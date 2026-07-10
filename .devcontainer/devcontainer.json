@@ -1,0 +1,68 @@
+{
+	"name": "stratt",
+	"dockerComposeFile": "docker-compose.yml",
+	"service": "devcontainer",
+	"workspaceFolder": "/workspaces/${localWorkspaceFolderBasename}",
+  "remoteEnv": {
+    "WORKSPACE_ROOT": "/workspaces/${localWorkspaceFolderBasename}"
+  },
+	"features": {
+		"ghcr.io/devcontainers/features/docker-in-docker": {
+			"dockerDefaultAddressPool": "base=192.168..0/17,size=24",
+			"moby": false
+		},
+		"ghcr.io/devcontainers/features/common-utils": {
+			"configureZshAsDefaultShell": true
+		},
+		"ghcr.io/devcontainers/features/git:1": {},
+        "ghcr.io/devcontainers/features/github-cli:1": {},
+        "ghcr.io/devcontainers/features/go:1": {},
+        "ghcr.io/devcontainers-extra/features/go-task:1": {},
+        "ghcr.io/devcontainers/features/node:2": {},
+        "ghcr.io/devcontainers-extra/features/uv:1": {}
+	},
+	"customizations": {
+		"vscode": {
+			"extensions": [
+				"Anthropic.claude-code",
+				"EditorConfig.EditorConfig",
+				"github.copilot",
+				"github.vscode-github-actions",
+				"github.vscode-pull-request-github",
+				"golang.go",
+				"ms-azuretools.vscode-containers",
+				"ms-vscode.vscode-chat-customizations-evaluations",
+				"ms-playwright.playwright",
+				"msjsdiag.vscode-react-native",
+				"task.vscode-task"
+			],
+			"settings": {
+				"editor.guides.bracketPairs": true,
+				"editor.renderWhitespace": "all",
+				"editor.rulers": [
+					80,
+					100,
+					120
+				],
+        "gopls": {
+          "analyses": {
+            "unusedparams": true,
+            "shadow": false
+          },
+          "staticcheck": false
+        },
+        "go.buildFlags": [],
+        "go.useLanguageServer": true,
+				"terminal.integrated.defaultProfile.linux": "zsh",
+				"terminal.integrated.profiles.linux": {
+					"zsh": {
+						"path": "/bin/zsh"
+					}
+				}
+			}
+		}
+	},
+	"initializeCommand": "echo WORKSPACE_NAME=${localWorkspaceFolderBasename} > .devcontainer/.env",
+	// "postCreateCommand": "chmod +x .devcontainer/postCreateCommand.sh && .devcontainer/postCreateCommand.sh",
+	// "postStartCommand": "task --dir ${containerWorkspaceFolder} setup:devcontainer",
+}

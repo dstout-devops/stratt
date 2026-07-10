@@ -1,0 +1,47 @@
+# --- Claude Code local / personal (keep shared config committed) ---
+CLAUDE.local.md
+.claude/settings.local.json
+.claude/*.local.json
+
+# --- Devcontainer generated ---
+.devcontainer/.env
+
+# --- Secrets (never commit; charter §2.5) ---
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+secrets/
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.coverage
+htmlcov/
+dist/
+build/
+*.egg-info/
+
+# --- Node / frontend ---
+node_modules/
+.vite/
+coverage/
+*.tsbuildinfo
+
+# --- Go ---
+/bin/
+*.test
+*.out
+
+# --- Task runner ---
+.task/
+
+# --- Editors / OS ---
+.DS_Store
+*.log
