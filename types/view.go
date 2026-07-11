@@ -18,6 +18,10 @@ type View struct {
 	// (kind/label/facet predicates) — deliberately not an expression
 	// language (non-goal: no new configuration languages, charter §1).
 	Selector ViewSelector `json:"selector"`
+	// DeclaredBy records which declaration path owns this View: "cac" for
+	// the Git-declared desired state (§1.2), "api" for direct declaration.
+	// CaC may adopt an api View; the api path may never modify a cac View.
+	DeclaredBy string `json:"declaredBy,omitempty"`
 }
 
 // ViewSelector is the structured query a View declares. All present clauses

@@ -21,6 +21,33 @@ import (
 	"github.com/oapi-codegen/runtime"
 )
 
+// Defines values for PlanEntryAction.
+const (
+	Adopt  PlanEntryAction = "adopt"
+	Create PlanEntryAction = "create"
+	Delete PlanEntryAction = "delete"
+	Noop   PlanEntryAction = "noop"
+	Update PlanEntryAction = "update"
+)
+
+// Valid indicates whether the value is a known member of the PlanEntryAction enum.
+func (e PlanEntryAction) Valid() bool {
+	switch e {
+	case Adopt:
+		return true
+	case Create:
+		return true
+	case Delete:
+		return true
+	case Noop:
+		return true
+	case Update:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for ProvenanceWriterKind.
 const (
 	ProvenanceWriterKindRun    ProvenanceWriterKind = "run"
@@ -84,6 +111,29 @@ func (e StartRunActuator) Valid() bool {
 	}
 }
 
+// Defines values for ViewDeclaredBy.
+const (
+	Api ViewDeclaredBy = "api"
+	Cac ViewDeclaredBy = "cac"
+)
+
+// Valid indicates whether the value is a known member of the ViewDeclaredBy enum.
+func (e ViewDeclaredBy) Valid() bool {
+	switch e {
+	case Api:
+		return true
+	case Cac:
+		return true
+	default:
+		return false
+	}
+}
+
+// DesiredState The full declared View set (charter §1.2).
+type DesiredState struct {
+	Views []ViewDeclaration `json:"views"`
+}
+
 // Entity defines model for Entity.
 type Entity struct {
 	Id           string            `json:"id"`
@@ -121,6 +171,30 @@ type FacetPredicate struct {
 	Namespace string      `json:"namespace"`
 	Path      *string     `json:"path,omitempty"`
 }
+
+// Plan defines model for Plan.
+type Plan struct {
+	Entries []PlanEntry `json:"entries"`
+}
+
+// PlanEntry defines model for PlanEntry.
+type PlanEntry struct {
+	Action PlanEntryAction `json:"action"`
+	Error  *string         `json:"error,omitempty"`
+
+	// MemberCount Live Entity count the relevant selector matches now.
+	MemberCount int64  `json:"memberCount"`
+	Name        string `json:"name"`
+
+	// NewSelector Structured selector data — deliberately not an expression language (charter non-goal; ADR-0003 review).
+	NewSelector *ViewSelector `json:"newSelector,omitempty"`
+
+	// OldSelector Structured selector data — deliberately not an expression language (charter non-goal; ADR-0003 review).
+	OldSelector *ViewSelector `json:"oldSelector,omitempty"`
+}
+
+// PlanEntryAction defines model for PlanEntry.Action.
+type PlanEntryAction string
 
 // Provenance Per-attribute stamp — which Run/Syncer wrote the value, when, from which Source (charter §2.1). Always exactly one answer.
 type Provenance struct {
@@ -161,11 +235,24 @@ type StartRunActuator string
 
 // View defines model for View.
 type View struct {
-	Name string `json:"name"`
+	// DeclaredBy Which declaration path owns this View — cac (Git-declared desired state, charter §1.2) or api. cac Views are Git-only.
+	DeclaredBy *ViewDeclaredBy `json:"declaredBy,omitempty"`
+	Name       string          `json:"name"`
 
 	// Selector Structured selector data — deliberately not an expression language (charter non-goal; ADR-0003 review).
 	Selector ViewSelector `json:"selector"`
 	Version  int64        `json:"version"`
+}
+
+// ViewDeclaredBy Which declaration path owns this View — cac (Git-declared desired state, charter §1.2) or api. cac Views are Git-only.
+type ViewDeclaredBy string
+
+// ViewDeclaration defines model for ViewDeclaration.
+type ViewDeclaration struct {
+	Name string `json:"name"`
+
+	// Selector Structured selector data — deliberately not an expression language (charter non-goal; ADR-0003 review).
+	Selector ViewSelector `json:"selector"`
 }
 
 // ViewResolution defines model for ViewResolution.
@@ -190,6 +277,9 @@ type ViewName = string
 // BadRequest defines model for BadRequest.
 type BadRequest = Error
 
+// Conflict defines model for Conflict.
+type Conflict = Error
+
 // NotFound defines model for NotFound.
 type NotFound = Error
 
@@ -197,6 +287,12 @@ type NotFound = Error
 type ResolveViewParams struct {
 	Limit *int `form:"limit,omitempty" json:"limit,omitempty"`
 }
+
+// DesiredStateApplyJSONRequestBody defines body for DesiredStateApply for application/json ContentType.
+type DesiredStateApplyJSONRequestBody = DesiredState
+
+// DesiredStatePlanJSONRequestBody defines body for DesiredStatePlan for application/json ContentType.
+type DesiredStatePlanJSONRequestBody = DesiredState
 
 // StartRunJSONRequestBody defines body for StartRun for application/json ContentType.
 type StartRunJSONRequestBody = StartRun
@@ -206,6 +302,12 @@ type DeclareViewJSONRequestBody = ViewSelector
 
 // ServerInterface represents all server handlers.
 type ServerInterface interface {
+	// Reconcile the graph's Views to a declared desired state
+	// (POST /desired-state/apply)
+	DesiredStateApply(w http.ResponseWriter, r *http.Request)
+	// Diff a declared desired state against the graph's Views
+	// (POST /desired-state/plan)
+	DesiredStatePlan(w http.ResponseWriter, r *http.Request)
 	// Get one Entity with its Facets and per-attribute Provenance
 	// (GET /entities/{id})
 	GetEntity(w http.ResponseWriter, r *http.Request, id string)
@@ -237,6 +339,34 @@ type ServerInterfaceWrapper struct {
 }
 
 type MiddlewareFunc func(http.Handler) http.Handler
+
+// DesiredStateApply operation middleware
+func (siw *ServerInterfaceWrapper) DesiredStateApply(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.DesiredStateApply(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// DesiredStatePlan operation middleware
+func (siw *ServerInterfaceWrapper) DesiredStatePlan(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.DesiredStatePlan(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
 
 // GetEntity operation middleware
 func (siw *ServerInterfaceWrapper) GetEntity(w http.ResponseWriter, r *http.Request) {
@@ -544,6 +674,8 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 		ErrorHandlerFunc:   options.ErrorHandlerFunc,
 	}
 
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/desired-state/apply", wrapper.DesiredStateApply)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/desired-state/plan", wrapper.DesiredStatePlan)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/entities/{id}", wrapper.GetEntity)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/runs", wrapper.StartRun)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/runs/{id}", wrapper.GetRun)
@@ -560,40 +692,50 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 // const string: with thousands of chunks the chained `+` fold is several
 // times slower for the Go compiler than parsing a slice literal.
 var swaggerSpec = []string{
-	"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",
+	"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",
 }
 
 // decodeSpec returns the embedded OpenAPI spec as raw JSON bytes,

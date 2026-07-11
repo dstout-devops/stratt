@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"syscall"
 	"time"
 
@@ -26,6 +27,7 @@ import (
 	"github.com/dstout-devops/stratt/core/internal/actuators/script"
 	"github.com/dstout-devops/stratt/core/internal/api"
 	"github.com/dstout-devops/stratt/core/internal/connectors/vcenter"
+	"github.com/dstout-devops/stratt/core/internal/desiredstate"
 	"github.com/dstout-devops/stratt/core/internal/dispatch"
 	"github.com/dstout-devops/stratt/core/internal/events"
 	"github.com/dstout-devops/stratt/core/internal/graph"
@@ -135,6 +137,31 @@ func run(ctx context.Context, log *slog.Logger) error {
 		}()
 	} else {
 		log.Info("no vCenter Source configured (STRATT_VCENTER_URL empty); syncer idle")
+	}
+
+	// ── desired-state reconciliation (§1.2: Git is the declarer) ────────
+	if path := os.Getenv("STRATT_DESIRED_STATE_PATH"); path != "" {
+		interval, err := time.ParseDuration(env("STRATT_DESIRED_STATE_INTERVAL", "30s"))
+		if err != nil {
+			return fmt.Errorf("desired-state interval: %w", err)
+		}
+		maxPrune := 0.0 // 0 → controller default (0.5)
+		if v := os.Getenv("STRATT_DESIRED_STATE_MAX_PRUNE"); v != "" {
+			if maxPrune, err = strconv.ParseFloat(v, 64); err != nil {
+				return fmt.Errorf("desired-state max prune: %w", err)
+			}
+		}
+		ctl := &desiredstate.Controller{
+			Path: path, Interval: interval, Store: store, Log: log,
+			MaxPruneFraction: maxPrune,
+		}
+		go func() {
+			if err := ctl.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
+				log.Error("desired-state controller stopped", "error", err)
+			}
+		}()
+	} else {
+		log.Info("no desired-state checkout configured (STRATT_DESIRED_STATE_PATH empty); reconciliation off")
 	}
 
 	// ── interface plane ──────────────────────────────────────────────────

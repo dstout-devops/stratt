@@ -9,6 +9,7 @@ import (
 
 	"go.temporal.io/sdk/client"
 
+	"github.com/dstout-devops/stratt/core/internal/desiredstate"
 	"github.com/dstout-devops/stratt/core/internal/events"
 	"github.com/dstout-devops/stratt/core/internal/graph"
 	"github.com/dstout-devops/stratt/core/internal/orchestrate"
@@ -53,7 +54,12 @@ func (s *Server) fail(w http.ResponseWriter, err error) {
 // ── mapping helpers (wire ⇄ domain) ─────────────────────────────────────────
 
 func viewToWire(v types.View) View {
-	return View{Name: v.Name, Version: v.Version, Selector: selectorToWire(v.Selector)}
+	out := View{Name: v.Name, Version: v.Version, Selector: selectorToWire(v.Selector)}
+	if v.DeclaredBy != "" {
+		db := ViewDeclaredBy(v.DeclaredBy)
+		out.DeclaredBy = &db
+	}
+	return out
 }
 
 func selectorToWire(sel types.ViewSelector) ViewSelector {
@@ -151,11 +157,95 @@ func (s *Server) DeclareView(w http.ResponseWriter, r *http.Request, name ViewNa
 		return
 	}
 	v, err := s.Store.DeclareView(r.Context(), name, sel)
+	if errors.Is(err, graph.ErrDeclaredByCaC) {
+		writeErr(w, http.StatusConflict, err.Error())
+		return
+	}
 	if err != nil {
 		s.fail(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, viewToWire(v))
+}
+
+// ── desired state (§1.2: drift is the diff) ─────────────────────────────────
+
+func declarationsFromWire(in DesiredState) ([]desiredstate.Declaration, error) {
+	out := make([]desiredstate.Declaration, len(in.Views))
+	for i, d := range in.Views {
+		if d.Name == "" {
+			return nil, fmt.Errorf("declaration %d: name is required", i)
+		}
+		sel, err := selectorFromWire(d.Selector)
+		if err != nil {
+			return nil, fmt.Errorf("declaration %s: %w", d.Name, err)
+		}
+		out[i] = desiredstate.Declaration{Name: d.Name, Selector: sel}
+	}
+	return out, nil
+}
+
+func planToWire(p desiredstate.Plan) Plan {
+	out := Plan{Entries: make([]PlanEntry, len(p.Entries))}
+	for i, e := range p.Entries {
+		w := PlanEntry{Name: e.Name, Action: PlanEntryAction(e.Action), MemberCount: e.MemberCount}
+		if e.OldSelector != nil {
+			s := selectorToWire(*e.OldSelector)
+			w.OldSelector = &s
+		}
+		if e.NewSelector != nil {
+			s := selectorToWire(*e.NewSelector)
+			w.NewSelector = &s
+		}
+		if e.Error != "" {
+			msg := e.Error
+			w.Error = &msg
+		}
+		out.Entries[i] = w
+	}
+	return out
+}
+
+func (s *Server) desiredStateBody(w http.ResponseWriter, r *http.Request) ([]desiredstate.Declaration, bool) {
+	var body DesiredState
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid desired state: "+err.Error())
+		return nil, false
+	}
+	decls, err := declarationsFromWire(body)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return nil, false
+	}
+	return decls, true
+}
+
+// DesiredStatePlan implements (POST /desired-state/plan).
+func (s *Server) DesiredStatePlan(w http.ResponseWriter, r *http.Request) {
+	decls, ok := s.desiredStateBody(w, r)
+	if !ok {
+		return
+	}
+	plan, err := desiredstate.ComputePlan(r.Context(), s.Store, decls)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, planToWire(plan))
+}
+
+// DesiredStateApply implements (POST /desired-state/apply).
+func (s *Server) DesiredStateApply(w http.ResponseWriter, r *http.Request) {
+	decls, ok := s.desiredStateBody(w, r)
+	if !ok {
+		return
+	}
+	plan, err := desiredstate.Apply(r.Context(), s.Store, decls)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, planToWire(plan))
 }
 
 // ResolveView implements (GET /views/{name}/entities).

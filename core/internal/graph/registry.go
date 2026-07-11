@@ -39,10 +39,32 @@ func (s *Store) RegisterFacetOwner(ctx context.Context, o types.FacetOwner) erro
 
 // ── Views (§2.1) ─────────────────────────────────────────────────────────────
 
-// DeclareView creates or updates a View's selector. Every change bumps the
-// version and lands in view_history (trigger-enforced). In Phase 1 this is
-// driven by the Git sync controller; direct calls are the Phase-0 path.
+// Declaration paths for Views (§1.2: desired state lives in Git).
+const (
+	// DeclaredByAPI marks a directly-declared View (PUT /views/{name}).
+	DeclaredByAPI = "api"
+	// DeclaredByCaC marks a View owned by the declared desired state (the
+	// Git sync controller / stratt apply).
+	DeclaredByCaC = "cac"
+)
+
+// ErrDeclaredByCaC is returned when the api path tries to modify a View owned
+// by the declared desired state — Git-declared Views are Git-only (§2.1).
+var ErrDeclaredByCaC = errors.New("graph: view is declared by desired state (cac); edit it in the declarations repo")
+
+// DeclareView creates or updates a View's selector via the api path. It is
+// refused with ErrDeclaredByCaC for Views owned by the desired state.
 func (s *Store) DeclareView(ctx context.Context, name string, sel types.ViewSelector) (types.View, error) {
+	return s.DeclareViewAs(ctx, name, sel, DeclaredByAPI)
+}
+
+// DeclareViewAs creates or updates a View's selector for the given
+// declaration path. Selector changes bump the version and land in
+// view_history (trigger-enforced); an unchanged declare is a version-stable
+// no-op. CaC may adopt an api-declared View (ownership transfers, version
+// unchanged); the api path may never touch a cac View — enforced by the
+// upsert guard, not read-then-write.
+func (s *Store) DeclareViewAs(ctx context.Context, name string, sel types.ViewSelector, declaredBy string) (types.View, error) {
 	selDoc, err := json.Marshal(sel)
 	if err != nil {
 		return types.View{}, fmt.Errorf("graph: marshal selector: %w", err)
@@ -50,17 +72,27 @@ func (s *Store) DeclareView(ctx context.Context, name string, sel types.ViewSele
 	var v types.View
 	var raw []byte
 	err = s.pool.QueryRow(ctx, `
-		INSERT INTO graph.view (name, selector)
-		VALUES ($1, $2)
-		ON CONFLICT (name) DO UPDATE SET selector = excluded.selector
-		WHERE graph.view.selector IS DISTINCT FROM excluded.selector
-		RETURNING name, version, selector`,
-		name, selDoc,
-	).Scan(&v.Name, &v.Version, &raw)
+		INSERT INTO graph.view (name, selector, declared_by)
+		VALUES ($1, $2, $3)
+		ON CONFLICT (name) DO UPDATE
+		SET selector = excluded.selector, declared_by = excluded.declared_by
+		WHERE (excluded.declared_by = 'cac' OR graph.view.declared_by = 'api')
+		  AND (graph.view.selector IS DISTINCT FROM excluded.selector
+		       OR graph.view.declared_by IS DISTINCT FROM excluded.declared_by)
+		RETURNING name, version, selector, declared_by`,
+		name, selDoc, declaredBy,
+	).Scan(&v.Name, &v.Version, &raw, &v.DeclaredBy)
 	if errors.Is(err, pgx.ErrNoRows) {
-		// Unchanged selector: a no-op declare, not a new version (the Git
-		// sync controller re-declares every reconcile in Phase 1).
-		return s.GetView(ctx, name)
+		// Either a no-op declare (unchanged selector and owner) or an api
+		// write refused by the cac guard — fetch to tell them apart.
+		existing, getErr := s.GetView(ctx, name)
+		if getErr != nil {
+			return types.View{}, getErr
+		}
+		if declaredBy == DeclaredByAPI && existing.DeclaredBy == DeclaredByCaC {
+			return types.View{}, fmt.Errorf("%w: view %s", ErrDeclaredByCaC, name)
+		}
+		return existing, nil
 	}
 	if err != nil {
 		return types.View{}, fmt.Errorf("graph: declare view: %w", err)
@@ -76,8 +108,8 @@ func (s *Store) GetView(ctx context.Context, name string) (types.View, error) {
 	var v types.View
 	var raw []byte
 	err := s.pool.QueryRow(ctx,
-		`SELECT name, version, selector FROM graph.view WHERE name = $1`, name,
-	).Scan(&v.Name, &v.Version, &raw)
+		`SELECT name, version, selector, declared_by FROM graph.view WHERE name = $1`, name,
+	).Scan(&v.Name, &v.Version, &raw, &v.DeclaredBy)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return v, fmt.Errorf("%w: view %s", ErrNotFound, name)
 	}
@@ -88,6 +120,63 @@ func (s *Store) GetView(ctx context.Context, name string) (types.View, error) {
 		return v, fmt.Errorf("graph: decode selector: %w", err)
 	}
 	return v, nil
+}
+
+// ListViewsDeclaredBy returns every View owned by the given declaration path,
+// ordered by name — the prune set for desired-state reconciliation.
+func (s *Store) ListViewsDeclaredBy(ctx context.Context, declaredBy string) ([]types.View, error) {
+	rows, err := s.pool.Query(ctx,
+		`SELECT name, version, selector, declared_by FROM graph.view WHERE declared_by = $1 ORDER BY name`,
+		declaredBy)
+	if err != nil {
+		return nil, fmt.Errorf("graph: list views: %w", err)
+	}
+	defer rows.Close()
+	var out []types.View
+	for rows.Next() {
+		var v types.View
+		var raw []byte
+		if err := rows.Scan(&v.Name, &v.Version, &raw, &v.DeclaredBy); err != nil {
+			return nil, fmt.Errorf("graph: list views: %w", err)
+		}
+		if err := json.Unmarshal(raw, &v.Selector); err != nil {
+			return nil, fmt.Errorf("graph: decode selector: %w", err)
+		}
+		out = append(out, v)
+	}
+	return out, rows.Err()
+}
+
+// DeleteView removes a View owned by the given declaration path, along with
+// its version history (Runs keep view_ref and view_version by value, and the
+// declarations repo remains the rebuildable source, §1.2). A View owned by a
+// different path is not touched — ErrNotFound either way.
+//
+// Consequence: view_history is NOT an audit source across a delete boundary —
+// a re-declared name restarts at version 1, so the selector a historical Run
+// pinned is recoverable only from Git history after delete/recreate. Never
+// join Run.view_version against view_history across that boundary.
+func (s *Store) DeleteView(ctx context.Context, name, declaredBy string) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("graph: delete view: %w", err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck
+	tag, err := tx.Exec(ctx,
+		`DELETE FROM graph.view WHERE name = $1 AND declared_by = $2`, name, declaredBy)
+	if err != nil {
+		return fmt.Errorf("graph: delete view: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("%w: view %s (declared_by %s)", ErrNotFound, name, declaredBy)
+	}
+	// History must go with the row: a later re-declare restarts at version 1
+	// and would collide with the retained (name, version) history keys.
+	if _, err := tx.Exec(ctx,
+		`DELETE FROM graph.view_history WHERE name = $1`, name); err != nil {
+		return fmt.Errorf("graph: delete view history: %w", err)
+	}
+	return tx.Commit(ctx)
 }
 
 // ── Sources (§2.2) ───────────────────────────────────────────────────────────

@@ -35,9 +35,9 @@ paths:
       operationId: declareView
       summary: Declare a View's selector (bumps the version on change)
       description: >
-        Phase-0 declaration path. From Phase 1, Views referenced by
-        Assignments are Git-only (charter §2.1); this endpoint is then
-        restricted to unreferenced Views.
+        Direct (api-path) declaration. Views owned by the Git-declared
+        desired state (declaredBy=cac) are Git-only (charter §2.1) and this
+        endpoint refuses them with 409 — edit the declarations repo instead.
       requestBody:
         required: true
         content:
@@ -50,6 +50,7 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/View" }
         "400": { $ref: "#/components/responses/BadRequest" }
+        "409": { $ref: "#/components/responses/Conflict" }
   /views/{name}/entities:
     parameters:
       - $ref: "#/components/parameters/ViewName"
@@ -83,6 +84,47 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/EntityDocument" }
         "404": { $ref: "#/components/responses/NotFound" }
+  /desired-state/plan:
+    post:
+      operationId: desiredStatePlan
+      summary: Diff a declared desired state against the graph's Views
+      description: >
+        Dry run of reconciliation (charter §1.2: drift is the diff). Entries
+        report the action, the selector change, and the live member count —
+        blast radius before anything executes.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/DesiredState" }
+      responses:
+        "200":
+          description: The reconciliation plan
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Plan" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+  /desired-state/apply:
+    post:
+      operationId: desiredStateApply
+      summary: Reconcile the graph's Views to a declared desired state
+      description: >
+        Applies the plan — creates/updates/adopts declared Views (owned as
+        declaredBy=cac) and prunes cac Views no longer declared. api-declared
+        Views are never pruned. Per-View failures are reported on their plan
+        entries; the rest still applies.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/DesiredState" }
+      responses:
+        "200":
+          description: The realized plan
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Plan" }
+        "400": { $ref: "#/components/responses/BadRequest" }
   /runs:
     post:
       operationId: startRun
@@ -151,6 +193,11 @@ components:
           schema: { $ref: "#/components/schemas/Error" }
     BadRequest:
       description: The request is malformed
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    Conflict:
+      description: The object is owned by another declaration path
       content:
         application/json:
           schema: { $ref: "#/components/schemas/Error" }
@@ -229,6 +276,49 @@ components:
         name: { type: string }
         version: { type: integer, format: int64 }
         selector: { $ref: "#/components/schemas/ViewSelector" }
+        declaredBy:
+          type: string
+          enum: [api, cac]
+          readOnly: true
+          description: >
+            Which declaration path owns this View — cac (Git-declared desired
+            state, charter §1.2) or api. cac Views are Git-only.
+    ViewDeclaration:
+      type: object
+      required: [name, selector]
+      properties:
+        name: { type: string }
+        selector: { $ref: "#/components/schemas/ViewSelector" }
+    DesiredState:
+      type: object
+      description: The full declared View set (charter §1.2).
+      required: [views]
+      properties:
+        views:
+          type: array
+          items: { $ref: "#/components/schemas/ViewDeclaration" }
+    PlanEntry:
+      type: object
+      required: [name, action, memberCount]
+      properties:
+        name: { type: string }
+        action:
+          type: string
+          enum: [create, update, adopt, noop, delete]
+        memberCount:
+          type: integer
+          format: int64
+          description: Live Entity count the relevant selector matches now.
+        oldSelector: { $ref: "#/components/schemas/ViewSelector" }
+        newSelector: { $ref: "#/components/schemas/ViewSelector" }
+        error: { type: string }
+    Plan:
+      type: object
+      required: [entries]
+      properties:
+        entries:
+          type: array
+          items: { $ref: "#/components/schemas/PlanEntry" }
     ViewResolution:
       type: object
       required: [view, entities]
