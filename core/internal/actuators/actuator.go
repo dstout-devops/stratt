@@ -36,9 +36,21 @@ type JobSpec struct {
 	Image string
 }
 
+// Per-target statuses. "changed" implies ok; failed and unreachable are both
+// failures for the Run-success fold but stay distinct for diagnosis (§1.8).
+const (
+	StatusOK          = "ok"
+	StatusChanged     = "changed"
+	StatusFailed      = "failed"
+	StatusUnreachable = "unreachable"
+)
+
 // TargetResult is a terminal per-target outcome.
 type TargetResult struct {
 	Target string
+	// Status is one of the Status* values.
+	Status string
+	// Failed is the seam's success fold: true for failed and unreachable.
 	Failed bool
 }
 

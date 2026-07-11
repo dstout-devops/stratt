@@ -69,11 +69,13 @@ func (b *Bus) Publish(ctx context.Context, ev types.RunEvent) error {
 	if err != nil {
 		return fmt.Errorf("events: marshal: %w", err)
 	}
-	// Seq is the runner's deterministic event counter, so a Run's re-publish
-	// (Temporal activity retry re-following the same pod) dedups server-side
-	// inside JetStream's dedup window instead of duplicating the stream.
+	// (RunID, Slice, Seq) is the event identity: Seq is the tool's
+	// deterministic counter within one slice, so a re-publish (Temporal
+	// activity retry re-following the same pod) dedups server-side inside
+	// JetStream's dedup window, while parallel slices — whose tools all
+	// count from 1 — never dedup each other away.
 	if _, err := b.js.Publish(ctx, subject(ev.RunID), payload,
-		jetstream.WithMsgID(fmt.Sprintf("%s/%d", ev.RunID, ev.Seq))); err != nil {
+		jetstream.WithMsgID(fmt.Sprintf("%s/%d/%d", ev.RunID, ev.Slice, ev.Seq))); err != nil {
 		return fmt.Errorf("events: publish: %w", err)
 	}
 	return nil

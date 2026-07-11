@@ -344,6 +344,14 @@ components:
         params:
           type: object
           description: Actuator-interpreted Step params (e.g. script source).
+        slices:
+          type: integer
+          format: int64
+          minimum: 1
+          default: 1
+          description: >
+            Partition the target set across this many parallel execution
+            Jobs (clamped to the target count).
     Run:
       type: object
       required: [id, workflowId, status, startedAt]

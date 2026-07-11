@@ -1,11 +1,13 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
+	"time"
 
 	"go.temporal.io/sdk/client"
 
@@ -331,6 +333,13 @@ func (s *Server) StartRun(w http.ResponseWriter, r *http.Request) {
 		}
 		in.Params = raw
 	}
+	if body.Slices != nil {
+		if *body.Slices < 1 {
+			writeErr(w, http.StatusBadRequest, "slices must be >= 1")
+			return
+		}
+		in.Slices = int(*body.Slices)
+	}
 	wfID := "run-" + run.ID
 	_, err = s.Temporal.ExecuteWorkflow(r.Context(), client.StartWorkflowOptions{
 		ID:        wfID,
@@ -377,7 +386,36 @@ func (s *Server) TailRunEvents(w http.ResponseWriter, r *http.Request, id RunID)
 	w.WriteHeader(http.StatusOK)
 	flusher.Flush()
 
-	err := s.Bus.Tail(r.Context(), id, func(ev types.RunEvent) error {
+	// Independent floor (§1.8, charter-guardian): the stream-end marker is
+	// published by FinishRun and could be lost if the bus fails at exactly
+	// that moment. A tail must never hang on a Run that is durably terminal
+	// in Postgres — poll the summary and close after a grace period that
+	// lets a late marker win the race.
+	ctx, cancel := context.WithCancel(r.Context())
+	defer cancel()
+	go func() {
+		ticker := time.NewTicker(2 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				run, err := s.Store.GetRun(ctx, id)
+				if err != nil || run.FinishedAt == nil {
+					continue
+				}
+				select { // grace: the marker normally arrives first
+				case <-time.After(5 * time.Second):
+					cancel()
+				case <-ctx.Done():
+				}
+				return
+			}
+		}
+	}()
+
+	err := s.Bus.Tail(ctx, id, func(ev types.RunEvent) error {
 		payload, err := json.Marshal(ev)
 		if err != nil {
 			return err
@@ -391,7 +429,7 @@ func (s *Server) TailRunEvents(w http.ResponseWriter, r *http.Request, id RunID)
 		}
 		return nil
 	})
-	if err != nil && !errors.Is(err, errStreamEnd) && r.Context().Err() == nil {
+	if err != nil && !errors.Is(err, errStreamEnd) && r.Context().Err() == nil && ctx.Err() == nil {
 		s.Log.Error("sse tail", "run", id, "error", err)
 	}
 }

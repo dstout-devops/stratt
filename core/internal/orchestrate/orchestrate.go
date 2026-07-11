@@ -15,6 +15,7 @@ import (
 
 	"github.com/dstout-devops/stratt/core/internal/actuators"
 	"github.com/dstout-devops/stratt/core/internal/dispatch"
+	"github.com/dstout-devops/stratt/core/internal/events"
 	"github.com/dstout-devops/stratt/core/internal/graph"
 	"github.com/dstout-devops/stratt/types"
 )
@@ -24,12 +25,14 @@ const TaskQueue = "stratt-runs"
 
 // RunInput starts one Run against a View. Actuator and Params are the Step
 // fields (§2.3: Step = Actuator + content + params); empty Actuator means
-// ansible (the Phase-0 default).
+// ansible (the Phase-0 default). Slices > 1 partitions the target set across
+// that many parallel K8s Jobs.
 type RunInput struct {
 	RunID    string
 	ViewName string
 	Actuator string
 	Params   json.RawMessage
+	Slices   int
 }
 
 // ResolvedTargets is what the View resolves to at dispatch time; the version
@@ -65,10 +68,27 @@ func RunAgainstView(ctx workflow.Context, in RunInput) error {
 		return finishRun(ctx, a, in, types.RunFailed, err)
 	}
 
-	var result dispatch.Result
-	if err := workflow.ExecuteActivity(ctx, a.Execute, in, resolved).Get(ctx, &result); err != nil {
-		return finishRun(ctx, a, in, types.RunFailed, err)
+	// Fan the target set out across slices — parallel Jobs, each an
+	// independently-retryable activity whose rung shows in the Workflow
+	// history (§1.8). Targets are disjoint, so results merge by union.
+	chunks := splitTargets(resolved.Targets, in.Slices)
+	futures := make([]workflow.Future, len(chunks))
+	for i, chunk := range chunks {
+		futures[i] = workflow.ExecuteActivity(ctx, a.Execute, in, i,
+			ResolvedTargets{ViewVersion: resolved.ViewVersion, Targets: chunk})
 	}
+	var result dispatch.Result
+	sliceResults := make([]dispatch.Result, len(chunks))
+	var execErr error
+	for i, f := range futures {
+		if err := f.Get(ctx, &sliceResults[i]); err != nil && execErr == nil {
+			execErr = err
+		}
+	}
+	if execErr != nil {
+		return finishRun(ctx, a, in, types.RunFailed, execErr)
+	}
+	result = mergeResults(sliceResults)
 
 	var facts FactSet
 	if err := workflow.ExecuteActivity(ctx, a.CollectFacts, resolved, result).Get(ctx, &facts); err != nil {
@@ -98,6 +118,7 @@ func finishRun(ctx workflow.Context, a *Activities, in RunInput, status types.Ru
 type Activities struct {
 	Store      *graph.Store
 	Dispatcher *dispatch.Dispatcher
+	Bus        *events.Bus
 	// Actuators is the registry of in-tree Actuators by name (§2.3).
 	Actuators map[string]actuators.Actuator
 }
@@ -133,9 +154,9 @@ func (a *Activities) MarkRunning(ctx context.Context, runID string) error {
 	return a.Store.SetRunStatus(ctx, runID, types.RunRunning, nil)
 }
 
-// Execute prepares the Step through its Actuator, dispatches the K8s Job,
-// and follows it, publishing task events.
-func (a *Activities) Execute(ctx context.Context, in RunInput, resolved ResolvedTargets) (dispatch.Result, error) {
+// Execute prepares one Step slice through its Actuator, dispatches the K8s
+// Job, and follows it, publishing task events under (runID, slice).
+func (a *Activities) Execute(ctx context.Context, in RunInput, slice int, resolved ResolvedTargets) (dispatch.Result, error) {
 	name := in.Actuator
 	if name == "" {
 		name = "ansible"
@@ -151,11 +172,60 @@ func (a *Activities) Execute(ctx context.Context, in RunInput, resolved Resolved
 		// Malformed Step params are terminal too.
 		return dispatch.Result{}, temporal.NewNonRetryableApplicationError(err.Error(), "InvalidStepParams", err)
 	}
-	res, err := a.Dispatcher.Run(ctx, in.RunID, spec, act)
+	res, err := a.Dispatcher.Run(ctx, in.RunID, slice, spec, act)
 	if err != nil {
 		return dispatch.Result{}, err
 	}
 	return *res, nil
+}
+
+// splitTargets partitions targets into at most n contiguous, non-empty
+// chunks (n is clamped to [1, len(targets)]).
+func splitTargets(targets []actuators.Target, n int) [][]actuators.Target {
+	if n < 1 {
+		n = 1
+	}
+	if n > len(targets) {
+		n = len(targets)
+	}
+	if n <= 1 {
+		return [][]actuators.Target{targets}
+	}
+	chunks := make([][]actuators.Target, 0, n)
+	base, extra := len(targets)/n, len(targets)%n
+	for i, off := 0, 0; i < n; i++ {
+		size := base
+		if i < extra {
+			size++
+		}
+		chunks = append(chunks, targets[off:off+size])
+		off += size
+	}
+	return chunks
+}
+
+// mergeResults unions per-slice results (targets are disjoint by
+// construction). SpawnLatency reports the slowest slice — the value the §8
+// gate bounds.
+func mergeResults(slices []dispatch.Result) dispatch.Result {
+	out := dispatch.Result{
+		Succeeded: true,
+		PerTarget: map[string]string{},
+		Facts:     map[string]map[string]json.RawMessage{},
+	}
+	for _, r := range slices {
+		out.Succeeded = out.Succeeded && r.Succeeded
+		for t, s := range r.PerTarget {
+			out.PerTarget[t] = s
+		}
+		for t, f := range r.Facts {
+			out.Facts[t] = f
+		}
+		if r.SpawnLatency > out.SpawnLatency {
+			out.SpawnLatency = r.SpawnLatency
+		}
+	}
+	return out
 }
 
 // CollectFacts joins per-target facts back to Entity ids.
@@ -189,25 +259,34 @@ func (a *Activities) ProjectFacts(ctx context.Context, runID string, facts FactS
 	return nil
 }
 
-// FinishRun records the terminal status and summary counts.
+// FinishRun records the terminal status and summary counts, then publishes
+// the Run-level stream-end marker — the tail's floor arrives only after
+// every slice has finished (§1.8: a floor, never a premature one).
 func (a *Activities) FinishRun(ctx context.Context, in RunInput, status types.RunStatus, result dispatch.Result) error {
-	okCount, failCount := 0, 0
-	for _, r := range result.PerTarget {
-		if r == "ok" {
-			okCount++
-		} else {
-			failCount++
-		}
+	counts := map[string]int{}
+	for _, s := range result.PerTarget {
+		counts[s]++
 	}
 	actuator := in.Actuator
 	if actuator == "" {
 		actuator = "ansible"
 	}
-	return a.Store.SetRunStatus(ctx, in.RunID, status, map[string]any{
+	slices := in.Slices
+	if slices < 1 {
+		slices = 1
+	}
+	if err := a.Store.SetRunStatus(ctx, in.RunID, status, map[string]any{
 		"actuator":       actuator, // which engine ran the Step (§1.8 diagnosis)
+		"slices":         slices,
 		"targets":        len(result.PerTarget),
-		"ok":             okCount,
-		"failed":         failCount,
-		"spawnLatencyMs": result.SpawnLatency.Milliseconds(),
-	})
+		"ok":             counts[actuators.StatusOK],
+		"changed":        counts[actuators.StatusChanged],
+		"failed":         counts[actuators.StatusFailed],
+		"unreachable":    counts[actuators.StatusUnreachable],
+		"spawnLatencyMs": result.SpawnLatency.Milliseconds(), // slowest slice
+	}); err != nil {
+		return err
+	}
+	// MsgID (runID/0/0) dedups the marker across FinishRun retries.
+	return a.Bus.Publish(ctx, types.RunEvent{RunID: in.RunID, Kind: "stream-end"})
 }

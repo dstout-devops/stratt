@@ -35,7 +35,11 @@ type Run struct {
 // descent ladder (Intent → Blueprint route → Workflow → Run → task event).
 // Events stream over NATS; only summaries persist in Postgres.
 type RunEvent struct {
-	RunID string    `json:"runId"`
+	RunID string `json:"runId"`
+	// Slice is the target-set slice this event came from (0 when the Run is
+	// unsliced). (RunID, Slice, Seq) is the event's identity: Seq is only
+	// unique within one slice's tool stream.
+	Slice int       `json:"slice,omitempty"`
 	Seq   int64     `json:"seq"`
 	At    time.Time `json:"at"`
 	// Kind is the event type (e.g. "task-start", "task-ok", "task-failed",

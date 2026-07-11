@@ -1,7 +1,11 @@
 package ansible
 
 import (
+	"encoding/json"
+	"strings"
 	"testing"
+
+	"github.com/dstout-devops/stratt/core/internal/actuators"
 )
 
 func TestParseEventAndFacts(t *testing.T) {
@@ -20,9 +24,9 @@ func TestParseEventAndFacts(t *testing.T) {
 		t.Fatalf("unexpected run event: %+v", re)
 	}
 
-	host, okRes, failed := HostResult(ev)
-	if host != "vm-1" || !okRes || failed {
-		t.Fatalf("unexpected host result: %s ok=%v failed=%v", host, okRes, failed)
+	host, status := HostStatus(ev)
+	if host != "vm-1" || status != "ok" {
+		t.Fatalf("unexpected host status: %s %s", host, status)
 	}
 
 	facts := ExtractFacts(ev)
@@ -62,8 +66,49 @@ func TestActuatorSeam(t *testing.T) {
 	if iv.Event.Seq != 9 || iv.Event.Kind != "runner_on_failed" || iv.Event.Target != "vm-1" {
 		t.Fatalf("event mapping: %+v", iv.Event)
 	}
-	if iv.Result == nil || !iv.Result.Failed || iv.Result.Target != "vm-1" {
+	if iv.Result == nil || !iv.Result.Failed || iv.Result.Status != actuators.StatusFailed {
 		t.Fatalf("failed host must fold into a failed result: %+v", iv.Result)
+	}
+
+	// Distinct statuses: changed (ok + mutation) and unreachable (a failure).
+	iv, _ = a.Interpret([]byte(`{"counter":10,"event":"runner_on_ok","event_data":{"host":"vm-2","res":{"changed":true}}}`))
+	if iv.Result == nil || iv.Result.Status != actuators.StatusChanged || iv.Result.Failed {
+		t.Fatalf("changed result: %+v", iv.Result)
+	}
+	iv, _ = a.Interpret([]byte(`{"counter":11,"event":"runner_on_unreachable","event_data":{"host":"vm-3"}}`))
+	if iv.Result == nil || iv.Result.Status != actuators.StatusUnreachable || !iv.Result.Failed {
+		t.Fatalf("unreachable result: %+v", iv.Result)
+	}
+}
+
+func TestPrepareParams(t *testing.T) {
+	a := Actuator{}
+	targets := []Target{{EntityID: "e1", Name: "vm-1"}}
+
+	// Custom play + EE override plumb through.
+	spec, err := a.Prepare(json.RawMessage(`{"play":"- hosts: all\n  tasks: []\n","eeImage":"stratt-ee:custom"}`), targets)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(spec.Files["project/play.yml"], "hosts: all") || spec.Image != "stratt-ee:custom" {
+		t.Fatalf("params not applied: image=%q files=%v", spec.Image, spec.Files["project/play.yml"])
+	}
+
+	// Invalid YAML and non-sequence plays fail at Prepare.
+	if _, err := a.Prepare(json.RawMessage(`{"play":"{ not: [valid"}`), targets); err == nil {
+		t.Fatal("garbage play must be rejected")
+	}
+	if _, err := a.Prepare(json.RawMessage(`{"play":"hosts: all"}`), targets); err == nil {
+		t.Fatal("non-sequence play must be rejected")
+	}
+
+	// Empty params keep the Phase-0 default.
+	spec, err = a.Prepare(nil, targets)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if spec.Files["project/play.yml"] != GatherFactsPlay || spec.Image != "" {
+		t.Fatal("empty params must yield the gather-facts default")
 	}
 }
 

@@ -55,22 +55,25 @@ func New(cfg Config, client kubernetes.Interface, bus *events.Bus, log *slog.Log
 // each target reported (to project back with Run provenance, §8).
 type Result struct {
 	Succeeded bool
-	PerTarget map[string]string // target name → ok | failed
+	// PerTarget maps target name → status (ok | changed | failed |
+	// unreachable). Failures are sticky: a target that ever failed is never
+	// downgraded by a later ok.
+	PerTarget map[string]string
 	// Facts by target name → facet namespace → value.
 	Facts map[string]map[string]json.RawMessage
 	// SpawnLatency is Job-creation → pod-running, the §8 pod-spawn gate.
 	SpawnLatency time.Duration
 }
 
-// Run creates the Job for the prepared Step and follows it to completion,
-// publishing every task event to the bus under runID. The Actuator that
-// prepared the spec interprets the pod's stdout lines — the dispatcher stays
-// tool-agnostic.
-func (d *Dispatcher) Run(ctx context.Context, runID string, spec actuators.JobSpec, act actuators.Actuator) (*Result, error) {
-	// Full Run id: the name keys ConfigMap and Job, and AlreadyExists is
-	// treated as adoption — a truncated id would let two Runs sharing a
-	// prefix adopt each other's execution (charter-guardian, ADR-0008).
-	jobName := "stratt-run-" + runID
+// Run creates the Job for the prepared Step slice and follows it to
+// completion, publishing every task event to the bus under (runID, slice).
+// The Actuator that prepared the spec interprets the pod's stdout lines —
+// the dispatcher stays tool-agnostic.
+func (d *Dispatcher) Run(ctx context.Context, runID string, slice int, spec actuators.JobSpec, act actuators.Actuator) (*Result, error) {
+	// Full Run id + slice index: the name keys ConfigMap and Job, and
+	// AlreadyExists is treated as adoption — a truncated id would let two
+	// Runs (or two slices) adopt each other's execution (ADR-0008 review).
+	jobName := fmt.Sprintf("stratt-run-%s-s%d", runID, slice)
 	created := time.Now()
 
 	if err := d.createContent(ctx, jobName, spec.Files); err != nil {
@@ -87,14 +90,15 @@ func (d *Dispatcher) Run(ctx context.Context, runID string, spec actuators.JobSp
 		return nil, err
 	}
 	spawn := time.Since(created)
-	d.log.Info("pod running", "pod", pod, "spawn", spawn.String())
+	d.log.Info("pod running", "pod", pod, "slice", slice, "spawn", spawn.String())
 
 	res := &Result{
 		PerTarget:    map[string]string{},
 		Facts:        map[string]map[string]json.RawMessage{},
 		SpawnLatency: spawn,
 	}
-	if err := d.followLogs(ctx, runID, pod, act, res); err != nil {
+	unclaimed, interpreted, err := d.followLogs(ctx, runID, slice, pod, act, res)
+	if err != nil {
 		return nil, err
 	}
 	ok, err := d.waitForJob(ctx, jobName)
@@ -102,6 +106,27 @@ func (d *Dispatcher) Run(ctx context.Context, runID string, spec actuators.JobSp
 		return nil, err
 	}
 	res.Succeeded = ok
+
+	// Diagnostic floor (§1.8): surface retained uninterpretable output when
+	// the tool never spoke its protocol at all, or the Job died abnormally
+	// (a mid-stream crash after valid events). A clean failure (interpreted
+	// events, Job reporting the play's own failure) keeps its stream free of
+	// banner noise. Seqs are deterministic — retries dedup.
+	if unclaimed.len() > 0 && (interpreted == 0 || !ok) {
+		d.log.Warn("publishing diagnostic output", "pod", pod, "lines", unclaimed.len(), "interpreted", interpreted)
+		for i, line := range unclaimed.lines {
+			ev := types.RunEvent{
+				RunID:   runID,
+				Slice:   slice,
+				Seq:     unclaimed.maxSeq + int64(i) + 1,
+				Kind:    "diagnostic-output",
+				Payload: map[string]any{"line": line},
+			}
+			if err := d.bus.Publish(ctx, ev); err != nil {
+				return nil, err
+			}
+		}
+	}
 	return res, nil
 }
 
@@ -218,32 +243,84 @@ func (d *Dispatcher) waitForPod(ctx context.Context, jobName string) (string, er
 	}
 }
 
+// diagnosticRing caps how many uninterpretable lines are retained for the
+// §1.8 diagnostic floor.
+const diagnosticRing = 50
+
+// statusRank orders per-target statuses for the escalating fold. Unknown
+// (including the empty "no status yet") ranks lowest.
+func statusRank(status string) int {
+	switch status {
+	case actuators.StatusChanged:
+		return 1
+	case actuators.StatusFailed, actuators.StatusUnreachable:
+		return 2
+	default:
+		return 0
+	}
+}
+
+// unclaimedRing is the bounded retention of lines an Actuator's Interpret
+// rejected, plus the highest interpreted seq (the base for deterministic
+// synthetic diagnostic seqs).
+type unclaimedRing struct {
+	lines  []string
+	maxSeq int64
+}
+
+func (u unclaimedRing) len() int { return len(u.lines) }
+
 // followLogs streams the pod's stdout, publishing each interpreted event to
-// the bus and folding per-target results and facts into res.
-func (d *Dispatcher) followLogs(ctx context.Context, runID, pod string, act actuators.Actuator, res *Result) error {
+// the bus and folding per-target results and facts into res. Lines the
+// Actuator cannot interpret are retained (bounded) and returned so Run can
+// publish them as the §1.8 diagnostic floor once the Job's verdict is known.
+// The Run-level stream-end marker is published by the Workflow once every
+// slice has finished.
+func (d *Dispatcher) followLogs(ctx context.Context, runID string, slice int, pod string, act actuators.Actuator, res *Result) (unclaimedRing, int, error) {
+	var unclaimed unclaimedRing
 	req := d.client.CoreV1().Pods(d.cfg.Namespace).GetLogs(pod, &corev1.PodLogOptions{Follow: true})
 	stream, err := req.Stream(ctx)
 	if err != nil {
-		return fmt.Errorf("dispatch: log stream: %w", err)
+		return unclaimed, 0, fmt.Errorf("dispatch: log stream: %w", err)
 	}
 	defer stream.Close()
 
+	interpreted := 0
 	sc := bufio.NewScanner(stream)
 	sc.Buffer(make([]byte, 0, 1024*1024), 8*1024*1024) // fact payloads are large
 	for sc.Scan() {
 		iv, ok := act.Interpret(sc.Bytes())
 		if !ok {
+			if line := strings.TrimSpace(sc.Text()); line != "" {
+				unclaimed.lines = append(unclaimed.lines, line)
+				if len(unclaimed.lines) > diagnosticRing {
+					unclaimed.lines = unclaimed.lines[1:]
+				}
+			}
 			continue
 		}
+		interpreted++
+		if iv.Event.Seq > unclaimed.maxSeq {
+			unclaimed.maxSeq = iv.Event.Seq
+		}
 		iv.Event.RunID = runID
+		iv.Event.Slice = slice
 		if err := d.bus.Publish(ctx, iv.Event); err != nil {
-			return err
+			return unclaimed, interpreted, err
 		}
 		if r := iv.Result; r != nil && r.Target != "" {
-			if r.Failed {
-				res.PerTarget[r.Target] = "failed"
-			} else if res.PerTarget[r.Target] != "failed" {
-				res.PerTarget[r.Target] = "ok"
+			status := r.Status
+			if status == "" { // seam default for status-less actuators
+				status = actuators.StatusOK
+				if r.Failed {
+					status = actuators.StatusFailed
+				}
+			}
+			// Statuses only escalate: ok < changed < failed/unreachable.
+			// A later ok (e.g. a skipped task) never hides that the target
+			// was mutated or failed earlier in the play.
+			if statusRank(status) >= statusRank(res.PerTarget[r.Target]) {
+				res.PerTarget[r.Target] = status
 			}
 		}
 		if iv.Facts != nil && iv.Event.Target != "" {
@@ -251,10 +328,9 @@ func (d *Dispatcher) followLogs(ctx context.Context, runID, pod string, act actu
 		}
 	}
 	if err := sc.Err(); err != nil && ctx.Err() == nil {
-		return fmt.Errorf("dispatch: read logs: %w", err)
+		return unclaimed, interpreted, fmt.Errorf("dispatch: read logs: %w", err)
 	}
-	// Terminal marker for tails (§1.8: the descent has a floor, not a gap).
-	return d.bus.Publish(ctx, types.RunEvent{RunID: runID, Kind: "stream-end"})
+	return unclaimed, interpreted, nil
 }
 
 // waitForJob polls the Job to a terminal condition.

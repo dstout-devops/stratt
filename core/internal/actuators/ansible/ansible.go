@@ -15,6 +15,8 @@ import (
 	"fmt"
 	"strings"
 
+	yaml "go.yaml.in/yaml/v3"
+
 	"github.com/dstout-devops/stratt/core/internal/actuators"
 	"github.com/dstout-devops/stratt/types"
 )
@@ -57,17 +59,40 @@ func BuildContent(play string, targets []Target) Content {
 	return Content{Play: play, Hosts: b.String()}
 }
 
+// params is this Actuator's interpretation of Step params — an internal
+// convenience, not the Contract (§1.5): the pinned JSON-Schema Contract
+// document lands with the Phase-2 Contract machinery.
+type params struct {
+	// Play is the play content (a YAML sequence of plays). Empty means the
+	// Phase-0 gather-facts play.
+	Play string `json:"play"`
+	// EEImage overrides the dispatcher's default execution-environment
+	// image. Dev accepts tags; production manifests pin digests (§7.3).
+	EEImage string `json:"eeImage"`
+}
+
 // Actuator adapts this package's pure functions to the Actuator seam.
 type Actuator struct{}
 
 // Name implements actuators.Actuator.
 func (Actuator) Name() string { return "ansible" }
 
-// Prepare implements actuators.Actuator. Params are unused in this slice:
-// the content is the Phase-0 gather-facts play (custom play content arrives
-// with "Ansible Actuator complete", charter §8 Phase 1).
-func (Actuator) Prepare(_ json.RawMessage, targets []Target) (actuators.JobSpec, error) {
-	content := BuildContent(GatherFactsPlay, targets)
+// Prepare implements actuators.Actuator.
+func (Actuator) Prepare(raw json.RawMessage, targets []Target) (actuators.JobSpec, error) {
+	var p params
+	if len(raw) > 0 {
+		if err := json.Unmarshal(raw, &p); err != nil {
+			return actuators.JobSpec{}, fmt.Errorf("ansible: invalid params: %w", err)
+		}
+	}
+	play := p.Play
+	if play == "" {
+		play = GatherFactsPlay
+	} else if err := validatePlay(play); err != nil {
+		// Fail at Prepare (terminal), not as a cryptic pod crash.
+		return actuators.JobSpec{}, err
+	}
+	content := BuildContent(play, targets)
 	return actuators.JobSpec{
 		Files: map[string]string{
 			"project/play.yml": content.Play,
@@ -76,7 +101,21 @@ func (Actuator) Prepare(_ json.RawMessage, targets []Target) (actuators.JobSpec,
 		// -j: one JSON event per stdout line — the event stream the
 		// dispatcher ships to NATS.
 		Command: []string{"ansible-runner", "run", "/runner", "-p", "play.yml", "-j"},
+		Image:   p.EEImage,
 	}, nil
+}
+
+// validatePlay checks the content is a YAML sequence (a plays list) — the
+// only shape ansible-runner will accept as a play file.
+func validatePlay(play string) error {
+	var doc any
+	if err := yaml.Unmarshal([]byte(play), &doc); err != nil {
+		return fmt.Errorf("ansible: params.play is not valid YAML: %w", err)
+	}
+	if _, ok := doc.([]any); !ok {
+		return fmt.Errorf("ansible: params.play must be a YAML sequence of plays")
+	}
+	return nil
 }
 
 // Interpret implements actuators.Actuator.
@@ -86,8 +125,12 @@ func (Actuator) Interpret(line []byte) (actuators.Interpreted, bool) {
 		return actuators.Interpreted{}, false
 	}
 	out := actuators.Interpreted{Event: ToRunEvent("", ev)}
-	if host, hostOK, failed := HostResult(ev); host != "" && (hostOK || failed) {
-		out.Result = &actuators.TargetResult{Target: host, Failed: failed}
+	if host, status := HostStatus(ev); host != "" && status != "" {
+		out.Result = &actuators.TargetResult{
+			Target: host,
+			Status: status,
+			Failed: status == actuators.StatusFailed || status == actuators.StatusUnreachable,
+		}
 	}
 	out.Facts = ExtractFacts(ev)
 	return out, true
@@ -133,16 +176,29 @@ func ToRunEvent(runID string, ev RunnerEvent) types.RunEvent {
 	}
 }
 
-// HostResult classifies terminal per-target events.
-func HostResult(ev RunnerEvent) (host string, ok, failed bool) {
+// HostStatus classifies terminal per-target events into the seam's statuses
+// (empty status = not a terminal per-target event). runner_on_ok with a
+// changed result reports "changed" — ok, but the target was mutated.
+func HostStatus(ev RunnerEvent) (host, status string) {
 	h, _ := ev.EventData["host"].(string)
 	switch ev.Event {
 	case "runner_on_ok":
-		return h, true, false
-	case "runner_on_failed", "runner_on_unreachable":
-		return h, false, true
+		if res, ok := ev.EventData["res"].(map[string]any); ok {
+			if changed, _ := res["changed"].(bool); changed {
+				return h, actuators.StatusChanged
+			}
+		}
+		return h, actuators.StatusOK
+	case "runner_on_skipped":
+		// A host whose task was skipped completed it without failure: ok
+		// for the per-target fold (failures stay sticky over it).
+		return h, actuators.StatusOK
+	case "runner_on_failed":
+		return h, actuators.StatusFailed
+	case "runner_on_unreachable":
+		return h, actuators.StatusUnreachable
 	}
-	return h, false, false
+	return h, ""
 }
 
 // ExtractFacts pulls gathered ansible_facts from a runner_on_ok event, mapped

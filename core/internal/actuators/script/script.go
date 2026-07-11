@@ -156,7 +156,11 @@ func (Actuator) Interpret(line []byte) (actuators.Interpreted, bool) {
 		Payload: payload,
 	}}
 	if ev.Event == "target_finished" && ev.RC != nil {
-		out.Result = &actuators.TargetResult{Target: ev.Host, Failed: *ev.RC != 0}
+		status := actuators.StatusOK
+		if *ev.RC != 0 {
+			status = actuators.StatusFailed
+		}
+		out.Result = &actuators.TargetResult{Target: ev.Host, Status: status, Failed: *ev.RC != 0}
 	}
 	return out, true
 }
