@@ -14,6 +14,7 @@ import (
 	"go.temporal.io/sdk/workflow"
 
 	"github.com/dstout-devops/stratt/core/internal/actuators"
+	"github.com/dstout-devops/stratt/core/internal/authz"
 	"github.com/dstout-devops/stratt/core/internal/dispatch"
 	"github.com/dstout-devops/stratt/core/internal/events"
 	"github.com/dstout-devops/stratt/core/internal/graph"
@@ -33,6 +34,12 @@ type RunInput struct {
 	Actuator string
 	Params   json.RawMessage
 	Slices   int
+	// Principal is the launching identity (§2.5) — checked for `use` on
+	// each CredentialRef at dispatch time and recorded for audit. Only the
+	// id travels; never any material.
+	Principal string
+	// CredentialRefs are pointer names to project into execution pods.
+	CredentialRefs []string
 }
 
 // ResolvedTargets is what the View resolves to at dispatch time; the version
@@ -68,6 +75,14 @@ func RunAgainstView(ctx workflow.Context, in RunInput) error {
 		return finishRun(ctx, a, in, types.RunFailed, err)
 	}
 
+	// Resolve credential pointers and check the Principal's `use` grant
+	// before anything executes (§2.5). Metadata only — material never
+	// enters workflow state.
+	var creds []dispatch.CredentialMount
+	if err := workflow.ExecuteActivity(ctx, a.ResolveCredentials, in).Get(ctx, &creds); err != nil {
+		return finishRun(ctx, a, in, types.RunFailed, err)
+	}
+
 	// Fan the target set out across slices — parallel Jobs, each an
 	// independently-retryable activity whose rung shows in the Workflow
 	// history (§1.8). Targets are disjoint, so results merge by union.
@@ -75,7 +90,7 @@ func RunAgainstView(ctx workflow.Context, in RunInput) error {
 	futures := make([]workflow.Future, len(chunks))
 	for i, chunk := range chunks {
 		futures[i] = workflow.ExecuteActivity(ctx, a.Execute, in, i,
-			ResolvedTargets{ViewVersion: resolved.ViewVersion, Targets: chunk})
+			ResolvedTargets{ViewVersion: resolved.ViewVersion, Targets: chunk}, creds)
 	}
 	var result dispatch.Result
 	sliceResults := make([]dispatch.Result, len(chunks))
@@ -119,6 +134,7 @@ type Activities struct {
 	Store      *graph.Store
 	Dispatcher *dispatch.Dispatcher
 	Bus        *events.Bus
+	Authz      authz.Authorizer
 	// Actuators is the registry of in-tree Actuators by name (§2.3).
 	Actuators map[string]actuators.Actuator
 }
@@ -154,9 +170,59 @@ func (a *Activities) MarkRunning(ctx context.Context, runID string) error {
 	return a.Store.SetRunStatus(ctx, runID, types.RunRunning, nil)
 }
 
+// ResolveCredentials turns CredentialRef names into pod-mountable pointers,
+// enforcing the launching Principal's `use` grant (§2.5, use-without-read).
+// Output is pure metadata: secret coordinates and projection policy — the
+// kubelet resolves material at spawn; nothing here can hold it.
+func (a *Activities) ResolveCredentials(ctx context.Context, in RunInput) ([]dispatch.CredentialMount, error) {
+	if len(in.CredentialRefs) == 0 {
+		return nil, nil
+	}
+	if in.Principal == "" {
+		return nil, temporal.NewNonRetryableApplicationError(
+			"credentialRefs require an authenticated principal", "CredentialUseDenied", nil)
+	}
+	out := make([]dispatch.CredentialMount, 0, len(in.CredentialRefs))
+	for _, name := range in.CredentialRefs {
+		allowed, err := a.Authz.Check(ctx, in.Principal, authz.RelationUser, "credential_ref:"+name)
+		if err != nil {
+			return nil, err
+		}
+		if !allowed {
+			return nil, temporal.NewNonRetryableApplicationError(
+				fmt.Sprintf("principal %s lacks use on credential_ref:%s", in.Principal, name),
+				"CredentialUseDenied", nil)
+		}
+		ref, err := a.Store.GetCredentialRef(ctx, name)
+		if err != nil {
+			return nil, temporal.NewNonRetryableApplicationError(err.Error(), "CredentialRefNotFound", err)
+		}
+		if ref.Backend != types.BackendK8sSecret {
+			return nil, temporal.NewNonRetryableApplicationError(
+				fmt.Sprintf("credential_ref %s: backend %s not yet implemented (ADR-0009)", name, ref.Backend),
+				"BackendUnimplemented", nil)
+		}
+		var loc struct {
+			Namespace string `json:"namespace"`
+			Name      string `json:"name"`
+		}
+		if err := json.Unmarshal(ref.Locator, &loc); err != nil || loc.Name == "" {
+			return nil, temporal.NewNonRetryableApplicationError(
+				fmt.Sprintf("credential_ref %s: invalid k8s-secret locator", name), "InvalidLocator", err)
+		}
+		out = append(out, dispatch.CredentialMount{
+			RefName:         name,
+			SecretNamespace: loc.Namespace, // "" = the Job's namespace; a mismatch fails at dispatch
+			SecretName:      loc.Name,
+			Injection:       ref.Injection,
+		})
+	}
+	return out, nil
+}
+
 // Execute prepares one Step slice through its Actuator, dispatches the K8s
 // Job, and follows it, publishing task events under (runID, slice).
-func (a *Activities) Execute(ctx context.Context, in RunInput, slice int, resolved ResolvedTargets) (dispatch.Result, error) {
+func (a *Activities) Execute(ctx context.Context, in RunInput, slice int, resolved ResolvedTargets, creds []dispatch.CredentialMount) (dispatch.Result, error) {
 	name := in.Actuator
 	if name == "" {
 		name = "ansible"
@@ -172,7 +238,7 @@ func (a *Activities) Execute(ctx context.Context, in RunInput, slice int, resolv
 		// Malformed Step params are terminal too.
 		return dispatch.Result{}, temporal.NewNonRetryableApplicationError(err.Error(), "InvalidStepParams", err)
 	}
-	res, err := a.Dispatcher.Run(ctx, in.RunID, slice, spec, act)
+	res, err := a.Dispatcher.Run(ctx, in.RunID, slice, spec, act, creds)
 	if err != nil {
 		return dispatch.Result{}, err
 	}
@@ -275,7 +341,7 @@ func (a *Activities) FinishRun(ctx context.Context, in RunInput, status types.Ru
 	if slices < 1 {
 		slices = 1
 	}
-	if err := a.Store.SetRunStatus(ctx, in.RunID, status, map[string]any{
+	summary := map[string]any{
 		"actuator":       actuator, // which engine ran the Step (§1.8 diagnosis)
 		"slices":         slices,
 		"targets":        len(result.PerTarget),
@@ -284,7 +350,16 @@ func (a *Activities) FinishRun(ctx context.Context, in RunInput, status types.Ru
 		"failed":         counts[actuators.StatusFailed],
 		"unreachable":    counts[actuators.StatusUnreachable],
 		"spawnLatencyMs": result.SpawnLatency.Milliseconds(), // slowest slice
-	}); err != nil {
+	}
+	// Audit (§1.8, §2.5): who launched, with which credential pointers —
+	// names only; material has no representation anywhere in the platform.
+	if in.Principal != "" {
+		summary["principal"] = in.Principal
+	}
+	if len(in.CredentialRefs) > 0 {
+		summary["credentialRefs"] = in.CredentialRefs
+	}
+	if err := a.Store.SetRunStatus(ctx, in.RunID, status, summary); err != nil {
 		return err
 	}
 	// MsgID (runID/0/0) dedups the marker across FinishRun retries.

@@ -43,10 +43,11 @@ selector:
 	writeDecl(t, root, "all-vms.yml", "name: all-vms\nselector:\n  kinds: [vm]\n")
 	writeDecl(t, root, "notes.txt", "not a declaration") // ignored
 
-	decls, err := ParseDir(root)
+	parsed, err := ParseDir(root)
 	if err != nil {
 		t.Fatal(err)
 	}
+	decls := parsed.Views
 	if len(decls) != 2 || decls[0].Name != "all-vms" || decls[1].Name != "prod-linux" {
 		t.Fatalf("decls: %+v", decls)
 	}
@@ -149,7 +150,7 @@ func TestPlanApplyLifecycle(t *testing.T) {
 		{Name: "adoptme", Selector: sel("vm")},
 		{Name: "fresh", Selector: sel("vm")},
 	}
-	plan, err := ComputePlan(ctx, s, decls)
+	plan, err := ComputePlan(ctx, s, Declarations{Views: decls})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -158,7 +159,7 @@ func TestPlanApplyLifecycle(t *testing.T) {
 		t.Fatalf("plan: %+v", got)
 	}
 
-	applied, err := Apply(ctx, s, decls)
+	applied, err := Apply(ctx, s, Declarations{Views: decls})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -178,7 +179,7 @@ func TestPlanApplyLifecycle(t *testing.T) {
 	}
 
 	// Re-apply: everything noop.
-	plan2, err := Apply(ctx, s, decls)
+	plan2, err := Apply(ctx, s, Declarations{Views: decls})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -188,7 +189,7 @@ func TestPlanApplyLifecycle(t *testing.T) {
 
 	// Selector change → update, version bump.
 	decls[1].Selector = sel("vm", "host")
-	plan3, err := Apply(ctx, s, decls)
+	plan3, err := Apply(ctx, s, Declarations{Views: decls})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -212,7 +213,7 @@ func TestPlanApplyLifecycle(t *testing.T) {
 	if _, err := s.DeclareView(ctx, "api-owned", sel("vm")); err != nil {
 		t.Fatal(err)
 	}
-	plan4, err := Apply(ctx, s, decls[:1]) // only adoptme remains declared
+	plan4, err := Apply(ctx, s, Declarations{Views: decls[:1]}) // only adoptme remains declared
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -231,7 +232,7 @@ func TestPlanApplyLifecycle(t *testing.T) {
 
 	// Deleted name can be re-declared: history went with the row.
 	decls2 := append(decls[:1], Declaration{Name: "fresh", Selector: sel("vm")})
-	plan5, err := Apply(ctx, s, decls2)
+	plan5, err := Apply(ctx, s, Declarations{Views: decls2})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -242,18 +243,131 @@ func TestPlanApplyLifecycle(t *testing.T) {
 	}
 }
 
+func writeCredRef(t *testing.T, root, file, content string) {
+	t.Helper()
+	dir := filepath.Join(root, "credential-refs")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, file), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestParseCredentialRefs(t *testing.T) {
+	root := t.TempDir()
+	writeDecl(t, root, "all-vms.yaml", "name: all-vms\nselector: {kinds: [vm]}\n")
+	writeCredRef(t, root, "vc.yaml", `
+name: vcenter-dev
+ownerTeam: platform
+backend: k8s-secret
+locator: { namespace: default, name: vcenter-dev }
+injection:
+  - { key: password, as: env, name: VC_PASS }
+  - { key: username, as: file, name: user }
+`)
+	parsed, err := ParseDir(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(parsed.CredentialRefs) != 1 {
+		t.Fatalf("refs: %+v", parsed.CredentialRefs)
+	}
+	ref := parsed.CredentialRefs[0]
+	if ref.Name != "vcenter-dev" || ref.OwnerTeam != "platform" || ref.Backend != types.BackendK8sSecret {
+		t.Fatalf("ref: %+v", ref)
+	}
+	if len(ref.Injection) != 2 || ref.Injection[0].As != types.InjectEnv || ref.Injection[1].As != types.InjectFile {
+		t.Fatalf("injection: %+v", ref.Injection)
+	}
+
+	// Rejections: bad backend, bad injection mode, missing injection.
+	for name, doc := range map[string]string{
+		"backend":   "name: x\nownerTeam: t\nbackend: sqlite\nlocator: {name: n}\ninjection: [{key: k, as: env, name: N}]\n",
+		"mode":      "name: x\nownerTeam: t\nbackend: k8s-secret\nlocator: {name: n}\ninjection: [{key: k, as: extra_vars, name: N}]\n",
+		"injection": "name: x\nownerTeam: t\nbackend: k8s-secret\nlocator: {name: n}\ninjection: []\n",
+	} {
+		bad := t.TempDir()
+		writeDecl(t, bad, "v.yaml", "name: v\nselector: {kinds: [vm]}\n")
+		writeCredRef(t, bad, "x.yaml", doc)
+		if _, err := ParseDir(bad); err == nil {
+			t.Fatalf("invalid %s must be rejected", name)
+		}
+	}
+
+	// credential-refs/ absent → valid (pre-ADR-0009 repos).
+	old := t.TempDir()
+	writeDecl(t, old, "v.yaml", "name: v\nselector: {kinds: [vm]}\n")
+	if _, err := ParseDir(old); err != nil {
+		t.Fatalf("missing credential-refs dir must be fine: %v", err)
+	}
+}
+
+func TestCredentialRefLifecycle(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+
+	mkRef := func(team string) types.CredentialRef {
+		return types.CredentialRef{
+			Name: "vc", OwnerTeam: team, Backend: types.BackendK8sSecret,
+			Locator:   json.RawMessage(`{"name":"vc-secret"}`),
+			Injection: []types.CredentialInjection{{Key: "password", As: types.InjectEnv, Name: "VC_PASS"}},
+		}
+	}
+	decls := Declarations{CredentialRefs: []types.CredentialRef{mkRef("platform")}}
+
+	plan, err := Apply(ctx, s, decls)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if actionsByName(plan)["vc"] != ActionCreate {
+		t.Fatalf("plan: %+v", plan.Entries)
+	}
+
+	// Noop re-apply; update on change.
+	plan, _ = Apply(ctx, s, decls)
+	if plan.Changes() != 0 {
+		t.Fatalf("re-apply should be noop: %+v", plan.Entries)
+	}
+	decls.CredentialRefs[0] = mkRef("other-team")
+	plan, _ = Apply(ctx, s, decls)
+	if actionsByName(plan)["vc"] != ActionUpdate {
+		t.Fatalf("owner change should plan update: %+v", plan.Entries)
+	}
+
+	// api may not modify a cac ref.
+	if _, err := s.DeclareCredentialRefAs(ctx, mkRef("hijack"), graph.DeclaredByAPI); err == nil || !strings.Contains(err.Error(), "cac") {
+		t.Fatalf("api declare on cac ref must fail, got %v", err)
+	}
+
+	// Prune.
+	plan, _ = Apply(ctx, s, Declarations{})
+	if actionsByName(plan)["vc"] != ActionDelete {
+		t.Fatalf("undeclared ref should prune: %+v", plan.Entries)
+	}
+	if _, err := s.GetCredentialRef(ctx, "vc"); err == nil {
+		t.Fatal("pruned ref should be gone")
+	}
+}
+
 func TestPruneStats(t *testing.T) {
 	p := Plan{Entries: []PlanEntry{
-		{Name: "a", Action: ActionNoop},
-		{Name: "b", Action: ActionUpdate},
-		{Name: "c", Action: ActionDelete},
-		{Name: "d", Action: ActionDelete},
-		{Name: "e", Action: ActionCreate}, // not a current cac view
-		{Name: "f", Action: ActionAdopt},  // currently api, not cac
+		{Kind: KindView, Name: "a", Action: ActionNoop},
+		{Kind: KindView, Name: "b", Action: ActionUpdate},
+		{Kind: KindView, Name: "c", Action: ActionDelete},
+		{Kind: KindView, Name: "d", Action: ActionDelete},
+		{Kind: KindView, Name: "e", Action: ActionCreate}, // not a current cac view
+		{Kind: KindView, Name: "f", Action: ActionAdopt},  // currently api, not cac
+		// One kind's bulk must not mask another's total disappearance:
+		// every declared credential-ref pruned.
+		{Kind: KindCredentialRef, Name: "x", Action: ActionDelete},
 	}}
-	deletes, cacTotal := p.PruneStats()
-	if deletes != 2 || cacTotal != 4 {
-		t.Fatalf("prune stats: deletes=%d cacTotal=%d", deletes, cacTotal)
+	stats := p.PruneStats()
+	if v := stats[KindView]; v[0] != 2 || v[1] != 4 {
+		t.Fatalf("view prune stats: %v", v)
+	}
+	if c := stats[KindCredentialRef]; c[0] != 1 || c[1] != 1 {
+		t.Fatalf("credential-ref prune stats: %v", c)
 	}
 }
 

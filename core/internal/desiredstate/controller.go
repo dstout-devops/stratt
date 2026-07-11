@@ -88,10 +88,13 @@ func (c *Controller) reconcile(ctx context.Context, log *slog.Logger) {
 	if maxPrune <= 0 {
 		maxPrune = 0.5
 	}
-	if deletes, cacTotal := plan.PruneStats(); cacTotal > 0 && float64(deletes)/float64(cacTotal) > maxPrune {
-		log.Error("refusing reconcile: plan prunes too much of the declared estate — apply explicitly (stratt apply) if intended",
-			"deletes", deletes, "declared", cacTotal, "maxPruneFraction", maxPrune)
-		return
+	for kind, s := range plan.PruneStats() {
+		deletes, cacTotal := s[0], s[1]
+		if cacTotal > 0 && float64(deletes)/float64(cacTotal) > maxPrune {
+			log.Error("refusing reconcile: plan prunes too much of the declared estate — apply explicitly (stratt apply) if intended",
+				"kind", kind, "deletes", deletes, "declared", cacTotal, "maxPruneFraction", maxPrune)
+			return
+		}
 	}
 
 	plan, err = Apply(ctx, c.Store, decls)
@@ -104,9 +107,9 @@ func (c *Controller) reconcile(ctx context.Context, log *slog.Logger) {
 			continue
 		}
 		if e.Error != "" {
-			log.Error("reconcile action failed", "view", e.Name, "action", string(e.Action), "error", e.Error)
+			log.Error("reconcile action failed", "kind", e.Kind, "name", e.Name, "action", string(e.Action), "error", e.Error)
 			continue
 		}
-		log.Info("reconciled", "view", e.Name, "action", string(e.Action), "members", e.MemberCount)
+		log.Info("reconciled", "kind", e.Kind, "name", e.Name, "action", string(e.Action), "members", e.MemberCount)
 	}
 }

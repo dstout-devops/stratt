@@ -179,6 +179,92 @@ func (s *Store) DeleteView(ctx context.Context, name, declaredBy string) error {
 	return tx.Commit(ctx)
 }
 
+// ── CredentialRefs (§2.5, ADR-0009) ─────────────────────────────────────────
+
+// DeclareCredentialRefAs creates or updates a CredentialRef pointer for the
+// given declaration path — the same cac-over-api ownership asymmetry as
+// Views (§1.2): cac may adopt, api may never touch a cac ref.
+func (s *Store) DeclareCredentialRefAs(ctx context.Context, ref types.CredentialRef, declaredBy string) (types.CredentialRef, error) {
+	injection, err := json.Marshal(ref.Injection)
+	if err != nil {
+		return types.CredentialRef{}, fmt.Errorf("graph: marshal injection: %w", err)
+	}
+	tag, err := s.pool.Exec(ctx, `
+		INSERT INTO graph.credential_ref (name, owner_team, backend, locator, injection, declared_by)
+		VALUES ($1, $2, $3, $4, $5, $6)
+		ON CONFLICT (name) DO UPDATE
+		SET owner_team = excluded.owner_team, backend = excluded.backend,
+		    locator = excluded.locator, injection = excluded.injection,
+		    declared_by = excluded.declared_by
+		WHERE (excluded.declared_by = 'cac' OR graph.credential_ref.declared_by = 'api')`,
+		ref.Name, ref.OwnerTeam, ref.Backend, ref.Locator, injection, declaredBy)
+	if err != nil {
+		return types.CredentialRef{}, fmt.Errorf("graph: declare credential ref: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return types.CredentialRef{}, fmt.Errorf("%w: credential ref %s", ErrDeclaredByCaC, ref.Name)
+	}
+	return s.GetCredentialRef(ctx, ref.Name)
+}
+
+// GetCredentialRef returns one pointer. There is no method anywhere that
+// returns material — no such code path exists (ADR-0009).
+func (s *Store) GetCredentialRef(ctx context.Context, name string) (types.CredentialRef, error) {
+	var ref types.CredentialRef
+	var injection []byte
+	err := s.pool.QueryRow(ctx, `
+		SELECT name, owner_team, backend, locator, injection, declared_by
+		FROM graph.credential_ref WHERE name = $1`, name,
+	).Scan(&ref.Name, &ref.OwnerTeam, &ref.Backend, &ref.Locator, &injection, &ref.DeclaredBy)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ref, fmt.Errorf("%w: credential ref %s", ErrNotFound, name)
+	}
+	if err != nil {
+		return ref, fmt.Errorf("graph: get credential ref: %w", err)
+	}
+	if err := json.Unmarshal(injection, &ref.Injection); err != nil {
+		return ref, fmt.Errorf("graph: decode injection: %w", err)
+	}
+	return ref, nil
+}
+
+// ListCredentialRefsDeclaredBy returns pointers owned by a declaration path.
+func (s *Store) ListCredentialRefsDeclaredBy(ctx context.Context, declaredBy string) ([]types.CredentialRef, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT name, owner_team, backend, locator, injection, declared_by
+		FROM graph.credential_ref WHERE declared_by = $1 ORDER BY name`, declaredBy)
+	if err != nil {
+		return nil, fmt.Errorf("graph: list credential refs: %w", err)
+	}
+	defer rows.Close()
+	var out []types.CredentialRef
+	for rows.Next() {
+		var ref types.CredentialRef
+		var injection []byte
+		if err := rows.Scan(&ref.Name, &ref.OwnerTeam, &ref.Backend, &ref.Locator, &injection, &ref.DeclaredBy); err != nil {
+			return nil, fmt.Errorf("graph: list credential refs: %w", err)
+		}
+		if err := json.Unmarshal(injection, &ref.Injection); err != nil {
+			return nil, fmt.Errorf("graph: decode injection: %w", err)
+		}
+		out = append(out, ref)
+	}
+	return out, rows.Err()
+}
+
+// DeleteCredentialRef removes a pointer owned by the given declaration path.
+func (s *Store) DeleteCredentialRef(ctx context.Context, name, declaredBy string) error {
+	tag, err := s.pool.Exec(ctx,
+		`DELETE FROM graph.credential_ref WHERE name = $1 AND declared_by = $2`, name, declaredBy)
+	if err != nil {
+		return fmt.Errorf("graph: delete credential ref: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("%w: credential ref %s (declared_by %s)", ErrNotFound, name, declaredBy)
+	}
+	return nil
+}
+
 // ── Sources (§2.2) ───────────────────────────────────────────────────────────
 
 // RegisterSource registers an external system of record. The credentialRef is

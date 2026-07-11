@@ -57,7 +57,9 @@ func run(cmd, dir, server string) error {
 	if err != nil {
 		return err
 	}
-	body, err := json.Marshal(map[string]any{"views": decls})
+	// Declarations' JSON shape is the wire DesiredState (views +
+	// credentialRefs) — pointer metadata only, never material (§2.5).
+	body, err := json.Marshal(decls)
 	if err != nil {
 		return err
 	}
@@ -93,7 +95,15 @@ func render(cmd string, plan desiredstate.Plan) error {
 		if e.Action == desiredstate.ActionNoop {
 			continue
 		}
-		fmt.Printf("%s %-8s %s  (members: %d)\n", symbols[e.Action], e.Action, e.Name, e.MemberCount)
+		kind := e.Kind
+		if kind == "" {
+			kind = desiredstate.KindView
+		}
+		if kind == desiredstate.KindView {
+			fmt.Printf("%s %-8s %s/%s  (members: %d)\n", symbols[e.Action], e.Action, kind, e.Name, e.MemberCount)
+		} else {
+			fmt.Printf("%s %-8s %s/%s\n", symbols[e.Action], e.Action, kind, e.Name)
+		}
 		if e.OldSelector != nil && e.NewSelector != nil {
 			old, _ := json.Marshal(e.OldSelector)
 			new_, _ := json.Marshal(e.NewSelector)

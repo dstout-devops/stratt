@@ -125,6 +125,57 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/Plan" }
         "400": { $ref: "#/components/responses/BadRequest" }
+  /credential-refs:
+    get:
+      operationId: listCredentialRefs
+      summary: List CredentialRef pointers the Principal may read
+      responses:
+        "200":
+          description: Pointer metadata only — material has no read path.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/CredentialRef" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+  /credential-refs/{name}:
+    parameters:
+      - name: name
+        in: path
+        required: true
+        schema: { type: string }
+    get:
+      operationId: getCredentialRef
+      summary: Get one CredentialRef pointer (reader grant required)
+      description: >
+        Returns pointer + injection policy metadata only. There is no
+        endpoint that returns secret material — no such code path exists
+        (charter §2.5, ADR-0009).
+      responses:
+        "200":
+          description: The pointer
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CredentialRef" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    put:
+      operationId: declareCredentialRef
+      summary: Declare a CredentialRef pointer (admin grant required)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CredentialRef" }
+      responses:
+        "200":
+          description: The declared pointer
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CredentialRef" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "409": { $ref: "#/components/responses/Conflict" }
   /runs:
     post:
       operationId: startRun
@@ -198,6 +249,11 @@ components:
           schema: { $ref: "#/components/schemas/Error" }
     Conflict:
       description: The object is owned by another declaration path
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    Forbidden:
+      description: The Principal lacks the required grant
       content:
         application/json:
           schema: { $ref: "#/components/schemas/Error" }
@@ -289,18 +345,53 @@ components:
       properties:
         name: { type: string }
         selector: { $ref: "#/components/schemas/ViewSelector" }
+    CredentialInjection:
+      type: object
+      required: [key, as, name]
+      properties:
+        key: { type: string, description: Field within the backend material. }
+        as: { type: string, enum: [env, file] }
+        name: { type: string, description: Env var name or path under the pod credentials mount. }
+    CredentialRef:
+      type: object
+      description: >
+        Pointer + injection policy to brokered secret material (charter
+        §2.5). Material never persists in the platform and has no read path.
+      required: [name, ownerTeam, backend, locator, injection]
+      properties:
+        name: { type: string }
+        ownerTeam: { type: string }
+        backend:
+          type: string
+          enum: [k8s-secret, vault, workload-identity]
+        locator:
+          type: object
+          description: "Backend-shaped address (k8s-secret: namespace, name)."
+        injection:
+          type: array
+          items: { $ref: "#/components/schemas/CredentialInjection" }
+        declaredBy:
+          type: string
+          enum: [api, cac]
+          readOnly: true
     DesiredState:
       type: object
-      description: The full declared View set (charter §1.2).
+      description: The full declared desired state (charter §1.2).
       required: [views]
       properties:
         views:
           type: array
           items: { $ref: "#/components/schemas/ViewDeclaration" }
+        credentialRefs:
+          type: array
+          items: { $ref: "#/components/schemas/CredentialRef" }
     PlanEntry:
       type: object
       required: [name, action, memberCount]
       properties:
+        kind:
+          type: string
+          enum: [view, credential-ref]
         name: { type: string }
         action:
           type: string
@@ -352,6 +443,13 @@ components:
           description: >
             Partition the target set across this many parallel execution
             Jobs (clamped to the target count).
+        credentialRefs:
+          type: array
+          items: { type: string }
+          description: >
+            CredentialRef names to project into the execution pods. The
+            launching Principal needs the `use` grant on each (checked at
+            dispatch; use never implies read — charter §2.5).
     Run:
       type: object
       required: [id, workflowId, status, startedAt]

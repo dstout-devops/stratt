@@ -51,6 +51,22 @@ func New(cfg Config, client kubernetes.Interface, bus *events.Bus, log *slog.Log
 	return &Dispatcher{cfg: cfg, client: client, bus: bus, log: log.With("component", "dispatch")}
 }
 
+// CredentialMount is a resolved CredentialRef pointer, ready to project into
+// the pod spec (§2.5, ADR-0009). Pure metadata: the kubelet dereferences the
+// Secret; this struct — like everything in the control plane — cannot hold
+// material.
+type CredentialMount struct {
+	// RefName is the CredentialRef name (audit/labels).
+	RefName string
+	// SecretNamespace must be empty or equal to the Job's namespace —
+	// secretKeyRef cannot cross namespaces; a mismatch fails dispatch.
+	SecretNamespace string
+	// SecretName is the K8s Secret holding the material.
+	SecretName string
+	// Injection is the per-key projection policy (env | file).
+	Injection []types.CredentialInjection
+}
+
 // Result summarizes one Job execution — per-target outcomes plus the facts
 // each target reported (to project back with Run provenance, §8).
 type Result struct {
@@ -69,7 +85,7 @@ type Result struct {
 // completion, publishing every task event to the bus under (runID, slice).
 // The Actuator that prepared the spec interprets the pod's stdout lines —
 // the dispatcher stays tool-agnostic.
-func (d *Dispatcher) Run(ctx context.Context, runID string, slice int, spec actuators.JobSpec, act actuators.Actuator) (*Result, error) {
+func (d *Dispatcher) Run(ctx context.Context, runID string, slice int, spec actuators.JobSpec, act actuators.Actuator, creds []CredentialMount) (*Result, error) {
 	// Full Run id + slice index: the name keys ConfigMap and Job, and
 	// AlreadyExists is treated as adoption — a truncated id would let two
 	// Runs (or two slices) adopt each other's execution (ADR-0008 review).
@@ -81,7 +97,7 @@ func (d *Dispatcher) Run(ctx context.Context, runID string, slice int, spec actu
 	}
 	defer d.cleanupContent(jobName)
 
-	if err := d.createJob(ctx, jobName, runID, spec); err != nil {
+	if err := d.createJob(ctx, jobName, runID, spec, creds); err != nil {
 		return nil, err
 	}
 
@@ -158,7 +174,7 @@ func (d *Dispatcher) cleanupContent(name string) {
 	_ = d.client.CoreV1().ConfigMaps(d.cfg.Namespace).Delete(ctx, name, metav1.DeleteOptions{})
 }
 
-func (d *Dispatcher) createJob(ctx context.Context, name, runID string, spec actuators.JobSpec) error {
+func (d *Dispatcher) createJob(ctx context.Context, name, runID string, spec actuators.JobSpec, creds []CredentialMount) error {
 	backoff := int32(0)
 	ttl := int32(3600)
 
@@ -176,6 +192,50 @@ func (d *Dispatcher) createJob(ctx context.Context, name, runID string, spec act
 	mounts := []corev1.VolumeMount{{Name: "workdir", MountPath: "/runner/artifacts"}}
 	for _, p := range paths {
 		mounts = append(mounts, corev1.VolumeMount{Name: "content", MountPath: "/runner/" + p, SubPath: cmKey(p)})
+	}
+
+	// Credential projection (§2.5, ADR-0009): the pod spec references the
+	// Secret; the KUBELET resolves material — the control plane composes
+	// coordinates only. env → secretKeyRef; file → read-only Secret volume
+	// items (0400) under /runner/credentials/.
+	var env []corev1.EnvVar
+	var volumes []corev1.Volume
+	fileMode := int32(0o400)
+	for ci, c := range creds {
+		if c.SecretNamespace != "" && c.SecretNamespace != d.cfg.Namespace {
+			return fmt.Errorf("dispatch: credential_ref %s: secret namespace %q differs from job namespace %q (secretKeyRef cannot cross namespaces)",
+				c.RefName, c.SecretNamespace, d.cfg.Namespace)
+		}
+		var items []corev1.KeyToPath
+		for _, inj := range c.Injection {
+			switch inj.As {
+			case types.InjectEnv:
+				env = append(env, corev1.EnvVar{
+					Name: inj.Name,
+					ValueFrom: &corev1.EnvVarSource{SecretKeyRef: &corev1.SecretKeySelector{
+						LocalObjectReference: corev1.LocalObjectReference{Name: c.SecretName},
+						Key:                  inj.Key,
+					}},
+				})
+			case types.InjectFile:
+				items = append(items, corev1.KeyToPath{Key: inj.Key, Path: inj.Name, Mode: &fileMode})
+			}
+		}
+		if len(items) > 0 {
+			volName := fmt.Sprintf("credential-%d", ci)
+			volumes = append(volumes, corev1.Volume{
+				Name: volName,
+				VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{
+					SecretName: c.SecretName,
+					Items:      items,
+				}},
+			})
+			mounts = append(mounts, corev1.VolumeMount{
+				Name:      volName,
+				MountPath: "/runner/credentials/" + c.RefName,
+				ReadOnly:  true,
+			})
+		}
 	}
 
 	job := &batchv1.Job{
@@ -199,14 +259,15 @@ func (d *Dispatcher) createJob(ctx context.Context, name, runID string, spec act
 						Name:         "ee",
 						Image:        image,
 						Command:      spec.Command,
+						Env:          env,
 						VolumeMounts: mounts,
 					}},
-					Volumes: []corev1.Volume{
+					Volumes: append([]corev1.Volume{
 						{Name: "content", VolumeSource: corev1.VolumeSource{ConfigMap: &corev1.ConfigMapVolumeSource{
 							LocalObjectReference: corev1.LocalObjectReference{Name: name},
 						}}},
 						{Name: "workdir", VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}},
-					},
+					}, volumes...),
 				},
 			},
 		},

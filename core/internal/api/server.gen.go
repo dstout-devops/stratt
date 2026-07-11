@@ -21,6 +21,63 @@ import (
 	"github.com/oapi-codegen/runtime"
 )
 
+// Defines values for CredentialInjectionAs.
+const (
+	Env  CredentialInjectionAs = "env"
+	File CredentialInjectionAs = "file"
+)
+
+// Valid indicates whether the value is a known member of the CredentialInjectionAs enum.
+func (e CredentialInjectionAs) Valid() bool {
+	switch e {
+	case Env:
+		return true
+	case File:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for CredentialRefBackend.
+const (
+	K8sSecret        CredentialRefBackend = "k8s-secret"
+	Vault            CredentialRefBackend = "vault"
+	WorkloadIdentity CredentialRefBackend = "workload-identity"
+)
+
+// Valid indicates whether the value is a known member of the CredentialRefBackend enum.
+func (e CredentialRefBackend) Valid() bool {
+	switch e {
+	case K8sSecret:
+		return true
+	case Vault:
+		return true
+	case WorkloadIdentity:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for CredentialRefDeclaredBy.
+const (
+	CredentialRefDeclaredByApi CredentialRefDeclaredBy = "api"
+	CredentialRefDeclaredByCac CredentialRefDeclaredBy = "cac"
+)
+
+// Valid indicates whether the value is a known member of the CredentialRefDeclaredBy enum.
+func (e CredentialRefDeclaredBy) Valid() bool {
+	switch e {
+	case CredentialRefDeclaredByApi:
+		return true
+	case CredentialRefDeclaredByCac:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for PlanEntryAction.
 const (
 	Adopt  PlanEntryAction = "adopt"
@@ -42,6 +99,24 @@ func (e PlanEntryAction) Valid() bool {
 	case Noop:
 		return true
 	case Update:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for PlanEntryKind.
+const (
+	PlanEntryKindCredentialRef PlanEntryKind = "credential-ref"
+	PlanEntryKindView          PlanEntryKind = "view"
+)
+
+// Valid indicates whether the value is a known member of the PlanEntryKind enum.
+func (e PlanEntryKind) Valid() bool {
+	switch e {
+	case PlanEntryKindCredentialRef:
+		return true
+	case PlanEntryKindView:
 		return true
 	default:
 		return false
@@ -113,25 +188,58 @@ func (e StartRunActuator) Valid() bool {
 
 // Defines values for ViewDeclaredBy.
 const (
-	Api ViewDeclaredBy = "api"
-	Cac ViewDeclaredBy = "cac"
+	ViewDeclaredByApi ViewDeclaredBy = "api"
+	ViewDeclaredByCac ViewDeclaredBy = "cac"
 )
 
 // Valid indicates whether the value is a known member of the ViewDeclaredBy enum.
 func (e ViewDeclaredBy) Valid() bool {
 	switch e {
-	case Api:
+	case ViewDeclaredByApi:
 		return true
-	case Cac:
+	case ViewDeclaredByCac:
 		return true
 	default:
 		return false
 	}
 }
 
-// DesiredState The full declared View set (charter §1.2).
+// CredentialInjection defines model for CredentialInjection.
+type CredentialInjection struct {
+	As CredentialInjectionAs `json:"as"`
+
+	// Key Field within the backend material.
+	Key string `json:"key"`
+
+	// Name Env var name or path under the pod credentials mount.
+	Name string `json:"name"`
+}
+
+// CredentialInjectionAs defines model for CredentialInjection.As.
+type CredentialInjectionAs string
+
+// CredentialRef Pointer + injection policy to brokered secret material (charter §2.5). Material never persists in the platform and has no read path.
+type CredentialRef struct {
+	Backend    CredentialRefBackend     `json:"backend"`
+	DeclaredBy *CredentialRefDeclaredBy `json:"declaredBy,omitempty"`
+	Injection  []CredentialInjection    `json:"injection"`
+
+	// Locator Backend-shaped address (k8s-secret: namespace, name).
+	Locator   map[string]interface{} `json:"locator"`
+	Name      string                 `json:"name"`
+	OwnerTeam string                 `json:"ownerTeam"`
+}
+
+// CredentialRefBackend defines model for CredentialRef.Backend.
+type CredentialRefBackend string
+
+// CredentialRefDeclaredBy defines model for CredentialRef.DeclaredBy.
+type CredentialRefDeclaredBy string
+
+// DesiredState The full declared desired state (charter §1.2).
 type DesiredState struct {
-	Views []ViewDeclaration `json:"views"`
+	CredentialRefs *[]CredentialRef  `json:"credentialRefs,omitempty"`
+	Views          []ViewDeclaration `json:"views"`
 }
 
 // Entity defines model for Entity.
@@ -181,6 +289,7 @@ type Plan struct {
 type PlanEntry struct {
 	Action PlanEntryAction `json:"action"`
 	Error  *string         `json:"error,omitempty"`
+	Kind   *PlanEntryKind  `json:"kind,omitempty"`
 
 	// MemberCount Live Entity count the relevant selector matches now.
 	MemberCount int64  `json:"memberCount"`
@@ -195,6 +304,9 @@ type PlanEntry struct {
 
 // PlanEntryAction defines model for PlanEntry.Action.
 type PlanEntryAction string
+
+// PlanEntryKind defines model for PlanEntry.Kind.
+type PlanEntryKind string
 
 // Provenance Per-attribute stamp — which Run/Syncer wrote the value, when, from which Source (charter §2.1). Always exactly one answer.
 type Provenance struct {
@@ -224,6 +336,9 @@ type RunStatus string
 // StartRun One Step against a View (charter §2.3: Step = Actuator + content + params). Params are interpreted by the named Actuator; their pinned JSON-Schema Contract documents land with the Phase-2 Contract machinery.
 type StartRun struct {
 	Actuator *StartRunActuator `json:"actuator,omitempty"`
+
+	// CredentialRefs CredentialRef names to project into the execution pods. The launching Principal needs the `use` grant on each (checked at dispatch; use never implies read — charter §2.5).
+	CredentialRefs *[]string `json:"credentialRefs,omitempty"`
 
 	// Params Actuator-interpreted Step params (e.g. script source).
 	Params *map[string]interface{} `json:"params,omitempty"`
@@ -283,6 +398,9 @@ type BadRequest = Error
 // Conflict defines model for Conflict.
 type Conflict = Error
 
+// Forbidden defines model for Forbidden.
+type Forbidden = Error
+
 // NotFound defines model for NotFound.
 type NotFound = Error
 
@@ -290,6 +408,9 @@ type NotFound = Error
 type ResolveViewParams struct {
 	Limit *int `form:"limit,omitempty" json:"limit,omitempty"`
 }
+
+// DeclareCredentialRefJSONRequestBody defines body for DeclareCredentialRef for application/json ContentType.
+type DeclareCredentialRefJSONRequestBody = CredentialRef
 
 // DesiredStateApplyJSONRequestBody defines body for DesiredStateApply for application/json ContentType.
 type DesiredStateApplyJSONRequestBody = DesiredState
@@ -305,6 +426,15 @@ type DeclareViewJSONRequestBody = ViewSelector
 
 // ServerInterface represents all server handlers.
 type ServerInterface interface {
+	// List CredentialRef pointers the Principal may read
+	// (GET /credential-refs)
+	ListCredentialRefs(w http.ResponseWriter, r *http.Request)
+	// Get one CredentialRef pointer (reader grant required)
+	// (GET /credential-refs/{name})
+	GetCredentialRef(w http.ResponseWriter, r *http.Request, name string)
+	// Declare a CredentialRef pointer (admin grant required)
+	// (PUT /credential-refs/{name})
+	DeclareCredentialRef(w http.ResponseWriter, r *http.Request, name string)
 	// Reconcile the graph's Views to a declared desired state
 	// (POST /desired-state/apply)
 	DesiredStateApply(w http.ResponseWriter, r *http.Request)
@@ -342,6 +472,72 @@ type ServerInterfaceWrapper struct {
 }
 
 type MiddlewareFunc func(http.Handler) http.Handler
+
+// ListCredentialRefs operation middleware
+func (siw *ServerInterfaceWrapper) ListCredentialRefs(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ListCredentialRefs(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// GetCredentialRef operation middleware
+func (siw *ServerInterfaceWrapper) GetCredentialRef(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "name" -------------
+	var name string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "name", r.PathValue("name"), &name, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: ""})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "name", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetCredentialRef(w, r, name)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// DeclareCredentialRef operation middleware
+func (siw *ServerInterfaceWrapper) DeclareCredentialRef(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "name" -------------
+	var name string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "name", r.PathValue("name"), &name, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: ""})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "name", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.DeclareCredentialRef(w, r, name)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
 
 // DesiredStateApply operation middleware
 func (siw *ServerInterfaceWrapper) DesiredStateApply(w http.ResponseWriter, r *http.Request) {
@@ -677,6 +873,9 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 		ErrorHandlerFunc:   options.ErrorHandlerFunc,
 	}
 
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/credential-refs", wrapper.ListCredentialRefs)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/credential-refs/{name}", wrapper.GetCredentialRef)
+	m.HandleFunc(http.MethodPut+" "+options.BaseURL+"/credential-refs/{name}", wrapper.DeclareCredentialRef)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/desired-state/apply", wrapper.DesiredStateApply)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/desired-state/plan", wrapper.DesiredStatePlan)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/entities/{id}", wrapper.GetEntity)
@@ -695,51 +894,61 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 // const string: with thousands of chunks the chained `+` fold is several
 // times slower for the Go compiler than parsing a slice literal.
 var swaggerSpec = []string{
-	"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",
+	"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",
 }
 
 // decodeSpec returns the embedded OpenAPI spec as raw JSON bytes,

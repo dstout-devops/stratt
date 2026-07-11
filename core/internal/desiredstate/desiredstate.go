@@ -35,7 +35,21 @@ type Declaration struct {
 	Selector types.ViewSelector `json:"selector"`
 }
 
-// Action is what reconciliation will do (or did) to one View.
+// Declarations is the full declared desired state — every kind the repo can
+// declare (Views since slice 2; CredentialRef pointers since ADR-0009;
+// Intents/Assignments arrive in Phase 2).
+type Declarations struct {
+	Views          []Declaration         `json:"views"`
+	CredentialRefs []types.CredentialRef `json:"credentialRefs"`
+}
+
+// Declared kinds appearing in plans.
+const (
+	KindView          = "view"
+	KindCredentialRef = "credential-ref"
+)
+
+// Action is what reconciliation will do (or did) to one declared object.
 type Action string
 
 const (
@@ -50,8 +64,11 @@ const (
 	ActionDelete Action = "delete"
 )
 
-// PlanEntry is the plan for one View. JSON tags mirror the wire schema.
+// PlanEntry is the plan for one declared object. JSON tags mirror the wire
+// schema.
 type PlanEntry struct {
+	// Kind is the declared kind: "view" | "credential-ref".
+	Kind   string `json:"kind"`
 	Name   string `json:"name"`
 	Action Action `json:"action"`
 	// MemberCount is the live Entity count the relevant selector matches now
@@ -80,20 +97,29 @@ func (p Plan) Changes() int {
 	return n
 }
 
-// PruneStats reports how many currently-cac Views this plan would delete, out
-// of how many exist. Every current cac View appears in a plan as exactly one
-// of noop/update/delete, so both numbers fall out of the entries.
-func (p Plan) PruneStats() (deletes, cacTotal int) {
+// PruneStats reports, per declared kind, how many currently-cac objects this
+// plan would delete out of how many exist. Every current cac object appears
+// in a plan as exactly one of noop/update/delete, so both numbers fall out
+// of the entries. Per-kind so one kind's bulk (e.g. many Views) can never
+// mask the total disappearance of another (e.g. every CredentialRef).
+func (p Plan) PruneStats() map[string][2]int { // kind → {deletes, cacTotal}
+	out := map[string][2]int{}
 	for _, e := range p.Entries {
+		kind := e.Kind
+		if kind == "" {
+			kind = KindView
+		}
+		s := out[kind]
 		switch e.Action {
 		case ActionDelete:
-			deletes++
-			cacTotal++
+			s[0]++
+			s[1]++
 		case ActionNoop, ActionUpdate:
-			cacTotal++
+			s[1]++
 		}
+		out[kind] = s
 	}
-	return deletes, cacTotal
+	return out
 }
 
 // ── declarations directory ──────────────────────────────────────────────────
@@ -115,17 +141,41 @@ type declFacet struct {
 	Equals    any    `yaml:"equals"`
 }
 
-// ParseDir reads every *.yaml/*.yml under <root>/views. A missing views
+// ParseDir reads the declarations checkout: every *.yaml/*.yml under
+// <root>/views plus, when present, <root>/credential-refs. A missing views
 // directory is an error, not an empty set — an empty set prunes every
 // cac-declared View, and a mistyped path must never look like one.
-func ParseDir(root string) ([]Declaration, error) {
-	dir := filepath.Join(root, "views")
+// (credential-refs/ is optional: repos predating ADR-0009 stay valid.)
+func ParseDir(root string) (Declarations, error) {
+	var out Declarations
+
+	views, err := parseKind(filepath.Join(root, "views"), false, parseViewFile)
+	if err != nil {
+		return out, err
+	}
+	out.Views = views
+	sort.Slice(out.Views, func(i, j int) bool { return out.Views[i].Name < out.Views[j].Name })
+
+	refs, err := parseKind(filepath.Join(root, "credential-refs"), true, parseCredentialRefFile)
+	if err != nil {
+		return out, err
+	}
+	out.CredentialRefs = refs
+	sort.Slice(out.CredentialRefs, func(i, j int) bool { return out.CredentialRefs[i].Name < out.CredentialRefs[j].Name })
+	return out, nil
+}
+
+// parseKind reads one declaration directory; optional dirs may be absent.
+func parseKind[T any](dir string, optional bool, parse func(path string, raw []byte) (string, T, error)) ([]T, error) {
 	entries, err := os.ReadDir(dir)
+	if os.IsNotExist(err) && optional {
+		return nil, nil
+	}
 	if err != nil {
 		return nil, fmt.Errorf("desiredstate: read declarations: %w", err)
 	}
-	seen := map[string]string{} // view name → file
-	var out []Declaration
+	seen := map[string]string{} // declared name → file
+	var out []T
 	for _, e := range entries {
 		if e.IsDir() {
 			continue
@@ -139,27 +189,99 @@ func ParseDir(root string) ([]Declaration, error) {
 		if err != nil {
 			return nil, fmt.Errorf("desiredstate: %s: %w", path, err)
 		}
-		var f declFile
-		dec := yaml.NewDecoder(strings.NewReader(string(raw)))
-		dec.KnownFields(true) // typos in declarations must fail, not vanish
-		if err := dec.Decode(&f); err != nil {
-			return nil, fmt.Errorf("desiredstate: %s: %w", path, err)
-		}
-		if f.Name == "" {
-			return nil, fmt.Errorf("desiredstate: %s: name is required", path)
-		}
-		if prev, dup := seen[f.Name]; dup {
-			return nil, fmt.Errorf("desiredstate: view %q declared in both %s and %s", f.Name, prev, path)
-		}
-		seen[f.Name] = path
-		sel, err := f.Selector.toSelector()
+		name, decl, err := parse(path, raw)
 		if err != nil {
-			return nil, fmt.Errorf("desiredstate: %s: %w", path, err)
+			return nil, err
 		}
-		out = append(out, Declaration{Name: f.Name, Selector: sel})
+		if prev, dup := seen[name]; dup {
+			return nil, fmt.Errorf("desiredstate: %q declared in both %s and %s", name, prev, path)
+		}
+		seen[name] = path
+		out = append(out, decl)
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out, nil
+}
+
+func parseViewFile(path string, raw []byte) (string, Declaration, error) {
+	var f declFile
+	dec := yaml.NewDecoder(strings.NewReader(string(raw)))
+	dec.KnownFields(true) // typos in declarations must fail, not vanish
+	if err := dec.Decode(&f); err != nil {
+		return "", Declaration{}, fmt.Errorf("desiredstate: %s: %w", path, err)
+	}
+	if f.Name == "" {
+		return "", Declaration{}, fmt.Errorf("desiredstate: %s: name is required", path)
+	}
+	sel, err := f.Selector.toSelector()
+	if err != nil {
+		return "", Declaration{}, fmt.Errorf("desiredstate: %s: %w", path, err)
+	}
+	return f.Name, Declaration{Name: f.Name, Selector: sel}, nil
+}
+
+// credRefFile is the credential-refs/*.yaml shape (pointer + injection
+// policy only — nothing in the declaration can hold material, §2.5).
+type credRefFile struct {
+	Name      string            `yaml:"name"`
+	OwnerTeam string            `yaml:"ownerTeam"`
+	Backend   string            `yaml:"backend"`
+	Locator   map[string]any    `yaml:"locator"`
+	Injection []credRefInjxYAML `yaml:"injection"`
+}
+type credRefInjxYAML struct {
+	Key  string `yaml:"key"`
+	As   string `yaml:"as"`
+	Name string `yaml:"name"`
+}
+
+func parseCredentialRefFile(path string, raw []byte) (string, types.CredentialRef, error) {
+	var f credRefFile
+	dec := yaml.NewDecoder(strings.NewReader(string(raw)))
+	dec.KnownFields(true)
+	if err := dec.Decode(&f); err != nil {
+		return "", types.CredentialRef{}, fmt.Errorf("desiredstate: %s: %w", path, err)
+	}
+	ref, err := f.toCredentialRef()
+	if err != nil {
+		return "", types.CredentialRef{}, fmt.Errorf("desiredstate: %s: %w", path, err)
+	}
+	return ref.Name, ref, nil
+}
+
+func (f credRefFile) toCredentialRef() (types.CredentialRef, error) {
+	var ref types.CredentialRef
+	if f.Name == "" || f.OwnerTeam == "" {
+		return ref, fmt.Errorf("credential ref requires name and ownerTeam")
+	}
+	switch f.Backend {
+	case types.BackendK8sSecret, types.BackendVault, types.BackendWorkloadIdentity:
+	default:
+		return ref, fmt.Errorf("credential ref %s: unknown backend %q", f.Name, f.Backend)
+	}
+	if len(f.Locator) == 0 {
+		return ref, fmt.Errorf("credential ref %s: locator is required", f.Name)
+	}
+	locator, err := json.Marshal(f.Locator)
+	if err != nil {
+		return ref, err
+	}
+	if len(f.Injection) == 0 {
+		return ref, fmt.Errorf("credential ref %s: injection policy is required", f.Name)
+	}
+	inj := make([]types.CredentialInjection, len(f.Injection))
+	for i, x := range f.Injection {
+		if x.Key == "" || x.Name == "" {
+			return ref, fmt.Errorf("credential ref %s: injection %d requires key and name", f.Name, i)
+		}
+		if x.As != types.InjectEnv && x.As != types.InjectFile {
+			return ref, fmt.Errorf("credential ref %s: injection %d: as must be env or file", f.Name, i)
+		}
+		inj[i] = types.CredentialInjection{Key: x.Key, As: x.As, Name: x.Name}
+	}
+	return types.CredentialRef{
+		Name: f.Name, OwnerTeam: f.OwnerTeam, Backend: f.Backend,
+		Locator: locator, Injection: inj,
+	}, nil
 }
 
 func (ds declSelector) toSelector() (types.ViewSelector, error) {
@@ -184,8 +306,28 @@ func (ds declSelector) toSelector() (types.ViewSelector, error) {
 
 // ── plan / apply ─────────────────────────────────────────────────────────────
 
-// ComputePlan diffs the declarations against the graph's current Views.
-func ComputePlan(ctx context.Context, store *graph.Store, decls []Declaration) (Plan, error) {
+// ComputePlan diffs the declarations against the graph's current state
+// across every declared kind.
+func ComputePlan(ctx context.Context, store *graph.Store, decls Declarations) (Plan, error) {
+	plan, err := computeViewPlan(ctx, store, decls.Views)
+	if err != nil {
+		return Plan{}, err
+	}
+	refPlan, err := computeCredentialRefPlan(ctx, store, decls.CredentialRefs)
+	if err != nil {
+		return Plan{}, err
+	}
+	plan.Entries = append(plan.Entries, refPlan.Entries...)
+	sort.Slice(plan.Entries, func(i, j int) bool {
+		if plan.Entries[i].Kind != plan.Entries[j].Kind {
+			return plan.Entries[i].Kind < plan.Entries[j].Kind
+		}
+		return plan.Entries[i].Name < plan.Entries[j].Name
+	})
+	return plan, nil
+}
+
+func computeViewPlan(ctx context.Context, store *graph.Store, decls []Declaration) (Plan, error) {
 	cac, err := store.ListViewsDeclaredBy(ctx, graph.DeclaredByCaC)
 	if err != nil {
 		return Plan{}, err
@@ -207,7 +349,7 @@ func ComputePlan(ctx context.Context, store *graph.Store, decls []Declaration) (
 	declared := map[string]bool{}
 	for _, d := range decls {
 		declared[d.Name] = true
-		entry := PlanEntry{Name: d.Name, NewSelector: ptr(d.Selector)}
+		entry := PlanEntry{Kind: KindView, Name: d.Name, NewSelector: ptr(d.Selector)}
 		switch {
 		case !existsIn(cacByName, d.Name) && !existsIn(apiByName, d.Name):
 			entry.Action = ActionCreate
@@ -246,40 +388,112 @@ func ComputePlan(ctx context.Context, store *graph.Store, decls []Declaration) (
 			return Plan{}, err
 		}
 		plan.Entries = append(plan.Entries, PlanEntry{
-			Name: v.Name, Action: ActionDelete, MemberCount: n, OldSelector: ptr(v.Selector),
+			Kind: KindView, Name: v.Name, Action: ActionDelete, MemberCount: n, OldSelector: ptr(v.Selector),
 		})
 	}
-	sort.Slice(plan.Entries, func(i, j int) bool { return plan.Entries[i].Name < plan.Entries[j].Name })
+	return plan, nil
+}
+
+// computeCredentialRefPlan diffs declared CredentialRef pointers. Equality
+// is semantic JSON equality of the pointer document (never material — none
+// exists to compare, §2.5). MemberCount is not meaningful for refs.
+func computeCredentialRefPlan(ctx context.Context, store *graph.Store, decls []types.CredentialRef) (Plan, error) {
+	cac, err := store.ListCredentialRefsDeclaredBy(ctx, graph.DeclaredByCaC)
+	if err != nil {
+		return Plan{}, err
+	}
+	api, err := store.ListCredentialRefsDeclaredBy(ctx, graph.DeclaredByAPI)
+	if err != nil {
+		return Plan{}, err
+	}
+	cacByName := map[string]types.CredentialRef{}
+	for _, r := range cac {
+		cacByName[r.Name] = r
+	}
+	apiByName := map[string]bool{}
+	for _, r := range api {
+		apiByName[r.Name] = true
+	}
+
+	var plan Plan
+	declared := map[string]bool{}
+	for _, d := range decls {
+		declared[d.Name] = true
+		entry := PlanEntry{Kind: KindCredentialRef, Name: d.Name}
+		current, isCac := cacByName[d.Name]
+		switch {
+		case !isCac && !apiByName[d.Name]:
+			entry.Action = ActionCreate
+		case apiByName[d.Name]:
+			entry.Action = ActionAdopt
+		case credentialRefsEqual(current, d):
+			entry.Action = ActionNoop
+		default:
+			entry.Action = ActionUpdate
+		}
+		plan.Entries = append(plan.Entries, entry)
+	}
+	for _, r := range cac {
+		if !declared[r.Name] {
+			plan.Entries = append(plan.Entries, PlanEntry{
+				Kind: KindCredentialRef, Name: r.Name, Action: ActionDelete,
+			})
+		}
+	}
 	return plan, nil
 }
 
 // Apply executes the plan for the declarations and returns the realized plan.
-// Per-View failures are recorded on their entries; the rest still applies.
-func Apply(ctx context.Context, store *graph.Store, decls []Declaration) (Plan, error) {
+// Per-object failures are recorded on their entries; the rest still applies.
+func Apply(ctx context.Context, store *graph.Store, decls Declarations) (Plan, error) {
 	plan, err := ComputePlan(ctx, store, decls)
 	if err != nil {
 		return Plan{}, err
 	}
-	declByName := map[string]types.ViewSelector{}
-	for _, d := range decls {
-		declByName[d.Name] = d.Selector
+	viewByName := map[string]types.ViewSelector{}
+	for _, d := range decls.Views {
+		viewByName[d.Name] = d.Selector
+	}
+	refByName := map[string]types.CredentialRef{}
+	for _, d := range decls.CredentialRefs {
+		refByName[d.Name] = d
 	}
 	for i := range plan.Entries {
 		e := &plan.Entries[i]
-		switch e.Action {
-		case ActionNoop:
+		if e.Action == ActionNoop {
 			continue
-		case ActionDelete:
-			if err := store.DeleteView(ctx, e.Name, graph.DeclaredByCaC); err != nil {
-				e.Error = err.Error()
-			}
-		default: // create, update, adopt
-			if _, err := store.DeclareViewAs(ctx, e.Name, declByName[e.Name], graph.DeclaredByCaC); err != nil {
-				e.Error = err.Error()
-			}
+		}
+		var err error
+		switch {
+		case e.Kind == KindView && e.Action == ActionDelete:
+			err = store.DeleteView(ctx, e.Name, graph.DeclaredByCaC)
+		case e.Kind == KindView:
+			_, err = store.DeclareViewAs(ctx, e.Name, viewByName[e.Name], graph.DeclaredByCaC)
+		case e.Kind == KindCredentialRef && e.Action == ActionDelete:
+			err = store.DeleteCredentialRef(ctx, e.Name, graph.DeclaredByCaC)
+		case e.Kind == KindCredentialRef:
+			_, err = store.DeclareCredentialRefAs(ctx, refByName[e.Name], graph.DeclaredByCaC)
+		}
+		if err != nil {
+			e.Error = err.Error()
 		}
 	}
 	return plan, nil
+}
+
+// credentialRefsEqual compares pointer documents semantically.
+func credentialRefsEqual(a, b types.CredentialRef) bool {
+	a.DeclaredBy, b.DeclaredBy = "", ""
+	ja, err1 := json.Marshal(a)
+	jb, err2 := json.Marshal(b)
+	if err1 != nil || err2 != nil {
+		return false
+	}
+	var va, vb any
+	if json.Unmarshal(ja, &va) != nil || json.Unmarshal(jb, &vb) != nil {
+		return false
+	}
+	return reflect.DeepEqual(va, vb)
 }
 
 func ptr(sel types.ViewSelector) *types.ViewSelector { return &sel }

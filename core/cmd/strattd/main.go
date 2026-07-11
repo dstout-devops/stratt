@@ -26,6 +26,7 @@ import (
 	"github.com/dstout-devops/stratt/core/internal/actuators/ansible"
 	"github.com/dstout-devops/stratt/core/internal/actuators/script"
 	"github.com/dstout-devops/stratt/core/internal/api"
+	"github.com/dstout-devops/stratt/core/internal/authz"
 	"github.com/dstout-devops/stratt/core/internal/connectors/vcenter"
 	"github.com/dstout-devops/stratt/core/internal/desiredstate"
 	"github.com/dstout-devops/stratt/core/internal/dispatch"
@@ -100,6 +101,16 @@ func run(ctx context.Context, log *slog.Logger) error {
 		EEImage:   env("STRATT_EE_IMAGE", "stratt-ee:dev"),
 	}, kubeClient, bus, log)
 
+	// ── authorization seam (§2.5, ADR-0009) ─────────────────────────────
+	// Tuple evaluator over CaC manifests this phase; OpenFGA server swaps in
+	// behind the same interface with OIDC. Deny is the default: with no
+	// tuples loaded, every grant-gated surface refuses.
+	authorizer := &authz.TupleAuthorizer{}
+	devPrincipal := os.Getenv("STRATT_DEV_PRINCIPAL_HEADER") == "true"
+	if devPrincipal {
+		log.Warn("DEV PRINCIPAL MODE: X-Stratt-Principal header is trusted — dev harness only, replaced by OIDC (ADR-0009)")
+	}
+
 	// In-tree Actuator registry (§2.3); out-of-tree Actuators arrive via the
 	// plugin Contract surfaces, not this map.
 	registry := map[string]actuators.Actuator{}
@@ -109,7 +120,7 @@ func run(ctx context.Context, log *slog.Logger) error {
 
 	w := worker.New(temporalClient, orchestrate.TaskQueue, worker.Options{})
 	w.RegisterWorkflow(orchestrate.RunAgainstView)
-	w.RegisterActivity(&orchestrate.Activities{Store: store, Dispatcher: dispatcher, Bus: bus, Actuators: registry})
+	w.RegisterActivity(&orchestrate.Activities{Store: store, Dispatcher: dispatcher, Bus: bus, Authz: authorizer, Actuators: registry})
 	if err := w.Start(); err != nil {
 		return fmt.Errorf("temporal worker: %w", err)
 	}
@@ -160,12 +171,34 @@ func run(ctx context.Context, log *slog.Logger) error {
 				log.Error("desired-state controller stopped", "error", err)
 			}
 		}()
+
+		// Authz tuples are CaC in the same checkout (§2.5): load now,
+		// reload on the reconcile cadence. A failed reload keeps the
+		// previous grant set (never silently drop to deny-all mid-flight;
+		// never silently gain grants from a broken file either).
+		if err := authorizer.LoadTuples(path); err != nil {
+			log.Error("authz tuples failed to load; starting with empty grants (deny)", "error", err)
+		}
+		go func() {
+			ticker := time.NewTicker(interval)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-ticker.C:
+					if err := authorizer.LoadTuples(path); err != nil {
+						log.Error("authz tuple reload failed; keeping previous grants", "error", err)
+					}
+				}
+			}
+		}()
 	} else {
-		log.Info("no desired-state checkout configured (STRATT_DESIRED_STATE_PATH empty); reconciliation off")
+		log.Info("no desired-state checkout configured (STRATT_DESIRED_STATE_PATH empty); reconciliation off — authz has no tuples (deny-all)")
 	}
 
 	// ── interface plane ──────────────────────────────────────────────────
-	server := &api.Server{Store: store, Bus: bus, Temporal: temporalClient, Log: log}
+	server := &api.Server{Store: store, Bus: bus, Temporal: temporalClient, Authz: authorizer, Log: log, DevPrincipalHeader: devPrincipal}
 	httpSrv := &http.Server{
 		Addr:              env("STRATT_LISTEN_ADDR", ":8080"),
 		Handler:           server.Handler(),

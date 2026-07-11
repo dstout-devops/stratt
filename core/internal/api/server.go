@@ -11,6 +11,7 @@ import (
 
 	"go.temporal.io/sdk/client"
 
+	"github.com/dstout-devops/stratt/core/internal/authz"
 	"github.com/dstout-devops/stratt/core/internal/desiredstate"
 	"github.com/dstout-devops/stratt/core/internal/events"
 	"github.com/dstout-devops/stratt/core/internal/graph"
@@ -24,14 +25,59 @@ type Server struct {
 	Store    *graph.Store
 	Bus      *events.Bus
 	Temporal client.Client
+	Authz    authz.Authorizer
 	Log      *slog.Logger
+	// DevPrincipalHeader enables the Phase-1 X-Stratt-Principal resolver —
+	// dev harness only, replaced by OIDC (ADR-0009). Startup logs loudly.
+	DevPrincipalHeader bool
 }
 
-// Handler mounts the generated routes under /api/v1.
+// Handler mounts the generated routes under /api/v1, behind the Principal
+// resolver — one identity seam for every surface (§1.6, ADR-0009).
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
-	mux.Handle("/api/v1/", http.StripPrefix("/api/v1", Handler(s)))
+	mux.Handle("/api/v1/", http.StripPrefix("/api/v1", s.principalMiddleware(Handler(s))))
 	return mux
+}
+
+// principalMiddleware resolves the request Principal. Bearer tokens are
+// reserved for OIDC (next slice); the dev header requires explicit opt-in.
+// Anonymous requests proceed unresolved — endpoints that require a grant
+// deny them (default deny lives at the check, not here).
+func (s *Server) principalMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if s.DevPrincipalHeader {
+			if id := r.Header.Get("X-Stratt-Principal"); id != "" {
+				kind := r.Header.Get("X-Stratt-Principal-Kind")
+				if kind == "" {
+					kind = authz.KindHuman
+				}
+				r = r.WithContext(authz.WithPrincipal(r.Context(), id, kind))
+			}
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// requireGrant checks the request Principal for a relation on an object,
+// writing the 403 itself when denied. use-without-read and friends all
+// funnel through this one seam.
+func (s *Server) requireGrant(w http.ResponseWriter, r *http.Request, relation, object string) bool {
+	id, _, ok := authz.PrincipalFrom(r.Context())
+	if !ok {
+		writeErr(w, http.StatusForbidden, "no principal (authentication required)")
+		return false
+	}
+	allowed, err := s.Authz.Check(r.Context(), id, relation, object)
+	if err != nil {
+		s.fail(w, err)
+		return false
+	}
+	if !allowed {
+		writeErr(w, http.StatusForbidden, fmt.Sprintf("principal %s lacks %s on %s", id, relation, object))
+		return false
+	}
+	return true
 }
 
 func writeJSON(w http.ResponseWriter, code int, v any) {
@@ -170,19 +216,151 @@ func (s *Server) DeclareView(w http.ResponseWriter, r *http.Request, name ViewNa
 	writeJSON(w, http.StatusOK, viewToWire(v))
 }
 
+// ── CredentialRefs (§2.5, ADR-0009) ─────────────────────────────────────────
+// Pointer metadata only, always: no handler here (or anywhere) can return
+// secret material — no such code path exists.
+
+func credentialRefToWire(ref types.CredentialRef) CredentialRef {
+	var locator map[string]any
+	_ = json.Unmarshal(ref.Locator, &locator)
+	out := CredentialRef{
+		Name:      ref.Name,
+		OwnerTeam: ref.OwnerTeam,
+		Backend:   CredentialRefBackend(ref.Backend),
+		Locator:   locator,
+		Injection: make([]CredentialInjection, len(ref.Injection)),
+	}
+	for i, inj := range ref.Injection {
+		out.Injection[i] = CredentialInjection{Key: inj.Key, As: CredentialInjectionAs(inj.As), Name: inj.Name}
+	}
+	if ref.DeclaredBy != "" {
+		db := CredentialRefDeclaredBy(ref.DeclaredBy)
+		out.DeclaredBy = &db
+	}
+	return out
+}
+
+func credentialRefFromWire(in CredentialRef) (types.CredentialRef, error) {
+	if in.Name == "" || in.OwnerTeam == "" {
+		return types.CredentialRef{}, fmt.Errorf("name and ownerTeam are required")
+	}
+	if !in.Backend.Valid() {
+		return types.CredentialRef{}, fmt.Errorf("unknown backend %q", in.Backend)
+	}
+	locator, err := json.Marshal(in.Locator)
+	if err != nil {
+		return types.CredentialRef{}, err
+	}
+	if len(in.Injection) == 0 {
+		return types.CredentialRef{}, fmt.Errorf("injection policy is required")
+	}
+	out := types.CredentialRef{
+		Name: in.Name, OwnerTeam: in.OwnerTeam, Backend: string(in.Backend),
+		Locator: locator, Injection: make([]types.CredentialInjection, len(in.Injection)),
+	}
+	for i, inj := range in.Injection {
+		if inj.Key == "" || inj.Name == "" || !inj.As.Valid() {
+			return types.CredentialRef{}, fmt.Errorf("injection %d: key, name, and as (env|file) are required", i)
+		}
+		out.Injection[i] = types.CredentialInjection{Key: inj.Key, As: string(inj.As), Name: inj.Name}
+	}
+	return out, nil
+}
+
+// GetCredentialRef implements (GET /credential-refs/{name}) — reader grant.
+func (s *Server) GetCredentialRef(w http.ResponseWriter, r *http.Request, name string) {
+	if !s.requireGrant(w, r, authz.RelationReader, "credential_ref:"+name) {
+		return
+	}
+	ref, err := s.Store.GetCredentialRef(r.Context(), name)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, credentialRefToWire(ref))
+}
+
+// ListCredentialRefs implements (GET /credential-refs): only pointers the
+// Principal may read are returned.
+func (s *Server) ListCredentialRefs(w http.ResponseWriter, r *http.Request) {
+	id, _, ok := authz.PrincipalFrom(r.Context())
+	if !ok {
+		writeErr(w, http.StatusForbidden, "no principal (authentication required)")
+		return
+	}
+	out := []CredentialRef{}
+	for _, declaredBy := range []string{graph.DeclaredByAPI, graph.DeclaredByCaC} {
+		refs, err := s.Store.ListCredentialRefsDeclaredBy(r.Context(), declaredBy)
+		if err != nil {
+			s.fail(w, err)
+			return
+		}
+		for _, ref := range refs {
+			allowed, err := s.Authz.Check(r.Context(), id, authz.RelationReader, "credential_ref:"+ref.Name)
+			if err != nil {
+				s.fail(w, err)
+				return
+			}
+			if allowed {
+				out = append(out, credentialRefToWire(ref))
+			}
+		}
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+// DeclareCredentialRef implements (PUT /credential-refs/{name}) — admin
+// grant on the ref (owner-team admins hold it via the model).
+func (s *Server) DeclareCredentialRef(w http.ResponseWriter, r *http.Request, name string) {
+	var body CredentialRef
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid credential ref: "+err.Error())
+		return
+	}
+	body.Name = name
+	ref, err := credentialRefFromWire(body)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if !s.requireGrant(w, r, authz.RelationAdmin, "credential_ref:"+name) {
+		return
+	}
+	declared, err := s.Store.DeclareCredentialRefAs(r.Context(), ref, graph.DeclaredByAPI)
+	if errors.Is(err, graph.ErrDeclaredByCaC) {
+		writeErr(w, http.StatusConflict, err.Error())
+		return
+	}
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, credentialRefToWire(declared))
+}
+
 // ── desired state (§1.2: drift is the diff) ─────────────────────────────────
 
-func declarationsFromWire(in DesiredState) ([]desiredstate.Declaration, error) {
-	out := make([]desiredstate.Declaration, len(in.Views))
+func declarationsFromWire(in DesiredState) (desiredstate.Declarations, error) {
+	var out desiredstate.Declarations
+	out.Views = make([]desiredstate.Declaration, len(in.Views))
 	for i, d := range in.Views {
 		if d.Name == "" {
-			return nil, fmt.Errorf("declaration %d: name is required", i)
+			return out, fmt.Errorf("declaration %d: name is required", i)
 		}
 		sel, err := selectorFromWire(d.Selector)
 		if err != nil {
-			return nil, fmt.Errorf("declaration %s: %w", d.Name, err)
+			return out, fmt.Errorf("declaration %s: %w", d.Name, err)
 		}
-		out[i] = desiredstate.Declaration{Name: d.Name, Selector: sel}
+		out.Views[i] = desiredstate.Declaration{Name: d.Name, Selector: sel}
+	}
+	if in.CredentialRefs != nil {
+		for _, c := range *in.CredentialRefs {
+			ref, err := credentialRefFromWire(c)
+			if err != nil {
+				return out, fmt.Errorf("credential ref %s: %w", c.Name, err)
+			}
+			out.CredentialRefs = append(out.CredentialRefs, ref)
+		}
 	}
 	return out, nil
 }
@@ -190,7 +368,8 @@ func declarationsFromWire(in DesiredState) ([]desiredstate.Declaration, error) {
 func planToWire(p desiredstate.Plan) Plan {
 	out := Plan{Entries: make([]PlanEntry, len(p.Entries))}
 	for i, e := range p.Entries {
-		w := PlanEntry{Name: e.Name, Action: PlanEntryAction(e.Action), MemberCount: e.MemberCount}
+		kind := PlanEntryKind(e.Kind)
+		w := PlanEntry{Kind: &kind, Name: e.Name, Action: PlanEntryAction(e.Action), MemberCount: e.MemberCount}
 		if e.OldSelector != nil {
 			s := selectorToWire(*e.OldSelector)
 			w.OldSelector = &s
@@ -208,16 +387,16 @@ func planToWire(p desiredstate.Plan) Plan {
 	return out
 }
 
-func (s *Server) desiredStateBody(w http.ResponseWriter, r *http.Request) ([]desiredstate.Declaration, bool) {
+func (s *Server) desiredStateBody(w http.ResponseWriter, r *http.Request) (desiredstate.Declarations, bool) {
 	var body DesiredState
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeErr(w, http.StatusBadRequest, "invalid desired state: "+err.Error())
-		return nil, false
+		return desiredstate.Declarations{}, false
 	}
 	decls, err := declarationsFromWire(body)
 	if err != nil {
 		writeErr(w, http.StatusBadRequest, err.Error())
-		return nil, false
+		return desiredstate.Declarations{}, false
 	}
 	return decls, true
 }
@@ -318,6 +497,15 @@ func (s *Server) StartRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	in := orchestrate.RunInput{RunID: run.ID, ViewName: v.Name}
+	// The launching Principal rides the Run for the dispatch-time `use`
+	// check and the audit trail (§1.8). Anonymous launches carry none and
+	// fail credential resolution if refs are requested.
+	if id, _, ok := authz.PrincipalFrom(r.Context()); ok {
+		in.Principal = id
+	}
+	if body.CredentialRefs != nil {
+		in.CredentialRefs = *body.CredentialRefs
+	}
 	if body.Actuator != nil {
 		if !body.Actuator.Valid() {
 			writeErr(w, http.StatusBadRequest, fmt.Sprintf("unknown actuator %q", *body.Actuator))
