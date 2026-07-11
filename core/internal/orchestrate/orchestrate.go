@@ -13,7 +13,7 @@ import (
 	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/workflow"
 
-	"github.com/dstout-devops/stratt/core/internal/actuators/ansible"
+	"github.com/dstout-devops/stratt/core/internal/actuators"
 	"github.com/dstout-devops/stratt/core/internal/dispatch"
 	"github.com/dstout-devops/stratt/core/internal/graph"
 	"github.com/dstout-devops/stratt/types"
@@ -22,17 +22,21 @@ import (
 // TaskQueue is the worker queue for Run Workflows.
 const TaskQueue = "stratt-runs"
 
-// RunInput starts one Run against a View.
+// RunInput starts one Run against a View. Actuator and Params are the Step
+// fields (§2.3: Step = Actuator + content + params); empty Actuator means
+// ansible (the Phase-0 default).
 type RunInput struct {
 	RunID    string
 	ViewName string
+	Actuator string
+	Params   json.RawMessage
 }
 
 // ResolvedTargets is what the View resolves to at dispatch time; the version
 // is recorded so blast radius stays auditable (§4.3).
 type ResolvedTargets struct {
 	ViewVersion int64
-	Targets     []ansible.Target
+	Targets     []actuators.Target
 }
 
 // FactSet carries per-target facts keyed for projection.
@@ -55,23 +59,23 @@ func RunAgainstView(ctx workflow.Context, in RunInput) error {
 
 	var resolved ResolvedTargets
 	if err := workflow.ExecuteActivity(ctx, a.ResolveTargets, in).Get(ctx, &resolved); err != nil {
-		return finishRun(ctx, a, in.RunID, types.RunFailed, err)
+		return finishRun(ctx, a, in, types.RunFailed, err)
 	}
 	if err := workflow.ExecuteActivity(ctx, a.MarkRunning, in.RunID).Get(ctx, nil); err != nil {
-		return finishRun(ctx, a, in.RunID, types.RunFailed, err)
+		return finishRun(ctx, a, in, types.RunFailed, err)
 	}
 
 	var result dispatch.Result
-	if err := workflow.ExecuteActivity(ctx, a.Execute, in.RunID, resolved).Get(ctx, &result); err != nil {
-		return finishRun(ctx, a, in.RunID, types.RunFailed, err)
+	if err := workflow.ExecuteActivity(ctx, a.Execute, in, resolved).Get(ctx, &result); err != nil {
+		return finishRun(ctx, a, in, types.RunFailed, err)
 	}
 
 	var facts FactSet
 	if err := workflow.ExecuteActivity(ctx, a.CollectFacts, resolved, result).Get(ctx, &facts); err != nil {
-		return finishRun(ctx, a, in.RunID, types.RunFailed, err)
+		return finishRun(ctx, a, in, types.RunFailed, err)
 	}
 	if err := workflow.ExecuteActivity(ctx, a.ProjectFacts, in.RunID, facts).Get(ctx, nil); err != nil {
-		return finishRun(ctx, a, in.RunID, types.RunFailed, err)
+		return finishRun(ctx, a, in, types.RunFailed, err)
 	}
 
 	status := types.RunSucceeded
@@ -79,14 +83,14 @@ func RunAgainstView(ctx workflow.Context, in RunInput) error {
 		status = types.RunFailed
 	}
 	var summaryErr error
-	if err := workflow.ExecuteActivity(ctx, a.FinishRun, in.RunID, status, result).Get(ctx, nil); err != nil {
+	if err := workflow.ExecuteActivity(ctx, a.FinishRun, in, status, result).Get(ctx, nil); err != nil {
 		summaryErr = err
 	}
 	return summaryErr
 }
 
-func finishRun(ctx workflow.Context, a *Activities, runID string, status types.RunStatus, cause error) error {
-	_ = workflow.ExecuteActivity(ctx, a.FinishRun, runID, status, dispatch.Result{}).Get(ctx, nil)
+func finishRun(ctx workflow.Context, a *Activities, in RunInput, status types.RunStatus, cause error) error {
+	_ = workflow.ExecuteActivity(ctx, a.FinishRun, in, status, dispatch.Result{}).Get(ctx, nil)
 	return cause
 }
 
@@ -94,6 +98,8 @@ func finishRun(ctx workflow.Context, a *Activities, runID string, status types.R
 type Activities struct {
 	Store      *graph.Store
 	Dispatcher *dispatch.Dispatcher
+	// Actuators is the registry of in-tree Actuators by name (§2.3).
+	Actuators map[string]actuators.Actuator
 }
 
 // ResolveTargets resolves the View to its live Entity set and renders
@@ -113,7 +119,7 @@ func (a *Activities) ResolveTargets(ctx context.Context, in RunInput) (ResolvedT
 		if name == "" {
 			name = e.ID
 		}
-		out.Targets = append(out.Targets, ansible.Target{
+		out.Targets = append(out.Targets, actuators.Target{
 			EntityID: e.ID,
 			Name:     name,
 			Vars:     map[string]string{"ansible_connection": "local"},
@@ -127,10 +133,25 @@ func (a *Activities) MarkRunning(ctx context.Context, runID string) error {
 	return a.Store.SetRunStatus(ctx, runID, types.RunRunning, nil)
 }
 
-// Execute dispatches the K8s Job and follows it, publishing task events.
-func (a *Activities) Execute(ctx context.Context, runID string, resolved ResolvedTargets) (dispatch.Result, error) {
-	content := ansible.BuildContent(ansible.GatherFactsPlay, resolved.Targets)
-	res, err := a.Dispatcher.Run(ctx, runID, content)
+// Execute prepares the Step through its Actuator, dispatches the K8s Job,
+// and follows it, publishing task events.
+func (a *Activities) Execute(ctx context.Context, in RunInput, resolved ResolvedTargets) (dispatch.Result, error) {
+	name := in.Actuator
+	if name == "" {
+		name = "ansible"
+	}
+	act, ok := a.Actuators[name]
+	if !ok {
+		// Unknown Actuator can never succeed — fail terminally, no retries.
+		return dispatch.Result{}, temporal.NewNonRetryableApplicationError(
+			fmt.Sprintf("no actuator registered as %q", name), "UnknownActuator", nil)
+	}
+	spec, err := act.Prepare(in.Params, resolved.Targets)
+	if err != nil {
+		// Malformed Step params are terminal too.
+		return dispatch.Result{}, temporal.NewNonRetryableApplicationError(err.Error(), "InvalidStepParams", err)
+	}
+	res, err := a.Dispatcher.Run(ctx, in.RunID, spec, act)
 	if err != nil {
 		return dispatch.Result{}, err
 	}
@@ -169,7 +190,7 @@ func (a *Activities) ProjectFacts(ctx context.Context, runID string, facts FactS
 }
 
 // FinishRun records the terminal status and summary counts.
-func (a *Activities) FinishRun(ctx context.Context, runID string, status types.RunStatus, result dispatch.Result) error {
+func (a *Activities) FinishRun(ctx context.Context, in RunInput, status types.RunStatus, result dispatch.Result) error {
 	okCount, failCount := 0, 0
 	for _, r := range result.PerTarget {
 		if r == "ok" {
@@ -178,7 +199,12 @@ func (a *Activities) FinishRun(ctx context.Context, runID string, status types.R
 			failCount++
 		}
 	}
-	return a.Store.SetRunStatus(ctx, runID, status, map[string]any{
+	actuator := in.Actuator
+	if actuator == "" {
+		actuator = "ansible"
+	}
+	return a.Store.SetRunStatus(ctx, in.RunID, status, map[string]any{
+		"actuator":       actuator, // which engine ran the Step (§1.8 diagnosis)
 		"targets":        len(result.PerTarget),
 		"ok":             okCount,
 		"failed":         failCount,

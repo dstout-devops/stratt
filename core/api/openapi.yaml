@@ -239,9 +239,21 @@ components:
           items: { $ref: "#/components/schemas/Entity" }
     StartRun:
       type: object
+      description: >
+        One Step against a View (charter §2.3: Step = Actuator + content +
+        params). Params are interpreted by the named Actuator; their pinned
+        JSON-Schema Contract documents land with the Phase-2 Contract
+        machinery.
       required: [viewName]
       properties:
         viewName: { type: string }
+        actuator:
+          type: string
+          enum: [ansible, script]
+          default: ansible
+        params:
+          type: object
+          description: Actuator-interpreted Step params (e.g. script source).
     Run:
       type: object
       required: [id, workflowId, status, startedAt]

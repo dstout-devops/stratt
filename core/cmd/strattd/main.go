@@ -21,6 +21,9 @@ import (
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 
+	"github.com/dstout-devops/stratt/core/internal/actuators"
+	"github.com/dstout-devops/stratt/core/internal/actuators/ansible"
+	"github.com/dstout-devops/stratt/core/internal/actuators/script"
 	"github.com/dstout-devops/stratt/core/internal/api"
 	"github.com/dstout-devops/stratt/core/internal/connectors/vcenter"
 	"github.com/dstout-devops/stratt/core/internal/dispatch"
@@ -95,9 +98,16 @@ func run(ctx context.Context, log *slog.Logger) error {
 		EEImage:   env("STRATT_EE_IMAGE", "stratt-ee:dev"),
 	}, kubeClient, bus, log)
 
+	// In-tree Actuator registry (§2.3); out-of-tree Actuators arrive via the
+	// plugin Contract surfaces, not this map.
+	registry := map[string]actuators.Actuator{}
+	for _, a := range []actuators.Actuator{ansible.Actuator{}, script.Actuator{}} {
+		registry[a.Name()] = a
+	}
+
 	w := worker.New(temporalClient, orchestrate.TaskQueue, worker.Options{})
 	w.RegisterWorkflow(orchestrate.RunAgainstView)
-	w.RegisterActivity(&orchestrate.Activities{Store: store, Dispatcher: dispatcher})
+	w.RegisterActivity(&orchestrate.Activities{Store: store, Dispatcher: dispatcher, Actuators: registry})
 	if err := w.Start(); err != nil {
 		return fmt.Errorf("temporal worker: %w", err)
 	}

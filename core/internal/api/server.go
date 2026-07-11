@@ -225,11 +225,27 @@ func (s *Server) StartRun(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, err)
 		return
 	}
+	in := orchestrate.RunInput{RunID: run.ID, ViewName: v.Name}
+	if body.Actuator != nil {
+		if !body.Actuator.Valid() {
+			writeErr(w, http.StatusBadRequest, fmt.Sprintf("unknown actuator %q", *body.Actuator))
+			return
+		}
+		in.Actuator = string(*body.Actuator)
+	}
+	if body.Params != nil {
+		raw, err := json.Marshal(*body.Params)
+		if err != nil {
+			writeErr(w, http.StatusBadRequest, "invalid params: "+err.Error())
+			return
+		}
+		in.Params = raw
+	}
 	wfID := "run-" + run.ID
 	_, err = s.Temporal.ExecuteWorkflow(r.Context(), client.StartWorkflowOptions{
 		ID:        wfID,
 		TaskQueue: orchestrate.TaskQueue,
-	}, orchestrate.RunAgainstView, orchestrate.RunInput{RunID: run.ID, ViewName: v.Name})
+	}, orchestrate.RunAgainstView, in)
 	if err != nil {
 		_ = s.Store.SetRunStatus(r.Context(), run.ID, types.RunFailed, map[string]any{"error": "workflow start failed"})
 		s.fail(w, fmt.Errorf("start workflow: %w", err))

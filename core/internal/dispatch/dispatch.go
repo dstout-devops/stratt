@@ -3,10 +3,10 @@
 // as it happens and never lands in Postgres.
 //
 // Phase-0 note: the charter's event-shipper sidecar is approximated by the
-// dispatcher following the pod log stream (`ansible-runner run -j` emits one
-// JSON event per line) and publishing each event to the bus. The pod stays
-// dumb; nothing in-cluster needs NATS reachability yet. The sidecar shape
-// lands with Sites (Phase 3).
+// dispatcher following the pod log stream — each Actuator's tool content
+// emits one JSON event per stdout line, which that Actuator interprets — and
+// publishing each event to the bus. The pod stays dumb; nothing in-cluster
+// needs NATS reachability yet. The sidecar shape lands with Sites (Phase 3).
 package dispatch
 
 import (
@@ -15,6 +15,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"sort"
+	"strings"
 	"time"
 
 	batchv1 "k8s.io/api/batch/v1"
@@ -23,7 +25,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 
-	"github.com/dstout-devops/stratt/core/internal/actuators/ansible"
+	"github.com/dstout-devops/stratt/core/internal/actuators"
 	"github.com/dstout-devops/stratt/core/internal/events"
 	"github.com/dstout-devops/stratt/types"
 )
@@ -60,21 +62,23 @@ type Result struct {
 	SpawnLatency time.Duration
 }
 
-// Run creates the Job for the given content and follows it to completion,
-// publishing every task event to the bus under runID.
-func (d *Dispatcher) Run(ctx context.Context, runID string, content ansible.Content) (*Result, error) {
+// Run creates the Job for the prepared Step and follows it to completion,
+// publishing every task event to the bus under runID. The Actuator that
+// prepared the spec interprets the pod's stdout lines — the dispatcher stays
+// tool-agnostic.
+func (d *Dispatcher) Run(ctx context.Context, runID string, spec actuators.JobSpec, act actuators.Actuator) (*Result, error) {
 	// Full Run id: the name keys ConfigMap and Job, and AlreadyExists is
 	// treated as adoption — a truncated id would let two Runs sharing a
 	// prefix adopt each other's execution (charter-guardian, ADR-0008).
 	jobName := "stratt-run-" + runID
 	created := time.Now()
 
-	if err := d.createContent(ctx, jobName, content); err != nil {
+	if err := d.createContent(ctx, jobName, spec.Files); err != nil {
 		return nil, err
 	}
 	defer d.cleanupContent(jobName)
 
-	if err := d.createJob(ctx, jobName, runID); err != nil {
+	if err := d.createJob(ctx, jobName, runID, spec); err != nil {
 		return nil, err
 	}
 
@@ -90,7 +94,7 @@ func (d *Dispatcher) Run(ctx context.Context, runID string, content ansible.Cont
 		Facts:        map[string]map[string]json.RawMessage{},
 		SpawnLatency: spawn,
 	}
-	if err := d.followLogs(ctx, runID, pod, res); err != nil {
+	if err := d.followLogs(ctx, runID, pod, act, res); err != nil {
 		return nil, err
 	}
 	ok, err := d.waitForJob(ctx, jobName)
@@ -101,13 +105,18 @@ func (d *Dispatcher) Run(ctx context.Context, runID string, content ansible.Cont
 	return res, nil
 }
 
-func (d *Dispatcher) createContent(ctx context.Context, name string, content ansible.Content) error {
+// cmKey flattens a JobSpec file path into a legal ConfigMap key (keys may not
+// contain "/"); the pod mount restores the real path under /runner/.
+func cmKey(path string) string { return strings.ReplaceAll(path, "/", "__") }
+
+func (d *Dispatcher) createContent(ctx context.Context, name string, files map[string]string) error {
+	data := make(map[string]string, len(files))
+	for path, content := range files {
+		data[cmKey(path)] = content
+	}
 	cm := &corev1.ConfigMap{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Labels: map[string]string{"app.kubernetes.io/managed-by": "stratt"}},
-		Data: map[string]string{
-			"play.yml": content.Play,
-			"hosts":    content.Hosts,
-		},
+		Data:       data,
 	}
 	// AlreadyExists is adoption: an activity retry re-entering, and the name
 	// derives from the Run id, so the existing content is this Run's.
@@ -124,9 +133,26 @@ func (d *Dispatcher) cleanupContent(name string) {
 	_ = d.client.CoreV1().ConfigMaps(d.cfg.Namespace).Delete(ctx, name, metav1.DeleteOptions{})
 }
 
-func (d *Dispatcher) createJob(ctx context.Context, name, runID string) error {
+func (d *Dispatcher) createJob(ctx context.Context, name, runID string, spec actuators.JobSpec) error {
 	backoff := int32(0)
 	ttl := int32(3600)
+
+	image := spec.Image
+	if image == "" {
+		image = d.cfg.EEImage
+	}
+	// One mount per content file, restored to its JobSpec path. Sorted so the
+	// pod spec is deterministic (map iteration is not).
+	paths := make([]string, 0, len(spec.Files))
+	for p := range spec.Files {
+		paths = append(paths, p)
+	}
+	sort.Strings(paths)
+	mounts := []corev1.VolumeMount{{Name: "workdir", MountPath: "/runner/artifacts"}}
+	for _, p := range paths {
+		mounts = append(mounts, corev1.VolumeMount{Name: "content", MountPath: "/runner/" + p, SubPath: cmKey(p)})
+	}
+
 	job := &batchv1.Job{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: name,
@@ -145,16 +171,10 @@ func (d *Dispatcher) createJob(ctx context.Context, name, runID string) error {
 				Spec: corev1.PodSpec{
 					RestartPolicy: corev1.RestartPolicyNever,
 					Containers: []corev1.Container{{
-						Name:  "ee",
-						Image: d.cfg.EEImage,
-						// -j: one JSON event per stdout line — the event
-						// stream the dispatcher ships to NATS.
-						Command: []string{"ansible-runner", "run", "/runner", "-p", "play.yml", "-j"},
-						VolumeMounts: []corev1.VolumeMount{
-							{Name: "content", MountPath: "/runner/project/play.yml", SubPath: "play.yml"},
-							{Name: "content", MountPath: "/runner/inventory/hosts", SubPath: "hosts"},
-							{Name: "workdir", MountPath: "/runner/artifacts"},
-						},
+						Name:         "ee",
+						Image:        image,
+						Command:      spec.Command,
+						VolumeMounts: mounts,
 					}},
 					Volumes: []corev1.Volume{
 						{Name: "content", VolumeSource: corev1.VolumeSource{ConfigMap: &corev1.ConfigMapVolumeSource{
@@ -198,9 +218,9 @@ func (d *Dispatcher) waitForPod(ctx context.Context, jobName string) (string, er
 	}
 }
 
-// followLogs streams the pod's stdout, publishing each runner event to the
-// bus and folding per-target results and facts into res.
-func (d *Dispatcher) followLogs(ctx context.Context, runID, pod string, res *Result) error {
+// followLogs streams the pod's stdout, publishing each interpreted event to
+// the bus and folding per-target results and facts into res.
+func (d *Dispatcher) followLogs(ctx context.Context, runID, pod string, act actuators.Actuator, res *Result) error {
 	req := d.client.CoreV1().Pods(d.cfg.Namespace).GetLogs(pod, &corev1.PodLogOptions{Follow: true})
 	stream, err := req.Stream(ctx)
 	if err != nil {
@@ -211,24 +231,23 @@ func (d *Dispatcher) followLogs(ctx context.Context, runID, pod string, res *Res
 	sc := bufio.NewScanner(stream)
 	sc.Buffer(make([]byte, 0, 1024*1024), 8*1024*1024) // fact payloads are large
 	for sc.Scan() {
-		ev, ok := ansible.ParseEvent(sc.Bytes())
+		iv, ok := act.Interpret(sc.Bytes())
 		if !ok {
 			continue
 		}
-		if err := d.bus.Publish(ctx, ansible.ToRunEvent(runID, ev)); err != nil {
+		iv.Event.RunID = runID
+		if err := d.bus.Publish(ctx, iv.Event); err != nil {
 			return err
 		}
-		if host, ok, failed := ansible.HostResult(ev); host != "" && (ok || failed) {
-			if failed {
-				res.PerTarget[host] = "failed"
-			} else if res.PerTarget[host] != "failed" {
-				res.PerTarget[host] = "ok"
+		if r := iv.Result; r != nil && r.Target != "" {
+			if r.Failed {
+				res.PerTarget[r.Target] = "failed"
+			} else if res.PerTarget[r.Target] != "failed" {
+				res.PerTarget[r.Target] = "ok"
 			}
 		}
-		if facts := ansible.ExtractFacts(ev); facts != nil {
-			if host, _ := ev.EventData["host"].(string); host != "" {
-				res.Facts[host] = facts
-			}
+		if iv.Facts != nil && iv.Event.Target != "" {
+			res.Facts[iv.Event.Target] = iv.Facts
 		}
 	}
 	if err := sc.Err(); err != nil && ctx.Err() == nil {

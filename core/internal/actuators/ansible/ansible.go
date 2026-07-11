@@ -15,17 +15,12 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/dstout-devops/stratt/core/internal/actuators"
 	"github.com/dstout-devops/stratt/types"
 )
 
-// Target is one Entity rendered as an execution target.
-type Target struct {
-	EntityID string
-	// Name is the host alias used in tool content and per-target results.
-	Name string
-	// Vars are tool-level connection/host vars (e.g. ansible_connection).
-	Vars map[string]string
-}
+// Target is one Entity rendered as an execution target (the shared seam type).
+type Target = actuators.Target
 
 // Content is the material mounted into the EE pod's private data dir.
 type Content struct {
@@ -60,6 +55,42 @@ func BuildContent(play string, targets []Target) Content {
 		b.WriteByte('\n')
 	}
 	return Content{Play: play, Hosts: b.String()}
+}
+
+// Actuator adapts this package's pure functions to the Actuator seam.
+type Actuator struct{}
+
+// Name implements actuators.Actuator.
+func (Actuator) Name() string { return "ansible" }
+
+// Prepare implements actuators.Actuator. Params are unused in this slice:
+// the content is the Phase-0 gather-facts play (custom play content arrives
+// with "Ansible Actuator complete", charter §8 Phase 1).
+func (Actuator) Prepare(_ json.RawMessage, targets []Target) (actuators.JobSpec, error) {
+	content := BuildContent(GatherFactsPlay, targets)
+	return actuators.JobSpec{
+		Files: map[string]string{
+			"project/play.yml": content.Play,
+			"inventory/hosts":  content.Hosts,
+		},
+		// -j: one JSON event per stdout line — the event stream the
+		// dispatcher ships to NATS.
+		Command: []string{"ansible-runner", "run", "/runner", "-p", "play.yml", "-j"},
+	}, nil
+}
+
+// Interpret implements actuators.Actuator.
+func (Actuator) Interpret(line []byte) (actuators.Interpreted, bool) {
+	ev, ok := ParseEvent(line)
+	if !ok {
+		return actuators.Interpreted{}, false
+	}
+	out := actuators.Interpreted{Event: ToRunEvent("", ev)}
+	if host, hostOK, failed := HostResult(ev); host != "" && (hostOK || failed) {
+		out.Result = &actuators.TargetResult{Target: host, Failed: failed}
+	}
+	out.Facts = ExtractFacts(ev)
+	return out, true
 }
 
 // RunnerEvent is the subset of an ansible-runner JSON event the platform

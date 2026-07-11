@@ -39,6 +39,34 @@ func TestParseEventAndFacts(t *testing.T) {
 	}
 }
 
+func TestActuatorSeam(t *testing.T) {
+	a := Actuator{}
+	if a.Name() != "ansible" {
+		t.Fatalf("name: %s", a.Name())
+	}
+	spec, err := a.Prepare(nil, []Target{{EntityID: "e1", Name: "vm-1", Vars: map[string]string{"ansible_connection": "local"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if spec.Files["project/play.yml"] == "" || spec.Files["inventory/hosts"] == "" {
+		t.Fatalf("content files missing: %+v", spec.Files)
+	}
+	if spec.Command[0] != "ansible-runner" {
+		t.Fatalf("command: %v", spec.Command)
+	}
+
+	iv, ok := a.Interpret([]byte(`{"uuid":"u1","counter":9,"event":"runner_on_failed","stdout":"","event_data":{"host":"vm-1"}}`))
+	if !ok {
+		t.Fatal("event should interpret")
+	}
+	if iv.Event.Seq != 9 || iv.Event.Kind != "runner_on_failed" || iv.Event.Target != "vm-1" {
+		t.Fatalf("event mapping: %+v", iv.Event)
+	}
+	if iv.Result == nil || !iv.Result.Failed || iv.Result.Target != "vm-1" {
+		t.Fatalf("failed host must fold into a failed result: %+v", iv.Result)
+	}
+}
+
 func TestBuildContent(t *testing.T) {
 	c := BuildContent(GatherFactsPlay, []Target{
 		{EntityID: "e1", Name: "vm-1", Vars: map[string]string{"ansible_connection": "local"}},
