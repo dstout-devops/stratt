@@ -160,6 +160,11 @@ tasks:
     cmds:
       - docker compose -f deploy/dev/docker-compose.yml down -v
 
+  dev:zitadel:bootstrap:
+    desc: Provision the dev e2e service identities in Zitadel (ADR-0009 slice 5)
+    cmds:
+      - deploy/dev/zitadel-bootstrap.sh
+
   dev:logs:
     desc: Tail dev substrate logs
     cmds:

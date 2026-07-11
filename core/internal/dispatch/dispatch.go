@@ -36,6 +36,11 @@ type Config struct {
 	Namespace string
 	// EEImage is the execution-environment image (ansible-runner inside).
 	EEImage string
+	// FSGroup is the pod-level fsGroup: credential Secret volumes are
+	// projected root:fsGroup mode 0440 (kubelet-owned, no world access), so
+	// the EE's non-root user reads them via group. Must match the EE image's
+	// runtime gid. <=0 defaults to 1000 (the stratt-ee `runner` user).
+	FSGroup int64
 }
 
 // Dispatcher creates and follows execution Jobs.
@@ -200,7 +205,14 @@ func (d *Dispatcher) createJob(ctx context.Context, name, runID string, spec act
 	// items (0400) under /runner/credentials/.
 	var env []corev1.EnvVar
 	var volumes []corev1.Volume
-	fileMode := int32(0o400)
+	// 0440 + pod fsGroup (not 0400): Secret volume files are root-owned by
+	// the kubelet, and the EE runs non-root — group is the only read path
+	// that doesn't require running the tool as root. No world access.
+	fileMode := int32(0o440)
+	fsGroup := d.cfg.FSGroup
+	if fsGroup <= 0 {
+		fsGroup = 1000
+	}
 	for ci, c := range creds {
 		if c.SecretNamespace != "" && c.SecretNamespace != d.cfg.Namespace {
 			return fmt.Errorf("dispatch: credential_ref %s: secret namespace %q differs from job namespace %q (secretKeyRef cannot cross namespaces)",
@@ -254,7 +266,8 @@ func (d *Dispatcher) createJob(ctx context.Context, name, runID string, spec act
 					Labels: map[string]string{"stratt.dev/run-id": runID},
 				},
 				Spec: corev1.PodSpec{
-					RestartPolicy: corev1.RestartPolicyNever,
+					SecurityContext: &corev1.PodSecurityContext{FSGroup: &fsGroup},
+					RestartPolicy:   corev1.RestartPolicyNever,
 					Containers: []corev1.Container{{
 						Name:         "ee",
 						Image:        image,

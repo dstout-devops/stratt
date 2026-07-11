@@ -1,0 +1,97 @@
+{
+  "schema_version": "1.1",
+  "type_definitions": [
+    { "type": "principal" },
+    {
+      "type": "org",
+      "relations": {
+        "admin": { "this": {} },
+        "member": {
+          "union": {
+            "child": [{ "this": {} }, { "computedUserset": { "relation": "admin" } }]
+          }
+        }
+      },
+      "metadata": {
+        "relations": {
+          "admin": { "directly_related_user_types": [{ "type": "principal" }] },
+          "member": { "directly_related_user_types": [{ "type": "principal" }] }
+        }
+      }
+    },
+    {
+      "type": "team",
+      "relations": {
+        "org": { "this": {} },
+        "admin": {
+          "union": {
+            "child": [
+              { "this": {} },
+              {
+                "tupleToUserset": {
+                  "tupleset": { "relation": "org" },
+                  "computedUserset": { "relation": "admin" }
+                }
+              }
+            ]
+          }
+        },
+        "member": {
+          "union": {
+            "child": [{ "this": {} }, { "computedUserset": { "relation": "admin" } }]
+          }
+        }
+      },
+      "metadata": {
+        "relations": {
+          "org": { "directly_related_user_types": [{ "type": "org" }] },
+          "admin": { "directly_related_user_types": [{ "type": "principal" }] },
+          "member": { "directly_related_user_types": [{ "type": "principal" }] }
+        }
+      }
+    },
+    {
+      "type": "credential_ref",
+      "relations": {
+        "owner_team": { "this": {} },
+        "admin": {
+          "union": {
+            "child": [
+              { "this": {} },
+              {
+                "tupleToUserset": {
+                  "tupleset": { "relation": "owner_team" },
+                  "computedUserset": { "relation": "admin" }
+                }
+              }
+            ]
+          }
+        },
+        "reader": {
+          "union": {
+            "child": [{ "this": {} }, { "computedUserset": { "relation": "admin" } }]
+          }
+        },
+        "user": { "this": {} }
+      },
+      "metadata": {
+        "relations": {
+          "owner_team": { "directly_related_user_types": [{ "type": "team" }] },
+          "admin": { "directly_related_user_types": [{ "type": "principal" }] },
+          "reader": {
+            "directly_related_user_types": [
+              { "type": "principal" },
+              { "type": "team", "relation": "member" }
+            ]
+          },
+          "user": {
+            "directly_related_user_types": [
+              { "type": "principal" },
+              { "type": "team", "relation": "member" }
+            ]
+          }
+        }
+      }
+    }
+  ]
+}

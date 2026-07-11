@@ -96,19 +96,49 @@ func run(ctx context.Context, log *slog.Logger) error {
 	if err != nil {
 		return fmt.Errorf("kubernetes: %w", err)
 	}
+	eeFSGroup, err := strconv.ParseInt(env("STRATT_EE_FSGROUP", "1000"), 10, 64)
+	if err != nil {
+		return fmt.Errorf("ee fsgroup: %w", err)
+	}
 	dispatcher := dispatch.New(dispatch.Config{
 		Namespace: env("STRATT_K8S_NAMESPACE", "default"),
 		EEImage:   env("STRATT_EE_IMAGE", "stratt-ee:dev"),
+		FSGroup:   eeFSGroup,
 	}, kubeClient, bus, log)
 
 	// ── authorization seam (§2.5, ADR-0009) ─────────────────────────────
-	// Tuple evaluator over CaC manifests this phase; OpenFGA server swaps in
-	// behind the same interface with OIDC. Deny is the default: with no
-	// tuples loaded, every grant-gated surface refuses.
-	authorizer := &authz.TupleAuthorizer{}
+	// The CaC tuple evaluator always loads (it is the no-substrate dev path
+	// and the model's semantic reference); with STRATT_OPENFGA_URL set the
+	// server answers checks instead, fed the same tuples by SyncTuples —
+	// two backends, one Authorizer seam, one Git source. Deny is the
+	// default: with no tuples loaded, every grant-gated surface refuses.
+	evaluator := &authz.TupleAuthorizer{}
+	var authorizer authz.Authorizer = evaluator
+	var fga *authz.OpenFGAAuthorizer
+	if fgaURL := os.Getenv("STRATT_OPENFGA_URL"); fgaURL != "" {
+		if fga, err = authz.NewOpenFGAAuthorizer(ctx, fgaURL); err != nil {
+			return err
+		}
+		authorizer = fga
+		log.Info("authz backend: openfga", "url", fgaURL)
+	} else {
+		log.Info("authz backend: in-process tuple evaluator (STRATT_OPENFGA_URL empty)")
+	}
+
 	devPrincipal := os.Getenv("STRATT_DEV_PRINCIPAL_HEADER") == "true"
 	if devPrincipal {
-		log.Warn("DEV PRINCIPAL MODE: X-Stratt-Principal header is trusted — dev harness only, replaced by OIDC (ADR-0009)")
+		log.Warn("DEV PRINCIPAL MODE: X-Stratt-Principal header is trusted — dev harness only (ADR-0009)")
+	}
+	var oidcResolver *authz.OIDCResolver
+	if issuer := os.Getenv("STRATT_OIDC_ISSUER"); issuer != "" {
+		// Fail fast: a misconfigured issuer must not boot an API that 401s
+		// every Bearer holder while looking healthy.
+		if oidcResolver, err = authz.NewOIDCResolver(ctx, issuer, os.Getenv("STRATT_OIDC_AUDIENCE")); err != nil {
+			return err
+		}
+		log.Info("identity backend: oidc", "issuer", issuer, "audienceCheck", os.Getenv("STRATT_OIDC_AUDIENCE") != "")
+	} else {
+		log.Info("identity backend: none (STRATT_OIDC_ISSUER empty); Bearer tokens are not accepted")
 	}
 
 	// In-tree Actuator registry (§2.3); out-of-tree Actuators arrive via the
@@ -176,9 +206,20 @@ func run(ctx context.Context, log *slog.Logger) error {
 		// reload on the reconcile cadence. A failed reload keeps the
 		// previous grant set (never silently drop to deny-all mid-flight;
 		// never silently gain grants from a broken file either).
-		if err := authorizer.LoadTuples(path); err != nil {
-			log.Error("authz tuples failed to load; starting with empty grants (deny)", "error", err)
+		reloadTuples := func() {
+			if err := evaluator.LoadTuples(path); err != nil {
+				log.Error("authz tuple reload failed; keeping previous grants", "error", err)
+				return
+			}
+			if fga != nil {
+				// OpenFGA is a projection of the same Git source (§1.2):
+				// desired-state sync, adds and revokes both.
+				if err := fga.SyncTuples(ctx, evaluator.Snapshot()); err != nil {
+					log.Error("openfga tuple sync failed; server grants may be stale", "error", err)
+				}
+			}
 		}
+		reloadTuples()
 		go func() {
 			ticker := time.NewTicker(interval)
 			defer ticker.Stop()
@@ -187,9 +228,7 @@ func run(ctx context.Context, log *slog.Logger) error {
 				case <-ctx.Done():
 					return
 				case <-ticker.C:
-					if err := authorizer.LoadTuples(path); err != nil {
-						log.Error("authz tuple reload failed; keeping previous grants", "error", err)
-					}
+					reloadTuples()
 				}
 			}
 		}()
@@ -198,7 +237,7 @@ func run(ctx context.Context, log *slog.Logger) error {
 	}
 
 	// ── interface plane ──────────────────────────────────────────────────
-	server := &api.Server{Store: store, Bus: bus, Temporal: temporalClient, Authz: authorizer, Log: log, DevPrincipalHeader: devPrincipal}
+	server := &api.Server{Store: store, Bus: bus, Temporal: temporalClient, Authz: authorizer, Log: log, DevPrincipalHeader: devPrincipal, OIDC: oidcResolver}
 	httpSrv := &http.Server{
 		Addr:              env("STRATT_LISTEN_ADDR", ":8080"),
 		Handler:           server.Handler(),

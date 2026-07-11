@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 
 	"go.temporal.io/sdk/client"
@@ -27,9 +28,13 @@ type Server struct {
 	Temporal client.Client
 	Authz    authz.Authorizer
 	Log      *slog.Logger
-	// DevPrincipalHeader enables the Phase-1 X-Stratt-Principal resolver —
-	// dev harness only, replaced by OIDC (ADR-0009). Startup logs loudly.
+	// DevPrincipalHeader enables the X-Stratt-Principal resolver — dev
+	// harness / no-substrate path only (ADR-0009). Startup logs loudly.
 	DevPrincipalHeader bool
+	// OIDC, when set, resolves Authorization: Bearer tokens to Principals.
+	// Nil leaves Bearer requests anonymous-denied (no silent fallback from
+	// a presented-but-unverifiable credential to another resolver).
+	OIDC *authz.OIDCResolver
 }
 
 // Handler mounts the generated routes under /api/v1, behind the Principal
@@ -40,12 +45,22 @@ func (s *Server) Handler() http.Handler {
 	return mux
 }
 
-// principalMiddleware resolves the request Principal. Bearer tokens are
-// reserved for OIDC (next slice); the dev header requires explicit opt-in.
-// Anonymous requests proceed unresolved — endpoints that require a grant
-// deny them (default deny lives at the check, not here).
+// principalMiddleware resolves the request Principal. Bearer tokens go to
+// the OIDC resolver when configured — an invalid or expired token is 401,
+// never a silent downgrade to anonymous; the dev header requires explicit
+// opt-in. Anonymous requests proceed unresolved — endpoints that require a
+// grant deny them (default deny lives at the check, not here).
 func (s *Server) principalMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if auth := r.Header.Get("Authorization"); s.OIDC != nil && strings.HasPrefix(auth, "Bearer ") {
+			id, kind, err := s.OIDC.Resolve(r.Context(), strings.TrimPrefix(auth, "Bearer "))
+			if err != nil {
+				writeErr(w, http.StatusUnauthorized, "invalid bearer token")
+				return
+			}
+			next.ServeHTTP(w, r.WithContext(authz.WithPrincipal(r.Context(), id, kind)))
+			return
+		}
 		if s.DevPrincipalHeader {
 			if id := r.Header.Get("X-Stratt-Principal"); id != "" {
 				kind := r.Header.Get("X-Stratt-Principal-Kind")

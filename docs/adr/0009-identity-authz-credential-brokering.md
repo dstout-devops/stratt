@@ -147,3 +147,53 @@ Founding Discipline or non-goal is touched.
   names OpenFGA; ReBAC expresses use-without-read and View-scoped execution natively.
 - **OpenFGA server in this slice** — deferred by steward decision: the tuple evaluator
   ships the semantics now; the server lands with OIDC as one auth slice.
+
+## Implementation notes (slice 5 — OIDC + OpenFGA server, 2026-07-11)
+
+The two deferred swaps landed behind the seams this ADR named; no consumer changed.
+
+- **Pins (dependency-scout 2026-07-11):** OpenFGA server `openfga/openfga:v1.17.0`
+  (RECOMMEND — CNCF Incubating 2025-10, prompt CVE history, Postgres first-class);
+  `github.com/openfga/go-sdk v0.7.0` (CAUTION — pre-1.0: pinned exact, every bump
+  treated as breaking and gated by the agreement test); `github.com/coreos/go-oidc/v3
+  v3.18.0` (RECOMMEND — verify-only scope, K8s/Dex pedigree). `openfga/language`
+  (DSL parser) deliberately skipped: the authorization model is authored as JSON
+  (`core/internal/authz/authzmodel.json`, embedded, §1.5 schemas-are-data); the DSL
+  above stays documentation.
+- **Dev IdP: Zitadel in the dev compose** (`ghcr.io/zitadel/zitadel:v4.16.0`), riding
+  the shared Postgres with its own database. dex was rejected (no `client_credentials`
+  grant — exactly the machine flow production uses); Keycloak rejected (JVM substrate
+  skew). **License flag:** Zitadel core relicensed Apache-2.0 → AGPL-3.0+CLA
+  (2025-03). Acceptable strictly as an unmodified, network-accessed service — the
+  Ansible-subprocess analogy; never vendored, forked, or linked. The e2e service
+  identities are provisioned with **access-token-type JWT** (go-oidc verifies via
+  JWKS; opaque tokens would require introspection).
+- **Datastore:** memory engine in dev — tuples are CaC and re-synced every reconcile
+  cycle, so the server is a rebuildable projection of Git (§1.2) and losing it loses
+  nothing. Production runbook (Helm slice): postgres engine + `openfga migrate`.
+- **Tuple sync is desired-state, not additive:** `SyncTuples` diffs the manifest
+  against a full server read and issues adds *and* deletes — grants added out-of-band
+  on the server are revoked on the next cycle (§2.4 no implicit precedence; Git is
+  the declarer).
+- **Swap fidelity is a test, not a claim:** `TestOpenFGAAgreement` runs the tuple
+  evaluator's fixture through both backends across every principal × relation ×
+  object and fails on any disagreement. The evaluator stays as the no-substrate dev
+  path and the model's executable semantics.
+- **Principal.ID = `sub`** (stable, non-reassignable; usernames and emails are not
+  identifiers). **Kind is a heuristic for now** — profile claims
+  (`preferred_username`/`email`) → human, else service; an explicit kind claim and
+  claims→team mapping (the AAP authenticator-maps analog) are follow-ups — team
+  membership stays explicit in `tuples.yaml`.
+- **Audience check is opt-in** (`STRATT_OIDC_AUDIENCE`): dev client_credentials
+  tokens carry client-specific audiences; production sets it. A presented Bearer that
+  fails verification is **401, never downgraded to anonymous**; an absent credential
+  is anonymous and denied per-grant (403).
+- **Backends are optional by env** (`STRATT_OPENFGA_URL`, `STRATT_OIDC_ISSUER`
+  unset → evaluator + gated dev header): the no-substrate dev path is a feature and
+  keeps the reference semantics honest.
+- **Correction to the file-injection mode:** slice-4 projected Secret files as 0400,
+  which is unreadable in practice — the kubelet owns Secret files as root and the EE
+  runs non-root (uid 1000), so the "verified" 0400 file was never readable by the
+  tool (caught by this slice's e2e). Files are now 0440 with pod `fsGroup` =
+  the EE gid (`STRATT_EE_FSGROUP`, default 1000): root:fsGroup, group-read only, no
+  world access, tool stays non-root. "File-preferred" stands.

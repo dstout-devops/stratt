@@ -137,6 +137,7 @@ paths:
               schema:
                 type: array
                 items: { $ref: "#/components/schemas/CredentialRef" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
   /credential-refs/{name}:
     parameters:
@@ -157,6 +158,7 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/CredentialRef" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
     put:
@@ -174,6 +176,7 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/CredentialRef" }
         "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "409": { $ref: "#/components/responses/Conflict" }
   /runs:
@@ -254,6 +257,15 @@ components:
           schema: { $ref: "#/components/schemas/Error" }
     Forbidden:
       description: The Principal lacks the required grant
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    Unauthorized:
+      description: >
+        A Bearer token was presented but could not be verified (invalid,
+        expired, or wrong issuer/audience). Written by the Principal
+        middleware — a bad credential is 401, never downgraded to anonymous;
+        an absent credential is anonymous and denied per-grant (403).
       content:
         application/json:
           schema: { $ref: "#/components/schemas/Error" }

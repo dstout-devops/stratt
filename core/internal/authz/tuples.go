@@ -23,17 +23,17 @@ import (
 //	                user   = direct ∪ team#member usersets   (implies NOTHING)
 type TupleAuthorizer struct {
 	mu     sync.RWMutex
-	tuples []tuple
+	tuples []Tuple
 }
 
-type tuple struct {
+type Tuple struct {
 	User     string `yaml:"user"`     // principal:<id> | team:<name>#member | org:<name> | team:<name>
 	Relation string `yaml:"relation"` // admin | member | reader | user | owner_team | org
 	Object   string `yaml:"object"`   // org:<n> | team:<n> | credential_ref:<n>
 }
 
 type tupleDoc struct {
-	Tuples []tuple `yaml:"tuples"`
+	Tuples []Tuple `yaml:"tuples"`
 }
 
 // LoadTuples (re)loads the manifest at <root>/authz/tuples.yaml. A missing
@@ -66,6 +66,16 @@ func (a *TupleAuthorizer) LoadTuples(root string) error {
 	a.tuples = doc.Tuples
 	a.mu.Unlock()
 	return nil
+}
+
+// Snapshot returns the currently loaded tuple set — the desired state the
+// OpenFGA projection syncs from (same CaC source, one read).
+func (a *TupleAuthorizer) Snapshot() []Tuple {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	out := make([]Tuple, len(a.tuples))
+	copy(out, a.tuples)
+	return out
 }
 
 // Check implements Authorizer for principal subjects.
