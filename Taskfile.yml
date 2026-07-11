@@ -70,14 +70,17 @@ tasks:
         fi
         echo "Evergreen gate passed."
 
+  # Go modules live in the go.work workspace (ADR-0005), not at the repo
+  # root; every Go branch below iterates the workspace members.
   fmt:
     desc: Format Go, web, and Python sources (skips languages with no files yet)
     silent: true
     cmds:
       - |
         set -eu
-        if [ -f go.mod ]; then
-          files=$(git ls-files '*.go'); [ -z "$files" ] || { echo '→ gofmt'; gofmt -w $files; }
+        if [ -f go.work ]; then
+          files=$(git ls-files '*.go' | grep -v '\.gen\.go$' || true)
+          [ -z "$files" ] || { echo '→ gofmt'; gofmt -w $files; }
         fi
         if [ -f package.json ]; then echo '→ prettier'; npx --yes prettier --write . >/dev/null; fi
         if [ -f pyproject.toml ]; then echo '→ ruff format'; uv run ruff format .; fi
@@ -90,8 +93,8 @@ tasks:
       - |
         set -eu
         rc=0
-        if [ -f go.mod ]; then
-          files=$(git ls-files '*.go')
+        if [ -f go.work ]; then
+          files=$(git ls-files '*.go' | grep -v '\.gen\.go$' || true)
           if [ -n "$files" ]; then
             out=$(gofmt -l $files); [ -z "$out" ] || { echo "gofmt needs: $out"; rc=1; }
           fi
@@ -107,25 +110,88 @@ tasks:
     cmds:
       - |
         set -eu
-        if [ -f go.mod ]; then echo '→ go vet'; go vet ./...; fi
+        if [ -f go.work ]; then
+          for mod in $(go work edit -json | jq -r '.Use[].DiskPath'); do
+            echo "→ go vet ($mod)"; (cd "$mod" && go vet ./...)
+          done
+        fi
         if [ -f package.json ]; then echo '→ eslint'; npx --yes eslint .; fi
         if [ -f pyproject.toml ]; then echo '→ ruff check'; uv run ruff check .; fi
         echo "lint done."
 
   test:
-    desc: Run tests (prints a notice and succeeds until code lands)
+    desc: Run tests across all workspace modules
     silent: true
     cmds:
       - |
         set -eu
         ran=0
-        if [ -f go.mod ]; then echo '→ go test'; go test ./...; ran=1; fi
+        if [ -f go.work ]; then
+          for mod in $(go work edit -json | jq -r '.Use[].DiskPath'); do
+            echo "→ go test ($mod)"; (cd "$mod" && go test ./...)
+          done
+          ran=1
+        fi
         if [ -f pyproject.toml ]; then echo '→ pytest'; uv run pytest; ran=1; fi
         if [ "$ran" = 0 ]; then echo "No packages yet — nothing to test."; fi
 
   ci:
-    desc: Aggregate gate CI runs — evergreen + formatting + lint
+    desc: Aggregate gate CI runs — evergreen + formatting + lint + codegen freshness + tests
     cmds:
       - task: evergreen
       - task: fmt:check
       - task: lint
+      - task: generate:check
+      - task: test
+
+  dev:up:
+    desc: Start the Phase-0 dev substrate (Postgres 18, NATS JetStream, Temporal, vcsim)
+    cmds:
+      - docker compose -f deploy/dev/docker-compose.yml up -d --wait
+
+  dev:down:
+    desc: Stop the dev substrate (keep volumes)
+    cmds:
+      - docker compose -f deploy/dev/docker-compose.yml down
+
+  dev:nuke:
+    desc: Stop the dev substrate and delete its volumes (fresh graph)
+    prompt: This deletes the dev Postgres/NATS data volumes. Continue?
+    cmds:
+      - docker compose -f deploy/dev/docker-compose.yml down -v
+
+  dev:logs:
+    desc: Tail dev substrate logs
+    cmds:
+      - docker compose -f deploy/dev/docker-compose.yml logs -f --tail=50
+
+  dev:kind:up:
+    desc: Create the kind dev cluster for the dispatcher (ADR-0007)
+    cmds:
+      # Pre-create kind's network with an explicit subnet — the devcontainer's
+      # docker-in-docker default address pool is small, and kind reuses an
+      # existing network named "kind" instead of allocating from the pool.
+      - docker network inspect kind >/dev/null 2>&1 || docker network create --subnet 192.168.102.0/24 kind
+      - go run sigs.k8s.io/kind@v0.32.0 create cluster --config deploy/dev/kind.yaml
+
+  dev:kind:down:
+    desc: Delete the kind dev cluster
+    cmds:
+      - go run sigs.k8s.io/kind@v0.32.0 delete cluster --name stratt-dev
+
+  dev:ee:build:
+    desc: Build the dev EE image and load it into the kind cluster
+    cmds:
+      - docker build -t stratt-ee:dev ee/
+      - go run sigs.k8s.io/kind@v0.32.0 load docker-image stratt-ee:dev --name stratt-dev
+
+  generate:
+    desc: Regenerate code from specs (OpenAPI → server stubs, ADR-0006)
+    cmds:
+      - cd core && go generate ./...
+
+  generate:check:
+    desc: Fail if generated code is stale relative to the spec (CI gate, ADR-0006)
+    cmds:
+      - task: generate
+      - git diff --exit-code -- '**/*.gen.go'

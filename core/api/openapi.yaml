@@ -1,0 +1,257 @@
+# Stratt control-plane API — the source of truth (ADR-0006: spec-first;
+# handlers are generated stubs that must conform). OpenAPI 3.0.3 dialect until
+# oapi-codegen ships native 3.1 (tracked upstream, ADR-0006).
+#
+# Charter §1.6: this one surface serves UI, CLI, CI, and (later) the MCP
+# server. §1.8 / ADR-0003 L2, L4: every descent rung reachable here is also a
+# rendered screen — no rung is UI-only or API-only.
+openapi: 3.0.3
+info:
+  title: Stratt API
+  description: >
+    Estate-automation platform API: the typed estate graph (projection,
+    charter §1.2), Views, and Run orchestration. Phase-0 surface.
+  version: 0.1.0
+  license:
+    name: Apache-2.0
+    url: https://www.apache.org/licenses/LICENSE-2.0
+servers:
+  - url: /api/v1
+paths:
+  /views/{name}:
+    parameters:
+      - $ref: "#/components/parameters/ViewName"
+    get:
+      operationId: getView
+      summary: Get a View (versioned, CaC-declared graph query)
+      responses:
+        "200":
+          description: The View
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/View" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    put:
+      operationId: declareView
+      summary: Declare a View's selector (bumps the version on change)
+      description: >
+        Phase-0 declaration path. From Phase 1, Views referenced by
+        Assignments are Git-only (charter §2.1); this endpoint is then
+        restricted to unreferenced Views.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ViewSelector" }
+      responses:
+        "200":
+          description: The declared View with its current version
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/View" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+  /views/{name}/entities:
+    parameters:
+      - $ref: "#/components/parameters/ViewName"
+    get:
+      operationId: resolveView
+      summary: Resolve the View's live Entity set
+      parameters:
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1 }
+      responses:
+        "200":
+          description: The live Entity set and the View version it came from
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ViewResolution" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /entities/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: { type: string }
+    get:
+      operationId: getEntity
+      summary: Get one Entity with its Facets and per-attribute Provenance
+      responses:
+        "200":
+          description: The Entity document
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/EntityDocument" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /runs:
+    post:
+      operationId: startRun
+      summary: Start a Run of the Phase-0 Workflow against a View
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/StartRun" }
+      responses:
+        "201":
+          description: The created Run
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Run" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /runs/{id}:
+    parameters:
+      - $ref: "#/components/parameters/RunID"
+    get:
+      operationId: getRun
+      summary: Get a Run summary
+      responses:
+        "200":
+          description: The Run summary (events stream separately)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Run" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /runs/{id}/events:
+    parameters:
+      - $ref: "#/components/parameters/RunID"
+    get:
+      operationId: tailRunEvents
+      summary: Live SSE tail of the Run's full task-event stream
+      description: >
+        Replays from the first event and follows live (NATS-backed). Never
+        truncated — the full stream of any Run is reachable (ADR-0003 L1/L2).
+        Ends with a `stream-end` event once the Run's stream closes.
+      responses:
+        "200":
+          description: Server-sent event stream; each `data:` line is a RunEvent.
+          content:
+            text/event-stream:
+              schema: { type: string }
+        "404": { $ref: "#/components/responses/NotFound" }
+components:
+  parameters:
+    ViewName:
+      name: name
+      in: path
+      required: true
+      schema: { type: string }
+      description: View name (the `view://<name>` reference without scheme).
+    RunID:
+      name: id
+      in: path
+      required: true
+      schema: { type: string }
+  responses:
+    NotFound:
+      description: The named object does not exist
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    BadRequest:
+      description: The request is malformed
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+  schemas:
+    Error:
+      type: object
+      required: [message]
+      properties:
+        message: { type: string }
+    Provenance:
+      type: object
+      description: >
+        Per-attribute stamp — which Run/Syncer wrote the value, when, from
+        which Source (charter §2.1). Always exactly one answer.
+      required: [writerKind, writerRef, at]
+      properties:
+        writerKind: { type: string, enum: [syncer, run] }
+        writerRef: { type: string }
+        sourceId: { type: string }
+        at: { type: string, format: date-time }
+    Entity:
+      type: object
+      required: [id, kind, identityKeys, labels]
+      properties:
+        id: { type: string }
+        kind: { type: string }
+        identityKeys:
+          type: object
+          additionalProperties: { type: string }
+        labels:
+          type: object
+          additionalProperties: { type: string }
+    Facet:
+      type: object
+      required: [namespace, value, provenance]
+      properties:
+        namespace: { type: string }
+        value:
+          description: The Facet document fragment (schema attaches per namespace, §1.1).
+        provenance: { $ref: "#/components/schemas/Provenance" }
+    EntityDocument:
+      type: object
+      required: [entity, facets]
+      properties:
+        entity: { $ref: "#/components/schemas/Entity" }
+        facets:
+          type: array
+          items: { $ref: "#/components/schemas/Facet" }
+    FacetPredicate:
+      type: object
+      required: [namespace, equals]
+      properties:
+        namespace: { type: string }
+        path: { type: string }
+        equals:
+          description: JSON value the addressed field must equal.
+    ViewSelector:
+      type: object
+      description: >
+        Structured selector data — deliberately not an expression language
+        (charter non-goal; ADR-0003 review).
+      properties:
+        kinds:
+          type: array
+          items: { type: string }
+        labels:
+          type: object
+          additionalProperties: { type: string }
+        facets:
+          type: array
+          items: { $ref: "#/components/schemas/FacetPredicate" }
+    View:
+      type: object
+      required: [name, version, selector]
+      properties:
+        name: { type: string }
+        version: { type: integer, format: int64 }
+        selector: { $ref: "#/components/schemas/ViewSelector" }
+    ViewResolution:
+      type: object
+      required: [view, entities]
+      properties:
+        view: { $ref: "#/components/schemas/View" }
+        entities:
+          type: array
+          items: { $ref: "#/components/schemas/Entity" }
+    StartRun:
+      type: object
+      required: [viewName]
+      properties:
+        viewName: { type: string }
+    Run:
+      type: object
+      required: [id, workflowId, status, startedAt]
+      properties:
+        id: { type: string }
+        workflowId: { type: string }
+        status:
+          type: string
+          enum: [pending, running, succeeded, failed, canceled]
+        viewRef: { type: string }
+        viewVersion: { type: integer, format: int64 }
+        startedAt: { type: string, format: date-time }
+        finishedAt: { type: string, format: date-time }

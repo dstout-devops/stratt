@@ -1,0 +1,8 @@
+# oapi-codegen config (ADR-0006). Generates types + net/http server stubs;
+# no framework (charter §1.4).
+package: api
+output: server.gen.go
+generate:
+  models: true
+  std-http-server: true
+  embedded-spec: true

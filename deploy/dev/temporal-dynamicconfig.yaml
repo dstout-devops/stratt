@@ -1,0 +1,4 @@
+# Temporal dynamic config for the Phase-0 dev substrate. The auto-setup image
+# stopped bundling config/dynamicconfig/development-sql.yaml (>= 1.28), so the
+# compose file mounts this one. Empty = server defaults, which suit dev.
+{}

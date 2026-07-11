@@ -1,0 +1,98 @@
+# Stratt Phase-0 dev substrate (charter §3, §8) — runs inside the devcontainer's
+# docker-in-docker. This is the development harness, not a deployment artifact;
+# production manifests (Helm, Phase 1) will pin image digests per §7.3. Tags here
+# are still pinned exactly and ride the quarterly upgrade train (§1.7).
+#
+#   task dev:up / task dev:down
+#
+# Services:
+#   postgres  — the graph plane (charter §3: Postgres 18, JSONB, GIN)
+#   nats      — JetStream: run event streaming, Emitter ingestion (§3)
+#   temporal  — orchestration plane, auto-setup against the same Postgres (§3)
+#   vcsim     — govmomi's vCenter simulator: the Phase-0 Syncer's dev target (§8)
+
+name: stratt-dev
+
+# Explicit subnet: the devcontainer's docker-in-docker daemon has a small
+# default address pool (see .devcontainer/devcontainer.json); a manual subnet
+# sidesteps pool exhaustion regardless of that setting.
+networks:
+  default:
+    ipam:
+      config:
+        - subnet: 192.168.101.0/24
+
+services:
+  postgres:
+    image: postgres:18.1-alpine
+    environment:
+      POSTGRES_USER: stratt
+      POSTGRES_PASSWORD: stratt-dev # dev-only; real deployments broker via CredentialRef (§2.5)
+      POSTGRES_DB: stratt
+    command: ["postgres", "-c", "shared_buffers=512MB", "-c", "max_connections=200"]
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U stratt -d stratt"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  nats:
+    image: nats:2.12.2-alpine
+    # Config file rather than flags: max_payload has no CLI flag.
+    command: ["-c", "/etc/nats/nats.conf"]
+    ports:
+      - "4222:4222" # client
+      - "8222:8222" # monitoring
+    volumes:
+      - natsdata:/data
+      - ./nats.conf:/etc/nats/nats.conf:ro
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:8222/healthz"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  temporal:
+    image: temporalio/auto-setup:1.29.1
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DB: postgres12
+      DB_PORT: "5432"
+      POSTGRES_SEEDS: postgres
+      POSTGRES_USER: stratt
+      POSTGRES_PWD: stratt-dev
+      DYNAMIC_CONFIG_FILE_PATH: config/dynamicconfig/development-sql.yaml
+    volumes:
+      # auto-setup >= 1.28 no longer bundles this file; mount our own.
+      - ./temporal-dynamicconfig.yaml:/etc/temporal/config/dynamicconfig/development-sql.yaml:ro
+    ports:
+      - "7233:7233"
+    healthcheck:
+      # auto-setup binds the frontend to the container IP, not loopback.
+      test: ["CMD-SHELL", "temporal operator cluster health --address $(hostname -i):7233"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+  vcsim:
+    image: vmware/vcsim:v0.55.1 # version-locked to the pinned govmomi module (ADR: dependency-scout 2026-07-11)
+    # Args only — the image ENTRYPOINT is already /vcsim, and a repeated
+    # binary name becomes a positional arg that stops Go flag parsing (all
+    # flags silently ignored, default loopback bind). 0.0.0.0 so the mapped
+    # port reaches it; 25 VMs per RP: a small estate to project.
+    command: ["-l", "0.0.0.0:8989", "-vm", "25"]
+    ports:
+      - "8989:8989"
+    # No healthcheck: the vcsim image is distroless (no shell/wget to probe
+    # with). The Syncer's own connect/retry loop is the effective readiness
+    # signal in dev.
+
+volumes:
+  pgdata:
+  natsdata:

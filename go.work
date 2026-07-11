@@ -1,0 +1,12 @@
+// Stratt multi-module workspace (ADR-0005).
+//
+// types/ — shared wire/domain types for the Named Kinds (charter §2), consumed by
+//          the control plane today and stratt-agent when it lands (Phase 3).
+// core/  — the Go control plane (charter §3): graph-store frontend, controllers,
+//          dispatcher, compiler cadences, OpenAPI-first API.
+go 1.26.0
+
+use (
+	./core
+	./types
+)
