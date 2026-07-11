@@ -33,6 +33,7 @@ import (
 	"github.com/dstout-devops/stratt/core/internal/events"
 	"github.com/dstout-devops/stratt/core/internal/graph"
 	"github.com/dstout-devops/stratt/core/internal/orchestrate"
+	"github.com/dstout-devops/stratt/core/internal/triggers"
 	"github.com/dstout-devops/stratt/types"
 )
 
@@ -232,8 +233,20 @@ func run(ctx context.Context, log *slog.Logger) error {
 				}
 			}
 		}()
+
+		// Declared Triggers project onto Temporal Schedules on the same
+		// cadence (§3: Temporal owns all lifecycle; ADR-0010) — Git declares,
+		// the graph row is the first projection, the Schedule the second.
+		trigReconciler := &triggers.Reconciler{
+			Temporal: temporalClient, Store: store, Log: log, Interval: interval,
+		}
+		go func() {
+			if err := trigReconciler.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
+				log.Error("trigger reconciler stopped", "error", err)
+			}
+		}()
 	} else {
-		log.Info("no desired-state checkout configured (STRATT_DESIRED_STATE_PATH empty); reconciliation off — authz has no tuples (deny-all)")
+		log.Info("no desired-state checkout configured (STRATT_DESIRED_STATE_PATH empty); reconciliation off — authz has no tuples (deny-all), triggers idle")
 	}
 
 	// ── interface plane ──────────────────────────────────────────────────

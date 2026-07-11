@@ -283,7 +283,7 @@ func TestRunSummaries(t *testing.T) {
 	s := testStore(t)
 	ctx := context.Background()
 
-	r, err := s.CreateRun(ctx, "wf-1", "view://test/prod-linux", 1)
+	r, err := s.CreateRun(ctx, "wf-1", "view://test/prod-linux", 1, "nightly-facts")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -299,5 +299,8 @@ func TestRunSummaries(t *testing.T) {
 	}
 	if got.Status != types.RunSucceeded || got.FinishedAt == nil {
 		t.Fatalf("terminal run should be succeeded with finished_at, got %+v", got)
+	}
+	if got.TriggeredBy != "nightly-facts" {
+		t.Fatalf("triggered_by should round-trip, got %+v", got)
 	}
 }

@@ -386,3 +386,131 @@ func TestSelectorsEqualNormalization(t *testing.T) {
 		t.Fatal("different equals must read as drift")
 	}
 }
+
+// ── Triggers (ADR-0010) ──────────────────────────────────────────────────────
+
+func writeTrigger(t *testing.T, root, file, content string) {
+	t.Helper()
+	dir := filepath.Join(root, "triggers")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, file), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestParseTriggers(t *testing.T) {
+	root := t.TempDir()
+	writeDecl(t, root, "all-vms.yaml", "name: all-vms\nselector: {kinds: [vm]}\n")
+	writeTrigger(t, root, "nightly.yaml", `
+name: nightly-facts
+cron: "0 2 * * *"
+viewName: all-vms
+actuator: ansible
+credentialRefs: [vcenter-dev]
+principal: "381351939796919559"
+`)
+	parsed, err := ParseDir(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(parsed.Triggers) != 1 {
+		t.Fatalf("triggers: %+v", parsed.Triggers)
+	}
+	tr := parsed.Triggers[0]
+	if tr.Kind != types.TriggerSchedule {
+		t.Fatalf("kind must default to schedule, got %q", tr.Kind)
+	}
+	if tr.Name != "nightly-facts" || tr.Cron != "0 2 * * *" || tr.Principal == "" {
+		t.Fatalf("trigger: %+v", tr)
+	}
+
+	// Rejections: missing cron, unknown kind, credentialRefs without a
+	// principal (could never pass the dispatch-time use check, §2.5).
+	for name, doc := range map[string]string{
+		"cron":      "name: x\nviewName: v\n",
+		"kind":      "name: x\nkind: webhook\ncron: '* * * * *'\nviewName: v\n",
+		"principal": "name: x\ncron: '* * * * *'\nviewName: v\ncredentialRefs: [c]\n",
+		"slices":    "name: x\ncron: '* * * * *'\nviewName: v\nslices: -1\n",
+	} {
+		bad := t.TempDir()
+		writeDecl(t, bad, "v.yaml", "name: v\nselector: {kinds: [vm]}\n")
+		writeTrigger(t, bad, "x.yaml", doc)
+		if _, err := ParseDir(bad); err == nil {
+			t.Fatalf("invalid %s must be rejected", name)
+		}
+	}
+
+	// triggers/ absent → valid (repos predating ADR-0010).
+	old := t.TempDir()
+	writeDecl(t, old, "v.yaml", "name: v\nselector: {kinds: [vm]}\n")
+	if _, err := ParseDir(old); err != nil {
+		t.Fatalf("absent triggers/ must be valid: %v", err)
+	}
+}
+
+func TestTriggerPlanApplyLifecycle(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+
+	trig := types.Trigger{
+		Name: "nightly", Kind: types.TriggerSchedule, Cron: "0 2 * * *",
+		ViewName: "all-vms",
+	}
+	decls := Declarations{Triggers: []types.Trigger{trig}}
+
+	plan, err := Apply(ctx, s, decls)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if actionsByName(plan)["nightly"] != ActionCreate {
+		t.Fatalf("plan: %+v", plan.Entries)
+	}
+
+	// Re-apply: noop (semantic equality of the declaration document).
+	plan2, err := Apply(ctx, s, decls)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan2.Changes() != 0 {
+		t.Fatalf("re-apply should be all noop: %+v", plan2.Entries)
+	}
+
+	// Changed cron → update, round-trips through the store.
+	decls.Triggers[0].Cron = "0 3 * * *"
+	decls.Triggers[0].Paused = true
+	plan3, err := Apply(ctx, s, decls)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if actionsByName(plan3)["nightly"] != ActionUpdate {
+		t.Fatalf("changed cron should plan update: %+v", plan3.Entries)
+	}
+	got, err := s.GetTrigger(ctx, "nightly")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Cron != "0 3 * * *" || !got.Paused {
+		t.Fatalf("trigger round-trip: %+v", got)
+	}
+
+	// Prune: an undeclared trigger is deleted, and prune stats see the kind.
+	empty := Declarations{}
+	prunePlan, err := ComputePlan(ctx, s, empty)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st := prunePlan.PruneStats()[KindTrigger]; st[0] != 1 || st[1] != 1 {
+		t.Fatalf("trigger prune stats: %v", st)
+	}
+	if _, err := Apply(ctx, s, empty); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.GetTrigger(ctx, "nightly"); err == nil {
+		t.Fatal("pruned trigger should be gone")
+	}
+	if ts, err := s.ListTriggers(ctx); err != nil || len(ts) != 0 {
+		t.Fatalf("list after prune: %v %v", ts, err)
+	}
+}

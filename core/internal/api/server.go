@@ -17,6 +17,7 @@ import (
 	"github.com/dstout-devops/stratt/core/internal/events"
 	"github.com/dstout-devops/stratt/core/internal/graph"
 	"github.com/dstout-devops/stratt/core/internal/orchestrate"
+	"github.com/dstout-devops/stratt/core/internal/triggers"
 	"github.com/dstout-devops/stratt/types"
 )
 
@@ -191,6 +192,36 @@ func runToWire(r types.Run) Run {
 	}
 	if r.ViewVersion != 0 {
 		out.ViewVersion = &r.ViewVersion
+	}
+	if r.TriggeredBy != "" {
+		out.TriggeredBy = &r.TriggeredBy
+	}
+	return out
+}
+
+func triggerToWire(t types.Trigger) Trigger {
+	out := Trigger{
+		Name: t.Name, Kind: TriggerKind(t.Kind), Cron: t.Cron,
+		ViewName: t.ViewName,
+	}
+	if t.Paused {
+		out.Paused = &t.Paused
+	}
+	if t.Actuator != "" {
+		out.Actuator = &t.Actuator
+	}
+	if t.Params != nil {
+		out.Params = &t.Params
+	}
+	if t.Slices != 0 {
+		s := int64(t.Slices)
+		out.Slices = &s
+	}
+	if len(t.CredentialRefs) > 0 {
+		out.CredentialRefs = &t.CredentialRefs
+	}
+	if t.Principal != "" {
+		out.Principal = &t.Principal
 	}
 	return out
 }
@@ -377,7 +408,51 @@ func declarationsFromWire(in DesiredState) (desiredstate.Declarations, error) {
 			out.CredentialRefs = append(out.CredentialRefs, ref)
 		}
 	}
+	if in.Triggers != nil {
+		for _, w := range *in.Triggers {
+			t, err := triggerFromWire(w)
+			if err != nil {
+				return out, fmt.Errorf("trigger %s: %w", w.Name, err)
+			}
+			out.Triggers = append(out.Triggers, t)
+		}
+	}
 	return out, nil
+}
+
+// triggerFromWire mirrors triggerToWire; the document is the same CaC
+// declaration the desired-state controller reads from Git — the CLI plan/
+// apply path sends the checkout verbatim (ADR-0010: Git review stays the
+// authorization; there is no other write surface).
+func triggerFromWire(w Trigger) (types.Trigger, error) {
+	t := types.Trigger{
+		Name: w.Name, Kind: string(w.Kind), Cron: w.Cron, ViewName: w.ViewName,
+	}
+	if t.Kind == "" {
+		t.Kind = types.TriggerSchedule
+	}
+	if w.Paused != nil {
+		t.Paused = *w.Paused
+	}
+	if w.Actuator != nil {
+		t.Actuator = *w.Actuator
+	}
+	if w.Params != nil {
+		t.Params = *w.Params
+	}
+	if w.Slices != nil {
+		t.Slices = int(*w.Slices)
+	}
+	if w.CredentialRefs != nil {
+		t.CredentialRefs = *w.CredentialRefs
+	}
+	if w.Principal != nil {
+		t.Principal = *w.Principal
+	}
+	if err := desiredstate.ValidateTrigger(t); err != nil {
+		return t, err
+	}
+	return t, nil
 }
 
 func planToWire(p desiredstate.Plan) Plan {
@@ -506,7 +581,7 @@ func (s *Server) StartRun(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, err)
 		return
 	}
-	run, err := s.Store.CreateRun(r.Context(), "", "view://"+v.Name, v.Version)
+	run, err := s.Store.CreateRun(r.Context(), "", "view://"+v.Name, v.Version, "")
 	if err != nil {
 		s.fail(w, err)
 		return
@@ -638,3 +713,69 @@ func (s *Server) TailRunEvents(w http.ResponseWriter, r *http.Request, id RunID)
 }
 
 var errStreamEnd = errors.New("stream end")
+
+// ── Triggers (charter §2, ADR-0010) ──────────────────────────────────────────
+// CaC-only: declared in the Git desired-state repo (Git review authorizes the
+// Principal binding). This surface is read-only by design.
+
+// ListTriggers implements (GET /triggers).
+func (s *Server) ListTriggers(w http.ResponseWriter, r *http.Request) {
+	ts, err := s.Store.ListTriggers(r.Context())
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	out := make([]Trigger, 0, len(ts))
+	for _, t := range ts {
+		out = append(out, triggerToWire(t))
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+// GetTrigger implements (GET /triggers/{name}): the declaration plus the
+// Temporal Schedule's observed state — the Trigger → Run descent rung (§1.8).
+func (s *Server) GetTrigger(w http.ResponseWriter, r *http.Request, name string) {
+	t, err := s.Store.GetTrigger(r.Context(), name)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	detail := TriggerDetail{Trigger: triggerToWire(t)}
+	// The schedule is a projection reconciled on a cadence: absent state
+	// (not yet created, or Temporal unreachable) degrades to declaration-only
+	// rather than failing the read.
+	handle := s.Temporal.ScheduleClient().GetHandle(r.Context(), triggers.ScheduleID(name))
+	desc, descErr := handle.Describe(r.Context())
+	if descErr != nil {
+		// Distinguishable in logs (§1.8): "not reconciled yet" and "Temporal
+		// unreachable" both degrade the response, but never silently.
+		s.Log.Warn("trigger schedule state unavailable; returning declaration only",
+			"trigger", name, "error", descErr)
+	} else {
+		state := TriggerScheduleState{}
+		if desc.Schedule.State != nil {
+			state.Paused = &desc.Schedule.State.Paused
+		}
+		if len(desc.Info.NextActionTimes) > 0 {
+			state.NextFireTimes = &desc.Info.NextActionTimes
+		}
+		var recent []struct {
+			At         time.Time `json:"at"`
+			WorkflowId string    `json:"workflowId"`
+		}
+		for _, a := range desc.Info.RecentActions {
+			if a.StartWorkflowResult == nil {
+				continue
+			}
+			recent = append(recent, struct {
+				At         time.Time `json:"at"`
+				WorkflowId string    `json:"workflowId"`
+			}{At: a.ActualTime, WorkflowId: a.StartWorkflowResult.WorkflowID})
+		}
+		if len(recent) > 0 {
+			state.RecentRuns = &recent
+		}
+		detail.Schedule = &state
+	}
+	writeJSON(w, http.StatusOK, detail)
+}

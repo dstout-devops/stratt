@@ -25,8 +25,11 @@ type Run struct {
 	Status     RunStatus `json:"status"`
 	// ViewRef and ViewVersion record exactly which View (at which version)
 	// the Run targeted — the blast-radius audit trail (§4.3).
-	ViewRef     string     `json:"viewRef,omitempty"`
-	ViewVersion int64      `json:"viewVersion,omitempty"`
+	ViewRef     string `json:"viewRef,omitempty"`
+	ViewVersion int64  `json:"viewVersion,omitempty"`
+	// TriggeredBy names the Trigger that fired this Run; empty for manual/API
+	// launches — the §1.8 descent rung Trigger → Run.
+	TriggeredBy string     `json:"triggeredBy,omitempty"`
 	StartedAt   time.Time  `json:"startedAt"`
 	FinishedAt  *time.Time `json:"finishedAt,omitempty"`
 }

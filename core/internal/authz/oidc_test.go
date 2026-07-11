@@ -125,4 +125,3 @@ func TestOIDCResolver(t *testing.T) {
 		t.Fatalf("matching audience must pass: %v", err)
 	}
 }
-

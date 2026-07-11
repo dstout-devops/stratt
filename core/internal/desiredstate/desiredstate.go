@@ -41,12 +41,14 @@ type Declaration struct {
 type Declarations struct {
 	Views          []Declaration         `json:"views"`
 	CredentialRefs []types.CredentialRef `json:"credentialRefs"`
+	Triggers       []types.Trigger       `json:"triggers"`
 }
 
 // Declared kinds appearing in plans.
 const (
 	KindView          = "view"
 	KindCredentialRef = "credential-ref"
+	KindTrigger       = "trigger"
 )
 
 // Action is what reconciliation will do (or did) to one declared object.
@@ -162,6 +164,13 @@ func ParseDir(root string) (Declarations, error) {
 	}
 	out.CredentialRefs = refs
 	sort.Slice(out.CredentialRefs, func(i, j int) bool { return out.CredentialRefs[i].Name < out.CredentialRefs[j].Name })
+
+	triggers, err := parseKind(filepath.Join(root, "triggers"), true, parseTriggerFile)
+	if err != nil {
+		return out, err
+	}
+	out.Triggers = triggers
+	sort.Slice(out.Triggers, func(i, j int) bool { return out.Triggers[i].Name < out.Triggers[j].Name })
 	return out, nil
 }
 
@@ -284,6 +293,66 @@ func (f credRefFile) toCredentialRef() (types.CredentialRef, error) {
 	}, nil
 }
 
+// triggerFile is the triggers/*.yaml shape (ADR-0010). The declaration is
+// also an impersonation grant — principal names the service identity the
+// fired Runs execute as — which is exactly why Triggers are CaC-only: Git
+// review authorizes the binding.
+type triggerFile struct {
+	Name           string         `yaml:"name"`
+	Kind           string         `yaml:"kind"`
+	Cron           string         `yaml:"cron"`
+	Paused         bool           `yaml:"paused"`
+	ViewName       string         `yaml:"viewName"`
+	Actuator       string         `yaml:"actuator"`
+	Params         map[string]any `yaml:"params"`
+	Slices         int            `yaml:"slices"`
+	CredentialRefs []string       `yaml:"credentialRefs"`
+	Principal      string         `yaml:"principal"`
+}
+
+func parseTriggerFile(path string, raw []byte) (string, types.Trigger, error) {
+	var f triggerFile
+	dec := yaml.NewDecoder(strings.NewReader(string(raw)))
+	dec.KnownFields(true)
+	if err := dec.Decode(&f); err != nil {
+		return "", types.Trigger{}, fmt.Errorf("desiredstate: %s: %w", path, err)
+	}
+	if f.Kind == "" {
+		f.Kind = types.TriggerSchedule
+	}
+	t := types.Trigger{
+		Name: f.Name, Kind: f.Kind, Cron: f.Cron, Paused: f.Paused,
+		ViewName: f.ViewName, Actuator: f.Actuator, Params: f.Params,
+		Slices: f.Slices, CredentialRefs: f.CredentialRefs, Principal: f.Principal,
+	}
+	if err := ValidateTrigger(t); err != nil {
+		return "", types.Trigger{}, fmt.Errorf("desiredstate: %s: %w", path, err)
+	}
+	return t.Name, t, nil
+}
+
+// ValidateTrigger checks one Trigger declaration; exported because the API's
+// desired-state plan/apply path (the CLI applying the same Git checkout)
+// validates the identical document shape.
+func ValidateTrigger(t types.Trigger) error {
+	if t.Name == "" || t.ViewName == "" || t.Cron == "" {
+		return fmt.Errorf("trigger requires name, viewName, and cron")
+	}
+	if t.Kind != types.TriggerSchedule {
+		return fmt.Errorf("trigger %s: unknown kind %q (v1 supports schedule)", t.Name, t.Kind)
+	}
+	if t.Slices < 0 {
+		return fmt.Errorf("trigger %s: slices must be >= 0", t.Name)
+	}
+	// CredentialRefs without a Principal can never resolve at dispatch
+	// (§2.5: use is checked against the launching identity) — fail the
+	// declaration, not the Run.
+	if len(t.CredentialRefs) > 0 && t.Principal == "" {
+		return fmt.Errorf("trigger %s: credentialRefs require a principal", t.Name)
+	}
+	return nil
+}
+
 func (ds declSelector) toSelector() (types.ViewSelector, error) {
 	sel := types.ViewSelector{Kinds: ds.Kinds, Labels: ds.Labels}
 	for _, f := range ds.Facets {
@@ -318,6 +387,11 @@ func ComputePlan(ctx context.Context, store *graph.Store, decls Declarations) (P
 		return Plan{}, err
 	}
 	plan.Entries = append(plan.Entries, refPlan.Entries...)
+	trigPlan, err := computeTriggerPlan(ctx, store, decls.Triggers)
+	if err != nil {
+		return Plan{}, err
+	}
+	plan.Entries = append(plan.Entries, trigPlan.Entries...)
 	sort.Slice(plan.Entries, func(i, j int) bool {
 		if plan.Entries[i].Kind != plan.Entries[j].Kind {
 			return plan.Entries[i].Kind < plan.Entries[j].Kind
@@ -443,6 +517,45 @@ func computeCredentialRefPlan(ctx context.Context, store *graph.Store, decls []t
 	return plan, nil
 }
 
+// computeTriggerPlan diffs declared Triggers (CaC-only, ADR-0010: every
+// stored Trigger is cac by construction, so there is no adopt case).
+// Equality is semantic JSON equality of the declaration document.
+func computeTriggerPlan(ctx context.Context, store *graph.Store, decls []types.Trigger) (Plan, error) {
+	current, err := store.ListTriggers(ctx)
+	if err != nil {
+		return Plan{}, err
+	}
+	byName := map[string]types.Trigger{}
+	for _, t := range current {
+		byName[t.Name] = t
+	}
+
+	var plan Plan
+	declared := map[string]bool{}
+	for _, d := range decls {
+		declared[d.Name] = true
+		entry := PlanEntry{Kind: KindTrigger, Name: d.Name}
+		cur, exists := byName[d.Name]
+		switch {
+		case !exists:
+			entry.Action = ActionCreate
+		case triggersEqual(cur, d):
+			entry.Action = ActionNoop
+		default:
+			entry.Action = ActionUpdate
+		}
+		plan.Entries = append(plan.Entries, entry)
+	}
+	for _, t := range current {
+		if !declared[t.Name] {
+			plan.Entries = append(plan.Entries, PlanEntry{
+				Kind: KindTrigger, Name: t.Name, Action: ActionDelete,
+			})
+		}
+	}
+	return plan, nil
+}
+
 // Apply executes the plan for the declarations and returns the realized plan.
 // Per-object failures are recorded on their entries; the rest still applies.
 func Apply(ctx context.Context, store *graph.Store, decls Declarations) (Plan, error) {
@@ -457,6 +570,10 @@ func Apply(ctx context.Context, store *graph.Store, decls Declarations) (Plan, e
 	refByName := map[string]types.CredentialRef{}
 	for _, d := range decls.CredentialRefs {
 		refByName[d.Name] = d
+	}
+	trigByName := map[string]types.Trigger{}
+	for _, d := range decls.Triggers {
+		trigByName[d.Name] = d
 	}
 	for i := range plan.Entries {
 		e := &plan.Entries[i]
@@ -473,6 +590,10 @@ func Apply(ctx context.Context, store *graph.Store, decls Declarations) (Plan, e
 			err = store.DeleteCredentialRef(ctx, e.Name, graph.DeclaredByCaC)
 		case e.Kind == KindCredentialRef:
 			_, err = store.DeclareCredentialRefAs(ctx, refByName[e.Name], graph.DeclaredByCaC)
+		case e.Kind == KindTrigger && e.Action == ActionDelete:
+			err = store.DeleteTrigger(ctx, e.Name)
+		case e.Kind == KindTrigger:
+			err = store.UpsertTrigger(ctx, trigByName[e.Name])
 		}
 		if err != nil {
 			e.Error = err.Error()
@@ -484,6 +605,20 @@ func Apply(ctx context.Context, store *graph.Store, decls Declarations) (Plan, e
 // credentialRefsEqual compares pointer documents semantically.
 func credentialRefsEqual(a, b types.CredentialRef) bool {
 	a.DeclaredBy, b.DeclaredBy = "", ""
+	ja, err1 := json.Marshal(a)
+	jb, err2 := json.Marshal(b)
+	if err1 != nil || err2 != nil {
+		return false
+	}
+	var va, vb any
+	if json.Unmarshal(ja, &va) != nil || json.Unmarshal(jb, &vb) != nil {
+		return false
+	}
+	return reflect.DeepEqual(va, vb)
+}
+
+// triggersEqual compares declaration documents semantically.
+func triggersEqual(a, b types.Trigger) bool {
 	ja, err1 := json.Marshal(a)
 	jb, err2 := json.Marshal(b)
 	if err1 != nil || err2 != nil {

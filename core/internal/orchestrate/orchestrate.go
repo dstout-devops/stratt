@@ -29,11 +29,17 @@ const TaskQueue = "stratt-runs"
 // ansible (the Phase-0 default). Slices > 1 partitions the target set across
 // that many parallel K8s Jobs.
 type RunInput struct {
+	// RunID is the pre-created Run summary id for API launches. Empty for
+	// Trigger-started executions: the Workflow's first activity (EnsureRun)
+	// creates the row itself (ADR-0010).
 	RunID    string
 	ViewName string
 	Actuator string
 	Params   json.RawMessage
 	Slices   int
+	// Trigger names the Trigger that fired this Run; empty for manual/API
+	// launches (§1.8 descent: Trigger → Run).
+	Trigger string
 	// Principal is the launching identity (§2.5) — checked for `use` on
 	// each CredentialRef at dispatch time and recorded for audit. Only the
 	// id travels; never any material.
@@ -66,6 +72,15 @@ func RunAgainstView(ctx workflow.Context, in RunInput) error {
 	}
 	ctx = workflow.WithActivityOptions(ctx, opts)
 	var a *Activities
+
+	// Trigger-started executions have no API handler to pre-create the Run
+	// summary — the Workflow owns it (ADR-0010).
+	if in.RunID == "" {
+		wfID := workflow.GetInfo(ctx).WorkflowExecution.ID
+		if err := workflow.ExecuteActivity(ctx, a.EnsureRun, in, wfID).Get(ctx, &in.RunID); err != nil {
+			return err
+		}
+	}
 
 	var resolved ResolvedTargets
 	if err := workflow.ExecuteActivity(ctx, a.ResolveTargets, in).Get(ctx, &resolved); err != nil {
@@ -137,6 +152,22 @@ type Activities struct {
 	Authz      authz.Authorizer
 	// Actuators is the registry of in-tree Actuators by name (§2.3).
 	Actuators map[string]actuators.Actuator
+}
+
+// EnsureRun creates the Run summary row for a Trigger-started execution
+// (ADR-0010): API launches pre-create theirs in the handler; schedule-fired
+// Workflows start with only the declaration's launch parameters. Returns the
+// new Run id.
+func (a *Activities) EnsureRun(ctx context.Context, in RunInput, workflowID string) (string, error) {
+	v, err := a.Store.GetView(ctx, in.ViewName)
+	if err != nil {
+		return "", err
+	}
+	run, err := a.Store.CreateRun(ctx, workflowID, "view://"+v.Name, v.Version, in.Trigger)
+	if err != nil {
+		return "", err
+	}
+	return run.ID, nil
 }
 
 // ResolveTargets resolves the View to its live Entity set and renders
@@ -355,6 +386,9 @@ func (a *Activities) FinishRun(ctx context.Context, in RunInput, status types.Ru
 	// names only; material has no representation anywhere in the platform.
 	if in.Principal != "" {
 		summary["principal"] = in.Principal
+	}
+	if in.Trigger != "" {
+		summary["trigger"] = in.Trigger
 	}
 	if len(in.CredentialRefs) > 0 {
 		summary["credentialRefs"] = in.CredentialRefs

@@ -12,14 +12,15 @@ import (
 )
 
 // CreateRun records a new Run summary row (charter §2.3). Only summaries live
-// in Postgres; the event stream goes to NATS (§3).
-func (s *Store) CreateRun(ctx context.Context, workflowID, viewRef string, viewVersion int64) (types.Run, error) {
-	r := types.Run{WorkflowID: workflowID, Status: types.RunPending, ViewRef: viewRef, ViewVersion: viewVersion}
+// in Postgres; the event stream goes to NATS (§3). triggeredBy names the
+// Trigger that fired this Run — "" for manual/API launches (§1.8 descent).
+func (s *Store) CreateRun(ctx context.Context, workflowID, viewRef string, viewVersion int64, triggeredBy string) (types.Run, error) {
+	r := types.Run{WorkflowID: workflowID, Status: types.RunPending, ViewRef: viewRef, ViewVersion: viewVersion, TriggeredBy: triggeredBy}
 	err := s.pool.QueryRow(ctx, `
-		INSERT INTO graph.run (workflow_id, status, view_ref, view_version)
-		VALUES ($1, $2, nullif($3, ''), nullif($4, 0))
+		INSERT INTO graph.run (workflow_id, status, view_ref, view_version, triggered_by)
+		VALUES ($1, $2, nullif($3, ''), nullif($4, 0), nullif($5, ''))
 		RETURNING id, started_at`,
-		workflowID, string(r.Status), viewRef, viewVersion,
+		workflowID, string(r.Status), viewRef, viewVersion, triggeredBy,
 	).Scan(&r.ID, &r.StartedAt)
 	if err != nil {
 		return r, fmt.Errorf("graph: create run: %w", err)
@@ -72,10 +73,11 @@ func (s *Store) GetRun(ctx context.Context, runID string) (types.Run, error) {
 	var status string
 	var viewRef *string
 	var viewVersion *int64
+	var triggeredBy *string
 	err := s.pool.QueryRow(ctx, `
-		SELECT id, workflow_id, status, view_ref, view_version, started_at, finished_at
+		SELECT id, workflow_id, status, view_ref, view_version, triggered_by, started_at, finished_at
 		FROM graph.run WHERE id = $1`, runID,
-	).Scan(&r.ID, &r.WorkflowID, &status, &viewRef, &viewVersion, &r.StartedAt, &r.FinishedAt)
+	).Scan(&r.ID, &r.WorkflowID, &status, &viewRef, &viewVersion, &triggeredBy, &r.StartedAt, &r.FinishedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return r, fmt.Errorf("%w: run %s", ErrNotFound, runID)
 	}
@@ -88,6 +90,9 @@ func (s *Store) GetRun(ctx context.Context, runID string) (types.Run, error) {
 	}
 	if viewVersion != nil {
 		r.ViewVersion = *viewVersion
+	}
+	if triggeredBy != nil {
+		r.TriggeredBy = *triggeredBy
 	}
 	return r, nil
 }
