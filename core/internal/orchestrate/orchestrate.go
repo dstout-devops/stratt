@@ -40,6 +40,11 @@ type RunInput struct {
 	// Trigger names the Trigger that fired this Run; empty for manual/API
 	// launches (§1.8 descent: Trigger → Run).
 	Trigger string
+	// WorkflowRunID/StepName link a Run executing as one Step of a Workflow
+	// back to its WorkflowRun (§1.8 descent: Workflow → Run); empty for
+	// direct launches.
+	WorkflowRunID string
+	StepName      string
 	// Principal is the launching identity (§2.5) — checked for `use` on
 	// each CredentialRef at dispatch time and recorded for audit. Only the
 	// id travels; never any material.
@@ -163,7 +168,10 @@ func (a *Activities) EnsureRun(ctx context.Context, in RunInput, workflowID stri
 	if err != nil {
 		return "", err
 	}
-	run, err := a.Store.CreateRun(ctx, workflowID, "view://"+v.Name, v.Version, in.Trigger)
+	run, err := a.Store.CreateRun(ctx, types.Run{
+		WorkflowID: workflowID, ViewRef: "view://" + v.Name, ViewVersion: v.Version,
+		TriggeredBy: in.Trigger, WorkflowRunID: in.WorkflowRunID, StepName: in.StepName,
+	})
 	if err != nil {
 		return "", err
 	}
@@ -389,6 +397,10 @@ func (a *Activities) FinishRun(ctx context.Context, in RunInput, status types.Ru
 	}
 	if in.Trigger != "" {
 		summary["trigger"] = in.Trigger
+	}
+	if in.WorkflowRunID != "" {
+		summary["workflowRun"] = in.WorkflowRunID
+		summary["step"] = in.StepName
 	}
 	if len(in.CredentialRefs) > 0 {
 		summary["credentialRefs"] = in.CredentialRefs

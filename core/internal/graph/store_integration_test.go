@@ -283,7 +283,7 @@ func TestRunSummaries(t *testing.T) {
 	s := testStore(t)
 	ctx := context.Background()
 
-	r, err := s.CreateRun(ctx, "wf-1", "view://test/prod-linux", 1, "nightly-facts")
+	r, err := s.CreateRun(ctx, types.Run{WorkflowID: "wf-1", ViewRef: "view://test/prod-linux", ViewVersion: 1, TriggeredBy: "nightly-facts"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -302,5 +302,77 @@ func TestRunSummaries(t *testing.T) {
 	}
 	if got.TriggeredBy != "nightly-facts" {
 		t.Fatalf("triggered_by should round-trip, got %+v", got)
+	}
+}
+
+// TestWorkflowRunsAndGates covers the ADR-0011 execution records: the
+// WorkflowRun lifecycle, Gate open/decide (incl. the pending-only guard),
+// and the Workflow → Run descent queries.
+func TestWorkflowRunsAndGates(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+
+	wr, err := s.CreateWorkflowRun(ctx, "patch", "", "alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetWorkflowRunTemporalID(ctx, wr.ID, "wfrun-"+wr.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetWorkflowRunStatus(ctx, wr.ID, types.RunRunning, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	// A Step Run linked to the execution.
+	r, err := s.CreateRun(ctx, types.Run{WorkflowID: "wfrun-x-gather", ViewRef: "view://all", ViewVersion: 1, WorkflowRunID: wr.ID, StepName: "gather"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runs, err := s.ListRunsForWorkflowRun(ctx, wr.ID)
+	if err != nil || len(runs) != 1 || runs[0].StepName != "gather" || runs[0].ID != r.ID {
+		t.Fatalf("descent runs: %v %v", runs, err)
+	}
+	got, err := s.GetRun(ctx, r.ID)
+	if err != nil || got.WorkflowRunID != wr.ID || got.StepName != "gather" {
+		t.Fatalf("run linkage round-trip: %+v %v", got, err)
+	}
+
+	// Gate lifecycle: open (idempotent), decide once, refuse re-decision.
+	approvers := types.GateApprovers{Teams: []string{"platform"}}
+	g, err := s.CreateGate(ctx, wr.ID, "approve", approvers)
+	if err != nil {
+		t.Fatal(err)
+	}
+	g2, err := s.CreateGate(ctx, wr.ID, "approve", approvers) // activity retry
+	if err != nil || g2.ID != g.ID {
+		t.Fatalf("gate create must be idempotent per (run, step): %v %v", g2, err)
+	}
+	pending, err := s.ListGates(ctx, types.GatePending)
+	if err != nil || len(pending) != 1 || pending[0].Approvers.Teams[0] != "platform" {
+		t.Fatalf("pending inbox: %v %v", pending, err)
+	}
+	if err := s.DecideGate(ctx, g.ID, types.GateApproved, "bob", "lgtm"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.DecideGate(ctx, g.ID, types.GateApproved, "bob", "lgtm"); err != nil {
+		t.Fatalf("same decision retry must be a noop: %v", err)
+	}
+	if err := s.DecideGate(ctx, g.ID, types.GateDenied, "eve", "no"); !errors.Is(err, ErrConflict) {
+		t.Fatalf("re-decision must conflict, got %v", err)
+	}
+	gates, err := s.ListGatesForWorkflowRun(ctx, wr.ID)
+	if err != nil || len(gates) != 1 || gates[0].Status != types.GateApproved || gates[0].DecidedBy != "bob" {
+		t.Fatalf("decided gate: %v %v", gates, err)
+	}
+
+	if err := s.SetWorkflowRunStatus(ctx, wr.ID, types.RunSucceeded, map[string]any{"steps": map[string]any{"gather": "succeeded"}}); err != nil {
+		t.Fatal(err)
+	}
+	final, summary, err := s.GetWorkflowRun(ctx, wr.ID)
+	if err != nil || final.Status != types.RunSucceeded || final.FinishedAt == nil || final.Principal != "alice" {
+		t.Fatalf("terminal workflow run: %+v %v", final, err)
+	}
+	if _, ok := summary["steps"]; !ok {
+		t.Fatalf("summary round-trip: %v", summary)
 	}
 }

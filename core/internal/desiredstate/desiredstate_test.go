@@ -514,3 +514,147 @@ func TestTriggerPlanApplyLifecycle(t *testing.T) {
 		t.Fatalf("list after prune: %v %v", ts, err)
 	}
 }
+
+// ── Workflows (ADR-0011) ─────────────────────────────────────────────────────
+
+func writeWorkflow(t *testing.T, root, file, content string) {
+	t.Helper()
+	dir := filepath.Join(root, "workflows")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, file), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestParseWorkflows(t *testing.T) {
+	root := t.TempDir()
+	writeDecl(t, root, "all-vms.yaml", "name: all-vms\nselector: {kinds: [vm]}\n")
+	writeWorkflow(t, root, "patch.yaml", `
+name: patch-dev
+steps:
+  - name: gather
+    viewName: all-vms
+    actuator: ansible
+    credentialRefs: [vcenter-dev]
+  - name: approve
+    needs: [gather]
+    gate:
+      approvers:
+        teams: [platform]
+      timeoutSeconds: 3600
+  - name: report
+    needs: [approve]
+    viewName: all-vms
+    actuator: script
+    params: { source: "echo done" }
+  - name: cleanup
+    needs: [gather, approve]
+    when: failure
+    viewName: all-vms
+    actuator: script
+    params: { source: "echo cleanup" }
+`)
+	parsed, err := ParseDir(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(parsed.Workflows) != 1 || len(parsed.Workflows[0].Steps) != 4 {
+		t.Fatalf("workflows: %+v", parsed.Workflows)
+	}
+	w := parsed.Workflows[0]
+	if w.Steps[1].Gate == nil || w.Steps[1].Gate.Approvers.Teams[0] != "platform" || w.Steps[1].Gate.TimeoutSeconds != 3600 {
+		t.Fatalf("gate step: %+v", w.Steps[1])
+	}
+	if w.Steps[3].When != types.WhenFailure {
+		t.Fatalf("when: %+v", w.Steps[3])
+	}
+
+	// Rejections.
+	for name, doc := range map[string]string{
+		"cycle":          "name: w\nsteps:\n  - {name: a, needs: [b], viewName: v}\n  - {name: b, needs: [a], viewName: v}\n",
+		"unknown-need":   "name: w\nsteps:\n  - {name: a, needs: [nope], viewName: v}\n",
+		"self-need":      "name: w\nsteps:\n  - {name: a, needs: [a], viewName: v}\n",
+		"dup-step":       "name: w\nsteps:\n  - {name: a, viewName: v}\n  - {name: a, viewName: v}\n",
+		"gate+actuation": "name: w\nsteps:\n  - {name: a, viewName: v, gate: {approvers: {teams: [t]}}}\n",
+		"no-view":        "name: w\nsteps:\n  - {name: a, actuator: script}\n",
+		"no-approvers":   "name: w\nsteps:\n  - {name: a, gate: {approvers: {}}}\n",
+		"bad-when":       "name: w\nsteps:\n  - {name: a, viewName: v}\n  - {name: b, needs: [a], when: sometimes, viewName: v}\n",
+		"when-no-needs":  "name: w\nsteps:\n  - {name: a, when: failure, viewName: v}\n",
+		"no-steps":       "name: w\nsteps: []\n",
+	} {
+		bad := t.TempDir()
+		writeDecl(t, bad, "v.yaml", "name: v\nselector: {kinds: [vm]}\n")
+		writeWorkflow(t, bad, "x.yaml", doc)
+		if _, err := ParseDir(bad); err == nil {
+			t.Fatalf("invalid %s must be rejected", name)
+		}
+	}
+
+	// workflows/ absent → valid (repos predating ADR-0011).
+	old := t.TempDir()
+	writeDecl(t, old, "v.yaml", "name: v\nselector: {kinds: [vm]}\n")
+	if _, err := ParseDir(old); err != nil {
+		t.Fatalf("absent workflows/ must be valid: %v", err)
+	}
+}
+
+func TestWorkflowPlanApplyLifecycle(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+
+	wf := types.Workflow{Name: "patch", Steps: []types.Step{
+		{Name: "gather", ViewName: "all-vms"},
+		{Name: "approve", Needs: []string{"gather"}, Gate: &types.GateSpec{
+			Approvers: types.GateApprovers{Teams: []string{"platform"}},
+		}},
+	}}
+	decls := Declarations{Workflows: []types.Workflow{wf}}
+
+	plan, err := Apply(ctx, s, decls)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if actionsByName(plan)["patch"] != ActionCreate {
+		t.Fatalf("plan: %+v", plan.Entries)
+	}
+
+	plan2, err := Apply(ctx, s, decls)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan2.Changes() != 0 {
+		t.Fatalf("re-apply should be all noop: %+v", plan2.Entries)
+	}
+
+	decls.Workflows[0].Steps[0].Actuator = "script"
+	plan3, err := Apply(ctx, s, decls)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if actionsByName(plan3)["patch"] != ActionUpdate {
+		t.Fatalf("changed step should plan update: %+v", plan3.Entries)
+	}
+	got, err := s.GetWorkflow(ctx, "patch")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Steps[0].Actuator != "script" || got.Steps[1].Gate == nil {
+		t.Fatalf("workflow round-trip: %+v", got)
+	}
+
+	prunePlan, err := ComputePlan(ctx, s, Declarations{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st := prunePlan.PruneStats()[KindWorkflow]; st[0] != 1 || st[1] != 1 {
+		t.Fatalf("workflow prune stats: %v", st)
+	}
+	if _, err := Apply(ctx, s, Declarations{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.GetWorkflow(ctx, "patch"); err == nil {
+		t.Fatal("pruned workflow should be gone")
+	}
+}

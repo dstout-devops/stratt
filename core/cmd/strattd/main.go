@@ -151,6 +151,7 @@ func run(ctx context.Context, log *slog.Logger) error {
 
 	w := worker.New(temporalClient, orchestrate.TaskQueue, worker.Options{})
 	w.RegisterWorkflow(orchestrate.RunAgainstView)
+	w.RegisterWorkflow(orchestrate.RunDAG)
 	w.RegisterActivity(&orchestrate.Activities{Store: store, Dispatcher: dispatcher, Bus: bus, Authz: authorizer, Actuators: registry})
 	if err := w.Start(); err != nil {
 		return fmt.Errorf("temporal worker: %w", err)

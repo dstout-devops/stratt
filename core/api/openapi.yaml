@@ -262,6 +262,124 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/TriggerDetail" }
         "404": { $ref: "#/components/responses/NotFound" }
+  /workflows:
+    get:
+      operationId: listWorkflows
+      summary: List declared Workflows
+      description: >
+        Workflows are CaC-only in v1 (ADR-0011): declared in the Git
+        desired-state repo. This surface is read-only.
+      responses:
+        "200":
+          description: Every declared Workflow.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Workflow" }
+  /workflows/{name}:
+    parameters:
+      - name: name
+        in: path
+        required: true
+        schema: { type: string }
+    get:
+      operationId: getWorkflow
+      summary: Get one Workflow declaration
+      responses:
+        "200":
+          description: The Workflow.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Workflow" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /workflows/{name}/runs:
+    parameters:
+      - name: name
+        in: path
+        required: true
+        schema: { type: string }
+    post:
+      operationId: startWorkflowRun
+      summary: Start one execution of a Workflow
+      description: >
+        The launching Principal rides every actuation Step's credential
+        `use` check (charter §2.5), exactly as if it had started each Run
+        directly.
+      responses:
+        "201":
+          description: The created WorkflowRun.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/WorkflowRun" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /workflow-runs/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: { type: string }
+    get:
+      operationId: getWorkflowRun
+      summary: Get one WorkflowRun with per-Step outcomes
+      description: >
+        The Workflow → Run rung of the descent ladder (charter §1.8): each
+        actuation Step links its Run id (tail its events via
+        /runs/{id}/events), each Gate Step its Gate.
+      responses:
+        "200":
+          description: The execution and its Steps.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/WorkflowRunDetail" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /gates:
+    get:
+      operationId: listGates
+      summary: List Gates (the approval inbox)
+      parameters:
+        - name: status
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [pending, approved, denied, expired]
+      responses:
+        "200":
+          description: Gates, newest first.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Gate" }
+  /gates/{id}/decision:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: { type: string }
+    post:
+      operationId: decideGate
+      summary: Approve or deny a pending Gate
+      description: >
+        Requires an authenticated Principal that the Gate's approver policy
+        authorizes — listed explicitly or a member of an approver team
+        (checked through the platform Authorizer, ADR-0009/0011). The
+        decision is delivered to the waiting Workflow as a signal; the
+        Workflow records it (202).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/GateDecision" }
+      responses:
+        "202":
+          description: Decision accepted and signaled to the Workflow.
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
 components:
   parameters:
     ViewName:
@@ -436,13 +554,16 @@ components:
         triggers:
           type: array
           items: { $ref: "#/components/schemas/Trigger" }
+        workflows:
+          type: array
+          items: { $ref: "#/components/schemas/Workflow" }
     PlanEntry:
       type: object
       required: [name, action, memberCount]
       properties:
         kind:
           type: string
-          enum: [view, credential-ref, trigger]
+          enum: [view, credential-ref, trigger, workflow]
         name: { type: string }
         action:
           type: string
@@ -517,6 +638,14 @@ components:
           description: >
             Name of the Trigger that fired this Run; absent for manual/API
             launches (charter §1.8 descent, Trigger → Run).
+        workflowRunId:
+          type: string
+          description: >
+            The WorkflowRun this Run executed under, when it ran as a
+            Workflow Step (charter §1.8 descent, Workflow → Run).
+        stepName:
+          type: string
+          description: The Step within that Workflow.
         startedAt: { type: string, format: date-time }
         finishedAt: { type: string, format: date-time }
     Trigger:
@@ -551,6 +680,124 @@ components:
       properties:
         trigger: { $ref: "#/components/schemas/Trigger" }
         schedule: { $ref: "#/components/schemas/TriggerScheduleState" }
+    Workflow:
+      type: object
+      description: >
+        A Temporal-backed DAG of Steps with Gates (charter §2, ADR-0011).
+        CaC-only in v1.
+      required: [name, steps]
+      properties:
+        name: { type: string }
+        steps:
+          type: array
+          items: { $ref: "#/components/schemas/Step" }
+    Step:
+      type: object
+      description: >
+        One DAG node — an actuation (Actuator + params against a View,
+        charter §2.3) or a Gate; exactly one shape is set.
+      required: [name]
+      properties:
+        name: { type: string }
+        needs:
+          type: array
+          items: { type: string }
+          description: Step names that must reach a terminal state first.
+        when:
+          type: string
+          enum: [success, failure, always]
+          description: >
+            Edge condition on the needs' outcomes; success is the default
+            (all needs succeeded).
+        gate: { $ref: "#/components/schemas/GateSpec" }
+        viewName: { type: string }
+        actuator: { type: string }
+        params: { type: object }
+        slices: { type: integer, format: int64 }
+        credentialRefs:
+          type: array
+          items: { type: string }
+    GateSpec:
+      type: object
+      required: [approvers]
+      properties:
+        approvers: { $ref: "#/components/schemas/GateApprovers" }
+        timeoutSeconds:
+          type: integer
+          format: int64
+          description: >
+            Expire (treat as denial) after this long pending; 0 waits
+            forever.
+    GateApprovers:
+      type: object
+      description: >
+        Who may decide: Principals listed explicitly, or members of the
+        listed teams (checked through the platform Authorizer).
+      properties:
+        principals:
+          type: array
+          items: { type: string }
+        teams:
+          type: array
+          items: { type: string }
+    Gate:
+      type: object
+      required: [id, workflowRunId, step, status, approvers, createdAt]
+      properties:
+        id: { type: string }
+        workflowRunId: { type: string }
+        step: { type: string }
+        status:
+          type: string
+          enum: [pending, approved, denied, expired]
+        approvers: { $ref: "#/components/schemas/GateApprovers" }
+        decidedBy: { type: string }
+        note: { type: string }
+        createdAt: { type: string, format: date-time }
+        decidedAt: { type: string, format: date-time }
+    GateDecision:
+      type: object
+      required: [approve]
+      properties:
+        approve: { type: boolean }
+        note: { type: string }
+    WorkflowRun:
+      type: object
+      required: [id, workflowName, status, startedAt]
+      properties:
+        id: { type: string }
+        workflowName: { type: string }
+        temporalId: { type: string }
+        status:
+          type: string
+          enum: [pending, running, succeeded, failed, canceled]
+        principal: { type: string }
+        startedAt: { type: string, format: date-time }
+        finishedAt: { type: string, format: date-time }
+    WorkflowRunDetail:
+      type: object
+      required: [workflowRun, steps]
+      properties:
+        workflowRun: { $ref: "#/components/schemas/WorkflowRun" }
+        steps:
+          type: array
+          items:
+            type: object
+            required: [name]
+            properties:
+              name: { type: string }
+              status:
+                type: string
+                description: >
+                  Terminal outcome from the WorkflowRun summary (succeeded,
+                  failed, skipped); absent while the execution is live —
+                  descend into the linked Run or Gate for live state.
+              runId:
+                type: string
+                description: The Step's Run (actuation Steps).
+              gateId:
+                type: string
+                description: The Step's Gate (Gate Steps).
     TriggerScheduleState:
       type: object
       description: >

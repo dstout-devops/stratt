@@ -42,6 +42,7 @@ type Declarations struct {
 	Views          []Declaration         `json:"views"`
 	CredentialRefs []types.CredentialRef `json:"credentialRefs"`
 	Triggers       []types.Trigger       `json:"triggers"`
+	Workflows      []types.Workflow      `json:"workflows"`
 }
 
 // Declared kinds appearing in plans.
@@ -49,6 +50,7 @@ const (
 	KindView          = "view"
 	KindCredentialRef = "credential-ref"
 	KindTrigger       = "trigger"
+	KindWorkflow      = "workflow"
 )
 
 // Action is what reconciliation will do (or did) to one declared object.
@@ -171,6 +173,13 @@ func ParseDir(root string) (Declarations, error) {
 	}
 	out.Triggers = triggers
 	sort.Slice(out.Triggers, func(i, j int) bool { return out.Triggers[i].Name < out.Triggers[j].Name })
+
+	workflows, err := parseKind(filepath.Join(root, "workflows"), true, parseWorkflowFile)
+	if err != nil {
+		return out, err
+	}
+	out.Workflows = workflows
+	sort.Slice(out.Workflows, func(i, j int) bool { return out.Workflows[i].Name < out.Workflows[j].Name })
 	return out, nil
 }
 
@@ -353,6 +362,140 @@ func ValidateTrigger(t types.Trigger) error {
 	return nil
 }
 
+// workflowFile is the workflows/*.yaml shape (ADR-0011): a DAG of Steps —
+// each an actuation or a Gate — with needs-edges and when-conditions.
+type workflowFile struct {
+	Name  string     `yaml:"name"`
+	Steps []stepYAML `yaml:"steps"`
+}
+type stepYAML struct {
+	Name           string         `yaml:"name"`
+	Needs          []string       `yaml:"needs"`
+	When           string         `yaml:"when"`
+	Gate           *gateYAML      `yaml:"gate"`
+	ViewName       string         `yaml:"viewName"`
+	Actuator       string         `yaml:"actuator"`
+	Params         map[string]any `yaml:"params"`
+	Slices         int            `yaml:"slices"`
+	CredentialRefs []string       `yaml:"credentialRefs"`
+}
+type gateYAML struct {
+	Approvers struct {
+		Principals []string `yaml:"principals"`
+		Teams      []string `yaml:"teams"`
+	} `yaml:"approvers"`
+	TimeoutSeconds int `yaml:"timeoutSeconds"`
+}
+
+func parseWorkflowFile(path string, raw []byte) (string, types.Workflow, error) {
+	var f workflowFile
+	dec := yaml.NewDecoder(strings.NewReader(string(raw)))
+	dec.KnownFields(true)
+	if err := dec.Decode(&f); err != nil {
+		return "", types.Workflow{}, fmt.Errorf("desiredstate: %s: %w", path, err)
+	}
+	w := types.Workflow{Name: f.Name}
+	for _, s := range f.Steps {
+		step := types.Step{
+			Name: s.Name, Needs: s.Needs, When: s.When,
+			ViewName: s.ViewName, Actuator: s.Actuator, Params: s.Params,
+			Slices: s.Slices, CredentialRefs: s.CredentialRefs,
+		}
+		if s.Gate != nil {
+			step.Gate = &types.GateSpec{
+				Approvers: types.GateApprovers{
+					Principals: s.Gate.Approvers.Principals,
+					Teams:      s.Gate.Approvers.Teams,
+				},
+				TimeoutSeconds: s.Gate.TimeoutSeconds,
+			}
+		}
+		w.Steps = append(w.Steps, step)
+	}
+	if err := ValidateWorkflow(w); err != nil {
+		return "", types.Workflow{}, fmt.Errorf("desiredstate: %s: %w", path, err)
+	}
+	return w.Name, w, nil
+}
+
+// ValidateWorkflow checks one Workflow declaration; exported for the API's
+// desired-state plan/apply path (same document shape as the Git checkout).
+func ValidateWorkflow(w types.Workflow) error {
+	if w.Name == "" || len(w.Steps) == 0 {
+		return fmt.Errorf("workflow requires name and at least one step")
+	}
+	byName := map[string]types.Step{}
+	for _, s := range w.Steps {
+		if s.Name == "" {
+			return fmt.Errorf("workflow %s: every step requires a name", w.Name)
+		}
+		if _, dup := byName[s.Name]; dup {
+			return fmt.Errorf("workflow %s: duplicate step %q", w.Name, s.Name)
+		}
+		byName[s.Name] = s
+		switch s.When {
+		case "", types.WhenSuccess, types.WhenFailure, types.WhenAlways:
+		default:
+			return fmt.Errorf("workflow %s: step %s: when must be success, failure, or always", w.Name, s.Name)
+		}
+		if s.When != "" && s.When != types.WhenSuccess && len(s.Needs) == 0 {
+			return fmt.Errorf("workflow %s: step %s: when %s requires needs", w.Name, s.Name, s.When)
+		}
+		isGate := s.Gate != nil
+		isActuation := s.ViewName != "" || s.Actuator != "" || s.Params != nil || len(s.CredentialRefs) > 0 || s.Slices != 0
+		switch {
+		case isGate && isActuation:
+			return fmt.Errorf("workflow %s: step %s: a step is a gate or an actuation, not both", w.Name, s.Name)
+		case !isGate && s.ViewName == "":
+			return fmt.Errorf("workflow %s: step %s: actuation step requires viewName", w.Name, s.Name)
+		case isGate && len(s.Gate.Approvers.Principals) == 0 && len(s.Gate.Approvers.Teams) == 0:
+			return fmt.Errorf("workflow %s: step %s: gate requires approvers (principals and/or teams)", w.Name, s.Name)
+		case isGate && s.Gate.TimeoutSeconds < 0:
+			return fmt.Errorf("workflow %s: step %s: gate timeoutSeconds must be >= 0", w.Name, s.Name)
+		case !isGate && s.Slices < 0:
+			return fmt.Errorf("workflow %s: step %s: slices must be >= 0", w.Name, s.Name)
+		}
+	}
+	// Needs must resolve, and the graph must be acyclic (Kahn's algorithm).
+	indegree := map[string]int{}
+	for _, s := range w.Steps {
+		for _, n := range s.Needs {
+			if _, ok := byName[n]; !ok {
+				return fmt.Errorf("workflow %s: step %s needs unknown step %q", w.Name, s.Name, n)
+			}
+			if n == s.Name {
+				return fmt.Errorf("workflow %s: step %s needs itself", w.Name, s.Name)
+			}
+			indegree[s.Name]++
+		}
+	}
+	queue := []string{}
+	for _, s := range w.Steps {
+		if indegree[s.Name] == 0 {
+			queue = append(queue, s.Name)
+		}
+	}
+	visited := 0
+	for len(queue) > 0 {
+		cur := queue[0]
+		queue = queue[1:]
+		visited++
+		for _, s := range w.Steps {
+			for _, n := range s.Needs {
+				if n == cur {
+					if indegree[s.Name]--; indegree[s.Name] == 0 {
+						queue = append(queue, s.Name)
+					}
+				}
+			}
+		}
+	}
+	if visited != len(w.Steps) {
+		return fmt.Errorf("workflow %s: step graph has a cycle", w.Name)
+	}
+	return nil
+}
+
 func (ds declSelector) toSelector() (types.ViewSelector, error) {
 	sel := types.ViewSelector{Kinds: ds.Kinds, Labels: ds.Labels}
 	for _, f := range ds.Facets {
@@ -392,6 +535,11 @@ func ComputePlan(ctx context.Context, store *graph.Store, decls Declarations) (P
 		return Plan{}, err
 	}
 	plan.Entries = append(plan.Entries, trigPlan.Entries...)
+	wfPlan, err := computeWorkflowPlan(ctx, store, decls.Workflows)
+	if err != nil {
+		return Plan{}, err
+	}
+	plan.Entries = append(plan.Entries, wfPlan.Entries...)
 	sort.Slice(plan.Entries, func(i, j int) bool {
 		if plan.Entries[i].Kind != plan.Entries[j].Kind {
 			return plan.Entries[i].Kind < plan.Entries[j].Kind
@@ -556,6 +704,44 @@ func computeTriggerPlan(ctx context.Context, store *graph.Store, decls []types.T
 	return plan, nil
 }
 
+// computeWorkflowPlan diffs declared Workflows (CaC-only, ADR-0011 — same
+// posture as Triggers: no adopt case, semantic JSON equality).
+func computeWorkflowPlan(ctx context.Context, store *graph.Store, decls []types.Workflow) (Plan, error) {
+	current, err := store.ListWorkflows(ctx)
+	if err != nil {
+		return Plan{}, err
+	}
+	byName := map[string]types.Workflow{}
+	for _, w := range current {
+		byName[w.Name] = w
+	}
+
+	var plan Plan
+	declared := map[string]bool{}
+	for _, d := range decls {
+		declared[d.Name] = true
+		entry := PlanEntry{Kind: KindWorkflow, Name: d.Name}
+		cur, exists := byName[d.Name]
+		switch {
+		case !exists:
+			entry.Action = ActionCreate
+		case declDocsEqual(cur, d):
+			entry.Action = ActionNoop
+		default:
+			entry.Action = ActionUpdate
+		}
+		plan.Entries = append(plan.Entries, entry)
+	}
+	for _, w := range current {
+		if !declared[w.Name] {
+			plan.Entries = append(plan.Entries, PlanEntry{
+				Kind: KindWorkflow, Name: w.Name, Action: ActionDelete,
+			})
+		}
+	}
+	return plan, nil
+}
+
 // Apply executes the plan for the declarations and returns the realized plan.
 // Per-object failures are recorded on their entries; the rest still applies.
 func Apply(ctx context.Context, store *graph.Store, decls Declarations) (Plan, error) {
@@ -574,6 +760,10 @@ func Apply(ctx context.Context, store *graph.Store, decls Declarations) (Plan, e
 	trigByName := map[string]types.Trigger{}
 	for _, d := range decls.Triggers {
 		trigByName[d.Name] = d
+	}
+	wfByName := map[string]types.Workflow{}
+	for _, d := range decls.Workflows {
+		wfByName[d.Name] = d
 	}
 	for i := range plan.Entries {
 		e := &plan.Entries[i]
@@ -594,6 +784,10 @@ func Apply(ctx context.Context, store *graph.Store, decls Declarations) (Plan, e
 			err = store.DeleteTrigger(ctx, e.Name)
 		case e.Kind == KindTrigger:
 			err = store.UpsertTrigger(ctx, trigByName[e.Name])
+		case e.Kind == KindWorkflow && e.Action == ActionDelete:
+			err = store.DeleteWorkflow(ctx, e.Name)
+		case e.Kind == KindWorkflow:
+			err = store.UpsertWorkflow(ctx, wfByName[e.Name])
 		}
 		if err != nil {
 			e.Error = err.Error()
@@ -618,7 +812,10 @@ func credentialRefsEqual(a, b types.CredentialRef) bool {
 }
 
 // triggersEqual compares declaration documents semantically.
-func triggersEqual(a, b types.Trigger) bool {
+func triggersEqual(a, b types.Trigger) bool { return declDocsEqual(a, b) }
+
+// declDocsEqual compares two declaration documents by canonical JSON.
+func declDocsEqual(a, b any) bool {
 	ja, err1 := json.Marshal(a)
 	jb, err2 := json.Marshal(b)
 	if err1 != nil || err2 != nil {

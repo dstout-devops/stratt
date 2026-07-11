@@ -78,6 +78,30 @@ func (e CredentialRefDeclaredBy) Valid() bool {
 	}
 }
 
+// Defines values for GateStatus.
+const (
+	GateStatusApproved GateStatus = "approved"
+	GateStatusDenied   GateStatus = "denied"
+	GateStatusExpired  GateStatus = "expired"
+	GateStatusPending  GateStatus = "pending"
+)
+
+// Valid indicates whether the value is a known member of the GateStatus enum.
+func (e GateStatus) Valid() bool {
+	switch e {
+	case GateStatusApproved:
+		return true
+	case GateStatusDenied:
+		return true
+	case GateStatusExpired:
+		return true
+	case GateStatusPending:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for PlanEntryAction.
 const (
 	Adopt  PlanEntryAction = "adopt"
@@ -110,6 +134,7 @@ const (
 	PlanEntryKindCredentialRef PlanEntryKind = "credential-ref"
 	PlanEntryKindTrigger       PlanEntryKind = "trigger"
 	PlanEntryKindView          PlanEntryKind = "view"
+	PlanEntryKindWorkflow      PlanEntryKind = "workflow"
 )
 
 // Valid indicates whether the value is a known member of the PlanEntryKind enum.
@@ -120,6 +145,8 @@ func (e PlanEntryKind) Valid() bool {
 	case PlanEntryKindTrigger:
 		return true
 	case PlanEntryKindView:
+		return true
+	case PlanEntryKindWorkflow:
 		return true
 	default:
 		return false
@@ -146,25 +173,25 @@ func (e ProvenanceWriterKind) Valid() bool {
 
 // Defines values for RunStatus.
 const (
-	Canceled  RunStatus = "canceled"
-	Failed    RunStatus = "failed"
-	Pending   RunStatus = "pending"
-	Running   RunStatus = "running"
-	Succeeded RunStatus = "succeeded"
+	RunStatusCanceled  RunStatus = "canceled"
+	RunStatusFailed    RunStatus = "failed"
+	RunStatusPending   RunStatus = "pending"
+	RunStatusRunning   RunStatus = "running"
+	RunStatusSucceeded RunStatus = "succeeded"
 )
 
 // Valid indicates whether the value is a known member of the RunStatus enum.
 func (e RunStatus) Valid() bool {
 	switch e {
-	case Canceled:
+	case RunStatusCanceled:
 		return true
-	case Failed:
+	case RunStatusFailed:
 		return true
-	case Pending:
+	case RunStatusPending:
 		return true
-	case Running:
+	case RunStatusRunning:
 		return true
-	case Succeeded:
+	case RunStatusSucceeded:
 		return true
 	default:
 		return false
@@ -183,6 +210,27 @@ func (e StartRunActuator) Valid() bool {
 	case Ansible:
 		return true
 	case Script:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for StepWhen.
+const (
+	Always  StepWhen = "always"
+	Failure StepWhen = "failure"
+	Success StepWhen = "success"
+)
+
+// Valid indicates whether the value is a known member of the StepWhen enum.
+func (e StepWhen) Valid() bool {
+	switch e {
+	case Always:
+		return true
+	case Failure:
+		return true
+	case Success:
 		return true
 	default:
 		return false
@@ -216,6 +264,57 @@ func (e ViewDeclaredBy) Valid() bool {
 	case ViewDeclaredByApi:
 		return true
 	case ViewDeclaredByCac:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for WorkflowRunStatus.
+const (
+	WorkflowRunStatusCanceled  WorkflowRunStatus = "canceled"
+	WorkflowRunStatusFailed    WorkflowRunStatus = "failed"
+	WorkflowRunStatusPending   WorkflowRunStatus = "pending"
+	WorkflowRunStatusRunning   WorkflowRunStatus = "running"
+	WorkflowRunStatusSucceeded WorkflowRunStatus = "succeeded"
+)
+
+// Valid indicates whether the value is a known member of the WorkflowRunStatus enum.
+func (e WorkflowRunStatus) Valid() bool {
+	switch e {
+	case WorkflowRunStatusCanceled:
+		return true
+	case WorkflowRunStatusFailed:
+		return true
+	case WorkflowRunStatusPending:
+		return true
+	case WorkflowRunStatusRunning:
+		return true
+	case WorkflowRunStatusSucceeded:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ListGatesParamsStatus.
+const (
+	ListGatesParamsStatusApproved ListGatesParamsStatus = "approved"
+	ListGatesParamsStatusDenied   ListGatesParamsStatus = "denied"
+	ListGatesParamsStatusExpired  ListGatesParamsStatus = "expired"
+	ListGatesParamsStatusPending  ListGatesParamsStatus = "pending"
+)
+
+// Valid indicates whether the value is a known member of the ListGatesParamsStatus enum.
+func (e ListGatesParamsStatus) Valid() bool {
+	switch e {
+	case ListGatesParamsStatusApproved:
+		return true
+	case ListGatesParamsStatusDenied:
+		return true
+	case ListGatesParamsStatusExpired:
+		return true
+	case ListGatesParamsStatusPending:
 		return true
 	default:
 		return false
@@ -259,6 +358,7 @@ type DesiredState struct {
 	CredentialRefs *[]CredentialRef  `json:"credentialRefs,omitempty"`
 	Triggers       *[]Trigger        `json:"triggers,omitempty"`
 	Views          []ViewDeclaration `json:"views"`
+	Workflows      *[]Workflow       `json:"workflows,omitempty"`
 }
 
 // Entity defines model for Entity.
@@ -297,6 +397,44 @@ type FacetPredicate struct {
 	Equals    interface{} `json:"equals"`
 	Namespace string      `json:"namespace"`
 	Path      *string     `json:"path,omitempty"`
+}
+
+// Gate defines model for Gate.
+type Gate struct {
+	// Approvers Who may decide: Principals listed explicitly, or members of the listed teams (checked through the platform Authorizer).
+	Approvers     GateApprovers `json:"approvers"`
+	CreatedAt     time.Time     `json:"createdAt"`
+	DecidedAt     *time.Time    `json:"decidedAt,omitempty"`
+	DecidedBy     *string       `json:"decidedBy,omitempty"`
+	Id            string        `json:"id"`
+	Note          *string       `json:"note,omitempty"`
+	Status        GateStatus    `json:"status"`
+	Step          string        `json:"step"`
+	WorkflowRunId string        `json:"workflowRunId"`
+}
+
+// GateStatus defines model for Gate.Status.
+type GateStatus string
+
+// GateApprovers Who may decide: Principals listed explicitly, or members of the listed teams (checked through the platform Authorizer).
+type GateApprovers struct {
+	Principals *[]string `json:"principals,omitempty"`
+	Teams      *[]string `json:"teams,omitempty"`
+}
+
+// GateDecision defines model for GateDecision.
+type GateDecision struct {
+	Approve bool    `json:"approve"`
+	Note    *string `json:"note,omitempty"`
+}
+
+// GateSpec defines model for GateSpec.
+type GateSpec struct {
+	// Approvers Who may decide: Principals listed explicitly, or members of the listed teams (checked through the platform Authorizer).
+	Approvers GateApprovers `json:"approvers"`
+
+	// TimeoutSeconds Expire (treat as denial) after this long pending; 0 waits forever.
+	TimeoutSeconds *int64 `json:"timeoutSeconds,omitempty"`
 }
 
 // Plan defines model for Plan.
@@ -345,11 +483,17 @@ type Run struct {
 	StartedAt  time.Time  `json:"startedAt"`
 	Status     RunStatus  `json:"status"`
 
+	// StepName The Step within that Workflow.
+	StepName *string `json:"stepName,omitempty"`
+
 	// TriggeredBy Name of the Trigger that fired this Run; absent for manual/API launches (charter §1.8 descent, Trigger → Run).
 	TriggeredBy *string `json:"triggeredBy,omitempty"`
 	ViewRef     *string `json:"viewRef,omitempty"`
 	ViewVersion *int64  `json:"viewVersion,omitempty"`
 	WorkflowId  string  `json:"workflowId"`
+
+	// WorkflowRunId The WorkflowRun this Run executed under, when it ran as a Workflow Step (charter §1.8 descent, Workflow → Run).
+	WorkflowRunId *string `json:"workflowRunId,omitempty"`
 }
 
 // RunStatus defines model for Run.Status.
@@ -372,6 +516,26 @@ type StartRun struct {
 
 // StartRunActuator defines model for StartRun.Actuator.
 type StartRunActuator string
+
+// Step One DAG node — an actuation (Actuator + params against a View, charter §2.3) or a Gate; exactly one shape is set.
+type Step struct {
+	Actuator       *string   `json:"actuator,omitempty"`
+	CredentialRefs *[]string `json:"credentialRefs,omitempty"`
+	Gate           *GateSpec `json:"gate,omitempty"`
+	Name           string    `json:"name"`
+
+	// Needs Step names that must reach a terminal state first.
+	Needs    *[]string               `json:"needs,omitempty"`
+	Params   *map[string]interface{} `json:"params,omitempty"`
+	Slices   *int64                  `json:"slices,omitempty"`
+	ViewName *string                 `json:"viewName,omitempty"`
+
+	// When Edge condition on the needs' outcomes; success is the default (all needs succeeded).
+	When *StepWhen `json:"when,omitempty"`
+}
+
+// StepWhen Edge condition on the needs' outcomes; success is the default (all needs succeeded).
+type StepWhen string
 
 // Trigger Anything that starts a Run (charter §2). v1 kind is `schedule` — a Temporal Schedule fires Runs with these launch parameters, executing as the declared service Principal (ADR-0010).
 type Trigger struct {
@@ -448,6 +612,42 @@ type ViewSelector struct {
 	Labels *map[string]string `json:"labels,omitempty"`
 }
 
+// Workflow A Temporal-backed DAG of Steps with Gates (charter §2, ADR-0011). CaC-only in v1.
+type Workflow struct {
+	Name  string `json:"name"`
+	Steps []Step `json:"steps"`
+}
+
+// WorkflowRun defines model for WorkflowRun.
+type WorkflowRun struct {
+	FinishedAt   *time.Time        `json:"finishedAt,omitempty"`
+	Id           string            `json:"id"`
+	Principal    *string           `json:"principal,omitempty"`
+	StartedAt    time.Time         `json:"startedAt"`
+	Status       WorkflowRunStatus `json:"status"`
+	TemporalId   *string           `json:"temporalId,omitempty"`
+	WorkflowName string            `json:"workflowName"`
+}
+
+// WorkflowRunStatus defines model for WorkflowRun.Status.
+type WorkflowRunStatus string
+
+// WorkflowRunDetail defines model for WorkflowRunDetail.
+type WorkflowRunDetail struct {
+	Steps []struct {
+		// GateId The Step's Gate (Gate Steps).
+		GateId *string `json:"gateId,omitempty"`
+		Name   string  `json:"name"`
+
+		// RunId The Step's Run (actuation Steps).
+		RunId *string `json:"runId,omitempty"`
+
+		// Status Terminal outcome from the WorkflowRun summary (succeeded, failed, skipped); absent while the execution is live — descend into the linked Run or Gate for live state.
+		Status *string `json:"status,omitempty"`
+	} `json:"steps"`
+	WorkflowRun WorkflowRun `json:"workflowRun"`
+}
+
 // RunID defines model for RunID.
 type RunID = string
 
@@ -469,6 +669,14 @@ type NotFound = Error
 // Unauthorized defines model for Unauthorized.
 type Unauthorized = Error
 
+// ListGatesParams defines parameters for ListGates.
+type ListGatesParams struct {
+	Status *ListGatesParamsStatus `form:"status,omitempty" json:"status,omitempty"`
+}
+
+// ListGatesParamsStatus defines parameters for ListGates.
+type ListGatesParamsStatus string
+
 // ResolveViewParams defines parameters for ResolveView.
 type ResolveViewParams struct {
 	Limit *int `form:"limit,omitempty" json:"limit,omitempty"`
@@ -482,6 +690,9 @@ type DesiredStateApplyJSONRequestBody = DesiredState
 
 // DesiredStatePlanJSONRequestBody defines body for DesiredStatePlan for application/json ContentType.
 type DesiredStatePlanJSONRequestBody = DesiredState
+
+// DecideGateJSONRequestBody defines body for DecideGate for application/json ContentType.
+type DecideGateJSONRequestBody = GateDecision
 
 // StartRunJSONRequestBody defines body for StartRun for application/json ContentType.
 type StartRunJSONRequestBody = StartRun
@@ -509,6 +720,12 @@ type ServerInterface interface {
 	// Get one Entity with its Facets and per-attribute Provenance
 	// (GET /entities/{id})
 	GetEntity(w http.ResponseWriter, r *http.Request, id string)
+	// List Gates (the approval inbox)
+	// (GET /gates)
+	ListGates(w http.ResponseWriter, r *http.Request, params ListGatesParams)
+	// Approve or deny a pending Gate
+	// (POST /gates/{id}/decision)
+	DecideGate(w http.ResponseWriter, r *http.Request, id string)
 	// Start a Run of the Phase-0 Workflow against a View
 	// (POST /runs)
 	StartRun(w http.ResponseWriter, r *http.Request)
@@ -533,6 +750,18 @@ type ServerInterface interface {
 	// Resolve the View's live Entity set
 	// (GET /views/{name}/entities)
 	ResolveView(w http.ResponseWriter, r *http.Request, name ViewName, params ResolveViewParams)
+	// Get one WorkflowRun with per-Step outcomes
+	// (GET /workflow-runs/{id})
+	GetWorkflowRun(w http.ResponseWriter, r *http.Request, id string)
+	// List declared Workflows
+	// (GET /workflows)
+	ListWorkflows(w http.ResponseWriter, r *http.Request)
+	// Get one Workflow declaration
+	// (GET /workflows/{name})
+	GetWorkflow(w http.ResponseWriter, r *http.Request, name string)
+	// Start one execution of a Workflow
+	// (POST /workflows/{name}/runs)
+	StartWorkflowRun(w http.ResponseWriter, r *http.Request, name string)
 }
 
 // ServerInterfaceWrapper converts contexts to parameters.
@@ -655,6 +884,65 @@ func (siw *ServerInterfaceWrapper) GetEntity(w http.ResponseWriter, r *http.Requ
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.GetEntity(w, r, id)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ListGates operation middleware
+func (siw *ServerInterfaceWrapper) ListGates(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ListGatesParams
+
+	// ------------- Optional query parameter "status" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "status", r.URL.Query(), &params.Status, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "status"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "status", Err: err})
+		}
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ListGates(w, r, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// DecideGate operation middleware
+func (siw *ServerInterfaceWrapper) DecideGate(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", r.PathValue("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: ""})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.DecideGate(w, r, id)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -864,6 +1152,98 @@ func (siw *ServerInterfaceWrapper) ResolveView(w http.ResponseWriter, r *http.Re
 	handler.ServeHTTP(w, r)
 }
 
+// GetWorkflowRun operation middleware
+func (siw *ServerInterfaceWrapper) GetWorkflowRun(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", r.PathValue("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: ""})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetWorkflowRun(w, r, id)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ListWorkflows operation middleware
+func (siw *ServerInterfaceWrapper) ListWorkflows(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ListWorkflows(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// GetWorkflow operation middleware
+func (siw *ServerInterfaceWrapper) GetWorkflow(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "name" -------------
+	var name string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "name", r.PathValue("name"), &name, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: ""})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "name", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetWorkflow(w, r, name)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// StartWorkflowRun operation middleware
+func (siw *ServerInterfaceWrapper) StartWorkflowRun(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "name" -------------
+	var name string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "name", r.PathValue("name"), &name, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: ""})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "name", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.StartWorkflowRun(w, r, name)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 type UnescapedCookieParamError struct {
 	ParamName string
 	Err       error
@@ -990,6 +1370,8 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/desired-state/apply", wrapper.DesiredStateApply)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/desired-state/plan", wrapper.DesiredStatePlan)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/entities/{id}", wrapper.GetEntity)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/gates", wrapper.ListGates)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/gates/{id}/decision", wrapper.DecideGate)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/runs", wrapper.StartRun)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/runs/{id}", wrapper.GetRun)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/runs/{id}/events", wrapper.TailRunEvents)
@@ -998,6 +1380,10 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/views/{name}", wrapper.GetView)
 	m.HandleFunc(http.MethodPut+" "+options.BaseURL+"/views/{name}", wrapper.DeclareView)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/views/{name}/entities", wrapper.ResolveView)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/workflow-runs/{id}", wrapper.GetWorkflowRun)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/workflows", wrapper.ListWorkflows)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/workflows/{name}", wrapper.GetWorkflow)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/workflows/{name}/runs", wrapper.StartWorkflowRun)
 
 	return m
 }
@@ -1007,75 +1393,95 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 // const string: with thousands of chunks the chained `+` fold is several
 // times slower for the Go compiler than parsing a slice literal.
 var swaggerSpec = []string{
-	"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",
+	"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",
+	"F/xmOBQPEuHbRyeikJPlCTnl/w0AAP//",
 }
 
 // decodeSpec returns the embedded OpenAPI spec as raw JSON bytes,

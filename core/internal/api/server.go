@@ -196,6 +196,12 @@ func runToWire(r types.Run) Run {
 	if r.TriggeredBy != "" {
 		out.TriggeredBy = &r.TriggeredBy
 	}
+	if r.WorkflowRunID != "" {
+		out.WorkflowRunId = &r.WorkflowRunID
+	}
+	if r.StepName != "" {
+		out.StepName = &r.StepName
+	}
 	return out
 }
 
@@ -417,6 +423,15 @@ func declarationsFromWire(in DesiredState) (desiredstate.Declarations, error) {
 			out.Triggers = append(out.Triggers, t)
 		}
 	}
+	if in.Workflows != nil {
+		for _, w := range *in.Workflows {
+			wf, err := workflowFromWire(w)
+			if err != nil {
+				return out, fmt.Errorf("workflow %s: %w", w.Name, err)
+			}
+			out.Workflows = append(out.Workflows, wf)
+		}
+	}
 	return out, nil
 }
 
@@ -581,7 +596,7 @@ func (s *Server) StartRun(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, err)
 		return
 	}
-	run, err := s.Store.CreateRun(r.Context(), "", "view://"+v.Name, v.Version, "")
+	run, err := s.Store.CreateRun(r.Context(), types.Run{ViewRef: "view://" + v.Name, ViewVersion: v.Version})
 	if err != nil {
 		s.fail(w, err)
 		return
@@ -778,4 +793,348 @@ func (s *Server) GetTrigger(w http.ResponseWriter, r *http.Request, name string)
 		detail.Schedule = &state
 	}
 	writeJSON(w, http.StatusOK, detail)
+}
+
+// ── Workflows + Gates (charter §2, ADR-0011) ─────────────────────────────────
+// Workflows are CaC-only in v1 (declared in Git, read-only here); starting an
+// execution and deciding a Gate are the runtime surfaces.
+
+func workflowToWire(w types.Workflow) Workflow {
+	out := Workflow{Name: w.Name}
+	for _, s := range w.Steps {
+		out.Steps = append(out.Steps, stepToWire(s))
+	}
+	return out
+}
+
+func stepToWire(s types.Step) Step {
+	out := Step{Name: s.Name}
+	if len(s.Needs) > 0 {
+		out.Needs = &s.Needs
+	}
+	if s.When != "" {
+		w := StepWhen(s.When)
+		out.When = &w
+	}
+	if s.Gate != nil {
+		spec := GateSpec{Approvers: approversToWire(s.Gate.Approvers)}
+		if s.Gate.TimeoutSeconds != 0 {
+			t := int64(s.Gate.TimeoutSeconds)
+			spec.TimeoutSeconds = &t
+		}
+		out.Gate = &spec
+	}
+	if s.ViewName != "" {
+		out.ViewName = &s.ViewName
+	}
+	if s.Actuator != "" {
+		out.Actuator = &s.Actuator
+	}
+	if s.Params != nil {
+		out.Params = &s.Params
+	}
+	if s.Slices != 0 {
+		n := int64(s.Slices)
+		out.Slices = &n
+	}
+	if len(s.CredentialRefs) > 0 {
+		out.CredentialRefs = &s.CredentialRefs
+	}
+	return out
+}
+
+func approversToWire(a types.GateApprovers) GateApprovers {
+	out := GateApprovers{}
+	if len(a.Principals) > 0 {
+		out.Principals = &a.Principals
+	}
+	if len(a.Teams) > 0 {
+		out.Teams = &a.Teams
+	}
+	return out
+}
+
+// workflowFromWire mirrors workflowToWire; same CaC document the controller
+// reads from Git — the CLI plan/apply path sends the checkout verbatim.
+func workflowFromWire(in Workflow) (types.Workflow, error) {
+	w := types.Workflow{Name: in.Name}
+	for _, s := range in.Steps {
+		step := types.Step{Name: s.Name}
+		if s.Needs != nil {
+			step.Needs = *s.Needs
+		}
+		if s.When != nil {
+			step.When = string(*s.When)
+		}
+		if s.Gate != nil {
+			g := &types.GateSpec{}
+			if s.Gate.Approvers.Principals != nil {
+				g.Approvers.Principals = *s.Gate.Approvers.Principals
+			}
+			if s.Gate.Approvers.Teams != nil {
+				g.Approvers.Teams = *s.Gate.Approvers.Teams
+			}
+			if s.Gate.TimeoutSeconds != nil {
+				g.TimeoutSeconds = int(*s.Gate.TimeoutSeconds)
+			}
+			step.Gate = g
+		}
+		if s.ViewName != nil {
+			step.ViewName = *s.ViewName
+		}
+		if s.Actuator != nil {
+			step.Actuator = *s.Actuator
+		}
+		if s.Params != nil {
+			step.Params = *s.Params
+		}
+		if s.Slices != nil {
+			step.Slices = int(*s.Slices)
+		}
+		if s.CredentialRefs != nil {
+			step.CredentialRefs = *s.CredentialRefs
+		}
+		w.Steps = append(w.Steps, step)
+	}
+	if err := desiredstate.ValidateWorkflow(w); err != nil {
+		return w, err
+	}
+	return w, nil
+}
+
+func workflowRunToWire(wr types.WorkflowRun) WorkflowRun {
+	out := WorkflowRun{
+		Id: wr.ID, WorkflowName: wr.WorkflowName,
+		Status:    WorkflowRunStatus(wr.Status),
+		StartedAt: wr.StartedAt, FinishedAt: wr.FinishedAt,
+	}
+	if wr.TemporalID != "" {
+		out.TemporalId = &wr.TemporalID
+	}
+	if wr.Principal != "" {
+		out.Principal = &wr.Principal
+	}
+	return out
+}
+
+func gateToWire(g types.Gate) Gate {
+	out := Gate{
+		Id: g.ID, WorkflowRunId: g.WorkflowRunID, Step: g.Step,
+		Status: GateStatus(g.Status), Approvers: approversToWire(g.Approvers),
+		CreatedAt: g.CreatedAt, DecidedAt: g.DecidedAt,
+	}
+	if g.DecidedBy != "" {
+		out.DecidedBy = &g.DecidedBy
+	}
+	if g.Note != "" {
+		out.Note = &g.Note
+	}
+	return out
+}
+
+// ListWorkflows implements (GET /workflows).
+func (s *Server) ListWorkflows(w http.ResponseWriter, r *http.Request) {
+	ws, err := s.Store.ListWorkflows(r.Context())
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	out := make([]Workflow, 0, len(ws))
+	for _, wf := range ws {
+		out = append(out, workflowToWire(wf))
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+// GetWorkflow implements (GET /workflows/{name}).
+func (s *Server) GetWorkflow(w http.ResponseWriter, r *http.Request, name string) {
+	wf, err := s.Store.GetWorkflow(r.Context(), name)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, workflowToWire(wf))
+}
+
+// StartWorkflowRun implements (POST /workflows/{name}/runs): create the
+// execution record, then start the RunDAG Temporal workflow. The launching
+// Principal rides every Step's credential use check (§2.5).
+func (s *Server) StartWorkflowRun(w http.ResponseWriter, r *http.Request, name string) {
+	if _, err := s.Store.GetWorkflow(r.Context(), name); err != nil {
+		s.fail(w, err)
+		return
+	}
+	principal := ""
+	if id, _, ok := authz.PrincipalFrom(r.Context()); ok {
+		principal = id
+	}
+	wr, err := s.Store.CreateWorkflowRun(r.Context(), name, "", principal)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	temporalID := "wfrun-" + wr.ID
+	_, err = s.Temporal.ExecuteWorkflow(r.Context(), client.StartWorkflowOptions{
+		ID:        temporalID,
+		TaskQueue: orchestrate.TaskQueue,
+	}, orchestrate.RunDAG, orchestrate.DAGInput{
+		WorkflowRunID: wr.ID, WorkflowName: name, Principal: principal,
+	})
+	if err != nil {
+		_ = s.Store.SetWorkflowRunStatus(r.Context(), wr.ID, types.RunFailed, map[string]any{"error": "workflow start failed"})
+		s.fail(w, fmt.Errorf("start workflow run: %w", err))
+		return
+	}
+	wr.TemporalID = temporalID
+	if err := s.Store.SetWorkflowRunTemporalID(r.Context(), wr.ID, temporalID); err != nil {
+		s.fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, workflowRunToWire(wr))
+}
+
+// GetWorkflowRun implements (GET /workflow-runs/{id}): the Workflow → Run
+// descent rung (§1.8) — every Step links its Run or Gate.
+func (s *Server) GetWorkflowRun(w http.ResponseWriter, r *http.Request, id string) {
+	wr, summary, err := s.Store.GetWorkflowRun(r.Context(), id)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	wf, err := s.Store.GetWorkflow(r.Context(), wr.WorkflowName)
+	if err != nil && !errors.Is(err, graph.ErrNotFound) {
+		s.fail(w, err)
+		return
+	}
+	runs, err := s.Store.ListRunsForWorkflowRun(r.Context(), id)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	gates, err := s.Store.ListGatesForWorkflowRun(r.Context(), id)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	runByStep := map[string]string{}
+	for _, run := range runs {
+		runByStep[run.StepName] = run.ID
+	}
+	gateByStep := map[string]string{}
+	for _, g := range gates {
+		gateByStep[g.Step] = g.ID
+	}
+	// Terminal per-Step outcomes, when recorded.
+	statusByStep := map[string]string{}
+	if steps, ok := summary["steps"].(map[string]any); ok {
+		for step, st := range steps {
+			if v, ok := st.(string); ok {
+				statusByStep[step] = v
+			}
+		}
+	}
+
+	detail := WorkflowRunDetail{WorkflowRun: workflowRunToWire(wr)}
+	for _, step := range wf.Steps {
+		entry := struct {
+			GateId *string `json:"gateId,omitempty"`
+			Name   string  `json:"name"`
+			RunId  *string `json:"runId,omitempty"`
+			Status *string `json:"status,omitempty"`
+		}{Name: step.Name}
+		if rid, ok := runByStep[step.Name]; ok {
+			entry.RunId = &rid
+		}
+		if gid, ok := gateByStep[step.Name]; ok {
+			entry.GateId = &gid
+		}
+		if st, ok := statusByStep[step.Name]; ok {
+			entry.Status = &st
+		}
+		detail.Steps = append(detail.Steps, entry)
+	}
+	writeJSON(w, http.StatusOK, detail)
+}
+
+// ListGates implements (GET /gates): the approval inbox.
+func (s *Server) ListGates(w http.ResponseWriter, r *http.Request, params ListGatesParams) {
+	status := ""
+	if params.Status != nil {
+		status = string(*params.Status)
+	}
+	gs, err := s.Store.ListGates(r.Context(), status)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	out := make([]Gate, 0, len(gs))
+	for _, g := range gs {
+		out = append(out, gateToWire(g))
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+// DecideGate implements (POST /gates/{id}/decision): authorize the caller
+// against the Gate's pinned approver policy, then deliver the decision to
+// the waiting Workflow as a signal — the Workflow records it (§1.8: the
+// transition lives in its history).
+func (s *Server) DecideGate(w http.ResponseWriter, r *http.Request, id string) {
+	var body GateDecision
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid decision: "+err.Error())
+		return
+	}
+	g, err := s.Store.GetGate(r.Context(), id)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	if g.Status != types.GatePending {
+		writeErr(w, http.StatusConflict, fmt.Sprintf("gate %s is already %s", id, g.Status))
+		return
+	}
+	principal, _, ok := authz.PrincipalFrom(r.Context())
+	if !ok {
+		writeErr(w, http.StatusForbidden, "no principal (authentication required)")
+		return
+	}
+	allowed := false
+	for _, p := range g.Approvers.Principals {
+		if p == principal {
+			allowed = true
+			break
+		}
+	}
+	for _, team := range g.Approvers.Teams {
+		if allowed {
+			break
+		}
+		member, err := s.Authz.Check(r.Context(), principal, authz.RelationMember, "team:"+team)
+		if err != nil {
+			s.fail(w, err)
+			return
+		}
+		allowed = member
+	}
+	if !allowed {
+		writeErr(w, http.StatusForbidden, fmt.Sprintf("principal %s is not an approver of gate %s", principal, id))
+		return
+	}
+
+	wr, _, err := s.Store.GetWorkflowRun(r.Context(), g.WorkflowRunID)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	note := ""
+	if body.Note != nil {
+		note = *body.Note
+	}
+	err = s.Temporal.SignalWorkflow(r.Context(), wr.TemporalID, "", orchestrate.GateSignalName(g.Step),
+		orchestrate.GateDecision{Approved: body.Approve, Principal: principal, Note: note})
+	if err != nil {
+		s.fail(w, fmt.Errorf("signal gate decision: %w", err))
+		return
+	}
+	w.WriteHeader(http.StatusAccepted)
 }

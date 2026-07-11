@@ -29,9 +29,14 @@ type Run struct {
 	ViewVersion int64  `json:"viewVersion,omitempty"`
 	// TriggeredBy names the Trigger that fired this Run; empty for manual/API
 	// launches — the §1.8 descent rung Trigger → Run.
-	TriggeredBy string     `json:"triggeredBy,omitempty"`
-	StartedAt   time.Time  `json:"startedAt"`
-	FinishedAt  *time.Time `json:"finishedAt,omitempty"`
+	TriggeredBy string `json:"triggeredBy,omitempty"`
+	// WorkflowRunID/StepName link a Run spawned as one Step of a Workflow
+	// execution back to it — the Workflow → Run descent rung (§1.8). Empty
+	// for direct launches.
+	WorkflowRunID string     `json:"workflowRunId,omitempty"`
+	StepName      string     `json:"stepName,omitempty"`
+	StartedAt     time.Time  `json:"startedAt"`
+	FinishedAt    *time.Time `json:"finishedAt,omitempty"`
 }
 
 // RunEvent is one task event in a Run's stream — the floor of the §1.8

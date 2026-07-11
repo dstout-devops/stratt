@@ -11,16 +11,17 @@ import (
 	"github.com/dstout-devops/stratt/types"
 )
 
-// CreateRun records a new Run summary row (charter §2.3). Only summaries live
-// in Postgres; the event stream goes to NATS (§3). triggeredBy names the
-// Trigger that fired this Run — "" for manual/API launches (§1.8 descent).
-func (s *Store) CreateRun(ctx context.Context, workflowID, viewRef string, viewVersion int64, triggeredBy string) (types.Run, error) {
-	r := types.Run{WorkflowID: workflowID, Status: types.RunPending, ViewRef: viewRef, ViewVersion: viewVersion, TriggeredBy: triggeredBy}
+// CreateRun records a new Run summary row seeded from r (charter §2.3): the
+// caller sets the descent linkage that applies — TriggeredBy for Trigger
+// fires, WorkflowRunID/StepName for Workflow Steps, neither for direct API
+// launches (§1.8). Only summaries live in Postgres; events go to NATS (§3).
+func (s *Store) CreateRun(ctx context.Context, r types.Run) (types.Run, error) {
+	r.Status = types.RunPending
 	err := s.pool.QueryRow(ctx, `
-		INSERT INTO graph.run (workflow_id, status, view_ref, view_version, triggered_by)
-		VALUES ($1, $2, nullif($3, ''), nullif($4, 0), nullif($5, ''))
+		INSERT INTO graph.run (workflow_id, status, view_ref, view_version, triggered_by, workflow_run_id, step_name)
+		VALUES ($1, $2, nullif($3, ''), nullif($4, 0), nullif($5, ''), nullif($6, '')::uuid, nullif($7, ''))
 		RETURNING id, started_at`,
-		workflowID, string(r.Status), viewRef, viewVersion, triggeredBy,
+		r.WorkflowID, string(r.Status), r.ViewRef, r.ViewVersion, r.TriggeredBy, r.WorkflowRunID, r.StepName,
 	).Scan(&r.ID, &r.StartedAt)
 	if err != nil {
 		return r, fmt.Errorf("graph: create run: %w", err)
@@ -67,17 +68,45 @@ func (s *Store) SetRunStatus(ctx context.Context, runID string, status types.Run
 	return nil
 }
 
+// ListRunsForWorkflowRun returns the per-Step Runs of one Workflow
+// execution — the §1.8 Workflow → Run descent query.
+func (s *Store) ListRunsForWorkflowRun(ctx context.Context, workflowRunID string) ([]types.Run, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT id, step_name, workflow_id, status, started_at, finished_at
+		FROM graph.run WHERE workflow_run_id = $1 ORDER BY started_at`, workflowRunID)
+	if err != nil {
+		return nil, fmt.Errorf("graph: list runs for workflow run: %w", err)
+	}
+	defer rows.Close()
+	var out []types.Run
+	for rows.Next() {
+		var r types.Run
+		var status string
+		var stepName *string
+		if err := rows.Scan(&r.ID, &stepName, &r.WorkflowID, &status, &r.StartedAt, &r.FinishedAt); err != nil {
+			return nil, fmt.Errorf("graph: list runs for workflow run: %w", err)
+		}
+		r.Status = types.RunStatus(status)
+		r.WorkflowRunID = workflowRunID
+		if stepName != nil {
+			r.StepName = *stepName
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
 // GetRun returns one Run summary.
 func (s *Store) GetRun(ctx context.Context, runID string) (types.Run, error) {
 	var r types.Run
 	var status string
 	var viewRef *string
 	var viewVersion *int64
-	var triggeredBy *string
+	var triggeredBy, workflowRunID, stepName *string
 	err := s.pool.QueryRow(ctx, `
-		SELECT id, workflow_id, status, view_ref, view_version, triggered_by, started_at, finished_at
+		SELECT id, workflow_id, status, view_ref, view_version, triggered_by, workflow_run_id, step_name, started_at, finished_at
 		FROM graph.run WHERE id = $1`, runID,
-	).Scan(&r.ID, &r.WorkflowID, &status, &viewRef, &viewVersion, &triggeredBy, &r.StartedAt, &r.FinishedAt)
+	).Scan(&r.ID, &r.WorkflowID, &status, &viewRef, &viewVersion, &triggeredBy, &workflowRunID, &stepName, &r.StartedAt, &r.FinishedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return r, fmt.Errorf("%w: run %s", ErrNotFound, runID)
 	}
@@ -93,6 +122,12 @@ func (s *Store) GetRun(ctx context.Context, runID string) (types.Run, error) {
 	}
 	if triggeredBy != nil {
 		r.TriggeredBy = *triggeredBy
+	}
+	if workflowRunID != nil {
+		r.WorkflowRunID = *workflowRunID
+	}
+	if stepName != nil {
+		r.StepName = *stepName
 	}
 	return r, nil
 }
