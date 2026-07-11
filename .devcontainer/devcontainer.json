@@ -7,11 +7,11 @@
     "WORKSPACE_ROOT": "/workspaces/${localWorkspaceFolderBasename}"
   },
 	"features": {
-		"ghcr.io/devcontainers/features/docker-in-docker": {
-			"dockerDefaultAddressPool": "base=192.168..0/17,size=24",
+		"ghcr.io/devcontainers/features/docker-in-docker:4": {
+			"dockerDefaultAddressPool": "base=192.168.96.0/20,size=24",
 			"moby": false
 		},
-		"ghcr.io/devcontainers/features/common-utils": {
+		"ghcr.io/devcontainers/features/common-utils:2": {
 			"configureZshAsDefaultShell": true
 		},
 		"ghcr.io/devcontainers/features/git:1": {},
