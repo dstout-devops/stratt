@@ -73,18 +73,17 @@
       "WebFetch(domain:openfga.dev)",
       "WebFetch(domain:kyverno.io)",
       "WebFetch(domain:github.com)",
-      "WebFetch(domain:raw.githubusercontent.com)"
-    ],
-    "ask": [
-      "Bash(git push:*)",
-      "Bash(gh pr create:*)",
-      "Bash(gh pr merge:*)",
-      "Bash(gh repo create:*)",
-      "Bash(gh release:*)",
-      "Bash(gh api:*)",
-      "Bash(docker push:*)",
-      "Bash(npm publish:*)",
-      "Bash(uv publish:*)"
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "Bash(task --list)",
+      "Bash(task setup:devcontainer)",
+      "Bash(task ci *)",
+      "Bash(task test *)",
+      "Bash(bash -n .devcontainer/postCreateCommand.sh)",
+      "Bash(node -e \"const fs=require\\('fs'\\);let s=fs.readFileSync\\('.devcontainer/devcontainer.json','utf8'\\);s=s.replace\\(/^\\\\s*\\\\/\\\\/.*$/gm,''\\);JSON.parse\\(s\\);console.log\\('devcontainer.json parses as valid JSON \\(comments stripped\\)'\\)\")",
+      "Bash(gh auth *)",
+      "Bash(command -v actionlint)",
+      "Bash(actionlint .github/workflows/ci.yml)",
+      "Bash(python3 -c \"import yaml,sys; yaml.safe_load\\(open\\('.github/workflows/ci.yml'\\)\\); print\\('ci.yml: valid YAML'\\)\")"
     ],
     "deny": [
       "Bash(sudo:*)",
@@ -106,6 +105,17 @@
       "Edit(stratt-charter.md)",
       "Write(.git/**)",
       "Edit(.git/**)"
+    ],
+    "ask": [
+      "Bash(git push:*)",
+      "Bash(gh pr create:*)",
+      "Bash(gh pr merge:*)",
+      "Bash(gh repo create:*)",
+      "Bash(gh release:*)",
+      "Bash(gh api:*)",
+      "Bash(docker push:*)",
+      "Bash(npm publish:*)",
+      "Bash(uv publish:*)"
     ]
   },
   "hooks": {

@@ -10,7 +10,9 @@ request contradicts the charter, surface the conflict — don't silently follow 
 
 **Status: pre-Phase-0.** This repo holds only the charter and the development-environment config.
 There is no product code yet. Do **not** scaffold application code, packages, migrations, or schemas
-unless explicitly asked — the charter (§0) mandates configuring the environment first.
+unless explicitly asked — [ADR-0001](docs/adr/0001-charter-as-design-authority-and-claude-control-plane.md)
+and the charter's §8 Phase-0 sequencing mandate configuring the environment first. (Charter §0 is the
+*Thesis*, not an environment mandate.)
 
 ## Founding Disciplines — binding on every decision (charter §1)
 1. **Type the seams, not the world.** JSON Schema attaches only at plugin boundaries and named

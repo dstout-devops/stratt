@@ -1,0 +1,131 @@
+# Stratt task runner — charter §3 ("Task runner: `task`").
+#
+# Pre-Phase-0: there is no product code yet, so every language branch below is
+# guarded on its manifest (go.mod / package.json / pyproject.toml) and no-ops
+# cleanly until that code lands. The targets are the stable contract CI and the
+# devcontainer call today; they grow bodies, not names, as the spine is built.
+#
+# The evergreen floors are the N-1 gate (charter §1.7). Bumping them is the
+# "quarterly upgrade train" checklist item — edit the vars, not the logic.
+
+version: "3"
+
+vars:
+  GO_MIN: "1.24" # N-1 of the Go 1.25 line
+  NODE_MIN: "22" # previous LTS (container ships current LTS 24)
+  PYTHON_MIN: "3.13" # N-1 of 3.14 (pods / plugin SDK only — charter §3)
+  TASK_MIN: "3.0"
+
+tasks:
+  default:
+    desc: List available tasks
+    cmds:
+      - task --list
+    silent: true
+
+  setup:devcontainer:
+    desc: Idempotent devcontainer bootstrap — verify toolchain, enforce evergreen
+    silent: true
+    cmds:
+      - task: versions
+      - task: evergreen
+
+  versions:
+    desc: Print installed toolchain versions
+    silent: true
+    cmds:
+      - |
+        echo "Stratt toolchain:"
+        printf '  go      %s\n' "$(go version 2>/dev/null | awk '{print $3}' | sed 's/^go//' || echo MISSING)"
+        printf '  node    %s\n' "$(node --version 2>/dev/null | sed 's/^v//' || echo MISSING)"
+        printf '  python  %s\n' "$(python3 --version 2>/dev/null | awk '{print $2}' || echo MISSING)"
+        printf '  uv      %s\n' "$(uv --version 2>/dev/null | awk '{print $2}' || echo MISSING)"
+        printf '  task    %s\n' "$(task --version 2>/dev/null | sed 's/^v//' || echo MISSING)"
+
+  evergreen:
+    desc: Fail the build if any toolchain dep is below its N-1 floor (charter §1.7)
+    silent: true
+    cmds:
+      - |
+        set -eu
+        fail=0
+        check() {
+          name="$1"; min="$2"; cur="$3"
+          if [ -z "$cur" ]; then
+            echo "  ✗ $name: not found (need >= $min)"; fail=1; return
+          fi
+          lowest=$(printf '%s\n%s\n' "$min" "$cur" | sort -V | head -n1)
+          if [ "$lowest" = "$min" ]; then
+            echo "  ✓ $name $cur (>= $min)"
+          else
+            echo "  ✗ $name $cur is below the N-1 floor $min"; fail=1
+          fi
+        }
+        check go     "{{.GO_MIN}}"     "$(go version 2>/dev/null | awk '{print $3}' | sed 's/^go//')"
+        check node   "{{.NODE_MIN}}"   "$(node --version 2>/dev/null | sed 's/^v//' | cut -d. -f1)"
+        check python "{{.PYTHON_MIN}}" "$(python3 --version 2>/dev/null | awk '{print $2}')"
+        check task   "{{.TASK_MIN}}"   "$(task --version 2>/dev/null | sed 's/^v//')"
+        if [ "$fail" != 0 ]; then
+          echo "Evergreen gate FAILED (charter §1.7 — stay >= N-1)."; exit 1
+        fi
+        echo "Evergreen gate passed."
+
+  fmt:
+    desc: Format Go, web, and Python sources (skips languages with no files yet)
+    silent: true
+    cmds:
+      - |
+        set -eu
+        if [ -f go.mod ]; then
+          files=$(git ls-files '*.go'); [ -z "$files" ] || { echo '→ gofmt'; gofmt -w $files; }
+        fi
+        if [ -f package.json ]; then echo '→ prettier'; npx --yes prettier --write . >/dev/null; fi
+        if [ -f pyproject.toml ]; then echo '→ ruff format'; uv run ruff format .; fi
+        echo "fmt done."
+
+  fmt:check:
+    desc: Verify formatting without modifying files (CI gate)
+    silent: true
+    cmds:
+      - |
+        set -eu
+        rc=0
+        if [ -f go.mod ]; then
+          files=$(git ls-files '*.go')
+          if [ -n "$files" ]; then
+            out=$(gofmt -l $files); [ -z "$out" ] || { echo "gofmt needs: $out"; rc=1; }
+          fi
+        fi
+        if [ -f package.json ]; then npx --yes prettier --check . || rc=1; fi
+        if [ -f pyproject.toml ]; then uv run ruff format --check . || rc=1; fi
+        if [ "$rc" != 0 ]; then exit 1; fi
+        echo "fmt:check clean."
+
+  lint:
+    desc: Lint Go, web, and Python (skips languages with no files yet)
+    silent: true
+    cmds:
+      - |
+        set -eu
+        if [ -f go.mod ]; then echo '→ go vet'; go vet ./...; fi
+        if [ -f package.json ]; then echo '→ eslint'; npx --yes eslint .; fi
+        if [ -f pyproject.toml ]; then echo '→ ruff check'; uv run ruff check .; fi
+        echo "lint done."
+
+  test:
+    desc: Run tests (prints a notice and succeeds until code lands)
+    silent: true
+    cmds:
+      - |
+        set -eu
+        ran=0
+        if [ -f go.mod ]; then echo '→ go test'; go test ./...; ran=1; fi
+        if [ -f pyproject.toml ]; then echo '→ pytest'; uv run pytest; ran=1; fi
+        if [ "$ran" = 0 ]; then echo "No packages yet — nothing to test."; fi
+
+  ci:
+    desc: Aggregate gate CI runs — evergreen + formatting + lint
+    cmds:
+      - task: evergreen
+      - task: fmt:check
+      - task: lint

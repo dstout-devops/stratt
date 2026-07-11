@@ -63,6 +63,6 @@
 		}
 	},
 	"initializeCommand": "echo WORKSPACE_NAME=${localWorkspaceFolderBasename} > .devcontainer/.env",
-	// "postCreateCommand": "chmod +x .devcontainer/postCreateCommand.sh && .devcontainer/postCreateCommand.sh",
-	// "postStartCommand": "task --dir ${containerWorkspaceFolder} setup:devcontainer",
+	"postCreateCommand": "chmod +x .devcontainer/postCreateCommand.sh && .devcontainer/postCreateCommand.sh",
+	"postStartCommand": "task --dir ${containerWorkspaceFolder} setup:devcontainer"
 }
