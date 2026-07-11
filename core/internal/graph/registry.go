@@ -122,6 +122,29 @@ func (s *Store) GetView(ctx context.Context, name string) (types.View, error) {
 	return v, nil
 }
 
+// ListViews returns every View, ordered by name.
+func (s *Store) ListViews(ctx context.Context) ([]types.View, error) {
+	rows, err := s.pool.Query(ctx,
+		`SELECT name, version, selector, declared_by FROM graph.view ORDER BY name`)
+	if err != nil {
+		return nil, fmt.Errorf("graph: list views: %w", err)
+	}
+	defer rows.Close()
+	var out []types.View
+	for rows.Next() {
+		var v types.View
+		var raw []byte
+		if err := rows.Scan(&v.Name, &v.Version, &raw, &v.DeclaredBy); err != nil {
+			return nil, fmt.Errorf("graph: list views: %w", err)
+		}
+		if err := json.Unmarshal(raw, &v.Selector); err != nil {
+			return nil, fmt.Errorf("graph: decode selector: %w", err)
+		}
+		out = append(out, v)
+	}
+	return out, rows.Err()
+}
+
 // ListViewsDeclaredBy returns every View owned by the given declaration path,
 // ordered by name — the prune set for desired-state reconciliation.
 func (s *Store) ListViewsDeclaredBy(ctx context.Context, declaredBy string) ([]types.View, error) {

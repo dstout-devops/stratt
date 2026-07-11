@@ -18,6 +18,18 @@ info:
 servers:
   - url: /api/v1
 paths:
+  /views:
+    get:
+      operationId: listViews
+      summary: List Views
+      responses:
+        "200":
+          description: Every View, ordered by name.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/View" }
   /views/{name}:
     parameters:
       - $ref: "#/components/parameters/ViewName"
@@ -180,6 +192,22 @@ paths:
         "403": { $ref: "#/components/responses/Forbidden" }
         "409": { $ref: "#/components/responses/Conflict" }
   /runs:
+    get:
+      operationId: listRuns
+      summary: List recent Run summaries
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, format: int64, minimum: 1, maximum: 500, default: 100 }
+      responses:
+        "200":
+          description: Recent Runs, newest first.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Run" }
     post:
       operationId: startRun
       summary: Start a Run of the Phase-0 Workflow against a View
@@ -313,6 +341,23 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/WorkflowRun" }
         "404": { $ref: "#/components/responses/NotFound" }
+  /workflow-runs:
+    get:
+      operationId: listWorkflowRuns
+      summary: List recent WorkflowRuns
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, format: int64, minimum: 1, maximum: 500, default: 100 }
+      responses:
+        "200":
+          description: Recent executions, newest first.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/WorkflowRun" }
   /workflow-runs/{id}:
     parameters:
       - name: id

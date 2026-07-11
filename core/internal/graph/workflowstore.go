@@ -172,6 +172,31 @@ func (s *Store) GetWorkflowRun(ctx context.Context, id string) (types.WorkflowRu
 	return wr, sum, nil
 }
 
+// ListWorkflowRuns returns recent executions, newest first.
+func (s *Store) ListWorkflowRuns(ctx context.Context, limit int) ([]types.WorkflowRun, error) {
+	if limit <= 0 || limit > 500 {
+		limit = 100
+	}
+	rows, err := s.pool.Query(ctx, `
+		SELECT id, workflow_name, temporal_id, status, principal, started_at, finished_at
+		FROM graph.workflow_run ORDER BY started_at DESC LIMIT $1`, limit)
+	if err != nil {
+		return nil, fmt.Errorf("graph: list workflow runs: %w", err)
+	}
+	defer rows.Close()
+	var out []types.WorkflowRun
+	for rows.Next() {
+		var wr types.WorkflowRun
+		var status string
+		if err := rows.Scan(&wr.ID, &wr.WorkflowName, &wr.TemporalID, &status, &wr.Principal, &wr.StartedAt, &wr.FinishedAt); err != nil {
+			return nil, fmt.Errorf("graph: list workflow runs: %w", err)
+		}
+		wr.Status = types.RunStatus(status)
+		out = append(out, wr)
+	}
+	return out, rows.Err()
+}
+
 // ── Gates ────────────────────────────────────────────────────────────────────
 
 // CreateGate opens one pending approval for a Gate Step. The approver policy

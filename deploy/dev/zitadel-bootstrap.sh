@@ -61,6 +61,48 @@ for user in stratt-e2e-admin stratt-e2e-intern stratt-e2e-outsider; do
     } >>"$out_file"
 done
 
+# ── human user for interactive (authorization-code) login — UI slice, ADR-0012
+human=stratt-e2e-human
+human_pass=${STRATT_E2E_HUMAN_PASSWORD:-Sup3r-Str4tt-Dev!}
+hsub=$(api POST /management/v1/users/_search \
+    "{\"queries\":[{\"userNameQuery\":{\"userName\":\"$human\",\"method\":\"TEXT_QUERY_METHOD_EQUALS\"}}]}" |
+    field id)
+if [ -z "$hsub" ]; then
+    hsub=$(api POST /management/v1/users/human/_import \
+        "{\"userName\":\"$human\",\"profile\":{\"firstName\":\"Stratt\",\"lastName\":\"Human\"},\"email\":{\"email\":\"human@stratt.localhost\",\"isEmailVerified\":true},\"password\":\"$human_pass\",\"passwordChangeRequired\":false}" |
+        field userId)
+    echo "created $human (sub $hsub)"
+else
+    echo "exists  $human (sub $hsub)"
+fi
+echo "STRATT_E2E_HUMAN_SUB=$hsub" >>"$out_file"
+
+# ── SPA OIDC app (PKCE) the UI logs in with — ADR-0012
+proj=$(api POST /management/v1/projects/_search \
+    '{"queries":[{"nameQuery":{"name":"stratt","method":"TEXT_QUERY_METHOD_EQUALS"}}]}' |
+    field id)
+if [ -z "$proj" ]; then
+    proj=$(api POST /management/v1/projects '{"name":"stratt"}' | field id)
+    echo "created project stratt ($proj)"
+else
+    echo "exists  project stratt ($proj)"
+fi
+ui_client=$(api POST "/management/v1/projects/$proj/apps/_search" \
+    '{"queries":[{"nameQuery":{"name":"stratt-ui","method":"TEXT_QUERY_METHOD_EQUALS"}}]}' |
+    field clientId)
+if [ -z "$ui_client" ]; then
+    # USER_AGENT + auth method NONE = SPA with PKCE; devMode allows http
+    # redirects (dev instance only); JWT access tokens verify via JWKS
+    # (slice 5) so the same Bearer works against strattd.
+    ui_client=$(api POST "/management/v1/projects/$proj/apps/oidc" \
+        '{"name":"stratt-ui","redirectUris":["http://localhost:5173/callback","http://localhost:8080/callback"],"postLogoutRedirectUris":["http://localhost:5173/","http://localhost:8080/"],"responseTypes":["OIDC_RESPONSE_TYPE_CODE"],"grantTypes":["OIDC_GRANT_TYPE_AUTHORIZATION_CODE","OIDC_GRANT_TYPE_REFRESH_TOKEN"],"appType":"OIDC_APP_TYPE_USER_AGENT","authMethodType":"OIDC_AUTH_METHOD_TYPE_NONE","accessTokenType":"OIDC_TOKEN_TYPE_JWT","devMode":true}' |
+        field clientId)
+    echo "created app stratt-ui (client $ui_client)"
+else
+    echo "exists  app stratt-ui (client $ui_client)"
+fi
+echo "STRATT_UI_CLIENT_ID=$ui_client" >>"$out_file"
+
 echo
 echo "wrote $out_file — mint a token with:"
 echo "  curl -s $base/oauth/v2/token -u '<client_id>:<client_secret>' \\"

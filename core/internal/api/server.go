@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -36,6 +38,10 @@ type Server struct {
 	// Nil leaves Bearer requests anonymous-denied (no silent fallback from
 	// a presented-but-unverifiable credential to another resolver).
 	OIDC *authz.OIDCResolver
+	// UIDir, when set, serves the built UI (ADR-0012) at / with an SPA
+	// fallback to index.html. The UI is a pure client of /api/v1 — same API
+	// as CLI, CI, and agents (§1.6); go:embed packaging is the Helm slice.
+	UIDir string
 }
 
 // Handler mounts the generated routes under /api/v1, behind the Principal
@@ -43,7 +49,24 @@ type Server struct {
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.Handle("/api/v1/", http.StripPrefix("/api/v1", s.principalMiddleware(Handler(s))))
+	if s.UIDir != "" {
+		mux.Handle("/", spaHandler(s.UIDir))
+	}
 	return mux
+}
+
+// spaHandler serves dir statically, falling back to index.html for paths
+// that don't exist on disk (client-side routes are URL-addressable, L10).
+func spaHandler(dir string) http.Handler {
+	fs := http.FileServer(http.Dir(dir))
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		p := filepath.Join(dir, filepath.Clean("/"+r.URL.Path))
+		if st, err := os.Stat(p); err == nil && !st.IsDir() {
+			fs.ServeHTTP(w, r)
+			return
+		}
+		http.ServeFile(w, r, filepath.Join(dir, "index.html"))
+	})
 }
 
 // principalMiddleware resolves the request Principal. Bearer tokens go to
@@ -1137,4 +1160,56 @@ func (s *Server) DecideGate(w http.ResponseWriter, r *http.Request, id string) {
 		return
 	}
 	w.WriteHeader(http.StatusAccepted)
+}
+
+// ── list endpoints (UI slice, ADR-0012) ──────────────────────────────────────
+
+// ListViews implements (GET /views).
+func (s *Server) ListViews(w http.ResponseWriter, r *http.Request) {
+	vs, err := s.Store.ListViews(r.Context())
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	out := make([]View, 0, len(vs))
+	for _, v := range vs {
+		out = append(out, viewToWire(v))
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+// ListRuns implements (GET /runs).
+func (s *Server) ListRuns(w http.ResponseWriter, r *http.Request, params ListRunsParams) {
+	limit := 0
+	if params.Limit != nil {
+		limit = int(*params.Limit)
+	}
+	rs, err := s.Store.ListRuns(r.Context(), limit)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	out := make([]Run, 0, len(rs))
+	for _, run := range rs {
+		out = append(out, runToWire(run))
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+// ListWorkflowRuns implements (GET /workflow-runs).
+func (s *Server) ListWorkflowRuns(w http.ResponseWriter, r *http.Request, params ListWorkflowRunsParams) {
+	limit := 0
+	if params.Limit != nil {
+		limit = int(*params.Limit)
+	}
+	wrs, err := s.Store.ListWorkflowRuns(r.Context(), limit)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	out := make([]WorkflowRun, 0, len(wrs))
+	for _, wr := range wrs {
+		out = append(out, workflowRunToWire(wr))
+	}
+	writeJSON(w, http.StatusOK, out)
 }

@@ -251,7 +251,11 @@ func run(ctx context.Context, log *slog.Logger) error {
 	}
 
 	// ── interface plane ──────────────────────────────────────────────────
-	server := &api.Server{Store: store, Bus: bus, Temporal: temporalClient, Authz: authorizer, Log: log, DevPrincipalHeader: devPrincipal, OIDC: oidcResolver}
+	uiDir := os.Getenv("STRATT_UI_DIR")
+	if uiDir != "" {
+		log.Info("serving ui", "dir", uiDir)
+	}
+	server := &api.Server{Store: store, Bus: bus, Temporal: temporalClient, Authz: authorizer, Log: log, DevPrincipalHeader: devPrincipal, OIDC: oidcResolver, UIDir: uiDir}
 	httpSrv := &http.Server{
 		Addr:              env("STRATT_LISTEN_ADDR", ":8080"),
 		Handler:           server.Handler(),

@@ -191,12 +191,31 @@ tasks:
       - go run sigs.k8s.io/kind@v0.32.0 load docker-image stratt-ee:dev --name stratt-dev
 
   generate:
-    desc: Regenerate code from specs (OpenAPI → server stubs, ADR-0006)
+    desc: Regenerate code from specs (OpenAPI → server stubs + UI types, ADR-0006/0012)
     cmds:
       - cd core && go generate ./...
+      - cd ui && npm run generate
 
   generate:check:
     desc: Fail if generated code is stale relative to the spec (CI gate, ADR-0006)
     cmds:
       - task: generate
-      - git diff --exit-code -- '**/*.gen.go'
+      - git diff --exit-code -- '**/*.gen.go' 'ui/src/api/schema.d.ts'
+
+  ui:dev:
+    desc: Vite dev server on :5173, /api proxied to strattd :8080 (ADR-0012)
+    dir: ui
+    cmds:
+      - npm run dev
+
+  ui:build:
+    desc: Build the UI (serve via STRATT_UI_DIR=ui/dist)
+    dir: ui
+    cmds:
+      - npm run build
+
+  ui:lint:
+    desc: Type-check the UI (the CI signal, ADR-0012)
+    dir: ui
+    cmds:
+      - npm run lint

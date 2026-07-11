@@ -96,6 +96,49 @@ func (s *Store) ListRunsForWorkflowRun(ctx context.Context, workflowRunID string
 	return out, rows.Err()
 }
 
+// ListRuns returns the most recent Run summaries, newest first.
+func (s *Store) ListRuns(ctx context.Context, limit int) ([]types.Run, error) {
+	if limit <= 0 || limit > 500 {
+		limit = 100
+	}
+	rows, err := s.pool.Query(ctx, `
+		SELECT id, workflow_id, status, view_ref, view_version, triggered_by, workflow_run_id, step_name, started_at, finished_at
+		FROM graph.run ORDER BY started_at DESC LIMIT $1`, limit)
+	if err != nil {
+		return nil, fmt.Errorf("graph: list runs: %w", err)
+	}
+	defer rows.Close()
+	var out []types.Run
+	for rows.Next() {
+		var r types.Run
+		var status string
+		var viewRef, triggeredBy, workflowRunID, stepName *string
+		var viewVersion *int64
+		if err := rows.Scan(&r.ID, &r.WorkflowID, &status, &viewRef, &viewVersion,
+			&triggeredBy, &workflowRunID, &stepName, &r.StartedAt, &r.FinishedAt); err != nil {
+			return nil, fmt.Errorf("graph: list runs: %w", err)
+		}
+		r.Status = types.RunStatus(status)
+		if viewRef != nil {
+			r.ViewRef = *viewRef
+		}
+		if viewVersion != nil {
+			r.ViewVersion = *viewVersion
+		}
+		if triggeredBy != nil {
+			r.TriggeredBy = *triggeredBy
+		}
+		if workflowRunID != nil {
+			r.WorkflowRunID = *workflowRunID
+		}
+		if stepName != nil {
+			r.StepName = *stepName
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
 // GetRun returns one Run summary.
 func (s *Store) GetRun(ctx context.Context, runID string) (types.Run, error) {
 	var r types.Run
