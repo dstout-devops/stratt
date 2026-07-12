@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "stratt:contract:actuators/opentofu.input:v1",
+  "title": "opentofu Step params",
+  "description": "Input Contract for the opentofu Actuator (charter §2.3, §3: OpenTofu over Terraform). Hand-written — derivation ladder rung 1 (§2.2). plan is read-only; apply mutates and belongs behind a Gate (ADR-0016).",
+  "type": "object",
+  "required": ["module", "mode", "workspace"],
+  "properties": {
+    "module": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Root module HCL (main.tf content)."
+    },
+    "mode": {
+      "type": "string",
+      "enum": ["plan", "apply"],
+      "description": "plan: render and stream the plan only. apply: plan and apply against the workspace state."
+    },
+    "workspace": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^[a-z0-9]([a-z0-9-]*[a-z0-9])?$",
+      "description": "State identity in the encrypted HTTP state backend; plan and apply Steps of one Workflow share it."
+    },
+    "vars": {
+      "type": "object",
+      "description": "Input variable values (rendered as *.auto.tfvars.json)."
+    },
+    "eeImage": {
+      "type": "string",
+      "description": "OpenTofu execution-environment image override."
+    }
+  },
+  "additionalProperties": false
+}

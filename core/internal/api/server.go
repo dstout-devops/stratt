@@ -43,6 +43,10 @@ type Server struct {
 	// fallback to index.html. The UI is a pure client of /api/v1 — same API
 	// as CLI, CI, and agents (§1.6); go:embed packaging is the Helm slice.
 	UIDir string
+	// StateBackend, when set, mounts the OpenTofu HTTP state backend at
+	// /statebackend/ (ADR-0016) — outside /api/v1: execution pods
+	// authenticate with per-workspace HMAC credentials, not Principals.
+	StateBackend http.Handler
 }
 
 // Handler mounts the generated routes under /api/v1, behind the Principal
@@ -56,6 +60,9 @@ func (s *Server) Handler() http.Handler {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok"))
 	})
+	if s.StateBackend != nil {
+		mux.Handle("/statebackend/", s.StateBackend)
+	}
 	if s.UIDir != "" {
 		mux.Handle("/", spaHandler(s.UIDir))
 	}

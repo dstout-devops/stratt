@@ -663,7 +663,7 @@ components:
         viewName: { type: string }
         actuator:
           type: string
-          enum: [ansible, script]
+          enum: [ansible, script, opentofu]
           default: ansible
         params:
           type: object

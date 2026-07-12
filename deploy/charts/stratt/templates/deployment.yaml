@@ -80,6 +80,22 @@ spec:
             {{- end }}
             - name: STRATT_EE_IMAGE
               value: {{ include "stratt.image" .Values.ee.image | quote }}
+            - name: STRATT_EE_TOFU_IMAGE
+              value: {{ include "stratt.image" .Values.ee.tofuImage | quote }}
+            {{- if or .Values.stateBackend.key .Values.stateBackend.existingSecret.name }}
+            {{- if .Values.stateBackend.existingSecret.name }}
+            - name: STRATT_STATE_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.stateBackend.existingSecret.name }}
+                  key: {{ .Values.stateBackend.existingSecret.key }}
+            {{- else }}
+            - name: STRATT_STATE_KEY
+              value: {{ .Values.stateBackend.key | quote }}
+            {{- end }}
+            - name: STRATT_STATE_BACKEND_URL
+              value: {{ .Values.stateBackend.url | default (printf "http://%s.%s.svc:%d" (include "stratt.fullname" .) .Release.Namespace (int .Values.service.port)) | quote }}
+            {{- end }}
             - name: STRATT_EE_FSGROUP
               value: {{ .Values.ee.fsGroup | quote }}
             {{- if .Values.declarations.gitSync.enabled }}

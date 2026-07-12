@@ -90,10 +90,26 @@ externalOpenfga:
 # NOTES.txt shouts when set.
 devPrincipalHeader: false
 
+# ── OpenTofu state backend (ADR-0016) ────────────────────────────────────────
+stateBackend:
+  # 32-byte hex key enables the encrypted HTTP state backend and the
+  # opentofu Actuator. Use existingSecret in production (inline is dev-only;
+  # NOTES.txt warns). Empty ⇒ backend off, opentofu Steps refuse to run.
+  key: ""
+  existingSecret:
+    name: ""
+    key: "state-key"
+  # URL execution pods use to reach strattd; defaults to the chart Service.
+  url: ""
+
 # ── execution plane ──────────────────────────────────────────────────────────
 ee:
   image:
     repository: stratt-ee
+    tag: dev
+    digest: ""
+  tofuImage:
+    repository: stratt-ee-tofu
     tag: dev
     digest: ""
   fsGroup: 1000

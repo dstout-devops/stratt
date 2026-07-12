@@ -7,6 +7,7 @@ stratt {{ .Chart.Version }} deployed as {{ include "stratt.fullname" . }} in {{ 
 {{- if not .Values.image.digest }}{{- $warn = append $warn (printf "image %s uses a floating tag — pin a digest in production (charter §7.3)" (include "stratt.image" .Values.image)) }}{{- end }}
 {{- if not .Values.ee.image.digest }}{{- $warn = append $warn (printf "ee image %s uses a floating tag — pin a digest in production (charter §7.3)" (include "stratt.image" .Values.ee.image)) }}{{- end }}
 {{- if and .Values.declarations.gitSync.enabled (not .Values.declarations.gitSync.image.digest) }}{{- $warn = append $warn "git-sync image uses a floating tag — pin a digest in production (charter §7.3)" }}{{- end }}
+{{- if .Values.stateBackend.key }}{{- $warn = append $warn "stateBackend.key is INLINE in values — use stateBackend.existingSecret in production (charter §2.5)" }}{{- end }}
 {{- if .Values.database.url }}{{- $warn = append $warn "database.url is INLINE in values — use database.existingSecret in production (charter §2.5: no secret material in manifests)" }}{{- end }}
 {{- if .Values.devPrincipalHeader }}{{- $warn = append $warn "devPrincipalHeader is ENABLED — the API trusts X-Stratt-Principal. Dev harnesses only, NEVER production (ADR-0009)" }}{{- end }}
 {{- if and .Values.oidc.issuer .Values.oidc.allowNoAudience (not .Values.oidc.audience) }}{{- $warn = append $warn "OIDC audience check is DISABLED (oidc.allowNoAudience) — dev only (ADR-0013)" }}{{- end }}

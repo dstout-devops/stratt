@@ -204,6 +204,28 @@ func (d *Dispatcher) createJob(ctx context.Context, name, runID string, spec act
 	// coordinates only. env → secretKeyRef; file → read-only Secret volume
 	// items (0400) under /runner/credentials/.
 	var env []corev1.EnvVar
+	// Actuator-supplied env (JobSpec.Env, ADR-0016): plain values the
+	// Prepare step computed (e.g. the state-backend credential) — sorted for
+	// a deterministic pod spec.
+	envKeys := make([]string, 0, len(spec.Env))
+	for k := range spec.Env {
+		envKeys = append(envKeys, k)
+	}
+	sort.Strings(envKeys)
+	for _, k := range envKeys {
+		env = append(env, corev1.EnvVar{Name: k, Value: spec.Env[k]})
+	}
+	// A CredentialRef env injection colliding with an actuator-set name
+	// would be K8s last-wins ambiguity — refuse instead (ADR-0016 note).
+	for _, c := range creds {
+		for _, inj := range c.Injection {
+			if inj.As == types.InjectEnv {
+				if _, clash := spec.Env[inj.Name]; clash {
+					return fmt.Errorf("dispatch: credential_ref %s env %q collides with an actuator-set variable", c.RefName, inj.Name)
+				}
+			}
+		}
+	}
 	var volumes []corev1.Volume
 	// 0440 + pod fsGroup (not 0400): Secret volume files are root-owned by
 	// the kubelet, and the EE runs non-root — group is the only read path

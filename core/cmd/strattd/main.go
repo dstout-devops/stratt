@@ -24,6 +24,7 @@ import (
 
 	"github.com/dstout-devops/stratt/core/internal/actuators"
 	"github.com/dstout-devops/stratt/core/internal/actuators/ansible"
+	"github.com/dstout-devops/stratt/core/internal/actuators/opentofu"
 	"github.com/dstout-devops/stratt/core/internal/actuators/script"
 	"github.com/dstout-devops/stratt/core/internal/api"
 	"github.com/dstout-devops/stratt/core/internal/authz"
@@ -36,6 +37,7 @@ import (
 	"github.com/dstout-devops/stratt/core/internal/events"
 	"github.com/dstout-devops/stratt/core/internal/graph"
 	"github.com/dstout-devops/stratt/core/internal/orchestrate"
+	"github.com/dstout-devops/stratt/core/internal/statebackend"
 	"github.com/dstout-devops/stratt/core/internal/triggers"
 	"github.com/dstout-devops/stratt/types"
 )
@@ -175,6 +177,26 @@ func run(ctx context.Context, log *slog.Logger) error {
 	registry := map[string]actuators.Actuator{}
 	for _, a := range []actuators.Actuator{ansible.Actuator{}, script.Actuator{}} {
 		registry[a.Name()] = a
+	}
+
+	// OpenTofu (ADR-0016): requires the encrypted state backend — without a
+	// state key the actuator is not registered and the backend not mounted;
+	// tofu Steps then fail loudly at Prepare, never plaintext local state.
+	var stateHandler http.Handler
+	if stateKey := os.Getenv("STRATT_STATE_KEY"); stateKey != "" {
+		sb, err := statebackend.New(stateKey, store, log)
+		if err != nil {
+			return err
+		}
+		stateHandler = sb.Handler()
+		tofuActuator := opentofu.FromEnv(sb.WorkspaceCredential)
+		if tofuActuator.BackendURL == "" {
+			return fmt.Errorf("STRATT_STATE_KEY is set but STRATT_STATE_BACKEND_URL is empty — execution pods need the backend address (ADR-0016)")
+		}
+		registry[tofuActuator.Name()] = tofuActuator
+		log.Info("opentofu actuator ready", "backend", tofuActuator.BackendURL, "eeImage", tofuActuator.DefaultImage)
+	} else {
+		log.Info("opentofu actuator disabled (STRATT_STATE_KEY empty)")
 	}
 
 	w := worker.New(temporalClient, orchestrate.TaskQueue, worker.Options{})
@@ -338,7 +360,7 @@ func run(ctx context.Context, log *slog.Logger) error {
 	if uiDir != "" {
 		log.Info("serving ui", "dir", uiDir)
 	}
-	server := &api.Server{Store: store, Bus: bus, Temporal: temporalClient, Authz: authorizer, Log: log, DevPrincipalHeader: devPrincipal, OIDC: oidcResolver, UIDir: uiDir}
+	server := &api.Server{Store: store, Bus: bus, Temporal: temporalClient, Authz: authorizer, Log: log, DevPrincipalHeader: devPrincipal, OIDC: oidcResolver, UIDir: uiDir, StateBackend: stateHandler}
 	httpSrv := &http.Server{
 		Addr:              env("STRATT_LISTEN_ADDR", ":8080"),
 		Handler:           server.Handler(),

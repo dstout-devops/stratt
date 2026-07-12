@@ -34,6 +34,10 @@ type JobSpec struct {
 	Command []string
 	// Image overrides the dispatcher's default EE image when non-empty.
 	Image string
+	// Env is actuator-computed plain environment for the pod (e.g. the
+	// state-backend credential, ADR-0016). CredentialRef material never
+	// travels here — that stays on the secretKeyRef path (§2.5).
+	Env map[string]string
 }
 
 // Per-target statuses. "changed" implies ok; failed and unreachable are both
