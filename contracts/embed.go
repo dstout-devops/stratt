@@ -8,7 +8,8 @@ package contracts
 import "embed"
 
 // FS carries every schema document. Paths are the Contract names:
-// actuators/<name>.input.schema.json, facets/<namespace>.schema.json.
+// actuators/<name>.input.schema.json, facets/<namespace>.schema.json,
+// outputs/<name>.schema.json.
 //
-//go:embed actuators/*.schema.json facets/*.schema.json
+//go:embed actuators/*.schema.json facets/*.schema.json outputs/*.schema.json
 var FS embed.FS

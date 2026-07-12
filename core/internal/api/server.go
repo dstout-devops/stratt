@@ -1252,11 +1252,11 @@ func validateStepParams(actuator *StartRunActuator, params *map[string]interface
 	return contract.ValidateActuatorParams(name, raw)
 }
 
-// ListContracts implements (GET /contracts): the pinned schema documents
-// (§1.5) — served from the embedded set, which startup has already verified
-// against the registry pins.
+// ListContracts implements (GET /contracts): the pin registry — shipped
+// documents (startup-verified against their pins) AND tool-derived ones
+// (ADR-0017), with their full version history.
 func (s *Server) ListContracts(w http.ResponseWriter, r *http.Request) {
-	all, err := contract.All()
+	all, err := s.Store.ListContracts(r.Context())
 	if err != nil {
 		s.fail(w, err)
 		return

@@ -58,6 +58,16 @@ type TargetResult struct {
 	Failed bool
 }
 
+// EntityObservation is one Entity a tool's output declares into existence —
+// projected with Run provenance by the orchestration layer (ADR-0017,
+// charter §4 provision→configure). Identity and labels only: Facets arrive
+// from later Steps or Syncers (§1.1).
+type EntityObservation struct {
+	Kind         string
+	IdentityKeys map[string]string
+	Labels       map[string]string
+}
+
 // Interpreted is one understood line of pod stdout.
 type Interpreted struct {
 	// Event is the task event to publish (RunID is stamped by the
@@ -70,6 +80,12 @@ type Interpreted struct {
 	// Event.Target, to project back with Run provenance (§8). Nil when the
 	// event carries none.
 	Facts map[string]json.RawMessage
+	// Entities are tool-declared Entity observations carried by this event
+	// (e.g. the opentofu stratt_entities output).
+	Entities []EntityObservation
+	// OutputsContract is a tool-derived (rung-2) schema document for the
+	// Step's outputs, when the event carries one (§2.2).
+	OutputsContract json.RawMessage
 }
 
 // Actuator prepares tool content and interprets the resulting event stream

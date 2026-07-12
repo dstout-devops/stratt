@@ -64,3 +64,38 @@ func (s *Store) ListContracts(ctx context.Context) ([]types.Contract, error) {
 	}
 	return out, rows.Err()
 }
+
+// RegisterDerivedContract pins a tool-derived (rung-2) document with
+// AUTO-VERSIONING (ADR-0017): unlike shipped rung-1 documents (whose pins
+// block on drift), a derived schema legitimately changes when the tool
+// content changes — same latest hash is a noop, a new hash inserts the next
+// version. The version history is the audit trail.
+//
+// Concurrency: the read-then-insert is safe because same-workspace applies
+// are serialized by the state-backend lock (ADR-0016); if a future derived
+// rung lacks such a lock, add a (name, hash) uniqueness + retry here.
+func (s *Store) RegisterDerivedContract(ctx context.Context, name, rung, hash string, schema []byte) (version int, err error) {
+	var latestVersion int
+	var latestHash string
+	err = s.pool.QueryRow(ctx, `
+		SELECT version, hash FROM graph.contract
+		WHERE name = $1 ORDER BY version DESC LIMIT 1`, name,
+	).Scan(&latestVersion, &latestHash)
+	switch {
+	case errors.Is(err, pgx.ErrNoRows):
+		latestVersion = 0
+	case err != nil:
+		return 0, fmt.Errorf("graph: register derived contract: %w", err)
+	case latestHash == hash:
+		return latestVersion, nil
+	}
+	next := latestVersion + 1
+	if _, err := s.pool.Exec(ctx, `
+		INSERT INTO graph.contract (name, version, rung, hash, schema)
+		VALUES ($1, $2, $3, $4, $5)
+		ON CONFLICT (name, version) DO NOTHING`,
+		name, next, rung, hash, schema); err != nil {
+		return 0, fmt.Errorf("graph: register derived contract: %w", err)
+	}
+	return next, nil
+}

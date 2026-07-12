@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "stratt:contract:outputs/stratt_entities:v1",
+  "title": "stratt_entities reserved output",
+  "description": "The reserved OpenTofu output that projects Entities with Run provenance (ADR-0017, charter §4 provision→configure). v1 observations carry identity and labels only — Facets arrive from the configure Step (§1.1: no undemanded schemas).",
+  "type": "array",
+  "items": {
+    "type": "object",
+    "required": ["kind", "identityKeys"],
+    "properties": {
+      "kind": {
+        "type": "string",
+        "minLength": 1,
+        "description": "Entity kind (domain data, e.g. endpoint, instance)."
+      },
+      "identityKeys": {
+        "type": "object",
+        "minProperties": 1,
+        "additionalProperties": { "type": "string", "minLength": 1 },
+        "description": "Identity scheme → value; correlation happens here (§1.2)."
+      },
+      "labels": {
+        "type": "object",
+        "additionalProperties": { "type": "string" },
+        "description": "Selection labels — the v1 binding surface for downstream Views."
+      }
+    },
+    "additionalProperties": false
+  }
+}

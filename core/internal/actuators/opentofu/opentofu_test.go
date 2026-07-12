@@ -95,3 +95,31 @@ func TestInterpret(t *testing.T) {
 		t.Fatal("banner noise must not interpret")
 	}
 }
+
+func TestInterpretOutputs(t *testing.T) {
+	a := testActuator()
+	line := []byte(`{"counter":12,"event":"outputs_json","outputs":{
+		"stratt_entities":{"sensitive":false,"type":["list",["object",{"kind":"string","identityKeys":["map","string"],"labels":["map","string"]}]],
+			"value":[{"kind":"endpoint","identityKeys":{"tofu.id":"ep-1"},"labels":{"demo":"tofu"}}]},
+		"admin_password":{"sensitive":true,"type":"string","value":"(sensitive)"}
+	}}`)
+	ev, ok := a.Interpret(line)
+	if !ok || ev.Event.Kind != "outputs-json" {
+		t.Fatalf("outputs-json: %+v ok=%v", ev.Event, ok)
+	}
+	if len(ev.Entities) != 1 || ev.Entities[0].Kind != "endpoint" || ev.Entities[0].IdentityKeys["tofu.id"] != "ep-1" {
+		t.Fatalf("entities: %+v", ev.Entities)
+	}
+	if len(ev.OutputsContract) == 0 {
+		t.Fatal("outputs contract must derive")
+	}
+
+	// Malformed reserved output → failed result with the contract named.
+	bad := []byte(`{"counter":13,"event":"outputs_json","outputs":{
+		"stratt_entities":{"sensitive":false,"type":"string","value":[{"kind":"","identityKeys":{}}]}
+	}}`)
+	ev, ok = a.Interpret(bad)
+	if !ok || ev.Result == nil || !ev.Result.Failed || ev.Event.Kind != "invalid-entities" {
+		t.Fatalf("malformed stratt_entities must fail the run: %+v", ev)
+	}
+}

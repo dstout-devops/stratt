@@ -82,6 +82,12 @@ type Result struct {
 	PerTarget map[string]string
 	// Facts by target name → facet namespace → value.
 	Facts map[string]map[string]json.RawMessage
+	// Entities are tool-declared Entity observations (ADR-0017), projected
+	// with Run provenance by the orchestration layer.
+	Entities []actuators.EntityObservation
+	// OutputsContract is the Step's tool-derived outputs schema, when the
+	// tool emitted one (§2.2 rung 2).
+	OutputsContract json.RawMessage
 	// SpawnLatency is Job-creation → pod-running, the §8 pod-spawn gate.
 	SpawnLatency time.Duration
 }
@@ -421,6 +427,12 @@ func (d *Dispatcher) followLogs(ctx context.Context, runID string, slice int, po
 		}
 		if iv.Facts != nil && iv.Event.Target != "" {
 			res.Facts[iv.Event.Target] = iv.Facts
+		}
+		if len(iv.Entities) > 0 {
+			res.Entities = append(res.Entities, iv.Entities...)
+		}
+		if len(iv.OutputsContract) > 0 {
+			res.OutputsContract = iv.OutputsContract
 		}
 	}
 	if err := sc.Err(); err != nil && ctx.Err() == nil {

@@ -6,7 +6,10 @@ package orchestrate
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
@@ -60,10 +63,20 @@ type ResolvedTargets struct {
 	Targets     []actuators.Target
 }
 
-// FactSet carries per-target facts keyed for projection.
+// FactSet carries per-target facts keyed for projection, plus tool-declared
+// Entity observations and the Step's derived outputs schema (ADR-0017).
 type FactSet struct {
 	// EntityFacts: entity id → facet namespace → value.
 	EntityFacts map[string]map[string]json.RawMessage
+	// Entities are tool-declared observations to project with Run
+	// provenance (e.g. the opentofu stratt_entities output).
+	Entities []actuators.EntityObservation
+	// OutputsContract is the rung-2 outputs schema the tool derived, with
+	// the name it registers under (empty = none).
+	OutputsContract     json.RawMessage
+	OutputsContractName string
+	// Workspace stamps the stratt.workspace selection label (v1 binding).
+	Workspace string
 }
 
 // RunAgainstView is the Phase-0 Workflow. Every state transition is a
@@ -126,7 +139,7 @@ func RunAgainstView(ctx workflow.Context, in RunInput) error {
 	result = mergeResults(sliceResults)
 
 	var facts FactSet
-	if err := workflow.ExecuteActivity(ctx, a.CollectFacts, resolved, result).Get(ctx, &facts); err != nil {
+	if err := workflow.ExecuteActivity(ctx, a.CollectFacts, in, resolved, result).Get(ctx, &facts); err != nil {
 		return finishRun(ctx, a, in, types.RunFailed, err)
 	}
 	if err := workflow.ExecuteActivity(ctx, a.ProjectFacts, in.RunID, facts).Get(ctx, nil); err != nil {
@@ -329,12 +342,17 @@ func mergeResults(slices []dispatch.Result) dispatch.Result {
 		if r.SpawnLatency > out.SpawnLatency {
 			out.SpawnLatency = r.SpawnLatency
 		}
+		out.Entities = append(out.Entities, r.Entities...)
+		if len(r.OutputsContract) > 0 {
+			out.OutputsContract = r.OutputsContract
+		}
 	}
 	return out
 }
 
-// CollectFacts joins per-target facts back to Entity ids.
-func (a *Activities) CollectFacts(ctx context.Context, resolved ResolvedTargets, result dispatch.Result) (FactSet, error) {
+// CollectFacts joins per-target facts back to Entity ids and carries the
+// tool-declared observations through (ADR-0017).
+func (a *Activities) CollectFacts(ctx context.Context, in RunInput, resolved ResolvedTargets, result dispatch.Result) (FactSet, error) {
 	byName := map[string]string{}
 	for _, t := range resolved.Targets {
 		byName[t.Name] = t.EntityID
@@ -345,12 +363,26 @@ func (a *Activities) CollectFacts(ctx context.Context, resolved ResolvedTargets,
 			fs.EntityFacts[id] = facets
 		}
 	}
+	fs.Entities = result.Entities
+	if len(result.OutputsContract) > 0 {
+		fs.OutputsContract = result.OutputsContract
+		// The workspace names the derived contract and the selection label.
+		var p struct {
+			Workspace string `json:"workspace"`
+		}
+		_ = json.Unmarshal(in.Params, &p)
+		if p.Workspace != "" {
+			fs.Workspace = p.Workspace
+			fs.OutputsContractName = "opentofu/" + p.Workspace + ".outputs"
+		}
+	}
 	return fs, nil
 }
 
 // ProjectFacts writes gathered facts back as Facets with Run provenance —
 // the projection half of the §8 slice, via the run-provenance write path
-// (§1.2, §4.3).
+// (§1.2, §4.3) — and projects tool-declared Entity observations plus the
+// derived outputs Contract (ADR-0017).
 func (a *Activities) ProjectFacts(ctx context.Context, runID string, facts FactSet) error {
 	p := a.Store.RunProjector()
 	prov := types.Provenance{WriterKind: types.WriterRun, WriterRef: runID, At: time.Now().UTC()}
@@ -359,6 +391,34 @@ func (a *Activities) ProjectFacts(ctx context.Context, runID string, facts FactS
 			if err := p.UpsertFacet(ctx, prov, entityID, ns, value); err != nil {
 				return err
 			}
+		}
+	}
+	for _, obs := range facts.Entities {
+		labels := map[string]string{}
+		for k, v := range obs.Labels {
+			labels[k] = v
+		}
+		if facts.Workspace != "" {
+			// The v1 binding surface: downstream Views select on this
+			// label (ADR-0017; parametrized Views are the follow-up).
+			labels["stratt.workspace"] = facts.Workspace
+		}
+		if _, err := p.UpsertEntities(ctx, prov, []graph.EntityUpsert{{
+			Kind: obs.Kind, IdentityKeys: obs.IdentityKeys, Labels: labels,
+		}}); err != nil {
+			if errors.Is(err, graph.ErrIdentityConflict) {
+				// Surface, never merge (§1.2) — mirror the Syncer posture.
+				return temporal.NewNonRetryableApplicationError(
+					fmt.Sprintf("output entity identity conflict: %v", err), "IdentityConflict", err)
+			}
+			return err
+		}
+	}
+	if len(facts.OutputsContract) > 0 && facts.OutputsContractName != "" {
+		sum := sha256.Sum256(facts.OutputsContract)
+		if _, err := a.Store.RegisterDerivedContract(ctx, facts.OutputsContractName,
+			types.RungToolDerived, hex.EncodeToString(sum[:]), facts.OutputsContract); err != nil {
+			return err
 		}
 	}
 	return nil

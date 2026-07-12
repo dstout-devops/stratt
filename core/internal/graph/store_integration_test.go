@@ -445,3 +445,27 @@ func TestFacetSchemaEnforcement(t *testing.T) {
 		t.Fatalf("uncovered namespace must not be validated: %v", err)
 	}
 }
+
+// TestDerivedContractVersioning covers ADR-0017: derived documents
+// auto-version on hash change instead of blocking like shipped pins.
+func TestDerivedContractVersioning(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+
+	v, err := s.RegisterDerivedContract(ctx, "opentofu/ws.outputs", "tool-derived", "h1", []byte(`{"a":1}`))
+	if err != nil || v != 1 {
+		t.Fatalf("first: v=%d err=%v", v, err)
+	}
+	v, err = s.RegisterDerivedContract(ctx, "opentofu/ws.outputs", "tool-derived", "h1", []byte(`{"a":1}`))
+	if err != nil || v != 1 {
+		t.Fatalf("same hash must be a noop at v1: v=%d err=%v", v, err)
+	}
+	v, err = s.RegisterDerivedContract(ctx, "opentofu/ws.outputs", "tool-derived", "h2", []byte(`{"a":2}`))
+	if err != nil || v != 2 {
+		t.Fatalf("new hash must auto-version: v=%d err=%v", v, err)
+	}
+	// Shipped (rung-1) semantics unchanged: same name+version, new hash blocks.
+	if err := s.RegisterContract(ctx, types.Contract{Name: "opentofu/ws.outputs", Version: 2, Rung: "tool-derived", Hash: "h3", Schema: []byte(`{}`)}); !errors.Is(err, ErrContractDrift) {
+		t.Fatalf("pin-path drift must still block: %v", err)
+	}
+}

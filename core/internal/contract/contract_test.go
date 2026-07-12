@@ -63,8 +63,8 @@ func TestPinsAreStable(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(all) != 3 {
-		t.Fatalf("expected 3 embedded documents, got %d", len(all))
+	if len(all) != 5 {
+		t.Fatalf("expected 5 embedded documents, got %d", len(all))
 	}
 	for _, c := range all {
 		if len(c.Hash) != 64 || c.Rung != "hand-written" || c.Version != 1 {

@@ -94,6 +94,20 @@ if rc == 0:
                 rc = show.returncode
     else:
         rc = run(["tofu", "apply", "-input=false", "-auto-approve", "-json"])
+        if rc == 0:
+            outp = subprocess.run(["tofu", "output", "-json"],
+                                  cwd=base, capture_output=True, text=True)
+            if outp.returncode == 0:
+                outputs = json.loads(outp.stdout or "{}")
+                # Redact sensitive values BEFORE emission: the event stream
+                # is not a secret channel (ADR-0017).
+                for name, o in outputs.items():
+                    if o.get("sensitive"):
+                        o["value"] = "(sensitive)"
+                emit(event="outputs_json", outputs=outputs)
+            else:
+                emit(event="raw", line=outp.stderr.strip())
+                rc = outp.returncode
 
 emit(event="tofu_finished", rc=rc, mode=mode)
 sys.exit(1 if rc else 0)
@@ -175,6 +189,7 @@ type driverEvent struct {
 	Mode    string          `json:"mode,omitempty"`
 	Plan    json.RawMessage `json:"plan,omitempty"`
 	Tofu    json.RawMessage `json:"tofu,omitempty"`
+	Outputs json.RawMessage `json:"outputs,omitempty"`
 }
 
 // tofuMsg is the subset of tofu's machine-readable stream we lift into
@@ -231,7 +246,27 @@ func (Actuator) Interpret(line []byte) (actuators.Interpreted, bool) {
 
 	case ev.Event == "plan_json":
 		out.Event.Kind = "plan-json"
-		out.Event.Payload = map[string]any{"plan": json.RawMessage(ev.Plan)}
+		// Sensitive planned values are only FLAGGED in tofu's plan JSON
+		// (after_sensitive / sensitive_values), not omitted — redact the
+		// marked leaves before the event stream sees them (§2.5,
+		// charter-guardian F2 on ADR-0017).
+		out.Event.Payload = map[string]any{"plan": redactPlan(ev.Plan)}
+
+	case ev.Event == "outputs_json":
+		out.Event.Kind = "outputs-json"
+		out.Event.Payload = map[string]any{"outputs": json.RawMessage(ev.Outputs)}
+		obs, doc, err := interpretOutputs(ev.Outputs)
+		if err != nil {
+			// A malformed reserved output fails the Run with the pointer
+			// detail visible (§1.8); statuses only escalate, so the later
+			// rc=0 terminal cannot hide it.
+			out.Event.Kind = "invalid-entities"
+			out.Event.Payload = map[string]any{"error": err.Error()}
+			out.Result = &actuators.TargetResult{Target: "workspace", Status: actuators.StatusFailed, Failed: true}
+			return out, true
+		}
+		out.Entities = obs
+		out.OutputsContract = doc
 
 	case ev.Event == "tofu_finished":
 		out.Event.Kind = "tofu-finished"

@@ -223,6 +223,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/contracts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List pinned Contracts
+         * @description Every pinned Contract and Facet schema (charter §1.5, ADR-0015): the JSON Schema document, its sha256 pin, version, and derivation rung. The SchemaForm/SchemaTable rendering source (ADR-0003 L7/L8).
+         */
+        get: operations["listContracts"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/triggers": {
         parameters: {
             query?: never;
@@ -525,7 +545,7 @@ export interface components {
              * @default ansible
              * @enum {string}
              */
-            actuator: "ansible" | "script";
+            actuator: "ansible" | "script" | "opentofu";
             /** @description Actuator-interpreted Step params (e.g. script source). */
             params?: Record<string, never>;
             /**
@@ -555,6 +575,22 @@ export interface components {
             startedAt: string;
             /** Format: date-time */
             finishedAt?: string;
+        };
+        /** @description A pinned JSON Schema document on a Step's inputs/outputs or a Facet namespace (charter §1.5, §2.2) — data, never a language class. */
+        Contract: {
+            /** @description e.g. actuators/script.input or facets/os.kernel */
+            name: string;
+            /** Format: int64 */
+            version: number;
+            /**
+             * @description Derivation-ladder provenance of the schema (§2.2).
+             * @enum {string}
+             */
+            rung: "hand-written" | "tool-derived" | "mcp-declared";
+            /** @description sha256 over the exact document bytes, hex. */
+            hash: string;
+            /** @description The JSON Schema document. */
+            schema: Record<string, never>;
         };
         /** @description Anything that starts a Run (charter §2). v1 kind is `schedule` — a Temporal Schedule fires Runs with these launch parameters, executing as the declared service Principal (ADR-0010). */
         Trigger: {
@@ -1065,6 +1101,26 @@ export interface operations {
                 };
             };
             404: components["responses"]["NotFound"];
+        };
+    };
+    listContracts: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Pinned Contracts, ordered by name and version. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Contract"][];
+                };
+            };
         };
     };
     listTriggers: {
