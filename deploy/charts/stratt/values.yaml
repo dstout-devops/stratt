@@ -1,0 +1,152 @@
+# Stratt chart values (ADR-0013).
+#
+# Secrets NEVER inline in production values (§2.5): every credential-bearing
+# setting has an existingSecret form; the inline form is a dev convenience
+# and NOTES.txt warns loudly when it is used.
+#
+# Digest pinning (§7.3): every image accepts `digest`, which wins over `tag`.
+# Production manifests must pin digests; NOTES.txt warns on floating tags.
+
+image:
+  repository: stratt/strattd
+  tag: dev
+  digest: "" # e.g. sha256:… — wins over tag when set
+  pullPolicy: IfNotPresent
+
+replicas: 1
+
+service:
+  type: ClusterIP
+  port: 8080
+
+ingress:
+  enabled: false
+  className: ""
+  host: ""
+  annotations: {}
+  tls: [] # standard networking.k8s.io/v1 tls entries
+
+# ── substrate endpoints (bring-your-own) ────────────────────────────────────
+database:
+  # Postgres DSN. Use existingSecret in production (url is dev-only).
+  url: ""
+  existingSecret:
+    name: ""
+    key: "url"
+
+nats:
+  url: "" # nats://…; credential-less dev URLs may inline
+  existingSecret:
+    name: ""
+    key: "url"
+
+temporal:
+  address: "temporal-frontend:7233"
+  namespace: "default"
+
+# ── identity + authorization (ADR-0009) ─────────────────────────────────────
+oidc:
+  issuer: ""
+  audience: ""
+  # Dev-only, explicit opt-out: issuer without audience refuses to boot
+  # otherwise (slice-5 guardian flag; ADR-0013).
+  allowNoAudience: false
+
+# In-cluster OpenFGA subchart (postgres engine; its chart runs
+# `openfga migrate` as a hook). Values under `openfga:` pass through to the
+# official chart; stratt wires STRATT_OPENFGA_URL to its service.
+openfga:
+  enabled: false
+  image:
+    # The ADR-0009 vetted server version (the chart's default appVersion may
+    # run ahead of the scouted pin — never let the chart drift the server).
+    tag: v1.17.0
+  datastore:
+    engine: postgres
+    # DSN via a pre-provisioned Secret only (§2.5) — never `datastore.uri`:
+    #   existingSecret: <secret name>
+    #   secretKeys: { uriKey: uri }
+    existingSecret: ""
+    secretKeys:
+      uriKey: uri
+    # `openfga migrate` runs as a chart hook Job before the server rolls.
+    applyMigrations: true
+    waitForMigrations: true
+    migrationType: job
+  replicaCount: 1
+  # The chart's bundled Bitnami DB subcharts stay OFF (scout: legacy-image
+  # governance risk; Postgres is bring-your-own like the rest of the spine).
+  postgresql:
+    enabled: false
+  mysql:
+    enabled: false
+
+# External OpenFGA (when the subchart is disabled). Empty ⇒ the in-process
+# tuple evaluator answers checks (no server).
+externalOpenfga:
+  url: ""
+
+# The X-Stratt-Principal dev header (ADR-0009). NEVER enable in production;
+# NOTES.txt shouts when set.
+devPrincipalHeader: false
+
+# ── execution plane ──────────────────────────────────────────────────────────
+ee:
+  image:
+    repository: stratt-ee
+    tag: dev
+    digest: ""
+  fsGroup: 1000
+
+# ── CaC declarations (desired state, §1.2) ──────────────────────────────────
+declarations:
+  # git-sync sidecar delivers the declarations checkout; strattd reconciles
+  # the synced directory every interval (plain-dir mode — no git in the
+  # strattd image).
+  gitSync:
+    enabled: false
+    repo: ""
+    ref: "main"
+    periodSeconds: 30
+    image:
+      repository: registry.k8s.io/git-sync/git-sync
+      tag: v4.4.2
+      digest: ""
+    # Secret with git-sync credential env vars (GITSYNC_USERNAME/
+    # GITSYNC_PASSWORD or GITSYNC_SSH_KEY_FILE mounts) — optional for
+    # public/anonymous repos.
+    existingSecret: ""
+  interval: "30s"
+  maxPruneFraction: "" # "" ⇒ controller default 0.5
+
+# ── Phase-0 vCenter Syncer (optional) ────────────────────────────────────────
+vcenter:
+  url: ""
+  insecure: false
+  sourceName: "vcenter"
+  # Secret with `username` and `password` keys; required when url is set.
+  existingSecret: ""
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    memory: 512Mi
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65532 # distroless nonroot
+  runAsGroup: 65532
+  seccompProfile:
+    type: RuntimeDefault
+
+containerSecurityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop: ["ALL"]
+
+nodeSelector: {}
+tolerations: []
+affinity: {}

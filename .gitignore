@@ -46,3 +46,6 @@ coverage/
 # --- Editors / OS ---
 .DS_Store
 *.log
+
+# --- Helm ---
+deploy/charts/*/charts/*.tgz

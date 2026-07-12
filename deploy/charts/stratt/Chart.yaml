@@ -1,0 +1,20 @@
+apiVersion: v2
+name: stratt
+description: >
+  Stratt control plane (strattd + bundled UI) for any Kubernetes (charter
+  §7.1). Postgres, NATS JetStream, Temporal, and an OIDC issuer are
+  bring-your-own endpoints — their official charts are the boring path
+  (§1.4); ADR-0013 records the posture. OpenFGA ships as an optional
+  subchart (postgres engine, migrations run by its chart hook).
+type: application
+version: 0.1.0
+# appVersion tracks the strattd image line; pin digests in production (§7.3).
+appVersion: "0.1.0"
+dependencies:
+  - name: openfga
+    # dependency-scout 2026-07-12: RECOMMEND. Chart is ahead of the vetted
+    # server (appVersion v1.18.1); values pin image.tag back to the ADR-0009
+    # accepted v1.17.0 until the server pin is re-scouted.
+    version: "0.3.10"
+    repository: https://openfga.github.io/helm-charts
+    condition: openfga.enabled

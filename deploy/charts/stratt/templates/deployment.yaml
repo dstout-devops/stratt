@@ -1,0 +1,173 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "stratt.fullname" . }}
+  labels: {{- include "stratt.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicas }}
+  selector:
+    matchLabels: {{- include "stratt.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels: {{- include "stratt.selectorLabels" . | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "stratt.fullname" . }}
+      securityContext: {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: strattd
+          image: {{ include "stratt.image" .Values.image }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext: {{- toYaml .Values.containerSecurityContext | nindent 12 }}
+          ports:
+            - name: http
+              containerPort: 8080
+          readinessProbe:
+            httpGet: { path: /healthz, port: http }
+            initialDelaySeconds: 2
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: { path: /healthz, port: http }
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources: {{- toYaml .Values.resources | nindent 12 }}
+          env:
+            - name: STRATT_K8S_NAMESPACE
+              value: {{ .Release.Namespace | quote }}
+            # DSNs come from Secrets in production (§2.5); the inline form is
+            # a dev convenience NOTES.txt warns about.
+            {{- if .Values.database.existingSecret.name }}
+            - name: STRATT_DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.database.existingSecret.name }}
+                  key: {{ .Values.database.existingSecret.key }}
+            {{- else if .Values.database.url }}
+            - name: STRATT_DATABASE_URL
+              value: {{ .Values.database.url | quote }}
+            {{- end }}
+            {{- if .Values.nats.existingSecret.name }}
+            - name: STRATT_NATS_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.nats.existingSecret.name }}
+                  key: {{ .Values.nats.existingSecret.key }}
+            {{- else if .Values.nats.url }}
+            - name: STRATT_NATS_URL
+              value: {{ .Values.nats.url | quote }}
+            {{- end }}
+            - name: STRATT_TEMPORAL_ADDRESS
+              value: {{ .Values.temporal.address | quote }}
+            - name: STRATT_TEMPORAL_NAMESPACE
+              value: {{ .Values.temporal.namespace | quote }}
+            {{- if .Values.oidc.issuer }}
+            - name: STRATT_OIDC_ISSUER
+              value: {{ .Values.oidc.issuer | quote }}
+            {{- if .Values.oidc.audience }}
+            - name: STRATT_OIDC_AUDIENCE
+              value: {{ .Values.oidc.audience | quote }}
+            {{- else if .Values.oidc.allowNoAudience }}
+            - name: STRATT_OIDC_ALLOW_NO_AUDIENCE
+              value: "true"
+            {{- end }}
+            {{- end }}
+            {{- if include "stratt.openfgaURL" . }}
+            - name: STRATT_OPENFGA_URL
+              value: {{ include "stratt.openfgaURL" . | quote }}
+            {{- end }}
+            {{- if .Values.devPrincipalHeader }}
+            - name: STRATT_DEV_PRINCIPAL_HEADER
+              value: "true"
+            {{- end }}
+            - name: STRATT_EE_IMAGE
+              value: {{ include "stratt.image" .Values.ee.image | quote }}
+            - name: STRATT_EE_FSGROUP
+              value: {{ .Values.ee.fsGroup | quote }}
+            {{- if .Values.declarations.gitSync.enabled }}
+            # git-sync maintains /declarations/current as an atomic symlink;
+            # strattd reconciles it as a plain directory every interval
+            # (ADR-0013 — no git binary in the strattd image).
+            - name: STRATT_DESIRED_STATE_PATH
+              value: /declarations/current
+            - name: STRATT_DESIRED_STATE_INTERVAL
+              value: {{ .Values.declarations.interval | quote }}
+            {{- if .Values.declarations.maxPruneFraction }}
+            - name: STRATT_DESIRED_STATE_MAX_PRUNE
+              value: {{ .Values.declarations.maxPruneFraction | quote }}
+            {{- end }}
+            {{- end }}
+            {{- if .Values.vcenter.url }}
+            - name: STRATT_VCENTER_URL
+              value: {{ .Values.vcenter.url | quote }}
+            - name: STRATT_VCENTER_SOURCE_NAME
+              value: {{ .Values.vcenter.sourceName | quote }}
+            {{- if .Values.vcenter.insecure }}
+            - name: STRATT_VCENTER_INSECURE
+              value: "true"
+            {{- end }}
+            {{- if .Values.vcenter.existingSecret }}
+            - name: STRATT_VCENTER_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.vcenter.existingSecret }}
+                  key: username
+            - name: STRATT_VCENTER_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.vcenter.existingSecret }}
+                  key: password
+            {{- end }}
+            {{- end }}
+          {{- if .Values.declarations.gitSync.enabled }}
+          volumeMounts:
+            - name: declarations
+              mountPath: /declarations
+              readOnly: true
+          {{- end }}
+        {{- if .Values.declarations.gitSync.enabled }}
+        - name: git-sync
+          image: {{ include "stratt.image" .Values.declarations.gitSync.image }}
+          # git-sync runs as its image's uid 65533 and needs a writable /tmp
+          # for its gitconfig; root stays read-only (found by the kind e2e).
+          securityContext:
+            {{- omit .Values.containerSecurityContext "readOnlyRootFilesystem" | toYaml | nindent 12 }}
+            readOnlyRootFilesystem: true
+            runAsUser: 65533
+            runAsGroup: 65533
+          env:
+            - name: GITSYNC_REPO
+              value: {{ .Values.declarations.gitSync.repo | quote }}
+            - name: GITSYNC_REF
+              value: {{ .Values.declarations.gitSync.ref | quote }}
+            - name: GITSYNC_PERIOD
+              value: "{{ .Values.declarations.gitSync.periodSeconds }}s"
+            - name: GITSYNC_ROOT
+              value: /declarations
+            - name: GITSYNC_LINK
+              value: current
+          {{- if .Values.declarations.gitSync.existingSecret }}
+          envFrom:
+            - secretRef:
+                name: {{ .Values.declarations.gitSync.existingSecret }}
+          {{- end }}
+          volumeMounts:
+            - name: declarations
+              mountPath: /declarations
+            - name: git-sync-tmp
+              mountPath: /tmp
+        {{- end }}
+      {{- if .Values.declarations.gitSync.enabled }}
+      volumes:
+        - name: declarations
+          emptyDir: {}
+        - name: git-sync-tmp
+          emptyDir: {}
+      {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity: {{- toYaml . | nindent 8 }}
+      {{- end }}

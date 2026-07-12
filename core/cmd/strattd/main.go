@@ -132,12 +132,23 @@ func run(ctx context.Context, log *slog.Logger) error {
 	}
 	var oidcResolver *authz.OIDCResolver
 	if issuer := os.Getenv("STRATT_OIDC_ISSUER"); issuer != "" {
+		// Production guard (ADR-0013, slice-5 guardian flag): an issuer
+		// without an audience accepts any token the IdP ever minted for any
+		// client. Skipping the audience check is a loud, explicit dev-only
+		// opt-out — never a default.
+		audience := os.Getenv("STRATT_OIDC_AUDIENCE")
+		if audience == "" {
+			if os.Getenv("STRATT_OIDC_ALLOW_NO_AUDIENCE") != "true" {
+				return fmt.Errorf("STRATT_OIDC_ISSUER is set but STRATT_OIDC_AUDIENCE is empty; set an audience or explicitly set STRATT_OIDC_ALLOW_NO_AUDIENCE=true (dev only)")
+			}
+			log.Warn("OIDC AUDIENCE CHECK DISABLED (STRATT_OIDC_ALLOW_NO_AUDIENCE=true) — dev harness only")
+		}
 		// Fail fast: a misconfigured issuer must not boot an API that 401s
 		// every Bearer holder while looking healthy.
-		if oidcResolver, err = authz.NewOIDCResolver(ctx, issuer, os.Getenv("STRATT_OIDC_AUDIENCE")); err != nil {
+		if oidcResolver, err = authz.NewOIDCResolver(ctx, issuer, audience); err != nil {
 			return err
 		}
-		log.Info("identity backend: oidc", "issuer", issuer, "audienceCheck", os.Getenv("STRATT_OIDC_AUDIENCE") != "")
+		log.Info("identity backend: oidc", "issuer", issuer, "audienceCheck", audience != "")
 	} else {
 		log.Info("identity backend: none (STRATT_OIDC_ISSUER empty); Bearer tokens are not accepted")
 	}

@@ -1,0 +1,47 @@
+# Dev/e2e values: install into the local kind cluster against the compose
+# substrate on the host (reachable from kind nodes via the kind network's
+# host gateway — 192.168.102.1 with deploy/dev/kind.yaml's subnet).
+#
+# EVERYTHING here is dev-shaped on purpose: inline dev DSNs, floating tags,
+# the dev principal header, no OIDC. NOTES.txt will shout accordingly.
+# Never derive production values from this file.
+
+image:
+  repository: stratt/strattd
+  tag: dev
+  pullPolicy: Never # kind-loaded image (task image:kind-load)
+
+database:
+  url: "postgres://stratt:stratt-dev@192.168.102.1:5432/stratt"
+nats:
+  url: "nats://192.168.102.1:4222"
+temporal:
+  address: "192.168.102.1:7233"
+
+devPrincipalHeader: true
+
+ee:
+  image:
+    repository: stratt-ee
+    tag: dev
+
+# Exercise the postgres-engine + migrate path (ADR-0009 runbook): the
+# `openfga` database and the DSN secret are provisioned by the e2e steps.
+openfga:
+  enabled: true
+  datastore:
+    engine: postgres
+    existingSecret: stratt-dev-openfga-dsn
+    secretKeys:
+      uriKey: uri
+
+declarations:
+  gitSync:
+    enabled: false # the dev declarations repo lives on the host; e2e uses api
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    memory: 256Mi

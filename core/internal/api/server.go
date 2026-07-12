@@ -49,6 +49,12 @@ type Server struct {
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.Handle("/api/v1/", http.StripPrefix("/api/v1", s.principalMiddleware(Handler(s))))
+	// Probe endpoint (ADR-0013): process-liveness only — no store, no authz,
+	// so probes never flap on substrate warm-up or grant state.
+	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("ok"))
+	})
 	if s.UIDir != "" {
 		mux.Handle("/", spaHandler(s.UIDir))
 	}

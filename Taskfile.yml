@@ -184,6 +184,24 @@ tasks:
     cmds:
       - go run sigs.k8s.io/kind@v0.32.0 delete cluster --name stratt-dev
 
+  image:build:
+    desc: Build the strattd control-plane image (ADR-0013)
+    cmds:
+      - docker build -f deploy/docker/strattd.Dockerfile -t stratt/strattd:dev .
+
+  image:kind-load:
+    desc: Build the strattd image and load it into the dev kind cluster
+    cmds:
+      - task: image:build
+      - go run sigs.k8s.io/kind@v0.32.0 load docker-image stratt/strattd:dev --name stratt-dev
+
+  chart:lint:
+    desc: Lint + render the Helm chart (ADR-0013)
+    cmds:
+      - helm lint deploy/charts/stratt
+      - helm template stratt deploy/charts/stratt > /dev/null
+      - helm template stratt deploy/charts/stratt -f deploy/charts/stratt/values-dev-kind.yaml > /dev/null
+
   dev:ee:build:
     desc: Build the dev EE image and load it into the kind cluster
     cmds:
