@@ -16,6 +16,7 @@ require (
 	go.temporal.io/api v1.63.0
 	go.temporal.io/sdk v1.46.0
 	go.yaml.in/yaml/v3 v3.0.4
+	golang.org/x/oauth2 v0.36.0
 	k8s.io/api v0.36.2
 	k8s.io/apimachinery v0.36.2
 	k8s.io/client-go v0.36.2
@@ -73,7 +74,6 @@ require (
 	go.yaml.in/yaml/v2 v2.4.3 // indirect
 	golang.org/x/crypto v0.52.0 // indirect
 	golang.org/x/net v0.55.0 // indirect
-	golang.org/x/oauth2 v0.36.0 // indirect
 	golang.org/x/sync v0.21.0 // indirect
 	golang.org/x/sys v0.45.0 // indirect
 	golang.org/x/term v0.43.0 // indirect

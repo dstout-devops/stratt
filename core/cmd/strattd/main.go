@@ -27,6 +27,7 @@ import (
 	"github.com/dstout-devops/stratt/core/internal/actuators/script"
 	"github.com/dstout-devops/stratt/core/internal/api"
 	"github.com/dstout-devops/stratt/core/internal/authz"
+	"github.com/dstout-devops/stratt/core/internal/connectors/msgraph"
 	"github.com/dstout-devops/stratt/core/internal/connectors/vcenter"
 	"github.com/dstout-devops/stratt/core/internal/desiredstate"
 	"github.com/dstout-devops/stratt/core/internal/dispatch"
@@ -191,6 +192,35 @@ func run(ctx context.Context, log *slog.Logger) error {
 		}()
 	} else {
 		log.Info("no vCenter Source configured (STRATT_VCENTER_URL empty); syncer idle")
+	}
+
+	// ── MS Graph Syncer (ADR-0014; started when a Source is configured) ──
+	if tenant := os.Getenv("STRATT_MSGRAPH_TENANT_ID"); tenant != "" {
+		interval, err := time.ParseDuration(env("STRATT_MSGRAPH_INTERVAL", "30s"))
+		if err != nil {
+			return fmt.Errorf("msgraph interval: %w", err)
+		}
+		syncer := msgraph.NewSyncer(msgraph.Config{
+			Endpoint: env("STRATT_MSGRAPH_ENDPOINT", "https://graph.microsoft.com/v1.0"),
+			TenantID: tenant,
+			ClientID: os.Getenv("STRATT_MSGRAPH_CLIENT_ID"),
+			// Env credential stub, same posture as vCenter (§2.5: material
+			// never persists; CredentialRef brokering for Syncers is the
+			// recorded follow-up).
+			ClientSecret: os.Getenv("STRATT_MSGRAPH_CLIENT_SECRET"),
+			TokenURL:     os.Getenv("STRATT_MSGRAPH_TOKEN_URL"),
+			SourceName:   env("STRATT_MSGRAPH_SOURCE_NAME", "msgraph"),
+		}, interval, store, log)
+		if err := syncer.Register(ctx); err != nil {
+			return err
+		}
+		go func() {
+			if err := syncer.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
+				log.Error("msgraph syncer stopped", "error", err)
+			}
+		}()
+	} else {
+		log.Info("no MS Graph Source configured (STRATT_MSGRAPH_TENANT_ID empty); syncer idle")
 	}
 
 	// ── desired-state reconciliation (§1.2: Git is the declarer) ────────
