@@ -81,7 +81,11 @@ func (r *Reconciler) Reconcile(ctx context.Context) error {
 	}
 	want := map[string]types.Trigger{}
 	for _, t := range desired {
-		want[t.Name] = t
+		// Only schedule-kind Triggers project onto Temporal Schedules;
+		// event-kind Triggers belong to the trigger engine (ADR-0018).
+		if t.Kind == types.TriggerSchedule {
+			want[t.Name] = t
+		}
 	}
 
 	sc := r.Temporal.ScheduleClient()
@@ -141,17 +145,6 @@ func compile(t types.Trigger) (client.ScheduleSpec, *client.ScheduleWorkflowActi
 		}
 		params = raw
 	}
-	in := orchestrate.RunInput{
-		// RunID stays empty: the Workflow's EnsureRun activity creates the
-		// Run summary for schedule-fired executions (ADR-0010).
-		Trigger:        t.Name,
-		ViewName:       t.ViewName,
-		Actuator:       t.Actuator,
-		Params:         params,
-		Slices:         t.Slices,
-		Principal:      t.Principal,
-		CredentialRefs: t.CredentialRefs,
-	}
 	hash, err := declarationHash(t)
 	if err != nil {
 		return client.ScheduleSpec{}, nil, "", err
@@ -159,10 +152,31 @@ func compile(t types.Trigger) (client.ScheduleSpec, *client.ScheduleWorkflowActi
 	spec := client.ScheduleSpec{CronExpressions: []string{t.Cron}}
 	action := &client.ScheduleWorkflowAction{
 		ID:        "trigger-" + t.Name,
-		Workflow:  orchestrate.RunAgainstView,
-		Args:      []any{in},
 		TaskQueue: orchestrate.TaskQueue,
 		Memo:      map[string]any{hashMemoKey: hash},
+	}
+	if t.WorkflowName != "" {
+		// Workflow-launching schedule (the ADR-0010 rider): RunDAG creates
+		// its own execution row via EnsureWorkflowRun.
+		action.Workflow = orchestrate.RunDAG
+		action.Args = []any{orchestrate.DAGInput{
+			WorkflowName: t.WorkflowName,
+			Principal:    t.Principal,
+			Trigger:      t.Name,
+		}}
+	} else {
+		action.Workflow = orchestrate.RunAgainstView
+		action.Args = []any{orchestrate.RunInput{
+			// RunID stays empty: EnsureRun creates the Run summary for
+			// schedule-fired executions (ADR-0010).
+			Trigger:        t.Name,
+			ViewName:       t.ViewName,
+			Actuator:       t.Actuator,
+			Params:         params,
+			Slices:         t.Slices,
+			Principal:      t.Principal,
+			CredentialRefs: t.CredentialRefs,
+		}}
 	}
 	return spec, action, hash, nil
 }

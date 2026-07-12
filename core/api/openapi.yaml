@@ -270,6 +270,21 @@ paths:
               schema:
                 type: array
                 items: { $ref: "#/components/schemas/Contract" }
+  /emitters:
+    get:
+      operationId: listEmitters
+      summary: List declared Emitters
+      description: >
+        Emitters are CaC-only event ingest points (ADR-0018). Declarations
+        hold only token hashes — there is no secret to read here (§2.5).
+      responses:
+        "200":
+          description: Every declared Emitter.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Emitter" }
   /triggers:
     get:
       operationId: listTriggers
@@ -709,6 +724,17 @@ components:
           description: The Step within that Workflow.
         startedAt: { type: string, format: date-time }
         finishedAt: { type: string, format: date-time }
+    Emitter:
+      type: object
+      required: [name, kind, tokenHash]
+      properties:
+        name: { type: string }
+        kind:
+          type: string
+          enum: [webhook, alertmanager]
+        tokenHash:
+          type: string
+          description: hex(sha256(token)) — never the token itself (§2.5).
     Contract:
       type: object
       description: >
@@ -733,17 +759,27 @@ components:
     Trigger:
       type: object
       description: >
-        Anything that starts a Run (charter §2). v1 kind is `schedule` — a
-        Temporal Schedule fires Runs with these launch parameters, executing
-        as the declared service Principal (ADR-0010).
-      required: [name, kind, cron, viewName]
+        Anything that starts a Run or Workflow (charter §2): kind schedule
+        (Temporal Schedule, ADR-0010) or kind event (Emitter event × CEL
+        rule, ADR-0018), executing as the declared service Principal.
+      required: [name, kind]
       properties:
         name: { type: string }
         kind:
           type: string
-          enum: [schedule]
+          enum: [schedule, event]
         cron: { type: string }
         paused: { type: boolean }
+        emitter:
+          type: string
+          description: Event source (kind event).
+        when:
+          type: string
+          description: CEL rule over the event payload (kind event).
+        cooldownSeconds: { type: integer, format: int64 }
+        workflowName:
+          type: string
+          description: Launch a declared Workflow instead of a single Run.
         viewName: { type: string }
         actuator: { type: string }
         params: { type: object }
@@ -850,6 +886,9 @@ components:
         id: { type: string }
         workflowName: { type: string }
         temporalId: { type: string }
+        triggeredBy:
+          type: string
+          description: Trigger that fired this execution (§1.8 descent).
         status:
           type: string
           enum: [pending, running, succeeded, failed, canceled]

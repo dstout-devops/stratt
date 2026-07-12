@@ -14,6 +14,7 @@ package desiredstate
 
 import (
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -26,6 +27,7 @@ import (
 
 	"github.com/dstout-devops/stratt/core/internal/contract"
 	"github.com/dstout-devops/stratt/core/internal/graph"
+	"github.com/dstout-devops/stratt/core/internal/rules"
 	"github.com/dstout-devops/stratt/types"
 )
 
@@ -44,6 +46,7 @@ type Declarations struct {
 	CredentialRefs []types.CredentialRef `json:"credentialRefs"`
 	Triggers       []types.Trigger       `json:"triggers"`
 	Workflows      []types.Workflow      `json:"workflows"`
+	Emitters       []types.Emitter       `json:"emitters"`
 }
 
 // Declared kinds appearing in plans.
@@ -52,6 +55,7 @@ const (
 	KindCredentialRef = "credential-ref"
 	KindTrigger       = "trigger"
 	KindWorkflow      = "workflow"
+	KindEmitter       = "emitter"
 )
 
 // Action is what reconciliation will do (or did) to one declared object.
@@ -181,6 +185,13 @@ func ParseDir(root string) (Declarations, error) {
 	}
 	out.Workflows = workflows
 	sort.Slice(out.Workflows, func(i, j int) bool { return out.Workflows[i].Name < out.Workflows[j].Name })
+
+	emitters, err := parseKind(filepath.Join(root, "emitters"), true, parseEmitterFile)
+	if err != nil {
+		return out, err
+	}
+	out.Emitters = emitters
+	sort.Slice(out.Emitters, func(i, j int) bool { return out.Emitters[i].Name < out.Emitters[j].Name })
 	return out, nil
 }
 
@@ -308,16 +319,20 @@ func (f credRefFile) toCredentialRef() (types.CredentialRef, error) {
 // fired Runs execute as — which is exactly why Triggers are CaC-only: Git
 // review authorizes the binding.
 type triggerFile struct {
-	Name           string         `yaml:"name"`
-	Kind           string         `yaml:"kind"`
-	Cron           string         `yaml:"cron"`
-	Paused         bool           `yaml:"paused"`
-	ViewName       string         `yaml:"viewName"`
-	Actuator       string         `yaml:"actuator"`
-	Params         map[string]any `yaml:"params"`
-	Slices         int            `yaml:"slices"`
-	CredentialRefs []string       `yaml:"credentialRefs"`
-	Principal      string         `yaml:"principal"`
+	Name            string         `yaml:"name"`
+	Kind            string         `yaml:"kind"`
+	Cron            string         `yaml:"cron"`
+	Paused          bool           `yaml:"paused"`
+	Emitter         string         `yaml:"emitter"`
+	When            string         `yaml:"when"`
+	CooldownSeconds int            `yaml:"cooldownSeconds"`
+	ViewName        string         `yaml:"viewName"`
+	Actuator        string         `yaml:"actuator"`
+	Params          map[string]any `yaml:"params"`
+	Slices          int            `yaml:"slices"`
+	CredentialRefs  []string       `yaml:"credentialRefs"`
+	Principal       string         `yaml:"principal"`
+	WorkflowName    string         `yaml:"workflowName"`
 }
 
 func parseTriggerFile(path string, raw []byte) (string, types.Trigger, error) {
@@ -332,8 +347,10 @@ func parseTriggerFile(path string, raw []byte) (string, types.Trigger, error) {
 	}
 	t := types.Trigger{
 		Name: f.Name, Kind: f.Kind, Cron: f.Cron, Paused: f.Paused,
+		Emitter: f.Emitter, When: f.When, CooldownSeconds: f.CooldownSeconds,
 		ViewName: f.ViewName, Actuator: f.Actuator, Params: f.Params,
 		Slices: f.Slices, CredentialRefs: f.CredentialRefs, Principal: f.Principal,
+		WorkflowName: f.WorkflowName,
 	}
 	if err := ValidateTrigger(t); err != nil {
 		return "", types.Trigger{}, fmt.Errorf("desiredstate: %s: %w", path, err)
@@ -345,11 +362,40 @@ func parseTriggerFile(path string, raw []byte) (string, types.Trigger, error) {
 // desired-state plan/apply path (the CLI applying the same Git checkout)
 // validates the identical document shape.
 func ValidateTrigger(t types.Trigger) error {
-	if t.Name == "" || t.ViewName == "" || t.Cron == "" {
-		return fmt.Errorf("trigger requires name, viewName, and cron")
+	if t.Name == "" {
+		return fmt.Errorf("trigger requires a name")
 	}
-	if t.Kind != types.TriggerSchedule {
-		return fmt.Errorf("trigger %s: unknown kind %q (v1 supports schedule)", t.Name, t.Kind)
+	// Launch target: a single Run (viewName) XOR a declared Workflow.
+	runLaunch := t.ViewName != ""
+	workflowLaunch := t.WorkflowName != ""
+	if runLaunch == workflowLaunch {
+		return fmt.Errorf("trigger %s: exactly one launch target — viewName or workflowName", t.Name)
+	}
+	if workflowLaunch && (t.Actuator != "" || t.Params != nil || t.Slices != 0 || len(t.CredentialRefs) > 0) {
+		return fmt.Errorf("trigger %s: workflowName launches carry no Step fields (the Workflow declares its own)", t.Name)
+	}
+	switch t.Kind {
+	case types.TriggerSchedule:
+		if t.Cron == "" {
+			return fmt.Errorf("trigger %s: schedule kind requires cron", t.Name)
+		}
+		if t.Emitter != "" || t.When != "" {
+			return fmt.Errorf("trigger %s: emitter/when belong to kind event", t.Name)
+		}
+	case types.TriggerEvent:
+		if t.Emitter == "" || t.When == "" {
+			return fmt.Errorf("trigger %s: event kind requires emitter and when", t.Name)
+		}
+		if t.Cron != "" || t.Paused {
+			return fmt.Errorf("trigger %s: cron/paused belong to kind schedule", t.Name)
+		}
+		// CEL compiles at declaration parse — a bad rule fails its file,
+		// never silently at event time (§1.8; ADR-0018).
+		if _, err := rules.Compile(t.When); err != nil {
+			return fmt.Errorf("trigger %s: %w", t.Name, err)
+		}
+	default:
+		return fmt.Errorf("trigger %s: unknown kind %q (schedule, event)", t.Name, t.Kind)
 	}
 	if t.Slices < 0 {
 		return fmt.Errorf("trigger %s: slices must be >= 0", t.Name)
@@ -360,8 +406,49 @@ func ValidateTrigger(t types.Trigger) error {
 	if len(t.CredentialRefs) > 0 && t.Principal == "" {
 		return fmt.Errorf("trigger %s: credentialRefs require a principal", t.Name)
 	}
-	if err := validateParamsContract(t.Actuator, t.Params); err != nil {
-		return fmt.Errorf("trigger %s: %w", t.Name, err)
+	if runLaunch {
+		if err := validateParamsContract(t.Actuator, t.Params); err != nil {
+			return fmt.Errorf("trigger %s: %w", t.Name, err)
+		}
+	}
+	return nil
+}
+
+// emitterFile is the emitters/*.yaml shape (ADR-0018). tokenHash is
+// hex(sha256(token)) — the declaration never holds the token itself (§2.5).
+type emitterFile struct {
+	Name      string `yaml:"name"`
+	Kind      string `yaml:"kind"`
+	TokenHash string `yaml:"tokenHash"`
+}
+
+func parseEmitterFile(path string, raw []byte) (string, types.Emitter, error) {
+	var f emitterFile
+	dec := yaml.NewDecoder(strings.NewReader(string(raw)))
+	dec.KnownFields(true)
+	if err := dec.Decode(&f); err != nil {
+		return "", types.Emitter{}, fmt.Errorf("desiredstate: %s: %w", path, err)
+	}
+	e := types.Emitter{Name: f.Name, Kind: f.Kind, TokenHash: strings.ToLower(f.TokenHash)}
+	if err := ValidateEmitter(e); err != nil {
+		return "", types.Emitter{}, fmt.Errorf("desiredstate: %s: %w", path, err)
+	}
+	return e.Name, e, nil
+}
+
+// ValidateEmitter checks one Emitter declaration.
+func ValidateEmitter(e types.Emitter) error {
+	if e.Name == "" {
+		return fmt.Errorf("emitter requires a name")
+	}
+	if e.Kind != types.EmitterWebhook && e.Kind != types.EmitterAlertmanager {
+		return fmt.Errorf("emitter %s: unknown kind %q (webhook, alertmanager)", e.Name, e.Kind)
+	}
+	if len(e.TokenHash) != 64 {
+		return fmt.Errorf("emitter %s: tokenHash must be hex(sha256(token)) — 64 hex chars", e.Name)
+	}
+	if _, err := hex.DecodeString(e.TokenHash); err != nil {
+		return fmt.Errorf("emitter %s: tokenHash is not hex", e.Name)
 	}
 	return nil
 }
@@ -568,6 +655,11 @@ func ComputePlan(ctx context.Context, store *graph.Store, decls Declarations) (P
 		return Plan{}, err
 	}
 	plan.Entries = append(plan.Entries, wfPlan.Entries...)
+	emPlan, err := computeEmitterPlan(ctx, store, decls.Emitters)
+	if err != nil {
+		return Plan{}, err
+	}
+	plan.Entries = append(plan.Entries, emPlan.Entries...)
 	sort.Slice(plan.Entries, func(i, j int) bool {
 		if plan.Entries[i].Kind != plan.Entries[j].Kind {
 			return plan.Entries[i].Kind < plan.Entries[j].Kind
@@ -770,6 +862,40 @@ func computeWorkflowPlan(ctx context.Context, store *graph.Store, decls []types.
 	return plan, nil
 }
 
+// computeEmitterPlan diffs declared Emitters (CaC-only, ADR-0018).
+func computeEmitterPlan(ctx context.Context, store *graph.Store, decls []types.Emitter) (Plan, error) {
+	current, err := store.ListEmitters(ctx)
+	if err != nil {
+		return Plan{}, err
+	}
+	byName := map[string]types.Emitter{}
+	for _, e := range current {
+		byName[e.Name] = e
+	}
+	var plan Plan
+	declared := map[string]bool{}
+	for _, d := range decls {
+		declared[d.Name] = true
+		entry := PlanEntry{Kind: KindEmitter, Name: d.Name}
+		cur, exists := byName[d.Name]
+		switch {
+		case !exists:
+			entry.Action = ActionCreate
+		case declDocsEqual(cur, d):
+			entry.Action = ActionNoop
+		default:
+			entry.Action = ActionUpdate
+		}
+		plan.Entries = append(plan.Entries, entry)
+	}
+	for _, e := range current {
+		if !declared[e.Name] {
+			plan.Entries = append(plan.Entries, PlanEntry{Kind: KindEmitter, Name: e.Name, Action: ActionDelete})
+		}
+	}
+	return plan, nil
+}
+
 // Apply executes the plan for the declarations and returns the realized plan.
 // Per-object failures are recorded on their entries; the rest still applies.
 func Apply(ctx context.Context, store *graph.Store, decls Declarations) (Plan, error) {
@@ -792,6 +918,10 @@ func Apply(ctx context.Context, store *graph.Store, decls Declarations) (Plan, e
 	wfByName := map[string]types.Workflow{}
 	for _, d := range decls.Workflows {
 		wfByName[d.Name] = d
+	}
+	emByName := map[string]types.Emitter{}
+	for _, d := range decls.Emitters {
+		emByName[d.Name] = d
 	}
 	for i := range plan.Entries {
 		e := &plan.Entries[i]
@@ -816,6 +946,10 @@ func Apply(ctx context.Context, store *graph.Store, decls Declarations) (Plan, e
 			err = store.DeleteWorkflow(ctx, e.Name)
 		case e.Kind == KindWorkflow:
 			err = store.UpsertWorkflow(ctx, wfByName[e.Name])
+		case e.Kind == KindEmitter && e.Action == ActionDelete:
+			err = store.DeleteEmitter(ctx, e.Name)
+		case e.Kind == KindEmitter:
+			err = store.UpsertEmitter(ctx, emByName[e.Name])
 		}
 		if err != nil {
 			e.Error = err.Error()

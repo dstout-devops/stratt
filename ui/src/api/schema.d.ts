@@ -243,6 +243,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/emitters": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List declared Emitters
+         * @description Emitters are CaC-only event ingest points (ADR-0018). Declarations hold only token hashes — there is no secret to read here (§2.5).
+         */
+        get: operations["listEmitters"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/triggers": {
         parameters: {
             query?: never;
@@ -576,6 +596,13 @@ export interface components {
             /** Format: date-time */
             finishedAt?: string;
         };
+        Emitter: {
+            name: string;
+            /** @enum {string} */
+            kind: "webhook" | "alertmanager";
+            /** @description hex(sha256(token)) — never the token itself (§2.5). */
+            tokenHash: string;
+        };
         /** @description A pinned JSON Schema document on a Step's inputs/outputs or a Facet namespace (charter §1.5, §2.2) — data, never a language class. */
         Contract: {
             /** @description e.g. actuators/script.input or facets/os.kernel */
@@ -592,14 +619,22 @@ export interface components {
             /** @description The JSON Schema document. */
             schema: Record<string, never>;
         };
-        /** @description Anything that starts a Run (charter §2). v1 kind is `schedule` — a Temporal Schedule fires Runs with these launch parameters, executing as the declared service Principal (ADR-0010). */
+        /** @description Anything that starts a Run or Workflow (charter §2): kind schedule (Temporal Schedule, ADR-0010) or kind event (Emitter event × CEL rule, ADR-0018), executing as the declared service Principal. */
         Trigger: {
             name: string;
             /** @enum {string} */
-            kind: "schedule";
-            cron: string;
+            kind: "schedule" | "event";
+            cron?: string;
             paused?: boolean;
-            viewName: string;
+            /** @description Event source (kind event). */
+            emitter?: string;
+            /** @description CEL rule over the event payload (kind event). */
+            when?: string;
+            /** Format: int64 */
+            cooldownSeconds?: number;
+            /** @description Launch a declared Workflow instead of a single Run. */
+            workflowName?: string;
+            viewName?: string;
             actuator?: string;
             params?: Record<string, never>;
             /** Format: int64 */
@@ -670,6 +705,8 @@ export interface components {
             id: string;
             workflowName: string;
             temporalId?: string;
+            /** @description Trigger that fired this execution (§1.8 descent). */
+            triggeredBy?: string;
             /** @enum {string} */
             status: "pending" | "running" | "succeeded" | "failed" | "canceled";
             principal?: string;
@@ -1119,6 +1156,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Contract"][];
+                };
+            };
+        };
+    };
+    listEmitters: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Every declared Emitter. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Emitter"][];
                 };
             };
         };

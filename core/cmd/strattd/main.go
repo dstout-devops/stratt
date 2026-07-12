@@ -34,10 +34,12 @@ import (
 	"github.com/dstout-devops/stratt/core/internal/contract"
 	"github.com/dstout-devops/stratt/core/internal/desiredstate"
 	"github.com/dstout-devops/stratt/core/internal/dispatch"
+	"github.com/dstout-devops/stratt/core/internal/emitters"
 	"github.com/dstout-devops/stratt/core/internal/events"
 	"github.com/dstout-devops/stratt/core/internal/graph"
 	"github.com/dstout-devops/stratt/core/internal/orchestrate"
 	"github.com/dstout-devops/stratt/core/internal/statebackend"
+	"github.com/dstout-devops/stratt/core/internal/triggerengine"
 	"github.com/dstout-devops/stratt/core/internal/triggers"
 	"github.com/dstout-devops/stratt/types"
 )
@@ -98,6 +100,9 @@ func run(ctx context.Context, log *slog.Logger) error {
 		return err
 	}
 	defer bus.Close()
+	if err := bus.EnsureEmitterStream(ctx); err != nil {
+		return err
+	}
 	log.Info("event bus ready", "stream", events.StreamName)
 
 	// ── orchestration plane ──────────────────────────────────────────────
@@ -355,12 +360,20 @@ func run(ctx context.Context, log *slog.Logger) error {
 		log.Info("no desired-state checkout configured (STRATT_DESIRED_STATE_PATH empty); reconciliation off — authz has no tuples (deny-all), triggers idle")
 	}
 
+	// ── trigger engine (ADR-0018: Emitter events × CEL → launches) ───────
+	engine := &triggerengine.Engine{Store: store, Bus: bus, Temporal: temporalClient, Log: log}
+	go func() {
+		if err := engine.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
+			log.Error("trigger engine stopped", "error", err)
+		}
+	}()
+
 	// ── interface plane ──────────────────────────────────────────────────
 	uiDir := os.Getenv("STRATT_UI_DIR")
 	if uiDir != "" {
 		log.Info("serving ui", "dir", uiDir)
 	}
-	server := &api.Server{Store: store, Bus: bus, Temporal: temporalClient, Authz: authorizer, Log: log, DevPrincipalHeader: devPrincipal, OIDC: oidcResolver, UIDir: uiDir, StateBackend: stateHandler}
+	server := &api.Server{Store: store, Bus: bus, Temporal: temporalClient, Authz: authorizer, Log: log, DevPrincipalHeader: devPrincipal, OIDC: oidcResolver, UIDir: uiDir, StateBackend: stateHandler, EmitterIngest: emitters.New(store, bus, log).Handler()}
 	httpSrv := &http.Server{
 		Addr:              env("STRATT_LISTEN_ADDR", ":8080"),
 		Handler:           server.Handler(),

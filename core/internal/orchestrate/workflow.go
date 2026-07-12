@@ -14,12 +14,18 @@ import (
 // DAGInput starts one WorkflowRun: the execution of a declared Workflow
 // (charter §2: Temporal-backed DAG of Steps with Gates; ADR-0011).
 type DAGInput struct {
+	// WorkflowRunID is the pre-created execution row for API launches.
+	// Empty for Trigger-started executions: EnsureWorkflowRun creates the
+	// row (the ADR-0010 pattern, ported for ADR-0018).
 	WorkflowRunID string
 	WorkflowName  string
 	// Principal is the launching identity; every actuation Step's
 	// credential `use` check runs against it (§2.5), exactly as if the
 	// Principal had started each Run directly.
 	Principal string
+	// Trigger names the Trigger that fired this execution; empty for
+	// API launches (§1.8 descent: Trigger → WorkflowRun).
+	Trigger string
 }
 
 // GateDecision is the signal payload an authorized Principal sends to a
@@ -65,6 +71,15 @@ func RunDAG(ctx workflow.Context, in DAGInput) error {
 	}
 	ctx = workflow.WithActivityOptions(ctx, opts)
 	var a *Activities
+
+	// Trigger-started executions have no API handler to pre-create the
+	// execution row — the Workflow owns it (ADR-0018, the ADR-0010 pattern).
+	if in.WorkflowRunID == "" {
+		wfID := workflow.GetInfo(ctx).WorkflowExecution.ID
+		if err := workflow.ExecuteActivity(ctx, a.EnsureWorkflowRun, in, wfID).Get(ctx, &in.WorkflowRunID); err != nil {
+			return err
+		}
+	}
 
 	// The spec is pinned into workflow state here: a Git update mid-flight
 	// changes future WorkflowRuns, never this one.
@@ -240,6 +255,19 @@ func finishWorkflowRun(ctx workflow.Context, a *Activities, in DAGInput, status 
 }
 
 // ── activities ───────────────────────────────────────────────────────────────
+
+// EnsureWorkflowRun creates the execution row for a Trigger-started RunDAG
+// (ADR-0018): API launches pre-create theirs in the handler. Returns the id.
+func (a *Activities) EnsureWorkflowRun(ctx context.Context, in DAGInput, temporalID string) (string, error) {
+	if _, err := a.Store.GetWorkflow(ctx, in.WorkflowName); err != nil {
+		return "", temporal.NewNonRetryableApplicationError(err.Error(), "WorkflowNotFound", err)
+	}
+	wr, err := a.Store.CreateWorkflowRun(ctx, in.WorkflowName, temporalID, in.Principal, in.Trigger)
+	if err != nil {
+		return "", err
+	}
+	return wr.ID, nil
+}
 
 // LoadWorkflow reads the declared Workflow spec.
 func (a *Activities) LoadWorkflow(ctx context.Context, name string) (types.Workflow, error) {

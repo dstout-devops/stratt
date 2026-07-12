@@ -89,7 +89,10 @@ type WorkflowRun struct {
 	Status     RunStatus `json:"status"`
 	// Principal is the launching identity; every Step's credential use
 	// check runs against it (§2.5).
-	Principal  string     `json:"principal,omitempty"`
-	StartedAt  time.Time  `json:"startedAt"`
-	FinishedAt *time.Time `json:"finishedAt,omitempty"`
+	Principal string `json:"principal,omitempty"`
+	// TriggeredBy names the Trigger that fired this execution; empty for
+	// API launches (§1.8 descent: Trigger → WorkflowRun).
+	TriggeredBy string     `json:"triggeredBy,omitempty"`
+	StartedAt   time.Time  `json:"startedAt"`
+	FinishedAt  *time.Time `json:"finishedAt,omitempty"`
 }

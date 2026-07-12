@@ -1,9 +1,10 @@
 package types
 
-// Trigger kinds. v1 ships schedule only; the Phase-2 Trigger engine adds
-// event-driven kinds (Emitter event × CEL) to this same object.
+// Trigger kinds: schedule (ADR-0010, Temporal Schedules) and event
+// (ADR-0018, Emitter event × CEL rule).
 const (
 	TriggerSchedule = "schedule"
+	TriggerEvent    = "event"
 )
 
 // Trigger is anything that starts a Run (charter §2: Temporal Schedule,
@@ -20,18 +21,29 @@ type Trigger struct {
 	Name string `json:"name"`
 	// Kind is the trigger kind; v1: "schedule".
 	Kind string `json:"kind"`
-	// Cron is the schedule spec (standard cron syntax; Temporal validates).
-	Cron string `json:"cron"`
+	// Cron is the schedule spec (kind schedule; Temporal validates).
+	Cron string `json:"cron,omitempty"`
 	// Paused declares the schedule paused without deleting it (drills,
 	// maintenance windows).
 	Paused bool `json:"paused,omitempty"`
-	// ViewName, Actuator, Params, Slices, CredentialRefs mirror StartRun —
-	// the launch parameters every fired Run starts with.
-	ViewName       string         `json:"viewName"`
+	// Emitter and When belong to kind event (ADR-0018): events from the
+	// named Emitter evaluate against the CEL expression When (compiled at
+	// declaration parse — a bad expression fails its file, never fires).
+	Emitter string `json:"emitter,omitempty"`
+	When    string `json:"when,omitempty"`
+	// CooldownSeconds suppresses further matches for this long after a
+	// launch (storm damping; 0 = none).
+	CooldownSeconds int `json:"cooldownSeconds,omitempty"`
+	// Launch target: a single Run (ViewName + Actuator + Params + …) or a
+	// declared Workflow (WorkflowName) — exactly one.
+	ViewName       string         `json:"viewName,omitempty"`
 	Actuator       string         `json:"actuator,omitempty"`
 	Params         map[string]any `json:"params,omitempty"`
 	Slices         int            `json:"slices,omitempty"`
 	CredentialRefs []string       `json:"credentialRefs,omitempty"`
+	// WorkflowName launches a declared Workflow instead of a single Run
+	// (the ADR-0010 rider, valid for both kinds).
+	WorkflowName string `json:"workflowName,omitempty"`
 	// Principal is the service identity the fired Runs execute as (§2.5);
 	// the dispatch-time `use` check applies to it exactly like an API launch.
 	Principal string `json:"principal,omitempty"`

@@ -312,7 +312,7 @@ func TestWorkflowRunsAndGates(t *testing.T) {
 	s := testStore(t)
 	ctx := context.Background()
 
-	wr, err := s.CreateWorkflowRun(ctx, "patch", "", "alice")
+	wr, err := s.CreateWorkflowRun(ctx, "patch", "", "alice", "probe-trigger")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -369,7 +369,7 @@ func TestWorkflowRunsAndGates(t *testing.T) {
 		t.Fatal(err)
 	}
 	final, summary, err := s.GetWorkflowRun(ctx, wr.ID)
-	if err != nil || final.Status != types.RunSucceeded || final.FinishedAt == nil || final.Principal != "alice" {
+	if err != nil || final.Status != types.RunSucceeded || final.FinishedAt == nil || final.Principal != "alice" || final.TriggeredBy != "probe-trigger" {
 		t.Fatalf("terminal workflow run: %+v %v", final, err)
 	}
 	if _, ok := summary["steps"]; !ok {

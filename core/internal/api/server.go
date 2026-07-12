@@ -47,6 +47,9 @@ type Server struct {
 	// /statebackend/ (ADR-0016) — outside /api/v1: execution pods
 	// authenticate with per-workspace HMAC credentials, not Principals.
 	StateBackend http.Handler
+	// EmitterIngest, when set, mounts POST /emitters/{name} (ADR-0018) —
+	// outside /api/v1: alert sources authenticate by emitter token.
+	EmitterIngest http.Handler
 }
 
 // Handler mounts the generated routes under /api/v1, behind the Principal
@@ -62,6 +65,9 @@ func (s *Server) Handler() http.Handler {
 	})
 	if s.StateBackend != nil {
 		mux.Handle("/statebackend/", s.StateBackend)
+	}
+	if s.EmitterIngest != nil {
+		mux.Handle("/emitters/", s.EmitterIngest)
 	}
 	if s.UIDir != "" {
 		mux.Handle("/", spaHandler(s.UIDir))
@@ -243,9 +249,25 @@ func runToWire(r types.Run) Run {
 }
 
 func triggerToWire(t types.Trigger) Trigger {
-	out := Trigger{
-		Name: t.Name, Kind: TriggerKind(t.Kind), Cron: t.Cron,
-		ViewName: t.ViewName,
+	out := Trigger{Name: t.Name, Kind: TriggerKind(t.Kind)}
+	if t.Cron != "" {
+		out.Cron = &t.Cron
+	}
+	if t.ViewName != "" {
+		out.ViewName = &t.ViewName
+	}
+	if t.Emitter != "" {
+		out.Emitter = &t.Emitter
+	}
+	if t.When != "" {
+		out.When = &t.When
+	}
+	if t.CooldownSeconds != 0 {
+		n := int64(t.CooldownSeconds)
+		out.CooldownSeconds = &n
+	}
+	if t.WorkflowName != "" {
+		out.WorkflowName = &t.WorkflowName
 	}
 	if t.Paused {
 		out.Paused = &t.Paused
@@ -477,8 +499,24 @@ func declarationsFromWire(in DesiredState) (desiredstate.Declarations, error) {
 // apply path sends the checkout verbatim (ADR-0010: Git review stays the
 // authorization; there is no other write surface).
 func triggerFromWire(w Trigger) (types.Trigger, error) {
-	t := types.Trigger{
-		Name: w.Name, Kind: string(w.Kind), Cron: w.Cron, ViewName: w.ViewName,
+	t := types.Trigger{Name: w.Name, Kind: string(w.Kind)}
+	if w.Cron != nil {
+		t.Cron = *w.Cron
+	}
+	if w.ViewName != nil {
+		t.ViewName = *w.ViewName
+	}
+	if w.Emitter != nil {
+		t.Emitter = *w.Emitter
+	}
+	if w.When != nil {
+		t.When = *w.When
+	}
+	if w.CooldownSeconds != nil {
+		t.CooldownSeconds = int(*w.CooldownSeconds)
+	}
+	if w.WorkflowName != nil {
+		t.WorkflowName = *w.WorkflowName
 	}
 	if t.Kind == "" {
 		t.Kind = types.TriggerSchedule
@@ -954,6 +992,9 @@ func workflowRunToWire(wr types.WorkflowRun) WorkflowRun {
 	if wr.TemporalID != "" {
 		out.TemporalId = &wr.TemporalID
 	}
+	if wr.TriggeredBy != "" {
+		out.TriggeredBy = &wr.TriggeredBy
+	}
 	if wr.Principal != "" {
 		out.Principal = &wr.Principal
 	}
@@ -1011,7 +1052,7 @@ func (s *Server) StartWorkflowRun(w http.ResponseWriter, r *http.Request, name s
 	if id, _, ok := authz.PrincipalFrom(r.Context()); ok {
 		principal = id
 	}
-	wr, err := s.Store.CreateWorkflowRun(r.Context(), name, "", principal)
+	wr, err := s.Store.CreateWorkflowRun(r.Context(), name, "", principal, "")
 	if err != nil {
 		s.fail(w, err)
 		return
@@ -1272,6 +1313,21 @@ func (s *Server) ListContracts(w http.ResponseWriter, r *http.Request) {
 			Name: c.Name, Version: int64(c.Version), Rung: ContractRung(c.Rung),
 			Hash: c.Hash, Schema: doc,
 		})
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+// ListEmitters implements (GET /emitters): declarations only — the token
+// hash is the whole secret story (§2.5), so this surface leaks nothing.
+func (s *Server) ListEmitters(w http.ResponseWriter, r *http.Request) {
+	es, err := s.Store.ListEmitters(r.Context())
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	out := make([]Emitter, 0, len(es))
+	for _, e := range es {
+		out = append(out, Emitter{Name: e.Name, Kind: EmitterKind(e.Kind), TokenHash: e.TokenHash})
 	}
 	writeJSON(w, http.StatusOK, out)
 }

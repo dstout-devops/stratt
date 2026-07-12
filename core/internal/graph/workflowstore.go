@@ -92,16 +92,17 @@ func (s *Store) DeleteWorkflow(ctx context.Context, name string) error {
 // ── WorkflowRuns ─────────────────────────────────────────────────────────────
 
 // CreateWorkflowRun records the start of one Workflow execution.
-func (s *Store) CreateWorkflowRun(ctx context.Context, workflowName, temporalID, principal string) (types.WorkflowRun, error) {
+// triggeredBy names the Trigger that fired it ("" = API launch, §1.8).
+func (s *Store) CreateWorkflowRun(ctx context.Context, workflowName, temporalID, principal, triggeredBy string) (types.WorkflowRun, error) {
 	wr := types.WorkflowRun{
 		WorkflowName: workflowName, TemporalID: temporalID,
-		Status: types.RunPending, Principal: principal,
+		Status: types.RunPending, Principal: principal, TriggeredBy: triggeredBy,
 	}
 	err := s.pool.QueryRow(ctx, `
-		INSERT INTO graph.workflow_run (workflow_name, temporal_id, principal)
-		VALUES ($1, $2, $3)
+		INSERT INTO graph.workflow_run (workflow_name, temporal_id, principal, triggered_by)
+		VALUES ($1, $2, $3, nullif($4, ''))
 		RETURNING id, started_at`,
-		workflowName, temporalID, principal,
+		workflowName, temporalID, principal, triggeredBy,
 	).Scan(&wr.ID, &wr.StartedAt)
 	if err != nil {
 		return wr, fmt.Errorf("graph: create workflow run: %w", err)
@@ -154,10 +155,11 @@ func (s *Store) GetWorkflowRun(ctx context.Context, id string) (types.WorkflowRu
 	var wr types.WorkflowRun
 	var status string
 	var summary []byte
+	var triggeredBy *string
 	err := s.pool.QueryRow(ctx, `
-		SELECT id, workflow_name, temporal_id, status, principal, summary, started_at, finished_at
+		SELECT id, workflow_name, temporal_id, status, principal, triggered_by, summary, started_at, finished_at
 		FROM graph.workflow_run WHERE id = $1`, id,
-	).Scan(&wr.ID, &wr.WorkflowName, &wr.TemporalID, &status, &wr.Principal, &summary, &wr.StartedAt, &wr.FinishedAt)
+	).Scan(&wr.ID, &wr.WorkflowName, &wr.TemporalID, &status, &wr.Principal, &triggeredBy, &summary, &wr.StartedAt, &wr.FinishedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return wr, nil, fmt.Errorf("%w: workflow run %s", ErrNotFound, id)
 	}
@@ -165,6 +167,9 @@ func (s *Store) GetWorkflowRun(ctx context.Context, id string) (types.WorkflowRu
 		return wr, nil, fmt.Errorf("graph: get workflow run: %w", err)
 	}
 	wr.Status = types.RunStatus(status)
+	if triggeredBy != nil {
+		wr.TriggeredBy = *triggeredBy
+	}
 	var sum map[string]any
 	if err := json.Unmarshal(summary, &sum); err != nil {
 		return wr, nil, fmt.Errorf("graph: decode workflow run summary: %w", err)
@@ -178,7 +183,7 @@ func (s *Store) ListWorkflowRuns(ctx context.Context, limit int) ([]types.Workfl
 		limit = 100
 	}
 	rows, err := s.pool.Query(ctx, `
-		SELECT id, workflow_name, temporal_id, status, principal, started_at, finished_at
+		SELECT id, workflow_name, temporal_id, status, principal, triggered_by, started_at, finished_at
 		FROM graph.workflow_run ORDER BY started_at DESC LIMIT $1`, limit)
 	if err != nil {
 		return nil, fmt.Errorf("graph: list workflow runs: %w", err)
@@ -188,10 +193,14 @@ func (s *Store) ListWorkflowRuns(ctx context.Context, limit int) ([]types.Workfl
 	for rows.Next() {
 		var wr types.WorkflowRun
 		var status string
-		if err := rows.Scan(&wr.ID, &wr.WorkflowName, &wr.TemporalID, &status, &wr.Principal, &wr.StartedAt, &wr.FinishedAt); err != nil {
+		var triggeredBy *string
+		if err := rows.Scan(&wr.ID, &wr.WorkflowName, &wr.TemporalID, &status, &wr.Principal, &triggeredBy, &wr.StartedAt, &wr.FinishedAt); err != nil {
 			return nil, fmt.Errorf("graph: list workflow runs: %w", err)
 		}
 		wr.Status = types.RunStatus(status)
+		if triggeredBy != nil {
+			wr.TriggeredBy = *triggeredBy
+		}
 		out = append(out, wr)
 	}
 	return out, rows.Err()
