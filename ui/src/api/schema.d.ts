@@ -263,6 +263,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/usage": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Per-Principal MCP usage accounting
+         * @description Aggregated platform-MCP-server tool calls per (Principal, tool) — the charter §1.6 "cost/usage accounting per identity" record (ADR-0021). Phase-4 per-Principal cost analytics builds on it.
+         */
+        get: operations["listUsage"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/baselines": {
         parameters: {
             query?: never;
@@ -684,6 +704,19 @@ export interface components {
             kind: "webhook" | "alertmanager";
             /** @description hex(sha256(token)) — never the token itself (§2.5). */
             tokenHash: string;
+        };
+        /** @description One (Principal, tool) aggregate of platform-MCP-server calls (charter §1.6 accounting per identity, ADR-0021). */
+        UsageEntry: {
+            principal: string;
+            /** @description human | service | agent (§2.5 — informational). */
+            principalKind?: string;
+            tool: string;
+            /** Format: int64 */
+            calls: number;
+            /** Format: int64 */
+            errors: number;
+            /** Format: date-time */
+            lastCall: string;
         };
         /** @description Checkable desired state (charter §2.4, ADR-0019): View selector + check Step + optional remediation Workflow ref + cadence. v1 is the hand-written rung of the §6 ladder; checks are read-only by construction (ansible check mode, opentofu plan). */
         Baseline: {
@@ -1321,6 +1354,28 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Emitter"][];
+                };
+            };
+        };
+    };
+    listUsage: {
+        parameters: {
+            query?: {
+                principal?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Usage aggregates, ordered by principal then tool. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UsageEntry"][];
                 };
             };
         };

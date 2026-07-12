@@ -285,6 +285,27 @@ paths:
               schema:
                 type: array
                 items: { $ref: "#/components/schemas/Emitter" }
+  /usage:
+    get:
+      operationId: listUsage
+      summary: Per-Principal MCP usage accounting
+      description: >
+        Aggregated platform-MCP-server tool calls per (Principal, tool) —
+        the charter §1.6 "cost/usage accounting per identity" record
+        (ADR-0021). Phase-4 per-Principal cost analytics builds on it.
+      parameters:
+        - name: principal
+          in: query
+          required: false
+          schema: { type: string }
+      responses:
+        "200":
+          description: Usage aggregates, ordered by principal then tool.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/UsageEntry" }
   /baselines:
     get:
       operationId: listBaselines
@@ -825,6 +846,21 @@ components:
         tokenHash:
           type: string
           description: hex(sha256(token)) — never the token itself (§2.5).
+    UsageEntry:
+      type: object
+      description: >
+        One (Principal, tool) aggregate of platform-MCP-server calls
+        (charter §1.6 accounting per identity, ADR-0021).
+      required: [principal, tool, calls, errors, lastCall]
+      properties:
+        principal: { type: string }
+        principalKind:
+          type: string
+          description: human | service | agent (§2.5 — informational).
+        tool: { type: string }
+        calls: { type: integer, format: int64 }
+        errors: { type: integer, format: int64 }
+        lastCall: { type: string, format: date-time }
     Baseline:
       type: object
       description: >

@@ -19,6 +19,7 @@ import (
 	"github.com/dstout-devops/stratt/core/internal/desiredstate"
 	"github.com/dstout-devops/stratt/core/internal/events"
 	"github.com/dstout-devops/stratt/core/internal/graph"
+	"github.com/dstout-devops/stratt/core/internal/mcpserver"
 	"github.com/dstout-devops/stratt/core/internal/orchestrate"
 	"github.com/dstout-devops/stratt/core/internal/triggers"
 	"github.com/dstout-devops/stratt/types"
@@ -57,6 +58,15 @@ type Server struct {
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.Handle("/api/v1/", http.StripPrefix("/api/v1", s.principalMiddleware(Handler(s))))
+	// Platform MCP server (§1.6, ADR-0021): the agent surface, same identity
+	// seam (ResolvePrincipal), same capabilities (tools invoke the generated
+	// router in-process). Never anonymous — 401 without a Principal.
+	mux.Handle("/mcp", mcpserver.New(mcpserver.Config{
+		Resolve:     s.ResolvePrincipal,
+		API:         Handler(s),
+		RecordUsage: s.Store.RecordMCPCall,
+		Log:         s.Log,
+	}))
 	// Probe endpoint (ADR-0013): process-liveness only — no store, no authz,
 	// so probes never flap on substrate warm-up or grant state.
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
@@ -96,26 +106,39 @@ func spaHandler(dir string) http.Handler {
 // grant deny them (default deny lives at the check, not here).
 func (s *Server) principalMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if auth := r.Header.Get("Authorization"); s.OIDC != nil && strings.HasPrefix(auth, "Bearer ") {
-			id, kind, err := s.OIDC.Resolve(r.Context(), strings.TrimPrefix(auth, "Bearer "))
-			if err != nil {
-				writeErr(w, http.StatusUnauthorized, "invalid bearer token")
-				return
-			}
-			next.ServeHTTP(w, r.WithContext(authz.WithPrincipal(r.Context(), id, kind)))
+		id, kind, err := s.ResolvePrincipal(r.Context(), r.Header)
+		if err != nil {
+			writeErr(w, http.StatusUnauthorized, "invalid bearer token")
 			return
 		}
-		if s.DevPrincipalHeader {
-			if id := r.Header.Get("X-Stratt-Principal"); id != "" {
-				kind := r.Header.Get("X-Stratt-Principal-Kind")
-				if kind == "" {
-					kind = authz.KindHuman
-				}
-				r = r.WithContext(authz.WithPrincipal(r.Context(), id, kind))
-			}
+		if id != "" {
+			r = r.WithContext(authz.WithPrincipal(r.Context(), id, kind))
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// ResolvePrincipal maps request headers to a Principal — the ONE identity
+// seam every surface shares (§1.6, ADR-0009): REST middleware and the MCP
+// tool layer both call it. ("", "", nil) means anonymous — default deny
+// lives at the checks; an invalid Bearer token errors, never downgrades.
+func (s *Server) ResolvePrincipal(ctx context.Context, h http.Header) (id, kind string, err error) {
+	if h == nil {
+		return "", "", nil
+	}
+	if auth := h.Get("Authorization"); s.OIDC != nil && strings.HasPrefix(auth, "Bearer ") {
+		return s.OIDC.Resolve(ctx, strings.TrimPrefix(auth, "Bearer "))
+	}
+	if s.DevPrincipalHeader {
+		if id := h.Get("X-Stratt-Principal"); id != "" {
+			kind := h.Get("X-Stratt-Principal-Kind")
+			if kind == "" {
+				kind = authz.KindHuman
+			}
+			return id, kind, nil
+		}
+	}
+	return "", "", nil
 }
 
 // requireGrant checks the request Principal for a relation on an object,
@@ -1445,6 +1468,29 @@ func (s *Server) ListEmitters(w http.ResponseWriter, r *http.Request) {
 	out := make([]Emitter, 0, len(es))
 	for _, e := range es {
 		out = append(out, Emitter{Name: e.Name, Kind: EmitterKind(e.Kind), TokenHash: e.TokenHash})
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+// ListUsage implements (GET /usage): the §1.6 per-identity MCP accounting
+// aggregate (ADR-0021).
+func (s *Server) ListUsage(w http.ResponseWriter, r *http.Request, params ListUsageParams) {
+	principal := ""
+	if params.Principal != nil {
+		principal = *params.Principal
+	}
+	us, err := s.Store.ListUsage(r.Context(), principal)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	out := make([]UsageEntry, 0, len(us))
+	for _, u := range us {
+		e := UsageEntry{Principal: u.Principal, Tool: u.Tool, Calls: u.Calls, Errors: u.Errors, LastCall: u.LastCall}
+		if u.PrincipalKind != "" {
+			e.PrincipalKind = &u.PrincipalKind
+		}
+		out = append(out, e)
 	}
 	writeJSON(w, http.StatusOK, out)
 }
