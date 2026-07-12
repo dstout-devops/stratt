@@ -15,6 +15,8 @@ export type Gate = components["schemas"]["Gate"];
 export type EntityDocument = components["schemas"]["EntityDocument"];
 export type Trigger = components["schemas"]["Trigger"];
 export type TriggerDetail = components["schemas"]["TriggerDetail"];
+export type Baseline = components["schemas"]["Baseline"];
+export type Finding = components["schemas"]["Finding"];
 
 export class ApiError extends Error {
   status: number;
@@ -78,4 +80,14 @@ export const api = {
     call<void>("POST", `/gates/${encodeURIComponent(id)}/decision`, { approve, note }),
   listTriggers: () => call<Trigger[]>("GET", "/triggers"),
   getTrigger: (name: string) => call<TriggerDetail>("GET", `/triggers/${encodeURIComponent(name)}`),
+  listBaselines: () => call<Baseline[]>("GET", "/baselines"),
+  getBaseline: (name: string) => call<Baseline>("GET", `/baselines/${encodeURIComponent(name)}`),
+  listFindings: (opts: { baseline?: string; status?: string; limit?: number } = {}) => {
+    const p = new URLSearchParams();
+    if (opts.baseline) p.set("baseline", opts.baseline);
+    if (opts.status) p.set("status", opts.status);
+    p.set("limit", String(opts.limit ?? 500));
+    return call<Finding[]>("GET", `/findings?${p}`);
+  },
+  getFinding: (id: string) => call<Finding>("GET", `/findings/${encodeURIComponent(id)}`),
 };

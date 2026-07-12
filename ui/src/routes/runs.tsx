@@ -20,6 +20,12 @@ function origin(r: Run) {
         trigger {r.triggeredBy}
       </Link>
     );
+  if (r.baseline)
+    return (
+      <Link to="/baselines/$name" params={{ name: r.baseline }}>
+        baseline {r.baseline}
+      </Link>
+    );
   return <span style={{ color: "var(--text-muted)" }}>api</span>;
 }
 
@@ -62,7 +68,9 @@ export function RunDetail({ id }: { id: string }) {
               ]
             : r?.triggeredBy
               ? [{ label: `trigger ${r.triggeredBy}`, to: `/triggers/${r.triggeredBy}` }]
-              : []),
+              : r?.baseline
+                ? [{ label: `baseline ${r.baseline}`, to: `/baselines/${r.baseline}` }]
+                : []),
           { label: `run ${id.slice(0, 8)}…` },
           { label: "task events" },
         ]}

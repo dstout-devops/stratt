@@ -49,3 +49,4 @@ coverage/
 
 # --- Helm ---
 deploy/charts/*/charts/*.tgz
+.playwright-mcp/

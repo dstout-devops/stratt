@@ -18,6 +18,8 @@ import { ViewsList, ViewDetail, EntityDetail, ErrorLine } from "./routes/graph";
 import { RunsList, RunDetail } from "./routes/runs";
 import { WorkflowsList, WorkflowDetail, WorkflowRunDetail, GatesInbox } from "./routes/workflows";
 import { TriggersList, TriggerDetail } from "./routes/triggers";
+import { FindingsList, FindingDetail } from "./routes/findings";
+import { BaselinesList, BaselineDetail } from "./routes/baselines";
 
 const rootRoute = createRootRoute({
   component: () => (
@@ -90,6 +92,25 @@ const triggerRoute = createRoute({
   },
 });
 
+const findingsRoute = createRoute({ getParentRoute: () => rootRoute, path: "/findings", component: FindingsList });
+const findingRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/findings/$id",
+  component: function FindingR() {
+    const { id } = findingRoute.useParams();
+    return <FindingDetail id={id} />;
+  },
+});
+const baselinesRoute = createRoute({ getParentRoute: () => rootRoute, path: "/baselines", component: BaselinesList });
+const baselineRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/baselines/$name",
+  component: function BaselineR() {
+    const { name } = baselineRoute.useParams();
+    return <BaselineDetail name={name} />;
+  },
+});
+
 // OIDC callback: exchange the code, restore the pre-login location.
 const callbackRoute = createRoute({
   getParentRoute: () => rootRoute,
@@ -125,6 +146,10 @@ const router = createRouter({
     gatesRoute,
     triggersRoute,
     triggerRoute,
+    findingsRoute,
+    findingRoute,
+    baselinesRoute,
+    baselineRoute,
     callbackRoute,
   ]),
 });

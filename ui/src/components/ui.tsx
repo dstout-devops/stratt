@@ -62,6 +62,16 @@ const STATES: Record<string, { token: string; icon: string }> = {
   denied: { token: "var(--state-failed)", icon: "⨯" },
   failed: { token: "var(--state-failed)", icon: "✗" },
   canceled: { token: "var(--state-pending)", icon: "⊘" },
+  // Finding lifecycle + severity (ADR-0019) — the same shared palette
+  // (design-tokens: one state palette for Run states AND Finding severity).
+  open: { token: "var(--state-failed)", icon: "!" },
+  resolved: { token: "var(--state-ok)", icon: "✓" },
+  clean: { token: "var(--state-ok)", icon: "✓" },
+  drifted: { token: "var(--state-failed)", icon: "!" },
+  damping: { token: "var(--state-attention)", icon: "~" },
+  info: { token: "var(--state-ok)", icon: "i" }, // design-tokens §: compliant/info → --state-ok
+  warning: { token: "var(--state-attention)", icon: "△" },
+  critical: { token: "var(--state-failed)", icon: "▲" },
 };
 
 export function StateChip({ state }: { state: string }) {

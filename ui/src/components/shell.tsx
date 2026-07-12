@@ -12,6 +12,8 @@ const NAV = [
   { to: "/workflows", label: "Workflows" },
   { to: "/gates", label: "Gates" },
   { to: "/triggers", label: "Triggers" },
+  { to: "/findings", label: "Findings" },
+  { to: "/baselines", label: "Baselines" },
 ];
 
 function themeNow(): string {
