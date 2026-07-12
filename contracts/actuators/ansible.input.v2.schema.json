@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "stratt:contract:actuators/ansible.input:v2",
+  "title": "ansible Step params",
+  "description": "Input Contract for the ansible Actuator (charter §2.3). Hand-written — derivation ladder rung 1 (§2.2). Empty play means the built-in gather-facts play. v2 adds check (check mode with diff capture, ADR-0019).",
+  "type": "object",
+  "properties": {
+    "play": {
+      "type": "string",
+      "description": "Play file content: a YAML sequence of plays (validated as YAML at Prepare)."
+    },
+    "eeImage": {
+      "type": "string",
+      "description": "Execution-environment image override for this Step's Jobs."
+    },
+    "check": {
+      "type": "boolean",
+      "description": "Run in check mode with diff capture (--check --diff): nothing mutates; changed means would-change — the Baseline drift signal (ADR-0019)."
+    }
+  },
+  "additionalProperties": false
+}

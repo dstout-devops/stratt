@@ -67,7 +67,9 @@ func dagTestEnv(t *testing.T, spec types.Workflow, childStatus map[string]error)
 
 	// Child Runs are stubbed per-step through OnWorkflow.
 	env.OnWorkflow(RunAgainstView, mock.Anything, mock.Anything).Return(
-		func(_ workflow.Context, in RunInput) error { return childStatus[in.StepName] })
+		func(_ workflow.Context, in RunInput) (RunOutcome, error) {
+			return RunOutcome{RunID: "run-" + in.StepName}, childStatus[in.StepName]
+		})
 
 	final := map[string]string{}
 	finalStatus := types.RunStatus("")

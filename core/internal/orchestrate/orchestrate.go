@@ -43,6 +43,9 @@ type RunInput struct {
 	// Trigger names the Trigger that fired this Run; empty for manual/API
 	// launches (§1.8 descent: Trigger → Run).
 	Trigger string
+	// Baseline names the Baseline whose cadence runs this check; empty for
+	// everything else (§1.8 descent: Baseline → Run, ADR-0019).
+	Baseline string
 	// WorkflowRunID/StepName link a Run executing as one Step of a Workflow
 	// back to its WorkflowRun (§1.8 descent: Workflow → Run); empty for
 	// direct launches.
@@ -79,10 +82,26 @@ type FactSet struct {
 	Workspace string
 }
 
+// RunOutcome is what RunAgainstView returns to a parent workflow: the Run id
+// plus the per-target verdicts and drift detail a Baseline evaluation needs
+// (ADR-0019). Compact by construction — facts and events never ride here.
+type RunOutcome struct {
+	RunID string
+	// PerTarget maps target name → status (ok | changed | failed |
+	// unreachable).
+	PerTarget map[string]string
+	// EntityByTarget resolves target names to Entity ids (View membership at
+	// dispatch time).
+	EntityByTarget map[string]string
+	// Drift is the per-target observed-vs-expected fragments (capped,
+	// redacted upstream).
+	Drift map[string][]json.RawMessage
+}
+
 // RunAgainstView is the Phase-0 Workflow. Every state transition is a
 // Temporal event — the descent ladder's Workflow → Run rungs (§1.8) fall out
 // of its history.
-func RunAgainstView(ctx workflow.Context, in RunInput) error {
+func RunAgainstView(ctx workflow.Context, in RunInput) (RunOutcome, error) {
 	opts := workflow.ActivityOptions{
 		StartToCloseTimeout: 10 * time.Minute,
 		HeartbeatTimeout:    time.Minute,
@@ -96,16 +115,16 @@ func RunAgainstView(ctx workflow.Context, in RunInput) error {
 	if in.RunID == "" {
 		wfID := workflow.GetInfo(ctx).WorkflowExecution.ID
 		if err := workflow.ExecuteActivity(ctx, a.EnsureRun, in, wfID).Get(ctx, &in.RunID); err != nil {
-			return err
+			return RunOutcome{}, err
 		}
 	}
 
 	var resolved ResolvedTargets
 	if err := workflow.ExecuteActivity(ctx, a.ResolveTargets, in).Get(ctx, &resolved); err != nil {
-		return finishRun(ctx, a, in, types.RunFailed, err)
+		return RunOutcome{RunID: in.RunID}, finishRun(ctx, a, in, types.RunFailed, err)
 	}
 	if err := workflow.ExecuteActivity(ctx, a.MarkRunning, in.RunID).Get(ctx, nil); err != nil {
-		return finishRun(ctx, a, in, types.RunFailed, err)
+		return RunOutcome{RunID: in.RunID}, finishRun(ctx, a, in, types.RunFailed, err)
 	}
 
 	// Resolve credential pointers and check the Principal's `use` grant
@@ -113,7 +132,7 @@ func RunAgainstView(ctx workflow.Context, in RunInput) error {
 	// enters workflow state.
 	var creds []dispatch.CredentialMount
 	if err := workflow.ExecuteActivity(ctx, a.ResolveCredentials, in).Get(ctx, &creds); err != nil {
-		return finishRun(ctx, a, in, types.RunFailed, err)
+		return RunOutcome{RunID: in.RunID}, finishRun(ctx, a, in, types.RunFailed, err)
 	}
 
 	// Fan the target set out across slices — parallel Jobs, each an
@@ -134,16 +153,16 @@ func RunAgainstView(ctx workflow.Context, in RunInput) error {
 		}
 	}
 	if execErr != nil {
-		return finishRun(ctx, a, in, types.RunFailed, execErr)
+		return RunOutcome{RunID: in.RunID}, finishRun(ctx, a, in, types.RunFailed, execErr)
 	}
 	result = mergeResults(sliceResults)
 
 	var facts FactSet
 	if err := workflow.ExecuteActivity(ctx, a.CollectFacts, in, resolved, result).Get(ctx, &facts); err != nil {
-		return finishRun(ctx, a, in, types.RunFailed, err)
+		return RunOutcome{RunID: in.RunID}, finishRun(ctx, a, in, types.RunFailed, err)
 	}
 	if err := workflow.ExecuteActivity(ctx, a.ProjectFacts, in.RunID, facts).Get(ctx, nil); err != nil {
-		return finishRun(ctx, a, in, types.RunFailed, err)
+		return RunOutcome{RunID: in.RunID}, finishRun(ctx, a, in, types.RunFailed, err)
 	}
 
 	status := types.RunSucceeded
@@ -154,7 +173,12 @@ func RunAgainstView(ctx workflow.Context, in RunInput) error {
 	if err := workflow.ExecuteActivity(ctx, a.FinishRun, in, status, result).Get(ctx, nil); err != nil {
 		summaryErr = err
 	}
-	return summaryErr
+	outcome := RunOutcome{RunID: in.RunID, PerTarget: result.PerTarget, Drift: result.Drift,
+		EntityByTarget: map[string]string{}}
+	for _, t := range resolved.Targets {
+		outcome.EntityByTarget[t.Name] = t.EntityID
+	}
+	return outcome, summaryErr
 }
 
 func finishRun(ctx workflow.Context, a *Activities, in RunInput, status types.RunStatus, cause error) error {
@@ -183,7 +207,8 @@ func (a *Activities) EnsureRun(ctx context.Context, in RunInput, workflowID stri
 	}
 	run, err := a.Store.CreateRun(ctx, types.Run{
 		WorkflowID: workflowID, ViewRef: "view://" + v.Name, ViewVersion: v.Version,
-		TriggeredBy: in.Trigger, WorkflowRunID: in.WorkflowRunID, StepName: in.StepName,
+		TriggeredBy: in.Trigger, Baseline: in.Baseline,
+		WorkflowRunID: in.WorkflowRunID, StepName: in.StepName,
 	})
 	if err != nil {
 		return "", err
@@ -346,6 +371,12 @@ func mergeResults(slices []dispatch.Result) dispatch.Result {
 		if len(r.OutputsContract) > 0 {
 			out.OutputsContract = r.OutputsContract
 		}
+		for t, fragments := range r.Drift {
+			if out.Drift == nil {
+				out.Drift = map[string][]json.RawMessage{}
+			}
+			out.Drift[t] = fragments
+		}
 	}
 	return out
 }
@@ -457,6 +488,14 @@ func (a *Activities) FinishRun(ctx context.Context, in RunInput, status types.Ru
 	}
 	if in.Trigger != "" {
 		summary["trigger"] = in.Trigger
+	}
+	if in.Baseline != "" {
+		summary["baseline"] = in.Baseline
+	}
+	if len(result.Drift) > 0 {
+		// The drifted targets' observed-vs-expected detail (capped at the
+		// dispatch seam) — the Run-level record behind each Finding (§1.8).
+		summary["drift"] = result.Drift
 	}
 	if in.WorkflowRunID != "" {
 		summary["workflowRun"] = in.WorkflowRunID

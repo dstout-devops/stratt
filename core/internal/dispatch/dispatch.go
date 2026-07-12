@@ -88,9 +88,20 @@ type Result struct {
 	// OutputsContract is the Step's tool-derived outputs schema, when the
 	// tool emitted one (§2.2 rung 2).
 	OutputsContract json.RawMessage
+	// Drift accumulates observed-vs-expected fragments per target from a
+	// check-mode execution (ADR-0019) — redacted upstream, size-capped here
+	// with a visible truncation marker (§1.8: truncation is never silent).
+	Drift map[string][]json.RawMessage
 	// SpawnLatency is Job-creation → pod-running, the §8 pod-spawn gate.
 	SpawnLatency time.Duration
 }
+
+// driftCapBytes bounds the accumulated drift detail per target. Findings
+// carry the capped detail; the full stream stays on the Run's events.
+const driftCapBytes = 16 * 1024
+
+// driftTruncated is the visible cap marker appended exactly once.
+var driftTruncated = json.RawMessage(`{"truncated":true}`)
 
 // Run creates the Job for the prepared Step slice and follows it to
 // completion, publishing every task event to the bus under (runID, slice).
@@ -388,6 +399,7 @@ func (d *Dispatcher) followLogs(ctx context.Context, runID string, slice int, po
 	defer stream.Close()
 
 	interpreted := 0
+	driftBytes := map[string]int{}
 	sc := bufio.NewScanner(stream)
 	sc.Buffer(make([]byte, 0, 1024*1024), 8*1024*1024) // fact payloads are large
 	for sc.Scan() {
@@ -433,6 +445,22 @@ func (d *Dispatcher) followLogs(ctx context.Context, runID string, slice int, po
 		}
 		if len(iv.OutputsContract) > 0 {
 			res.OutputsContract = iv.OutputsContract
+		}
+		if len(iv.Drift) > 0 && iv.Event.Target != "" {
+			target := iv.Event.Target
+			if res.Drift == nil {
+				res.Drift = map[string][]json.RawMessage{}
+			}
+			switch {
+			case driftBytes[target] > driftCapBytes:
+				// already marked truncated
+			case driftBytes[target]+len(iv.Drift) > driftCapBytes:
+				res.Drift[target] = append(res.Drift[target], driftTruncated)
+				driftBytes[target] = driftCapBytes + 1
+			default:
+				res.Drift[target] = append(res.Drift[target], iv.Drift)
+				driftBytes[target] += len(iv.Drift)
+			}
 		}
 	}
 	if err := sc.Err(); err != nil && ctx.Err() == nil {

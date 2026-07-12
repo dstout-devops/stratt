@@ -47,6 +47,7 @@ type Declarations struct {
 	Triggers       []types.Trigger       `json:"triggers"`
 	Workflows      []types.Workflow      `json:"workflows"`
 	Emitters       []types.Emitter       `json:"emitters"`
+	Baselines      []types.Baseline      `json:"baselines"`
 }
 
 // Declared kinds appearing in plans.
@@ -56,6 +57,7 @@ const (
 	KindTrigger       = "trigger"
 	KindWorkflow      = "workflow"
 	KindEmitter       = "emitter"
+	KindBaseline      = "baseline"
 )
 
 // Action is what reconciliation will do (or did) to one declared object.
@@ -192,6 +194,13 @@ func ParseDir(root string) (Declarations, error) {
 	}
 	out.Emitters = emitters
 	sort.Slice(out.Emitters, func(i, j int) bool { return out.Emitters[i].Name < out.Emitters[j].Name })
+
+	baselines, err := parseKind(filepath.Join(root, "baselines"), true, parseBaselineFile)
+	if err != nil {
+		return out, err
+	}
+	out.Baselines = baselines
+	sort.Slice(out.Baselines, func(i, j int) bool { return out.Baselines[i].Name < out.Baselines[j].Name })
 	return out, nil
 }
 
@@ -453,6 +462,95 @@ func ValidateEmitter(e types.Emitter) error {
 	return nil
 }
 
+// baselineFile is the baselines/*.yaml shape (ADR-0019): a check Step +
+// cadence + remediation ref. Like Triggers, the declaration is an
+// impersonation grant (principal) — Git review authorizes it; CaC-only.
+type baselineFile struct {
+	Name                string         `yaml:"name"`
+	ViewName            string         `yaml:"viewName"`
+	Actuator            string         `yaml:"actuator"`
+	Params              map[string]any `yaml:"params"`
+	Slices              int            `yaml:"slices"`
+	CredentialRefs      []string       `yaml:"credentialRefs"`
+	Principal           string         `yaml:"principal"`
+	Cron                string         `yaml:"cron"`
+	Paused              bool           `yaml:"paused"`
+	Severity            string         `yaml:"severity"`
+	DampingObservations int            `yaml:"dampingObservations"`
+	RemediationWorkflow string         `yaml:"remediationWorkflow"`
+	Framework           string         `yaml:"framework"`
+}
+
+func parseBaselineFile(path string, raw []byte) (string, types.Baseline, error) {
+	var f baselineFile
+	dec := yaml.NewDecoder(strings.NewReader(string(raw)))
+	dec.KnownFields(true)
+	if err := dec.Decode(&f); err != nil {
+		return "", types.Baseline{}, fmt.Errorf("desiredstate: %s: %w", path, err)
+	}
+	b := types.Baseline{
+		Name: f.Name, ViewName: f.ViewName, Actuator: f.Actuator, Params: f.Params,
+		Slices: f.Slices, CredentialRefs: f.CredentialRefs, Principal: f.Principal,
+		Cron: f.Cron, Paused: f.Paused, Severity: f.Severity,
+		DampingObservations: f.DampingObservations,
+		RemediationWorkflow: f.RemediationWorkflow, Framework: f.Framework,
+	}
+	if err := ValidateBaseline(b); err != nil {
+		return "", types.Baseline{}, fmt.Errorf("desiredstate: %s: %w", path, err)
+	}
+	return b.Name, b, nil
+}
+
+// ValidateBaseline checks one Baseline declaration (ADR-0019). The check
+// must be read-only by construction: only Actuators with check semantics are
+// accepted, opentofu is pinned to plan mode, and ansible's check flag is the
+// platform's to set — a declaration cannot even ask for a mutating check.
+func ValidateBaseline(b types.Baseline) error {
+	if b.Name == "" {
+		return fmt.Errorf("baseline requires a name")
+	}
+	if b.ViewName == "" {
+		return fmt.Errorf("baseline %s: viewName is required", b.Name)
+	}
+	if b.Cron == "" {
+		return fmt.Errorf("baseline %s: cron is required (the check cadence)", b.Name)
+	}
+	switch b.Severity {
+	case types.SeverityInfo, types.SeverityWarning, types.SeverityCritical:
+	default:
+		return fmt.Errorf("baseline %s: severity must be info, warning, or critical", b.Name)
+	}
+	if b.DampingObservations < 0 {
+		return fmt.Errorf("baseline %s: dampingObservations must be >= 0", b.Name)
+	}
+	if b.Slices < 0 {
+		return fmt.Errorf("baseline %s: slices must be >= 0", b.Name)
+	}
+	actuator := b.Actuator
+	if actuator == "" {
+		actuator = "ansible"
+	}
+	switch actuator {
+	case "ansible":
+		if _, set := b.Params["check"]; set {
+			return fmt.Errorf("baseline %s: params.check is not declarable — the platform forces check mode on baseline checks", b.Name)
+		}
+	case "opentofu":
+		if mode, _ := b.Params["mode"].(string); mode != "plan" {
+			return fmt.Errorf("baseline %s: opentofu checks require params.mode: plan", b.Name)
+		}
+	default:
+		return fmt.Errorf("baseline %s: actuator %q has no read-only check semantics (ansible, opentofu)", b.Name, actuator)
+	}
+	if len(b.CredentialRefs) > 0 && b.Principal == "" {
+		return fmt.Errorf("baseline %s: credentialRefs require a principal", b.Name)
+	}
+	if err := validateParamsContract(b.Actuator, b.Params); err != nil {
+		return fmt.Errorf("baseline %s: %w", b.Name, err)
+	}
+	return nil
+}
+
 // validateParamsContract checks actuation params against the Actuator's
 // input Contract (§1.5, ADR-0015) — a bad declaration fails its file at
 // plan/reconcile time, never at dispatch.
@@ -660,6 +758,11 @@ func ComputePlan(ctx context.Context, store *graph.Store, decls Declarations) (P
 		return Plan{}, err
 	}
 	plan.Entries = append(plan.Entries, emPlan.Entries...)
+	blPlan, err := computeBaselinePlan(ctx, store, decls.Baselines)
+	if err != nil {
+		return Plan{}, err
+	}
+	plan.Entries = append(plan.Entries, blPlan.Entries...)
 	sort.Slice(plan.Entries, func(i, j int) bool {
 		if plan.Entries[i].Kind != plan.Entries[j].Kind {
 			return plan.Entries[i].Kind < plan.Entries[j].Kind
@@ -896,6 +999,41 @@ func computeEmitterPlan(ctx context.Context, store *graph.Store, decls []types.E
 	return plan, nil
 }
 
+// computeBaselinePlan diffs declared Baselines (CaC-only, ADR-0019 — same
+// posture as Triggers: no adopt case, semantic JSON equality).
+func computeBaselinePlan(ctx context.Context, store *graph.Store, decls []types.Baseline) (Plan, error) {
+	current, err := store.ListBaselines(ctx)
+	if err != nil {
+		return Plan{}, err
+	}
+	byName := map[string]types.Baseline{}
+	for _, b := range current {
+		byName[b.Name] = b
+	}
+	var plan Plan
+	declared := map[string]bool{}
+	for _, d := range decls {
+		declared[d.Name] = true
+		entry := PlanEntry{Kind: KindBaseline, Name: d.Name}
+		cur, exists := byName[d.Name]
+		switch {
+		case !exists:
+			entry.Action = ActionCreate
+		case declDocsEqual(cur, d):
+			entry.Action = ActionNoop
+		default:
+			entry.Action = ActionUpdate
+		}
+		plan.Entries = append(plan.Entries, entry)
+	}
+	for _, b := range current {
+		if !declared[b.Name] {
+			plan.Entries = append(plan.Entries, PlanEntry{Kind: KindBaseline, Name: b.Name, Action: ActionDelete})
+		}
+	}
+	return plan, nil
+}
+
 // Apply executes the plan for the declarations and returns the realized plan.
 // Per-object failures are recorded on their entries; the rest still applies.
 func Apply(ctx context.Context, store *graph.Store, decls Declarations) (Plan, error) {
@@ -922,6 +1060,10 @@ func Apply(ctx context.Context, store *graph.Store, decls Declarations) (Plan, e
 	emByName := map[string]types.Emitter{}
 	for _, d := range decls.Emitters {
 		emByName[d.Name] = d
+	}
+	blByName := map[string]types.Baseline{}
+	for _, d := range decls.Baselines {
+		blByName[d.Name] = d
 	}
 	for i := range plan.Entries {
 		e := &plan.Entries[i]
@@ -950,6 +1092,10 @@ func Apply(ctx context.Context, store *graph.Store, decls Declarations) (Plan, e
 			err = store.DeleteEmitter(ctx, e.Name)
 		case e.Kind == KindEmitter:
 			err = store.UpsertEmitter(ctx, emByName[e.Name])
+		case e.Kind == KindBaseline && e.Action == ActionDelete:
+			err = store.DeleteBaseline(ctx, e.Name)
+		case e.Kind == KindBaseline:
+			err = store.UpsertBaseline(ctx, blByName[e.Name])
 		}
 		if err != nil {
 			e.Error = err.Error()

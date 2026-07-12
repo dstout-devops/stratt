@@ -86,6 +86,11 @@ type Interpreted struct {
 	// OutputsContract is a tool-derived (rung-2) schema document for the
 	// Step's outputs, when the event carries one (§2.2).
 	OutputsContract json.RawMessage
+	// Drift is one observed-vs-expected fragment for Event.Target carried by
+	// this event (a check-mode task diff, a planned resource change) —
+	// already redacted upstream. The dispatcher accumulates fragments per
+	// target, size-capped, for Baseline evaluation (ADR-0019).
+	Drift json.RawMessage
 }
 
 // Actuator prepares tool content and interprets the resulting event stream

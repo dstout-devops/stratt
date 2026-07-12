@@ -263,6 +263,84 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/baselines": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List declared Baselines
+         * @description Baselines are CaC-only checkable desired state (charter §2.4, ADR-0019): a View selector + check Step + remediation Workflow ref + cadence. This surface is read-only; Git review authorizes the Principal binding.
+         */
+        get: operations["listBaselines"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/baselines/{name}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                name: string;
+            };
+            cookie?: never;
+        };
+        /** Get a declared Baseline */
+        get: operations["getBaseline"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/findings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Findings
+         * @description Findings are drift/compliance results (charter §2.4): Entity + Baseline + observed-vs-expected diff + severity + Evidence ref (the check Run). One kind, framework-tagged; resolved Findings are kept as the audit history.
+         */
+        get: operations["listFindings"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/findings/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        /** Get a Finding */
+        get: operations["getFinding"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/triggers": {
         parameters: {
             query?: never;
@@ -535,10 +613,12 @@ export interface components {
             credentialRefs?: components["schemas"]["CredentialRef"][];
             triggers?: components["schemas"]["Trigger"][];
             workflows?: components["schemas"]["Workflow"][];
+            emitters?: components["schemas"]["Emitter"][];
+            baselines?: components["schemas"]["Baseline"][];
         };
         PlanEntry: {
             /** @enum {string} */
-            kind?: "view" | "credential-ref" | "trigger" | "workflow";
+            kind?: "view" | "credential-ref" | "trigger" | "workflow" | "emitter" | "baseline";
             name: string;
             /** @enum {string} */
             action: "create" | "update" | "adopt" | "noop" | "delete";
@@ -587,6 +667,8 @@ export interface components {
             viewVersion?: number;
             /** @description Name of the Trigger that fired this Run; absent for manual/API launches (charter §1.8 descent, Trigger → Run). */
             triggeredBy?: string;
+            /** @description Name of the Baseline whose cadence ran this check; absent for everything else (charter §1.8 descent, Baseline → Run). */
+            baseline?: string;
             /** @description The WorkflowRun this Run executed under, when it ran as a Workflow Step (charter §1.8 descent, Workflow → Run). */
             workflowRunId?: string;
             /** @description The Step within that Workflow. */
@@ -602,6 +684,69 @@ export interface components {
             kind: "webhook" | "alertmanager";
             /** @description hex(sha256(token)) — never the token itself (§2.5). */
             tokenHash: string;
+        };
+        /** @description Checkable desired state (charter §2.4, ADR-0019): View selector + check Step + optional remediation Workflow ref + cadence. v1 is the hand-written rung of the §6 ladder; checks are read-only by construction (ansible check mode, opentofu plan). */
+        Baseline: {
+            name: string;
+            viewName: string;
+            /**
+             * @default ansible
+             * @enum {string}
+             */
+            actuator: "ansible" | "opentofu";
+            params?: Record<string, never>;
+            /** Format: int64 */
+            slices?: number;
+            credentialRefs?: string[];
+            /** @description Service identity the checks execute as (§2.5), exactly like a Trigger's. */
+            principal?: string;
+            /** @description Check cadence (a Temporal Schedule actuates it, §3). */
+            cron: string;
+            paused?: boolean;
+            /**
+             * @description Stamped onto every Finding this Baseline raises.
+             * @enum {string}
+             */
+            severity: "info" | "warning" | "critical";
+            /**
+             * Format: int64
+             * @description Flap damping (charter §4.3) — a Finding opens only after this many consecutive drifted observations. Default 1.
+             */
+            dampingObservations?: number;
+            /** @description Declared Workflow that remediates this Baseline's Findings — a ref only, never auto-launched (§5 Flow 2, remediation behind Gates). */
+            remediationWorkflow?: string;
+            /** @description Compliance tag (e.g. cis) — Findings are framework-tagged (§2.4). */
+            framework?: string;
+        };
+        /** @description A drift/compliance result (charter §2.4): Entity + Baseline + observed-vs-expected diff + severity + Evidence ref. One kind, framework-tagged. v1 Evidence is the redacted diff snapshot plus the check Run ref (runId). */
+        Finding: {
+            id: string;
+            baseline: string;
+            target: string;
+            /** @description The Entity the target resolves to via the View's membership; absent for non-Entity targets (e.g. an opentofu workspace). */
+            entityId?: string;
+            /** @enum {string} */
+            status: "pending" | "open" | "resolved";
+            /** @enum {string} */
+            severity: "info" | "warning" | "critical";
+            framework?: string;
+            /**
+             * Format: int64
+             * @description Drifted observations since the last clean one (§4.3 damping counter).
+             */
+            consecutiveDrifted: number;
+            /** @description Latest observed-vs-expected detail (redacted, size-capped visibly). */
+            diff?: unknown;
+            /** @description The check Run behind the latest observation — the Evidence ref (§1.8). */
+            runId?: string;
+            /** Format: date-time */
+            firstObserved: string;
+            /** Format: date-time */
+            lastObserved: string;
+            /** Format: date-time */
+            openedAt?: string;
+            /** Format: date-time */
+            resolvedAt?: string;
         };
         /** @description A pinned JSON Schema document on a Step's inputs/outputs or a Facet namespace (charter §1.5, §2.2) — data, never a language class. */
         Contract: {
@@ -1178,6 +1323,96 @@ export interface operations {
                     "application/json": components["schemas"]["Emitter"][];
                 };
             };
+        };
+    };
+    listBaselines: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Every declared Baseline. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Baseline"][];
+                };
+            };
+        };
+    };
+    getBaseline: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The Baseline declaration. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Baseline"];
+                };
+            };
+            404: components["responses"]["NotFound"];
+        };
+    };
+    listFindings: {
+        parameters: {
+            query?: {
+                baseline?: string;
+                status?: "pending" | "open" | "resolved";
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Findings, newest observation first. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Finding"][];
+                };
+            };
+        };
+    };
+    getFinding: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The Finding. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Finding"];
+                };
+            };
+            404: components["responses"]["NotFound"];
         };
     };
     listTriggers: {

@@ -83,7 +83,15 @@
       "Bash(gh auth *)",
       "Bash(command -v actionlint)",
       "Bash(actionlint .github/workflows/ci.yml)",
-      "Bash(python3 -c \"import yaml,sys; yaml.safe_load\\(open\\('.github/workflows/ci.yml'\\)\\); print\\('ci.yml: valid YAML'\\)\")"
+      "Bash(python3 -c \"import yaml,sys; yaml.safe_load\\(open\\('.github/workflows/ci.yml'\\)\\); print\\('ci.yml: valid YAML'\\)\")",
+      "Bash(go test *)",
+      "Bash(task generate *)",
+      "Bash(go build *)",
+      "Bash(task fmt:check)",
+      "Bash(task lint *)",
+      "Bash(pkill -x strattd)",
+      "Bash(STRATT_VCENTER_URL='https://localhost:8989/sdk' STRATT_VCENTER_INSECURE=true STRATT_EE_IMAGE=stratt-ee:dev /tmp/claude-1000/-workspaces-stratt/b9fe8676-b7ba-464c-9958-96df669c3531/scratchpad/strattd)",
+      "WebSearch"
     ],
     "deny": [
       "Bash(sudo:*)",

@@ -285,6 +285,85 @@ paths:
               schema:
                 type: array
                 items: { $ref: "#/components/schemas/Emitter" }
+  /baselines:
+    get:
+      operationId: listBaselines
+      summary: List declared Baselines
+      description: >
+        Baselines are CaC-only checkable desired state (charter §2.4,
+        ADR-0019): a View selector + check Step + remediation Workflow ref +
+        cadence. This surface is read-only; Git review authorizes the
+        Principal binding.
+      responses:
+        "200":
+          description: Every declared Baseline.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Baseline" }
+  /baselines/{name}:
+    parameters:
+      - name: name
+        in: path
+        required: true
+        schema: { type: string }
+    get:
+      operationId: getBaseline
+      summary: Get a declared Baseline
+      responses:
+        "200":
+          description: The Baseline declaration.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Baseline" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /findings:
+    get:
+      operationId: listFindings
+      summary: List Findings
+      description: >
+        Findings are drift/compliance results (charter §2.4): Entity +
+        Baseline + observed-vs-expected diff + severity + Evidence ref (the
+        check Run). One kind, framework-tagged; resolved Findings are kept as
+        the audit history.
+      parameters:
+        - name: baseline
+          in: query
+          required: false
+          schema: { type: string }
+        - name: status
+          in: query
+          required: false
+          schema: { type: string, enum: [pending, open, resolved] }
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, format: int64, minimum: 1, maximum: 500, default: 100 }
+      responses:
+        "200":
+          description: Findings, newest observation first.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Finding" }
+  /findings/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: { type: string }
+    get:
+      operationId: getFinding
+      summary: Get a Finding
+      responses:
+        "200":
+          description: The Finding.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Finding" }
+        "404": { $ref: "#/components/responses/NotFound" }
   /triggers:
     get:
       operationId: listTriggers
@@ -633,13 +712,19 @@ components:
         workflows:
           type: array
           items: { $ref: "#/components/schemas/Workflow" }
+        emitters:
+          type: array
+          items: { $ref: "#/components/schemas/Emitter" }
+        baselines:
+          type: array
+          items: { $ref: "#/components/schemas/Baseline" }
     PlanEntry:
       type: object
       required: [name, action, memberCount]
       properties:
         kind:
           type: string
-          enum: [view, credential-ref, trigger, workflow]
+          enum: [view, credential-ref, trigger, workflow, emitter, baseline]
         name: { type: string }
         action:
           type: string
@@ -714,6 +799,11 @@ components:
           description: >
             Name of the Trigger that fired this Run; absent for manual/API
             launches (charter §1.8 descent, Trigger → Run).
+        baseline:
+          type: string
+          description: >
+            Name of the Baseline whose cadence ran this check; absent for
+            everything else (charter §1.8 descent, Baseline → Run).
         workflowRunId:
           type: string
           description: >
@@ -735,6 +825,91 @@ components:
         tokenHash:
           type: string
           description: hex(sha256(token)) — never the token itself (§2.5).
+    Baseline:
+      type: object
+      description: >
+        Checkable desired state (charter §2.4, ADR-0019): View selector +
+        check Step + optional remediation Workflow ref + cadence. v1 is the
+        hand-written rung of the §6 ladder; checks are read-only by
+        construction (ansible check mode, opentofu plan).
+      required: [name, viewName, cron, severity]
+      properties:
+        name: { type: string }
+        viewName: { type: string }
+        actuator:
+          type: string
+          enum: [ansible, opentofu]
+          default: ansible
+        params: { type: object }
+        slices: { type: integer, format: int64 }
+        credentialRefs:
+          type: array
+          items: { type: string }
+        principal:
+          type: string
+          description: >
+            Service identity the checks execute as (§2.5), exactly like a
+            Trigger's.
+        cron:
+          type: string
+          description: Check cadence (a Temporal Schedule actuates it, §3).
+        paused: { type: boolean }
+        severity:
+          type: string
+          enum: [info, warning, critical]
+          description: Stamped onto every Finding this Baseline raises.
+        dampingObservations:
+          type: integer
+          format: int64
+          description: >
+            Flap damping (charter §4.3) — a Finding opens only after this
+            many consecutive drifted observations. Default 1.
+        remediationWorkflow:
+          type: string
+          description: >
+            Declared Workflow that remediates this Baseline's Findings — a
+            ref only, never auto-launched (§5 Flow 2, remediation behind
+            Gates).
+        framework:
+          type: string
+          description: Compliance tag (e.g. cis) — Findings are framework-tagged (§2.4).
+    Finding:
+      type: object
+      description: >
+        A drift/compliance result (charter §2.4): Entity + Baseline +
+        observed-vs-expected diff + severity + Evidence ref. One kind,
+        framework-tagged. v1 Evidence is the redacted diff snapshot plus the
+        check Run ref (runId).
+      required: [id, baseline, target, status, severity, consecutiveDrifted, firstObserved, lastObserved]
+      properties:
+        id: { type: string }
+        baseline: { type: string }
+        target: { type: string }
+        entityId:
+          type: string
+          description: >
+            The Entity the target resolves to via the View's membership;
+            absent for non-Entity targets (e.g. an opentofu workspace).
+        status:
+          type: string
+          enum: [pending, open, resolved]
+        severity:
+          type: string
+          enum: [info, warning, critical]
+        framework: { type: string }
+        consecutiveDrifted:
+          type: integer
+          format: int64
+          description: Drifted observations since the last clean one (§4.3 damping counter).
+        diff:
+          description: Latest observed-vs-expected detail (redacted, size-capped visibly).
+        runId:
+          type: string
+          description: The check Run behind the latest observation — the Evidence ref (§1.8).
+        firstObserved: { type: string, format: date-time }
+        lastObserved: { type: string, format: date-time }
+        openedAt: { type: string, format: date-time }
+        resolvedAt: { type: string, format: date-time }
     Contract:
       type: object
       description: >

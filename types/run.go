@@ -30,6 +30,9 @@ type Run struct {
 	// TriggeredBy names the Trigger that fired this Run; empty for manual/API
 	// launches — the §1.8 descent rung Trigger → Run.
 	TriggeredBy string `json:"triggeredBy,omitempty"`
+	// Baseline names the Baseline whose cadence ran this check; empty for
+	// everything else — the §1.8 descent rung Baseline → Run (ADR-0019).
+	Baseline string `json:"baseline,omitempty"`
 	// WorkflowRunID/StepName link a Run spawned as one Step of a Workflow
 	// execution back to it — the Workflow → Run descent rung (§1.8). Empty
 	// for direct launches.

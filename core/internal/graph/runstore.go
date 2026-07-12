@@ -18,10 +18,10 @@ import (
 func (s *Store) CreateRun(ctx context.Context, r types.Run) (types.Run, error) {
 	r.Status = types.RunPending
 	err := s.pool.QueryRow(ctx, `
-		INSERT INTO graph.run (workflow_id, status, view_ref, view_version, triggered_by, workflow_run_id, step_name)
-		VALUES ($1, $2, nullif($3, ''), nullif($4, 0), nullif($5, ''), nullif($6, '')::uuid, nullif($7, ''))
+		INSERT INTO graph.run (workflow_id, status, view_ref, view_version, triggered_by, baseline, workflow_run_id, step_name)
+		VALUES ($1, $2, nullif($3, ''), nullif($4, 0), nullif($5, ''), nullif($6, ''), nullif($7, '')::uuid, nullif($8, ''))
 		RETURNING id, started_at`,
-		r.WorkflowID, string(r.Status), r.ViewRef, r.ViewVersion, r.TriggeredBy, r.WorkflowRunID, r.StepName,
+		r.WorkflowID, string(r.Status), r.ViewRef, r.ViewVersion, r.TriggeredBy, r.Baseline, r.WorkflowRunID, r.StepName,
 	).Scan(&r.ID, &r.StartedAt)
 	if err != nil {
 		return r, fmt.Errorf("graph: create run: %w", err)
@@ -102,7 +102,7 @@ func (s *Store) ListRuns(ctx context.Context, limit int) ([]types.Run, error) {
 		limit = 100
 	}
 	rows, err := s.pool.Query(ctx, `
-		SELECT id, workflow_id, status, view_ref, view_version, triggered_by, workflow_run_id, step_name, started_at, finished_at
+		SELECT id, workflow_id, status, view_ref, view_version, triggered_by, baseline, workflow_run_id, step_name, started_at, finished_at
 		FROM graph.run ORDER BY started_at DESC LIMIT $1`, limit)
 	if err != nil {
 		return nil, fmt.Errorf("graph: list runs: %w", err)
@@ -112,10 +112,10 @@ func (s *Store) ListRuns(ctx context.Context, limit int) ([]types.Run, error) {
 	for rows.Next() {
 		var r types.Run
 		var status string
-		var viewRef, triggeredBy, workflowRunID, stepName *string
+		var viewRef, triggeredBy, baseline, workflowRunID, stepName *string
 		var viewVersion *int64
 		if err := rows.Scan(&r.ID, &r.WorkflowID, &status, &viewRef, &viewVersion,
-			&triggeredBy, &workflowRunID, &stepName, &r.StartedAt, &r.FinishedAt); err != nil {
+			&triggeredBy, &baseline, &workflowRunID, &stepName, &r.StartedAt, &r.FinishedAt); err != nil {
 			return nil, fmt.Errorf("graph: list runs: %w", err)
 		}
 		r.Status = types.RunStatus(status)
@@ -127,6 +127,9 @@ func (s *Store) ListRuns(ctx context.Context, limit int) ([]types.Run, error) {
 		}
 		if triggeredBy != nil {
 			r.TriggeredBy = *triggeredBy
+		}
+		if baseline != nil {
+			r.Baseline = *baseline
 		}
 		if workflowRunID != nil {
 			r.WorkflowRunID = *workflowRunID
@@ -145,11 +148,11 @@ func (s *Store) GetRun(ctx context.Context, runID string) (types.Run, error) {
 	var status string
 	var viewRef *string
 	var viewVersion *int64
-	var triggeredBy, workflowRunID, stepName *string
+	var triggeredBy, baseline, workflowRunID, stepName *string
 	err := s.pool.QueryRow(ctx, `
-		SELECT id, workflow_id, status, view_ref, view_version, triggered_by, workflow_run_id, step_name, started_at, finished_at
+		SELECT id, workflow_id, status, view_ref, view_version, triggered_by, baseline, workflow_run_id, step_name, started_at, finished_at
 		FROM graph.run WHERE id = $1`, runID,
-	).Scan(&r.ID, &r.WorkflowID, &status, &viewRef, &viewVersion, &triggeredBy, &workflowRunID, &stepName, &r.StartedAt, &r.FinishedAt)
+	).Scan(&r.ID, &r.WorkflowID, &status, &viewRef, &viewVersion, &triggeredBy, &baseline, &workflowRunID, &stepName, &r.StartedAt, &r.FinishedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return r, fmt.Errorf("%w: run %s", ErrNotFound, runID)
 	}
@@ -165,6 +168,9 @@ func (s *Store) GetRun(ctx context.Context, runID string) (types.Run, error) {
 	}
 	if triggeredBy != nil {
 		r.TriggeredBy = *triggeredBy
+	}
+	if baseline != nil {
+		r.Baseline = *baseline
 	}
 	if workflowRunID != nil {
 		r.WorkflowRunID = *workflowRunID

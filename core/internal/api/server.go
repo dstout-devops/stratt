@@ -239,6 +239,9 @@ func runToWire(r types.Run) Run {
 	if r.TriggeredBy != "" {
 		out.TriggeredBy = &r.TriggeredBy
 	}
+	if r.Baseline != "" {
+		out.Baseline = &r.Baseline
+	}
 	if r.WorkflowRunID != "" {
 		out.WorkflowRunId = &r.WorkflowRunID
 	}
@@ -287,6 +290,102 @@ func triggerToWire(t types.Trigger) Trigger {
 	}
 	if t.Principal != "" {
 		out.Principal = &t.Principal
+	}
+	return out
+}
+
+func baselineToWire(b types.Baseline) Baseline {
+	out := Baseline{Name: b.Name, ViewName: b.ViewName, Cron: b.Cron, Severity: BaselineSeverity(b.Severity)}
+	if b.Actuator != "" {
+		a := BaselineActuator(b.Actuator)
+		out.Actuator = &a
+	}
+	if b.Params != nil {
+		out.Params = &b.Params
+	}
+	if b.Slices != 0 {
+		n := int64(b.Slices)
+		out.Slices = &n
+	}
+	if len(b.CredentialRefs) > 0 {
+		out.CredentialRefs = &b.CredentialRefs
+	}
+	if b.Principal != "" {
+		out.Principal = &b.Principal
+	}
+	if b.Paused {
+		out.Paused = &b.Paused
+	}
+	if b.DampingObservations != 0 {
+		n := int64(b.DampingObservations)
+		out.DampingObservations = &n
+	}
+	if b.RemediationWorkflow != "" {
+		out.RemediationWorkflow = &b.RemediationWorkflow
+	}
+	if b.Framework != "" {
+		out.Framework = &b.Framework
+	}
+	return out
+}
+
+// baselineFromWire mirrors baselineToWire; same CaC declaration the
+// desired-state controller reads from Git (the CLI plan/apply path sends the
+// checkout verbatim — Git review stays the authorization).
+func baselineFromWire(w Baseline) (types.Baseline, error) {
+	b := types.Baseline{Name: w.Name, ViewName: w.ViewName, Cron: w.Cron, Severity: string(w.Severity)}
+	if w.Actuator != nil {
+		b.Actuator = string(*w.Actuator)
+	}
+	if w.Params != nil {
+		b.Params = *w.Params
+	}
+	if w.Slices != nil {
+		b.Slices = int(*w.Slices)
+	}
+	if w.CredentialRefs != nil {
+		b.CredentialRefs = *w.CredentialRefs
+	}
+	if w.Principal != nil {
+		b.Principal = *w.Principal
+	}
+	if w.Paused != nil {
+		b.Paused = *w.Paused
+	}
+	if w.DampingObservations != nil {
+		b.DampingObservations = int(*w.DampingObservations)
+	}
+	if w.RemediationWorkflow != nil {
+		b.RemediationWorkflow = *w.RemediationWorkflow
+	}
+	if w.Framework != nil {
+		b.Framework = *w.Framework
+	}
+	if err := desiredstate.ValidateBaseline(b); err != nil {
+		return b, err
+	}
+	return b, nil
+}
+
+func findingToWire(f types.Finding) Finding {
+	out := Finding{
+		Id: f.ID, Baseline: f.Baseline, Target: f.Target,
+		Status: FindingStatus(f.Status), Severity: FindingSeverity(f.Severity),
+		ConsecutiveDrifted: int64(f.ConsecutiveDrifted),
+		FirstObserved:      f.FirstObserved, LastObserved: f.LastObserved,
+		OpenedAt: f.OpenedAt, ResolvedAt: f.ResolvedAt,
+	}
+	if f.EntityID != "" {
+		out.EntityId = &f.EntityID
+	}
+	if f.Framework != "" {
+		out.Framework = &f.Framework
+	}
+	if f.RunID != "" {
+		out.RunId = &f.RunID
+	}
+	if len(f.Diff) > 0 {
+		out.Diff = json.RawMessage(f.Diff)
 	}
 	return out
 }
@@ -489,6 +588,24 @@ func declarationsFromWire(in DesiredState) (desiredstate.Declarations, error) {
 				return out, fmt.Errorf("workflow %s: %w", w.Name, err)
 			}
 			out.Workflows = append(out.Workflows, wf)
+		}
+	}
+	if in.Emitters != nil {
+		for _, e := range *in.Emitters {
+			em := types.Emitter{Name: e.Name, Kind: string(e.Kind), TokenHash: strings.ToLower(e.TokenHash)}
+			if err := desiredstate.ValidateEmitter(em); err != nil {
+				return out, fmt.Errorf("emitter %s: %w", e.Name, err)
+			}
+			out.Emitters = append(out.Emitters, em)
+		}
+	}
+	if in.Baselines != nil {
+		for _, w := range *in.Baselines {
+			b, err := baselineFromWire(w)
+			if err != nil {
+				return out, fmt.Errorf("baseline %s: %w", w.Name, err)
+			}
+			out.Baselines = append(out.Baselines, b)
 		}
 	}
 	return out, nil
@@ -1330,4 +1447,65 @@ func (s *Server) ListEmitters(w http.ResponseWriter, r *http.Request) {
 		out = append(out, Emitter{Name: e.Name, Kind: EmitterKind(e.Kind), TokenHash: e.TokenHash})
 	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+// ListBaselines implements (GET /baselines): the declared checkable desired
+// state (ADR-0019). Read-only — Baselines are CaC-only.
+func (s *Server) ListBaselines(w http.ResponseWriter, r *http.Request) {
+	bs, err := s.Store.ListBaselines(r.Context())
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	out := make([]Baseline, 0, len(bs))
+	for _, b := range bs {
+		out = append(out, baselineToWire(b))
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+// GetBaseline implements (GET /baselines/{name}).
+func (s *Server) GetBaseline(w http.ResponseWriter, r *http.Request, name string) {
+	b, err := s.Store.GetBaseline(r.Context(), name)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, baselineToWire(b))
+}
+
+// ListFindings implements (GET /findings): drift/compliance results across
+// every Baseline on one list (§5 Flow 2: one dashboard).
+func (s *Server) ListFindings(w http.ResponseWriter, r *http.Request, params ListFindingsParams) {
+	baseline, status := "", ""
+	if params.Baseline != nil {
+		baseline = *params.Baseline
+	}
+	if params.Status != nil {
+		status = string(*params.Status)
+	}
+	limit := 0
+	if params.Limit != nil {
+		limit = int(*params.Limit)
+	}
+	fs, err := s.Store.ListFindings(r.Context(), baseline, status, limit)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	out := make([]Finding, 0, len(fs))
+	for _, f := range fs {
+		out = append(out, findingToWire(f))
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+// GetFinding implements (GET /findings/{id}).
+func (s *Server) GetFinding(w http.ResponseWriter, r *http.Request, id string) {
+	f, err := s.Store.GetFinding(r.Context(), id)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, findingToWire(f))
 }

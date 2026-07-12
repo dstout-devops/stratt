@@ -69,6 +69,10 @@ type params struct {
 	// EEImage overrides the dispatcher's default execution-environment
 	// image. Dev accepts tags; production manifests pin digests (§7.3).
 	EEImage string `json:"eeImage"`
+	// Check runs the play in check mode with diff capture (--check --diff):
+	// nothing mutates, and "changed" means "would change" — the Baseline
+	// drift signal (ADR-0019).
+	Check bool `json:"check"`
 }
 
 // Actuator adapts this package's pure functions to the Actuator seam.
@@ -93,14 +97,20 @@ func (Actuator) Prepare(raw json.RawMessage, targets []Target) (actuators.JobSpe
 		return actuators.JobSpec{}, err
 	}
 	content := BuildContent(play, targets)
+	// -j: one JSON event per stdout line — the event stream the
+	// dispatcher ships to NATS.
+	command := []string{"ansible-runner", "run", "/runner", "-p", "play.yml", "-j"}
+	if p.Check {
+		// Check mode with diffs: read-only by the tool's own contract;
+		// changed results mean "would change" (ADR-0019).
+		command = append(command, "--cmdline", "--check --diff")
+	}
 	return actuators.JobSpec{
 		Files: map[string]string{
 			"project/play.yml": content.Play,
 			"inventory/hosts":  content.Hosts,
 		},
-		// -j: one JSON event per stdout line — the event stream the
-		// dispatcher ships to NATS.
-		Command: []string{"ansible-runner", "run", "/runner", "-p", "play.yml", "-j"},
+		Command: command,
 		Image:   p.EEImage,
 	}, nil
 }
@@ -133,7 +143,64 @@ func (Actuator) Interpret(line []byte) (actuators.Interpreted, bool) {
 		}
 	}
 	out.Facts = ExtractFacts(ev)
+	out.Drift = ExtractDiff(ev)
 	return out, true
+}
+
+// ExtractDiff lifts a changed task's observed-vs-expected detail from a
+// runner_on_ok event into a drift fragment (ADR-0019): the task name plus
+// the STRUCTURE of the tool's diff — which files/objects would change —
+// never the before/after bodies. Diff bodies are rendered file content and
+// can carry secret material; the persisted Finding must not (§2.5,
+// charter-guardian on ADR-0019). Full detail stays on the Run's event
+// stream, mirroring the opentofu posture (addresses/actions in fragments;
+// values only in the redacted plan-json event). Nil for unchanged tasks.
+func ExtractDiff(ev RunnerEvent) json.RawMessage {
+	if ev.Event != "runner_on_ok" {
+		return nil
+	}
+	res, ok := ev.EventData["res"].(map[string]any)
+	if !ok {
+		return nil
+	}
+	if changed, _ := res["changed"].(bool); !changed {
+		return nil
+	}
+	fragment := map[string]any{"changed": true}
+	if task, _ := ev.EventData["task"].(string); task != "" {
+		fragment["task"] = task
+	}
+	if paths := diffPaths(res["diff"]); len(paths) > 0 {
+		fragment["paths"] = paths
+	}
+	raw, err := json.Marshal(fragment)
+	if err != nil {
+		return nil
+	}
+	return raw
+}
+
+// diffPaths reduces an ansible --diff document to the changed objects'
+// headers (file paths / object names) — structure only, no content.
+func diffPaths(diff any) []string {
+	entries, ok := diff.([]any)
+	if !ok {
+		return nil
+	}
+	var paths []string
+	for _, d := range entries {
+		m, ok := d.(map[string]any)
+		if !ok {
+			continue
+		}
+		for _, key := range []string{"after_header", "before_header"} {
+			if s, _ := m[key].(string); s != "" {
+				paths = append(paths, s)
+				break
+			}
+		}
+	}
+	return paths
 }
 
 // RunnerEvent is the subset of an ansible-runner JSON event the platform

@@ -16,6 +16,11 @@ func TestValidateActuatorParams(t *testing.T) {
 	if err := ValidateActuatorParams("ansible", nil); err != nil {
 		t.Fatalf("nil params must validate as {}: %v", err)
 	}
+	// check arrived with ansible.input v2 (ADR-0019) — the latest version
+	// answers validation.
+	if err := ValidateActuatorParams("ansible", []byte(`{"check":true}`)); err != nil {
+		t.Fatalf("v2 check param rejected: %v", err)
+	}
 
 	// The slice-7 e2e failure class: a typoed key, caught with a pointer.
 	err := ValidateActuatorParams("script", []byte(`{"soruce":"typo"}`))
@@ -63,13 +68,22 @@ func TestPinsAreStable(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(all) != 5 {
-		t.Fatalf("expected 5 embedded documents, got %d", len(all))
+	if len(all) != 6 {
+		t.Fatalf("expected 6 embedded documents, got %d", len(all))
 	}
+	versions := map[string]int{}
 	for _, c := range all {
-		if len(c.Hash) != 64 || c.Rung != "hand-written" || c.Version != 1 {
+		if len(c.Hash) != 64 || c.Rung != "hand-written" || c.Version < 1 {
 			t.Fatalf("pin shape: %+v", c)
 		}
+		if c.Version > versions[c.Name] {
+			versions[c.Name] = c.Version
+		}
+	}
+	// ansible.input v2 (check mode, ADR-0019) resolves as the current
+	// version; v1 stays pinned alongside it.
+	if versions["actuators/ansible.input"] != 2 {
+		t.Fatalf("ansible.input current version: %d", versions["actuators/ansible.input"])
 	}
 	// Same process, same documents → identical pins on re-read.
 	again, _ := All()

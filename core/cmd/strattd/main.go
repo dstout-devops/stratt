@@ -28,6 +28,7 @@ import (
 	"github.com/dstout-devops/stratt/core/internal/actuators/script"
 	"github.com/dstout-devops/stratt/core/internal/api"
 	"github.com/dstout-devops/stratt/core/internal/authz"
+	"github.com/dstout-devops/stratt/core/internal/baselines"
 	"github.com/dstout-devops/stratt/core/internal/connectors/awsec2"
 	"github.com/dstout-devops/stratt/core/internal/connectors/msgraph"
 	"github.com/dstout-devops/stratt/core/internal/connectors/vcenter"
@@ -207,6 +208,7 @@ func run(ctx context.Context, log *slog.Logger) error {
 	w := worker.New(temporalClient, orchestrate.TaskQueue, worker.Options{})
 	w.RegisterWorkflow(orchestrate.RunAgainstView)
 	w.RegisterWorkflow(orchestrate.RunDAG)
+	w.RegisterWorkflow(orchestrate.RunBaselineCheck)
 	w.RegisterActivity(&orchestrate.Activities{Store: store, Dispatcher: dispatcher, Bus: bus, Authz: authorizer, Actuators: registry})
 	if err := w.Start(); err != nil {
 		return fmt.Errorf("temporal worker: %w", err)
@@ -354,6 +356,17 @@ func run(ctx context.Context, log *slog.Logger) error {
 		go func() {
 			if err := trigReconciler.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
 				log.Error("trigger reconciler stopped", "error", err)
+			}
+		}()
+
+		// Declared Baseline cadences project onto Temporal Schedules the same
+		// way (§3: "Baseline cadences"; ADR-0019).
+		blReconciler := &baselines.Reconciler{
+			Temporal: temporalClient, Store: store, Log: log, Interval: interval,
+		}
+		go func() {
+			if err := blReconciler.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
+				log.Error("baseline reconciler stopped", "error", err)
 			}
 		}()
 	} else {

@@ -204,10 +204,17 @@ type tofuMsg struct {
 		Detail   string `json:"detail"`
 	} `json:"diagnostic"`
 	Changes *struct {
-		Add    int `json:"add"`
-		Change int `json:"change"`
-		Remove int `json:"remove"`
+		Add       int    `json:"add"`
+		Change    int    `json:"change"`
+		Remove    int    `json:"remove"`
+		Operation string `json:"operation"`
 	} `json:"changes"`
+	Change *struct {
+		Resource struct {
+			Addr string `json:"addr"`
+		} `json:"resource"`
+		Action string `json:"action"`
+	} `json:"change"`
 }
 
 // Interpret implements actuators.Actuator.
@@ -239,6 +246,29 @@ func (Actuator) Interpret(line []byte) (actuators.Interpreted, bool) {
 				payload["add"] = m.Changes.Add
 				payload["change"] = m.Changes.Change
 				payload["remove"] = m.Changes.Remove
+			}
+			// Drift capture (ADR-0019): a plan that would change IS "changed"
+			// in check semantics — "tofu plan on cron is drift detection, no
+			// special case" (§5 Flow 2). The plan's change_summary escalates
+			// the workspace to changed (statuses only escalate, so the later
+			// rc=0 terminal ok cannot hide it); each planned/drifted resource
+			// rides along as an observed-vs-expected fragment. Addresses and
+			// counts only — never planned values (those stay in the redacted
+			// plan-json event).
+			switch {
+			case m.Type == "change_summary" && m.Changes != nil && m.Changes.Operation == "plan":
+				if m.Changes.Add+m.Changes.Change+m.Changes.Remove > 0 {
+					out.Result = &actuators.TargetResult{Target: "workspace", Status: actuators.StatusChanged}
+					out.Drift, _ = json.Marshal(map[string]any{
+						"add": m.Changes.Add, "change": m.Changes.Change, "remove": m.Changes.Remove,
+					})
+				}
+			case (m.Type == "planned_change" || m.Type == "resource_drift") && m.Change != nil:
+				fragment := map[string]any{"address": m.Change.Resource.Addr, "action": m.Change.Action}
+				if m.Type == "resource_drift" {
+					fragment["drift"] = true
+				}
+				out.Drift, _ = json.Marshal(fragment)
 			}
 		}
 		out.Event.Kind = kind
