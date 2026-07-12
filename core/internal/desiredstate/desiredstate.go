@@ -48,6 +48,7 @@ type Declarations struct {
 	Workflows      []types.Workflow      `json:"workflows"`
 	Emitters       []types.Emitter       `json:"emitters"`
 	Baselines      []types.Baseline      `json:"baselines"`
+	MCPServers     []types.MCPServer     `json:"mcpServers"`
 }
 
 // Declared kinds appearing in plans.
@@ -58,6 +59,7 @@ const (
 	KindWorkflow      = "workflow"
 	KindEmitter       = "emitter"
 	KindBaseline      = "baseline"
+	KindMCPServer     = "mcp-server"
 )
 
 // Action is what reconciliation will do (or did) to one declared object.
@@ -201,6 +203,13 @@ func ParseDir(root string) (Declarations, error) {
 	}
 	out.Baselines = baselines
 	sort.Slice(out.Baselines, func(i, j int) bool { return out.Baselines[i].Name < out.Baselines[j].Name })
+
+	mcpServers, err := parseKind(filepath.Join(root, "mcp-servers"), true, parseMCPServerFile)
+	if err != nil {
+		return out, err
+	}
+	out.MCPServers = mcpServers
+	sort.Slice(out.MCPServers, func(i, j int) bool { return out.MCPServers[i].Name < out.MCPServers[j].Name })
 	return out, nil
 }
 
@@ -551,6 +560,74 @@ func ValidateBaseline(b types.Baseline) error {
 	return nil
 }
 
+// mcpServerFile is the mcp-servers/*.yaml shape (ADR-0022). For stdio the
+// declaration carries the server's entire source — the sandbox runs exactly
+// what Git review approved, never a command derived from Run-time input
+// (the structural stdio-injection mitigation; dependency-scout mandate).
+type mcpServerFile struct {
+	Name      string `yaml:"name"`
+	Transport string `yaml:"transport"`
+	Rev       int    `yaml:"rev"`
+	Script    string `yaml:"script"`
+	Endpoint  string `yaml:"endpoint"`
+	TokenRef  *struct {
+		CredentialRef string `yaml:"credentialRef"`
+		Key           string `yaml:"key"`
+	} `yaml:"tokenRef"`
+}
+
+func parseMCPServerFile(path string, raw []byte) (string, types.MCPServer, error) {
+	var f mcpServerFile
+	dec := yaml.NewDecoder(strings.NewReader(string(raw)))
+	dec.KnownFields(true)
+	if err := dec.Decode(&f); err != nil {
+		return "", types.MCPServer{}, fmt.Errorf("desiredstate: %s: %w", path, err)
+	}
+	m := types.MCPServer{
+		Name: f.Name, Transport: f.Transport, Rev: f.Rev,
+		Script: f.Script, Endpoint: f.Endpoint,
+	}
+	if f.TokenRef != nil {
+		m.TokenRef = &types.MCPTokenRef{CredentialRef: f.TokenRef.CredentialRef, Key: f.TokenRef.Key}
+	}
+	if err := ValidateMCPServer(m); err != nil {
+		return "", types.MCPServer{}, fmt.Errorf("desiredstate: %s: %w", path, err)
+	}
+	return m.Name, m, nil
+}
+
+// ValidateMCPServer checks one MCPServer declaration (ADR-0022).
+func ValidateMCPServer(m types.MCPServer) error {
+	if m.Name == "" {
+		return fmt.Errorf("mcp server requires a name")
+	}
+	if m.Rev < 1 {
+		return fmt.Errorf("mcp server %s: rev must be >= 1 (it keys the pinned tool contracts)", m.Name)
+	}
+	switch m.Transport {
+	case types.MCPTransportStdio:
+		if m.Script == "" {
+			return fmt.Errorf("mcp server %s: stdio transport requires script (the server source, Git-reviewed)", m.Name)
+		}
+		if m.Endpoint != "" || m.TokenRef != nil {
+			return fmt.Errorf("mcp server %s: endpoint/tokenRef belong to http transport", m.Name)
+		}
+	case types.MCPTransportHTTP:
+		if m.Endpoint == "" {
+			return fmt.Errorf("mcp server %s: http transport requires endpoint", m.Name)
+		}
+		if m.Script != "" {
+			return fmt.Errorf("mcp server %s: script belongs to stdio transport", m.Name)
+		}
+		if m.TokenRef != nil && (m.TokenRef.CredentialRef == "" || m.TokenRef.Key == "") {
+			return fmt.Errorf("mcp server %s: tokenRef requires credentialRef and key", m.Name)
+		}
+	default:
+		return fmt.Errorf("mcp server %s: unknown transport %q (stdio, http)", m.Name, m.Transport)
+	}
+	return nil
+}
+
 // validateParamsContract checks actuation params against the Actuator's
 // input Contract (§1.5, ADR-0015) — a bad declaration fails its file at
 // plan/reconcile time, never at dispatch.
@@ -763,6 +840,11 @@ func ComputePlan(ctx context.Context, store *graph.Store, decls Declarations) (P
 		return Plan{}, err
 	}
 	plan.Entries = append(plan.Entries, blPlan.Entries...)
+	msPlan, err := computeMCPServerPlan(ctx, store, decls.MCPServers)
+	if err != nil {
+		return Plan{}, err
+	}
+	plan.Entries = append(plan.Entries, msPlan.Entries...)
 	sort.Slice(plan.Entries, func(i, j int) bool {
 		if plan.Entries[i].Kind != plan.Entries[j].Kind {
 			return plan.Entries[i].Kind < plan.Entries[j].Kind
@@ -1034,6 +1116,40 @@ func computeBaselinePlan(ctx context.Context, store *graph.Store, decls []types.
 	return plan, nil
 }
 
+// computeMCPServerPlan diffs declared MCPServers (CaC-only, ADR-0022).
+func computeMCPServerPlan(ctx context.Context, store *graph.Store, decls []types.MCPServer) (Plan, error) {
+	current, err := store.ListMCPServers(ctx)
+	if err != nil {
+		return Plan{}, err
+	}
+	byName := map[string]types.MCPServer{}
+	for _, m := range current {
+		byName[m.Name] = m
+	}
+	var plan Plan
+	declared := map[string]bool{}
+	for _, d := range decls {
+		declared[d.Name] = true
+		entry := PlanEntry{Kind: KindMCPServer, Name: d.Name}
+		cur, exists := byName[d.Name]
+		switch {
+		case !exists:
+			entry.Action = ActionCreate
+		case declDocsEqual(cur, d):
+			entry.Action = ActionNoop
+		default:
+			entry.Action = ActionUpdate
+		}
+		plan.Entries = append(plan.Entries, entry)
+	}
+	for _, m := range current {
+		if !declared[m.Name] {
+			plan.Entries = append(plan.Entries, PlanEntry{Kind: KindMCPServer, Name: m.Name, Action: ActionDelete})
+		}
+	}
+	return plan, nil
+}
+
 // Apply executes the plan for the declarations and returns the realized plan.
 // Per-object failures are recorded on their entries; the rest still applies.
 func Apply(ctx context.Context, store *graph.Store, decls Declarations) (Plan, error) {
@@ -1064,6 +1180,10 @@ func Apply(ctx context.Context, store *graph.Store, decls Declarations) (Plan, e
 	blByName := map[string]types.Baseline{}
 	for _, d := range decls.Baselines {
 		blByName[d.Name] = d
+	}
+	msByName := map[string]types.MCPServer{}
+	for _, d := range decls.MCPServers {
+		msByName[d.Name] = d
 	}
 	for i := range plan.Entries {
 		e := &plan.Entries[i]
@@ -1096,6 +1216,10 @@ func Apply(ctx context.Context, store *graph.Store, decls Declarations) (Plan, e
 			err = store.DeleteBaseline(ctx, e.Name)
 		case e.Kind == KindBaseline:
 			err = store.UpsertBaseline(ctx, blByName[e.Name])
+		case e.Kind == KindMCPServer && e.Action == ActionDelete:
+			err = store.DeleteMCPServer(ctx, e.Name)
+		case e.Kind == KindMCPServer:
+			err = store.UpsertMCPServer(ctx, msByName[e.Name])
 		}
 		if err != nil {
 			e.Error = err.Error()

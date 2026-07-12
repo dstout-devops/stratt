@@ -92,6 +92,9 @@ type Result struct {
 	// check-mode execution (ADR-0019) — redacted upstream, size-capped here
 	// with a visible truncation marker (§1.8: truncation is never silent).
 	Drift map[string][]json.RawMessage
+	// MCPTools are tool schemas declared by an external MCP server during
+	// this execution (rung-3 registration material, ADR-0022).
+	MCPTools []actuators.MCPToolDecl
 	// SpawnLatency is Job-creation → pod-running, the §8 pod-spawn gate.
 	SpawnLatency time.Duration
 }
@@ -445,6 +448,9 @@ func (d *Dispatcher) followLogs(ctx context.Context, runID string, slice int, po
 		}
 		if len(iv.OutputsContract) > 0 {
 			res.OutputsContract = iv.OutputsContract
+		}
+		if len(iv.MCPTools) > 0 {
+			res.MCPTools = append(res.MCPTools, iv.MCPTools...)
 		}
 		if len(iv.Drift) > 0 && iv.Event.Target != "" {
 			target := iv.Event.Target

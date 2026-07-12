@@ -17,6 +17,7 @@ import (
 	"go.temporal.io/sdk/workflow"
 
 	"github.com/dstout-devops/stratt/core/internal/actuators"
+	mcpact "github.com/dstout-devops/stratt/core/internal/actuators/mcp"
 	"github.com/dstout-devops/stratt/core/internal/authz"
 	"github.com/dstout-devops/stratt/core/internal/dispatch"
 	"github.com/dstout-devops/stratt/core/internal/events"
@@ -78,6 +79,9 @@ type FactSet struct {
 	// the name it registers under (empty = none).
 	OutputsContract     json.RawMessage
 	OutputsContractName string
+	// MCPTools are an external MCP server's declared tool schemas — the
+	// rung-3 pin material (ADR-0022).
+	MCPTools []actuators.MCPToolDecl
 	// Workspace stamps the stratt.workspace selection label (v1 binding).
 	Workspace string
 }
@@ -371,6 +375,7 @@ func mergeResults(slices []dispatch.Result) dispatch.Result {
 		if len(r.OutputsContract) > 0 {
 			out.OutputsContract = r.OutputsContract
 		}
+		out.MCPTools = append(out.MCPTools, r.MCPTools...)
 		for t, fragments := range r.Drift {
 			if out.Drift == nil {
 				out.Drift = map[string][]json.RawMessage{}
@@ -395,6 +400,18 @@ func (a *Activities) CollectFacts(ctx context.Context, in RunInput, resolved Res
 		}
 	}
 	fs.Entities = result.Entities
+	if len(result.MCPTools) > 0 {
+		// Belt to the driver's own gate: pins mint ONLY from deliberate
+		// register-mode Runs — never as a side effect of a call touching a
+		// sibling tool (guardian on ADR-0022).
+		var p struct {
+			Mode string `json:"mode"`
+		}
+		_ = json.Unmarshal(in.Params, &p)
+		if p.Mode == "register" {
+			fs.MCPTools = result.MCPTools
+		}
+	}
 	if len(result.OutputsContract) > 0 {
 		fs.OutputsContract = result.OutputsContract
 		// The workspace names the derived contract and the selection label.
@@ -449,6 +466,28 @@ func (a *Activities) ProjectFacts(ctx context.Context, runID string, facts FactS
 		sum := sha256.Sum256(facts.OutputsContract)
 		if _, err := a.Store.RegisterDerivedContract(ctx, facts.OutputsContractName,
 			types.RungToolDerived, hex.EncodeToString(sum[:]), facts.OutputsContract); err != nil {
+			return err
+		}
+	}
+	// Rung 3 (§2.2, ADR-0022): pin the MCP server's declared tool schemas at
+	// the declaration's rev. Canonical form here must equal what the driver
+	// hashed; drift within a rev is ErrContractDrift — the Run fails
+	// visibly, and accepting the change is a Git act (bump rev).
+	for _, t := range facts.MCPTools {
+		hash, canonical, err := mcpact.CanonicalHash(t.Schema)
+		if err != nil {
+			return temporal.NewNonRetryableApplicationError(
+				fmt.Sprintf("mcp tool %s/%s: %v", t.Server, t.Tool, err), "InvalidToolSchema", err)
+		}
+		if hash != t.Hash {
+			return temporal.NewNonRetryableApplicationError(
+				fmt.Sprintf("mcp tool %s/%s: driver hash %s != control-plane hash %s (canonicalization mismatch)",
+					t.Server, t.Tool, t.Hash, hash), "CanonicalizationMismatch", nil)
+		}
+		if err := a.Store.RegisterMCPContract(ctx, mcpact.ContractName(t.Server, t.Tool), t.Rev, hash, canonical); err != nil {
+			if errors.Is(err, graph.ErrContractDrift) {
+				return temporal.NewNonRetryableApplicationError(err.Error(), "ContractDrift", err)
+			}
 			return err
 		}
 	}

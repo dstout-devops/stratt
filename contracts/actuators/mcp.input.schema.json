@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "stratt:contract:actuators/mcp.input:v1",
+  "title": "mcp Step params",
+  "description": "Input Contract for the mcp Actuator (charter §2.3: generic MCP-client; ADR-0022). register pins the declared server's tool schemas at its rev; call invokes one tool — refused unless the tool is pinned at that rev, and arguments validate against the pin (rung 3: MCP-declared-and-pinned, drift blocking).",
+  "type": "object",
+  "required": ["server"],
+  "properties": {
+    "server": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Declared MCPServer name (mcp-servers/*.yaml)."
+    },
+    "mode": {
+      "type": "string",
+      "enum": ["register", "call"],
+      "description": "register: pin the server's declared tool schemas. call (default): invoke one tool."
+    },
+    "tool": {
+      "type": "string",
+      "description": "Tool name (call mode)."
+    },
+    "arguments": {
+      "type": "object",
+      "description": "Tool arguments, validated against the pinned mcp/<server>/<tool>.input Contract."
+    },
+    "eeImage": {
+      "type": "string",
+      "description": "MCP execution-environment image override."
+    }
+  },
+  "additionalProperties": false
+}

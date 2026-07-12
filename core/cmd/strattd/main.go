@@ -24,6 +24,7 @@ import (
 
 	"github.com/dstout-devops/stratt/core/internal/actuators"
 	"github.com/dstout-devops/stratt/core/internal/actuators/ansible"
+	mcpact "github.com/dstout-devops/stratt/core/internal/actuators/mcp"
 	"github.com/dstout-devops/stratt/core/internal/actuators/opentofu"
 	"github.com/dstout-devops/stratt/core/internal/actuators/script"
 	"github.com/dstout-devops/stratt/core/internal/api"
@@ -184,6 +185,22 @@ func run(ctx context.Context, log *slog.Logger) error {
 	for _, a := range []actuators.Actuator{ansible.Actuator{}, script.Actuator{}} {
 		registry[a.Name()] = a
 	}
+
+	// mcp Actuator (ADR-0022): store-backed declaration + pin lookups; the
+	// external server runs only inside the sandboxed EE pod.
+	mcpActuator := mcpact.FromEnv(store.GetMCPServer,
+		func(ctx context.Context, name string, version int) (types.Contract, bool, error) {
+			c, err := store.GetContract(ctx, name, version)
+			if errors.Is(err, graph.ErrNotFound) {
+				return types.Contract{}, false, nil
+			}
+			if err != nil {
+				return types.Contract{}, false, err
+			}
+			return c, true, nil
+		})
+	registry[mcpActuator.Name()] = mcpActuator
+	log.Info("mcp actuator ready", "eeImage", mcpActuator.DefaultImage)
 
 	// OpenTofu (ADR-0016): requires the encrypted state backend — without a
 	// state key the actuator is not registered and the backend not mounted;

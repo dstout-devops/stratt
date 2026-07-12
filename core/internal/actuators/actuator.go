@@ -91,6 +91,21 @@ type Interpreted struct {
 	// already redacted upstream. The dispatcher accumulates fragments per
 	// target, size-capped, for Baseline evaluation (ADR-0019).
 	Drift json.RawMessage
+	// MCPTools are tool schemas an external MCP server declared during this
+	// event — the rung-3 registration material (§2.2, ADR-0022), pinned by
+	// the orchestration layer.
+	MCPTools []MCPToolDecl
+}
+
+// MCPToolDecl is one tool schema declared by an external MCP server: the
+// input to the rung-3 (mcp-declared-and-pinned) Contract path. Hash is the
+// canonical-form sha256 the driver computed; Rev keys the pin.
+type MCPToolDecl struct {
+	Server string
+	Rev    int
+	Tool   string
+	Hash   string
+	Schema json.RawMessage
 }
 
 // Actuator prepares tool content and interprets the resulting event stream

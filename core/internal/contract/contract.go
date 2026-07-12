@@ -185,6 +185,26 @@ func ValidateActuatorParams(actuator string, params json.RawMessage) error {
 	return c.validate(params)
 }
 
+// ValidateDocument evaluates an instance against a schema document that is
+// not embedded — e.g. a DB-pinned rung-2/3 Contract (ADR-0022). The schema
+// compiles ad hoc; contractName only labels the error (§1.8 pointer detail).
+func ValidateDocument(contractName string, schema, instance json.RawMessage) error {
+	compiler := jsonschema.NewCompiler()
+	doc, err := jsonschema.UnmarshalJSON(bytes.NewReader(schema))
+	if err != nil {
+		return &ValidationError{Contract: contractName, Detail: "schema is not valid JSON: " + err.Error()}
+	}
+	if err := compiler.AddResource("schema.json", doc); err != nil {
+		return &ValidationError{Contract: contractName, Detail: "schema: " + err.Error()}
+	}
+	sch, err := compiler.Compile("schema.json")
+	if err != nil {
+		return &ValidationError{Contract: contractName, Detail: "schema does not compile: " + err.Error()}
+	}
+	c := &compiled{contract: types.Contract{Name: contractName}, schema: sch}
+	return c.validate(instance)
+}
+
 // ValidateFacet checks a Facet value when its namespace has a pinned schema.
 // covered=false means no schema exists for the namespace — allowed by
 // design: a Facet schema may exist only when a shipping Contract demands it

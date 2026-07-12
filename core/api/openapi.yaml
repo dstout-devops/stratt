@@ -739,13 +739,16 @@ components:
         baselines:
           type: array
           items: { $ref: "#/components/schemas/Baseline" }
+        mcpServers:
+          type: array
+          items: { $ref: "#/components/schemas/MCPServer" }
     PlanEntry:
       type: object
       required: [name, action, memberCount]
       properties:
         kind:
           type: string
-          enum: [view, credential-ref, trigger, workflow, emitter, baseline]
+          enum: [view, credential-ref, trigger, workflow, emitter, baseline, mcp-server]
         name: { type: string }
         action:
           type: string
@@ -784,7 +787,7 @@ components:
         viewName: { type: string }
         actuator:
           type: string
-          enum: [ansible, script, opentofu]
+          enum: [ansible, script, opentofu, mcp]
           default: ansible
         params:
           type: object
@@ -846,6 +849,33 @@ components:
         tokenHash:
           type: string
           description: hex(sha256(token)) — never the token itself (§2.5).
+    MCPServer:
+      type: object
+      description: >
+        A CaC-declared external MCP server the mcp Actuator may invoke
+        (charter §2.3, ADR-0022). stdio servers carry their entire source in
+        the declaration — Git review authorizes exactly what the sandbox
+        runs. rev keys the pinned tool Contracts (rung 3, drift blocking).
+      required: [name, transport, rev]
+      properties:
+        name: { type: string }
+        transport:
+          type: string
+          enum: [stdio, http]
+        rev: { type: integer, format: int64, minimum: 1 }
+        script:
+          type: string
+          description: stdio server source (Git-reviewed, run verbatim).
+        endpoint:
+          type: string
+          description: http server URL.
+        tokenRef:
+          type: object
+          description: CredentialRef pointer for the http bearer token (never material, §2.5).
+          required: [credentialRef, key]
+          properties:
+            credentialRef: { type: string }
+            key: { type: string }
     UsageEntry:
       type: object
       description: >

@@ -45,6 +45,35 @@ func (s *Store) RegisterContract(ctx context.Context, c types.Contract) error {
 	}
 }
 
+// RegisterMCPContract pins one rung-3 (mcp-declared-and-pinned, §2.2)
+// document at the declaration's rev: RegisterContract's blocking semantics
+// apply — same (name, rev) with a different hash is ErrContractDrift, and
+// the registration Run fails visibly. Accepting a changed schema is a Git
+// act (bump rev, re-register); rung 2's auto-versioning is deliberately NOT
+// available here (ADR-0022).
+func (s *Store) RegisterMCPContract(ctx context.Context, name string, rev int, hash string, schema []byte) error {
+	return s.RegisterContract(ctx, types.Contract{
+		Name: name, Version: rev, Rung: types.RungMCPDeclared, Hash: hash, Schema: schema,
+	})
+}
+
+// GetContract returns one pinned Contract by (name, version).
+func (s *Store) GetContract(ctx context.Context, name string, version int) (types.Contract, error) {
+	var c types.Contract
+	c.Name, c.Version = name, version
+	err := s.pool.QueryRow(ctx,
+		`SELECT rung, hash, schema FROM graph.contract WHERE name = $1 AND version = $2`,
+		name, version,
+	).Scan(&c.Rung, &c.Hash, &c.Schema)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return c, fmt.Errorf("%w: contract %s v%d", ErrNotFound, name, version)
+	}
+	if err != nil {
+		return c, fmt.Errorf("graph: get contract: %w", err)
+	}
+	return c, nil
+}
+
 // ListContracts returns every pinned Contract, ordered by name+version.
 func (s *Store) ListContracts(ctx context.Context) ([]types.Contract, error) {
 	rows, err := s.pool.Query(ctx, `

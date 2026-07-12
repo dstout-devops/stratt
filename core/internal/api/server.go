@@ -631,6 +631,24 @@ func declarationsFromWire(in DesiredState) (desiredstate.Declarations, error) {
 			out.Baselines = append(out.Baselines, b)
 		}
 	}
+	if in.McpServers != nil {
+		for _, w := range *in.McpServers {
+			m := types.MCPServer{Name: w.Name, Transport: string(w.Transport), Rev: int(w.Rev)}
+			if w.Script != nil {
+				m.Script = *w.Script
+			}
+			if w.Endpoint != nil {
+				m.Endpoint = *w.Endpoint
+			}
+			if w.TokenRef != nil {
+				m.TokenRef = &types.MCPTokenRef{CredentialRef: w.TokenRef.CredentialRef, Key: w.TokenRef.Key}
+			}
+			if err := desiredstate.ValidateMCPServer(m); err != nil {
+				return out, fmt.Errorf("mcp server %s: %w", w.Name, err)
+			}
+			out.MCPServers = append(out.MCPServers, m)
+		}
+	}
 	return out, nil
 }
 

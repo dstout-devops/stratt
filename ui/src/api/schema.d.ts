@@ -635,10 +635,11 @@ export interface components {
             workflows?: components["schemas"]["Workflow"][];
             emitters?: components["schemas"]["Emitter"][];
             baselines?: components["schemas"]["Baseline"][];
+            mcpServers?: components["schemas"]["MCPServer"][];
         };
         PlanEntry: {
             /** @enum {string} */
-            kind?: "view" | "credential-ref" | "trigger" | "workflow" | "emitter" | "baseline";
+            kind?: "view" | "credential-ref" | "trigger" | "workflow" | "emitter" | "baseline" | "mcp-server";
             name: string;
             /** @enum {string} */
             action: "create" | "update" | "adopt" | "noop" | "delete";
@@ -665,7 +666,7 @@ export interface components {
              * @default ansible
              * @enum {string}
              */
-            actuator: "ansible" | "script" | "opentofu";
+            actuator: "ansible" | "script" | "opentofu" | "mcp";
             /** @description Actuator-interpreted Step params (e.g. script source). */
             params?: Record<string, never>;
             /**
@@ -704,6 +705,23 @@ export interface components {
             kind: "webhook" | "alertmanager";
             /** @description hex(sha256(token)) — never the token itself (§2.5). */
             tokenHash: string;
+        };
+        /** @description A CaC-declared external MCP server the mcp Actuator may invoke (charter §2.3, ADR-0022). stdio servers carry their entire source in the declaration — Git review authorizes exactly what the sandbox runs. rev keys the pinned tool Contracts (rung 3, drift blocking). */
+        MCPServer: {
+            name: string;
+            /** @enum {string} */
+            transport: "stdio" | "http";
+            /** Format: int64 */
+            rev: number;
+            /** @description stdio server source (Git-reviewed, run verbatim). */
+            script?: string;
+            /** @description http server URL. */
+            endpoint?: string;
+            /** @description CredentialRef pointer for the http bearer token (never material, §2.5). */
+            tokenRef?: {
+                credentialRef: string;
+                key: string;
+            };
         };
         /** @description One (Principal, tool) aggregate of platform-MCP-server calls (charter §1.6 accounting per identity, ADR-0021). */
         UsageEntry: {
