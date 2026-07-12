@@ -286,6 +286,9 @@ func triggerToWire(t types.Trigger) Trigger {
 	if t.ViewName != "" {
 		out.ViewName = &t.ViewName
 	}
+	if t.ViewParams != nil {
+		out.ViewParams = &t.ViewParams
+	}
 	if t.Emitter != "" {
 		out.Emitter = &t.Emitter
 	}
@@ -738,6 +741,9 @@ func triggerFromWire(w Trigger) (types.Trigger, error) {
 	if w.ViewName != nil {
 		t.ViewName = *w.ViewName
 	}
+	if w.ViewParams != nil {
+		t.ViewParams = *w.ViewParams
+	}
 	if w.Emitter != nil {
 		t.Emitter = *w.Emitter
 	}
@@ -794,6 +800,9 @@ func planToWire(p desiredstate.Plan) Plan {
 			msg := e.Error
 			w.Error = &msg
 		}
+		if e.ParamDependent {
+			w.ParamDependent = &e.ParamDependent
+		}
 		out.Entries[i] = w
 	}
 	return out
@@ -847,7 +856,7 @@ func (s *Server) ResolveView(w http.ResponseWriter, r *http.Request, name ViewNa
 	if params.Limit != nil {
 		limit = *params.Limit
 	}
-	v, ents, err := s.Store.ResolveView(r.Context(), name, limit)
+	v, ents, err := s.Store.ResolveView(r.Context(), name, nil, limit)
 	if err != nil {
 		s.fail(w, err)
 		return

@@ -18,11 +18,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"regexp"
 	"sort"
 	"strings"
 
 	"github.com/dstout-devops/stratt/core/internal/graph"
+	"github.com/dstout-devops/stratt/core/internal/template"
 	"github.com/dstout-devops/stratt/types"
 )
 
@@ -82,7 +82,7 @@ type Store interface {
 	ListAssignments(ctx context.Context) ([]types.Assignment, error)
 	GetIntent(ctx context.Context, name string) (types.Intent, error)
 	GetView(ctx context.Context, name string) (types.View, error)
-	ResolveSelector(ctx context.Context, sel types.ViewSelector, limit int) ([]types.Entity, error)
+	ResolveSelector(ctx context.Context, sel types.ViewSelector, params map[string]any, limit int) ([]types.Entity, error)
 	GetBlueprint(ctx context.Context, name string, version int) (types.Blueprint, error)
 	GetWorkflow(ctx context.Context, name string) (types.Workflow, error)
 	GetAssignmentMembership(ctx context.Context, assignment string) (graph.AssignmentMembership, bool, error)
@@ -303,6 +303,10 @@ func validateRefs(ctx context.Context, s Store, a types.Assignment) (types.Bluep
 		return types.Blueprint{}, types.Intent{}, fmt.Sprintf(
 			"assignment %s: view %q is not cac-declared — an Assignment may not target an api View (desired state must stay in Git, §2.1)", a.Name, a.View)
 	}
+	if selectorParametrized(view.Selector) {
+		return types.Blueprint{}, types.Intent{}, fmt.Sprintf(
+			"assignment %s: view %q is parametrized ({{.param.x}}) — parametrized Views bind only at launch, not as a compile target (ADR-0024: the max-delta gate is undefined against param variance)", a.Name, a.View)
+	}
 	intent, err := s.GetIntent(ctx, a.Intent)
 	if err != nil {
 		return types.Blueprint{}, types.Intent{}, fmt.Sprintf("assignment %s: intent %q not found", a.Name, a.Intent)
@@ -324,6 +328,23 @@ func validateRefs(ctx context.Context, s Store, a types.Assignment) (types.Bluep
 		}
 	}
 	return bp, intent, ""
+}
+
+// selectorParametrized reports whether a View selector carries {{.param.x}}
+// placeholders (ADR-0024) — such a View resolves only with launch-supplied
+// params and cannot be an Assignment/Baseline compile target.
+func selectorParametrized(sel types.ViewSelector) bool {
+	for _, v := range sel.Labels {
+		if strings.Contains(v, "{{") {
+			return true
+		}
+	}
+	for _, f := range sel.Facets {
+		if strings.Contains(string(f.Equals), "{{") {
+			return true
+		}
+	}
+	return false
 }
 
 // compiledBaseline builds one facet-observation Baseline for an (Assignment,
@@ -369,7 +390,7 @@ func CompiledName(assignment, blueprint string, version, route int) string {
 
 // resolveIDs resolves a selector to a sorted slice of Entity ids.
 func resolveIDs(ctx context.Context, s Store, sel types.ViewSelector) ([]string, error) {
-	ents, err := s.ResolveSelector(ctx, sel, 0)
+	ents, err := s.ResolveSelector(ctx, sel, nil, 0)
 	if err != nil {
 		return nil, err
 	}
@@ -424,70 +445,53 @@ func exceedsDelta(prevCount, changed int, maxDelta float64) bool {
 	return float64(changed)/float64(prevCount) > maxDelta
 }
 
-var tmplRe = regexp.MustCompile(`\{\{\s*\.spec\.([a-zA-Z0-9_]+)\s*\}\}`)
-
-// substitute replaces {{.spec.KEY}} references with the Intent spec value
-// (explicit field lookup only — no expression language, a charter non-goal).
-// An unknown key is a compile error.
-func substitute(s string, spec map[string]any) (string, string) {
-	var missing string
-	out := tmplRe.ReplaceAllStringFunc(s, func(m string) string {
-		key := tmplRe.FindStringSubmatch(m)[1]
-		v, ok := spec[key]
-		if !ok {
-			missing = key
-			return m
-		}
-		return fmt.Sprint(v)
-	})
-	if missing != "" {
-		return "", fmt.Sprintf("template references unknown spec field %q", missing)
-	}
-	return out, ""
-}
-
-// substituteRaw substitutes templates inside a JSON string value; non-string
-// JSON passes through unchanged.
-func substituteRaw(raw json.RawMessage, spec map[string]any) (json.RawMessage, string) {
-	if len(raw) == 0 {
-		return raw, ""
-	}
-	var sv string
-	if err := json.Unmarshal(raw, &sv); err != nil {
-		return raw, "" // not a string literal — no templating
-	}
-	if !strings.Contains(sv, "{{") {
-		return raw, ""
-	}
-	out, serr := substitute(sv, spec)
-	if serr != "" {
-		return nil, serr
-	}
-	nb, _ := json.Marshal(out)
-	return nb, ""
-}
-
-// substituteExpectation applies Intent-spec substitution to an observe
-// expectation's Path and Equals/Contains values.
+// substituteExpectation applies Intent-spec substitution ({{.spec.X}}) to an
+// observe expectation's Path and Equals/Contains values, via the shared
+// explicit-lookup engine (ADR-0024).
 func substituteExpectation(exp types.FacetExpectation, spec map[string]any) (types.FacetExpectation, string) {
 	if exp.Namespace == "" {
 		return exp, "observe expectation requires a namespace"
 	}
-	path, serr := substitute(exp.Path, spec)
-	if serr != "" {
-		return exp, serr
+	ns := template.Namespaces{"spec": spec}
+	path, err := template.Substitute(exp.Path, ns)
+	if err != nil {
+		return exp, err.Error()
 	}
-	exp.Path = path
-	if exp.Equals, serr = substituteRaw(exp.Equals, spec); serr != "" {
-		return exp, serr
+	exp.Path, _ = path.(string)
+	if exp.Equals, err = substituteRaw(exp.Equals, ns); err != nil {
+		return exp, err.Error()
 	}
-	if exp.Contains, serr = substituteRaw(exp.Contains, spec); serr != "" {
-		return exp, serr
+	if exp.Contains, err = substituteRaw(exp.Contains, ns); err != nil {
+		return exp, err.Error()
 	}
 	if len(exp.Equals) == 0 && len(exp.Contains) == 0 {
 		return exp, "observe expectation requires equals or contains"
 	}
 	return exp, ""
+}
+
+// substituteRaw resolves templates inside a JSON value: unmarshal → substitute
+// (type-preserving) → re-marshal. Empty/invalid JSON passes through.
+func substituteRaw(raw json.RawMessage, ns template.Namespaces) (json.RawMessage, error) {
+	if len(raw) == 0 {
+		return raw, nil
+	}
+	var v any
+	if err := json.Unmarshal(raw, &v); err != nil {
+		return raw, nil
+	}
+	if !template.Has(v) {
+		return raw, nil
+	}
+	out, err := template.Substitute(v, ns)
+	if err != nil {
+		return nil, err
+	}
+	nb, err := json.Marshal(out)
+	if err != nil {
+		return nil, err
+	}
+	return nb, nil
 }
 
 type poison struct {

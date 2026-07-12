@@ -164,7 +164,7 @@ func assertLive(t *testing.T, store *graph.Store, want int) {
 // its graph.name label.
 func labelOf(t *testing.T, store *graph.Store, id string) string {
 	t.Helper()
-	ents, err := store.ResolveSelector(context.Background(), types.ViewSelector{Kinds: []string{"device"}}, 0)
+	ents, err := store.ResolveSelector(context.Background(), types.ViewSelector{Kinds: []string{"device"}}, nil, 0)
 	if err != nil {
 		t.Fatal(err)
 	}

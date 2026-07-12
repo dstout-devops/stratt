@@ -818,6 +818,11 @@ components:
           description: Live Entity count the relevant selector matches now.
         oldSelector: { $ref: "#/components/schemas/ViewSelector" }
         newSelector: { $ref: "#/components/schemas/ViewSelector" }
+        paramDependent:
+          type: boolean
+          description: >
+            A parametrized View whose membership binds at launch — memberCount
+            is not meaningful and is omitted (ADR-0024).
         error: { type: string }
     Plan:
       type: object
@@ -1203,6 +1208,11 @@ components:
           type: string
           description: Launch a declared Workflow instead of a single Run.
         viewName: { type: string }
+        viewParams:
+          type: object
+          description: >
+            Binds a parametrized View's {{.param.x}} placeholders; values may
+            reference the firing event ({{.event.x}}) — ADR-0024.
         actuator: { type: string }
         params: { type: object }
         slices: { type: integer, format: int64 }

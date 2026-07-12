@@ -35,26 +35,6 @@ func TestExceedsDelta(t *testing.T) {
 	}
 }
 
-func TestSubstitute(t *testing.T) {
-	spec := map[string]any{"package": "google-chrome", "channel": "stable"}
-	got, serr := substitute("{{.spec.package}}", spec)
-	if serr != "" || got != "google-chrome" {
-		t.Fatalf("substitute: %q %q", got, serr)
-	}
-	got, serr = substitute("v-{{ .spec.channel }}-x", spec)
-	if serr != "" || got != "v-stable-x" {
-		t.Fatalf("substitute inline: %q %q", got, serr)
-	}
-	// Unknown field is a compile error.
-	if _, serr := substitute("{{.spec.missing}}", spec); serr == "" {
-		t.Fatal("unknown spec field must error")
-	}
-	// No template passes through.
-	if got, _ := substitute("literal", spec); got != "literal" {
-		t.Fatalf("literal: %q", got)
-	}
-}
-
 func TestSubstituteExpectation(t *testing.T) {
 	spec := map[string]any{"package": "google-chrome"}
 	exp := types.FacetExpectation{

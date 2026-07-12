@@ -169,8 +169,12 @@ func compile(t types.Trigger) (client.ScheduleSpec, *client.ScheduleWorkflowActi
 		action.Args = []any{orchestrate.RunInput{
 			// RunID stays empty: EnsureRun creates the Run summary for
 			// schedule-fired executions (ADR-0010).
-			Trigger:        t.Name,
-			ViewName:       t.ViewName,
+			Trigger:  t.Name,
+			ViewName: t.ViewName,
+			// Schedule launches have no firing event; viewParams carry only
+			// literal values (event templates are rejected at declaration,
+			// ADR-0024).
+			ViewParams:     t.ViewParams,
 			Actuator:       t.Actuator,
 			Params:         params,
 			Slices:         t.Slices,

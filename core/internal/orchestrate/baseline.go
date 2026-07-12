@@ -118,7 +118,7 @@ func (a *Activities) EvaluateFacetBaseline(ctx context.Context, b types.Baseline
 		return graph.ObservationOutcome{}, temporal.NewNonRetryableApplicationError(
 			fmt.Sprintf("baseline %s: facet-observation requires a compiled selector", b.Name), "InvalidBaseline", nil)
 	}
-	ents, err := a.Store.ResolveSelector(ctx, *b.Selector, 0)
+	ents, err := a.Store.ResolveSelector(ctx, *b.Selector, nil, 0)
 	if err != nil {
 		return graph.ObservationOutcome{}, err
 	}

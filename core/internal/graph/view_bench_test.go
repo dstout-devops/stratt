@@ -76,7 +76,7 @@ func TestViewQueryGate(t *testing.T) {
 	}
 
 	// Warm once (plan cache, buffers), then measure.
-	if _, err := s.ResolveSelector(ctx, sel, 0); err != nil {
+	if _, err := s.ResolveSelector(ctx, sel, nil, 0); err != nil {
 		t.Fatal(err)
 	}
 	const rounds = 10
@@ -84,7 +84,7 @@ func TestViewQueryGate(t *testing.T) {
 	var matched int
 	for range rounds {
 		t0 := time.Now()
-		ents, err := s.ResolveSelector(ctx, sel, 0)
+		ents, err := s.ResolveSelector(ctx, sel, nil, 0)
 		if err != nil {
 			t.Fatal(err)
 		}

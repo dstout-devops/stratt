@@ -329,6 +329,31 @@ func TestCompileRejectsNonCacView(t *testing.T) {
 	}
 }
 
+func TestCompileRejectsParametrizedView(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	seedEntity(t, s, "u1", "x86_64")
+	// A parametrized cac View — binds only at launch, not as a compile target.
+	if _, err := s.DeclareViewAs(ctx, "param-vms",
+		types.ViewSelector{Kinds: []string{"vm"}, Labels: map[string]string{"host": "{{.param.host}}"}},
+		graph.DeclaredByCaC); err != nil {
+		t.Fatal(err)
+	}
+	must(t, s.UpsertIntent(ctx, types.Intent{Name: "chrome", Kind: types.IntentApplication}))
+	must(t, s.UpsertBlueprint(ctx, appBlueprint("application", 1, types.ClaimAdditive)))
+	must(t, s.UpsertAssignment(ctx, types.Assignment{Name: "kiosks", Intent: "chrome", View: "param-vms", Blueprint: "application", BlueprintVersion: 1}))
+	plan := compileApply(t, s, 0)
+	found := false
+	for _, e := range plan.Errors {
+		if contains(e, "parametrized") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected a parametrized-View rejection, got %v", plan.Errors)
+	}
+}
+
 func must(t *testing.T, err error) {
 	t.Helper()
 	if err != nil {

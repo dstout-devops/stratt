@@ -29,6 +29,7 @@ import (
 	"github.com/dstout-devops/stratt/core/internal/contract"
 	"github.com/dstout-devops/stratt/core/internal/graph"
 	"github.com/dstout-devops/stratt/core/internal/rules"
+	"github.com/dstout-devops/stratt/core/internal/template"
 	"github.com/dstout-devops/stratt/types"
 )
 
@@ -97,6 +98,10 @@ type PlanEntry struct {
 	MemberCount int64               `json:"memberCount"`
 	OldSelector *types.ViewSelector `json:"oldSelector,omitempty"`
 	NewSelector *types.ViewSelector `json:"newSelector,omitempty"`
+	// ParamDependent marks a parametrized View (ADR-0024) whose membership
+	// depends on launch params — MemberCount is not meaningful (it binds at
+	// launch, not reconcile) and is left 0 rather than a misleading count.
+	ParamDependent bool `json:"paramDependent,omitempty"`
 	// Error carries a per-View apply failure (apply continues past it).
 	Error string `json:"error,omitempty"`
 }
@@ -297,7 +302,26 @@ func parseViewFile(path string, raw []byte) (string, Declaration, error) {
 	if err != nil {
 		return "", Declaration{}, fmt.Errorf("desiredstate: %s: %w", path, err)
 	}
+	// A View selector may bind only the param namespace ({{.param.x}}) — a
+	// parametrized View (ADR-0024). event/spec are not available here; catch
+	// them at declaration, not at launch.
+	if err := checkTemplateNamespaces("view "+f.Name, map[string]bool{"param": true}, selectorStrings(sel)...); err != nil {
+		return "", Declaration{}, fmt.Errorf("desiredstate: %s: %w", path, err)
+	}
 	return f.Name, Declaration{Name: f.Name, Selector: sel}, nil
+}
+
+// selectorStrings returns a selector's templatable string values (label
+// values, facet equals) for namespace-scope checking.
+func selectorStrings(sel types.ViewSelector) []any {
+	var out []any
+	for _, v := range sel.Labels {
+		out = append(out, v)
+	}
+	for _, f := range sel.Facets {
+		out = append(out, string(f.Equals))
+	}
+	return out
 }
 
 // credRefFile is the credential-refs/*.yaml shape (pointer + injection
@@ -378,6 +402,7 @@ type triggerFile struct {
 	When            string         `yaml:"when"`
 	CooldownSeconds int            `yaml:"cooldownSeconds"`
 	ViewName        string         `yaml:"viewName"`
+	ViewParams      map[string]any `yaml:"viewParams"`
 	Actuator        string         `yaml:"actuator"`
 	Params          map[string]any `yaml:"params"`
 	Slices          int            `yaml:"slices"`
@@ -399,7 +424,8 @@ func parseTriggerFile(path string, raw []byte) (string, types.Trigger, error) {
 	t := types.Trigger{
 		Name: f.Name, Kind: f.Kind, Cron: f.Cron, Paused: f.Paused,
 		Emitter: f.Emitter, When: f.When, CooldownSeconds: f.CooldownSeconds,
-		ViewName: f.ViewName, Actuator: f.Actuator, Params: f.Params,
+		ViewName: f.ViewName, ViewParams: f.ViewParams,
+		Actuator: f.Actuator, Params: f.Params,
 		Slices: f.Slices, CredentialRefs: f.CredentialRefs, Principal: f.Principal,
 		WorkflowName: f.WorkflowName,
 	}
@@ -424,6 +450,17 @@ func ValidateTrigger(t types.Trigger) error {
 	}
 	if workflowLaunch && (t.Actuator != "" || t.Params != nil || t.Slices != 0 || len(t.CredentialRefs) > 0) {
 		return fmt.Errorf("trigger %s: workflowName launches carry no Step fields (the Workflow declares its own)", t.Name)
+	}
+	// Template namespace scope (ADR-0024): a Trigger's params/viewParams may
+	// bind {{.event.x}} only on event-kind Triggers (a schedule fire has no
+	// event); the spec/param namespaces belong to the compiler and the View,
+	// not here.
+	allowed := map[string]bool{}
+	if t.Kind == types.TriggerEvent {
+		allowed["event"] = true
+	}
+	if err := checkTemplateNamespaces("trigger "+t.Name, allowed, t.Params, t.ViewParams); err != nil {
+		return err
 	}
 	switch t.Kind {
 	case types.TriggerSchedule:
@@ -884,8 +921,14 @@ func ValidateBlueprint(b types.Blueprint) error {
 
 // validateParamsContract checks actuation params against the Actuator's
 // input Contract (§1.5, ADR-0015) — a bad declaration fails its file at
-// plan/reconcile time, never at dispatch.
+// plan/reconcile time, never at dispatch. Params carrying {{...}} bindings
+// (ADR-0024) are validated at LAUNCH against their resolved values instead
+// (the placeholder isn't the value the schema must accept), so their
+// contract check is skipped here.
 func validateParamsContract(actuator string, params map[string]any) error {
+	if template.Has(params) {
+		return nil
+	}
 	name := actuator
 	if name == "" {
 		name = "ansible"
@@ -899,6 +942,24 @@ func validateParamsContract(actuator string, params map[string]any) error {
 		raw = b
 	}
 	return contract.ValidateActuatorParams(name, raw)
+}
+
+// checkTemplateNamespaces rejects a declaration whose bindings reference a
+// namespace the context does not provide (ADR-0024): e.g. {{.event.x}} on a
+// schedule Trigger, or {{.spec.x}} anywhere outside the compiler.
+func checkTemplateNamespaces(what string, allowed map[string]bool, vals ...any) error {
+	refs := map[string]bool{}
+	for _, v := range vals {
+		for ns := range template.References(v) {
+			refs[ns] = true
+		}
+	}
+	for ns := range refs {
+		if !allowed[ns] {
+			return fmt.Errorf("%s: template references the %q namespace, which is not available here", what, ns)
+		}
+	}
+	return nil
 }
 
 // workflowFile is the workflows/*.yaml shape (ADR-0011): a DAG of Steps —
@@ -997,6 +1058,13 @@ func ValidateWorkflow(w types.Workflow) error {
 		if !isGate {
 			if err := validateParamsContract(s.Actuator, s.Params); err != nil {
 				return fmt.Errorf("workflow %s: step %s: %w", w.Name, s.Name, err)
+			}
+			// A Step's params may bind only the event namespace (from the
+			// firing Emitter event, ADR-0024) — resolved by ResolveStepParams.
+			if err := checkTemplateNamespaces(
+				fmt.Sprintf("workflow %s step %s", w.Name, s.Name),
+				map[string]bool{"event": true}, s.Params); err != nil {
+				return err
 			}
 		}
 	}
@@ -1155,11 +1223,18 @@ func computeViewPlan(ctx context.Context, store *graph.Store, decls []Declaratio
 			}
 		}
 		if entry.Action != ActionNoop {
-			n, err := store.CountSelector(ctx, d.Selector)
-			if err != nil {
-				return Plan{}, err
+			// A parametrized View's membership is a launch-time concept —
+			// counting the literal {{.param.x}} selector would print a
+			// misleading ~0 (ADR-0024). Mark it, skip the count.
+			if selectorHasTemplate(d.Selector) {
+				entry.ParamDependent = true
+			} else {
+				n, err := store.CountSelector(ctx, d.Selector)
+				if err != nil {
+					return Plan{}, err
+				}
+				entry.MemberCount = n
 			}
-			entry.MemberCount = n
 		}
 		plan.Entries = append(plan.Entries, entry)
 	}
@@ -1169,15 +1244,35 @@ func computeViewPlan(ctx context.Context, store *graph.Store, decls []Declaratio
 		if declared[v.Name] {
 			continue
 		}
-		n, err := store.CountSelector(ctx, v.Selector)
-		if err != nil {
-			return Plan{}, err
+		e := PlanEntry{Kind: KindView, Name: v.Name, Action: ActionDelete, OldSelector: ptr(v.Selector)}
+		if selectorHasTemplate(v.Selector) {
+			e.ParamDependent = true
+		} else {
+			n, err := store.CountSelector(ctx, v.Selector)
+			if err != nil {
+				return Plan{}, err
+			}
+			e.MemberCount = n
 		}
-		plan.Entries = append(plan.Entries, PlanEntry{
-			Kind: KindView, Name: v.Name, Action: ActionDelete, MemberCount: n, OldSelector: ptr(v.Selector),
-		})
+		plan.Entries = append(plan.Entries, e)
 	}
 	return plan, nil
+}
+
+// selectorHasTemplate reports whether a selector carries {{...}} placeholders
+// (a parametrized View, ADR-0024).
+func selectorHasTemplate(sel types.ViewSelector) bool {
+	for _, v := range sel.Labels {
+		if strings.Contains(v, "{{") {
+			return true
+		}
+	}
+	for _, f := range sel.Facets {
+		if strings.Contains(string(f.Equals), "{{") {
+			return true
+		}
+	}
+	return false
 }
 
 // computeCredentialRefPlan diffs declared CredentialRef pointers. Equality

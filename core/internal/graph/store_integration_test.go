@@ -234,7 +234,7 @@ func TestViewResolution(t *testing.T) {
 		t.Fatalf("fresh view should be version 1, got %d", v.Version)
 	}
 
-	_, ents, err := s.ResolveView(ctx, "test/prod-linux", 0)
+	_, ents, err := s.ResolveView(ctx, "test/prod-linux", nil, 0)
 	if err != nil {
 		t.Fatal(err)
 	}

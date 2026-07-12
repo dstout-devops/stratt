@@ -9,6 +9,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"github.com/dstout-devops/stratt/core/internal/template"
 	"github.com/dstout-devops/stratt/types"
 )
 
@@ -126,8 +127,14 @@ func containmentDoc(path string, equals json.RawMessage) (json.RawMessage, error
 }
 
 // ResolveSelector returns the live Entity set a selector produces, ordered by
-// id for stable pagination. limit <= 0 means no limit.
-func (s *Store) ResolveSelector(ctx context.Context, sel types.ViewSelector, limit int) ([]types.Entity, error) {
+// id for stable pagination. limit <= 0 means no limit. A selector carrying
+// {{.param.x}} placeholders (a parametrized View, ADR-0024) is resolved
+// against params first; a non-parametrized selector ignores params.
+func (s *Store) ResolveSelector(ctx context.Context, sel types.ViewSelector, params map[string]any, limit int) ([]types.Entity, error) {
+	sel, err := bindSelector(sel, params)
+	if err != nil {
+		return nil, err
+	}
 	where, args, err := selectorSQL(sel)
 	if err != nil {
 		return nil, err
@@ -179,12 +186,71 @@ func (s *Store) CountSelector(ctx context.Context, sel types.ViewSelector) (int6
 }
 
 // ResolveView resolves a View by name to its current Entity set, returning
-// the version so callers can record exactly what they targeted (§4.3).
-func (s *Store) ResolveView(ctx context.Context, name string, limit int) (types.View, []types.Entity, error) {
+// the version so callers can record exactly what they targeted (§4.3). params
+// binds a parametrized View's placeholders (ADR-0024); nil for a plain View.
+func (s *Store) ResolveView(ctx context.Context, name string, params map[string]any, limit int) (types.View, []types.Entity, error) {
 	v, err := s.GetView(ctx, name)
 	if err != nil {
 		return types.View{}, nil, err
 	}
-	ents, err := s.ResolveSelector(ctx, v.Selector, limit)
+	ents, err := s.ResolveSelector(ctx, v.Selector, params, limit)
 	return v, ents, err
+}
+
+// bindSelector resolves {{.param.x}} placeholders in a copy of the selector
+// (Labels values and Facet Equals) against params — the parametrized-View
+// binding (ADR-0024). selectorSQL then sees fully-resolved structured data.
+// A selector with no placeholders returns unchanged.
+func bindSelector(sel types.ViewSelector, params map[string]any) (types.ViewSelector, error) {
+	hasTemplate := false
+	for _, v := range sel.Labels {
+		if strings.Contains(v, "{{") {
+			hasTemplate = true
+		}
+	}
+	for _, f := range sel.Facets {
+		if strings.Contains(string(f.Equals), "{{") {
+			hasTemplate = true
+		}
+	}
+	if !hasTemplate {
+		return sel, nil
+	}
+	ns := template.Namespaces{"param": params}
+	out := types.ViewSelector{Kinds: sel.Kinds}
+	if sel.Labels != nil {
+		out.Labels = make(map[string]string, len(sel.Labels))
+		for k, v := range sel.Labels {
+			r, err := template.Substitute(v, ns)
+			if err != nil {
+				return sel, fmt.Errorf("graph: view label %q: %w", k, err)
+			}
+			out.Labels[k] = fmt.Sprint(r)
+		}
+	}
+	for _, f := range sel.Facets {
+		nf := f
+		if strings.Contains(string(f.Equals), "{{") {
+			bound, err := bindRaw(f.Equals, ns)
+			if err != nil {
+				return sel, fmt.Errorf("graph: view facet %q: %w", f.Namespace, err)
+			}
+			nf.Equals = bound
+		}
+		out.Facets = append(out.Facets, nf)
+	}
+	return out, nil
+}
+
+// bindRaw substitutes templates inside a JSON value (type-preserving).
+func bindRaw(raw json.RawMessage, ns template.Namespaces) (json.RawMessage, error) {
+	var v any
+	if err := json.Unmarshal(raw, &v); err != nil {
+		return raw, nil
+	}
+	out, err := template.Substitute(v, ns)
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(out)
 }

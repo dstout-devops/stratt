@@ -18,10 +18,12 @@ import (
 	"go.temporal.io/api/serviceerror"
 	"go.temporal.io/sdk/client"
 
+	"github.com/dstout-devops/stratt/core/internal/contract"
 	"github.com/dstout-devops/stratt/core/internal/events"
 	"github.com/dstout-devops/stratt/core/internal/graph"
 	"github.com/dstout-devops/stratt/core/internal/orchestrate"
 	"github.com/dstout-devops/stratt/core/internal/rules"
+	"github.com/dstout-devops/stratt/core/internal/template"
 	"github.com/dstout-devops/stratt/types"
 )
 
@@ -97,7 +99,7 @@ func (e *Engine) handle(ctx context.Context, log *slog.Logger, ev types.EmitterE
 				continue
 			}
 		}
-		if err := e.launch(ctx, log, t, hash); err != nil {
+		if err := e.launch(ctx, log, t, ev, hash); err != nil {
 			log.Error("trigger launch failed; event will redeliver", "trigger", t.Name, "error", err)
 			launchErr = err
 		}
@@ -124,18 +126,23 @@ func (e *Engine) program(t types.Trigger) (*rules.Program, error) {
 }
 
 // launch fires the Trigger's declared target with a deterministic workflow
-// id — the dedup axis for at-least-once delivery.
-func (e *Engine) launch(ctx context.Context, log *slog.Logger, t types.Trigger, eventHash string) error {
+// id — the dedup axis for at-least-once delivery. The firing event's payload
+// binds {{.event.x}} references in the launch params/viewParams (ADR-0024).
+func (e *Engine) launch(ctx context.Context, log *slog.Logger, t types.Trigger, ev types.EmitterEvent, eventHash string) error {
 	opts := client.StartWorkflowOptions{
 		TaskQueue: orchestrate.TaskQueue,
 	}
 	short := eventHash[:16]
+	ns := template.Namespaces{"event": ev.Payload}
 	if t.WorkflowName != "" {
 		opts.ID = fmt.Sprintf("trigger-%s-%s", t.Name, short)
+		// The payload rides into the DAG; each Step resolves its own
+		// {{.event.x}} bindings (ResolveStepParams activity).
 		_, err := e.Temporal.ExecuteWorkflow(ctx, opts, orchestrate.RunDAG, orchestrate.DAGInput{
 			WorkflowName: t.WorkflowName,
 			Principal:    t.Principal,
 			Trigger:      t.Name,
+			Event:        ev.Payload,
 		})
 		if isAlreadyStarted(err) {
 			log.Info("trigger launch deduplicated", "trigger", t.Name, "id", opts.ID)
@@ -147,17 +154,25 @@ func (e *Engine) launch(ctx context.Context, log *slog.Logger, t types.Trigger, 
 		return err
 	}
 
-	var params json.RawMessage
-	if t.Params != nil {
-		raw, err := json.Marshal(t.Params)
-		if err != nil {
-			return err
-		}
-		params = raw
+	// Run target: resolve + re-validate params, and bind viewParams, against
+	// the event before launch. A missing field or a resolved contract
+	// violation is a TERMINAL data problem (this payload will never bind) —
+	// logged and dropped, never launched and never redelivered (a poison
+	// message must not loop). Only infrastructure failures below redeliver.
+	params, err := contract.ResolveActuatorParams(actuatorOrDefault(t.Actuator), t.Params, ns)
+	if err != nil {
+		log.Error("trigger binding failed; event dropped (not redelivered)", "trigger", t.Name, "error", err)
+		return nil
+	}
+	viewParams, err := template.SubstituteParams(t.ViewParams, ns)
+	if err != nil {
+		log.Error("trigger viewParams binding failed; event dropped (not redelivered)", "trigger", t.Name, "error", err)
+		return nil
 	}
 	opts.ID = fmt.Sprintf("trigger-%s-%s", t.Name, short)
-	_, err := e.Temporal.ExecuteWorkflow(ctx, opts, orchestrate.RunAgainstView, orchestrate.RunInput{
+	_, err = e.Temporal.ExecuteWorkflow(ctx, opts, orchestrate.RunAgainstView, orchestrate.RunInput{
 		ViewName:       t.ViewName,
+		ViewParams:     viewParams,
 		Actuator:       t.Actuator,
 		Params:         params,
 		Slices:         t.Slices,
@@ -173,6 +188,13 @@ func (e *Engine) launch(ctx context.Context, log *slog.Logger, t types.Trigger, 
 		log.Info("trigger launched run", "trigger", t.Name, "view", t.ViewName, "id", opts.ID)
 	}
 	return err
+}
+
+func actuatorOrDefault(a string) string {
+	if a == "" {
+		return "ansible"
+	}
+	return a
 }
 
 func isAlreadyStarted(err error) bool {

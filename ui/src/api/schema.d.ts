@@ -724,6 +724,8 @@ export interface components {
             memberCount: number;
             oldSelector?: components["schemas"]["ViewSelector"];
             newSelector?: components["schemas"]["ViewSelector"];
+            /** @description A parametrized View whose membership binds at launch — memberCount is not meaningful and is omitted (ADR-0024). */
+            paramDependent?: boolean;
             error?: string;
         };
         Plan: {
@@ -987,6 +989,8 @@ export interface components {
             /** @description Launch a declared Workflow instead of a single Run. */
             workflowName?: string;
             viewName?: string;
+            /** @description Binds a parametrized View's {{.param.x}} placeholders; values may reference the firing event ({{.event.x}}) — ADR-0024. */
+            viewParams?: Record<string, never>;
             actuator?: string;
             params?: Record<string, never>;
             /** Format: int64 */

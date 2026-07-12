@@ -8,6 +8,8 @@ import (
 	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/workflow"
 
+	"github.com/dstout-devops/stratt/core/internal/contract"
+	"github.com/dstout-devops/stratt/core/internal/template"
 	"github.com/dstout-devops/stratt/types"
 )
 
@@ -26,6 +28,10 @@ type DAGInput struct {
 	// Trigger names the Trigger that fired this execution; empty for
 	// API launches (§1.8 descent: Trigger → WorkflowRun).
 	Trigger string
+	// Event is the Emitter-event payload that fired this execution (empty
+	// for schedule/API launches) — the source for a Step's {{.event.x}}
+	// param bindings (ADR-0024).
+	Event map[string]any
 }
 
 // GateDecision is the signal payload an authorized Principal sends to a
@@ -185,13 +191,15 @@ func stepEligible(s types.Step, state map[string]string) (ready, met bool) {
 // runActuationStep executes one Step as a child RunAgainstView workflow.
 // EnsureRun (slice 6) creates the Run row, stamping WorkflowRunID/StepName.
 func runActuationStep(ctx workflow.Context, in DAGInput, step types.Step) string {
+	// Resolve the Step's {{.event.x}} param bindings against the firing
+	// event and re-validate the result against the Actuator Contract, in an
+	// activity (I/O-free but not workflow-deterministic; ADR-0024). A binding
+	// that references a missing field or resolves to a contract violation
+	// fails the Step visibly (§1.8), never reaching the Actuator.
 	var params json.RawMessage
-	if step.Params != nil {
-		raw, err := json.Marshal(step.Params)
-		if err != nil {
-			return stepFailed
-		}
-		params = raw
+	var a *Activities
+	if err := workflow.ExecuteActivity(ctx, a.ResolveStepParams, step.Actuator, step.Params, in.Event).Get(ctx, &params); err != nil {
+		return stepFailed
 	}
 	cctx := workflow.WithChildOptions(ctx, workflow.ChildWorkflowOptions{
 		WorkflowID: ChildRunID(in.WorkflowRunID, step.Name),
@@ -267,6 +275,22 @@ func (a *Activities) EnsureWorkflowRun(ctx context.Context, in DAGInput, tempora
 		return "", err
 	}
 	return wr.ID, nil
+}
+
+// ResolveStepParams substitutes a Step's {{.event.x}} bindings against the
+// firing event, then re-validates the resolved params against the Actuator's
+// input Contract before dispatch (ADR-0024). Returns the resolved params as
+// the JSON the Actuator receives.
+func (a *Activities) ResolveStepParams(ctx context.Context, actuator string, params map[string]any, event map[string]any) (json.RawMessage, error) {
+	name := actuator
+	if name == "" {
+		name = "ansible"
+	}
+	raw, err := contract.ResolveActuatorParams(name, params, template.Namespaces{"event": event})
+	if err != nil {
+		return nil, temporal.NewNonRetryableApplicationError(err.Error(), "InvalidStepParams", err)
+	}
+	return raw, nil
 }
 
 // LoadWorkflow reads the declared Workflow spec.

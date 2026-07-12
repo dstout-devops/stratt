@@ -36,7 +36,11 @@ type Trigger struct {
 	CooldownSeconds int `json:"cooldownSeconds,omitempty"`
 	// Launch target: a single Run (ViewName + Actuator + Params + …) or a
 	// declared Workflow (WorkflowName) — exactly one.
-	ViewName       string         `json:"viewName,omitempty"`
+	ViewName string `json:"viewName,omitempty"`
+	// ViewParams binds a parametrized View's {{.param.x}} placeholders
+	// (ADR-0024); values may themselves reference the firing event
+	// ({{.event.x}}). Empty for plain Views.
+	ViewParams     map[string]any `json:"viewParams,omitempty"`
 	Actuator       string         `json:"actuator,omitempty"`
 	Params         map[string]any `json:"params,omitempty"`
 	Slices         int            `json:"slices,omitempty"`

@@ -22,6 +22,7 @@ import (
 	"golang.org/x/text/message"
 
 	"github.com/dstout-devops/stratt/contracts"
+	"github.com/dstout-devops/stratt/core/internal/template"
 	"github.com/dstout-devops/stratt/types"
 )
 
@@ -183,6 +184,29 @@ func ValidateActuatorParams(actuator string, params json.RawMessage) error {
 		params = []byte(`{}`)
 	}
 	return c.validate(params)
+}
+
+// ResolveActuatorParams binds a launch-time param map's {{.ns.x}} templates
+// (ADR-0024), then re-validates the resolved params against the Actuator's
+// input Contract and returns the JSON the Actuator receives. This moves a
+// template-dependent field's validation from declaration time to launch —
+// the resolved value, not the placeholder, is what must satisfy the schema —
+// while guaranteeing the Actuator never sees unvalidated params (§1.5, §1.8).
+func ResolveActuatorParams(actuator string, params map[string]any, ns template.Namespaces) (json.RawMessage, error) {
+	resolved, err := template.SubstituteParams(params, ns)
+	if err != nil {
+		return nil, err
+	}
+	raw := json.RawMessage(`{}`)
+	if resolved != nil {
+		if raw, err = json.Marshal(resolved); err != nil {
+			return nil, err
+		}
+	}
+	if err := ValidateActuatorParams(actuator, raw); err != nil {
+		return nil, err
+	}
+	return raw, nil
 }
 
 // ValidateDocument evaluates an instance against a schema document that is

@@ -40,7 +40,10 @@ type RunInput struct {
 	ViewName string
 	Actuator string
 	Params   json.RawMessage
-	Slices   int
+	// ViewParams binds a parametrized View's {{.param.x}} placeholders at
+	// launch (ADR-0024) — resolved by ResolveTargets before selection.
+	ViewParams map[string]any
+	Slices     int
 	// Trigger names the Trigger that fired this Run; empty for manual/API
 	// launches (§1.8 descent: Trigger → Run).
 	Trigger string
@@ -224,7 +227,7 @@ func (a *Activities) EnsureRun(ctx context.Context, in RunInput, workflowID stri
 // execution targets. Phase-0 target semantics: local-connection per target
 // (see ansible.GatherFactsPlay).
 func (a *Activities) ResolveTargets(ctx context.Context, in RunInput) (ResolvedTargets, error) {
-	v, ents, err := a.Store.ResolveView(ctx, in.ViewName, 0)
+	v, ents, err := a.Store.ResolveView(ctx, in.ViewName, in.ViewParams, 0)
 	if err != nil {
 		return ResolvedTargets{}, err
 	}
