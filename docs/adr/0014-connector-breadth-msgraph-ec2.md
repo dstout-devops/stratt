@@ -56,6 +56,24 @@ tool-shape mapping isolated in a pure normalizer.
   in-process (paging, rename, removal, restart-resume, 410-resync) — the
   swap-fidelity proof for a future real-tenant run.
 
-## Implementation notes (commit B — EC2)
+## Implementation notes (commit B — EC2, 2026-07-12)
 
-(appended when commit B lands)
+- **Dependencies (dependency-scout 2026-07-12):** `aws-sdk-go-v2` RECOMMEND —
+  official, Apache-2.0, modular per-service versioning with no breaking major since
+  GA; pinned root v1.42.1 / config v1.32.29 / credentials v1.19.28 /
+  service/ec2 v1.316.0. The SDK is the boring choice; hand-rolled SigV4 would be
+  strictly worse.
+- **LocalStack REJECTED → moto.** LocalStack's March-2026 single-image unification
+  put EC2 behind an auth-gated paid tier and sunset the unauthenticated Apache-2.0
+  community image — the second gating move in its history; exactly the single-vendor
+  governance risk §1.3/§1.7 screen for. The dev stand-in is **moto**
+  (`motoserver/moto:5.2.2`, Apache-2.0, community-governed), which mocks the
+  run/describe/terminate surface over the wire — same subprocess-boundary posture
+  as vcsim/graphsim, never linked, never load-bearing.
+- Terminated instances are treated as absent (EC2 keeps them visible ~1h) — they
+  tombstone the cycle the API stops reporting them alive.
+- Verified e2e: 3 seeded instances projected with instance.* facets + syncer
+  provenance into the `cloud-instances` View; terminate → tombstoned within one
+  interval; runs alongside the vCenter and Graph Syncers on one graph.
+- Follow-up: the SDK's high release cadence wants the scheduled dependency-bump CI
+  job (scout note); real-account validation before production-ready.

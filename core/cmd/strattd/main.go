@@ -27,6 +27,7 @@ import (
 	"github.com/dstout-devops/stratt/core/internal/actuators/script"
 	"github.com/dstout-devops/stratt/core/internal/api"
 	"github.com/dstout-devops/stratt/core/internal/authz"
+	"github.com/dstout-devops/stratt/core/internal/connectors/awsec2"
 	"github.com/dstout-devops/stratt/core/internal/connectors/msgraph"
 	"github.com/dstout-devops/stratt/core/internal/connectors/vcenter"
 	"github.com/dstout-devops/stratt/core/internal/desiredstate"
@@ -221,6 +222,32 @@ func run(ctx context.Context, log *slog.Logger) error {
 		}()
 	} else {
 		log.Info("no MS Graph Source configured (STRATT_MSGRAPH_TENANT_ID empty); syncer idle")
+	}
+
+	// ── EC2 cloud-instance Syncer (ADR-0014) ─────────────────────────────
+	if region := os.Getenv("STRATT_AWS_REGION"); region != "" {
+		interval, err := time.ParseDuration(env("STRATT_AWS_INTERVAL", "60s"))
+		if err != nil {
+			return fmt.Errorf("awsec2 interval: %w", err)
+		}
+		syncer := awsec2.NewSyncer(awsec2.Config{
+			// Endpoint override points at the moto stand-in in dev;
+			// credentials arrive via the SDK's standard env chain (§2.5
+			// env-stub posture, CredentialRef brokering is the follow-up).
+			Endpoint:   os.Getenv("STRATT_AWS_ENDPOINT"),
+			Region:     region,
+			SourceName: env("STRATT_AWS_SOURCE_NAME", "awsec2"),
+		}, interval, store, log)
+		if err := syncer.Register(ctx); err != nil {
+			return err
+		}
+		go func() {
+			if err := syncer.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
+				log.Error("awsec2 syncer stopped", "error", err)
+			}
+		}()
+	} else {
+		log.Info("no EC2 Source configured (STRATT_AWS_REGION empty); syncer idle")
 	}
 
 	// ── desired-state reconciliation (§1.2: Git is the declarer) ────────

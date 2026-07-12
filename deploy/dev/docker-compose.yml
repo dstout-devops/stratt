@@ -100,6 +100,16 @@ services:
     # with). The Syncer's own connect/retry loop is the effective readiness
     # signal in dev.
 
+  moto:
+    # Dev stand-in for the EC2 API (ADR-0014; the vcsim posture). moto over
+    # LocalStack: dependency-scout 2026-07-12 — LocalStack's free tier
+    # dropped EC2 behind an auth-gated paid plan (March 2026); moto is
+    # Apache-2.0, community-governed, actively maintained, and mocks the
+    # run/describe/terminate-instances surface the Syncer e2e needs.
+    image: motoserver/moto:5.2.2
+    ports:
+      - "5000:5000"
+
   openfga:
     image: openfga/openfga:v1.17.0 # dependency-scout 2026-07-11: RECOMMEND (CNCF Incubating)
     command: ["run", "--datastore-engine", "memory"]
