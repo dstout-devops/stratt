@@ -283,6 +283,77 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/intents": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List declared Intents (CaC-only, ADR-0023) */
+        get: operations["listIntents"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/assignments": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List declared Assignments (CaC-only, ADR-0023) */
+        get: operations["listAssignments"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/blueprints": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List declared Blueprint versions (CaC-only, ADR-0023) */
+        get: operations["listBlueprints"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/compile": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Latest Intent-compile status — membership deltas, pauses, errors
+         * @description The §4.3 "stratt plan renders membership deltas" surface (ADR-0023): per-Assignment join/leave counts, max-delta pauses, and any compile errors from the most recent reconcile pass.
+         */
+        get: operations["getCompileStatus"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/baselines": {
         parameters: {
             query?: never;
@@ -636,10 +707,13 @@ export interface components {
             emitters?: components["schemas"]["Emitter"][];
             baselines?: components["schemas"]["Baseline"][];
             mcpServers?: components["schemas"]["MCPServer"][];
+            intents?: components["schemas"]["Intent"][];
+            assignments?: components["schemas"]["Assignment"][];
+            blueprints?: components["schemas"]["Blueprint"][];
         };
         PlanEntry: {
             /** @enum {string} */
-            kind?: "view" | "credential-ref" | "trigger" | "workflow" | "emitter" | "baseline" | "mcp-server";
+            kind?: "view" | "credential-ref" | "trigger" | "workflow" | "emitter" | "baseline" | "mcp-server" | "intent" | "assignment" | "blueprint";
             name: string;
             /** @enum {string} */
             action: "create" | "update" | "adopt" | "noop" | "delete";
@@ -723,6 +797,76 @@ export interface components {
                 key: string;
             };
         };
+        /** @description A declarative document of *what* (charter §2.4), bound to a View by an Assignment. CaC-only. v1: Intent/Application. */
+        Intent: {
+            name: string;
+            kind: string;
+            spec?: Record<string, never>;
+            /** @enum {string} */
+            onRemove?: "retain" | "revert" | "remove";
+        };
+        /** @description Binds an Intent to a cac-declared View, pinning a Blueprint version (charter §2.4). CaC-only. */
+        Assignment: {
+            name: string;
+            intent: string;
+            view: string;
+            blueprint: string;
+            /** Format: int64 */
+            blueprintVersion: number;
+            environments?: string[];
+            /** @description Per-Assignment max-delta gate fraction override (§4.3). */
+            maxDelta?: number;
+            /**
+             * Format: int64
+             * @description Acknowledgement token to unblock a paused large delta.
+             */
+            ackDelta?: number;
+        };
+        /** @description A versioned composition (Intent × Assignment × View membership → Baselines + remediation refs), routed by capability-scoped Facets (charter §2.4). CaC-only. */
+        Blueprint: {
+            name: string;
+            /** Format: int64 */
+            version: number;
+            for: string;
+            /** @enum {string} */
+            severity?: "info" | "warning" | "critical";
+            /** Format: int64 */
+            dampingObservations?: number;
+            routes: components["schemas"]["BlueprintRoute"][];
+        };
+        BlueprintRoute: {
+            match?: components["schemas"]["FacetPredicate"][];
+            observe: components["schemas"]["FacetExpectation"];
+            /** @enum {string} */
+            claim: "exclusive" | "additive";
+            /** @description Declared Workflow that remediates this route's Findings — a ref only (§5 Flow 2). */
+            remediationWorkflow?: string;
+        };
+        FacetExpectation: {
+            namespace: string;
+            path?: string;
+            equals?: unknown;
+            contains?: unknown;
+        };
+        /** @description One Intent-compile pass summary (charter §4.3, ADR-0023). */
+        CompileStatus: {
+            /** Format: date-time */
+            compiledAt?: string;
+            /** Format: int64 */
+            compiledBaselines?: number;
+            errors?: string[];
+            deltas?: components["schemas"]["AssignmentDelta"][];
+        };
+        AssignmentDelta: {
+            assignment: string;
+            /** Format: int64 */
+            memberCount: number;
+            joins?: string[];
+            leaves?: string[];
+            unrouted?: string[];
+            paused?: boolean;
+            note?: string;
+        };
         /** @description One (Principal, tool) aggregate of platform-MCP-server calls (charter §1.6 accounting per identity, ADR-0021). */
         UsageEntry: {
             principal: string;
@@ -739,6 +883,18 @@ export interface components {
         /** @description Checkable desired state (charter §2.4, ADR-0019): View selector + check Step + optional remediation Workflow ref + cadence. v1 is the hand-written rung of the §6 ladder; checks are read-only by construction (ansible check mode, opentofu plan). */
         Baseline: {
             name: string;
+            /** @description "" (check Step) or facet-observation (compiler-emitted, graph-side check — ADR-0023). */
+            mode?: string;
+            /** @description Origin of a compiler-emitted Baseline — the §1.8 descent from a Finding back to its Assignment/Blueprint (ADR-0023). Absent for hand-written Baselines. */
+            compiledFrom?: {
+                assignment?: string;
+                intent?: string;
+                blueprint?: string;
+                /** Format: int64 */
+                blueprintVersion?: number;
+                /** Format: int64 */
+                route?: number;
+            };
             viewName: string;
             /**
              * @default ansible
@@ -1394,6 +1550,86 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["UsageEntry"][];
+                };
+            };
+        };
+    };
+    listIntents: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Every declared Intent. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Intent"][];
+                };
+            };
+        };
+    };
+    listAssignments: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Every declared Assignment. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Assignment"][];
+                };
+            };
+        };
+    };
+    listBlueprints: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Every declared Blueprint version. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Blueprint"][];
+                };
+            };
+        };
+    };
+    getCompileStatus: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The latest compile pass summary. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CompileStatus"];
                 };
             };
         };

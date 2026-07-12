@@ -21,6 +21,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"sort"
+	"strconv"
 	"strings"
 
 	yaml "go.yaml.in/yaml/v3"
@@ -49,6 +50,9 @@ type Declarations struct {
 	Emitters       []types.Emitter       `json:"emitters"`
 	Baselines      []types.Baseline      `json:"baselines"`
 	MCPServers     []types.MCPServer     `json:"mcpServers"`
+	Intents        []types.Intent        `json:"intents"`
+	Assignments    []types.Assignment    `json:"assignments"`
+	Blueprints     []types.Blueprint     `json:"blueprints"`
 }
 
 // Declared kinds appearing in plans.
@@ -60,6 +64,9 @@ const (
 	KindEmitter       = "emitter"
 	KindBaseline      = "baseline"
 	KindMCPServer     = "mcp-server"
+	KindIntent        = "intent"
+	KindAssignment    = "assignment"
+	KindBlueprint     = "blueprint"
 )
 
 // Action is what reconciliation will do (or did) to one declared object.
@@ -210,6 +217,32 @@ func ParseDir(root string) (Declarations, error) {
 	}
 	out.MCPServers = mcpServers
 	sort.Slice(out.MCPServers, func(i, j int) bool { return out.MCPServers[i].Name < out.MCPServers[j].Name })
+
+	intents, err := parseKind(filepath.Join(root, "intents"), true, parseIntentFile)
+	if err != nil {
+		return out, err
+	}
+	out.Intents = intents
+	sort.Slice(out.Intents, func(i, j int) bool { return out.Intents[i].Name < out.Intents[j].Name })
+
+	assignments, err := parseKind(filepath.Join(root, "assignments"), true, parseAssignmentFile)
+	if err != nil {
+		return out, err
+	}
+	out.Assignments = assignments
+	sort.Slice(out.Assignments, func(i, j int) bool { return out.Assignments[i].Name < out.Assignments[j].Name })
+
+	blueprints, err := parseKind(filepath.Join(root, "blueprints"), true, parseBlueprintFile)
+	if err != nil {
+		return out, err
+	}
+	out.Blueprints = blueprints
+	sort.Slice(out.Blueprints, func(i, j int) bool {
+		if out.Blueprints[i].Name != out.Blueprints[j].Name {
+			return out.Blueprints[i].Name < out.Blueprints[j].Name
+		}
+		return out.Blueprints[i].Version < out.Blueprints[j].Version
+	})
 	return out, nil
 }
 
@@ -628,6 +661,227 @@ func ValidateMCPServer(m types.MCPServer) error {
 	return nil
 }
 
+// ── Intent layer (ADR-0023): Intent / Assignment / Blueprint ────────────────
+
+// intentFile is the intents/*.yaml shape.
+type intentFile struct {
+	Name     string         `yaml:"name"`
+	Kind     string         `yaml:"kind"`
+	Spec     map[string]any `yaml:"spec"`
+	OnRemove string         `yaml:"onRemove"`
+}
+
+func parseIntentFile(path string, raw []byte) (string, types.Intent, error) {
+	var f intentFile
+	dec := yaml.NewDecoder(strings.NewReader(string(raw)))
+	dec.KnownFields(true)
+	if err := dec.Decode(&f); err != nil {
+		return "", types.Intent{}, fmt.Errorf("desiredstate: %s: %w", path, err)
+	}
+	in := types.Intent{Name: f.Name, Kind: f.Kind, Spec: f.Spec, OnRemove: f.OnRemove}
+	if err := ValidateIntent(in); err != nil {
+		return "", types.Intent{}, fmt.Errorf("desiredstate: %s: %w", path, err)
+	}
+	return in.Name, in, nil
+}
+
+// ValidateIntent checks one Intent declaration (ADR-0023).
+func ValidateIntent(in types.Intent) error {
+	if in.Name == "" {
+		return fmt.Errorf("intent requires a name")
+	}
+	if in.Kind != types.IntentApplication {
+		return fmt.Errorf("intent %s: kind %q is not implemented in v1 (only %s)", in.Name, in.Kind, types.IntentApplication)
+	}
+	switch in.OnRemove {
+	case "", types.OnRemoveRetain:
+	case types.OnRemoveRevert, types.OnRemoveRemove:
+		return fmt.Errorf("intent %s: onRemove %q is not implemented in v1 (schema-driven removal is Phase 3); only retain", in.Name, in.OnRemove)
+	default:
+		return fmt.Errorf("intent %s: unknown onRemove %q (retain)", in.Name, in.OnRemove)
+	}
+	return nil
+}
+
+// assignmentFile is the assignments/*.yaml shape. blueprint is "name@version".
+type assignmentFile struct {
+	Name         string   `yaml:"name"`
+	Intent       string   `yaml:"intent"`
+	View         string   `yaml:"view"`
+	Blueprint    string   `yaml:"blueprint"`
+	Environments []string `yaml:"environments"`
+	MaxDelta     *float64 `yaml:"maxDelta"`
+	AckDelta     int      `yaml:"ackDelta"`
+}
+
+func parseAssignmentFile(path string, raw []byte) (string, types.Assignment, error) {
+	var f assignmentFile
+	dec := yaml.NewDecoder(strings.NewReader(string(raw)))
+	dec.KnownFields(true)
+	if err := dec.Decode(&f); err != nil {
+		return "", types.Assignment{}, fmt.Errorf("desiredstate: %s: %w", path, err)
+	}
+	name, version, err := splitBlueprintRef(f.Blueprint)
+	if err != nil {
+		return "", types.Assignment{}, fmt.Errorf("desiredstate: %s: %w", path, err)
+	}
+	a := types.Assignment{
+		Name: f.Name, Intent: f.Intent, View: f.View,
+		Blueprint: name, BlueprintVersion: version,
+		Environments: f.Environments, MaxDelta: f.MaxDelta, AckDelta: f.AckDelta,
+	}
+	if err := ValidateAssignment(a); err != nil {
+		return "", types.Assignment{}, fmt.Errorf("desiredstate: %s: %w", path, err)
+	}
+	return a.Name, a, nil
+}
+
+// splitBlueprintRef parses "name@version".
+func splitBlueprintRef(ref string) (string, int, error) {
+	at := strings.LastIndex(ref, "@")
+	if at <= 0 || at == len(ref)-1 {
+		return "", 0, fmt.Errorf("blueprint must be name@version, got %q", ref)
+	}
+	version, err := strconv.Atoi(ref[at+1:])
+	if err != nil || version < 1 {
+		return "", 0, fmt.Errorf("blueprint version must be a positive integer, got %q", ref[at+1:])
+	}
+	return ref[:at], version, nil
+}
+
+// ValidateAssignment checks one Assignment declaration (ADR-0023). Full
+// cross-reference validation (View is cac; Intent/Blueprint/Workflow exist)
+// runs at compile, where the graph is available.
+func ValidateAssignment(a types.Assignment) error {
+	if a.Name == "" {
+		return fmt.Errorf("assignment requires a name")
+	}
+	if a.Intent == "" || a.View == "" || a.Blueprint == "" {
+		return fmt.Errorf("assignment %s: intent, view, and blueprint are required", a.Name)
+	}
+	if a.MaxDelta != nil && (*a.MaxDelta <= 0 || *a.MaxDelta > 1) {
+		return fmt.Errorf("assignment %s: maxDelta must be in (0, 1]", a.Name)
+	}
+	if a.AckDelta < 0 {
+		return fmt.Errorf("assignment %s: ackDelta must be >= 0", a.Name)
+	}
+	return nil
+}
+
+// blueprintFile is the blueprints/*.yaml shape.
+type blueprintFile struct {
+	Name                string           `yaml:"name"`
+	Version             int              `yaml:"version"`
+	For                 string           `yaml:"for"`
+	Routes              []blueprintRoute `yaml:"routes"`
+	Severity            string           `yaml:"severity"`
+	DampingObservations int              `yaml:"dampingObservations"`
+}
+type blueprintRoute struct {
+	Match               []declFacetPred `yaml:"match"`
+	Observe             declExpectation `yaml:"observe"`
+	Claim               string          `yaml:"claim"`
+	RemediationWorkflow string          `yaml:"remediationWorkflow"`
+}
+type declFacetPred struct {
+	Namespace string `yaml:"namespace"`
+	Path      string `yaml:"path"`
+	Equals    any    `yaml:"equals"`
+}
+type declExpectation struct {
+	Namespace string `yaml:"namespace"`
+	Path      string `yaml:"path"`
+	Equals    any    `yaml:"equals"`
+	Contains  any    `yaml:"contains"`
+}
+
+func parseBlueprintFile(path string, raw []byte) (string, types.Blueprint, error) {
+	var f blueprintFile
+	dec := yaml.NewDecoder(strings.NewReader(string(raw)))
+	dec.KnownFields(true)
+	if err := dec.Decode(&f); err != nil {
+		return "", types.Blueprint{}, fmt.Errorf("desiredstate: %s: %w", path, err)
+	}
+	b := types.Blueprint{
+		Name: f.Name, Version: f.Version, For: f.For,
+		Severity: f.Severity, DampingObservations: f.DampingObservations,
+	}
+	for i, r := range f.Routes {
+		var match []types.FacetPredicate
+		for _, m := range r.Match {
+			eq, err := marshalYAMLValue(m.Equals)
+			if err != nil {
+				return "", types.Blueprint{}, fmt.Errorf("desiredstate: %s: route %d match: %w", path, i, err)
+			}
+			match = append(match, types.FacetPredicate{Namespace: m.Namespace, Path: m.Path, Equals: eq})
+		}
+		eq, err := marshalYAMLValue(r.Observe.Equals)
+		if err != nil {
+			return "", types.Blueprint{}, fmt.Errorf("desiredstate: %s: route %d observe equals: %w", path, i, err)
+		}
+		con, err := marshalYAMLValue(r.Observe.Contains)
+		if err != nil {
+			return "", types.Blueprint{}, fmt.Errorf("desiredstate: %s: route %d observe contains: %w", path, i, err)
+		}
+		b.Routes = append(b.Routes, types.BlueprintRoute{
+			Match: match,
+			Observe: types.FacetExpectation{
+				Namespace: r.Observe.Namespace, Path: r.Observe.Path, Equals: eq, Contains: con,
+			},
+			Claim: r.Claim, RemediationWorkflow: r.RemediationWorkflow,
+		})
+	}
+	if err := ValidateBlueprint(b); err != nil {
+		return "", types.Blueprint{}, fmt.Errorf("desiredstate: %s: %w", path, err)
+	}
+	// Dedup key is name@version — two versions of one Blueprint coexist.
+	return fmt.Sprintf("%s@%d", b.Name, b.Version), b, nil
+}
+
+// marshalYAMLValue converts a yaml-decoded value to canonical JSON (nil → nil).
+func marshalYAMLValue(v any) (json.RawMessage, error) {
+	if v == nil {
+		return nil, nil
+	}
+	raw, err := json.Marshal(v)
+	if err != nil {
+		return nil, err
+	}
+	return raw, nil
+}
+
+// ValidateBlueprint checks one Blueprint declaration (ADR-0023).
+func ValidateBlueprint(b types.Blueprint) error {
+	if b.Name == "" || b.Version < 1 {
+		return fmt.Errorf("blueprint requires a name and version >= 1")
+	}
+	if b.For != types.IntentApplication {
+		return fmt.Errorf("blueprint %s@%d: for %q is not implemented in v1 (only %s)", b.Name, b.Version, b.For, types.IntentApplication)
+	}
+	switch b.Severity {
+	case "", types.SeverityInfo, types.SeverityWarning, types.SeverityCritical:
+	default:
+		return fmt.Errorf("blueprint %s@%d: severity must be info, warning, or critical", b.Name, b.Version)
+	}
+	if len(b.Routes) == 0 {
+		return fmt.Errorf("blueprint %s@%d: at least one route is required", b.Name, b.Version)
+	}
+	for i, r := range b.Routes {
+		if r.Observe.Namespace == "" {
+			return fmt.Errorf("blueprint %s@%d: route %d observe requires a namespace", b.Name, b.Version, i)
+		}
+		if len(r.Observe.Equals) == 0 && len(r.Observe.Contains) == 0 {
+			return fmt.Errorf("blueprint %s@%d: route %d observe requires equals or contains", b.Name, b.Version, i)
+		}
+		switch r.Claim {
+		case types.ClaimExclusive, types.ClaimAdditive:
+		default:
+			return fmt.Errorf("blueprint %s@%d: route %d claim must be exclusive or additive", b.Name, b.Version, i)
+		}
+	}
+	return nil
+}
+
 // validateParamsContract checks actuation params against the Actuator's
 // input Contract (§1.5, ADR-0015) — a bad declaration fails its file at
 // plan/reconcile time, never at dispatch.
@@ -845,6 +1099,11 @@ func ComputePlan(ctx context.Context, store *graph.Store, decls Declarations) (P
 		return Plan{}, err
 	}
 	plan.Entries = append(plan.Entries, msPlan.Entries...)
+	inPlan, err := computeIntentLayerPlan(ctx, store, decls)
+	if err != nil {
+		return Plan{}, err
+	}
+	plan.Entries = append(plan.Entries, inPlan.Entries...)
 	sort.Slice(plan.Entries, func(i, j int) bool {
 		if plan.Entries[i].Kind != plan.Entries[j].Kind {
 			return plan.Entries[i].Kind < plan.Entries[j].Kind
@@ -1090,6 +1349,11 @@ func computeBaselinePlan(ctx context.Context, store *graph.Store, decls []types.
 	}
 	byName := map[string]types.Baseline{}
 	for _, b := range current {
+		// Compiler-owned Baselines (ADR-0023) are the Intent compiler's to
+		// manage — the hand-written baselines/ kind never touches them.
+		if b.CompiledFrom != nil {
+			continue
+		}
 		byName[b.Name] = b
 	}
 	var plan Plan
@@ -1108,8 +1372,8 @@ func computeBaselinePlan(ctx context.Context, store *graph.Store, decls []types.
 		}
 		plan.Entries = append(plan.Entries, entry)
 	}
-	for _, b := range current {
-		if !declared[b.Name] {
+	for name, b := range byName {
+		if !declared[name] {
 			plan.Entries = append(plan.Entries, PlanEntry{Kind: KindBaseline, Name: b.Name, Action: ActionDelete})
 		}
 	}
@@ -1150,6 +1414,94 @@ func computeMCPServerPlan(ctx context.Context, store *graph.Store, decls []types
 	return plan, nil
 }
 
+// computeIntentLayerPlan diffs declared Intents, Assignments, and Blueprints
+// (CaC-only, ADR-0023). Blueprints are keyed by name@version so versions
+// coexist; the plan entry Name carries that key for prune uniqueness.
+func computeIntentLayerPlan(ctx context.Context, store *graph.Store, decls Declarations) (Plan, error) {
+	var plan Plan
+
+	curIntents, err := store.ListIntents(ctx)
+	if err != nil {
+		return Plan{}, err
+	}
+	inByName := map[string]types.Intent{}
+	for _, in := range curIntents {
+		inByName[in.Name] = in
+	}
+	declaredIn := map[string]bool{}
+	for _, d := range decls.Intents {
+		declaredIn[d.Name] = true
+		e := PlanEntry{Kind: KindIntent, Name: d.Name}
+		cur, ok := inByName[d.Name]
+		e.Action = diffAction(ok, declDocsEqual(cur, d))
+		plan.Entries = append(plan.Entries, e)
+	}
+	for _, in := range curIntents {
+		if !declaredIn[in.Name] {
+			plan.Entries = append(plan.Entries, PlanEntry{Kind: KindIntent, Name: in.Name, Action: ActionDelete})
+		}
+	}
+
+	curAsgs, err := store.ListAssignments(ctx)
+	if err != nil {
+		return Plan{}, err
+	}
+	asgByName := map[string]types.Assignment{}
+	for _, a := range curAsgs {
+		asgByName[a.Name] = a
+	}
+	declaredAsg := map[string]bool{}
+	for _, d := range decls.Assignments {
+		declaredAsg[d.Name] = true
+		e := PlanEntry{Kind: KindAssignment, Name: d.Name}
+		cur, ok := asgByName[d.Name]
+		e.Action = diffAction(ok, declDocsEqual(cur, d))
+		plan.Entries = append(plan.Entries, e)
+	}
+	for _, a := range curAsgs {
+		if !declaredAsg[a.Name] {
+			plan.Entries = append(plan.Entries, PlanEntry{Kind: KindAssignment, Name: a.Name, Action: ActionDelete})
+		}
+	}
+
+	curBps, err := store.ListBlueprints(ctx)
+	if err != nil {
+		return Plan{}, err
+	}
+	bpKey := func(name string, version int) string { return fmt.Sprintf("%s@%d", name, version) }
+	bpByKey := map[string]types.Blueprint{}
+	for _, b := range curBps {
+		bpByKey[bpKey(b.Name, b.Version)] = b
+	}
+	declaredBp := map[string]bool{}
+	for _, d := range decls.Blueprints {
+		k := bpKey(d.Name, d.Version)
+		declaredBp[k] = true
+		e := PlanEntry{Kind: KindBlueprint, Name: k}
+		cur, ok := bpByKey[k]
+		e.Action = diffAction(ok, declDocsEqual(cur, d))
+		plan.Entries = append(plan.Entries, e)
+	}
+	for _, b := range curBps {
+		if k := bpKey(b.Name, b.Version); !declaredBp[k] {
+			plan.Entries = append(plan.Entries, PlanEntry{Kind: KindBlueprint, Name: k, Action: ActionDelete})
+		}
+	}
+	return plan, nil
+}
+
+// diffAction maps (exists, equal) to a plan action for a CaC-only kind.
+func diffAction(exists, equal bool) Action {
+	switch {
+	case !exists:
+		return ActionCreate
+	case equal:
+		return ActionNoop
+	default:
+		return ActionUpdate
+	}
+}
+
 // Apply executes the plan for the declarations and returns the realized plan.
 // Per-object failures are recorded on their entries; the rest still applies.
 func Apply(ctx context.Context, store *graph.Store, decls Declarations) (Plan, error) {
@@ -1184,6 +1536,18 @@ func Apply(ctx context.Context, store *graph.Store, decls Declarations) (Plan, e
 	msByName := map[string]types.MCPServer{}
 	for _, d := range decls.MCPServers {
 		msByName[d.Name] = d
+	}
+	inByName := map[string]types.Intent{}
+	for _, d := range decls.Intents {
+		inByName[d.Name] = d
+	}
+	asgByName := map[string]types.Assignment{}
+	for _, d := range decls.Assignments {
+		asgByName[d.Name] = d
+	}
+	bpByKey := map[string]types.Blueprint{}
+	for _, d := range decls.Blueprints {
+		bpByKey[fmt.Sprintf("%s@%d", d.Name, d.Version)] = d
 	}
 	for i := range plan.Entries {
 		e := &plan.Entries[i]
@@ -1220,6 +1584,23 @@ func Apply(ctx context.Context, store *graph.Store, decls Declarations) (Plan, e
 			err = store.DeleteMCPServer(ctx, e.Name)
 		case e.Kind == KindMCPServer:
 			err = store.UpsertMCPServer(ctx, msByName[e.Name])
+		case e.Kind == KindIntent && e.Action == ActionDelete:
+			err = store.DeleteIntent(ctx, e.Name)
+		case e.Kind == KindIntent:
+			err = store.UpsertIntent(ctx, inByName[e.Name])
+		case e.Kind == KindAssignment && e.Action == ActionDelete:
+			err = store.DeleteAssignment(ctx, e.Name)
+		case e.Kind == KindAssignment:
+			err = store.UpsertAssignment(ctx, asgByName[e.Name])
+		case e.Kind == KindBlueprint && e.Action == ActionDelete:
+			name, version, perr := splitBlueprintRef(e.Name)
+			if perr != nil {
+				err = perr
+			} else {
+				err = store.DeleteBlueprint(ctx, name, version)
+			}
+		case e.Kind == KindBlueprint:
+			err = store.UpsertBlueprint(ctx, bpByKey[e.Name])
 		}
 		if err != nil {
 			e.Error = err.Error()

@@ -306,6 +306,56 @@ paths:
               schema:
                 type: array
                 items: { $ref: "#/components/schemas/UsageEntry" }
+  /intents:
+    get:
+      operationId: listIntents
+      summary: List declared Intents (CaC-only, ADR-0023)
+      responses:
+        "200":
+          description: Every declared Intent.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Intent" }
+  /assignments:
+    get:
+      operationId: listAssignments
+      summary: List declared Assignments (CaC-only, ADR-0023)
+      responses:
+        "200":
+          description: Every declared Assignment.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Assignment" }
+  /blueprints:
+    get:
+      operationId: listBlueprints
+      summary: List declared Blueprint versions (CaC-only, ADR-0023)
+      responses:
+        "200":
+          description: Every declared Blueprint version.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Blueprint" }
+  /compile:
+    get:
+      operationId: getCompileStatus
+      summary: Latest Intent-compile status — membership deltas, pauses, errors
+      description: >
+        The §4.3 "stratt plan renders membership deltas" surface (ADR-0023):
+        per-Assignment join/leave counts, max-delta pauses, and any compile
+        errors from the most recent reconcile pass.
+      responses:
+        "200":
+          description: The latest compile pass summary.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CompileStatus" }
   /baselines:
     get:
       operationId: listBaselines
@@ -742,13 +792,22 @@ components:
         mcpServers:
           type: array
           items: { $ref: "#/components/schemas/MCPServer" }
+        intents:
+          type: array
+          items: { $ref: "#/components/schemas/Intent" }
+        assignments:
+          type: array
+          items: { $ref: "#/components/schemas/Assignment" }
+        blueprints:
+          type: array
+          items: { $ref: "#/components/schemas/Blueprint" }
     PlanEntry:
       type: object
       required: [name, action, memberCount]
       properties:
         kind:
           type: string
-          enum: [view, credential-ref, trigger, workflow, emitter, baseline, mcp-server]
+          enum: [view, credential-ref, trigger, workflow, emitter, baseline, mcp-server, intent, assignment, blueprint]
         name: { type: string }
         action:
           type: string
@@ -876,6 +935,111 @@ components:
           properties:
             credentialRef: { type: string }
             key: { type: string }
+    Intent:
+      type: object
+      description: >
+        A declarative document of *what* (charter §2.4), bound to a View by
+        an Assignment. CaC-only. v1: Intent/Application.
+      required: [name, kind]
+      properties:
+        name: { type: string }
+        kind: { type: string }
+        spec: { type: object }
+        onRemove:
+          type: string
+          enum: [retain, revert, remove]
+    Assignment:
+      type: object
+      description: >
+        Binds an Intent to a cac-declared View, pinning a Blueprint version
+        (charter §2.4). CaC-only.
+      required: [name, intent, view, blueprint, blueprintVersion]
+      properties:
+        name: { type: string }
+        intent: { type: string }
+        view: { type: string }
+        blueprint: { type: string }
+        blueprintVersion: { type: integer, format: int64 }
+        environments:
+          type: array
+          items: { type: string }
+        maxDelta:
+          type: number
+          description: Per-Assignment max-delta gate fraction override (§4.3).
+        ackDelta:
+          type: integer
+          format: int64
+          description: Acknowledgement token to unblock a paused large delta.
+    Blueprint:
+      type: object
+      description: >
+        A versioned composition (Intent × Assignment × View membership →
+        Baselines + remediation refs), routed by capability-scoped Facets
+        (charter §2.4). CaC-only.
+      required: [name, version, for, routes]
+      properties:
+        name: { type: string }
+        version: { type: integer, format: int64 }
+        for: { type: string }
+        severity:
+          type: string
+          enum: [info, warning, critical]
+        dampingObservations: { type: integer, format: int64 }
+        routes:
+          type: array
+          items: { $ref: "#/components/schemas/BlueprintRoute" }
+    BlueprintRoute:
+      type: object
+      required: [observe, claim]
+      properties:
+        match:
+          type: array
+          items: { $ref: "#/components/schemas/FacetPredicate" }
+        observe: { $ref: "#/components/schemas/FacetExpectation" }
+        claim:
+          type: string
+          enum: [exclusive, additive]
+        remediationWorkflow:
+          type: string
+          description: Declared Workflow that remediates this route's Findings — a ref only (§5 Flow 2).
+    FacetExpectation:
+      type: object
+      required: [namespace]
+      properties:
+        namespace: { type: string }
+        path: { type: string }
+        equals: {}
+        contains: {}
+    CompileStatus:
+      type: object
+      description: >
+        One Intent-compile pass summary (charter §4.3, ADR-0023).
+      properties:
+        compiledAt: { type: string, format: date-time }
+        compiledBaselines: { type: integer, format: int64 }
+        errors:
+          type: array
+          items: { type: string }
+        deltas:
+          type: array
+          items: { $ref: "#/components/schemas/AssignmentDelta" }
+    AssignmentDelta:
+      type: object
+      required: [assignment, memberCount]
+      properties:
+        assignment: { type: string }
+        memberCount: { type: integer, format: int64 }
+        joins:
+          type: array
+          items: { type: string }
+        leaves:
+          type: array
+          items: { type: string }
+        unrouted:
+          type: array
+          items: { type: string }
+        paused: { type: boolean }
+        note: { type: string }
     UsageEntry:
       type: object
       description: >
@@ -901,6 +1065,23 @@ components:
       required: [name, viewName, cron, severity]
       properties:
         name: { type: string }
+        mode:
+          type: string
+          description: >
+            "" (check Step) or facet-observation (compiler-emitted,
+            graph-side check — ADR-0023).
+        compiledFrom:
+          type: object
+          description: >
+            Origin of a compiler-emitted Baseline — the §1.8 descent from a
+            Finding back to its Assignment/Blueprint (ADR-0023). Absent for
+            hand-written Baselines.
+          properties:
+            assignment: { type: string }
+            intent: { type: string }
+            blueprint: { type: string }
+            blueprintVersion: { type: integer, format: int64 }
+            route: { type: integer, format: int64 }
         viewName: { type: string }
         actuator:
           type: string

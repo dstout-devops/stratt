@@ -30,6 +30,7 @@ import (
 	"github.com/dstout-devops/stratt/core/internal/api"
 	"github.com/dstout-devops/stratt/core/internal/authz"
 	"github.com/dstout-devops/stratt/core/internal/baselines"
+	"github.com/dstout-devops/stratt/core/internal/compiler"
 	"github.com/dstout-devops/stratt/core/internal/connectors/awsec2"
 	"github.com/dstout-devops/stratt/core/internal/connectors/msgraph"
 	"github.com/dstout-devops/stratt/core/internal/connectors/vcenter"
@@ -72,6 +73,10 @@ func run(ctx context.Context, log *slog.Logger) error {
 	}
 	defer store.Close()
 	log.Info("graph store ready (migrations applied)")
+
+	// Shared Intent-compile status: the desired-state controller writes each
+	// pass, GET /compile serves it (§4.3 membership-delta surface, ADR-0023).
+	compileStatus := &compiler.Status{}
 
 	// Pin the shipped Contract documents (§1.5, ADR-0015). Drift between a
 	// registered pin and the shipped document is blocking — the platform
@@ -323,9 +328,16 @@ func run(ctx context.Context, log *slog.Logger) error {
 				return fmt.Errorf("desired-state max prune: %w", err)
 			}
 		}
+		maxDelta := 0.0 // 0 → compiler default (0.5)
+		if v := os.Getenv("STRATT_INTENT_MAX_DELTA"); v != "" {
+			if maxDelta, err = strconv.ParseFloat(v, 64); err != nil {
+				return fmt.Errorf("intent max delta: %w", err)
+			}
+		}
 		ctl := &desiredstate.Controller{
 			Path: path, Interval: interval, Store: store, Log: log,
 			MaxPruneFraction: maxPrune,
+			MaxDelta:         maxDelta, CompileStatus: compileStatus,
 		}
 		go func() {
 			if err := ctl.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
@@ -403,7 +415,7 @@ func run(ctx context.Context, log *slog.Logger) error {
 	if uiDir != "" {
 		log.Info("serving ui", "dir", uiDir)
 	}
-	server := &api.Server{Store: store, Bus: bus, Temporal: temporalClient, Authz: authorizer, Log: log, DevPrincipalHeader: devPrincipal, OIDC: oidcResolver, UIDir: uiDir, StateBackend: stateHandler, EmitterIngest: emitters.New(store, bus, log).Handler()}
+	server := &api.Server{Store: store, Bus: bus, Temporal: temporalClient, Authz: authorizer, Log: log, DevPrincipalHeader: devPrincipal, OIDC: oidcResolver, UIDir: uiDir, StateBackend: stateHandler, EmitterIngest: emitters.New(store, bus, log).Handler(), CompileStatus: compileStatus}
 	httpSrv := &http.Server{
 		Addr:              env("STRATT_LISTEN_ADDR", ":8080"),
 		Handler:           server.Handler(),

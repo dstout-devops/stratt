@@ -100,7 +100,7 @@ func (s *Store) RecordBaselineObservations(ctx context.Context, b types.Baseline
 				INSERT INTO graph.finding
 					(baseline, target, entity_id, status, severity, framework,
 					 consecutive_drifted, diff, run_id, opened_at)
-				VALUES ($1, $2, nullif($3, ''), $4, $5, $6, 1, $7, $8,
+				VALUES ($1, $2, nullif($3, ''), $4, $5, $6, 1, $7, nullif($8, '')::uuid,
 					CASE WHEN $4 = 'open' THEN now() END)`,
 				b.Name, target, o.EntityID, status, b.Severity, b.Framework,
 				o.Detail, runID)
@@ -118,7 +118,7 @@ func (s *Store) RecordBaselineObservations(ctx context.Context, b types.Baseline
 			_, err = tx.Exec(ctx, `
 				UPDATE graph.finding
 				SET consecutive_drifted = consecutive_drifted + 1,
-				    diff = $2, run_id = $3, entity_id = nullif($4, ''),
+				    diff = $2, run_id = nullif($3, '')::uuid, entity_id = nullif($4, ''),
 				    last_observed = now(),
 				    status = CASE WHEN $5 THEN 'open' ELSE status END,
 				    opened_at = CASE WHEN $5 THEN now() ELSE opened_at END
@@ -144,7 +144,7 @@ func (s *Store) RecordBaselineObservations(ctx context.Context, b types.Baseline
 			_, err = tx.Exec(ctx, `
 				UPDATE graph.finding
 				SET status = 'resolved', resolved_at = now(),
-				    last_observed = now(), consecutive_drifted = 0, run_id = $2
+				    last_observed = now(), consecutive_drifted = 0, run_id = nullif($2, '')::uuid
 				WHERE id = $1`, cur.id, runID)
 			if err != nil {
 				return out, fmt.Errorf("graph: record observations: resolve %s: %w", target, err)
@@ -179,6 +179,26 @@ func scanFinding(row pgx.Row) (types.Finding, error) {
 	}
 	f.Diff = diff
 	return f, nil
+}
+
+// WriteOrphanFinding records a single open Finding for compiled state left
+// behind by a withdrawn-but-retained Assignment (charter §2.4, §4.3:
+// abandoned state is never silent). Idempotent on the live (baseline,
+// target) row via the partial unique index — a second withdrawal pass just
+// refreshes it, never duplicates. runID is empty (the Intent-layer
+// withdrawal, not a check Run, is the evidence).
+func (s *Store) WriteOrphanFinding(ctx context.Context, baseline, target, severity string, detail []byte) error {
+	_, err := s.pool.Exec(ctx, `
+		INSERT INTO graph.finding
+			(baseline, target, status, severity, framework, consecutive_drifted, diff, opened_at)
+		VALUES ($1, $2, 'open', $3, 'orphan', 1, $4, now())
+		ON CONFLICT (baseline, target) WHERE status <> 'resolved'
+		DO UPDATE SET diff = excluded.diff, last_observed = now()`,
+		baseline, target, severity, detail)
+	if err != nil {
+		return fmt.Errorf("graph: write orphan finding: %w", err)
+	}
+	return nil
 }
 
 // ListFindings returns Findings, newest observation first, optionally

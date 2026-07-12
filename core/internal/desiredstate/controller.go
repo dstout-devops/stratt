@@ -9,6 +9,7 @@ import (
 
 	"log/slog"
 
+	"github.com/dstout-devops/stratt/core/internal/compiler"
 	"github.com/dstout-devops/stratt/core/internal/graph"
 )
 
@@ -32,6 +33,13 @@ type Controller struct {
 	// apply (CLI/API) is explicit ack and is not gated. <=0 means the 0.5
 	// default; >=1 disables the guard.
 	MaxPruneFraction float64
+	// MaxDelta is the Intent-compiler max-delta gate fraction (§4.3, ADR-0023):
+	// the per-Assignment engine default when the Assignment declares no
+	// override. <=0 means the compiler default (0.5).
+	MaxDelta float64
+	// CompileStatus, when set, receives each pass's compile summary for the
+	// read-only GET /compile surface.
+	CompileStatus *compiler.Status
 }
 
 // Run reconciles until ctx ends.
@@ -111,5 +119,42 @@ func (c *Controller) reconcile(ctx context.Context, log *slog.Logger) {
 			continue
 		}
 		log.Info("reconciled", "kind", e.Kind, "name", e.Name, "action", string(e.Action), "members", e.MemberCount)
+	}
+
+	// The Intent compiler runs after the intent-layer kinds are persisted and
+	// re-runs every cycle — membership drifts without Git changes (Syncer
+	// relabels), so the compiled Baselines must re-derive continuously (§4.3,
+	// ADR-0023).
+	c.compile(ctx, log)
+}
+
+// compile derives compiled Baselines from the declared Intent/Assignment/
+// Blueprint objects and live View membership, applies the result, and
+// publishes the summary for GET /compile.
+func (c *Controller) compile(ctx context.Context, log *slog.Logger) {
+	log = log.With("component", "compiler")
+	plan, err := compiler.Compile(ctx, c.Store, c.MaxDelta)
+	if err != nil {
+		log.Error("compile failed", "error", err)
+		return
+	}
+	errs := plan.Apply(ctx, c.Store)
+	if c.CompileStatus != nil {
+		c.CompileStatus.Set(compiler.Snapshot{
+			CompiledAt: time.Now().UTC(), CompiledBaselines: len(plan.Upserts),
+			Errors: errs, Deltas: plan.Deltas,
+		})
+	}
+	for _, e := range errs {
+		log.Error("compile error", "error", e)
+	}
+	for _, d := range plan.Deltas {
+		switch {
+		case d.Paused:
+			log.Warn("compile paused: max-delta gate", "assignment", d.Assignment, "note", d.Note)
+		case len(d.Joins)+len(d.Leaves) > 0:
+			log.Info("compiled", "assignment", d.Assignment, "members", d.MemberCount,
+				"joins", len(d.Joins), "leaves", len(d.Leaves), "unrouted", len(d.Unrouted))
+		}
 	}
 }

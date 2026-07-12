@@ -15,6 +15,7 @@ import (
 	"go.temporal.io/sdk/client"
 
 	"github.com/dstout-devops/stratt/core/internal/authz"
+	"github.com/dstout-devops/stratt/core/internal/compiler"
 	"github.com/dstout-devops/stratt/core/internal/contract"
 	"github.com/dstout-devops/stratt/core/internal/desiredstate"
 	"github.com/dstout-devops/stratt/core/internal/events"
@@ -51,6 +52,9 @@ type Server struct {
 	// EmitterIngest, when set, mounts POST /emitters/{name} (ADR-0018) —
 	// outside /api/v1: alert sources authenticate by emitter token.
 	EmitterIngest http.Handler
+	// CompileStatus, when set, is the shared Intent-compile status the
+	// controller updates and GET /compile serves (ADR-0023).
+	CompileStatus *compiler.Status
 }
 
 // Handler mounts the generated routes under /api/v1, behind the Principal
@@ -317,8 +321,37 @@ func triggerToWire(t types.Trigger) Trigger {
 	return out
 }
 
+// jsonRoundTrip re-encodes a wire object and decodes it into a domain type —
+// used where the two share a JSON shape (ADR-0023 intent-layer kinds).
+func jsonRoundTrip(from, to any) error {
+	raw, err := json.Marshal(from)
+	if err != nil {
+		return err
+	}
+	return json.Unmarshal(raw, to)
+}
+
 func baselineToWire(b types.Baseline) Baseline {
 	out := Baseline{Name: b.Name, ViewName: b.ViewName, Cron: b.Cron, Severity: BaselineSeverity(b.Severity)}
+	if b.Mode != "" {
+		out.Mode = &b.Mode
+	}
+	if b.CompiledFrom != nil {
+		out.CompiledFrom = &struct {
+			Assignment       *string `json:"assignment,omitempty"`
+			Blueprint        *string `json:"blueprint,omitempty"`
+			BlueprintVersion *int64  `json:"blueprintVersion,omitempty"`
+			Intent           *string `json:"intent,omitempty"`
+			Route            *int64  `json:"route,omitempty"`
+		}{}
+		out.CompiledFrom.Assignment = &b.CompiledFrom.Assignment
+		out.CompiledFrom.Intent = &b.CompiledFrom.Intent
+		out.CompiledFrom.Blueprint = &b.CompiledFrom.Blueprint
+		v := int64(b.CompiledFrom.BlueprintVersion)
+		out.CompiledFrom.BlueprintVersion = &v
+		r := int64(b.CompiledFrom.Route)
+		out.CompiledFrom.Route = &r
+	}
 	if b.Actuator != "" {
 		a := BaselineActuator(b.Actuator)
 		out.Actuator = &a
@@ -629,6 +662,47 @@ func declarationsFromWire(in DesiredState) (desiredstate.Declarations, error) {
 				return out, fmt.Errorf("baseline %s: %w", w.Name, err)
 			}
 			out.Baselines = append(out.Baselines, b)
+		}
+	}
+	// Intent-layer kinds (ADR-0023): the wire shapes are JSON-equivalent to
+	// the domain types (the CLI marshals desiredstate.Declarations directly),
+	// so a JSON round-trip is the faithful conversion — it preserves the
+	// route observe equals/contains raw values through the generated
+	// interface{} fields.
+	if in.Intents != nil {
+		for _, w := range *in.Intents {
+			var it types.Intent
+			if err := jsonRoundTrip(w, &it); err != nil {
+				return out, fmt.Errorf("intent %s: %w", w.Name, err)
+			}
+			if err := desiredstate.ValidateIntent(it); err != nil {
+				return out, err
+			}
+			out.Intents = append(out.Intents, it)
+		}
+	}
+	if in.Assignments != nil {
+		for _, w := range *in.Assignments {
+			var a types.Assignment
+			if err := jsonRoundTrip(w, &a); err != nil {
+				return out, fmt.Errorf("assignment %s: %w", w.Name, err)
+			}
+			if err := desiredstate.ValidateAssignment(a); err != nil {
+				return out, err
+			}
+			out.Assignments = append(out.Assignments, a)
+		}
+	}
+	if in.Blueprints != nil {
+		for _, w := range *in.Blueprints {
+			var b types.Blueprint
+			if err := jsonRoundTrip(w, &b); err != nil {
+				return out, fmt.Errorf("blueprint %s: %w", w.Name, err)
+			}
+			if err := desiredstate.ValidateBlueprint(b); err != nil {
+				return out, err
+			}
+			out.Blueprints = append(out.Blueprints, b)
 		}
 	}
 	if in.McpServers != nil {
@@ -1511,6 +1585,55 @@ func (s *Server) ListUsage(w http.ResponseWriter, r *http.Request, params ListUs
 		out = append(out, e)
 	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+// ListIntents implements (GET /intents): declared Intents (CaC-only).
+func (s *Server) ListIntents(w http.ResponseWriter, r *http.Request) {
+	items, err := s.Store.ListIntents(r.Context())
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	if items == nil {
+		items = []types.Intent{}
+	}
+	writeJSON(w, http.StatusOK, items)
+}
+
+// ListAssignments implements (GET /assignments): declared Assignments.
+func (s *Server) ListAssignments(w http.ResponseWriter, r *http.Request) {
+	items, err := s.Store.ListAssignments(r.Context())
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	if items == nil {
+		items = []types.Assignment{}
+	}
+	writeJSON(w, http.StatusOK, items)
+}
+
+// ListBlueprints implements (GET /blueprints): declared Blueprint versions.
+func (s *Server) ListBlueprints(w http.ResponseWriter, r *http.Request) {
+	items, err := s.Store.ListBlueprints(r.Context())
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	if items == nil {
+		items = []types.Blueprint{}
+	}
+	writeJSON(w, http.StatusOK, items)
+}
+
+// GetCompileStatus implements (GET /compile): the latest Intent-compile pass
+// summary (§4.3 membership-delta surface, ADR-0023).
+func (s *Server) GetCompileStatus(w http.ResponseWriter, _ *http.Request) {
+	if s.CompileStatus == nil {
+		writeJSON(w, http.StatusOK, compiler.Snapshot{})
+		return
+	}
+	writeJSON(w, http.StatusOK, s.CompileStatus.Get())
 }
 
 // ListBaselines implements (GET /baselines): the declared checkable desired

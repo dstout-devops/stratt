@@ -45,4 +45,40 @@ type Baseline struct {
 	// Framework tags the Findings (e.g. "cis") — "one kind, framework-
 	// tagged" (§2.4).
 	Framework string `json:"framework,omitempty"`
+
+	// ── facet-observation variant (compiler output, ADR-0023) ──────────────
+	// Mode selects the check machinery: "" (default) is a check Step (the
+	// ADR-0019 ansible/tofu Run); "facet-observation" is evaluated
+	// graph-side against the compiled Selector — the desired state is
+	// "these Entities should carry this Facet value" (§2.4 "expected Facet
+	// values"), no execution pod.
+	Mode string `json:"mode,omitempty"`
+	// Selector is the compiled target set (the Assignment's View selector ∩
+	// the Blueprint route match). facet-observation resolves this directly,
+	// not ViewName (ViewName is retained for descent display).
+	Selector *ViewSelector `json:"selector,omitempty"`
+	// Expected are the Facet checks a facet-observation Baseline evaluates
+	// per targeted Entity.
+	Expected []FacetExpectation `json:"expected,omitempty"`
+	// Claim records how the observed namespace is claimed (exclusive|
+	// additive) — informational on the row; the conflict check runs at
+	// compile (anti-GPO, §2.4).
+	Claim string `json:"claim,omitempty"`
+	// CompiledFrom marks a compiler-owned Baseline and its origin. Nil for
+	// hand-written Baselines — the compiler touches only its own rows.
+	CompiledFrom *CompiledOrigin `json:"compiledFrom,omitempty"`
 }
+
+// CompiledOrigin is the §1.8 descent linkage from a compiled Baseline back
+// to the Intent-layer documents that produced it (ADR-0023).
+type CompiledOrigin struct {
+	Assignment       string `json:"assignment"`
+	Intent           string `json:"intent"`
+	Blueprint        string `json:"blueprint"`
+	BlueprintVersion int    `json:"blueprintVersion"`
+	Route            int    `json:"route"`
+}
+
+// FacetObservation is the Baseline mode for compiler-emitted, graph-side
+// checks.
+const FacetObservation = "facet-observation"

@@ -37,6 +37,28 @@ func (s *Store) RegisterFacetOwner(ctx context.Context, o types.FacetOwner) erro
 	return nil
 }
 
+// GetFacetOwner returns the registered owner of a Facet namespace; ok=false
+// when the namespace is unowned. The read side of the ownership eligibility
+// check the compiler runs before claiming a namespace (ADR-0023).
+func (s *Store) GetFacetOwner(ctx context.Context, namespace string) (types.FacetOwner, bool, error) {
+	var o types.FacetOwner
+	o.Namespace = namespace
+	var scope *string
+	err := s.pool.QueryRow(ctx,
+		`SELECT owner_kind, owner_ref, view_scope FROM graph.facet_owner WHERE namespace = $1`, namespace,
+	).Scan(&o.OwnerKind, &o.OwnerRef, &scope)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return types.FacetOwner{Namespace: namespace}, false, nil
+	}
+	if err != nil {
+		return o, false, fmt.Errorf("graph: get facet owner: %w", err)
+	}
+	if scope != nil {
+		o.ViewScope = *scope
+	}
+	return o, true, nil
+}
+
 // ── Views (§2.1) ─────────────────────────────────────────────────────────────
 
 // Declaration paths for Views (§1.2: desired state lives in Git).
