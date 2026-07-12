@@ -30,6 +30,7 @@ import (
 	"github.com/dstout-devops/stratt/core/internal/connectors/awsec2"
 	"github.com/dstout-devops/stratt/core/internal/connectors/msgraph"
 	"github.com/dstout-devops/stratt/core/internal/connectors/vcenter"
+	"github.com/dstout-devops/stratt/core/internal/contract"
 	"github.com/dstout-devops/stratt/core/internal/desiredstate"
 	"github.com/dstout-devops/stratt/core/internal/dispatch"
 	"github.com/dstout-devops/stratt/core/internal/events"
@@ -65,6 +66,20 @@ func run(ctx context.Context, log *slog.Logger) error {
 	}
 	defer store.Close()
 	log.Info("graph store ready (migrations applied)")
+
+	// Pin the shipped Contract documents (§1.5, ADR-0015). Drift between a
+	// registered pin and the shipped document is blocking — the platform
+	// must not boot with schemas that silently changed under their pins.
+	shipped, err := contract.All()
+	if err != nil {
+		return err
+	}
+	for _, c := range shipped {
+		if err := store.RegisterContract(ctx, c); err != nil {
+			return err
+		}
+	}
+	log.Info("contracts pinned", "count", len(shipped))
 
 	// Bootstrap ownership registrations (§2.1: registration precedes writes).
 	// os.kernel is written back by Runs; owned by the platform team until the

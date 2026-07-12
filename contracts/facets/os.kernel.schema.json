@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "stratt:contract:facets/os.kernel:v1",
+  "title": "os.kernel Facet",
+  "description": "Demanded by the ansible Actuator's gather output (charter §1.1: a Facet schema exists only when a shipping Contract demands it). Validated at the Projector write path.",
+  "type": "object",
+  "properties": {
+    "family": { "type": "string" },
+    "release": { "type": "string" },
+    "arch": { "type": "string" }
+  },
+  "additionalProperties": false
+}

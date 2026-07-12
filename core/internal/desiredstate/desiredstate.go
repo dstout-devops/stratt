@@ -24,6 +24,7 @@ import (
 
 	yaml "go.yaml.in/yaml/v3"
 
+	"github.com/dstout-devops/stratt/core/internal/contract"
 	"github.com/dstout-devops/stratt/core/internal/graph"
 	"github.com/dstout-devops/stratt/types"
 )
@@ -359,7 +360,29 @@ func ValidateTrigger(t types.Trigger) error {
 	if len(t.CredentialRefs) > 0 && t.Principal == "" {
 		return fmt.Errorf("trigger %s: credentialRefs require a principal", t.Name)
 	}
+	if err := validateParamsContract(t.Actuator, t.Params); err != nil {
+		return fmt.Errorf("trigger %s: %w", t.Name, err)
+	}
 	return nil
+}
+
+// validateParamsContract checks actuation params against the Actuator's
+// input Contract (§1.5, ADR-0015) — a bad declaration fails its file at
+// plan/reconcile time, never at dispatch.
+func validateParamsContract(actuator string, params map[string]any) error {
+	name := actuator
+	if name == "" {
+		name = "ansible"
+	}
+	raw := json.RawMessage(`{}`)
+	if params != nil {
+		b, err := json.Marshal(params)
+		if err != nil {
+			return fmt.Errorf("params: %w", err)
+		}
+		raw = b
+	}
+	return contract.ValidateActuatorParams(name, raw)
 }
 
 // workflowFile is the workflows/*.yaml shape (ADR-0011): a DAG of Steps —
@@ -454,6 +477,11 @@ func ValidateWorkflow(w types.Workflow) error {
 			return fmt.Errorf("workflow %s: step %s: gate timeoutSeconds must be >= 0", w.Name, s.Name)
 		case !isGate && s.Slices < 0:
 			return fmt.Errorf("workflow %s: step %s: slices must be >= 0", w.Name, s.Name)
+		}
+		if !isGate {
+			if err := validateParamsContract(s.Actuator, s.Params); err != nil {
+				return fmt.Errorf("workflow %s: step %s: %w", w.Name, s.Name, err)
+			}
 		}
 	}
 	// Needs must resolve, and the graph must be acyclic (Kahn's algorithm).

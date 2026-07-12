@@ -9,6 +9,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/dstout-devops/stratt/core/internal/contract"
 	"github.com/dstout-devops/stratt/types"
 )
 
@@ -174,6 +175,13 @@ func upsertEntityTx(ctx context.Context, tx pgx.Tx, prov types.Provenance, e Ent
 }
 
 func upsertFacetTx(ctx context.Context, tx pgx.Tx, prov types.Provenance, entityID, namespace string, value json.RawMessage) error {
+	// Pinned Facet schemas validate at the write path itself (§1.5,
+	// ADR-0015) — every writer (Normalizer and Run provenance alike) passes
+	// through here, so enforcement is structural, not a review norm.
+	// Namespaces without a demanded schema pass uncovered (§1.1).
+	if _, err := contract.ValidateFacet(namespace, value); err != nil {
+		return fmt.Errorf("graph: facet %s on %s: %w", namespace, entityID, err)
+	}
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO graph.facet (entity_id, namespace, value, prov_writer_kind, prov_writer_ref, prov_source_id, prov_at)
 		VALUES ($1, $2, $3, $4, $5, nullif($6, ''), $7)

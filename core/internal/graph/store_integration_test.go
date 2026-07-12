@@ -376,3 +376,72 @@ func TestWorkflowRunsAndGates(t *testing.T) {
 		t.Fatalf("summary round-trip: %v", summary)
 	}
 }
+
+// TestContractPinning covers ADR-0015: registration is idempotent per
+// name+version+hash, and drift against a pin is blocking.
+func TestContractPinning(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+
+	c := types.Contract{
+		Name: "actuators/test.input", Version: 1, Rung: "hand-written",
+		Hash: "aaaa", Schema: []byte(`{"type":"object"}`),
+	}
+	if err := s.RegisterContract(ctx, c); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.RegisterContract(ctx, c); err != nil {
+		t.Fatalf("same pin must be a noop: %v", err)
+	}
+	// Same name+version, different bytes → blocking drift naming both hashes.
+	drifted := c
+	drifted.Hash = "bbbb"
+	err := s.RegisterContract(ctx, drifted)
+	if !errors.Is(err, ErrContractDrift) || !strings.Contains(err.Error(), "aaaa") || !strings.Contains(err.Error(), "bbbb") {
+		t.Fatalf("drift must block naming both hashes, got %v", err)
+	}
+	// A new version coexists.
+	v2 := drifted
+	v2.Version = 2
+	if err := s.RegisterContract(ctx, v2); err != nil {
+		t.Fatal(err)
+	}
+	all, err := s.ListContracts(ctx)
+	if err != nil || len(all) != 2 {
+		t.Fatalf("list: %v %v", all, err)
+	}
+}
+
+// TestFacetSchemaEnforcement proves the pinned os.kernel schema rejects
+// malformed writes at the write path itself (§1.5) — for the Run-provenance
+// projector too, and for uncovered namespaces nothing changes.
+func TestFacetSchemaEnforcement(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	p := s.NormalizerProjector()
+	pv := prov(types.WriterSyncer, "vcenter/syncer")
+
+	if err := s.RegisterFacetOwner(ctx, types.FacetOwner{Namespace: "os.kernel", OwnerKind: "syncer", OwnerRef: "vcenter/syncer"}); err != nil {
+		t.Fatal(err)
+	}
+	ids, err := p.UpsertEntities(ctx, pv, []EntityUpsert{{Kind: "vm", IdentityKeys: map[string]string{"vcenter.uuid": "u-cx"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Valid document → accepted.
+	if err := p.UpsertFacet(ctx, pv, ids[0], "os.kernel", json.RawMessage(`{"family":"linux","release":"6.6"}`)); err != nil {
+		t.Fatalf("valid os.kernel rejected: %v", err)
+	}
+	// Off-schema property → rejected with the contract named.
+	err = p.UpsertFacet(ctx, pv, ids[0], "os.kernel", json.RawMessage(`{"family":"linux","kernelParams":["quiet"]}`))
+	if err == nil || !strings.Contains(err.Error(), "facets/os.kernel") {
+		t.Fatalf("off-schema os.kernel must be rejected naming the contract, got %v", err)
+	}
+	// Uncovered namespace (no demanded schema, §1.1) → passes as before.
+	if err := s.RegisterFacetOwner(ctx, types.FacetOwner{Namespace: "vm.config", OwnerKind: "syncer", OwnerRef: "vcenter/syncer"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.UpsertFacet(ctx, pv, ids[0], "vm.config", json.RawMessage(`{"anything":true}`)); err != nil {
+		t.Fatalf("uncovered namespace must not be validated: %v", err)
+	}
+}

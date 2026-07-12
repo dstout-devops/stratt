@@ -15,6 +15,7 @@ import (
 	"go.temporal.io/sdk/client"
 
 	"github.com/dstout-devops/stratt/core/internal/authz"
+	"github.com/dstout-devops/stratt/core/internal/contract"
 	"github.com/dstout-devops/stratt/core/internal/desiredstate"
 	"github.com/dstout-devops/stratt/core/internal/events"
 	"github.com/dstout-devops/stratt/core/internal/graph"
@@ -620,6 +621,12 @@ func (s *Server) StartRun(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "invalid request: "+err.Error())
 		return
 	}
+	// Contract check at the door (§1.5, ADR-0015): a malformed Step fails
+	// here with pointer detail — before any Run row exists, not at dispatch.
+	if err := validateStepParams(body.Actuator, body.Params); err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	v, err := s.Store.GetView(r.Context(), body.ViewName)
 	if err != nil {
 		s.fail(w, err)
@@ -1216,6 +1223,48 @@ func (s *Server) ListWorkflowRuns(w http.ResponseWriter, r *http.Request, params
 	out := make([]WorkflowRun, 0, len(wrs))
 	for _, wr := range wrs {
 		out = append(out, workflowRunToWire(wr))
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+// validateStepParams checks wire Step params against the Actuator's input
+// Contract (§1.5, ADR-0015). nil actuator means the ansible default.
+func validateStepParams(actuator *StartRunActuator, params *map[string]interface{}) error {
+	name := "ansible"
+	if actuator != nil && *actuator != "" {
+		name = string(*actuator)
+	}
+	raw := json.RawMessage(`{}`)
+	if params != nil {
+		b, err := json.Marshal(*params)
+		if err != nil {
+			return fmt.Errorf("invalid params: %w", err)
+		}
+		raw = b
+	}
+	return contract.ValidateActuatorParams(name, raw)
+}
+
+// ListContracts implements (GET /contracts): the pinned schema documents
+// (§1.5) — served from the embedded set, which startup has already verified
+// against the registry pins.
+func (s *Server) ListContracts(w http.ResponseWriter, r *http.Request) {
+	all, err := contract.All()
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	out := make([]Contract, 0, len(all))
+	for _, c := range all {
+		var doc map[string]interface{}
+		if err := json.Unmarshal(c.Schema, &doc); err != nil {
+			s.fail(w, err)
+			return
+		}
+		out = append(out, Contract{
+			Name: c.Name, Version: int64(c.Version), Rung: ContractRung(c.Rung),
+			Hash: c.Hash, Schema: doc,
+		})
 	}
 	writeJSON(w, http.StatusOK, out)
 }

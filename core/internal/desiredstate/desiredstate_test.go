@@ -548,13 +548,13 @@ steps:
     needs: [approve]
     viewName: all-vms
     actuator: script
-    params: { source: "echo done" }
+    params: { script: "echo done" }
   - name: cleanup
     needs: [gather, approve]
     when: failure
     viewName: all-vms
     actuator: script
-    params: { source: "echo cleanup" }
+    params: { script: "echo cleanup" }
 `)
 	parsed, err := ParseDir(root)
 	if err != nil {

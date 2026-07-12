@@ -254,6 +254,22 @@ paths:
             text/event-stream:
               schema: { type: string }
         "404": { $ref: "#/components/responses/NotFound" }
+  /contracts:
+    get:
+      operationId: listContracts
+      summary: List pinned Contracts
+      description: >
+        Every pinned Contract and Facet schema (charter §1.5, ADR-0015):
+        the JSON Schema document, its sha256 pin, version, and derivation
+        rung. The SchemaForm/SchemaTable rendering source (ADR-0003 L7/L8).
+      responses:
+        "200":
+          description: Pinned Contracts, ordered by name and version.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Contract" }
   /triggers:
     get:
       operationId: listTriggers
@@ -693,6 +709,27 @@ components:
           description: The Step within that Workflow.
         startedAt: { type: string, format: date-time }
         finishedAt: { type: string, format: date-time }
+    Contract:
+      type: object
+      description: >
+        A pinned JSON Schema document on a Step's inputs/outputs or a Facet
+        namespace (charter §1.5, §2.2) — data, never a language class.
+      required: [name, version, rung, hash, schema]
+      properties:
+        name:
+          type: string
+          description: e.g. actuators/script.input or facets/os.kernel
+        version: { type: integer, format: int64 }
+        rung:
+          type: string
+          enum: [hand-written, tool-derived, mcp-declared]
+          description: Derivation-ladder provenance of the schema (§2.2).
+        hash:
+          type: string
+          description: sha256 over the exact document bytes, hex.
+        schema:
+          type: object
+          description: The JSON Schema document.
     Trigger:
       type: object
       description: >

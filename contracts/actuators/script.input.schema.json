@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "stratt:contract:actuators/script.input:v1",
+  "title": "script Step params",
+  "description": "Input Contract for the script Actuator (charter §2.3). Hand-written — derivation ladder rung 1 (§2.2).",
+  "type": "object",
+  "required": ["script"],
+  "properties": {
+    "script": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Script source, executed once per target."
+    },
+    "interpreter": {
+      "type": "string",
+      "description": "Interpreter binary (default sh)."
+    }
+  },
+  "additionalProperties": false
+}
