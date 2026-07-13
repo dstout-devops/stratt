@@ -43,6 +43,54 @@ func TestParseEventAndFacts(t *testing.T) {
 	}
 }
 
+// TestExtractHardeningFacts covers the os.hardening.* projection (ADR-0033):
+// the collector set_facts a `stratt_hardening_<domain>` dict per CIS domain,
+// which ExtractFacts maps to the os.hardening.<domain> Facet namespaces.
+func TestExtractHardeningFacts(t *testing.T) {
+	line := []byte(`{"counter":9,"event":"runner_on_ok","event_data":{"host":"host-1","task":"project stratt hardening facets","res":{"ansible_facts":{` +
+		`"stratt_hardening_sysctl":{"ip_forward":"0","tcp_syncookies":"1"},` +
+		`"stratt_hardening_sshd":{"permit_root_login":"no"},` +
+		`"stratt_hardening_filesystem":{"cramfs_disabled":true,"tmp_nodev":false},` +
+		`"stratt_hardening_auditd":{"installed":true,"enabled":true,"running":true},` +
+		`"stratt_hardening_services":{"avahi_removed":true},` +
+		`"ansible_system":"Linux"}}}}`)
+	ev, ok := ParseEvent(line)
+	if !ok {
+		t.Fatal("event line did not parse")
+	}
+	facts := ExtractFacts(ev)
+	if facts == nil {
+		t.Fatal("expected facts")
+	}
+	// os.kernel still projects alongside the hardening namespaces.
+	if string(facts["os.kernel"]) != `{"family":"linux"}` {
+		t.Fatalf("os.kernel: %s", facts["os.kernel"])
+	}
+	// Strings stay strings; booleans stay booleans — the projected document
+	// must match the pinned os.hardening.<domain> schema.
+	if string(facts["os.hardening.sysctl"]) != `{"ip_forward":"0","tcp_syncookies":"1"}` {
+		t.Fatalf("os.hardening.sysctl: %s", facts["os.hardening.sysctl"])
+	}
+	if string(facts["os.hardening.sshd"]) != `{"permit_root_login":"no"}` {
+		t.Fatalf("os.hardening.sshd: %s", facts["os.hardening.sshd"])
+	}
+	if string(facts["os.hardening.filesystem"]) != `{"cramfs_disabled":true,"tmp_nodev":false}` {
+		t.Fatalf("os.hardening.filesystem: %s", facts["os.hardening.filesystem"])
+	}
+	if _, ok := facts["os.hardening.auditd"]; !ok {
+		t.Fatal("expected os.hardening.auditd")
+	}
+	if _, ok := facts["os.hardening.services"]; !ok {
+		t.Fatal("expected os.hardening.services")
+	}
+
+	// An event carrying no hardening dicts projects none of the namespaces.
+	plain, _ := ParseEvent([]byte(`{"counter":1,"event":"runner_on_ok","event_data":{"host":"h","res":{"ansible_facts":{"ansible_system":"Linux"}}}}`))
+	if f := ExtractFacts(plain); f["os.hardening.sysctl"] != nil {
+		t.Fatalf("no hardening facts expected: %v", f)
+	}
+}
+
 func TestActuatorSeam(t *testing.T) {
 	a := Actuator{}
 	if a.Name() != "ansible" {

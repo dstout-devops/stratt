@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "stratt:contract:facets/os.hardening.filesystem:v1",
+  "title": "os.hardening.filesystem Facet",
+  "description": "Filesystem-hardening posture relevant to CIS §1 (disabled unused filesystems, /tmp mount options). Projected by the os-hardening collector gather Run (charter §1.2); demanded by the shipping cis-1.x facet-observation Baselines (§1.1). Booleans are the observed compliant state (true = the control's expectation is met on the host as read).",
+  "type": "object",
+  "properties": {
+    "cramfs_disabled": { "type": "boolean" },
+    "freevxfs_disabled": { "type": "boolean" },
+    "jffs2_disabled": { "type": "boolean" },
+    "hfs_disabled": { "type": "boolean" },
+    "hfsplus_disabled": { "type": "boolean" },
+    "udf_disabled": { "type": "boolean" },
+    "tmp_separate": { "type": "boolean", "description": "/tmp is a separate partition" },
+    "tmp_nodev": { "type": "boolean" },
+    "tmp_nosuid": { "type": "boolean" },
+    "tmp_noexec": { "type": "boolean" }
+  },
+  "additionalProperties": false
+}

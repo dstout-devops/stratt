@@ -74,6 +74,70 @@ framework: cis
 	}
 }
 
+// TestParseFacetObservationBaseline covers the hand-written facet-observation
+// Baseline (ADR-0033): mode + expected values, no actuator/params/check Step.
+func TestParseFacetObservationBaseline(t *testing.T) {
+	root := t.TempDir()
+	writeDecl(t, root, "linux.yaml", "name: linux\nselector: {facets: [{namespace: os.kernel, path: family, equals: linux}]}\n")
+	writeBaseline(t, root, "cis-sshd.yaml", `
+name: cis-5-2-8-permit-root-login
+viewName: linux
+mode: facet-observation
+cron: "0 * * * *"
+severity: critical
+framework: cis
+claim: exclusive
+expected:
+  - namespace: os.hardening.sshd
+    path: permit_root_login
+    equals: "no"
+  - namespace: os.hardening.auditd
+    path: running
+    equals: true
+`)
+	parsed, err := ParseDir(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(parsed.Baselines) != 1 {
+		t.Fatalf("baselines: %+v", parsed.Baselines)
+	}
+	b := parsed.Baselines[0]
+	if b.Mode != types.FacetObservation || b.Framework != "cis" || b.Claim != types.ClaimExclusive {
+		t.Fatalf("baseline: %+v", b)
+	}
+	if len(b.Expected) != 2 {
+		t.Fatalf("expected: %+v", b.Expected)
+	}
+	if b.Expected[0].Namespace != "os.hardening.sshd" || string(b.Expected[0].Equals) != `"no"` {
+		t.Fatalf("expected[0]: %+v (%s)", b.Expected[0], b.Expected[0].Equals)
+	}
+	if string(b.Expected[1].Equals) != `true` {
+		t.Fatalf("expected[1] equals: %s", b.Expected[1].Equals)
+	}
+
+	// Rejections specific to facet-observation.
+	for name, doc := range map[string]string{
+		"no expected":     "name: x\nviewName: v\nmode: facet-observation\ncron: '* * * * *'\nseverity: info\n",
+		"actuator set":    "name: x\nviewName: v\nmode: facet-observation\ncron: '* * * * *'\nseverity: info\nactuator: ansible\nexpected: [{namespace: n, equals: 1}]\n",
+		"params set":      "name: x\nviewName: v\nmode: facet-observation\ncron: '* * * * *'\nseverity: info\nparams: {x: 1}\nexpected: [{namespace: n, equals: 1}]\n",
+		"creds set":       "name: x\nviewName: v\nmode: facet-observation\ncron: '* * * * *'\nseverity: info\ncredentialRefs: [c]\nprincipal: p\nexpected: [{namespace: n, equals: 1}]\n",
+		"no matcher":      "name: x\nviewName: v\nmode: facet-observation\ncron: '* * * * *'\nseverity: info\nexpected: [{namespace: n}]\n",
+		"two matchers":    "name: x\nviewName: v\nmode: facet-observation\ncron: '* * * * *'\nseverity: info\nexpected: [{namespace: n, equals: 1, contains: 2}]\n",
+		"empty namespace": "name: x\nviewName: v\nmode: facet-observation\ncron: '* * * * *'\nseverity: info\nexpected: [{equals: 1}]\n",
+		"missing view":    "name: x\nmode: facet-observation\ncron: '* * * * *'\nseverity: info\nexpected: [{namespace: n, equals: 1}]\n",
+		"bad claim":       "name: x\nviewName: v\nmode: facet-observation\ncron: '* * * * *'\nseverity: info\nclaim: priority\nexpected: [{namespace: n, equals: 1}]\n",
+		"unknown mode":    "name: x\nviewName: v\nmode: probe\ncron: '* * * * *'\nseverity: info\n",
+	} {
+		bad := t.TempDir()
+		writeDecl(t, bad, "v.yaml", "name: v\nselector: {kinds: [vm]}\n")
+		writeBaseline(t, bad, "x.yaml", doc)
+		if _, err := ParseDir(bad); err == nil {
+			t.Fatalf("invalid facet-observation baseline (%s) must be rejected", name)
+		}
+	}
+}
+
 func TestBaselinePlanApplyLifecycle(t *testing.T) {
 	s := testStore(t)
 	ctx := context.Background()

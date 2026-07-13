@@ -122,11 +122,22 @@ func checkRunInput(b types.Baseline) (RunInput, error) {
 // if any expectation is unmet (a missing Facet is unmet — desired state
 // absent is drift). runID stays empty: the workflow history is the Evidence.
 func (a *Activities) EvaluateFacetBaseline(ctx context.Context, b types.Baseline) (graph.ObservationOutcome, error) {
-	if b.Selector == nil {
+	// Compiler-emitted Baselines (ADR-0023) carry a compiled Selector (the
+	// Assignment's View ∩ the Blueprint route). Hand-written facet-observation
+	// Baselines (ADR-0033) name a viewName instead — resolve that View to its
+	// live Entity set. One of the two is always present (ValidateBaseline
+	// requires viewName; the compiler always sets Selector).
+	var ents []types.Entity
+	var err error
+	switch {
+	case b.Selector != nil:
+		ents, err = a.Store.ResolveSelector(ctx, *b.Selector, nil, 0)
+	case b.ViewName != "":
+		_, ents, err = a.Store.ResolveView(ctx, b.ViewName, nil, 0)
+	default:
 		return graph.ObservationOutcome{}, temporal.NewNonRetryableApplicationError(
-			fmt.Sprintf("baseline %s: facet-observation requires a compiled selector", b.Name), "InvalidBaseline", nil)
+			fmt.Sprintf("baseline %s: facet-observation requires a selector or viewName", b.Name), "InvalidBaseline", nil)
 	}
-	ents, err := a.Store.ResolveSelector(ctx, *b.Selector, nil, 0)
 	if err != nil {
 		return graph.ObservationOutcome{}, err
 	}

@@ -737,6 +737,46 @@ type baselineFile struct {
 	DampingObservations int            `yaml:"dampingObservations"`
 	RemediationWorkflow string         `yaml:"remediationWorkflow"`
 	Framework           string         `yaml:"framework"`
+
+	// facet-observation variant (ADR-0033): a hand-written Baseline that
+	// asserts expected Facet values graph-side (no check Step, no actuator).
+	// The desired state is "the Entities in viewName should carry these Facet
+	// values" (§2.4); the collector projects the Facets separately (§1.2).
+	Mode     string                 `yaml:"mode"`
+	Expected []facetExpectationFile `yaml:"expected"`
+	Claim    string                 `yaml:"claim"`
+}
+
+// facetExpectationFile is the yaml shape of one facet-observation expectation.
+// It mirrors types.FacetExpectation but carries explicit yaml tags (the type's
+// json tags don't govern yaml decoding) so `notBefore` decodes as written.
+type facetExpectationFile struct {
+	Namespace string `yaml:"namespace"`
+	Path      string `yaml:"path"`
+	Equals    any    `yaml:"equals"`
+	Contains  any    `yaml:"contains"`
+	NotBefore string `yaml:"notBefore"`
+}
+
+// toExpectation converts a yaml expectation into the typed form, JSON-encoding
+// the equals/contains value. Returns an error only if the value is unencodable.
+func (e facetExpectationFile) toExpectation() (types.FacetExpectation, error) {
+	exp := types.FacetExpectation{Namespace: e.Namespace, Path: e.Path, NotBefore: e.NotBefore}
+	if e.Equals != nil {
+		raw, err := json.Marshal(e.Equals)
+		if err != nil {
+			return types.FacetExpectation{}, err
+		}
+		exp.Equals = raw
+	}
+	if e.Contains != nil {
+		raw, err := json.Marshal(e.Contains)
+		if err != nil {
+			return types.FacetExpectation{}, err
+		}
+		exp.Contains = raw
+	}
+	return exp, nil
 }
 
 func parseBaselineFile(path string, raw []byte) (string, types.Baseline, error) {
@@ -752,6 +792,14 @@ func parseBaselineFile(path string, raw []byte) (string, types.Baseline, error) 
 		Cron: f.Cron, Paused: f.Paused, Severity: f.Severity,
 		DampingObservations: f.DampingObservations,
 		RemediationWorkflow: f.RemediationWorkflow, Framework: f.Framework,
+		Mode: f.Mode, Claim: f.Claim,
+	}
+	for _, ef := range f.Expected {
+		exp, err := ef.toExpectation()
+		if err != nil {
+			return "", types.Baseline{}, fmt.Errorf("desiredstate: %s: expected: %w", path, err)
+		}
+		b.Expected = append(b.Expected, exp)
 	}
 	if err := ValidateBaseline(b); err != nil {
 		return "", types.Baseline{}, fmt.Errorf("desiredstate: %s: %w", path, err)
@@ -784,6 +832,51 @@ func ValidateBaseline(b types.Baseline) error {
 	if b.Slices < 0 {
 		return fmt.Errorf("baseline %s: slices must be >= 0", b.Name)
 	}
+
+	// facet-observation Baselines (ADR-0033) assert expected Facet values
+	// graph-side — they have no check Step, so the actuator/params/read-only
+	// checks below do not apply. The desired state is data; the collector
+	// projects the Facets separately (§1.2). viewName + cron are validated
+	// above; here we require well-formed expectations and no execution fields.
+	if b.Mode == types.FacetObservation {
+		if b.Actuator != "" || len(b.Params) > 0 {
+			return fmt.Errorf("baseline %s: facet-observation baselines take no actuator/params (the check is graph-side)", b.Name)
+		}
+		if len(b.CredentialRefs) > 0 {
+			return fmt.Errorf("baseline %s: facet-observation baselines take no credentialRefs", b.Name)
+		}
+		switch b.Claim {
+		case "", types.ClaimExclusive, types.ClaimAdditive:
+		default:
+			return fmt.Errorf("baseline %s: claim must be exclusive or additive", b.Name)
+		}
+		if len(b.Expected) == 0 {
+			return fmt.Errorf("baseline %s: facet-observation requires at least one expected value", b.Name)
+		}
+		for i, exp := range b.Expected {
+			if exp.Namespace == "" {
+				return fmt.Errorf("baseline %s: expected[%d]: namespace is required", b.Name, i)
+			}
+			set := 0
+			if len(exp.Equals) > 0 {
+				set++
+			}
+			if len(exp.Contains) > 0 {
+				set++
+			}
+			if exp.NotBefore != "" {
+				set++
+			}
+			if set != 1 {
+				return fmt.Errorf("baseline %s: expected[%d]: exactly one of equals, contains, or notBefore is required", b.Name, i)
+			}
+		}
+		return nil
+	}
+	if b.Mode != "" {
+		return fmt.Errorf("baseline %s: unknown mode %q (only %q, or empty for a check Step)", b.Name, b.Mode, types.FacetObservation)
+	}
+
 	actuator := b.Actuator
 	if actuator == "" {
 		actuator = "ansible"

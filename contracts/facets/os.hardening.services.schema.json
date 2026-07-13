@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "stratt:contract:facets/os.hardening.services:v1",
+  "title": "os.hardening.services Facet",
+  "description": "Presence of special-purpose services CIS §2 recommends removing unless required. Projected by the os-hardening collector gather Run (charter §1.2); demanded by the shipping cis-2.x facet-observation Baselines (§1.1). Booleans report the compliant state (true = the service is absent / not active on the host as read).",
+  "type": "object",
+  "properties": {
+    "avahi_removed": { "type": "boolean" },
+    "cups_removed": { "type": "boolean" },
+    "dhcp_server_removed": { "type": "boolean" },
+    "ldap_server_removed": { "type": "boolean" },
+    "nfs_server_removed": { "type": "boolean" },
+    "rpcbind_removed": { "type": "boolean" },
+    "rsync_removed": { "type": "boolean" },
+    "telnet_server_removed": { "type": "boolean" }
+  },
+  "additionalProperties": false
+}

@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "stratt:contract:facets/os.hardening.auditd:v1",
+  "title": "os.hardening.auditd Facet",
+  "description": "Audit-subsystem posture relevant to CIS §4 (auditd installed, enabled at boot, running). Projected by the os-hardening collector gather Run (charter §1.2); demanded by the shipping cis-4.x facet-observation Baselines (§1.1).",
+  "type": "object",
+  "properties": {
+    "installed": { "type": "boolean" },
+    "enabled": { "type": "boolean", "description": "auditd service enabled at boot" },
+    "running": { "type": "boolean" }
+  },
+  "additionalProperties": false
+}

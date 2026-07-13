@@ -414,8 +414,31 @@ func ExtractFacts(ev RunnerEvent) map[string]json.RawMessage {
 			out["os.kernel"] = raw
 		}
 	}
+
+	// os.hardening.* — projected by the os-hardening collector gather play,
+	// which set_facts a `stratt_hardening_<domain>` dict per CIS domain (§8:
+	// facts return as Facets). The play owns the normalization (sysctl/sshd
+	// values as strings, filesystem/auditd/services as booleans) so the
+	// projected document matches the pinned os.hardening.<domain> schema —
+	// a mismatch is refused at the Projector write (charter §1.1). Each
+	// domain is demanded by the shipping cis facet-observation Baselines.
+	for _, domain := range hardeningDomains {
+		m, ok := facts["stratt_hardening_"+domain].(map[string]any)
+		if !ok || len(m) == 0 {
+			continue
+		}
+		if raw, err := json.Marshal(m); err == nil {
+			out["os.hardening."+domain] = raw
+		}
+	}
+
 	if len(out) == 0 {
 		return nil
 	}
 	return out
 }
+
+// hardeningDomains are the os.hardening.<domain> Facet namespaces the CIS
+// collector projects; each has a pinned schema in contracts/facets and is
+// demanded by a shipping Baseline (charter §1.1).
+var hardeningDomains = []string{"sysctl", "sshd", "filesystem", "auditd", "services"}

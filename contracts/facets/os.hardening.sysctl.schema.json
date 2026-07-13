@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "stratt:contract:facets/os.hardening.sysctl:v1",
+  "title": "os.hardening.sysctl Facet",
+  "description": "Effective kernel tunables relevant to CIS network hardening (CIS Linux §3). Projected by the os-hardening collector gather Run (WriterRun provenance, charter §1.2); demanded by the shipping cis-3.x facet-observation Baselines (§1.1). Keys are dot-free normalized names (the Facet path evaluator splits on '.'); values are the raw sysctl string reading so a control asserts equality against it.",
+  "type": "object",
+  "properties": {
+    "ip_forward": { "type": "string", "description": "net.ipv4.ip_forward" },
+    "all_send_redirects": { "type": "string", "description": "net.ipv4.conf.all.send_redirects" },
+    "default_send_redirects": { "type": "string", "description": "net.ipv4.conf.default.send_redirects" },
+    "all_accept_redirects": { "type": "string", "description": "net.ipv4.conf.all.accept_redirects" },
+    "all_secure_redirects": { "type": "string", "description": "net.ipv4.conf.all.secure_redirects" },
+    "all_accept_source_route": { "type": "string", "description": "net.ipv4.conf.all.accept_source_route" },
+    "all_log_martians": { "type": "string", "description": "net.ipv4.conf.all.log_martians" },
+    "all_rp_filter": { "type": "string", "description": "net.ipv4.conf.all.rp_filter" },
+    "icmp_echo_ignore_broadcasts": { "type": "string", "description": "net.ipv4.icmp_echo_ignore_broadcasts" },
+    "tcp_syncookies": { "type": "string", "description": "net.ipv4.tcp_syncookies" },
+    "randomize_va_space": { "type": "string", "description": "kernel.randomize_va_space" }
+  },
+  "additionalProperties": false
+}

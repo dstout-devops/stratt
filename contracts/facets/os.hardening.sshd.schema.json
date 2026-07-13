@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "stratt:contract:facets/os.hardening.sshd:v1",
+  "title": "os.hardening.sshd Facet",
+  "description": "Effective sshd configuration relevant to CIS SSH hardening (CIS Linux §5.2), read from `sshd -T` so the projected value is what the daemon actually enforces. Projected by the os-hardening collector gather Run (charter §1.2); demanded by the shipping cis-5.2.x facet-observation Baselines (§1.1). Values are the normalized `sshd -T` string tokens.",
+  "type": "object",
+  "properties": {
+    "permit_root_login": { "type": "string" },
+    "password_authentication": { "type": "string" },
+    "permit_empty_passwords": { "type": "string" },
+    "x11_forwarding": { "type": "string" },
+    "max_auth_tries": { "type": "string" },
+    "client_alive_interval": { "type": "string" },
+    "client_alive_count_max": { "type": "string" },
+    "login_grace_time": { "type": "string" },
+    "ignore_rhosts": { "type": "string" },
+    "hostbased_authentication": { "type": "string" }
+  },
+  "additionalProperties": false
+}

@@ -505,7 +505,20 @@ func (d *Dispatcher) followLogs(ctx context.Context, runID string, slice int, po
 			res.SiteByTarget[r.Target] = d.site()
 		}
 		if iv.Facts != nil && iv.Event.Target != "" {
-			res.Facts[iv.Event.Target] = iv.Facts
+			// Accumulate per namespace across the play's fact-emitting events:
+			// a gather play may project several Facet namespaces from separate
+			// tasks (e.g. os.kernel from setup, os.hardening.* from a later
+			// set_fact), and each namespace is its own seam — a later event
+			// must not erase an earlier namespace. Same namespace twice: last
+			// wins.
+			byNS := res.Facts[iv.Event.Target]
+			if byNS == nil {
+				byNS = map[string]json.RawMessage{}
+				res.Facts[iv.Event.Target] = byNS
+			}
+			for ns, v := range iv.Facts {
+				byNS[ns] = v
+			}
 		}
 		if len(iv.Entities) > 0 {
 			res.Entities = append(res.Entities, iv.Entities...)
