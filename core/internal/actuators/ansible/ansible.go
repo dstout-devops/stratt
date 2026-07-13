@@ -73,6 +73,18 @@ type params struct {
 	// nothing mutates, and "changed" means "would change" — the Baseline
 	// drift signal (ADR-0019).
 	Check bool `json:"check"`
+	// SCM is an SCM content-ref: clone a repo in the EE pod and run a
+	// playbook from it (charter §5.6). Mutually exclusive with Play.
+	SCM *scmParams `json:"scm"`
+}
+
+// scmParams is the SCM content-ref (ansible.input v3). The clone runs inside
+// the EE image (git is exec'd there, never linked into the control plane —
+// §3 GPL boundary); the control plane only emits the clone script + env.
+type scmParams struct {
+	Repo     string `json:"repo"`
+	Ref      string `json:"ref"`
+	Playbook string `json:"playbook"`
 }
 
 // Actuator adapts this package's pure functions to the Actuator seam.
@@ -89,6 +101,15 @@ func (Actuator) Prepare(raw json.RawMessage, targets []Target) (actuators.JobSpe
 			return actuators.JobSpec{}, fmt.Errorf("ansible: invalid params: %w", err)
 		}
 	}
+	if p.Play != "" && p.SCM != nil {
+		return actuators.JobSpec{}, fmt.Errorf("ansible: params.play and params.scm are mutually exclusive")
+	}
+	hosts := BuildContent("", targets).Hosts // the View's targets, always
+
+	if p.SCM != nil {
+		return prepareSCM(p, hosts)
+	}
+
 	play := p.Play
 	if play == "" {
 		play = GatherFactsPlay
@@ -96,7 +117,6 @@ func (Actuator) Prepare(raw json.RawMessage, targets []Target) (actuators.JobSpe
 		// Fail at Prepare (terminal), not as a cryptic pod crash.
 		return actuators.JobSpec{}, err
 	}
-	content := BuildContent(play, targets)
 	// -j: one JSON event per stdout line — the event stream the
 	// dispatcher ships to NATS.
 	command := []string{"ansible-runner", "run", "/runner", "-p", "play.yml", "-j"}
@@ -107,12 +127,75 @@ func (Actuator) Prepare(raw json.RawMessage, targets []Target) (actuators.JobSpe
 	}
 	return actuators.JobSpec{
 		Files: map[string]string{
-			"project/play.yml": content.Play,
-			"inventory/hosts":  content.Hosts,
+			"project/play.yml": play,
+			"inventory/hosts":  hosts,
 		},
 		Command: command,
 		Image:   p.EEImage,
 	}, nil
+}
+
+// cloneScript clones the SCM content-ref into /runner/project (an empty,
+// writable dir in the EE image) then runs the playbook from it. Untrusted
+// values (repo/ref/playbook) arrive as env and are used quoted — never
+// interpolated into the script text. A private-repo credential, when present,
+// is injected as a file by the dispatcher (§2.5) and referenced here via
+// GIT_SSH_COMMAND set out-of-band; this v1 targets public/pre-seeded repos.
+const cloneScript = `set -eu
+git clone --depth 1 ${SCM_REF:+--branch} ${SCM_REF:+"$SCM_REF"} -- "$SCM_REPO" /runner/project
+if [ "${SCM_CHECK:-}" = "1" ]; then
+  exec ansible-runner run /runner -p "$SCM_PLAYBOOK" -j --cmdline "--check --diff"
+fi
+exec ansible-runner run /runner -p "$SCM_PLAYBOOK" -j
+`
+
+// prepareSCM builds the JobSpec for an SCM content-ref Step. The playbook body
+// is cloned in-pod; only inventory/hosts (from the View) and the static clone
+// script are mounted.
+func prepareSCM(p params, hosts string) (actuators.JobSpec, error) {
+	if err := validateSCM(p.SCM); err != nil {
+		return actuators.JobSpec{}, err
+	}
+	env := map[string]string{
+		"SCM_REPO":     p.SCM.Repo,
+		"SCM_PLAYBOOK": p.SCM.Playbook,
+	}
+	if p.SCM.Ref != "" {
+		env["SCM_REF"] = p.SCM.Ref
+	}
+	if p.Check {
+		env["SCM_CHECK"] = "1"
+	}
+	return actuators.JobSpec{
+		Files: map[string]string{
+			"clone.sh":        cloneScript,
+			"inventory/hosts": hosts,
+		},
+		Command: []string{"sh", "/runner/clone.sh"},
+		Env:     env,
+		Image:   p.EEImage,
+	}, nil
+}
+
+// validateSCM rejects an SCM content-ref that would fail in-pod: empty
+// repo/playbook, or a playbook path that escapes the clone via traversal.
+func validateSCM(s *scmParams) error {
+	if s.Repo == "" || s.Playbook == "" {
+		return fmt.Errorf("ansible: params.scm requires repo and playbook")
+	}
+	// A repo (or ref) beginning with "-" is parsed by git as an option, not a
+	// URL — argument injection that survives shell-quoting. The clone script
+	// also guards this with a "--" separator (defense in depth).
+	if strings.HasPrefix(s.Repo, "-") {
+		return fmt.Errorf("ansible: params.scm.repo must not begin with '-'")
+	}
+	if strings.HasPrefix(s.Ref, "-") {
+		return fmt.Errorf("ansible: params.scm.ref must not begin with '-'")
+	}
+	if strings.Contains(s.Playbook, "..") || strings.HasPrefix(s.Playbook, "/") {
+		return fmt.Errorf("ansible: params.scm.playbook must be a relative path within the repo")
+	}
+	return nil
 }
 
 // validatePlay checks the content is a YAML sequence (a plays list) — the

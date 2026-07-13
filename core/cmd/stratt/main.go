@@ -24,6 +24,17 @@ func main() {
 		os.Exit(2)
 	}
 	cmd := os.Args[1]
+
+	// `import awx` is a one-shot migration tool with its own flags; it reads
+	// AWX and writes a local bundle, never touching the platform API.
+	if cmd == "import" {
+		if err := runImport(os.Args[2:]); err != nil {
+			fmt.Fprintln(os.Stderr, "stratt:", err)
+			os.Exit(1)
+		}
+		return
+	}
+
 	fs := flag.NewFlagSet(cmd, flag.ExitOnError)
 	dir := fs.String("d", ".", "declarations directory (contains views/)")
 	server := fs.String("s", envOr("STRATT_SERVER", "http://localhost:8080"), "control-plane base URL")
@@ -42,7 +53,9 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, `usage: stratt <plan|apply> [-d declarations-dir] [-s server-url]`)
+	fmt.Fprintln(os.Stderr, `usage:
+  stratt <plan|apply> [-d declarations-dir] [-s server-url]
+  stratt import awx --endpoint <url> [--token <t>] -o <out-dir>`)
 }
 
 func envOr(key, def string) string {

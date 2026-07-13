@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "stratt:contract:actuators/ansible.input:v3",
+  "title": "ansible Step params",
+  "description": "Input Contract for the ansible Actuator (charter §2.3). Hand-written — derivation ladder rung 1 (§2.2). v3 adds scm: an SCM content-ref (charter §5.6 'project (SCM) → tool content ref on a Step') so a Step runs a playbook cloned from a repo instead of inline play content. play and scm are mutually exclusive; neither means the built-in gather-facts play.",
+  "type": "object",
+  "properties": {
+    "play": {
+      "type": "string",
+      "description": "Play file content: a YAML sequence of plays (validated as YAML at Prepare). Mutually exclusive with scm."
+    },
+    "scm": {
+      "type": "object",
+      "description": "SCM content-ref: clone a repo in the EE pod and run a playbook from it. The clone execs git inside the EE image (GPL boundary, §3); the control plane never fetches content.",
+      "properties": {
+        "repo": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Clone URL (https:// or ssh://). Private-repo credentials arrive via the Step's credentialRefs, never here (§2.5)."
+        },
+        "ref": {
+          "type": "string",
+          "description": "Branch, tag, or commit to check out. Empty means the repo default branch."
+        },
+        "playbook": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Playbook path within the repo (e.g. site.yml or playbooks/deploy.yml)."
+        }
+      },
+      "required": ["repo", "playbook"],
+      "additionalProperties": false
+    },
+    "eeImage": {
+      "type": "string",
+      "description": "Execution-environment image override for this Step's Jobs."
+    },
+    "check": {
+      "type": "boolean",
+      "description": "Run in check mode with diff capture (--check --diff): nothing mutates; changed means would-change — the Baseline drift signal (ADR-0019)."
+    }
+  },
+  "not": { "required": ["play", "scm"] },
+  "additionalProperties": false
+}
