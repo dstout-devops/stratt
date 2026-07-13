@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "stratt:contract:facets/mgmt.site:v1",
+  "title": "mgmt.site Facet",
+  "description": "Demanded by the dispatch-routing engine (charter §2.3, §3 leaf-node Sites; ADR-0032): the execution locus an Entity is reachable from — the Site whose satellite agent runs Steps against it. Written by Syncers with provenance (§1.2); an Entity with no mgmt.site routes to the built-in 'local' central cluster. Unlike mgmt.channels (a per-capability co-management MAP, §2.4), this is a single PHYSICAL fact: one Entity lives at one execution locus, so the value is a scalar, not a routing map — it carries no capability precedence. site is the name of a declared Site (never 'local', which is implicit).",
+  "type": "object",
+  "properties": {
+    "site": { "type": "string", "minLength": 1 }
+  },
+  "required": ["site"],
+  "additionalProperties": false
+}

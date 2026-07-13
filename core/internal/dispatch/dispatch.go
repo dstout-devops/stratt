@@ -41,6 +41,11 @@ type Config struct {
 	// the EE's non-root user reads them via group. Must match the EE image's
 	// runtime gid. <=0 defaults to 1000 (the stratt-ee `runner` user).
 	FSGroup int64
+	// Site is the execution locus this dispatcher runs at (ADR-0032). The hub
+	// leaves it empty (⇒ "local"); a remote Site's stratt-agent sets its Site
+	// name. Every published event and per-target result is stamped with it so
+	// §1.8 descent shows *where* a target ran.
+	Site string
 }
 
 // Dispatcher creates and follows execution Jobs.
@@ -54,6 +59,15 @@ type Dispatcher struct {
 // New builds a Dispatcher on an existing clientset and event bus.
 func New(cfg Config, client kubernetes.Interface, bus *events.Bus, log *slog.Logger) *Dispatcher {
 	return &Dispatcher{cfg: cfg, client: client, bus: bus, log: log.With("component", "dispatch")}
+}
+
+// site is this dispatcher's execution locus, defaulting to the built-in local
+// central cluster when unset (ADR-0032).
+func (d *Dispatcher) site() string {
+	if d.cfg.Site == "" {
+		return types.LocalSite
+	}
+	return d.cfg.Site
 }
 
 // CredentialMount is a resolved CredentialRef pointer, ready to project into
@@ -88,6 +102,10 @@ type Result struct {
 	// unreachable). Failures are sticky: a target that ever failed is never
 	// downgraded by a later ok.
 	PerTarget map[string]string
+	// SiteByTarget maps target name → the execution locus it ran at (ADR-0032)
+	// — "local" for the central cluster, a Site name for a remote leaf. Feeds
+	// the Run's Sites union and §1.8 descent. Empty on legacy/local-only Runs.
+	SiteByTarget map[string]string
 	// Facts by target name → facet namespace → value.
 	Facts map[string]map[string]json.RawMessage
 	// Entities are tool-declared Entity observations (ADR-0017), projected
@@ -155,6 +173,7 @@ func (d *Dispatcher) Run(ctx context.Context, runID string, slice int, spec actu
 
 	res := &Result{
 		PerTarget:    map[string]string{},
+		SiteByTarget: map[string]string{},
 		Facts:        map[string]map[string]json.RawMessage{},
 		SpawnLatency: spawn,
 	}
@@ -465,6 +484,7 @@ func (d *Dispatcher) followLogs(ctx context.Context, runID string, slice int, po
 		}
 		iv.Event.RunID = runID
 		iv.Event.Slice = slice
+		iv.Event.Site = d.site() // §1.8: descent shows where this event ran
 		if err := d.bus.Publish(ctx, iv.Event); err != nil {
 			return unclaimed, interpreted, err
 		}
@@ -482,6 +502,7 @@ func (d *Dispatcher) followLogs(ctx context.Context, runID string, slice int, po
 			if statusRank(status) >= statusRank(res.PerTarget[r.Target]) {
 				res.PerTarget[r.Target] = status
 			}
+			res.SiteByTarget[r.Target] = d.site()
 		}
 		if iv.Facts != nil && iv.Event.Target != "" {
 			res.Facts[iv.Event.Target] = iv.Facts

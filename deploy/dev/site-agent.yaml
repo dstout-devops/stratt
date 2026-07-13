@@ -1,0 +1,88 @@
+# Dev harness: a remote Site's stratt-agent (ADR-0032), Site "edge-west" in
+# namespace site-b of the same kind cluster. It proves the transport, not K8s
+# multi-cluster: the hub's dispatcher NEVER touches site-b — only NATS does. The
+# agent runs Jobs here via its OWN in-cluster clientset, connected to nats-site
+# (a leaf of the hub NATS) at the kind host gateway.
+#
+#   task dev:site:up   # namespace + RBAC + agent + a Site-local credential
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: site-b
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: stratt-agent
+  namespace: site-b
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: stratt-agent
+  namespace: site-b
+rules:
+  # Exactly the dispatcher's execution surface (K8s Jobs are the only primitive,
+  # §3): create/adopt/delete Jobs + their ConfigMaps, follow pod logs, and read
+  # Secrets for the credential-presence preflight (never their material — the
+  # kubelet resolves that into the pod, §2.5).
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    verbs: ["create", "get", "list", "watch", "delete"]
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["create", "get", "delete"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get"]
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: stratt-agent
+  namespace: site-b
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: stratt-agent
+subjects:
+  - kind: ServiceAccount
+    name: stratt-agent
+    namespace: site-b
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: stratt-agent
+  namespace: site-b
+  labels: { app: stratt-agent, site: edge-west }
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: stratt-agent }
+  template:
+    metadata:
+      labels: { app: stratt-agent, site: edge-west }
+    spec:
+      serviceAccountName: stratt-agent
+      containers:
+        - name: agent
+          image: stratt/stratt-agent:dev
+          imagePullPolicy: IfNotPresent
+          env:
+            - { name: STRATT_SITE_NAME, value: "edge-west" }
+            - { name: STRATT_AGENT_MODE, value: "push" }
+            # nats-site (leaf of the hub NATS) via the kind host gateway.
+            - { name: STRATT_NATS_URL, value: "nats://192.168.102.1:4223" }
+            - { name: STRATT_K8S_NAMESPACE, value: "site-b" }
+            - { name: STRATT_EE_IMAGE, value: "stratt-ee:dev" }
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65532
+            allowPrivilegeEscalation: false

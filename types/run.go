@@ -47,6 +47,11 @@ type Run struct {
 	// validated against the Action's output Contract and available for
 	// cross-Step binding. Nil for Actuator Runs.
 	Outputs json.RawMessage `json:"outputs,omitempty"`
+	// Sites lists the execution loci this Run touched (ADR-0032) — the §1.8
+	// descent answer to "where did this run": ["local"], ["edge-west"], or a
+	// union when per-target routing fanned one Run across Sites. Nil/empty for
+	// legacy Runs and targetless Actions.
+	Sites []string `json:"sites,omitempty"`
 }
 
 // RunEvent is one task event in a Run's stream — the floor of the §1.8
@@ -65,6 +70,11 @@ type RunEvent struct {
 	Kind string `json:"kind"`
 	// Target is the Entity the event applies to, when per-target.
 	Target string `json:"target,omitempty"`
+	// Site is the execution locus this event came from (ADR-0032) — stamped by
+	// the dispatcher so §1.8 descent shows *where* a target ran. Empty/"local"
+	// for the central cluster; a Site name for a remote leaf. Descriptive only:
+	// never part of the (RunID, Slice, Seq) event identity.
+	Site string `json:"site,omitempty"`
 	// Payload is the event body (tool-shaped, opaque to the spine).
 	Payload map[string]any `json:"payload,omitempty"`
 }

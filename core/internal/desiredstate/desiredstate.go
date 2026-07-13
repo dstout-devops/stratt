@@ -56,6 +56,7 @@ type Declarations struct {
 	Blueprints     []types.Blueprint     `json:"blueprints"`
 	NotifySinks    []types.Sink          `json:"notifySinks"`
 	Subscriptions  []types.Subscription  `json:"subscriptions"`
+	Sites          []types.Site          `json:"sites"`
 }
 
 // Declared kinds appearing in plans.
@@ -72,6 +73,7 @@ const (
 	KindBlueprint     = "blueprint"
 	KindNotifySink    = "notify-sink"
 	KindSubscription  = "subscription"
+	KindSite          = "site"
 )
 
 // Action is what reconciliation will do (or did) to one declared object.
@@ -212,6 +214,13 @@ func ParseDir(root string) (Declarations, error) {
 	}
 	out.Emitters = emitters
 	sort.Slice(out.Emitters, func(i, j int) bool { return out.Emitters[i].Name < out.Emitters[j].Name })
+
+	sites, err := parseKind(filepath.Join(root, "sites"), true, parseSiteFile)
+	if err != nil {
+		return out, err
+	}
+	out.Sites = sites
+	sort.Slice(out.Sites, func(i, j int) bool { return out.Sites[i].Name < out.Sites[j].Name })
 
 	notifySinks, err := parseKind(filepath.Join(root, "notify-sinks"), true, parseNotifySinkFile)
 	if err != nil {
@@ -555,6 +564,50 @@ func ValidateEmitter(e types.Emitter) error {
 	}
 	if _, err := hex.DecodeString(e.TokenHash); err != nil {
 		return fmt.Errorf("emitter %s: tokenHash is not hex", e.Name)
+	}
+	return nil
+}
+
+// siteFile is the sites/*.yaml shape (ADR-0032). A Site declaration holds NO
+// secret material — the agent resolves credential pointers against its OWN
+// local Secrets at spawn (§2.5).
+type siteFile struct {
+	Name        string `yaml:"name"`
+	Mode        string `yaml:"mode"`
+	Namespace   string `yaml:"namespace"`
+	Description string `yaml:"description"`
+}
+
+func parseSiteFile(path string, raw []byte) (string, types.Site, error) {
+	var f siteFile
+	dec := yaml.NewDecoder(strings.NewReader(string(raw)))
+	dec.KnownFields(true)
+	if err := dec.Decode(&f); err != nil {
+		return "", types.Site{}, fmt.Errorf("desiredstate: %s: %w", path, err)
+	}
+	s := types.Site{Name: f.Name, Mode: f.Mode, Namespace: f.Namespace, Description: f.Description, DeclaredBy: "cac"}
+	if err := ValidateSite(s); err != nil {
+		return "", types.Site{}, fmt.Errorf("desiredstate: %s: %w", path, err)
+	}
+	return s.Name, s, nil
+}
+
+// ValidateSite checks one Site declaration.
+func ValidateSite(s types.Site) error {
+	if s.Name == "" {
+		return fmt.Errorf("site requires a name")
+	}
+	if s.Name == types.LocalSite {
+		return fmt.Errorf("site name %q is reserved for the built-in central locus", types.LocalSite)
+	}
+	if s.Mode != types.SiteModePush && s.Mode != types.SiteModePull {
+		return fmt.Errorf("site %s: unknown mode %q (push, pull)", s.Name, s.Mode)
+	}
+	// A Site name is a NATS subject token (stratt.dispatch.<name>, ADR-0032), so
+	// it must not contain the dot/wildcard/space characters that would split or
+	// widen the subject.
+	if strings.ContainsAny(s.Name, ". \t*>") {
+		return fmt.Errorf("site %s: name must not contain '.', whitespace, or NATS wildcards ('*','>')", s.Name)
 	}
 	return nil
 }
@@ -1348,6 +1401,11 @@ func ComputePlan(ctx context.Context, store *graph.Store, decls Declarations) (P
 		return Plan{}, err
 	}
 	plan.Entries = append(plan.Entries, emPlan.Entries...)
+	sitePlan, err := computeSitePlan(ctx, store, decls.Sites)
+	if err != nil {
+		return Plan{}, err
+	}
+	plan.Entries = append(plan.Entries, sitePlan.Entries...)
 	nsPlan, err := computeNotifySinkPlan(ctx, store, decls.NotifySinks)
 	if err != nil {
 		return Plan{}, err
@@ -1636,6 +1694,40 @@ func computeEmitterPlan(ctx context.Context, store *graph.Store, decls []types.E
 	return plan, nil
 }
 
+// computeSitePlan diffs declared Sites (CaC-only, ADR-0032).
+func computeSitePlan(ctx context.Context, store *graph.Store, decls []types.Site) (Plan, error) {
+	current, err := store.ListSites(ctx)
+	if err != nil {
+		return Plan{}, err
+	}
+	byName := map[string]types.Site{}
+	for _, s := range current {
+		byName[s.Name] = s
+	}
+	var plan Plan
+	declared := map[string]bool{}
+	for _, d := range decls {
+		declared[d.Name] = true
+		entry := PlanEntry{Kind: KindSite, Name: d.Name}
+		cur, exists := byName[d.Name]
+		switch {
+		case !exists:
+			entry.Action = ActionCreate
+		case declDocsEqual(cur, d):
+			entry.Action = ActionNoop
+		default:
+			entry.Action = ActionUpdate
+		}
+		plan.Entries = append(plan.Entries, entry)
+	}
+	for _, s := range current {
+		if !declared[s.Name] {
+			plan.Entries = append(plan.Entries, PlanEntry{Kind: KindSite, Name: s.Name, Action: ActionDelete})
+		}
+	}
+	return plan, nil
+}
+
 // computeNotifySinkPlan diffs declared Sinks (CaC-only, ADR-0027).
 func computeNotifySinkPlan(ctx context.Context, store *graph.Store, decls []types.Sink) (Plan, error) {
 	current, err := store.ListNotifySinks(ctx)
@@ -1893,6 +1985,10 @@ func Apply(ctx context.Context, store *graph.Store, decls Declarations) (Plan, e
 	for _, d := range decls.Emitters {
 		emByName[d.Name] = d
 	}
+	siteByName := map[string]types.Site{}
+	for _, d := range decls.Sites {
+		siteByName[d.Name] = d
+	}
 	blByName := map[string]types.Baseline{}
 	for _, d := range decls.Baselines {
 		blByName[d.Name] = d
@@ -1948,6 +2044,10 @@ func Apply(ctx context.Context, store *graph.Store, decls Declarations) (Plan, e
 			err = store.DeleteEmitter(ctx, e.Name)
 		case e.Kind == KindEmitter:
 			err = store.UpsertEmitter(ctx, emByName[e.Name])
+		case e.Kind == KindSite && e.Action == ActionDelete:
+			err = store.DeleteSite(ctx, e.Name)
+		case e.Kind == KindSite:
+			err = store.UpsertSite(ctx, siteByName[e.Name])
 		case e.Kind == KindNotifySink && e.Action == ActionDelete:
 			err = store.DeleteNotifySink(ctx, e.Name)
 		case e.Kind == KindNotifySink:

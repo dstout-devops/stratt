@@ -66,6 +66,33 @@ func (s *Store) GetFacets(ctx context.Context, entityID string) ([]types.Facet, 
 	return out, rows.Err()
 }
 
+// FacetValuesByEntities bulk-reads one Facet namespace across a set of Entities
+// — the dispatch-routing read path (ADR-0032): a single query for mgmt.site
+// over a resolved View, avoiding an N+1 GetFacets fan-out. Entities without the
+// Facet are simply absent from the returned map.
+func (s *Store) FacetValuesByEntities(ctx context.Context, namespace string, entityIDs []string) (map[string]json.RawMessage, error) {
+	if len(entityIDs) == 0 {
+		return map[string]json.RawMessage{}, nil
+	}
+	rows, err := s.pool.Query(ctx, `
+		SELECT entity_id, value FROM graph.facet
+		WHERE namespace = $1 AND entity_id = ANY($2::uuid[])`, namespace, entityIDs)
+	if err != nil {
+		return nil, fmt.Errorf("graph: facet values by entities: %w", err)
+	}
+	defer rows.Close()
+	out := make(map[string]json.RawMessage, len(entityIDs))
+	for rows.Next() {
+		var id string
+		var val json.RawMessage
+		if err := rows.Scan(&id, &val); err != nil {
+			return nil, fmt.Errorf("graph: scan facet value: %w", err)
+		}
+		out[id] = val
+	}
+	return out, rows.Err()
+}
+
 // selectorSQL compiles a ViewSelector into a WHERE clause over graph.entity e.
 // The selector is structured data (charter §2.1 — Views are declared queries,
 // not an expression language); compilation is deliberately mechanical.

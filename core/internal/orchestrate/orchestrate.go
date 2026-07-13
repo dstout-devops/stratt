@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"time"
 
 	"go.temporal.io/sdk/activity"
@@ -25,6 +26,7 @@ import (
 	"github.com/dstout-devops/stratt/core/internal/events"
 	"github.com/dstout-devops/stratt/core/internal/evidencestore"
 	"github.com/dstout-devops/stratt/core/internal/graph"
+	"github.com/dstout-devops/stratt/core/internal/siteproto"
 	"github.com/dstout-devops/stratt/types"
 )
 
@@ -79,6 +81,30 @@ type ResolvedTargets struct {
 	Targets     []actuators.Target
 }
 
+// SiteGroup is the targets that route to one execution locus (ADR-0032). The
+// built-in central cluster is Site "local".
+type SiteGroup struct {
+	Site    string
+	Targets []actuators.Target
+}
+
+// RoutedTargets is the View's Entity set partitioned by execution locus (the
+// mgmt.site Facet). Groups is a DETERMINISTICALLY SORTED slice (by Site name),
+// never a map — Temporal replay forbids map-range nondeterminism.
+type RoutedTargets struct {
+	ViewVersion int64
+	Groups      []SiteGroup
+}
+
+// SiteGateway dispatches one prepared slice to a remote Site over NATS and
+// awaits its terminal result, heartbeating while it blocks (ADR-0032).
+// Implemented by sitegw.Gateway; nil on a hub with no Sites configured, in
+// which case a Run that routes to a remote Site fails terminally.
+type SiteGateway interface {
+	DispatchAndAwait(ctx context.Context, req siteproto.DispatchRequest, heartbeat func()) (dispatch.Result, error)
+	Cancel(ctx context.Context, site, runID string) error
+}
+
 // FactSet carries per-target facts keyed for projection, plus tool-declared
 // Entity observations and the Step's derived outputs schema (ADR-0017).
 type FactSet struct {
@@ -130,6 +156,11 @@ func RunAgainstView(ctx workflow.Context, in RunInput) (RunOutcome, error) {
 	ctx = workflow.WithActivityOptions(ctx, opts)
 	var a *Activities
 
+	// touchedSites is the set of execution loci this Run dispatched to (ADR-0032),
+	// populated once targets are routed. Captured by the cancel defer so cleanup
+	// can reach every remote Site's agent, not just the hub.
+	var touchedSites []string
+
 	// Trigger-started executions have no API handler to pre-create the Run
 	// summary — the Workflow owns it (ADR-0010).
 	if in.RunID == "" {
@@ -142,7 +173,8 @@ func RunAgainstView(ctx workflow.Context, in RunInput) (RunOutcome, error) {
 	// Cancellation (POST /runs/{id}/cancel → Temporal CancelWorkflow, ADR-0026):
 	// the Workflow is the single writer of terminal Run status, so it owns the
 	// canceled transition. Activities cannot run on a canceled ctx, so cleanup
-	// runs on a disconnected context — delete the Job(s), then stamp canceled.
+	// runs on a disconnected context — delete the Job(s) (hub + each remote
+	// Site), then stamp canceled.
 	defer func() {
 		if in.RunID == "" || !errors.Is(ctx.Err(), workflow.ErrCanceled) {
 			return
@@ -150,7 +182,7 @@ func RunAgainstView(ctx workflow.Context, in RunInput) (RunOutcome, error) {
 		dctx, dcancel := workflow.NewDisconnectedContext(ctx)
 		defer dcancel()
 		dctx = workflow.WithActivityOptions(dctx, opts)
-		_ = workflow.ExecuteActivity(dctx, a.CleanupRun, in.RunID).Get(dctx, nil)
+		_ = workflow.ExecuteActivity(dctx, a.CleanupRun, in.RunID, touchedSites).Get(dctx, nil)
 		_ = workflow.ExecuteActivity(dctx, a.FinishRun, in, types.RunCanceled, dispatch.Result{}).Get(dctx, nil)
 	}()
 
@@ -163,9 +195,17 @@ func RunAgainstView(ctx workflow.Context, in RunInput) (RunOutcome, error) {
 		return RunOutcome{RunID: in.RunID}, finishRun(ctx, a, in, types.RunFailed, err)
 	}
 
-	var resolved ResolvedTargets
-	if err := workflow.ExecuteActivity(ctx, a.ResolveTargets, in).Get(ctx, &resolved); err != nil {
+	// Resolve targets and partition them by execution locus (ADR-0032): the
+	// mgmt.site Facet routes each Entity to its Site; unset ⇒ the local cluster.
+	var routed RoutedTargets
+	if err := workflow.ExecuteActivity(ctx, a.ResolveTargetsBySite, in).Get(ctx, &routed); err != nil {
 		return RunOutcome{RunID: in.RunID}, finishRun(ctx, a, in, types.RunFailed, err)
+	}
+	// Flat set for CollectFacts (name→entityID) and blast-radius audit.
+	resolved := ResolvedTargets{ViewVersion: routed.ViewVersion}
+	for _, g := range routed.Groups {
+		resolved.Targets = append(resolved.Targets, g.Targets...)
+		touchedSites = append(touchedSites, g.Site)
 	}
 	if err := workflow.ExecuteActivity(ctx, a.MarkRunning, in.RunID).Get(ctx, nil); err != nil {
 		return RunOutcome{RunID: in.RunID}, finishRun(ctx, a, in, types.RunFailed, err)
@@ -179,17 +219,23 @@ func RunAgainstView(ctx workflow.Context, in RunInput) (RunOutcome, error) {
 		return RunOutcome{RunID: in.RunID}, finishRun(ctx, a, in, types.RunFailed, err)
 	}
 
-	// Fan the target set out across slices — parallel Jobs, each an
-	// independently-retryable activity whose rung shows in the Workflow
-	// history (§1.8). Targets are disjoint, so results merge by union.
-	chunks := splitTargets(resolved.Targets, in.Slices)
-	futures := make([]workflow.Future, len(chunks))
-	for i, chunk := range chunks {
-		futures[i] = workflow.ExecuteActivity(ctx, a.Execute, in, i,
-			ResolvedTargets{ViewVersion: resolved.ViewVersion, Targets: chunk}, creds)
+	// Fan out one branch per (Site, slice) — parallel Jobs, each an
+	// independently-retryable activity whose rung shows in the Workflow history
+	// (§1.8). The slice index is GLOBAL across all Sites: the event MsgID is
+	// (runID, slice, seq), so two Sites' "slice 0" would dedup-erase each
+	// other's events server-side — global numbering keeps every event and Job
+	// name unique (ADR-0032). Targets are disjoint, so results merge by union.
+	var futures []workflow.Future
+	gslice := 0
+	for _, g := range routed.Groups {
+		for _, chunk := range splitTargets(g.Targets, in.Slices) {
+			futures = append(futures, workflow.ExecuteActivity(ctx, a.Execute, in, gslice, g.Site,
+				ResolvedTargets{ViewVersion: routed.ViewVersion, Targets: chunk}, creds))
+			gslice++
+		}
 	}
 	var result dispatch.Result
-	sliceResults := make([]dispatch.Result, len(chunks))
+	sliceResults := make([]dispatch.Result, len(futures))
 	var execErr error
 	for i, f := range futures {
 		if err := f.Get(ctx, &sliceResults[i]); err != nil && execErr == nil {
@@ -230,6 +276,24 @@ func finishRun(ctx workflow.Context, a *Activities, in RunInput, status types.Ru
 	return cause
 }
 
+// sitesTouched is the sorted, de-duplicated set of execution loci a Run's
+// targets ran at (ADR-0032) — the Run.Sites union recorded for §1.8 descent.
+func sitesTouched(result dispatch.Result) []string {
+	if len(result.SiteByTarget) == 0 {
+		return nil
+	}
+	seen := map[string]struct{}{}
+	for _, s := range result.SiteByTarget {
+		seen[s] = struct{}{}
+	}
+	out := make([]string, 0, len(seen))
+	for s := range seen {
+		out = append(out, s)
+	}
+	sort.Strings(out)
+	return out
+}
+
 // Activities carries the worker-side dependencies.
 type Activities struct {
 	Store      *graph.Store
@@ -246,6 +310,10 @@ type Activities struct {
 	// unsealed (a logged no-op), like the opentofu actuator is gated on a state
 	// key.
 	Evidence *evidencestore.Store
+	// Sites dispatches slices to remote execution loci over NATS (§2.3,
+	// ADR-0032). Nil on a hub with no Sites configured — a Run whose targets
+	// route to a remote Site then fails terminally with NoSiteGateway.
+	Sites SiteGateway
 }
 
 // EnsureRun creates the Run summary row for a Trigger-started execution
@@ -268,9 +336,22 @@ func (a *Activities) EnsureRun(ctx context.Context, in RunInput, workflowID stri
 	return run.ID, nil
 }
 
+// renderTarget renders one resolved Entity as an execution target. Phase-0
+// target semantics: local-connection per target (see ansible.GatherFactsPlay).
+func renderTarget(e types.Entity) actuators.Target {
+	name := e.Labels["vcenter.name"]
+	if name == "" {
+		name = e.ID
+	}
+	return actuators.Target{
+		EntityID: e.ID,
+		Name:     name,
+		Vars:     map[string]string{"ansible_connection": "local"},
+	}
+}
+
 // ResolveTargets resolves the View to its live Entity set and renders
-// execution targets. Phase-0 target semantics: local-connection per target
-// (see ansible.GatherFactsPlay).
+// execution targets (locus-agnostic; used by the targetless/legacy paths).
 func (a *Activities) ResolveTargets(ctx context.Context, in RunInput) (ResolvedTargets, error) {
 	v, ents, err := a.Store.ResolveView(ctx, in.ViewName, in.ViewParams, 0)
 	if err != nil {
@@ -281,15 +362,53 @@ func (a *Activities) ResolveTargets(ctx context.Context, in RunInput) (ResolvedT
 	}
 	out := ResolvedTargets{ViewVersion: v.Version}
 	for _, e := range ents {
-		name := e.Labels["vcenter.name"]
-		if name == "" {
-			name = e.ID
+		out.Targets = append(out.Targets, renderTarget(e))
+	}
+	return out, nil
+}
+
+// ResolveTargetsBySite resolves the View and partitions its targets by
+// execution locus (the mgmt.site Facet; unset ⇒ the built-in "local" central
+// cluster). Read-only — it only READS mgmt.site, never writes it (§1.2). Groups
+// come back sorted by Site name so the Workflow's fan-out is replay-deterministic
+// (ADR-0032).
+func (a *Activities) ResolveTargetsBySite(ctx context.Context, in RunInput) (RoutedTargets, error) {
+	v, ents, err := a.Store.ResolveView(ctx, in.ViewName, in.ViewParams, 0)
+	if err != nil {
+		return RoutedTargets{}, err
+	}
+	if len(ents) == 0 {
+		return RoutedTargets{}, fmt.Errorf("orchestrate: view %s resolves to zero entities", in.ViewName)
+	}
+	ids := make([]string, len(ents))
+	for i, e := range ents {
+		ids[i] = e.ID
+	}
+	locs, err := a.Store.FacetValuesByEntities(ctx, "mgmt.site", ids)
+	if err != nil {
+		return RoutedTargets{}, err
+	}
+	bySite := map[string][]actuators.Target{}
+	for _, e := range ents {
+		site := types.LocalSite
+		if raw, ok := locs[e.ID]; ok {
+			var loc struct {
+				Site string `json:"site"`
+			}
+			if err := json.Unmarshal(raw, &loc); err == nil && loc.Site != "" {
+				site = loc.Site
+			}
 		}
-		out.Targets = append(out.Targets, actuators.Target{
-			EntityID: e.ID,
-			Name:     name,
-			Vars:     map[string]string{"ansible_connection": "local"},
-		})
+		bySite[site] = append(bySite[site], renderTarget(e))
+	}
+	names := make([]string, 0, len(bySite))
+	for s := range bySite {
+		names = append(names, s)
+	}
+	sort.Strings(names)
+	out := RoutedTargets{ViewVersion: v.Version}
+	for _, s := range names {
+		out.Groups = append(out.Groups, SiteGroup{Site: s, Targets: bySite[s]})
 	}
 	return out, nil
 }
@@ -373,9 +492,13 @@ func (a *Activities) ResolveCredentials(ctx context.Context, in RunInput) ([]dis
 	return out, nil
 }
 
-// Execute prepares one Step slice through its Actuator, dispatches the K8s
-// Job, and follows it, publishing task events under (runID, slice).
-func (a *Activities) Execute(ctx context.Context, in RunInput, slice int, resolved ResolvedTargets, creds []dispatch.CredentialMount) (dispatch.Result, error) {
+// Execute prepares one Step slice through its Actuator and runs it at the
+// slice's execution locus (ADR-0032). The Actuator prepares the pod content on
+// the HUB (one Interpreter registry); a local slice runs on the hub Dispatcher,
+// a remote slice is dispatched to that Site's agent over NATS. Either way the
+// same prepared JobSpec drives the same dispatch.Dispatcher.Run — no parallel
+// execution stack (§1.4).
+func (a *Activities) Execute(ctx context.Context, in RunInput, slice int, site string, resolved ResolvedTargets, creds []dispatch.CredentialMount) (dispatch.Result, error) {
 	name := in.Actuator
 	if name == "" {
 		name = "ansible"
@@ -391,20 +514,55 @@ func (a *Activities) Execute(ctx context.Context, in RunInput, slice int, resolv
 		// Malformed Step params are terminal too.
 		return dispatch.Result{}, temporal.NewNonRetryableApplicationError(err.Error(), "InvalidStepParams", err)
 	}
-	// Heartbeat from the dispatch loops so Temporal can deliver cancellation
-	// to a long-running Job (a canceled Run stops promptly, ADR-0026).
-	res, err := a.Dispatcher.Run(ctx, in.RunID, slice, spec, act, creds,
-		func() { activity.RecordHeartbeat(ctx) })
-	if err != nil {
-		return dispatch.Result{}, err
+	heartbeat := func() { activity.RecordHeartbeat(ctx) }
+
+	if site == "" || site == types.LocalSite {
+		// Heartbeat from the dispatch loops so Temporal can deliver cancellation
+		// to a long-running Job (a canceled Run stops promptly, ADR-0026).
+		res, err := a.Dispatcher.Run(ctx, in.RunID, slice, spec, act, creds, heartbeat)
+		if err != nil {
+			return dispatch.Result{}, err
+		}
+		return *res, nil
 	}
-	return *res, nil
+
+	// Remote Site: the prepared spec must be remote-safe — no plain Env
+	// material may cross the wire (§2.5, ADR-0032). Terminal if it isn't (e.g.
+	// opentofu, which carries the state-backend credential in Env → hub-local).
+	if err := spec.RemoteSafe(); err != nil {
+		return dispatch.Result{}, temporal.NewNonRetryableApplicationError(err.Error(), "NotRemoteSafe", err)
+	}
+	if a.Sites == nil {
+		return dispatch.Result{}, temporal.NewNonRetryableApplicationError(
+			fmt.Sprintf("run targets site %q but this hub has no site gateway configured", site), "NoSiteGateway", nil)
+	}
+	return a.Sites.DispatchAndAwait(ctx, siteproto.DispatchRequest{
+		RunID: in.RunID, Slice: slice, Site: site,
+		Actuator: name, DryRun: in.DryRun, Spec: spec, Creds: creds,
+	}, heartbeat)
 }
 
 // CleanupRun deletes a Run's K8s Jobs on cancellation (invoked from the
-// Workflow's disconnected cleanup path). Idempotent.
-func (a *Activities) CleanupRun(ctx context.Context, runID string) error {
-	return a.Dispatcher.DeleteRunJobs(ctx, runID)
+// Workflow's disconnected cleanup path). It deletes the hub's Jobs and, for
+// each remote Site the Run touched, publishes a cancel so the Site's agent
+// deletes its Jobs too (ADR-0032). Idempotent; a partitioned Site that misses
+// the cancel relies on its agent-side Job lease as the backstop.
+func (a *Activities) CleanupRun(ctx context.Context, runID string, sites []string) error {
+	if err := a.Dispatcher.DeleteRunJobs(ctx, runID); err != nil {
+		return err
+	}
+	if a.Sites == nil {
+		return nil
+	}
+	for _, site := range sites {
+		if site == "" || site == types.LocalSite {
+			continue
+		}
+		if err := a.Sites.Cancel(ctx, site, runID); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // splitTargets partitions targets into at most n contiguous, non-empty
@@ -437,14 +595,18 @@ func splitTargets(targets []actuators.Target, n int) [][]actuators.Target {
 // gate bounds.
 func mergeResults(slices []dispatch.Result) dispatch.Result {
 	out := dispatch.Result{
-		Succeeded: true,
-		PerTarget: map[string]string{},
-		Facts:     map[string]map[string]json.RawMessage{},
+		Succeeded:    true,
+		PerTarget:    map[string]string{},
+		SiteByTarget: map[string]string{},
+		Facts:        map[string]map[string]json.RawMessage{},
 	}
 	for _, r := range slices {
 		out.Succeeded = out.Succeeded && r.Succeeded
 		for t, s := range r.PerTarget {
 			out.PerTarget[t] = s
+		}
+		for t, site := range r.SiteByTarget {
+			out.SiteByTarget[t] = site
 		}
 		for t, f := range r.Facts {
 			out.Facts[t] = f
@@ -633,7 +795,15 @@ func (a *Activities) FinishRun(ctx context.Context, in RunInput, status types.Ru
 	if len(in.CredentialRefs) > 0 {
 		summary["credentialRefs"] = in.CredentialRefs
 	}
+	// Where did this run (§1.8, ADR-0032): the union of loci its targets ran at.
+	sites := sitesTouched(result)
+	if len(sites) > 0 {
+		summary["sites"] = sites
+	}
 	if err := a.Store.SetRunStatus(ctx, in.RunID, status, summary); err != nil {
+		return err
+	}
+	if err := a.Store.SetRunSites(ctx, in.RunID, sites); err != nil {
 		return err
 	}
 	// Outbound Notice on terminal failure/cancel (ADR-0027) — the outbound

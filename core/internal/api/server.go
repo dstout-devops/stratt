@@ -60,6 +60,10 @@ type Server struct {
 	// Evidence, when set, serves sealed audit bundles (§2.4, ADR-0029). Nil
 	// (no object store configured) makes the Evidence endpoints 404.
 	Evidence *evidencestore.Store
+	// SiteLiveness, when set, returns the set of Sites whose agent is currently
+	// heartbeating (ADR-0032) — read from the NATS liveness KV, never the graph
+	// (§1.2). Nil reports every Site as not-live.
+	SiteLiveness func(ctx context.Context) (map[string]bool, error)
 }
 
 // Handler mounts the generated routes under /api/v1, behind the Principal
@@ -297,6 +301,26 @@ func runToWire(r types.Run) Run {
 		if json.Unmarshal(r.Outputs, &m) == nil {
 			out.Outputs = &m
 		}
+	}
+	if len(r.Sites) > 0 {
+		sites := append([]string(nil), r.Sites...)
+		out.Sites = &sites
+	}
+	return out
+}
+
+// siteToWire renders a Site declaration with its live agent status (ADR-0032).
+func siteToWire(s types.Site, live bool) Site {
+	out := Site{Name: s.Name, Mode: SiteMode(s.Mode), Live: &live}
+	if s.Namespace != "" {
+		out.Namespace = &s.Namespace
+	}
+	if s.Description != "" {
+		out.Description = &s.Description
+	}
+	if s.DeclaredBy != "" {
+		db := SiteDeclaredBy(s.DeclaredBy)
+		out.DeclaredBy = &db
 	}
 	return out
 }
@@ -747,6 +771,21 @@ func declarationsFromWire(in DesiredState) (desiredstate.Declarations, error) {
 				return out, fmt.Errorf("mcp server %s: %w", w.Name, err)
 			}
 			out.MCPServers = append(out.MCPServers, m)
+		}
+	}
+	if in.Sites != nil {
+		for _, w := range *in.Sites {
+			st := types.Site{Name: w.Name, Mode: string(w.Mode), DeclaredBy: "cac"}
+			if w.Namespace != nil {
+				st.Namespace = *w.Namespace
+			}
+			if w.Description != nil {
+				st.Description = *w.Description
+			}
+			if err := desiredstate.ValidateSite(st); err != nil {
+				return out, fmt.Errorf("site %s: %w", w.Name, err)
+			}
+			out.Sites = append(out.Sites, st)
 		}
 	}
 	return out, nil
@@ -1671,6 +1710,46 @@ func (s *Server) ListEmitters(w http.ResponseWriter, r *http.Request) {
 		out = append(out, Emitter{Name: e.Name, Kind: EmitterKind(e.Kind), TokenHash: e.TokenHash})
 	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+// liveSites reads the current heartbeat set (ADR-0032); a nil provider or an
+// error means "no live status available" — the declaration still returns.
+func (s *Server) liveSites(ctx context.Context) map[string]bool {
+	if s.SiteLiveness == nil {
+		return nil
+	}
+	live, err := s.SiteLiveness(ctx)
+	if err != nil {
+		s.Log.Warn("site liveness read failed", "err", err)
+		return nil
+	}
+	return live
+}
+
+// ListSites implements (GET /sites): declared Sites merged with live agent
+// status (ADR-0032).
+func (s *Server) ListSites(w http.ResponseWriter, r *http.Request) {
+	sites, err := s.Store.ListSites(r.Context())
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	live := s.liveSites(r.Context())
+	out := make([]Site, 0, len(sites))
+	for _, st := range sites {
+		out = append(out, siteToWire(st, live[st.Name]))
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+// GetSite implements (GET /sites/{name}).
+func (s *Server) GetSite(w http.ResponseWriter, r *http.Request, name string) {
+	st, err := s.Store.GetSite(r.Context(), name)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, siteToWire(st, s.liveSites(r.Context())[name]))
 }
 
 // ListUsage implements (GET /usage): the §1.6 per-identity MCP accounting

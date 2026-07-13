@@ -298,6 +298,40 @@ paths:
               schema:
                 type: array
                 items: { $ref: "#/components/schemas/Emitter" }
+  /sites:
+    get:
+      operationId: listSites
+      summary: List declared Sites
+      description: >
+        Sites are CaC-declared remote execution loci (ADR-0032). The response
+        merges the declaration with live agent status from the liveness KV
+        (§1.2 — status is never persisted to the graph). Declarations hold no
+        secret material (§2.5).
+      responses:
+        "200":
+          description: Every declared Site, with live status.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Site" }
+  /sites/{name}:
+    get:
+      operationId: getSite
+      summary: Get one declared Site
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: The Site declaration with live status.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Site" }
+        "404":
+          description: No such Site.
   /usage:
     get:
       operationId: listUsage
@@ -856,13 +890,16 @@ components:
         blueprints:
           type: array
           items: { $ref: "#/components/schemas/Blueprint" }
+        sites:
+          type: array
+          items: { $ref: "#/components/schemas/Site" }
     PlanEntry:
       type: object
       required: [name, action, memberCount]
       properties:
         kind:
           type: string
-          enum: [view, credential-ref, trigger, workflow, emitter, baseline, mcp-server, intent, assignment, blueprint]
+          enum: [view, credential-ref, trigger, workflow, emitter, baseline, mcp-server, intent, assignment, blueprint, site]
         name: { type: string }
         action:
           type: string
@@ -967,8 +1004,39 @@ components:
           description: >
             An Action Run's typed output values, validated against the Action's
             output Contract (charter §2.2, ADR-0031); absent for Actuator Runs.
+        sites:
+          type: array
+          items: { type: string }
+          description: >
+            The execution loci this Run touched (charter §1.8 descent, ADR-0032):
+            ["local"], a Site name, or a union when per-target routing fanned the
+            Run across Sites. Absent for legacy Runs and targetless Actions.
         startedAt: { type: string, format: date-time }
         finishedAt: { type: string, format: date-time }
+    Site:
+      type: object
+      description: >
+        A remote execution locus — a satellite dispatcher reachable over a NATS
+        leaf (charter §2.3, ADR-0032). CaC-declared; live up/down status is
+        ephemeral (NATS KV), surfaced via the `live` field on reads.
+      required: [name, mode]
+      properties:
+        name: { type: string }
+        mode:
+          type: string
+          enum: [push, pull]
+        namespace:
+          type: string
+          description: The K8s namespace the Site's agent runs Jobs in.
+        description: { type: string }
+        declaredBy:
+          type: string
+          enum: [cac, api]
+        live:
+          type: boolean
+          description: >
+            Whether an agent for this Site is currently heartbeating (read-only,
+            from the liveness KV; never persisted to the graph, §1.2).
     Emitter:
       type: object
       required: [name, kind, tokenHash]

@@ -200,6 +200,27 @@ tasks:
       - task: image:build
       - go run sigs.k8s.io/kind@v0.32.0 load docker-image stratt/strattd:dev --name stratt-dev
 
+  image:agent:
+    desc: Build the stratt-agent (Site satellite) image and load it into kind (ADR-0032)
+    cmds:
+      - docker build -f deploy/docker/stratt-agent.Dockerfile -t stratt/stratt-agent:dev .
+      - go run sigs.k8s.io/kind@v0.32.0 load docker-image stratt/stratt-agent:dev --name stratt-dev
+
+  dev:site:up:
+    desc: Bring up the remote Site "edge-west" agent in kind namespace site-b (ADR-0032)
+    cmds:
+      - task: image:agent
+      - kubectl apply -f deploy/dev/site-agent.yaml
+      # A Site-LOCAL credential Secret — material lives at the Site, never shipped
+      # over NATS (§2.5). Only created if absent (idempotent).
+      - kubectl -n site-b create secret generic edge-demo-cred --from-literal=token=site-local-only --dry-run=client -o yaml | kubectl apply -f -
+      - kubectl -n site-b rollout status deploy/stratt-agent --timeout=90s
+
+  dev:site:down:
+    desc: Tear down the edge-west Site agent + namespace
+    cmds:
+      - kubectl delete -f deploy/dev/site-agent.yaml --ignore-not-found
+
   chart:lint:
     desc: Lint + render the Helm chart (ADR-0013)
     cmds:

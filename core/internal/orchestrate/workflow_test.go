@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"reflect"
+	"sort"
+	"sync"
 	"testing"
 	"time"
 
@@ -12,6 +14,8 @@ import (
 	"go.temporal.io/sdk/testsuite"
 	"go.temporal.io/sdk/workflow"
 
+	"github.com/dstout-devops/stratt/core/internal/actuators"
+	"github.com/dstout-devops/stratt/core/internal/dispatch"
 	"github.com/dstout-devops/stratt/types"
 )
 
@@ -87,6 +91,71 @@ func dagTestEnv(t *testing.T, spec types.Workflow, childStatus map[string]error)
 			return nil
 		})
 	return env, &final, &finalStatus
+}
+
+// TestRunAgainstViewFanOutBySite proves the per-Site fan-out (ADR-0032): a View
+// whose targets straddle two loci dispatches one Execute branch per (Site,
+// slice) with GLOBALLY-UNIQUE slice indices (so cross-Site events never
+// dedup-erase each other), and the Run records the union of Sites touched.
+func TestRunAgainstViewFanOutBySite(t *testing.T) {
+	ts := &testsuite.WorkflowTestSuite{}
+	env := ts.NewTestWorkflowEnvironment()
+	env.RegisterWorkflow(RunAgainstView)
+	var a *Activities
+
+	// Two groups, returned sorted by Site name: "edge-west" before "local".
+	routed := RoutedTargets{ViewVersion: 1, Groups: []SiteGroup{
+		{Site: "edge-west", Targets: []actuators.Target{{EntityID: "e3", Name: "t3"}}},
+		{Site: types.LocalSite, Targets: []actuators.Target{{EntityID: "e1", Name: "t1"}, {EntityID: "e2", Name: "t2"}}},
+	}}
+	env.OnActivity(a.CheckExecutionGrant, mock.Anything, mock.Anything).Return(nil)
+	env.OnActivity(a.ResolveTargetsBySite, mock.Anything, mock.Anything).Return(routed, nil)
+	env.OnActivity(a.MarkRunning, mock.Anything, mock.Anything).Return(nil)
+	env.OnActivity(a.ResolveCredentials, mock.Anything, mock.Anything).Return([]dispatch.CredentialMount(nil), nil)
+
+	var mu sync.Mutex
+	slicesBySite := map[string][]int{}
+	env.OnActivity(a.Execute, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(
+		func(_ context.Context, _ RunInput, slice int, site string, resolved ResolvedTargets, _ []dispatch.CredentialMount) (dispatch.Result, error) {
+			mu.Lock()
+			slicesBySite[site] = append(slicesBySite[site], slice)
+			mu.Unlock()
+			res := dispatch.Result{Succeeded: true, PerTarget: map[string]string{}, SiteByTarget: map[string]string{}}
+			for _, tgt := range resolved.Targets {
+				res.PerTarget[tgt.Name] = actuators.StatusOK
+				res.SiteByTarget[tgt.Name] = site
+			}
+			return res, nil
+		})
+	env.OnActivity(a.CollectFacts, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(FactSet{}, nil)
+	env.OnActivity(a.ProjectFacts, mock.Anything, mock.Anything, mock.Anything).Return(nil)
+
+	var gotSites []string
+	env.OnActivity(a.FinishRun, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(
+		func(_ context.Context, _ RunInput, status types.RunStatus, result dispatch.Result) error {
+			gotSites = sitesTouched(result)
+			return nil
+		})
+
+	env.ExecuteWorkflow(RunAgainstView, RunInput{RunID: "r1", ViewName: "v", Principal: "alice"})
+	if !env.IsWorkflowCompleted() || env.GetWorkflowError() != nil {
+		t.Fatalf("workflow: completed=%v err=%v", env.IsWorkflowCompleted(), env.GetWorkflowError())
+	}
+
+	// One branch per group (Slices unset ⇒ 1 chunk each): edge-west then local.
+	if len(slicesBySite["edge-west"]) != 1 || len(slicesBySite[types.LocalSite]) != 1 {
+		t.Fatalf("expected one branch per site, got %v", slicesBySite)
+	}
+	// Slice indices are GLOBAL and unique across sites — the collision guard.
+	all := append(append([]int{}, slicesBySite["edge-west"]...), slicesBySite[types.LocalSite]...)
+	sort.Ints(all)
+	if !reflect.DeepEqual(all, []int{0, 1}) {
+		t.Fatalf("slice indices must be globally unique {0,1}, got %v", all)
+	}
+	// The Run records the union of loci touched.
+	if !reflect.DeepEqual(gotSites, []string{"edge-west", "local"}) {
+		t.Fatalf("run sites: got %v want [edge-west local]", gotSites)
+	}
 }
 
 func TestRunDAGApprovedPath(t *testing.T) {

@@ -10,6 +10,8 @@ package actuators
 
 import (
 	"encoding/json"
+	"fmt"
+	"sort"
 
 	"github.com/dstout-devops/stratt/types"
 )
@@ -37,7 +39,35 @@ type JobSpec struct {
 	// Env is actuator-computed plain environment for the pod (e.g. the
 	// state-backend credential, ADR-0016). CredentialRef material never
 	// travels here — that stays on the secretKeyRef path (§2.5).
+	//
+	// CAUTION (Sites, ADR-0032): because Env carries plain values that MAY be
+	// material (the opentofu TF_HTTP_PASSWORD is one), a JobSpec with non-empty
+	// Env is NOT safe to serialize onto NATS or pack into a signed Bundle — see
+	// RemoteSafe. Env-populating actuators (opentofu, ansible-SCM) stay
+	// hub-local in v1.
 	Env map[string]string
+}
+
+// RemoteSafe reports whether this JobSpec may leave the hub process — be
+// serialized into a NATS dispatch to a remote Site or packed into a
+// cosign-signed Bundle (ADR-0032). A JobSpec is remote-safe only when it
+// carries no plain Env: Env may hold credential material (e.g. the opentofu
+// state-backend password, ADR-0016), and once serialized that material crosses
+// the wire or lands durably in a distributable artifact — a §2.5 violation.
+// The gate is structural, not a review norm, and deliberately conservative
+// (any non-empty Env is refused, even non-secret keys) until Env separates
+// material from plain config. Never include a key's VALUE in the error — that
+// is exactly the material we refuse to surface.
+func (s JobSpec) RemoteSafe() error {
+	if len(s.Env) == 0 {
+		return nil
+	}
+	keys := make([]string, 0, len(s.Env))
+	for k := range s.Env {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return fmt.Errorf("job spec is not remote-safe: it sets pod env %v, which may carry credential material and must not cross a Site boundary or enter a Bundle (§2.5); this actuator stays hub-local in v1", keys)
 }
 
 // Per-target statuses. "changed" implies ok; failed and unreachable are both

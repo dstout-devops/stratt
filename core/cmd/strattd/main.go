@@ -48,6 +48,8 @@ import (
 	"github.com/dstout-devops/stratt/core/internal/graph"
 	"github.com/dstout-devops/stratt/core/internal/notify"
 	"github.com/dstout-devops/stratt/core/internal/orchestrate"
+	"github.com/dstout-devops/stratt/core/internal/sitegw"
+	"github.com/dstout-devops/stratt/core/internal/siteproto"
 	"github.com/dstout-devops/stratt/core/internal/statebackend"
 	"github.com/dstout-devops/stratt/core/internal/triggerengine"
 	"github.com/dstout-devops/stratt/core/internal/triggers"
@@ -121,6 +123,19 @@ func run(ctx context.Context, log *slog.Logger) error {
 		return err
 	}
 	log.Info("event bus ready", "stream", events.StreamName)
+
+	// ── Site dispatch plane (§2.3, ADR-0032) ─────────────────────────────
+	// The hub↔Site NATS gateway: the dispatch/result streams + liveness KV
+	// remote execution loci use. Local-only Runs never touch it.
+	siteGateway, err := sitegw.Connect(env("STRATT_NATS_URL", "nats://localhost:4222"), "strattd", log)
+	if err != nil {
+		return err
+	}
+	defer siteGateway.Close()
+	if err := siteGateway.EnsureStreams(ctx); err != nil {
+		return err
+	}
+	log.Info("site gateway ready", "streams", []string{siteproto.DispatchStream, siteproto.ResultStream})
 
 	// ── orchestration plane ──────────────────────────────────────────────
 	temporalClient, err := client.Dial(client.Options{
@@ -283,7 +298,7 @@ func run(ctx context.Context, log *slog.Logger) error {
 	w.RegisterWorkflow(orchestrate.RunAction)
 	w.RegisterWorkflow(orchestrate.RunDAG)
 	w.RegisterWorkflow(orchestrate.RunBaselineCheck)
-	w.RegisterActivity(&orchestrate.Activities{Store: store, Dispatcher: dispatcher, Bus: bus, Authz: authorizer, Actuators: registry, Actions: actionRegistry, Evidence: evidence})
+	w.RegisterActivity(&orchestrate.Activities{Store: store, Dispatcher: dispatcher, Bus: bus, Authz: authorizer, Actuators: registry, Actions: actionRegistry, Evidence: evidence, Sites: siteGateway})
 	if err := w.Start(); err != nil {
 		return fmt.Errorf("temporal worker: %w", err)
 	}
@@ -504,7 +519,17 @@ func run(ctx context.Context, log *slog.Logger) error {
 	if uiDir != "" {
 		log.Info("serving ui", "dir", uiDir)
 	}
-	server := &api.Server{Store: store, Bus: bus, Temporal: temporalClient, Authz: authorizer, Log: log, DevPrincipalHeader: devPrincipal, OIDC: oidcResolver, UIDir: uiDir, StateBackend: stateHandler, EmitterIngest: emitters.New(store, bus, log).Handler(), CompileStatus: compileStatus, Evidence: evidence}
+	server := &api.Server{Store: store, Bus: bus, Temporal: temporalClient, Authz: authorizer, Log: log, DevPrincipalHeader: devPrincipal, OIDC: oidcResolver, UIDir: uiDir, StateBackend: stateHandler, EmitterIngest: emitters.New(store, bus, log).Handler(), CompileStatus: compileStatus, Evidence: evidence, SiteLiveness: func(ctx context.Context) (map[string]bool, error) {
+		live, err := siteGateway.LiveSites(ctx)
+		if err != nil {
+			return nil, err
+		}
+		out := make(map[string]bool, len(live))
+		for name := range live {
+			out[name] = true
+		}
+		return out, nil
+	}}
 	httpSrv := &http.Server{
 		Addr:              env("STRATT_LISTEN_ADDR", ":8080"),
 		Handler:           server.Handler(),

@@ -82,6 +82,27 @@ func (s *Store) SetRunOutputs(ctx context.Context, runID string, outputs json.Ra
 	return nil
 }
 
+// SetRunSites records the union of execution loci a Run touched (ADR-0032) —
+// the §1.8 "where did this run" descent answer. Nil/empty leaves it null.
+func (s *Store) SetRunSites(ctx context.Context, runID string, sites []string) error {
+	if len(sites) == 0 {
+		return nil
+	}
+	blob, err := json.Marshal(sites)
+	if err != nil {
+		return fmt.Errorf("graph: marshal run sites: %w", err)
+	}
+	tag, err := s.pool.Exec(ctx,
+		`UPDATE graph.run SET sites = $2::jsonb WHERE id = $1`, runID, string(blob))
+	if err != nil {
+		return fmt.Errorf("graph: set run sites: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("%w: run %s", ErrNotFound, runID)
+	}
+	return nil
+}
+
 // ListRunsForWorkflowRun returns the per-Step Runs of one Workflow
 // execution — the §1.8 Workflow → Run descent query.
 func (s *Store) ListRunsForWorkflowRun(ctx context.Context, workflowRunID string) ([]types.Run, error) {
@@ -163,11 +184,11 @@ func (s *Store) GetRun(ctx context.Context, runID string) (types.Run, error) {
 	var viewRef *string
 	var viewVersion *int64
 	var triggeredBy, baseline, workflowRunID, stepName *string
-	var outputs []byte
+	var outputs, sites []byte
 	err := s.pool.QueryRow(ctx, `
-		SELECT id, workflow_id, status, view_ref, view_version, triggered_by, baseline, workflow_run_id, step_name, started_at, finished_at, outputs
+		SELECT id, workflow_id, status, view_ref, view_version, triggered_by, baseline, workflow_run_id, step_name, started_at, finished_at, outputs, sites
 		FROM graph.run WHERE id = $1`, runID,
-	).Scan(&r.ID, &r.WorkflowID, &status, &viewRef, &viewVersion, &triggeredBy, &baseline, &workflowRunID, &stepName, &r.StartedAt, &r.FinishedAt, &outputs)
+	).Scan(&r.ID, &r.WorkflowID, &status, &viewRef, &viewVersion, &triggeredBy, &baseline, &workflowRunID, &stepName, &r.StartedAt, &r.FinishedAt, &outputs, &sites)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return r, fmt.Errorf("%w: run %s", ErrNotFound, runID)
 	}
@@ -195,6 +216,11 @@ func (s *Store) GetRun(ctx context.Context, runID string) (types.Run, error) {
 	}
 	if len(outputs) > 0 {
 		r.Outputs = outputs
+	}
+	if len(sites) > 0 {
+		if err := json.Unmarshal(sites, &r.Sites); err != nil {
+			return r, fmt.Errorf("graph: decode run sites: %w", err)
+		}
 	}
 	return r, nil
 }

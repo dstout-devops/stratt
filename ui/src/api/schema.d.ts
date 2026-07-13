@@ -285,6 +285,43 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/sites": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List declared Sites
+         * @description Sites are CaC-declared remote execution loci (ADR-0032). The response merges the declaration with live agent status from the liveness KV (§1.2 — status is never persisted to the graph). Declarations hold no secret material (§2.5).
+         */
+        get: operations["listSites"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/sites/{name}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get one declared Site */
+        get: operations["getSite"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/usage": {
         parameters: {
             query?: never;
@@ -776,10 +813,11 @@ export interface components {
             intents?: components["schemas"]["Intent"][];
             assignments?: components["schemas"]["Assignment"][];
             blueprints?: components["schemas"]["Blueprint"][];
+            sites?: components["schemas"]["Site"][];
         };
         PlanEntry: {
             /** @enum {string} */
-            kind?: "view" | "credential-ref" | "trigger" | "workflow" | "emitter" | "baseline" | "mcp-server" | "intent" | "assignment" | "blueprint";
+            kind?: "view" | "credential-ref" | "trigger" | "workflow" | "emitter" | "baseline" | "mcp-server" | "intent" | "assignment" | "blueprint" | "site";
             name: string;
             /** @enum {string} */
             action: "create" | "update" | "adopt" | "noop" | "delete";
@@ -842,10 +880,25 @@ export interface components {
             stepName?: string;
             /** @description An Action Run's typed output values, validated against the Action's output Contract (charter §2.2, ADR-0031); absent for Actuator Runs. */
             outputs?: Record<string, never>;
+            /** @description The execution loci this Run touched (charter §1.8 descent, ADR-0032): ["local"], a Site name, or a union when per-target routing fanned the Run across Sites. Absent for legacy Runs and targetless Actions. */
+            sites?: string[];
             /** Format: date-time */
             startedAt: string;
             /** Format: date-time */
             finishedAt?: string;
+        };
+        /** @description A remote execution locus — a satellite dispatcher reachable over a NATS leaf (charter §2.3, ADR-0032). CaC-declared; live up/down status is ephemeral (NATS KV), surfaced via the `live` field on reads. */
+        Site: {
+            name: string;
+            /** @enum {string} */
+            mode: "push" | "pull";
+            /** @description The K8s namespace the Site's agent runs Jobs in. */
+            namespace?: string;
+            description?: string;
+            /** @enum {string} */
+            declaredBy?: "cac" | "api";
+            /** @description Whether an agent for this Site is currently heartbeating (read-only, from the liveness KV; never persisted to the graph, §1.2). */
+            live?: boolean;
         };
         Emitter: {
             name: string;
@@ -1645,6 +1698,55 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["Emitter"][];
                 };
+            };
+        };
+    };
+    listSites: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Every declared Site, with live status. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Site"][];
+                };
+            };
+        };
+    };
+    getSite: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The Site declaration with live status. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Site"];
+                };
+            };
+            /** @description No such Site. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };
