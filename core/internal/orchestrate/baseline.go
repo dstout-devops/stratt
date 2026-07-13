@@ -8,6 +8,7 @@ package orchestrate
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"reflect"
 	"strings"
@@ -50,7 +51,10 @@ func RunBaselineCheck(ctx workflow.Context, in BaselineInput) error {
 	// history is the Evidence (Findings carry no check-Run ref).
 	if b.Mode == types.FacetObservation {
 		var eval graph.ObservationOutcome
-		return workflow.ExecuteActivity(ctx, a.EvaluateFacetBaseline, b).Get(ctx, &eval)
+		if err := workflow.ExecuteActivity(ctx, a.EvaluateFacetBaseline, b).Get(ctx, &eval); err != nil {
+			return err
+		}
+		return workflow.ExecuteActivity(ctx, a.SealEvidence, b.Name).Get(ctx, nil)
 	}
 
 	runIn, err := checkRunInput(b)
@@ -69,7 +73,10 @@ func RunBaselineCheck(ctx workflow.Context, in BaselineInput) error {
 	}
 
 	var eval graph.ObservationOutcome
-	return workflow.ExecuteActivity(ctx, a.EvaluateBaseline, b, outcome).Get(ctx, &eval)
+	if err := workflow.ExecuteActivity(ctx, a.EvaluateBaseline, b, outcome).Get(ctx, &eval); err != nil {
+		return err
+	}
+	return workflow.ExecuteActivity(ctx, a.SealEvidence, b.Name).Get(ctx, nil)
 }
 
 // checkRunInput renders a Baseline's check Step into a RunInput, enforcing —
@@ -152,6 +159,79 @@ func (a *Activities) EvaluateFacetBaseline(ctx context.Context, b types.Baseline
 		return out, err
 	}
 	return out, a.emitFindingNotices(ctx, out)
+}
+
+// SealEvidence seals an object-locked audit bundle for every open Finding of a
+// Baseline that lacks one (§2.4, ADR-0029). Keyed by the manifest's absence, not
+// the one-shot pending→open transition, so a seal failure + activity retry
+// re-seals the missed Findings (write-once by the graph unique index). A no-op
+// when no object store is configured — Findings then open unsealed.
+func (a *Activities) SealEvidence(ctx context.Context, baseline string) error {
+	if a.Evidence == nil {
+		return nil
+	}
+	findings, err := a.Store.ListUnsealedFindings(ctx, baseline)
+	if err != nil {
+		return err
+	}
+	for _, f := range findings {
+		bundle, err := a.buildEvidenceBundle(ctx, f)
+		if err != nil {
+			return err
+		}
+		sealed, err := a.Evidence.Seal(ctx, "evidence/"+f.ID+".json", bundle)
+		if err != nil {
+			return err
+		}
+		rec := types.Evidence{
+			FindingID: f.ID, Baseline: f.Baseline, Target: f.Target,
+			ObjectKey: sealed.Key, SHA256: sealed.SHA256, SizeBytes: sealed.Size,
+			RetainUntil: sealed.RetainUntil,
+		}
+		if err := a.Store.RecordEvidence(ctx, rec); err != nil {
+			if errors.Is(err, graph.ErrConflict) {
+				continue // raced another sealer; the object is write-once anyway
+			}
+			return err
+		}
+	}
+	return nil
+}
+
+// buildEvidenceBundle assembles one Finding's audit bundle: the redacted diff +
+// Finding metadata, the check Run summary, and a durable snapshot of the Run's
+// NATS task-event stream (the one artifact class not otherwise persisted, §3).
+func (a *Activities) buildEvidenceBundle(ctx context.Context, f types.Finding) ([]byte, error) {
+	bundle := map[string]any{
+		"schema":  "stratt.evidence/v1",
+		"finding": f,
+	}
+	if f.RunID != "" {
+		if run, err := a.Store.GetRun(ctx, f.RunID); err == nil {
+			bundle["run"] = map[string]any{
+				"id": run.ID, "status": run.Status, "viewRef": run.ViewRef,
+				"startedAt": run.StartedAt, "finishedAt": run.FinishedAt,
+			}
+		}
+		// Snapshot the Run's event stream from NATS, stopping at the stream-end
+		// marker FinishRun publishes (bounded so a missing marker can't hang).
+		// Durably persisting task events into a long-retained store is safe only
+		// under the §2.5 invariant that task events never carry secret material
+		// (credentials inject at pod spawn, are never logged) — the bundle relies
+		// on that, it does not re-scrub.
+		events := []types.RunEvent{}
+		tctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+		defer cancel()
+		_ = a.Bus.Tail(tctx, f.RunID, func(ev types.RunEvent) error {
+			events = append(events, ev)
+			if ev.Kind == "stream-end" {
+				cancel()
+			}
+			return nil
+		})
+		bundle["events"] = events
+	}
+	return json.MarshalIndent(bundle, "", "  ")
 }
 
 // emitFindingNotices publishes one finding.open Notice per Finding that

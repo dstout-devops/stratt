@@ -22,6 +22,7 @@ import (
 	"github.com/dstout-devops/stratt/core/internal/authz"
 	"github.com/dstout-devops/stratt/core/internal/dispatch"
 	"github.com/dstout-devops/stratt/core/internal/events"
+	"github.com/dstout-devops/stratt/core/internal/evidencestore"
 	"github.com/dstout-devops/stratt/core/internal/graph"
 	"github.com/dstout-devops/stratt/types"
 )
@@ -226,6 +227,11 @@ type Activities struct {
 	Authz      authz.Authorizer
 	// Actuators is the registry of in-tree Actuators by name (§2.3).
 	Actuators map[string]actuators.Actuator
+	// Evidence seals Finding audit bundles into the object store (§2.4,
+	// ADR-0029). Nil when no object store is configured — Findings then open
+	// unsealed (a logged no-op), like the opentofu actuator is gated on a state
+	// key.
+	Evidence *evidencestore.Store
 }
 
 // EnsureRun creates the Run summary row for a Trigger-started execution

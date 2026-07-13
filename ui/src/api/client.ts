@@ -17,6 +17,7 @@ export type Trigger = components["schemas"]["Trigger"];
 export type TriggerDetail = components["schemas"]["TriggerDetail"];
 export type Baseline = components["schemas"]["Baseline"];
 export type Finding = components["schemas"]["Finding"];
+export type Evidence = components["schemas"]["Evidence"];
 
 export class ApiError extends Error {
   status: number;
@@ -90,4 +91,6 @@ export const api = {
     return call<Finding[]>("GET", `/findings?${p}`);
   },
   getFinding: (id: string) => call<Finding>("GET", `/findings/${encodeURIComponent(id)}`),
+  getFindingEvidence: (id: string) =>
+    call<Evidence>("GET", `/findings/${encodeURIComponent(id)}/evidence`),
 };

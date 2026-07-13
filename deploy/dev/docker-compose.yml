@@ -110,6 +110,31 @@ services:
     ports:
       - "5000:5000"
 
+  seaweedfs:
+    # S3-compatible object store for the Evidence store (charter §2.4, ADR-0029).
+    # dependency-scout 2026-07-13: SeaweedFS (Apache-2.0) over Garage (AGPL + no
+    # object-lock) and moto (store-and-ignore lock). IMPORTANT (ADR-0029, verified
+    # empirically): SeaweedFS accepts the object-lock config + retention but does
+    # NOT enforce WORM (3.97 and 4.39 both allow overwrite AND delete under
+    # retention). So in dev, Evidence immutability rests on sha256 tamper-evidence
+    # (a mutated object is detected + refused on read) + write-once — NOT backend
+    # WORM. Real WORM enforcement needs a compliant production store (AWS S3
+    # Object Lock). This dev container proves the S3 path + tamper-evidence, not
+    # storage-layer immutability.
+    image: chrislusf/seaweedfs:3.97
+    # All-in-one (master+volume+filer+s3); path-style S3 on 8333. -ip.bind=0.0.0.0
+    # so the mapped port reaches it from strattd on the host.
+    command: ["server", "-dir=/data", "-s3", "-s3.port=8333", "-ip.bind=0.0.0.0", "-master.volumeSizeLimitMB=100"]
+    ports:
+      - "8333:8333"
+    volumes:
+      - seaweeddata:/data
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:8333/ || exit 1"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
   openfga:
     image: openfga/openfga:v1.17.0 # dependency-scout 2026-07-11: RECOMMEND (CNCF Incubating)
     command: ["run", "--datastore-engine", "memory"]
@@ -175,3 +200,4 @@ services:
 volumes:
   pgdata:
   natsdata:
+  seaweeddata:

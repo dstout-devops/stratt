@@ -454,6 +454,50 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/findings/{id}/evidence": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        /**
+         * Get a Finding's Evidence manifest
+         * @description The manifest for the Finding's sealed, object-locked audit bundle (charter §2.4, ADR-0029) — object key, sha256 integrity anchor, size, and retain-until. 404 when the Finding has no sealed Evidence.
+         */
+        get: operations["getFindingEvidence"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/evidence/{id}/download": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        /**
+         * Download a sealed Evidence bundle (integrity-verified)
+         * @description Streams the sealed audit bundle after re-verifying its sha256 against the manifest (§1.8: a tampered object is detected and refused, never served as authentic). 409 when the object fails the integrity check.
+         */
+        get: operations["downloadEvidence"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/triggers": {
         parameters: {
             query?: never;
@@ -948,6 +992,25 @@ export interface components {
             remediationWorkflow?: string;
             /** @description Compliance tag (e.g. cis) — Findings are framework-tagged (§2.4). */
             framework?: string;
+        };
+        /** @description The manifest for a Finding's sealed, object-locked audit bundle (charter §2.4, ADR-0029). The immutable bundle lives in the object store; this is the graph's pointer to it. sha256 is the tamper-evidence anchor. */
+        Evidence: {
+            id: string;
+            findingId: string;
+            baseline: string;
+            target: string;
+            objectKey: string;
+            /** @description hex(sha256(bundle)) — the integrity/tamper-evidence anchor. */
+            sha256: string;
+            /** Format: int64 */
+            sizeBytes: number;
+            /** Format: date-time */
+            sealedAt: string;
+            /**
+             * Format: date-time
+             * @description Object-lock retain-until applied at seal time (WORM on a compliant store).
+             */
+            retainUntil: string;
         };
         /** @description A drift/compliance result (charter §2.4): Entity + Baseline + observed-vs-expected diff + severity + Evidence ref. One kind, framework-tagged. v1 Evidence is the redacted diff snapshot plus the check Run ref (runId). */
         Finding: {
@@ -1769,6 +1832,59 @@ export interface operations {
                 };
             };
             404: components["responses"]["NotFound"];
+        };
+    };
+    getFindingEvidence: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The Evidence manifest. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Evidence"];
+                };
+            };
+            404: components["responses"]["NotFound"];
+        };
+    };
+    downloadEvidence: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The sealed bundle. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": Record<string, never>;
+                };
+            };
+            404: components["responses"]["NotFound"];
+            /** @description The object failed its integrity check (tampered). */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
         };
     };
     listTriggers: {

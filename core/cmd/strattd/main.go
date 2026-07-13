@@ -40,6 +40,7 @@ import (
 	"github.com/dstout-devops/stratt/core/internal/dispatch"
 	"github.com/dstout-devops/stratt/core/internal/emitters"
 	"github.com/dstout-devops/stratt/core/internal/events"
+	"github.com/dstout-devops/stratt/core/internal/evidencestore"
 	"github.com/dstout-devops/stratt/core/internal/graph"
 	"github.com/dstout-devops/stratt/core/internal/notify"
 	"github.com/dstout-devops/stratt/core/internal/orchestrate"
@@ -232,11 +233,40 @@ func run(ctx context.Context, log *slog.Logger) error {
 		log.Info("opentofu actuator disabled (STRATT_STATE_KEY empty)")
 	}
 
+	// ── Evidence store (§2.4, ADR-0029) ─────────────────────────────────
+	// Gated on STRATT_EVIDENCE_BUCKET: without it, Findings open unsealed (a
+	// logged no-op), like the opentofu actuator is gated on a state key.
+	// Object-store credentials arrive via the SDK env chain (§2.5 env-stub),
+	// reusing the same AWS wiring as the EC2 Syncer.
+	var evidence *evidencestore.Store
+	if bucket := os.Getenv("STRATT_EVIDENCE_BUCKET"); bucket != "" {
+		retentionDays, _ := strconv.Atoi(env("STRATT_EVIDENCE_RETENTION_DAYS", "365"))
+		evidence, err = evidencestore.New(ctx, evidencestore.Config{
+			// A dedicated endpoint (the object store is a distinct service from
+			// the EC2 mock on STRATT_AWS_ENDPOINT); empty falls back to the AWS
+			// default resolver (real S3).
+			Endpoint:      env("STRATT_EVIDENCE_ENDPOINT", os.Getenv("STRATT_AWS_ENDPOINT")),
+			Region:        env("STRATT_EVIDENCE_REGION", env("STRATT_AWS_REGION", "us-east-1")),
+			Bucket:        bucket,
+			RetentionDays: retentionDays,
+			PathStyle:     true,
+		})
+		if err != nil {
+			return err
+		}
+		if err := evidence.EnsureBucket(ctx); err != nil {
+			return fmt.Errorf("evidence store: %w", err)
+		}
+		log.Info("evidence store ready", "bucket", bucket, "retentionDays", retentionDays)
+	} else {
+		log.Info("evidence store disabled (STRATT_EVIDENCE_BUCKET empty); findings open unsealed")
+	}
+
 	w := worker.New(temporalClient, orchestrate.TaskQueue, worker.Options{})
 	w.RegisterWorkflow(orchestrate.RunAgainstView)
 	w.RegisterWorkflow(orchestrate.RunDAG)
 	w.RegisterWorkflow(orchestrate.RunBaselineCheck)
-	w.RegisterActivity(&orchestrate.Activities{Store: store, Dispatcher: dispatcher, Bus: bus, Authz: authorizer, Actuators: registry})
+	w.RegisterActivity(&orchestrate.Activities{Store: store, Dispatcher: dispatcher, Bus: bus, Authz: authorizer, Actuators: registry, Evidence: evidence})
 	if err := w.Start(); err != nil {
 		return fmt.Errorf("temporal worker: %w", err)
 	}
@@ -431,7 +461,7 @@ func run(ctx context.Context, log *slog.Logger) error {
 	if uiDir != "" {
 		log.Info("serving ui", "dir", uiDir)
 	}
-	server := &api.Server{Store: store, Bus: bus, Temporal: temporalClient, Authz: authorizer, Log: log, DevPrincipalHeader: devPrincipal, OIDC: oidcResolver, UIDir: uiDir, StateBackend: stateHandler, EmitterIngest: emitters.New(store, bus, log).Handler(), CompileStatus: compileStatus}
+	server := &api.Server{Store: store, Bus: bus, Temporal: temporalClient, Authz: authorizer, Log: log, DevPrincipalHeader: devPrincipal, OIDC: oidcResolver, UIDir: uiDir, StateBackend: stateHandler, EmitterIngest: emitters.New(store, bus, log).Handler(), CompileStatus: compileStatus, Evidence: evidence}
 	httpSrv := &http.Server{
 		Addr:              env("STRATT_LISTEN_ADDR", ":8080"),
 		Handler:           server.Handler(),

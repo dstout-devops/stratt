@@ -286,6 +286,10 @@ func registerTools(s *mcp.Server, cfg Config) {
 		func(ctx context.Context, req *mcp.CallToolRequest, in idIn) (*mcp.CallToolResult, any, error) {
 			return invoke(ctx, cfg, req, "get_finding", http.MethodGet, "/findings/"+url.PathEscape(in.ID), nil)
 		})
+	mcp.AddTool(s, &mcp.Tool{Name: "get_finding_evidence", Description: "Get a Finding's Evidence manifest: the object key, sha256 integrity anchor, size, and retain-until of its sealed, object-locked audit bundle (§2.4)."},
+		func(ctx context.Context, req *mcp.CallToolRequest, in idIn) (*mcp.CallToolResult, any, error) {
+			return invoke(ctx, cfg, req, "get_finding_evidence", http.MethodGet, "/findings/"+url.PathEscape(in.ID)+"/evidence", nil)
+		})
 	get("list_baselines", "List declared Baselines: checkable desired state (View + check Step + remediation Workflow ref + cadence).", func() string { return "/baselines" })
 	mcp.AddTool(s, &mcp.Tool{Name: "get_baseline", Description: "Get one Baseline declaration, including its remediation Workflow ref and damping threshold."},
 		func(ctx context.Context, req *mcp.CallToolRequest, in nameIn) (*mcp.CallToolResult, any, error) {

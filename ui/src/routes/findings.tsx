@@ -184,6 +184,13 @@ export function FindingDetail({ id }: { id: string }) {
     enabled: !!f,
   });
   const b: Baseline | undefined = bq.data;
+  // The sealed Evidence manifest (§2.4, ADR-0029); 404 = not yet sealed.
+  const ev = useQuery({
+    queryKey: ["evidence", id],
+    queryFn: () => api.getFindingEvidence(id),
+    enabled: !!f,
+    retry: false,
+  });
   return (
     <div className="flex flex-col gap-[var(--space-4)]">
       <DescentRail
@@ -236,6 +243,20 @@ export function FindingDetail({ id }: { id: string }) {
                   </Link>
                 ) : (
                   "—"
+                ),
+              ],
+              [
+                "sealed bundle",
+                ev.data ? (
+                  <a
+                    href={`/api/v1/evidence/${ev.data.id}/download`}
+                    className="mono text-[12px]"
+                    title={`object-locked · sha256 ${ev.data.sha256.slice(0, 12)}… · retain until ${new Date(ev.data.retainUntil).toLocaleDateString()}`}
+                  >
+                    download (sha256 {ev.data.sha256.slice(0, 8)}…)
+                  </a>
+                ) : (
+                  "— (not sealed)"
                 ),
               ],
             ]}

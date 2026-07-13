@@ -20,6 +20,7 @@ import (
 	"github.com/dstout-devops/stratt/core/internal/contract"
 	"github.com/dstout-devops/stratt/core/internal/desiredstate"
 	"github.com/dstout-devops/stratt/core/internal/events"
+	"github.com/dstout-devops/stratt/core/internal/evidencestore"
 	"github.com/dstout-devops/stratt/core/internal/graph"
 	"github.com/dstout-devops/stratt/core/internal/mcpserver"
 	"github.com/dstout-devops/stratt/core/internal/orchestrate"
@@ -56,6 +57,9 @@ type Server struct {
 	// CompileStatus, when set, is the shared Intent-compile status the
 	// controller updates and GET /compile serves (ADR-0023).
 	CompileStatus *compiler.Status
+	// Evidence, when set, serves sealed audit bundles (§2.4, ADR-0029). Nil
+	// (no object store configured) makes the Evidence endpoints 404.
+	Evidence *evidencestore.Store
 }
 
 // Handler mounts the generated routes under /api/v1, behind the Principal
@@ -1748,4 +1752,51 @@ func (s *Server) GetFinding(w http.ResponseWriter, r *http.Request, id string) {
 		return
 	}
 	writeJSON(w, http.StatusOK, findingToWire(f))
+}
+
+func evidenceToWire(e types.Evidence) Evidence {
+	return Evidence{
+		Id: e.ID, FindingId: e.FindingID, Baseline: e.Baseline, Target: e.Target,
+		ObjectKey: e.ObjectKey, Sha256: e.SHA256, SizeBytes: e.SizeBytes,
+		SealedAt: e.SealedAt, RetainUntil: e.RetainUntil,
+	}
+}
+
+// GetFindingEvidence implements (GET /findings/{id}/evidence): the manifest for
+// the Finding's sealed audit bundle (§2.4, ADR-0029).
+func (s *Server) GetFindingEvidence(w http.ResponseWriter, r *http.Request, id string) {
+	e, err := s.Store.GetEvidenceByFinding(r.Context(), id)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, evidenceToWire(e))
+}
+
+// DownloadEvidence implements (GET /evidence/{id}/download): stream the sealed
+// bundle after re-verifying its sha256 against the manifest — a tampered object
+// is refused with 409, never served as authentic (§1.8, ADR-0029).
+func (s *Server) DownloadEvidence(w http.ResponseWriter, r *http.Request, id string) {
+	e, err := s.Store.GetEvidence(r.Context(), id)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	if s.Evidence == nil {
+		writeErr(w, http.StatusNotFound, "evidence store not configured")
+		return
+	}
+	body, err := s.Evidence.GetVerified(r.Context(), e.ObjectKey, e.SHA256)
+	if errors.Is(err, evidencestore.ErrTampered) {
+		writeErr(w, http.StatusConflict, "evidence object failed its integrity check (tampered)")
+		return
+	}
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("X-Stratt-Evidence-SHA256", e.SHA256)
+	w.Header().Set("Content-Disposition", "attachment; filename=evidence-"+e.FindingID+".json")
+	_, _ = w.Write(body)
 }

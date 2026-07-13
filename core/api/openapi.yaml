@@ -448,6 +448,48 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/Finding" }
         "404": { $ref: "#/components/responses/NotFound" }
+  /findings/{id}/evidence:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: { type: string }
+    get:
+      operationId: getFindingEvidence
+      summary: Get a Finding's Evidence manifest
+      description: >
+        The manifest for the Finding's sealed, object-locked audit bundle
+        (charter §2.4, ADR-0029) — object key, sha256 integrity anchor, size,
+        and retain-until. 404 when the Finding has no sealed Evidence.
+      responses:
+        "200":
+          description: The Evidence manifest.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Evidence" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /evidence/{id}/download:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: { type: string }
+    get:
+      operationId: downloadEvidence
+      summary: Download a sealed Evidence bundle (integrity-verified)
+      description: >
+        Streams the sealed audit bundle after re-verifying its sha256 against
+        the manifest (§1.8: a tampered object is detected and refused, never
+        served as authentic). 409 when the object fails the integrity check.
+      responses:
+        "200":
+          description: The sealed bundle.
+          content:
+            application/json:
+              schema: { type: object }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: The object failed its integrity check (tampered).
   /triggers:
     get:
       operationId: listTriggers
@@ -1138,6 +1180,28 @@ components:
         framework:
           type: string
           description: Compliance tag (e.g. cis) — Findings are framework-tagged (§2.4).
+    Evidence:
+      type: object
+      description: >
+        The manifest for a Finding's sealed, object-locked audit bundle (charter
+        §2.4, ADR-0029). The immutable bundle lives in the object store; this is
+        the graph's pointer to it. sha256 is the tamper-evidence anchor.
+      required: [id, findingId, baseline, target, objectKey, sha256, sizeBytes, sealedAt, retainUntil]
+      properties:
+        id: { type: string }
+        findingId: { type: string }
+        baseline: { type: string }
+        target: { type: string }
+        objectKey: { type: string }
+        sha256:
+          type: string
+          description: hex(sha256(bundle)) — the integrity/tamper-evidence anchor.
+        sizeBytes: { type: integer, format: int64 }
+        sealedAt: { type: string, format: date-time }
+        retainUntil:
+          type: string
+          format: date-time
+          description: Object-lock retain-until applied at seal time (WORM on a compliant store).
     Finding:
       type: object
       description: >
