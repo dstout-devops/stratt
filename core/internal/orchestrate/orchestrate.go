@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"time"
 
+	"go.temporal.io/sdk/activity"
 	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/workflow"
 
@@ -125,6 +126,21 @@ func RunAgainstView(ctx workflow.Context, in RunInput) (RunOutcome, error) {
 			return RunOutcome{}, err
 		}
 	}
+
+	// Cancellation (POST /runs/{id}/cancel → Temporal CancelWorkflow, ADR-0026):
+	// the Workflow is the single writer of terminal Run status, so it owns the
+	// canceled transition. Activities cannot run on a canceled ctx, so cleanup
+	// runs on a disconnected context — delete the Job(s), then stamp canceled.
+	defer func() {
+		if in.RunID == "" || !errors.Is(ctx.Err(), workflow.ErrCanceled) {
+			return
+		}
+		dctx, dcancel := workflow.NewDisconnectedContext(ctx)
+		defer dcancel()
+		dctx = workflow.WithActivityOptions(dctx, opts)
+		_ = workflow.ExecuteActivity(dctx, a.CleanupRun, in.RunID).Get(dctx, nil)
+		_ = workflow.ExecuteActivity(dctx, a.FinishRun, in, types.RunCanceled, dispatch.Result{}).Get(dctx, nil)
+	}()
 
 	var resolved ResolvedTargets
 	if err := workflow.ExecuteActivity(ctx, a.ResolveTargets, in).Get(ctx, &resolved); err != nil {
@@ -322,11 +338,20 @@ func (a *Activities) Execute(ctx context.Context, in RunInput, slice int, resolv
 		// Malformed Step params are terminal too.
 		return dispatch.Result{}, temporal.NewNonRetryableApplicationError(err.Error(), "InvalidStepParams", err)
 	}
-	res, err := a.Dispatcher.Run(ctx, in.RunID, slice, spec, act, creds)
+	// Heartbeat from the dispatch loops so Temporal can deliver cancellation
+	// to a long-running Job (a canceled Run stops promptly, ADR-0026).
+	res, err := a.Dispatcher.Run(ctx, in.RunID, slice, spec, act, creds,
+		func() { activity.RecordHeartbeat(ctx) })
 	if err != nil {
 		return dispatch.Result{}, err
 	}
 	return *res, nil
+}
+
+// CleanupRun deletes a Run's K8s Jobs on cancellation (invoked from the
+// Workflow's disconnected cleanup path). Idempotent.
+func (a *Activities) CleanupRun(ctx context.Context, runID string) error {
+	return a.Dispatcher.DeleteRunJobs(ctx, runID)
 }
 
 // splitTargets partitions targets into at most n contiguous, non-empty

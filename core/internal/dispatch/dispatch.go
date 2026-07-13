@@ -110,7 +110,16 @@ var driftTruncated = json.RawMessage(`{"truncated":true}`)
 // completion, publishing every task event to the bus under (runID, slice).
 // The Actuator that prepared the spec interprets the pod's stdout lines —
 // the dispatcher stays tool-agnostic.
-func (d *Dispatcher) Run(ctx context.Context, runID string, slice int, spec actuators.JobSpec, act actuators.Actuator, creds []CredentialMount) (*Result, error) {
+// heartbeat is the activity-heartbeat callback the orchestration layer passes
+// so Temporal can deliver cancellation to a long-running Job (nil = no-op, e.g.
+// in tests). It is invoked from the pod-wait/log-follow/job-wait loops.
+func hb(f func()) {
+	if f != nil {
+		f()
+	}
+}
+
+func (d *Dispatcher) Run(ctx context.Context, runID string, slice int, spec actuators.JobSpec, act actuators.Actuator, creds []CredentialMount, heartbeat func()) (*Result, error) {
 	// Full Run id + slice index: the name keys ConfigMap and Job, and
 	// AlreadyExists is treated as adoption — a truncated id would let two
 	// Runs (or two slices) adopt each other's execution (ADR-0008 review).
@@ -126,7 +135,7 @@ func (d *Dispatcher) Run(ctx context.Context, runID string, slice int, spec actu
 		return nil, err
 	}
 
-	pod, err := d.waitForPod(ctx, jobName)
+	pod, err := d.waitForPod(ctx, jobName, heartbeat)
 	if err != nil {
 		return nil, err
 	}
@@ -138,11 +147,11 @@ func (d *Dispatcher) Run(ctx context.Context, runID string, slice int, spec actu
 		Facts:        map[string]map[string]json.RawMessage{},
 		SpawnLatency: spawn,
 	}
-	unclaimed, interpreted, err := d.followLogs(ctx, runID, slice, pod, act, res)
+	unclaimed, interpreted, err := d.followLogs(ctx, runID, slice, pod, act, res, heartbeat)
 	if err != nil {
 		return nil, err
 	}
-	ok, err := d.waitForJob(ctx, jobName)
+	ok, err := d.waitForJob(ctx, jobName, heartbeat)
 	if err != nil {
 		return nil, err
 	}
@@ -197,6 +206,27 @@ func (d *Dispatcher) cleanupContent(name string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	_ = d.client.CoreV1().ConfigMaps(d.cfg.Namespace).Delete(ctx, name, metav1.DeleteOptions{})
+}
+
+// DeleteRunJobs deletes every K8s Job for a Run (all slices), killing their
+// pods (Background propagation), so a cancellation actually stops execution —
+// nothing else deletes a Job before its finish TTL. Jobs carry the
+// stratt.dev/run-id label (createJob); ConfigMaps are cleaned by the returning
+// Execute activity's own defer. Idempotent: absent Jobs are not an error.
+func (d *Dispatcher) DeleteRunJobs(ctx context.Context, runID string) error {
+	sel := "stratt.dev/run-id=" + runID
+	jobs, err := d.client.BatchV1().Jobs(d.cfg.Namespace).List(ctx, metav1.ListOptions{LabelSelector: sel})
+	if err != nil {
+		return fmt.Errorf("dispatch: list run jobs %s: %w", runID, err)
+	}
+	bg := metav1.DeletePropagationBackground
+	for i := range jobs.Items {
+		if derr := d.client.BatchV1().Jobs(d.cfg.Namespace).Delete(ctx, jobs.Items[i].Name,
+			metav1.DeleteOptions{PropagationPolicy: &bg}); derr != nil && !apierrors.IsNotFound(derr) {
+			err = fmt.Errorf("dispatch: delete job %s: %w", jobs.Items[i].Name, derr)
+		}
+	}
+	return err
 }
 
 func (d *Dispatcher) createJob(ctx context.Context, name, runID string, spec actuators.JobSpec, creds []CredentialMount) error {
@@ -337,7 +367,7 @@ func (d *Dispatcher) createJob(ctx context.Context, name, runID string, spec act
 }
 
 // waitForPod polls until the Job's pod is running or terminal.
-func (d *Dispatcher) waitForPod(ctx context.Context, jobName string) (string, error) {
+func (d *Dispatcher) waitForPod(ctx context.Context, jobName string, heartbeat func()) (string, error) {
 	for {
 		pods, err := d.client.CoreV1().Pods(d.cfg.Namespace).List(ctx, metav1.ListOptions{
 			LabelSelector: "job-name=" + jobName,
@@ -351,6 +381,7 @@ func (d *Dispatcher) waitForPod(ctx context.Context, jobName string) (string, er
 				return p.Name, nil
 			}
 		}
+		hb(heartbeat)
 		select {
 		case <-time.After(250 * time.Millisecond):
 		case <-ctx.Done():
@@ -392,7 +423,7 @@ func (u unclaimedRing) len() int { return len(u.lines) }
 // publish them as the §1.8 diagnostic floor once the Job's verdict is known.
 // The Run-level stream-end marker is published by the Workflow once every
 // slice has finished.
-func (d *Dispatcher) followLogs(ctx context.Context, runID string, slice int, pod string, act actuators.Actuator, res *Result) (unclaimedRing, int, error) {
+func (d *Dispatcher) followLogs(ctx context.Context, runID string, slice int, pod string, act actuators.Actuator, res *Result, heartbeat func()) (unclaimedRing, int, error) {
 	var unclaimed unclaimedRing
 	req := d.client.CoreV1().Pods(d.cfg.Namespace).GetLogs(pod, &corev1.PodLogOptions{Follow: true})
 	stream, err := req.Stream(ctx)
@@ -406,6 +437,7 @@ func (d *Dispatcher) followLogs(ctx context.Context, runID string, slice int, po
 	sc := bufio.NewScanner(stream)
 	sc.Buffer(make([]byte, 0, 1024*1024), 8*1024*1024) // fact payloads are large
 	for sc.Scan() {
+		hb(heartbeat) // each output line keeps the activity heartbeat alive
 		iv, ok := act.Interpret(sc.Bytes())
 		if !ok {
 			if line := strings.TrimSpace(sc.Text()); line != "" {
@@ -476,7 +508,7 @@ func (d *Dispatcher) followLogs(ctx context.Context, runID string, slice int, po
 }
 
 // waitForJob polls the Job to a terminal condition.
-func (d *Dispatcher) waitForJob(ctx context.Context, jobName string) (bool, error) {
+func (d *Dispatcher) waitForJob(ctx context.Context, jobName string, heartbeat func()) (bool, error) {
 	for {
 		job, err := d.client.BatchV1().Jobs(d.cfg.Namespace).Get(ctx, jobName, metav1.GetOptions{})
 		if err != nil {
@@ -488,6 +520,7 @@ func (d *Dispatcher) waitForJob(ctx context.Context, jobName string) (bool, erro
 		if job.Status.Failed > 0 {
 			return false, nil
 		}
+		hb(heartbeat)
 		select {
 		case <-time.After(500 * time.Millisecond):
 		case <-ctx.Done():

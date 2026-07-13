@@ -68,8 +68,8 @@ func TestPinsAreStable(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(all) != 8 {
-		t.Fatalf("expected 8 embedded documents, got %d", len(all))
+	if len(all) != 9 {
+		t.Fatalf("expected 9 embedded documents, got %d", len(all))
 	}
 	versions := map[string]int{}
 	for _, c := range all {
@@ -80,9 +80,9 @@ func TestPinsAreStable(t *testing.T) {
 			versions[c.Name] = c.Version
 		}
 	}
-	// ansible.input v3 (scm content-ref, ADR-0025) resolves as the current
-	// version; v1/v2 stay pinned alongside it.
-	if versions["actuators/ansible.input"] != 3 {
+	// ansible.input v4 (extraVars, ADR-0026) resolves as the current version;
+	// v1/v2/v3 stay pinned alongside it.
+	if versions["actuators/ansible.input"] != 4 {
 		t.Fatalf("ansible.input current version: %d", versions["actuators/ansible.input"])
 	}
 	// Same process, same documents → identical pins on re-read.

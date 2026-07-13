@@ -2,16 +2,16 @@ package contract
 
 import "testing"
 
-// TestAnsibleV3IsResolved locks that the highest-versioned sibling wins the
-// actuators/ansible.input lookup (path-sorted load, ADR-0025) — so the scm
-// content-ref schema is the one Steps validate against.
-func TestAnsibleV3IsResolved(t *testing.T) {
+// TestAnsibleHighestVersionResolved locks that the highest-versioned sibling
+// wins the actuators/ansible.input lookup (path-sorted load) — currently v4
+// (extraVars, ADR-0026), which still carries the v3 scm content-ref.
+func TestAnsibleHighestVersionResolved(t *testing.T) {
 	c, ok, err := Get("actuators/ansible.input")
 	if err != nil || !ok {
 		t.Fatalf("ansible.input contract: ok=%v err=%v", ok, err)
 	}
-	if c.Version != 3 {
-		t.Fatalf("resolved ansible.input version = %d, want 3 (the scm sibling)", c.Version)
+	if c.Version != 4 {
+		t.Fatalf("resolved ansible.input version = %d, want 4 (the extraVars sibling)", c.Version)
 	}
 }
 
@@ -31,5 +31,12 @@ func TestAnsibleSCMParamsValidate(t *testing.T) {
 	// The v2 fields still validate (no regression).
 	if err := ValidateActuatorParams("ansible", []byte(`{"play":"- hosts: all\n","check":true}`)); err != nil {
 		t.Fatalf("v2 params regressed: %v", err)
+	}
+	// v4 extraVars validates alongside play or scm.
+	if err := ValidateActuatorParams("ansible", []byte(`{"play":"- hosts: all\n","extraVars":{"msg":"hi"}}`)); err != nil {
+		t.Fatalf("extraVars rejected: %v", err)
+	}
+	if err := ValidateActuatorParams("ansible", []byte(`{"scm":{"repo":"r","playbook":"p"},"extraVars":{"x":1}}`)); err != nil {
+		t.Fatalf("scm+extraVars rejected: %v", err)
 	}
 }

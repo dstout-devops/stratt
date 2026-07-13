@@ -70,6 +70,31 @@ func TestValidateSCMRejectsBadPaths(t *testing.T) {
 	}
 }
 
+func TestExtraVarsWrittenBothPaths(t *testing.T) {
+	// play path
+	spec, err := prep(t, `{"play":"- hosts: all\n","extraVars":{"msg":"hello","n":3}}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ev, ok := spec.Files["env/extravars"]
+	if !ok || !strings.Contains(ev, `"msg":"hello"`) || !strings.Contains(ev, `"n":3`) {
+		t.Fatalf("play path env/extravars: %q", ev)
+	}
+	// scm path
+	spec, err = prep(t, `{"scm":{"repo":"https://x/r.git","playbook":"p.yml"},"extraVars":{"msg":"hi"}}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ev := spec.Files["env/extravars"]; !strings.Contains(ev, `"msg":"hi"`) {
+		t.Fatalf("scm path env/extravars: %q", ev)
+	}
+	// absent when no extra vars
+	spec, _ = prep(t, `{"play":"- hosts: all\n"}`)
+	if _, ok := spec.Files["env/extravars"]; ok {
+		t.Fatal("env/extravars must be absent when no extraVars given")
+	}
+}
+
 func TestCloneScriptSeparatesOptionsFromArgs(t *testing.T) {
 	// The "--" separator is the exec-time defense against argument injection.
 	if !strings.Contains(cloneScript, ` -- "$SCM_REPO"`) {

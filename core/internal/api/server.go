@@ -15,6 +15,7 @@ import (
 	"go.temporal.io/sdk/client"
 
 	"github.com/dstout-devops/stratt/core/internal/authz"
+	"github.com/dstout-devops/stratt/core/internal/awxfacade"
 	"github.com/dstout-devops/stratt/core/internal/compiler"
 	"github.com/dstout-devops/stratt/core/internal/contract"
 	"github.com/dstout-devops/stratt/core/internal/desiredstate"
@@ -70,6 +71,18 @@ func (s *Server) Handler() http.Handler {
 		API:         Handler(s),
 		RecordUsage: s.Store.RecordMCPCall,
 		Log:         s.Log,
+	}))
+	// AWX-compatible /api/v2 façade (§5.6, ADR-0026): a stateless compat
+	// surface over the same seams, for tooling cutover. Its own auth middleware
+	// (Bearer/Basic/dev); definitions read-only, launch+cancel the only writes.
+	mux.Handle("/api/v2/", awxfacade.New(awxfacade.Config{
+		Store:              s.Store,
+		Bus:                s.Bus,
+		Temporal:           s.Temporal,
+		Authz:              s.Authz,
+		OIDC:               s.OIDC,
+		DevPrincipalHeader: s.DevPrincipalHeader,
+		Log:                s.Log,
 	}))
 	// Probe endpoint (ADR-0013): process-liveness only — no store, no authz,
 	// so probes never flap on substrate warm-up or grant state.
@@ -913,32 +926,22 @@ func (s *Server) StartRun(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	v, err := s.Store.GetView(r.Context(), body.ViewName)
-	if err != nil {
-		s.fail(w, err)
-		return
-	}
-	run, err := s.Store.CreateRun(r.Context(), types.Run{ViewRef: "view://" + v.Name, ViewVersion: v.Version})
-	if err != nil {
-		s.fail(w, err)
-		return
-	}
-	in := orchestrate.RunInput{RunID: run.ID, ViewName: v.Name}
+	p := orchestrate.LaunchParams{ViewName: body.ViewName}
 	// The launching Principal rides the Run for the dispatch-time `use`
 	// check and the audit trail (§1.8). Anonymous launches carry none and
 	// fail credential resolution if refs are requested.
 	if id, _, ok := authz.PrincipalFrom(r.Context()); ok {
-		in.Principal = id
+		p.Principal = id
 	}
 	if body.CredentialRefs != nil {
-		in.CredentialRefs = *body.CredentialRefs
+		p.CredentialRefs = *body.CredentialRefs
 	}
 	if body.Actuator != nil {
 		if !body.Actuator.Valid() {
 			writeErr(w, http.StatusBadRequest, fmt.Sprintf("unknown actuator %q", *body.Actuator))
 			return
 		}
-		in.Actuator = string(*body.Actuator)
+		p.Actuator = string(*body.Actuator)
 	}
 	if body.Params != nil {
 		raw, err := json.Marshal(*body.Params)
@@ -946,27 +949,17 @@ func (s *Server) StartRun(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, http.StatusBadRequest, "invalid params: "+err.Error())
 			return
 		}
-		in.Params = raw
+		p.Params = raw
 	}
 	if body.Slices != nil {
 		if *body.Slices < 1 {
 			writeErr(w, http.StatusBadRequest, "slices must be >= 1")
 			return
 		}
-		in.Slices = int(*body.Slices)
+		p.Slices = int(*body.Slices)
 	}
-	wfID := "run-" + run.ID
-	_, err = s.Temporal.ExecuteWorkflow(r.Context(), client.StartWorkflowOptions{
-		ID:        wfID,
-		TaskQueue: orchestrate.TaskQueue,
-	}, orchestrate.RunAgainstView, in)
+	run, err := orchestrate.LaunchRun(r.Context(), orchestrate.LaunchDeps{Store: s.Store, Temporal: s.Temporal}, p)
 	if err != nil {
-		_ = s.Store.SetRunStatus(r.Context(), run.ID, types.RunFailed, map[string]any{"error": "workflow start failed"})
-		s.fail(w, fmt.Errorf("start workflow: %w", err))
-		return
-	}
-	run.WorkflowID = wfID
-	if err := s.Store.SetRunWorkflowID(r.Context(), run.ID, wfID); err != nil {
 		s.fail(w, err)
 		return
 	}
@@ -981,6 +974,30 @@ func (s *Server) GetRun(w http.ResponseWriter, r *http.Request, id RunID) {
 		return
 	}
 	writeJSON(w, http.StatusOK, runToWire(run))
+}
+
+// CancelRun implements (POST /runs/{id}/cancel): signal the Run's Temporal
+// workflow to cancel. The Workflow owns the canceled transition and Job
+// cleanup (ADR-0026); this only requests it. 202 even for a terminal Run
+// (idempotent, AWX-cancel semantics).
+//
+// Authorization mirrors StartRun's posture: authenticated, but not yet
+// object-gated. Run/View-scoped execution authz (a `run`/`view` type in the
+// OpenFGA model) is the deferred Phase-2/3 extension of the ADR-0009 model —
+// launching and canceling share one posture so the /api/v2 façade cannot be a
+// weaker path (§1.6). Gating on the unmodeled `run` type here would fail-closed
+// for every caller.
+func (s *Server) CancelRun(w http.ResponseWriter, r *http.Request, id RunID) {
+	run, err := s.Store.GetRun(r.Context(), id)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	if err := orchestrate.CancelRun(r.Context(), s.Temporal, run.ID); err != nil {
+		s.fail(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusAccepted)
 }
 
 // TailRunEvents implements (GET /runs/{id}/events): SSE replay + follow of

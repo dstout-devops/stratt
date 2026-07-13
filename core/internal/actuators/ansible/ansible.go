@@ -76,6 +76,10 @@ type params struct {
 	// SCM is an SCM content-ref: clone a repo in the EE pod and run a
 	// playbook from it (charter §5.6). Mutually exclusive with Play.
 	SCM *scmParams `json:"scm"`
+	// ExtraVars are variables passed to ansible-runner as --extra-vars (via
+	// env/extravars) — the landing field for AWX launch extra_vars and survey
+	// answers (ADR-0025/0026). Never secret material (§2.5).
+	ExtraVars map[string]any `json:"extraVars"`
 }
 
 // scmParams is the SCM content-ref (ansible.input v3). The clone runs inside
@@ -125,14 +129,33 @@ func (Actuator) Prepare(raw json.RawMessage, targets []Target) (actuators.JobSpe
 		// changed results mean "would change" (ADR-0019).
 		command = append(command, "--cmdline", "--check --diff")
 	}
+	files := map[string]string{
+		"project/play.yml": play,
+		"inventory/hosts":  hosts,
+	}
+	if err := addExtraVars(files, p.ExtraVars); err != nil {
+		return actuators.JobSpec{}, err
+	}
 	return actuators.JobSpec{
-		Files: map[string]string{
-			"project/play.yml": play,
-			"inventory/hosts":  hosts,
-		},
+		Files:   files,
 		Command: command,
 		Image:   p.EEImage,
 	}, nil
+}
+
+// addExtraVars writes ansible-runner's env/extravars file when extra vars are
+// present. ansible-runner loads /runner/env/extravars as --extra-vars; JSON is
+// valid YAML, so the marshalled map is accepted verbatim.
+func addExtraVars(files map[string]string, vars map[string]any) error {
+	if len(vars) == 0 {
+		return nil
+	}
+	raw, err := json.Marshal(vars)
+	if err != nil {
+		return fmt.Errorf("ansible: invalid extraVars: %w", err)
+	}
+	files["env/extravars"] = string(raw)
+	return nil
 }
 
 // cloneScript clones the SCM content-ref into /runner/project (an empty,
@@ -166,11 +189,15 @@ func prepareSCM(p params, hosts string) (actuators.JobSpec, error) {
 	if p.Check {
 		env["SCM_CHECK"] = "1"
 	}
+	files := map[string]string{
+		"clone.sh":        cloneScript,
+		"inventory/hosts": hosts,
+	}
+	if err := addExtraVars(files, p.ExtraVars); err != nil {
+		return actuators.JobSpec{}, err
+	}
 	return actuators.JobSpec{
-		Files: map[string]string{
-			"clone.sh":        cloneScript,
-			"inventory/hosts": hosts,
-		},
+		Files:   files,
 		Command: []string{"sh", "/runner/clone.sh"},
 		Env:     env,
 		Image:   p.EEImage,

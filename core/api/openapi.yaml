@@ -237,6 +237,19 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/Run" }
         "404": { $ref: "#/components/responses/NotFound" }
+  /runs/{id}/cancel:
+    parameters:
+      - $ref: "#/components/parameters/RunID"
+    post:
+      operationId: cancelRun
+      summary: Request cancellation of a running Run
+      description: >
+        Signals the Run's Temporal workflow to cancel; the workflow is the
+        single writer of the canceled status and deletes the Run's K8s Job(s)
+        (ADR-0026). A terminal Run is a no-op. 202 = accepted (async).
+      responses:
+        "202": { description: Cancellation requested }
+        "404": { $ref: "#/components/responses/NotFound" }
   /runs/{id}/events:
     parameters:
       - $ref: "#/components/parameters/RunID"

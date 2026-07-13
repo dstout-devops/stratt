@@ -180,3 +180,23 @@ func (s *Store) GetRun(ctx context.Context, runID string) (types.Run, error) {
 	}
 	return r, nil
 }
+
+// GetRunByAWXID resolves a Run from the synthetic AWX integer job id the
+// /api/v2 façade exposes (ADR-0026), via the graph.awx_run_id functional index.
+// Int31 collisions resolve to the most-recent Run sharing the id — correct for
+// transient job polling. Returns ErrNotFound when no Run hashes to id.
+func (s *Store) GetRunByAWXID(ctx context.Context, awxID int64) (types.Run, error) {
+	var runID string
+	err := s.pool.QueryRow(ctx, `
+		SELECT id FROM graph.run
+		WHERE graph.awx_run_id(id) = $1
+		ORDER BY started_at DESC LIMIT 1`, awxID,
+	).Scan(&runID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return types.Run{}, fmt.Errorf("%w: run awx-id %d", ErrNotFound, awxID)
+	}
+	if err != nil {
+		return types.Run{}, fmt.Errorf("graph: get run by awx id: %w", err)
+	}
+	return s.GetRun(ctx, runID)
+}

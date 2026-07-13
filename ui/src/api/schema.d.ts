@@ -201,6 +201,28 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/runs/{id}/cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["RunID"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Request cancellation of a running Run
+         * @description Signals the Run's Temporal workflow to cancel; the workflow is the single writer of the canceled status and deletes the Run's K8s Job(s) (ADR-0026). A terminal Run is a no-op. 202 = accepted (async).
+         */
+        post: operations["cancelRun"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/runs/{id}/events": {
         parameters: {
             query?: never;
@@ -1469,6 +1491,27 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["Run"];
                 };
+            };
+            404: components["responses"]["NotFound"];
+        };
+    };
+    cancelRun: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["RunID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Cancellation requested */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             404: components["responses"]["NotFound"];
         };
