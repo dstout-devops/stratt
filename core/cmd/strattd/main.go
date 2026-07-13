@@ -24,6 +24,7 @@ import (
 
 	"github.com/dstout-devops/stratt/core/internal/actuators"
 	"github.com/dstout-devops/stratt/core/internal/actuators/ansible"
+	certissuer "github.com/dstout-devops/stratt/core/internal/actuators/certissuer"
 	mcpact "github.com/dstout-devops/stratt/core/internal/actuators/mcp"
 	"github.com/dstout-devops/stratt/core/internal/actuators/opentofu"
 	"github.com/dstout-devops/stratt/core/internal/actuators/script"
@@ -33,6 +34,7 @@ import (
 	"github.com/dstout-devops/stratt/core/internal/baselines"
 	"github.com/dstout-devops/stratt/core/internal/compiler"
 	"github.com/dstout-devops/stratt/core/internal/connectors/awsec2"
+	certsyncer "github.com/dstout-devops/stratt/core/internal/connectors/certissuer"
 	"github.com/dstout-devops/stratt/core/internal/connectors/msgraph"
 	"github.com/dstout-devops/stratt/core/internal/connectors/vcenter"
 	"github.com/dstout-devops/stratt/core/internal/contract"
@@ -193,7 +195,7 @@ func run(ctx context.Context, log *slog.Logger) error {
 	// In-tree Actuator registry (§2.3); out-of-tree Actuators arrive via the
 	// plugin Contract surfaces, not this map.
 	registry := map[string]actuators.Actuator{}
-	for _, a := range []actuators.Actuator{ansible.Actuator{}, script.Actuator{}, webhook.Actuator{}} {
+	for _, a := range []actuators.Actuator{ansible.Actuator{}, script.Actuator{}, webhook.Actuator{}, certissuer.Actuator{}} {
 		registry[a.Name()] = a
 	}
 
@@ -349,6 +351,32 @@ func run(ctx context.Context, log *slog.Logger) error {
 		}()
 	} else {
 		log.Info("no EC2 Source configured (STRATT_AWS_REGION empty); syncer idle")
+	}
+
+	// ── cert-issuer (CLM) Syncer (ADR-0030; started when a Source is set) ─
+	if addr := os.Getenv("STRATT_CLM_ADDR"); addr != "" {
+		interval, err := time.ParseDuration(env("STRATT_CLM_INTERVAL", "60s"))
+		if err != nil {
+			return fmt.Errorf("certissuer interval: %w", err)
+		}
+		syncer := certsyncer.NewSyncer(certsyncer.Config{
+			// Read-side projection credential via the env chain (§2.5); the
+			// write side (issue/revoke) injects its token into the EE pod.
+			Addr:       addr,
+			Token:      os.Getenv("STRATT_CLM_TOKEN"),
+			Mount:      env("STRATT_CLM_MOUNT", "pki"),
+			SourceName: env("STRATT_CLM_SOURCE_NAME", "certissuer"),
+		}, interval, store, log)
+		if err := syncer.Register(ctx); err != nil {
+			return err
+		}
+		go func() {
+			if err := syncer.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
+				log.Error("certissuer syncer stopped", "error", err)
+			}
+		}()
+	} else {
+		log.Info("no CLM Source configured (STRATT_CLM_ADDR empty); cert syncer idle")
 	}
 
 	// ── desired-state reconciliation (§1.2: Git is the declarer) ────────

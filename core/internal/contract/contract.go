@@ -32,17 +32,19 @@ type compiled struct {
 }
 
 var (
-	once     sync.Once
-	loadErr  error
-	byName   map[string]*compiled
-	ordered  []types.Contract
-	facetSet map[string]*compiled // facet namespace → schema
+	once      sync.Once
+	loadErr   error
+	byName    map[string]*compiled
+	ordered   []types.Contract
+	facetSet  map[string]*compiled // facet namespace → schema
+	intentSet map[string]*compiled // intent kind (Intent/Certificate) → spec schema
 )
 
 // load parses, hashes, and compiles every embedded document exactly once.
 func load() {
 	byName = map[string]*compiled{}
 	facetSet = map[string]*compiled{}
+	intentSet = map[string]*compiled{}
 	compiler := jsonschema.NewCompiler()
 
 	var paths []string
@@ -99,7 +101,20 @@ func load() {
 		if ns, ok := strings.CutPrefix(name, "facets/"); ok {
 			facetSet[ns] = c
 		}
+		if base, ok := strings.CutPrefix(name, "intents/"); ok {
+			intentSet[intentKindFromFile(base)] = c
+		}
 	}
+}
+
+// intentKindFromFile maps an intents/<base>.schema.json basename to its Named
+// Kind (charter §2.4): "certificate" → "Intent/Certificate". Filenames are
+// lowercase because a kind's slash cannot live in a path.
+func intentKindFromFile(base string) string {
+	if base == "" {
+		return ""
+	}
+	return "Intent/" + strings.ToUpper(base[:1]) + base[1:]
 }
 
 func ensure() error {
@@ -242,4 +257,34 @@ func ValidateFacet(namespace string, value json.RawMessage) (covered bool, err e
 		return false, nil
 	}
 	return true, c.validate(value)
+}
+
+// HasIntentKind reports whether an Intent kind has a registered spec schema —
+// the definition of "implemented" (§1.1). Used to gate Blueprints without
+// validating a spec.
+func HasIntentKind(kind string) (bool, error) {
+	if err := ensure(); err != nil {
+		return false, err
+	}
+	_, ok := intentSet[kind]
+	return ok, nil
+}
+
+// ValidateIntentSpec checks an Intent's spec against its kind's schema
+// (charter §2.4: each Intent kind has a schema driving forms/validation).
+// This is the first place an Intent payload is typed at its seam (§1.1) —
+// covered=false means the kind has no registered spec schema, which the caller
+// treats as "kind not implemented" rather than "anything goes".
+func ValidateIntentSpec(kind string, spec json.RawMessage) (covered bool, err error) {
+	if err := ensure(); err != nil {
+		return false, err
+	}
+	c, ok := intentSet[kind]
+	if !ok {
+		return false, nil
+	}
+	if len(spec) == 0 {
+		spec = []byte(`{}`)
+	}
+	return true, c.validate(spec)
 }

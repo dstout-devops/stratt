@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"strconv"
 	"strings"
 	"time"
 
@@ -278,6 +279,34 @@ func expectationUnmet(value json.RawMessage, exp types.FacetExpectation) string 
 		if !jsonContains(at, exp.Contains) {
 			return "does not contain expected element"
 		}
+	case exp.NotBefore != "":
+		if reason := notBeforeUnmet(at, exp.NotBefore); reason != "" {
+			return reason
+		}
+	}
+	return ""
+}
+
+// notBeforeUnmet checks the expiry threshold (ADR-0030): the addressed value is
+// an RFC3339 timestamp that must be at least `window` (a Go duration) in the
+// future at evaluation time. This is a point-in-time observation — `now` is the
+// moment of check, stamped by the Run's provenance (§1.8). A malformed value or
+// window is unmet (a cert we cannot read the expiry of is drift, not clean).
+func notBeforeUnmet(value json.RawMessage, window string) string {
+	dur, err := time.ParseDuration(window)
+	if err != nil {
+		return "invalid renewal window " + strconv.Quote(window)
+	}
+	var ts string
+	if err := json.Unmarshal(value, &ts); err != nil {
+		return "value is not a timestamp string"
+	}
+	notAfter, err := time.Parse(time.RFC3339, ts)
+	if err != nil {
+		return "value is not an RFC3339 timestamp"
+	}
+	if notAfter.Before(time.Now().Add(dur)) {
+		return "within renewal window (expires " + ts + ")"
 	}
 	return ""
 }

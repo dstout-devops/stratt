@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "stratt:contract:intents/application:v1",
+  "title": "Intent/Application spec",
+  "description": "The desired-state payload for an application Intent (charter §2.4, ADR-0023). Permissive in v1 — Blueprints reference spec fields by explicit lookup ({{.spec.package}}); this schema types the seam (§1.1) without over-constraining the pre-existing kind.",
+  "type": "object",
+  "properties": {
+    "package": { "type": "string" },
+    "channel": { "type": "string" }
+  },
+  "additionalProperties": true
+}

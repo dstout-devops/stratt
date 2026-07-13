@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "stratt:contract:actuators/cert-issuer.input:v1",
+  "title": "cert-issuer Actuator input",
+  "description": "Params for the cert-issuer Actuator (charter §2.3, ADR-0030): issue/renew/revoke against a Vault-compatible PKI CLM. The CLM token is NOT here — it is injected as a CredentialRef named 'cert-issuer' at pod spawn (§2.5). addr/role/etc. are non-secret.",
+  "type": "object",
+  "properties": {
+    "operation": { "type": "string", "enum": ["issue", "renew", "revoke"] },
+    "addr": { "type": "string", "description": "CLM base URL, e.g. http://openbao:8200" },
+    "mount": { "type": "string", "description": "PKI secrets-engine mount (default pki)" },
+    "role": { "type": "string", "description": "issuing role (issue/renew)" },
+    "commonName": { "type": "string", "description": "certificate CN (issue/renew)" },
+    "ttl": { "type": "string", "description": "issued cert TTL, e.g. 720h (issue/renew)" },
+    "serial": { "type": "string", "description": "colon-hex serial: the cert to revoke (revoke) or supersede (renew)" }
+  },
+  "required": ["operation", "addr"],
+  "additionalProperties": false
+}

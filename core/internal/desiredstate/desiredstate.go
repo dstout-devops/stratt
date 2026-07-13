@@ -848,22 +848,45 @@ func parseIntentFile(path string, raw []byte) (string, types.Intent, error) {
 	return in.Name, in, nil
 }
 
-// ValidateIntent checks one Intent declaration (ADR-0023).
+// ValidateIntent checks one Intent declaration (ADR-0023, ADR-0030). The kind
+// is "implemented" iff it has a registered spec schema; the spec is validated
+// at its seam (§1.1) and onRemove is gated per-kind (schema-driven removal
+// semantics live in the kind, not tribal memory — §2.4).
 func ValidateIntent(in types.Intent) error {
 	if in.Name == "" {
 		return fmt.Errorf("intent requires a name")
 	}
-	if in.Kind != types.IntentApplication {
-		return fmt.Errorf("intent %s: kind %q is not implemented in v1 (only %s)", in.Name, in.Kind, types.IntentApplication)
+	specRaw, err := json.Marshal(in.Spec)
+	if err != nil {
+		return fmt.Errorf("intent %s: marshal spec: %w", in.Name, err)
 	}
-	switch in.OnRemove {
+	covered, err := contract.ValidateIntentSpec(in.Kind, specRaw)
+	if err != nil {
+		return fmt.Errorf("intent %s: %w", in.Name, err)
+	}
+	if !covered {
+		return fmt.Errorf("intent %s: kind %q is not an implemented Intent kind (no spec schema)", in.Name, in.Kind)
+	}
+	return validateOnRemove(in.Name, in.Kind, in.OnRemove)
+}
+
+// validateOnRemove gates the withdrawal lifecycle per Intent kind (§2.4).
+// retain is universal; remove is implemented for Certificate (revoke-or-expire,
+// ADR-0030); revert lands with the config/fileset kinds.
+func validateOnRemove(name, kind, onRemove string) error {
+	switch onRemove {
 	case "", types.OnRemoveRetain:
-	case types.OnRemoveRevert, types.OnRemoveRemove:
-		return fmt.Errorf("intent %s: onRemove %q is not implemented in v1 (schema-driven removal is Phase 3); only retain", in.Name, in.OnRemove)
+		return nil
+	case types.OnRemoveRemove:
+		if kind == types.IntentCertificate {
+			return nil
+		}
+		return fmt.Errorf("intent %s: onRemove %q is not implemented for kind %s", name, onRemove, kind)
+	case types.OnRemoveRevert:
+		return fmt.Errorf("intent %s: onRemove %q is not implemented yet (deferred to the config/fileset kinds)", name, onRemove)
 	default:
-		return fmt.Errorf("intent %s: unknown onRemove %q (retain)", in.Name, in.OnRemove)
+		return fmt.Errorf("intent %s: unknown onRemove %q (retain|remove)", name, onRemove)
 	}
-	return nil
 }
 
 // assignmentFile is the assignments/*.yaml shape. blueprint is "name@version".
@@ -939,6 +962,7 @@ type blueprintFile struct {
 	Routes              []blueprintRoute `yaml:"routes"`
 	Severity            string           `yaml:"severity"`
 	DampingObservations int              `yaml:"dampingObservations"`
+	RemoveWorkflow      string           `yaml:"removeWorkflow"`
 }
 type blueprintRoute struct {
 	Match               []declFacetPred `yaml:"match"`
@@ -956,6 +980,7 @@ type declExpectation struct {
 	Path      string `yaml:"path"`
 	Equals    any    `yaml:"equals"`
 	Contains  any    `yaml:"contains"`
+	NotBefore string `yaml:"notBefore"`
 }
 
 func parseBlueprintFile(path string, raw []byte) (string, types.Blueprint, error) {
@@ -968,6 +993,7 @@ func parseBlueprintFile(path string, raw []byte) (string, types.Blueprint, error
 	b := types.Blueprint{
 		Name: f.Name, Version: f.Version, For: f.For,
 		Severity: f.Severity, DampingObservations: f.DampingObservations,
+		RemoveWorkflow: f.RemoveWorkflow,
 	}
 	for i, r := range f.Routes {
 		var match []types.FacetPredicate
@@ -989,7 +1015,8 @@ func parseBlueprintFile(path string, raw []byte) (string, types.Blueprint, error
 		b.Routes = append(b.Routes, types.BlueprintRoute{
 			Match: match,
 			Observe: types.FacetExpectation{
-				Namespace: r.Observe.Namespace, Path: r.Observe.Path, Equals: eq, Contains: con,
+				Namespace: r.Observe.Namespace, Path: r.Observe.Path,
+				Equals: eq, Contains: con, NotBefore: r.Observe.NotBefore,
 			},
 			Claim: r.Claim, RemediationWorkflow: r.RemediationWorkflow,
 		})
@@ -1018,8 +1045,10 @@ func ValidateBlueprint(b types.Blueprint) error {
 	if b.Name == "" || b.Version < 1 {
 		return fmt.Errorf("blueprint requires a name and version >= 1")
 	}
-	if b.For != types.IntentApplication {
-		return fmt.Errorf("blueprint %s@%d: for %q is not implemented in v1 (only %s)", b.Name, b.Version, b.For, types.IntentApplication)
+	if ok, err := contract.HasIntentKind(b.For); err != nil {
+		return fmt.Errorf("blueprint %s@%d: %w", b.Name, b.Version, err)
+	} else if !ok {
+		return fmt.Errorf("blueprint %s@%d: for %q is not an implemented Intent kind", b.Name, b.Version, b.For)
 	}
 	switch b.Severity {
 	case "", types.SeverityInfo, types.SeverityWarning, types.SeverityCritical:
@@ -1033,8 +1062,8 @@ func ValidateBlueprint(b types.Blueprint) error {
 		if r.Observe.Namespace == "" {
 			return fmt.Errorf("blueprint %s@%d: route %d observe requires a namespace", b.Name, b.Version, i)
 		}
-		if len(r.Observe.Equals) == 0 && len(r.Observe.Contains) == 0 {
-			return fmt.Errorf("blueprint %s@%d: route %d observe requires equals or contains", b.Name, b.Version, i)
+		if len(r.Observe.Equals) == 0 && len(r.Observe.Contains) == 0 && r.Observe.NotBefore == "" {
+			return fmt.Errorf("blueprint %s@%d: route %d observe requires equals, contains, or notBefore", b.Name, b.Version, i)
 		}
 		switch r.Claim {
 		case types.ClaimExclusive, types.ClaimAdditive:

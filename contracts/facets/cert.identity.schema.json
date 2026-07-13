@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "stratt:contract:facets/cert.identity:v1",
+  "title": "cert.identity Facet",
+  "description": "Demanded by the cert-issuer Connector's Syncer (charter §2.1 'cert' Entity, §2.4 Intent/Certificate GA, ADR-0030): the identifying attributes of an issued X.509 certificate, projected from the CLM. A Facet schema exists only when a shipping Contract demands it (§1.1); validated at the Projector write path.",
+  "type": "object",
+  "properties": {
+    "commonName": { "type": "string" },
+    "serialNumber": { "type": "string" },
+    "issuer": { "type": "string" },
+    "dnsNames": { "type": "array", "items": { "type": "string" } }
+  },
+  "additionalProperties": false
+}

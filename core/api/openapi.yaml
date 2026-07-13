@@ -906,7 +906,7 @@ components:
         viewName: { type: string }
         actuator:
           type: string
-          enum: [ansible, script, opentofu, mcp]
+          enum: [ansible, script, opentofu, mcp, cert-issuer]
           default: ansible
         params:
           type: object

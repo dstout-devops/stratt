@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "stratt:contract:intents/certificate:v1",
+  "title": "Intent/Certificate spec",
+  "description": "The desired-state payload for a certificate Intent (charter §2.4, ADR-0030). issuer is a ref to the CLM Connector's role; renewBefore is the Baseline-side expiry-threshold window; exportable is `false` AS SCHEMA, not a policy memo (§2.4). Typed at the seam per §1.1.",
+  "type": "object",
+  "properties": {
+    "issuer": { "type": "string", "description": "CLM connector role ref (e.g. certissuer/stratt-dev)" },
+    "commonName": { "type": "string" },
+    "validity": { "type": "string", "description": "issued cert TTL, e.g. 720h" },
+    "renewBefore": { "type": "string", "description": "renew when notAfter is within this window, e.g. 360h" },
+    "exportable": { "const": false },
+    "onRemoveRevoke": { "type": "boolean", "description": "when true and the Intent is withdrawn with onRemove: remove, revoke rather than let-expire" }
+  },
+  "required": ["issuer", "commonName", "renewBefore"],
+  "additionalProperties": false
+}

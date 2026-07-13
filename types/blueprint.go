@@ -34,6 +34,11 @@ type Blueprint struct {
 	// (§4.3 flap damping).
 	Severity            string `json:"severity"`
 	DampingObservations int    `json:"dampingObservations,omitempty"`
+	// RemoveWorkflow is the Workflow ref surfaced on the orphan Finding when an
+	// Intent of this kind is withdrawn with onRemove: remove (§2.4, ADR-0030) —
+	// e.g. a certificate revoke Workflow. A ref only: the operator launches it
+	// (§5 Flow 2), never auto-run. Empty ⇒ withdrawal is retain-only.
+	RemoveWorkflow string `json:"removeWorkflow,omitempty"`
 }
 
 // BlueprintRoute is one capability route: a Facet-predicate match → an
@@ -68,4 +73,12 @@ type FacetExpectation struct {
 	// Contains asserts the addressed value (an array or string) contains this
 	// element (additive/ensure-contains semantics).
 	Contains json.RawMessage `json:"contains,omitempty"`
+	// NotBefore asserts the addressed value (an RFC3339 timestamp) is at least
+	// this Go duration (e.g. "360h") in the FUTURE at evaluation time — the
+	// Baseline-side expiry threshold (ADR-0030): cert.expiry.notAfter must be
+	// at least renewBefore ahead, else the cert drifts toward expiry. The
+	// window is Git policy, sourced from the Intent spec ({{.spec.renewBefore}})
+	// and substituted at compile. Empty ⇒ unused. Exactly one of
+	// Equals/Contains/NotBefore is set.
+	NotBefore string `json:"notBefore,omitempty"`
 }

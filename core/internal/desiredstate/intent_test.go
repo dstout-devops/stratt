@@ -75,11 +75,14 @@ maxDelta: 0.4
 
 	// Rejections.
 	for name, docs := range map[string]map[string]string{
-		"bad intent kind":   {"intents": "name: x\nkind: Intent/Certificate\n"},
-		"revert onRemove":   {"intents": "name: x\nkind: Intent/Application\nonRemove: revert\n"},
-		"blueprint no ver":  {"blueprints": "name: b\nfor: Intent/Application\nroutes: [{observe: {namespace: n, equals: 1}, claim: additive}]\n"},
-		"bad claim":         {"blueprints": "name: b\nversion: 1\nfor: Intent/Application\nroutes: [{observe: {namespace: n, equals: 1}, claim: priority}]\n"},
-		"bad blueprint ref": {"assignments": "name: a\nintent: i\nview: v\nblueprint: application\n"},
+		"unimplemented kind": {"intents": "name: x\nkind: Intent/FileSet\nspec: {}\n"},
+		"invalid cert spec":  {"intents": "name: x\nkind: Intent/Certificate\nspec: {}\n"}, // missing required issuer/commonName/renewBefore
+		"remove on non-cert": {"intents": "name: x\nkind: Intent/Application\nonRemove: remove\n"},
+		"revert onRemove":    {"intents": "name: x\nkind: Intent/Application\nonRemove: revert\n"},
+		"blueprint no ver":   {"blueprints": "name: b\nfor: Intent/Application\nroutes: [{observe: {namespace: n, equals: 1}, claim: additive}]\n"},
+		"blueprint bad kind": {"blueprints": "name: b\nversion: 1\nfor: Intent/FileSet\nroutes: [{observe: {namespace: n, equals: 1}, claim: additive}]\n"},
+		"bad claim":          {"blueprints": "name: b\nversion: 1\nfor: Intent/Application\nroutes: [{observe: {namespace: n, equals: 1}, claim: priority}]\n"},
+		"bad blueprint ref":  {"assignments": "name: a\nintent: i\nview: v\nblueprint: application\n"},
 	} {
 		bad := t.TempDir()
 		writeDecl(t, bad, "v.yaml", "name: v\nselector: {kinds: [vm]}\n")
@@ -89,6 +92,31 @@ maxDelta: 0.4
 		if _, err := ParseDir(bad); err == nil {
 			t.Fatalf("invalid intent-layer (%s) must be rejected", name)
 		}
+	}
+}
+
+// TestCertificateIntentGA proves the Phase-3 kind is now first-class: a valid
+// Intent/Certificate with onRemove: remove and a Certificate Blueprint (with a
+// notBefore expiry threshold + removeWorkflow) parse cleanly (ADR-0030).
+func TestCertificateIntentGA(t *testing.T) {
+	root := t.TempDir()
+	writeDecl(t, root, "v.yaml", "name: certs\nselector: {kinds: [cert]}\n")
+	writeKind(t, root, "intents", "c.yaml",
+		"name: web-cert\nkind: Intent/Certificate\nonRemove: remove\n"+
+			"spec: {issuer: certissuer/stratt-dev, commonName: web.stratt.test, renewBefore: 360h, exportable: false}\n")
+	writeKind(t, root, "blueprints", "b.yaml",
+		"name: certificate\nversion: 1\nfor: Intent/Certificate\nseverity: warning\nremoveWorkflow: cert-revoke\n"+
+			"routes: [{observe: {namespace: cert.expiry, path: notAfter, notBefore: '{{.spec.renewBefore}}'}, claim: exclusive, remediationWorkflow: cert-renew}]\n")
+	parsed, err := ParseDir(root)
+	if err != nil {
+		t.Fatalf("valid certificate intent-layer must parse: %v", err)
+	}
+	if in := parsed.Intents[0]; in.Kind != types.IntentCertificate || in.OnRemove != types.OnRemoveRemove {
+		t.Fatalf("intent: %+v", in)
+	}
+	if bp := parsed.Blueprints[0]; bp.For != types.IntentCertificate || bp.RemoveWorkflow != "cert-revoke" ||
+		bp.Routes[0].Observe.NotBefore != "{{.spec.renewBefore}}" {
+		t.Fatalf("blueprint: %+v", bp)
 	}
 }
 

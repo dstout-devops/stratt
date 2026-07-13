@@ -306,6 +306,44 @@ func TestCompileOrphanOnWithdrawal(t *testing.T) {
 	}
 }
 
+// TestCompileOnRemoveRevoke proves onRemove=remove surfaces the Blueprint's
+// remove Workflow on the orphan Finding (ADR-0030) — a ref for the operator to
+// launch (§5 Flow 2), never auto-run. The Intent stays declared; the Assignment
+// is withdrawn.
+func TestCompileOnRemoveRevoke(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	seedEntity(t, s, "u1", "x86_64")
+	seedView(t, s, "dev-vms")
+	must(t, s.UpsertWorkflow(ctx, types.Workflow{Name: "cert-revoke", Steps: []types.Step{{Name: "revoke", ViewName: "dev-vms", Actuator: "cert-issuer"}}}))
+	must(t, s.UpsertIntent(ctx, types.Intent{Name: "web-cert", Kind: types.IntentCertificate, OnRemove: types.OnRemoveRemove}))
+	bp := appBlueprint("certificate", 1, types.ClaimAdditive)
+	bp.For = types.IntentCertificate
+	bp.RemoveWorkflow = "cert-revoke"
+	must(t, s.UpsertBlueprint(ctx, bp))
+	must(t, s.UpsertAssignment(ctx, types.Assignment{Name: "site-certs", Intent: "web-cert", View: "dev-vms", Blueprint: "certificate", BlueprintVersion: 1}))
+	compileApply(t, s, 0)
+	name := CompiledName("site-certs", "certificate", 1, 0)
+	if _, err := s.GetBaseline(ctx, name); err != nil {
+		t.Fatalf("baseline should exist: %v", err)
+	}
+
+	// Withdraw the Assignment; the Intent (onRemove=remove) stays declared.
+	must(t, s.DeleteAssignment(ctx, "site-certs"))
+	compileApply(t, s, 0)
+	findings, _ := s.ListFindings(ctx, name, "", 0)
+	if len(findings) != 1 || findings[0].Status != types.FindingOpen {
+		t.Fatalf("expected one open orphan finding, got %+v", findings)
+	}
+	var d map[string]any
+	if err := json.Unmarshal(findings[0].Diff, &d); err != nil {
+		t.Fatalf("orphan detail: %v", err)
+	}
+	if d["onRemove"] != "remove" || d["removeWorkflow"] != "cert-revoke" {
+		t.Fatalf("orphan must carry the revoke remediation ref, got %v", d)
+	}
+}
+
 func TestCompileRejectsNonCacView(t *testing.T) {
 	s := testStore(t)
 	ctx := context.Background()

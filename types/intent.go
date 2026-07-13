@@ -1,9 +1,13 @@
 package types
 
-// Intent kinds (charter §2.4). v1 ships Intent/Application only; the
-// Certificate/FileSet/Access kinds are Phase-3 GA (§8).
+// Intent kinds (charter §2.4). Intent/Application shipped in Phase 2;
+// Intent/Certificate is the Phase-3 promote-flagship GA (§8, ADR-0030). The
+// FileSet/Access kinds follow. Each kind has a registered spec schema
+// (contracts/intents/<kind>.schema.json) — an Intent kind is "implemented"
+// exactly when its schema exists (§1.1).
 const (
 	IntentApplication = "Intent/Application"
+	IntentCertificate = "Intent/Certificate"
 )
 
 // onRemove lifecycle values (charter §2.4): what happens to compiled state

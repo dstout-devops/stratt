@@ -274,13 +274,27 @@ func Compile(ctx context.Context, s Store, maxDelta float64) (Plan, error) {
 		}
 		plan.Prunes = append(plan.Prunes, eb.Name)
 		if !declared[asg] {
-			// Withdrawn Assignment: onRemove=retain (v1) → orphan Finding.
-			detail, _ := json.Marshal(map[string]any{
+			// Withdrawn Assignment. Default onRemove=retain → an orphan Finding
+			// (abandoned state is never silent, §2.4/§4.3).
+			detail := map[string]any{
 				"reason": "assignment withdrawn; compiled state retained (onRemove=retain)",
-			})
+			}
+			// onRemove: remove (§2.4, ADR-0030) — consult the still-declared
+			// Intent + Blueprint to surface a revoke/decommission remediation on
+			// the orphan. It is a ref only: the operator launches the remove
+			// Workflow, never auto-run (§5 Flow 2, §1.8). If the Intent is also
+			// gone we cannot know its removal semantics → retain.
+			if in, err := s.GetIntent(ctx, eb.CompiledFrom.Intent); err == nil && in.OnRemove == types.OnRemoveRemove {
+				if bp, err := s.GetBlueprint(ctx, eb.CompiledFrom.Blueprint, eb.CompiledFrom.BlueprintVersion); err == nil && bp.RemoveWorkflow != "" {
+					detail["reason"] = "assignment withdrawn with onRemove=remove; launch the remove workflow to decommission (never auto-run, §5 Flow 2)"
+					detail["onRemove"] = types.OnRemoveRemove
+					detail["removeWorkflow"] = bp.RemoveWorkflow
+				}
+			}
+			d, _ := json.Marshal(detail)
 			plan.Orphans = append(plan.Orphans, Orphan{
 				Baseline: eb.Name, Target: "assignment:" + asg,
-				Severity: eb.Severity, Detail: detail,
+				Severity: eb.Severity, Detail: d,
 			})
 		}
 	}
@@ -325,6 +339,12 @@ func validateRefs(ctx context.Context, s Store, a types.Assignment) (types.Bluep
 				return types.Blueprint{}, types.Intent{}, fmt.Sprintf(
 					"assignment %s: blueprint route %d remediation workflow %q not found", a.Name, i, r.RemediationWorkflow)
 			}
+		}
+	}
+	if bp.RemoveWorkflow != "" {
+		if _, err := s.GetWorkflow(ctx, bp.RemoveWorkflow); err != nil {
+			return types.Blueprint{}, types.Intent{}, fmt.Sprintf(
+				"assignment %s: blueprint remove workflow %q not found", a.Name, bp.RemoveWorkflow)
 		}
 	}
 	return bp, intent, ""
@@ -464,8 +484,17 @@ func substituteExpectation(exp types.FacetExpectation, spec map[string]any) (typ
 	if exp.Contains, err = substituteRaw(exp.Contains, ns); err != nil {
 		return exp, err.Error()
 	}
-	if len(exp.Equals) == 0 && len(exp.Contains) == 0 {
-		return exp, "observe expectation requires equals or contains"
+	// NotBefore is a duration string (the renewal window) — substitute
+	// {{.spec.renewBefore}} explicitly (ADR-0030 threshold; ADR-0024 engine).
+	if exp.NotBefore != "" {
+		nb, err := template.Substitute(exp.NotBefore, ns)
+		if err != nil {
+			return exp, err.Error()
+		}
+		exp.NotBefore, _ = nb.(string)
+	}
+	if len(exp.Equals) == 0 && len(exp.Contains) == 0 && exp.NotBefore == "" {
+		return exp, "observe expectation requires equals, contains, or notBefore"
 	}
 	return exp, ""
 }

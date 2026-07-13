@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "stratt:contract:facets/cert.expiry:v1",
+  "title": "cert.expiry Facet",
+  "description": "Demanded by the cert-issuer Connector's Syncer (charter §2.1, §2.4, ADR-0030): the validity window of an issued X.509 certificate, projected from the CLM. The notAfter timestamp is the Baseline-side expiry-threshold check's subject (a Certificate Blueprint asserts it is at least renewBefore in the future). A Facet schema exists only when a shipping Contract demands it (§1.1).",
+  "type": "object",
+  "properties": {
+    "notBefore": { "type": "string", "format": "date-time" },
+    "notAfter": { "type": "string", "format": "date-time" }
+  },
+  "required": ["notAfter"],
+  "additionalProperties": false
+}

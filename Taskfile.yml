@@ -165,6 +165,11 @@ tasks:
     cmds:
       - deploy/dev/zitadel-bootstrap.sh
 
+  dev:openbao:bootstrap:
+    desc: Provision the dev CLM in OpenBao — PKI engine, root CA, role, demo certs (ADR-0030)
+    cmds:
+      - deploy/dev/openbao-bootstrap.sh
+
   dev:logs:
     desc: Tail dev substrate logs
     cmds:

@@ -808,7 +808,7 @@ export interface components {
              * @default ansible
              * @enum {string}
              */
-            actuator: "ansible" | "script" | "opentofu" | "mcp";
+            actuator: "ansible" | "script" | "opentofu" | "mcp" | "cert-issuer";
             /** @description Actuator-interpreted Step params (e.g. script source). */
             params?: Record<string, never>;
             /**
