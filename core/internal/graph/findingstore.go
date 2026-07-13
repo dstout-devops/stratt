@@ -32,6 +32,22 @@ type ObservationOutcome struct {
 	// Cleared counts pending Findings deleted by a clean observation before
 	// they ever fired — damping absorbed the flap (§4.3).
 	Cleared int `json:"cleared"`
+	// OpenedFindings identifies the Findings that TRANSITIONED to open in this
+	// pass — the outbound-notification trigger (ADR-0027). Exactly the newly
+	// fired ones (len == Opened), so a finding.open Notice fires on the
+	// pending→open transition, never on every re-observation of an already
+	// open Finding.
+	OpenedFindings []OpenedFinding `json:"openedFindings,omitempty"`
+}
+
+// OpenedFinding is the identity of a Finding that just fired — enough for a
+// Notice payload and the §1.8 descent (Finding → Baseline → target Entity).
+type OpenedFinding struct {
+	Baseline  string `json:"baseline"`
+	Target    string `json:"target"`
+	EntityID  string `json:"entityId,omitempty"`
+	Severity  string `json:"severity"`
+	Framework string `json:"framework,omitempty"`
 }
 
 // RecordBaselineObservations applies one check Run's observations to the
@@ -109,6 +125,10 @@ func (s *Store) RecordBaselineObservations(ctx context.Context, b types.Baseline
 			}
 			if status == types.FindingOpen {
 				out.Opened++
+				out.OpenedFindings = append(out.OpenedFindings, OpenedFinding{
+					Baseline: b.Name, Target: target, EntityID: o.EntityID,
+					Severity: b.Severity, Framework: b.Framework,
+				})
 			} else {
 				out.Pending++
 			}
@@ -129,6 +149,10 @@ func (s *Store) RecordBaselineObservations(ctx context.Context, b types.Baseline
 			}
 			if opens {
 				out.Opened++
+				out.OpenedFindings = append(out.OpenedFindings, OpenedFinding{
+					Baseline: b.Name, Target: target, EntityID: o.EntityID,
+					Severity: b.Severity, Framework: b.Framework,
+				})
 			} else if cur.status == types.FindingPending {
 				out.Pending++
 			}

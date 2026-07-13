@@ -308,9 +308,28 @@ func (a *Activities) MarkWorkflowRunRunning(ctx context.Context, id string) erro
 }
 
 // CreateGateRecord opens the pending approval row (idempotent per
-// (workflowRun, step) across activity retries).
+// (workflowRun, step) across activity retries) and emits a gate.pending Notice
+// so approvers are reached (ADR-0027). The gate id is stable across retries,
+// so NoticeHash dedups the publish.
 func (a *Activities) CreateGateRecord(ctx context.Context, workflowRunID, step string, approvers types.GateApprovers) (types.Gate, error) {
-	return a.Store.CreateGate(ctx, workflowRunID, step, approvers)
+	gate, err := a.Store.CreateGate(ctx, workflowRunID, step, approvers)
+	if err != nil {
+		return gate, err
+	}
+	n := types.Notice{Kind: types.NoticeGatePending, Subject: gate.ID, Payload: map[string]any{
+		"workflowRun": workflowRunID,
+		"step":        step,
+	}}
+	if len(approvers.Principals) > 0 {
+		n.Payload["approverPrincipals"] = approvers.Principals
+	}
+	if len(approvers.Teams) > 0 {
+		n.Payload["approverTeams"] = approvers.Teams
+	}
+	if err := a.Bus.PublishNotice(ctx, n); err != nil {
+		return gate, err
+	}
+	return gate, nil
 }
 
 // RecordGateDecision writes the terminal Gate state — approver identity and

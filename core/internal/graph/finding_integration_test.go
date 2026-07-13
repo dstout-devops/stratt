@@ -55,6 +55,15 @@ func TestFindingDampingImmediate(t *testing.T) {
 	if out.Opened != 1 || out.Pending != 0 {
 		t.Fatalf("want 1 opened, got %+v", out)
 	}
+	// The transition drives the finding.open Notice (ADR-0027): exactly the
+	// target that fired, stamped from the baseline.
+	if len(out.OpenedFindings) != 1 {
+		t.Fatalf("want 1 opened finding, got %+v", out.OpenedFindings)
+	}
+	if of := out.OpenedFindings[0]; of.Target != "vm-1" || of.Baseline != b.Name ||
+		of.EntityID != "ent-1" || of.Severity != types.SeverityWarning || of.Framework != "cis" {
+		t.Fatalf("opened finding not stamped: %+v", of)
+	}
 	f := liveFinding(t, store, b.Name, "vm-1")
 	if f == nil || f.Status != types.FindingOpen {
 		t.Fatalf("want open finding for vm-1, got %+v", f)
@@ -85,6 +94,10 @@ func TestFindingDampingThreshold(t *testing.T) {
 		if out.Opened != 0 || out.Pending != 1 {
 			t.Fatalf("observation %d: want pending, got %+v", i, out)
 		}
+		// Below the damping threshold: pending, so NO finding.open Notice yet.
+		if len(out.OpenedFindings) != 0 {
+			t.Fatalf("observation %d: pending must not report an opened finding: %+v", i, out.OpenedFindings)
+		}
 	}
 	f := liveFinding(t, store, b.Name, "vm-1")
 	if f == nil || f.Status != types.FindingPending || f.ConsecutiveDrifted != 2 {
@@ -98,6 +111,11 @@ func TestFindingDampingThreshold(t *testing.T) {
 	}
 	if out.Opened != 1 {
 		t.Fatalf("want opened, got %+v", out)
+	}
+	// The pending→open transition (not the earlier re-observations) is the one
+	// that reports an opened finding.
+	if len(out.OpenedFindings) != 1 || out.OpenedFindings[0].Target != "vm-1" {
+		t.Fatalf("threshold crossing must report exactly the opened finding: %+v", out.OpenedFindings)
 	}
 	if f = liveFinding(t, store, b.Name, "vm-1"); f == nil || f.Status != types.FindingOpen || f.ConsecutiveDrifted != 3 {
 		t.Fatalf("want open count 3, got %+v", f)
@@ -170,7 +188,7 @@ func TestFindingAbsentTargetNoTransition(t *testing.T) {
 	if err != nil {
 		t.Fatalf("record: %v", err)
 	}
-	if out != (ObservationOutcome{}) {
+	if out.Opened != 0 || out.Pending != 0 || out.Resolved != 0 || out.Cleared != 0 || len(out.OpenedFindings) != 0 {
 		t.Fatalf("absent target must transition nothing, got %+v", out)
 	}
 	if f := liveFinding(t, store, b.Name, "vm-1"); f == nil || f.Status != types.FindingOpen {

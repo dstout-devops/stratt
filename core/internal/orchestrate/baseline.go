@@ -147,7 +147,35 @@ func (a *Activities) EvaluateFacetBaseline(ctx context.Context, b types.Baseline
 		}
 		obs[e.ID] = o
 	}
-	return a.Store.RecordBaselineObservations(ctx, b, "", obs)
+	out, err := a.Store.RecordBaselineObservations(ctx, b, "", obs)
+	if err != nil {
+		return out, err
+	}
+	return out, a.emitFindingNotices(ctx, out)
+}
+
+// emitFindingNotices publishes one finding.open Notice per Finding that
+// transitioned to open in this pass (ADR-0027). Only the newly fired ones, so
+// re-observation of an already-open Finding stays quiet. NoticeHash dedups the
+// publish across activity retries.
+func (a *Activities) emitFindingNotices(ctx context.Context, out graph.ObservationOutcome) error {
+	for _, f := range out.OpenedFindings {
+		n := types.Notice{Kind: types.NoticeFindingOpen, Subject: f.Baseline + "/" + f.Target, Payload: map[string]any{
+			"baseline": f.Baseline,
+			"target":   f.Target,
+			"severity": f.Severity,
+		}}
+		if f.EntityID != "" {
+			n.Payload["entityId"] = f.EntityID
+		}
+		if f.Framework != "" {
+			n.Payload["framework"] = f.Framework
+		}
+		if err := a.Bus.PublishNotice(ctx, n); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // expectationUnmet returns "" when the Facet value satisfies the expectation,
@@ -253,7 +281,11 @@ func (a *Activities) LoadBaseline(ctx context.Context, name string) (types.Basel
 // Baseline's Findings (§4.3 flap damping): changed = drifted, ok = clean,
 // failed/unreachable = no observation.
 func (a *Activities) EvaluateBaseline(ctx context.Context, b types.Baseline, outcome RunOutcome) (graph.ObservationOutcome, error) {
-	return a.Store.RecordBaselineObservations(ctx, b, outcome.RunID, observationsFromOutcome(outcome))
+	out, err := a.Store.RecordBaselineObservations(ctx, b, outcome.RunID, observationsFromOutcome(outcome))
+	if err != nil {
+		return out, err
+	}
+	return out, a.emitFindingNotices(ctx, out)
 }
 
 // observationsFromOutcome maps per-target check statuses to observations:

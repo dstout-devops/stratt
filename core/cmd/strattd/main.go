@@ -27,6 +27,7 @@ import (
 	mcpact "github.com/dstout-devops/stratt/core/internal/actuators/mcp"
 	"github.com/dstout-devops/stratt/core/internal/actuators/opentofu"
 	"github.com/dstout-devops/stratt/core/internal/actuators/script"
+	"github.com/dstout-devops/stratt/core/internal/actuators/webhook"
 	"github.com/dstout-devops/stratt/core/internal/api"
 	"github.com/dstout-devops/stratt/core/internal/authz"
 	"github.com/dstout-devops/stratt/core/internal/baselines"
@@ -40,6 +41,7 @@ import (
 	"github.com/dstout-devops/stratt/core/internal/emitters"
 	"github.com/dstout-devops/stratt/core/internal/events"
 	"github.com/dstout-devops/stratt/core/internal/graph"
+	"github.com/dstout-devops/stratt/core/internal/notify"
 	"github.com/dstout-devops/stratt/core/internal/orchestrate"
 	"github.com/dstout-devops/stratt/core/internal/statebackend"
 	"github.com/dstout-devops/stratt/core/internal/triggerengine"
@@ -108,6 +110,9 @@ func run(ctx context.Context, log *slog.Logger) error {
 	}
 	defer bus.Close()
 	if err := bus.EnsureEmitterStream(ctx); err != nil {
+		return err
+	}
+	if err := bus.EnsureNoticeStream(ctx); err != nil {
 		return err
 	}
 	log.Info("event bus ready", "stream", events.StreamName)
@@ -187,7 +192,7 @@ func run(ctx context.Context, log *slog.Logger) error {
 	// In-tree Actuator registry (§2.3); out-of-tree Actuators arrive via the
 	// plugin Contract surfaces, not this map.
 	registry := map[string]actuators.Actuator{}
-	for _, a := range []actuators.Actuator{ansible.Actuator{}, script.Actuator{}} {
+	for _, a := range []actuators.Actuator{ansible.Actuator{}, script.Actuator{}, webhook.Actuator{}} {
 		registry[a.Name()] = a
 	}
 
@@ -407,6 +412,17 @@ func run(ctx context.Context, log *slog.Logger) error {
 	go func() {
 		if err := engine.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
 			log.Error("trigger engine stopped", "error", err)
+		}
+	}()
+
+	// ── notifier (ADR-0027: Notices × Subscriptions → webhook delivery) ──
+	// The outbound mirror of the trigger engine. Each delivery runs in a pod
+	// so the Sink's CredentialRef is injected at spawn (§2.5) — the daemon
+	// composes pod specs from pointers, never material.
+	notifier := &notify.Dispatcher{Store: store, Bus: bus, Dispatcher: dispatcher, Authz: authorizer, Log: log}
+	go func() {
+		if err := notifier.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
+			log.Error("notifier stopped", "error", err)
 		}
 	}()
 

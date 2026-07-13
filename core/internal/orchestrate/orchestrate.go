@@ -574,6 +574,48 @@ func (a *Activities) FinishRun(ctx context.Context, in RunInput, status types.Ru
 	if err := a.Store.SetRunStatus(ctx, in.RunID, status, summary); err != nil {
 		return err
 	}
+	// Outbound Notice on terminal failure/cancel (ADR-0027) — the outbound
+	// mirror of the inbound Emitter path. Notification deliveries are
+	// dispatched directly (never through this activity), so a failed delivery
+	// cannot loop back into a run.failed Notice. NoticeHash dedups the publish
+	// across FinishRun retries.
+	if kind := noticeKindForRun(status); kind != "" {
+		n := types.Notice{Kind: kind, Subject: in.RunID, Payload: map[string]any{
+			"status":   string(status),
+			"actuator": actuator,
+			"view":     in.ViewName,
+			"failed":   counts[actuators.StatusFailed] + counts[actuators.StatusUnreachable],
+			"targets":  len(result.PerTarget),
+		}}
+		if in.Trigger != "" {
+			n.Payload["trigger"] = in.Trigger
+		}
+		if in.Baseline != "" {
+			n.Payload["baseline"] = in.Baseline
+		}
+		if in.Principal != "" {
+			n.Payload["principal"] = in.Principal
+		}
+		if in.WorkflowRunID != "" {
+			n.Payload["workflowRun"] = in.WorkflowRunID
+			n.Payload["step"] = in.StepName
+		}
+		if err := a.Bus.PublishNotice(ctx, n); err != nil {
+			return err
+		}
+	}
 	// MsgID (runID/0/0) dedups the marker across FinishRun retries.
 	return a.Bus.Publish(ctx, types.RunEvent{RunID: in.RunID, Kind: "stream-end"})
+}
+
+// noticeKindForRun maps a terminal Run status to its outbound Notice kind
+// (ADR-0027); "" for non-notifiable terminal states (succeeded).
+func noticeKindForRun(s types.RunStatus) string {
+	switch s {
+	case types.RunFailed:
+		return types.NoticeRunFailed
+	case types.RunCanceled:
+		return types.NoticeRunCanceled
+	}
+	return ""
 }

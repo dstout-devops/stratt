@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "stratt:contract:actuators/webhook.input:v1",
+  "title": "webhook Step params",
+  "description": "Input Contract for the webhook Actuator (charter §2.3, ADR-0027) — the outbound notification transport, run in an execution pod so the credential is injected at spawn (§2.5). The delivery URL and any bearer token arrive as injected CredentialRef files (/runner/credentials/<ref>/url, /token), never as params. Hand-written — derivation ladder rung 1 (§2.2).",
+  "type": "object",
+  "required": ["body"],
+  "properties": {
+    "body": {
+      "type": "string",
+      "description": "Request body, already rendered (e.g. from a Notice)."
+    },
+    "method": {
+      "type": "string",
+      "enum": ["POST", "PUT"],
+      "description": "HTTP method (default POST)."
+    },
+    "headers": {
+      "type": "object",
+      "additionalProperties": { "type": "string" },
+      "description": "Non-secret static request headers (e.g. Content-Type). Secret headers come from the injected credential, never here."
+    }
+  },
+  "additionalProperties": false
+}

@@ -54,6 +54,8 @@ type Declarations struct {
 	Intents        []types.Intent        `json:"intents"`
 	Assignments    []types.Assignment    `json:"assignments"`
 	Blueprints     []types.Blueprint     `json:"blueprints"`
+	NotifySinks    []types.Sink          `json:"notifySinks"`
+	Subscriptions  []types.Subscription  `json:"subscriptions"`
 }
 
 // Declared kinds appearing in plans.
@@ -68,6 +70,8 @@ const (
 	KindIntent        = "intent"
 	KindAssignment    = "assignment"
 	KindBlueprint     = "blueprint"
+	KindNotifySink    = "notify-sink"
+	KindSubscription  = "subscription"
 )
 
 // Action is what reconciliation will do (or did) to one declared object.
@@ -208,6 +212,20 @@ func ParseDir(root string) (Declarations, error) {
 	}
 	out.Emitters = emitters
 	sort.Slice(out.Emitters, func(i, j int) bool { return out.Emitters[i].Name < out.Emitters[j].Name })
+
+	notifySinks, err := parseKind(filepath.Join(root, "notify-sinks"), true, parseNotifySinkFile)
+	if err != nil {
+		return out, err
+	}
+	out.NotifySinks = notifySinks
+	sort.Slice(out.NotifySinks, func(i, j int) bool { return out.NotifySinks[i].Name < out.NotifySinks[j].Name })
+
+	subscriptions, err := parseKind(filepath.Join(root, "subscriptions"), true, parseSubscriptionFile)
+	if err != nil {
+		return out, err
+	}
+	out.Subscriptions = subscriptions
+	sort.Slice(out.Subscriptions, func(i, j int) bool { return out.Subscriptions[i].Name < out.Subscriptions[j].Name })
 
 	baselines, err := parseKind(filepath.Join(root, "baselines"), true, parseBaselineFile)
 	if err != nil {
@@ -537,6 +555,114 @@ func ValidateEmitter(e types.Emitter) error {
 	}
 	if _, err := hex.DecodeString(e.TokenHash); err != nil {
 		return fmt.Errorf("emitter %s: tokenHash is not hex", e.Name)
+	}
+	return nil
+}
+
+// notifySinkFile is the notify-sinks/*.yaml shape (ADR-0027). No secret
+// material: the delivery url/token come from the bound CredentialRef, injected
+// into the delivery pod at spawn (§2.5).
+type notifySinkFile struct {
+	Name          string `yaml:"name"`
+	Kind          string `yaml:"kind"`
+	Principal     string `yaml:"principal"`
+	CredentialRef string `yaml:"credentialRef"`
+	Config        struct {
+		Method       string `yaml:"method"`
+		BodyTemplate string `yaml:"bodyTemplate"`
+	} `yaml:"config"`
+}
+
+func parseNotifySinkFile(path string, raw []byte) (string, types.Sink, error) {
+	var f notifySinkFile
+	dec := yaml.NewDecoder(strings.NewReader(string(raw)))
+	dec.KnownFields(true)
+	if err := dec.Decode(&f); err != nil {
+		return "", types.Sink{}, fmt.Errorf("desiredstate: %s: %w", path, err)
+	}
+	s := types.Sink{Name: f.Name, Kind: f.Kind, Principal: f.Principal, CredentialRef: f.CredentialRef,
+		Config: types.SinkConfig{Method: f.Config.Method, BodyTemplate: f.Config.BodyTemplate}}
+	if err := ValidateNotifySink(s); err != nil {
+		return "", types.Sink{}, fmt.Errorf("desiredstate: %s: %w", path, err)
+	}
+	return s.Name, s, nil
+}
+
+// ValidateNotifySink checks one Sink declaration. Exported for API reuse.
+func ValidateNotifySink(s types.Sink) error {
+	if s.Name == "" {
+		return fmt.Errorf("notify sink requires a name")
+	}
+	if s.Kind != types.SinkWebhook {
+		return fmt.Errorf("notify sink %s: unknown kind %q (webhook)", s.Name, s.Kind)
+	}
+	if s.CredentialRef == "" {
+		return fmt.Errorf("notify sink %s: credentialRef is required (the delivery url/token are injected from it, never inline — §2.5)", s.Name)
+	}
+	if s.Principal == "" {
+		return fmt.Errorf("notify sink %s: principal is required (it must hold `use` on the credentialRef — the delivery credential check, §2.5/§1.6)", s.Name)
+	}
+	return nil
+}
+
+// subscriptionFile is the subscriptions/*.yaml shape (ADR-0027).
+type subscriptionFile struct {
+	Name            string   `yaml:"name"`
+	On              []string `yaml:"on"`
+	Match           string   `yaml:"match"`
+	Sink            string   `yaml:"sink"`
+	CooldownSeconds int      `yaml:"cooldownSeconds"`
+}
+
+func parseSubscriptionFile(path string, raw []byte) (string, types.Subscription, error) {
+	var f subscriptionFile
+	dec := yaml.NewDecoder(strings.NewReader(string(raw)))
+	dec.KnownFields(true)
+	if err := dec.Decode(&f); err != nil {
+		return "", types.Subscription{}, fmt.Errorf("desiredstate: %s: %w", path, err)
+	}
+	sub := types.Subscription{
+		Name: f.Name, On: f.On, Match: f.Match, Sink: f.Sink, CooldownSeconds: f.CooldownSeconds,
+	}
+	if err := ValidateSubscription(sub); err != nil {
+		return "", types.Subscription{}, fmt.Errorf("desiredstate: %s: %w", path, err)
+	}
+	return sub.Name, sub, nil
+}
+
+// noticeKinds is the closed set of notice kinds a Subscription may listen for
+// (ADR-0027) — an unknown kind is a declaration error, never a silent no-op.
+var noticeKinds = map[string]bool{
+	types.NoticeRunFailed:   true,
+	types.NoticeRunCanceled: true,
+	types.NoticeFindingOpen: true,
+	types.NoticeGatePending: true,
+}
+
+// ValidateSubscription checks one Subscription declaration, including that its
+// CEL match compiles (fail the file, never silently at notice time — §1.8).
+func ValidateSubscription(sub types.Subscription) error {
+	if sub.Name == "" {
+		return fmt.Errorf("subscription requires a name")
+	}
+	if sub.Sink == "" {
+		return fmt.Errorf("subscription %s: sink is required", sub.Name)
+	}
+	if len(sub.On) == 0 {
+		return fmt.Errorf("subscription %s: on must list at least one notice kind", sub.Name)
+	}
+	for _, k := range sub.On {
+		if !noticeKinds[k] {
+			return fmt.Errorf("subscription %s: unknown notice kind %q (run.failed, run.canceled, finding.open, gate.pending)", sub.Name, k)
+		}
+	}
+	if sub.CooldownSeconds < 0 {
+		return fmt.Errorf("subscription %s: cooldownSeconds must be >= 0", sub.Name)
+	}
+	if sub.Match != "" {
+		if _, err := rules.Compile(sub.Match); err != nil {
+			return fmt.Errorf("subscription %s: match: %w", sub.Name, err)
+		}
 	}
 	return nil
 }
@@ -1157,6 +1283,16 @@ func ComputePlan(ctx context.Context, store *graph.Store, decls Declarations) (P
 		return Plan{}, err
 	}
 	plan.Entries = append(plan.Entries, emPlan.Entries...)
+	nsPlan, err := computeNotifySinkPlan(ctx, store, decls.NotifySinks)
+	if err != nil {
+		return Plan{}, err
+	}
+	plan.Entries = append(plan.Entries, nsPlan.Entries...)
+	subPlan, err := computeSubscriptionPlan(ctx, store, decls.Subscriptions)
+	if err != nil {
+		return Plan{}, err
+	}
+	plan.Entries = append(plan.Entries, subPlan.Entries...)
 	blPlan, err := computeBaselinePlan(ctx, store, decls.Baselines)
 	if err != nil {
 		return Plan{}, err
@@ -1435,6 +1571,74 @@ func computeEmitterPlan(ctx context.Context, store *graph.Store, decls []types.E
 	return plan, nil
 }
 
+// computeNotifySinkPlan diffs declared Sinks (CaC-only, ADR-0027).
+func computeNotifySinkPlan(ctx context.Context, store *graph.Store, decls []types.Sink) (Plan, error) {
+	current, err := store.ListNotifySinks(ctx)
+	if err != nil {
+		return Plan{}, err
+	}
+	byName := map[string]types.Sink{}
+	for _, s := range current {
+		byName[s.Name] = s
+	}
+	var plan Plan
+	declared := map[string]bool{}
+	for _, d := range decls {
+		declared[d.Name] = true
+		entry := PlanEntry{Kind: KindNotifySink, Name: d.Name}
+		cur, exists := byName[d.Name]
+		switch {
+		case !exists:
+			entry.Action = ActionCreate
+		case declDocsEqual(cur, d):
+			entry.Action = ActionNoop
+		default:
+			entry.Action = ActionUpdate
+		}
+		plan.Entries = append(plan.Entries, entry)
+	}
+	for _, s := range current {
+		if !declared[s.Name] {
+			plan.Entries = append(plan.Entries, PlanEntry{Kind: KindNotifySink, Name: s.Name, Action: ActionDelete})
+		}
+	}
+	return plan, nil
+}
+
+// computeSubscriptionPlan diffs declared Subscriptions (CaC-only, ADR-0027).
+func computeSubscriptionPlan(ctx context.Context, store *graph.Store, decls []types.Subscription) (Plan, error) {
+	current, err := store.ListSubscriptions(ctx)
+	if err != nil {
+		return Plan{}, err
+	}
+	byName := map[string]types.Subscription{}
+	for _, s := range current {
+		byName[s.Name] = s
+	}
+	var plan Plan
+	declared := map[string]bool{}
+	for _, d := range decls {
+		declared[d.Name] = true
+		entry := PlanEntry{Kind: KindSubscription, Name: d.Name}
+		cur, exists := byName[d.Name]
+		switch {
+		case !exists:
+			entry.Action = ActionCreate
+		case declDocsEqual(cur, d):
+			entry.Action = ActionNoop
+		default:
+			entry.Action = ActionUpdate
+		}
+		plan.Entries = append(plan.Entries, entry)
+	}
+	for _, s := range current {
+		if !declared[s.Name] {
+			plan.Entries = append(plan.Entries, PlanEntry{Kind: KindSubscription, Name: s.Name, Action: ActionDelete})
+		}
+	}
+	return plan, nil
+}
+
 // computeBaselinePlan diffs declared Baselines (CaC-only, ADR-0019 — same
 // posture as Triggers: no adopt case, semantic JSON equality).
 func computeBaselinePlan(ctx context.Context, store *graph.Store, decls []types.Baseline) (Plan, error) {
@@ -1628,6 +1832,14 @@ func Apply(ctx context.Context, store *graph.Store, decls Declarations) (Plan, e
 	for _, d := range decls.Baselines {
 		blByName[d.Name] = d
 	}
+	sinkByName := map[string]types.Sink{}
+	for _, d := range decls.NotifySinks {
+		sinkByName[d.Name] = d
+	}
+	subByName := map[string]types.Subscription{}
+	for _, d := range decls.Subscriptions {
+		subByName[d.Name] = d
+	}
 	msByName := map[string]types.MCPServer{}
 	for _, d := range decls.MCPServers {
 		msByName[d.Name] = d
@@ -1671,6 +1883,14 @@ func Apply(ctx context.Context, store *graph.Store, decls Declarations) (Plan, e
 			err = store.DeleteEmitter(ctx, e.Name)
 		case e.Kind == KindEmitter:
 			err = store.UpsertEmitter(ctx, emByName[e.Name])
+		case e.Kind == KindNotifySink && e.Action == ActionDelete:
+			err = store.DeleteNotifySink(ctx, e.Name)
+		case e.Kind == KindNotifySink:
+			err = store.UpsertNotifySink(ctx, sinkByName[e.Name])
+		case e.Kind == KindSubscription && e.Action == ActionDelete:
+			err = store.DeleteSubscription(ctx, e.Name)
+		case e.Kind == KindSubscription:
+			err = store.UpsertSubscription(ctx, subByName[e.Name])
 		case e.Kind == KindBaseline && e.Action == ActionDelete:
 			err = store.DeleteBaseline(ctx, e.Name)
 		case e.Kind == KindBaseline:
