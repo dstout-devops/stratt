@@ -897,20 +897,27 @@ components:
     StartRun:
       type: object
       description: >
-        One Step against a View (charter §2.3: Step = Actuator + content +
-        params). Params are interpreted by the named Actuator; their pinned
-        JSON-Schema Contract documents land with the Phase-2 Contract
-        machinery.
-      required: [viewName]
+        One Step: an Actuator against a View (charter §2.3: Actuator + content +
+        params), or a targetless Connector Action (Action + params, ADR-0031).
+        Set viewName+actuator OR action, not both.
       properties:
         viewName: { type: string }
         actuator:
           type: string
-          enum: [ansible, script, opentofu, mcp, cert-issuer]
+          enum: [ansible, script, opentofu, mcp]
           default: ansible
+        action:
+          type: string
+          description: >
+            A Connector Action (namespaced, e.g. certissuer/revoke). When set,
+            this is a targetless typed operation — viewName/actuator are ignored
+            and the CredentialRef `use` grant is the authz gate, not runner-on-View.
+        dryRun:
+          type: boolean
+          description: Ask a DryRunnable Action to plan without side effects.
         params:
           type: object
-          description: Actuator-interpreted Step params (e.g. script source).
+          description: Actuator- or Action-interpreted Step params.
         slices:
           type: integer
           format: int64
@@ -955,6 +962,11 @@ components:
         stepName:
           type: string
           description: The Step within that Workflow.
+        outputs:
+          type: object
+          description: >
+            An Action Run's typed output values, validated against the Action's
+            output Contract (charter §2.2, ADR-0031); absent for Actuator Runs.
         startedAt: { type: string, format: date-time }
         finishedAt: { type: string, format: date-time }
     Emitter:

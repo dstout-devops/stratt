@@ -62,6 +62,9 @@ const (
 type stepResult struct {
 	Name   string
 	Status string
+	// Outputs are an Action Step's typed outputs (ADR-0031), accumulated into
+	// the DAG's steps namespace for downstream {{.steps.<name>.outputs.x}} binds.
+	Outputs json.RawMessage
 }
 
 // RunDAG executes a declared Workflow: Steps launch as soon as their needs
@@ -101,20 +104,30 @@ func RunDAG(ctx workflow.Context, in DAGInput) error {
 	for _, s := range spec.Steps {
 		state[s.Name] = ""
 	}
+	// stepOutputs accumulates completed Action Steps' typed outputs, the source
+	// of the {{.steps.<name>.outputs.x}} binding namespace (ADR-0031). Written
+	// only on the main workflow goroutine (on done.Receive), so it is safe to
+	// read when launching a downstream Step.
+	stepOutputs := map[string]json.RawMessage{}
 
 	done := workflow.NewChannel(ctx)
 	running := 0
 	launch := func(step types.Step) {
 		state[step.Name] = "running"
 		running++
+		boundOutputs := copyOutputs(stepOutputs) // snapshot for this goroutine
 		workflow.Go(ctx, func(gctx workflow.Context) {
 			var status string
-			if step.Gate != nil {
+			var outputs json.RawMessage
+			switch {
+			case step.Gate != nil:
 				status = runGateStep(gctx, a, in, step)
-			} else {
-				status = runActuationStep(gctx, in, step)
+			case step.Action != "":
+				status, outputs = runActionStep(gctx, in, step, boundOutputs)
+			default:
+				status = runActuationStep(gctx, in, step, boundOutputs)
 			}
-			done.Send(gctx, stepResult{Name: step.Name, Status: status})
+			done.Send(gctx, stepResult{Name: step.Name, Status: status, Outputs: outputs})
 		})
 	}
 
@@ -147,6 +160,9 @@ func RunDAG(ctx workflow.Context, in DAGInput) error {
 		done.Receive(ctx, &r)
 		running--
 		state[r.Name] = r.Status
+		if len(r.Outputs) > 0 {
+			stepOutputs[r.Name] = r.Outputs
+		}
 		schedule()
 	}
 
@@ -188,17 +204,27 @@ func stepEligible(s types.Step, state map[string]string) (ready, met bool) {
 	}
 }
 
+// copyOutputs snapshots the accumulated step-outputs map so a launched Step's
+// goroutine binds against a stable view (the map keeps mutating as later Steps
+// complete). Determinism-safe: it copies workflow state, no I/O.
+func copyOutputs(m map[string]json.RawMessage) map[string]json.RawMessage {
+	out := make(map[string]json.RawMessage, len(m))
+	for k, v := range m {
+		out[k] = v
+	}
+	return out
+}
+
 // runActuationStep executes one Step as a child RunAgainstView workflow.
 // EnsureRun (slice 6) creates the Run row, stamping WorkflowRunID/StepName.
-func runActuationStep(ctx workflow.Context, in DAGInput, step types.Step) string {
-	// Resolve the Step's {{.event.x}} param bindings against the firing
-	// event and re-validate the result against the Actuator Contract, in an
-	// activity (I/O-free but not workflow-deterministic; ADR-0024). A binding
-	// that references a missing field or resolves to a contract violation
-	// fails the Step visibly (§1.8), never reaching the Actuator.
+func runActuationStep(ctx workflow.Context, in DAGInput, step types.Step, steps map[string]json.RawMessage) string {
+	// Resolve the Step's {{.event.x}}/{{.steps.x}} param bindings and re-validate
+	// against the Actuator Contract in an activity (ADR-0024/0031). A binding to
+	// a missing field or a contract violation fails the Step visibly (§1.8),
+	// never reaching the Actuator.
 	var params json.RawMessage
 	var a *Activities
-	if err := workflow.ExecuteActivity(ctx, a.ResolveStepParams, step.Actuator, step.Params, in.Event).Get(ctx, &params); err != nil {
+	if err := workflow.ExecuteActivity(ctx, a.ResolveStepParams, step.Actuator, step.Params, in.Event, steps).Get(ctx, &params); err != nil {
 		return stepFailed
 	}
 	cctx := workflow.WithChildOptions(ctx, workflow.ChildWorkflowOptions{
@@ -218,6 +244,33 @@ func runActuationStep(ctx workflow.Context, in DAGInput, step types.Step) string
 		return stepFailed
 	}
 	return stepSucceeded
+}
+
+// runActionStep executes one Step as a child RunAction workflow (§2.2,
+// ADR-0031) and returns its typed outputs for downstream binding.
+func runActionStep(ctx workflow.Context, in DAGInput, step types.Step, steps map[string]json.RawMessage) (string, json.RawMessage) {
+	var params json.RawMessage
+	var a *Activities
+	if err := workflow.ExecuteActivity(ctx, a.ResolveActionStepParams, step.Action, step.Params, in.Event, steps).Get(ctx, &params); err != nil {
+		return stepFailed, nil
+	}
+	cctx := workflow.WithChildOptions(ctx, workflow.ChildWorkflowOptions{
+		WorkflowID: ChildRunID(in.WorkflowRunID, step.Name),
+	})
+	var outcome RunOutcome
+	err := workflow.ExecuteChildWorkflow(cctx, RunAction, RunInput{
+		Action:         step.Action,
+		DryRun:         step.DryRun,
+		Params:         params,
+		CredentialRefs: step.CredentialRefs,
+		Principal:      in.Principal,
+		WorkflowRunID:  in.WorkflowRunID,
+		StepName:       step.Name,
+	}).Get(cctx, &outcome)
+	if err != nil {
+		return stepFailed, nil
+	}
+	return stepSucceeded, outcome.Outputs
 }
 
 // runGateStep opens a Gate row and waits for an authorized decision signal
@@ -277,16 +330,40 @@ func (a *Activities) EnsureWorkflowRun(ctx context.Context, in DAGInput, tempora
 	return wr.ID, nil
 }
 
-// ResolveStepParams substitutes a Step's {{.event.x}} bindings against the
-// firing event, then re-validates the resolved params against the Actuator's
-// input Contract before dispatch (ADR-0024). Returns the resolved params as
-// the JSON the Actuator receives.
-func (a *Activities) ResolveStepParams(ctx context.Context, actuator string, params map[string]any, event map[string]any) (json.RawMessage, error) {
+// stepsNamespace turns accumulated Step outputs (stepName → outputs JSON) into
+// the template namespace backing {{.steps.<name>.outputs.<field>}} (ADR-0031).
+func stepsNamespace(steps map[string]json.RawMessage) map[string]any {
+	ns := make(map[string]any, len(steps))
+	for name, raw := range steps {
+		var out any
+		if json.Unmarshal(raw, &out) == nil {
+			ns[name] = map[string]any{"outputs": out}
+		}
+	}
+	return ns
+}
+
+// ResolveStepParams substitutes a Step's {{.event.x}} / {{.steps.x}} bindings
+// (the firing event and prior Steps' outputs), then re-validates the resolved
+// params against the Actuator's input Contract before dispatch (ADR-0024/0031).
+func (a *Activities) ResolveStepParams(ctx context.Context, actuator string, params map[string]any, event map[string]any, steps map[string]json.RawMessage) (json.RawMessage, error) {
 	name := actuator
 	if name == "" {
 		name = "ansible"
 	}
-	raw, err := contract.ResolveActuatorParams(name, params, template.Namespaces{"event": event})
+	ns := template.Namespaces{"event": event, "steps": stepsNamespace(steps)}
+	raw, err := contract.ResolveActuatorParams(name, params, ns)
+	if err != nil {
+		return nil, temporal.NewNonRetryableApplicationError(err.Error(), "InvalidStepParams", err)
+	}
+	return raw, nil
+}
+
+// ResolveActionStepParams is the Action counterpart: substitute event/steps
+// bindings and re-validate against the Action's input Contract (§2.2, ADR-0031).
+func (a *Activities) ResolveActionStepParams(ctx context.Context, action string, params map[string]any, event map[string]any, steps map[string]json.RawMessage) (json.RawMessage, error) {
+	ns := template.Namespaces{"event": event, "steps": stepsNamespace(steps)}
+	raw, err := contract.ResolveActionParams(action, params, ns)
 	if err != nil {
 		return nil, temporal.NewNonRetryableApplicationError(err.Error(), "InvalidStepParams", err)
 	}

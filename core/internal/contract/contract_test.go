@@ -68,8 +68,8 @@ func TestPinsAreStable(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(all) != 15 {
-		t.Fatalf("expected 15 embedded documents, got %d", len(all))
+	if len(all) != 22 {
+		t.Fatalf("expected 22 embedded documents, got %d", len(all))
 	}
 	versions := map[string]int{}
 	for _, c := range all {
@@ -91,5 +91,30 @@ func TestPinsAreStable(t *testing.T) {
 		if all[i].Hash != again[i].Hash {
 			t.Fatal("hashes must be deterministic")
 		}
+	}
+}
+
+// TestActionContracts covers the Action input/output validation direction
+// (§2.2, ADR-0031) — the direction that distinguishes an Action from an Actuator.
+func TestActionContracts(t *testing.T) {
+	// Input: a valid revoke; a missing required field; an unknown action.
+	if err := ValidateActionInput("certissuer/revoke", []byte(`{"addr":"http://x","serial":"a:b"}`)); err != nil {
+		t.Fatalf("valid revoke input: %v", err)
+	}
+	if err := ValidateActionInput("certissuer/revoke", []byte(`{"addr":"http://x"}`)); err == nil {
+		t.Fatal("revoke input missing serial must be rejected")
+	}
+	if err := ValidateActionInput("certissuer/nope", []byte(`{}`)); err == nil {
+		t.Fatal("an uncontracted action must be refused")
+	}
+	// Output: a valid issue output; a bad one (missing serial) rejected.
+	if err := ValidateActionOutput("certissuer/issue", []byte(`{"serial":"aa:bb"}`)); err != nil {
+		t.Fatalf("valid issue output: %v", err)
+	}
+	if err := ValidateActionOutput("certissuer/issue", []byte(`{"notAfter":"x"}`)); err == nil {
+		t.Fatal("issue output missing serial must fail validation (§1.8)")
+	}
+	if err := ValidateActionOutput("awsec2/create-vm", []byte(`{"instanceId":"i-1","privateIp":"10.0.0.1"}`)); err != nil {
+		t.Fatalf("valid create-vm output: %v", err)
 	}
 }

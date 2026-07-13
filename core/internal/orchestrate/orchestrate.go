@@ -17,6 +17,7 @@ import (
 	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/workflow"
 
+	"github.com/dstout-devops/stratt/core/internal/actions"
 	"github.com/dstout-devops/stratt/core/internal/actuators"
 	mcpact "github.com/dstout-devops/stratt/core/internal/actuators/mcp"
 	"github.com/dstout-devops/stratt/core/internal/authz"
@@ -41,7 +42,13 @@ type RunInput struct {
 	RunID    string
 	ViewName string
 	Actuator string
-	Params   json.RawMessage
+	// Action names a Connector Action for a targetless typed operation (§2.2,
+	// ADR-0031). Mutually exclusive with Actuator/ViewName — set means this Run
+	// executes via RunAction, not RunAgainstView.
+	Action string
+	// DryRun asks a DryRunnable Action to plan without side effects (§2.2).
+	DryRun bool
+	Params json.RawMessage
 	// ViewParams binds a parametrized View's {{.param.x}} placeholders at
 	// launch (ADR-0024) — resolved by ResolveTargets before selection.
 	ViewParams map[string]any
@@ -105,6 +112,10 @@ type RunOutcome struct {
 	// Drift is the per-target observed-vs-expected fragments (capped,
 	// redacted upstream).
 	Drift map[string][]json.RawMessage
+	// Outputs are an Action's typed output VALUES (ADR-0031), validated against
+	// its output Contract — returned so a DAG runner can bind them into a
+	// downstream Step ({{.steps.<name>.outputs.<field>}}). Empty for Actuators.
+	Outputs json.RawMessage
 }
 
 // RunAgainstView is the Phase-0 Workflow. Every state transition is a
@@ -227,6 +238,9 @@ type Activities struct {
 	Authz      authz.Authorizer
 	// Actuators is the registry of in-tree Actuators by name (§2.3).
 	Actuators map[string]actuators.Actuator
+	// Actions is the registry of in-tree Connector Actions by namespaced name
+	// (§2.2, ADR-0031) — the targetless typed-operation seam.
+	Actions actions.Registry
 	// Evidence seals Finding audit bundles into the object store (§2.4,
 	// ADR-0029). Nil when no object store is configured — Findings then open
 	// unsealed (a logged no-op), like the opentofu actuator is gated on a state
@@ -586,6 +600,15 @@ func (a *Activities) FinishRun(ctx context.Context, in RunInput, status types.Ru
 		"failed":         counts[actuators.StatusFailed],
 		"unreachable":    counts[actuators.StatusUnreachable],
 		"spawnLatencyMs": result.SpawnLatency.Milliseconds(), // slowest slice
+	}
+	if in.Action != "" {
+		// An Action Run is a targetless typed operation (§2.2) — record the
+		// Action (and dry-run posture) instead of a misleading actuator default.
+		delete(summary, "actuator")
+		summary["action"] = in.Action
+		if in.DryRun {
+			summary["dryRun"] = true
+		}
 	}
 	// Audit (§1.8, §2.5): who launched, with which credential pointers —
 	// names only; material has no representation anywhere in the platform.

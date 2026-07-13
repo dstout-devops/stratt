@@ -72,6 +72,14 @@ type CredentialMount struct {
 	Injection []types.CredentialInjection
 }
 
+// Interpreter turns a pod's stdout lines into task events + results. Both
+// actuators.Actuator and actions.Action satisfy it, so the dispatcher serves
+// Actuator tool-content and Action typed-operations through one pod path
+// (§1.4 — no parallel execution stack; ADR-0031).
+type Interpreter interface {
+	Interpret(line []byte) (actuators.Interpreted, bool)
+}
+
 // Result summarizes one Job execution — per-target outcomes plus the facts
 // each target reported (to project back with Run provenance, §8).
 type Result struct {
@@ -88,6 +96,9 @@ type Result struct {
 	// OutputsContract is the Step's tool-derived outputs schema, when the
 	// tool emitted one (§2.2 rung 2).
 	OutputsContract json.RawMessage
+	// Outputs are an Action's typed output VALUES (ADR-0031), validated against
+	// its output Contract and captured on the Run for cross-Step binding.
+	Outputs json.RawMessage
 	// Drift accumulates observed-vs-expected fragments per target from a
 	// check-mode execution (ADR-0019) — redacted upstream, size-capped here
 	// with a visible truncation marker (§1.8: truncation is never silent).
@@ -119,7 +130,7 @@ func hb(f func()) {
 	}
 }
 
-func (d *Dispatcher) Run(ctx context.Context, runID string, slice int, spec actuators.JobSpec, act actuators.Actuator, creds []CredentialMount, heartbeat func()) (*Result, error) {
+func (d *Dispatcher) Run(ctx context.Context, runID string, slice int, spec actuators.JobSpec, act Interpreter, creds []CredentialMount, heartbeat func()) (*Result, error) {
 	// Full Run id + slice index: the name keys ConfigMap and Job, and
 	// AlreadyExists is treated as adoption — a truncated id would let two
 	// Runs (or two slices) adopt each other's execution (ADR-0008 review).
@@ -423,7 +434,7 @@ func (u unclaimedRing) len() int { return len(u.lines) }
 // publish them as the §1.8 diagnostic floor once the Job's verdict is known.
 // The Run-level stream-end marker is published by the Workflow once every
 // slice has finished.
-func (d *Dispatcher) followLogs(ctx context.Context, runID string, slice int, pod string, act actuators.Actuator, res *Result, heartbeat func()) (unclaimedRing, int, error) {
+func (d *Dispatcher) followLogs(ctx context.Context, runID string, slice int, pod string, act Interpreter, res *Result, heartbeat func()) (unclaimedRing, int, error) {
 	var unclaimed unclaimedRing
 	req := d.client.CoreV1().Pods(d.cfg.Namespace).GetLogs(pod, &corev1.PodLogOptions{Follow: true})
 	stream, err := req.Stream(ctx)
@@ -480,6 +491,9 @@ func (d *Dispatcher) followLogs(ctx context.Context, runID string, slice int, po
 		}
 		if len(iv.OutputsContract) > 0 {
 			res.OutputsContract = iv.OutputsContract
+		}
+		if len(iv.Outputs) > 0 {
+			res.Outputs = iv.Outputs
 		}
 		if len(iv.MCPTools) > 0 {
 			res.MCPTools = append(res.MCPTools, iv.MCPTools...)

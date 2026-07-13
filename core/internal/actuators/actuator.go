@@ -86,6 +86,11 @@ type Interpreted struct {
 	// OutputsContract is a tool-derived (rung-2) schema document for the
 	// Step's outputs, when the event carries one (§2.2).
 	OutputsContract json.RawMessage
+	// Outputs are the typed output VALUES an Action produced (§2.2: an Action
+	// declares an output Contract). Validated against actions/<name>.output and
+	// captured on the Run for cross-Step binding (ADR-0031). Actuators leave it
+	// nil — output values are the Action seam's defining feature.
+	Outputs json.RawMessage
 	// Drift is one observed-vs-expected fragment for Event.Target carried by
 	// this event (a check-mode task diff, a planned resource change) —
 	// already redacted upstream. The dispatcher accumulates fragments per

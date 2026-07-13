@@ -1,6 +1,9 @@
 package types
 
-import "time"
+import (
+	"encoding/json"
+	"time"
+)
 
 // RunStatus is the lifecycle state of a Run.
 type RunStatus string
@@ -40,6 +43,10 @@ type Run struct {
 	StepName      string     `json:"stepName,omitempty"`
 	StartedAt     time.Time  `json:"startedAt"`
 	FinishedAt    *time.Time `json:"finishedAt,omitempty"`
+	// Outputs are an Action Run's typed output VALUES (§2.2, ADR-0031),
+	// validated against the Action's output Contract and available for
+	// cross-Step binding. Nil for Actuator Runs.
+	Outputs json.RawMessage `json:"outputs,omitempty"`
 }
 
 // RunEvent is one task event in a Run's stream — the floor of the §1.8

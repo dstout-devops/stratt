@@ -1099,6 +1099,24 @@ func validateParamsContract(actuator string, params map[string]any) error {
 	return contract.ValidateActuatorParams(name, raw)
 }
 
+// validateActionParamsContract checks an Action Step's params against the
+// Action's input Contract (ADR-0031). Template-carrying params ({{.steps.x}} /
+// {{.event.x}}) are validated at LAUNCH against resolved values, skipped here.
+func validateActionParamsContract(action string, params map[string]any) error {
+	if template.Has(params) {
+		return nil
+	}
+	raw := json.RawMessage(`{}`)
+	if params != nil {
+		b, err := json.Marshal(params)
+		if err != nil {
+			return fmt.Errorf("params: %w", err)
+		}
+		raw = b
+	}
+	return contract.ValidateActionInput(action, raw)
+}
+
 // checkTemplateNamespaces rejects a declaration whose bindings reference a
 // namespace the context does not provide (ADR-0024): e.g. {{.event.x}} on a
 // schedule Trigger, or {{.spec.x}} anywhere outside the compiler.
@@ -1130,6 +1148,8 @@ type stepYAML struct {
 	Gate           *gateYAML      `yaml:"gate"`
 	ViewName       string         `yaml:"viewName"`
 	Actuator       string         `yaml:"actuator"`
+	Action         string         `yaml:"action"`
+	DryRun         bool           `yaml:"dryRun"`
 	Params         map[string]any `yaml:"params"`
 	Slices         int            `yaml:"slices"`
 	CredentialRefs []string       `yaml:"credentialRefs"`
@@ -1153,7 +1173,8 @@ func parseWorkflowFile(path string, raw []byte) (string, types.Workflow, error) 
 	for _, s := range f.Steps {
 		step := types.Step{
 			Name: s.Name, Needs: s.Needs, When: s.When,
-			ViewName: s.ViewName, Actuator: s.Actuator, Params: s.Params,
+			ViewName: s.ViewName, Actuator: s.Actuator,
+			Action: s.Action, DryRun: s.DryRun, Params: s.Params,
 			Slices: s.Slices, CredentialRefs: s.CredentialRefs,
 		}
 		if s.Gate != nil {
@@ -1196,12 +1217,17 @@ func ValidateWorkflow(w types.Workflow) error {
 		if s.When != "" && s.When != types.WhenSuccess && len(s.Needs) == 0 {
 			return fmt.Errorf("workflow %s: step %s: when %s requires needs", w.Name, s.Name, s.When)
 		}
+		// A Step is exactly one of three shapes (§2.3, ADR-0031): a Gate, an
+		// Action (targetless typed operation), or an Actuation (Actuator+View).
 		isGate := s.Gate != nil
-		isActuation := s.ViewName != "" || s.Actuator != "" || s.Params != nil || len(s.CredentialRefs) > 0 || s.Slices != 0
+		isAction := s.Action != ""
+		isActuation := s.ViewName != "" || s.Actuator != "" || s.Slices != 0
 		switch {
-		case isGate && isActuation:
-			return fmt.Errorf("workflow %s: step %s: a step is a gate or an actuation, not both", w.Name, s.Name)
-		case !isGate && s.ViewName == "":
+		case isGate && (isAction || isActuation):
+			return fmt.Errorf("workflow %s: step %s: a step is a gate, an action, or an actuation — not multiple", w.Name, s.Name)
+		case isAction && isActuation:
+			return fmt.Errorf("workflow %s: step %s: a step is an action or an actuation, not both (actions are targetless — no viewName/actuator/slices)", w.Name, s.Name)
+		case !isGate && !isAction && s.ViewName == "":
 			return fmt.Errorf("workflow %s: step %s: actuation step requires viewName", w.Name, s.Name)
 		case isGate && len(s.Gate.Approvers.Principals) == 0 && len(s.Gate.Approvers.Teams) == 0:
 			return fmt.Errorf("workflow %s: step %s: gate requires approvers (principals and/or teams)", w.Name, s.Name)
@@ -1210,15 +1236,25 @@ func ValidateWorkflow(w types.Workflow) error {
 		case !isGate && s.Slices < 0:
 			return fmt.Errorf("workflow %s: step %s: slices must be >= 0", w.Name, s.Name)
 		}
-		if !isGate {
+		// Params/CredentialRefs may bind the event namespace (firing Emitter,
+		// ADR-0024) and the steps namespace (a prior Step's outputs, ADR-0031),
+		// both resolved at launch by ResolveStepParams.
+		bindable := map[string]bool{"event": true, "steps": true}
+		switch {
+		case isAction:
+			if err := validateActionParamsContract(s.Action, s.Params); err != nil {
+				return fmt.Errorf("workflow %s: step %s: %w", w.Name, s.Name, err)
+			}
+			if err := checkTemplateNamespaces(
+				fmt.Sprintf("workflow %s step %s", w.Name, s.Name), bindable, s.Params); err != nil {
+				return err
+			}
+		case !isGate:
 			if err := validateParamsContract(s.Actuator, s.Params); err != nil {
 				return fmt.Errorf("workflow %s: step %s: %w", w.Name, s.Name, err)
 			}
-			// A Step's params may bind only the event namespace (from the
-			// firing Emitter event, ADR-0024) — resolved by ResolveStepParams.
 			if err := checkTemplateNamespaces(
-				fmt.Sprintf("workflow %s step %s", w.Name, s.Name),
-				map[string]bool{"event": true}, s.Params); err != nil {
+				fmt.Sprintf("workflow %s step %s", w.Name, s.Name), bindable, s.Params); err != nil {
 				return err
 			}
 		}

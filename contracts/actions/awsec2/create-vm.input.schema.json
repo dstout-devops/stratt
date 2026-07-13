@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "stratt:contract:actions/awsec2/create-vm.input:v1",
+  "title": "awsec2/create-vm input",
+  "description": "Input Contract for the awsec2/create-vm Action (charter §2.2 headline example, ADR-0031). AWS credentials inject as a CredentialRef (§2.5), not params.",
+  "type": "object",
+  "properties": {
+    "region": { "type": "string" },
+    "endpoint": { "type": "string", "description": "override API endpoint (dev: the moto stand-in)" },
+    "instanceType": { "type": "string" },
+    "ami": { "type": "string" },
+    "name": { "type": "string" }
+  },
+  "required": ["region", "ami"],
+  "additionalProperties": false
+}

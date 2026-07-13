@@ -583,6 +583,11 @@ steps:
 		"bad-when":       "name: w\nsteps:\n  - {name: a, viewName: v}\n  - {name: b, needs: [a], when: sometimes, viewName: v}\n",
 		"when-no-needs":  "name: w\nsteps:\n  - {name: a, when: failure, viewName: v}\n",
 		"no-steps":       "name: w\nsteps: []\n",
+		// Action shape (ADR-0031): an action step is targetless.
+		"action+view":    "name: w\nsteps:\n  - {name: a, action: certissuer/revoke, viewName: v, params: {addr: 'http://x', serial: 'a:b'}, credentialRefs: [c]}\n",
+		"action+gate":    "name: w\nsteps:\n  - {name: a, action: certissuer/revoke, gate: {approvers: {teams: [t]}}}\n",
+		"bad-action-in":  "name: w\nsteps:\n  - {name: a, action: certissuer/revoke, params: {addr: 'http://x'}}\n", // missing serial
+		"unknown-action": "name: w\nsteps:\n  - {name: a, action: certissuer/nope, params: {}}\n",
 	} {
 		bad := t.TempDir()
 		writeDecl(t, bad, "v.yaml", "name: v\nselector: {kinds: [vm]}\n")
@@ -590,6 +595,31 @@ steps:
 		if _, err := ParseDir(bad); err == nil {
 			t.Fatalf("invalid %s must be rejected", name)
 		}
+	}
+
+	// A valid Action Step parses (targetless typed operation, ADR-0031).
+	act := t.TempDir()
+	writeDecl(t, act, "v.yaml", "name: v\nselector: {kinds: [vm]}\n")
+	writeWorkflow(t, act, "cert.yaml",
+		"name: cert-revoke\nsteps:\n  - name: revoke\n    action: certissuer/revoke\n    credentialRefs: [cert-issuer]\n    params: {addr: 'http://x', serial: 'a:b'}\n")
+	parsedAct, err := ParseDir(act)
+	if err != nil {
+		t.Fatalf("valid action workflow must parse: %v", err)
+	}
+	if s := parsedAct.Workflows[0].Steps[0]; s.Action != "certissuer/revoke" || s.ViewName != "" {
+		t.Fatalf("action step: %+v", s)
+	}
+
+	// Cross-Step output binding ({{.steps.x.outputs.y}}) is a valid namespace
+	// on a downstream Step's params (ADR-0031).
+	bind := t.TempDir()
+	writeDecl(t, bind, "v.yaml", "name: v\nselector: {kinds: [vm]}\n")
+	writeWorkflow(t, bind, "seam.yaml",
+		"name: seam\nsteps:\n"+
+			"  - {name: provision, action: awsec2/create-vm, params: {region: us-east-1, ami: ami-1}}\n"+
+			"  - name: configure\n    needs: [provision]\n    viewName: v\n    actuator: script\n    params: {script: '{{.steps.provision.outputs.instanceId}}'}\n")
+	if _, err := ParseDir(bind); err != nil {
+		t.Fatalf("steps-namespace binding must parse: %v", err)
 	}
 
 	// workflows/ absent → valid (repos predating ADR-0011).

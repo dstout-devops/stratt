@@ -292,6 +292,12 @@ func runToWire(r types.Run) Run {
 	if r.StepName != "" {
 		out.StepName = &r.StepName
 	}
+	if len(r.Outputs) > 0 {
+		var m map[string]any
+		if json.Unmarshal(r.Outputs, &m) == nil {
+			out.Outputs = &m
+		}
+	}
 	return out
 }
 
@@ -924,6 +930,17 @@ func (s *Server) StartRun(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "invalid request: "+err.Error())
 		return
 	}
+	// A targetless Connector Action (§2.2, ADR-0031): no View, so no
+	// runner-on-View grant — the credential `use`-check in RunAction is the
+	// authz chokepoint. Validate the input Contract at the door.
+	if body.Action != nil && *body.Action != "" {
+		s.startAction(w, r, body)
+		return
+	}
+	if body.ViewName == nil || *body.ViewName == "" {
+		writeErr(w, http.StatusBadRequest, "viewName is required for an actuator Run")
+		return
+	}
 	// Contract check at the door (§1.5, ADR-0015): a malformed Step fails
 	// here with pointer detail — before any Run row exists, not at dispatch.
 	if err := validateStepParams(body.Actuator, body.Params); err != nil {
@@ -933,10 +950,10 @@ func (s *Server) StartRun(w http.ResponseWriter, r *http.Request) {
 	// View-scoped execution authz (§2.5, ADR-0028): the launching Principal must
 	// hold `runner` on the target View — fail fast at the door with a 403 (the
 	// RunAgainstView chokepoint re-checks, covering the no-handler paths).
-	if !s.requireGrant(w, r, authz.RelationRunner, "view:"+body.ViewName) {
+	if !s.requireGrant(w, r, authz.RelationRunner, "view:"+*body.ViewName) {
 		return
 	}
-	p := orchestrate.LaunchParams{ViewName: body.ViewName}
+	p := orchestrate.LaunchParams{ViewName: *body.ViewName}
 	// The launching Principal rides the Run for the dispatch-time `use`
 	// check and the audit trail (§1.8). Anonymous launches carry none and
 	// fail credential resolution if refs are requested.
@@ -967,6 +984,41 @@ func (s *Server) StartRun(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		p.Slices = int(*body.Slices)
+	}
+	run, err := orchestrate.LaunchRun(r.Context(), orchestrate.LaunchDeps{Store: s.Store, Temporal: s.Temporal}, p)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, runToWire(run))
+}
+
+// startAction launches a targetless Connector Action (§2.2, ADR-0031). Input
+// validated at the door; authz is the CredentialRef `use`-check inside
+// RunAction (Actions are not View-scoped).
+func (s *Server) startAction(w http.ResponseWriter, r *http.Request, body StartRun) {
+	var params json.RawMessage
+	if body.Params != nil {
+		raw, err := json.Marshal(*body.Params)
+		if err != nil {
+			writeErr(w, http.StatusBadRequest, "invalid params: "+err.Error())
+			return
+		}
+		params = raw
+	}
+	if err := contract.ValidateActionInput(*body.Action, params); err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	p := orchestrate.LaunchParams{Action: *body.Action, Params: params}
+	if body.DryRun != nil {
+		p.DryRun = *body.DryRun
+	}
+	if id, _, ok := authz.PrincipalFrom(r.Context()); ok {
+		p.Principal = id
+	}
+	if body.CredentialRefs != nil {
+		p.CredentialRefs = *body.CredentialRefs
 	}
 	run, err := orchestrate.LaunchRun(r.Context(), orchestrate.LaunchDeps{Store: s.Store, Temporal: s.Temporal}, p)
 	if err != nil {

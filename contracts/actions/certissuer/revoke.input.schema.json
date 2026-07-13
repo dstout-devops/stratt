@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "stratt:contract:actions/certissuer/revoke.input:v1",
+  "title": "certissuer/revoke input",
+  "description": "Input Contract for certissuer/revoke (ADR-0031). Idempotent. Token injected (§2.5).",
+  "type": "object",
+  "properties": {
+    "addr": { "type": "string" },
+    "mount": { "type": "string" },
+    "serial": { "type": "string" }
+  },
+  "required": ["addr", "serial"],
+  "additionalProperties": false
+}

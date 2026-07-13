@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "stratt:contract:actions/certissuer/issue.output:v1",
+  "title": "certissuer/issue output",
+  "description": "Output Contract for certissuer/issue: the minted certificate's identity.",
+  "type": "object",
+  "properties": {
+    "serial": { "type": "string" },
+    "notAfter": { "type": "string" }
+  },
+  "required": ["serial"],
+  "additionalProperties": false
+}

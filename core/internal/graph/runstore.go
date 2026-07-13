@@ -68,6 +68,20 @@ func (s *Store) SetRunStatus(ctx context.Context, runID string, status types.Run
 	return nil
 }
 
+// SetRunOutputs stores an Action Run's typed output values (§2.2, ADR-0031),
+// already validated against the Action's output Contract by the caller.
+func (s *Store) SetRunOutputs(ctx context.Context, runID string, outputs json.RawMessage) error {
+	tag, err := s.pool.Exec(ctx,
+		`UPDATE graph.run SET outputs = $2::jsonb WHERE id = $1`, runID, string(outputs))
+	if err != nil {
+		return fmt.Errorf("graph: set run outputs: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("%w: run %s", ErrNotFound, runID)
+	}
+	return nil
+}
+
 // ListRunsForWorkflowRun returns the per-Step Runs of one Workflow
 // execution — the §1.8 Workflow → Run descent query.
 func (s *Store) ListRunsForWorkflowRun(ctx context.Context, workflowRunID string) ([]types.Run, error) {
@@ -149,10 +163,11 @@ func (s *Store) GetRun(ctx context.Context, runID string) (types.Run, error) {
 	var viewRef *string
 	var viewVersion *int64
 	var triggeredBy, baseline, workflowRunID, stepName *string
+	var outputs []byte
 	err := s.pool.QueryRow(ctx, `
-		SELECT id, workflow_id, status, view_ref, view_version, triggered_by, baseline, workflow_run_id, step_name, started_at, finished_at
+		SELECT id, workflow_id, status, view_ref, view_version, triggered_by, baseline, workflow_run_id, step_name, started_at, finished_at, outputs
 		FROM graph.run WHERE id = $1`, runID,
-	).Scan(&r.ID, &r.WorkflowID, &status, &viewRef, &viewVersion, &triggeredBy, &baseline, &workflowRunID, &stepName, &r.StartedAt, &r.FinishedAt)
+	).Scan(&r.ID, &r.WorkflowID, &status, &viewRef, &viewVersion, &triggeredBy, &baseline, &workflowRunID, &stepName, &r.StartedAt, &r.FinishedAt, &outputs)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return r, fmt.Errorf("%w: run %s", ErrNotFound, runID)
 	}
@@ -177,6 +192,9 @@ func (s *Store) GetRun(ctx context.Context, runID string) (types.Run, error) {
 	}
 	if stepName != nil {
 		r.StepName = *stepName
+	}
+	if len(outputs) > 0 {
+		r.Outputs = outputs
 	}
 	return r, nil
 }

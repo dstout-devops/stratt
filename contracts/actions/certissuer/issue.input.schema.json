@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "stratt:contract:actions/certissuer/issue.input:v1",
+  "title": "certissuer/issue input",
+  "description": "Input Contract for the certissuer/issue Action (ADR-0031). The CLM token is injected as a CredentialRef named 'cert-issuer' (§2.5), not a param.",
+  "type": "object",
+  "properties": {
+    "addr": { "type": "string", "description": "CLM base URL, e.g. http://openbao:8200" },
+    "mount": { "type": "string" },
+    "role": { "type": "string" },
+    "commonName": { "type": "string" },
+    "ttl": { "type": "string", "description": "e.g. 720h" }
+  },
+  "required": ["addr", "role", "commonName"],
+  "additionalProperties": false
+}

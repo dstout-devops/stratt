@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "stratt:contract:actions/certissuer/renew.output:v1",
+  "title": "certissuer/renew output",
+  "type": "object",
+  "properties": {
+    "newSerial": { "type": "string" },
+    "oldSerial": { "type": "string" }
+  },
+  "required": ["newSerial"],
+  "additionalProperties": false
+}

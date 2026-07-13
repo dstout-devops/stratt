@@ -24,10 +24,15 @@ type LaunchDeps struct {
 	Temporal client.Client
 }
 
-// LaunchParams is the transport-neutral input to launch one Run against a View.
+// LaunchParams is the transport-neutral input to launch one Run — against a
+// View (Actuator) or as a targetless Action (§2.2, ADR-0031).
 type LaunchParams struct {
-	ViewName       string
-	Actuator       string // "" defaults to ansible
+	ViewName string
+	Actuator string // "" defaults to ansible
+	// Action, when set, launches a targetless Connector Action (RunAction)
+	// instead of an Actuator Run; ViewName is ignored. DryRun asks for a plan.
+	Action         string
+	DryRun         bool
 	Params         json.RawMessage
 	CredentialRefs []string
 	Slices         int
@@ -41,6 +46,9 @@ type LaunchParams struct {
 // bound workflow id. A contract violation is returned verbatim (callers map it
 // to their own error shape, §1.8).
 func LaunchRun(ctx context.Context, d LaunchDeps, p LaunchParams) (types.Run, error) {
+	if p.Action != "" {
+		return launchAction(ctx, d, p)
+	}
 	name := p.Actuator
 	if name == "" {
 		name = "ansible"
@@ -64,6 +72,37 @@ func LaunchRun(ctx context.Context, d LaunchDeps, p LaunchParams) (types.Run, er
 	if _, err := d.Temporal.ExecuteWorkflow(ctx, client.StartWorkflowOptions{
 		ID: wfID, TaskQueue: TaskQueue,
 	}, RunAgainstView, in); err != nil {
+		_ = d.Store.SetRunStatus(ctx, run.ID, types.RunFailed, map[string]any{"error": "workflow start failed"})
+		return types.Run{}, fmt.Errorf("%w: %w", ErrStartWorkflow, err)
+	}
+	run.WorkflowID = wfID
+	if err := d.Store.SetRunWorkflowID(ctx, run.ID, wfID); err != nil {
+		return types.Run{}, err
+	}
+	return run, nil
+}
+
+// launchAction is the single-launch path for a targetless Connector Action
+// (§2.2, ADR-0031). It validates params against the Action's INPUT Contract at
+// the door (§1.5), pre-creates the Run, and starts RunAction. (Launch-level
+// dedup via a stable workflow-id for idempotent Actions is a documented
+// follow-up; activity-retry safety already comes from Job-name adoption.)
+func launchAction(ctx context.Context, d LaunchDeps, p LaunchParams) (types.Run, error) {
+	if err := contract.ValidateActionInput(p.Action, p.Params); err != nil {
+		return types.Run{}, err
+	}
+	run, err := d.Store.CreateRun(ctx, types.Run{ViewRef: "action://" + p.Action})
+	if err != nil {
+		return types.Run{}, err
+	}
+	in := RunInput{
+		RunID: run.ID, Action: p.Action, DryRun: p.DryRun, Params: p.Params,
+		CredentialRefs: p.CredentialRefs, Principal: p.Principal,
+	}
+	wfID := "run-" + run.ID
+	if _, err := d.Temporal.ExecuteWorkflow(ctx, client.StartWorkflowOptions{
+		ID: wfID, TaskQueue: TaskQueue,
+	}, RunAction, in); err != nil {
 		_ = d.Store.SetRunStatus(ctx, run.ID, types.RunFailed, map[string]any{"error": "workflow start failed"})
 		return types.Run{}, fmt.Errorf("%w: %w", ErrStartWorkflow, err)
 	}

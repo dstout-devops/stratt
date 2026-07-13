@@ -801,15 +801,19 @@ export interface components {
             view: components["schemas"]["View"];
             entities: components["schemas"]["Entity"][];
         };
-        /** @description One Step against a View (charter §2.3: Step = Actuator + content + params). Params are interpreted by the named Actuator; their pinned JSON-Schema Contract documents land with the Phase-2 Contract machinery. */
+        /** @description One Step: an Actuator against a View (charter §2.3: Actuator + content + params), or a targetless Connector Action (Action + params, ADR-0031). Set viewName+actuator OR action, not both. */
         StartRun: {
-            viewName: string;
+            viewName?: string;
             /**
              * @default ansible
              * @enum {string}
              */
-            actuator: "ansible" | "script" | "opentofu" | "mcp" | "cert-issuer";
-            /** @description Actuator-interpreted Step params (e.g. script source). */
+            actuator: "ansible" | "script" | "opentofu" | "mcp";
+            /** @description A Connector Action (namespaced, e.g. certissuer/revoke). When set, this is a targetless typed operation — viewName/actuator are ignored and the CredentialRef `use` grant is the authz gate, not runner-on-View. */
+            action?: string;
+            /** @description Ask a DryRunnable Action to plan without side effects. */
+            dryRun?: boolean;
+            /** @description Actuator- or Action-interpreted Step params. */
             params?: Record<string, never>;
             /**
              * Format: int64
@@ -836,6 +840,8 @@ export interface components {
             workflowRunId?: string;
             /** @description The Step within that Workflow. */
             stepName?: string;
+            /** @description An Action Run's typed output values, validated against the Action's output Contract (charter §2.2, ADR-0031); absent for Actuator Runs. */
+            outputs?: Record<string, never>;
             /** Format: date-time */
             startedAt: string;
             /** Format: date-time */

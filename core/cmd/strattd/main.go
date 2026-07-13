@@ -22,9 +22,11 @@ import (
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 
+	"github.com/dstout-devops/stratt/core/internal/actions"
+	awsaction "github.com/dstout-devops/stratt/core/internal/actions/awsec2"
+	certaction "github.com/dstout-devops/stratt/core/internal/actions/certissuer"
 	"github.com/dstout-devops/stratt/core/internal/actuators"
 	"github.com/dstout-devops/stratt/core/internal/actuators/ansible"
-	certissuer "github.com/dstout-devops/stratt/core/internal/actuators/certissuer"
 	mcpact "github.com/dstout-devops/stratt/core/internal/actuators/mcp"
 	"github.com/dstout-devops/stratt/core/internal/actuators/opentofu"
 	"github.com/dstout-devops/stratt/core/internal/actuators/script"
@@ -195,9 +197,21 @@ func run(ctx context.Context, log *slog.Logger) error {
 	// In-tree Actuator registry (§2.3); out-of-tree Actuators arrive via the
 	// plugin Contract surfaces, not this map.
 	registry := map[string]actuators.Actuator{}
-	for _, a := range []actuators.Actuator{ansible.Actuator{}, script.Actuator{}, webhook.Actuator{}, certissuer.Actuator{}} {
+	for _, a := range []actuators.Actuator{ansible.Actuator{}, script.Actuator{}, webhook.Actuator{}} {
 		registry[a.Name()] = a
 	}
+
+	// In-tree Action registry (§2.2, ADR-0031): targetless typed operations
+	// shipped by Connectors — the write side of cert-issuer (retiring the
+	// ADR-0030 Actuator-in-disguise) and awsec2 create-vm.
+	actionRegistry := actions.Registry{}
+	for _, act := range []actions.Action{
+		certaction.Issue(), certaction.Renew(), certaction.Revoke(),
+		awsaction.CreateVM(env("STRATT_EE_ACTIONS_IMAGE", "stratt-ee-actions:dev")),
+	} {
+		actionRegistry[act.Name()] = act
+	}
+	log.Info("action registry ready", "actions", len(actionRegistry))
 
 	// mcp Actuator (ADR-0022): store-backed declaration + pin lookups; the
 	// external server runs only inside the sandboxed EE pod.
@@ -266,9 +280,10 @@ func run(ctx context.Context, log *slog.Logger) error {
 
 	w := worker.New(temporalClient, orchestrate.TaskQueue, worker.Options{})
 	w.RegisterWorkflow(orchestrate.RunAgainstView)
+	w.RegisterWorkflow(orchestrate.RunAction)
 	w.RegisterWorkflow(orchestrate.RunDAG)
 	w.RegisterWorkflow(orchestrate.RunBaselineCheck)
-	w.RegisterActivity(&orchestrate.Activities{Store: store, Dispatcher: dispatcher, Bus: bus, Authz: authorizer, Actuators: registry, Evidence: evidence})
+	w.RegisterActivity(&orchestrate.Activities{Store: store, Dispatcher: dispatcher, Bus: bus, Authz: authorizer, Actuators: registry, Actions: actionRegistry, Evidence: evidence})
 	if err := w.Start(); err != nil {
 		return fmt.Errorf("temporal worker: %w", err)
 	}

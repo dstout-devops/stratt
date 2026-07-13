@@ -19,9 +19,9 @@ type Workflow struct {
 	Steps []Step `json:"steps"`
 }
 
-// Step is one node of the DAG: either an actuation (one contracted
-// invocation — Actuator + params against a View, §2.3) or a Gate. Exactly
-// one of the two shapes is set.
+// Step is one node of the DAG (§2.3): an actuation (Actuator + params against a
+// View), an Action (a targetless typed operation — Action + params, ADR-0031),
+// or a Gate. Exactly one of the three shapes is set.
 type Step struct {
 	Name string `json:"name"`
 	// Needs lists Step names that must reach a terminal state first.
@@ -34,8 +34,13 @@ type Step struct {
 	Gate *GateSpec `json:"gate,omitempty"`
 
 	// Actuation fields (mirror StartRun / Trigger launch parameters).
-	ViewName       string         `json:"viewName,omitempty"`
-	Actuator       string         `json:"actuator,omitempty"`
+	ViewName string `json:"viewName,omitempty"`
+	Actuator string `json:"actuator,omitempty"`
+	// Action names a Connector Action for a targetless typed operation (§2.2,
+	// ADR-0031); mutually exclusive with ViewName/Actuator. DryRun asks for a
+	// side-effect-free plan.
+	Action         string         `json:"action,omitempty"`
+	DryRun         bool           `json:"dryRun,omitempty"`
 	Params         map[string]any `json:"params,omitempty"`
 	Slices         int            `json:"slices,omitempty"`
 	CredentialRefs []string       `json:"credentialRefs,omitempty"`

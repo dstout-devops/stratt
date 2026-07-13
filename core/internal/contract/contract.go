@@ -201,6 +201,62 @@ func ValidateActuatorParams(actuator string, params json.RawMessage) error {
 	return c.validate(params)
 }
 
+// ValidateActionInput checks an Action's params against its input Contract
+// (charter §2.2: an Action declares an input Contract, ADR-0031). An Action
+// with no input contract is refused — an uncontracted operation must not exist.
+func ValidateActionInput(action string, params json.RawMessage) error {
+	if err := ensure(); err != nil {
+		return err
+	}
+	c, ok := byName["actions/"+action+".input"]
+	if !ok {
+		return fmt.Errorf("contract: no input contract for action %q", action)
+	}
+	if len(params) == 0 {
+		params = []byte(`{}`)
+	}
+	return c.validate(params)
+}
+
+// ValidateActionOutput checks an Action's produced outputs against its output
+// Contract (§2.2: an Action declares an OUTPUT Contract — the direction that
+// makes an Action more than an Actuator). An Action with no output contract is
+// refused. Dry-run plans are not validated here (a plan is not the contracted
+// output); the caller skips this for dryRun (ADR-0031).
+func ValidateActionOutput(action string, outputs json.RawMessage) error {
+	if err := ensure(); err != nil {
+		return err
+	}
+	c, ok := byName["actions/"+action+".output"]
+	if !ok {
+		return fmt.Errorf("contract: no output contract for action %q", action)
+	}
+	if len(outputs) == 0 {
+		outputs = []byte(`{}`)
+	}
+	return c.validate(outputs)
+}
+
+// ResolveActionParams binds a launch-time param map's {{.ns.x}} templates
+// (ADR-0024/0031 cross-Step binding) then re-validates against the Action's
+// input Contract — the Action counterpart of ResolveActuatorParams.
+func ResolveActionParams(action string, params map[string]any, ns template.Namespaces) (json.RawMessage, error) {
+	resolved, err := template.SubstituteParams(params, ns)
+	if err != nil {
+		return nil, err
+	}
+	raw := json.RawMessage(`{}`)
+	if resolved != nil {
+		if raw, err = json.Marshal(resolved); err != nil {
+			return nil, err
+		}
+	}
+	if err := ValidateActionInput(action, raw); err != nil {
+		return nil, err
+	}
+	return raw, nil
+}
+
 // ResolveActuatorParams binds a launch-time param map's {{.ns.x}} templates
 // (ADR-0024), then re-validates the resolved params against the Actuator's
 // input Contract and returns the JSON the Actuator receives. This moves a

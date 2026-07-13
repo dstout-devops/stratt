@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "stratt:contract:actions/certissuer/renew.input:v1",
+  "title": "certissuer/renew input",
+  "description": "Input Contract for certissuer/renew (ADR-0031): issue a replacement cert and revoke the superseded serial. Token injected (§2.5).",
+  "type": "object",
+  "properties": {
+    "addr": { "type": "string" },
+    "mount": { "type": "string" },
+    "role": { "type": "string" },
+    "commonName": { "type": "string" },
+    "ttl": { "type": "string" },
+    "serial": { "type": "string", "description": "the superseded serial to revoke (optional)" }
+  },
+  "required": ["addr", "role", "commonName"],
+  "additionalProperties": false
+}
