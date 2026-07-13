@@ -97,7 +97,7 @@ func run(log *slog.Logger) error {
 
 	ag := &agent{
 		site: site, mode: mode, namespace: namespace,
-		dispatcher: dispatcher, gw: gw, kube: kubeClient,
+		dispatcher: dispatcher, gw: gw, kube: kubeClient, bus: bus,
 		interp: buildInterpreters(), log: log,
 	}
 
@@ -120,7 +120,7 @@ func run(log *slog.Logger) error {
 	case types.SiteModePush:
 		return gw.ConsumeDispatch(ctx, site, ag.handlePush)
 	case types.SiteModePull:
-		return fmt.Errorf("pull mode not yet available (ADR-0032 Commit 2)")
+		return ag.servePull(ctx)
 	default:
 		return fmt.Errorf("unknown STRATT_AGENT_MODE %q (want push|pull)", mode)
 	}
@@ -134,8 +134,10 @@ type agent struct {
 	dispatcher *dispatch.Dispatcher
 	gw         *sitegw.Gateway
 	kube       kubernetes.Interface
+	bus        *events.Bus
 	interp     map[string]dispatch.Interpreter
 	log        *slog.Logger
+	lastRun    string // dedup: last Bundle digest executed (pull mode)
 }
 
 // handlePush runs one dispatched slice through the shared Dispatcher and reports

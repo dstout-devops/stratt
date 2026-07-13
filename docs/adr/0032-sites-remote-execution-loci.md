@@ -1,7 +1,7 @@
 # ADR 0032 — Sites: remote execution loci (NATS-leaf push; cosign/OCI pull Bundles)
 
-- **Status:** Accepted (Commit 1 — push-mode spine; Commit 2 — pull Bundles — is a
-  documented fast-follow)
+- **Status:** Accepted (Commit 1 — push-mode spine; Commit 2 — pull-mode + cosign/OCI
+  Bundles)
 - **Date:** 2026-07-13
 - **Deciders:** Project steward (dstout)
 - **Charter sections:** §2.3 (Step/execution plane; **Site** = "remote execution
@@ -105,8 +105,20 @@ is dispatch (hub → Site).
     cancel signal, and the §2.5 **refusal of a JobSpec carrying Env material at the
     dispatch door** (`core/internal/sitegw/gateway_test.go`).
   - Full build + all module tests + lint green.
-- **Runnable-next (harness wired, not yet executed):** the cross-cluster kind
-  fan-out e2e — `task dev:site:up` brings up Site "edge-west" (namespace `site-b`,
+- **Verified this commit (Commit 2):** the cosign-exact verify path in-process
+  against a real cosign-format key signature — a valid signature verifies and
+  reconstructs the JobSpec, while a **wrong pinned digest, a wrong key, an
+  unsigned Bundle, and a tampered content layer are all hard-refused**
+  (`core/internal/bundle/verify_test.go`); deterministic pack + digest pin
+  round-trip; `Build` refuses Env material. Full build + tests + lint + evergreen
+  green with the two new deps.
+- **Runnable-next (Commit 2 harness wired):** the pull e2e —
+  `task dev:up` starts the `zot` registry; `task dev:bundle:demo` builds+pushes+
+  **signs** a Bundle with `cosign` and prints the digest; a `stratt-agent
+  --mode=pull` (env-pinned ref/digest/pubkey) then pulls, verifies, and runs it,
+  and refuses a one-byte-tampered Bundle with a `run.failed` naming the Site.
+- **Runnable-next (Commit 1 harness wired, not yet executed):** the cross-cluster
+  kind fan-out e2e — `task dev:site:up` brings up Site "edge-west" (namespace `site-b`,
   a leaf `nats-site`, a Site-local credential Secret). A View spanning `local` +
   `mgmt.site=edge-west` should fan out; the `site-b` Job runs under the agent's own
   clientset (the hub never touches that namespace); events leaf-forward with
@@ -114,13 +126,39 @@ is dispatch (hub → Site).
   credential material. The local-Site path is byte-identical to the already-e2e'd
   execution path; the new transport is proven by the live integration test above.
 
+## Decision (Commit 2 — pull-mode + cosign/OCI Bundles)
+
+7. **A Bundle is a cosign-signed OCI artifact of credential-free content (§2.3,
+   §1.5).** `core/internal/bundle` packs a prepared JobSpec's `Files` into a
+   **deterministic** tar+gz content layer (sorted, fixed mode/time ⇒ a stable
+   digest) plus a config blob (name/version/actuator/command/image + the pinned
+   `contentDigest`), under our own media types (`vnd.stratt.bundle.*`). **Build
+   refuses a non-`RemoteSafe` spec** — a distributable, signed artifact must never
+   bake material (§2.5). `stratt bundle push` (a new CLI verb) builds+pushes via
+   `oras-go/v2` and prints the manifest digest to pin + the `cosign sign --key`
+   command. Deps added: `oras.land/oras-go/v2` + `github.com/sigstore/sigstore`
+   (both Apache-2.0; dependency-scout RECOMMEND).
+
+8. **Verify-before-execute is in-process and cosign-exact (§1.8, §1.5; steward
+   choice).** The operator signs with real `cosign sign --key`; the agent
+   reproduces cosign's key-based verification **in-process** — fetch the
+   `sha256-<hex>.sig` companion artifact, verify the ECDSA signature over the
+   simple-signing payload against the **pinned public key** (`sigstore/sigstore`
+   primitives — no cosign CLI, no exec/parse trust surface, per dependency-scout),
+   and confirm the payload binds this exact manifest digest. The Assignment
+   **pins the manifest digest** too (defense in depth). A wrong digest, wrong key,
+   missing signature, or tampered content layer is a **hard refusal** — the agent
+   emits a `run.failed` event (leaf-forwarded, so §1.8 descent shows *where* and
+   *why*) and never unpacks/executes. Keyless (Fulcio/Rekor via `sigstore-go`
+   bundles) is the documented production follow-up.
+
+9. **Pull-mode agent (§1.4).** `stratt-agent --mode=pull` (same binary, same
+   `Dispatcher.Run`) polls its assigned Bundle on a cadence, verifies, and — only
+   on success — reconstructs the JobSpec and runs it, deduped by digest. v1 config
+   is env-direct (`STRATT_BUNDLE_REF/DIGEST/PUBKEY`); a signed OCI **assignment
+   index** the agent resolves for itself is the documented follow-up.
+
 ## Deferred / fast-follow (documented)
-- **Commit 2 — pull-mode + cosign/OCI Bundles:** an egress-only Site pulls signed
-  Bundles from an OCI registry, verifies cosign signature + pinned digest before
-  unpack (a tampered Bundle is refused, §1.8/§1.5), and runs them via the same
-  `Dispatcher.Run` (`stratt-agent --mode=pull`). Adds `oras-go` + `sigstore-go` +
-  a registry image (dependency-scout gates them). The agent already refuses pull
-  mode until then.
 - **Interpreter / trust-tier distribution — the deepest tension:** the agent is
   *compiled* with in-tree Interpreters only (Bundles carry content, not the Go
   Interpreter); a `verified`/`community`-tier actuator reaching a Site, and

@@ -35,6 +35,16 @@ func main() {
 		return
 	}
 
+	// `bundle` packages Step content into a cosign-signable OCI Bundle for
+	// pull-mode Sites (ADR-0032); it talks to a registry, not the platform API.
+	if cmd == "bundle" {
+		if err := runBundle(os.Args[2:]); err != nil {
+			fmt.Fprintln(os.Stderr, "stratt:", err)
+			os.Exit(1)
+		}
+		return
+	}
+
 	fs := flag.NewFlagSet(cmd, flag.ExitOnError)
 	dir := fs.String("d", ".", "declarations directory (contains views/)")
 	server := fs.String("s", envOr("STRATT_SERVER", "http://localhost:8080"), "control-plane base URL")
@@ -55,7 +65,8 @@ func main() {
 func usage() {
 	fmt.Fprintln(os.Stderr, `usage:
   stratt <plan|apply> [-d declarations-dir] [-s server-url]
-  stratt import awx --endpoint <url> [--token <t>] -o <out-dir>`)
+  stratt import awx --endpoint <url> [--token <t>] -o <out-dir>
+  stratt bundle push <content-dir> <ref> --name N --version V --actuator A`)
 }
 
 func envOr(key, def string) string {

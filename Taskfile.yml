@@ -221,6 +221,27 @@ tasks:
     cmds:
       - kubectl delete -f deploy/dev/site-agent.yaml --ignore-not-found
 
+  dev:cosign:keys:
+    desc: Generate a dev cosign key pair for Bundle signing (ADR-0032; empty password)
+    dir: deploy/dev
+    cmds:
+      - test -f cosign.key || COSIGN_PASSWORD="" cosign generate-key-pair
+    status:
+      - test -f deploy/dev/cosign.key
+
+  dev:bundle:demo:
+    desc: Build+push+sign a demo Bundle to the dev registry (ADR-0032). Prints the digest to pin.
+    dir: deploy/dev
+    vars:
+      REF: localhost:5555/stratt/bundles/hello:1
+    cmds:
+      - task: dev:cosign:keys
+      - rm -rf /tmp/stratt-bundle && mkdir -p /tmp/stratt-bundle/project
+      - printf 'echo "hello from a signed pull Bundle"\n' > /tmp/stratt-bundle/project/run.sh
+      # Build+push via the CLI; the manifest digest it prints is what you pin + sign.
+      - STRATT_BUNDLE_INSECURE=true go run -C ../../core ./cmd/stratt bundle push /tmp/stratt-bundle {{.REF}} --name hello --version 1 --actuator script --command "sh,/runner/project/run.sh"
+      - COSIGN_PASSWORD="" cosign sign --yes --allow-insecure-registry --key cosign.key {{.REF}}
+
   chart:lint:
     desc: Lint + render the Helm chart (ADR-0013)
     cmds:

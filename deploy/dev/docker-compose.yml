@@ -83,6 +83,23 @@ services:
       timeout: 3s
       retries: 20
 
+  # OCI registry for pull-mode Bundles (ADR-0032; dependency-scout: zot, the
+  # OCI-artifact-native CNCF registry). Dev: anonymous read/write, plain HTTP.
+  # Production pins the image by digest (§7.3) and enables auth.
+  zot:
+    image: ghcr.io/project-zot/zot-linux-amd64:v2.1.18
+    command: ["serve", "/etc/zot/config.json"]
+    ports:
+      - "5555:5000"
+    volumes:
+      - ./zot.json:/etc/zot/config.json:ro
+      - zotdata:/var/lib/registry
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:5000/v2/ || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
   temporal:
     image: temporalio/auto-setup:1.29.1
     depends_on:
@@ -251,3 +268,4 @@ volumes:
   pgdata:
   natsdata:
   seaweeddata:
+  zotdata:
