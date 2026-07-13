@@ -926,6 +926,12 @@ func (s *Server) StartRun(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	// View-scoped execution authz (§2.5, ADR-0028): the launching Principal must
+	// hold `runner` on the target View — fail fast at the door with a 403 (the
+	// RunAgainstView chokepoint re-checks, covering the no-handler paths).
+	if !s.requireGrant(w, r, authz.RelationRunner, "view:"+body.ViewName) {
+		return
+	}
 	p := orchestrate.LaunchParams{ViewName: body.ViewName}
 	// The launching Principal rides the Run for the dispatch-time `use`
 	// check and the audit trail (§1.8). Anonymous launches carry none and
@@ -981,16 +987,18 @@ func (s *Server) GetRun(w http.ResponseWriter, r *http.Request, id RunID) {
 // cleanup (ADR-0026); this only requests it. 202 even for a terminal Run
 // (idempotent, AWX-cancel semantics).
 //
-// Authorization mirrors StartRun's posture: authenticated, but not yet
-// object-gated. Run/View-scoped execution authz (a `run`/`view` type in the
-// OpenFGA model) is the deferred Phase-2/3 extension of the ADR-0009 model —
-// launching and canceling share one posture so the /api/v2 façade cannot be a
-// weaker path (§1.6). Gating on the unmodeled `run` type here would fail-closed
-// for every caller.
+// Authorization is View-scoped (§2.5, ADR-0028): the caller must hold `runner`
+// on the Run's View — you may cancel Runs against Views you may launch against.
+// This re-introduces the object-gating ADR-0026 deferred (the `view` type now
+// exists); launch and cancel share the one runner relation, so the /api/v2
+// façade cannot be a weaker path (§1.6 symmetry).
 func (s *Server) CancelRun(w http.ResponseWriter, r *http.Request, id RunID) {
 	run, err := s.Store.GetRun(r.Context(), id)
 	if err != nil {
 		s.fail(w, err)
+		return
+	}
+	if !s.requireGrant(w, r, authz.RelationRunner, "view:"+viewNameFromRef(run.ViewRef)) {
 		return
 	}
 	if err := orchestrate.CancelRun(r.Context(), s.Temporal, run.ID); err != nil {
@@ -998,6 +1006,12 @@ func (s *Server) CancelRun(w http.ResponseWriter, r *http.Request, id RunID) {
 		return
 	}
 	w.WriteHeader(http.StatusAccepted)
+}
+
+// viewNameFromRef strips the "view://" scheme from a Run's ViewRef, yielding the
+// bare View name used as the authz object (view:<name>).
+func viewNameFromRef(ref string) string {
+	return strings.TrimPrefix(ref, "view://")
 }
 
 // TailRunEvents implements (GET /runs/{id}/events): SSE replay + follow of
@@ -1302,9 +1316,22 @@ func (s *Server) GetWorkflow(w http.ResponseWriter, r *http.Request, name string
 // execution record, then start the RunDAG Temporal workflow. The launching
 // Principal rides every Step's credential use check (§2.5).
 func (s *Server) StartWorkflowRun(w http.ResponseWriter, r *http.Request, name string) {
-	if _, err := s.Store.GetWorkflow(r.Context(), name); err != nil {
+	wf, err := s.Store.GetWorkflow(r.Context(), name)
+	if err != nil {
 		s.fail(w, err)
 		return
+	}
+	// View-scoped execution authz (§2.5, ADR-0028): the launching Principal must
+	// hold `runner` on EVERY actuation Step's View (gate Steps target none). The
+	// per-Step child Runs re-check at the RunAgainstView chokepoint; this is the
+	// fail-fast 403 at the door.
+	for _, st := range wf.Steps {
+		if st.ViewName == "" {
+			continue
+		}
+		if !s.requireGrant(w, r, authz.RelationRunner, "view:"+st.ViewName) {
+			return
+		}
 	}
 	principal := ""
 	if id, _, ok := authz.PrincipalFrom(r.Context()); ok {

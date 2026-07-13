@@ -78,6 +78,9 @@ func (f *Facade) launch(w http.ResponseWriter, r *http.Request) {
 	}
 
 	id2, _, _ := principal(r)
+	if !f.requireRunner(r.Context(), w, id2, step.ViewName) {
+		return
+	}
 	run, err := orchestrate.LaunchRun(r.Context(), orchestrate.LaunchDeps{Store: f.cfg.Store, Temporal: f.cfg.Temporal},
 		orchestrate.LaunchParams{
 			ViewName:       step.ViewName,

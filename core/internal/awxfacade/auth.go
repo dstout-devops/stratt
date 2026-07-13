@@ -71,6 +71,27 @@ func (f *Facade) resolve(ctx context.Context, h http.Header) (id, kind string, e
 	return "", "", nil
 }
 
+// requireRunner enforces View-scoped execution authz (§2.5, ADR-0028) on the
+// façade, symmetric with the native path — the compat surface is never a weaker
+// authz path (§1.6). Returns false (and writes an AWX-shaped 403) when the
+// principal lacks `runner` on the view.
+func (f *Facade) requireRunner(ctx context.Context, w http.ResponseWriter, principal, view string) bool {
+	if principal == "" || f.cfg.Authz == nil {
+		awxErr(w, http.StatusForbidden, "You do not have permission to perform this action.")
+		return false
+	}
+	allowed, err := f.cfg.Authz.Check(ctx, principal, authz.RelationRunner, "view:"+view)
+	if err != nil {
+		awxErr(w, http.StatusInternalServerError, err.Error())
+		return false
+	}
+	if !allowed {
+		awxErr(w, http.StatusForbidden, "You do not have permission to perform this action.")
+		return false
+	}
+	return true
+}
+
 // authed wraps a handler so it resolves + stamps the Principal on the request
 // context (via authz.WithPrincipal), exactly as /api/v1's principalMiddleware
 // does — so requireGrant-style checks and the launch Principal work unchanged.

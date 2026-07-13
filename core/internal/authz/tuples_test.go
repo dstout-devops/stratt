@@ -37,6 +37,19 @@ tuples:
   # dave has use directly, nothing else; erin has read only
   - { user: "principal:dave", relation: user, object: "credential_ref:vc" }
   - { user: "principal:erin", relation: reader, object: "credential_ref:vc" }
+  # View-scoped execution (§2.5, ADR-0028): prod is owned by platform; members
+  # may RUN it. dave may run solo directly (nothing on prod — runner is per-View).
+  # frank may read prod but not run it (reader ≠ runner).
+  - { user: "team:platform", relation: owner_team, object: "view:prod" }
+  - { user: "team:platform#member", relation: runner, object: "view:prod" }
+  - { user: "principal:dave", relation: runner, object: "view:solo" }
+  - { user: "principal:frank", relation: reader, object: "view:prod" }
+  # A View in a DIFFERENT org — the no-blanket-org-bypass proof: nebulae's admin
+  # (alice) must have NO runner here; contractors' member zoe does.
+  - { user: "org:other", relation: org, object: "team:contractors" }
+  - { user: "team:contractors", relation: owner_team, object: "view:ext" }
+  - { user: "team:contractors#member", relation: runner, object: "view:ext" }
+  - { user: "principal:zoe", relation: member, object: "team:contractors" }
 `
 
 func TestTupleSemantics(t *testing.T) {
@@ -108,6 +121,68 @@ func TestTupleSemantics(t *testing.T) {
 	// Unknowns are denied.
 	if check("mallory", "user", "credential_ref:vc") || check("bob", "user", "credential_ref:other") {
 		t.Fatal("default deny")
+	}
+}
+
+// TestViewScopedExecution covers the ADR-0028 view/runner semantics.
+func TestViewScopedExecution(t *testing.T) {
+	a := loadFixture(t, fixture)
+	ctx := context.Background()
+	check := func(p, rel, obj string) bool {
+		ok, err := a.Check(ctx, p, rel, obj)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return ok
+	}
+
+	// Runner via team#member userset, via owner-team admin, and directly.
+	if !check("bob", "runner", "view:prod") {
+		t.Fatal("team member gets userset runner")
+	}
+	if !check("carol", "runner", "view:prod") {
+		t.Fatal("owner-team admin implies view admin implies runner")
+	}
+	if !check("dave", "runner", "view:solo") {
+		t.Fatal("direct runner grant")
+	}
+
+	// runner is PER-VIEW, never global: dave runs solo, not prod.
+	if check("dave", "runner", "view:prod") {
+		t.Fatal("runner must be view-scoped, not global")
+	}
+	if check("bob", "runner", "view:solo") {
+		t.Fatal("prod member has no runner on solo")
+	}
+
+	// reader ≠ runner (siblings; neither implies the other).
+	if !check("frank", "reader", "view:prod") {
+		t.Fatal("direct reader grant")
+	}
+	if check("frank", "runner", "view:prod") {
+		t.Fatal("reader must NOT imply runner")
+	}
+	if check("bob", "reader", "view:prod") {
+		// bob has runner (member userset) but no reader grant/userset.
+		t.Fatal("runner must NOT imply reader")
+	}
+
+	// NO blanket org-admin bypass (the user's decision): alice administers
+	// nebulae (and thus platform → view:prod, legitimately by ownership), but
+	// has NO path to view:ext, owned by contractors in a different org.
+	if !check("alice", "runner", "view:prod") {
+		t.Fatal("org admin reaches an owned View via the ownership chain")
+	}
+	if check("alice", "runner", "view:ext") {
+		t.Fatal("org admin must NOT get runner on a View it does not own (no bypass)")
+	}
+	if !check("zoe", "runner", "view:ext") {
+		t.Fatal("contractors member gets runner on its own View")
+	}
+
+	// Default deny.
+	if check("mallory", "runner", "view:prod") || check("mallory", "runner", "view:ext") {
+		t.Fatal("ungranted principal denied")
 	}
 }
 

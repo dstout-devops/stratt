@@ -21,6 +21,10 @@ import (
 //	credential_ref: owner_team; admin = direct ∪ owner_team.admin;
 //	                reader = direct ∪ team#member usersets ∪ admin;
 //	                user   = direct ∪ team#member usersets   (implies NOTHING)
+//	view:   owner_team; admin = direct ∪ owner_team.admin;
+//	                reader = direct ∪ team#member usersets ∪ admin;
+//	                runner = direct ∪ team#member usersets ∪ admin  (§2.5
+//	                View-scoped execution; NO org/team-admin bypass, ADR-0028)
 type TupleAuthorizer struct {
 	mu     sync.RWMutex
 	tuples []Tuple
@@ -135,6 +139,21 @@ func (a *TupleAuthorizer) check(subject, relation, object string, depth int) boo
 	case relation == RelationReader && objType == "credential_ref":
 		// reader = direct ∪ admin. NOTE: user implies nothing — deliberately
 		// absent here (use-without-read, §2.5).
+		return a.check(subject, RelationAdmin, object, depth+1)
+	case relation == RelationAdmin && objType == "view":
+		// view admin = direct ∪ owner-team admin (mirror credential_ref).
+		for _, t := range a.tuples {
+			if t.Object == object && t.Relation == "owner_team" {
+				if a.check(subject, RelationAdmin, t.User, depth+1) {
+					return true
+				}
+			}
+		}
+	case (relation == RelationReader || relation == RelationRunner) && objType == "view":
+		// reader/runner = direct ∪ admin (§2.5 View-scoped execution, ADR-0028).
+		// There is NO org/team-admin bypass: admin here is the VIEW's admin
+		// (direct or owner-team), reached via the case above — org admin does
+		// not imply runner on a View it does not own.
 		return a.check(subject, RelationAdmin, object, depth+1)
 	}
 	return false

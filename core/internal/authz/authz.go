@@ -23,6 +23,10 @@ const (
 	RelationReader = "reader"
 	// RelationUser is use-without-read: it implies NOTHING else.
 	RelationUser = "user"
+	// RelationRunner is View-scoped execution (§2.5, ADR-0028): may launch a
+	// Run/Workflow against a view:<name> — "only against Entities in this
+	// View." Granted per-View, never blanket by org/team admin.
+	RelationRunner = "runner"
 )
 
 // Authorizer answers relation checks in OpenFGA shape: may `principal` hold

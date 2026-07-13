@@ -92,6 +92,53 @@
           }
         }
       }
+    },
+    {
+      "type": "view",
+      "relations": {
+        "owner_team": { "this": {} },
+        "admin": {
+          "union": {
+            "child": [
+              { "this": {} },
+              {
+                "tupleToUserset": {
+                  "tupleset": { "relation": "owner_team" },
+                  "computedUserset": { "relation": "admin" }
+                }
+              }
+            ]
+          }
+        },
+        "reader": {
+          "union": {
+            "child": [{ "this": {} }, { "computedUserset": { "relation": "admin" } }]
+          }
+        },
+        "runner": {
+          "union": {
+            "child": [{ "this": {} }, { "computedUserset": { "relation": "admin" } }]
+          }
+        }
+      },
+      "metadata": {
+        "relations": {
+          "owner_team": { "directly_related_user_types": [{ "type": "team" }] },
+          "admin": { "directly_related_user_types": [{ "type": "principal" }] },
+          "reader": {
+            "directly_related_user_types": [
+              { "type": "principal" },
+              { "type": "team", "relation": "member" }
+            ]
+          },
+          "runner": {
+            "directly_related_user_types": [
+              { "type": "principal" },
+              { "type": "team", "relation": "member" }
+            ]
+          }
+        }
+      }
     }
   ]
 }

@@ -44,7 +44,7 @@ func TestOpenFGAAgreement(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	principals := []string{"alice", "bob", "carol", "dave", "erin", "mallory"}
+	principals := []string{"alice", "bob", "carol", "dave", "erin", "frank", "zoe", "mallory"}
 	// Relations checkable per object type — OpenFGA validation-errors on
 	// relations a type does not define, where the evaluator simply denies.
 	objectRelations := map[string][]string{
@@ -52,6 +52,9 @@ func TestOpenFGAAgreement(t *testing.T) {
 		"team:platform":        {RelationAdmin, RelationMember},
 		"credential_ref:vc":    {RelationAdmin, RelationReader, RelationUser},
 		"credential_ref:other": {RelationAdmin, RelationReader, RelationUser},
+		"view:prod":            {RelationAdmin, RelationReader, RelationRunner},
+		"view:solo":            {RelationAdmin, RelationReader, RelationRunner},
+		"view:ext":             {RelationAdmin, RelationReader, RelationRunner},
 	}
 	checked := 0
 	for _, p := range principals {

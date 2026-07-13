@@ -142,6 +142,15 @@ func RunAgainstView(ctx workflow.Context, in RunInput) (RunOutcome, error) {
 		_ = workflow.ExecuteActivity(dctx, a.FinishRun, in, types.RunCanceled, dispatch.Result{}).Get(dctx, nil)
 	}()
 
+	// View-scoped execution authz (§2.5, ADR-0028): before ANYTHING runs, the
+	// Principal must hold `runner` on the target View. This is the one chokepoint
+	// every launch path funnels through — API, façade, Trigger, Baseline, and each
+	// DAG Step's child Run — so the check gates them all under one model (§1.6).
+	// A denial fails fast: no targets resolved, no pod spawned.
+	if err := workflow.ExecuteActivity(ctx, a.CheckExecutionGrant, in).Get(ctx, nil); err != nil {
+		return RunOutcome{RunID: in.RunID}, finishRun(ctx, a, in, types.RunFailed, err)
+	}
+
 	var resolved ResolvedTargets
 	if err := workflow.ExecuteActivity(ctx, a.ResolveTargets, in).Get(ctx, &resolved); err != nil {
 		return RunOutcome{RunID: in.RunID}, finishRun(ctx, a, in, types.RunFailed, err)
@@ -268,6 +277,30 @@ func (a *Activities) ResolveTargets(ctx context.Context, in RunInput) (ResolvedT
 // MarkRunning transitions the Run summary to running.
 func (a *Activities) MarkRunning(ctx context.Context, runID string) error {
 	return a.Store.SetRunStatus(ctx, runID, types.RunRunning, nil)
+}
+
+// CheckExecutionGrant enforces View-scoped execution authz (§2.5, ADR-0028):
+// the launching Principal must hold `runner` on the target View. Denial is a
+// TERMINAL data problem (the grant will not appear mid-Run), so it is a
+// non-retryable error that fails the Run — the same shape as the credential
+// `use` denial. An empty Principal is denied outright (deny-by-default). This
+// activity is invoked first in RunAgainstView, so it gates every launch path
+// (API, façade, Trigger, Baseline, and each DAG Step's child) identically.
+func (a *Activities) CheckExecutionGrant(ctx context.Context, in RunInput) error {
+	if in.Principal == "" {
+		return temporal.NewNonRetryableApplicationError(
+			"execution requires an authenticated principal with runner on the view", "ExecutionDenied", nil)
+	}
+	allowed, err := a.Authz.Check(ctx, in.Principal, authz.RelationRunner, "view:"+in.ViewName)
+	if err != nil {
+		return err
+	}
+	if !allowed {
+		return temporal.NewNonRetryableApplicationError(
+			fmt.Sprintf("principal %s lacks runner on view:%s", in.Principal, in.ViewName),
+			"ExecutionDenied", nil)
+	}
+	return nil
 }
 
 // ResolveCredentials turns CredentialRef names into pod-mountable pointers,

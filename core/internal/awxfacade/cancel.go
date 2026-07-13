@@ -2,6 +2,7 @@ package awxfacade
 
 import (
 	"net/http"
+	"strings"
 
 	"github.com/dstout-devops/stratt/core/internal/orchestrate"
 	"github.com/dstout-devops/stratt/types"
@@ -27,6 +28,10 @@ func (f *Facade) cancel(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	id, _, _ := principal(r)
+	if !f.requireRunner(r.Context(), w, id, viewNameFromRef(run.ViewRef)) {
+		return
+	}
 	if !cancelable(run.Status) {
 		// Already terminal — AWX treats a re-cancel as a 202 no-op.
 		w.WriteHeader(http.StatusAccepted)
@@ -41,4 +46,10 @@ func (f *Facade) cancel(w http.ResponseWriter, r *http.Request) {
 
 func cancelable(s types.RunStatus) bool {
 	return s == types.RunPending || s == types.RunRunning
+}
+
+// viewNameFromRef strips the "view://" scheme from a Run's ViewRef → the bare
+// name used as the authz object (view:<name>).
+func viewNameFromRef(ref string) string {
+	return strings.TrimPrefix(ref, "view://")
 }
