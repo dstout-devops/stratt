@@ -29,6 +29,12 @@ const (
 	RelationRunner = "runner"
 )
 
+// AuditObject is the single object guarding the audit stream (ADR-0034): a
+// reader grant on it authorizes GET /audit and the SIEM forwarder. Audit reads
+// are privileged (who-did-what-when), so they are deny-by-default like Runs —
+// unlike v1's open read endpoints.
+const AuditObject = "audit:log"
+
 // Authorizer answers relation checks in OpenFGA shape: may `principal` hold
 // `relation` on `object` (e.g. "user" on "credential_ref:vcenter-dev")?
 // Deny is the default: unknown principals, relations, and objects are false.

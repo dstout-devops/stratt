@@ -32,6 +32,7 @@ import (
 	"github.com/dstout-devops/stratt/core/internal/actuators/script"
 	"github.com/dstout-devops/stratt/core/internal/actuators/webhook"
 	"github.com/dstout-devops/stratt/core/internal/api"
+	"github.com/dstout-devops/stratt/core/internal/audit"
 	"github.com/dstout-devops/stratt/core/internal/authz"
 	"github.com/dstout-devops/stratt/core/internal/baselines"
 	"github.com/dstout-devops/stratt/core/internal/compiler"
@@ -513,6 +514,11 @@ func run(ctx context.Context, log *slog.Logger) error {
 			log.Error("notifier stopped", "error", err)
 		}
 	}()
+
+	// Audit sealer (ADR-0034): the single writer that chains the append-only
+	// audit ledger for tamper-evidence, decoupled from the hot-path append so
+	// integrity never bottlenecks the full access log (§1.6, §1.8).
+	go (&audit.Sealer{Store: store, Log: log}).Run(ctx)
 
 	// ── interface plane ──────────────────────────────────────────────────
 	uiDir := os.Getenv("STRATT_UI_DIR")

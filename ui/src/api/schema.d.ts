@@ -342,6 +342,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/audit": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The audit stream
+         * @description The one audit stream (charter §1.6, ADR-0034): a born-here, append-only, Principal-stamped, ordered ledger of who-did-what-when — the full access log. Cursor-paged by seq (pass the last seq as `since`). Privileged: requires a reader grant on audit:log (deny-by-default, unlike v1's open read endpoints).
+         */
+        get: operations["listAudit"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/audit/verify": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Verify the audit stream's tamper-evidence chain
+         * @description Walks the sealed hash chain (ADR-0034, §1.8) and reports whether the ledger is intact: OK, or the first seq where a link is broken (altered content, a removed row, or a truncated tail). Requires a reader grant on audit:log.
+         */
+        get: operations["verifyAudit"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/intents": {
         parameters: {
             query?: never;
@@ -1028,6 +1068,46 @@ export interface components {
             errors: number;
             /** Format: date-time */
             lastCall: string;
+        };
+        /** @description One entry in the audit stream (charter §1.6, ADR-0034): who did what, to what, with what outcome, when. Ordered by seq; hash-chained for tamper-evidence. */
+        AuditEvent: {
+            /**
+             * Format: int64
+             * @description Monotonic order + page cursor.
+             */
+            seq: number;
+            /** Format: date-time */
+            at: string;
+            /** @description Acting identity; empty for an anonymous attempt. */
+            principalId?: string;
+            principalKind?: string;
+            /** @description What was done (e.g. "run.start", "authz.exec-grant", a route pattern). */
+            action: string;
+            /** @description The target (View */
+            object?: string;
+            /** @description ok | denied | failed | an HTTP status. */
+            outcome?: string;
+            /** @description Optional structured context (never secret material, §2.5). */
+            detail?: unknown;
+            /** @description Whether the tamper-evidence chain covers this event yet. */
+            sealed?: boolean;
+        };
+        /** @description Result of walking the tamper-evidence hash chain (ADR-0034, §1.8): OK, or the first seq where the chain breaks and why. */
+        AuditVerification: {
+            ok: boolean;
+            /**
+             * Format: int64
+             * @description Highest seq the sealed chain covers.
+             */
+            sealedThrough: number;
+            /**
+             * Format: int64
+             * @description Sealed events walked.
+             */
+            events: number;
+            /** Format: int64 */
+            firstBadSeq?: number;
+            reason?: string;
         };
         /** @description Checkable desired state (charter §2.4, ADR-0019): View selector + check Step + optional remediation Workflow ref + cadence. v1 is the hand-written rung of the §6 ladder; checks are read-only by construction (ansible check mode, opentofu plan). */
         Baseline: {
@@ -1825,6 +1905,54 @@ export interface operations {
                     "application/json": components["schemas"]["UsageEntry"][];
                 };
             };
+        };
+    };
+    listAudit: {
+        parameters: {
+            query?: {
+                /** @description Return events with seq greater than this (the page cursor). */
+                since?: number;
+                principal?: string;
+                action?: string;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Audit events in seq order. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AuditEvent"][];
+                };
+            };
+            403: components["responses"]["Forbidden"];
+        };
+    };
+    verifyAudit: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The verification result. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AuditVerification"];
+                };
+            };
+            403: components["responses"]["Forbidden"];
         };
     };
     listIntents: {

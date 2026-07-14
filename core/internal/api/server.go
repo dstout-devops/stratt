@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -71,14 +72,17 @@ type Server struct {
 // resolver — one identity seam for every surface (§1.6, ADR-0009).
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
-	mux.Handle("/api/v1/", http.StripPrefix("/api/v1", s.principalMiddleware(Handler(s))))
+	// principal resolves identity; audit records every request behind it (the
+	// full access log, §1.6) — audit is INNER so it sees the resolved Principal.
+	mux.Handle("/api/v1/", http.StripPrefix("/api/v1", s.principalMiddleware(s.auditMiddleware(Handler(s)))))
 	// Platform MCP server (§1.6, ADR-0021): the agent surface, same identity
 	// seam (ResolvePrincipal), same capabilities (tools invoke the generated
-	// router in-process). Never anonymous — 401 without a Principal.
+	// router in-process). Never anonymous — 401 without a Principal. Tool calls
+	// fold into the one audit stream as mcp.tool-call events.
 	mux.Handle("/mcp", mcpserver.New(mcpserver.Config{
 		Resolve:     s.ResolvePrincipal,
 		API:         Handler(s),
-		RecordUsage: s.Store.RecordMCPCall,
+		RecordUsage: s.recordMCPAudit,
 		Log:         s.Log,
 	}))
 	// AWX-compatible /api/v2 façade (§5.6, ADR-0026): a stateless compat
@@ -122,6 +126,71 @@ func spaHandler(dir string) http.Handler {
 			return
 		}
 		http.ServeFile(w, r, filepath.Join(dir, "index.html"))
+	})
+}
+
+// auditMiddleware records every request into the one audit stream (§1.6,
+// ADR-0034) after it runs — the full access log, reads included. It runs
+// behind principalMiddleware so the acting Principal is on the context. The
+// append is best-effort on a background context (the response is already
+// served); a failure is logged, never hidden (§1.8). Action is the matched
+// route pattern (low-cardinality); Object is the concrete path.
+func (s *Server) auditMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
+		next.ServeHTTP(rec, r)
+		id, kind, _ := authz.PrincipalFrom(r.Context())
+		action := r.Method + " " + r.URL.Path
+		if r.Pattern != "" {
+			action = r.Pattern
+		}
+		if err := s.Store.RecordAudit(context.WithoutCancel(r.Context()), types.AuditEvent{
+			PrincipalID: id, PrincipalKind: kind, Action: action,
+			Object: r.URL.Path, Outcome: strconv.Itoa(rec.status),
+		}); err != nil {
+			s.Log.Error("audit record failed", "action", action, "err", err)
+		}
+	})
+}
+
+// statusRecorder captures the response status for the audit log.
+type statusRecorder struct {
+	http.ResponseWriter
+	status int
+	wrote  bool
+}
+
+func (r *statusRecorder) WriteHeader(code int) {
+	if !r.wrote {
+		r.status, r.wrote = code, true
+	}
+	r.ResponseWriter.WriteHeader(code)
+}
+
+func (r *statusRecorder) Write(b []byte) (int, error) {
+	r.wrote = true
+	return r.ResponseWriter.Write(b)
+}
+
+// Flush lets the SSE run-event stream keep working through the wrapper.
+func (r *statusRecorder) Flush() {
+	if f, ok := r.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
+}
+
+// recordMCPAudit folds a platform-MCP tool invocation into the one audit
+// stream (§1.6) as an mcp.tool-call event — replacing the standalone
+// audit.mcp_call write so GET /usage and the SIEM forwarder see the same rows.
+func (s *Server) recordMCPAudit(ctx context.Context, c types.MCPCall) error {
+	outcome := types.AuditOK
+	if !c.OK {
+		outcome = types.AuditFailed
+	}
+	detail, _ := json.Marshal(map[string]any{"durationMs": c.DurationMS})
+	return s.Store.RecordAudit(ctx, types.AuditEvent{
+		PrincipalID: c.Principal, PrincipalKind: c.PrincipalKind,
+		Action: types.AuditMCPToolCall, Object: c.Tool, Outcome: outcome, Detail: detail,
 	})
 }
 
@@ -1774,6 +1843,85 @@ func (s *Server) ListUsage(w http.ResponseWriter, r *http.Request, params ListUs
 		out = append(out, e)
 	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+// ListAudit implements (GET /audit): the one audit stream (§1.6, ADR-0034),
+// cursor-paged by seq. Privileged — a reader grant on audit:log, deny-by-
+// default (unlike v1's open read endpoints), because who-did-what-when is
+// sensitive.
+func (s *Server) ListAudit(w http.ResponseWriter, r *http.Request, params ListAuditParams) {
+	if !s.requireGrant(w, r, authz.RelationReader, authz.AuditObject) {
+		return
+	}
+	since, principal, action, limit := int64(0), "", "", 0
+	if params.Since != nil {
+		since = *params.Since
+	}
+	if params.Principal != nil {
+		principal = *params.Principal
+	}
+	if params.Action != nil {
+		action = *params.Action
+	}
+	if params.Limit != nil {
+		limit = int(*params.Limit)
+	}
+	evs, err := s.Store.ListAudit(r.Context(), principal, action, since, limit)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	out := make([]AuditEvent, 0, len(evs))
+	for _, e := range evs {
+		out = append(out, auditToWire(e))
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+// VerifyAudit implements (GET /audit/verify): walk the tamper-evidence hash
+// chain and report integrity (§1.8, ADR-0034).
+func (s *Server) VerifyAudit(w http.ResponseWriter, r *http.Request) {
+	if !s.requireGrant(w, r, authz.RelationReader, authz.AuditObject) {
+		return
+	}
+	v, err := s.Store.VerifyAudit(r.Context())
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	out := AuditVerification{Ok: v.OK, SealedThrough: v.SealedThrough, Events: v.Events}
+	if v.FirstBadSeq != 0 {
+		out.FirstBadSeq = &v.FirstBadSeq
+	}
+	if v.Reason != "" {
+		out.Reason = &v.Reason
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+func auditToWire(e types.AuditEvent) AuditEvent {
+	a := AuditEvent{Seq: e.Seq, At: e.At, Action: e.Action}
+	if e.PrincipalID != "" {
+		a.PrincipalId = &e.PrincipalID
+	}
+	if e.PrincipalKind != "" {
+		a.PrincipalKind = &e.PrincipalKind
+	}
+	if e.Object != "" {
+		a.Object = &e.Object
+	}
+	if e.Outcome != "" {
+		a.Outcome = &e.Outcome
+	}
+	if len(e.Detail) > 0 {
+		var d any
+		if json.Unmarshal(e.Detail, &d) == nil {
+			a.Detail = d
+		}
+	}
+	sealed := e.Hash != nil
+	a.Sealed = &sealed
+	return a
 }
 
 // ListIntents implements (GET /intents): declared Intents (CaC-only).

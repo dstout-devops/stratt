@@ -246,6 +246,12 @@ type startWorkflowRunIn struct {
 type listUsageIn struct {
 	Principal string `json:"principal,omitempty" jsonschema:"filter: Principal id (empty = all)"`
 }
+type getAuditIn struct {
+	Since     int64  `json:"since,omitempty" jsonschema:"page cursor: return events with seq greater than this"`
+	Principal string `json:"principal,omitempty" jsonschema:"filter by acting Principal id"`
+	Action    string `json:"action,omitempty" jsonschema:"filter by action"`
+	Limit     int64  `json:"limit,omitempty" jsonschema:"max events (default 200)"`
+}
 type decideGateIn struct {
 	GateID  string `json:"gateId" jsonschema:"the pending Gate's id"`
 	Approve bool   `json:"approve" jsonschema:"true approves, false denies"`
@@ -363,6 +369,31 @@ func registerTools(s *mcp.Server, cfg Config) {
 				path += "?principal=" + url.QueryEscape(in.Principal)
 			}
 			return invoke(ctx, cfg, req, "list_usage", http.MethodGet, path, nil)
+		})
+	mcp.AddTool(s, &mcp.Tool{Name: "get_audit", Description: "Read the audit stream (§1.6): the ordered, Principal-stamped log of who-did-what-when, cursor-paged by seq. Requires the reader grant on audit:log."},
+		func(ctx context.Context, req *mcp.CallToolRequest, in getAuditIn) (*mcp.CallToolResult, any, error) {
+			q := url.Values{}
+			if in.Since > 0 {
+				q.Set("since", strconv.FormatInt(in.Since, 10))
+			}
+			if in.Principal != "" {
+				q.Set("principal", in.Principal)
+			}
+			if in.Action != "" {
+				q.Set("action", in.Action)
+			}
+			if in.Limit > 0 {
+				q.Set("limit", strconv.FormatInt(in.Limit, 10))
+			}
+			path := "/audit"
+			if len(q) > 0 {
+				path += "?" + q.Encode()
+			}
+			return invoke(ctx, cfg, req, "get_audit", http.MethodGet, path, nil)
+		})
+	mcp.AddTool(s, &mcp.Tool{Name: "verify_audit", Description: "Verify the audit stream's tamper-evidence hash chain (§1.8): OK, or the first seq where it breaks. Requires the reader grant on audit:log."},
+		func(ctx context.Context, req *mcp.CallToolRequest, in struct{}) (*mcp.CallToolResult, any, error) {
+			return invoke(ctx, cfg, req, "verify_audit", http.MethodGet, "/audit/verify", nil)
 		})
 
 	// Act surface — the Flow-5 remediation half. Same checks as REST by

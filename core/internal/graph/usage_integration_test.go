@@ -11,13 +11,25 @@ func TestUsageAccounting(t *testing.T) {
 	store := testStore(t)
 	ctx := context.Background()
 
-	for _, c := range []types.MCPCall{
-		{Principal: "remedy-bot", PrincipalKind: "agent", Tool: "list_findings", OK: true, DurationMS: 12},
-		{Principal: "remedy-bot", PrincipalKind: "agent", Tool: "list_findings", OK: true, DurationMS: 9},
-		{Principal: "remedy-bot", PrincipalKind: "agent", Tool: "decide_gate", OK: false, DurationMS: 3},
-		{Principal: "admin", PrincipalKind: "human", Tool: "list_findings", OK: true, DurationMS: 5},
+	// Usage is now aggregated over the one audit stream (ADR-0034): MCP calls
+	// are mcp.tool-call audit events. Record them the way the server does.
+	for _, c := range []struct {
+		principal, kind, tool string
+		ok                    bool
+	}{
+		{"remedy-bot", "agent", "list_findings", true},
+		{"remedy-bot", "agent", "list_findings", true},
+		{"remedy-bot", "agent", "decide_gate", false},
+		{"admin", "human", "list_findings", true},
 	} {
-		if err := store.RecordMCPCall(ctx, c); err != nil {
+		outcome := types.AuditOK
+		if !c.ok {
+			outcome = types.AuditFailed
+		}
+		if err := store.RecordAudit(ctx, types.AuditEvent{
+			PrincipalID: c.principal, PrincipalKind: c.kind,
+			Action: types.AuditMCPToolCall, Object: c.tool, Outcome: outcome,
+		}); err != nil {
 			t.Fatalf("record: %v", err)
 		}
 	}

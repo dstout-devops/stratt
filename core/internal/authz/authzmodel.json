@@ -139,6 +139,22 @@
           }
         }
       }
+    },
+    {
+      "type": "audit",
+      "relations": {
+        "reader": { "this": {} }
+      },
+      "metadata": {
+        "relations": {
+          "reader": {
+            "directly_related_user_types": [
+              { "type": "principal" },
+              { "type": "team", "relation": "member" }
+            ]
+          }
+        }
+      }
     }
   ]
 }

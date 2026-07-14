@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"sort"
 	"time"
 
@@ -427,6 +428,7 @@ func (a *Activities) MarkRunning(ctx context.Context, runID string) error {
 // (API, façade, Trigger, Baseline, and each DAG Step's child) identically.
 func (a *Activities) CheckExecutionGrant(ctx context.Context, in RunInput) error {
 	if in.Principal == "" {
+		a.audit(ctx, "", types.AuditExecGrant, "view:"+in.ViewName, types.AuditDenied)
 		return temporal.NewNonRetryableApplicationError(
 			"execution requires an authenticated principal with runner on the view", "ExecutionDenied", nil)
 	}
@@ -435,11 +437,31 @@ func (a *Activities) CheckExecutionGrant(ctx context.Context, in RunInput) error
 		return err
 	}
 	if !allowed {
+		a.audit(ctx, in.Principal, types.AuditExecGrant, "view:"+in.ViewName, types.AuditDenied)
 		return temporal.NewNonRetryableApplicationError(
 			fmt.Sprintf("principal %s lacks runner on view:%s", in.Principal, in.ViewName),
 			"ExecutionDenied", nil)
 	}
+	// The one audit event covering EVERY run path — API, trigger, schedule,
+	// baseline all funnel through here (§1.6): who ran against which View.
+	a.audit(ctx, in.Principal, types.AuditExecGrant, "view:"+in.ViewName, types.AuditOK)
 	return nil
+}
+
+// audit appends one action to the audit stream (§1.6, ADR-0034) — best-effort
+// on a background context so a slow audit write never fails the action it
+// records, and a nil Store (tests) is a no-op. Principal kind is not carried
+// through activities; the id is the load-bearing field.
+func (a *Activities) audit(ctx context.Context, principal, action, object, outcome string) {
+	if a.Store == nil {
+		return
+	}
+	if err := a.Store.RecordAudit(context.WithoutCancel(ctx), types.AuditEvent{
+		PrincipalID: principal, Action: action, Object: object, Outcome: outcome,
+	}); err != nil {
+		// A failed audit write must be visible, never swallowed (§1.8).
+		slog.Error("audit record failed", "action", action, "err", err)
+	}
 }
 
 // ResolveCredentials turns CredentialRef names into pod-mountable pointers,
@@ -461,10 +483,12 @@ func (a *Activities) ResolveCredentials(ctx context.Context, in RunInput) ([]dis
 			return nil, err
 		}
 		if !allowed {
+			a.audit(ctx, in.Principal, types.AuditCredentialUse, "credential_ref:"+name, types.AuditDenied)
 			return nil, temporal.NewNonRetryableApplicationError(
 				fmt.Sprintf("principal %s lacks use on credential_ref:%s", in.Principal, name),
 				"CredentialUseDenied", nil)
 		}
+		a.audit(ctx, in.Principal, types.AuditCredentialUse, "credential_ref:"+name, types.AuditOK)
 		ref, err := a.Store.GetCredentialRef(ctx, name)
 		if err != nil {
 			return nil, temporal.NewNonRetryableApplicationError(err.Error(), "CredentialRefNotFound", err)

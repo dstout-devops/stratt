@@ -8,29 +8,18 @@ import (
 	"github.com/dstout-devops/stratt/types"
 )
 
-// RecordMCPCall writes one platform-MCP-server tool invocation — the §1.6
-// per-identity usage accounting record (ADR-0021).
-func (s *Store) RecordMCPCall(ctx context.Context, c types.MCPCall) error {
-	_, err := s.pool.Exec(ctx, `
-		INSERT INTO audit.mcp_call (principal, principal_kind, tool, ok, duration_ms)
-		VALUES ($1, $2, $3, $4, $5)`,
-		c.Principal, c.PrincipalKind, c.Tool, c.OK, c.DurationMS)
-	if err != nil {
-		return fmt.Errorf("graph: record mcp call: %w", err)
-	}
-	return nil
-}
-
 // ListUsage aggregates MCP tool calls per (principal, tool), optionally
-// filtered by principal — the §1.6 accounting made visible.
+// filtered by principal — the §1.6 accounting made visible. Re-sourced over the
+// one audit stream (ADR-0034): MCP calls are now mcp.tool-call audit events, so
+// usage and the SIEM forwarder read the same rows.
 func (s *Store) ListUsage(ctx context.Context, principal string) ([]types.UsageEntry, error) {
 	rows, err := s.pool.Query(ctx, `
-		SELECT principal, max(principal_kind), tool,
-		       count(*), count(*) FILTER (WHERE NOT ok), max(at)
-		FROM audit.mcp_call
-		WHERE ($1 = '' OR principal = $1)
-		GROUP BY principal, tool
-		ORDER BY principal, tool`, principal)
+		SELECT principal_id, max(principal_kind), object,
+		       count(*), count(*) FILTER (WHERE outcome <> 'ok'), max(at)
+		FROM audit.event
+		WHERE action = 'mcp.tool-call' AND ($1 = '' OR principal_id = $1)
+		GROUP BY principal_id, object
+		ORDER BY principal_id, object`, principal)
 	if err != nil {
 		return nil, fmt.Errorf("graph: list usage: %w", err)
 	}
