@@ -79,6 +79,13 @@ func (s *Sim) Set(n Node) {
 	s.nodes[n.Name] = n
 }
 
+// Remove deletes a node (also usable via the POST /_sim/remove hook).
+func (s *Sim) Remove(name string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.nodes, name)
+}
+
 // Handler serves the node API (signature-gated) plus unauthenticated test hooks.
 func (s *Sim) Handler() http.Handler {
 	mux := http.NewServeMux()

@@ -38,6 +38,7 @@ import (
 	"github.com/dstout-devops/stratt/core/internal/compiler"
 	"github.com/dstout-devops/stratt/core/internal/connectors/awsec2"
 	certsyncer "github.com/dstout-devops/stratt/core/internal/connectors/certissuer"
+	"github.com/dstout-devops/stratt/core/internal/connectors/chef"
 	"github.com/dstout-devops/stratt/core/internal/connectors/msgraph"
 	"github.com/dstout-devops/stratt/core/internal/connectors/vcenter"
 	"github.com/dstout-devops/stratt/core/internal/contract"
@@ -409,6 +410,47 @@ func run(ctx context.Context, log *slog.Logger) error {
 		}()
 	} else {
 		log.Info("no CLM Source configured (STRATT_CLM_ADDR empty); cert syncer idle")
+	}
+
+	// ── Chef Infra Server node Syncer (ADR-0037; config-mgmt SoR ingest) ─
+	if serverURL := os.Getenv("STRATT_CHEF_SERVER_URL"); serverURL != "" {
+		interval, err := time.ParseDuration(env("STRATT_CHEF_INTERVAL", "60s"))
+		if err != nil {
+			return fmt.Errorf("chef interval: %w", err)
+		}
+		// The signing key is read from a mounted PEM file (§2.5: material
+		// stays a file the process reads, never persisted to the graph);
+		// STRATT_CHEF_KEY may carry inline PEM for dev.
+		keyPEM := os.Getenv("STRATT_CHEF_KEY")
+		if keyFile := os.Getenv("STRATT_CHEF_KEY_FILE"); keyFile != "" {
+			b, err := os.ReadFile(keyFile)
+			if err != nil {
+				return fmt.Errorf("chef key file: %w", err)
+			}
+			keyPEM = string(b)
+		}
+		skipSSL := env("STRATT_CHEF_SKIP_SSL", "false") == "true"
+		if skipSSL {
+			log.Warn("STRATT_CHEF_SKIP_SSL enabled: Chef TLS verification is OFF (self-signed legacy servers only; estate data flows unverified)")
+		}
+		syncer := chef.NewSyncer(chef.Config{
+			ServerURL:   serverURL,
+			ClientName:  os.Getenv("STRATT_CHEF_CLIENT_NAME"),
+			KeyPEM:      keyPEM,
+			AuthVersion: env("STRATT_CHEF_AUTH_VERSION", "1.0"),
+			SkipSSL:     skipSSL,
+			SourceName:  env("STRATT_CHEF_SOURCE_NAME", "chef"),
+		}, interval, store, log)
+		if err := syncer.Register(ctx); err != nil {
+			return err
+		}
+		go func() {
+			if err := syncer.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
+				log.Error("chef syncer stopped", "error", err)
+			}
+		}()
+	} else {
+		log.Info("no Chef Source configured (STRATT_CHEF_SERVER_URL empty); syncer idle")
 	}
 
 	// ── desired-state reconciliation (§1.2: Git is the declarer) ────────

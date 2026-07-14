@@ -1,0 +1,13 @@
+# Smart-inventory View over Chef-sourced hosts (ADR-0037): the AAP-inventory →
+# Stratt-View replacement. The chef Syncer projects each node as a `host` Entity
+# carrying chef.* labels (chef.environment, chef.role.<name>); a View selects
+# them live, no hand-entered host list (§1.2 — Chef stays the SoR).
+#
+# This is the §1.1 shipping consumer that demands the projection. Bind an
+# Assignment to it in a later Intent-layer slice to enforce Baselines over the
+# fleet; here it just proves the estate is queryable as one graph.
+name: production-chef-hosts
+selector:
+  kinds: [host]
+  labels:
+    chef.environment: production
