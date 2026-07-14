@@ -15,6 +15,20 @@ image:
 
 replicas: 1
 
+# High availability (ADR-0040). For replicas > 1, enable leaderElection so the
+# singleton controllers (audit sealer, syncers, reconcilers, trigger engine,
+# notifier, Salt emitter) run only on the elected leader; the REST API and the
+# Temporal worker run on every replica. Multi-replica also requires the OpenFGA
+# server backend (openfga.enabled / external) — the in-process authz evaluator
+# is single-replica only.
+leaderElection:
+  enabled: false
+# PodDisruptionBudget keeps a quorum of API replicas serving during voluntary
+# disruptions (node drains, rollouts). Rendered only when replicas > 1.
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 1
+
 service:
   type: ClusterIP
   port: 8080

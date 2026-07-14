@@ -690,6 +690,13 @@ func run(ctx context.Context, log *slog.Logger) error {
 		}
 	}
 	if env("STRATT_LEADER_ELECTION", "false") == "true" {
+		// Multi-replica authz MUST use the OpenFGA server backend: the ongoing
+		// tuple reload is leader-only, so a non-leader's in-process evaluator
+		// would go stale and silently serve wrong grants (§1.6/§1.8). Fail fast
+		// rather than hide it — mirroring the OIDC-audience / state-key guards.
+		if os.Getenv("STRATT_OPENFGA_URL") == "" {
+			return fmt.Errorf("STRATT_LEADER_ELECTION requires STRATT_OPENFGA_URL: multi-replica authorization needs the OpenFGA server backend; the in-process evaluator is single-replica only")
+		}
 		host, _ := os.Hostname()
 		leaderCfg := leader.Config{
 			Identity:  env("POD_NAME", host),

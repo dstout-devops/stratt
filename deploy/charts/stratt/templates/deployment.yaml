@@ -5,6 +5,13 @@ metadata:
   labels: {{- include "stratt.labels" . | nindent 4 }}
 spec:
   replicas: {{ .Values.replicas }}
+  # Surge-then-drain rollout keeps the API available during upgrades (ADR-0040);
+  # the PDB below bounds voluntary disruption.
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
   selector:
     matchLabels: {{- include "stratt.selectorLabels" . | nindent 6 }}
   template:
@@ -21,8 +28,10 @@ spec:
           ports:
             - name: http
               containerPort: 8080
+          # Readiness gates traffic on substrate reachability; liveness is
+          # process-only so a substrate blip never restarts the pod (ADR-0040).
           readinessProbe:
-            httpGet: { path: /healthz, port: http }
+            httpGet: { path: /readyz, port: http }
             initialDelaySeconds: 2
             periodSeconds: 5
           livenessProbe:
@@ -33,6 +42,20 @@ spec:
           env:
             - name: STRATT_K8S_NAMESPACE
               value: {{ .Release.Namespace | quote }}
+            {{- if .Values.leaderElection.enabled }}
+            # Leader election (ADR-0040): identity + namespace via the downward
+            # API; controllers run only on the elected leader.
+            - name: STRATT_LEADER_ELECTION
+              value: "true"
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            {{- end }}
             # DSNs come from Secrets in production (§2.5); the inline form is
             # a dev convenience NOTES.txt warns about.
             {{- if .Values.database.existingSecret.name }}
@@ -184,6 +207,17 @@ spec:
       {{- with .Values.tolerations }}
       tolerations: {{- toYaml . | nindent 8 }}
       {{- end }}
-      {{- with .Values.affinity }}
-      affinity: {{- toYaml . | nindent 8 }}
+      {{- if .Values.affinity }}
+      affinity: {{- toYaml .Values.affinity | nindent 8 }}
+      {{- else if gt (int .Values.replicas) 1 }}
+      # Default: spread replicas across nodes so one node loss can't take the
+      # whole control plane (ADR-0040). Override via .Values.affinity.
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchLabels: {{- include "stratt.selectorLabels" . | nindent 20 }}
+                topologyKey: kubernetes.io/hostname
       {{- end }}

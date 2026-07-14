@@ -1,0 +1,14 @@
+{{- if and .Values.podDisruptionBudget.enabled (gt (int .Values.replicas) 1) }}
+# PodDisruptionBudget (ADR-0040): keep a quorum of API replicas serving during
+# voluntary disruptions (node drains, rolling upgrades). Rendered only for a
+# multi-replica (HA) deployment.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "stratt.fullname" . }}
+  labels: {{- include "stratt.labels" . | nindent 4 }}
+spec:
+  minAvailable: {{ .Values.podDisruptionBudget.minAvailable }}
+  selector:
+    matchLabels: {{- include "stratt.selectorLabels" . | nindent 6 }}
+{{- end }}
