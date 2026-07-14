@@ -13,6 +13,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -77,6 +78,18 @@ func env(key, def string) string {
 		return v
 	}
 	return def
+}
+
+// splitNonEmpty splits a comma-separated env value into trimmed, non-empty
+// entries (e.g. STRATT_SALT_EVENT_TAGS="salt/minion/,salt/job/").
+func splitNonEmpty(s string) []string {
+	var out []string
+	for _, p := range strings.Split(s, ",") {
+		if p = strings.TrimSpace(p); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 func run(ctx context.Context, log *slog.Logger) error {
@@ -484,11 +497,13 @@ func run(ctx context.Context, log *slog.Logger) error {
 
 	// ── Salt grains Syncer (ADR-0039; config-mgmt SoR ingest) ────────────
 	saltCfg := salt.Config{
-		APIURL:     os.Getenv("STRATT_SALT_API_URL"),
-		Username:   os.Getenv("STRATT_SALT_USERNAME"),
-		Password:   os.Getenv("STRATT_SALT_PASSWORD"),
-		Eauth:      env("STRATT_SALT_EAUTH", "pam"),
-		SourceName: env("STRATT_SALT_SOURCE_NAME", "salt"),
+		APIURL:      os.Getenv("STRATT_SALT_API_URL"),
+		Username:    os.Getenv("STRATT_SALT_USERNAME"),
+		Password:    os.Getenv("STRATT_SALT_PASSWORD"),
+		Eauth:       env("STRATT_SALT_EAUTH", "pam"),
+		SourceName:  env("STRATT_SALT_SOURCE_NAME", "salt"),
+		EmitterName: env("STRATT_SALT_EMITTER_NAME", "salt"),
+		EventTags:   splitNonEmpty(os.Getenv("STRATT_SALT_EVENT_TAGS")),
 	}
 	if saltCfg.APIURL != "" {
 		interval, err := time.ParseDuration(env("STRATT_SALT_INTERVAL", "60s"))
@@ -621,6 +636,19 @@ func run(ctx context.Context, log *slog.Logger) error {
 			log.Error("trigger engine stopped", "error", err)
 		}
 	}()
+
+	// ── Salt event-bus Emitter (ADR-0039: stream-subscriber → emitter stream) ─
+	if saltCfg.APIURL != "" && env("STRATT_SALT_EVENTS", "false") == "true" {
+		if len(saltCfg.EventTags) == 0 {
+			log.Warn("STRATT_SALT_EVENTS enabled with no STRATT_SALT_EVENT_TAGS filter: forwarding the ENTIRE Salt event bus onto the emitter stream (set a tag-prefix allowlist to avoid flooding)")
+		}
+		emitter := salt.NewEmitter(saltCfg, bus, log)
+		go func() {
+			if err := emitter.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
+				log.Error("salt emitter stopped", "error", err)
+			}
+		}()
+	}
 
 	// ── notifier (ADR-0027: Notices × Subscriptions → webhook delivery) ──
 	// The outbound mirror of the trigger engine. Each delivery runs in a pod
