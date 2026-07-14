@@ -41,6 +41,7 @@ import (
 	"github.com/dstout-devops/stratt/core/internal/connectors/chef"
 	"github.com/dstout-devops/stratt/core/internal/connectors/msgraph"
 	"github.com/dstout-devops/stratt/core/internal/connectors/puppet"
+	"github.com/dstout-devops/stratt/core/internal/connectors/salt"
 	"github.com/dstout-devops/stratt/core/internal/connectors/vcenter"
 	"github.com/dstout-devops/stratt/core/internal/contract"
 	"github.com/dstout-devops/stratt/core/internal/desiredstate"
@@ -479,6 +480,32 @@ func run(ctx context.Context, log *slog.Logger) error {
 		}()
 	} else {
 		log.Info("no PuppetDB Source configured (STRATT_PUPPETDB_URL empty); syncer idle")
+	}
+
+	// ── Salt grains Syncer (ADR-0039; config-mgmt SoR ingest) ────────────
+	saltCfg := salt.Config{
+		APIURL:     os.Getenv("STRATT_SALT_API_URL"),
+		Username:   os.Getenv("STRATT_SALT_USERNAME"),
+		Password:   os.Getenv("STRATT_SALT_PASSWORD"),
+		Eauth:      env("STRATT_SALT_EAUTH", "pam"),
+		SourceName: env("STRATT_SALT_SOURCE_NAME", "salt"),
+	}
+	if saltCfg.APIURL != "" {
+		interval, err := time.ParseDuration(env("STRATT_SALT_INTERVAL", "60s"))
+		if err != nil {
+			return fmt.Errorf("salt interval: %w", err)
+		}
+		syncer := salt.NewSyncer(saltCfg, interval, store, log)
+		if err := syncer.Register(ctx); err != nil {
+			return err
+		}
+		go func() {
+			if err := syncer.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
+				log.Error("salt syncer stopped", "error", err)
+			}
+		}()
+	} else {
+		log.Info("no Salt Source configured (STRATT_SALT_API_URL empty); syncer idle")
 	}
 
 	// ── desired-state reconciliation (§1.2: Git is the declarer) ────────

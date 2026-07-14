@@ -1,0 +1,17 @@
+# Smart-inventory View over Salt-sourced hosts (ADR-0039): the AAP-inventory →
+# Stratt-View replacement, over the third config-mgmt Source. The salt Syncer
+# projects each minion as a `host` Entity carrying source-scoped salt.node.*
+# facets; a View selects them live, no hand-entered host list (§1.2 — the Salt
+# master stays the SoR).
+#
+# Selection is on the SOURCE-scoped facet, not the shared Entity `labels` bag
+# (which would clobber across correlating Sources, §2.4/ADR-0038). Salt has no
+# `environment` grain, so this selects on a real core grain (os_family) — the
+# facet-selection story works for any grain, not just environment.
+name: redhat-salt-hosts
+selector:
+  kinds: [host]
+  facets:
+    - namespace: salt.node.identity
+      path: os_family
+      equals: RedHat
