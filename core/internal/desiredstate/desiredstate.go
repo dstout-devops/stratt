@@ -742,9 +742,11 @@ type baselineFile struct {
 	// asserts expected Facet values graph-side (no check Step, no actuator).
 	// The desired state is "the Entities in viewName should carry these Facet
 	// values" (§2.4); the collector projects the Facets separately (§1.2).
+	// There is deliberately no `claim` field: an observation reads, it never
+	// writes/owns the Facet, so there is nothing to claim (the anti-GPO claim
+	// concept is the compiler's, over Assignment-owned writes — ADR-0023/§2.4).
 	Mode     string                 `yaml:"mode"`
 	Expected []facetExpectationFile `yaml:"expected"`
-	Claim    string                 `yaml:"claim"`
 }
 
 // facetExpectationFile is the yaml shape of one facet-observation expectation.
@@ -792,7 +794,7 @@ func parseBaselineFile(path string, raw []byte) (string, types.Baseline, error) 
 		Cron: f.Cron, Paused: f.Paused, Severity: f.Severity,
 		DampingObservations: f.DampingObservations,
 		RemediationWorkflow: f.RemediationWorkflow, Framework: f.Framework,
-		Mode: f.Mode, Claim: f.Claim,
+		Mode: f.Mode,
 	}
 	for _, ef := range f.Expected {
 		exp, err := ef.toExpectation()
@@ -844,11 +846,6 @@ func ValidateBaseline(b types.Baseline) error {
 		}
 		if len(b.CredentialRefs) > 0 {
 			return fmt.Errorf("baseline %s: facet-observation baselines take no credentialRefs", b.Name)
-		}
-		switch b.Claim {
-		case "", types.ClaimExclusive, types.ClaimAdditive:
-		default:
-			return fmt.Errorf("baseline %s: claim must be exclusive or additive", b.Name)
 		}
 		if len(b.Expected) == 0 {
 			return fmt.Errorf("baseline %s: facet-observation requires at least one expected value", b.Name)

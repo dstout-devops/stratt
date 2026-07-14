@@ -86,7 +86,6 @@ mode: facet-observation
 cron: "0 * * * *"
 severity: critical
 framework: cis
-claim: exclusive
 expected:
   - namespace: os.hardening.sshd
     path: permit_root_login
@@ -103,7 +102,7 @@ expected:
 		t.Fatalf("baselines: %+v", parsed.Baselines)
 	}
 	b := parsed.Baselines[0]
-	if b.Mode != types.FacetObservation || b.Framework != "cis" || b.Claim != types.ClaimExclusive {
+	if b.Mode != types.FacetObservation || b.Framework != "cis" {
 		t.Fatalf("baseline: %+v", b)
 	}
 	if len(b.Expected) != 2 {
@@ -118,16 +117,16 @@ expected:
 
 	// Rejections specific to facet-observation.
 	for name, doc := range map[string]string{
-		"no expected":     "name: x\nviewName: v\nmode: facet-observation\ncron: '* * * * *'\nseverity: info\n",
-		"actuator set":    "name: x\nviewName: v\nmode: facet-observation\ncron: '* * * * *'\nseverity: info\nactuator: ansible\nexpected: [{namespace: n, equals: 1}]\n",
-		"params set":      "name: x\nviewName: v\nmode: facet-observation\ncron: '* * * * *'\nseverity: info\nparams: {x: 1}\nexpected: [{namespace: n, equals: 1}]\n",
-		"creds set":       "name: x\nviewName: v\nmode: facet-observation\ncron: '* * * * *'\nseverity: info\ncredentialRefs: [c]\nprincipal: p\nexpected: [{namespace: n, equals: 1}]\n",
-		"no matcher":      "name: x\nviewName: v\nmode: facet-observation\ncron: '* * * * *'\nseverity: info\nexpected: [{namespace: n}]\n",
-		"two matchers":    "name: x\nviewName: v\nmode: facet-observation\ncron: '* * * * *'\nseverity: info\nexpected: [{namespace: n, equals: 1, contains: 2}]\n",
-		"empty namespace": "name: x\nviewName: v\nmode: facet-observation\ncron: '* * * * *'\nseverity: info\nexpected: [{equals: 1}]\n",
-		"missing view":    "name: x\nmode: facet-observation\ncron: '* * * * *'\nseverity: info\nexpected: [{namespace: n, equals: 1}]\n",
-		"bad claim":       "name: x\nviewName: v\nmode: facet-observation\ncron: '* * * * *'\nseverity: info\nclaim: priority\nexpected: [{namespace: n, equals: 1}]\n",
-		"unknown mode":    "name: x\nviewName: v\nmode: probe\ncron: '* * * * *'\nseverity: info\n",
+		"no expected":       "name: x\nviewName: v\nmode: facet-observation\ncron: '* * * * *'\nseverity: info\n",
+		"actuator set":      "name: x\nviewName: v\nmode: facet-observation\ncron: '* * * * *'\nseverity: info\nactuator: ansible\nexpected: [{namespace: n, equals: 1}]\n",
+		"params set":        "name: x\nviewName: v\nmode: facet-observation\ncron: '* * * * *'\nseverity: info\nparams: {x: 1}\nexpected: [{namespace: n, equals: 1}]\n",
+		"creds set":         "name: x\nviewName: v\nmode: facet-observation\ncron: '* * * * *'\nseverity: info\ncredentialRefs: [c]\nprincipal: p\nexpected: [{namespace: n, equals: 1}]\n",
+		"no matcher":        "name: x\nviewName: v\nmode: facet-observation\ncron: '* * * * *'\nseverity: info\nexpected: [{namespace: n}]\n",
+		"two matchers":      "name: x\nviewName: v\nmode: facet-observation\ncron: '* * * * *'\nseverity: info\nexpected: [{namespace: n, equals: 1, contains: 2}]\n",
+		"empty namespace":   "name: x\nviewName: v\nmode: facet-observation\ncron: '* * * * *'\nseverity: info\nexpected: [{equals: 1}]\n",
+		"missing view":      "name: x\nmode: facet-observation\ncron: '* * * * *'\nseverity: info\nexpected: [{namespace: n, equals: 1}]\n",
+		"claim not a field": "name: x\nviewName: v\nmode: facet-observation\ncron: '* * * * *'\nseverity: info\nclaim: exclusive\nexpected: [{namespace: n, equals: 1}]\n",
+		"unknown mode":      "name: x\nviewName: v\nmode: probe\ncron: '* * * * *'\nseverity: info\n",
 	} {
 		bad := t.TempDir()
 		writeDecl(t, bad, "v.yaml", "name: v\nselector: {kinds: [vm]}\n")

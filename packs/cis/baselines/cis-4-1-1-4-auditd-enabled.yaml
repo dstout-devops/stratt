@@ -1,0 +1,12 @@
+# CIS 4.1.1.4 auditd enabled at boot — asserted graph-side against the os.hardening.auditd Facet the
+# collector projects (ADR-0033). The benchmark is data: a control is a Baseline.
+name: cis-4-1-1-4-auditd-enabled
+viewName: ${VIEW}
+mode: facet-observation
+cron: "0 */6 * * *"
+severity: warning
+framework: cis
+expected:
+  - namespace: os.hardening.auditd
+    path: enabled
+    equals: true

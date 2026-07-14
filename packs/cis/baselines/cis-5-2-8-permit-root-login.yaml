@@ -1,0 +1,12 @@
+# CIS 5.2.8 disable SSH root login — asserted graph-side against the os.hardening.sshd Facet the
+# collector projects (ADR-0033). The benchmark is data: a control is a Baseline.
+name: cis-5-2-8-permit-root-login
+viewName: ${VIEW}
+mode: facet-observation
+cron: "0 */6 * * *"
+severity: critical
+framework: cis
+expected:
+  - namespace: os.hardening.sshd
+    path: permit_root_login
+    equals: "no"

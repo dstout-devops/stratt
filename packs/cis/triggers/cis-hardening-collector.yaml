@@ -1,0 +1,132 @@
+# Collector — a scheduled, read-only gather Run that projects host hardening
+# posture as os.hardening.* Facets (charter §1.2; ADR-0033). It mutates nothing;
+# the projection is the side-effect of the Run (WriterRun provenance). The
+# facet-observation Baselines in this pack assert the CIS values against what
+# this collector projects.
+#
+# The set_fact names (stratt_hardening_<domain>) and value types are a contract
+# with the ansible actuator's ExtractFacts and the pinned os.hardening.<domain>
+# schemas — sysctl/sshd values are strings, filesystem/auditd/services booleans.
+name: cis-hardening-collector
+kind: schedule
+cron: "0 */6 * * *"
+viewName: ${VIEW}
+principal: ${PRINCIPAL}
+credentialRefs: ${CRED}
+actuator: ansible
+params:
+  play: |
+    - name: Collect CIS host hardening posture (read-only)
+      hosts: all
+      gather_facts: true
+      become: true
+      vars:
+        sysctl_oids:
+          ip_forward: net.ipv4.ip_forward
+          all_send_redirects: net.ipv4.conf.all.send_redirects
+          default_send_redirects: net.ipv4.conf.default.send_redirects
+          all_accept_redirects: net.ipv4.conf.all.accept_redirects
+          all_secure_redirects: net.ipv4.conf.all.secure_redirects
+          all_accept_source_route: net.ipv4.conf.all.accept_source_route
+          all_log_martians: net.ipv4.conf.all.log_martians
+          all_rp_filter: net.ipv4.conf.all.rp_filter
+          icmp_echo_ignore_broadcasts: net.ipv4.icmp_echo_ignore_broadcasts
+          tcp_syncookies: net.ipv4.tcp_syncookies
+          randomize_va_space: kernel.randomize_va_space
+        sshd_keys:
+          permit_root_login: permitrootlogin
+          password_authentication: passwordauthentication
+          permit_empty_passwords: permitemptypasswords
+          x11_forwarding: x11forwarding
+          max_auth_tries: maxauthtries
+          client_alive_interval: clientaliveinterval
+          client_alive_count_max: clientalivecountmax
+          login_grace_time: logingracetime
+          ignore_rhosts: ignorerhosts
+          hostbased_authentication: hostbasedauthentication
+        blocked_filesystems: [cramfs, freevxfs, jffs2, hfs, hfsplus, udf]
+      tasks:
+        - name: Read kernel parameters
+          ansible.builtin.command: "sysctl -n {{ item.value }}"
+          changed_when: false
+          failed_when: false
+          loop: "{{ sysctl_oids | dict2items }}"
+          register: cis_sysctl
+
+        - name: Read effective sshd configuration
+          ansible.builtin.command: sshd -T
+          changed_when: false
+          failed_when: false
+          register: cis_sshd
+
+        - name: Probe modprobe-blocked filesystems
+          ansible.builtin.shell: >-
+            set -o pipefail;
+            if modprobe -n -v {{ item }} 2>&1 | grep -Eq 'install /bin/(true|false)|not found'
+               && ! lsmod | grep -q '^{{ item }}\b'; then echo true; else echo false; fi
+          args: { executable: /bin/bash }
+          changed_when: false
+          failed_when: false
+          loop: "{{ blocked_filesystems }}"
+          register: cis_fs
+
+        - name: Probe /tmp mount options
+          ansible.builtin.shell: "findmnt -no OPTIONS /tmp 2>/dev/null || true"
+          args: { executable: /bin/bash }
+          changed_when: false
+          failed_when: false
+          register: cis_tmp
+
+        - name: Gather package facts
+          ansible.builtin.package_facts:
+            manager: auto
+
+        - name: Gather service facts
+          ansible.builtin.service_facts:
+
+        - name: Build sysctl and sshd lookup maps
+          ansible.builtin.set_fact:
+            sysctl_map: >-
+              {{ dict(cis_sysctl.results
+                      | map(attribute='item.key')
+                      | zip(cis_sysctl.results | map(attribute='stdout') | map('trim'))) }}
+            sshd_map: >-
+              {{ dict(cis_sshd.stdout_lines
+                      | map('regex_replace', '^(\S+)\s+(.*)$', '\1\t\2')
+                      | map('split', '\t')) }}
+            fs_map: >-
+              {{ dict(blocked_filesystems
+                      | zip(cis_fs.results | map(attribute='stdout') | map('trim') | map('lower'))) }}
+            tmp_opts: "{{ cis_tmp.stdout | default('') }}"
+
+        - name: Project stratt hardening facets
+          ansible.builtin.set_fact:
+            stratt_hardening_sysctl: "{{ sysctl_map }}"
+            stratt_hardening_sshd: >-
+              {{ dict(sshd_keys | dict2items
+                      | map(attribute='key')
+                      | zip(sshd_keys.values() | map('extract', sshd_map) | map('default', ''))) }}
+            stratt_hardening_filesystem:
+              cramfs_disabled: "{{ fs_map.cramfs | default('false') == 'true' }}"
+              freevxfs_disabled: "{{ fs_map.freevxfs | default('false') == 'true' }}"
+              jffs2_disabled: "{{ fs_map.jffs2 | default('false') == 'true' }}"
+              hfs_disabled: "{{ fs_map.hfs | default('false') == 'true' }}"
+              hfsplus_disabled: "{{ fs_map.hfsplus | default('false') == 'true' }}"
+              udf_disabled: "{{ fs_map.udf | default('false') == 'true' }}"
+              tmp_separate: "{{ tmp_opts | length > 0 }}"
+              tmp_nodev: "{{ 'nodev' in tmp_opts }}"
+              tmp_nosuid: "{{ 'nosuid' in tmp_opts }}"
+              tmp_noexec: "{{ 'noexec' in tmp_opts }}"
+            stratt_hardening_auditd:
+              installed: "{{ 'auditd' in ansible_facts.packages }}"
+              enabled: "{{ (ansible_facts.services['auditd.service'].status | default('')) == 'enabled' }}"
+              running: "{{ (ansible_facts.services['auditd.service'].state | default('')) == 'running' }}"
+            stratt_hardening_services:
+              avahi_removed: "{{ 'avahi-daemon' not in ansible_facts.packages }}"
+              cups_removed: "{{ 'cups' not in ansible_facts.packages }}"
+              dhcp_server_removed: "{{ 'isc-dhcp-server' not in ansible_facts.packages }}"
+              ldap_server_removed: "{{ 'slapd' not in ansible_facts.packages }}"
+              nfs_server_removed: "{{ 'nfs-kernel-server' not in ansible_facts.packages }}"
+              rpcbind_removed: "{{ 'rpcbind' not in ansible_facts.packages }}"
+              rsync_removed: "{{ 'rsync' not in ansible_facts.packages }}"
+              telnet_server_removed: "{{ 'telnetd' not in ansible_facts.packages }}"

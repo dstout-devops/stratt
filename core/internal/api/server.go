@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -1873,6 +1874,88 @@ func (s *Server) ListFindings(w http.ResponseWriter, r *http.Request, params Lis
 		out = append(out, findingToWire(f))
 	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+// GetComplianceReport implements (GET /compliance/{framework}): the framework's
+// per-View posture score (ADR-0033). It folds the framework-tagged Baselines
+// (the controls) against their open Findings — a control passes when no target
+// in its View has an open Finding. Read-only over the existing surface; the
+// benchmark is data, a pack ships the controls.
+func (s *Server) GetComplianceReport(w http.ResponseWriter, r *http.Request, framework string, params GetComplianceReportParams) {
+	viewFilter := ""
+	if params.View != nil {
+		viewFilter = *params.View
+	}
+	baselines, err := s.Store.ListBaselines(r.Context())
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	openCounts, err := s.Store.OpenFindingCountsByFramework(r.Context(), framework)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, buildComplianceReport(framework, viewFilter, baselines, openCounts))
+}
+
+// buildComplianceReport folds the framework-tagged Baselines (the controls)
+// against their open-Finding counts into a per-View score (ADR-0033). A control
+// passes when it has no open Findings. Pure over its inputs — the I/O lives in
+// the handler — so the scoring is unit-tested without a store.
+func buildComplianceReport(framework, viewFilter string, baselines []types.Baseline, openCounts map[string]int) ComplianceReport {
+	type acc struct {
+		controls, passing, failing int64
+		failingControls            []FailingControl
+	}
+	byView := map[string]*acc{}
+	var order []string
+	for _, b := range baselines {
+		if b.Framework != framework {
+			continue
+		}
+		if viewFilter != "" && b.ViewName != viewFilter {
+			continue
+		}
+		a := byView[b.ViewName]
+		if a == nil {
+			a = &acc{}
+			byView[b.ViewName] = a
+			order = append(order, b.ViewName)
+		}
+		a.controls++
+		if n := openCounts[b.Name]; n > 0 {
+			a.failing++
+			a.failingControls = append(a.failingControls, FailingControl{
+				Baseline:     b.Name,
+				Severity:     FailingControlSeverity(b.Severity),
+				OpenFindings: int64(n),
+			})
+		} else {
+			a.passing++
+		}
+	}
+	sort.Strings(order)
+
+	report := ComplianceReport{Framework: framework, Views: make([]ComplianceViewScore, 0, len(order))}
+	for _, view := range order {
+		a := byView[view]
+		score := 1.0
+		if a.controls > 0 {
+			score = float64(a.passing) / float64(a.controls)
+		}
+		sort.Slice(a.failingControls, func(i, j int) bool {
+			return a.failingControls[i].Baseline < a.failingControls[j].Baseline
+		})
+		vs := ComplianceViewScore{
+			View: view, Controls: a.controls, Passing: a.passing, Failing: a.failing, Score: score,
+		}
+		if len(a.failingControls) > 0 {
+			vs.FailingControls = &a.failingControls
+		}
+		report.Views = append(report.Views, vs)
+	}
+	return report
 }
 
 // GetFinding implements (GET /findings/{id}).

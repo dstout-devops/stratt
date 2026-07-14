@@ -1,0 +1,12 @@
+# CIS 2.2.5 remove CUPS — asserted graph-side against the os.hardening.services Facet the
+# collector projects (ADR-0033). The benchmark is data: a control is a Baseline.
+name: cis-2-2-5-cups
+viewName: ${VIEW}
+mode: facet-observation
+cron: "0 */6 * * *"
+severity: info
+framework: cis
+expected:
+  - namespace: os.hardening.services
+    path: cups_removed
+    equals: true

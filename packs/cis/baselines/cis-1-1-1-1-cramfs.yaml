@@ -1,0 +1,12 @@
+# CIS 1.1.1.1 disable cramfs — asserted graph-side against the os.hardening.filesystem Facet the
+# collector projects (ADR-0033). The benchmark is data: a control is a Baseline.
+name: cis-1-1-1-1-cramfs
+viewName: ${VIEW}
+mode: facet-observation
+cron: "0 */6 * * *"
+severity: warning
+framework: cis
+expected:
+  - namespace: os.hardening.filesystem
+    path: cramfs_disabled
+    equals: true

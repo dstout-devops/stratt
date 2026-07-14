@@ -1,0 +1,12 @@
+# CIS 1.1.8 /tmp nodev — asserted graph-side against the os.hardening.filesystem Facet the
+# collector projects (ADR-0033). The benchmark is data: a control is a Baseline.
+name: cis-1-1-8-tmp-nodev
+viewName: ${VIEW}
+mode: facet-observation
+cron: "0 */6 * * *"
+severity: warning
+framework: cis
+expected:
+  - namespace: os.hardening.filesystem
+    path: tmp_nodev
+    equals: true

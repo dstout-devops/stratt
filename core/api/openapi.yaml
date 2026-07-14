@@ -436,6 +436,32 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/Baseline" }
         "404": { $ref: "#/components/responses/NotFound" }
+  /compliance/{framework}:
+    parameters:
+      - name: framework
+        in: path
+        required: true
+        schema: { type: string }
+    get:
+      operationId: getComplianceReport
+      summary: Compliance rollup for a framework
+      description: >
+        Aggregates framework-tagged Baselines (the controls) and their open
+        Findings into a per-View posture score (charter §2.4). A control passes
+        when no target in its View has an open Finding for it. Read-only over
+        the existing Baseline/Finding surface — the benchmark is data, a pack
+        ships the controls (ADR-0033).
+      parameters:
+        - name: view
+          in: query
+          required: false
+          schema: { type: string }
+      responses:
+        "200":
+          description: The framework's per-View compliance rollup.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ComplianceReport" }
   /findings:
     get:
       operationId: listFindings
@@ -1319,6 +1345,46 @@ components:
         lastObserved: { type: string, format: date-time }
         openedAt: { type: string, format: date-time }
         resolvedAt: { type: string, format: date-time }
+    ComplianceReport:
+      type: object
+      description: >
+        A framework's compliance posture (charter §2.4, ADR-0033): the
+        framework-tagged Baselines are the controls, rolled up per View into a
+        score. The benchmark is data — a pack ships the controls.
+      required: [framework, views]
+      properties:
+        framework: { type: string }
+        views:
+          type: array
+          items: { $ref: "#/components/schemas/ComplianceViewScore" }
+    ComplianceViewScore:
+      type: object
+      required: [view, controls, passing, failing, score]
+      properties:
+        view: { type: string }
+        controls:
+          type: integer
+          format: int64
+          description: Framework-tagged Baselines targeting this View.
+        passing: { type: integer, format: int64 }
+        failing: { type: integer, format: int64 }
+        score:
+          type: number
+          format: double
+          description: passing / controls (1.0 when there are no controls).
+        failingControls:
+          type: array
+          items: { $ref: "#/components/schemas/FailingControl" }
+    FailingControl:
+      type: object
+      required: [baseline, severity, openFindings]
+      properties:
+        baseline: { type: string }
+        severity: { type: string, enum: [info, warning, critical] }
+        openFindings:
+          type: integer
+          format: int64
+          description: Open Findings this control has raised across the View's targets.
     Contract:
       type: object
       description: >

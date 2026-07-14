@@ -251,6 +251,32 @@ func (s *Store) ListFindings(ctx context.Context, baseline, status string, limit
 	return out, rows.Err()
 }
 
+// OpenFindingCountsByFramework returns, per Baseline name, how many Findings
+// are currently open for the given framework — the failing-control tally the
+// compliance rollup folds against the framework's Baselines (ADR-0033). One
+// grouped query, so the rollup stays O(1) in round-trips regardless of how
+// many controls a pack ships.
+func (s *Store) OpenFindingCountsByFramework(ctx context.Context, framework string) (map[string]int, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT baseline, count(*) FROM graph.finding
+		WHERE framework = $1 AND status = 'open'
+		GROUP BY baseline`, framework)
+	if err != nil {
+		return nil, fmt.Errorf("graph: open finding counts: %w", err)
+	}
+	defer rows.Close()
+	out := map[string]int{}
+	for rows.Next() {
+		var name string
+		var n int
+		if err := rows.Scan(&name, &n); err != nil {
+			return nil, fmt.Errorf("graph: open finding counts: %w", err)
+		}
+		out[name] = n
+	}
+	return out, rows.Err()
+}
+
 // GetFinding returns one Finding.
 func (s *Store) GetFinding(ctx context.Context, id string) (types.Finding, error) {
 	f, err := scanFinding(s.pool.QueryRow(ctx,

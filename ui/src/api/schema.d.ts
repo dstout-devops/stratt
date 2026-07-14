@@ -452,6 +452,28 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/compliance/{framework}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                framework: string;
+            };
+            cookie?: never;
+        };
+        /**
+         * Compliance rollup for a framework
+         * @description Aggregates framework-tagged Baselines (the controls) and their open Findings into a per-View posture score (charter §2.4). A control passes when no target in its View has an open Finding for it. Read-only over the existing Baseline/Finding surface — the benchmark is data, a pack ships the controls (ADR-0033).
+         */
+        get: operations["getComplianceReport"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/findings": {
         parameters: {
             query?: never;
@@ -1100,6 +1122,39 @@ export interface components {
             openedAt?: string;
             /** Format: date-time */
             resolvedAt?: string;
+        };
+        /** @description A framework's compliance posture (charter §2.4, ADR-0033): the framework-tagged Baselines are the controls, rolled up per View into a score. The benchmark is data — a pack ships the controls. */
+        ComplianceReport: {
+            framework: string;
+            views: components["schemas"]["ComplianceViewScore"][];
+        };
+        ComplianceViewScore: {
+            view: string;
+            /**
+             * Format: int64
+             * @description Framework-tagged Baselines targeting this View.
+             */
+            controls: number;
+            /** Format: int64 */
+            passing: number;
+            /** Format: int64 */
+            failing: number;
+            /**
+             * Format: double
+             * @description passing / controls (1.0 when there are no controls).
+             */
+            score: number;
+            failingControls?: components["schemas"]["FailingControl"][];
+        };
+        FailingControl: {
+            baseline: string;
+            /** @enum {string} */
+            severity: "info" | "warning" | "critical";
+            /**
+             * Format: int64
+             * @description Open Findings this control has raised across the View's targets.
+             */
+            openFindings: number;
         };
         /** @description A pinned JSON Schema document on a Step's inputs/outputs or a Facet namespace (charter §1.5, §2.2) — data, never a language class. */
         Contract: {
@@ -1893,6 +1948,30 @@ export interface operations {
                 };
             };
             404: components["responses"]["NotFound"];
+        };
+    };
+    getComplianceReport: {
+        parameters: {
+            query?: {
+                view?: string;
+            };
+            header?: never;
+            path: {
+                framework: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The framework's per-View compliance rollup. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ComplianceReport"];
+                };
+            };
         };
     };
     listFindings: {

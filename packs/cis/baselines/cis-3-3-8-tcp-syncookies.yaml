@@ -1,0 +1,12 @@
+# CIS 3.3.8 TCP SYN cookies — asserted graph-side against the os.hardening.sysctl Facet the
+# collector projects (ADR-0033). The benchmark is data: a control is a Baseline.
+name: cis-3-3-8-tcp-syncookies
+viewName: ${VIEW}
+mode: facet-observation
+cron: "0 */6 * * *"
+severity: warning
+framework: cis
+expected:
+  - namespace: os.hardening.sysctl
+    path: tcp_syncookies
+    equals: "1"

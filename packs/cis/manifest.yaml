@@ -1,0 +1,36 @@
+# CIS Linux Benchmark pack — a curated grouping of existing Named Kinds
+# (charter §2: "pack" is NOT a Kind). It ships a collector Trigger that projects
+# os.hardening.* Facets (§1.2) and a set of facet-observation Baselines that
+# assert the CIS-recommended values (framework: cis). The benchmark is DATA over
+# a reusable projection — build the projection once, and CIS/STIG/PCI become
+# pure Baseline authoring (ADR-0033).
+name: cis
+title: CIS Linux Benchmark (Level 1, host) — facet-observation
+version: 1
+description: >-
+  Projects host hardening posture as os.hardening.* Facets via a read-only
+  ansible gather Run, and asserts the CIS Level-1 recommended values as
+  facet-observation Baselines. v1 covers a broad set of controls across the
+  filesystem, service, network-sysctl, audit, and SSH domains; the set extends
+  control-by-control as pure data (no new code) on the same projection.
+
+# Every Facet namespace the collector projects and the Baselines demand. Each
+# has a pinned schema in contracts/facets (charter §1.1).
+requiredFacets:
+  - os.hardening.filesystem
+  - os.hardening.services
+  - os.hardening.sysctl
+  - os.hardening.auditd
+  - os.hardening.sshd
+
+# Placeholders substituted by `stratt pack install`.
+parameters:
+  - name: VIEW
+    description: the View selecting the hosts to assess (required)
+    required: true
+  - name: PRINCIPAL
+    description: the Principal the collector gather Run executes as
+    default: cis-collector
+  - name: CRED
+    description: a CredentialRef list for the collector's host connection (optional)
+    default: "[]"
