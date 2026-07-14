@@ -52,6 +52,7 @@ deploy/charts/*/charts/*.tgz
 .playwright-mcp/
 
 # stray Go build outputs (binaries built into the repo root)
+strattd
 core/stratt-forwarder
 core/strattd
 core/stratt-agent
