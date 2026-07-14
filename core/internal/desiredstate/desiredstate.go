@@ -57,6 +57,7 @@ type Declarations struct {
 	NotifySinks    []types.Sink          `json:"notifySinks"`
 	Subscriptions  []types.Subscription  `json:"subscriptions"`
 	Sites          []types.Site          `json:"sites"`
+	SCIMIdPs       []types.SCIMIdP       `json:"scimIdps"`
 }
 
 // Declared kinds appearing in plans.
@@ -74,6 +75,7 @@ const (
 	KindNotifySink    = "notify-sink"
 	KindSubscription  = "subscription"
 	KindSite          = "site"
+	KindSCIMIdP       = "scim-idp"
 )
 
 // Action is what reconciliation will do (or did) to one declared object.
@@ -221,6 +223,13 @@ func ParseDir(root string) (Declarations, error) {
 	}
 	out.Sites = sites
 	sort.Slice(out.Sites, func(i, j int) bool { return out.Sites[i].Name < out.Sites[j].Name })
+
+	scimIdps, err := parseKind(filepath.Join(root, "scim"), true, parseScimFile)
+	if err != nil {
+		return out, err
+	}
+	out.SCIMIdPs = scimIdps
+	sort.Slice(out.SCIMIdPs, func(i, j int) bool { return out.SCIMIdPs[i].Name < out.SCIMIdPs[j].Name })
 
 	notifySinks, err := parseKind(filepath.Join(root, "notify-sinks"), true, parseNotifySinkFile)
 	if err != nil {
@@ -564,6 +573,60 @@ func ValidateEmitter(e types.Emitter) error {
 	}
 	if _, err := hex.DecodeString(e.TokenHash); err != nil {
 		return fmt.Errorf("emitter %s: tokenHash is not hex", e.Name)
+	}
+	return nil
+}
+
+// scimFile is the scim/*.yaml shape (ADR-0035): a registered SCIM IdP. It holds
+// the sha256 of the IdP's bearer token (§2.5 — material never stored) and the
+// group→team mappings. A mapped team's MEMBERSHIP becomes IdP-owned; the
+// reconcile one-owner guard forbids CaC also declaring its members (§2.1).
+type scimFile struct {
+	Name          string `yaml:"name"`
+	TokenHash     string `yaml:"tokenHash"`
+	GroupMappings []struct {
+		Group string `yaml:"group"`
+		Team  string `yaml:"team"`
+	} `yaml:"groupMappings"`
+}
+
+func parseScimFile(path string, raw []byte) (string, types.SCIMIdP, error) {
+	var f scimFile
+	dec := yaml.NewDecoder(strings.NewReader(string(raw)))
+	dec.KnownFields(true)
+	if err := dec.Decode(&f); err != nil {
+		return "", types.SCIMIdP{}, fmt.Errorf("desiredstate: %s: %w", path, err)
+	}
+	d := types.SCIMIdP{Name: f.Name, TokenHash: strings.ToLower(f.TokenHash)}
+	for _, m := range f.GroupMappings {
+		d.GroupMappings = append(d.GroupMappings, types.GroupMapping{Group: m.Group, Team: m.Team})
+	}
+	if err := ValidateScim(d); err != nil {
+		return "", types.SCIMIdP{}, fmt.Errorf("desiredstate: %s: %w", path, err)
+	}
+	return d.Name, d, nil
+}
+
+// ValidateScim checks one SCIM IdP declaration.
+func ValidateScim(d types.SCIMIdP) error {
+	if d.Name == "" {
+		return fmt.Errorf("scim idp requires a name")
+	}
+	if len(d.TokenHash) != 64 {
+		return fmt.Errorf("scim idp %s: tokenHash must be hex(sha256(token)) — 64 hex chars", d.Name)
+	}
+	if _, err := hex.DecodeString(d.TokenHash); err != nil {
+		return fmt.Errorf("scim idp %s: tokenHash is not hex", d.Name)
+	}
+	seen := map[string]bool{}
+	for _, m := range d.GroupMappings {
+		if m.Group == "" || m.Team == "" {
+			return fmt.Errorf("scim idp %s: groupMapping requires both group and team", d.Name)
+		}
+		if seen[m.Group] {
+			return fmt.Errorf("scim idp %s: duplicate mapping for group %q", d.Name, m.Group)
+		}
+		seen[m.Group] = true
 	}
 	return nil
 }
@@ -1517,6 +1580,11 @@ func ComputePlan(ctx context.Context, store *graph.Store, decls Declarations) (P
 		return Plan{}, err
 	}
 	plan.Entries = append(plan.Entries, sitePlan.Entries...)
+	scimPlan, err := computeScimPlan(ctx, store, decls.SCIMIdPs)
+	if err != nil {
+		return Plan{}, err
+	}
+	plan.Entries = append(plan.Entries, scimPlan.Entries...)
 	nsPlan, err := computeNotifySinkPlan(ctx, store, decls.NotifySinks)
 	if err != nil {
 		return Plan{}, err
@@ -1766,6 +1834,40 @@ func computeWorkflowPlan(ctx context.Context, store *graph.Store, decls []types.
 			plan.Entries = append(plan.Entries, PlanEntry{
 				Kind: KindWorkflow, Name: w.Name, Action: ActionDelete,
 			})
+		}
+	}
+	return plan, nil
+}
+
+// computeScimPlan diffs declared SCIM IdPs (CaC-only, ADR-0035).
+func computeScimPlan(ctx context.Context, store *graph.Store, decls []types.SCIMIdP) (Plan, error) {
+	current, err := store.ListIDPs(ctx)
+	if err != nil {
+		return Plan{}, err
+	}
+	byName := map[string]types.SCIMIdP{}
+	for _, d := range current {
+		byName[d.Name] = d
+	}
+	var plan Plan
+	declared := map[string]bool{}
+	for _, d := range decls {
+		declared[d.Name] = true
+		entry := PlanEntry{Kind: KindSCIMIdP, Name: d.Name}
+		cur, exists := byName[d.Name]
+		switch {
+		case !exists:
+			entry.Action = ActionCreate
+		case declDocsEqual(cur, d):
+			entry.Action = ActionNoop
+		default:
+			entry.Action = ActionUpdate
+		}
+		plan.Entries = append(plan.Entries, entry)
+	}
+	for _, d := range current {
+		if !declared[d.Name] {
+			plan.Entries = append(plan.Entries, PlanEntry{Kind: KindSCIMIdP, Name: d.Name, Action: ActionDelete})
 		}
 	}
 	return plan, nil
@@ -2100,6 +2202,10 @@ func Apply(ctx context.Context, store *graph.Store, decls Declarations) (Plan, e
 	for _, d := range decls.Sites {
 		siteByName[d.Name] = d
 	}
+	scimByName := map[string]types.SCIMIdP{}
+	for _, d := range decls.SCIMIdPs {
+		scimByName[d.Name] = d
+	}
 	blByName := map[string]types.Baseline{}
 	for _, d := range decls.Baselines {
 		blByName[d.Name] = d
@@ -2159,6 +2265,10 @@ func Apply(ctx context.Context, store *graph.Store, decls Declarations) (Plan, e
 			err = store.DeleteSite(ctx, e.Name)
 		case e.Kind == KindSite:
 			err = store.UpsertSite(ctx, siteByName[e.Name])
+		case e.Kind == KindSCIMIdP && e.Action == ActionDelete:
+			err = store.DeleteIDP(ctx, e.Name)
+		case e.Kind == KindSCIMIdP:
+			err = store.UpsertIDP(ctx, scimByName[e.Name])
 		case e.Kind == KindNotifySink && e.Action == ActionDelete:
 			err = store.DeleteNotifySink(ctx, e.Name)
 		case e.Kind == KindNotifySink:

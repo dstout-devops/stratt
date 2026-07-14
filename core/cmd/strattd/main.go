@@ -49,6 +49,7 @@ import (
 	"github.com/dstout-devops/stratt/core/internal/graph"
 	"github.com/dstout-devops/stratt/core/internal/notify"
 	"github.com/dstout-devops/stratt/core/internal/orchestrate"
+	"github.com/dstout-devops/stratt/core/internal/scim"
 	"github.com/dstout-devops/stratt/core/internal/sitegw"
 	"github.com/dstout-devops/stratt/core/internal/siteproto"
 	"github.com/dstout-devops/stratt/core/internal/statebackend"
@@ -525,7 +526,7 @@ func run(ctx context.Context, log *slog.Logger) error {
 	if uiDir != "" {
 		log.Info("serving ui", "dir", uiDir)
 	}
-	server := &api.Server{Store: store, Bus: bus, Temporal: temporalClient, Authz: authorizer, Log: log, DevPrincipalHeader: devPrincipal, OIDC: oidcResolver, UIDir: uiDir, StateBackend: stateHandler, EmitterIngest: emitters.New(store, bus, log).Handler(), CompileStatus: compileStatus, Evidence: evidence, SiteLiveness: func(ctx context.Context) (map[string]bool, error) {
+	server := &api.Server{Store: store, Bus: bus, Temporal: temporalClient, Authz: authorizer, Log: log, DevPrincipalHeader: devPrincipal, OIDC: oidcResolver, UIDir: uiDir, StateBackend: stateHandler, EmitterIngest: emitters.New(store, bus, log).Handler(), SCIM: scim.New(store, log).Handler(), CompileStatus: compileStatus, Evidence: evidence, SiteLiveness: func(ctx context.Context) (map[string]bool, error) {
 		live, err := siteGateway.LiveSites(ctx)
 		if err != nil {
 			return nil, err

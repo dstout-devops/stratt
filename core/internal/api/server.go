@@ -56,6 +56,10 @@ type Server struct {
 	// EmitterIngest, when set, mounts POST /emitters/{name} (ADR-0018) —
 	// outside /api/v1: alert sources authenticate by emitter token.
 	EmitterIngest http.Handler
+	// SCIM, when set, mounts the SCIM 2.0 Service Provider at /scim/v2
+	// (ADR-0035) — outside /api/v1: the customer's IdP pushes Users/Groups and
+	// authenticates by a per-IdP bearer token, not a Principal.
+	SCIM http.Handler
 	// CompileStatus, when set, is the shared Intent-compile status the
 	// controller updates and GET /compile serves (ADR-0023).
 	CompileStatus *compiler.Status
@@ -108,6 +112,9 @@ func (s *Server) Handler() http.Handler {
 	}
 	if s.EmitterIngest != nil {
 		mux.Handle("/emitters/", s.EmitterIngest)
+	}
+	if s.SCIM != nil {
+		mux.Handle("/scim/v2/", s.SCIM)
 	}
 	if s.UIDir != "" {
 		mux.Handle("/", spaHandler(s.UIDir))
