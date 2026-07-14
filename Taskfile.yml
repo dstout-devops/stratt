@@ -170,6 +170,11 @@ tasks:
     cmds:
       - deploy/dev/openbao-bootstrap.sh
 
+  dev:scim:bootstrap:
+    desc: Drive the SCIM SP like an IdP — push Users/Group, filter, deactivate (ADR-0035)
+    cmds:
+      - deploy/dev/scim-bootstrap.sh
+
   dev:logs:
     desc: Tail dev substrate logs
     cmds:

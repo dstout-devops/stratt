@@ -449,6 +449,26 @@ func run(ctx context.Context, log *slog.Logger) error {
 				log.Error("authz tuple reload failed; keeping previous grants", "error", err)
 				return
 			}
+			// SCIM group→team membership projects into the tuple union (ADR-0035):
+			// the directory owns WHO is in a mapped team; CaC still owns the
+			// policy (team→role grants). The §2.1 one-owner guard refuses to
+			// project if CaC also declares a mapped team's members — never two
+			// writers of one team's membership.
+			if memberships, err := store.ProjectedMemberships(ctx); err != nil {
+				log.Error("scim projected memberships failed; keeping previous", "error", err)
+			} else if mapped, err := store.MappedTeams(ctx); err != nil {
+				log.Error("scim mapped teams failed; keeping previous", "error", err)
+			} else if team := cacOwnsMappedTeam(evaluator.CACSnapshot(), mapped); team != "" {
+				log.Error("scim/CaC two-writer conflict: a mapped team's membership is also declared in CaC; NOT projecting IdP memberships (§2.1)", "team", team)
+			} else {
+				projected := make([]authz.Tuple, 0, len(memberships))
+				for _, m := range memberships {
+					projected = append(projected, authz.Tuple{
+						User: "principal:" + m.PrincipalID, Relation: authz.RelationMember, Object: "team:" + m.Team,
+					})
+				}
+				evaluator.SetProjectedTuples(projected)
+			}
 			if fga != nil {
 				// OpenFGA is a projection of the same Git source (§1.2):
 				// desired-state sync, adds and revokes both.
@@ -536,6 +556,20 @@ func run(ctx context.Context, log *slog.Logger) error {
 			out[name] = true
 		}
 		return out, nil
+	}, SCIMGate: func(ctx context.Context, principalID string) error {
+		// Deny a SCIM-managed human the IdP has deactivated (ADR-0035). Unknown
+		// to SCIM = not gated. Fail-OPEN on a lookup error: a DB blip must not
+		// deny every human (the request would fail at its grant check anyway if
+		// the store is truly down) — never a NEW denial from a transient error.
+		found, active, err := store.LookupActive(ctx, principalID)
+		if err != nil {
+			log.Warn("scim deactivation lookup failed; allowing (fail-open)", "principal", principalID, "error", err)
+			return nil
+		}
+		if found && !active {
+			return fmt.Errorf("principal %s is deactivated in the identity provider", principalID)
+		}
+		return nil
 	}}
 	httpSrv := &http.Server{
 		Addr:              env("STRATT_LISTEN_ADDR", ":8080"),
@@ -576,6 +610,25 @@ func kubeClientset() (kubernetes.Interface, error) {
 		}
 	}
 	return kubernetes.NewForConfig(cfg)
+}
+
+// cacOwnsMappedTeam returns the first team that is BOTH a SCIM-mapping target and
+// has its membership declared directly in CaC (a `member` tuple on team:<t>) —
+// the §2.1 two-writer conflict. Empty means no conflict.
+func cacOwnsMappedTeam(cac []authz.Tuple, mapped map[string]bool) string {
+	const prefix = "team:"
+	for _, t := range cac {
+		if t.Relation != authz.RelationMember {
+			continue
+		}
+		if len(t.Object) <= len(prefix) || t.Object[:len(prefix)] != prefix {
+			continue
+		}
+		if team := t.Object[len(prefix):]; mapped[team] {
+			return team
+		}
+	}
+	return ""
 }
 
 // tlog adapts slog to Temporal's logger interface.

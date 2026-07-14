@@ -70,6 +70,13 @@ type Server struct {
 	// heartbeating (ADR-0032) — read from the NATS liveness KV, never the graph
 	// (§1.2). Nil reports every Site as not-live.
 	SiteLiveness func(ctx context.Context) (map[string]bool, error)
+	// SCIMGate, when set, blocks a SCIM-managed human Principal that the IdP has
+	// deactivated at request-time resolution (ADR-0035) — closing the access-
+	// token-TTL window that grant-revocation alone leaves open. It is consulted
+	// ONLY for human Principals; service/agent and unknown-to-SCIM subjects are
+	// never gated (never lock out non-SCIM or break-glass identities). Returns a
+	// non-nil error to deny.
+	SCIMGate func(ctx context.Context, principalID string) error
 }
 
 // Handler mounts the generated routes under /api/v1, behind the Principal
@@ -228,19 +235,31 @@ func (s *Server) ResolvePrincipal(ctx context.Context, h http.Header) (id, kind 
 	if h == nil {
 		return "", "", nil
 	}
-	if auth := h.Get("Authorization"); s.OIDC != nil && strings.HasPrefix(auth, "Bearer ") {
-		return s.OIDC.Resolve(ctx, strings.TrimPrefix(auth, "Bearer "))
+	switch {
+	case s.OIDC != nil && strings.HasPrefix(h.Get("Authorization"), "Bearer "):
+		id, kind, err = s.OIDC.Resolve(ctx, strings.TrimPrefix(h.Get("Authorization"), "Bearer "))
+	case s.DevPrincipalHeader && h.Get("X-Stratt-Principal") != "":
+		id = h.Get("X-Stratt-Principal")
+		kind = h.Get("X-Stratt-Principal-Kind")
+		if kind == "" {
+			kind = authz.KindHuman
+		}
+	default:
+		return "", "", nil
 	}
-	if s.DevPrincipalHeader {
-		if id := h.Get("X-Stratt-Principal"); id != "" {
-			kind := h.Get("X-Stratt-Principal-Kind")
-			if kind == "" {
-				kind = authz.KindHuman
-			}
-			return id, kind, nil
+	if err != nil {
+		return "", "", err
+	}
+	// SCIM deactivation gate (ADR-0035): a valid token/header still resolves,
+	// but a SCIM-managed human the IdP has deactivated is denied here — even
+	// before the token expires. Only humans are gated; §1.6 one seam so REST,
+	// MCP, and the façade all inherit it.
+	if id != "" && kind == authz.KindHuman && s.SCIMGate != nil {
+		if gerr := s.SCIMGate(ctx, id); gerr != nil {
+			return "", "", gerr
 		}
 	}
-	return "", "", nil
+	return id, kind, nil
 }
 
 // requireGrant checks the request Principal for a relation on an object,

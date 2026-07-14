@@ -26,8 +26,14 @@ import (
 //	                runner = direct ∪ team#member usersets ∪ admin  (§2.5
 //	                View-scoped execution; NO org/team-admin bypass, ADR-0028)
 type TupleAuthorizer struct {
-	mu     sync.RWMutex
-	tuples []Tuple
+	mu sync.RWMutex
+	// cac is the CaC tuple set (authz/tuples.yaml); projected is the set derived
+	// from external projections (SCIM group→team membership, ADR-0035). tuples is
+	// their union — the effective grant set that check and Snapshot read, so the
+	// OpenFGA sync stays a single authoritative writer over CaC ∪ projected.
+	cac       []Tuple
+	projected []Tuple
+	tuples    []Tuple
 }
 
 type Tuple struct {
@@ -67,13 +73,42 @@ func (a *TupleAuthorizer) LoadTuples(root string) error {
 		}
 	}
 	a.mu.Lock()
-	a.tuples = doc.Tuples
+	a.cac = doc.Tuples
+	a.rebuild()
 	a.mu.Unlock()
 	return nil
 }
 
-// Snapshot returns the currently loaded tuple set — the desired state the
-// OpenFGA projection syncs from (same CaC source, one read).
+// SetProjectedTuples replaces the projected tuple set (SCIM group→team
+// membership, ADR-0035) and rebuilds the effective union. The reconcile loop
+// calls it each cycle alongside LoadTuples so grants track deactivation.
+func (a *TupleAuthorizer) SetProjectedTuples(ts []Tuple) {
+	a.mu.Lock()
+	a.projected = append([]Tuple(nil), ts...)
+	a.rebuild()
+	a.mu.Unlock()
+}
+
+// rebuild recomputes the effective union (caller holds the write lock).
+func (a *TupleAuthorizer) rebuild() {
+	a.tuples = make([]Tuple, 0, len(a.cac)+len(a.projected))
+	a.tuples = append(a.tuples, a.cac...)
+	a.tuples = append(a.tuples, a.projected...)
+}
+
+// CACSnapshot returns just the CaC tuple set (not the projected union) — the
+// reconcile one-owner guard inspects it to forbid CaC and an IdP mapping both
+// owning a team's membership (§2.1, ADR-0035).
+func (a *TupleAuthorizer) CACSnapshot() []Tuple {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	out := make([]Tuple, len(a.cac))
+	copy(out, a.cac)
+	return out
+}
+
+// Snapshot returns the effective tuple set — the CaC ∪ projected union that the
+// OpenFGA projection syncs from authoritatively (one writer, one read).
 func (a *TupleAuthorizer) Snapshot() []Tuple {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
