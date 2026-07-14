@@ -51,3 +51,6 @@ func Connect(ctx context.Context, databaseURL string) (*Store, error) {
 
 // Close releases the underlying pool (only when created via Connect).
 func (s *Store) Close() { s.pool.Close() }
+
+// Ping verifies the database is reachable — the readiness signal (ADR-0040).
+func (s *Store) Ping(ctx context.Context) error { return s.pool.Ping(ctx) }

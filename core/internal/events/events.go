@@ -58,6 +58,10 @@ func Connect(ctx context.Context, url string) (*Bus, error) {
 // Close drains the connection.
 func (b *Bus) Close() { b.nc.Close() }
 
+// Connected reports whether the NATS connection is currently up — the readiness
+// signal for the event bus (ADR-0040).
+func (b *Bus) Connected() bool { return b.nc.IsConnected() }
+
 func subject(runID string) string { return subjectPrefix + runID }
 
 // Publish appends one event to a Run's stream.

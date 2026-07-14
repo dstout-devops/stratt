@@ -81,6 +81,24 @@ type Server struct {
 
 // Handler mounts the generated routes under /api/v1, behind the Principal
 // resolver — one identity seam for every surface (§1.6, ADR-0009).
+// handleReadyz is the readiness probe (ADR-0040): the substrate must be
+// reachable. Kept cheap with a short timeout so a transient blip doesn't flap
+// the whole fleet out of the load-balancer.
+func (s *Server) handleReadyz(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
+	defer cancel()
+	if err := s.Store.Ping(ctx); err != nil {
+		http.Error(w, "database unreachable: "+err.Error(), http.StatusServiceUnavailable)
+		return
+	}
+	if s.Bus != nil && !s.Bus.Connected() {
+		http.Error(w, "event bus not connected", http.StatusServiceUnavailable)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write([]byte("ready"))
+}
+
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	// principal resolves identity; audit records every request behind it (the
@@ -109,12 +127,15 @@ func (s *Server) Handler() http.Handler {
 		SCIMGate:           s.SCIMGate,
 		Log:                s.Log,
 	}))
-	// Probe endpoint (ADR-0013): process-liveness only — no store, no authz,
-	// so probes never flap on substrate warm-up or grant state.
+	// Liveness (ADR-0013): process-liveness only — no store, no authz, so the
+	// liveness probe never flaps on substrate warm-up or grant state.
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok"))
 	})
+	// Readiness (ADR-0040): distinct from liveness — verifies the substrate is
+	// reachable so a pod only takes traffic once Postgres + NATS are up.
+	mux.HandleFunc("/readyz", s.handleReadyz)
 	if s.StateBackend != nil {
 		mux.Handle("/statebackend/", s.StateBackend)
 	}

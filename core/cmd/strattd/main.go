@@ -51,6 +51,7 @@ import (
 	"github.com/dstout-devops/stratt/core/internal/events"
 	"github.com/dstout-devops/stratt/core/internal/evidencestore"
 	"github.com/dstout-devops/stratt/core/internal/graph"
+	"github.com/dstout-devops/stratt/core/internal/leader"
 	"github.com/dstout-devops/stratt/core/internal/notify"
 	"github.com/dstout-devops/stratt/core/internal/orchestrate"
 	"github.com/dstout-devops/stratt/core/internal/scim"
@@ -323,6 +324,14 @@ func run(ctx context.Context, log *slog.Logger) error {
 	defer w.Stop()
 	log.Info("run worker ready", "taskQueue", orchestrate.TaskQueue)
 
+	// Controllers (syncers, reconcilers, engines, the audit sealer, the Salt
+	// emitter) are the singleton control loops: collected here and started only
+	// on the elected LEADER (HA, ADR-0040), so N replicas don't double-run them.
+	// The REST API and the Temporal worker (below) run on EVERY replica.
+	// Construction + Register stay inline (idempotent) so config errors fail loud
+	// on all replicas; only the Run loops are leader-gated.
+	var controllers []func(context.Context)
+
 	// ── Phase-0 vCenter Syncer (started when a Source is configured) ─────
 	if endpoint := os.Getenv("STRATT_VCENTER_URL"); endpoint != "" {
 		syncer := vcenter.NewSyncer(vcenter.Config{
@@ -337,11 +346,11 @@ func run(ctx context.Context, log *slog.Logger) error {
 		if err := syncer.Register(ctx); err != nil {
 			return err
 		}
-		go func() {
-			if err := syncer.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
+		controllers = append(controllers, func(cctx context.Context) {
+			if err := syncer.Run(cctx); err != nil && !errors.Is(err, context.Canceled) {
 				log.Error("vcenter syncer stopped", "error", err)
 			}
-		}()
+		})
 	} else {
 		log.Info("no vCenter Source configured (STRATT_VCENTER_URL empty); syncer idle")
 	}
@@ -366,11 +375,11 @@ func run(ctx context.Context, log *slog.Logger) error {
 		if err := syncer.Register(ctx); err != nil {
 			return err
 		}
-		go func() {
-			if err := syncer.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
+		controllers = append(controllers, func(cctx context.Context) {
+			if err := syncer.Run(cctx); err != nil && !errors.Is(err, context.Canceled) {
 				log.Error("msgraph syncer stopped", "error", err)
 			}
-		}()
+		})
 	} else {
 		log.Info("no MS Graph Source configured (STRATT_MSGRAPH_TENANT_ID empty); syncer idle")
 	}
@@ -392,11 +401,11 @@ func run(ctx context.Context, log *slog.Logger) error {
 		if err := syncer.Register(ctx); err != nil {
 			return err
 		}
-		go func() {
-			if err := syncer.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
+		controllers = append(controllers, func(cctx context.Context) {
+			if err := syncer.Run(cctx); err != nil && !errors.Is(err, context.Canceled) {
 				log.Error("awsec2 syncer stopped", "error", err)
 			}
-		}()
+		})
 	} else {
 		log.Info("no EC2 Source configured (STRATT_AWS_REGION empty); syncer idle")
 	}
@@ -418,11 +427,11 @@ func run(ctx context.Context, log *slog.Logger) error {
 		if err := syncer.Register(ctx); err != nil {
 			return err
 		}
-		go func() {
-			if err := syncer.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
+		controllers = append(controllers, func(cctx context.Context) {
+			if err := syncer.Run(cctx); err != nil && !errors.Is(err, context.Canceled) {
 				log.Error("certissuer syncer stopped", "error", err)
 			}
-		}()
+		})
 	} else {
 		log.Info("no CLM Source configured (STRATT_CLM_ADDR empty); cert syncer idle")
 	}
@@ -459,11 +468,11 @@ func run(ctx context.Context, log *slog.Logger) error {
 		if err := syncer.Register(ctx); err != nil {
 			return err
 		}
-		go func() {
-			if err := syncer.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
+		controllers = append(controllers, func(cctx context.Context) {
+			if err := syncer.Run(cctx); err != nil && !errors.Is(err, context.Canceled) {
 				log.Error("chef syncer stopped", "error", err)
 			}
-		}()
+		})
 	} else {
 		log.Info("no Chef Source configured (STRATT_CHEF_SERVER_URL empty); syncer idle")
 	}
@@ -486,11 +495,11 @@ func run(ctx context.Context, log *slog.Logger) error {
 		if err := syncer.Register(ctx); err != nil {
 			return err
 		}
-		go func() {
-			if err := syncer.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
+		controllers = append(controllers, func(cctx context.Context) {
+			if err := syncer.Run(cctx); err != nil && !errors.Is(err, context.Canceled) {
 				log.Error("puppet syncer stopped", "error", err)
 			}
-		}()
+		})
 	} else {
 		log.Info("no PuppetDB Source configured (STRATT_PUPPETDB_URL empty); syncer idle")
 	}
@@ -514,11 +523,11 @@ func run(ctx context.Context, log *slog.Logger) error {
 		if err := syncer.Register(ctx); err != nil {
 			return err
 		}
-		go func() {
-			if err := syncer.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
+		controllers = append(controllers, func(cctx context.Context) {
+			if err := syncer.Run(cctx); err != nil && !errors.Is(err, context.Canceled) {
 				log.Error("salt syncer stopped", "error", err)
 			}
-		}()
+		})
 	} else {
 		log.Info("no Salt Source configured (STRATT_SALT_API_URL empty); syncer idle")
 	}
@@ -546,11 +555,11 @@ func run(ctx context.Context, log *slog.Logger) error {
 			MaxPruneFraction: maxPrune,
 			MaxDelta:         maxDelta, CompileStatus: compileStatus,
 		}
-		go func() {
-			if err := ctl.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
+		controllers = append(controllers, func(cctx context.Context) {
+			if err := ctl.Run(cctx); err != nil && !errors.Is(err, context.Canceled) {
 				log.Error("desired-state controller stopped", "error", err)
 			}
-		}()
+		})
 
 		// Authz tuples are CaC in the same checkout (§2.5): load now,
 		// reload on the reconcile cadence. A failed reload keeps the
@@ -590,18 +599,21 @@ func run(ctx context.Context, log *slog.Logger) error {
 			}
 		}
 		reloadTuples()
-		go func() {
+		// The ongoing reload cadence is leader-only: one writer keeps OpenFGA
+		// synced (ADR-0040). Multi-replica deployments must use the OpenFGA
+		// server backend — the in-process evaluator is single-replica only.
+		controllers = append(controllers, func(cctx context.Context) {
 			ticker := time.NewTicker(interval)
 			defer ticker.Stop()
 			for {
 				select {
-				case <-ctx.Done():
+				case <-cctx.Done():
 					return
 				case <-ticker.C:
 					reloadTuples()
 				}
 			}
-		}()
+		})
 
 		// Declared Triggers project onto Temporal Schedules on the same
 		// cadence (§3: Temporal owns all lifecycle; ADR-0010) — Git declares,
@@ -609,33 +621,33 @@ func run(ctx context.Context, log *slog.Logger) error {
 		trigReconciler := &triggers.Reconciler{
 			Temporal: temporalClient, Store: store, Log: log, Interval: interval,
 		}
-		go func() {
-			if err := trigReconciler.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
+		controllers = append(controllers, func(cctx context.Context) {
+			if err := trigReconciler.Run(cctx); err != nil && !errors.Is(err, context.Canceled) {
 				log.Error("trigger reconciler stopped", "error", err)
 			}
-		}()
+		})
 
 		// Declared Baseline cadences project onto Temporal Schedules the same
 		// way (§3: "Baseline cadences"; ADR-0019).
 		blReconciler := &baselines.Reconciler{
 			Temporal: temporalClient, Store: store, Log: log, Interval: interval,
 		}
-		go func() {
-			if err := blReconciler.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
+		controllers = append(controllers, func(cctx context.Context) {
+			if err := blReconciler.Run(cctx); err != nil && !errors.Is(err, context.Canceled) {
 				log.Error("baseline reconciler stopped", "error", err)
 			}
-		}()
+		})
 	} else {
 		log.Info("no desired-state checkout configured (STRATT_DESIRED_STATE_PATH empty); reconciliation off — authz has no tuples (deny-all), triggers idle")
 	}
 
 	// ── trigger engine (ADR-0018: Emitter events × CEL → launches) ───────
 	engine := &triggerengine.Engine{Store: store, Bus: bus, Temporal: temporalClient, Log: log}
-	go func() {
-		if err := engine.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
+	controllers = append(controllers, func(cctx context.Context) {
+		if err := engine.Run(cctx); err != nil && !errors.Is(err, context.Canceled) {
 			log.Error("trigger engine stopped", "error", err)
 		}
-	}()
+	})
 
 	// ── Salt event-bus Emitter (ADR-0039: stream-subscriber → emitter stream) ─
 	if saltCfg.APIURL != "" && env("STRATT_SALT_EVENTS", "false") == "true" {
@@ -643,11 +655,11 @@ func run(ctx context.Context, log *slog.Logger) error {
 			log.Warn("STRATT_SALT_EVENTS enabled with no STRATT_SALT_EVENT_TAGS filter: forwarding the ENTIRE Salt event bus onto the emitter stream (set a tag-prefix allowlist to avoid flooding)")
 		}
 		emitter := salt.NewEmitter(saltCfg, bus, log)
-		go func() {
-			if err := emitter.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
+		controllers = append(controllers, func(cctx context.Context) {
+			if err := emitter.Run(cctx); err != nil && !errors.Is(err, context.Canceled) {
 				log.Error("salt emitter stopped", "error", err)
 			}
-		}()
+		})
 	}
 
 	// ── notifier (ADR-0027: Notices × Subscriptions → webhook delivery) ──
@@ -655,16 +667,43 @@ func run(ctx context.Context, log *slog.Logger) error {
 	// so the Sink's CredentialRef is injected at spawn (§2.5) — the daemon
 	// composes pod specs from pointers, never material.
 	notifier := &notify.Dispatcher{Store: store, Bus: bus, Dispatcher: dispatcher, Authz: authorizer, Log: log}
-	go func() {
-		if err := notifier.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
+	controllers = append(controllers, func(cctx context.Context) {
+		if err := notifier.Run(cctx); err != nil && !errors.Is(err, context.Canceled) {
 			log.Error("notifier stopped", "error", err)
 		}
-	}()
+	})
 
 	// Audit sealer (ADR-0034): the single writer that chains the append-only
 	// audit ledger for tamper-evidence, decoupled from the hot-path append so
-	// integrity never bottlenecks the full access log (§1.6, §1.8).
-	go (&audit.Sealer{Store: store, Log: log}).Run(ctx)
+	// integrity never bottlenecks the full access log (§1.6, §1.8). Leader-only:
+	// two sealers would corrupt the hash chain (ADR-0040).
+	controllers = append(controllers, func(cctx context.Context) {
+		(&audit.Sealer{Store: store, Log: log}).Run(cctx)
+	})
+
+	// Start the controllers: on the elected leader when leader election is on,
+	// else directly (single-replica dev/compose). The API + Temporal worker run
+	// on every replica regardless (ADR-0040).
+	startControllers := func(cctx context.Context) {
+		for _, run := range controllers {
+			go run(cctx)
+		}
+	}
+	if env("STRATT_LEADER_ELECTION", "false") == "true" {
+		host, _ := os.Hostname()
+		leaderCfg := leader.Config{
+			Identity:  env("POD_NAME", host),
+			Namespace: env("POD_NAMESPACE", "default"),
+		}
+		log.Info("leader election enabled; controllers run on the elected leader", "identity", leaderCfg.Identity)
+		go func() {
+			if err := leader.Run(ctx, kubeClient, leaderCfg, log, startControllers); err != nil && !errors.Is(err, context.Canceled) {
+				log.Error("leader election stopped", "error", err)
+			}
+		}()
+	} else {
+		startControllers(ctx)
+	}
 
 	// ── interface plane ──────────────────────────────────────────────────
 	uiDir := os.Getenv("STRATT_UI_DIR")

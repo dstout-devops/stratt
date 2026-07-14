@@ -9,6 +9,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/jackc/pgx/v5/stdlib"
 	"github.com/pressly/goose/v3"
+	"github.com/pressly/goose/v3/lock"
 )
 
 //go:embed migrations/*.sql
@@ -27,7 +28,15 @@ func Migrate(ctx context.Context, pool *pgxpool.Pool) error {
 	if err != nil {
 		return fmt.Errorf("graph: migrations fs: %w", err)
 	}
-	provider, err := goose.NewProvider(goose.DialectPostgres, db, sub)
+	// A Postgres advisory session lock serializes concurrent Up() calls, so N
+	// strattd replicas racing migrations at boot is safe (HA, ADR-0040): the
+	// first replica migrates while the rest block, then observe the schema
+	// already current. Boring — a goose built-in, no new dependency.
+	locker, err := lock.NewPostgresSessionLocker()
+	if err != nil {
+		return fmt.Errorf("graph: migration locker: %w", err)
+	}
+	provider, err := goose.NewProvider(goose.DialectPostgres, db, sub, goose.WithSessionLocker(locker))
 	if err != nil {
 		return fmt.Errorf("graph: migration provider: %w", err)
 	}
