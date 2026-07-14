@@ -147,10 +147,10 @@ func TestChefSyncerProjectsAndCorrelates(t *testing.T) {
 	}
 
 	facets := facetMap(t, store, web.ID)
-	assertFacetField(t, facets, "node.identity", "platform", "ubuntu")
-	assertFacetField(t, facets, "node.identity", "chef_client", "15.17.4")
-	assertFacetField(t, facets, "node.os", "kernel_release", "5.15.0-91-generic")
-	assertFacetField(t, facets, "node.network", "ipv4", "10.0.0.10")
+	assertFacetField(t, facets, "chef.node.identity", "platform", "ubuntu")
+	assertFacetField(t, facets, "chef.node.identity", "chef_client", "15.17.4")
+	assertFacetField(t, facets, "chef.node.os", "kernel_release", "5.15.0-91-generic")
+	assertFacetField(t, facets, "chef.node.network", "ipv4", "10.0.0.10")
 
 	// The View / smart-inventory story: select production hosts by label.
 	prod, err := store.ResolveSelector(ctx, types.ViewSelector{Kinds: []string{"host"}, Labels: map[string]string{"chef.environment": "production"}}, nil, 0)

@@ -67,9 +67,9 @@ func normalizeNode(n chefapi.Node) (graph.EntityUpsert, error) {
 
 	facets := map[string]json.RawMessage{}
 	for ns, doc := range map[string]map[string]any{
-		"node.identity": nodeIdentity,
-		"node.os":       nodeOS,
-		"node.network":  nodeNetwork,
+		"chef.node.identity": nodeIdentity,
+		"chef.node.os":       nodeOS,
+		"chef.node.network":  nodeNetwork,
 	} {
 		if len(doc) == 0 {
 			continue

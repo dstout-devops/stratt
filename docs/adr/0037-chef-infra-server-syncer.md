@@ -73,8 +73,12 @@ the estate wherever the org lands. The EOL is a reason the wedge is *urgent*, no
    correlates with the same host from vcenter/msgraph by identity-key overlap (the established pattern
    — not shared Facet namespaces). Labels power the smart-inventory View: `chef.environment`,
    `chef.node.name`, and per-role `chef.role.<name>`. Facets are a **curated** map of ohai automatic
-   attributes onto connector-namespaced observed Facets (the msgraph `device.*` precedent): `node.identity`,
-   `node.os`, `node.network`. These are **left uncovered by a pinned schema** until a shipping
+   attributes onto **source-scoped** observed Facets (the msgraph `device.*` precedent): `chef.node.identity`,
+   `chef.node.os`, `chef.node.network`. Source-scoped (not a shared `node.*`) because §2.1's
+   one-owner-per-namespace registry forbids a second config-mgmt Syncer co-owning them and a shared
+   namespace would be last-writer-wins across Sources (the §2.4 implicit-precedence ban); cross-source
+   hosts unify via the `dns.fqdn` identity key instead (this source-scoping was settled in ADR-0038).
+   These are **left uncovered by a pinned schema** until a shipping
    Contract/Baseline demands one (§1.1 — no speculative schemas), exactly as msgraph's `device.*`.
 
 ## Charter posture
@@ -121,7 +125,7 @@ the estate wherever the org lands. The EOL is a reason the wedge is *urgent*, no
   flagged for large estates); **environments/roles as Relations** (v1 projects them as View-able
   labels); **policyfiles / data bags / cookbook-version** Facets; expanded `automatic.roles` (v1 reads
   the node's own `run_list` `role[...]`); **CredentialRef brokering for Syncers** (shared gap);
-  pinning `node.*` Facet schemas once a Baseline demands them; a **real-Chef e2e** (out-of-network
+  pinning `chef.node.*` Facet schemas once a Baseline demands them; a **real-Chef e2e** (out-of-network
   build — chefsim is the proof surface, and the store/normalizer/tombstone/correlation paths are
   proven by unit + real-DB integration tests); the **OpenVox/PuppetDB second connector** — the
   deliberate generality test that the Normalizer contract is not Chef-shaped.

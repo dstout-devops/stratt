@@ -61,14 +61,21 @@ func (c Config) SyncerRef() string {
 // declared writer, registered before the first projection). Curated
 // charter-down from ohai (never a dump); left uncovered by a pinned schema
 // until a shipping Contract demands one (§1.1), exactly as msgraph's device.*.
+//
+// Namespaces are SOURCE-scoped (chef.node.*, not a shared node.*): §2.1's
+// one-owner-per-namespace registry forbids a second config-mgmt Syncer
+// (e.g. puppet) co-owning them, and a shared namespace would be last-writer-
+// wins across Sources — the implicit precedence §2.4 bans. Cross-source hosts
+// still unify via the dns.fqdn identity key; unified fact queries are a future
+// normalization layer, not two Syncers fighting one namespace (ADR-0038).
 func (c Config) FacetNamespaces() []types.FacetOwner {
 	owner := func(ns string) types.FacetOwner {
 		return types.FacetOwner{Namespace: ns, OwnerKind: "syncer", OwnerRef: c.SyncerRef()}
 	}
 	return []types.FacetOwner{
-		owner("node.identity"), // platform, platform_family, platform_version, chef_client
-		owner("node.os"),       // kernel name/release/machine, uptime
-		owner("node.network"),  // fqdn, primary ipv4/ipv6, default gateway
+		owner("chef.node.identity"), // platform, platform_family, platform_version, chef_client
+		owner("chef.node.os"),       // kernel name/release/machine, uptime
+		owner("chef.node.network"),  // fqdn, primary ipv4/ipv6, default gateway
 	}
 }
 
