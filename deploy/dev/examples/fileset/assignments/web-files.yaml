@@ -1,0 +1,6 @@
+# Binds the nginx-conf FileSet Intent to the web-hosts View via fileset@1.
+name: web-files
+intent: nginx-conf
+view: web-hosts
+blueprint: fileset@1
+environments: [dev]

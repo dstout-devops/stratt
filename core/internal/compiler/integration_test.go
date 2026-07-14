@@ -6,6 +6,7 @@ import (
 	"fmt"
 	neturl "net/url"
 	"os"
+	"reflect"
 	"testing"
 	"time"
 
@@ -341,6 +342,107 @@ func TestCompileOnRemoveRevoke(t *testing.T) {
 	}
 	if d["onRemove"] != "remove" || d["removeWorkflow"] != "cert-revoke" {
 		t.Fatalf("orphan must carry the revoke remediation ref, got %v", d)
+	}
+}
+
+// TestCompileFileSet proves an Intent/FileSet Blueprint compiles a
+// digest-Equals facet-observation Baseline (spec substituted into the observe
+// path + value), and that withdrawing the Assignment with onRemove=revert
+// surfaces the Blueprint's remove Workflow on the orphan Finding (ADR-0036).
+func TestCompileFileSet(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	seedEntity(t, s, "u1", "x86_64")
+	seedView(t, s, "dev-vms")
+	must(t, s.UpsertWorkflow(ctx, types.Workflow{Name: "fileset-apply", Steps: []types.Step{{Name: "apply", ViewName: "dev-vms", Actuator: "ansible"}}}))
+	must(t, s.UpsertWorkflow(ctx, types.Workflow{Name: "fileset-revert", Steps: []types.Step{{Name: "revert", ViewName: "dev-vms", Actuator: "ansible"}}}))
+	must(t, s.UpsertIntent(ctx, types.Intent{
+		Name: "nginx-conf", Kind: types.IntentFileSet, OnRemove: types.OnRemoveRevert,
+		Spec: map[string]any{"key": "nginx-conf", "path": "/etc/nginx/nginx.conf", "digest": "sha256:abc"},
+	}))
+	bp := types.Blueprint{
+		Name: "fileset", Version: 1, For: types.IntentFileSet,
+		Severity: types.SeverityWarning, DampingObservations: 1, RemoveWorkflow: "fileset-revert",
+		Routes: []types.BlueprintRoute{{
+			Observe: types.FacetExpectation{Namespace: "fileset.content", Path: "{{.spec.key}}.digest", Equals: json.RawMessage(`"{{.spec.digest}}"`)},
+			Claim:   types.ClaimAdditive, RemediationWorkflow: "fileset-apply",
+		}},
+	}
+	must(t, s.UpsertBlueprint(ctx, bp))
+	must(t, s.UpsertAssignment(ctx, types.Assignment{Name: "web-files", Intent: "nginx-conf", View: "dev-vms", Blueprint: "fileset", BlueprintVersion: 1}))
+
+	compileApply(t, s, 0)
+	name := CompiledName("web-files", "fileset", 1, 0)
+	b, err := s.GetBaseline(ctx, name)
+	if err != nil {
+		t.Fatalf("compiled fileset baseline missing: %v", err)
+	}
+	exp := b.Expected[0]
+	if b.Mode != types.FacetObservation || exp.Namespace != "fileset.content" || exp.Path != "nginx-conf.digest" {
+		t.Fatalf("compiled observe not substituted: %+v", exp)
+	}
+	if string(exp.Equals) != `"sha256:abc"` {
+		t.Fatalf("digest not substituted into equals: %s", exp.Equals)
+	}
+	// The Blueprint remediates fileset.content → it owns the namespace (§2.1).
+	owner, ok, _ := s.GetFacetOwner(ctx, "fileset.content")
+	if !ok || owner.OwnerKind != "blueprint" || owner.OwnerRef != "fileset" {
+		t.Fatalf("fileset.content must be blueprint-owned, got %+v ok=%v", owner, ok)
+	}
+
+	// Withdraw with onRemove=revert → orphan carries the revert remove Workflow.
+	must(t, s.DeleteAssignment(ctx, "web-files"))
+	compileApply(t, s, 0)
+	findings, _ := s.ListFindings(ctx, name, "", 0)
+	if len(findings) != 1 || findings[0].Status != types.FindingOpen {
+		t.Fatalf("expected one open orphan finding, got %+v", findings)
+	}
+	var d map[string]any
+	if err := json.Unmarshal(findings[0].Diff, &d); err != nil {
+		t.Fatalf("orphan detail: %v", err)
+	}
+	if d["onRemove"] != "revert" || d["removeWorkflow"] != "fileset-revert" {
+		t.Fatalf("orphan must carry the revert remediation ref, got %v", d)
+	}
+}
+
+// TestCompileAccessAdditive proves two Intent/Access Assignments over the same
+// host set with additive claims do NOT poison each other (the additive union,
+// §2.4) — the charter's canonical additive case (sudoers/admin groups).
+func TestCompileAccessAdditive(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	seedEntity(t, s, "u1", "x86_64")
+	seedView(t, s, "dev-vms")
+	must(t, s.UpsertWorkflow(ctx, types.Workflow{Name: "access-apply", Steps: []types.Step{{Name: "apply", ViewName: "dev-vms", Actuator: "ansible"}}}))
+	accessBP := func() types.Blueprint {
+		return types.Blueprint{
+			Name: "access", Version: 1, For: types.IntentAccess, Severity: types.SeverityWarning, DampingObservations: 1,
+			Routes: []types.BlueprintRoute{{
+				Observe: types.FacetExpectation{Namespace: "access.grants", Contains: json.RawMessage(`{"subject":"{{.spec.subject}}","kind":"{{.spec.kind}}","scope":"{{.spec.scope}}"}`)},
+				Claim:   types.ClaimAdditive, RemediationWorkflow: "access-apply",
+			}},
+		}
+	}
+	must(t, s.UpsertBlueprint(ctx, accessBP()))
+	must(t, s.UpsertIntent(ctx, types.Intent{Name: "alice-wheel", Kind: types.IntentAccess, Spec: map[string]any{"subject": "alice", "kind": "group", "scope": "wheel"}}))
+	must(t, s.UpsertIntent(ctx, types.Intent{Name: "bob-wheel", Kind: types.IntentAccess, Spec: map[string]any{"subject": "bob", "kind": "group", "scope": "wheel"}}))
+	must(t, s.UpsertAssignment(ctx, types.Assignment{Name: "a1", Intent: "alice-wheel", View: "dev-vms", Blueprint: "access", BlueprintVersion: 1}))
+	must(t, s.UpsertAssignment(ctx, types.Assignment{Name: "a2", Intent: "bob-wheel", View: "dev-vms", Blueprint: "access", BlueprintVersion: 1}))
+
+	plan := compileApply(t, s, 0)
+	if len(plan.Errors) != 0 {
+		t.Fatalf("additive access claims must not conflict: %v", plan.Errors)
+	}
+	b, err := s.GetBaseline(ctx, CompiledName("a1", "access", 1, 0))
+	if err != nil {
+		t.Fatalf("compiled access baseline missing: %v", err)
+	}
+	var got, want any
+	_ = json.Unmarshal(b.Expected[0].Contains, &got)
+	_ = json.Unmarshal([]byte(`{"subject":"alice","kind":"group","scope":"wheel"}`), &want)
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("access contains not substituted: %s", b.Expected[0].Contains)
 	}
 }
 

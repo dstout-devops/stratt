@@ -432,6 +432,29 @@ func ExtractFacts(ev RunnerEvent) map[string]json.RawMessage {
 		}
 	}
 
+	// fileset.content — projected by the FileSet collector gather play, which
+	// stats each managed file and set_facts `stratt_fileset` as a {key:
+	// {digest, mode, owner, group, present}} object (ADR-0036). Keyed by the
+	// Intent's dot-free `key` so a compiled Baseline can address
+	// fileset.content.<key>.digest. The play owns normalization to the pinned
+	// fileset.content schema, else the Projector write is refused (§1.1).
+	if m, ok := facts["stratt_fileset"].(map[string]any); ok && len(m) > 0 {
+		if raw, err := json.Marshal(m); err == nil {
+			out["fileset.content"] = raw
+		}
+	}
+
+	// access.grants — projected by the Access collector gather play, which
+	// enumerates host access (admins/sudoers/authorized_keys/accounts) and
+	// set_facts `stratt_access` as an array of bare {principal, kind, scope}
+	// tuples (ADR-0036). The additive Baseline ensures-contains the desired
+	// tuple; per-element provenance lives on the desired side (§1.2).
+	if arr, ok := facts["stratt_access"].([]any); ok && len(arr) > 0 {
+		if raw, err := json.Marshal(arr); err == nil {
+			out["access.grants"] = raw
+		}
+	}
+
 	if len(out) == 0 {
 		return nil
 	}

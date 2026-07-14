@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "stratt:contract:intents/access:v1",
+  "title": "Intent/Access spec",
+  "description": "The desired-state payload for a host-access grant (charter §2.4, §4.2 'additive claims, per-element provenance'; ADR-0036). Governs OS-level access on estate hosts — local admin-group membership, sudoers rules, SSH authorized_keys, local accounts — NOT platform authorization (which stays the CaC/OpenFGA tuple spine, §2.5). `subject` is the host-local account the grant is for — deliberately NOT the platform Principal Named Kind (§2), to keep the host/platform identity boundary sharp. One Intent declares one grant; the compiled Baseline ensures-contains {subject, kind, scope} in the host's observed access.grants (additive). Public keys only — private material never enters the graph (§1.2/§2.5). Typed at the seam per §1.1.",
+  "type": "object",
+  "properties": {
+    "subject": { "type": "string", "description": "the host-local account/subject the grant is for (not a platform Principal)" },
+    "kind": { "enum": ["sudo", "group", "authorized_key", "account"], "description": "the grant kind" },
+    "scope": { "type": "string", "description": "kind-scoped detail: sudo command spec, group name, public-key fingerprint, or account shell" },
+    "state": { "enum": ["present", "absent"], "description": "present (default) or absent" }
+  },
+  "required": ["subject", "kind", "scope"],
+  "additionalProperties": false
+}

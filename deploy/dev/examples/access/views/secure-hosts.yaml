@@ -1,0 +1,8 @@
+# The host View the Access example targets (CaC-declared — an Assignment may
+# only bind a cac View, §2.1). Also the View recertified via
+# GET /access/recertification/secure-hosts.
+name: secure-hosts
+selector:
+  kinds: [host]
+  labels:
+    tier: secure

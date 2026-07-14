@@ -8,6 +8,12 @@ package types
 const (
 	IntentApplication = "Intent/Application"
 	IntentCertificate = "Intent/Certificate"
+	// IntentFileSet distributes files to hosts (content-addressed, checksum
+	// Facets); IntentAccess governs host/OS-level access (additive claims:
+	// local admin groups, sudoers, authorized_keys) — ADR-0036. Neither is
+	// platform authorization, which stays the CaC/OpenFGA spine (§2.5).
+	IntentFileSet = "Intent/FileSet"
+	IntentAccess  = "Intent/Access"
 )
 
 // onRemove lifecycle values (charter §2.4): what happens to compiled state

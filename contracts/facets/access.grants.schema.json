@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "stratt:contract:facets/access.grants:v1",
+  "title": "access.grants Facet",
+  "description": "Observed host-access grants (charter §1.2: a projection of actual OS access state; §4.2 'additive claims'). An array of the bare {subject, kind, scope} tuples enforceable on the host — local admins, sudoers rules, authorized_keys, accounts. `subject` is a host-local account, deliberately NOT the platform Principal Named Kind (§2). Projected by the access collector gather Run, demanded by the shipping Intent/Access Baselines (§1.1). A compiled Baseline ensures-contains the desired grant tuple (additive); a desired grant absent is drift, and an unmanaged tuple present is visible for recertification. Per-element provenance (which Intent/Assignment contributed a grant, since when) lives on the desired side in Git (§1.2) and is joined in the recertification report — the observed tuple is bare so drift matching is exact.",
+  "type": "array",
+  "items": {
+    "type": "object",
+    "properties": {
+      "subject": { "type": "string" },
+      "kind": { "enum": ["sudo", "group", "authorized_key", "account"] },
+      "scope": { "type": "string" }
+    },
+    "required": ["subject", "kind", "scope"],
+    "additionalProperties": false
+  }
+}

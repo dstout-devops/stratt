@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "stratt:contract:intents/fileset:v1",
+  "title": "Intent/FileSet spec",
+  "description": "The desired-state payload for a file-distribution Intent (charter §2.4, §4.2 'content-addressed … checksum Facets'; ADR-0036). One Intent manages one file: `digest` is the expected sha256 the compiled Baseline observes for drift; `key` is a dot-free slug naming the file inside the `fileset.content` Facet (the Facet-path evaluator splits on '.', so the key must be dot-free). `source` points at the content (object-store ref); v1 delivers by source-ref — content-addressed OCI artifacts on the Bundle rails (ADR-0032) are the documented next layer. Typed at the seam per §1.1.",
+  "type": "object",
+  "properties": {
+    "key": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]*$", "description": "dot-free slug for this managed file within the fileset.content Facet" },
+    "path": { "type": "string", "pattern": "^/", "description": "absolute destination path on the target host" },
+    "digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$", "description": "expected content sha256 — the drift key observed as fileset.content.<key>.digest" },
+    "source": { "type": "string", "description": "content source ref (object-store key); the remediation Workflow resolves it" },
+    "mode": { "type": "string", "pattern": "^0[0-7]{3}$", "description": "POSIX mode, e.g. 0644" },
+    "owner": { "type": "string" },
+    "group": { "type": "string" },
+    "selinux": { "type": "string", "description": "optional SELinux type context" },
+    "state": { "enum": ["present", "absent"], "description": "present (default) or absent" }
+  },
+  "required": ["key", "path", "digest"],
+  "additionalProperties": false
+}

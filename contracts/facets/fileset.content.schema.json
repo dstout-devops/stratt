@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "stratt:contract:facets/fileset.content:v1",
+  "title": "fileset.content Facet",
+  "description": "Observed managed-file state on a host (charter §1.2: a projection of actual host state; §4.2 'checksum Facets'). Keyed by the FileSet Intent's dot-free `key`; each entry carries the observed sha256 digest, POSIX attributes, and presence. Projected by the fileset collector gather Run (ansible stat + sha256), demanded by the shipping Intent/FileSet Baselines (§1.1). A compiled Baseline observes fileset.content.<key>.digest equals the Intent's expected digest; a mismatch or absence is drift.",
+  "type": "object",
+  "additionalProperties": {
+    "type": "object",
+    "properties": {
+      "digest": { "type": "string", "description": "observed content sha256 (sha256:<hex>), or empty when absent" },
+      "mode": { "type": "string", "description": "observed POSIX mode, e.g. 0644" },
+      "owner": { "type": "string" },
+      "group": { "type": "string" },
+      "present": { "type": "boolean", "description": "whether the file exists on the host" }
+    },
+    "required": ["present"],
+    "additionalProperties": false
+  }
+}

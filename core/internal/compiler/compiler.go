@@ -279,15 +279,20 @@ func Compile(ctx context.Context, s Store, maxDelta float64) (Plan, error) {
 			detail := map[string]any{
 				"reason": "assignment withdrawn; compiled state retained (onRemove=retain)",
 			}
-			// onRemove: remove (§2.4, ADR-0030) — consult the still-declared
-			// Intent + Blueprint to surface a revoke/decommission remediation on
-			// the orphan. It is a ref only: the operator launches the remove
-			// Workflow, never auto-run (§5 Flow 2, §1.8). If the Intent is also
-			// gone we cannot know its removal semantics → retain.
-			if in, err := s.GetIntent(ctx, eb.CompiledFrom.Intent); err == nil && in.OnRemove == types.OnRemoveRemove {
+			// onRemove: remove | revert (§2.4, ADR-0030/0036) — consult the
+			// still-declared Intent + Blueprint to surface a decommission/restore
+			// remediation on the orphan. remove decommissions (revoke a cert, an
+			// access grant); revert restores prior state (remove a distributed
+			// file, remove a granted access). Both surface the Blueprint's
+			// removeWorkflow — a ref only: the operator launches it, never auto-run
+			// (§5 Flow 2, §1.8). If the Intent is also gone we cannot know its
+			// removal semantics → retain.
+			if in, err := s.GetIntent(ctx, eb.CompiledFrom.Intent); err == nil &&
+				(in.OnRemove == types.OnRemoveRemove || in.OnRemove == types.OnRemoveRevert) {
 				if bp, err := s.GetBlueprint(ctx, eb.CompiledFrom.Blueprint, eb.CompiledFrom.BlueprintVersion); err == nil && bp.RemoveWorkflow != "" {
-					detail["reason"] = "assignment withdrawn with onRemove=remove; launch the remove workflow to decommission (never auto-run, §5 Flow 2)"
-					detail["onRemove"] = types.OnRemoveRemove
+					detail["reason"] = fmt.Sprintf("assignment withdrawn with onRemove=%s; launch the remove workflow to %s (never auto-run, §5 Flow 2)",
+						in.OnRemove, removeVerb(in.OnRemove))
+					detail["onRemove"] = in.OnRemove
 					detail["removeWorkflow"] = bp.RemoveWorkflow
 				}
 			}
@@ -393,6 +398,14 @@ func compiledBaseline(a types.Assignment, bp types.Blueprint, intent types.Inten
 			BlueprintVersion: bp.Version, Route: routeIdx,
 		},
 	}
+}
+
+// removeVerb renders the onRemove intent for the orphan-Finding message.
+func removeVerb(onRemove string) string {
+	if onRemove == types.OnRemoveRevert {
+		return "restore prior state"
+	}
+	return "decommission"
 }
 
 func severityOr(s string) string {

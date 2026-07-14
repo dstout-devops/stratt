@@ -1,0 +1,16 @@
+# Intent/FileSet example (ADR-0036): distribute a single managed file to a host
+# View with content-addressed drift detection. `digest` is the expected sha256
+# the compiled Baseline observes as fileset.content.<key>.digest; `key` is the
+# dot-free slug this file occupies in the fileset.content Facet. onRemove: revert
+# surfaces the file-absent remove Workflow on the orphan Finding when withdrawn.
+name: nginx-conf
+kind: Intent/FileSet
+onRemove: revert
+spec:
+  key: nginx-conf
+  path: /etc/nginx/nginx.conf
+  source: cfg/nginx.conf
+  digest: sha256:0000000000000000000000000000000000000000000000000000000000000000
+  mode: "0644"
+  owner: root
+  group: root

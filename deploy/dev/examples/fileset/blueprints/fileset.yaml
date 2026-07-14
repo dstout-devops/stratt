@@ -1,0 +1,21 @@
+# FileSet Blueprint (ADR-0036): one route observing fileset.content.<key>.digest
+# against the Intent's expected digest ({{.spec.digest}} substituted at compile).
+# claim: additive — many FileSet Intents contribute distinct managed files to the
+# same host's fileset.content Facet, each keyed by its own slug, so they union
+# rather than collide (two Intents fighting over one key both open Findings, no
+# silent precedence — the anti-GPO axiom, §2.4). The remediation Workflow
+# converges the file; removeWorkflow removes it on onRemove: revert. Both are
+# refs the operator launches, never auto-run (§5 Flow 2).
+name: fileset
+version: 1
+for: Intent/FileSet
+severity: warning
+dampingObservations: 1
+removeWorkflow: fileset-revert
+routes:
+  - observe:
+      namespace: fileset.content
+      path: "{{.spec.key}}.digest"
+      equals: "{{.spec.digest}}"
+    claim: additive
+    remediationWorkflow: fileset-apply

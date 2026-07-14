@@ -1,0 +1,7 @@
+# The host View the FileSet example targets (CaC-declared — an Assignment may
+# only bind a cac View, §2.1).
+name: web-hosts
+selector:
+  kinds: [host]
+  labels:
+    role: web

@@ -109,12 +109,24 @@ func load() {
 
 // intentKindFromFile maps an intents/<base>.schema.json basename to its Named
 // Kind (charter §2.4): "certificate" → "Intent/Certificate". Filenames are
-// lowercase because a kind's slash cannot live in a path.
+// lowercase because a kind's slash cannot live in a path. Multi-word kinds
+// whose canonical spelling is not a simple first-letter capitalization (the
+// frozen §2 vocabulary, e.g. "FileSet") are mapped explicitly — the spelling is
+// API and must round-trip exactly.
 func intentKindFromFile(base string) string {
 	if base == "" {
 		return ""
 	}
+	if kind, ok := intentKindSpelling[base]; ok {
+		return kind
+	}
 	return "Intent/" + strings.ToUpper(base[:1]) + base[1:]
+}
+
+// intentKindSpelling pins the exact Named-Kind spelling for intent filenames
+// that are not a plain first-letter capitalization (§2 vocabulary is frozen).
+var intentKindSpelling = map[string]string{
+	"fileset": "Intent/FileSet",
 }
 
 func ensure() error {

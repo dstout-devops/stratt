@@ -1,0 +1,21 @@
+# Access revoke Workflow (ADR-0036, onRemove: revert|remove): remove the granted
+# host access (drop group membership / remove the sudoers rule / remove the
+# authorized_key). Surfaced on the orphan Finding when the Assignment is
+# withdrawn — a ref the operator launches, never auto-run (§5 Flow 2).
+name: access-revoke
+steps:
+  - name: revoke
+    viewName: secure-hosts
+    actuator: ansible
+    params:
+      play: |
+        - name: Revoke host-access grant
+          hosts: all
+          become: true
+          tasks:
+            - name: Remove group membership
+              ansible.builtin.command: "gpasswd -d {{ access_subject }} {{ access_scope }}"
+              register: gpasswd
+              changed_when: gpasswd.rc == 0
+              failed_when: false
+              when: access_kind == "group"

@@ -1,0 +1,13 @@
+# Intent/Access example (ADR-0036): grant a host-access element — here local
+# admin-group (wheel) membership for alice — across a host View. Additive: many
+# Access Intents contribute distinct grants to the same host's access.grants
+# Facet; each is one {subject, kind, scope} tuple. onRemove: revert surfaces
+# the revoke Workflow on the orphan Finding when withdrawn. This is OS-level
+# access, NOT platform authorization (which stays the CaC/OpenFGA spine, §2.5).
+name: alice-wheel
+kind: Intent/Access
+onRemove: revert
+spec:
+  subject: alice
+  kind: group
+  scope: wheel

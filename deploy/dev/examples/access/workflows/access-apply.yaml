@@ -1,0 +1,21 @@
+# Access remediation Workflow (ADR-0036): converge the desired host-access grant
+# (add the account to a group / place the sudoers rule / install the
+# authorized_key). Surfaced as a ref on a drift Finding — never auto-launched
+# (§5 Flow 2). ansible user/lineinfile/authorized_key modules are idempotent.
+name: access-apply
+steps:
+  - name: apply
+    viewName: secure-hosts
+    actuator: ansible
+    params:
+      play: |
+        - name: Converge host-access grant
+          hosts: all
+          become: true
+          tasks:
+            - name: Ensure group membership
+              ansible.builtin.user:
+                name: "{{ access_subject }}"
+                groups: "{{ access_scope }}"
+                append: true
+              when: access_kind == "group"

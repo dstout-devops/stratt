@@ -1,0 +1,23 @@
+# Access Blueprint (ADR-0036): one route that ensures-contains the desired grant
+# tuple in the host's observed access.grants Facet. claim: additive — the
+# charter's canonical additive case (§2.4 "local admin groups, sudoers, trust
+# stores"): grants union with per-element provenance, never collide. A desired
+# grant absent on a host is drift; the remediation Workflow converges it,
+# removeWorkflow revokes it on onRemove: revert/remove. Both refs the operator
+# launches, never auto-run (§5 Flow 2). Unmanaged (rogue) grants surface in the
+# recertification report, not here.
+name: access
+version: 1
+for: Intent/Access
+severity: warning
+dampingObservations: 1
+removeWorkflow: access-revoke
+routes:
+  - observe:
+      namespace: access.grants
+      contains:
+        subject: "{{.spec.subject}}"
+        kind: "{{.spec.kind}}"
+        scope: "{{.spec.scope}}"
+    claim: additive
+    remediationWorkflow: access-apply

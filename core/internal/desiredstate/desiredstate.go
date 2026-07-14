@@ -1098,21 +1098,31 @@ func ValidateIntent(in types.Intent) error {
 }
 
 // validateOnRemove gates the withdrawal lifecycle per Intent kind (§2.4).
-// retain is universal; remove is implemented for Certificate (revoke-or-expire,
-// ADR-0030); revert lands with the config/fileset kinds.
+// retain is universal. remove (destructive decommission) is implemented for
+// Certificate (revoke-or-expire, ADR-0030) and Access (revoke a granted access,
+// ADR-0036). revert (restore prior state) is implemented for FileSet (remove
+// the distributed file) and Access (ADR-0036). Both surface the Blueprint's
+// removeWorkflow on the orphan Finding — a ref the operator launches, never
+// auto-run (§5 Flow 2). Withdrawn-but-retained state always raises an orphan
+// Finding regardless (§2.4 — abandoned state is never silent).
 func validateOnRemove(name, kind, onRemove string) error {
 	switch onRemove {
 	case "", types.OnRemoveRetain:
 		return nil
 	case types.OnRemoveRemove:
-		if kind == types.IntentCertificate {
+		switch kind {
+		case types.IntentCertificate, types.IntentAccess:
 			return nil
 		}
 		return fmt.Errorf("intent %s: onRemove %q is not implemented for kind %s", name, onRemove, kind)
 	case types.OnRemoveRevert:
-		return fmt.Errorf("intent %s: onRemove %q is not implemented yet (deferred to the config/fileset kinds)", name, onRemove)
+		switch kind {
+		case types.IntentFileSet, types.IntentAccess:
+			return nil
+		}
+		return fmt.Errorf("intent %s: onRemove %q is not implemented for kind %s", name, onRemove, kind)
 	default:
-		return fmt.Errorf("intent %s: unknown onRemove %q (retain|remove)", name, onRemove)
+		return fmt.Errorf("intent %s: unknown onRemove %q (retain|revert|remove)", name, onRemove)
 	}
 }
 

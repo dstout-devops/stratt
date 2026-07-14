@@ -1,0 +1,6 @@
+# Binds the alice-wheel Access Intent to the secure-hosts View via access@1.
+name: host-access
+intent: alice-wheel
+view: secure-hosts
+blueprint: access@1
+environments: [dev]

@@ -1,0 +1,25 @@
+# FileSet remediation Workflow (ADR-0036): converge the managed file to its
+# desired content + POSIX attributes. Surfaced as a ref on a drift Finding —
+# never auto-launched (§5 Flow 2). ansible copy is idempotent and atomic
+# (temp+rename); backup: true preserves the prior bytes on change. `source` is
+# resolved from the object store by the operator's play; digest verification
+# happens on the next collector pass (content-addressed drift, §4.2).
+name: fileset-apply
+steps:
+  - name: apply
+    viewName: web-hosts
+    actuator: ansible
+    params:
+      play: |
+        - name: Distribute managed file
+          hosts: all
+          become: true
+          tasks:
+            - name: Place file with content-addressed attributes
+              ansible.builtin.copy:
+                src: "{{ fileset_src }}"
+                dest: "{{ fileset_path }}"
+                mode: "{{ fileset_mode | default('0644') }}"
+                owner: "{{ fileset_owner | default('root') }}"
+                group: "{{ fileset_group | default('root') }}"
+                backup: true

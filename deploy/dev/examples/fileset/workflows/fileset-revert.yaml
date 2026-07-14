@@ -1,0 +1,19 @@
+# FileSet revert Workflow (ADR-0036, onRemove: revert): remove the distributed
+# file, restoring the host's prior state. Surfaced on the orphan Finding when the
+# Assignment is withdrawn — a ref the operator launches, never auto-run
+# (§5 Flow 2). ansible file state: absent is idempotent.
+name: fileset-revert
+steps:
+  - name: revert
+    viewName: web-hosts
+    actuator: ansible
+    params:
+      play: |
+        - name: Remove managed file
+          hosts: all
+          become: true
+          tasks:
+            - name: Ensure the managed file is absent
+              ansible.builtin.file:
+                path: "{{ fileset_path }}"
+                state: absent

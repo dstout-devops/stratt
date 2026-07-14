@@ -1,0 +1,44 @@
+# FileSet collector (ADR-0036): a scheduled, read-only gather Run that projects
+# observed managed-file state as the fileset.content Facet (charter §1.2,
+# project-then-observe — the CIS precedent, ADR-0033). It mutates nothing; the
+# projection is the Run's side-effect (WriterRun provenance). The compiled
+# FileSet Baselines assert each Intent's expected digest against what this
+# collector projects.
+#
+# The set_fact name (stratt_fileset) and its {key: {digest, mode, owner, group,
+# present}} shape are a contract with the ansible actuator's ExtractFacts and the
+# pinned fileset.content schema. v1 takes the managed (key, path) list as a play
+# var — auto-deriving it from the declared FileSet Intents is a documented
+# fast-follow (ADR-0036).
+name: fileset-collector
+kind: schedule
+cron: "*/15 * * * *"
+viewName: web-hosts
+principal: svc-collector
+actuator: ansible
+params:
+  play: |
+    - name: Collect managed-file state (read-only)
+      hosts: all
+      gather_facts: false
+      become: true
+      vars:
+        managed_files:
+          - { key: nginx-conf, path: /etc/nginx/nginx.conf }
+      tasks:
+        - name: Stat each managed file
+          ansible.builtin.stat:
+            path: "{{ item.path }}"
+            checksum_algorithm: sha256
+          loop: "{{ managed_files }}"
+          register: fileset_stat
+
+        - name: Project stratt fileset facet
+          ansible.builtin.set_fact:
+            stratt_fileset: "{{ stratt_fileset | default({}) | combine({ item.item.key: {
+              'present': item.stat.exists,
+              'digest': ('sha256:' ~ item.stat.checksum) if item.stat.exists else '',
+              'mode': item.stat.mode | default(''),
+              'owner': item.stat.pw_name | default(''),
+              'group': item.stat.gr_name | default('') } }) }}"
+          loop: "{{ fileset_stat.results }}"

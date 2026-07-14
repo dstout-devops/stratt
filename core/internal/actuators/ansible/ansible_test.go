@@ -91,6 +91,37 @@ func TestExtractHardeningFacts(t *testing.T) {
 	}
 }
 
+// TestExtractFileSetAndAccessFacts covers the Intent/FileSet and Intent/Access
+// projections (ADR-0036): the collector set_facts `stratt_fileset` (a keyed
+// object of managed-file state) and `stratt_access` (an array of bare grant
+// tuples), which ExtractFacts maps to the fileset.content / access.grants
+// namespaces demanded by the shipping Baselines.
+func TestExtractFileSetAndAccessFacts(t *testing.T) {
+	line := []byte(`{"counter":9,"event":"runner_on_ok","event_data":{"host":"host-1","res":{"ansible_facts":{` +
+		`"stratt_fileset":{"nginx-conf":{"digest":"sha256:abc","mode":"0644","owner":"root","group":"root","present":true}},` +
+		`"stratt_access":[{"principal":"alice","kind":"group","scope":"wheel"}]}}}}`)
+	ev, ok := ParseEvent(line)
+	if !ok {
+		t.Fatal("event line did not parse")
+	}
+	facts := ExtractFacts(ev)
+	if facts == nil {
+		t.Fatal("expected facts")
+	}
+	if string(facts["fileset.content"]) != `{"nginx-conf":{"digest":"sha256:abc","group":"root","mode":"0644","owner":"root","present":true}}` {
+		t.Fatalf("fileset.content: %s", facts["fileset.content"])
+	}
+	if string(facts["access.grants"]) != `[{"kind":"group","principal":"alice","scope":"wheel"}]` {
+		t.Fatalf("access.grants: %s", facts["access.grants"])
+	}
+
+	// An event with an empty access array / absent fileset projects neither.
+	none, _ := ParseEvent([]byte(`{"counter":1,"event":"runner_on_ok","event_data":{"host":"h","res":{"ansible_facts":{"stratt_access":[]}}}}`))
+	if f := ExtractFacts(none); f["access.grants"] != nil || f["fileset.content"] != nil {
+		t.Fatalf("no fileset/access facts expected: %v", f)
+	}
+}
+
 func TestActuatorSeam(t *testing.T) {
 	a := Actuator{}
 	if a.Name() != "ansible" {
