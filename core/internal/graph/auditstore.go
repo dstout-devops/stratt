@@ -3,6 +3,7 @@ package graph
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/jackc/pgx/v5"
@@ -27,6 +28,27 @@ func (s *Store) RecordAudit(ctx context.Context, e types.AuditEvent) error {
 }
 
 const auditColumns = `seq, at, principal_id, principal_kind, action, object, outcome, detail, prev_hash, hash`
+
+// LatestAuditForObject returns the most recent audit event for a given
+// (action, object) pair — e.g. the last access.recertify attestation of a View
+// (ADR-0036). The audit stream is the durable record of an attestation, so
+// "last attested" is a query over it, not a second table (§1.6). Returns
+// found=false when the object has never seen that action.
+func (s *Store) LatestAuditForObject(ctx context.Context, action, object string) (types.AuditEvent, bool, error) {
+	row := s.pool.QueryRow(ctx, `
+		SELECT `+auditColumns+`
+		FROM audit.event
+		WHERE action = $1 AND object = $2
+		ORDER BY seq DESC LIMIT 1`, action, object)
+	e, err := scanAudit(row)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return types.AuditEvent{}, false, nil
+	}
+	if err != nil {
+		return types.AuditEvent{}, false, fmt.Errorf("graph: latest audit for object: %w", err)
+	}
+	return e, true, nil
+}
 
 // ListAudit returns audit events in seq order after `since` (a cursor),
 // optionally filtered by principal and/or action. Ascending seq = forward

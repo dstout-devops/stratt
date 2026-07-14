@@ -596,6 +596,55 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/ComplianceReport" }
+  /access/recertification/{view}:
+    parameters:
+      - name: view
+        in: path
+        required: true
+        schema: { type: string }
+    get:
+      operationId: getAccessRecertification
+      summary: Access-recertification report for a View
+      description: >
+        The current host-access grants across a View (charter §2.4, ADR-0036):
+        every observed access.grants tuple, joined against the desired
+        Intent/Access grants (per-element provenance — which Intent/Assignment
+        declared it), with unmanaged/rogue grants flagged. `grantSetHash`
+        anchors an attestation; `status` is `overdue` when the View has never
+        been attested or the last attestation is older than the recertification
+        cadence — abandoned governance is never silent (§1.8). Read-only over
+        the projected Facets and the audit stream.
+      responses:
+        "200":
+          description: The View's access-recertification report.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AccessRecertification" }
+    post:
+      operationId: attestAccessRecertification
+      summary: Attest a View's access grants (recertification)
+      description: >
+        Records a Principal's attestation that the View's current access grants
+        are correct (charter §2.4, ADR-0036). The reviewed grant set is sealed
+        as an object-locked Evidence bundle (WORM, ADR-0029) and the attestation
+        is recorded in the one audit stream (action `access.recertify`, ADR-0034)
+        — a SIEM-forwardable, tamper-evident sign-off. Requires the `runner`
+        grant on the View (§2.5). `grantSetHash` must match the current set, else
+        409 — attesting stale state is refused (§1.8).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/AttestRequest" }
+      responses:
+        "200":
+          description: The sealed attestation receipt.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AttestationReceipt" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "409": { $ref: "#/components/responses/Conflict" }
   /findings:
     get:
       operationId: listFindings
@@ -1582,6 +1631,80 @@ components:
           type: integer
           format: int64
           description: Open Findings this control has raised across the View's targets.
+    AccessRecertification:
+      type: object
+      description: >
+        A View's host-access recertification report (charter §2.4, ADR-0036):
+        the current grants with per-element provenance and an attestation
+        anchor. `status` surfaces overdue governance (§1.8).
+      required: [view, grantSetHash, cadenceDays, status, grants]
+      properties:
+        view: { type: string }
+        grantSetHash:
+          type: string
+          description: hex(sha256(canonical grant set)) — the value an attestation pins.
+        cadenceDays:
+          type: integer
+          format: int64
+          description: Recertification cadence; a View unattested for longer is overdue.
+        status:
+          type: string
+          enum: [overdue, current]
+          description: overdue when never attested or the last attestation is older than the cadence.
+        lastAttested:
+          type: string
+          format: date-time
+          description: When the View was last attested (absent = never).
+        lastAttestedBy: { type: string }
+        grants:
+          type: array
+          items: { $ref: "#/components/schemas/AccessGrantReview" }
+    AccessGrantReview:
+      type: object
+      description: >
+        One host-access grant under review: the {subject, kind, scope} tuple,
+        the hosts it is observed on, and whether a desired Intent/Access manages
+        it (unmanaged = rogue/undeclared access to review). `subject` is a
+        host-local account, not the platform Principal Named Kind (§2).
+      required: [subject, kind, scope, hosts, managed]
+      properties:
+        subject: { type: string }
+        kind: { type: string, enum: [sudo, group, authorized_key, account] }
+        scope: { type: string }
+        hosts:
+          type: array
+          items: { type: string }
+          description: Entity ids on which this grant is observed.
+        managed:
+          type: boolean
+          description: True when a desired Intent/Access declares this grant; false = unmanaged/rogue.
+        intent: { type: string, description: The declaring Intent (when managed). }
+        assignment: { type: string, description: The declaring Assignment (when managed). }
+    AttestRequest:
+      type: object
+      description: The grant-set hash the reviewer is attesting; must match the current set (§1.8).
+      required: [grantSetHash]
+      properties:
+        grantSetHash: { type: string }
+        note: { type: string, description: Optional reviewer note (recorded in the audit detail). }
+    AttestationReceipt:
+      type: object
+      description: >
+        The sealed, audited attestation of a View's access grants (ADR-0036): the
+        object-locked Evidence key + integrity anchor, and the attestor. The
+        audit stream carries the durable record (action access.recertify).
+      required: [view, grantSetHash, evidenceKey, sha256, retainUntil, attestedBy]
+      properties:
+        view: { type: string }
+        grantSetHash: { type: string }
+        evidenceKey:
+          type: string
+          description: Object-store key of the sealed, WORM attestation bundle.
+        sha256:
+          type: string
+          description: hex(sha256(bundle)) — the tamper-evidence anchor.
+        retainUntil: { type: string, format: date-time }
+        attestedBy: { type: string }
     Contract:
       type: object
       description: >

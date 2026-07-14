@@ -28,6 +28,35 @@ func rawExec(t *testing.T, s *Store, sql string) {
 	}
 }
 
+// TestLatestAuditForObject proves the recertification "last attested" query
+// (ADR-0036): the newest event for a given (action, object) is returned, and a
+// never-seen object reports not-found.
+func TestLatestAuditForObject(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	for _, who := range []string{"alice", "bob"} {
+		if err := s.RecordAudit(ctx, types.AuditEvent{
+			PrincipalID: who, PrincipalKind: "human",
+			Action: "access.recertify", Object: "view:web-hosts", Outcome: types.AuditOK,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// A different object must not shadow the query.
+	_ = s.RecordAudit(ctx, types.AuditEvent{PrincipalID: "carol", PrincipalKind: "human", Action: "access.recertify", Object: "view:db-hosts", Outcome: types.AuditOK})
+
+	e, ok, err := s.LatestAuditForObject(ctx, "access.recertify", "view:web-hosts")
+	if err != nil || !ok {
+		t.Fatalf("latest audit: ok=%v err=%v", ok, err)
+	}
+	if e.PrincipalID != "bob" {
+		t.Fatalf("latest attestation must be bob's (newest), got %q", e.PrincipalID)
+	}
+	if _, ok, _ := s.LatestAuditForObject(ctx, "access.recertify", "view:never"); ok {
+		t.Fatal("never-attested object must report not-found")
+	}
+}
+
 // TestAuditChainSealAndVerify proves the tamper-evidence lifecycle (ADR-0034):
 // append is unsealed, the sealer chains the tail, verify passes on a clean
 // chain and fails precisely when a sealed row's content is altered.

@@ -599,6 +599,32 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/access/recertification/{view}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                view: string;
+            };
+            cookie?: never;
+        };
+        /**
+         * Access-recertification report for a View
+         * @description The current host-access grants across a View (charter §2.4, ADR-0036): every observed access.grants tuple, joined against the desired Intent/Access grants (per-element provenance — which Intent/Assignment declared it), with unmanaged/rogue grants flagged. `grantSetHash` anchors an attestation; `status` is `overdue` when the View has never been attested or the last attestation is older than the recertification cadence — abandoned governance is never silent (§1.8). Read-only over the projected Facets and the audit stream.
+         */
+        get: operations["getAccessRecertification"];
+        put?: never;
+        /**
+         * Attest a View's access grants (recertification)
+         * @description Records a Principal's attestation that the View's current access grants are correct (charter §2.4, ADR-0036). The reviewed grant set is sealed as an object-locked Evidence bundle (WORM, ADR-0029) and the attestation is recorded in the one audit stream (action `access.recertify`, ADR-0034) — a SIEM-forwardable, tamper-evident sign-off. Requires the `runner` grant on the View (§2.5). `grantSetHash` must match the current set, else 409 — attesting stale state is refused (§1.8).
+         */
+        post: operations["attestAccessRecertification"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/findings": {
         parameters: {
             query?: never;
@@ -1354,6 +1380,62 @@ export interface components {
              * @description Open Findings this control has raised across the View's targets.
              */
             openFindings: number;
+        };
+        /** @description A View's host-access recertification report (charter §2.4, ADR-0036): the current grants with per-element provenance and an attestation anchor. `status` surfaces overdue governance (§1.8). */
+        AccessRecertification: {
+            view: string;
+            /** @description hex(sha256(canonical grant set)) — the value an attestation pins. */
+            grantSetHash: string;
+            /**
+             * Format: int64
+             * @description Recertification cadence; a View unattested for longer is overdue.
+             */
+            cadenceDays: number;
+            /**
+             * @description overdue when never attested or the last attestation is older than the cadence.
+             * @enum {string}
+             */
+            status: "overdue" | "current";
+            /**
+             * Format: date-time
+             * @description When the View was last attested (absent = never).
+             */
+            lastAttested?: string;
+            lastAttestedBy?: string;
+            grants: components["schemas"]["AccessGrantReview"][];
+        };
+        /** @description One host-access grant under review: the {subject, kind, scope} tuple, the hosts it is observed on, and whether a desired Intent/Access manages it (unmanaged = rogue/undeclared access to review). `subject` is a host-local account, not the platform Principal Named Kind (§2). */
+        AccessGrantReview: {
+            subject: string;
+            /** @enum {string} */
+            kind: "sudo" | "group" | "authorized_key" | "account";
+            scope: string;
+            /** @description Entity ids on which this grant is observed. */
+            hosts: string[];
+            /** @description True when a desired Intent/Access declares this grant; false = unmanaged/rogue. */
+            managed: boolean;
+            /** @description The declaring Intent (when managed). */
+            intent?: string;
+            /** @description The declaring Assignment (when managed). */
+            assignment?: string;
+        };
+        /** @description The grant-set hash the reviewer is attesting; must match the current set (§1.8). */
+        AttestRequest: {
+            grantSetHash: string;
+            /** @description Optional reviewer note (recorded in the audit detail). */
+            note?: string;
+        };
+        /** @description The sealed, audited attestation of a View's access grants (ADR-0036): the object-locked Evidence key + integrity anchor, and the attestor. The audit stream carries the durable record (action access.recertify). */
+        AttestationReceipt: {
+            view: string;
+            grantSetHash: string;
+            /** @description Object-store key of the sealed, WORM attestation bundle. */
+            evidenceKey: string;
+            /** @description hex(sha256(bundle)) — the tamper-evidence anchor. */
+            sha256: string;
+            /** Format: date-time */
+            retainUntil: string;
+            attestedBy: string;
         };
         /** @description A pinned JSON Schema document on a Step's inputs/outputs or a Facet namespace (charter §1.5, §2.2) — data, never a language class. */
         Contract: {
@@ -2316,6 +2398,57 @@ export interface operations {
                     "application/json": components["schemas"]["ComplianceReport"];
                 };
             };
+        };
+    };
+    getAccessRecertification: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                view: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The View's access-recertification report. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccessRecertification"];
+                };
+            };
+        };
+    };
+    attestAccessRecertification: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                view: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AttestRequest"];
+            };
+        };
+        responses: {
+            /** @description The sealed attestation receipt. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AttestationReceipt"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            403: components["responses"]["Forbidden"];
+            409: components["responses"]["Conflict"];
         };
     };
     listFindings: {
