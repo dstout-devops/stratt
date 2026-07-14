@@ -13,11 +13,21 @@ const (
 	NoticeGatePending = "gate.pending"
 )
 
-// Sink kinds. v1 ships webhook (generic JSON HTTP POST); typed slack/smtp/
-// pagerduty drivers are a documented fast-follow (ADR-0027).
+// Sink kinds — the outbound destinations. webhook (notify, ADR-0027) delivers
+// Notices from the notifier; the SIEM kinds (ADR-0034) are audit-egress
+// destinations the stratt-forwarder ships the audit stream to. "Sink" is one
+// delivery-plane noun, NOT a core Named Kind (§2); the kind selects the driver.
+// Splunk/syslog/OTel are drivers beneath a neutral seam — none is load-bearing
+// in core (§1.4/§1.5, mirroring "S3-compatible, never MinIO-by-name").
 const (
-	SinkWebhook = "webhook"
+	SinkWebhook   = "webhook"
+	SinkSplunkHEC = "splunk-hec"
+	SinkSyslog    = "syslog"
+	SinkOTelLogs  = "otel-logs"
 )
+
+// SIEMSinkKinds are the audit-egress Sink kinds the forwarder handles.
+var SIEMSinkKinds = map[string]bool{SinkSplunkHEC: true, SinkSyslog: true, SinkOTelLogs: true}
 
 // Sink is a CaC-declared outbound delivery endpoint (ADR-0027). It is
 // delivery-plane infra, NOT a core-model Named Kind (§2) — hence the notify_
@@ -44,14 +54,27 @@ type Sink struct {
 	Config SinkConfig `json:"config,omitempty"`
 }
 
-// SinkConfig is the non-secret delivery configuration of a Sink.
+// SinkConfig is the non-secret delivery configuration of a Sink. The webhook
+// fields serve notify; the SIEM fields serve the audit forwarder. All are
+// non-secret — the credential (HEC token, TLS material) is a CredentialRef,
+// never inline (§2.5).
 type SinkConfig struct {
-	// Method is the HTTP method (default POST).
+	// Method is the HTTP method (default POST). (webhook)
 	Method string `json:"method,omitempty"`
 	// BodyTemplate is a Go text/template rendered over the Notice — it may
 	// reference {{.kind}}, {{.subject}}, {{.at}}, and {{.payload.X}}. Empty
-	// renders a default JSON body of the whole Notice.
+	// renders a default JSON body of the whole Notice. (webhook)
 	BodyTemplate string `json:"bodyTemplate,omitempty"`
+
+	// Endpoint is the SIEM destination: an https URL for splunk-hec / otel-logs,
+	// or host:port for syslog. (SIEM)
+	Endpoint string `json:"endpoint,omitempty"`
+	// Index is the Splunk index; Source/SourceType tag the events. (splunk-hec)
+	Index string `json:"index,omitempty"`
+	// Facility is the syslog facility number (default 13/audit). (syslog)
+	Facility int `json:"facility,omitempty"`
+	// Insecure allows plain HTTP / no-TLS to a dev SIEM. Production is TLS. (SIEM)
+	Insecure bool `json:"insecure,omitempty"`
 }
 
 // Subscription binds notice-kinds × a CEL predicate → a Sink (ADR-0027).

@@ -206,6 +206,28 @@ tasks:
       - docker build -f deploy/docker/stratt-agent.Dockerfile -t stratt/stratt-agent:dev .
       - go run sigs.k8s.io/kind@v0.32.0 load docker-image stratt/stratt-agent:dev --name stratt-dev
 
+  image:forwarder:
+    desc: Build the stratt-forwarder (audit→SIEM) image and load it into kind (ADR-0034)
+    cmds:
+      - docker build -f deploy/docker/stratt-forwarder.Dockerfile -t stratt/stratt-forwarder:dev .
+      - go run sigs.k8s.io/kind@v0.32.0 load docker-image stratt/stratt-forwarder:dev --name stratt-dev
+
+  dev:forwarder:demo:
+    desc: >-
+      Run stratt-forwarder locally against the harness strattd, shipping the audit
+      stream to a declared SIEM sink (ADR-0034). Declare a sink under
+      notify-sinks/ (kind splunk-hec|syslog|otel-logs, config.endpoint) + grant
+      the forwarder principal reader on audit:log, then `stratt apply`. Set
+      STRATT_FORWARDER_SINK to the sink name.
+    cmds:
+      - |
+        go run -C core ./cmd/stratt-forwarder
+    env:
+      STRATT_SERVER: '{{.STRATT_SERVER | default "http://localhost:8080"}}'
+      STRATT_FORWARDER_SINK: '{{.SINK | default "splunk-dev"}}'
+      STRATT_FORWARDER_PRINCIPAL: '{{.PRINCIPAL | default "audit-forwarder"}}'
+      STRATT_FORWARDER_CRED_DIR: '{{.CRED_DIR | default ""}}'
+
   dev:site:up:
     desc: Bring up the remote Site "edge-west" agent in kind namespace site-b (ADR-0032)
     cmds:

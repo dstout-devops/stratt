@@ -143,11 +143,18 @@
     {
       "type": "audit",
       "relations": {
-        "reader": { "this": {} }
+        "reader": { "this": {} },
+        "forwarder": { "this": {} }
       },
       "metadata": {
         "relations": {
           "reader": {
+            "directly_related_user_types": [
+              { "type": "principal" },
+              { "type": "team", "relation": "member" }
+            ]
+          },
+          "forwarder": {
             "directly_related_user_types": [
               { "type": "principal" },
               { "type": "team", "relation": "member" }

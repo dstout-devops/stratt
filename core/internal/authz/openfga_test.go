@@ -55,7 +55,7 @@ func TestOpenFGAAgreement(t *testing.T) {
 		"view:prod":            {RelationAdmin, RelationReader, RelationRunner},
 		"view:solo":            {RelationAdmin, RelationReader, RelationRunner},
 		"view:ext":             {RelationAdmin, RelationReader, RelationRunner},
-		"audit:log":            {RelationReader},
+		"audit:log":            {RelationReader, RelationForwarder},
 	}
 	checked := 0
 	for _, p := range principals {

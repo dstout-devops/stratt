@@ -406,6 +406,87 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/AuditVerification" }
         "403": { $ref: "#/components/responses/Forbidden" }
+  /audit/forward/{sink}/config:
+    parameters:
+      - { name: sink, in: path, required: true, schema: { type: string } }
+    get:
+      operationId: getForwardConfig
+      summary: A SIEM sink's non-secret forwarding config
+      description: >
+        The declared Sink's non-secret egress config (kind/driver, endpoint,
+        index, facility) — the stratt-forwarder reads it so the CaC Sink is the
+        single source of truth (ADR-0034). The credential is never here; it is a
+        CredentialRef injected into the forwarder pod (§2.5). Requires the forwarder
+        grant on audit:log.
+      responses:
+        "200":
+          description: The sink's forwarding config.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ForwardConfig" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /audit/forward/{sink}:
+    parameters:
+      - { name: sink, in: path, required: true, schema: { type: string } }
+    get:
+      operationId: getForwardBatch
+      summary: The next audit batch to ship to a SIEM sink
+      description: >
+        Audit events in seq order after the sink's committed offset — the
+        at-least-once egress read (ADR-0034). Repeated calls return the same
+        batch until the forwarder reports delivery; the server owns the cursor.
+        Requires the forwarder grant on audit:log.
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, format: int64, minimum: 1, maximum: 1000, default: 200 }
+      responses:
+        "200":
+          description: The next batch (empty when caught up).
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/AuditEvent" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+  /audit/forward/{sink}/report:
+    parameters:
+      - { name: sink, in: path, required: true, schema: { type: string } }
+    post:
+      operationId: reportForward
+      summary: Report a SIEM delivery outcome
+      description: >
+        The forwarder reports the result of shipping a batch (ADR-0034, §1.8). A
+        "delivered" report commits the sink's offset to throughSeq (only forward,
+        never rewind) and records the delivery; a "failed" report records the
+        failure for visibility but does NOT advance the offset — a dropped audit
+        record is impossible-by-design, the batch re-ships until it succeeds.
+        Requires the forwarder grant on audit:log.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ForwardReport" }
+      responses:
+        "204": { description: Recorded. }
+        "403": { $ref: "#/components/responses/Forbidden" }
+  /audit/forward/{sink}/deliveries:
+    parameters:
+      - { name: sink, in: path, required: true, schema: { type: string } }
+    get:
+      operationId: listForwardDeliveries
+      summary: A SIEM sink's recent delivery outcomes
+      responses:
+        "200":
+          description: Recent deliveries, newest first.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/ForwardDelivery" }
+        "403": { $ref: "#/components/responses/Forbidden" }
   /intents:
     get:
       operationId: listIntents
@@ -1304,6 +1385,39 @@ components:
         events: { type: integer, format: int64, description: Sealed events walked. }
         firstBadSeq: { type: integer, format: int64 }
         reason: { type: string }
+    ForwardConfig:
+      type: object
+      description: >
+        A SIEM sink's non-secret forwarding config (ADR-0034) — the driver kind
+        and destination the forwarder ships to. Never carries the credential.
+      required: [sink, kind, endpoint]
+      properties:
+        sink: { type: string }
+        kind: { type: string, description: 'splunk-hec | syslog | otel-logs' }
+        endpoint: { type: string }
+        index: { type: string }
+        facility: { type: integer }
+        insecure: { type: boolean }
+    ForwardReport:
+      type: object
+      description: A forwarder's report of shipping a batch (ADR-0034, §1.8).
+      required: [throughSeq, count, status]
+      properties:
+        throughSeq: { type: integer, format: int64, description: Highest seq in the batch. }
+        count: { type: integer }
+        status: { type: string, enum: [delivered, failed] }
+        detail: { type: string, description: Non-secret failure summary (never the endpoint/token). }
+    ForwardDelivery:
+      type: object
+      description: One recorded SIEM-egress outcome (ADR-0034, §1.8).
+      required: [sink, throughSeq, count, status, at]
+      properties:
+        sink: { type: string }
+        throughSeq: { type: integer, format: int64 }
+        count: { type: integer }
+        status: { type: string }
+        detail: { type: string }
+        at: { type: string, format: date-time }
     Baseline:
       type: object
       description: >

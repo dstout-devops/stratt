@@ -27,12 +27,19 @@ const (
 	// Run/Workflow against a view:<name> — "only against Entities in this
 	// View." Granted per-View, never blanket by org/team admin.
 	RelationRunner = "runner"
+	// RelationForwarder authorizes the SIEM egress endpoints on audit:log
+	// (ADR-0034): reading batches and advancing the forward cursor. Kept
+	// distinct from reader so a read-only audit grant cannot advance a cursor
+	// (least-privilege, §1.6) — the forwarder's Principal holds this, humans get
+	// reader.
+	RelationForwarder = "forwarder"
 )
 
 // AuditObject is the single object guarding the audit stream (ADR-0034): a
-// reader grant on it authorizes GET /audit and the SIEM forwarder. Audit reads
-// are privileged (who-did-what-when), so they are deny-by-default like Runs —
-// unlike v1's open read endpoints.
+// reader grant authorizes GET /audit and /audit/verify; a forwarder grant
+// authorizes the SIEM egress endpoints (batch/report). Audit is privileged
+// (who-did-what-when), so it is deny-by-default like Runs — unlike v1's open
+// read endpoints.
 const AuditObject = "audit:log"
 
 // Authorizer answers relation checks in OpenFGA shape: may `principal` hold

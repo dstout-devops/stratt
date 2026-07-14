@@ -50,3 +50,9 @@ coverage/
 # --- Helm ---
 deploy/charts/*/charts/*.tgz
 .playwright-mcp/
+
+# stray Go build outputs (binaries built into the repo root)
+/stratt-forwarder
+/strattd
+/stratt-agent
+/stratt

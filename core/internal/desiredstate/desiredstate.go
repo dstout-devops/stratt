@@ -623,6 +623,10 @@ type notifySinkFile struct {
 	Config        struct {
 		Method       string `yaml:"method"`
 		BodyTemplate string `yaml:"bodyTemplate"`
+		Endpoint     string `yaml:"endpoint"`
+		Index        string `yaml:"index"`
+		Facility     int    `yaml:"facility"`
+		Insecure     bool   `yaml:"insecure"`
 	} `yaml:"config"`
 }
 
@@ -634,7 +638,11 @@ func parseNotifySinkFile(path string, raw []byte) (string, types.Sink, error) {
 		return "", types.Sink{}, fmt.Errorf("desiredstate: %s: %w", path, err)
 	}
 	s := types.Sink{Name: f.Name, Kind: f.Kind, Principal: f.Principal, CredentialRef: f.CredentialRef,
-		Config: types.SinkConfig{Method: f.Config.Method, BodyTemplate: f.Config.BodyTemplate}}
+		Config: types.SinkConfig{
+			Method: f.Config.Method, BodyTemplate: f.Config.BodyTemplate,
+			Endpoint: f.Config.Endpoint, Index: f.Config.Index,
+			Facility: f.Config.Facility, Insecure: f.Config.Insecure,
+		}}
 	if err := ValidateNotifySink(s); err != nil {
 		return "", types.Sink{}, fmt.Errorf("desiredstate: %s: %w", path, err)
 	}
@@ -646,8 +654,21 @@ func ValidateNotifySink(s types.Sink) error {
 	if s.Name == "" {
 		return fmt.Errorf("notify sink requires a name")
 	}
+	// SIEM audit-egress sinks (ADR-0034): declared in Git like any Sink, shipped
+	// to by the stratt-forwarder. Require an endpoint; the credential (HEC token,
+	// TLS) is a CredentialRef injected into the forwarder pod (§2.5), optional
+	// for a plain-TCP dev syslog. When present it is authz-checked like webhook.
+	if types.SIEMSinkKinds[s.Kind] {
+		if s.Config.Endpoint == "" {
+			return fmt.Errorf("sink %s: %s requires config.endpoint", s.Name, s.Kind)
+		}
+		if s.CredentialRef != "" && s.Principal == "" {
+			return fmt.Errorf("sink %s: principal is required when a credentialRef is set (the delivery credential check, §2.5/§1.6)", s.Name)
+		}
+		return nil
+	}
 	if s.Kind != types.SinkWebhook {
-		return fmt.Errorf("notify sink %s: unknown kind %q (webhook)", s.Name, s.Kind)
+		return fmt.Errorf("sink %s: unknown kind %q (webhook, splunk-hec, syslog, otel-logs)", s.Name, s.Kind)
 	}
 	if s.CredentialRef == "" {
 		return fmt.Errorf("notify sink %s: credentialRef is required (the delivery url/token are injected from it, never inline — §2.5)", s.Name)

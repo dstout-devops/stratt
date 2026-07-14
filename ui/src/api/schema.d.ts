@@ -382,6 +382,91 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/audit/forward/{sink}/config": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                sink: string;
+            };
+            cookie?: never;
+        };
+        /**
+         * A SIEM sink's non-secret forwarding config
+         * @description The declared Sink's non-secret egress config (kind/driver, endpoint, index, facility) — the stratt-forwarder reads it so the CaC Sink is the single source of truth (ADR-0034). The credential is never here; it is a CredentialRef injected into the forwarder pod (§2.5). Requires the forwarder grant on audit:log.
+         */
+        get: operations["getForwardConfig"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/audit/forward/{sink}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                sink: string;
+            };
+            cookie?: never;
+        };
+        /**
+         * The next audit batch to ship to a SIEM sink
+         * @description Audit events in seq order after the sink's committed offset — the at-least-once egress read (ADR-0034). Repeated calls return the same batch until the forwarder reports delivery; the server owns the cursor. Requires the forwarder grant on audit:log.
+         */
+        get: operations["getForwardBatch"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/audit/forward/{sink}/report": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                sink: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Report a SIEM delivery outcome
+         * @description The forwarder reports the result of shipping a batch (ADR-0034, §1.8). A "delivered" report commits the sink's offset to throughSeq (only forward, never rewind) and records the delivery; a "failed" report records the failure for visibility but does NOT advance the offset — a dropped audit record is impossible-by-design, the batch re-ships until it succeeds. Requires the forwarder grant on audit:log.
+         */
+        post: operations["reportForward"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/audit/forward/{sink}/deliveries": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                sink: string;
+            };
+            cookie?: never;
+        };
+        /** A SIEM sink's recent delivery outcomes */
+        get: operations["listForwardDeliveries"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/intents": {
         parameters: {
             query?: never;
@@ -1108,6 +1193,40 @@ export interface components {
             /** Format: int64 */
             firstBadSeq?: number;
             reason?: string;
+        };
+        /** @description A SIEM sink's non-secret forwarding config (ADR-0034) — the driver kind and destination the forwarder ships to. Never carries the credential. */
+        ForwardConfig: {
+            sink: string;
+            /** @description splunk-hec | syslog | otel-logs */
+            kind: string;
+            endpoint: string;
+            index?: string;
+            facility?: number;
+            insecure?: boolean;
+        };
+        /** @description A forwarder's report of shipping a batch (ADR-0034, §1.8). */
+        ForwardReport: {
+            /**
+             * Format: int64
+             * @description Highest seq in the batch.
+             */
+            throughSeq: number;
+            count: number;
+            /** @enum {string} */
+            status: "delivered" | "failed";
+            /** @description Non-secret failure summary (never the endpoint/token). */
+            detail?: string;
+        };
+        /** @description One recorded SIEM-egress outcome (ADR-0034, §1.8). */
+        ForwardDelivery: {
+            sink: string;
+            /** Format: int64 */
+            throughSeq: number;
+            count: number;
+            status: string;
+            detail?: string;
+            /** Format: date-time */
+            at: string;
         };
         /** @description Checkable desired state (charter §2.4, ADR-0019): View selector + check Step + optional remediation Workflow ref + cadence. v1 is the hand-written rung of the §6 ladder; checks are read-only by construction (ansible check mode, opentofu plan). */
         Baseline: {
@@ -1950,6 +2069,103 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AuditVerification"];
+                };
+            };
+            403: components["responses"]["Forbidden"];
+        };
+    };
+    getForwardConfig: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                sink: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The sink's forwarding config. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ForwardConfig"];
+                };
+            };
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    getForwardBatch: {
+        parameters: {
+            query?: {
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                sink: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The next batch (empty when caught up). */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AuditEvent"][];
+                };
+            };
+            403: components["responses"]["Forbidden"];
+        };
+    };
+    reportForward: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                sink: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ForwardReport"];
+            };
+        };
+        responses: {
+            /** @description Recorded. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            403: components["responses"]["Forbidden"];
+        };
+    };
+    listForwardDeliveries: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                sink: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Recent deliveries, newest first. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ForwardDelivery"][];
                 };
             };
             403: components["responses"]["Forbidden"];

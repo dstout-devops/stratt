@@ -1899,6 +1899,121 @@ func (s *Server) VerifyAudit(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, out)
 }
 
+// GetForwardConfig implements (GET /audit/forward/{sink}/config): the declared
+// SIEM Sink's non-secret egress config, so the forwarder treats the CaC Sink as
+// the source of truth (ADR-0034). Never returns the credential (§2.5).
+func (s *Server) GetForwardConfig(w http.ResponseWriter, r *http.Request, sink string) {
+	if !s.requireGrant(w, r, authz.RelationForwarder, authz.AuditObject) {
+		return
+	}
+	sk, err := s.Store.GetNotifySink(r.Context(), sink)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	if !types.SIEMSinkKinds[sk.Kind] {
+		writeErr(w, http.StatusNotFound, "sink "+sink+" is not a SIEM audit sink")
+		return
+	}
+	out := ForwardConfig{Sink: sk.Name, Kind: sk.Kind, Endpoint: sk.Config.Endpoint}
+	if sk.Config.Index != "" {
+		out.Index = &sk.Config.Index
+	}
+	if sk.Config.Facility != 0 {
+		f := sk.Config.Facility
+		out.Facility = &f
+	}
+	if sk.Config.Insecure {
+		ins := true
+		out.Insecure = &ins
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+// GetForwardBatch implements (GET /audit/forward/{sink}): the next in-order
+// audit batch after the sink's committed offset — the at-least-once egress read
+// (ADR-0034). The server owns the cursor; repeated calls return the same batch
+// until the forwarder reports delivery.
+func (s *Server) GetForwardBatch(w http.ResponseWriter, r *http.Request, sink string, params GetForwardBatchParams) {
+	if !s.requireGrant(w, r, authz.RelationForwarder, authz.AuditObject) {
+		return
+	}
+	offset, err := s.Store.GetForwardOffset(r.Context(), sink)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	limit := 0
+	if params.Limit != nil {
+		limit = int(*params.Limit)
+	}
+	evs, err := s.Store.ForwardBatch(r.Context(), offset, limit)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	out := make([]AuditEvent, 0, len(evs))
+	for _, e := range evs {
+		out = append(out, auditToWire(e))
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+// ReportForward implements (POST /audit/forward/{sink}/report): the forwarder's
+// delivery outcome. "delivered" commits the offset (forward-only) and records
+// the delivery; "failed" records the failure but never advances the offset, so
+// the batch re-ships until it lands — a dropped audit record is impossible by
+// design (ADR-0034, §1.8).
+func (s *Server) ReportForward(w http.ResponseWriter, r *http.Request, sink string) {
+	if !s.requireGrant(w, r, authz.RelationForwarder, authz.AuditObject) {
+		return
+	}
+	var body ForwardReport
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid report")
+		return
+	}
+	if body.Status == ForwardReportStatusDelivered {
+		if err := s.Store.CommitForwardOffset(r.Context(), sink, body.ThroughSeq); err != nil {
+			s.fail(w, err)
+			return
+		}
+	}
+	detail := ""
+	if body.Detail != nil {
+		detail = *body.Detail
+	}
+	if err := s.Store.RecordForwardDelivery(r.Context(), types.ForwardDelivery{
+		Sink: sink, ThroughSeq: body.ThroughSeq, Count: body.Count,
+		Status: string(body.Status), Detail: detail,
+	}); err != nil {
+		s.fail(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// ListForwardDeliveries implements (GET /audit/forward/{sink}/deliveries).
+func (s *Server) ListForwardDeliveries(w http.ResponseWriter, r *http.Request, sink string) {
+	if !s.requireGrant(w, r, authz.RelationForwarder, authz.AuditObject) {
+		return
+	}
+	ds, err := s.Store.ListForwardDeliveries(r.Context(), sink, 0)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	out := make([]ForwardDelivery, 0, len(ds))
+	for _, d := range ds {
+		wire := ForwardDelivery{Sink: d.Sink, ThroughSeq: d.ThroughSeq, Count: d.Count, Status: d.Status, At: d.At}
+		if d.Detail != "" {
+			wire.Detail = &d.Detail
+		}
+		out = append(out, wire)
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
 func auditToWire(e types.AuditEvent) AuditEvent {
 	a := AuditEvent{Seq: e.Seq, At: e.At, Action: e.Action}
 	if e.PrincipalID != "" {
