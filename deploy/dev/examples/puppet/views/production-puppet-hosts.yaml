@@ -1,0 +1,18 @@
+# Smart-inventory View over Puppet/OpenVox-sourced hosts (ADR-0038): the
+# AAP-inventory → Stratt-View replacement, over a SECOND config-mgmt Source.
+# The puppet Syncer projects each PuppetDB node as a `host` Entity carrying the
+# source-scoped puppet.node.* facets; a View selects them live, no hand-entered
+# host list (§1.2 — PuppetDB stays the SoR).
+#
+# Selection is on the SOURCE-scoped facet, not the shared Entity `labels` bag:
+# a host managed by both Chef and Puppet (same dns.fqdn) is ONE Entity carrying
+# both chef.node.* and puppet.node.* facets — source-scoped, provenance-stamped,
+# never clobbering. Labels would clobber across the two Sources (whole-set
+# last-writer), so projected selection lives in facets instead.
+name: production-puppet-hosts
+selector:
+  kinds: [host]
+  facets:
+    - namespace: puppet.node.identity
+      path: environment
+      equals: production

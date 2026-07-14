@@ -71,8 +71,10 @@ the estate wherever the org lands. The EOL is a reason the wedge is *urgent*, no
 5. **Identity + Facets curated charter-down (§1.1).** Entity `Kind: host` (aligns with vcenter).
    Identity keys: `chef.node.name` (always) **+ `dns.fqdn`** from ohai, so a Chef-sourced host
    correlates with the same host from vcenter/msgraph by identity-key overlap (the established pattern
-   — not shared Facet namespaces). Labels power the smart-inventory View: `chef.environment`,
-   `chef.node.name`, and per-role `chef.role.<name>`. Facets are a **curated** map of ohai automatic
+   — not shared Facet namespaces). Selectable, source-attributable data (e.g. `environment`) rides the
+   **source-scoped facets**, NOT the shared Entity label bag — a whole-set last-writer projection that
+   clobbers across two config-mgmt Sources correlating onto one host (§2.4; corrected in ADR-0038). The
+   smart-inventory View selects on `chef.node.identity.environment`. Facets are a **curated** map of ohai automatic
    attributes onto **source-scoped** observed Facets (the msgraph `device.*` precedent): `chef.node.identity`,
    `chef.node.os`, `chef.node.network`. Source-scoped (not a shared `node.*`) because §2.1's
    one-owner-per-namespace registry forbids a second config-mgmt Syncer co-owning them and a shared
@@ -113,18 +115,19 @@ the estate wherever the org lands. The EOL is a reason the wedge is *urgent*, no
 
 ## Known behavior
 
-- **Labels are a whole-set, last-writer projection.** The Projector replaces an Entity's entire label
-  blob on each observation (identity keys and per-namespace Facets accumulate; labels do not). When two
-  Syncers correlate onto one host, they alternate the label set each cycle. For the Chef story this is
-  benign (Chef owns `chef.*` and is typically the sole label-writer of its hosts); a per-key label
-  provenance model is a broader graph concern, out of scope here and flagged for the platform.
+- **Entity labels are a whole-set, last-writer projection** (the Projector replaces an Entity's entire
+  label blob per observation; identity keys and per-namespace Facets accumulate, labels do not). So
+  config-mgmt connectors do **not** write projected, source-attributable data into the shared label bag
+  — it would clobber across two Sources correlating onto one host (§2.4). Selectable data lives in the
+  source-scoped facets instead (corrected under ADR-0038 when Puppet made the collision reachable). A
+  general per-key/per-writer Entity-**label** ownership model remains a platform deferral.
 
 ## Honest deferrals
 
 - Chef **partial-search** bulk fetch (v1 does list + get-each — O(N) requests; fine at dogfood scale,
-  flagged for large estates); **environments/roles as Relations** (v1 projects them as View-able
-  labels); **policyfiles / data bags / cookbook-version** Facets; expanded `automatic.roles` (v1 reads
-  the node's own `run_list` `role[...]`); **CredentialRef brokering for Syncers** (shared gap);
+  flagged for large estates); **environments/roles** (v1 projects `environment` into the identity
+  facet; roles/expanded `automatic.roles` deferred — needs facet array-membership View selection);
+  **policyfiles / data bags / cookbook-version** Facets; **CredentialRef brokering for Syncers** (shared gap);
   pinning `chef.node.*` Facet schemas once a Baseline demands them; a **real-Chef e2e** (out-of-network
   build — chefsim is the proof surface, and the store/normalizer/tombstone/correlation paths are
   proven by unit + real-DB integration tests); the **OpenVox/PuppetDB second connector** — the

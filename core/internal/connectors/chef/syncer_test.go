@@ -136,24 +136,27 @@ func TestChefSyncerProjectsAndCorrelates(t *testing.T) {
 
 	// The chef.node.name entity also carries the fqdn identity it correlated
 	// onto: the count==3 above already proves it merged with the pre-seeded host
-	// rather than duplicating it. (Labels are a whole-set last-writer projection,
-	// so Chef's label set — not the seed's — is what remains; see ADR-0037.)
+	// rather than duplicating it.
 	web := findHost(t, store, "web-01")
 	if web.IdentityKeys["dns.fqdn"] != "web-01.acme.internal" {
 		t.Fatalf("web-01 must carry the fqdn identity, got %v", web.IdentityKeys)
 	}
-	if web.Labels["chef.environment"] != "production" || web.Labels["chef.role.web"] != "true" {
-		t.Fatalf("smart-inventory labels missing: %v", web.Labels)
-	}
 
+	// Selectable, source-attributable data lives in the source-scoped facets,
+	// NOT the shared Entity label bag (which would clobber across Sources, §2.4).
 	facets := facetMap(t, store, web.ID)
 	assertFacetField(t, facets, "chef.node.identity", "platform", "ubuntu")
 	assertFacetField(t, facets, "chef.node.identity", "chef_client", "15.17.4")
+	assertFacetField(t, facets, "chef.node.identity", "environment", "production")
 	assertFacetField(t, facets, "chef.node.os", "kernel_release", "5.15.0-91-generic")
 	assertFacetField(t, facets, "chef.node.network", "ipv4", "10.0.0.10")
 
-	// The View / smart-inventory story: select production hosts by label.
-	prod, err := store.ResolveSelector(ctx, types.ViewSelector{Kinds: []string{"host"}, Labels: map[string]string{"chef.environment": "production"}}, nil, 0)
+	// The smart-inventory story: select production hosts via the source-scoped
+	// facet (the shipped example View's selector).
+	prod, err := store.ResolveSelector(ctx, types.ViewSelector{
+		Kinds:  []string{"host"},
+		Facets: []types.FacetPredicate{{Namespace: "chef.node.identity", Path: "environment", Equals: json.RawMessage(`"production"`)}},
+	}, nil, 0)
 	if err != nil || len(prod) != 2 {
 		t.Fatalf("production View: got %d err=%v, want 2 (web-01, db-01)", len(prod), err)
 	}

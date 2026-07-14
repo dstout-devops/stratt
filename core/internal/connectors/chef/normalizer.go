@@ -3,7 +3,6 @@ package chef
 import (
 	"encoding/json"
 	"fmt"
-	"strings"
 
 	chefapi "github.com/go-chef/chef"
 
@@ -31,24 +30,18 @@ func normalizeNode(n chefapi.Node) (graph.EntityUpsert, error) {
 		identity["dns.fqdn"] = fqdn
 	}
 
-	labels := map[string]string{"chef.node.name": n.Name}
-	if n.Environment != "" {
-		labels["chef.environment"] = n.Environment
-	}
-	// One boolean label per assigned role, so a View can select "hosts running
-	// role X". Expanded automatic.roles is a documented enrichment (v1 reads the
-	// node's own run_list role[...] entries).
-	for _, entry := range n.RunList {
-		if role, ok := roleName(entry); ok {
-			labels["chef.role."+role] = "true"
-		}
-	}
-
+	// No Entity labels: the Entity `labels` bag is a whole-set last-writer
+	// projection, so two Sources correlating onto one host (Chef + Puppet on a
+	// shared dns.fqdn) would clobber each other's labels — implicit precedence
+	// across Sources (§2.4). Source-attributable, selectable data lives in the
+	// SOURCE-scoped facets instead (which have per-namespace ownership); Views
+	// select on those facets (ADR-0038). `environment` rides the identity facet.
 	nodeIdentity := prune(map[string]any{
 		"platform":         str(auto, "platform"),
 		"platform_family":  str(auto, "platform_family"),
 		"platform_version": str(auto, "platform_version"),
 		"chef_client":      chefClientVersion(auto),
+		"environment":      n.Environment,
 	})
 	kernel := submap(auto, "kernel")
 	nodeOS := prune(map[string]any{
@@ -84,17 +77,8 @@ func normalizeNode(n chefapi.Node) (graph.EntityUpsert, error) {
 	return graph.EntityUpsert{
 		Kind:         "host",
 		IdentityKeys: identity,
-		Labels:       labels,
 		Facets:       facets,
 	}, nil
-}
-
-// roleName extracts X from a "role[X]" run_list entry.
-func roleName(entry string) (string, bool) {
-	if strings.HasPrefix(entry, "role[") && strings.HasSuffix(entry, "]") {
-		return entry[len("role[") : len(entry)-1], true
-	}
-	return "", false
 }
 
 // chefClientVersion reads ohai chef_packages.chef.version when present.

@@ -40,6 +40,7 @@ import (
 	certsyncer "github.com/dstout-devops/stratt/core/internal/connectors/certissuer"
 	"github.com/dstout-devops/stratt/core/internal/connectors/chef"
 	"github.com/dstout-devops/stratt/core/internal/connectors/msgraph"
+	"github.com/dstout-devops/stratt/core/internal/connectors/puppet"
 	"github.com/dstout-devops/stratt/core/internal/connectors/vcenter"
 	"github.com/dstout-devops/stratt/core/internal/contract"
 	"github.com/dstout-devops/stratt/core/internal/desiredstate"
@@ -451,6 +452,33 @@ func run(ctx context.Context, log *slog.Logger) error {
 		}()
 	} else {
 		log.Info("no Chef Source configured (STRATT_CHEF_SERVER_URL empty); syncer idle")
+	}
+
+	// ── OpenVox/PuppetDB node Syncer (ADR-0038; config-mgmt SoR ingest) ──
+	if pdbURL := os.Getenv("STRATT_PUPPETDB_URL"); pdbURL != "" {
+		interval, err := time.ParseDuration(env("STRATT_PUPPETDB_INTERVAL", "60s"))
+		if err != nil {
+			return fmt.Errorf("puppet interval: %w", err)
+		}
+		// mTLS client cert/key/CA arrive as mounted files (§2.5: material stays
+		// a file the process reads, never persisted); empty for an http:// dev URL.
+		syncer := puppet.NewSyncer(puppet.Config{
+			BaseURL:    pdbURL,
+			CertFile:   os.Getenv("STRATT_PUPPETDB_CERT_FILE"),
+			KeyFile:    os.Getenv("STRATT_PUPPETDB_KEY_FILE"),
+			CAFile:     os.Getenv("STRATT_PUPPETDB_CA_FILE"),
+			SourceName: env("STRATT_PUPPETDB_SOURCE_NAME", "puppet"),
+		}, interval, store, log)
+		if err := syncer.Register(ctx); err != nil {
+			return err
+		}
+		go func() {
+			if err := syncer.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
+				log.Error("puppet syncer stopped", "error", err)
+			}
+		}()
+	} else {
+		log.Info("no PuppetDB Source configured (STRATT_PUPPETDB_URL empty); syncer idle")
 	}
 
 	// ── desired-state reconciliation (§1.2: Git is the declarer) ────────
