@@ -48,7 +48,7 @@ func (f *Facade) resolve(ctx context.Context, h http.Header) (id, kind string, e
 		if f.cfg.OIDC == nil {
 			return "", "", errNoOIDC
 		}
-		return f.cfg.OIDC.Resolve(ctx, strings.TrimPrefix(authHeader, "Bearer "))
+		id, kind, err = f.cfg.OIDC.Resolve(ctx, strings.TrimPrefix(authHeader, "Bearer "))
 	case strings.HasPrefix(authHeader, "Basic "):
 		if f.cfg.OIDC == nil {
 			return "", "", errNoOIDC
@@ -57,18 +57,28 @@ func (f *Facade) resolve(ctx context.Context, h http.Header) (id, kind string, e
 		if !ok {
 			return "", "", errBadBasic
 		}
-		return f.cfg.OIDC.Resolve(ctx, pass)
+		id, kind, err = f.cfg.OIDC.Resolve(ctx, pass)
+	case f.cfg.DevPrincipalHeader && h.Get("X-Stratt-Principal") != "":
+		id = h.Get("X-Stratt-Principal")
+		kind = h.Get("X-Stratt-Principal-Kind")
+		if kind == "" {
+			kind = authz.KindHuman
+		}
+	default:
+		return "", "", nil
 	}
-	if f.cfg.DevPrincipalHeader {
-		if p := h.Get("X-Stratt-Principal"); p != "" {
-			k := h.Get("X-Stratt-Principal-Kind")
-			if k == "" {
-				k = authz.KindHuman
-			}
-			return p, k, nil
+	if err != nil {
+		return "", "", err
+	}
+	// SCIM deactivation gate (ADR-0035): the compat surface inherits the same
+	// offboarding block as /api/v1 — a deactivated human cannot launch or cancel
+	// Runs via /api/v2 either (§1.6 symmetry). Humans only.
+	if id != "" && kind == authz.KindHuman && f.cfg.SCIMGate != nil {
+		if gerr := f.cfg.SCIMGate(ctx, id); gerr != nil {
+			return "", "", gerr
 		}
 	}
-	return "", "", nil
+	return id, kind, nil
 }
 
 // requireRunner enforces View-scoped execution authz (§2.5, ADR-0028) on the

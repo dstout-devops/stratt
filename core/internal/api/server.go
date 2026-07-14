@@ -106,6 +106,7 @@ func (s *Server) Handler() http.Handler {
 		Authz:              s.Authz,
 		OIDC:               s.OIDC,
 		DevPrincipalHeader: s.DevPrincipalHeader,
+		SCIMGate:           s.SCIMGate,
 		Log:                s.Log,
 	}))
 	// Probe endpoint (ADR-0013): process-liveness only — no store, no authz,
@@ -252,8 +253,10 @@ func (s *Server) ResolvePrincipal(ctx context.Context, h http.Header) (id, kind 
 	}
 	// SCIM deactivation gate (ADR-0035): a valid token/header still resolves,
 	// but a SCIM-managed human the IdP has deactivated is denied here — even
-	// before the token expires. Only humans are gated; §1.6 one seam so REST,
-	// MCP, and the façade all inherit it.
+	// before the token expires. Only humans are gated. REST and MCP inherit this
+	// via ResolvePrincipal; the /api/v2 façade applies the SAME s.SCIMGate in its
+	// own resolver (awxfacade.Config.SCIMGate) so the compat surface is not a
+	// weaker offboarding path (§1.6 symmetry).
 	if id != "" && kind == authz.KindHuman && s.SCIMGate != nil {
 		if gerr := s.SCIMGate(ctx, id); gerr != nil {
 			return "", "", gerr

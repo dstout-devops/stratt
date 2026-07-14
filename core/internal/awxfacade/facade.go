@@ -16,6 +16,7 @@
 package awxfacade
 
 import (
+	"context"
 	"encoding/json"
 	"log/slog"
 	"net/http"
@@ -36,7 +37,12 @@ type Config struct {
 	Authz              authz.Authorizer
 	OIDC               *authz.OIDCResolver
 	DevPrincipalHeader bool
-	Log                *slog.Logger
+	// SCIMGate, when set, denies a SCIM-deactivated human at resolve time
+	// (ADR-0035) — the compat surface must not be a weaker offboarding path than
+	// /api/v1 (§1.6 symmetry). Same seam semantics as api.Server.SCIMGate:
+	// humans only; service/agent and unknown-to-SCIM never gated.
+	SCIMGate func(ctx context.Context, principalID string) error
+	Log      *slog.Logger
 }
 
 // Facade is the /api/v2 handler.
