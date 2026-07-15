@@ -59,6 +59,53 @@ where a fan-out actually touches multiple Cells and descent consumes it); the `K
 Slice 2 ships the residency/homing data model + placement Findings + `Source.cell`/`run.cell` + `siteFile.cell`
 + the `SetRunCells`/`HomeCellsByEntities` plumbing those later slices consume.
 
+## Slice-3 refinements (accepted 2026-07-15)
+
+Slice 3 = the read-federation `cellrouter`. Steward-approved refinements to the pinned design:
+
+1. **Scope = READ federation; WRITE home-forwarding moves to slice 5.** Cross-Cell writes are vacuous today —
+   Syncers write their own Cell by construction (`source.cell`), Runs home to the launching Cell (`run.cell`),
+   CaC is partitioned per-Cell, and cross-Cell run *launch* is `RunAcrossCells` (slice 5). Slice-2 placement
+   Findings already enforce the no-multi-master guarantee *observably*. A write-forwarder built now would be
+   dead code. So slice 3 ships read federation + the shared foundation; write home-forwarding lands with slice 5.
+2. **Cross-Cell auth = forward the caller's token.** The `cellrouter` replays the caller's inbound
+   `Authorization: Bearer` (or the dev `X-Stratt-Principal`) verbatim on peer calls, so the peer's identical
+   `ResolvePrincipal` re-derives the **same Principal** — cross-Cell authz + audit attribute to the *user*, not
+   the Cell (§1.6 one-Principal; zero new primitive). Guardrails: forward ONLY to CaC-declared
+   `graph.cell.endpoint` (never a caller-supplied address); require a shared OIDC issuer/audience across Cells
+   (a token that can't verify at the peer fails the peer call, surfaced as unreachable — never silent); the
+   token is request-scoped, never persisted or logged (§2.5). Service-identity rejected (it would collapse
+   per-user authz + audit to per-Cell). MCP carries the identity only in context, so `mcpserver.invoke` sets
+   the forwardable headers on its in-process request for uniform forwarding.
+3. **Partial-result honesty = HTTP 206 + named headers, no body envelope.** Every read body + the oapi contract
+   stay unchanged; partial-ness rides `X-Stratt-Cells-Queried` / `X-Stratt-Cells-Unreachable` (named, never
+   dropped) and — critically — **HTTP 206** when a Cell is unreachable, so even a header-ignoring client sees a
+   non-200 (§1.8 teeth). MCP folds the unreachable set into the tool-result envelope note so agents see the gap
+   in-band. A UI/CLI 206 renderer is a fast-follow (the honest signal ships now).
+4. **The cellrouter wraps the generated router ONCE**, used by both `/api/v1` and MCP (so MCP `list_*`/`get_*`
+   federate for free). Classification is an explicit federated-route table (`/runs`, `/findings`,
+   `/views/{}/entities` list reads; `/entities/{id}` point read) — everything else passes through; the merge is
+   per-endpoint (id / started_at,id / last_observed,id) with a `sort` — no cross-Cell join/pushdown (§1.4). A
+   fan-out call carries `X-Stratt-Cell-Fanout` so peers serve it local-only (no recursion). **Single-Cell (no
+   `graph.cell` peers) is a byte-identical pass-through** (empty-peer-set short-circuit). Point read is
+   local-first-then-peers: a locally-present Entity is authoritative (single-writer); a local miss asks peers.
+5. **`KindCell` CaC loader lands here** (its consumer — the peer set — is now real). Sort tiebreaks (`, id ASC`
+   on `ListRuns`/`ListFindings`, backed by composite indexes) make the cross-Cell merge total-order deterministic.
+
+**Slice-3 known limitations (tracked, charter-guardian flags):**
+- **§1.5 cross-Cell schema-skew gating is not yet enforced** — the merge unions peer JSON. A peer on a divergent
+  Facet/Contract registry whose body doesn't parse as the expected array now surfaces as a **206 (partial),
+  never a silent union** (the merge-failure path is honest); explicit registry-version gating (block the merge
+  on a version mismatch) lands with the global-registry work (slice 4), before a second Cell with a divergent
+  registry is declarable.
+- **`X-Stratt-Cell-Fanout` is a peer-internal control signal accepted unauthenticated at the edge.** An external
+  client spoofing it only *narrows its own view* to the local Cell (no cross-Cell data leak, no authz bypass —
+  the local handler still enforces authz). Closed when peer-to-peer authentication lands (companion to the
+  slice-4 global authz).
+- **The dev `X-Stratt-Principal` header is forwarded cross-Cell** — safe ONLY because a prod peer with
+  `DevPrincipalHeader` disabled ignores it (→ anonymous → denied → named unreachable). Never enable the dev
+  header on a prod peer.
+
 ## Decision (the complete architecture)
 
 **Partitioned region-local single-writer Cells presenting ONE logical estate.** Not multi-master.

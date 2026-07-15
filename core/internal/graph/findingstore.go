@@ -329,7 +329,7 @@ func (s *Store) ListFindings(ctx context.Context, baseline, status string, limit
 		SELECT `+findingColumns+`
 		FROM graph.finding
 		WHERE ($1 = '' OR baseline = $1) AND ($2 = '' OR status = $2)
-		ORDER BY last_observed DESC LIMIT $3`, baseline, status, limit)
+		ORDER BY last_observed DESC, id ASC LIMIT $3`, baseline, status, limit)
 	if err != nil {
 		return nil, fmt.Errorf("graph: list findings: %w", err)
 	}

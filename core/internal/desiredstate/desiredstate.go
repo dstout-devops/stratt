@@ -17,6 +17,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -57,6 +58,7 @@ type Declarations struct {
 	NotifySinks    []types.Sink          `json:"notifySinks"`
 	Subscriptions  []types.Subscription  `json:"subscriptions"`
 	Sites          []types.Site          `json:"sites"`
+	Cells          []types.Cell          `json:"cells"`
 	SCIMIdPs       []types.SCIMIdP       `json:"scimIdps"`
 }
 
@@ -75,6 +77,7 @@ const (
 	KindNotifySink    = "notify-sink"
 	KindSubscription  = "subscription"
 	KindSite          = "site"
+	KindCell          = "cell"
 	KindSCIMIdP       = "scim-idp"
 )
 
@@ -223,6 +226,13 @@ func ParseDir(root string) (Declarations, error) {
 	}
 	out.Sites = sites
 	sort.Slice(out.Sites, func(i, j int) bool { return out.Sites[i].Name < out.Sites[j].Name })
+
+	cells, err := parseKind(filepath.Join(root, "cells"), true, parseCellFile)
+	if err != nil {
+		return out, err
+	}
+	out.Cells = cells
+	sort.Slice(out.Cells, func(i, j int) bool { return out.Cells[i].Name < out.Cells[j].Name })
 
 	scimIdps, err := parseKind(filepath.Join(root, "scim"), true, parseScimFile)
 	if err != nil {
@@ -682,6 +692,50 @@ func ValidateSite(s types.Site) error {
 	// widen the subject.
 	if strings.ContainsAny(s.Name, ". \t*>") {
 		return fmt.Errorf("site %s: name must not contain '.', whitespace, or NATS wildcards ('*','>')", s.Name)
+	}
+	return nil
+}
+
+// cellFile is the cells/*.yaml shape (ADR-0044). A Cell declaration is the
+// federation router's peer registry: name + region + the peer's strattd API
+// endpoint. No secret material.
+type cellFile struct {
+	Name           string `yaml:"name"`
+	Region         string `yaml:"region"`
+	Endpoint       string `yaml:"endpoint"`
+	DispatchPrefix string `yaml:"dispatchPrefix"`
+	Description    string `yaml:"description"`
+}
+
+func parseCellFile(path string, raw []byte) (string, types.Cell, error) {
+	var f cellFile
+	dec := yaml.NewDecoder(strings.NewReader(string(raw)))
+	dec.KnownFields(true)
+	if err := dec.Decode(&f); err != nil {
+		return "", types.Cell{}, fmt.Errorf("desiredstate: %s: %w", path, err)
+	}
+	c := types.Cell{Name: f.Name, Region: f.Region, Endpoint: f.Endpoint, DispatchPrefix: f.DispatchPrefix, Description: f.Description, DeclaredBy: "cac"}
+	if err := ValidateCell(c); err != nil {
+		return "", types.Cell{}, fmt.Errorf("desiredstate: %s: %w", path, err)
+	}
+	return c.Name, c, nil
+}
+
+// ValidateCell checks one Cell declaration.
+func ValidateCell(c types.Cell) error {
+	if c.Name == "" {
+		return fmt.Errorf("cell requires a name")
+	}
+	if c.Name == types.LocalCell {
+		return fmt.Errorf("cell name %q is reserved for the built-in single-Cell default", types.LocalCell)
+	}
+	if c.Region == "" {
+		return fmt.Errorf("cell %s: region is required", c.Name)
+	}
+	// endpoint is the peer's strattd API address the federation router dials.
+	u, err := url.Parse(c.Endpoint)
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		return fmt.Errorf("cell %s: endpoint must be an absolute URL (got %q)", c.Name, c.Endpoint)
 	}
 	return nil
 }
@@ -1601,6 +1655,11 @@ func ComputePlan(ctx context.Context, store *graph.Store, decls Declarations) (P
 		return Plan{}, err
 	}
 	plan.Entries = append(plan.Entries, sitePlan.Entries...)
+	cellPlan, err := computeCellPlan(ctx, store, decls.Cells)
+	if err != nil {
+		return Plan{}, err
+	}
+	plan.Entries = append(plan.Entries, cellPlan.Entries...)
 	scimPlan, err := computeScimPlan(ctx, store, decls.SCIMIdPs)
 	if err != nil {
 		return Plan{}, err
@@ -1962,6 +2021,41 @@ func computeSitePlan(ctx context.Context, store *graph.Store, decls []types.Site
 	return plan, nil
 }
 
+// computeCellPlan diffs declared Cells (CaC-only, ADR-0044) — the federation
+// peer registry.
+func computeCellPlan(ctx context.Context, store *graph.Store, decls []types.Cell) (Plan, error) {
+	current, err := store.ListCells(ctx)
+	if err != nil {
+		return Plan{}, err
+	}
+	byName := map[string]types.Cell{}
+	for _, c := range current {
+		byName[c.Name] = c
+	}
+	var plan Plan
+	declared := map[string]bool{}
+	for _, d := range decls {
+		declared[d.Name] = true
+		entry := PlanEntry{Kind: KindCell, Name: d.Name}
+		cur, exists := byName[d.Name]
+		switch {
+		case !exists:
+			entry.Action = ActionCreate
+		case declDocsEqual(cur, d):
+			entry.Action = ActionNoop
+		default:
+			entry.Action = ActionUpdate
+		}
+		plan.Entries = append(plan.Entries, entry)
+	}
+	for _, c := range current {
+		if !declared[c.Name] {
+			plan.Entries = append(plan.Entries, PlanEntry{Kind: KindCell, Name: c.Name, Action: ActionDelete})
+		}
+	}
+	return plan, nil
+}
+
 // computeNotifySinkPlan diffs declared Sinks (CaC-only, ADR-0027).
 func computeNotifySinkPlan(ctx context.Context, store *graph.Store, decls []types.Sink) (Plan, error) {
 	current, err := store.ListNotifySinks(ctx)
@@ -2223,6 +2317,10 @@ func Apply(ctx context.Context, store *graph.Store, decls Declarations) (Plan, e
 	for _, d := range decls.Sites {
 		siteByName[d.Name] = d
 	}
+	cellByName := map[string]types.Cell{}
+	for _, d := range decls.Cells {
+		cellByName[d.Name] = d
+	}
 	scimByName := map[string]types.SCIMIdP{}
 	for _, d := range decls.SCIMIdPs {
 		scimByName[d.Name] = d
@@ -2286,6 +2384,10 @@ func Apply(ctx context.Context, store *graph.Store, decls Declarations) (Plan, e
 			err = store.DeleteSite(ctx, e.Name)
 		case e.Kind == KindSite:
 			err = store.UpsertSite(ctx, siteByName[e.Name])
+		case e.Kind == KindCell && e.Action == ActionDelete:
+			err = store.DeleteCell(ctx, e.Name)
+		case e.Kind == KindCell:
+			err = store.UpsertCell(ctx, cellByName[e.Name])
 		case e.Kind == KindSCIMIdP && e.Action == ActionDelete:
 			err = store.DeleteIDP(ctx, e.Name)
 		case e.Kind == KindSCIMIdP:

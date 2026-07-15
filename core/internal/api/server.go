@@ -18,6 +18,7 @@ import (
 
 	"github.com/dstout-devops/stratt/core/internal/authz"
 	"github.com/dstout-devops/stratt/core/internal/awxfacade"
+	"github.com/dstout-devops/stratt/core/internal/cellrouter"
 	"github.com/dstout-devops/stratt/core/internal/compiler"
 	"github.com/dstout-devops/stratt/core/internal/contract"
 	"github.com/dstout-devops/stratt/core/internal/desiredstate"
@@ -38,6 +39,10 @@ type Server struct {
 	Temporal client.Client
 	Authz    authz.Authorizer
 	Log      *slog.Logger
+	// CellID is this daemon's control-plane Cell (STRATT_CELL_ID, ADR-0044).
+	// Empty/"local" ⇒ read federation is a no-op (no peers). Threaded into the
+	// cellrouter that wraps the API for cross-Cell read federation.
+	CellID string
 	// DevPrincipalHeader enables the X-Stratt-Principal resolver — dev
 	// harness / no-substrate path only (ADR-0009). Startup logs loudly.
 	DevPrincipalHeader bool
@@ -117,16 +122,25 @@ func (s *Server) handleReadyz(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
+	// Read federation (ADR-0044 slice 3): wrap the generated router ONCE and use
+	// the SAME wrapped handler for both /api/v1 and MCP, so both surfaces present
+	// one logical estate. Single-Cell (no graph.cell peers) ⇒ byte-identical
+	// pass-through. Writes are never federated here (§2.4).
+	fed := cellrouter.Middleware(Handler(s), cellrouter.Deps{
+		Store:  s.Store,
+		CellID: s.CellID,
+		Log:    s.Log,
+	})
 	// principal resolves identity; audit records every request behind it (the
 	// full access log, §1.6) — audit is INNER so it sees the resolved Principal.
-	mux.Handle("/api/v1/", http.StripPrefix("/api/v1", s.principalMiddleware(s.auditMiddleware(Handler(s)))))
+	mux.Handle("/api/v1/", http.StripPrefix("/api/v1", s.principalMiddleware(s.auditMiddleware(fed))))
 	// Platform MCP server (§1.6, ADR-0021): the agent surface, same identity
 	// seam (ResolvePrincipal), same capabilities (tools invoke the generated
 	// router in-process). Never anonymous — 401 without a Principal. Tool calls
 	// fold into the one audit stream as mcp.tool-call events.
 	mux.Handle("/mcp", mcpserver.New(mcpserver.Config{
 		Resolve:     s.ResolvePrincipal,
-		API:         Handler(s),
+		API:         fed,
 		RecordUsage: s.recordMCPAudit,
 		Log:         s.Log,
 	}))

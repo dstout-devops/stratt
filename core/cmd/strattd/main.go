@@ -749,7 +749,7 @@ func run(ctx context.Context, log *slog.Logger) error {
 	if uiDir != "" {
 		log.Info("serving ui", "dir", uiDir)
 	}
-	server := &api.Server{Store: store, Bus: bus, Temporal: temporalClient, Authz: authorizer, Log: log, DevPrincipalHeader: devPrincipal, OIDC: oidcResolver, UIDir: uiDir, StateBackend: stateHandler, EmitterIngest: emitters.New(store, bus, log).Handler(), SCIM: scim.New(store, log).Handler(), CompileStatus: compileStatus, Evidence: evidence, SiteLiveness: func(ctx context.Context) (map[string]bool, error) {
+	server := &api.Server{Store: store, Bus: bus, Temporal: temporalClient, Authz: authorizer, Log: log, CellID: cellID, DevPrincipalHeader: devPrincipal, OIDC: oidcResolver, UIDir: uiDir, StateBackend: stateHandler, EmitterIngest: emitters.New(store, bus, log).Handler(), SCIM: scim.New(store, log).Handler(), CompileStatus: compileStatus, Evidence: evidence, SiteLiveness: func(ctx context.Context) (map[string]bool, error) {
 		live, err := siteGateway.LiveSites(ctx)
 		if err != nil {
 			return nil, err

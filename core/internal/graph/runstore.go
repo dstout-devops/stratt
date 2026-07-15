@@ -161,7 +161,7 @@ func (s *Store) ListRuns(ctx context.Context, limit int) ([]types.Run, error) {
 	}
 	rows, err := s.pool.Query(ctx, `
 		SELECT id, workflow_id, status, view_ref, view_version, triggered_by, baseline, workflow_run_id, step_name, started_at, finished_at
-		FROM graph.run ORDER BY started_at DESC LIMIT $1`, limit)
+		FROM graph.run ORDER BY started_at DESC, id ASC LIMIT $1`, limit)
 	if err != nil {
 		return nil, fmt.Errorf("graph: list runs: %w", err)
 	}
