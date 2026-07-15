@@ -82,6 +82,16 @@ func env(key, def string) string {
 	return def
 }
 
+// leaderLeaseName returns the Cell-scoped leader lease name (ADR-0044): the
+// legacy "strattd-leader" for the built-in local Cell, "strattd-leader-<cell>"
+// for a named Cell so peer Cells sharing a namespace never contend one lease.
+func leaderLeaseName(cell string) string {
+	if cell == "" || cell == types.LocalCell {
+		return "strattd-leader"
+	}
+	return "strattd-leader-" + cell
+}
+
 // splitNonEmpty splits a comma-separated env value into trimmed, non-empty
 // entries (e.g. STRATT_SALT_EVENT_TAGS="salt/minion/,salt/job/").
 func splitNonEmpty(s string) []string {
@@ -102,6 +112,23 @@ func run(ctx context.Context, log *slog.Logger) error {
 	}
 	defer store.Close()
 	log.Info("graph store ready (migrations applied)")
+
+	// ── control-plane Cell identity (ADR-0044) ───────────────────────────
+	// A Cell is a region-local single-writer control-plane shard. STRATT_CELL_ID
+	// stamps this daemon's Cell into write provenance (prov_cell) and, for a
+	// named Cell, into the collision-prone shared-name control resources (leader
+	// lease, Temporal namespace/queue) so a peer Cell sharing substrate cannot
+	// collide. The default "local" Cell keeps every name byte-identical to the
+	// pre-Cells control plane. (Cross-Cell federation, homing semantics, and
+	// NATS-subject scoping are later ADR-0044 slices.)
+	cellID := env("STRATT_CELL_ID", types.LocalCell)
+	store.SetCell(cellID)
+	temporalNamespaceDefault := "default"
+	if cellID != types.LocalCell {
+		orchestrate.TaskQueue = orchestrate.TaskQueue + "-" + cellID
+		temporalNamespaceDefault = "stratt-" + cellID
+		log.Info("control-plane cell", "cell", cellID, "taskQueue", orchestrate.TaskQueue)
+	}
 
 	// Shared Intent-compile status: the desired-state controller writes each
 	// pass, GET /compile serves it (§4.3 membership-delta surface, ADR-0023).
@@ -160,7 +187,7 @@ func run(ctx context.Context, log *slog.Logger) error {
 	// ── orchestration plane ──────────────────────────────────────────────
 	temporalClient, err := client.Dial(client.Options{
 		HostPort:  env("STRATT_TEMPORAL_ADDRESS", "localhost:7233"),
-		Namespace: env("STRATT_TEMPORAL_NAMESPACE", "default"),
+		Namespace: env("STRATT_TEMPORAL_NAMESPACE", temporalNamespaceDefault),
 		Logger:    tlog{log.With("component", "temporal")},
 	})
 	if err != nil {
@@ -703,6 +730,9 @@ func run(ctx context.Context, log *slog.Logger) error {
 		leaderCfg := leader.Config{
 			Identity:  env("POD_NAME", host),
 			Namespace: env("POD_NAMESPACE", "default"),
+			// Cell-scoped lease (ADR-0044): a named Cell's leader must not
+			// contend a peer Cell's lease if they share a K8s namespace.
+			LeaseName: leaderLeaseName(cellID),
 		}
 		log.Info("leader election enabled; controllers run on the elected leader", "identity", leaderCfg.Identity)
 		go func() {

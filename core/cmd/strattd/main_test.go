@@ -42,3 +42,20 @@ func TestCACOwnsMappedTeam(t *testing.T) {
 		}
 	}
 }
+
+// TestLeaderLeaseName proves Cell-scoped lease naming (ADR-0044): the local Cell
+// keeps the legacy name (backward-compat) and named Cells are disjoint.
+func TestLeaderLeaseName(t *testing.T) {
+	if got := leaderLeaseName(""); got != "strattd-leader" {
+		t.Fatalf("empty Cell must keep the legacy lease name, got %q", got)
+	}
+	if got := leaderLeaseName("local"); got != "strattd-leader" {
+		t.Fatalf("local Cell must keep the legacy lease name, got %q", got)
+	}
+	if got := leaderLeaseName("us-east"); got != "strattd-leader-us-east" {
+		t.Fatalf("named Cell must be Cell-scoped, got %q", got)
+	}
+	if leaderLeaseName("us-east") == leaderLeaseName("eu-west") {
+		t.Fatal("distinct Cells must produce distinct lease names")
+	}
+}

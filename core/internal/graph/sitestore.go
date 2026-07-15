@@ -23,12 +23,13 @@ func (s *Store) UpsertSite(ctx context.Context, st types.Site) error {
 		declaredBy = "cac"
 	}
 	_, err := s.pool.Exec(ctx, `
-		INSERT INTO graph.site (name, mode, namespace, description, declared_by)
-		VALUES ($1, $2, $3, $4, $5)
+		INSERT INTO graph.site (name, mode, namespace, description, declared_by, cell)
+		VALUES ($1, $2, $3, $4, $5, nullif($6, ''))
 		ON CONFLICT (name) DO UPDATE SET
 			mode = excluded.mode, namespace = excluded.namespace,
-			description = excluded.description, declared_by = excluded.declared_by`,
-		st.Name, st.Mode, st.Namespace, st.Description, declaredBy)
+			description = excluded.description, declared_by = excluded.declared_by,
+			cell = excluded.cell`,
+		st.Name, st.Mode, st.Namespace, st.Description, declaredBy, st.Cell)
 	if err != nil {
 		return fmt.Errorf("graph: upsert site: %w", err)
 	}
@@ -38,11 +39,11 @@ func (s *Store) UpsertSite(ctx context.Context, st types.Site) error {
 // GetSite returns one Site declaration.
 func (s *Store) GetSite(ctx context.Context, name string) (types.Site, error) {
 	var st types.Site
-	var namespace, description *string
+	var namespace, description, cell *string
 	err := s.pool.QueryRow(ctx, `
-		SELECT name, mode, namespace, description, declared_by
+		SELECT name, mode, namespace, description, declared_by, cell
 		FROM graph.site WHERE name = $1`, name,
-	).Scan(&st.Name, &st.Mode, &namespace, &description, &st.DeclaredBy)
+	).Scan(&st.Name, &st.Mode, &namespace, &description, &st.DeclaredBy, &cell)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return types.Site{}, fmt.Errorf("%w: site %s", ErrNotFound, name)
 	}
@@ -55,13 +56,16 @@ func (s *Store) GetSite(ctx context.Context, name string) (types.Site, error) {
 	if description != nil {
 		st.Description = *description
 	}
+	if cell != nil {
+		st.Cell = *cell
+	}
 	return st, nil
 }
 
 // ListSites returns every Site declaration, ordered by name.
 func (s *Store) ListSites(ctx context.Context) ([]types.Site, error) {
 	rows, err := s.pool.Query(ctx, `
-		SELECT name, mode, namespace, description, declared_by
+		SELECT name, mode, namespace, description, declared_by, cell
 		FROM graph.site ORDER BY name`)
 	if err != nil {
 		return nil, fmt.Errorf("graph: list sites: %w", err)
@@ -70,8 +74,8 @@ func (s *Store) ListSites(ctx context.Context) ([]types.Site, error) {
 	var out []types.Site
 	for rows.Next() {
 		var st types.Site
-		var namespace, description *string
-		if err := rows.Scan(&st.Name, &st.Mode, &namespace, &description, &st.DeclaredBy); err != nil {
+		var namespace, description, cell *string
+		if err := rows.Scan(&st.Name, &st.Mode, &namespace, &description, &st.DeclaredBy, &cell); err != nil {
 			return nil, fmt.Errorf("graph: list sites: %w", err)
 		}
 		if namespace != nil {
@@ -79,6 +83,9 @@ func (s *Store) ListSites(ctx context.Context) ([]types.Site, error) {
 		}
 		if description != nil {
 			st.Description = *description
+		}
+		if cell != nil {
+			st.Cell = *cell
 		}
 		out = append(out, st)
 	}

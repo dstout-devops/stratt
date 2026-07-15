@@ -31,8 +31,12 @@ import (
 	"github.com/dstout-devops/stratt/types"
 )
 
-// TaskQueue is the worker queue for Run Workflows.
-const TaskQueue = "stratt-runs"
+// TaskQueue is the worker queue for Run Workflows. It is Cell-scoped
+// (ADR-0044): main sets it to "stratt-runs-<cell>" for a named Cell so a Cell's
+// worker only picks up its own Cell's Runs and cannot collide with a peer Cell
+// sharing a Temporal cluster. The single-Cell default ("local") keeps the
+// legacy "stratt-runs". Set once at startup before the worker/launch paths run.
+var TaskQueue = "stratt-runs"
 
 // RunInput starts one Run against a View. Actuator and Params are the Step
 // fields (§2.3: Step = Actuator + content + params); empty Actuator means

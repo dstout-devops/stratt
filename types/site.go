@@ -23,6 +23,9 @@ type Site struct {
 	// DeclaredBy records the declaration path: "cac" (Git desired state, §1.2)
 	// or "api". Mirrors View/Trigger/Emitter.
 	DeclaredBy string `json:"declaredBy,omitempty"`
+	// Cell is the control-plane Cell this Site belongs to (ADR-0044:
+	// Site → Cell → region). Empty ⇒ the built-in LocalCell.
+	Cell string `json:"cell,omitempty"`
 }
 
 // Site modes.

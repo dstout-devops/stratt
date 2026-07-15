@@ -23,6 +23,11 @@ type Provenance struct {
 	WriterRef string `json:"writerRef"`
 	// SourceID is the external system of record the value was observed from,
 	// empty for Run-written facts whose source is the execution itself.
-	SourceID string    `json:"sourceId,omitempty"`
-	At       time.Time `json:"at"`
+	SourceID string `json:"sourceId,omitempty"`
+	// Cell is which control-plane Cell wrote the value (ADR-0044), stamped by
+	// the writing Store from STRATT_CELL_ID. Empty/"local" for the single-Cell
+	// default. Read-back only — the write stamp is the daemon's own Cell, not a
+	// caller choice (which Cell wrote this has exactly one answer, §2.1).
+	Cell string    `json:"cell,omitempty"`
+	At   time.Time `json:"at"`
 }

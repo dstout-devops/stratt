@@ -20,11 +20,26 @@ import (
 	"fmt"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/dstout-devops/stratt/types"
 )
 
 // Store is the graph-store frontend over a pgx pool.
 type Store struct {
 	pool *pgxpool.Pool
+	// cell is this control-plane Cell's id (ADR-0044), stamped as prov_cell on
+	// every write. Defaults to LocalCell so a single-Cell deployment is
+	// unchanged; main.go sets it from STRATT_CELL_ID.
+	cell string
+}
+
+// SetCell sets the Cell id stamped into write provenance (ADR-0044). Called
+// once at startup from STRATT_CELL_ID; empty is treated as LocalCell.
+func (s *Store) SetCell(cell string) {
+	if cell == "" {
+		cell = types.LocalCell
+	}
+	s.cell = cell
 }
 
 // New wraps an existing pool. The caller owns the pool's lifecycle.
@@ -46,7 +61,7 @@ func Connect(ctx context.Context, databaseURL string) (*Store, error) {
 		pool.Close()
 		return nil, err
 	}
-	return &Store{pool: pool}, nil
+	return &Store{pool: pool, cell: types.LocalCell}, nil
 }
 
 // Close releases the underlying pool (only when created via Connect).

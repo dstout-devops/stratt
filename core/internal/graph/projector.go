@@ -33,16 +33,28 @@ const (
 type Projector struct {
 	pool *pgxpool.Pool
 	path WritePath
+	// cell is the writing Cell id stamped as prov_cell (ADR-0044), inherited
+	// from the Store. LocalCell for the single-Cell default.
+	cell string
 }
 
 // NormalizerProjector returns the write surface for Connector Normalizers.
 func (s *Store) NormalizerProjector() *Projector {
-	return &Projector{pool: s.pool, path: WritePathNormalizer}
+	return &Projector{pool: s.pool, path: WritePathNormalizer, cell: s.projCell()}
 }
 
 // RunProjector returns the write surface for Run-provenance fact writes.
 func (s *Store) RunProjector() *Projector {
-	return &Projector{pool: s.pool, path: WritePathRunProvenance}
+	return &Projector{pool: s.pool, path: WritePathRunProvenance, cell: s.projCell()}
+}
+
+// projCell returns the Store's Cell id, defaulting to LocalCell (a Store built
+// outside Connect, e.g. in a test, has an empty cell).
+func (s *Store) projCell() string {
+	if s.cell == "" {
+		return types.LocalCell
+	}
+	return s.cell
 }
 
 // EntityUpsert is one observed Entity to project. Correlation happens on
@@ -87,7 +99,7 @@ func (p *Projector) UpsertEntities(ctx context.Context, prov types.Provenance, b
 
 	ids := make([]string, len(batch))
 	for i, e := range batch {
-		id, err := upsertEntityTx(ctx, tx, prov, e)
+		id, err := upsertEntityTx(ctx, tx, prov, p.cell, e)
 		if err != nil {
 			return nil, err
 		}
@@ -99,7 +111,7 @@ func (p *Projector) UpsertEntities(ctx context.Context, prov types.Provenance, b
 	return ids, nil
 }
 
-func upsertEntityTx(ctx context.Context, tx pgx.Tx, prov types.Provenance, e EntityUpsert) (string, error) {
+func upsertEntityTx(ctx context.Context, tx pgx.Tx, prov types.Provenance, cell string, e EntityUpsert) (string, error) {
 	if len(e.IdentityKeys) == 0 {
 		return "", errors.New("graph: entity upsert requires at least one identity key")
 	}
@@ -132,10 +144,10 @@ func upsertEntityTx(ctx context.Context, tx pgx.Tx, prov types.Provenance, e Ent
 	switch len(matched) {
 	case 0:
 		if err := tx.QueryRow(ctx, `
-			INSERT INTO graph.entity (kind, labels, prov_writer_kind, prov_writer_ref, prov_source_id, prov_at)
-			VALUES ($1, $2, $3, $4, nullif($5, ''), $6)
+			INSERT INTO graph.entity (kind, labels, prov_writer_kind, prov_writer_ref, prov_source_id, prov_cell, prov_at)
+			VALUES ($1, $2, $3, $4, nullif($5, ''), $6, $7)
 			RETURNING id`,
-			e.Kind, labels, string(prov.WriterKind), prov.WriterRef, prov.SourceID, prov.At,
+			e.Kind, labels, string(prov.WriterKind), prov.WriterRef, prov.SourceID, cell, prov.At,
 		).Scan(&id); err != nil {
 			return "", fmt.Errorf("graph: insert entity: %w", err)
 		}
@@ -150,10 +162,10 @@ func upsertEntityTx(ctx context.Context, tx pgx.Tx, prov types.Provenance, e Ent
 			UPDATE graph.entity
 			SET kind = $2, labels = graph.entity.labels || $3::jsonb,
 			    prov_writer_kind = $4, prov_writer_ref = $5,
-			    prov_source_id = nullif($6, ''), prov_at = $7,
+			    prov_source_id = nullif($6, ''), prov_cell = $8, prov_at = $7,
 			    deleted_at = NULL
 			WHERE id = $1`,
-			id, e.Kind, labels, string(prov.WriterKind), prov.WriterRef, prov.SourceID, prov.At,
+			id, e.Kind, labels, string(prov.WriterKind), prov.WriterRef, prov.SourceID, prov.At, cell,
 		); err != nil {
 			return "", fmt.Errorf("graph: update entity: %w", err)
 		}
@@ -187,14 +199,14 @@ func upsertEntityTx(ctx context.Context, tx pgx.Tx, prov types.Provenance, e Ent
 	}
 
 	for ns, val := range e.Facets {
-		if err := upsertFacetTx(ctx, tx, prov, id, ns, val); err != nil {
+		if err := upsertFacetTx(ctx, tx, prov, cell, id, ns, val); err != nil {
 			return "", err
 		}
 	}
 	return id, nil
 }
 
-func upsertFacetTx(ctx context.Context, tx pgx.Tx, prov types.Provenance, entityID, namespace string, value json.RawMessage) error {
+func upsertFacetTx(ctx context.Context, tx pgx.Tx, prov types.Provenance, cell, entityID, namespace string, value json.RawMessage) error {
 	// Pinned Facet schemas validate at the write path itself (§1.5,
 	// ADR-0015) — every writer (Normalizer and Run provenance alike) passes
 	// through here, so enforcement is structural, not a review norm.
@@ -203,15 +215,16 @@ func upsertFacetTx(ctx context.Context, tx pgx.Tx, prov types.Provenance, entity
 		return fmt.Errorf("graph: facet %s on %s: %w", namespace, entityID, err)
 	}
 	if _, err := tx.Exec(ctx, `
-		INSERT INTO graph.facet (entity_id, namespace, value, prov_writer_kind, prov_writer_ref, prov_source_id, prov_at)
-		VALUES ($1, $2, $3, $4, $5, nullif($6, ''), $7)
+		INSERT INTO graph.facet (entity_id, namespace, value, prov_writer_kind, prov_writer_ref, prov_source_id, prov_cell, prov_at)
+		VALUES ($1, $2, $3, $4, $5, nullif($6, ''), $8, $7)
 		ON CONFLICT (entity_id, namespace) DO UPDATE
 		SET value = excluded.value,
 		    prov_writer_kind = excluded.prov_writer_kind,
 		    prov_writer_ref = excluded.prov_writer_ref,
 		    prov_source_id = excluded.prov_source_id,
+		    prov_cell = excluded.prov_cell,
 		    prov_at = excluded.prov_at`,
-		entityID, namespace, value, string(prov.WriterKind), prov.WriterRef, prov.SourceID, prov.At,
+		entityID, namespace, value, string(prov.WriterKind), prov.WriterRef, prov.SourceID, prov.At, cell,
 	); err != nil {
 		return fmt.Errorf("graph: upsert facet %s on %s: %w", namespace, entityID, err)
 	}
@@ -225,7 +238,7 @@ func (p *Projector) UpsertFacet(ctx context.Context, prov types.Provenance, enti
 		return err
 	}
 	defer tx.Rollback(ctx) //nolint:errcheck
-	if err := upsertFacetTx(ctx, tx, prov, entityID, namespace, value); err != nil {
+	if err := upsertFacetTx(ctx, tx, prov, p.cell, entityID, namespace, value); err != nil {
 		return err
 	}
 	return tx.Commit(ctx)
@@ -239,14 +252,15 @@ func (p *Projector) UpsertRelation(ctx context.Context, prov types.Provenance, r
 	}
 	defer tx.Rollback(ctx) //nolint:errcheck
 	if _, err := tx.Exec(ctx, `
-		INSERT INTO graph.relation (type, from_id, to_id, prov_writer_kind, prov_writer_ref, prov_source_id, prov_at)
-		VALUES ($1, $2, $3, $4, $5, nullif($6, ''), $7)
+		INSERT INTO graph.relation (type, from_id, to_id, prov_writer_kind, prov_writer_ref, prov_source_id, prov_cell, prov_at)
+		VALUES ($1, $2, $3, $4, $5, nullif($6, ''), $8, $7)
 		ON CONFLICT (type, from_id, to_id) DO UPDATE
 		SET prov_writer_kind = excluded.prov_writer_kind,
 		    prov_writer_ref = excluded.prov_writer_ref,
 		    prov_source_id = excluded.prov_source_id,
+		    prov_cell = excluded.prov_cell,
 		    prov_at = excluded.prov_at`,
-		relType, fromID, toID, string(prov.WriterKind), prov.WriterRef, prov.SourceID, prov.At,
+		relType, fromID, toID, string(prov.WriterKind), prov.WriterRef, prov.SourceID, prov.At, p.cell,
 	); err != nil {
 		return fmt.Errorf("graph: upsert relation: %w", err)
 	}
