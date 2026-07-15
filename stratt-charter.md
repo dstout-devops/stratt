@@ -57,6 +57,7 @@ Naming is API. Frozen at v1.0 with a formal deprecation policy thereafter. **Ban
 - **Run** — execution instance: status, per-target results, event stream, artifacts, cost/usage, provenance written.
 - **Trigger** — anything that starts a Run: Temporal Schedule, Emitter event × CEL rule, manual, API/MCP. Cron is just one Emitter.
 - **Bundle** — cosign-signed OCI artifact of content + deps for pull-mode agents. **Site** — remote execution locus (satellite dispatcher + NATS leaf).
+- **Cell** — a region-local, single-writer control-plane shard (its own boring-spine substrate). The fleet is many Cells presenting one logical estate, active/active across Cells with no datum multi-master; each datum has exactly one home Cell (§2.1). A Cell contains Sites; the built-in default is one Cell (`local`).
 
 ### 2.4 Intent layer (the team-facing surface)
 - **Intent** — a small declarative document of *what*, by payload kind: `Intent/Application`, `Intent/Certificate`, `Intent/FileSet`, `Intent/Access`, `Intent/Config`, extensible. Each kind has a schema (→ generated forms/validation). Every Intent kind carries a lifecycle field: **`onRemove: retain | revert | remove`** (default `retain`), and withdrawn-but-retained state always raises an orphan Finding — abandoned state is never silent, even when deliberate. Domain-specific removal semantics live in the schema (a Certificate's `remove` may mean revoke vs. let-expire), never in tribal memory.
