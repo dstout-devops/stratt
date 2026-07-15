@@ -634,6 +634,9 @@ func findingToWire(f types.Finding) Finding {
 	if f.RunID != "" {
 		out.RunId = &f.RunID
 	}
+	if f.ResolvedReason != "" {
+		out.ResolvedReason = &f.ResolvedReason
+	}
 	if len(f.Diff) > 0 {
 		out.Diff = json.RawMessage(f.Diff)
 	}

@@ -1607,6 +1607,12 @@ components:
         lastObserved: { type: string, format: date-time }
         openedAt: { type: string, format: date-time }
         resolvedAt: { type: string, format: date-time }
+        resolvedReason:
+          type: string
+          description: >
+            Why a resolved Finding closed (§1.8, ADR-0043): "observed-clean" (the
+            drift went away) or "entity-tombstoned" (the Entity it was about no
+            longer exists, e.g. a renewed cert). Absent on a live Finding.
     ComplianceReport:
       type: object
       description: >

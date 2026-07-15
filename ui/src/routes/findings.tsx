@@ -235,6 +235,7 @@ export function FindingDetail({ id }: { id: string }) {
               ["last observed", <span className="tnum text-[12px]">{new Date(f.lastObserved).toLocaleString()}</span>],
               ["opened", <span className="tnum text-[12px]">{f.openedAt ? new Date(f.openedAt).toLocaleString() : "—"}</span>],
               ["resolved", <span className="tnum text-[12px]">{f.resolvedAt ? new Date(f.resolvedAt).toLocaleString() : "—"}</span>],
+              ["resolved reason", <span className="text-[12px]">{f.resolvedReason ?? "—"}</span>],
               [
                 "evidence",
                 f.runId ? (

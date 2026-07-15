@@ -1358,6 +1358,8 @@ export interface components {
             openedAt?: string;
             /** Format: date-time */
             resolvedAt?: string;
+            /** @description Why a resolved Finding closed (§1.8, ADR-0043): "observed-clean" (the drift went away) or "entity-tombstoned" (the Entity it was about no longer exists, e.g. a renewed cert). Absent on a live Finding. */
+            resolvedReason?: string;
         };
         /** @description A framework's compliance posture (charter §2.4, ADR-0033): the framework-tagged Baselines are the controls, rolled up per View into a score. The benchmark is data — a pack ships the controls. */
         ComplianceReport: {

@@ -167,7 +167,7 @@ func (s *Store) RecordBaselineObservations(ctx context.Context, b types.Baseline
 		case exists: // open → resolved (kept — the audit record)
 			_, err = tx.Exec(ctx, `
 				UPDATE graph.finding
-				SET status = 'resolved', resolved_at = now(),
+				SET status = 'resolved', resolved_at = now(), resolved_reason = 'observed-clean',
 				    last_observed = now(), consecutive_drifted = 0, run_id = nullif($2, '')::uuid
 				WHERE id = $1`, cur.id, runID)
 			if err != nil {
@@ -184,15 +184,16 @@ func (s *Store) RecordBaselineObservations(ctx context.Context, b types.Baseline
 }
 
 const findingColumns = `id, baseline, target, entity_id, status, severity, framework,
-	consecutive_drifted, diff, run_id, first_observed, last_observed, opened_at, resolved_at`
+	consecutive_drifted, diff, run_id, first_observed, last_observed, opened_at, resolved_at,
+	resolved_reason`
 
 func scanFinding(row pgx.Row) (types.Finding, error) {
 	var f types.Finding
-	var entityID, runID *string
+	var entityID, runID, resolvedReason *string
 	var diff []byte
 	if err := row.Scan(&f.ID, &f.Baseline, &f.Target, &entityID, &f.Status,
 		&f.Severity, &f.Framework, &f.ConsecutiveDrifted, &diff, &runID,
-		&f.FirstObserved, &f.LastObserved, &f.OpenedAt, &f.ResolvedAt); err != nil {
+		&f.FirstObserved, &f.LastObserved, &f.OpenedAt, &f.ResolvedAt, &resolvedReason); err != nil {
 		return f, err
 	}
 	if entityID != nil {
@@ -201,8 +202,39 @@ func scanFinding(row pgx.Row) (types.Finding, error) {
 	if runID != nil {
 		f.RunID = *runID
 	}
+	// A NULL reason on a resolved row is a legacy clean-resolve.
+	if resolvedReason != nil {
+		f.ResolvedReason = *resolvedReason
+	} else if f.Status == types.FindingResolved {
+		f.ResolvedReason = "observed-clean"
+	}
 	f.Diff = diff
 	return f, nil
+}
+
+// ResolveFindingsForTombstonedEntities resolves every live Finding whose Entity
+// has been tombstoned (charter §1.8, ADR-0043): the proposition a per-Entity
+// Finding asserts is moot once no Source observes that Entity (e.g. a renewed
+// cert whose serial — its only identity — changed). Idempotent and self-healing
+// (it resolves any such Finding regardless of when it was opened), stamping an
+// explicit reason so the audit trail shows "the Entity is gone", not "observed
+// clean". The resolved row and its sealed Evidence are kept and descendable.
+// Orphan/workspace Findings (null entity_id) and co-managed-still-live Entities
+// (deleted_at IS NULL) are untouched. Off the projector write path, like
+// WriteOrphanFinding.
+func (s *Store) ResolveFindingsForTombstonedEntities(ctx context.Context) (int64, error) {
+	tag, err := s.pool.Exec(ctx, `
+		UPDATE graph.finding f
+		SET status = 'resolved', resolved_at = now(), last_observed = now(),
+		    consecutive_drifted = 0, resolved_reason = 'entity-tombstoned'
+		FROM graph.entity e
+		WHERE f.entity_id = e.id::text
+		  AND e.deleted_at IS NOT NULL
+		  AND f.status <> 'resolved'`)
+	if err != nil {
+		return 0, fmt.Errorf("graph: resolve findings for tombstoned entities: %w", err)
+	}
+	return tag.RowsAffected(), nil
 }
 
 // WriteOrphanFinding records a single open Finding for compiled state left

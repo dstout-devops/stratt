@@ -44,4 +44,9 @@ type Finding struct {
 	LastObserved  time.Time  `json:"lastObserved"`
 	OpenedAt      *time.Time `json:"openedAt,omitempty"`
 	ResolvedAt    *time.Time `json:"resolvedAt,omitempty"`
+	// ResolvedReason distinguishes WHY a Finding resolved (§1.8, ADR-0043):
+	// "observed-clean" (the drift went away) vs "entity-tombstoned" (the Entity
+	// the Finding was about no longer exists — e.g. a renewed cert). Empty on a
+	// live Finding.
+	ResolvedReason string `json:"resolvedReason,omitempty"`
 }

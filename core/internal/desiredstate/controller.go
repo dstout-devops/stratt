@@ -126,6 +126,16 @@ func (c *Controller) reconcile(ctx context.Context, log *slog.Logger) {
 	// relabels), so the compiled Baselines must re-derive continuously (§4.3,
 	// ADR-0023).
 	c.compile(ctx, log)
+
+	// Garbage-collect Findings whose Entity has been tombstoned (ADR-0043):
+	// a renewed cert changes identity (new serial = new Entity), so the old
+	// Entity's drift Finding would otherwise linger open forever. Estate-wide,
+	// idempotent, self-healing; non-fatal to the cycle.
+	if n, err := c.Store.ResolveFindingsForTombstonedEntities(ctx); err != nil {
+		log.Error("finding tombstone-GC failed", "error", err)
+	} else if n > 0 {
+		log.Info("resolved findings for tombstoned entities", "count", n)
+	}
 }
 
 // compile derives compiled Baselines from the declared Intent/Assignment/
