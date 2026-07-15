@@ -914,6 +914,17 @@ export interface components {
             labels: {
                 [key: string]: string;
             };
+            /** @description The Sources that currently observe this Entity and when each last saw it — the per-Source presence set backing cross-source liveness (charter §1.2, ADR-0042). The Entity is live while this is non-empty. */
+            observedBy?: components["schemas"]["SourceObservation"][];
+        };
+        SourceObservation: {
+            sourceId: string;
+            kind: string;
+            name: string;
+            /** Format: date-time */
+            firstSeen: string;
+            /** Format: date-time */
+            lastSeen: string;
         };
         Facet: {
             namespace: string;

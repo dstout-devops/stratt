@@ -66,6 +66,33 @@ func (s *Store) GetFacets(ctx context.Context, entityID string) ([]types.Facet, 
 	return out, rows.Err()
 }
 
+// GetObservedBy returns the Sources that currently observe an Entity and when
+// each last saw it — the per-Source presence set backing cross-source liveness
+// (charter §1.2, ADR-0042). The true presence set, replacing the last-writer
+// prov_source_id guess.
+func (s *Store) GetObservedBy(ctx context.Context, entityID string) ([]types.SourceObservation, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT src.id, src.kind, src.name, p.first_seen, p.last_seen
+		FROM graph.entity_presence p
+		JOIN graph.source src ON src.id = p.source_id
+		WHERE p.entity_id = $1
+		ORDER BY src.name`, entityID)
+	if err != nil {
+		return nil, fmt.Errorf("graph: get observed-by: %w", err)
+	}
+	defer rows.Close()
+
+	var out []types.SourceObservation
+	for rows.Next() {
+		var o types.SourceObservation
+		if err := rows.Scan(&o.SourceID, &o.Kind, &o.Name, &o.FirstSeen, &o.LastSeen); err != nil {
+			return nil, fmt.Errorf("graph: scan observed-by: %w", err)
+		}
+		out = append(out, o)
+	}
+	return out, rows.Err()
+}
+
 // FacetValuesByEntities bulk-reads one Facet namespace across a set of Entities
 // — the dispatch-routing read path (ADR-0032): a single query for mgmt.site
 // over a resolved View, avoiding an N+1 GetFacets fan-out. Entities without the

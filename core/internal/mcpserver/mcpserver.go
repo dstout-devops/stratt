@@ -306,7 +306,7 @@ func registerTools(s *mcp.Server, cfg Config) {
 		func(ctx context.Context, req *mcp.CallToolRequest, in nameIn) (*mcp.CallToolResult, any, error) {
 			return invoke(ctx, cfg, req, "resolve_view", http.MethodGet, "/views/"+url.PathEscape(in.Name)+"/entities", nil)
 		})
-	mcp.AddTool(s, &mcp.Tool{Name: "get_entity", Description: "Get one Entity document: identity, labels, Facets with provenance."},
+	mcp.AddTool(s, &mcp.Tool{Name: "get_entity", Description: "Get one Entity document: identity, labels, Facets with provenance, and observedBy (the Sources that currently observe it, with last-seen times)."},
 		func(ctx context.Context, req *mcp.CallToolRequest, in idIn) (*mcp.CallToolResult, any, error) {
 			return invoke(ctx, cfg, req, "get_entity", http.MethodGet, "/entities/"+url.PathEscape(in.ID), nil)
 		})

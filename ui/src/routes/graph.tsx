@@ -78,6 +78,16 @@ export function EntityDetail({ id }: { id: string }) {
           />
         )}
       </Card>
+      <Card title="Observed by — the Sources that vouch for this Entity (§1.2 liveness, ADR-0042)">
+        <DataTable
+          head={["source", "kind", "last seen"]}
+          rows={(e?.observedBy ?? []).map((o) => [
+            <span className="mono text-[12px]">{o.name}</span>,
+            <span className="text-[12px]">{o.kind}</span>,
+            <span className="tnum text-[12px]">{new Date(o.lastSeen).toLocaleString()}</span>,
+          ])}
+        />
+      </Card>
       <Card title="Facets — value + Provenance (§2.1: exactly one writer answer)">
         <DataTable
           head={["namespace", "value", "written by", "at"]}

@@ -403,7 +403,15 @@ func selectorFromWire(in ViewSelector) (types.ViewSelector, error) {
 }
 
 func entityToWire(e types.Entity) Entity {
-	return Entity{Id: e.ID, Kind: e.Kind, IdentityKeys: e.IdentityKeys, Labels: e.Labels}
+	out := Entity{Id: e.ID, Kind: e.Kind, IdentityKeys: e.IdentityKeys, Labels: e.Labels}
+	if len(e.ObservedBy) > 0 {
+		obs := make([]SourceObservation, len(e.ObservedBy))
+		for i, o := range e.ObservedBy {
+			obs[i] = SourceObservation{SourceId: o.SourceID, Kind: o.Kind, Name: o.Name, FirstSeen: o.FirstSeen, LastSeen: o.LastSeen}
+		}
+		out.ObservedBy = &obs
+	}
+	return out
 }
 
 func runToWire(r types.Run) Run {
@@ -1070,6 +1078,12 @@ func (s *Server) ResolveView(w http.ResponseWriter, r *http.Request, name ViewNa
 func (s *Server) GetEntity(w http.ResponseWriter, r *http.Request, id string) {
 	e, err := s.Store.GetEntity(r.Context(), id)
 	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	// The per-Source presence set (ADR-0042) — who currently vouches for this
+	// Entity, replacing the last-writer prov_source_id guess.
+	if e.ObservedBy, err = s.Store.GetObservedBy(r.Context(), id); err != nil {
 		s.fail(w, err)
 		return
 	}
