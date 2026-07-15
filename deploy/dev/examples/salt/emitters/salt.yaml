@@ -1,0 +1,11 @@
+# The Salt event-bus Emitter as a first-class, registered stream subscriber
+# (ADR-0039). Declaring it claims the name `salt` in the emitter registry, so a
+# token-authed webhook Emitter can no longer collide with the name the Salt
+# stream subscriber publishes under (the charter-guardian flag from ADR-0039).
+#
+# A stream Emitter outbound-connects (it's the strattd Salt emitter goroutine,
+# gated on STRATT_SALT_EVENTS) and publishes onto the emitter stream; nothing
+# POSTs to it, so it carries NO tokenHash. Triggers reference it by name:
+#   kind: event, emitter: salt, when: 'event.tag.startsWith("salt/minion/")'
+name: salt
+kind: stream

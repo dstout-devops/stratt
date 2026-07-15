@@ -6,6 +6,12 @@ package types
 const (
 	EmitterWebhook      = "webhook"
 	EmitterAlertmanager = "alertmanager"
+	// EmitterStream is a poller/stream-subscriber Emitter (charter §2.2): it
+	// outbound-connects to an external stream (e.g. the Salt event bus, ADR-0039)
+	// and publishes onto the emitter stream. It has NO inbound token (nothing
+	// POSTs to it), so TokenHash is empty. Registering one claims its name in the
+	// registry, so a token-authed webhook Emitter can't collide with it.
+	EmitterStream = "stream"
 )
 
 // Emitter is a CaC-declared event ingest point (ADR-0018). TokenHash is
@@ -14,9 +20,10 @@ const (
 // registry). Callers present the raw token in X-Stratt-Emitter-Token.
 type Emitter struct {
 	Name string `json:"name"`
-	// Kind is webhook | alertmanager.
+	// Kind is webhook | alertmanager | stream.
 	Kind string `json:"kind"`
-	// TokenHash is hex(sha256(token)).
+	// TokenHash is hex(sha256(token)) for receive kinds; EMPTY for a stream
+	// subscriber (no inbound token).
 	TokenHash string `json:"tokenHash"`
 }
 

@@ -56,6 +56,12 @@ func (in *Ingest) Handler() http.Handler {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
+		if em.Kind == types.EmitterStream {
+			// A stream Emitter is outbound-subscribed (ADR-0039) — it publishes
+			// onto the emitter stream itself; nothing POSTs to it.
+			http.Error(w, "emitter "+name+" is a stream subscriber, not an ingest endpoint", http.StatusBadRequest)
+			return
+		}
 		token := r.Header.Get(TokenHeader)
 		sum := sha256.Sum256([]byte(token))
 		if token == "" || subtle.ConstantTimeCompare([]byte(hex.EncodeToString(sum[:])), []byte(strings.ToLower(em.TokenHash))) != 1 {

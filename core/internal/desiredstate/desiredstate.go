@@ -565,14 +565,22 @@ func ValidateEmitter(e types.Emitter) error {
 	if e.Name == "" {
 		return fmt.Errorf("emitter requires a name")
 	}
-	if e.Kind != types.EmitterWebhook && e.Kind != types.EmitterAlertmanager {
-		return fmt.Errorf("emitter %s: unknown kind %q (webhook, alertmanager)", e.Name, e.Kind)
-	}
-	if len(e.TokenHash) != 64 {
-		return fmt.Errorf("emitter %s: tokenHash must be hex(sha256(token)) — 64 hex chars", e.Name)
-	}
-	if _, err := hex.DecodeString(e.TokenHash); err != nil {
-		return fmt.Errorf("emitter %s: tokenHash is not hex", e.Name)
+	switch e.Kind {
+	case types.EmitterWebhook, types.EmitterAlertmanager:
+		// Receive kinds authenticate an inbound POST by token.
+		if len(e.TokenHash) != 64 {
+			return fmt.Errorf("emitter %s: tokenHash must be hex(sha256(token)) — 64 hex chars", e.Name)
+		}
+		if _, err := hex.DecodeString(e.TokenHash); err != nil {
+			return fmt.Errorf("emitter %s: tokenHash is not hex", e.Name)
+		}
+	case types.EmitterStream:
+		// A stream subscriber outbound-connects; it has no inbound token.
+		if e.TokenHash != "" {
+			return fmt.Errorf("emitter %s: a stream emitter is outbound-subscribed and must not carry a tokenHash", e.Name)
+		}
+	default:
+		return fmt.Errorf("emitter %s: unknown kind %q (webhook, alertmanager, stream)", e.Name, e.Kind)
 	}
 	return nil
 }
