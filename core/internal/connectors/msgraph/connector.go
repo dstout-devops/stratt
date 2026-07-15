@@ -57,6 +57,14 @@ func (c Config) FacetNamespaces() []types.FacetOwner {
 	}
 }
 
+// LabelOwners are the Entity-label keys this Syncer owns (§2.1, ADR-0038 —
+// per-key label ownership prevents cross-source label clobber).
+func (c Config) LabelOwners() []types.LabelOwner {
+	return []types.LabelOwner{
+		{Key: "graph.name", OwnerKind: "syncer", OwnerRef: c.SyncerRef()},
+	}
+}
+
 func (c Config) tokenURL() string {
 	if c.TokenURL != "" {
 		return c.TokenURL

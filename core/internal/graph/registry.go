@@ -59,6 +59,48 @@ func (s *Store) GetFacetOwner(ctx context.Context, namespace string) (types.Face
 	return o, true, nil
 }
 
+// RegisterLabelOwner declares the single write owner of an Entity-label KEY
+// (charter §2.1, ADR-0038). Idempotent for the same owner; a different owner
+// fails with ErrOwnerConflict. The label equivalent of RegisterFacetOwner.
+func (s *Store) RegisterLabelOwner(ctx context.Context, o types.LabelOwner) error {
+	tag, err := s.pool.Exec(ctx, `
+		INSERT INTO graph.label_owner (key, owner_kind, owner_ref, view_scope)
+		VALUES ($1, $2, $3, nullif($4, ''))
+		ON CONFLICT (key) DO UPDATE
+		SET view_scope = excluded.view_scope
+		WHERE label_owner.owner_kind = excluded.owner_kind
+		  AND label_owner.owner_ref = excluded.owner_ref`,
+		o.Key, o.OwnerKind, o.OwnerRef, o.ViewScope)
+	if err != nil {
+		return fmt.Errorf("graph: register label owner %s: %w", o.Key, err)
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("%w: label key %s", ErrOwnerConflict, o.Key)
+	}
+	return nil
+}
+
+// GetLabelOwner returns the registered owner of a label key; ok=false when the
+// key is unowned.
+func (s *Store) GetLabelOwner(ctx context.Context, key string) (types.LabelOwner, bool, error) {
+	var o types.LabelOwner
+	o.Key = key
+	var scope *string
+	err := s.pool.QueryRow(ctx,
+		`SELECT owner_kind, owner_ref, view_scope FROM graph.label_owner WHERE key = $1`, key,
+	).Scan(&o.OwnerKind, &o.OwnerRef, &scope)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return types.LabelOwner{Key: key}, false, nil
+	}
+	if err != nil {
+		return o, false, fmt.Errorf("graph: get label owner: %w", err)
+	}
+	if scope != nil {
+		o.ViewScope = *scope
+	}
+	return o, true, nil
+}
+
 // ── Views (§2.1) ─────────────────────────────────────────────────────────────
 
 // Declaration paths for Views (§1.2: desired state lives in Git).

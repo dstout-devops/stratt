@@ -155,6 +155,9 @@ func TestIdentityCorrelation(t *testing.T) {
 	ctx := context.Background()
 	p := s.NormalizerProjector()
 	pv := prov(types.WriterSyncer, "vcenter/syncer")
+	if err := s.RegisterLabelOwner(ctx, types.LabelOwner{Key: "env", OwnerKind: "syncer", OwnerRef: "vcenter/syncer"}); err != nil {
+		t.Fatal(err)
+	}
 
 	ids1, err := p.UpsertEntities(ctx, pv, []EntityUpsert{
 		{Kind: "vm", IdentityKeys: map[string]string{"vcenter.uuid": "u-1"}, Labels: map[string]string{"env": "dev"}},
@@ -203,6 +206,9 @@ func TestViewResolution(t *testing.T) {
 	pv := prov(types.WriterSyncer, "vcenter/syncer")
 
 	if err := s.RegisterFacetOwner(ctx, types.FacetOwner{Namespace: "os.kernel", OwnerKind: "syncer", OwnerRef: "vcenter/syncer"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.RegisterLabelOwner(ctx, types.LabelOwner{Key: "env", OwnerKind: "syncer", OwnerRef: "vcenter/syncer"}); err != nil {
 		t.Fatal(err)
 	}
 	var batch []EntityUpsert

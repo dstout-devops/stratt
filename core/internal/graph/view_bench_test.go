@@ -22,6 +22,11 @@ func seedEstate(tb testing.TB, s *Store, n int) {
 	if err := s.RegisterFacetOwner(ctx, types.FacetOwner{Namespace: "os.kernel", OwnerKind: "syncer", OwnerRef: "vcenter/syncer"}); err != nil {
 		tb.Fatal(err)
 	}
+	for _, k := range []string{"env", "ring"} {
+		if err := s.RegisterLabelOwner(ctx, types.LabelOwner{Key: k, OwnerKind: "syncer", OwnerRef: "vcenter/syncer"}); err != nil {
+			tb.Fatal(err)
+		}
+	}
 	const batchSize = 1000
 	for base := 0; base < n; base += batchSize {
 		var batch []EntityUpsert

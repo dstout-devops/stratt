@@ -14,6 +14,9 @@ func TestResolveSelectorWithParams(t *testing.T) {
 	ctx := context.Background()
 	p := s.NormalizerProjector()
 	prov := types.Provenance{WriterKind: types.WriterSyncer, WriterRef: "test/syncer", At: time.Now().UTC()}
+	if err := s.RegisterLabelOwner(ctx, types.LabelOwner{Key: "vcenter.name", OwnerKind: "syncer", OwnerRef: "test/syncer"}); err != nil {
+		t.Fatal(err)
+	}
 	ids, err := p.UpsertEntities(ctx, prov, []EntityUpsert{
 		{Kind: "vm", IdentityKeys: map[string]string{"vcenter.uuid": "a"}, Labels: map[string]string{"vcenter.name": "web-01"}},
 		{Kind: "vm", IdentityKeys: map[string]string{"vcenter.uuid": "b"}, Labels: map[string]string{"vcenter.name": "web-02"}},

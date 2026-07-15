@@ -57,6 +57,8 @@ func seedEntity(t *testing.T, s *graph.Store, uuid, arch string) string {
 	// os.kernel is Syncer-owned (registration precedes writes, §2.1) — a
 	// Blueprint observing it reads only, never seizes ownership.
 	_ = s.RegisterFacetOwner(ctx, types.FacetOwner{Namespace: "os.kernel", OwnerKind: "syncer", OwnerRef: "test/syncer"})
+	// The seed Syncer likewise owns the "env" label key it writes (ADR-0041).
+	_ = s.RegisterLabelOwner(ctx, types.LabelOwner{Key: "env", OwnerKind: "syncer", OwnerRef: "test/syncer"})
 	p := s.NormalizerProjector()
 	prov := types.Provenance{WriterKind: types.WriterSyncer, WriterRef: "test/syncer", At: time.Now().UTC()}
 	ids, err := p.UpsertEntities(ctx, prov, []graph.EntityUpsert{

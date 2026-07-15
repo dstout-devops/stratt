@@ -51,6 +51,14 @@ func (c Config) FacetNamespaces() []types.FacetOwner {
 	}
 }
 
+// LabelOwners are the Entity-label keys this Syncer owns (§2.1, ADR-0038).
+func (c Config) LabelOwners() []types.LabelOwner {
+	return []types.LabelOwner{
+		{Key: "aws.region", OwnerKind: "syncer", OwnerRef: c.SyncerRef()},
+		{Key: "aws.name", OwnerKind: "syncer", OwnerRef: c.SyncerRef()},
+	}
+}
+
 // client builds the EC2 API client from the standard config chain.
 func (c Config) client(ctx context.Context) (*ec2.Client, error) {
 	cfg, err := awsconfig.LoadDefaultConfig(ctx, awsconfig.WithRegion(c.Region))

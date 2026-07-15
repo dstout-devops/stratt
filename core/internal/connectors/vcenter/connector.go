@@ -57,6 +57,13 @@ func (c Config) FacetNamespaces() []types.FacetOwner {
 	}
 }
 
+// LabelOwners are the Entity-label keys this Syncer owns (§2.1, ADR-0038).
+func (c Config) LabelOwners() []types.LabelOwner {
+	return []types.LabelOwner{
+		{Key: "vcenter.name", OwnerKind: "syncer", OwnerRef: c.SyncerRef()},
+	}
+}
+
 // connect dials the vim25 endpoint and authenticates.
 func connect(ctx context.Context, cfg Config) (*govmomi.Client, error) {
 	u, err := soap.ParseURL(cfg.Endpoint)

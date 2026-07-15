@@ -63,6 +63,11 @@ func (s *Syncer) Register(ctx context.Context) error {
 			return err
 		}
 	}
+	for _, o := range s.cfg.LabelOwners() {
+		if err := s.store.RegisterLabelOwner(ctx, o); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 

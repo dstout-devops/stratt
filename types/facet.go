@@ -32,3 +32,16 @@ type FacetOwner struct {
 	// ViewScope optionally narrows ownership to Entities in a View.
 	ViewScope string `json:"viewScope,omitempty"`
 }
+
+// LabelOwner is one row of the Entity-label ownership registry (charter §2.1,
+// ADR-0038): every label KEY has exactly one declared write owner, so two
+// Sources correlating onto one Entity cannot clobber each other's labels
+// (§2.4). The label equivalent of FacetOwner, keyed by label key.
+type LabelOwner struct {
+	Key string `json:"key"`
+	// OwnerKind is who may write the key: a Syncer, a Blueprint output, or a team.
+	OwnerKind string `json:"ownerKind"`
+	OwnerRef  string `json:"ownerRef"`
+	// ViewScope optionally narrows ownership to Entities in a View.
+	ViewScope string `json:"viewScope,omitempty"`
+}

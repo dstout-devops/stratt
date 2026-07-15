@@ -44,3 +44,10 @@ func (c Config) FacetNamespaces() []types.FacetOwner {
 		owner("cert.expiry"),   // notBefore, notAfter
 	}
 }
+
+// LabelOwners are the Entity-label keys this Syncer owns (§2.1, ADR-0038).
+func (c Config) LabelOwners() []types.LabelOwner {
+	return []types.LabelOwner{
+		{Key: "cert.commonName", OwnerKind: "syncer", OwnerRef: c.SyncerRef()},
+	}
+}

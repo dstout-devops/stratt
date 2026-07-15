@@ -141,9 +141,14 @@ func upsertEntityTx(ctx context.Context, tx pgx.Tx, prov types.Provenance, e Ent
 		}
 	case 1:
 		id = matched[0]
+		// Per-key MERGE, not whole-blob replace (ADR-0041): this writer
+		// contributes only its own label keys; other Sources' keys on a
+		// correlated Entity are preserved (no §2.4 cross-source clobber, and a
+		// no-label writer no longer wipes). Ownership of the changed keys is
+		// enforced by the enforce_label_owner trigger.
 		if _, err := tx.Exec(ctx, `
 			UPDATE graph.entity
-			SET kind = $2, labels = $3,
+			SET kind = $2, labels = graph.entity.labels || $3::jsonb,
 			    prov_writer_kind = $4, prov_writer_ref = $5,
 			    prov_source_id = nullif($6, ''), prov_at = $7,
 			    deleted_at = NULL

@@ -109,7 +109,6 @@ func TestChefSyncerProjectsAndCorrelates(t *testing.T) {
 	if _, err := store.NormalizerProjector().UpsertEntities(ctx, seedProv, []graph.EntityUpsert{{
 		Kind:         "host",
 		IdentityKeys: map[string]string{"dns.fqdn": "web-01.acme.internal"},
-		Labels:       map[string]string{"seed": "yes"},
 	}}); err != nil {
 		t.Fatal(err)
 	}
