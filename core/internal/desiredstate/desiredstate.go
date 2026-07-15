@@ -647,6 +647,9 @@ type siteFile struct {
 	Mode        string `yaml:"mode"`
 	Namespace   string `yaml:"namespace"`
 	Description string `yaml:"description"`
+	// Cell is the control-plane Cell this Site belongs to (ADR-0044:
+	// Site → Cell → region). Empty ⇒ the built-in LocalCell.
+	Cell string `yaml:"cell"`
 }
 
 func parseSiteFile(path string, raw []byte) (string, types.Site, error) {
@@ -656,7 +659,7 @@ func parseSiteFile(path string, raw []byte) (string, types.Site, error) {
 	if err := dec.Decode(&f); err != nil {
 		return "", types.Site{}, fmt.Errorf("desiredstate: %s: %w", path, err)
 	}
-	s := types.Site{Name: f.Name, Mode: f.Mode, Namespace: f.Namespace, Description: f.Description, DeclaredBy: "cac"}
+	s := types.Site{Name: f.Name, Mode: f.Mode, Namespace: f.Namespace, Description: f.Description, Cell: f.Cell, DeclaredBy: "cac"}
 	if err := ValidateSite(s); err != nil {
 		return "", types.Site{}, fmt.Errorf("desiredstate: %s: %w", path, err)
 	}

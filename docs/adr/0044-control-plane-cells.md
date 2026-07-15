@@ -31,6 +31,34 @@ silent LWW for write availability — a correctness regression that violates §2
 plane cell-awareness. As the successor platform to fleet-scale estate tools (Intune/Jamf/SCCM/AWX), Stratt
 needs true multi-region — done as the *most complete correct* form, not the most-available-at-any-cost form.
 
+## Slice-2 refinements (accepted 2026-07-15 — supersede the `mgmt.cell` Facet references below)
+
+Implementing slice 2 surfaced two refinements to the pinned design; the steward approved both:
+
+1. **Residency is a set-once `home_cell` COLUMN on `graph.entity`, NOT a `mgmt.cell` Facet.** A Facet is
+   last-writer (`ON CONFLICT DO UPDATE`), so a stray cross-Cell write would *silently overwrite* residency to
+   match the writer — defeating the §2.4 placement-mismatch Finding this ADR also requires (the mismatch could
+   never be observed). `home_cell` is stamped once at Entity creation (= the creating daemon's Cell), never
+   touched on the correlate-UPDATE path, and mutated only by the slice-7 fenced re-home — mirroring the
+   `run.cell`/`prov_cell` column precedent (not the soft, re-pointable `mgmt.site` routing hint). The slice-3
+   router reads the column directly. **Everywhere below that says "`mgmt.cell` residency Facet", read
+   "`home_cell` column".** `mgmt.site` (execution routing) is untouched.
+
+2. **`Source.cell` = the registering daemon's Cell (Sources are env-registered, not CaC).** There is no CaC
+   Source declaration; a Source homes to the Cell of the daemon whose `Register()` created it. Entity-inherits-
+   Source-cell then holds by construction (the same daemon projects the Entity, stamping `home_cell`). The §2.4
+   authority check compares an Entity's `home_cell` against the Cells of the Sources observing it (via the
+   ADR-0042 `entity_presence` set) — a divergence is a cross-Cell identity collision (the multi-master
+   condition) and raises a `framework='placement'`, `severity='critical'` Finding; it resolves when the
+   collision clears (`placement-reconciled`) or the Entity is tombstoned (`entity-tombstoned`, ADR-0043).
+
+**Slice-2 implementation-sequencing (deferred where the consumer/test lives, not corners cut — the design
+above is unchanged):** the `run.cells` *touched-union* population lands with slice 5 (cross-Cell orchestration,
+where a fan-out actually touches multiple Cells and descent consumes it); the `KindCell` CaC loader (declaring
+`graph.cell` rows from Git) lands with slice 3 (its consumer is the federation router's peer-endpoint set).
+Slice 2 ships the residency/homing data model + placement Findings + `Source.cell`/`run.cell` + `siteFile.cell`
++ the `SetRunCells`/`HomeCellsByEntities` plumbing those later slices consume.
+
 ## Decision (the complete architecture)
 
 **Partitioned region-local single-writer Cells presenting ONE logical estate.** Not multi-master.

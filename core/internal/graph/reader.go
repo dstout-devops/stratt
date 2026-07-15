@@ -120,6 +120,31 @@ func (s *Store) FacetValuesByEntities(ctx context.Context, namespace string, ent
 	return out, rows.Err()
 }
 
+// HomeCellsByEntities bulk-reads the home Cell of a set of Entities (ADR-0044)
+// — the cross-Cell analogue of FacetValuesByEntities/mgmt.site, feeding the Run
+// Cell-union now and slice 3's federation router's write-forwarding later. Every
+// live Entity has a home_cell (NOT NULL), so every id in the input maps.
+func (s *Store) HomeCellsByEntities(ctx context.Context, entityIDs []string) (map[string]string, error) {
+	if len(entityIDs) == 0 {
+		return map[string]string{}, nil
+	}
+	rows, err := s.pool.Query(ctx, `
+		SELECT id, home_cell FROM graph.entity WHERE id = ANY($1::uuid[])`, entityIDs)
+	if err != nil {
+		return nil, fmt.Errorf("graph: home cells by entities: %w", err)
+	}
+	defer rows.Close()
+	out := make(map[string]string, len(entityIDs))
+	for rows.Next() {
+		var id, cell string
+		if err := rows.Scan(&id, &cell); err != nil {
+			return nil, fmt.Errorf("graph: scan home cell: %w", err)
+		}
+		out[id] = cell
+	}
+	return out, rows.Err()
+}
+
 // selectorSQL compiles a ViewSelector into a WHERE clause over graph.entity e.
 // The selector is structured data (charter §2.1 — Views are declared queries,
 // not an expression language); compilation is deliberately mechanical.

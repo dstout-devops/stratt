@@ -136,6 +136,21 @@ func (c *Controller) reconcile(ctx context.Context, log *slog.Logger) {
 	} else if n > 0 {
 		log.Info("resolved findings for tombstoned entities", "count", n)
 	}
+
+	// Cell placement check (ADR-0044): an Entity whose home Cell disagrees with
+	// a Source observing it is a cross-Cell collision (the multi-master
+	// condition) — surface it as a Finding, and resolve it when reconciled.
+	// Estate-wide, idempotent, non-fatal; a no-op for a single-Cell estate.
+	if n, err := c.Store.WriteCellPlacementFindings(ctx); err != nil {
+		log.Error("cell placement check failed", "error", err)
+	} else if n > 0 {
+		log.Warn("cell placement mismatch findings", "count", n)
+	}
+	if n, err := c.Store.ResolveClearedCellPlacementFindings(ctx); err != nil {
+		log.Error("cell placement resolve failed", "error", err)
+	} else if n > 0 {
+		log.Info("resolved reconciled cell placement findings", "count", n)
+	}
 }
 
 // compile derives compiled Baselines from the declared Intent/Assignment/

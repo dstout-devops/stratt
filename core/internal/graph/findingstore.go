@@ -237,6 +237,68 @@ func (s *Store) ResolveFindingsForTombstonedEntities(ctx context.Context) (int64
 	return tag.RowsAffected(), nil
 }
 
+// WriteCellPlacementFindings opens a Finding for every live Entity whose home
+// Cell (residency, ADR-0044) disagrees with the Cell of a Source observing it —
+// a cross-Cell identity collision, i.e. two Cells contributing to one datum,
+// the multi-master condition §2.1/§2.4 forbid. Detected via the ADR-0042
+// presence set (not the last-writer prov_source_id). The set-once home_cell is
+// what makes this observable: a Facet's last-writer would silently resolve the
+// divergence instead of surfacing it (§2.4, never a silent precedence). Estate-
+// wide, idempotent on the live (baseline,target) partial unique index. The
+// reserved baseline '__placement__' (never a real Baseline name) keeps this
+// namespace explicit so no other Finding writer can collide with a placement
+// row on the (baseline,target) index; framework 'placement', target 'entity:
+// <id>'. Off the projector write path like WriteOrphanFinding. Single-Cell
+// ('local' everywhere) writes nothing.
+func (s *Store) WriteCellPlacementFindings(ctx context.Context) (int64, error) {
+	tag, err := s.pool.Exec(ctx, `
+		INSERT INTO graph.finding
+			(baseline, target, entity_id, status, severity, framework, consecutive_drifted, diff, opened_at)
+		SELECT '__placement__', 'entity:' || e.id, e.id::text, 'open', 'critical', 'placement', 1,
+		       jsonb_build_object(
+		           'homeCell', e.home_cell,
+		           'observedCells', (
+		               SELECT jsonb_agg(DISTINCT coalesce(src.cell, 'local'))
+		               FROM graph.entity_presence p JOIN graph.source src ON src.id = p.source_id
+		               WHERE p.entity_id = e.id AND coalesce(src.cell, 'local') <> e.home_cell)),
+		       now()
+		FROM graph.entity e
+		WHERE e.deleted_at IS NULL
+		  AND EXISTS (
+		      SELECT 1 FROM graph.entity_presence p JOIN graph.source src ON src.id = p.source_id
+		      WHERE p.entity_id = e.id AND coalesce(src.cell, 'local') <> e.home_cell)
+		ON CONFLICT (baseline, target) WHERE status <> 'resolved'
+		DO UPDATE SET diff = excluded.diff, last_observed = now()`)
+	if err != nil {
+		return 0, fmt.Errorf("graph: write cell placement findings: %w", err)
+	}
+	return tag.RowsAffected(), nil
+}
+
+// ResolveClearedCellPlacementFindings resolves open placement Findings whose
+// Entity no longer has any divergent-Cell Source observing it (the collision was
+// reconciled — e.g. the wrong-Cell Source stopped observing it). Mirror of
+// ResolveFindingsForTombstonedEntities; idempotent, self-healing, keeps the
+// audit row. Tombstoned Entities are handled by the tombstone-GC sweep (which
+// runs first in the reconcile cycle) and are already resolved here.
+func (s *Store) ResolveClearedCellPlacementFindings(ctx context.Context) (int64, error) {
+	tag, err := s.pool.Exec(ctx, `
+		UPDATE graph.finding f
+		SET status = 'resolved', resolved_at = now(), last_observed = now(),
+		    consecutive_drifted = 0, resolved_reason = 'placement-reconciled'
+		FROM graph.entity e
+		WHERE f.entity_id = e.id::text
+		  AND f.framework = 'placement'
+		  AND f.status <> 'resolved'
+		  AND NOT EXISTS (
+		      SELECT 1 FROM graph.entity_presence p JOIN graph.source src ON src.id = p.source_id
+		      WHERE p.entity_id = e.id AND coalesce(src.cell, 'local') <> e.home_cell)`)
+	if err != nil {
+		return 0, fmt.Errorf("graph: resolve cleared cell placement findings: %w", err)
+	}
+	return tag.RowsAffected(), nil
+}
+
 // WriteOrphanFinding records a single open Finding for compiled state left
 // behind by a withdrawn-but-retained Assignment (charter §2.4, §4.3:
 // abandoned state is never silent). Idempotent on the live (baseline,

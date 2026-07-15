@@ -17,11 +17,13 @@ import (
 // launches (§1.8). Only summaries live in Postgres; events go to NATS (§3).
 func (s *Store) CreateRun(ctx context.Context, r types.Run) (types.Run, error) {
 	r.Status = types.RunPending
+	// A Run homes to the launching daemon's Cell (ADR-0044).
+	r.Cell = s.projCell()
 	err := s.pool.QueryRow(ctx, `
-		INSERT INTO graph.run (workflow_id, status, view_ref, view_version, triggered_by, baseline, workflow_run_id, step_name)
-		VALUES ($1, $2, nullif($3, ''), nullif($4, 0), nullif($5, ''), nullif($6, ''), nullif($7, '')::uuid, nullif($8, ''))
+		INSERT INTO graph.run (workflow_id, status, view_ref, view_version, triggered_by, baseline, workflow_run_id, step_name, cell)
+		VALUES ($1, $2, nullif($3, ''), nullif($4, 0), nullif($5, ''), nullif($6, ''), nullif($7, '')::uuid, nullif($8, ''), $9)
 		RETURNING id, started_at`,
-		r.WorkflowID, string(r.Status), r.ViewRef, r.ViewVersion, r.TriggeredBy, r.Baseline, r.WorkflowRunID, r.StepName,
+		r.WorkflowID, string(r.Status), r.ViewRef, r.ViewVersion, r.TriggeredBy, r.Baseline, r.WorkflowRunID, r.StepName, r.Cell,
 	).Scan(&r.ID, &r.StartedAt)
 	if err != nil {
 		return r, fmt.Errorf("graph: create run: %w", err)
@@ -96,6 +98,27 @@ func (s *Store) SetRunSites(ctx context.Context, runID string, sites []string) e
 		`UPDATE graph.run SET sites = $2::jsonb WHERE id = $1`, runID, string(blob))
 	if err != nil {
 		return fmt.Errorf("graph: set run sites: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("%w: run %s", ErrNotFound, runID)
+	}
+	return nil
+}
+
+// SetRunCells records the union of Cells a Run touched (ADR-0044) — the
+// cross-Cell analogue of SetRunSites. Nil/empty is a no-op.
+func (s *Store) SetRunCells(ctx context.Context, runID string, cells []string) error {
+	if len(cells) == 0 {
+		return nil
+	}
+	blob, err := json.Marshal(cells)
+	if err != nil {
+		return fmt.Errorf("graph: marshal run cells: %w", err)
+	}
+	tag, err := s.pool.Exec(ctx,
+		`UPDATE graph.run SET cells = $2::jsonb WHERE id = $1`, runID, string(blob))
+	if err != nil {
+		return fmt.Errorf("graph: set run cells: %w", err)
 	}
 	if tag.RowsAffected() == 0 {
 		return fmt.Errorf("%w: run %s", ErrNotFound, runID)
@@ -183,12 +206,12 @@ func (s *Store) GetRun(ctx context.Context, runID string) (types.Run, error) {
 	var status string
 	var viewRef *string
 	var viewVersion *int64
-	var triggeredBy, baseline, workflowRunID, stepName *string
-	var outputs, sites []byte
+	var triggeredBy, baseline, workflowRunID, stepName, cell *string
+	var outputs, sites, cells []byte
 	err := s.pool.QueryRow(ctx, `
-		SELECT id, workflow_id, status, view_ref, view_version, triggered_by, baseline, workflow_run_id, step_name, started_at, finished_at, outputs, sites
+		SELECT id, workflow_id, status, view_ref, view_version, triggered_by, baseline, workflow_run_id, step_name, started_at, finished_at, outputs, sites, cell, cells
 		FROM graph.run WHERE id = $1`, runID,
-	).Scan(&r.ID, &r.WorkflowID, &status, &viewRef, &viewVersion, &triggeredBy, &baseline, &workflowRunID, &stepName, &r.StartedAt, &r.FinishedAt, &outputs, &sites)
+	).Scan(&r.ID, &r.WorkflowID, &status, &viewRef, &viewVersion, &triggeredBy, &baseline, &workflowRunID, &stepName, &r.StartedAt, &r.FinishedAt, &outputs, &sites, &cell, &cells)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return r, fmt.Errorf("%w: run %s", ErrNotFound, runID)
 	}
@@ -220,6 +243,14 @@ func (s *Store) GetRun(ctx context.Context, runID string) (types.Run, error) {
 	if len(sites) > 0 {
 		if err := json.Unmarshal(sites, &r.Sites); err != nil {
 			return r, fmt.Errorf("graph: decode run sites: %w", err)
+		}
+	}
+	if cell != nil {
+		r.Cell = *cell
+	}
+	if len(cells) > 0 {
+		if err := json.Unmarshal(cells, &r.Cells); err != nil {
+			return r, fmt.Errorf("graph: decode run cells: %w", err)
 		}
 	}
 	return r, nil

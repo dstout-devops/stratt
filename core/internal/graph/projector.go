@@ -143,9 +143,15 @@ func upsertEntityTx(ctx context.Context, tx pgx.Tx, prov types.Provenance, cell 
 	var id string
 	switch len(matched) {
 	case 0:
+		// home_cell (residency, ADR-0044) is stamped ONCE here, at creation, =
+		// the creating daemon's Cell. It is deliberately NOT written on the
+		// correlate-UPDATE branch below: an Entity keeps its home even when a
+		// different Cell's daemon observes it, and that retained divergence is
+		// exactly what the placement-mismatch sweep reports (§2.4). The only
+		// other mutation is the fenced re-home (slice 7).
 		if err := tx.QueryRow(ctx, `
-			INSERT INTO graph.entity (kind, labels, prov_writer_kind, prov_writer_ref, prov_source_id, prov_cell, prov_at)
-			VALUES ($1, $2, $3, $4, nullif($5, ''), $6, $7)
+			INSERT INTO graph.entity (kind, labels, prov_writer_kind, prov_writer_ref, prov_source_id, prov_cell, home_cell, prov_at)
+			VALUES ($1, $2, $3, $4, nullif($5, ''), $6, $6, $7)
 			RETURNING id`,
 			e.Kind, labels, string(prov.WriterKind), prov.WriterRef, prov.SourceID, cell, prov.At,
 		).Scan(&id); err != nil {

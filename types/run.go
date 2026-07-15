@@ -52,6 +52,13 @@ type Run struct {
 	// union when per-target routing fanned one Run across Sites. Nil/empty for
 	// legacy Runs and targetless Actions.
 	Sites []string `json:"sites,omitempty"`
+	// Cell is the control-plane Cell this Run homes to (ADR-0044) — the Cell of
+	// the daemon that launched it. Empty ⇒ the built-in LocalCell.
+	Cell string `json:"cell,omitempty"`
+	// Cells lists the Cells this Run touched — the cross-Cell analogue of Sites,
+	// the union when a parent RunAcrossCells fanned out to peer Cells (slice 5).
+	// Nil/empty for a single-Cell Run.
+	Cells []string `json:"cells,omitempty"`
 }
 
 // RunEvent is one task event in a Run's stream — the floor of the §1.8

@@ -357,14 +357,23 @@ func (s *Store) DeleteCredentialRef(ctx context.Context, name, declaredBy string
 // RegisterSource registers an external system of record. The credentialRef is
 // a pointer only — secret material never persists in the platform (§2.5).
 func (s *Store) RegisterSource(ctx context.Context, src types.Source) (types.Source, error) {
+	// A Source homes to the registering daemon's Cell (ADR-0044): its Syncer
+	// runs in this Cell and its Entities inherit this home. An explicit Cell on
+	// the Source wins (future CaC); otherwise the daemon's Cell.
+	cell := src.Cell
+	if cell == "" {
+		cell = s.projCell()
+	}
 	err := s.pool.QueryRow(ctx, `
-		INSERT INTO graph.source (kind, name, endpoint, credential_ref)
-		VALUES ($1, $2, $3, nullif($4, ''))
+		INSERT INTO graph.source (kind, name, endpoint, credential_ref, cell)
+		VALUES ($1, $2, $3, nullif($4, ''), $5)
 		ON CONFLICT (name) DO UPDATE
-		SET kind = excluded.kind, endpoint = excluded.endpoint, credential_ref = excluded.credential_ref
+		SET kind = excluded.kind, endpoint = excluded.endpoint,
+		    credential_ref = excluded.credential_ref, cell = excluded.cell
 		RETURNING id`,
-		src.Kind, src.Name, src.Endpoint, src.CredentialRef,
+		src.Kind, src.Name, src.Endpoint, src.CredentialRef, cell,
 	).Scan(&src.ID)
+	src.Cell = cell
 	if err != nil {
 		return src, fmt.Errorf("graph: register source: %w", err)
 	}
@@ -374,10 +383,10 @@ func (s *Store) RegisterSource(ctx context.Context, src types.Source) (types.Sou
 // GetSource returns a Source by name.
 func (s *Store) GetSource(ctx context.Context, name string) (types.Source, error) {
 	var src types.Source
-	var cred *string
+	var cred, cell *string
 	err := s.pool.QueryRow(ctx,
-		`SELECT id, kind, name, endpoint, credential_ref FROM graph.source WHERE name = $1`, name,
-	).Scan(&src.ID, &src.Kind, &src.Name, &src.Endpoint, &cred)
+		`SELECT id, kind, name, endpoint, credential_ref, cell FROM graph.source WHERE name = $1`, name,
+	).Scan(&src.ID, &src.Kind, &src.Name, &src.Endpoint, &cred, &cell)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return src, fmt.Errorf("%w: source %s", ErrNotFound, name)
 	}
@@ -386,6 +395,9 @@ func (s *Store) GetSource(ctx context.Context, name string) (types.Source, error
 	}
 	if cred != nil {
 		src.CredentialRef = *cred
+	}
+	if cell != nil {
+		src.Cell = *cell
 	}
 	return src, nil
 }

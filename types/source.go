@@ -12,4 +12,8 @@ type Source struct {
 	// never stored here — only a CredentialRef pointer (§2.5).
 	Endpoint      string `json:"endpoint"`
 	CredentialRef string `json:"credentialRef,omitempty"`
+	// Cell is the control-plane Cell this Source homes to (ADR-0044): the Cell
+	// of the daemon that registered it. Its Entities inherit this home. Empty ⇒
+	// the built-in LocalCell.
+	Cell string `json:"cell,omitempty"`
 }
