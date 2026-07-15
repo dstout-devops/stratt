@@ -95,6 +95,22 @@ func (s *Server) handleReadyz(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "event bus not connected", http.StatusServiceUnavailable)
 		return
 	}
+	// Authz + Temporal reachability (ADR-0040): every gated request needs
+	// authz, and a replica that can't reach Temporal can't launch/advance Runs.
+	// The deliberate trade: a Temporal/OpenFGA blip briefly 503s read-serving
+	// replicas too — accepted, a replica that can't do its job shouldn't take load.
+	if s.Authz != nil {
+		if err := s.Authz.CheckHealth(ctx); err != nil {
+			http.Error(w, "authorization backend unreachable: "+err.Error(), http.StatusServiceUnavailable)
+			return
+		}
+	}
+	if s.Temporal != nil {
+		if _, err := s.Temporal.CheckHealth(ctx, &client.CheckHealthRequest{}); err != nil {
+			http.Error(w, "temporal unreachable: "+err.Error(), http.StatusServiceUnavailable)
+			return
+		}
+	}
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write([]byte("ready"))
 }

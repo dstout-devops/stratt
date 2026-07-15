@@ -131,13 +131,29 @@ func (s *Store) SealPending(ctx context.Context) (int, error) {
 		return 0, nil
 	}
 
+	// Per-event guard: only ever seal an UNsealed row (hash IS NULL). Belt-and-
+	// suspenders against a re-seal (ADR-0040).
 	for _, b := range batch {
-		if _, err := tx.Exec(ctx, `UPDATE audit.event SET prev_hash=$1, hash=$2 WHERE seq=$3`, b.prev, b.hash, b.seq); err != nil {
+		ct, err := tx.Exec(ctx, `UPDATE audit.event SET prev_hash=$1, hash=$2 WHERE seq=$3 AND hash IS NULL`, b.prev, b.hash, b.seq)
+		if err != nil {
 			return 0, fmt.Errorf("graph: seal seq %d: %w", b.seq, err)
 		}
+		if ct.RowsAffected() != 1 {
+			return 0, fmt.Errorf("graph: seq %d already sealed concurrently — retry next pass", b.seq)
+		}
 	}
-	if _, err := tx.Exec(ctx, `UPDATE audit.seal_head SET seq=$1, hash=$2 WHERE id`, lastSeq, lastHash); err != nil {
+	// Expected-prev-hash CAS on the seal-head advance: the write commits only if
+	// the head is still exactly where we read it (headSeq/headHash). Makes
+	// hash-chain integrity independent of the lock/lease, not just the FOR UPDATE
+	// (ADR-0040). NULL-safe on hash (genesis head is NULL).
+	ct, err := tx.Exec(ctx,
+		`UPDATE audit.seal_head SET seq=$1, hash=$2 WHERE id AND seq=$3 AND hash IS NOT DISTINCT FROM $4`,
+		lastSeq, lastHash, headSeq, headHash)
+	if err != nil {
 		return 0, fmt.Errorf("graph: advance seal head: %w", err)
+	}
+	if ct.RowsAffected() != 1 {
+		return 0, fmt.Errorf("graph: seal head advanced concurrently (expected seq %d) — retry next pass", headSeq)
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return 0, err

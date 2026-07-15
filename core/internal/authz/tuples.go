@@ -118,6 +118,10 @@ func (a *TupleAuthorizer) Snapshot() []Tuple {
 }
 
 // Check implements Authorizer for principal subjects.
+// CheckHealth is always ready: the tuple authorizer is in-process, with no
+// external backend to reach (ADR-0040).
+func (a *TupleAuthorizer) CheckHealth(_ context.Context) error { return nil }
+
 func (a *TupleAuthorizer) Check(_ context.Context, principalID, relation, object string) (bool, error) {
 	a.mu.RLock()
 	defer a.mu.RUnlock()

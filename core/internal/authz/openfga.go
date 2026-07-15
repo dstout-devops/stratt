@@ -120,6 +120,14 @@ func (a *OpenFGAAuthorizer) Check(ctx context.Context, principalID, relation, ob
 	return resp.GetAllowed(), nil
 }
 
+// CheckHealth probes the OpenFGA server with a benign Check: a reachable server
+// answers (false, nil) for an unknown principal; an unreachable one errors
+// (ADR-0040 readiness). Reuses the proven Check path — no separate SDK call.
+func (a *OpenFGAAuthorizer) CheckHealth(ctx context.Context) error {
+	_, err := a.Check(ctx, "__readyz_probe__", RelationUser, "credential_ref:__readyz_probe__")
+	return err
+}
+
 // writeChunk keeps each transactional Write under the server's per-request
 // tuple limit (100).
 const writeChunk = 100

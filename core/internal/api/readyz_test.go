@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -66,5 +67,31 @@ func TestReadyz(t *testing.T) {
 	s.handleReadyz(rec, httptest.NewRequest(http.MethodGet, "/readyz", nil))
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("unreachable store: got %d, want 503", rec.Code)
+	}
+}
+
+type fakeAuthz struct{ healthErr error }
+
+func (f fakeAuthz) Check(context.Context, string, string, string) (bool, error) { return false, nil }
+func (f fakeAuthz) CheckHealth(context.Context) error                           { return f.healthErr }
+
+// TestReadyzAuthzHealth proves /readyz gates on authorization-backend
+// reachability (ADR-0040): a healthy authz is 200, an unreachable one is 503.
+func TestReadyzAuthzHealth(t *testing.T) {
+	store := readyTestStore(t)
+	defer store.Close()
+
+	healthy := &Server{Store: store, Authz: fakeAuthz{nil}}
+	rec := httptest.NewRecorder()
+	healthy.handleReadyz(rec, httptest.NewRequest(http.MethodGet, "/readyz", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("healthy authz: got %d, want 200 (%s)", rec.Code, rec.Body.String())
+	}
+
+	down := &Server{Store: store, Authz: fakeAuthz{errors.New("openfga down")}}
+	rec = httptest.NewRecorder()
+	down.handleReadyz(rec, httptest.NewRequest(http.MethodGet, "/readyz", nil))
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("unreachable authz: got %d, want 503", rec.Code)
 	}
 }

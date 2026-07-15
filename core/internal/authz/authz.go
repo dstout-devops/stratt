@@ -47,6 +47,9 @@ const AuditObject = "audit:log"
 // Deny is the default: unknown principals, relations, and objects are false.
 type Authorizer interface {
 	Check(ctx context.Context, principalID, relation, object string) (bool, error)
+	// CheckHealth verifies the authorization backend is reachable — the
+	// readiness signal (ADR-0040). Nil = ready.
+	CheckHealth(ctx context.Context) error
 }
 
 type ctxKey struct{}

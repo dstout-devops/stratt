@@ -28,6 +28,41 @@ func rawExec(t *testing.T, s *Store, sql string) {
 	}
 }
 
+// TestSealConcurrentSafe proves the sealer's expected-head CAS + per-event
+// hash-IS-NULL guard (ADR-0040): two sealers racing the same pending set produce
+// exactly one linear chain — no event double-sealed, no error, VerifyAudit clean.
+func TestSealConcurrentSafe(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	appendAudit(t, s, 5)
+
+	type res struct {
+		n   int
+		err error
+	}
+	ch := make(chan res, 2)
+	for i := 0; i < 2; i++ {
+		go func() {
+			n, err := s.SealPending(ctx)
+			ch <- res{n, err}
+		}()
+	}
+	total := 0
+	for i := 0; i < 2; i++ {
+		r := <-ch
+		if r.err != nil {
+			t.Fatalf("concurrent seal errored: %v", r.err)
+		}
+		total += r.n
+	}
+	if total != 5 {
+		t.Fatalf("exactly 5 events must be sealed once across both sealers, got %d", total)
+	}
+	if v, err := s.VerifyAudit(ctx); err != nil || !v.OK || v.Events != 5 {
+		t.Fatalf("chain must be clean after concurrent seal: %+v err=%v", v, err)
+	}
+}
+
 // TestLatestAuditForObject proves the recertification "last attested" query
 // (ADR-0036): the newest event for a given (action, object) is returned, and a
 // never-seen object reports not-found.
