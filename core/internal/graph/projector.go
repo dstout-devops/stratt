@@ -171,6 +171,21 @@ func upsertEntityTx(ctx context.Context, tx pgx.Tx, prov types.Provenance, e Ent
 		return "", fmt.Errorf("graph: upsert identities: %w", err)
 	}
 
+	// Record this Source's presence (ADR-0042): liveness is a UNION over
+	// Sources, so each Syncer observation asserts a per-(Entity, Source) row.
+	// Run writes record none — a run-only Entity stays outside the presence
+	// system and is never tombstoned.
+	if prov.WriterKind == types.WriterSyncer && prov.SourceID != "" {
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO graph.entity_presence (entity_id, source_id, first_seen, last_seen)
+			VALUES ($1, $2::uuid, now(), now())
+			ON CONFLICT (entity_id, source_id) DO UPDATE SET last_seen = now()`,
+			id, prov.SourceID,
+		); err != nil {
+			return "", fmt.Errorf("graph: record presence: %w", err)
+		}
+	}
+
 	for ns, val := range e.Facets {
 		if err := upsertFacetTx(ctx, tx, prov, id, ns, val); err != nil {
 			return "", err
@@ -238,26 +253,59 @@ func (p *Projector) UpsertRelation(ctx context.Context, prov types.Provenance, r
 	return tx.Commit(ctx)
 }
 
-// TombstoneAbsent marks as deleted every live Entity that carries an identity
-// under scheme but whose identity value is not in seen — the disappearance
-// half of a full resync. The projection stays rebuildable; tombstones keep
-// Run history resolvable.
+// TombstoneAbsent retracts the calling Source's presence for every Entity it
+// carries an identity for under scheme but whose value is not in seen — the
+// disappearance half of a full resync. An Entity is tombstoned only when its
+// LAST Source's presence is retracted (ADR-0042): liveness is a union over
+// Sources, so a host co-managed by another Source stays live. Returns the
+// number of Entities actually tombstoned. The projection stays rebuildable;
+// tombstones keep Run history resolvable.
 func (p *Projector) TombstoneAbsent(ctx context.Context, prov types.Provenance, scheme string, seen []string) (int64, error) {
 	tx, err := p.begin(ctx)
 	if err != nil {
 		return 0, err
 	}
 	defer tx.Rollback(ctx) //nolint:errcheck
+
+	// Stmt A: retract this Source's presence for the vanished Entities. A
+	// data-modifying CTE cannot be used here — its DELETE is invisible to a
+	// NOT EXISTS in the same statement under Postgres snapshot rules — so the
+	// tombstone is a second statement in the same transaction (Stmt B).
+	rows, err := tx.Query(ctx, `
+		DELETE FROM graph.entity_presence p
+		USING graph.entity_identity i
+		WHERE p.entity_id = i.entity_id
+		  AND p.source_id = $1::uuid
+		  AND i.scheme = $2
+		  AND NOT (i.value = ANY($3::text[]))
+		RETURNING p.entity_id`,
+		prov.SourceID, scheme, seen,
+	)
+	if err != nil {
+		return 0, fmt.Errorf("graph: retract presence: %w", err)
+	}
+	retracted, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	if err != nil {
+		return 0, fmt.Errorf("graph: collect retracted: %w", err)
+	}
+	if len(retracted) == 0 {
+		if err := tx.Commit(ctx); err != nil {
+			return 0, err
+		}
+		return 0, nil
+	}
+
+	// Stmt B: tombstone only the retracted Entities whose LAST presence row is
+	// now gone, restamping the retracting Syncer's provenance (which keeps the
+	// enforce_write_path prov-check satisfied on the normalizer path).
 	tag, err := tx.Exec(ctx, `
 		UPDATE graph.entity e
 		SET deleted_at = now(),
-		    prov_writer_kind = $3, prov_writer_ref = $4, prov_source_id = nullif($5, ''), prov_at = $6
-		FROM graph.entity_identity i
-		WHERE i.entity_id = e.id
-		  AND i.scheme = $1
+		    prov_writer_kind = $1, prov_writer_ref = $2, prov_source_id = nullif($3, ''), prov_at = $4
+		WHERE e.id = ANY($5::uuid[])
 		  AND e.deleted_at IS NULL
-		  AND NOT (i.value = ANY($2::text[]))`,
-		scheme, seen, string(prov.WriterKind), prov.WriterRef, prov.SourceID, prov.At,
+		  AND NOT EXISTS (SELECT 1 FROM graph.entity_presence p2 WHERE p2.entity_id = e.id)`,
+		string(prov.WriterKind), prov.WriterRef, prov.SourceID, prov.At, retracted,
 	)
 	if err != nil {
 		return 0, fmt.Errorf("graph: tombstone absent: %w", err)
@@ -268,23 +316,50 @@ func (p *Projector) TombstoneAbsent(ctx context.Context, prov types.Provenance, 
 	return tag.RowsAffected(), nil
 }
 
-// TombstoneByIdentity marks as deleted the single live Entity carrying the
-// given identity key — the disappearance half of delta ingestion.
+// TombstoneByIdentity retracts the calling Source's presence for the single
+// Entity carrying the given identity key — the disappearance half of delta
+// ingestion — and tombstones it only if that was its last Source's presence
+// (ADR-0042). Returns true iff the Entity was tombstoned.
 func (p *Projector) TombstoneByIdentity(ctx context.Context, prov types.Provenance, scheme, value string) (bool, error) {
 	tx, err := p.begin(ctx)
 	if err != nil {
 		return false, err
 	}
 	defer tx.Rollback(ctx) //nolint:errcheck
+
+	// Stmt A: retract this Source's presence for the one (scheme, value).
+	rows, err := tx.Query(ctx, `
+		DELETE FROM graph.entity_presence p
+		USING graph.entity_identity i
+		WHERE p.entity_id = i.entity_id
+		  AND p.source_id = $1::uuid
+		  AND i.scheme = $2 AND i.value = $3
+		RETURNING p.entity_id`,
+		prov.SourceID, scheme, value,
+	)
+	if err != nil {
+		return false, fmt.Errorf("graph: retract presence: %w", err)
+	}
+	retracted, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	if err != nil {
+		return false, fmt.Errorf("graph: collect retracted: %w", err)
+	}
+	if len(retracted) == 0 {
+		if err := tx.Commit(ctx); err != nil {
+			return false, err
+		}
+		return false, nil
+	}
+
+	// Stmt B: tombstone the Entity iff its last presence row is now gone.
 	tag, err := tx.Exec(ctx, `
 		UPDATE graph.entity e
 		SET deleted_at = now(),
-		    prov_writer_kind = $3, prov_writer_ref = $4, prov_source_id = nullif($5, ''), prov_at = $6
-		FROM graph.entity_identity i
-		WHERE i.entity_id = e.id
-		  AND i.scheme = $1 AND i.value = $2
-		  AND e.deleted_at IS NULL`,
-		scheme, value, string(prov.WriterKind), prov.WriterRef, prov.SourceID, prov.At,
+		    prov_writer_kind = $1, prov_writer_ref = $2, prov_source_id = nullif($3, ''), prov_at = $4
+		WHERE e.id = ANY($5::uuid[])
+		  AND e.deleted_at IS NULL
+		  AND NOT EXISTS (SELECT 1 FROM graph.entity_presence p2 WHERE p2.entity_id = e.id)`,
+		string(prov.WriterKind), prov.WriterRef, prov.SourceID, prov.At, retracted,
 	)
 	if err != nil {
 		return false, fmt.Errorf("graph: tombstone by identity: %w", err)

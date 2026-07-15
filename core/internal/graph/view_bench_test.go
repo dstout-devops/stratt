@@ -17,7 +17,7 @@ func seedEstate(tb testing.TB, s *Store, n int) {
 	tb.Helper()
 	ctx := context.Background()
 	p := s.NormalizerProjector()
-	pv := types.Provenance{WriterKind: types.WriterSyncer, WriterRef: "vcenter/syncer", SourceID: "bench", At: time.Now().UTC()}
+	pv := types.Provenance{WriterKind: types.WriterSyncer, WriterRef: "vcenter/syncer", SourceID: testSourceID, At: time.Now().UTC()}
 
 	if err := s.RegisterFacetOwner(ctx, types.FacetOwner{Namespace: "os.kernel", OwnerKind: "syncer", OwnerRef: "vcenter/syncer"}); err != nil {
 		tb.Fatal(err)

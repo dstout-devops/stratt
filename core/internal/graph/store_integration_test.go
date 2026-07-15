@@ -56,11 +56,22 @@ func testStore(t *testing.T) *Store {
 		t.Fatalf("connect+migrate test database: %v", err)
 	}
 	t.Cleanup(store.Close)
+	// Seed the canonical test Source that prov() stamps, so entity_presence's
+	// source_id FK (ADR-0042) resolves. graph.source has no write-path trigger.
+	if _, err := store.pool.Exec(ctx, `
+		INSERT INTO graph.source (id, kind, name, endpoint) VALUES ($1, 'test', 'test-src', '')
+		ON CONFLICT DO NOTHING`, testSourceID); err != nil {
+		t.Fatalf("seed test source: %v", err)
+	}
 	return store
 }
 
+// testSourceID is a fixed Source uuid seeded by testStore so the presence FK
+// resolves for the default prov() provenance.
+const testSourceID = "00000000-0000-0000-0000-0000000000aa"
+
 func prov(kind types.WriterKind, ref string) types.Provenance {
-	return types.Provenance{WriterKind: kind, WriterRef: ref, SourceID: "src-test", At: time.Now().UTC()}
+	return types.Provenance{WriterKind: kind, WriterRef: ref, SourceID: testSourceID, At: time.Now().UTC()}
 }
 
 // TestWritePathEnforcement proves charter §1.2 is a data-layer property: a
