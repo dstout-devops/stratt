@@ -14,6 +14,22 @@ func TestPrepareRequiresBody(t *testing.T) {
 	}
 }
 
+// TestPrepareCredentialMount proves the credential dir is param-driven (so
+// RunAction's per-ref-name mount reaches the driver, ADR-0040).
+func TestPrepareCredentialMount(t *testing.T) {
+	spec, err := (Actuator{}).Prepare(json.RawMessage(`{"body":"x","credentialMount":"slack-cred"}`), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var step map[string]any
+	if err := json.Unmarshal([]byte(spec.Files["project/step.json"]), &step); err != nil {
+		t.Fatal(err)
+	}
+	if step["credentialMount"] != "slack-cred" {
+		t.Fatalf("credentialMount must thread into step.json, got %v", step["credentialMount"])
+	}
+}
+
 func TestPrepareJobSpec(t *testing.T) {
 	spec, err := (Actuator{}).Prepare(json.RawMessage(`{"body":"{\"hi\":1}","headers":{"X-A":"b"}}`), nil)
 	if err != nil {
@@ -25,9 +41,11 @@ func TestPrepareJobSpec(t *testing.T) {
 	if _, ok := spec.Files["project/driver.py"]; !ok {
 		t.Fatal("driver.py missing")
 	}
-	// The driver reads the credential from the fixed mount path, never params.
-	if !strings.Contains(spec.Files["project/driver.py"], "/runner/credentials/webhook") {
-		t.Fatal("driver must read the credential from the webhook mount path")
+	// The driver reads the credential from a mount dir (param-driven, defaulting
+	// to "webhook"), never from params (§2.5).
+	if !strings.Contains(spec.Files["project/driver.py"], "/runner/credentials/") ||
+		!strings.Contains(spec.Files["project/driver.py"], `step.get("credentialMount") or "webhook"`) {
+		t.Fatal("driver must read the credential from the param-driven mount dir")
 	}
 	// The URL/token must never be baked into content (§2.5).
 	for k, v := range spec.Files {

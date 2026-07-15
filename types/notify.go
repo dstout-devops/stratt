@@ -124,8 +124,11 @@ type NotifyDelivery struct {
 	Status string `json:"status"`
 	// Detail is the error or non-2xx summary on failure (never secret
 	// material — the url/token live only in the delivery pod).
-	Detail string    `json:"detail,omitempty"`
-	At     time.Time `json:"at"`
+	Detail string `json:"detail,omitempty"`
+	// RunID links the delivery to its descendable Run (§1.8, ADR-0040); empty
+	// for pre-0040 deliveries.
+	RunID string    `json:"runId,omitempty"`
+	At    time.Time `json:"at"`
 }
 
 // Delivery statuses.

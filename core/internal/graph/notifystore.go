@@ -157,9 +157,9 @@ func (s *Store) DeleteSubscription(ctx context.Context, name string) error {
 func (s *Store) RecordDelivery(ctx context.Context, d types.NotifyDelivery) error {
 	_, err := s.pool.Exec(ctx, `
 		INSERT INTO graph.notify_delivery
-			(notice_kind, subject, subscription, sink, status, detail)
-		VALUES ($1, $2, $3, $4, $5, nullif($6, ''))`,
-		d.NoticeKind, d.Subject, d.Subscription, d.Sink, d.Status, d.Detail)
+			(notice_kind, subject, subscription, sink, status, detail, run_id)
+		VALUES ($1, $2, $3, $4, $5, nullif($6, ''), nullif($7, '')::uuid)`,
+		d.NoticeKind, d.Subject, d.Subscription, d.Sink, d.Status, d.Detail, d.RunID)
 	if err != nil {
 		return fmt.Errorf("graph: record delivery: %w", err)
 	}

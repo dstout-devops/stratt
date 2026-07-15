@@ -229,6 +229,27 @@ func (s *Store) GetRun(ctx context.Context, runID string) (types.Run, error) {
 // /api/v2 façade exposes (ADR-0026), via the graph.awx_run_id functional index.
 // Int31 collisions resolve to the most-recent Run sharing the id — correct for
 // transient job polling. Returns ErrNotFound when no Run hashes to id.
+// GetRunByWorkflowID returns the Run (id + status) for a Temporal workflow id.
+// Used to resolve a delivery Run from the notifier's deterministic workflow id
+// even when the workflow failed terminally (the outcome is empty then), so the
+// notify_delivery → Run cross-link is never dropped (§1.8, ADR-0040).
+func (s *Store) GetRunByWorkflowID(ctx context.Context, workflowID string) (types.Run, error) {
+	var r types.Run
+	var status string
+	err := s.pool.QueryRow(ctx,
+		`SELECT id, status FROM graph.run WHERE workflow_id = $1 ORDER BY started_at DESC NULLS LAST LIMIT 1`, workflowID,
+	).Scan(&r.ID, &status)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return r, fmt.Errorf("%w: run for workflow %s", ErrNotFound, workflowID)
+	}
+	if err != nil {
+		return r, fmt.Errorf("graph: get run by workflow id: %w", err)
+	}
+	r.WorkflowID = workflowID
+	r.Status = types.RunStatus(status)
+	return r, nil
+}
+
 func (s *Store) GetRunByAWXID(ctx context.Context, awxID int64) (types.Run, error) {
 	var runID string
 	err := s.pool.QueryRow(ctx, `

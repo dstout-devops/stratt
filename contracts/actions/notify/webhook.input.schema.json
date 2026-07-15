@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "stratt:contract:actions/notify/webhook.input:v1",
+  "title": "notify/webhook input",
+  "description": "Input Contract for notify/webhook (ADR-0027/0040): one outbound HTTP POST. url/token are injected credential files (from credentialMount), never params (§2.5).",
+  "type": "object",
+  "properties": {
+    "body": { "type": "string" },
+    "method": { "type": "string", "enum": ["POST", "PUT"] },
+    "headers": { "type": "object", "additionalProperties": { "type": "string" } },
+    "credentialMount": { "type": "string" }
+  },
+  "required": ["body"],
+  "additionalProperties": false
+}

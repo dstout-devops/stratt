@@ -32,6 +32,10 @@ type params struct {
 	Body    string            `json:"body"`
 	Method  string            `json:"method"`
 	Headers map[string]string `json:"headers"`
+	// CredentialMount is the credential dir the driver reads url/token from —
+	// the CredentialRef name RunAction mounts under (/runner/credentials/<name>/).
+	// Empty → the legacy fixed "webhook" mount.
+	CredentialMount string `json:"credentialMount"`
 }
 
 // driverPy issues one request and prints one event line. It deliberately
@@ -40,9 +44,9 @@ type params struct {
 const driverPy = `import json, os, sys, urllib.request, urllib.error
 
 base = "/runner/project"
-cred = "/runner/credentials/webhook"
 with open(base + "/step.json") as f:
     step = json.load(f)
+cred = "/runner/credentials/" + (step.get("credentialMount") or "webhook")
 with open(base + "/body") as f:
     body = f.read()
 with open(cred + "/url") as f:
@@ -108,7 +112,7 @@ func (Actuator) Prepare(raw json.RawMessage, _ []actuators.Target) (actuators.Jo
 	default:
 		return actuators.JobSpec{}, fmt.Errorf("webhook: unsupported method %q (POST, PUT)", p.Method)
 	}
-	stepDoc, err := json.Marshal(map[string]any{"method": p.Method, "headers": p.Headers})
+	stepDoc, err := json.Marshal(map[string]any{"method": p.Method, "headers": p.Headers, "credentialMount": p.CredentialMount})
 	if err != nil {
 		return actuators.JobSpec{}, fmt.Errorf("webhook: marshal step content: %w", err)
 	}

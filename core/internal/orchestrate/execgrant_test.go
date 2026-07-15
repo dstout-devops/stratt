@@ -12,6 +12,7 @@ type fakeAuthz struct {
 }
 
 func (f fakeAuthz) Check(_ context.Context, _, _, _ string) (bool, error) { return f.allow, f.err }
+func (f fakeAuthz) CheckHealth(_ context.Context) error                   { return nil }
 
 // TestCheckExecutionGrant covers the ADR-0028 View-scoped execution gate: an
 // empty Principal and an ungranted Principal are both denied (deny-by-default),

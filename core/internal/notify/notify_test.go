@@ -18,6 +18,7 @@ type fakeAuthz struct {
 }
 
 func (f fakeAuthz) Check(_ context.Context, _, _, _ string) (bool, error) { return f.allow, f.err }
+func (f fakeAuthz) CheckHealth(_ context.Context) error                   { return nil }
 
 func TestKindListed(t *testing.T) {
 	on := []string{types.NoticeRunFailed, types.NoticeFindingOpen}
@@ -90,21 +91,21 @@ func TestMatchAdditive(t *testing.T) {
 	}
 }
 
-// TestResolveCredentialAuthz proves the §1.6/§2.5 delivery credential gate: a
-// Sink with no Principal is refused, and a Principal that lacks `use` on the
-// CredentialRef is denied — both BEFORE the Store is ever touched (nil Store
-// here proves the check short-circuits ahead of any credential resolution).
-func TestResolveCredentialAuthz(t *testing.T) {
+// TestAuthorizeSink proves the §1.6/§2.5 delivery credential gate (the
+// pre-flight before launching the delivery Run): a Sink with no Principal is
+// refused, and a Principal that lacks `use` on the CredentialRef is denied —
+// both BEFORE the Store is ever touched (nil Store proves the short-circuit).
+func TestAuthorizeSink(t *testing.T) {
 	ctx := context.Background()
 
 	noPrincipal := &Dispatcher{Authz: fakeAuthz{allow: true}}
-	if _, err := noPrincipal.resolveCredential(ctx, types.Sink{Name: "s", CredentialRef: "c"}); err == nil ||
+	if err := noPrincipal.authorizeSink(ctx, types.Sink{Name: "s", CredentialRef: "c"}); err == nil ||
 		!strings.Contains(err.Error(), "principal is required") {
 		t.Fatalf("missing principal must be refused, got %v", err)
 	}
 
 	denied := &Dispatcher{Authz: fakeAuthz{allow: false}}
-	_, err := denied.resolveCredential(ctx, types.Sink{Name: "s", Principal: "p", CredentialRef: "c"})
+	err := denied.authorizeSink(ctx, types.Sink{Name: "s", Principal: "p", CredentialRef: "c"})
 	if err == nil || !strings.Contains(err.Error(), "lacks use on credential_ref:c") {
 		t.Fatalf("ungranted principal must be denied, got %v", err)
 	}

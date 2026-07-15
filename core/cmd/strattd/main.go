@@ -26,6 +26,7 @@ import (
 	"github.com/dstout-devops/stratt/core/internal/actions"
 	awsaction "github.com/dstout-devops/stratt/core/internal/actions/awsec2"
 	certaction "github.com/dstout-devops/stratt/core/internal/actions/certissuer"
+	notifyaction "github.com/dstout-devops/stratt/core/internal/actions/notify"
 	"github.com/dstout-devops/stratt/core/internal/actuators"
 	"github.com/dstout-devops/stratt/core/internal/actuators/ansible"
 	mcpact "github.com/dstout-devops/stratt/core/internal/actuators/mcp"
@@ -242,6 +243,7 @@ func run(ctx context.Context, log *slog.Logger) error {
 	for _, act := range []actions.Action{
 		certaction.Issue(), certaction.Renew(), certaction.Revoke(),
 		awsaction.CreateVM(env("STRATT_EE_ACTIONS_IMAGE", "stratt-ee-actions:dev")),
+		notifyaction.Webhook(),
 	} {
 		actionRegistry[act.Name()] = act
 	}
@@ -666,7 +668,7 @@ func run(ctx context.Context, log *slog.Logger) error {
 	// The outbound mirror of the trigger engine. Each delivery runs in a pod
 	// so the Sink's CredentialRef is injected at spawn (§2.5) — the daemon
 	// composes pod specs from pointers, never material.
-	notifier := &notify.Dispatcher{Store: store, Bus: bus, Dispatcher: dispatcher, Authz: authorizer, Log: log}
+	notifier := &notify.Dispatcher{Store: store, Bus: bus, Temporal: temporalClient, Authz: authorizer, Log: log}
 	controllers = append(controllers, func(cctx context.Context) {
 		if err := notifier.Run(cctx); err != nil && !errors.Is(err, context.Canceled) {
 			log.Error("notifier stopped", "error", err)

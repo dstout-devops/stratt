@@ -1,0 +1,8 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "stratt:contract:actions/notify/webhook.output:v1",
+  "title": "notify/webhook output",
+  "description": "Output Contract for notify/webhook: the delivery verdict is the Run status (§1.8); the driver emits no typed outputs in v1, so any/empty is accepted.",
+  "type": "object",
+  "additionalProperties": true
+}

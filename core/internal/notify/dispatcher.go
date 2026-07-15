@@ -3,17 +3,21 @@ package notify
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sync"
 	"time"
 
-	"github.com/dstout-devops/stratt/core/internal/actuators/webhook"
+	enumspb "go.temporal.io/api/enums/v1"
+	"go.temporal.io/api/serviceerror"
+	"go.temporal.io/sdk/client"
+
 	"github.com/dstout-devops/stratt/core/internal/authz"
 	"github.com/dstout-devops/stratt/core/internal/contract"
-	"github.com/dstout-devops/stratt/core/internal/dispatch"
 	"github.com/dstout-devops/stratt/core/internal/events"
 	"github.com/dstout-devops/stratt/core/internal/graph"
+	"github.com/dstout-devops/stratt/core/internal/orchestrate"
 	"github.com/dstout-devops/stratt/core/internal/rules"
 	"github.com/dstout-devops/stratt/types"
 )
@@ -27,11 +31,11 @@ const NoticeDurable = "stratt-notifier"
 // credential is injected into the pod at spawn, so the daemon never holds
 // secret material (§2.5, ADR-0027).
 type Dispatcher struct {
-	Store      *graph.Store
-	Bus        *events.Bus
-	Dispatcher *dispatch.Dispatcher
-	Authz      authz.Authorizer
-	Log        *slog.Logger
+	Store    *graph.Store
+	Bus      *events.Bus
+	Temporal client.Client
+	Authz    authz.Authorizer
+	Log      *slog.Logger
 
 	mu       sync.Mutex
 	programs map[string]*rules.Program // subscription name → compiled match
@@ -137,8 +141,11 @@ func (d *Dispatcher) suppressed(sub types.Subscription) bool {
 	return false
 }
 
-// deliver resolves the Sink + credential and dispatches one delivery Job.
-// Returns a non-nil error ONLY for transient infrastructure failures (retry
+// deliver renders the Notice and launches the webhook Connector Action as a
+// first-class, DESCENDABLE Run via RunAction (§1.8, ADR-0040) — no longer a
+// bespoke direct-dispatch. The §2.5 credential-`use` check is now the standard
+// Action chokepoint (RunAction.ResolveCredentials), literally shared with every
+// Run (§1.6). Returns a non-nil error ONLY for transient infra failures (retry
 // the whole Notice); terminal per-delivery problems are recorded and swallowed.
 func (d *Dispatcher) deliver(ctx context.Context, log *slog.Logger, sub types.Subscription, n types.Notice) error {
 	sink, err := d.Store.GetNotifySink(ctx, sub.Sink)
@@ -148,94 +155,105 @@ func (d *Dispatcher) deliver(ctx context.Context, log *slog.Logger, sub types.Su
 	if sink.Kind != types.SinkWebhook {
 		return d.poison(ctx, log, sub, n, fmt.Sprintf("sink %s: unsupported kind %q", sink.Name, sink.Kind))
 	}
-	mount, err := d.resolveCredential(ctx, sink)
-	if err != nil {
+	// Pre-flight credential-use authz: fail fast before spawning a delivery Run
+	// for an ungranted Sink (RunAction re-checks at pod spawn — defense in depth).
+	if err := d.authorizeSink(ctx, sink); err != nil {
 		return d.poison(ctx, log, sub, n, err.Error())
 	}
 	body, err := renderBody(sink, n)
 	if err != nil {
 		return d.poison(ctx, log, sub, n, err.Error())
 	}
-	raw, err := json.Marshal(map[string]any{"body": body, "method": sink.Config.Method})
+	// credentialMount = the Sink's CredentialRef name: RunAction mounts the
+	// secret at /runner/credentials/<name>/ and the driver reads it there.
+	params, err := json.Marshal(map[string]any{
+		"body": body, "method": sink.Config.Method, "credentialMount": sink.CredentialRef,
+	})
 	if err != nil {
 		return d.poison(ctx, log, sub, n, err.Error())
 	}
-	// Validate against the pinned webhook Contract (§2.3) before dispatch.
-	if err := contract.ValidateActuatorParams(types.SinkWebhook, raw); err != nil {
+	if err := contract.ValidateActionInput("notify/webhook", params); err != nil {
 		return d.poison(ctx, log, sub, n, "contract: "+err.Error())
 	}
-	spec, err := webhook.Actuator{}.Prepare(raw, nil)
-	if err != nil {
-		return d.poison(ctx, log, sub, n, err.Error())
-	}
 
-	// Deterministic delivery id: the job name is stable per (subscription,
-	// notice), so a redelivery adopts the in-flight Job instead of spawning a
-	// duplicate (dispatch treats AlreadyExists as adoption).
-	deliveryID := fmt.Sprintf("ntfy-%s-%s", sub.Name, events.NoticeHash(n)[:12])
-	res, err := d.Dispatcher.Run(ctx, deliveryID, 0, spec, webhook.Actuator{}, []dispatch.CredentialMount{mount}, nil)
+	// A deterministic workflow id dedups a redelivered Notice: a duplicate is
+	// rejected and adopted (await the prior delivery), never re-POSTed.
+	wfID := "ntfy-" + sub.Name + "-" + events.NoticeHash(n)[:12]
+	we, err := d.Temporal.ExecuteWorkflow(ctx, client.StartWorkflowOptions{
+		ID: wfID, TaskQueue: orchestrate.TaskQueue,
+		WorkflowIDReusePolicy: enumspb.WORKFLOW_ID_REUSE_POLICY_REJECT_DUPLICATE,
+	}, orchestrate.RunAction, orchestrate.RunInput{
+		Action: "notify/webhook", Params: params,
+		CredentialRefs: []string{sink.CredentialRef}, Principal: sink.Principal,
+	})
 	if err != nil {
-		// Infrastructure: pod could not spawn / dispatch failed. Redeliver.
-		return err
+		var already *serviceerror.WorkflowExecutionAlreadyStarted
+		if !errors.As(err, &already) {
+			return err // infra: could not start — redeliver
+		}
+		we = d.Temporal.GetWorkflow(ctx, wfID, "") // adopt the in-flight/prior delivery
 	}
-	if res.Succeeded {
-		d.record(ctx, log, sub, sink, n, types.DeliveryDelivered, "")
-		log.Info("notification delivered", "sink", sink.Name, "kind", n.Kind, "subject", n.Subject)
+	var outcome orchestrate.RunOutcome
+	werr := we.Get(ctx, &outcome)
+	// Resolve the delivery Run by its deterministic workflow id, not from the
+	// outcome — populated even when the workflow failed terminally (empty
+	// outcome), so the notify_delivery → Run cross-link is never dropped exactly
+	// where descent matters most (§1.8).
+	runID := ""
+	run, gerr := d.Store.GetRunByWorkflowID(ctx, wfID)
+	if gerr == nil {
+		runID = run.ID
+	}
+	if werr != nil {
+		// The delivery Run failed terminally (authz denied, bad params, pod
+		// error) — record failed, do not loop (§1.8). Never the raw error (a
+		// Temporal message could carry adjacent detail).
+		d.record(ctx, log, sub, sink, n, types.DeliveryFailed, "delivery run failed", runID)
+		log.Error("notification delivery run failed", "sink", sink.Name, "kind", n.Kind, "run", runID, "error", werr)
 		return nil
 	}
-	// The pod ran but the endpoint rejected the POST (non-2xx). Terminal for
-	// v1 — record the failure on the status surface (§1.8) and do not loop
-	// (a permanent 4xx must not redeliver forever). 5xx retry/backoff is a
-	// documented follow-up (ADR-0027).
-	d.record(ctx, log, sub, sink, n, types.DeliveryFailed, "endpoint rejected the request")
-	log.Error("notification rejected by endpoint", "sink", sink.Name, "kind", n.Kind, "subject", n.Subject)
+	// The Run completed; a non-2xx endpoint response is RunFailed (not a workflow
+	// error), so the Run status is the delivery verdict.
+	if gerr == nil && run.Status == types.RunSucceeded {
+		d.record(ctx, log, sub, sink, n, types.DeliveryDelivered, "", runID)
+		log.Info("notification delivered", "sink", sink.Name, "kind", n.Kind, "subject", n.Subject, "run", runID)
+		return nil
+	}
+	d.record(ctx, log, sub, sink, n, types.DeliveryFailed, "endpoint rejected the request", runID)
+	log.Error("notification rejected by endpoint", "sink", sink.Name, "kind", n.Kind, "run", runID)
 	return nil
 }
 
-// resolveCredential turns the Sink's CredentialRef into a pod mount POINTER —
-// pure metadata, never material (§2.5). k8s-secret only in v1; other backends
-// fail loudly. The mount is pinned under the fixed webhook mount name so the
-// driver reads /runner/credentials/webhook/{url,token}.
-func (d *Dispatcher) resolveCredential(ctx context.Context, sink types.Sink) (dispatch.CredentialMount, error) {
+// authorizeSink is the pre-flight credential-use check (§1.6/§2.5): a Sink cannot
+// fire a credential its Principal lacks `use` on. The full resolution (backend,
+// locator, mount) now lives in RunAction.ResolveCredentials — one authz model,
+// literally shared with every Run.
+func (d *Dispatcher) authorizeSink(ctx context.Context, sink types.Sink) error {
 	if sink.CredentialRef == "" {
-		return dispatch.CredentialMount{}, fmt.Errorf("sink %s: credentialRef is required", sink.Name)
+		return fmt.Errorf("sink %s: credentialRef is required", sink.Name)
 	}
-	// One authz model (§1.6): delivery runs the SAME credential-use check the
-	// Run path enforces (orchestrate.ResolveCredentials), so a Sink cannot fire
-	// a credential its Principal lacks `use` on — honoring the credential's
-	// OwnerTeam scoping (§2.5 use-without-read).
 	if sink.Principal == "" {
-		return dispatch.CredentialMount{}, fmt.Errorf("sink %s: principal is required (delivery credential use is authz-checked)", sink.Name)
+		return fmt.Errorf("sink %s: principal is required (delivery credential use is authz-checked)", sink.Name)
 	}
 	allowed, err := d.Authz.Check(ctx, sink.Principal, authz.RelationUser, "credential_ref:"+sink.CredentialRef)
 	if err != nil {
-		return dispatch.CredentialMount{}, fmt.Errorf("sink %s: authz check: %w", sink.Name, err)
+		return fmt.Errorf("sink %s: authz check: %w", sink.Name, err)
 	}
 	if !allowed {
-		return dispatch.CredentialMount{}, fmt.Errorf("sink %s: principal %s lacks use on credential_ref:%s", sink.Name, sink.Principal, sink.CredentialRef)
+		// Audit the denial like the shared Run path does (§1.6): a denial caught
+		// at pre-flight still reaches the one audit stream (§1.8). A granted use
+		// is audited by RunAction.ResolveCredentials when the delivery Run runs.
+		if d.Store != nil {
+			if aerr := d.Store.RecordAudit(context.WithoutCancel(ctx), types.AuditEvent{
+				PrincipalID: sink.Principal, Action: types.AuditCredentialUse,
+				Object: "credential_ref:" + sink.CredentialRef, Outcome: types.AuditDenied,
+			}); aerr != nil {
+				d.Log.Error("audit credential-use denial failed", "error", aerr)
+			}
+		}
+		return fmt.Errorf("sink %s: principal %s lacks use on credential_ref:%s", sink.Name, sink.Principal, sink.CredentialRef)
 	}
-	ref, err := d.Store.GetCredentialRef(ctx, sink.CredentialRef)
-	if err != nil {
-		return dispatch.CredentialMount{}, fmt.Errorf("sink %s: credentialRef %s: %w", sink.Name, sink.CredentialRef, err)
-	}
-	if ref.Backend != types.BackendK8sSecret {
-		return dispatch.CredentialMount{}, fmt.Errorf(
-			"sink %s: credentialRef %s backend %q unsupported for notification sinks in v1 (k8s-secret only)",
-			sink.Name, sink.CredentialRef, ref.Backend)
-	}
-	var loc struct {
-		Namespace string `json:"namespace"`
-		Name      string `json:"name"`
-	}
-	if err := json.Unmarshal(ref.Locator, &loc); err != nil || loc.Name == "" {
-		return dispatch.CredentialMount{}, fmt.Errorf("sink %s: credentialRef %s: invalid k8s-secret locator", sink.Name, sink.CredentialRef)
-	}
-	return dispatch.CredentialMount{
-		RefName:         webhook.CredentialMountName,
-		SecretNamespace: loc.Namespace,
-		SecretName:      loc.Name,
-		Injection:       ref.Injection,
-	}, nil
+	return nil
 }
 
 // poison records a terminal per-delivery problem and returns nil (never a
@@ -253,10 +271,10 @@ func (d *Dispatcher) poison(ctx context.Context, log *slog.Logger, sub types.Sub
 }
 
 // record persists a delivery outcome on the status surface (§1.8).
-func (d *Dispatcher) record(ctx context.Context, log *slog.Logger, sub types.Subscription, sink types.Sink, n types.Notice, status, detail string) {
+func (d *Dispatcher) record(ctx context.Context, log *slog.Logger, sub types.Subscription, sink types.Sink, n types.Notice, status, detail, runID string) {
 	if err := d.Store.RecordDelivery(ctx, types.NotifyDelivery{
 		NoticeKind: n.Kind, Subject: n.Subject, Subscription: sub.Name, Sink: sink.Name,
-		Status: status, Detail: detail,
+		Status: status, Detail: detail, RunID: runID,
 	}); err != nil {
 		log.Error("record delivery failed", "error", err)
 	}
