@@ -66,7 +66,7 @@ func siteLocalClient(t *testing.T) pluginv1.PluginServiceClient {
 // gate out the shared dns.fqdn scheme from the relayed write-back exactly as on a
 // direct dial — proving the relay forwards opaque bytes and governs nothing (V1).
 func TestRelay_HostGovernsHubSideOverRelay(t *testing.T) {
-	dialer, acceptor := newMemTransport()
+	dialer, acceptor := siterelay.InProcess()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 

@@ -18,14 +18,16 @@ import (
 // recovery mechanism (§1.6). JetStream durability for the opening dispatch is a
 // documented hardening option, unneeded for these synchronous, retryable calls.
 //
-// Subjects: the opening request → `STRATT_SITERELAY.call.<site>` with Reply set to
-// a fresh inbox; the agent streams responses to that inbox; the hub sends
-// follow-ups (cancel) to `<inbox>.c2s`.
+// Subjects: the opening request → `STRATT_SITERELAY.call.<site>.<plugin>` with
+// Reply set to a fresh inbox; the agent streams responses to that inbox; the hub
+// sends follow-ups (cancel) to `<inbox>.c2s`.
 
 const callSubjectRoot = "STRATT_SITERELAY.call"
 
-// CallSubject is the per-Site opening-request subject.
-func CallSubject(site string) string { return callSubjectRoot + "." + site }
+// CallSubject is the opening-request subject for one plugin at one Site — a Site
+// may run several plugins (opentofu, ansible…), so calls route per-(site, plugin)
+// and each plugin's agent-side Serve subscribes to its own subject.
+func CallSubject(site, plugin string) string { return callSubjectRoot + "." + site + "." + plugin }
 
 // wireFrame is the on-wire envelope: Seq orders/deduplicates the response stream (0
 // on the opening request; 1..N on responses). Msg.Payload stays OPAQUE proto bytes
@@ -49,11 +51,15 @@ func decodeFrame(b []byte) (uint64, Msg, error) {
 
 // NATSDialer opens relay calls to one Site over NATS (hub side).
 type NATSDialer struct {
-	nc   *nats.Conn
-	site string
+	nc     *nats.Conn
+	site   string
+	plugin string
 }
 
-func NewNATSDialer(nc *nats.Conn, site string) *NATSDialer { return &NATSDialer{nc: nc, site: site} }
+// NewNATSDialer targets one plugin at one Site (plugin = the grant's plugin id).
+func NewNATSDialer(nc *nats.Conn, site, plugin string) *NATSDialer {
+	return &NATSDialer{nc: nc, site: site, plugin: plugin}
+}
 
 func (d *NATSDialer) Open(ctx context.Context, _ string) (CallStream, error) {
 	inbox := nats.NewInbox()
@@ -61,12 +67,13 @@ func (d *NATSDialer) Open(ctx context.Context, _ string) (CallStream, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &natsClientStream{nc: d.nc, site: d.site, inbox: inbox, sub: sub, ctx: ctx}, nil
+	return &natsClientStream{nc: d.nc, site: d.site, plugin: d.plugin, inbox: inbox, sub: sub, ctx: ctx}, nil
 }
 
 type natsClientStream struct {
 	nc     *nats.Conn
 	site   string
+	plugin string
 	inbox  string
 	sub    *nats.Subscription
 	ctx    context.Context
@@ -82,7 +89,7 @@ func (s *natsClientStream) Send(m Msg) error {
 	if !s.opened {
 		s.opened = true
 		// Opening request → the Site's call subject, Reply = this call's inbox.
-		return s.nc.PublishMsg(&nats.Msg{Subject: CallSubject(s.site), Reply: s.inbox, Data: frame})
+		return s.nc.PublishMsg(&nats.Msg{Subject: CallSubject(s.site, s.plugin), Reply: s.inbox, Data: frame})
 	}
 	// Follow-up (cancel) → the client→server subject.
 	return s.nc.Publish(s.inbox+".c2s", frame)
@@ -118,21 +125,23 @@ func (s *natsClientStream) Close() error {
 
 // ── agent side ──────────────────────────────────────────────────────────────
 
-// NATSAcceptor yields incoming relay calls for one Site over NATS (agent side).
+// NATSAcceptor yields incoming relay calls for one plugin at this Site (agent side).
 type NATSAcceptor struct {
-	nc   *nats.Conn
-	site string
-	once sync.Once
-	sub  *nats.Subscription
-	err  error
+	nc     *nats.Conn
+	site   string
+	plugin string
+	once   sync.Once
+	sub    *nats.Subscription
+	err    error
 }
 
-func NewNATSAcceptor(nc *nats.Conn, site string) *NATSAcceptor {
-	return &NATSAcceptor{nc: nc, site: site}
+// NewNATSAcceptor accepts calls for one plugin at this Site (plugin = its grant id).
+func NewNATSAcceptor(nc *nats.Conn, site, plugin string) *NATSAcceptor {
+	return &NATSAcceptor{nc: nc, site: site, plugin: plugin}
 }
 
 func (a *NATSAcceptor) Accept(ctx context.Context) (CallStream, error) {
-	a.once.Do(func() { a.sub, a.err = a.nc.SubscribeSync(CallSubject(a.site)) })
+	a.once.Do(func() { a.sub, a.err = a.nc.SubscribeSync(CallSubject(a.site, a.plugin)) })
 	if a.err != nil {
 		return nil, a.err
 	}

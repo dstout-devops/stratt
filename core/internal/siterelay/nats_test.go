@@ -33,7 +33,7 @@ func TestRelay_NATSRoundTrip(t *testing.T) {
 	defer cancel()
 
 	site := "edge-" + time.Now().Format("150405.000")
-	acceptor := siterelay.NewNATSAcceptor(nc, site)
+	acceptor := siterelay.NewNATSAcceptor(nc, site, "vcenter-dev")
 	go func() { _ = siterelay.Serve(ctx, acceptor, siteLocalClient(t)) }()
 
 	grant := pluginhost.Grant{
@@ -42,7 +42,7 @@ func TestRelay_NATSRoundTrip(t *testing.T) {
 		Source:          types.Source{Kind: "vcenter", Name: "vcenter-dev"},
 		IdentitySchemes: []string{"vcenter.uuid", "dns.fqdn"},
 	}
-	host := pluginhost.New(nil, siterelay.NewClient(siterelay.NewNATSDialer(nc, site)), grant,
+	host := pluginhost.New(nil, siterelay.NewClient(siterelay.NewNATSDialer(nc, site, "vcenter-dev")), grant,
 		slog.New(slog.NewTextHandler(io.Discard, nil)))
 
 	raw, err := host.ApplyRaw(ctx, pluginhost.ApplyInvoke{Principal: "alice", Params: []byte(`{}`)})

@@ -28,8 +28,10 @@ import (
 	"github.com/dstout-devops/stratt/core/internal/events"
 	"github.com/dstout-devops/stratt/core/internal/evidencestore"
 	"github.com/dstout-devops/stratt/core/internal/graph"
+	"github.com/dstout-devops/stratt/core/internal/planstore"
 	"github.com/dstout-devops/stratt/core/internal/pluginhost"
 	"github.com/dstout-devops/stratt/core/internal/siteproto"
+	"github.com/dstout-devops/stratt/core/internal/siterelay"
 	"github.com/dstout-devops/stratt/types"
 )
 
@@ -334,8 +336,16 @@ type PluginAction struct {
 // a plugin actuator may legitimately carry ZERO CredentialRefs (guardian fix #4:
 // the Action path's ungated-refusal is deliberately NOT ported here).
 type PluginActuator struct {
+	// Host is the hub-local plugin host (nil for a Site-only plugin). A remote-Site
+	// Step builds a relay-backed host on demand from Grant + PlanStore + the
+	// Activities relay dialer, so the SAME governor runs hub-side over the wire
+	// (ADR-0049).
 	Host        *pluginhost.Host
 	DryRunnable bool
+	// Grant + PlanStore let executePlugin construct a Site-backed host with
+	// identical governance (the grant never leaves the hub, ADR-0049 V1).
+	Grant     pluginhost.Grant
+	PlanStore *planstore.Store
 }
 
 type Activities struct {
@@ -343,6 +353,13 @@ type Activities struct {
 	Dispatcher *dispatch.Dispatcher
 	Bus        *events.Bus
 	Authz      authz.Authorizer
+	// Log is the base logger for on-demand hosts (Site relay). Nil → slog.Default().
+	Log *slog.Logger
+	// RelayDial yields the relay transport to one plugin at a Site's agent
+	// (ADR-0049), keyed by (site, plugin-id). Nil when no plugin relay is configured
+	// — a remote-Site plugin Step then fails visibly (never silently run hub-local,
+	// §1.8). Set NATS-backed in strattd.
+	RelayDial func(site, pluginID string) siterelay.Dialer
 	// Actuators is the registry of in-tree Actuators by name (§2.3).
 	Actuators map[string]actuators.Actuator
 	// Actions is the registry of in-tree Connector Actions by namespaced name
@@ -706,14 +723,25 @@ func (a *Activities) executePlugin(ctx context.Context, in RunInput, site string
 		return dispatch.Result{}, temporal.NewNonRetryableApplicationError(
 			fmt.Sprintf("actuator %q does not support dry-run", in.Actuator), "DryRunUnsupported", nil)
 	}
-	// Sites deferred (ADR-0047 hub-only v1): the port carries only credential
-	// NAMES, so the §2.5 remote-safe hazard the pod path has does not arise — but
-	// remote execution loci for a plugin actuator are a later slice, not silently
-	// run hub-local (§1.8: never pretend a remote Step ran where it was asked).
+	// Resolve WHERE the plugin runs. Hub-local uses the pre-dialed host; a remote
+	// Site builds a relay-backed host on demand (ADR-0049): the SAME grant (never
+	// leaves the hub, V1) with a client that tunnels to the Site agent over the
+	// outbound leaf. Governance still runs hub-side over the plugin's raw shapes.
+	host := pa.Host
 	if site != "" && site != types.LocalSite {
+		if a.RelayDial == nil {
+			return dispatch.Result{}, temporal.NewNonRetryableApplicationError(
+				fmt.Sprintf("actuator %q targets Site %q but no plugin relay is configured", in.Actuator, site), "NoPluginRelay", nil)
+		}
+		log := a.Log
+		if log == nil {
+			log = slog.Default()
+		}
+		host = pluginhost.New(a.Store, siterelay.NewClient(a.RelayDial(site, pa.Grant.PluginIdentity)), pa.Grant, log).UsePlanStore(pa.PlanStore)
+	}
+	if host == nil {
 		return dispatch.Result{}, temporal.NewNonRetryableApplicationError(
-			fmt.Sprintf("actuator %q is plugin-hosted; remote Site execution is not yet supported (hub-only v1)", in.Actuator),
-			"PluginActuatorSiteUnsupported", nil)
+			fmt.Sprintf("actuator %q has no host for locus %q (Site-only plugin invoked hub-local?)", in.Actuator, site), "NoPluginHost", nil)
 	}
 	// Only the use-checked, authorized names cross the wire (§2.5); the plugin
 	// resolves material against its own broker, confined to these.
@@ -740,7 +768,7 @@ func (a *Activities) executePlugin(ctx context.Context, in RunInput, site string
 				"PlanPinMissing", nil)
 		}
 		var verr error
-		pinnedPlan, verr = pa.Host.VerifyPinnedPlan(ctx, in.PlanDigest)
+		pinnedPlan, verr = host.VerifyPinnedPlan(ctx, in.PlanDigest)
 		if verr != nil {
 			return dispatch.Result{}, temporal.NewNonRetryableApplicationError(
 				fmt.Sprintf("actuator %q: pinned plan %s failed verification at the Apply boundary: %v", in.Actuator, in.PlanDigest, verr),
@@ -748,7 +776,7 @@ func (a *Activities) executePlugin(ctx context.Context, in RunInput, site string
 		}
 	}
 	activity.RecordHeartbeat(ctx) // canceled Run stops promptly (ADR-0026)
-	raw, err := pa.Host.ApplyRaw(ctx, pluginhost.ApplyInvoke{
+	raw, err := host.ApplyRaw(ctx, pluginhost.ApplyInvoke{
 		Principal:      in.Principal,
 		Params:         in.Params,
 		Targets:        targets,
