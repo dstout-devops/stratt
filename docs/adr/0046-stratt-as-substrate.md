@@ -1,4 +1,4 @@
-# ADR 0046 — Stratt as Substrate: the dark-matter re-centering and the sovereign device port
+# ADR 0046 — Stratt as Substrate: the dark-matter re-centering and the sovereign plugin port
 
 - **Status:** **Proposed** — a re-centering of the project's identity. This ADR proposes an evolution of the
   charter **§0 (Thesis)** and **§1 (Founding Disciplines)** and therefore requires the **highest review bar in
@@ -8,8 +8,10 @@
 - **Deciders:** Project steward (dstout)
 - **Charter sections:** §0 (Thesis), §1.1 (type the seams), §1.2 (projections), §1.4 (boring spine, pluggable
   everything), §1.5 (sovereign contracts, multiple transports), §1.6 (one Principal/authz/audit/cost), §1.8
-  (never hide diagnosis), §2 (Vocabulary — adds **band**, **beam**, **device**). Builds on ADR-0044 (Cells),
-  ADR-0045 (home-ownership gate), ADR-0032 (Sites), ADR-0015 (Contracts), ADR-0009 (identity/authz).
+  (never hide diagnosis), §2 (Vocabulary — adds **band** and **beam** as *coordinates*; the umbrella noun for
+  a thing-behind-the-port is **plugin**, deliberately *not* a new Named Kind, per the vocabulary-linter ruling
+  below). Builds on ADR-0044 (Cells), ADR-0045 (home-ownership gate), ADR-0032 (Sites), ADR-0015 (Contracts),
+  ADR-0009 (identity/authz).
 
 ## Context
 
@@ -40,7 +42,7 @@ Two forces make this urgent rather than aesthetic:
    can be first-class, single-writer, and fence-movable; `band`/`beam` inherit the movable machinery but not
    the free "total" pass.
 
-The full design (disciplines, boundary, repo mapping, port `.proto` sketch, the ten t=0 invariants, and the
+The full design (disciplines, boundary, repo mapping, port `.proto` sketch, the thirteen t=0 invariants, and the
 phased path) is captured in the session design artifact; this ADR records the decision and the review it
 requires.
 
@@ -52,15 +54,16 @@ Re-center Stratt from *doer* to *substrate*, on three pillars.
 
 The core owns exactly six things — **graph** (what is), **coordinates** (where it lives), **contracts** (the
 seams), **reconcile engine** (when to act), **authz** (who may), **audit** (what happened) — and **zero domain
-logic**. Everything that *does* — provision, configure, observe, notify, remediate — is a **device** behind a
-port. The disciplines (twelve; most carried verbatim from the current §1, three promoted, four added):
+logic**. Everything that *does* — provision, configure, observe, notify, remediate — is a **plugin** behind a
+port (a Connector, an Actuator, or a capability-backend; *plugin* is the umbrella word, not a new Named Kind).
+The disciplines (twelve; most carried verbatim from the current §1, three promoted, four added):
 
 - *Carried:* projections-never-a-second-truth (§1.2); one-identity/authz/audit/cost (§1.6); secrets brokered
   not held (§2.5); never-hide-diagnosis (§1.8); rug-pull-proof + evergreen (§1.3/§1.7).
 - *Promoted to the thesis:* **boring spine, pluggable everything** (§1.4) and **sovereign contracts, multiple
   transports** (§1.5) become the defining identity, not two of eight.
 - *Added:* **(a) Spine, not doer** — a domain-specific code path in the core (an `if ansible {…}`) is a design
-  failure. **(b) The unit of work is never the whole** — every device is a physically independent
+  failure. **(b) The unit of work is never the whole** — every plugin is a physically independent
   build/test/CI/release unit; the core stays small and grows *only when an invariant is added, never when a
   capability is*; the contract is the only synchronization surface, so bounded CI and bounded context (human
   *and AI*) fall out of physically-real boundaries. **(c) Coordinates place, they do not classify** — `cell`
@@ -75,59 +78,61 @@ port. The disciplines (twelve; most carried verbatim from the current §1, three
   pain (Temporal's own persistence abstraction, generalized) — it is an escape hatch, **not** a licence to
   make the spine vendor-neutral and re-invite the dependency sprawl §1.4 exists to prevent.
 
-### 2. The core/device boundary is **content-blindness**
+### 2. The core/plugin boundary is **content-blindness**
 
-The core operates on every resource as an **opaque, contract-typed blob** — it schedules, routes, authorizes,
-versions, and records provenance on it, and **never interprets what it means**. Only devices are
-content-experts. The one test for every "put it in core" argument: *does this need to know what the resource
-is?* If yes, it is a device. This keeps the core's size a function of the number of *mechanisms* (small,
+The core operates on every payload as an **opaque, contract-typed blob** — it schedules, routes, authorizes,
+versions, and records provenance on it, and **never interprets what it means**. Only plugins are
+content-experts. The one test for every "put it in core" argument: *does this need to know what the payload
+is?* If yes, it is a plugin. This keeps the core's size a function of the number of *mechanisms* (small,
 fixed), not *domains* (unbounded, at the edge), and makes parallel development trivial — the merge-conflict
 surface of the whole platform equals the contract files.
 
 **One carve-out, load-bearing (guardian finding #3).** Content-blindness is the rule for the **Actuator/Apply
 path** — the core never typed that content, so payload-opacity there merely formalizes the permanent
-Actuator/Action split (§2.3). It is **not** the rule for the **Syncer→graph write-back path**: a device's
+Actuator/Action split (§2.3). It is **not** the rule for the **Syncer→graph write-back path**: a plugin's
 returned Facets are the top rung of the §2.4 Contract ladder, and the core **must** keep validating them, at
 the data layer, against the pinned, hash-verified Facet schema (§1.5 — "schema drift is blocking, never
-silently absorbed"). If that validation moved into the untrusted device, §1.5's seam would have been handed to
+silently absorbed"). If that validation moved into the untrusted plugin, §1.5's seam would have been handed to
 the very thing it exists to police. So: **the payload is opaque on Apply; on write-back it is
 envelope-governed *and* core-schema-validated.** Content-blindness is §1.1 *at the seam*, never the
 abandonment of the seam.
 
-### 3. The sovereign device port
+### 3. The sovereign plugin port
 
-One versioned, hash-pinned protobuf/gRPC **bus** with typed **device classes** (USB model: one bus, standard
-device classes). A `DomainDevice` service (`Observe/Plan/Apply/Destroy/Invoke/Subscribe`, capability-negotiated
-via `GetManifest`); capability classes (`StateStore`, `EventBus`, `SecretBroker`, `DurableExec`,
-`ArtifactStore`) are siblings on the same authenticated/versioned bus. The load-bearing wire shape is **opaque
-`payload` + typed governance `Envelope`** (coordinates, contract-ref, principal, credential-refs,
-idempotency-key, device-computed content-hash). The core reads the envelope and governs; it hands the payload
-to the device untouched. Thirteen invariants must be right at t=0 (any of which, if wrong, means a rewrite) —
-the original ten plus three the charter-guardian review made non-negotiable (11–13):
+One versioned, hash-pinned protobuf/gRPC **bus** with typed **plugin classes** (the USB model — one bus,
+standard device classes; here the classes are *plugin* classes). A `PluginService` (`Observe/Plan/Apply/
+Destroy/Invoke/Subscribe`, capability-negotiated via `GetManifest`); capability classes (`StateStore`,
+`EventBus`, `SecretBroker`, `DurableExec`, `ArtifactStore`) are siblings on the same authenticated/versioned
+bus. The load-bearing wire shape is **opaque `Payload` + typed governance `Envelope`** (coordinates,
+contract-ref, principal, credential-refs, idempotency-key, plugin-computed content-hash) — the opaque message
+is **`Payload`, never `Resource`** (`resource` is a §2-banned core-model identifier). The core reads the
+envelope and governs; it hands the payload to the plugin untouched. Thirteen invariants must be right at t=0
+(any of which, if wrong, means a rewrite) — the original ten plus three the charter-guardian review made
+non-negotiable (11–13):
 
 1. opaque payload / typed envelope; 2. content-blind discovery (`GetManifest`); 3. identity **bound to an
 authenticated channel** (the §1.6 seam across a process boundary — the direct lesson of the cross-Cell auth
 findings hardened this session); 4. streaming + persistent connections; 5. envelope-vs-payload version
-decoupling + hash-pinned contracts + blocking drift; 6. provenance **core-stamped, not device-claimed**;
+decoupling + hash-pinned contracts + blocking drift; 6. provenance **core-stamped, not plugin-claimed**;
 7. idempotency-by-contract (SDK-enforced) + optional checkpoint/resume; 8. cursor-delta `Observe` +
-device-computed content-hash + envelope hoisting (scale); 9. optional `Observe` resource-tree at true bands +
-atomic `Apply` on the root (band-honest profiles without breaking atomic apply); 10. one bus + typed device
+plugin-computed content-hash + envelope hoisting (scale); 9. optional `Observe` payload-tree at true bands +
+atomic `Apply` on the root (band-honest profiles without breaking atomic apply); 10. one bus + typed plugin
 classes; **11. the core enforces the facet-ownership registry (§2.1) and coordinate-scope from the
-*authenticated channel identity* before writing** — a device may write Facets only within the Source/coordinate
-scope its channel owns, so a compromised device forges no ownership and opens no §1.2 second-writer path (the
+*authenticated channel identity* before writing** — a plugin may write Facets only within the Source/coordinate
+scope its channel owns, so a compromised plugin forges no ownership and opens no §1.2 second-writer path (the
 content/ownership guarantee, distinct from the writer guarantee #3/#6 already gives); **12. the
 event/diagnostic descent channel (`Subscribe`/`TaskEvent`) is a typed, core-legible Envelope** even while the
 desired-state payload stays opaque — else §1.8 one-click descent dies at the port, inside the blob;
-**13. the shipped device SDK stays permissively licensed and links no copyleft tool** — only a community
-device *binary* links copyleft on its own side of the wire, which turns the port into a uniform license
+**13. the shipped plugin SDK stays permissively licensed and links no copyleft tool** — only a community
+plugin *binary* links copyleft on its own side of the wire, which turns the port into a uniform license
 firewall (the ad-hoc "Ansible is subprocess-only" carve-out, generalized).
 
 ### Migration is Stratt's own doctrine, applied to itself
 
 The boundary **already exists in-process** (the `Actuator`/`Syncer`/`Action`/`Emitter` interfaces; `dispatch`
-treats JobSpecs opaquely; **Sites already run as wire-devices** over `siteproto`). The refactor *promotes the
-interface to a port and extends the Site model to all devices* — import → co-manage → cutover + fenced move:
-**A** formalize the port; **B** extract one device (`vcenter`) over the wire as the existence proof; **C**
+treats JobSpecs opaquely; **Sites already run as wire-plugins** over `siteproto`). The refactor *promotes the
+interface to a port and extends the Site model to all plugins* — import → co-manage → cutover + fenced move:
+**A** formalize the port; **B** extract one plugin (`vcenter`) over the wire as the existence proof; **C**
 extract the rest in parallel with in-process/wire co-registration; **D** capability-port the backends. None of
 this begins until this ADR is accepted at the highest bar.
 
@@ -138,7 +143,7 @@ tensions.
 
 - **Upholds:** §1.2 (the graph stays a rebuildable projection; the substrate remembers, it does not own),
   §1.6 (one Principal/authz/audit — *strengthened* by carrying it across a process boundary), §2.5 (secrets
-  brokered, never crossing the core or a coordinate boundary), §1.8 (partial-result honesty; a device is a
+  brokered, never crossing the core or a coordinate boundary), §1.8 (partial-result honesty; a plugin is a
   descendable node, never a silent absorber), §1.3 (Apache-2.0 spine + public contract, no gated tier).
 - **§1.1 (type the seams, not the world):** **reinforced on the terms above, not violated** — but only once
   the guardian's two corrections hold: `band`/`beam` are *computed, sparse, Contract-demanded* coordinates
@@ -150,35 +155,36 @@ tensions.
 - **Tensions resolved at review (charter-guardian, 2026-07-16 — SOUND-WITH-CHANGES, folded in above):**
   (1) the capability-ports discipline is an *escape hatch under measured pain*, not "never on vendors" — the
   named spine stays. (2) The **reconcile-seam** (loop-primitive + durable-workflow escape hatch) is the one
-  *bet*, not a pure principle; it belongs in a subordinate ADR, not §1. (3) §2's new Named Kinds: `band`/
-  `beam` proceed as coordinates (deferred to vocabulary-linter); **`device` is blocked as worded** — it
-  collides with `device` already in use as an endpoint Entity (§2.1/§0), the exact namespace collision §2's
-  banned list guards against. The unifying plugin noun must be renamed before any §2 edit (candidate: keep the
-  existing **Connector/Actuator** vocabulary and name the *port*, not a new Kind); resolution deferred to
-  vocabulary-linter + steward.
+  *bet*, not a pure principle; it belongs in a subordinate ADR, not §1. (3) §2 vocabulary (vocabulary-linter,
+  2026-07-16 — resolved): `band`/`beam` are admitted **as coordinates** (no collision); **`device` is BLOCKED
+  as an umbrella noun** — it collides with the endpoint Entity `Kind: "device"` (`msgraph/normalizer.go`,
+  §2.1/§0). Resolution: the umbrella is **`plugin`** (the charter's existing informal word — *not* a new Named
+  Kind); a thing-behind-the-port stays a **Connector/Actuator** or a capability-backend. The gRPC service is
+  `PluginService` and the opaque message is `Payload` (never `Resource`, a §2-banned term). No new Named Kind
+  is minted; only `band`/`beam` are candidate §2 additions, and only at steward sign-off.
 
 ## Consequences
 
 - **Positive:** velocity stays flat as the system grows (change-cost is local); N-way parallel development and
   bounded AI context fall out of physically-real boundaries; any backend is swappable (no vendor lock in the
-  core); community devices in any language via the wire contract; the whole ADR-0044/0045 single-writer +
+  core); community plugins in any language via the wire contract; the whole ADR-0044/0045 single-writer +
   provenance + audit machinery is *reused*, not rebuilt.
 - **Negative / trade-offs:** a large structural refactor of a Phase-3-mature codebase; a per-call wire cost
   (mitigated by streaming + long-lived connections); the core-ceiling needs enforceable teeth or the spine
   re-accretes. **The port protocol is itself a §1.7 fossilization vector** (the guardian's missed tension): a
-  load-bearing wire contract pinned by N community devices is exactly the compat surface that ossifies —
+  load-bearing wire contract pinned by N community plugins is exactly the compat surface that ossifies —
   "never become the fossil AWX did." This is a §1.7 risk, not only a §1.5 one (Terraform provider-protocol
   pain); the mitigations are invariant #5 (envelope/payload version decoupling), protocol versioning from
   Phase A, and extending the evergreen gate to the protocol version — and the §9 risk table must gain a
-  *device-port protocol fossilization* row.
+  *plugin-port protocol fossilization* row.
 - **Validation already in hand:** the hardest legal constraint proves the model — **Ansible is already
   subprocess-only** (`ansible-runner`, GPLv3) and it works; the refactor generalizes what the one legally
   required case forced.
-- **Follow-ups:** the evergreen gate extends to the port protocol version; `band`/`beam` join the vocabulary
-  linter and the `device`-noun rename lands *before* any §2 edit; the SDK gains a device conformance +
-  idempotency test harness (and stays permissively licensed, invariant #13); a core-size budget/gate; and the
-  multiplied credential-bearing device channels are governed by the existing trust-tier + signing + sandbox
-  posture (§2.2/§7.3), named explicitly as covering the device surface.
+- **Follow-ups:** the evergreen gate extends to the port protocol version; `band`/`beam` are the only
+  candidate §2 additions (at steward sign-off); the SDK gains a plugin conformance + idempotency test harness
+  (and stays permissively licensed, invariant #13); a core-size budget/gate; and the multiplied
+  credential-bearing plugin channels are governed by the existing trust-tier + signing + sandbox posture
+  (§2.2/§7.3), named explicitly as covering the plugin surface.
 
 ## Alternatives considered
 
@@ -188,16 +194,16 @@ tensions.
 - **A greenfield project** — rejected: throws away the hardest *solved* problems (multi-region single-writer,
   structural data-layer enforcement, the Connector contract, provenance, one audit stream) that a
   resilient-from-t0 substrate must have and that took real work to get right.
-- **One literal port service for all devices** — rejected: capability-devices (state store, event bus) have a
-  different verb-shape and no coordinate envelope; "one bus + typed device classes" is more USB-faithful and
+- **One literal port service for all plugins** — rejected: capability-backends (state store, event bus) have a
+  different verb-shape and no coordinate envelope; "one bus + typed plugin classes" is more USB-faithful and
   honest.
 
 ## Reviews
 
 - **charter-guardian (2026-07-16): SOUND-WITH-CHANGES — folded in.** The *direction* is charter-honoring (the
   maturation of §0/§1.4/§1.5/§7.6), and the writer/provenance guarantee genuinely survives the wire (single-
-  writer is the `enforce_write_path` DB constraint keyed on the projector's declared Cell — devices never hold
-  a graph write path, so a compromised device forges no provenance). Six findings + two added invariants were
+  writer is the `enforce_write_path` DB constraint keyed on the projector's declared Cell — plugins never hold
+  a graph write path, so a compromised plugin forges no provenance). Six findings + two added invariants were
   required and are now reflected above: (1) `band`/`beam` demoted to computed/sparse coordinates, not
   total/enforced classifications; (2) the named boring spine kept, capability-ports reframed as a
   measured-pain escape hatch; (3) the Syncer write-back path carved out of payload-opacity (stays
@@ -207,7 +213,12 @@ tensions.
   §1.7 protocol-fossilization risk logged. Affirmed intact: §2.5 secrets (CredentialRef names only), the
   GPLv3 boundary (a wire port is a *cleaner* arm's-length firewall than a subprocess pipe — under-claimed by
   the ADR), the §1.6 identity model, and all four permanent non-goals.
-- **vocabulary-linter:** *pending* — `band`/`beam` as candidate coordinate Kinds, and the required `device`
-  rename; this gate must clear before any §2 edit.
+- **vocabulary-linter (2026-07-16): CLEARED with renames — folded in.** `band`/`beam` admitted as coordinates
+  (no collision). `device` **blocked** as an umbrella noun (collides with the `Kind: "device"` endpoint Entity
+  in `msgraph/normalizer.go`, §2.1/§0): the umbrella is now **`plugin`** — the charter's existing informal
+  word, *not* a new Named Kind. The gRPC service is `PluginService`; the opaque message is `Payload` (never
+  `Resource`, a §2-banned identifier). Capability-class names (`StateStore`/`EventBus`/…) and `port`/`bus`/
+  `payload`/`envelope` pass as design/transport terms with no Named-Kind claim. Net: the only candidate §2
+  *additions* are `band`/`beam` as coordinates; no new plugin Kind is minted. Gate cleared for steward review.
 - **No dependency-scout yet** — the port introduces gRPC/protobuf tooling (Phase A); route through
   dependency-scout when that lands.
