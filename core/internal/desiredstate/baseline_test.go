@@ -45,15 +45,15 @@ framework: cis
 		t.Fatalf("baseline: %+v", b)
 	}
 
-	// Rejections: the check must be read-only by declaration — check is the
-	// platform's flag, opentofu only ever plans, and only Actuators with
-	// check semantics are accepted (ADR-0019).
+	// Rejections: the check must be read-only — `check` is the platform's flag,
+	// opentofu read-only is platform-FORCED (a DryRun plan over the port, so a
+	// declared mode is overridden, not policed), and only Actuators with check
+	// semantics are accepted (ADR-0019/0047).
 	for name, doc := range map[string]string{
 		"missing cron":       "name: x\nviewName: v\nseverity: info\n",
 		"missing view":       "name: x\ncron: '* * * * *'\nseverity: info\n",
 		"bad severity":       "name: x\nviewName: v\ncron: '* * * * *'\nseverity: urgent\n",
 		"declared check":     "name: x\nviewName: v\ncron: '* * * * *'\nseverity: info\nparams: {check: false}\n",
-		"tofu apply":         "name: x\nviewName: v\ncron: '* * * * *'\nseverity: info\nactuator: opentofu\nparams: {mode: apply, module: m, workspace: w}\n",
 		"no check semantics": "name: x\nviewName: v\ncron: '* * * * *'\nseverity: info\nactuator: script\n",
 		"negative damping":   "name: x\nviewName: v\ncron: '* * * * *'\nseverity: info\ndampingObservations: -1\n",
 		"creds no principal": "name: x\nviewName: v\ncron: '* * * * *'\nseverity: info\ncredentialRefs: [c]\n",

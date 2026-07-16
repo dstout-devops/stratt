@@ -123,8 +123,6 @@ spec:
             {{- end }}
             - name: STRATT_EE_IMAGE
               value: {{ include "stratt.image" .Values.ee.image | quote }}
-            - name: STRATT_EE_TOFU_IMAGE
-              value: {{ include "stratt.image" .Values.ee.tofuImage | quote }}
             {{- if or .Values.stateBackend.key .Values.stateBackend.existingSecret.name }}
             {{- if .Values.stateBackend.existingSecret.name }}
             - name: STRATT_STATE_KEY

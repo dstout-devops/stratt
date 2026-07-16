@@ -141,10 +141,6 @@ ee:
     repository: stratt-ee
     tag: dev
     digest: ""
-  tofuImage:
-    repository: stratt-ee-tofu
-    tag: dev
-    digest: ""
   fsGroup: 1000
 
 # ── CaC declarations (desired state, §1.2) ──────────────────────────────────

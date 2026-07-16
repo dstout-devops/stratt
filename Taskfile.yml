@@ -294,12 +294,6 @@ tasks:
       - docker build -t stratt-ee:dev ee/
       - go run sigs.k8s.io/kind@v0.32.0 load docker-image stratt-ee:dev --name stratt-dev
 
-  dev:ee-tofu:build:
-    desc: Build the OpenTofu EE image and load it into the kind cluster (ADR-0016)
-    cmds:
-      - docker build -f ee/tofu.Dockerfile -t stratt-ee-tofu:dev ee/
-      - go run sigs.k8s.io/kind@v0.32.0 load docker-image stratt-ee-tofu:dev --name stratt-dev
-
   dev:ee-mcp:build:
     desc: Build the MCP EE image and load it into the kind cluster (ADR-0022)
     cmds:

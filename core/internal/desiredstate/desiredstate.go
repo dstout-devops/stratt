@@ -1072,9 +1072,8 @@ func ValidateBaseline(b types.Baseline) error {
 			return fmt.Errorf("baseline %s: params.check is not declarable — the platform forces check mode on baseline checks", b.Name)
 		}
 	case "opentofu":
-		if mode, _ := b.Params["mode"].(string); mode != "plan" {
-			return fmt.Errorf("baseline %s: opentofu checks require params.mode: plan", b.Name)
-		}
+		// Read-only is platform-forced (the DryRun plan verb over the port,
+		// ADR-0047) — no params.mode convention to declare or police.
 	default:
 		return fmt.Errorf("baseline %s: actuator %q has no read-only check semantics (ansible, opentofu)", b.Name, actuator)
 	}

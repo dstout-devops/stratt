@@ -93,14 +93,16 @@ func checkRunInput(b types.Baseline) (RunInput, error) {
 	if actuator == "" {
 		actuator = "ansible"
 	}
+	dryRun := false
 	switch actuator {
 	case "ansible":
 		params["check"] = true
 	case "opentofu":
-		if mode, _ := params["mode"].(string); mode != "plan" {
-			return RunInput{}, temporal.NewNonRetryableApplicationError(
-				fmt.Sprintf("baseline %s: opentofu checks require mode=plan", b.Name), "BaselineNotReadOnly", nil)
-		}
+		// The platform FORCES read-only (a streaming dry-run plan) — no
+		// declaration can make a baseline converge. Over the port opentofu is a
+		// plugin Actuator (ADR-0047): read-only is the DryRun verb, not a
+		// params.mode convention (that was the in-tree pod actuator's shape).
+		dryRun = true
 	default:
 		return RunInput{}, temporal.NewNonRetryableApplicationError(
 			fmt.Sprintf("baseline %s: actuator %q has no read-only check semantics (ansible, opentofu)", b.Name, actuator),
@@ -112,7 +114,7 @@ func checkRunInput(b types.Baseline) (RunInput, error) {
 	}
 	return RunInput{
 		ViewName: b.ViewName, Actuator: actuator, Params: raw, Slices: b.Slices,
-		Baseline: b.Name, Principal: b.Principal, CredentialRefs: b.CredentialRefs,
+		Baseline: b.Name, Principal: b.Principal, CredentialRefs: b.CredentialRefs, DryRun: dryRun,
 	}, nil
 }
 

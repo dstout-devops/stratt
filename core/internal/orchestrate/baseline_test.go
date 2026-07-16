@@ -22,14 +22,22 @@ func TestCheckRunInputReadOnly(t *testing.T) {
 		t.Fatalf("check must be forced: %s (%v)", in.Params, err)
 	}
 
-	// opentofu: plan passes; anything else is structurally refused.
-	if _, err := checkRunInput(types.Baseline{Name: "b", Actuator: "opentofu",
-		Params: map[string]any{"mode": "plan", "module": "m", "workspace": "w"}}); err != nil {
-		t.Fatalf("tofu plan check: %v", err)
+	// opentofu: read-only (DryRun plan) is platform-FORCED, whatever the
+	// declaration said — a baseline can never converge (ADR-0047 over the port).
+	tf, err := checkRunInput(types.Baseline{Name: "b", Actuator: "opentofu",
+		Params: map[string]any{"module": "m", "workspace": "w"}})
+	if err != nil {
+		t.Fatalf("tofu baseline check: %v", err)
 	}
-	if _, err := checkRunInput(types.Baseline{Name: "b", Actuator: "opentofu",
-		Params: map[string]any{"mode": "apply", "module": "m", "workspace": "w"}}); err == nil {
-		t.Fatalf("tofu apply must be refused at launch")
+	if !tf.DryRun {
+		t.Fatal("opentofu baseline must force DryRun (read-only, platform-forced)")
+	}
+	// Even a declaration asking to apply is forced read-only — never refused, never
+	// converging (the platform overrides, mirroring ansible's forced check).
+	tf2, err := checkRunInput(types.Baseline{Name: "b", Actuator: "opentofu",
+		Params: map[string]any{"mode": "apply", "module": "m", "workspace": "w"}})
+	if err != nil || !tf2.DryRun {
+		t.Fatalf("a tofu baseline is always forced to a read-only plan: dryRun=%v err=%v", tf2.DryRun, err)
 	}
 	if _, err := checkRunInput(types.Baseline{Name: "b", Actuator: "script"}); err == nil {
 		t.Fatalf("actuator without check semantics must be refused at launch")

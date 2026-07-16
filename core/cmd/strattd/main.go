@@ -30,7 +30,6 @@ import (
 	"github.com/dstout-devops/stratt/core/internal/actuators"
 	"github.com/dstout-devops/stratt/core/internal/actuators/ansible"
 	mcpact "github.com/dstout-devops/stratt/core/internal/actuators/mcp"
-	"github.com/dstout-devops/stratt/core/internal/actuators/opentofu"
 	"github.com/dstout-devops/stratt/core/internal/actuators/script"
 	"github.com/dstout-devops/stratt/core/internal/actuators/webhook"
 	"github.com/dstout-devops/stratt/core/internal/api"
@@ -452,12 +451,10 @@ func run(ctx context.Context, log *slog.Logger) error {
 			}
 			log.Info("opentofu plugin actuator registered", "addr", tofuPluginAddr, "backend", os.Getenv("STRATT_STATE_BACKEND_URL"))
 		} else {
-			tofuActuator := opentofu.FromEnv(sb.WorkspaceCredential)
-			if tofuActuator.BackendURL == "" {
-				return fmt.Errorf("STRATT_STATE_KEY is set but STRATT_STATE_BACKEND_URL is empty — execution pods need the backend address (ADR-0016)")
-			}
-			registry[tofuActuator.Name()] = tofuActuator
-			log.Info("opentofu in-tree actuator ready (no STRATT_OPENTOFU_PLUGIN_ADDR)", "backend", tofuActuator.BackendURL, "eeImage", tofuActuator.DefaultImage)
+			// opentofu is a plugin-only Actuator now (the in-tree pod actuator was
+			// retired, ADR-0046/0047): the state backend is still served for a peer
+			// Cell's plugin, but no actuator is registered here without its address.
+			log.Info("opentofu plugin not configured (STRATT_OPENTOFU_PLUGIN_ADDR empty); actuator disabled, state backend still served")
 		}
 	} else {
 		log.Info("opentofu actuator disabled (STRATT_STATE_KEY empty)")
