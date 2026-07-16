@@ -904,6 +904,41 @@ paths:
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/Conflict" }
+  /sources:
+    get:
+      operationId: listSources
+      summary: List registered Sources with home Cell + runtime home-ownership state
+      description: >
+        The Sources this Cell knows, each with its home Cell, re-home seal state,
+        and this daemon's runtime home-ownership status (active / standby / sealed
+        — ADR-0045). Standby means a Connector is deployed here but a peer Cell
+        homes the Source; it will auto-activate when a fenced re-home hands it here.
+      responses:
+        "200":
+          description: Registered Sources.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Source" }
+  /sources/{name}:
+    parameters:
+      - $ref: "#/components/parameters/SourceName"
+    get:
+      operationId: getSource
+      summary: Get one Source — returns it only if THIS Cell homes it
+      description: >
+        Returns the Source iff this Cell authoritatively homes it (its Connector's
+        home probe, ADR-0045). A Source homed on a peer Cell, or not registered
+        here, is 404. Under the standard authz/audit model; a peer's home probe
+        reaches it as an HMAC-signed fan-out GET.
+      responses:
+        "200":
+          description: The Source (homed here).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Source" }
+        "404": { $ref: "#/components/responses/NotFound" }
   /sources/{name}/rehome:
     parameters:
       - $ref: "#/components/parameters/SourceName"
@@ -1045,6 +1080,12 @@ components:
         endpoint: { type: string }
         credentialRef: { type: string }
         cell: { type: string }
+        rehomingTo:
+          type: string
+          description: Destination Cell while this Source is sealed mid re-home (ADR-0044 slice 7); absent when settled.
+        status:
+          type: string
+          description: This daemon's runtime home-ownership state (ADR-0045) — active / standby / sealed / greenfield / uncertain. Absent when the daemon runs no Connector for this Source.
     Provenance:
       type: object
       description: >

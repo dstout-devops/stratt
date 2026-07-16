@@ -417,6 +417,37 @@ func (s *Store) GetSource(ctx context.Context, name string) (types.Source, error
 	return src, nil
 }
 
+// ListSources returns every registered Source (home Cell + re-home seal state),
+// ordered by name — the read model behind GET /sources (ADR-0045).
+func (s *Store) ListSources(ctx context.Context) ([]types.Source, error) {
+	rows, err := s.pool.Query(ctx,
+		`SELECT id, kind, name, endpoint, credential_ref, cell, rehoming_to, home_epoch
+		 FROM graph.source ORDER BY name`)
+	if err != nil {
+		return nil, fmt.Errorf("graph: list sources: %w", err)
+	}
+	defer rows.Close()
+	var out []types.Source
+	for rows.Next() {
+		var src types.Source
+		var cred, cell, rehoming *string
+		if err := rows.Scan(&src.ID, &src.Kind, &src.Name, &src.Endpoint, &cred, &cell, &rehoming, &src.HomeEpoch); err != nil {
+			return nil, fmt.Errorf("graph: list sources: %w", err)
+		}
+		if cred != nil {
+			src.CredentialRef = *cred
+		}
+		if cell != nil {
+			src.Cell = *cell
+		}
+		if rehoming != nil {
+			src.RehomingTo = *rehoming
+		}
+		out = append(out, src)
+	}
+	return out, rows.Err()
+}
+
 // SyncCursor returns the stored delta cursor for a Source ("" if none).
 func (s *Store) SyncCursor(ctx context.Context, sourceID string) (string, error) {
 	var cursor *string

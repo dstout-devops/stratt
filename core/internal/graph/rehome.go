@@ -175,6 +175,30 @@ func (s *Store) CompleteRehome(ctx context.Context, name string) (int64, error) 
 	return tombstoned, nil
 }
 
+// GetSourceHome reads a Source's home Cell and re-home seal state (ADR-0045) —
+// the local half of the fleet-home resolver. found=false when this Cell has no
+// row for the Source (it may be homed on a peer, or greenfield). Cheap indexed
+// point read; never touches peers.
+func (s *Store) GetSourceHome(ctx context.Context, name string) (cell string, rehomingTo string, found bool, err error) {
+	var scell, srehome *string
+	err = s.pool.QueryRow(ctx,
+		`SELECT cell, rehoming_to FROM graph.source WHERE name = $1`, name,
+	).Scan(&scell, &srehome)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", "", false, nil
+	}
+	if err != nil {
+		return "", "", false, fmt.Errorf("graph: get source home: %w", err)
+	}
+	if scell != nil {
+		cell = *scell
+	}
+	if srehome != nil {
+		rehomingTo = *srehome
+	}
+	return cell, rehomingTo, true, nil
+}
+
 // AbortRehome un-seals a Source whose re-home failed BEFORE the destination
 // adopted it (must-fix 4: after a committed adopt the move is roll-forward-only,
 // never aborted). It clears rehoming_to and bumps home_epoch again so a late,

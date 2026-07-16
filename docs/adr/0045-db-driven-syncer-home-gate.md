@@ -1,11 +1,14 @@
 # ADR 0045 — DB-driven Syncer instantiation & Connector home-ownership gate (full re-home auto-cutover)
 
-- **Status:** **Partially landed** (2026-07-16). The **DB home-ownership gate** + **seal-safe
-  `RegisterSource`** — the single-writer correctness core (design-review must-fixes 1 & 3) — shipped as
-  migration `00032_home_gate.sql`; the **full auto-cutover** (fleet resolver, `main` standby supervisor,
-  home-collision + standby Findings, active/standby/sealed status API — must-fixes 2 & 4) remains
-  **Proposed / scheduled**. The gate makes destination-side single-writer a DB constraint *now*; the
-  redeploy-free cutover it enables is the follow-up.
+- **Status:** **Accepted / landed** (2026-07-16). Shipped in two steward-scoped increments: (1) the **DB
+  home-ownership gate** + **seal-safe `RegisterSource`** — the single-writer correctness core (must-fixes 1
+  & 3) — as migration `00032_home_gate.sql`; then (2) the **full auto-cutover** — the `internal/homegate`
+  Connector supervisor (loop-gated standby, must-fix 6), the fleet home resolver + `GET /sources/{name}`
+  probe, the **home-collision reconcile** Finding (must-fix 2), the **standby Finding** + active/standby/
+  sealed status on `GET /sources` (must-fix 4). A cross-Cell Source re-home is now a fully automatic
+  destination-side cutover: a Connector pre-deployed on a peer Cell stands by and auto-activates when a
+  fenced re-home hands the Source there — **no manual redeploy**. Proven end-to-end by the two-Cell e2e
+  (`TestCellsE2E/standby_connector_auto-activates_on_re-home`, live Postgres).
 - **Date:** 2026-07-16
 - **Deciders:** Project steward (dstout)
 - **Charter sections:** §1.2 (projection, single writer), §1.4 (boring spine), §2.1/§2.4 (exactly one
@@ -52,15 +55,17 @@ increment (the redeploy-free cutover they enable follows):
   completely untouched — never rewrites its home or resets its `home_epoch` mid-move (the DO UPDATE is gated
   on `rehoming_to IS NULL`). `TestRegisterSourceSealSafe`.
 
-**Still Proposed / scheduled (the redeploy-free cutover):** the fleet **home resolver** + `GET /sources/{name}`,
-the `main` **standby supervisor** (loop-gate so a standby Connector does not enumerate-then-drop the external
-SoR — must-fix 6), the periodic **home-collision reconcile** raising a `critical` Finding when >1 Cell homes
-one Source name (the greenfield race — must-fix 2, never a silent tiebreak, §2.4 anti-GPO), and the **standby
-Finding + active/standby/sealed status** on the sources read model so a standby is never silent (must-fix 4).
-Until those land, the ADR-0044 slice-7 runbook step (deploy/enable the Connector on the destination Cell)
-stands, and the home gate above guarantees no double-writer regardless.
+**Then landed (the redeploy-free cutover, `internal/homegate`):** the fleet **home resolver** +
+`GET /sources/{name}` probe (a peer answers 200-with-home / 404 behind the standard authz+audit and the
+slice-4 HMAC fan-out); the **standby supervisor** wired at the `main` connector seam (loop-gate so a standby
+Connector never claims or pulls the external SoR — must-fix 6; the `Register` claim is now active-gated,
+construction stays inline so config still fails loud); the periodic **home-collision reconcile** raising a
+`critical` Finding when >1 Cell homes one Source name with neither sealed (the greenfield race — must-fix 2,
+never a silent tiebreak, §2.4 anti-GPO); and the **standby Finding** (a stuck/uncertain standby is never
+silent — must-fix 4) plus the active/standby/sealed **status** on `GET /sources`. A peer-homed Source is
+never stolen; the supervisor auto-activates the cycle after a fenced re-home flips the local home here.
 
-## Decision (the full auto-cutover — remaining, Proposed)
+## Decision (the full auto-cutover — implemented)
 
 Introduce a **Connector home-ownership gate** so a Syncer projects a Source's Entities **iff** the Source's
 `graph.source.cell` equals this daemon's Cell **and** `rehoming_to IS NULL`:

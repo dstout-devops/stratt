@@ -889,6 +889,49 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/sources": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List registered Sources with home Cell + runtime home-ownership state
+         * @description The Sources this Cell knows, each with its home Cell, re-home seal state, and this daemon's runtime home-ownership status (active / standby / sealed — ADR-0045). Standby means a Connector is deployed here but a peer Cell homes the Source; it will auto-activate when a fenced re-home hands it here.
+         */
+        get: operations["listSources"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/sources/{name}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Source name (the registered external system of record). */
+                name: components["parameters"]["SourceName"];
+            };
+            cookie?: never;
+        };
+        /**
+         * Get one Source — returns it only if THIS Cell homes it
+         * @description Returns the Source iff this Cell authoritatively homes it (its Connector's home probe, ADR-0045). A Source homed on a peer Cell, or not registered here, is 404. Under the standard authz/audit model; a peer's home probe reaches it as an HMAC-signed fan-out GET.
+         */
+        get: operations["getSource"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/sources/{name}/rehome": {
         parameters: {
             query?: never;
@@ -958,6 +1001,10 @@ export interface components {
             endpoint: string;
             credentialRef?: string;
             cell?: string;
+            /** @description Destination Cell while this Source is sealed mid re-home (ADR-0044 slice 7); absent when settled. */
+            rehomingTo?: string;
+            /** @description This daemon's runtime home-ownership state (ADR-0045) — active / standby / sealed / greenfield / uncertain. Absent when the daemon runs no Connector for this Source. */
+            status?: string;
         };
         /** @description Per-attribute stamp — which Run/Syncer wrote the value, when, from which Source (charter §2.1). Always exactly one answer. */
         Provenance: {
@@ -2843,6 +2890,50 @@ export interface operations {
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
             409: components["responses"]["Conflict"];
+        };
+    };
+    listSources: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Registered Sources. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Source"][];
+                };
+            };
+        };
+    };
+    getSource: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Source name (the registered external system of record). */
+                name: components["parameters"]["SourceName"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The Source (homed here). */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Source"];
+                };
+            };
+            404: components["responses"]["NotFound"];
         };
     };
     rehomeSource: {

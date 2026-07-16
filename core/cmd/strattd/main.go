@@ -5,6 +5,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -53,6 +54,7 @@ import (
 	"github.com/dstout-devops/stratt/core/internal/events"
 	"github.com/dstout-devops/stratt/core/internal/evidencestore"
 	"github.com/dstout-devops/stratt/core/internal/graph"
+	"github.com/dstout-devops/stratt/core/internal/homegate"
 	"github.com/dstout-devops/stratt/core/internal/leader"
 	"github.com/dstout-devops/stratt/core/internal/notify"
 	"github.com/dstout-devops/stratt/core/internal/orchestrate"
@@ -432,6 +434,44 @@ func run(ctx context.Context, log *slog.Logger) error {
 	// on all replicas; only the Run loops are leader-gated.
 	var controllers []func(context.Context)
 
+	// ── Connector home-ownership supervisor (ADR-0045) ───────────────────
+	// Each Syncer runs under home-ownership control: a Connector deployed on a
+	// Cell that does not yet home its Source STANDS BY (no claim, no external SoR
+	// load) and auto-activates when a fenced re-home hands the Source here — no
+	// manual redeploy. The DB home gate (migration 00032) is the single-writer
+	// backstop underneath; this is the graceful-standby + observability layer. A
+	// single-Cell estate (no peers) resolves every Source as greenfield → claims
+	// immediately, byte-identical to the pre-ADR-0045 always-run wiring.
+	sourceStatus := homegate.NewStatus()
+	homeProbe := func(pctx context.Context, endpoint, name string) (string, bool, bool, error) {
+		st, body, err := peerClient.Get(pctx, endpoint, "/sources/"+name, "", "system:homegate", authz.KindService)
+		if err != nil {
+			return "", false, false, err
+		}
+		if st == http.StatusNotFound {
+			return "", false, false, nil // the peer does not home it
+		}
+		if st != http.StatusOK {
+			return "", false, false, fmt.Errorf("peer home probe /sources/%s: HTTP %d", name, st)
+		}
+		var src struct {
+			Cell       string `json:"cell"`
+			RehomingTo string `json:"rehomingTo"`
+		}
+		_ = json.Unmarshal(body, &src)
+		return src.Cell, true, src.RehomingTo != "", nil
+	}
+	homeDeps := homegate.Deps{
+		Resolver:              &homegate.Resolver{Cell: cellID, Store: store, Probe: homeProbe},
+		Status:                sourceStatus,
+		OpenStandbyFinding:    store.WriteHomeStandbyFinding,
+		ResolveStandbyFinding: store.ResolveHomeStandbyFinding,
+		Log:                   log,
+	}
+	homeSupervise := func(source string, register, run func(context.Context) error) func(context.Context) {
+		return func(cctx context.Context) { homegate.Supervise(cctx, homeDeps, source, register, run) }
+	}
+
 	// ── Phase-0 vCenter Syncer (started when a Source is configured) ─────
 	if endpoint := os.Getenv("STRATT_VCENTER_URL"); endpoint != "" {
 		syncer := vcenter.NewSyncer(vcenter.Config{
@@ -443,14 +483,7 @@ func run(ctx context.Context, log *slog.Logger) error {
 			Insecure:   env("STRATT_VCENTER_INSECURE", "false") == "true",
 			SourceName: env("STRATT_VCENTER_SOURCE_NAME", "vcenter-dev"),
 		}, store, log)
-		if err := syncer.Register(ctx); err != nil {
-			return err
-		}
-		controllers = append(controllers, func(cctx context.Context) {
-			if err := syncer.Run(cctx); err != nil && !errors.Is(err, context.Canceled) {
-				log.Error("vcenter syncer stopped", "error", err)
-			}
-		})
+		controllers = append(controllers, homeSupervise(env("STRATT_VCENTER_SOURCE_NAME", "vcenter-dev"), syncer.Register, syncer.Run))
 	} else {
 		log.Info("no vCenter Source configured (STRATT_VCENTER_URL empty); syncer idle")
 	}
@@ -472,14 +505,7 @@ func run(ctx context.Context, log *slog.Logger) error {
 			TokenURL:     os.Getenv("STRATT_MSGRAPH_TOKEN_URL"),
 			SourceName:   env("STRATT_MSGRAPH_SOURCE_NAME", "msgraph"),
 		}, interval, store, log)
-		if err := syncer.Register(ctx); err != nil {
-			return err
-		}
-		controllers = append(controllers, func(cctx context.Context) {
-			if err := syncer.Run(cctx); err != nil && !errors.Is(err, context.Canceled) {
-				log.Error("msgraph syncer stopped", "error", err)
-			}
-		})
+		controllers = append(controllers, homeSupervise(env("STRATT_MSGRAPH_SOURCE_NAME", "msgraph"), syncer.Register, syncer.Run))
 	} else {
 		log.Info("no MS Graph Source configured (STRATT_MSGRAPH_TENANT_ID empty); syncer idle")
 	}
@@ -498,14 +524,7 @@ func run(ctx context.Context, log *slog.Logger) error {
 			Region:     region,
 			SourceName: env("STRATT_AWS_SOURCE_NAME", "awsec2"),
 		}, interval, store, log)
-		if err := syncer.Register(ctx); err != nil {
-			return err
-		}
-		controllers = append(controllers, func(cctx context.Context) {
-			if err := syncer.Run(cctx); err != nil && !errors.Is(err, context.Canceled) {
-				log.Error("awsec2 syncer stopped", "error", err)
-			}
-		})
+		controllers = append(controllers, homeSupervise(env("STRATT_AWS_SOURCE_NAME", "awsec2"), syncer.Register, syncer.Run))
 	} else {
 		log.Info("no EC2 Source configured (STRATT_AWS_REGION empty); syncer idle")
 	}
@@ -524,14 +543,7 @@ func run(ctx context.Context, log *slog.Logger) error {
 			Mount:      env("STRATT_CLM_MOUNT", "pki"),
 			SourceName: env("STRATT_CLM_SOURCE_NAME", "certissuer"),
 		}, interval, store, log)
-		if err := syncer.Register(ctx); err != nil {
-			return err
-		}
-		controllers = append(controllers, func(cctx context.Context) {
-			if err := syncer.Run(cctx); err != nil && !errors.Is(err, context.Canceled) {
-				log.Error("certissuer syncer stopped", "error", err)
-			}
-		})
+		controllers = append(controllers, homeSupervise(env("STRATT_CLM_SOURCE_NAME", "certissuer"), syncer.Register, syncer.Run))
 	} else {
 		log.Info("no CLM Source configured (STRATT_CLM_ADDR empty); cert syncer idle")
 	}
@@ -565,14 +577,7 @@ func run(ctx context.Context, log *slog.Logger) error {
 			SkipSSL:     skipSSL,
 			SourceName:  env("STRATT_CHEF_SOURCE_NAME", "chef"),
 		}, interval, store, log)
-		if err := syncer.Register(ctx); err != nil {
-			return err
-		}
-		controllers = append(controllers, func(cctx context.Context) {
-			if err := syncer.Run(cctx); err != nil && !errors.Is(err, context.Canceled) {
-				log.Error("chef syncer stopped", "error", err)
-			}
-		})
+		controllers = append(controllers, homeSupervise(env("STRATT_CHEF_SOURCE_NAME", "chef"), syncer.Register, syncer.Run))
 	} else {
 		log.Info("no Chef Source configured (STRATT_CHEF_SERVER_URL empty); syncer idle")
 	}
@@ -592,14 +597,7 @@ func run(ctx context.Context, log *slog.Logger) error {
 			CAFile:     os.Getenv("STRATT_PUPPETDB_CA_FILE"),
 			SourceName: env("STRATT_PUPPETDB_SOURCE_NAME", "puppet"),
 		}, interval, store, log)
-		if err := syncer.Register(ctx); err != nil {
-			return err
-		}
-		controllers = append(controllers, func(cctx context.Context) {
-			if err := syncer.Run(cctx); err != nil && !errors.Is(err, context.Canceled) {
-				log.Error("puppet syncer stopped", "error", err)
-			}
-		})
+		controllers = append(controllers, homeSupervise(env("STRATT_PUPPETDB_SOURCE_NAME", "puppet"), syncer.Register, syncer.Run))
 	} else {
 		log.Info("no PuppetDB Source configured (STRATT_PUPPETDB_URL empty); syncer idle")
 	}
@@ -620,17 +618,22 @@ func run(ctx context.Context, log *slog.Logger) error {
 			return fmt.Errorf("salt interval: %w", err)
 		}
 		syncer := salt.NewSyncer(saltCfg, interval, store, log)
-		if err := syncer.Register(ctx); err != nil {
-			return err
-		}
-		controllers = append(controllers, func(cctx context.Context) {
-			if err := syncer.Run(cctx); err != nil && !errors.Is(err, context.Canceled) {
-				log.Error("salt syncer stopped", "error", err)
-			}
-		})
+		controllers = append(controllers, homeSupervise(saltCfg.SourceName, syncer.Register, syncer.Run))
 	} else {
 		log.Info("no Salt Source configured (STRATT_SALT_API_URL empty); syncer idle")
 	}
+
+	// ── home-ownership collision reconcile (ADR-0045 must-fix 2) ─────────
+	// A periodic sweep raising a CRITICAL Finding when >1 Cell homes the same
+	// Source name with neither sealed — the greenfield double-writer the slice-2
+	// placement check cannot see. Leader-gated; short-circuits on a single-Cell
+	// estate (no peers). Never resolves a collision by a silent tiebreak (§2.4).
+	controllers = append(controllers, func(cctx context.Context) {
+		rec := &homegate.Reconciler{Cell: cellID, Store: store, Probe: homeProbe}
+		if err := rec.Run(cctx); err != nil && !errors.Is(err, context.Canceled) {
+			log.Error("home-collision reconcile stopped", "error", err)
+		}
+	})
 
 	// ── desired-state reconciliation (§1.2: Git is the declarer) ────────
 	if path := os.Getenv("STRATT_DESIRED_STATE_PATH"); path != "" {
@@ -846,7 +849,14 @@ func run(ctx context.Context, log *slog.Logger) error {
 	if uiDir != "" {
 		log.Info("serving ui", "dir", uiDir)
 	}
-	server := &api.Server{Store: store, Bus: bus, Temporal: temporalClient, Authz: authorizer, Log: log, CellID: cellID, CellSecret: []byte(os.Getenv("STRATT_CELL_SECRET")), Peers: peerClient, Issuer: oidcIssuer, Audience: oidcAudience, DevPrincipalHeader: devPrincipal, OIDC: oidcResolver, UIDir: uiDir, StateBackend: stateHandler, EmitterIngest: emitters.New(store, bus, log).Handler(), SCIM: scim.New(store, log).Handler(), CompileStatus: compileStatus, Evidence: evidence, SiteLiveness: func(ctx context.Context) (map[string]bool, error) {
+	server := &api.Server{Store: store, Bus: bus, Temporal: temporalClient, Authz: authorizer, Log: log, CellID: cellID, CellSecret: []byte(os.Getenv("STRATT_CELL_SECRET")), Peers: peerClient, Issuer: oidcIssuer, Audience: oidcAudience, DevPrincipalHeader: devPrincipal, OIDC: oidcResolver, UIDir: uiDir, StateBackend: stateHandler, EmitterIngest: emitters.New(store, bus, log).Handler(), SCIM: scim.New(store, log).Handler(), CompileStatus: compileStatus, Evidence: evidence, SourceStatus: func() map[string]string {
+		snap := sourceStatus.Snapshot()
+		out := make(map[string]string, len(snap))
+		for name, rt := range snap {
+			out[name] = string(rt.State)
+		}
+		return out
+	}, SiteLiveness: func(ctx context.Context) (map[string]bool, error) {
 		live, err := siteGateway.LiveSites(ctx)
 		if err != nil {
 			return nil, err

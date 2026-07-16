@@ -37,6 +37,19 @@ const (
 	RehomeAborted  = "aborted"  // pre-adopt failure: source Cell un-sealed
 )
 
+// FindingHomeCollision is the framework for the §1.8 critical Finding raised when
+// more than one Cell homes the same Source NAME with neither sealed — the
+// greenfield double-writer the slice-2 placement check cannot see (ADR-0045
+// must-fix 2). Never resolved by a silent tiebreak (§2.4); surfaced for a
+// deliberate fenced re-home.
+const FindingHomeCollision = "home-collision"
+
+// FindingHomeStandby is the framework for the warning Finding a stuck/uncertain
+// standby raises (ADR-0045 must-fix 4): a Connector deployed on a Cell that
+// cannot confirm the Source's fleet home (a peer is unreachable) stands by rather
+// than risk a steal — visible, not silent. Auto-resolved once the home resolves.
+const FindingHomeStandby = "home-standby"
+
 // FindingRehomeStuck is the framework label for the §1.8 live-surface Finding a
 // stuck seal raises (a re-home sealed but not completed — partition, unreachable
 // peer, or a Connector not yet deployed on the destination). Auto-resolves on

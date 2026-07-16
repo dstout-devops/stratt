@@ -88,6 +88,11 @@ type Server struct {
 	// heartbeating (ADR-0032) — read from the NATS liveness KV, never the graph
 	// (§1.2). Nil reports every Site as not-live.
 	SiteLiveness func(ctx context.Context) (map[string]bool, error)
+	// SourceStatus, when set, returns this daemon's runtime home-ownership state
+	// per Source (ADR-0045): active / standby / sealed / greenfield / uncertain,
+	// read from the in-memory homegate supervisor (never the graph, §1.2). Nil on
+	// a daemon that runs no Connectors. Keyed by Source name.
+	SourceStatus func() map[string]string
 	// SCIMGate, when set, blocks a SCIM-managed human Principal that the IdP has
 	// deactivated at request-time resolution (ADR-0035) — closing the access-
 	// token-TTL window that grant-revocation alone leaves open. It is consulted

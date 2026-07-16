@@ -10,13 +10,16 @@ import (
 	"net/http/httptest"
 	neturl "net/url"
 	"os"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/dstout-devops/stratt/core/internal/authz"
 	"github.com/dstout-devops/stratt/core/internal/cellrouter"
 	"github.com/dstout-devops/stratt/core/internal/graph"
+	"github.com/dstout-devops/stratt/core/internal/homegate"
 	"github.com/dstout-devops/stratt/types"
 )
 
@@ -128,6 +131,76 @@ func TestCellsE2E(t *testing.T) {
 		}
 		if _, err := storeEU.GetSource(ctx, "vc-eu"); err == nil {
 			t.Fatal("EU must no longer home the Source after complete")
+		}
+	})
+
+	// ── ADR-0045: a standby Connector auto-activates on re-home (no redeploy) ──
+	t.Run("standby connector auto-activates on re-home", func(t *testing.T) {
+		// A Source homed on EU, with its Connector ALSO deployed on US in standby.
+		if _, err := storeEU.RegisterSource(ctx, types.Source{Kind: "vcenter", Name: "vc-move", Endpoint: "https://vc"}); err != nil {
+			t.Fatal(err)
+		}
+		// US's home probe reaches EU's GET /sources/{name} over the real HMAC path.
+		pc := cellrouter.NewPeerClient(secret)
+		probe := func(pctx context.Context, endpoint, name string) (string, bool, bool, error) {
+			st, body, err := pc.Get(pctx, endpoint, "/sources/"+name, "", "system", authz.KindService)
+			if err != nil {
+				return "", false, false, err
+			}
+			if st == http.StatusNotFound {
+				return "", false, false, nil
+			}
+			if st != http.StatusOK {
+				return "", false, false, fmt.Errorf("probe HTTP %d", st)
+			}
+			var s struct {
+				Cell, RehomingTo string
+			}
+			_ = json.Unmarshal(body, &s)
+			return s.Cell, true, s.RehomingTo != "", nil
+		}
+
+		var activated int32
+		register := func(context.Context) error { return nil }
+		run := func(rc context.Context) error { atomic.StoreInt32(&activated, 1); return nil }
+
+		sctx, scancel := context.WithCancel(ctx)
+		defer scancel()
+		st := homegate.NewStatus()
+		go homegate.Supervise(sctx, homegate.Deps{
+			Resolver: &homegate.Resolver{Cell: "us", Store: storeUS, Probe: probe},
+			Status:   st, Poll: 10 * time.Millisecond,
+		}, "vc-move", register, run)
+
+		// US must STAND BY (never steal) while EU homes the Source.
+		time.Sleep(80 * time.Millisecond)
+		if atomic.LoadInt32(&activated) != 0 {
+			t.Fatal("US must stand by (not activate/steal) while EU homes the Source")
+		}
+		if got := st.Snapshot()["vc-move"].State; got != homegate.Standby {
+			t.Fatalf("US status must be Standby, got %s", got)
+		}
+
+		// Re-home EU→US over the real path: seal → adopt → complete.
+		sealed, err := storeEU.SealSourceForRehome(ctx, "vc-move", "us")
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, _ := json.Marshal(RehomeAdopt{Source: Source{Kind: "vcenter", Name: "vc-move", Endpoint: "https://vc"}, Epoch: sealed.HomeEpoch})
+		if status, resp, err := pc.Post(ctx, srvUS.URL, "/sources/rehome-adopt", body, "admin", "human"); err != nil || status != http.StatusAccepted {
+			t.Fatalf("adopt: status=%d err=%v resp=%s", status, err, string(resp))
+		}
+		if _, err := storeEU.CompleteRehome(ctx, "vc-move"); err != nil {
+			t.Fatal(err)
+		}
+
+		// The US supervisor's next poll sees the local home flip to US → activates.
+		deadline := time.Now().Add(2 * time.Second)
+		for atomic.LoadInt32(&activated) == 0 && time.Now().Before(deadline) {
+			time.Sleep(10 * time.Millisecond)
+		}
+		if atomic.LoadInt32(&activated) != 1 {
+			t.Fatal("US Connector must AUTO-ACTIVATE after the re-home (no manual redeploy)")
 		}
 	})
 
