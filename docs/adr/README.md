@@ -54,3 +54,4 @@ Status is `Accepted` unless noted. See **[../roadmap.md](../roadmap.md)** for ho
 | [0043](0043-cert-renewal-finding-gc.md) | Cert-renewal Finding-GC (resolve Findings for tombstoned Entities) | Accepted |
 | [0044](0044-control-plane-cells.md) | Control-plane Cells / multi-region (partitioned single-writer, one logical estate) | Accepted |
 | [0045](0045-db-driven-syncer-home-gate.md) | DB-driven Syncer instantiation & Connector home-ownership gate (full re-home auto-cutover) | Proposed |
+| [0046](0046-stratt-as-substrate.md) | Stratt as Substrate: the dark-matter re-centering and the sovereign device port | Proposed |
