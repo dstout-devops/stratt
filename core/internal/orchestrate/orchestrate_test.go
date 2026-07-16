@@ -9,6 +9,29 @@ import (
 	"github.com/dstout-devops/stratt/core/internal/dispatch"
 )
 
+// TestSiteReachableFromCell pins the slice-6 Site→Cell binding decision: a Site
+// is reachable only from its own Cell (its dispatch queue lives on that Cell's
+// NATS); an unset Site cell is co-located; a single-Cell 'local' estate treats
+// every Site as reachable (no-op).
+func TestSiteReachableFromCell(t *testing.T) {
+	cases := []struct {
+		siteCell, daemonCell string
+		want                 bool
+	}{
+		{"", "local", true},    // unset Site, local daemon — co-located
+		{"", "eu", true},       // unset Site, named daemon — co-located
+		{"eu", "eu", true},     // same Cell — reachable
+		{"eu", "us", false},    // peer Cell — its queue is on another NATS
+		{"eu", "local", false}, // named Site, local daemon — unreachable
+		{"local", "eu", false}, // explicit 'local' Site, eu daemon — unreachable
+	}
+	for _, c := range cases {
+		if got := siteReachableFromCell(c.siteCell, c.daemonCell); got != c.want {
+			t.Errorf("siteReachableFromCell(%q,%q)=%v want %v", c.siteCell, c.daemonCell, got, c.want)
+		}
+	}
+}
+
 func mkTargets(n int) []actuators.Target {
 	out := make([]actuators.Target, n)
 	for i := range out {

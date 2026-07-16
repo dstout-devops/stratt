@@ -61,11 +61,30 @@ func run(log *slog.Logger) error {
 	}
 	mode := env("STRATT_AGENT_MODE", types.SiteModePush)
 	url := env("STRATT_NATS_URL", "nats://localhost:4222")
-	log = log.With("site", site, "mode", mode)
+
+	// Cell binding (ADR-0044 slice 6): this Site belongs to a Cell, and its
+	// dispatch/result/event subjects are Cell-scoped. The agent has no database,
+	// so it derives the SAME scope token the hub does from shared env
+	// (STRATT_CELL_ID, defaulting to LocalCell, plus the STRATT_CELL_DISPATCH_PREFIX
+	// override) — set it must match this Site's home Cell, or the agent
+	// subscribes to a dispatch subject the hub never publishes to. LocalCell
+	// keeps every subject byte-identical to the pre-Cells agent.
+	cellID := env("STRATT_CELL_ID", types.LocalCell)
+	scopeTok := types.CellScopeToken(cellID, os.Getenv("STRATT_CELL_DISPATCH_PREFIX"))
+	if !types.ValidCellScopeToken(scopeTok) {
+		return fmt.Errorf("NATS scope token %q (from STRATT_CELL_ID=%q / STRATT_CELL_DISPATCH_PREFIX) is not NATS-safe: use lower-case alphanumeric + '-', no '.'/'*'/'>'", scopeTok, cellID)
+	}
+	siteproto.SetScope(scopeTok)
+	// Log the RESOLVED token, not just the Cell id: the agent has no CaC to
+	// reconcile against the hub's, so an operator diagnosing a "dead Site" that
+	// is really a hub/agent scope mismatch compares the two ends' natsScope logs
+	// directly (charter-guardian slice-6 flag #2).
+	log = log.With("site", site, "mode", mode, "cell", cellID, "natsScope", scopeTok)
 
 	// Local event bus: the dispatcher publishes run events here; the leaf
-	// forwards stratt.run.> to the hub's stream, so the hub reads them unchanged.
-	bus, err := events.Connect(ctx, url)
+	// forwards the (Cell-scoped) stratt.<cell>.run.> subjects to the hub's
+	// stream, so the hub reads them unchanged.
+	bus, err := events.Connect(ctx, url, scopeTok)
 	if err != nil {
 		return fmt.Errorf("events: %w", err)
 	}

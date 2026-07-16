@@ -58,6 +58,21 @@ temporal:
   address: "temporal-frontend:7233"
   namespace: "default"
 
+# ── control-plane Cell (ADR-0044) ───────────────────────────────────────────
+# Multi-region: leave id "" for the built-in single-Cell "local" (today's
+# deployment, byte-identical). Set id to this Cell's name to scope the leader
+# lease, Temporal namespace/queue, and every NATS stream/subject (slice 6) so
+# peer Cells sharing substrate never collide. dispatchPrefix optionally
+# overrides the NATS scope token (must equal graph.cell.dispatch_prefix, or the
+# daemon loud-fails at boot). EVERY Site agent in this Cell must carry the same
+# id/dispatchPrefix. secretName references a fleet-wide Secret holding the
+# cross-Cell HMAC key (STRATT_CELL_SECRET, slice 4).
+cell:
+  id: ""
+  dispatchPrefix: ""
+  secretName: ""
+  secretKey: "cell-secret"
+
 # ── identity + authorization (ADR-0009) ─────────────────────────────────────
 oidc:
   issuer: ""

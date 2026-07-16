@@ -15,30 +15,67 @@ import (
 
 	"github.com/dstout-devops/stratt/core/internal/actuators"
 	"github.com/dstout-devops/stratt/core/internal/dispatch"
+	"github.com/dstout-devops/stratt/types"
 )
 
-// JetStream stream / KV names (mirrors events.go's STRATT_* naming).
+// Base JetStream stream / KV names and subject roots (mirrors events.go's
+// STRATT_* naming). A named Cell scopes every one of them so peer Cells sharing
+// a NATS cluster never cross-wire each other's dispatch plane (ADR-0044 slice
+// 6); the built-in LocalCell (scope "") keeps them byte-identical.
 const (
+	baseDispatchStream   = "STRATT_DISPATCH"
+	baseResultStream     = "STRATT_DISPATCH_RESULT"
+	baseLivenessBucket   = "SITE_LIVENESS"
+	baseDispatchSubjRoot = "stratt.dispatch"
+	baseResultSubjRoot   = "stratt.dispatchresult"
+)
+
+// The Cell-scoped names, derived once by SetScope at boot. They are package
+// vars (mirroring orchestrate.TaskQueue) because siteproto's pure subject
+// functions are shared verbatim by the hub (strattd) and the agent
+// (stratt-agent): both call SetScope with the SAME token so they always agree.
+var (
 	// DispatchStream is a work-queue stream of hub→Site dispatch requests;
 	// per-Site durable pull consumers drain it (store-and-forward + redelivery).
-	DispatchStream = "STRATT_DISPATCH"
+	DispatchStream = baseDispatchStream
 	// ResultStream carries Site→hub terminal results, correlated by (runID, slice).
-	ResultStream = "STRATT_DISPATCH_RESULT"
+	ResultStream = baseResultStream
 	// LivenessBucket is a TTL'd KV of agent heartbeats so the hub fails a
 	// dead-Site branch fast instead of eating activity timeouts.
-	LivenessBucket = "SITE_LIVENESS"
+	LivenessBucket = baseLivenessBucket
+	// DispatchSubjectPrefix roots every hub→Site dispatch subject.
+	DispatchSubjectPrefix = baseDispatchSubjRoot
+	// resultSubjectPrefix roots every Site→hub result subject.
+	resultSubjectPrefix = baseResultSubjRoot
+	// DispatchStreamSubjects is what the work-queue stream binds: every per-Site
+	// dispatch subject, but NOT the 4-token cancel subjects (those are ephemeral
+	// core-NATS signals, never queued work).
+	DispatchStreamSubjects = baseDispatchSubjRoot + ".*"
+	// ResultStreamSubjects is what the result stream binds.
+	ResultStreamSubjects = baseResultSubjRoot + ".>"
 )
 
-// DispatchSubjectPrefix roots every hub→Site dispatch subject.
-const DispatchSubjectPrefix = "stratt.dispatch"
+// SetScope Cell-scopes every stream/KV name and subject root for this daemon's
+// Cell (ADR-0044 slice 6). Both strattd and stratt-agent MUST call it once at
+// boot with types.CellScopeToken(cellID, override) — the identical token — or
+// hub and agent publish/subscribe on different subjects and silently talk past
+// each other. scope "" (LocalCell) is a no-op: every name stays byte-identical
+// to the pre-Cells control plane.
+func SetScope(scope string) {
+	DispatchStream = types.ScopedStream(baseDispatchStream, scope)
+	ResultStream = types.ScopedStream(baseResultStream, scope)
+	LivenessBucket = types.ScopedStream(baseLivenessBucket, scope)
+	// ScopedSubjectRoot inserts the token as the second subject token
+	// ("stratt.dispatch" → "stratt.<tok>.dispatch"), so the bare roots scope
+	// without any trailing-dot juggling.
+	DispatchSubjectPrefix = types.ScopedSubjectRoot(baseDispatchSubjRoot, scope)
+	resultSubjectPrefix = types.ScopedSubjectRoot(baseResultSubjRoot, scope)
+	DispatchStreamSubjects = DispatchSubjectPrefix + ".*"
+	ResultStreamSubjects = resultSubjectPrefix + ".>"
+}
 
-// DispatchSubject is the work subject for one Site (3 tokens).
+// DispatchSubject is the work subject for one Site (3 tokens under the root).
 func DispatchSubject(site string) string { return DispatchSubjectPrefix + "." + site }
-
-// DispatchStreamSubjects is what the work-queue stream binds: every per-Site
-// dispatch subject, but NOT the 4-token cancel subjects (those are ephemeral
-// core-NATS signals, never queued work).
-const DispatchStreamSubjects = DispatchSubjectPrefix + ".*"
 
 // CancelSubject is the ephemeral hub→Site cancellation signal for a Run (4
 // tokens, so it never matches DispatchStreamSubjects).
@@ -46,11 +83,8 @@ func CancelSubject(site string) string { return DispatchSubjectPrefix + ".cancel
 
 // ResultSubject correlates a terminal result to its dispatched slice.
 func ResultSubject(runID string, slice int) string {
-	return fmt.Sprintf("stratt.dispatchresult.%s.%d", runID, slice)
+	return fmt.Sprintf("%s.%s.%d", resultSubjectPrefix, runID, slice)
 }
-
-// ResultStreamSubjects is what the result stream binds.
-const ResultStreamSubjects = "stratt.dispatchresult.>"
 
 // DispatchRequest is one hub→Site work item: a prepared, RemoteSafe JobSpec
 // plus credential POINTERS to run one slice of a Run at a remote Site. The

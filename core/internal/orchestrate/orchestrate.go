@@ -431,11 +431,45 @@ func (a *Activities) ResolveTargetsBySite(ctx context.Context, in RunInput) (Rou
 		names = append(names, s)
 	}
 	sort.Strings(names)
+	// Site→Cell binding (ADR-0044 slice 6): a Site's dispatch work-queue lives on
+	// its Cell's NATS, so this daemon can only reach Sites homed to its OWN Cell.
+	// A target routed to a Site homed elsewhere is a loud, terminal misroute —
+	// never a silently-dropped or wrongly-dispatched slice (§1.8). Cross-Cell
+	// targets are handled by RunAcrossCells scatter (slice 5), which re-resolves
+	// the View per Cell so a child Run only ever sees its own Cell's Sites; this
+	// check is the enforced invariant behind that assumption. LocalSite is the
+	// daemon's in-Cell central locus and is always reachable.
+	daemonCell := a.Store.Cell()
+	for _, s := range names {
+		if s == types.LocalSite {
+			continue
+		}
+		st, err := a.Store.GetSite(ctx, s)
+		if err != nil {
+			return RoutedTargets{}, fmt.Errorf("orchestrate: resolve site %q for cell check: %w", s, err)
+		}
+		if !siteReachableFromCell(st.Cell, daemonCell) {
+			return RoutedTargets{}, temporal.NewNonRetryableApplicationError(
+				fmt.Sprintf("site %q is homed to cell %q but this Run runs in cell %q; its dispatch queue lives on another Cell's NATS and is unreachable here (ADR-0044 slice 6)", s, st.Cell, daemonCell),
+				"SiteCellMisroute", nil)
+		}
+	}
 	out := RoutedTargets{ViewVersion: v.Version}
 	for _, s := range names {
 		out.Groups = append(out.Groups, SiteGroup{Site: s, Targets: bySite[s]})
 	}
 	return out, nil
+}
+
+// siteReachableFromCell reports whether a Site homed to siteCell can be reached
+// from a daemon running in daemonCell (ADR-0044 slice 6). A Site's dispatch
+// work-queue lives on its Cell's NATS, so only same-Cell Sites are reachable. An
+// unset Site cell means co-located with whichever Cell declares it (reachable);
+// the daemon's own Cell is reachable; any other named Cell is not — its queue is
+// on another Cell's NATS. For a single-Cell 'local' estate every Site is
+// reachable (all cells are "" or "local"), so this is a no-op there.
+func siteReachableFromCell(siteCell, daemonCell string) bool {
+	return siteCell == "" || siteCell == daemonCell
 }
 
 // MarkRunning transitions the Run summary to running.

@@ -14,9 +14,10 @@ import (
 )
 
 const (
-	// EmitterStreamName holds ingested Emitter events (ADR-0018) — a
+	// EmitterStreamName is the base emitter-event stream name (ADR-0018) — a
 	// separate stream from Run task events: different producers, different
-	// consumers, different retention pressure.
+	// consumers, different retention pressure. Cell-scoped like the Run stream
+	// (ADR-0044 slice 6).
 	EmitterStreamName = "STRATT_EMITTER_EVENTS"
 	emitterSubject    = "stratt.emitter."
 )
@@ -24,8 +25,8 @@ const (
 // EnsureEmitterStream creates the emitter event stream (idempotent).
 func (b *Bus) EnsureEmitterStream(ctx context.Context) error {
 	_, err := b.js.CreateOrUpdateStream(ctx, jetstream.StreamConfig{
-		Name:     EmitterStreamName,
-		Subjects: []string{emitterSubject + ">"},
+		Name:     b.emitterStream,
+		Subjects: []string{b.emitterSubj + ">"},
 		Storage:  jetstream.FileStorage,
 		MaxAge:   7 * 24 * time.Hour,
 	})
@@ -53,7 +54,7 @@ func (b *Bus) PublishEmitterEvent(ctx context.Context, ev types.EmitterEvent) er
 	if err != nil {
 		return fmt.Errorf("events: marshal emitter event: %w", err)
 	}
-	if _, err := b.js.Publish(ctx, emitterSubject+ev.Emitter, payload,
+	if _, err := b.js.Publish(ctx, b.emitterSubj+ev.Emitter, payload,
 		jetstream.WithMsgID(EventHash(ev))); err != nil {
 		return fmt.Errorf("events: publish emitter event: %w", err)
 	}
@@ -65,7 +66,7 @@ func (b *Bus) PublishEmitterEvent(ctx context.Context, ev types.EmitterEvent) er
 // Temporal workflow ids from the event hash so redelivery cannot
 // double-launch). fn returning nil acks; an error naks for redelivery.
 func (b *Bus) ConsumeEmitterEvents(ctx context.Context, durable string, fn func(types.EmitterEvent) error) error {
-	cons, err := b.js.CreateOrUpdateConsumer(ctx, EmitterStreamName, jetstream.ConsumerConfig{
+	cons, err := b.js.CreateOrUpdateConsumer(ctx, b.emitterStream, jetstream.ConsumerConfig{
 		Durable:       durable,
 		AckPolicy:     jetstream.AckExplicitPolicy,
 		DeliverPolicy: jetstream.DeliverNewPolicy,

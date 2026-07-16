@@ -78,6 +78,26 @@ spec:
             - name: STRATT_NATS_URL
               value: {{ .Values.nats.url | quote }}
             {{- end }}
+            {{- if .Values.cell.id }}
+            # Control-plane Cell identity (ADR-0044). Scopes the leader lease,
+            # Temporal namespace/queue, and — slice 6 — every NATS stream/subject
+            # so peer Cells sharing substrate never cross-wire. Unset ⇒ the
+            # built-in single-Cell "local" (byte-identical to a pre-Cells deploy).
+            # Every Site agent in this Cell MUST carry the identical values.
+            - name: STRATT_CELL_ID
+              value: {{ .Values.cell.id | quote }}
+            {{- if .Values.cell.dispatchPrefix }}
+            - name: STRATT_CELL_DISPATCH_PREFIX
+              value: {{ .Values.cell.dispatchPrefix | quote }}
+            {{- end }}
+            {{- if .Values.cell.secretName }}
+            - name: STRATT_CELL_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.cell.secretName }}
+                  key: {{ .Values.cell.secretKey | default "cell-secret" }}
+            {{- end }}
+            {{- end }}
             - name: STRATT_TEMPORAL_ADDRESS
               value: {{ .Values.temporal.address | quote }}
             - name: STRATT_TEMPORAL_NAMESPACE

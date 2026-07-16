@@ -203,6 +203,57 @@ symmetric-secret + no-nonce residuals carry forward.
 Single-Cell 'local' stays a byte-identical no-op: `len(peers)==0` runs `RunAgainstView` (never `RunAcrossCells`),
 no HMAC-body path, no `run.cells` write, `partial` never arises, writes are always local.
 
+## Slice-6 refinements (accepted 2026-07-16)
+
+Slice 6 is cross-Cell EXECUTION wiring: the NATS dispatch/event plane is Cell-scoped end to end
+(slice 1 deferred subject scoping to "where a second Cell consumes it"), and a Site is bound to its
+Cell so a Run dispatches only to Sites it can actually reach. Steward-approved:
+
+1. **One env-derived scope token, reconciled against CaC — not a DB read (the load-bearing choice).**
+   A Site's `stratt-agent` has NO database, so the runtime NATS scope can only come from config both
+   ends share. Hub and agent each derive the IDENTICAL token from env —
+   `types.CellScopeToken(STRATT_CELL_ID, STRATT_CELL_DISPATCH_PREFIX)` — so they always exchange on
+   the same subjects; a mismatch would make them silently talk past each other. `graph.cell.dispatch_
+   prefix` (CaC) stays authoritative as *desired* state: the hub **loud-fails at boot** if its env-
+   derived token ≠ its Cell's declared `DispatchPrefix` (`reconcileDispatchScope`, run from the same
+   in-memory CaC decls as the slice-4 authz-home gate, before serving). This is §2.4 exactly-one-
+   answer applied to deployment config — env is the runtime input, CaC the declaration, and a
+   divergence is surfaced, never resolved by silent precedence. Rejected: reading `dispatch_prefix`
+   from the DB at boot (the agent can't, so the two ends could still diverge) and dropping the CaC
+   column to "informational" (a second, unenforced truth).
+2. **Every NATS name is Cell-scoped, gated on `scope != ""` (LocalCell byte-identical).** Streams/KV
+   suffix `_<CELL>` (`STRATT_RUN_EVENTS_<cell>`, `STRATT_DISPATCH_<cell>`, `SITE_LIVENESS_<cell>`,
+   emitter + notice); subjects insert the token as the second subject token (`stratt.<cell>.run.>`,
+   `stratt.<cell>.dispatch.*`, `stratt.<cell>.dispatchresult.>`). The derivation lives once in
+   `types` (`ScopedStream`/`ScopedSubjectRoot`); `events.Bus` scopes its three streams at Connect,
+   `siteproto.SetScope` scopes the dispatch plane's package-global names (mirror of
+   `orchestrate.TaskQueue`) so its pure subject functions stay shared verbatim by hub and agent. A
+   single-Cell 'local' estate keeps every stream/subject byte-identical to the pre-Cells plane.
+3. **Site→Cell binding = a loud, terminal misroute (§1.8), enforced not assumed.** A Site's dispatch
+   work-queue lives on its Cell's NATS, so a daemon can only reach Sites homed to its own Cell.
+   `ResolveTargetsBySite` now rejects any target routed to a Site homed elsewhere
+   (`SiteCellMisroute`, non-retryable) rather than silently dropping or mis-dispatching it. This is
+   the enforced invariant *behind* the slice-5 scatter: `RunAcrossCells` re-resolves the View per
+   Cell so each child Run only ever sees its own Cell's home entities (and thus its own Cell's
+   Sites); the check makes that a guarantee, not a hope. `LocalSite` is the daemon's in-Cell central
+   locus and is always reachable; an unset Site cell is co-located.
+4. **The NATS leaf topology needs no subject-filter change.** A remote Site's NATS runs as a
+   leaf borrowing the hub's JetStream account and forwards the whole account subject-agnostically, so
+   a named Cell's scoped subjects forward with zero config change — the agent and hub only need the
+   same `STRATT_CELL_ID`. (The site-local-JetStream-domain case remains the ADR-0032 deferral.)
+
+**Honest deferrals (slice 6):** the Helm chart now templates `STRATT_CELL_ID`/
+`STRATT_CELL_DISPATCH_PREFIX`/`STRATT_CELL_SECRET` from a `cell:` values block for the hub; a
+per-Cell agent chart (agents are still the ADR-0032 dev manifest) and the full multi-Cell deploy
+harness are slice-7 deploy/runbook. Per-Site NATS credentials at the leaf (dev is leaf-open) remain
+the ADR-0032 production hardening. The cross-Cell event-stream tail is still answered by federating
+at the API layer (slice 5), never by a cross-Cell NATS consumer (§1.4 — no widening the work-queue
+across Cells).
+
+Single-Cell 'local' stays a byte-identical no-op throughout: scope "" leaves every stream/subject/KV
+name unchanged, `reconcileDispatchScope` has no declared Cell to reconcile, and every Site is
+reachable.
+
 ## Decision (the complete architecture)
 
 **Partitioned region-local single-writer Cells presenting ONE logical estate.** Not multi-master.
@@ -269,7 +320,8 @@ no HMAC-body path, no `run.cells` write, `partial` never arises, writes are alwa
    (§1.2). All shared-name stamping is **gated on `cell != "local"`** so today's single-Cell deployment is
    byte-identical (namespace `default`, queue `stratt-runs`, lease `strattd-leader`, unprefixed subjects). The
    slice sequence below is the authority on *what lands when* (provenance + lease + Temporal namespace/queue in
-   slice 1; NATS-subject scoping in slice 6 where a second Cell consumes it).
+   slice 1; NATS-subject scoping in slice 6 where a second Cell consumes it — **landed**, via a single
+   env-derived scope token shared by hub and agent and reconciled loud against CaC `dispatch_prefix`).
 10. **Substrate HA/DR is deploy/runbook** (per-Cell in-region quorum HA + async cross-region DR replica /
     Temporal XDC / NATS mirror / object CRR — endpoints are already env strings). Cell failover promotes a
     Cell's DR replica set — a *within-Cell* DR event, bounded blast radius (the cell doctrine), human-authorized
@@ -300,7 +352,10 @@ cannot split-brain.
    refinements — not the naïve central `ResolveTargetsByCell` partition, which is blind to peer-homed targets) +
    child-Run fan-out to peer control APIs + `graph.run.cells` union + the `partial` RunStatus + write
    home-forwarding (cancel/gate) + `/runs/{id}` descent federation.
-6. **Cross-cell execution wiring:** Cell-scoped NATS fully cut over; Site→Cell binding; the hop hierarchy e2e.
+6. **Cross-cell execution wiring (landed 2026-07-16):** Cell-scoped NATS fully cut over (run-event,
+   emitter, notice, dispatch, result streams + subjects + liveness KV, all gated on `scope != ""`);
+   env-derived scope token reconciled loud against CaC `dispatch_prefix`; Site→Cell binding
+   (`SiteCellMisroute`); hub + agent scope from one shared env derivation — see slice-6 refinements.
 7. **Per-Cell DR + fenced re-home GA + failover drill** (mostly deploy/runbook); 99.99% multi-region evidence.
 
 ## Charter reconciliation
@@ -338,6 +393,20 @@ cannot split-brain.
 - **vocabulary-linter:** Cell used consistently as a Named Kind; `graph.cell`/`prov_cell`/`mgmt.cell` clean;
   no banned term.
 - **No dependency-scout** — zero new dependencies.
+- **Slice-6 charter-guardian:** direction **SOUND**, no must-fixes — §2.4 env-vs-CaC reconcile is genuinely
+  no-silent-precedence (loud boot-fail, not a winner-pick), §1.8 misroute + reconcile failures are loud and
+  terminal, §1.2 `dispatch_prefix` is a validated CaC declaration not a second truth, §1.4 pure-string scoping
+  (zero deps, leaf forwards subject-agnostically — no cross-Cell work-queue widening), §1.3 all in Apache
+  `core/`+`types/`+`deploy/charts`. Its should-fix flags actioned: **#1** a NATS-safe charset gate on the scope
+  token (`types.ValidCellScopeToken`) now loud-fails at CaC compile (`ValidateCell`) AND at boot in both mains
+  before any stream is created — a stray `.`/wildcard can no longer silently reshape the subject topology;
+  **#2** `stratt-agent` now logs the resolved `natsScope` so a hub/agent scope mismatch is diagnosable directly.
+  Flag #3 (an inert orphan stream if the *env-vs-CaC* reconcile fails after streams are created) is left as an
+  operational note — it requires a genuine misconfig fix regardless, and the charset gate pre-empts the common
+  typo case before any stream exists.
+- **Slice-6 vocabulary-linter:** CLEAN — `CellScopeToken`/`ScopedStream`/`SetScope`/`SiteCellMisroute`/
+  `graph.cell.dispatch_prefix` and the `stratt.<cell>.*` subjects all use Cell as the frozen Named Kind (Cell
+  is the control-plane shard, Site the execution locus — never blurred); no banned term.
 
 ## Consequences
 

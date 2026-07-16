@@ -81,3 +81,40 @@ func TestIsAuthzHome(t *testing.T) {
 		t.Fatal("'local' in a named fleet must loud-fail")
 	}
 }
+
+// TestReconcileDispatchScope proves the slice-6 boot gate (§2.4 exactly-one-
+// answer): the daemon's env-derived NATS scope MUST match its Cell's CaC-
+// declared DispatchPrefix, else the hub and its DB-less Site agents would scope
+// differently — the daemon refuses to boot rather than serve on subjects the
+// agents can't find.
+func TestReconcileDispatchScope(t *testing.T) {
+	fleet := []types.Cell{
+		{Name: "eu", DispatchPrefix: ""},    // declared prefix defaults to the name "eu"
+		{Name: "us", DispatchPrefix: "usx"}, // explicit override
+	}
+
+	// Effective scope derived the way main does: CellScopeToken(cellID, envOverride).
+	effective := func(cellID, envOverride string) string { return types.CellScopeToken(cellID, envOverride) }
+
+	// eu with no env override → effective "eu" == declared "eu": OK.
+	if err := reconcileDispatchScope("eu", effective("eu", ""), fleet); err != nil {
+		t.Fatalf("matching default scope must reconcile: %v", err)
+	}
+	// us with env override "usx" → effective "usx" == declared "usx": OK.
+	if err := reconcileDispatchScope("us", effective("us", "usx"), fleet); err != nil {
+		t.Fatalf("matching override scope must reconcile: %v", err)
+	}
+	// eu with a stray env override "wrong" → effective "wrong" != declared "eu": loud-fail.
+	if err := reconcileDispatchScope("eu", effective("eu", "wrong"), fleet); err == nil {
+		t.Fatal("env/CaC scope divergence must loud-fail")
+	}
+	// us WITHOUT the override env → effective "us" != declared "usx": loud-fail
+	// (the operator forgot to set STRATT_CELL_DISPATCH_PREFIX).
+	if err := reconcileDispatchScope("us", effective("us", ""), fleet); err == nil {
+		t.Fatal("a declared DispatchPrefix the env omits must loud-fail")
+	}
+	// A Cell absent from the declared fleet has no DispatchPrefix to reconcile.
+	if err := reconcileDispatchScope("ap", effective("ap", ""), fleet); err != nil {
+		t.Fatalf("an undeclared Cell must not loud-fail: %v", err)
+	}
+}

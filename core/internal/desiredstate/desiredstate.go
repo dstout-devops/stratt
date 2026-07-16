@@ -733,6 +733,16 @@ func ValidateCell(c types.Cell) error {
 	if c.Name == types.LocalCell {
 		return fmt.Errorf("cell name %q is reserved for the built-in single-Cell default", types.LocalCell)
 	}
+	// The Cell name and any DispatchPrefix become NATS subject tokens + JetStream
+	// stream names (ADR-0044 slice 6) and the Temporal namespace/queue + leader
+	// lease (slice 1); a '.' or wildcard would silently reshape the NATS topology.
+	// Reject them at compile — the highest, earliest gate.
+	if !types.ValidCellScopeToken(c.Name) {
+		return fmt.Errorf("cell %s: name must be NATS-safe (lower-case alphanumeric + '-', no '.'/'*'/'>')", c.Name)
+	}
+	if !types.ValidCellScopeToken(c.DispatchPrefix) {
+		return fmt.Errorf("cell %s: dispatchPrefix %q must be NATS-safe (lower-case alphanumeric + '-', no '.'/'*'/'>')", c.Name, c.DispatchPrefix)
+	}
 	if c.Region == "" {
 		return fmt.Errorf("cell %s: region is required", c.Name)
 	}

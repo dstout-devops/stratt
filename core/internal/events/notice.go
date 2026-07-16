@@ -25,8 +25,8 @@ const (
 // EnsureNoticeStream creates the notice stream (idempotent).
 func (b *Bus) EnsureNoticeStream(ctx context.Context) error {
 	_, err := b.js.CreateOrUpdateStream(ctx, jetstream.StreamConfig{
-		Name:     NoticeStreamName,
-		Subjects: []string{noticeSubject + ">"},
+		Name:     b.noticeStream,
+		Subjects: []string{b.noticeSubj + ">"},
 		Storage:  jetstream.FileStorage,
 		MaxAge:   7 * 24 * time.Hour,
 	})
@@ -61,7 +61,7 @@ func (b *Bus) PublishNotice(ctx context.Context, n types.Notice) error {
 	if err != nil {
 		return fmt.Errorf("events: marshal notice: %w", err)
 	}
-	if _, err := b.js.Publish(ctx, noticeSubject+n.Kind, payload,
+	if _, err := b.js.Publish(ctx, b.noticeSubj+n.Kind, payload,
 		jetstream.WithMsgID(NoticeHash(n))); err != nil {
 		return fmt.Errorf("events: publish notice: %w", err)
 	}
@@ -72,7 +72,7 @@ func (b *Bus) PublishNotice(ctx context.Context, n types.Notice) error {
 // (at-least-once; the notifier's deliveries tolerate rare duplicates —
 // ADR-0027). fn returning nil acks; an error naks for redelivery.
 func (b *Bus) ConsumeNotices(ctx context.Context, durable string, fn func(types.Notice) error) error {
-	cons, err := b.js.CreateOrUpdateConsumer(ctx, NoticeStreamName, jetstream.ConsumerConfig{
+	cons, err := b.js.CreateOrUpdateConsumer(ctx, b.noticeStream, jetstream.ConsumerConfig{
 		Durable:       durable,
 		AckPolicy:     jetstream.AckExplicitPolicy,
 		DeliverPolicy: jetstream.DeliverNewPolicy,

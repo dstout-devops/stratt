@@ -114,6 +114,32 @@ func isAuthzHome(cellID string, cells []types.Cell) (bool, error) {
 	return false, nil // this Cell isn't in the declared fleet → never authz-home
 }
 
+// reconcileDispatchScope loud-fails when this daemon's effective NATS scope
+// token (env-derived — the ONLY source the DB-less Site agents can share) does
+// not match its Cell's CaC-declared DispatchPrefix (ADR-0044 slice 6). The
+// declared prefix is desired state; the deployed env is the runtime input; a
+// divergence is neither silently resolved by precedence nor tolerated (§2.4
+// exactly-one-answer) — it means the hub and its agents would scope differently,
+// so the daemon refuses to boot rather than serve on subjects the agents can't
+// find. A Cell absent from the declared fleet has no DispatchPrefix to reconcile
+// (the env token stands alone); 'local' in a named fleet already loud-fails in
+// isAuthzHome.
+func reconcileDispatchScope(cellID, effective string, cells []types.Cell) error {
+	for _, c := range cells {
+		if c.Name != cellID {
+			continue
+		}
+		declared := types.CellScopeToken(cellID, c.DispatchPrefix)
+		if declared != effective {
+			return fmt.Errorf(
+				"NATS dispatch scope mismatch for Cell %q: effective %q (from STRATT_CELL_ID / STRATT_CELL_DISPATCH_PREFIX) != CaC-declared %q (graph.cell.dispatch_prefix); the hub and its Site agents must scope identically — align the env with the declaration",
+				cellID, effective, declared)
+		}
+		return nil
+	}
+	return nil
+}
+
 // splitNonEmpty splits a comma-separated env value into trimmed, non-empty
 // entries (e.g. STRATT_SALT_EVENT_TAGS="salt/minion/,salt/job/").
 func splitNonEmpty(s string) []string {
@@ -145,11 +171,23 @@ func run(ctx context.Context, log *slog.Logger) error {
 	// NATS-subject scoping are later ADR-0044 slices.)
 	cellID := env("STRATT_CELL_ID", types.LocalCell)
 	store.SetCell(cellID)
+	// scopeTok is the Cell's NATS subject/stream scope token — the ONE string
+	// the hub and every Site agent derive identically from shared env so the two
+	// ends exchange on the same subjects (ADR-0044 slice 6). "" for LocalCell
+	// keeps every NATS name byte-identical; a named Cell scopes the run-event,
+	// emitter, notice, dispatch, and result planes so peers sharing a NATS
+	// cluster never cross-wire. STRATT_CELL_DISPATCH_PREFIX overrides the default
+	// (the Cell name); reconciled against the CaC-declared DispatchPrefix below.
+	scopeTok := types.CellScopeToken(cellID, os.Getenv("STRATT_CELL_DISPATCH_PREFIX"))
+	if !types.ValidCellScopeToken(scopeTok) {
+		return fmt.Errorf("NATS scope token %q (from STRATT_CELL_ID=%q / STRATT_CELL_DISPATCH_PREFIX) is not NATS-safe: use lower-case alphanumeric + '-', no '.'/'*'/'>'", scopeTok, cellID)
+	}
+	siteproto.SetScope(scopeTok)
 	temporalNamespaceDefault := "default"
 	if cellID != types.LocalCell {
 		orchestrate.TaskQueue = orchestrate.TaskQueue + "-" + cellID
 		temporalNamespaceDefault = "stratt-" + cellID
-		log.Info("control-plane cell", "cell", cellID, "taskQueue", orchestrate.TaskQueue)
+		log.Info("control-plane cell", "cell", cellID, "taskQueue", orchestrate.TaskQueue, "natsScope", scopeTok)
 	}
 
 	// Shared Intent-compile status: the desired-state controller writes each
@@ -180,7 +218,7 @@ func run(ctx context.Context, log *slog.Logger) error {
 	}
 
 	// ── event plane ──────────────────────────────────────────────────────
-	bus, err := events.Connect(ctx, env("STRATT_NATS_URL", "nats://localhost:4222"))
+	bus, err := events.Connect(ctx, env("STRATT_NATS_URL", "nats://localhost:4222"), scopeTok)
 	if err != nil {
 		return err
 	}
@@ -191,7 +229,7 @@ func run(ctx context.Context, log *slog.Logger) error {
 	if err := bus.EnsureNoticeStream(ctx); err != nil {
 		return err
 	}
-	log.Info("event bus ready", "stream", events.StreamName)
+	log.Info("event bus ready", "stream", bus.StreamName())
 
 	// ── Site dispatch plane (§2.3, ADR-0032) ─────────────────────────────
 	// The hub↔Site NATS gateway: the dispatch/result streams + liveness KV
@@ -632,6 +670,15 @@ func run(ctx context.Context, log *slog.Logger) error {
 		}
 		if !authzHome {
 			log.Info("not the authz-home Cell; OpenFGA tuple sync is disabled here (a peer Cell owns it)", "cell", cellID)
+		}
+
+		// Dispatch-scope reconcile (ADR-0044 slice 6): the NATS subject/stream
+		// scope this daemon already applied (env-derived) MUST match its Cell's
+		// CaC-declared DispatchPrefix, or hub and agents scope differently. The
+		// streams are created but the daemon has not yet begun serving, so a
+		// loud-fail here is safe and correct (§2.4).
+		if err := reconcileDispatchScope(cellID, scopeTok, authzDecls.Cells); err != nil {
+			return err
 		}
 
 		// Authz tuples are CaC in the same checkout (§2.5): load now,
