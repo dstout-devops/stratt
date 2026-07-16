@@ -425,6 +425,90 @@ func (h *Host) ownsCred(name string) bool {
 	return strings.HasPrefix(name, "cred/"+h.grant.Source.Name+"/")
 }
 
+// EventPublisher is the seam onto the emitter-event stream (events.Bus satisfies
+// it). The Emitter host publishes the plugin's core-legible `match` projection
+// as a types.EmitterEvent under the GRANT's emitter name.
+type EventPublisher interface {
+	PublishEmitterEvent(ctx context.Context, ev types.EmitterEvent) error
+}
+
+// SubscribeLoop drives an Emitter plugin (ADR-0046/0047, the Emitter verb): it
+// BINDS the emitter name to the authenticated channel identity (the plugin's
+// manifest plugin_id must equal the granted identity — the anti-spoof gate the
+// guardian required), holds a long-lived Subscribe stream (reconnecting with
+// backoff), and publishes each event's core-legible `match` as a
+// types.EmitterEvent under the GRANT's emitter name — NEVER the plugin's
+// subject/type. CEL matches this, never the opaque payload (ADR-0047 §3). No
+// graph write, no Source ownership (§1.2 N/A — events, not entities). Emission
+// is gated by the operator grant of the emitter name; a malformed event is
+// dropped with a visible rejection (§1.8), never silently.
+func (h *Host) SubscribeLoop(ctx context.Context, pub EventPublisher) error {
+	// Bind the emitter name to the channel identity — the Register-equivalent for
+	// the Emitter verb (no Source, but the same identity binding).
+	man, err := h.client.GetManifest(ctx, &pluginv1.GetManifestRequest{})
+	if err != nil {
+		return fmt.Errorf("pluginhost: emitter manifest: %w", err)
+	}
+	if id := man.GetManifest().GetPluginId(); id != h.grant.PluginIdentity {
+		return fmt.Errorf("pluginhost: emitter manifest identity %q != granted identity %q (anti-spoof)", id, h.grant.PluginIdentity)
+	}
+	emitter := h.grant.emitterName()
+	h.log.Info("emitter subscribed", "emitter", emitter)
+
+	backoff := time.Second
+	const maxBackoff = 30 * time.Second
+	for {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		err := h.subscribeOnce(ctx, pub, emitter)
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		h.log.Warn("emitter stream ended; reconnecting", "emitter", emitter, "error", err, "backoff", backoff.String())
+		select {
+		case <-time.After(backoff):
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+		if backoff *= 2; backoff > maxBackoff {
+			backoff = maxBackoff
+		}
+	}
+}
+
+func (h *Host) subscribeOnce(ctx context.Context, pub EventPublisher, emitter string) error {
+	stream, err := h.client.Subscribe(ctx, &pluginv1.SubscribeRequest{})
+	if err != nil {
+		return err
+	}
+	for {
+		resp, err := stream.Recv()
+		if errors.Is(err, io.EOF) {
+			return nil // clean end; the loop reconnects
+		}
+		if err != nil {
+			return err
+		}
+		ev := resp.GetEvent()
+		m := ev.GetMatch()
+		if m == nil {
+			// A malformed event with no legible routing projection is dropped
+			// VISIBLY (§1.8) — the plugin's subject/type never become the route.
+			h.reject("emitter", emitter, "event has no core-legible match projection; dropped")
+			continue
+		}
+		pubEvent := types.EmitterEvent{
+			Emitter:    emitter, // grant-bound; the plugin cannot influence the trigger route
+			ReceivedAt: time.Now().UTC().Format(time.RFC3339Nano),
+			Payload:    m.AsMap(), // the same map[string]any shape CEL already consumes
+		}
+		if err := pub.PublishEmitterEvent(ctx, pubEvent); err != nil {
+			h.reject("emitter", emitter, "publish failed: "+err.Error())
+		}
+	}
+}
+
 // toUpsert gates one ObservedEntity into a graph.EntityUpsert: it drops every
 // identity scheme / label key / facet namespace outside the grant (recording a
 // Rejection), and requires at least one granted identity key. Facet VALUES stay

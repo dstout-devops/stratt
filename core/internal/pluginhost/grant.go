@@ -47,6 +47,20 @@ type Grant struct {
 	// TombstoneSchemes are the identity schemes the host tombstones by on a
 	// full-sync boundary (ADR-0042). Must be a subset of IdentitySchemes.
 	TombstoneSchemes []string
+	// EmitterName is the operator-declared emitter name this plugin may publish
+	// under (ADR-0046/0047). It is BOUND to the authenticated channel identity —
+	// the Trigger engine routes on it, so it must never be a free-form value the
+	// untrusted plugin process can influence (guardian: anti-spoof). Empty falls
+	// back to the Source name.
+	EmitterName string
+}
+
+// emitterName is the grant-bound name the host publishes emitter events under.
+func (g Grant) emitterName() string {
+	if g.EmitterName != "" {
+		return g.EmitterName
+	}
+	return g.Source.Name
 }
 
 // WriterRef is this plugin's Syncer writer identity for Provenance and the

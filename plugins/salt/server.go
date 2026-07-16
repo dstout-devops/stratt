@@ -28,6 +28,8 @@ type Config struct {
 	Username string
 	Password string
 	Eauth    string
+	// EventTags is the Emitter's tag-prefix allowlist (empty = forward all).
+	EventTags []string
 }
 
 func (c Config) eauth() string {
@@ -58,7 +60,7 @@ func (s *Server) GetManifest(context.Context, *pluginv1.GetManifestRequest) (*pl
 		PluginId:        s.cfg.PluginID,
 		ProtocolVersion: "v1",
 		Class:           pluginv1.PluginClass_PLUGIN_CLASS_SYNCER,
-		Verbs:           []pluginv1.Verb{pluginv1.Verb_VERB_OBSERVE},
+		Verbs:           []pluginv1.Verb{pluginv1.Verb_VERB_OBSERVE, pluginv1.Verb_VERB_EMIT},
 		Contracts: []*pluginv1.ContractDecl{
 			{SchemaId: "salt.node.identity"},
 			{SchemaId: "salt.node.os"},

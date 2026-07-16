@@ -15,6 +15,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/test/bufconn"
+	"google.golang.org/protobuf/types/known/structpb"
 
 	"github.com/dstout-devops/stratt/core/internal/graph"
 	"github.com/dstout-devops/stratt/core/internal/pluginhost"
@@ -73,6 +74,7 @@ type fakePlugin struct {
 	invokeOutputs          []byte
 	invokeCreds            []string
 	invokeOutputContractID string
+	subscribeEvents        []*pluginv1.EmittedEvent
 	// delta-cursor knobs: on an empty-cursor (full) Observe, NextCursor=nextCursor;
 	// on a cursored (delta) Observe, emit deltaGone + NextCursor=deltaCursor.
 	nextCursor  string
@@ -122,6 +124,24 @@ func (f *fakePlugin) Invoke(_ *pluginv1.InvokeRequest, stream grpc.ServerStreami
 			ProvisionedCreds: creds,
 		},
 	})
+}
+
+func (f *fakePlugin) Subscribe(_ *pluginv1.SubscribeRequest, stream grpc.ServerStreamingServer[pluginv1.SubscribeResponse]) error {
+	for _, ev := range f.subscribeEvents {
+		if err := stream.Send(&pluginv1.SubscribeResponse{Event: ev}); err != nil {
+			return err
+		}
+	}
+	<-stream.Context().Done() // hold the stream open until the host cancels
+	return stream.Context().Err()
+}
+
+// capturePub captures published emitter events for assertions.
+type capturePub struct{ ch chan types.EmitterEvent }
+
+func (c *capturePub) PublishEmitterEvent(_ context.Context, ev types.EmitterEvent) error {
+	c.ch <- ev
+	return nil
 }
 
 func serve(t *testing.T, f *fakePlugin) pluginv1.PluginServiceClient {
@@ -534,6 +554,58 @@ func TestHost_InvokeRawGovernsEntitiesUnprojected(t *testing.T) {
 	}
 	if !gated {
 		t.Fatalf("expected a dns.fqdn rejection, got %+v", raw.Rejections)
+	}
+}
+
+// TestHost_SubscribeGrantBoundEmitterName proves the guardian anti-spoof
+// invariant: the published EmitterEvent.Emitter is the GRANT's emitter name — not
+// the plugin's subject/type — the legible `match` becomes the CEL payload, and an
+// event with no match projection is dropped VISIBLY (§1.8), never silently.
+func TestHost_SubscribeGrantBoundEmitterName(t *testing.T) {
+	grant := vcenterGrant(pluginhost.TierTrusted, []string{"vcenter.uuid"})
+	grant.EmitterName = "salt-prod"
+	m, _ := structpb.NewStruct(map[string]any{"tag": "salt/job/x", "data": map[string]any{"fun": "test.ping"}})
+	spoofed := &pluginv1.EmittedEvent{Subject: "attacker", Type: "impersonate", Match: m}
+	malformed := &pluginv1.EmittedEvent{} // no match projection
+	client := serve(t, &fakePlugin{pluginID: grant.PluginIdentity,
+		subscribeEvents: []*pluginv1.EmittedEvent{spoofed, malformed}})
+	h := pluginhost.New(nil, client, grant, discardLog())
+	pub := &capturePub{ch: make(chan types.EmitterEvent, 4)}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- h.SubscribeLoop(ctx, pub) }()
+
+	got := <-pub.ch // the spoofed event's published form
+	if got.Emitter != "salt-prod" {
+		t.Fatalf("emitter must be the grant name, got %q (plugin subject/type must not route)", got.Emitter)
+	}
+	if got.Payload["tag"] != "salt/job/x" {
+		t.Fatalf("CEL payload must be the legible match projection: %+v", got.Payload)
+	}
+	cancel()
+	<-done
+
+	var dropped bool
+	for _, r := range h.Rejections() {
+		if r.Kind == "emitter" {
+			dropped = true
+		}
+	}
+	if !dropped {
+		t.Fatalf("the match-less event must be dropped with a visible rejection, got %+v", h.Rejections())
+	}
+}
+
+// TestHost_SubscribeIdentityBinding proves emission is bound to the authenticated
+// channel identity: a plugin whose manifest identity != the granted identity is
+// refused before any event flows (anti-spoof).
+func TestHost_SubscribeIdentityBinding(t *testing.T) {
+	grant := vcenterGrant(pluginhost.TierTrusted, []string{"vcenter.uuid"})
+	client := serve(t, &fakePlugin{pluginID: "IMPOSTER"}) // != grant.PluginIdentity
+	h := pluginhost.New(nil, client, grant, discardLog())
+	pub := &capturePub{ch: make(chan types.EmitterEvent, 1)}
+	if err := h.SubscribeLoop(context.Background(), pub); err == nil {
+		t.Fatal("a plugin whose manifest identity != the grant identity must be refused (anti-spoof)")
 	}
 }
 

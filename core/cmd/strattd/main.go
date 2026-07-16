@@ -39,7 +39,6 @@ import (
 	"github.com/dstout-devops/stratt/core/internal/baselines"
 	"github.com/dstout-devops/stratt/core/internal/cellrouter"
 	"github.com/dstout-devops/stratt/core/internal/compiler"
-	"github.com/dstout-devops/stratt/core/internal/connectors/salt"
 	"github.com/dstout-devops/stratt/core/internal/contract"
 	"github.com/dstout-devops/stratt/core/internal/desiredstate"
 	"github.com/dstout-devops/stratt/core/internal/dispatch"
@@ -679,18 +678,8 @@ func run(ctx context.Context, log *slog.Logger) error {
 		log.Info("no PuppetDB plugin configured (STRATT_PUPPET_PLUGIN_ADDR empty); syncer idle")
 	}
 
-	// ── Salt grains Syncer (ADR-0039; config-mgmt SoR ingest) ────────────
-	saltCfg := salt.Config{
-		APIURL:      os.Getenv("STRATT_SALT_API_URL"),
-		Username:    os.Getenv("STRATT_SALT_USERNAME"),
-		Password:    os.Getenv("STRATT_SALT_PASSWORD"),
-		Eauth:       env("STRATT_SALT_EAUTH", "pam"),
-		SourceName:  env("STRATT_SALT_SOURCE_NAME", "salt"),
-		EmitterName: env("STRATT_SALT_EMITTER_NAME", "salt"),
-		EventTags:   splitNonEmpty(os.Getenv("STRATT_SALT_EVENT_TAGS")),
-	}
-	// The grains Syncer runs over the port; the event-bus Emitter (below) stays
-	// in-tree until the Subscribe verb is wired host-side.
+	// ── Salt plugin over the port: grains Syncer + event-bus Emitter ─────
+	var saltHost *pluginhost.Host
 	if addr := os.Getenv("STRATT_SALT_PLUGIN_ADDR"); addr != "" {
 		sourceName := env("STRATT_SALT_SOURCE_NAME", "salt")
 		interval, err := time.ParseDuration(env("STRATT_SALT_INTERVAL", "60s"))
@@ -709,10 +698,12 @@ func run(ctx context.Context, log *slog.Logger) error {
 			FacetNamespaces:  []string{"salt.node.identity", "salt.node.os", "salt.node.network"},
 			IdentitySchemes:  []string{"salt.minion_id", "dns.fqdn"},
 			TombstoneSchemes: []string{"salt.minion_id"},
+			// The emitter name is grant-bound to this channel identity (anti-spoof).
+			EmitterName: env("STRATT_SALT_EMITTER_NAME", sourceName),
 		}
-		host := pluginhost.New(store, pluginv1.NewPluginServiceClient(conn), grant, log)
-		controllers = append(controllers, homeSupervise(sourceName, host.Register, func(cctx context.Context) error {
-			return host.SyncLoop(cctx, interval)
+		saltHost = pluginhost.New(store, pluginv1.NewPluginServiceClient(conn), grant, log)
+		controllers = append(controllers, homeSupervise(sourceName, saltHost.Register, func(cctx context.Context) error {
+			return saltHost.SyncLoop(cctx, interval)
 		}))
 	} else {
 		log.Info("no Salt plugin configured (STRATT_SALT_PLUGIN_ADDR empty); syncer idle")
@@ -873,14 +864,13 @@ func run(ctx context.Context, log *slog.Logger) error {
 		}
 	})
 
-	// ── Salt event-bus Emitter (ADR-0039: stream-subscriber → emitter stream) ─
-	if saltCfg.APIURL != "" && env("STRATT_SALT_EVENTS", "false") == "true" {
-		if len(saltCfg.EventTags) == 0 {
-			log.Warn("STRATT_SALT_EVENTS enabled with no STRATT_SALT_EVENT_TAGS filter: forwarding the ENTIRE Salt event bus onto the emitter stream (set a tag-prefix allowlist to avoid flooding)")
-		}
-		emitter := salt.NewEmitter(saltCfg, bus, log)
+	// ── Salt event-bus Emitter over the port (Subscribe verb; ADR-0039) ──
+	// Reuses the salt plugin host; the emitter name is grant-bound (anti-spoof),
+	// and the Trigger engine CEL-matches the plugin's legible `match` projection,
+	// never the opaque payload (ADR-0047 §3). Tag-filtering is the plugin's job.
+	if saltHost != nil && env("STRATT_SALT_EVENTS", "false") == "true" {
 		controllers = append(controllers, func(cctx context.Context) {
-			if err := emitter.Run(cctx); err != nil && !errors.Is(err, context.Canceled) {
+			if err := saltHost.SubscribeLoop(cctx, bus); err != nil && !errors.Is(err, context.Canceled) {
 				log.Error("salt emitter stopped", "error", err)
 			}
 		})

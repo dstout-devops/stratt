@@ -118,8 +118,12 @@ func TestGetManifestSyncer(t *testing.T) {
 	if m.GetClass().String() != "PLUGIN_CLASS_SYNCER" {
 		t.Errorf("class = %s, want PLUGIN_CLASS_SYNCER", m.GetClass())
 	}
-	if len(m.GetVerbs()) != 1 || m.GetVerbs()[0].String() != "VERB_OBSERVE" {
-		t.Errorf("verbs = %v, want [VERB_OBSERVE]", m.GetVerbs())
+	verbs := map[string]bool{}
+	for _, v := range m.GetVerbs() {
+		verbs[v.String()] = true
+	}
+	if !verbs["VERB_OBSERVE"] || !verbs["VERB_EMIT"] {
+		t.Errorf("verbs = %v, want OBSERVE + EMIT (Syncer + Emitter)", m.GetVerbs())
 	}
 	gotContracts := map[string]bool{}
 	for _, c := range m.GetContracts() {
