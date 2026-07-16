@@ -889,12 +889,75 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/sources/{name}/rehome": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Source name (the registered external system of record). */
+                name: components["parameters"]["SourceName"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Fenced cross-Cell re-home of a Source to another Cell (ADR-0044 slice 7)
+         * @description Moves a Source — and thus its Entities' residency — from its current home Cell to a destination Cell, via a fenced two-phase move that never permits two writers (seal → adopt → tombstone). Requires the `rehome` grant on the destination `cell:<dest>`. Forwards to the Source's home Cell if this Cell is not the home (§1.8); starts the durable RehomeSourceWorkflow (202, async). A single-Cell 'local' estate has no peers and rejects re-home.
+         */
+        post: operations["rehomeSource"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/sources/rehome-adopt": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Destination-Cell adopt of a re-homed Source (peer-internal, ADR-0044 slice 7)
+         * @description Internal cross-Cell endpoint: the source Cell's RehomeSourceWorkflow forwards a sealed Source here for the destination Cell to claim. Accepted ONLY as a verified peer fan-out (HMAC, slice 4) asserting the acting Principal, which is re-checked for `rehome` on this Cell against the global OpenFGA (§1.6). The body carries a CredentialRef NAME only, never material (§2.5).
+         */
+        post: operations["adoptRehomedSource"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
         Error: {
             message: string;
+        };
+        /** @description A request to re-home a Source to another Cell (ADR-0044 slice 7). */
+        RehomeRequest: {
+            /** @description The destination Cell's name (a declared peer Cell). */
+            destCell: string;
+        };
+        /** @description The destination-side adopt payload: a sealed Source snapshot (CredentialRef NAME only, never material — §2.5) plus its fencing epoch. */
+        RehomeAdopt: {
+            source: components["schemas"]["Source"];
+            /** Format: int64 */
+            epoch: number;
+        };
+        /** @description An external system of record (charter §2.2). Secret material never appears here — only a CredentialRef pointer (§2.5). */
+        Source: {
+            id?: string;
+            kind: string;
+            name: string;
+            endpoint: string;
+            credentialRef?: string;
+            cell?: string;
         };
         /** @description Per-attribute stamp — which Run/Syncer wrote the value, when, from which Source (charter §2.1). Always exactly one answer. */
         Provenance: {
@@ -1636,11 +1699,22 @@ export interface components {
                 "application/json": components["schemas"]["Error"];
             };
         };
+        /** @description A required peer Cell (e.g. the datum's home) was unreachable, so the write could not be routed to its single writer. Never a silent success (§1.8, no failover-to-a-second-writer). */
+        Unavailable: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["Error"];
+            };
+        };
     };
     parameters: {
         /** @description View name (the `view://<name>` reference without scheme). */
         ViewName: string;
         RunID: string;
+        /** @description Source name (the registered external system of record). */
+        SourceName: string;
     };
     requestBodies: never;
     headers: never;
@@ -2769,6 +2843,62 @@ export interface operations {
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
             409: components["responses"]["Conflict"];
+        };
+    };
+    rehomeSource: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Source name (the registered external system of record). */
+                name: components["parameters"]["SourceName"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RehomeRequest"];
+            };
+        };
+        responses: {
+            /** @description Re-home accepted and started (async) */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            503: components["responses"]["Unavailable"];
+        };
+    };
+    adoptRehomedSource: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RehomeAdopt"];
+            };
+        };
+        responses: {
+            /** @description Source adopted (idempotent */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
         };
     };
 }

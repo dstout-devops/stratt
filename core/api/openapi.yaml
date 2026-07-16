@@ -904,6 +904,54 @@ paths:
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/Conflict" }
+  /sources/{name}/rehome:
+    parameters:
+      - $ref: "#/components/parameters/SourceName"
+    post:
+      operationId: rehomeSource
+      summary: Fenced cross-Cell re-home of a Source to another Cell (ADR-0044 slice 7)
+      description: >
+        Moves a Source — and thus its Entities' residency — from its current
+        home Cell to a destination Cell, via a fenced two-phase move that never
+        permits two writers (seal → adopt → tombstone). Requires the `rehome`
+        grant on the destination `cell:<dest>`. Forwards to the Source's home
+        Cell if this Cell is not the home (§1.8); starts the durable
+        RehomeSourceWorkflow (202, async). A single-Cell 'local' estate has no
+        peers and rejects re-home.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/RehomeRequest" }
+      responses:
+        "202": { description: Re-home accepted and started (async) }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "503": { $ref: "#/components/responses/Unavailable" }
+  /sources/rehome-adopt:
+    post:
+      operationId: adoptRehomedSource
+      summary: Destination-Cell adopt of a re-homed Source (peer-internal, ADR-0044 slice 7)
+      description: >
+        Internal cross-Cell endpoint: the source Cell's RehomeSourceWorkflow
+        forwards a sealed Source here for the destination Cell to claim. Accepted
+        ONLY as a verified peer fan-out (HMAC, slice 4) asserting the acting
+        Principal, which is re-checked for `rehome` on this Cell against the
+        global OpenFGA (§1.6). The body carries a CredentialRef NAME only, never
+        material (§2.5).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/RehomeAdopt" }
+      responses:
+        "202": { description: Source adopted (idempotent, epoch-fenced) }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
 components:
   parameters:
     ViewName:
@@ -917,6 +965,12 @@ components:
       in: path
       required: true
       schema: { type: string }
+    SourceName:
+      name: name
+      in: path
+      required: true
+      schema: { type: string }
+      description: Source name (the registered external system of record).
   responses:
     NotFound:
       description: The named object does not exist
@@ -947,12 +1001,50 @@ components:
       content:
         application/json:
           schema: { $ref: "#/components/schemas/Error" }
+    Unavailable:
+      description: >
+        A required peer Cell (e.g. the datum's home) was unreachable, so the
+        write could not be routed to its single writer. Never a silent success
+        (§1.8, no failover-to-a-second-writer).
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
   schemas:
     Error:
       type: object
       required: [message]
       properties:
         message: { type: string }
+    RehomeRequest:
+      type: object
+      required: [destCell]
+      description: A request to re-home a Source to another Cell (ADR-0044 slice 7).
+      properties:
+        destCell:
+          type: string
+          description: The destination Cell's name (a declared peer Cell).
+    RehomeAdopt:
+      type: object
+      required: [source, epoch]
+      description: >
+        The destination-side adopt payload: a sealed Source snapshot (CredentialRef
+        NAME only, never material — §2.5) plus its fencing epoch.
+      properties:
+        source: { $ref: "#/components/schemas/Source" }
+        epoch: { type: integer, format: int64 }
+    Source:
+      type: object
+      description: >
+        An external system of record (charter §2.2). Secret material never
+        appears here — only a CredentialRef pointer (§2.5).
+      required: [kind, name, endpoint]
+      properties:
+        id: { type: string }
+        kind: { type: string }
+        name: { type: string }
+        endpoint: { type: string }
+        credentialRef: { type: string }
+        cell: { type: string }
     Provenance:
       type: object
       description: >

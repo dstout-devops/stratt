@@ -383,10 +383,11 @@ func (s *Store) RegisterSource(ctx context.Context, src types.Source) (types.Sou
 // GetSource returns a Source by name.
 func (s *Store) GetSource(ctx context.Context, name string) (types.Source, error) {
 	var src types.Source
-	var cred, cell *string
+	var cred, cell, rehoming *string
 	err := s.pool.QueryRow(ctx,
-		`SELECT id, kind, name, endpoint, credential_ref, cell FROM graph.source WHERE name = $1`, name,
-	).Scan(&src.ID, &src.Kind, &src.Name, &src.Endpoint, &cred, &cell)
+		`SELECT id, kind, name, endpoint, credential_ref, cell, rehoming_to, home_epoch
+		 FROM graph.source WHERE name = $1`, name,
+	).Scan(&src.ID, &src.Kind, &src.Name, &src.Endpoint, &cred, &cell, &rehoming, &src.HomeEpoch)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return src, fmt.Errorf("%w: source %s", ErrNotFound, name)
 	}
@@ -398,6 +399,9 @@ func (s *Store) GetSource(ctx context.Context, name string) (types.Source, error
 	}
 	if cell != nil {
 		src.Cell = *cell
+	}
+	if rehoming != nil {
+		src.RehomingTo = *rehoming
 	}
 	return src, nil
 }

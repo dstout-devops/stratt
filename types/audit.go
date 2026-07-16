@@ -49,6 +49,11 @@ const (
 	AuditExecGrant     = "authz.exec-grant"
 	AuditCredentialUse = "credential.use"
 	AuditMCPToolCall   = "mcp.tool-call"
+	// AuditRehome records each phase of a fenced cross-Cell Source re-home
+	// (ADR-0044 slice 7). Recorded on BOTH Cells' per-Cell hash chains — the
+	// source Cell logs seal/complete/abort, the destination Cell logs adopt — so
+	// the move is never a silent gap in either chain (§1.8). Object is the Source.
+	AuditRehome = "cell.rehome"
 )
 
 // Audit outcome constants.

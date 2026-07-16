@@ -250,7 +250,7 @@ func TestPresenceWritePathGate(t *testing.T) {
 	if err == nil {
 		t.Fatal("direct presence write outside the normalizer path must be rejected (§1.2)")
 	}
-	if !strings.Contains(err.Error(), "only Normalizers and Run provenance") {
+	if !strings.Contains(err.Error(), "may write the graph projection") {
 		t.Fatalf("expected the §1.2 write-path rejection, got %v", err)
 	}
 }

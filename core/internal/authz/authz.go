@@ -33,7 +33,19 @@ const (
 	// (least-privilege, §1.6) — the forwarder's Principal holds this, humans get
 	// reader.
 	RelationForwarder = "forwarder"
+	// RelationRehome authorizes a fenced cross-Cell Source re-home (ADR-0044
+	// slice 7) — a privileged control-plane move of a Source (and its Entities'
+	// residency) from one Cell to another. Granted per destination Cell
+	// (cell:<dest>), deny-by-default, never implied by org/team admin: moving an
+	// estate partition across regions is a deliberate, separately-granted act.
+	// The destination Cell re-checks it against the global OpenFGA on the
+	// forwarded adopt (§1.6 one authz model), like every other cross-Cell write.
+	RelationRehome = "rehome"
 )
+
+// CellObject guards a Cell for the re-home relation (ADR-0044 slice 7): a
+// principal must hold `rehome` on cell:<dest> to move a Source there.
+func CellObject(cell string) string { return "cell:" + cell }
 
 // AuditObject is the single object guarding the audit stream (ADR-0034): a
 // reader grant authorizes GET /audit and /audit/verify; a forwarder grant

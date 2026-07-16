@@ -409,6 +409,10 @@ func run(ctx context.Context, log *slog.Logger) error {
 	w.RegisterWorkflow(orchestrate.RunAction)
 	w.RegisterWorkflow(orchestrate.RunDAG)
 	w.RegisterWorkflow(orchestrate.RunBaselineCheck)
+	// Fenced cross-Cell Source re-home (ADR-0044 slice 7): runs on the Source's
+	// home Cell, seals → forwards adopt to the destination → tombstones the old
+	// Entities, with a compensating abort before the adopt commits.
+	w.RegisterWorkflow(orchestrate.RehomeSourceWorkflow)
 	// Peers is the write-side cross-Cell client (ADR-0044 slice 5): it launches
 	// and polls child Runs on peer Cells. Nil-safe on a single-Cell estate (no
 	// secret ⇒ no peers ⇒ RunAcrossCells is never reached).

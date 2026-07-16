@@ -254,6 +254,55 @@ Single-Cell 'local' stays a byte-identical no-op throughout: scope "" leaves eve
 name unchanged, `reconcileDispatchScope` has no declared Cell to reconcile, and every Site is
 reachable.
 
+## Slice-7 refinements (accepted 2026-07-16)
+
+Slice 7 is the fenced re-home GA + per-Cell DR + failover drill — the last correctness-envelope member
+(fenced re-home) and the DR/runbook/evidence that make the 99.99% multi-region claim discharge-able. A
+charter-guardian DESIGN review (before any code) reshaped it materially; steward-approved:
+
+1. **The unit of re-home is the SOURCE, not the Entity (the load-bearing correction).** An Entity is a
+   projection of a Source (§1.2). Re-homing a bare Entity while its Source keeps syncing on the old Cell
+   silently re-projects it there on the next cycle — a durable second writer *below* the fence, worse than
+   the instant it prevents; and it breaks mechanically (`entity_presence.source_id` FK, `enforce_facet_owner`,
+   a permanent critical placement Finding, and a shipped-but-unrederivable = second-truth Entity in the
+   destination). So re-home seals the **Source**, the destination **re-projects** its Entities natively
+   (rebuildable, `prov_cell=dest`), and the source Cell **tombstones** its now-unobserved copies. `RehomeSourceWorkflow`
+   drives Seal → Adopt → Complete with a compensating Abort.
+2. **The seal fence is a DB CONSTRAINT (closes residual tension #4 for the window).** Migration 00031 adds
+   `graph.source.rehoming_to` (+ `home_epoch`) and extends `enforce_write_path`: a Normalizer projection
+   stamping a sealed Source's `prov_source_id`/`source_id` is **rejected**. After the seal commits, the home
+   Cell physically cannot keep projecting the Source — proven on real Postgres (`TestSealFenceRejectsNormalizerWrite`).
+   A new `'rehome'` mover write path is exempt (it performs the seal + the tombstone).
+3. **Tombstone, never hard-DELETE (must-fix 3).** Complete tombstones the Entities (`deleted_at`) and
+   resolves their Findings with a distinct `resolved_reason='entity-rehomed'` (vs ADR-0043's `entity-tombstoned`)
+   so descent shows the Entity moved Cells, it did not vanish — and the source Cell's Findings never linger
+   open forever. The Source row is removed (its projection now belongs to the destination).
+4. **Adopt is the point of no return; the epoch fences replay, not the un-seal (must-fix 4).** There is no
+   cross-Postgres CAS, so "un-adopt by bumping an epoch in the other DB" is not a real fence — the Temporal
+   history is the ordering authority. Abort is admissible ONLY before the Adopt activity commits; after a
+   committed Adopt the workflow is roll-forward-only (retry Complete). `home_epoch` guards a stale/replayed
+   adopt (idempotency).
+5. **§1.8 teeth: stuck-seal Finding + dual-Cell audit (must-fix 5).** A sealed-but-not-completed Source
+   (partition, unreachable destination) is frozen (zero writers — safe) AND surfaced as an open
+   `framework='rehome'` Finding, auto-resolved on complete/abort. `cell.rehome` is audited on BOTH Cells'
+   per-Cell hash chains — seal/complete/abort on the source, adopt on the destination — never a silent gap.
+6. **§2.5: CredentialRef names only.** The adopt snapshot carries the Source's CredentialRef **name**, never
+   material; the destination resolves it against its OWN Secrets. Reuses the slice-5 HMAC-body-covered,
+   Principal-asserted PeerClient; the destination re-checks the `rehome` grant against the global OpenFGA.
+7. **Bounded scope; full auto-cutover deferred to [ADR-0045](0045-db-driven-syncer-home-gate.md).** Syncers
+   are env-instantiated, not DB-driven, so a fully-automatic destination cutover needs a Connector
+   home-ownership gate (a Connector-architecture change touching every Syncer) — spun out as ADR-0045. Slice
+   7 ships the correctness core; deploying/enabling the Source's Connector on the destination Cell is the
+   one runbook step, and the fence guarantees no double-writer regardless of timing. DR (per-Cell replica
+   promotion) is env-string repoint + the `cell-failover-drill` runbook; the 99.99% evidence map is
+   `docs/evidence/multi-region-99_99.md`.
+
+With slice 7 the **correctness envelope is closed**: fenced re-home + home-routed-loud-fail +
+per-Cell-audit-federated-read + partial-result honesty all shipped; no slice permits two writers to one
+datum, a silent federation drop, or a hidden audit gap. Single-Cell 'local' stays a byte-identical no-op:
+no Source is ever sealed (`rehoming_to` always NULL), the seal fence is a cheap indexed miss, and re-home
+loud-fails for want of a peer Cell.
+
 ## Decision (the complete architecture)
 
 **Partitioned region-local single-writer Cells presenting ONE logical estate.** Not multi-master.
@@ -356,7 +405,11 @@ cannot split-brain.
    emitter, notice, dispatch, result streams + subjects + liveness KV, all gated on `scope != ""`);
    env-derived scope token reconciled loud against CaC `dispatch_prefix`; Site→Cell binding
    (`SiteCellMisroute`); hub + agent scope from one shared env derivation — see slice-6 refinements.
-7. **Per-Cell DR + fenced re-home GA + failover drill** (mostly deploy/runbook); 99.99% multi-region evidence.
+7. **Per-Cell DR + fenced re-home GA + failover drill (landed 2026-07-16):** Source-granular fenced re-home
+   (`RehomeSourceWorkflow`: seal → adopt → tombstone, DB seal fence in `enforce_write_path`, migration
+   00031), stuck-seal Finding + dual-Cell `cell.rehome` audit, `entity-rehomed` tombstone reason; DR =
+   env-string repoint + the `cell-failover-drill` runbook; 99.99% evidence map. Closes the correctness
+   envelope. Full auto-cutover deferred to ADR-0045. See slice-7 refinements.
 
 ## Charter reconciliation
 
@@ -407,6 +460,13 @@ cannot split-brain.
 - **Slice-6 vocabulary-linter:** CLEAN — `CellScopeToken`/`ScopedStream`/`SetScope`/`SiteCellMisroute`/
   `graph.cell.dispatch_prefix` and the `stratt.<cell>.*` subjects all use Cell as the frozen Named Kind (Cell
   is the control-plane shard, Site the execution locus — never blurred); no banned term.
+- **Slice-7 charter-guardian (DESIGN review, pre-code — the highest bar):** returned CHANGES-REQUIRED and
+  caught the load-bearing flaw on paper — re-homing an Entity independent of its Source reintroduces a silent
+  durable second writer and a second truth. Its must-fixes are the slice-7 refinements above (Source is the
+  unit; DB seal fence; tombstone-not-DELETE with `entity-rehomed`; Adopt = point of no return; stuck-seal
+  Finding + complete/abort audit; CredentialRef-names-only). The IMPLEMENTATION review returned PASS — all
+  seven embodied, correctness envelope CONFIRMED — with two should-fixes (surfaced the swallowed adopt-audit
+  error; stamped the recording Cell) applied. **Slice-7 vocabulary-linter:** CLEAN.
 
 ## Consequences
 

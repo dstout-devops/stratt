@@ -59,6 +59,10 @@ temporal:
   namespace: "default"
 
 # ── control-plane Cell (ADR-0044) ───────────────────────────────────────────
+# Multi-region DR is done by REPOINTING the substrate env strings above
+# (database.url / nats.url / temporal.address / evidence store) to a Cell's
+# promoted DR replica set — there is no separate _REPLICA value. Cell failover
+# and the fenced Source re-home procedure are in docs/runbooks/cell-failover-drill.md.
 # Multi-region: leave id "" for the built-in single-Cell "local" (today's
 # deployment, byte-identical). Set id to this Cell's name to scope the leader
 # lease, Temporal namespace/queue, and every NATS stream/subject (slice 6) so
