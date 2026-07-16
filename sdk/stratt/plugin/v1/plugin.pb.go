@@ -1911,7 +1911,14 @@ type PlanResponse struct {
 	// The hash-pinned saved plan (ADR-0047 §7). `Plan` is the CANONICAL producer of
 	// the plan a Gate approves; ApplyRequest.plan_ref then applies EXACTLY it — the
 	// core binds this sha256 at Gate approval and re-verifies it at the Apply boundary.
-	Plan          *ArtifactRef `protobuf:"bytes,4,opt,name=plan,proto3" json:"plan,omitempty"`
+	Plan *ArtifactRef `protobuf:"bytes,4,opt,name=plan,proto3" json:"plan,omitempty"`
+	// The OPAQUE saved-plan BYTES (ADR-0047 §8). The core content-addresses these
+	// (sha256 it COMPUTES — a plugin-asserted `plan.sha256` is advisory, §1.5),
+	// encrypts + stores them write-once, and re-hashes at the Apply boundary
+	// (verify-don't-trust). Hashing an opaque blob is content-blind. Delivered inline
+	// on the UNARY Plan verb so a streaming dry-run Apply stays structurally
+	// non-pinnable (ApplyResponse has no such field). Empty when the plan is empty.
+	SavedPlan     []byte `protobuf:"bytes,5,opt,name=saved_plan,json=savedPlan,proto3" json:"saved_plan,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1974,6 +1981,13 @@ func (x *PlanResponse) GetPlan() *ArtifactRef {
 	return nil
 }
 
+func (x *PlanResponse) GetSavedPlan() []byte {
+	if x != nil {
+		return x.SavedPlan
+	}
+	return nil
+}
+
 type ApplyRequest struct {
 	state       protoimpl.MessageState `protogen:"open.v1"`
 	Envelope    *Envelope              `protobuf:"bytes,1,opt,name=envelope,proto3" json:"envelope,omitempty"`
@@ -1983,6 +1997,13 @@ type ApplyRequest struct {
 	// Apply EXACTLY the plan a Gate approved (ADR-0047 §7): the core verifies this
 	// sha256 against the Gate-approved digest at THIS boundary. Empty == apply `desired`.
 	PlanRef *ArtifactRef `protobuf:"bytes,5,opt,name=plan_ref,json=planRef,proto3" json:"plan_ref,omitempty"`
+	// The core-VERIFIED pinned plan bytes (ADR-0047 §8): the core fetched them from
+	// its encrypted store at plan_ref.sha256 and RE-HASHED them (verify-don't-trust),
+	// then hands them to the plugin to apply EXACTLY (the plugin wrote them itself at
+	// Plan time, so this is not the core leaking a secret — it returns the plugin's
+	// own bytes over the authenticated channel). Set iff plan_ref is; the plugin
+	// applies these, never a plan it re-resolves itself. May re-verify hash==plan_ref.
+	PinnedPlan []byte `protobuf:"bytes,7,opt,name=pinned_plan,json=pinnedPlan,proto3" json:"pinned_plan,omitempty"`
 	// The core-resolved actuation target set, sent LEGIBLY — NEVER baked into the
 	// opaque `desired` payload (guardian, ADR-0047 §1.1/§1.2/§1.8). The target set
 	// carries blast-radius/authz weight and is the correlation key the core owns:
@@ -2055,6 +2076,13 @@ func (x *ApplyRequest) GetDryRun() bool {
 func (x *ApplyRequest) GetPlanRef() *ArtifactRef {
 	if x != nil {
 		return x.PlanRef
+	}
+	return nil
+}
+
+func (x *ApplyRequest) GetPinnedPlan() []byte {
+	if x != nil {
+		return x.PinnedPlan
 	}
 	return nil
 }
@@ -3131,18 +3159,22 @@ const file_stratt_plugin_v1_plugin_proto_rawDesc = "" +
 	"\tfull_sync\x18\x06 \x01(\bR\bfullSync\"z\n" +
 	"\vPlanRequest\x126\n" +
 	"\benvelope\x18\x01 \x01(\v2\x1a.stratt.plugin.v1.EnvelopeR\benvelope\x123\n" +
-	"\adesired\x18\x02 \x01(\v2\x19.stratt.plugin.v1.PayloadR\adesired\"\xa0\x01\n" +
+	"\adesired\x18\x02 \x01(\v2\x19.stratt.plugin.v1.PayloadR\adesired\"\xbf\x01\n" +
 	"\fPlanResponse\x12-\n" +
 	"\x04diff\x18\x01 \x01(\v2\x19.stratt.plugin.v1.PayloadR\x04diff\x12\x18\n" +
 	"\asummary\x18\x02 \x01(\tR\asummary\x12\x14\n" +
 	"\x05empty\x18\x03 \x01(\bR\x05empty\x121\n" +
-	"\x04plan\x18\x04 \x01(\v2\x1d.stratt.plugin.v1.ArtifactRefR\x04plan\"\xaa\x02\n" +
+	"\x04plan\x18\x04 \x01(\v2\x1d.stratt.plugin.v1.ArtifactRefR\x04plan\x12\x1d\n" +
+	"\n" +
+	"saved_plan\x18\x05 \x01(\fR\tsavedPlan\"\xcb\x02\n" +
 	"\fApplyRequest\x126\n" +
 	"\benvelope\x18\x01 \x01(\v2\x1a.stratt.plugin.v1.EnvelopeR\benvelope\x123\n" +
 	"\adesired\x18\x02 \x01(\v2\x19.stratt.plugin.v1.PayloadR\adesired\x12!\n" +
 	"\fresume_token\x18\x03 \x01(\tR\vresumeToken\x12\x17\n" +
 	"\adry_run\x18\x04 \x01(\bR\x06dryRun\x128\n" +
-	"\bplan_ref\x18\x05 \x01(\v2\x1d.stratt.plugin.v1.ArtifactRefR\aplanRef\x127\n" +
+	"\bplan_ref\x18\x05 \x01(\v2\x1d.stratt.plugin.v1.ArtifactRefR\aplanRef\x12\x1f\n" +
+	"\vpinned_plan\x18\a \x01(\fR\n" +
+	"pinnedPlan\x127\n" +
 	"\atargets\x18\x06 \x03(\v2\x1d.stratt.plugin.v1.ApplyTargetR\atargets\"\xae\x02\n" +
 	"\vApplyTarget\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12T\n" +

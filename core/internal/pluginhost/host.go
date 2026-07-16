@@ -26,6 +26,7 @@ import (
 	"time"
 
 	"github.com/dstout-devops/stratt/core/internal/graph"
+	"github.com/dstout-devops/stratt/core/internal/planstore"
 	pluginv1 "github.com/dstout-devops/stratt/sdk/stratt/plugin/v1"
 	"github.com/dstout-devops/stratt/types"
 )
@@ -39,7 +40,14 @@ type Host struct {
 
 	source     types.Source
 	rejections []Rejection
+	plans      *planstore.Store // set for Actuator hosts (the Plan verb); nil otherwise
 }
+
+// UsePlanStore attaches the content-addressed plan store an Actuator host needs
+// for the Plan verb (ADR-0047 §8) — the core content-addresses + encrypts the
+// saved plan and re-hashes it at the Apply boundary. Syncer/Action hosts leave it
+// nil. Returns the host for chaining at wiring time.
+func (h *Host) UsePlanStore(p *planstore.Store) *Host { h.plans = p; return h }
 
 // Rejection is a governance refusal the host surfaces (an ungranted/land-grabbed
 // emission it dropped). Persisting these as graph Findings (§1.8) is the
@@ -430,13 +438,84 @@ type ApplyTarget struct {
 
 // ApplyInvoke is a governed Actuator Apply request. Params is the opaque tool
 // config (`desired`); Targets is the legible core-resolved set; CredentialRefs
-// are authorized NAMES only (§2.5, the credential-oracle closure).
+// are authorized NAMES only (§2.5, the credential-oracle closure). PlanDigest +
+// PinnedPlan carry a Gate-approved pinned plan (ADR-0047 §8): the caller has
+// already fetched-and-re-hashed the bytes from the core store, so ApplyRaw sends
+// them for the plugin to apply EXACTLY — never a plan the plugin re-resolves.
 type ApplyInvoke struct {
 	Principal      string
 	Params         []byte
 	Targets        []ApplyTarget
 	DryRun         bool
 	CredentialRefs []string
+	PlanDigest     string
+	PinnedPlan     []byte
+}
+
+// PlanInvoke is a governed Actuator Plan request (the unary, pinnable producer).
+type PlanInvoke struct {
+	Principal      string
+	Params         []byte
+	CredentialRefs []string
+}
+
+// PlanOutcome is the governed result of a Plan. Digest is the content-address of
+// the saved plan the CORE computed + stored (the pin a Gate binds); "" when the
+// plan is empty. Diff is the plugin-redacted descent diff; the core never
+// interprets it (§1.8/§2.5).
+type PlanOutcome struct {
+	Digest  string
+	Summary string
+	Empty   bool
+	Diff    []byte
+}
+
+// Plan calls the plugin's unary Plan verb and content-addresses the saved plan:
+// the CORE computes the sha256 (a plugin-asserted plan.sha256 is advisory, §1.5),
+// encrypts + stores it write-once, and returns the digest. This is the canonical
+// producer of the pin a Gate approves; the streaming dry-run Apply cannot produce
+// one (ApplyResponse has no saved-plan field — structurally non-pinnable).
+func (h *Host) Plan(ctx context.Context, req PlanInvoke) (PlanOutcome, error) {
+	var out PlanOutcome
+	creds := make([]*pluginv1.CredentialRef, 0, len(req.CredentialRefs))
+	for _, n := range req.CredentialRefs {
+		creds = append(creds, &pluginv1.CredentialRef{Name: n})
+	}
+	resp, err := h.client.Plan(ctx, &pluginv1.PlanRequest{
+		Envelope: &pluginv1.Envelope{
+			Principal: &pluginv1.Principal{Id: req.Principal, Kind: "user"},
+			Creds:     creds,
+		},
+		Desired: &pluginv1.Payload{Bytes: req.Params},
+	})
+	if err != nil {
+		return out, fmt.Errorf("pluginhost: plan: %w", err)
+	}
+	out.Summary = resp.GetSummary()
+	out.Empty = resp.GetEmpty()
+	out.Diff = resp.GetDiff().GetBytes()
+	if saved := resp.GetSavedPlan(); len(saved) > 0 {
+		if h.plans == nil {
+			return out, errors.New("pluginhost: Plan produced a saved plan but no plan store is attached (UsePlanStore)")
+		}
+		digest, err := h.plans.Put(ctx, saved) // CORE computes the sha256, encrypts, write-once
+		if err != nil {
+			return out, fmt.Errorf("pluginhost: store plan: %w", err)
+		}
+		out.Digest = digest
+	}
+	return out, nil
+}
+
+// VerifyPinnedPlan fetches the plan at the Gate-approved digest from the core
+// store and RE-HASHES it (verify-don't-trust, ADR-0047 §8) — the caller passes the
+// returned bytes to ApplyRaw as the pinned plan. A missing/tampered plan is
+// terminal (fail closed — never a silent unpinned apply).
+func (h *Host) VerifyPinnedPlan(ctx context.Context, digest string) ([]byte, error) {
+	if h.plans == nil {
+		return nil, errors.New("pluginhost: plan-pinned Apply but no plan store is attached")
+	}
+	return h.plans.GetVerified(ctx, digest)
 }
 
 // ApplyEntity is a GOVERNED, UNPROJECTED write-back observation from an Apply
@@ -515,7 +594,7 @@ func (h *Host) ApplyRaw(ctx context.Context, req ApplyInvoke) (RawApplyResult, e
 	for _, n := range req.CredentialRefs {
 		creds = append(creds, &pluginv1.CredentialRef{Name: n})
 	}
-	stream, err := h.client.Apply(ctx, &pluginv1.ApplyRequest{
+	applyReq := &pluginv1.ApplyRequest{
 		Envelope: &pluginv1.Envelope{
 			Principal: &pluginv1.Principal{Id: req.Principal, Kind: "user"},
 			Creds:     creds,
@@ -523,7 +602,14 @@ func (h *Host) ApplyRaw(ctx context.Context, req ApplyInvoke) (RawApplyResult, e
 		Desired: &pluginv1.Payload{Bytes: req.Params},
 		DryRun:  req.DryRun,
 		Targets: targets,
-	})
+	}
+	// A Gate-approved pinned plan: the core-verified bytes + the digest the plugin
+	// applies EXACTLY (never a plan it re-resolves, ADR-0047 §8).
+	if len(req.PinnedPlan) > 0 {
+		applyReq.PlanRef = &pluginv1.ArtifactRef{Sha256: req.PlanDigest}
+		applyReq.PinnedPlan = req.PinnedPlan
+	}
+	stream, err := h.client.Apply(ctx, applyReq)
 	if err != nil {
 		return out, fmt.Errorf("pluginhost: apply: %w", err)
 	}

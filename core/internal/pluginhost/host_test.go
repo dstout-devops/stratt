@@ -1,7 +1,10 @@
 package pluginhost_test
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"log/slog"
@@ -18,6 +21,7 @@ import (
 	"google.golang.org/protobuf/types/known/structpb"
 
 	"github.com/dstout-devops/stratt/core/internal/graph"
+	"github.com/dstout-devops/stratt/core/internal/planstore"
 	"github.com/dstout-devops/stratt/core/internal/pluginhost"
 	pluginv1 "github.com/dstout-devops/stratt/sdk/stratt/plugin/v1"
 	"github.com/dstout-devops/stratt/types"
@@ -85,6 +89,35 @@ type fakePlugin struct {
 	// core-side fold / confused-deputy / write-back governance precisely.
 	applyStream    []*pluginv1.ApplyResponse
 	captureApplyIn func(*pluginv1.ApplyRequest)
+	planResp       *pluginv1.PlanResponse
+}
+
+func (f *fakePlugin) Plan(_ context.Context, _ *pluginv1.PlanRequest) (*pluginv1.PlanResponse, error) {
+	if f.planResp != nil {
+		return f.planResp, nil
+	}
+	return &pluginv1.PlanResponse{}, nil
+}
+
+// memArtifactDB is an in-memory, write-once planstore.ArtifactDB for host tests.
+type memArtifactDB struct{ m map[string][]byte }
+
+func (d *memArtifactDB) PutPlanArtifact(_ context.Context, sha string, ct []byte) error {
+	if d.m == nil {
+		d.m = map[string][]byte{}
+	}
+	if _, ok := d.m[sha]; !ok {
+		d.m[sha] = append([]byte(nil), ct...)
+	}
+	return nil
+}
+
+func (d *memArtifactDB) GetPlanArtifact(_ context.Context, sha string) ([]byte, error) {
+	ct, ok := d.m[sha]
+	if !ok {
+		return nil, planstore.ErrNotFound
+	}
+	return ct, nil
 }
 
 func (f *fakePlugin) Apply(req *pluginv1.ApplyRequest, stream grpc.ServerStreamingServer[pluginv1.ApplyResponse]) error {
@@ -792,5 +825,68 @@ func TestHost_ApplyWriteBackGovernedUnprojected(t *testing.T) {
 	}
 	if string(wb.Facets["vm.config"]) != `{"cpus":4}` {
 		t.Fatalf("granted facet must survive write-back: %+v", wb.Facets)
+	}
+}
+
+const planTestKey = "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"
+
+// TestHost_PlanContentAddressesSavedPlan proves the Plan verb: the CORE computes
+// the sha256 of the saved plan (a plugin-asserted plan.sha256 is advisory),
+// encrypts + stores it, and returns that digest as the pin (ADR-0047 §8).
+func TestHost_PlanContentAddressesSavedPlan(t *testing.T) {
+	grant := vcenterGrant(pluginhost.TierTrusted, []string{"vcenter.uuid"})
+	saved := []byte("SAVED-TOFU-PLAN-with-secret-hunter2")
+	fp := &fakePlugin{pluginID: grant.PluginIdentity, planResp: &pluginv1.PlanResponse{
+		Summary:   "plan for prod",
+		SavedPlan: saved,
+		Plan:      &pluginv1.ArtifactRef{Sha256: "LIES-plugin-asserted-hash"}, // advisory, ignored
+	}}
+	db := &memArtifactDB{}
+	ps, err := planstore.New(planTestKey, db)
+	if err != nil {
+		t.Fatalf("planstore: %v", err)
+	}
+	h := pluginhost.New(nil, serve(t, fp), grant, discardLog()).UsePlanStore(ps)
+	out, err := h.Plan(context.Background(), pluginhost.PlanInvoke{Principal: "alice", Params: []byte(`{"workspace":"prod"}`)})
+	if err != nil {
+		t.Fatalf("plan: %v", err)
+	}
+	sum := sha256.Sum256(saved)
+	want := hex.EncodeToString(sum[:])
+	if out.Digest != want {
+		t.Fatalf("core must content-address the saved plan itself, got %q want %q (plugin's asserted hash must be ignored)", out.Digest, want)
+	}
+	// Stored encrypted — the plan secret must not sit in the clear.
+	if bytes.Contains(db.m[want], []byte("hunter2")) {
+		t.Fatal("saved plan must be encrypted at rest (§2.5)")
+	}
+	// GetVerified round-trips the exact plan.
+	got, err := h.VerifyPinnedPlan(context.Background(), out.Digest)
+	if err != nil || !bytes.Equal(got, saved) {
+		t.Fatalf("verify pinned plan: %v (%q)", err, got)
+	}
+}
+
+// TestHost_ApplyPinnedPlanCrossesTheWire proves a Gate-approved pinned plan reaches
+// the plugin as bytes + plan_ref (the plugin applies EXACTLY it, ADR-0047 §8).
+func TestHost_ApplyPinnedPlanCrossesTheWire(t *testing.T) {
+	grant := vcenterGrant(pluginhost.TierTrusted, []string{"vcenter.uuid"})
+	var captured *pluginv1.ApplyRequest
+	fp := &fakePlugin{pluginID: grant.PluginIdentity,
+		captureApplyIn: func(r *pluginv1.ApplyRequest) { captured = r },
+		applyStream:    []*pluginv1.ApplyResponse{{Event: &pluginv1.TaskEvent{Terminal: true, Ok: true}, Result: &pluginv1.ItemResult{Status: pluginv1.ItemResult_STATUS_CHANGED}}},
+	}
+	h := pluginhost.New(nil, serve(t, fp), grant, discardLog())
+	_, err := h.ApplyRaw(context.Background(), pluginhost.ApplyInvoke{
+		Principal: "alice", PlanDigest: "abc123", PinnedPlan: []byte("PINNED-PLAN-BYTES"),
+	})
+	if err != nil {
+		t.Fatalf("applyRaw: %v", err)
+	}
+	if captured == nil || string(captured.GetPinnedPlan()) != "PINNED-PLAN-BYTES" {
+		t.Fatalf("pinned plan bytes must reach the plugin: %+v", captured.GetPinnedPlan())
+	}
+	if captured.GetPlanRef().GetSha256() != "abc123" {
+		t.Fatalf("plan_ref digest must reach the plugin, got %q", captured.GetPlanRef().GetSha256())
 	}
 }

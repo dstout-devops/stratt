@@ -154,9 +154,26 @@ func (s *Server) Apply(req *pluginv1.ApplyRequest, stream grpc.ServerStreamingSe
 		_ = stream.Send(resp)
 	}
 	var args []string
-	if req.GetDryRun() {
+	switch {
+	case req.GetDryRun():
 		args = append([]string{"plan", "-input=false", "-no-color", "-json"}, varFileArg(varFile)...)
-	} else {
+	case len(req.GetPinnedPlan()) > 0:
+		// Apply EXACTLY the Gate-approved plan the core verified (ADR-0047 §8): write
+		// the pinned bytes and `tofu apply <planfile>` — never re-plan. Defensively
+		// re-check the digest the core pinned (belt to the core's verify-don't-trust).
+		if ref := req.GetPlanRef().GetSha256(); ref != "" {
+			sum := sha256.Sum256(req.GetPinnedPlan())
+			if hex.EncodeToString(sum[:]) != ref {
+				return sendApplyTerminal(stream, false, pluginv1.ItemResult_STATUS_FAILED, "pinned plan bytes do not match plan_ref sha256", next())
+			}
+		}
+		planPath := filepath.Join(dir, ".terraform", "stratt-pinned.tfplan")
+		if werr := os.WriteFile(planPath, req.GetPinnedPlan(), 0o600); werr != nil {
+			return sendApplyTerminal(stream, false, pluginv1.ItemResult_STATUS_FAILED, "write pinned plan: "+werr.Error(), next())
+		}
+		defer os.Remove(planPath)
+		args = []string{"apply", "-input=false", "-no-color", "-json", planPath}
+	default:
 		args = append([]string{"apply", "-input=false", "-auto-approve", "-no-color", "-json"}, varFileArg(varFile)...)
 	}
 	_, rc, rerr := s.run.run(ctx, dir, env, args, onLine)
@@ -237,10 +254,11 @@ func (s *Server) Plan(ctx context.Context, req *pluginv1.PlanRequest) (*pluginv1
 	redacted := redactPlan(showRaw)
 	empty := !planHasChanges(showRaw)
 	return &pluginv1.PlanResponse{
-		Diff:    &pluginv1.Payload{Bytes: redacted},
-		Summary: fmt.Sprintf("opentofu plan for workspace %q", p.Workspace),
-		Empty:   empty,
-		Plan:    &pluginv1.ArtifactRef{Sha256: digest, MediaType: "application/vnd.opentofu.plan"},
+		Diff:      &pluginv1.Payload{Bytes: redacted},
+		Summary:   fmt.Sprintf("opentofu plan for workspace %q", p.Workspace),
+		Empty:     empty,
+		Plan:      &pluginv1.ArtifactRef{Sha256: digest, MediaType: "application/vnd.opentofu.plan"},
+		SavedPlan: planBytes, // opaque; the CORE re-hashes + content-addresses (§8)
 	}, nil
 }
 

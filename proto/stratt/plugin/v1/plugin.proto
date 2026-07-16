@@ -360,6 +360,13 @@ message PlanResponse {
   // the plan a Gate approves; ApplyRequest.plan_ref then applies EXACTLY it — the
   // core binds this sha256 at Gate approval and re-verifies it at the Apply boundary.
   ArtifactRef plan = 4;
+  // The OPAQUE saved-plan BYTES (ADR-0047 §8). The core content-addresses these
+  // (sha256 it COMPUTES — a plugin-asserted `plan.sha256` is advisory, §1.5),
+  // encrypts + stores them write-once, and re-hashes at the Apply boundary
+  // (verify-don't-trust). Hashing an opaque blob is content-blind. Delivered inline
+  // on the UNARY Plan verb so a streaming dry-run Apply stays structurally
+  // non-pinnable (ApplyResponse has no such field). Empty when the plan is empty.
+  bytes saved_plan = 5;
 }
 
 message ApplyRequest {
@@ -370,6 +377,13 @@ message ApplyRequest {
   // Apply EXACTLY the plan a Gate approved (ADR-0047 §7): the core verifies this
   // sha256 against the Gate-approved digest at THIS boundary. Empty == apply `desired`.
   ArtifactRef plan_ref = 5;
+  // The core-VERIFIED pinned plan bytes (ADR-0047 §8): the core fetched them from
+  // its encrypted store at plan_ref.sha256 and RE-HASHED them (verify-don't-trust),
+  // then hands them to the plugin to apply EXACTLY (the plugin wrote them itself at
+  // Plan time, so this is not the core leaking a secret — it returns the plugin's
+  // own bytes over the authenticated channel). Set iff plan_ref is; the plugin
+  // applies these, never a plan it re-resolves itself. May re-verify hash==plan_ref.
+  bytes pinned_plan = 7;
   // The core-resolved actuation target set, sent LEGIBLY — NEVER baked into the
   // opaque `desired` payload (guardian, ADR-0047 §1.1/§1.2/§1.8). The target set
   // carries blast-radius/authz weight and is the correlation key the core owns:
