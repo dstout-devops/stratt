@@ -29,7 +29,7 @@ require (
 	go.temporal.io/api v1.63.0
 	go.temporal.io/sdk v1.46.0
 	go.yaml.in/yaml/v3 v3.0.4
-	golang.org/x/oauth2 v0.36.0
+	golang.org/x/oauth2 v0.36.0 // indirect
 	golang.org/x/text v0.38.0
 	google.golang.org/grpc v1.82.1
 	google.golang.org/protobuf v1.36.12-0.20260120151049-f2248ac996af // indirect; pinned UP by k8s.io/* @v0.36.2; do NOT force to a tagged v1.36.x — that downgrades client-go to an alpha (ADR-0046 dependency-scout)

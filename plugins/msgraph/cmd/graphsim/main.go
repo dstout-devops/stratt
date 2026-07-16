@@ -1,5 +1,7 @@
 // Command graphsim runs the dev-harness Microsoft Graph stand-in (ADR-0014):
-// the vcsim posture for the msgraph Connector. Dev only — never deployed.
+// the vcsim posture for the msgraph plugin. Dev only — never deployed. It lives
+// with the plugin now (ADR-0046/0047 cutover): the sim is the plugin's own test
+// double, not a control-plane concern.
 package main
 
 import (
@@ -8,7 +10,7 @@ import (
 	"os"
 	"time"
 
-	"github.com/dstout-devops/stratt/core/internal/connectors/msgraph/graphsim"
+	"github.com/dstout-devops/stratt/plugins/msgraph/graphsim"
 )
 
 func main() {
