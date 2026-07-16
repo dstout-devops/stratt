@@ -86,6 +86,9 @@ and AWX→Stratt migration mapping: invoke the **`/vocabulary`** skill.
   before finalizing.
 - **New dependency?** Run it past the **`dependency-scout`** subagent (evergreen §1.7: license, N-1
   support, upgrade track record) before adding it.
+- **New core-model identifier?** Before merging a new Entity/Facet/Contract type name, API route, DB
+  table/column, or CLI noun, run the **`vocabulary-linter`** subagent against it (charter §2 — naming
+  is frozen v1.0 API).
 - **Decisions of consequence** get an ADR under `docs/adr/` — run **`/new-adr`**.
 
 ## Repo etiquette
