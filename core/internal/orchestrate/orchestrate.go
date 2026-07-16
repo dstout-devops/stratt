@@ -317,6 +317,18 @@ type PluginAction struct {
 	DryRunnable bool
 }
 
+// PluginActuator is an Actuator provided by a plugin over the port
+// (ADR-0047/0048): its host (for ApplyRaw) and the core-side dry-run capability
+// (reconciled from the Manifest at registration, never trusted live, guardian
+// fix #6). Unlike an Action, an actuation Step's authz chokepoint is the
+// runner-on-View grant (ADR-0028), enforced in RunAgainstView BEFORE Execute — so
+// a plugin actuator may legitimately carry ZERO CredentialRefs (guardian fix #4:
+// the Action path's ungated-refusal is deliberately NOT ported here).
+type PluginActuator struct {
+	Host        *pluginhost.Host
+	DryRunnable bool
+}
+
 type Activities struct {
 	Store      *graph.Store
 	Dispatcher *dispatch.Dispatcher
@@ -331,6 +343,10 @@ type Activities struct {
 	// over the sovereign port (ADR-0047/0048). Exclusive with the in-tree registry
 	// and across plugins — main.go fails registration on a collision (§2.4).
 	PluginActions map[string]PluginAction
+	// PluginActuators routes an Actuator name to the plugin that provides its
+	// Plan/Apply/Destroy verbs over the port (ADR-0047/0048). Exclusive with the
+	// in-tree Actuators registry and across plugins — main.go fails on a collision.
+	PluginActuators map[string]PluginActuator
 	// Evidence seals Finding audit bundles into the object store (§2.4,
 	// ADR-0029). Nil when no object store is configured — Findings then open
 	// unsealed (a logged no-op), like the opentofu actuator is gated on a state
@@ -598,6 +614,13 @@ func (a *Activities) Execute(ctx context.Context, in RunInput, slice int, site s
 	if name == "" {
 		name = "ansible"
 	}
+	// ── Route: a plugin-provided Actuator applies over the port; else the pod ──
+	// The authz chokepoint is the runner-on-View grant (RunAgainstView, ADR-0028)
+	// already enforced BEFORE this activity — NOT the Action path's credential
+	// use-check — so a plugin actuation Step may carry zero creds (guardian #4).
+	if pa, ok := a.PluginActuators[name]; ok {
+		return a.executePlugin(ctx, in, site, resolved, creds, pa)
+	}
 	act, ok := a.Actuators[name]
 	if !ok {
 		// Unknown Actuator can never succeed — fail terminally, no retries.
@@ -635,6 +658,70 @@ func (a *Activities) Execute(ctx context.Context, in RunInput, slice int, site s
 		RunID: in.RunID, Slice: slice, Site: site,
 		Actuator: name, DryRun: in.DryRun, Spec: spec, Creds: creds,
 	}, heartbeat)
+}
+
+// executePlugin runs one Step slice through a plugin-hosted Actuator over the
+// sovereign port (ADR-0047/0048). It reuses the reviewed governance of the port
+// host (ApplyRaw): targets cross LEGIBLY (never in the opaque params, guardian
+// #1), Succeeded is folded CORE-SIDE from per-target statuses (#3), and NOTHING
+// is projected here — the returned dispatch.Result flows to CollectFacts →
+// ProjectFacts, the single batched Run-provenance writer (#2). The View-grant is
+// the authz chokepoint (already enforced in RunAgainstView), so zero creds is
+// legitimate — the Action path's ungated-refusal is NOT ported (#4).
+func (a *Activities) executePlugin(ctx context.Context, in RunInput, site string, resolved ResolvedTargets, creds []dispatch.CredentialMount, pa PluginActuator) (dispatch.Result, error) {
+	// Dry-run refused CORE-SIDE from the reconciled capability, never delegated —
+	// a plugin that silently ignored dry_run would run live side effects (#6).
+	if in.DryRun && !pa.DryRunnable {
+		return dispatch.Result{}, temporal.NewNonRetryableApplicationError(
+			fmt.Sprintf("actuator %q does not support dry-run", in.Actuator), "DryRunUnsupported", nil)
+	}
+	// Sites deferred (ADR-0047 hub-only v1): the port carries only credential
+	// NAMES, so the §2.5 remote-safe hazard the pod path has does not arise — but
+	// remote execution loci for a plugin actuator are a later slice, not silently
+	// run hub-local (§1.8: never pretend a remote Step ran where it was asked).
+	if site != "" && site != types.LocalSite {
+		return dispatch.Result{}, temporal.NewNonRetryableApplicationError(
+			fmt.Sprintf("actuator %q is plugin-hosted; remote Site execution is not yet supported (hub-only v1)", in.Actuator),
+			"PluginActuatorSiteUnsupported", nil)
+	}
+	// Only the use-checked, authorized names cross the wire (§2.5); the plugin
+	// resolves material against its own broker, confined to these.
+	names := make([]string, 0, len(creds))
+	for _, c := range creds {
+		names = append(names, c.RefName)
+	}
+	// The core-resolved target set crosses LEGIBLY (#1): name + connection vars.
+	// (identity_keys for write-back re-correlation are resolved by the projection
+	// path today; passing them to identity-rendering actuators is a follow-up.)
+	targets := make([]pluginhost.ApplyTarget, 0, len(resolved.Targets))
+	for _, t := range resolved.Targets {
+		targets = append(targets, pluginhost.ApplyTarget{Name: t.Name, Vars: t.Vars})
+	}
+	activity.RecordHeartbeat(ctx) // canceled Run stops promptly (ADR-0026)
+	raw, err := pa.Host.ApplyRaw(ctx, pluginhost.ApplyInvoke{
+		Principal:      in.Principal,
+		Params:         in.Params,
+		Targets:        targets,
+		DryRun:         in.DryRun,
+		CredentialRefs: names,
+	})
+	if err != nil {
+		return dispatch.Result{}, err
+	}
+	// Surface governance rejections (dropped land-grabs / confused-deputy targets)
+	// for §1.8 honesty — never swallowed. (Persisting as Findings is the follow-up.)
+	for _, r := range raw.Rejections {
+		activity.GetLogger(ctx).Warn("plugin apply emission rejected",
+			"actuator", in.Actuator, "kind", r.Kind, "detail", r.Detail, "reason", r.Reason)
+	}
+	// Map the governed, UNPROJECTED result to dispatch.Result. CollectFacts →
+	// ProjectFacts perform the single batched projection with Run provenance (#2).
+	res := dispatch.Result{Succeeded: raw.Succeeded, PerTarget: raw.PerTarget, Drift: raw.Drift}
+	for _, e := range raw.WriteBack {
+		res.Entities = append(res.Entities, actuators.EntityObservation{
+			Kind: e.Kind, IdentityKeys: e.IdentityKeys, Labels: e.Labels})
+	}
+	return res, nil
 }
 
 // CleanupRun deletes a Run's K8s Jobs on cancellation (invoked from the
