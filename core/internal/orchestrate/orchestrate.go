@@ -28,6 +28,7 @@ import (
 	"github.com/dstout-devops/stratt/core/internal/events"
 	"github.com/dstout-devops/stratt/core/internal/evidencestore"
 	"github.com/dstout-devops/stratt/core/internal/graph"
+	"github.com/dstout-devops/stratt/core/internal/pluginhost"
 	"github.com/dstout-devops/stratt/core/internal/siteproto"
 	"github.com/dstout-devops/stratt/types"
 )
@@ -308,6 +309,14 @@ func sitesTouched(result dispatch.Result) []string {
 }
 
 // Activities carries the worker-side dependencies.
+// PluginAction is a Connector Action provided by a plugin over the port
+// (ADR-0047/0048): its host (for InvokeRaw) and the core-side dry-run capability
+// (reconciled from the ActionDecl at registration, never trusted live).
+type PluginAction struct {
+	Host        *pluginhost.Host
+	DryRunnable bool
+}
+
 type Activities struct {
 	Store      *graph.Store
 	Dispatcher *dispatch.Dispatcher
@@ -318,6 +327,10 @@ type Activities struct {
 	// Actions is the registry of in-tree Connector Actions by namespaced name
 	// (§2.2, ADR-0031) — the targetless typed-operation seam.
 	Actions actions.Registry
+	// PluginActions routes a Connector Action name to the plugin that provides it
+	// over the sovereign port (ADR-0047/0048). Exclusive with the in-tree registry
+	// and across plugins — main.go fails registration on a collision (§2.4).
+	PluginActions map[string]PluginAction
 	// Evidence seals Finding audit bundles into the object store (§2.4,
 	// ADR-0029). Nil when no object store is configured — Findings then open
 	// unsealed (a logged no-op), like the opentofu actuator is gated on a state

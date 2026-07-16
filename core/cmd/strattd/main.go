@@ -330,15 +330,61 @@ func run(ctx context.Context, log *slog.Logger) error {
 	// In-tree Action registry (§2.2, ADR-0031): targetless typed operations
 	// shipped by Connectors — the write side of cert-issuer (retiring the
 	// ADR-0030 Actuator-in-disguise) and awsec2 create-vm.
+	// awsec2 create-vm stays in-tree ONLY when no awsec2 plugin is configured;
+	// with the plugin the port provides it and a registry entry would collide.
+	awsPluginAddr := os.Getenv("STRATT_AWS_PLUGIN_ADDR")
 	actionRegistry := actions.Registry{}
-	for _, act := range []actions.Action{
+	inTreeActions := []actions.Action{
 		certaction.Issue(), certaction.Renew(), certaction.Revoke(),
-		awsaction.CreateVM(env("STRATT_EE_ACTIONS_IMAGE", "stratt-ee-actions:dev")),
 		notifyaction.Webhook(),
-	} {
+	}
+	if awsPluginAddr == "" {
+		inTreeActions = append(inTreeActions, awsaction.CreateVM(env("STRATT_EE_ACTIONS_IMAGE", "stratt-ee-actions:dev")))
+	}
+	for _, act := range inTreeActions {
 		actionRegistry[act.Name()] = act
 	}
 	log.Info("action registry ready", "actions", len(actionRegistry))
+
+	// ── Plugin-provided Actions over the port (ADR-0047/0048 cutover) ────────
+	// A plugin Action name is EXCLUSIVE with the in-tree registry and across
+	// plugins (§2.4): a collision fails startup, never silently overwrites.
+	pluginActions := map[string]orchestrate.PluginAction{}
+	registerPluginAction := func(name string, host *pluginhost.Host, dryRunnable bool) error {
+		if _, dup := pluginActions[name]; dup {
+			return fmt.Errorf("plugin action %q claimed by two plugins (§2.4 exclusive)", name)
+		}
+		if _, inTree := actionRegistry[name]; inTree {
+			return fmt.Errorf("plugin action %q collides with an in-tree Action (§2.4 exclusive)", name)
+		}
+		pluginActions[name] = orchestrate.PluginAction{Host: host, DryRunnable: dryRunnable}
+		return nil
+	}
+
+	// awsec2 plugin: when configured it provides BOTH the instance Syncer and the
+	// create-vm Action over the port; the in-tree awsec2 is then disabled.
+	var awsHost *pluginhost.Host
+	if awsPluginAddr != "" {
+		conn, err := grpc.NewClient(awsPluginAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+		if err != nil {
+			return fmt.Errorf("awsec2 plugin dial %s: %w", awsPluginAddr, err)
+		}
+		defer conn.Close()
+		grant := pluginhost.Grant{
+			PluginIdentity:   env("STRATT_AWS_PLUGIN_ID", "awsec2"),
+			Tier:             pluginhost.Tier(env("STRATT_AWS_TIER", "trusted")),
+			Source:           types.Source{Kind: "awsec2", Name: env("STRATT_AWS_SOURCE_NAME", "awsec2"), Endpoint: os.Getenv("STRATT_AWS_ENDPOINT")},
+			FacetNamespaces:  []string{"instance.compute", "instance.network", "instance.state"},
+			LabelKeys:        []string{"aws.region", "aws.name"},
+			IdentitySchemes:  []string{"aws.instanceId"},
+			TombstoneSchemes: []string{"aws.instanceId"},
+		}
+		awsHost = pluginhost.New(store, pluginv1.NewPluginServiceClient(conn), grant, log)
+		if err := registerPluginAction("awsec2/create-vm", awsHost, true); err != nil {
+			return err
+		}
+		log.Info("awsec2 plugin actions registered", "addr", awsPluginAddr)
+	}
 
 	// mcp Actuator (ADR-0022): store-backed declaration + pin lookups; the
 	// external server runs only inside the sandboxed EE pod.
@@ -419,7 +465,7 @@ func run(ctx context.Context, log *slog.Logger) error {
 	// and polls child Runs on peer Cells. Nil-safe on a single-Cell estate (no
 	// secret ⇒ no peers ⇒ RunAcrossCells is never reached).
 	peerClient := cellrouter.NewPeerClient([]byte(os.Getenv("STRATT_CELL_SECRET")))
-	w.RegisterActivity(&orchestrate.Activities{Store: store, Dispatcher: dispatcher, Bus: bus, Authz: authorizer, Actuators: registry, Actions: actionRegistry, Evidence: evidence, Sites: siteGateway, Peers: peerClient})
+	w.RegisterActivity(&orchestrate.Activities{Store: store, Dispatcher: dispatcher, Bus: bus, Authz: authorizer, Actuators: registry, Actions: actionRegistry, PluginActions: pluginActions, Evidence: evidence, Sites: siteGateway, Peers: peerClient})
 	if err := w.Start(); err != nil {
 		return fmt.Errorf("temporal worker: %w", err)
 	}
@@ -537,8 +583,17 @@ func run(ctx context.Context, log *slog.Logger) error {
 		log.Info("no MS Graph plugin configured (STRATT_MSGRAPH_PLUGIN_ADDR empty); syncer idle")
 	}
 
-	// ── EC2 cloud-instance Syncer (ADR-0014) ─────────────────────────────
-	if region := os.Getenv("STRATT_AWS_REGION"); region != "" {
+	// ── EC2 instance Syncer: plugin over the port when configured, else in-tree ─
+	if awsHost != nil {
+		interval, err := time.ParseDuration(env("STRATT_AWS_INTERVAL", "60s"))
+		if err != nil {
+			return fmt.Errorf("awsec2 interval: %w", err)
+		}
+		src := env("STRATT_AWS_SOURCE_NAME", "awsec2")
+		controllers = append(controllers, homeSupervise(src, awsHost.Register, func(cctx context.Context) error {
+			return awsHost.SyncLoop(cctx, interval)
+		}))
+	} else if region := os.Getenv("STRATT_AWS_REGION"); region != "" {
 		interval, err := time.ParseDuration(env("STRATT_AWS_INTERVAL", "60s"))
 		if err != nil {
 			return fmt.Errorf("awsec2 interval: %w", err)
@@ -553,7 +608,7 @@ func run(ctx context.Context, log *slog.Logger) error {
 		}, interval, store, log)
 		controllers = append(controllers, homeSupervise(env("STRATT_AWS_SOURCE_NAME", "awsec2"), syncer.Register, syncer.Run))
 	} else {
-		log.Info("no EC2 Source configured (STRATT_AWS_REGION empty); syncer idle")
+		log.Info("no EC2 Source configured (STRATT_AWS_PLUGIN_ADDR/STRATT_AWS_REGION empty); syncer idle")
 	}
 
 	// ── cert-issuer (CLM) Syncer (ADR-0030; started when a Source is set) ─

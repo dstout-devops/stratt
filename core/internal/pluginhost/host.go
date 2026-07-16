@@ -279,31 +279,61 @@ func (h *Host) Sync(ctx context.Context) error {
 	return nil
 }
 
-// Invoke runs one Action over the port (ADR-0047): it calls the plugin's Invoke,
-// streams TaskEvents (audit/descent), and on the terminal message captures the
-// InvokeResult — projecting its entities with RUN provenance (WriterRun; the host
-// picks the write path per verb, never the plugin — ADR-0047 §2), gating identity
-// schemes exactly as on Observe, and returning the typed outputs. runID stamps
-// provenance; Register must have run.
-func (h *Host) Invoke(ctx context.Context, runID, action string, args []byte, dryRun bool) (InvokeOutcome, error) {
-	var out InvokeOutcome
-	if h.source.ID == "" {
-		return out, errors.New("pluginhost: Invoke before Register")
+// ActionInvoke is a governed Action invocation over the port (ADR-0047). The
+// LAUNCHING Principal (not the plugin's channel identity) and ONLY the
+// use-checked, platform-authorized CredentialRef NAMES cross the wire — the
+// read-direction mirror of §7's provisioned-cred confinement.
+type ActionInvoke struct {
+	Principal            string // the launching Principal (audit/authz identity, §1.6)
+	Action               string
+	Args                 []byte
+	DryRun               bool
+	CredentialRefs       []string // authorized names only (the credential-oracle closure)
+	ExpectOutputContract string   // core-pinned output-contract id; "" skips the reconcile
+}
+
+// ActionEntity is a GOVERNED, UNPROJECTED provision→configure observation —
+// kind + identity keys that passed the tier+grant gate. The orchestration
+// projects it once, with RUN provenance (per-verb write path, ADR-0047 §2).
+type ActionEntity struct {
+	Kind         string
+	IdentityKeys map[string]string
+}
+
+// RawInvokeResult is the governed result of an Action invocation with NOTHING
+// written to the graph — the caller performs the single projection.
+type RawInvokeResult struct {
+	OK               bool
+	Outputs          []byte
+	Entities         []ActionEntity
+	ProvisionedCreds []string
+	Rejections       []Rejection
+}
+
+// InvokeRaw calls the plugin's Invoke and returns a GOVERNED result WITHOUT
+// touching the graph. It applies the host's grant governance (identity-scheme
+// gate, ADR-0047 §1/finding #4) to every returned entity, reconciles the
+// plugin-asserted output contract against the core-pinned id (§1.5 — drift is
+// blocking), namespace-confines provisioned creds (§7), and surfaces rejections.
+// "Raw" means unprojected, NEVER ungated.
+func (h *Host) InvokeRaw(ctx context.Context, req ActionInvoke) (RawInvokeResult, error) {
+	var out RawInvokeResult
+	creds := make([]*pluginv1.CredentialRef, 0, len(req.CredentialRefs))
+	for _, n := range req.CredentialRefs {
+		creds = append(creds, &pluginv1.CredentialRef{Name: n})
 	}
 	stream, err := h.client.Invoke(ctx, &pluginv1.InvokeRequest{
-		Envelope: &pluginv1.Envelope{Principal: &pluginv1.Principal{Id: h.grant.PluginIdentity, Kind: "service"}},
-		Args:     &pluginv1.Payload{Bytes: args},
-		Action:   action,
-		DryRun:   dryRun,
+		Envelope: &pluginv1.Envelope{
+			Principal: &pluginv1.Principal{Id: req.Principal, Kind: "user"},
+			Creds:     creds,
+		},
+		Args:   &pluginv1.Payload{Bytes: req.Args},
+		Action: req.Action,
+		DryRun: req.DryRun,
 	})
 	if err != nil {
-		return out, fmt.Errorf("pluginhost: invoke %q: %w", action, err)
+		return out, fmt.Errorf("pluginhost: invoke %q: %w", req.Action, err)
 	}
-	// RUN provenance — the imperative Action write path, distinct from the Syncer
-	// Observe path (per-verb projector selection, ADR-0047 §2).
-	prov := types.Provenance{WriterKind: types.WriterRun, WriterRef: runID, SourceID: h.source.ID, At: time.Now().UTC()}
-	projector := h.store.RunProjector()
-
 	for {
 		resp, err := stream.Recv()
 		if errors.Is(err, io.EOF) {
@@ -315,50 +345,74 @@ func (h *Host) Invoke(ctx context.Context, runID, action string, args []byte, dr
 			}
 			return out, fmt.Errorf("pluginhost: invoke recv: %w", err)
 		}
-		if ev := resp.GetEvent(); ev != nil {
-			out.Events++
-			if ev.GetTerminal() {
-				out.OK = ev.GetOk()
-			}
+		if ev := resp.GetEvent(); ev != nil && ev.GetTerminal() {
+			out.OK = ev.GetOk()
 		}
 		res := resp.GetResult()
 		if res == nil {
 			continue // diagnostic message; the result rides the terminal one
 		}
 		out.Outputs = res.GetOutputs().GetBytes()
-		out.OutputContract = res.GetOutputContract().GetSchemaId()
-
-		// provision→configure: project each entity by kind + granted identity with
-		// RUN provenance. (Facet/label write-back on the Invoke path — with the same
-		// ownership rules as Observe — is the recorded follow-up; identity is what
-		// lets the next Syncer sweep correlate onto the provisioned entity.)
+		// §1.5: the plugin's asserted output contract must match the core-pinned id.
+		if got := res.GetOutputContract().GetSchemaId(); req.ExpectOutputContract != "" && got != "" && got != req.ExpectOutputContract {
+			return out, fmt.Errorf("pluginhost: action %q output-contract drift: plugin asserted %q, core pins %q", req.Action, got, req.ExpectOutputContract)
+		}
 		for _, e := range res.GetEntities() {
 			ids := map[string]string{}
 			for scheme, val := range e.GetIdentityKeys() {
 				if ok, reason := h.grant.allowsIdentity(scheme); !ok {
-					h.reject("identity-scheme", scheme, "invoke: "+reason)
+					r := Rejection{Kind: "identity-scheme", Detail: scheme, Reason: "invoke: " + reason}
+					h.reject(r.Kind, r.Detail, r.Reason)
+					out.Rejections = append(out.Rejections, r)
 					continue
 				}
 				ids[scheme] = val
 			}
 			if len(ids) == 0 {
-				h.reject("entity", e.GetKind(), "invoke: no granted identity key")
+				r := Rejection{Kind: "entity", Detail: e.GetKind(), Reason: "invoke: no granted identity key"}
+				h.reject(r.Kind, r.Detail, r.Reason)
+				out.Rejections = append(out.Rejections, r)
 				continue
 			}
-			gids, err := projector.UpsertEntities(ctx, prov, []graph.EntityUpsert{{Kind: e.GetKind(), IdentityKeys: ids}})
-			if err != nil {
-				return out, fmt.Errorf("pluginhost: invoke project: %w", err)
-			}
-			out.ProvisionedEntity = append(out.ProvisionedEntity, gids...)
+			out.Entities = append(out.Entities, ActionEntity{Kind: e.GetKind(), IdentityKeys: ids})
 		}
 		for _, c := range res.GetProvisionedCreds() {
-			name := c.GetName()
-			if !h.ownsCred(name) {
-				h.reject("provisioned-cred", name, "outside the plugin's credential namespace (ADR-0047 §7)")
+			if !h.ownsCred(c.GetName()) {
+				r := Rejection{Kind: "provisioned-cred", Detail: c.GetName(), Reason: "outside the plugin's credential namespace (ADR-0047 §7)"}
+				h.reject(r.Kind, r.Detail, r.Reason)
+				out.Rejections = append(out.Rejections, r)
 				continue
 			}
-			out.ProvisionedCreds = append(out.ProvisionedCreds, name)
+			out.ProvisionedCreds = append(out.ProvisionedCreds, c.GetName())
 		}
+	}
+	return out, nil
+}
+
+// Invoke is the direct/standalone Action path: InvokeRaw + project the governed
+// entities with RUN provenance (WriterRun, ADR-0047 §2). The orchestration uses
+// InvokeRaw + RecordActionResult instead, so projection stays a single path.
+// Register must have run (for the Source-stamped provenance).
+func (h *Host) Invoke(ctx context.Context, runID, action string, args []byte, dryRun bool) (InvokeOutcome, error) {
+	var out InvokeOutcome
+	if h.source.ID == "" {
+		return out, errors.New("pluginhost: Invoke before Register")
+	}
+	raw, err := h.InvokeRaw(ctx, ActionInvoke{Principal: h.grant.PluginIdentity, Action: action, Args: args, DryRun: dryRun})
+	if err != nil {
+		return out, err
+	}
+	out.OK = raw.OK
+	out.Outputs = raw.Outputs
+	out.ProvisionedCreds = raw.ProvisionedCreds
+	prov := types.Provenance{WriterKind: types.WriterRun, WriterRef: runID, SourceID: h.source.ID, At: time.Now().UTC()}
+	projector := h.store.RunProjector()
+	for _, e := range raw.Entities {
+		gids, err := projector.UpsertEntities(ctx, prov, []graph.EntityUpsert{{Kind: e.Kind, IdentityKeys: e.IdentityKeys}})
+		if err != nil {
+			return out, fmt.Errorf("pluginhost: invoke project: %w", err)
+		}
+		out.ProvisionedEntity = append(out.ProvisionedEntity, gids...)
 	}
 	return out, nil
 }

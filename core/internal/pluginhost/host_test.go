@@ -64,14 +64,15 @@ func newTestStore(t *testing.T) *graph.Store {
 // core suite never imports a domain plugin).
 type fakePlugin struct {
 	pluginv1.UnimplementedPluginServiceServer
-	pluginID         string
-	class            pluginv1.PluginClass
-	contracts        []*pluginv1.ContractDecl
-	tombstoneSchemes []string
-	entities         []*pluginv1.ObservedEntity
-	invokeEntities   []*pluginv1.ObservedEntity
-	invokeOutputs    []byte
-	invokeCreds      []string
+	pluginID               string
+	class                  pluginv1.PluginClass
+	contracts              []*pluginv1.ContractDecl
+	tombstoneSchemes       []string
+	entities               []*pluginv1.ObservedEntity
+	invokeEntities         []*pluginv1.ObservedEntity
+	invokeOutputs          []byte
+	invokeCreds            []string
+	invokeOutputContractID string
 	// delta-cursor knobs: on an empty-cursor (full) Observe, NextCursor=nextCursor;
 	// on a cursored (delta) Observe, emit deltaGone + NextCursor=deltaCursor.
 	nextCursor  string
@@ -108,11 +109,15 @@ func (f *fakePlugin) Invoke(_ *pluginv1.InvokeRequest, stream grpc.ServerStreami
 	for _, c := range f.invokeCreds {
 		creds = append(creds, &pluginv1.CredentialRef{Name: c})
 	}
+	ocID := f.invokeOutputContractID
+	if ocID == "" {
+		ocID = "action.output"
+	}
 	return stream.Send(&pluginv1.InvokeResponse{
 		Event: &pluginv1.TaskEvent{Level: pluginv1.TaskEvent_LEVEL_INFO, Message: "done", Terminal: true, Ok: true},
 		Result: &pluginv1.InvokeResult{
 			Outputs:          &pluginv1.Payload{Bytes: f.invokeOutputs},
-			OutputContract:   &pluginv1.ContractRef{SchemaId: "action.output"},
+			OutputContract:   &pluginv1.ContractRef{SchemaId: ocID},
 			Entities:         f.invokeEntities,
 			ProvisionedCreds: creds,
 		},
@@ -478,6 +483,57 @@ func TestHost_DeltaCursorPersistsAndResumes(t *testing.T) {
 	got := vms(t, store)
 	if len(got) != 1 || got[0].IdentityKeys["vcenter.uuid"] != "u1" {
 		t.Fatalf("after delta sync want only u1 live, got %+v", got)
+	}
+}
+
+// TestHost_InvokeRawOutputContractDrift proves §1.5 over the wire: a plugin that
+// asserts an output contract differing from the core-pinned id is a BLOCKING
+// error (drift is never silently absorbed). InvokeRaw needs no store.
+func TestHost_InvokeRawOutputContractDrift(t *testing.T) {
+	grant := vcenterGrant(pluginhost.TierTrusted, []string{"vcenter.uuid"})
+	client := serve(t, &fakePlugin{pluginID: "vcenter-dev", invokeOutputContractID: "WRONG.output"})
+	h := pluginhost.New(nil, client, grant, discardLog())
+	_, err := h.InvokeRaw(context.Background(), pluginhost.ActionInvoke{
+		Principal: "alice", Action: "vcenter/x", ExpectOutputContract: "actions/vcenter/x.output",
+	})
+	if err == nil {
+		t.Fatal("plugin output-contract drift must be a blocking error (§1.5)")
+	}
+}
+
+// TestHost_InvokeRawGovernsEntitiesUnprojected proves "raw ≠ ungated": InvokeRaw
+// applies the tier+grant identity gate and returns only governed observations,
+// UNPROJECTED (the orchestration writes once, with Run provenance). A community
+// plugin's shared dns.fqdn is dropped; the source-local id survives.
+func TestHost_InvokeRawGovernsEntitiesUnprojected(t *testing.T) {
+	grant := vcenterGrant(pluginhost.TierCommunity, []string{"vcenter.uuid", "dns.fqdn"})
+	inst := &pluginv1.ObservedEntity{Kind: "vm", IdentityKeys: map[string]string{"vcenter.uuid": "u1", "dns.fqdn": "vm1.corp"}}
+	client := serve(t, &fakePlugin{pluginID: "vcenter-dev", invokeEntities: []*pluginv1.ObservedEntity{inst}})
+	h := pluginhost.New(nil, client, grant, discardLog())
+	raw, err := h.InvokeRaw(context.Background(), pluginhost.ActionInvoke{Principal: "alice", Action: "vcenter/x"})
+	if err != nil {
+		t.Fatalf("invokeRaw: %v", err)
+	}
+	if !raw.OK {
+		t.Fatal("expected terminal ok")
+	}
+	if len(raw.Entities) != 1 {
+		t.Fatalf("want 1 governed entity, got %d", len(raw.Entities))
+	}
+	if _, leaked := raw.Entities[0].IdentityKeys["dns.fqdn"]; leaked {
+		t.Fatalf("community plugin's shared dns.fqdn must be gated out: %+v", raw.Entities[0].IdentityKeys)
+	}
+	if raw.Entities[0].IdentityKeys["vcenter.uuid"] != "u1" {
+		t.Fatalf("source-local identity must survive: %+v", raw.Entities[0].IdentityKeys)
+	}
+	var gated bool
+	for _, r := range raw.Rejections {
+		if r.Kind == "identity-scheme" && r.Detail == "dns.fqdn" {
+			gated = true
+		}
+	}
+	if !gated {
+		t.Fatalf("expected a dns.fqdn rejection, got %+v", raw.Rejections)
 	}
 }
 
