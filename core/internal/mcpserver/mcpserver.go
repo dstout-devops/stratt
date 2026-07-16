@@ -27,6 +27,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/dstout-devops/stratt/core/internal/authz"
+	"github.com/dstout-devops/stratt/core/internal/cellrouter"
 	"github.com/dstout-devops/stratt/types"
 )
 
@@ -55,6 +56,20 @@ func New(cfg Config) http.Handler {
 	registerTools(server, cfg)
 	h := mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return server }, nil)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// SECURITY (ADR-0044): /mcp is NEVER a legitimate peer fan-out target —
+		// peers forward to /api/v1, which is HMAC-gated by the cellrouter before a
+		// handler runs. The fan-out branch of ResolvePrincipal trusts an asserted
+		// X-Stratt-Principal *because* that gate ran; the MCP surface has no such
+		// gate (it resolves the Principal directly, then invokes the router
+		// in-process without the fan-out header). So an inbound fan-out header here
+		// could only be a spoof attempting principal impersonation — reject it, so
+		// the assertion is never honored on an un-HMAC-verified surface.
+		if r.Header.Get(cellrouter.FanoutHeader) != "" {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusUnauthorized)
+			_, _ = w.Write([]byte(`{"message":"the MCP surface is not a peer fan-out target"}`))
+			return
+		}
 		id, _, err := cfg.Resolve(r.Context(), r.Header)
 		if err != nil || id == "" {
 			w.Header().Set("Content-Type", "application/json")

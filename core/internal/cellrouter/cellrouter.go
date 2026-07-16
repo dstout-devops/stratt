@@ -443,5 +443,9 @@ func (rt *router) verifyFanout(r *http.Request) bool {
 		r.Body = io.NopCloser(bytes.NewReader(body)) // restore for the inner handler
 		bodyHash = hashBody(body)
 	}
-	return verifyCellAuth(rt.deps.Secret, r.Method, r.URL.Path, r.URL.RawQuery, bodyHash, r.Header.Get(authHeader), rt.replayWindow())
+	// The asserted Principal (id+kind) is bound into the signature, so a replay
+	// that rewrites X-Stratt-Principal to escalate fails verification.
+	return verifyCellAuth(rt.deps.Secret, r.Method, r.URL.Path, r.URL.RawQuery, bodyHash,
+		r.Header.Get("X-Stratt-Principal"), r.Header.Get("X-Stratt-Principal-Kind"),
+		r.Header.Get(authHeader), rt.replayWindow())
 }

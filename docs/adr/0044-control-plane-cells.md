@@ -122,7 +122,14 @@ the slice-3 safety gaps. Steward-approved:
    fan-out (`X-Stratt-Cell-Auth: <ts>:<hmac(method\npath\nrawQuery\nts)>`); a fanout header **without valid auth
    → 401** (a spoof/misconfigured peer — never silently honored). 30s replay window; no secret ⇒ single-Cell,
    the inbound fanout header is stripped. Residuals (recorded follow-ups): symmetric shared secret (any Cell can
-   impersonate a peer — mesh-trust), no replay nonce within the window (target is an idempotent GET).
+   impersonate a peer — mesh-trust; closing it needs asymmetric per-Cell keys, a larger change); no replay nonce
+   within the window. **Security hardening (2026-07-16, review-driven):** the signed string now binds the
+   asserted **Principal** (`method\npath\nrawQuery\n[bodyHash\n]principalID\nprincipalKind\nts`) — a replay
+   within the window can no longer be re-attributed by rewriting `X-Stratt-Principal` to escalate, so the
+   no-nonce residual loses its escalation value (a pure replay stays idempotent-GET / write-idempotency-key
+   bounded). Separately, the **`/mcp` surface now rejects an inbound fanout header** (it is never a legitimate
+   peer target and, unlike `/api/v1`, has no cellrouter HMAC gate in front of `ResolvePrincipal`) — closing an
+   unauthenticated principal-impersonation path the slice-5 fan-out assertion had opened on that surface.
 3. **Skew gating (§1.5/§1.6) = named `X-Stratt-Cells-Skewed` + 206**, two gates: a **discovery-time** OIDC
    issuer+audience probe of each peer's `/cellinfo` (a mismatch drops the peer AND never forwards a caller's
    token to it), and a **per-response** `X-Stratt-Registry-Version` compare (catches a mid-TTL redeploy). A

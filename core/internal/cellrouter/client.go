@@ -15,21 +15,19 @@ import (
 )
 
 // signCellAuth computes the fan-out HMAC signature header value (ADR-0044 slice
-// 4): "<ts>:<hex-hmac-sha256(method\npath\nrawQuery\nts)>". Reuses the
-// statebackend HMAC idiom. rawQuery is signed so limit/since can't be swapped.
-//
-// bodyHash is the hex sha256 of the request body, empty for a bodyless request.
-// When empty the signed string is byte-identical to the slice-4 GET form
-// (method\npath\nrawQuery\nts) — read federation and its tripwires never move.
-// When present (a forwarded WRITE, slice 5) it is folded in as a fourth line so
-// a tamper/replay-with-swapped-body inside the window can't launch a different
-// Run under the forwarded identity (ADR-0044 slice 5, §2.5).
-func signCellAuth(secret []byte, method, path, rawQuery, bodyHash string, ts int64) string {
+// 4): "<ts>:<hex-hmac-sha256(method\npath\nrawQuery\n[bodyHash\n]principalID\nprincipalKind\nts)>".
+// Reuses the statebackend HMAC idiom. rawQuery is signed so limit/since can't be
+// swapped; bodyHash (present for a WRITE) binds the body; and the asserted
+// Principal id+kind are bound too (hardening, security review 2026-07-16) — the
+// assertion IS the security-relevant claim a fan-out makes, so an observer cannot
+// replay a valid signature with a rewritten X-Stratt-Principal to escalate within
+// the window. Empty principalID/kind (an anonymous read) sign as empty lines.
+func signCellAuth(secret []byte, method, path, rawQuery, bodyHash, principalID, principalKind string, ts int64) string {
 	mac := hmac.New(sha256.New, secret)
 	if bodyHash == "" {
-		fmt.Fprintf(mac, "%s\n%s\n%s\n%d", method, path, rawQuery, ts)
+		fmt.Fprintf(mac, "%s\n%s\n%s\n%s\n%s\n%d", method, path, rawQuery, principalID, principalKind, ts)
 	} else {
-		fmt.Fprintf(mac, "%s\n%s\n%s\n%s\n%d", method, path, rawQuery, bodyHash, ts)
+		fmt.Fprintf(mac, "%s\n%s\n%s\n%s\n%s\n%s\n%d", method, path, rawQuery, bodyHash, principalID, principalKind, ts)
 	}
 	return strconv.FormatInt(ts, 10) + ":" + hex.EncodeToString(mac.Sum(nil))
 }
@@ -47,9 +45,11 @@ func hashBody(body []byte) string {
 // verifyCellAuth checks a fan-out signature: correct HMAC (constant-time) AND
 // within the replay window. No nonce cache — replay within the window is
 // possible but bounded (a GET is idempotent; a forwarded write carries a
-// deterministic idempotency key the home Cell dedups on — ADR-0044 slice 5).
-// bodyHash binds the write body into the signature (empty for a GET).
-func verifyCellAuth(secret []byte, method, path, rawQuery, bodyHash, header string, window time.Duration) bool {
+// deterministic idempotency key the home Cell dedups on — ADR-0044 slice 5) AND,
+// since the signature now binds the asserted Principal, a replay cannot escalate
+// by rewriting the identity. bodyHash binds the write body; principalID/kind bind
+// the asserted identity (both empty for an anonymous GET).
+func verifyCellAuth(secret []byte, method, path, rawQuery, bodyHash, principalID, principalKind, header string, window time.Duration) bool {
 	tsStr, _, ok := strings.Cut(header, ":")
 	if !ok {
 		return false
@@ -61,7 +61,7 @@ func verifyCellAuth(secret []byte, method, path, rawQuery, bodyHash, header stri
 	if d := time.Now().Unix() - ts; d < -int64(window.Seconds()) || d > int64(window.Seconds()) {
 		return false
 	}
-	expected := signCellAuth(secret, method, path, rawQuery, bodyHash, ts)
+	expected := signCellAuth(secret, method, path, rawQuery, bodyHash, principalID, principalKind, ts)
 	return subtle.ConstantTimeCompare([]byte(header), []byte(expected)) == 1
 }
 
@@ -122,7 +122,10 @@ func (rt *router) peerGet(ctx context.Context, endpoint, path, rawQuery string, 
 	}
 	hdrs[fanoutHeader] = "1"
 	if len(rt.deps.Secret) > 0 {
-		hdrs[authHeader] = signCellAuth(rt.deps.Secret, http.MethodGet, path, rawQuery, "", time.Now().Unix())
+		// Bind the forwarded Principal (the assertion the peer will honor) into
+		// the signature so it cannot be rewritten on replay.
+		hdrs[authHeader] = signCellAuth(rt.deps.Secret, http.MethodGet, path, rawQuery, "",
+			hdrs["X-Stratt-Principal"], hdrs["X-Stratt-Principal-Kind"], time.Now().Unix())
 	}
 	return rt.doGet(ctx, endpoint, path, rawQuery, hdrs)
 }

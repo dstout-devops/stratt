@@ -78,7 +78,10 @@ func (c *PeerClient) do(ctx context.Context, method, endpoint, path, rawQuery st
 		req.Header.Set("Content-Type", "application/json")
 	}
 	if len(c.Secret) > 0 {
-		req.Header.Set(authHeader, signCellAuth(c.Secret, method, path, rawQuery, hashBody(body), time.Now().Unix()))
+		// Bind the asserted Principal into the signature so a replay cannot
+		// rewrite the identity the peer will authorize the write under.
+		req.Header.Set(authHeader, signCellAuth(c.Secret, method, path, rawQuery, hashBody(body),
+			principalID, principalKind, time.Now().Unix()))
 	}
 	resp, err := c.HTTP.Do(req)
 	if err != nil {

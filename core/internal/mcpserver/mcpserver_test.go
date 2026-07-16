@@ -98,6 +98,25 @@ func textOf(t *testing.T, res *mcp.CallToolResult) string {
 	return tc.Text
 }
 
+// TestMCPRejectsFanoutHeader proves the security fix (2026-07-16): the /mcp
+// surface is never a peer fan-out target, so an inbound X-Stratt-Cell-Fanout is
+// rejected BEFORE the Principal is resolved. Without this, an unauthenticated
+// caller could set the fan-out header + X-Stratt-Principal and be trusted by
+// ResolvePrincipal's fan-out case (which assumes an upstream HMAC gate that /mcp
+// lacks) — full principal impersonation. testConfig.Resolve deliberately WOULD
+// trust the header, so a non-401 here would be the impersonation.
+func TestMCPRejectsFanoutHeader(t *testing.T) {
+	h := New(testConfig(&usageLog{}))
+	req := httptest.NewRequest(http.MethodPost, "/mcp", nil)
+	req.Header.Set("X-Stratt-Cell-Fanout", "1")
+	req.Header.Set("X-Stratt-Principal", "admin") // forged assertion
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("MCP must reject a fan-out header (no principal impersonation), got %d", rec.Code)
+	}
+}
+
 func TestUnauthenticated401(t *testing.T) {
 	usage := &usageLog{}
 	srv := httptest.NewServer(New(testConfig(usage)))

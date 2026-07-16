@@ -144,7 +144,7 @@ func TestFanoutNoRecursion(t *testing.T) {
 		Deps{Store: fakeCells{[]types.Cell{{Name: "eu", Endpoint: peer.URL}}}, CellID: "local", Secret: secret})
 	req := httptest.NewRequest(http.MethodGet, "/runs", nil)
 	req.Header.Set(fanoutHeader, "1")
-	req.Header.Set(authHeader, signCellAuth(secret, http.MethodGet, "/runs", "", "", time.Now().Unix()))
+	req.Header.Set(authHeader, signCellAuth(secret, http.MethodGet, "/runs", "", "", "", "", time.Now().Unix()))
 	rec := httptest.NewRecorder()
 	rt.ServeHTTP(rec, req)
 	if peerCalled {
@@ -230,11 +230,33 @@ func TestFanoutAuthValid(t *testing.T) {
 		Deps{Store: fakeCells{[]types.Cell{{Name: "eu", Endpoint: "http://unused"}}}, CellID: "local", Secret: secret})
 	req := httptest.NewRequest(http.MethodGet, "/runs", nil)
 	req.Header.Set(fanoutHeader, "1")
-	req.Header.Set(authHeader, signCellAuth(secret, http.MethodGet, "/runs", "", "", time.Now().Unix()))
+	req.Header.Set(authHeader, signCellAuth(secret, http.MethodGet, "/runs", "", "", "", "", time.Now().Unix()))
 	rec := httptest.NewRecorder()
 	rt.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK || rec.Header().Get(hdrQueried) != "" {
 		t.Fatalf("authenticated fan-out must be served local-only, got %d queried=%q", rec.Code, rec.Header().Get(hdrQueried))
+	}
+}
+
+// TestFanoutPrincipalTamperRejected proves the security fix (2026-07-16): the
+// asserted Principal is BOUND into the HMAC, so an observer who replays a valid
+// fan-out signature within the window but rewrites X-Stratt-Principal to escalate
+// is rejected — the recomputed HMAC over the tampered identity no longer matches.
+func TestFanoutPrincipalTamperRejected(t *testing.T) {
+	secret := []byte("fleet-secret")
+	rt := Middleware(localInner("[]", "[]"),
+		Deps{Store: fakeCells{nil}, CellID: "local", Secret: secret})
+	req := httptest.NewRequest(http.MethodGet, "/runs", nil)
+	req.Header.Set(fanoutHeader, "1")
+	// A legitimate signature over the low-privilege principal "alice"...
+	req.Header.Set(authHeader, signCellAuth(secret, http.MethodGet, "/runs", "", "", "alice", "human", time.Now().Unix()))
+	// ...but the header is rewritten to escalate to "admin" (a replay-tamper).
+	req.Header.Set("X-Stratt-Principal", "admin")
+	req.Header.Set("X-Stratt-Principal-Kind", "human")
+	rec := httptest.NewRecorder()
+	rt.ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("a fan-out with a rewritten Principal must be 401 (identity bound to the HMAC), got %d", rec.Code)
 	}
 }
 
@@ -255,7 +277,7 @@ func TestFanoutAuthRejected(t *testing.T) {
 	// Tampered signature (wrong secret).
 	req2 := httptest.NewRequest(http.MethodGet, "/runs", nil)
 	req2.Header.Set(fanoutHeader, "1")
-	req2.Header.Set(authHeader, signCellAuth([]byte("wrong"), http.MethodGet, "/runs", "", "", time.Now().Unix()))
+	req2.Header.Set(authHeader, signCellAuth([]byte("wrong"), http.MethodGet, "/runs", "", "", "", "", time.Now().Unix()))
 	rec2 := httptest.NewRecorder()
 	rt.ServeHTTP(rec2, req2)
 	if rec2.Code != http.StatusUnauthorized {
@@ -264,7 +286,7 @@ func TestFanoutAuthRejected(t *testing.T) {
 	// Expired signature (outside the window).
 	req3 := httptest.NewRequest(http.MethodGet, "/runs", nil)
 	req3.Header.Set(fanoutHeader, "1")
-	req3.Header.Set(authHeader, signCellAuth(secret, http.MethodGet, "/runs", "", "", time.Now().Add(-time.Hour).Unix()))
+	req3.Header.Set(authHeader, signCellAuth(secret, http.MethodGet, "/runs", "", "", "", "", time.Now().Add(-time.Hour).Unix()))
 	rec3 := httptest.NewRecorder()
 	rt.ServeHTTP(rec3, req3)
 	if rec3.Code != http.StatusUnauthorized {
@@ -285,7 +307,7 @@ func TestFanoutSignedOutbound(t *testing.T) {
 	rt := Middleware(localInner("[]", "[]"),
 		Deps{Store: fakeCells{[]types.Cell{{Name: "eu", Endpoint: peer.URL}}}, CellID: "local", Secret: secret})
 	rt.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/runs", nil))
-	if gotAuth == "" || !verifyCellAuth(secret, http.MethodGet, "/runs", "", "", gotAuth, defaultReplayWindow) {
+	if gotAuth == "" || !verifyCellAuth(secret, http.MethodGet, "/runs", "", "", "", "", gotAuth, defaultReplayWindow) {
 		t.Fatalf("peer must receive a valid fan-out signature, got %q", gotAuth)
 	}
 }
@@ -542,7 +564,7 @@ func signedPost(secret []byte, path, body, principal string, ts int64) *http.Req
 	req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))
 	req.Header.Set(fanoutHeader, "1")
 	req.Header.Set("X-Stratt-Principal", principal)
-	req.Header.Set(authHeader, signCellAuth(secret, http.MethodPost, path, "", hashBody([]byte(body)), ts))
+	req.Header.Set(authHeader, signCellAuth(secret, http.MethodPost, path, "", hashBody([]byte(body)), principal, "", ts))
 	return req
 }
 
