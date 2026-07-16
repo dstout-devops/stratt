@@ -135,6 +135,12 @@ tasks:
         if [ -f pyproject.toml ]; then echo '→ pytest'; uv run pytest; ran=1; fi
         if [ "$ran" = 0 ]; then echo "No packages yet — nothing to test."; fi
 
+  e2e:cells:
+    desc: Two-Cell end-to-end harness — federated read + fenced Source re-home over real HTTP (ADR-0044; needs `task dev:up`)
+    dir: core
+    cmds:
+      - go test ./internal/api/ -run TestCellsE2E -v -count=1
+
   ci:
     desc: Aggregate gate CI runs — evergreen + formatting + lint + codegen freshness + tests
     cmds:

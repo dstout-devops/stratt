@@ -95,8 +95,10 @@ The **[ADR-0044](adr/0044-control-plane-cells.md) Cells workstream (slices 1–7
 multi-region active/active with fenced Source re-home — a capability the roadmap places at Phase 4 and
 beyond. [ADR-0040](adr/0040-high-availability-and-disaster-recovery.md) explicitly *deferred* cells, and
 the 99.99% multi-region target sits *above* Phase-3's 99.9% single-region SLO
-([evidence map](evidence/multi-region-99_99.md)). Follow-up [ADR-0045](adr/0045-db-driven-syncer-home-gate.md)
-(full re-home auto-cutover) is Proposed, not scheduled.
+([evidence map](evidence/multi-region-99_99.md)). The cross-Cell mechanisms (federated read, partial-result
+honesty, fenced re-home over real HTTP) are **demonstrated end-to-end** by the two-Cell harness
+(`task e2e:cells`) against live Postgres — the measured SLO still needs a real fleet. Follow-up
+[ADR-0045](adr/0045-db-driven-syncer-home-gate.md) (full re-home auto-cutover) is Proposed, not scheduled.
 
 ## Where we are, in one line
 

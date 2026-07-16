@@ -29,10 +29,28 @@ Each row is a property the 99.99% claim depends on, and the shipped code/test th
 | A region loss is recoverable within RTO/RPO | per-Cell DR replica promotion (env-string repoint) | ADR-0040 substrate + cell-failover runbook §B |
 | No silent availability-over-correctness trade | no multi-master anywhere; unreachable home = loud 503/206, never failover-to-a-second-writer | slices 3/5/7; `forwardWriteToPeers` 503 path |
 
+## Demonstrated locally: the two-Cell e2e harness
+
+The cross-Cell **mechanisms** — not the production SLO number — are proven end-to-end by `TestCellsE2E`
+(`core/internal/api/cells_e2e_test.go`, `task e2e:cells`): two REAL strattd API servers, each backed by its
+OWN Postgres, wired as peers over real HTTP with the real HMAC-signed cellrouter. It asserts, against live
+Postgres:
+
+- **Federated read unions both Cells** and names the queried Cells (slice 3).
+- **An unreachable peer is a loud 206** with the Cell NAMED in `X-Stratt-Cells-Unreachable`, and the
+  reachable Cell's data still returned — never a silent drop (§1.8, slice 3).
+- **A fenced Source re-home eu→us over the real adopt HTTP path** (HMAC-signed, Principal-asserted): seal on
+  EU (DB fence engaged) → adopt on US (US homes the Source) → complete on EU (the Entity tombstoned) — with
+  an un-signed adopt refused and a write to a downed peer failing loudly (slice 7).
+
+This upgrades slices 3–7 from "unit-tested in isolation" to "demonstrated working together" — the biggest
+de-risking available without a real fleet.
+
 ## What still gates the measured number
 
-- **Drills, not code.** The failover drill and the re-home drill (runbook §§B/C) must pass on a real
-  two-Cell fleet with RPO/RTO recorded. Multi-region infra is a deploy exercise, not in this repo.
+- **Drills on a real fleet, not code.** The failover drill and the re-home drill (runbook §§B/C) must pass
+  on a real two-Cell fleet with RPO/RTO recorded. The e2e harness proves the mechanisms; the measured SLO
+  and the full RunAcrossCells Job execution (Temporal + K8s) still need real multi-region infra.
 - **Shared-fate residuals (accepted, ADR-0044 residual tension 2):** global OpenFGA + global OIDC are the
   price of §1.6 "one model", mitigated by per-Cell read-replicas + active-passive DR — they cap the
   theoretical ceiling and are a deliberate correctness-over-availability choice.
