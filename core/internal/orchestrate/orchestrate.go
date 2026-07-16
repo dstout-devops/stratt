@@ -86,6 +86,15 @@ type RunInput struct {
 	// the request arrives as a verified peer fan-out; always false for a direct
 	// launch, so a single-Cell estate is unaffected.
 	StayLocal bool
+	// Plan marks a Run executing an actuation Step's PLAN verb — it produces a
+	// hash-pinned saved plan (ADR-0047 §8) rather than converging.
+	Plan bool
+	// PlanFrom is set on a plan-PINNED Apply: the Plan Step whose digest this Apply
+	// must apply. PlanDigest is that Gate-approved digest, read from core-held state
+	// (the Plan Step's output). PlanFrom set + PlanDigest empty is FAIL-CLOSED (a
+	// terminal error, never a silent unpinned apply of `desired` — ADR-0047 §8).
+	PlanFrom   string
+	PlanDigest string
 }
 
 // ResolvedTargets is what the View resolves to at dispatch time; the version
@@ -660,6 +669,28 @@ func (a *Activities) Execute(ctx context.Context, in RunInput, slice int, site s
 	}, heartbeat)
 }
 
+// PlanStep runs the PLAN verb of a plugin-hosted Actuator (ADR-0047 §7/§8): the
+// host content-addresses + encrypts the saved plan and returns the digest — the
+// pin a downstream Gate binds and a plan-pinned Apply consumes. Only a plugin
+// actuator supports it (the in-tree pod Actuators do not produce a pinnable plan).
+// Returns the digest; a plan that produced none (empty converge) returns "".
+func (a *Activities) PlanStep(ctx context.Context, in RunInput) (string, error) {
+	pa, ok := a.PluginActuators[in.Actuator]
+	if !ok {
+		return "", temporal.NewNonRetryableApplicationError(
+			fmt.Sprintf("actuator %q does not support the Plan verb (not a plugin actuator)", in.Actuator), "PlanUnsupported", nil)
+	}
+	out, err := pa.Host.Plan(ctx, pluginhost.PlanInvoke{
+		Principal:      in.Principal,
+		Params:         in.Params,
+		CredentialRefs: in.CredentialRefs,
+	})
+	if err != nil {
+		return "", err
+	}
+	return out.Digest, nil
+}
+
 // executePlugin runs one Step slice through a plugin-hosted Actuator over the
 // sovereign port (ADR-0047/0048). It reuses the reviewed governance of the port
 // host (ApplyRaw): targets cross LEGIBLY (never in the opaque params, guardian
@@ -697,6 +728,25 @@ func (a *Activities) executePlugin(ctx context.Context, in RunInput, site string
 	for _, t := range resolved.Targets {
 		targets = append(targets, pluginhost.ApplyTarget{Name: t.Name, Vars: t.Vars})
 	}
+	// Plan-pinned Apply (ADR-0047 §8): a Step that names a Plan source MUST carry a
+	// Gate-approved digest. FAIL CLOSED on an empty digest — never a silent unpinned
+	// live apply of `desired`. When present, the core fetches + RE-HASHES the plan
+	// from its store (verify-don't-trust) and hands the plugin the verified bytes.
+	var pinnedPlan []byte
+	if in.PlanFrom != "" {
+		if in.PlanDigest == "" {
+			return dispatch.Result{}, temporal.NewNonRetryableApplicationError(
+				fmt.Sprintf("actuator %q: plan-pinned Apply of %q has no approved plan digest — refusing an unpinned apply (ADR-0047 §8, fail-closed)", in.Actuator, in.PlanFrom),
+				"PlanPinMissing", nil)
+		}
+		var verr error
+		pinnedPlan, verr = pa.Host.VerifyPinnedPlan(ctx, in.PlanDigest)
+		if verr != nil {
+			return dispatch.Result{}, temporal.NewNonRetryableApplicationError(
+				fmt.Sprintf("actuator %q: pinned plan %s failed verification at the Apply boundary: %v", in.Actuator, in.PlanDigest, verr),
+				"PlanPinVerifyFailed", verr)
+		}
+	}
 	activity.RecordHeartbeat(ctx) // canceled Run stops promptly (ADR-0026)
 	raw, err := pa.Host.ApplyRaw(ctx, pluginhost.ApplyInvoke{
 		Principal:      in.Principal,
@@ -704,6 +754,8 @@ func (a *Activities) executePlugin(ctx context.Context, in RunInput, site string
 		Targets:        targets,
 		DryRun:         in.DryRun,
 		CredentialRefs: names,
+		PlanDigest:     in.PlanDigest,
+		PinnedPlan:     pinnedPlan,
 	})
 	if err != nil {
 		return dispatch.Result{}, err

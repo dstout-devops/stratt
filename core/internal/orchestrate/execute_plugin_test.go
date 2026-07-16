@@ -42,3 +42,18 @@ func TestExecutePlugin_ZeroCredsNotUngated(t *testing.T) {
 		t.Fatalf("actuation must NOT inherit the Action path's ungated-credential refusal, got %v", err)
 	}
 }
+
+// TestExecutePlugin_PlanPinMissingFailsClosed proves the runtime fail-closed rule
+// (ADR-0047 §8): a plan-pinned Apply (PlanFrom set) with an EMPTY approved digest
+// is a terminal error — never a silent unpinned apply of `desired`. The plugin
+// (nil client) is never dialed.
+func TestExecutePlugin_PlanPinMissingFailsClosed(t *testing.T) {
+	discard := slog.New(slog.NewTextHandler(io.Discard, nil))
+	host := pluginhost.New(nil, nil, pluginhost.Grant{Source: types.Source{Name: "opentofu"}}, discard)
+	a := &Activities{PluginActuators: map[string]PluginActuator{"opentofu": {Host: host, DryRunnable: true}}}
+	_, err := a.Execute(context.Background(),
+		RunInput{Actuator: "opentofu", PlanFrom: "plan-step" /* PlanDigest empty */}, 0, "", ResolvedTargets{}, nil)
+	if err == nil || !strings.Contains(err.Error(), "refusing an unpinned apply") {
+		t.Fatalf("plan-pinned Apply with no approved digest must fail closed, got %v", err)
+	}
+}

@@ -121,11 +121,11 @@ func RunDAG(ctx workflow.Context, in DAGInput) error {
 			var outputs json.RawMessage
 			switch {
 			case step.Gate != nil:
-				status = runGateStep(gctx, a, in, step)
+				status = runGateStep(gctx, a, in, step, boundOutputs)
 			case step.Action != "":
 				status, outputs = runActionStep(gctx, in, step, boundOutputs)
 			default:
-				status = runActuationStep(gctx, in, step, boundOutputs)
+				status, outputs = runActuationStep(gctx, in, step, boundOutputs)
 			}
 			done.Send(gctx, stepResult{Name: step.Name, Status: status, Outputs: outputs})
 		})
@@ -216,8 +216,12 @@ func copyOutputs(m map[string]json.RawMessage) map[string]json.RawMessage {
 }
 
 // runActuationStep executes one Step as a child RunAgainstView workflow.
-// EnsureRun (slice 6) creates the Run row, stamping WorkflowRunID/StepName.
-func runActuationStep(ctx workflow.Context, in DAGInput, step types.Step, steps map[string]json.RawMessage) string {
+// EnsureRun (slice 6) creates the Run row, stamping WorkflowRunID/StepName. A Plan
+// Step (step.Plan) instead runs the PLAN verb and RETURNS its digest as the Step's
+// output (planDigest), the pin a downstream Gate binds and a plan-pinned Apply
+// consumes (ADR-0047 §8). A plan-pinned Apply (step.PlanFrom) reads that digest
+// from core-held Step state and threads it into the child Run.
+func runActuationStep(ctx workflow.Context, in DAGInput, step types.Step, steps map[string]json.RawMessage) (string, json.RawMessage) {
 	// Resolve the Step's {{.event.x}}/{{.steps.x}} param bindings and re-validate
 	// against the Actuator Contract in an activity (ADR-0024/0031). A binding to
 	// a missing field or a contract violation fails the Step visibly (§1.8),
@@ -225,7 +229,28 @@ func runActuationStep(ctx workflow.Context, in DAGInput, step types.Step, steps 
 	var params json.RawMessage
 	var a *Activities
 	if err := workflow.ExecuteActivity(ctx, a.ResolveStepParams, step.Actuator, step.Params, in.Event, steps).Get(ctx, &params); err != nil {
-		return stepFailed
+		return stepFailed, nil
+	}
+
+	// Plan verb: produce the hash-pinned saved plan and surface its digest as this
+	// Step's output. The core content-addresses + stores the plan (host.Plan); only
+	// the digest flows into the DAG's step state (never the secret-bearing plan).
+	if step.Plan {
+		var digest string
+		if err := workflow.ExecuteActivity(ctx, a.PlanStep, RunInput{
+			Actuator: step.Actuator, Params: params, CredentialRefs: step.CredentialRefs,
+			Principal: in.Principal, WorkflowRunID: in.WorkflowRunID, StepName: step.Name, Plan: true,
+		}).Get(ctx, &digest); err != nil {
+			return stepFailed, nil
+		}
+		out, _ := json.Marshal(map[string]string{"planDigest": digest})
+		return stepSucceeded, out
+	}
+
+	// A plan-pinned Apply reads its Gate-approved digest from core-held Step state.
+	planDigest := ""
+	if step.PlanFrom != "" {
+		planDigest = digestFromStep(steps, step.PlanFrom)
 	}
 	cctx := workflow.WithChildOptions(ctx, workflow.ChildWorkflowOptions{
 		WorkflowID: ChildRunID(in.WorkflowRunID, step.Name),
@@ -239,11 +264,27 @@ func runActuationStep(ctx workflow.Context, in DAGInput, step types.Step, steps 
 		Principal:      in.Principal,
 		WorkflowRunID:  in.WorkflowRunID,
 		StepName:       step.Name,
+		PlanFrom:       step.PlanFrom,
+		PlanDigest:     planDigest,
 	}).Get(cctx, nil)
 	if err != nil {
-		return stepFailed
+		return stepFailed, nil
 	}
-	return stepSucceeded
+	return stepSucceeded, nil
+}
+
+// digestFromStep reads the planDigest output a Plan Step recorded into the DAG's
+// step state (core-held; never a plugin re-resolve, ADR-0047 §8).
+func digestFromStep(steps map[string]json.RawMessage, planStep string) string {
+	raw, ok := steps[planStep]
+	if !ok {
+		return ""
+	}
+	var out struct {
+		PlanDigest string `json:"planDigest"`
+	}
+	_ = json.Unmarshal(raw, &out)
+	return out.PlanDigest
 }
 
 // runActionStep executes one Step as a child RunAction workflow (§2.2,
@@ -276,9 +317,16 @@ func runActionStep(ctx workflow.Context, in DAGInput, step types.Step, steps map
 // runGateStep opens a Gate row and waits for an authorized decision signal
 // (or the declared timeout). The workflow is the row's single writer after
 // creation, so the §1.8 history shows every transition.
-func runGateStep(ctx workflow.Context, a *Activities, in DAGInput, step types.Step) string {
+func runGateStep(ctx workflow.Context, a *Activities, in DAGInput, step types.Step, steps map[string]json.RawMessage) string {
+	// A Gate guarding a plan-pinned Apply BINDS the exact plan digest it approves
+	// (write-once, approve-what-you-see — ADR-0047 §8), read from the Plan Step's
+	// output. "" for an ordinary Gate.
+	planDigest := ""
+	if step.PlanFrom != "" {
+		planDigest = digestFromStep(steps, step.PlanFrom)
+	}
 	var gate types.Gate
-	if err := workflow.ExecuteActivity(ctx, a.CreateGateRecord, in.WorkflowRunID, step.Name, step.Gate.Approvers).Get(ctx, &gate); err != nil {
+	if err := workflow.ExecuteActivity(ctx, a.CreateGateRecord, in.WorkflowRunID, step.Name, planDigest, step.Gate.Approvers).Get(ctx, &gate); err != nil {
 		return stepFailed
 	}
 
@@ -388,8 +436,8 @@ func (a *Activities) MarkWorkflowRunRunning(ctx context.Context, id string) erro
 // (workflowRun, step) across activity retries) and emits a gate.pending Notice
 // so approvers are reached (ADR-0027). The gate id is stable across retries,
 // so NoticeHash dedups the publish.
-func (a *Activities) CreateGateRecord(ctx context.Context, workflowRunID, step string, approvers types.GateApprovers) (types.Gate, error) {
-	gate, err := a.Store.CreateGate(ctx, workflowRunID, step, approvers)
+func (a *Activities) CreateGateRecord(ctx context.Context, workflowRunID, step, planDigest string, approvers types.GateApprovers) (types.Gate, error) {
+	gate, err := a.Store.CreateGate(ctx, workflowRunID, step, planDigest, approvers)
 	if err != nil {
 		return gate, err
 	}
@@ -397,6 +445,11 @@ func (a *Activities) CreateGateRecord(ctx context.Context, workflowRunID, step s
 		"workflowRun": workflowRunID,
 		"step":        step,
 	}}
+	// approve-what-you-see (§1.8/§1.6): the exact plan digest reaches the approver —
+	// human via the notice/inbox and an agent approver via the same API/MCP payload.
+	if gate.PlanDigest != "" {
+		n.Payload["planDigest"] = gate.PlanDigest
+	}
 	if len(approvers.Principals) > 0 {
 		n.Payload["approverPrincipals"] = approvers.Principals
 	}

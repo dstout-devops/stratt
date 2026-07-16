@@ -1637,7 +1637,76 @@ func ValidateWorkflow(w types.Workflow) error {
 	if visited != len(w.Steps) {
 		return fmt.Errorf("workflow %s: step graph has a cycle", w.Name)
 	}
+	if err := validatePlanPinning(w, byName); err != nil {
+		return err
+	}
 	return nil
+}
+
+// validatePlanPinning enforces the compile-validated, FAIL-CLOSED Plan↔Gate↔Apply
+// triple (ADR-0047 §8, guardian pass 3): a plan-pinned Apply must be transitively
+// guarded by a Gate that binds the SAME Plan step's digest. It closes three holes —
+// an unknown/non-Plan PlanFrom, a Gate binding a plan it does not `needs`, and (the
+// most dangerous) a plan-pinned Apply with no guarding Gate, which would otherwise
+// let the runtime silently degrade to an unpinned live apply of `desired`.
+func validatePlanPinning(w types.Workflow, byName map[string]types.Step) error {
+	// (1) Every PlanFrom must name an existing PLAN step.
+	for _, s := range w.Steps {
+		if s.PlanFrom == "" {
+			continue
+		}
+		ref, ok := byName[s.PlanFrom]
+		if !ok {
+			return fmt.Errorf("workflow %s: step %s: planFrom names unknown step %q", w.Name, s.Name, s.PlanFrom)
+		}
+		if !ref.Plan {
+			return fmt.Errorf("workflow %s: step %s: planFrom %q is not a plan step (missing plan: true)", w.Name, s.Name, s.PlanFrom)
+		}
+		// (2) A Gate that binds a plan must `needs` it (so the digest exists to bind).
+		if s.Gate != nil && !directlyNeeds(s, s.PlanFrom) {
+			return fmt.Errorf("workflow %s: gate %s: binds plan %q but does not need it", w.Name, s.Name, s.PlanFrom)
+		}
+	}
+	// (3) A plan-pinned Apply must be transitively guarded by a Gate with the SAME
+	// PlanFrom — else the pin is unenforced (fail-closed, never a silent unpinned apply).
+	for _, s := range w.Steps {
+		applyPinned := s.PlanFrom != "" && s.Gate == nil && !s.Plan
+		if !applyPinned {
+			continue
+		}
+		if !guardedByGateForPlan(s.Name, s.PlanFrom, w, byName, map[string]bool{}) {
+			return fmt.Errorf("workflow %s: step %s: plan-pinned Apply of %q is not guarded by a Gate binding that plan — a plan-pinned Apply must sit behind its Plan's Gate (ADR-0047 §8, fail-closed)", w.Name, s.Name, s.PlanFrom)
+		}
+	}
+	return nil
+}
+
+func directlyNeeds(s types.Step, name string) bool {
+	for _, n := range s.Needs {
+		if n == name {
+			return true
+		}
+	}
+	return false
+}
+
+// guardedByGateForPlan reports whether some step in name's transitive needs-closure
+// is a Gate whose PlanFrom == plan.
+func guardedByGateForPlan(name, plan string, w types.Workflow, byName map[string]types.Step, seen map[string]bool) bool {
+	if seen[name] {
+		return false
+	}
+	seen[name] = true
+	for _, n := range byName[name].Needs {
+		nd := byName[n]
+		if nd.Gate != nil && nd.PlanFrom == plan {
+			return true
+		}
+		if guardedByGateForPlan(n, plan, w, byName, seen) {
+			return true
+		}
+	}
+	return false
 }
 
 func (ds declSelector) toSelector() (types.ViewSelector, error) {

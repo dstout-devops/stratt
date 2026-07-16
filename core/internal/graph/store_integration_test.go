@@ -356,13 +356,20 @@ func TestWorkflowRunsAndGates(t *testing.T) {
 
 	// Gate lifecycle: open (idempotent), decide once, refuse re-decision.
 	approvers := types.GateApprovers{Teams: []string{"platform"}}
-	g, err := s.CreateGate(ctx, wr.ID, "approve", approvers)
+	g, err := s.CreateGate(ctx, wr.ID, "approve", "plan-digest-abc", approvers)
 	if err != nil {
 		t.Fatal(err)
 	}
-	g2, err := s.CreateGate(ctx, wr.ID, "approve", approvers) // activity retry
+	if g.PlanDigest != "plan-digest-abc" {
+		t.Fatalf("gate must bind its approved plan digest, got %q", g.PlanDigest)
+	}
+	// A retry (or a re-plan) must NOT rebind the digest — write-once (ADR-0047 §8).
+	g2, err := s.CreateGate(ctx, wr.ID, "approve", "plan-digest-DIFFERENT", approvers) // activity retry / re-plan
 	if err != nil || g2.ID != g.ID {
 		t.Fatalf("gate create must be idempotent per (run, step): %v %v", g2, err)
+	}
+	if g2.PlanDigest != "plan-digest-abc" {
+		t.Fatalf("gate plan_digest must be WRITE-ONCE (first value wins), got %q", g2.PlanDigest)
 	}
 	pending, err := s.ListGates(ctx, types.GatePending)
 	if err != nil || len(pending) != 1 || pending[0].Approvers.Teams[0] != "platform" {

@@ -64,9 +64,9 @@ func dagTestEnv(t *testing.T, spec types.Workflow, childStatus map[string]error)
 	var a *Activities
 	env.OnActivity(a.LoadWorkflow, mock.Anything, spec.Name).Return(spec, nil)
 	env.OnActivity(a.MarkWorkflowRunRunning, mock.Anything, "wr-1").Return(nil)
-	env.OnActivity(a.CreateGateRecord, mock.Anything, "wr-1", mock.Anything, mock.Anything).Return(
-		func(_ context.Context, _, step string, approvers types.GateApprovers) (types.Gate, error) {
-			return types.Gate{ID: "gate-" + step, WorkflowRunID: "wr-1", Step: step, Status: types.GatePending, Approvers: approvers}, nil
+	env.OnActivity(a.CreateGateRecord, mock.Anything, "wr-1", mock.Anything, mock.Anything, mock.Anything).Return(
+		func(_ context.Context, _, step, planDigest string, approvers types.GateApprovers) (types.Gate, error) {
+			return types.Gate{ID: "gate-" + step, WorkflowRunID: "wr-1", Step: step, Status: types.GatePending, Approvers: approvers, PlanDigest: planDigest}, nil
 		})
 	env.OnActivity(a.RecordGateDecision, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
 	// Step params are resolved (event binding + re-validation) in an activity

@@ -44,6 +44,20 @@ type Step struct {
 	Params         map[string]any `json:"params,omitempty"`
 	Slices         int            `json:"slices,omitempty"`
 	CredentialRefs []string       `json:"credentialRefs,omitempty"`
+
+	// Plan marks an actuation Step that runs the Actuator's PLAN verb — the
+	// canonical producer of a hash-pinned saved plan (ADR-0047 §7/§8). It outputs
+	// the plan digest ({{.steps.<name>.outputs.planDigest}}) that a downstream Gate
+	// binds and a plan-pinned Apply consumes. (A DryRun streaming Apply is
+	// diagnostic and is NOT pinnable — only a Plan step produces the pin.)
+	Plan bool `json:"plan,omitempty"`
+	// PlanFrom names the Plan Step whose digest this Step consumes — on a Gate it
+	// is the digest bound into the Gate record (approve-what-you-see, §1.8); on an
+	// Apply it is the plan applied EXACTLY. A plan-pinned Apply MUST be transitively
+	// guarded by a Gate with the SAME PlanFrom (validated at load, fail-closed —
+	// ADR-0047 §8): the core never silently degrades a missing pin to an unpinned
+	// live apply of `desired`.
+	PlanFrom string `json:"planFrom,omitempty"`
 }
 
 // GateSpec declares who may decide a Gate and how long it waits.
@@ -82,6 +96,11 @@ type Gate struct {
 	Note          string        `json:"note,omitempty"`
 	CreatedAt     time.Time     `json:"createdAt"`
 	DecidedAt     *time.Time    `json:"decidedAt,omitempty"`
+	// PlanDigest is the exact saved-plan sha256 this Gate approves (ADR-0047 §8) —
+	// WRITE-ONCE at creation (a re-plan never silently rebinds), the digest the
+	// approver sees (approve-what-you-see, §1.8), and the value the plan-pinned
+	// Apply is verified against at its boundary. Empty for a non-plan Gate.
+	PlanDigest string `json:"planDigest,omitempty"`
 }
 
 // WorkflowRun is one execution of a Workflow — the rung between Workflow and
