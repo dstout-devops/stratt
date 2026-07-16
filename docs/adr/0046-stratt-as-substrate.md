@@ -1,9 +1,11 @@
 # ADR 0046 — Stratt as Substrate: the dark-matter re-centering and the sovereign plugin port
 
-- **Status:** **Proposed** — a re-centering of the project's identity. This ADR proposes an evolution of the
-  charter **§0 (Thesis)** and **§1 (Founding Disciplines)** and therefore requires the **highest review bar in
-  the project** (charter-guardian + steward). It is a *direction*, not an approved refactor; no code changes
-  and no edit to `stratt-charter.md` accompany it.
+- **Status:** **Accepted** (2026-07-16, steward) — a re-centering of the project's identity, cleared at the
+  project's **highest review bar**: charter-guardian (SOUND-WITH-CHANGES) + vocabulary-linter (CLEARED with
+  renames) + steward sign-off, all recorded in *Reviews*. Acceptance authorizes **Phase A** (formalize the
+  port) only. It does **not** itself edit the charter: the §0/§1/§2 wording change — and adding `band`/`beam`
+  to §2 — remains a **separate, explicit, highest-bar action**, taken on its own instruction. No charter file
+  is modified by this ADR.
 - **Date:** 2026-07-16
 - **Deciders:** Project steward (dstout)
 - **Charter sections:** §0 (Thesis), §1.1 (type the seams), §1.2 (projections), §1.4 (boring spine, pluggable
