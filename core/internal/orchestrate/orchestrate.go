@@ -721,6 +721,13 @@ func (a *Activities) executePlugin(ctx context.Context, in RunInput, site string
 		res.Entities = append(res.Entities, actuators.EntityObservation{
 			Kind: e.Kind, IdentityKeys: e.IdentityKeys, Labels: e.Labels})
 	}
+	// A rung-2 DerivedContract (tofu outputs schema) rides the existing
+	// OutputsContract channel — CollectFacts names it from the Step's workspace and
+	// ProjectFacts registers it, the core recomputing + pinning the hash (§1.5,
+	// §2.2). The plugin's asserted schema_id/rev are advisory; the core owns naming.
+	if len(raw.Derived) > 0 {
+		res.OutputsContract = raw.Derived[0].Schema
+	}
 	return res, nil
 }
 
