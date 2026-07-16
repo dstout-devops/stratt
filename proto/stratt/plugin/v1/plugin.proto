@@ -1,0 +1,359 @@
+// Package stratt.plugin.v1 is the SOVEREIGN PLUGIN PORT — the one versioned,
+// hash-pinned wire contract every plugin plugs into (ADR-0046). It is the "USB
+// bus" of Stratt: one bus, typed plugin classes. The core owns this contract;
+// gRPC is merely the transport beneath it (charter §1.5). A plugin is a
+// Connector, an Actuator, or (later, Phase D) a capability-backend — never a
+// new Named Kind; `plugin` is the umbrella word (ADR-0046, vocabulary-linter
+// 2026-07-16).
+//
+// THE LOAD-BEARING SHAPE: opaque `Payload` + typed governance `Envelope`.
+// The core reads the Envelope and governs on it (routes, authorizes, versions,
+// stamps provenance, audits); it hands the Payload to the plugin UNTOUCHED and
+// never parses it. The day the core parses a Payload to make a decision,
+// content-blindness is dead. This shape can never move.
+//
+// The message is `Payload`, NEVER `Resource` — `resource` is a §2-banned
+// core-model identifier.
+//
+// ── The 13 t=0 invariants (ADR-0046 §Decision.3) and where each lives ──
+//  1. Opaque payload / typed envelope ............ Payload.bytes + Envelope
+//  2. Content-blind discovery .................... PluginService.GetManifest
+//  3. Identity bound to an authenticated channel . Envelope.principal + transport note
+//  4. Streaming + persistent connections ......... stream RPCs (Observe/Apply/…)
+//  5. Envelope-vs-payload version decoupling ..... protocol_version ≠ ContractRef.sha256
+//  6. Provenance core-stamped, not plugin-claimed  NO provenance field exists (by design)
+//  7. Idempotency-by-contract + checkpoint/resume  Envelope.idempotency_key + ApplyRequest.resume_token
+//  8. Cursor-delta Observe + content-hash ........ ObserveRequest.cursor + Envelope.content_hash
+//  9. Observe tree at true bands + atomic Apply .. Item.children + Apply on the root
+// 10. One bus + typed plugin classes ............. this single service + Manifest.class
+// 11. Facet-ownership + coordinate-scope pre-write  core-side check on every returned Envelope (note)
+// 12. Typed, core-legible diagnostic descent ..... TaskEvent is typed, NOT an opaque blob
+// 13. SDK stays permissively licensed ............ out-of-band (the shipped SDK links no copyleft)
+//
+// PHASE A scope: the domain PluginService below. The capability classes
+// (StateStore/EventBus/SecretBroker/DurableExec/ArtifactStore) are siblings on
+// the same bus but are Phase D — reserved, not defined here.
+syntax = "proto3";
+
+package stratt.plugin.v1;
+
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/dstout-devops/stratt/core/gen/stratt/plugin/v1;pluginv1";
+
+// ─────────────────────────────────────────────────────────────────────────
+// Governance envelope + opaque payload — the load-bearing wire shape.
+// ─────────────────────────────────────────────────────────────────────────
+
+// Envelope is the TYPED half the core reads and governs on. Every field here is
+// a governance fact, never domain content. Invariant #1.
+message Envelope {
+  // Where this lives — routing, authz scope, blast-radius (invariant #10 class
+  // aside, this is the coordinate half). `cell`/`kind` are total; `band`/`beam`
+  // are OPTIONAL, sparse, platform-computed (ADR-0046 discipline (c)); a plugin
+  // that does not compute them leaves them empty and the core does not infer.
+  Coordinates coordinates = 1;
+
+  // WHICH pinned schema this Payload claims to conform to — a hash-pinned
+  // pointer, checked for conformance, NEVER read for content (invariant #2/#5).
+  ContractRef contract = 2;
+
+  // The asserted acting identity. The core resolved it at its one seam and the
+  // plugin trusts it ONLY because the call provably arrived over the
+  // authenticated core→plugin channel (mTLS / per-plugin token). A principal on
+  // an unauthenticated surface is never trusted — invariant #3, the direct
+  // lesson of the cross-Cell auth hardening (ADR-0044 slice 4 / this session).
+  Principal principal = 3;
+
+  // POINTERS to credentials (§2.5) — names only, never material. The plugin
+  // resolves them against ITS OWN broker at point of use; material never
+  // crosses the core or a coordinate boundary.
+  repeated CredentialRef creds = 4;
+
+  // Idempotency key — the same key + same Payload must converge, never
+  // double-apply (invariant #7).
+  string idempotency_key = 5;
+
+  // Run / correlation id — the §1.8 descent + audit thread.
+  string correlation_id = 6;
+
+  // Plugin-COMPUTED content hash of the Payload — lets the core detect change
+  // WITHOUT reading content, at scale (invariant #8). Content-blind change
+  // detection: the core compares hashes, never diffs payloads.
+  string content_hash = 7;
+
+  // NOTE — there is deliberately NO `provenance` field. The core STAMPS
+  // provenance from the authenticated channel identity, so a plugin can neither
+  // forge nor claim it (invariant #6). Adding a provenance field here would be
+  // a charter §1.2 violation and is forbidden.
+}
+
+// Payload is the OPAQUE half — the plugin's domain content. The core never
+// parses these bytes. Invariant #1. (Named `Payload`, never `Resource`.)
+message Payload {
+  bytes bytes = 1;
+}
+
+// Item is one observed thing: its governance Envelope + opaque Payload, plus an
+// OPTIONAL band-honest decomposition into children at their true bands
+// (invariant #9). Apply is always issued on the ROOT Item for atomicity — the
+// tree is for observation/descent honesty, not for partial apply.
+message Item {
+  Envelope envelope = 1;
+  Payload payload = 2;
+  repeated Item children = 3;
+}
+
+// Coordinates — total residency (`cell`, `kind`) + optional computed residency
+// (`band`, `beam`). See ADR-0046 discipline (c): coordinates place, they do not
+// classify; band/beam are sparse and platform-computed, never a hand-authored
+// precondition.
+message Coordinates {
+  string cell = 1; // region residency (ADR-0044). "" == the LocalCell.
+  string kind = 2; // Entity kind — total, semantically-empty coordinate.
+  string band = 3; // OPTIONAL computed stack band (Seven-Spectra S1..S7). "" if uncomputed.
+  string beam = 4; // OPTIONAL computed service beam. "" if uncomputed.
+}
+
+// ContractRef pins a Facet/Payload schema by id + content hash. The core checks
+// CONFORMANCE against the pinned, hash-verified schema (invariant #5, §1.5 —
+// "schema drift is blocking, never silently absorbed"); it never reads the
+// schema to interpret content.
+message ContractRef {
+  string schema_id = 1; // e.g. "vcenter.vm.v1"
+  string sha256 = 2;    // hex content hash of the pinned schema document
+}
+
+// Principal — the asserted acting identity (id + kind). Kind is the graph's
+// existing string kind (e.g. "agent", "user", "service"), not a new enum, to
+// stay byte-consistent with authz/provenance. Trust derives from the
+// authenticated channel (invariant #3), not from these fields alone.
+message Principal {
+  string id = 1;
+  string kind = 2;
+}
+
+// CredentialRef — a NAME only (§2.5). Never carries secret material.
+message CredentialRef {
+  string name = 1;
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Discovery + capability negotiation (content-blind).
+// ─────────────────────────────────────────────────────────────────────────
+
+// PluginClass names the USB-style class of a plugin. It maps to Stratt's
+// existing Named Kinds — no new Kind is minted (ADR-0046 / vocabulary-linter).
+enum PluginClass {
+  PLUGIN_CLASS_UNSPECIFIED = 0;
+  PLUGIN_CLASS_SYNCER = 1;   // Connector/Syncer  — Observe (+ write-back Facets)
+  PLUGIN_CLASS_ACTUATOR = 2; // Actuator          — Plan/Apply/Destroy
+  PLUGIN_CLASS_ACTION = 3;   // Connector/Action  — Invoke (targetless)
+  PLUGIN_CLASS_EMITTER = 4;  // Connector/Emitter — Subscribe (push)
+}
+
+// Verb — the capability a plugin advertises. The core calls only advertised
+// verbs (capability negotiation, invariant #2). A plugin may span verbs.
+enum Verb {
+  VERB_UNSPECIFIED = 0;
+  VERB_OBSERVE = 1;
+  VERB_PLAN = 2;
+  VERB_APPLY = 3;
+  VERB_DESTROY = 4;
+  VERB_INVOKE = 5;
+  VERB_EMIT = 6;
+}
+
+message GetManifestRequest {}
+
+// ContractDecl — a schema this plugin OWNS (single-writer per §2.1). The BAND
+// lets one plugin honestly span bands. id + sha256 are hash-pinned (invariant
+// #5). The core enforces §2.1 ownership from the channel identity before any
+// write (invariant #11).
+message ContractDecl {
+  string schema_id = 1;
+  string sha256 = 2;
+  string band = 3; // the band this contract's data lives at ("" if band-agnostic)
+}
+
+message Manifest {
+  string plugin_id = 1;         // stable plugin identity (NOT "device_id")
+  string protocol_version = 2;  // this port's wire version — decoupled from ContractDecl.sha256 (invariant #5)
+  PluginClass class = 3;
+  repeated Verb verbs = 4;      // advertised capabilities
+  repeated ContractDecl contracts = 5; // schemas it owns, with bands
+}
+
+// GetManifestResponse wraps the Manifest so the RPC has a dedicated,
+// independently-evolvable response type (buf STANDARD) while Manifest stays the
+// reusable domain value.
+message GetManifestResponse {
+  Manifest manifest = 1;
+}
+
+message HealthRequest {}
+
+message HealthResponse {
+  enum Serving {
+    SERVING_UNSPECIFIED = 0;
+    SERVING_UP = 1;
+    SERVING_DOWN = 2;
+  }
+  Serving status = 1;
+  string protocol_version = 2;
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Verb requests/responses.
+// ─────────────────────────────────────────────────────────────────────────
+
+// ObserveRequest — cursor-delta enumeration (invariant #8). An empty cursor is
+// a full sync; a returned next_cursor resumes the delta. The core NEVER asks
+// the plugin to interpret; it just streams Items back.
+message ObserveRequest {
+  string cursor = 1; // opaque resume token from a prior Observe; "" == full sync
+}
+
+// ObserveResponse streams Items. The plugin sets next_cursor on the final
+// message of a delta window. Every Item.envelope is re-validated core-side
+// against the channel identity's owned Source/coordinate scope + pinned schema
+// BEFORE the core projects it (invariant #11 + the Syncer write-back carve-out:
+// this path is envelope-governed AND core-schema-validated, not payload-opaque).
+message ObserveResponse {
+  repeated Item items = 1;
+  string next_cursor = 2; // set on the last message of the window; "" mid-window
+}
+
+// PlanRequest asks the plugin for the DOMAIN diff (device-only knowledge). The
+// desired-state Payload is opaque to the core.
+message PlanRequest {
+  Envelope envelope = 1;
+  Payload desired = 2;
+}
+
+// PlanResponse is the plugin's domain diff, returned as an opaque Payload the core
+// stores and can descend into (§1.8) but never interprets. summary is a typed,
+// core-legible one-line gist for descent screens (never the mechanism of
+// diagnosis-hiding — invariant #12 spirit). (Named PlanResponse, not Plan, so the
+// message never shadows the PluginService.Plan RPC in the service scope.)
+message PlanResponse {
+  Payload diff = 1;
+  string summary = 2;
+  bool empty = 3; // true == no change (converged)
+}
+
+message ApplyRequest {
+  Envelope envelope = 1;
+  Payload desired = 2;      // opaque; applied atomically on the ROOT (invariant #9)
+  string resume_token = 3;  // optional checkpoint/resume (invariant #7); "" == fresh
+}
+
+message DestroyRequest {
+  Envelope envelope = 1;
+}
+
+// InvokeRequest — a targetless Action (RunAction). Args are opaque.
+message InvokeRequest {
+  Envelope envelope = 1;
+  Payload args = 2;
+}
+
+// SubscribeRequest — an Emitter opens a long-lived push stream (invariant #4).
+message SubscribeRequest {
+  string cursor = 1; // opaque resume token; "" == from-now
+}
+
+// TaskEvent is the TYPED, CORE-LEGIBLE descent/diagnostic unit (invariant #12).
+// It is deliberately NOT an opaque blob: §1.8 one-click descent (Intent →
+// Blueprint → Workflow → Run → task event) must survive the port. Diagnostics
+// ride this typed channel; only DESIRED-STATE payloads are opaque.
+message TaskEvent {
+  enum Level {
+    LEVEL_UNSPECIFIED = 0;
+    LEVEL_DEBUG = 1;
+    LEVEL_INFO = 2;
+    LEVEL_WARN = 3;
+    LEVEL_ERROR = 4;
+  }
+  Level level = 1;
+  string message = 2;                 // human/core-legible line
+  google.protobuf.Timestamp at = 3;
+  string correlation_id = 4;          // mirrors Envelope.correlation_id
+  map<string, string> fields = 5;     // structured, legible fields — NOT an opaque blob
+  bool terminal = 6;                  // true on the final event of the stream
+  bool ok = 7;                        // meaningful only when terminal == true
+}
+
+// Per-RPC response wrappers keep each streaming verb independently evolvable
+// (buf STANDARD RPC_REQUEST_RESPONSE_UNIQUE — aids invariant #5's additive-only
+// evolution) while TaskEvent stays the single shared, core-legible diagnostic
+// type each one carries.
+message ApplyResponse {
+  TaskEvent event = 1;
+}
+
+message DestroyResponse {
+  TaskEvent event = 1;
+}
+
+message InvokeResponse {
+  TaskEvent event = 1;
+}
+
+// EmittedEvent — an Emitter's push: governance Envelope + opaque Payload,
+// exactly like an observed Item (the core routes on the envelope, never the
+// payload).
+message EmittedEvent {
+  Envelope envelope = 1;
+  Payload payload = 2;
+  string cursor = 3; // resume token the core persists for at-least-once replay
+}
+
+message SubscribeResponse {
+  EmittedEvent event = 1;
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// The one bus. Invariant #10.
+// ─────────────────────────────────────────────────────────────────────────
+
+// PluginService is the single domain-plugin contract. A plugin implements only
+// the verbs its Manifest advertises; the core calls only those (invariant #2).
+// Streaming RPCs are long-lived (invariant #4) — the transport is a persistent,
+// authenticated connection, not a per-call spawn.
+service PluginService {
+  // Content-blind discovery: what a plugin is and can do, never how (invariant #2).
+  rpc GetManifest(GetManifestRequest) returns (GetManifestResponse);
+
+  // Liveness/readiness of the plugin process.
+  rpc Health(HealthRequest) returns (HealthResponse);
+
+  // Syncer: cursor-delta enumeration of the external system of record
+  // (invariant #8), streamed for scale (invariant #4).
+  rpc Observe(ObserveRequest) returns (stream ObserveResponse);
+
+  // Actuator: the domain diff (device-only).
+  rpc Plan(PlanRequest) returns (PlanResponse);
+
+  // Actuator: converge desired state; streams typed TaskEvents for descent
+  // (invariant #12); idempotent by contract, resumable (invariant #7).
+  rpc Apply(ApplyRequest) returns (stream ApplyResponse);
+
+  // Actuator: tear down; same streaming/idempotency discipline as Apply.
+  rpc Destroy(DestroyRequest) returns (stream DestroyResponse);
+
+  // Action: a targetless invocation.
+  rpc Invoke(InvokeRequest) returns (stream InvokeResponse);
+
+  // Emitter: plugin→core push over a long-lived stream (invariant #4).
+  rpc Subscribe(SubscribeRequest) returns (stream SubscribeResponse);
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// RESERVED — Phase D capability classes (StateStore, EventBus, SecretBroker,
+// DurableExec, ArtifactStore) are siblings on THIS bus but carry a different,
+// coordinate-free verb-shape. They are intentionally NOT defined in Phase A;
+// defining them here now would be speculative. See ADR-0046 discipline (d):
+// Postgres/NATS/Temporal remain the blessed, named, evergreen-tracked spine;
+// these ports are a measured-pain escape hatch, not a vendor-neutrality mandate.
+// ─────────────────────────────────────────────────────────────────────────

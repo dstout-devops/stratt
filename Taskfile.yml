@@ -15,6 +15,11 @@ vars:
   NODE_MIN: "22" # previous LTS (container ships current LTS 24)
   PYTHON_MIN: "3.13" # N-1 of 3.14 (pods / plugin SDK only — charter §3)
   TASK_MIN: "3.0"
+  # Sovereign plugin port codegen (ADR-0046 Phase A). Pinned like the other
+  # `go run <tool>@<ver>` tools; bump on the quarterly upgrade train.
+  BUF_VER: "1.71.0"
+  PROTOC_GEN_GO_VER: "1.36.11" # tracks google.golang.org/protobuf (pinned UP by k8s.io — see core/go.mod)
+  PROTOC_GEN_GO_GRPC_VER: "1.5.1"
 
 tasks:
   default:
@@ -148,6 +153,7 @@ tasks:
       - task: fmt:check
       - task: lint
       - task: generate:check
+      - task: proto:check
       - task: test
 
   dev:up:
@@ -313,16 +319,47 @@ tasks:
       - go run sigs.k8s.io/kind@v0.32.0 load docker-image stratt-ee-actions:dev --name stratt-dev
 
   generate:
-    desc: Regenerate code from specs (OpenAPI → server stubs + UI types, ADR-0006/0012)
+    desc: Regenerate code from specs (OpenAPI → server stubs + UI types, ADR-0006/0012; proto → plugin port, ADR-0046)
     cmds:
       - cd core && go generate ./...
       - cd ui && npm run generate
+      - task: proto:generate
 
   generate:check:
     desc: Fail if generated code is stale relative to the spec (CI gate, ADR-0006)
     cmds:
       - task: generate
       - git diff --exit-code -- '**/*.gen.go' 'ui/src/api/schema.d.ts'
+
+  proto:generate:
+    desc: Regenerate Go bindings from the sovereign plugin port proto (ADR-0046 Phase A)
+    dir: proto
+    cmds:
+      - go install google.golang.org/protobuf/cmd/protoc-gen-go@v{{.PROTOC_GEN_GO_VER}}
+      - go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@v{{.PROTOC_GEN_GO_GRPC_VER}}
+      - PATH="$(go env GOPATH)/bin:$PATH" go run github.com/bufbuild/buf/cmd/buf@v{{.BUF_VER}} generate
+
+  proto:check:
+    desc: Lint + no-breaking-change gate for the plugin port; fail if bindings are stale (ADR-0046 inv#5)
+    cmds:
+      - cd proto && go run github.com/bufbuild/buf/cmd/buf@v{{.BUF_VER}} lint
+      - cd proto && go run github.com/bufbuild/buf/cmd/buf@v{{.BUF_VER}} build
+      - task: proto:breaking
+      - task: proto:generate
+      - git diff --exit-code -- core/gen
+
+  proto:breaking:
+    desc: Enforce additive-only evolution of the plugin port vs main (ADR-0046 inv#5 / §1.7 anti-fossilization)
+    dir: proto
+    silent: true
+    cmds:
+      - |
+        set -eu
+        out=$(go run github.com/bufbuild/buf/cmd/buf@v{{.BUF_VER}} breaking --against '../.git#branch=main,subdir=proto' 2>&1) || {
+          printf '%s\n' "$out" | grep -q 'no .proto files' && { echo "✓ proto:breaking — no baseline on main yet (first introduction of the port); gate engages once merged"; exit 0; }
+          printf '%s\n' "$out"; exit 1
+        }
+        echo "✓ proto:breaking — no breaking changes vs main"
 
   ui:dev:
     desc: Vite dev server on :5173, /api proxied to strattd :8080 (ADR-0012)
