@@ -21,9 +21,21 @@ import (
 )
 
 // relaySitePlugin is a plugin "at the Site": Apply streams a write-back with a
-// granted + an ungranted-for-community scheme, then a terminal CHANGED.
+// granted + an ungranted-for-community scheme, then a terminal CHANGED. manifestID
+// is what its GetManifest asserts (the hub validates it against the grant, F1).
 type relaySitePlugin struct {
 	pluginv1.UnimplementedPluginServiceServer
+	manifestID string
+}
+
+func (p relaySitePlugin) GetManifest(context.Context, *pluginv1.GetManifestRequest) (*pluginv1.GetManifestResponse, error) {
+	id := p.manifestID
+	if id == "" {
+		id = "vcenter-dev"
+	}
+	return &pluginv1.GetManifestResponse{Manifest: &pluginv1.Manifest{
+		PluginId: id, ProtocolVersion: "v1", Class: pluginv1.PluginClass_PLUGIN_CLASS_ACTUATOR,
+	}}, nil
 }
 
 func (relaySitePlugin) Apply(_ *pluginv1.ApplyRequest, s grpc.ServerStreamingServer[pluginv1.ApplyResponse]) error {
@@ -35,11 +47,11 @@ func (relaySitePlugin) Apply(_ *pluginv1.ApplyRequest, s grpc.ServerStreamingSer
 	})
 }
 
-func relaySiteClient(t *testing.T) pluginv1.PluginServiceClient {
+func relaySiteClient(t *testing.T, manifestID string) pluginv1.PluginServiceClient {
 	t.Helper()
 	lis := bufconn.Listen(1 << 20)
 	srv := grpc.NewServer()
-	pluginv1.RegisterPluginServiceServer(srv, relaySitePlugin{})
+	pluginv1.RegisterPluginServiceServer(srv, relaySitePlugin{manifestID: manifestID})
 	go func() { _ = srv.Serve(lis) }()
 	conn, err := grpc.NewClient("passthrough:///bufnet",
 		grpc.WithContextDialer(func(ctx context.Context, _ string) (net.Conn, error) { return lis.DialContext(ctx) }),
@@ -59,7 +71,7 @@ func TestExecutePlugin_RemoteSiteViaRelay(t *testing.T) {
 	dialer, acceptor := siterelay.InProcess()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	go func() { _ = siterelay.Serve(ctx, acceptor, relaySiteClient(t)) }()
+	go func() { _ = siterelay.Serve(ctx, acceptor, relaySiteClient(t, "vcenter-dev")) }()
 
 	grant := pluginhost.Grant{
 		PluginIdentity: "vcenter-dev", Tier: pluginhost.TierCommunity,
@@ -103,5 +115,32 @@ func TestExecutePlugin_RemoteSiteNoRelayFailsVisibly(t *testing.T) {
 	_, err := a.Execute(context.Background(), RunInput{Actuator: "tofu"}, 0, "edge-1", ResolvedTargets{}, nil)
 	if err == nil || !strings.Contains(err.Error(), "no plugin relay is configured") {
 		t.Fatalf("remote-Site plugin with no relay must fail visibly, got %v", err)
+	}
+}
+
+// TestExecutePlugin_SiteManifestMismatchRejected proves ADR-0049 F1: a Site plugin
+// whose relayed Manifest asserts an identity ≠ the hub-held grant is REJECTED
+// hub-side before any verb runs — a compromised agent cannot relay a different
+// plugin under the grant's authority.
+func TestExecutePlugin_SiteManifestMismatchRejected(t *testing.T) {
+	dialer, acceptor := siterelay.InProcess()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	// The plugin at the Site asserts the WRONG identity.
+	go func() { _ = siterelay.Serve(ctx, acceptor, relaySiteClient(t, "attacker-plugin")) }()
+
+	grant := pluginhost.Grant{PluginIdentity: "vcenter-dev", Tier: pluginhost.TierTrusted,
+		Source: types.Source{Kind: "vcenter", Name: "vcenter-dev"}, IdentitySchemes: []string{"vcenter.uuid"}}
+	a := &Activities{
+		Log:             slog.New(slog.NewTextHandler(io.Discard, nil)),
+		RelayDial:       func(string, string) siterelay.Dialer { return dialer },
+		PluginActuators: map[string]PluginActuator{"tofu": {Grant: grant, DryRunnable: true}},
+	}
+	ts := &testsuite.WorkflowTestSuite{}
+	env := ts.NewTestActivityEnvironment()
+	env.RegisterActivity(a.Execute)
+	_, err := env.ExecuteActivity(a.Execute, RunInput{Actuator: "tofu", Principal: "alice"}, 0, "edge-1", ResolvedTargets{}, []dispatch.CredentialMount(nil))
+	if err == nil || !strings.Contains(err.Error(), "anti-spoof") {
+		t.Fatalf("a Site plugin whose manifest ≠ grant must be rejected hub-side (F1), got %v", err)
 	}
 }

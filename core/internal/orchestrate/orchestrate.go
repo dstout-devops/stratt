@@ -738,6 +738,14 @@ func (a *Activities) executePlugin(ctx context.Context, in RunInput, site string
 			log = slog.Default()
 		}
 		host = pluginhost.New(a.Store, siterelay.NewClient(a.RelayDial(site, pa.Grant.PluginIdentity)), pa.Grant, log).UsePlanStore(pa.PlanStore)
+		// F1 (ADR-0049): validate the RELAYED Manifest against the hub-held grant
+		// before any verb — the Site controls manifest.plugin_id, so a compromised
+		// agent relaying a different plugin is rejected hub-side. Bounded-trust holds
+		// until end-to-end plugin auth lands.
+		if err := host.ValidateManifest(ctx); err != nil {
+			return dispatch.Result{}, temporal.NewNonRetryableApplicationError(
+				fmt.Sprintf("actuator %q at Site %q: %v", in.Actuator, site, err), "SitePluginIdentityMismatch", nil)
+		}
 	}
 	if host == nil {
 		return dispatch.Result{}, temporal.NewNonRetryableApplicationError(

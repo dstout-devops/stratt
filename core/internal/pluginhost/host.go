@@ -144,6 +144,25 @@ func (h *Host) Register(ctx context.Context) error {
 	return nil
 }
 
+// ValidateManifest fetches the plugin's Manifest and checks its asserted identity
+// against the hub-held grant (ADR-0049 F1) — the anti-spoof binding for a RELAYED
+// Site plugin, where manifest.plugin_id is a string the Site controls and a
+// compromised agent could relay a different plugin. Governance stays hub-side: a
+// mismatch is rejected BEFORE any verb runs. Lighter than Register (no Source/owner
+// registration, no Syncer-class assumption) so it runs per-Run on a Site host. The
+// deeper end-to-end auth (a plugin-held key the agent cannot forge) is the tracked
+// hardening; until then the trust model is bounded to the grant's delegated scope.
+func (h *Host) ValidateManifest(ctx context.Context) error {
+	resp, err := h.client.GetManifest(ctx, &pluginv1.GetManifestRequest{})
+	if err != nil {
+		return fmt.Errorf("pluginhost: get manifest: %w", err)
+	}
+	if id := resp.GetManifest().GetPluginId(); id != h.grant.PluginIdentity {
+		return fmt.Errorf("pluginhost: manifest identity %q != granted identity %q (anti-spoof, ADR-0049 F1)", id, h.grant.PluginIdentity)
+	}
+	return nil
+}
+
 // SyncLoop re-runs a full Sync every interval until ctx ends. A transient sync
 // error is logged and retried on the next tick — the full sync is the recovery
 // mechanism (ADR-0046: reconcile-as-recovery). Register must have run first;

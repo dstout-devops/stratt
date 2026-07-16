@@ -1,6 +1,6 @@
 # ADR 0049 — Sites over the plugin port: the agent as an authenticated transport relay, never a governor
 
-- **Status:** **Proposed** — extends remote-Site execution (ADR-0032, today only the in-tree pod path) to the
+- **Status:** **Accepted** (2026-07-16, steward) — extends remote-Site execution (ADR-0032, today only the in-tree pod path) to the
   full plugin-port verb surface (Observe / Plan / Apply / Destroy / Invoke), so a device that must act at the
   edge (ansible against isolated hosts, cert issuance from a leaf, on-prem AD) can run over the sovereign port
   instead of an in-tree pod. One charter-guardian pass (REWORK → folded; see Reviews). Supersedes ADR-0047's
@@ -124,6 +124,31 @@ hub-side; the plugin's raw, provenance-free wire shapes are tunnelled over the e
 - **Model B — the hub dials a Site-local plugin's gRPC directly.** Rejected on sight: Sites are behind
   NAT/firewall; the pull/leaf topology exists precisely to avoid inbound. (The chosen model keeps the outbound
   leaf and lets NATS carry the hub-initiated virtual connection.)
+
+## Hardening status (slice 4)
+
+- **F1 — hub-side Manifest validation: DONE.** `pluginhost.Host.ValidateManifest`
+  fetches the relayed Manifest and rejects any `plugin_id` ≠ the hub-held grant
+  BEFORE any verb; `executePlugin` calls it when it builds a Site host. A compromised
+  agent relaying a different plugin under the grant's authority is refused hub-side
+  (`SitePluginIdentityMismatch`), tested. The deeper **end-to-end plugin auth** (a
+  plugin-held key the agent cannot forge, tunnelled through the relay) remains the
+  tracked hardening; until it lands the trust model is the bounded one pinned above —
+  a Site forges only within its grant + resolved-View scope, never estate-wide.
+- **F3 — home-Cell write-back: VERIFIED, no code needed for actuation.** The DB home
+  gate (`enforce_write_path`, migration 00032) applies the cross-Cell home rejection
+  ONLY to `wp = 'normalizer'` (Syncer) writes; `run-provenance` writes get the
+  writer-kind check but NOT the home-Cell rejection. Site **actuation** write-back is
+  Run-provenance, so it projects at the Run's Cell and is never spuriously rejected.
+  F3 becomes load-bearing only for a future **Site Syncer** (Observe over the relay,
+  where the Source is homed on a Cell) — that path MUST route its write-back
+  projection to the Source's home-Cell hub (ADR-0044 write-home-forwarding); recorded
+  as its precondition, not built here.
+- **TLS leaf — DEPLOYMENT requirement.** The relay tunnels over the SAME NATS
+  connection the site gateway holds (`sitegw.Connect` → `nats.Connect`), so leaf TLS
+  is set by the URL scheme (`tls://`) + NATS server config, not core code. Because
+  secret-bearing plan bytes now cross Site→hub (V2), production MUST run the leaf
+  over TLS; documented as an operational precondition of this ADR.
 
 ## Reviews
 
