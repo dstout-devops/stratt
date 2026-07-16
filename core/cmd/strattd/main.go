@@ -46,7 +46,6 @@ import (
 	"github.com/dstout-devops/stratt/core/internal/connectors/msgraph"
 	"github.com/dstout-devops/stratt/core/internal/connectors/puppet"
 	"github.com/dstout-devops/stratt/core/internal/connectors/salt"
-	"github.com/dstout-devops/stratt/core/internal/connectors/vcenter"
 	"github.com/dstout-devops/stratt/core/internal/contract"
 	"github.com/dstout-devops/stratt/core/internal/desiredstate"
 	"github.com/dstout-devops/stratt/core/internal/dispatch"
@@ -58,13 +57,17 @@ import (
 	"github.com/dstout-devops/stratt/core/internal/leader"
 	"github.com/dstout-devops/stratt/core/internal/notify"
 	"github.com/dstout-devops/stratt/core/internal/orchestrate"
+	"github.com/dstout-devops/stratt/core/internal/pluginhost"
 	"github.com/dstout-devops/stratt/core/internal/scim"
 	"github.com/dstout-devops/stratt/core/internal/sitegw"
 	"github.com/dstout-devops/stratt/core/internal/siteproto"
 	"github.com/dstout-devops/stratt/core/internal/statebackend"
 	"github.com/dstout-devops/stratt/core/internal/triggerengine"
 	"github.com/dstout-devops/stratt/core/internal/triggers"
+	pluginv1 "github.com/dstout-devops/stratt/sdk/stratt/plugin/v1"
 	"github.com/dstout-devops/stratt/types"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
 )
 
 func main() {
@@ -472,20 +475,40 @@ func run(ctx context.Context, log *slog.Logger) error {
 		return func(cctx context.Context) { homegate.Supervise(cctx, homeDeps, source, register, run) }
 	}
 
-	// ── Phase-0 vCenter Syncer (started when a Source is configured) ─────
-	if endpoint := os.Getenv("STRATT_VCENTER_URL"); endpoint != "" {
-		syncer := vcenter.NewSyncer(vcenter.Config{
-			Endpoint: endpoint,
-			// Credentials via env is the Phase-0 CredentialRef injection
-			// stub; material is never persisted (§2.5).
-			Username:   env("STRATT_VCENTER_USERNAME", "user"),
-			Password:   env("STRATT_VCENTER_PASSWORD", "pass"),
-			Insecure:   env("STRATT_VCENTER_INSECURE", "false") == "true",
-			SourceName: env("STRATT_VCENTER_SOURCE_NAME", "vcenter-dev"),
-		}, store, log)
-		controllers = append(controllers, homeSupervise(env("STRATT_VCENTER_SOURCE_NAME", "vcenter-dev"), syncer.Register, syncer.Run))
+	// ── vCenter Syncer plugin over the sovereign port (ADR-0046 Phase B) ──
+	// The govmomi content-expertise lives in the stratt-plugin-vcenter binary;
+	// the control plane connects to it and GOVERNS what it may write — ownership
+	// and the identity-scheme gate come from the operator Grant (finding #1/#4),
+	// provenance is stamped core-side (the plugin holds no DB path). The Grant is
+	// assembled here from env as the Phase-0 stand-in for a Git/CaC grant.
+	if addr := os.Getenv("STRATT_VCENTER_PLUGIN_ADDR"); addr != "" {
+		sourceName := env("STRATT_VCENTER_SOURCE_NAME", "vcenter-dev")
+		interval, err := time.ParseDuration(env("STRATT_VCENTER_INTERVAL", "30s"))
+		if err != nil {
+			return fmt.Errorf("vcenter interval: %w", err)
+		}
+		conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+		if err != nil {
+			return fmt.Errorf("vcenter plugin dial %s: %w", addr, err)
+		}
+		defer conn.Close()
+		grant := pluginhost.Grant{
+			PluginIdentity:  env("STRATT_VCENTER_PLUGIN_ID", "vcenter"),
+			Tier:            pluginhost.Tier(env("STRATT_VCENTER_TIER", "trusted")),
+			Source:          types.Source{Kind: "vcenter", Name: sourceName, Endpoint: os.Getenv("STRATT_VCENTER_URL")},
+			FacetNamespaces: []string{"vm.config", "vm.runtime", "net.guest"},
+			LabelKeys:       []string{"vcenter.name"},
+			// dns.fqdn is a shared cross-source scheme: only honored because the
+			// grant lists it AND the tier is trusted (finding #4).
+			IdentitySchemes:  []string{"vcenter.uuid", "vcenter.host.uuid", "dns.fqdn"},
+			TombstoneSchemes: []string{"vcenter.uuid", "vcenter.host.uuid"},
+		}
+		host := pluginhost.New(store, pluginv1.NewPluginServiceClient(conn), grant, log)
+		controllers = append(controllers, homeSupervise(sourceName, host.Register, func(cctx context.Context) error {
+			return host.SyncLoop(cctx, interval)
+		}))
 	} else {
-		log.Info("no vCenter Source configured (STRATT_VCENTER_URL empty); syncer idle")
+		log.Info("no vCenter plugin configured (STRATT_VCENTER_PLUGIN_ADDR empty); syncer idle")
 	}
 
 	// ── MS Graph Syncer (ADR-0014; started when a Source is configured) ──

@@ -10,5 +10,7 @@ use (
 	./contracts
 	./core
 	./packs
+	./plugins/vcenter
+	./sdk
 	./types
 )

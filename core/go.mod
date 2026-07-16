@@ -11,6 +11,7 @@ require (
 	github.com/coreos/go-oidc/v3 v3.18.0
 	github.com/dstout-devops/stratt/contracts v0.0.0-00010101000000-000000000000
 	github.com/dstout-devops/stratt/packs v0.0.0-00010101000000-000000000000
+	github.com/dstout-devops/stratt/sdk v0.0.0-00010101000000-000000000000
 	github.com/dstout-devops/stratt/types v0.0.0-00010101000000-000000000000
 	github.com/getkin/kin-openapi v0.141.0
 	github.com/go-chef/chef v0.30.1
@@ -26,14 +27,13 @@ require (
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.2
 	github.com/sigstore/sigstore v1.10.8
 	github.com/stretchr/testify v1.11.1
-	github.com/vmware/govmomi v0.55.1
 	go.temporal.io/api v1.63.0
 	go.temporal.io/sdk v1.46.0
 	go.yaml.in/yaml/v3 v3.0.4
 	golang.org/x/oauth2 v0.36.0
 	golang.org/x/text v0.38.0
 	google.golang.org/grpc v1.82.1
-	google.golang.org/protobuf v1.36.12-0.20260120151049-f2248ac996af // pinned UP by k8s.io/* @v0.36.2; do NOT force to a tagged v1.36.x — that downgrades client-go to an alpha (ADR-0046 dependency-scout)
+	google.golang.org/protobuf v1.36.12-0.20260120151049-f2248ac996af // indirect; pinned UP by k8s.io/* @v0.36.2; do NOT force to a tagged v1.36.x — that downgrades client-go to an alpha (ADR-0046 dependency-scout)
 	gopkg.in/yaml.v3 v3.0.1
 	k8s.io/api v0.36.2
 	k8s.io/apimachinery v0.36.2
@@ -139,3 +139,5 @@ replace github.com/dstout-devops/stratt/types => ../types
 replace github.com/dstout-devops/stratt/contracts => ../contracts
 
 replace github.com/dstout-devops/stratt/packs => ../packs
+
+replace github.com/dstout-devops/stratt/sdk => ../sdk

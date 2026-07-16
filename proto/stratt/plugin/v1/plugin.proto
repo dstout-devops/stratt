@@ -39,7 +39,7 @@ package stratt.plugin.v1;
 
 import "google/protobuf/timestamp.proto";
 
-option go_package = "github.com/dstout-devops/stratt/core/gen/stratt/plugin/v1;pluginv1";
+option go_package = "github.com/dstout-devops/stratt/sdk/stratt/plugin/v1;pluginv1";
 
 // ─────────────────────────────────────────────────────────────────────────
 // Governance envelope + opaque payload — the load-bearing wire shape.
@@ -94,10 +94,11 @@ message Payload {
   bytes bytes = 1;
 }
 
-// Item is one observed thing: its governance Envelope + opaque Payload, plus an
-// OPTIONAL band-honest decomposition into children at their true bands
-// (invariant #9). Apply is always issued on the ROOT Item for atomicity — the
-// tree is for observation/descent honesty, not for partial apply.
+// Item is the OPAQUE Apply-path aggregate: a governance Envelope + opaque
+// Payload, plus an OPTIONAL band-honest decomposition into children at their
+// true bands (invariant #9). Apply is always issued on the ROOT Item for
+// atomicity — the tree is for descent honesty, not partial apply. (The Syncer
+// write-back path uses the core-legible ObservedEntity below, not this.)
 message Item {
   Envelope envelope = 1;
   Payload payload = 2;
@@ -181,7 +182,11 @@ message Manifest {
   string protocol_version = 2;  // this port's wire version — decoupled from ContractDecl.sha256 (invariant #5)
   PluginClass class = 3;
   repeated Verb verbs = 4;      // advertised capabilities
-  repeated ContractDecl contracts = 5; // schemas it owns, with bands
+  repeated ContractDecl contracts = 5; // facet namespaces it REQUESTS to own (advertisement, not grant)
+  // Identity schemes this Source tombstones by (the full-sync seen-set is
+  // accumulated per scheme; ADR-0042). REQUESTED — the core honors these only
+  // where the operator grant allows, and the tier/grant gate applies (finding #4).
+  repeated string tombstone_schemes = 6;
 }
 
 // GetManifestResponse wraps the Manifest so the RPC has a dedicated,
@@ -214,14 +219,42 @@ message ObserveRequest {
   string cursor = 1; // opaque resume token from a prior Observe; "" == full sync
 }
 
-// ObserveResponse streams Items. The plugin sets next_cursor on the final
-// message of a delta window. Every Item.envelope is re-validated core-side
-// against the channel identity's owned Source/coordinate scope + pinned schema
-// BEFORE the core projects it (invariant #11 + the Syncer write-back carve-out:
-// this path is envelope-governed AND core-schema-validated, not payload-opaque).
+// ObservedEntity is the core-LEGIBLE write-back shape — the Syncer carve-out
+// (ADR-0046 findings #3/#5). The core reads kind/identity_keys/labels/facet-
+// namespaces STRUCTURALLY to route, correlate, own-check, and tombstone; each
+// facet VALUE is a plugin blob the core validates against the pinned Facet
+// schema at the write path (contract.ValidateFacet) and never interprets
+// further. This is deliberately NOT the opaque Apply-path payload — and it
+// carries NO principal/provenance field, so a plugin cannot claim provenance
+// (invariant #6): the host stamps it from the authenticated channel identity.
+message ObservedEntity {
+  string kind = 1;                       // Entity kind — core-legible coordinate
+  // identity scheme -> value. Each scheme is gated by tier + operator grant
+  // (finding #4): an ungranted scheme, or a shared cross-source scheme from a
+  // community-tier plugin, is rejected with a Finding, never written.
+  map<string, string> identity_keys = 2;
+  map<string, string> labels = 3;        // label key -> value; owned per-key (ADR-0041)
+  map<string, bytes> facets = 4;         // namespace -> value blob, schema-validated core-side
+}
+
+// GoneEntity signals a delta 'leave': an Entity the Source no longer reports, by
+// the identity scheme+value it tombstones on (ADR-0042). Empty on a pure
+// full-sync window.
+message GoneEntity {
+  string scheme = 1;
+  string value = 2;
+}
+
+// ObserveResponse is one window of the Syncer stream. The core accumulates a
+// per-scheme seen-set from `entities`; on full_sync_complete it tombstones
+// everything absent for each granted tombstone scheme (liveness crosses the
+// wire, ADR-0042). `gone` carries delta leaves. The plugin holds no DB path —
+// the core is the sole writer under enforce_write_path.
 message ObserveResponse {
-  repeated Item items = 1;
-  string next_cursor = 2; // set on the last message of the window; "" mid-window
+  repeated ObservedEntity entities = 1; // present entities (upserts) in this window
+  repeated GoneEntity gone = 2;         // delta leaves to tombstone; empty on full-sync
+  bool full_sync_complete = 3;          // true on the window that ends a full sync
+  string next_cursor = 4;               // opaque delta resume token; set on the last message of a window
 }
 
 // PlanRequest asks the plugin for the DOMAIN diff (device-only knowledge). The

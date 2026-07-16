@@ -1,0 +1,132 @@
+package vcenter
+
+import (
+	"context"
+	"fmt"
+	"log/slog"
+	"net/url"
+
+	"github.com/vmware/govmomi"
+	"github.com/vmware/govmomi/view"
+	"github.com/vmware/govmomi/vim25"
+	"github.com/vmware/govmomi/vim25/mo"
+	"github.com/vmware/govmomi/vim25/soap"
+	"google.golang.org/grpc"
+
+	pluginv1 "github.com/dstout-devops/stratt/sdk/stratt/plugin/v1"
+)
+
+// Config locates the vCenter Source. Credentials arrive resolved from the
+// plugin's OWN broker at spawn (§2.5); material never crosses the core.
+type Config struct {
+	PluginID string // the authenticated channel identity the operator grant is keyed on
+	Endpoint string
+	Username string
+	Password string
+	Insecure bool // dev/vcsim only
+}
+
+// Server implements the sovereign plugin port for a Syncer-class vCenter plugin.
+// It advertises the facet namespaces + tombstone schemes it REQUESTS to own; the
+// core-side host honors them only where the operator grant allows.
+type Server struct {
+	pluginv1.UnimplementedPluginServiceServer
+	cfg Config
+	log *slog.Logger
+}
+
+func NewServer(cfg Config, log *slog.Logger) *Server {
+	if cfg.PluginID == "" {
+		cfg.PluginID = "vcenter"
+	}
+	return &Server{cfg: cfg, log: log.With("plugin", "vcenter")}
+}
+
+func (s *Server) GetManifest(context.Context, *pluginv1.GetManifestRequest) (*pluginv1.GetManifestResponse, error) {
+	return &pluginv1.GetManifestResponse{Manifest: &pluginv1.Manifest{
+		PluginId:        s.cfg.PluginID,
+		ProtocolVersion: "v1",
+		Class:           pluginv1.PluginClass_PLUGIN_CLASS_SYNCER,
+		Verbs:           []pluginv1.Verb{pluginv1.Verb_VERB_OBSERVE},
+		Contracts: []*pluginv1.ContractDecl{
+			{SchemaId: "vm.config"},
+			{SchemaId: "vm.runtime"},
+			{SchemaId: "net.guest"},
+		},
+		TombstoneSchemes: []string{"vcenter.uuid", "vcenter.host.uuid"},
+	}}, nil
+}
+
+// Observe performs a full sync: it enumerates hosts + VMs and streams them as
+// ObservedEntities with the full_sync_complete boundary so the host can tombstone
+// (ADR-0042). Delta/watch (the PropertyCollector change feed) is the follow-up.
+func (s *Server) Observe(_ *pluginv1.ObserveRequest, stream grpc.ServerStreamingServer[pluginv1.ObserveResponse]) error {
+	ctx := stream.Context()
+	client, err := connect(ctx, s.cfg)
+	if err != nil {
+		return err
+	}
+	defer client.Logout(ctx) //nolint:errcheck
+
+	entities, err := enumerate(ctx, client.Client)
+	if err != nil {
+		return err
+	}
+	s.log.Info("full sync", "entities", len(entities))
+	return stream.Send(&pluginv1.ObserveResponse{Entities: entities, FullSyncComplete: true})
+}
+
+func connect(ctx context.Context, cfg Config) (*govmomi.Client, error) {
+	u, err := soap.ParseURL(cfg.Endpoint)
+	if err != nil {
+		return nil, fmt.Errorf("vcenter: parse endpoint: %w", err)
+	}
+	u.User = url.UserPassword(cfg.Username, cfg.Password)
+	client, err := govmomi.NewClient(ctx, u, cfg.Insecure)
+	if err != nil {
+		return nil, fmt.Errorf("vcenter: connect %s: %w", u.Host, err)
+	}
+	return client, nil
+}
+
+// enumerate bulk-reads hosts + VMs and normalizes them. Pure content-expertise;
+// no graph writes (the plugin holds no DB path).
+func enumerate(ctx context.Context, c *vim25.Client) ([]*pluginv1.ObservedEntity, error) {
+	m := view.NewManager(c)
+	var out []*pluginv1.ObservedEntity
+
+	hv, err := m.CreateContainerView(ctx, c.ServiceContent.RootFolder, []string{"HostSystem"}, true)
+	if err != nil {
+		return nil, fmt.Errorf("vcenter: host view: %w", err)
+	}
+	defer hv.Destroy(ctx) //nolint:errcheck
+	var hosts []mo.HostSystem
+	if err := hv.Retrieve(ctx, []string{"HostSystem"}, hostProps, &hosts); err != nil {
+		return nil, fmt.Errorf("vcenter: retrieve hosts: %w", err)
+	}
+	for _, h := range hosts {
+		e, err := normalizeHost(h)
+		if err != nil {
+			continue
+		}
+		out = append(out, e)
+	}
+
+	vv, err := m.CreateContainerView(ctx, c.ServiceContent.RootFolder, []string{"VirtualMachine"}, true)
+	if err != nil {
+		return nil, fmt.Errorf("vcenter: vm view: %w", err)
+	}
+	defer vv.Destroy(ctx) //nolint:errcheck
+	var machines []mo.VirtualMachine
+	if err := vv.Retrieve(ctx, []string{"VirtualMachine"}, vmProps, &machines); err != nil {
+		return nil, fmt.Errorf("vcenter: retrieve vms: %w", err)
+	}
+	for _, vm := range machines {
+		e, err := normalizeVM(vm)
+		if err != nil {
+			continue
+		}
+		out = append(out, e)
+	}
+	return out, nil
+}

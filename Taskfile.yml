@@ -346,7 +346,7 @@ tasks:
       - cd proto && go run github.com/bufbuild/buf/cmd/buf@v{{.BUF_VER}} build
       - task: proto:breaking
       - task: proto:generate
-      - git diff --exit-code -- core/gen
+      - git diff --exit-code -- sdk
 
   proto:breaking:
     desc: Enforce additive-only evolution of the plugin port vs main (ADR-0046 inv#5 / §1.7 anti-fossilization)

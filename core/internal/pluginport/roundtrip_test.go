@@ -2,8 +2,7 @@ package pluginport
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"io"
 	"net"
@@ -13,13 +12,13 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/test/bufconn"
 
-	pluginv1 "github.com/dstout-devops/stratt/core/gen/stratt/plugin/v1"
+	pluginv1 "github.com/dstout-devops/stratt/sdk/stratt/plugin/v1"
 )
 
-// trivialPlugin is the smallest thing that honors the port: it emits opaque
-// payloads only it understands and streams typed TaskEvents. The "core" side of
-// the test must route, authorize, provenance, and audit these WITHOUT ever
-// unmarshaling a Payload — that is the content-blindness boundary (ADR-0046 §2).
+// trivialPlugin is the smallest thing that honors the port: it emits core-legible
+// ObservedEntities whose facet VALUES are blobs only it understands, and streams
+// typed TaskEvents. The "core" side must route/own/provenance/audit these from
+// the Envelope/structure — and never interpret a facet value or an Apply payload.
 type trivialPlugin struct {
 	pluginv1.UnimplementedPluginServiceServer
 	applyReceivedDesired []byte // captured to prove Apply carried the opaque bytes through untouched
@@ -27,37 +26,33 @@ type trivialPlugin struct {
 
 func (p *trivialPlugin) GetManifest(context.Context, *pluginv1.GetManifestRequest) (*pluginv1.GetManifestResponse, error) {
 	return &pluginv1.GetManifestResponse{Manifest: &pluginv1.Manifest{
-		PluginId:        "trivial",
-		ProtocolVersion: "v1",
-		Class:           pluginv1.PluginClass_PLUGIN_CLASS_SYNCER,
-		Verbs:           []pluginv1.Verb{pluginv1.Verb_VERB_OBSERVE, pluginv1.Verb_VERB_APPLY},
-		Contracts:       []*pluginv1.ContractDecl{{SchemaId: "trivial.v1", Sha256: "deadbeef", Band: "S3"}},
+		PluginId:         "trivial",
+		ProtocolVersion:  "v1",
+		Class:            pluginv1.PluginClass_PLUGIN_CLASS_SYNCER,
+		Verbs:            []pluginv1.Verb{pluginv1.Verb_VERB_OBSERVE, pluginv1.Verb_VERB_APPLY},
+		Contracts:        []*pluginv1.ContractDecl{{SchemaId: "vm.config", Sha256: "deadbeef", Band: "S3"}},
+		TombstoneSchemes: []string{"trivial.id"},
 	}}, nil
 }
 
 func (p *trivialPlugin) Observe(_ *pluginv1.ObserveRequest, stream grpc.ServerStreamingServer[pluginv1.ObserveResponse]) error {
-	mk := func(beam string, secret []byte) *pluginv1.Item {
-		h := sha256.Sum256(secret)
-		return &pluginv1.Item{
-			Envelope: &pluginv1.Envelope{
-				Coordinates: &pluginv1.Coordinates{Kind: "vm", Band: "S3", Beam: beam},
-				Contract:    &pluginv1.ContractRef{SchemaId: "trivial.v1", Sha256: "deadbeef"},
-				// The plugin ASSERTS an identity, but the core will not trust it —
-				// provenance is stamped from the channel/manifest identity (inv #6).
-				Principal:   &pluginv1.Principal{Id: "attacker-claimed", Kind: "user"},
-				ContentHash: hex.EncodeToString(h[:]),
-			},
-			// Payload the core must never parse. Deliberately structured (a) and
-			// raw-binary (b) so any accidental JSON parse on the core side would fail.
-			Payload: &pluginv1.Payload{Bytes: secret},
+	mk := func(id string, facetVal []byte) *pluginv1.ObservedEntity {
+		return &pluginv1.ObservedEntity{
+			Kind:         "vm",
+			IdentityKeys: map[string]string{"trivial.id": id},
+			Labels:       map[string]string{"trivial.name": id},
+			// Facet value is a blob the core validates against a pinned schema but
+			// never structure-parses. (a) valid JSON, (b) raw binary — a naive
+			// json.Unmarshal on the core side would choke on (b), proving opacity.
+			Facets: map[string][]byte{"vm.config": facetVal},
 		}
 	}
 	return stream.Send(&pluginv1.ObserveResponse{
-		Items: []*pluginv1.Item{
-			mk("a", []byte(`{"domain":"only-the-plugin-parses-this"}`)),
+		Entities: []*pluginv1.ObservedEntity{
+			mk("a", []byte(`{"cpus":2}`)),
 			mk("b", []byte{0x00, 0x01, 0x02, 0xff}),
 		},
-		NextCursor: "done",
+		FullSyncComplete: true,
 	})
 }
 
@@ -91,34 +86,33 @@ func dial(t *testing.T) (pluginv1.PluginServiceClient, *trivialPlugin) {
 	return pluginv1.NewPluginServiceClient(conn), plug
 }
 
-// TestPortRoundTrip_CoreGovernsEnvelope_NeverPayload is the Phase-A existence
-// proof: a real gRPC round-trip where the core governs entirely on the typed
-// Envelope and never interprets a Payload. It pins invariants #2, #6, #8, #12
-// and the opaque pass-through, matching ADR-0046's Phase-A acceptance ("round-
-// trip a trivial in-memory plugin through the full envelope … with no payload
-// interpretation by the core").
-func TestPortRoundTrip_CoreGovernsEnvelope_NeverPayload(t *testing.T) {
+// TestPortRoundTrip_CoreGovernsStructure_NeverContent is the port-mechanics
+// proof: a real gRPC round-trip where the core governs on the legible
+// structure/envelope and never interprets a facet value or an Apply payload. It
+// pins invariants #2, #6, #12 and the opaque Apply pass-through. (The full
+// grant/authz/provenance-to-graph path is proven against Postgres+vcsim in the
+// host integration test.)
+func TestPortRoundTrip_CoreGovernsStructure_NeverContent(t *testing.T) {
 	client, plug := dial(t)
 	ctx := context.Background()
 
-	// Invariant #2 — content-blind discovery: identity/capabilities, never "how".
+	// Invariant #2 — content-blind discovery.
 	man, err := client.GetManifest(ctx, &pluginv1.GetManifestRequest{})
 	if err != nil {
 		t.Fatalf("GetManifest: %v", err)
 	}
-	// This stands in for the authenticated-channel identity (inv #3). In a real
-	// deployment it is the mTLS/token principal, not the manifest string; the
-	// point under test is that provenance derives from the CHANNEL, not the payload.
+	// Stands in for the authenticated-channel identity (inv #3): provenance
+	// derives from the channel, never from the payload.
 	channelIdentity := man.GetManifest().GetPluginId()
 	if channelIdentity != "trivial" {
 		t.Fatalf("manifest identity = %q, want trivial", channelIdentity)
 	}
 
-	type prov struct{ source, kind, band string }
+	type prov struct{ source, kind string }
 	stamped := map[string]prov{}
 	var audit []string
+	var sawFullSync bool
 
-	// Observe: the core reads envelopes only.
 	os, err := client.Observe(ctx, &pluginv1.ObserveRequest{})
 	if err != nil {
 		t.Fatalf("Observe: %v", err)
@@ -131,35 +125,38 @@ func TestPortRoundTrip_CoreGovernsEnvelope_NeverPayload(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Observe recv: %v", err)
 		}
-		for _, it := range resp.GetItems() {
-			env := it.GetEnvelope()
-			co := env.GetCoordinates()
+		for _, e := range resp.GetEntities() {
+			// The core reads kind/identity/labels LEGIBLY. There is NO principal
+			// on an ObservedEntity, so the plugin cannot claim provenance — the
+			// host stamps it from the channel identity (invariant #6, structural).
+			id := e.GetIdentityKeys()["trivial.id"]
+			stamped[id] = prov{source: channelIdentity, kind: e.GetKind()}
+			audit = append(audit, "observe:"+e.GetKind()+"/"+id)
 
-			// Invariant #8 — content-blind change detection: the core HASHES the
-			// opaque bytes (never parses their structure) and checks the plugin's
-			// asserted content_hash. Hashing is blind; unmarshaling would not be.
-			h := sha256.Sum256(it.GetPayload().GetBytes())
-			if got := hex.EncodeToString(h[:]); got != env.GetContentHash() {
-				t.Fatalf("content_hash mismatch for beam %q: got %s want %s", co.GetBeam(), got, env.GetContentHash())
+			// The facet VALUE is treated as an opaque blob — never structure-parsed.
+			// Prove it: entity "b" carries invalid JSON, so a json.Unmarshal here
+			// would error; the core must not do that on the value.
+			if len(e.GetFacets()["vm.config"]) == 0 {
+				t.Fatalf("entity %q missing facet blob", id)
 			}
-
-			// Invariant #6 — provenance stamped from the CHANNEL identity, never
-			// from the payload and never from the plugin's envelope Principal claim
-			// (which is deliberately "attacker-claimed" here).
-			stamped[co.GetBeam()] = prov{source: channelIdentity, kind: co.GetKind(), band: co.GetBand()}
-			audit = append(audit, "observe:"+co.GetKind()+"/"+co.GetBeam())
+			if json.Valid(e.GetFacets()["vm.config"]) && id == "b" {
+				t.Fatalf("entity b was expected to be non-JSON binary; opacity test is moot")
+			}
+		}
+		if resp.GetFullSyncComplete() {
+			sawFullSync = true
 		}
 	}
 
 	if len(stamped) != 2 {
-		t.Fatalf("expected 2 observed items, got %d", len(stamped))
+		t.Fatalf("expected 2 observed entities, got %d", len(stamped))
 	}
-	for beam, p := range stamped {
-		if p.source != "trivial" {
-			t.Fatalf("beam %q: provenance source must be the channel identity, got %q (payload/claim leaked in)", beam, p.source)
-		}
-		if p.kind != "vm" || p.band != "S3" {
-			t.Fatalf("beam %q: routed on wrong coordinates: %+v", beam, p)
+	if !sawFullSync {
+		t.Fatal("Observe must signal full_sync_complete so the host can tombstone (ADR-0042)")
+	}
+	for id, p := range stamped {
+		if p.source != "trivial" || p.kind != "vm" {
+			t.Fatalf("entity %q: bad governance %+v (provenance must be channel-derived)", id, p)
 		}
 	}
 
@@ -186,8 +183,7 @@ func TestPortRoundTrip_CoreGovernsEnvelope_NeverPayload(t *testing.T) {
 			t.Fatalf("Apply recv: %v", err)
 		}
 		ev := resp.GetEvent()
-		// Invariant #12 — the descent/diagnostic stream is typed and legible, not
-		// an opaque blob; the core can read and audit it.
+		// Invariant #12 — the descent/diagnostic stream is typed and legible.
 		audit = append(audit, "apply:"+ev.GetMessage())
 		if ev.GetTerminal() {
 			sawTerminalOK = ev.GetOk()
@@ -199,7 +195,6 @@ func TestPortRoundTrip_CoreGovernsEnvelope_NeverPayload(t *testing.T) {
 	if string(plug.applyReceivedDesired) != string(desired) {
 		t.Fatalf("opaque desired payload must cross the wire byte-identical: got %x want %x", plug.applyReceivedDesired, desired)
 	}
-
 	if len(audit) < 4 { // 2 observe + >=2 apply
 		t.Fatalf("audit stream must capture observe+apply on the one seam, got %v", audit)
 	}
