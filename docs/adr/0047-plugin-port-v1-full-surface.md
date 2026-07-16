@@ -172,6 +172,55 @@ three governed places:
 CI gate; a genuinely incompatible change is a **new negotiated protocol major**, never a silent break — USB's
 "1.1 → 2.0 → 3.x, negotiated, backward-compatible" made structural (§1.5, §1.7).
 
+### 8. Plan-as-artifact — the compliant storage & binding (Actuator slice 3, guardian pass 3)
+
+Implementing §7's plan-as-artifact seam forced the storage question §7 left implicit. The guardian
+adjudication (2026-07-16, pass 3) is binding; it rejected the two obvious framings and pinned the design to
+what §7(ii)+(iii) already implied:
+
+- **Where the plan BYTES live — NOT Evidence, NOT plugin-echo-trust.** The plan artifact is
+  secret-bearing (tofu plans embed resolved values). It must NOT go into `evidencestore` — that store is
+  WORM/object-locked *compliance* retention (undeletable for the window) and plaintext-at-rest, so a leaked
+  secret there is unexpungeable; and `Evidence` is a Named Kind meaning "a Finding's immutable backing"
+  (§2.4), which a saved plan is not. Equally, the plan must NOT stay solely in the plugin with the core
+  trusting an **echoed-back digest** — that is trust, not verification (§1.5), and reopens the confused-deputy
+  hole the mechanism exists to close. **The compliant store is a content-addressed (key = sha256),
+  encryption-at-rest, immutable, core-fetchable artifact store** — the same *class* as the AES-256-GCM
+  `statebackend` (ADR-0016), NOT the generic Phase-D `ArtifactStore` capability port. Hashing an **opaque**
+  Payload is content-blind (invariant #1 untouched — the core never interprets the plan); the bytes transit
+  core memory transiently to be hashed/stored and are never held as core *state* beyond the encrypted store,
+  so §2.5 holds exactly as it does when the core cosign-verifies a Bundle.
+- **Verify-don't-trust at the Apply boundary.** The core **fetches the object at the Gate-bound digest D and
+  re-hashes it itself** (the `evidencestore.GetVerified` fetch-and-rehash shape), rejecting a mismatch as
+  terminal — never a plugin re-reading its own plan, never an echoed digest.
+- **Core computes the digest, never the plugin.** As with `Envelope.content_hash` / `DerivedContract`, a
+  plugin-asserted `ArtifactRef.sha256` is advisory; the core's own hash over the received bytes is
+  authoritative (§1.5). *Open proto point (slice 3 design):* `PlanResponse.plan` is today an `ArtifactRef`
+  **pointer** (uri+sha256), but core-fetch-and-rehash needs the plan **bytes** to reach the core store — so
+  the Plan verb must deliver bytes (inline field or a streamed Plan), an additive proto decision to resolve
+  before the store is wired to a real producer.
+- **Content-blind core cannot redact — redaction is a plugin/SDK contract.** `PlanResponse.diff` (the
+  descent/approve surface) is opaque; the core cannot run redaction over bytes it cannot parse (as
+  `DiffFragment` already documents "already-redacted"). The SDK MUST redact `diff` before return; the clear
+  diff never lands in the graph or a Run summary — only a redacted summary + a descent link.
+- **The Gate binding is a compile-validated, fail-closed TRIPLE, not a topology accident.** A plan-pinned
+  Apply names the Plan step feeding its `plan_ref`; the Gate guarding that Apply binds the **same** Plan
+  step's digest; `LoadWorkflow` rejects any plan-pinned Apply not transitively guarded by a Gate bound to its
+  plan's digest, and rejects an ambiguous multi-Plan `needs` with no explicit selector (implicit precedence,
+  §2.4). Three holes this closes: multiple Plan steps (name it or compile-error), a Gate bound to no digest
+  while Apply proceeds (approve-nothing, §1.8), and — most dangerous — an Apply with an empty resolved
+  `plan_ref` **silently degrading to an unpinned live apply of `desired`**. `executePlugin` MUST fail closed:
+  a Step declared plan-pinned with an empty resolved digest is terminal, never a `desired` fallback.
+- **`Gate.plan_digest` is write-once; the digest is read from core state.** `CreateGate`'s upsert must
+  preserve the first-bound digest (a re-plan must not silently rebind); `executePlugin` reads D from the Gate
+  row / `stepOutputs` and sets `plan_ref.sha256 = D` itself, never accepting a plugin-proposed value.
+- **Approve-what-you-see reaches human AND agent identically (§1.6/§1.8).** The approval surface displays D +
+  the redacted summary + a descent link, and the same digest is exposed to an agent approver via API/MCP under
+  one authz/audit model — binding without surfacing is only nominal.
+- **Structurally sound, kept so:** a streaming dry-run `Apply` cannot be pinned — `ApplyResponse` carries no
+  `ArtifactRef`; only the unary `Plan` does. The digest-recording code lives ONLY in the `host.Plan` path and
+  ignores any `Envelope.artifact` on an Apply-verb response, so the property stays structural, not incidental.
+
 ## Consequences
 - **Positive:** the contract is frozen for every plugin class AND has explicit, governed growth room for
   systems not yet built (AAP/Terraform/K8s/Crossplane/cloud/AD fit without a new verb); extractions become
@@ -195,6 +244,16 @@ CI gate; a genuinely incompatible change is a **new negotiated protocol major**,
   protocol floor (§7a); plan-as-artifact got explicit Gate-binds-hash / core-verifies-at-boundary TOCTOU
   closure (§7); provisioned CredentialRef got namespace-confinement + no-overwrite + core-stamped binding
   (§7); the async and scope-label non-additions got their justification/guardrail fixes.
+- **charter-guardian, pass 3 — plan-as-artifact storage & binding (2026-07-16): CHANGES REQUIRED → folded
+  (§8).** The (a) core-Evidence vs (b) plugin-echo framing was a false binary: (a) persists secrets into
+  WORM-locked plaintext Evidence (§2.5 violation, unexpungeable); (b) trusts an echoed digest (reopens the
+  verify-don't-trust hole). Resolved to §7(ii)+(iii)'s already-accepted design — a content-addressed,
+  encrypted, **core-fetch-and-rehash** artifact store (statebackend *class*, not Evidence, not the Phase-D
+  ArtifactStore port). Added: plugin-side `diff` redaction (content-blind core can't redact); the
+  compile-validated fail-closed Plan↔Gate↔Apply **triple** (closing silent-unpinned-apply-of-`desired`,
+  approve-nothing, and multi-Plan ambiguity); write-once `Gate.plan_digest` read from core state; and
+  approve-what-you-see surfaced to human + agent alike. Open proto point flagged: the Plan verb must deliver
+  plan **bytes** (not just an `ArtifactRef` pointer) for the core to hash/store.
 - **vocabulary-linter (2026-07-16): CLEAN — no edits.** No banned terms; every new identifier reuses a frozen
   Named Kind (Action/Relation/Contract/Entity/Bundle) or is a carrying/structural type (Result/Fragment/Ref/
   Decl), never a rival Kind. `DerivedContract` reads as "a Contract at a derived rung" (guarded by the Rung
