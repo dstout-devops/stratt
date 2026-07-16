@@ -32,6 +32,11 @@ type AuditEvent struct {
 	// the unsealed tail.
 	PrevHash []byte `json:"prevHash,omitempty"`
 	Hash     []byte `json:"hash,omitempty"`
+	// Cell is the control-plane Cell that recorded the event (ADR-0044 slice 4).
+	// Deliberately NOT part of the hash chain (it is constant within a Cell's
+	// ledger); it rides the wire so a federated read attributes each event to
+	// its Cell and the SIEM dedups on (cell, seq).
+	Cell string `json:"cell,omitempty"`
 }
 
 // Audit action constants — the stable Action vocabulary (one audit path, §1.6).

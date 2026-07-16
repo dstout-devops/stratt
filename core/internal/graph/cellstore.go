@@ -23,13 +23,13 @@ func (s *Store) UpsertCell(ctx context.Context, c types.Cell) error {
 		declaredBy = "cac"
 	}
 	_, err := s.pool.Exec(ctx, `
-		INSERT INTO graph.cell (name, region, endpoint, dispatch_prefix, description, declared_by)
-		VALUES ($1, $2, $3, $4, $5, $6)
+		INSERT INTO graph.cell (name, region, endpoint, dispatch_prefix, description, declared_by, authz_home)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)
 		ON CONFLICT (name) DO UPDATE SET
 			region = excluded.region, endpoint = excluded.endpoint,
 			dispatch_prefix = excluded.dispatch_prefix, description = excluded.description,
-			declared_by = excluded.declared_by`,
-		c.Name, c.Region, c.Endpoint, c.DispatchPrefix, c.Description, declaredBy)
+			declared_by = excluded.declared_by, authz_home = excluded.authz_home`,
+		c.Name, c.Region, c.Endpoint, c.DispatchPrefix, c.Description, declaredBy, c.AuthzHome)
 	if err != nil {
 		return fmt.Errorf("graph: upsert cell: %w", err)
 	}
@@ -41,9 +41,9 @@ func (s *Store) GetCell(ctx context.Context, name string) (types.Cell, error) {
 	var c types.Cell
 	var dispatchPrefix, description *string
 	err := s.pool.QueryRow(ctx, `
-		SELECT name, region, endpoint, dispatch_prefix, description, declared_by
+		SELECT name, region, endpoint, dispatch_prefix, description, declared_by, authz_home
 		FROM graph.cell WHERE name = $1`, name,
-	).Scan(&c.Name, &c.Region, &c.Endpoint, &dispatchPrefix, &description, &c.DeclaredBy)
+	).Scan(&c.Name, &c.Region, &c.Endpoint, &dispatchPrefix, &description, &c.DeclaredBy, &c.AuthzHome)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return types.Cell{}, fmt.Errorf("%w: cell %s", ErrNotFound, name)
 	}
@@ -62,7 +62,7 @@ func (s *Store) GetCell(ctx context.Context, name string) (types.Cell, error) {
 // ListCells returns every Cell declaration, ordered by name.
 func (s *Store) ListCells(ctx context.Context) ([]types.Cell, error) {
 	rows, err := s.pool.Query(ctx, `
-		SELECT name, region, endpoint, dispatch_prefix, description, declared_by
+		SELECT name, region, endpoint, dispatch_prefix, description, declared_by, authz_home
 		FROM graph.cell ORDER BY name`)
 	if err != nil {
 		return nil, fmt.Errorf("graph: list cells: %w", err)
@@ -72,7 +72,7 @@ func (s *Store) ListCells(ctx context.Context) ([]types.Cell, error) {
 	for rows.Next() {
 		var c types.Cell
 		var dispatchPrefix, description *string
-		if err := rows.Scan(&c.Name, &c.Region, &c.Endpoint, &dispatchPrefix, &description, &c.DeclaredBy); err != nil {
+		if err := rows.Scan(&c.Name, &c.Region, &c.Endpoint, &dispatchPrefix, &description, &c.DeclaredBy, &c.AuthzHome); err != nil {
 			return nil, fmt.Errorf("graph: list cells: %w", err)
 		}
 		if dispatchPrefix != nil {

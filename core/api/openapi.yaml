@@ -1438,6 +1438,7 @@ components:
         detail:
           description: Optional structured context (never secret material, §2.5).
         sealed: { type: boolean, description: Whether the tamper-evidence chain covers this event yet. }
+        cell: { type: string, description: 'The control-plane Cell that recorded the event (ADR-0044); present on a federated read.' }
     AuditVerification:
       type: object
       description: >

@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/dstout-devops/stratt/core/internal/authz"
+	"github.com/dstout-devops/stratt/types"
 )
 
 // TestCACOwnsMappedTeam proves the §2.1 one-owner guard: a team is flagged only
@@ -57,5 +58,26 @@ func TestLeaderLeaseName(t *testing.T) {
 	}
 	if leaderLeaseName("us-east") == leaderLeaseName("eu-west") {
 		t.Fatal("distinct Cells must produce distinct lease names")
+	}
+}
+
+// TestIsAuthzHome proves the authz-home predicate (ADR-0044 slice 4): 'local'
+// owns authz only when no named Cells are declared; a named fleet's authz-home
+// is exactly the flagged Cell; a 'local' daemon in a named fleet loud-fails.
+func TestIsAuthzHome(t *testing.T) {
+	cell := func(name string, home bool) types.Cell { return types.Cell{Name: name, AuthzHome: home} }
+	fleet := []types.Cell{cell("eu", true), cell("us", false)}
+
+	if h, err := isAuthzHome("local", nil); !h || err != nil {
+		t.Fatalf("single-cell 'local' must be authz-home: h=%v err=%v", h, err)
+	}
+	if h, err := isAuthzHome("eu", fleet); !h || err != nil {
+		t.Fatalf("the flagged Cell must be authz-home: h=%v err=%v", h, err)
+	}
+	if h, err := isAuthzHome("us", fleet); h || err != nil {
+		t.Fatalf("a non-flagged Cell must not be authz-home: h=%v err=%v", h, err)
+	}
+	if _, err := isAuthzHome("local", fleet); err == nil {
+		t.Fatal("'local' in a named fleet must loud-fail")
 	}
 }

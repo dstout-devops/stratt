@@ -142,6 +142,34 @@ func All() ([]types.Contract, error) {
 	return ordered, nil
 }
 
+var (
+	fpOnce sync.Once
+	fpVal  string
+	fpErr  error
+)
+
+// Fingerprint is a single sha256 over the sorted (name, version, hash) triples
+// of the pinned registry (ADR-0044 slice 4) — a cheap version stamp a Cell
+// advertises so the federation router can BLOCK a merge with a peer on a
+// divergent Contract/Facet registry (§1.5: schema drift is blocking, never a
+// silent union). Computed once (the booted set is authoritative — boot aborts
+// on drift), memoized.
+func Fingerprint() (string, error) {
+	fpOnce.Do(func() {
+		all, err := All()
+		if err != nil {
+			fpErr = err
+			return
+		}
+		h := sha256.New()
+		for _, c := range all {
+			fmt.Fprintf(h, "%s\t%d\t%s\n", c.Name, c.Version, c.Hash)
+		}
+		fpVal = hex.EncodeToString(h.Sum(nil))
+	})
+	return fpVal, fpErr
+}
+
 // Get returns one Contract by name (e.g. "actuators/script.input").
 func Get(name string) (types.Contract, bool, error) {
 	if err := ensure(); err != nil {

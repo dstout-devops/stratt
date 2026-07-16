@@ -233,6 +233,9 @@ func ParseDir(root string) (Declarations, error) {
 	}
 	out.Cells = cells
 	sort.Slice(out.Cells, func(i, j int) bool { return out.Cells[i].Name < out.Cells[j].Name })
+	if err := validateCellSet(out.Cells); err != nil {
+		return out, err
+	}
 
 	scimIdps, err := parseKind(filepath.Join(root, "scim"), true, parseScimFile)
 	if err != nil {
@@ -705,6 +708,7 @@ type cellFile struct {
 	Endpoint       string `yaml:"endpoint"`
 	DispatchPrefix string `yaml:"dispatchPrefix"`
 	Description    string `yaml:"description"`
+	AuthzHome      bool   `yaml:"authzHome"`
 }
 
 func parseCellFile(path string, raw []byte) (string, types.Cell, error) {
@@ -714,7 +718,7 @@ func parseCellFile(path string, raw []byte) (string, types.Cell, error) {
 	if err := dec.Decode(&f); err != nil {
 		return "", types.Cell{}, fmt.Errorf("desiredstate: %s: %w", path, err)
 	}
-	c := types.Cell{Name: f.Name, Region: f.Region, Endpoint: f.Endpoint, DispatchPrefix: f.DispatchPrefix, Description: f.Description, DeclaredBy: "cac"}
+	c := types.Cell{Name: f.Name, Region: f.Region, Endpoint: f.Endpoint, DispatchPrefix: f.DispatchPrefix, Description: f.Description, AuthzHome: f.AuthzHome, DeclaredBy: "cac"}
 	if err := ValidateCell(c); err != nil {
 		return "", types.Cell{}, fmt.Errorf("desiredstate: %s: %w", path, err)
 	}
@@ -738,6 +742,31 @@ func ValidateCell(c types.Cell) error {
 		return fmt.Errorf("cell %s: endpoint must be an absolute URL (got %q)", c.Name, c.Endpoint)
 	}
 	return nil
+}
+
+// validateCellSet enforces the exactly-one authz-home invariant across a named
+// fleet (ADR-0044 slice 4): the authz-home Cell's leader is the SOLE writer of
+// the shared OpenFGA tuple store, so two would thrash and zero would let grants
+// go stale. A pure single-Cell estate (no declared Cells) is fine — the built-in
+// 'local' Cell is the trivial authz writer.
+func validateCellSet(cells []types.Cell) error {
+	if len(cells) == 0 {
+		return nil
+	}
+	var homes []string
+	for _, c := range cells {
+		if c.AuthzHome {
+			homes = append(homes, c.Name)
+		}
+	}
+	switch len(homes) {
+	case 1:
+		return nil
+	case 0:
+		return fmt.Errorf("exactly one Cell must set authzHome: true (the sole OpenFGA tuple writer); none of %d declared Cells does", len(cells))
+	default:
+		return fmt.Errorf("exactly one Cell may set authzHome: true; %d do: %s", len(homes), strings.Join(homes, ", "))
+	}
 }
 
 // notifySinkFile is the notify-sinks/*.yaml shape (ADR-0027). No secret

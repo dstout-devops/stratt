@@ -1213,6 +1213,8 @@ export interface components {
             detail?: unknown;
             /** @description Whether the tamper-evidence chain covers this event yet. */
             sealed?: boolean;
+            /** @description The control-plane Cell that recorded the event (ADR-0044); present on a federated read. */
+            cell?: string;
         };
         /** @description Result of walking the tamper-evidence hash chain (ADR-0034, §1.8): OK, or the first seq where the chain breaks and why. */
         AuditVerification: {

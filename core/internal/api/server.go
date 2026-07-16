@@ -43,6 +43,14 @@ type Server struct {
 	// Empty/"local" ⇒ read federation is a no-op (no peers). Threaded into the
 	// cellrouter that wraps the API for cross-Cell read federation.
 	CellID string
+	// CellSecret is the fleet-wide STRATT_CELL_SECRET for HMAC-authenticating
+	// cross-Cell fan-out calls (ADR-0044 slice 4). Empty ⇒ single-Cell.
+	CellSecret []byte
+	// Issuer/Audience are this Cell's OIDC config, advertised at /cellinfo so a
+	// peer can verify the fleet shares one issuer before it forwards a caller's
+	// token (§1.6; ADR-0044 slice 4). Non-secret.
+	Issuer   string
+	Audience string
 	// DevPrincipalHeader enables the X-Stratt-Principal resolver — dev
 	// harness / no-substrate path only (ADR-0009). Startup logs loudly.
 	DevPrincipalHeader bool
@@ -126,10 +134,15 @@ func (s *Server) Handler() http.Handler {
 	// the SAME wrapped handler for both /api/v1 and MCP, so both surfaces present
 	// one logical estate. Single-Cell (no graph.cell peers) ⇒ byte-identical
 	// pass-through. Writes are never federated here (§2.4).
+	fpForFed, _ := contract.Fingerprint()
 	fed := cellrouter.Middleware(Handler(s), cellrouter.Deps{
-		Store:  s.Store,
-		CellID: s.CellID,
-		Log:    s.Log,
+		Store:           s.Store,
+		CellID:          s.CellID,
+		Log:             s.Log,
+		Secret:          s.CellSecret,
+		Issuer:          s.Issuer,
+		Audience:        s.Audience,
+		RegistryVersion: fpForFed,
 	})
 	// principal resolves identity; audit records every request behind it (the
 	// full access log, §1.6) — audit is INNER so it sees the resolved Principal.
@@ -166,6 +179,12 @@ func (s *Server) Handler() http.Handler {
 	// Readiness (ADR-0040): distinct from liveness — verifies the substrate is
 	// reachable so a pod only takes traffic once Postgres + NATS are up.
 	mux.HandleFunc("/readyz", s.handleReadyz)
+	// Cell info (ADR-0044 slice 4): UNAUTHENTICATED, NON-federated — a peer
+	// probes it BEFORE it can trust tokens, to verify the fleet shares one OIDC
+	// issuer + Contract registry version before federating. Advertises only
+	// non-secret coordinates. The exact-path route wins over /api/v1/, bypassing
+	// principal/audit/cellrouter.
+	mux.HandleFunc("/api/v1/cellinfo", s.handleCellInfo)
 	if s.StateBackend != nil {
 		mux.Handle("/statebackend/", s.StateBackend)
 	}
@@ -178,7 +197,41 @@ func (s *Server) Handler() http.Handler {
 	if s.UIDir != "" {
 		mux.Handle("/", spaHandler(s.UIDir))
 	}
-	return mux
+	// Every response advertises this Cell's Contract-registry fingerprint
+	// (ADR-0044 slice 4) so a peer can BLOCK a federated merge on schema skew
+	// (§1.5). Outermost so federated responses (which don't copy inner headers)
+	// still carry it.
+	fp, _ := contract.Fingerprint()
+	return registryVersionMiddleware(fp, mux)
+}
+
+// registryVersionMiddleware stamps X-Stratt-Registry-Version on every response.
+func registryVersionMiddleware(fingerprint string, next http.Handler) http.Handler {
+	if fingerprint == "" {
+		return next
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Stratt-Registry-Version", fingerprint)
+		next.ServeHTTP(w, r)
+	})
+}
+
+// handleCellInfo advertises this Cell's federation coordinates (§1.6, §1.5):
+// its Cell name, OIDC issuer/audience, and Contract-registry fingerprint. All
+// non-secret; unauthenticated so a peer can verify shared identity + registry
+// before it federates or forwards a caller's token.
+func (s *Server) handleCellInfo(w http.ResponseWriter, _ *http.Request) {
+	fp, _ := contract.Fingerprint()
+	cell := s.CellID
+	if cell == "" {
+		cell = types.LocalCell
+	}
+	writeJSON(w, http.StatusOK, map[string]string{
+		"cell":            cell,
+		"issuer":          s.Issuer,
+		"audience":        s.Audience,
+		"registryVersion": fp,
+	})
 }
 
 // spaHandler serves dir statically, falling back to index.html for paths
@@ -212,7 +265,7 @@ func (s *Server) auditMiddleware(next http.Handler) http.Handler {
 		}
 		if err := s.Store.RecordAudit(context.WithoutCancel(r.Context()), types.AuditEvent{
 			PrincipalID: id, PrincipalKind: kind, Action: action,
-			Object: r.URL.Path, Outcome: strconv.Itoa(rec.status),
+			Object: r.URL.Path, Outcome: strconv.Itoa(rec.status), Cell: s.CellID,
 		}); err != nil {
 			s.Log.Error("audit record failed", "action", action, "err", err)
 		}
@@ -256,7 +309,7 @@ func (s *Server) recordMCPAudit(ctx context.Context, c types.MCPCall) error {
 	detail, _ := json.Marshal(map[string]any{"durationMs": c.DurationMS})
 	return s.Store.RecordAudit(ctx, types.AuditEvent{
 		PrincipalID: c.Principal, PrincipalKind: c.PrincipalKind,
-		Action: types.AuditMCPToolCall, Object: c.Tool, Outcome: outcome, Detail: detail,
+		Action: types.AuditMCPToolCall, Object: c.Tool, Outcome: outcome, Detail: detail, Cell: s.CellID,
 	})
 }
 
@@ -2133,6 +2186,9 @@ func auditToWire(e types.AuditEvent) AuditEvent {
 	}
 	sealed := e.Hash != nil
 	a.Sealed = &sealed
+	if e.Cell != "" {
+		a.Cell = &e.Cell
+	}
 	return a
 }
 

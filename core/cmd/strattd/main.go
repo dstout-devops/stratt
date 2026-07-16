@@ -92,6 +92,27 @@ func leaderLeaseName(cell string) string {
 	return "strattd-leader-" + cell
 }
 
+// isAuthzHome decides whether THIS daemon's Cell is the authz home — the sole
+// writer of the shared OpenFGA tuple store (ADR-0044 slice 4). Derived from the
+// in-memory CaC Cell set (not a DB read, which would race the reconcile). A pure
+// single-Cell estate (no declared Cells) makes the built-in 'local' Cell the
+// trivial authz writer; a named fleet must not run a 'local' daemon (it would be
+// a second writer) — loud-fail. Changing the designation requires a restart.
+func isAuthzHome(cellID string, cells []types.Cell) (bool, error) {
+	if len(cells) == 0 {
+		return cellID == types.LocalCell, nil
+	}
+	if cellID == types.LocalCell {
+		return false, fmt.Errorf("STRATT_CELL_ID is 'local' but %d named Cells are declared; set STRATT_CELL_ID to this Cell's name", len(cells))
+	}
+	for _, c := range cells {
+		if c.Name == cellID {
+			return c.AuthzHome, nil
+		}
+	}
+	return false, nil // this Cell isn't in the declared fleet → never authz-home
+}
+
 // splitNonEmpty splits a comma-separated env value into trimmed, non-empty
 // entries (e.g. STRATT_SALT_EVENT_TAGS="salt/minion/,salt/job/").
 func splitNonEmpty(s string) []string {
@@ -234,12 +255,14 @@ func run(ctx context.Context, log *slog.Logger) error {
 		log.Warn("DEV PRINCIPAL MODE: X-Stratt-Principal header is trusted — dev harness only (ADR-0009)")
 	}
 	var oidcResolver *authz.OIDCResolver
-	if issuer := os.Getenv("STRATT_OIDC_ISSUER"); issuer != "" {
+	oidcIssuer := os.Getenv("STRATT_OIDC_ISSUER")
+	oidcAudience := os.Getenv("STRATT_OIDC_AUDIENCE")
+	if issuer := oidcIssuer; issuer != "" {
 		// Production guard (ADR-0013, slice-5 guardian flag): an issuer
 		// without an audience accepts any token the IdP ever minted for any
 		// client. Skipping the audience check is a loud, explicit dev-only
 		// opt-out — never a default.
-		audience := os.Getenv("STRATT_OIDC_AUDIENCE")
+		audience := oidcAudience
 		if audience == "" {
 			if os.Getenv("STRATT_OIDC_ALLOW_NO_AUDIENCE") != "true" {
 				return fmt.Errorf("STRATT_OIDC_ISSUER is set but STRATT_OIDC_AUDIENCE is empty; set an audience or explicitly set STRATT_OIDC_ALLOW_NO_AUDIENCE=true (dev only)")
@@ -590,6 +613,21 @@ func run(ctx context.Context, log *slog.Logger) error {
 			}
 		})
 
+		// Authz-home gate (ADR-0044 slice 4): only the authz-home Cell's daemon
+		// writes the shared OpenFGA tuple store — else N Cells thrash it. Derived
+		// from the CaC Cell set at boot (not the DB, which races the reconcile).
+		authzDecls, err := desiredstate.ParseDir(path)
+		if err != nil {
+			return fmt.Errorf("desired-state parse (authz-home): %w", err)
+		}
+		authzHome, err := isAuthzHome(cellID, authzDecls.Cells)
+		if err != nil {
+			return err
+		}
+		if !authzHome {
+			log.Info("not the authz-home Cell; OpenFGA tuple sync is disabled here (a peer Cell owns it)", "cell", cellID)
+		}
+
 		// Authz tuples are CaC in the same checkout (§2.5): load now,
 		// reload on the reconcile cadence. A failed reload keeps the
 		// previous grant set (never silently drop to deny-all mid-flight;
@@ -619,9 +657,11 @@ func run(ctx context.Context, log *slog.Logger) error {
 				}
 				evaluator.SetProjectedTuples(projected)
 			}
-			if fga != nil {
+			if fga != nil && authzHome {
 				// OpenFGA is a projection of the same Git source (§1.2):
-				// desired-state sync, adds and revokes both.
+				// desired-state sync, adds and revokes both. ONLY the
+				// authz-home Cell writes — the shared store has one writer
+				// (ADR-0044 slice 4), else peer Cells would thrash it.
 				if err := fga.SyncTuples(ctx, evaluator.Snapshot()); err != nil {
 					log.Error("openfga tuple sync failed; server grants may be stale", "error", err)
 				}
@@ -749,7 +789,7 @@ func run(ctx context.Context, log *slog.Logger) error {
 	if uiDir != "" {
 		log.Info("serving ui", "dir", uiDir)
 	}
-	server := &api.Server{Store: store, Bus: bus, Temporal: temporalClient, Authz: authorizer, Log: log, CellID: cellID, DevPrincipalHeader: devPrincipal, OIDC: oidcResolver, UIDir: uiDir, StateBackend: stateHandler, EmitterIngest: emitters.New(store, bus, log).Handler(), SCIM: scim.New(store, log).Handler(), CompileStatus: compileStatus, Evidence: evidence, SiteLiveness: func(ctx context.Context) (map[string]bool, error) {
+	server := &api.Server{Store: store, Bus: bus, Temporal: temporalClient, Authz: authorizer, Log: log, CellID: cellID, CellSecret: []byte(os.Getenv("STRATT_CELL_SECRET")), Issuer: oidcIssuer, Audience: oidcAudience, DevPrincipalHeader: devPrincipal, OIDC: oidcResolver, UIDir: uiDir, StateBackend: stateHandler, EmitterIngest: emitters.New(store, bus, log).Handler(), SCIM: scim.New(store, log).Handler(), CompileStatus: compileStatus, Evidence: evidence, SiteLiveness: func(ctx context.Context) (map[string]bool, error) {
 		live, err := siteGateway.LiveSites(ctx)
 		if err != nil {
 			return nil, err

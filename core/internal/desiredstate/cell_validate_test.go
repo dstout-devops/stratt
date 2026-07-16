@@ -43,3 +43,28 @@ func TestParseCellFile(t *testing.T) {
 		t.Fatal("unknown yaml field must be rejected")
 	}
 }
+
+// TestValidateCellSet proves the exactly-one authz-home invariant (ADR-0044
+// slice 4): a named fleet needs exactly one authzHome Cell (the sole OpenFGA
+// tuple writer); a pure single-Cell estate (no declared Cells) is fine.
+func TestValidateCellSet(t *testing.T) {
+	cell := func(name string, home bool) types.Cell {
+		return types.Cell{Name: name, Region: "r", Endpoint: "https://" + name, AuthzHome: home}
+	}
+	cases := []struct {
+		name  string
+		cells []types.Cell
+		ok    bool
+	}{
+		{"no cells (single-cell)", nil, true},
+		{"one home", []types.Cell{cell("eu", true)}, true},
+		{"two cells one home", []types.Cell{cell("eu", true), cell("us", false)}, true},
+		{"zero home in a fleet", []types.Cell{cell("eu", false), cell("us", false)}, false},
+		{"two homes", []types.Cell{cell("eu", true), cell("us", true)}, false},
+	}
+	for _, c := range cases {
+		if err := validateCellSet(c.cells); (err == nil) != c.ok {
+			t.Fatalf("%s: ok=%v err=%v", c.name, c.ok, err)
+		}
+	}
+}

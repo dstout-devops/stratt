@@ -13,7 +13,7 @@ func TestCellStore(t *testing.T) {
 	s := testStore(t)
 	ctx := context.Background()
 
-	c := types.Cell{Name: "us-east", Region: "us-east-1", Endpoint: "https://us-east.stratt.internal", Description: "primary"}
+	c := types.Cell{Name: "us-east", Region: "us-east-1", Endpoint: "https://us-east.stratt.internal", Description: "primary", AuthzHome: true}
 	if err := s.UpsertCell(ctx, c); err != nil {
 		t.Fatal(err)
 	}
@@ -21,7 +21,7 @@ func TestCellStore(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Region != "us-east-1" || got.Endpoint != "https://us-east.stratt.internal" || got.DeclaredBy != "cac" {
+	if got.Region != "us-east-1" || got.Endpoint != "https://us-east.stratt.internal" || got.DeclaredBy != "cac" || !got.AuthzHome {
 		t.Fatalf("cell round-trip mismatch: %+v", got)
 	}
 	// Update.

@@ -75,6 +75,11 @@ func eventJSON(e types.AuditEvent) map[string]any {
 		"at":     e.At.UTC().Format(time.RFC3339Nano),
 		"action": e.Action,
 	}
+	if e.Cell != "" {
+		// The SIEM dedups on (cell, seq): seq is per-Cell, so a single SIEM
+		// aggregating multiple Cells needs the Cell to disambiguate (ADR-0044).
+		m["cell"] = e.Cell
+	}
 	if e.PrincipalID != "" {
 		m["principal"] = e.PrincipalID
 	}

@@ -2,8 +2,10 @@ package cellrouter
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -12,9 +14,10 @@ import (
 type kind int
 
 const (
-	kindNone  kind = iota // pass straight to the local handler
-	kindList              // scatter-gather + merge a list read
-	kindPoint             // route a single-Entity read to its home Cell
+	kindNone      kind = iota // pass straight to the local handler
+	kindList                  // scatter-gather + merge a list read
+	kindPoint                 // route a single-Entity read to its home Cell
+	kindAggregate             // scatter-gather + group-SUM a per-identity aggregate
 )
 
 // adapter is the only per-endpoint code: how to extract the total-order sort key
@@ -60,11 +63,56 @@ func extractField(raw json.RawMessage, tsField string) itemKey {
 	return k
 }
 
+// extractAudit keys an audit event by `at` (per-Cell `seq` is not comparable
+// across Cells), with a (cell, seq) tiebreak for total order (ADR-0044 slice 4).
+func extractAudit(raw json.RawMessage) itemKey {
+	var v struct {
+		At   time.Time `json:"at"`
+		Seq  int64     `json:"seq"`
+		Cell string    `json:"cell"`
+	}
+	_ = json.Unmarshal(raw, &v)
+	return itemKey{ts: v.At, id: v.Cell + ":" + strconv.FormatInt(v.Seq, 10)}
+}
+
 var (
 	runsAdapter     = adapter{extract: func(r json.RawMessage) itemKey { return extractField(r, "startedAt") }, less: descByTS}
 	findingsAdapter = adapter{extract: func(r json.RawMessage) itemKey { return extractField(r, "lastObserved") }, less: descByTS}
 	entitiesAdapter = adapter{extract: func(r json.RawMessage) itemKey { return extractField(r, "") }, less: ascByID}
+	auditAdapter    = adapter{extract: extractAudit, less: descByTS}
 )
+
+// aggAdapter federates a per-identity aggregate (/usage): group by a key, then
+// SUM/MAX matching groups across Cells — a client-side merge over per-Cell
+// GROUP BYs, no cross-Cell query pushdown (§1.4). No truncation (never cut a
+// group).
+type aggAdapter struct {
+	key     func(map[string]any) string
+	combine func(dst, src map[string]any)
+}
+
+func numOf(v any) float64 {
+	if f, ok := v.(float64); ok {
+		return f
+	}
+	return 0
+}
+
+// usageAdapter sums (principal, tool) MCP-usage across Cells: calls/errors add,
+// lastCall/principalKind take the max (§1.6 accounting per identity).
+var usageAdapter = aggAdapter{
+	key: func(m map[string]any) string { return fmt.Sprint(m["principal"]) + "\x00" + fmt.Sprint(m["tool"]) },
+	combine: func(dst, src map[string]any) {
+		dst["calls"] = numOf(dst["calls"]) + numOf(src["calls"])
+		dst["errors"] = numOf(dst["errors"]) + numOf(src["errors"])
+		if fmt.Sprint(src["lastCall"]) > fmt.Sprint(dst["lastCall"]) { // rfc3339 lexical == chronological
+			dst["lastCall"] = src["lastCall"]
+		}
+		if fmt.Sprint(src["principalKind"]) > fmt.Sprint(dst["principalKind"]) {
+			dst["principalKind"] = src["principalKind"]
+		}
+	},
+}
 
 // classify maps a request to its federation kind (the explicit federated-route
 // table — the §1.4 guardrail; anything not listed passes through untouched).
@@ -77,6 +125,10 @@ func classify(r *http.Request) (adapter, kind) {
 		return runsAdapter, kindList
 	case p == "/findings":
 		return findingsAdapter, kindList
+	case p == "/audit":
+		return auditAdapter, kindList
+	case p == "/usage":
+		return adapter{}, kindAggregate
 	case isViewEntities(p):
 		return entitiesAdapter, kindList
 	case isEntityByID(p):
@@ -126,6 +178,40 @@ func mergeList(bodies [][]byte, ad adapter, limit int) ([]byte, error) {
 	out := make([]json.RawMessage, len(items))
 	for i, it := range items {
 		out[i] = it.raw
+	}
+	return json.Marshal(out)
+}
+
+// mergeAggregate group-merges per-Cell aggregate rows: rows sharing a key are
+// combined (SUM/MAX), the rest pass through, output sorted by key for
+// determinism. No truncation — never cut a group (ADR-0044 slice 4).
+func mergeAggregate(bodies [][]byte, agg aggAdapter) ([]byte, error) {
+	groups := map[string]map[string]any{}
+	for _, b := range bodies {
+		if len(b) == 0 {
+			continue
+		}
+		var arr []map[string]any
+		if err := json.Unmarshal(b, &arr); err != nil {
+			return nil, err
+		}
+		for _, item := range arr {
+			k := agg.key(item)
+			if existing, ok := groups[k]; ok {
+				agg.combine(existing, item)
+			} else {
+				groups[k] = item
+			}
+		}
+	}
+	keys := make([]string, 0, len(groups))
+	for k := range groups {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	out := make([]map[string]any, len(keys))
+	for i, k := range keys {
+		out[i] = groups[k]
 	}
 	return json.Marshal(out)
 }

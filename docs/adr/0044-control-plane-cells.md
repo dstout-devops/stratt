@@ -106,6 +106,42 @@ Slice 3 = the read-federation `cellrouter`. Steward-approved refinements to the 
   `DevPrincipalHeader` disabled ignores it (→ anonymous → denied → named unreachable). Never enable the dev
   header on a prod peer.
 
+## Slice-4 refinements (accepted 2026-07-16)
+
+Slice 4 completes the §1.6 "one model" over Cells (global authz + one logical audit/cost stream) and closes
+the slice-3 safety gaps. Steward-approved:
+
+1. **authz-home Cell (the sole OpenFGA tuple writer)** = a CaC `authzHome` flag on the Cell registry
+   (`types.Cell.AuthzHome`, `graph.cell.authz_home`, `cells/*.yaml`), validated **exactly-one** across a named
+   fleet at CaC compile. The daemon derives its authz-home from the **in-memory decls at boot** (not a DB read
+   — races the reconcile); 'local' is authz-home only when no named Cells are declared (a 'local' daemon in a
+   named fleet **loud-fails**). The gate wraps the **`SyncTuples` call itself** (which also runs at boot on
+   every replica before leader election) — so only the authz-home Cell ever writes the shared store and N Cells
+   can't thrash it. Changing the designation requires a restart.
+2. **Peer-to-peer auth = HMAC** (`STRATT_CELL_SECRET`, fleet-wide, statebackend idiom): the router signs each
+   fan-out (`X-Stratt-Cell-Auth: <ts>:<hmac(method\npath\nrawQuery\nts)>`); a fanout header **without valid auth
+   → 401** (a spoof/misconfigured peer — never silently honored). 30s replay window; no secret ⇒ single-Cell,
+   the inbound fanout header is stripped. Residuals (recorded follow-ups): symmetric shared secret (any Cell can
+   impersonate a peer — mesh-trust), no replay nonce within the window (target is an idempotent GET).
+3. **Skew gating (§1.5/§1.6) = named `X-Stratt-Cells-Skewed` + 206**, two gates: a **discovery-time** OIDC
+   issuer+audience probe of each peer's `/cellinfo` (a mismatch drops the peer AND never forwards a caller's
+   token to it), and a **per-response** `X-Stratt-Registry-Version` compare (catches a mid-TTL redeploy). A
+   skewed peer is NAMED, its body never unioned. `/cellinfo` is an unauthenticated, non-federated endpoint
+   advertising only non-secret coordinates (cell/issuer/audience/registryVersion); the fingerprint is a sha256
+   over the sorted (name,version,hash) triples of the pinned registry, stamped on every response by an
+   outermost middleware (federated responses drop inner headers).
+4. **Federated `/audit`** merges on **`at` DESC, (cell,seq) tiebreak** (per-Cell `seq` is not comparable); `cell`
+   rides the wire (NOT the hash chain — hashing it would break `VerifyAudit` on rows already sealed). The
+   federated path is **limit-only** (the cross-Cell `seq` cursor is deferred); a single-Cell estate keeps its
+   `seq`-ASC cursor unchanged (an accepted merged-view §1.6 split, not a datum-model split). **Federated
+   `/usage`** is a **scatter-gather-SUM** (a new `kindAggregate`: group by (principal,tool), SUM calls/errors,
+   MAX lastCall) — a client-side merge over per-Cell GROUP BYs, no cross-Cell join/pushdown (§1.4), no
+   truncation. **SIEM**: `cell` on the forwarded event → one SIEM dedups on `(cell,seq)`; each Cell runs its own
+   forwarder to the one SIEM (deploy).
+
+Single-Cell 'local' stays a byte-identical no-op throughout: `SyncTuples` runs as today, no HMAC signing, the
+cellrouter is a pass-through, `/audit` keeps `seq`-ASC.
+
 ## Decision (the complete architecture)
 
 **Partitioned region-local single-writer Cells presenting ONE logical estate.** Not multi-master.

@@ -17,17 +17,26 @@ import (
 // chain is filled in later by the sealer, so recording never bottlenecks the
 // full access log. detail must never carry secret material (§2.5).
 func (s *Store) RecordAudit(ctx context.Context, e types.AuditEvent) error {
+	cell := e.Cell
+	if cell == "" {
+		cell = "local"
+	}
 	_, err := s.pool.Exec(ctx, `
-		INSERT INTO audit.event (principal_id, principal_kind, action, object, outcome, detail)
-		VALUES ($1, $2, $3, $4, $5, $6)`,
-		e.PrincipalID, e.PrincipalKind, e.Action, e.Object, e.Outcome, nullJSON(e.Detail))
+		INSERT INTO audit.event (principal_id, principal_kind, action, object, outcome, detail, cell)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+		e.PrincipalID, e.PrincipalKind, e.Action, e.Object, e.Outcome, nullJSON(e.Detail), cell)
 	if err != nil {
 		return fmt.Errorf("graph: record audit: %w", err)
 	}
 	return nil
 }
 
-const auditColumns = `seq, at, principal_id, principal_kind, action, object, outcome, detail, prev_hash, hash`
+// auditColumns lists the read columns (scanned by scanAudit). cell (ADR-0044)
+// rides the read but is NOT in the sealer's HASHED set — SealPending scans its
+// own explicit column list (no cell), and VerifyAudit reads cell but
+// audit.Canonical excludes it from the recomputed hash — so the tamper-evidence
+// chain is byte-identical to pre-Cells.
+const auditColumns = `seq, at, principal_id, principal_kind, action, object, outcome, detail, prev_hash, hash, cell`
 
 // LatestAuditForObject returns the most recent audit event for a given
 // (action, object) pair — e.g. the last access.recertify attestation of a View
@@ -79,7 +88,7 @@ func (s *Store) ListAudit(ctx context.Context, principal, action string, since i
 
 func scanAudit(row pgx.Row) (types.AuditEvent, error) {
 	var e types.AuditEvent
-	err := row.Scan(&e.Seq, &e.At, &e.PrincipalID, &e.PrincipalKind, &e.Action, &e.Object, &e.Outcome, &e.Detail, &e.PrevHash, &e.Hash)
+	err := row.Scan(&e.Seq, &e.At, &e.PrincipalID, &e.PrincipalKind, &e.Action, &e.Object, &e.Outcome, &e.Detail, &e.PrevHash, &e.Hash, &e.Cell)
 	return e, err
 }
 
@@ -174,7 +183,7 @@ func (s *Store) VerifyAudit(ctx context.Context) (types.AuditVerification, error
 	}
 
 	rows, err := s.pool.Query(ctx, `
-		SELECT seq, at, principal_id, principal_kind, action, object, outcome, detail, prev_hash, hash
+		SELECT seq, at, principal_id, principal_kind, action, object, outcome, detail, prev_hash, hash, cell
 		FROM audit.event WHERE hash IS NOT NULL ORDER BY seq ASC`)
 	if err != nil {
 		return types.AuditVerification{}, fmt.Errorf("graph: verify audit: %w", err)

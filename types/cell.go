@@ -28,6 +28,12 @@ type Cell struct {
 	// DeclaredBy records the declaration path: "cac" (Git desired state) or
 	// "api". Mirrors Site/View/Trigger/Emitter.
 	DeclaredBy string `json:"declaredBy,omitempty"`
+	// AuthzHome designates the ONE Cell whose leader syncs the global OpenFGA
+	// tuple store (ADR-0044 slice 4). Exactly one Cell in a named fleet carries
+	// it; every other Cell reads authz but never writes tuples, so N Cells
+	// sharing one OpenFGA cannot thrash each other's grants (SyncTuples is an
+	// authoritative single-writer). Validated exactly-one at CaC compile.
+	AuthzHome bool `json:"authzHome,omitempty"`
 }
 
 // LocalCell is the built-in, single-Cell default (today's deployment, dev, and
