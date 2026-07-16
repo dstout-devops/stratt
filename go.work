@@ -11,7 +11,9 @@ use (
 	./core
 	./packs
 	./plugins/awsec2
+	./plugins/certissuer
 	./plugins/chef
+	./plugins/msgraph
 	./plugins/puppet
 	./plugins/salt
 	./plugins/vcenter

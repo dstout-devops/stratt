@@ -72,6 +72,11 @@ type fakePlugin struct {
 	invokeEntities   []*pluginv1.ObservedEntity
 	invokeOutputs    []byte
 	invokeCreds      []string
+	// delta-cursor knobs: on an empty-cursor (full) Observe, NextCursor=nextCursor;
+	// on a cursored (delta) Observe, emit deltaGone + NextCursor=deltaCursor.
+	nextCursor  string
+	deltaGone   []*pluginv1.GoneEntity
+	deltaCursor string
 }
 
 func (f *fakePlugin) GetManifest(context.Context, *pluginv1.GetManifestRequest) (*pluginv1.GetManifestResponse, error) {
@@ -89,8 +94,12 @@ func (f *fakePlugin) GetManifest(context.Context, *pluginv1.GetManifestRequest) 
 	}}, nil
 }
 
-func (f *fakePlugin) Observe(_ *pluginv1.ObserveRequest, stream grpc.ServerStreamingServer[pluginv1.ObserveResponse]) error {
-	return stream.Send(&pluginv1.ObserveResponse{Entities: f.entities, FullSyncComplete: true})
+func (f *fakePlugin) Observe(req *pluginv1.ObserveRequest, stream grpc.ServerStreamingServer[pluginv1.ObserveResponse]) error {
+	if req.GetCursor() == "" {
+		return stream.Send(&pluginv1.ObserveResponse{Entities: f.entities, FullSyncComplete: true, NextCursor: f.nextCursor})
+	}
+	// Delta window: the host resumed from a persisted cursor.
+	return stream.Send(&pluginv1.ObserveResponse{Gone: f.deltaGone, NextCursor: f.deltaCursor})
 }
 
 func (f *fakePlugin) Invoke(_ *pluginv1.InvokeRequest, stream grpc.ServerStreamingServer[pluginv1.InvokeResponse]) error {
@@ -430,6 +439,45 @@ func TestHost_InvokeProjectsWithRunProvenance(t *testing.T) {
 	}
 	if !credReject {
 		t.Fatalf("expected a provisioned-cred rejection, got %+v", h.Rejections())
+	}
+}
+
+// TestHost_DeltaCursorPersistsAndResumes proves the host owns the delta cursor
+// (ADR-0047): the first (full) sync persists the plugin's next_cursor; the second
+// sync resumes from it, so the plugin returns a DELTA window whose Gone entry
+// tombstones the departed entity — without a re-enumeration.
+func TestHost_DeltaCursorPersistsAndResumes(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+	grant := vcenterGrant(pluginhost.TierTrusted, []string{"vcenter.uuid"})
+	client := serve(t, &fakePlugin{
+		pluginID:    "vcenter-dev",
+		entities:    []*pluginv1.ObservedEntity{ent("u1", nil, nil), ent("u2", nil, nil)},
+		nextCursor:  "delta-1",
+		deltaGone:   []*pluginv1.GoneEntity{{Scheme: "vcenter.uuid", Value: "u2"}},
+		deltaCursor: "delta-2",
+	})
+	h := pluginhost.New(store, client, grant, discardLog())
+	if err := h.Register(ctx); err != nil {
+		t.Fatalf("register: %v", err)
+	}
+
+	// First sync: empty cursor → full → u1,u2 live; cursor "delta-1" persisted.
+	if err := h.Sync(ctx); err != nil {
+		t.Fatalf("sync1: %v", err)
+	}
+	if n := len(vms(t, store)); n != 2 {
+		t.Fatalf("after full sync want 2 vms, got %d", n)
+	}
+
+	// Second sync: resumes from "delta-1" → the plugin returns a delta window with
+	// a Gone entry for u2 → u2 tombstoned by the delta path (not a re-enumeration).
+	if err := h.Sync(ctx); err != nil {
+		t.Fatalf("sync2: %v", err)
+	}
+	got := vms(t, store)
+	if len(got) != 1 || got[0].IdentityKeys["vcenter.uuid"] != "u1" {
+		t.Fatalf("after delta sync want only u1 live, got %+v", got)
 	}
 }
 

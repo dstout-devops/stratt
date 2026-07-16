@@ -174,7 +174,11 @@ func (h *Host) Sync(ctx context.Context) error {
 	if h.source.ID == "" {
 		return errors.New("pluginhost: Sync before Register")
 	}
-	stream, err := h.client.Observe(ctx, &pluginv1.ObserveRequest{})
+	// Resume from the persisted delta cursor (e.g. msgraph @odata.deltaLink); "" is
+	// a full sync. The HOST owns the cursor now — the plugin holds no store, so
+	// single-writer/provenance stay core-side (ADR-0046/0047).
+	cursor, _ := h.store.SyncCursor(ctx, h.source.ID)
+	stream, err := h.client.Observe(ctx, &pluginv1.ObserveRequest{Cursor: cursor})
 	if err != nil {
 		return fmt.Errorf("pluginhost: observe: %w", err)
 	}
@@ -261,6 +265,14 @@ func (h *Host) Sync(ctx context.Context) error {
 				if _, err := projector.TombstoneAbsent(ctx, prov, s, seen[s]); err != nil {
 					return fmt.Errorf("pluginhost: tombstone absent %q: %w", s, err)
 				}
+			}
+		}
+
+		// Persist the delta resume token so the next SyncLoop tick continues the
+		// feed instead of re-enumerating (ADR-0042 cursor semantics, host-owned).
+		if nc := resp.GetNextCursor(); nc != "" {
+			if err := h.store.SetSyncCursor(ctx, h.source.ID, nc, resp.GetFullSyncComplete()); err != nil {
+				return fmt.Errorf("pluginhost: persist cursor: %w", err)
 			}
 		}
 	}
