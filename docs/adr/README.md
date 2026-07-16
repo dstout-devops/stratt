@@ -56,3 +56,4 @@ Status is `Accepted` unless noted. See **[../roadmap.md](../roadmap.md)** for ho
 | [0045](0045-db-driven-syncer-home-gate.md) | DB-driven Syncer instantiation & Connector home-ownership gate (full re-home auto-cutover) | Proposed |
 | [0046](0046-stratt-as-substrate.md) | Stratt as Substrate: the dark-matter re-centering and the sovereign plugin port | Accepted |
 | [0047](0047-plugin-port-v1-full-surface.md) | Plugin port v1 full surface: write-back, relations, the rung ladder, and USB-style growth | Accepted |
+| [0048](0048-integration-taxonomy-plugin-tool-transport.md) | Integration taxonomy: connector (plugin) vs migration (tool) vs transport (core port) | Accepted |
