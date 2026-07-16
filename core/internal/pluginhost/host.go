@@ -180,6 +180,12 @@ func (h *Host) Sync(ctx context.Context) error {
 			return fmt.Errorf("pluginhost: observe recv: %w", err)
 		}
 
+		type pendingRel struct {
+			fromID string
+			rel    *pluginv1.ObservedRelation
+		}
+		var pending []pendingRel
+
 		for _, e := range resp.GetEntities() {
 			up, ok := h.toUpsert(e)
 			if !ok {
@@ -193,11 +199,36 @@ func (h *Host) Sync(ctx context.Context) error {
 			if err != nil {
 				return fmt.Errorf("pluginhost: upsert: %w", err)
 			}
-			_ = ids
+			for _, rel := range e.GetRelations() {
+				pending = append(pending, pendingRel{fromID: ids[0], rel: rel})
+			}
 			for _, s := range h.grant.TombstoneSchemes {
 				if v, ok := up.IdentityKeys[s]; ok {
 					seen[s] = append(seen[s], v)
 				}
+			}
+		}
+
+		// Relations resolve AFTER all entities in the window are present, targeting
+		// BY IDENTITY (ADR-0047 §1): the target scheme is tier+grant gated exactly
+		// as an emitted identity key is, and an unresolved target drops the edge
+		// with a rejection — NEVER a vivified placeholder Entity.
+		for _, pr := range pending {
+			rel := pr.rel
+			if ok, reason := h.grant.allowsIdentity(rel.GetToScheme()); !ok {
+				h.reject("relation-target", rel.GetToScheme(), reason)
+				continue
+			}
+			toID, found, err := h.store.EntityIDByIdentity(ctx, rel.GetToScheme(), rel.GetToValue())
+			if err != nil {
+				return fmt.Errorf("pluginhost: resolve relation target: %w", err)
+			}
+			if !found {
+				h.reject("relation", rel.GetType(), "target "+rel.GetToScheme()+"="+rel.GetToValue()+" not found; edge dropped (no vivify)")
+				continue
+			}
+			if err := projector.UpsertRelation(ctx, prov, rel.GetType(), pr.fromID, toID); err != nil {
+				return fmt.Errorf("pluginhost: upsert relation: %w", err)
 			}
 		}
 

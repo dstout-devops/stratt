@@ -94,6 +94,7 @@ func connect(ctx context.Context, cfg Config) (*govmomi.Client, error) {
 func enumerate(ctx context.Context, c *vim25.Client) ([]*pluginv1.ObservedEntity, error) {
 	m := view.NewManager(c)
 	var out []*pluginv1.ObservedEntity
+	hostUUIDByRef := map[string]string{} // host moref -> vcenter.host.uuid, for the runs-on edge
 
 	hv, err := m.CreateContainerView(ctx, c.ServiceContent.RootFolder, []string{"HostSystem"}, true)
 	if err != nil {
@@ -110,6 +111,9 @@ func enumerate(ctx context.Context, c *vim25.Client) ([]*pluginv1.ObservedEntity
 			continue
 		}
 		out = append(out, e)
+		if h.Summary.Hardware != nil && h.Summary.Hardware.Uuid != "" {
+			hostUUIDByRef[h.Self.Value] = h.Summary.Hardware.Uuid
+		}
 	}
 
 	vv, err := m.CreateContainerView(ctx, c.ServiceContent.RootFolder, []string{"VirtualMachine"}, true)
@@ -125,6 +129,15 @@ func enumerate(ctx context.Context, c *vim25.Client) ([]*pluginv1.ObservedEntity
 		e, err := normalizeVM(vm)
 		if err != nil {
 			continue
+		}
+		// runs-on edge to the ESXi host, named BY IDENTITY (vcenter.host.uuid) —
+		// the plugin never sees graph ids; the host resolves + stamps (ADR-0047 §1).
+		if vm.Runtime.Host != nil {
+			if uuid, ok := hostUUIDByRef[vm.Runtime.Host.Value]; ok {
+				e.Relations = append(e.Relations, &pluginv1.ObservedRelation{
+					Type: "runs-on", ToScheme: "vcenter.host.uuid", ToValue: uuid,
+				})
+			}
 		}
 		out = append(out, e)
 	}

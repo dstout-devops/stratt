@@ -243,6 +243,122 @@ func TestHost_ManifestBeyondGrantFailsRegistration(t *testing.T) {
 	}
 }
 
+func discardLog() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard, nil)) }
+
+// hostEntity is a bare ESXi-host ObservedEntity (a runs-on target).
+func hostEntity(uuid string) *pluginv1.ObservedEntity {
+	return &pluginv1.ObservedEntity{
+		Kind: "host", IdentityKeys: map[string]string{"vcenter.host.uuid": uuid},
+		Labels: map[string]string{"vcenter.name": "esxi-" + uuid},
+	}
+}
+
+// TestHost_RelationsResolveByIdentity proves the ADR-0047 relations path: a vm's
+// runs-on edge, named by the host's identity, is resolved and written vm->host
+// (the vcenter runs-on regression from Phase B, now restored over the wire).
+func TestHost_RelationsResolveByIdentity(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+	grant := vcenterGrant(pluginhost.TierTrusted, []string{"vcenter.uuid", "vcenter.host.uuid"})
+	grant.TombstoneSchemes = []string{"vcenter.uuid", "vcenter.host.uuid"}
+
+	vm := ent("u1", nil, nil)
+	vm.Relations = []*pluginv1.ObservedRelation{{Type: "runs-on", ToScheme: "vcenter.host.uuid", ToValue: "h1"}}
+	client := serve(t, &fakePlugin{pluginID: "vcenter-dev",
+		entities: []*pluginv1.ObservedEntity{hostEntity("h1"), vm}})
+	h := pluginhost.New(store, client, grant, discardLog())
+	if err := h.Register(ctx); err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	if err := h.Sync(ctx); err != nil {
+		t.Fatalf("sync: %v", err)
+	}
+
+	vmID, ok, err := store.EntityIDByIdentity(ctx, "vcenter.uuid", "u1")
+	if err != nil || !ok {
+		t.Fatalf("vm not projected: ok=%v err=%v", ok, err)
+	}
+	hostID, ok, err := store.EntityIDByIdentity(ctx, "vcenter.host.uuid", "h1")
+	if err != nil || !ok {
+		t.Fatalf("host not projected: ok=%v err=%v", ok, err)
+	}
+	targets, err := store.RelationTargets(ctx, vmID, "runs-on")
+	if err != nil {
+		t.Fatalf("relation targets: %v", err)
+	}
+	if len(targets) != 1 || targets[0] != hostID {
+		t.Fatalf("runs-on edge not written vm->host: got %v want [%s]", targets, hostID)
+	}
+}
+
+// TestHost_RelationTargetGated proves the target scheme is tier+grant gated: a
+// relation to an UNGRANTED scheme is dropped with a rejection, never written.
+func TestHost_RelationTargetGated(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+	// "mac" is not in the grant — a relation targeting it must be refused.
+	grant := vcenterGrant(pluginhost.TierTrusted, []string{"vcenter.uuid"})
+	vm := ent("u1", nil, nil)
+	vm.Relations = []*pluginv1.ObservedRelation{{Type: "peers-with", ToScheme: "mac", ToValue: "aa:bb"}}
+	client := serve(t, &fakePlugin{pluginID: "vcenter-dev", entities: []*pluginv1.ObservedEntity{vm}})
+	h := pluginhost.New(store, client, grant, discardLog())
+	if err := h.Register(ctx); err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	if err := h.Sync(ctx); err != nil {
+		t.Fatalf("sync: %v", err)
+	}
+	vmID, _, _ := store.EntityIDByIdentity(ctx, "vcenter.uuid", "u1")
+	if tg, _ := store.RelationTargets(ctx, vmID, "peers-with"); len(tg) != 0 {
+		t.Fatalf("ungranted relation target must not be written, got %v", tg)
+	}
+	var gated bool
+	for _, r := range h.Rejections() {
+		if r.Kind == "relation-target" && r.Detail == "mac" {
+			gated = true
+		}
+	}
+	if !gated {
+		t.Fatalf("expected a relation-target rejection for scheme mac, got %+v", h.Rejections())
+	}
+}
+
+// TestHost_RelationNoVivify proves resolve-don't-vivify: a granted-scheme target
+// that does not exist drops the edge and records a rejection — it NEVER creates a
+// placeholder host Entity (which would covertly write an ungranted identity).
+func TestHost_RelationNoVivify(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+	grant := vcenterGrant(pluginhost.TierTrusted, []string{"vcenter.uuid", "vcenter.host.uuid"})
+	vm := ent("u1", nil, nil)
+	vm.Relations = []*pluginv1.ObservedRelation{{Type: "runs-on", ToScheme: "vcenter.host.uuid", ToValue: "ghost"}}
+	client := serve(t, &fakePlugin{pluginID: "vcenter-dev", entities: []*pluginv1.ObservedEntity{vm}})
+	h := pluginhost.New(store, client, grant, discardLog())
+	if err := h.Register(ctx); err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	if err := h.Sync(ctx); err != nil {
+		t.Fatalf("sync: %v", err)
+	}
+	// No placeholder host was vivified.
+	if _, found, _ := store.EntityIDByIdentity(ctx, "vcenter.host.uuid", "ghost"); found {
+		t.Fatal("resolve-don't-vivify violated: a placeholder host Entity was created")
+	}
+	vmID, _, _ := store.EntityIDByIdentity(ctx, "vcenter.uuid", "u1")
+	if tg, _ := store.RelationTargets(ctx, vmID, "runs-on"); len(tg) != 0 {
+		t.Fatalf("edge to a missing target must be dropped, got %v", tg)
+	}
+	var dropped bool
+	for _, r := range h.Rejections() {
+		if r.Kind == "relation" {
+			dropped = true
+		}
+	}
+	if !dropped {
+		t.Fatalf("expected a dropped-relation rejection, got %+v", h.Rejections())
+	}
+}
+
 // TestHost_TombstoneAbsentOnFullSync proves liveness crosses the wire
 // (ADR-0042): an Entity absent from a later full sync is tombstoned.
 func TestHost_TombstoneAbsentOnFullSync(t *testing.T) {

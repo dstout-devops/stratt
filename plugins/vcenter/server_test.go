@@ -48,3 +48,44 @@ func TestEnumerateAgainstSimulator(t *testing.T) {
 		t.Logf("enumerated %d vms and %d hosts", vms, hosts)
 	})
 }
+
+// TestEnumerateEmitsRunsOn proves the vcenter runs-on edge crosses the wire
+// (ADR-0047 relations; the Phase-B regression restored): every simulator VM runs
+// on a host, so at least one vm carries a runs-on edge targeting a host BY
+// IDENTITY (vcenter.host.uuid), and that identity matches an emitted host.
+func TestEnumerateEmitsRunsOn(t *testing.T) {
+	simulator.Test(func(ctx context.Context, c *vim25.Client) {
+		entities, err := enumerate(ctx, c)
+		if err != nil {
+			t.Fatalf("enumerate: %v", err)
+		}
+		hostUUIDs := map[string]bool{}
+		for _, e := range entities {
+			if e.GetKind() == "host" {
+				hostUUIDs[e.GetIdentityKeys()["vcenter.host.uuid"]] = true
+			}
+		}
+		var edges int
+		for _, e := range entities {
+			if e.GetKind() != "vm" {
+				continue
+			}
+			for _, r := range e.GetRelations() {
+				if r.GetType() != "runs-on" {
+					continue
+				}
+				edges++
+				if r.GetToScheme() != "vcenter.host.uuid" {
+					t.Errorf("runs-on must target by vcenter.host.uuid, got %q", r.GetToScheme())
+				}
+				if !hostUUIDs[r.GetToValue()] {
+					t.Errorf("runs-on target %q is not an emitted host", r.GetToValue())
+				}
+			}
+		}
+		if edges == 0 {
+			t.Fatal("expected at least one runs-on edge from a vm to its host")
+		}
+		t.Logf("emitted %d runs-on edges", edges)
+	})
+}
