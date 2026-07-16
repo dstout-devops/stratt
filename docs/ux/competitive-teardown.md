@@ -1,6 +1,6 @@
 # Competitive UX Teardown — Estate-Automation Control Planes
 
-**Status:** Research input for the Stratt UX design foundation (pre-Phase-0).
+**Status:** Research input for the Stratt UX design foundation.
 **Method:** multi-source fan-out research, per-claim adversarial verification
 (3-vote), sources tagged primary / blog / forum. 88 claims extracted; 70 upheld
 high/medium confidence, 5 refuted and dropped. **Goal:** find exactly where these

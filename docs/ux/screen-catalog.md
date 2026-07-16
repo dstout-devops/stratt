@@ -1,6 +1,6 @@
 # Stratt Screen & Component Catalog
 
-**Status:** Draft (pre-Phase-0 design foundation). **Charter authority:** §3.1
+**Status:** Design foundation (the UX baseline the Views/Findings UI was built on). **Charter authority:** §3.1
 (center-of-gravity screens, schema-driven rendering), §1.8 (one-click descent),
 §6 (power gradient). **Vocabulary:** every screen and component is named from the
 frozen Named Kinds (§2); no banned term (`inventory`, `playbook`, `job template`,

@@ -4,6 +4,10 @@ Operational companion to [ADR-0040](../adr/0040-high-availability-and-disaster-r
 "not a flimsy backup" half: the deploy topology, backup/PITR, tested failover, and DR drills. **An
 untested plan does not count** — every procedure here has a rehearsal step.
 
+> **Scope:** this runbook is **in-region HA + single-Cell DR**. For **multi-region** Cell failover and the
+> fenced cross-Cell Source re-home, see the companion [cell-failover-drill.md](cell-failover-drill.md)
+> ([ADR-0044](../adr/0044-control-plane-cells.md)).
+
 ## Availability targets
 
 | Tier | Scope | RPO | RTO | Mechanism |

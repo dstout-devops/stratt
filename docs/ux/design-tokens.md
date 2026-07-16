@@ -1,6 +1,6 @@
 # Stratt Design Tokens
 
-**Status:** Draft (pre-Phase-0 design foundation). **Charter authority:** §3.1
+**Status:** Design foundation (the UX baseline the Views/Findings UI was built on). **Charter authority:** §3.1
 ("design tokens as data: all theming via CSS variables; no hardcoded styling in
 components") and the [frontend-react rule](../../.claude/rules/frontend-react.md).
 

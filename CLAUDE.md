@@ -8,11 +8,15 @@ plugin that consumes typed inputs from the graph and writes typed, provenance-st
 non-trivial decision. The charter supersedes every other document, including this one. If code or a
 request contradicts the charter, surface the conflict — don't silently follow either.
 
-**Status: pre-Phase-0.** This repo holds only the charter and the development-environment config.
-There is no product code yet. Do **not** scaffold application code, packages, migrations, or schemas
-unless explicitly asked — [ADR-0001](docs/adr/0001-charter-as-design-authority-and-claude-control-plane.md)
-and the charter's §8 Phase-0 sequencing mandate configuring the environment first. (Charter §0 is the
-*Thesis*, not an environment mandate.)
+**Status: Phases 0–2 code-complete; Phase 3 ~90%; multi-region Cells shipped ahead of plan.** The Go
+control plane (`core/`), the React UI (`ui/`), 45 ADRs, and the Helm chart are all real and substantial —
+this is a working platform, not a spike. The living, evidence-backed tracker is
+**[docs/roadmap.md](docs/roadmap.md)**; the decision record is **[docs/adr/](docs/adr/README.md)**. Follow
+the charter §8 phasing and the roadmap — build the *next* thing, not ahead recklessly — and keep new work
+behind an ADR (`/new-adr`) when it is a decision of consequence. **No phase's promote/OSS exit gate is met:**
+every one ultimately waits on the charter **§7.4** going-public step (OSPO/IP clearance) plus operational
+evidence (SLO, security review, adoption) — none of which is a coding task, and the repo stays **private**
+until then.
 
 ## Founding Disciplines — binding on every decision (charter §1)
 1. **Type the seams, not the world.** JSON Schema attaches only at plugin boundaries and named
