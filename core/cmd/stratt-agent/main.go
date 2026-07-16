@@ -25,7 +25,6 @@ import (
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 
-	certaction "github.com/dstout-devops/stratt/core/internal/actions/certissuer"
 	"github.com/dstout-devops/stratt/core/internal/actuators"
 	"github.com/dstout-devops/stratt/core/internal/actuators/ansible"
 	"github.com/dstout-devops/stratt/core/internal/actuators/script"
@@ -281,12 +280,9 @@ func buildInterpreters() map[string]dispatch.Interpreter {
 	for _, a := range []actuators.Actuator{ansible.Actuator{}, script.Actuator{}, webhook.Actuator{}} {
 		m[a.Name()] = a
 	}
-	// Action Interpreters (Prepare is hub-side; Interpret is config-free here).
-	for _, act := range []dispatch.Interpreter{certaction.Issue(), certaction.Renew(), certaction.Revoke()} {
-		if n, ok := act.(interface{ Name() string }); ok {
-			m[n.Name()] = act
-		}
-	}
+	// The cert issue/renew/revoke pod Interpreters are retired (ADR-0050): cert
+	// lifecycle runs as the certissuer reconcile Actuator over the port, reaching a
+	// Site via the plugin relay (ADR-0049), not an in-agent pod Interpreter.
 	return m
 }
 

@@ -25,7 +25,6 @@ import (
 	"k8s.io/client-go/tools/clientcmd"
 
 	"github.com/dstout-devops/stratt/core/internal/actions"
-	certaction "github.com/dstout-devops/stratt/core/internal/actions/certissuer"
 	notifyaction "github.com/dstout-devops/stratt/core/internal/actions/notify"
 	"github.com/dstout-devops/stratt/core/internal/actuators"
 	"github.com/dstout-devops/stratt/core/internal/actuators/ansible"
@@ -325,14 +324,12 @@ func run(ctx context.Context, log *slog.Logger) error {
 	}
 
 	// In-tree Action registry (§2.2, ADR-0031): targetless typed operations
-	// shipped by Connectors — the write side of cert-issuer (retiring the
-	// ADR-0030 Actuator-in-disguise) and awsec2 create-vm.
-	// certissuer + notify Actions run in-tree (pods, incl. at remote Sites via
-	// stratt-agent); awsec2 create-vm is provided by its plugin over the port.
+	// shipped by Connectors. cert lifecycle is now the certissuer reconcile
+	// ACTUATOR over the port (ADR-0050) — the in-tree issue/renew/revoke pod Action
+	// is retired; notify runs in-tree (pods); awsec2 create-vm is a plugin Action.
 	awsPluginAddr := os.Getenv("STRATT_AWS_PLUGIN_ADDR")
 	actionRegistry := actions.Registry{}
 	for _, act := range []actions.Action{
-		certaction.Issue(), certaction.Renew(), certaction.Revoke(),
 		notifyaction.Webhook(),
 	} {
 		actionRegistry[act.Name()] = act
@@ -644,9 +641,10 @@ func run(ctx context.Context, log *slog.Logger) error {
 		log.Info("no EC2 plugin configured (STRATT_AWS_PLUGIN_ADDR empty); syncer idle")
 	}
 
-	// ── cert-issuer (CLM) Syncer over the port (Phase C cutover; ADR-0030) ─
-	// The Syncer runs over the port; the issue/renew/revoke Actions stay in-tree
-	// (pod execution, incl. at remote Sites via stratt-agent).
+	// ── cert-issuer (CLM) Syncer + reconcile Actuator over the port (ADR-0050) ─
+	// Both the cert Syncer (Observe) AND the cert lifecycle Actuator (Plan/Apply/
+	// Destroy) run over the port on one plugin host; the in-tree pod Action is
+	// retired. Edge issuance rides the Site relay (ADR-0049).
 	if addr := os.Getenv("STRATT_CLM_PLUGIN_ADDR"); addr != "" {
 		sourceName := env("STRATT_CLM_SOURCE_NAME", "certissuer")
 		interval, err := time.ParseDuration(env("STRATT_CLM_INTERVAL", "60s"))
@@ -671,6 +669,12 @@ func run(ctx context.Context, log *slog.Logger) error {
 		controllers = append(controllers, homeSupervise(sourceName, host.Register, func(cctx context.Context) error {
 			return host.SyncLoop(cctx, interval)
 		}))
+		// Same host, reconcile Actuator role (ADR-0050): Plan/Apply/Destroy the cert
+		// lifecycle. Model Y (no plan-artifact) → no plan store. Dry-runnable.
+		if err := registerPluginActuator("certissuer", host, true, grant, nil); err != nil {
+			return err
+		}
+		log.Info("certissuer plugin ready (Syncer + reconcile Actuator)", "addr", addr)
 	} else {
 		log.Info("no CLM plugin configured (STRATT_CLM_PLUGIN_ADDR empty); cert syncer idle")
 	}
