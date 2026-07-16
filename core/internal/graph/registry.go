@@ -364,15 +364,26 @@ func (s *Store) RegisterSource(ctx context.Context, src types.Source) (types.Sou
 	if cell == "" {
 		cell = s.projCell()
 	}
+	// Seal-safe (ADR-0045 must-fix 3): a Connector restart on a Source currently
+	// SEALED for a cross-Cell re-home must leave the row COMPLETELY untouched —
+	// never rewrite its home or reset its fencing epoch mid-move (that would
+	// corrupt the fenced hand-off). The DO UPDATE is gated on rehoming_to IS NULL;
+	// a sealed conflict returns no row, and we return the existing (sealed) Source
+	// unchanged. home_epoch is never in the SET list, so a re-register never
+	// resets the fence.
 	err := s.pool.QueryRow(ctx, `
 		INSERT INTO graph.source (kind, name, endpoint, credential_ref, cell)
 		VALUES ($1, $2, $3, nullif($4, ''), $5)
 		ON CONFLICT (name) DO UPDATE
 		SET kind = excluded.kind, endpoint = excluded.endpoint,
 		    credential_ref = excluded.credential_ref, cell = excluded.cell
+		WHERE graph.source.rehoming_to IS NULL
 		RETURNING id`,
 		src.Kind, src.Name, src.Endpoint, src.CredentialRef, cell,
 	).Scan(&src.ID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return s.GetSource(ctx, src.Name) // sealed: return it untouched
+	}
 	src.Cell = cell
 	if err != nil {
 		return src, fmt.Errorf("graph: register source: %w", err)

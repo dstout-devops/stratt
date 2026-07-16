@@ -1,8 +1,11 @@
 # ADR 0045 — DB-driven Syncer instantiation & Connector home-ownership gate (full re-home auto-cutover)
 
-- **Status:** Proposed (design deferral spun out of ADR-0044 slice 7; not yet scheduled). Captures the
-  Connector-architecture change required to make a cross-Cell Source re-home a fully control-plane-driven
-  cutover with **no manual Connector redeploy** on the destination Cell.
+- **Status:** **Partially landed** (2026-07-16). The **DB home-ownership gate** + **seal-safe
+  `RegisterSource`** — the single-writer correctness core (design-review must-fixes 1 & 3) — shipped as
+  migration `00032_home_gate.sql`; the **full auto-cutover** (fleet resolver, `main` standby supervisor,
+  home-collision + standby Findings, active/standby/sealed status API — must-fixes 2 & 4) remains
+  **Proposed / scheduled**. The gate makes destination-side single-writer a DB constraint *now*; the
+  redeploy-free cutover it enables is the follow-up.
 - **Date:** 2026-07-16
 - **Deciders:** Project steward (dstout)
 - **Charter sections:** §1.2 (projection, single writer), §1.4 (boring spine), §2.1/§2.4 (exactly one
@@ -31,7 +34,33 @@ project a Source's Entities **only if it is the Source's declared home Cell and 
 i.e. the fence generalized from "reject a sealed Source's writes" to "a Syncer stands by unless it owns an
 unsealed Source." That is a change to how every Connector instantiates and gates, so it is its own ADR.
 
-## Decision (proposed)
+## Landed increment (2026-07-16): the DB home gate + seal-safe register
+
+A charter-guardian design review of the full auto-cutover returned CHANGES-REQUIRED with four must-fixes;
+the two that are the single-writer **correctness core** shipped first as a bounded, independently-valuable
+increment (the redeploy-free cutover they enable follows):
+
+- **Home gate is a DB CONSTRAINT (must-fix 1), not a Go convention.** Migration `00032_home_gate.sql`
+  extends `enforce_write_path`: the Normalizer projector declares its Cell as `stratt.cell`, and a Normalizer
+  projection whose Source is homed on a **named peer** Cell is rejected at the data layer — folded into the
+  seal fence's existing source lookup (no extra query). Fires only when both the daemon and the Source's
+  home are named Cells and differ; an unclaimed / `local` Source is claim-by-projection, so a single-Cell
+  `local` estate is byte-identical. This **closes the steady-state half of ADR-0044 residual tension #4**:
+  destination-side single-writer no longer leans on protocol once a Source is homed. Proven on real Postgres
+  (`TestHomeGateRejectsPeerHomedProjection`).
+- **Seal-safe `RegisterSource` (must-fix 3).** A Connector restart on a **sealed** Source leaves the row
+  completely untouched — never rewrites its home or resets its `home_epoch` mid-move (the DO UPDATE is gated
+  on `rehoming_to IS NULL`). `TestRegisterSourceSealSafe`.
+
+**Still Proposed / scheduled (the redeploy-free cutover):** the fleet **home resolver** + `GET /sources/{name}`,
+the `main` **standby supervisor** (loop-gate so a standby Connector does not enumerate-then-drop the external
+SoR — must-fix 6), the periodic **home-collision reconcile** raising a `critical` Finding when >1 Cell homes
+one Source name (the greenfield race — must-fix 2, never a silent tiebreak, §2.4 anti-GPO), and the **standby
+Finding + active/standby/sealed status** on the sources read model so a standby is never silent (must-fix 4).
+Until those land, the ADR-0044 slice-7 runbook step (deploy/enable the Connector on the destination Cell)
+stands, and the home gate above guarantees no double-writer regardless.
+
+## Decision (the full auto-cutover — remaining, Proposed)
 
 Introduce a **Connector home-ownership gate** so a Syncer projects a Source's Entities **iff** the Source's
 `graph.source.cell` equals this daemon's Cell **and** `rehoming_to IS NULL`:
@@ -65,3 +94,15 @@ Introduce a **Connector home-ownership gate** so a Syncer projects a Source's En
 
 - Spun out of the ADR-0044 slice-7 charter-guardian design review (which confirmed the Source is the
   correct unit of re-home) and the scope decision to ship the bounded correctness core first.
+- **charter-guardian (DESIGN review of the full auto-cutover):** CHANGES-REQUIRED. Direction sound (strictly
+  better than today's unconditional double-writer), four must-fixes: (1) the home gate must be a DB
+  constraint not a Go convention — **landed** (migration 00032); (2) the greenfield simultaneous-claim race
+  is a *silent* double-writer (the slice-2 placement Finding can't see it), so it needs a home-collision
+  reconcile Finding, never a silent tiebreak — **scheduled**; (3) seal-safe `RegisterSource` — **landed**;
+  (4) standby must never be silent (Finding + status) — **scheduled**. Should-fixes (loop-gate supervisor to
+  avoid enumerate-then-drop; `GET /sources/{name}` under authz+audit+HMAC; byte-identical single-Cell —
+  **honored**) captured above. The landed increment was steward-scoped as the split "harden the DB gate now,
+  auto-cutover next."
+- **Flag (widened residual tension):** the full auto-cutover would extend ADR-0044 residual tension #4 from
+  the brief re-home window to the steady-state life of every standby Connector; the landed DB home gate
+  (must-fix 1) is precisely what keeps that a DB constraint rather than protocol.

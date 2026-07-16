@@ -79,8 +79,12 @@ func (p *Projector) begin(ctx context.Context) (pgx.Tx, error) {
 	if err != nil {
 		return nil, fmt.Errorf("graph: begin: %w", err)
 	}
-	// Transaction-local declaration checked by the §1.2 triggers.
-	if _, err := tx.Exec(ctx, `SELECT set_config('stratt.write_path', $1, true)`, string(p.path)); err != nil {
+	// Transaction-local declarations checked by the §1.2 triggers: the write
+	// PATH, and (ADR-0045) the projecting daemon's CELL — the home gate rejects a
+	// Normalizer projection for a Source homed on a different Cell.
+	if _, err := tx.Exec(ctx, `
+		SELECT set_config('stratt.write_path', $1, true),
+		       set_config('stratt.cell', $2, true)`, string(p.path), p.cell); err != nil {
 		_ = tx.Rollback(ctx)
 		return nil, fmt.Errorf("graph: declare write path: %w", err)
 	}
