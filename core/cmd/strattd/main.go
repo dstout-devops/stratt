@@ -54,6 +54,7 @@ import (
 	"github.com/dstout-devops/stratt/core/internal/scim"
 	"github.com/dstout-devops/stratt/core/internal/sitegw"
 	"github.com/dstout-devops/stratt/core/internal/siteproto"
+	"github.com/dstout-devops/stratt/core/internal/siterelay"
 	"github.com/dstout-devops/stratt/core/internal/statebackend"
 	"github.com/dstout-devops/stratt/core/internal/triggerengine"
 	"github.com/dstout-devops/stratt/core/internal/triggers"
@@ -356,14 +357,16 @@ func run(ctx context.Context, log *slog.Logger) error {
 	// A plugin Actuator name is EXCLUSIVE with the in-tree Actuator registry and
 	// across plugins (§2.4): a collision fails startup, never silently overwrites.
 	pluginActuators := map[string]orchestrate.PluginActuator{}
-	registerPluginActuator := func(name string, host *pluginhost.Host, dryRunnable bool) error {
+	// grant + plans travel with the actuator so Execute can build a Site-backed host
+	// with identical governance (the grant never leaves the hub, ADR-0049 V1).
+	registerPluginActuator := func(name string, host *pluginhost.Host, dryRunnable bool, grant pluginhost.Grant, plans *planstore.Store) error {
 		if _, dup := pluginActuators[name]; dup {
 			return fmt.Errorf("plugin actuator %q claimed by two plugins (§2.4 exclusive)", name)
 		}
 		if _, inTree := registry[name]; inTree {
 			return fmt.Errorf("plugin actuator %q collides with an in-tree Actuator (§2.4 exclusive)", name)
 		}
-		pluginActuators[name] = orchestrate.PluginActuator{Host: host, DryRunnable: dryRunnable}
+		pluginActuators[name] = orchestrate.PluginActuator{Host: host, DryRunnable: dryRunnable, Grant: grant, PlanStore: plans}
 		return nil
 	}
 
@@ -446,7 +449,7 @@ func run(ctx context.Context, log *slog.Logger) error {
 				FacetNamespaces: splitNonEmpty(os.Getenv("STRATT_OPENTOFU_FACET_NAMESPACES")),
 			}
 			host := pluginhost.New(store, pluginv1.NewPluginServiceClient(conn), grant, log).UsePlanStore(plans)
-			if err := registerPluginActuator("opentofu", host, true); err != nil {
+			if err := registerPluginActuator("opentofu", host, true, grant, plans); err != nil {
 				return err
 			}
 			log.Info("opentofu plugin actuator registered", "addr", tofuPluginAddr, "backend", os.Getenv("STRATT_STATE_BACKEND_URL"))
@@ -503,7 +506,13 @@ func run(ctx context.Context, log *slog.Logger) error {
 	// and polls child Runs on peer Cells. Nil-safe on a single-Cell estate (no
 	// secret ⇒ no peers ⇒ RunAcrossCells is never reached).
 	peerClient := cellrouter.NewPeerClient([]byte(os.Getenv("STRATT_CELL_SECRET")))
-	w.RegisterActivity(&orchestrate.Activities{Store: store, Dispatcher: dispatcher, Bus: bus, Authz: authorizer, Actuators: registry, Actions: actionRegistry, PluginActions: pluginActions, PluginActuators: pluginActuators, Evidence: evidence, Sites: siteGateway, Peers: peerClient})
+	// RelayDial tunnels a remote-Site plugin verb over the SAME NATS leaf the site
+	// gateway holds (ADR-0049): governance stays hub-side, only the transport
+	// lengthens. Keyed by (site, plugin-id).
+	relayDial := func(site, pluginID string) siterelay.Dialer {
+		return siterelay.NewNATSDialer(siteGateway.Conn(), site, pluginID)
+	}
+	w.RegisterActivity(&orchestrate.Activities{Store: store, Dispatcher: dispatcher, Bus: bus, Authz: authorizer, Log: log, RelayDial: relayDial, Actuators: registry, Actions: actionRegistry, PluginActions: pluginActions, PluginActuators: pluginActuators, Evidence: evidence, Sites: siteGateway, Peers: peerClient})
 	if err := w.Start(); err != nil {
 		return fmt.Errorf("temporal worker: %w", err)
 	}

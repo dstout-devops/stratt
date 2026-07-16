@@ -52,6 +52,11 @@ func Connect(url, name string, log *slog.Logger) (*Gateway, error) {
 // Close drains the connection.
 func (g *Gateway) Close() { g.nc.Close() }
 
+// Conn exposes the underlying NATS connection for the plugin-port relay
+// (ADR-0049): the siterelay Dialer/Acceptor tunnel over the SAME outbound leaf the
+// gateway already holds, so no second connection is opened.
+func (g *Gateway) Conn() *nats.Conn { return g.nc }
+
 // EnsureStreams creates the dispatch work-queue, the result stream, and the
 // liveness KV (idempotent). The hub calls this at startup; a Site's leaf borrows
 // the hub's JetStream, so the agent need not (and must not) re-create them.

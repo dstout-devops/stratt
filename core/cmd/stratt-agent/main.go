@@ -34,7 +34,11 @@ import (
 	"github.com/dstout-devops/stratt/core/internal/events"
 	"github.com/dstout-devops/stratt/core/internal/sitegw"
 	"github.com/dstout-devops/stratt/core/internal/siteproto"
+	"github.com/dstout-devops/stratt/core/internal/siterelay"
+	pluginv1 "github.com/dstout-devops/stratt/sdk/stratt/plugin/v1"
 	"github.com/dstout-devops/stratt/types"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
 )
 
 // version stamps liveness; overridden at build time.
@@ -133,6 +137,25 @@ func run(log *slog.Logger) error {
 	defer unsub()
 
 	go ag.heartbeatLoop(ctx)
+
+	// Plugin-port relay (ADR-0049): when a Site-local plugin is configured, proxy
+	// the hub's relayed port calls to it over the SAME leaf. The agent GOVERNS
+	// NOTHING — siterelay.Serve forwards opaque proto; the hub-held grant + gates
+	// decide (V1). One plugin per env var today; a plugin manifest is the follow-up.
+	if pluginAddr := os.Getenv("STRATT_SITE_PLUGIN_ADDR"); pluginAddr != "" {
+		pluginID := env("STRATT_SITE_PLUGIN_ID", "opentofu")
+		conn, err := grpc.NewClient(pluginAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+		if err != nil {
+			return fmt.Errorf("site plugin dial %s: %w", pluginAddr, err)
+		}
+		defer conn.Close()
+		go func() {
+			if err := siterelay.Serve(ctx, siterelay.NewNATSAcceptor(gw.Conn(), site, pluginID), pluginv1.NewPluginServiceClient(conn)); err != nil && ctx.Err() == nil {
+				log.Error("plugin relay serve exited", "plugin", pluginID, "err", err)
+			}
+		}()
+		log.Info("plugin-port relay serving", "plugin", pluginID, "addr", pluginAddr)
+	}
 
 	log.Info("stratt-agent ready", "namespace", namespace, "nats", url, "version", version)
 	switch mode {
