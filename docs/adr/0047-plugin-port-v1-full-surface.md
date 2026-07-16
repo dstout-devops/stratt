@@ -1,9 +1,10 @@
 # ADR 0047 — Plugin port v1 full surface: write-back, relations, and the rung ladder over the wire
 
-- **Status:** **Proposed** — extends the sovereign plugin port (ADR-0046) to cover the full
-  Connector/Actuator/Action/Emitter breadth in one additive, non-breaking change, and reconciles the
-  ADR-0046 findings (#2/#3/#4) for the Actuator/Action/Emitter verbs. Consequential (Contracts + authz over
-  the wire) → carries a charter-guardian review; steward sign-off before extraction begins.
+- **Status:** **Accepted** (2026-07-16, steward) — extends the sovereign plugin port (ADR-0046) to cover the
+  full Connector/Actuator/Action/Emitter breadth in one additive, non-breaking change, and reconciles the
+  ADR-0046 findings (#2/#3/#4) for the Actuator/Action/Emitter verbs. Two charter-guardian passes +
+  vocabulary-linter cleared (see Reviews). Acceptance freezes the v1 wire contract and authorizes Phase C
+  extraction against it.
 - **Date:** 2026-07-16
 - **Deciders:** Project steward (dstout)
 - **Charter sections:** §1.1, §1.2 (projections / two write paths), §1.5 (schemas pinned, drift blocking),
@@ -198,4 +199,5 @@ CI gate; a genuinely incompatible change is a **new negotiated protocol major**,
   Named Kind (Action/Relation/Contract/Entity/Bundle) or is a carrying/structural type (Result/Fragment/Ref/
   Decl), never a rival Kind. `DerivedContract` reads as "a Contract at a derived rung" (guarded by the Rung
   enum); `ArtifactRef` is a Bundle/OCI pointer; `ActionDecl`/`InvokeRequest.action` use `Action` as a selector.
-- **Gated on steward sign-off** before extraction begins — this freezes the v1 wire contract for every plugin.
+- **Steward sign-off (2026-07-16):** Accepted — the v1 wire contract is frozen for every plugin class; Phase C
+  extraction proceeds against it.
