@@ -80,6 +80,23 @@ type fakePlugin struct {
 	nextCursor  string
 	deltaGone   []*pluginv1.GoneEntity
 	deltaCursor string
+	// apply knobs: applyStream is sent verbatim (per-target results, write-back,
+	// drift, derived contracts, the terminal event) so a test drives the host's
+	// core-side fold / confused-deputy / write-back governance precisely.
+	applyStream    []*pluginv1.ApplyResponse
+	captureApplyIn func(*pluginv1.ApplyRequest)
+}
+
+func (f *fakePlugin) Apply(req *pluginv1.ApplyRequest, stream grpc.ServerStreamingServer[pluginv1.ApplyResponse]) error {
+	if f.captureApplyIn != nil {
+		f.captureApplyIn(req)
+	}
+	for _, r := range f.applyStream {
+		if err := stream.Send(r); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (f *fakePlugin) GetManifest(context.Context, *pluginv1.GetManifestRequest) (*pluginv1.GetManifestResponse, error) {
@@ -643,5 +660,137 @@ func TestHost_TombstoneAbsentOnFullSync(t *testing.T) {
 	got := vms(t, store)
 	if len(got) != 1 || got[0].IdentityKeys["vcenter.uuid"] != "u1" {
 		t.Fatalf("after sync2 want only u1 live, got %+v", got)
+	}
+}
+
+// applyEvent is a small helper for building the streamed ApplyResponses.
+func applyResult(target string, st pluginv1.ItemResult_Status) *pluginv1.ApplyResponse {
+	return &pluginv1.ApplyResponse{Result: &pluginv1.ItemResult{ItemKey: target, Status: st}}
+}
+
+// TestHost_ApplyCoreSideFold proves guardian fix #1 (targets reach the plugin
+// LEGIBLY, never in the opaque payload) and fix #3 (Succeeded is folded core-side
+// from per-target statuses — a plugin's terminal ok=true alongside a FAILED target
+// still yields a non-OK Run, §1.8). ApplyRaw needs no store (nothing projected).
+func TestHost_ApplyCoreSideFold(t *testing.T) {
+	grant := vcenterGrant(pluginhost.TierTrusted, []string{"vcenter.uuid"})
+	var captured *pluginv1.ApplyRequest
+	fp := &fakePlugin{
+		pluginID:       grant.PluginIdentity,
+		captureApplyIn: func(r *pluginv1.ApplyRequest) { captured = r },
+		applyStream: []*pluginv1.ApplyResponse{
+			{Event: &pluginv1.TaskEvent{Level: pluginv1.TaskEvent_LEVEL_INFO, Message: "applying"}},
+			applyResult("web-1", pluginv1.ItemResult_STATUS_CHANGED),
+			applyResult("web-2", pluginv1.ItemResult_STATUS_FAILED),
+			// The lie: the plugin self-asserts success on the terminal event.
+			{Event: &pluginv1.TaskEvent{Terminal: true, Ok: true}},
+		},
+	}
+	client := serve(t, fp)
+	h := pluginhost.New(nil, client, grant, discardLog())
+	raw, err := h.ApplyRaw(context.Background(), pluginhost.ApplyInvoke{
+		Principal: "alice",
+		Params:    []byte(`{"module":"nginx"}`),
+		Targets: []pluginhost.ApplyTarget{
+			{Name: "web-1", IdentityKeys: map[string]string{"vcenter.uuid": "u1"}, Vars: map[string]string{"ansible_host": "10.0.0.1"}},
+			{Name: "web-2", IdentityKeys: map[string]string{"vcenter.uuid": "u2"}},
+		},
+	})
+	if err != nil {
+		t.Fatalf("applyRaw: %v", err)
+	}
+	// Fix #3: the plugin's terminal ok is NOT trusted — a FAILED target is non-OK.
+	if raw.Succeeded {
+		t.Fatal("a FAILED target must fold to a non-OK Run regardless of the plugin's terminal ok (§1.8)")
+	}
+	if raw.PerTarget["web-1"] != "changed" || raw.PerTarget["web-2"] != "failed" {
+		t.Fatalf("per-target fold wrong: %+v", raw.PerTarget)
+	}
+	// Fix #1: the target set crossed the wire LEGIBLY (typed field, not the payload).
+	if captured == nil || len(captured.GetTargets()) != 2 {
+		t.Fatalf("targets must reach the plugin as a legible field, got %+v", captured.GetTargets())
+	}
+	if captured.GetTargets()[0].GetName() != "web-1" || captured.GetTargets()[0].GetVars()["ansible_host"] != "10.0.0.1" {
+		t.Fatalf("legible target detail lost: %+v", captured.GetTargets()[0])
+	}
+	if string(captured.GetDesired().GetBytes()) != `{"module":"nginx"}` {
+		t.Fatalf("opaque desired must carry the tool config verbatim: %q", captured.GetDesired().GetBytes())
+	}
+}
+
+// TestHost_ApplyConfusedDeputyRejectsUnresolvedTarget proves guardian fix #1's
+// gate: a per-target status keyed to a target OUTSIDE the Step's resolved set is
+// REJECTED visibly (§1.8), never folded into the outcome — a plugin cannot report
+// status against a target the core did not authorize for this Step.
+func TestHost_ApplyConfusedDeputyRejectsUnresolvedTarget(t *testing.T) {
+	grant := vcenterGrant(pluginhost.TierTrusted, []string{"vcenter.uuid"})
+	fp := &fakePlugin{
+		pluginID: grant.PluginIdentity,
+		applyStream: []*pluginv1.ApplyResponse{
+			applyResult("web-1", pluginv1.ItemResult_STATUS_OK),
+			applyResult("db-secret", pluginv1.ItemResult_STATUS_FAILED), // NOT in the resolved set
+			{Event: &pluginv1.TaskEvent{Terminal: true, Ok: true}},
+		},
+	}
+	client := serve(t, fp)
+	h := pluginhost.New(nil, client, grant, discardLog())
+	raw, err := h.ApplyRaw(context.Background(), pluginhost.ApplyInvoke{
+		Principal: "alice",
+		Targets:   []pluginhost.ApplyTarget{{Name: "web-1"}},
+	})
+	if err != nil {
+		t.Fatalf("applyRaw: %v", err)
+	}
+	if _, leaked := raw.PerTarget["db-secret"]; leaked {
+		t.Fatalf("out-of-scope target must never enter the outcome: %+v", raw.PerTarget)
+	}
+	var rejected bool
+	for _, r := range raw.Rejections {
+		if r.Kind == "item-result" && r.Detail == "db-secret" {
+			rejected = true
+		}
+	}
+	if !rejected {
+		t.Fatalf("expected a confused-deputy rejection for db-secret, got %+v", raw.Rejections)
+	}
+}
+
+// TestHost_ApplyWriteBackGovernedUnprojected proves apply write-back is "raw ≠
+// ungated": the identity-scheme tier+grant gate applies exactly as on the Syncer
+// path, ungranted schemes are dropped with a Rejection, and the governed set is
+// returned UNPROJECTED (store is nil — the orchestration writes once with Run
+// provenance, guardian fix #2).
+func TestHost_ApplyWriteBackGovernedUnprojected(t *testing.T) {
+	grant := vcenterGrant(pluginhost.TierCommunity, []string{"vcenter.uuid", "dns.fqdn"})
+	fp := &fakePlugin{
+		pluginID: grant.PluginIdentity,
+		applyStream: []*pluginv1.ApplyResponse{
+			{WriteBack: []*pluginv1.ObservedEntity{{
+				Kind:         "vm",
+				IdentityKeys: map[string]string{"vcenter.uuid": "u9", "dns.fqdn": "vm9.corp"},
+				Labels:       map[string]string{"vcenter.name": "vm9"},
+				Facets:       map[string][]byte{"vm.config": []byte(`{"cpus":4}`)},
+			}}},
+			{Event: &pluginv1.TaskEvent{Terminal: true, Ok: true}},
+		},
+	}
+	client := serve(t, fp)
+	h := pluginhost.New(nil, client, grant, discardLog())
+	raw, err := h.ApplyRaw(context.Background(), pluginhost.ApplyInvoke{Principal: "alice"})
+	if err != nil {
+		t.Fatalf("applyRaw: %v", err)
+	}
+	if len(raw.WriteBack) != 1 {
+		t.Fatalf("want 1 governed write-back entity, got %d", len(raw.WriteBack))
+	}
+	wb := raw.WriteBack[0]
+	if _, leaked := wb.IdentityKeys["dns.fqdn"]; leaked {
+		t.Fatalf("community plugin's shared dns.fqdn must be gated out of write-back: %+v", wb.IdentityKeys)
+	}
+	if wb.IdentityKeys["vcenter.uuid"] != "u9" {
+		t.Fatalf("source-local identity must survive: %+v", wb.IdentityKeys)
+	}
+	if string(wb.Facets["vm.config"]) != `{"cpus":4}` {
+		t.Fatalf("granted facet must survive write-back: %+v", wb.Facets)
 	}
 }

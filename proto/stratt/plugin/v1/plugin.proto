@@ -370,10 +370,31 @@ message ApplyRequest {
   // Apply EXACTLY the plan a Gate approved (ADR-0047 §7): the core verifies this
   // sha256 against the Gate-approved digest at THIS boundary. Empty == apply `desired`.
   ArtifactRef plan_ref = 5;
+  // The core-resolved actuation target set, sent LEGIBLY — NEVER baked into the
+  // opaque `desired` payload (guardian, ADR-0047 §1.1/§1.2/§1.8). The target set
+  // carries blast-radius/authz weight and is the correlation key the core owns:
+  // §1.8 descent renders it, §1.2 re-correlates per-target write-back onto it, and
+  // it is the confused-deputy gate — the core REJECTS any ItemResult/write-back
+  // keyed to a target NOT in this set. Empty for workspace-scoped actuators (tofu).
+  repeated ApplyTarget targets = 6;
+}
+
+// ApplyTarget is one core-resolved target. `name` is the stable alias the plugin
+// renders into tool-native content (inventory host, -target) AND the key an
+// ItemResult / per-target write-back references back — the core matches on it and
+// rejects any unmatched key (confused-deputy, invariant #11 analog). `vars` are
+// tool-level connection vars; `identity_keys` re-correlate write-back to the
+// target Entity (resolve-don't-vivify). Tool *config* rides `desired`; only the
+// governance-bearing target SET is legible here.
+message ApplyTarget {
+  string name = 1;
+  map<string, string> identity_keys = 2;
+  map<string, string> vars = 3;
 }
 
 message DestroyRequest {
   Envelope envelope = 1;
+  repeated ApplyTarget targets = 2; // symmetry with Apply — the legible teardown set
 }
 
 // InvokeRequest — a targetless Action (RunAction). Args are opaque.

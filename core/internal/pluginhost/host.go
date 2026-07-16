@@ -417,6 +417,221 @@ func (h *Host) Invoke(ctx context.Context, runID, action string, args []byte, dr
 	return out, nil
 }
 
+// ApplyTarget is one core-resolved actuation target, passed LEGIBLY to the plugin
+// (ADR-0047 §1.1): the target set carries blast-radius/authz weight and is the
+// correlation key, so it is NEVER baked into the opaque desired payload. Name is
+// the confused-deputy gate key; Vars are tool connection vars; IdentityKeys
+// re-correlate write-back to the target Entity.
+type ApplyTarget struct {
+	Name         string
+	IdentityKeys map[string]string
+	Vars         map[string]string
+}
+
+// ApplyInvoke is a governed Actuator Apply request. Params is the opaque tool
+// config (`desired`); Targets is the legible core-resolved set; CredentialRefs
+// are authorized NAMES only (§2.5, the credential-oracle closure).
+type ApplyInvoke struct {
+	Principal      string
+	Params         []byte
+	Targets        []ApplyTarget
+	DryRun         bool
+	CredentialRefs []string
+}
+
+// ApplyEntity is a GOVERNED, UNPROJECTED write-back observation from an Apply
+// (tofu stratt_entities, ansible gathered facts). The caller projects it ONCE,
+// with RUN provenance (WriterRun) — never Syncer, never the plugin (per-verb
+// write path is a t=0 invariant, ADR-0047 §2). "Raw" is unprojected, never
+// ungated: identity schemes passed the tier+grant gate.
+type ApplyEntity struct {
+	Kind         string
+	IdentityKeys map[string]string
+	Labels       map[string]string
+	Facets       map[string][]byte
+}
+
+// DerivedSchema is a plugin-emitted rung-2 (tofu-plan-derived) output schema
+// DOCUMENT. The caller recomputes + pins its hash (no plugin-asserted sha256,
+// §1.5); a new rev with different bytes is blocking drift. schema_id is confined
+// to the plugin's own Source namespace (ADR-0047 §4) — the host rejects any id
+// outside it, so a plugin can never overwrite another owner's contract.
+type DerivedSchema struct {
+	SchemaID string
+	Rev      string
+	Schema   []byte
+}
+
+// RawApplyResult is the governed outcome of an Apply with NOTHING written to the
+// graph — the orchestration performs the single batched projection AFTER the
+// stream is fully consumed (guardian fix #2: never interleave a graph write from
+// the Recv loop; Execute is a retryable activity). Succeeded is COMPUTED
+// core-side from the per-target statuses (guardian fix #3), never the plugin's
+// self-asserted terminal ok — a plugin that returns ok=true alongside a FAILED
+// target still yields a non-OK Run (§1.8).
+type RawApplyResult struct {
+	Succeeded  bool
+	PerTarget  map[string]string // resolved target name -> status; sticky-fail folded
+	WriteBack  []ApplyEntity
+	Drift      map[string][]json.RawMessage
+	Derived    []DerivedSchema
+	Checkpoint string // graceful-abort resume token (invariant #7); "" == ran to completion
+	Rejections []Rejection
+}
+
+// applyStatus renders a wire ItemResult.Status as the core-legible per-target
+// string (dispatch.Result.PerTarget convention).
+func applyStatus(s pluginv1.ItemResult_Status) string {
+	switch s {
+	case pluginv1.ItemResult_STATUS_OK:
+		return "ok"
+	case pluginv1.ItemResult_STATUS_CHANGED:
+		return "changed"
+	case pluginv1.ItemResult_STATUS_FAILED:
+		return "failed"
+	case pluginv1.ItemResult_STATUS_UNREACHABLE:
+		return "unreachable"
+	default:
+		return "unspecified"
+	}
+}
+
+// ApplyRaw calls the plugin's Apply and returns a GOVERNED result WITHOUT touching
+// the graph. It streams ApplyResponses, folding per-target status core-side,
+// gating write-back identity schemes and derived-contract namespaces on the grant,
+// and rejecting any per-target status keyed to a target OUTSIDE the resolved set
+// (confused-deputy, guardian fix #1). The terminal `ok` is deliberately ignored
+// (guardian fix #3). Nothing is projected here — the caller writes once (fix #2).
+func (h *Host) ApplyRaw(ctx context.Context, req ApplyInvoke) (RawApplyResult, error) {
+	out := RawApplyResult{PerTarget: map[string]string{}}
+	// The resolved target-name set is the confused-deputy gate.
+	resolved := make(map[string]bool, len(req.Targets))
+	targets := make([]*pluginv1.ApplyTarget, 0, len(req.Targets))
+	for _, t := range req.Targets {
+		resolved[t.Name] = true
+		targets = append(targets, &pluginv1.ApplyTarget{Name: t.Name, IdentityKeys: t.IdentityKeys, Vars: t.Vars})
+	}
+	creds := make([]*pluginv1.CredentialRef, 0, len(req.CredentialRefs))
+	for _, n := range req.CredentialRefs {
+		creds = append(creds, &pluginv1.CredentialRef{Name: n})
+	}
+	stream, err := h.client.Apply(ctx, &pluginv1.ApplyRequest{
+		Envelope: &pluginv1.Envelope{
+			Principal: &pluginv1.Principal{Id: req.Principal, Kind: "user"},
+			Creds:     creds,
+		},
+		Desired: &pluginv1.Payload{Bytes: req.Params},
+		DryRun:  req.DryRun,
+		Targets: targets,
+	})
+	if err != nil {
+		return out, fmt.Errorf("pluginhost: apply: %w", err)
+	}
+	var failed, sawTerminal bool
+	for {
+		resp, err := stream.Recv()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			if ctx.Err() != nil {
+				return out, ctx.Err()
+			}
+			return out, fmt.Errorf("pluginhost: apply recv: %w", err)
+		}
+		if ev := resp.GetEvent(); ev != nil {
+			if cp := ev.GetCheckpoint(); cp != "" {
+				out.Checkpoint = cp
+			}
+			if ev.GetTerminal() {
+				sawTerminal = true // ev.GetOk() intentionally ignored — fold below
+			}
+		}
+		// Per-target status: confused-deputy gated, sticky-fail folded.
+		if r := resp.GetResult(); r != nil {
+			key := r.GetItemKey()
+			switch {
+			case key != "" && !resolved[key]:
+				rej := Rejection{Kind: "item-result", Detail: key, Reason: "apply: per-target status for a target outside the resolved set (confused deputy)"}
+				h.reject(rej.Kind, rej.Detail, rej.Reason)
+				out.Rejections = append(out.Rejections, rej)
+			default:
+				st := applyStatus(r.GetStatus())
+				if st == "failed" || st == "unreachable" {
+					failed = true
+				}
+				if key != "" {
+					if prev := out.PerTarget[key]; prev != "failed" && prev != "unreachable" {
+						out.PerTarget[key] = st // sticky: a failed target is never downgraded
+					}
+				}
+			}
+		}
+		// Write-back: identity-scheme tier+grant gate, UNPROJECTED (mirrors InvokeRaw).
+		for _, e := range resp.GetWriteBack() {
+			ids := map[string]string{}
+			for scheme, val := range e.GetIdentityKeys() {
+				if ok, reason := h.grant.allowsIdentity(scheme); !ok {
+					rej := Rejection{Kind: "identity-scheme", Detail: scheme, Reason: "apply: " + reason}
+					h.reject(rej.Kind, rej.Detail, rej.Reason)
+					out.Rejections = append(out.Rejections, rej)
+					continue
+				}
+				ids[scheme] = val
+			}
+			if len(ids) == 0 {
+				rej := Rejection{Kind: "entity", Detail: e.GetKind(), Reason: "apply: no granted identity key"}
+				h.reject(rej.Kind, rej.Detail, rej.Reason)
+				out.Rejections = append(out.Rejections, rej)
+				continue
+			}
+			labels := map[string]string{}
+			for k, v := range e.GetLabels() {
+				if !h.grant.allowsLabel(k) {
+					rej := Rejection{Kind: "label", Detail: k, Reason: "apply: label key not in operator grant"}
+					h.reject(rej.Kind, rej.Detail, rej.Reason)
+					out.Rejections = append(out.Rejections, rej)
+					continue
+				}
+				labels[k] = v
+			}
+			facets := map[string][]byte{}
+			for ns, v := range e.GetFacets() {
+				if !h.grant.allowsFacet(ns) {
+					rej := Rejection{Kind: "facet", Detail: ns, Reason: "apply: facet namespace not in operator grant"}
+					h.reject(rej.Kind, rej.Detail, rej.Reason)
+					out.Rejections = append(out.Rejections, rej)
+					continue
+				}
+				facets[ns] = v
+			}
+			out.WriteBack = append(out.WriteBack, ApplyEntity{Kind: e.GetKind(), IdentityKeys: ids, Labels: labels, Facets: facets})
+		}
+		// Drift: opaque, already-redacted, accumulated per item_key (ADR-0019).
+		if d := resp.GetDrift(); d != nil {
+			if out.Drift == nil {
+				out.Drift = map[string][]json.RawMessage{}
+			}
+			out.Drift[d.GetItemKey()] = append(out.Drift[d.GetItemKey()], json.RawMessage(d.GetDetail().GetBytes()))
+		}
+		// Derived contract: namespace-confined to the plugin's own Source scope.
+		if dc := resp.GetDerivedContract(); dc != nil {
+			id := dc.GetSchemaId()
+			if !strings.HasPrefix(id, h.grant.Source.Name+"/") {
+				rej := Rejection{Kind: "derived-contract", Detail: id, Reason: "apply: schema_id outside the plugin's Source namespace (ADR-0047 §4)"}
+				h.reject(rej.Kind, rej.Detail, rej.Reason)
+				out.Rejections = append(out.Rejections, rej)
+			} else {
+				out.Derived = append(out.Derived, DerivedSchema{SchemaID: id, Rev: dc.GetRev(), Schema: dc.GetSchema()})
+			}
+		}
+	}
+	// Core-side fold (guardian fix #3): the plugin's terminal ok is NOT trusted.
+	// A stream that never terminated is also a failure (partial/torn stream).
+	out.Succeeded = sawTerminal && !failed
+	return out, nil
+}
+
 // ownsCred enforces provisioned-CredentialRef namespace confinement (ADR-0047 §7):
 // a plugin may only name creds under its own Source scope, so it cannot shadow
 // another principal's CredentialRef. (Registration into the secrets registry is
