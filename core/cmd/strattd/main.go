@@ -42,9 +42,6 @@ import (
 	"github.com/dstout-devops/stratt/core/internal/compiler"
 	"github.com/dstout-devops/stratt/core/internal/connectors/awsec2"
 	certsyncer "github.com/dstout-devops/stratt/core/internal/connectors/certissuer"
-	"github.com/dstout-devops/stratt/core/internal/connectors/chef"
-	"github.com/dstout-devops/stratt/core/internal/connectors/msgraph"
-	"github.com/dstout-devops/stratt/core/internal/connectors/puppet"
 	"github.com/dstout-devops/stratt/core/internal/connectors/salt"
 	"github.com/dstout-devops/stratt/core/internal/contract"
 	"github.com/dstout-devops/stratt/core/internal/desiredstate"
@@ -511,26 +508,33 @@ func run(ctx context.Context, log *slog.Logger) error {
 		log.Info("no vCenter plugin configured (STRATT_VCENTER_PLUGIN_ADDR empty); syncer idle")
 	}
 
-	// ── MS Graph Syncer (ADR-0014; started when a Source is configured) ──
-	if tenant := os.Getenv("STRATT_MSGRAPH_TENANT_ID"); tenant != "" {
+	// ── MS Graph device Syncer over the port (ADR-0046/0047 Phase C cutover) ─
+	if addr := os.Getenv("STRATT_MSGRAPH_PLUGIN_ADDR"); addr != "" {
+		sourceName := env("STRATT_MSGRAPH_SOURCE_NAME", "msgraph")
 		interval, err := time.ParseDuration(env("STRATT_MSGRAPH_INTERVAL", "30s"))
 		if err != nil {
 			return fmt.Errorf("msgraph interval: %w", err)
 		}
-		syncer := msgraph.NewSyncer(msgraph.Config{
-			Endpoint: env("STRATT_MSGRAPH_ENDPOINT", "https://graph.microsoft.com/v1.0"),
-			TenantID: tenant,
-			ClientID: os.Getenv("STRATT_MSGRAPH_CLIENT_ID"),
-			// Env credential stub, same posture as vCenter (§2.5: material
-			// never persists; CredentialRef brokering for Syncers is the
-			// recorded follow-up).
-			ClientSecret: os.Getenv("STRATT_MSGRAPH_CLIENT_SECRET"),
-			TokenURL:     os.Getenv("STRATT_MSGRAPH_TOKEN_URL"),
-			SourceName:   env("STRATT_MSGRAPH_SOURCE_NAME", "msgraph"),
-		}, interval, store, log)
-		controllers = append(controllers, homeSupervise(env("STRATT_MSGRAPH_SOURCE_NAME", "msgraph"), syncer.Register, syncer.Run))
+		conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+		if err != nil {
+			return fmt.Errorf("msgraph plugin dial %s: %w", addr, err)
+		}
+		defer conn.Close()
+		grant := pluginhost.Grant{
+			PluginIdentity:   env("STRATT_MSGRAPH_PLUGIN_ID", "msgraph"),
+			Tier:             pluginhost.Tier(env("STRATT_MSGRAPH_TIER", "trusted")),
+			Source:           types.Source{Kind: "msgraph", Name: sourceName, Endpoint: env("STRATT_MSGRAPH_ENDPOINT", "https://graph.microsoft.com/v1.0")},
+			FacetNamespaces:  []string{"device.identity", "device.os", "device.state"},
+			LabelKeys:        []string{"graph.name"},
+			IdentitySchemes:  []string{"graph.id"},
+			TombstoneSchemes: []string{"graph.id"},
+		}
+		host := pluginhost.New(store, pluginv1.NewPluginServiceClient(conn), grant, log)
+		controllers = append(controllers, homeSupervise(sourceName, host.Register, func(cctx context.Context) error {
+			return host.SyncLoop(cctx, interval)
+		}))
 	} else {
-		log.Info("no MS Graph Source configured (STRATT_MSGRAPH_TENANT_ID empty); syncer idle")
+		log.Info("no MS Graph plugin configured (STRATT_MSGRAPH_PLUGIN_ADDR empty); syncer idle")
 	}
 
 	// ── EC2 cloud-instance Syncer (ADR-0014) ─────────────────────────────
@@ -571,58 +575,62 @@ func run(ctx context.Context, log *slog.Logger) error {
 		log.Info("no CLM Source configured (STRATT_CLM_ADDR empty); cert syncer idle")
 	}
 
-	// ── Chef Infra Server node Syncer (ADR-0037; config-mgmt SoR ingest) ─
-	if serverURL := os.Getenv("STRATT_CHEF_SERVER_URL"); serverURL != "" {
+	// ── Chef Infra node Syncer over the port (ADR-0046/0047 Phase C cutover) ─
+	if addr := os.Getenv("STRATT_CHEF_PLUGIN_ADDR"); addr != "" {
+		sourceName := env("STRATT_CHEF_SOURCE_NAME", "chef")
 		interval, err := time.ParseDuration(env("STRATT_CHEF_INTERVAL", "60s"))
 		if err != nil {
 			return fmt.Errorf("chef interval: %w", err)
 		}
-		// The signing key is read from a mounted PEM file (§2.5: material
-		// stays a file the process reads, never persisted to the graph);
-		// STRATT_CHEF_KEY may carry inline PEM for dev.
-		keyPEM := os.Getenv("STRATT_CHEF_KEY")
-		if keyFile := os.Getenv("STRATT_CHEF_KEY_FILE"); keyFile != "" {
-			b, err := os.ReadFile(keyFile)
-			if err != nil {
-				return fmt.Errorf("chef key file: %w", err)
-			}
-			keyPEM = string(b)
+		conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+		if err != nil {
+			return fmt.Errorf("chef plugin dial %s: %w", addr, err)
 		}
-		skipSSL := env("STRATT_CHEF_SKIP_SSL", "false") == "true"
-		if skipSSL {
-			log.Warn("STRATT_CHEF_SKIP_SSL enabled: Chef TLS verification is OFF (self-signed legacy servers only; estate data flows unverified)")
+		defer conn.Close()
+		grant := pluginhost.Grant{
+			PluginIdentity:  env("STRATT_CHEF_PLUGIN_ID", "chef"),
+			Tier:            pluginhost.Tier(env("STRATT_CHEF_TIER", "trusted")),
+			Source:          types.Source{Kind: "chef", Name: sourceName, Endpoint: os.Getenv("STRATT_CHEF_SERVER_URL")},
+			FacetNamespaces: []string{"chef.node.identity", "chef.node.os", "chef.node.network"},
+			// dns.fqdn is a shared cross-source scheme: honored only because it is
+			// granted AND the tier is trusted (ADR-0047 finding #4).
+			IdentitySchemes:  []string{"chef.node.name", "dns.fqdn"},
+			TombstoneSchemes: []string{"chef.node.name"},
 		}
-		syncer := chef.NewSyncer(chef.Config{
-			ServerURL:   serverURL,
-			ClientName:  os.Getenv("STRATT_CHEF_CLIENT_NAME"),
-			KeyPEM:      keyPEM,
-			AuthVersion: env("STRATT_CHEF_AUTH_VERSION", "1.0"),
-			SkipSSL:     skipSSL,
-			SourceName:  env("STRATT_CHEF_SOURCE_NAME", "chef"),
-		}, interval, store, log)
-		controllers = append(controllers, homeSupervise(env("STRATT_CHEF_SOURCE_NAME", "chef"), syncer.Register, syncer.Run))
+		host := pluginhost.New(store, pluginv1.NewPluginServiceClient(conn), grant, log)
+		controllers = append(controllers, homeSupervise(sourceName, host.Register, func(cctx context.Context) error {
+			return host.SyncLoop(cctx, interval)
+		}))
 	} else {
-		log.Info("no Chef Source configured (STRATT_CHEF_SERVER_URL empty); syncer idle")
+		log.Info("no Chef plugin configured (STRATT_CHEF_PLUGIN_ADDR empty); syncer idle")
 	}
 
-	// ── OpenVox/PuppetDB node Syncer (ADR-0038; config-mgmt SoR ingest) ──
-	if pdbURL := os.Getenv("STRATT_PUPPETDB_URL"); pdbURL != "" {
+	// ── PuppetDB node Syncer over the port (ADR-0046/0047 Phase C cutover) ───
+	if addr := os.Getenv("STRATT_PUPPET_PLUGIN_ADDR"); addr != "" {
+		sourceName := env("STRATT_PUPPETDB_SOURCE_NAME", "puppet")
 		interval, err := time.ParseDuration(env("STRATT_PUPPETDB_INTERVAL", "60s"))
 		if err != nil {
 			return fmt.Errorf("puppet interval: %w", err)
 		}
-		// mTLS client cert/key/CA arrive as mounted files (§2.5: material stays
-		// a file the process reads, never persisted); empty for an http:// dev URL.
-		syncer := puppet.NewSyncer(puppet.Config{
-			BaseURL:    pdbURL,
-			CertFile:   os.Getenv("STRATT_PUPPETDB_CERT_FILE"),
-			KeyFile:    os.Getenv("STRATT_PUPPETDB_KEY_FILE"),
-			CAFile:     os.Getenv("STRATT_PUPPETDB_CA_FILE"),
-			SourceName: env("STRATT_PUPPETDB_SOURCE_NAME", "puppet"),
-		}, interval, store, log)
-		controllers = append(controllers, homeSupervise(env("STRATT_PUPPETDB_SOURCE_NAME", "puppet"), syncer.Register, syncer.Run))
+		conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+		if err != nil {
+			return fmt.Errorf("puppet plugin dial %s: %w", addr, err)
+		}
+		defer conn.Close()
+		grant := pluginhost.Grant{
+			PluginIdentity:   env("STRATT_PUPPET_PLUGIN_ID", "puppet"),
+			Tier:             pluginhost.Tier(env("STRATT_PUPPET_TIER", "trusted")),
+			Source:           types.Source{Kind: "puppet", Name: sourceName, Endpoint: os.Getenv("STRATT_PUPPETDB_URL")},
+			FacetNamespaces:  []string{"puppet.node.identity", "puppet.node.os", "puppet.node.network"},
+			IdentitySchemes:  []string{"puppet.certname", "dns.fqdn"},
+			TombstoneSchemes: []string{"puppet.certname"},
+		}
+		host := pluginhost.New(store, pluginv1.NewPluginServiceClient(conn), grant, log)
+		controllers = append(controllers, homeSupervise(sourceName, host.Register, func(cctx context.Context) error {
+			return host.SyncLoop(cctx, interval)
+		}))
 	} else {
-		log.Info("no PuppetDB Source configured (STRATT_PUPPETDB_URL empty); syncer idle")
+		log.Info("no PuppetDB plugin configured (STRATT_PUPPET_PLUGIN_ADDR empty); syncer idle")
 	}
 
 	// ── Salt grains Syncer (ADR-0039; config-mgmt SoR ingest) ────────────

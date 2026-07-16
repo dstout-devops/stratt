@@ -14,7 +14,6 @@ require (
 	github.com/dstout-devops/stratt/sdk v0.0.0-00010101000000-000000000000
 	github.com/dstout-devops/stratt/types v0.0.0-00010101000000-000000000000
 	github.com/getkin/kin-openapi v0.141.0
-	github.com/go-chef/chef v0.30.1
 	github.com/google/cel-go v0.29.2
 	github.com/jackc/pgx/v5 v5.10.0
 	github.com/modelcontextprotocol/go-sdk v1.6.1
