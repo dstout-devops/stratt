@@ -57,4 +57,5 @@ Status is `Accepted` unless noted. See **[../roadmap.md](../roadmap.md)** for ho
 | [0046](0046-stratt-as-substrate.md) | Stratt as Substrate: the dark-matter re-centering and the sovereign plugin port | Accepted |
 | [0047](0047-plugin-port-v1-full-surface.md) | Plugin port v1 full surface: write-back, relations, the rung ladder, and USB-style growth | Accepted |
 | [0048](0048-integration-taxonomy-plugin-tool-transport.md) | Integration taxonomy: connector (plugin) vs migration (tool) vs transport (core port) | Accepted |
-| [0049](0049-sites-over-the-plugin-port.md) | Sites over the plugin port: the agent as an authenticated transport relay, never a governor | Proposed |
+| [0049](0049-sites-over-the-plugin-port.md) | Sites over the plugin port: the agent as an authenticated transport relay, never a governor | Accepted |
+| [0050](0050-certificate-reconcile-actuator.md) | Certificate lifecycle as a reconcile Actuator (CSR/sign over the port) | Accepted |
