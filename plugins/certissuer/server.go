@@ -15,16 +15,6 @@ import (
 	pluginv1 "github.com/dstout-devops/stratt/sdk/stratt/plugin/v1"
 )
 
-// The three Actions this Connector advertises (ActionDecl.name); the
-// InvokeRequest.action selector picks one. certissuer is a MULTI-OP Action —
-// unlike awsec2's sole create-vm, the empty selector is NOT accepted, every op
-// must be named.
-const (
-	actionIssue  = "certissuer/issue"
-	actionRenew  = "certissuer/renew"
-	actionRevoke = "certissuer/revoke"
-)
-
 // facetNamespaces are the Facet namespaces this Syncer REQUESTS to own (§2.1); the
 // core honors them only where the operator grant allows.
 var facetNamespaces = []string{
@@ -43,11 +33,11 @@ type Config struct {
 }
 
 // Server implements the sovereign plugin port for the certissuer Connector — a
-// SYNCER-class plugin advertising OBSERVE (the cert Syncer) AND INVOKE (the
-// issue/renew/revoke multi-op Action). It advertises the facet namespaces +
-// tombstone scheme it REQUESTS to own and the Actions it ships; the core-side host
-// honors them only where the operator grant allows. The plugin holds no graph
-// write path (§1.2).
+// multi-role plugin advertising OBSERVE (the cert Syncer) AND the reconcile
+// ACTUATOR verbs PLAN/APPLY/DESTROY (cert lifecycle, ADR-0050). It advertises the
+// facet namespaces + tombstone scheme it REQUESTS to own; the core-side host honors
+// them only where the operator grant allows. The plugin holds no graph write path
+// (§1.2) — it proposes typed values, the host stamps provenance + validates.
 type Server struct {
 	pluginv1.UnimplementedPluginServiceServer
 	cfg Config
@@ -73,38 +63,15 @@ func (s *Server) GetManifest(context.Context, *pluginv1.GetManifestRequest) (*pl
 		contracts = append(contracts, &pluginv1.ContractDecl{SchemaId: ns})
 	}
 	return &pluginv1.GetManifestResponse{Manifest: &pluginv1.Manifest{
-		PluginId:         s.cfg.PluginID,
-		ProtocolVersion:  "v1",
+		PluginId:        s.cfg.PluginID,
+		ProtocolVersion: "v1",
+		// SYNCER class (the Observe registration path checks it); the cert lifecycle
+		// is the reconcile ACTUATOR verbs (ADR-0050) — a multi-role Connector.
 		Class:            pluginv1.PluginClass_PLUGIN_CLASS_SYNCER,
-		Verbs:            []pluginv1.Verb{pluginv1.Verb_VERB_OBSERVE, pluginv1.Verb_VERB_INVOKE},
+		Verbs:            []pluginv1.Verb{pluginv1.Verb_VERB_OBSERVE, pluginv1.Verb_VERB_PLAN, pluginv1.Verb_VERB_APPLY, pluginv1.Verb_VERB_DESTROY},
+		Capabilities:     []string{"apply.dry-run"},
 		Contracts:        contracts,
 		TombstoneSchemes: []string{"cert.serial"},
-		Actions: []*pluginv1.ActionDecl{
-			{
-				// issue mints a new leaf; each call is a new cert → not idempotent.
-				Name:        actionIssue,
-				Input:       &pluginv1.ContractRef{SchemaId: "actions/certissuer/issue.input"},
-				Output:      &pluginv1.ContractRef{SchemaId: "actions/certissuer/issue.output"},
-				Idempotent:  false,
-				DryRunnable: true,
-			},
-			{
-				// renew mints a replacement + revokes the superseded serial → not idempotent.
-				Name:        actionRenew,
-				Input:       &pluginv1.ContractRef{SchemaId: "actions/certissuer/renew.input"},
-				Output:      &pluginv1.ContractRef{SchemaId: "actions/certissuer/renew.output"},
-				Idempotent:  false,
-				DryRunnable: true,
-			},
-			{
-				// revoke by serial → idempotent (revoking an already-revoked cert is a no-op).
-				Name:        actionRevoke,
-				Input:       &pluginv1.ContractRef{SchemaId: "actions/certissuer/revoke.input"},
-				Output:      &pluginv1.ContractRef{SchemaId: "actions/certissuer/revoke.output"},
-				Idempotent:  true,
-				DryRunnable: true,
-			},
-		},
 	}}, nil
 }
 
@@ -156,233 +123,218 @@ func observe(ctx context.Context, ca CA, log *slog.Logger) ([]*pluginv1.Observed
 	return out, nil
 }
 
-// certParams is the input Contract of the three Actions
-// (actions/certissuer/<op>.input). The CLM token is NOT here — resolved from the
-// plugin's own broker as a spawn-time CredentialRef (§2.5).
-type certParams struct {
-	Role       string `json:"role"`       // issue/renew: the PKI role to mint under
-	CommonName string `json:"commonName"` // issue/renew: the leaf CN
-	TTL        string `json:"ttl"`        // issue/renew: lease (e.g. "720h")
-	Serial     string `json:"serial"`     // renew: superseded serial to revoke; revoke: target
+// desired is the reconcile input Contract (actuators/certissuer.input, ADR-0050):
+// a valid cert for commonName under role, refreshed before renewBefore. The CSR is
+// the TARGET's — the private key is born on the target and never crosses (§2.5).
+// The CLM token is NOT here (a spawn-time CredentialRef from the plugin's broker).
+type desired struct {
+	CommonName  string `json:"commonName"`
+	Role        string `json:"role"`
+	TTL         string `json:"ttl"`         // lease, e.g. "720h"
+	RenewBefore string `json:"renewBefore"` // window, e.g. "168h"
+	CSR         string `json:"csr"`         // target-generated CSR PEM (born-on-target)
 }
 
-// Invoke runs one cert Action selected by req.Action across issue/renew/revoke: it
-// performs the CLM op honoring DryRun and streams a typed progress TaskEvent then a
-// TERMINAL InvokeResponse carrying the InvokeResult (typed Outputs, never the key
-// or token; for issue also the new cert as an ObservedEntity with Run provenance,
-// §1.2). Result is set ONLY on the terminal message.
-func (s *Server) Invoke(req *pluginv1.InvokeRequest, stream grpc.ServerStreamingServer[pluginv1.InvokeResponse]) error {
-	ctx := stream.Context()
-	action := req.GetAction()
-	switch action {
-	case actionIssue, actionRenew, actionRevoke:
+func (d desired) window() (time.Duration, error) {
+	if d.RenewBefore == "" {
+		return 0, nil
+	}
+	return time.ParseDuration(d.RenewBefore)
+}
+
+// act is the reconcile decision.
+type act int
+
+const (
+	actNoop act = iota
+	actIssue
+	actRenew
+)
+
+func (a act) String() string {
+	switch a {
+	case actIssue:
+		return "issue"
+	case actRenew:
+		return "renew"
 	default:
-		return status.Errorf(codes.InvalidArgument, "certissuer: unknown action %q", action)
+		return "noop"
 	}
+}
 
-	var p certParams
-	if args := req.GetArgs(); args != nil && len(args.GetBytes()) > 0 {
-		if err := json.Unmarshal(args.GetBytes(), &p); err != nil {
-			return status.Errorf(codes.InvalidArgument, "%s: invalid args: %v", action, err)
-		}
+// decide is the plugin-owned semantic diff (ADR-0050 §2): no live cert → issue; the
+// cert is within renewBefore → renew; else noop (converged). Content-blind to the
+// core, which only schedules the opaque converge.
+func decide(cur *CurrentCert, renewBefore time.Duration, now time.Time) (act, string) {
+	switch {
+	case cur == nil:
+		return actIssue, "no live cert for commonName — issue"
+	case cur.NotAfter.Sub(now) <= renewBefore:
+		return actRenew, fmt.Sprintf("cert %s expires %s (within renewBefore) — renew", cur.Serial, cur.NotAfter.UTC().Format(time.RFC3339))
+	default:
+		return actNoop, fmt.Sprintf("cert %s valid until %s — converged", cur.Serial, cur.NotAfter.UTC().Format(time.RFC3339))
 	}
-	switch action {
-	case actionIssue, actionRenew:
-		if p.Role == "" || p.CommonName == "" {
-			return status.Errorf(codes.InvalidArgument, "%s requires role and commonName", action)
-		}
-	case actionRevoke:
-		if p.Serial == "" {
-			return status.Errorf(codes.InvalidArgument, "certissuer/revoke requires serial")
-		}
-	}
+}
 
-	// Progress event (typed, core-legible descent — §1.8). Fields never carry the
-	// token or a private key.
-	if err := stream.Send(&pluginv1.InvokeResponse{Event: &pluginv1.TaskEvent{
-		Level:         pluginv1.TaskEvent_LEVEL_INFO,
-		Message:       fmt.Sprintf("%s: contacting CLM", action),
-		At:            timestamppb.Now(),
-		CorrelationId: req.GetEnvelope().GetCorrelationId(),
-		Fields:        map[string]string{"commonName": p.CommonName, "serial": p.Serial},
-	}}); err != nil {
-		return err
+// Plan is the reconcile diff (ADR-0050 §2/§4): observe the current cert for the
+// commonName and decide issue/renew/noop. The plan is DIAGNOSTIC — certs are
+// reconcile-with-desired (Model Y), NOT plan-as-artifact, so no saved_plan is
+// produced; Apply RE-DECIDES against live state. summary is the core-legible gist;
+// empty == converged.
+func (s *Server) Plan(ctx context.Context, req *pluginv1.PlanRequest) (*pluginv1.PlanResponse, error) {
+	d, err := parseDesired(req.GetDesired().GetBytes())
+	if err != nil {
+		return nil, err
 	}
-
-	// DryRun is a side-effect-free plan: describe the change, touch no CLM state
-	// (§2.2 dry-run). No cert is created/revoked, so the terminal result carries no
-	// bindable outputs and no Entity.
-	if req.GetDryRun() {
-		return stream.Send(&pluginv1.InvokeResponse{
-			Event: &pluginv1.TaskEvent{
-				Level:         pluginv1.TaskEvent_LEVEL_INFO,
-				Message:       fmt.Sprintf("dry-run ok: would %s", action),
-				At:            timestamppb.Now(),
-				CorrelationId: req.GetEnvelope().GetCorrelationId(),
-				Terminal:      true,
-				Ok:            true,
-			},
-			Result: &pluginv1.InvokeResult{OutputContract: outputContract(action)},
-		})
+	win, err := d.window()
+	if err != nil {
+		return nil, status.Errorf(codes.InvalidArgument, "certissuer: invalid renewBefore: %v", err)
 	}
-
 	ca, err := s.newCA(ctx)
 	if err != nil {
-		return err
+		return nil, err
 	}
-
-	switch action {
-	case actionIssue:
-		return s.invokeIssue(ctx, stream, req, ca, p)
-	case actionRenew:
-		return s.invokeRenew(ctx, stream, req, ca, p)
-	default: // actionRevoke
-		return s.invokeRevoke(ctx, stream, req, ca, p)
+	cur, err := ca.Current(ctx, d.CommonName)
+	if err != nil {
+		return nil, err
 	}
+	a, why := decide(cur, win, time.Now())
+	diff, _ := json.Marshal(map[string]string{"decision": a.String(), "commonName": d.CommonName}) // redacted — no key material
+	return &pluginv1.PlanResponse{
+		Diff:    &pluginv1.Payload{Bytes: diff},
+		Summary: why,
+		Empty:   a == actNoop,
+	}, nil
 }
 
-// invokeIssue mints a new leaf cert. Terminal Result carries the issued cert minus
-// the private key/token AND the new cert as an ObservedEntity (identity + label);
-// its Facets arrive from the certissuer Syncer's next poll (the awsec2 posture).
-func (s *Server) invokeIssue(ctx context.Context, stream grpc.ServerStreamingServer[pluginv1.InvokeResponse], req *pluginv1.InvokeRequest, ca CA, p certParams) error {
-	iss, err := ca.Issue(ctx, p.Role, p.CommonName, p.TTL)
+// Apply reconciles the commonName to a valid cert: it RE-DECIDES against live state
+// (idempotent by re-observation, not a pinned plan), SIGNS the target's CSR via
+// OpenBao /sign when issue/renew is needed (born-on-target, §2.5), revokes the
+// superseded serial on renew (converge to exactly one valid cert per (CN,role),
+// ADR-0050 §5), and writes back the new cert Entity. Terminal ItemResult: CHANGED
+// on issue/renew, OK on a converged noop.
+func (s *Server) Apply(req *pluginv1.ApplyRequest, stream grpc.ServerStreamingServer[pluginv1.ApplyResponse]) error {
+	ctx := stream.Context()
+	d, perr := parseDesired(req.GetDesired().GetBytes())
+	if perr != nil {
+		return applyFail(stream, perr.Error())
+	}
+	win, err := d.window()
 	if err != nil {
-		return s.terminalFailure(stream, req, fmt.Errorf("%s: %w", actionIssue, err))
+		return applyFail(stream, "invalid renewBefore: "+err.Error())
+	}
+	ca, err := s.newCA(ctx)
+	if err != nil {
+		return applyFail(stream, err.Error())
+	}
+	cur, err := ca.Current(ctx, d.CommonName)
+	if err != nil {
+		return applyFail(stream, err.Error())
+	}
+	a, why := decide(cur, win, time.Now())
+	_ = stream.Send(&pluginv1.ApplyResponse{Event: &pluginv1.TaskEvent{
+		Level: pluginv1.TaskEvent_LEVEL_INFO, Message: why, At: timestamppb.Now(),
+		CorrelationId: req.GetEnvelope().GetCorrelationId(), Fields: map[string]string{"commonName": d.CommonName, "decision": a.String()},
+	}})
+	if a == actNoop {
+		return applyDone(stream, pluginv1.ItemResult_STATUS_OK, "converged", nil)
+	}
+	// issue/renew both SIGN the target's CSR — never /issue (which would generate +
+	// discard a key, shipping a dead cert, ADR-0050 §3). No CSR → fail visibly.
+	if d.CSR == "" {
+		return applyFail(stream, "commonName requires a target-generated csr (born-on-target, ADR-0050) — refusing to sign without one")
+	}
+	if req.GetDryRun() {
+		return applyDone(stream, pluginv1.ItemResult_STATUS_CHANGED, "dry-run: would "+a.String(), nil)
+	}
+	iss, err := ca.Sign(ctx, d.Role, d.CSR, d.TTL)
+	if err != nil {
+		return applyFail(stream, a.String()+": "+err.Error())
 	}
 	if iss.Serial == "" {
-		return s.terminalFailure(stream, req, fmt.Errorf("%s: CLM returned no serial", actionIssue))
+		return applyFail(stream, a.String()+": CLM returned no serial")
 	}
-
-	out := map[string]any{"serial": iss.Serial, "commonName": p.CommonName}
-	if iss.PEM != "" {
-		out["certificate"] = iss.PEM // the cert PEM — NOT the private key (§2.5)
-	}
-	if iss.Expiration > 0 {
-		out["notAfter"] = time.Unix(iss.Expiration, 0).UTC().Format(time.RFC3339)
-	}
-	outputs, err := json.Marshal(out)
-	if err != nil {
-		return s.terminalFailure(stream, req, fmt.Errorf("%s: marshal outputs: %w", actionIssue, err))
-	}
-
-	// Project the new cert with Run provenance (§1.2): identity + label only; the
-	// Facets come from the Syncer's next enumeration.
-	entity := &pluginv1.ObservedEntity{
-		Kind:         "cert",
-		IdentityKeys: map[string]string{"cert.serial": iss.Serial},
-		Labels:       map[string]string{"cert.commonName": p.CommonName},
-	}
-
-	s.log.Info("issued cert", "serial", iss.Serial, "commonName", p.CommonName)
-	return stream.Send(&pluginv1.InvokeResponse{
-		Event: &pluginv1.TaskEvent{
-			Level:         pluginv1.TaskEvent_LEVEL_INFO,
-			Message:       "issued " + iss.Serial,
-			At:            timestamppb.Now(),
-			CorrelationId: req.GetEnvelope().GetCorrelationId(),
-			Fields:        map[string]string{"serial": iss.Serial, "commonName": p.CommonName},
-			Terminal:      true,
-			Ok:            true,
-		},
-		Result: &pluginv1.InvokeResult{
-			Outputs:        &pluginv1.Payload{Bytes: outputs},
-			OutputContract: outputContract(actionIssue),
-			Entities:       []*pluginv1.ObservedEntity{entity},
-		},
-	})
-}
-
-// invokeRenew mints a replacement leaf and revokes the superseded serial. Terminal
-// Result carries the new + old serials (the certissuer/renew.output shape). The new
-// cert's Entity is projected by the Syncer's next poll, not this Action.
-func (s *Server) invokeRenew(ctx context.Context, stream grpc.ServerStreamingServer[pluginv1.InvokeResponse], req *pluginv1.InvokeRequest, ca CA, p certParams) error {
-	iss, err := ca.Issue(ctx, p.Role, p.CommonName, p.TTL)
-	if err != nil {
-		return s.terminalFailure(stream, req, fmt.Errorf("%s: %w", actionRenew, err))
-	}
-	if iss.Serial == "" {
-		return s.terminalFailure(stream, req, fmt.Errorf("%s: CLM returned no serial", actionRenew))
-	}
-	if p.Serial != "" {
-		if _, err := ca.Revoke(ctx, p.Serial); err != nil {
-			return s.terminalFailure(stream, req, fmt.Errorf("%s: revoke superseded %s: %w", actionRenew, p.Serial, err))
+	if a == actRenew && cur != nil { // converge to exactly one valid cert per (CN,role)
+		if _, err := ca.Revoke(ctx, cur.Serial); err != nil {
+			return applyFail(stream, "revoke superseded "+cur.Serial+": "+err.Error())
 		}
 	}
-
-	outputs, err := json.Marshal(map[string]any{"newSerial": iss.Serial, "oldSerial": p.Serial})
-	if err != nil {
-		return s.terminalFailure(stream, req, fmt.Errorf("%s: marshal outputs: %w", actionRenew, err))
+	// Write back the new cert (identity + label; facets arrive from the Syncer's
+	// next poll). The HOST stamps Run provenance + validates (ADR-0047 §2, §7).
+	entity := &pluginv1.ObservedEntity{
+		Kind: "cert", IdentityKeys: map[string]string{"cert.serial": iss.Serial},
+		Labels: map[string]string{"cert.commonName": d.CommonName},
 	}
+	s.log.Info("signed cert", "serial", iss.Serial, "commonName", d.CommonName, "decision", a.String())
+	return applyDone(stream, pluginv1.ItemResult_STATUS_CHANGED, a.String()+" → "+iss.Serial, []*pluginv1.ObservedEntity{entity})
+}
 
-	s.log.Info("renewed cert", "newSerial", iss.Serial, "oldSerial", p.Serial)
-	return stream.Send(&pluginv1.InvokeResponse{
-		Event: &pluginv1.TaskEvent{
-			Level:         pluginv1.TaskEvent_LEVEL_INFO,
-			Message:       "renewed → " + iss.Serial,
-			At:            timestamppb.Now(),
-			CorrelationId: req.GetEnvelope().GetCorrelationId(),
-			Fields:        map[string]string{"newSerial": iss.Serial, "oldSerial": p.Serial},
-			Terminal:      true,
-			Ok:            true,
-		},
-		Result: &pluginv1.InvokeResult{
-			Outputs:        &pluginv1.Payload{Bytes: outputs},
-			OutputContract: outputContract(actionRenew),
-		},
+// Destroy revokes the cert for the commonName — the gated destructive exception
+// (ADR-0050 §6; the Gate is core-side, under one authz/audit, human OR agent). It
+// tombstones the cert Entity (GoneEntity by cert.serial) so the graph reflects the
+// revoke immediately, symmetric with the Syncer's liveness.
+func (s *Server) Destroy(req *pluginv1.DestroyRequest, stream grpc.ServerStreamingServer[pluginv1.DestroyResponse]) error {
+	ctx := stream.Context()
+	d, perr := parseDesired(req.GetDesired().GetBytes())
+	if perr != nil {
+		return destroyFail(stream, perr.Error())
+	}
+	ca, err := s.newCA(ctx)
+	if err != nil {
+		return destroyFail(stream, err.Error())
+	}
+	cur, err := ca.Current(ctx, d.CommonName)
+	if err != nil {
+		return destroyFail(stream, err.Error())
+	}
+	if cur == nil {
+		return stream.Send(&pluginv1.DestroyResponse{
+			Event:  &pluginv1.TaskEvent{Terminal: true, Ok: true, At: timestamppb.Now(), Message: "no live cert for " + d.CommonName + " — nothing to revoke"},
+			Result: &pluginv1.ItemResult{Status: pluginv1.ItemResult_STATUS_OK},
+		})
+	}
+	if _, err := ca.Revoke(ctx, cur.Serial); err != nil {
+		return destroyFail(stream, "revoke "+cur.Serial+": "+err.Error())
+	}
+	s.log.Info("revoked cert", "serial", cur.Serial, "commonName", d.CommonName)
+	return stream.Send(&pluginv1.DestroyResponse{
+		Event:  &pluginv1.TaskEvent{Terminal: true, Ok: true, At: timestamppb.Now(), Message: "revoked " + cur.Serial},
+		Result: &pluginv1.ItemResult{Status: pluginv1.ItemResult_STATUS_CHANGED},
+		Gone:   []*pluginv1.GoneEntity{{Scheme: "cert.serial", Value: cur.Serial}},
 	})
 }
 
-// invokeRevoke revokes a cert by serial. Terminal Result carries the serial + the
-// CLM revocation epoch; it projects no Entity (the Syncer tombstones the revoked
-// cert as absent on its next poll).
-func (s *Server) invokeRevoke(ctx context.Context, stream grpc.ServerStreamingServer[pluginv1.InvokeResponse], req *pluginv1.InvokeRequest, ca CA, p certParams) error {
-	revocation, err := ca.Revoke(ctx, p.Serial)
-	if err != nil {
-		return s.terminalFailure(stream, req, fmt.Errorf("%s: %w", actionRevoke, err))
+func parseDesired(raw []byte) (desired, error) {
+	var d desired
+	if err := json.Unmarshal(raw, &d); err != nil {
+		return d, status.Errorf(codes.InvalidArgument, "certissuer: invalid desired: %v", err)
 	}
+	if d.CommonName == "" || d.Role == "" {
+		return d, status.Errorf(codes.InvalidArgument, "certissuer: commonName and role are required")
+	}
+	return d, nil
+}
 
-	out := map[string]any{"serial": p.Serial}
-	if revocation > 0 {
-		out["revocationTime"] = revocation
-	}
-	outputs, err := json.Marshal(out)
-	if err != nil {
-		return s.terminalFailure(stream, req, fmt.Errorf("%s: marshal outputs: %w", actionRevoke, err))
-	}
-
-	s.log.Info("revoked cert", "serial", p.Serial)
-	return stream.Send(&pluginv1.InvokeResponse{
-		Event: &pluginv1.TaskEvent{
-			Level:         pluginv1.TaskEvent_LEVEL_INFO,
-			Message:       "revoked " + p.Serial,
-			At:            timestamppb.Now(),
-			CorrelationId: req.GetEnvelope().GetCorrelationId(),
-			Fields:        map[string]string{"serial": p.Serial},
-			Terminal:      true,
-			Ok:            true,
-		},
-		Result: &pluginv1.InvokeResult{
-			Outputs:        &pluginv1.Payload{Bytes: outputs},
-			OutputContract: outputContract(actionRevoke),
-		},
+// applyDone / applyFail / destroyFail emit the single terminal message. A domain
+// failure rides the typed descent channel (§1.8), not a transport error.
+func applyDone(stream grpc.ServerStreamingServer[pluginv1.ApplyResponse], st pluginv1.ItemResult_Status, msg string, wb []*pluginv1.ObservedEntity) error {
+	return stream.Send(&pluginv1.ApplyResponse{
+		Event:     &pluginv1.TaskEvent{Terminal: true, Ok: true, At: timestamppb.Now(), Message: msg},
+		Result:    &pluginv1.ItemResult{Status: st},
+		WriteBack: wb,
 	})
 }
 
-// terminalFailure emits the terminal, not-ok TaskEvent (no Result) and returns nil
-// — a domain failure rides the typed descent channel, it is not a transport error.
-func (s *Server) terminalFailure(stream grpc.ServerStreamingServer[pluginv1.InvokeResponse], req *pluginv1.InvokeRequest, cause error) error {
-	s.log.Error("cert action failed", "error", cause)
-	return stream.Send(&pluginv1.InvokeResponse{Event: &pluginv1.TaskEvent{
-		Level:         pluginv1.TaskEvent_LEVEL_ERROR,
-		Message:       cause.Error(),
-		At:            timestamppb.Now(),
-		CorrelationId: req.GetEnvelope().GetCorrelationId(),
-		Terminal:      true,
-		Ok:            false,
-	}})
+func applyFail(stream grpc.ServerStreamingServer[pluginv1.ApplyResponse], msg string) error {
+	return stream.Send(&pluginv1.ApplyResponse{
+		Event:  &pluginv1.TaskEvent{Terminal: true, Ok: false, At: timestamppb.Now(), Level: pluginv1.TaskEvent_LEVEL_ERROR, Message: msg},
+		Result: &pluginv1.ItemResult{Status: pluginv1.ItemResult_STATUS_FAILED},
+	})
 }
 
-// outputContract maps an Action to its pinned output ContractRef.
-func outputContract(action string) *pluginv1.ContractRef {
-	return &pluginv1.ContractRef{SchemaId: "actions/" + action + ".output"}
+func destroyFail(stream grpc.ServerStreamingServer[pluginv1.DestroyResponse], msg string) error {
+	return stream.Send(&pluginv1.DestroyResponse{
+		Event:  &pluginv1.TaskEvent{Terminal: true, Ok: false, At: timestamppb.Now(), Level: pluginv1.TaskEvent_LEVEL_ERROR, Message: msg},
+		Result: &pluginv1.ItemResult{Status: pluginv1.ItemResult_STATUS_FAILED},
+	})
 }

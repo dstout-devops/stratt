@@ -27,8 +27,10 @@ import (
 type fakeCA struct {
 	certs      map[string]Cert // serial -> read cert
 	serials    []string        // enumeration order
-	issue      Issued          // what Issue returns
-	issueErr   error
+	current    *CurrentCert    // what Current returns (the observed live cert for the CN)
+	signed     Issued          // what Sign returns
+	signErr    error
+	signedCSR  string   // the CSR passed to Sign (proves born-on-target)
 	revoked    []string // serials passed to Revoke
 	revocation int64    // what Revoke returns
 }
@@ -39,8 +41,11 @@ func (f *fakeCA) GetCert(_ context.Context, serial string) (Cert, error) {
 	return f.certs[serial], nil
 }
 
-func (f *fakeCA) Issue(context.Context, string, string, string) (Issued, error) {
-	return f.issue, f.issueErr
+func (f *fakeCA) Current(context.Context, string) (*CurrentCert, error) { return f.current, nil }
+
+func (f *fakeCA) Sign(_ context.Context, _, csrPEM, _ string) (Issued, error) {
+	f.signedCSR = csrPEM
+	return f.signed, f.signErr
 }
 
 func (f *fakeCA) Revoke(_ context.Context, serial string) (int64, error) {
@@ -167,190 +172,130 @@ func TestObserveEmitsCerts(t *testing.T) {
 	}
 }
 
-// TestInvokeIssue proves the Action half of the port for the issue op: Issue → a
-// terminal InvokeResponse carrying the typed outputs (serial, commonName) AND the
-// new cert as an ObservedEntity. Result is set ONLY on the terminal event.
-func TestInvokeIssue(t *testing.T) {
-	f := &fakeCA{issue: Issued{Serial: "ff:ee", PEM: "NEWPEM", Expiration: 1893456000}}
-
-	args, _ := json.Marshal(certParams{Role: "stratt-dev", CommonName: "app.stratt.test", TTL: "720h"})
-	req := &pluginv1.InvokeRequest{Action: actionIssue, Args: &pluginv1.Payload{Bytes: args}}
-	stream := &captureStream[pluginv1.InvokeResponse]{ctx: context.Background()}
-	if err := newServer(t, f).Invoke(req, stream); err != nil {
-		t.Fatalf("invoke: %v", err)
-	}
-	if len(stream.sent) < 2 {
-		t.Fatalf("expected a progress event then a terminal event, got %d", len(stream.sent))
-	}
-
-	// Only the final message is terminal and carries the Result.
-	for i, resp := range stream.sent {
-		last := i == len(stream.sent)-1
-		if resp.GetEvent().GetTerminal() != last {
-			t.Errorf("message %d terminal=%v, want %v", i, resp.GetEvent().GetTerminal(), last)
-		}
-		if !last && resp.GetResult() != nil {
-			t.Errorf("non-terminal message %d must not carry Result", i)
-		}
-	}
-
-	term := stream.sent[len(stream.sent)-1]
-	if !term.GetEvent().GetOk() {
-		t.Fatal("terminal event must be ok")
-	}
-	res := term.GetResult()
-	if res == nil {
-		t.Fatal("terminal message must carry Result")
-	}
-	var out map[string]any
-	if err := json.Unmarshal(res.GetOutputs().GetBytes(), &out); err != nil {
-		t.Fatalf("outputs: %v", err)
-	}
-	if out["serial"] != "ff:ee" || out["commonName"] != "app.stratt.test" {
-		t.Fatalf("outputs: %v", out)
-	}
-	// The token and private key must NEVER appear in the outputs (§2.5).
-	if _, bad := out["token"]; bad {
-		t.Fatal("outputs must not carry the CLM token")
-	}
-	if _, bad := out["privateKey"]; bad {
-		t.Fatal("outputs must not carry the private key")
-	}
-	if len(res.GetEntities()) != 1 {
-		t.Fatalf("issue must project the new cert entity, got %d", len(res.GetEntities()))
-	}
-	ent := res.GetEntities()[0]
-	if ent.GetKind() != "cert" || ent.GetIdentityKeys()["cert.serial"] != "ff:ee" {
-		t.Fatalf("entity: kind=%q identity=%v", ent.GetKind(), ent.GetIdentityKeys())
-	}
-	if ent.GetLabels()["cert.commonName"] != "app.stratt.test" {
-		t.Fatalf("entity labels: %v", ent.GetLabels())
-	}
-	if res.GetOutputContract().GetSchemaId() != "actions/certissuer/issue.output" {
-		t.Errorf("output contract: %q", res.GetOutputContract().GetSchemaId())
-	}
-}
-
-// TestInvokeRevoke proves the revoke op: Revoke by serial → a terminal ok
-// InvokeResponse. It projects no Entity (the Syncer tombstones the revoked cert
-// as absent on its next poll).
-func TestInvokeRevoke(t *testing.T) {
-	f := &fakeCA{revocation: 1783968900}
-
-	args, _ := json.Marshal(certParams{Serial: "ff:ee"})
-	req := &pluginv1.InvokeRequest{Action: actionRevoke, Args: &pluginv1.Payload{Bytes: args}}
-	stream := &captureStream[pluginv1.InvokeResponse]{ctx: context.Background()}
-	if err := newServer(t, f).Invoke(req, stream); err != nil {
-		t.Fatalf("invoke: %v", err)
-	}
-	term := stream.sent[len(stream.sent)-1]
-	if !term.GetEvent().GetTerminal() || !term.GetEvent().GetOk() {
-		t.Fatalf("revoke must end in a terminal ok event: %+v", term.GetEvent())
-	}
-	if len(f.revoked) != 1 || f.revoked[0] != "ff:ee" {
-		t.Fatalf("revoke must call the CLM with the target serial, got %v", f.revoked)
-	}
-	res := term.GetResult()
-	if res == nil {
-		t.Fatal("terminal message must carry Result")
-	}
-	if len(res.GetEntities()) != 0 {
-		t.Errorf("revoke must project no entity, got %d", len(res.GetEntities()))
-	}
-	var out map[string]any
-	if err := json.Unmarshal(res.GetOutputs().GetBytes(), &out); err != nil {
-		t.Fatalf("outputs: %v", err)
-	}
-	if out["serial"] != "ff:ee" {
-		t.Fatalf("outputs: %v", out)
-	}
-}
-
-// TestInvokeDryRunTouchesNothing — a dry-run plans without any CLM write: no
-// Issue/Revoke call, a terminal ok, and no bindable outputs/entity (§2.2).
-func TestInvokeDryRunTouchesNothing(t *testing.T) {
-	f := &fakeCA{}
-	args, _ := json.Marshal(certParams{Role: "stratt-dev", CommonName: "plan.stratt.test"})
-	req := &pluginv1.InvokeRequest{Action: actionIssue, Args: &pluginv1.Payload{Bytes: args}, DryRun: true}
-	stream := &captureStream[pluginv1.InvokeResponse]{ctx: context.Background()}
-	if err := newServer(t, f).Invoke(req, stream); err != nil {
-		t.Fatalf("invoke: %v", err)
-	}
-	if f.issue != (Issued{}) || len(f.revoked) != 0 {
-		t.Fatal("dry-run must not touch the CLM")
-	}
-	term := stream.sent[len(stream.sent)-1]
-	if !term.GetEvent().GetTerminal() || !term.GetEvent().GetOk() {
-		t.Fatalf("dry-run must end terminal ok: %+v", term.GetEvent())
-	}
-	if term.GetResult().GetOutputs() != nil || len(term.GetResult().GetEntities()) != 0 {
-		t.Error("a dry-run plan must carry no bindable outputs and no entity")
-	}
-}
-
-// TestInvokeUnknownActionRejected — a content-blind selector that names no shipped
-// Action is rejected, never guessed. The empty selector is NOT the sole Action
-// here (certissuer is multi-op).
-func TestInvokeUnknownActionRejected(t *testing.T) {
-	for _, action := range []string{"", "certissuer/delete-ca"} {
-		stream := &captureStream[pluginv1.InvokeResponse]{ctx: context.Background()}
-		err := newServer(t, &fakeCA{}).Invoke(&pluginv1.InvokeRequest{Action: action}, stream)
-		if err == nil {
-			t.Errorf("action %q must be rejected", action)
-		}
-	}
-}
-
-// TestGetManifest — the SYNCER class advertises OBSERVE + INVOKE, the 2 cert facet
-// namespaces, the cert.serial tombstone scheme, and THREE ActionDecls with their
-// idempotent/dry-run flags and input/output contract ids.
-func TestGetManifest(t *testing.T) {
-	resp, err := newServer(t, &fakeCA{}).GetManifest(context.Background(), &pluginv1.GetManifestRequest{})
+// planApply drives Plan then Apply with a desired JSON, returning the Apply's
+// terminal ApplyResponse.
+func applyDesired(t *testing.T, f *fakeCA, desiredJSON string, dryRun bool) *pluginv1.ApplyResponse {
+	t.Helper()
+	stream := &captureStream[pluginv1.ApplyResponse]{ctx: context.Background()}
+	err := newServer(t, f).Apply(&pluginv1.ApplyRequest{Desired: &pluginv1.Payload{Bytes: []byte(desiredJSON)}, DryRun: dryRun}, stream)
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("apply: %v", err)
 	}
-	m := resp.GetManifest()
-	if m.GetClass() != pluginv1.PluginClass_PLUGIN_CLASS_SYNCER {
-		t.Errorf("class = %v", m.GetClass())
+	for _, m := range stream.sent {
+		if m.GetEvent().GetTerminal() {
+			return m
+		}
 	}
+	t.Fatal("no terminal ApplyResponse")
+	return nil
+}
+
+// TestPlan_IssueRenewNoop proves the plugin-owned semantic diff (ADR-0050 §2):
+// no cert → issue; within renewBefore → renew; healthy → noop (empty).
+func TestPlan_IssueRenewNoop(t *testing.T) {
+	plan := func(f *fakeCA, desired string) *pluginv1.PlanResponse {
+		p, err := newServer(t, f).Plan(context.Background(), &pluginv1.PlanRequest{Desired: &pluginv1.Payload{Bytes: []byte(desired)}})
+		if err != nil {
+			t.Fatalf("plan: %v", err)
+		}
+		return p
+	}
+	// no live cert → issue (not empty).
+	if p := plan(&fakeCA{current: nil}, `{"commonName":"web.test","role":"web"}`); p.GetEmpty() {
+		t.Fatal("no cert must plan a non-empty (issue) diff")
+	}
+	// cert expiring within the window → renew (not empty).
+	soon := &fakeCA{current: &CurrentCert{Serial: "aa:bb", NotAfter: time.Now().Add(24 * time.Hour)}}
+	if p := plan(soon, `{"commonName":"web.test","role":"web","renewBefore":"168h"}`); p.GetEmpty() {
+		t.Fatal("a cert within renewBefore must plan a non-empty (renew) diff")
+	}
+	// healthy cert outside the window → noop (empty == converged).
+	healthy := &fakeCA{current: &CurrentCert{Serial: "cc:dd", NotAfter: time.Now().Add(2000 * time.Hour)}}
+	if p := plan(healthy, `{"commonName":"web.test","role":"web","renewBefore":"168h"}`); !p.GetEmpty() {
+		t.Fatal("a healthy cert must plan empty (converged)")
+	}
+}
+
+// TestApply_IssueSignsCSR proves Apply signs the TARGET's CSR (born-on-target, never
+// /issue), writes back the new cert Entity, and folds CHANGED.
+func TestApply_IssueSignsCSR(t *testing.T) {
+	f := &fakeCA{current: nil, signed: Issued{Serial: "ff:ee"}}
+	term := applyDesired(t, f, `{"commonName":"web.test","role":"web","csr":"CSR-PEM-FROM-TARGET"}`, false)
+	if f.signedCSR != "CSR-PEM-FROM-TARGET" {
+		t.Fatalf("Apply must sign the target's CSR (born-on-target), got %q", f.signedCSR)
+	}
+	if term.GetResult().GetStatus() != pluginv1.ItemResult_STATUS_CHANGED || !term.GetEvent().GetOk() {
+		t.Fatalf("a fresh issue must fold CHANGED+ok: %+v", term.GetResult())
+	}
+	if len(term.GetWriteBack()) != 1 || term.GetWriteBack()[0].GetIdentityKeys()["cert.serial"] != "ff:ee" {
+		t.Fatalf("Apply must write back the new cert Entity: %+v", term.GetWriteBack())
+	}
+}
+
+// TestApply_NoCSRFailsVisibly proves the key-delivery invariant (ADR-0050 §3): a
+// convergence that would sign without a target CSR is REFUSED, never a silent
+// /issue-and-discard-the-key.
+func TestApply_NoCSRFailsVisibly(t *testing.T) {
+	f := &fakeCA{current: nil, signed: Issued{Serial: "x"}}
+	term := applyDesired(t, f, `{"commonName":"web.test","role":"web"}`, false)
+	if term.GetResult().GetStatus() != pluginv1.ItemResult_STATUS_FAILED || term.GetEvent().GetOk() {
+		t.Fatalf("issue/renew without a CSR must fail visibly (born-on-target), got %+v", term.GetResult())
+	}
+	if f.signedCSR != "" {
+		t.Fatal("must not call Sign without a CSR")
+	}
+}
+
+// TestApply_NoopConverged proves a healthy cert converges to OK with no CLM write.
+func TestApply_NoopConverged(t *testing.T) {
+	f := &fakeCA{current: &CurrentCert{Serial: "cc:dd", NotAfter: time.Now().Add(2000 * time.Hour)}}
+	term := applyDesired(t, f, `{"commonName":"web.test","role":"web","renewBefore":"168h","csr":"X"}`, false)
+	if term.GetResult().GetStatus() != pluginv1.ItemResult_STATUS_OK {
+		t.Fatalf("a healthy cert must converge to OK, got %+v", term.GetResult())
+	}
+	if f.signedCSR != "" || len(f.revoked) != 0 {
+		t.Fatal("noop must touch no CLM state")
+	}
+}
+
+// TestApply_RenewRevokesSuperseded proves renew signs a new cert AND revokes the
+// old serial (converge to exactly one valid cert per CN, ADR-0050 §5).
+func TestApply_RenewRevokesSuperseded(t *testing.T) {
+	f := &fakeCA{current: &CurrentCert{Serial: "old:11", NotAfter: time.Now().Add(24 * time.Hour)}, signed: Issued{Serial: "new:22"}}
+	term := applyDesired(t, f, `{"commonName":"web.test","role":"web","renewBefore":"168h","csr":"CSR"}`, false)
+	if term.GetResult().GetStatus() != pluginv1.ItemResult_STATUS_CHANGED {
+		t.Fatalf("renew must fold CHANGED, got %+v", term.GetResult())
+	}
+	if len(f.revoked) != 1 || f.revoked[0] != "old:11" {
+		t.Fatalf("renew must revoke the superseded serial, got %+v", f.revoked)
+	}
+}
+
+// TestDestroy_RevokesAndTombstones proves the gated Destroy path: revoke the cert
+// for the CN + emit a GoneEntity so the graph reflects it immediately.
+func TestDestroy_RevokesAndTombstones(t *testing.T) {
+	f := &fakeCA{current: &CurrentCert{Serial: "kill:99", NotAfter: time.Now().Add(500 * time.Hour)}}
+	stream := &captureStream[pluginv1.DestroyResponse]{ctx: context.Background()}
+	if err := newServer(t, f).Destroy(&pluginv1.DestroyRequest{Desired: &pluginv1.Payload{Bytes: []byte(`{"commonName":"web.test","role":"web"}`)}}, stream); err != nil {
+		t.Fatalf("destroy: %v", err)
+	}
+	term := stream.sent[len(stream.sent)-1]
+	if len(f.revoked) != 1 || f.revoked[0] != "kill:99" {
+		t.Fatalf("destroy must revoke the CN's cert, got %+v", f.revoked)
+	}
+	if len(term.GetGone()) != 1 || term.GetGone()[0].GetValue() != "kill:99" {
+		t.Fatalf("destroy must tombstone the cert Entity, got %+v", term.GetGone())
+	}
+}
+
+// TestGetManifest_ActuatorVerbs proves the manifest advertises the reconcile verbs.
+func TestGetManifest_ActuatorVerbs(t *testing.T) {
+	m, _ := newServer(t, &fakeCA{}).GetManifest(context.Background(), &pluginv1.GetManifestRequest{})
 	verbs := map[pluginv1.Verb]bool{}
-	for _, v := range m.GetVerbs() {
+	for _, v := range m.GetManifest().GetVerbs() {
 		verbs[v] = true
 	}
-	if !verbs[pluginv1.Verb_VERB_OBSERVE] || !verbs[pluginv1.Verb_VERB_INVOKE] {
-		t.Errorf("verbs = %v, want OBSERVE+INVOKE", m.GetVerbs())
-	}
-	if len(m.GetContracts()) != 2 {
-		t.Errorf("expected 2 facet contracts, got %d", len(m.GetContracts()))
-	}
-	if len(m.GetTombstoneSchemes()) != 1 || m.GetTombstoneSchemes()[0] != "cert.serial" {
-		t.Errorf("tombstone schemes = %v", m.GetTombstoneSchemes())
-	}
-	if len(m.GetActions()) != 3 {
-		t.Fatalf("expected 3 actions, got %d", len(m.GetActions()))
-	}
-	want := map[string]struct {
-		idempotent bool
-		in, out    string
-	}{
-		actionIssue:  {false, "actions/certissuer/issue.input", "actions/certissuer/issue.output"},
-		actionRenew:  {false, "actions/certissuer/renew.input", "actions/certissuer/renew.output"},
-		actionRevoke: {true, "actions/certissuer/revoke.input", "actions/certissuer/revoke.output"},
-	}
-	for _, a := range m.GetActions() {
-		w, ok := want[a.GetName()]
-		if !ok {
-			t.Errorf("unexpected action %q", a.GetName())
-			continue
-		}
-		if !a.GetDryRunnable() {
-			t.Errorf("%s must be dry_runnable", a.GetName())
-		}
-		if a.GetIdempotent() != w.idempotent {
-			t.Errorf("%s idempotent=%v, want %v", a.GetName(), a.GetIdempotent(), w.idempotent)
-		}
-		if a.GetInput().GetSchemaId() != w.in || a.GetOutput().GetSchemaId() != w.out {
-			t.Errorf("%s contracts: in=%q out=%q", a.GetName(), a.GetInput().GetSchemaId(), a.GetOutput().GetSchemaId())
-		}
+	if !verbs[pluginv1.Verb_VERB_PLAN] || !verbs[pluginv1.Verb_VERB_APPLY] || !verbs[pluginv1.Verb_VERB_DESTROY] || !verbs[pluginv1.Verb_VERB_OBSERVE] {
+		t.Fatalf("certissuer must advertise OBSERVE+PLAN+APPLY+DESTROY, got %v", m.GetManifest().GetVerbs())
 	}
 }

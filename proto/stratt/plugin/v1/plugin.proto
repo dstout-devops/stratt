@@ -409,6 +409,7 @@ message ApplyTarget {
 message DestroyRequest {
   Envelope envelope = 1;
   repeated ApplyTarget targets = 2; // symmetry with Apply — the legible teardown set
+  Payload desired = 3;              // opaque desired-state the plugin tears down (e.g. the cert commonName, ADR-0050)
 }
 
 // InvokeRequest — a targetless Action (RunAction). Args are opaque.

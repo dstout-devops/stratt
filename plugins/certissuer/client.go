@@ -3,7 +3,9 @@ package certissuer
 import (
 	"bytes"
 	"context"
+	"crypto/x509"
 	"encoding/json"
+	"encoding/pem"
 	"fmt"
 	"io"
 	"net/http"
@@ -20,8 +22,20 @@ import (
 type CA interface {
 	ListSerials(ctx context.Context) ([]string, error)
 	GetCert(ctx context.Context, serial string) (Cert, error)
-	Issue(ctx context.Context, role, commonName, ttl string) (Issued, error)
+	// Sign submits a target-generated CSR to /sign/:role — the born-on-target key
+	// delivery (ADR-0050): the private key never leaves the target; only the signed
+	// cert returns. Replaces Issue (which discarded the server-side key).
+	Sign(ctx context.Context, role, csrPEM, ttl string) (Issued, error)
+	// Current returns the live cert observed for a commonName (Plan's diff input).
+	Current(ctx context.Context, commonName string) (*CurrentCert, error)
 	Revoke(ctx context.Context, serial string) (int64, error)
+}
+
+// CurrentCert is the live (non-revoked) leaf observed for a commonName — the state
+// Plan/Apply decide the reconcile against (ADR-0050).
+type CurrentCert struct {
+	Serial   string
+	NotAfter time.Time
 }
 
 // Client is a hand-rolled REST client for a Vault-compatible PKI CLM (dev:
@@ -166,22 +180,62 @@ type Issued struct {
 	Expiration int64
 }
 
-// Issue mints a new leaf certificate for commonName under role with the given
-// TTL (e.g. "720h"). Used by the certissuer/issue and certissuer/renew Actions.
-func (c *Client) Issue(ctx context.Context, role, commonName, ttl string) (Issued, error) {
+// Sign submits a target-generated CSR to /sign/:role. Unlike /issue, the CLM does
+// NOT generate the keypair — the private key was born on the target and never
+// leaves it; only the signed cert (public) returns (ADR-0050, §2.5). Renewal
+// re-signs the same CSR/key, so the cert churns but the key is stable.
+func (c *Client) Sign(ctx context.Context, role, csrPEM, ttl string) (Issued, error) {
 	if ttl == "" {
 		ttl = "720h"
 	}
-	data, err := c.do(ctx, http.MethodPost, "/issue/"+url.PathEscape(role),
-		map[string]string{"common_name": commonName, "ttl": ttl}, false)
+	data, err := c.do(ctx, http.MethodPost, "/sign/"+url.PathEscape(role),
+		map[string]string{"csr": csrPEM, "ttl": ttl}, false)
 	if err != nil {
 		return Issued{}, err
 	}
 	var d issueData
 	if err := json.Unmarshal(data, &d); err != nil {
-		return Issued{}, fmt.Errorf("clm: decode issue: %w", err)
+		return Issued{}, fmt.Errorf("clm: decode sign: %w", err)
 	}
 	return Issued{Serial: d.SerialNumber, PEM: d.Certificate, Expiration: d.Expiration}, nil
+}
+
+// Current returns the live (non-revoked) leaf matching commonName with the latest
+// notAfter, or nil if none — the observation Plan/Apply reconcile against
+// (ADR-0050). O(N) over the CLM's certs (list + read + parse each), like the
+// Syncer; a CLM index by CN is the follow-up.
+func (c *Client) Current(ctx context.Context, commonName string) (*CurrentCert, error) {
+	serials, err := c.ListSerials(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var best *CurrentCert
+	for _, s := range serials {
+		cert, err := c.GetCert(ctx, s)
+		if err != nil {
+			return nil, err
+		}
+		if cert.Revoked {
+			continue
+		}
+		crt, err := parseLeaf(cert.PEM)
+		if err != nil || crt.IsCA || crt.Subject.CommonName != commonName {
+			continue
+		}
+		if best == nil || crt.NotAfter.After(best.NotAfter) {
+			best = &CurrentCert{Serial: s, NotAfter: crt.NotAfter}
+		}
+	}
+	return best, nil
+}
+
+// parseLeaf decodes a PEM cert (shared by Current + normalizeCert).
+func parseLeaf(pemStr string) (*x509.Certificate, error) {
+	block, _ := pem.Decode([]byte(pemStr))
+	if block == nil {
+		return nil, fmt.Errorf("certissuer: no PEM block")
+	}
+	return x509.ParseCertificate(block.Bytes)
 }
 
 // Revoke revokes a certificate by serial (colon-hex) and returns the CLM's
