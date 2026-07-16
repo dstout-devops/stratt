@@ -37,6 +37,7 @@ syntax = "proto3";
 
 package stratt.plugin.v1;
 
+import "google/protobuf/struct.proto";
 import "google/protobuf/timestamp.proto";
 
 option go_package = "github.com/dstout-devops/stratt/sdk/stratt/plugin/v1;pluginv1";
@@ -82,6 +83,17 @@ message Envelope {
   // detection: the core compares hashes, never diffs payloads.
   string content_hash = 7;
 
+  // A GOVERNED content/Bundle ref (signed Bundle / OCI / git) the core verifies
+  // BEFORE hand-off (ADR-0032; ADR-0047 §5). It rides the Envelope, not the
+  // opaque Payload, precisely because the core must read+verify it — a pointer,
+  // no inline bytes; uri/sha256 are checked against the signature/digest
+  // (verify-don't-trust). Also carries the plan-as-artifact handle (ADR-0047 §7).
+  ArtifactRef artifact = 8;
+
+  // NOTE — no untyped `extensions` map. The Envelope stays FULLY typed
+  // (invariant #1); growth is additive typed fields, and private matched-pair
+  // data rides the opaque Payload (ADR-0047 §7, guardian review).
+
   // NOTE — there is deliberately NO `provenance` field. The core STAMPS
   // provenance from the authenticated channel identity, so a plugin can neither
   // forge nor claim it (invariant #6). Adding a provenance field here would be
@@ -92,6 +104,18 @@ message Envelope {
 // parses these bytes. Invariant #1. (Named `Payload`, never `Resource`.)
 message Payload {
   bytes bytes = 1;
+}
+
+// ArtifactRef points at a governed content object (a signed Bundle / OCI image /
+// git ref). Pointer only — NO inline bytes. The core cosign/OCI-verifies `uri`
+// against `sha256` before hand-off (ADR-0047 §5); the plugin's claim is checked,
+// never trusted. Reused as the plan-as-artifact handle (ADR-0047 §7): a Gate
+// binds the exact sha256 a human approved, and the core re-verifies it at the
+// Apply boundary so "approved == applied".
+message ArtifactRef {
+  string uri = 1;
+  string sha256 = 2;
+  string media_type = 3;
 }
 
 // Item is the OPAQUE Apply-path aggregate: a governance Envelope + opaque
@@ -177,6 +201,17 @@ message ContractDecl {
   string band = 3; // the band this contract's data lives at ("" if band-agnostic)
 }
 
+// ActionDecl advertises one Action a plugin ships (a plugin may ship many —
+// certissuer = issue/renew/revoke). Content-blind discovery (invariant #2); the
+// InvokeRequest.action selector picks one. input/output are pinned Contract refs.
+message ActionDecl {
+  string name = 1;        // the InvokeRequest.action selector, e.g. "awsec2/create-vm"
+  ContractRef input = 2;  // pinned input schema (conformance-checked on args)
+  ContractRef output = 3; // pinned output schema (empty if the Action returns no typed outputs)
+  bool idempotent = 4;
+  bool dry_runnable = 5;
+}
+
 message Manifest {
   string plugin_id = 1;         // stable plugin identity (NOT "device_id")
   string protocol_version = 2;  // this port's wire version — decoupled from ContractDecl.sha256 (invariant #5)
@@ -187,6 +222,27 @@ message Manifest {
   // accumulated per scheme; ADR-0042). REQUESTED — the core honors these only
   // where the operator grant allows, and the tier/grant gate applies (finding #4).
   repeated string tombstone_schemes = 6;
+  repeated ActionDecl actions = 7; // advertised Actions (content-blind discovery)
+
+  // Advisory (ADR-0047 §7): does the host POLL (re-invoke Observe each interval)
+  // or hold one long-lived STREAM (change-feed)? Optional.
+  enum ObserveMode {
+    OBSERVE_MODE_UNSPECIFIED = 0;
+    OBSERVE_MODE_POLL = 1;
+    OBSERVE_MODE_STREAM = 2;
+  }
+  ObserveMode observe_mode = 8;
+
+  // Forward-compat capability flags (ADR-0047 §7): tokens like "apply.plan-artifact",
+  // "invoke.dry-run", "emit.match". The MEANING is a core-owned VERSIONED registry
+  // (a plugin never mints contract meaning, §1.5); unknown tokens are ignored
+  // (graceful degradation); a capability is NEVER precedence-bearing (§2.4).
+  repeated string capabilities = 9;
+  // Negotiated wire-version window; the core enforces a §1.7 N-1 floor and a
+  // genuinely incompatible change is a new negotiated major — bounded, never an
+  // unbounded 1..N fossil matrix.
+  string min_protocol = 10;
+  string max_protocol = 11;
 }
 
 // GetManifestResponse wraps the Manifest so the RPC has a dedicated,
@@ -235,6 +291,20 @@ message ObservedEntity {
   map<string, string> identity_keys = 2;
   map<string, string> labels = 3;        // label key -> value; owned per-key (ADR-0041)
   map<string, bytes> facets = 4;         // namespace -> value blob, schema-validated core-side
+  // Directed edges FROM this entity, target named BY IDENTITY (never a graph id —
+  // the plugin never sees ids). The core resolves the target against an EXISTING
+  // identity only (NEVER auto-vivifies a stub, ADR-0047 §1) and stamps the edge;
+  // the target scheme is tier+grant gated exactly as emitted identity keys are.
+  repeated ObservedRelation relations = 5;
+}
+
+// ObservedRelation is a typed directed edge to a target entity named by identity
+// scheme+value. Mirrors graph.Projector.UpsertRelation — core-resolved + stamped;
+// the plugin proposes, never writes (§1.2).
+message ObservedRelation {
+  string type = 1;      // e.g. "runs-on"
+  string to_scheme = 2; // target identity scheme (tier+grant gated, ADR-0047 §1)
+  string to_value = 3;
 }
 
 // GoneEntity signals a delta 'leave': an Entity the Source no longer reports, by
@@ -243,6 +313,16 @@ message ObservedEntity {
 message GoneEntity {
   string scheme = 1;
   string value = 2;
+}
+
+// GoneRelation retracts an edge on a delta window (e.g. a VM migrates hosts)
+// without a full re-enumeration. Empty on a full-sync window.
+message GoneRelation {
+  string type = 1;
+  string from_scheme = 2;
+  string from_value = 3;
+  string to_scheme = 4;
+  string to_value = 5;
 }
 
 // ObserveResponse is one window of the Syncer stream. The core accumulates a
@@ -255,6 +335,9 @@ message ObserveResponse {
   repeated GoneEntity gone = 2;         // delta leaves to tombstone; empty on full-sync
   bool full_sync_complete = 3;          // true on the window that ends a full sync
   string next_cursor = 4;               // opaque delta resume token; set on the last message of a window
+  repeated GoneRelation gone_relations = 5; // edge leaves to retract; empty on full-sync
+  bool full_sync = 6;                   // this window is part of a FULL enumeration (seen-set accrual);
+                                        // false on a pure delta window (full_sync_complete gates tombstone)
 }
 
 // PlanRequest asks the plugin for the DOMAIN diff (device-only knowledge). The
@@ -273,12 +356,20 @@ message PlanResponse {
   Payload diff = 1;
   string summary = 2;
   bool empty = 3; // true == no change (converged)
+  // The hash-pinned saved plan (ADR-0047 §7). `Plan` is the CANONICAL producer of
+  // the plan a Gate approves; ApplyRequest.plan_ref then applies EXACTLY it — the
+  // core binds this sha256 at Gate approval and re-verifies it at the Apply boundary.
+  ArtifactRef plan = 4;
 }
 
 message ApplyRequest {
   Envelope envelope = 1;
   Payload desired = 2;      // opaque; applied atomically on the ROOT (invariant #9)
   string resume_token = 3;  // optional checkpoint/resume (invariant #7); "" == fresh
+  bool dry_run = 4;         // plan/--check as a STREAMING dry-run (diagnostics/descent, not the pin path)
+  // Apply EXACTLY the plan a Gate approved (ADR-0047 §7): the core verifies this
+  // sha256 against the Gate-approved digest at THIS boundary. Empty == apply `desired`.
+  ArtifactRef plan_ref = 5;
 }
 
 message DestroyRequest {
@@ -289,6 +380,9 @@ message DestroyRequest {
 message InvokeRequest {
   Envelope envelope = 1;
   Payload args = 2;
+  string action = 3; // which advertised Action (ActionDecl.name); "" == the sole Action.
+                     // Keeps Envelope.contract purely conformance, never a routing key.
+  bool dry_run = 4;  // side-effect-free plan, only where the ActionDecl is dry_runnable
 }
 
 // SubscribeRequest — an Emitter opens a long-lived push stream (invariant #4).
@@ -315,31 +409,108 @@ message TaskEvent {
   map<string, string> fields = 5;     // structured, legible fields — NOT an opaque blob
   bool terminal = 6;                  // true on the final event of the stream
   bool ok = 7;                        // meaningful only when terminal == true
+  string checkpoint = 8;              // a gracefully-aborting Apply emits where it stopped; the core
+                                      // persists it and feeds a later ApplyRequest.resume_token (ADR-0047)
+}
+
+// ItemResult is a per-target outcome (ansible/script fan out). It is an OUTCOME,
+// never a ranking/precedence (§2.4). The root Item's terminal `ok` MUST fold any
+// FAILED/UNREACHABLE child to non-OK — partial success is never a green Run (§1.8).
+// item_key references a child Item; "" == the root. Reports status WITHOUT
+// implying rollback (atomic on the root, inv #9, is the tofu class; fan-out is not).
+message ItemResult {
+  enum Status {
+    STATUS_UNSPECIFIED = 0;
+    STATUS_OK = 1;
+    STATUS_CHANGED = 2;
+    STATUS_FAILED = 3;
+    STATUS_UNREACHABLE = 4;
+  }
+  string item_key = 1;
+  Status status = 2;
+}
+
+// DiffFragment is an opaque, already-redacted observed-vs-expected fragment
+// (ADR-0019 baselines). The core accumulates/caps and descends (§1.8); it never
+// interprets — a Payload, not a map.
+message DiffFragment {
+  string item_key = 1;
+  Payload detail = 2;
+}
+
+// DerivedContract is a TOOL-DERIVED (rung-2, tofu plan) or DECLARED (rung-3, mcp)
+// schema DOCUMENT describing the PLUGIN'S OWN outputs/tools — NEVER a rung-1 Facet
+// schema (finding #2 stands: rung-1 is sovereign, not assertable over the wire).
+// The core RECOMPUTES + pins the hash (no plugin-asserted sha256); a new `rev`
+// with different bytes is BLOCKING drift (§1.5). `schema_id` is namespace-confined
+// to the plugin's granted scope and never overwrites another owner (ADR-0047 §4).
+message DerivedContract {
+  enum Rung {
+    RUNG_UNSPECIFIED = 0;
+    // 1 is intentionally absent — rung-1 (hand-written, core-shipped) is NOT
+    // representable over the wire (finding #2).
+    RUNG_TOOL_DERIVED = 2; // tofu plan-derived output schema
+    RUNG_DECLARED = 3;     // mcp-declared tool schema
+  }
+  Rung rung = 1;
+  string schema_id = 2;
+  string rev = 3;   // version; different bytes under the same (schema_id, rev) is blocking drift
+  bytes schema = 4; // the JSON-Schema document; the core computes + pins its hash
+  string band = 5;  // S1..S7 residency (advisory)
 }
 
 // Per-RPC response wrappers keep each streaming verb independently evolvable
-// (buf STANDARD RPC_REQUEST_RESPONSE_UNIQUE — aids invariant #5's additive-only
-// evolution) while TaskEvent stays the single shared, core-legible diagnostic
-// type each one carries.
+// (buf STANDARD RPC_REQUEST_RESPONSE_UNIQUE). TaskEvent is the shared, core-legible
+// diagnostic type; the sibling fields carry the structured, governed return data.
+// Each message sets what it has; TaskEvent.terminal ends the stream.
 message ApplyResponse {
   TaskEvent event = 1;
+  // Entities/facts observed DURING apply (tofu stratt_entities, ansible gathered
+  // facts) — reuses the Syncer write-back shape; the HOST stamps RUN provenance
+  // (WriterRun), never Syncer (per-verb projector selection is a t=0 invariant,
+  // ADR-0047 §2). Provenance-free by construction, so the plugin can't choose it.
+  repeated ObservedEntity write_back = 2;
+  ItemResult result = 3;                // per-target status
+  DiffFragment drift = 4;               // observed-vs-expected fragment (ADR-0019)
+  DerivedContract derived_contract = 5; // tofu rung-2 / mcp rung-3 schema doc
 }
 
 message DestroyResponse {
   TaskEvent event = 1;
+  ItemResult result = 2;        // per-target teardown status
+  repeated GoneEntity gone = 3; // tombstone the Entities a prior Apply projected (symmetry)
+}
+
+// InvokeResult is set only on the TERMINAL message. `outputs` are validated against
+// a PINNED output_contract before capture and land as a Run output (cross-Step
+// binding, never directly as Entity/Facet state); `entities` go through the write
+// path (RUN provenance); `provisioned_creds` are CredentialRef NAMES only (§2.5),
+// namespace-confined to the channel scope and never overwriting (ADR-0047 §7).
+message InvokeResult {
+  Payload outputs = 1;
+  ContractRef output_contract = 2;
+  repeated ObservedEntity entities = 3;
+  repeated CredentialRef provisioned_creds = 4;
 }
 
 message InvokeResponse {
   TaskEvent event = 1;
+  InvokeResult result = 2; // set only on the terminal message (event.terminal)
 }
 
-// EmittedEvent — an Emitter's push: governance Envelope + opaque Payload,
-// exactly like an observed Item (the core routes on the envelope, never the
-// payload).
+// EmittedEvent — an Emitter's push. The opaque `payload` is the faithful body
+// (content_hash covers dedup, EXCLUDING occurred_at, matching EventHash). `match`
+// is the core-LEGIBLE routing projection the trigger engine evaluates CEL against
+// (the Emitter analog of ObservedEntity / Envelope coordinates); it is NEVER
+// persisted as Entity/Facet state — routing only (ADR-0047 §3).
 message EmittedEvent {
   Envelope envelope = 1;
   Payload payload = 2;
-  string cursor = 3; // resume token the core persists for at-least-once replay
+  string cursor = 3;                         // resume token; at-least-once replay
+  google.protobuf.Struct match = 4;          // legible CEL match fields (event.*); never persisted as state
+  string subject = 5;                        // routing subject (source/emitter), typed out of the payload
+  string type = 6;                           // event-type discriminator (salt tag / alertmanager alertname)
+  google.protobuf.Timestamp occurred_at = 7; // occurrence time; EXCLUDED from content_hash
 }
 
 message SubscribeResponse {

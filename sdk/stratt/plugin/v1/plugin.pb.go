@@ -45,6 +45,7 @@ package pluginv1
 import (
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
 	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
+	structpb "google.golang.org/protobuf/types/known/structpb"
 	timestamppb "google.golang.org/protobuf/types/known/timestamppb"
 	reflect "reflect"
 	sync "sync"
@@ -178,6 +179,57 @@ func (Verb) EnumDescriptor() ([]byte, []int) {
 	return file_stratt_plugin_v1_plugin_proto_rawDescGZIP(), []int{1}
 }
 
+// Advisory (ADR-0047 §7): does the host POLL (re-invoke Observe each interval)
+// or hold one long-lived STREAM (change-feed)? Optional.
+type Manifest_ObserveMode int32
+
+const (
+	Manifest_OBSERVE_MODE_UNSPECIFIED Manifest_ObserveMode = 0
+	Manifest_OBSERVE_MODE_POLL        Manifest_ObserveMode = 1
+	Manifest_OBSERVE_MODE_STREAM      Manifest_ObserveMode = 2
+)
+
+// Enum value maps for Manifest_ObserveMode.
+var (
+	Manifest_ObserveMode_name = map[int32]string{
+		0: "OBSERVE_MODE_UNSPECIFIED",
+		1: "OBSERVE_MODE_POLL",
+		2: "OBSERVE_MODE_STREAM",
+	}
+	Manifest_ObserveMode_value = map[string]int32{
+		"OBSERVE_MODE_UNSPECIFIED": 0,
+		"OBSERVE_MODE_POLL":        1,
+		"OBSERVE_MODE_STREAM":      2,
+	}
+)
+
+func (x Manifest_ObserveMode) Enum() *Manifest_ObserveMode {
+	p := new(Manifest_ObserveMode)
+	*p = x
+	return p
+}
+
+func (x Manifest_ObserveMode) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (Manifest_ObserveMode) Descriptor() protoreflect.EnumDescriptor {
+	return file_stratt_plugin_v1_plugin_proto_enumTypes[2].Descriptor()
+}
+
+func (Manifest_ObserveMode) Type() protoreflect.EnumType {
+	return &file_stratt_plugin_v1_plugin_proto_enumTypes[2]
+}
+
+func (x Manifest_ObserveMode) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use Manifest_ObserveMode.Descriptor instead.
+func (Manifest_ObserveMode) EnumDescriptor() ([]byte, []int) {
+	return file_stratt_plugin_v1_plugin_proto_rawDescGZIP(), []int{11, 0}
+}
+
 type HealthResponse_Serving int32
 
 const (
@@ -211,11 +263,11 @@ func (x HealthResponse_Serving) String() string {
 }
 
 func (HealthResponse_Serving) Descriptor() protoreflect.EnumDescriptor {
-	return file_stratt_plugin_v1_plugin_proto_enumTypes[2].Descriptor()
+	return file_stratt_plugin_v1_plugin_proto_enumTypes[3].Descriptor()
 }
 
 func (HealthResponse_Serving) Type() protoreflect.EnumType {
-	return &file_stratt_plugin_v1_plugin_proto_enumTypes[2]
+	return &file_stratt_plugin_v1_plugin_proto_enumTypes[3]
 }
 
 func (x HealthResponse_Serving) Number() protoreflect.EnumNumber {
@@ -224,7 +276,7 @@ func (x HealthResponse_Serving) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use HealthResponse_Serving.Descriptor instead.
 func (HealthResponse_Serving) EnumDescriptor() ([]byte, []int) {
-	return file_stratt_plugin_v1_plugin_proto_rawDescGZIP(), []int{12, 0}
+	return file_stratt_plugin_v1_plugin_proto_rawDescGZIP(), []int{14, 0}
 }
 
 type TaskEvent_Level int32
@@ -266,11 +318,11 @@ func (x TaskEvent_Level) String() string {
 }
 
 func (TaskEvent_Level) Descriptor() protoreflect.EnumDescriptor {
-	return file_stratt_plugin_v1_plugin_proto_enumTypes[3].Descriptor()
+	return file_stratt_plugin_v1_plugin_proto_enumTypes[4].Descriptor()
 }
 
 func (TaskEvent_Level) Type() protoreflect.EnumType {
-	return &file_stratt_plugin_v1_plugin_proto_enumTypes[3]
+	return &file_stratt_plugin_v1_plugin_proto_enumTypes[4]
 }
 
 func (x TaskEvent_Level) Number() protoreflect.EnumNumber {
@@ -279,7 +331,113 @@ func (x TaskEvent_Level) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use TaskEvent_Level.Descriptor instead.
 func (TaskEvent_Level) EnumDescriptor() ([]byte, []int) {
-	return file_stratt_plugin_v1_plugin_proto_rawDescGZIP(), []int{23, 0}
+	return file_stratt_plugin_v1_plugin_proto_rawDescGZIP(), []int{27, 0}
+}
+
+type ItemResult_Status int32
+
+const (
+	ItemResult_STATUS_UNSPECIFIED ItemResult_Status = 0
+	ItemResult_STATUS_OK          ItemResult_Status = 1
+	ItemResult_STATUS_CHANGED     ItemResult_Status = 2
+	ItemResult_STATUS_FAILED      ItemResult_Status = 3
+	ItemResult_STATUS_UNREACHABLE ItemResult_Status = 4
+)
+
+// Enum value maps for ItemResult_Status.
+var (
+	ItemResult_Status_name = map[int32]string{
+		0: "STATUS_UNSPECIFIED",
+		1: "STATUS_OK",
+		2: "STATUS_CHANGED",
+		3: "STATUS_FAILED",
+		4: "STATUS_UNREACHABLE",
+	}
+	ItemResult_Status_value = map[string]int32{
+		"STATUS_UNSPECIFIED": 0,
+		"STATUS_OK":          1,
+		"STATUS_CHANGED":     2,
+		"STATUS_FAILED":      3,
+		"STATUS_UNREACHABLE": 4,
+	}
+)
+
+func (x ItemResult_Status) Enum() *ItemResult_Status {
+	p := new(ItemResult_Status)
+	*p = x
+	return p
+}
+
+func (x ItemResult_Status) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (ItemResult_Status) Descriptor() protoreflect.EnumDescriptor {
+	return file_stratt_plugin_v1_plugin_proto_enumTypes[5].Descriptor()
+}
+
+func (ItemResult_Status) Type() protoreflect.EnumType {
+	return &file_stratt_plugin_v1_plugin_proto_enumTypes[5]
+}
+
+func (x ItemResult_Status) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use ItemResult_Status.Descriptor instead.
+func (ItemResult_Status) EnumDescriptor() ([]byte, []int) {
+	return file_stratt_plugin_v1_plugin_proto_rawDescGZIP(), []int{28, 0}
+}
+
+type DerivedContract_Rung int32
+
+const (
+	DerivedContract_RUNG_UNSPECIFIED DerivedContract_Rung = 0
+	// 1 is intentionally absent — rung-1 (hand-written, core-shipped) is NOT
+	// representable over the wire (finding #2).
+	DerivedContract_RUNG_TOOL_DERIVED DerivedContract_Rung = 2 // tofu plan-derived output schema
+	DerivedContract_RUNG_DECLARED     DerivedContract_Rung = 3 // mcp-declared tool schema
+)
+
+// Enum value maps for DerivedContract_Rung.
+var (
+	DerivedContract_Rung_name = map[int32]string{
+		0: "RUNG_UNSPECIFIED",
+		2: "RUNG_TOOL_DERIVED",
+		3: "RUNG_DECLARED",
+	}
+	DerivedContract_Rung_value = map[string]int32{
+		"RUNG_UNSPECIFIED":  0,
+		"RUNG_TOOL_DERIVED": 2,
+		"RUNG_DECLARED":     3,
+	}
+)
+
+func (x DerivedContract_Rung) Enum() *DerivedContract_Rung {
+	p := new(DerivedContract_Rung)
+	*p = x
+	return p
+}
+
+func (x DerivedContract_Rung) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (DerivedContract_Rung) Descriptor() protoreflect.EnumDescriptor {
+	return file_stratt_plugin_v1_plugin_proto_enumTypes[6].Descriptor()
+}
+
+func (DerivedContract_Rung) Type() protoreflect.EnumType {
+	return &file_stratt_plugin_v1_plugin_proto_enumTypes[6]
+}
+
+func (x DerivedContract_Rung) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use DerivedContract_Rung.Descriptor instead.
+func (DerivedContract_Rung) EnumDescriptor() ([]byte, []int) {
+	return file_stratt_plugin_v1_plugin_proto_rawDescGZIP(), []int{30, 0}
 }
 
 // Envelope is the TYPED half the core reads and governs on. Every field here is
@@ -312,7 +470,13 @@ type Envelope struct {
 	// Plugin-COMPUTED content hash of the Payload — lets the core detect change
 	// WITHOUT reading content, at scale (invariant #8). Content-blind change
 	// detection: the core compares hashes, never diffs payloads.
-	ContentHash   string `protobuf:"bytes,7,opt,name=content_hash,json=contentHash,proto3" json:"content_hash,omitempty"`
+	ContentHash string `protobuf:"bytes,7,opt,name=content_hash,json=contentHash,proto3" json:"content_hash,omitempty"`
+	// A GOVERNED content/Bundle ref (signed Bundle / OCI / git) the core verifies
+	// BEFORE hand-off (ADR-0032; ADR-0047 §5). It rides the Envelope, not the
+	// opaque Payload, precisely because the core must read+verify it — a pointer,
+	// no inline bytes; uri/sha256 are checked against the signature/digest
+	// (verify-don't-trust). Also carries the plan-as-artifact handle (ADR-0047 §7).
+	Artifact      *ArtifactRef `protobuf:"bytes,8,opt,name=artifact,proto3" json:"artifact,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -396,6 +560,13 @@ func (x *Envelope) GetContentHash() string {
 	return ""
 }
 
+func (x *Envelope) GetArtifact() *ArtifactRef {
+	if x != nil {
+		return x.Artifact
+	}
+	return nil
+}
+
 // Payload is the OPAQUE half — the plugin's domain content. The core never
 // parses these bytes. Invariant #1. (Named `Payload`, never `Resource`.)
 type Payload struct {
@@ -442,6 +613,72 @@ func (x *Payload) GetBytes() []byte {
 	return nil
 }
 
+// ArtifactRef points at a governed content object (a signed Bundle / OCI image /
+// git ref). Pointer only — NO inline bytes. The core cosign/OCI-verifies `uri`
+// against `sha256` before hand-off (ADR-0047 §5); the plugin's claim is checked,
+// never trusted. Reused as the plan-as-artifact handle (ADR-0047 §7): a Gate
+// binds the exact sha256 a human approved, and the core re-verifies it at the
+// Apply boundary so "approved == applied".
+type ArtifactRef struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Uri           string                 `protobuf:"bytes,1,opt,name=uri,proto3" json:"uri,omitempty"`
+	Sha256        string                 `protobuf:"bytes,2,opt,name=sha256,proto3" json:"sha256,omitempty"`
+	MediaType     string                 `protobuf:"bytes,3,opt,name=media_type,json=mediaType,proto3" json:"media_type,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ArtifactRef) Reset() {
+	*x = ArtifactRef{}
+	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[2]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ArtifactRef) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ArtifactRef) ProtoMessage() {}
+
+func (x *ArtifactRef) ProtoReflect() protoreflect.Message {
+	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[2]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ArtifactRef.ProtoReflect.Descriptor instead.
+func (*ArtifactRef) Descriptor() ([]byte, []int) {
+	return file_stratt_plugin_v1_plugin_proto_rawDescGZIP(), []int{2}
+}
+
+func (x *ArtifactRef) GetUri() string {
+	if x != nil {
+		return x.Uri
+	}
+	return ""
+}
+
+func (x *ArtifactRef) GetSha256() string {
+	if x != nil {
+		return x.Sha256
+	}
+	return ""
+}
+
+func (x *ArtifactRef) GetMediaType() string {
+	if x != nil {
+		return x.MediaType
+	}
+	return ""
+}
+
 // Item is the OPAQUE Apply-path aggregate: a governance Envelope + opaque
 // Payload, plus an OPTIONAL band-honest decomposition into children at their
 // true bands (invariant #9). Apply is always issued on the ROOT Item for
@@ -458,7 +695,7 @@ type Item struct {
 
 func (x *Item) Reset() {
 	*x = Item{}
-	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[2]
+	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -470,7 +707,7 @@ func (x *Item) String() string {
 func (*Item) ProtoMessage() {}
 
 func (x *Item) ProtoReflect() protoreflect.Message {
-	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[2]
+	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -483,7 +720,7 @@ func (x *Item) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Item.ProtoReflect.Descriptor instead.
 func (*Item) Descriptor() ([]byte, []int) {
-	return file_stratt_plugin_v1_plugin_proto_rawDescGZIP(), []int{2}
+	return file_stratt_plugin_v1_plugin_proto_rawDescGZIP(), []int{3}
 }
 
 func (x *Item) GetEnvelope() *Envelope {
@@ -523,7 +760,7 @@ type Coordinates struct {
 
 func (x *Coordinates) Reset() {
 	*x = Coordinates{}
-	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[3]
+	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -535,7 +772,7 @@ func (x *Coordinates) String() string {
 func (*Coordinates) ProtoMessage() {}
 
 func (x *Coordinates) ProtoReflect() protoreflect.Message {
-	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[3]
+	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -548,7 +785,7 @@ func (x *Coordinates) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Coordinates.ProtoReflect.Descriptor instead.
 func (*Coordinates) Descriptor() ([]byte, []int) {
-	return file_stratt_plugin_v1_plugin_proto_rawDescGZIP(), []int{3}
+	return file_stratt_plugin_v1_plugin_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *Coordinates) GetCell() string {
@@ -593,7 +830,7 @@ type ContractRef struct {
 
 func (x *ContractRef) Reset() {
 	*x = ContractRef{}
-	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[4]
+	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -605,7 +842,7 @@ func (x *ContractRef) String() string {
 func (*ContractRef) ProtoMessage() {}
 
 func (x *ContractRef) ProtoReflect() protoreflect.Message {
-	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[4]
+	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -618,7 +855,7 @@ func (x *ContractRef) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ContractRef.ProtoReflect.Descriptor instead.
 func (*ContractRef) Descriptor() ([]byte, []int) {
-	return file_stratt_plugin_v1_plugin_proto_rawDescGZIP(), []int{4}
+	return file_stratt_plugin_v1_plugin_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *ContractRef) GetSchemaId() string {
@@ -649,7 +886,7 @@ type Principal struct {
 
 func (x *Principal) Reset() {
 	*x = Principal{}
-	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[5]
+	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -661,7 +898,7 @@ func (x *Principal) String() string {
 func (*Principal) ProtoMessage() {}
 
 func (x *Principal) ProtoReflect() protoreflect.Message {
-	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[5]
+	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -674,7 +911,7 @@ func (x *Principal) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Principal.ProtoReflect.Descriptor instead.
 func (*Principal) Descriptor() ([]byte, []int) {
-	return file_stratt_plugin_v1_plugin_proto_rawDescGZIP(), []int{5}
+	return file_stratt_plugin_v1_plugin_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *Principal) GetId() string {
@@ -701,7 +938,7 @@ type CredentialRef struct {
 
 func (x *CredentialRef) Reset() {
 	*x = CredentialRef{}
-	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[6]
+	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -713,7 +950,7 @@ func (x *CredentialRef) String() string {
 func (*CredentialRef) ProtoMessage() {}
 
 func (x *CredentialRef) ProtoReflect() protoreflect.Message {
-	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[6]
+	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -726,7 +963,7 @@ func (x *CredentialRef) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CredentialRef.ProtoReflect.Descriptor instead.
 func (*CredentialRef) Descriptor() ([]byte, []int) {
-	return file_stratt_plugin_v1_plugin_proto_rawDescGZIP(), []int{6}
+	return file_stratt_plugin_v1_plugin_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *CredentialRef) GetName() string {
@@ -744,7 +981,7 @@ type GetManifestRequest struct {
 
 func (x *GetManifestRequest) Reset() {
 	*x = GetManifestRequest{}
-	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[7]
+	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -756,7 +993,7 @@ func (x *GetManifestRequest) String() string {
 func (*GetManifestRequest) ProtoMessage() {}
 
 func (x *GetManifestRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[7]
+	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -769,7 +1006,7 @@ func (x *GetManifestRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetManifestRequest.ProtoReflect.Descriptor instead.
 func (*GetManifestRequest) Descriptor() ([]byte, []int) {
-	return file_stratt_plugin_v1_plugin_proto_rawDescGZIP(), []int{7}
+	return file_stratt_plugin_v1_plugin_proto_rawDescGZIP(), []int{8}
 }
 
 // ContractDecl — a schema this plugin OWNS (single-writer per §2.1). The BAND
@@ -787,7 +1024,7 @@ type ContractDecl struct {
 
 func (x *ContractDecl) Reset() {
 	*x = ContractDecl{}
-	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[8]
+	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -799,7 +1036,7 @@ func (x *ContractDecl) String() string {
 func (*ContractDecl) ProtoMessage() {}
 
 func (x *ContractDecl) ProtoReflect() protoreflect.Message {
-	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[8]
+	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -812,7 +1049,7 @@ func (x *ContractDecl) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ContractDecl.ProtoReflect.Descriptor instead.
 func (*ContractDecl) Descriptor() ([]byte, []int) {
-	return file_stratt_plugin_v1_plugin_proto_rawDescGZIP(), []int{8}
+	return file_stratt_plugin_v1_plugin_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *ContractDecl) GetSchemaId() string {
@@ -836,6 +1073,85 @@ func (x *ContractDecl) GetBand() string {
 	return ""
 }
 
+// ActionDecl advertises one Action a plugin ships (a plugin may ship many —
+// certissuer = issue/renew/revoke). Content-blind discovery (invariant #2); the
+// InvokeRequest.action selector picks one. input/output are pinned Contract refs.
+type ActionDecl struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`     // the InvokeRequest.action selector, e.g. "awsec2/create-vm"
+	Input         *ContractRef           `protobuf:"bytes,2,opt,name=input,proto3" json:"input,omitempty"`   // pinned input schema (conformance-checked on args)
+	Output        *ContractRef           `protobuf:"bytes,3,opt,name=output,proto3" json:"output,omitempty"` // pinned output schema (empty if the Action returns no typed outputs)
+	Idempotent    bool                   `protobuf:"varint,4,opt,name=idempotent,proto3" json:"idempotent,omitempty"`
+	DryRunnable   bool                   `protobuf:"varint,5,opt,name=dry_runnable,json=dryRunnable,proto3" json:"dry_runnable,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ActionDecl) Reset() {
+	*x = ActionDecl{}
+	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[10]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ActionDecl) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ActionDecl) ProtoMessage() {}
+
+func (x *ActionDecl) ProtoReflect() protoreflect.Message {
+	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[10]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ActionDecl.ProtoReflect.Descriptor instead.
+func (*ActionDecl) Descriptor() ([]byte, []int) {
+	return file_stratt_plugin_v1_plugin_proto_rawDescGZIP(), []int{10}
+}
+
+func (x *ActionDecl) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *ActionDecl) GetInput() *ContractRef {
+	if x != nil {
+		return x.Input
+	}
+	return nil
+}
+
+func (x *ActionDecl) GetOutput() *ContractRef {
+	if x != nil {
+		return x.Output
+	}
+	return nil
+}
+
+func (x *ActionDecl) GetIdempotent() bool {
+	if x != nil {
+		return x.Idempotent
+	}
+	return false
+}
+
+func (x *ActionDecl) GetDryRunnable() bool {
+	if x != nil {
+		return x.DryRunnable
+	}
+	return false
+}
+
 type Manifest struct {
 	state           protoimpl.MessageState `protogen:"open.v1"`
 	PluginId        string                 `protobuf:"bytes,1,opt,name=plugin_id,json=pluginId,proto3" json:"plugin_id,omitempty"`                      // stable plugin identity (NOT "device_id")
@@ -846,14 +1162,26 @@ type Manifest struct {
 	// Identity schemes this Source tombstones by (the full-sync seen-set is
 	// accumulated per scheme; ADR-0042). REQUESTED — the core honors these only
 	// where the operator grant allows, and the tier/grant gate applies (finding #4).
-	TombstoneSchemes []string `protobuf:"bytes,6,rep,name=tombstone_schemes,json=tombstoneSchemes,proto3" json:"tombstone_schemes,omitempty"`
-	unknownFields    protoimpl.UnknownFields
-	sizeCache        protoimpl.SizeCache
+	TombstoneSchemes []string             `protobuf:"bytes,6,rep,name=tombstone_schemes,json=tombstoneSchemes,proto3" json:"tombstone_schemes,omitempty"`
+	Actions          []*ActionDecl        `protobuf:"bytes,7,rep,name=actions,proto3" json:"actions,omitempty"` // advertised Actions (content-blind discovery)
+	ObserveMode      Manifest_ObserveMode `protobuf:"varint,8,opt,name=observe_mode,json=observeMode,proto3,enum=stratt.plugin.v1.Manifest_ObserveMode" json:"observe_mode,omitempty"`
+	// Forward-compat capability flags (ADR-0047 §7): tokens like "apply.plan-artifact",
+	// "invoke.dry-run", "emit.match". The MEANING is a core-owned VERSIONED registry
+	// (a plugin never mints contract meaning, §1.5); unknown tokens are ignored
+	// (graceful degradation); a capability is NEVER precedence-bearing (§2.4).
+	Capabilities []string `protobuf:"bytes,9,rep,name=capabilities,proto3" json:"capabilities,omitempty"`
+	// Negotiated wire-version window; the core enforces a §1.7 N-1 floor and a
+	// genuinely incompatible change is a new negotiated major — bounded, never an
+	// unbounded 1..N fossil matrix.
+	MinProtocol   string `protobuf:"bytes,10,opt,name=min_protocol,json=minProtocol,proto3" json:"min_protocol,omitempty"`
+	MaxProtocol   string `protobuf:"bytes,11,opt,name=max_protocol,json=maxProtocol,proto3" json:"max_protocol,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *Manifest) Reset() {
 	*x = Manifest{}
-	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[9]
+	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -865,7 +1193,7 @@ func (x *Manifest) String() string {
 func (*Manifest) ProtoMessage() {}
 
 func (x *Manifest) ProtoReflect() protoreflect.Message {
-	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[9]
+	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -878,7 +1206,7 @@ func (x *Manifest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Manifest.ProtoReflect.Descriptor instead.
 func (*Manifest) Descriptor() ([]byte, []int) {
-	return file_stratt_plugin_v1_plugin_proto_rawDescGZIP(), []int{9}
+	return file_stratt_plugin_v1_plugin_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *Manifest) GetPluginId() string {
@@ -923,6 +1251,41 @@ func (x *Manifest) GetTombstoneSchemes() []string {
 	return nil
 }
 
+func (x *Manifest) GetActions() []*ActionDecl {
+	if x != nil {
+		return x.Actions
+	}
+	return nil
+}
+
+func (x *Manifest) GetObserveMode() Manifest_ObserveMode {
+	if x != nil {
+		return x.ObserveMode
+	}
+	return Manifest_OBSERVE_MODE_UNSPECIFIED
+}
+
+func (x *Manifest) GetCapabilities() []string {
+	if x != nil {
+		return x.Capabilities
+	}
+	return nil
+}
+
+func (x *Manifest) GetMinProtocol() string {
+	if x != nil {
+		return x.MinProtocol
+	}
+	return ""
+}
+
+func (x *Manifest) GetMaxProtocol() string {
+	if x != nil {
+		return x.MaxProtocol
+	}
+	return ""
+}
+
 // GetManifestResponse wraps the Manifest so the RPC has a dedicated,
 // independently-evolvable response type (buf STANDARD) while Manifest stays the
 // reusable domain value.
@@ -935,7 +1298,7 @@ type GetManifestResponse struct {
 
 func (x *GetManifestResponse) Reset() {
 	*x = GetManifestResponse{}
-	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[10]
+	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -947,7 +1310,7 @@ func (x *GetManifestResponse) String() string {
 func (*GetManifestResponse) ProtoMessage() {}
 
 func (x *GetManifestResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[10]
+	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -960,7 +1323,7 @@ func (x *GetManifestResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetManifestResponse.ProtoReflect.Descriptor instead.
 func (*GetManifestResponse) Descriptor() ([]byte, []int) {
-	return file_stratt_plugin_v1_plugin_proto_rawDescGZIP(), []int{10}
+	return file_stratt_plugin_v1_plugin_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *GetManifestResponse) GetManifest() *Manifest {
@@ -978,7 +1341,7 @@ type HealthRequest struct {
 
 func (x *HealthRequest) Reset() {
 	*x = HealthRequest{}
-	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[11]
+	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -990,7 +1353,7 @@ func (x *HealthRequest) String() string {
 func (*HealthRequest) ProtoMessage() {}
 
 func (x *HealthRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[11]
+	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1003,7 +1366,7 @@ func (x *HealthRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HealthRequest.ProtoReflect.Descriptor instead.
 func (*HealthRequest) Descriptor() ([]byte, []int) {
-	return file_stratt_plugin_v1_plugin_proto_rawDescGZIP(), []int{11}
+	return file_stratt_plugin_v1_plugin_proto_rawDescGZIP(), []int{13}
 }
 
 type HealthResponse struct {
@@ -1016,7 +1379,7 @@ type HealthResponse struct {
 
 func (x *HealthResponse) Reset() {
 	*x = HealthResponse{}
-	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[12]
+	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1028,7 +1391,7 @@ func (x *HealthResponse) String() string {
 func (*HealthResponse) ProtoMessage() {}
 
 func (x *HealthResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[12]
+	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1041,7 +1404,7 @@ func (x *HealthResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HealthResponse.ProtoReflect.Descriptor instead.
 func (*HealthResponse) Descriptor() ([]byte, []int) {
-	return file_stratt_plugin_v1_plugin_proto_rawDescGZIP(), []int{12}
+	return file_stratt_plugin_v1_plugin_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *HealthResponse) GetStatus() HealthResponse_Serving {
@@ -1070,7 +1433,7 @@ type ObserveRequest struct {
 
 func (x *ObserveRequest) Reset() {
 	*x = ObserveRequest{}
-	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[13]
+	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1082,7 +1445,7 @@ func (x *ObserveRequest) String() string {
 func (*ObserveRequest) ProtoMessage() {}
 
 func (x *ObserveRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[13]
+	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1095,7 +1458,7 @@ func (x *ObserveRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ObserveRequest.ProtoReflect.Descriptor instead.
 func (*ObserveRequest) Descriptor() ([]byte, []int) {
-	return file_stratt_plugin_v1_plugin_proto_rawDescGZIP(), []int{13}
+	return file_stratt_plugin_v1_plugin_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *ObserveRequest) GetCursor() string {
@@ -1119,16 +1482,21 @@ type ObservedEntity struct {
 	// identity scheme -> value. Each scheme is gated by tier + operator grant
 	// (finding #4): an ungranted scheme, or a shared cross-source scheme from a
 	// community-tier plugin, is rejected with a Finding, never written.
-	IdentityKeys  map[string]string `protobuf:"bytes,2,rep,name=identity_keys,json=identityKeys,proto3" json:"identity_keys,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
-	Labels        map[string]string `protobuf:"bytes,3,rep,name=labels,proto3" json:"labels,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"` // label key -> value; owned per-key (ADR-0041)
-	Facets        map[string][]byte `protobuf:"bytes,4,rep,name=facets,proto3" json:"facets,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"` // namespace -> value blob, schema-validated core-side
+	IdentityKeys map[string]string `protobuf:"bytes,2,rep,name=identity_keys,json=identityKeys,proto3" json:"identity_keys,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	Labels       map[string]string `protobuf:"bytes,3,rep,name=labels,proto3" json:"labels,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"` // label key -> value; owned per-key (ADR-0041)
+	Facets       map[string][]byte `protobuf:"bytes,4,rep,name=facets,proto3" json:"facets,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"` // namespace -> value blob, schema-validated core-side
+	// Directed edges FROM this entity, target named BY IDENTITY (never a graph id —
+	// the plugin never sees ids). The core resolves the target against an EXISTING
+	// identity only (NEVER auto-vivifies a stub, ADR-0047 §1) and stamps the edge;
+	// the target scheme is tier+grant gated exactly as emitted identity keys are.
+	Relations     []*ObservedRelation `protobuf:"bytes,5,rep,name=relations,proto3" json:"relations,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *ObservedEntity) Reset() {
 	*x = ObservedEntity{}
-	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[14]
+	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1140,7 +1508,7 @@ func (x *ObservedEntity) String() string {
 func (*ObservedEntity) ProtoMessage() {}
 
 func (x *ObservedEntity) ProtoReflect() protoreflect.Message {
-	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[14]
+	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1153,7 +1521,7 @@ func (x *ObservedEntity) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ObservedEntity.ProtoReflect.Descriptor instead.
 func (*ObservedEntity) Descriptor() ([]byte, []int) {
-	return file_stratt_plugin_v1_plugin_proto_rawDescGZIP(), []int{14}
+	return file_stratt_plugin_v1_plugin_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *ObservedEntity) GetKind() string {
@@ -1184,6 +1552,76 @@ func (x *ObservedEntity) GetFacets() map[string][]byte {
 	return nil
 }
 
+func (x *ObservedEntity) GetRelations() []*ObservedRelation {
+	if x != nil {
+		return x.Relations
+	}
+	return nil
+}
+
+// ObservedRelation is a typed directed edge to a target entity named by identity
+// scheme+value. Mirrors graph.Projector.UpsertRelation — core-resolved + stamped;
+// the plugin proposes, never writes (§1.2).
+type ObservedRelation struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Type          string                 `protobuf:"bytes,1,opt,name=type,proto3" json:"type,omitempty"`                         // e.g. "runs-on"
+	ToScheme      string                 `protobuf:"bytes,2,opt,name=to_scheme,json=toScheme,proto3" json:"to_scheme,omitempty"` // target identity scheme (tier+grant gated, ADR-0047 §1)
+	ToValue       string                 `protobuf:"bytes,3,opt,name=to_value,json=toValue,proto3" json:"to_value,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ObservedRelation) Reset() {
+	*x = ObservedRelation{}
+	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[17]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ObservedRelation) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ObservedRelation) ProtoMessage() {}
+
+func (x *ObservedRelation) ProtoReflect() protoreflect.Message {
+	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[17]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ObservedRelation.ProtoReflect.Descriptor instead.
+func (*ObservedRelation) Descriptor() ([]byte, []int) {
+	return file_stratt_plugin_v1_plugin_proto_rawDescGZIP(), []int{17}
+}
+
+func (x *ObservedRelation) GetType() string {
+	if x != nil {
+		return x.Type
+	}
+	return ""
+}
+
+func (x *ObservedRelation) GetToScheme() string {
+	if x != nil {
+		return x.ToScheme
+	}
+	return ""
+}
+
+func (x *ObservedRelation) GetToValue() string {
+	if x != nil {
+		return x.ToValue
+	}
+	return ""
+}
+
 // GoneEntity signals a delta 'leave': an Entity the Source no longer reports, by
 // the identity scheme+value it tombstones on (ADR-0042). Empty on a pure
 // full-sync window.
@@ -1197,7 +1635,7 @@ type GoneEntity struct {
 
 func (x *GoneEntity) Reset() {
 	*x = GoneEntity{}
-	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[15]
+	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[18]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1209,7 +1647,7 @@ func (x *GoneEntity) String() string {
 func (*GoneEntity) ProtoMessage() {}
 
 func (x *GoneEntity) ProtoReflect() protoreflect.Message {
-	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[15]
+	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[18]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1222,7 +1660,7 @@ func (x *GoneEntity) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GoneEntity.ProtoReflect.Descriptor instead.
 func (*GoneEntity) Descriptor() ([]byte, []int) {
-	return file_stratt_plugin_v1_plugin_proto_rawDescGZIP(), []int{15}
+	return file_stratt_plugin_v1_plugin_proto_rawDescGZIP(), []int{18}
 }
 
 func (x *GoneEntity) GetScheme() string {
@@ -1239,6 +1677,84 @@ func (x *GoneEntity) GetValue() string {
 	return ""
 }
 
+// GoneRelation retracts an edge on a delta window (e.g. a VM migrates hosts)
+// without a full re-enumeration. Empty on a full-sync window.
+type GoneRelation struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Type          string                 `protobuf:"bytes,1,opt,name=type,proto3" json:"type,omitempty"`
+	FromScheme    string                 `protobuf:"bytes,2,opt,name=from_scheme,json=fromScheme,proto3" json:"from_scheme,omitempty"`
+	FromValue     string                 `protobuf:"bytes,3,opt,name=from_value,json=fromValue,proto3" json:"from_value,omitempty"`
+	ToScheme      string                 `protobuf:"bytes,4,opt,name=to_scheme,json=toScheme,proto3" json:"to_scheme,omitempty"`
+	ToValue       string                 `protobuf:"bytes,5,opt,name=to_value,json=toValue,proto3" json:"to_value,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GoneRelation) Reset() {
+	*x = GoneRelation{}
+	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[19]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GoneRelation) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GoneRelation) ProtoMessage() {}
+
+func (x *GoneRelation) ProtoReflect() protoreflect.Message {
+	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[19]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GoneRelation.ProtoReflect.Descriptor instead.
+func (*GoneRelation) Descriptor() ([]byte, []int) {
+	return file_stratt_plugin_v1_plugin_proto_rawDescGZIP(), []int{19}
+}
+
+func (x *GoneRelation) GetType() string {
+	if x != nil {
+		return x.Type
+	}
+	return ""
+}
+
+func (x *GoneRelation) GetFromScheme() string {
+	if x != nil {
+		return x.FromScheme
+	}
+	return ""
+}
+
+func (x *GoneRelation) GetFromValue() string {
+	if x != nil {
+		return x.FromValue
+	}
+	return ""
+}
+
+func (x *GoneRelation) GetToScheme() string {
+	if x != nil {
+		return x.ToScheme
+	}
+	return ""
+}
+
+func (x *GoneRelation) GetToValue() string {
+	if x != nil {
+		return x.ToValue
+	}
+	return ""
+}
+
 // ObserveResponse is one window of the Syncer stream. The core accumulates a
 // per-scheme seen-set from `entities`; on full_sync_complete it tombstones
 // everything absent for each granted tombstone scheme (liveness crosses the
@@ -1250,13 +1766,15 @@ type ObserveResponse struct {
 	Gone             []*GoneEntity          `protobuf:"bytes,2,rep,name=gone,proto3" json:"gone,omitempty"`                                                    // delta leaves to tombstone; empty on full-sync
 	FullSyncComplete bool                   `protobuf:"varint,3,opt,name=full_sync_complete,json=fullSyncComplete,proto3" json:"full_sync_complete,omitempty"` // true on the window that ends a full sync
 	NextCursor       string                 `protobuf:"bytes,4,opt,name=next_cursor,json=nextCursor,proto3" json:"next_cursor,omitempty"`                      // opaque delta resume token; set on the last message of a window
+	GoneRelations    []*GoneRelation        `protobuf:"bytes,5,rep,name=gone_relations,json=goneRelations,proto3" json:"gone_relations,omitempty"`             // edge leaves to retract; empty on full-sync
+	FullSync         bool                   `protobuf:"varint,6,opt,name=full_sync,json=fullSync,proto3" json:"full_sync,omitempty"`                           // this window is part of a FULL enumeration (seen-set accrual);
 	unknownFields    protoimpl.UnknownFields
 	sizeCache        protoimpl.SizeCache
 }
 
 func (x *ObserveResponse) Reset() {
 	*x = ObserveResponse{}
-	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[16]
+	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[20]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1268,7 +1786,7 @@ func (x *ObserveResponse) String() string {
 func (*ObserveResponse) ProtoMessage() {}
 
 func (x *ObserveResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[16]
+	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[20]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1281,7 +1799,7 @@ func (x *ObserveResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ObserveResponse.ProtoReflect.Descriptor instead.
 func (*ObserveResponse) Descriptor() ([]byte, []int) {
-	return file_stratt_plugin_v1_plugin_proto_rawDescGZIP(), []int{16}
+	return file_stratt_plugin_v1_plugin_proto_rawDescGZIP(), []int{20}
 }
 
 func (x *ObserveResponse) GetEntities() []*ObservedEntity {
@@ -1312,6 +1830,20 @@ func (x *ObserveResponse) GetNextCursor() string {
 	return ""
 }
 
+func (x *ObserveResponse) GetGoneRelations() []*GoneRelation {
+	if x != nil {
+		return x.GoneRelations
+	}
+	return nil
+}
+
+func (x *ObserveResponse) GetFullSync() bool {
+	if x != nil {
+		return x.FullSync
+	}
+	return false
+}
+
 // PlanRequest asks the plugin for the DOMAIN diff (device-only knowledge). The
 // desired-state Payload is opaque to the core.
 type PlanRequest struct {
@@ -1324,7 +1856,7 @@ type PlanRequest struct {
 
 func (x *PlanRequest) Reset() {
 	*x = PlanRequest{}
-	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[17]
+	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[21]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1336,7 +1868,7 @@ func (x *PlanRequest) String() string {
 func (*PlanRequest) ProtoMessage() {}
 
 func (x *PlanRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[17]
+	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[21]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1349,7 +1881,7 @@ func (x *PlanRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PlanRequest.ProtoReflect.Descriptor instead.
 func (*PlanRequest) Descriptor() ([]byte, []int) {
-	return file_stratt_plugin_v1_plugin_proto_rawDescGZIP(), []int{17}
+	return file_stratt_plugin_v1_plugin_proto_rawDescGZIP(), []int{21}
 }
 
 func (x *PlanRequest) GetEnvelope() *Envelope {
@@ -1372,17 +1904,21 @@ func (x *PlanRequest) GetDesired() *Payload {
 // diagnosis-hiding — invariant #12 spirit). (Named PlanResponse, not Plan, so the
 // message never shadows the PluginService.Plan RPC in the service scope.)
 type PlanResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Diff          *Payload               `protobuf:"bytes,1,opt,name=diff,proto3" json:"diff,omitempty"`
-	Summary       string                 `protobuf:"bytes,2,opt,name=summary,proto3" json:"summary,omitempty"`
-	Empty         bool                   `protobuf:"varint,3,opt,name=empty,proto3" json:"empty,omitempty"` // true == no change (converged)
+	state   protoimpl.MessageState `protogen:"open.v1"`
+	Diff    *Payload               `protobuf:"bytes,1,opt,name=diff,proto3" json:"diff,omitempty"`
+	Summary string                 `protobuf:"bytes,2,opt,name=summary,proto3" json:"summary,omitempty"`
+	Empty   bool                   `protobuf:"varint,3,opt,name=empty,proto3" json:"empty,omitempty"` // true == no change (converged)
+	// The hash-pinned saved plan (ADR-0047 §7). `Plan` is the CANONICAL producer of
+	// the plan a Gate approves; ApplyRequest.plan_ref then applies EXACTLY it — the
+	// core binds this sha256 at Gate approval and re-verifies it at the Apply boundary.
+	Plan          *ArtifactRef `protobuf:"bytes,4,opt,name=plan,proto3" json:"plan,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *PlanResponse) Reset() {
 	*x = PlanResponse{}
-	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[18]
+	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[22]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1394,7 +1930,7 @@ func (x *PlanResponse) String() string {
 func (*PlanResponse) ProtoMessage() {}
 
 func (x *PlanResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[18]
+	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[22]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1407,7 +1943,7 @@ func (x *PlanResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PlanResponse.ProtoReflect.Descriptor instead.
 func (*PlanResponse) Descriptor() ([]byte, []int) {
-	return file_stratt_plugin_v1_plugin_proto_rawDescGZIP(), []int{18}
+	return file_stratt_plugin_v1_plugin_proto_rawDescGZIP(), []int{22}
 }
 
 func (x *PlanResponse) GetDiff() *Payload {
@@ -1431,18 +1967,29 @@ func (x *PlanResponse) GetEmpty() bool {
 	return false
 }
 
+func (x *PlanResponse) GetPlan() *ArtifactRef {
+	if x != nil {
+		return x.Plan
+	}
+	return nil
+}
+
 type ApplyRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Envelope      *Envelope              `protobuf:"bytes,1,opt,name=envelope,proto3" json:"envelope,omitempty"`
-	Desired       *Payload               `protobuf:"bytes,2,opt,name=desired,proto3" json:"desired,omitempty"`                            // opaque; applied atomically on the ROOT (invariant #9)
-	ResumeToken   string                 `protobuf:"bytes,3,opt,name=resume_token,json=resumeToken,proto3" json:"resume_token,omitempty"` // optional checkpoint/resume (invariant #7); "" == fresh
+	state       protoimpl.MessageState `protogen:"open.v1"`
+	Envelope    *Envelope              `protobuf:"bytes,1,opt,name=envelope,proto3" json:"envelope,omitempty"`
+	Desired     *Payload               `protobuf:"bytes,2,opt,name=desired,proto3" json:"desired,omitempty"`                            // opaque; applied atomically on the ROOT (invariant #9)
+	ResumeToken string                 `protobuf:"bytes,3,opt,name=resume_token,json=resumeToken,proto3" json:"resume_token,omitempty"` // optional checkpoint/resume (invariant #7); "" == fresh
+	DryRun      bool                   `protobuf:"varint,4,opt,name=dry_run,json=dryRun,proto3" json:"dry_run,omitempty"`               // plan/--check as a STREAMING dry-run (diagnostics/descent, not the pin path)
+	// Apply EXACTLY the plan a Gate approved (ADR-0047 §7): the core verifies this
+	// sha256 against the Gate-approved digest at THIS boundary. Empty == apply `desired`.
+	PlanRef       *ArtifactRef `protobuf:"bytes,5,opt,name=plan_ref,json=planRef,proto3" json:"plan_ref,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *ApplyRequest) Reset() {
 	*x = ApplyRequest{}
-	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[19]
+	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[23]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1454,7 +2001,7 @@ func (x *ApplyRequest) String() string {
 func (*ApplyRequest) ProtoMessage() {}
 
 func (x *ApplyRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[19]
+	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[23]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1467,7 +2014,7 @@ func (x *ApplyRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ApplyRequest.ProtoReflect.Descriptor instead.
 func (*ApplyRequest) Descriptor() ([]byte, []int) {
-	return file_stratt_plugin_v1_plugin_proto_rawDescGZIP(), []int{19}
+	return file_stratt_plugin_v1_plugin_proto_rawDescGZIP(), []int{23}
 }
 
 func (x *ApplyRequest) GetEnvelope() *Envelope {
@@ -1491,6 +2038,20 @@ func (x *ApplyRequest) GetResumeToken() string {
 	return ""
 }
 
+func (x *ApplyRequest) GetDryRun() bool {
+	if x != nil {
+		return x.DryRun
+	}
+	return false
+}
+
+func (x *ApplyRequest) GetPlanRef() *ArtifactRef {
+	if x != nil {
+		return x.PlanRef
+	}
+	return nil
+}
+
 type DestroyRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Envelope      *Envelope              `protobuf:"bytes,1,opt,name=envelope,proto3" json:"envelope,omitempty"`
@@ -1500,7 +2061,7 @@ type DestroyRequest struct {
 
 func (x *DestroyRequest) Reset() {
 	*x = DestroyRequest{}
-	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[20]
+	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[24]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1512,7 +2073,7 @@ func (x *DestroyRequest) String() string {
 func (*DestroyRequest) ProtoMessage() {}
 
 func (x *DestroyRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[20]
+	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[24]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1525,7 +2086,7 @@ func (x *DestroyRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DestroyRequest.ProtoReflect.Descriptor instead.
 func (*DestroyRequest) Descriptor() ([]byte, []int) {
-	return file_stratt_plugin_v1_plugin_proto_rawDescGZIP(), []int{20}
+	return file_stratt_plugin_v1_plugin_proto_rawDescGZIP(), []int{24}
 }
 
 func (x *DestroyRequest) GetEnvelope() *Envelope {
@@ -1537,16 +2098,19 @@ func (x *DestroyRequest) GetEnvelope() *Envelope {
 
 // InvokeRequest — a targetless Action (RunAction). Args are opaque.
 type InvokeRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Envelope      *Envelope              `protobuf:"bytes,1,opt,name=envelope,proto3" json:"envelope,omitempty"`
-	Args          *Payload               `protobuf:"bytes,2,opt,name=args,proto3" json:"args,omitempty"`
+	state    protoimpl.MessageState `protogen:"open.v1"`
+	Envelope *Envelope              `protobuf:"bytes,1,opt,name=envelope,proto3" json:"envelope,omitempty"`
+	Args     *Payload               `protobuf:"bytes,2,opt,name=args,proto3" json:"args,omitempty"`
+	Action   string                 `protobuf:"bytes,3,opt,name=action,proto3" json:"action,omitempty"` // which advertised Action (ActionDecl.name); "" == the sole Action.
+	// Keeps Envelope.contract purely conformance, never a routing key.
+	DryRun        bool `protobuf:"varint,4,opt,name=dry_run,json=dryRun,proto3" json:"dry_run,omitempty"` // side-effect-free plan, only where the ActionDecl is dry_runnable
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *InvokeRequest) Reset() {
 	*x = InvokeRequest{}
-	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[21]
+	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[25]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1558,7 +2122,7 @@ func (x *InvokeRequest) String() string {
 func (*InvokeRequest) ProtoMessage() {}
 
 func (x *InvokeRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[21]
+	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[25]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1571,7 +2135,7 @@ func (x *InvokeRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use InvokeRequest.ProtoReflect.Descriptor instead.
 func (*InvokeRequest) Descriptor() ([]byte, []int) {
-	return file_stratt_plugin_v1_plugin_proto_rawDescGZIP(), []int{21}
+	return file_stratt_plugin_v1_plugin_proto_rawDescGZIP(), []int{25}
 }
 
 func (x *InvokeRequest) GetEnvelope() *Envelope {
@@ -1588,6 +2152,20 @@ func (x *InvokeRequest) GetArgs() *Payload {
 	return nil
 }
 
+func (x *InvokeRequest) GetAction() string {
+	if x != nil {
+		return x.Action
+	}
+	return ""
+}
+
+func (x *InvokeRequest) GetDryRun() bool {
+	if x != nil {
+		return x.DryRun
+	}
+	return false
+}
+
 // SubscribeRequest — an Emitter opens a long-lived push stream (invariant #4).
 type SubscribeRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
@@ -1598,7 +2176,7 @@ type SubscribeRequest struct {
 
 func (x *SubscribeRequest) Reset() {
 	*x = SubscribeRequest{}
-	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[22]
+	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[26]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1610,7 +2188,7 @@ func (x *SubscribeRequest) String() string {
 func (*SubscribeRequest) ProtoMessage() {}
 
 func (x *SubscribeRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[22]
+	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[26]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1623,7 +2201,7 @@ func (x *SubscribeRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SubscribeRequest.ProtoReflect.Descriptor instead.
 func (*SubscribeRequest) Descriptor() ([]byte, []int) {
-	return file_stratt_plugin_v1_plugin_proto_rawDescGZIP(), []int{22}
+	return file_stratt_plugin_v1_plugin_proto_rawDescGZIP(), []int{26}
 }
 
 func (x *SubscribeRequest) GetCursor() string {
@@ -1646,13 +2224,14 @@ type TaskEvent struct {
 	Fields        map[string]string      `protobuf:"bytes,5,rep,name=fields,proto3" json:"fields,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"` // structured, legible fields — NOT an opaque blob
 	Terminal      bool                   `protobuf:"varint,6,opt,name=terminal,proto3" json:"terminal,omitempty"`                                                                      // true on the final event of the stream
 	Ok            bool                   `protobuf:"varint,7,opt,name=ok,proto3" json:"ok,omitempty"`                                                                                  // meaningful only when terminal == true
+	Checkpoint    string                 `protobuf:"bytes,8,opt,name=checkpoint,proto3" json:"checkpoint,omitempty"`                                                                   // a gracefully-aborting Apply emits where it stopped; the core
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *TaskEvent) Reset() {
 	*x = TaskEvent{}
-	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[23]
+	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[27]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1664,7 +2243,7 @@ func (x *TaskEvent) String() string {
 func (*TaskEvent) ProtoMessage() {}
 
 func (x *TaskEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[23]
+	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[27]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1677,7 +2256,7 @@ func (x *TaskEvent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TaskEvent.ProtoReflect.Descriptor instead.
 func (*TaskEvent) Descriptor() ([]byte, []int) {
-	return file_stratt_plugin_v1_plugin_proto_rawDescGZIP(), []int{23}
+	return file_stratt_plugin_v1_plugin_proto_rawDescGZIP(), []int{27}
 }
 
 func (x *TaskEvent) GetLevel() TaskEvent_Level {
@@ -1729,20 +2308,229 @@ func (x *TaskEvent) GetOk() bool {
 	return false
 }
 
-// Per-RPC response wrappers keep each streaming verb independently evolvable
-// (buf STANDARD RPC_REQUEST_RESPONSE_UNIQUE — aids invariant #5's additive-only
-// evolution) while TaskEvent stays the single shared, core-legible diagnostic
-// type each one carries.
-type ApplyResponse struct {
+func (x *TaskEvent) GetCheckpoint() string {
+	if x != nil {
+		return x.Checkpoint
+	}
+	return ""
+}
+
+// ItemResult is a per-target outcome (ansible/script fan out). It is an OUTCOME,
+// never a ranking/precedence (§2.4). The root Item's terminal `ok` MUST fold any
+// FAILED/UNREACHABLE child to non-OK — partial success is never a green Run (§1.8).
+// item_key references a child Item; "" == the root. Reports status WITHOUT
+// implying rollback (atomic on the root, inv #9, is the tofu class; fan-out is not).
+type ItemResult struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Event         *TaskEvent             `protobuf:"bytes,1,opt,name=event,proto3" json:"event,omitempty"`
+	ItemKey       string                 `protobuf:"bytes,1,opt,name=item_key,json=itemKey,proto3" json:"item_key,omitempty"`
+	Status        ItemResult_Status      `protobuf:"varint,2,opt,name=status,proto3,enum=stratt.plugin.v1.ItemResult_Status" json:"status,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
+func (x *ItemResult) Reset() {
+	*x = ItemResult{}
+	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[28]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ItemResult) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ItemResult) ProtoMessage() {}
+
+func (x *ItemResult) ProtoReflect() protoreflect.Message {
+	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[28]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ItemResult.ProtoReflect.Descriptor instead.
+func (*ItemResult) Descriptor() ([]byte, []int) {
+	return file_stratt_plugin_v1_plugin_proto_rawDescGZIP(), []int{28}
+}
+
+func (x *ItemResult) GetItemKey() string {
+	if x != nil {
+		return x.ItemKey
+	}
+	return ""
+}
+
+func (x *ItemResult) GetStatus() ItemResult_Status {
+	if x != nil {
+		return x.Status
+	}
+	return ItemResult_STATUS_UNSPECIFIED
+}
+
+// DiffFragment is an opaque, already-redacted observed-vs-expected fragment
+// (ADR-0019 baselines). The core accumulates/caps and descends (§1.8); it never
+// interprets — a Payload, not a map.
+type DiffFragment struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	ItemKey       string                 `protobuf:"bytes,1,opt,name=item_key,json=itemKey,proto3" json:"item_key,omitempty"`
+	Detail        *Payload               `protobuf:"bytes,2,opt,name=detail,proto3" json:"detail,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DiffFragment) Reset() {
+	*x = DiffFragment{}
+	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[29]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DiffFragment) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DiffFragment) ProtoMessage() {}
+
+func (x *DiffFragment) ProtoReflect() protoreflect.Message {
+	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[29]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DiffFragment.ProtoReflect.Descriptor instead.
+func (*DiffFragment) Descriptor() ([]byte, []int) {
+	return file_stratt_plugin_v1_plugin_proto_rawDescGZIP(), []int{29}
+}
+
+func (x *DiffFragment) GetItemKey() string {
+	if x != nil {
+		return x.ItemKey
+	}
+	return ""
+}
+
+func (x *DiffFragment) GetDetail() *Payload {
+	if x != nil {
+		return x.Detail
+	}
+	return nil
+}
+
+// DerivedContract is a TOOL-DERIVED (rung-2, tofu plan) or DECLARED (rung-3, mcp)
+// schema DOCUMENT describing the PLUGIN'S OWN outputs/tools — NEVER a rung-1 Facet
+// schema (finding #2 stands: rung-1 is sovereign, not assertable over the wire).
+// The core RECOMPUTES + pins the hash (no plugin-asserted sha256); a new `rev`
+// with different bytes is BLOCKING drift (§1.5). `schema_id` is namespace-confined
+// to the plugin's granted scope and never overwrites another owner (ADR-0047 §4).
+type DerivedContract struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Rung          DerivedContract_Rung   `protobuf:"varint,1,opt,name=rung,proto3,enum=stratt.plugin.v1.DerivedContract_Rung" json:"rung,omitempty"`
+	SchemaId      string                 `protobuf:"bytes,2,opt,name=schema_id,json=schemaId,proto3" json:"schema_id,omitempty"`
+	Rev           string                 `protobuf:"bytes,3,opt,name=rev,proto3" json:"rev,omitempty"`       // version; different bytes under the same (schema_id, rev) is blocking drift
+	Schema        []byte                 `protobuf:"bytes,4,opt,name=schema,proto3" json:"schema,omitempty"` // the JSON-Schema document; the core computes + pins its hash
+	Band          string                 `protobuf:"bytes,5,opt,name=band,proto3" json:"band,omitempty"`     // S1..S7 residency (advisory)
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DerivedContract) Reset() {
+	*x = DerivedContract{}
+	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[30]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DerivedContract) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DerivedContract) ProtoMessage() {}
+
+func (x *DerivedContract) ProtoReflect() protoreflect.Message {
+	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[30]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DerivedContract.ProtoReflect.Descriptor instead.
+func (*DerivedContract) Descriptor() ([]byte, []int) {
+	return file_stratt_plugin_v1_plugin_proto_rawDescGZIP(), []int{30}
+}
+
+func (x *DerivedContract) GetRung() DerivedContract_Rung {
+	if x != nil {
+		return x.Rung
+	}
+	return DerivedContract_RUNG_UNSPECIFIED
+}
+
+func (x *DerivedContract) GetSchemaId() string {
+	if x != nil {
+		return x.SchemaId
+	}
+	return ""
+}
+
+func (x *DerivedContract) GetRev() string {
+	if x != nil {
+		return x.Rev
+	}
+	return ""
+}
+
+func (x *DerivedContract) GetSchema() []byte {
+	if x != nil {
+		return x.Schema
+	}
+	return nil
+}
+
+func (x *DerivedContract) GetBand() string {
+	if x != nil {
+		return x.Band
+	}
+	return ""
+}
+
+// Per-RPC response wrappers keep each streaming verb independently evolvable
+// (buf STANDARD RPC_REQUEST_RESPONSE_UNIQUE). TaskEvent is the shared, core-legible
+// diagnostic type; the sibling fields carry the structured, governed return data.
+// Each message sets what it has; TaskEvent.terminal ends the stream.
+type ApplyResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	Event *TaskEvent             `protobuf:"bytes,1,opt,name=event,proto3" json:"event,omitempty"`
+	// Entities/facts observed DURING apply (tofu stratt_entities, ansible gathered
+	// facts) — reuses the Syncer write-back shape; the HOST stamps RUN provenance
+	// (WriterRun), never Syncer (per-verb projector selection is a t=0 invariant,
+	// ADR-0047 §2). Provenance-free by construction, so the plugin can't choose it.
+	WriteBack       []*ObservedEntity `protobuf:"bytes,2,rep,name=write_back,json=writeBack,proto3" json:"write_back,omitempty"`
+	Result          *ItemResult       `protobuf:"bytes,3,opt,name=result,proto3" json:"result,omitempty"`                                          // per-target status
+	Drift           *DiffFragment     `protobuf:"bytes,4,opt,name=drift,proto3" json:"drift,omitempty"`                                            // observed-vs-expected fragment (ADR-0019)
+	DerivedContract *DerivedContract  `protobuf:"bytes,5,opt,name=derived_contract,json=derivedContract,proto3" json:"derived_contract,omitempty"` // tofu rung-2 / mcp rung-3 schema doc
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
+}
+
 func (x *ApplyResponse) Reset() {
 	*x = ApplyResponse{}
-	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[24]
+	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[31]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1754,7 +2542,7 @@ func (x *ApplyResponse) String() string {
 func (*ApplyResponse) ProtoMessage() {}
 
 func (x *ApplyResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[24]
+	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[31]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1767,7 +2555,7 @@ func (x *ApplyResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ApplyResponse.ProtoReflect.Descriptor instead.
 func (*ApplyResponse) Descriptor() ([]byte, []int) {
-	return file_stratt_plugin_v1_plugin_proto_rawDescGZIP(), []int{24}
+	return file_stratt_plugin_v1_plugin_proto_rawDescGZIP(), []int{31}
 }
 
 func (x *ApplyResponse) GetEvent() *TaskEvent {
@@ -1777,16 +2565,46 @@ func (x *ApplyResponse) GetEvent() *TaskEvent {
 	return nil
 }
 
+func (x *ApplyResponse) GetWriteBack() []*ObservedEntity {
+	if x != nil {
+		return x.WriteBack
+	}
+	return nil
+}
+
+func (x *ApplyResponse) GetResult() *ItemResult {
+	if x != nil {
+		return x.Result
+	}
+	return nil
+}
+
+func (x *ApplyResponse) GetDrift() *DiffFragment {
+	if x != nil {
+		return x.Drift
+	}
+	return nil
+}
+
+func (x *ApplyResponse) GetDerivedContract() *DerivedContract {
+	if x != nil {
+		return x.DerivedContract
+	}
+	return nil
+}
+
 type DestroyResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Event         *TaskEvent             `protobuf:"bytes,1,opt,name=event,proto3" json:"event,omitempty"`
+	Result        *ItemResult            `protobuf:"bytes,2,opt,name=result,proto3" json:"result,omitempty"` // per-target teardown status
+	Gone          []*GoneEntity          `protobuf:"bytes,3,rep,name=gone,proto3" json:"gone,omitempty"`     // tombstone the Entities a prior Apply projected (symmetry)
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *DestroyResponse) Reset() {
 	*x = DestroyResponse{}
-	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[25]
+	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[32]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1798,7 +2616,7 @@ func (x *DestroyResponse) String() string {
 func (*DestroyResponse) ProtoMessage() {}
 
 func (x *DestroyResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[25]
+	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[32]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1811,7 +2629,7 @@ func (x *DestroyResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DestroyResponse.ProtoReflect.Descriptor instead.
 func (*DestroyResponse) Descriptor() ([]byte, []int) {
-	return file_stratt_plugin_v1_plugin_proto_rawDescGZIP(), []int{25}
+	return file_stratt_plugin_v1_plugin_proto_rawDescGZIP(), []int{32}
 }
 
 func (x *DestroyResponse) GetEvent() *TaskEvent {
@@ -1821,16 +2639,104 @@ func (x *DestroyResponse) GetEvent() *TaskEvent {
 	return nil
 }
 
+func (x *DestroyResponse) GetResult() *ItemResult {
+	if x != nil {
+		return x.Result
+	}
+	return nil
+}
+
+func (x *DestroyResponse) GetGone() []*GoneEntity {
+	if x != nil {
+		return x.Gone
+	}
+	return nil
+}
+
+// InvokeResult is set only on the TERMINAL message. `outputs` are validated against
+// a PINNED output_contract before capture and land as a Run output (cross-Step
+// binding, never directly as Entity/Facet state); `entities` go through the write
+// path (RUN provenance); `provisioned_creds` are CredentialRef NAMES only (§2.5),
+// namespace-confined to the channel scope and never overwriting (ADR-0047 §7).
+type InvokeResult struct {
+	state            protoimpl.MessageState `protogen:"open.v1"`
+	Outputs          *Payload               `protobuf:"bytes,1,opt,name=outputs,proto3" json:"outputs,omitempty"`
+	OutputContract   *ContractRef           `protobuf:"bytes,2,opt,name=output_contract,json=outputContract,proto3" json:"output_contract,omitempty"`
+	Entities         []*ObservedEntity      `protobuf:"bytes,3,rep,name=entities,proto3" json:"entities,omitempty"`
+	ProvisionedCreds []*CredentialRef       `protobuf:"bytes,4,rep,name=provisioned_creds,json=provisionedCreds,proto3" json:"provisioned_creds,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
+}
+
+func (x *InvokeResult) Reset() {
+	*x = InvokeResult{}
+	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[33]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *InvokeResult) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*InvokeResult) ProtoMessage() {}
+
+func (x *InvokeResult) ProtoReflect() protoreflect.Message {
+	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[33]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use InvokeResult.ProtoReflect.Descriptor instead.
+func (*InvokeResult) Descriptor() ([]byte, []int) {
+	return file_stratt_plugin_v1_plugin_proto_rawDescGZIP(), []int{33}
+}
+
+func (x *InvokeResult) GetOutputs() *Payload {
+	if x != nil {
+		return x.Outputs
+	}
+	return nil
+}
+
+func (x *InvokeResult) GetOutputContract() *ContractRef {
+	if x != nil {
+		return x.OutputContract
+	}
+	return nil
+}
+
+func (x *InvokeResult) GetEntities() []*ObservedEntity {
+	if x != nil {
+		return x.Entities
+	}
+	return nil
+}
+
+func (x *InvokeResult) GetProvisionedCreds() []*CredentialRef {
+	if x != nil {
+		return x.ProvisionedCreds
+	}
+	return nil
+}
+
 type InvokeResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Event         *TaskEvent             `protobuf:"bytes,1,opt,name=event,proto3" json:"event,omitempty"`
+	Result        *InvokeResult          `protobuf:"bytes,2,opt,name=result,proto3" json:"result,omitempty"` // set only on the terminal message (event.terminal)
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *InvokeResponse) Reset() {
 	*x = InvokeResponse{}
-	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[26]
+	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[34]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1842,7 +2748,7 @@ func (x *InvokeResponse) String() string {
 func (*InvokeResponse) ProtoMessage() {}
 
 func (x *InvokeResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[26]
+	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[34]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1855,7 +2761,7 @@ func (x *InvokeResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use InvokeResponse.ProtoReflect.Descriptor instead.
 func (*InvokeResponse) Descriptor() ([]byte, []int) {
-	return file_stratt_plugin_v1_plugin_proto_rawDescGZIP(), []int{26}
+	return file_stratt_plugin_v1_plugin_proto_rawDescGZIP(), []int{34}
 }
 
 func (x *InvokeResponse) GetEvent() *TaskEvent {
@@ -1865,21 +2771,34 @@ func (x *InvokeResponse) GetEvent() *TaskEvent {
 	return nil
 }
 
-// EmittedEvent — an Emitter's push: governance Envelope + opaque Payload,
-// exactly like an observed Item (the core routes on the envelope, never the
-// payload).
+func (x *InvokeResponse) GetResult() *InvokeResult {
+	if x != nil {
+		return x.Result
+	}
+	return nil
+}
+
+// EmittedEvent — an Emitter's push. The opaque `payload` is the faithful body
+// (content_hash covers dedup, EXCLUDING occurred_at, matching EventHash). `match`
+// is the core-LEGIBLE routing projection the trigger engine evaluates CEL against
+// (the Emitter analog of ObservedEntity / Envelope coordinates); it is NEVER
+// persisted as Entity/Facet state — routing only (ADR-0047 §3).
 type EmittedEvent struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Envelope      *Envelope              `protobuf:"bytes,1,opt,name=envelope,proto3" json:"envelope,omitempty"`
 	Payload       *Payload               `protobuf:"bytes,2,opt,name=payload,proto3" json:"payload,omitempty"`
-	Cursor        string                 `protobuf:"bytes,3,opt,name=cursor,proto3" json:"cursor,omitempty"` // resume token the core persists for at-least-once replay
+	Cursor        string                 `protobuf:"bytes,3,opt,name=cursor,proto3" json:"cursor,omitempty"`                           // resume token; at-least-once replay
+	Match         *structpb.Struct       `protobuf:"bytes,4,opt,name=match,proto3" json:"match,omitempty"`                             // legible CEL match fields (event.*); never persisted as state
+	Subject       string                 `protobuf:"bytes,5,opt,name=subject,proto3" json:"subject,omitempty"`                         // routing subject (source/emitter), typed out of the payload
+	Type          string                 `protobuf:"bytes,6,opt,name=type,proto3" json:"type,omitempty"`                               // event-type discriminator (salt tag / alertmanager alertname)
+	OccurredAt    *timestamppb.Timestamp `protobuf:"bytes,7,opt,name=occurred_at,json=occurredAt,proto3" json:"occurred_at,omitempty"` // occurrence time; EXCLUDED from content_hash
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *EmittedEvent) Reset() {
 	*x = EmittedEvent{}
-	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[27]
+	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[35]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1891,7 +2810,7 @@ func (x *EmittedEvent) String() string {
 func (*EmittedEvent) ProtoMessage() {}
 
 func (x *EmittedEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[27]
+	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[35]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1904,7 +2823,7 @@ func (x *EmittedEvent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EmittedEvent.ProtoReflect.Descriptor instead.
 func (*EmittedEvent) Descriptor() ([]byte, []int) {
-	return file_stratt_plugin_v1_plugin_proto_rawDescGZIP(), []int{27}
+	return file_stratt_plugin_v1_plugin_proto_rawDescGZIP(), []int{35}
 }
 
 func (x *EmittedEvent) GetEnvelope() *Envelope {
@@ -1928,6 +2847,34 @@ func (x *EmittedEvent) GetCursor() string {
 	return ""
 }
 
+func (x *EmittedEvent) GetMatch() *structpb.Struct {
+	if x != nil {
+		return x.Match
+	}
+	return nil
+}
+
+func (x *EmittedEvent) GetSubject() string {
+	if x != nil {
+		return x.Subject
+	}
+	return ""
+}
+
+func (x *EmittedEvent) GetType() string {
+	if x != nil {
+		return x.Type
+	}
+	return ""
+}
+
+func (x *EmittedEvent) GetOccurredAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.OccurredAt
+	}
+	return nil
+}
+
 type SubscribeResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Event         *EmittedEvent          `protobuf:"bytes,1,opt,name=event,proto3" json:"event,omitempty"`
@@ -1937,7 +2884,7 @@ type SubscribeResponse struct {
 
 func (x *SubscribeResponse) Reset() {
 	*x = SubscribeResponse{}
-	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[28]
+	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[36]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1949,7 +2896,7 @@ func (x *SubscribeResponse) String() string {
 func (*SubscribeResponse) ProtoMessage() {}
 
 func (x *SubscribeResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[28]
+	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[36]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1962,7 +2909,7 @@ func (x *SubscribeResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SubscribeResponse.ProtoReflect.Descriptor instead.
 func (*SubscribeResponse) Descriptor() ([]byte, []int) {
-	return file_stratt_plugin_v1_plugin_proto_rawDescGZIP(), []int{28}
+	return file_stratt_plugin_v1_plugin_proto_rawDescGZIP(), []int{36}
 }
 
 func (x *SubscribeResponse) GetEvent() *EmittedEvent {
@@ -1976,7 +2923,7 @@ var File_stratt_plugin_v1_plugin_proto protoreflect.FileDescriptor
 
 const file_stratt_plugin_v1_plugin_proto_rawDesc = "" +
 	"\n" +
-	"\x1dstratt/plugin/v1/plugin.proto\x12\x10stratt.plugin.v1\x1a\x1fgoogle/protobuf/timestamp.proto\"\xeb\x02\n" +
+	"\x1dstratt/plugin/v1/plugin.proto\x12\x10stratt.plugin.v1\x1a\x1cgoogle/protobuf/struct.proto\x1a\x1fgoogle/protobuf/timestamp.proto\"\xa6\x03\n" +
 	"\bEnvelope\x12?\n" +
 	"\vcoordinates\x18\x01 \x01(\v2\x1d.stratt.plugin.v1.CoordinatesR\vcoordinates\x129\n" +
 	"\bcontract\x18\x02 \x01(\v2\x1d.stratt.plugin.v1.ContractRefR\bcontract\x129\n" +
@@ -1984,9 +2931,15 @@ const file_stratt_plugin_v1_plugin_proto_rawDesc = "" +
 	"\x05creds\x18\x04 \x03(\v2\x1f.stratt.plugin.v1.CredentialRefR\x05creds\x12'\n" +
 	"\x0fidempotency_key\x18\x05 \x01(\tR\x0eidempotencyKey\x12%\n" +
 	"\x0ecorrelation_id\x18\x06 \x01(\tR\rcorrelationId\x12!\n" +
-	"\fcontent_hash\x18\a \x01(\tR\vcontentHash\"\x1f\n" +
+	"\fcontent_hash\x18\a \x01(\tR\vcontentHash\x129\n" +
+	"\bartifact\x18\b \x01(\v2\x1d.stratt.plugin.v1.ArtifactRefR\bartifact\"\x1f\n" +
 	"\aPayload\x12\x14\n" +
-	"\x05bytes\x18\x01 \x01(\fR\x05bytes\"\xa7\x01\n" +
+	"\x05bytes\x18\x01 \x01(\fR\x05bytes\"V\n" +
+	"\vArtifactRef\x12\x10\n" +
+	"\x03uri\x18\x01 \x01(\tR\x03uri\x12\x16\n" +
+	"\x06sha256\x18\x02 \x01(\tR\x06sha256\x12\x1d\n" +
+	"\n" +
+	"media_type\x18\x03 \x01(\tR\tmediaType\"\xa7\x01\n" +
 	"\x04Item\x126\n" +
 	"\benvelope\x18\x01 \x01(\v2\x1a.stratt.plugin.v1.EnvelopeR\benvelope\x123\n" +
 	"\apayload\x18\x02 \x01(\v2\x19.stratt.plugin.v1.PayloadR\apayload\x122\n" +
@@ -2008,14 +2961,33 @@ const file_stratt_plugin_v1_plugin_proto_rawDesc = "" +
 	"\fContractDecl\x12\x1b\n" +
 	"\tschema_id\x18\x01 \x01(\tR\bschemaId\x12\x16\n" +
 	"\x06sha256\x18\x02 \x01(\tR\x06sha256\x12\x12\n" +
-	"\x04band\x18\x03 \x01(\tR\x04band\"\xa0\x02\n" +
+	"\x04band\x18\x03 \x01(\tR\x04band\"\xcf\x01\n" +
+	"\n" +
+	"ActionDecl\x12\x12\n" +
+	"\x04name\x18\x01 \x01(\tR\x04name\x123\n" +
+	"\x05input\x18\x02 \x01(\v2\x1d.stratt.plugin.v1.ContractRefR\x05input\x125\n" +
+	"\x06output\x18\x03 \x01(\v2\x1d.stratt.plugin.v1.ContractRefR\x06output\x12\x1e\n" +
+	"\n" +
+	"idempotent\x18\x04 \x01(\bR\n" +
+	"idempotent\x12!\n" +
+	"\fdry_runnable\x18\x05 \x01(\bR\vdryRunnable\"\xea\x04\n" +
 	"\bManifest\x12\x1b\n" +
 	"\tplugin_id\x18\x01 \x01(\tR\bpluginId\x12)\n" +
 	"\x10protocol_version\x18\x02 \x01(\tR\x0fprotocolVersion\x123\n" +
 	"\x05class\x18\x03 \x01(\x0e2\x1d.stratt.plugin.v1.PluginClassR\x05class\x12,\n" +
 	"\x05verbs\x18\x04 \x03(\x0e2\x16.stratt.plugin.v1.VerbR\x05verbs\x12<\n" +
 	"\tcontracts\x18\x05 \x03(\v2\x1e.stratt.plugin.v1.ContractDeclR\tcontracts\x12+\n" +
-	"\x11tombstone_schemes\x18\x06 \x03(\tR\x10tombstoneSchemes\"M\n" +
+	"\x11tombstone_schemes\x18\x06 \x03(\tR\x10tombstoneSchemes\x126\n" +
+	"\aactions\x18\a \x03(\v2\x1c.stratt.plugin.v1.ActionDeclR\aactions\x12I\n" +
+	"\fobserve_mode\x18\b \x01(\x0e2&.stratt.plugin.v1.Manifest.ObserveModeR\vobserveMode\x12\"\n" +
+	"\fcapabilities\x18\t \x03(\tR\fcapabilities\x12!\n" +
+	"\fmin_protocol\x18\n" +
+	" \x01(\tR\vminProtocol\x12!\n" +
+	"\fmax_protocol\x18\v \x01(\tR\vmaxProtocol\"[\n" +
+	"\vObserveMode\x12\x1c\n" +
+	"\x18OBSERVE_MODE_UNSPECIFIED\x10\x00\x12\x15\n" +
+	"\x11OBSERVE_MODE_POLL\x10\x01\x12\x17\n" +
+	"\x13OBSERVE_MODE_STREAM\x10\x02\"M\n" +
 	"\x13GetManifestResponse\x126\n" +
 	"\bmanifest\x18\x01 \x01(\v2\x1a.stratt.plugin.v1.ManifestR\bmanifest\"\x0f\n" +
 	"\rHealthRequest\"\xc3\x01\n" +
@@ -2028,12 +3000,13 @@ const file_stratt_plugin_v1_plugin_proto_rawDesc = "" +
 	"SERVING_UP\x10\x01\x12\x10\n" +
 	"\fSERVING_DOWN\x10\x02\"(\n" +
 	"\x0eObserveRequest\x12\x16\n" +
-	"\x06cursor\x18\x01 \x01(\tR\x06cursor\"\xc0\x03\n" +
+	"\x06cursor\x18\x01 \x01(\tR\x06cursor\"\x82\x04\n" +
 	"\x0eObservedEntity\x12\x12\n" +
 	"\x04kind\x18\x01 \x01(\tR\x04kind\x12W\n" +
 	"\ridentity_keys\x18\x02 \x03(\v22.stratt.plugin.v1.ObservedEntity.IdentityKeysEntryR\fidentityKeys\x12D\n" +
 	"\x06labels\x18\x03 \x03(\v2,.stratt.plugin.v1.ObservedEntity.LabelsEntryR\x06labels\x12D\n" +
-	"\x06facets\x18\x04 \x03(\v2,.stratt.plugin.v1.ObservedEntity.FacetsEntryR\x06facets\x1a?\n" +
+	"\x06facets\x18\x04 \x03(\v2,.stratt.plugin.v1.ObservedEntity.FacetsEntryR\x06facets\x12@\n" +
+	"\trelations\x18\x05 \x03(\v2\".stratt.plugin.v1.ObservedRelationR\trelations\x1a?\n" +
 	"\x11IdentityKeysEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\x1a9\n" +
@@ -2042,35 +3015,54 @@ const file_stratt_plugin_v1_plugin_proto_rawDesc = "" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\x1a9\n" +
 	"\vFacetsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\fR\x05value:\x028\x01\":\n" +
+	"\x05value\x18\x02 \x01(\fR\x05value:\x028\x01\"^\n" +
+	"\x10ObservedRelation\x12\x12\n" +
+	"\x04type\x18\x01 \x01(\tR\x04type\x12\x1b\n" +
+	"\tto_scheme\x18\x02 \x01(\tR\btoScheme\x12\x19\n" +
+	"\bto_value\x18\x03 \x01(\tR\atoValue\":\n" +
 	"\n" +
 	"GoneEntity\x12\x16\n" +
 	"\x06scheme\x18\x01 \x01(\tR\x06scheme\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value\"\xd0\x01\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value\"\x9a\x01\n" +
+	"\fGoneRelation\x12\x12\n" +
+	"\x04type\x18\x01 \x01(\tR\x04type\x12\x1f\n" +
+	"\vfrom_scheme\x18\x02 \x01(\tR\n" +
+	"fromScheme\x12\x1d\n" +
+	"\n" +
+	"from_value\x18\x03 \x01(\tR\tfromValue\x12\x1b\n" +
+	"\tto_scheme\x18\x04 \x01(\tR\btoScheme\x12\x19\n" +
+	"\bto_value\x18\x05 \x01(\tR\atoValue\"\xb4\x02\n" +
 	"\x0fObserveResponse\x12<\n" +
 	"\bentities\x18\x01 \x03(\v2 .stratt.plugin.v1.ObservedEntityR\bentities\x120\n" +
 	"\x04gone\x18\x02 \x03(\v2\x1c.stratt.plugin.v1.GoneEntityR\x04gone\x12,\n" +
 	"\x12full_sync_complete\x18\x03 \x01(\bR\x10fullSyncComplete\x12\x1f\n" +
 	"\vnext_cursor\x18\x04 \x01(\tR\n" +
-	"nextCursor\"z\n" +
+	"nextCursor\x12E\n" +
+	"\x0egone_relations\x18\x05 \x03(\v2\x1e.stratt.plugin.v1.GoneRelationR\rgoneRelations\x12\x1b\n" +
+	"\tfull_sync\x18\x06 \x01(\bR\bfullSync\"z\n" +
 	"\vPlanRequest\x126\n" +
 	"\benvelope\x18\x01 \x01(\v2\x1a.stratt.plugin.v1.EnvelopeR\benvelope\x123\n" +
-	"\adesired\x18\x02 \x01(\v2\x19.stratt.plugin.v1.PayloadR\adesired\"m\n" +
+	"\adesired\x18\x02 \x01(\v2\x19.stratt.plugin.v1.PayloadR\adesired\"\xa0\x01\n" +
 	"\fPlanResponse\x12-\n" +
 	"\x04diff\x18\x01 \x01(\v2\x19.stratt.plugin.v1.PayloadR\x04diff\x12\x18\n" +
 	"\asummary\x18\x02 \x01(\tR\asummary\x12\x14\n" +
-	"\x05empty\x18\x03 \x01(\bR\x05empty\"\x9e\x01\n" +
+	"\x05empty\x18\x03 \x01(\bR\x05empty\x121\n" +
+	"\x04plan\x18\x04 \x01(\v2\x1d.stratt.plugin.v1.ArtifactRefR\x04plan\"\xf1\x01\n" +
 	"\fApplyRequest\x126\n" +
 	"\benvelope\x18\x01 \x01(\v2\x1a.stratt.plugin.v1.EnvelopeR\benvelope\x123\n" +
 	"\adesired\x18\x02 \x01(\v2\x19.stratt.plugin.v1.PayloadR\adesired\x12!\n" +
-	"\fresume_token\x18\x03 \x01(\tR\vresumeToken\"H\n" +
+	"\fresume_token\x18\x03 \x01(\tR\vresumeToken\x12\x17\n" +
+	"\adry_run\x18\x04 \x01(\bR\x06dryRun\x128\n" +
+	"\bplan_ref\x18\x05 \x01(\v2\x1d.stratt.plugin.v1.ArtifactRefR\aplanRef\"H\n" +
 	"\x0eDestroyRequest\x126\n" +
-	"\benvelope\x18\x01 \x01(\v2\x1a.stratt.plugin.v1.EnvelopeR\benvelope\"v\n" +
+	"\benvelope\x18\x01 \x01(\v2\x1a.stratt.plugin.v1.EnvelopeR\benvelope\"\xa7\x01\n" +
 	"\rInvokeRequest\x126\n" +
 	"\benvelope\x18\x01 \x01(\v2\x1a.stratt.plugin.v1.EnvelopeR\benvelope\x12-\n" +
-	"\x04args\x18\x02 \x01(\v2\x19.stratt.plugin.v1.PayloadR\x04args\"*\n" +
+	"\x04args\x18\x02 \x01(\v2\x19.stratt.plugin.v1.PayloadR\x04args\x12\x16\n" +
+	"\x06action\x18\x03 \x01(\tR\x06action\x12\x17\n" +
+	"\adry_run\x18\x04 \x01(\bR\x06dryRun\"*\n" +
 	"\x10SubscribeRequest\x12\x16\n" +
-	"\x06cursor\x18\x01 \x01(\tR\x06cursor\"\xbb\x03\n" +
+	"\x06cursor\x18\x01 \x01(\tR\x06cursor\"\xdb\x03\n" +
 	"\tTaskEvent\x127\n" +
 	"\x05level\x18\x01 \x01(\x0e2!.stratt.plugin.v1.TaskEvent.LevelR\x05level\x12\x18\n" +
 	"\amessage\x18\x02 \x01(\tR\amessage\x12*\n" +
@@ -2078,7 +3070,10 @@ const file_stratt_plugin_v1_plugin_proto_rawDesc = "" +
 	"\x0ecorrelation_id\x18\x04 \x01(\tR\rcorrelationId\x12?\n" +
 	"\x06fields\x18\x05 \x03(\v2'.stratt.plugin.v1.TaskEvent.FieldsEntryR\x06fields\x12\x1a\n" +
 	"\bterminal\x18\x06 \x01(\bR\bterminal\x12\x0e\n" +
-	"\x02ok\x18\a \x01(\bR\x02ok\x1a9\n" +
+	"\x02ok\x18\a \x01(\bR\x02ok\x12\x1e\n" +
+	"\n" +
+	"checkpoint\x18\b \x01(\tR\n" +
+	"checkpoint\x1a9\n" +
 	"\vFieldsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"`\n" +
@@ -2089,17 +3084,58 @@ const file_stratt_plugin_v1_plugin_proto_rawDesc = "" +
 	"LEVEL_INFO\x10\x02\x12\x0e\n" +
 	"\n" +
 	"LEVEL_WARN\x10\x03\x12\x0f\n" +
-	"\vLEVEL_ERROR\x10\x04\"B\n" +
+	"\vLEVEL_ERROR\x10\x04\"\xd4\x01\n" +
+	"\n" +
+	"ItemResult\x12\x19\n" +
+	"\bitem_key\x18\x01 \x01(\tR\aitemKey\x12;\n" +
+	"\x06status\x18\x02 \x01(\x0e2#.stratt.plugin.v1.ItemResult.StatusR\x06status\"n\n" +
+	"\x06Status\x12\x16\n" +
+	"\x12STATUS_UNSPECIFIED\x10\x00\x12\r\n" +
+	"\tSTATUS_OK\x10\x01\x12\x12\n" +
+	"\x0eSTATUS_CHANGED\x10\x02\x12\x11\n" +
+	"\rSTATUS_FAILED\x10\x03\x12\x16\n" +
+	"\x12STATUS_UNREACHABLE\x10\x04\"\\\n" +
+	"\fDiffFragment\x12\x19\n" +
+	"\bitem_key\x18\x01 \x01(\tR\aitemKey\x121\n" +
+	"\x06detail\x18\x02 \x01(\v2\x19.stratt.plugin.v1.PayloadR\x06detail\"\xf0\x01\n" +
+	"\x0fDerivedContract\x12:\n" +
+	"\x04rung\x18\x01 \x01(\x0e2&.stratt.plugin.v1.DerivedContract.RungR\x04rung\x12\x1b\n" +
+	"\tschema_id\x18\x02 \x01(\tR\bschemaId\x12\x10\n" +
+	"\x03rev\x18\x03 \x01(\tR\x03rev\x12\x16\n" +
+	"\x06schema\x18\x04 \x01(\fR\x06schema\x12\x12\n" +
+	"\x04band\x18\x05 \x01(\tR\x04band\"F\n" +
+	"\x04Rung\x12\x14\n" +
+	"\x10RUNG_UNSPECIFIED\x10\x00\x12\x15\n" +
+	"\x11RUNG_TOOL_DERIVED\x10\x02\x12\x11\n" +
+	"\rRUNG_DECLARED\x10\x03\"\xbd\x02\n" +
 	"\rApplyResponse\x121\n" +
-	"\x05event\x18\x01 \x01(\v2\x1b.stratt.plugin.v1.TaskEventR\x05event\"D\n" +
+	"\x05event\x18\x01 \x01(\v2\x1b.stratt.plugin.v1.TaskEventR\x05event\x12?\n" +
+	"\n" +
+	"write_back\x18\x02 \x03(\v2 .stratt.plugin.v1.ObservedEntityR\twriteBack\x124\n" +
+	"\x06result\x18\x03 \x01(\v2\x1c.stratt.plugin.v1.ItemResultR\x06result\x124\n" +
+	"\x05drift\x18\x04 \x01(\v2\x1e.stratt.plugin.v1.DiffFragmentR\x05drift\x12L\n" +
+	"\x10derived_contract\x18\x05 \x01(\v2!.stratt.plugin.v1.DerivedContractR\x0fderivedContract\"\xac\x01\n" +
 	"\x0fDestroyResponse\x121\n" +
-	"\x05event\x18\x01 \x01(\v2\x1b.stratt.plugin.v1.TaskEventR\x05event\"C\n" +
+	"\x05event\x18\x01 \x01(\v2\x1b.stratt.plugin.v1.TaskEventR\x05event\x124\n" +
+	"\x06result\x18\x02 \x01(\v2\x1c.stratt.plugin.v1.ItemResultR\x06result\x120\n" +
+	"\x04gone\x18\x03 \x03(\v2\x1c.stratt.plugin.v1.GoneEntityR\x04gone\"\x97\x02\n" +
+	"\fInvokeResult\x123\n" +
+	"\aoutputs\x18\x01 \x01(\v2\x19.stratt.plugin.v1.PayloadR\aoutputs\x12F\n" +
+	"\x0foutput_contract\x18\x02 \x01(\v2\x1d.stratt.plugin.v1.ContractRefR\x0eoutputContract\x12<\n" +
+	"\bentities\x18\x03 \x03(\v2 .stratt.plugin.v1.ObservedEntityR\bentities\x12L\n" +
+	"\x11provisioned_creds\x18\x04 \x03(\v2\x1f.stratt.plugin.v1.CredentialRefR\x10provisionedCreds\"{\n" +
 	"\x0eInvokeResponse\x121\n" +
-	"\x05event\x18\x01 \x01(\v2\x1b.stratt.plugin.v1.TaskEventR\x05event\"\x93\x01\n" +
+	"\x05event\x18\x01 \x01(\v2\x1b.stratt.plugin.v1.TaskEventR\x05event\x126\n" +
+	"\x06result\x18\x02 \x01(\v2\x1e.stratt.plugin.v1.InvokeResultR\x06result\"\xad\x02\n" +
 	"\fEmittedEvent\x126\n" +
 	"\benvelope\x18\x01 \x01(\v2\x1a.stratt.plugin.v1.EnvelopeR\benvelope\x123\n" +
 	"\apayload\x18\x02 \x01(\v2\x19.stratt.plugin.v1.PayloadR\apayload\x12\x16\n" +
-	"\x06cursor\x18\x03 \x01(\tR\x06cursor\"I\n" +
+	"\x06cursor\x18\x03 \x01(\tR\x06cursor\x12-\n" +
+	"\x05match\x18\x04 \x01(\v2\x17.google.protobuf.StructR\x05match\x12\x18\n" +
+	"\asubject\x18\x05 \x01(\tR\asubject\x12\x12\n" +
+	"\x04type\x18\x06 \x01(\tR\x04type\x12;\n" +
+	"\voccurred_at\x18\a \x01(\v2\x1a.google.protobuf.TimestampR\n" +
+	"occurredAt\"I\n" +
 	"\x11SubscribeResponse\x124\n" +
 	"\x05event\x18\x01 \x01(\v2\x1e.stratt.plugin.v1.EmittedEventR\x05event*\x92\x01\n" +
 	"\vPluginClass\x12\x1c\n" +
@@ -2139,104 +3175,141 @@ func file_stratt_plugin_v1_plugin_proto_rawDescGZIP() []byte {
 	return file_stratt_plugin_v1_plugin_proto_rawDescData
 }
 
-var file_stratt_plugin_v1_plugin_proto_enumTypes = make([]protoimpl.EnumInfo, 4)
-var file_stratt_plugin_v1_plugin_proto_msgTypes = make([]protoimpl.MessageInfo, 33)
+var file_stratt_plugin_v1_plugin_proto_enumTypes = make([]protoimpl.EnumInfo, 7)
+var file_stratt_plugin_v1_plugin_proto_msgTypes = make([]protoimpl.MessageInfo, 41)
 var file_stratt_plugin_v1_plugin_proto_goTypes = []any{
 	(PluginClass)(0),              // 0: stratt.plugin.v1.PluginClass
 	(Verb)(0),                     // 1: stratt.plugin.v1.Verb
-	(HealthResponse_Serving)(0),   // 2: stratt.plugin.v1.HealthResponse.Serving
-	(TaskEvent_Level)(0),          // 3: stratt.plugin.v1.TaskEvent.Level
-	(*Envelope)(nil),              // 4: stratt.plugin.v1.Envelope
-	(*Payload)(nil),               // 5: stratt.plugin.v1.Payload
-	(*Item)(nil),                  // 6: stratt.plugin.v1.Item
-	(*Coordinates)(nil),           // 7: stratt.plugin.v1.Coordinates
-	(*ContractRef)(nil),           // 8: stratt.plugin.v1.ContractRef
-	(*Principal)(nil),             // 9: stratt.plugin.v1.Principal
-	(*CredentialRef)(nil),         // 10: stratt.plugin.v1.CredentialRef
-	(*GetManifestRequest)(nil),    // 11: stratt.plugin.v1.GetManifestRequest
-	(*ContractDecl)(nil),          // 12: stratt.plugin.v1.ContractDecl
-	(*Manifest)(nil),              // 13: stratt.plugin.v1.Manifest
-	(*GetManifestResponse)(nil),   // 14: stratt.plugin.v1.GetManifestResponse
-	(*HealthRequest)(nil),         // 15: stratt.plugin.v1.HealthRequest
-	(*HealthResponse)(nil),        // 16: stratt.plugin.v1.HealthResponse
-	(*ObserveRequest)(nil),        // 17: stratt.plugin.v1.ObserveRequest
-	(*ObservedEntity)(nil),        // 18: stratt.plugin.v1.ObservedEntity
-	(*GoneEntity)(nil),            // 19: stratt.plugin.v1.GoneEntity
-	(*ObserveResponse)(nil),       // 20: stratt.plugin.v1.ObserveResponse
-	(*PlanRequest)(nil),           // 21: stratt.plugin.v1.PlanRequest
-	(*PlanResponse)(nil),          // 22: stratt.plugin.v1.PlanResponse
-	(*ApplyRequest)(nil),          // 23: stratt.plugin.v1.ApplyRequest
-	(*DestroyRequest)(nil),        // 24: stratt.plugin.v1.DestroyRequest
-	(*InvokeRequest)(nil),         // 25: stratt.plugin.v1.InvokeRequest
-	(*SubscribeRequest)(nil),      // 26: stratt.plugin.v1.SubscribeRequest
-	(*TaskEvent)(nil),             // 27: stratt.plugin.v1.TaskEvent
-	(*ApplyResponse)(nil),         // 28: stratt.plugin.v1.ApplyResponse
-	(*DestroyResponse)(nil),       // 29: stratt.plugin.v1.DestroyResponse
-	(*InvokeResponse)(nil),        // 30: stratt.plugin.v1.InvokeResponse
-	(*EmittedEvent)(nil),          // 31: stratt.plugin.v1.EmittedEvent
-	(*SubscribeResponse)(nil),     // 32: stratt.plugin.v1.SubscribeResponse
-	nil,                           // 33: stratt.plugin.v1.ObservedEntity.IdentityKeysEntry
-	nil,                           // 34: stratt.plugin.v1.ObservedEntity.LabelsEntry
-	nil,                           // 35: stratt.plugin.v1.ObservedEntity.FacetsEntry
-	nil,                           // 36: stratt.plugin.v1.TaskEvent.FieldsEntry
-	(*timestamppb.Timestamp)(nil), // 37: google.protobuf.Timestamp
+	(Manifest_ObserveMode)(0),     // 2: stratt.plugin.v1.Manifest.ObserveMode
+	(HealthResponse_Serving)(0),   // 3: stratt.plugin.v1.HealthResponse.Serving
+	(TaskEvent_Level)(0),          // 4: stratt.plugin.v1.TaskEvent.Level
+	(ItemResult_Status)(0),        // 5: stratt.plugin.v1.ItemResult.Status
+	(DerivedContract_Rung)(0),     // 6: stratt.plugin.v1.DerivedContract.Rung
+	(*Envelope)(nil),              // 7: stratt.plugin.v1.Envelope
+	(*Payload)(nil),               // 8: stratt.plugin.v1.Payload
+	(*ArtifactRef)(nil),           // 9: stratt.plugin.v1.ArtifactRef
+	(*Item)(nil),                  // 10: stratt.plugin.v1.Item
+	(*Coordinates)(nil),           // 11: stratt.plugin.v1.Coordinates
+	(*ContractRef)(nil),           // 12: stratt.plugin.v1.ContractRef
+	(*Principal)(nil),             // 13: stratt.plugin.v1.Principal
+	(*CredentialRef)(nil),         // 14: stratt.plugin.v1.CredentialRef
+	(*GetManifestRequest)(nil),    // 15: stratt.plugin.v1.GetManifestRequest
+	(*ContractDecl)(nil),          // 16: stratt.plugin.v1.ContractDecl
+	(*ActionDecl)(nil),            // 17: stratt.plugin.v1.ActionDecl
+	(*Manifest)(nil),              // 18: stratt.plugin.v1.Manifest
+	(*GetManifestResponse)(nil),   // 19: stratt.plugin.v1.GetManifestResponse
+	(*HealthRequest)(nil),         // 20: stratt.plugin.v1.HealthRequest
+	(*HealthResponse)(nil),        // 21: stratt.plugin.v1.HealthResponse
+	(*ObserveRequest)(nil),        // 22: stratt.plugin.v1.ObserveRequest
+	(*ObservedEntity)(nil),        // 23: stratt.plugin.v1.ObservedEntity
+	(*ObservedRelation)(nil),      // 24: stratt.plugin.v1.ObservedRelation
+	(*GoneEntity)(nil),            // 25: stratt.plugin.v1.GoneEntity
+	(*GoneRelation)(nil),          // 26: stratt.plugin.v1.GoneRelation
+	(*ObserveResponse)(nil),       // 27: stratt.plugin.v1.ObserveResponse
+	(*PlanRequest)(nil),           // 28: stratt.plugin.v1.PlanRequest
+	(*PlanResponse)(nil),          // 29: stratt.plugin.v1.PlanResponse
+	(*ApplyRequest)(nil),          // 30: stratt.plugin.v1.ApplyRequest
+	(*DestroyRequest)(nil),        // 31: stratt.plugin.v1.DestroyRequest
+	(*InvokeRequest)(nil),         // 32: stratt.plugin.v1.InvokeRequest
+	(*SubscribeRequest)(nil),      // 33: stratt.plugin.v1.SubscribeRequest
+	(*TaskEvent)(nil),             // 34: stratt.plugin.v1.TaskEvent
+	(*ItemResult)(nil),            // 35: stratt.plugin.v1.ItemResult
+	(*DiffFragment)(nil),          // 36: stratt.plugin.v1.DiffFragment
+	(*DerivedContract)(nil),       // 37: stratt.plugin.v1.DerivedContract
+	(*ApplyResponse)(nil),         // 38: stratt.plugin.v1.ApplyResponse
+	(*DestroyResponse)(nil),       // 39: stratt.plugin.v1.DestroyResponse
+	(*InvokeResult)(nil),          // 40: stratt.plugin.v1.InvokeResult
+	(*InvokeResponse)(nil),        // 41: stratt.plugin.v1.InvokeResponse
+	(*EmittedEvent)(nil),          // 42: stratt.plugin.v1.EmittedEvent
+	(*SubscribeResponse)(nil),     // 43: stratt.plugin.v1.SubscribeResponse
+	nil,                           // 44: stratt.plugin.v1.ObservedEntity.IdentityKeysEntry
+	nil,                           // 45: stratt.plugin.v1.ObservedEntity.LabelsEntry
+	nil,                           // 46: stratt.plugin.v1.ObservedEntity.FacetsEntry
+	nil,                           // 47: stratt.plugin.v1.TaskEvent.FieldsEntry
+	(*timestamppb.Timestamp)(nil), // 48: google.protobuf.Timestamp
+	(*structpb.Struct)(nil),       // 49: google.protobuf.Struct
 }
 var file_stratt_plugin_v1_plugin_proto_depIdxs = []int32{
-	7,  // 0: stratt.plugin.v1.Envelope.coordinates:type_name -> stratt.plugin.v1.Coordinates
-	8,  // 1: stratt.plugin.v1.Envelope.contract:type_name -> stratt.plugin.v1.ContractRef
-	9,  // 2: stratt.plugin.v1.Envelope.principal:type_name -> stratt.plugin.v1.Principal
-	10, // 3: stratt.plugin.v1.Envelope.creds:type_name -> stratt.plugin.v1.CredentialRef
-	4,  // 4: stratt.plugin.v1.Item.envelope:type_name -> stratt.plugin.v1.Envelope
-	5,  // 5: stratt.plugin.v1.Item.payload:type_name -> stratt.plugin.v1.Payload
-	6,  // 6: stratt.plugin.v1.Item.children:type_name -> stratt.plugin.v1.Item
-	0,  // 7: stratt.plugin.v1.Manifest.class:type_name -> stratt.plugin.v1.PluginClass
-	1,  // 8: stratt.plugin.v1.Manifest.verbs:type_name -> stratt.plugin.v1.Verb
-	12, // 9: stratt.plugin.v1.Manifest.contracts:type_name -> stratt.plugin.v1.ContractDecl
-	13, // 10: stratt.plugin.v1.GetManifestResponse.manifest:type_name -> stratt.plugin.v1.Manifest
-	2,  // 11: stratt.plugin.v1.HealthResponse.status:type_name -> stratt.plugin.v1.HealthResponse.Serving
-	33, // 12: stratt.plugin.v1.ObservedEntity.identity_keys:type_name -> stratt.plugin.v1.ObservedEntity.IdentityKeysEntry
-	34, // 13: stratt.plugin.v1.ObservedEntity.labels:type_name -> stratt.plugin.v1.ObservedEntity.LabelsEntry
-	35, // 14: stratt.plugin.v1.ObservedEntity.facets:type_name -> stratt.plugin.v1.ObservedEntity.FacetsEntry
-	18, // 15: stratt.plugin.v1.ObserveResponse.entities:type_name -> stratt.plugin.v1.ObservedEntity
-	19, // 16: stratt.plugin.v1.ObserveResponse.gone:type_name -> stratt.plugin.v1.GoneEntity
-	4,  // 17: stratt.plugin.v1.PlanRequest.envelope:type_name -> stratt.plugin.v1.Envelope
-	5,  // 18: stratt.plugin.v1.PlanRequest.desired:type_name -> stratt.plugin.v1.Payload
-	5,  // 19: stratt.plugin.v1.PlanResponse.diff:type_name -> stratt.plugin.v1.Payload
-	4,  // 20: stratt.plugin.v1.ApplyRequest.envelope:type_name -> stratt.plugin.v1.Envelope
-	5,  // 21: stratt.plugin.v1.ApplyRequest.desired:type_name -> stratt.plugin.v1.Payload
-	4,  // 22: stratt.plugin.v1.DestroyRequest.envelope:type_name -> stratt.plugin.v1.Envelope
-	4,  // 23: stratt.plugin.v1.InvokeRequest.envelope:type_name -> stratt.plugin.v1.Envelope
-	5,  // 24: stratt.plugin.v1.InvokeRequest.args:type_name -> stratt.plugin.v1.Payload
-	3,  // 25: stratt.plugin.v1.TaskEvent.level:type_name -> stratt.plugin.v1.TaskEvent.Level
-	37, // 26: stratt.plugin.v1.TaskEvent.at:type_name -> google.protobuf.Timestamp
-	36, // 27: stratt.plugin.v1.TaskEvent.fields:type_name -> stratt.plugin.v1.TaskEvent.FieldsEntry
-	27, // 28: stratt.plugin.v1.ApplyResponse.event:type_name -> stratt.plugin.v1.TaskEvent
-	27, // 29: stratt.plugin.v1.DestroyResponse.event:type_name -> stratt.plugin.v1.TaskEvent
-	27, // 30: stratt.plugin.v1.InvokeResponse.event:type_name -> stratt.plugin.v1.TaskEvent
-	4,  // 31: stratt.plugin.v1.EmittedEvent.envelope:type_name -> stratt.plugin.v1.Envelope
-	5,  // 32: stratt.plugin.v1.EmittedEvent.payload:type_name -> stratt.plugin.v1.Payload
-	31, // 33: stratt.plugin.v1.SubscribeResponse.event:type_name -> stratt.plugin.v1.EmittedEvent
-	11, // 34: stratt.plugin.v1.PluginService.GetManifest:input_type -> stratt.plugin.v1.GetManifestRequest
-	15, // 35: stratt.plugin.v1.PluginService.Health:input_type -> stratt.plugin.v1.HealthRequest
-	17, // 36: stratt.plugin.v1.PluginService.Observe:input_type -> stratt.plugin.v1.ObserveRequest
-	21, // 37: stratt.plugin.v1.PluginService.Plan:input_type -> stratt.plugin.v1.PlanRequest
-	23, // 38: stratt.plugin.v1.PluginService.Apply:input_type -> stratt.plugin.v1.ApplyRequest
-	24, // 39: stratt.plugin.v1.PluginService.Destroy:input_type -> stratt.plugin.v1.DestroyRequest
-	25, // 40: stratt.plugin.v1.PluginService.Invoke:input_type -> stratt.plugin.v1.InvokeRequest
-	26, // 41: stratt.plugin.v1.PluginService.Subscribe:input_type -> stratt.plugin.v1.SubscribeRequest
-	14, // 42: stratt.plugin.v1.PluginService.GetManifest:output_type -> stratt.plugin.v1.GetManifestResponse
-	16, // 43: stratt.plugin.v1.PluginService.Health:output_type -> stratt.plugin.v1.HealthResponse
-	20, // 44: stratt.plugin.v1.PluginService.Observe:output_type -> stratt.plugin.v1.ObserveResponse
-	22, // 45: stratt.plugin.v1.PluginService.Plan:output_type -> stratt.plugin.v1.PlanResponse
-	28, // 46: stratt.plugin.v1.PluginService.Apply:output_type -> stratt.plugin.v1.ApplyResponse
-	29, // 47: stratt.plugin.v1.PluginService.Destroy:output_type -> stratt.plugin.v1.DestroyResponse
-	30, // 48: stratt.plugin.v1.PluginService.Invoke:output_type -> stratt.plugin.v1.InvokeResponse
-	32, // 49: stratt.plugin.v1.PluginService.Subscribe:output_type -> stratt.plugin.v1.SubscribeResponse
-	42, // [42:50] is the sub-list for method output_type
-	34, // [34:42] is the sub-list for method input_type
-	34, // [34:34] is the sub-list for extension type_name
-	34, // [34:34] is the sub-list for extension extendee
-	0,  // [0:34] is the sub-list for field type_name
+	11, // 0: stratt.plugin.v1.Envelope.coordinates:type_name -> stratt.plugin.v1.Coordinates
+	12, // 1: stratt.plugin.v1.Envelope.contract:type_name -> stratt.plugin.v1.ContractRef
+	13, // 2: stratt.plugin.v1.Envelope.principal:type_name -> stratt.plugin.v1.Principal
+	14, // 3: stratt.plugin.v1.Envelope.creds:type_name -> stratt.plugin.v1.CredentialRef
+	9,  // 4: stratt.plugin.v1.Envelope.artifact:type_name -> stratt.plugin.v1.ArtifactRef
+	7,  // 5: stratt.plugin.v1.Item.envelope:type_name -> stratt.plugin.v1.Envelope
+	8,  // 6: stratt.plugin.v1.Item.payload:type_name -> stratt.plugin.v1.Payload
+	10, // 7: stratt.plugin.v1.Item.children:type_name -> stratt.plugin.v1.Item
+	12, // 8: stratt.plugin.v1.ActionDecl.input:type_name -> stratt.plugin.v1.ContractRef
+	12, // 9: stratt.plugin.v1.ActionDecl.output:type_name -> stratt.plugin.v1.ContractRef
+	0,  // 10: stratt.plugin.v1.Manifest.class:type_name -> stratt.plugin.v1.PluginClass
+	1,  // 11: stratt.plugin.v1.Manifest.verbs:type_name -> stratt.plugin.v1.Verb
+	16, // 12: stratt.plugin.v1.Manifest.contracts:type_name -> stratt.plugin.v1.ContractDecl
+	17, // 13: stratt.plugin.v1.Manifest.actions:type_name -> stratt.plugin.v1.ActionDecl
+	2,  // 14: stratt.plugin.v1.Manifest.observe_mode:type_name -> stratt.plugin.v1.Manifest.ObserveMode
+	18, // 15: stratt.plugin.v1.GetManifestResponse.manifest:type_name -> stratt.plugin.v1.Manifest
+	3,  // 16: stratt.plugin.v1.HealthResponse.status:type_name -> stratt.plugin.v1.HealthResponse.Serving
+	44, // 17: stratt.plugin.v1.ObservedEntity.identity_keys:type_name -> stratt.plugin.v1.ObservedEntity.IdentityKeysEntry
+	45, // 18: stratt.plugin.v1.ObservedEntity.labels:type_name -> stratt.plugin.v1.ObservedEntity.LabelsEntry
+	46, // 19: stratt.plugin.v1.ObservedEntity.facets:type_name -> stratt.plugin.v1.ObservedEntity.FacetsEntry
+	24, // 20: stratt.plugin.v1.ObservedEntity.relations:type_name -> stratt.plugin.v1.ObservedRelation
+	23, // 21: stratt.plugin.v1.ObserveResponse.entities:type_name -> stratt.plugin.v1.ObservedEntity
+	25, // 22: stratt.plugin.v1.ObserveResponse.gone:type_name -> stratt.plugin.v1.GoneEntity
+	26, // 23: stratt.plugin.v1.ObserveResponse.gone_relations:type_name -> stratt.plugin.v1.GoneRelation
+	7,  // 24: stratt.plugin.v1.PlanRequest.envelope:type_name -> stratt.plugin.v1.Envelope
+	8,  // 25: stratt.plugin.v1.PlanRequest.desired:type_name -> stratt.plugin.v1.Payload
+	8,  // 26: stratt.plugin.v1.PlanResponse.diff:type_name -> stratt.plugin.v1.Payload
+	9,  // 27: stratt.plugin.v1.PlanResponse.plan:type_name -> stratt.plugin.v1.ArtifactRef
+	7,  // 28: stratt.plugin.v1.ApplyRequest.envelope:type_name -> stratt.plugin.v1.Envelope
+	8,  // 29: stratt.plugin.v1.ApplyRequest.desired:type_name -> stratt.plugin.v1.Payload
+	9,  // 30: stratt.plugin.v1.ApplyRequest.plan_ref:type_name -> stratt.plugin.v1.ArtifactRef
+	7,  // 31: stratt.plugin.v1.DestroyRequest.envelope:type_name -> stratt.plugin.v1.Envelope
+	7,  // 32: stratt.plugin.v1.InvokeRequest.envelope:type_name -> stratt.plugin.v1.Envelope
+	8,  // 33: stratt.plugin.v1.InvokeRequest.args:type_name -> stratt.plugin.v1.Payload
+	4,  // 34: stratt.plugin.v1.TaskEvent.level:type_name -> stratt.plugin.v1.TaskEvent.Level
+	48, // 35: stratt.plugin.v1.TaskEvent.at:type_name -> google.protobuf.Timestamp
+	47, // 36: stratt.plugin.v1.TaskEvent.fields:type_name -> stratt.plugin.v1.TaskEvent.FieldsEntry
+	5,  // 37: stratt.plugin.v1.ItemResult.status:type_name -> stratt.plugin.v1.ItemResult.Status
+	8,  // 38: stratt.plugin.v1.DiffFragment.detail:type_name -> stratt.plugin.v1.Payload
+	6,  // 39: stratt.plugin.v1.DerivedContract.rung:type_name -> stratt.plugin.v1.DerivedContract.Rung
+	34, // 40: stratt.plugin.v1.ApplyResponse.event:type_name -> stratt.plugin.v1.TaskEvent
+	23, // 41: stratt.plugin.v1.ApplyResponse.write_back:type_name -> stratt.plugin.v1.ObservedEntity
+	35, // 42: stratt.plugin.v1.ApplyResponse.result:type_name -> stratt.plugin.v1.ItemResult
+	36, // 43: stratt.plugin.v1.ApplyResponse.drift:type_name -> stratt.plugin.v1.DiffFragment
+	37, // 44: stratt.plugin.v1.ApplyResponse.derived_contract:type_name -> stratt.plugin.v1.DerivedContract
+	34, // 45: stratt.plugin.v1.DestroyResponse.event:type_name -> stratt.plugin.v1.TaskEvent
+	35, // 46: stratt.plugin.v1.DestroyResponse.result:type_name -> stratt.plugin.v1.ItemResult
+	25, // 47: stratt.plugin.v1.DestroyResponse.gone:type_name -> stratt.plugin.v1.GoneEntity
+	8,  // 48: stratt.plugin.v1.InvokeResult.outputs:type_name -> stratt.plugin.v1.Payload
+	12, // 49: stratt.plugin.v1.InvokeResult.output_contract:type_name -> stratt.plugin.v1.ContractRef
+	23, // 50: stratt.plugin.v1.InvokeResult.entities:type_name -> stratt.plugin.v1.ObservedEntity
+	14, // 51: stratt.plugin.v1.InvokeResult.provisioned_creds:type_name -> stratt.plugin.v1.CredentialRef
+	34, // 52: stratt.plugin.v1.InvokeResponse.event:type_name -> stratt.plugin.v1.TaskEvent
+	40, // 53: stratt.plugin.v1.InvokeResponse.result:type_name -> stratt.plugin.v1.InvokeResult
+	7,  // 54: stratt.plugin.v1.EmittedEvent.envelope:type_name -> stratt.plugin.v1.Envelope
+	8,  // 55: stratt.plugin.v1.EmittedEvent.payload:type_name -> stratt.plugin.v1.Payload
+	49, // 56: stratt.plugin.v1.EmittedEvent.match:type_name -> google.protobuf.Struct
+	48, // 57: stratt.plugin.v1.EmittedEvent.occurred_at:type_name -> google.protobuf.Timestamp
+	42, // 58: stratt.plugin.v1.SubscribeResponse.event:type_name -> stratt.plugin.v1.EmittedEvent
+	15, // 59: stratt.plugin.v1.PluginService.GetManifest:input_type -> stratt.plugin.v1.GetManifestRequest
+	20, // 60: stratt.plugin.v1.PluginService.Health:input_type -> stratt.plugin.v1.HealthRequest
+	22, // 61: stratt.plugin.v1.PluginService.Observe:input_type -> stratt.plugin.v1.ObserveRequest
+	28, // 62: stratt.plugin.v1.PluginService.Plan:input_type -> stratt.plugin.v1.PlanRequest
+	30, // 63: stratt.plugin.v1.PluginService.Apply:input_type -> stratt.plugin.v1.ApplyRequest
+	31, // 64: stratt.plugin.v1.PluginService.Destroy:input_type -> stratt.plugin.v1.DestroyRequest
+	32, // 65: stratt.plugin.v1.PluginService.Invoke:input_type -> stratt.plugin.v1.InvokeRequest
+	33, // 66: stratt.plugin.v1.PluginService.Subscribe:input_type -> stratt.plugin.v1.SubscribeRequest
+	19, // 67: stratt.plugin.v1.PluginService.GetManifest:output_type -> stratt.plugin.v1.GetManifestResponse
+	21, // 68: stratt.plugin.v1.PluginService.Health:output_type -> stratt.plugin.v1.HealthResponse
+	27, // 69: stratt.plugin.v1.PluginService.Observe:output_type -> stratt.plugin.v1.ObserveResponse
+	29, // 70: stratt.plugin.v1.PluginService.Plan:output_type -> stratt.plugin.v1.PlanResponse
+	38, // 71: stratt.plugin.v1.PluginService.Apply:output_type -> stratt.plugin.v1.ApplyResponse
+	39, // 72: stratt.plugin.v1.PluginService.Destroy:output_type -> stratt.plugin.v1.DestroyResponse
+	41, // 73: stratt.plugin.v1.PluginService.Invoke:output_type -> stratt.plugin.v1.InvokeResponse
+	43, // 74: stratt.plugin.v1.PluginService.Subscribe:output_type -> stratt.plugin.v1.SubscribeResponse
+	67, // [67:75] is the sub-list for method output_type
+	59, // [59:67] is the sub-list for method input_type
+	59, // [59:59] is the sub-list for extension type_name
+	59, // [59:59] is the sub-list for extension extendee
+	0,  // [0:59] is the sub-list for field type_name
 }
 
 func init() { file_stratt_plugin_v1_plugin_proto_init() }
@@ -2249,8 +3322,8 @@ func file_stratt_plugin_v1_plugin_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_stratt_plugin_v1_plugin_proto_rawDesc), len(file_stratt_plugin_v1_plugin_proto_rawDesc)),
-			NumEnums:      4,
-			NumMessages:   33,
+			NumEnums:      7,
+			NumMessages:   41,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
