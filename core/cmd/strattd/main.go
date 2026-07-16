@@ -50,6 +50,7 @@ import (
 	"github.com/dstout-devops/stratt/core/internal/leader"
 	"github.com/dstout-devops/stratt/core/internal/notify"
 	"github.com/dstout-devops/stratt/core/internal/orchestrate"
+	"github.com/dstout-devops/stratt/core/internal/planstore"
 	"github.com/dstout-devops/stratt/core/internal/pluginhost"
 	"github.com/dstout-devops/stratt/core/internal/scim"
 	"github.com/dstout-devops/stratt/core/internal/sitegw"
@@ -353,6 +354,20 @@ func run(ctx context.Context, log *slog.Logger) error {
 		return nil
 	}
 
+	// A plugin Actuator name is EXCLUSIVE with the in-tree Actuator registry and
+	// across plugins (§2.4): a collision fails startup, never silently overwrites.
+	pluginActuators := map[string]orchestrate.PluginActuator{}
+	registerPluginActuator := func(name string, host *pluginhost.Host, dryRunnable bool) error {
+		if _, dup := pluginActuators[name]; dup {
+			return fmt.Errorf("plugin actuator %q claimed by two plugins (§2.4 exclusive)", name)
+		}
+		if _, inTree := registry[name]; inTree {
+			return fmt.Errorf("plugin actuator %q collides with an in-tree Actuator (§2.4 exclusive)", name)
+		}
+		pluginActuators[name] = orchestrate.PluginActuator{Host: host, DryRunnable: dryRunnable}
+		return nil
+	}
+
 	// awsec2 plugin: when configured it provides BOTH the instance Syncer and the
 	// create-vm Action over the port; the in-tree awsec2 is then disabled.
 	var awsHost *pluginhost.Host
@@ -404,12 +419,46 @@ func run(ctx context.Context, log *slog.Logger) error {
 			return err
 		}
 		stateHandler = sb.Handler()
-		tofuActuator := opentofu.FromEnv(sb.WorkspaceCredential)
-		if tofuActuator.BackendURL == "" {
-			return fmt.Errorf("STRATT_STATE_KEY is set but STRATT_STATE_BACKEND_URL is empty — execution pods need the backend address (ADR-0016)")
+		if tofuPluginAddr := os.Getenv("STRATT_OPENTOFU_PLUGIN_ADDR"); tofuPluginAddr != "" {
+			// Cutover (ADR-0046/0047): the opentofu Actuator runs over the sovereign
+			// port — Plan/Apply/Destroy, plan-as-artifact (§8). The in-tree Actuator
+			// is NOT registered (§2.4 exclusive). The plan store shares the state key
+			// (the plan is content-addressed + encrypted, ADR-0047 §8); the plugin
+			// derives its own TF_HTTP_PASSWORD from its own STRATT_STATE_KEY config.
+			plans, err := planstore.New(stateKey, store)
+			if err != nil {
+				return err
+			}
+			conn, err := grpc.NewClient(tofuPluginAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+			if err != nil {
+				return fmt.Errorf("opentofu plugin dial %s: %w", tofuPluginAddr, err)
+			}
+			defer conn.Close()
+			grant := pluginhost.Grant{
+				PluginIdentity: env("STRATT_OPENTOFU_PLUGIN_ID", "opentofu"),
+				Tier:           pluginhost.Tier(env("STRATT_OPENTOFU_TIER", "trusted")),
+				Source:         types.Source{Kind: "opentofu", Name: env("STRATT_OPENTOFU_SOURCE_NAME", "opentofu"), Endpoint: os.Getenv("STRATT_STATE_BACKEND_URL")},
+				// stratt_entities write-back grants (operator-declared, §2.1): the
+				// identity schemes / label keys / facet namespaces tofu outputs may
+				// project. Empty by default — an ungranted emission is rejected, not
+				// silently written (defence-in-depth, ADR-0047 §1).
+				IdentitySchemes: splitNonEmpty(os.Getenv("STRATT_OPENTOFU_IDENTITY_SCHEMES")),
+				LabelKeys:       splitNonEmpty(os.Getenv("STRATT_OPENTOFU_LABEL_KEYS")),
+				FacetNamespaces: splitNonEmpty(os.Getenv("STRATT_OPENTOFU_FACET_NAMESPACES")),
+			}
+			host := pluginhost.New(store, pluginv1.NewPluginServiceClient(conn), grant, log).UsePlanStore(plans)
+			if err := registerPluginActuator("opentofu", host, true); err != nil {
+				return err
+			}
+			log.Info("opentofu plugin actuator registered", "addr", tofuPluginAddr, "backend", os.Getenv("STRATT_STATE_BACKEND_URL"))
+		} else {
+			tofuActuator := opentofu.FromEnv(sb.WorkspaceCredential)
+			if tofuActuator.BackendURL == "" {
+				return fmt.Errorf("STRATT_STATE_KEY is set but STRATT_STATE_BACKEND_URL is empty — execution pods need the backend address (ADR-0016)")
+			}
+			registry[tofuActuator.Name()] = tofuActuator
+			log.Info("opentofu in-tree actuator ready (no STRATT_OPENTOFU_PLUGIN_ADDR)", "backend", tofuActuator.BackendURL, "eeImage", tofuActuator.DefaultImage)
 		}
-		registry[tofuActuator.Name()] = tofuActuator
-		log.Info("opentofu actuator ready", "backend", tofuActuator.BackendURL, "eeImage", tofuActuator.DefaultImage)
 	} else {
 		log.Info("opentofu actuator disabled (STRATT_STATE_KEY empty)")
 	}
@@ -457,7 +506,7 @@ func run(ctx context.Context, log *slog.Logger) error {
 	// and polls child Runs on peer Cells. Nil-safe on a single-Cell estate (no
 	// secret ⇒ no peers ⇒ RunAcrossCells is never reached).
 	peerClient := cellrouter.NewPeerClient([]byte(os.Getenv("STRATT_CELL_SECRET")))
-	w.RegisterActivity(&orchestrate.Activities{Store: store, Dispatcher: dispatcher, Bus: bus, Authz: authorizer, Actuators: registry, Actions: actionRegistry, PluginActions: pluginActions, Evidence: evidence, Sites: siteGateway, Peers: peerClient})
+	w.RegisterActivity(&orchestrate.Activities{Store: store, Dispatcher: dispatcher, Bus: bus, Authz: authorizer, Actuators: registry, Actions: actionRegistry, PluginActions: pluginActions, PluginActuators: pluginActuators, Evidence: evidence, Sites: siteGateway, Peers: peerClient})
 	if err := w.Start(); err != nil {
 		return fmt.Errorf("temporal worker: %w", err)
 	}
