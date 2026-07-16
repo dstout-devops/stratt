@@ -9,8 +9,10 @@
 package cellrouter
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -23,9 +25,15 @@ import (
 	"github.com/dstout-devops/stratt/types"
 )
 
-// fanoutHeader marks a request that is itself a cross-Cell fan-out call: the
+// FanoutHeader marks a request that is itself a cross-Cell fan-out call: the
 // receiving Cell serves it LOCAL-ONLY, so peers never recurse into each other.
-const fanoutHeader = "X-Stratt-Cell-Fanout"
+// A request carrying it reaches the inner handler only after the HMAC verified
+// (ADR-0044 slice 4), so at the handler its presence means "trusted peer" — the
+// signal the API uses to accept a forwarded child Run (slice 5).
+const FanoutHeader = "X-Stratt-Cell-Fanout"
+
+// fanoutHeader is the internal alias used throughout this package.
+const fanoutHeader = FanoutHeader
 
 // authHeader carries the HMAC signature proving a fan-out call came from a peer
 // Cell holding the shared STRATT_CELL_SECRET (ADR-0044 slice 4). Format:
@@ -110,8 +118,16 @@ func (rt *router) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			// are no peers — strip it and serve normally (never narrow to
 			// local-only on an untrusted signal).
 			r.Header.Del(fanoutHeader)
-		case verifyCellAuth(rt.deps.Secret, r.Method, r.URL.Path, r.URL.RawQuery, r.Header.Get(authHeader), rt.replayWindow()):
-			rt.inner.ServeHTTP(w, r) // authenticated peer → local-only
+		case rt.verifyFanout(r):
+			// Authenticated peer → local-only. A forwarded WRITE (slice 5) has no
+			// live bearer (the launch is async — §2.5, tokens never persist), so
+			// it ASSERTS the acting Principal via X-Stratt-Principal. That
+			// assertion is honored at the ONE identity seam (Server.ResolvePrincipal,
+			// §1.6) — NOT here — so the SCIM offboarding gate runs on it and the
+			// audit access-log attributes it; this branch only proves the peer's
+			// authenticity so ResolvePrincipal may trust the header. Any fan-out
+			// whose HMAC does not verify is 401'd below before reaching a handler.
+			rt.inner.ServeHTTP(w, r)
 			return
 		default:
 			http.Error(w, "cell fan-out authentication failed", http.StatusUnauthorized)
@@ -411,4 +427,21 @@ func (rt *router) replayWindow() time.Duration {
 		return rt.deps.ReplayWindow
 	}
 	return defaultReplayWindow
+}
+
+// verifyFanout checks the inbound fan-out HMAC. For a GET the body is empty and
+// the signature is the byte-identical slice-4 form; for a forwarded WRITE the
+// body is read (and RESTORED so the inner handler can decode it) and folded into
+// the signature, so a tampered/replayed body is rejected (ADR-0044 slice 5).
+func (rt *router) verifyFanout(r *http.Request) bool {
+	bodyHash := ""
+	if r.Method != http.MethodGet && r.Body != nil {
+		body, err := io.ReadAll(io.LimitReader(r.Body, 32<<20))
+		if err != nil {
+			return false
+		}
+		r.Body = io.NopCloser(bytes.NewReader(body)) // restore for the inner handler
+		bodyHash = hashBody(body)
+	}
+	return verifyCellAuth(rt.deps.Secret, r.Method, r.URL.Path, r.URL.RawQuery, bodyHash, r.Header.Get(authHeader), rt.replayWindow())
 }

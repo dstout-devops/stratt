@@ -100,4 +100,8 @@ type WorkflowRun struct {
 	TriggeredBy string     `json:"triggeredBy,omitempty"`
 	StartedAt   time.Time  `json:"startedAt"`
 	FinishedAt  *time.Time `json:"finishedAt,omitempty"`
+	// Cell is the control-plane Cell whose Temporal owns this execution (ADR-0044
+	// slice 5) — set once at creation. A Gate decision or cancel routes here.
+	// Empty ⇒ the built-in LocalCell.
+	Cell string `json:"cell,omitempty"`
 }

@@ -1050,7 +1050,7 @@ export interface components {
             id: string;
             workflowId: string;
             /** @enum {string} */
-            status: "pending" | "running" | "succeeded" | "failed" | "canceled";
+            status: "pending" | "running" | "succeeded" | "failed" | "canceled" | "partial";
             viewRef?: string;
             /** Format: int64 */
             viewVersion?: number;
@@ -1559,7 +1559,7 @@ export interface components {
             /** @description Trigger that fired this execution (§1.8 descent). */
             triggeredBy?: string;
             /** @enum {string} */
-            status: "pending" | "running" | "succeeded" | "failed" | "canceled";
+            status: "pending" | "running" | "succeeded" | "failed" | "canceled" | "partial";
             principal?: string;
             /** Format: date-time */
             startedAt: string;

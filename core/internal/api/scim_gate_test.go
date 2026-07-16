@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/dstout-devops/stratt/core/internal/authz"
+	"github.com/dstout-devops/stratt/core/internal/cellrouter"
 )
 
 // TestResolvePrincipalSCIMGate proves the request-time deactivation block
@@ -50,5 +51,44 @@ func TestResolvePrincipalSCIMGate(t *testing.T) {
 	s.SCIMGate = nil
 	if id, _, err := s.ResolvePrincipal(ctx, hdr("fired-admin", "")); err != nil || id != "fired-admin" {
 		t.Fatalf("no gate: id=%q err=%v", id, err)
+	}
+}
+
+// TestResolvePrincipalFanoutAssertion proves a verified cross-Cell fan-out
+// asserts the acting Principal at the ONE identity seam (ADR-0044 slice 5, §1.6):
+// it is honored only with a secret configured AND the fan-out header, and it is
+// still subject to the SCIM offboarding gate (a deactivated human is denied even
+// on a forwarded child launch).
+func TestResolvePrincipalFanoutAssertion(t *testing.T) {
+	ctx := context.Background()
+	deactivated := map[string]bool{"fired-admin": true}
+	s := &Server{
+		CellSecret: []byte("fleet-secret"),
+		SCIMGate: func(_ context.Context, id string) error {
+			if deactivated[id] {
+				return errors.New("deactivated")
+			}
+			return nil
+		},
+	}
+	fanout := func(id string) http.Header {
+		h := http.Header{}
+		h.Set(cellrouter.FanoutHeader, "1")
+		h.Set("X-Stratt-Principal", id)
+		return h
+	}
+
+	// A verified fan-out asserts the Principal (DevPrincipalHeader is OFF).
+	if id, kind, err := s.ResolvePrincipal(ctx, fanout("alice")); err != nil || id != "alice" || kind != authz.KindHuman {
+		t.Fatalf("verified fan-out must assert the Principal: id=%q kind=%q err=%v", id, kind, err)
+	}
+	// The SCIM gate still applies to a forwarded child launch.
+	if _, _, err := s.ResolvePrincipal(ctx, fanout("fired-admin")); err == nil {
+		t.Fatal("a deactivated human must be denied even on a forwarded child launch")
+	}
+	// Without a secret (single-Cell), the assertion header is NOT trusted.
+	s.CellSecret = nil
+	if id, _, err := s.ResolvePrincipal(ctx, fanout("alice")); err != nil || id != "" {
+		t.Fatalf("no secret ⇒ the fan-out assertion must be untrusted, got id=%q err=%v", id, err)
 	}
 }

@@ -13,7 +13,11 @@ func mapStatus(s types.RunStatus) string {
 	switch s {
 	case types.RunSucceeded:
 		return "successful"
-	case types.RunFailed:
+	case types.RunFailed, types.RunPartial:
+		// AWX has no "partial" — a cross-Cell Run that failed in some region
+		// (ADR-0044 slice 5) reads as failed on the compat surface, never a
+		// false "successful" (§1.8). The full per-Cell breakdown lives on the
+		// native Run.
 		return "failed"
 	case types.RunCanceled:
 		return "canceled"
@@ -119,7 +123,7 @@ func runToJob(run types.Run) map[string]any {
 		"job":      id,
 		"type":     "job",
 		"status":   status,
-		"failed":   run.Status == types.RunFailed,
+		"failed":   run.Status == types.RunFailed || run.Status == types.RunPartial,
 		"started":  run.StartedAt.UTC().Format(time.RFC3339),
 		"finished": finished,
 		"elapsed":  elapsed,

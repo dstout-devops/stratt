@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/dstout-devops/stratt/core/internal/authz"
 	"github.com/dstout-devops/stratt/types"
 )
 
@@ -143,7 +144,7 @@ func TestFanoutNoRecursion(t *testing.T) {
 		Deps{Store: fakeCells{[]types.Cell{{Name: "eu", Endpoint: peer.URL}}}, CellID: "local", Secret: secret})
 	req := httptest.NewRequest(http.MethodGet, "/runs", nil)
 	req.Header.Set(fanoutHeader, "1")
-	req.Header.Set(authHeader, signCellAuth(secret, http.MethodGet, "/runs", "", time.Now().Unix()))
+	req.Header.Set(authHeader, signCellAuth(secret, http.MethodGet, "/runs", "", "", time.Now().Unix()))
 	rec := httptest.NewRecorder()
 	rt.ServeHTTP(rec, req)
 	if peerCalled {
@@ -229,7 +230,7 @@ func TestFanoutAuthValid(t *testing.T) {
 		Deps{Store: fakeCells{[]types.Cell{{Name: "eu", Endpoint: "http://unused"}}}, CellID: "local", Secret: secret})
 	req := httptest.NewRequest(http.MethodGet, "/runs", nil)
 	req.Header.Set(fanoutHeader, "1")
-	req.Header.Set(authHeader, signCellAuth(secret, http.MethodGet, "/runs", "", time.Now().Unix()))
+	req.Header.Set(authHeader, signCellAuth(secret, http.MethodGet, "/runs", "", "", time.Now().Unix()))
 	rec := httptest.NewRecorder()
 	rt.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK || rec.Header().Get(hdrQueried) != "" {
@@ -254,7 +255,7 @@ func TestFanoutAuthRejected(t *testing.T) {
 	// Tampered signature (wrong secret).
 	req2 := httptest.NewRequest(http.MethodGet, "/runs", nil)
 	req2.Header.Set(fanoutHeader, "1")
-	req2.Header.Set(authHeader, signCellAuth([]byte("wrong"), http.MethodGet, "/runs", "", time.Now().Unix()))
+	req2.Header.Set(authHeader, signCellAuth([]byte("wrong"), http.MethodGet, "/runs", "", "", time.Now().Unix()))
 	rec2 := httptest.NewRecorder()
 	rt.ServeHTTP(rec2, req2)
 	if rec2.Code != http.StatusUnauthorized {
@@ -263,7 +264,7 @@ func TestFanoutAuthRejected(t *testing.T) {
 	// Expired signature (outside the window).
 	req3 := httptest.NewRequest(http.MethodGet, "/runs", nil)
 	req3.Header.Set(fanoutHeader, "1")
-	req3.Header.Set(authHeader, signCellAuth(secret, http.MethodGet, "/runs", "", time.Now().Add(-time.Hour).Unix()))
+	req3.Header.Set(authHeader, signCellAuth(secret, http.MethodGet, "/runs", "", "", time.Now().Add(-time.Hour).Unix()))
 	rec3 := httptest.NewRecorder()
 	rt.ServeHTTP(rec3, req3)
 	if rec3.Code != http.StatusUnauthorized {
@@ -284,7 +285,7 @@ func TestFanoutSignedOutbound(t *testing.T) {
 	rt := Middleware(localInner("[]", "[]"),
 		Deps{Store: fakeCells{[]types.Cell{{Name: "eu", Endpoint: peer.URL}}}, CellID: "local", Secret: secret})
 	rt.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/runs", nil))
-	if gotAuth == "" || !verifyCellAuth(secret, http.MethodGet, "/runs", "", gotAuth, defaultReplayWindow) {
+	if gotAuth == "" || !verifyCellAuth(secret, http.MethodGet, "/runs", "", "", gotAuth, defaultReplayWindow) {
 		t.Fatalf("peer must receive a valid fan-out signature, got %q", gotAuth)
 	}
 }
@@ -476,5 +477,118 @@ func TestNonFederatedPassthrough(t *testing.T) {
 	rt.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/runs", nil)) // a write
 	if peerCalled || rec.Code != http.StatusCreated {
 		t.Fatalf("a write must pass straight to inner, never federate (peerCalled=%v code=%d)", peerCalled, rec.Code)
+	}
+}
+
+// TestRunDescentFederates proves a descent into a peer-homed child Run resolves:
+// GET /runs/{id} misses locally and federates to the homing peer (ADR-0044 slice
+// 5), while a sub-resource (…/events) is never federated (local pass-through).
+func TestRunDescentFederates(t *testing.T) {
+	peer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/v1/runs/child-1" {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(w, `{"id":"child-1","status":"succeeded"}`)
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer peer.Close()
+
+	localCalled := false
+	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/runs/child-1/events" {
+			localCalled = true
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		w.WriteHeader(http.StatusNotFound) // local doesn't home child-1
+	})
+	rt := Middleware(inner, Deps{Store: fakeCells{[]types.Cell{{Name: "eu", Endpoint: peer.URL}}}, CellID: "local"})
+
+	// Point read federates to the peer that homes the run.
+	rec := httptest.NewRecorder()
+	rt.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/runs/child-1", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("a peer-homed child Run must federate to 200, got %d", rec.Code)
+	}
+	var run map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &run); err != nil || run["id"] != "child-1" {
+		t.Fatalf("federated run body must be the peer's, got %s", rec.Body.String())
+	}
+	// A sub-resource is NOT federated — served local-only.
+	recEv := httptest.NewRecorder()
+	rt.ServeHTTP(recEv, httptest.NewRequest(http.MethodGet, "/runs/child-1/events", nil))
+	if !localCalled || recEv.Code != http.StatusOK {
+		t.Fatalf("/runs/{id}/events must be a local pass-through, got local=%v code=%d", localCalled, recEv.Code)
+	}
+}
+
+// echoInner is a stub generated router that echoes the acting Principal (from
+// the request context) and the request body — for exercising the slice-5
+// forwarded-write trust path.
+func echoInner() http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		id, kind, _ := authz.PrincipalFrom(r.Context())
+		body, _ := io.ReadAll(r.Body)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		_ = json.NewEncoder(w).Encode(map[string]string{"principal": id, "kind": kind, "body": string(body)})
+	})
+}
+
+// signedPost builds a POST fan-out request with a body-covered HMAC and an
+// asserted Principal (mirrors PeerClient.Post).
+func signedPost(secret []byte, path, body, principal string, ts int64) *http.Request {
+	req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))
+	req.Header.Set(fanoutHeader, "1")
+	req.Header.Set("X-Stratt-Principal", principal)
+	req.Header.Set(authHeader, signCellAuth(secret, http.MethodPost, path, "", hashBody([]byte(body)), ts))
+	return req
+}
+
+// TestForwardedWriteBodyHMAC proves a forwarded WRITE is authenticated over its
+// body: a valid body-covered signature is served local-only; a tampered body
+// (same signature) is rejected 401 (ADR-0044 slice 5, §2.5).
+func TestForwardedWriteBodyHMAC(t *testing.T) {
+	secret := []byte("fleet-secret")
+	rt := Middleware(echoInner(),
+		Deps{Store: fakeCells{nil}, CellID: "local", Secret: secret})
+
+	// Valid: signature covers this exact body.
+	rec := httptest.NewRecorder()
+	rt.ServeHTTP(rec, signedPost(secret, "/runs", `{"view":"v1"}`, "alice", time.Now().Unix()))
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("a validly body-signed forwarded write must be served, got %d", rec.Code)
+	}
+
+	// Tampered: keep the signature but swap the body — must 401.
+	tampered := signedPost(secret, "/runs", `{"view":"v1"}`, "alice", time.Now().Unix())
+	tampered.Body = io.NopCloser(strings.NewReader(`{"view":"EVIL"}`))
+	recT := httptest.NewRecorder()
+	rt.ServeHTTP(recT, tampered)
+	if recT.Code != http.StatusUnauthorized {
+		t.Fatalf("a body-swapped forwarded write must be 401, got %d", recT.Code)
+	}
+}
+
+// TestForwardedWriteBodyRestored proves a verified forwarded write is served
+// local-only with its body intact for the inner handler (the principal
+// ASSERTION itself is honored one layer up, at Server.ResolvePrincipal — §1.6 —
+// so the SCIM gate and audit see it; see the api package test).
+func TestForwardedWriteBodyRestored(t *testing.T) {
+	secret := []byte("fleet-secret")
+	rt := Middleware(echoInner(),
+		Deps{Store: fakeCells{nil}, CellID: "local", Secret: secret})
+	rec := httptest.NewRecorder()
+	rt.ServeHTTP(rec, signedPost(secret, "/runs", `{"view":"v1"}`, "alice", time.Now().Unix()))
+	var got map[string]string
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("a verified forwarded write must be served local-only, got %d", rec.Code)
+	}
+	if got["body"] != `{"view":"v1"}` {
+		t.Fatalf("the body must be restored intact for the inner handler, got %q", got["body"])
 	}
 }

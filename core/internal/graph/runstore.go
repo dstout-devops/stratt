@@ -53,7 +53,7 @@ func (s *Store) SetRunStatus(ctx context.Context, runID string, status types.Run
 	if summary == nil {
 		doc = []byte(`{}`)
 	}
-	terminal := status == types.RunSucceeded || status == types.RunFailed || status == types.RunCanceled
+	terminal := status == types.RunSucceeded || status == types.RunFailed || status == types.RunCanceled || status == types.RunPartial
 	tag, err := s.pool.Exec(ctx, `
 		UPDATE graph.run
 		SET status = $2,

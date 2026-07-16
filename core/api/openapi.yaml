@@ -1203,7 +1203,7 @@ components:
         workflowId: { type: string }
         status:
           type: string
-          enum: [pending, running, succeeded, failed, canceled]
+          enum: [pending, running, succeeded, failed, canceled, partial]
         viewRef: { type: string }
         viewVersion: { type: integer, format: int64 }
         triggeredBy:
@@ -1889,7 +1889,7 @@ components:
           description: Trigger that fired this execution (§1.8 descent).
         status:
           type: string
-          enum: [pending, running, succeeded, failed, canceled]
+          enum: [pending, running, succeeded, failed, canceled, partial]
         principal: { type: string }
         startedAt: { type: string, format: date-time }
         finishedAt: { type: string, format: date-time }

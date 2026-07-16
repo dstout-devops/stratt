@@ -17,16 +17,39 @@ import (
 // signCellAuth computes the fan-out HMAC signature header value (ADR-0044 slice
 // 4): "<ts>:<hex-hmac-sha256(method\npath\nrawQuery\nts)>". Reuses the
 // statebackend HMAC idiom. rawQuery is signed so limit/since can't be swapped.
-func signCellAuth(secret []byte, method, path, rawQuery string, ts int64) string {
+//
+// bodyHash is the hex sha256 of the request body, empty for a bodyless request.
+// When empty the signed string is byte-identical to the slice-4 GET form
+// (method\npath\nrawQuery\nts) — read federation and its tripwires never move.
+// When present (a forwarded WRITE, slice 5) it is folded in as a fourth line so
+// a tamper/replay-with-swapped-body inside the window can't launch a different
+// Run under the forwarded identity (ADR-0044 slice 5, §2.5).
+func signCellAuth(secret []byte, method, path, rawQuery, bodyHash string, ts int64) string {
 	mac := hmac.New(sha256.New, secret)
-	fmt.Fprintf(mac, "%s\n%s\n%s\n%d", method, path, rawQuery, ts)
+	if bodyHash == "" {
+		fmt.Fprintf(mac, "%s\n%s\n%s\n%d", method, path, rawQuery, ts)
+	} else {
+		fmt.Fprintf(mac, "%s\n%s\n%s\n%s\n%d", method, path, rawQuery, bodyHash, ts)
+	}
 	return strconv.FormatInt(ts, 10) + ":" + hex.EncodeToString(mac.Sum(nil))
+}
+
+// hashBody returns the hex sha256 of a request body, or "" for an empty body
+// (so a bodyless call signs in the legacy GET form).
+func hashBody(body []byte) string {
+	if len(body) == 0 {
+		return ""
+	}
+	sum := sha256.Sum256(body)
+	return hex.EncodeToString(sum[:])
 }
 
 // verifyCellAuth checks a fan-out signature: correct HMAC (constant-time) AND
 // within the replay window. No nonce cache — replay within the window is
-// possible but bounded and the target is an idempotent GET (documented residual).
-func verifyCellAuth(secret []byte, method, path, rawQuery, header string, window time.Duration) bool {
+// possible but bounded (a GET is idempotent; a forwarded write carries a
+// deterministic idempotency key the home Cell dedups on — ADR-0044 slice 5).
+// bodyHash binds the write body into the signature (empty for a GET).
+func verifyCellAuth(secret []byte, method, path, rawQuery, bodyHash, header string, window time.Duration) bool {
 	tsStr, _, ok := strings.Cut(header, ":")
 	if !ok {
 		return false
@@ -38,7 +61,7 @@ func verifyCellAuth(secret []byte, method, path, rawQuery, header string, window
 	if d := time.Now().Unix() - ts; d < -int64(window.Seconds()) || d > int64(window.Seconds()) {
 		return false
 	}
-	expected := signCellAuth(secret, method, path, rawQuery, ts)
+	expected := signCellAuth(secret, method, path, rawQuery, bodyHash, ts)
 	return subtle.ConstantTimeCompare([]byte(header), []byte(expected)) == 1
 }
 
@@ -99,7 +122,7 @@ func (rt *router) peerGet(ctx context.Context, endpoint, path, rawQuery string, 
 	}
 	hdrs[fanoutHeader] = "1"
 	if len(rt.deps.Secret) > 0 {
-		hdrs[authHeader] = signCellAuth(rt.deps.Secret, http.MethodGet, path, rawQuery, time.Now().Unix())
+		hdrs[authHeader] = signCellAuth(rt.deps.Secret, http.MethodGet, path, rawQuery, "", time.Now().Unix())
 	}
 	return rt.doGet(ctx, endpoint, path, rawQuery, hdrs)
 }

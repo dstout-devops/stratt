@@ -37,6 +37,10 @@ type LaunchParams struct {
 	CredentialRefs []string
 	Slices         int
 	Principal      string
+	// StayLocal launches a Run that must not fan out across Cells (ADR-0044
+	// slice 5) — set by the API handler when the request arrived as a verified
+	// peer fan-out (a forwarded child Run). A direct launch leaves it false.
+	StayLocal bool
 }
 
 // LaunchRun is the single launch path shared by POST /api/v1/runs and the AWX
@@ -67,11 +71,29 @@ func LaunchRun(ctx context.Context, d LaunchDeps, p LaunchParams) (types.Run, er
 	in := RunInput{
 		RunID: run.ID, ViewName: v.Name, Actuator: p.Actuator, Params: p.Params,
 		CredentialRefs: p.CredentialRefs, Slices: p.Slices, Principal: p.Principal,
+		StayLocal: p.StayLocal,
+	}
+	// Cross-Cell selection (ADR-0044 slice 5): a direct launch on a fleet with
+	// peer Cells runs the parent RunAcrossCells (scatter a child Run to every
+	// Cell, each self-scoping to its home entities). A forwarded child
+	// (StayLocal) or a single-Cell estate (no peers) runs RunAgainstView —
+	// byte-identically to today. A Cell-registry read error fails the launch
+	// loudly rather than silently dropping peer targets (§1.8).
+	workflowFn := any(RunAgainstView)
+	if !p.StayLocal {
+		peers, err := d.Store.PeerCells(ctx)
+		if err != nil {
+			_ = d.Store.SetRunStatus(ctx, run.ID, types.RunFailed, map[string]any{"error": "cell registry unavailable"})
+			return types.Run{}, fmt.Errorf("%w: read peer Cells: %w", ErrStartWorkflow, err)
+		}
+		if len(peers) > 0 {
+			workflowFn = any(RunAcrossCells)
+		}
 	}
 	wfID := "run-" + run.ID
 	if _, err := d.Temporal.ExecuteWorkflow(ctx, client.StartWorkflowOptions{
 		ID: wfID, TaskQueue: TaskQueue,
-	}, RunAgainstView, in); err != nil {
+	}, workflowFn, in); err != nil {
 		_ = d.Store.SetRunStatus(ctx, run.ID, types.RunFailed, map[string]any{"error": "workflow start failed"})
 		return types.Run{}, fmt.Errorf("%w: %w", ErrStartWorkflow, err)
 	}

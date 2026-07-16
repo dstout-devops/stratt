@@ -97,12 +97,13 @@ func (s *Store) CreateWorkflowRun(ctx context.Context, workflowName, temporalID,
 	wr := types.WorkflowRun{
 		WorkflowName: workflowName, TemporalID: temporalID,
 		Status: types.RunPending, Principal: principal, TriggeredBy: triggeredBy,
+		Cell: s.projCell(), // homes to the creating daemon's Cell (ADR-0044 slice 5)
 	}
 	err := s.pool.QueryRow(ctx, `
-		INSERT INTO graph.workflow_run (workflow_name, temporal_id, principal, triggered_by)
-		VALUES ($1, $2, $3, nullif($4, ''))
+		INSERT INTO graph.workflow_run (workflow_name, temporal_id, principal, triggered_by, cell)
+		VALUES ($1, $2, $3, nullif($4, ''), $5)
 		RETURNING id, started_at`,
-		workflowName, temporalID, principal, triggeredBy,
+		workflowName, temporalID, principal, triggeredBy, wr.Cell,
 	).Scan(&wr.ID, &wr.StartedAt)
 	if err != nil {
 		return wr, fmt.Errorf("graph: create workflow run: %w", err)
@@ -133,7 +134,7 @@ func (s *Store) SetWorkflowRunStatus(ctx context.Context, id string, status type
 	if summary == nil {
 		doc = []byte(`{}`)
 	}
-	terminal := status == types.RunSucceeded || status == types.RunFailed || status == types.RunCanceled
+	terminal := status == types.RunSucceeded || status == types.RunFailed || status == types.RunCanceled || status == types.RunPartial
 	tag, err := s.pool.Exec(ctx, `
 		UPDATE graph.workflow_run
 		SET status = $2,
@@ -157,9 +158,9 @@ func (s *Store) GetWorkflowRun(ctx context.Context, id string) (types.WorkflowRu
 	var summary []byte
 	var triggeredBy *string
 	err := s.pool.QueryRow(ctx, `
-		SELECT id, workflow_name, temporal_id, status, principal, triggered_by, summary, started_at, finished_at
+		SELECT id, workflow_name, temporal_id, status, principal, triggered_by, summary, started_at, finished_at, cell
 		FROM graph.workflow_run WHERE id = $1`, id,
-	).Scan(&wr.ID, &wr.WorkflowName, &wr.TemporalID, &status, &wr.Principal, &triggeredBy, &summary, &wr.StartedAt, &wr.FinishedAt)
+	).Scan(&wr.ID, &wr.WorkflowName, &wr.TemporalID, &status, &wr.Principal, &triggeredBy, &summary, &wr.StartedAt, &wr.FinishedAt, &wr.Cell)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return wr, nil, fmt.Errorf("%w: workflow run %s", ErrNotFound, id)
 	}

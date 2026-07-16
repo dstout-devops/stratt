@@ -46,6 +46,11 @@ type Server struct {
 	// CellSecret is the fleet-wide STRATT_CELL_SECRET for HMAC-authenticating
 	// cross-Cell fan-out calls (ADR-0044 slice 4). Empty ⇒ single-Cell.
 	CellSecret []byte
+	// Peers forwards a WRITE that targets a datum homed on another Cell (a cancel
+	// or a gate decision, ADR-0044 slice 5) to that Cell's control API. On a
+	// single-Cell estate it is set but PeerCells is empty, so forwardWriteToPeers
+	// falls straight through to the local error — the forward never fires.
+	Peers *cellrouter.PeerClient
 	// Issuer/Audience are this Cell's OIDC config, advertised at /cellinfo so a
 	// peer can verify the fleet shares one issuer before it forwards a caller's
 	// token (§1.6; ADR-0044 slice 4). Non-secret.
@@ -332,6 +337,15 @@ func (s *Server) principalMiddleware(next http.Handler) http.Handler {
 	})
 }
 
+// isForwardedChild reports whether this request is a verified peer fan-out (a
+// forwarded child Run, ADR-0044 slice 5). The cellrouter middleware admits the
+// FanoutHeader to the inner handler ONLY after the HMAC verified (and strips it
+// on a single-Cell estate), so its presence here means a trusted peer sent it —
+// the launch then stays local (RunAgainstView), the recursion base case.
+func isForwardedChild(r *http.Request) bool {
+	return r.Header.Get(cellrouter.FanoutHeader) != ""
+}
+
 // ResolvePrincipal maps request headers to a Principal — the ONE identity
 // seam every surface shares (§1.6, ADR-0009): REST middleware and the MCP
 // tool layer both call it. ("", "", nil) means anonymous — default deny
@@ -344,6 +358,20 @@ func (s *Server) ResolvePrincipal(ctx context.Context, h http.Header) (id, kind 
 	case s.OIDC != nil && strings.HasPrefix(h.Get("Authorization"), "Bearer "):
 		id, kind, err = s.OIDC.Resolve(ctx, strings.TrimPrefix(h.Get("Authorization"), "Bearer "))
 	case s.DevPrincipalHeader && h.Get("X-Stratt-Principal") != "":
+		id = h.Get("X-Stratt-Principal")
+		kind = h.Get("X-Stratt-Principal-Kind")
+		if kind == "" {
+			kind = authz.KindHuman
+		}
+	case len(s.CellSecret) > 0 && h.Get(cellrouter.FanoutHeader) != "" && h.Get("X-Stratt-Principal") != "":
+		// A verified peer fan-out asserts the acting Principal (ADR-0044 slice 5):
+		// the async cross-Cell child launch has no live bearer to forward (§2.5).
+		// Trusted because the cellrouter middleware 401s any fan-out whose HMAC
+		// does not verify before it reaches a handler, and a Cell with a secret
+		// configured ALWAYS runs that check (a single-Cell estate has no secret,
+		// so this case never fires and the header is untrusted). Resolving it HERE
+		// — the one identity seam (§1.6) — means the SCIM offboarding gate below
+		// still applies and auditMiddleware attributes the forwarded write.
 		id = h.Get("X-Stratt-Principal")
 		kind = h.Get("X-Stratt-Principal-Kind")
 		if kind == "" {
@@ -1212,7 +1240,7 @@ func (s *Server) StartRun(w http.ResponseWriter, r *http.Request) {
 	if !s.requireGrant(w, r, authz.RelationRunner, "view:"+*body.ViewName) {
 		return
 	}
-	p := orchestrate.LaunchParams{ViewName: *body.ViewName}
+	p := orchestrate.LaunchParams{ViewName: *body.ViewName, StayLocal: isForwardedChild(r)}
 	// The launching Principal rides the Run for the dispatch-time `use`
 	// check and the audit trail (§1.8). Anonymous launches carry none and
 	// fail credential resolution if refs are requested.
@@ -1309,18 +1337,78 @@ func (s *Server) GetRun(w http.ResponseWriter, r *http.Request, id RunID) {
 // façade cannot be a weaker path (§1.6 symmetry).
 func (s *Server) CancelRun(w http.ResponseWriter, r *http.Request, id RunID) {
 	run, err := s.Store.GetRun(r.Context(), id)
+	// A Run row lives only on its home Cell (single-writer residency, ADR-0044).
+	// If it is homed here, the local Temporal owns it — cancel locally. If it is
+	// homed elsewhere (a local miss, or a foreign-Cell stamp), the cancel must
+	// reach that Cell's Temporal — forward it (§1.8: a cross-Cell Run you can
+	// launch, you can cancel).
+	if err == nil && (run.Cell == "" || run.Cell == s.localCell()) {
+		if !s.requireGrant(w, r, authz.RelationRunner, "view:"+viewNameFromRef(run.ViewRef)) {
+			return
+		}
+		if err := orchestrate.CancelRun(r.Context(), s.Temporal, run.ID); err != nil {
+			s.fail(w, err)
+			return
+		}
+		w.WriteHeader(http.StatusAccepted)
+		return
+	}
+	// Homed on a peer: forward the cancel. The home Cell re-checks the runner
+	// grant against the shared authz model and performs the cancel; other Cells
+	// 404 harmlessly. An unreachable home is a loud 503, never a silent success.
+	s.forwardWriteToPeers(w, r, "/runs/"+string(id)+"/cancel", nil, err)
+}
+
+// localCell is this daemon's Cell id, defaulting to the built-in LocalCell.
+func (s *Server) localCell() string {
+	if s.CellID == "" {
+		return types.LocalCell
+	}
+	return s.CellID
+}
+
+// forwardWriteToPeers forwards a point-write (cancel, gate decision) that targets
+// a datum homed on another Cell to every peer, asserting the caller's Principal
+// over the fan-out HMAC (§1.6 — the home Cell re-evaluates authz). The home Cell
+// acts (2xx); non-home Cells 404. Returns the home Cell's status; if no Cell
+// homes the datum it surfaces the original local error (typically 404); if every
+// peer was unreachable it is a 503. localErr is the local lookup's error, used
+// only when no peer claims the datum.
+func (s *Server) forwardWriteToPeers(w http.ResponseWriter, r *http.Request, path string, reqBody []byte, localErr error) {
+	if s.Peers == nil {
+		s.fail(w, localErr)
+		return
+	}
+	peers, err := s.Store.PeerCells(r.Context())
 	if err != nil {
-		s.fail(w, err)
+		writeErr(w, http.StatusServiceUnavailable, "cell registry unavailable")
 		return
 	}
-	if !s.requireGrant(w, r, authz.RelationRunner, "view:"+viewNameFromRef(run.ViewRef)) {
+	pid, pkind, _ := authz.PrincipalFrom(r.Context())
+	unreachable := 0
+	for _, p := range peers {
+		status, body, err := s.Peers.Post(r.Context(), p.Endpoint, path, reqBody, pid, pkind)
+		if err != nil {
+			unreachable++
+			continue
+		}
+		if status == http.StatusNotFound {
+			continue // this Cell does not home the datum
+		}
+		// The home Cell answered (2xx accept, or a 403/4xx it decided) — relay it.
+		w.WriteHeader(status)
+		_, _ = w.Write(body)
 		return
 	}
-	if err := orchestrate.CancelRun(r.Context(), s.Temporal, run.ID); err != nil {
-		s.fail(w, err)
+	if unreachable > 0 {
+		writeErr(w, http.StatusServiceUnavailable, "the datum's home Cell is unreachable")
 		return
 	}
-	w.WriteHeader(http.StatusAccepted)
+	if localErr != nil {
+		s.fail(w, localErr) // no Cell homes it → the local not-found stands
+		return
+	}
+	writeErr(w, http.StatusNotFound, "no Cell homes this datum")
 }
 
 // viewNameFromRef strips the "view://" scheme from a Run's ViewRef, yielding the
@@ -1770,6 +1858,16 @@ func (s *Server) DecideGate(w http.ResponseWriter, r *http.Request, id string) {
 	}
 	g, err := s.Store.GetGate(r.Context(), id)
 	if err != nil {
+		// A Gate lives on the Cell whose Temporal owns its WorkflowRun (they are
+		// co-homed, ADR-0044 slice 5). A local miss ⇒ homed on a peer: forward the
+		// decision so it signals the RIGHT Temporal namespace, never the wrong one
+		// (which would silently signal a same-named execution). The home Cell
+		// re-checks the approver policy. Re-marshal the decoded body to forward it.
+		if errors.Is(err, graph.ErrNotFound) {
+			fwd, _ := json.Marshal(body)
+			s.forwardWriteToPeers(w, r, "/gates/"+id+"/decision", fwd, err)
+			return
+		}
 		s.fail(w, err)
 		return
 	}

@@ -131,7 +131,11 @@ func classify(r *http.Request) (adapter, kind) {
 		return adapter{}, kindAggregate
 	case isViewEntities(p):
 		return entitiesAdapter, kindList
-	case isEntityByID(p):
+	case isEntityByID(p), isRunByID(p), isWorkflowRunByID(p):
+		// A datum lives only in its home Cell (single-writer residency), so a
+		// point read is local-if-present-else-ask-the-homing-peer (§1.8). Runs
+		// and WorkflowRuns join Entities here so a descent from a parent
+		// RunAcrossCells into a peer-homed child Run resolves (ADR-0044 slice 5).
 		return adapter{}, kindPoint
 	default:
 		return adapter{}, kindNone
@@ -144,10 +148,21 @@ func isViewEntities(p string) bool {
 		strings.Count(p, "/") == 3
 }
 
-// /entities/{id}
-func isEntityByID(p string) bool {
-	return strings.HasPrefix(p, "/entities/") && strings.Count(p, "/") == 2 && len(p) > len("/entities/")
+// pointByID matches "/<prefix>/{id}" — exactly two slashes and a non-empty id, so
+// it never swallows a sub-resource like "/runs/{id}/events" or ".../cancel"
+// (three slashes).
+func pointByID(p, prefix string) bool {
+	return strings.HasPrefix(p, prefix) && strings.Count(p, "/") == 2 && len(p) > len(prefix)
 }
+
+// /entities/{id}
+func isEntityByID(p string) bool { return pointByID(p, "/entities/") }
+
+// /runs/{id} — NOT /runs/{id}/events or /runs/{id}/cancel (three slashes).
+func isRunByID(p string) bool { return pointByID(p, "/runs/") }
+
+// /workflow-runs/{id}
+func isWorkflowRunByID(p string) bool { return pointByID(p, "/workflow-runs/") }
 
 // mergeList concatenates the per-Cell (already-sorted) JSON arrays, re-sorts in
 // total order, truncates to limit, and re-encodes the bare array (no envelope —

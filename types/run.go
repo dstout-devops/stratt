@@ -14,6 +14,13 @@ const (
 	RunSucceeded RunStatus = "succeeded"
 	RunFailed    RunStatus = "failed"
 	RunCanceled  RunStatus = "canceled"
+	// RunPartial is a cross-Cell terminal outcome: some home Cells succeeded and
+	// at least one failed or was unreachable (ADR-0044 slice 5). It exists so a
+	// RunAcrossCells never reports a green Run that silently skipped a region
+	// (§1.8) — the failed/unreachable Cells are named in the summary and Cells.
+	// Only a multi-Cell RunAcrossCells can produce it; a single-Cell Run is only
+	// ever succeeded/failed/canceled (the no-op invariant is preserved).
+	RunPartial RunStatus = "partial"
 )
 
 // Run is one execution instance: status, per-target results, event stream,

@@ -23,6 +23,7 @@ import (
 	"github.com/dstout-devops/stratt/core/internal/actuators"
 	mcpact "github.com/dstout-devops/stratt/core/internal/actuators/mcp"
 	"github.com/dstout-devops/stratt/core/internal/authz"
+	"github.com/dstout-devops/stratt/core/internal/cellrouter"
 	"github.com/dstout-devops/stratt/core/internal/dispatch"
 	"github.com/dstout-devops/stratt/core/internal/events"
 	"github.com/dstout-devops/stratt/core/internal/evidencestore"
@@ -77,6 +78,13 @@ type RunInput struct {
 	Principal string
 	// CredentialRefs are pointer names to project into execution pods.
 	CredentialRefs []string
+	// StayLocal marks a Run that must NOT fan out across Cells (ADR-0044 slice
+	// 5): it is the recursion base case for a forwarded child Run, and it makes
+	// a zero-entity View resolution a benign empty success (a peer legitimately
+	// homes none of a multi-Cell View's targets). Set by the launch path when
+	// the request arrives as a verified peer fan-out; always false for a direct
+	// launch, so a single-Cell estate is unaffected.
+	StayLocal bool
 }
 
 // ResolvedTargets is what the View resolves to at dispatch time; the version
@@ -319,6 +327,11 @@ type Activities struct {
 	// ADR-0032). Nil on a hub with no Sites configured — a Run whose targets
 	// route to a remote Site then fails terminally with NoSiteGateway.
 	Sites SiteGateway
+	// Peers launches and polls child Runs on peer Cells over their control APIs
+	// (ADR-0044 slice 5) — the write-side counterpart of the cellrouter read
+	// federation. Nil on a single-Cell estate; RunAcrossCells is never reached
+	// there (LaunchRun sees no peers), so the nil is never dereferenced.
+	Peers *cellrouter.PeerClient
 }
 
 // EnsureRun creates the Run summary row for a Trigger-started execution
@@ -383,6 +396,13 @@ func (a *Activities) ResolveTargetsBySite(ctx context.Context, in RunInput) (Rou
 		return RoutedTargets{}, err
 	}
 	if len(ents) == 0 {
+		// A forwarded child Run (StayLocal) that homes none of a multi-Cell
+		// View's targets is a benign empty success, not a failure — the parent
+		// RunAcrossCells scatters to ALL peers and most legitimately have zero
+		// local targets (ADR-0044 slice 5). A direct launch still fails loudly.
+		if in.StayLocal {
+			return RoutedTargets{ViewVersion: v.Version}, nil
+		}
 		return RoutedTargets{}, fmt.Errorf("orchestrate: view %s resolves to zero entities", in.ViewName)
 	}
 	ids := make([]string, len(ents))

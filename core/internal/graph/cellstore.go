@@ -86,6 +86,28 @@ func (s *Store) ListCells(ctx context.Context) ([]types.Cell, error) {
 	return out, rows.Err()
 }
 
+// Cell returns this Store's own Cell id (STRATT_CELL_ID, or LocalCell) — the
+// residency home stamped on rows this daemon writes (ADR-0044).
+func (s *Store) Cell() string { return s.projCell() }
+
+// PeerCells returns the declared Cells OTHER than this one, ordered by name —
+// the fan-out set for a cross-Cell Run (ADR-0044 slice 5). Empty ⇒ single-Cell
+// estate (the no-op case): a Run then runs entirely local, byte-identically.
+func (s *Store) PeerCells(ctx context.Context) ([]types.Cell, error) {
+	all, err := s.ListCells(ctx)
+	if err != nil {
+		return nil, err
+	}
+	self := s.projCell()
+	peers := make([]types.Cell, 0, len(all))
+	for _, c := range all {
+		if c.Name != self {
+			peers = append(peers, c)
+		}
+	}
+	return peers, nil
+}
+
 // DeleteCell removes one Cell declaration.
 func (s *Store) DeleteCell(ctx context.Context, name string) error {
 	tag, err := s.pool.Exec(ctx, `DELETE FROM graph.cell WHERE name = $1`, name)

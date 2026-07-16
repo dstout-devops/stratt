@@ -142,6 +142,67 @@ the slice-3 safety gaps. Steward-approved:
 Single-Cell 'local' stays a byte-identical no-op throughout: `SyncTuples` runs as today, no HMAC signing, the
 cellrouter is a pass-through, `/audit` keeps `seq`-ASC.
 
+## Slice-5 refinements (accepted 2026-07-16)
+
+Slice 5 turns cross-Cell READ federation into cross-Cell ORCHESTRATION: a Run can act on the whole logical
+estate, a Run/Gate homed elsewhere can be cancelled/approved, and a parent Run descends into its peer-homed
+children. Steward-approved:
+
+1. **Scatter, NOT central partition (the load-bearing correction).** Entities are not replicated, so a parent
+   Cell is structurally blind to peer-homed targets — `ResolveView`/`HomeCellsByEntities` query only the local
+   pool. A central "partition the View's targets by home Cell" (the naïve `ResolveTargetsBySite` mirror) would
+   silently drop peer targets while passing single-Cell tripwires. So **`RunAcrossCells` scatters**: a local
+   child `RunAgainstView` over this Cell's home entities + one HTTP-launched child Run per peer Cell, each
+   **self-scoping** because its `RunAgainstView` re-resolves the same (global CaC) View to only that Cell's home
+   subset. It is the write-side mirror of slice-3 scatter-gather reads, not the one-level-up mirror of the Site
+   fan-out.
+2. **`StayLocal` = the recursion base case.** A forwarded child carries `RunInput.StayLocal`, which makes
+   `LaunchRun` always choose `RunAgainstView` (never `RunAcrossCells`) and turns a zero-entity resolution into a
+   **benign empty success** (a peer legitimately homes none of a View's targets). `LaunchRun` selects
+   `RunAcrossCells` only for a direct launch with peers declared; a single-Cell estate (no peers) runs
+   `RunAgainstView` byte-identically.
+3. **`partial` — a new terminal RunStatus.** A cross-Cell Run where some Cells succeeded and at least one
+   failed/unreachable is `partial`, never a silent green (§1.8) — the failed Cells are NAMED in the summary
+   (`failedCells`) and the touched-Cell union (`run.cells`). A View that matched no entity in ANY Cell is a
+   failure, not a hollow green. Only a multi-Cell `RunAcrossCells` can produce `partial`; a single-Cell Run is
+   only ever succeeded/failed/canceled. The AWX façade maps `partial→failed` (AWX has no partial); the notify
+   success-gate treats `partial` as not-success. `partial` is a status VALUE on the frozen Run Kind, not a new
+   Named Kind.
+4. **Forwarded-write identity = HMAC-verified Principal ASSERTION, resolved at the one seam.** The async child
+   launch runs in a Temporal activity with NO live bearer (§2.5 — tokens never persist), so it cannot forward
+   one. It asserts the acting Principal's **id** via `X-Stratt-Principal`, honored ONLY when a secret is
+   configured AND the request carries the fan-out header — trusted because the cellrouter middleware 401s any
+   fan-out whose HMAC does not verify before it reaches a handler. Critically, the assertion is resolved at the
+   **one identity seam** (`Server.ResolvePrincipal`, §1.6), NOT injected inside the router — so the ADR-0035 SCIM
+   offboarding gate still runs on the asserted Principal (a human deactivated mid-fan-out is denied) and the
+   audit access-log attributes the forwarded write. The peer re-evaluates the `runner`/approver authz against the
+   global OpenFGA (the assertion is identity, not authorization). No credential MATERIAL is ever forwarded — only
+   CredentialRef names ride the child body, expected to be globally CaC-declared like Views. The synchronous
+   point-forwards (cancel, gate decision) use the same assertion.
+5. **Body-covered HMAC for writes.** The fan-out signature now folds `sha256(body)` for non-GET
+   (`method\npath\nrawQuery\nsha256(body)\nts`); the GET form is byte-identical to slice 4 (read federation +
+   tripwires unmoved). A tampered/replayed body can no longer launch a different Run under the forwarded
+   identity.
+6. **Point-forwards for `CancelRun` + `DecideGate`.** A Run/Gate lives only on its home Cell; a cancel/decision
+   that landed on the wrong Cell would hit the wrong Temporal namespace (silently, if a same-named execution
+   existed). Both forward to the home Cell (the home Cell re-checks the grant/approver policy; an unreachable
+   home is a loud 503). A Gate is co-homed with its WorkflowRun via the new **`graph.workflow_run.cell`**
+   (migration 00030, set-once at creation like `run.cell`).
+7. **Descent federation.** `/runs/{id}` and `/workflow-runs/{id}` join `/entities/{id}` as `kindPoint`
+   (local-if-present-else-ask-the-homing-peer-else-503), so a descent from a parent `RunAcrossCells` into a
+   peer-homed child Run resolves. The parent's summary lists `childRuns` (`{cell, run, status}`) — the forward
+   descent path.
+
+**Honest deferrals (slice 5):** peer-side idempotency-key dedup for a forwarded child launch (the activity
+POSTs once then polls internally, so a Temporal retry re-POSTs only when the launch itself failed; the
+lost-response double-launch is the recorded residual — launch-level dedup is already a standing follow-up).
+Federating the *scoped* child-list and the child event-stream tail across Cells (descent-by-listing is
+answerable from the parent's `childRuns`/`run.cells` for now). Reverse child→parent linkage. The slice-4 HMAC
+symmetric-secret + no-nonce residuals carry forward.
+
+Single-Cell 'local' stays a byte-identical no-op: `len(peers)==0` runs `RunAgainstView` (never `RunAcrossCells`),
+no HMAC-body path, no `run.cells` write, `partial` never arises, writes are always local.
+
 ## Decision (the complete architecture)
 
 **Partitioned region-local single-writer Cells presenting ONE logical estate.** Not multi-master.
@@ -235,8 +296,10 @@ cannot split-brain.
    honesty; home-Cell write forwarding; `graph.cell` globally replicated.
 4. **Global identity/authz + federated audit/cost:** global OIDC/OpenFGA (authz-home-Cell leader sync); per-
    Cell audit chains + federated `ListAudit` merge + aggregated SIEM forwarder; per-identity cost aggregation.
-5. **Cross-cell orchestration:** `RunAcrossCells` + `ResolveTargetsByCell` (the slice-1 seam) + child-Run fan-
-   out to peer control APIs + `graph.run.cells`.
+5. **Cross-cell orchestration (landed 2026-07-16):** `RunAcrossCells` (a **scatter** — see slice-5
+   refinements — not the naïve central `ResolveTargetsByCell` partition, which is blind to peer-homed targets) +
+   child-Run fan-out to peer control APIs + `graph.run.cells` union + the `partial` RunStatus + write
+   home-forwarding (cancel/gate) + `/runs/{id}` descent federation.
 6. **Cross-cell execution wiring:** Cell-scoped NATS fully cut over; Site→Cell binding; the hop hierarchy e2e.
 7. **Per-Cell DR + fenced re-home GA + failover drill** (mostly deploy/runbook); 99.99% multi-region evidence.
 
