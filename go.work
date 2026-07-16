@@ -10,6 +10,10 @@ use (
 	./contracts
 	./core
 	./packs
+	./plugins/awsec2
+	./plugins/chef
+	./plugins/puppet
+	./plugins/salt
 	./plugins/vcenter
 	./sdk
 	./types

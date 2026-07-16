@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/dstout-devops/stratt/core/internal/graph"
@@ -44,9 +45,22 @@ type Host struct {
 // emission it dropped). Persisting these as graph Findings (§1.8) is the
 // follow-up; for now they are logged and retained for observability/tests.
 type Rejection struct {
-	Kind   string // "identity-scheme" | "label" | "facet" | "entity"
+	Kind   string // "identity-scheme" | "label" | "facet" | "entity" | "relation" | "provisioned-cred"
 	Detail string // the offending scheme/key/namespace
 	Reason string
+}
+
+// InvokeOutcome is what an Action invocation returns to its calling Run Step: the
+// typed outputs (for cross-Step binding, ADR-0031), the graph ids of entities it
+// provisioned (provision→configure, ADR-0017), and the CredentialRef names it
+// provisioned (§2.5, namespace-confined).
+type InvokeOutcome struct {
+	OK                bool
+	Outputs           []byte
+	OutputContract    string
+	ProvisionedEntity []string
+	ProvisionedCreds  []string
+	Events            int
 }
 
 func New(store *graph.Store, client pluginv1.PluginServiceClient, grant Grant, log *slog.Logger) *Host {
@@ -251,6 +265,98 @@ func (h *Host) Sync(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+// Invoke runs one Action over the port (ADR-0047): it calls the plugin's Invoke,
+// streams TaskEvents (audit/descent), and on the terminal message captures the
+// InvokeResult — projecting its entities with RUN provenance (WriterRun; the host
+// picks the write path per verb, never the plugin — ADR-0047 §2), gating identity
+// schemes exactly as on Observe, and returning the typed outputs. runID stamps
+// provenance; Register must have run.
+func (h *Host) Invoke(ctx context.Context, runID, action string, args []byte, dryRun bool) (InvokeOutcome, error) {
+	var out InvokeOutcome
+	if h.source.ID == "" {
+		return out, errors.New("pluginhost: Invoke before Register")
+	}
+	stream, err := h.client.Invoke(ctx, &pluginv1.InvokeRequest{
+		Envelope: &pluginv1.Envelope{Principal: &pluginv1.Principal{Id: h.grant.PluginIdentity, Kind: "service"}},
+		Args:     &pluginv1.Payload{Bytes: args},
+		Action:   action,
+		DryRun:   dryRun,
+	})
+	if err != nil {
+		return out, fmt.Errorf("pluginhost: invoke %q: %w", action, err)
+	}
+	// RUN provenance — the imperative Action write path, distinct from the Syncer
+	// Observe path (per-verb projector selection, ADR-0047 §2).
+	prov := types.Provenance{WriterKind: types.WriterRun, WriterRef: runID, SourceID: h.source.ID, At: time.Now().UTC()}
+	projector := h.store.RunProjector()
+
+	for {
+		resp, err := stream.Recv()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			if ctx.Err() != nil {
+				return out, ctx.Err()
+			}
+			return out, fmt.Errorf("pluginhost: invoke recv: %w", err)
+		}
+		if ev := resp.GetEvent(); ev != nil {
+			out.Events++
+			if ev.GetTerminal() {
+				out.OK = ev.GetOk()
+			}
+		}
+		res := resp.GetResult()
+		if res == nil {
+			continue // diagnostic message; the result rides the terminal one
+		}
+		out.Outputs = res.GetOutputs().GetBytes()
+		out.OutputContract = res.GetOutputContract().GetSchemaId()
+
+		// provision→configure: project each entity by kind + granted identity with
+		// RUN provenance. (Facet/label write-back on the Invoke path — with the same
+		// ownership rules as Observe — is the recorded follow-up; identity is what
+		// lets the next Syncer sweep correlate onto the provisioned entity.)
+		for _, e := range res.GetEntities() {
+			ids := map[string]string{}
+			for scheme, val := range e.GetIdentityKeys() {
+				if ok, reason := h.grant.allowsIdentity(scheme); !ok {
+					h.reject("identity-scheme", scheme, "invoke: "+reason)
+					continue
+				}
+				ids[scheme] = val
+			}
+			if len(ids) == 0 {
+				h.reject("entity", e.GetKind(), "invoke: no granted identity key")
+				continue
+			}
+			gids, err := projector.UpsertEntities(ctx, prov, []graph.EntityUpsert{{Kind: e.GetKind(), IdentityKeys: ids}})
+			if err != nil {
+				return out, fmt.Errorf("pluginhost: invoke project: %w", err)
+			}
+			out.ProvisionedEntity = append(out.ProvisionedEntity, gids...)
+		}
+		for _, c := range res.GetProvisionedCreds() {
+			name := c.GetName()
+			if !h.ownsCred(name) {
+				h.reject("provisioned-cred", name, "outside the plugin's credential namespace (ADR-0047 §7)")
+				continue
+			}
+			out.ProvisionedCreds = append(out.ProvisionedCreds, name)
+		}
+	}
+	return out, nil
+}
+
+// ownsCred enforces provisioned-CredentialRef namespace confinement (ADR-0047 §7):
+// a plugin may only name creds under its own Source scope, so it cannot shadow
+// another principal's CredentialRef. (Registration into the secrets registry is
+// the follow-up; this gates the name.)
+func (h *Host) ownsCred(name string) bool {
+	return strings.HasPrefix(name, "cred/"+h.grant.Source.Name+"/")
 }
 
 // toUpsert gates one ObservedEntity into a graph.EntityUpsert: it drops every

@@ -69,6 +69,9 @@ type fakePlugin struct {
 	contracts        []*pluginv1.ContractDecl
 	tombstoneSchemes []string
 	entities         []*pluginv1.ObservedEntity
+	invokeEntities   []*pluginv1.ObservedEntity
+	invokeOutputs    []byte
+	invokeCreds      []string
 }
 
 func (f *fakePlugin) GetManifest(context.Context, *pluginv1.GetManifestRequest) (*pluginv1.GetManifestResponse, error) {
@@ -88,6 +91,23 @@ func (f *fakePlugin) GetManifest(context.Context, *pluginv1.GetManifestRequest) 
 
 func (f *fakePlugin) Observe(_ *pluginv1.ObserveRequest, stream grpc.ServerStreamingServer[pluginv1.ObserveResponse]) error {
 	return stream.Send(&pluginv1.ObserveResponse{Entities: f.entities, FullSyncComplete: true})
+}
+
+func (f *fakePlugin) Invoke(_ *pluginv1.InvokeRequest, stream grpc.ServerStreamingServer[pluginv1.InvokeResponse]) error {
+	_ = stream.Send(&pluginv1.InvokeResponse{Event: &pluginv1.TaskEvent{Level: pluginv1.TaskEvent_LEVEL_INFO, Message: "working"}})
+	var creds []*pluginv1.CredentialRef
+	for _, c := range f.invokeCreds {
+		creds = append(creds, &pluginv1.CredentialRef{Name: c})
+	}
+	return stream.Send(&pluginv1.InvokeResponse{
+		Event: &pluginv1.TaskEvent{Level: pluginv1.TaskEvent_LEVEL_INFO, Message: "done", Terminal: true, Ok: true},
+		Result: &pluginv1.InvokeResult{
+			Outputs:          &pluginv1.Payload{Bytes: f.invokeOutputs},
+			OutputContract:   &pluginv1.ContractRef{SchemaId: "action.output"},
+			Entities:         f.invokeEntities,
+			ProvisionedCreds: creds,
+		},
+	})
 }
 
 func serve(t *testing.T, f *fakePlugin) pluginv1.PluginServiceClient {
@@ -356,6 +376,60 @@ func TestHost_RelationNoVivify(t *testing.T) {
 	}
 	if !dropped {
 		t.Fatalf("expected a dropped-relation rejection, got %+v", h.Rejections())
+	}
+}
+
+// TestHost_InvokeProjectsWithRunProvenance proves the Action/Invoke path: the
+// plugin's Invoke returns typed outputs + a provisioned entity, and the host
+// projects it with RUN provenance (distinct from the Syncer Observe path,
+// ADR-0047 §2), captures the outputs, and namespace-gates provisioned creds.
+func TestHost_InvokeProjectsWithRunProvenance(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+	grant := vcenterGrant(pluginhost.TierTrusted, []string{"vcenter.uuid"})
+	inst := &pluginv1.ObservedEntity{Kind: "vm", IdentityKeys: map[string]string{"vcenter.uuid": "created-1"}}
+	client := serve(t, &fakePlugin{
+		pluginID:       "vcenter-dev",
+		invokeEntities: []*pluginv1.ObservedEntity{inst},
+		invokeOutputs:  []byte(`{"vm":"created-1"}`),
+		// second name is outside the plugin's cred namespace — must be refused.
+		invokeCreds: []string{"cred/vcenter-dev/root-pw", "cred/other-src/steal"},
+	})
+	h := pluginhost.New(store, client, grant, discardLog())
+	if err := h.Register(ctx); err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	out, err := h.Invoke(ctx, "run-1", "provision", []byte(`{}`), false)
+	if err != nil {
+		t.Fatalf("invoke: %v", err)
+	}
+	if !out.OK {
+		t.Fatal("expected a terminal ok result")
+	}
+	if string(out.Outputs) != `{"vm":"created-1"}` {
+		t.Fatalf("outputs not captured: %s", out.Outputs)
+	}
+	if len(out.ProvisionedEntity) != 1 {
+		t.Fatalf("expected 1 provisioned entity, got %d", len(out.ProvisionedEntity))
+	}
+	wk, err := store.EntityWriterKind(ctx, out.ProvisionedEntity[0])
+	if err != nil {
+		t.Fatalf("writer kind: %v", err)
+	}
+	if wk != "run" {
+		t.Fatalf("provisioned entity must carry RUN provenance, got %q", wk)
+	}
+	if len(out.ProvisionedCreds) != 1 || out.ProvisionedCreds[0] != "cred/vcenter-dev/root-pw" {
+		t.Fatalf("credential namespace gate failed: %+v", out.ProvisionedCreds)
+	}
+	var credReject bool
+	for _, r := range h.Rejections() {
+		if r.Kind == "provisioned-cred" && r.Detail == "cred/other-src/steal" {
+			credReject = true
+		}
+	}
+	if !credReject {
+		t.Fatalf("expected a provisioned-cred rejection, got %+v", h.Rejections())
 	}
 }
 
