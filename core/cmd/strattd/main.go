@@ -25,7 +25,6 @@ import (
 	"k8s.io/client-go/tools/clientcmd"
 
 	"github.com/dstout-devops/stratt/core/internal/actions"
-	awsaction "github.com/dstout-devops/stratt/core/internal/actions/awsec2"
 	certaction "github.com/dstout-devops/stratt/core/internal/actions/certissuer"
 	notifyaction "github.com/dstout-devops/stratt/core/internal/actions/notify"
 	"github.com/dstout-devops/stratt/core/internal/actuators"
@@ -40,8 +39,6 @@ import (
 	"github.com/dstout-devops/stratt/core/internal/baselines"
 	"github.com/dstout-devops/stratt/core/internal/cellrouter"
 	"github.com/dstout-devops/stratt/core/internal/compiler"
-	"github.com/dstout-devops/stratt/core/internal/connectors/awsec2"
-	certsyncer "github.com/dstout-devops/stratt/core/internal/connectors/certissuer"
 	"github.com/dstout-devops/stratt/core/internal/connectors/salt"
 	"github.com/dstout-devops/stratt/core/internal/contract"
 	"github.com/dstout-devops/stratt/core/internal/desiredstate"
@@ -330,18 +327,14 @@ func run(ctx context.Context, log *slog.Logger) error {
 	// In-tree Action registry (§2.2, ADR-0031): targetless typed operations
 	// shipped by Connectors — the write side of cert-issuer (retiring the
 	// ADR-0030 Actuator-in-disguise) and awsec2 create-vm.
-	// awsec2 create-vm stays in-tree ONLY when no awsec2 plugin is configured;
-	// with the plugin the port provides it and a registry entry would collide.
+	// certissuer + notify Actions run in-tree (pods, incl. at remote Sites via
+	// stratt-agent); awsec2 create-vm is provided by its plugin over the port.
 	awsPluginAddr := os.Getenv("STRATT_AWS_PLUGIN_ADDR")
 	actionRegistry := actions.Registry{}
-	inTreeActions := []actions.Action{
+	for _, act := range []actions.Action{
 		certaction.Issue(), certaction.Renew(), certaction.Revoke(),
 		notifyaction.Webhook(),
-	}
-	if awsPluginAddr == "" {
-		inTreeActions = append(inTreeActions, awsaction.CreateVM(env("STRATT_EE_ACTIONS_IMAGE", "stratt-ee-actions:dev")))
-	}
-	for _, act := range inTreeActions {
+	} {
 		actionRegistry[act.Name()] = act
 	}
 	log.Info("action registry ready", "actions", len(actionRegistry))
@@ -583,7 +576,7 @@ func run(ctx context.Context, log *slog.Logger) error {
 		log.Info("no MS Graph plugin configured (STRATT_MSGRAPH_PLUGIN_ADDR empty); syncer idle")
 	}
 
-	// ── EC2 instance Syncer: plugin over the port when configured, else in-tree ─
+	// ── EC2 instance Syncer over the port (Phase C cutover) ──────────────
 	if awsHost != nil {
 		interval, err := time.ParseDuration(env("STRATT_AWS_INTERVAL", "60s"))
 		if err != nil {
@@ -593,41 +586,39 @@ func run(ctx context.Context, log *slog.Logger) error {
 		controllers = append(controllers, homeSupervise(src, awsHost.Register, func(cctx context.Context) error {
 			return awsHost.SyncLoop(cctx, interval)
 		}))
-	} else if region := os.Getenv("STRATT_AWS_REGION"); region != "" {
-		interval, err := time.ParseDuration(env("STRATT_AWS_INTERVAL", "60s"))
-		if err != nil {
-			return fmt.Errorf("awsec2 interval: %w", err)
-		}
-		syncer := awsec2.NewSyncer(awsec2.Config{
-			// Endpoint override points at the moto stand-in in dev;
-			// credentials arrive via the SDK's standard env chain (§2.5
-			// env-stub posture, CredentialRef brokering is the follow-up).
-			Endpoint:   os.Getenv("STRATT_AWS_ENDPOINT"),
-			Region:     region,
-			SourceName: env("STRATT_AWS_SOURCE_NAME", "awsec2"),
-		}, interval, store, log)
-		controllers = append(controllers, homeSupervise(env("STRATT_AWS_SOURCE_NAME", "awsec2"), syncer.Register, syncer.Run))
 	} else {
-		log.Info("no EC2 Source configured (STRATT_AWS_PLUGIN_ADDR/STRATT_AWS_REGION empty); syncer idle")
+		log.Info("no EC2 plugin configured (STRATT_AWS_PLUGIN_ADDR empty); syncer idle")
 	}
 
-	// ── cert-issuer (CLM) Syncer (ADR-0030; started when a Source is set) ─
-	if addr := os.Getenv("STRATT_CLM_ADDR"); addr != "" {
+	// ── cert-issuer (CLM) Syncer over the port (Phase C cutover; ADR-0030) ─
+	// The Syncer runs over the port; the issue/renew/revoke Actions stay in-tree
+	// (pod execution, incl. at remote Sites via stratt-agent).
+	if addr := os.Getenv("STRATT_CLM_PLUGIN_ADDR"); addr != "" {
+		sourceName := env("STRATT_CLM_SOURCE_NAME", "certissuer")
 		interval, err := time.ParseDuration(env("STRATT_CLM_INTERVAL", "60s"))
 		if err != nil {
 			return fmt.Errorf("certissuer interval: %w", err)
 		}
-		syncer := certsyncer.NewSyncer(certsyncer.Config{
-			// Read-side projection credential via the env chain (§2.5); the
-			// write side (issue/revoke) injects its token into the EE pod.
-			Addr:       addr,
-			Token:      os.Getenv("STRATT_CLM_TOKEN"),
-			Mount:      env("STRATT_CLM_MOUNT", "pki"),
-			SourceName: env("STRATT_CLM_SOURCE_NAME", "certissuer"),
-		}, interval, store, log)
-		controllers = append(controllers, homeSupervise(env("STRATT_CLM_SOURCE_NAME", "certissuer"), syncer.Register, syncer.Run))
+		conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+		if err != nil {
+			return fmt.Errorf("certissuer plugin dial %s: %w", addr, err)
+		}
+		defer conn.Close()
+		grant := pluginhost.Grant{
+			PluginIdentity:   env("STRATT_CLM_PLUGIN_ID", "certissuer"),
+			Tier:             pluginhost.Tier(env("STRATT_CLM_TIER", "trusted")),
+			Source:           types.Source{Kind: "certissuer", Name: sourceName, Endpoint: os.Getenv("STRATT_CLM_ADDR")},
+			FacetNamespaces:  []string{"cert.identity", "cert.expiry"},
+			LabelKeys:        []string{"cert.commonName"},
+			IdentitySchemes:  []string{"cert.serial"},
+			TombstoneSchemes: []string{"cert.serial"},
+		}
+		host := pluginhost.New(store, pluginv1.NewPluginServiceClient(conn), grant, log)
+		controllers = append(controllers, homeSupervise(sourceName, host.Register, func(cctx context.Context) error {
+			return host.SyncLoop(cctx, interval)
+		}))
 	} else {
-		log.Info("no CLM Source configured (STRATT_CLM_ADDR empty); cert syncer idle")
+		log.Info("no CLM plugin configured (STRATT_CLM_PLUGIN_ADDR empty); cert syncer idle")
 	}
 
 	// ── Chef Infra node Syncer over the port (ADR-0046/0047 Phase C cutover) ─
@@ -698,15 +689,33 @@ func run(ctx context.Context, log *slog.Logger) error {
 		EmitterName: env("STRATT_SALT_EMITTER_NAME", "salt"),
 		EventTags:   splitNonEmpty(os.Getenv("STRATT_SALT_EVENT_TAGS")),
 	}
-	if saltCfg.APIURL != "" {
+	// The grains Syncer runs over the port; the event-bus Emitter (below) stays
+	// in-tree until the Subscribe verb is wired host-side.
+	if addr := os.Getenv("STRATT_SALT_PLUGIN_ADDR"); addr != "" {
+		sourceName := env("STRATT_SALT_SOURCE_NAME", "salt")
 		interval, err := time.ParseDuration(env("STRATT_SALT_INTERVAL", "60s"))
 		if err != nil {
 			return fmt.Errorf("salt interval: %w", err)
 		}
-		syncer := salt.NewSyncer(saltCfg, interval, store, log)
-		controllers = append(controllers, homeSupervise(saltCfg.SourceName, syncer.Register, syncer.Run))
+		conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+		if err != nil {
+			return fmt.Errorf("salt plugin dial %s: %w", addr, err)
+		}
+		defer conn.Close()
+		grant := pluginhost.Grant{
+			PluginIdentity:   env("STRATT_SALT_PLUGIN_ID", "salt"),
+			Tier:             pluginhost.Tier(env("STRATT_SALT_TIER", "trusted")),
+			Source:           types.Source{Kind: "salt", Name: sourceName, Endpoint: os.Getenv("STRATT_SALT_API_URL")},
+			FacetNamespaces:  []string{"salt.node.identity", "salt.node.os", "salt.node.network"},
+			IdentitySchemes:  []string{"salt.minion_id", "dns.fqdn"},
+			TombstoneSchemes: []string{"salt.minion_id"},
+		}
+		host := pluginhost.New(store, pluginv1.NewPluginServiceClient(conn), grant, log)
+		controllers = append(controllers, homeSupervise(sourceName, host.Register, func(cctx context.Context) error {
+			return host.SyncLoop(cctx, interval)
+		}))
 	} else {
-		log.Info("no Salt Source configured (STRATT_SALT_API_URL empty); syncer idle")
+		log.Info("no Salt plugin configured (STRATT_SALT_PLUGIN_ADDR empty); syncer idle")
 	}
 
 	// ── home-ownership collision reconcile (ADR-0045 must-fix 2) ─────────

@@ -155,3 +155,16 @@ func (c *saltClient) authToken(ctx context.Context) (string, error) {
 	defer c.mu.Unlock()
 	return c.token, nil
 }
+
+// str reads a string field from a decoded JSON map, "" when absent or non-string.
+// Shared by the Emitter (the Syncer normalizer that also used it moved to the
+// plugin, ADR-0046/0047 cutover).
+func str(m map[string]any, key string) string {
+	if m == nil {
+		return ""
+	}
+	if v, ok := m[key].(string); ok {
+		return v
+	}
+	return ""
+}

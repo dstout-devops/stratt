@@ -306,18 +306,6 @@ tasks:
       - docker build -f ee/mcp.Dockerfile -t stratt-ee-mcp:dev ee/
       - go run sigs.k8s.io/kind@v0.32.0 load docker-image stratt-ee-mcp:dev --name stratt-dev
 
-  dev:ee-actions:build:
-    desc: Build the Actions EE image (Go SDK drivers, e.g. awsec2/create-vm) and load it into kind (ADR-0031)
-    cmds:
-      - docker build -f ee/actions.Dockerfile -t stratt-ee-actions:dev .
-      - go run sigs.k8s.io/kind@v0.32.0 load docker-image stratt-ee-actions:dev --name stratt-dev
-
-  dev:ee-actions:build:
-    desc: Build the Actions EE image (Go SDK drivers, e.g. awsec2/create-vm) and load it into kind (ADR-0031)
-    cmds:
-      - docker build -f ee/actions.Dockerfile -t stratt-ee-actions:dev .
-      - go run sigs.k8s.io/kind@v0.32.0 load docker-image stratt-ee-actions:dev --name stratt-dev
-
   generate:
     desc: Regenerate code from specs (OpenAPI → server stubs + UI types, ADR-0006/0012; proto → plugin port, ADR-0046)
     cmds:
