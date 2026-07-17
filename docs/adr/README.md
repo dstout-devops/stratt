@@ -66,3 +66,4 @@ Status is `Accepted` unless noted. See **[../roadmap.md](../roadmap.md)** for ho
 | [0055](0055-estate-composition.md) | Estate Composition: what it means to "define the estate" (north-star model + guardrails + gap roadmap) | Accepted |
 | [0056](0056-estate-as-code.md) | Estate-as-Code: declaring Sources & Connectors in Git + the `stratt` estate CLI | Accepted |
 | [0057](0057-environment-scoped-reconciliation.md) | Environment-scoped reconciliation: one estate repo, N environments | Accepted |
+| [0058](0058-provisioning-from-intent.md) | Provisioning from Intent: declare desired infrastructure → gated build → project back (G1/G4) | Accepted |
