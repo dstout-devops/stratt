@@ -1,6 +1,6 @@
 # ADR 0057 — Environment-scoped reconciliation: one estate repo, N environments
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-07-17
 - **Deciders:** steward (dstout), charter-guardian
 - **Charter sections:** §1.2, §2.4, §4.1, §4.3
