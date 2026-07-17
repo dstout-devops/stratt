@@ -4,6 +4,9 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/dstout-devops/stratt/core/internal/provision"
+	"github.com/dstout-devops/stratt/types"
 )
 
 // estateRoot is the repo's reconciled reference estate (/estate), relative to
@@ -100,6 +103,50 @@ func TestReferenceEstateDevSlice(t *testing.T) {
 	// Unscoped (env == "") is byte-identical to no scoping: every Trigger kept.
 	if all := ScopeToEnvironment(decls, ""); len(all.Triggers) != len(decls.Triggers) {
 		t.Errorf("unscoped daemon must keep every Trigger, got %d of %d", len(all.Triggers), len(decls.Triggers))
+	}
+}
+
+// TestReferenceEstateProvisioningIntent ties the real estate's Intent/Compute
+// (web-fleet) through the provisioning planner (ADR-0058): with nothing built,
+// the whole declared fleet surfaces as gated builds — web-01, web-02 — and the
+// planner produces no phantom, no error. This is the declare→gated-build seam
+// exercised on the shipped declaration, not a synthetic one.
+func TestReferenceEstateProvisioningIntent(t *testing.T) {
+	if _, err := os.Stat(estateRoot); err != nil {
+		t.Skipf("reference estate not found at %s (%v)", estateRoot, err)
+	}
+	decls, err := ParseDir(estateRoot)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	var pis []provision.Intent
+	for _, in := range decls.Intents {
+		if in.Kind != types.IntentCompute {
+			continue
+		}
+		pi, err := provision.FromIntent(in)
+		if err != nil {
+			t.Fatalf("decode Intent/Compute %q: %v", in.Name, err)
+		}
+		pis = append(pis, pi)
+	}
+	if len(pis) == 0 {
+		t.Fatal("expected an Intent/Compute (web-fleet) in the reference estate")
+	}
+	// Nothing built → the whole fleet is a gated-build shortfall (no phantom).
+	res, err := provision.Plan(pis, nil, 0)
+	if err != nil {
+		t.Fatalf("plan: %v", err)
+	}
+	got := map[string]bool{}
+	for _, i := range res.ToBuild {
+		got[i.Name] = true
+	}
+	if !got["web-01"] || !got["web-02"] {
+		t.Errorf("web-fleet (count:2) must surface web-01+web-02 for build, got %v", got)
+	}
+	if len(res.Paused) != 0 {
+		t.Errorf("a 2-instance fleet must not trip the max-delta gate, got %v", res.Paused)
 	}
 }
 

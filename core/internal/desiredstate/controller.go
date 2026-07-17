@@ -2,6 +2,7 @@ package desiredstate
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -11,6 +12,8 @@ import (
 
 	"github.com/dstout-devops/stratt/core/internal/compiler"
 	"github.com/dstout-devops/stratt/core/internal/graph"
+	"github.com/dstout-devops/stratt/core/internal/provision"
+	"github.com/dstout-devops/stratt/types"
 )
 
 // Controller is the desired-state reconcile loop (charter §3 reconciliation
@@ -156,6 +159,90 @@ func (c *Controller) reconcile(ctx context.Context, log *slog.Logger) {
 		log.Error("cell placement resolve failed", "error", err)
 	} else if n > 0 {
 		log.Info("resolved reconciled cell placement findings", "count", n)
+	}
+
+	// Provisioning reconcile (ADR-0058): surface GATED builds for Intent/Compute
+	// shortfalls (desired count vs projected+correlated Entities). It never builds
+	// and never writes an Entity for the unbuilt (§1.2) — the shortfall is
+	// recomputed each cycle and the provisioning Findings reconciled. Non-fatal.
+	c.reconcileProvisioning(ctx, decls, log)
+}
+
+// reconcileProvisioning turns Intent/Compute declarations into gated-build
+// Findings (ADR-0058). The desired count minus the already-projected+correlated
+// instances is the shortfall; each missing instance becomes a provisioning
+// Finding referencing the gated build Workflow the operator launches (§5 Flow 1),
+// a delta beyond §4.3 pauses as one batch Finding, and instances that have since
+// built resolve. Nothing here writes an Entity or persists desired state (§1.2).
+func (c *Controller) reconcileProvisioning(ctx context.Context, decls Declarations, log *slog.Logger) {
+	log = log.With("component", "provision")
+	var intents []provision.Intent
+	specs := map[string]provision.ComputeSpec{}
+	for _, in := range decls.Intents {
+		if in.Kind != types.IntentCompute {
+			continue
+		}
+		pi, err := provision.FromIntent(in)
+		if err != nil {
+			log.Error("intent/compute decode failed", "intent", in.Name, "error", err)
+			return
+		}
+		intents = append(intents, pi)
+		specs[pi.Name] = pi.Spec
+	}
+
+	built, err := c.Store.ProvisionedInstances(ctx)
+	if err != nil {
+		log.Error("provisioned-instances read failed", "error", err)
+		return
+	}
+	res, err := provision.Plan(intents, built, 0)
+	if err != nil {
+		// Exclusive-claim collision (§2.4) — a declaration error to fix, not a
+		// build to run. Surface loudly; apply nothing.
+		log.Error("provisioning plan rejected", "error", err)
+		return
+	}
+
+	var keepB, keepT []string
+	keep := func(b, t string) { keepB = append(keepB, b); keepT = append(keepT, t) }
+
+	for _, inst := range res.ToBuild {
+		sp := specs[inst.Intent]
+		detail, _ := json.Marshal(map[string]any{
+			"instance": inst.Name, "intent": inst.Intent, "ordinal": inst.Ordinal,
+			"builder": sp.Builder, "buildWorkflow": sp.BuildWorkflow,
+			"projectKind": sp.ProjectKind, "labels": sp.Labels, "params": sp.Params,
+			"reason": "declared but not built — launch the gated build Workflow (never auto-run, §5 Flow 1)",
+		})
+		b := "provision/" + inst.Intent
+		if err := c.Store.WriteProvisionFinding(ctx, b, inst.Name, "warning", detail); err != nil {
+			log.Error("write provision finding failed", "instance", inst.Name, "error", err)
+			continue
+		}
+		keep(b, inst.Name)
+	}
+	for _, p := range res.Paused {
+		detail, _ := json.Marshal(map[string]any{
+			"intent": p.Intent, "missing": p.Missing, "desired": p.Desired, "limit": p.Limit,
+			"reason": "provisioning delta exceeds the §4.3 max-delta gate — review, then raise maxDelta or apply explicitly",
+		})
+		b := "provision/" + p.Intent
+		const batch = "(batch)"
+		if err := c.Store.WriteProvisionFinding(ctx, b, batch, "warning", detail); err != nil {
+			log.Error("write provision batch finding failed", "intent", p.Intent, "error", err)
+			continue
+		}
+		keep(b, batch)
+		log.Warn("provisioning paused: max-delta gate", "intent", p.Intent, "missing", p.Missing, "limit", p.Limit)
+	}
+
+	resolved, err := c.Store.ResolveProvisionFindingsExcept(ctx, keepB, keepT)
+	if err != nil {
+		log.Error("resolve provision findings failed", "error", err)
+	}
+	if len(res.ToBuild) > 0 || len(res.Paused) > 0 || resolved > 0 {
+		log.Info("provisioning reconcile", "toBuild", len(res.ToBuild), "paused", len(res.Paused), "resolved", resolved)
 	}
 }
 

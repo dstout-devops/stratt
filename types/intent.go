@@ -14,6 +14,12 @@ const (
 	// platform authorization, which stays the CaC/OpenFGA spine (§2.5).
 	IntentFileSet = "Intent/FileSet"
 	IntentAccess  = "Intent/Access"
+	// IntentCompute declares desired compute infrastructure (ADR-0058): a count
+	// of instances that SHOULD exist. Unlike the other kinds it does not compile
+	// to observation Baselines — a sibling provisioning reconcile compares its
+	// count against projected+correlated Entities and surfaces GATED builds
+	// (§5 Flow 1), never an Entity for the unbuilt (§1.2).
+	IntentCompute = "Intent/Compute"
 )
 
 // onRemove lifecycle values (charter §2.4): what happens to compiled state

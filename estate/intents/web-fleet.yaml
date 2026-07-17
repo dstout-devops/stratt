@@ -1,0 +1,26 @@
+# web-fleet — Intent/Compute (ADR-0058): declare desired compute infrastructure
+# from the simplest form. "Two Linux web servers" — that's the whole declaration.
+# This is NOT an Entity (§1.2): the graph holds only what is BUILT. The
+# provisioning reconcile compares this `count` against the instances already
+# projected+correlated for it and surfaces a GATED build for the shortfall
+# (a `provision/web-fleet` Finding per missing instance) — it never auto-launches
+# (§5 Flow 1). Approve the buildWorkflow → the instance builds → projects back as
+# `kind: host, labels{os: linux, role: web}` → linux-fleet selects it → converged.
+#
+# `builder` is the landscape swap point: awsec2/create-vm (moto in dev) today,
+# one-line change to opentofu / vsphere / crossplane tomorrow — the rest of the
+# estate (the View, the Baselines, the configure Steps) never moves (§1.4/§1.5).
+name: web-fleet
+kind: Intent/Compute
+spec:
+  count: 2 # → web-01, web-02 (stable, idempotent identities; exclusively claimed, §2.4)
+  namePrefix: web
+  projectKind: host # what the built infra projects AS, so linux-fleet selects it
+  labels: { os: linux, role: web }
+  builder: awsec2/create-vm # landscape binding → opentofu / vsphere / crossplane
+  buildWorkflow: compute-build # the GATED Workflow the operator launches per instance
+  params: # OPAQUE — validated against the builder's own input Contract (§1.5), never typed here
+    region: us-east-1
+    endpoint: http://moto:5000 # dev stand-in; prod omits (real AWS)
+    instanceType: t3.micro
+    ami: ami-0linuxbaseline000

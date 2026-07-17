@@ -1,0 +1,122 @@
+package provision
+
+import "testing"
+
+func names(insts []Instance) map[string]bool {
+	m := map[string]bool{}
+	for _, i := range insts {
+		m[i.Name] = true
+	}
+	return m
+}
+
+func TestInstanceName(t *testing.T) {
+	cases := []struct {
+		prefix         string
+		ordinal, count int
+		want           string
+	}{
+		{"web", 1, 3, "web-01"},
+		{"web", 10, 12, "web-10"},
+		{"db", 2, 2, "db-02"},
+		{"node", 7, 100, "node-007"}, // width follows count
+	}
+	for _, c := range cases {
+		if got := InstanceName(c.prefix, c.ordinal, c.count); got != c.want {
+			t.Errorf("InstanceName(%q,%d,%d) = %q, want %q", c.prefix, c.ordinal, c.count, got, c.want)
+		}
+	}
+}
+
+// A brand-new fleet: every instance is a gated build, nothing resolved/paused.
+func TestPlanNewFleet(t *testing.T) {
+	r, err := Plan([]Intent{{Name: "web-fleet", Spec: ComputeSpec{Count: 3, NamePrefix: "web"}}}, nil, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := names(r.ToBuild)
+	for _, want := range []string{"web-01", "web-02", "web-03"} {
+		if !got[want] {
+			t.Errorf("new fleet: %q not surfaced for build (got %v)", want, got)
+		}
+	}
+	if len(r.Resolved) != 0 || len(r.Paused) != 0 {
+		t.Errorf("new fleet: expected 0 resolved / 0 paused, got %d/%d", len(r.Resolved), len(r.Paused))
+	}
+}
+
+// Partial fleet: built instances resolve, the rest surface. This is the
+// idempotent-convergence property — re-reconciling never rebuilds web-01.
+func TestPlanPartialConverges(t *testing.T) {
+	r, err := Plan(
+		[]Intent{{Name: "web-fleet", Spec: ComputeSpec{Count: 3, NamePrefix: "web"}}},
+		map[string]bool{"web-01": true},
+		0,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if names(r.ToBuild)["web-01"] {
+		t.Error("web-01 is already built — must NOT be surfaced for build (idempotency)")
+	}
+	if !names(r.ToBuild)["web-02"] || !names(r.ToBuild)["web-03"] {
+		t.Errorf("web-02/web-03 must still surface, got %v", names(r.ToBuild))
+	}
+	if len(r.Resolved) != 1 || r.Resolved[0].Name != "web-01" {
+		t.Errorf("web-01 must resolve, got %v", r.Resolved)
+	}
+
+	// Fully built => nothing to build, all resolved (converged).
+	full, _ := Plan(
+		[]Intent{{Name: "web-fleet", Spec: ComputeSpec{Count: 3, NamePrefix: "web"}}},
+		map[string]bool{"web-01": true, "web-02": true, "web-03": true},
+		0,
+	)
+	if len(full.ToBuild) != 0 {
+		t.Errorf("converged fleet must build nothing, got %v", names(full.ToBuild))
+	}
+	if len(full.Resolved) != 3 {
+		t.Errorf("converged fleet must resolve all 3, got %d", len(full.Resolved))
+	}
+}
+
+// Two Intents deriving the same instance name is a COMPILE error (§2.4), never
+// a silent last-writer-wins.
+func TestPlanExclusiveClaim(t *testing.T) {
+	_, err := Plan([]Intent{
+		{Name: "web-a", Spec: ComputeSpec{Count: 2, NamePrefix: "web"}},
+		{Name: "web-b", Spec: ComputeSpec{Count: 2, NamePrefix: "web"}}, // same prefix -> web-01 collision
+	}, nil, 0)
+	if err == nil {
+		t.Fatal("expected an exclusive-claim error for the web-01 collision across two Intents")
+	}
+}
+
+// §4.3 max-delta: a shortfall beyond the cap pauses the batch instead of fanning
+// out — the guardian's mandatory blast-radius gate (M4).
+func TestPlanMaxDeltaPauses(t *testing.T) {
+	// 50 missing against the default cap of 25 => pause, surface nothing.
+	r, err := Plan([]Intent{{Name: "big", Spec: ComputeSpec{Count: 50, NamePrefix: "n"}}}, nil, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(r.ToBuild) != 0 {
+		t.Errorf("oversized fan-out must NOT surface individual builds, got %d", len(r.ToBuild))
+	}
+	if len(r.Paused) != 1 || r.Paused[0].Missing != 50 {
+		t.Errorf("expected one batch pause of 50, got %v", r.Paused)
+	}
+
+	// A per-Intent spec.maxDelta tightens below the cap: count 10, maxDelta 0.2
+	// => limit ceil(2) => 10 missing > 2 => pause.
+	tight, _ := Plan([]Intent{{Name: "roll", Spec: ComputeSpec{Count: 10, NamePrefix: "r", MaxDelta: 0.2}}}, nil, 0)
+	if len(tight.Paused) != 1 || len(tight.ToBuild) != 0 {
+		t.Errorf("spec.maxDelta=0.2 must pause a full-fleet build, got build=%d paused=%d", len(tight.ToBuild), len(tight.Paused))
+	}
+
+	// Just at the cap does NOT pause.
+	ok, _ := Plan([]Intent{{Name: "atcap", Spec: ComputeSpec{Count: 25, NamePrefix: "c"}}}, nil, 0)
+	if len(ok.Paused) != 0 || len(ok.ToBuild) != 25 {
+		t.Errorf("exactly-cap fleet must surface all builds, got build=%d paused=%d", len(ok.ToBuild), len(ok.Paused))
+	}
+}

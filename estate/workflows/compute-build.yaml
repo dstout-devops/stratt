@@ -1,0 +1,29 @@
+# compute-build — the GATED build Workflow an Intent/Compute launches (ADR-0058).
+# The provisioning reconcile surfaces a `provision/<intent>` Finding per missing
+# instance; an operator launches THIS Workflow to build one (§5 Flow 1 — the launch
+# IS the gate, and the approve Step adds a second platform-admin approval). The
+# build Action projects the instance back with Run provenance; the projectKind +
+# labels + the stratt.intent/instance correlation label ride that projection (never
+# a reconcile-side write, §1.2 / ADR-0058 M1) so the next reconcile sees it built
+# and resolves the Finding.
+#
+# `action:` is the landscape binding — awsec2/create-vm (moto in dev), swappable for
+# opentofu / vsphere / crossplane without touching the estate around it (§1.4/§1.5).
+# NOTE: per-instance parameterization (web-01 vs web-02 at launch) + the
+# project-as-host relabel is the build-execution slice that follows this one.
+name: compute-build
+steps:
+  - name: approve
+    gate:
+      approvers:
+        teams: [platform-admins]
+      timeoutSeconds: 86400 # 24h to approve the build
+  - name: build
+    needs: [approve]
+    action: awsec2/create-vm # landscape binding — swap for crossplane/opentofu/vsphere
+    params:
+      region: us-east-1
+      endpoint: http://moto:5000 # dev stand-in; prod omits (real AWS)
+      instanceType: t3.micro
+      ami: ami-0linuxbaseline000
+      name: web

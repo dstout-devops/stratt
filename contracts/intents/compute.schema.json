@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "stratt:contract:intents/compute:v1",
+  "title": "Intent/Compute spec",
+  "description": "Desired compute infrastructure declared in Git (ADR-0058, realizing ADR-0055 G1/G4/G2). NOT an Entity (§1.2): the graph holds only what is BUILT; this declares what SHOULD exist. The reconcile compares this count against projected+correlated Entities and surfaces a GATED build (§5 Flow 1) — it never auto-launches. Landscape-agnostic: `builder` is the swap point; `params` is opaque, validated only against the builder's own input Contract (§1.5, never typed here — that would grow a per-provider ontology, §1.1).",
+  "type": "object",
+  "properties": {
+    "count": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Cardinality (G2): how many instances SHOULD exist. A typed field expanded by the reconcile — never a config-language loop (§1 non-goal)."
+    },
+    "namePrefix": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]*$",
+      "description": "Instance identities are namePrefix + ordinal (web -> web-01, web-02). Stable + idempotent: the reconcile correlates desired<->built by this name (stratt.intent/instance label). Exclusively claimed across Intents (§2.4)."
+    },
+    "projectKind": {
+      "type": "string",
+      "description": "The Entity kind the built infra projects AS, so the fleet's Views select it (e.g. host). Carried on the build's Run-provenance projection or a relabel Normalizer — NEVER written by the reconcile (§1.2, decision 6)."
+    },
+    "labels": {
+      "type": "object",
+      "additionalProperties": { "type": "string" },
+      "description": "Selection labels stamped on the built Entity's projection (per-key owned, ADR-0041), e.g. {os: linux, role: web}."
+    },
+    "builder": {
+      "type": "string",
+      "description": "The build Action or Actuator ref (awsec2/create-vm | opentofu | vsphere | crossplane | ...). The landscape swap point (§1.4/§1.5); core learns no provider."
+    },
+    "buildWorkflow": {
+      "type": "string",
+      "description": "The GATED Workflow the operator launches to build a missing instance (Gate -> builder -> project-back). Referenced by the provisioning Finding; never auto-launched (§5 Flow 1)."
+    },
+    "params": {
+      "type": "object",
+      "additionalProperties": true,
+      "description": "Opaque build params passed to the builder, validated against ITS input Contract downstream (§1.5). Intent/Compute never types these — no per-landscape fields here (§1.1)."
+    },
+    "maxDelta": {
+      "type": "number",
+      "exclusiveMinimum": 0,
+      "maximum": 1,
+      "description": "Optional §4.3 blast-radius fraction: if more than this fraction of `count` is missing in one reconcile, the batch PAUSES pending explicit approval instead of surfacing every build (never a silent fan-out). Defaults to the controller's absolute cap."
+    }
+  },
+  "required": ["count", "namePrefix", "builder", "buildWorkflow"],
+  "additionalProperties": false
+}
