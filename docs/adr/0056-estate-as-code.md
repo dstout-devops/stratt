@@ -1,6 +1,6 @@
 # ADR 0056 — Estate-as-Code: declaring Sources & Connectors in Git + the `stratt` estate CLI
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-07-17
 - **Deciders:** steward (dstout), charter-guardian
 - **Charter sections:** §1.2, §1.4, §2, §2.4, §2.5, §5, §8

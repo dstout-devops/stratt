@@ -1,6 +1,6 @@
 # ADR 0055 — Estate Composition: what it means to "define the estate"
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-07-17
 - **Deciders:** steward (dstout), charter-guardian
 - **Charter sections:** §1.1, §1.2, §1.4, §2, §5, §8, and the permanent non-goals (§1.1/§7.5)
@@ -52,7 +52,7 @@ orchestrate through plugins — composition, never a schema-of-everything.**
 - Defining the estate is therefore **declaring those primitives and letting them fan out through plugins**. It
   is not authoring one universal model of the world.
 
-**2. The five guardrails (binding on every future estate-composition step).**
+**2. The six guardrails (binding on every future estate-composition step).**
 1. **No universal ontology (§1.1).** Type the seams — plugin Contracts and named Facets — never whole Entities,
    never a global schema of "server/network/app". Core never models a domain generically.
 2. **No new configuration language (permanent non-goal).** Templating stays Blueprints + `{{.ns.path}}`
