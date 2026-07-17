@@ -129,6 +129,10 @@ type RoutedTargets struct {
 // which case a Run that routes to a remote Site fails terminally.
 type SiteGateway interface {
 	DispatchAndAwait(ctx context.Context, req siteproto.DispatchRequest, heartbeat func()) (dispatch.Result, error)
+	// StreamApply dispatches a TYPED (EE-Job) slice and drains the Site's forwarded
+	// ApplyResponses (raw proto-JSON) to onResp, returning the Site Job's exit —
+	// governance runs hub-side over these frames (ADR-0051 MF2).
+	StreamApply(ctx context.Context, req siteproto.DispatchRequest, heartbeat func(), onResp func(json.RawMessage)) (bool, error)
 	Cancel(ctx context.Context, site, runID string) error
 }
 
@@ -850,12 +854,13 @@ func (a *Activities) executeJobPlugin(ctx context.Context, in RunInput, slice in
 		return dispatch.Result{}, temporal.NewNonRetryableApplicationError(
 			fmt.Sprintf("actuator %q does not support dry-run", in.Actuator), "DryRunUnsupported", nil)
 	}
-	// Phase 5a is hub-local: the EE-Job at a remote Site (streaming its typed stdout
-	// Site→hub for hub-side governance) is ADR-0051 Phase 6 (MF2). Fail visibly rather
-	// than silently run the flagship on the hub for Site-homed targets (§1.8).
-	if site != "" && site != types.LocalSite {
+	// Where the EE-Job runs: hub-local dispatches directly; a remote Site runs the
+	// shim Job AT the Site and forwards its typed stdout Site→hub (ADR-0051 MF2). A
+	// remote Step with no Site gateway fails visibly (never silently hub-local, §1.8).
+	remote := site != "" && site != types.LocalSite
+	if remote && a.Sites == nil {
 		return dispatch.Result{}, temporal.NewNonRetryableApplicationError(
-			fmt.Sprintf("actuator %q (EE-Job transport) at Site %q is not yet wired (ADR-0051 Phase 6)", in.Actuator, site), "JobTransportSiteUnsupported", nil)
+			fmt.Sprintf("actuator %q targets Site %q but this hub has no site gateway configured", in.Actuator, site), "NoSiteGateway", nil)
 	}
 	if pa.Host == nil {
 		return dispatch.Result{}, temporal.NewNonRetryableApplicationError(
@@ -912,7 +917,7 @@ func (a *Activities) executeJobPlugin(ctx context.Context, in RunInput, slice in
 	}()
 	heartbeat := func() { activity.RecordHeartbeat(ctx) }
 	// ctx-aware send: on cancellation the governor stops draining ch, so a blocking
-	// send would wedge the dispatcher — fall through instead (the ctx-bound Job stream
+	// send would wedge the producer — fall through instead (the ctx-bound Job stream
 	// ends promptly, ADR-0026).
 	onResp := func(resp *pluginv1.ApplyResponse) {
 		select {
@@ -920,7 +925,26 @@ func (a *Activities) executeJobPlugin(ctx context.Context, in RunInput, slice in
 		case <-ctx.Done():
 		}
 	}
-	jobOK, _, rerr := a.Dispatcher.RunStream(ctx, in.RunID, slice, spec, creds, heartbeat, onResp)
+	// Producer: hub-local runs the shim Job here and streams its typed stdout; a
+	// remote Site runs the SAME shim Job at the Site and forwards the typed frames
+	// (MF2). Either way the governor drains ch — governance is hub-side and single
+	// (MF1), the Site folds nothing.
+	var jobOK bool
+	var rerr error
+	if remote {
+		req := siteproto.DispatchRequest{
+			RunID: in.RunID, Slice: slice, Site: site, Actuator: in.Actuator,
+			DryRun: in.DryRun, Typed: true, Spec: spec, Creds: creds,
+		}
+		jobOK, rerr = a.Sites.StreamApply(ctx, req, heartbeat, func(b json.RawMessage) {
+			resp := &pluginv1.ApplyResponse{}
+			if protojson.Unmarshal(b, resp) == nil {
+				onResp(resp)
+			}
+		})
+	} else {
+		jobOK, _, rerr = a.Dispatcher.RunStream(ctx, in.RunID, slice, spec, creds, heartbeat, onResp)
+	}
 	close(ch)
 	gr := <-gov
 	if rerr != nil {
@@ -943,6 +967,15 @@ func (a *Activities) executeJobPlugin(ctx context.Context, in RunInput, slice in
 	res := dispatch.Result{
 		Succeeded: raw.Succeeded && jobOK, PerTarget: raw.PerTarget, Drift: raw.Drift,
 		Facts: map[string]map[string]json.RawMessage{},
+	}
+	if remote {
+		// §1.8 descent: stamp the execution locus of each governed target so the
+		// Run's Sites union + one-click descent show WHERE it ran (ADR-0032). The
+		// Site folded nothing, so the hub stamps from the dispatch locus.
+		res.SiteByTarget = make(map[string]string, len(raw.PerTarget))
+		for name := range raw.PerTarget {
+			res.SiteByTarget[name] = site
+		}
 	}
 	for _, e := range raw.WriteBack {
 		// Facts re-correlate to the resolved target name via the write-back's

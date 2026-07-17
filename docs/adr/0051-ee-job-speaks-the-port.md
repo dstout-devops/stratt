@@ -164,3 +164,31 @@ ansible Run (real EE pod, NATS, Temporal). Everything else is green — `go buil
 pluginhost/dispatch/orchestrate/strattd unit suites, and a full `docker build` of the EE image whose baked
 `stratt-ansible` binary emitted the exact port shapes against a stubbed runner. Run the dev-cluster Run before
 relying on the cutover in a real deployment; there is no in-tree fallback behind it now.
+
+## Phase 6 — the EE-Job at a Site, governed hub-side (MF2, 2026-07-17)
+
+A Site-homed EE-Job Step now runs the shim Job AT the Site and forwards its typed stdout Site→hub, where the
+SAME governor folds — MF2 met, extending ADR-0049's hub-side-governance-V1 to the subprocess transport. The
+design is symmetric with the hub-local path: the Site runs the shim via `dispatch.RunStream` (folding NOTHING)
+and forwards each raw `ApplyResponse` over a new Cell-scoped NATS stream (`STRATT_DISPATCH_APPLY`); the hub's
+`sitegw.StreamApply` drains those frames into the SAME `Host.GovernStream` bridge the hub-local `RunStream`
+feeds. The Site is a dumb pod-runner + byte-forwarder — the confused-deputy target set and the grant are built
+HUB-side from the core-resolved targets, never from anything the Site asserts. The shim JobSpec shipped to the
+Site is `RemoteSafe` (no Env material; creds are pointers the agent resolves against its OWN local Secrets,
+§2.5); frames carry only proto-JSON port shapes + names. §1.8 task events still flow via the agent's local Bus →
+NATS leaf → hub run-events; `res.SiteByTarget` stamps the execution locus. This **reopens Site-homed ansible**
+(fail-closed since 5b).
+
+- **Wire:** `siteproto.ApplyStream`/`ApplySubject`/`ApplyFrame{Seq,Response,EOF,JobOK,Err}` + `DispatchRequest.Typed`.
+- **Gateway:** hub `StreamApply` (dispatch + ordered drain, heartbeated); Site `PublishApply` (MsgID `runID/slice/seq`
+  dedups a redelivered adopted Job's re-forwarded frames; the stream's `Duplicates` window is set to 1h so a
+  late redelivery never double-governs).
+- **Agent:** `handleTyped` runs `RunStream`, forwards frames, and closes with an EOF frame carrying the Job exit.
+
+**charter-guardian, pass 3 — Phase 6 (MF2): SOUND** (no must-fixes). Governance is hub-side and single over the
+Site boundary (MF1/MF2); the agent-as-relay posture is strictly BETTER than the old folded-`DispatchResult` path
+(a forged frame is bounded by the hub-held grant + resolved-View set — the old path had NO hub-side gate). Two
+non-blocking notes, both folded: **N1** — `handleTyped` now logs (never silently drops) an unencodable frame
+(§1.8/MF5); **N2** — the explicit 1h dedup window above. Proven by `TestExecuteJobPlugin_RemoteSiteGovernsHubSide`
+(confused-deputy + ungranted-facet rejected hub-side over Site-forwarded frames; RemoteSafe Spec; Site stamping).
+End-to-end over live NATS + an EE pod remains the same outstanding dev-cluster signal noted above.

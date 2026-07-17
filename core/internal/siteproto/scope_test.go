@@ -25,6 +25,9 @@ func TestSetScopeLocalByteIdentical(t *testing.T) {
 		DispatchSubject("edge"):   "stratt.dispatch.edge",
 		CancelSubject("edge"):     "stratt.dispatch.cancel.edge",
 		ResultSubject("run-1", 3): "stratt.dispatchresult.run-1.3",
+		ApplyStream:               "STRATT_DISPATCH_APPLY",
+		ApplyStreamSubjects:       "stratt.dispatchapply.>",
+		ApplySubject("run-1", 3):  "stratt.dispatchapply.run-1.3",
 	}
 	for got, want := range checks {
 		if got != want {
@@ -49,6 +52,9 @@ func TestSetScopeNamed(t *testing.T) {
 		DispatchSubject("edge"):   "stratt.eu.dispatch.edge",
 		CancelSubject("edge"):     "stratt.eu.dispatch.cancel.edge",
 		ResultSubject("run-1", 3): "stratt.eu.dispatchresult.run-1.3",
+		ApplyStream:               "STRATT_DISPATCH_APPLY_EU",
+		ApplyStreamSubjects:       "stratt.eu.dispatchapply.>",
+		ApplySubject("run-1", 3):  "stratt.eu.dispatchapply.run-1.3",
 	}
 	for got, want := range checks {
 		if got != want {

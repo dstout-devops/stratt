@@ -37,6 +37,7 @@ import (
 	"github.com/dstout-devops/stratt/types"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/protobuf/encoding/protojson"
 )
 
 // version stamps liveness; overridden at build time.
@@ -188,6 +189,9 @@ type agent struct {
 // published BEFORE the ACK (in ConsumeDispatch) so an agent crash mid-run
 // redelivers the work and adopts the existing Job by name.
 func (ag *agent) handlePush(ctx context.Context, req siteproto.DispatchRequest) error {
+	if req.Typed {
+		return ag.handleTyped(ctx, req)
+	}
 	name := interpName(req)
 	interp, ok := ag.interp[name]
 	if !ok {
@@ -207,6 +211,55 @@ func (ag *agent) handlePush(ctx context.Context, req siteproto.DispatchRequest) 
 	return ag.gw.PublishResult(ctx, siteproto.DispatchResult{
 		RunID: req.RunID, Slice: req.Slice, Site: ag.site, Result: *res,
 	})
+}
+
+// handleTyped runs an EE-Job (subprocess) transport slice at this Site and FORWARDS
+// the shim's raw ApplyResponses to the hub (ADR-0051 MF2) — it folds/interprets
+// NOTHING (there is no in-agent ansible Interpreter; the hub is the sole governor,
+// MF1). §1.8 task events still flow via the dispatcher's local Bus → leaf → hub. A
+// preflight failure (missing local Secret) publishes an EOF frame carrying Err and
+// ACKs (redelivery cannot fix it); a pod/infra error returns the error to NAK so the
+// adopted Job re-runs and re-forwards (frame seqs dedup the replay). On success the
+// EOF frame carries the Job exit for the hub's §1.8 fold (MF5).
+func (ag *agent) handleTyped(ctx context.Context, req siteproto.DispatchRequest) error {
+	if missing := ag.missingSecrets(ctx, req.Creds); missing != "" {
+		return ag.reportApplyTerminal(ctx, req, false,
+			fmt.Sprintf("credential secret %s not present at site %q", missing, ag.site))
+	}
+	var seq int64
+	forward := func(resp *pluginv1.ApplyResponse) {
+		b, err := protojson.Marshal(resp)
+		if err != nil {
+			// Never silently swallow a frame (§1.8/MF5): log it. A dropped frame
+			// fails CLOSED — a lost terminal → the hub's fold reads NOT-OK.
+			ag.log.Warn("drop unencodable apply frame", "run", req.RunID, "slice", req.Slice, "err", err)
+			return
+		}
+		seq++
+		if perr := ag.gw.PublishApply(ctx, siteproto.ApplyFrame{
+			RunID: req.RunID, Slice: req.Slice, Site: ag.site, Seq: seq, Response: b,
+		}); perr != nil {
+			ag.log.Warn("forward apply frame failed", "run", req.RunID, "slice", req.Slice, "err", perr)
+		}
+	}
+	jobOK, _, err := ag.dispatcher.RunStream(ctx, req.RunID, req.Slice, req.Spec, req.Creds, nil, forward)
+	if err != nil {
+		// Infra error — NAK for redelivery; publish no EOF (the hub keeps awaiting,
+		// heartbeated). The adopted Job re-forwards; seqs dedup the replayed frames.
+		return fmt.Errorf("dispatch run (typed): %w", err)
+	}
+	return ag.reportApplyTerminal(ctx, req, jobOK, "")
+}
+
+// reportApplyTerminal publishes the EOF governance frame (the typed path's terminal,
+// MF2) and ACKs. A non-empty msg is a terminal agent error the hub surfaces (§1.8).
+func (ag *agent) reportApplyTerminal(ctx context.Context, req siteproto.DispatchRequest, jobOK bool, msg string) error {
+	if err := ag.gw.PublishApply(ctx, siteproto.ApplyFrame{
+		RunID: req.RunID, Slice: req.Slice, Site: ag.site, EOF: true, JobOK: jobOK, Err: msg,
+	}); err != nil {
+		return err // couldn't report — NAK and retry so the hub eventually learns
+	}
+	return nil
 }
 
 // reportTerminal publishes a terminal-error result and ACKs (returns nil).
