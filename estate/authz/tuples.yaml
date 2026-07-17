@@ -10,3 +10,6 @@ tuples:
   # actuator/syncer Runs against these — the runner-on-View gate at the door.
   - { user: principal:dev-runner, relation: runner, object: view:dev-hosts }
   - { user: principal:dev-runner, relation: runner, object: view:dev-vms }
+  # dev-runner is the dev platform admin: it may approve the compute-build Gate
+  # (ADR-0058 — the §5 Flow 1 build approval). In prod this is a real team.
+  - { user: principal:dev-runner, relation: member, object: team:platform-admins }

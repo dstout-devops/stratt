@@ -23,7 +23,15 @@ steps:
     action: awsec2/create-vm # landscape binding — swap for crossplane/opentofu/vsphere
     params:
       region: us-east-1
-      endpoint: http://moto:5000 # dev stand-in; prod omits (real AWS)
       instanceType: t3.micro
       ami: ami-0linuxbaseline000
-      name: web
+      name: web-01
+      # The estate OVERLAY (ADR-0058 §6): the built instance projects AS this kind
+      # with these labels (Run provenance, never a reconcile write). The
+      # stratt.intent/instance key resolves the provisioning Finding; fleet is the
+      # selection label web-servers picks up. Per-instance parameterization (web-02…)
+      # via launch params is the follow-up — this concrete Workflow builds web-01.
+      projectKind: host
+      projectLabels:
+        fleet: web
+        stratt.intent/instance: web-01

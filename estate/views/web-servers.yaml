@@ -1,0 +1,9 @@
+# web-servers — the fleet the web-fleet Intent/Compute builds into (ADR-0058). It
+# selects the PROVISIONED hosts by the fleet label the build owns (§2.1 per-key):
+# a compute-build Run projects each instance as kind:host, labels{fleet:web}, so it
+# lands here the moment it's built. This is the loop closing — declare (Intent/Compute)
+# → gated build → project back → selected by a View → the provisioning Finding resolves.
+name: web-servers
+selector:
+  kinds: [host]
+  labels: { fleet: web }

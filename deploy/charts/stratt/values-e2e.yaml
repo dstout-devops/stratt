@@ -70,3 +70,21 @@ plugins:
       STRATT_VCENTER_SOURCE_NAME: "vcenter-dev"
       STRATT_VCENTER_URL: "https://192.168.102.1:8989/sdk"
       STRATT_VCENTER_INTERVAL: "15s"
+  # awsec2 build Action (ADR-0058 slice 2): the create-vm builder the compute-build
+  # Workflow launches. Deployed ACTION-ONLY — hostEnv omits STRATT_AWS_INTERVAL, so
+  # strattd runs the Action without the competing instance Syncer (decision-6
+  # kind-unification). The plugin pod reaches moto on the host gateway; strattd
+  # dials it via the auto-derived STRATT_AWS_PLUGIN_ADDR (name `aws`). The
+  # endpoint's gateway IP is re-asserted at install (dev:install --set-string).
+  - name: aws
+    image:
+      repository: stratt-plugin-awsec2
+      tag: dev
+      digest: ""
+      pullPolicy: Never # kind-loaded (task image:awsec2-plugin)
+    env:
+      STRATT_AWSEC2_ENDPOINT: "http://192.168.102.1:5000" # moto stand-in on the host gateway
+      STRATT_AWSEC2_REGION: "us-east-1"
+    hostEnv:
+      STRATT_AWS_SOURCE_NAME: "awsec2-build"
+      # STRATT_AWS_INTERVAL deliberately unset → build Action only, no Syncer.

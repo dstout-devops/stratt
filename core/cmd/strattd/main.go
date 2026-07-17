@@ -755,8 +755,14 @@ func run(ctx context.Context, log *slog.Logger) error {
 	}
 
 	// ── EC2 instance Syncer over the port (Phase C cutover) ──────────────
-	if awsHost != nil {
-		interval, err := time.ParseDuration(env("STRATT_AWS_INTERVAL", "60s"))
+	// The awsec2 plugin serves BOTH a create-vm build Action and an instance
+	// Syncer. The Syncer is OPT-IN (STRATT_AWS_INTERVAL must be set): a
+	// build-only deployment (the ADR-0058 provisioning builder) runs the Action
+	// without a competing Syncer projection that would re-kind the built instance
+	// (the decision-6 kind-unification hazard). Set the interval to enable steady-
+	// state observation.
+	if awsHost != nil && os.Getenv("STRATT_AWS_INTERVAL") != "" {
+		interval, err := time.ParseDuration(os.Getenv("STRATT_AWS_INTERVAL"))
 		if err != nil {
 			return fmt.Errorf("awsec2 interval: %w", err)
 		}
@@ -764,6 +770,8 @@ func run(ctx context.Context, log *slog.Logger) error {
 		controllers = append(controllers, homeSupervise(src, awsHost.Register, func(cctx context.Context) error {
 			return awsHost.SyncLoop(cctx, interval)
 		}))
+	} else if awsHost != nil {
+		log.Info("awsec2 plugin: build Action only (STRATT_AWS_INTERVAL unset — Syncer off)")
 	} else {
 		log.Info("no EC2 plugin configured (STRATT_AWS_PLUGIN_ADDR empty); syncer idle")
 	}

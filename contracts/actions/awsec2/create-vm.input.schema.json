@@ -9,7 +9,13 @@
     "endpoint": { "type": "string", "description": "override API endpoint (dev: the moto stand-in)" },
     "instanceType": { "type": "string" },
     "ami": { "type": "string" },
-    "name": { "type": "string" }
+    "name": { "type": "string" },
+    "projectKind": { "type": "string", "description": "estate overlay (ADR-0058 §6): the Entity kind the built instance projects AS (e.g. host), so a fleet View selects it. Empty keeps the native 'instance'." },
+    "projectLabels": {
+      "type": "object",
+      "additionalProperties": { "type": "string" },
+      "description": "estate overlay labels carried on the built instance's Run-provenance projection — the stratt.intent/instance correlation key + fleet labels the Run may own (§2.1 per-key ownership)."
+    }
   },
   "required": ["region", "ami"],
   "additionalProperties": false

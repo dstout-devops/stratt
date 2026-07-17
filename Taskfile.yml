@@ -374,6 +374,12 @@ tasks:
       - docker build -f plugins/declared/Dockerfile -t stratt-plugin-declared:dev .
       - go run sigs.k8s.io/kind@v{{.KIND_VER}} load docker-image stratt-plugin-declared:dev --name {{.KIND_CLUSTER}}
 
+  image:awsec2-plugin:
+    desc: Build the awsec2 gRPC plugin image (create-vm build Action) and load it into the kind cluster
+    cmds:
+      - docker build -f plugins/awsec2/Dockerfile -t stratt-plugin-awsec2:dev .
+      - go run sigs.k8s.io/kind@v{{.KIND_VER}} load docker-image stratt-plugin-awsec2:dev --name {{.KIND_CLUSTER}}
+
   images:control-plane:
     desc: Build the CONTROL-PLANE images (no push/load) — the CI regression gate. Plugins & the EE image build in their OWN units (each plugin is its own build/CI unit, ADR-0046) — core CI never builds per-plugin (it must scale to hundreds of plugins).
     cmds:
@@ -411,8 +417,9 @@ tasks:
           --set-string database.url="postgres://stratt:stratt-dev@${GW}:5432/stratt" \
           --set-string nats.url="nats://${GW}:4222" \
           --set-string temporal.address="${GW}:7233" \
-          --set-string "plugins[0].env.STRATT_VCENTER_URL=https://${GW}:8989/sdk" \
-          --set-string "plugins[0].hostEnv.STRATT_VCENTER_URL=https://${GW}:8989/sdk"
+          --set-string "plugins[1].env.STRATT_VCENTER_URL=https://${GW}:8989/sdk" \
+          --set-string "plugins[1].hostEnv.STRATT_VCENTER_URL=https://${GW}:8989/sdk" \
+          --set-string "plugins[2].env.STRATT_AWSEC2_ENDPOINT=http://${GW}:5000"
       - "{{.KUBECTL}} --context {{.KIND_CONTEXT}} -n stratt rollout status deploy/stratt --timeout=180s"
 
   dev:stack:up:
@@ -423,11 +430,12 @@ tasks:
       # NATS (bus), Temporal (orchestration), vcsim (the vcenter Syncer's SoR).
       # Scoping this away from the full `dev:up` keeps the turnkey path off the
       # kitchen-sink extras (zot registry, zitadel, …) a plugin run never touches.
-      - docker compose -f deploy/dev/docker-compose.yml up -d --wait postgres nats temporal vcsim
+      - docker compose -f deploy/dev/docker-compose.yml up -d --wait postgres nats temporal vcsim moto
       - task: image:kind-load
       - task: dev:ee:build
       - task: image:vcenter-plugin
       - task: image:declared-plugin
+      - task: image:awsec2-plugin
       - task: dev:install
 
   dev:stack:down:

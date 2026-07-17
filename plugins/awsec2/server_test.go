@@ -188,6 +188,39 @@ func TestInvokeCreateVM(t *testing.T) {
 	}
 }
 
+// TestInvokeCreateVMProjectionOverlay proves the ADR-0058 §6 estate overlay: when
+// the provisioning seam supplies projectKind + projectLabels, the built instance
+// projects AS that kind with those labels merged onto aws.region — so a fleet View
+// selects it and its stratt.intent/instance correlation resolves the provisioning
+// Finding. Native identity (aws.instanceId) is preserved.
+func TestInvokeCreateVMProjectionOverlay(t *testing.T) {
+	api := &fakeEC2{runOut: &ec2.RunInstancesOutput{Instances: []ec2types.Instance{{
+		InstanceId: aws.String("i-abc"),
+	}}}}
+	args, _ := json.Marshal(createVMParams{
+		Region: "us-east-1", AMI: "ami-1", Name: "web-01",
+		ProjectKind:   "host",
+		ProjectLabels: map[string]string{"fleet": "web", "stratt.intent/instance": "web-01"},
+	})
+	stream := &captureStream[pluginv1.InvokeResponse]{ctx: context.Background()}
+	if err := newServer(t, api).Invoke(&pluginv1.InvokeRequest{
+		Action: "awsec2/create-vm", Args: &pluginv1.Payload{Bytes: args},
+	}, stream); err != nil {
+		t.Fatalf("invoke: %v", err)
+	}
+	ent := stream.sent[len(stream.sent)-1].GetResult().GetEntities()[0]
+	if ent.GetKind() != "host" {
+		t.Errorf("projectKind overlay: kind=%q, want host", ent.GetKind())
+	}
+	if ent.GetIdentityKeys()["aws.instanceId"] != "i-abc" {
+		t.Errorf("native identity must be preserved, got %v", ent.GetIdentityKeys())
+	}
+	l := ent.GetLabels()
+	if l["fleet"] != "web" || l["stratt.intent/instance"] != "web-01" || l["aws.region"] != "us-east-1" {
+		t.Errorf("overlay labels merged onto aws.region expected, got %v", l)
+	}
+}
+
 // TestInvokeUnknownActionRejected — a content-blind selector that names no shipped
 // Action is rejected, never guessed.
 func TestInvokeUnknownActionRejected(t *testing.T) {

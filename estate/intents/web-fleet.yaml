@@ -15,12 +15,15 @@ kind: Intent/Compute
 spec:
   count: 2 # → web-01, web-02 (stable, idempotent identities; exclusively claimed, §2.4)
   namePrefix: web
-  projectKind: host # what the built infra projects AS, so linux-fleet selects it
-  labels: { os: linux, role: web }
+  projectKind: host # what the built infra projects AS, so a fleet View selects it
+  # Fleet labels the BUILD owns (§2.1 per-key ownership): the built VM carries these
+  # on its Run-provenance projection. NOTE os/role/tier are owned by the declared
+  # Connector globally, so a provisioned VM uses a fleet key it can first-write —
+  # cross-source label unification is an ADR-0058 decision-6 refinement.
+  labels: { fleet: web }
   builder: awsec2/create-vm # landscape binding → opentofu / vsphere / crossplane
   buildWorkflow: compute-build # the GATED Workflow the operator launches per instance
   params: # OPAQUE — validated against the builder's own input Contract (§1.5), never typed here
     region: us-east-1
-    endpoint: http://moto:5000 # dev stand-in; prod omits (real AWS)
     instanceType: t3.micro
     ami: ami-0linuxbaseline000
