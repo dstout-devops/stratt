@@ -19,7 +19,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/dstout-devops/stratt/core/internal/connectors/awx"
+	"github.com/dstout-devops/stratt/core/internal/awximport/awx"
 )
 
 // Options tunes the transform. Zero value is valid.

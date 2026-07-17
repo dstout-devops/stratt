@@ -9,6 +9,22 @@
 #
 # Pins ride the quarterly evergreen train (§1.7).
 
+# ── stratt-ansible shim (ADR-0051): the port-speaking binary baked into the EE ──
+# Apache-2.0 Go that reads the sovereign ApplyRequest, shells out to ansible-runner
+# (the GPL boundary stays a SUBPROCESS — never linked), and emits the port's typed
+# shapes as proto-JSON on stdout. The EE-Job transport runs THIS as the pod command;
+# the core forwards its typed stream and governs hub-side (GovernStream). Build
+# context is the repo root — the module + its only dep (the lean sdk, via replace).
+FROM golang:1.26 AS shim
+WORKDIR /src
+COPY sdk/ sdk/
+COPY plugins/ansible/ plugins/ansible/
+COPY plugins/script/ plugins/script/
+ENV GOWORK=off CGO_ENABLED=0
+RUN cd plugins/ansible && go build -trimpath -o /out/stratt-ansible ./cmd/stratt-ansible
+# stratt-script (ADR-0046 Category A): the per-target script-runner over the port.
+RUN cd plugins/script && go build -trimpath -o /out/stratt-script ./cmd/stratt-script
+
 FROM python:3.14-slim
 
 # git + ssh client: the ansible Actuator's SCM content-ref (charter §5.6,
@@ -25,12 +41,19 @@ RUN uv pip install --system --no-cache \
     "ansible-core>=2.19,<2.20" \
     "ansible-runner>=2.4,<3"
 
+# The port-speaking shims (ADR-0051/0046): the EE-Job transport's pod commands. Each
+# reads /runner/stratt/request.json (the sovereign ApplyRequest) and emits typed
+# ApplyResponses. stratt-ansible runs ansible-runner; stratt-script runs user scripts.
+COPY --from=shim /out/stratt-ansible /usr/local/bin/stratt-ansible
+COPY --from=shim /out/stratt-script /usr/local/bin/stratt-script
+
 # Non-root: the dispatcher's pods run unprivileged.
 RUN useradd --create-home --uid 1000 runner \
-    && mkdir -p /runner/project /runner/inventory /runner/artifacts \
+    && mkdir -p /runner/project /runner/inventory /runner/artifacts /runner/stratt \
     && chown -R runner:runner /runner
 USER runner
 WORKDIR /runner
 
-# The dispatcher overrides the command; this default documents the contract.
+# The dispatcher overrides the command: the EE-Job transport (ADR-0051) sets
+# ["stratt-ansible"]; this default documents the legacy in-tree-actuator contract.
 CMD ["ansible-runner", "run", "/runner", "-p", "play.yml", "-j"]

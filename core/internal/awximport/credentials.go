@@ -1,7 +1,7 @@
 package awximport
 
 import (
-	"github.com/dstout-devops/stratt/core/internal/connectors/awx"
+	"github.com/dstout-devops/stratt/core/internal/awximport/awx"
 	"github.com/dstout-devops/stratt/types"
 )
 

@@ -89,30 +89,26 @@ func checkRunInput(b types.Baseline) (RunInput, error) {
 	for k, v := range b.Params {
 		params[k] = v
 	}
+	// A Baseline names its Actuator explicitly (no platform default, ADR-0046);
+	// required at declaration (ValidateBaseline), so empty here is a bug.
 	actuator := b.Actuator
 	if actuator == "" {
-		actuator = "ansible"
-	}
-	switch actuator {
-	case "ansible":
-		params["check"] = true
-	case "opentofu":
-		if mode, _ := params["mode"].(string); mode != "plan" {
-			return RunInput{}, temporal.NewNonRetryableApplicationError(
-				fmt.Sprintf("baseline %s: opentofu checks require mode=plan", b.Name), "BaselineNotReadOnly", nil)
-		}
-	default:
 		return RunInput{}, temporal.NewNonRetryableApplicationError(
-			fmt.Sprintf("baseline %s: actuator %q has no read-only check semantics (ansible, opentofu)", b.Name, actuator),
-			"BaselineNotReadOnly", nil)
+			"baseline requires an explicit actuator (no platform default)", "ActuatorRequired", nil)
 	}
+	// A baseline is ALWAYS read-only — a platform INVARIANT, not a per-tool fact
+	// (ADR-0046: the spine never switches on tool name, no `if ansible {…}`). Force
+	// the port DryRun bit; read-only is the plugin's reconciled capability (VERB_PLAN
+	// → DryRunnable / the EE-Job shim's `--check`), and an Actuator that cannot honor
+	// it is rejected at LAUNCH by the DryRunnable gate — never by a name switch here.
 	raw, err := json.Marshal(params)
 	if err != nil {
 		return RunInput{}, err
 	}
 	return RunInput{
 		ViewName: b.ViewName, Actuator: actuator, Params: raw, Slices: b.Slices,
-		Baseline: b.Name, Principal: b.Principal, CredentialRefs: b.CredentialRefs,
+		Baseline: b.Name, Principal: b.Principal, CredentialRefs: b.CredentialRefs, DryRun: true,
+		FacetWriteScope: b.FacetWriteScope,
 	}, nil
 }
 

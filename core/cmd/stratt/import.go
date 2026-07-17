@@ -6,7 +6,7 @@ import (
 	"fmt"
 
 	"github.com/dstout-devops/stratt/core/internal/awximport"
-	"github.com/dstout-devops/stratt/core/internal/connectors/awx"
+	"github.com/dstout-devops/stratt/core/internal/awximport/awx"
 )
 
 // runImport dispatches `stratt import <source>`. Only awx is supported (the

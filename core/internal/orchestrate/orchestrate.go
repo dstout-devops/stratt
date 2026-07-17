@@ -13,22 +13,29 @@ import (
 	"fmt"
 	"log/slog"
 	"sort"
+	"strconv"
 	"time"
 
 	"go.temporal.io/sdk/activity"
 	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/workflow"
+	"google.golang.org/protobuf/encoding/protojson"
 
 	"github.com/dstout-devops/stratt/core/internal/actions"
 	"github.com/dstout-devops/stratt/core/internal/actuators"
-	mcpact "github.com/dstout-devops/stratt/core/internal/actuators/mcp"
 	"github.com/dstout-devops/stratt/core/internal/authz"
 	"github.com/dstout-devops/stratt/core/internal/cellrouter"
+	"github.com/dstout-devops/stratt/core/internal/contract"
 	"github.com/dstout-devops/stratt/core/internal/dispatch"
 	"github.com/dstout-devops/stratt/core/internal/events"
 	"github.com/dstout-devops/stratt/core/internal/evidencestore"
 	"github.com/dstout-devops/stratt/core/internal/graph"
+	"github.com/dstout-devops/stratt/core/internal/planstore"
+	"github.com/dstout-devops/stratt/core/internal/pluginhost"
 	"github.com/dstout-devops/stratt/core/internal/siteproto"
+	"github.com/dstout-devops/stratt/core/internal/siterelay"
+	mcpcanon "github.com/dstout-devops/stratt/sdk/mcp"
+	pluginv1 "github.com/dstout-devops/stratt/sdk/stratt/plugin/v1"
 	"github.com/dstout-devops/stratt/types"
 )
 
@@ -40,8 +47,10 @@ import (
 var TaskQueue = "stratt-runs"
 
 // RunInput starts one Run against a View. Actuator and Params are the Step
-// fields (§2.3: Step = Actuator + content + params); empty Actuator means
-// ansible (the Phase-0 default). Slices > 1 partitions the target set across
+// fields (§2.3: Step = Actuator + content + params). A View actuation names its
+// Actuator EXPLICITLY — declared, or inherited from the parent Run — never a
+// platform default (ADR-0046: the spine names no tool, §1.8: always traceable);
+// it is empty only for Action runs. Slices > 1 partitions the target set across
 // that many parallel K8s Jobs.
 type RunInput struct {
 	// RunID is the pre-created Run summary id for API launches. Empty for
@@ -57,6 +66,11 @@ type RunInput struct {
 	// DryRun asks a DryRunnable Action to plan without side effects (§2.2).
 	DryRun bool
 	Params json.RawMessage
+	// FacetWriteScope is the per-Run facet FLOOR (ADR-0054): the actuation may write
+	// back ONLY these Facet namespaces (intersected with the plugin's registered grant
+	// at the one governor). Declared on the Step/Baseline/Trigger and inherited by
+	// derived Runs. Empty admits NO facet write-back (TIGHT least-authority default).
+	FacetWriteScope []string
 	// ViewParams binds a parametrized View's {{.param.x}} placeholders at
 	// launch (ADR-0024) — resolved by ResolveTargets before selection.
 	ViewParams map[string]any
@@ -85,6 +99,15 @@ type RunInput struct {
 	// the request arrives as a verified peer fan-out; always false for a direct
 	// launch, so a single-Cell estate is unaffected.
 	StayLocal bool
+	// Plan marks a Run executing an actuation Step's PLAN verb — it produces a
+	// hash-pinned saved plan (ADR-0047 §8) rather than converging.
+	Plan bool
+	// PlanFrom is set on a plan-PINNED Apply: the Plan Step whose digest this Apply
+	// must apply. PlanDigest is that Gate-approved digest, read from core-held state
+	// (the Plan Step's output). PlanFrom set + PlanDigest empty is FAIL-CLOSED (a
+	// terminal error, never a silent unpinned apply of `desired` — ADR-0047 §8).
+	PlanFrom   string
+	PlanDigest string
 }
 
 // ResolvedTargets is what the View resolves to at dispatch time; the version
@@ -115,6 +138,10 @@ type RoutedTargets struct {
 // which case a Run that routes to a remote Site fails terminally.
 type SiteGateway interface {
 	DispatchAndAwait(ctx context.Context, req siteproto.DispatchRequest, heartbeat func()) (dispatch.Result, error)
+	// StreamApply dispatches a TYPED (EE-Job) slice and drains the Site's forwarded
+	// ApplyResponses (raw proto-JSON) to onResp, returning the Site Job's exit —
+	// governance runs hub-side over these frames (ADR-0051 MF2).
+	StreamApply(ctx context.Context, req siteproto.DispatchRequest, heartbeat func(), onResp func(json.RawMessage)) (bool, error)
 	Cancel(ctx context.Context, site, runID string) error
 }
 
@@ -130,9 +157,6 @@ type FactSet struct {
 	// the name it registers under (empty = none).
 	OutputsContract     json.RawMessage
 	OutputsContractName string
-	// MCPTools are an external MCP server's declared tool schemas — the
-	// rung-3 pin material (ADR-0022).
-	MCPTools []actuators.MCPToolDecl
 	// Workspace stamps the stratt.workspace selection label (v1 binding).
 	Workspace string
 }
@@ -308,16 +332,77 @@ func sitesTouched(result dispatch.Result) []string {
 }
 
 // Activities carries the worker-side dependencies.
+// PluginAction is a Connector Action provided by a plugin over the port
+// (ADR-0047/0048): its host (for InvokeRaw) and the core-side dry-run capability
+// (reconciled from the ActionDecl at registration, never trusted live).
+type PluginAction struct {
+	Host        *pluginhost.Host
+	DryRunnable bool
+}
+
+// PluginActuator is an Actuator provided by a plugin over the port
+// (ADR-0047/0048): its host (for ApplyRaw) and the core-side dry-run capability
+// (reconciled from the Manifest at registration, never trusted live, guardian
+// fix #6). Unlike an Action, an actuation Step's authz chokepoint is the
+// runner-on-View grant (ADR-0028), enforced in RunAgainstView BEFORE Execute — so
+// a plugin actuator may legitimately carry ZERO CredentialRefs (guardian fix #4:
+// the Action path's ungated-refusal is deliberately NOT ported here).
+type PluginActuator struct {
+	// Host is the hub-local plugin host (nil for a Site-only plugin). A remote-Site
+	// Step builds a relay-backed host on demand from Grant + PlanStore + the
+	// Activities relay dialer, so the SAME governor runs hub-side over the wire
+	// (ADR-0049).
+	Host        *pluginhost.Host
+	DryRunnable bool
+	// Grant + PlanStore let executePlugin construct a Site-backed host with
+	// identical governance (the grant never leaves the hub, ADR-0049 V1).
+	Grant     pluginhost.Grant
+	PlanStore *planstore.Store
+	// JobCommand, when non-empty, marks this Actuator as the EE-JOB (subprocess)
+	// transport (ADR-0051): instead of a long-lived gRPC Apply, the core dispatches
+	// a K8s Job (the EE image) whose entrypoint is this command — a shim that speaks
+	// the port on stdout. The dispatcher forwards the typed stream; Host.GovernStream
+	// governs it hub-side with the SAME governor as the gRPC path (MF1). Host here
+	// carries only the Grant (its gRPC client is nil — the Job is the transport).
+	JobCommand []string
+	// Image overrides the dispatcher's default EE image for this actuator's Jobs
+	// (ADR-0053: mcp needs the python-bearing EE-mcp image for the sandboxed server).
+	Image string
+	// MCP marks the mcp EE-Job transport (ADR-0053): the core resolves the MCPServer
+	// declaration + the rung-3 pin seam around the generic EE-Job dispatch — the
+	// protocol lives in the stratt-mcp shim; the pinning + graph resolution stay core.
+	MCP bool
+}
+
+// jobTransport reports whether this Actuator runs as an EE-Job shim (ADR-0051)
+// rather than a long-lived gRPC plugin.
+func (p PluginActuator) jobTransport() bool { return len(p.JobCommand) > 0 }
+
 type Activities struct {
 	Store      *graph.Store
 	Dispatcher *dispatch.Dispatcher
 	Bus        *events.Bus
 	Authz      authz.Authorizer
+	// Log is the base logger for on-demand hosts (Site relay). Nil → slog.Default().
+	Log *slog.Logger
+	// RelayDial yields the relay transport to one plugin at a Site's agent
+	// (ADR-0049), keyed by (site, plugin-id). Nil when no plugin relay is configured
+	// — a remote-Site plugin Step then fails visibly (never silently run hub-local,
+	// §1.8). Set NATS-backed in strattd.
+	RelayDial func(site, pluginID string) siterelay.Dialer
 	// Actuators is the registry of in-tree Actuators by name (§2.3).
 	Actuators map[string]actuators.Actuator
 	// Actions is the registry of in-tree Connector Actions by namespaced name
 	// (§2.2, ADR-0031) — the targetless typed-operation seam.
 	Actions actions.Registry
+	// PluginActions routes a Connector Action name to the plugin that provides it
+	// over the sovereign port (ADR-0047/0048). Exclusive with the in-tree registry
+	// and across plugins — main.go fails registration on a collision (§2.4).
+	PluginActions map[string]PluginAction
+	// PluginActuators routes an Actuator name to the plugin that provides its
+	// Plan/Apply/Destroy verbs over the port (ADR-0047/0048). Exclusive with the
+	// in-tree Actuators registry and across plugins — main.go fails on a collision.
+	PluginActuators map[string]PluginActuator
 	// Evidence seals Finding audit bundles into the object store (§2.4,
 	// ADR-0029). Nil when no object store is configured — Findings then open
 	// unsealed (a logged no-op), like the opentofu actuator is gated on a state
@@ -581,15 +666,53 @@ func (a *Activities) ResolveCredentials(ctx context.Context, in RunInput) ([]dis
 // same prepared JobSpec drives the same dispatch.Dispatcher.Run — no parallel
 // execution stack (§1.4).
 func (a *Activities) Execute(ctx context.Context, in RunInput, slice int, site string, resolved ResolvedTargets, creds []dispatch.CredentialMount) (dispatch.Result, error) {
+	// A View actuation carries an EXPLICIT actuator — declared or inherited from the
+	// parent Run, never a platform default (ADR-0046: the spine names no tool). Empty
+	// here means an under-specified declaration slipped past validation — fail loudly.
 	name := in.Actuator
 	if name == "" {
-		name = "ansible"
+		return dispatch.Result{}, temporal.NewNonRetryableApplicationError(
+			"a View actuation requires an explicit actuator (no platform default)", "ActuatorRequired", nil)
+	}
+	// ── Route: a plugin-provided Actuator applies over the port; else the pod ──
+	// The authz chokepoint is the runner-on-View grant (RunAgainstView, ADR-0028)
+	// already enforced BEFORE this activity — NOT the Action path's credential
+	// use-check — so a plugin actuation Step may carry zero creds (guardian #4).
+	if pa, ok := a.PluginActuators[name]; ok {
+		// Admission lint (ADR-0054 MF-2): a declared FacetWriteScope must be a SUBSET
+		// of the actuator's registered facet grant. An out-of-grant entry can never
+		// write back — the one governor's grant∩scope AND would silently drop it — so
+		// reject LOUDLY at launch naming the offending namespace (§1.8: a mismatch is
+		// diagnosed, not a silent no-op). This is the earliest choke-point that holds
+		// the grant registry (a worker-side runtime property); the govern-time
+		// intersection remains the non-bypassable security backstop underneath.
+		if bad := firstOutsideGrant(in.FacetWriteScope, pa.Grant.FacetNamespaces); bad != "" {
+			return dispatch.Result{}, temporal.NewNonRetryableApplicationError(
+				fmt.Sprintf("facet write-scope %q is not in actuator %q's registered grant (ADR-0054)", bad, name),
+				"FacetWriteScopeUngranted", nil)
+		}
+		if pa.MCP {
+			return a.executeMCP(ctx, in, slice, pa)
+		}
+		if pa.jobTransport() {
+			return a.executeJobPlugin(ctx, in, slice, site, resolved, creds, pa)
+		}
+		return a.executePlugin(ctx, in, site, resolved, creds, pa)
 	}
 	act, ok := a.Actuators[name]
 	if !ok {
 		// Unknown Actuator can never succeed — fail terminally, no retries.
 		return dispatch.Result{}, temporal.NewNonRetryableApplicationError(
 			fmt.Sprintf("no actuator registered as %q", name), "UnknownActuator", nil)
+	}
+	// In-tree pod Actuators are EFFECTFUL — they declare no read-only capability, so a
+	// dry-run (e.g. a baseline check, which the platform forces read-only) can never
+	// run through one. Reject rather than silently run live (§1.8). Read-only work
+	// belongs to a DryRunnable plugin Actuator; this is the capability gate the baseline
+	// path relies on now that it no longer switches on tool name (ADR-0046).
+	if in.DryRun {
+		return dispatch.Result{}, temporal.NewNonRetryableApplicationError(
+			fmt.Sprintf("actuator %q does not support dry-run (read-only)", name), "DryRunUnsupported", nil)
 	}
 	spec, err := act.Prepare(in.Params, resolved.Targets)
 	if err != nil {
@@ -622,6 +745,455 @@ func (a *Activities) Execute(ctx context.Context, in RunInput, slice int, site s
 		RunID: in.RunID, Slice: slice, Site: site,
 		Actuator: name, DryRun: in.DryRun, Spec: spec, Creds: creds,
 	}, heartbeat)
+}
+
+// firstOutsideGrant returns the first FacetWriteScope namespace that is NOT in
+// the actuator's registered facet grant, or "" if every entry is within grant
+// (ADR-0054 admission lint). An empty scope is trivially within any grant — the
+// tight default writes no facets, never an out-of-grant violation.
+func firstOutsideGrant(scope, grant []string) string {
+	for _, ns := range scope {
+		found := false
+		for _, g := range grant {
+			if g == ns {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return ns
+		}
+	}
+	return ""
+}
+
+// PlanStep runs the PLAN verb of a plugin-hosted Actuator (ADR-0047 §7/§8): the
+// host content-addresses + encrypts the saved plan and returns the digest — the
+// pin a downstream Gate binds and a plan-pinned Apply consumes. Only a plugin
+// actuator supports it (the in-tree pod Actuators do not produce a pinnable plan).
+// Returns the digest; a plan that produced none (empty converge) returns "".
+func (a *Activities) PlanStep(ctx context.Context, in RunInput) (string, error) {
+	pa, ok := a.PluginActuators[in.Actuator]
+	if !ok {
+		return "", temporal.NewNonRetryableApplicationError(
+			fmt.Sprintf("actuator %q does not support the Plan verb (not a plugin actuator)", in.Actuator), "PlanUnsupported", nil)
+	}
+	out, err := pa.Host.Plan(ctx, pluginhost.PlanInvoke{
+		Principal:      in.Principal,
+		Params:         in.Params,
+		CredentialRefs: in.CredentialRefs,
+	})
+	if err != nil {
+		return "", err
+	}
+	return out.Digest, nil
+}
+
+// executePlugin runs one Step slice through a plugin-hosted Actuator over the
+// sovereign port (ADR-0047/0048). It reuses the reviewed governance of the port
+// host (ApplyRaw): targets cross LEGIBLY (never in the opaque params, guardian
+// #1), Succeeded is folded CORE-SIDE from per-target statuses (#3), and NOTHING
+// is projected here — the returned dispatch.Result flows to CollectFacts →
+// ProjectFacts, the single batched Run-provenance writer (#2). The View-grant is
+// the authz chokepoint (already enforced in RunAgainstView), so zero creds is
+// legitimate — the Action path's ungated-refusal is NOT ported (#4).
+func (a *Activities) executePlugin(ctx context.Context, in RunInput, site string, resolved ResolvedTargets, creds []dispatch.CredentialMount, pa PluginActuator) (dispatch.Result, error) {
+	// Dry-run refused CORE-SIDE from the reconciled capability, never delegated —
+	// a plugin that silently ignored dry_run would run live side effects (#6).
+	if in.DryRun && !pa.DryRunnable {
+		return dispatch.Result{}, temporal.NewNonRetryableApplicationError(
+			fmt.Sprintf("actuator %q does not support dry-run", in.Actuator), "DryRunUnsupported", nil)
+	}
+	// Resolve WHERE the plugin runs. Hub-local uses the pre-dialed host; a remote
+	// Site builds a relay-backed host on demand (ADR-0049): the SAME grant (never
+	// leaves the hub, V1) with a client that tunnels to the Site agent over the
+	// outbound leaf. Governance still runs hub-side over the plugin's raw shapes.
+	host := pa.Host
+	if site != "" && site != types.LocalSite {
+		if a.RelayDial == nil {
+			return dispatch.Result{}, temporal.NewNonRetryableApplicationError(
+				fmt.Sprintf("actuator %q targets Site %q but no plugin relay is configured", in.Actuator, site), "NoPluginRelay", nil)
+		}
+		log := a.Log
+		if log == nil {
+			log = slog.Default()
+		}
+		// MF-C (ADR-0052): a relay-backed host at an untrusted Site NEVER attaches hub
+		// Secret coordinates to the Envelope — a remote plugin gets ref names alone.
+		host = pluginhost.New(a.Store, siterelay.NewClient(a.RelayDial(site, pa.Grant.PluginIdentity)), pa.Grant, log).
+			UsePlanStore(pa.PlanStore).WithoutCredentialCoordinates()
+		// F1 (ADR-0049): validate the RELAYED Manifest against the hub-held grant
+		// before any verb — the Site controls manifest.plugin_id, so a compromised
+		// agent relaying a different plugin is rejected hub-side. Bounded-trust holds
+		// until end-to-end plugin auth lands.
+		if err := host.ValidateManifest(ctx); err != nil {
+			return dispatch.Result{}, temporal.NewNonRetryableApplicationError(
+				fmt.Sprintf("actuator %q at Site %q: %v", in.Actuator, site, err), "SitePluginIdentityMismatch", nil)
+		}
+	}
+	if host == nil {
+		return dispatch.Result{}, temporal.NewNonRetryableApplicationError(
+			fmt.Sprintf("actuator %q has no host for locus %q (Site-only plugin invoked hub-local?)", in.Actuator, site), "NoPluginHost", nil)
+	}
+	// Only the use-checked, authorized names cross the wire (§2.5); the plugin
+	// resolves material against its own broker, confined to these.
+	names := make([]string, 0, len(creds))
+	for _, c := range creds {
+		names = append(names, c.RefName)
+	}
+	// The core-resolved target set crosses LEGIBLY (#1): name + connection vars.
+	// (identity_keys for write-back re-correlation are resolved by the projection
+	// path today; passing them to identity-rendering actuators is a follow-up.)
+	targets := make([]pluginhost.ApplyTarget, 0, len(resolved.Targets))
+	for _, t := range resolved.Targets {
+		targets = append(targets, pluginhost.ApplyTarget{Name: t.Name, Vars: t.Vars})
+	}
+	// Plan-pinned Apply (ADR-0047 §8): a Step that names a Plan source MUST carry a
+	// Gate-approved digest. FAIL CLOSED on an empty digest — never a silent unpinned
+	// live apply of `desired`. When present, the core fetches + RE-HASHES the plan
+	// from its store (verify-don't-trust) and hands the plugin the verified bytes.
+	var pinnedPlan []byte
+	if in.PlanFrom != "" {
+		if in.PlanDigest == "" {
+			return dispatch.Result{}, temporal.NewNonRetryableApplicationError(
+				fmt.Sprintf("actuator %q: plan-pinned Apply of %q has no approved plan digest — refusing an unpinned apply (ADR-0047 §8, fail-closed)", in.Actuator, in.PlanFrom),
+				"PlanPinMissing", nil)
+		}
+		var verr error
+		pinnedPlan, verr = host.VerifyPinnedPlan(ctx, in.PlanDigest)
+		if verr != nil {
+			return dispatch.Result{}, temporal.NewNonRetryableApplicationError(
+				fmt.Sprintf("actuator %q: pinned plan %s failed verification at the Apply boundary: %v", in.Actuator, in.PlanDigest, verr),
+				"PlanPinVerifyFailed", verr)
+		}
+	}
+	activity.RecordHeartbeat(ctx) // canceled Run stops promptly (ADR-0026)
+	raw, err := host.ApplyRaw(ctx, pluginhost.ApplyInvoke{
+		Principal:       in.Principal,
+		Params:          in.Params,
+		Targets:         targets,
+		DryRun:          in.DryRun,
+		CredentialRefs:  names,
+		PlanDigest:      in.PlanDigest,
+		PinnedPlan:      pinnedPlan,
+		FacetWriteScope: in.FacetWriteScope,
+	})
+	if err != nil {
+		return dispatch.Result{}, err
+	}
+	// Surface governance rejections (dropped land-grabs / confused-deputy targets)
+	// for §1.8 honesty — never swallowed. (Persisting as Findings is the follow-up.)
+	for _, r := range raw.Rejections {
+		activity.GetLogger(ctx).Warn("plugin apply emission rejected",
+			"actuator", in.Actuator, "kind", r.Kind, "detail", r.Detail, "reason", r.Reason)
+	}
+	// Map the governed, UNPROJECTED result to dispatch.Result. CollectFacts →
+	// ProjectFacts perform the single batched projection with Run provenance (#2).
+	res := dispatch.Result{Succeeded: raw.Succeeded, PerTarget: raw.PerTarget, Drift: raw.Drift}
+	for _, e := range raw.WriteBack {
+		res.Entities = append(res.Entities, actuators.EntityObservation{
+			Kind: e.Kind, IdentityKeys: e.IdentityKeys, Labels: e.Labels})
+	}
+	// A rung-2 DerivedContract (tofu outputs schema) rides the existing
+	// OutputsContract channel — CollectFacts names it from the Step's workspace and
+	// ProjectFacts registers it, the core recomputing + pinning the hash (§1.5,
+	// §2.2). The plugin's asserted schema_id/rev are advisory; the core owns naming.
+	if len(raw.Derived) > 0 {
+		res.OutputsContract = raw.Derived[0].Schema
+	}
+	return res, nil
+}
+
+// executeJobPlugin runs one Step slice through an EE-Job (subprocess) transport
+// Actuator (ADR-0051): the stratt-ansible shim, baked into the EE image, speaks the
+// port on stdout. The core dispatches the Job, the dispatcher forwards its typed
+// stream folding NOTHING (MF1/MF2), and the SAME hub-side governor as the gRPC path
+// (Host.GovernStream) gates it against the CORE-HELD resolved target set (MF4). The
+// on-disk Job content is the sovereign ApplyRequest — one request shape, both
+// transports. Nothing is projected here; the governed dispatch.Result flows to
+// CollectFacts → ProjectFacts (the single batched Run-provenance writer, §1.2).
+func (a *Activities) executeJobPlugin(ctx context.Context, in RunInput, slice int, site string, resolved ResolvedTargets, creds []dispatch.CredentialMount, pa PluginActuator) (dispatch.Result, error) {
+	// Dry-run refused CORE-SIDE from the reconciled capability (MF6 — a shim that
+	// silently ignored the check bit would run live side effects).
+	if in.DryRun && !pa.DryRunnable {
+		return dispatch.Result{}, temporal.NewNonRetryableApplicationError(
+			fmt.Sprintf("actuator %q does not support dry-run", in.Actuator), "DryRunUnsupported", nil)
+	}
+	// Where the EE-Job runs: hub-local dispatches directly; a remote Site runs the
+	// shim Job AT the Site and forwards its typed stdout Site→hub (ADR-0051 MF2). A
+	// remote Step with no Site gateway fails visibly (never silently hub-local, §1.8).
+	remote := site != "" && site != types.LocalSite
+	if remote && a.Sites == nil {
+		return dispatch.Result{}, temporal.NewNonRetryableApplicationError(
+			fmt.Sprintf("actuator %q targets Site %q but this hub has no site gateway configured", in.Actuator, site), "NoSiteGateway", nil)
+	}
+	if pa.Host == nil {
+		return dispatch.Result{}, temporal.NewNonRetryableApplicationError(
+			fmt.Sprintf("actuator %q has no governing host", in.Actuator), "NoPluginHost", nil)
+	}
+
+	// The core-resolved target set crosses LEGIBLY (MF4): name + connection vars +
+	// a host.name identity key. The shim renders its inventory FROM these (never the
+	// playbook's self-reported hosts) and stamps the write-back with the same identity
+	// so gathered facts re-correlate to the resolved Entity hub-side.
+	targets := make([]pluginhost.ApplyTarget, 0, len(resolved.Targets))
+	ptargets := make([]*pluginv1.ApplyTarget, 0, len(resolved.Targets))
+	for _, t := range resolved.Targets {
+		ids := map[string]string{"host.name": t.Name}
+		targets = append(targets, pluginhost.ApplyTarget{Name: t.Name, Vars: t.Vars, IdentityKeys: ids})
+		ptargets = append(ptargets, &pluginv1.ApplyTarget{Name: t.Name, Vars: t.Vars, IdentityKeys: ids})
+	}
+	// Only the use-checked, authorized names cross (§2.5); material stays on the
+	// kubelet secretKeyRef mounts (MF7 — one authz chokepoint, injection at the pod).
+	credRefs := make([]*pluginv1.CredentialRef, 0, len(creds))
+	for _, c := range creds {
+		credRefs = append(credRefs, &pluginv1.CredentialRef{Name: c.RefName})
+	}
+	// The Job content is the sovereign ApplyRequest (proto-JSON) — the SAME shape the
+	// gRPC transport sends, so one request contract serves both transports.
+	applyReq := &pluginv1.ApplyRequest{
+		Envelope: &pluginv1.Envelope{Principal: &pluginv1.Principal{Id: in.Principal, Kind: "user"}, Creds: credRefs},
+		Desired:  &pluginv1.Payload{Bytes: in.Params},
+		DryRun:   in.DryRun,
+		Targets:  ptargets,
+	}
+	reqBytes, err := protojson.Marshal(applyReq)
+	if err != nil {
+		return dispatch.Result{}, temporal.NewNonRetryableApplicationError(err.Error(), "InvalidStepParams", err)
+	}
+	spec := actuators.JobSpec{
+		Files:   map[string]string{"stratt/request.json": string(reqBytes)},
+		Command: pa.JobCommand,
+	}
+
+	// Bridge: the dispatcher streams decoded ApplyResponses onto ch (folding nothing,
+	// MF1); the governor drains ch on its own goroutine. A closed ch is the governor's
+	// io.EOF; RunStream returning ends the stream. Governance runs hub-side over the
+	// raw shapes — identical to the gRPC path.
+	ch := make(chan *pluginv1.ApplyResponse, 64)
+	type govResult struct {
+		raw pluginhost.RawApplyResult
+		err error
+	}
+	gov := make(chan govResult, 1)
+	go func() {
+		raw, gerr := pa.Host.GovernStream(ctx, pluginhost.NewChanStream(ctx, ch), targets, in.FacetWriteScope)
+		gov <- govResult{raw: raw, err: gerr}
+	}()
+	heartbeat := func() { activity.RecordHeartbeat(ctx) }
+	// ctx-aware send: on cancellation the governor stops draining ch, so a blocking
+	// send would wedge the producer — fall through instead (the ctx-bound Job stream
+	// ends promptly, ADR-0026).
+	onResp := func(resp *pluginv1.ApplyResponse) {
+		select {
+		case ch <- resp:
+		case <-ctx.Done():
+		}
+	}
+	// Producer: hub-local runs the shim Job here and streams its typed stdout; a
+	// remote Site runs the SAME shim Job at the Site and forwards the typed frames
+	// (MF2). Either way the governor drains ch — governance is hub-side and single
+	// (MF1), the Site folds nothing.
+	var jobOK bool
+	var rerr error
+	if remote {
+		req := siteproto.DispatchRequest{
+			RunID: in.RunID, Slice: slice, Site: site, Actuator: in.Actuator,
+			DryRun: in.DryRun, Typed: true, Spec: spec, Creds: creds,
+		}
+		jobOK, rerr = a.Sites.StreamApply(ctx, req, heartbeat, func(b json.RawMessage) {
+			resp := &pluginv1.ApplyResponse{}
+			if protojson.Unmarshal(b, resp) == nil {
+				onResp(resp)
+			}
+		})
+	} else {
+		jobOK, _, rerr = a.Dispatcher.RunStream(ctx, in.RunID, slice, spec, creds, heartbeat, onResp)
+	}
+	close(ch)
+	gr := <-gov
+	if rerr != nil {
+		return dispatch.Result{}, rerr
+	}
+	if gr.err != nil {
+		return dispatch.Result{}, gr.err
+	}
+	raw := gr.raw
+
+	for _, r := range raw.Rejections {
+		activity.GetLogger(ctx).Warn("plugin apply emission rejected",
+			"actuator", in.Actuator, "kind", r.Kind, "detail", r.Detail, "reason", r.Reason)
+	}
+	// Map the governed, UNPROJECTED result to dispatch.Result. Succeeded folds BOTH
+	// §1.8/MF5 signals: the governor's terminal fold (raw.Succeeded) AND the K8s Job
+	// exit (jobOK) — a green terminal followed by a non-zero exit (OOMKill, torn
+	// cleanup, shim serialize error) must read NOT-OK, restoring parity with the
+	// in-tree floor (dispatch.Run's res.Succeeded = the Job exit).
+	res := dispatch.Result{
+		Succeeded: raw.Succeeded && jobOK, PerTarget: raw.PerTarget, Drift: raw.Drift,
+		Facts: map[string]map[string]json.RawMessage{},
+	}
+	if remote {
+		// §1.8 descent: stamp the execution locus of each governed target so the
+		// Run's Sites union + one-click descent show WHERE it ran (ADR-0032). The
+		// Site folded nothing, so the hub stamps from the dispatch locus.
+		res.SiteByTarget = make(map[string]string, len(raw.PerTarget))
+		for name := range raw.PerTarget {
+			res.SiteByTarget[name] = site
+		}
+	}
+	for _, e := range raw.WriteBack {
+		// Facts re-correlate to the resolved target name via the write-back's
+		// host.name identity and flow through the res.Facts (name→EntityID) channel,
+		// identical to CollectFacts' in-tree path. CollectFacts drops any name NOT in
+		// the core-resolved set (its byName map) — that drop IS the confused-deputy
+		// floor for write-backs (the governor gates item_key but not entity identity
+		// against the resolved set), so do not remove it when refactoring CollectFacts.
+		name := e.IdentityKeys["host.name"]
+		if name == "" {
+			continue
+		}
+		facets := make(map[string]json.RawMessage, len(e.Facets))
+		for ns, v := range e.Facets {
+			facets[ns] = json.RawMessage(v)
+		}
+		res.Facts[name] = facets
+	}
+	return res, nil
+}
+
+// executeMCP dispatches an mcp Step over the EE-Job transport, keeping the §1.5/§2.2
+// SEAM in the core (ADR-0053): the stratt-mcp shim speaks the protocol, but the core
+// resolves the MCPServer declaration + its rev, validates call-args against the pinned
+// Contract (the door check), and — for REGISTER — pins each rung-3 derived_contract
+// the shim proposes at its OWN held rev (MF-2), recomputing the canonical hash (MF-4).
+// A pin is never a side effect of a call: BOTH the shim (register-only emission) and
+// this core loop (register-only pinning + reject on a call) gate it (MF-3).
+func (a *Activities) executeMCP(ctx context.Context, in RunInput, slice int, pa PluginActuator) (dispatch.Result, error) {
+	var p struct {
+		Server    string          `json:"server"`
+		Mode      string          `json:"mode"`
+		Tool      string          `json:"tool"`
+		Arguments json.RawMessage `json:"arguments"`
+	}
+	if len(in.Params) > 0 {
+		if err := json.Unmarshal(in.Params, &p); err != nil {
+			return dispatch.Result{}, temporal.NewNonRetryableApplicationError(err.Error(), "InvalidStepParams", err)
+		}
+	}
+	if p.Mode == "" {
+		p.Mode = "call"
+	}
+	if p.Server == "" || (p.Mode != "register" && p.Mode != "call") {
+		return dispatch.Result{}, temporal.NewNonRetryableApplicationError("mcp: server + mode (register|call) required", "InvalidStepParams", nil)
+	}
+	// The seam: resolve the declared server (its rev is CORE-HELD, MF-2 — never
+	// shim-chosen). The shim receives the resolved declaration in the Job content.
+	server, err := a.Store.GetMCPServer(ctx, p.Server)
+	if err != nil {
+		return dispatch.Result{}, temporal.NewNonRetryableApplicationError(fmt.Sprintf("mcp: %v", err), "MCPServerNotFound", err)
+	}
+	step := map[string]any{"mode": p.Mode, "server": server.Name, "rev": strconv.Itoa(server.Rev), "transport": server.Transport}
+	if server.Transport == types.MCPTransportStdio {
+		step["script"] = server.Script
+	} else {
+		step["endpoint"] = server.Endpoint
+		if server.TokenRef != nil {
+			step["tokenFile"] = "/runner/credentials/" + server.TokenRef.CredentialRef + "/" + server.TokenRef.Key
+		}
+	}
+	if p.Mode == "call" {
+		if p.Tool == "" {
+			return dispatch.Result{}, temporal.NewNonRetryableApplicationError("mcp: call requires tool", "InvalidStepParams", nil)
+		}
+		name := mcpcanon.ContractName(server.Name, p.Tool)
+		pin, err := a.Store.GetContract(ctx, name, server.Rev)
+		if err != nil {
+			return dispatch.Result{}, temporal.NewNonRetryableApplicationError(
+				fmt.Sprintf("mcp: no pinned contract %s @ rev %d — run a register Step first (§2.2 rung 3)", name, server.Rev), "MCPNotPinned", err)
+		}
+		args := p.Arguments
+		if len(args) == 0 {
+			args = json.RawMessage(`{}`)
+		}
+		// Contract at the door (§1.5, STAYS core): args validate against the pin.
+		if err := contract.ValidateDocument(pin.Name, pin.Schema, args); err != nil {
+			return dispatch.Result{}, temporal.NewNonRetryableApplicationError(fmt.Sprintf("mcp: arguments %v", err), "InvalidStepParams", err)
+		}
+		step["tool"] = p.Tool
+		step["arguments"] = json.RawMessage(args)
+		step["pinnedHash"] = pin.Hash
+	}
+	desired, err := json.Marshal(step)
+	if err != nil {
+		return dispatch.Result{}, err
+	}
+	reqBytes, err := protojson.Marshal(&pluginv1.ApplyRequest{Desired: &pluginv1.Payload{Bytes: desired}})
+	if err != nil {
+		return dispatch.Result{}, err
+	}
+	spec := actuators.JobSpec{
+		Files:   map[string]string{"stratt/request.json": string(reqBytes)},
+		Command: pa.JobCommand,
+		Image:   pa.Image,
+	}
+
+	// Dispatch the shim + govern hub-side (the ADR-0051 bridge). The "target" is the
+	// single server (per-server, not per-target — the schema_id namespace-confines it).
+	targets := []pluginhost.ApplyTarget{{Name: server.Name}}
+	ch := make(chan *pluginv1.ApplyResponse, 64)
+	type govResult struct {
+		raw pluginhost.RawApplyResult
+		err error
+	}
+	gov := make(chan govResult, 1)
+	go func() {
+		raw, gerr := pa.Host.GovernStream(ctx, pluginhost.NewChanStream(ctx, ch), targets, nil)
+		gov <- govResult{raw: raw, err: gerr}
+	}()
+	heartbeat := func() { activity.RecordHeartbeat(ctx) }
+	onResp := func(resp *pluginv1.ApplyResponse) {
+		select {
+		case ch <- resp:
+		case <-ctx.Done():
+		}
+	}
+	jobOK, _, rerr := a.Dispatcher.RunStream(ctx, in.RunID, slice, spec, nil, heartbeat, onResp)
+	close(ch)
+	gr := <-gov
+	if rerr != nil {
+		return dispatch.Result{}, rerr
+	}
+	if gr.err != nil {
+		return dispatch.Result{}, gr.err
+	}
+	raw := gr.raw
+
+	// The rung-3 pin seam (MF-1/2/3). A register-mode Step pins each RUNG_DECLARED
+	// derived_contract at the CORE-HELD rev, recomputing the canonical hash; a
+	// derived_contract on a CALL is rejected (a pin is never a call side effect); a
+	// non-rung-3 derived from mcp is rejected (fail-closed, never a silent auto-version).
+	for _, d := range raw.Derived {
+		if p.Mode != "register" {
+			return dispatch.Result{}, temporal.NewNonRetryableApplicationError(
+				fmt.Sprintf("mcp: derived_contract %s on a %s Step — a pin is never a side effect of a call (ADR-0022)", d.SchemaID, p.Mode), "MCPUnexpectedPin", nil)
+		}
+		if d.Rung != int32(pluginv1.DerivedContract_RUNG_DECLARED) {
+			return dispatch.Result{}, temporal.NewNonRetryableApplicationError(
+				fmt.Sprintf("mcp register: derived_contract %s rung=%d, want RUNG_DECLARED (3)", d.SchemaID, d.Rung), "MCPBadRung", nil)
+		}
+		hash, canonical, herr := mcpcanon.CanonicalHash(d.Schema)
+		if herr != nil {
+			return dispatch.Result{}, temporal.NewNonRetryableApplicationError(fmt.Sprintf("mcp: %v", herr), "InvalidToolSchema", herr)
+		}
+		if err := a.Store.RegisterMCPContract(ctx, d.SchemaID, server.Rev, hash, canonical); err != nil {
+			if errors.Is(err, graph.ErrContractDrift) {
+				return dispatch.Result{}, temporal.NewNonRetryableApplicationError(err.Error(), "ContractDrift", err)
+			}
+			return dispatch.Result{}, err
+		}
+	}
+	return dispatch.Result{Succeeded: raw.Succeeded && jobOK, PerTarget: raw.PerTarget}, nil
 }
 
 // CleanupRun deletes a Run's K8s Jobs on cancellation (invoked from the
@@ -700,7 +1272,6 @@ func mergeResults(slices []dispatch.Result) dispatch.Result {
 		if len(r.OutputsContract) > 0 {
 			out.OutputsContract = r.OutputsContract
 		}
-		out.MCPTools = append(out.MCPTools, r.MCPTools...)
 		for t, fragments := range r.Drift {
 			if out.Drift == nil {
 				out.Drift = map[string][]json.RawMessage{}
@@ -725,18 +1296,6 @@ func (a *Activities) CollectFacts(ctx context.Context, in RunInput, resolved Res
 		}
 	}
 	fs.Entities = result.Entities
-	if len(result.MCPTools) > 0 {
-		// Belt to the driver's own gate: pins mint ONLY from deliberate
-		// register-mode Runs — never as a side effect of a call touching a
-		// sibling tool (guardian on ADR-0022).
-		var p struct {
-			Mode string `json:"mode"`
-		}
-		_ = json.Unmarshal(in.Params, &p)
-		if p.Mode == "register" {
-			fs.MCPTools = result.MCPTools
-		}
-	}
 	if len(result.OutputsContract) > 0 {
 		fs.OutputsContract = result.OutputsContract
 		// The workspace names the derived contract and the selection label.
@@ -794,28 +1353,9 @@ func (a *Activities) ProjectFacts(ctx context.Context, runID string, facts FactS
 			return err
 		}
 	}
-	// Rung 3 (§2.2, ADR-0022): pin the MCP server's declared tool schemas at
-	// the declaration's rev. Canonical form here must equal what the driver
-	// hashed; drift within a rev is ErrContractDrift — the Run fails
-	// visibly, and accepting the change is a Git act (bump rev).
-	for _, t := range facts.MCPTools {
-		hash, canonical, err := mcpact.CanonicalHash(t.Schema)
-		if err != nil {
-			return temporal.NewNonRetryableApplicationError(
-				fmt.Sprintf("mcp tool %s/%s: %v", t.Server, t.Tool, err), "InvalidToolSchema", err)
-		}
-		if hash != t.Hash {
-			return temporal.NewNonRetryableApplicationError(
-				fmt.Sprintf("mcp tool %s/%s: driver hash %s != control-plane hash %s (canonicalization mismatch)",
-					t.Server, t.Tool, t.Hash, hash), "CanonicalizationMismatch", nil)
-		}
-		if err := a.Store.RegisterMCPContract(ctx, mcpact.ContractName(t.Server, t.Tool), t.Rev, hash, canonical); err != nil {
-			if errors.Is(err, graph.ErrContractDrift) {
-				return temporal.NewNonRetryableApplicationError(err.Error(), "ContractDrift", err)
-			}
-			return err
-		}
-	}
+	// Rung-3 (mcp) pinning is NOT here — it moved to executeMCP over the governed
+	// derived_contract channel (ADR-0053): the seam pins each RUNG_DECLARED contract at
+	// the core-held rev directly, so the old MCPTools facts channel is retired.
 	return nil
 }
 
@@ -827,10 +1367,7 @@ func (a *Activities) FinishRun(ctx context.Context, in RunInput, status types.Ru
 	for _, s := range result.PerTarget {
 		counts[s]++
 	}
-	actuator := in.Actuator
-	if actuator == "" {
-		actuator = "ansible"
-	}
+	actuator := in.Actuator // explicit (declared/inherited); Action runs leave it empty
 	slices := in.Slices
 	if slices < 1 {
 		slices = 1

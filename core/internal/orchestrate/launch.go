@@ -28,7 +28,7 @@ type LaunchDeps struct {
 // View (Actuator) or as a targetless Action (§2.2, ADR-0031).
 type LaunchParams struct {
 	ViewName string
-	Actuator string // "" defaults to ansible
+	Actuator string // explicit; no platform default (ADR-0046)
 	// Action, when set, launches a targetless Connector Action (RunAction)
 	// instead of an Actuator Run; ViewName is ignored. DryRun asks for a plan.
 	Action         string
@@ -37,6 +37,8 @@ type LaunchParams struct {
 	CredentialRefs []string
 	Slices         int
 	Principal      string
+	// FacetWriteScope is the Facet namespaces this Run may write back (ADR-0054).
+	FacetWriteScope []string
 	// StayLocal launches a Run that must not fan out across Cells (ADR-0044
 	// slice 5) — set by the API handler when the request arrived as a verified
 	// peer fan-out (a forwarded child Run). A direct launch leaves it false.
@@ -53,9 +55,11 @@ func LaunchRun(ctx context.Context, d LaunchDeps, p LaunchParams) (types.Run, er
 	if p.Action != "" {
 		return launchAction(ctx, d, p)
 	}
+	// A View actuation names its Actuator EXPLICITLY — no platform default (ADR-0046:
+	// the spine names no tool; every Run's actuator is traceable to a declaration).
 	name := p.Actuator
 	if name == "" {
-		name = "ansible"
+		return types.Run{}, fmt.Errorf("a View actuation requires an explicit actuator (no platform default)")
 	}
 	if err := contract.ValidateActuatorParams(name, p.Params); err != nil {
 		return types.Run{}, err
@@ -71,7 +75,7 @@ func LaunchRun(ctx context.Context, d LaunchDeps, p LaunchParams) (types.Run, er
 	in := RunInput{
 		RunID: run.ID, ViewName: v.Name, Actuator: p.Actuator, Params: p.Params,
 		CredentialRefs: p.CredentialRefs, Slices: p.Slices, Principal: p.Principal,
-		StayLocal: p.StayLocal,
+		StayLocal: p.StayLocal, FacetWriteScope: p.FacetWriteScope,
 	}
 	// Cross-Cell selection (ADR-0044 slice 5): a direct launch on a fleet with
 	// peer Cells runs the parent RunAcrossCells (scatter a child Run to every

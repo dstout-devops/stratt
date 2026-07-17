@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/dstout-devops/stratt/core/internal/connectors/awx"
-	"github.com/dstout-devops/stratt/core/internal/connectors/awx/awxsim"
+	"github.com/dstout-devops/stratt/core/internal/awximport/awx"
+	"github.com/dstout-devops/stratt/core/internal/awximport/awx/awxsim"
 	"github.com/dstout-devops/stratt/core/internal/desiredstate"
 )
 

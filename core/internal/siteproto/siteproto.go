@@ -11,6 +11,7 @@
 package siteproto
 
 import (
+	"encoding/json"
 	"fmt"
 
 	"github.com/dstout-devops/stratt/core/internal/actuators"
@@ -25,9 +26,11 @@ import (
 const (
 	baseDispatchStream   = "STRATT_DISPATCH"
 	baseResultStream     = "STRATT_DISPATCH_RESULT"
+	baseApplyStream      = "STRATT_DISPATCH_APPLY"
 	baseLivenessBucket   = "SITE_LIVENESS"
 	baseDispatchSubjRoot = "stratt.dispatch"
 	baseResultSubjRoot   = "stratt.dispatchresult"
+	baseApplySubjRoot    = "stratt.dispatchapply"
 )
 
 // The Cell-scoped names, derived once by SetScope at boot. They are package
@@ -40,6 +43,11 @@ var (
 	DispatchStream = baseDispatchStream
 	// ResultStream carries Site→hub terminal results, correlated by (runID, slice).
 	ResultStream = baseResultStream
+	// ApplyStream carries Site→hub TYPED governance frames for an EE-Job (subprocess)
+	// transport dispatch (ADR-0051 MF2): the Site forwards the shim's raw
+	// ApplyResponses so the HUB governs (GovernStream) — the Site folds nothing.
+	// Ordered per (runID, slice); the final frame is EOF-marked with the Job exit.
+	ApplyStream = baseApplyStream
 	// LivenessBucket is a TTL'd KV of agent heartbeats so the hub fails a
 	// dead-Site branch fast instead of eating activity timeouts.
 	LivenessBucket = baseLivenessBucket
@@ -47,12 +55,16 @@ var (
 	DispatchSubjectPrefix = baseDispatchSubjRoot
 	// resultSubjectPrefix roots every Site→hub result subject.
 	resultSubjectPrefix = baseResultSubjRoot
+	// applySubjectPrefix roots every Site→hub typed-governance subject (MF2).
+	applySubjectPrefix = baseApplySubjRoot
 	// DispatchStreamSubjects is what the work-queue stream binds: every per-Site
 	// dispatch subject, but NOT the 4-token cancel subjects (those are ephemeral
 	// core-NATS signals, never queued work).
 	DispatchStreamSubjects = baseDispatchSubjRoot + ".*"
 	// ResultStreamSubjects is what the result stream binds.
 	ResultStreamSubjects = baseResultSubjRoot + ".>"
+	// ApplyStreamSubjects is what the typed-governance stream binds (MF2).
+	ApplyStreamSubjects = baseApplySubjRoot + ".>"
 )
 
 // SetScope Cell-scopes every stream/KV name and subject root for this daemon's
@@ -64,14 +76,17 @@ var (
 func SetScope(scope string) {
 	DispatchStream = types.ScopedStream(baseDispatchStream, scope)
 	ResultStream = types.ScopedStream(baseResultStream, scope)
+	ApplyStream = types.ScopedStream(baseApplyStream, scope)
 	LivenessBucket = types.ScopedStream(baseLivenessBucket, scope)
 	// ScopedSubjectRoot inserts the token as the second subject token
 	// ("stratt.dispatch" → "stratt.<tok>.dispatch"), so the bare roots scope
 	// without any trailing-dot juggling.
 	DispatchSubjectPrefix = types.ScopedSubjectRoot(baseDispatchSubjRoot, scope)
 	resultSubjectPrefix = types.ScopedSubjectRoot(baseResultSubjRoot, scope)
+	applySubjectPrefix = types.ScopedSubjectRoot(baseApplySubjRoot, scope)
 	DispatchStreamSubjects = DispatchSubjectPrefix + ".*"
 	ResultStreamSubjects = resultSubjectPrefix + ".>"
+	ApplyStreamSubjects = applySubjectPrefix + ".>"
 }
 
 // DispatchSubject is the work subject for one Site (3 tokens under the root).
@@ -84,6 +99,13 @@ func CancelSubject(site string) string { return DispatchSubjectPrefix + ".cancel
 // ResultSubject correlates a terminal result to its dispatched slice.
 func ResultSubject(runID string, slice int) string {
 	return fmt.Sprintf("%s.%s.%d", resultSubjectPrefix, runID, slice)
+}
+
+// ApplySubject correlates a typed-governance frame stream to its dispatched
+// slice (ADR-0051 MF2). Ordered per (runID, slice); the hub drains it into
+// GovernStream and folds hub-side.
+func ApplySubject(runID string, slice int) string {
+	return fmt.Sprintf("%s.%s.%d", applySubjectPrefix, runID, slice)
 }
 
 // DispatchRequest is one hub→Site work item: a prepared, RemoteSafe JobSpec
@@ -103,6 +125,13 @@ type DispatchRequest struct {
 	Actuator string `json:"actuator,omitempty"`
 	Action   string `json:"action,omitempty"`
 	DryRun   bool   `json:"dryRun,omitempty"`
+	// Typed marks an EE-Job (subprocess) transport dispatch (ADR-0051 MF2): the
+	// agent runs Spec with dispatch.RunStream (folding NOTHING) and FORWARDS the
+	// shim's raw ApplyResponses to the hub over ApplyStream; the hub governs
+	// (GovernStream) and folds. A Typed request needs no in-agent Interpreter — the
+	// Site never reads ansible semantics. When false, the legacy in-tree path runs
+	// (agent looks up the Interpreter and folds Site-side).
+	Typed bool `json:"typed,omitempty"`
 	// Spec is the prepared pod content — MUST satisfy RemoteSafe (no plain Env
 	// material). Enforced by the gateway before publish (§2.5).
 	Spec actuators.JobSpec `json:"spec"`
@@ -122,6 +151,34 @@ type DispatchResult struct {
 	// Err is a terminal execution error the Site could not express as a
 	// per-target failure (e.g. MissingCredential, a refused Bundle). Empty on a
 	// normal result; non-empty fails the branch activity on the hub.
+	Err string `json:"err,omitempty"`
+}
+
+// ApplyFrame is one Site→hub governance frame for a TYPED (EE-Job) dispatch
+// (ADR-0051 MF2). The Site forwards the shim's raw ApplyResponses verbatim so the
+// HUB is the sole governor (GovernStream) — the Site interprets/folds nothing. The
+// stream is ordered per (runID, slice); the final frame sets EOF and carries the
+// Job's exit (JobOK) plus any terminal agent error (Err, e.g. a missing local
+// Secret — MF5/§1.8: never silent). Response is a proto-JSON pluginv1.ApplyResponse
+// (siteproto stays dependency-light — it does not import the generated port types;
+// the hub decodes the bytes into the governor).
+type ApplyFrame struct {
+	RunID string `json:"runId"`
+	Slice int    `json:"slice"`
+	Site  string `json:"site"`
+	// Seq is the monotonic per-(runID,slice) frame index the hub dedups on (MsgID):
+	// a redelivered dispatch's adopted Job re-emits identical output → identical
+	// seqs, so the ordered consumer sees each governance frame exactly once.
+	Seq int64 `json:"seq,omitempty"`
+	// Response is a proto-JSON pluginv1.ApplyResponse (empty on the EOF frame).
+	Response json.RawMessage `json:"response,omitempty"`
+	// EOF marks the terminal frame: no Response, JobOK/Err authoritative.
+	EOF bool `json:"eof,omitempty"`
+	// JobOK is the Site Job's exit success (a §1.8 signal the hub ANDs into the
+	// governor's terminal fold, MF5). Meaningful only on the EOF frame.
+	JobOK bool `json:"jobOk,omitempty"`
+	// Err is a terminal agent-side error the Site could not express as a typed
+	// response (preflight failure, infra error). Meaningful only on the EOF frame.
 	Err string `json:"err,omitempty"`
 }
 

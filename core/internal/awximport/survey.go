@@ -3,7 +3,7 @@ package awximport
 import (
 	"encoding/json"
 
-	"github.com/dstout-devops/stratt/core/internal/connectors/awx"
+	"github.com/dstout-devops/stratt/core/internal/awximport/awx"
 )
 
 // mapSurvey transforms an AWX survey into an input Contract: a JSON Schema

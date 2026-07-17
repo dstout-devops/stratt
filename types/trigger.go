@@ -40,11 +40,14 @@ type Trigger struct {
 	// ViewParams binds a parametrized View's {{.param.x}} placeholders
 	// (ADR-0024); values may themselves reference the firing event
 	// ({{.event.x}}). Empty for plain Views.
-	ViewParams     map[string]any `json:"viewParams,omitempty"`
-	Actuator       string         `json:"actuator,omitempty"`
-	Params         map[string]any `json:"params,omitempty"`
-	Slices         int            `json:"slices,omitempty"`
-	CredentialRefs []string       `json:"credentialRefs,omitempty"`
+	ViewParams map[string]any `json:"viewParams,omitempty"`
+	Actuator   string         `json:"actuator,omitempty"`
+	// FacetWriteScope is the Facet namespaces a launched Run may write back
+	// (ADR-0054): the actuator's grant ∩ this scope. Empty admits no facet write-back.
+	FacetWriteScope []string       `json:"facetWriteScope,omitempty"`
+	Params          map[string]any `json:"params,omitempty"`
+	Slices          int            `json:"slices,omitempty"`
+	CredentialRefs  []string       `json:"credentialRefs,omitempty"`
 	// WorkflowName launches a declared Workflow instead of a single Run
 	// (the ADR-0010 rider, valid for both kinds).
 	WorkflowName string `json:"workflowName,omitempty"`

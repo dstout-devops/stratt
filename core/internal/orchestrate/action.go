@@ -16,8 +16,10 @@ import (
 	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/workflow"
 
+	"github.com/dstout-devops/stratt/core/internal/actuators"
 	"github.com/dstout-devops/stratt/core/internal/contract"
 	"github.com/dstout-devops/stratt/core/internal/dispatch"
+	"github.com/dstout-devops/stratt/core/internal/pluginhost"
 	"github.com/dstout-devops/stratt/types"
 )
 
@@ -111,20 +113,72 @@ func (a *Activities) EnsureActionRun(ctx context.Context, in RunInput, workflowI
 // ExecuteAction prepares the Action into pod content and dispatches it (one
 // pod, no targets). dryRun on a non-DryRunnable Action is terminal.
 func (a *Activities) ExecuteAction(ctx context.Context, in RunInput, creds []dispatch.CredentialMount) (dispatch.Result, error) {
-	act, ok := a.Actions[in.Action]
-	if !ok {
-		return dispatch.Result{}, temporal.NewNonRetryableApplicationError(
-			fmt.Sprintf("no action registered as %q", in.Action), "UnknownAction", nil)
-	}
-	// The v1 Action authz chokepoint is the CredentialRef `use`-check (§2.5) —
-	// Actions are not View-scoped, so an Action carrying NO CredentialRef would
-	// have no gate. Until an Action-object `run` grant lands (deferred), refuse a
-	// credential-free Action: the "every Action is gated" invariant is enforced
-	// here, not merely assumed (§1.6, ADR-0031 guardian flag).
+	// ── Shared preamble, BEFORE the pod-vs-plugin branch (§2.5/§1.6) ──────────
+	// Every Action is gated: the CredentialRef use-check is the Action's ONLY
+	// authz chokepoint, so a credential-free Action is refused on EITHER path.
+	// ResolveCredentials already ran the use-check + audit per name; a name the
+	// launching Principal lacked `use` on never reached here (a plugin Action
+	// cannot escape it — an unregistered/unauthorized name fails there).
 	if len(creds) == 0 {
 		return dispatch.Result{}, temporal.NewNonRetryableApplicationError(
 			fmt.Sprintf("action %q must carry a CredentialRef — the use-check is its only authz gate until the Action run-grant lands", in.Action),
 			"ActionUngated", nil)
+	}
+
+	// ── Route: a plugin-provided Action goes over the port; else the pod path ─
+	if pa, ok := a.PluginActions[in.Action]; ok {
+		// Dry-run is refused CORE-SIDE from the reconciled ActionDecl, never
+		// delegated (a plugin that ignores dry_run would run live side effects).
+		if in.DryRun && !pa.DryRunnable {
+			return dispatch.Result{}, temporal.NewNonRetryableApplicationError(
+				fmt.Sprintf("action %q does not support dry-run", in.Action), "DryRunUnsupported", nil)
+		}
+		// The use-checked, authorized CredentialRefs cross with their resolved Secret
+		// COORDINATES (ADR-0052) — names + name/namespace/key coordinates, NEVER
+		// material; the plugin's SDK SecretBroker resolves the material itself, confined
+		// to these. The host attaches coordinates only on the local path (MF-C). The
+		// launching Principal — not the plugin channel identity — carries the invocation.
+		portCreds := make([]pluginhost.Credential, 0, len(creds))
+		for _, c := range creds {
+			keys := make([]pluginhost.CredentialKey, 0, len(c.Injection))
+			for _, inj := range c.Injection {
+				keys = append(keys, pluginhost.CredentialKey{Key: inj.Key, As: inj.As, Name: inj.Name})
+			}
+			portCreds = append(portCreds, pluginhost.Credential{
+				RefName: c.RefName, SecretNamespace: c.SecretNamespace, SecretName: c.SecretName, Keys: keys,
+			})
+		}
+		raw, err := pa.Host.InvokeRaw(ctx, pluginhost.ActionInvoke{
+			Principal:            in.Principal,
+			Action:               in.Action,
+			Args:                 in.Params,
+			DryRun:               in.DryRun,
+			Credentials:          portCreds,
+			ExpectOutputContract: "actions/" + in.Action + ".output",
+		})
+		if err != nil {
+			return dispatch.Result{}, err
+		}
+		// Surface governance rejections (dropped land-grabs) for §1.8 honesty —
+		// never swallowed. (Persisting them as Findings is the tracked follow-up.)
+		for _, r := range raw.Rejections {
+			activity.GetLogger(ctx).Warn("plugin action emission rejected",
+				"action", in.Action, "kind", r.Kind, "detail", r.Detail, "reason", r.Reason)
+		}
+		// Entities are GOVERNED but UNPROJECTED — RecordActionResult performs the
+		// single write with RUN provenance (per-verb write path, ADR-0047 §2).
+		ents := make([]actuators.EntityObservation, 0, len(raw.Entities))
+		for _, e := range raw.Entities {
+			ents = append(ents, actuators.EntityObservation{Kind: e.Kind, IdentityKeys: e.IdentityKeys})
+		}
+		return dispatch.Result{Succeeded: raw.OK, Outputs: raw.Outputs, Entities: ents}, nil
+	}
+
+	// ── In-tree pod path ─────────────────────────────────────────────────────
+	act, ok := a.Actions[in.Action]
+	if !ok {
+		return dispatch.Result{}, temporal.NewNonRetryableApplicationError(
+			fmt.Sprintf("no action registered as %q", in.Action), "UnknownAction", nil)
 	}
 	if in.DryRun && !act.DryRunnable() {
 		return dispatch.Result{}, temporal.NewNonRetryableApplicationError(

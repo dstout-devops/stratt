@@ -342,6 +342,12 @@ func childRunBody(in RunInput) ([]byte, error) {
 	if len(in.CredentialRefs) > 0 {
 		body["credentialRefs"] = in.CredentialRefs
 	}
+	if len(in.FacetWriteScope) > 0 {
+		// The derived child inherits the parent's Facet write-scope verbatim
+		// (ADR-0054) — a cross-Cell fan-out must not silently widen or drop it;
+		// the peer re-governs grant∩scope hub-side against its own actuator grant.
+		body["facetWriteScope"] = in.FacetWriteScope
+	}
 	return json.Marshal(body)
 }
 
@@ -370,7 +376,7 @@ func isTerminal(s types.RunStatus) bool {
 func (a *Activities) FinishRunAcross(ctx context.Context, arg FinishAcrossArg) error {
 	in := arg.In
 	summary := map[string]any{
-		"actuator":  actuatorOr(in.Actuator),
+		"actuator":  in.Actuator, // inherited from the parent Run — never defaulted
 		"view":      in.ViewName,
 		"targets":   arg.Targets,
 		"crossCell": true,
@@ -419,11 +425,4 @@ func (a *Activities) FinishRunAcross(ctx context.Context, arg FinishAcrossArg) e
 		return a.Bus.Publish(ctx, types.RunEvent{RunID: in.RunID, Kind: "stream-end"})
 	}
 	return nil
-}
-
-func actuatorOr(name string) string {
-	if name == "" {
-		return "ansible"
-	}
-	return name
 }

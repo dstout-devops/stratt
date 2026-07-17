@@ -25,16 +25,17 @@ import (
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 
-	certaction "github.com/dstout-devops/stratt/core/internal/actions/certissuer"
 	"github.com/dstout-devops/stratt/core/internal/actuators"
-	"github.com/dstout-devops/stratt/core/internal/actuators/ansible"
-	"github.com/dstout-devops/stratt/core/internal/actuators/script"
-	"github.com/dstout-devops/stratt/core/internal/actuators/webhook"
 	"github.com/dstout-devops/stratt/core/internal/dispatch"
 	"github.com/dstout-devops/stratt/core/internal/events"
 	"github.com/dstout-devops/stratt/core/internal/sitegw"
 	"github.com/dstout-devops/stratt/core/internal/siteproto"
+	"github.com/dstout-devops/stratt/core/internal/siterelay"
+	pluginv1 "github.com/dstout-devops/stratt/sdk/stratt/plugin/v1"
 	"github.com/dstout-devops/stratt/types"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/protobuf/encoding/protojson"
 )
 
 // version stamps liveness; overridden at build time.
@@ -134,6 +135,25 @@ func run(log *slog.Logger) error {
 
 	go ag.heartbeatLoop(ctx)
 
+	// Plugin-port relay (ADR-0049): when a Site-local plugin is configured, proxy
+	// the hub's relayed port calls to it over the SAME leaf. The agent GOVERNS
+	// NOTHING — siterelay.Serve forwards opaque proto; the hub-held grant + gates
+	// decide (V1). One plugin per env var today; a plugin manifest is the follow-up.
+	if pluginAddr := os.Getenv("STRATT_SITE_PLUGIN_ADDR"); pluginAddr != "" {
+		pluginID := env("STRATT_SITE_PLUGIN_ID", "opentofu")
+		conn, err := grpc.NewClient(pluginAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+		if err != nil {
+			return fmt.Errorf("site plugin dial %s: %w", pluginAddr, err)
+		}
+		defer conn.Close()
+		go func() {
+			if err := siterelay.Serve(ctx, siterelay.NewNATSAcceptor(gw.Conn(), site, pluginID), pluginv1.NewPluginServiceClient(conn)); err != nil && ctx.Err() == nil {
+				log.Error("plugin relay serve exited", "plugin", pluginID, "err", err)
+			}
+		}()
+		log.Info("plugin-port relay serving", "plugin", pluginID, "addr", pluginAddr)
+	}
+
 	log.Info("stratt-agent ready", "namespace", namespace, "nats", url, "version", version)
 	switch mode {
 	case types.SiteModePush:
@@ -167,6 +187,9 @@ type agent struct {
 // published BEFORE the ACK (in ConsumeDispatch) so an agent crash mid-run
 // redelivers the work and adopts the existing Job by name.
 func (ag *agent) handlePush(ctx context.Context, req siteproto.DispatchRequest) error {
+	if req.Typed {
+		return ag.handleTyped(ctx, req)
+	}
 	name := interpName(req)
 	interp, ok := ag.interp[name]
 	if !ok {
@@ -186,6 +209,55 @@ func (ag *agent) handlePush(ctx context.Context, req siteproto.DispatchRequest) 
 	return ag.gw.PublishResult(ctx, siteproto.DispatchResult{
 		RunID: req.RunID, Slice: req.Slice, Site: ag.site, Result: *res,
 	})
+}
+
+// handleTyped runs an EE-Job (subprocess) transport slice at this Site and FORWARDS
+// the shim's raw ApplyResponses to the hub (ADR-0051 MF2) — it folds/interprets
+// NOTHING (there is no in-agent ansible Interpreter; the hub is the sole governor,
+// MF1). §1.8 task events still flow via the dispatcher's local Bus → leaf → hub. A
+// preflight failure (missing local Secret) publishes an EOF frame carrying Err and
+// ACKs (redelivery cannot fix it); a pod/infra error returns the error to NAK so the
+// adopted Job re-runs and re-forwards (frame seqs dedup the replay). On success the
+// EOF frame carries the Job exit for the hub's §1.8 fold (MF5).
+func (ag *agent) handleTyped(ctx context.Context, req siteproto.DispatchRequest) error {
+	if missing := ag.missingSecrets(ctx, req.Creds); missing != "" {
+		return ag.reportApplyTerminal(ctx, req, false,
+			fmt.Sprintf("credential secret %s not present at site %q", missing, ag.site))
+	}
+	var seq int64
+	forward := func(resp *pluginv1.ApplyResponse) {
+		b, err := protojson.Marshal(resp)
+		if err != nil {
+			// Never silently swallow a frame (§1.8/MF5): log it. A dropped frame
+			// fails CLOSED — a lost terminal → the hub's fold reads NOT-OK.
+			ag.log.Warn("drop unencodable apply frame", "run", req.RunID, "slice", req.Slice, "err", err)
+			return
+		}
+		seq++
+		if perr := ag.gw.PublishApply(ctx, siteproto.ApplyFrame{
+			RunID: req.RunID, Slice: req.Slice, Site: ag.site, Seq: seq, Response: b,
+		}); perr != nil {
+			ag.log.Warn("forward apply frame failed", "run", req.RunID, "slice", req.Slice, "err", perr)
+		}
+	}
+	jobOK, _, err := ag.dispatcher.RunStream(ctx, req.RunID, req.Slice, req.Spec, req.Creds, nil, forward)
+	if err != nil {
+		// Infra error — NAK for redelivery; publish no EOF (the hub keeps awaiting,
+		// heartbeated). The adopted Job re-forwards; seqs dedup the replayed frames.
+		return fmt.Errorf("dispatch run (typed): %w", err)
+	}
+	return ag.reportApplyTerminal(ctx, req, jobOK, "")
+}
+
+// reportApplyTerminal publishes the EOF governance frame (the typed path's terminal,
+// MF2) and ACKs. A non-empty msg is a terminal agent error the hub surfaces (§1.8).
+func (ag *agent) reportApplyTerminal(ctx context.Context, req siteproto.DispatchRequest, jobOK bool, msg string) error {
+	if err := ag.gw.PublishApply(ctx, siteproto.ApplyFrame{
+		RunID: req.RunID, Slice: req.Slice, Site: ag.site, EOF: true, JobOK: jobOK, Err: msg,
+	}); err != nil {
+		return err // couldn't report — NAK and retry so the hub eventually learns
+	}
+	return nil
 }
 
 // reportTerminal publishes a terminal-error result and ACKs (returns nil).
@@ -237,15 +309,14 @@ func (ag *agent) heartbeatLoop(ctx context.Context) {
 	}
 }
 
-// interpName is the registered Interpreter name for a request (Action wins).
+// interpName is the registered Interpreter name for a request (Action wins). The
+// request always names one explicitly (ADR-0046: no platform default); an empty
+// name resolves to no interpreter, and handlePush reports that terminally.
 func interpName(req siteproto.DispatchRequest) string {
 	if req.Action != "" {
 		return req.Action
 	}
-	if req.Actuator != "" {
-		return req.Actuator
-	}
-	return "ansible"
+	return req.Actuator
 }
 
 // buildInterpreters is the Site's in-tree Interpreter registry. It MUST track
@@ -253,17 +324,19 @@ func interpName(req siteproto.DispatchRequest) string {
 // JobSpec, the agent only Interprets pod output, so config-free constructors
 // suffice. Interpreter version skew between hub and agent is the documented
 // deepest tension (ADR-0032); v1 ships core in-tree Interpreters only.
+//
+// Ansible is no longer here (ADR-0051 Phase 5b): it is the EE-Job transport, a
+// PluginActuator the hub routes through GovernStream — never the Site fold path.
+// A Site-homed ansible Run fails closed at the hub (JobTransportSiteUnsupported)
+// until the EE-Job-at-a-Site path lands (Phase 6, MF2). script/webhook still fold.
 func buildInterpreters() map[string]dispatch.Interpreter {
 	m := map[string]dispatch.Interpreter{}
-	for _, a := range []actuators.Actuator{ansible.Actuator{}, script.Actuator{}, webhook.Actuator{}} {
+	for _, a := range []actuators.Actuator{ /* all in-tree actuators extracted to plugins */ } {
 		m[a.Name()] = a
 	}
-	// Action Interpreters (Prepare is hub-side; Interpret is config-free here).
-	for _, act := range []dispatch.Interpreter{certaction.Issue(), certaction.Renew(), certaction.Revoke()} {
-		if n, ok := act.(interface{ Name() string }); ok {
-			m[n.Name()] = act
-		}
-	}
+	// The cert issue/renew/revoke pod Interpreters are retired (ADR-0050): cert
+	// lifecycle runs as the certissuer reconcile Actuator over the port, reaching a
+	// Site via the plugin relay (ADR-0049), not an in-agent pod Interpreter.
 	return m
 }
 

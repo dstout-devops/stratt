@@ -211,19 +211,23 @@ func (s *Store) ListWorkflowRuns(ctx context.Context, limit int) ([]types.Workfl
 
 // CreateGate opens one pending approval for a Gate Step. The approver policy
 // is pinned on the row (audit: what authorized the eventual decision).
-func (s *Store) CreateGate(ctx context.Context, workflowRunID, step string, approvers types.GateApprovers) (types.Gate, error) {
+func (s *Store) CreateGate(ctx context.Context, workflowRunID, step, planDigest string, approvers types.GateApprovers) (types.Gate, error) {
 	g := types.Gate{WorkflowRunID: workflowRunID, Step: step, Status: types.GatePending, Approvers: approvers}
 	doc, err := json.Marshal(approvers)
 	if err != nil {
 		return g, fmt.Errorf("graph: marshal gate approvers: %w", err)
 	}
+	// plan_digest is set ONLY on INSERT and never in the DO UPDATE — WRITE-ONCE
+	// (ADR-0047 §8): a retried/re-created Gate keeps the first-bound digest, so a
+	// re-plan can never silently rebind a different plan under an approval. The
+	// RETURNING reads back whatever is persisted (the first value on a conflict).
 	err = s.pool.QueryRow(ctx, `
-		INSERT INTO graph.gate (workflow_run_id, step, approvers)
-		VALUES ($1, $2, $3)
+		INSERT INTO graph.gate (workflow_run_id, step, approvers, plan_digest)
+		VALUES ($1, $2, $3, $4)
 		ON CONFLICT (workflow_run_id, step) DO UPDATE SET step = excluded.step
-		RETURNING id, status, created_at`,
-		workflowRunID, step, doc,
-	).Scan(&g.ID, &g.Status, &g.CreatedAt)
+		RETURNING id, status, created_at, plan_digest`,
+		workflowRunID, step, doc, planDigest,
+	).Scan(&g.ID, &g.Status, &g.CreatedAt, &g.PlanDigest)
 	if err != nil {
 		return g, fmt.Errorf("graph: create gate: %w", err)
 	}
@@ -291,14 +295,14 @@ func (s *Store) ListGatesForWorkflowRun(ctx context.Context, workflowRunID strin
 }
 
 const gateSelect = `
-	SELECT id, workflow_run_id, step, status, approvers, decided_by, note, created_at, decided_at
+	SELECT id, workflow_run_id, step, status, approvers, decided_by, note, created_at, decided_at, plan_digest
 	FROM graph.gate`
 
 func (s *Store) scanGate(row pgx.Row) (types.Gate, error) {
 	var g types.Gate
 	var approvers []byte
 	err := row.Scan(&g.ID, &g.WorkflowRunID, &g.Step, &g.Status, &approvers,
-		&g.DecidedBy, &g.Note, &g.CreatedAt, &g.DecidedAt)
+		&g.DecidedBy, &g.Note, &g.CreatedAt, &g.DecidedAt, &g.PlanDigest)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return g, fmt.Errorf("%w: gate", ErrNotFound)
 	}

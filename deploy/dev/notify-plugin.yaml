@@ -1,0 +1,84 @@
+# stratt-notify plugin deployment (ADR-0046/0052) — the notification-delivery Action
+# over the sovereign port. The control plane dials it (STRATT_NOTIFY_PLUGIN_ADDR).
+#
+# MF-A (the guardian §2.5 must-fix): the plugin's Secret-read RBAC is confined to ONLY
+# its brokerable Secrets — a dedicated namespace (stratt-secrets) holding the webhook
+# Sink Secrets, and a Role that grants get/watch on Secrets THERE and nowhere else. So
+# the RBAC gate ≈ the per-call use-grant the core already enforced: a compromised
+# notify plugin can read no Secret outside this namespace, and the use-check remains
+# the sole chokepoint. Community-tier plugins would get no such Role at all (§7.3).
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: stratt-notify
+  namespace: stratt
+---
+# The Role lives in the SECRET namespace, NOT the plugin's — it scopes the plugin's
+# read to exactly the brokerable Sink Secrets (MF-A). Never a cluster-wide secrets Role.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: stratt-notify-secret-reader
+  namespace: stratt-secrets
+rules:
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: stratt-notify-secret-reader
+  namespace: stratt-secrets
+subjects:
+  - kind: ServiceAccount
+    name: stratt-notify
+    namespace: stratt
+roleRef:
+  kind: Role
+  name: stratt-notify-secret-reader
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: stratt-notify
+  namespace: stratt
+  labels: { app: stratt-notify }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: stratt-notify } }
+  template:
+    metadata:
+      labels: { app: stratt-notify }
+    spec:
+      serviceAccountName: stratt-notify
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: stratt-notify
+          image: stratt-notify:dev
+          args: []
+          ports:
+            - { name: grpc, containerPort: 9090 }
+          env:
+            # The namespace the brokerable Sink Secrets live in (matches the Role above).
+            - { name: STRATT_SECRET_NAMESPACE, value: "stratt-secrets" }
+            - { name: STRATT_PLUGIN_LISTEN, value: ":9090" }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: stratt-notify
+  namespace: stratt
+spec:
+  selector: { app: stratt-notify }
+  ports:
+    - { name: grpc, port: 9090, targetPort: 9090 }
+# The control plane then dials it: STRATT_NOTIFY_PLUGIN_ADDR=stratt-notify.stratt.svc:9090

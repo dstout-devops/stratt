@@ -16,6 +16,10 @@ cron: "*/15 * * * *"
 viewName: secure-hosts
 principal: svc-collector
 actuator: ansible
+# This gather Run PROJECTS the access.grants Facet (ADR-0054 write-scope): the
+# effective write-back is the ansible grant ∩ this scope. Without it the tight
+# default would drop the projection at the one governor.
+facetWriteScope: [access.grants]
 params:
   play: |
     - name: Collect host-access grants (read-only)

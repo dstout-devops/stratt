@@ -27,6 +27,10 @@ type Baseline struct {
 	Slices         int            `json:"slices,omitempty"`
 	CredentialRefs []string       `json:"credentialRefs,omitempty"`
 	Principal      string         `json:"principal,omitempty"`
+	// FacetWriteScope is the Facet namespaces this check may write back (ADR-0054):
+	// the effective write-back allowlist is the actuator's grant ∩ this scope. Empty
+	// admits NO facet write-back (TIGHT least-authority default).
+	FacetWriteScope []string `json:"facetWriteScope,omitempty"`
 	// Cron is the check cadence (a Temporal Schedule actuates it, §3:
 	// "Baseline cadences").
 	Cron string `json:"cron"`

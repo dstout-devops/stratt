@@ -25,8 +25,11 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 
+	"google.golang.org/protobuf/encoding/protojson"
+
 	"github.com/dstout-devops/stratt/core/internal/actuators"
 	"github.com/dstout-devops/stratt/core/internal/events"
+	pluginv1 "github.com/dstout-devops/stratt/sdk/stratt/plugin/v1"
 	"github.com/dstout-devops/stratt/types"
 )
 
@@ -121,9 +124,6 @@ type Result struct {
 	// check-mode execution (ADR-0019) — redacted upstream, size-capped here
 	// with a visible truncation marker (§1.8: truncation is never silent).
 	Drift map[string][]json.RawMessage
-	// MCPTools are tool schemas declared by an external MCP server during
-	// this execution (rung-3 registration material, ADR-0022).
-	MCPTools []actuators.MCPToolDecl
 	// SpawnLatency is Job-creation → pod-running, the §8 pod-spawn gate.
 	SpawnLatency time.Duration
 }
@@ -208,6 +208,125 @@ func (d *Dispatcher) Run(ctx context.Context, runID string, slice int, spec actu
 		}
 	}
 	return res, nil
+}
+
+// RunStream runs an EE-Job that speaks the sovereign port (the stratt-ansible shim,
+// ADR-0051) and STREAMS its typed stdout to onResp — the subprocess transport beside
+// gRPC. Unlike Run it FOLDS and INTERPRETS nothing (MF1/MF2): the hub-side governor
+// (pluginhost.GovernStream) is the sole authority over the decoded ApplyResponses.
+// The dispatcher only (a) decodes each line as a port ApplyResponse and, when it
+// carries a TaskEvent, publishes it for §1.8 descent, then (b) hands the response to
+// onResp. A line that is NOT a decodable ApplyResponse (a shim panic, a leaked
+// banner) goes to the diagnostic ring (MF5), surfaced iff the Job died or spoke no
+// typed shape at all. Returns the Job's exit success — descriptive only; the
+// authoritative Succeeded is the governor's core-side fold, never this bool.
+func (d *Dispatcher) RunStream(ctx context.Context, runID string, slice int, spec actuators.JobSpec, creds []CredentialMount, heartbeat func(), onResp func(*pluginv1.ApplyResponse)) (bool, time.Duration, error) {
+	jobName := fmt.Sprintf("stratt-run-%s-s%d", runID, slice)
+	created := time.Now()
+
+	if err := d.createContent(ctx, jobName, spec.Files); err != nil {
+		return false, 0, err
+	}
+	defer d.cleanupContent(jobName)
+
+	if err := d.createJob(ctx, jobName, runID, spec, creds); err != nil {
+		return false, 0, err
+	}
+
+	pod, err := d.waitForPod(ctx, jobName, heartbeat)
+	if err != nil {
+		return false, 0, err
+	}
+	spawn := time.Since(created)
+	d.log.Info("pod running (typed transport)", "pod", pod, "slice", slice, "spawn", spawn.String())
+
+	unclaimed, interpreted, err := d.followTyped(ctx, runID, slice, pod, onResp, heartbeat)
+	if err != nil {
+		return false, spawn, err
+	}
+	ok, err := d.waitForJob(ctx, jobName, heartbeat)
+	if err != nil {
+		return false, spawn, err
+	}
+
+	// Diagnostic floor (§1.8, MF5): the shim forwards ansible-runner banners as typed
+	// diagnostics itself, so a line reaching the ring here is a line the shim never
+	// managed to type at all (a panic, a torn stream) — surfaced only when the Job
+	// died or emitted no typed shape.
+	if unclaimed.len() > 0 && (interpreted == 0 || !ok) {
+		d.log.Warn("publishing diagnostic output (typed transport)", "pod", pod, "lines", unclaimed.len(), "interpreted", interpreted)
+		for i, line := range unclaimed.lines {
+			ev := types.RunEvent{RunID: runID, Slice: slice, Seq: unclaimed.maxSeq + int64(i) + 1, Kind: "diagnostic-output", Payload: map[string]any{"line": line}}
+			if err := d.bus.Publish(ctx, ev); err != nil {
+				return false, spawn, err
+			}
+		}
+	}
+	return ok, spawn, nil
+}
+
+// followTyped follows the EE-Job's stdout, decoding each line as a port ApplyResponse.
+// It publishes each response's TaskEvent for §1.8 descent (stamped RunID/Slice/Site,
+// like followLogs) and hands the whole response to onResp for hub-side governance —
+// it folds nothing. Undecodable lines land in the diagnostic ring (MF5).
+func (d *Dispatcher) followTyped(ctx context.Context, runID string, slice int, pod string, onResp func(*pluginv1.ApplyResponse), heartbeat func()) (unclaimedRing, int, error) {
+	var unclaimed unclaimedRing
+	req := d.client.CoreV1().Pods(d.cfg.Namespace).GetLogs(pod, &corev1.PodLogOptions{Follow: true})
+	stream, err := req.Stream(ctx)
+	if err != nil {
+		return unclaimed, 0, fmt.Errorf("dispatch: log stream: %w", err)
+	}
+	defer stream.Close()
+
+	interpreted := 0
+	var seq int64
+	sc := bufio.NewScanner(stream)
+	sc.Buffer(make([]byte, 0, 1024*1024), 8*1024*1024) // fact payloads are large
+	for sc.Scan() {
+		hb(heartbeat)
+		resp := &pluginv1.ApplyResponse{}
+		if uerr := protojson.Unmarshal(sc.Bytes(), resp); uerr != nil {
+			if line := strings.TrimSpace(sc.Text()); line != "" {
+				unclaimed.lines = append(unclaimed.lines, line)
+				if len(unclaimed.lines) > diagnosticRing {
+					unclaimed.lines = unclaimed.lines[1:]
+				}
+			}
+			continue
+		}
+		interpreted++
+		seq++
+		unclaimed.maxSeq = seq
+		if ev := resp.GetEvent(); ev != nil {
+			re := types.RunEvent{
+				RunID: runID, Slice: slice, Seq: seq, Site: d.site(),
+				Kind:    typedEventKind(ev),
+				Target:  ev.GetFields()["host"],
+				Payload: map[string]any{"message": ev.GetMessage()},
+			}
+			if ev.GetAt() != nil {
+				re.At = ev.GetAt().AsTime()
+			}
+			if err := d.bus.Publish(ctx, re); err != nil {
+				return unclaimed, interpreted, err
+			}
+		}
+		onResp(resp)
+	}
+	return unclaimed, interpreted, nil
+}
+
+// typedEventKind renders a port TaskEvent's kind for the §1.8 event stream: the
+// shim stamps Fields["kind"] (the ansible-runner event name, or "diagnostic"); a
+// terminal falls back to "task-terminal".
+func typedEventKind(ev *pluginv1.TaskEvent) string {
+	if k := ev.GetFields()["kind"]; k != "" {
+		return k
+	}
+	if ev.GetTerminal() {
+		return "task-terminal"
+	}
+	return "task"
 }
 
 // cmKey flattens a JobSpec file path into a legal ConfigMap key (keys may not
@@ -528,9 +647,6 @@ func (d *Dispatcher) followLogs(ctx context.Context, runID string, slice int, po
 		}
 		if len(iv.Outputs) > 0 {
 			res.Outputs = iv.Outputs
-		}
-		if len(iv.MCPTools) > 0 {
-			res.MCPTools = append(res.MCPTools, iv.MCPTools...)
 		}
 		if len(iv.Drift) > 0 && iv.Event.Target != "" {
 			target := iv.Event.Target

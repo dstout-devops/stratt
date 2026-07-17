@@ -52,6 +52,11 @@ func Connect(url, name string, log *slog.Logger) (*Gateway, error) {
 // Close drains the connection.
 func (g *Gateway) Close() { g.nc.Close() }
 
+// Conn exposes the underlying NATS connection for the plugin-port relay
+// (ADR-0049): the siterelay Dialer/Acceptor tunnel over the SAME outbound leaf the
+// gateway already holds, so no second connection is opened.
+func (g *Gateway) Conn() *nats.Conn { return g.nc }
+
 // EnsureStreams creates the dispatch work-queue, the result stream, and the
 // liveness KV (idempotent). The hub calls this at startup; a Site's leaf borrows
 // the hub's JetStream, so the agent need not (and must not) re-create them.
@@ -72,6 +77,20 @@ func (g *Gateway) EnsureStreams(ctx context.Context) error {
 		MaxAge:   24 * time.Hour,
 	}); err != nil {
 		return fmt.Errorf("sitegw: ensure result stream: %w", err)
+	}
+	// Typed governance frames Site→hub for EE-Job dispatches (ADR-0051 MF2). Ordered
+	// per (runID, slice); the hub drains it into GovernStream and folds hub-side.
+	// Duplicates window is set explicitly (not the 2m default) so a redelivered
+	// dispatch's re-forwarded frames — MsgID = runID/slice/seq — still dedup even when
+	// the adopted Job re-runs late in the Run's life, so the hub never double-governs.
+	if _, err := g.js.CreateOrUpdateStream(ctx, jetstream.StreamConfig{
+		Name:       siteproto.ApplyStream,
+		Subjects:   []string{siteproto.ApplyStreamSubjects},
+		Storage:    jetstream.FileStorage,
+		MaxAge:     24 * time.Hour,
+		Duplicates: time.Hour,
+	}); err != nil {
+		return fmt.Errorf("sitegw: ensure apply stream: %w", err)
 	}
 	if _, err := g.js.CreateOrUpdateKeyValue(ctx, jetstream.KeyValueConfig{
 		Bucket: siteproto.LivenessBucket,
@@ -174,6 +193,96 @@ func (g *Gateway) DispatchAndAwait(ctx context.Context, req siteproto.DispatchRe
 	return dr.Result, nil
 }
 
+// StreamApply dispatches a TYPED (EE-Job) slice to a Site and drains the Site's
+// forwarded ApplyResponses IN ORDER to onResp (raw proto-JSON), returning the Site
+// Job's exit success (ADR-0051 MF2). Governance runs HUB-SIDE — the caller feeds
+// onResp into GovernStream; the Site folds nothing. DeliverAll replays frames that
+// landed before this consumer started, so there is no dispatch/consume race; a
+// terminal agent error rides the EOF frame (never silent, §1.8). It heartbeats
+// while waiting so a long remote run keeps the hub activity alive.
+func (g *Gateway) StreamApply(ctx context.Context, req siteproto.DispatchRequest, heartbeat func(), onResp func(json.RawMessage)) (bool, error) {
+	if err := g.Dispatch(ctx, req); err != nil {
+		return false, err
+	}
+	cons, err := g.js.OrderedConsumer(ctx, siteproto.ApplyStream, jetstream.OrderedConsumerConfig{
+		FilterSubjects: []string{siteproto.ApplySubject(req.RunID, req.Slice)},
+		DeliverPolicy:  jetstream.DeliverAllPolicy,
+	})
+	if err != nil {
+		return false, fmt.Errorf("sitegw: apply consumer: %w", err)
+	}
+	it, err := cons.Messages()
+	if err != nil {
+		return false, fmt.Errorf("sitegw: apply messages: %w", err)
+	}
+	defer it.Stop()
+
+	// A goroutine drives the blocking iterator; the main loop selects on frames,
+	// ctx, and a heartbeat ticker (the iterator itself cannot be select-ed on).
+	type frame struct {
+		f   siteproto.ApplyFrame
+		err error
+	}
+	frames := make(chan frame)
+	go func() {
+		for {
+			msg, err := it.Next()
+			if err != nil {
+				select {
+				case frames <- frame{err: err}:
+				case <-ctx.Done():
+				}
+				return
+			}
+			var f siteproto.ApplyFrame
+			if uerr := json.Unmarshal(msg.Data(), &f); uerr != nil {
+				select {
+				case frames <- frame{err: fmt.Errorf("sitegw: decode apply frame: %w", uerr)}:
+				case <-ctx.Done():
+				}
+				return
+			}
+			select {
+			case frames <- frame{f: f}:
+			case <-ctx.Done():
+				return
+			}
+			if f.EOF {
+				return
+			}
+		}
+	}()
+
+	t := time.NewTicker(15 * time.Second)
+	defer t.Stop()
+	for {
+		select {
+		case fr := <-frames:
+			if fr.err != nil {
+				if ctx.Err() != nil {
+					return false, ctx.Err()
+				}
+				return false, fr.err
+			}
+			if fr.f.EOF {
+				if fr.f.Err != "" {
+					return false, fmt.Errorf("site %s: %s", fr.f.Site, fr.f.Err)
+				}
+				return fr.f.JobOK, nil
+			}
+			if len(fr.f.Response) > 0 {
+				onResp(fr.f.Response)
+			}
+		case <-ctx.Done():
+			return false, ctx.Err()
+		case <-t.C:
+			if heartbeat != nil {
+				heartbeat()
+			}
+		}
+	}
+}
+
 // Cancel signals a Site to delete a Run's Jobs (ephemeral core-NATS publish;
 // the agent's Job lease is the backstop if a partition drops it).
 func (g *Gateway) Cancel(ctx context.Context, site, runID string) error {
@@ -260,6 +369,27 @@ func (g *Gateway) PublishResult(ctx context.Context, dr siteproto.DispatchResult
 	if _, err := g.js.Publish(ctx, siteproto.ResultSubject(dr.RunID, dr.Slice), payload,
 		jetstream.WithMsgID(fmt.Sprintf("%s/%d", dr.RunID, dr.Slice))); err != nil {
 		return fmt.Errorf("sitegw: publish result: %w", err)
+	}
+	return nil
+}
+
+// PublishApply forwards one typed governance frame to the hub for an EE-Job
+// dispatch (ADR-0051 MF2) — a raw ApplyResponse the Site relays without folding.
+// MsgID = runID/slice/seq (runID/slice/eof for the terminal frame) dedups the
+// re-forwarded frames of a redelivered dispatch: an adopted Job re-emits identical
+// output → identical seqs, so the hub's ordered consumer sees each frame once.
+func (g *Gateway) PublishApply(ctx context.Context, f siteproto.ApplyFrame) error {
+	payload, err := json.Marshal(f)
+	if err != nil {
+		return fmt.Errorf("sitegw: marshal apply frame: %w", err)
+	}
+	id := fmt.Sprintf("%s/%d/%d", f.RunID, f.Slice, f.Seq)
+	if f.EOF {
+		id = fmt.Sprintf("%s/%d/eof", f.RunID, f.Slice)
+	}
+	if _, err := g.js.Publish(ctx, siteproto.ApplySubject(f.RunID, f.Slice), payload,
+		jetstream.WithMsgID(id)); err != nil {
+		return fmt.Errorf("sitegw: publish apply frame: %w", err)
 	}
 	return nil
 }

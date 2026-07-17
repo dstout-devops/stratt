@@ -40,6 +40,55 @@ func (s *Store) GetEntity(ctx context.Context, id string) (types.Entity, error) 
 	return e, nil
 }
 
+// EntityIDByIdentity resolves a LIVE Entity's id by one of its identity keys —
+// the relation-targeting primitive (ADR-0047 §1: resolve-don't-vivify). found is
+// false when no live Entity carries that (scheme, value); the caller drops the
+// edge and records a rejection, NEVER creating a placeholder Entity (which would
+// covertly write an ungranted identity key).
+func (s *Store) EntityIDByIdentity(ctx context.Context, scheme, value string) (string, bool, error) {
+	var id string
+	err := s.pool.QueryRow(ctx, `
+		SELECT i.entity_id
+		FROM graph.entity_identity i
+		JOIN graph.entity e ON e.id = i.entity_id AND e.deleted_at IS NULL
+		WHERE i.scheme = $1 AND i.value = $2
+		LIMIT 1`, scheme, value).Scan(&id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, fmt.Errorf("graph: resolve identity %s=%s: %w", scheme, value, err)
+	}
+	return id, true, nil
+}
+
+// EntityWriterKind returns the WriterKind that created an Entity ("syncer" or
+// "run") — the per-verb provenance distinction (ADR-0047 §2: Observe write-back
+// is Syncer-provenance, Apply/Invoke write-back is Run-provenance). For
+// descent/tests.
+func (s *Store) EntityWriterKind(ctx context.Context, id string) (string, error) {
+	var wk string
+	err := s.pool.QueryRow(ctx, `SELECT prov_writer_kind FROM graph.entity WHERE id = $1`, id).Scan(&wk)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", fmt.Errorf("%w: entity %s", ErrNotFound, id)
+	}
+	if err != nil {
+		return "", fmt.Errorf("graph: entity writer kind: %w", err)
+	}
+	return wk, nil
+}
+
+// RelationTargets returns the ids of the Entities that fromID points to via a
+// relation of relType — the descent/edge surface (§1.8).
+func (s *Store) RelationTargets(ctx context.Context, fromID, relType string) ([]string, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT to_id FROM graph.relation WHERE from_id = $1 AND type = $2`, fromID, relType)
+	if err != nil {
+		return nil, fmt.Errorf("graph: relation targets: %w", err)
+	}
+	return pgx.CollectRows(rows, pgx.RowTo[string])
+}
+
 // GetFacets returns all Facets of an Entity with their Provenance — the
 // "why is this value here" surface (charter §2.1, §1.8).
 func (s *Store) GetFacets(ctx context.Context, entityID string) ([]types.Facet, error) {

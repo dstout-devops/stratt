@@ -458,6 +458,7 @@ type triggerFile struct {
 	CredentialRefs  []string       `yaml:"credentialRefs"`
 	Principal       string         `yaml:"principal"`
 	WorkflowName    string         `yaml:"workflowName"`
+	FacetWriteScope []string       `yaml:"facetWriteScope"`
 }
 
 func parseTriggerFile(path string, raw []byte) (string, types.Trigger, error) {
@@ -476,7 +477,7 @@ func parseTriggerFile(path string, raw []byte) (string, types.Trigger, error) {
 		ViewName: f.ViewName, ViewParams: f.ViewParams,
 		Actuator: f.Actuator, Params: f.Params,
 		Slices: f.Slices, CredentialRefs: f.CredentialRefs, Principal: f.Principal,
-		WorkflowName: f.WorkflowName,
+		WorkflowName: f.WorkflowName, FacetWriteScope: f.FacetWriteScope,
 	}
 	if err := ValidateTrigger(t); err != nil {
 		return "", types.Trigger{}, fmt.Errorf("desiredstate: %s: %w", path, err)
@@ -925,6 +926,11 @@ type baselineFile struct {
 	DampingObservations int            `yaml:"dampingObservations"`
 	RemediationWorkflow string         `yaml:"remediationWorkflow"`
 	Framework           string         `yaml:"framework"`
+	// FacetWriteScope is the Facet namespaces this Baseline's actuation may write
+	// back (ADR-0054): the effective allowlist is the actuator's grant ∩ this scope.
+	// Empty admits no facet write-back (tight default). Moot for the observation
+	// Mode below, which reads and never writes.
+	FacetWriteScope []string `yaml:"facetWriteScope"`
 
 	// facet-observation variant (ADR-0033): a hand-written Baseline that
 	// asserts expected Facet values graph-side (no check Step, no actuator).
@@ -982,7 +988,7 @@ func parseBaselineFile(path string, raw []byte) (string, types.Baseline, error) 
 		Cron: f.Cron, Paused: f.Paused, Severity: f.Severity,
 		DampingObservations: f.DampingObservations,
 		RemediationWorkflow: f.RemediationWorkflow, Framework: f.Framework,
-		Mode: f.Mode,
+		Mode: f.Mode, FacetWriteScope: f.FacetWriteScope,
 	}
 	for _, ef := range f.Expected {
 		exp, err := ef.toExpectation()
@@ -1062,22 +1068,11 @@ func ValidateBaseline(b types.Baseline) error {
 		return fmt.Errorf("baseline %s: unknown mode %q (only %q, or empty for a check Step)", b.Name, b.Mode, types.FacetObservation)
 	}
 
-	actuator := b.Actuator
-	if actuator == "" {
-		actuator = "ansible"
-	}
-	switch actuator {
-	case "ansible":
-		if _, set := b.Params["check"]; set {
-			return fmt.Errorf("baseline %s: params.check is not declarable — the platform forces check mode on baseline checks", b.Name)
-		}
-	case "opentofu":
-		if mode, _ := b.Params["mode"].(string); mode != "plan" {
-			return fmt.Errorf("baseline %s: opentofu checks require params.mode: plan", b.Name)
-		}
-	default:
-		return fmt.Errorf("baseline %s: actuator %q has no read-only check semantics (ansible, opentofu)", b.Name, actuator)
-	}
+	// A baseline is read-only by platform INVARIANT — the launch path forces the
+	// DryRun bit and rejects any Actuator that can't honor it (its reconciled
+	// DryRunnable capability). Validation stays CONTENT-BLIND (ADR-0046): it does not
+	// switch on tool name nor police tool-specific params (e.g. an inert params.check
+	// the read-only shim ignores) — the seam is the Contract, not a tool roster.
 	if len(b.CredentialRefs) > 0 && b.Principal == "" {
 		return fmt.Errorf("baseline %s: credentialRefs require a principal", b.Name)
 	}
@@ -1422,13 +1417,17 @@ func ValidateBlueprint(b types.Blueprint) error {
 // (the placeholder isn't the value the schema must accept), so their
 // contract check is skipped here.
 func validateParamsContract(actuator string, params map[string]any) error {
+	// A View actuation names its Actuator EXPLICITLY (no platform default, ADR-0046):
+	// this validator is reached only on the view-actuation branch (actions, gates, and
+	// facet-observation baselines never call it), so an empty actuator is an
+	// under-specified declaration — reject it at parse, not silently default it.
+	if actuator == "" {
+		return fmt.Errorf("a View actuation requires an explicit actuator (no platform default)")
+	}
 	if template.Has(params) {
 		return nil
 	}
 	name := actuator
-	if name == "" {
-		name = "ansible"
-	}
 	raw := json.RawMessage(`{}`)
 	if params != nil {
 		b, err := json.Marshal(params)
@@ -1483,17 +1482,18 @@ type workflowFile struct {
 	Steps []stepYAML `yaml:"steps"`
 }
 type stepYAML struct {
-	Name           string         `yaml:"name"`
-	Needs          []string       `yaml:"needs"`
-	When           string         `yaml:"when"`
-	Gate           *gateYAML      `yaml:"gate"`
-	ViewName       string         `yaml:"viewName"`
-	Actuator       string         `yaml:"actuator"`
-	Action         string         `yaml:"action"`
-	DryRun         bool           `yaml:"dryRun"`
-	Params         map[string]any `yaml:"params"`
-	Slices         int            `yaml:"slices"`
-	CredentialRefs []string       `yaml:"credentialRefs"`
+	Name            string         `yaml:"name"`
+	Needs           []string       `yaml:"needs"`
+	When            string         `yaml:"when"`
+	Gate            *gateYAML      `yaml:"gate"`
+	ViewName        string         `yaml:"viewName"`
+	Actuator        string         `yaml:"actuator"`
+	Action          string         `yaml:"action"`
+	DryRun          bool           `yaml:"dryRun"`
+	Params          map[string]any `yaml:"params"`
+	Slices          int            `yaml:"slices"`
+	CredentialRefs  []string       `yaml:"credentialRefs"`
+	FacetWriteScope []string       `yaml:"facetWriteScope"`
 }
 type gateYAML struct {
 	Approvers struct {
@@ -1517,6 +1517,7 @@ func parseWorkflowFile(path string, raw []byte) (string, types.Workflow, error) 
 			ViewName: s.ViewName, Actuator: s.Actuator,
 			Action: s.Action, DryRun: s.DryRun, Params: s.Params,
 			Slices: s.Slices, CredentialRefs: s.CredentialRefs,
+			FacetWriteScope: s.FacetWriteScope,
 		}
 		if s.Gate != nil {
 			step.Gate = &types.GateSpec{
@@ -1637,7 +1638,76 @@ func ValidateWorkflow(w types.Workflow) error {
 	if visited != len(w.Steps) {
 		return fmt.Errorf("workflow %s: step graph has a cycle", w.Name)
 	}
+	if err := validatePlanPinning(w, byName); err != nil {
+		return err
+	}
 	return nil
+}
+
+// validatePlanPinning enforces the compile-validated, FAIL-CLOSED Plan↔Gate↔Apply
+// triple (ADR-0047 §8, guardian pass 3): a plan-pinned Apply must be transitively
+// guarded by a Gate that binds the SAME Plan step's digest. It closes three holes —
+// an unknown/non-Plan PlanFrom, a Gate binding a plan it does not `needs`, and (the
+// most dangerous) a plan-pinned Apply with no guarding Gate, which would otherwise
+// let the runtime silently degrade to an unpinned live apply of `desired`.
+func validatePlanPinning(w types.Workflow, byName map[string]types.Step) error {
+	// (1) Every PlanFrom must name an existing PLAN step.
+	for _, s := range w.Steps {
+		if s.PlanFrom == "" {
+			continue
+		}
+		ref, ok := byName[s.PlanFrom]
+		if !ok {
+			return fmt.Errorf("workflow %s: step %s: planFrom names unknown step %q", w.Name, s.Name, s.PlanFrom)
+		}
+		if !ref.Plan {
+			return fmt.Errorf("workflow %s: step %s: planFrom %q is not a plan step (missing plan: true)", w.Name, s.Name, s.PlanFrom)
+		}
+		// (2) A Gate that binds a plan must `needs` it (so the digest exists to bind).
+		if s.Gate != nil && !directlyNeeds(s, s.PlanFrom) {
+			return fmt.Errorf("workflow %s: gate %s: binds plan %q but does not need it", w.Name, s.Name, s.PlanFrom)
+		}
+	}
+	// (3) A plan-pinned Apply must be transitively guarded by a Gate with the SAME
+	// PlanFrom — else the pin is unenforced (fail-closed, never a silent unpinned apply).
+	for _, s := range w.Steps {
+		applyPinned := s.PlanFrom != "" && s.Gate == nil && !s.Plan
+		if !applyPinned {
+			continue
+		}
+		if !guardedByGateForPlan(s.Name, s.PlanFrom, w, byName, map[string]bool{}) {
+			return fmt.Errorf("workflow %s: step %s: plan-pinned Apply of %q is not guarded by a Gate binding that plan — a plan-pinned Apply must sit behind its Plan's Gate (ADR-0047 §8, fail-closed)", w.Name, s.Name, s.PlanFrom)
+		}
+	}
+	return nil
+}
+
+func directlyNeeds(s types.Step, name string) bool {
+	for _, n := range s.Needs {
+		if n == name {
+			return true
+		}
+	}
+	return false
+}
+
+// guardedByGateForPlan reports whether some step in name's transitive needs-closure
+// is a Gate whose PlanFrom == plan.
+func guardedByGateForPlan(name, plan string, w types.Workflow, byName map[string]types.Step, seen map[string]bool) bool {
+	if seen[name] {
+		return false
+	}
+	seen[name] = true
+	for _, n := range byName[name].Needs {
+		nd := byName[n]
+		if nd.Gate != nil && nd.PlanFrom == plan {
+			return true
+		}
+		if guardedByGateForPlan(n, plan, w, byName, seen) {
+			return true
+		}
+	}
+	return false
 }
 
 func (ds declSelector) toSelector() (types.ViewSelector, error) {

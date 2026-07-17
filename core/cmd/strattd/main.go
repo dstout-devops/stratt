@@ -25,28 +25,13 @@ import (
 	"k8s.io/client-go/tools/clientcmd"
 
 	"github.com/dstout-devops/stratt/core/internal/actions"
-	awsaction "github.com/dstout-devops/stratt/core/internal/actions/awsec2"
-	certaction "github.com/dstout-devops/stratt/core/internal/actions/certissuer"
-	notifyaction "github.com/dstout-devops/stratt/core/internal/actions/notify"
 	"github.com/dstout-devops/stratt/core/internal/actuators"
-	"github.com/dstout-devops/stratt/core/internal/actuators/ansible"
-	mcpact "github.com/dstout-devops/stratt/core/internal/actuators/mcp"
-	"github.com/dstout-devops/stratt/core/internal/actuators/opentofu"
-	"github.com/dstout-devops/stratt/core/internal/actuators/script"
-	"github.com/dstout-devops/stratt/core/internal/actuators/webhook"
 	"github.com/dstout-devops/stratt/core/internal/api"
 	"github.com/dstout-devops/stratt/core/internal/audit"
 	"github.com/dstout-devops/stratt/core/internal/authz"
 	"github.com/dstout-devops/stratt/core/internal/baselines"
 	"github.com/dstout-devops/stratt/core/internal/cellrouter"
 	"github.com/dstout-devops/stratt/core/internal/compiler"
-	"github.com/dstout-devops/stratt/core/internal/connectors/awsec2"
-	certsyncer "github.com/dstout-devops/stratt/core/internal/connectors/certissuer"
-	"github.com/dstout-devops/stratt/core/internal/connectors/chef"
-	"github.com/dstout-devops/stratt/core/internal/connectors/msgraph"
-	"github.com/dstout-devops/stratt/core/internal/connectors/puppet"
-	"github.com/dstout-devops/stratt/core/internal/connectors/salt"
-	"github.com/dstout-devops/stratt/core/internal/connectors/vcenter"
 	"github.com/dstout-devops/stratt/core/internal/contract"
 	"github.com/dstout-devops/stratt/core/internal/desiredstate"
 	"github.com/dstout-devops/stratt/core/internal/dispatch"
@@ -58,13 +43,19 @@ import (
 	"github.com/dstout-devops/stratt/core/internal/leader"
 	"github.com/dstout-devops/stratt/core/internal/notify"
 	"github.com/dstout-devops/stratt/core/internal/orchestrate"
+	"github.com/dstout-devops/stratt/core/internal/planstore"
+	"github.com/dstout-devops/stratt/core/internal/pluginhost"
 	"github.com/dstout-devops/stratt/core/internal/scim"
 	"github.com/dstout-devops/stratt/core/internal/sitegw"
 	"github.com/dstout-devops/stratt/core/internal/siteproto"
+	"github.com/dstout-devops/stratt/core/internal/siterelay"
 	"github.com/dstout-devops/stratt/core/internal/statebackend"
 	"github.com/dstout-devops/stratt/core/internal/triggerengine"
 	"github.com/dstout-devops/stratt/core/internal/triggers"
+	pluginv1 "github.com/dstout-devops/stratt/sdk/stratt/plugin/v1"
 	"github.com/dstout-devops/stratt/types"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
 )
 
 func main() {
@@ -322,39 +313,186 @@ func run(ctx context.Context, log *slog.Logger) error {
 
 	// In-tree Actuator registry (§2.3); out-of-tree Actuators arrive via the
 	// plugin Contract surfaces, not this map.
+	//
+	// Out-of-tree Actuators arrive via the plugin Contract surfaces, not this map.
+	// ansible (ADR-0051), script + webhook/notify (ADR-0046 Category A) have LEFT the
+	// Apache core — ansible/script as EE-Job shims, notify/webhook as a gRPC plugin
+	// Action (§1.4 — no `if <tool> {…}` in the spine). Only mcp remains in-tree
+	// (registered below) pending its own extraction slice.
 	registry := map[string]actuators.Actuator{}
-	for _, a := range []actuators.Actuator{ansible.Actuator{}, script.Actuator{}, webhook.Actuator{}} {
-		registry[a.Name()] = a
-	}
 
-	// In-tree Action registry (§2.2, ADR-0031): targetless typed operations
-	// shipped by Connectors — the write side of cert-issuer (retiring the
-	// ADR-0030 Actuator-in-disguise) and awsec2 create-vm.
+	// In-tree Action registry (§2.2, ADR-0031): targetless typed operations shipped by
+	// Connectors. cert lifecycle is the certissuer reconcile Actuator over the port
+	// (ADR-0050); notify/webhook is now a gRPC plugin Action (ADR-0052); awsec2
+	// create-vm is a plugin Action. No in-tree Actions remain today.
+	awsPluginAddr := os.Getenv("STRATT_AWS_PLUGIN_ADDR")
 	actionRegistry := actions.Registry{}
 	for _, act := range []actions.Action{
-		certaction.Issue(), certaction.Renew(), certaction.Revoke(),
-		awsaction.CreateVM(env("STRATT_EE_ACTIONS_IMAGE", "stratt-ee-actions:dev")),
-		notifyaction.Webhook(),
+		// (in-tree Actions extracted to plugins; none remain)
 	} {
 		actionRegistry[act.Name()] = act
 	}
 	log.Info("action registry ready", "actions", len(actionRegistry))
 
-	// mcp Actuator (ADR-0022): store-backed declaration + pin lookups; the
-	// external server runs only inside the sandboxed EE pod.
-	mcpActuator := mcpact.FromEnv(store.GetMCPServer,
-		func(ctx context.Context, name string, version int) (types.Contract, bool, error) {
-			c, err := store.GetContract(ctx, name, version)
-			if errors.Is(err, graph.ErrNotFound) {
-				return types.Contract{}, false, nil
-			}
-			if err != nil {
-				return types.Contract{}, false, err
-			}
-			return c, true, nil
-		})
-	registry[mcpActuator.Name()] = mcpActuator
-	log.Info("mcp actuator ready", "eeImage", mcpActuator.DefaultImage)
+	// ── Plugin-provided Actions over the port (ADR-0047/0048 cutover) ────────
+	// A plugin Action name is EXCLUSIVE with the in-tree registry and across
+	// plugins (§2.4): a collision fails startup, never silently overwrites.
+	pluginActions := map[string]orchestrate.PluginAction{}
+	registerPluginAction := func(name string, host *pluginhost.Host, dryRunnable bool) error {
+		if _, dup := pluginActions[name]; dup {
+			return fmt.Errorf("plugin action %q claimed by two plugins (§2.4 exclusive)", name)
+		}
+		if _, inTree := actionRegistry[name]; inTree {
+			return fmt.Errorf("plugin action %q collides with an in-tree Action (§2.4 exclusive)", name)
+		}
+		pluginActions[name] = orchestrate.PluginAction{Host: host, DryRunnable: dryRunnable}
+		return nil
+	}
+
+	// A plugin Actuator name is EXCLUSIVE with the in-tree Actuator registry and
+	// across plugins (§2.4): a collision fails startup, never silently overwrites.
+	pluginActuators := map[string]orchestrate.PluginActuator{}
+	// grant + plans travel with the actuator so Execute can build a Site-backed host
+	// with identical governance (the grant never leaves the hub, ADR-0049 V1).
+	registerPluginActuator := func(name string, host *pluginhost.Host, dryRunnable bool, grant pluginhost.Grant, plans *planstore.Store) error {
+		if _, dup := pluginActuators[name]; dup {
+			return fmt.Errorf("plugin actuator %q claimed by two plugins (§2.4 exclusive)", name)
+		}
+		if _, inTree := registry[name]; inTree {
+			return fmt.Errorf("plugin actuator %q collides with an in-tree Actuator (§2.4 exclusive)", name)
+		}
+		pluginActuators[name] = orchestrate.PluginActuator{Host: host, DryRunnable: dryRunnable, Grant: grant, PlanStore: plans}
+		return nil
+	}
+
+	// Ansible EE-Job (subprocess) transport (ADR-0051): the flagship Actuator over
+	// the sovereign port, the SOLE ansible path (Phase 5b cutover). No gRPC dial —
+	// the transport IS the K8s Job running the stratt-ansible shim. The host carries
+	// only the MF3 BOUNDED grant (never a wildcard): exactly the Facet namespaces the
+	// shim projects and the host.name identity scheme it correlates facts by.
+	// GovernStream gates the Job's typed stdout against this grant hub-side; the gRPC
+	// client is nil (govern never dials).
+	{
+		grant := pluginhost.Grant{
+			PluginIdentity: env("STRATT_ANSIBLE_PLUGIN_ID", "ansible"),
+			Tier:           pluginhost.TierTrusted,
+			Source:         types.Source{Kind: "ansible", Name: env("STRATT_ANSIBLE_SOURCE_NAME", "ansible")},
+			FacetNamespaces: []string{
+				"os.kernel",
+				"os.hardening.sysctl", "os.hardening.sshd", "os.hardening.filesystem",
+				"os.hardening.auditd", "os.hardening.services",
+				"fileset.content", "access.grants",
+			},
+			IdentitySchemes: []string{"host.name"},
+		}
+		if _, dup := pluginActuators["ansible"]; dup {
+			return fmt.Errorf("ansible EE-Job actuator collides with a registered plugin actuator (§2.4 exclusive)")
+		}
+		host := pluginhost.New(store, nil, grant, log) // nil client: the Job is the transport; govern uses only the grant
+		pluginActuators["ansible"] = orchestrate.PluginActuator{
+			Host: host, DryRunnable: true, Grant: grant,
+			JobCommand: []string{env("STRATT_ANSIBLE_SHIM", "stratt-ansible")},
+		}
+		log.Info("ansible EE-Job actuator registered (ADR-0051 subprocess transport)", "shim", env("STRATT_ANSIBLE_SHIM", "stratt-ansible"))
+	}
+
+	// Script EE-Job (subprocess) transport (ADR-0046 Category A): the per-target
+	// script-runner over the sovereign port. Effectful (no read-only capability →
+	// NOT DryRunnable, so a dry-run/baseline against it is rejected at launch). Its
+	// grant is EMPTY (script proposes no Facets/identity write-back — GovernStream
+	// folds only the per-target ItemResults, confused-deputy gated on the resolved
+	// set). No gRPC dial — the transport is the K8s Job running stratt-script.
+	{
+		grant := pluginhost.Grant{
+			PluginIdentity: env("STRATT_SCRIPT_PLUGIN_ID", "script"),
+			Tier:           pluginhost.TierTrusted,
+			Source:         types.Source{Kind: "script", Name: env("STRATT_SCRIPT_SOURCE_NAME", "script")},
+		}
+		if _, dup := pluginActuators["script"]; dup {
+			return fmt.Errorf("script EE-Job actuator collides with a registered plugin actuator (§2.4 exclusive)")
+		}
+		host := pluginhost.New(store, nil, grant, log)
+		pluginActuators["script"] = orchestrate.PluginActuator{
+			Host: host, DryRunnable: false, Grant: grant,
+			JobCommand: []string{env("STRATT_SCRIPT_SHIM", "stratt-script")},
+		}
+		log.Info("script EE-Job actuator registered (ADR-0046 subprocess transport)", "shim", env("STRATT_SCRIPT_SHIM", "stratt-script"))
+	}
+
+	// awsec2 plugin: when configured it provides BOTH the instance Syncer and the
+	// create-vm Action over the port; the in-tree awsec2 is then disabled.
+	var awsHost *pluginhost.Host
+	if awsPluginAddr != "" {
+		conn, err := grpc.NewClient(awsPluginAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+		if err != nil {
+			return fmt.Errorf("awsec2 plugin dial %s: %w", awsPluginAddr, err)
+		}
+		defer conn.Close()
+		grant := pluginhost.Grant{
+			PluginIdentity:   env("STRATT_AWS_PLUGIN_ID", "awsec2"),
+			Tier:             pluginhost.Tier(env("STRATT_AWS_TIER", "trusted")),
+			Source:           types.Source{Kind: "awsec2", Name: env("STRATT_AWS_SOURCE_NAME", "awsec2"), Endpoint: os.Getenv("STRATT_AWS_ENDPOINT")},
+			FacetNamespaces:  []string{"instance.compute", "instance.network", "instance.state"},
+			LabelKeys:        []string{"aws.region", "aws.name"},
+			IdentitySchemes:  []string{"aws.instanceId"},
+			TombstoneSchemes: []string{"aws.instanceId"},
+		}
+		awsHost = pluginhost.New(store, pluginv1.NewPluginServiceClient(conn), grant, log)
+		if err := registerPluginAction("awsec2/create-vm", awsHost, true); err != nil {
+			return err
+		}
+		log.Info("awsec2 plugin actions registered", "addr", awsPluginAddr)
+	}
+
+	// notify/webhook plugin Action (ADR-0046 Category A / ADR-0052): the notification
+	// delivery left the core. When configured, the stratt-notify plugin issues the POST
+	// in-process, resolving the Sink's per-call url/token via the SecretBroker — the
+	// core hands COORDINATES (never material) in the Envelope (§2.5). NOT DryRunnable
+	// (a POST has no read-only plan). Unset ⇒ no notify/webhook Action is registered
+	// and notifications fail closed (the in-tree pod Action was retired — the cutover).
+	if addr := os.Getenv("STRATT_NOTIFY_PLUGIN_ADDR"); addr != "" {
+		conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+		if err != nil {
+			return fmt.Errorf("notify plugin dial %s: %w", addr, err)
+		}
+		defer conn.Close()
+		grant := pluginhost.Grant{
+			PluginIdentity: env("STRATT_NOTIFY_PLUGIN_ID", "notify"),
+			Tier:           pluginhost.TierTrusted, // SecretBroker resolution is trusted-tier (MF-A)
+			Source:         types.Source{Kind: "notify", Name: env("STRATT_NOTIFY_SOURCE_NAME", "notify")},
+		}
+		host := pluginhost.New(store, pluginv1.NewPluginServiceClient(conn), grant, log)
+		if err := registerPluginAction("notify/webhook", host, false); err != nil {
+			return err
+		}
+		log.Info("notify plugin action registered (ADR-0052 SecretBroker)", "addr", addr)
+	} else {
+		log.Info("no notify plugin configured (STRATT_NOTIFY_PLUGIN_ADDR empty); notifications disabled")
+	}
+
+	// mcp EE-Job transport (ADR-0053): MCP is a generic transport (charter §1.5), not
+	// an in-core protocol. The stratt-mcp shim (baked into the EE-mcp image) speaks
+	// JSON-RPC to the sandboxed server; the CORE keeps the seam — it resolves the
+	// MCPServer declaration + rev, validates call-args against the pin, and pins each
+	// rung-3 derived_contract (executeMCP). The grant Source.Name is "mcp" so a
+	// derived tool schema (mcp/<server>/<tool>.input) is namespace-confined to it.
+	{
+		grant := pluginhost.Grant{
+			PluginIdentity: env("STRATT_MCP_PLUGIN_ID", "mcp"),
+			Tier:           pluginhost.TierTrusted,
+			Source:         types.Source{Kind: "mcp", Name: "mcp"},
+		}
+		if _, dup := pluginActuators["mcp"]; dup {
+			return fmt.Errorf("mcp actuator collides with a registered plugin actuator (§2.4 exclusive)")
+		}
+		host := pluginhost.New(store, nil, grant, log)
+		pluginActuators["mcp"] = orchestrate.PluginActuator{
+			Host: host, DryRunnable: false, Grant: grant, MCP: true,
+			JobCommand: []string{env("STRATT_MCP_SHIM", "stratt-mcp")},
+			Image:      env("STRATT_EE_MCP_IMAGE", "stratt-ee-mcp:dev"),
+		}
+		log.Info("mcp EE-Job actuator registered (ADR-0053 generic MCP transport)", "eeImage", env("STRATT_EE_MCP_IMAGE", "stratt-ee-mcp:dev"))
+	}
 
 	// OpenTofu (ADR-0016): requires the encrypted state backend — without a
 	// state key the actuator is not registered and the backend not mounted;
@@ -366,12 +504,44 @@ func run(ctx context.Context, log *slog.Logger) error {
 			return err
 		}
 		stateHandler = sb.Handler()
-		tofuActuator := opentofu.FromEnv(sb.WorkspaceCredential)
-		if tofuActuator.BackendURL == "" {
-			return fmt.Errorf("STRATT_STATE_KEY is set but STRATT_STATE_BACKEND_URL is empty — execution pods need the backend address (ADR-0016)")
+		if tofuPluginAddr := os.Getenv("STRATT_OPENTOFU_PLUGIN_ADDR"); tofuPluginAddr != "" {
+			// Cutover (ADR-0046/0047): the opentofu Actuator runs over the sovereign
+			// port — Plan/Apply/Destroy, plan-as-artifact (§8). The in-tree Actuator
+			// is NOT registered (§2.4 exclusive). The plan store shares the state key
+			// (the plan is content-addressed + encrypted, ADR-0047 §8); the plugin
+			// derives its own TF_HTTP_PASSWORD from its own STRATT_STATE_KEY config.
+			plans, err := planstore.New(stateKey, store)
+			if err != nil {
+				return err
+			}
+			conn, err := grpc.NewClient(tofuPluginAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+			if err != nil {
+				return fmt.Errorf("opentofu plugin dial %s: %w", tofuPluginAddr, err)
+			}
+			defer conn.Close()
+			grant := pluginhost.Grant{
+				PluginIdentity: env("STRATT_OPENTOFU_PLUGIN_ID", "opentofu"),
+				Tier:           pluginhost.Tier(env("STRATT_OPENTOFU_TIER", "trusted")),
+				Source:         types.Source{Kind: "opentofu", Name: env("STRATT_OPENTOFU_SOURCE_NAME", "opentofu"), Endpoint: os.Getenv("STRATT_STATE_BACKEND_URL")},
+				// stratt_entities write-back grants (operator-declared, §2.1): the
+				// identity schemes / label keys / facet namespaces tofu outputs may
+				// project. Empty by default — an ungranted emission is rejected, not
+				// silently written (defence-in-depth, ADR-0047 §1).
+				IdentitySchemes: splitNonEmpty(os.Getenv("STRATT_OPENTOFU_IDENTITY_SCHEMES")),
+				LabelKeys:       splitNonEmpty(os.Getenv("STRATT_OPENTOFU_LABEL_KEYS")),
+				FacetNamespaces: splitNonEmpty(os.Getenv("STRATT_OPENTOFU_FACET_NAMESPACES")),
+			}
+			host := pluginhost.New(store, pluginv1.NewPluginServiceClient(conn), grant, log).UsePlanStore(plans)
+			if err := registerPluginActuator("opentofu", host, true, grant, plans); err != nil {
+				return err
+			}
+			log.Info("opentofu plugin actuator registered", "addr", tofuPluginAddr, "backend", os.Getenv("STRATT_STATE_BACKEND_URL"))
+		} else {
+			// opentofu is a plugin-only Actuator now (the in-tree pod actuator was
+			// retired, ADR-0046/0047): the state backend is still served for a peer
+			// Cell's plugin, but no actuator is registered here without its address.
+			log.Info("opentofu plugin not configured (STRATT_OPENTOFU_PLUGIN_ADDR empty); actuator disabled, state backend still served")
 		}
-		registry[tofuActuator.Name()] = tofuActuator
-		log.Info("opentofu actuator ready", "backend", tofuActuator.BackendURL, "eeImage", tofuActuator.DefaultImage)
 	} else {
 		log.Info("opentofu actuator disabled (STRATT_STATE_KEY empty)")
 	}
@@ -419,7 +589,13 @@ func run(ctx context.Context, log *slog.Logger) error {
 	// and polls child Runs on peer Cells. Nil-safe on a single-Cell estate (no
 	// secret ⇒ no peers ⇒ RunAcrossCells is never reached).
 	peerClient := cellrouter.NewPeerClient([]byte(os.Getenv("STRATT_CELL_SECRET")))
-	w.RegisterActivity(&orchestrate.Activities{Store: store, Dispatcher: dispatcher, Bus: bus, Authz: authorizer, Actuators: registry, Actions: actionRegistry, Evidence: evidence, Sites: siteGateway, Peers: peerClient})
+	// RelayDial tunnels a remote-Site plugin verb over the SAME NATS leaf the site
+	// gateway holds (ADR-0049): governance stays hub-side, only the transport
+	// lengthens. Keyed by (site, plugin-id).
+	relayDial := func(site, pluginID string) siterelay.Dialer {
+		return siterelay.NewNATSDialer(siteGateway.Conn(), site, pluginID)
+	}
+	w.RegisterActivity(&orchestrate.Activities{Store: store, Dispatcher: dispatcher, Bus: bus, Authz: authorizer, Log: log, RelayDial: relayDial, Actuators: registry, Actions: actionRegistry, PluginActions: pluginActions, PluginActuators: pluginActuators, Evidence: evidence, Sites: siteGateway, Peers: peerClient})
 	if err := w.Start(); err != nil {
 		return fmt.Errorf("temporal worker: %w", err)
 	}
@@ -472,155 +648,210 @@ func run(ctx context.Context, log *slog.Logger) error {
 		return func(cctx context.Context) { homegate.Supervise(cctx, homeDeps, source, register, run) }
 	}
 
-	// ── Phase-0 vCenter Syncer (started when a Source is configured) ─────
-	if endpoint := os.Getenv("STRATT_VCENTER_URL"); endpoint != "" {
-		syncer := vcenter.NewSyncer(vcenter.Config{
-			Endpoint: endpoint,
-			// Credentials via env is the Phase-0 CredentialRef injection
-			// stub; material is never persisted (§2.5).
-			Username:   env("STRATT_VCENTER_USERNAME", "user"),
-			Password:   env("STRATT_VCENTER_PASSWORD", "pass"),
-			Insecure:   env("STRATT_VCENTER_INSECURE", "false") == "true",
-			SourceName: env("STRATT_VCENTER_SOURCE_NAME", "vcenter-dev"),
-		}, store, log)
-		controllers = append(controllers, homeSupervise(env("STRATT_VCENTER_SOURCE_NAME", "vcenter-dev"), syncer.Register, syncer.Run))
+	// ── vCenter Syncer plugin over the sovereign port (ADR-0046 Phase B) ──
+	// The govmomi content-expertise lives in the stratt-plugin-vcenter binary;
+	// the control plane connects to it and GOVERNS what it may write — ownership
+	// and the identity-scheme gate come from the operator Grant (finding #1/#4),
+	// provenance is stamped core-side (the plugin holds no DB path). The Grant is
+	// assembled here from env as the Phase-0 stand-in for a Git/CaC grant.
+	if addr := os.Getenv("STRATT_VCENTER_PLUGIN_ADDR"); addr != "" {
+		sourceName := env("STRATT_VCENTER_SOURCE_NAME", "vcenter-dev")
+		interval, err := time.ParseDuration(env("STRATT_VCENTER_INTERVAL", "30s"))
+		if err != nil {
+			return fmt.Errorf("vcenter interval: %w", err)
+		}
+		conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+		if err != nil {
+			return fmt.Errorf("vcenter plugin dial %s: %w", addr, err)
+		}
+		defer conn.Close()
+		grant := pluginhost.Grant{
+			PluginIdentity:  env("STRATT_VCENTER_PLUGIN_ID", "vcenter"),
+			Tier:            pluginhost.Tier(env("STRATT_VCENTER_TIER", "trusted")),
+			Source:          types.Source{Kind: "vcenter", Name: sourceName, Endpoint: os.Getenv("STRATT_VCENTER_URL")},
+			FacetNamespaces: []string{"vm.config", "vm.runtime", "net.guest"},
+			LabelKeys:       []string{"vcenter.name"},
+			// dns.fqdn is a shared cross-source scheme: only honored because the
+			// grant lists it AND the tier is trusted (finding #4).
+			IdentitySchemes:  []string{"vcenter.uuid", "vcenter.host.uuid", "dns.fqdn"},
+			TombstoneSchemes: []string{"vcenter.uuid", "vcenter.host.uuid"},
+		}
+		host := pluginhost.New(store, pluginv1.NewPluginServiceClient(conn), grant, log)
+		controllers = append(controllers, homeSupervise(sourceName, host.Register, func(cctx context.Context) error {
+			return host.SyncLoop(cctx, interval)
+		}))
 	} else {
-		log.Info("no vCenter Source configured (STRATT_VCENTER_URL empty); syncer idle")
+		log.Info("no vCenter plugin configured (STRATT_VCENTER_PLUGIN_ADDR empty); syncer idle")
 	}
 
-	// ── MS Graph Syncer (ADR-0014; started when a Source is configured) ──
-	if tenant := os.Getenv("STRATT_MSGRAPH_TENANT_ID"); tenant != "" {
+	// ── MS Graph device Syncer over the port (ADR-0046/0047 Phase C cutover) ─
+	if addr := os.Getenv("STRATT_MSGRAPH_PLUGIN_ADDR"); addr != "" {
+		sourceName := env("STRATT_MSGRAPH_SOURCE_NAME", "msgraph")
 		interval, err := time.ParseDuration(env("STRATT_MSGRAPH_INTERVAL", "30s"))
 		if err != nil {
 			return fmt.Errorf("msgraph interval: %w", err)
 		}
-		syncer := msgraph.NewSyncer(msgraph.Config{
-			Endpoint: env("STRATT_MSGRAPH_ENDPOINT", "https://graph.microsoft.com/v1.0"),
-			TenantID: tenant,
-			ClientID: os.Getenv("STRATT_MSGRAPH_CLIENT_ID"),
-			// Env credential stub, same posture as vCenter (§2.5: material
-			// never persists; CredentialRef brokering for Syncers is the
-			// recorded follow-up).
-			ClientSecret: os.Getenv("STRATT_MSGRAPH_CLIENT_SECRET"),
-			TokenURL:     os.Getenv("STRATT_MSGRAPH_TOKEN_URL"),
-			SourceName:   env("STRATT_MSGRAPH_SOURCE_NAME", "msgraph"),
-		}, interval, store, log)
-		controllers = append(controllers, homeSupervise(env("STRATT_MSGRAPH_SOURCE_NAME", "msgraph"), syncer.Register, syncer.Run))
+		conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+		if err != nil {
+			return fmt.Errorf("msgraph plugin dial %s: %w", addr, err)
+		}
+		defer conn.Close()
+		grant := pluginhost.Grant{
+			PluginIdentity:   env("STRATT_MSGRAPH_PLUGIN_ID", "msgraph"),
+			Tier:             pluginhost.Tier(env("STRATT_MSGRAPH_TIER", "trusted")),
+			Source:           types.Source{Kind: "msgraph", Name: sourceName, Endpoint: env("STRATT_MSGRAPH_ENDPOINT", "https://graph.microsoft.com/v1.0")},
+			FacetNamespaces:  []string{"device.identity", "device.os", "device.state"},
+			LabelKeys:        []string{"graph.name"},
+			IdentitySchemes:  []string{"graph.id"},
+			TombstoneSchemes: []string{"graph.id"},
+		}
+		host := pluginhost.New(store, pluginv1.NewPluginServiceClient(conn), grant, log)
+		controllers = append(controllers, homeSupervise(sourceName, host.Register, func(cctx context.Context) error {
+			return host.SyncLoop(cctx, interval)
+		}))
 	} else {
-		log.Info("no MS Graph Source configured (STRATT_MSGRAPH_TENANT_ID empty); syncer idle")
+		log.Info("no MS Graph plugin configured (STRATT_MSGRAPH_PLUGIN_ADDR empty); syncer idle")
 	}
 
-	// ── EC2 cloud-instance Syncer (ADR-0014) ─────────────────────────────
-	if region := os.Getenv("STRATT_AWS_REGION"); region != "" {
+	// ── EC2 instance Syncer over the port (Phase C cutover) ──────────────
+	if awsHost != nil {
 		interval, err := time.ParseDuration(env("STRATT_AWS_INTERVAL", "60s"))
 		if err != nil {
 			return fmt.Errorf("awsec2 interval: %w", err)
 		}
-		syncer := awsec2.NewSyncer(awsec2.Config{
-			// Endpoint override points at the moto stand-in in dev;
-			// credentials arrive via the SDK's standard env chain (§2.5
-			// env-stub posture, CredentialRef brokering is the follow-up).
-			Endpoint:   os.Getenv("STRATT_AWS_ENDPOINT"),
-			Region:     region,
-			SourceName: env("STRATT_AWS_SOURCE_NAME", "awsec2"),
-		}, interval, store, log)
-		controllers = append(controllers, homeSupervise(env("STRATT_AWS_SOURCE_NAME", "awsec2"), syncer.Register, syncer.Run))
+		src := env("STRATT_AWS_SOURCE_NAME", "awsec2")
+		controllers = append(controllers, homeSupervise(src, awsHost.Register, func(cctx context.Context) error {
+			return awsHost.SyncLoop(cctx, interval)
+		}))
 	} else {
-		log.Info("no EC2 Source configured (STRATT_AWS_REGION empty); syncer idle")
+		log.Info("no EC2 plugin configured (STRATT_AWS_PLUGIN_ADDR empty); syncer idle")
 	}
 
-	// ── cert-issuer (CLM) Syncer (ADR-0030; started when a Source is set) ─
-	if addr := os.Getenv("STRATT_CLM_ADDR"); addr != "" {
+	// ── cert-issuer (CLM) Syncer + reconcile Actuator over the port (ADR-0050) ─
+	// Both the cert Syncer (Observe) AND the cert lifecycle Actuator (Plan/Apply/
+	// Destroy) run over the port on one plugin host; the in-tree pod Action is
+	// retired. Edge issuance rides the Site relay (ADR-0049).
+	if addr := os.Getenv("STRATT_CLM_PLUGIN_ADDR"); addr != "" {
+		sourceName := env("STRATT_CLM_SOURCE_NAME", "certissuer")
 		interval, err := time.ParseDuration(env("STRATT_CLM_INTERVAL", "60s"))
 		if err != nil {
 			return fmt.Errorf("certissuer interval: %w", err)
 		}
-		syncer := certsyncer.NewSyncer(certsyncer.Config{
-			// Read-side projection credential via the env chain (§2.5); the
-			// write side (issue/revoke) injects its token into the EE pod.
-			Addr:       addr,
-			Token:      os.Getenv("STRATT_CLM_TOKEN"),
-			Mount:      env("STRATT_CLM_MOUNT", "pki"),
-			SourceName: env("STRATT_CLM_SOURCE_NAME", "certissuer"),
-		}, interval, store, log)
-		controllers = append(controllers, homeSupervise(env("STRATT_CLM_SOURCE_NAME", "certissuer"), syncer.Register, syncer.Run))
+		conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+		if err != nil {
+			return fmt.Errorf("certissuer plugin dial %s: %w", addr, err)
+		}
+		defer conn.Close()
+		grant := pluginhost.Grant{
+			PluginIdentity:   env("STRATT_CLM_PLUGIN_ID", "certissuer"),
+			Tier:             pluginhost.Tier(env("STRATT_CLM_TIER", "trusted")),
+			Source:           types.Source{Kind: "certissuer", Name: sourceName, Endpoint: os.Getenv("STRATT_CLM_ADDR")},
+			FacetNamespaces:  []string{"cert.identity", "cert.expiry"},
+			LabelKeys:        []string{"cert.commonName"},
+			IdentitySchemes:  []string{"cert.serial"},
+			TombstoneSchemes: []string{"cert.serial"},
+		}
+		host := pluginhost.New(store, pluginv1.NewPluginServiceClient(conn), grant, log)
+		controllers = append(controllers, homeSupervise(sourceName, host.Register, func(cctx context.Context) error {
+			return host.SyncLoop(cctx, interval)
+		}))
+		// Same host, reconcile Actuator role (ADR-0050): Plan/Apply/Destroy the cert
+		// lifecycle. Model Y (no plan-artifact) → no plan store. Dry-runnable.
+		if err := registerPluginActuator("certissuer", host, true, grant, nil); err != nil {
+			return err
+		}
+		log.Info("certissuer plugin ready (Syncer + reconcile Actuator)", "addr", addr)
 	} else {
-		log.Info("no CLM Source configured (STRATT_CLM_ADDR empty); cert syncer idle")
+		log.Info("no CLM plugin configured (STRATT_CLM_PLUGIN_ADDR empty); cert syncer idle")
 	}
 
-	// ── Chef Infra Server node Syncer (ADR-0037; config-mgmt SoR ingest) ─
-	if serverURL := os.Getenv("STRATT_CHEF_SERVER_URL"); serverURL != "" {
+	// ── Chef Infra node Syncer over the port (ADR-0046/0047 Phase C cutover) ─
+	if addr := os.Getenv("STRATT_CHEF_PLUGIN_ADDR"); addr != "" {
+		sourceName := env("STRATT_CHEF_SOURCE_NAME", "chef")
 		interval, err := time.ParseDuration(env("STRATT_CHEF_INTERVAL", "60s"))
 		if err != nil {
 			return fmt.Errorf("chef interval: %w", err)
 		}
-		// The signing key is read from a mounted PEM file (§2.5: material
-		// stays a file the process reads, never persisted to the graph);
-		// STRATT_CHEF_KEY may carry inline PEM for dev.
-		keyPEM := os.Getenv("STRATT_CHEF_KEY")
-		if keyFile := os.Getenv("STRATT_CHEF_KEY_FILE"); keyFile != "" {
-			b, err := os.ReadFile(keyFile)
-			if err != nil {
-				return fmt.Errorf("chef key file: %w", err)
-			}
-			keyPEM = string(b)
+		conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+		if err != nil {
+			return fmt.Errorf("chef plugin dial %s: %w", addr, err)
 		}
-		skipSSL := env("STRATT_CHEF_SKIP_SSL", "false") == "true"
-		if skipSSL {
-			log.Warn("STRATT_CHEF_SKIP_SSL enabled: Chef TLS verification is OFF (self-signed legacy servers only; estate data flows unverified)")
+		defer conn.Close()
+		grant := pluginhost.Grant{
+			PluginIdentity:  env("STRATT_CHEF_PLUGIN_ID", "chef"),
+			Tier:            pluginhost.Tier(env("STRATT_CHEF_TIER", "trusted")),
+			Source:          types.Source{Kind: "chef", Name: sourceName, Endpoint: os.Getenv("STRATT_CHEF_SERVER_URL")},
+			FacetNamespaces: []string{"chef.node.identity", "chef.node.os", "chef.node.network"},
+			// dns.fqdn is a shared cross-source scheme: honored only because it is
+			// granted AND the tier is trusted (ADR-0047 finding #4).
+			IdentitySchemes:  []string{"chef.node.name", "dns.fqdn"},
+			TombstoneSchemes: []string{"chef.node.name"},
 		}
-		syncer := chef.NewSyncer(chef.Config{
-			ServerURL:   serverURL,
-			ClientName:  os.Getenv("STRATT_CHEF_CLIENT_NAME"),
-			KeyPEM:      keyPEM,
-			AuthVersion: env("STRATT_CHEF_AUTH_VERSION", "1.0"),
-			SkipSSL:     skipSSL,
-			SourceName:  env("STRATT_CHEF_SOURCE_NAME", "chef"),
-		}, interval, store, log)
-		controllers = append(controllers, homeSupervise(env("STRATT_CHEF_SOURCE_NAME", "chef"), syncer.Register, syncer.Run))
+		host := pluginhost.New(store, pluginv1.NewPluginServiceClient(conn), grant, log)
+		controllers = append(controllers, homeSupervise(sourceName, host.Register, func(cctx context.Context) error {
+			return host.SyncLoop(cctx, interval)
+		}))
 	} else {
-		log.Info("no Chef Source configured (STRATT_CHEF_SERVER_URL empty); syncer idle")
+		log.Info("no Chef plugin configured (STRATT_CHEF_PLUGIN_ADDR empty); syncer idle")
 	}
 
-	// ── OpenVox/PuppetDB node Syncer (ADR-0038; config-mgmt SoR ingest) ──
-	if pdbURL := os.Getenv("STRATT_PUPPETDB_URL"); pdbURL != "" {
+	// ── PuppetDB node Syncer over the port (ADR-0046/0047 Phase C cutover) ───
+	if addr := os.Getenv("STRATT_PUPPET_PLUGIN_ADDR"); addr != "" {
+		sourceName := env("STRATT_PUPPETDB_SOURCE_NAME", "puppet")
 		interval, err := time.ParseDuration(env("STRATT_PUPPETDB_INTERVAL", "60s"))
 		if err != nil {
 			return fmt.Errorf("puppet interval: %w", err)
 		}
-		// mTLS client cert/key/CA arrive as mounted files (§2.5: material stays
-		// a file the process reads, never persisted); empty for an http:// dev URL.
-		syncer := puppet.NewSyncer(puppet.Config{
-			BaseURL:    pdbURL,
-			CertFile:   os.Getenv("STRATT_PUPPETDB_CERT_FILE"),
-			KeyFile:    os.Getenv("STRATT_PUPPETDB_KEY_FILE"),
-			CAFile:     os.Getenv("STRATT_PUPPETDB_CA_FILE"),
-			SourceName: env("STRATT_PUPPETDB_SOURCE_NAME", "puppet"),
-		}, interval, store, log)
-		controllers = append(controllers, homeSupervise(env("STRATT_PUPPETDB_SOURCE_NAME", "puppet"), syncer.Register, syncer.Run))
+		conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+		if err != nil {
+			return fmt.Errorf("puppet plugin dial %s: %w", addr, err)
+		}
+		defer conn.Close()
+		grant := pluginhost.Grant{
+			PluginIdentity:   env("STRATT_PUPPET_PLUGIN_ID", "puppet"),
+			Tier:             pluginhost.Tier(env("STRATT_PUPPET_TIER", "trusted")),
+			Source:           types.Source{Kind: "puppet", Name: sourceName, Endpoint: os.Getenv("STRATT_PUPPETDB_URL")},
+			FacetNamespaces:  []string{"puppet.node.identity", "puppet.node.os", "puppet.node.network"},
+			IdentitySchemes:  []string{"puppet.certname", "dns.fqdn"},
+			TombstoneSchemes: []string{"puppet.certname"},
+		}
+		host := pluginhost.New(store, pluginv1.NewPluginServiceClient(conn), grant, log)
+		controllers = append(controllers, homeSupervise(sourceName, host.Register, func(cctx context.Context) error {
+			return host.SyncLoop(cctx, interval)
+		}))
 	} else {
-		log.Info("no PuppetDB Source configured (STRATT_PUPPETDB_URL empty); syncer idle")
+		log.Info("no PuppetDB plugin configured (STRATT_PUPPET_PLUGIN_ADDR empty); syncer idle")
 	}
 
-	// ── Salt grains Syncer (ADR-0039; config-mgmt SoR ingest) ────────────
-	saltCfg := salt.Config{
-		APIURL:      os.Getenv("STRATT_SALT_API_URL"),
-		Username:    os.Getenv("STRATT_SALT_USERNAME"),
-		Password:    os.Getenv("STRATT_SALT_PASSWORD"),
-		Eauth:       env("STRATT_SALT_EAUTH", "pam"),
-		SourceName:  env("STRATT_SALT_SOURCE_NAME", "salt"),
-		EmitterName: env("STRATT_SALT_EMITTER_NAME", "salt"),
-		EventTags:   splitNonEmpty(os.Getenv("STRATT_SALT_EVENT_TAGS")),
-	}
-	if saltCfg.APIURL != "" {
+	// ── Salt plugin over the port: grains Syncer + event-bus Emitter ─────
+	var saltHost *pluginhost.Host
+	if addr := os.Getenv("STRATT_SALT_PLUGIN_ADDR"); addr != "" {
+		sourceName := env("STRATT_SALT_SOURCE_NAME", "salt")
 		interval, err := time.ParseDuration(env("STRATT_SALT_INTERVAL", "60s"))
 		if err != nil {
 			return fmt.Errorf("salt interval: %w", err)
 		}
-		syncer := salt.NewSyncer(saltCfg, interval, store, log)
-		controllers = append(controllers, homeSupervise(saltCfg.SourceName, syncer.Register, syncer.Run))
+		conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+		if err != nil {
+			return fmt.Errorf("salt plugin dial %s: %w", addr, err)
+		}
+		defer conn.Close()
+		grant := pluginhost.Grant{
+			PluginIdentity:   env("STRATT_SALT_PLUGIN_ID", "salt"),
+			Tier:             pluginhost.Tier(env("STRATT_SALT_TIER", "trusted")),
+			Source:           types.Source{Kind: "salt", Name: sourceName, Endpoint: os.Getenv("STRATT_SALT_API_URL")},
+			FacetNamespaces:  []string{"salt.node.identity", "salt.node.os", "salt.node.network"},
+			IdentitySchemes:  []string{"salt.minion_id", "dns.fqdn"},
+			TombstoneSchemes: []string{"salt.minion_id"},
+			// The emitter name is grant-bound to this channel identity (anti-spoof).
+			EmitterName: env("STRATT_SALT_EMITTER_NAME", sourceName),
+		}
+		saltHost = pluginhost.New(store, pluginv1.NewPluginServiceClient(conn), grant, log)
+		controllers = append(controllers, homeSupervise(sourceName, saltHost.Register, func(cctx context.Context) error {
+			return saltHost.SyncLoop(cctx, interval)
+		}))
 	} else {
-		log.Info("no Salt Source configured (STRATT_SALT_API_URL empty); syncer idle")
+		log.Info("no Salt plugin configured (STRATT_SALT_PLUGIN_ADDR empty); syncer idle")
 	}
 
 	// ── home-ownership collision reconcile (ADR-0045 must-fix 2) ─────────
@@ -778,14 +1009,13 @@ func run(ctx context.Context, log *slog.Logger) error {
 		}
 	})
 
-	// ── Salt event-bus Emitter (ADR-0039: stream-subscriber → emitter stream) ─
-	if saltCfg.APIURL != "" && env("STRATT_SALT_EVENTS", "false") == "true" {
-		if len(saltCfg.EventTags) == 0 {
-			log.Warn("STRATT_SALT_EVENTS enabled with no STRATT_SALT_EVENT_TAGS filter: forwarding the ENTIRE Salt event bus onto the emitter stream (set a tag-prefix allowlist to avoid flooding)")
-		}
-		emitter := salt.NewEmitter(saltCfg, bus, log)
+	// ── Salt event-bus Emitter over the port (Subscribe verb; ADR-0039) ──
+	// Reuses the salt plugin host; the emitter name is grant-bound (anti-spoof),
+	// and the Trigger engine CEL-matches the plugin's legible `match` projection,
+	// never the opaque payload (ADR-0047 §3). Tag-filtering is the plugin's job.
+	if saltHost != nil && env("STRATT_SALT_EVENTS", "false") == "true" {
 		controllers = append(controllers, func(cctx context.Context) {
-			if err := emitter.Run(cctx); err != nil && !errors.Is(err, context.Canceled) {
+			if err := saltHost.SubscribeLoop(cctx, bus); err != nil && !errors.Is(err, context.Canceled) {
 				log.Error("salt emitter stopped", "error", err)
 			}
 		})

@@ -10,5 +10,19 @@ use (
 	./contracts
 	./core
 	./packs
+	./plugins/ansible
+	./plugins/awsec2
+	./plugins/certissuer
+	./plugins/chef
+	./plugins/msgraph
+	./plugins/mcp
+	./plugins/notify
+	./plugins/opentofu
+	./plugins/puppet
+	./plugins/salt
+	./plugins/script
+	./plugins/vcenter
+	./sdk
+	./sdk/secretbroker
 	./types
 )
