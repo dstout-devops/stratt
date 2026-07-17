@@ -18,6 +18,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/test/bufconn"
+	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/types/known/structpb"
 
 	"github.com/dstout-devops/stratt/core/internal/graph"
@@ -888,5 +889,77 @@ func TestHost_ApplyPinnedPlanCrossesTheWire(t *testing.T) {
 	}
 	if captured.GetPlanRef().GetSha256() != "abc123" {
 		t.Fatalf("plan_ref digest must reach the plugin, got %q", captured.GetPlanRef().GetSha256())
+	}
+}
+
+// TestHost_GovernStream_EEJobTransport proves ADR-0051 MF1: the EE-Job (subprocess)
+// transport feeds the SAME hub-side governor as the gRPC path. Typed proto-JSON
+// ApplyResponse lines (the Job's stdout) run through NewJobStream → GovernStream and
+// get IDENTICAL governance: confused-deputy target gate, sticky per-target fold,
+// core-side Succeeded, and community-tier identity gating on write-back — no gRPC.
+func TestHost_GovernStream_EEJobTransport(t *testing.T) {
+	line := func(r *pluginv1.ApplyResponse) []byte {
+		b, err := protojson.Marshal(r)
+		if err != nil {
+			t.Fatalf("marshal: %v", err)
+		}
+		return b
+	}
+	lines := [][]byte{
+		line(&pluginv1.ApplyResponse{Result: &pluginv1.ItemResult{ItemKey: "web-1", Status: pluginv1.ItemResult_STATUS_CHANGED}}),
+		// A status for a target OUTSIDE the resolved set — confused deputy, rejected.
+		line(&pluginv1.ApplyResponse{Result: &pluginv1.ItemResult{ItemKey: "db-secret", Status: pluginv1.ItemResult_STATUS_FAILED}}),
+		// Write-back with a granted + an ungranted-for-community identity scheme.
+		line(&pluginv1.ApplyResponse{WriteBack: []*pluginv1.ObservedEntity{{
+			Kind: "vm", IdentityKeys: map[string]string{"vcenter.uuid": "u1", "dns.fqdn": "vm1.corp"},
+		}}}),
+		line(&pluginv1.ApplyResponse{Event: &pluginv1.TaskEvent{Terminal: true, Ok: true}}),
+	}
+	i := 0
+	next := func() ([]byte, error) {
+		if i >= len(lines) {
+			return nil, io.EOF
+		}
+		b := lines[i]
+		i++
+		return b, nil
+	}
+
+	grant := vcenterGrant(pluginhost.TierCommunity, []string{"vcenter.uuid", "dns.fqdn"})
+	h := pluginhost.New(nil, nil, grant, discardLog())
+	raw, err := h.GovernStream(context.Background(), pluginhost.NewJobStream(next),
+		[]pluginhost.ApplyTarget{{Name: "web-1"}})
+	if err != nil {
+		t.Fatalf("governStream: %v", err)
+	}
+	// Same fold as the gRPC path: web-1 changed; the out-of-set db-secret is rejected
+	// (never enters PerTarget, never sets failed) → Succeeded from the terminal.
+	if raw.PerTarget["web-1"] != "changed" {
+		t.Fatalf("per-target fold over EE-Job stream wrong: %+v", raw.PerTarget)
+	}
+	if _, leaked := raw.PerTarget["db-secret"]; leaked {
+		t.Fatal("confused-deputy target must never enter the outcome over the EE-Job transport")
+	}
+	if !raw.Succeeded {
+		t.Fatalf("terminal + no in-set failure must fold Succeeded: %+v", raw)
+	}
+	// Same identity gate: community plugin's shared dns.fqdn dropped, source-local survives.
+	if len(raw.WriteBack) != 1 || raw.WriteBack[0].IdentityKeys["vcenter.uuid"] != "u1" {
+		t.Fatalf("governed write-back wrong: %+v", raw.WriteBack)
+	}
+	if _, leaked := raw.WriteBack[0].IdentityKeys["dns.fqdn"]; leaked {
+		t.Fatal("community-tier shared dns.fqdn must be gated out over the EE-Job transport")
+	}
+	var cd, id bool
+	for _, r := range raw.Rejections {
+		if r.Kind == "item-result" && r.Detail == "db-secret" {
+			cd = true
+		}
+		if r.Kind == "identity-scheme" && r.Detail == "dns.fqdn" {
+			id = true
+		}
+	}
+	if !cd || !id {
+		t.Fatalf("expected confused-deputy + identity-scheme rejections, got %+v", raw.Rejections)
 	}
 }

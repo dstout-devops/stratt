@@ -25,6 +25,8 @@ import (
 	"strings"
 	"time"
 
+	"google.golang.org/protobuf/encoding/protojson"
+
 	"github.com/dstout-devops/stratt/core/internal/graph"
 	"github.com/dstout-devops/stratt/core/internal/planstore"
 	pluginv1 "github.com/dstout-devops/stratt/sdk/stratt/plugin/v1"
@@ -632,6 +634,37 @@ func (h *Host) ApplyRaw(ctx context.Context, req ApplyInvoke) (RawApplyResult, e
 	if err != nil {
 		return out, fmt.Errorf("pluginhost: apply: %w", err)
 	}
+	// One governor, transport-agnostic (ADR-0051 MF1): the gRPC stream and the
+	// EE-Job stdout adapter both feed the SAME govern loop; the dispatcher and Site
+	// agents relay these shapes but fold/gate nothing.
+	return h.govern(ctx, stream, resolved)
+}
+
+// applyStream is the transport-agnostic source of ApplyResponses the governor
+// consumes (ADR-0051): the gRPC client stream satisfies it, and so does the EE-Job
+// stdout adapter (jsonLineStream). io.EOF ends the stream.
+type applyStream interface {
+	Recv() (*pluginv1.ApplyResponse, error)
+}
+
+// GovernStream is the entry the EE-Job (subprocess) transport uses (ADR-0051 MF1):
+// it governs a stream of typed ApplyResponses the Job emitted on stdout, against the
+// CORE-HELD resolved target set (MF4 — the confused-deputy gate keys on these names,
+// never the pod's self-reported inventory). Identical governance to the gRPC path.
+func (h *Host) GovernStream(ctx context.Context, stream applyStream, targets []ApplyTarget) (RawApplyResult, error) {
+	resolved := make(map[string]bool, len(targets))
+	for _, t := range targets {
+		resolved[t.Name] = true
+	}
+	return h.govern(ctx, stream, resolved)
+}
+
+// govern is the SOLE hub-side Apply governor (ADR-0051): confused-deputy target gate,
+// identity/facet/label write-back gates, drift/derived-contract capture, and the
+// core-side Succeeded fold (a stream that never sent a terminal folds to not-OK —
+// the §1.8 silent-death floor). `resolved` is the core-held resolved target-name set.
+func (h *Host) govern(ctx context.Context, stream applyStream, resolved map[string]bool) (RawApplyResult, error) {
+	out := RawApplyResult{PerTarget: map[string]string{}}
 	var failed, sawTerminal bool
 	for {
 		resp, err := stream.Recv()
@@ -735,6 +768,32 @@ func (h *Host) ApplyRaw(ctx context.Context, req ApplyInvoke) (RawApplyResult, e
 	// A stream that never terminated is also a failure (partial/torn stream).
 	out.Succeeded = sawTerminal && !failed
 	return out, nil
+}
+
+// jsonLineStream adapts a sequence of proto-JSON ApplyResponse lines (an EE-Job's
+// stdout — the subprocess transport, ADR-0051) into an applyStream the governor
+// consumes. next() returns the next line, io.EOF at end. The dispatcher pre-routes
+// non-ApplyResponse lines (ansible-runner banners, tracebacks) to the §1.8
+// diagnostic ring (MF5), so a line reaching here should decode; a stray undecodable
+// line is a hard error, never silently dropped.
+type jsonLineStream struct {
+	next func() ([]byte, error)
+}
+
+// NewJobStream builds an applyStream over an EE-Job's typed stdout line source — the
+// EE-Job (subprocess) transport's feed into the one governor (ADR-0051 MF1).
+func NewJobStream(next func() ([]byte, error)) applyStream { return &jsonLineStream{next: next} }
+
+func (s *jsonLineStream) Recv() (*pluginv1.ApplyResponse, error) {
+	line, err := s.next()
+	if err != nil {
+		return nil, err // io.EOF or a read error
+	}
+	resp := &pluginv1.ApplyResponse{}
+	if uerr := protojson.Unmarshal(line, resp); uerr != nil {
+		return nil, fmt.Errorf("pluginhost: undecodable ApplyResponse line: %w", uerr)
+	}
+	return resp, nil
 }
 
 // ownsCred enforces provisioned-CredentialRef namespace confinement (ADR-0047 §7):
