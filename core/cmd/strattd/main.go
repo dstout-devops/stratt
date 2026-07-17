@@ -27,7 +27,6 @@ import (
 	"github.com/dstout-devops/stratt/core/internal/actions"
 	notifyaction "github.com/dstout-devops/stratt/core/internal/actions/notify"
 	"github.com/dstout-devops/stratt/core/internal/actuators"
-	"github.com/dstout-devops/stratt/core/internal/actuators/ansible"
 	mcpact "github.com/dstout-devops/stratt/core/internal/actuators/mcp"
 	"github.com/dstout-devops/stratt/core/internal/actuators/script"
 	"github.com/dstout-devops/stratt/core/internal/actuators/webhook"
@@ -319,19 +318,14 @@ func run(ctx context.Context, log *slog.Logger) error {
 	// In-tree Actuator registry (§2.3); out-of-tree Actuators arrive via the
 	// plugin Contract surfaces, not this map.
 	//
-	// Ansible over the port (ADR-0051): when the EE-Job transport is enabled the
-	// flagship no longer runs in-tree — the core dispatches the stratt-ansible shim
-	// (baked into the EE image) which speaks the port on stdout, and governs the typed
-	// stream hub-side with the SAME governor as the gRPC path (MF1). The in-tree
-	// ansible.Actuator then stands aside (registered below as a JobCommand actuator);
-	// unset ⇒ the in-tree pod interpreter, the pre-cutover fallback.
-	ansibleJobTransport := os.Getenv("STRATT_ANSIBLE_JOB_TRANSPORT") != ""
+	// Ansible is no longer here (ADR-0051 Phase 5b cutover): the flagship runs
+	// EXCLUSIVELY over the port as the EE-Job (subprocess) transport — the core
+	// dispatches the stratt-ansible shim (baked into the EE image) which speaks the
+	// port on stdout, and governs the typed stream hub-side with the SAME governor as
+	// the gRPC path (MF1). Its Prepare/Interpret content-awareness has LEFT the Apache
+	// core (§1.4 — no `if ansible {…}` in the spine). script/webhook remain in-tree.
 	registry := map[string]actuators.Actuator{}
-	inTreeActuators := []actuators.Actuator{script.Actuator{}, webhook.Actuator{}}
-	if !ansibleJobTransport {
-		inTreeActuators = append(inTreeActuators, ansible.Actuator{})
-	}
-	for _, a := range inTreeActuators {
+	for _, a := range []actuators.Actuator{script.Actuator{}, webhook.Actuator{}} {
 		registry[a.Name()] = a
 	}
 
@@ -380,12 +374,13 @@ func run(ctx context.Context, log *slog.Logger) error {
 	}
 
 	// Ansible EE-Job (subprocess) transport (ADR-0051): the flagship Actuator over
-	// the sovereign port. No gRPC dial — the transport IS the K8s Job running the
-	// stratt-ansible shim. The host carries only the MF3 BOUNDED grant (never a
-	// wildcard): exactly the Facet namespaces the shim projects and the host.name
-	// identity scheme it correlates facts by. GovernStream gates the Job's typed
-	// stdout against this grant hub-side; the gRPC client is nil (govern never dials).
-	if ansibleJobTransport {
+	// the sovereign port, the SOLE ansible path (Phase 5b cutover). No gRPC dial —
+	// the transport IS the K8s Job running the stratt-ansible shim. The host carries
+	// only the MF3 BOUNDED grant (never a wildcard): exactly the Facet namespaces the
+	// shim projects and the host.name identity scheme it correlates facts by.
+	// GovernStream gates the Job's typed stdout against this grant hub-side; the gRPC
+	// client is nil (govern never dials).
+	{
 		grant := pluginhost.Grant{
 			PluginIdentity: env("STRATT_ANSIBLE_PLUGIN_ID", "ansible"),
 			Tier:           pluginhost.TierTrusted,

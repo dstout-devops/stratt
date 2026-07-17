@@ -26,7 +26,6 @@ import (
 	"k8s.io/client-go/tools/clientcmd"
 
 	"github.com/dstout-devops/stratt/core/internal/actuators"
-	"github.com/dstout-devops/stratt/core/internal/actuators/ansible"
 	"github.com/dstout-devops/stratt/core/internal/actuators/script"
 	"github.com/dstout-devops/stratt/core/internal/actuators/webhook"
 	"github.com/dstout-devops/stratt/core/internal/dispatch"
@@ -275,9 +274,14 @@ func interpName(req siteproto.DispatchRequest) string {
 // JobSpec, the agent only Interprets pod output, so config-free constructors
 // suffice. Interpreter version skew between hub and agent is the documented
 // deepest tension (ADR-0032); v1 ships core in-tree Interpreters only.
+//
+// Ansible is no longer here (ADR-0051 Phase 5b): it is the EE-Job transport, a
+// PluginActuator the hub routes through GovernStream — never the Site fold path.
+// A Site-homed ansible Run fails closed at the hub (JobTransportSiteUnsupported)
+// until the EE-Job-at-a-Site path lands (Phase 6, MF2). script/webhook still fold.
 func buildInterpreters() map[string]dispatch.Interpreter {
 	m := map[string]dispatch.Interpreter{}
-	for _, a := range []actuators.Actuator{ansible.Actuator{}, script.Actuator{}, webhook.Actuator{}} {
+	for _, a := range []actuators.Actuator{script.Actuator{}, webhook.Actuator{}} {
 		m[a.Name()] = a
 	}
 	// The cert issue/renew/revoke pod Interpreters are retired (ADR-0050): cert

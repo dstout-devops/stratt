@@ -144,3 +144,23 @@ the EE/shim is signed + trust-tiered like any plugin (§7.3).
   fallback; content-blindness is not *achieved* until the deletion lands, only *reachable*); **F2** — the MF3
   grant is registration-static (matches the gRPC `PluginActuator` posture, not a regression); the tighter
   per-Step *claimed-facet intersection* MF3 describes is a later refinement.
+
+## Phase 5b — the cutover (2026-07-17)
+
+The env gate is gone: ansible is now EXCLUSIVELY the EE-Job transport. `core/internal/actuators/ansible`
+(the `Prepare`/`Interpret`/`BuildContent`/`HostStatus`/`ExtractFacts`/`ExtractDiff` content-awareness) is
+**deleted** — the Apache spine no longer holds an `if ansible {…}` (§1.4, guardian **F1** resolved). `strattd`
+registers "ansible" only as the EE-Job `PluginActuator`; `stratt-agent`'s in-tree Interpreter registry drops
+ansible (it was dead for ansible the moment the hub routed ansible through `GovernStream` — a `PluginActuator`
+never takes the Site fold path). The `actuators/ansible.input` **Contract stays** (pinned schema data, §1.5);
+the flagship's expertise lives in the `plugins/ansible` shim module.
+
+**Regression window (intended by the roadmap's hub-local-first sequencing):** a **Site-homed** ansible Run now
+fails closed at the hub (`JobTransportSiteUnsupported`) until the EE-Job-at-a-Site path lands (Phase 6, MF2).
+Hub-local ansible is unaffected.
+
+**Outstanding verification (the one signal this environment cannot produce):** a live **dev-cluster** end-to-end
+ansible Run (real EE pod, NATS, Temporal). Everything else is green — `go build`/`vet`/`gofmt`, the
+pluginhost/dispatch/orchestrate/strattd unit suites, and a full `docker build` of the EE image whose baked
+`stratt-ansible` binary emitted the exact port shapes against a stubbed runner. Run the dev-cluster Run before
+relying on the cutover in a real deployment; there is no in-tree fallback behind it now.
