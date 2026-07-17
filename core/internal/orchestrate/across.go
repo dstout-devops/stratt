@@ -342,6 +342,12 @@ func childRunBody(in RunInput) ([]byte, error) {
 	if len(in.CredentialRefs) > 0 {
 		body["credentialRefs"] = in.CredentialRefs
 	}
+	if len(in.FacetWriteScope) > 0 {
+		// The derived child inherits the parent's Facet write-scope verbatim
+		// (ADR-0054) — a cross-Cell fan-out must not silently widen or drop it;
+		// the peer re-governs grant∩scope hub-side against its own actuator grant.
+		body["facetWriteScope"] = in.FacetWriteScope
+	}
 	return json.Marshal(body)
 }
 

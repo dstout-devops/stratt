@@ -257,16 +257,17 @@ func runActuationStep(ctx workflow.Context, in DAGInput, step types.Step, steps 
 		WorkflowID: ChildRunID(in.WorkflowRunID, step.Name),
 	})
 	err := workflow.ExecuteChildWorkflow(cctx, RunAgainstView, RunInput{
-		ViewName:       step.ViewName,
-		Actuator:       step.Actuator,
-		Params:         params,
-		Slices:         step.Slices,
-		CredentialRefs: step.CredentialRefs,
-		Principal:      in.Principal,
-		WorkflowRunID:  in.WorkflowRunID,
-		StepName:       step.Name,
-		PlanFrom:       step.PlanFrom,
-		PlanDigest:     planDigest,
+		ViewName:        step.ViewName,
+		Actuator:        step.Actuator,
+		Params:          params,
+		Slices:          step.Slices,
+		CredentialRefs:  step.CredentialRefs,
+		Principal:       in.Principal,
+		WorkflowRunID:   in.WorkflowRunID,
+		StepName:        step.Name,
+		PlanFrom:        step.PlanFrom,
+		PlanDigest:      planDigest,
+		FacetWriteScope: step.FacetWriteScope,
 	}).Get(cctx, nil)
 	if err != nil {
 		return stepFailed, nil

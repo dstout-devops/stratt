@@ -521,6 +521,9 @@ type ApplyInvoke struct {
 	CredentialRefs []string
 	PlanDigest     string
 	PinnedPlan     []byte
+	// FacetWriteScope is the per-Run facet FLOOR (ADR-0054): the effective write-back
+	// allowlist is the plugin grant ∩ this scope. Empty admits no facet write-back.
+	FacetWriteScope []string
 }
 
 // PlanInvoke is a governed Actuator Plan request (the unary, pinnable producer).
@@ -692,8 +695,9 @@ func (h *Host) ApplyRaw(ctx context.Context, req ApplyInvoke) (RawApplyResult, e
 	}
 	// One governor, transport-agnostic (ADR-0051 MF1): the gRPC stream and the
 	// EE-Job stdout adapter both feed the SAME govern loop; the dispatcher and Site
-	// agents relay these shapes but fold/gate nothing.
-	return h.govern(ctx, stream, resolved)
+	// agents relay these shapes but fold/gate nothing. The facet floor (ADR-0054) is
+	// applied here, at the one governor — never re-implemented per transport.
+	return h.govern(ctx, stream, resolved, scopeSet(req.FacetWriteScope))
 }
 
 // applyStream is the transport-agnostic source of ApplyResponses the governor
@@ -707,19 +711,32 @@ type applyStream interface {
 // it governs a stream of typed ApplyResponses the Job emitted on stdout, against the
 // CORE-HELD resolved target set (MF4 — the confused-deputy gate keys on these names,
 // never the pod's self-reported inventory). Identical governance to the gRPC path.
-func (h *Host) GovernStream(ctx context.Context, stream applyStream, targets []ApplyTarget) (RawApplyResult, error) {
+func (h *Host) GovernStream(ctx context.Context, stream applyStream, targets []ApplyTarget, writeScope []string) (RawApplyResult, error) {
 	resolved := make(map[string]bool, len(targets))
 	for _, t := range targets {
 		resolved[t.Name] = true
 	}
-	return h.govern(ctx, stream, resolved)
+	return h.govern(ctx, stream, resolved, scopeSet(writeScope))
+}
+
+// scopeSet builds the per-Run facet write-scope lookup (ADR-0054). The set is the
+// FLOOR intersected with the grant ceiling at govern; TIGHT default — a nil/empty
+// scope admits NO facet write-back (least authority).
+func scopeSet(ns []string) map[string]bool {
+	s := make(map[string]bool, len(ns))
+	for _, n := range ns {
+		s[n] = true
+	}
+	return s
 }
 
 // govern is the SOLE hub-side Apply governor (ADR-0051): confused-deputy target gate,
 // identity/facet/label write-back gates, drift/derived-contract capture, and the
 // core-side Succeeded fold (a stream that never sent a terminal folds to not-OK —
-// the §1.8 silent-death floor). `resolved` is the core-held resolved target-name set.
-func (h *Host) govern(ctx context.Context, stream applyStream, resolved map[string]bool) (RawApplyResult, error) {
+// the §1.8 silent-death floor). `resolved` is the core-held resolved target-name set;
+// `writeScope` is the per-Run facet FLOOR — the effective facet allowlist is
+// grant ∩ writeScope (ADR-0054, pure AND — scoped-but-ungranted just drops).
+func (h *Host) govern(ctx context.Context, stream applyStream, resolved, writeScope map[string]bool) (RawApplyResult, error) {
 	out := RawApplyResult{PerTarget: map[string]string{}}
 	var failed, sawTerminal bool
 	for {
@@ -791,8 +808,16 @@ func (h *Host) govern(ctx context.Context, stream applyStream, resolved map[stri
 			}
 			facets := map[string][]byte{}
 			for ns, v := range e.GetFacets() {
+				// Effective allowlist = grant ceiling ∩ Step write-scope (ADR-0054):
+				// pure AND — a facet outside EITHER bound drops, never a fallback (§2.4).
 				if !h.grant.allowsFacet(ns) {
 					rej := Rejection{Kind: "facet", Detail: ns, Reason: "apply: facet namespace not in operator grant"}
+					h.reject(rej.Kind, rej.Detail, rej.Reason)
+					out.Rejections = append(out.Rejections, rej)
+					continue
+				}
+				if !writeScope[ns] {
+					rej := Rejection{Kind: "facet", Detail: ns, Reason: "apply: facet namespace not in the Step's facet write-scope (least authority, ADR-0054)"}
 					h.reject(rej.Kind, rej.Detail, rej.Reason)
 					out.Rejections = append(out.Rejections, rej)
 					continue

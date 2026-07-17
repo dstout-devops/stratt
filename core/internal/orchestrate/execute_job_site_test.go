@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"io"
 	"log/slog"
+	"strings"
 	"testing"
 
 	"go.temporal.io/sdk/testsuite"
@@ -90,7 +91,9 @@ func TestExecuteJobPlugin_RemoteSiteGovernsHubSide(t *testing.T) {
 	env := ts.NewTestActivityEnvironment()
 	env.RegisterActivity(a.Execute)
 	val, err := env.ExecuteActivity(a.Execute,
-		RunInput{Actuator: "ansible", Principal: "alice"}, 3, "edge-1", resolved, []dispatch.CredentialMount(nil))
+		// The Run scopes os.kernel into its write-back (ADR-0054); os.kernel then
+		// survives grant∩scope while the ungranted secret.leak is gated regardless.
+		RunInput{Actuator: "ansible", Principal: "alice", FacetWriteScope: []string{"os.kernel"}}, 3, "edge-1", resolved, []dispatch.CredentialMount(nil))
 	if err != nil {
 		t.Fatalf("execute EE-Job at Site: %v", err)
 	}
@@ -144,5 +147,42 @@ func TestExecuteJobPlugin_RemoteSiteNoGatewayFailsVisibly(t *testing.T) {
 		a.PluginActuators["ansible"])
 	if err == nil {
 		t.Fatal("a Site EE-Job Step with no site gateway must fail visibly")
+	}
+}
+
+// TestExecute_FacetWriteScopeAdmissionLint proves the ADR-0054 MF-2 admission
+// lint: a declared FacetWriteScope with an entry OUTSIDE the actuator's registered
+// facet grant fails the Run LOUDLY at launch (naming the offending namespace),
+// rather than silently dropping the facet at govern (§1.8 — a mismatch is
+// diagnosed, not a silent no-op). A scope wholly within grant is admitted.
+func TestExecute_FacetWriteScopeAdmissionLint(t *testing.T) {
+	grant := pluginhost.Grant{
+		PluginIdentity:  "ansible",
+		Tier:            pluginhost.TierTrusted,
+		Source:          types.Source{Kind: "ansible", Name: "ansible"},
+		FacetNamespaces: []string{"os.kernel"},
+		IdentitySchemes: []string{"host.name"},
+	}
+	host := pluginhost.New(nil, nil, grant, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	a := &Activities{
+		Log: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		PluginActuators: map[string]PluginActuator{
+			"ansible": {Host: host, DryRunnable: true, Grant: grant, JobCommand: []string{"stratt-ansible"}},
+		},
+	}
+	ts := &testsuite.WorkflowTestSuite{}
+	env := ts.NewTestActivityEnvironment()
+	env.RegisterActivity(a.Execute)
+
+	// os.hardening.sshd is NOT in the ansible grant → the whole Run is rejected.
+	_, err := env.ExecuteActivity(a.Execute,
+		RunInput{Actuator: "ansible", Principal: "alice", FacetWriteScope: []string{"os.hardening.sshd"}},
+		0, "", ResolvedTargets{Targets: []actuators.Target{{EntityID: "e-1", Name: "web-1"}}},
+		[]dispatch.CredentialMount(nil))
+	if err == nil {
+		t.Fatal("a FacetWriteScope entry outside the actuator's grant must fail the Run at launch (ADR-0054 MF-2)")
+	}
+	if !strings.Contains(err.Error(), "os.hardening.sshd") || !strings.Contains(err.Error(), "registered grant") {
+		t.Fatalf("the rejection must name the offending namespace + cause (§1.8): %v", err)
 	}
 }

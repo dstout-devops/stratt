@@ -23,6 +23,11 @@ viewName: managed-certs
 principal: svc-cert-reconcile
 actuator: certissuer
 credentialRefs: [cert-issuer]
+# certissuer's Apply projects the issued cert's cert.identity/cert.expiry Facets
+# back (ADR-0054 write-scope): the effective write-back is the certissuer grant ∩
+# this scope. Without it the tight default would drop the projection at the one
+# governor and the reconcile would converge OpenBao but never update the graph.
+facetWriteScope: [cert.identity, cert.expiry]
 params:
   commonName: web.stratt.test
   role: stratt-dev

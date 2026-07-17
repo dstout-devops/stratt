@@ -108,6 +108,7 @@ func checkRunInput(b types.Baseline) (RunInput, error) {
 	return RunInput{
 		ViewName: b.ViewName, Actuator: actuator, Params: raw, Slices: b.Slices,
 		Baseline: b.Name, Principal: b.Principal, CredentialRefs: b.CredentialRefs, DryRun: true,
+		FacetWriteScope: b.FacetWriteScope,
 	}, nil
 }
 

@@ -1255,6 +1255,12 @@ func (s *Server) StartRun(w http.ResponseWriter, r *http.Request) {
 	if body.CredentialRefs != nil {
 		p.CredentialRefs = *body.CredentialRefs
 	}
+	if body.FacetWriteScope != nil {
+		// Opaque Facet-namespace allowlist (ADR-0054); the effective set is the
+		// actuator's grant ∩ this scope, enforced at the one governor. An entry
+		// outside the actuator's grant is rejected loudly at launch (admission lint).
+		p.FacetWriteScope = *body.FacetWriteScope
+	}
 	if body.Actuator != nil {
 		// Actuator is an OPAQUE routing key (ADR-0046): no closed-enum gate here.
 		// An unregistered name fails the Run terminally at launch (UnknownActuator).

@@ -66,6 +66,11 @@ type RunInput struct {
 	// DryRun asks a DryRunnable Action to plan without side effects (§2.2).
 	DryRun bool
 	Params json.RawMessage
+	// FacetWriteScope is the per-Run facet FLOOR (ADR-0054): the actuation may write
+	// back ONLY these Facet namespaces (intersected with the plugin's registered grant
+	// at the one governor). Declared on the Step/Baseline/Trigger and inherited by
+	// derived Runs. Empty admits NO facet write-back (TIGHT least-authority default).
+	FacetWriteScope []string
 	// ViewParams binds a parametrized View's {{.param.x}} placeholders at
 	// launch (ADR-0024) — resolved by ResolveTargets before selection.
 	ViewParams map[string]any
@@ -674,6 +679,18 @@ func (a *Activities) Execute(ctx context.Context, in RunInput, slice int, site s
 	// already enforced BEFORE this activity — NOT the Action path's credential
 	// use-check — so a plugin actuation Step may carry zero creds (guardian #4).
 	if pa, ok := a.PluginActuators[name]; ok {
+		// Admission lint (ADR-0054 MF-2): a declared FacetWriteScope must be a SUBSET
+		// of the actuator's registered facet grant. An out-of-grant entry can never
+		// write back — the one governor's grant∩scope AND would silently drop it — so
+		// reject LOUDLY at launch naming the offending namespace (§1.8: a mismatch is
+		// diagnosed, not a silent no-op). This is the earliest choke-point that holds
+		// the grant registry (a worker-side runtime property); the govern-time
+		// intersection remains the non-bypassable security backstop underneath.
+		if bad := firstOutsideGrant(in.FacetWriteScope, pa.Grant.FacetNamespaces); bad != "" {
+			return dispatch.Result{}, temporal.NewNonRetryableApplicationError(
+				fmt.Sprintf("facet write-scope %q is not in actuator %q's registered grant (ADR-0054)", bad, name),
+				"FacetWriteScopeUngranted", nil)
+		}
 		if pa.MCP {
 			return a.executeMCP(ctx, in, slice, pa)
 		}
@@ -728,6 +745,26 @@ func (a *Activities) Execute(ctx context.Context, in RunInput, slice int, site s
 		RunID: in.RunID, Slice: slice, Site: site,
 		Actuator: name, DryRun: in.DryRun, Spec: spec, Creds: creds,
 	}, heartbeat)
+}
+
+// firstOutsideGrant returns the first FacetWriteScope namespace that is NOT in
+// the actuator's registered facet grant, or "" if every entry is within grant
+// (ADR-0054 admission lint). An empty scope is trivially within any grant — the
+// tight default writes no facets, never an out-of-grant violation.
+func firstOutsideGrant(scope, grant []string) string {
+	for _, ns := range scope {
+		found := false
+		for _, g := range grant {
+			if g == ns {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return ns
+		}
+	}
+	return ""
 }
 
 // PlanStep runs the PLAN verb of a plugin-hosted Actuator (ADR-0047 §7/§8): the
@@ -832,13 +869,14 @@ func (a *Activities) executePlugin(ctx context.Context, in RunInput, site string
 	}
 	activity.RecordHeartbeat(ctx) // canceled Run stops promptly (ADR-0026)
 	raw, err := host.ApplyRaw(ctx, pluginhost.ApplyInvoke{
-		Principal:      in.Principal,
-		Params:         in.Params,
-		Targets:        targets,
-		DryRun:         in.DryRun,
-		CredentialRefs: names,
-		PlanDigest:     in.PlanDigest,
-		PinnedPlan:     pinnedPlan,
+		Principal:       in.Principal,
+		Params:          in.Params,
+		Targets:         targets,
+		DryRun:          in.DryRun,
+		CredentialRefs:  names,
+		PlanDigest:      in.PlanDigest,
+		PinnedPlan:      pinnedPlan,
+		FacetWriteScope: in.FacetWriteScope,
 	})
 	if err != nil {
 		return dispatch.Result{}, err
@@ -939,7 +977,7 @@ func (a *Activities) executeJobPlugin(ctx context.Context, in RunInput, slice in
 	}
 	gov := make(chan govResult, 1)
 	go func() {
-		raw, gerr := pa.Host.GovernStream(ctx, pluginhost.NewChanStream(ctx, ch), targets)
+		raw, gerr := pa.Host.GovernStream(ctx, pluginhost.NewChanStream(ctx, ch), targets, in.FacetWriteScope)
 		gov <- govResult{raw: raw, err: gerr}
 	}()
 	heartbeat := func() { activity.RecordHeartbeat(ctx) }
@@ -1110,7 +1148,7 @@ func (a *Activities) executeMCP(ctx context.Context, in RunInput, slice int, pa 
 	}
 	gov := make(chan govResult, 1)
 	go func() {
-		raw, gerr := pa.Host.GovernStream(ctx, pluginhost.NewChanStream(ctx, ch), targets)
+		raw, gerr := pa.Host.GovernStream(ctx, pluginhost.NewChanStream(ctx, ch), targets, nil)
 		gov <- govResult{raw: raw, err: gerr}
 	}()
 	heartbeat := func() { activity.RecordHeartbeat(ctx) }

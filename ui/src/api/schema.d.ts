@@ -1152,6 +1152,8 @@ export interface components {
             slices: number;
             /** @description CredentialRef names to project into the execution pods. The launching Principal needs the `use` grant on each (checked at dispatch; use never implies read — charter §2.5). */
             credentialRefs?: string[];
+            /** @description Facet namespaces this Run may write back (ADR-0054). The effective allowlist enforced at the one governor is the actuator's registered grant ∩ this scope (least authority). Empty admits NO facet write-back (tight default); an entry not in the actuator's grant is rejected at authoring. */
+            facetWriteScope?: string[];
         };
         Run: {
             id: string;
@@ -1396,6 +1398,8 @@ export interface components {
             /** Format: int64 */
             slices?: number;
             credentialRefs?: string[];
+            /** @description Facet namespaces this Baseline's check may write back (ADR-0054) — a read-only check still projects gathered facts. Effective allowlist is the actuator's grant ∩ this scope; empty admits none (tight default). */
+            facetWriteScope?: string[];
             /** @description Service identity the checks execute as (§2.5), exactly like a Trigger's. */
             principal?: string;
             /** @description Check cadence (a Temporal Schedule actuates it, §3). */

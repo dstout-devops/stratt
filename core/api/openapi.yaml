@@ -1331,6 +1331,15 @@ components:
             CredentialRef names to project into the execution pods. The
             launching Principal needs the `use` grant on each (checked at
             dispatch; use never implies read — charter §2.5).
+        facetWriteScope:
+          type: array
+          items: { type: string }
+          description: >
+            Facet namespaces this Run may write back (ADR-0054). The effective
+            allowlist enforced at the one governor is the actuator's registered
+            grant ∩ this scope (least authority). Empty admits NO facet write-back
+            (tight default); an entry not in the actuator's grant is rejected at
+            authoring.
     Run:
       type: object
       required: [id, workflowId, status, startedAt]
@@ -1660,6 +1669,13 @@ components:
         credentialRefs:
           type: array
           items: { type: string }
+        facetWriteScope:
+          type: array
+          items: { type: string }
+          description: >
+            Facet namespaces this Baseline's check may write back (ADR-0054) —
+            a read-only check still projects gathered facts. Effective allowlist
+            is the actuator's grant ∩ this scope; empty admits none (tight default).
         principal:
           type: string
           description: >

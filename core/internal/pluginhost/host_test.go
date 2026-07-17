@@ -810,7 +810,12 @@ func TestHost_ApplyWriteBackGovernedUnprojected(t *testing.T) {
 	}
 	client := serve(t, fp)
 	h := pluginhost.New(nil, client, grant, discardLog())
-	raw, err := h.ApplyRaw(context.Background(), pluginhost.ApplyInvoke{Principal: "alice"})
+	// The Run scopes vm.config into its write-back (ADR-0054); the effective set
+	// is the grant ceiling ∩ this scope. Identity-scheme gating is orthogonal and
+	// still applies (the tier+grant gate below).
+	raw, err := h.ApplyRaw(context.Background(), pluginhost.ApplyInvoke{
+		Principal: "alice", FacetWriteScope: []string{"vm.config"},
+	})
 	if err != nil {
 		t.Fatalf("applyRaw: %v", err)
 	}
@@ -928,7 +933,7 @@ func TestHost_GovernStream_EEJobTransport(t *testing.T) {
 	grant := vcenterGrant(pluginhost.TierCommunity, []string{"vcenter.uuid", "dns.fqdn"})
 	h := pluginhost.New(nil, nil, grant, discardLog())
 	raw, err := h.GovernStream(context.Background(), pluginhost.NewJobStream(next),
-		[]pluginhost.ApplyTarget{{Name: "web-1"}})
+		[]pluginhost.ApplyTarget{{Name: "web-1"}}, nil) // identity-only write-back, no facets to scope
 	if err != nil {
 		t.Fatalf("governStream: %v", err)
 	}
@@ -1027,43 +1032,49 @@ func TestHost_GovernStream_AnsibleFactsWriteBack(t *testing.T) {
 	}
 
 	h := pluginhost.New(nil, nil, ansibleGrant(), discardLog())
+	// The Step's facet WRITE-SCOPE is NARROW — only os.kernel — even though the plugin
+	// grant also covers os.hardening.sshd. The effective allowlist is grant ∩ scope
+	// (ADR-0054): os.kernel survives, os.hardening.sshd is DROPPED (granted but
+	// out-of-scope — the F2 least-authority fix), secret.leak is dropped (ungranted).
 	raw, err := h.GovernStream(context.Background(), pluginhost.NewJobStream(next),
-		[]pluginhost.ApplyTarget{{Name: "web-2", IdentityKeys: map[string]string{"host.name": "web-2"}}})
+		[]pluginhost.ApplyTarget{{Name: "web-2", IdentityKeys: map[string]string{"host.name": "web-2"}}},
+		[]string{"os.kernel"})
 	if err != nil {
 		t.Fatalf("governStream: %v", err)
 	}
 	if raw.PerTarget["web-2"] != "changed" || !raw.Succeeded {
 		t.Fatalf("per-host fold wrong: %+v (succeeded=%v)", raw.PerTarget, raw.Succeeded)
 	}
-	// Exactly the host.name-keyed write-back survives; the ungranted-identity one is dropped.
 	if len(raw.WriteBack) != 1 {
-		t.Fatalf("expected 1 governed write-back (ungranted-identity dropped), got %d: %+v", len(raw.WriteBack), raw.WriteBack)
+		t.Fatalf("expected 1 governed write-back, got %d: %+v", len(raw.WriteBack), raw.WriteBack)
 	}
 	e := raw.WriteBack[0]
-	// executeJobPlugin re-correlates facts to the resolved target by this key.
 	if e.IdentityKeys["host.name"] != "web-2" {
 		t.Fatalf("write-back host.name correlation key missing: %+v", e.IdentityKeys)
 	}
 	if _, ok := e.Facets["os.kernel"]; !ok {
-		t.Fatalf("granted os.kernel facet must survive: %+v", e.Facets)
+		t.Fatalf("granted AND scoped os.kernel must survive: %+v", e.Facets)
 	}
-	if _, ok := e.Facets["os.hardening.sshd"]; !ok {
-		t.Fatalf("granted os.hardening.sshd facet must survive: %+v", e.Facets)
+	if _, leaked := e.Facets["os.hardening.sshd"]; leaked {
+		t.Fatal("ADR-0054: a GRANTED but OUT-OF-SCOPE facet must be dropped (write-scope narrows the grant)")
 	}
 	if _, leaked := e.Facets["secret.leak"]; leaked {
-		t.Fatal("ungranted facet namespace must be gated out (MF3 is not a wildcard)")
+		t.Fatal("ungranted facet namespace must be gated out")
 	}
-	var facetRej, identRej bool
+	var scopeRej, grantRej, identRej bool
 	for _, r := range raw.Rejections {
-		if r.Kind == "facet" && r.Detail == "secret.leak" {
-			facetRej = true
+		if r.Kind == "facet" && r.Detail == "os.hardening.sshd" {
+			scopeRej = true // dropped by the write-scope floor (granted, out of scope)
 		}
-		if r.Kind == "entity" { // the ungranted-identity write-back, dropped with no granted key
-			identRej = true
+		if r.Kind == "facet" && r.Detail == "secret.leak" {
+			grantRej = true // dropped by the grant ceiling (ungranted)
+		}
+		if r.Kind == "entity" {
+			identRej = true // the ungranted-identity write-back
 		}
 	}
-	if !facetRej || !identRej {
-		t.Fatalf("expected facet + ungranted-identity rejections, got %+v", raw.Rejections)
+	if !scopeRej || !grantRej || !identRej {
+		t.Fatalf("expected write-scope + grant + identity rejections, got %+v", raw.Rejections)
 	}
 }
 

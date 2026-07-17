@@ -44,6 +44,9 @@ type Step struct {
 	Params         map[string]any `json:"params,omitempty"`
 	Slices         int            `json:"slices,omitempty"`
 	CredentialRefs []string       `json:"credentialRefs,omitempty"`
+	// FacetWriteScope is the Facet namespaces an actuation Step may write back
+	// (ADR-0054): the actuator's grant ∩ this scope. Empty admits no facet write-back.
+	FacetWriteScope []string `json:"facetWriteScope,omitempty"`
 
 	// Plan marks an actuation Step that runs the Actuator's PLAN verb — the
 	// canonical producer of a hash-pinned saved plan (ADR-0047 §7/§8). It outputs

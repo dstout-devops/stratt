@@ -173,14 +173,15 @@ func (e *Engine) launch(ctx context.Context, log *slog.Logger, t types.Trigger, 
 	}
 	opts.ID = fmt.Sprintf("trigger-%s-%s", t.Name, short)
 	_, err = e.Temporal.ExecuteWorkflow(ctx, opts, orchestrate.RunAgainstView, orchestrate.RunInput{
-		ViewName:       t.ViewName,
-		ViewParams:     viewParams,
-		Actuator:       t.Actuator,
-		Params:         params,
-		Slices:         t.Slices,
-		Principal:      t.Principal,
-		CredentialRefs: t.CredentialRefs,
-		Trigger:        t.Name,
+		ViewName:        t.ViewName,
+		ViewParams:      viewParams,
+		Actuator:        t.Actuator,
+		FacetWriteScope: t.FacetWriteScope,
+		Params:          params,
+		Slices:          t.Slices,
+		Principal:       t.Principal,
+		CredentialRefs:  t.CredentialRefs,
+		Trigger:         t.Name,
 	})
 	if isAlreadyStarted(err) {
 		log.Info("trigger launch deduplicated", "trigger", t.Name, "id", opts.ID)

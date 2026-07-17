@@ -458,6 +458,7 @@ type triggerFile struct {
 	CredentialRefs  []string       `yaml:"credentialRefs"`
 	Principal       string         `yaml:"principal"`
 	WorkflowName    string         `yaml:"workflowName"`
+	FacetWriteScope []string       `yaml:"facetWriteScope"`
 }
 
 func parseTriggerFile(path string, raw []byte) (string, types.Trigger, error) {
@@ -476,7 +477,7 @@ func parseTriggerFile(path string, raw []byte) (string, types.Trigger, error) {
 		ViewName: f.ViewName, ViewParams: f.ViewParams,
 		Actuator: f.Actuator, Params: f.Params,
 		Slices: f.Slices, CredentialRefs: f.CredentialRefs, Principal: f.Principal,
-		WorkflowName: f.WorkflowName,
+		WorkflowName: f.WorkflowName, FacetWriteScope: f.FacetWriteScope,
 	}
 	if err := ValidateTrigger(t); err != nil {
 		return "", types.Trigger{}, fmt.Errorf("desiredstate: %s: %w", path, err)
@@ -925,6 +926,11 @@ type baselineFile struct {
 	DampingObservations int            `yaml:"dampingObservations"`
 	RemediationWorkflow string         `yaml:"remediationWorkflow"`
 	Framework           string         `yaml:"framework"`
+	// FacetWriteScope is the Facet namespaces this Baseline's actuation may write
+	// back (ADR-0054): the effective allowlist is the actuator's grant ∩ this scope.
+	// Empty admits no facet write-back (tight default). Moot for the observation
+	// Mode below, which reads and never writes.
+	FacetWriteScope []string `yaml:"facetWriteScope"`
 
 	// facet-observation variant (ADR-0033): a hand-written Baseline that
 	// asserts expected Facet values graph-side (no check Step, no actuator).
@@ -982,7 +988,7 @@ func parseBaselineFile(path string, raw []byte) (string, types.Baseline, error) 
 		Cron: f.Cron, Paused: f.Paused, Severity: f.Severity,
 		DampingObservations: f.DampingObservations,
 		RemediationWorkflow: f.RemediationWorkflow, Framework: f.Framework,
-		Mode: f.Mode,
+		Mode: f.Mode, FacetWriteScope: f.FacetWriteScope,
 	}
 	for _, ef := range f.Expected {
 		exp, err := ef.toExpectation()
@@ -1476,17 +1482,18 @@ type workflowFile struct {
 	Steps []stepYAML `yaml:"steps"`
 }
 type stepYAML struct {
-	Name           string         `yaml:"name"`
-	Needs          []string       `yaml:"needs"`
-	When           string         `yaml:"when"`
-	Gate           *gateYAML      `yaml:"gate"`
-	ViewName       string         `yaml:"viewName"`
-	Actuator       string         `yaml:"actuator"`
-	Action         string         `yaml:"action"`
-	DryRun         bool           `yaml:"dryRun"`
-	Params         map[string]any `yaml:"params"`
-	Slices         int            `yaml:"slices"`
-	CredentialRefs []string       `yaml:"credentialRefs"`
+	Name            string         `yaml:"name"`
+	Needs           []string       `yaml:"needs"`
+	When            string         `yaml:"when"`
+	Gate            *gateYAML      `yaml:"gate"`
+	ViewName        string         `yaml:"viewName"`
+	Actuator        string         `yaml:"actuator"`
+	Action          string         `yaml:"action"`
+	DryRun          bool           `yaml:"dryRun"`
+	Params          map[string]any `yaml:"params"`
+	Slices          int            `yaml:"slices"`
+	CredentialRefs  []string       `yaml:"credentialRefs"`
+	FacetWriteScope []string       `yaml:"facetWriteScope"`
 }
 type gateYAML struct {
 	Approvers struct {
@@ -1510,6 +1517,7 @@ func parseWorkflowFile(path string, raw []byte) (string, types.Workflow, error) 
 			ViewName: s.ViewName, Actuator: s.Actuator,
 			Action: s.Action, DryRun: s.DryRun, Params: s.Params,
 			Slices: s.Slices, CredentialRefs: s.CredentialRefs,
+			FacetWriteScope: s.FacetWriteScope,
 		}
 		if s.Gate != nil {
 			step.Gate = &types.GateSpec{
