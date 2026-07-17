@@ -1,4 +1,4 @@
-// Package staticinv is the static-inventory Syncer plugin (ADR-0056 §5): a
+// Package declared is the declared-estate Syncer plugin (ADR-0056 §5): a
 // Connector whose system-of-record is a host-list file in the estate repo —
 // "devices as code". It projects each declared host as a `host` Entity over the
 // sovereign plugin port (ADR-0046); the core-side host performs the WriterSyncer
@@ -16,7 +16,7 @@
 //     tombstones nothing on the full-sync boundary, so a removed host lingers
 //     until a deliberate decommission — never a reconcile delete (§2.4). The
 //     max-delta-gated orphan Finding is the documented follow-up.
-package staticinv
+package declared
 
 import (
 	"context"
@@ -33,13 +33,13 @@ import (
 	pluginv1 "github.com/dstout-devops/stratt/sdk/stratt/plugin/v1"
 )
 
-// Config locates the static-inventory Source: a directory of host-list files.
+// Config locates the declared-estate Source: a directory of host-list files.
 type Config struct {
 	PluginID string // the authenticated channel identity the operator grant is keyed on
 	Path     string // directory holding the host-list files (*.yaml)
 }
 
-// Server implements the sovereign plugin port for a Syncer-class static-inventory
+// Server implements the sovereign plugin port for a Syncer-class declared-estate
 // plugin. It holds no graph write path; it maps the file to core-legible
 // ObservedEntity wire values and the core-side host governs the write.
 type Server struct {
@@ -50,9 +50,9 @@ type Server struct {
 
 func NewServer(cfg Config, log *slog.Logger) *Server {
 	if cfg.PluginID == "" {
-		cfg.PluginID = "staticinv"
+		cfg.PluginID = "declared"
 	}
-	return &Server{cfg: cfg, log: log.With("plugin", "staticinv")}
+	return &Server{cfg: cfg, log: log.With("plugin", "declared")}
 }
 
 func (s *Server) GetManifest(context.Context, *pluginv1.GetManifestRequest) (*pluginv1.GetManifestResponse, error) {
@@ -76,7 +76,7 @@ func (s *Server) Observe(_ *pluginv1.ObserveRequest, stream grpc.ServerStreaming
 	if err != nil {
 		return err
 	}
-	s.log.Info("static inventory enumerated", "path", s.cfg.Path, "hosts", len(entities))
+	s.log.Info("declared estate enumerated", "path", s.cfg.Path, "hosts", len(entities))
 	return stream.Send(&pluginv1.ObserveResponse{
 		Entities:         entities,
 		FullSync:         true,
@@ -84,7 +84,7 @@ func (s *Server) Observe(_ *pluginv1.ObserveRequest, stream grpc.ServerStreaming
 	})
 }
 
-// hostFile is the static-inventory boundary Contract (ADR-0056 §5): the plugin's
+// hostFile is the declared-estate boundary Contract (ADR-0056 §5): the plugin's
 // OWN minimal file format, strict-decoded — NOT a universal host ontology (§1.1).
 type hostFile struct {
 	Hosts []hostEntry `yaml:"hosts"`
@@ -101,7 +101,7 @@ type hostEntry struct {
 func enumerate(dir string) ([]*pluginv1.ObservedEntity, error) {
 	dirents, err := os.ReadDir(dir)
 	if err != nil {
-		return nil, fmt.Errorf("staticinv: read inventory dir %s: %w", dir, err)
+		return nil, fmt.Errorf("declared: read inventory dir %s: %w", dir, err)
 	}
 	var files []string
 	for _, e := range dirents {
@@ -118,22 +118,22 @@ func enumerate(dir string) ([]*pluginv1.ObservedEntity, error) {
 		path := filepath.Join(dir, name)
 		raw, err := os.ReadFile(path)
 		if err != nil {
-			return nil, fmt.Errorf("staticinv: read %s: %w", path, err)
+			return nil, fmt.Errorf("declared: read %s: %w", path, err)
 		}
 		dec := yaml.NewDecoder(strings.NewReader(string(raw)))
 		dec.KnownFields(true) // reject unknown keys — the file is a pinned boundary, not free-form
 		var hf hostFile
 		if err := dec.Decode(&hf); err != nil {
-			return nil, fmt.Errorf("staticinv: %s: %w", name, err)
+			return nil, fmt.Errorf("declared: %s: %w", name, err)
 		}
 		for i, h := range hf.Hosts {
 			ent, err := normalize(h)
 			if err != nil {
-				return nil, fmt.Errorf("staticinv: %s host %d: %w", name, i, err)
+				return nil, fmt.Errorf("declared: %s host %d: %w", name, i, err)
 			}
 			fqdn := ent.GetIdentityKeys()["dns.fqdn"]
 			if prev, dup := seen[fqdn]; dup {
-				return nil, fmt.Errorf("staticinv: duplicate host %q (declared in %s and %s); dns.fqdn is the identity key", fqdn, prev, name)
+				return nil, fmt.Errorf("declared: duplicate host %q (declared in %s and %s); dns.fqdn is the identity key", fqdn, prev, name)
 			}
 			seen[fqdn] = name
 			out = append(out, ent)

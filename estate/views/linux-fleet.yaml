@@ -1,6 +1,6 @@
 # The linux-fleet View — the GROUP (an L2-construct target, ADR-0055). Selects
 # every host Entity labeled os=linux, wherever it was projected FROM (vSphere,
-# Terraform/OpenTofu, Crossplane, or the static-inventory Connector) — the group
+# Terraform/OpenTofu, Crossplane, or the declared-estate Connector) — the group
 # is landscape-neutral; the label is set by whichever Syncer observes the host.
 name: linux-fleet
 selector:

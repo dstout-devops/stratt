@@ -68,12 +68,12 @@ same `homegate.Supervise(host.Register, host.SyncLoop)` path env wiring uses tod
 declared in `sources/` **supersedes** the env block of the same `Source.Name`; undeclared connectors keep env
 wiring until every connector is declared, at which point the per-connector env blocks are deleted.
 
-**5. A file/Git-backed static-inventory Connector** (`plugins/staticinv`) — a real Syncer over the port whose
+**5. A file/Git-backed declared-estate Connector** (`plugins/declared`) — a real Syncer over the port whose
 system-of-record is a host-list file in the estate repo (`estate/hosts/*.yaml`, keyword `hosts:`). It is the
 charter-clean answer to "devices via code": it writes only through `NormalizerProjector.UpsertEntities` with
 `WriterSyncer` provenance (the sole legal §1.2 seam, already proven by `stratt-dev-seed`), and the file is the
 authoritative external SoR (Stratt projects it, never writes back). No create-device API; the graph stays
-rebuildable. **The host-list file schema is the `plugins/staticinv` Connector's own boundary Contract projecting
+rebuildable. **The host-list file schema is the `plugins/declared` Connector's own boundary Contract projecting
 into named Facets (§1.1) — NOT a generic whole-host document schema; "devices via code" must never become a
 universal host ontology.** **Removing a host from the file does NOT silently tombstone its Entities**: it raises
 an orphan/decommission **Finding**, max-delta-gated (§4.3), so a Git edit can never silently delete estate — a
@@ -88,7 +88,7 @@ stack applies.
 
 - **§1.2 — not a writable CMDB, not a second truth.** `sources/` adds routing/authority *metadata*, not an
   Entity store. Every Entity still arrives via a Normalizer/Run-provenance write; the external system (or the
-  static-inventory *file*) stays authoritative. No create-device API is introduced.
+  declared-estate *file*) stays authoritative. No create-device API is introduced.
 - **§2 — frozen vocabulary.** Uses Source/Connector Named Kinds only; new *directory* `sources/`, not a new
   Kind. `vocabulary-linter` gates synonyms (`inventory`/`provider`/`binding`/`registration`/`resource`) and the
   overloaded `grant` noun in keys/dirs/CLI nouns/DB/API, and keeps the host-list keyword `hosts:`. "Binding" and
@@ -125,12 +125,12 @@ stack applies.
 ## Reviews
 
 - **charter-guardian (2026-07-17): SOUND-WITH-CHANGES.** Decision 2 (SoR at Facet/identity granularity; scalar
-  `Kind→owner` is a parse error) matches the data-layer reality (`ErrOwnerConflict`); the static-inventory
+  `Kind→owner` is a parse error) matches the data-layer reality (`ErrOwnerConflict`); the declared-estate
   Connector is the charter-clean "devices via code" (authoritative file + `WriterSyncer`-only projection), not a
   writable CMDB. **Must-fixes (folded):** (1) the title's "per-object-type Source binding" encoded the rejected
   `Kind→owner` model — retitled "declaring Sources & Connectors in Git"; (2) the host-removal semantics
   contradicted the follow-up — resolved to **orphan/decommission Finding, max-delta-gated, never a silent
-  tombstone** in both places. **Flags (folded):** the static-inventory file schema is pinned to the Connector's
+  tombstone** in both places. **Flags (folded):** the declared-estate file schema is pinned to the Connector's
   boundary Contract into named Facets (not a universal host ontology, §1.1); overlapping `facetNamespaces`
   across two `sources/` docs now fails at plan time (§2.1 `ErrOwnerConflict` at CaC time); the CaC surface
   exposes `connector:`, **never** a `grant` keyword (reserved for the §2.5 authz plane) — `binding`/`grant` stay

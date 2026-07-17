@@ -688,7 +688,7 @@ func run(ctx context.Context, log *slog.Logger) error {
 		log.Info("no vCenter plugin configured (STRATT_VCENTER_PLUGIN_ADDR empty); syncer idle")
 	}
 
-	// ── static-inventory Syncer plugin over the port (ADR-0056 §5) ───────────
+	// ── declared-estate Syncer plugin over the port (ADR-0056 §5) ───────────
 	// Devices-as-code: the plugin's system-of-record is a host-list file shipped
 	// with the estate (estate/hosts/*.yaml). It projects existence + dns.fqdn
 	// identity + labels; the FILE is authoritative and Stratt never writes back
@@ -696,21 +696,21 @@ func run(ctx context.Context, log *slog.Logger) error {
 	// plugin declares none) and NO tombstone scheme, so a host dropped from the
 	// file is never silently deleted (§5). Grant assembled from env here — the
 	// Phase-0 stand-in for the sources/ CaC grant (ADR-0056 decisions 1–4).
-	if addr := os.Getenv("STRATT_STATICINV_PLUGIN_ADDR"); addr != "" {
-		sourceName := env("STRATT_STATICINV_SOURCE_NAME", "staticinv")
-		interval, err := time.ParseDuration(env("STRATT_STATICINV_INTERVAL", "30s"))
+	if addr := os.Getenv("STRATT_DECLARED_PLUGIN_ADDR"); addr != "" {
+		sourceName := env("STRATT_DECLARED_SOURCE_NAME", "declared")
+		interval, err := time.ParseDuration(env("STRATT_DECLARED_INTERVAL", "30s"))
 		if err != nil {
-			return fmt.Errorf("staticinv interval: %w", err)
+			return fmt.Errorf("declared interval: %w", err)
 		}
 		conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
 		if err != nil {
-			return fmt.Errorf("staticinv plugin dial %s: %w", addr, err)
+			return fmt.Errorf("declared plugin dial %s: %w", addr, err)
 		}
 		defer conn.Close()
 		grant := pluginhost.Grant{
-			PluginIdentity: env("STRATT_STATICINV_PLUGIN_ID", "staticinv"),
-			Tier:           pluginhost.Tier(env("STRATT_STATICINV_TIER", "trusted")),
-			Source:         types.Source{Kind: "staticinv", Name: sourceName, Endpoint: env("STRATT_STATICINV_PATH", "file:///hosts")},
+			PluginIdentity: env("STRATT_DECLARED_PLUGIN_ID", "declared"),
+			Tier:           pluginhost.Tier(env("STRATT_DECLARED_TIER", "trusted")),
+			Source:         types.Source{Kind: "declared", Name: sourceName, Endpoint: env("STRATT_DECLARED_PATH", "file:///hosts")},
 			LabelKeys:      []string{"os", "role", "tier"},
 			// dns.fqdn is a shared cross-source scheme: honored because the grant
 			// lists it AND the tier is trusted (finding #4). No FacetNamespaces and
@@ -722,7 +722,7 @@ func run(ctx context.Context, log *slog.Logger) error {
 			return host.SyncLoop(cctx, interval)
 		}))
 	} else {
-		log.Info("no static-inventory plugin configured (STRATT_STATICINV_PLUGIN_ADDR empty); syncer idle")
+		log.Info("no declared-estate plugin configured (STRATT_DECLARED_PLUGIN_ADDR empty); syncer idle")
 	}
 
 	// ── MS Graph device Syncer over the port (ADR-0046/0047 Phase C cutover) ─

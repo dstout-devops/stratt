@@ -64,7 +64,7 @@ spec:
               value: {{ $v | quote }}
             {{- end }}
           resources: {{- toYaml ($.Values.pluginResources | default $.Values.resources) | nindent 12 }}
-          {{- /* estateHosts: a file-backed Syncer (static-inventory, ADR-0056 §5)
+          {{- /* estateHosts: a file-backed Syncer (declared-estate, ADR-0056 §5)
                  needs the estate's hosts/ files. Mount ONLY those keys from the
                  inline declarations ConfigMap (least privilege — not the whole
                  estate) at /hosts. Dev/inline path; prod delivers via git-sync. */ -}}

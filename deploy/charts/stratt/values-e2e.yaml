@@ -38,22 +38,22 @@ declarations:
 
 # The Syncer plugins, deployed in-cluster and dialed by strattd.
 plugins:
-  # Static-inventory (devices-as-code, ADR-0056 §5): projects estate/hosts/*.yaml
+  # Declared estate (devices-as-code, ADR-0056 §5): projects estate/hosts/*.yaml
   # as `host` Entities. `estateHosts: true` mounts just the hosts/ keys from the
   # declarations ConfigMap at /hosts. hostEnv wires strattd's syncer for it
-  # (STRATT_STATICINV_PLUGIN_ADDR is auto-derived from the name).
-  - name: staticinv
+  # (STRATT_DECLARED_PLUGIN_ADDR is auto-derived from the name).
+  - name: declared
     image:
-      repository: stratt-plugin-staticinv
+      repository: stratt-plugin-declared
       tag: dev
       digest: ""
-      pullPolicy: Never # kind-loaded (task image:staticinv-plugin)
+      pullPolicy: Never # kind-loaded (task image:declared-plugin)
     estateHosts: true
     env:
-      STRATT_STATICINV_PATH: /hosts
+      STRATT_DECLARED_PATH: /hosts
     hostEnv:
-      STRATT_STATICINV_SOURCE_NAME: staticinv-dev
-      STRATT_STATICINV_INTERVAL: "15s"
+      STRATT_DECLARED_SOURCE_NAME: declared-dev
+      STRATT_DECLARED_INTERVAL: "15s"
   - name: vcenter
     image:
       repository: stratt-plugin-vcenter

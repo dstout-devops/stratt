@@ -1,4 +1,4 @@
-package staticinv
+package declared
 
 import (
 	"context"
@@ -56,7 +56,7 @@ hosts:
 			t.Errorf("entity missing dns.fqdn identity: %+v", e)
 		}
 		if len(e.GetFacets()) != 0 {
-			t.Errorf("static inventory must project NO facet (§1.1), got %v", e.GetFacets())
+			t.Errorf("declared estate must project NO facet (§1.1), got %v", e.GetFacets())
 		}
 		byFQDN[fqdn] = e
 	}

@@ -368,11 +368,11 @@ tasks:
       - docker build -f plugins/vcenter/Dockerfile -t stratt-plugin-vcenter:dev .
       - go run sigs.k8s.io/kind@v{{.KIND_VER}} load docker-image stratt-plugin-vcenter:dev --name {{.KIND_CLUSTER}}
 
-  image:staticinv-plugin:
-    desc: Build the static-inventory gRPC Syncer plugin image and load it into the kind cluster
+  image:declared-plugin:
+    desc: Build the declared-estate gRPC Syncer plugin image and load it into the kind cluster
     cmds:
-      - docker build -f plugins/staticinv/Dockerfile -t stratt-plugin-staticinv:dev .
-      - go run sigs.k8s.io/kind@v{{.KIND_VER}} load docker-image stratt-plugin-staticinv:dev --name {{.KIND_CLUSTER}}
+      - docker build -f plugins/declared/Dockerfile -t stratt-plugin-declared:dev .
+      - go run sigs.k8s.io/kind@v{{.KIND_VER}} load docker-image stratt-plugin-declared:dev --name {{.KIND_CLUSTER}}
 
   images:control-plane:
     desc: Build the CONTROL-PLANE images (no push/load) — the CI regression gate. Plugins & the EE image build in their OWN units (each plugin is its own build/CI unit, ADR-0046) — core CI never builds per-plugin (it must scale to hundreds of plugins).
@@ -427,7 +427,7 @@ tasks:
       - task: image:kind-load
       - task: dev:ee:build
       - task: image:vcenter-plugin
-      - task: image:staticinv-plugin
+      - task: image:declared-plugin
       - task: dev:install
 
   dev:stack:down:
@@ -466,7 +466,7 @@ tasks:
       - go run ./cmd/stratt-dev-assert -mode=syncer -context={{.KIND_CONTEXT}}
 
   e2e:plugin:devices:
-    desc: Prove devices-as-code — estate/hosts/*.yaml projects into the linux-fleet View via the static-inventory plugin (needs dev:stack:up)
+    desc: Prove devices-as-code — estate/hosts/*.yaml projects into the linux-fleet View via the declared-estate plugin (needs dev:stack:up)
     dir: core
     cmds:
       - go run ./cmd/stratt-dev-assert -mode=devices -context={{.KIND_CONTEXT}}

@@ -1,9 +1,9 @@
-// The static-inventory Syncer plugin (ADR-0056 §5) — "devices as code". Its
+// The declared-estate Syncer plugin (ADR-0056 §5) — "devices as code". Its
 // system-of-record is a host-list file in the estate repo; it projects `host`
 // Entities over the sovereign plugin port and imports NOTHING from core/ (the
 // module-isolation discipline, ADR-0046). The leanest possible plugin: the SDK,
 // gRPC, and a YAML parser.
-module github.com/dstout-devops/stratt/plugins/staticinv
+module github.com/dstout-devops/stratt/plugins/declared
 
 go 1.25.0
 

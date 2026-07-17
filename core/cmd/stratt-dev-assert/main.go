@@ -11,7 +11,7 @@
 //	                 `vm` Entities (GET /views/dev-vms/entities), then launch a
 //	                 `script` Run against those REAL targets and assert success.
 //	-mode=devices  : assert the devices-as-code loop (ADR-0056 §5) — hosts declared
-//	                 in estate/hosts/*.yaml are projected by the static-inventory
+//	                 in estate/hosts/*.yaml are projected by the declared-estate
 //	                 Syncer plugin and selected by the linux-fleet View.
 //
 // Exit 0 = green. Any assertion failure is fatal (non-zero).
@@ -114,7 +114,7 @@ func assertSyncer(c *apiClient, cs *kubernetes.Clientset, ns string) {
 }
 
 // assertDevices proves the devices-as-code loop (ADR-0056 §5): hosts declared in
-// estate/hosts/*.yaml are projected by the static-inventory Syncer plugin and
+// estate/hosts/*.yaml are projected by the declared-estate Syncer plugin and
 // selected by the linux-fleet View (kinds:[host], labels:{os:linux}) — the whole
 // path from a Git file to a drift-checkable graph member, no writable CMDB. The
 // View's os:linux selector means every member it returns already carries the
@@ -130,9 +130,9 @@ func assertDevices(c *apiClient) {
 		time.Sleep(3 * time.Second)
 	}
 	if n < want {
-		log.Fatalf("static-inventory plugin projected %d hosts into linux-fleet, want >= %d (estate/hosts → host Entities → View)", n, want)
+		log.Fatalf("declared-estate plugin projected %d hosts into linux-fleet, want >= %d (estate/hosts → host Entities → View)", n, want)
 	}
-	log.Printf("✓ static-inventory Syncer projected %d Git-declared hosts into linux-fleet (devices-as-code)", n)
+	log.Printf("✓ declared-estate Syncer projected %d Git-declared hosts into linux-fleet (devices-as-code)", n)
 }
 
 func assertJobRan(cs *kubernetes.Clientset, ns, runID string) {
