@@ -5,3 +5,8 @@ tuples:
   - { user: principal:dev-runner, relation: runner, object: view:linux-fleet }
   - { user: principal:dev-runner, relation: runner, object: view:web-hosts }
   - { user: principal:dev-runner, relation: runner, object: view:secure-hosts }
+  # Plugin-e2e target Views (dev-hosts = the seeded synthetic target; dev-vms =
+  # the vcenter Syncer's projected vcsim VMs). The dev-runner launches the
+  # actuator/syncer Runs against these — the runner-on-View gate at the door.
+  - { user: principal:dev-runner, relation: runner, object: view:dev-hosts }
+  - { user: principal:dev-runner, relation: runner, object: view:dev-vms }

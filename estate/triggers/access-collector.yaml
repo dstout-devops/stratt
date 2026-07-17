@@ -12,6 +12,11 @@
 # is the operator-tunable part (structurally valid, not e2e-run this slice).
 name: access-collector
 kind: schedule
+# Environment scope (ADR-0057): the production slice. This scheduled gather Run
+# targets the secure-hosts fleet, which only exists where real hosts are
+# projected — not in the dev cell — so a dev daemon (STRATT_ENVIRONMENT=dev)
+# skips it instead of firing ansible against an empty View. Untag to run everywhere.
+environments: [prod]
 cron: "*/15 * * * *"
 viewName: secure-hosts
 principal: svc-collector

@@ -31,3 +31,18 @@ declarative constructs (the useful half of AWS CDK — see ADR-0055):
   (ansible)`. The provision Step's `action` is the **landscape binding** — `awsec2/create-vm` in dev, swappable
   for a `crossplane`/`opentofu`/`vsphere` Action without touching the rest of the estate. Provisioning is
   **gated** (§5 Flow 1 — never a silent auto-launch). Cert (certissuer) + app (helm) Steps are the next slice.
+
+## Environment slices ([ADR-0057](../docs/adr/0057-environment-scoped-reconciliation.md))
+One estate tree, many logical slices. A daemon carries an active `STRATT_ENVIRONMENT`; a launching
+declaration (Assignment · Trigger · Baseline) reconciles only where its `environments:` list contains that
+value (untagged ⇒ every environment). Empty `STRATT_ENVIRONMENT` ⇒ unscoped (reconciles everything).
+
+The four Triggers under `triggers/` are tagged `environments: [prod]` — each fires a Run needing a plugin or
+target set the dev cell doesn't run (certissuer, real host fleets, the Salt event bus). So the **turnkey dev
+stack** (`values-e2e`, `STRATT_ENVIRONMENT=dev`) reconciles the whole estate but launches **none** of them:
+no cross-env schedule noise, and — data-layer-scoped — they are never prune targets either. Scoping is a
+boolean membership filter, never precedence (§2.4); Views/Workflows are reached only through a scoped kind and
+are never filtered. `task dev:stage-estate` stages this tree into the inline-declarations ConfigMap.
+
+> `views/dev-hosts.yaml` + `views/dev-vms.yaml` and their `dev-runner` grants are the **plugin-e2e** target
+> Views (the seeded synthetic host; the vcenter Syncer's vcsim VMs). Untagged ⇒ present in every slice.

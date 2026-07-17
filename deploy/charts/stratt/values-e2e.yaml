@@ -16,8 +16,16 @@ openfga:
 
 devPrincipalHeader: true
 
-# Inline dev CaC checkout (chart-rendered ConfigMap): the dev-hosts / dev-vms
-# Views + the dev-runner `runner` grants under dev/declarations/**.
+# Active environment (ADR-0057): reconcile the DEV slice of the estate. The
+# estate's four production-slice Triggers (cert-reconcile-web, the two ansible
+# collectors, salt-minion-start) are tagged `environments: [prod]`, so this
+# daemon never launches them (and, data-layer-scoped, never prunes them) — no
+# cross-env schedule noise. The plugin-e2e fixtures are untagged ⇒ in every env.
+environment: dev
+
+# Inline CaC checkout (chart-rendered ConfigMap): the whole reconciled /estate,
+# staged into dev/declarations/** by `task dev:stage-estate`. Carries the
+# dev-hosts / dev-vms plugin-e2e Views + the dev-runner `runner` grants.
 declarations:
   gitSync:
     enabled: false

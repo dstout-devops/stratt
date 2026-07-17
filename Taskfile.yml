@@ -321,7 +321,7 @@ tasks:
 
   chart:lint:
     desc: Lint + render the Helm chart (ADR-0013)
-    deps: [tools:helm]
+    deps: [tools:helm, dev:stage-estate]
     cmds:
       - "{{.HELM}} lint deploy/charts/stratt"
       - "{{.HELM}} template stratt deploy/charts/stratt > /dev/null"
@@ -375,9 +375,19 @@ tasks:
       - docker build -f deploy/docker/stratt-agent.Dockerfile -t stratt/stratt-agent:ci .
       - docker build -f deploy/docker/stratt-forwarder.Dockerfile -t stratt/stratt-forwarder:ci .
 
+  dev:stage-estate:
+    desc: Stage the reconciled /estate into the chart's inline-declarations path (Helm can't glob outside the chart)
+    cmds:
+      # /estate is the single source of truth; this git-ignored copy is what the
+      # inline-declarations ConfigMap globs. Mirror exactly (delete-extraneous) so
+      # a removed declaration doesn't linger in the staged tree.
+      - rm -rf {{.ROOT_DIR}}/deploy/charts/stratt/dev/declarations
+      - mkdir -p {{.ROOT_DIR}}/deploy/charts/stratt/dev/declarations
+      - cp -R {{.ROOT_DIR}}/estate/. {{.ROOT_DIR}}/deploy/charts/stratt/dev/declarations/
+
   dev:install:
     desc: Helm-install strattd (+ in-cluster plugins) into kind, wired to the compose substrate (idempotent)
-    deps: [tools:helm, tools:kubectl]
+    deps: [tools:helm, tools:kubectl, dev:stage-estate]
     vars:
       GW:
         sh: |

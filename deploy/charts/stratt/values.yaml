@@ -171,10 +171,11 @@ declarations:
     existingSecret: ""
   interval: "30s"
   maxPruneFraction: "" # "" ⇒ controller default 0.5
-  # inline delivers a small CaC checkout as a chart-rendered ConfigMap (no git
-  # server, no baked image) — the dev/e2e path. The fixtures live under the
-  # chart at dev/declarations/**; keys are restored to their nested paths on
-  # mount. Mutually exclusive with gitSync (git-sync is the production path).
+  # inline delivers a CaC checkout as a chart-rendered ConfigMap (no git server,
+  # no baked image) — the dev/e2e path. The reconciled /estate is staged under
+  # the chart at dev/declarations/** by `task dev:stage-estate`; keys are restored
+  # to their nested paths on mount. Mutually exclusive with gitSync (git-sync is
+  # the production path).
   inline:
     enabled: false
     interval: "30s"

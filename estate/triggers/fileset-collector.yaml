@@ -12,6 +12,11 @@
 # fast-follow (ADR-0036).
 name: fileset-collector
 kind: schedule
+# Environment scope (ADR-0057): the production slice. This scheduled gather Run
+# targets the web-hosts fleet, which only exists where real hosts are projected —
+# not in the dev cell — so a dev daemon (STRATT_ENVIRONMENT=dev) skips it instead
+# of firing ansible against an empty View. Untag to run everywhere.
+environments: [prod]
 cron: "*/15 * * * *"
 viewName: web-hosts
 principal: svc-collector

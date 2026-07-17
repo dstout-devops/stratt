@@ -18,6 +18,11 @@
 # against its OWN broker; material never crosses the core, §2.5).
 name: cert-reconcile-web
 kind: schedule
+# Environment scope (ADR-0057): the production slice. This fire runs the
+# certissuer Actuator against OpenBao for a real cert target — a plugin the dev
+# cell doesn't deploy — so a dev daemon (STRATT_ENVIRONMENT=dev) never launches
+# it (and, data-layer-scoped, never prunes it either). Untag to run everywhere.
+environments: [prod]
 cron: "0 */6 * * *" # every 6h — converge well inside renewBefore
 viewName: managed-certs
 principal: svc-cert-reconcile
