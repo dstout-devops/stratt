@@ -66,7 +66,9 @@ func (s *Store) ListBaselines(ctx context.Context) ([]types.Baseline, error) {
 		if err := json.Unmarshal(spec, &b); err != nil {
 			return nil, fmt.Errorf("graph: decode baseline spec: %w", err)
 		}
-		out = append(out, b)
+		if types.InScope(b.Environments, s.environment) { // env scope (ADR-0057)
+			out = append(out, b)
+		}
 	}
 	return out, rows.Err()
 }

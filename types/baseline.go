@@ -49,6 +49,10 @@ type Baseline struct {
 	// Framework tags the Findings (e.g. "cis") — "one kind, framework-
 	// tagged" (§2.4).
 	Framework string `json:"framework,omitempty"`
+	// Environments scopes this Baseline to a subset of environments (ADR-0057);
+	// empty = all. A compiled Baseline inherits its source Assignment's set so a
+	// dev-compiled Baseline is invisible to a prod daemon's prune.
+	Environments []string `json:"environments,omitempty"`
 
 	// ── facet-observation variant (compiler output, ADR-0023) ──────────────
 	// Mode selects the check machinery: "" (default) is a check Step (the

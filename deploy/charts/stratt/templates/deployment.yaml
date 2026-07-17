@@ -98,6 +98,10 @@ spec:
                   key: {{ .Values.cell.secretKey | default "cell-secret" }}
             {{- end }}
             {{- end }}
+            {{- if .Values.environment }}
+            - name: STRATT_ENVIRONMENT
+              value: {{ .Values.environment | quote }}
+            {{- end }}
             - name: STRATT_TEMPORAL_ADDRESS
               value: {{ .Values.temporal.address | quote }}
             - name: STRATT_TEMPORAL_NAMESPACE

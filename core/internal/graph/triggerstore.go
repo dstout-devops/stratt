@@ -67,7 +67,9 @@ func (s *Store) ListTriggers(ctx context.Context) ([]types.Trigger, error) {
 		if err := json.Unmarshal(spec, &t); err != nil {
 			return nil, fmt.Errorf("graph: decode trigger spec: %w", err)
 		}
-		out = append(out, t)
+		if types.InScope(t.Environments, s.environment) { // env scope (ADR-0057)
+			out = append(out, t)
+		}
 	}
 	return out, rows.Err()
 }

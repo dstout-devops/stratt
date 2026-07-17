@@ -87,6 +87,12 @@ func (c *Controller) reconcile(ctx context.Context, log *slog.Logger) {
 		return
 	}
 
+	// Environment scope (ADR-0057): a scoped daemon applies only its slice. The
+	// store's cac list reads are scoped identically, so the prune candidate set
+	// and the compiler see the same slice — out-of-scope declarations are neither
+	// applied nor pruned (the §1.2 data-layer partition, never a convention).
+	decls = ScopeToEnvironment(decls, c.Store.ActiveEnvironment())
+
 	plan, err := ComputePlan(ctx, c.Store, decls)
 	if err != nil {
 		log.Error("reconcile plan failed", "error", err)

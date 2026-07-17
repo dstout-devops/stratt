@@ -164,6 +164,10 @@ func run(ctx context.Context, log *slog.Logger) error {
 	// NATS-subject scoping are later ADR-0044 slices.)
 	cellID := env("STRATT_CELL_ID", types.LocalCell)
 	store.SetCell(cellID)
+	// Active environment (ADR-0057): a logical dev/staging/prod slice WITHIN this
+	// Cell. Empty = unscoped (reconciles every declaration, byte-identical to
+	// pre-ADR-0057). When set, the reconcile applies + prunes only its slice.
+	store.SetEnvironment(env("STRATT_ENVIRONMENT", ""))
 	// scopeTok is the Cell's NATS subject/stream scope token — the ONE string
 	// the hub and every Site agent derive identically from shared env so the two
 	// ends exchange on the same subjects (ADR-0044 slice 6). "" for LocalCell

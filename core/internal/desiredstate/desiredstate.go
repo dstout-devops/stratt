@@ -459,6 +459,7 @@ type triggerFile struct {
 	Principal       string         `yaml:"principal"`
 	WorkflowName    string         `yaml:"workflowName"`
 	FacetWriteScope []string       `yaml:"facetWriteScope"`
+	Environments    []string       `yaml:"environments"`
 }
 
 func parseTriggerFile(path string, raw []byte) (string, types.Trigger, error) {
@@ -478,6 +479,7 @@ func parseTriggerFile(path string, raw []byte) (string, types.Trigger, error) {
 		Actuator: f.Actuator, Params: f.Params,
 		Slices: f.Slices, CredentialRefs: f.CredentialRefs, Principal: f.Principal,
 		WorkflowName: f.WorkflowName, FacetWriteScope: f.FacetWriteScope,
+		Environments: f.Environments,
 	}
 	if err := ValidateTrigger(t); err != nil {
 		return "", types.Trigger{}, fmt.Errorf("desiredstate: %s: %w", path, err)
@@ -926,6 +928,7 @@ type baselineFile struct {
 	DampingObservations int            `yaml:"dampingObservations"`
 	RemediationWorkflow string         `yaml:"remediationWorkflow"`
 	Framework           string         `yaml:"framework"`
+	Environments        []string       `yaml:"environments"`
 	// FacetWriteScope is the Facet namespaces this Baseline's actuation may write
 	// back (ADR-0054): the effective allowlist is the actuator's grant ∩ this scope.
 	// Empty admits no facet write-back (tight default). Moot for the observation
@@ -988,7 +991,7 @@ func parseBaselineFile(path string, raw []byte) (string, types.Baseline, error) 
 		Cron: f.Cron, Paused: f.Paused, Severity: f.Severity,
 		DampingObservations: f.DampingObservations,
 		RemediationWorkflow: f.RemediationWorkflow, Framework: f.Framework,
-		Mode: f.Mode, FacetWriteScope: f.FacetWriteScope,
+		Mode: f.Mode, FacetWriteScope: f.FacetWriteScope, Environments: f.Environments,
 	}
 	for _, ef := range f.Expected {
 		exp, err := ef.toExpectation()
@@ -1731,6 +1734,38 @@ func (ds declSelector) toSelector() (types.ViewSelector, error) {
 }
 
 // ── plan / apply ─────────────────────────────────────────────────────────────
+
+// ScopeToEnvironment filters the parsed declarations to the apply-set in scope
+// for the active environment (ADR-0057), consistent with the store's env-scoped
+// list reads (which scope the prune candidates + the compiler). Only the
+// launching/active kinds (Assignment/Trigger/Baseline) carry an environment in
+// v1; Views/Workflows are targets reached only through a scoped kind and are not
+// independently scoped. env == "" (unscoped daemon) keeps everything unchanged.
+func ScopeToEnvironment(d Declarations, env string) Declarations {
+	if env == "" {
+		return d
+	}
+	assigns := make([]types.Assignment, 0, len(d.Assignments))
+	for _, a := range d.Assignments {
+		if types.InScope(a.Environments, env) {
+			assigns = append(assigns, a)
+		}
+	}
+	trigs := make([]types.Trigger, 0, len(d.Triggers))
+	for _, t := range d.Triggers {
+		if types.InScope(t.Environments, env) {
+			trigs = append(trigs, t)
+		}
+	}
+	bls := make([]types.Baseline, 0, len(d.Baselines))
+	for _, b := range d.Baselines {
+		if types.InScope(b.Environments, env) {
+			bls = append(bls, b)
+		}
+	}
+	d.Assignments, d.Triggers, d.Baselines = assigns, trigs, bls
+	return d
+}
 
 // ComputePlan diffs the declarations against the graph's current state
 // across every declared kind.

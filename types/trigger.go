@@ -54,4 +54,8 @@ type Trigger struct {
 	// Principal is the service identity the fired Runs execute as (§2.5);
 	// the dispatch-time `use` check applies to it exactly like an API launch.
 	Principal string `json:"principal,omitempty"`
+	// Environments scopes this Trigger to a subset of environments (ADR-0057);
+	// empty = all. A scoped daemon (STRATT_ENVIRONMENT) reconciles it only when
+	// in scope, so a dev cell never fires prod's schedules.
+	Environments []string `json:"environments,omitempty"`
 }

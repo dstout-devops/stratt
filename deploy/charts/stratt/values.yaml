@@ -77,6 +77,14 @@ cell:
   secretName: ""
   secretKey: "cell-secret"
 
+# ── active environment (ADR-0057) ───────────────────────────────────────────
+# The logical dev/staging/prod slice this daemon reconciles — a DIFFERENT axis
+# from cell (cell = physical residency; environment = logical slice within it).
+# Empty ⇒ unscoped: reconciles every declaration (byte-identical to pre-ADR-0057).
+# When set, the reconcile applies + prunes ONLY declarations tagged for this
+# environment (or untagged); a dev cell never fires prod's schedules.
+environment: ""
+
 # ── identity + authorization (ADR-0009) ─────────────────────────────────────
 oidc:
   issuer: ""

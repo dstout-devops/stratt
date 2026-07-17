@@ -388,6 +388,7 @@ func compiledBaseline(a types.Assignment, bp types.Blueprint, intent types.Inten
 		Selector:            &sel,
 		Expected:            []types.FacetExpectation{exp},
 		Claim:               route.Claim,
+		Environments:        a.Environments, // inherit env scope (ADR-0057): dev-compiled ⇒ invisible to prod prune
 		Cron:                "@every 1m",
 		Severity:            severityOr(bp.Severity),
 		DampingObservations: bp.DampingObservations,
