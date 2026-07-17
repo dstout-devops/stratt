@@ -368,6 +368,13 @@ tasks:
       - docker build -f plugins/vcenter/Dockerfile -t stratt-plugin-vcenter:dev .
       - go run sigs.k8s.io/kind@v{{.KIND_VER}} load docker-image stratt-plugin-vcenter:dev --name {{.KIND_CLUSTER}}
 
+  images:control-plane:
+    desc: Build the CONTROL-PLANE images (no push/load) — the CI regression gate. Plugins & the EE image build in their OWN units (each plugin is its own build/CI unit, ADR-0046) — core CI never builds per-plugin (it must scale to hundreds of plugins).
+    cmds:
+      - docker build -f deploy/docker/strattd.Dockerfile -t stratt/strattd:ci .
+      - docker build -f deploy/docker/stratt-agent.Dockerfile -t stratt/stratt-agent:ci .
+      - docker build -f deploy/docker/stratt-forwarder.Dockerfile -t stratt/stratt-forwarder:ci .
+
   dev:install:
     desc: Helm-install strattd (+ in-cluster plugins) into kind, wired to the compose substrate (idempotent)
     deps: [tools:helm, tools:kubectl]

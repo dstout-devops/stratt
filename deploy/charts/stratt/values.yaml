@@ -187,14 +187,6 @@ declarations:
 #     secretNamespace: ""               # when set, a confined get-Secrets Role there (SecretBroker, §2.5)
 plugins: []
 
-# ── vCenter Syncer connection defaults (consumed by a `plugins:` vcenter entry) ─
-vcenter:
-  url: ""
-  insecure: false
-  sourceName: "vcenter"
-  # Secret with `username` and `password` keys; required when url is set.
-  existingSecret: ""
-
 resources:
   requests:
     cpu: 100m

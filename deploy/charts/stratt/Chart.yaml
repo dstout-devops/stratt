@@ -7,7 +7,9 @@ description: >
   (§1.4); ADR-0013 records the posture. OpenFGA ships as an optional
   subchart (postgres engine, migrations run by its chart hook).
 type: application
-version: 0.1.0
+# 0.2.0: in-cluster gRPC plugins (`plugins:`), inline CaC declarations, and the
+# vcenter env-drift fix (STRATT_VCENTER_PLUGIN_ADDR) — see values.yaml.
+version: 0.2.0
 # appVersion tracks the strattd image line; pin digests in production (§7.3).
 appVersion: "0.1.0"
 dependencies:
