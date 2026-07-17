@@ -76,5 +76,11 @@ jobs:
           set -eu
           go install github.com/go-task/task/v3/cmd/task@v3.52.0
           echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+      - name: Install UI dependencies
+        # `task ci` → generate:check regenerates the UI OpenAPI types with
+        # openapi-typescript, a ui/ devDependency. Without node_modules the codegen
+        # step exits 127 (command not found). Install from the committed lockfile so
+        # the generated output is byte-reproducible against the pinned toolchain.
+        run: cd ui && npm ci
       - name: Run CI gate
         run: task ci
