@@ -20,6 +20,16 @@ vars:
   BUF_VER: "1.71.0"
   PROTOC_GEN_GO_VER: "1.36.11" # tracks google.golang.org/protobuf (pinned UP by k8s.io — see core/go.mod)
   PROTOC_GEN_GO_GRPC_VER: "1.5.1"
+  # Cluster tooling — pinned + installed to repo-local .bin/ so the dev stack
+  # stands up with ZERO manual installs beyond go+task (quarterly upgrade train).
+  KIND_VER: "0.32.0"
+  HELM_VER: "3.16.4"
+  KUBECTL_VER: "1.34.1" # within skew of the kind node (K8s N-2, §1.7)
+  BIN: "{{.ROOT_DIR}}/.bin"
+  HELM: "{{.ROOT_DIR}}/.bin/helm"
+  KUBECTL: "{{.ROOT_DIR}}/.bin/kubectl"
+  KIND_CLUSTER: "stratt-dev"
+  KIND_CONTEXT: "kind-stratt-dev"
 
 tasks:
   default:
@@ -193,13 +203,41 @@ tasks:
       - docker compose -f deploy/dev/docker-compose.yml logs -f --tail=50
 
   dev:kind:up:
-    desc: Create the kind dev cluster for the dispatcher (ADR-0007)
+    desc: Create the kind dev cluster for the dispatcher (ADR-0007) — idempotent, self-healing
+    deps: [tools:kubectl]
     cmds:
       # Pre-create kind's network with an explicit subnet — the devcontainer's
       # docker-in-docker default address pool is small, and kind reuses an
       # existing network named "kind" instead of allocating from the pool.
       - docker network inspect kind >/dev/null 2>&1 || docker network create --subnet 192.168.102.0/24 kind
-      - go run sigs.k8s.io/kind@v0.32.0 create cluster --config deploy/dev/kind.yaml
+      # Idempotent: only create when the cluster is absent (re-running the turnkey
+      # stack must never fail on an existing cluster).
+      - |
+        if go run sigs.k8s.io/kind@v{{.KIND_VER}} get clusters 2>/dev/null | grep -qx {{.KIND_CLUSTER}}; then
+          echo "kind cluster {{.KIND_CLUSTER}} already exists — skipping create"
+        else
+          go run sigs.k8s.io/kind@v{{.KIND_VER}} create cluster --config deploy/dev/kind.yaml
+        fi
+      - go run sigs.k8s.io/kind@v{{.KIND_VER}} export kubeconfig --name {{.KIND_CLUSTER}}
+      # Raise the host inotify limit FROM the privileged kind node (we can't sudo
+      # in the devcontainer, and this sysctl is host-global). The devcontainer
+      # default (128 instances) is too low for kube-proxy + CoreDNS, which crash
+      # with "too many open files" and take ClusterIP routing + DNS down with them.
+      # A real host/CI runner already has an adequate limit; this makes the
+      # constrained dev host self-sufficient. Idempotent.
+      - docker exec {{.KIND_CLUSTER}}-control-plane sysctl -w fs.inotify.max_user_instances=1024 fs.inotify.max_user_watches=1048576 >/dev/null
+      # If kube-proxy/CoreDNS already crashed under the old limit, bounce them so
+      # they restart under the raised one; then wait for the rollout (which handles
+      # the pod-recreation window, unlike `wait` which errors on no-match). DNS +
+      # ClusterIP must be healthy before strattd dispatch / plugin dials depend on them.
+      - |
+        set -eu
+        ready=$({{.KUBECTL}} --context {{.KIND_CONTEXT}} -n kube-system get pods -l k8s-app=kube-proxy -o jsonpath='{.items[*].status.containerStatuses[*].ready}' 2>/dev/null || true)
+        if ! echo "$ready" | grep -q true; then
+          {{.KUBECTL}} --context {{.KIND_CONTEXT}} -n kube-system rollout restart ds/kube-proxy deploy/coredns
+        fi
+      - "{{.KUBECTL}} --context {{.KIND_CONTEXT}} -n kube-system rollout status ds/kube-proxy --timeout=150s"
+      - "{{.KUBECTL}} --context {{.KIND_CONTEXT}} -n kube-system rollout status deploy/coredns --timeout=150s"
 
   dev:kind:down:
     desc: Delete the kind dev cluster
@@ -283,10 +321,131 @@ tasks:
 
   chart:lint:
     desc: Lint + render the Helm chart (ADR-0013)
+    deps: [tools:helm]
     cmds:
-      - helm lint deploy/charts/stratt
-      - helm template stratt deploy/charts/stratt > /dev/null
-      - helm template stratt deploy/charts/stratt -f deploy/charts/stratt/values-dev-kind.yaml > /dev/null
+      - "{{.HELM}} lint deploy/charts/stratt"
+      - "{{.HELM}} template stratt deploy/charts/stratt > /dev/null"
+      - "{{.HELM}} template stratt deploy/charts/stratt -f deploy/charts/stratt/values-dev-kind.yaml > /dev/null"
+      - "{{.HELM}} template stratt deploy/charts/stratt -f deploy/charts/stratt/values-dev-kind.yaml -f deploy/charts/stratt/values-e2e.yaml > /dev/null"
+
+  tools:helm:
+    desc: Install the pinned helm binary to .bin/ (idempotent; zero-manual bootstrap)
+    status:
+      - test "$({{.HELM}} version --short 2>/dev/null | sed 's/^v//; s/+.*//')" = "{{.HELM_VER}}"
+    cmds:
+      - mkdir -p {{.BIN}}
+      - |
+        set -eu
+        arch=$(uname -m); case "$arch" in x86_64) arch=amd64;; aarch64|arm64) arch=arm64;; esac
+        tmp=$(mktemp -d)
+        curl -fsSL "https://get.helm.sh/helm-v{{.HELM_VER}}-linux-${arch}.tar.gz" | tar -xz -C "$tmp"
+        install -m 0755 "$tmp/linux-${arch}/helm" "{{.HELM}}"
+        rm -rf "$tmp"
+
+  tools:kubectl:
+    desc: Install the pinned kubectl binary to .bin/ (idempotent; zero-manual bootstrap)
+    status:
+      - "{{.KUBECTL}} version --client 2>/dev/null | grep -q 'v{{.KUBECTL_VER}}'"
+    cmds:
+      - mkdir -p {{.BIN}}
+      - |
+        set -eu
+        arch=$(uname -m); case "$arch" in x86_64) arch=amd64;; aarch64|arm64) arch=arm64;; esac
+        curl -fsSL -o "{{.KUBECTL}}" "https://dl.k8s.io/release/v{{.KUBECTL_VER}}/bin/linux/${arch}/kubectl"
+        chmod +x "{{.KUBECTL}}"
+
+  dev:kind:gateway:
+    desc: Print the kind docker network's host gateway (compose substrate locus)
+    silent: true
+    cmds:
+      - |
+        gw=$(docker network inspect kind 2>/dev/null | grep -m1 '"Gateway"' | sed 's/.*: *"//; s/".*//')
+        echo "${gw:-192.168.102.1}"
+
+  image:vcenter-plugin:
+    desc: Build the vcenter gRPC Syncer plugin image and load it into the kind cluster
+    cmds:
+      - docker build -f plugins/vcenter/Dockerfile -t stratt-plugin-vcenter:dev .
+      - go run sigs.k8s.io/kind@v{{.KIND_VER}} load docker-image stratt-plugin-vcenter:dev --name {{.KIND_CLUSTER}}
+
+  dev:install:
+    desc: Helm-install strattd (+ in-cluster plugins) into kind, wired to the compose substrate (idempotent)
+    deps: [tools:helm, tools:kubectl]
+    vars:
+      GW:
+        sh: |
+          docker network inspect kind 2>/dev/null | grep -m1 '"Gateway"' | sed 's/.*: *"//; s/".*//'
+    cmds:
+      # Ensure the kubeconfig context exists (idempotent) before helm/kubectl.
+      - go run sigs.k8s.io/kind@v{{.KIND_VER}} export kubeconfig --name {{.KIND_CLUSTER}}
+      - |
+        set -eu
+        GW="{{.GW}}"; GW="${GW:-192.168.102.1}"
+        "{{.HELM}}" upgrade --install stratt {{.ROOT_DIR}}/deploy/charts/stratt \
+          --kube-context {{.KIND_CONTEXT}} -n stratt --create-namespace \
+          -f {{.ROOT_DIR}}/deploy/charts/stratt/values-dev-kind.yaml \
+          -f {{.ROOT_DIR}}/deploy/charts/stratt/values-e2e.yaml \
+          --set-string database.url="postgres://stratt:stratt-dev@${GW}:5432/stratt" \
+          --set-string nats.url="nats://${GW}:4222" \
+          --set-string temporal.address="${GW}:7233" \
+          --set-string "plugins[0].env.STRATT_VCENTER_URL=https://${GW}:8989/sdk" \
+          --set-string "plugins[0].hostEnv.STRATT_VCENTER_URL=https://${GW}:8989/sdk"
+      - "{{.KUBECTL}} --context {{.KIND_CONTEXT}} -n stratt rollout status deploy/stratt --timeout=180s"
+
+  dev:stack:up:
+    desc: Turnkey — substrate + kind + images + helm-install strattd & plugins, wait-ready (fully task-driven)
+    deps: [dev:kind:up]
+    cmds:
+      # Only the substrate the plugin e2e actually needs — Postgres (graph),
+      # NATS (bus), Temporal (orchestration), vcsim (the vcenter Syncer's SoR).
+      # Scoping this away from the full `dev:up` keeps the turnkey path off the
+      # kitchen-sink extras (zot registry, zitadel, …) a plugin run never touches.
+      - docker compose -f deploy/dev/docker-compose.yml up -d --wait postgres nats temporal vcsim
+      - task: image:kind-load
+      - task: dev:ee:build
+      - task: image:vcenter-plugin
+      - task: dev:install
+
+  dev:stack:down:
+    desc: Uninstall the stack release and stop the substrate (keep volumes)
+    cmds:
+      - go run sigs.k8s.io/kind@v{{.KIND_VER}} export kubeconfig --name {{.KIND_CLUSTER}} 2>/dev/null || true
+      - "{{.HELM}} uninstall stratt --kube-context {{.KIND_CONTEXT}} -n stratt 2>/dev/null || true"
+      - task: dev:down
+
+  dev:stack:nuke:
+    desc: Full teardown — uninstall, delete the kind cluster, and drop substrate volumes
+    cmds:
+      - task: dev:stack:down
+      - task: dev:kind:down
+      - task: dev:nuke
+
+  e2e:seed:
+    desc: Seed one synthetic dev-host Entity for the actuator e2e (Normalizer seam, §1.2)
+    dir: core
+    env:
+      STRATT_DATABASE_URL: '{{.STRATT_DATABASE_URL | default "postgres://stratt:stratt-dev@localhost:5432/stratt"}}'
+    cmds:
+      - go run ./cmd/stratt-dev-seed
+
+  e2e:plugin:actuator:
+    desc: Prove the script+ansible EE-Job Actuators run as governed K8s Jobs in kind (needs dev:stack:up)
+    dir: core
+    cmds:
+      - task: e2e:seed
+      - go run ./cmd/stratt-dev-assert -mode=actuator -context={{.KIND_CONTEXT}}
+
+  e2e:plugin:syncer:
+    desc: Prove the vcenter gRPC Syncer plugin projects vcsim Entities + actuator on real targets (needs dev:stack:up)
+    dir: core
+    cmds:
+      - go run ./cmd/stratt-dev-assert -mode=syncer -context={{.KIND_CONTEXT}}
+
+  e2e:plugin:
+    desc: Full functional plugin e2e in kind — actuator (EE-Job) + syncer (gRPC). Run after `task dev:stack:up`.
+    cmds:
+      - task: e2e:plugin:actuator
+      - task: e2e:plugin:syncer
 
   dev:ee:build:
     desc: Build the dev EE image and load it into the kind cluster

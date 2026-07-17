@@ -26,12 +26,19 @@ ARG VITE_OIDC_CLIENT_ID=""
 RUN npm run build
 
 # ── control plane ────────────────────────────────────────────────────────────
+# GOWORK=off: build the strattd binary from core/go.mod alone (the workspace's
+# sdk/plugins modules are NOT in this image's context — the control plane never
+# links them, ADR-0046). core's replace directives resolve types/contracts/packs/
+# sdk locally, so copy exactly those, and nothing tool-specific.
 FROM golang:1.26 AS build
 WORKDIR /src
-COPY go.work go.work.sum ./
+ENV GOWORK=off
 COPY types/ types/
+COPY contracts/ contracts/
+COPY packs/ packs/
+COPY sdk/ sdk/
 COPY core/ core/
-RUN go mod download
+RUN go -C core mod download
 RUN CGO_ENABLED=0 go build -C core -trimpath -ldflags "-s -w" -o /out/strattd ./cmd/strattd
 
 # ── runtime ──────────────────────────────────────────────────────────────────

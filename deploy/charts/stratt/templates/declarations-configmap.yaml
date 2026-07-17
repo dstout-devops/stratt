@@ -1,0 +1,19 @@
+{{- /*
+Inline CaC declarations (dev/e2e) — the git-server-free path (ADR-0013). The chart
+carries a small dev checkout under dev/declarations/**; each file is stored under a
+FLATTENED key (ConfigMap keys can't contain "/") and deployment.yaml restores the
+nested layout (views/…, authz/tuples.yaml) with volume items[].path. Gated on
+declarations.inline.enabled so it never renders in a production install.
+*/ -}}
+{{- if .Values.declarations.inline.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "stratt.fullname" . }}-declarations
+  labels: {{- include "stratt.labels" . | nindent 4 }}
+data:
+  {{- range $path, $bytes := .Files.Glob "dev/declarations/**" }}
+  {{ trimPrefix "dev/declarations/" $path | replace "/" "__" }}: |
+    {{- $.Files.Get $path | nindent 4 }}
+  {{- end }}
+{{- end }}
