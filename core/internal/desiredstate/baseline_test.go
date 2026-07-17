@@ -45,16 +45,14 @@ framework: cis
 		t.Fatalf("baseline: %+v", b)
 	}
 
-	// Rejections: the check must be read-only — `check` is the platform's flag,
-	// opentofu read-only is platform-FORCED (a DryRun plan over the port, so a
-	// declared mode is overridden, not policed), and only Actuators with check
-	// semantics are accepted (ADR-0019/0047).
+	// Rejections: structural invariants only. Baseline VALIDATION is now content-blind
+	// (ADR-0046): it no longer switches on tool name nor polices tool-specific params
+	// (a declared params.check is inert; a non-read-only actuator is rejected at LAUNCH
+	// by the DryRunnable capability gate, not here).
 	for name, doc := range map[string]string{
 		"missing cron":       "name: x\nviewName: v\nseverity: info\n",
 		"missing view":       "name: x\ncron: '* * * * *'\nseverity: info\n",
 		"bad severity":       "name: x\nviewName: v\ncron: '* * * * *'\nseverity: urgent\n",
-		"declared check":     "name: x\nviewName: v\ncron: '* * * * *'\nseverity: info\nparams: {check: false}\n",
-		"no check semantics": "name: x\nviewName: v\ncron: '* * * * *'\nseverity: info\nactuator: script\n",
 		"negative damping":   "name: x\nviewName: v\ncron: '* * * * *'\nseverity: info\ndampingObservations: -1\n",
 		"creds no principal": "name: x\nviewName: v\ncron: '* * * * *'\nseverity: info\ncredentialRefs: [c]\n",
 	} {
@@ -64,6 +62,17 @@ framework: cis
 		if _, err := ParseDir(bad); err == nil {
 			t.Fatalf("invalid baseline (%s) must be rejected", name)
 		}
+	}
+
+	// Content-blind acceptance: a declared (inert) params.check no longer trips a
+	// tool-name switch — validation names no tool. (The §1.5 params-Contract seam
+	// STAYS — a non-ansible actuator's params are still validated against its pinned
+	// input Contract, ADR-0046 finding #3 — so it is not asserted here.)
+	okDir := t.TempDir()
+	writeDecl(t, okDir, "v.yaml", "name: v\nselector: {kinds: [vm]}\n")
+	writeBaseline(t, okDir, "x.yaml", "name: x\nviewName: v\ncron: '* * * * *'\nseverity: info\nparams: {check: false}\n")
+	if _, err := ParseDir(okDir); err != nil {
+		t.Fatalf("content-blind validation must accept an inert declared params.check, got %v", err)
 	}
 
 	// baselines/ absent → valid (repos predating ADR-0019).

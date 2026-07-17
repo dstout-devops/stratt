@@ -1299,8 +1299,12 @@ components:
         viewName: { type: string }
         actuator:
           type: string
-          enum: [ansible, script, opentofu, mcp]
           default: ansible
+          description: >
+            Names the Actuator as an OPAQUE routing key (ADR-0046 — the spine
+            does not enumerate tools): any registered in-tree Actuator or plugin
+            Actuator. An unknown name fails the Run terminally at launch. Matches
+            the open-string workflow-step actuator field.
         action:
           type: string
           description: >
@@ -1647,8 +1651,12 @@ components:
         viewName: { type: string }
         actuator:
           type: string
-          enum: [ansible, opentofu]
           default: ansible
+          description: >
+            Names the Actuator as an OPAQUE routing key (ADR-0046). A baseline is
+            read-only by platform invariant, so the named Actuator must be
+            read-only-capable (a DryRunnable plugin) — an Actuator that cannot run
+            read-only is rejected terminally at launch, not by a closed enum here.
         params: { type: object }
         slices: { type: integer, format: int64 }
         credentialRefs:

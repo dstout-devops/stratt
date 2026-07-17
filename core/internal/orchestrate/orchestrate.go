@@ -44,6 +44,12 @@ import (
 // legacy "stratt-runs". Set once at startup before the worker/launch paths run.
 var TaskQueue = "stratt-runs"
 
+// defaultActuator is the platform default when a Step/Baseline names no Actuator —
+// the ONE canonical place the flagship's name lives (ADR-0046: the spine must not
+// scatter a specific tool name). Making the Actuator field required on the wire (and
+// dropping this default entirely) is the fuller dark-matter fix, tracked separately.
+const defaultActuator = "ansible"
+
 // RunInput starts one Run against a View. Actuator and Params are the Step
 // fields (§2.3: Step = Actuator + content + params); empty Actuator means
 // ansible (the Phase-0 default). Slices > 1 partitions the target set across
@@ -655,7 +661,7 @@ func (a *Activities) ResolveCredentials(ctx context.Context, in RunInput) ([]dis
 func (a *Activities) Execute(ctx context.Context, in RunInput, slice int, site string, resolved ResolvedTargets, creds []dispatch.CredentialMount) (dispatch.Result, error) {
 	name := in.Actuator
 	if name == "" {
-		name = "ansible"
+		name = defaultActuator
 	}
 	// ── Route: a plugin-provided Actuator applies over the port; else the pod ──
 	// The authz chokepoint is the runner-on-View grant (RunAgainstView, ADR-0028)
@@ -672,6 +678,15 @@ func (a *Activities) Execute(ctx context.Context, in RunInput, slice int, site s
 		// Unknown Actuator can never succeed — fail terminally, no retries.
 		return dispatch.Result{}, temporal.NewNonRetryableApplicationError(
 			fmt.Sprintf("no actuator registered as %q", name), "UnknownActuator", nil)
+	}
+	// In-tree pod Actuators are EFFECTFUL — they declare no read-only capability, so a
+	// dry-run (e.g. a baseline check, which the platform forces read-only) can never
+	// run through one. Reject rather than silently run live (§1.8). Read-only work
+	// belongs to a DryRunnable plugin Actuator; this is the capability gate the baseline
+	// path relies on now that it no longer switches on tool name (ADR-0046).
+	if in.DryRun {
+		return dispatch.Result{}, temporal.NewNonRetryableApplicationError(
+			fmt.Sprintf("actuator %q does not support dry-run (read-only)", name), "DryRunUnsupported", nil)
 	}
 	spec, err := act.Prepare(in.Params, resolved.Targets)
 	if err != nil {

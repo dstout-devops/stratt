@@ -1062,21 +1062,11 @@ func ValidateBaseline(b types.Baseline) error {
 		return fmt.Errorf("baseline %s: unknown mode %q (only %q, or empty for a check Step)", b.Name, b.Mode, types.FacetObservation)
 	}
 
-	actuator := b.Actuator
-	if actuator == "" {
-		actuator = "ansible"
-	}
-	switch actuator {
-	case "ansible":
-		if _, set := b.Params["check"]; set {
-			return fmt.Errorf("baseline %s: params.check is not declarable — the platform forces check mode on baseline checks", b.Name)
-		}
-	case "opentofu":
-		// Read-only is platform-forced (the DryRun plan verb over the port,
-		// ADR-0047) — no params.mode convention to declare or police.
-	default:
-		return fmt.Errorf("baseline %s: actuator %q has no read-only check semantics (ansible, opentofu)", b.Name, actuator)
-	}
+	// A baseline is read-only by platform INVARIANT — the launch path forces the
+	// DryRun bit and rejects any Actuator that can't honor it (its reconciled
+	// DryRunnable capability). Validation stays CONTENT-BLIND (ADR-0046): it does not
+	// switch on tool name nor police tool-specific params (e.g. an inert params.check
+	// the read-only shim ignores) — the seam is the Contract, not a tool roster.
 	if len(b.CredentialRefs) > 0 && b.Principal == "" {
 		return fmt.Errorf("baseline %s: credentialRefs require a principal", b.Name)
 	}

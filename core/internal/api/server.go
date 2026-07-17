@@ -647,7 +647,7 @@ func baselineToWire(b types.Baseline) Baseline {
 		out.CompiledFrom.Route = &r
 	}
 	if b.Actuator != "" {
-		a := BaselineActuator(b.Actuator)
+		a := b.Actuator
 		out.Actuator = &a
 	}
 	if b.Params != nil {
@@ -1256,11 +1256,9 @@ func (s *Server) StartRun(w http.ResponseWriter, r *http.Request) {
 		p.CredentialRefs = *body.CredentialRefs
 	}
 	if body.Actuator != nil {
-		if !body.Actuator.Valid() {
-			writeErr(w, http.StatusBadRequest, fmt.Sprintf("unknown actuator %q", *body.Actuator))
-			return
-		}
-		p.Actuator = string(*body.Actuator)
+		// Actuator is an OPAQUE routing key (ADR-0046): no closed-enum gate here.
+		// An unregistered name fails the Run terminally at launch (UnknownActuator).
+		p.Actuator = *body.Actuator
 	}
 	if body.Params != nil {
 		raw, err := json.Marshal(*body.Params)
@@ -1979,11 +1977,11 @@ func (s *Server) ListWorkflowRuns(w http.ResponseWriter, r *http.Request, params
 }
 
 // validateStepParams checks wire Step params against the Actuator's input
-// Contract (§1.5, ADR-0015). nil actuator means the ansible default.
-func validateStepParams(actuator *StartRunActuator, params *map[string]interface{}) error {
+// Contract (§1.5, ADR-0015). nil/empty actuator means the platform default.
+func validateStepParams(actuator *string, params *map[string]interface{}) error {
 	name := "ansible"
 	if actuator != nil && *actuator != "" {
-		name = string(*actuator)
+		name = *actuator
 	}
 	raw := json.RawMessage(`{}`)
 	if params != nil {

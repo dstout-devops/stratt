@@ -91,35 +91,20 @@ func checkRunInput(b types.Baseline) (RunInput, error) {
 	}
 	actuator := b.Actuator
 	if actuator == "" {
-		actuator = "ansible"
+		actuator = defaultActuator
 	}
-	dryRun := false
-	switch actuator {
-	case "ansible":
-		// Force read-only. The in-tree pod actuator reads params.check; the EE-Job
-		// transport (ADR-0051 MF6) reads the port DryRun bit and maps it to
-		// `--check --diff` in the shim — set BOTH so a baseline is read-only under
-		// either transport (the unused one is harmlessly ignored).
-		params["check"] = true
-		dryRun = true
-	case "opentofu":
-		// The platform FORCES read-only (a streaming dry-run plan) — no
-		// declaration can make a baseline converge. Over the port opentofu is a
-		// plugin Actuator (ADR-0047): read-only is the DryRun verb, not a
-		// params.mode convention (that was the in-tree pod actuator's shape).
-		dryRun = true
-	default:
-		return RunInput{}, temporal.NewNonRetryableApplicationError(
-			fmt.Sprintf("baseline %s: actuator %q has no read-only check semantics (ansible, opentofu)", b.Name, actuator),
-			"BaselineNotReadOnly", nil)
-	}
+	// A baseline is ALWAYS read-only — a platform INVARIANT, not a per-tool fact
+	// (ADR-0046: the spine never switches on tool name, no `if ansible {…}`). Force
+	// the port DryRun bit; read-only is the plugin's reconciled capability (VERB_PLAN
+	// → DryRunnable / the EE-Job shim's `--check`), and an Actuator that cannot honor
+	// it is rejected at LAUNCH by the DryRunnable gate — never by a name switch here.
 	raw, err := json.Marshal(params)
 	if err != nil {
 		return RunInput{}, err
 	}
 	return RunInput{
 		ViewName: b.ViewName, Actuator: actuator, Params: raw, Slices: b.Slices,
-		Baseline: b.Name, Principal: b.Principal, CredentialRefs: b.CredentialRefs, DryRun: dryRun,
+		Baseline: b.Name, Principal: b.Principal, CredentialRefs: b.CredentialRefs, DryRun: true,
 	}, nil
 }
 

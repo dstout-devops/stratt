@@ -189,6 +189,32 @@ func TestShim_SCMContentRef(t *testing.T) {
 	}
 }
 
+// TestShim_DryRunMapsToCheck is the conformance test the platform's read-only
+// invariant rests on (ADR-0046 Category B): the port DryRun bit MUST map to
+// ansible's `--check --diff`, for the inline-play path, so a baseline (which forces
+// DryRun) never mutates a target. Without DryRun, no --check is passed.
+func TestShim_DryRunMapsToCheck(t *testing.T) {
+	base := Request{Params: json.RawMessage(`{"play":"- hosts: all\n  tasks: []\n"}`), Targets: []Target{{Name: "h"}}}
+	for _, dry := range []bool{true, false} {
+		req := base
+		req.DryRun = dry
+		run := &captureRunner{rc: 0}
+		var buf bytes.Buffer
+		if err := Run(context.Background(), &buf, t.TempDir(), req, run, noClone(t)); err != nil {
+			t.Fatalf("run: %v", err)
+		}
+		var sawCheck bool
+		for _, a := range run.args {
+			if a == "--check --diff" {
+				sawCheck = true
+			}
+		}
+		if sawCheck != dry {
+			t.Fatalf("DryRun=%v must map to --check=%v, args=%v", dry, dry, run.args)
+		}
+	}
+}
+
 // TestShim_SCMValidation proves the argument-injection / path-traversal guards on the
 // SCM ref (a repo/ref beginning with '-' is a git option, not a URL; a playbook must
 // stay within the repo). Each rejects with a terminal fatal, never a clone.
