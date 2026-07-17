@@ -65,3 +65,4 @@ Status is `Accepted` unless noted. See **[../roadmap.md](../roadmap.md)** for ho
 | [0054](0054-per-step-facet-claim.md) | Per-Step facet write-scope: narrow the write-back grant to what a Step declares | Accepted |
 | [0055](0055-estate-composition.md) | Estate Composition: what it means to "define the estate" (north-star model + guardrails + gap roadmap) | Accepted |
 | [0056](0056-estate-as-code.md) | Estate-as-Code: declaring Sources & Connectors in Git + the `stratt` estate CLI | Accepted |
+| [0057](0057-environment-scoped-reconciliation.md) | Environment-scoped reconciliation: one estate repo, N environments | Proposed |
