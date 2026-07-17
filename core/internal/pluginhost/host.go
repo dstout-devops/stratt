@@ -610,6 +610,12 @@ type DerivedSchema struct {
 	SchemaID string
 	Rev      string
 	Schema   []byte
+	// Rung carries the wire DerivedContract.rung (ADR-0053 MF-1): the caller MUST
+	// branch on it — RUNG_DECLARED (3) pins BLOCKING at the given rev (mcp rung-3),
+	// RUNG_TOOL_DERIVED (2) auto-versions (tofu rung-2), UNSPECIFIED/unknown is a HARD
+	// REJECT (never a silent auto-version). Dropping it would silently absorb schema
+	// drift — the §1.5 violation. -1 is never a valid rung.
+	Rung int32
 }
 
 // RawApplyResult is the governed outcome of an Apply with NOTHING written to the
@@ -810,7 +816,11 @@ func (h *Host) govern(ctx context.Context, stream applyStream, resolved map[stri
 				h.reject(rej.Kind, rej.Detail, rej.Reason)
 				out.Rejections = append(out.Rejections, rej)
 			} else {
-				out.Derived = append(out.Derived, DerivedSchema{SchemaID: id, Rev: dc.GetRev(), Schema: dc.GetSchema()})
+				// Carry the rung (MF-1): the caller branches on it (rung-3 blocking pin /
+				// rung-2 auto-version / unknown reject) — never a silent default.
+				out.Derived = append(out.Derived, DerivedSchema{
+					SchemaID: id, Rev: dc.GetRev(), Schema: dc.GetSchema(), Rung: int32(dc.GetRung()),
+				})
 			}
 		}
 	}

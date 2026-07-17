@@ -22,7 +22,6 @@ import (
 
 	"github.com/dstout-devops/stratt/core/internal/actions"
 	"github.com/dstout-devops/stratt/core/internal/actuators"
-	mcpact "github.com/dstout-devops/stratt/core/internal/actuators/mcp"
 	"github.com/dstout-devops/stratt/core/internal/authz"
 	"github.com/dstout-devops/stratt/core/internal/cellrouter"
 	"github.com/dstout-devops/stratt/core/internal/dispatch"
@@ -33,6 +32,7 @@ import (
 	"github.com/dstout-devops/stratt/core/internal/pluginhost"
 	"github.com/dstout-devops/stratt/core/internal/siteproto"
 	"github.com/dstout-devops/stratt/core/internal/siterelay"
+	mcpcanon "github.com/dstout-devops/stratt/sdk/mcp"
 	pluginv1 "github.com/dstout-devops/stratt/sdk/stratt/plugin/v1"
 	"github.com/dstout-devops/stratt/types"
 )
@@ -1190,7 +1190,7 @@ func (a *Activities) ProjectFacts(ctx context.Context, runID string, facts FactS
 	// hashed; drift within a rev is ErrContractDrift — the Run fails
 	// visibly, and accepting the change is a Git act (bump rev).
 	for _, t := range facts.MCPTools {
-		hash, canonical, err := mcpact.CanonicalHash(t.Schema)
+		hash, canonical, err := mcpcanon.CanonicalHash(t.Schema)
 		if err != nil {
 			return temporal.NewNonRetryableApplicationError(
 				fmt.Sprintf("mcp tool %s/%s: %v", t.Server, t.Tool, err), "InvalidToolSchema", err)
@@ -1200,7 +1200,7 @@ func (a *Activities) ProjectFacts(ctx context.Context, runID string, facts FactS
 				fmt.Sprintf("mcp tool %s/%s: driver hash %s != control-plane hash %s (canonicalization mismatch)",
 					t.Server, t.Tool, t.Hash, hash), "CanonicalizationMismatch", nil)
 		}
-		if err := a.Store.RegisterMCPContract(ctx, mcpact.ContractName(t.Server, t.Tool), t.Rev, hash, canonical); err != nil {
+		if err := a.Store.RegisterMCPContract(ctx, mcpcanon.ContractName(t.Server, t.Tool), t.Rev, hash, canonical); err != nil {
 			if errors.Is(err, graph.ErrContractDrift) {
 				return temporal.NewNonRetryableApplicationError(err.Error(), "ContractDrift", err)
 			}
