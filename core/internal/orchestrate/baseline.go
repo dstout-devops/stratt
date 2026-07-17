@@ -96,7 +96,12 @@ func checkRunInput(b types.Baseline) (RunInput, error) {
 	dryRun := false
 	switch actuator {
 	case "ansible":
+		// Force read-only. The in-tree pod actuator reads params.check; the EE-Job
+		// transport (ADR-0051 MF6) reads the port DryRun bit and maps it to
+		// `--check --diff` in the shim — set BOTH so a baseline is read-only under
+		// either transport (the unused one is harmlessly ignored).
 		params["check"] = true
+		dryRun = true
 	case "opentofu":
 		// The platform FORCES read-only (a streaming dry-run plan) — no
 		// declaration can make a baseline converge. Over the port opentofu is a

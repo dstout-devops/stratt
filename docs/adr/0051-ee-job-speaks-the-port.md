@@ -130,3 +130,17 @@ the EE/shim is signed + trust-tiered like any plugin (§7.3).
   MF6 (check via port DryRun), MF7 (one credential authz path). Confirmed clean: content-blindness holds (typed
   decode ≠ interpretation; `ItemResult_Status` is the port's own vocabulary), the two credential injections are
   one §2.5 contract, and no permanent non-goal or banned identifier is breached.
+
+- **charter-guardian, pass 2 — the Phase 5a implementation (2026-07-17): SOUND-WITH-CHANGES → folded.** The
+  hub-local integration realizes "one governor, two transports": `dispatch.RunStream`/`followTyped` decode +
+  publish + relay, folding/gating nothing; `pluginhost.GovernStream` is the sole governor over both the gRPC and
+  the EE-Job channel-stream; the confused-deputy `resolved` set is core-held (MF1/MF4). The synthesized
+  `{"host.name": name}` is a per-run correlation LABEL, not a second identity truth — facts flow only through the
+  `res.Facts` (name→EntityID) channel via the core-held `resolved.Targets`, never an `UpsertEntities`-by-host.name
+  path (§1.2 upheld). Only CredentialRef **names** cross into the Job content (§2.5). One CHANGES-REQUIRED, folded:
+  **C1** — the K8s Job exit is a distinct MF5 signal, so `Succeeded = raw.Succeeded && jobOK` (a green terminal
+  followed by a non-zero exit reads NOT-OK, parity with the in-tree floor). Tracked follow-ups: **F1** — Phase 5b
+  must DELETE the in-tree `actuators/ansible` content-awareness (Phase 5a env-gates it as the pre-cutover
+  fallback; content-blindness is not *achieved* until the deletion lands, only *reachable*); **F2** — the MF3
+  grant is registration-static (matches the gRPC `PluginActuator` posture, not a regression); the tighter
+  per-Step *claimed-facet intersection* MF3 describes is a later refinement.

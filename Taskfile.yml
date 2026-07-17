@@ -291,7 +291,9 @@ tasks:
   dev:ee:build:
     desc: Build the dev EE image and load it into the kind cluster
     cmds:
-      - docker build -t stratt-ee:dev ee/
+      # Context is the repo root: the multi-stage build compiles the stratt-ansible
+      # shim (ADR-0051) from plugins/ansible + sdk before baking the EE runtime.
+      - docker build -f ee/Dockerfile -t stratt-ee:dev .
       - go run sigs.k8s.io/kind@v0.32.0 load docker-image stratt-ee:dev --name stratt-dev
 
   dev:ee-mcp:build:

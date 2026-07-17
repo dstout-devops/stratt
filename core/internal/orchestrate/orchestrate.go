@@ -18,6 +18,7 @@ import (
 	"go.temporal.io/sdk/activity"
 	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/workflow"
+	"google.golang.org/protobuf/encoding/protojson"
 
 	"github.com/dstout-devops/stratt/core/internal/actions"
 	"github.com/dstout-devops/stratt/core/internal/actuators"
@@ -32,6 +33,7 @@ import (
 	"github.com/dstout-devops/stratt/core/internal/pluginhost"
 	"github.com/dstout-devops/stratt/core/internal/siteproto"
 	"github.com/dstout-devops/stratt/core/internal/siterelay"
+	pluginv1 "github.com/dstout-devops/stratt/sdk/stratt/plugin/v1"
 	"github.com/dstout-devops/stratt/types"
 )
 
@@ -346,7 +348,18 @@ type PluginActuator struct {
 	// identical governance (the grant never leaves the hub, ADR-0049 V1).
 	Grant     pluginhost.Grant
 	PlanStore *planstore.Store
+	// JobCommand, when non-empty, marks this Actuator as the EE-JOB (subprocess)
+	// transport (ADR-0051): instead of a long-lived gRPC Apply, the core dispatches
+	// a K8s Job (the EE image) whose entrypoint is this command — a shim that speaks
+	// the port on stdout. The dispatcher forwards the typed stream; Host.GovernStream
+	// governs it hub-side with the SAME governor as the gRPC path (MF1). Host here
+	// carries only the Grant (its gRPC client is nil — the Job is the transport).
+	JobCommand []string
 }
+
+// jobTransport reports whether this Actuator runs as an EE-Job shim (ADR-0051)
+// rather than a long-lived gRPC plugin.
+func (p PluginActuator) jobTransport() bool { return len(p.JobCommand) > 0 }
 
 type Activities struct {
 	Store      *graph.Store
@@ -645,6 +658,9 @@ func (a *Activities) Execute(ctx context.Context, in RunInput, slice int, site s
 	// already enforced BEFORE this activity — NOT the Action path's credential
 	// use-check — so a plugin actuation Step may carry zero creds (guardian #4).
 	if pa, ok := a.PluginActuators[name]; ok {
+		if pa.jobTransport() {
+			return a.executeJobPlugin(ctx, in, slice, site, resolved, creds, pa)
+		}
 		return a.executePlugin(ctx, in, site, resolved, creds, pa)
 	}
 	act, ok := a.Actuators[name]
@@ -815,6 +831,135 @@ func (a *Activities) executePlugin(ctx context.Context, in RunInput, site string
 	// §2.2). The plugin's asserted schema_id/rev are advisory; the core owns naming.
 	if len(raw.Derived) > 0 {
 		res.OutputsContract = raw.Derived[0].Schema
+	}
+	return res, nil
+}
+
+// executeJobPlugin runs one Step slice through an EE-Job (subprocess) transport
+// Actuator (ADR-0051): the stratt-ansible shim, baked into the EE image, speaks the
+// port on stdout. The core dispatches the Job, the dispatcher forwards its typed
+// stream folding NOTHING (MF1/MF2), and the SAME hub-side governor as the gRPC path
+// (Host.GovernStream) gates it against the CORE-HELD resolved target set (MF4). The
+// on-disk Job content is the sovereign ApplyRequest — one request shape, both
+// transports. Nothing is projected here; the governed dispatch.Result flows to
+// CollectFacts → ProjectFacts (the single batched Run-provenance writer, §1.2).
+func (a *Activities) executeJobPlugin(ctx context.Context, in RunInput, slice int, site string, resolved ResolvedTargets, creds []dispatch.CredentialMount, pa PluginActuator) (dispatch.Result, error) {
+	// Dry-run refused CORE-SIDE from the reconciled capability (MF6 — a shim that
+	// silently ignored the check bit would run live side effects).
+	if in.DryRun && !pa.DryRunnable {
+		return dispatch.Result{}, temporal.NewNonRetryableApplicationError(
+			fmt.Sprintf("actuator %q does not support dry-run", in.Actuator), "DryRunUnsupported", nil)
+	}
+	// Phase 5a is hub-local: the EE-Job at a remote Site (streaming its typed stdout
+	// Site→hub for hub-side governance) is ADR-0051 Phase 6 (MF2). Fail visibly rather
+	// than silently run the flagship on the hub for Site-homed targets (§1.8).
+	if site != "" && site != types.LocalSite {
+		return dispatch.Result{}, temporal.NewNonRetryableApplicationError(
+			fmt.Sprintf("actuator %q (EE-Job transport) at Site %q is not yet wired (ADR-0051 Phase 6)", in.Actuator, site), "JobTransportSiteUnsupported", nil)
+	}
+	if pa.Host == nil {
+		return dispatch.Result{}, temporal.NewNonRetryableApplicationError(
+			fmt.Sprintf("actuator %q has no governing host", in.Actuator), "NoPluginHost", nil)
+	}
+
+	// The core-resolved target set crosses LEGIBLY (MF4): name + connection vars +
+	// a host.name identity key. The shim renders its inventory FROM these (never the
+	// playbook's self-reported hosts) and stamps the write-back with the same identity
+	// so gathered facts re-correlate to the resolved Entity hub-side.
+	targets := make([]pluginhost.ApplyTarget, 0, len(resolved.Targets))
+	ptargets := make([]*pluginv1.ApplyTarget, 0, len(resolved.Targets))
+	for _, t := range resolved.Targets {
+		ids := map[string]string{"host.name": t.Name}
+		targets = append(targets, pluginhost.ApplyTarget{Name: t.Name, Vars: t.Vars, IdentityKeys: ids})
+		ptargets = append(ptargets, &pluginv1.ApplyTarget{Name: t.Name, Vars: t.Vars, IdentityKeys: ids})
+	}
+	// Only the use-checked, authorized names cross (§2.5); material stays on the
+	// kubelet secretKeyRef mounts (MF7 — one authz chokepoint, injection at the pod).
+	credRefs := make([]*pluginv1.CredentialRef, 0, len(creds))
+	for _, c := range creds {
+		credRefs = append(credRefs, &pluginv1.CredentialRef{Name: c.RefName})
+	}
+	// The Job content is the sovereign ApplyRequest (proto-JSON) — the SAME shape the
+	// gRPC transport sends, so one request contract serves both transports.
+	applyReq := &pluginv1.ApplyRequest{
+		Envelope: &pluginv1.Envelope{Principal: &pluginv1.Principal{Id: in.Principal, Kind: "user"}, Creds: credRefs},
+		Desired:  &pluginv1.Payload{Bytes: in.Params},
+		DryRun:   in.DryRun,
+		Targets:  ptargets,
+	}
+	reqBytes, err := protojson.Marshal(applyReq)
+	if err != nil {
+		return dispatch.Result{}, temporal.NewNonRetryableApplicationError(err.Error(), "InvalidStepParams", err)
+	}
+	spec := actuators.JobSpec{
+		Files:   map[string]string{"stratt/request.json": string(reqBytes)},
+		Command: pa.JobCommand,
+	}
+
+	// Bridge: the dispatcher streams decoded ApplyResponses onto ch (folding nothing,
+	// MF1); the governor drains ch on its own goroutine. A closed ch is the governor's
+	// io.EOF; RunStream returning ends the stream. Governance runs hub-side over the
+	// raw shapes — identical to the gRPC path.
+	ch := make(chan *pluginv1.ApplyResponse, 64)
+	type govResult struct {
+		raw pluginhost.RawApplyResult
+		err error
+	}
+	gov := make(chan govResult, 1)
+	go func() {
+		raw, gerr := pa.Host.GovernStream(ctx, pluginhost.NewChanStream(ctx, ch), targets)
+		gov <- govResult{raw: raw, err: gerr}
+	}()
+	heartbeat := func() { activity.RecordHeartbeat(ctx) }
+	// ctx-aware send: on cancellation the governor stops draining ch, so a blocking
+	// send would wedge the dispatcher — fall through instead (the ctx-bound Job stream
+	// ends promptly, ADR-0026).
+	onResp := func(resp *pluginv1.ApplyResponse) {
+		select {
+		case ch <- resp:
+		case <-ctx.Done():
+		}
+	}
+	jobOK, _, rerr := a.Dispatcher.RunStream(ctx, in.RunID, slice, spec, creds, heartbeat, onResp)
+	close(ch)
+	gr := <-gov
+	if rerr != nil {
+		return dispatch.Result{}, rerr
+	}
+	if gr.err != nil {
+		return dispatch.Result{}, gr.err
+	}
+	raw := gr.raw
+
+	for _, r := range raw.Rejections {
+		activity.GetLogger(ctx).Warn("plugin apply emission rejected",
+			"actuator", in.Actuator, "kind", r.Kind, "detail", r.Detail, "reason", r.Reason)
+	}
+	// Map the governed, UNPROJECTED result to dispatch.Result. Succeeded folds BOTH
+	// §1.8/MF5 signals: the governor's terminal fold (raw.Succeeded) AND the K8s Job
+	// exit (jobOK) — a green terminal followed by a non-zero exit (OOMKill, torn
+	// cleanup, shim serialize error) must read NOT-OK, restoring parity with the
+	// in-tree floor (dispatch.Run's res.Succeeded = the Job exit).
+	res := dispatch.Result{
+		Succeeded: raw.Succeeded && jobOK, PerTarget: raw.PerTarget, Drift: raw.Drift,
+		Facts: map[string]map[string]json.RawMessage{},
+	}
+	for _, e := range raw.WriteBack {
+		// Facts re-correlate to the resolved target name via the write-back's
+		// host.name identity and flow through the res.Facts (name→EntityID) channel,
+		// identical to CollectFacts' in-tree path. CollectFacts drops any name NOT in
+		// the core-resolved set (its byName map) — that drop IS the confused-deputy
+		// floor for write-backs (the governor gates item_key but not entity identity
+		// against the resolved set), so do not remove it when refactoring CollectFacts.
+		name := e.IdentityKeys["host.name"]
+		if name == "" {
+			continue
+		}
+		facets := make(map[string]json.RawMessage, len(e.Facets))
+		for ns, v := range e.Facets {
+			facets[ns] = json.RawMessage(v)
+		}
+		res.Facts[name] = facets
 	}
 	return res, nil
 }

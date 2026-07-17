@@ -796,6 +796,33 @@ func (s *jsonLineStream) Recv() (*pluginv1.ApplyResponse, error) {
 	return resp, nil
 }
 
+// chanStream adapts a channel of already-decoded ApplyResponses into an applyStream
+// (ADR-0051 MF1): the dispatcher decodes the EE-Job's typed stdout and pushes each
+// response here, the governor pulls them off. A closed channel is io.EOF; a canceled
+// ctx short-circuits so a stuck Job never wedges the governor.
+type chanStream struct {
+	ctx context.Context
+	ch  <-chan *pluginv1.ApplyResponse
+}
+
+// NewChanStream builds an applyStream over a channel of decoded ApplyResponses — the
+// EE-Job (subprocess) transport's feed into the one governor (GovernStream).
+func NewChanStream(ctx context.Context, ch <-chan *pluginv1.ApplyResponse) applyStream {
+	return &chanStream{ctx: ctx, ch: ch}
+}
+
+func (s *chanStream) Recv() (*pluginv1.ApplyResponse, error) {
+	select {
+	case <-s.ctx.Done():
+		return nil, s.ctx.Err()
+	case resp, ok := <-s.ch:
+		if !ok {
+			return nil, io.EOF
+		}
+		return resp, nil
+	}
+}
+
 // ownsCred enforces provisioned-CredentialRef namespace confinement (ADR-0047 §7):
 // a plugin may only name creds under its own Source scope, so it cannot shadow
 // another principal's CredentialRef. (Registration into the secrets registry is

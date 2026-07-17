@@ -318,8 +318,20 @@ func run(ctx context.Context, log *slog.Logger) error {
 
 	// In-tree Actuator registry (§2.3); out-of-tree Actuators arrive via the
 	// plugin Contract surfaces, not this map.
+	//
+	// Ansible over the port (ADR-0051): when the EE-Job transport is enabled the
+	// flagship no longer runs in-tree — the core dispatches the stratt-ansible shim
+	// (baked into the EE image) which speaks the port on stdout, and governs the typed
+	// stream hub-side with the SAME governor as the gRPC path (MF1). The in-tree
+	// ansible.Actuator then stands aside (registered below as a JobCommand actuator);
+	// unset ⇒ the in-tree pod interpreter, the pre-cutover fallback.
+	ansibleJobTransport := os.Getenv("STRATT_ANSIBLE_JOB_TRANSPORT") != ""
 	registry := map[string]actuators.Actuator{}
-	for _, a := range []actuators.Actuator{ansible.Actuator{}, script.Actuator{}, webhook.Actuator{}} {
+	inTreeActuators := []actuators.Actuator{script.Actuator{}, webhook.Actuator{}}
+	if !ansibleJobTransport {
+		inTreeActuators = append(inTreeActuators, ansible.Actuator{})
+	}
+	for _, a := range inTreeActuators {
 		registry[a.Name()] = a
 	}
 
@@ -365,6 +377,36 @@ func run(ctx context.Context, log *slog.Logger) error {
 		}
 		pluginActuators[name] = orchestrate.PluginActuator{Host: host, DryRunnable: dryRunnable, Grant: grant, PlanStore: plans}
 		return nil
+	}
+
+	// Ansible EE-Job (subprocess) transport (ADR-0051): the flagship Actuator over
+	// the sovereign port. No gRPC dial — the transport IS the K8s Job running the
+	// stratt-ansible shim. The host carries only the MF3 BOUNDED grant (never a
+	// wildcard): exactly the Facet namespaces the shim projects and the host.name
+	// identity scheme it correlates facts by. GovernStream gates the Job's typed
+	// stdout against this grant hub-side; the gRPC client is nil (govern never dials).
+	if ansibleJobTransport {
+		grant := pluginhost.Grant{
+			PluginIdentity: env("STRATT_ANSIBLE_PLUGIN_ID", "ansible"),
+			Tier:           pluginhost.TierTrusted,
+			Source:         types.Source{Kind: "ansible", Name: env("STRATT_ANSIBLE_SOURCE_NAME", "ansible")},
+			FacetNamespaces: []string{
+				"os.kernel",
+				"os.hardening.sysctl", "os.hardening.sshd", "os.hardening.filesystem",
+				"os.hardening.auditd", "os.hardening.services",
+				"fileset.content", "access.grants",
+			},
+			IdentitySchemes: []string{"host.name"},
+		}
+		if _, dup := pluginActuators["ansible"]; dup {
+			return fmt.Errorf("ansible EE-Job actuator collides with a registered plugin actuator (§2.4 exclusive)")
+		}
+		host := pluginhost.New(store, nil, grant, log) // nil client: the Job is the transport; govern uses only the grant
+		pluginActuators["ansible"] = orchestrate.PluginActuator{
+			Host: host, DryRunnable: true, Grant: grant,
+			JobCommand: []string{env("STRATT_ANSIBLE_SHIM", "stratt-ansible")},
+		}
+		log.Info("ansible EE-Job actuator registered (ADR-0051 subprocess transport)", "shim", env("STRATT_ANSIBLE_SHIM", "stratt-ansible"))
 	}
 
 	// awsec2 plugin: when configured it provides BOTH the instance Syncer and the

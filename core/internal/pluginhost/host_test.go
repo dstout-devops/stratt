@@ -963,3 +963,106 @@ func TestHost_GovernStream_EEJobTransport(t *testing.T) {
 		t.Fatalf("expected confused-deputy + identity-scheme rejections, got %+v", raw.Rejections)
 	}
 }
+
+// ansibleGrant mirrors the MF3 BOUNDED grant strattd builds for the ansible EE-Job
+// actuator (ADR-0051): exactly the Facet namespaces the shim projects + the host.name
+// identity scheme it correlates facts by — never a wildcard.
+func ansibleGrant() pluginhost.Grant {
+	return pluginhost.Grant{
+		PluginIdentity: "ansible",
+		Tier:           pluginhost.TierTrusted,
+		Source:         types.Source{Kind: "ansible", Name: "ansible"},
+		FacetNamespaces: []string{
+			"os.kernel",
+			"os.hardening.sysctl", "os.hardening.sshd", "os.hardening.filesystem",
+			"os.hardening.auditd", "os.hardening.services",
+			"fileset.content", "access.grants",
+		},
+		IdentitySchemes: []string{"host.name"},
+	}
+}
+
+// TestHost_GovernStream_AnsibleFactsWriteBack proves the governance contract the
+// ansible EE-Job transport depends on end-to-end (ADR-0051 MF3/MF4): the shim's
+// per-host facts write-back — keyed by the host.name identity the core passes as a
+// legible target — survives govern for GRANTED Facet namespaces, an ungranted
+// namespace is dropped (not a wildcard grant), and executeJobPlugin's host.name→name
+// re-correlation key is present on the governed result.
+func TestHost_GovernStream_AnsibleFactsWriteBack(t *testing.T) {
+	line := func(r *pluginv1.ApplyResponse) []byte {
+		b, err := protojson.Marshal(r)
+		if err != nil {
+			t.Fatalf("marshal: %v", err)
+		}
+		return b
+	}
+	lines := [][]byte{
+		line(&pluginv1.ApplyResponse{Result: &pluginv1.ItemResult{ItemKey: "web-2", Status: pluginv1.ItemResult_STATUS_CHANGED}}),
+		// The gather play's facts write-back: granted namespaces survive; the
+		// ungranted secret.leak is gated out (MF3 is a BOUNDED allowlist).
+		line(&pluginv1.ApplyResponse{WriteBack: []*pluginv1.ObservedEntity{{
+			Kind:         "host",
+			IdentityKeys: map[string]string{"host.name": "web-2"},
+			Facets: map[string][]byte{
+				"os.kernel":         []byte(`{"family":"linux"}`),
+				"os.hardening.sshd": []byte(`{"permit_root_login":"no"}`),
+				"secret.leak":       []byte(`{"stolen":"creds"}`),
+			},
+		}}}),
+		// A write-back under an UNGRANTED identity scheme → dropped whole (no granted key).
+		line(&pluginv1.ApplyResponse{WriteBack: []*pluginv1.ObservedEntity{{
+			Kind: "host", IdentityKeys: map[string]string{"aws.instanceId": "i-123"},
+			Facets: map[string][]byte{"os.kernel": []byte(`{"family":"linux"}`)},
+		}}}),
+		line(&pluginv1.ApplyResponse{Event: &pluginv1.TaskEvent{Terminal: true, Ok: true}}),
+	}
+	i := 0
+	next := func() ([]byte, error) {
+		if i >= len(lines) {
+			return nil, io.EOF
+		}
+		b := lines[i]
+		i++
+		return b, nil
+	}
+
+	h := pluginhost.New(nil, nil, ansibleGrant(), discardLog())
+	raw, err := h.GovernStream(context.Background(), pluginhost.NewJobStream(next),
+		[]pluginhost.ApplyTarget{{Name: "web-2", IdentityKeys: map[string]string{"host.name": "web-2"}}})
+	if err != nil {
+		t.Fatalf("governStream: %v", err)
+	}
+	if raw.PerTarget["web-2"] != "changed" || !raw.Succeeded {
+		t.Fatalf("per-host fold wrong: %+v (succeeded=%v)", raw.PerTarget, raw.Succeeded)
+	}
+	// Exactly the host.name-keyed write-back survives; the ungranted-identity one is dropped.
+	if len(raw.WriteBack) != 1 {
+		t.Fatalf("expected 1 governed write-back (ungranted-identity dropped), got %d: %+v", len(raw.WriteBack), raw.WriteBack)
+	}
+	e := raw.WriteBack[0]
+	// executeJobPlugin re-correlates facts to the resolved target by this key.
+	if e.IdentityKeys["host.name"] != "web-2" {
+		t.Fatalf("write-back host.name correlation key missing: %+v", e.IdentityKeys)
+	}
+	if _, ok := e.Facets["os.kernel"]; !ok {
+		t.Fatalf("granted os.kernel facet must survive: %+v", e.Facets)
+	}
+	if _, ok := e.Facets["os.hardening.sshd"]; !ok {
+		t.Fatalf("granted os.hardening.sshd facet must survive: %+v", e.Facets)
+	}
+	if _, leaked := e.Facets["secret.leak"]; leaked {
+		t.Fatal("ungranted facet namespace must be gated out (MF3 is not a wildcard)")
+	}
+	var facetRej, identRej bool
+	for _, r := range raw.Rejections {
+		if r.Kind == "facet" && r.Detail == "secret.leak" {
+			facetRej = true
+		}
+		if r.Kind == "entity" { // the ungranted-identity write-back, dropped with no granted key
+			identRej = true
+		}
+	}
+	if !facetRej || !identRej {
+		t.Fatalf("expected facet + ungranted-identity rejections, got %+v", raw.Rejections)
+	}
+}
