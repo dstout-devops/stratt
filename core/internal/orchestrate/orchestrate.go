@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"log/slog"
 	"sort"
+	"strconv"
 	"time"
 
 	"go.temporal.io/sdk/activity"
@@ -24,6 +25,7 @@ import (
 	"github.com/dstout-devops/stratt/core/internal/actuators"
 	"github.com/dstout-devops/stratt/core/internal/authz"
 	"github.com/dstout-devops/stratt/core/internal/cellrouter"
+	"github.com/dstout-devops/stratt/core/internal/contract"
 	"github.com/dstout-devops/stratt/core/internal/dispatch"
 	"github.com/dstout-devops/stratt/core/internal/events"
 	"github.com/dstout-devops/stratt/core/internal/evidencestore"
@@ -365,6 +367,13 @@ type PluginActuator struct {
 	// governs it hub-side with the SAME governor as the gRPC path (MF1). Host here
 	// carries only the Grant (its gRPC client is nil — the Job is the transport).
 	JobCommand []string
+	// Image overrides the dispatcher's default EE image for this actuator's Jobs
+	// (ADR-0053: mcp needs the python-bearing EE-mcp image for the sandboxed server).
+	Image string
+	// MCP marks the mcp EE-Job transport (ADR-0053): the core resolves the MCPServer
+	// declaration + the rung-3 pin seam around the generic EE-Job dispatch — the
+	// protocol lives in the stratt-mcp shim; the pinning + graph resolution stay core.
+	MCP bool
 }
 
 // jobTransport reports whether this Actuator runs as an EE-Job shim (ADR-0051)
@@ -668,6 +677,9 @@ func (a *Activities) Execute(ctx context.Context, in RunInput, slice int, site s
 	// already enforced BEFORE this activity — NOT the Action path's credential
 	// use-check — so a plugin actuation Step may carry zero creds (guardian #4).
 	if pa, ok := a.PluginActuators[name]; ok {
+		if pa.MCP {
+			return a.executeMCP(ctx, in, slice, pa)
+		}
 		if pa.jobTransport() {
 			return a.executeJobPlugin(ctx, in, slice, site, resolved, creds, pa)
 		}
@@ -1013,6 +1025,140 @@ func (a *Activities) executeJobPlugin(ctx context.Context, in RunInput, slice in
 		res.Facts[name] = facets
 	}
 	return res, nil
+}
+
+// executeMCP dispatches an mcp Step over the EE-Job transport, keeping the §1.5/§2.2
+// SEAM in the core (ADR-0053): the stratt-mcp shim speaks the protocol, but the core
+// resolves the MCPServer declaration + its rev, validates call-args against the pinned
+// Contract (the door check), and — for REGISTER — pins each rung-3 derived_contract
+// the shim proposes at its OWN held rev (MF-2), recomputing the canonical hash (MF-4).
+// A pin is never a side effect of a call: BOTH the shim (register-only emission) and
+// this core loop (register-only pinning + reject on a call) gate it (MF-3).
+func (a *Activities) executeMCP(ctx context.Context, in RunInput, slice int, pa PluginActuator) (dispatch.Result, error) {
+	var p struct {
+		Server    string          `json:"server"`
+		Mode      string          `json:"mode"`
+		Tool      string          `json:"tool"`
+		Arguments json.RawMessage `json:"arguments"`
+	}
+	if len(in.Params) > 0 {
+		if err := json.Unmarshal(in.Params, &p); err != nil {
+			return dispatch.Result{}, temporal.NewNonRetryableApplicationError(err.Error(), "InvalidStepParams", err)
+		}
+	}
+	if p.Mode == "" {
+		p.Mode = "call"
+	}
+	if p.Server == "" || (p.Mode != "register" && p.Mode != "call") {
+		return dispatch.Result{}, temporal.NewNonRetryableApplicationError("mcp: server + mode (register|call) required", "InvalidStepParams", nil)
+	}
+	// The seam: resolve the declared server (its rev is CORE-HELD, MF-2 — never
+	// shim-chosen). The shim receives the resolved declaration in the Job content.
+	server, err := a.Store.GetMCPServer(ctx, p.Server)
+	if err != nil {
+		return dispatch.Result{}, temporal.NewNonRetryableApplicationError(fmt.Sprintf("mcp: %v", err), "MCPServerNotFound", err)
+	}
+	step := map[string]any{"mode": p.Mode, "server": server.Name, "rev": strconv.Itoa(server.Rev), "transport": server.Transport}
+	if server.Transport == types.MCPTransportStdio {
+		step["script"] = server.Script
+	} else {
+		step["endpoint"] = server.Endpoint
+		if server.TokenRef != nil {
+			step["tokenFile"] = "/runner/credentials/" + server.TokenRef.CredentialRef + "/" + server.TokenRef.Key
+		}
+	}
+	if p.Mode == "call" {
+		if p.Tool == "" {
+			return dispatch.Result{}, temporal.NewNonRetryableApplicationError("mcp: call requires tool", "InvalidStepParams", nil)
+		}
+		name := mcpcanon.ContractName(server.Name, p.Tool)
+		pin, err := a.Store.GetContract(ctx, name, server.Rev)
+		if err != nil {
+			return dispatch.Result{}, temporal.NewNonRetryableApplicationError(
+				fmt.Sprintf("mcp: no pinned contract %s @ rev %d — run a register Step first (§2.2 rung 3)", name, server.Rev), "MCPNotPinned", err)
+		}
+		args := p.Arguments
+		if len(args) == 0 {
+			args = json.RawMessage(`{}`)
+		}
+		// Contract at the door (§1.5, STAYS core): args validate against the pin.
+		if err := contract.ValidateDocument(pin.Name, pin.Schema, args); err != nil {
+			return dispatch.Result{}, temporal.NewNonRetryableApplicationError(fmt.Sprintf("mcp: arguments %v", err), "InvalidStepParams", err)
+		}
+		step["tool"] = p.Tool
+		step["arguments"] = json.RawMessage(args)
+		step["pinnedHash"] = pin.Hash
+	}
+	desired, err := json.Marshal(step)
+	if err != nil {
+		return dispatch.Result{}, err
+	}
+	reqBytes, err := protojson.Marshal(&pluginv1.ApplyRequest{Desired: &pluginv1.Payload{Bytes: desired}})
+	if err != nil {
+		return dispatch.Result{}, err
+	}
+	spec := actuators.JobSpec{
+		Files:   map[string]string{"stratt/request.json": string(reqBytes)},
+		Command: pa.JobCommand,
+		Image:   pa.Image,
+	}
+
+	// Dispatch the shim + govern hub-side (the ADR-0051 bridge). The "target" is the
+	// single server (per-server, not per-target — the schema_id namespace-confines it).
+	targets := []pluginhost.ApplyTarget{{Name: server.Name}}
+	ch := make(chan *pluginv1.ApplyResponse, 64)
+	type govResult struct {
+		raw pluginhost.RawApplyResult
+		err error
+	}
+	gov := make(chan govResult, 1)
+	go func() {
+		raw, gerr := pa.Host.GovernStream(ctx, pluginhost.NewChanStream(ctx, ch), targets)
+		gov <- govResult{raw: raw, err: gerr}
+	}()
+	heartbeat := func() { activity.RecordHeartbeat(ctx) }
+	onResp := func(resp *pluginv1.ApplyResponse) {
+		select {
+		case ch <- resp:
+		case <-ctx.Done():
+		}
+	}
+	jobOK, _, rerr := a.Dispatcher.RunStream(ctx, in.RunID, slice, spec, nil, heartbeat, onResp)
+	close(ch)
+	gr := <-gov
+	if rerr != nil {
+		return dispatch.Result{}, rerr
+	}
+	if gr.err != nil {
+		return dispatch.Result{}, gr.err
+	}
+	raw := gr.raw
+
+	// The rung-3 pin seam (MF-1/2/3). A register-mode Step pins each RUNG_DECLARED
+	// derived_contract at the CORE-HELD rev, recomputing the canonical hash; a
+	// derived_contract on a CALL is rejected (a pin is never a call side effect); a
+	// non-rung-3 derived from mcp is rejected (fail-closed, never a silent auto-version).
+	for _, d := range raw.Derived {
+		if p.Mode != "register" {
+			return dispatch.Result{}, temporal.NewNonRetryableApplicationError(
+				fmt.Sprintf("mcp: derived_contract %s on a %s Step — a pin is never a side effect of a call (ADR-0022)", d.SchemaID, p.Mode), "MCPUnexpectedPin", nil)
+		}
+		if d.Rung != int32(pluginv1.DerivedContract_RUNG_DECLARED) {
+			return dispatch.Result{}, temporal.NewNonRetryableApplicationError(
+				fmt.Sprintf("mcp register: derived_contract %s rung=%d, want RUNG_DECLARED (3)", d.SchemaID, d.Rung), "MCPBadRung", nil)
+		}
+		hash, canonical, herr := mcpcanon.CanonicalHash(d.Schema)
+		if herr != nil {
+			return dispatch.Result{}, temporal.NewNonRetryableApplicationError(fmt.Sprintf("mcp: %v", herr), "InvalidToolSchema", herr)
+		}
+		if err := a.Store.RegisterMCPContract(ctx, d.SchemaID, server.Rev, hash, canonical); err != nil {
+			if errors.Is(err, graph.ErrContractDrift) {
+				return dispatch.Result{}, temporal.NewNonRetryableApplicationError(err.Error(), "ContractDrift", err)
+			}
+			return dispatch.Result{}, err
+		}
+	}
+	return dispatch.Result{Succeeded: raw.Succeeded && jobOK, PerTarget: raw.PerTarget}, nil
 }
 
 // CleanupRun deletes a Run's K8s Jobs on cancellation (invoked from the
