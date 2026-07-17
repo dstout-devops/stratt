@@ -21,6 +21,7 @@ use (
 	./plugins/puppet
 	./plugins/salt
 	./plugins/script
+	./plugins/staticinv
 	./plugins/vcenter
 	./sdk
 	./sdk/secretbroker
