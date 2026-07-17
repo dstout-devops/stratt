@@ -26,10 +26,18 @@ func (f fakeRunner) run(_ context.Context, _ string, _ []string, onLine func([]b
 	return f.rc, nil
 }
 
+// noClone fails if invoked — a non-SCM Run must never reach the cloner.
+func noClone(t *testing.T) cloner {
+	return func(context.Context, string, scmParams) error {
+		t.Fatal("cloner invoked for a non-SCM request")
+		return nil
+	}
+}
+
 func runShim(t *testing.T, req Request, f fakeRunner) []*pluginv1.ApplyResponse {
 	t.Helper()
 	var buf bytes.Buffer
-	if err := Run(context.Background(), &buf, t.TempDir(), req, f); err != nil {
+	if err := Run(context.Background(), &buf, t.TempDir(), req, f, noClone(t)); err != nil {
 		t.Fatalf("run: %v", err)
 	}
 	var out []*pluginv1.ApplyResponse
@@ -119,5 +127,99 @@ func TestShim_FanOutFactsDriftDiagnostics(t *testing.T) {
 	// Exactly one terminal; rc=1 → ok=false (the hub folds Succeeded, not the shim).
 	if terminals != 1 || termOk {
 		t.Fatalf("want one terminal with ok=false (rc=1), got terminals=%d ok=%v", terminals, termOk)
+	}
+}
+
+// captureRunner records the args ansible-runner was invoked with.
+type captureRunner struct {
+	rc   int
+	args []string
+}
+
+func (c *captureRunner) run(_ context.Context, _ string, args []string, _ func([]byte)) (int, error) {
+	c.args = args
+	return c.rc, nil
+}
+
+// TestShim_SCMContentRef proves an SCM content-ref is cloned in the EE and the play
+// runs FROM the cloned playbook path (ADR-0025): the shim validates the ref, clones
+// project/, and points ansible-runner at the repo's playbook — never a written
+// play.yml. The clone boundary is a subprocess (git), injected here.
+func TestShim_SCMContentRef(t *testing.T) {
+	req := Request{
+		Params:  json.RawMessage(`{"scm":{"repo":"https://git.example/ops.git","ref":"v2","playbook":"site/deploy.yml"}}`),
+		Targets: []Target{{Name: "web-1"}},
+		DryRun:  true,
+	}
+	var gotSCM scmParams
+	var gotProjectDir string
+	clone := func(_ context.Context, projectDir string, scm scmParams) error {
+		gotSCM, gotProjectDir = scm, projectDir
+		return nil // a real git clone would populate projectDir
+	}
+	run := &captureRunner{rc: 0}
+
+	var buf bytes.Buffer
+	dir := t.TempDir()
+	if err := Run(context.Background(), &buf, dir, req, run, clone); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	// The ref was cloned into project/ with the exact params.
+	if gotSCM.Repo != "https://git.example/ops.git" || gotSCM.Ref != "v2" || gotSCM.Playbook != "site/deploy.yml" {
+		t.Fatalf("cloner got wrong SCM params: %+v", gotSCM)
+	}
+	if gotProjectDir != dir+"/project" {
+		t.Fatalf("clone target must be the runner project dir, got %q", gotProjectDir)
+	}
+	// ansible-runner runs the repo's playbook (not a written play.yml), in check mode.
+	var sawPlaybook, sawCheck bool
+	for i, a := range run.args {
+		if a == "-p" && i+1 < len(run.args) && run.args[i+1] == "site/deploy.yml" {
+			sawPlaybook = true
+		}
+		if a == "--check --diff" {
+			sawCheck = true
+		}
+	}
+	if !sawPlaybook {
+		t.Fatalf("ansible-runner must target the SCM playbook path, args=%v", run.args)
+	}
+	if !sawCheck {
+		t.Fatalf("DryRun must map to --check --diff, args=%v", run.args)
+	}
+}
+
+// TestShim_SCMValidation proves the argument-injection / path-traversal guards on the
+// SCM ref (a repo/ref beginning with '-' is a git option, not a URL; a playbook must
+// stay within the repo). Each rejects with a terminal fatal, never a clone.
+func TestShim_SCMValidation(t *testing.T) {
+	cases := map[string]scmParams{
+		"missing repo":       {Playbook: "p.yml"},
+		"missing playbook":   {Repo: "r"},
+		"repo option-inject": {Repo: "--upload-pack=evil", Playbook: "p.yml"},
+		"ref option-inject":  {Repo: "r", Ref: "--foo", Playbook: "p.yml"},
+		"playbook traversal": {Repo: "r", Playbook: "../../etc/x.yml"},
+		"playbook absolute":  {Repo: "r", Playbook: "/etc/x.yml"},
+	}
+	for name, scm := range cases {
+		t.Run(name, func(t *testing.T) {
+			if err := validateSCM(&scm); err == nil {
+				t.Fatalf("validateSCM(%+v) must reject", scm)
+			}
+			// End to end: a bad ref never reaches the cloner; it emits a terminal fatal.
+			raw, _ := json.Marshal(map[string]any{"scm": scm})
+			req := Request{Params: raw, Targets: []Target{{Name: "h"}}}
+			clone := func(context.Context, string, scmParams) error {
+				t.Fatal("a rejected SCM ref must never be cloned")
+				return nil
+			}
+			var buf bytes.Buffer
+			if err := Run(context.Background(), &buf, t.TempDir(), req, &captureRunner{}, clone); err != nil {
+				t.Fatalf("run: %v", err)
+			}
+			if !bytes.Contains(buf.Bytes(), []byte(`"terminal":true`)) {
+				t.Fatalf("a rejected SCM ref must emit a terminal fatal, got %s", buf.Bytes())
+			}
+		})
 	}
 }
