@@ -1416,7 +1416,7 @@ func validateParamsContract(actuator string, params map[string]any) error {
 	}
 	name := actuator
 	if name == "" {
-		name = "ansible"
+		name = types.DefaultActuator
 	}
 	raw := json.RawMessage(`{}`)
 	if params != nil {

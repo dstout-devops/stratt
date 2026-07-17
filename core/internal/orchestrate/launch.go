@@ -55,7 +55,7 @@ func LaunchRun(ctx context.Context, d LaunchDeps, p LaunchParams) (types.Run, er
 	}
 	name := p.Actuator
 	if name == "" {
-		name = "ansible"
+		name = defaultActuator
 	}
 	if err := contract.ValidateActuatorParams(name, p.Params); err != nil {
 		return types.Run{}, err

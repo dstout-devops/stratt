@@ -50,7 +50,7 @@ var TaskQueue = "stratt-runs"
 // the ONE canonical place the flagship's name lives (ADR-0046: the spine must not
 // scatter a specific tool name). Making the Actuator field required on the wire (and
 // dropping this default entirely) is the fuller dark-matter fix, tracked separately.
-const defaultActuator = "ansible"
+const defaultActuator = types.DefaultActuator
 
 // RunInput starts one Run against a View. Actuator and Params are the Step
 // fields (§2.3: Step = Actuator + content + params); empty Actuator means
@@ -156,9 +156,6 @@ type FactSet struct {
 	// the name it registers under (empty = none).
 	OutputsContract     json.RawMessage
 	OutputsContractName string
-	// MCPTools are an external MCP server's declared tool schemas — the
-	// rung-3 pin material (ADR-0022).
-	MCPTools []actuators.MCPToolDecl
 	// Workspace stamps the stratt.workspace selection label (v1 binding).
 	Workspace string
 }
@@ -1237,7 +1234,6 @@ func mergeResults(slices []dispatch.Result) dispatch.Result {
 		if len(r.OutputsContract) > 0 {
 			out.OutputsContract = r.OutputsContract
 		}
-		out.MCPTools = append(out.MCPTools, r.MCPTools...)
 		for t, fragments := range r.Drift {
 			if out.Drift == nil {
 				out.Drift = map[string][]json.RawMessage{}
@@ -1262,18 +1258,6 @@ func (a *Activities) CollectFacts(ctx context.Context, in RunInput, resolved Res
 		}
 	}
 	fs.Entities = result.Entities
-	if len(result.MCPTools) > 0 {
-		// Belt to the driver's own gate: pins mint ONLY from deliberate
-		// register-mode Runs — never as a side effect of a call touching a
-		// sibling tool (guardian on ADR-0022).
-		var p struct {
-			Mode string `json:"mode"`
-		}
-		_ = json.Unmarshal(in.Params, &p)
-		if p.Mode == "register" {
-			fs.MCPTools = result.MCPTools
-		}
-	}
 	if len(result.OutputsContract) > 0 {
 		fs.OutputsContract = result.OutputsContract
 		// The workspace names the derived contract and the selection label.
@@ -1331,28 +1315,9 @@ func (a *Activities) ProjectFacts(ctx context.Context, runID string, facts FactS
 			return err
 		}
 	}
-	// Rung 3 (§2.2, ADR-0022): pin the MCP server's declared tool schemas at
-	// the declaration's rev. Canonical form here must equal what the driver
-	// hashed; drift within a rev is ErrContractDrift — the Run fails
-	// visibly, and accepting the change is a Git act (bump rev).
-	for _, t := range facts.MCPTools {
-		hash, canonical, err := mcpcanon.CanonicalHash(t.Schema)
-		if err != nil {
-			return temporal.NewNonRetryableApplicationError(
-				fmt.Sprintf("mcp tool %s/%s: %v", t.Server, t.Tool, err), "InvalidToolSchema", err)
-		}
-		if hash != t.Hash {
-			return temporal.NewNonRetryableApplicationError(
-				fmt.Sprintf("mcp tool %s/%s: driver hash %s != control-plane hash %s (canonicalization mismatch)",
-					t.Server, t.Tool, t.Hash, hash), "CanonicalizationMismatch", nil)
-		}
-		if err := a.Store.RegisterMCPContract(ctx, mcpcanon.ContractName(t.Server, t.Tool), t.Rev, hash, canonical); err != nil {
-			if errors.Is(err, graph.ErrContractDrift) {
-				return temporal.NewNonRetryableApplicationError(err.Error(), "ContractDrift", err)
-			}
-			return err
-		}
-	}
+	// Rung-3 (mcp) pinning is NOT here — it moved to executeMCP over the governed
+	// derived_contract channel (ADR-0053): the seam pins each RUNG_DECLARED contract at
+	// the core-held rev directly, so the old MCPTools facts channel is retired.
 	return nil
 }
 
@@ -1366,7 +1331,7 @@ func (a *Activities) FinishRun(ctx context.Context, in RunInput, status types.Ru
 	}
 	actuator := in.Actuator
 	if actuator == "" {
-		actuator = "ansible"
+		actuator = defaultActuator
 	}
 	slices := in.Slices
 	if slices < 1 {

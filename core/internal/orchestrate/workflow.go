@@ -397,7 +397,7 @@ func stepsNamespace(steps map[string]json.RawMessage) map[string]any {
 func (a *Activities) ResolveStepParams(ctx context.Context, actuator string, params map[string]any, event map[string]any, steps map[string]json.RawMessage) (json.RawMessage, error) {
 	name := actuator
 	if name == "" {
-		name = "ansible"
+		name = defaultActuator
 	}
 	ns := template.Namespaces{"event": event, "steps": stepsNamespace(steps)}
 	raw, err := contract.ResolveActuatorParams(name, params, ns)

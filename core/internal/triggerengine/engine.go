@@ -192,7 +192,7 @@ func (e *Engine) launch(ctx context.Context, log *slog.Logger, t types.Trigger, 
 
 func actuatorOrDefault(a string) string {
 	if a == "" {
-		return "ansible"
+		return types.DefaultActuator
 	}
 	return a
 }

@@ -317,7 +317,7 @@ func interpName(req siteproto.DispatchRequest) string {
 	if req.Actuator != "" {
 		return req.Actuator
 	}
-	return "ansible"
+	return types.DefaultActuator
 }
 
 // buildInterpreters is the Site's in-tree Interpreter registry. It MUST track

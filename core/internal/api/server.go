@@ -1979,7 +1979,7 @@ func (s *Server) ListWorkflowRuns(w http.ResponseWriter, r *http.Request, params
 // validateStepParams checks wire Step params against the Actuator's input
 // Contract (§1.5, ADR-0015). nil/empty actuator means the platform default.
 func validateStepParams(actuator *string, params *map[string]interface{}) error {
-	name := "ansible"
+	name := types.DefaultActuator
 	if actuator != nil && *actuator != "" {
 		name = *actuator
 	}

@@ -423,7 +423,7 @@ func (a *Activities) FinishRunAcross(ctx context.Context, arg FinishAcrossArg) e
 
 func actuatorOr(name string) string {
 	if name == "" {
-		return "ansible"
+		return defaultActuator
 	}
 	return name
 }
