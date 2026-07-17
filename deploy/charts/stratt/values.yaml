@@ -163,14 +163,29 @@ declarations:
     existingSecret: ""
   interval: "30s"
   maxPruneFraction: "" # "" ⇒ controller default 0.5
+  # inline delivers a small CaC checkout as a chart-rendered ConfigMap (no git
+  # server, no baked image) — the dev/e2e path. The fixtures live under the
+  # chart at dev/declarations/**; keys are restored to their nested paths on
+  # mount. Mutually exclusive with gitSync (git-sync is the production path).
+  inline:
+    enabled: false
+    interval: "30s"
+    # "" ⇒ controller default (0.5). Dev installs whose inline set is the whole
+    # authoritative desired state raise this to prune stale cac on a dirty graph.
+    maxPruneFraction: ""
 
-# ── Phase-0 vCenter Syncer (optional) ────────────────────────────────────────
-vcenter:
-  url: ""
-  insecure: false
-  sourceName: "vcenter"
-  # Secret with `username` and `password` keys; required when url is set.
-  existingSecret: ""
+# ── gRPC plugins deployed in-cluster (ADR-0046) ──────────────────────────────
+# Each entry renders a Deployment + Service serving the sovereign plugin port on
+# :9090, and auto-wires STRATT_<NAME>_PLUGIN_ADDR into strattd so it dials the
+# in-cluster Service. This is the prod-aligned home for every gRPC plugin
+# (vcenter/opentofu/certissuer/msgraph/awsec2…). Empty ⇒ no plugins deployed.
+# Entry shape:
+#   - name: vcenter                     # Deployment/Service "<release>-vcenter"; env key STRATT_VCENTER_PLUGIN_ADDR
+#     image: {repository, tag, digest, pullPolicy}
+#     env: {STRATT_VCENTER_URL: "...", ...}   # env for the PLUGIN pod
+#     hostEnv: {STRATT_VCENTER_SOURCE_NAME: "..."}  # extra env injected into strattd
+#     secretNamespace: ""               # when set, a confined get-Secrets Role there (SecretBroker, §2.5)
+plugins: []
 
 resources:
   requests:

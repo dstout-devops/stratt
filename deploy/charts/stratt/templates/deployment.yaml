@@ -152,29 +152,32 @@ spec:
               value: {{ .Values.declarations.maxPruneFraction | quote }}
             {{- end }}
             {{- end }}
-            {{- if .Values.vcenter.url }}
-            - name: STRATT_VCENTER_URL
-              value: {{ .Values.vcenter.url | quote }}
-            - name: STRATT_VCENTER_SOURCE_NAME
-              value: {{ .Values.vcenter.sourceName | quote }}
-            {{- if .Values.vcenter.insecure }}
-            - name: STRATT_VCENTER_INSECURE
-              value: "true"
-            {{- end }}
-            {{- if .Values.vcenter.existingSecret }}
-            - name: STRATT_VCENTER_USERNAME
-              valueFrom:
-                secretKeyRef:
-                  name: {{ .Values.vcenter.existingSecret }}
-                  key: username
-            - name: STRATT_VCENTER_PASSWORD
-              valueFrom:
-                secretKeyRef:
-                  name: {{ .Values.vcenter.existingSecret }}
-                  key: password
+            {{- if .Values.declarations.inline.enabled }}
+            # Inline dev CaC checkout via a chart-rendered ConfigMap
+            # (declarations-configmap.yaml) — the git-server-free dev/e2e path.
+            - name: STRATT_DESIRED_STATE_PATH
+              value: /declarations
+            - name: STRATT_DESIRED_STATE_INTERVAL
+              value: {{ .Values.declarations.inline.interval | quote }}
+            {{- if .Values.declarations.inline.maxPruneFraction }}
+            # The inline set is the AUTHORITATIVE (minimal) dev desired state; on a
+            # dirty dev graph it must be free to prune stale cac (raise past the
+            # 0.5 safety default). Dev-only — a production install never sets this.
+            - name: STRATT_DESIRED_STATE_MAX_PRUNE
+              value: {{ .Values.declarations.inline.maxPruneFraction | quote }}
             {{- end }}
             {{- end }}
-          {{- if .Values.declarations.gitSync.enabled }}
+            {{- /* gRPC plugins (ADR-0046): dial each in-cluster plugin Service and pass
+                   through any per-plugin strattd env (source name / tier / metadata). */ -}}
+            {{- range .Values.plugins }}
+            - name: STRATT_{{ .name | upper | replace "-" "_" }}_PLUGIN_ADDR
+              value: {{ printf "%s-%s.%s.svc:9090" (include "stratt.fullname" $) .name $.Release.Namespace | quote }}
+            {{- range $k, $v := .hostEnv }}
+            - name: {{ $k }}
+              value: {{ $v | quote }}
+            {{- end }}
+            {{- end }}
+          {{- if or .Values.declarations.gitSync.enabled .Values.declarations.inline.enabled }}
           volumeMounts:
             - name: declarations
               mountPath: /declarations
@@ -218,6 +221,19 @@ spec:
           emptyDir: {}
         - name: git-sync-tmp
           emptyDir: {}
+      {{- else if .Values.declarations.inline.enabled }}
+      # ConfigMap keys can't contain "/", so the fixtures are stored flattened
+      # (views__x.yaml) and restored to their nested paths (views/x.yaml, the
+      # loader's expected layout incl. authz/tuples.yaml) via items[].path.
+      volumes:
+        - name: declarations
+          configMap:
+            name: {{ include "stratt.fullname" . }}-declarations
+            items:
+              {{- range $path, $bytes := .Files.Glob "dev/declarations/**" }}
+              - key: {{ trimPrefix "dev/declarations/" $path | replace "/" "__" }}
+                path: {{ trimPrefix "dev/declarations/" $path }}
+              {{- end }}
       {{- end }}
       {{- with .Values.nodeSelector }}
       nodeSelector: {{- toYaml . | nindent 8 }}

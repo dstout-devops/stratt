@@ -1,0 +1,48 @@
+# Plugin-e2e values — layered AFTER values-dev-kind.yaml (task dev:install).
+# Proves BOTH plugin transports in-cluster: the vcenter gRPC Syncer plugin (a
+# `plugins:` entry) projecting real vcsim Entities, and the script/ansible EE-Job
+# Actuators (dispatched as K8s Jobs). Everything dev-shaped; never derive prod
+# values from this file.
+#
+# The host-gateway (192.168.102.1 default from deploy/dev/kind.yaml's pinned
+# subnet) is re-asserted at install by `task dev:install` via --set-string with
+# the value computed from `docker network inspect kind`, so a foreign subnet
+# can't silently break the substrate/vcsim DSNs.
+
+# In-proc tuple evaluator (no OpenFGA server / DSN secret) — the authz for the
+# e2e is delivered by the inline declarations below.
+openfga:
+  enabled: false
+
+devPrincipalHeader: true
+
+# Inline dev CaC checkout (chart-rendered ConfigMap): the dev-hosts / dev-vms
+# Views + the dev-runner `runner` grants under dev/declarations/**.
+declarations:
+  gitSync:
+    enabled: false
+  inline:
+    enabled: true
+    interval: "10s" # tighten the reconcile so the e2e's Views/tuples go live fast
+    # This inline set IS the authoritative dev desired state; allow it to prune
+    # stale cac accumulated on a shared/dirty dev graph (past the 0.5 default).
+    maxPruneFraction: "1"
+
+# The vcenter Syncer plugin, deployed in-cluster and dialed by strattd.
+plugins:
+  - name: vcenter
+    image:
+      repository: stratt-plugin-vcenter
+      tag: dev
+      digest: ""
+      pullPolicy: Never # kind-loaded (task image:vcenter-plugin)
+    # env for the PLUGIN pod — it connects to vcsim on the host gateway.
+    env:
+      STRATT_VCENTER_URL: "https://192.168.102.1:8989/sdk"
+      STRATT_VCENTER_INSECURE: "true"
+    # extra env injected into strattd: the Source name it homes the projection
+    # under (+ the Endpoint metadata stamped on the Source, §2.2).
+    hostEnv:
+      STRATT_VCENTER_SOURCE_NAME: "vcenter-dev"
+      STRATT_VCENTER_URL: "https://192.168.102.1:8989/sdk"
+      STRATT_VCENTER_INTERVAL: "15s"

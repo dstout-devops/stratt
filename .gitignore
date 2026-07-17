@@ -51,6 +51,9 @@ coverage/
 deploy/charts/*/charts/*.tgz
 .playwright-mcp/
 
+# pinned cluster tooling installed by tools:helm / tools:kubectl
+.bin/
+
 # stray Go build outputs (binaries built into the repo root)
 strattd
 core/stratt-forwarder

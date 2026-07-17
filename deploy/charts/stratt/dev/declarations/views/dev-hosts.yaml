@@ -1,0 +1,7 @@
+# Dev View for the plugin e2e — selects the synthetic target seeded by
+# stratt-dev-seed (Kind: dev-host). A dedicated kind keeps this isolated from the
+# vcenter plugin's projected `host` (ESXi) Entities so the actuator run is
+# deterministic (exactly one target).
+name: dev-hosts
+selector:
+  kinds: [dev-host]

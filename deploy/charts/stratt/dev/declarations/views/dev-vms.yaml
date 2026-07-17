@@ -1,0 +1,6 @@
+# Dev View selecting the vcenter Syncer plugin's projected VM Entities (from
+# vcsim, ~25 VMs) — the real-data target set for the syncer→actuator chain in
+# the plugin e2e (no synthetic seeding).
+name: dev-vms
+selector:
+  kinds: [vm]
