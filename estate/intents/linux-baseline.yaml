@@ -1,0 +1,16 @@
+# Intent/FileSet — the desired baseline for a Linux server: a hardened sshd_config.
+# The Intent carries only the desired *spec* (§1.1 typed at the Facet seam); it is
+# bound to a group by an Assignment, and the Blueprint (template) turns it into a
+# drift-checked Baseline. `digest` is the expected sha256 the compiled Baseline
+# observes as fileset.content.sshd-config.digest.
+name: linux-baseline
+kind: Intent/FileSet
+onRemove: revert
+spec:
+  key: sshd-config
+  path: /etc/ssh/sshd_config
+  source: cfg/sshd_config.hardened
+  digest: sha256:0000000000000000000000000000000000000000000000000000000000000000
+  mode: "0600"
+  owner: root
+  group: root

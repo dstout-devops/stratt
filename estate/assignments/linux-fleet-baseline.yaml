@@ -1,0 +1,10 @@
+# Binds the linux-baseline Intent to the linux-fleet group via linux-baseline@1 —
+# the "5-line simplest form" (ADR-0055): declare WHAT (the baseline) over WHICH
+# group (linux-fleet) using WHICH template (linux-baseline@1). The compiler does the
+# fan-out. Overrides, when needed, are explicit-overlay (guardrail 6), never a
+# precedence field.
+name: linux-fleet-baseline
+intent: linux-baseline
+view: linux-fleet
+blueprint: linux-baseline@1
+environments: [dev]

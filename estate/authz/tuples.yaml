@@ -1,0 +1,7 @@
+# Estate authz (CaC, loaded by the reconcile at <root>/authz/tuples.yaml). Grants
+# only pointers, never material (§2.5). runner-on-View is the §2.5/ADR-0028 gate for
+# launching Runs against a group.
+tuples:
+  - { user: principal:dev-runner, relation: runner, object: view:linux-fleet }
+  - { user: principal:dev-runner, relation: runner, object: view:web-hosts }
+  - { user: principal:dev-runner, relation: runner, object: view:secure-hosts }
