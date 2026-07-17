@@ -61,3 +61,4 @@ Status is `Accepted` unless noted. See **[../roadmap.md](../roadmap.md)** for ho
 | [0050](0050-certificate-reconcile-actuator.md) | Certificate lifecycle as a reconcile Actuator (CSR/sign over the port) | Accepted |
 | [0051](0051-ee-job-speaks-the-port.md) | The EE Job speaks the port: a subprocess transport, one governor (ansible extraction) | Accepted |
 | [0052](0052-secretbroker-port.md) | The SecretBroker port: per-call credential resolution for plugins (§2.5) | Accepted |
+| [0053](0053-mcp-transport-generic-connector.md) | MCP as a generic transport: the last domain logic leaves the core | Accepted |
