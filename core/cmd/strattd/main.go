@@ -25,10 +25,8 @@ import (
 	"k8s.io/client-go/tools/clientcmd"
 
 	"github.com/dstout-devops/stratt/core/internal/actions"
-	notifyaction "github.com/dstout-devops/stratt/core/internal/actions/notify"
 	"github.com/dstout-devops/stratt/core/internal/actuators"
 	mcpact "github.com/dstout-devops/stratt/core/internal/actuators/mcp"
-	"github.com/dstout-devops/stratt/core/internal/actuators/webhook"
 	"github.com/dstout-devops/stratt/core/internal/api"
 	"github.com/dstout-devops/stratt/core/internal/audit"
 	"github.com/dstout-devops/stratt/core/internal/authz"
@@ -318,23 +316,20 @@ func run(ctx context.Context, log *slog.Logger) error {
 	// plugin Contract surfaces, not this map.
 	//
 	// Out-of-tree Actuators arrive via the plugin Contract surfaces, not this map.
-	// ansible (ADR-0051) and script (ADR-0046 Category A) run EXCLUSIVELY over the
-	// port as EE-Job (subprocess) shims baked into the EE image — their Prepare/
-	// Interpret content-awareness has LEFT the Apache core (§1.4 — no `if <tool> {…}`
-	// in the spine). webhook remains in-tree pending its own extraction slice.
+	// ansible (ADR-0051), script + webhook/notify (ADR-0046 Category A) have LEFT the
+	// Apache core — ansible/script as EE-Job shims, notify/webhook as a gRPC plugin
+	// Action (§1.4 — no `if <tool> {…}` in the spine). Only mcp remains in-tree
+	// (registered below) pending its own extraction slice.
 	registry := map[string]actuators.Actuator{}
-	for _, a := range []actuators.Actuator{webhook.Actuator{}} {
-		registry[a.Name()] = a
-	}
 
-	// In-tree Action registry (§2.2, ADR-0031): targetless typed operations
-	// shipped by Connectors. cert lifecycle is now the certissuer reconcile
-	// ACTUATOR over the port (ADR-0050) — the in-tree issue/renew/revoke pod Action
-	// is retired; notify runs in-tree (pods); awsec2 create-vm is a plugin Action.
+	// In-tree Action registry (§2.2, ADR-0031): targetless typed operations shipped by
+	// Connectors. cert lifecycle is the certissuer reconcile Actuator over the port
+	// (ADR-0050); notify/webhook is now a gRPC plugin Action (ADR-0052); awsec2
+	// create-vm is a plugin Action. No in-tree Actions remain today.
 	awsPluginAddr := os.Getenv("STRATT_AWS_PLUGIN_ADDR")
 	actionRegistry := actions.Registry{}
 	for _, act := range []actions.Action{
-		notifyaction.Webhook(),
+		// (in-tree Actions extracted to plugins; none remain)
 	} {
 		actionRegistry[act.Name()] = act
 	}
@@ -448,6 +443,32 @@ func run(ctx context.Context, log *slog.Logger) error {
 			return err
 		}
 		log.Info("awsec2 plugin actions registered", "addr", awsPluginAddr)
+	}
+
+	// notify/webhook plugin Action (ADR-0046 Category A / ADR-0052): the notification
+	// delivery left the core. When configured, the stratt-notify plugin issues the POST
+	// in-process, resolving the Sink's per-call url/token via the SecretBroker — the
+	// core hands COORDINATES (never material) in the Envelope (§2.5). NOT DryRunnable
+	// (a POST has no read-only plan). Unset ⇒ no notify/webhook Action is registered
+	// and notifications fail closed (the in-tree pod Action was retired — the cutover).
+	if addr := os.Getenv("STRATT_NOTIFY_PLUGIN_ADDR"); addr != "" {
+		conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+		if err != nil {
+			return fmt.Errorf("notify plugin dial %s: %w", addr, err)
+		}
+		defer conn.Close()
+		grant := pluginhost.Grant{
+			PluginIdentity: env("STRATT_NOTIFY_PLUGIN_ID", "notify"),
+			Tier:           pluginhost.TierTrusted, // SecretBroker resolution is trusted-tier (MF-A)
+			Source:         types.Source{Kind: "notify", Name: env("STRATT_NOTIFY_SOURCE_NAME", "notify")},
+		}
+		host := pluginhost.New(store, pluginv1.NewPluginServiceClient(conn), grant, log)
+		if err := registerPluginAction("notify/webhook", host, false); err != nil {
+			return err
+		}
+		log.Info("notify plugin action registered (ADR-0052 SecretBroker)", "addr", addr)
+	} else {
+		log.Info("no notify plugin configured (STRATT_NOTIFY_PLUGIN_ADDR empty); notifications disabled")
 	}
 
 	// mcp Actuator (ADR-0022): store-backed declaration + pin lookups; the

@@ -15,11 +15,13 @@ use (
 	./plugins/certissuer
 	./plugins/chef
 	./plugins/msgraph
+	./plugins/notify
 	./plugins/opentofu
 	./plugins/puppet
 	./plugins/salt
 	./plugins/script
 	./plugins/vcenter
 	./sdk
+	./sdk/secretbroker
 	./types
 )
