@@ -87,6 +87,36 @@ dedicated ADRs before any code:
 **4. Each new capability plugin (Crossplane, Helm, DNS, network) is its own ADR + Contract**, sandbox-tiered per
 §7.3, and slots in behind the port with no core change.
 
+## Layered constructs & landscape-agnosticism (the AWS CDK reference — half of it)
+
+The "declare from the simplest form, sane defaults, optional overrides, composing upward" experience is the
+**AWS CDK construct model**, and CDK is a useful reference for **half** of what we want — the half about
+*layered composition*, not the half about *language*:
+
+| CDK concept (the useful half) | Stratt realization (typed, declarative) |
+|---|---|
+| L1 construct (raw resource) | one typed Step / Actuation (a single `opentofu`/`ansible`/`crossplane` apply) |
+| L2 construct (sane-defaults wrapper) | a **Blueprint** — a template with defaults over a route |
+| L3 construct (opinionated multi-resource pattern) | a composite onboarding **Blueprint + Workflow** (provision + cert + configure + app) |
+| Construct tree / composition | **Assignments** binding Blueprints to **Views** (groups) + **Workflow** DAGs |
+| `synth` → CloudFormation | the **compiler + orchestrator** fanning declarations into concrete plugin Steps/Baselines |
+| Escape hatch (drop L2→L1 to override) | the **G6 overlay** — explicit overlay + §2.4 claim-type merge (guardrail 6), never a precedence field |
+
+**The half we must reject (permanent non-goal):** CDK *is a programming language* — imperative synthesis in
+TypeScript/Python. Stratt's constructs are **declarative typed primitives**, and "synthesis" is the compiler/
+orchestrator, **not code execution**. Adopting CDK's programmatic model would be the forbidden "new
+configuration language." The reference is the *construct/defaults/multi-target* mental model — never the language.
+
+**Where Stratt goes *beyond* CDK — landscape-agnosticism.** CDK synthesizes to **one** target (CloudFormation).
+Stratt is **multi-landscape by construction**: the *same* high-level Blueprint route / Intent binds **different
+plugin Actuators** depending on the estate — provision via **vSphere (VMware)**, **Terraform/OpenTofu**, or
+**Crossplane**; configure via **Ansible/Chef/Salt**; cert via certissuer; app via a Helm Actuator. The landscape
+is a **plugin-binding choice resolved at the sovereign port via a typed Contract (§5), never baked into the
+composition layer (§1.4).** A "Linux server" construct is therefore landscape-neutral; the plugin owns the
+landscape, and re-targeting VMware → Crossplane is swapping the bound Actuator, not rewriting the estate. This
+is the load-bearing reason the composition must stay typed-declarative-over-plugins and must never grow
+landscape knowledge (or a landscape DSL) in core.
+
 ## Charter alignment
 
 This is a **§1/§2-touching decision at the highest review bar** — it defines the model the whole platform
@@ -135,3 +165,9 @@ violate §5 and is out of scope until its own ADR reconciles it.
   **guardrail 6** to §4.1 explicit-overlay + §2.4 claim-type merge (never a precedence field). **Flag (folded):**
   the no-auto-launch citation was tightened from "§5 Flow 2" to §5 Flow 1 (Gate-on-plan) + §2.3 Gate + §4.3
   max-delta — the machinery the gating actually leans on. No permanent non-goal is breached as written.
+- **Post-review refinement (2026-07-17, steward):** added the "Layered constructs & landscape-agnosticism (the
+  AWS CDK reference)" section. It is **reinforcing, not a new decision** — it maps the composition model to a
+  known reference (CDK L1/L2/L3 constructs, defaults-with-escape-hatches) while **explicitly rejecting CDK's
+  programming-language half** as the forbidden config-language non-goal, and adds landscape-agnosticism (the same
+  construct binds vSphere/Terraform/Crossplane/Ansible via the port) as a direct consequence of §1.4/§5. No
+  guardrail changes.
