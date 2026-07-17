@@ -1299,7 +1299,6 @@ components:
         viewName: { type: string }
         actuator:
           type: string
-          default: ansible
           description: >
             Names the Actuator as an OPAQUE routing key (ADR-0046 — the spine
             does not enumerate tools): any registered in-tree Actuator or plugin
@@ -1651,7 +1650,6 @@ components:
         viewName: { type: string }
         actuator:
           type: string
-          default: ansible
           description: >
             Names the Actuator as an OPAQUE routing key (ADR-0046). A baseline is
             read-only by platform invariant, so the named Actuator must be

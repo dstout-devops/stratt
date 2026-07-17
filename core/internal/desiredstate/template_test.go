@@ -70,7 +70,7 @@ func TestTriggerTemplateNamespaceScope(t *testing.T) {
 	// event binding on an event-kind Trigger is allowed.
 	ev := types.Trigger{
 		Name: "ok", Kind: types.TriggerEvent, Emitter: "alerts", When: "true",
-		ViewName: "v", ViewParams: map[string]any{"host": "{{.event.labels.instance}}"},
+		ViewName: "v", Actuator: "ansible", ViewParams: map[string]any{"host": "{{.event.labels.instance}}"},
 	}
 	if err := ValidateTrigger(ev); err != nil {
 		t.Fatalf("event binding on event Trigger must be allowed: %v", err)

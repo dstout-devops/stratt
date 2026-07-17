@@ -309,15 +309,14 @@ func (ag *agent) heartbeatLoop(ctx context.Context) {
 	}
 }
 
-// interpName is the registered Interpreter name for a request (Action wins).
+// interpName is the registered Interpreter name for a request (Action wins). The
+// request always names one explicitly (ADR-0046: no platform default); an empty
+// name resolves to no interpreter, and handlePush reports that terminally.
 func interpName(req siteproto.DispatchRequest) string {
 	if req.Action != "" {
 		return req.Action
 	}
-	if req.Actuator != "" {
-		return req.Actuator
-	}
-	return types.DefaultActuator
+	return req.Actuator
 }
 
 // buildInterpreters is the Site's in-tree Interpreter registry. It MUST track

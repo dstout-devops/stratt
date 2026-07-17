@@ -1977,12 +1977,13 @@ func (s *Server) ListWorkflowRuns(w http.ResponseWriter, r *http.Request, params
 }
 
 // validateStepParams checks wire Step params against the Actuator's input
-// Contract (§1.5, ADR-0015). nil/empty actuator means the platform default.
+// Contract (§1.5, ADR-0015). A View actuation must name its actuator (no platform
+// default, ADR-0046) — an empty one is rejected here, not silently defaulted.
 func validateStepParams(actuator *string, params *map[string]interface{}) error {
-	name := types.DefaultActuator
-	if actuator != nil && *actuator != "" {
-		name = *actuator
+	if actuator == nil || *actuator == "" {
+		return fmt.Errorf("a View actuation requires an explicit actuator (no platform default)")
 	}
+	name := *actuator
 	raw := json.RawMessage(`{}`)
 	if params != nil {
 		b, err := json.Marshal(*params)

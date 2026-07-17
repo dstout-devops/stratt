@@ -53,9 +53,11 @@ func LaunchRun(ctx context.Context, d LaunchDeps, p LaunchParams) (types.Run, er
 	if p.Action != "" {
 		return launchAction(ctx, d, p)
 	}
+	// A View actuation names its Actuator EXPLICITLY — no platform default (ADR-0046:
+	// the spine names no tool; every Run's actuator is traceable to a declaration).
 	name := p.Actuator
 	if name == "" {
-		name = defaultActuator
+		return types.Run{}, fmt.Errorf("a View actuation requires an explicit actuator (no platform default)")
 	}
 	if err := contract.ValidateActuatorParams(name, p.Params); err != nil {
 		return types.Run{}, err

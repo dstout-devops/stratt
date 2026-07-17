@@ -3,6 +3,7 @@ package orchestrate
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"time"
 
 	"go.temporal.io/sdk/temporal"
@@ -395,9 +396,11 @@ func stepsNamespace(steps map[string]json.RawMessage) map[string]any {
 // (the firing event and prior Steps' outputs), then re-validates the resolved
 // params against the Actuator's input Contract before dispatch (ADR-0024/0031).
 func (a *Activities) ResolveStepParams(ctx context.Context, actuator string, params map[string]any, event map[string]any, steps map[string]json.RawMessage) (json.RawMessage, error) {
+	// A Workflow actuation Step names its Actuator explicitly (no platform default,
+	// ADR-0046); validated at Workflow declaration, so empty here is a bug.
 	name := actuator
 	if name == "" {
-		name = defaultActuator
+		return nil, fmt.Errorf("workflow actuation step requires an explicit actuator (no platform default)")
 	}
 	ns := template.Namespaces{"event": event, "steps": stepsNamespace(steps)}
 	raw, err := contract.ResolveActuatorParams(name, params, ns)

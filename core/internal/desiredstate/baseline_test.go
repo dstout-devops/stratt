@@ -26,6 +26,7 @@ func TestParseBaselines(t *testing.T) {
 	writeBaseline(t, root, "kernel.yaml", `
 name: kernel-drift
 viewName: all-vms
+actuator: ansible
 cron: "0 * * * *"
 severity: warning
 dampingObservations: 2
@@ -70,7 +71,7 @@ framework: cis
 	// input Contract, ADR-0046 finding #3 — so it is not asserted here.)
 	okDir := t.TempDir()
 	writeDecl(t, okDir, "v.yaml", "name: v\nselector: {kinds: [vm]}\n")
-	writeBaseline(t, okDir, "x.yaml", "name: x\nviewName: v\ncron: '* * * * *'\nseverity: info\nparams: {check: false}\n")
+	writeBaseline(t, okDir, "x.yaml", "name: x\nviewName: v\nactuator: ansible\ncron: '* * * * *'\nseverity: info\nparams: {check: false}\n")
 	if _, err := ParseDir(okDir); err != nil {
 		t.Fatalf("content-blind validation must accept an inert declared params.check, got %v", err)
 	}

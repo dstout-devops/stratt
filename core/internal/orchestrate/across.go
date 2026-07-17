@@ -370,7 +370,7 @@ func isTerminal(s types.RunStatus) bool {
 func (a *Activities) FinishRunAcross(ctx context.Context, arg FinishAcrossArg) error {
 	in := arg.In
 	summary := map[string]any{
-		"actuator":  actuatorOr(in.Actuator),
+		"actuator":  in.Actuator, // inherited from the parent Run — never defaulted
 		"view":      in.ViewName,
 		"targets":   arg.Targets,
 		"crossCell": true,
@@ -419,11 +419,4 @@ func (a *Activities) FinishRunAcross(ctx context.Context, arg FinishAcrossArg) e
 		return a.Bus.Publish(ctx, types.RunEvent{RunID: in.RunID, Kind: "stream-end"})
 	}
 	return nil
-}
-
-func actuatorOr(name string) string {
-	if name == "" {
-		return defaultActuator
-	}
-	return name
 }

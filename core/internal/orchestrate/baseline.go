@@ -89,9 +89,12 @@ func checkRunInput(b types.Baseline) (RunInput, error) {
 	for k, v := range b.Params {
 		params[k] = v
 	}
+	// A Baseline names its Actuator explicitly (no platform default, ADR-0046);
+	// required at declaration (ValidateBaseline), so empty here is a bug.
 	actuator := b.Actuator
 	if actuator == "" {
-		actuator = defaultActuator
+		return RunInput{}, temporal.NewNonRetryableApplicationError(
+			"baseline requires an explicit actuator (no platform default)", "ActuatorRequired", nil)
 	}
 	// A baseline is ALWAYS read-only — a platform INVARIANT, not a per-tool fact
 	// (ADR-0046: the spine never switches on tool name, no `if ansible {…}`). Force

@@ -159,7 +159,9 @@ func (e *Engine) launch(ctx context.Context, log *slog.Logger, t types.Trigger, 
 	// violation is a TERMINAL data problem (this payload will never bind) —
 	// logged and dropped, never launched and never redelivered (a poison
 	// message must not loop). Only infrastructure failures below redeliver.
-	params, err := contract.ResolveActuatorParams(actuatorOrDefault(t.Actuator), t.Params, ns)
+	// The trigger declaration's actuator — required for a View-actuation trigger
+	// (validated at declaration; no platform default, ADR-0046).
+	params, err := contract.ResolveActuatorParams(t.Actuator, t.Params, ns)
 	if err != nil {
 		log.Error("trigger binding failed; event dropped (not redelivered)", "trigger", t.Name, "error", err)
 		return nil
@@ -188,13 +190,6 @@ func (e *Engine) launch(ctx context.Context, log *slog.Logger, t types.Trigger, 
 		log.Info("trigger launched run", "trigger", t.Name, "view", t.ViewName, "id", opts.ID)
 	}
 	return err
-}
-
-func actuatorOrDefault(a string) string {
-	if a == "" {
-		return types.DefaultActuator
-	}
-	return a
 }
 
 func isAlreadyStarted(err error) bool {

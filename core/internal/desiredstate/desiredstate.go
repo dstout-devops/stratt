@@ -1411,13 +1411,17 @@ func ValidateBlueprint(b types.Blueprint) error {
 // (the placeholder isn't the value the schema must accept), so their
 // contract check is skipped here.
 func validateParamsContract(actuator string, params map[string]any) error {
+	// A View actuation names its Actuator EXPLICITLY (no platform default, ADR-0046):
+	// this validator is reached only on the view-actuation branch (actions, gates, and
+	// facet-observation baselines never call it), so an empty actuator is an
+	// under-specified declaration — reject it at parse, not silently default it.
+	if actuator == "" {
+		return fmt.Errorf("a View actuation requires an explicit actuator (no platform default)")
+	}
 	if template.Has(params) {
 		return nil
 	}
 	name := actuator
-	if name == "" {
-		name = types.DefaultActuator
-	}
 	raw := json.RawMessage(`{}`)
 	if params != nil {
 		b, err := json.Marshal(params)

@@ -2,13 +2,6 @@ package types
 
 import "time"
 
-// DefaultActuator is the platform fallback when a Step/Baseline/Trigger names no
-// Actuator — the ONE canonical place the spine names a tool (ADR-0046: the core must
-// not scatter a specific tool name). The fuller dark-matter fix — making the wire
-// `actuator` field required and dropping the default entirely — is a separate wire
-// decision; until then, change the default here, in one place.
-const DefaultActuator = "ansible"
-
 // Step edge conditions: when a Step becomes eligible relative to its needs
 // (charter §2: success/failure/always edges). Empty means success.
 const (
@@ -43,7 +36,6 @@ type Step struct {
 	// Actuation fields (mirror StartRun / Trigger launch parameters).
 	ViewName string `json:"viewName,omitempty"`
 	Actuator string `json:"actuator,omitempty"`
-	// (DefaultActuator, below, is the platform fallback when Actuator is empty.)
 	// Action names a Connector Action for a targetless typed operation (§2.2,
 	// ADR-0031); mutually exclusive with ViewName/Actuator. DryRun asks for a
 	// side-effect-free plan.

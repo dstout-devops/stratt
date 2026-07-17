@@ -16,12 +16,16 @@ func TestCheckRunInputReadOnly(t *testing.T) {
 	// A baseline is read-only by platform INVARIANT: DryRun is forced for ANY
 	// actuator, and the spine no longer switches on tool name nor writes a
 	// tool-specific params.check (ADR-0046 — content-blind).
-	in, err := checkRunInput(types.Baseline{Name: "b", ViewName: "v", Cron: "@hourly", Severity: "info"})
+	in, err := checkRunInput(types.Baseline{Name: "b", Actuator: "ansible", ViewName: "v", Cron: "@hourly", Severity: "info"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if in.Actuator != "ansible" || in.Baseline != "b" || !in.DryRun {
 		t.Fatalf("baseline must force DryRun read-only via the port bit: %+v", in)
+	}
+	// A baseline with NO actuator is rejected — no platform default (ADR-0046).
+	if _, err := checkRunInput(types.Baseline{Name: "b", ViewName: "v", Cron: "@hourly", Severity: "info"}); err == nil {
+		t.Fatal("a baseline with no actuator must be rejected (no platform default)")
 	}
 	var p map[string]any
 	if err := json.Unmarshal(in.Params, &p); err != nil {

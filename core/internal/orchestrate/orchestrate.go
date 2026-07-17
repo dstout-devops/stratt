@@ -46,15 +46,11 @@ import (
 // legacy "stratt-runs". Set once at startup before the worker/launch paths run.
 var TaskQueue = "stratt-runs"
 
-// defaultActuator is the platform default when a Step/Baseline names no Actuator —
-// the ONE canonical place the flagship's name lives (ADR-0046: the spine must not
-// scatter a specific tool name). Making the Actuator field required on the wire (and
-// dropping this default entirely) is the fuller dark-matter fix, tracked separately.
-const defaultActuator = types.DefaultActuator
-
 // RunInput starts one Run against a View. Actuator and Params are the Step
-// fields (§2.3: Step = Actuator + content + params); empty Actuator means
-// ansible (the Phase-0 default). Slices > 1 partitions the target set across
+// fields (§2.3: Step = Actuator + content + params). A View actuation names its
+// Actuator EXPLICITLY — declared, or inherited from the parent Run — never a
+// platform default (ADR-0046: the spine names no tool, §1.8: always traceable);
+// it is empty only for Action runs. Slices > 1 partitions the target set across
 // that many parallel K8s Jobs.
 type RunInput struct {
 	// RunID is the pre-created Run summary id for API launches. Empty for
@@ -665,9 +661,13 @@ func (a *Activities) ResolveCredentials(ctx context.Context, in RunInput) ([]dis
 // same prepared JobSpec drives the same dispatch.Dispatcher.Run — no parallel
 // execution stack (§1.4).
 func (a *Activities) Execute(ctx context.Context, in RunInput, slice int, site string, resolved ResolvedTargets, creds []dispatch.CredentialMount) (dispatch.Result, error) {
+	// A View actuation carries an EXPLICIT actuator — declared or inherited from the
+	// parent Run, never a platform default (ADR-0046: the spine names no tool). Empty
+	// here means an under-specified declaration slipped past validation — fail loudly.
 	name := in.Actuator
 	if name == "" {
-		name = defaultActuator
+		return dispatch.Result{}, temporal.NewNonRetryableApplicationError(
+			"a View actuation requires an explicit actuator (no platform default)", "ActuatorRequired", nil)
 	}
 	// ── Route: a plugin-provided Actuator applies over the port; else the pod ──
 	// The authz chokepoint is the runner-on-View grant (RunAgainstView, ADR-0028)
@@ -1329,10 +1329,7 @@ func (a *Activities) FinishRun(ctx context.Context, in RunInput, status types.Ru
 	for _, s := range result.PerTarget {
 		counts[s]++
 	}
-	actuator := in.Actuator
-	if actuator == "" {
-		actuator = defaultActuator
-	}
+	actuator := in.Actuator // explicit (declared/inherited); Action runs leave it empty
 	slices := in.Slices
 	if slices < 1 {
 		slices = 1
