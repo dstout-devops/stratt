@@ -12,7 +12,7 @@ everything here; **[CLAUDE.md](../CLAUDE.md)** is the operating guide for workin
 | Area | What's here |
 |---|---|
 | **[roadmap.md](roadmap.md)** | Phase status vs charter §8 — what's built, what's gated, what's deferred. Start here for "where are we?" |
-| **[adr/](adr/README.md)** | Architecture Decision Records (54, indexed). Every decision of consequence; run `/new-adr` to add one. |
+| **[adr/](adr/README.md)** | Architecture Decision Records (56, indexed). Every decision of consequence; run `/new-adr` to add one. |
 | **[runbooks/](runbooks/)** | Operational procedures: [ha-dr.md](runbooks/ha-dr.md) (in-region HA + DR), [cell-failover-drill.md](runbooks/cell-failover-drill.md) (multi-region Cell failover + fenced Source re-home). |
 | **[evidence/](evidence/multi-region-99_99.md)** | Requirement→evidence maps that back an availability/compliance claim (e.g. the 99.99% multi-region path). |
 | **[ux/](ux/)** | Design system + product UX: [design-tokens.md](ux/design-tokens.md), [screen-catalog.md](ux/screen-catalog.md), [competitive-teardown.md](ux/competitive-teardown.md). |

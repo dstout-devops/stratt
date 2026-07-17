@@ -63,3 +63,5 @@ Status is `Accepted` unless noted. See **[../roadmap.md](../roadmap.md)** for ho
 | [0052](0052-secretbroker-port.md) | The SecretBroker port: per-call credential resolution for plugins (§2.5) | Accepted |
 | [0053](0053-mcp-transport-generic-connector.md) | MCP as a generic transport: the last domain logic leaves the core | Accepted |
 | [0054](0054-per-step-facet-claim.md) | Per-Step facet write-scope: narrow the write-back grant to what a Step declares | Accepted |
+| [0055](0055-estate-composition.md) | Estate Composition: what it means to "define the estate" (north-star model + guardrails + gap roadmap) | Proposed |
+| [0056](0056-estate-as-code.md) | Estate-as-Code: declaring Sources & Connectors in Git + the `stratt` estate CLI | Proposed |
