@@ -8,8 +8,10 @@ plugin that consumes typed inputs from the graph and writes typed, provenance-st
 non-trivial decision. The charter supersedes every other document, including this one. If code or a
 request contradicts the charter, surface the conflict — don't silently follow either.
 
-**Status: Phases 0–2 code-complete; Phase 3 ~90%; multi-region Cells shipped ahead of plan.** The Go
-control plane (`core/`), the React UI (`ui/`), 45 ADRs, and the Helm chart are all real and substantial —
+**Status: Phases 0–2 code-complete; Phase 3 ~90%; multi-region Cells shipped ahead of plan; and the whole
+platform re-centered onto the sovereign plugin port (dark-matter, ADR-0046 arc) — the core spine is
+content-blind and every tool is a plugin, verified in-repo (live-cluster e2e still outstanding).** The Go
+control plane (`core/`), the React UI (`ui/`), 54 ADRs, and the Helm chart are all real and substantial —
 this is a working platform, not a spike. The living, evidence-backed tracker is
 **[docs/roadmap.md](docs/roadmap.md)**; the decision record is **[docs/adr/](docs/adr/README.md)**. Follow
 the charter §8 phasing and the roadmap — build the *next* thing, not ahead recklessly — and keep new work

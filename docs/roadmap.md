@@ -21,8 +21,8 @@ The thesis slice. **Done** — go/no-go recorded in [ADR-0008](adr/0008-phase0-g
 | Deliverable | State | Evidence |
 |---|---|---|
 | Entity/Facet/Provenance store | ✅ | `core/internal/graph` (migration `00001_graph_spine`) |
-| One native Syncer (vCenter-class) | ✅ | `core/internal/connectors/vcenter` ([ADR-0007](adr/0007-phase0-syncer-sdk-and-dev-harness.md)) |
-| View query → Temporal Workflow → K8s Job (ansible-runner) | ✅ | `orchestrate`, `dispatch`, `actuators/ansible` |
+| One native Syncer (vCenter-class) | ✅ | `plugins/vcenter` (re-centered from in-tree, ADR-0046; [ADR-0007](adr/0007-phase0-syncer-sdk-and-dev-harness.md)) |
+| View query → Temporal Workflow → K8s Job (ansible-runner) | ✅ | `orchestrate`, `dispatch`, `plugins/ansible` (EE-Job transport, ADR-0051) |
 | Facts projected back with provenance | ✅ | `graph.RunProjector`, `orchestrate.ProjectFacts` |
 | Live SSE tail | ✅ | `events.Bus.Tail`, `GET /runs/{id}/events` |
 
@@ -34,8 +34,8 @@ The thesis slice. **Done** — go/no-go recorded in [ADR-0008](adr/0008-phase0-g
 
 | Deliverable | State | Evidence |
 |---|---|---|
-| Ansible Actuator (EEs, per-target results, slicing) | ✅ | `actuators/ansible`, `RunInput.Slices` |
-| `script` Actuator | ✅ | `actuators/script` |
+| Ansible Actuator (EEs, per-target results, slicing) | ✅ | `plugins/ansible` (EE-Job shim, ADR-0051), `RunInput.Slices` |
+| `script` Actuator | ✅ | `plugins/script` (EE-Job shim, ADR-0046) |
 | Git desired-state sync + `stratt apply`/`plan` | ✅ | `desiredstate`, `POST /desired-state/{plan,apply}` |
 | Views UI | ✅ | `ui/` ([ADR-0012](adr/0012-views-ui-v1.md)) |
 | Workflows + Gates | ✅ | `orchestrate.RunDAG`, `DecideGate` ([ADR-0011](adr/0011-workflows-gates-v1.md)) |
@@ -43,7 +43,7 @@ The thesis slice. **Done** — go/no-go recorded in [ADR-0008](adr/0008-phase0-g
 | CredentialRefs (Vault + K8s) | ✅ | `dispatch.CredentialMount` ([ADR-0009](adr/0009-identity-authz-credential-brokering.md)) |
 | OIDC + basic OpenFGA | ✅ | `authz` (OpenFGA + tuples), OIDC resolver |
 | Helm chart | ✅ | `deploy/charts/stratt` ([ADR-0013](adr/0013-helm-packaging.md)) |
-| MS Graph + cloud-instance Syncers | ✅ | `connectors/msgraph`, `connectors/awsec2` ([ADR-0014](adr/0014-connector-breadth-msgraph-ec2.md)) |
+| MS Graph + cloud-instance Syncers | ✅ | `plugins/msgraph`, `plugins/awsec2` (re-centered, ADR-0046; [ADR-0014](adr/0014-connector-breadth-msgraph-ec2.md)) |
 | **Promote:** Nebulae daily-driver, 30d zero data loss | ⬜ | operational, not code |
 | **OSS gate:** OSPO clearance → repo public (DCO/ADRs/quickstart) | 🚫 | charter §7.4 blocker |
 
@@ -53,11 +53,11 @@ The thesis slice. **Done** — go/no-go recorded in [ADR-0008](adr/0008-phase0-g
 
 | Deliverable | State | Evidence |
 |---|---|---|
-| OpenTofu Actuator (plan/apply Gates, encrypted HTTP state backend, output→Contracts) | ✅ | `actuators/opentofu`, `statebackend` ([ADR-0016](adr/0016-opentofu-actuator.md)/[0017](adr/0017-tofu-outputs-to-entities.md)) |
+| OpenTofu Actuator (plan/apply Gates, encrypted HTTP state backend, output→Contracts) | ✅ | `plugins/opentofu` (re-centered, ADR-0046), `statebackend` (core transport) ([ADR-0016](adr/0016-opentofu-actuator.md)/[0017](adr/0017-tofu-outputs-to-entities.md)) |
 | Trigger engine (webhook + Alertmanager Emitters, CEL) | ✅ | `triggerengine`, `emitters`, `rules` ([ADR-0018](adr/0018-trigger-engine.md)) |
 | Intent/Assignment/Blueprint compiler (claim types, ownership registry, membership-delta, max-delta gate) | ✅ | `compiler` ([ADR-0023](adr/0023-intent-compiler.md)) |
 | Baselines + Findings v1 (check-mode + tofu plan, flap damping) | ✅ | `baselines`, `graph.findingstore` ([ADR-0019](adr/0019-baselines-findings-v1.md)) |
-| MCP actuator/Action adapter + platform MCP server | ✅ | `actuators/mcp`, `mcpserver` ([ADR-0021](adr/0021-platform-mcp-server.md)/[0022](adr/0022-mcp-actuator.md)) |
+| MCP actuator/Action adapter + platform MCP server | ✅ | `plugins/mcp` (EE-Job transport, ADR-0053), `mcpserver` (core agent-native surface) ([ADR-0021](adr/0021-platform-mcp-server.md)/[0022](adr/0022-mcp-actuator.md)) |
 | AWX importer + `/api/v2` façade | ✅ | `awximport`, `awxfacade` ([ADR-0025](adr/0025-awx-importer-and-ansible-scm-content-ref.md)/[0026](adr/0026-awx-api-v2-facade.md)) |
 | Notifications | ✅ | `notify` ([ADR-0027](adr/0027-notifications.md)) |
 
@@ -75,7 +75,7 @@ connect to — revisit when a real tenant requires them); the promote/OSS gates 
 | SCIM | ✅ | `scim` ([ADR-0035](adr/0035-scim-service-provider.md)) |
 | Pull agent + Bundles | ✅ | `cmd/stratt-agent` (pull), `bundle` ([ADR-0032](adr/0032-sites-remote-execution-loci.md)) |
 | Evidence store (object-lock) + CIS pack | ✅ | `evidencestore`, `packs/cis` ([ADR-0029](adr/0029-evidence-store-object-lock.md)/[0033](adr/0033-cis-pack-compliance-as-data.md)) |
-| `Intent/Certificate` + `Intent/FileSet` + `Intent/Access` GA | ✅ | `connectors/certissuer`, `types.Intent{Certificate,FileSet,Access}` ([ADR-0030](adr/0030-intent-certificate-ga.md)/[0036](adr/0036-intent-fileset-access-ga.md)) |
+| `Intent/Certificate` + `Intent/FileSet` + `Intent/Access` GA | ✅ | `plugins/certissuer` (Syncer + reconcile Actuator, ADR-0050), `types.Intent{Certificate,FileSet,Access}` ([ADR-0030](adr/0030-intent-certificate-ga.md)/[0036](adr/0036-intent-fileset-access-ga.md)) |
 | **Jamf Connector** | ⏸ | deferred — no current need/environment |
 | **ConfigMgr (SCCM AdminService) Connector** | ⏸ | deferred — no current need/environment |
 | **Promote:** production for a bounded service class; 99.9% 30-day SLO; security review | ⬜ | operational, not code |
@@ -88,6 +88,39 @@ CRD interface, verified-plugin registry, ACP addressability. Not begun as planne
 below.**
 
 ---
+
+## Cross-cutting: the substrate re-centering (dark-matter, ADR-0046 arc)
+
+Orthogonal to the phase plan, the platform underwent its largest architectural shift: the **dark-matter
+re-centering** ([ADR-0046](adr/0046-stratt-as-substrate.md)). The Apache-2.0 core is now a thin,
+**content-blind spine** — graph / coordinates / contracts / reconcile / authz / audit with **zero tool
+domain logic** — and **every tool is a plugin behind the sovereign plugin port**. The Phase 0–2 actuators and
+connectors listed above were originally *in-tree*; they have all been re-centered out. This is a re-architecture
+of existing capabilities, not new phase work — the deliverables above still stand, they now live behind the port.
+
+| Slice | State | Evidence |
+|---|---|---|
+| Sovereign plugin port + content-blind spine (the thesis) | ✅ | [ADR-0046](adr/0046-stratt-as-substrate.md); `sdk/stratt/plugin/v1`, `pluginhost` |
+| Port v1 full surface (write-back, relations, rung ladder, plan pinning) | ✅ | [ADR-0047](adr/0047-plugin-port-v1-full-surface.md); `pluginhost.ApplyRaw`/`PlanStep` |
+| Integration taxonomy (connector-plugin vs migration-tool vs core-transport) | ✅ | [ADR-0048](adr/0048-integration-taxonomy-plugin-tool-transport.md); AWX importer relocated, façade kept |
+| Sites over the port (agent = authenticated relay, governance stays hub-side) | ✅ | [ADR-0049](adr/0049-sites-over-the-plugin-port.md); `sitegw`, `siteproto` typed stream |
+| Certificate lifecycle as a reconcile Actuator | ✅ | [ADR-0050](adr/0050-certificate-reconcile-actuator.md); `plugins/certissuer` |
+| Ansible EE-Job subprocess transport (GPL boundary in the EE image) | ✅ | [ADR-0051](adr/0051-ee-job-speaks-the-port.md); `plugins/ansible`, one `govern` |
+| SecretBroker port (per-call resolution; core holds no material, §2.5) | ✅ | [ADR-0052](adr/0052-secretbroker-port.md); `sdk/secretbroker` |
+| MCP as a generic transport (the last domain logic leaves the core) | ✅ | [ADR-0053](adr/0053-mcp-transport-generic-connector.md); `plugins/mcp` EE-Job shim |
+| Per-Step facet write-scope (least-authority write-back at the one governor) | ✅ | [ADR-0054](adr/0054-per-step-facet-claim.md); `pluginhost.govern` grant∩scope |
+
+**Verified in-repo (structural):** `core/internal/connectors/` is empty; `internal/actuators`,
+`internal/actions`, `internal/emitters` hold only the seam interfaces, no tool logic; **12 tools** live in
+`plugins/` (ansible, awsec2, certissuer, chef, mcp, msgraph, notify, opentofu, puppet, salt, script, vcenter);
+the execution path routes by registry lookup, not a tool-name switch, with no platform-default actuator
+(ADR-0046). The residual tool-name strings in core are legitimate — opaque routing-key registration in the
+composition root (`cmd/strattd`), the AWX `/api/v2` compat façade, and the AWX one-shot migration tool.
+
+**Honest caveat:** this is **structurally code-complete and proven by unit/integration tests** (Site-forwarded
+governance, the govern grant∩scope intersection) — **not** yet by a live end-to-end run on a real
+NATS+K8s+Temporal cluster (environment-blocked). The exit gates are unchanged: the re-centering does not move
+any promote/OSS gate, which still waits on §7.4.
 
 ## Ahead of the roadmap: multi-region Cells
 
@@ -103,6 +136,8 @@ honesty, fenced re-home over real HTTP) are **demonstrated end-to-end** by the t
 ## Where we are, in one line
 
 Phases 0–2 code-complete; Phase 3 code ~90% (Jamf + ConfigMgr Connectors deferred by choice); multi-region
-Cells shipped ahead of schedule. **No phase's promote/OSS exit gate is met** — every one ultimately waits on
-the charter §7.4 going-public step (OSPO/IP clearance) plus real operational evidence (SLO, security review,
-adoption), none of which is a coding task.
+Cells shipped ahead of schedule; and the whole platform has been **re-centered onto the sovereign plugin port
+(dark-matter, ADR-0046 arc)** — the core spine is content-blind and every tool is a plugin, verified structurally
+in-repo and by unit/integration tests, with the live-cluster e2e still outstanding. **No phase's promote/OSS
+exit gate is met** — every one ultimately waits on the charter §7.4 going-public step (OSPO/IP clearance) plus
+real operational evidence (SLO, security review, adoption), none of which is a coding task.
