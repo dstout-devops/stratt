@@ -133,20 +133,27 @@ func (a *Activities) ExecuteAction(ctx context.Context, in RunInput, creds []dis
 			return dispatch.Result{}, temporal.NewNonRetryableApplicationError(
 				fmt.Sprintf("action %q does not support dry-run", in.Action), "DryRunUnsupported", nil)
 		}
-		// Only the use-checked, authorized names cross the wire (the read-side
-		// credential-oracle closure); the plugin resolves material against its own
-		// broker, confined to these. The launching Principal — not the plugin
-		// channel identity — carries the invocation (§1.6 one-Principal model).
-		names := make([]string, 0, len(creds))
+		// The use-checked, authorized CredentialRefs cross with their resolved Secret
+		// COORDINATES (ADR-0052) — names + name/namespace/key coordinates, NEVER
+		// material; the plugin's SDK SecretBroker resolves the material itself, confined
+		// to these. The host attaches coordinates only on the local path (MF-C). The
+		// launching Principal — not the plugin channel identity — carries the invocation.
+		portCreds := make([]pluginhost.Credential, 0, len(creds))
 		for _, c := range creds {
-			names = append(names, c.RefName)
+			keys := make([]pluginhost.CredentialKey, 0, len(c.Injection))
+			for _, inj := range c.Injection {
+				keys = append(keys, pluginhost.CredentialKey{Key: inj.Key, As: inj.As, Name: inj.Name})
+			}
+			portCreds = append(portCreds, pluginhost.Credential{
+				RefName: c.RefName, SecretNamespace: c.SecretNamespace, SecretName: c.SecretName, Keys: keys,
+			})
 		}
 		raw, err := pa.Host.InvokeRaw(ctx, pluginhost.ActionInvoke{
 			Principal:            in.Principal,
 			Action:               in.Action,
 			Args:                 in.Params,
 			DryRun:               in.DryRun,
-			CredentialRefs:       names,
+			Credentials:          portCreds,
 			ExpectOutputContract: "actions/" + in.Action + ".output",
 		})
 		if err != nil {

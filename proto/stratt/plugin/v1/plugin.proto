@@ -161,6 +161,27 @@ message Principal {
 // CredentialRef — a NAME only (§2.5). Never carries secret material.
 message CredentialRef {
   string name = 1;
+  // ResolvedRef coordinates (ADR-0052 SecretBroker) — attached by the core ONLY on
+  // the local/trusted path (never serialized onto a relay transport, MF-C) for
+  // use-checked refs, so a plugin's SDK SecretBroker can resolve the material ITSELF
+  // (like the kubelet does for a pod's secretKeyRef). Coordinates only — there is
+  // deliberately no material/bytes field here, EVER (§2.5: material never transits
+  // the core). A plugin that receives only `name` cannot resolve — fail-closed.
+  ResolvedRef resolved = 2;
+}
+// ResolvedRef is a use-checked pointer to WHERE a CredentialRef's material lives
+// (ADR-0052): a K8s Secret's coordinates + the per-key mapping. NO material field.
+message ResolvedRef {
+  string secret_namespace = 1;
+  string secret_name = 2;
+  // keys the plugin is authorized to read, mirroring the CredentialRef's Injection —
+  // the Secret DATA keys + the logical name/mode the pod path would have projected.
+  repeated ResolvedKey keys = 3;
+}
+message ResolvedKey {
+  string key = 1;  // the Secret DATA key (e.g. "url", "token") — a name, never a value
+  string as = 2;   // projection role hint: "env" | "file"
+  string name = 3; // the logical env-var / file name the pod path would have used
 }
 
 // ─────────────────────────────────────────────────────────────────────────

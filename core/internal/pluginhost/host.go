@@ -43,6 +43,13 @@ type Host struct {
 	source     types.Source
 	rejections []Rejection
 	plans      *planstore.Store // set for Actuator hosts (the Plan verb); nil otherwise
+
+	// credCoordinates gates SecretBroker ResolvedRef enrichment (ADR-0052 MF-C): the
+	// host attaches use-checked Secret COORDINATES to the Envelope only on the LOCAL/
+	// trusted path. A relay-backed host (a plugin at an untrusted Site) sets this
+	// false, so hub Secret coordinates never cross the relay — fail-closed. New()
+	// defaults it TRUE (a hub-local host); WithoutCredentialCoordinates() disables it.
+	credCoordinates bool
 }
 
 // UsePlanStore attaches the content-addressed plan store an Actuator host needs
@@ -50,6 +57,46 @@ type Host struct {
 // saved plan and re-hashes it at the Apply boundary. Syncer/Action hosts leave it
 // nil. Returns the host for chaining at wiring time.
 func (h *Host) UsePlanStore(p *planstore.Store) *Host { h.plans = p; return h }
+
+// WithoutCredentialCoordinates disables SecretBroker ResolvedRef enrichment for this
+// host (ADR-0052 MF-C) — used for a RELAY-backed host so a plugin at an untrusted
+// Site never learns hub Secret coordinates. Returns the host for chaining.
+func (h *Host) WithoutCredentialCoordinates() *Host { h.credCoordinates = false; return h }
+
+// Credential is a use-checked CredentialRef with its resolved Secret COORDINATES
+// (ADR-0052) — names/paths only, NEVER material. The host attaches these to the
+// Envelope (as a ResolvedRef) on the local path so the plugin's SDK SecretBroker can
+// resolve the material itself; withheld on a relay host (MF-C).
+type Credential struct {
+	RefName         string
+	SecretNamespace string
+	SecretName      string
+	Keys            []CredentialKey
+}
+
+// CredentialKey mirrors one CredentialRef Injection entry: the Secret DATA key the
+// plugin may read + the logical name/mode the pod path would have projected.
+type CredentialKey struct{ Key, As, Name string }
+
+// wireCred renders one authorized Credential onto the Envelope. The ResolvedRef
+// coordinates ride ONLY when this host allows them (MF-C); otherwise the plugin gets
+// the name alone and must fail closed. No material field exists to leak (§2.5).
+func (h *Host) wireCred(c Credential) *pluginv1.CredentialRef {
+	ref := &pluginv1.CredentialRef{Name: c.RefName}
+	if !h.credCoordinates {
+		return ref
+	}
+	keys := make([]*pluginv1.ResolvedKey, 0, len(c.Keys))
+	for _, k := range c.Keys {
+		keys = append(keys, &pluginv1.ResolvedKey{Key: k.Key, As: k.As, Name: k.Name})
+	}
+	ref.Resolved = &pluginv1.ResolvedRef{
+		SecretNamespace: c.SecretNamespace,
+		SecretName:      c.SecretName,
+		Keys:            keys,
+	}
+	return ref
+}
 
 // Rejection is a governance refusal the host surfaces (an ungranted/land-grabbed
 // emission it dropped). Persisting these as graph Findings (§1.8) is the
@@ -74,7 +121,7 @@ type InvokeOutcome struct {
 }
 
 func New(store *graph.Store, client pluginv1.PluginServiceClient, grant Grant, log *slog.Logger) *Host {
-	return &Host{store: store, client: client, grant: grant,
+	return &Host{store: store, client: client, grant: grant, credCoordinates: true,
 		log: log.With("plugin", grant.PluginIdentity, "source", grant.Source.Name)}
 }
 
@@ -313,12 +360,15 @@ func (h *Host) Sync(ctx context.Context) error {
 // use-checked, platform-authorized CredentialRef NAMES cross the wire — the
 // read-direction mirror of §7's provisioned-cred confinement.
 type ActionInvoke struct {
-	Principal            string // the launching Principal (audit/authz identity, §1.6)
-	Action               string
-	Args                 []byte
-	DryRun               bool
-	CredentialRefs       []string // authorized names only (the credential-oracle closure)
-	ExpectOutputContract string   // core-pinned output-contract id; "" skips the reconcile
+	Principal string // the launching Principal (audit/authz identity, §1.6)
+	Action    string
+	Args      []byte
+	DryRun    bool
+	// Credentials are the use-checked, authorized CredentialRefs with their resolved
+	// Secret COORDINATES (ADR-0052) — names only, plus coordinates the host attaches to
+	// the Envelope on the local path (MF-C). The plugin resolves material itself.
+	Credentials          []Credential
+	ExpectOutputContract string // core-pinned output-contract id; "" skips the reconcile
 }
 
 // ActionEntity is a GOVERNED, UNPROJECTED provision→configure observation —
@@ -347,9 +397,9 @@ type RawInvokeResult struct {
 // "Raw" means unprojected, NEVER ungated.
 func (h *Host) InvokeRaw(ctx context.Context, req ActionInvoke) (RawInvokeResult, error) {
 	var out RawInvokeResult
-	creds := make([]*pluginv1.CredentialRef, 0, len(req.CredentialRefs))
-	for _, n := range req.CredentialRefs {
-		creds = append(creds, &pluginv1.CredentialRef{Name: n})
+	creds := make([]*pluginv1.CredentialRef, 0, len(req.Credentials))
+	for _, c := range req.Credentials {
+		creds = append(creds, h.wireCred(c))
 	}
 	stream, err := h.client.Invoke(ctx, &pluginv1.InvokeRequest{
 		Envelope: &pluginv1.Envelope{
@@ -953,3 +1003,7 @@ func (h *Host) toUpsert(e *pluginv1.ObservedEntity) (graph.EntityUpsert, bool) {
 
 	return graph.EntityUpsert{Kind: e.GetKind(), IdentityKeys: ids, Labels: labels, Facets: facets}, true
 }
+
+// WireCredForTest exposes wireCred to the package's external-facing tests (the
+// enrichment boundary is security-critical, ADR-0052 MF-C, and must be asserted).
+func (h *Host) WireCredForTest(c Credential) *pluginv1.CredentialRef { return h.wireCred(c) }

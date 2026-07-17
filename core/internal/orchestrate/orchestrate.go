@@ -772,7 +772,10 @@ func (a *Activities) executePlugin(ctx context.Context, in RunInput, site string
 		if log == nil {
 			log = slog.Default()
 		}
-		host = pluginhost.New(a.Store, siterelay.NewClient(a.RelayDial(site, pa.Grant.PluginIdentity)), pa.Grant, log).UsePlanStore(pa.PlanStore)
+		// MF-C (ADR-0052): a relay-backed host at an untrusted Site NEVER attaches hub
+		// Secret coordinates to the Envelope — a remote plugin gets ref names alone.
+		host = pluginhost.New(a.Store, siterelay.NewClient(a.RelayDial(site, pa.Grant.PluginIdentity)), pa.Grant, log).
+			UsePlanStore(pa.PlanStore).WithoutCredentialCoordinates()
 		// F1 (ADR-0049): validate the RELAYED Manifest against the hub-held grant
 		// before any verb — the Site controls manifest.plugin_id, so a compromised
 		// agent relaying a different plugin is rejected hub-side. Bounded-trust holds

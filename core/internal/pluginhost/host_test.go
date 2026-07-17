@@ -1066,3 +1066,37 @@ func TestHost_GovernStream_AnsibleFactsWriteBack(t *testing.T) {
 		t.Fatalf("expected facet + ungranted-identity rejections, got %+v", raw.Rejections)
 	}
 }
+
+// TestHost_WireCred_CoordinatesLocalOnly proves the SecretBroker enrichment boundary
+// (ADR-0052 MF-C): a LOCAL host attaches use-checked Secret COORDINATES (never
+// material — there is no bytes field) to the Envelope CredentialRef, while a
+// relay-backed host (WithoutCredentialCoordinates) hands the NAME alone so a plugin
+// at an untrusted Site cannot learn hub Secret coordinates and fails closed.
+func TestHost_WireCred_CoordinatesLocalOnly(t *testing.T) {
+	cred := pluginhost.Credential{
+		RefName: "cred/notify/webhook", SecretNamespace: "stratt-secrets", SecretName: "webhook-sink",
+		Keys: []pluginhost.CredentialKey{{Key: "url", As: "file", Name: "url"}, {Key: "token", As: "file", Name: "token"}},
+	}
+
+	local := pluginhost.New(nil, nil, ansibleGrant(), discardLog())
+	got := local.WireCredForTest(cred)
+	if got.GetName() != "cred/notify/webhook" {
+		t.Fatalf("name must always cross: %q", got.GetName())
+	}
+	r := got.GetResolved()
+	if r == nil || r.GetSecretName() != "webhook-sink" || r.GetSecretNamespace() != "stratt-secrets" {
+		t.Fatalf("local host must attach Secret coordinates: %+v", r)
+	}
+	if len(r.GetKeys()) != 2 || r.GetKeys()[0].GetKey() != "url" {
+		t.Fatalf("coordinates must carry the authorized data keys: %+v", r.GetKeys())
+	}
+
+	relay := pluginhost.New(nil, nil, ansibleGrant(), discardLog()).WithoutCredentialCoordinates()
+	rgot := relay.WireCredForTest(cred)
+	if rgot.GetName() != "cred/notify/webhook" {
+		t.Fatalf("name must still cross on the relay path: %q", rgot.GetName())
+	}
+	if rgot.GetResolved() != nil {
+		t.Fatal("MF-C: a relay-backed host must NEVER attach hub Secret coordinates")
+	}
+}
