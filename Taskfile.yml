@@ -368,6 +368,12 @@ tasks:
       - docker build -f plugins/vcenter/Dockerfile -t stratt-plugin-vcenter:dev .
       - go run sigs.k8s.io/kind@v{{.KIND_VER}} load docker-image stratt-plugin-vcenter:dev --name {{.KIND_CLUSTER}}
 
+  image:staticinv-plugin:
+    desc: Build the static-inventory gRPC Syncer plugin image and load it into the kind cluster
+    cmds:
+      - docker build -f plugins/staticinv/Dockerfile -t stratt-plugin-staticinv:dev .
+      - go run sigs.k8s.io/kind@v{{.KIND_VER}} load docker-image stratt-plugin-staticinv:dev --name {{.KIND_CLUSTER}}
+
   images:control-plane:
     desc: Build the CONTROL-PLANE images (no push/load) — the CI regression gate. Plugins & the EE image build in their OWN units (each plugin is its own build/CI unit, ADR-0046) — core CI never builds per-plugin (it must scale to hundreds of plugins).
     cmds:
@@ -421,6 +427,7 @@ tasks:
       - task: image:kind-load
       - task: dev:ee:build
       - task: image:vcenter-plugin
+      - task: image:staticinv-plugin
       - task: dev:install
 
   dev:stack:down:
@@ -458,11 +465,18 @@ tasks:
     cmds:
       - go run ./cmd/stratt-dev-assert -mode=syncer -context={{.KIND_CONTEXT}}
 
+  e2e:plugin:devices:
+    desc: Prove devices-as-code — estate/hosts/*.yaml projects into the linux-fleet View via the static-inventory plugin (needs dev:stack:up)
+    dir: core
+    cmds:
+      - go run ./cmd/stratt-dev-assert -mode=devices -context={{.KIND_CONTEXT}}
+
   e2e:plugin:
-    desc: Full functional plugin e2e in kind — actuator (EE-Job) + syncer (gRPC). Run after `task dev:stack:up`.
+    desc: Full functional plugin e2e in kind — actuator (EE-Job) + syncer (gRPC) + devices-as-code (static-inv). Run after `task dev:stack:up`.
     cmds:
       - task: e2e:plugin:actuator
       - task: e2e:plugin:syncer
+      - task: e2e:plugin:devices
 
   dev:ee:build:
     desc: Build the dev EE image and load it into the kind cluster

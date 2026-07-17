@@ -10,6 +10,9 @@
 //	-mode=syncer   : wait for the vcenter gRPC Syncer plugin to project vcsim
 //	                 `vm` Entities (GET /views/dev-vms/entities), then launch a
 //	                 `script` Run against those REAL targets and assert success.
+//	-mode=devices  : assert the devices-as-code loop (ADR-0056 §5) — hosts declared
+//	                 in estate/hosts/*.yaml are projected by the static-inventory
+//	                 Syncer plugin and selected by the linux-fleet View.
 //
 // Exit 0 = green. Any assertion failure is fatal (non-zero).
 package main
@@ -38,7 +41,7 @@ import (
 const principal = "dev-runner" // matches dev/declarations/authz/tuples.yaml
 
 func main() {
-	mode := flag.String("mode", "actuator", "actuator | syncer")
+	mode := flag.String("mode", "actuator", "actuator | syncer | devices")
 	kctx := flag.String("context", "kind-stratt-dev", "kube context")
 	ns := flag.String("namespace", "stratt", "namespace strattd runs in")
 	flag.Parse()
@@ -56,6 +59,8 @@ func main() {
 		assertActuator(c, cs, *ns)
 	case "syncer":
 		assertSyncer(c, cs, *ns)
+	case "devices":
+		assertDevices(c)
 	default:
 		log.Fatalf("unknown -mode %q", *mode)
 	}
@@ -106,6 +111,28 @@ func assertSyncer(c *apiClient, cs *kubernetes.Clientset, ns string) {
 	out := c.awaitSuccess(runID, 150*time.Second)
 	assertJobRan(cs, ns, runID)
 	log.Printf("✓ [script] run %s over vcsim targets succeeded, governed K8s Job ran (outputs: %v)", runID, out)
+}
+
+// assertDevices proves the devices-as-code loop (ADR-0056 §5): hosts declared in
+// estate/hosts/*.yaml are projected by the static-inventory Syncer plugin and
+// selected by the linux-fleet View (kinds:[host], labels:{os:linux}) — the whole
+// path from a Git file to a drift-checkable graph member, no writable CMDB. The
+// View's os:linux selector means every member it returns already carries the
+// label, so a non-zero count is the end-to-end assertion.
+func assertDevices(c *apiClient) {
+	const want = 3 // estate/hosts/edge-fleet.yaml declares three linux hosts
+	deadline := time.Now().Add(120 * time.Second)
+	var n int
+	for time.Now().Before(deadline) {
+		if n = c.resolveViewCount("linux-fleet"); n >= want {
+			break
+		}
+		time.Sleep(3 * time.Second)
+	}
+	if n < want {
+		log.Fatalf("static-inventory plugin projected %d hosts into linux-fleet, want >= %d (estate/hosts → host Entities → View)", n, want)
+	}
+	log.Printf("✓ static-inventory Syncer projected %d Git-declared hosts into linux-fleet (devices-as-code)", n)
 }
 
 func assertJobRan(cs *kubernetes.Clientset, ns, runID string) {
