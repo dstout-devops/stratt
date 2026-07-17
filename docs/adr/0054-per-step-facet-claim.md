@@ -122,6 +122,24 @@ is surfaced (§1.8); a facet with no scope is never written — least authority,
   exactly (exact-match today makes this moot). **(d)** consider the same per-Step intersection for identity
   schemes/labels only if a blast-radius case arises there.
 
+- **On the deferrals (why deferred, not a workaround):** the two follow-ups above are different in kind, and
+  neither patches over a missing mechanism — the explicit `FacetWriteScope` declaration IS the permanent
+  primitive, and both derivation and the lint sit beside it, not under it.
+  - **(b) is resolved (2026-07-17):** `vocabulary-linter` ran the exhaustive scan and returned CLEAN — `FacetWriteScope`
+    is an unambiguous compound identifier, no banned core-model terms, and it coexists cleanly with the frozen
+    §2.4 `Claim` (the compiler still carries `Baseline.Claim = route.Claim` for Assignment-ownership; the two are
+    distinct concepts with distinct identifiers, no overload). It was a verification step, not future work.
+  - **(a) is correctly sequenced and leaves NO live hole.** Verified: the compiler emits ONLY `Mode:
+    FacetObservation` Baselines (`compiler.go` `compiledBaseline` — read-only, graph-side, no Actuator, no
+    write-back). Those Baselines READ the facets that hand-written collectors PROJECT; the collectors declare
+    their scope explicitly (this slice's migration). So the tight default breaks no compiled path — there is no
+    facet-writing compiled Baseline stranded behind the deferral. Building the framework→facet map NOW would
+    itself violate §1.1 ("every Facet schema must be demanded by a shipping Contract"): no compliance-pack
+    Contract demands it yet, so the map would be a speculative ontology — the exact "type the world" the charter
+    forbids. The `_ []string` seam already present in `compiledBaseline`'s signature is where a pack-derived
+    scope list will flow in once a demanding pack Contract lands. Deferral here is charter-mandated sequencing,
+    not a corner cut.
+
 ## Alternatives considered
 
 - **Absent write-scope = the full plugin ceiling (scope only NARROWS, opt-in).** Non-breaking, but it leaves the
