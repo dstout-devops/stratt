@@ -59,6 +59,16 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          # proto:breaking compares the port against the main baseline; full history
+          # so buf can build the baseline image (ADR-0046 inv#5).
+          fetch-depth: 0
+      - name: Materialize the main baseline for buf breaking
+        # `task ci` → proto:breaking clones `../.git#branch=main`. The checkout is a
+        # detached HEAD with no local `main` branch, so create one from the remote —
+        # otherwise buf fails with "could not clone .git" (exit 128). Force-updates on
+        # the push-to-main run too (HEAD is detached there, so no self-checkout clash).
+        run: git fetch --no-tags --force origin +refs/heads/main:refs/heads/main
       - name: Set up Go
         uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
         with:
