@@ -19,9 +19,11 @@ FROM golang:1.26 AS shim
 WORKDIR /src
 COPY sdk/ sdk/
 COPY plugins/ansible/ plugins/ansible/
-WORKDIR /src/plugins/ansible
+COPY plugins/script/ plugins/script/
 ENV GOWORK=off CGO_ENABLED=0
-RUN go build -trimpath -o /out/stratt-ansible ./cmd/stratt-ansible
+RUN cd plugins/ansible && go build -trimpath -o /out/stratt-ansible ./cmd/stratt-ansible
+# stratt-script (ADR-0046 Category A): the per-target script-runner over the port.
+RUN cd plugins/script && go build -trimpath -o /out/stratt-script ./cmd/stratt-script
 
 FROM python:3.14-slim
 
@@ -39,9 +41,11 @@ RUN uv pip install --system --no-cache \
     "ansible-core>=2.19,<2.20" \
     "ansible-runner>=2.4,<3"
 
-# The port-speaking shim (ADR-0051): the EE-Job transport's pod command. It reads
-# /runner/stratt/request.json (the sovereign ApplyRequest) and runs ansible-runner.
+# The port-speaking shims (ADR-0051/0046): the EE-Job transport's pod commands. Each
+# reads /runner/stratt/request.json (the sovereign ApplyRequest) and emits typed
+# ApplyResponses. stratt-ansible runs ansible-runner; stratt-script runs user scripts.
 COPY --from=shim /out/stratt-ansible /usr/local/bin/stratt-ansible
+COPY --from=shim /out/stratt-script /usr/local/bin/stratt-script
 
 # Non-root: the dispatcher's pods run unprivileged.
 RUN useradd --create-home --uid 1000 runner \

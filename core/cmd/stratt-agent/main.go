@@ -26,7 +26,6 @@ import (
 	"k8s.io/client-go/tools/clientcmd"
 
 	"github.com/dstout-devops/stratt/core/internal/actuators"
-	"github.com/dstout-devops/stratt/core/internal/actuators/script"
 	"github.com/dstout-devops/stratt/core/internal/actuators/webhook"
 	"github.com/dstout-devops/stratt/core/internal/dispatch"
 	"github.com/dstout-devops/stratt/core/internal/events"
@@ -334,7 +333,7 @@ func interpName(req siteproto.DispatchRequest) string {
 // until the EE-Job-at-a-Site path lands (Phase 6, MF2). script/webhook still fold.
 func buildInterpreters() map[string]dispatch.Interpreter {
 	m := map[string]dispatch.Interpreter{}
-	for _, a := range []actuators.Actuator{script.Actuator{}, webhook.Actuator{}} {
+	for _, a := range []actuators.Actuator{webhook.Actuator{}} {
 		m[a.Name()] = a
 	}
 	// The cert issue/renew/revoke pod Interpreters are retired (ADR-0050): cert

@@ -28,7 +28,6 @@ import (
 	notifyaction "github.com/dstout-devops/stratt/core/internal/actions/notify"
 	"github.com/dstout-devops/stratt/core/internal/actuators"
 	mcpact "github.com/dstout-devops/stratt/core/internal/actuators/mcp"
-	"github.com/dstout-devops/stratt/core/internal/actuators/script"
 	"github.com/dstout-devops/stratt/core/internal/actuators/webhook"
 	"github.com/dstout-devops/stratt/core/internal/api"
 	"github.com/dstout-devops/stratt/core/internal/audit"
@@ -318,14 +317,13 @@ func run(ctx context.Context, log *slog.Logger) error {
 	// In-tree Actuator registry (§2.3); out-of-tree Actuators arrive via the
 	// plugin Contract surfaces, not this map.
 	//
-	// Ansible is no longer here (ADR-0051 Phase 5b cutover): the flagship runs
-	// EXCLUSIVELY over the port as the EE-Job (subprocess) transport — the core
-	// dispatches the stratt-ansible shim (baked into the EE image) which speaks the
-	// port on stdout, and governs the typed stream hub-side with the SAME governor as
-	// the gRPC path (MF1). Its Prepare/Interpret content-awareness has LEFT the Apache
-	// core (§1.4 — no `if ansible {…}` in the spine). script/webhook remain in-tree.
+	// Out-of-tree Actuators arrive via the plugin Contract surfaces, not this map.
+	// ansible (ADR-0051) and script (ADR-0046 Category A) run EXCLUSIVELY over the
+	// port as EE-Job (subprocess) shims baked into the EE image — their Prepare/
+	// Interpret content-awareness has LEFT the Apache core (§1.4 — no `if <tool> {…}`
+	// in the spine). webhook remains in-tree pending its own extraction slice.
 	registry := map[string]actuators.Actuator{}
-	for _, a := range []actuators.Actuator{script.Actuator{}, webhook.Actuator{}} {
+	for _, a := range []actuators.Actuator{webhook.Actuator{}} {
 		registry[a.Name()] = a
 	}
 
@@ -402,6 +400,29 @@ func run(ctx context.Context, log *slog.Logger) error {
 			JobCommand: []string{env("STRATT_ANSIBLE_SHIM", "stratt-ansible")},
 		}
 		log.Info("ansible EE-Job actuator registered (ADR-0051 subprocess transport)", "shim", env("STRATT_ANSIBLE_SHIM", "stratt-ansible"))
+	}
+
+	// Script EE-Job (subprocess) transport (ADR-0046 Category A): the per-target
+	// script-runner over the sovereign port. Effectful (no read-only capability →
+	// NOT DryRunnable, so a dry-run/baseline against it is rejected at launch). Its
+	// grant is EMPTY (script proposes no Facets/identity write-back — GovernStream
+	// folds only the per-target ItemResults, confused-deputy gated on the resolved
+	// set). No gRPC dial — the transport is the K8s Job running stratt-script.
+	{
+		grant := pluginhost.Grant{
+			PluginIdentity: env("STRATT_SCRIPT_PLUGIN_ID", "script"),
+			Tier:           pluginhost.TierTrusted,
+			Source:         types.Source{Kind: "script", Name: env("STRATT_SCRIPT_SOURCE_NAME", "script")},
+		}
+		if _, dup := pluginActuators["script"]; dup {
+			return fmt.Errorf("script EE-Job actuator collides with a registered plugin actuator (§2.4 exclusive)")
+		}
+		host := pluginhost.New(store, nil, grant, log)
+		pluginActuators["script"] = orchestrate.PluginActuator{
+			Host: host, DryRunnable: false, Grant: grant,
+			JobCommand: []string{env("STRATT_SCRIPT_SHIM", "stratt-script")},
+		}
+		log.Info("script EE-Job actuator registered (ADR-0046 subprocess transport)", "shim", env("STRATT_SCRIPT_SHIM", "stratt-script"))
 	}
 
 	// awsec2 plugin: when configured it provides BOTH the instance Syncer and the
