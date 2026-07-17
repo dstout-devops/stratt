@@ -10,6 +10,7 @@ use (
 	./contracts
 	./core
 	./packs
+	./plugins/ansible
 	./plugins/awsec2
 	./plugins/certissuer
 	./plugins/chef
