@@ -94,6 +94,27 @@ compliance propositions about a serial-Entity* (issuer, keyUsage, `exportable:fa
 **Baseline/Finding** with auto-sealed Evidence (ADR-0030 §6, ADR-0029) — that audit/export surface is
 PRESERVED, not dropped. The Run history + provenance is the audit trail for the reconcile (renewal) path.
 
+### 8. Driving the reconcile — a schedule Trigger, not a compiled Baseline
+
+The reconcile is driven by an ordinary **schedule Trigger** (cron) that launches the
+certissuer Actuator's Apply — no new mechanism, and no compiled renewal Baseline.
+Each fire is one converge: observe OpenBao for the commonName → decide → issue/renew/
+noop. "tofu plan on cron is drift detection" generalized to "certissuer apply on cron
+is cert lifecycle." The compiler emits **no** cert renewal Baseline (superseding
+ADR-0030 §4's notBefore-facet-Baseline) — the expiry threshold lives in the plugin's
+Plan. A shipped, parse-validated example is
+`deploy/dev/examples/certificate/` (a `managed-certs` View + a `cert-reconcile-web`
+schedule Trigger). The View is vestigial for the CN-scoped Actuator (the commonName
+is a param, as opentofu's workspace is) but satisfies the Trigger's launch target and
+surfaces the Syncer-projected cert Entities for §1.8 descent.
+
+**The born-on-target CSR is the one open integration contract.** The Trigger carries
+`csr` as a param today (a placeholder in the example). The real flow — the target
+generates its keypair + CSR locally and Stratt fetches the CSR at reconcile time so
+the private key never exists off-target — is the remaining integration point named by
+§3; until it lands, `csr` is operator-supplied. Apply already fails closed without a
+CSR (never /issue-and-discard), so the invariant holds regardless.
+
 ## Consequences
 
 - **Positive:** cert lifecycle becomes reconcile-native (ADR-0046); issue-vs-renew is the plugin's Plan, core
