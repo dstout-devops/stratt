@@ -3,7 +3,7 @@ package awximport
 import (
 	"strings"
 
-	"github.com/dstout-devops/stratt/core/internal/connectors/awx"
+	"github.com/dstout-devops/stratt/core/internal/awximport/awx"
 )
 
 // nativeSyncer maps an AWX inventory-source plugin to the Stratt Connector that

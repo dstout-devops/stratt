@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/dstout-devops/stratt/core/internal/connectors/awx"
+	"github.com/dstout-devops/stratt/core/internal/awximport/awx"
 )
 
 func TestReduceHostFilter(t *testing.T) {

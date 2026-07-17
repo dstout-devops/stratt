@@ -6,7 +6,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/dstout-devops/stratt/core/internal/connectors/awx/awxsim"
+	"github.com/dstout-devops/stratt/core/internal/awximport/awx/awxsim"
 )
 
 // newSim starts an awxsim httptest server and returns a client pointed at it.

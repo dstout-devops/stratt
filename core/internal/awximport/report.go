@@ -5,7 +5,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/dstout-devops/stratt/core/internal/connectors/awx"
+	"github.com/dstout-devops/stratt/core/internal/awximport/awx"
 )
 
 // report accumulates per-mapping notes and blocking items. Blocking items must
