@@ -2,6 +2,7 @@ package policy
 
 import (
 	"testing"
+	"time"
 
 	"github.com/dstout-devops/stratt/types"
 )
@@ -169,6 +170,100 @@ func TestEvaluate_NonBool_FailsClosed(t *testing.T) {
 	d := Evaluate(ctrls, prodCtx())
 	if d.Outcome != types.OutcomeDeny {
 		t.Fatalf("non-bool predicate must fail closed, got %s", d.Outcome)
+	}
+}
+
+// ── typed Control library: TimeWindow (ADR-0067) ────────────────────────────
+
+var (
+	inHour  = time.Date(2026, 7, 18, 10, 0, 0, 0, time.UTC) // hour 10
+	outHour = time.Date(2026, 7, 18, 3, 0, 0, 0, time.UTC)  // hour 3
+)
+
+func TestTimeWindow_DenyMode(t *testing.T) {
+	tw := &types.TimeWindowSpec{Mode: types.TimeWindowDeny, StartHourUTC: 9, EndHourUTC: 17}
+	if !timeWindowFires(tw, inHour) {
+		t.Fatal("blackout must fire inside the window")
+	}
+	if timeWindowFires(tw, outHour) {
+		t.Fatal("blackout must not fire outside the window")
+	}
+}
+
+func TestTimeWindow_AllowOnly(t *testing.T) {
+	tw := &types.TimeWindowSpec{Mode: types.TimeWindowAllowOnly, StartHourUTC: 9, EndHourUTC: 17}
+	if timeWindowFires(tw, inHour) {
+		t.Fatal("maintenance window must not fire inside the window")
+	}
+	if !timeWindowFires(tw, outHour) {
+		t.Fatal("maintenance window must fire outside the window")
+	}
+}
+
+func TestTimeWindow_DaysFilter(t *testing.T) {
+	day := weekdayAbbr[inHour.Weekday()]
+	other := "mon"
+	if day == "mon" {
+		other = "tue"
+	}
+	on := &types.TimeWindowSpec{Mode: types.TimeWindowDeny, Days: []string{day}, StartHourUTC: 0, EndHourUTC: 24}
+	off := &types.TimeWindowSpec{Mode: types.TimeWindowDeny, Days: []string{other}, StartHourUTC: 0, EndHourUTC: 24}
+	if !timeWindowFires(on, inHour) {
+		t.Fatal("must fire on a matching day")
+	}
+	if timeWindowFires(off, inHour) {
+		t.Fatal("must not fire on a non-matching day")
+	}
+}
+
+// A TimeWindow control gates the decision like any other, over the fixed lattice.
+func TestEvaluate_TimeWindowControl(t *testing.T) {
+	freeze := types.Control{ID: "freeze", Outcome: types.OutcomeDeny,
+		TimeWindow: &types.TimeWindowSpec{Mode: types.TimeWindowDeny, StartHourUTC: 9, EndHourUTC: 17}}
+
+	ccIn := prodCtx()
+	ccIn.ScheduledAt = inHour
+	if d := Evaluate([]types.Control{freeze}, ccIn); d.Outcome != types.OutcomeDeny {
+		t.Fatalf("in-window freeze must deny, got %s", d.Outcome)
+	}
+	ccOut := prodCtx()
+	ccOut.ScheduledAt = outHour
+	if d := Evaluate([]types.Control{freeze}, ccOut); d.Outcome != types.OutcomeAllow {
+		t.Fatalf("out-of-window freeze must allow, got %s", d.Outcome)
+	}
+}
+
+// A TimeWindow control with no scheduled_at fails closed (ADR-0061 M4).
+func TestEvaluate_TimeWindow_NoSchedule_FailsClosed(t *testing.T) {
+	freeze := types.Control{ID: "freeze", Outcome: types.OutcomeDeny,
+		TimeWindow: &types.TimeWindowSpec{Mode: types.TimeWindowDeny, StartHourUTC: 9, EndHourUTC: 17}}
+	d := Evaluate([]types.Control{freeze}, prodCtx()) // ScheduledAt zero
+	if d.Outcome != types.OutcomeDeny {
+		t.Fatalf("time-window with no scheduled_at must fail closed, got %s (%v)", d.Outcome, d.Reasons)
+	}
+	if codes(d)["no_schedule_time"] != 1 {
+		t.Fatalf("want a no_schedule_time reason, got %v", d.Reasons)
+	}
+}
+
+func TestValidateControls_TimeWindow(t *testing.T) {
+	good := []types.Control{{ID: "w", Outcome: types.OutcomeDeny,
+		TimeWindow: &types.TimeWindowSpec{Mode: types.TimeWindowDeny, Days: []string{"sat", "sun"}, StartHourUTC: 0, EndHourUTC: 24}}}
+	if err := ValidateControls(good); err != nil {
+		t.Fatalf("valid time-window must pass, got %v", err)
+	}
+	bad := map[string]types.Control{
+		"bad mode":  {ID: "w", Outcome: types.OutcomeDeny, TimeWindow: &types.TimeWindowSpec{Mode: "sometimes", StartHourUTC: 0, EndHourUTC: 24}},
+		"bad hours": {ID: "w", Outcome: types.OutcomeDeny, TimeWindow: &types.TimeWindowSpec{Mode: types.TimeWindowDeny, StartHourUTC: 17, EndHourUTC: 9}},
+		"bad day":   {ID: "w", Outcome: types.OutcomeDeny, TimeWindow: &types.TimeWindowSpec{Mode: types.TimeWindowDeny, Days: []string{"funday"}, StartHourUTC: 0, EndHourUTC: 24}},
+		"both kinds": {ID: "w", Outcome: types.OutcomeDeny, When: "true",
+			TimeWindow: &types.TimeWindowSpec{Mode: types.TimeWindowDeny, StartHourUTC: 0, EndHourUTC: 24}},
+		"no kind": {ID: "w", Outcome: types.OutcomeDeny},
+	}
+	for name, c := range bad {
+		if err := ValidateControls([]types.Control{c}); err == nil {
+			t.Fatalf("%s: must be rejected at load", name)
+		}
 	}
 }
 

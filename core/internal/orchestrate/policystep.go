@@ -83,11 +83,16 @@ func policyAuditEvent(arg PolicyEvalArg, dec types.Decision) types.AuditEvent {
 // with no approver obligation, an approval is unsatisfiable and fails closed
 // (§1.8: never a silent pass). A failed evaluation also fails closed.
 func runPolicyStep(ctx workflow.Context, a *Activities, in DAGInput, step types.Step) string {
+	cc := assembleChangeContext(in)
+	// scheduled_at is the run's logical time — workflow.Now is replay-safe
+	// (deterministic), so time-window controls (ADR-0067) judge against the real
+	// decision time without breaking Temporal determinism.
+	cc.ScheduledAt = workflow.Now(ctx).UTC()
 	arg := PolicyEvalArg{
 		WorkflowRunID: in.WorkflowRunID,
 		StepName:      step.Name,
 		Controls:      step.Policy.Controls,
-		Context:       assembleChangeContext(in),
+		Context:       cc,
 	}
 	var dec types.Decision
 	if err := workflow.ExecuteActivity(ctx, a.EvaluatePolicy, arg).Get(ctx, &dec); err != nil {

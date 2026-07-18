@@ -66,24 +66,17 @@ func Evaluate(controls []types.Control, cc types.ChangeContext) types.Decision {
 		return dec
 	}
 
+	cm := ctxMap(cc)
 	var fired []types.Control
 	for _, c := range controls {
-		prg, err := rules.CompileForEnv(env, c.When)
-		if err != nil {
+		ok, failCode, failMsg := controlFires(env, cm, cc, c)
+		if failCode != "" {
+			// Fail-closed: a control that cannot be evaluated (uncompilable CEL,
+			// a reference to an absent coordinate, an unjudgeable window) denies —
+			// most-restrictive, never a silent allow (ADR-0061 M4).
 			dec.Outcome = mostRestrictive(dec.Outcome, types.OutcomeDeny)
 			dec.Reasons = append(dec.Reasons, types.Reason{
-				Code: "compile_error", Message: err.Error(), ControlID: c.ID,
-			})
-			continue
-		}
-		ok, err := prg.EvalVars(map[string]any{"ctx": ctxMap(cc)})
-		if err != nil {
-			// Fail-closed: a predicate that cannot evaluate (including a
-			// reference to an absent optional risk/criticality coordinate)
-			// denies — most-restrictive, never "no risk" (ADR-0061 M4).
-			dec.Outcome = mostRestrictive(dec.Outcome, types.OutcomeDeny)
-			dec.Reasons = append(dec.Reasons, types.Reason{
-				Code: "eval_error", Message: err.Error(), ControlID: c.ID,
+				Code: failCode, Message: failMsg, ControlID: c.ID,
 			})
 			continue
 		}
@@ -106,6 +99,67 @@ func Evaluate(controls []types.Control, cc types.ChangeContext) types.Decision {
 		}
 	}
 	return dec
+}
+
+// controlFires evaluates one control's predicate. It returns fired=true when the
+// control applies. failCode!="" means the control could not be judged and the
+// caller fails closed (deny). Dispatch is by KIND: a typed primitive is
+// evaluated by dedicated deterministic logic; otherwise the raw CEL `When`
+// predicate is compiled and run (ADR-0067).
+func controlFires(env *cel.Env, cm map[string]any, cc types.ChangeContext, c types.Control) (fired bool, failCode, failMsg string) {
+	switch {
+	case c.TimeWindow != nil:
+		if cc.ScheduledAt.IsZero() {
+			return false, "no_schedule_time", "time-window control has no scheduled_at to judge (fail-closed, M4)"
+		}
+		return timeWindowFires(c.TimeWindow, cc.ScheduledAt), "", ""
+	default: // raw CEL predicate
+		prg, err := rules.CompileForEnv(env, c.When)
+		if err != nil {
+			return false, "compile_error", err.Error()
+		}
+		ok, err := prg.EvalVars(map[string]any{"ctx": cm})
+		if err != nil {
+			return false, "eval_error", err.Error()
+		}
+		return ok, "", ""
+	}
+}
+
+// timeWindowFires reports whether a TimeWindow control applies at t (ADR-0067):
+// a deny/blackout fires when t is INSIDE the window, an allow-only/maintenance
+// window fires when t is OUTSIDE it.
+func timeWindowFires(tw *types.TimeWindowSpec, t time.Time) bool {
+	in := inWindow(tw, t.UTC())
+	if tw.Mode == types.TimeWindowAllowOnly {
+		return !in
+	}
+	return in // TimeWindowDeny (default)
+}
+
+var weekdayAbbr = map[time.Weekday]string{
+	time.Sunday: "sun", time.Monday: "mon", time.Tuesday: "tue", time.Wednesday: "wed",
+	time.Thursday: "thu", time.Friday: "fri", time.Saturday: "sat",
+}
+
+// inWindow reports whether t (UTC) falls in the recurring weekly window: a
+// matching day (empty Days = every day) AND hour in [StartHourUTC, EndHourUTC).
+func inWindow(tw *types.TimeWindowSpec, t time.Time) bool {
+	if len(tw.Days) > 0 {
+		day := weekdayAbbr[t.Weekday()]
+		match := false
+		for _, d := range tw.Days {
+			if d == day {
+				match = true
+				break
+			}
+		}
+		if !match {
+			return false
+		}
+	}
+	h := t.Hour()
+	return h >= tw.StartHourUTC && h < tw.EndHourUTC
 }
 
 // mostRestrictive returns whichever of two outcomes ranks higher on the fixed
@@ -148,8 +202,49 @@ func ValidateControls(controls []types.Control) error {
 		default:
 			return fmt.Errorf("policy: control %q: unknown outcome %q", c.ID, c.Outcome)
 		}
-		if _, err := rules.CompileForEnv(env, c.When); err != nil {
-			return fmt.Errorf("policy: control %q: %w", c.ID, err)
+		// A control is exactly ONE kind: a raw CEL predicate or one typed
+		// primitive (ADR-0067). Count the kinds and reject zero or multiple.
+		kinds := 0
+		if c.When != "" {
+			kinds++
+		}
+		if c.TimeWindow != nil {
+			kinds++
+			if err := validateTimeWindow(c.ID, c.TimeWindow); err != nil {
+				return err
+			}
+		}
+		switch kinds {
+		case 0:
+			return fmt.Errorf("policy: control %q: must be a CEL `when` or a typed primitive", c.ID)
+		case 1:
+		default:
+			return fmt.Errorf("policy: control %q: is more than one kind (a CEL `when` and a typed primitive)", c.ID)
+		}
+		if c.When != "" {
+			if _, err := rules.CompileForEnv(env, c.When); err != nil {
+				return fmt.Errorf("policy: control %q: %w", c.ID, err)
+			}
+		}
+	}
+	return nil
+}
+
+// validateTimeWindow checks a TimeWindow spec at load (ADR-0067): a known mode,
+// a well-ordered hour range within [0,24], and recognised day abbreviations.
+func validateTimeWindow(id string, tw *types.TimeWindowSpec) error {
+	switch tw.Mode {
+	case types.TimeWindowDeny, types.TimeWindowAllowOnly:
+	default:
+		return fmt.Errorf("policy: control %q: time-window mode %q must be %q or %q", id, tw.Mode, types.TimeWindowDeny, types.TimeWindowAllowOnly)
+	}
+	if tw.StartHourUTC < 0 || tw.EndHourUTC > 24 || tw.StartHourUTC >= tw.EndHourUTC {
+		return fmt.Errorf("policy: control %q: time-window needs 0 <= startHourUtc < endHourUtc <= 24", id)
+	}
+	valid := map[string]bool{"sun": true, "mon": true, "tue": true, "wed": true, "thu": true, "fri": true, "sat": true}
+	for _, d := range tw.Days {
+		if !valid[d] {
+			return fmt.Errorf("policy: control %q: unknown day %q (use sun..sat)", id, d)
 		}
 	}
 	return nil

@@ -90,16 +90,43 @@ type ChangeContext struct {
 }
 
 // Control is one governance predicate over the ChangeContext (ADR-0061 §4 /
-// ADR-0062). When is a CEL boolean predicate; a control whose predicate is
-// true FIRES its Outcome + Obligations. Controls are DATA over a closed
-// vocabulary (guardrail 1). Type names the primitive (approval/sod/…); v1
-// treats every Control uniformly as a When→Outcome rule.
+// ADR-0062). A control FIRES its Outcome + Obligations when its predicate holds.
+// A control is exactly one KIND (validated at load, ADR-0067): a raw CEL
+// predicate (When), or one typed primitive from the closed Control library
+// (TimeWindow, and — as they land — SoD/Waiver/Quorum/BreakGlass). Typed
+// primitives are DATA the framework evaluates deterministically; they are not
+// lowered to author-visible CEL (guardrail 1: parameterisation, not a DSL).
 type Control struct {
 	ID          string       `json:"id"`
 	Type        string       `json:"type,omitempty"`
-	When        string       `json:"when"`
+	When        string       `json:"when,omitempty"`
 	Outcome     string       `json:"outcome"`
 	Obligations []Obligation `json:"obligations,omitempty"`
+	// TimeWindow is the change-freeze / maintenance-window primitive (§5 Flow-4).
+	TimeWindow *TimeWindowSpec `json:"timeWindow,omitempty"`
+}
+
+// TimeWindow modes (ADR-0067).
+const (
+	// TimeWindowDeny is a blackout: the control fires when scheduled_at is INSIDE
+	// the window (a forbidden period — e.g. a holiday change freeze).
+	TimeWindowDeny = "deny"
+	// TimeWindowAllowOnly is a maintenance window: the control fires when
+	// scheduled_at is OUTSIDE the window (changes are permitted only within it).
+	TimeWindowAllowOnly = "allow-only"
+)
+
+// TimeWindowSpec is a recurring weekly time window in UTC (ADR-0067 v1: no RRULE
+// dependency yet — days-of-week + an hour range). Days are lowercase 3-letter
+// abbreviations (sun mon tue wed thu fri sat); empty = every day. The window is
+// [StartHourUTC, EndHourUTC) on a matching day. An unset scheduled_at fails
+// closed (most-restrictive, ADR-0061 M4) — a window cannot be judged without a
+// time.
+type TimeWindowSpec struct {
+	Mode         string   `json:"mode"`
+	Days         []string `json:"days,omitempty"`
+	StartHourUTC int      `json:"startHourUtc"`
+	EndHourUTC   int      `json:"endHourUtc"`
 }
 
 // Obligation is a binding rider on a decision (ADR-0061). Type is from the
