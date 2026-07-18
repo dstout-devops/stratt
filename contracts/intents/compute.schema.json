@@ -42,6 +42,15 @@
       "exclusiveMinimum": 0,
       "maximum": 1,
       "description": "Optional §4.3 blast-radius fraction: if more than this fraction of `count` is missing in one reconcile, the batch PAUSES pending explicit approval instead of surfacing every build (never a silent fan-out). Defaults to the controller's absolute cap."
+    },
+    "placement": {
+      "type": "object",
+      "description": "Optional desired topology placement (ADR-0059 decision 5): the built unit's subnet + zone. A Relation cannot be declared in Git (§1.2), so placement's CaC home is the Intent; the build projects the placed-in edge (Run-provenance). Divergence from a built unit's OBSERVED placement raises a placement-drift Finding (§1.8) — never a silent reconcile edit.",
+      "properties": {
+        "subnet": { "type": "string", "description": "The subnet Entity name the unit is placed in (an Intent/Subnet name)." },
+        "zone": { "type": "string", "description": "The dmz / availability-zone Entity name the unit sits in." }
+      },
+      "additionalProperties": false
     }
   },
   "required": ["count", "namePrefix", "builder", "buildWorkflow"],

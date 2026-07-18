@@ -45,3 +45,13 @@ type Relation struct {
 	FromID string `json:"fromId"`
 	ToID   string `json:"toId"`
 }
+
+// Placement Relation types (ADR-0059 decision 2): the topology composition backbone.
+// A host is placed-in a subnet; a subnet is in-dmz / in-az. Free-string Relation.Type
+// values (§2.1) — no edge-schema change. Written only by the two §1.2 paths (a
+// Syncer's observation or a build Run), never a hand-authored graph row.
+const (
+	RelPlacedIn = "placed-in"
+	RelInDmz    = "in-dmz"
+	RelInAz     = "in-az"
+)

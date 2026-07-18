@@ -2,32 +2,52 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "stratt:contract:intents/dmz:v1",
   "title": "Intent/Dmz spec",
-  "description": "Desired a DMZ (a security zone) declared in Git (ADR-0059, a named-singleton provisioning Intent). NOT an Entity (§1.2): cardinality-1 — the ONE named Entity that SHOULD exist, correlated desired<->built by (intentKind, name). The reconcile surfaces a GATED build (§5 Flow 1), never auto-launches, never writes the unbuilt. Landscape-agnostic: 'builder' is the swap point; 'params' is opaque, validated only against the builder's own input Contract (§1.5) — no per-provider network fields here (§1.1, no universal ontology). The built infra's attributes live in an owned-but-uncovered Facet namespace until a Contract consumes them (decision 1); this schema types only the CaC declaration seam, never the graph Facet.",
+  "description": "Desired a DMZ (a security zone) declared in Git (ADR-0059, a named-singleton provisioning Intent). NOT an Entity (\u00a71.2): cardinality-1 \u2014 the ONE named Entity that SHOULD exist, correlated desired<->built by (intentKind, name). The reconcile surfaces a GATED build (\u00a75 Flow 1), never auto-launches, never writes the unbuilt. Landscape-agnostic: 'builder' is the swap point; 'params' is opaque, validated only against the builder's own input Contract (\u00a71.5) \u2014 no per-provider network fields here (\u00a71.1, no universal ontology). The built infra's attributes live in an owned-but-uncovered Facet namespace until a Contract consumes them (decision 1); this schema types only the CaC declaration seam, never the graph Facet.",
   "type": "object",
   "properties": {
     "projectKind": {
       "type": "string",
-      "description": "The Entity kind the built infra projects AS (default dmz), so Views select it. Carried on the build's Run-provenance projection — NEVER written by the reconcile (§1.2)."
+      "description": "The Entity kind the built infra projects AS (default dmz), so Views select it. Carried on the build's Run-provenance projection \u2014 NEVER written by the reconcile (\u00a71.2)."
     },
     "labels": {
       "type": "object",
-      "additionalProperties": { "type": "string" },
+      "additionalProperties": {
+        "type": "string"
+      },
       "description": "Selection labels stamped on the built Entity's projection (per-key owned, ADR-0041)."
     },
     "builder": {
       "type": "string",
-      "description": "The build Actuator/Action ref (crossplane | opentofu | dns | vsphere-network | ...). The landscape swap point (§1.4/§1.5); core learns no provider."
+      "description": "The build Actuator/Action ref (crossplane | opentofu | dns | vsphere-network | ...). The landscape swap point (\u00a71.4/\u00a71.5); core learns no provider."
     },
     "buildWorkflow": {
       "type": "string",
-      "description": "The GATED Workflow the operator launches to build the singleton (Gate -> builder -> project-back). Referenced by the provisioning Finding; never auto-launched (§5 Flow 1)."
+      "description": "The GATED Workflow the operator launches to build the singleton (Gate -> builder -> project-back). Referenced by the provisioning Finding; never auto-launched (\u00a75 Flow 1)."
     },
     "params": {
       "type": "object",
       "additionalProperties": true,
-      "description": "Opaque build params passed to the builder, validated against ITS input Contract downstream (§1.5). Never typed here (§1.1)."
+      "description": "Opaque build params passed to the builder, validated against ITS input Contract downstream (\u00a71.5). Never typed here (\u00a71.1)."
+    },
+    "placement": {
+      "type": "object",
+      "description": "Optional desired topology placement (ADR-0059 decision 5): a Relation cannot be declared in Git (\u00a71.2), so placement's CaC home is the Intent; the build projects the placed-in edge (Run-provenance). Divergence from the observed placement raises a placement-drift Finding (\u00a71.8).",
+      "properties": {
+        "subnet": {
+          "type": "string",
+          "description": "The subnet Entity name this unit is placed in (an Intent/Subnet name)."
+        },
+        "zone": {
+          "type": "string",
+          "description": "The dmz / availability-zone Entity name this unit sits in."
+        }
+      },
+      "additionalProperties": false
     }
   },
-  "required": ["builder", "buildWorkflow"],
+  "required": [
+    "builder",
+    "buildWorkflow"
+  ],
   "additionalProperties": false
 }

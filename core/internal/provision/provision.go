@@ -24,6 +24,17 @@ import (
 // silent fan-out.
 const DefaultMaxBuildBatch = 25
 
+// Placement is the desired topology placement of a provisioned unit (ADR-0059
+// decision 5): the subnet it sits in and, optionally, the zone. Its CaC home is the
+// Intent — a Relation cannot be declared in Git (§1.2) — and the build honors it,
+// projecting the placed-in edge (Run-provenance) from the reality it creates. When
+// declared placement diverges from a built host's OBSERVED placement, the reconcile
+// raises a placement-drift Finding (S5, §1.8) — never a silent reconcile edit.
+type Placement struct {
+	Subnet string `json:"subnet,omitempty"`
+	Zone   string `json:"zone,omitempty"`
+}
+
 // ComputeSpec is the decoded Intent/Compute payload (contracts/intents/compute.schema.json).
 type ComputeSpec struct {
 	Count         int               `json:"count"`
@@ -33,7 +44,8 @@ type ComputeSpec struct {
 	Builder       string            `json:"builder"`
 	BuildWorkflow string            `json:"buildWorkflow"`
 	Params        map[string]any    `json:"params"`
-	MaxDelta      float64           `json:"maxDelta"` // 0 => use the controller cap
+	MaxDelta      float64           `json:"maxDelta"`  // 0 => use the controller cap
+	Placement     *Placement        `json:"placement"` // optional desired topology placement
 }
 
 // Intent pairs a declaration name with its decoded compute spec.
@@ -118,6 +130,7 @@ type SingletonSpec struct {
 	Builder       string            `json:"builder"`
 	BuildWorkflow string            `json:"buildWorkflow"`
 	Params        map[string]any    `json:"params"`
+	Placement     *Placement        `json:"placement"` // optional desired topology placement
 }
 
 // SingletonIntent pairs a declaration name + its Intent kind with the decoded spec.

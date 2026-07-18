@@ -248,7 +248,8 @@ func (c *Controller) reconcileProvisioning(ctx context.Context, decls Declaratio
 			"instance": inst.Name, "intent": inst.Intent, "ordinal": inst.Ordinal,
 			"builder": sp.Builder, "buildWorkflow": sp.BuildWorkflow,
 			"projectKind": sp.ProjectKind, "labels": sp.Labels, "params": sp.Params,
-			"reason": "declared but not built — launch the gated build Workflow (never auto-run, §5 Flow 1)",
+			"placement": sp.Placement,
+			"reason":    "declared but not built — launch the gated build Workflow (never auto-run, §5 Flow 1)",
 		})
 		b := "provision/" + inst.Intent
 		if err := c.Store.WriteProvisionFinding(ctx, b, inst.Name, "warning", detail); err != nil {
@@ -266,7 +267,8 @@ func (c *Controller) reconcileProvisioning(ctx context.Context, decls Declaratio
 			"correlationLabel": map[string]string{"stratt.intent/singleton": inst.Name},
 			"builder":          si.Spec.Builder, "buildWorkflow": si.Spec.BuildWorkflow,
 			"projectKind": si.Spec.ProjectKind, "labels": si.Spec.Labels, "params": si.Spec.Params,
-			"reason": "declared but not built — launch the gated build Workflow (never auto-run, §5 Flow 1)",
+			"placement": si.Spec.Placement,
+			"reason":    "declared but not built — launch the gated build Workflow (never auto-run, §5 Flow 1)",
 		})
 		b := "provision/" + inst.Intent
 		if err := c.Store.WriteProvisionFinding(ctx, b, inst.Name, "warning", detail); err != nil {
