@@ -386,6 +386,12 @@ tasks:
       - docker build -f plugins/netbox/Dockerfile -t stratt-plugin-netbox:dev .
       - go run sigs.k8s.io/kind@v{{.KIND_VER}} load docker-image stratt-plugin-netbox:dev --name {{.KIND_CLUSTER}}
 
+  image:crossplane-plugin:
+    desc: Build the Crossplane build-Actuator plugin image (ADR-0059) and load it into the kind cluster
+    cmds:
+      - docker build -f plugins/crossplane/Dockerfile -t stratt-plugin-crossplane:dev .
+      - go run sigs.k8s.io/kind@v{{.KIND_VER}} load docker-image stratt-plugin-crossplane:dev --name {{.KIND_CLUSTER}}
+
   images:control-plane:
     desc: Build the CONTROL-PLANE images (no push/load) — the CI regression gate. Plugins & the EE image build in their OWN units (each plugin is its own build/CI unit, ADR-0046) — core CI never builds per-plugin (it must scale to hundreds of plugins).
     cmds:
