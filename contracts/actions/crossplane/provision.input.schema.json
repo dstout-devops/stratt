@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "stratt:contract:actions/crossplane/create-subnet.input:v1",
-  "title": "crossplane/create-subnet input",
-  "description": "Input Contract for the crossplane/create-subnet Action (ADR-0059): the targetless builder an Intent/Subnet launches. It server-side-applies the named Crossplane resource (GVR + spec, opaque per §1.5 — a provider-kubernetes Object in dev, a provider-aws Subnet in prod), waits for Ready, and projects the subnet back. The projectKind + projectLabels (incl. the stratt.intent/singleton correlation key) ride the Run-provenance projection so the provisioning Finding resolves.",
+  "$id": "stratt:contract:actions/crossplane/provision.input:v1",
+  "title": "crossplane/provision input",
+  "description": "Input Contract for the crossplane/provision Action (ADR-0059): the targetless builder an Intent/Subnet launches. It server-side-applies the named Crossplane resource (GVR + spec, opaque per §1.5 — a provider-kubernetes Object in dev, a provider-aws Subnet in prod), waits for Ready, and projects the subnet back. The projectKind + projectLabels (incl. the stratt.intent/singleton correlation key) ride the Run-provenance projection so the provisioning Finding resolves.",
   "type": "object",
   "properties": {
     "group": { "type": "string", "description": "The Crossplane resource API group, e.g. kubernetes.crossplane.io." },
@@ -20,6 +20,20 @@
       "type": "object",
       "additionalProperties": { "type": "string" },
       "description": "Estate overlay labels on the Run-provenance projection — the stratt.intent/singleton correlation key resolves the provisioning Finding."
+    },
+    "relations": {
+      "type": "array",
+      "description": "Topology edges the build projects (ADR-0059): the built resource's placement, e.g. a host placed-in a subnet. Targeted by identity; the core gates the target scheme + resolves it + projects Run-provenance (an unresolved target drops the edge).",
+      "items": {
+        "type": "object",
+        "properties": {
+          "type": { "type": "string", "description": "The Relation type, e.g. placed-in." },
+          "toScheme": { "type": "string", "description": "The target Entity's identity scheme, e.g. crossplane.claim." },
+          "toValue": { "type": "string", "description": "The target Entity's identity value, e.g. the subnet name." }
+        },
+        "required": ["type", "toScheme", "toValue"],
+        "additionalProperties": false
+      }
     }
   },
   "required": ["group", "version", "resource", "kind", "name"],

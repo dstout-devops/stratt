@@ -26,7 +26,8 @@ metadata:
   name: provider-kubernetes-composed
 rules:
   - apiGroups: [""]
-    resources: ["configmaps"]
+    # configmaps stand in for a cloud subnet; pods are real compute (a host in the subnet).
+    resources: ["configmaps", "pods"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1

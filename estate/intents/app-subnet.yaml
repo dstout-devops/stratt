@@ -7,14 +7,14 @@
 # kind: subnet correlated by stratt.intent/singleton → the Finding resolves → the Syncer
 # maintains net.subnet as-built.
 #
-# `builder` is the landscape swap point: crossplane/create-subnet (provider-kubernetes in
+# `builder` is the landscape swap point: crossplane/provision (provider-kubernetes in
 # dev) today, one-line change to a real cloud provider (provider-aws Subnet) tomorrow —
 # the rest of the estate never moves (§1.4/§1.5).
 name: app-subnet
 kind: Intent/Subnet
 spec:
   projectKind: subnet
-  builder: crossplane/create-subnet
+  builder: crossplane/provision
   buildWorkflow: subnet-build # the GATED Workflow the operator launches
   params: # OPAQUE — validated against the builder's own input Contract (§1.5)
     cidr: 10.30.0.0/24

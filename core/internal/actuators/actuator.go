@@ -96,6 +96,18 @@ type EntityObservation struct {
 	Kind         string
 	IdentityKeys map[string]string
 	Labels       map[string]string
+	// Relations the observation carries — a build's placed-in edge (ADR-0059), each
+	// targeting a resolved Entity BY IDENTITY. Projected Run-provenance alongside the
+	// entity (ProjectFacts), so a build projects its topology, not just identity.
+	Relations []RelationObservation
+}
+
+// RelationObservation is a write-back edge to a target named by identity (the target
+// Entity is resolved at projection; an unresolved target drops the edge).
+type RelationObservation struct {
+	Type     string
+	ToScheme string
+	ToValue  string
 }
 
 // Interpreted is one understood line of pod stdout.

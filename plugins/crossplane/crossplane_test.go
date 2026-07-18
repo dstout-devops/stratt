@@ -223,3 +223,19 @@ func TestInvokeUnknownAction(t *testing.T) {
 		t.Fatal("unknown action must be rejected")
 	}
 }
+
+// TestProjectEntityRelations proves the build projects its topology edges (ADR-0059):
+// a host placed-in a subnet, targeted by identity.
+func TestProjectEntityRelations(t *testing.T) {
+	ent := projectEntity(claimParams{
+		Name: "app-01", ProjectKind: "host", IdentityScheme: "crossplane.claim",
+		Relations: []relationParam{{Type: "placed-in", ToScheme: "crossplane.claim", ToValue: "app-subnet"}},
+	})
+	if len(ent.GetRelations()) != 1 {
+		t.Fatalf("expected 1 relation, got %d", len(ent.GetRelations()))
+	}
+	r := ent.GetRelations()[0]
+	if r.GetType() != "placed-in" || r.GetToScheme() != "crossplane.claim" || r.GetToValue() != "app-subnet" {
+		t.Errorf("relation = %s %s=%s", r.GetType(), r.GetToScheme(), r.GetToValue())
+	}
+}

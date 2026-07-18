@@ -429,6 +429,20 @@ type ActionEntity struct {
 	// ownership-gated — a Run write bypasses the label-owner trigger (§4.3), and
 	// they are the operator's build-declared overlay, not plugin-owned keys.
 	Labels map[string]string
+	// Relations the Action projects (a build's placed-in edge, ADR-0059) — the full
+	// build observation, not just identity: a build creates infra IN a subnet and
+	// projects the topology edge. Targeted BY IDENTITY and gated exactly as a Syncer's
+	// (the target scheme must be granted; an unresolved target drops the edge, never
+	// vivifies). Facets are NOT here by design — those arrive from the Syncer's poll.
+	Relations []GovernedRelation
+}
+
+// GovernedRelation is a build's write-back edge to a target named by identity — the
+// governed twin of a Syncer's ObservedRelation (ADR-0047 §1 / ADR-0059).
+type GovernedRelation struct {
+	Type     string
+	ToScheme string
+	ToValue  string
 }
 
 // RawInvokeResult is the governed result of an Action invocation with NOTHING
@@ -505,7 +519,22 @@ func (h *Host) InvokeRaw(ctx context.Context, req ActionInvoke) (RawInvokeResult
 				out.Rejections = append(out.Rejections, r)
 				continue
 			}
-			out.Entities = append(out.Entities, ActionEntity{Kind: e.GetKind(), IdentityKeys: ids, Labels: e.GetLabels()})
+			// Relations: a build's write-back edges (ADR-0059), each targeting BY
+			// IDENTITY. The target scheme is tier+grant gated exactly as an emitted
+			// identity key (ADR-0047 §1); a rejected target drops the edge, never
+			// vivifies. Projection (resolve target + upsert) is the single Run-provenance
+			// write in RecordActionResult, mirroring the Syncer's two-phase resolve.
+			var rels []GovernedRelation
+			for _, rel := range e.GetRelations() {
+				if ok, reason := h.grant.allowsIdentity(rel.GetToScheme()); !ok {
+					r := Rejection{Kind: "relation-target", Detail: rel.GetToScheme(), Reason: "invoke: " + reason}
+					h.reject(r.Kind, r.Detail, r.Reason)
+					out.Rejections = append(out.Rejections, r)
+					continue
+				}
+				rels = append(rels, GovernedRelation{Type: rel.GetType(), ToScheme: rel.GetToScheme(), ToValue: rel.GetToValue()})
+			}
+			out.Entities = append(out.Entities, ActionEntity{Kind: e.GetKind(), IdentityKeys: ids, Labels: e.GetLabels(), Relations: rels})
 		}
 		for _, c := range res.GetProvisionedCreds() {
 			if !h.ownsCred(c.GetName()) {
@@ -539,11 +568,29 @@ func (h *Host) Invoke(ctx context.Context, runID, action string, args []byte, dr
 	prov := types.Provenance{WriterKind: types.WriterRun, WriterRef: runID, SourceID: h.source.ID, At: time.Now().UTC()}
 	projector := h.store.RunProjector()
 	for _, e := range raw.Entities {
-		gids, err := projector.UpsertEntities(ctx, prov, []graph.EntityUpsert{{Kind: e.Kind, IdentityKeys: e.IdentityKeys}})
+		gids, err := projector.UpsertEntities(ctx, prov, []graph.EntityUpsert{{Kind: e.Kind, IdentityKeys: e.IdentityKeys, Labels: e.Labels}})
 		if err != nil {
 			return out, fmt.Errorf("pluginhost: invoke project: %w", err)
 		}
 		out.ProvisionedEntity = append(out.ProvisionedEntity, gids...)
+		// The build's topology edges (ADR-0059): resolve BY IDENTITY, upsert
+		// Run-provenance, drop an unresolved target (no vivify) — same as the orchestrated
+		// RecordActionResult path, so projection stays one shape.
+		for _, rel := range e.Relations {
+			toID, found, err := h.store.EntityIDByIdentity(ctx, rel.ToScheme, rel.ToValue)
+			if err != nil {
+				return out, fmt.Errorf("pluginhost: invoke resolve relation: %w", err)
+			}
+			if !found {
+				// Visible drop (§1.8), mirroring the Syncer's resolve rejection — never a
+				// silent vanish.
+				h.reject("relation", rel.Type, "target "+rel.ToScheme+"="+rel.ToValue+" not found; edge dropped (no vivify)")
+				continue
+			}
+			if err := projector.UpsertRelation(ctx, prov, rel.Type, gids[0], toID); err != nil {
+				return out, fmt.Errorf("pluginhost: invoke project relation: %w", err)
+			}
+		}
 	}
 	return out, nil
 }

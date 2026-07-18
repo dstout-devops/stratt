@@ -1335,15 +1335,37 @@ func (a *Activities) ProjectFacts(ctx context.Context, runID string, facts FactS
 			// label (ADR-0017; parametrized Views are the follow-up).
 			labels["stratt.workspace"] = facts.Workspace
 		}
-		if _, err := p.UpsertEntities(ctx, prov, []graph.EntityUpsert{{
+		ids, err := p.UpsertEntities(ctx, prov, []graph.EntityUpsert{{
 			Kind: obs.Kind, IdentityKeys: obs.IdentityKeys, Labels: labels,
-		}}); err != nil {
+		}})
+		if err != nil {
 			if errors.Is(err, graph.ErrIdentityConflict) {
 				// Surface, never merge (§1.2) — mirror the Syncer posture.
 				return temporal.NewNonRetryableApplicationError(
 					fmt.Sprintf("output entity identity conflict: %v", err), "IdentityConflict", err)
 			}
 			return err
+		}
+		// Project the build's topology edges (ADR-0059): resolve each target BY
+		// IDENTITY, then upsert Run-provenance — an unresolved target drops the edge
+		// (never vivifies a placeholder, §1.2), mirroring the Syncer's resolve.
+		for _, rel := range obs.Relations {
+			toID, found, err := a.Store.EntityIDByIdentity(ctx, rel.ToScheme, rel.ToValue)
+			if err != nil {
+				return err
+			}
+			if !found {
+				// Surface the drop (§1.8 diagnosis-parity with the Syncer, host.go): a
+				// build's declared edge whose target isn't present vanishes WITH a trace,
+				// never silently — a build is ordering-sensitive (the target's build may
+				// not have run yet), so the Intent→Run descent must be able to explain it.
+				activity.GetLogger(ctx).Warn("build relation dropped: target not found (no vivify, §1.2)",
+					"type", rel.Type, "toScheme", rel.ToScheme, "toValue", rel.ToValue, "runId", runID)
+				continue
+			}
+			if err := p.UpsertRelation(ctx, prov, rel.Type, ids[0], toID); err != nil {
+				return err
+			}
 		}
 	}
 	if len(facts.OutputsContract) > 0 && facts.OutputsContractName != "" {

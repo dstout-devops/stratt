@@ -1,0 +1,54 @@
+# app-tier-build — the GATED build Workflow for the app-tier compute, PLACED-IN the
+# app-subnet (ADR-0058 + ADR-0059). Same shape as subnet-build: approve Gate → the
+# crossplane/provision Action provisions REAL compute (a Pod via provider-kubernetes),
+# waits Ready, and projects the host back with Run provenance — the stratt.intent/instance
+# correlation label resolves the provision/app-tier Finding, AND a placed-in edge to the
+# subnet projects the topology (the build's full observation, via the refined ingestion
+# primitive — a build projects its edges, not just its identity). The placement-drift
+# check then confirms declared (app-subnet) == observed (the placed-in edge).
+name: app-tier-build
+steps:
+  - name: approve
+    gate:
+      approvers:
+        teams: [platform-admins]
+      timeoutSeconds: 86400
+  - name: build
+    needs: [approve]
+    action: crossplane/provision
+    credentialRefs: [crossplane-dev]
+    params:
+      group: kubernetes.crossplane.io
+      version: v1alpha2
+      resource: objects
+      kind: Object
+      name: app-01
+      readySeconds: 120
+      # Estate overlay: the built compute projects AS a host, correlated by
+      # stratt.intent/instance so the provision/app-tier Finding resolves.
+      projectKind: host
+      identityScheme: crossplane.claim
+      projectLabels:
+        stratt.intent/instance: app-01
+        fleet: app
+      # The topology edge the build projects (decision 5): the host is placed-in the
+      # subnet, targeted by identity — the core gates + resolves + projects it.
+      relations:
+        - type: placed-in
+          toScheme: crossplane.claim
+          toValue: app-subnet
+      # Real compute: a Pod provider-kubernetes provisions (a genuine reconcile).
+      spec:
+        providerConfigRef:
+          name: default
+        forProvider:
+          manifest:
+            apiVersion: v1
+            kind: Pod
+            metadata:
+              name: app-01
+              namespace: crossplane-system
+            spec:
+              containers:
+                - name: app
+                  image: registry.k8s.io/pause:3.9
