@@ -31,7 +31,7 @@ func TestReferenceEstateParses(t *testing.T) {
 	if _, err := os.Stat(estateRoot); err != nil {
 		t.Skipf("reference estate not found at %s (%v)", estateRoot, err)
 	}
-	decls, err := ParseDir(estateRoot)
+	decls, err := ParseDir(estateRoot, nil)
 	if err != nil {
 		t.Fatalf("reference estate %s does not parse/validate: %v", filepath.Clean(estateRoot), err)
 	}
@@ -72,7 +72,7 @@ func TestReferenceEstateDevSlice(t *testing.T) {
 	if _, err := os.Stat(estateRoot); err != nil {
 		t.Skipf("reference estate not found at %s (%v)", estateRoot, err)
 	}
-	decls, err := ParseDir(estateRoot)
+	decls, err := ParseDir(estateRoot, nil)
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
@@ -115,7 +115,7 @@ func TestReferenceEstateProvisioningIntent(t *testing.T) {
 	if _, err := os.Stat(estateRoot); err != nil {
 		t.Skipf("reference estate not found at %s (%v)", estateRoot, err)
 	}
-	decls, err := ParseDir(estateRoot)
+	decls, err := ParseDir(estateRoot, nil)
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}

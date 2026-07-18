@@ -62,6 +62,10 @@ type Declarations struct {
 	Sites          []types.Site          `json:"sites"`
 	Cells          []types.Cell          `json:"cells"`
 	SCIMIdPs       []types.SCIMIdP       `json:"scimIdps"`
+	// AdmissionControls are the estate's admission policy (ADR-0073 §7.4b): CEL
+	// predicates over each declaration's manifest, evaluated at load through the
+	// PDP port. A deny rejects the declaration (§7.4c).
+	AdmissionControls []types.Control `json:"admissionControls,omitempty"`
 }
 
 // Declared kinds appearing in plans.
@@ -184,8 +188,28 @@ type declFacet struct {
 // directory is an error, not an empty set — an empty set prunes every
 // cac-declared View, and a mistyped path must never look like one.
 // (credential-refs/ is optional: repos predating ADR-0009 stay valid.)
-func ParseDir(root string) (Declarations, error) {
+// ParseDir loads and validates the estate declarations. decider is the PDP port
+// for the admission PEP (ADR-0073 §7.4c): when the estate declares an admission
+// policy (admission/) and a decider is supplied, every OTHER declaration's
+// manifest is admitted through the port and a deny rejects the load, fail-closed
+// (§1.8). A nil decider skips admission (e.g. a boot-time authz-only load).
+func ParseDir(root string, decider policy.Decider) (Declarations, error) {
 	var out Declarations
+
+	// Admission policy first: it governs every other declaration (§3
+	// Kyverno-for-config). Controls are validated at load (CEL-only, allow/deny).
+	admissionDecls, err := parseKind(filepath.Join(root, "admission"), true, parseAdmissionFile)
+	if err != nil {
+		return out, err
+	}
+	for _, a := range admissionDecls {
+		out.AdmissionControls = append(out.AdmissionControls, a.Controls...)
+	}
+	if len(out.AdmissionControls) > 0 && decider != nil {
+		if err := admitEstate(root, out.AdmissionControls, decider); err != nil {
+			return out, err
+		}
+	}
 
 	views, err := parseKind(filepath.Join(root, "views"), false, parseViewFile)
 	if err != nil {
@@ -300,6 +324,137 @@ func ParseDir(root string) (Declarations, error) {
 		return out.Blueprints[i].Version < out.Blueprints[j].Version
 	})
 	return out, nil
+}
+
+// admissionFileYAML is one estate admission policy (ADR-0073 §7.4b): a named set
+// of CEL-only admission controls. Reuses controlYAML; only id/when/outcome are
+// meaningful (ValidateAdmissionControls rejects run-time typed primitives).
+type admissionFileYAML struct {
+	Name     string        `yaml:"name"`
+	Controls []controlYAML `yaml:"controls"`
+}
+type admissionDecl struct {
+	Name     string
+	Controls []types.Control
+}
+
+func parseAdmissionFile(path string, raw []byte) (string, admissionDecl, error) {
+	var f admissionFileYAML
+	dec := yaml.NewDecoder(strings.NewReader(string(raw)))
+	dec.KnownFields(true)
+	if err := dec.Decode(&f); err != nil {
+		return "", admissionDecl{}, fmt.Errorf("desiredstate: %s: %w", path, err)
+	}
+	if f.Name == "" {
+		return "", admissionDecl{}, fmt.Errorf("desiredstate: %s: admission policy requires a name", path)
+	}
+	ctrls := make([]types.Control, 0, len(f.Controls))
+	for _, c := range f.Controls {
+		ctrls = append(ctrls, types.Control{ID: c.ID, When: c.When, Outcome: c.Outcome})
+	}
+	if err := policy.ValidateAdmissionControls(ctrls); err != nil {
+		return "", admissionDecl{}, fmt.Errorf("desiredstate: %s: %w", path, err)
+	}
+	return f.Name, admissionDecl{Name: f.Name, Controls: ctrls}, nil
+}
+
+// admissionDirs are the declaration directories admission judges — every estate
+// kind except admission/ itself (a policy does not admit itself).
+var admissionDirs = []string{
+	"views", "credential-refs", "triggers", "workflows", "emitters", "sites",
+	"cells", "scim", "notify-sinks", "subscriptions", "baselines", "mcp-servers",
+	"intents", "assignments", "blueprints",
+}
+
+// admitEstate runs the admission PEP over every declaration manifest through the
+// PDP port (ADR-0073 §7.4c). A deny rejects the load with the reasons on the
+// record (§1.8). The manifest is admitted as a generic object with a guaranteed
+// `kind` (the manifest's own, or the directory's), so admission controls can
+// match reliably (e.g. object.kind == 'Workflow').
+func admitEstate(root string, controls []types.Control, decider policy.Decider) error {
+	for _, sub := range admissionDirs {
+		entries, err := os.ReadDir(filepath.Join(root, sub))
+		if os.IsNotExist(err) {
+			continue
+		}
+		if err != nil {
+			return fmt.Errorf("desiredstate: admission read %s: %w", sub, err)
+		}
+		for _, e := range entries {
+			if e.IsDir() {
+				continue
+			}
+			ext := strings.ToLower(filepath.Ext(e.Name()))
+			if ext != ".yaml" && ext != ".yml" {
+				continue
+			}
+			path := filepath.Join(sub, e.Name())
+			raw, err := os.ReadFile(filepath.Join(root, path))
+			if err != nil {
+				return fmt.Errorf("desiredstate: %s: %w", path, err)
+			}
+			obj, err := manifestObject(raw, sub)
+			if err != nil {
+				return fmt.Errorf("desiredstate: admission parse %s: %w", path, err)
+			}
+			d := decider.Admit(context.Background(), policy.AdmissionRequest{Object: obj, Controls: controls})
+			if d.Outcome == types.OutcomeDeny {
+				return fmt.Errorf("desiredstate: %s: admission denied — %s", path, admissionReasons(d))
+			}
+		}
+	}
+	return nil
+}
+
+// manifestObject decodes a declaration into a generic object for admission,
+// guaranteeing a `kind` (the manifest's own, else the directory's singular kind).
+func manifestObject(raw []byte, sub string) (map[string]any, error) {
+	var m map[string]any
+	if err := yaml.Unmarshal(raw, &m); err != nil {
+		return nil, err
+	}
+	if m == nil {
+		m = map[string]any{}
+	}
+	if _, ok := m["kind"]; !ok {
+		m["kind"] = dirKind(sub)
+	}
+	return m, nil
+}
+
+func dirKind(sub string) string {
+	switch sub {
+	case "views":
+		return "View"
+	case "workflows":
+		return "Workflow"
+	case "assignments":
+		return "Assignment"
+	case "blueprints":
+		return "Blueprint"
+	case "baselines":
+		return "Baseline"
+	case "triggers":
+		return "Trigger"
+	case "emitters":
+		return "Emitter"
+	case "sites":
+		return "Site"
+	default:
+		return sub
+	}
+}
+
+func admissionReasons(d types.Decision) string {
+	parts := make([]string, 0, len(d.Reasons))
+	for _, r := range d.Reasons {
+		if r.ControlID != "" {
+			parts = append(parts, r.ControlID+": "+r.Message)
+		} else {
+			parts = append(parts, r.Message)
+		}
+	}
+	return strings.Join(parts, "; ")
 }
 
 // parseKind reads one declaration directory; optional dirs may be absent.

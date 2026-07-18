@@ -12,6 +12,7 @@ import (
 
 	"github.com/dstout-devops/stratt/core/internal/compiler"
 	"github.com/dstout-devops/stratt/core/internal/graph"
+	"github.com/dstout-devops/stratt/core/internal/policy"
 	"github.com/dstout-devops/stratt/core/internal/provision"
 	"github.com/dstout-devops/stratt/types"
 )
@@ -43,6 +44,10 @@ type Controller struct {
 	// CompileStatus, when set, receives each pass's compile summary for the
 	// read-only GET /compile surface.
 	CompileStatus *compiler.Status
+	// Decider is the PDP port for the admission PEP (ADR-0073): each reconcile
+	// admits the estate's declarations through it, rejecting a denied load. Nil
+	// ⇒ admission is skipped (no policy engine configured).
+	Decider policy.Decider
 }
 
 // Run reconciles until ctx ends.
@@ -82,7 +87,7 @@ func (c *Controller) reconcile(ctx context.Context, log *slog.Logger) {
 		}
 	}
 
-	decls, err := ParseDir(c.Path)
+	decls, err := ParseDir(c.Path, c.Decider)
 	if err != nil {
 		// Fail-safe: never apply (and above all never prune) off a broken
 		// read of the desired state.

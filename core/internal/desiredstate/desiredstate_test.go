@@ -43,7 +43,7 @@ selector:
 	writeDecl(t, root, "all-vms.yml", "name: all-vms\nselector:\n  kinds: [vm]\n")
 	writeDecl(t, root, "notes.txt", "not a declaration") // ignored
 
-	parsed, err := ParseDir(root)
+	parsed, err := ParseDir(root, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -62,26 +62,26 @@ selector:
 
 func TestParseDirRejects(t *testing.T) {
 	// Missing views/ directory is an error, never an empty (prune-all) set.
-	if _, err := ParseDir(t.TempDir()); err == nil {
+	if _, err := ParseDir(t.TempDir(), nil); err == nil {
 		t.Fatal("missing views/ must be an error")
 	}
 
 	root := t.TempDir()
 	writeDecl(t, root, "a.yaml", "name: dup\nselector: {kinds: [vm]}\n")
 	writeDecl(t, root, "b.yaml", "name: dup\nselector: {kinds: [host]}\n")
-	if _, err := ParseDir(root); err == nil || !strings.Contains(err.Error(), "declared in both") {
+	if _, err := ParseDir(root, nil); err == nil || !strings.Contains(err.Error(), "declared in both") {
 		t.Fatalf("duplicate names must be rejected, got %v", err)
 	}
 
 	root = t.TempDir()
 	writeDecl(t, root, "bad.yaml", "name: x\nselektor: {}\n") // typo field
-	if _, err := ParseDir(root); err == nil {
+	if _, err := ParseDir(root, nil); err == nil {
 		t.Fatal("unknown fields must be rejected (KnownFields)")
 	}
 
 	root = t.TempDir()
 	writeDecl(t, root, "noname.yaml", "selector: {kinds: [vm]}\n")
-	if _, err := ParseDir(root); err == nil {
+	if _, err := ParseDir(root, nil); err == nil {
 		t.Fatal("missing name must be rejected")
 	}
 }
@@ -266,7 +266,7 @@ injection:
   - { key: password, as: env, name: VC_PASS }
   - { key: username, as: file, name: user }
 `)
-	parsed, err := ParseDir(root)
+	parsed, err := ParseDir(root, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -290,7 +290,7 @@ injection:
 		bad := t.TempDir()
 		writeDecl(t, bad, "v.yaml", "name: v\nselector: {kinds: [vm]}\n")
 		writeCredRef(t, bad, "x.yaml", doc)
-		if _, err := ParseDir(bad); err == nil {
+		if _, err := ParseDir(bad, nil); err == nil {
 			t.Fatalf("invalid %s must be rejected", name)
 		}
 	}
@@ -298,7 +298,7 @@ injection:
 	// credential-refs/ absent → valid (pre-ADR-0009 repos).
 	old := t.TempDir()
 	writeDecl(t, old, "v.yaml", "name: v\nselector: {kinds: [vm]}\n")
-	if _, err := ParseDir(old); err != nil {
+	if _, err := ParseDir(old, nil); err != nil {
 		t.Fatalf("missing credential-refs dir must be fine: %v", err)
 	}
 }
@@ -411,7 +411,7 @@ actuator: ansible
 credentialRefs: [vcenter-dev]
 principal: "381351939796919559"
 `)
-	parsed, err := ParseDir(root)
+	parsed, err := ParseDir(root, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -437,7 +437,7 @@ principal: "381351939796919559"
 		bad := t.TempDir()
 		writeDecl(t, bad, "v.yaml", "name: v\nselector: {kinds: [vm]}\n")
 		writeTrigger(t, bad, "x.yaml", doc)
-		if _, err := ParseDir(bad); err == nil {
+		if _, err := ParseDir(bad, nil); err == nil {
 			t.Fatalf("invalid %s must be rejected", name)
 		}
 	}
@@ -445,7 +445,7 @@ principal: "381351939796919559"
 	// triggers/ absent → valid (repos predating ADR-0010).
 	old := t.TempDir()
 	writeDecl(t, old, "v.yaml", "name: v\nselector: {kinds: [vm]}\n")
-	if _, err := ParseDir(old); err != nil {
+	if _, err := ParseDir(old, nil); err != nil {
 		t.Fatalf("absent triggers/ must be valid: %v", err)
 	}
 }
@@ -556,7 +556,7 @@ steps:
     actuator: script
     params: { script: "echo cleanup" }
 `)
-	parsed, err := ParseDir(root)
+	parsed, err := ParseDir(root, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -592,7 +592,7 @@ steps:
 		bad := t.TempDir()
 		writeDecl(t, bad, "v.yaml", "name: v\nselector: {kinds: [vm]}\n")
 		writeWorkflow(t, bad, "x.yaml", doc)
-		if _, err := ParseDir(bad); err == nil {
+		if _, err := ParseDir(bad, nil); err == nil {
 			t.Fatalf("invalid %s must be rejected", name)
 		}
 	}
@@ -602,7 +602,7 @@ steps:
 	writeDecl(t, act, "v.yaml", "name: v\nselector: {kinds: [vm]}\n")
 	writeWorkflow(t, act, "cert.yaml",
 		"name: cert-revoke\nsteps:\n  - name: revoke\n    action: certissuer/revoke\n    credentialRefs: [cert-issuer]\n    params: {addr: 'http://x', serial: 'a:b'}\n")
-	parsedAct, err := ParseDir(act)
+	parsedAct, err := ParseDir(act, nil)
 	if err != nil {
 		t.Fatalf("valid action workflow must parse: %v", err)
 	}
@@ -618,14 +618,14 @@ steps:
 		"name: seam\nsteps:\n"+
 			"  - {name: provision, action: awsec2/create-vm, params: {region: us-east-1, ami: ami-1}}\n"+
 			"  - name: configure\n    needs: [provision]\n    viewName: v\n    actuator: script\n    params: {script: '{{.steps.provision.outputs.instanceId}}'}\n")
-	if _, err := ParseDir(bind); err != nil {
+	if _, err := ParseDir(bind, nil); err != nil {
 		t.Fatalf("steps-namespace binding must parse: %v", err)
 	}
 
 	// workflows/ absent → valid (repos predating ADR-0011).
 	old := t.TempDir()
 	writeDecl(t, old, "v.yaml", "name: v\nselector: {kinds: [vm]}\n")
-	if _, err := ParseDir(old); err != nil {
+	if _, err := ParseDir(old, nil); err != nil {
 		t.Fatalf("absent workflows/ must be valid: %v", err)
 	}
 }

@@ -1062,6 +1062,7 @@ func run(ctx context.Context, log *slog.Logger) error {
 			Path: path, Interval: interval, Store: store, Log: log,
 			MaxPruneFraction: maxPrune,
 			MaxDelta:         maxDelta, CompileStatus: compileStatus,
+			Decider: decider,
 		}
 		controllers = append(controllers, func(cctx context.Context) {
 			if err := ctl.Run(cctx); err != nil && !errors.Is(err, context.Canceled) {
@@ -1072,7 +1073,7 @@ func run(ctx context.Context, log *slog.Logger) error {
 		// Authz-home gate (ADR-0044 slice 4): only the authz-home Cell's daemon
 		// writes the shared OpenFGA tuple store — else N Cells thrash it. Derived
 		// from the CaC Cell set at boot (not the DB, which races the reconcile).
-		authzDecls, err := desiredstate.ParseDir(path)
+		authzDecls, err := desiredstate.ParseDir(path, nil)
 		if err != nil {
 			return fmt.Errorf("desired-state parse (authz-home): %w", err)
 		}

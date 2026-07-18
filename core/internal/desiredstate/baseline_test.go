@@ -33,7 +33,7 @@ dampingObservations: 2
 remediationWorkflow: patch-dev
 framework: cis
 `)
-	parsed, err := ParseDir(root)
+	parsed, err := ParseDir(root, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -60,7 +60,7 @@ framework: cis
 		bad := t.TempDir()
 		writeDecl(t, bad, "v.yaml", "name: v\nselector: {kinds: [vm]}\n")
 		writeBaseline(t, bad, "x.yaml", doc)
-		if _, err := ParseDir(bad); err == nil {
+		if _, err := ParseDir(bad, nil); err == nil {
 			t.Fatalf("invalid baseline (%s) must be rejected", name)
 		}
 	}
@@ -72,14 +72,14 @@ framework: cis
 	okDir := t.TempDir()
 	writeDecl(t, okDir, "v.yaml", "name: v\nselector: {kinds: [vm]}\n")
 	writeBaseline(t, okDir, "x.yaml", "name: x\nviewName: v\nactuator: ansible\ncron: '* * * * *'\nseverity: info\nparams: {check: false}\n")
-	if _, err := ParseDir(okDir); err != nil {
+	if _, err := ParseDir(okDir, nil); err != nil {
 		t.Fatalf("content-blind validation must accept an inert declared params.check, got %v", err)
 	}
 
 	// baselines/ absent → valid (repos predating ADR-0019).
 	old := t.TempDir()
 	writeDecl(t, old, "v.yaml", "name: v\nselector: {kinds: [vm]}\n")
-	if _, err := ParseDir(old); err != nil {
+	if _, err := ParseDir(old, nil); err != nil {
 		t.Fatalf("absent baselines/ must be valid: %v", err)
 	}
 }
@@ -104,7 +104,7 @@ expected:
     path: running
     equals: true
 `)
-	parsed, err := ParseDir(root)
+	parsed, err := ParseDir(root, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -141,7 +141,7 @@ expected:
 		bad := t.TempDir()
 		writeDecl(t, bad, "v.yaml", "name: v\nselector: {kinds: [vm]}\n")
 		writeBaseline(t, bad, "x.yaml", doc)
-		if _, err := ParseDir(bad); err == nil {
+		if _, err := ParseDir(bad, nil); err == nil {
 			t.Fatalf("invalid facet-observation baseline (%s) must be rejected", name)
 		}
 	}

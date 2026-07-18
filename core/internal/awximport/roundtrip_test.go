@@ -44,7 +44,7 @@ func TestBundleRoundTrips(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	decls, err := desiredstate.ParseDir(bundle)
+	decls, err := desiredstate.ParseDir(bundle, nil)
 	if err != nil {
 		t.Fatalf("emitted bundle does not round-trip through ParseDir: %v", err)
 	}

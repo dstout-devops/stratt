@@ -12,7 +12,7 @@ func TestViewSelectorNamespaceScope(t *testing.T) {
 	root := t.TempDir()
 	// A param-bound View is fine.
 	writeDecl(t, root, "ok.yaml", "name: ok\nselector: {kinds: [vm], labels: {host: \"{{.param.host}}\"}}\n")
-	if _, err := ParseDir(root); err != nil {
+	if _, err := ParseDir(root, nil); err != nil {
 		t.Fatalf("param View must be allowed: %v", err)
 	}
 	// An event/spec binding in a View selector is rejected at declaration.
@@ -22,7 +22,7 @@ func TestViewSelectorNamespaceScope(t *testing.T) {
 	} {
 		d := t.TempDir()
 		writeDecl(t, d, "b.yaml", bad)
-		if _, err := ParseDir(d); err == nil {
+		if _, err := ParseDir(d, nil); err == nil {
 			t.Fatalf("View selector with a non-param namespace must be rejected: %s", bad)
 		}
 	}

@@ -48,7 +48,7 @@ blueprint: application@3
 environments: [prod]
 maxDelta: 0.4
 `)
-	parsed, err := ParseDir(root)
+	parsed, err := ParseDir(root, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -89,7 +89,7 @@ maxDelta: 0.4
 		for kind, doc := range docs {
 			writeKind(t, bad, kind, "x.yaml", doc)
 		}
-		if _, err := ParseDir(bad); err == nil {
+		if _, err := ParseDir(bad, nil); err == nil {
 			t.Fatalf("invalid intent-layer (%s) must be rejected", name)
 		}
 	}
@@ -107,7 +107,7 @@ func TestCertificateIntentGA(t *testing.T) {
 	writeKind(t, root, "blueprints", "b.yaml",
 		"name: certificate\nversion: 1\nfor: Intent/Certificate\nseverity: warning\nremoveWorkflow: cert-revoke\n"+
 			"routes: [{observe: {namespace: cert.expiry, path: notAfter, notBefore: '{{.spec.renewBefore}}'}, claim: exclusive, remediationWorkflow: cert-renew}]\n")
-	parsed, err := ParseDir(root)
+	parsed, err := ParseDir(root, nil)
 	if err != nil {
 		t.Fatalf("valid certificate intent-layer must parse: %v", err)
 	}
@@ -132,7 +132,7 @@ func TestFileSetIntentGA(t *testing.T) {
 	writeKind(t, root, "blueprints", "b.yaml",
 		"name: fileset\nversion: 1\nfor: Intent/FileSet\nseverity: warning\nremoveWorkflow: fileset-revert\n"+
 			"routes: [{observe: {namespace: fileset.content, path: '{{.spec.key}}.digest', equals: '{{.spec.digest}}'}, claim: additive, remediationWorkflow: fileset-apply}]\n")
-	parsed, err := ParseDir(root)
+	parsed, err := ParseDir(root, nil)
 	if err != nil {
 		t.Fatalf("valid fileset intent-layer must parse: %v", err)
 	}
@@ -146,7 +146,7 @@ func TestFileSetIntentGA(t *testing.T) {
 	// A bad digest (not sha256:<64hex>) is refused at the seam (§1.1).
 	writeKind(t, root, "intents", "f.yaml",
 		"name: nginx-conf\nkind: Intent/FileSet\nspec: {key: nginx-conf, path: /etc/nginx/nginx.conf, digest: nope}\n")
-	if _, err := ParseDir(root); err == nil {
+	if _, err := ParseDir(root, nil); err == nil {
 		t.Fatal("fileset spec with a malformed digest must be rejected")
 	}
 }
@@ -162,7 +162,7 @@ func TestAccessIntentGA(t *testing.T) {
 	writeKind(t, root, "blueprints", "b.yaml",
 		"name: access\nversion: 1\nfor: Intent/Access\nseverity: warning\nremoveWorkflow: access-revoke\n"+
 			"routes: [{observe: {namespace: access.grants, contains: {subject: '{{.spec.subject}}', kind: '{{.spec.kind}}', scope: '{{.spec.scope}}'}}, claim: additive, remediationWorkflow: access-apply}]\n")
-	parsed, err := ParseDir(root)
+	parsed, err := ParseDir(root, nil)
 	if err != nil {
 		t.Fatalf("valid access intent-layer must parse: %v", err)
 	}
@@ -175,7 +175,7 @@ func TestAccessIntentGA(t *testing.T) {
 	// onRemove: remove is also valid for Access (revoke a grant).
 	writeKind(t, root, "intents", "a.yaml",
 		"name: alice-wheel\nkind: Intent/Access\nonRemove: remove\nspec: {subject: alice, kind: group, scope: wheel}\n")
-	if _, err := ParseDir(root); err != nil {
+	if _, err := ParseDir(root, nil); err != nil {
 		t.Fatalf("access onRemove: remove must parse: %v", err)
 	}
 }
@@ -186,7 +186,7 @@ func TestBlueprintVersionsCoexist(t *testing.T) {
 	base := "name: application\nfor: Intent/Application\nroutes: [{observe: {namespace: n, equals: 1}, claim: additive}]\nversion: "
 	writeKind(t, root, "blueprints", "v1.yaml", base+"1\n")
 	writeKind(t, root, "blueprints", "v2.yaml", base+"2\n")
-	parsed, err := ParseDir(root)
+	parsed, err := ParseDir(root, nil)
 	if err != nil {
 		t.Fatalf("two versions of one blueprint must coexist: %v", err)
 	}

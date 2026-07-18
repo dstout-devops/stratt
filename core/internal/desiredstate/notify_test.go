@@ -24,7 +24,7 @@ match: event.payload.severity == "critical"
 sink: ops-webhook
 cooldownSeconds: 60
 `)
-	parsed, err := ParseDir(root)
+	parsed, err := ParseDir(root, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -46,32 +46,32 @@ func TestValidateNotifyRejects(t *testing.T) {
 
 	// A Sink with no credentialRef is rejected — secrets are never inline (§2.5).
 	root := seed("notify-sinks", "bad.yaml", "name: x\nkind: webhook\nprincipal: p\n")
-	if _, err := ParseDir(root); err == nil || !strings.Contains(err.Error(), "credentialRef") {
+	if _, err := ParseDir(root, nil); err == nil || !strings.Contains(err.Error(), "credentialRef") {
 		t.Fatalf("want credentialRef error, got %v", err)
 	}
 
 	// A Sink with no principal is rejected — delivery credential use is
 	// authz-checked (§2.5/§1.6), so a Sink must name whom it delivers as.
 	root = seed("notify-sinks", "nopr.yaml", "name: x\nkind: webhook\ncredentialRef: c\n")
-	if _, err := ParseDir(root); err == nil || !strings.Contains(err.Error(), "principal") {
+	if _, err := ParseDir(root, nil); err == nil || !strings.Contains(err.Error(), "principal") {
 		t.Fatalf("want principal error, got %v", err)
 	}
 
 	// An unknown notice kind is a declaration error, never a silent no-op.
 	root = seed("subscriptions", "bad.yaml", "name: s\non: [run.exploded]\nsink: k\n")
-	if _, err := ParseDir(root); err == nil || !strings.Contains(err.Error(), "unknown notice kind") {
+	if _, err := ParseDir(root, nil); err == nil || !strings.Contains(err.Error(), "unknown notice kind") {
 		t.Fatalf("want unknown-kind error, got %v", err)
 	}
 
 	// A match that does not compile fails the file at parse (§1.8).
 	root = seed("subscriptions", "bad2.yaml", "name: s\non: [run.failed]\nsink: k\nmatch: 'event.payload.'\n")
-	if _, err := ParseDir(root); err == nil || !strings.Contains(err.Error(), "match") {
+	if _, err := ParseDir(root, nil); err == nil || !strings.Contains(err.Error(), "match") {
 		t.Fatalf("want match compile error, got %v", err)
 	}
 
 	// A Subscription with an empty on-set is rejected.
 	root = seed("subscriptions", "bad3.yaml", "name: s\nsink: k\n")
-	if _, err := ParseDir(root); err == nil || !strings.Contains(err.Error(), "at least one notice kind") {
+	if _, err := ParseDir(root, nil); err == nil || !strings.Contains(err.Error(), "at least one notice kind") {
 		t.Fatalf("want empty-on error, got %v", err)
 	}
 }

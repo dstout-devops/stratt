@@ -16,6 +16,7 @@ import (
 	"os"
 
 	"github.com/dstout-devops/stratt/core/internal/desiredstate"
+	"github.com/dstout-devops/stratt/core/internal/policy"
 )
 
 func main() {
@@ -89,7 +90,7 @@ func envOr(key, def string) string {
 }
 
 func run(cmd, dir, server string) error {
-	decls, err := desiredstate.ParseDir(dir)
+	decls, err := desiredstate.ParseDir(dir, policy.CEL{})
 	if err != nil {
 		return err
 	}
