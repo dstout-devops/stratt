@@ -25,8 +25,10 @@ declarative constructs (the useful half of AWS CDK — see ADR-0055):
 
 - **`views/linux-fleet.yaml`** — the group (`kinds:[host], labels:{os:linux}`), landscape-neutral: a host counts
   whether it was projected from vSphere, OpenTofu, Crossplane, or the declared-estate file.
-- **`intents/linux-baseline.yaml` + `blueprints/linux-baseline.yaml` + `assignments/linux-fleet-baseline.yaml`**
+- **`intents/linux-baseline.yaml` + the shared `blueprints/fileset.yaml` + `assignments/linux-fleet-baseline.yaml`**
   — the "template Z" (L2 construct with defaults) bound to the group; the compiler drift-checks every member.
+  The flagship REUSES the one `fileset` Blueprint (a namespace has a single Blueprint owner, §2.1; additive keys
+  union within it), so the fleet's `sshd-config` key and web-files' `nginx-conf` key coexist in `fileset.content`.
 - **`workflows/linux-onboard.yaml`** — the L3 onboarding lifecycle: `Gate → provision (Action) → configure
   (ansible)`. The provision Step's `action` is the **landscape binding** — `awsec2/create-vm` in dev, swappable
   for a `crossplane`/`opentofu`/`vsphere` Action without touching the rest of the estate. Provisioning is
