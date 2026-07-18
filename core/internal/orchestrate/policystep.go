@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 
 	"go.temporal.io/sdk/activity"
+	"go.temporal.io/sdk/log"
 	"go.temporal.io/sdk/workflow"
 
 	"github.com/dstout-devops/stratt/core/internal/policy"
@@ -47,14 +48,38 @@ func (a *Activities) EvaluatePolicy(ctx context.Context, arg PolicyEvalArg) (typ
 	} else {
 		lg.Warn("policy decision blocked", "outcome", dec.Outcome, "reasons", codes)
 	}
-	// Durable, tamper-evident record on the audit chain (ADR-0065). A failed
-	// audit write is visible, never swallowed (§1.8); nil-guarded like Evidence.
+	// Durable, tamper-evident record on the audit chain (ADR-0065) — now including
+	// the decision's obligations (ADR-0075). A failed audit write is visible,
+	// never swallowed (§1.8); nil-guarded like Evidence.
 	if a.Store != nil {
 		if err := a.Store.RecordAudit(context.WithoutCancel(ctx), policyAuditEvent(arg, dec)); err != nil {
 			lg.Error("policy decision audit failed", "err", err)
 		}
+		enforceObligations(context.WithoutCancel(ctx), a, arg, dec, lg)
 	}
 	return dec, nil
+}
+
+// enforceObligations makes a decision's binding riders REAL, not recorded-and-
+// dropped (ADR-0075, closing the ADR-0070 guardrail-6 gap): a post_review (a
+// break-glass bypass) becomes a TRACKED, closeable Finding, so "mandatory
+// post-review" is an item someone must resolve — never a discarded struct. A
+// failed write is logged, never silent (§1.8). notify/record_evidence/ttl are
+// the following slices.
+func enforceObligations(ctx context.Context, a *Activities, arg PolicyEvalArg, dec types.Decision, lg log.Logger) {
+	for _, ob := range dec.Obligations {
+		if ob.Type != types.ObligationPostReview {
+			continue
+		}
+		target := arg.WorkflowRunID + "/" + arg.StepName
+		detail, _ := json.Marshal(map[string]any{
+			"obligation": ob, "step": arg.StepName, "actor": arg.Context.Actor.ID,
+			"outcome": dec.Outcome, "reasons": dec.Reasons,
+		})
+		if err := a.Store.WriteGovernanceFinding(ctx, "governance/post-review", target, "warning", "governance/post-review", detail); err != nil {
+			lg.Error("post-review obligation: finding write failed", "err", err, "target", target)
+		}
+	}
 }
 
 // policyAuditEvent maps a decision to its audit record (ADR-0065): outcome →
@@ -70,10 +95,11 @@ func policyAuditEvent(arg PolicyEvalArg, dec types.Decision) types.AuditEvent {
 		outcome = dec.Outcome
 	}
 	detail, _ := json.Marshal(struct {
-		Outcome string         `json:"outcome"`
-		Step    string         `json:"step"`
-		Reasons []types.Reason `json:"reasons,omitempty"`
-	}{dec.Outcome, arg.StepName, dec.Reasons})
+		Outcome     string             `json:"outcome"`
+		Step        string             `json:"step"`
+		Reasons     []types.Reason     `json:"reasons,omitempty"`
+		Obligations []types.Obligation `json:"obligations,omitempty"`
+	}{dec.Outcome, arg.StepName, dec.Reasons, dec.Obligations})
 	return types.AuditEvent{
 		PrincipalID: arg.Context.Actor.ID,
 		Action:      types.AuditPolicyDecision,

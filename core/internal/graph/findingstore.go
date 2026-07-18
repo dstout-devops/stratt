@@ -367,6 +367,25 @@ func (s *Store) WriteOrphanFinding(ctx context.Context, baseline, target, severi
 	return nil
 }
 
+// WriteGovernanceFinding records a governance obligation as a TRACKED, closeable
+// Finding (ADR-0070 guardrail 6 / ADR-0075): a break-glass post-review, or any
+// binding rider that must not vanish, becomes an open Finding keyed by
+// (baseline, target) — idempotent and resolvable, reusing the shipped Findings
+// surface so "mandatory review" is a real item, never a discarded struct (§1.8).
+func (s *Store) WriteGovernanceFinding(ctx context.Context, baseline, target, severity, framework string, detail []byte) error {
+	_, err := s.pool.Exec(ctx, `
+		INSERT INTO graph.finding
+			(baseline, target, status, severity, framework, consecutive_drifted, diff, opened_at)
+		VALUES ($1, $2, 'open', $3, $4, 1, $5, now())
+		ON CONFLICT (baseline, target) WHERE status <> 'resolved'
+		DO UPDATE SET diff = excluded.diff, last_observed = now()`,
+		baseline, target, severity, framework, detail)
+	if err != nil {
+		return fmt.Errorf("graph: write governance finding: %w", err)
+	}
+	return nil
+}
+
 // ListFindings returns Findings, newest observation first, optionally
 // filtered by Baseline name and/or status.
 func (s *Store) ListFindings(ctx context.Context, baseline, status string, limit int) ([]types.Finding, error) {

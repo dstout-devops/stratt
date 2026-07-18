@@ -2,6 +2,7 @@ package orchestrate
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -63,6 +64,20 @@ func TestPolicyAuditEvent(t *testing.T) {
 		if len(ev.Detail) == 0 {
 			t.Fatalf("%s: detail must carry the reasons", outcome)
 		}
+	}
+}
+
+// The audit record now carries the decision's obligations — a break-glass
+// post-review is on the tamper-evident chain, not discarded (ADR-0075).
+func TestPolicyAuditEvent_IncludesObligations(t *testing.T) {
+	arg := PolicyEvalArg{WorkflowRunID: "wr-1", StepName: "guard",
+		Context: types.ChangeContext{Actor: types.PrincipalRef{ID: "alice"}}}
+	dec := types.Decision{Outcome: types.OutcomeAllow, Obligations: []types.Obligation{
+		{Type: types.ObligationPostReview, Params: map[string]any{"by": "security-team"}},
+	}}
+	ev := policyAuditEvent(arg, dec)
+	if !strings.Contains(string(ev.Detail), types.ObligationPostReview) {
+		t.Fatalf("audit detail must carry the obligations, got %s", ev.Detail)
 	}
 }
 
