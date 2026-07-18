@@ -193,5 +193,11 @@ func assembleChangeContext(in DAGInput) types.ChangeContext {
 	if env, ok := cc.Labels["environment"]; ok {
 		cc.Environment = env
 	}
+	// Committers (the change authors) from a `committers` launch param — the
+	// source SoD checks the actor against (ADR-0068). A CI/operator launching the
+	// change supplies them; richer committer provenance is a follow-up.
+	for _, id := range paramStrings(in.LaunchParams, "committers") {
+		cc.Committers = append(cc.Committers, types.PrincipalRef{ID: id})
+	}
 	return cc
 }

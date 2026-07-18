@@ -113,6 +113,8 @@ func controlFires(env *cel.Env, cm map[string]any, cc types.ChangeContext, c typ
 			return false, "no_schedule_time", "time-window control has no scheduled_at to judge (fail-closed, M4)"
 		}
 		return timeWindowFires(c.TimeWindow, cc.ScheduledAt), "", ""
+	case c.SoD != nil:
+		return sodViolated(c.SoD, cc), "", ""
 	default: // raw CEL predicate
 		prg, err := rules.CompileForEnv(env, c.When)
 		if err != nil {
@@ -160,6 +162,24 @@ func inWindow(tw *types.TimeWindowSpec, t time.Time) bool {
 	}
 	h := t.Hour()
 	return h >= tw.StartHourUTC && h < tw.EndHourUTC
+}
+
+// sodViolated reports whether a separation-of-duties control is violated
+// (ADR-0068): the actor belongs to a role set it must be distinct from. v1
+// checks `committers` — the actor is also a change author. No committers ⇒ no
+// dual-role conflict ⇒ not violated (plain set membership).
+func sodViolated(sod *types.SoDSpec, cc types.ChangeContext) bool {
+	for _, from := range sod.DistinctFrom {
+		if from != types.SoDDistinctFromCommitters {
+			continue
+		}
+		for _, c := range cc.Committers {
+			if c.ID != "" && c.ID == cc.Actor.ID {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // mostRestrictive returns whichever of two outcomes ranks higher on the fixed
@@ -214,6 +234,12 @@ func ValidateControls(controls []types.Control) error {
 				return err
 			}
 		}
+		if c.SoD != nil {
+			kinds++
+			if err := validateSoD(c.ID, c.SoD); err != nil {
+				return err
+			}
+		}
 		switch kinds {
 		case 0:
 			return fmt.Errorf("policy: control %q: must be a CEL `when` or a typed primitive", c.ID)
@@ -225,6 +251,20 @@ func ValidateControls(controls []types.Control) error {
 			if _, err := rules.CompileForEnv(env, c.When); err != nil {
 				return fmt.Errorf("policy: control %q: %w", c.ID, err)
 			}
+		}
+	}
+	return nil
+}
+
+// validateSoD checks a SoD spec at load (ADR-0068): a non-empty distinctFrom of
+// recognised role sets (v1: committers).
+func validateSoD(id string, sod *types.SoDSpec) error {
+	if len(sod.DistinctFrom) == 0 {
+		return fmt.Errorf("policy: control %q: sod requires distinctFrom", id)
+	}
+	for _, from := range sod.DistinctFrom {
+		if from != types.SoDDistinctFromCommitters {
+			return fmt.Errorf("policy: control %q: sod distinctFrom %q unsupported (v1: %q)", id, from, types.SoDDistinctFromCommitters)
 		}
 	}
 	return nil

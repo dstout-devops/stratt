@@ -267,6 +267,61 @@ func TestValidateControls_TimeWindow(t *testing.T) {
 	}
 }
 
+// ── typed Control library: SoD (ADR-0068) ───────────────────────────────────
+
+func ctxWithCommitters(actor string, committers ...string) types.ChangeContext {
+	cc := types.ChangeContext{Actor: types.PrincipalRef{ID: actor}}
+	for _, c := range committers {
+		cc.Committers = append(cc.Committers, types.PrincipalRef{ID: c})
+	}
+	return cc
+}
+
+func TestSoD_Violation(t *testing.T) {
+	sod := &types.SoDSpec{DistinctFrom: []string{types.SoDDistinctFromCommitters}}
+	if !sodViolated(sod, ctxWithCommitters("alice", "bob", "alice")) {
+		t.Fatal("actor who is also a committer violates SoD")
+	}
+	if sodViolated(sod, ctxWithCommitters("alice", "bob", "carol")) {
+		t.Fatal("actor distinct from committers does not violate SoD")
+	}
+	if sodViolated(sod, ctxWithCommitters("alice")) {
+		t.Fatal("no committers ⇒ no dual-role conflict ⇒ not violated")
+	}
+}
+
+// A SoD control gates the decision: fires (denies) when the actor authored the change.
+func TestEvaluate_SoDControl(t *testing.T) {
+	guard := types.Control{ID: "four-eyes", Outcome: types.OutcomeDeny,
+		SoD: &types.SoDSpec{DistinctFrom: []string{types.SoDDistinctFromCommitters}}}
+
+	if d := Evaluate([]types.Control{guard}, ctxWithCommitters("alice", "alice")); d.Outcome != types.OutcomeDeny {
+		t.Fatalf("self-authored change must deny, got %s", d.Outcome)
+	}
+	if d := Evaluate([]types.Control{guard}, ctxWithCommitters("alice", "bob")); d.Outcome != types.OutcomeAllow {
+		t.Fatalf("distinct actor/committer must allow, got %s", d.Outcome)
+	}
+}
+
+func TestValidateControls_SoD(t *testing.T) {
+	good := []types.Control{{ID: "s", Outcome: types.OutcomeDeny,
+		SoD: &types.SoDSpec{DistinctFrom: []string{types.SoDDistinctFromCommitters}}}}
+	if err := ValidateControls(good); err != nil {
+		t.Fatalf("valid SoD must pass, got %v", err)
+	}
+	bad := map[string]types.Control{
+		"empty distinctFrom":   {ID: "s", Outcome: types.OutcomeDeny, SoD: &types.SoDSpec{}},
+		"unknown distinctFrom": {ID: "s", Outcome: types.OutcomeDeny, SoD: &types.SoDSpec{DistinctFrom: []string{"reviewers"}}},
+		"both kinds": {ID: "s", Outcome: types.OutcomeDeny, When: "true",
+			SoD: &types.SoDSpec{DistinctFrom: []string{types.SoDDistinctFromCommitters}}},
+	}
+	for name, c := range bad {
+		if err := ValidateControls([]types.Control{c}); err == nil {
+			t.Fatalf("%s: must be rejected at load", name)
+		}
+	}
+}
+
 // ValidateControls compiles every predicate at declaration time (§1.8).
 func TestValidateControls(t *testing.T) {
 	ok := []types.Control{

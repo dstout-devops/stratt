@@ -104,6 +104,26 @@ type Control struct {
 	Obligations []Obligation `json:"obligations,omitempty"`
 	// TimeWindow is the change-freeze / maintenance-window primitive (§5 Flow-4).
 	TimeWindow *TimeWindowSpec `json:"timeWindow,omitempty"`
+	// SoD is the separation-of-duties primitive (ADR-0068).
+	SoD *SoDSpec `json:"sod,omitempty"`
+}
+
+// SoD distinct-from role sets (ADR-0068). v1 supports "committers".
+const (
+	// SoDDistinctFromCommitters requires the actor to differ from the change
+	// authors — four-eyes at authoring: the requester may not also be a committer.
+	SoDDistinctFromCommitters = "committers"
+)
+
+// SoDSpec is the separation-of-duties primitive (ADR-0068): the control FIRES
+// its Outcome when the actor belongs to a role set it must be DISTINCT from —
+// an SoD violation. v1 checks distinctness from `committers` (the change
+// authors, carried in ChangeContext.Committers). With no committers recorded
+// there is no dual-role conflict to detect, so the control does not fire (plain
+// set-membership: actor ∈ ∅ is false). Approver-distinctness (requester ≠
+// approver) is enforced at gate-decision time — a follow-up.
+type SoDSpec struct {
+	DistinctFrom []string `json:"distinctFrom"`
 }
 
 // TimeWindow modes (ADR-0067).

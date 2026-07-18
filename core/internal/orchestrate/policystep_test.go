@@ -159,6 +159,18 @@ func TestAssembleChangeContext(t *testing.T) {
 	}
 }
 
+// Committers (SoD's source, ADR-0068) are surfaced from the `committers` launch
+// param, tolerating both []string and []any.
+func TestAssembleChangeContext_Committers(t *testing.T) {
+	cc := assembleChangeContext(DAGInput{
+		Principal:    "alice",
+		LaunchParams: map[string]any{"committers": []any{"alice", "bob"}},
+	})
+	if len(cc.Committers) != 2 || cc.Committers[0].ID != "alice" || cc.Committers[1].ID != "bob" {
+		t.Fatalf("committers not surfaced: %+v", cc.Committers)
+	}
+}
+
 // An allow-outcome policy Step succeeds and downstream success-gated steps run.
 func TestRunDAG_PolicyAllows(t *testing.T) {
 	spec := types.Workflow{Name: "guarded", Steps: []types.Step{
