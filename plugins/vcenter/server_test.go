@@ -19,7 +19,7 @@ func TestEnumerateAgainstSimulator(t *testing.T) {
 		if err != nil {
 			t.Fatalf("enumerate: %v", err)
 		}
-		var vms, hosts int
+		var vms, hosts, subnets int
 		for _, e := range entities {
 			switch e.GetKind() {
 			case "vm":
@@ -38,14 +38,25 @@ func TestEnumerateAgainstSimulator(t *testing.T) {
 				if e.GetIdentityKeys()["vcenter.host.uuid"] == "" {
 					t.Errorf("host missing vcenter.host.uuid identity")
 				}
+			case "subnet":
+				subnets++
+				if e.GetIdentityKeys()["vcenter.network.moref"] == "" {
+					t.Errorf("subnet missing vcenter.network.moref identity")
+				}
+				if len(e.GetFacets()["net.subnet"]) == 0 {
+					t.Errorf("subnet missing net.subnet facet blob")
+				}
+				if e.GetLabels()["source"] != "vsphere" {
+					t.Errorf("vSphere subnet must carry source=vsphere, got %q", e.GetLabels()["source"])
+				}
 			default:
 				t.Errorf("unexpected kind %q", e.GetKind())
 			}
 		}
-		if vms == 0 || hosts == 0 {
-			t.Fatalf("expected vms and hosts from simulator, got %d vms / %d hosts", vms, hosts)
+		if vms == 0 || hosts == 0 || subnets == 0 {
+			t.Fatalf("expected vms, hosts, and subnets from simulator, got %d vms / %d hosts / %d subnets", vms, hosts, subnets)
 		}
-		t.Logf("enumerated %d vms and %d hosts", vms, hosts)
+		t.Logf("enumerated %d vms, %d hosts, %d subnets (vSphere networks)", vms, hosts, subnets)
 	})
 }
 
@@ -87,5 +98,46 @@ func TestEnumerateEmitsRunsOn(t *testing.T) {
 			t.Fatal("expected at least one runs-on edge from a vm to its host")
 		}
 		t.Logf("emitted %d runs-on edges", edges)
+	})
+}
+
+// TestEnumerateEmitsPlacedIn proves vSphere emits the placed-in edge (ADR-0059) from
+// a VM to the network(s) it sits in, targeting the subnet BY IDENTITY
+// (vcenter.network.moref) — the same edge shape a cloud Syncer uses, so a
+// relation-aware View ("the VMs in network X") spans both managers.
+func TestEnumerateEmitsPlacedIn(t *testing.T) {
+	simulator.Test(func(ctx context.Context, c *vim25.Client) {
+		entities, err := enumerate(ctx, c)
+		if err != nil {
+			t.Fatalf("enumerate: %v", err)
+		}
+		subnetRefs := map[string]bool{}
+		for _, e := range entities {
+			if e.GetKind() == "subnet" {
+				subnetRefs[e.GetIdentityKeys()["vcenter.network.moref"]] = true
+			}
+		}
+		var edges int
+		for _, e := range entities {
+			if e.GetKind() != "vm" {
+				continue
+			}
+			for _, r := range e.GetRelations() {
+				if r.GetType() != "placed-in" {
+					continue
+				}
+				edges++
+				if r.GetToScheme() != "vcenter.network.moref" {
+					t.Errorf("placed-in must target by vcenter.network.moref, got %q", r.GetToScheme())
+				}
+				if !subnetRefs[r.GetToValue()] {
+					t.Errorf("placed-in target %q is not an emitted subnet", r.GetToValue())
+				}
+			}
+		}
+		if edges == 0 {
+			t.Fatal("expected at least one placed-in edge from a vm to its network")
+		}
+		t.Logf("emitted %d placed-in edges (vm -> vSphere network)", edges)
 	})
 }

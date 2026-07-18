@@ -26,6 +26,7 @@ var vmProps = []string{
 	"runtime.powerState",
 	"runtime.connectionState",
 	"runtime.host",
+	"network", // the portgroups/networks the VM is attached to — the placed-in edge
 	"guest.hostName",
 	"guest.ipAddress",
 	"guest.toolsRunningStatus",
@@ -34,6 +35,38 @@ var vmProps = []string{
 var hostProps = []string{
 	"name",
 	"summary.hardware.uuid",
+}
+
+// networkProps is the minimum a vSphere network (portgroup/DVPG/opaque) needs to
+// project as a subnet — the name; the moref (identity) rides the object's Self ref.
+var networkProps = []string{"name"}
+
+// normalizeNetwork maps one vSphere network — a standard portgroup, a distributed
+// virtual portgroup, or an opaque network — to a `subnet` Entity (ADR-0059). vSphere
+// is a network Source too: its portgroups co-exist in one estate with cloud subnets a
+// Crossplane Source projects (ADR-0060 multi-source, each its own per-source row). The
+// moref is the stable per-object identity; net.subnet carries the vSphere-known
+// attributes as an owned-but-uncovered Facet (no schema ahead of a consumer, §1.1).
+func normalizeNetwork(n mo.Network) (*pluginv1.ObservedEntity, error) {
+	ref := n.Self.Value
+	if ref == "" {
+		return nil, fmt.Errorf("vcenter: network %q has no moref; cannot project without identity", n.Name)
+	}
+	facet, err := json.Marshal(map[string]any{
+		"name":   n.Name,
+		"moref":  ref,
+		"kind":   n.Self.Type, // Network | DistributedVirtualPortgroup | OpaqueNetwork
+		"source": "vsphere",
+	})
+	if err != nil {
+		return nil, fmt.Errorf("vcenter: marshal facet net.subnet: %w", err)
+	}
+	return &pluginv1.ObservedEntity{
+		Kind:         "subnet",
+		IdentityKeys: map[string]string{"vcenter.network.moref": ref},
+		Labels:       map[string]string{"source": "vsphere", "vcenter.name": n.Name},
+		Facets:       map[string][]byte{"net.subnet": facet},
+	}, nil
 }
 
 // normalizeVM maps one VirtualMachine to an ObservedEntity. The plugin emits
