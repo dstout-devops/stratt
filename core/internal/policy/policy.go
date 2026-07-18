@@ -129,6 +129,32 @@ func ctxMap(cc types.ChangeContext) map[string]any {
 	return m
 }
 
+// ValidateControls compiles every control's When predicate against the policy
+// env, returning the first error — the declaration-time gate (§1.8: fail the
+// file at load, never silently at decision time). It mirrors the trigger-rule
+// compile and validatePlanPinning. It also requires a non-empty, recognised
+// Outcome so a control cannot declare an unknown verdict.
+func ValidateControls(controls []types.Control) error {
+	env, err := policyEnv()
+	if err != nil {
+		return err
+	}
+	for _, c := range controls {
+		if c.ID == "" {
+			return fmt.Errorf("policy: control requires an id")
+		}
+		switch c.Outcome {
+		case types.OutcomeAllow, types.OutcomeDeny, types.OutcomeRequireApproval, types.OutcomeEscalate:
+		default:
+			return fmt.Errorf("policy: control %q: unknown outcome %q", c.ID, c.Outcome)
+		}
+		if _, err := rules.CompileForEnv(env, c.When); err != nil {
+			return fmt.Errorf("policy: control %q: %w", c.ID, err)
+		}
+	}
+	return nil
+}
+
 func firedMessage(c types.Control) string {
 	if c.Type != "" {
 		return fmt.Sprintf("control %q (%s) matched", c.ID, c.Type)

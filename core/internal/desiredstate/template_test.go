@@ -74,6 +74,39 @@ func TestWorkflowStepParamNamespaceScope(t *testing.T) {
 	}
 }
 
+// A policy Step is a valid Step shape; its control predicates are CEL-compiled
+// at load and a bad predicate or empty control set fails the file (ADR-0063).
+func TestWorkflowPolicyStep(t *testing.T) {
+	good := types.Workflow{Name: "w", Steps: []types.Step{
+		{Name: "guard", Policy: &types.PolicySpec{Controls: []types.Control{
+			{ID: "freeze", When: "ctx.environment == 'prod'", Outcome: types.OutcomeDeny},
+		}}},
+	}}
+	if err := ValidateWorkflow(good); err != nil {
+		t.Fatalf("valid policy step must pass, got %v", err)
+	}
+	bads := map[string]types.Workflow{
+		"empty controls": {Name: "w", Steps: []types.Step{
+			{Name: "guard", Policy: &types.PolicySpec{}},
+		}},
+		"uncompilable predicate": {Name: "w", Steps: []types.Step{
+			{Name: "guard", Policy: &types.PolicySpec{Controls: []types.Control{
+				{ID: "x", When: "!!! not cel", Outcome: types.OutcomeDeny}},
+			}},
+		}},
+		"mixed shape (policy+actuation)": {Name: "w", Steps: []types.Step{
+			{Name: "guard", ViewName: "v", Policy: &types.PolicySpec{Controls: []types.Control{
+				{ID: "x", When: "true", Outcome: types.OutcomeDeny}},
+			}},
+		}},
+	}
+	for name, wf := range bads {
+		if err := ValidateWorkflow(wf); err == nil {
+			t.Fatalf("%s: must be rejected at load", name)
+		}
+	}
+}
+
 func TestTriggerTemplateNamespaceScope(t *testing.T) {
 	// event binding on an event-kind Trigger is allowed.
 	ev := types.Trigger{

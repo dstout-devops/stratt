@@ -29,6 +29,7 @@ import (
 
 	"github.com/dstout-devops/stratt/core/internal/contract"
 	"github.com/dstout-devops/stratt/core/internal/graph"
+	"github.com/dstout-devops/stratt/core/internal/policy"
 	"github.com/dstout-devops/stratt/core/internal/rules"
 	"github.com/dstout-devops/stratt/core/internal/template"
 	"github.com/dstout-devops/stratt/types"
@@ -1562,24 +1563,36 @@ func ValidateWorkflow(w types.Workflow) error {
 		if s.When != "" && s.When != types.WhenSuccess && len(s.Needs) == 0 {
 			return fmt.Errorf("workflow %s: step %s: when %s requires needs", w.Name, s.Name, s.When)
 		}
-		// A Step is exactly one of three shapes (§2.3, ADR-0031): a Gate, an
-		// Action (targetless typed operation), or an Actuation (Actuator+View).
+		// A Step is exactly one of four shapes (§2.3, ADR-0031, ADR-0063): a Gate,
+		// a Policy checkpoint, an Action (targetless typed operation), or an
+		// Actuation (Actuator+View).
 		isGate := s.Gate != nil
+		isPolicy := s.Policy != nil
 		isAction := s.Action != ""
 		isActuation := s.ViewName != "" || s.Actuator != "" || s.Slices != 0
 		switch {
-		case isGate && (isAction || isActuation):
-			return fmt.Errorf("workflow %s: step %s: a step is a gate, an action, or an actuation — not multiple", w.Name, s.Name)
+		case isPolicy && (isGate || isAction || isActuation),
+			isGate && (isAction || isActuation):
+			return fmt.Errorf("workflow %s: step %s: a step is a gate, a policy, an action, or an actuation — not multiple", w.Name, s.Name)
 		case isAction && isActuation:
 			return fmt.Errorf("workflow %s: step %s: a step is an action or an actuation, not both (actions are targetless — no viewName/actuator/slices)", w.Name, s.Name)
-		case !isGate && !isAction && s.ViewName == "":
+		case !isGate && !isPolicy && !isAction && s.ViewName == "":
 			return fmt.Errorf("workflow %s: step %s: actuation step requires viewName", w.Name, s.Name)
 		case isGate && len(s.Gate.Approvers.Principals) == 0 && len(s.Gate.Approvers.Teams) == 0:
 			return fmt.Errorf("workflow %s: step %s: gate requires approvers (principals and/or teams)", w.Name, s.Name)
 		case isGate && s.Gate.TimeoutSeconds < 0:
 			return fmt.Errorf("workflow %s: step %s: gate timeoutSeconds must be >= 0", w.Name, s.Name)
-		case !isGate && s.Slices < 0:
+		case isPolicy && len(s.Policy.Controls) == 0:
+			return fmt.Errorf("workflow %s: step %s: policy step requires controls", w.Name, s.Name)
+		case !isGate && !isPolicy && s.Slices < 0:
 			return fmt.Errorf("workflow %s: step %s: slices must be >= 0", w.Name, s.Name)
+		}
+		// A policy Step's control predicates are CEL-compiled at load — fail the
+		// file, never silently at decision time (§1.8, ADR-0063).
+		if isPolicy {
+			if err := policy.ValidateControls(s.Policy.Controls); err != nil {
+				return fmt.Errorf("workflow %s: step %s: %w", w.Name, s.Name, err)
+			}
 		}
 		// Params/CredentialRefs may bind the event namespace (firing Emitter,
 		// ADR-0024), the steps namespace (a prior Step's outputs, ADR-0031), and
@@ -1597,7 +1610,7 @@ func ValidateWorkflow(w types.Workflow) error {
 				fmt.Sprintf("workflow %s step %s", w.Name, s.Name), bindable, s.Params); err != nil {
 				return err
 			}
-		case !isGate:
+		case !isGate && !isPolicy:
 			if err := validateParamsContract(s.Actuator, s.Params); err != nil {
 				return fmt.Errorf("workflow %s: step %s: %w", w.Name, s.Name, err)
 			}

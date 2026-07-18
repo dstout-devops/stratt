@@ -33,6 +33,12 @@ type Step struct {
 	// Gate makes this a human-approval Step (§2: Gates).
 	Gate *GateSpec `json:"gate,omitempty"`
 
+	// Policy makes this an automated policy-decision checkpoint (ADR-0061 §7.2 /
+	// ADR-0063): the built-in PDP evaluates the controls over a ChangeContext
+	// assembled from the run and gates the DAG on the four-way outcome. Mutually
+	// exclusive with Gate/Action/actuation.
+	Policy *PolicySpec `json:"policy,omitempty"`
+
 	// Actuation fields (mirror StartRun / Trigger launch parameters).
 	ViewName string `json:"viewName,omitempty"`
 	Actuator string `json:"actuator,omitempty"`
@@ -61,6 +67,13 @@ type Step struct {
 	// ADR-0047 §8): the core never silently degrades a missing pin to an unpinned
 	// live apply of `desired`.
 	PlanFrom string `json:"planFrom,omitempty"`
+}
+
+// PolicySpec is an automated policy-decision checkpoint (ADR-0063). v1 carries
+// inline Controls; target-anchored governance.controls Facets are ADR-0061 §7.6.
+// Each Control's When predicate is CEL-compiled at load (fail-closed, §1.8).
+type PolicySpec struct {
+	Controls []Control `json:"controls"`
 }
 
 // GateSpec declares who may decide a Gate and how long it waits.

@@ -171,3 +171,29 @@ func TestEvaluate_NonBool_FailsClosed(t *testing.T) {
 		t.Fatalf("non-bool predicate must fail closed, got %s", d.Outcome)
 	}
 }
+
+// ValidateControls compiles every predicate at declaration time (§1.8).
+func TestValidateControls(t *testing.T) {
+	ok := []types.Control{
+		{ID: "a", When: "ctx.environment == 'prod'", Outcome: types.OutcomeDeny},
+		{ID: "b", When: "has(ctx.riskScore) && ctx.riskScore >= 0.8", Outcome: types.OutcomeEscalate},
+	}
+	if err := ValidateControls(ok); err != nil {
+		t.Fatalf("valid controls must pass, got %v", err)
+	}
+	cases := []struct {
+		name string
+		c    types.Control
+	}{
+		{"missing id", types.Control{When: "true", Outcome: types.OutcomeAllow}},
+		{"unknown outcome", types.Control{ID: "x", When: "true", Outcome: "maybe"}},
+		{"uncompilable predicate", types.Control{ID: "x", When: "!!! not cel", Outcome: types.OutcomeAllow}},
+		{"non-bool predicate", types.Control{ID: "x", When: "ctx.environment", Outcome: types.OutcomeAllow}},
+		{"empty outcome", types.Control{ID: "x", When: "true", Outcome: ""}},
+	}
+	for _, tc := range cases {
+		if err := ValidateControls([]types.Control{tc.c}); err == nil {
+			t.Fatalf("%s: must be rejected at load", tc.name)
+		}
+	}
+}

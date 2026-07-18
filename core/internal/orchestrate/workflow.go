@@ -128,6 +128,8 @@ func RunDAG(ctx workflow.Context, in DAGInput) error {
 			switch {
 			case step.Gate != nil:
 				status = runGateStep(gctx, a, in, step, boundOutputs)
+			case step.Policy != nil:
+				status = runPolicyStep(gctx, a, in, step)
 			case step.Action != "":
 				status, outputs = runActionStep(gctx, in, step, boundOutputs)
 			default:
