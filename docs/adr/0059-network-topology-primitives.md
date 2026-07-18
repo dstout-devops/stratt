@@ -106,6 +106,15 @@ Finding — the desired-vs-observed gap is diagnosable, not quietly wrong. Conve
 is a **gated move Workflow**, not a reconcile edit — a deferred follow-up; until it lands the Finding is the
 signal.
 
+> **Implemented 2026-07-18.** `reconcilePlacementDrift` compares each Intent's declared `placement.subnet`
+> against the OBSERVED subnets its correlated units are `placed-in` (via `ObservedPlacements`: the placed-in
+> edge → the target subnet's `net.subnet.name`, a subnet's canonical name every Source stamps). A unit with
+> both a declared and an observed placement whose declared subnet is not among the observed drifts →
+> `WritePlacementDriftFinding` (framework `placement`), resolved when it converges, stops being observed, or its
+> placement is withdrawn. Nothing writes an Entity or edge (§1.2). Detection is pure + tested
+> (`DetectPlacementDrift`); it fires the moment a placement-declaring Intent has a correlated, mis-placed host —
+> which arrives with the build loop / a cloud Syncer emitting placement edges (vCenter already emits them).
+
 **6. Relation-aware View selection is the new selection capability.** "Select the hosts in the DMZ" is a View
 that filters by **placement edge** — genuinely new (today's selector joins only kind/label/facet, never
 `graph.relation`). ADR-0059 adds a `Relations []RelationPredicate` clause to `ViewSelector` (`{type, targetKind,

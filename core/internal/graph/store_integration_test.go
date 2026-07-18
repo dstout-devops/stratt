@@ -176,6 +176,71 @@ func TestFacetOwnership(t *testing.T) {
 	}
 }
 
+// TestObservedPlacements proves the observed side of the placement-drift check
+// (ADR-0059 S5): a unit's placed-in edges resolve to the target subnets' net.subnet
+// names, keyed by the unit's correlation label.
+func TestObservedPlacements(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	p := s.NormalizerProjector()
+	pv := prov(types.WriterSyncer, "vcenter/syncer")
+	if err := s.RegisterLabelOwner(ctx, types.LabelOwner{Key: "stratt.intent/instance", OwnerKind: "syncer", OwnerRef: "vcenter/syncer"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.RegisterFacetOwner(ctx, types.FacetOwner{Namespace: "net.subnet", OwnerKind: "syncer", OwnerRef: "vcenter/syncer"}); err != nil {
+		t.Fatal(err)
+	}
+
+	ids, err := p.UpsertEntities(ctx, pv, []EntityUpsert{
+		{Kind: "host", IdentityKeys: map[string]string{"host.name": "web-1"}, Labels: map[string]string{"stratt.intent/instance": "web-01"}},
+		{Kind: "subnet", IdentityKeys: map[string]string{"net.name": "legacy"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	hostID, subnetID := ids[0], ids[1]
+	fp := types.Provenance{WriterKind: types.WriterSyncer, WriterRef: "vcenter/syncer", SourceID: "00000000-0000-0000-0000-0000000000bb", At: time.Now().UTC()}
+	if err := p.UpsertFacet(ctx, fp, subnetID, "net.subnet", json.RawMessage(`{"name":"legacy-net"}`)); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.UpsertRelation(ctx, pv, types.RelPlacedIn, hostID, subnetID); err != nil {
+		t.Fatal(err)
+	}
+
+	obs, err := s.ObservedPlacements(ctx, "stratt.intent/instance")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := obs["web-01"]
+	if len(got) != 1 || got[0] != "legacy-net" {
+		t.Fatalf("expected web-01 observed placed-in legacy-net, got %v", obs)
+	}
+
+	// Finding lifecycle: a drift Finding opens, then resolves when the unit converges.
+	if err := s.WritePlacementDriftFinding(ctx, "web-01", json.RawMessage(`{"declared":"web-dmz","observed":["legacy-net"]}`)); err != nil {
+		t.Fatal(err)
+	}
+	openCount := func() int {
+		var n int
+		if err := s.pool.QueryRow(ctx,
+			`SELECT count(*) FROM graph.finding WHERE framework='placement' AND status='open' AND target='web-01'`).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	if openCount() != 1 {
+		t.Fatalf("expected 1 open placement-drift finding, got %d", openCount())
+	}
+	// web-01 no longer drifts (converged / not re-asserted) → resolves.
+	resolved, err := s.ResolvePlacementDriftFindingsExcept(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolved != 1 || openCount() != 0 {
+		t.Fatalf("converged drift must resolve, resolved=%d still-open=%d", resolved, openCount())
+	}
+}
+
 // TestRelationGC proves ADR-0059 decision 7's two relation-GC paths: the
 // endpoint-tombstone cascade (7b) and Syncer delta retraction (7a). No dangling
 // placement edge survives a decommissioned endpoint.

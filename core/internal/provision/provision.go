@@ -212,6 +212,76 @@ func PlanSingletons(intents []SingletonIntent, built map[string]bool, cap int) (
 	return r, nil
 }
 
+// ── Placement drift (ADR-0059 decision 5, S5 / §1.8) ────────────────────────
+// A unit's DECLARED placement (its Intent's placement.subnet) can diverge from its
+// OBSERVED placement (the subnet it is actually placed-in, per a Syncer's edge). The
+// reconcile surfaces that as a placement-drift Finding — the desired-vs-observed gap is
+// diagnosable, never silently wrong. Converging it (re-placing a live host) is a gated
+// move Workflow, a separate slice; until then the Finding is the signal.
+
+// Drift is one placement divergence. A unit drifts only when it has BOTH a declared
+// placement AND an observed placement, and the declared subnet is not among the
+// observed ones — an un-placed or un-declared unit is simply not compared.
+type Drift struct {
+	Unit     string   // correlation value (instance name / singleton key)
+	Declared string   // the Intent's placement.subnet (a subnet's canonical net.subnet.name)
+	Observed []string // the subnet name(s) the unit is actually placed-in
+}
+
+// DetectPlacementDrift pairs declared placements (unit → declared subnet) with observed
+// placements (unit → observed subnet names) and returns the units whose declared subnet
+// is not among the observed. Pure, deterministic order.
+func DetectPlacementDrift(declared map[string]string, observed map[string][]string) []Drift {
+	var out []Drift
+	for unit, want := range declared {
+		obs, ok := observed[unit]
+		if !ok || len(obs) == 0 {
+			continue // not yet placed / not observed — no drift signal
+		}
+		found := false
+		for _, o := range obs {
+			if o == want {
+				found = true
+				break
+			}
+		}
+		if !found {
+			out = append(out, Drift{Unit: unit, Declared: want, Observed: obs})
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Unit < out[j].Unit })
+	return out
+}
+
+// DeclaredComputePlacements maps each desired instance name → its Intent's
+// placement.subnet, for the compute Intents that declare one. The correlation values are
+// stratt.intent/instance labels — the observed side keys on the same. Pure.
+func DeclaredComputePlacements(intents []Intent) map[string]string {
+	out := map[string]string{}
+	for _, in := range intents {
+		if in.Spec.Placement == nil || in.Spec.Placement.Subnet == "" {
+			continue
+		}
+		for _, inst := range desired(in) {
+			out[inst.Name] = in.Spec.Placement.Subnet
+		}
+	}
+	return out
+}
+
+// DeclaredSingletonPlacements maps each singleton correlation key → its placement.subnet.
+// Keys are stratt.intent/singleton labels — the observed side keys on the same. Pure.
+func DeclaredSingletonPlacements(intents []SingletonIntent) map[string]string {
+	out := map[string]string{}
+	for _, in := range intents {
+		if in.Spec.Placement == nil || in.Spec.Placement.Subnet == "" {
+			continue
+		}
+		out[SingletonKey(in.Kind, in.Name)] = in.Spec.Placement.Subnet
+	}
+	return out
+}
+
 // Plan computes the provisioning shortfall. `built` is the set of
 // stratt.intent/instance labels already projected (correlated built Entities);
 // `cap` bounds the per-Intent build batch (§4.3, 0 => DefaultMaxBuildBatch), and

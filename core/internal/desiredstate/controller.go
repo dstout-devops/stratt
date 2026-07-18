@@ -315,6 +315,59 @@ func (c *Controller) reconcileProvisioning(ctx context.Context, decls Declaratio
 			"toBuild", len(res.ToBuild), "paused", len(res.Paused),
 			"singletonBuild", len(sres.ToBuild), "singletonPaused", len(sres.Paused), "resolved", resolved)
 	}
+
+	// Placement drift (ADR-0059 decision 5, S5): declared placement vs observed.
+	c.reconcilePlacementDrift(ctx, intents, singletons, log)
+}
+
+// reconcilePlacementDrift surfaces the desired-vs-observed placement gap as Findings
+// (ADR-0059 S5, §1.8): a unit whose Intent declares placement.subnet but is OBSERVED
+// placed-in a different subnet drifts. Nothing here writes an Entity or edge (§1.2) —
+// converging a drift (re-placing a live host) is a gated move Workflow, a separate slice;
+// until then the Finding is the signal. Findings resolve when the unit converges, stops
+// being observed, or its placement is withdrawn.
+func (c *Controller) reconcilePlacementDrift(ctx context.Context, compute []provision.Intent, singletons []provision.SingletonIntent, log *slog.Logger) {
+	declaredC := provision.DeclaredComputePlacements(compute)
+	declaredS := provision.DeclaredSingletonPlacements(singletons)
+	if len(declaredC) == 0 && len(declaredS) == 0 {
+		// No placement declared anywhere — clear any stale drift Findings and stop.
+		if _, err := c.Store.ResolvePlacementDriftFindingsExcept(ctx, nil); err != nil {
+			log.Error("resolve placement findings failed", "error", err)
+		}
+		return
+	}
+	observedC, err := c.Store.ObservedPlacements(ctx, "stratt.intent/instance")
+	if err != nil {
+		log.Error("observed placements (instance) failed", "error", err)
+		return
+	}
+	observedS, err := c.Store.ObservedPlacements(ctx, "stratt.intent/singleton")
+	if err != nil {
+		log.Error("observed placements (singleton) failed", "error", err)
+		return
+	}
+	drifts := append(provision.DetectPlacementDrift(declaredC, observedC),
+		provision.DetectPlacementDrift(declaredS, observedS)...)
+
+	var keep []string
+	for _, d := range drifts {
+		detail, _ := json.Marshal(map[string]any{
+			"unit": d.Unit, "declared": d.Declared, "observed": d.Observed,
+			"reason": "declared placement diverges from observed placement — re-place via a gated move Workflow (never a reconcile edit, §5)",
+		})
+		if err := c.Store.WritePlacementDriftFinding(ctx, d.Unit, detail); err != nil {
+			log.Error("write placement drift finding failed", "unit", d.Unit, "error", err)
+			continue
+		}
+		keep = append(keep, d.Unit)
+	}
+	resolved, err := c.Store.ResolvePlacementDriftFindingsExcept(ctx, keep)
+	if err != nil {
+		log.Error("resolve placement findings failed", "error", err)
+	}
+	if len(drifts) > 0 || resolved > 0 {
+		log.Info("placement-drift reconcile", "drifted", len(drifts), "resolved", resolved)
+	}
 }
 
 // compile derives compiled Baselines from the declared Intent/Assignment/

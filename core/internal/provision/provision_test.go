@@ -191,3 +191,42 @@ func TestPlanSingletonsExclusiveClaim(t *testing.T) {
 		t.Fatal("two Intents claiming the same (kind, name) must be a compile error")
 	}
 }
+
+// TestDetectPlacementDrift proves the pure drift detection (ADR-0059 S5): a unit whose
+// declared subnet is not among its observed subnets drifts; converged, un-placed, and
+// un-declared units do not.
+func TestDetectPlacementDrift(t *testing.T) {
+	declared := map[string]string{
+		"web-01": "web-dmz", // observed elsewhere -> drift
+		"web-02": "web-dmz", // observed in web-dmz -> converged
+		"web-03": "web-dmz", // not observed at all -> no signal
+		"db-01":  "db-tier", // observed in db-tier -> converged
+	}
+	observed := map[string][]string{
+		"web-01": {"legacy-net"},
+		"web-02": {"web-dmz"},
+		"db-01":  {"db-tier"},
+		"api-01": {"api-net"}, // observed but not declared -> ignored
+	}
+	drifts := DetectPlacementDrift(declared, observed)
+	if len(drifts) != 1 {
+		t.Fatalf("expected exactly 1 drift (web-01), got %d: %+v", len(drifts), drifts)
+	}
+	d := drifts[0]
+	if d.Unit != "web-01" || d.Declared != "web-dmz" || len(d.Observed) != 1 || d.Observed[0] != "legacy-net" {
+		t.Fatalf("unexpected drift: %+v", d)
+	}
+}
+
+// TestDeclaredComputePlacements proves each desired instance inherits its Intent's
+// placement, and Intents without placement are skipped.
+func TestDeclaredComputePlacements(t *testing.T) {
+	intents := []Intent{
+		{Name: "web", Spec: ComputeSpec{Count: 2, NamePrefix: "web", Placement: &Placement{Subnet: "web-dmz"}}},
+		{Name: "cache", Spec: ComputeSpec{Count: 1, NamePrefix: "cache"}}, // no placement
+	}
+	got := DeclaredComputePlacements(intents)
+	if len(got) != 2 || got["web-01"] != "web-dmz" || got["web-02"] != "web-dmz" {
+		t.Fatalf("expected web-01/web-02 -> web-dmz, got %v", got)
+	}
+}
