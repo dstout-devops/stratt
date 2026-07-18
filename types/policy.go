@@ -106,6 +106,26 @@ type Control struct {
 	TimeWindow *TimeWindowSpec `json:"timeWindow,omitempty"`
 	// SoD is the separation-of-duties primitive (ADR-0068).
 	SoD *SoDSpec `json:"sod,omitempty"`
+	// Waiver is a MODIFIER, not a predicate (ADR-0069): it exempts another
+	// control in the same set from applying its outcome. A waiver control needs
+	// no Outcome/When and is exclusive with the predicate kinds.
+	Waiver *WaiverSpec `json:"waiver,omitempty"`
+}
+
+// WaiverSpec is a time-boxed, approved exemption of another control (ADR-0069):
+// while ACTIVE (not expired at the decision time), it suppresses the referenced
+// control's outcome — the change proceeds despite that control firing, and the
+// suppression is RECORDED (a waiver-applied pass is compliance-relevant,
+// ADR-0061 S1). ExpiresAt is MANDATORY (guardrail 4: Kyverno's missing expiry
+// is a known footgun) — a waiver without it fails to compile. A waiver can only
+// reference a control IN its ControlSet, so it can never exempt a
+// framework-compiled mandatory floor (§4.3/§5, which are not ControlSet
+// controls — ADR-0066).
+type WaiverSpec struct {
+	ControlRef    string    `json:"controlRef"`
+	ExpiresAt     time.Time `json:"expiresAt"`
+	Justification string    `json:"justification"`
+	ApprovedBy    string    `json:"approvedBy"`
 }
 
 // SoD distinct-from role sets (ADR-0068). v1 supports "committers".

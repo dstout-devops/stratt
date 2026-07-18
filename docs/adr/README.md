@@ -77,3 +77,4 @@ Status is `Accepted` unless noted. See **[../roadmap.md](../roadmap.md)** for ho
 | [0066](0066-mandatory-floors-pre-existing.md) | The mandatory safety floors pre-exist and are non-substitutable (ADR-0061 M1, closed) | Accepted |
 | [0067](0067-typed-control-library-timewindow.md) | The typed Control library: primitives as data, starting with TimeWindow | Accepted |
 | [0068](0068-typed-control-sod.md) | Typed Control library: Separation of Duties, and committer enrichment | Accepted |
+| [0069](0069-typed-control-waiver.md) | Typed Control library: Waiver, a time-boxed control exemption | Accepted |

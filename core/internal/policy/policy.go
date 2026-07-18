@@ -67,13 +67,31 @@ func Evaluate(controls []types.Control, cc types.ChangeContext) types.Decision {
 	}
 
 	cm := ctxMap(cc)
+	// Pass 1: the set of control IDs exempted by an ACTIVE waiver (ADR-0069). A
+	// waiver is active only if it has not expired at the decision time; an
+	// unjudgeable time leaves it inactive (fail-safe — the underlying control
+	// stands). Waivers reference only ControlSet controls, so they can never
+	// exempt a mandatory floor (ADR-0066).
+	waived := map[string]bool{}
+	for _, c := range controls {
+		if c.Waiver != nil && waiverActive(c.Waiver, cc.ScheduledAt) {
+			waived[c.Waiver.ControlRef] = true
+		}
+	}
+	// Pass 2: evaluate predicate controls; an active waiver suppresses a fired
+	// control's outcome (recorded, not applied).
 	var fired []types.Control
 	for _, c := range controls {
+		if c.Waiver != nil {
+			continue // a waiver is a modifier, not a firing predicate
+		}
 		ok, failCode, failMsg := controlFires(env, cm, cc, c)
 		if failCode != "" {
 			// Fail-closed: a control that cannot be evaluated (uncompilable CEL,
 			// a reference to an absent coordinate, an unjudgeable window) denies —
-			// most-restrictive, never a silent allow (ADR-0061 M4).
+			// most-restrictive, never a silent allow (ADR-0061 M4). A broken
+			// control's deny is NOT waivable (a waiver exempts a decision, not an
+			// evaluation failure).
 			dec.Outcome = mostRestrictive(dec.Outcome, types.OutcomeDeny)
 			dec.Reasons = append(dec.Reasons, types.Reason{
 				Code: failCode, Message: failMsg, ControlID: c.ID,
@@ -82,6 +100,15 @@ func Evaluate(controls []types.Control, cc types.ChangeContext) types.Decision {
 		}
 		if !ok {
 			continue // predicate false: this control does not fire
+		}
+		if waived[c.ID] {
+			// An active, approved waiver exempts this fired control — the outcome
+			// is NOT applied, but the exemption is recorded (compliance-relevant,
+			// ADR-0061 S1).
+			dec.Reasons = append(dec.Reasons, types.Reason{
+				Code: "waived", Message: firedMessage(c) + " (waived)", ControlID: c.ID,
+			})
+			continue
 		}
 		fired = append(fired, c)
 		dec.Outcome = mostRestrictive(dec.Outcome, c.Outcome)
@@ -182,6 +209,17 @@ func sodViolated(sod *types.SoDSpec, cc types.ChangeContext) bool {
 	return false
 }
 
+// waiverActive reports whether a waiver still exempts at the decision time
+// (ADR-0069): not expired. An unjudgeable time (zero scheduled_at) leaves it
+// INACTIVE — we cannot confirm it has not expired, so the underlying control
+// stands (fail-safe, ADR-0061 M4).
+func waiverActive(w *types.WaiverSpec, at time.Time) bool {
+	if at.IsZero() {
+		return false
+	}
+	return at.Before(w.ExpiresAt)
+}
+
 // mostRestrictive returns whichever of two outcomes ranks higher on the fixed
 // lattice. It is commutative and associative, so evaluation order cannot change
 // the result (the §2.4 additive-union analogue, not precedence).
@@ -213,17 +251,35 @@ func ValidateControls(controls []types.Control) error {
 	if err != nil {
 		return err
 	}
+	ids := map[string]bool{}
+	for _, c := range controls {
+		if c.ID != "" {
+			ids[c.ID] = true
+		}
+	}
 	for _, c := range controls {
 		if c.ID == "" {
 			return fmt.Errorf("policy: control requires an id")
+		}
+		// A waiver is a MODIFIER, not a predicate (ADR-0069): it needs no outcome,
+		// is exclusive with the predicate kinds, and references a control in this
+		// set.
+		if c.Waiver != nil {
+			if c.When != "" || c.TimeWindow != nil || c.SoD != nil {
+				return fmt.Errorf("policy: control %q: a waiver is not also a predicate", c.ID)
+			}
+			if err := validateWaiver(c.ID, c.Waiver, ids); err != nil {
+				return err
+			}
+			continue
 		}
 		switch c.Outcome {
 		case types.OutcomeAllow, types.OutcomeDeny, types.OutcomeRequireApproval, types.OutcomeEscalate:
 		default:
 			return fmt.Errorf("policy: control %q: unknown outcome %q", c.ID, c.Outcome)
 		}
-		// A control is exactly ONE kind: a raw CEL predicate or one typed
-		// primitive (ADR-0067). Count the kinds and reject zero or multiple.
+		// A predicate control is exactly ONE kind: a raw CEL predicate or one
+		// typed primitive (ADR-0067). Count the kinds and reject zero or multiple.
 		kinds := 0
 		if c.When != "" {
 			kinds++
@@ -252,6 +308,32 @@ func ValidateControls(controls []types.Control) error {
 				return fmt.Errorf("policy: control %q: %w", c.ID, err)
 			}
 		}
+	}
+	return nil
+}
+
+// validateWaiver checks a waiver at load (ADR-0069): a mandatory expiresAt
+// (guardrail 4), a justification and approver (an exemption must be accountable),
+// and a controlRef naming another control IN this set — so a waiver can never
+// exempt a mandatory floor (ADR-0066), only a peer ControlSet control.
+func validateWaiver(id string, w *types.WaiverSpec, ids map[string]bool) error {
+	if w.ControlRef == "" {
+		return fmt.Errorf("policy: waiver %q requires controlRef", id)
+	}
+	if w.ControlRef == id {
+		return fmt.Errorf("policy: waiver %q cannot reference itself", id)
+	}
+	if !ids[w.ControlRef] {
+		return fmt.Errorf("policy: waiver %q references control %q not in this set", id, w.ControlRef)
+	}
+	if w.ExpiresAt.IsZero() {
+		return fmt.Errorf("policy: waiver %q requires expiresAt (guardrail 4: no unbounded exemptions)", id)
+	}
+	if w.Justification == "" {
+		return fmt.Errorf("policy: waiver %q requires a justification", id)
+	}
+	if w.ApprovedBy == "" {
+		return fmt.Errorf("policy: waiver %q requires approvedBy", id)
 	}
 	return nil
 }

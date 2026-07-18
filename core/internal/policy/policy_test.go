@@ -322,6 +322,96 @@ func TestValidateControls_SoD(t *testing.T) {
 	}
 }
 
+// ── typed Control library: Waiver (ADR-0069) ────────────────────────────────
+
+var (
+	future = inHour.Add(24 * time.Hour)
+	past   = inHour.Add(-24 * time.Hour)
+)
+
+func denyCtrl(id string) types.Control {
+	return types.Control{ID: id, When: "true", Outcome: types.OutcomeDeny}
+}
+func waiverCtrl(id, ref string, expires time.Time) types.Control {
+	return types.Control{ID: id, Waiver: &types.WaiverSpec{
+		ControlRef: ref, ExpiresAt: expires, Justification: "incident-123", ApprovedBy: "alice"}}
+}
+
+// An active waiver suppresses a fired control's outcome — recorded, not applied.
+func TestEvaluate_WaiverSuppresses(t *testing.T) {
+	cc := prodCtx()
+	cc.ScheduledAt = inHour
+	d := Evaluate([]types.Control{denyCtrl("x"), waiverCtrl("w", "x", future)}, cc)
+	if d.Outcome != types.OutcomeAllow {
+		t.Fatalf("active waiver must suppress the deny, got %s (%v)", d.Outcome, d.Reasons)
+	}
+	if codes(d)["waived"] != 1 || codes(d)["fired"] != 0 {
+		t.Fatalf("the suppression must be recorded as waived, not fired: %v", d.Reasons)
+	}
+}
+
+// An expired waiver does not suppress — the underlying control stands.
+func TestEvaluate_WaiverExpired(t *testing.T) {
+	cc := prodCtx()
+	cc.ScheduledAt = inHour
+	d := Evaluate([]types.Control{denyCtrl("x"), waiverCtrl("w", "x", past)}, cc)
+	if d.Outcome != types.OutcomeDeny || codes(d)["fired"] != 1 {
+		t.Fatalf("expired waiver must not suppress, got %s (%v)", d.Outcome, d.Reasons)
+	}
+}
+
+// A waiver with no decision time to judge expiry against is inactive (fail-safe).
+func TestEvaluate_WaiverNoScheduleInactive(t *testing.T) {
+	d := Evaluate([]types.Control{denyCtrl("x"), waiverCtrl("w", "x", future)}, prodCtx()) // ScheduledAt zero
+	if d.Outcome != types.OutcomeDeny {
+		t.Fatalf("a waiver with no decision time must be inactive (deny stands), got %s", d.Outcome)
+	}
+}
+
+// A waiver for a control that did not fire is moot.
+func TestEvaluate_WaiverMoot(t *testing.T) {
+	cc := prodCtx()
+	cc.ScheduledAt = inHour
+	notFiring := types.Control{ID: "y", When: "false", Outcome: types.OutcomeDeny}
+	d := Evaluate([]types.Control{notFiring, waiverCtrl("w", "y", future)}, cc)
+	if d.Outcome != types.OutcomeAllow || codes(d)["waived"] != 0 || codes(d)["fired"] != 0 {
+		t.Fatalf("a waiver for a non-firing control is moot, got %s (%v)", d.Outcome, d.Reasons)
+	}
+}
+
+// A fail-closed control (broken predicate) is NOT waivable — a waiver exempts a
+// decision, not an evaluation failure.
+func TestEvaluate_WaiverDoesNotHideFailClosed(t *testing.T) {
+	cc := prodCtx()
+	cc.ScheduledAt = inHour
+	broken := types.Control{ID: "z", When: "!!! bad", Outcome: types.OutcomeAllow}
+	d := Evaluate([]types.Control{broken, waiverCtrl("w", "z", future)}, cc)
+	if d.Outcome != types.OutcomeDeny || codes(d)["compile_error"] != 1 || codes(d)["waived"] != 0 {
+		t.Fatalf("a broken control must fail closed despite a waiver, got %s (%v)", d.Outcome, d.Reasons)
+	}
+}
+
+func TestValidateControls_Waiver(t *testing.T) {
+	if err := ValidateControls([]types.Control{denyCtrl("x"), waiverCtrl("w", "x", future)}); err != nil {
+		t.Fatalf("valid waiver must pass, got %v", err)
+	}
+	bad := map[string][]types.Control{
+		"no expiresAt":     {denyCtrl("x"), {ID: "w", Waiver: &types.WaiverSpec{ControlRef: "x", Justification: "j", ApprovedBy: "a"}}},
+		"no justification": {denyCtrl("x"), {ID: "w", Waiver: &types.WaiverSpec{ControlRef: "x", ExpiresAt: future, ApprovedBy: "a"}}},
+		"no approvedBy":    {denyCtrl("x"), {ID: "w", Waiver: &types.WaiverSpec{ControlRef: "x", ExpiresAt: future, Justification: "j"}}},
+		"no controlRef":    {denyCtrl("x"), {ID: "w", Waiver: &types.WaiverSpec{ExpiresAt: future, Justification: "j", ApprovedBy: "a"}}},
+		"ref not in set":   {denyCtrl("x"), waiverCtrl("w", "nope", future)},
+		"self reference":   {waiverCtrl("w", "w", future)},
+		"waiver + predicate": {denyCtrl("x"), {ID: "w", When: "true", Outcome: types.OutcomeDeny,
+			Waiver: &types.WaiverSpec{ControlRef: "x", ExpiresAt: future, Justification: "j", ApprovedBy: "a"}}},
+	}
+	for name, cs := range bad {
+		if err := ValidateControls(cs); err == nil {
+			t.Fatalf("%s: must be rejected at load", name)
+		}
+	}
+}
+
 // ValidateControls compiles every predicate at declaration time (§1.8).
 func TestValidateControls(t *testing.T) {
 	ok := []types.Control{
