@@ -20,19 +20,18 @@ var ErrOwnerConflict = errors.New("graph: facet namespace already has a differen
 // Registering the same owner again is idempotent; registering a different
 // owner fails with ErrOwnerConflict.
 func (s *Store) RegisterFacetOwner(ctx context.Context, o types.FacetOwner) error {
-	tag, err := s.pool.Exec(ctx, `
+	// ADR-0060: MANY sources may own a namespace, keyed per (namespace, owner_ref).
+	// Re-registering the same (namespace, owner_ref) is idempotent; a DIFFERENT
+	// source registering the same namespace is now legal — no longer ErrOwnerConflict.
+	// Registration still gates who MAY write (§2.5); the authoritative view is a
+	// separate sources/ CaC declaration.
+	if _, err := s.pool.Exec(ctx, `
 		INSERT INTO graph.facet_owner (namespace, owner_kind, owner_ref, view_scope)
 		VALUES ($1, $2, $3, nullif($4, ''))
-		ON CONFLICT (namespace) DO UPDATE
-		SET view_scope = excluded.view_scope
-		WHERE facet_owner.owner_kind = excluded.owner_kind
-		  AND facet_owner.owner_ref = excluded.owner_ref`,
-		o.Namespace, o.OwnerKind, o.OwnerRef, o.ViewScope)
-	if err != nil {
+		ON CONFLICT (namespace, owner_ref) DO UPDATE
+		SET owner_kind = excluded.owner_kind, view_scope = excluded.view_scope`,
+		o.Namespace, o.OwnerKind, o.OwnerRef, o.ViewScope); err != nil {
 		return fmt.Errorf("graph: register facet owner %s: %w", o.Namespace, err)
-	}
-	if tag.RowsAffected() == 0 {
-		return fmt.Errorf("%w: namespace %s", ErrOwnerConflict, o.Namespace)
 	}
 	return nil
 }

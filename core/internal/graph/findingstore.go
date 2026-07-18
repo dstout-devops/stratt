@@ -305,6 +305,54 @@ func (s *Store) ResolveClearedCellPlacementFindings(ctx context.Context) (int64,
 // target) row via the partial unique index — a second withdrawal pass just
 // refreshes it, never duplicates. runID is empty (the Intent-layer
 // withdrawal, not a check Run, is the evidence).
+// WriteFacetContentionFindings surfaces multi-source Facet contention (ADR-0060 §4):
+// when >1 source projects the same (Entity, namespace) and no authority is declared,
+// the effective scalar value cannot be resolved — a §2.4/§1.8 diagnosis, never a
+// silent pick. One Finding per contended (Entity, namespace) carrying the contending
+// sources; idempotent on the live (baseline, target) row. Estate-wide, non-fatal.
+func (s *Store) WriteFacetContentionFindings(ctx context.Context) (int64, error) {
+	tag, err := s.pool.Exec(ctx, `
+		INSERT INTO graph.finding
+			(baseline, target, entity_id, status, severity, framework, consecutive_drifted, diff, opened_at)
+		SELECT 'ownership/' || f.namespace, f.entity_id::text, f.entity_id::text, 'open', 'warning', 'ownership', 1,
+		       jsonb_build_object(
+		           'namespace', f.namespace,
+		           'sources', array_agg(DISTINCT f.prov_source_id),
+		           'reason', 'multiple sources project this facet with no declared authority (ADR-0060 §4); declare the authoritative source in sources/ CaC'),
+		       now()
+		FROM graph.facet f
+		JOIN graph.entity e ON e.id = f.entity_id AND e.deleted_at IS NULL
+		GROUP BY f.entity_id, f.namespace
+		HAVING count(DISTINCT f.prov_source_id) > 1
+		ON CONFLICT (baseline, target) WHERE status <> 'resolved'
+		DO UPDATE SET diff = excluded.diff, last_observed = now()`)
+	if err != nil {
+		return 0, fmt.Errorf("graph: write facet contention findings: %w", err)
+	}
+	return tag.RowsAffected(), nil
+}
+
+// ResolveClearedFacetContentionFindings resolves an ownership-contention Finding
+// once the contention clears (≤1 source now projects that (Entity, namespace) —
+// a source was scoped out, or one tombstoned). The GC half (§1.8, ADR-0043).
+func (s *Store) ResolveClearedFacetContentionFindings(ctx context.Context) (int64, error) {
+	tag, err := s.pool.Exec(ctx, `
+		UPDATE graph.finding fnd
+		SET status = 'resolved', resolved_at = now(), last_observed = now(),
+		    consecutive_drifted = 0, resolved_reason = 'contention-cleared'
+		WHERE fnd.framework = 'ownership' AND fnd.status <> 'resolved'
+		  AND NOT EXISTS (
+		      SELECT 1 FROM graph.facet f
+		      WHERE f.entity_id::text = fnd.target
+		        AND 'ownership/' || f.namespace = fnd.baseline
+		      GROUP BY f.entity_id, f.namespace
+		      HAVING count(DISTINCT f.prov_source_id) > 1)`)
+	if err != nil {
+		return 0, fmt.Errorf("graph: resolve cleared facet contention findings: %w", err)
+	}
+	return tag.RowsAffected(), nil
+}
+
 func (s *Store) WriteOrphanFinding(ctx context.Context, baseline, target, severity string, detail []byte) error {
 	_, err := s.pool.Exec(ctx, `
 		INSERT INTO graph.finding

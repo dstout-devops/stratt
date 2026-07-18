@@ -117,36 +117,53 @@ func TestFacetOwnership(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Double-claim by a different owner → registration error (§2.1).
-	err = s.RegisterFacetOwner(ctx, types.FacetOwner{Namespace: "os.kernel", OwnerKind: "syncer", OwnerRef: "other/syncer"})
-	if !errors.Is(err, ErrOwnerConflict) {
-		t.Fatalf("second owner registration should be ErrOwnerConflict, got: %v", err)
+	// ADR-0060: a SECOND source may register the same namespace (multi-owner) —
+	// no longer ErrOwnerConflict. Many systems legitimately know one namespace.
+	if err := s.RegisterFacetOwner(ctx, types.FacetOwner{Namespace: "os.kernel", OwnerKind: "syncer", OwnerRef: "other/syncer"}); err != nil {
+		t.Fatalf("a second source may register the same namespace (ADR-0060): %v", err)
 	}
 
-	// Owner writes → ok.
-	if err := p.UpsertFacet(ctx, prov(types.WriterSyncer, "vcenter/syncer"), id, "os.kernel", json.RawMessage(`{"family":"linux"}`)); err != nil {
+	// The registered owner writes → its own per-source row (SourceID vcenter-src).
+	vcp := types.Provenance{WriterKind: types.WriterSyncer, WriterRef: "vcenter/syncer", SourceID: "00000000-0000-0000-0000-0000000000bb", At: time.Now().UTC()}
+	if err := p.UpsertFacet(ctx, vcp, id, "os.kernel", json.RawMessage(`{"family":"linux"}`)); err != nil {
 		t.Fatal(err)
 	}
 
-	// A different Syncer writing the owned namespace → rejected.
-	err = p.UpsertFacet(ctx, prov(types.WriterSyncer, "other/syncer"), id, "os.kernel", json.RawMessage(`{"family":"bsd"}`))
-	if err == nil || !strings.Contains(err.Error(), "owned by") {
-		t.Fatalf("non-owner syncer write should be rejected, got: %v", err)
+	// An UNREGISTERED syncer writing the namespace → rejected (§2.5 bounded grant).
+	err = p.UpsertFacet(ctx, prov(types.WriterSyncer, "unregistered/syncer"), id, "os.kernel", json.RawMessage(`{"family":"bsd"}`))
+	if err == nil || !strings.Contains(err.Error(), "not a registered owner") {
+		t.Fatalf("unregistered syncer write should be rejected, got: %v", err)
 	}
 
-	// Run provenance writes ahead of Syncer lag (§4.3) → ok.
+	// The SECOND registered source writes under its OWN source → a distinct row;
+	// both are RETAINED, never overwritten (ADR-0060 — keep every signal).
+	otherp := types.Provenance{WriterKind: types.WriterSyncer, WriterRef: "other/syncer", SourceID: "00000000-0000-0000-0000-0000000000cc", At: time.Now().UTC()}
+	if err := p.UpsertFacet(ctx, otherp, id, "os.kernel", json.RawMessage(`{"family":"bsd"}`)); err != nil {
+		t.Fatalf("a registered second source must write its own per-source row: %v", err)
+	}
+
+	// Run provenance (§4.3) → admissible to a registered namespace; keyed to the
+	// reserved 'run' source (empty SourceID), a third distinct row.
 	rp := s.RunProjector()
-	if err := rp.UpsertFacet(ctx, prov(types.WriterRun, "run-123"), id, "os.kernel", json.RawMessage(`{"family":"linux","release":"6.6"}`)); err != nil {
+	runp := types.Provenance{WriterKind: types.WriterRun, WriterRef: "run-123", At: time.Now().UTC()}
+	if err := rp.UpsertFacet(ctx, runp, id, "os.kernel", json.RawMessage(`{"family":"linux","release":"6.6"}`)); err != nil {
 		t.Fatalf("run-provenance write should be admissible (§4.3): %v", err)
 	}
 
-	// Versioning: two successful writes → version 2, history has both.
+	// Retention: all three sources' os.kernel facets co-exist — signal is never
+	// dropped (ADR-0060 decision 2).
 	facets, err := s.GetFacets(ctx, id)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(facets) != 1 || facets[0].Provenance.WriterRef != "run-123" {
-		t.Fatalf("facet provenance should show the last writer, got %+v", facets)
+	osRows := 0
+	for _, f := range facets {
+		if f.Namespace == "os.kernel" {
+			osRows++
+		}
+	}
+	if osRows != 3 {
+		t.Fatalf("all three sources' os.kernel facets must be retained (ADR-0060), got %d rows", osRows)
 	}
 	var histCount int
 	if err := s.pool.QueryRow(ctx,
@@ -154,8 +171,8 @@ func TestFacetOwnership(t *testing.T) {
 	).Scan(&histCount); err != nil {
 		t.Fatal(err)
 	}
-	if histCount != 2 {
-		t.Fatalf("facet_history should hold every version, got %d rows", histCount)
+	if histCount != 3 {
+		t.Fatalf("facet_history should hold every source's write, got %d rows", histCount)
 	}
 }
 

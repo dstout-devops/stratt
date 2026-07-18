@@ -224,17 +224,23 @@ func upsertFacetTx(ctx context.Context, tx pgx.Tx, prov types.Provenance, cell, 
 	if _, err := contract.ValidateFacet(namespace, value); err != nil {
 		return fmt.Errorf("graph: facet %s on %s: %w", namespace, entityID, err)
 	}
+	// The Facet grain includes the SOURCE (ADR-0060): each source retains its own
+	// row, so two sources projecting one namespace never overwrite each other. A
+	// write with no Source (a Run/Actuator write-back) uses the empty-string key —
+	// NOT NULL (a valid PK dimension), bounded (never per-Run writer_ref), and
+	// skipped by the home-gate uuid cast (`sid <> ''`). A genuine per-Actuator
+	// source is the ADR-0060 M2 follow-up.
+	source := prov.SourceID
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO graph.facet (entity_id, namespace, value, prov_writer_kind, prov_writer_ref, prov_source_id, prov_cell, prov_at)
-		VALUES ($1, $2, $3, $4, $5, nullif($6, ''), $8, $7)
-		ON CONFLICT (entity_id, namespace) DO UPDATE
+		VALUES ($1, $2, $3, $4, $5, $6, $8, $7)
+		ON CONFLICT (entity_id, namespace, prov_source_id) DO UPDATE
 		SET value = excluded.value,
 		    prov_writer_kind = excluded.prov_writer_kind,
 		    prov_writer_ref = excluded.prov_writer_ref,
-		    prov_source_id = excluded.prov_source_id,
 		    prov_cell = excluded.prov_cell,
 		    prov_at = excluded.prov_at`,
-		entityID, namespace, value, string(prov.WriterKind), prov.WriterRef, prov.SourceID, prov.At, cell,
+		entityID, namespace, value, string(prov.WriterKind), prov.WriterRef, source, prov.At, cell,
 	); err != nil {
 		return fmt.Errorf("graph: upsert facet %s on %s: %w", namespace, entityID, err)
 	}

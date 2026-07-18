@@ -161,6 +161,20 @@ func (c *Controller) reconcile(ctx context.Context, log *slog.Logger) {
 		log.Info("resolved reconciled cell placement findings", "count", n)
 	}
 
+	// Multi-source Facet contention (ADR-0060): when >1 source projects the same
+	// (Entity, namespace) and no authority is declared, the effective scalar value
+	// can't be resolved — surface it as a Finding, resolve when it clears. Non-fatal.
+	if n, err := c.Store.WriteFacetContentionFindings(ctx); err != nil {
+		log.Error("facet contention check failed", "error", err)
+	} else if n > 0 {
+		log.Warn("multi-source facet contention findings", "count", n)
+	}
+	if n, err := c.Store.ResolveClearedFacetContentionFindings(ctx); err != nil {
+		log.Error("facet contention resolve failed", "error", err)
+	} else if n > 0 {
+		log.Info("resolved cleared facet contention findings", "count", n)
+	}
+
 	// Provisioning reconcile (ADR-0058): surface GATED builds for Intent/Compute
 	// shortfalls (desired count vs projected+correlated Entities). It never builds
 	// and never writes an Entity for the unbuilt (§1.2) — the shortfall is

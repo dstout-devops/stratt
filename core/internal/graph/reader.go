@@ -151,22 +151,37 @@ func (s *Store) FacetValuesByEntities(ctx context.Context, namespace string, ent
 		return map[string]json.RawMessage{}, nil
 	}
 	rows, err := s.pool.Query(ctx, `
-		SELECT entity_id, value FROM graph.facet
+		SELECT entity_id, value, prov_source_id FROM graph.facet
 		WHERE namespace = $1 AND entity_id = ANY($2::uuid[])`, namespace, entityIDs)
 	if err != nil {
 		return nil, fmt.Errorf("graph: facet values by entities: %w", err)
 	}
 	defer rows.Close()
-	out := make(map[string]json.RawMessage, len(entityIDs))
+	// ADR-0060 M5: a scalar read resolves ONE effective value per Entity from
+	// now-possibly-many per-source rows — never a last-row/last-writer pick. With
+	// no declared authority yet (sources/ CaC pending), a single-source Entity
+	// yields its value; a multi-source Entity is OMITTED (fail-safe — e.g. mgmt.site
+	// routing falls to the default) so nothing is silently picked; the
+	// ownership-contention Finding surfaces it for the operator (§2.4/§1.8).
+	perEntity := make(map[string][]json.RawMessage, len(entityIDs))
 	for rows.Next() {
-		var id string
+		var id, src string
 		var val json.RawMessage
-		if err := rows.Scan(&id, &val); err != nil {
+		if err := rows.Scan(&id, &val, &src); err != nil {
 			return nil, fmt.Errorf("graph: scan facet value: %w", err)
 		}
-		out[id] = val
+		perEntity[id] = append(perEntity[id], val)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	out := make(map[string]json.RawMessage, len(perEntity))
+	for id, vals := range perEntity {
+		if len(vals) == 1 {
+			out[id] = vals[0]
+		}
+	}
+	return out, nil
 }
 
 // HomeCellsByEntities bulk-reads the home Cell of a set of Entities (ADR-0044)
