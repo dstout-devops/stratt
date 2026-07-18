@@ -64,6 +64,31 @@ type Authorizer interface {
 	CheckHealth(ctx context.Context) error
 }
 
+// ApproverAuthorized is the ONE seam that answers "may this principal decide
+// this Gate" (§1.6, ADR-0011's deferred note, ADR-0064): a match against the
+// declaration-scoped explicit principals list, OR ReBAC membership of one of
+// the approver teams via Check. Used by both the human-Gate and policy-opened-
+// Gate decision paths, so approver authorization has one implementation. The
+// explicit principals list stays declaration data (not an OpenFGA object type),
+// checked inside this helper.
+func ApproverAuthorized(ctx context.Context, a Authorizer, principal string, principals, teams []string) (bool, error) {
+	for _, p := range principals {
+		if p == principal {
+			return true, nil
+		}
+	}
+	for _, team := range teams {
+		member, err := a.Check(ctx, principal, RelationMember, "team:"+team)
+		if err != nil {
+			return false, err
+		}
+		if member {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 type ctxKey struct{}
 
 // WithPrincipal attaches the resolved Principal to the request context.

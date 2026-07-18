@@ -30,29 +30,93 @@ func (a *Activities) EvaluatePolicy(ctx context.Context, controls []types.Contro
 	return dec, nil
 }
 
-// runPolicyStep evaluates a policy checkpoint synchronously and maps the
-// four-way outcome to a Step status (ADR-0063). The ChangeContext is assembled
+// runPolicyStep evaluates a policy checkpoint synchronously and gates the DAG on
+// the four-way outcome (ADR-0063 / ADR-0064). The ChangeContext is assembled
 // deterministically on the workflow goroutine; only the evaluation crosses into
-// the activity. A failed evaluation is fail-closed (the step fails, never a
-// silent pass).
+// the activity. allow succeeds; deny fails; require_approval/escalate OPEN a
+// human Gate whose approvers come from the decision's obligation (ADR-0064) —
+// with no approver obligation, an approval is unsatisfiable and fails closed
+// (§1.8: never a silent pass). A failed evaluation also fails closed.
 func runPolicyStep(ctx workflow.Context, a *Activities, in DAGInput, step types.Step) string {
 	cc := assembleChangeContext(in)
 	var dec types.Decision
 	if err := workflow.ExecuteActivity(ctx, a.EvaluatePolicy, step.Policy.Controls, cc).Get(ctx, &dec); err != nil {
 		return stepFailed
 	}
-	return PolicyStepStatus(dec.Outcome)
+	switch dec.Outcome {
+	case types.OutcomeRequireApproval, types.OutcomeEscalate:
+		approvers, timeout, ok := approversFromDecision(dec)
+		if !ok {
+			return stepFailed // an approval with no approver obligation is unsatisfiable
+		}
+		return awaitGate(ctx, a, in.WorkflowRunID, step.Name, approvers, timeout, "")
+	default:
+		return PolicyStepStatus(dec.Outcome)
+	}
 }
 
-// PolicyStepStatus maps a PDP outcome to a DAG step status (ADR-0063 v1): allow
-// succeeds; deny / require_approval / escalate fail closed. require_approval and
-// escalate BLOCK until the interactive Gate wiring of §7.2b — never a silent
-// pass. Pure, so it is unit-tested directly.
+// PolicyStepStatus is the terminal (non-Gate) outcome→status mapping: allow
+// succeeds, everything else fails closed. runPolicyStep routes
+// require_approval/escalate to a Gate first; this is the deny path and the
+// fail-closed fallback. Pure, so it is unit-tested directly.
 func PolicyStepStatus(outcome string) string {
 	if outcome == types.OutcomeAllow {
 		return stepSucceeded
 	}
 	return stepFailed
+}
+
+// approversFromDecision extracts the Gate approvers a require_approval/escalate
+// decision carries (ADR-0064): the require_approval obligation's params.teams /
+// params.principals become the GateApprovers, params.timeoutSeconds its timeout.
+// ok=false when no approver is named (the caller fails closed). M-of-N quorum
+// (params.count > 1) is not enforced here — that is the §7.3 Quorum control.
+func approversFromDecision(dec types.Decision) (types.GateApprovers, int, bool) {
+	var ap types.GateApprovers
+	timeout := 0
+	for _, ob := range dec.Obligations {
+		if ob.Type != types.ObligationRequireApproval {
+			continue
+		}
+		ap.Teams = append(ap.Teams, paramStrings(ob.Params, "teams")...)
+		ap.Principals = append(ap.Principals, paramStrings(ob.Params, "principals")...)
+		if t, ok := paramInt(ob.Params, "timeoutSeconds"); ok {
+			timeout = t
+		}
+	}
+	ok := len(ap.Teams) > 0 || len(ap.Principals) > 0
+	return ap, timeout, ok
+}
+
+// paramStrings reads a []string obligation param, tolerating both a native
+// []string (Go-constructed) and a []any of strings (JSON-decoded from estate).
+func paramStrings(params map[string]any, key string) []string {
+	switch v := params[key].(type) {
+	case []string:
+		return v
+	case []any:
+		out := make([]string, 0, len(v))
+		for _, e := range v {
+			if s, ok := e.(string); ok {
+				out = append(out, s)
+			}
+		}
+		return out
+	default:
+		return nil
+	}
+}
+
+// paramInt reads an int obligation param, tolerating float64 (JSON) and int.
+func paramInt(params map[string]any, key string) (int, bool) {
+	switch v := params[key].(type) {
+	case float64:
+		return int(v), true
+	case int:
+		return v, true
+	default:
+		return 0, false
+	}
 }
 
 // assembleChangeContext builds the typed ChangeContext a policy Step evaluates

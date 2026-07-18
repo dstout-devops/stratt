@@ -1902,23 +1902,10 @@ func (s *Server) DecideGate(w http.ResponseWriter, r *http.Request, id string) {
 		writeErr(w, http.StatusForbidden, "no principal (authentication required)")
 		return
 	}
-	allowed := false
-	for _, p := range g.Approvers.Principals {
-		if p == principal {
-			allowed = true
-			break
-		}
-	}
-	for _, team := range g.Approvers.Teams {
-		if allowed {
-			break
-		}
-		member, err := s.Authz.Check(r.Context(), principal, authz.RelationMember, "team:"+team)
-		if err != nil {
-			s.fail(w, err)
-			return
-		}
-		allowed = member
+	allowed, err := authz.ApproverAuthorized(r.Context(), s.Authz, principal, g.Approvers.Principals, g.Approvers.Teams)
+	if err != nil {
+		s.fail(w, err)
+		return
 	}
 	if !allowed {
 		writeErr(w, http.StatusForbidden, fmt.Sprintf("principal %s is not an approver of gate %s", principal, id))

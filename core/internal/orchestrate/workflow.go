@@ -334,20 +334,30 @@ func runGateStep(ctx workflow.Context, a *Activities, in DAGInput, step types.St
 	if step.PlanFrom != "" {
 		planDigest = digestFromStep(steps, step.PlanFrom)
 	}
+	return awaitGate(ctx, a, in.WorkflowRunID, step.Name, step.Gate.Approvers, step.Gate.TimeoutSeconds, planDigest)
+}
+
+// awaitGate opens a Gate record and blocks on the human decision signal, racing
+// the declared timeout (ADR-0011). It is the shared human-approval primitive:
+// a declared Gate Step (runGateStep) and a policy REQUIRE_APPROVAL/ESCALATE
+// outcome (runPolicyStep, ADR-0064) both call it, so a policy-opened Gate is
+// decided through the identical API/audit path as a declared one. Approved ⇒
+// the step succeeds; denied/expired ⇒ it fails.
+func awaitGate(ctx workflow.Context, a *Activities, workflowRunID, stepName string, approvers types.GateApprovers, timeoutSeconds int, planDigest string) string {
 	var gate types.Gate
-	if err := workflow.ExecuteActivity(ctx, a.CreateGateRecord, in.WorkflowRunID, step.Name, planDigest, step.Gate.Approvers).Get(ctx, &gate); err != nil {
+	if err := workflow.ExecuteActivity(ctx, a.CreateGateRecord, workflowRunID, stepName, planDigest, approvers).Get(ctx, &gate); err != nil {
 		return stepFailed
 	}
 
 	decision := GateDecision{}
 	decided := false
 	sel := workflow.NewSelector(ctx)
-	sel.AddReceive(workflow.GetSignalChannel(ctx, GateSignalName(step.Name)), func(c workflow.ReceiveChannel, _ bool) {
+	sel.AddReceive(workflow.GetSignalChannel(ctx, GateSignalName(stepName)), func(c workflow.ReceiveChannel, _ bool) {
 		c.Receive(ctx, &decision)
 		decided = true
 	})
-	if step.Gate.TimeoutSeconds > 0 {
-		sel.AddFuture(workflow.NewTimer(ctx, time.Duration(step.Gate.TimeoutSeconds)*time.Second), func(workflow.Future) {})
+	if timeoutSeconds > 0 {
+		sel.AddFuture(workflow.NewTimer(ctx, time.Duration(timeoutSeconds)*time.Second), func(workflow.Future) {})
 	}
 	sel.Select(ctx)
 

@@ -3,9 +3,96 @@ package orchestrate
 import (
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/dstout-devops/stratt/types"
 )
+
+func approvalControl(outcome string, teams ...string) types.Control {
+	tt := make([]any, len(teams))
+	for i, t := range teams {
+		tt[i] = t
+	}
+	return types.Control{
+		ID: "approve", When: "ctx.environment == 'prod'", Outcome: outcome,
+		Obligations: []types.Obligation{{Type: types.ObligationRequireApproval, Params: map[string]any{"teams": tt}}},
+	}
+}
+
+// approversFromDecision extracts the require_approval obligation's approvers,
+// tolerating the []any that JSON-decoded estate produces.
+func TestApproversFromDecision(t *testing.T) {
+	dec := types.Decision{Outcome: types.OutcomeRequireApproval, Obligations: []types.Obligation{
+		{Type: types.ObligationRequireApproval, Params: map[string]any{
+			"teams": []any{"platform"}, "principals": []string{"alice"}, "timeoutSeconds": float64(300),
+		}},
+	}}
+	ap, timeout, ok := approversFromDecision(dec)
+	if !ok || len(ap.Teams) != 1 || ap.Teams[0] != "platform" || len(ap.Principals) != 1 || timeout != 300 {
+		t.Fatalf("got approvers=%+v timeout=%d ok=%v", ap, timeout, ok)
+	}
+	// No approver obligation ⇒ not ok (caller fails closed).
+	if _, _, ok := approversFromDecision(types.Decision{Outcome: types.OutcomeRequireApproval}); ok {
+		t.Fatal("a require_approval with no approver obligation must be unsatisfiable")
+	}
+}
+
+// A require_approval outcome opens a Gate; an approve signal succeeds the step
+// and downstream runs (ADR-0064).
+func TestRunDAG_PolicyRequiresApproval_Approved(t *testing.T) {
+	spec := types.Workflow{Name: "guarded", Steps: []types.Step{
+		{Name: "guard", Policy: &types.PolicySpec{Controls: []types.Control{
+			approvalControl(types.OutcomeRequireApproval, "platform"),
+		}}},
+		{Name: "apply", Needs: []string{"guard"}, ViewName: "v"},
+	}}
+	env, final, status := dagTestEnv(t, spec, map[string]error{})
+	env.RegisterDelayedCallback(func() {
+		env.SignalWorkflow(GateSignalName("guard"), GateDecision{Approved: true, Principal: "alice"})
+	}, time.Minute)
+	env.ExecuteWorkflow(RunDAG, DAGInput{
+		WorkflowRunID: "wr-1", WorkflowName: "guarded", Principal: "alice",
+		LaunchParams: map[string]any{"environment": "prod"},
+	})
+
+	if !env.IsWorkflowCompleted() || env.GetWorkflowError() != nil {
+		t.Fatalf("workflow: completed=%v err=%v", env.IsWorkflowCompleted(), env.GetWorkflowError())
+	}
+	want := map[string]string{"guard": stepSucceeded, "apply": stepSucceeded}
+	if !reflect.DeepEqual(*final, want) {
+		t.Fatalf("steps: got %v want %v", *final, want)
+	}
+	if *status != types.RunSucceeded {
+		t.Fatalf("status: %s", *status)
+	}
+}
+
+// A require_approval decision that names no approver is unsatisfiable and fails
+// closed — no Gate, no silent pass (ADR-0064).
+func TestRunDAG_PolicyRequiresApproval_NoApprover_FailsClosed(t *testing.T) {
+	spec := types.Workflow{Name: "guarded", Steps: []types.Step{
+		{Name: "guard", Policy: &types.PolicySpec{Controls: []types.Control{
+			{ID: "approve", When: "ctx.environment == 'prod'", Outcome: types.OutcomeRequireApproval},
+		}}},
+		{Name: "apply", Needs: []string{"guard"}, ViewName: "v"},
+	}}
+	env, final, status := dagTestEnv(t, spec, map[string]error{})
+	env.ExecuteWorkflow(RunDAG, DAGInput{
+		WorkflowRunID: "wr-1", WorkflowName: "guarded", Principal: "alice",
+		LaunchParams: map[string]any{"environment": "prod"},
+	})
+
+	if !env.IsWorkflowCompleted() || env.GetWorkflowError() != nil {
+		t.Fatalf("workflow: completed=%v err=%v", env.IsWorkflowCompleted(), env.GetWorkflowError())
+	}
+	want := map[string]string{"guard": stepFailed, "apply": stepSkipped}
+	if !reflect.DeepEqual(*final, want) {
+		t.Fatalf("steps: got %v want %v", *final, want)
+	}
+	if *status != types.RunFailed {
+		t.Fatalf("status: %s", *status)
+	}
+}
 
 // PolicyStepStatus maps the four-way outcome to a DAG status: allow succeeds,
 // everything else fails closed (ADR-0063 v1).

@@ -72,3 +72,4 @@ Status is `Accepted` unless noted. See **[../roadmap.md](../roadmap.md)** for ho
 | [0061](0061-estate-governance-policy-decision-point.md) | Estate Governance: the policy decision point, the three authorships, and governance-as-data | Accepted |
 | [0062](0062-policy-contract-and-pdp-interface-v1.md) | Policy Contract & PDP interface v1: the four-way Decision, the CEL evaluator, and the most-restrictive lattice | Accepted |
 | [0063](0063-policy-step-dag-dispatch-v1.md) | Policy Step & DAG dispatch v1: the PDP as a synchronous checkpoint | Accepted |
+| [0064](0064-policy-require-approval-gate.md) | Policy REQUIRE_APPROVAL opens a human Gate; the approver check folds into one authz seam | Accepted |
