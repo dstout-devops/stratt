@@ -2,13 +2,20 @@ package crossplane
 
 import (
 	"context"
+	"encoding/json"
+	"io"
+	"log/slog"
 	"testing"
 	"time"
 
+	"google.golang.org/grpc"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/client-go/dynamic"
 	dynamicfake "k8s.io/client-go/dynamic/fake"
+
+	pluginv1 "github.com/dstout-devops/stratt/sdk/stratt/plugin/v1"
 )
 
 func params() claimParams {
@@ -86,5 +93,85 @@ func TestWaitReadyAgainstFake(t *testing.T) {
 	}
 	if !ok || got == nil {
 		t.Fatalf("expected the seeded claim to be Ready, got ok=%v", ok)
+	}
+}
+
+// observeStreamMock captures the ObserveResponse stream for a unit test.
+type observeStreamMock struct {
+	grpc.ServerStream
+	ctx  context.Context
+	sent []*pluginv1.ObserveResponse
+}
+
+func (m *observeStreamMock) Context() context.Context { return m.ctx }
+func (m *observeStreamMock) Send(r *pluginv1.ObserveResponse) error {
+	m.sent = append(m.sent, r)
+	return nil
+}
+
+// TestObserveProjectsClaims proves the SYNCER half: Crossplane enumerates its live
+// Claims and projects each as a subnet Entity carrying the AS-BUILT cidr (status wins
+// over the requested spec) — the resync-able Source the guardian pointed to, distinct
+// from the Apply write-back (this row is Syncer-provenance, authority-resolvable).
+func TestObserveProjectsClaims(t *testing.T) {
+	gvr := schema.GroupVersionResource{Group: "net.example.org", Version: "v1alpha1", Resource: "subnetclaims"}
+	claim := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "net.example.org/v1alpha1", "kind": "SubnetClaim",
+		"metadata": map[string]any{"name": "web-dmz", "namespace": "stratt"},
+		"spec":     map[string]any{"cidr": "10.0.1.0/24"},
+		"status":   map[string]any{"cidr": "10.0.1.0/25"}, // as-built differs from requested
+	}}
+	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(),
+		map[schema.GroupVersionResource]string{gvr: "SubnetClaimList"}, claim)
+
+	s := NewServer(Config{ObserveClaims: []ObserveClaim{{
+		Group: "net.example.org", Version: "v1alpha1", Resource: "subnetclaims",
+		Namespace: "stratt", ProjectKind: "subnet", IdentityScheme: "crossplane.claim",
+	}}}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	s.dyn = func() (dynamic.Interface, error) { return dyn, nil }
+
+	stream := &observeStreamMock{ctx: context.Background()}
+	if err := s.Observe(&pluginv1.ObserveRequest{}, stream); err != nil {
+		t.Fatalf("Observe: %v", err)
+	}
+	if len(stream.sent) != 1 || !stream.sent[0].GetFullSyncComplete() {
+		t.Fatalf("expected one full-sync response, got %d", len(stream.sent))
+	}
+	ents := stream.sent[0].GetEntities()
+	if len(ents) != 1 {
+		t.Fatalf("expected 1 observed entity, got %d", len(ents))
+	}
+	e := ents[0]
+	if e.GetKind() != "subnet" || e.GetIdentityKeys()["crossplane.claim"] != "stratt/web-dmz" {
+		t.Errorf("kind/identity = %s / %v", e.GetKind(), e.GetIdentityKeys())
+	}
+	if e.GetLabels()["source"] != "crossplane" {
+		t.Errorf("source label = %v", e.GetLabels())
+	}
+	var facet map[string]any
+	if err := json.Unmarshal(e.GetFacets()["net.subnet"], &facet); err != nil {
+		t.Fatalf("facet unmarshal: %v", err)
+	}
+	if facet["cidr"] != "10.0.1.0/25" { // as-built (status) wins over spec
+		t.Errorf("net.subnet cidr = %v, want as-built 10.0.1.0/25", facet["cidr"])
+	}
+}
+
+// TestManifestDualVerb proves the plugin advertises OBSERVE alongside APPLY/DESTROY —
+// the full-featured dual-verb surface the host gates each grant against.
+func TestManifestDualVerb(t *testing.T) {
+	s := NewServer(Config{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	m, err := s.GetManifest(context.Background(), &pluginv1.GetManifestRequest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	verbs := map[pluginv1.Verb]bool{}
+	for _, v := range m.GetManifest().GetVerbs() {
+		verbs[v] = true
+	}
+	for _, want := range []pluginv1.Verb{pluginv1.Verb_VERB_APPLY, pluginv1.Verb_VERB_DESTROY, pluginv1.Verb_VERB_OBSERVE} {
+		if !verbs[want] {
+			t.Errorf("manifest missing verb %v", want)
+		}
 	}
 }

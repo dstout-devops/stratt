@@ -150,8 +150,14 @@ func (h *Host) Register(ctx context.Context) error {
 	if m.GetPluginId() != h.grant.PluginIdentity {
 		return fmt.Errorf("pluginhost: manifest identity %q != granted identity %q", m.GetPluginId(), h.grant.PluginIdentity)
 	}
-	if m.GetClass() != pluginv1.PluginClass_PLUGIN_CLASS_SYNCER {
-		return fmt.Errorf("pluginhost: plugin %q is not a Syncer (class %v)", h.grant.PluginIdentity, m.GetClass())
+	// Gate on the OBSERVE verb, not a singular Class: a full-featured plugin may be
+	// BOTH an Actuator and a Syncer (e.g. Crossplane BUILDS its Claims and OBSERVES
+	// their as-built state as a registered Source). Consistent with the Actuator and
+	// Emitter paths, which gate on identity/verb and never on Class — "the Manifest is
+	// advertisement; the grant is truth" (ADR-0046). The Class field remains the
+	// plugin's declared primary kind; Verbs is the authoritative capability surface.
+	if !manifestHasVerb(m, pluginv1.Verb_VERB_OBSERVE) {
+		return fmt.Errorf("pluginhost: plugin %q cannot Observe (verbs %v) — a Syncer grant needs the OBSERVE verb", h.grant.PluginIdentity, m.GetVerbs())
 	}
 
 	// Every REQUESTED facet namespace must be granted. The sha256 of a declared
@@ -231,6 +237,17 @@ func (h *Host) SyncLoop(ctx context.Context, interval time.Duration) error {
 			return ctx.Err()
 		}
 	}
+}
+
+// manifestHasVerb reports whether the plugin advertises a verb — the capability
+// gate for a full-featured (multi-verb) plugin registering under one verb's grant.
+func manifestHasVerb(m *pluginv1.Manifest, v pluginv1.Verb) bool {
+	for _, got := range m.GetVerbs() {
+		if got == v {
+			return true
+		}
+	}
+	return false
 }
 
 func (h *Host) provenance() types.Provenance {

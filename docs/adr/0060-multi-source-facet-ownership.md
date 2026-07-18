@@ -212,3 +212,17 @@ sequences the label plumbing; the `os.kernel` case (a Facet) is solved here, `os
   - **Genuine item surfaced (not M2/M3): the §4.3 damp write-through** (decision 2) is specified-but-unbuilt —
     scoped forward above. It stamps an *already-registered Syncer's* source onto a run write (legitimate), which is
     exactly *not* what M2 proposed.
+- **charter-guardian (2026-07-18): SOUND** on the follow-on **full-featured dual-verb Crossplane plugin** — the
+  charter-clean home for resync-able as-built state the M2 dissolution pointed to. Crossplane now BUILDS its Claims
+  (Actuator: Apply/Destroy, Run-provenance write-backs) AND OBSERVES them back as a registered **Source** (Syncer:
+  Observe), co-owning `net.subnet` but NOT authoritative (NetBox is). Verdicts: (1) one binary carrying both an
+  Actuator and a Syncer contract is charter-native — §2.2 defines a Connector as a *capability bundle*, and ADR-0046
+  states "plugin is the umbrella word, not a new Named Kind"; the binary is the transport (§1.5), the two roles ride
+  two distinct Grants and only the Syncer registers a Source. (2) Refining the pluginhost syncer `Register` to gate
+  on the **OBSERVE verb** rather than a singular `Class == SYNCER` is *tighter*, not looser (it verifies the plugin
+  can perform the granted verb), and consistent with the Actuator + Emitter paths, which already gate on
+  identity/verb, never Class — "the Manifest is advertisement; the grant is truth" (§1.5). None of ADR-0046's
+  thirteen t=0 invariants pins registration-on-Class (the load-bearing ones — #3 channel-bound identity, #11
+  core-enforced ownership from channel identity, #10 typed classes — are all intact); `Class` is now the advisory
+  primary kind and `Verbs` the authoritative capability surface. (3) Do NOT mint a DUAL/multi-class Named Kind —
+  that would add frozen-v1.0 vocabulary for no gain; Verbs-as-capability is adequate.

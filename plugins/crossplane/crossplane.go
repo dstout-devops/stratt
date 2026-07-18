@@ -36,6 +36,23 @@ const protocolVersion = "v1"
 type Config struct {
 	PluginID   string
 	Kubeconfig string // path; "" ⇒ in-cluster config
+	// ObserveClaims are the Crossplane Claim/XR kinds this plugin enumerates as a
+	// SYNCER (ADR-0060): Crossplane KNOWS the resources it built, so it observes
+	// their as-built state back as a registered Source — the full-featured dual-verb
+	// plugin (it BUILDS via Apply and OBSERVES via Observe). Empty ⇒ observe nothing
+	// (a build-only deployment); Observe then streams an empty full-sync.
+	ObserveClaims []ObserveClaim
+}
+
+// ObserveClaim declares one Claim/XR kind to enumerate and how each instance
+// projects into the estate — the read-side twin of claimParams' project overlay.
+type ObserveClaim struct {
+	Group          string `json:"group"`
+	Version        string `json:"version"`
+	Resource       string `json:"resource"`       // the plural, e.g. "subnetclaims"
+	Namespace      string `json:"namespace"`      // "" ⇒ cluster-scoped (an XR)
+	ProjectKind    string `json:"projectKind"`    // e.g. "subnet"
+	IdentityScheme string `json:"identityScheme"` // e.g. "crossplane.claim"
 }
 
 // Server implements the sovereign plugin port for the Crossplane build Actuator.
@@ -60,9 +77,20 @@ func (s *Server) GetManifest(context.Context, *pluginv1.GetManifestRequest) (*pl
 	return &pluginv1.GetManifestResponse{Manifest: &pluginv1.Manifest{
 		PluginId:        s.cfg.PluginID,
 		ProtocolVersion: protocolVersion,
-		Class:           pluginv1.PluginClass_PLUGIN_CLASS_ACTUATOR,
-		Verbs:           []pluginv1.Verb{pluginv1.Verb_VERB_APPLY, pluginv1.Verb_VERB_DESTROY},
-		Capabilities:    []string{"apply.dry-run"},
+		// Class is the PRIMARY declared kind (the builder); Verbs is the authoritative
+		// capability surface. This is a FULL-FEATURED dual-verb plugin — it BUILDS
+		// Claims (Apply/Destroy) AND OBSERVES their as-built state (Observe), so its
+		// real CIDRs are resync-able + authority-declarable (ADR-0060), never a
+		// synthesized Actuator write-back source. The host gates each grant on the verb.
+		Class: pluginv1.PluginClass_PLUGIN_CLASS_ACTUATOR,
+		Verbs: []pluginv1.Verb{pluginv1.Verb_VERB_APPLY, pluginv1.Verb_VERB_DESTROY, pluginv1.Verb_VERB_OBSERVE},
+		// Observe REQUESTS to own net.subnet (owned-but-uncovered, §1.1 — no schema
+		// until a Contract consumes it). NetBox is declared authoritative for it
+		// (ADR-0060); Crossplane's as-built CIDR is retained, resolvable signal.
+		Contracts:        []*pluginv1.ContractDecl{{SchemaId: "net.subnet"}},
+		ObserveMode:      pluginv1.Manifest_OBSERVE_MODE_POLL,
+		TombstoneSchemes: []string{"crossplane.claim"},
+		Capabilities:     []string{"apply.dry-run"},
 	}}, nil
 }
 
@@ -148,6 +176,74 @@ func (s *Server) Apply(req *pluginv1.ApplyRequest, stream grpc.ServerStreamingSe
 		WriteBack: []*pluginv1.ObservedEntity{ent},
 	})
 	return terminal(stream, true, pluginv1.ItemResult_STATUS_CHANGED, "claim Ready: "+p.Name)
+}
+
+// Observe enumerates every configured Crossplane Claim/XR and streams each as an
+// ObservedEntity — the SYNCER half of this full-featured plugin (ADR-0060). Crossplane
+// is the registered Source for the resources it built; its as-built CIDR is retained
+// alongside NetBox's (the declared authority), never overwriting it. One full-sync window.
+func (s *Server) Observe(_ *pluginv1.ObserveRequest, stream grpc.ServerStreamingServer[pluginv1.ObserveResponse]) error {
+	ctx := stream.Context()
+	dyn, err := s.dyn()
+	if err != nil {
+		return fmt.Errorf("crossplane observe: kube client: %w", err)
+	}
+	entities := make([]*pluginv1.ObservedEntity, 0)
+	for _, oc := range s.cfg.ObserveClaims {
+		gvr := schema.GroupVersionResource{Group: oc.Group, Version: oc.Version, Resource: oc.Resource}
+		list, err := resourceClient(dyn, gvr, oc.Namespace).List(ctx, metav1.ListOptions{})
+		if err != nil {
+			return fmt.Errorf("crossplane observe %s: %w", oc.Resource, err)
+		}
+		for i := range list.Items {
+			entities = append(entities, projectClaim(oc, &list.Items[i]))
+		}
+	}
+	s.log.Info("crossplane observed", "claim_kinds", len(s.cfg.ObserveClaims), "entities", len(entities))
+	return stream.Send(&pluginv1.ObserveResponse{Entities: entities, FullSync: true, FullSyncComplete: true})
+}
+
+// projectClaim maps a live Crossplane Claim/XR to an ObservedEntity: the estate kind,
+// the crossplane.claim correlation identity (matching the Apply write-back's identity so
+// the observed row correlates onto the same Entity), and the net.subnet Facet carrying
+// the AS-BUILT cidr. Pure.
+func projectClaim(oc ObserveClaim, got *unstructured.Unstructured) *pluginv1.ObservedEntity {
+	kind := oc.ProjectKind
+	if kind == "" {
+		kind = "subnet"
+	}
+	scheme := oc.IdentityScheme
+	if scheme == "" {
+		scheme = "crossplane.claim"
+	}
+	name := got.GetName()
+	id := name
+	if ns := got.GetNamespace(); ns != "" {
+		id = ns + "/" + name
+	}
+	facet := map[string]any{"claim": got.GetKind(), "name": name}
+	if cidr := claimCIDR(got); cidr != "" {
+		facet["cidr"] = cidr
+	}
+	raw, _ := json.Marshal(facet)
+	return &pluginv1.ObservedEntity{
+		Kind:         kind,
+		IdentityKeys: map[string]string{scheme: id},
+		Labels:       map[string]string{"source": "crossplane"},
+		Facets:       map[string][]byte{"net.subnet": raw},
+	}
+}
+
+// claimCIDR reads the as-built cidr Crossplane reports (status.cidr) — what it actually
+// made — falling back to the requested spec.cidr. Pure.
+func claimCIDR(got *unstructured.Unstructured) string {
+	if cidr, found, _ := unstructured.NestedString(got.Object, "status", "cidr"); found && cidr != "" {
+		return cidr
+	}
+	if cidr, found, _ := unstructured.NestedString(got.Object, "spec", "cidr"); found && cidr != "" {
+		return cidr
+	}
+	return ""
 }
 
 // buildClaim renders the unstructured Crossplane Claim from params (pure).

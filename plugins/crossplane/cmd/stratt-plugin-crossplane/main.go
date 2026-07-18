@@ -5,6 +5,7 @@
 package main
 
 import (
+	"encoding/json"
 	"log/slog"
 	"net"
 	"os"
@@ -20,6 +21,14 @@ func main() {
 	cfg := crossplane.Config{
 		PluginID:   env("STRATT_PLUGIN_ID", "crossplane"),
 		Kubeconfig: os.Getenv("STRATT_CROSSPLANE_KUBECONFIG"), // "" ⇒ in-cluster
+	}
+	// STRATT_CROSSPLANE_OBSERVE is a JSON array of Claim kinds to observe back as a
+	// registered Source (the SYNCER verb). Empty ⇒ build-only (Observe streams empty).
+	if raw := os.Getenv("STRATT_CROSSPLANE_OBSERVE"); raw != "" {
+		if err := json.Unmarshal([]byte(raw), &cfg.ObserveClaims); err != nil {
+			log.Error("parse STRATT_CROSSPLANE_OBSERVE", "error", err)
+			os.Exit(1)
+		}
 	}
 	addr := env("STRATT_PLUGIN_LISTEN", ":9090")
 

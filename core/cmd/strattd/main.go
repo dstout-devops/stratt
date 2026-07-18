@@ -555,14 +555,18 @@ func run(ctx context.Context, log *slog.Logger) error {
 	// projects the built resource back FULLY — existence, identity, labels, AND the
 	// net.subnet Facet it just built. NetBox (the IPAM SoR) ALSO knows net.subnet;
 	// that is resolved by multi-source Facet ownership (ADR-0060), never by stripping
-	// this grant. (Until ADR-0060 lands, running BOTH plugins collides at the §2.1
-	// per-namespace registration — the exact limitation ADR-0060 removes.)
+	// this grant. NetBox and Crossplane now co-own net.subnet (ADR-0060 multi-source):
+	// both project it, each its own row, NetBox declared authoritative.
 	if addr := os.Getenv("STRATT_CROSSPLANE_PLUGIN_ADDR"); addr != "" {
 		conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
 		if err != nil {
 			return fmt.Errorf("crossplane plugin dial %s: %w", addr, err)
 		}
 		defer conn.Close()
+		// The Actuator grant: Crossplane BUILDS Claims (Apply/Destroy). Its write-backs
+		// are Run-provenance ('' source) — an Actuator is not a Source (ADR-0060). The
+		// SYNCER half (Crossplane observing its Claims' as-built state as a registered
+		// Source) is wired below in the Syncer section (full-featured dual-verb plugin).
 		grant := pluginhost.Grant{
 			PluginIdentity:  env("STRATT_CROSSPLANE_PLUGIN_ID", "crossplane"),
 			Tier:            pluginhost.Tier(env("STRATT_CROSSPLANE_TIER", "trusted")),
@@ -791,6 +795,39 @@ func run(ctx context.Context, log *slog.Logger) error {
 		}))
 	} else {
 		log.Info("no NetBox plugin configured (STRATT_NETBOX_PLUGIN_ADDR empty); syncer idle")
+	}
+
+	// ── Crossplane Syncer over the port — the SYNCER half of the dual-verb plugin ──
+	// (ADR-0060). The Actuator half is registered above; here the SAME plugin Observes
+	// its Claims' as-built state back as a REGISTERED Source (resync-able +
+	// authority-declarable — the charter-clean path, not a synthesized Actuator source).
+	// Co-owns net.subnet but is NOT authoritative: NetBox (the IPAM SoR) is, so a scalar
+	// read resolves to NetBox while Crossplane's as-built CIDR is retained as signal.
+	if addr := os.Getenv("STRATT_CROSSPLANE_PLUGIN_ADDR"); addr != "" {
+		sourceName := env("STRATT_CROSSPLANE_SOURCE_NAME", "crossplane")
+		interval, err := time.ParseDuration(env("STRATT_CROSSPLANE_INTERVAL", "60s"))
+		if err != nil {
+			return fmt.Errorf("crossplane interval: %w", err)
+		}
+		conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+		if err != nil {
+			return fmt.Errorf("crossplane syncer dial %s: %w", addr, err)
+		}
+		defer conn.Close()
+		grant := pluginhost.Grant{
+			PluginIdentity:   env("STRATT_CROSSPLANE_PLUGIN_ID", "crossplane"),
+			Tier:             pluginhost.Tier(env("STRATT_CROSSPLANE_TIER", "trusted")),
+			Source:           types.Source{Kind: "crossplane", Name: sourceName},
+			FacetNamespaces:  []string{"net.subnet"}, // co-owner, NOT authoritative (NetBox is)
+			LabelKeys:        []string{"source"},
+			IdentitySchemes:  []string{"crossplane.claim"},
+			TombstoneSchemes: []string{"crossplane.claim"},
+		}
+		host := pluginhost.New(store, pluginv1.NewPluginServiceClient(conn), grant, log)
+		controllers = append(controllers, homeSupervise(sourceName, host.Register, func(cctx context.Context) error {
+			return host.SyncLoop(cctx, interval)
+		}))
+		log.Info("crossplane plugin syncer registered (dual-verb)", "addr", addr, "interval", interval.String())
 	}
 
 	// ── MS Graph device Syncer over the port (ADR-0046/0047 Phase C cutover) ─
