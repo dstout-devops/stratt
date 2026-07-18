@@ -1,0 +1,14 @@
+# net-vlan — Intent/Vlan (ADR-0059): the straightforward SECOND network kind, once subnet
+# lands. A vlan is a named singleton exactly like a subnet — same provisioning loop, same
+# builder, zero core change (a free-string Entity kind + the singleton mode + the net.vlan
+# owned-but-uncovered Facet). Declaring a new topology primitive costs almost nothing —
+# the whole point of decision 1 (type the seams, not the world). NetBox already OBSERVES
+# vlans + the in-vlan edge; this adds the PROVISIONING path.
+name: net-vlan
+kind: Intent/Vlan
+spec:
+  projectKind: vlan
+  builder: crossplane/provision
+  buildWorkflow: vlan-build
+  params:
+    vid: "100"

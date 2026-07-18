@@ -54,4 +54,5 @@ const (
 	RelPlacedIn = "placed-in"
 	RelInDmz    = "in-dmz"
 	RelInAz     = "in-az"
+	RelInVlan   = "in-vlan" // a subnet is in-vlan a vlan (the topology backbone, netbox emits it too)
 )

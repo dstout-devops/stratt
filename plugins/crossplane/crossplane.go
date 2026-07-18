@@ -95,7 +95,7 @@ func (s *Server) GetManifest(context.Context, *pluginv1.GetManifestRequest) (*pl
 		// Observe REQUESTS to own net.subnet (owned-but-uncovered, §1.1 — no schema
 		// until a Contract consumes it). NetBox is declared authoritative for it
 		// (ADR-0060); Crossplane's as-built CIDR is retained, resolvable signal.
-		Contracts:        []*pluginv1.ContractDecl{{SchemaId: "net.subnet"}},
+		Contracts:        []*pluginv1.ContractDecl{{SchemaId: "net.subnet"}, {SchemaId: "net.vlan"}},
 		ObserveMode:      pluginv1.Manifest_OBSERVE_MODE_POLL,
 		TombstoneSchemes: []string{"crossplane.claim"},
 		Actions: []*pluginv1.ActionDecl{{
@@ -337,35 +337,44 @@ func projectClaim(oc ObserveClaim, got *unstructured.Unstructured) *pluginv1.Obs
 		IdentityKeys: map[string]string{scheme: id},
 		Labels:       map[string]string{"source": "crossplane"},
 	}
-	// net.subnet is a SUBNET facet — only a subnet carries it (a host's Object does not).
-	if kind == "subnet" {
+	// Each kind carries its own owned-but-uncovered Facet: a subnet's net.subnet (cidr),
+	// a vlan's net.vlan (vid) — a host's Object carries neither.
+	switch kind {
+	case "subnet":
 		facet := map[string]any{"claim": got.GetKind(), "name": name}
 		if cidr := claimCIDR(got); cidr != "" {
 			facet["cidr"] = cidr
 		}
 		raw, _ := json.Marshal(facet)
 		ent.Facets = map[string][]byte{"net.subnet": raw}
+	case "vlan":
+		facet := map[string]any{"claim": got.GetKind(), "name": name}
+		if vid := claimField(got, "vid"); vid != "" {
+			facet["vid"] = vid
+		}
+		raw, _ := json.Marshal(facet)
+		ent.Facets = map[string][]byte{"net.vlan": raw}
 	}
 	return ent
 }
 
 // claimCIDR reads the as-built cidr Crossplane reports (status.cidr) — what it actually
 // made — falling back to the requested spec.cidr. Pure.
-func claimCIDR(got *unstructured.Unstructured) string {
-	// Direct XR/claim: status.cidr (as-built) then spec.cidr (requested).
-	if cidr, found, _ := unstructured.NestedString(got.Object, "status", "cidr"); found && cidr != "" {
-		return cidr
-	}
-	// provider-kubernetes Object: the reflected (status.atProvider) then desired
-	// (spec.forProvider) wrapped-manifest data.cidr.
-	if cidr, found, _ := unstructured.NestedString(got.Object, "status", "atProvider", "manifest", "data", "cidr"); found && cidr != "" {
-		return cidr
-	}
-	if cidr, found, _ := unstructured.NestedString(got.Object, "spec", "forProvider", "manifest", "data", "cidr"); found && cidr != "" {
-		return cidr
-	}
-	if cidr, found, _ := unstructured.NestedString(got.Object, "spec", "cidr"); found && cidr != "" {
-		return cidr
+func claimCIDR(got *unstructured.Unstructured) string { return claimField(got, "cidr") }
+
+// claimField reads a named as-built field from a Crossplane resource, trying the direct
+// XR/claim status/spec first, then a provider-kubernetes Object's reflected
+// (status.atProvider) / desired (spec.forProvider) wrapped-manifest data. Pure.
+func claimField(got *unstructured.Unstructured, field string) string {
+	for _, path := range [][]string{
+		{"status", field},
+		{"status", "atProvider", "manifest", "data", field},
+		{"spec", "forProvider", "manifest", "data", field},
+		{"spec", field},
+	} {
+		if v, found, _ := unstructured.NestedString(got.Object, path...); found && v != "" {
+			return v
+		}
 	}
 	return ""
 }

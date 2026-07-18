@@ -29,6 +29,7 @@ const (
 	IntentSubnet    = "Intent/Subnet"
 	IntentDnsRecord = "Intent/DnsRecord"
 	IntentDmz       = "Intent/Dmz"
+	IntentVlan      = "Intent/Vlan"
 )
 
 // SingletonIntentKinds are the provisioning Intent kinds planned as cardinality-1
@@ -38,6 +39,7 @@ var SingletonIntentKinds = map[string]bool{
 	IntentSubnet:    true,
 	IntentDnsRecord: true,
 	IntentDmz:       true,
+	IntentVlan:      true,
 }
 
 // onRemove lifecycle values (charter §2.4): what happens to compiled state

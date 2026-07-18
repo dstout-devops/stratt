@@ -36,6 +36,13 @@ steps:
       identityScheme: crossplane.claim
       projectLabels:
         stratt.intent/singleton: Intent/Subnet/app-subnet
+      # Topology composition (ADR-0059): the subnet is in-vlan the net-vlan — the build
+      # projects the edge (relation primitive), targeted by identity. If the vlan isn't
+      # built yet the edge drops with a visible trace (§1.8), never silently.
+      relations:
+        - type: in-vlan
+          toScheme: crossplane.claim
+          toValue: net-vlan
       spec:
         providerConfigRef:
           name: default
