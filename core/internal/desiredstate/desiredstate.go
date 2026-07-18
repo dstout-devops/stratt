@@ -1582,6 +1582,8 @@ func ValidateWorkflow(w types.Workflow) error {
 			return fmt.Errorf("workflow %s: step %s: gate requires approvers (principals and/or teams)", w.Name, s.Name)
 		case isGate && s.Gate.TimeoutSeconds < 0:
 			return fmt.Errorf("workflow %s: step %s: gate timeoutSeconds must be >= 0", w.Name, s.Name)
+		case isGate && s.Gate.Threshold < 0:
+			return fmt.Errorf("workflow %s: step %s: gate threshold must be >= 0", w.Name, s.Name)
 		case isPolicy && len(s.Policy.Controls) == 0:
 			return fmt.Errorf("workflow %s: step %s: policy step requires controls", w.Name, s.Name)
 		case !isGate && !isPolicy && s.Slices < 0:

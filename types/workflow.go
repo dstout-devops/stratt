@@ -82,6 +82,10 @@ type GateSpec struct {
 	// TimeoutSeconds expires the Gate (recorded as expired, treated as
 	// denial) after this long pending; 0 waits forever.
 	TimeoutSeconds int `json:"timeoutSeconds,omitempty"`
+	// Threshold is the quorum: the number of DISTINCT authorized approvals
+	// required before the Gate proceeds (M-of-N, ADR-0071). 0 or 1 means a
+	// single approval; any single deny short-circuits regardless of threshold.
+	Threshold int `json:"threshold,omitempty"`
 }
 
 // GateApprovers authorizes a decision: the Principal is listed explicitly or

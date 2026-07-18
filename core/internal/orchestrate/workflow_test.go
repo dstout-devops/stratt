@@ -244,6 +244,64 @@ func TestRunDAGGateTimeoutExpires(t *testing.T) {
 	}
 }
 
+// Quorum (ADR-0071): a Gate with threshold N proceeds only after N DISTINCT
+// approvals.
+func TestRunDAGGateQuorumMet(t *testing.T) {
+	spec := types.Workflow{Name: "w", Steps: []types.Step{
+		{Name: "approve", Gate: &types.GateSpec{Approvers: types.GateApprovers{Teams: []string{"platform"}}, Threshold: 2}},
+		{Name: "after", Needs: []string{"approve"}, ViewName: "v"},
+	}}
+	env, final, status := dagTestEnv(t, spec, map[string]error{})
+	env.RegisterDelayedCallback(func() {
+		env.SignalWorkflow(GateSignalName("approve"), GateDecision{Approved: true, Principal: "alice"})
+		env.SignalWorkflow(GateSignalName("approve"), GateDecision{Approved: true, Principal: "bob"})
+	}, time.Minute)
+	env.ExecuteWorkflow(RunDAG, DAGInput{WorkflowRunID: "wr-1", WorkflowName: "w"})
+	if !env.IsWorkflowCompleted() || env.GetWorkflowError() != nil {
+		t.Fatalf("workflow: completed=%v err=%v", env.IsWorkflowCompleted(), env.GetWorkflowError())
+	}
+	want := map[string]string{"approve": stepSucceeded, "after": stepSucceeded}
+	if !reflect.DeepEqual(*final, want) {
+		t.Fatalf("steps: got %v want %v", *final, want)
+	}
+	if *status != types.RunSucceeded {
+		t.Fatalf("two distinct approvals must meet quorum, got %s", *status)
+	}
+}
+
+// A single deny short-circuits a quorum Gate regardless of threshold.
+func TestRunDAGGateQuorumDenyShortCircuits(t *testing.T) {
+	spec := types.Workflow{Name: "w", Steps: []types.Step{
+		{Name: "approve", Gate: &types.GateSpec{Approvers: types.GateApprovers{Teams: []string{"platform"}}, Threshold: 3}},
+	}}
+	env, _, status := dagTestEnv(t, spec, map[string]error{})
+	env.RegisterDelayedCallback(func() {
+		env.SignalWorkflow(GateSignalName("approve"), GateDecision{Approved: false, Principal: "alice", Note: "no"})
+	}, time.Minute)
+	env.ExecuteWorkflow(RunDAG, DAGInput{WorkflowRunID: "wr-1", WorkflowName: "w"})
+	if *status != types.RunFailed {
+		t.Fatalf("a single deny must fail a quorum gate, got %s", *status)
+	}
+}
+
+// The SAME principal approving twice does not meet a threshold of 2 (distinct
+// approvals); the gate expires.
+func TestRunDAGGateQuorumDistinct(t *testing.T) {
+	spec := types.Workflow{Name: "w", Steps: []types.Step{
+		{Name: "approve", Gate: &types.GateSpec{
+			Approvers: types.GateApprovers{Teams: []string{"platform"}}, Threshold: 2, TimeoutSeconds: 60}},
+	}}
+	env, _, status := dagTestEnv(t, spec, map[string]error{})
+	env.RegisterDelayedCallback(func() {
+		env.SignalWorkflow(GateSignalName("approve"), GateDecision{Approved: true, Principal: "alice"})
+		env.SignalWorkflow(GateSignalName("approve"), GateDecision{Approved: true, Principal: "alice"})
+	}, 30*time.Second)
+	env.ExecuteWorkflow(RunDAG, DAGInput{WorkflowRunID: "wr-1", WorkflowName: "w"})
+	if *status != types.RunFailed {
+		t.Fatalf("one distinct approver cannot meet a quorum of 2, gate must expire, got %s", *status)
+	}
+}
+
 func TestRunDAGFailedStepSkipsDownstream(t *testing.T) {
 	spec := types.Workflow{Name: "w", Steps: []types.Step{
 		{Name: "a", ViewName: "v"},

@@ -24,15 +24,16 @@ func approvalControl(outcome string, teams ...string) types.Control {
 func TestApproversFromDecision(t *testing.T) {
 	dec := types.Decision{Outcome: types.OutcomeRequireApproval, Obligations: []types.Obligation{
 		{Type: types.ObligationRequireApproval, Params: map[string]any{
-			"teams": []any{"platform"}, "principals": []string{"alice"}, "timeoutSeconds": float64(300),
+			"teams": []any{"platform"}, "principals": []string{"alice"},
+			"timeoutSeconds": float64(300), "count": float64(2),
 		}},
 	}}
-	ap, timeout, ok := approversFromDecision(dec)
-	if !ok || len(ap.Teams) != 1 || ap.Teams[0] != "platform" || len(ap.Principals) != 1 || timeout != 300 {
-		t.Fatalf("got approvers=%+v timeout=%d ok=%v", ap, timeout, ok)
+	ap, timeout, threshold, ok := approversFromDecision(dec)
+	if !ok || len(ap.Teams) != 1 || ap.Teams[0] != "platform" || len(ap.Principals) != 1 || timeout != 300 || threshold != 2 {
+		t.Fatalf("got approvers=%+v timeout=%d threshold=%d ok=%v", ap, timeout, threshold, ok)
 	}
 	// No approver obligation ⇒ not ok (caller fails closed).
-	if _, _, ok := approversFromDecision(types.Decision{Outcome: types.OutcomeRequireApproval}); ok {
+	if _, _, _, ok := approversFromDecision(types.Decision{Outcome: types.OutcomeRequireApproval}); ok {
 		t.Fatal("a require_approval with no approver obligation must be unsatisfiable")
 	}
 }

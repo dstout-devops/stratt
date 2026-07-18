@@ -334,41 +334,66 @@ func runGateStep(ctx workflow.Context, a *Activities, in DAGInput, step types.St
 	if step.PlanFrom != "" {
 		planDigest = digestFromStep(steps, step.PlanFrom)
 	}
-	return awaitGate(ctx, a, in.WorkflowRunID, step.Name, step.Gate.Approvers, step.Gate.TimeoutSeconds, planDigest)
+	return awaitGate(ctx, a, in.WorkflowRunID, step.Name, step.Gate.Approvers, step.Gate.TimeoutSeconds, step.Gate.Threshold, planDigest)
 }
 
-// awaitGate opens a Gate record and blocks on the human decision signal, racing
-// the declared timeout (ADR-0011). It is the shared human-approval primitive:
-// a declared Gate Step (runGateStep) and a policy REQUIRE_APPROVAL/ESCALATE
+// awaitGate opens a Gate record and blocks on human decision signals, racing the
+// declared timeout (ADR-0011). It is the shared human-approval primitive: a
+// declared Gate Step (runGateStep) and a policy REQUIRE_APPROVAL/ESCALATE
 // outcome (runPolicyStep, ADR-0064) both call it, so a policy-opened Gate is
-// decided through the identical API/audit path as a declared one. Approved ⇒
-// the step succeeds; denied/expired ⇒ it fails.
-func awaitGate(ctx workflow.Context, a *Activities, workflowRunID, stepName string, approvers types.GateApprovers, timeoutSeconds int, planDigest string) string {
+// decided through the identical API/audit path as a declared one.
+//
+// Quorum (ADR-0071): the Gate proceeds only after `threshold` DISTINCT authorized
+// approvals (threshold < 1 ⇒ 1, the single-approval default). Each DecideGate
+// call signals one authorized approval; the workflow accumulates the distinct
+// principals in replay-safe state, so a re-approval by the same principal never
+// double-counts. Any single DENY short-circuits to failure regardless of
+// threshold; the timeout expires the Gate. Approved ⇒ the step succeeds.
+func awaitGate(ctx workflow.Context, a *Activities, workflowRunID, stepName string, approvers types.GateApprovers, timeoutSeconds, threshold int, planDigest string) string {
+	if threshold < 1 {
+		threshold = 1
+	}
 	var gate types.Gate
 	if err := workflow.ExecuteActivity(ctx, a.CreateGateRecord, workflowRunID, stepName, planDigest, approvers).Get(ctx, &gate); err != nil {
 		return stepFailed
 	}
 
-	decision := GateDecision{}
-	decided := false
-	sel := workflow.NewSelector(ctx)
-	sel.AddReceive(workflow.GetSignalChannel(ctx, GateSignalName(stepName)), func(c workflow.ReceiveChannel, _ bool) {
-		c.Receive(ctx, &decision)
-		decided = true
-	})
+	approvedBy := map[string]bool{} // distinct approving principals
+	denied := false
+	timedOut := false
+	lastPrincipal, note := "", ""
+
+	sigChan := workflow.GetSignalChannel(ctx, GateSignalName(stepName))
+	var timer workflow.Future
 	if timeoutSeconds > 0 {
-		sel.AddFuture(workflow.NewTimer(ctx, time.Duration(timeoutSeconds)*time.Second), func(workflow.Future) {})
+		timer = workflow.NewTimer(ctx, time.Duration(timeoutSeconds)*time.Second)
 	}
-	sel.Select(ctx)
+	for len(approvedBy) < threshold && !denied && !timedOut {
+		sel := workflow.NewSelector(ctx)
+		sel.AddReceive(sigChan, func(c workflow.ReceiveChannel, _ bool) {
+			var d GateDecision
+			c.Receive(ctx, &d)
+			if d.Approved {
+				approvedBy[d.Principal] = true
+			} else {
+				denied = true
+			}
+			lastPrincipal, note = d.Principal, d.Note
+		})
+		if timer != nil {
+			sel.AddFuture(timer, func(workflow.Future) { timedOut = true })
+		}
+		sel.Select(ctx)
+	}
 
 	status := types.GateExpired
-	if decided {
+	switch {
+	case denied:
 		status = types.GateDenied
-		if decision.Approved {
-			status = types.GateApproved
-		}
+	case len(approvedBy) >= threshold:
+		status = types.GateApproved
 	}
-	if err := workflow.ExecuteActivity(ctx, a.RecordGateDecision, gate.ID, status, decision.Principal, decision.Note).Get(ctx, nil); err != nil {
+	if err := workflow.ExecuteActivity(ctx, a.RecordGateDecision, gate.ID, status, lastPrincipal, note).Get(ctx, nil); err != nil {
 		return stepFailed
 	}
 	if status == types.GateApproved {

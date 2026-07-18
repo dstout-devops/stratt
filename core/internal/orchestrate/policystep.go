@@ -100,11 +100,11 @@ func runPolicyStep(ctx workflow.Context, a *Activities, in DAGInput, step types.
 	}
 	switch dec.Outcome {
 	case types.OutcomeRequireApproval, types.OutcomeEscalate:
-		approvers, timeout, ok := approversFromDecision(dec)
+		approvers, timeout, threshold, ok := approversFromDecision(dec)
 		if !ok {
 			return stepFailed // an approval with no approver obligation is unsatisfiable
 		}
-		return awaitGate(ctx, a, in.WorkflowRunID, step.Name, approvers, timeout, "")
+		return awaitGate(ctx, a, in.WorkflowRunID, step.Name, approvers, timeout, threshold, "")
 	default:
 		return PolicyStepStatus(dec.Outcome)
 	}
@@ -123,12 +123,12 @@ func PolicyStepStatus(outcome string) string {
 
 // approversFromDecision extracts the Gate approvers a require_approval/escalate
 // decision carries (ADR-0064): the require_approval obligation's params.teams /
-// params.principals become the GateApprovers, params.timeoutSeconds its timeout.
-// ok=false when no approver is named (the caller fails closed). M-of-N quorum
-// (params.count > 1) is not enforced here — that is the §7.3 Quorum control.
-func approversFromDecision(dec types.Decision) (types.GateApprovers, int, bool) {
+// params.principals become the GateApprovers, params.timeoutSeconds its timeout,
+// and params.count the M-of-N quorum threshold (ADR-0071; default 1). ok=false
+// when no approver is named (the caller fails closed).
+func approversFromDecision(dec types.Decision) (types.GateApprovers, int, int, bool) {
 	var ap types.GateApprovers
-	timeout := 0
+	timeout, threshold := 0, 0
 	for _, ob := range dec.Obligations {
 		if ob.Type != types.ObligationRequireApproval {
 			continue
@@ -138,9 +138,12 @@ func approversFromDecision(dec types.Decision) (types.GateApprovers, int, bool) 
 		if t, ok := paramInt(ob.Params, "timeoutSeconds"); ok {
 			timeout = t
 		}
+		if n, ok := paramInt(ob.Params, "count"); ok && n > threshold {
+			threshold = n
+		}
 	}
 	ok := len(ap.Teams) > 0 || len(ap.Principals) > 0
-	return ap, timeout, ok
+	return ap, timeout, threshold, ok
 }
 
 // paramStrings reads a []string obligation param, tolerating both a native
