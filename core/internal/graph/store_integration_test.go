@@ -249,6 +249,72 @@ func TestRelationGC(t *testing.T) {
 	}
 }
 
+// TestRelationAwareViewSelection proves ADR-0059 decision 6: a View selects by
+// TOPOLOGY — "the hosts in the DMZ subnet" — via an outgoing placed-in edge, not
+// by label alone.
+func TestRelationAwareViewSelection(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	p := s.NormalizerProjector()
+	pv := prov(types.WriterSyncer, "vcenter/syncer")
+	if err := s.RegisterLabelOwner(ctx, types.LabelOwner{Key: "zone", OwnerKind: "syncer", OwnerRef: "vcenter/syncer"}); err != nil {
+		t.Fatal(err)
+	}
+
+	ids, err := p.UpsertEntities(ctx, pv, []EntityUpsert{
+		{Kind: "subnet", IdentityKeys: map[string]string{"net.name": "web-dmz"}, Labels: map[string]string{"zone": "dmz"}},
+		{Kind: "subnet", IdentityKeys: map[string]string{"net.name": "db-tier"}, Labels: map[string]string{"zone": "internal"}},
+		{Kind: "host", IdentityKeys: map[string]string{"host.name": "web-1"}},
+		{Kind: "host", IdentityKeys: map[string]string{"host.name": "web-2"}},
+		{Kind: "host", IdentityKeys: map[string]string{"host.name": "db-1"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	dmz, internal, web1, web2, db1 := ids[0], ids[1], ids[2], ids[3], ids[4]
+	// web-1, web-2 placed-in the DMZ subnet; db-1 placed-in the internal subnet.
+	for _, e := range [][2]string{{web1, dmz}, {web2, dmz}, {db1, internal}} {
+		if err := p.UpsertRelation(ctx, pv, types.RelPlacedIn, e[0], e[1]); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// "The hosts in the DMZ" — kind host + an outgoing placed-in edge to a subnet
+	// labeled zone=dmz. Selection by topology, not by a label on the host.
+	if _, err := s.DeclareView(ctx, "test/dmz-hosts", types.ViewSelector{
+		Kinds: []string{"host"},
+		Relations: []types.RelationPredicate{{
+			Type: types.RelPlacedIn, TargetKind: "subnet", TargetLabels: map[string]string{"zone": "dmz"},
+		}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	_, ents, err := s.ResolveView(ctx, "test/dmz-hosts", nil, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]bool{}
+	for _, e := range ents {
+		got[e.IdentityKeys["host.name"]] = true
+	}
+	if len(ents) != 2 || !got["web-1"] || !got["web-2"] {
+		t.Fatalf("relation-aware selection should yield the 2 DMZ hosts, got %d: %v", len(ents), got)
+	}
+
+	// Retract web-2's placement → it leaves the topology View (relation GC + selection
+	// compose): a decommissioned placement drops the host from the DMZ fleet.
+	if err := p.RetractRelation(ctx, types.RelPlacedIn, web2, dmz); err != nil {
+		t.Fatal(err)
+	}
+	_, ents2, err := s.ResolveView(ctx, "test/dmz-hosts", nil, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ents2) != 1 || ents2[0].IdentityKeys["host.name"] != "web-1" {
+		t.Fatalf("after retracting web-2's placement, only web-1 remains, got %d", len(ents2))
+	}
+}
+
 // TestFacetDeclaredAuthority proves the second half of ADR-0060: retaining all
 // per-source signal AND resolving a scalar read to the ONE declared authority.
 func TestFacetDeclaredAuthority(t *testing.T) {

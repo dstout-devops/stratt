@@ -265,6 +265,31 @@ func selectorSQL(sel types.ViewSelector) (where string, args []any, err error) {
 			"EXISTS (SELECT 1 FROM graph.facet f WHERE f.entity_id = e.id AND f.namespace = %s AND f.value @> %s::jsonb)",
 			next(p.Namespace), next(string(doc))))
 	}
+	// Relation predicates (ADR-0059 decision 6): the Entity has an outgoing edge of
+	// Type to a live target of TargetKind carrying TargetLabels. An EXISTS join over
+	// graph.relation — topology-aware selection, additive (AND) with the other clauses.
+	for _, rp := range sel.Relations {
+		if rp.Type == "" {
+			return "", nil, errors.New("graph: relation predicate requires a type")
+		}
+		rc := []string{
+			fmt.Sprintf("r.from_id = e.id AND r.type = %s", next(rp.Type)),
+			"te.deleted_at IS NULL",
+		}
+		if rp.TargetKind != "" {
+			rc = append(rc, fmt.Sprintf("te.kind = %s", next(rp.TargetKind)))
+		}
+		if len(rp.TargetLabels) > 0 {
+			doc, err := json.Marshal(rp.TargetLabels)
+			if err != nil {
+				return "", nil, fmt.Errorf("graph: marshal relation target labels: %w", err)
+			}
+			rc = append(rc, fmt.Sprintf("te.labels @> %s::jsonb", next(string(doc))))
+		}
+		conds = append(conds, fmt.Sprintf(
+			"EXISTS (SELECT 1 FROM graph.relation r JOIN graph.entity te ON te.id = r.to_id WHERE %s)",
+			strings.Join(rc, " AND ")))
+	}
 	return strings.Join(conds, " AND "), args, nil
 }
 
@@ -384,7 +409,8 @@ func bindSelector(sel types.ViewSelector, params map[string]any) (types.ViewSele
 		return sel, nil
 	}
 	ns := template.Namespaces{"param": params}
-	out := types.ViewSelector{Kinds: sel.Kinds}
+	// Relations carry through unbound (topology predicates take no {{.param}} today).
+	out := types.ViewSelector{Kinds: sel.Kinds, Relations: sel.Relations}
 	if sel.Labels != nil {
 		out.Labels = make(map[string]string, len(sel.Labels))
 		for k, v := range sel.Labels {

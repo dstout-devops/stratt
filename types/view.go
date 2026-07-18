@@ -35,6 +35,25 @@ type ViewSelector struct {
 	// Facets matches on Facet values by namespace and JSON path equality,
 	// e.g. {namespace: "os.kernel", path: "family", equals: "linux"}.
 	Facets []FacetPredicate `json:"facets,omitempty"`
+	// Relations matches Entities by an outgoing typed edge — "select the hosts in
+	// the DMZ" (ADR-0059 decision 6): the Entity is included if it has a relation of
+	// the given type to a target matching targetKind/targetLabels. Selection by
+	// TOPOLOGY, not label alone. Additive with the other clauses (AND).
+	Relations []RelationPredicate `json:"relations,omitempty"`
+}
+
+// RelationPredicate matches an Entity by an outgoing typed edge to a target
+// (ADR-0059 decision 6): the Entity (edge FROM) has a Relation of Type to a target
+// Entity (edge TO) of TargetKind carrying every TargetLabel. Compiled to an EXISTS
+// join over graph.relation — the topology-aware selection clause.
+type RelationPredicate struct {
+	// Type is the Relation type the Entity must have an outgoing edge of (e.g.
+	// "placed-in"). Required.
+	Type string `json:"type"`
+	// TargetKind optionally constrains the edge's target Entity kind (e.g. "subnet").
+	TargetKind string `json:"targetKind,omitempty"`
+	// TargetLabels optionally constrains the target Entity's labels (every key=value).
+	TargetLabels map[string]string `json:"targetLabels,omitempty"`
 }
 
 // FacetPredicate matches one value inside a Facet document.
