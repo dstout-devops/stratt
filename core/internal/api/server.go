@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"os"
@@ -1749,6 +1750,18 @@ func (s *Server) StartWorkflowRun(w http.ResponseWriter, r *http.Request, name s
 	if id, _, ok := authz.PrincipalFrom(r.Context()); ok {
 		principal = id
 	}
+	// Optional launch params (ADR-0059): the operator parameterizes what was declared
+	// (the target of a re-placement move, a per-instance build) — bound in Step params
+	// via {{.launch.x}}. The gate + View-runner authz above remain the control; this
+	// only fills declared placeholders, it cannot escalate what the Workflow may do.
+	var launchParams map[string]any
+	if r.Body != nil {
+		dec := json.NewDecoder(r.Body)
+		if err := dec.Decode(&launchParams); err != nil && !errors.Is(err, io.EOF) {
+			s.fail(w, fmt.Errorf("decode launch params: %w", err))
+			return
+		}
+	}
 	wr, err := s.Store.CreateWorkflowRun(r.Context(), name, "", principal, "")
 	if err != nil {
 		s.fail(w, err)
@@ -1759,7 +1772,7 @@ func (s *Server) StartWorkflowRun(w http.ResponseWriter, r *http.Request, name s
 		ID:        temporalID,
 		TaskQueue: orchestrate.TaskQueue,
 	}, orchestrate.RunDAG, orchestrate.DAGInput{
-		WorkflowRunID: wr.ID, WorkflowName: name, Principal: principal,
+		WorkflowRunID: wr.ID, WorkflowName: name, Principal: principal, LaunchParams: launchParams,
 	})
 	if err != nil {
 		_ = s.Store.SetWorkflowRunStatus(r.Context(), wr.ID, types.RunFailed, map[string]any{"error": "workflow start failed"})

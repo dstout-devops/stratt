@@ -32,11 +32,15 @@ steps:
         stratt.intent/instance: app-01
         fleet: app
       # The topology edge the build projects (decision 5): the host is placed-in the
-      # subnet, targeted by identity — the core gates + resolves + projects it.
+      # subnet named by the LAUNCH param — the same Workflow builds OR re-places (ADR-0059).
+      # placed-in is singular (a host in ONE subnet), so a re-launch with a different
+      # targetSubnet MOVES the host: the build retracts its stale placed-in edge, adds the
+      # new. This is the gated re-placement move — launch is the gate, the param is the
+      # target, no reconcile-side write (§5 Flow 2 / §1.2).
       relations:
         - type: placed-in
           toScheme: crossplane.claim
-          toValue: app-subnet
+          toValue: "{{.launch.targetSubnet}}"
       # Real compute: a Pod provider-kubernetes provisions (a genuine reconcile).
       spec:
         providerConfigRef:

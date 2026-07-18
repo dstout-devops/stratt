@@ -1363,6 +1363,19 @@ func (a *Activities) ProjectFacts(ctx context.Context, runID string, facts FactS
 					"type", rel.Type, "toScheme", rel.ToScheme, "toValue", rel.ToValue, "runId", runID)
 				continue
 			}
+			// Singular placement is a MOVE, not an add (ADR-0059 re-placement): a re-run
+			// with a new target retracts this Entity's OWN stale placement edge of this
+			// type before adding the new one, so it is never in two subnets at once. Scoped
+			// to Run-provenance — never touches a Syncer's observed edge (§1.2 cross-source).
+			// §2.4 single-owning-build: the run-scoped retract is safe from last-writer-wins
+			// because the provisioning exclusive-claim gives one Intent per unit, hence one
+			// owning build per Entity (see RetractRunRelationsFrom for the guard + the
+			// Relation-ownership-registry follow-up that would make it structural).
+			if types.IsSingularPlacement(rel.Type) {
+				if err := p.RetractRunRelationsFrom(ctx, rel.Type, ids[0], toID); err != nil {
+					return err
+				}
+			}
 			if err := p.UpsertRelation(ctx, prov, rel.Type, ids[0], toID); err != nil {
 				return err
 			}

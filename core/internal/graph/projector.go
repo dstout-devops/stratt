@@ -305,6 +305,37 @@ func (p *Projector) RetractRelation(ctx context.Context, relType, fromID, toID s
 	return tx.Commit(ctx)
 }
 
+// RetractRunRelationsFrom deletes the caller's OWN (Run-provenance) edges of relType from
+// fromID whose target is NOT keepTo — the MOVE half of a singular placement relation
+// (ADR-0059): a host is placed-in ONE subnet, so re-projecting its placement retracts the
+// stale edge rather than leaving it in two. Scoped to prov_writer_kind='run' so a build
+// NEVER clobbers a Syncer's OBSERVED edge (cross-source respect, §1.2). Idempotent; the
+// §1.2 relation_write_path trigger is satisfied by the projector's run-provenance GUC.
+//
+// §2.4 SINGLE-OWNING-BUILD RELIANCE (guardian-flagged): the run-wide scope would be
+// last-writer-wins if TWO builds placed one from-Entity. That is prevented upstream by the
+// provisioning EXCLUSIVE CLAIM (provision.Plan / PlanSingletons: one Intent per
+// (intentKind, name) / instance name is a compile error, §2.4) — so exactly one Intent
+// owns a unit, hence one buildWorkflow, hence one owning build projects its placement.
+// The proper STRUCTURAL guard (a Relation-ownership registry, the edge analogue of the
+// Facet ownership registry §2.1, catching an ad-hoc second workflow that hand-places the
+// same host) is a named follow-up — until it lands, the exclusive-claim is the guard and a
+// manual double-build of one host is an operator declaration error, not a silent tiebreak.
+func (p *Projector) RetractRunRelationsFrom(ctx context.Context, relType, fromID, keepTo string) error {
+	tx, err := p.begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck
+	if _, err := tx.Exec(ctx,
+		`DELETE FROM graph.relation WHERE type = $1 AND from_id = $2 AND to_id <> $3 AND prov_writer_kind = 'run'`,
+		relType, fromID, keepTo,
+	); err != nil {
+		return fmt.Errorf("graph: retract run relations from: %w", err)
+	}
+	return tx.Commit(ctx)
+}
+
 // retractRelationsFor deletes every relation touching any of ids — the endpoint-
 // tombstone cascade (ADR-0059 decision 7b). Entities are SOFT-deleted (deleted_at),
 // so the relation FK's ON DELETE CASCADE never fires; a decommissioned endpoint must

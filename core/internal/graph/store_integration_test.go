@@ -786,3 +786,64 @@ func TestDerivedContractVersioning(t *testing.T) {
 		t.Fatalf("pin-path drift must still block: %v", err)
 	}
 }
+
+// TestReplacementMove proves the singular-placement move (ADR-0059): re-projecting a
+// host's placed-in edge to a NEW subnet retracts the stale Run-provenance edge (a MOVE),
+// while a Syncer's OBSERVED edge from the same host is left untouched (cross-source).
+func TestReplacementMove(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	np := s.NormalizerProjector()
+	rp := s.RunProjector()
+	pv := prov(types.WriterSyncer, "vcenter/syncer")
+
+	ids, err := np.UpsertEntities(ctx, pv, []EntityUpsert{
+		{Kind: "host", IdentityKeys: map[string]string{"host.name": "app-01"}},
+		{Kind: "subnet", IdentityKeys: map[string]string{"net.name": "app-subnet"}},
+		{Kind: "subnet", IdentityKeys: map[string]string{"net.name": "dmz-subnet"}},
+		{Kind: "subnet", IdentityKeys: map[string]string{"net.name": "observed-net"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	host, appSub, dmzSub, obsSub := ids[0], ids[1], ids[2], ids[3]
+	rpv := prov(types.WriterRun, "build-1")
+	// Build placed the host in app-subnet (Run-provenance); a Syncer separately observed
+	// it in observed-net (Syncer-provenance — a different, legitimate source).
+	if err := rp.UpsertRelation(ctx, rpv, types.RelPlacedIn, host, appSub); err != nil {
+		t.Fatal(err)
+	}
+	if err := np.UpsertRelation(ctx, pv, types.RelPlacedIn, host, obsSub); err != nil {
+		t.Fatal(err)
+	}
+
+	targets := func() map[string]string {
+		rows, _ := s.pool.Query(ctx, `SELECT to_id::text, prov_writer_kind FROM graph.relation WHERE from_id=$1 AND type='placed-in'`, host)
+		defer rows.Close()
+		out := map[string]string{}
+		for rows.Next() {
+			var to, kind string
+			_ = rows.Scan(&to, &kind)
+			out[to] = kind
+		}
+		return out
+	}
+	// The MOVE: re-project the placement to dmz-subnet — retract the build's own stale
+	// app-subnet edge, keep dmz-subnet.
+	if err := rp.RetractRunRelationsFrom(ctx, types.RelPlacedIn, host, dmzSub); err != nil {
+		t.Fatal(err)
+	}
+	if err := rp.UpsertRelation(ctx, rpv, types.RelPlacedIn, host, dmzSub); err != nil {
+		t.Fatal(err)
+	}
+	got := targets()
+	if _, stale := got[appSub]; stale {
+		t.Errorf("moved host must NOT keep the stale app-subnet edge, got %v", got)
+	}
+	if got[dmzSub] != "run" {
+		t.Errorf("moved host must be placed-in dmz-subnet (run), got %v", got)
+	}
+	if got[obsSub] != "syncer" {
+		t.Errorf("the Syncer's OBSERVED edge must be untouched (cross-source), got %v", got)
+	}
+}

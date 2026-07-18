@@ -71,7 +71,7 @@ func dagTestEnv(t *testing.T, spec types.Workflow, childStatus map[string]error)
 	env.OnActivity(a.RecordGateDecision, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
 	// Step params are resolved (event binding + re-validation) in an activity
 	// before each child Run (ADR-0024); stub it to a passthrough.
-	env.OnActivity(a.ResolveStepParams, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(
+	env.OnActivity(a.ResolveStepParams, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(
 		json.RawMessage(`{}`), nil)
 
 	// Child Runs are stubbed per-step through OnWorkflow.

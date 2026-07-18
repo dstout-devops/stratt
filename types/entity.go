@@ -56,3 +56,16 @@ const (
 	RelInAz     = "in-az"
 	RelInVlan   = "in-vlan" // a subnet is in-vlan a vlan (the topology backbone, netbox emits it too)
 )
+
+// IsSingularPlacement reports whether a Relation type is a SINGULAR placement — a
+// from-Entity is in exactly ONE target of this type (a host is placed-in one subnet, a
+// subnet is in-vlan/in-dmz/in-az one of each). A build re-projecting such an edge to a new
+// target MOVES rather than adds (ADR-0059 re-placement); a multi-valued relation
+// (member-of, runs-on) is additive and never triggers the move retraction.
+func IsSingularPlacement(relType string) bool {
+	switch relType {
+	case RelPlacedIn, RelInVlan, RelInDmz, RelInAz:
+		return true
+	}
+	return false
+}

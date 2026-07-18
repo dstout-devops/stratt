@@ -1582,9 +1582,12 @@ func ValidateWorkflow(w types.Workflow) error {
 			return fmt.Errorf("workflow %s: step %s: slices must be >= 0", w.Name, s.Name)
 		}
 		// Params/CredentialRefs may bind the event namespace (firing Emitter,
-		// ADR-0024) and the steps namespace (a prior Step's outputs, ADR-0031),
-		// both resolved at launch by ResolveStepParams.
-		bindable := map[string]bool{"event": true, "steps": true}
+		// ADR-0024), the steps namespace (a prior Step's outputs, ADR-0031), and
+		// the launch namespace (operator-supplied launch params for a parameterized
+		// build/re-placement Workflow, ADR-0059) — all resolved at launch by
+		// ResolveStepParams. Launch values only fill declared placeholders in an
+		// already-gated, Contract-bounded Step (§2.5); they cannot move the target.
+		bindable := map[string]bool{"event": true, "steps": true, "launch": true}
 		switch {
 		case isAction:
 			if err := validateActionParamsContract(s.Action, s.Params); err != nil {

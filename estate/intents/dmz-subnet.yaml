@@ -1,0 +1,11 @@
+# dmz-subnet — a second Intent/Subnet (ADR-0059), the re-placement move TARGET. Built
+# through the parameterized subnet-provision Workflow (launch {subnetName: dmz-subnet,
+# cidr: 10.40.0.0/24}) — one build Workflow for every subnet.
+name: dmz-subnet
+kind: Intent/Subnet
+spec:
+  projectKind: subnet
+  builder: crossplane/provision
+  buildWorkflow: subnet-provision
+  params:
+    cidr: 10.40.0.0/24

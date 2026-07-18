@@ -33,6 +33,11 @@ type DAGInput struct {
 	// for schedule/API launches) — the source for a Step's {{.event.x}}
 	// param bindings (ADR-0024).
 	Event map[string]any
+	// LaunchParams are the operator-supplied inputs from POST /workflows/{name}/runs
+	// — the source for a Step's {{.launch.x}} bindings (ADR-0059 re-placement /
+	// per-instance builds). The gate + the launching Principal's authz remain the
+	// control; these only parameterize what was already declared and gated.
+	LaunchParams map[string]any
 }
 
 // GateDecision is the signal payload an authorized Principal sends to a
@@ -229,7 +234,7 @@ func runActuationStep(ctx workflow.Context, in DAGInput, step types.Step, steps 
 	// never reaching the Actuator.
 	var params json.RawMessage
 	var a *Activities
-	if err := workflow.ExecuteActivity(ctx, a.ResolveStepParams, step.Actuator, step.Params, in.Event, steps).Get(ctx, &params); err != nil {
+	if err := workflow.ExecuteActivity(ctx, a.ResolveStepParams, step.Actuator, step.Params, in.Event, steps, in.LaunchParams).Get(ctx, &params); err != nil {
 		return stepFailed, nil
 	}
 
@@ -294,7 +299,7 @@ func digestFromStep(steps map[string]json.RawMessage, planStep string) string {
 func runActionStep(ctx workflow.Context, in DAGInput, step types.Step, steps map[string]json.RawMessage) (string, json.RawMessage) {
 	var params json.RawMessage
 	var a *Activities
-	if err := workflow.ExecuteActivity(ctx, a.ResolveActionStepParams, step.Action, step.Params, in.Event, steps).Get(ctx, &params); err != nil {
+	if err := workflow.ExecuteActivity(ctx, a.ResolveActionStepParams, step.Action, step.Params, in.Event, steps, in.LaunchParams).Get(ctx, &params); err != nil {
 		return stepFailed, nil
 	}
 	cctx := workflow.WithChildOptions(ctx, workflow.ChildWorkflowOptions{
@@ -396,14 +401,14 @@ func stepsNamespace(steps map[string]json.RawMessage) map[string]any {
 // ResolveStepParams substitutes a Step's {{.event.x}} / {{.steps.x}} bindings
 // (the firing event and prior Steps' outputs), then re-validates the resolved
 // params against the Actuator's input Contract before dispatch (ADR-0024/0031).
-func (a *Activities) ResolveStepParams(ctx context.Context, actuator string, params map[string]any, event map[string]any, steps map[string]json.RawMessage) (json.RawMessage, error) {
+func (a *Activities) ResolveStepParams(ctx context.Context, actuator string, params map[string]any, event map[string]any, steps map[string]json.RawMessage, launch map[string]any) (json.RawMessage, error) {
 	// A Workflow actuation Step names its Actuator explicitly (no platform default,
 	// ADR-0046); validated at Workflow declaration, so empty here is a bug.
 	name := actuator
 	if name == "" {
 		return nil, fmt.Errorf("workflow actuation step requires an explicit actuator (no platform default)")
 	}
-	ns := template.Namespaces{"event": event, "steps": stepsNamespace(steps)}
+	ns := template.Namespaces{"event": event, "steps": stepsNamespace(steps), "launch": launch}
 	raw, err := contract.ResolveActuatorParams(name, params, ns)
 	if err != nil {
 		return nil, temporal.NewNonRetryableApplicationError(err.Error(), "InvalidStepParams", err)
@@ -413,8 +418,8 @@ func (a *Activities) ResolveStepParams(ctx context.Context, actuator string, par
 
 // ResolveActionStepParams is the Action counterpart: substitute event/steps
 // bindings and re-validate against the Action's input Contract (§2.2, ADR-0031).
-func (a *Activities) ResolveActionStepParams(ctx context.Context, action string, params map[string]any, event map[string]any, steps map[string]json.RawMessage) (json.RawMessage, error) {
-	ns := template.Namespaces{"event": event, "steps": stepsNamespace(steps)}
+func (a *Activities) ResolveActionStepParams(ctx context.Context, action string, params map[string]any, event map[string]any, steps map[string]json.RawMessage, launch map[string]any) (json.RawMessage, error) {
+	ns := template.Namespaces{"event": event, "steps": stepsNamespace(steps), "launch": launch}
 	raw, err := contract.ResolveActionParams(action, params, ns)
 	if err != nil {
 		return nil, temporal.NewNonRetryableApplicationError(err.Error(), "InvalidStepParams", err)

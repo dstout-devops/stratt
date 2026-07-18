@@ -57,6 +57,14 @@ func TestWorkflowStepParamNamespaceScope(t *testing.T) {
 	if err := ValidateWorkflow(ok); err != nil {
 		t.Fatalf("event binding on a Step must be allowed: %v", err)
 	}
+	// A Step param may bind the launch namespace (operator-supplied launch params
+	// for a parameterized build/re-placement Workflow, ADR-0059).
+	okLaunch := types.Workflow{Name: "w", Steps: []types.Step{
+		{Name: "s", ViewName: "v", Actuator: "script", Params: map[string]any{"script": "echo {{.launch.targetSubnet}}"}},
+	}}
+	if err := ValidateWorkflow(okLaunch); err != nil {
+		t.Fatalf("launch binding on a Step must be allowed: %v", err)
+	}
 	// spec/param are not available on a Step.
 	bad := types.Workflow{Name: "w", Steps: []types.Step{
 		{Name: "s", ViewName: "v", Actuator: "script", Params: map[string]any{"script": "{{.spec.x}}"}},
