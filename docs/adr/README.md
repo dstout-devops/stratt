@@ -82,3 +82,4 @@ Status is `Accepted` unless noted. See **[../roadmap.md](../roadmap.md)** for ho
 | [0071](0071-quorum-gate-threshold.md) | Quorum (M-of-N): a gate threshold, not an evaluator Control | Accepted |
 | [0072](0072-policy-decision-point-is-a-port.md) | The Policy Decision Point is a PORT, not a core dependency (corrects ADR-0062) | Accepted |
 | [0073](0073-admission-pep-over-the-port.md) | The admission PEP: policy at the compile seam, over the PDP port | Accepted |
+| [0074](0074-external-policy-engine-subprocess.md) | External policy engines (OPA / Kyverno) over the subprocess transport | Accepted |

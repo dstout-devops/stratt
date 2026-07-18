@@ -642,13 +642,23 @@ func run(ctx context.Context, log *slog.Logger) error {
 		return siterelay.NewNATSDialer(siteGateway.Conn(), site, pluginID)
 	}
 	// Policy Decision Point port (ADR-0072): the built-in CEL provider by default;
-	// STRATT_POLICY_BYPASS explicitly disables governance (recorded, never silent);
-	// an external engine plugin swaps in here when configured. Policy is external
-	// and swappable/bypassable — never a hardcoded core dependency.
+	// STRATT_POLICY_EXEC_CMD swaps in an EXTERNAL engine (OPA/Kyverno) over the
+	// subprocess transport (ADR-0074); STRATT_POLICY_BYPASS explicitly disables
+	// governance (recorded, never silent). Policy is external and
+	// swappable/bypassable — never a hardcoded core dependency.
 	var decider policy.Decider = policy.CEL{}
-	if os.Getenv("STRATT_POLICY_BYPASS") == "true" {
+	switch {
+	case os.Getenv("STRATT_POLICY_BYPASS") == "true":
 		decider = policy.Bypass{}
-		log.Warn("POLICY BYPASS: the policy decision point is disabled by STRATT_POLICY_BYPASS; all policy Steps allow (recorded)")
+		log.Warn("POLICY BYPASS: the policy decision point is disabled by STRATT_POLICY_BYPASS; all policy checks allow (recorded)")
+	case os.Getenv("STRATT_POLICY_EXEC_CMD") != "":
+		engine := os.Getenv("STRATT_POLICY_ENGINE")
+		if engine == "" {
+			engine = "exec"
+		}
+		cmd := os.Getenv("STRATT_POLICY_EXEC_CMD")
+		decider = policy.NewExecCommand(engine, cmd)
+		log.Info("policy engine: external subprocess (ADR-0074)", "engine", engine, "cmd", cmd)
 	}
 	w.RegisterActivity(&orchestrate.Activities{Store: store, Dispatcher: dispatcher, Bus: bus, Authz: authorizer, Decider: decider, Log: log, RelayDial: relayDial, Actuators: registry, Actions: actionRegistry, PluginActions: pluginActions, PluginActuators: pluginActuators, Evidence: evidence, Sites: siteGateway, Peers: peerClient})
 	if err := w.Start(); err != nil {

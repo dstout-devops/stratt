@@ -41,16 +41,16 @@ type Decider interface {
 // external engine may instead consult its own loaded policy and treat Controls
 // as advisory — the port abstracts that choice from the core.
 type Request struct {
-	Controls []types.Control
-	Context  types.ChangeContext
+	Controls []types.Control     `json:"controls"`
+	Context  types.ChangeContext `json:"context"`
 }
 
 // AdmissionRequest is the admission port input (ADR-0073): the declaration being
 // admitted (as an object map — kind/spec/labels) and the admission controls to
 // apply. Actor-independent — admission judges the manifest, not who submitted it.
 type AdmissionRequest struct {
-	Object   map[string]any
-	Controls []types.Control
+	Object   map[string]any  `json:"object"`
+	Controls []types.Control `json:"controls"`
 }
 
 // CEL is the built-in in-tree provider (ADR-0072): it evaluates the controls
