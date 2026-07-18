@@ -78,3 +78,4 @@ Status is `Accepted` unless noted. See **[../roadmap.md](../roadmap.md)** for ho
 | [0067](0067-typed-control-library-timewindow.md) | The typed Control library: primitives as data, starting with TimeWindow | Accepted |
 | [0068](0068-typed-control-sod.md) | Typed Control library: Separation of Duties, and committer enrichment | Accepted |
 | [0069](0069-typed-control-waiver.md) | Typed Control library: Waiver, a time-boxed control exemption | Accepted |
+| [0070](0070-typed-control-breakglass.md) | Typed Control library: BreakGlass, emergency bypass with mandatory post-review | Accepted |

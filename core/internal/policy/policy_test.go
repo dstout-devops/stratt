@@ -412,6 +412,94 @@ func TestValidateControls_Waiver(t *testing.T) {
 	}
 }
 
+// ── typed Control library: BreakGlass (ADR-0070) ────────────────────────────
+
+func emergencyCtx(class, incident, reason string) types.ChangeContext {
+	return types.ChangeContext{
+		Actor: types.PrincipalRef{ID: "alice"}, ChangeClass: class, ScheduledAt: inHour,
+		Labels: map[string]string{"incident": incident, "reasonCode": reason},
+	}
+}
+func hasObligation(d types.Decision, typ string) bool {
+	for _, o := range d.Obligations {
+		if o.Type == typ {
+			return true
+		}
+	}
+	return false
+}
+func breakGlassCtrl(id, review string, bypasses ...string) types.Control {
+	return types.Control{ID: id, BreakGlass: &types.BreakGlassSpec{Bypasses: bypasses, PostReviewBy: review}}
+}
+
+// A declared emergency bypasses the listed control — allowed, but with a
+// MANDATORY post-review obligation (bypass ≠ silence).
+func TestEvaluate_BreakGlass_Bypasses(t *testing.T) {
+	d := Evaluate(
+		[]types.Control{denyCtrl("x"), breakGlassCtrl("bg", "security-team", "x")},
+		emergencyCtx("emergency", "INC-1", "hotfix"),
+	)
+	if d.Outcome != types.OutcomeAllow {
+		t.Fatalf("active break-glass must bypass the deny, got %s (%v)", d.Outcome, d.Reasons)
+	}
+	if codes(d)["break-glass"] != 1 || codes(d)["break-glass-used"] != 1 || codes(d)["fired"] != 0 {
+		t.Fatalf("bypass must be recorded, not fired: %v", d.Reasons)
+	}
+	if !hasObligation(d, types.ObligationPostReview) {
+		t.Fatalf("an emergency bypass must leave a post-review obligation, got %v", d.Obligations)
+	}
+}
+
+// Break-glass is inactive without a real emergency declaration.
+func TestEvaluate_BreakGlass_InactivePaths(t *testing.T) {
+	cases := map[string]types.ChangeContext{
+		"not emergency":  emergencyCtx("normal", "INC-1", "hotfix"),
+		"no incident":    emergencyCtx("emergency", "", "hotfix"),
+		"no reason code": emergencyCtx("emergency", "INC-1", ""),
+	}
+	for name, cc := range cases {
+		d := Evaluate([]types.Control{denyCtrl("x"), breakGlassCtrl("bg", "security-team", "x")}, cc)
+		if d.Outcome != types.OutcomeDeny || codes(d)["fired"] != 1 {
+			t.Fatalf("%s: break-glass must be inactive (deny stands), got %s (%v)", name, d.Outcome, d.Reasons)
+		}
+		if hasObligation(d, types.ObligationPostReview) {
+			t.Fatalf("%s: inactive break-glass must not emit post-review", name)
+		}
+	}
+}
+
+// A fail-closed (broken) control is NOT bypassable by break-glass.
+func TestEvaluate_BreakGlass_DoesNotHideFailClosed(t *testing.T) {
+	broken := types.Control{ID: "z", When: "!!! bad", Outcome: types.OutcomeAllow}
+	d := Evaluate([]types.Control{broken, breakGlassCtrl("bg", "security-team", "z")},
+		emergencyCtx("emergency", "INC-1", "hotfix"))
+	if d.Outcome != types.OutcomeDeny || codes(d)["compile_error"] != 1 || codes(d)["break-glass"] != 0 {
+		t.Fatalf("a broken control must fail closed despite break-glass, got %s (%v)", d.Outcome, d.Reasons)
+	}
+}
+
+func TestValidateControls_BreakGlass(t *testing.T) {
+	if err := ValidateControls([]types.Control{denyCtrl("x"), breakGlassCtrl("bg", "security-team", "x")}); err != nil {
+		t.Fatalf("valid break-glass must pass, got %v", err)
+	}
+	bad := map[string][]types.Control{
+		"no postReviewBy": {denyCtrl("x"), {ID: "bg", BreakGlass: &types.BreakGlassSpec{Bypasses: []string{"x"}}}},
+		"no bypasses":     {denyCtrl("x"), {ID: "bg", BreakGlass: &types.BreakGlassSpec{PostReviewBy: "sec"}}},
+		"self bypass":     {breakGlassCtrl("bg", "sec", "bg")},
+		"ref not in set":  {denyCtrl("x"), breakGlassCtrl("bg", "sec", "nope")},
+		"bg + predicate": {denyCtrl("x"), {ID: "bg", When: "true", Outcome: types.OutcomeDeny,
+			BreakGlass: &types.BreakGlassSpec{Bypasses: []string{"x"}, PostReviewBy: "sec"}}},
+		"bg + waiver": {denyCtrl("x"), {ID: "bg",
+			Waiver:     &types.WaiverSpec{ControlRef: "x", ExpiresAt: future, Justification: "j", ApprovedBy: "a"},
+			BreakGlass: &types.BreakGlassSpec{Bypasses: []string{"x"}, PostReviewBy: "sec"}}},
+	}
+	for name, cs := range bad {
+		if err := ValidateControls(cs); err == nil {
+			t.Fatalf("%s: must be rejected at load", name)
+		}
+	}
+}
+
 // ValidateControls compiles every predicate at declaration time (§1.8).
 func TestValidateControls(t *testing.T) {
 	ok := []types.Control{

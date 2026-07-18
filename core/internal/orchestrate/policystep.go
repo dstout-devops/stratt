@@ -193,6 +193,11 @@ func assembleChangeContext(in DAGInput) types.ChangeContext {
 	if env, ok := cc.Labels["environment"]; ok {
 		cc.Environment = env
 	}
+	// change_class (standard|normal|emergency) drives break-glass activation
+	// (ADR-0070); the incident/reasonCode ride in labels generically.
+	if cls, ok := cc.Labels["changeClass"]; ok {
+		cc.ChangeClass = cls
+	}
 	// Committers (the change authors) from a `committers` launch param — the
 	// source SoD checks the actor against (ADR-0068). A CI/operator launching the
 	// change supplies them; richer committer provenance is a follow-up.

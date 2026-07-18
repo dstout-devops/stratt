@@ -43,7 +43,8 @@ const (
 	ObligationRequireApproval = "require_approval" // params: count, from (selector)
 	ObligationTTL             = "ttl"              // params: expires
 	ObligationRecordEvidence  = "record_evidence"
-	ObligationNotify          = "notify" // params: target
+	ObligationNotify          = "notify"      // params: target
+	ObligationPostReview      = "post_review" // params: by (authority), incident (ADR-0070)
 )
 
 // Principal-ish reference carried in a decision request. Reuses the Principal
@@ -110,6 +111,24 @@ type Control struct {
 	// control in the same set from applying its outcome. A waiver control needs
 	// no Outcome/When and is exclusive with the predicate kinds.
 	Waiver *WaiverSpec `json:"waiver,omitempty"`
+	// BreakGlass is an emergency-bypass MODIFIER (ADR-0070): while an emergency
+	// is declared it bypasses the listed controls, at the cost of a mandatory
+	// post-review obligation. Exclusive with the predicate/waiver kinds.
+	BreakGlass *BreakGlassSpec `json:"breakGlass,omitempty"`
+}
+
+// BreakGlassSpec is the emergency-bypass primitive (ADR-0070 / ADR-0061
+// guardrail 6): while ACTIVE it suppresses the `Bypasses` controls — but bypass
+// is never silence, so an active break-glass ALWAYS leaves a mandatory
+// post-review obligation on the decision (`PostReviewBy` is the retro-review
+// authority; required at load). Activation is a real emergency declaration, not
+// a flag: change_class == "emergency" AND an incident and reasonCode present in
+// the ChangeContext (supplied by the activator at launch). Like a waiver it can
+// only bypass PEER ControlSet controls — never a mandatory floor (ADR-0066) —
+// and never a fail-closed evaluation error.
+type BreakGlassSpec struct {
+	Bypasses     []string `json:"bypasses"`
+	PostReviewBy string   `json:"postReviewBy"`
 }
 
 // WaiverSpec is a time-boxed, approved exemption of another control (ADR-0069):

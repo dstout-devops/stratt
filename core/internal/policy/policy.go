@@ -73,25 +73,32 @@ func Evaluate(controls []types.Control, cc types.ChangeContext) types.Decision {
 	// stands). Waivers reference only ControlSet controls, so they can never
 	// exempt a mandatory floor (ADR-0066).
 	waived := map[string]bool{}
+	bgBy := map[string]string{} // bypassed control ID → the active break-glass's ID
 	for _, c := range controls {
 		if c.Waiver != nil && waiverActive(c.Waiver, cc.ScheduledAt) {
 			waived[c.Waiver.ControlRef] = true
 		}
+		if c.BreakGlass != nil && breakGlassActive(c.BreakGlass, cc) {
+			for _, ref := range c.BreakGlass.Bypasses {
+				bgBy[ref] = c.ID
+			}
+		}
 	}
-	// Pass 2: evaluate predicate controls; an active waiver suppresses a fired
-	// control's outcome (recorded, not applied).
+	// Pass 2: evaluate predicate controls; an active waiver or break-glass
+	// suppresses a fired control's outcome (recorded, not applied).
+	bgUsed := map[string]bool{}
 	var fired []types.Control
 	for _, c := range controls {
-		if c.Waiver != nil {
-			continue // a waiver is a modifier, not a firing predicate
+		if c.Waiver != nil || c.BreakGlass != nil {
+			continue // modifiers do not fire
 		}
 		ok, failCode, failMsg := controlFires(env, cm, cc, c)
 		if failCode != "" {
 			// Fail-closed: a control that cannot be evaluated (uncompilable CEL,
 			// a reference to an absent coordinate, an unjudgeable window) denies —
 			// most-restrictive, never a silent allow (ADR-0061 M4). A broken
-			// control's deny is NOT waivable (a waiver exempts a decision, not an
-			// evaluation failure).
+			// control's deny is NOT waivable/bypassable (a modifier exempts a
+			// decision, not an evaluation failure).
 			dec.Outcome = mostRestrictive(dec.Outcome, types.OutcomeDeny)
 			dec.Reasons = append(dec.Reasons, types.Reason{
 				Code: failCode, Message: failMsg, ControlID: c.ID,
@@ -110,11 +117,33 @@ func Evaluate(controls []types.Control, cc types.ChangeContext) types.Decision {
 			})
 			continue
 		}
+		if bg, ok := bgBy[c.ID]; ok {
+			// An active break-glass bypasses this fired control (ADR-0070). Mark
+			// it used so the mandatory post-review obligation is emitted below.
+			bgUsed[bg] = true
+			dec.Reasons = append(dec.Reasons, types.Reason{
+				Code: "break-glass", Message: firedMessage(c) + " (break-glass bypass)", ControlID: c.ID,
+			})
+			continue
+		}
 		fired = append(fired, c)
 		dec.Outcome = mostRestrictive(dec.Outcome, c.Outcome)
 		dec.Reasons = append(dec.Reasons, types.Reason{
 			Code: "fired", Message: firedMessage(c), ControlID: c.ID,
 		})
+	}
+	// Break-glass that actually bypassed a control leaves a MANDATORY post-review
+	// obligation — bypass is never silence (ADR-0061 guardrail 6 / ADR-0070).
+	for _, c := range controls {
+		if c.BreakGlass != nil && bgUsed[c.ID] {
+			dec.Obligations = append(dec.Obligations, types.Obligation{
+				Type:   types.ObligationPostReview,
+				Params: map[string]any{"by": c.BreakGlass.PostReviewBy, "incident": cc.Labels["incident"]},
+			})
+			dec.Reasons = append(dec.Reasons, types.Reason{
+				Code: "break-glass-used", Message: "emergency bypass — mandatory post-review", ControlID: c.ID,
+			})
+		}
 	}
 
 	// Obligations are the binding riders of the controls that produced the
@@ -220,6 +249,16 @@ func waiverActive(w *types.WaiverSpec, at time.Time) bool {
 	return at.Before(w.ExpiresAt)
 }
 
+// breakGlassActive reports whether a real emergency is declared (ADR-0070):
+// change_class == "emergency" AND an incident and reasonCode are present (the
+// activator's emergency justification, supplied at launch). Break-glass is a
+// declared emergency path, never a bare flag — so it cannot be "always on".
+func breakGlassActive(_ *types.BreakGlassSpec, cc types.ChangeContext) bool {
+	return cc.ChangeClass == "emergency" &&
+		cc.Labels["incident"] != "" &&
+		cc.Labels["reasonCode"] != ""
+}
+
 // mostRestrictive returns whichever of two outcomes ranks higher on the fixed
 // lattice. It is commutative and associative, so evaluation order cannot change
 // the result (the §2.4 additive-union analogue, not precedence).
@@ -261,15 +300,24 @@ func ValidateControls(controls []types.Control) error {
 		if c.ID == "" {
 			return fmt.Errorf("policy: control requires an id")
 		}
-		// A waiver is a MODIFIER, not a predicate (ADR-0069): it needs no outcome,
-		// is exclusive with the predicate kinds, and references a control in this
-		// set.
-		if c.Waiver != nil {
+		// Modifiers (waiver, break-glass) are not predicates (ADR-0069/0070): they
+		// need no outcome, are exclusive with the predicate kinds and each other,
+		// and reference controls in this set.
+		if c.Waiver != nil || c.BreakGlass != nil {
 			if c.When != "" || c.TimeWindow != nil || c.SoD != nil {
-				return fmt.Errorf("policy: control %q: a waiver is not also a predicate", c.ID)
+				return fmt.Errorf("policy: control %q: a modifier (waiver/break-glass) is not also a predicate", c.ID)
 			}
-			if err := validateWaiver(c.ID, c.Waiver, ids); err != nil {
-				return err
+			if c.Waiver != nil && c.BreakGlass != nil {
+				return fmt.Errorf("policy: control %q: a control is a waiver or a break-glass, not both", c.ID)
+			}
+			if c.Waiver != nil {
+				if err := validateWaiver(c.ID, c.Waiver, ids); err != nil {
+					return err
+				}
+			} else {
+				if err := validateBreakGlass(c.ID, c.BreakGlass, ids); err != nil {
+					return err
+				}
 			}
 			continue
 		}
@@ -334,6 +382,28 @@ func validateWaiver(id string, w *types.WaiverSpec, ids map[string]bool) error {
 	}
 	if w.ApprovedBy == "" {
 		return fmt.Errorf("policy: waiver %q requires approvedBy", id)
+	}
+	return nil
+}
+
+// validateBreakGlass checks a break-glass at load (ADR-0070): a mandatory
+// post-review authority (guardrail 6: bypass is never silence), and a non-empty
+// Bypasses of non-self control IDs present IN this set — so it can never bypass
+// a mandatory floor (ADR-0066), only peer ControlSet controls.
+func validateBreakGlass(id string, bg *types.BreakGlassSpec, ids map[string]bool) error {
+	if bg.PostReviewBy == "" {
+		return fmt.Errorf("policy: break-glass %q requires postReviewBy (mandatory post-review, guardrail 6)", id)
+	}
+	if len(bg.Bypasses) == 0 {
+		return fmt.Errorf("policy: break-glass %q requires bypasses", id)
+	}
+	for _, ref := range bg.Bypasses {
+		if ref == id {
+			return fmt.Errorf("policy: break-glass %q cannot bypass itself", id)
+		}
+		if !ids[ref] {
+			return fmt.Errorf("policy: break-glass %q bypasses control %q not in this set", id, ref)
+		}
 	}
 	return nil
 }
