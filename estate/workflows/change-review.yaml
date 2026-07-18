@@ -1,0 +1,38 @@
+# change-review — a governance checkpoint declared as estate code (ADR-0061 arc /
+# ADR-0072). This is the first workflow to exercise the typed Control library
+# from Git: a policy Step whose decision comes through the PDP PORT (the built-in
+# CEL provider by default, swappable/bypassable), then a quorum sign-off Gate.
+# Launch-only — it automates nothing; launching it obtains a governed, audited
+# approval for a change, and records the decision on the one audit stream.
+name: change-review
+steps:
+  # The governance guard — evaluated by the Policy Decision Point (ADR-0063).
+  - name: guard
+    policy:
+      controls:
+        # Change freeze: deny weekend changes (§5 Flow-4 maintenance window).
+        - id: weekend-freeze
+          timeWindow: { mode: deny, days: [sat, sun], startHourUtc: 0, endHourUtc: 24 }
+          outcome: deny
+        # Four-eyes at authoring: the requester may not also be a change author
+        # (SoD). Fires only when committers are supplied at launch.
+        - id: four-eyes
+          sod: { distinctFrom: [committers] }
+          outcome: require_approval
+          obligations:
+            - type: require_approval
+              params: { teams: [platform-admins], count: 2 }
+        # Break-glass: a declared emergency (changeClass=emergency + incident +
+        # reasonCode at launch) bypasses the freeze — with a MANDATORY post-review.
+        - id: emergency-override
+          breakGlass:
+            bypasses: [weekend-freeze]
+            postReviewBy: security-team
+  # Two-person sign-off (M-of-N quorum, ADR-0071) — the human gate.
+  - name: sign-off
+    needs: [guard]
+    gate:
+      approvers:
+        teams: [platform-admins]
+      threshold: 2
+      timeoutSeconds: 86400

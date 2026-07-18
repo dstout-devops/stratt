@@ -24,6 +24,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	yaml "go.yaml.in/yaml/v3"
 
@@ -1490,6 +1491,7 @@ type stepYAML struct {
 	Needs           []string       `yaml:"needs"`
 	When            string         `yaml:"when"`
 	Gate            *gateYAML      `yaml:"gate"`
+	Policy          *policyYAML    `yaml:"policy"`
 	ViewName        string         `yaml:"viewName"`
 	Actuator        string         `yaml:"actuator"`
 	Action          string         `yaml:"action"`
@@ -1506,6 +1508,80 @@ type gateYAML struct {
 	} `yaml:"approvers"`
 	TimeoutSeconds int `yaml:"timeoutSeconds"`
 	Threshold      int `yaml:"threshold"` // M-of-N quorum (ADR-0071)
+}
+
+// policyYAML is the estate declaration surface for a policy checkpoint Step
+// (ADR-0063/0067–0071): the CEL provider's inline-Control dialect. yaml.v3 does
+// not read json tags, so these mirror types/policy.go with yaml tags. The typed
+// primitives are optional pointers; controlYAML maps 1:1 to types.Control.
+type policyYAML struct {
+	Controls []controlYAML `yaml:"controls"`
+}
+type controlYAML struct {
+	ID          string           `yaml:"id"`
+	Type        string           `yaml:"type"`
+	When        string           `yaml:"when"`
+	Outcome     string           `yaml:"outcome"`
+	Obligations []obligationYAML `yaml:"obligations"`
+	TimeWindow  *timeWindowYAML  `yaml:"timeWindow"`
+	SoD         *sodYAML         `yaml:"sod"`
+	Waiver      *waiverYAML      `yaml:"waiver"`
+	BreakGlass  *breakGlassYAML  `yaml:"breakGlass"`
+}
+type obligationYAML struct {
+	Type   string         `yaml:"type"`
+	Params map[string]any `yaml:"params"`
+}
+type timeWindowYAML struct {
+	Mode         string   `yaml:"mode"`
+	Days         []string `yaml:"days"`
+	StartHourUTC int      `yaml:"startHourUtc"`
+	EndHourUTC   int      `yaml:"endHourUtc"`
+}
+type sodYAML struct {
+	DistinctFrom []string `yaml:"distinctFrom"`
+}
+type waiverYAML struct {
+	ControlRef    string    `yaml:"controlRef"`
+	ExpiresAt     time.Time `yaml:"expiresAt"`
+	Justification string    `yaml:"justification"`
+	ApprovedBy    string    `yaml:"approvedBy"`
+}
+type breakGlassYAML struct {
+	Bypasses     []string `yaml:"bypasses"`
+	PostReviewBy string   `yaml:"postReviewBy"`
+}
+
+// toPolicySpec maps the declared policy YAML into the typed PolicySpec. Load
+// validation (ValidateWorkflow → the CEL provider's dialect check) runs after.
+func toPolicySpec(p *policyYAML) *types.PolicySpec {
+	ctrls := make([]types.Control, 0, len(p.Controls))
+	for _, c := range p.Controls {
+		tc := types.Control{ID: c.ID, Type: c.Type, When: c.When, Outcome: c.Outcome}
+		for _, o := range c.Obligations {
+			tc.Obligations = append(tc.Obligations, types.Obligation{Type: o.Type, Params: o.Params})
+		}
+		if c.TimeWindow != nil {
+			tc.TimeWindow = &types.TimeWindowSpec{
+				Mode: c.TimeWindow.Mode, Days: c.TimeWindow.Days,
+				StartHourUTC: c.TimeWindow.StartHourUTC, EndHourUTC: c.TimeWindow.EndHourUTC,
+			}
+		}
+		if c.SoD != nil {
+			tc.SoD = &types.SoDSpec{DistinctFrom: c.SoD.DistinctFrom}
+		}
+		if c.Waiver != nil {
+			tc.Waiver = &types.WaiverSpec{
+				ControlRef: c.Waiver.ControlRef, ExpiresAt: c.Waiver.ExpiresAt,
+				Justification: c.Waiver.Justification, ApprovedBy: c.Waiver.ApprovedBy,
+			}
+		}
+		if c.BreakGlass != nil {
+			tc.BreakGlass = &types.BreakGlassSpec{Bypasses: c.BreakGlass.Bypasses, PostReviewBy: c.BreakGlass.PostReviewBy}
+		}
+		ctrls = append(ctrls, tc)
+	}
+	return &types.PolicySpec{Controls: ctrls}
 }
 
 func parseWorkflowFile(path string, raw []byte) (string, types.Workflow, error) {
@@ -1533,6 +1609,9 @@ func parseWorkflowFile(path string, raw []byte) (string, types.Workflow, error) 
 				TimeoutSeconds: s.Gate.TimeoutSeconds,
 				Threshold:      s.Gate.Threshold,
 			}
+		}
+		if s.Policy != nil {
+			step.Policy = toPolicySpec(s.Policy)
 		}
 		w.Steps = append(w.Steps, step)
 	}

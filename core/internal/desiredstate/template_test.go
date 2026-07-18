@@ -2,6 +2,7 @@ package desiredstate
 
 import (
 	"context"
+	"os"
 	"testing"
 
 	"github.com/dstout-devops/stratt/types"
@@ -142,6 +143,88 @@ func TestPlanGateFloorNotSubstitutableByPolicy(t *testing.T) {
 	}}
 	if err := ValidateWorkflow(gateGuarded); err != nil {
 		t.Fatalf("a plan-pinned Apply behind a real plan-binding Gate must pass, got %v", err)
+	}
+}
+
+// A policy Step + its typed control library round-trips from estate YAML through
+// the loader into a typed PolicySpec (ADR-0063/0067–0071 declaration surface).
+func TestParseWorkflowPolicyStep(t *testing.T) {
+	src := `name: guarded-deploy
+steps:
+  - name: guard
+    policy:
+      controls:
+        - id: prod-freeze
+          timeWindow: { mode: deny, days: [sat, sun], startHourUtc: 0, endHourUtc: 24 }
+          outcome: deny
+        - id: four-eyes
+          sod: { distinctFrom: [committers] }
+          outcome: require_approval
+          obligations:
+            - type: require_approval
+              params: { teams: [platform-admins], count: 2 }
+        - id: waive-freeze
+          waiver:
+            controlRef: prod-freeze
+            expiresAt: 2026-07-20T00:00:00Z
+            justification: incident-4471
+            approvedBy: sre-lead
+  - name: apply
+    needs: [guard]
+    viewName: v
+    actuator: script
+    params: { script: "echo hi" }
+`
+	_, wf, err := parseWorkflowFile("guarded.yaml", []byte(src))
+	if err != nil {
+		t.Fatalf("valid policy workflow must parse + validate, got %v", err)
+	}
+	if wf.Steps[0].Policy == nil || len(wf.Steps[0].Policy.Controls) != 3 {
+		t.Fatalf("policy step did not round-trip: %+v", wf.Steps[0].Policy)
+	}
+	cs := wf.Steps[0].Policy.Controls
+	if cs[0].TimeWindow == nil || cs[0].TimeWindow.Mode != types.TimeWindowDeny || len(cs[0].TimeWindow.Days) != 2 {
+		t.Fatalf("time-window control mismapped: %+v", cs[0])
+	}
+	if cs[1].SoD == nil || cs[1].SoD.DistinctFrom[0] != types.SoDDistinctFromCommitters || cs[1].Outcome != types.OutcomeRequireApproval {
+		t.Fatalf("sod control mismapped: %+v", cs[1])
+	}
+	if len(cs[1].Obligations) != 1 || cs[1].Obligations[0].Type != types.ObligationRequireApproval {
+		t.Fatalf("obligation mismapped: %+v", cs[1].Obligations)
+	}
+	if cs[2].Waiver == nil || cs[2].Waiver.ControlRef != "prod-freeze" || cs[2].Waiver.ApprovedBy != "sre-lead" {
+		t.Fatalf("waiver control mismapped: %+v", cs[2])
+	}
+	if y := cs[2].Waiver.ExpiresAt.UTC().Year(); y != 2026 {
+		t.Fatalf("waiver expiresAt not parsed as a timestamp: %v", cs[2].Waiver.ExpiresAt)
+	}
+}
+
+// The shipped estate governance example must boot-validate — CI guards it so the
+// declaration surface and the example never drift apart.
+func TestEstateChangeReviewValidates(t *testing.T) {
+	raw, err := os.ReadFile("../../../estate/workflows/change-review.yaml")
+	if err != nil {
+		t.Fatalf("read estate example: %v", err)
+	}
+	if _, _, err := parseWorkflowFile("change-review.yaml", raw); err != nil {
+		t.Fatalf("estate governance example must parse + validate at load: %v", err)
+	}
+}
+
+// An invalid control (uncompilable predicate) fails the file at load.
+func TestParseWorkflowPolicyStep_InvalidRejected(t *testing.T) {
+	src := `name: bad
+steps:
+  - name: guard
+    policy:
+      controls:
+        - id: broken
+          when: "!!! not cel"
+          outcome: deny
+`
+	if _, _, err := parseWorkflowFile("bad.yaml", []byte(src)); err == nil {
+		t.Fatal("an uncompilable control must fail the file at load")
 	}
 }
 
