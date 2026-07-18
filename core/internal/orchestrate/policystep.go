@@ -28,7 +28,15 @@ type PolicyEvalArg struct {
 // hash-chained audit stream (ADR-0065) and logged, so the Intent → Run → step
 // descent can explain the outcome (§1.8).
 func (a *Activities) EvaluatePolicy(ctx context.Context, arg PolicyEvalArg) (types.Decision, error) {
-	dec := policy.Evaluate(arg.Controls, arg.Context)
+	// The decision comes through the PDP PORT (ADR-0072), never a concrete engine.
+	// Nil ⇒ the built-in CEL provider (the default); an operator may swap it for
+	// an external engine or policy.Bypass. The core is content-blind here — it
+	// sends controls + context and acts on the returned Decision.
+	decider := a.Decider
+	if decider == nil {
+		decider = policy.CEL{}
+	}
+	dec := decider.Decide(ctx, policy.Request{Controls: arg.Controls, Context: arg.Context})
 	codes := make([]string, 0, len(dec.Reasons))
 	for _, r := range dec.Reasons {
 		codes = append(codes, r.Code+":"+r.ControlID)

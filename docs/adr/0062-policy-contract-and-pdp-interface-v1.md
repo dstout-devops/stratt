@@ -1,10 +1,17 @@
 # ADR 0062 — Policy Contract & PDP interface v1: the four-way Decision, the CEL evaluator, and the most-restrictive lattice
 
-- **Status:** Accepted
+- **Status:** Accepted — architecture **partially superseded by [ADR-0072](0072-policy-decision-point-is-a-port.md)**
 - **Date:** 2026-07-18
 - **Deciders:** steward (dstout)
 - **Charter sections:** §1.1, §1.4, §1.5, §1.8, §2 (Contract), §2.4, §3
 - **Implements:** ADR-0061 §7.1 (the first sequenced follow-up)
+
+> **Superseded note (ADR-0072):** the Contract, the four-way Decision, and the most-restrictive
+> lattice stand. What ADR-0072 corrects: this ADR built the evaluator as a concrete, directly-called
+> in-core engine with **no seam** — making policy a hardcoded dependency, un-swappable and
+> un-bypassable, with governance domain logic in the content-blind spine. ADR-0072 puts the PDP behind
+> the `policy.Decider` port (built-in CEL provider + external plugins + explicit bypass). Read this ADR
+> for the Contract/outcome model; read ADR-0072 for the (corrected) placement.
 
 ## Context
 

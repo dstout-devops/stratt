@@ -45,6 +45,7 @@ import (
 	"github.com/dstout-devops/stratt/core/internal/orchestrate"
 	"github.com/dstout-devops/stratt/core/internal/planstore"
 	"github.com/dstout-devops/stratt/core/internal/pluginhost"
+	"github.com/dstout-devops/stratt/core/internal/policy"
 	"github.com/dstout-devops/stratt/core/internal/scim"
 	"github.com/dstout-devops/stratt/core/internal/sitegw"
 	"github.com/dstout-devops/stratt/core/internal/siteproto"
@@ -640,7 +641,16 @@ func run(ctx context.Context, log *slog.Logger) error {
 	relayDial := func(site, pluginID string) siterelay.Dialer {
 		return siterelay.NewNATSDialer(siteGateway.Conn(), site, pluginID)
 	}
-	w.RegisterActivity(&orchestrate.Activities{Store: store, Dispatcher: dispatcher, Bus: bus, Authz: authorizer, Log: log, RelayDial: relayDial, Actuators: registry, Actions: actionRegistry, PluginActions: pluginActions, PluginActuators: pluginActuators, Evidence: evidence, Sites: siteGateway, Peers: peerClient})
+	// Policy Decision Point port (ADR-0072): the built-in CEL provider by default;
+	// STRATT_POLICY_BYPASS explicitly disables governance (recorded, never silent);
+	// an external engine plugin swaps in here when configured. Policy is external
+	// and swappable/bypassable — never a hardcoded core dependency.
+	var decider policy.Decider = policy.CEL{}
+	if os.Getenv("STRATT_POLICY_BYPASS") == "true" {
+		decider = policy.Bypass{}
+		log.Warn("POLICY BYPASS: the policy decision point is disabled by STRATT_POLICY_BYPASS; all policy Steps allow (recorded)")
+	}
+	w.RegisterActivity(&orchestrate.Activities{Store: store, Dispatcher: dispatcher, Bus: bus, Authz: authorizer, Decider: decider, Log: log, RelayDial: relayDial, Actuators: registry, Actions: actionRegistry, PluginActions: pluginActions, PluginActuators: pluginActuators, Evidence: evidence, Sites: siteGateway, Peers: peerClient})
 	if err := w.Start(); err != nil {
 		return fmt.Errorf("temporal worker: %w", err)
 	}

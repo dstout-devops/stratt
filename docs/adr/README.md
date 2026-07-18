@@ -70,7 +70,7 @@ Status is `Accepted` unless noted. See **[../roadmap.md](../roadmap.md)** for ho
 | [0059](0059-network-topology-primitives.md) | Network & topology primitives: subnet/dmz/az/dns kinds + placement as a Relation | Accepted |
 | [0060](0060-multi-source-facet-ownership.md) | Multi-source Facet projection: keep every signal, declare the authoritative view | Accepted |
 | [0061](0061-estate-governance-policy-decision-point.md) | Estate Governance: the policy decision point, the three authorships, and governance-as-data | Accepted |
-| [0062](0062-policy-contract-and-pdp-interface-v1.md) | Policy Contract & PDP interface v1: the four-way Decision, the CEL evaluator, and the most-restrictive lattice | Accepted |
+| [0062](0062-policy-contract-and-pdp-interface-v1.md) | Policy Contract & PDP interface v1: the four-way Decision, the CEL evaluator, and the most-restrictive lattice | Accepted (arch. superseded by 0072) |
 | [0063](0063-policy-step-dag-dispatch-v1.md) | Policy Step & DAG dispatch v1: the PDP as a synchronous checkpoint | Accepted |
 | [0064](0064-policy-require-approval-gate.md) | Policy REQUIRE_APPROVAL opens a human Gate; the approver check folds into one authz seam | Accepted |
 | [0065](0065-durable-policy-decision-recording.md) | Durable policy-decision recording: the audit stream, not a Finding | Accepted |
@@ -80,3 +80,4 @@ Status is `Accepted` unless noted. See **[../roadmap.md](../roadmap.md)** for ho
 | [0069](0069-typed-control-waiver.md) | Typed Control library: Waiver, a time-boxed control exemption | Accepted |
 | [0070](0070-typed-control-breakglass.md) | Typed Control library: BreakGlass, emergency bypass with mandatory post-review | Accepted |
 | [0071](0071-quorum-gate-threshold.md) | Quorum (M-of-N): a gate threshold, not an evaluator Control | Accepted |
+| [0072](0072-policy-decision-point-is-a-port.md) | The Policy Decision Point is a PORT, not a core dependency (corrects ADR-0062) | Accepted |

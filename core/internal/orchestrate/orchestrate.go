@@ -32,6 +32,7 @@ import (
 	"github.com/dstout-devops/stratt/core/internal/graph"
 	"github.com/dstout-devops/stratt/core/internal/planstore"
 	"github.com/dstout-devops/stratt/core/internal/pluginhost"
+	"github.com/dstout-devops/stratt/core/internal/policy"
 	"github.com/dstout-devops/stratt/core/internal/siteproto"
 	"github.com/dstout-devops/stratt/core/internal/siterelay"
 	mcpcanon "github.com/dstout-devops/stratt/sdk/mcp"
@@ -383,6 +384,12 @@ type Activities struct {
 	Dispatcher *dispatch.Dispatcher
 	Bus        *events.Bus
 	Authz      authz.Authorizer
+	// Decider is the Policy Decision Point PORT (ADR-0072): the policy Step
+	// obtains its Decision through this seam, never a concrete engine. Nil ⇒ the
+	// built-in CEL provider (the default); swap for an external engine or
+	// policy.Bypass to disable governance. Content-blind: the core sends controls
+	// + context and acts on the Decision.
+	Decider policy.Decider
 	// Log is the base logger for on-demand hosts (Site relay). Nil → slog.Default().
 	Log *slog.Logger
 	// RelayDial yields the relay transport to one plugin at a Site's agent
