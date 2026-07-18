@@ -176,6 +176,79 @@ func TestFacetOwnership(t *testing.T) {
 	}
 }
 
+// TestRelationGC proves ADR-0059 decision 7's two relation-GC paths: the
+// endpoint-tombstone cascade (7b) and Syncer delta retraction (7a). No dangling
+// placement edge survives a decommissioned endpoint.
+func TestRelationGC(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	p := s.NormalizerProjector()
+	pv := prov(types.WriterSyncer, "vcenter/syncer")
+
+	// A host placed-in a subnet, plus a run-provenance placement edge (the build seam).
+	ids, err := p.UpsertEntities(ctx, pv, []EntityUpsert{
+		{Kind: "host", IdentityKeys: map[string]string{"host.name": "web-1"}},
+		{Kind: "subnet", IdentityKeys: map[string]string{"net.name": "web-dmz"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	hostID, subnetID := ids[0], ids[1]
+	if err := p.UpsertRelation(ctx, pv, "placed-in", hostID, subnetID); err != nil {
+		t.Fatal(err)
+	}
+	// A run-provenance edge too (never re-observed by a Syncer — only the cascade collects it).
+	rp := prov(types.WriterRun, "run-1")
+	if err := s.RunProjector().UpsertRelation(ctx, rp, "built-in", hostID, subnetID); err != nil {
+		t.Fatal(err)
+	}
+
+	relCount := func(from string) int {
+		var n int
+		if err := s.pool.QueryRow(ctx, `SELECT count(*) FROM graph.relation WHERE from_id = $1`, from).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	if relCount(hostID) != 2 {
+		t.Fatalf("expected 2 edges from the host, got %d", relCount(hostID))
+	}
+
+	// (7b) Tombstone the host → BOTH its edges (syncer + run) cascade-retract, so no
+	// placement edge dangles to the soft-deleted endpoint.
+	if _, err := p.TombstoneByIdentity(ctx, pv, "host.name", "web-1"); err != nil {
+		t.Fatal(err)
+	}
+	if relCount(hostID) != 0 {
+		t.Fatalf("endpoint-tombstone cascade must retract every edge of the gone host, got %d", relCount(hostID))
+	}
+
+	// (7a) Syncer delta retraction: re-create the host + a fresh edge, then retract it
+	// directly (the GoneRelations path resolves endpoints then calls this).
+	ids2, err := p.UpsertEntities(ctx, pv, []EntityUpsert{
+		{Kind: "host", IdentityKeys: map[string]string{"host.name": "web-2"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := p.UpsertRelation(ctx, pv, "placed-in", ids2[0], subnetID); err != nil {
+		t.Fatal(err)
+	}
+	if relCount(ids2[0]) != 1 {
+		t.Fatalf("expected the fresh edge, got %d", relCount(ids2[0]))
+	}
+	if err := p.RetractRelation(ctx, "placed-in", ids2[0], subnetID); err != nil {
+		t.Fatal(err)
+	}
+	if relCount(ids2[0]) != 0 {
+		t.Fatalf("delta retraction must remove the edge, got %d", relCount(ids2[0]))
+	}
+	// Idempotent: retracting a missing edge is a no-op.
+	if err := p.RetractRelation(ctx, "placed-in", ids2[0], subnetID); err != nil {
+		t.Fatalf("retracting a missing edge must be a no-op, got %v", err)
+	}
+}
+
 // TestFacetDeclaredAuthority proves the second half of ADR-0060: retaining all
 // per-source signal AND resolving a scalar read to the ONE declared authority.
 func TestFacetDeclaredAuthority(t *testing.T) {

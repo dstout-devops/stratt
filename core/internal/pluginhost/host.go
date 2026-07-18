@@ -354,6 +354,35 @@ func (h *Host) Sync(ctx context.Context) error {
 			}
 		}
 
+		// GoneRelations: a delta feed's retracted edges (ADR-0059 decision 7a — Syncer
+		// delta retraction). Both endpoints are resolved BY IDENTITY and tier+grant
+		// gated exactly as a relation TARGET is; an already-gone endpoint means the
+		// endpoint-tombstone cascade (7b) already retracted the edge, so it is a no-op.
+		for _, gr := range resp.GetGoneRelations() {
+			if ok, reason := h.grant.allowsIdentity(gr.GetFromScheme()); !ok {
+				h.reject("relation-gone-from", gr.GetFromScheme(), reason)
+				continue
+			}
+			if ok, reason := h.grant.allowsIdentity(gr.GetToScheme()); !ok {
+				h.reject("relation-gone-to", gr.GetToScheme(), reason)
+				continue
+			}
+			fromID, ffound, err := h.store.EntityIDByIdentity(ctx, gr.GetFromScheme(), gr.GetFromValue())
+			if err != nil {
+				return fmt.Errorf("pluginhost: resolve gone-relation from: %w", err)
+			}
+			toID, tfound, err := h.store.EntityIDByIdentity(ctx, gr.GetToScheme(), gr.GetToValue())
+			if err != nil {
+				return fmt.Errorf("pluginhost: resolve gone-relation to: %w", err)
+			}
+			if !ffound || !tfound {
+				continue // an endpoint already gone → its cascade retracted the edge
+			}
+			if err := projector.RetractRelation(ctx, gr.GetType(), fromID, toID); err != nil {
+				return fmt.Errorf("pluginhost: retract gone relation: %w", err)
+			}
+		}
+
 		if resp.GetFullSyncComplete() {
 			for _, s := range h.grant.TombstoneSchemes {
 				if _, err := projector.TombstoneAbsent(ctx, prov, s, seen[s]); err != nil {

@@ -283,6 +283,49 @@ func (p *Projector) UpsertRelation(ctx context.Context, prov types.Provenance, r
 	return tx.Commit(ctx)
 }
 
+// RetractRelation deletes one edge — the Syncer delta-retraction half of relation
+// GC (ADR-0059 decision 7a): a connector that stops observing an edge (the Observe
+// stream's GoneRelations) retracts it, so a placement edge never dangles after its
+// Source stops asserting it. Idempotent (a missing edge is a no-op). The §1.2
+// relation_write_path trigger is satisfied by the projector's write-path GUC; a
+// DELETE skips the writer-kind agreement check, so a Syncer may retract the edge it
+// (as a Source) wrote. The write PATH (normalizer/run) comes from this projector.
+func (p *Projector) RetractRelation(ctx context.Context, relType, fromID, toID string) error {
+	tx, err := p.begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck
+	if _, err := tx.Exec(ctx,
+		`DELETE FROM graph.relation WHERE type = $1 AND from_id = $2 AND to_id = $3`,
+		relType, fromID, toID,
+	); err != nil {
+		return fmt.Errorf("graph: retract relation: %w", err)
+	}
+	return tx.Commit(ctx)
+}
+
+// retractRelationsFor deletes every relation touching any of ids — the endpoint-
+// tombstone cascade (ADR-0059 decision 7b). Entities are SOFT-deleted (deleted_at),
+// so the relation FK's ON DELETE CASCADE never fires; a decommissioned endpoint must
+// not leave a dangling placement (or any) edge, so the tombstone path sweeps them
+// explicitly. Runs INSIDE the caller's tombstone tx, so the §1.2 write-path GUC is
+// already set; a relation DELETE skips the writer-kind check, so this retracts BOTH
+// syncer- and run-provenance edges of the gone endpoint (a build-Run-written
+// placement edge is never re-observed by any Syncer, so only this cascade collects it).
+func retractRelationsFor(ctx context.Context, tx pgx.Tx, ids []string) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	if _, err := tx.Exec(ctx,
+		`DELETE FROM graph.relation WHERE from_id = ANY($1::uuid[]) OR to_id = ANY($1::uuid[])`,
+		ids,
+	); err != nil {
+		return fmt.Errorf("graph: cascade-retract relations: %w", err)
+	}
+	return nil
+}
+
 // TombstoneAbsent retracts the calling Source's presence for every Entity it
 // carries an identity for under scheme but whose value is not in seen — the
 // disappearance half of a full resync. An Entity is tombstoned only when its
@@ -328,22 +371,31 @@ func (p *Projector) TombstoneAbsent(ctx context.Context, prov types.Provenance, 
 	// Stmt B: tombstone only the retracted Entities whose LAST presence row is
 	// now gone, restamping the retracting Syncer's provenance (which keeps the
 	// enforce_write_path prov-check satisfied on the normalizer path).
-	tag, err := tx.Exec(ctx, `
+	rows2, err := tx.Query(ctx, `
 		UPDATE graph.entity e
 		SET deleted_at = now(),
 		    prov_writer_kind = $1, prov_writer_ref = $2, prov_source_id = nullif($3, ''), prov_at = $4
 		WHERE e.id = ANY($5::uuid[])
 		  AND e.deleted_at IS NULL
-		  AND NOT EXISTS (SELECT 1 FROM graph.entity_presence p2 WHERE p2.entity_id = e.id)`,
+		  AND NOT EXISTS (SELECT 1 FROM graph.entity_presence p2 WHERE p2.entity_id = e.id)
+		RETURNING e.id`,
 		string(prov.WriterKind), prov.WriterRef, prov.SourceID, prov.At, retracted,
 	)
 	if err != nil {
 		return 0, fmt.Errorf("graph: tombstone absent: %w", err)
 	}
+	tombstoned, err := pgx.CollectRows(rows2, pgx.RowTo[string])
+	if err != nil {
+		return 0, fmt.Errorf("graph: collect tombstoned: %w", err)
+	}
+	// Cascade: retract every edge touching a now-tombstoned endpoint (decision 7b).
+	if err := retractRelationsFor(ctx, tx, tombstoned); err != nil {
+		return 0, err
+	}
 	if err := tx.Commit(ctx); err != nil {
 		return 0, err
 	}
-	return tag.RowsAffected(), nil
+	return int64(len(tombstoned)), nil
 }
 
 // TombstoneByIdentity retracts the calling Source's presence for the single
@@ -382,22 +434,31 @@ func (p *Projector) TombstoneByIdentity(ctx context.Context, prov types.Provenan
 	}
 
 	// Stmt B: tombstone the Entity iff its last presence row is now gone.
-	tag, err := tx.Exec(ctx, `
+	rows2, err := tx.Query(ctx, `
 		UPDATE graph.entity e
 		SET deleted_at = now(),
 		    prov_writer_kind = $1, prov_writer_ref = $2, prov_source_id = nullif($3, ''), prov_at = $4
 		WHERE e.id = ANY($5::uuid[])
 		  AND e.deleted_at IS NULL
-		  AND NOT EXISTS (SELECT 1 FROM graph.entity_presence p2 WHERE p2.entity_id = e.id)`,
+		  AND NOT EXISTS (SELECT 1 FROM graph.entity_presence p2 WHERE p2.entity_id = e.id)
+		RETURNING e.id`,
 		string(prov.WriterKind), prov.WriterRef, prov.SourceID, prov.At, retracted,
 	)
 	if err != nil {
 		return false, fmt.Errorf("graph: tombstone by identity: %w", err)
 	}
+	tombstoned, err := pgx.CollectRows(rows2, pgx.RowTo[string])
+	if err != nil {
+		return false, fmt.Errorf("graph: collect tombstoned: %w", err)
+	}
+	// Cascade: retract every edge touching a now-tombstoned endpoint (decision 7b).
+	if err := retractRelationsFor(ctx, tx, tombstoned); err != nil {
+		return false, err
+	}
 	if err := tx.Commit(ctx); err != nil {
 		return false, err
 	}
-	return tag.RowsAffected() > 0, nil
+	return len(tombstoned) > 0, nil
 }
 
 func orEmpty(m map[string]string) map[string]string {
