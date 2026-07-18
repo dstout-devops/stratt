@@ -74,3 +74,4 @@ Status is `Accepted` unless noted. See **[../roadmap.md](../roadmap.md)** for ho
 | [0063](0063-policy-step-dag-dispatch-v1.md) | Policy Step & DAG dispatch v1: the PDP as a synchronous checkpoint | Accepted |
 | [0064](0064-policy-require-approval-gate.md) | Policy REQUIRE_APPROVAL opens a human Gate; the approver check folds into one authz seam | Accepted |
 | [0065](0065-durable-policy-decision-recording.md) | Durable policy-decision recording: the audit stream, not a Finding | Accepted |
+| [0066](0066-mandatory-floors-pre-existing.md) | The mandatory safety floors pre-exist and are non-substitutable (ADR-0061 M1, closed) | Accepted |

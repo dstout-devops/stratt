@@ -133,6 +133,16 @@ honesty, fenced re-home over real HTTP) are **demonstrated end-to-end** by the t
 (`task e2e:cells`) against live Postgres — the measured SLO still needs a real fleet. Follow-up
 [ADR-0045](adr/0045-db-driven-syncer-home-gate.md) (full re-home auto-cutover) is Proposed, not scheduled.
 
+## Dev follow-ups / test hygiene
+
+- **Two timing-sensitive tests flake under concurrent `task ci` load** (each passes clean in isolation
+  and on re-run; neither is a correctness bug): `core/internal/triggers/reconcile_test.go` (a
+  `time.Sleep(500ms)` around a reconcile cadence) and `core/internal/siterelay` (relay timing). On a
+  heavily-loaded box (kind + Crossplane + the full parallel suite) they occasionally miss their fixed
+  sleep window and fail with a bare `FAIL` / exit 201. **Fix:** replace the fixed `time.Sleep` with a
+  poll-until-condition-with-deadline (e.g. `require.Eventually`-style) so the gate is deterministic
+  regardless of host load. Low-risk, isolated to test files; do before wiring CI on a shared runner.
+
 ## Where we are, in one line
 
 Phases 0–2 code-complete; Phase 3 code ~90% (Jamf + ConfigMgr Connectors deferred by choice); multi-region

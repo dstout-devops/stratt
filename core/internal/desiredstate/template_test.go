@@ -107,6 +107,44 @@ func TestWorkflowPolicyStep(t *testing.T) {
 	}
 }
 
+// M1 (ADR-0061 / ADR-0066): the §5 plan-gate floor is non-substitutable — a
+// plan-pinned Apply "guarded" only by a policy Step (which binds no plan digest)
+// is rejected at load, exactly as one guarded by nothing. A real plan-binding
+// Gate is required.
+func TestPlanGateFloorNotSubstitutableByPolicy(t *testing.T) {
+	act := func(name string, needs []string) types.Step {
+		return types.Step{Name: name, Needs: needs, ViewName: "v", Actuator: "script",
+			Params: map[string]any{"script": "echo hi"}}
+	}
+	planStep := act("plan", nil)
+	planStep.Plan = true
+
+	applyPolicy := act("apply", []string{"guard"})
+	applyPolicy.PlanFrom = "plan"
+	policyGuarded := types.Workflow{Name: "w", Steps: []types.Step{
+		planStep,
+		{Name: "guard", Needs: []string{"plan"}, Policy: &types.PolicySpec{Controls: []types.Control{
+			{ID: "c", When: "true", Outcome: types.OutcomeRequireApproval}},
+		}},
+		applyPolicy,
+	}}
+	if err := ValidateWorkflow(policyGuarded); err == nil {
+		t.Fatal("a plan-pinned Apply guarded only by a policy Step must be rejected (the plan-gate floor is Gate-only, §5)")
+	}
+	// The same shape with a real plan-binding Gate passes.
+	applyGate := act("apply", []string{"approve"})
+	applyGate.PlanFrom = "plan"
+	gateGuarded := types.Workflow{Name: "w", Steps: []types.Step{
+		planStep,
+		{Name: "approve", Needs: []string{"plan"}, PlanFrom: "plan", Gate: &types.GateSpec{
+			Approvers: types.GateApprovers{Teams: []string{"platform"}}}},
+		applyGate,
+	}}
+	if err := ValidateWorkflow(gateGuarded); err != nil {
+		t.Fatalf("a plan-pinned Apply behind a real plan-binding Gate must pass, got %v", err)
+	}
+}
+
 func TestTriggerTemplateNamespaceScope(t *testing.T) {
 	// event binding on an event-kind Trigger is allowed.
 	ev := types.Trigger{
