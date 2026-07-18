@@ -41,14 +41,25 @@ pretending "a namespace has one source in the whole estate."
 **2. Every projection is RETAINED, per source — signal is never dropped (§1.8).** The Facet grain becomes
 per-source: **`(entity_id, namespace, prov_source_id)`**, where the grain key is the **Source** (`prov_source_id`),
 made **NOT NULL** — never `prov_writer_ref` (which changes per Run → unbounded rows, guardian **M1**). Every facet
-write carries a *registered* source; a write with no source is rejected, not NULL-keyed. Each source is the **sole
-writer of its own** row, so no source overwrites another's — §1.2 single-writer holds trivially *per source row*,
-no cross-source fight, no lost signal. Two run-write kinds are distinguished (guardian **M2**, preserving §4.3
-flap-damping): a **damp write** (a remediation Run reflecting a just-applied change ahead of Syncer lag) carries
-the *damped Syncer's* `source_id` and writes **through** that Syncer's row (`prov_writer_kind='run'`, same grain)
-— so it still damps the visible value; a **genuine new observation** (e.g. a Crossplane Actuator write-back)
-carries its **own** registered source and gets its own row. `facet_history` re-keys to
-`(entity_id, namespace, prov_source_id, version)` so two sources' version streams never collide (**M6**).
+write carries a *registered* source; a **Run/Actuator write-back** — Run-provenance by construction (§1.2 "the
+execution *is* the source", not a system of record) — is keyed to the **reserved empty-string source `''`**. Each
+source is the **sole writer of its own** row, so no source overwrites another's — §1.2 single-writer holds
+trivially *per source row*, no cross-source fight, no lost signal. `facet_history` re-keys to
+`(entity_id, namespace, prov_source_id, version)` so two sources' version streams never collide (**M6**), and it
+retains every apply's RunRef at a distinct version — so two Actuators touching one `(Entity, namespace)` lose no
+signal on the shared `''` row (the current value is the latest apply; every prior apply is in history). An
+**Actuator is not a Source** (§2 Named Kinds): resync-able as-built state (e.g. Crossplane's actual CIDRs) is
+projected by a *Crossplane **Syncer*** over the Crossplane API as a registered Source — this multi-source model
+working as designed — never by synthesizing a source onto the Actuator write-back.
+
+> **Amended 2026-07-18 (supersedes the original wording of this paragraph).** The first draft here said a no-source
+> write is *rejected*, and distinguished "two run-write kinds" where a *genuine new observation (e.g. a Crossplane
+> Actuator write-back) carries its own registered source*. Both were wrong: run write-backs are **admitted** under
+> the `''` key (never rejected — the shipped model), and an Actuator-source conflates two Named Kinds (§2). The
+> charter-clean path for resync-able as-built state is a **Syncer+Source**, above. The §4.3 **damp write-through**
+> (a remediation reflecting a just-applied value *through* the declared-authoritative Syncer's row, ahead of Syncer
+> lag) is a scoped **future** §4.3 increment — no damp mechanism exists in code today. See the guardian resolution
+> (2026-07-18) in the log below (dissolves **M2**/**M3**).
 
 **3. The effective "truth" per `(Entity, namespace)` is the DECLARED authoritative source — explicit, not implicit
 precedence (§2.4).** A consumer (a View facet-predicate, a Baseline check, an API read) resolves the effective
@@ -56,6 +67,16 @@ value through a per-Facet-namespace **source authority declared in `sources/` Ca
 NetBox is authoritative." This is a Git-reviewed, rebuild-deterministic authority assignment — the *opposite* of
 the silent priority/last-writer-wins field §2.4 forbids. It amends ADR-0056 decision 2: overlapping Facet
 namespaces are no longer a plan-time failure; they are legal, and authority is declared rather than monopolized.
+
+> **Implemented 2026-07-18.** The authority declaration is an additive **`authoritative` flag on the existing
+> `facet_owner` registry** (migration `00036`), guarded by a **partial unique index** (`WHERE authoritative`) so at
+> most one owner per namespace is authoritative — §2.4 exactly-one-or-none, a second claim *fails the write*. The
+> `FacetValuesByEntities` resolver joins each facet row's `prov_writer_ref` to the namespace's authoritative
+> `owner_ref` (a syncer stamps `prov_writer_ref = owner_ref`, so the match is exact) and resolves single→value,
+> multi→the authority (else omit + contention Finding). Declared today by the plugin grant
+> (`Grant.AuthoritativeFacetNamespaces`; NetBox is authoritative for `net.subnet`/`net.vlan`); when `sources/` CaC
+> (ADR-0056) lands it simply **sets the same flag from Git** — the mechanism is stable, so that arrives additively
+> with **no rework**. This supersedes the "deterministic-default interim authority" note under Consequences.
 
 **4. Reads resolve by KIND — additive-union for predicates, declared-authority for scalars — never an arbitrary
 tiebreak (§2.4, guardian M4/M5).** A **View facet-predicate / membership test** is **additive-union**: the Entity
@@ -107,17 +128,30 @@ sequences the label plumbing; the `os.kernel` case (a Facet) is solved here, `os
 - **Negative / trade-offs:** the Facet store grows a source dimension (`(Entity, namespace, source)`), the
   `facet_owner_check`/write-path triggers are re-based (a migration + careful test — the highest-care §1.2 surface,
   so this **re-guardian is a hard gate before implementation**), and the effective-value read path + the
-  ownership-contention Finding are new. Authority declaration rides `sources/` CaC (ADR-0056 1–4), still pending —
-  until it lands, the deterministic-default (SoR / stable order) is the interim authority.
+  ownership-contention Finding are new. Authority declaration is **implemented** as the `facet_owner.authoritative`
+  flag (decision 3, migration `00036`), declared today by the plugin grant and by `sources/` CaC (ADR-0056)
+  additively when it lands — there is no "deterministic-default interim authority"; undeclared multi-source
+  contention fails safe (omit) and surfaces a Finding, never a silent pick.
 - **Migration safety (guardian M7, §1.2 highest-care):** existing run-written facet rows have `prov_source_id`
   NULL — a NULL cannot enter the PK, so the migration **backfills before re-keying**: run-only namespaces get a
   reserved run source (or, since the graph is rebuildable, drop-and-let-resync); `facet_owner`'s existing
   `syncer`/`blueprint`/`team` owners re-key by `owner_ref` (the registration stays; the *authority* declaration
   lives in `sources/` CaC, never overloaded into this table).
-- **Follow-ups:** the label per-key-provenance change (decision 6); the ownership-contention Finding + resolution
-  UX; the retroactive entity-merge case (two pre-existing entities that each already hold the Facet — with the
-  per-source grain their rows don't PK-collide on merge, but the merge path must preserve both); binding
-  `prov_source_id` to the authenticated Source at every write layer (S1).
+- **Follow-ups (post-implementation status, 2026-07-18):**
+  - **Declared-authority (decisions 3/4): DONE** — `facet_owner.authoritative` + resolver + grant wiring, live.
+  - **Per-Actuator source (old "M2"): DISSOLVED** by the guardian — an Actuator is not a Source (§2); Run/Actuator
+    write-backs are correctly Run-provenance under the `''` key, and resync-able as-built state comes from a
+    **Syncer+Source** (e.g. a Crossplane Syncer), not a synthesized Actuator-source. Nothing to build.
+  - **Drop the run-bypass (old "M3"): DISSOLVED** — un-buildable once M2 dissolves (`''` is not a registered
+    source), and the §2.5 bound for Run facet writes correctly lives at the ADR-0054 FacetWriteScope governor, not
+    in the DB trigger (which correctly checks only namespace-is-registered, all it can see).
+  - **§4.3 damp write-through: SCOPED FORWARD** — a remediation reflecting a just-applied value *through* the
+    declared-authoritative Syncer's row (ahead of Syncer lag). No damp mechanism exists in code today; this is a
+    future §4.3 increment (stamps an *already-registered* Syncer's source onto a run write — legitimate, unlike M2).
+  - **Still open:** the **label** per-key-provenance change (decision 6 — a separate ADR-0041 evolution: the label
+    *bag* → per-source values, touching every View selector); the retroactive entity-merge case (two pre-existing
+    entities each already holding the Facet — the per-source grain avoids PK-collision, but the merge path must
+    preserve both); binding `prov_source_id` to the authenticated Source at every write layer (S1).
 
 ## Alternatives considered
 
@@ -158,3 +192,23 @@ sequences the label plumbing; the `os.kernel` case (a Facet) is solved here, `os
   source; **M7** the migration backfills NULL run-source rows before re-keying. Flags folded: S1 (bind
   `prov_source_id` to the authenticated grant), S2/S3 (single resolver for descent + predicates). **The gate is
   cleared** — the mechanism is now specified to implement without a §1.2/§2.4 defect.
+- **charter-guardian post-implementation review (2026-07-18): PASS on the shipped model; the two deferred
+  follow-ups both DISSOLVE.** With the base + declared-authority implemented, a focused review of the last two
+  write-side follow-ups returned:
+  - **Old "M2" (per-Actuator source) — DISSOLVE.** `Source` and `Actuator` are distinct Named Kinds (§2);
+    `types/provenance.go` keeps a deliberately **binary** writer model (`WriterSyncer` carries a `SourceID` — a
+    system observed *from*; `WriterRun` carries none — "the execution *is* the source"). Synthesizing a
+    per-Actuator `prov_source_id` on a `WriterRun` write-back smuggles in a third writer kind and lets a fiction
+    nothing resyncs from be declared authoritative (§1.2 rebuildability). The `''` key is correct; two Actuators on
+    one `(Entity, ns)` lose no signal (each apply's RunRef is retained in `facet_history` by version — intrinsic
+    Run-provenance, *not* the banned §2.4 cross-source last-writer-wins), and descent already tells them apart by
+    RunRef (§1.8). Resync-able as-built state → a **Crossplane Syncer+Source**, the model working as designed.
+    → This **retracts** the `re-review`'s M2 phrasing above ("Actuator write-backs get their own source").
+  - **Old "M3" (drop the run-bypass) — DISSOLVE.** Un-buildable once M2 dissolves (`''` is not a registered
+    owner), and the per-Run §2.5 bound correctly lives at the ADR-0054 **FacetWriteScope governor** (where the
+    grant data exists), not in plpgsql. DB registration-check + governor grant-intersection is correct
+    defense-in-depth; pushing the grant into the trigger would duplicate the sovereign grant surface in the DB
+    (§1.4/§1.5 drift). The trigger correctly checks only "namespace is registered at all."
+  - **Genuine item surfaced (not M2/M3): the §4.3 damp write-through** (decision 2) is specified-but-unbuilt —
+    scoped forward above. It stamps an *already-registered Syncer's* source onto a run write (legitimate), which is
+    exactly *not* what M2 proposed.

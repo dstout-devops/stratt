@@ -773,13 +773,17 @@ func run(ctx context.Context, log *slog.Logger) error {
 		}
 		defer conn.Close()
 		grant := pluginhost.Grant{
-			PluginIdentity:   env("STRATT_NETBOX_PLUGIN_ID", "netbox"),
-			Tier:             pluginhost.Tier(env("STRATT_NETBOX_TIER", "trusted")),
-			Source:           types.Source{Kind: "netbox", Name: sourceName, Endpoint: os.Getenv("STRATT_NETBOX_URL")},
-			FacetNamespaces:  []string{"net.subnet", "net.vlan"},
-			LabelKeys:        []string{"source", "net.cidr", "vlan.vid"},
-			IdentitySchemes:  []string{"netbox.prefix.id", "netbox.vlan.id"},
-			TombstoneSchemes: []string{"netbox.prefix.id", "netbox.vlan.id"},
+			PluginIdentity:  env("STRATT_NETBOX_PLUGIN_ID", "netbox"),
+			Tier:            pluginhost.Tier(env("STRATT_NETBOX_TIER", "trusted")),
+			Source:          types.Source{Kind: "netbox", Name: sourceName, Endpoint: os.Getenv("STRATT_NETBOX_URL")},
+			FacetNamespaces: []string{"net.subnet", "net.vlan"},
+			// NetBox is the IPAM system-of-record: its net.subnet/net.vlan are the
+			// declared "truth" (ADR-0060). Crossplane also projects net.subnet (its
+			// as-built CIDR — retained signal), but a scalar read resolves to NetBox.
+			AuthoritativeFacetNamespaces: []string{"net.subnet", "net.vlan"},
+			LabelKeys:                    []string{"source", "net.cidr", "vlan.vid"},
+			IdentitySchemes:              []string{"netbox.prefix.id", "netbox.vlan.id"},
+			TombstoneSchemes:             []string{"netbox.prefix.id", "netbox.vlan.id"},
 		}
 		host := pluginhost.New(store, pluginv1.NewPluginServiceClient(conn), grant, log)
 		controllers = append(controllers, homeSupervise(sourceName, host.Register, func(cctx context.Context) error {

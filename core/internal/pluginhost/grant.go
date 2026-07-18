@@ -42,8 +42,14 @@ type Grant struct {
 	// FacetNamespaces / LabelKeys / IdentitySchemes are the allowlists the core
 	// registers ownership from and gates emissions against.
 	FacetNamespaces []string
-	LabelKeys       []string
-	IdentitySchemes []string
+	// AuthoritativeFacetNamespaces is the subset of FacetNamespaces this source is
+	// the declared effective "truth" for (ADR-0060 declared-authority). When many
+	// sources project a namespace, a scalar read resolves to the authoritative
+	// source's value; the others are retained as signal. Must be a subset of
+	// FacetNamespaces. At most one source per namespace may claim it (§2.4).
+	AuthoritativeFacetNamespaces []string
+	LabelKeys                    []string
+	IdentitySchemes              []string
 	// TombstoneSchemes are the identity schemes the host tombstones by on a
 	// full-sync boundary (ADR-0042). Must be a subset of IdentitySchemes.
 	TombstoneSchemes []string

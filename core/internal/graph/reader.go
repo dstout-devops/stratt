@@ -150,35 +150,59 @@ func (s *Store) FacetValuesByEntities(ctx context.Context, namespace string, ent
 	if len(entityIDs) == 0 {
 		return map[string]json.RawMessage{}, nil
 	}
+	// ADR-0060 M5 + declared-authority: a scalar read resolves ONE effective value
+	// per Entity from now-possibly-many per-source rows — never a last-row/last-writer
+	// pick. Each row is flagged is_authority when its writer is the namespace's
+	// DECLARED authoritative owner (facet_owner.authoritative — at most one, §2.4):
+	// a syncer stamps prov_writer_ref = its owner_ref, so the join is exact. Run
+	// (empty-source) write-backs never match an authoritative syncer-owner, so a
+	// build's as-applied value defers to the declared IPAM/SoR truth by construction.
 	rows, err := s.pool.Query(ctx, `
-		SELECT entity_id, value, prov_source_id FROM graph.facet
-		WHERE namespace = $1 AND entity_id = ANY($2::uuid[])`, namespace, entityIDs)
+		SELECT f.entity_id, f.value,
+		       (o.owner_ref IS NOT NULL) AS is_authority
+		FROM graph.facet f
+		LEFT JOIN graph.facet_owner o
+		  ON o.namespace = f.namespace AND o.owner_ref = f.prov_writer_ref AND o.authoritative
+		WHERE f.namespace = $1 AND f.entity_id = ANY($2::uuid[])`, namespace, entityIDs)
 	if err != nil {
 		return nil, fmt.Errorf("graph: facet values by entities: %w", err)
 	}
 	defer rows.Close()
-	// ADR-0060 M5: a scalar read resolves ONE effective value per Entity from
-	// now-possibly-many per-source rows — never a last-row/last-writer pick. With
-	// no declared authority yet (sources/ CaC pending), a single-source Entity
-	// yields its value; a multi-source Entity is OMITTED (fail-safe — e.g. mgmt.site
-	// routing falls to the default) so nothing is silently picked; the
-	// ownership-contention Finding surfaces it for the operator (§2.4/§1.8).
-	perEntity := make(map[string][]json.RawMessage, len(entityIDs))
+	type candidate struct {
+		val         json.RawMessage
+		isAuthority bool
+	}
+	perEntity := make(map[string][]candidate, len(entityIDs))
 	for rows.Next() {
-		var id, src string
+		var id string
 		var val json.RawMessage
-		if err := rows.Scan(&id, &val, &src); err != nil {
+		var isAuthority bool
+		if err := rows.Scan(&id, &val, &isAuthority); err != nil {
 			return nil, fmt.Errorf("graph: scan facet value: %w", err)
 		}
-		perEntity[id] = append(perEntity[id], val)
+		perEntity[id] = append(perEntity[id], candidate{val, isAuthority})
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
+	// Resolve: a single source yields its value. Many sources resolve to the ONE
+	// declared authority if present; with none declared the read is OMITTED
+	// (fail-safe — e.g. mgmt.site routing falls to the default) so nothing is
+	// silently picked, and the ownership-contention Finding surfaces it (§2.4/§1.8).
 	out := make(map[string]json.RawMessage, len(perEntity))
-	for id, vals := range perEntity {
-		if len(vals) == 1 {
-			out[id] = vals[0]
+	for id, cands := range perEntity {
+		if len(cands) == 1 {
+			out[id] = cands[0].val
+			continue
+		}
+		var auth []json.RawMessage
+		for _, c := range cands {
+			if c.isAuthority {
+				auth = append(auth, c.val)
+			}
+		}
+		if len(auth) == 1 {
+			out[id] = auth[0]
 		}
 	}
 	return out, nil

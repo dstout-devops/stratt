@@ -176,6 +176,78 @@ func TestFacetOwnership(t *testing.T) {
 	}
 }
 
+// TestFacetDeclaredAuthority proves the second half of ADR-0060: retaining all
+// per-source signal AND resolving a scalar read to the ONE declared authority.
+func TestFacetDeclaredAuthority(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	p := s.NormalizerProjector()
+
+	ids, err := p.UpsertEntities(ctx, prov(types.WriterSyncer, "netbox/syncer"), []EntityUpsert{
+		{Kind: "subnet", IdentityKeys: map[string]string{"netbox.prefix.id": "p-1"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := ids[0]
+
+	// NetBox is the declared IPAM truth for net.subnet; Crossplane co-owns it.
+	if err := s.RegisterFacetOwner(ctx, types.FacetOwner{Namespace: "net.subnet", OwnerKind: "syncer", OwnerRef: "netbox/syncer", Authoritative: true}); err != nil {
+		t.Fatal(err)
+	}
+	// §2.4: a SECOND authoritative claim on the same namespace is rejected — never
+	// two competing truths resolved by an implicit tiebreak.
+	if err := s.RegisterFacetOwner(ctx, types.FacetOwner{Namespace: "net.subnet", OwnerKind: "syncer", OwnerRef: "crossplane/syncer", Authoritative: true}); err == nil {
+		t.Fatal("a second authoritative owner for one namespace must be rejected (§2.4)")
+	}
+	// Crossplane registers as a NON-authoritative co-owner (retained signal).
+	if err := s.RegisterFacetOwner(ctx, types.FacetOwner{Namespace: "net.subnet", OwnerKind: "syncer", OwnerRef: "crossplane/syncer"}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Both sources project net.subnet with DIFFERENT values — both retained.
+	nbp := types.Provenance{WriterKind: types.WriterSyncer, WriterRef: "netbox/syncer", SourceID: "00000000-0000-0000-0000-0000000000bb", At: time.Now().UTC()}
+	if err := p.UpsertFacet(ctx, nbp, id, "net.subnet", json.RawMessage(`{"cidr":"10.0.0.0/24"}`)); err != nil {
+		t.Fatal(err)
+	}
+	cxp := types.Provenance{WriterKind: types.WriterSyncer, WriterRef: "crossplane/syncer", SourceID: "00000000-0000-0000-0000-0000000000dd", At: time.Now().UTC()}
+	if err := p.UpsertFacet(ctx, cxp, id, "net.subnet", json.RawMessage(`{"cidr":"10.0.0.0/25"}`)); err != nil {
+		t.Fatal(err)
+	}
+
+	// A scalar read resolves to the DECLARED authority (NetBox) — not a last-writer pick.
+	vals, err := s.FacetValuesByEntities(ctx, "net.subnet", []string{id})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// jsonb reformats with whitespace, so assert on content: NetBox's /24, not /25.
+	if !strings.Contains(string(vals[id]), "10.0.0.0/24") || strings.Contains(string(vals[id]), "/25") {
+		t.Fatalf("scalar read must resolve to the declared authority (NetBox /24), got %s", vals[id])
+	}
+
+	// Contrast: a namespace with NO declared authority + multi-source → OMITTED
+	// (fail-safe); the ownership-contention Finding surfaces it (§2.4/§1.8).
+	if err := s.RegisterFacetOwner(ctx, types.FacetOwner{Namespace: "net.mtu", OwnerKind: "syncer", OwnerRef: "netbox/syncer"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.RegisterFacetOwner(ctx, types.FacetOwner{Namespace: "net.mtu", OwnerKind: "syncer", OwnerRef: "crossplane/syncer"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.UpsertFacet(ctx, nbp, id, "net.mtu", json.RawMessage(`{"mtu":1500}`)); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.UpsertFacet(ctx, cxp, id, "net.mtu", json.RawMessage(`{"mtu":9000}`)); err != nil {
+		t.Fatal(err)
+	}
+	mtu, err := s.FacetValuesByEntities(ctx, "net.mtu", []string{id})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v, ok := mtu[id]; ok {
+		t.Fatalf("multi-source with NO declared authority must be omitted (fail-safe), got %s", v)
+	}
+}
+
 // TestIdentityCorrelation proves observations correlate onto one Entity via
 // identity keys, and conflicts surface instead of merging silently.
 func TestIdentityCorrelation(t *testing.T) {

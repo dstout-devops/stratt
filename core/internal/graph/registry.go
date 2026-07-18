@@ -25,12 +25,16 @@ func (s *Store) RegisterFacetOwner(ctx context.Context, o types.FacetOwner) erro
 	// source registering the same namespace is now legal — no longer ErrOwnerConflict.
 	// Registration still gates who MAY write (§2.5); the authoritative view is a
 	// separate sources/ CaC declaration.
+	// ADR-0060 declared-authority: `authoritative` marks this owner the effective
+	// "truth" for the namespace. At most one per namespace (partial unique index,
+	// §2.4); a conflicting second claim FAILS here rather than silently tiebreaking.
 	if _, err := s.pool.Exec(ctx, `
-		INSERT INTO graph.facet_owner (namespace, owner_kind, owner_ref, view_scope)
-		VALUES ($1, $2, $3, nullif($4, ''))
+		INSERT INTO graph.facet_owner (namespace, owner_kind, owner_ref, view_scope, authoritative)
+		VALUES ($1, $2, $3, nullif($4, ''), $5)
 		ON CONFLICT (namespace, owner_ref) DO UPDATE
-		SET owner_kind = excluded.owner_kind, view_scope = excluded.view_scope`,
-		o.Namespace, o.OwnerKind, o.OwnerRef, o.ViewScope); err != nil {
+		SET owner_kind = excluded.owner_kind, view_scope = excluded.view_scope,
+		    authoritative = excluded.authoritative`,
+		o.Namespace, o.OwnerKind, o.OwnerRef, o.ViewScope, o.Authoritative); err != nil {
 		return fmt.Errorf("graph: register facet owner %s: %w", o.Namespace, err)
 	}
 	return nil

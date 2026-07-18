@@ -180,7 +180,8 @@ func (h *Host) Register(ctx context.Context) error {
 
 	ref := h.grant.WriterRef()
 	for _, ns := range h.grant.FacetNamespaces {
-		if err := h.store.RegisterFacetOwner(ctx, types.FacetOwner{Namespace: ns, OwnerKind: "syncer", OwnerRef: ref}); err != nil {
+		authoritative := contains(h.grant.AuthoritativeFacetNamespaces, ns)
+		if err := h.store.RegisterFacetOwner(ctx, types.FacetOwner{Namespace: ns, OwnerKind: "syncer", OwnerRef: ref, Authoritative: authoritative}); err != nil {
 			return fmt.Errorf("pluginhost: register facet owner %q: %w", ns, err)
 		}
 	}
