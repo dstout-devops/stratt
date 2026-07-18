@@ -816,11 +816,13 @@ func run(ctx context.Context, log *slog.Logger) error {
 		}
 		defer conn.Close()
 		grant := pluginhost.Grant{
-			PluginIdentity:   env("STRATT_CROSSPLANE_PLUGIN_ID", "crossplane"),
-			Tier:             pluginhost.Tier(env("STRATT_CROSSPLANE_TIER", "trusted")),
-			Source:           types.Source{Kind: "crossplane", Name: sourceName},
-			FacetNamespaces:  []string{"net.subnet"}, // co-owner, NOT authoritative (NetBox is)
-			LabelKeys:        []string{"source"},
+			PluginIdentity:  env("STRATT_CROSSPLANE_PLUGIN_ID", "crossplane"),
+			Tier:            pluginhost.Tier(env("STRATT_CROSSPLANE_TIER", "trusted")),
+			Source:          types.Source{Kind: "crossplane", Name: sourceName},
+			FacetNamespaces: []string{"net.subnet"}, // co-owner, NOT authoritative (NetBox is)
+			// No label ownership: the "source" of a subnet is its PROVENANCE
+			// (prov_source_id, ADR-0060), not a shared label key — which is per-key
+			// single-owner (ADR-0041) and legitimately held by another Syncer.
 			IdentitySchemes:  []string{"crossplane.claim"},
 			TombstoneSchemes: []string{"crossplane.claim"},
 		}

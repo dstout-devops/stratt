@@ -40,7 +40,7 @@ spec:
         app.kubernetes.io/component: plugin
         stratt.dev/plugin: {{ .name }}
     spec:
-      {{- if .secretNamespace }}
+      {{- if or .secretNamespace .kubeReader }}
       serviceAccountName: {{ $name }}
       {{- end }}
       securityContext: {{- toYaml $.Values.podSecurityContext | nindent 8 }}
@@ -104,13 +104,15 @@ spec:
     - name: grpc
       port: 9090
       targetPort: 9090
-{{- if .secretNamespace }}
+{{- if or .secretNamespace .kubeReader }}
 ---
 apiVersion: v1
 kind: ServiceAccount
 metadata:
   name: {{ $name }}
   labels: {{- include "stratt.labels" $ | nindent 4 }}
+{{- end }}
+{{- if .secretNamespace }}
 ---
 # Confined to the brokerable-Secret namespace only (§2.5, notify MF-A) — never a
 # cluster-wide secrets reader. The RBAC gate ≈ the per-call use-grant the core
@@ -136,6 +138,35 @@ roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
   name: {{ $name }}-secret-reader
+subjects:
+  - kind: ServiceAccount
+    name: {{ $name }}
+    namespace: {{ $.Release.Namespace }}
+{{- end }}
+{{- if .kubeReader }}
+---
+# Confined READ access to exactly the resources this plugin OBSERVES (§2.5): a Syncer
+# over the kube API — e.g. Crossplane observing its Claim CRs. get/list/watch only,
+# scoped to the declared apiGroups/resources; never a cluster-admin reader.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ $name }}-kube-reader
+  labels: {{- include "stratt.labels" $ | nindent 4 }}
+rules:
+  - apiGroups: {{ .kubeReader.apiGroups | toJson }}
+    resources: {{ .kubeReader.resources | toJson }}
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ $name }}-kube-reader
+  labels: {{- include "stratt.labels" $ | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ $name }}-kube-reader
 subjects:
   - kind: ServiceAccount
     name: {{ $name }}

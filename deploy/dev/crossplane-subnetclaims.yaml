@@ -1,0 +1,49 @@
+# Dev-only: a minimal SubnetClaim CRD + instances standing in for Crossplane-managed
+# cloud subnets. The Crossplane Syncer plugin OBSERVES these as a registered Source
+# (ADR-0060) — demonstrating Crossplane and vSphere managing network in ONE estate,
+# without needing the full Crossplane controller stack. In a real deployment these are
+# genuine Crossplane Claims reconciled against a cloud provider.
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: subnetclaims.net.example.org
+spec:
+  group: net.example.org
+  scope: Cluster
+  names:
+    plural: subnetclaims
+    singular: subnetclaim
+    kind: SubnetClaim
+    listKind: SubnetClaimList
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              properties:
+                cidr: { type: string }
+            status:
+              type: object
+              properties:
+                cidr: { type: string }
+      subresources:
+        status: {}
+---
+apiVersion: net.example.org/v1alpha1
+kind: SubnetClaim
+metadata:
+  name: cloud-web-subnet
+spec:
+  cidr: 10.20.0.0/24
+---
+apiVersion: net.example.org/v1alpha1
+kind: SubnetClaim
+metadata:
+  name: cloud-db-subnet
+spec:
+  cidr: 10.20.1.0/24

@@ -92,3 +92,22 @@ plugins:
     hostEnv:
       STRATT_AWS_SOURCE_NAME: "awsec2-build"
       # STRATT_AWS_INTERVAL deliberately unset → build Action only, no Syncer.
+  # Crossplane Syncer (ADR-0059/0060): OBSERVES SubnetClaim CRs (deploy/dev/crossplane-
+  # subnetclaims.yaml) as a registered network Source — so Crossplane and vSphere manage
+  # network in ONE estate, each subnet retained per-source. kubeReader grants CONFINED
+  # get/list/watch on just subnetclaims (§2.5), never a cluster reader. No Crossplane
+  # controllers needed for the Observe demo — the CRs stand in for cloud subnets.
+  - name: crossplane
+    image:
+      repository: stratt-plugin-crossplane
+      tag: dev
+      digest: ""
+      pullPolicy: Never # kind-loaded (task image:crossplane-plugin)
+    kubeReader:
+      apiGroups: ["net.example.org"]
+      resources: ["subnetclaims"]
+    env:
+      STRATT_CROSSPLANE_OBSERVE: '[{"group":"net.example.org","version":"v1alpha1","resource":"subnetclaims","projectKind":"subnet","identityScheme":"crossplane.claim"}]'
+    hostEnv:
+      STRATT_CROSSPLANE_SOURCE_NAME: "crossplane-dev"
+      STRATT_CROSSPLANE_INTERVAL: "15s"
