@@ -192,17 +192,27 @@ func (c *Controller) reconcileProvisioning(ctx context.Context, decls Declaratio
 	log = log.With("component", "provision")
 	var intents []provision.Intent
 	specs := map[string]provision.ComputeSpec{}
+	var singletons []provision.SingletonIntent
+	singSpecs := map[string]provision.SingletonIntent{}
 	for _, in := range decls.Intents {
-		if in.Kind != types.IntentCompute {
-			continue
+		switch {
+		case in.Kind == types.IntentCompute:
+			pi, err := provision.FromIntent(in)
+			if err != nil {
+				log.Error("intent/compute decode failed", "intent", in.Name, "error", err)
+				return
+			}
+			intents = append(intents, pi)
+			specs[pi.Name] = pi.Spec
+		case types.SingletonIntentKinds[in.Kind]:
+			si, err := provision.FromSingletonIntent(in)
+			if err != nil {
+				log.Error("singleton intent decode failed", "intent", in.Name, "kind", in.Kind, "error", err)
+				return
+			}
+			singletons = append(singletons, si)
+			singSpecs[in.Name] = si
 		}
-		pi, err := provision.FromIntent(in)
-		if err != nil {
-			log.Error("intent/compute decode failed", "intent", in.Name, "error", err)
-			return
-		}
-		intents = append(intents, pi)
-		specs[pi.Name] = pi.Spec
 	}
 
 	built, err := c.Store.ProvisionedInstances(ctx)
@@ -215,6 +225,17 @@ func (c *Controller) reconcileProvisioning(ctx context.Context, decls Declaratio
 		// Exclusive-claim collision (§2.4) — a declaration error to fix, not a
 		// build to run. Surface loudly; apply nothing.
 		log.Error("provisioning plan rejected", "error", err)
+		return
+	}
+	// Named-singleton mode (ADR-0059 decision 4) — the same gated-Finding plumbing.
+	builtSing, err := c.Store.ProvisionedSingletons(ctx)
+	if err != nil {
+		log.Error("provisioned-singletons read failed", "error", err)
+		return
+	}
+	sres, err := provision.PlanSingletons(singletons, builtSing, 0)
+	if err != nil {
+		log.Error("singleton provisioning plan rejected", "error", err)
 		return
 	}
 
@@ -236,6 +257,38 @@ func (c *Controller) reconcileProvisioning(ctx context.Context, decls Declaratio
 		}
 		keep(b, inst.Name)
 	}
+	// Singleton builds: baseline provision/<intent>, target = the (kind/name)
+	// correlation key the built Entity will carry as stratt.intent/singleton.
+	for _, inst := range sres.ToBuild {
+		si := singSpecs[inst.Intent]
+		detail, _ := json.Marshal(map[string]any{
+			"singleton": inst.Name, "intent": inst.Intent, "intentKind": si.Kind,
+			"correlationLabel": map[string]string{"stratt.intent/singleton": inst.Name},
+			"builder":          si.Spec.Builder, "buildWorkflow": si.Spec.BuildWorkflow,
+			"projectKind": si.Spec.ProjectKind, "labels": si.Spec.Labels, "params": si.Spec.Params,
+			"reason": "declared but not built — launch the gated build Workflow (never auto-run, §5 Flow 1)",
+		})
+		b := "provision/" + inst.Intent
+		if err := c.Store.WriteProvisionFinding(ctx, b, inst.Name, "warning", detail); err != nil {
+			log.Error("write singleton provision finding failed", "singleton", inst.Name, "error", err)
+			continue
+		}
+		keep(b, inst.Name)
+	}
+	for _, p := range sres.Paused {
+		detail, _ := json.Marshal(map[string]any{
+			"missing": p.Missing, "desired": p.Desired, "limit": p.Limit,
+			"reason": "singleton provisioning batch exceeds the §4.3 max-delta gate — review, then apply explicitly",
+		})
+		b := "provision/" + p.Intent
+		const batch = "(batch)"
+		if err := c.Store.WriteProvisionFinding(ctx, b, batch, "warning", detail); err != nil {
+			log.Error("write singleton batch finding failed", "error", err)
+			continue
+		}
+		keep(b, batch)
+		log.Warn("singleton provisioning paused: max-delta gate", "missing", p.Missing, "limit", p.Limit)
+	}
 	for _, p := range res.Paused {
 		detail, _ := json.Marshal(map[string]any{
 			"intent": p.Intent, "missing": p.Missing, "desired": p.Desired, "limit": p.Limit,
@@ -255,8 +308,10 @@ func (c *Controller) reconcileProvisioning(ctx context.Context, decls Declaratio
 	if err != nil {
 		log.Error("resolve provision findings failed", "error", err)
 	}
-	if len(res.ToBuild) > 0 || len(res.Paused) > 0 || resolved > 0 {
-		log.Info("provisioning reconcile", "toBuild", len(res.ToBuild), "paused", len(res.Paused), "resolved", resolved)
+	if len(res.ToBuild) > 0 || len(res.Paused) > 0 || len(sres.ToBuild) > 0 || len(sres.Paused) > 0 || resolved > 0 {
+		log.Info("provisioning reconcile",
+			"toBuild", len(res.ToBuild), "paused", len(res.Paused),
+			"singletonBuild", len(sres.ToBuild), "singletonPaused", len(sres.Paused), "resolved", resolved)
 	}
 }
 

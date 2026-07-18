@@ -101,6 +101,98 @@ func desired(in Intent) []Instance {
 	return out
 }
 
+// ── Named-singleton provisioning (ADR-0059 decision 4) ──────────────────────
+// Network/topology Intents (subnet, dns-record, dmz) are cardinality-1 named
+// singletons, not count/ordinal fleets. The desired unit is the ONE named Entity;
+// the correlation key is (intentKind, name) — a per-kind namespace, NOT the
+// stratt.intent/instance label (a subnet named "web-dmz" must never collide with a
+// Compute instance named "web-dmz", §2). §4.3 bites on the number of singleton
+// builds surfaced per reconcile pass (a 500-record DNS-zone import pauses the batch),
+// keyed on build count, not ordinal count.
+
+// SingletonSpec is the decoded named-singleton Intent payload
+// (contracts/intents/{subnet,dnsrecord,dmz}.schema.json).
+type SingletonSpec struct {
+	ProjectKind   string            `json:"projectKind"`
+	Labels        map[string]string `json:"labels"`
+	Builder       string            `json:"builder"`
+	BuildWorkflow string            `json:"buildWorkflow"`
+	Params        map[string]any    `json:"params"`
+}
+
+// SingletonIntent pairs a declaration name + its Intent kind with the decoded spec.
+type SingletonIntent struct {
+	Name string
+	Kind string // types.IntentSubnet | IntentDnsRecord | IntentDmz
+	Spec SingletonSpec
+}
+
+// SingletonKey is the per-kind correlation key (intentKind, name) — the value of the
+// stratt.intent/singleton label a built singleton Entity carries, so desired<->built
+// correlates without a cross-kind collision.
+func SingletonKey(kind, name string) string { return kind + "/" + name }
+
+// FromSingletonIntent decodes a types.Intent (a singleton kind) into a SingletonIntent.
+func FromSingletonIntent(in types.Intent) (SingletonIntent, error) {
+	raw, err := json.Marshal(in.Spec)
+	if err != nil {
+		return SingletonIntent{}, fmt.Errorf("provision: intent %q: marshal spec: %w", in.Name, err)
+	}
+	var s SingletonSpec
+	if err := json.Unmarshal(raw, &s); err != nil {
+		return SingletonIntent{}, fmt.Errorf("provision: intent %q: decode singleton spec: %w", in.Name, err)
+	}
+	return SingletonIntent{Name: in.Name, Kind: in.Kind, Spec: s}, nil
+}
+
+// PlanSingletons computes the named-singleton shortfall. `built` is the set of
+// stratt.intent/singleton correlation keys already projected. Each desired Instance
+// carries its correlation key as Name (kind/name) so the claim + built maps namespace
+// by kind. Two Intents claiming the same (kind, name) is a compile error (§2.4). If the
+// TOTAL missing across the pass exceeds cap, the whole batch pauses (§4.3), never a
+// silent fan-out. Pure: no writes, no phantom Entities.
+func PlanSingletons(intents []SingletonIntent, built map[string]bool, cap int) (Result, error) {
+	if cap <= 0 {
+		cap = DefaultMaxBuildBatch
+	}
+	sorted := append([]SingletonIntent(nil), intents...)
+	sort.Slice(sorted, func(i, j int) bool {
+		if sorted[i].Kind != sorted[j].Kind {
+			return sorted[i].Kind < sorted[j].Kind
+		}
+		return sorted[i].Name < sorted[j].Name
+	})
+
+	// Exclusive claim on (kind, name) across ALL singleton Intents (§2.4).
+	claim := map[string]string{}
+	for _, in := range sorted {
+		key := SingletonKey(in.Kind, in.Name)
+		if prev, dup := claim[key]; dup {
+			return Result{}, fmt.Errorf("provision: singleton %q is claimed by two Intents (%q and %q) — resolve the name collision (exclusive claim, §2.4)", key, prev, in.Name)
+		}
+		claim[key] = in.Name
+	}
+
+	var r Result
+	var missing []Instance
+	for _, in := range sorted {
+		key := SingletonKey(in.Kind, in.Name)
+		inst := Instance{Name: key, Intent: in.Name}
+		if built[key] {
+			r.Resolved = append(r.Resolved, inst)
+		} else {
+			missing = append(missing, inst)
+		}
+	}
+	// §4.3: pause the whole batch if the pass would surface too many builds at once.
+	if len(missing) > cap {
+		r.Paused = append(r.Paused, Pause{Intent: "(singletons)", Missing: len(missing), Desired: len(sorted), Limit: cap})
+		return r, nil
+	}
+	r.ToBuild = missing
+	return r, nil
+}
+
 // Plan computes the provisioning shortfall. `built` is the set of
 // stratt.intent/instance labels already projected (correlated built Entities);
 // `cap` bounds the per-Intent build batch (§4.3, 0 => DefaultMaxBuildBatch), and

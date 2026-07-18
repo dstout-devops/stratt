@@ -120,3 +120,74 @@ func TestPlanMaxDeltaPauses(t *testing.T) {
 		t.Errorf("exactly-cap fleet must surface all builds, got build=%d paused=%d", len(ok.ToBuild), len(ok.Paused))
 	}
 }
+
+// TestPlanSingletonsShortfall proves named-singleton mode (ADR-0059 decision 4):
+// one desired Entity per Intent, correlated by (kind, name), missing ones surfaced.
+func TestPlanSingletonsShortfall(t *testing.T) {
+	intents := []SingletonIntent{
+		{Name: "web-dmz", Kind: "Intent/Subnet", Spec: SingletonSpec{Builder: "crossplane", BuildWorkflow: "net-build"}},
+		{Name: "db-tier", Kind: "Intent/Subnet", Spec: SingletonSpec{Builder: "crossplane", BuildWorkflow: "net-build"}},
+	}
+	// web-dmz already built; db-tier is not.
+	built := map[string]bool{"Intent/Subnet/web-dmz": true}
+	r, err := PlanSingletons(intents, built, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(r.ToBuild) != 1 || r.ToBuild[0].Name != "Intent/Subnet/db-tier" {
+		t.Fatalf("expected db-tier to build, got %+v", r.ToBuild)
+	}
+	if len(r.Resolved) != 1 || r.Resolved[0].Name != "Intent/Subnet/web-dmz" {
+		t.Fatalf("expected web-dmz resolved, got %+v", r.Resolved)
+	}
+}
+
+// TestPlanSingletonsNoCrossKindCollision proves a subnet and a dmz named the same
+// do NOT collide — the correlation key namespaces by kind (§2).
+func TestPlanSingletonsNoCrossKindCollision(t *testing.T) {
+	intents := []SingletonIntent{
+		{Name: "edge", Kind: "Intent/Subnet", Spec: SingletonSpec{Builder: "x", BuildWorkflow: "w"}},
+		{Name: "edge", Kind: "Intent/Dmz", Spec: SingletonSpec{Builder: "x", BuildWorkflow: "w"}},
+	}
+	r, err := PlanSingletons(intents, nil, 0)
+	if err != nil {
+		t.Fatalf("distinct kinds must not collide: %v", err)
+	}
+	if len(r.ToBuild) != 2 {
+		t.Fatalf("both distinct-kind singletons should build, got %+v", r.ToBuild)
+	}
+}
+
+// TestPlanSingletonsBatchPauses proves the §4.3 gate pauses a large batch (e.g. a
+// 500-record DNS-zone import) instead of fanning out silently.
+func TestPlanSingletonsBatchPauses(t *testing.T) {
+	var intents []SingletonIntent
+	for i := 0; i < 30; i++ {
+		intents = append(intents, SingletonIntent{
+			Name: "rec-" + string(rune('a'+i%26)) + string(rune('a'+i/26)),
+			Kind: "Intent/DnsRecord", Spec: SingletonSpec{Builder: "dns", BuildWorkflow: "w"},
+		})
+	}
+	r, err := PlanSingletons(intents, nil, 25)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(r.ToBuild) != 0 || len(r.Paused) != 1 {
+		t.Fatalf("a 30-build batch over cap 25 must pause, got toBuild=%d paused=%d", len(r.ToBuild), len(r.Paused))
+	}
+	if r.Paused[0].Missing != 30 {
+		t.Fatalf("paused batch should report 30 missing, got %d", r.Paused[0].Missing)
+	}
+}
+
+// TestPlanSingletonsExclusiveClaim proves two Intents claiming the same (kind, name)
+// is a compile error (§2.4), never a silent tiebreak.
+func TestPlanSingletonsExclusiveClaim(t *testing.T) {
+	intents := []SingletonIntent{
+		{Name: "web-dmz", Kind: "Intent/Subnet", Spec: SingletonSpec{Builder: "a", BuildWorkflow: "w"}},
+		{Name: "web-dmz", Kind: "Intent/Subnet", Spec: SingletonSpec{Builder: "b", BuildWorkflow: "w"}},
+	}
+	if _, err := PlanSingletons(intents, nil, 0); err == nil {
+		t.Fatal("two Intents claiming the same (kind, name) must be a compile error")
+	}
+}

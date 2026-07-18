@@ -126,7 +126,8 @@ func intentKindFromFile(base string) string {
 // intentKindSpelling pins the exact Named-Kind spelling for intent filenames
 // that are not a plain first-letter capitalization (§2 vocabulary is frozen).
 var intentKindSpelling = map[string]string{
-	"fileset": "Intent/FileSet",
+	"fileset":   "Intent/FileSet",
+	"dnsrecord": "Intent/DnsRecord",
 }
 
 func ensure() error {

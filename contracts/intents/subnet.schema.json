@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "stratt:contract:intents/subnet:v1",
+  "title": "Intent/Subnet spec",
+  "description": "Desired a subnet (a CIDR range) declared in Git (ADR-0059, a named-singleton provisioning Intent). NOT an Entity (§1.2): cardinality-1 — the ONE named Entity that SHOULD exist, correlated desired<->built by (intentKind, name). The reconcile surfaces a GATED build (§5 Flow 1), never auto-launches, never writes the unbuilt. Landscape-agnostic: 'builder' is the swap point; 'params' is opaque, validated only against the builder's own input Contract (§1.5) — no per-provider network fields here (§1.1, no universal ontology). The built infra's attributes live in an owned-but-uncovered Facet namespace until a Contract consumes them (decision 1); this schema types only the CaC declaration seam, never the graph Facet.",
+  "type": "object",
+  "properties": {
+    "projectKind": {
+      "type": "string",
+      "description": "The Entity kind the built infra projects AS (default subnet), so Views select it. Carried on the build's Run-provenance projection — NEVER written by the reconcile (§1.2)."
+    },
+    "labels": {
+      "type": "object",
+      "additionalProperties": { "type": "string" },
+      "description": "Selection labels stamped on the built Entity's projection (per-key owned, ADR-0041)."
+    },
+    "builder": {
+      "type": "string",
+      "description": "The build Actuator/Action ref (crossplane | opentofu | dns | vsphere-network | ...). The landscape swap point (§1.4/§1.5); core learns no provider."
+    },
+    "buildWorkflow": {
+      "type": "string",
+      "description": "The GATED Workflow the operator launches to build the singleton (Gate -> builder -> project-back). Referenced by the provisioning Finding; never auto-launched (§5 Flow 1)."
+    },
+    "params": {
+      "type": "object",
+      "additionalProperties": true,
+      "description": "Opaque build params passed to the builder, validated against ITS input Contract downstream (§1.5). Never typed here (§1.1)."
+    }
+  },
+  "required": ["builder", "buildWorkflow"],
+  "additionalProperties": false
+}

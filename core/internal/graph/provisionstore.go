@@ -32,6 +32,34 @@ func (s *Store) ProvisionedInstances(ctx context.Context) (map[string]bool, erro
 	return out, rows.Err()
 }
 
+// ProvisionedSingletons returns the set of stratt.intent/singleton correlation
+// keys (kind/name) currently projected on live Entities (ADR-0059 decision 4): the
+// "built" set the named-singleton provisioning reconcile compares desired subnets/
+// dns-records/dmzs against. Per-kind namespaced so a singleton never collides with a
+// Compute instance. Only projections are consulted — the graph never holds the
+// unbuilt (§1.2).
+func (s *Store) ProvisionedSingletons(ctx context.Context) (map[string]bool, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT DISTINCT labels->>'stratt.intent/singleton'
+		FROM graph.entity
+		WHERE labels ? 'stratt.intent/singleton' AND deleted_at IS NULL`)
+	if err != nil {
+		return nil, fmt.Errorf("graph: provisioned singletons: %w", err)
+	}
+	defer rows.Close()
+	out := map[string]bool{}
+	for rows.Next() {
+		var key string
+		if err := rows.Scan(&key); err != nil {
+			return nil, fmt.Errorf("graph: scan provisioned singleton: %w", err)
+		}
+		if key != "" {
+			out[key] = true
+		}
+	}
+	return out, rows.Err()
+}
+
 // WriteProvisionFinding records/refreshes one open provisioning Finding
 // (ADR-0058): a gated build the operator must launch (§5 Flow 1). It is keyed to
 // the INTENT via baseline "provision/<intent>"; target is the desired instance
