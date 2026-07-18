@@ -15,6 +15,7 @@ use (
 	./plugins/certissuer
 	./plugins/chef
 	./plugins/msgraph
+	./plugins/netbox
 	./plugins/mcp
 	./plugins/notify
 	./plugins/opentofu

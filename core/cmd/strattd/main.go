@@ -725,6 +725,40 @@ func run(ctx context.Context, log *slog.Logger) error {
 		log.Info("no declared-estate plugin configured (STRATT_DECLARED_PLUGIN_ADDR empty); syncer idle")
 	}
 
+	// ── NetBox topology Syncer over the port (ADR-0059) ──────────────────────
+	// NetBox (netbox-community) is the IPAM/DCIM source of truth. The plugin
+	// projects `subnet`/`vlan` Entities + the `in-vlan` placement Relation; the
+	// grant owns the net.subnet/net.vlan Facet namespaces (owned-but-uncovered —
+	// no schema until a Contract consumes them, ADR-0059 M1). Grant from env is
+	// the Phase-0 stand-in for a sources/ CaC grant (ADR-0056 1-4).
+	if addr := os.Getenv("STRATT_NETBOX_PLUGIN_ADDR"); addr != "" {
+		sourceName := env("STRATT_NETBOX_SOURCE_NAME", "netbox")
+		interval, err := time.ParseDuration(env("STRATT_NETBOX_INTERVAL", "60s"))
+		if err != nil {
+			return fmt.Errorf("netbox interval: %w", err)
+		}
+		conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+		if err != nil {
+			return fmt.Errorf("netbox plugin dial %s: %w", addr, err)
+		}
+		defer conn.Close()
+		grant := pluginhost.Grant{
+			PluginIdentity:   env("STRATT_NETBOX_PLUGIN_ID", "netbox"),
+			Tier:             pluginhost.Tier(env("STRATT_NETBOX_TIER", "trusted")),
+			Source:           types.Source{Kind: "netbox", Name: sourceName, Endpoint: os.Getenv("STRATT_NETBOX_URL")},
+			FacetNamespaces:  []string{"net.subnet", "net.vlan"},
+			LabelKeys:        []string{"source", "net.cidr", "vlan.vid"},
+			IdentitySchemes:  []string{"netbox.prefix.id", "netbox.vlan.id"},
+			TombstoneSchemes: []string{"netbox.prefix.id", "netbox.vlan.id"},
+		}
+		host := pluginhost.New(store, pluginv1.NewPluginServiceClient(conn), grant, log)
+		controllers = append(controllers, homeSupervise(sourceName, host.Register, func(cctx context.Context) error {
+			return host.SyncLoop(cctx, interval)
+		}))
+	} else {
+		log.Info("no NetBox plugin configured (STRATT_NETBOX_PLUGIN_ADDR empty); syncer idle")
+	}
+
 	// ── MS Graph device Syncer over the port (ADR-0046/0047 Phase C cutover) ─
 	if addr := os.Getenv("STRATT_MSGRAPH_PLUGIN_ADDR"); addr != "" {
 		sourceName := env("STRATT_MSGRAPH_SOURCE_NAME", "msgraph")
