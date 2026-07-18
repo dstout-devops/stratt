@@ -22,6 +22,7 @@ import (
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 
@@ -471,6 +472,17 @@ func (d *Dispatcher) createJob(ctx context.Context, name, runID string, spec act
 		}
 	}
 
+	// Sandbox the ephemeral execution pod — the one pod that runs arbitrary tool
+	// content (§7.1/§3, enterprise-readiness hardening). Non-root is enforced
+	// (not merely assumed from the image's USER), privilege escalation and all
+	// capabilities are dropped, the SA token is NOT mounted (the arbitrary-content
+	// pod has no cluster identity), a runaway is CPU/memory-capped, and a hung Job
+	// is deadline-bounded so it can never run forever. (readOnlyRootFilesystem is a
+	// follow-up: it needs the EE image's write-paths moved onto emptyDir mounts.)
+	noRoot, noPrivEsc, noAutomount := true, false, false
+	deadline := int64(6 * 3600) // 6h ceiling on total Job runtime (incl. retries)
+	seccomp := &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault}
+
 	job := &batchv1.Job{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: name,
@@ -480,6 +492,7 @@ func (d *Dispatcher) createJob(ctx context.Context, name, runID string, spec act
 			},
 		},
 		Spec: batchv1.JobSpec{
+			ActiveDeadlineSeconds:   &deadline,
 			BackoffLimit:            &backoff,
 			TTLSecondsAfterFinished: &ttl,
 			Template: corev1.PodTemplateSpec{
@@ -487,14 +500,35 @@ func (d *Dispatcher) createJob(ctx context.Context, name, runID string, spec act
 					Labels: map[string]string{"stratt.dev/run-id": runID},
 				},
 				Spec: corev1.PodSpec{
-					SecurityContext: &corev1.PodSecurityContext{FSGroup: &fsGroup},
-					RestartPolicy:   corev1.RestartPolicyNever,
+					SecurityContext: &corev1.PodSecurityContext{
+						FSGroup:        &fsGroup,
+						RunAsNonRoot:   &noRoot,
+						SeccompProfile: seccomp,
+					},
+					AutomountServiceAccountToken: &noAutomount,
+					RestartPolicy:                corev1.RestartPolicyNever,
 					Containers: []corev1.Container{{
 						Name:         "ee",
 						Image:        image,
 						Command:      spec.Command,
 						Env:          env,
 						VolumeMounts: mounts,
+						SecurityContext: &corev1.SecurityContext{
+							RunAsNonRoot:             &noRoot,
+							AllowPrivilegeEscalation: &noPrivEsc,
+							Capabilities:             &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}},
+							SeccompProfile:           seccomp,
+						},
+						Resources: corev1.ResourceRequirements{
+							Requests: corev1.ResourceList{
+								corev1.ResourceCPU:    resource.MustParse("50m"),
+								corev1.ResourceMemory: resource.MustParse("64Mi"),
+							},
+							Limits: corev1.ResourceList{
+								corev1.ResourceCPU:    resource.MustParse("2"),
+								corev1.ResourceMemory: resource.MustParse("2Gi"),
+							},
+						},
 					}},
 					Volumes: append([]corev1.Volume{
 						{Name: "content", VolumeSource: corev1.VolumeSource{ConfigMap: &corev1.ConfigMapVolumeSource{
