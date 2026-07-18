@@ -103,11 +103,14 @@ plugins:
       tag: dev
       digest: ""
       pullPolicy: Never # kind-loaded (task image:crossplane-plugin)
-    kubeReader:
-      apiGroups: ["net.example.org"]
-      resources: ["subnetclaims"]
+    # The plugin BUILDS (create-subnet Action server-side-applies provider-kubernetes
+    # Objects) AND OBSERVES (lists them for net.subnet) — CONFINED to objects only (§2.5).
+    kubeAccess:
+      apiGroups: ["kubernetes.crossplane.io"]
+      resources: ["objects"]
+      verbs: ["get", "list", "watch", "create", "update", "patch"]
     env:
-      STRATT_CROSSPLANE_OBSERVE: '[{"group":"net.example.org","version":"v1alpha1","resource":"subnetclaims","projectKind":"subnet","identityScheme":"crossplane.claim"}]'
+      STRATT_CROSSPLANE_OBSERVE: '[{"group":"kubernetes.crossplane.io","version":"v1alpha2","resource":"objects","projectKind":"subnet","identityScheme":"crossplane.claim"}]'
     hostEnv:
       STRATT_CROSSPLANE_SOURCE_NAME: "crossplane-dev"
       STRATT_CROSSPLANE_INTERVAL: "15s"

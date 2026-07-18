@@ -1,0 +1,50 @@
+# subnet-build — the GATED build Workflow an Intent/Subnet launches (ADR-0059). The
+# provisioning reconcile surfaces a provision/app-subnet Finding; an operator launches THIS
+# Workflow to build the subnet (§5 Flow 1 — the launch IS the gate, and the approve Step
+# adds a platform-admin approval). The crossplane/create-subnet Action server-side-applies
+# a real Crossplane resource, waits for it to reconcile Ready, and projects the subnet back
+# with Run provenance; the projectKind + the stratt.intent/singleton correlation label ride
+# that projection (never a reconcile-side write, §1.2) so the next reconcile sees it built
+# and resolves the Finding. The Crossplane Syncer then maintains net.subnet as-built.
+#
+# `action:` is the landscape binding — crossplane/create-subnet (provider-kubernetes in
+# dev), swappable for a real cloud provider without touching the estate around it.
+name: subnet-build
+steps:
+  - name: approve
+    gate:
+      approvers:
+        teams: [platform-admins]
+      timeoutSeconds: 86400 # 24h to approve the build
+  - name: build
+    needs: [approve]
+    action: crossplane/create-subnet
+    credentialRefs: [crossplane-dev] # §2.5 — an Action's use-check is its only authz gate
+    params:
+      # The Crossplane resource to provision (opaque, §1.5 — a provider-kubernetes Object
+      # in dev; a provider-aws Subnet in prod is a params change, nothing else).
+      group: kubernetes.crossplane.io
+      version: v1alpha2
+      resource: objects
+      kind: Object
+      name: app-subnet
+      cidr: 10.30.0.0/24
+      readySeconds: 120
+      # The estate overlay (ADR-0059 §6): the built subnet projects AS this kind, correlated
+      # by the stratt.intent/singleton label so the provision/app-subnet Finding resolves.
+      projectKind: subnet
+      identityScheme: crossplane.claim
+      projectLabels:
+        stratt.intent/singleton: Intent/Subnet/app-subnet
+      spec:
+        providerConfigRef:
+          name: default
+        forProvider:
+          manifest:
+            apiVersion: v1
+            kind: ConfigMap
+            metadata:
+              name: subnet-app-subnet
+              namespace: crossplane-system
+            data:
+              cidr: 10.30.0.0/24

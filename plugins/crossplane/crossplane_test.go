@@ -175,3 +175,51 @@ func TestManifestDualVerb(t *testing.T) {
 		}
 	}
 }
+
+// invokeStreamMock captures the InvokeResponse stream.
+type invokeStreamMock struct {
+	grpc.ServerStream
+	ctx  context.Context
+	sent []*pluginv1.InvokeResponse
+}
+
+func (m *invokeStreamMock) Context() context.Context { return m.ctx }
+func (m *invokeStreamMock) Send(r *pluginv1.InvokeResponse) error {
+	m.sent = append(m.sent, r)
+	return nil
+}
+
+// TestProjectEntity proves the create-subnet Action projects entity-only (ADR-0059):
+// kind + the crossplane.claim identity + the stratt.intent/singleton correlation label,
+// and NO net.subnet facet (the Syncer supplies that).
+func TestProjectEntity(t *testing.T) {
+	ent := projectEntity(claimParams{
+		Name: "app-subnet", ProjectKind: "subnet", IdentityScheme: "crossplane.claim",
+		ProjectLabels: map[string]string{"stratt.intent/singleton": "Intent/Subnet/app-subnet"},
+	})
+	if ent.GetKind() != "subnet" {
+		t.Errorf("kind = %q", ent.GetKind())
+	}
+	if ent.GetIdentityKeys()["crossplane.claim"] != "app-subnet" {
+		t.Errorf("identity = %v", ent.GetIdentityKeys())
+	}
+	if ent.GetLabels()["stratt.intent/singleton"] != "Intent/Subnet/app-subnet" {
+		t.Errorf("correlation label missing: %v", ent.GetLabels())
+	}
+	if len(ent.GetFacets()) != 0 {
+		t.Errorf("Action projection must be entity-only (no facet), got %v", ent.GetFacets())
+	}
+}
+
+// (The full Invoke provisioning path uses server-side-apply, which the fake dynamic
+// client doesn't support — it is verified live end-to-end against real Crossplane in the
+// dev cluster. The pure projection + action dispatch are unit-tested here.)
+
+// TestInvokeUnknownAction proves an unknown action is rejected.
+func TestInvokeUnknownAction(t *testing.T) {
+	s := NewServer(Config{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	err := s.Invoke(&pluginv1.InvokeRequest{Action: "crossplane/delete-everything"}, &invokeStreamMock{ctx: context.Background()})
+	if err == nil {
+		t.Fatal("unknown action must be rejected")
+	}
+}

@@ -409,6 +409,38 @@ tasks:
       - mkdir -p {{.ROOT_DIR}}/deploy/charts/stratt/dev/declarations
       - cp -R {{.ROOT_DIR}}/estate/. {{.ROOT_DIR}}/deploy/charts/stratt/dev/declarations/
 
+  dev:crossplane:
+    desc: Install REAL Crossplane + provider-kubernetes into kind for the topology build loop (ADR-0059, idempotent)
+    deps: [tools:helm, tools:kubectl]
+    cmds:
+      - go run sigs.k8s.io/kind@v{{.KIND_VER}} export kubeconfig --name {{.KIND_CLUSTER}}
+      - "{{.HELM}} repo add crossplane-stable https://charts.crossplane.io/stable --force-update"
+      - "{{.HELM}} repo update crossplane-stable"
+      - >-
+        {{.HELM}} --kube-context {{.KIND_CONTEXT}} upgrade --install crossplane
+        crossplane-stable/crossplane -n crossplane-system --create-namespace
+        --version 2.3.3 --wait --timeout 5m
+      # provider-kubernetes with a PINNED runtime SA (so RBAC can target it).
+      - |
+        cat <<'EOF' | {{.KUBECTL}} --context {{.KIND_CONTEXT}} apply -f -
+        apiVersion: pkg.crossplane.io/v1beta1
+        kind: DeploymentRuntimeConfig
+        metadata: { name: provider-kubernetes }
+        spec:
+          serviceAccountTemplate:
+            metadata: { name: provider-kubernetes }
+        ---
+        apiVersion: pkg.crossplane.io/v1
+        kind: Provider
+        metadata: { name: provider-kubernetes }
+        spec:
+          package: xpkg.upbound.io/crossplane-contrib/provider-kubernetes:v0.17.0
+          runtimeConfigRef: { name: provider-kubernetes }
+        EOF
+      - "{{.KUBECTL}} --context {{.KIND_CONTEXT}} wait --for=condition=Healthy provider/provider-kubernetes --timeout=180s"
+      # The subnet platform: ProviderConfig (InjectedIdentity) + confined provider RBAC.
+      - "{{.KUBECTL}} --context {{.KIND_CONTEXT}} apply -f {{.ROOT_DIR}}/deploy/dev/crossplane-subnet.yaml"
+
   dev:install:
     desc: Helm-install strattd (+ in-cluster plugins) into kind, wired to the compose substrate (idempotent)
     deps: [tools:helm, tools:kubectl, dev:stage-estate]

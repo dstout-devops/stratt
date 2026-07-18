@@ -18,6 +18,8 @@ import (
 	"time"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -31,6 +33,9 @@ import (
 )
 
 const protocolVersion = "v1"
+
+// actionCreateSubnet is the targetless builder verb an Intent/Subnet launches (ADR-0059).
+const actionCreateSubnet = "crossplane/create-subnet"
 
 // Config locates the Kubernetes cluster whose Crossplane provisions the estate.
 type Config struct {
@@ -83,14 +88,24 @@ func (s *Server) GetManifest(context.Context, *pluginv1.GetManifestRequest) (*pl
 		// real CIDRs are resync-able + authority-declarable (ADR-0060), never a
 		// synthesized Actuator write-back source. The host gates each grant on the verb.
 		Class: pluginv1.PluginClass_PLUGIN_CLASS_ACTUATOR,
-		Verbs: []pluginv1.Verb{pluginv1.Verb_VERB_APPLY, pluginv1.Verb_VERB_DESTROY, pluginv1.Verb_VERB_OBSERVE},
+		// APPLY/DESTROY (actuator, View-targeted reconcile), OBSERVE (syncer), and INVOKE
+		// (the create-subnet Action — the targetless builder an Intent/Subnet launches,
+		// ADR-0059). One binary, the whole build+observe lifecycle.
+		Verbs: []pluginv1.Verb{pluginv1.Verb_VERB_APPLY, pluginv1.Verb_VERB_DESTROY, pluginv1.Verb_VERB_OBSERVE, pluginv1.Verb_VERB_INVOKE},
 		// Observe REQUESTS to own net.subnet (owned-but-uncovered, §1.1 — no schema
 		// until a Contract consumes it). NetBox is declared authoritative for it
 		// (ADR-0060); Crossplane's as-built CIDR is retained, resolvable signal.
 		Contracts:        []*pluginv1.ContractDecl{{SchemaId: "net.subnet"}},
 		ObserveMode:      pluginv1.Manifest_OBSERVE_MODE_POLL,
 		TombstoneSchemes: []string{"crossplane.claim"},
-		Capabilities:     []string{"apply.dry-run"},
+		Actions: []*pluginv1.ActionDecl{{
+			Name:        actionCreateSubnet,
+			Input:       &pluginv1.ContractRef{SchemaId: "actions/crossplane/create-subnet.input"},
+			Output:      &pluginv1.ContractRef{SchemaId: "actions/crossplane/create-subnet.output"},
+			Idempotent:  true, // server-side-apply of the named resource is idempotent
+			DryRunnable: true,
+		}},
+		Capabilities: []string{"apply.dry-run"},
 	}}, nil
 }
 
@@ -115,6 +130,10 @@ type claimParams struct {
 	ProjectKind    string            `json:"projectKind"`    // e.g. "subnet"
 	ProjectLabels  map[string]string `json:"projectLabels"`  // e.g. {source: crossplane}
 	IdentityScheme string            `json:"identityScheme"` // e.g. "crossplane.claim"
+	// Cidr is the net.subnet value the build projects (the declared as-built cidr) when
+	// it is not readable from the provisioned resource's status/spec — the Intent knows
+	// the CIDR it asked for. Optional; the Syncer refreshes net.subnet from the resource.
+	Cidr string `json:"cidr"`
 }
 
 // Apply provisions one Crossplane Claim: server-side-apply it, wait for Ready, and
@@ -129,44 +148,22 @@ func (s *Server) Apply(req *pluginv1.ApplyRequest, stream grpc.ServerStreamingSe
 	if p.Group == "" || p.Version == "" || p.Resource == "" || p.Kind == "" || p.Name == "" {
 		return terminal(stream, false, pluginv1.ItemResult_STATUS_FAILED, "group, version, resource, kind, name are required")
 	}
-	gvr := schema.GroupVersionResource{Group: p.Group, Version: p.Version, Resource: p.Resource}
-
-	dyn, err := s.dyn()
-	if err != nil {
-		return terminal(stream, false, pluginv1.ItemResult_STATUS_FAILED, "kube client: "+err.Error())
-	}
-	ri := resourceClient(dyn, gvr, p.Namespace)
-
 	_ = stream.Send(&pluginv1.ApplyResponse{Event: &pluginv1.TaskEvent{
 		Level: pluginv1.TaskEvent_LEVEL_INFO, At: timestamppb.Now(),
 		Message: fmt.Sprintf("applying %s/%s claim %q", p.Group, p.Kind, p.Name),
 		Fields:  map[string]string{"resource": p.Resource, "name": p.Name},
 	}})
 
-	claim := buildClaim(p)
 	if req.GetDryRun() {
-		data, _ := json.Marshal(claim.Object)
-		if _, err := ri.Patch(ctx, p.Name, types.ApplyPatchType, data, metav1.PatchOptions{
-			FieldManager: "stratt-crossplane", DryRun: []string{metav1.DryRunAll},
-		}); err != nil {
+		if _, err := s.provision(ctx, p, true); err != nil {
 			return terminal(stream, false, pluginv1.ItemResult_STATUS_FAILED, "dry-run apply: "+err.Error())
 		}
 		return terminal(stream, true, pluginv1.ItemResult_STATUS_CHANGED, "dry-run: claim would apply")
 	}
 
-	data, _ := json.Marshal(claim.Object)
-	if _, err := ri.Patch(ctx, p.Name, types.ApplyPatchType, data, metav1.PatchOptions{
-		FieldManager: "stratt-crossplane", Force: boolPtr(true),
-	}); err != nil {
-		return terminal(stream, false, pluginv1.ItemResult_STATUS_FAILED, "apply: "+err.Error())
-	}
-
-	ready, got, err := waitReady(ctx, ri, p.Name, budget(p.ReadySeconds))
+	got, err := s.provision(ctx, p, false)
 	if err != nil {
-		return terminal(stream, false, pluginv1.ItemResult_STATUS_FAILED, "await ready: "+err.Error())
-	}
-	if !ready {
-		return terminal(stream, false, pluginv1.ItemResult_STATUS_FAILED, "claim did not become Ready within the budget")
+		return terminal(stream, false, pluginv1.ItemResult_STATUS_FAILED, err.Error())
 	}
 
 	ent := project(p, got)
@@ -176,6 +173,101 @@ func (s *Server) Apply(req *pluginv1.ApplyRequest, stream grpc.ServerStreamingSe
 		WriteBack: []*pluginv1.ObservedEntity{ent},
 	})
 	return terminal(stream, true, pluginv1.ItemResult_STATUS_CHANGED, "claim Ready: "+p.Name)
+}
+
+// provision applies the Crossplane resource (server-side-apply) and waits for it to
+// become Ready — the shared build core of the Apply (actuator, View-targeted) and Invoke
+// (create-subnet Action, targetless builder) verbs. dryRun applies with DryRunAll and
+// returns (nil, nil) without waiting. Landscape-agnostic: the params' GVR + spec name the
+// Crossplane resource (a provider-kubernetes Object in dev, a provider-aws Subnet in
+// prod), never typed per-provider (§1.5).
+func (s *Server) provision(ctx context.Context, p claimParams, dryRun bool) (*unstructured.Unstructured, error) {
+	if p.Group == "" || p.Version == "" || p.Resource == "" || p.Kind == "" || p.Name == "" {
+		return nil, fmt.Errorf("group, version, resource, kind, name are required")
+	}
+	dyn, err := s.dyn()
+	if err != nil {
+		return nil, fmt.Errorf("kube client: %w", err)
+	}
+	gvr := schema.GroupVersionResource{Group: p.Group, Version: p.Version, Resource: p.Resource}
+	ri := resourceClient(dyn, gvr, p.Namespace)
+	data, _ := json.Marshal(buildClaim(p).Object)
+	opts := metav1.PatchOptions{FieldManager: "stratt-crossplane", Force: boolPtr(true)}
+	if dryRun {
+		opts = metav1.PatchOptions{FieldManager: "stratt-crossplane", DryRun: []string{metav1.DryRunAll}}
+	}
+	if _, err := ri.Patch(ctx, p.Name, types.ApplyPatchType, data, opts); err != nil {
+		return nil, fmt.Errorf("apply: %w", err)
+	}
+	if dryRun {
+		return nil, nil
+	}
+	ready, got, err := waitReady(ctx, ri, p.Name, budget(p.ReadySeconds))
+	if err != nil {
+		return nil, fmt.Errorf("await ready: %w", err)
+	}
+	if !ready {
+		return nil, fmt.Errorf("%s %q did not become Ready within the budget", p.Kind, p.Name)
+	}
+	return got, nil
+}
+
+// Invoke runs the create-subnet Action (ADR-0059): the targetless builder an Intent/Subnet
+// launches. It provisions the Crossplane resource (real reconciliation), waits Ready, then
+// projects the subnet Entity back with Run provenance — the projectKind + the
+// stratt.intent/singleton correlation label ride the projection so the provisioning Finding
+// resolves. net.subnet carries the declared cidr; the Syncer refreshes it as-built.
+func (s *Server) Invoke(req *pluginv1.InvokeRequest, stream grpc.ServerStreamingServer[pluginv1.InvokeResponse]) error {
+	ctx := stream.Context()
+	if action := req.GetAction(); action != "" && action != actionCreateSubnet {
+		return status.Errorf(codes.InvalidArgument, "crossplane: unknown action %q", action)
+	}
+	var p claimParams
+	if args := req.GetArgs(); args != nil && len(args.GetBytes()) > 0 {
+		if err := json.Unmarshal(args.GetBytes(), &p); err != nil {
+			return status.Errorf(codes.InvalidArgument, "crossplane/create-subnet: invalid args: %v", err)
+		}
+	}
+	cid := req.GetEnvelope().GetCorrelationId()
+	_ = stream.Send(&pluginv1.InvokeResponse{Event: &pluginv1.TaskEvent{
+		Level: pluginv1.TaskEvent_LEVEL_INFO, At: timestamppb.Now(), CorrelationId: cid,
+		Message: fmt.Sprintf("provisioning subnet %q via %s/%s", p.Name, p.Group, p.Kind),
+		Fields:  map[string]string{"resource": p.Resource, "name": p.Name, "cidr": p.Cidr},
+	}})
+
+	got, err := s.provision(ctx, p, req.GetDryRun())
+	if err != nil {
+		return s.invokeFailed(stream, cid, fmt.Errorf("crossplane/create-subnet: %w", err))
+	}
+	if req.GetDryRun() {
+		return stream.Send(&pluginv1.InvokeResponse{
+			Event:  &pluginv1.TaskEvent{Level: pluginv1.TaskEvent_LEVEL_INFO, At: timestamppb.Now(), CorrelationId: cid, Terminal: true, Ok: true, Message: "dry-run ok: subnet would provision"},
+			Result: &pluginv1.InvokeResult{OutputContract: &pluginv1.ContractRef{SchemaId: "actions/crossplane/create-subnet.output"}},
+		})
+	}
+
+	_ = got // Ready confirmed; the Syncer's next poll supplies net.subnet (as-built)
+	ent := projectEntity(p)
+	outputs, _ := json.Marshal(map[string]any{"name": p.Name, "cidr": p.Cidr})
+	s.log.Info("crossplane subnet provisioned", "name", p.Name, "projectKind", ent.GetKind())
+	return stream.Send(&pluginv1.InvokeResponse{
+		Event: &pluginv1.TaskEvent{Level: pluginv1.TaskEvent_LEVEL_INFO, At: timestamppb.Now(), CorrelationId: cid, Terminal: true, Ok: true, Message: "provisioned " + p.Name, Fields: map[string]string{"name": p.Name, "cidr": p.Cidr}},
+		Result: &pluginv1.InvokeResult{
+			Outputs:        &pluginv1.Payload{Bytes: outputs},
+			OutputContract: &pluginv1.ContractRef{SchemaId: "actions/crossplane/create-subnet.output"},
+			Entities:       []*pluginv1.ObservedEntity{ent},
+		},
+	})
+}
+
+// invokeFailed emits the terminal not-ok TaskEvent (a domain failure rides the typed
+// descent channel, §1.8 — not a transport error).
+func (s *Server) invokeFailed(stream grpc.ServerStreamingServer[pluginv1.InvokeResponse], cid string, cause error) error {
+	s.log.Error("create-subnet failed", "error", cause)
+	return stream.Send(&pluginv1.InvokeResponse{Event: &pluginv1.TaskEvent{
+		Level: pluginv1.TaskEvent_LEVEL_ERROR, At: timestamppb.Now(), CorrelationId: cid,
+		Terminal: true, Ok: false, Message: cause.Error(),
+	}})
 }
 
 // Observe enumerates every configured Crossplane Claim/XR and streams each as an
@@ -237,7 +329,16 @@ func projectClaim(oc ObserveClaim, got *unstructured.Unstructured) *pluginv1.Obs
 // claimCIDR reads the as-built cidr Crossplane reports (status.cidr) — what it actually
 // made — falling back to the requested spec.cidr. Pure.
 func claimCIDR(got *unstructured.Unstructured) string {
+	// Direct XR/claim: status.cidr (as-built) then spec.cidr (requested).
 	if cidr, found, _ := unstructured.NestedString(got.Object, "status", "cidr"); found && cidr != "" {
+		return cidr
+	}
+	// provider-kubernetes Object: the reflected (status.atProvider) then desired
+	// (spec.forProvider) wrapped-manifest data.cidr.
+	if cidr, found, _ := unstructured.NestedString(got.Object, "status", "atProvider", "manifest", "data", "cidr"); found && cidr != "" {
+		return cidr
+	}
+	if cidr, found, _ := unstructured.NestedString(got.Object, "spec", "forProvider", "manifest", "data", "cidr"); found && cidr != "" {
 		return cidr
 	}
 	if cidr, found, _ := unstructured.NestedString(got.Object, "spec", "cidr"); found && cidr != "" {
@@ -279,9 +380,11 @@ func isReady(u *unstructured.Unstructured) bool {
 	return false
 }
 
-// project maps the applied/ready Claim to an ObservedEntity carrying the estate
-// overlay (ADR-0059 §6): kind + labels + the correlation identity. Pure.
-func project(p claimParams, got *unstructured.Unstructured) *pluginv1.ObservedEntity {
+// projectEntity maps the built resource to the ObservedEntity the estate overlay
+// declares (ADR-0059 §6): kind + the correlation identity + labels (incl. the
+// stratt.intent/singleton correlation key). NO Facet — like awsec2/create-vm, the Action
+// projects identity; the Syncer's next poll supplies net.subnet. Pure.
+func projectEntity(p claimParams) *pluginv1.ObservedEntity {
 	kind := p.ProjectKind
 	if kind == "" {
 		kind = "subnet"
@@ -298,26 +401,33 @@ func project(p claimParams, got *unstructured.Unstructured) *pluginv1.ObservedEn
 	for k, v := range p.ProjectLabels {
 		labels[k] = v
 	}
-	// Crossplane KNOWS the subnet it just built — it projects the net.subnet Facet
-	// too (the as-built CIDR + the Claim it came from). A full-featured plugin
-	// projects everything its system reports; the fact that NetBox ALSO knows about
-	// subnets is not a reason to strip this — it is resolved by multi-source Facet
-	// ownership (ADR-0060), never by crippling the builder.
-	facet := map[string]any{"claim": p.Kind, "name": p.Name}
-	// Prefer the AS-BUILT cidr Crossplane reports in status; fall back to the
-	// requested spec. (A full-featured builder reports what it actually made.)
-	if cidr, found, _ := unstructured.NestedString(got.Object, "status", "cidr"); found && cidr != "" {
-		facet["cidr"] = cidr
-	} else if cidr, ok := p.Spec["cidr"].(string); ok && cidr != "" {
-		facet["cidr"] = cidr
-	}
-	raw, _ := json.Marshal(facet)
 	return &pluginv1.ObservedEntity{
 		Kind:         kind,
 		IdentityKeys: map[string]string{scheme: id},
 		Labels:       labels,
-		Facets:       map[string][]byte{"net.subnet": raw},
 	}
+}
+
+// project is the Apply (actuator) projection: the entity PLUS the net.subnet Facet the
+// actuator write-back carries (governed by FacetWriteScope at the host). A full-featured
+// plugin projects everything its system reports; net.subnet co-existing with NetBox's is
+// resolved by multi-source Facet ownership (ADR-0060), never by crippling the builder. Pure.
+func project(p claimParams, got *unstructured.Unstructured) *pluginv1.ObservedEntity {
+	ent := projectEntity(p)
+	facet := map[string]any{"claim": p.Kind, "name": p.Name}
+	// Prefer the AS-BUILT cidr Crossplane reports in status; then the explicit param
+	// (the Intent declared it — used when the provisioned resource, e.g. a
+	// provider-kubernetes Object, doesn't surface cidr at status.cidr); then the spec.
+	if cidr, found, _ := unstructured.NestedString(got.Object, "status", "cidr"); found && cidr != "" {
+		facet["cidr"] = cidr
+	} else if p.Cidr != "" {
+		facet["cidr"] = p.Cidr
+	} else if cidr, ok := p.Spec["cidr"].(string); ok && cidr != "" {
+		facet["cidr"] = cidr
+	}
+	raw, _ := json.Marshal(facet)
+	ent.Facets = map[string][]byte{"net.subnet": raw}
+	return ent
 }
 
 func waitReady(ctx context.Context, ri dynamic.ResourceInterface, name string, budget time.Duration) (bool, *unstructured.Unstructured, error) {

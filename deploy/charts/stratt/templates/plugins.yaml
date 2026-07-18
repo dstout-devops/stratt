@@ -40,7 +40,7 @@ spec:
         app.kubernetes.io/component: plugin
         stratt.dev/plugin: {{ .name }}
     spec:
-      {{- if or .secretNamespace .kubeReader }}
+      {{- if or .secretNamespace .kubeAccess }}
       serviceAccountName: {{ $name }}
       {{- end }}
       securityContext: {{- toYaml $.Values.podSecurityContext | nindent 8 }}
@@ -104,7 +104,7 @@ spec:
     - name: grpc
       port: 9090
       targetPort: 9090
-{{- if or .secretNamespace .kubeReader }}
+{{- if or .secretNamespace .kubeAccess }}
 ---
 apiVersion: v1
 kind: ServiceAccount
@@ -143,30 +143,32 @@ subjects:
     name: {{ $name }}
     namespace: {{ $.Release.Namespace }}
 {{- end }}
-{{- if .kubeReader }}
+{{- if .kubeAccess }}
 ---
-# Confined READ access to exactly the resources this plugin OBSERVES (§2.5): a Syncer
-# over the kube API — e.g. Crossplane observing its Claim CRs. get/list/watch only,
-# scoped to the declared apiGroups/resources; never a cluster-admin reader.
+# CONFINED kube-API access to exactly the resources this plugin uses (§2.5): a plugin over
+# the kube API — a Syncer OBSERVING (e.g. Crossplane listing its Claim CRs) and/or a builder
+# APPLYING (Crossplane server-side-applying provider resources). Scoped to the declared
+# apiGroups/resources + verbs (default get/list/watch — a read-only Syncer); never a
+# cluster-admin. The RBAC gate ≈ the per-verb grant the core already governs.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: {{ $name }}-kube-reader
+  name: {{ $name }}-kube-access
   labels: {{- include "stratt.labels" $ | nindent 4 }}
 rules:
-  - apiGroups: {{ .kubeReader.apiGroups | toJson }}
-    resources: {{ .kubeReader.resources | toJson }}
-    verbs: ["get", "list", "watch"]
+  - apiGroups: {{ .kubeAccess.apiGroups | toJson }}
+    resources: {{ .kubeAccess.resources | toJson }}
+    verbs: {{ .kubeAccess.verbs | default (list "get" "list" "watch") | toJson }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  name: {{ $name }}-kube-reader
+  name: {{ $name }}-kube-access
   labels: {{- include "stratt.labels" $ | nindent 4 }}
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
-  name: {{ $name }}-kube-reader
+  name: {{ $name }}-kube-access
 subjects:
   - kind: ServiceAccount
     name: {{ $name }}

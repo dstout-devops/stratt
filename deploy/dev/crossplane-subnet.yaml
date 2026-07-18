@@ -1,0 +1,43 @@
+# REAL Crossplane platform for the topology build loop (ADR-0059). Stratt's Intent/Subnet
+# is the self-service abstraction; the crossplane/create-subnet Action renders a
+# provider-kubernetes Object (§1.5 — the plugin is the landscape-agnostic builder
+# transport) which Crossplane RECONCILES, provisioning the actual resource. No cloud
+# creds: provider-kubernetes provisions in-cluster (a ConfigMap standing in for the cloud
+# subnet), so the loop is genuinely end-to-end reconciled, not stubbed. Swapping in a real
+# cloud provider (provider-aws Subnet) is a params change on the Intent, nothing else.
+#
+# Prereqs installed out-of-band (real Crossplane, not stubbed):
+#   helm install crossplane crossplane-stable/crossplane -n crossplane-system --version 2.3.3
+#   kubectl apply: Provider provider-kubernetes:v0.17.0 (+ DeploymentRuntimeConfig pinning
+#     its SA to `provider-kubernetes`)
+apiVersion: kubernetes.crossplane.io/v1alpha1
+kind: ProviderConfig
+metadata:
+  name: default
+spec:
+  credentials:
+    source: InjectedIdentity
+---
+# provider-kubernetes provisions the composed ConfigMap with its own (pinned) SA — confined
+# to ConfigMaps, never cluster-admin.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: provider-kubernetes-composed
+rules:
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: provider-kubernetes-composed
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: provider-kubernetes-composed
+subjects:
+  - kind: ServiceAccount
+    name: provider-kubernetes
+    namespace: crossplane-system

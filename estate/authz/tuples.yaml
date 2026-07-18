@@ -15,3 +15,4 @@ tuples:
   - { user: principal:dev-runner, relation: member, object: team:platform-admins }
   # …and may USE the aws-dev CredentialRef the build Action binds (§2.5 use-check).
   - { user: principal:dev-runner, relation: user, object: credential_ref:aws-dev }
+  - { user: principal:dev-runner, relation: user, object: credential_ref:crossplane-dev }

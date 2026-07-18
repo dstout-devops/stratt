@@ -579,6 +579,13 @@ func run(ctx context.Context, log *slog.Logger) error {
 		if err := registerPluginActuator("crossplane", host, true, grant, nil); err != nil {
 			return err
 		}
+		// crossplane/create-subnet Action (ADR-0059): the targetless builder an
+		// Intent/Subnet launches. Reuses the host/grant; the build projects the subnet
+		// Entity + correlation label (entity-only, like awsec2/create-vm), and the
+		// Syncer below supplies net.subnet.
+		if err := registerPluginAction("crossplane/create-subnet", host, true); err != nil {
+			return err
+		}
 		log.Info("crossplane plugin actuator registered", "addr", addr)
 	} else {
 		log.Info("no Crossplane plugin configured (STRATT_CROSSPLANE_PLUGIN_ADDR empty); actuator disabled")
