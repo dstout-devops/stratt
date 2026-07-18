@@ -2,6 +2,7 @@ package orchestrate
 
 import (
 	"context"
+	"encoding/json"
 
 	"go.temporal.io/sdk/activity"
 	"go.temporal.io/sdk/workflow"
@@ -10,13 +11,24 @@ import (
 	"github.com/dstout-devops/stratt/types"
 )
 
+// PolicyEvalArg is the activity input for one policy checkpoint: the controls,
+// the assembled ChangeContext, and the run/step the decision belongs to (so the
+// durable audit record can reference them, ADR-0065).
+type PolicyEvalArg struct {
+	WorkflowRunID string
+	StepName      string
+	Controls      []types.Control
+	Context       types.ChangeContext
+}
+
 // EvaluatePolicy runs the built-in PDP over the assembled ChangeContext
-// (ADR-0063 / ADR-0062). It lives in an activity because CEL compilation and
-// decision timestamping are non-deterministic and must not run on the workflow
-// goroutine. It logs the decision so the Intent → Run → step descent can
-// explain the outcome (§1.8); durable Finding/Evidence recording is §7.2d.
-func (a *Activities) EvaluatePolicy(ctx context.Context, controls []types.Control, cc types.ChangeContext) (types.Decision, error) {
-	dec := policy.Evaluate(controls, cc)
+// (ADR-0063 / ADR-0062). It lives in an activity because CEL compilation,
+// decision timestamping, and the audit write are non-deterministic and must not
+// run on the workflow goroutine. Every decision is recorded on the one
+// hash-chained audit stream (ADR-0065) and logged, so the Intent → Run → step
+// descent can explain the outcome (§1.8).
+func (a *Activities) EvaluatePolicy(ctx context.Context, arg PolicyEvalArg) (types.Decision, error) {
+	dec := policy.Evaluate(arg.Controls, arg.Context)
 	codes := make([]string, 0, len(dec.Reasons))
 	for _, r := range dec.Reasons {
 		codes = append(codes, r.Code+":"+r.ControlID)
@@ -27,7 +39,40 @@ func (a *Activities) EvaluatePolicy(ctx context.Context, controls []types.Contro
 	} else {
 		lg.Warn("policy decision blocked", "outcome", dec.Outcome, "reasons", codes)
 	}
+	// Durable, tamper-evident record on the audit chain (ADR-0065). A failed
+	// audit write is visible, never swallowed (§1.8); nil-guarded like Evidence.
+	if a.Store != nil {
+		if err := a.Store.RecordAudit(context.WithoutCancel(ctx), policyAuditEvent(arg, dec)); err != nil {
+			lg.Error("policy decision audit failed", "err", err)
+		}
+	}
 	return dec, nil
+}
+
+// policyAuditEvent maps a decision to its audit record (ADR-0065): outcome →
+// audit outcome (allow=ok, deny=denied, require_approval/escalate verbatim);
+// reasons + step ride in Detail (structured, never secret — §2.5). Pure, so it
+// is unit-tested directly.
+func policyAuditEvent(arg PolicyEvalArg, dec types.Decision) types.AuditEvent {
+	outcome := types.AuditOK
+	switch dec.Outcome {
+	case types.OutcomeDeny:
+		outcome = types.AuditDenied
+	case types.OutcomeRequireApproval, types.OutcomeEscalate:
+		outcome = dec.Outcome
+	}
+	detail, _ := json.Marshal(struct {
+		Outcome string         `json:"outcome"`
+		Step    string         `json:"step"`
+		Reasons []types.Reason `json:"reasons,omitempty"`
+	}{dec.Outcome, arg.StepName, dec.Reasons})
+	return types.AuditEvent{
+		PrincipalID: arg.Context.Actor.ID,
+		Action:      types.AuditPolicyDecision,
+		Object:      arg.WorkflowRunID,
+		Outcome:     outcome,
+		Detail:      detail,
+	}
 }
 
 // runPolicyStep evaluates a policy checkpoint synchronously and gates the DAG on
@@ -38,9 +83,14 @@ func (a *Activities) EvaluatePolicy(ctx context.Context, controls []types.Contro
 // with no approver obligation, an approval is unsatisfiable and fails closed
 // (§1.8: never a silent pass). A failed evaluation also fails closed.
 func runPolicyStep(ctx workflow.Context, a *Activities, in DAGInput, step types.Step) string {
-	cc := assembleChangeContext(in)
+	arg := PolicyEvalArg{
+		WorkflowRunID: in.WorkflowRunID,
+		StepName:      step.Name,
+		Controls:      step.Policy.Controls,
+		Context:       assembleChangeContext(in),
+	}
 	var dec types.Decision
-	if err := workflow.ExecuteActivity(ctx, a.EvaluatePolicy, step.Policy.Controls, cc).Get(ctx, &dec); err != nil {
+	if err := workflow.ExecuteActivity(ctx, a.EvaluatePolicy, arg).Get(ctx, &dec); err != nil {
 		return stepFailed
 	}
 	switch dec.Outcome {

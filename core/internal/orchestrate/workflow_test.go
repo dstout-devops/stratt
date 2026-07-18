@@ -76,9 +76,9 @@ func dagTestEnv(t *testing.T, spec types.Workflow, childStatus map[string]error)
 		json.RawMessage(`{}`), nil)
 	// The policy activity delegates to the REAL evaluator, so a policy Step's
 	// DAG behaviour is driven by its actual controls (ADR-0063).
-	env.OnActivity(a.EvaluatePolicy, mock.Anything, mock.Anything, mock.Anything).Return(
-		func(_ context.Context, controls []types.Control, cc types.ChangeContext) (types.Decision, error) {
-			return policy.Evaluate(controls, cc), nil
+	env.OnActivity(a.EvaluatePolicy, mock.Anything, mock.Anything).Return(
+		func(_ context.Context, arg PolicyEvalArg) (types.Decision, error) {
+			return policy.Evaluate(arg.Controls, arg.Context), nil
 		})
 
 	// Child Runs are stubbed per-step through OnWorkflow.

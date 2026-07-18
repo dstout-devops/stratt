@@ -37,6 +37,34 @@ func TestApproversFromDecision(t *testing.T) {
 	}
 }
 
+// policyAuditEvent maps each outcome to a durable audit record (ADR-0065).
+func TestPolicyAuditEvent(t *testing.T) {
+	arg := PolicyEvalArg{WorkflowRunID: "wr-1", StepName: "guard",
+		Context: types.ChangeContext{Actor: types.PrincipalRef{ID: "alice"}}}
+	cases := map[string]string{
+		types.OutcomeAllow:           types.AuditOK,
+		types.OutcomeDeny:            types.AuditDenied,
+		types.OutcomeRequireApproval: types.OutcomeRequireApproval,
+		types.OutcomeEscalate:        types.OutcomeEscalate,
+	}
+	for outcome, wantOutcome := range cases {
+		ev := policyAuditEvent(arg, types.Decision{Outcome: outcome,
+			Reasons: []types.Reason{{Code: "fired", ControlID: "c1"}}})
+		if ev.Action != types.AuditPolicyDecision {
+			t.Fatalf("%s: action %q", outcome, ev.Action)
+		}
+		if ev.Outcome != wantOutcome {
+			t.Fatalf("%s: audit outcome %q want %q", outcome, ev.Outcome, wantOutcome)
+		}
+		if ev.PrincipalID != "alice" || ev.Object != "wr-1" {
+			t.Fatalf("%s: principal/object %q/%q", outcome, ev.PrincipalID, ev.Object)
+		}
+		if len(ev.Detail) == 0 {
+			t.Fatalf("%s: detail must carry the reasons", outcome)
+		}
+	}
+}
+
 // A require_approval outcome opens a Gate; an approve signal succeeds the step
 // and downstream runs (ADR-0064).
 func TestRunDAG_PolicyRequiresApproval_Approved(t *testing.T) {
