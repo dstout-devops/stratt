@@ -30,9 +30,15 @@ const DefaultMaxBuildBatch = 25
 // projecting the placed-in edge (Run-provenance) from the reality it creates. When
 // declared placement diverges from a built host's OBSERVED placement, the reconcile
 // raises a placement-drift Finding (S5, §1.8) — never a silent reconcile edit.
+// Fields are DISTINCT per topology kind (decision 3): no generic `zone` string —
+// that would force the build to disambiguate the edge type (in-dmz vs in-az) by
+// resolving the target's kind, re-introducing the generic-zone discriminator §1.1
+// forbids. dmz → an in-dmz edge to a dmz Entity; availabilityZone → an in-az edge to
+// an availability-zone Entity.
 type Placement struct {
-	Subnet string `json:"subnet,omitempty"`
-	Zone   string `json:"zone,omitempty"`
+	Subnet           string `json:"subnet,omitempty"`
+	Dmz              string `json:"dmz,omitempty"`
+	AvailabilityZone string `json:"availabilityZone,omitempty"`
 }
 
 // ComputeSpec is the decoded Intent/Compute payload (contracts/intents/compute.schema.json).

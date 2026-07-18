@@ -35,11 +35,15 @@
       "properties": {
         "subnet": {
           "type": "string",
-          "description": "The subnet Entity name this unit is placed in (an Intent/Subnet name)."
+          "description": "The subnet Entity name this unit is placed in (an Intent/Subnet name) \u2014 a placed-in edge."
         },
-        "zone": {
+        "dmz": {
           "type": "string",
-          "description": "The dmz / availability-zone Entity name this unit sits in."
+          "description": "The dmz Entity name this unit sits in (an in-dmz edge). Distinct from availabilityZone (decision 3: no generic zone)."
+        },
+        "availabilityZone": {
+          "type": "string",
+          "description": "The availability-zone Entity name this unit sits in (an in-az edge)."
         }
       },
       "additionalProperties": false

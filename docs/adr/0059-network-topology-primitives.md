@@ -79,8 +79,10 @@ the Compute count/ordinal mode, and `reconcileProvisioning` branches per Intent 
 - **Exclusive claim (S2):** the correlation key is **`(intentKind, name)`** — a per-kind namespace, NOT the
   `stratt.intent/instance` label (a subnet is not an instance, §2; a flat shared label would falsely collide an
   `Intent/Subnet web-dmz` with a Compute instance named `web-dmz`). Two Intents claiming the same `(kind, name)`
-  is a **compile error through the same ownership-registry `ErrOwnerConflict` path** as ADR-0058, never an
-  ad-hoc check or a tiebreak (§2.4).
+  is a **compile error through the same inline exclusive-claim path as ADR-0058's Compute planner** — a
+  claim-map collision fails the whole reconcile with an error (as `provision.Plan` does), never an ad-hoc check
+  or a tiebreak (§2.4). (Corrected 2026-07-18: both planners use the inline claim-map, not a literal
+  `ErrOwnerConflict` — the guard is the same, the phrasing is fixed.)
 - **Max-delta (S3):** named singletons have no per-Intent count fan-out, so the compute count-fraction gate
   does not apply. §4.3 bites on the **number of singleton builds surfaced per reconcile pass** (a DNS-zone
   import minting 500 `Intent/DnsRecord` → 500 gated builds pauses the batch) plus any placement-cascade fan-out
@@ -91,7 +93,10 @@ point (§1.4/§1.5), each its own plugin ADR; the spine learns no provider's net
 
 **5. Placement is *composed*, not free-floating — its CaC home is the Intent (§1.2).** Because a Relation
 cannot be declared in Git, desired placement rides the **provisioning Intent**: `Intent/Compute` (and the
-network Intents) gain an optional `placement: {subnet: web-dmz, zone: dmz}`. The build honors it — it creates
+network Intents) gain an optional `placement: {subnet: web-dmz, dmz: edge, availabilityZone: us-east-1a}`
+(distinct fields per topology kind — NOT a generic `zone` string, which would force the build to disambiguate
+`in-dmz` vs `in-az` by resolving the target's kind, re-introducing the generic-zone discriminator decision 3
+kills; amended 2026-07-18 per the implementation guardian review). The build honors it — it creates
 the host *in* that subnet — and its Run projects **both** the host Entity **and** the `placed-in` Relation
 (Run-provenance). So "three web servers in the DMZ subnet" is one declaration; the placement edge is a
 projection of the built reality, never a hand-authored graph row. Observed placement (a cloud Syncer) confirms
@@ -189,8 +194,9 @@ a build prerequisite); VLAN (a straightforward second network kind once subnet l
     enforced — the existing `relation_write_path` trigger (the edge twin of `enforce_write_path`) — and the
     build edge rides Run-provenance, never a reconcile/API write (decision 2).
   - **Flags folded:** S1 — relation GC is **two** paths (Syncer `gone_relations` retraction + endpoint-tombstone
-    cascade for Run-written edges), decision 7; S2 — exclusive-claim key is `(intentKind, name)` via the
-    ownership-registry `ErrOwnerConflict` path, not the overloaded `stratt.intent/instance` label, decision 4;
+    cascade for Run-written edges), decision 7; S2 — exclusive-claim key is `(intentKind, name)` via the same
+    inline claim-map path as ADR-0058's Compute planner (collision fails the reconcile), not the overloaded
+    `stratt.intent/instance` label, decision 4;
     S3 — §4.3 max-delta keyed on singleton builds **per reconcile pass**, not count-fraction, decision 4;
     S4 — Facet ownership assigned to the consuming plugin, not core, decisions 1 + §1.1 alignment; S5 —
     placement drift raises a Finding (§1.8), decision 5; S6 — scrubbed the §2-banned "resource" from the
