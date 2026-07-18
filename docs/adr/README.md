@@ -69,3 +69,4 @@ Status is `Accepted` unless noted. See **[../roadmap.md](../roadmap.md)** for ho
 | [0058](0058-provisioning-from-intent.md) | Provisioning from Intent: declare desired infrastructure → gated build → project back (G1/G4) | Accepted |
 | [0059](0059-network-topology-primitives.md) | Network & topology primitives: subnet/dmz/az/dns kinds + placement as a Relation | Accepted |
 | [0060](0060-multi-source-facet-ownership.md) | Multi-source Facet projection: keep every signal, declare the authoritative view | Accepted |
+| [0061](0061-estate-governance-policy-decision-point.md) | Estate Governance: the policy decision point, the three authorships, and governance-as-data | Accepted |
