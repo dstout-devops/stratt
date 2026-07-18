@@ -39,12 +39,16 @@ lock: multiple grants MAY declare the same `FacetNamespace`. Registration record
 pretending "a namespace has one source in the whole estate."
 
 **2. Every projection is RETAINED, per source — signal is never dropped (§1.8).** The Facet grain becomes
-per-source: `(Entity, namespace, source)`. Each source is the **sole writer of its own** projection row, so no
-source ever overwrites another's — the §1.2 single-writer invariant holds trivially *per source row*, and there
-is no cross-source write-fight, no rejection, no lost signal. Two systems that both see a subnet BOTH keep their
-observation, each provenance-stamped. (Run-provenance Facet writes — an ansible gather, an Actuator write-back —
-are the *Run's* contribution under its own source and never evict a Syncer's row: this dissolves the Run-eviction
-hazard a last-writer-wins ownership check would have had.)
+per-source: **`(entity_id, namespace, prov_source_id)`**, where the grain key is the **Source** (`prov_source_id`),
+made **NOT NULL** — never `prov_writer_ref` (which changes per Run → unbounded rows, guardian **M1**). Every facet
+write carries a *registered* source; a write with no source is rejected, not NULL-keyed. Each source is the **sole
+writer of its own** row, so no source overwrites another's — §1.2 single-writer holds trivially *per source row*,
+no cross-source fight, no lost signal. Two run-write kinds are distinguished (guardian **M2**, preserving §4.3
+flap-damping): a **damp write** (a remediation Run reflecting a just-applied change ahead of Syncer lag) carries
+the *damped Syncer's* `source_id` and writes **through** that Syncer's row (`prov_writer_kind='run'`, same grain)
+— so it still damps the visible value; a **genuine new observation** (e.g. a Crossplane Actuator write-back)
+carries its **own** registered source and gets its own row. `facet_history` re-keys to
+`(entity_id, namespace, prov_source_id, version)` so two sources' version streams never collide (**M6**).
 
 **3. The effective "truth" per `(Entity, namespace)` is the DECLARED authoritative source — explicit, not implicit
 precedence (§2.4).** A consumer (a View facet-predicate, a Baseline check, an API read) resolves the effective
@@ -53,18 +57,27 @@ NetBox is authoritative." This is a Git-reviewed, rebuild-deterministic authorit
 the silent priority/last-writer-wins field §2.4 forbids. It amends ADR-0056 decision 2: overlapping Facet
 namespaces are no longer a plan-time failure; they are legal, and authority is declared rather than monopolized.
 
-**4. Undeclared contention surfaces a Finding, never a silent pick (§1.8).** When ≥2 sources project the same
-`(Entity, namespace)` and no authority is declared for it, the reconcile raises an ownership-contention Finding
-(framework `ownership`) carrying **both values + both sources as Evidence** — the operator declares which source
-is authoritative. Until then a *deterministic* default serves (the source the estate names as the namespace's
-system-of-record, else a stable source-name order), so reads are never non-deterministic — but the contention is
-**diagnosable, never hidden**. No implicit resolution.
+**4. Reads resolve by KIND — additive-union for predicates, declared-authority for scalars — never an arbitrary
+tiebreak (§2.4, guardian M4/M5).** A **View facet-predicate / membership test** is **additive-union**: the Entity
+matches if ANY retained source-row satisfies the predicate (§2.4's approved additive-union — the existing
+`EXISTS(...)` selector already yields this; it is now intentional). A **scalar/authority read** (a Baseline
+drift-check, `mgmt.site` dispatch routing) resolves to the **declared** authority; else, if exactly one source
+projects it, that value; else it raises an **ownership-contention Finding** (framework `ownership`) carrying
+**both values + both sources** as Evidence and **refuses to collapse** — it never picks a "stable source-name
+order" winner (alphabetical-wins is last-name-wins dressed as determinism, an implicit precedence §2.4 bans). The
+same single resolver serves descent (show all) and predicates/checks (the resolved value), so what is displayed
+is what was matched (guardian S3).
 
-**5. Both data-layer gates are preserved in the re-based Facet guard (§2.5 / §1.2).** The trigger keeps BOTH:
-(a) the bounded-grant registration check — is `(namespace, source)` a registered grant? — and (b) per-`(Entity,
-namespace, source)` single-writer (decide against `OLD` under the row's primary-key lock, never a secondary
-SELECT). Authority resolution in decision 3 is a **read-time** concern — it never rewrites a row's provenance, so
-it opens no third write path (only Normalizers/Run provenance ever write, §1.2).
+**5. The re-based Facet guard is registration-only, decided under the PK lock (§2.5 / §1.2, guardian M3).** The
+trigger's sole check is the **bounded-grant registration**: is `(NEW.namespace, NEW.prov_source_id)` a registered
+grant? Per-`(Entity, namespace, source)` single-writer is then **the primary key itself** — mutual exclusion is
+the unique index, decided against `OLD` on `ON CONFLICT`, never a secondary `SELECT ... FROM graph.facet` (which
+would reintroduce a first-write TOCTOU). The old **"a Run write is always admissible to any registered
+namespace" bypass is dropped**: a Run write is now gated by *its source's* grant (decision 2's write-through
+carries the damped Syncer's source, which is registered) — this *tightens* §2.5. Authority resolution (decision
+4) is **read-time** and never rewrites provenance, so it opens no third write path — only Normalizers/Run
+provenance write (§1.2). Source identity is bound to the authenticated grant at the write layer, not caller input
+(guardian S1) — `prov_source_id` is now a PK dimension AND the authority anchor, so it must not be spoofable.
 
 **6. Labels (ADR-0041) follow the same principle** — per-source values + declared authority — but the label
 **bag** is one jsonb column with a single Entity-level provenance stamp, so per-source label retention needs a
@@ -96,10 +109,15 @@ sequences the label plumbing; the `os.kernel` case (a Facet) is solved here, `os
   so this **re-guardian is a hard gate before implementation**), and the effective-value read path + the
   ownership-contention Finding are new. Authority declaration rides `sources/` CaC (ADR-0056 1–4), still pending —
   until it lands, the deterministic-default (SoR / stable order) is the interim authority.
-- **Follow-ups:** the label per-key-provenance change (decision 6); the effective-value resolver + View/Baseline
-  read path; the ownership-contention Finding + resolution UX; migrating existing per-namespace `facet_owner` rows
-  to the per-source form; the retroactive entity-merge case (two pre-existing entities that each already hold the
-  Facet — with the per-source grain their rows don't PK-collide on merge, but the merge path must preserve both).
+- **Migration safety (guardian M7, §1.2 highest-care):** existing run-written facet rows have `prov_source_id`
+  NULL — a NULL cannot enter the PK, so the migration **backfills before re-keying**: run-only namespaces get a
+  reserved run source (or, since the graph is rebuildable, drop-and-let-resync); `facet_owner`'s existing
+  `syncer`/`blueprint`/`team` owners re-key by `owner_ref` (the registration stays; the *authority* declaration
+  lives in `sources/` CaC, never overloaded into this table).
+- **Follow-ups:** the label per-key-provenance change (decision 6); the ownership-contention Finding + resolution
+  UX; the retroactive entity-merge case (two pre-existing entities that each already hold the Facet — with the
+  per-source grain their rows don't PK-collide on merge, but the merge path must preserve both); binding
+  `prov_source_id` to the authenticated Source at every write layer (S1).
 
 ## Alternatives considered
 
@@ -129,6 +147,14 @@ sequences the label plumbing; the `os.kernel` case (a Facet) is solved here, `os
   S8 (both values retained inherently). Guardian **M5** (keep both data-layer gates) and the should-fixes (pin
   Source-vs-Syncer as the ownership key; interim/hand-off semantics; state the retroactive-merge assumption; the
   `os.kernel` facet-vs-label example) are folded above.
-- **Gate:** because this re-bases a §1.2 data-layer guard and the model changed materially after the first review,
-  a **charter-guardian re-review of the retain-all + declared-authority mechanism is a hard prerequisite before
-  implementation** (design-only ADR; the implementation PR carries the re-review).
+- **charter-guardian re-review (2026-07-18): mechanism SOUND-WITH-CHANGES → folded.** The retain-all principle is
+  charter-sound (§1.2/§2.4/§2.5); seven data-layer must-fixes on the mechanism, now folded into decisions 2/4/5 +
+  the migration note: **M1** grain key = `prov_source_id` NOT NULL (never per-Run `prov_writer_ref`); **M2** §4.3
+  damp writes write-through to the damped Syncer's source-row, Actuator write-backs get their own source; **M3**
+  the re-based trigger is registration-only, decided under the PK lock (no secondary SELECT), and drops the
+  "Run always admissible" bypass; **M4** no "stable source-name order" — predicates are additive-union, scalars
+  resolve declared-authority-or-single-or-Finding; **M5** `FacetValuesByEntities` (the `mgmt.site` routing hot
+  path) must resolve the effective value in-query, not last-row-wins; **M6** `facet_history` PK re-keys to include
+  source; **M7** the migration backfills NULL run-source rows before re-keying. Flags folded: S1 (bind
+  `prov_source_id` to the authenticated grant), S2/S3 (single resolver for descent + predicates). **The gate is
+  cleared** — the mechanism is now specified to implement without a §1.2/§2.4 defect.
