@@ -1505,6 +1505,7 @@ type gateYAML struct {
 		Teams      []string `yaml:"teams"`
 	} `yaml:"approvers"`
 	TimeoutSeconds int `yaml:"timeoutSeconds"`
+	Threshold      int `yaml:"threshold"` // M-of-N quorum (ADR-0071)
 }
 
 func parseWorkflowFile(path string, raw []byte) (string, types.Workflow, error) {
@@ -1530,6 +1531,7 @@ func parseWorkflowFile(path string, raw []byte) (string, types.Workflow, error) 
 					Teams:      s.Gate.Approvers.Teams,
 				},
 				TimeoutSeconds: s.Gate.TimeoutSeconds,
+				Threshold:      s.Gate.Threshold,
 			}
 		}
 		w.Steps = append(w.Steps, step)

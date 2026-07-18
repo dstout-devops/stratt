@@ -22,6 +22,13 @@ import (
 // than the launch-time authz allowed; it can only add restriction (§1.6, M2).
 type Decider interface {
 	Decide(ctx context.Context, req Request) types.Decision
+	// Validate checks a provider's policy declarations at load — fail the file,
+	// never silently at decision time (§1.8). Each provider validates its own
+	// dialect (the CEL provider validates inline typed Controls; a future OPA
+	// provider would validate its bundles), so declaration-time validation is
+	// engine-selected through the port, never hardcoded to one engine
+	// (charter-guardian follow-up on ADR-0072).
+	Validate(controls []types.Control) error
 }
 
 // Request is the port input: the controls to apply and the change being judged.
@@ -43,6 +50,10 @@ func (CEL) Decide(_ context.Context, req Request) types.Decision {
 	return Evaluate(req.Controls, req.Context)
 }
 
+// Validate is the CEL provider's declaration-time check of its dialect — inline
+// typed Controls (ADR-0067/0068/0069/0070).
+func (CEL) Validate(controls []types.Control) error { return ValidateControls(controls) }
+
 // Bypass disables policy explicitly and VISIBLY (§1.8: never a silent skip). It
 // allows every change but stamps a "policy-bypassed" reason and a bypass engine,
 // so the audit stream (ADR-0065) shows governance was turned off — the honest
@@ -56,3 +67,7 @@ func (Bypass) Decide(_ context.Context, _ Request) types.Decision {
 		Provenance: types.DecisionProvenance{Engine: "bypass"},
 	}
 }
+
+// Validate is a no-op when policy is bypassed — a disabled engine validates
+// nothing (consistent with Bypass allowing every decision).
+func (Bypass) Validate([]types.Control) error { return nil }
