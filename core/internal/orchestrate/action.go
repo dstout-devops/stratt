@@ -169,7 +169,7 @@ func (a *Activities) ExecuteAction(ctx context.Context, in RunInput, creds []dis
 		// single write with RUN provenance (per-verb write path, ADR-0047 §2).
 		ents := make([]actuators.EntityObservation, 0, len(raw.Entities))
 		for _, e := range raw.Entities {
-			ents = append(ents, actuators.EntityObservation{Kind: e.Kind, IdentityKeys: e.IdentityKeys})
+			ents = append(ents, actuators.EntityObservation{Kind: e.Kind, IdentityKeys: e.IdentityKeys, Labels: e.Labels})
 		}
 		return dispatch.Result{Succeeded: raw.OK, Outputs: raw.Outputs, Entities: ents}, nil
 	}

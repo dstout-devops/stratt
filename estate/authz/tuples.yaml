@@ -13,3 +13,5 @@ tuples:
   # dev-runner is the dev platform admin: it may approve the compute-build Gate
   # (ADR-0058 — the §5 Flow 1 build approval). In prod this is a real team.
   - { user: principal:dev-runner, relation: member, object: team:platform-admins }
+  # …and may USE the aws-dev CredentialRef the build Action binds (§2.5 use-check).
+  - { user: principal:dev-runner, relation: user, object: credential_ref:aws-dev }

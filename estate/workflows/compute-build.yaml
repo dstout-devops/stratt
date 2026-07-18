@@ -21,6 +21,7 @@ steps:
   - name: build
     needs: [approve]
     action: awsec2/create-vm # landscape binding — swap for crossplane/opentofu/vsphere
+    credentialRefs: [aws-dev] # §2.5 — an Action's use-check is its only authz gate
     params:
       region: us-east-1
       instanceType: t3.micro

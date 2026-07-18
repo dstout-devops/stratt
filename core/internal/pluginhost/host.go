@@ -377,6 +377,11 @@ type ActionInvoke struct {
 type ActionEntity struct {
 	Kind         string
 	IdentityKeys map[string]string
+	// Labels the Action projects (ADR-0058 §6 estate overlay). Carried through to
+	// the single Run-provenance projection; unlike a Syncer's labels these are not
+	// ownership-gated — a Run write bypasses the label-owner trigger (§4.3), and
+	// they are the operator's build-declared overlay, not plugin-owned keys.
+	Labels map[string]string
 }
 
 // RawInvokeResult is the governed result of an Action invocation with NOTHING
@@ -453,7 +458,7 @@ func (h *Host) InvokeRaw(ctx context.Context, req ActionInvoke) (RawInvokeResult
 				out.Rejections = append(out.Rejections, r)
 				continue
 			}
-			out.Entities = append(out.Entities, ActionEntity{Kind: e.GetKind(), IdentityKeys: ids})
+			out.Entities = append(out.Entities, ActionEntity{Kind: e.GetKind(), IdentityKeys: ids, Labels: e.GetLabels()})
 		}
 		for _, c := range res.GetProvisionedCreds() {
 			if !h.ownsCred(c.GetName()) {

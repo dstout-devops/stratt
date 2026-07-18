@@ -85,6 +85,10 @@ plugins:
     env:
       STRATT_AWSEC2_ENDPOINT: "http://192.168.102.1:5000" # moto stand-in on the host gateway
       STRATT_AWSEC2_REGION: "us-east-1"
+      # Dummy static creds: moto accepts ANY credentials, but the AWS SDK's
+      # LoadDefaultConfig must resolve SOME (else it probes IMDS and times out).
+      AWS_ACCESS_KEY_ID: "testing"
+      AWS_SECRET_ACCESS_KEY: "testing"
     hostEnv:
       STRATT_AWS_SOURCE_NAME: "awsec2-build"
       # STRATT_AWS_INTERVAL deliberately unset → build Action only, no Syncer.
