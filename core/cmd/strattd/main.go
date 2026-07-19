@@ -488,6 +488,10 @@ func run(ctx context.Context, log *slog.Logger) error {
 				"os.hardening.sysctl", "os.hardening.sshd", "os.hardening.filesystem",
 				"os.hardening.auditd", "os.hardening.services",
 				"fileset.content", "access.grants",
+				// app.config: the observed application config an ansible remediation
+				// reports back via the stratt_facets convention (ADR-0084 fact-back).
+				// A Step's facetWriteScope is intersected with this grant (ADR-0054).
+				"app.config",
 			},
 			IdentitySchemes: []string{"host.name"},
 		}
@@ -881,10 +885,15 @@ func run(ctx context.Context, log *slog.Logger) error {
 			PluginIdentity: env("STRATT_DECLARED_PLUGIN_ID", "declared"),
 			Tier:           pluginhost.Tier(env("STRATT_DECLARED_TIER", "trusted")),
 			Source:         types.Source{Kind: "declared", Name: sourceName, Endpoint: env("STRATT_DECLARED_PATH", "file:///hosts")},
-			LabelKeys:      []string{"os", "role", "tier"},
+			LabelKeys:      []string{"os", "role", "tier", "demo"},
+			// The ONE declared facet the plugin may own: mgmt.address — the DECLARED
+			// reachability of a device (ADR-0084). The manifest advertises exactly this,
+			// so the grant must list exactly this (registration fails on any mismatch).
+			// Observed facets stay the collectors' (§2.1).
+			FacetNamespaces: []string{"mgmt.address"},
 			// dns.fqdn is a shared cross-source scheme: honored because the grant
-			// lists it AND the tier is trusted (finding #4). No FacetNamespaces and
-			// no TombstoneSchemes — projection-only, never a silent delete (§5).
+			// lists it AND the tier is trusted (finding #4). No TombstoneSchemes —
+			// projection-only, never a silent delete (§5).
 			IdentitySchemes: []string{"dns.fqdn"},
 		}
 		host := pluginhost.New(store, pluginv1.NewPluginServiceClient(conn), grant, log)

@@ -21,11 +21,12 @@ steps:
     params:
       extraVars:
         # The play authors the connection vars (estate content, not the core): user +
-        # the mounted key path. Host-key checking off — this is an ephemeral demo node.
+        # the STAGED key path (see the first task). Host-key checking off — ephemeral node.
+        # ansible_python_interpreter is left to auto-discovery so localhost (the EE) and
+        # the target (alpine + python3) each resolve their own.
         ansible_user: root
-        ansible_ssh_private_key_file: /runner/credentials/web-machine/id_ed25519
+        ansible_ssh_private_key_file: /tmp/web-machine-key
         ansible_ssh_common_args: "-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
-        ansible_python_interpreter: /usr/bin/python3
         # The desired listen port — the web-server onboarding default (8080).
         web_server_port: "8080"
       play: |
@@ -33,6 +34,15 @@ steps:
           hosts: all
           gather_facts: false
           tasks:
+            - name: Stage the SSH key at 0600 (mounts are group-readable; SSH refuses that)
+              delegate_to: localhost
+              connection: local
+              run_once: true
+              ansible.builtin.copy:
+                src: /runner/credentials/web-machine/id_ed25519
+                dest: /tmp/web-machine-key
+                mode: "0600"
+                remote_src: true
             - name: Ensure the nginx conf.d directory exists
               ansible.builtin.file:
                 path: /etc/nginx/conf.d
