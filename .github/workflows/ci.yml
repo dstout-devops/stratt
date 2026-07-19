@@ -56,6 +56,26 @@ jobs:
   build:
     name: Evergreen + lint
     runs-on: ubuntu-latest
+    # Stand up the real substrate floor (Postgres 18, charter §3) so the DB-gated
+    # integration tests actually RUN in CI instead of silently t.Skip-ing
+    # (enterprise-readiness CI-1). Without this, 13 integration tests + the
+    # migration-race test skipped, so the graph/compiler/api storage paths — the
+    # spine — had zero CI coverage. The test harness creates throwaway databases
+    # per test, so it needs the CREATEDB superuser the default image grants.
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_USER: stratt
+          POSTGRES_PASSWORD: stratt-dev
+          POSTGRES_DB: stratt
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U stratt"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -95,6 +115,11 @@ jobs:
         # the generated output is byte-reproducible against the pinned toolchain.
         run: cd ui && npm ci
       - name: Run CI gate
+        env:
+          # Point the integration tests at the Postgres service (CI-1). The store
+          # helpers default to this URL, but set it explicitly so the intent is
+          # visible and a service-name change can't silently re-skip the suite.
+          STRATT_TEST_DATABASE_URL: postgres://stratt:stratt-dev@localhost:5432/stratt
         run: task ci
 
   images:
