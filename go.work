@@ -19,6 +19,7 @@ use (
 	./plugins/msgraph
 	./plugins/netbox
 	./plugins/mcp
+	./plugins/mesh
 	./plugins/notify
 	./plugins/opentofu
 	./plugins/puppet
