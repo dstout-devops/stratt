@@ -80,6 +80,67 @@ func TestCorrelateIdentities(t *testing.T) {
 	}
 }
 
+// TestCorrelateIdentities_Service proves ADR-0081 slice 3: a service's mTLS cert
+// `identifies` the service Entity when the cert's CN or SAN matches the service's
+// dns.fqdn — the identity↔service cross-dimension link. DB-gated.
+func TestCorrelateIdentities_Service(t *testing.T) {
+	store := testStore(t)
+	ctx := context.Background()
+
+	// A `service` Entity carrying its K8s DNS name (as kubeservices projects it).
+	if err := store.RegisterFacetOwner(ctx, types.FacetOwner{
+		Namespace: "service.endpoint", OwnerKind: string(types.WriterSyncer), OwnerRef: "kubeservices",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	svcSrc, _ := store.RegisterSource(ctx, types.Source{Kind: "kubeservices", Name: "k8s"})
+	ep, _ := json.Marshal(map[string]any{"ports": []map[string]any{{"port": 8443}}})
+	svcProv := types.Provenance{WriterKind: types.WriterSyncer, WriterRef: "kubeservices", SourceID: svcSrc.ID}
+	svcIDs, err := store.NormalizerProjector().UpsertEntities(ctx, svcProv, []EntityUpsert{{
+		Kind: "service",
+		IdentityKeys: map[string]string{
+			"k8s.service": "prod/web",
+			"dns.fqdn":    "web.prod.svc.cluster.local",
+		},
+		Facets: map[string]json.RawMessage{"service.endpoint": ep},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	serviceID := svcIDs[0]
+
+	// A cert whose SAN is the service FQDN (a service mTLS cert).
+	if err := store.RegisterFacetOwner(ctx, types.FacetOwner{
+		Namespace: "identity.credential", OwnerKind: string(types.WriterSyncer), OwnerRef: "certissuer",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	pkiSrc, _ := store.RegisterSource(ctx, types.Source{Kind: "certissuer", Name: "pki"})
+	credDoc, _ := json.Marshal(map[string]any{
+		"scheme": "cert", "subjectName": "web", "notAfter": "2027-01-01T00:00:00Z",
+		"subjectAltNames": []string{"web.prod.svc.cluster.local"},
+	})
+	if _, err := store.NormalizerProjector().UpsertEntities(ctx,
+		types.Provenance{WriterKind: types.WriterSyncer, WriterRef: "certissuer", SourceID: pkiSrc.ID},
+		[]EntityUpsert{{Kind: "cert", IdentityKeys: map[string]string{"cert.serial": "S-web"},
+			Facets: map[string]json.RawMessage{"identity.credential": credDoc}}}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := store.CorrelateIdentities(ctx); err != nil {
+		t.Fatalf("correlate: %v", err)
+	}
+
+	// The cert identifies the service (matched by the SAN → dns.fqdn), and no leaver
+	// Finding (a service is not a disabled user).
+	if got := count(t, store, `SELECT count(*) FROM graph.relation WHERE type='identifies' AND to_id='`+serviceID+`'`); got != 1 {
+		t.Fatalf("the cert must `identifies` the service via its FQDN SAN, got %d edges", got)
+	}
+	if got := count(t, store, `SELECT count(*) FROM graph.finding WHERE framework='identity/leaver-credential'`); got != 0 {
+		t.Fatalf("a service cert must not raise a leaver Finding, got %d", got)
+	}
+}
+
 func cred(subjectName string) json.RawMessage {
 	raw, _ := json.Marshal(map[string]any{
 		"scheme":       "cert",

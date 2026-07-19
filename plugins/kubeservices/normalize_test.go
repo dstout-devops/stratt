@@ -29,7 +29,7 @@ func TestNormalize_ServiceApplicationProvides(t *testing.T) {
 		{Namespace: "prod", Name: "legacy", Ports: []ServicePort{{Port: 80}}, Labels: nil}, // not Helm-managed
 	}
 
-	ents := Normalize(services)
+	ents := Normalize(services, "cluster.local")
 
 	svc := byKind(ents, "service")
 	if len(svc) != 3 {
@@ -70,8 +70,12 @@ func TestNormalize_ServiceApplicationProvides(t *testing.T) {
 		t.Fatal("the non-Helm service must not be provided by an application")
 	}
 
-	// service.endpoint carries ports + protocol.
+	// The service carries its K8s DNS name as dns.fqdn, so a service cert `identifies`
+	// it (ADR-0081 slice 3).
 	web := byIdentity(t, svc, SchemeService, "prod/web")
+	if web.GetIdentityKeys()["dns.fqdn"] != "web.prod.svc.cluster.local" {
+		t.Fatalf("service dns.fqdn identity: %v", web.GetIdentityKeys())
+	}
 	var ep struct {
 		Ports []struct {
 			Port     int

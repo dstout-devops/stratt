@@ -59,9 +59,37 @@ func (s *Store) CorrelateIdentities(ctx context.Context) error {
 		return fmt.Errorf("identity-correlation: subjects: %w", err)
 	}
 
+	// A service `identifies`-target index (ADR-0081 slice 3): a service's mTLS/SPIFFE
+	// cert attests its DNS name, so a cert whose CN or SAN matches a `service`
+	// Entity's dns.fqdn identity `identifies` that service — the identity↔service
+	// cross-dimension link. Services carry no identity.subject (§2.1: that namespace
+	// is scim-owned), so they are matched by their projected DNS identity instead.
+	serviceIndex := map[string]string{} // lower(dns.fqdn) -> service entity id
+	svcRows, err := s.pool.Query(ctx, `
+		SELECT i.entity_id, i.value
+		FROM graph.entity_identity i
+		JOIN graph.entity e ON e.id = i.entity_id
+		WHERE e.kind = 'service' AND i.scheme = 'dns.fqdn' AND e.deleted_at IS NULL`)
+	if err != nil {
+		return fmt.Errorf("identity-correlation: read services: %w", err)
+	}
+	for svcRows.Next() {
+		var id, fqdn string
+		if err := svcRows.Scan(&id, &fqdn); err != nil {
+			svcRows.Close()
+			return fmt.Errorf("identity-correlation: scan service: %w", err)
+		}
+		serviceIndex[strings.ToLower(fqdn)] = id
+	}
+	svcRows.Close()
+	if err := svcRows.Err(); err != nil {
+		return fmt.Errorf("identity-correlation: services: %w", err)
+	}
+
 	// Buffer the credentials before writing (the write acquires its own conn).
 	type credential struct {
 		id, subjectName, serial string
+		sans                    []string
 	}
 	var creds []credential
 	certRows, err := s.pool.Query(ctx, `
@@ -79,11 +107,15 @@ func (s *Store) CorrelateIdentities(ctx context.Context) error {
 			certRows.Close()
 			return fmt.Errorf("identity-correlation: scan credential: %w", err)
 		}
-		var v struct{ SubjectName, SerialNumber string }
+		var v struct {
+			SubjectName     string
+			SerialNumber    string
+			SubjectAltNames []string
+		}
 		if err := json.Unmarshal(raw, &v); err != nil {
 			continue
 		}
-		creds = append(creds, credential{id: id, subjectName: v.SubjectName, serial: v.SerialNumber})
+		creds = append(creds, credential{id: id, subjectName: v.SubjectName, serial: v.SerialNumber, sans: v.SubjectAltNames})
 	}
 	certRows.Close()
 	if err := certRows.Err(); err != nil {
@@ -93,27 +125,42 @@ func (s *Store) CorrelateIdentities(ctx context.Context) error {
 	proj := s.RunProjector()
 	prov := types.Provenance{WriterKind: types.WriterRun, WriterRef: identityCorrelator}
 	for _, c := range creds {
-		if c.subjectName == "" {
-			continue
+		// A credential attests its CN and every SAN — match each against the subject
+		// index (users/groups) and the service index. One edge per resolved target.
+		names := make([]string, 0, 1+len(c.sans))
+		if c.subjectName != "" {
+			names = append(names, c.subjectName)
 		}
-		sj, ok := index[strings.ToLower(c.subjectName)]
-		if !ok {
-			continue // the credential attests a subject not projected as an identity — not a leaver signal
-		}
-		if err := proj.UpsertRelation(ctx, prov, "identifies", c.id, sj.id); err != nil {
-			return fmt.Errorf("identity-correlation: identifies %s→%s: %w", c.id, sj.id, err)
-		}
-		if sj.status == "disabled" {
-			detail, _ := json.Marshal(map[string]any{
-				"credential":  c.id,
-				"serial":      c.serial,
-				"subject":     sj.id,
-				"subjectName": c.subjectName,
-				"reason":      "a valid credential attests a DEACTIVATED identity — a leaver still holds it; revoke at the PKI SoR (INV-2)",
-			})
-			// The remediation flows to the SoR (revoke the cert), never a graph edit (INV-2).
-			if err := s.WriteGovernanceFinding(ctx, "identity/leaver-credential", c.id, "warning", "identity/leaver-credential", detail); err != nil {
-				return fmt.Errorf("identity-correlation: leaver finding %s: %w", c.id, err)
+		names = append(names, c.sans...)
+		linked := map[string]bool{} // target entity id -> already linked this cert
+
+		for _, name := range names {
+			key := strings.ToLower(name)
+
+			// Subject (user/group): identifies + the leaver Finding on a disabled subject.
+			if sj, ok := index[key]; ok && !linked[sj.id] {
+				linked[sj.id] = true
+				if err := proj.UpsertRelation(ctx, prov, "identifies", c.id, sj.id); err != nil {
+					return fmt.Errorf("identity-correlation: identifies %s→%s: %w", c.id, sj.id, err)
+				}
+				if sj.status == "disabled" {
+					detail, _ := json.Marshal(map[string]any{
+						"credential": c.id, "serial": c.serial, "subject": sj.id, "subjectName": name,
+						"reason": "a valid credential attests a DEACTIVATED identity — a leaver still holds it; revoke at the PKI SoR (INV-2)",
+					})
+					if err := s.WriteGovernanceFinding(ctx, "identity/leaver-credential", c.id, "warning", "identity/leaver-credential", detail); err != nil {
+						return fmt.Errorf("identity-correlation: leaver finding %s: %w", c.id, err)
+					}
+				}
+			}
+
+			// Service: identifies the service whose DNS name the cert attests
+			// (ADR-0081 slice 3 — the identity↔service link).
+			if svcID, ok := serviceIndex[key]; ok && !linked[svcID] {
+				linked[svcID] = true
+				if err := proj.UpsertRelation(ctx, prov, "identifies", c.id, svcID); err != nil {
+					return fmt.Errorf("identity-correlation: identifies %s→service %s: %w", c.id, svcID, err)
+				}
 			}
 		}
 	}

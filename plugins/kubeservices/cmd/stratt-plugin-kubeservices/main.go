@@ -31,8 +31,9 @@ func main() {
 		os.Exit(1)
 	}
 	cfg := kubeservices.Config{
-		PluginID:  env("STRATT_PLUGIN_ID", "kubeservices"),
-		Namespace: os.Getenv("STRATT_KUBESERVICES_NAMESPACE"), // "" = all namespaces
+		PluginID:      env("STRATT_PLUGIN_ID", "kubeservices"),
+		Namespace:     os.Getenv("STRATT_KUBESERVICES_NAMESPACE"), // "" = all namespaces
+		ClusterDomain: os.Getenv("STRATT_KUBESERVICES_CLUSTER_DOMAIN"),
 	}
 	addr := env("STRATT_PLUGIN_LISTEN", ":9090")
 

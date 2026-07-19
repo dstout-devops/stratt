@@ -15,8 +15,9 @@ import (
 
 // Config locates the collection scope.
 type Config struct {
-	PluginID  string // the authenticated channel identity the operator grant is keyed on
-	Namespace string // "" ⇒ all namespaces
+	PluginID      string // the authenticated channel identity the operator grant is keyed on
+	Namespace     string // "" ⇒ all namespaces
+	ClusterDomain string // service DNS suffix (default "cluster.local"); forms each service's dns.fqdn identity
 }
 
 // Server implements the sovereign plugin port for the kubeservices Syncer (ADR-0081):
@@ -81,7 +82,7 @@ func (s *Server) enumerate(ctx context.Context) ([]*pluginv1.ObservedEntity, err
 	for i := range list.Items {
 		services = append(services, fromCoreV1(&list.Items[i]))
 	}
-	return Normalize(services), nil
+	return Normalize(services, s.cfg.ClusterDomain), nil
 }
 
 // fromCoreV1 maps a Kubernetes Service onto the client-go-free projection shape the

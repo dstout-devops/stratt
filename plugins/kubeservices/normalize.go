@@ -47,8 +47,13 @@ const (
 
 // Normalize maps a full enumeration of K8s Services onto ObservedEntities: one
 // `service` Entity per Service, and one `application` Entity per Helm release that
-// `provides` the services it owns. Deterministic order for stable projection/tests.
-func Normalize(services []K8sService) []*pluginv1.ObservedEntity {
+// `provides` the services it owns. clusterDomain (e.g. "cluster.local") forms each
+// service's DNS identity so a service mTLS cert can `identifies` it (ADR-0081 slice
+// 3). Deterministic order for stable projection/tests.
+func Normalize(services []K8sService, clusterDomain string) []*pluginv1.ObservedEntity {
+	if clusterDomain == "" {
+		clusterDomain = "cluster.local"
+	}
 	sort.Slice(services, func(i, j int) bool {
 		if services[i].Namespace != services[j].Namespace {
 			return services[i].Namespace < services[j].Namespace
@@ -68,7 +73,7 @@ func Normalize(services []K8sService) []*pluginv1.ObservedEntity {
 
 	for _, s := range services {
 		key := s.Namespace + "/" + s.Name
-		out = append(out, serviceEntity(s, key))
+		out = append(out, serviceEntity(s, key, clusterDomain))
 
 		if !isHelmManaged(s.Labels) {
 			continue
@@ -95,7 +100,7 @@ func Normalize(services []K8sService) []*pluginv1.ObservedEntity {
 	return out
 }
 
-func serviceEntity(s K8sService, key string) *pluginv1.ObservedEntity {
+func serviceEntity(s K8sService, key, clusterDomain string) *pluginv1.ObservedEntity {
 	ports := make([]map[string]any, 0, len(s.Ports))
 	for _, p := range s.Ports {
 		port := map[string]any{"port": p.Port}
@@ -122,10 +127,15 @@ func serviceEntity(s K8sService, key string) *pluginv1.ObservedEntity {
 	}
 	raw, _ := json.Marshal(endpoint)
 	return &pluginv1.ObservedEntity{
-		Kind:         "service",
-		IdentityKeys: map[string]string{SchemeService: key},
-		Labels:       map[string]string{"service.name": s.Name},
-		Facets:       map[string][]byte{"service.endpoint": raw},
+		Kind: "service",
+		IdentityKeys: map[string]string{
+			SchemeService: key,
+			// The K8s service DNS name — the SHARED dns.fqdn scheme, so a service mTLS
+			// cert (whose SAN is this FQDN) `identifies` this service (ADR-0081 slice 3).
+			"dns.fqdn": s.Name + "." + s.Namespace + ".svc." + clusterDomain,
+		},
+		Labels: map[string]string{"service.name": s.Name},
+		Facets: map[string][]byte{"service.endpoint": raw},
 	}
 }
 
