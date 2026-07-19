@@ -92,3 +92,4 @@ Status is `Accepted` unless noted. See **[../roadmap.md](../roadmap.md)** for ho
 | [0081](0081-service-as-a-capability-dimension.md) | Service as a capability dimension: the deliverable↔service seam, grounded in K8s + Helm | Accepted |
 | [0082](0082-relation-liveness.md) | Relation liveness: cross-source edge GC, the edge analog of entity presence | Accepted |
 | [0083](0083-blueprint-route-materialization-seam.md) | The Blueprint route is the tool-materialization seam; declare outcomes, plugins materialize (+ G6 defaults/override) | Accepted |
+| [0084](0084-managed-node-reachability-address-facet.md) | Managed-node reachability is a typed address Facet; core resolves the connection seam, the plugin renders the connection | Accepted |
