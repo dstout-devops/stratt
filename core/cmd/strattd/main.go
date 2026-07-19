@@ -1280,6 +1280,16 @@ func run(ctx context.Context, log *slog.Logger) error {
 			if err := store.CorrelateIdentities(ctx); err != nil {
 				log.Error("identity correlation failed; keeping previous", "error", err)
 			}
+			// Patch/advisory check (ADR-0080 slice 2): load the declarable advisory
+			// ruleset from the estate (compliance-as-data) and raise patch/advisory
+			// Findings over the projected software.package inventory. The collector
+			// that populates the inventory is slice 2b; until then this is a no-op on
+			// zero inventory. Best-effort — a broken ruleset keeps the previous (§1.8).
+			if advisories, err := desiredstate.LoadPackageAdvisories(path); err != nil {
+				log.Error("load package advisories failed; keeping previous", "error", err)
+			} else if err := store.CheckPackageAdvisories(ctx, advisories); err != nil {
+				log.Error("package advisory check failed; keeping previous", "error", err)
+			}
 		}
 		reloadTuples()
 		// The ongoing reload cadence is leader-only: one writer keeps OpenFGA

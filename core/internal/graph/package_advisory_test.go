@@ -59,7 +59,7 @@ func TestCheckPackageAdvisories(t *testing.T) {
 		t.Fatalf("project inventory: %v", err)
 	}
 
-	advisories := []PackageAdvisory{
+	advisories := []types.PackageAdvisory{
 		{ID: "CVE-2022-3602", Package: "openssl", Fixed: "3.0.7", Severity: "high", Title: "X.509 buffer overflow"},
 		{ID: "CVE-9999-0000", Package: "curl", Fixed: "8.0.0", Severity: "high", Title: "not applicable — curl is patched"},
 	}
@@ -120,7 +120,7 @@ func TestCheckPackageAdvisories_Unassessable(t *testing.T) {
 	}}); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.CheckPackageAdvisories(ctx, []PackageAdvisory{
+	if err := store.CheckPackageAdvisories(ctx, []types.PackageAdvisory{
 		{ID: "CVE-2022-3602", Package: "openssl", Fixed: "3.0.7", Severity: "high"},
 	}); err != nil {
 		t.Fatalf("check: %v", err)

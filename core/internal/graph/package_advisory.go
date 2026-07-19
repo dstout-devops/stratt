@@ -6,25 +6,9 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+
+	"github.com/dstout-devops/stratt/types"
 )
-
-// packageAdvisoryChecker is the WriterRef for the platform-computed patch/advisory
-// Findings (ADR-0080). The advisory ruleset is DATA (declarable, §1.2); the check
-// is a derivation over the projected software.package inventory.
-const packageAdvisoryChecker = "package-advisory-checker"
-
-// PackageAdvisory is one patch/vulnerability rule: a package is affected when its
-// installed version is below FixedVersion (upgrade-to-fix, the common patch case)
-// OR appears in AffectedVersions (explicit). The ruleset is compliance-as-data
-// (ADR-0033 lineage): who decides "vulnerable" stays declarable, not hardcoded.
-type PackageAdvisory struct {
-	ID       string   // advisory / CVE id, e.g. "CVE-2022-3602"
-	Package  string   // affected package name
-	Fixed    string   // affected if installed < Fixed (dotted-numeric compare); empty ⇒ ignore
-	Affected []string // OR: explicit affected versions
-	Severity string   // critical | high | medium | low
-	Title    string   // human summary
-}
 
 // CheckPackageAdvisories reads every host's software.package inventory and raises a
 // patch/advisory Finding for each installed package an advisory affects (ADR-0080)
@@ -32,11 +16,11 @@ type PackageAdvisory struct {
 // signal. Platform-computed (a derivation over projected facts, not an external
 // observation), idempotent per (host, package, advisory). Remediation is a patch
 // Action against the host (a package upgrade), never a graph edit (§1.2).
-func (s *Store) CheckPackageAdvisories(ctx context.Context, advisories []PackageAdvisory) error {
+func (s *Store) CheckPackageAdvisories(ctx context.Context, advisories []types.PackageAdvisory) error {
 	if len(advisories) == 0 {
 		return nil
 	}
-	byPackage := map[string][]PackageAdvisory{}
+	byPackage := map[string][]types.PackageAdvisory{}
 	for _, a := range advisories {
 		if a.Package == "" {
 			continue
@@ -141,7 +125,7 @@ func findingSeverity(advisory string) string {
 // only when BOTH versions are comparable() by the dotted-numeric comparator;
 // otherwise assessable=false and the caller must surface it, never assume safe
 // (§1.8 — no silent false-negative on a security advisory).
-func advisoryAffects(adv PackageAdvisory, installed string) (affected, assessable bool) {
+func advisoryAffects(adv types.PackageAdvisory, installed string) (affected, assessable bool) {
 	for _, v := range adv.Affected {
 		if v == installed {
 			return true, true
