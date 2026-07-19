@@ -6,12 +6,12 @@ import (
 	"testing"
 )
 
-// TestLoadPackageAdvisories proves ADR-0080 slice 2: the advisory ruleset loads
+// TestLoadSoftwareAdvisories proves ADR-0080 slice 2: the advisory ruleset loads
 // from estate Git (compliance-as-data), and a malformed/incomplete ruleset fails
 // LOUD (§1.8) rather than silently disabling patch Findings.
-func TestLoadPackageAdvisories(t *testing.T) {
+func TestLoadSoftwareAdvisories(t *testing.T) {
 	t.Run("absent dir is a no-op", func(t *testing.T) {
-		got, err := LoadPackageAdvisories(t.TempDir())
+		got, err := LoadSoftwareAdvisories(t.TempDir())
 		if err != nil || got != nil {
 			t.Fatalf("absent advisories/ must be empty no-op, got %v, %v", got, err)
 		}
@@ -21,28 +21,28 @@ func TestLoadPackageAdvisories(t *testing.T) {
 		root := t.TempDir()
 		writeAdvisory(t, root, "a.yaml", `advisories:
   - id: CVE-2022-3602
-    package: openssl
+    component: openssl
     fixed: "3.0.7"
     severity: high
   - id: EOL-1
-    package: openssl
+    component: openssl
     affected: ["1.1.1"]
     severity: critical`)
-		got, err := LoadPackageAdvisories(root)
+		got, err := LoadSoftwareAdvisories(root)
 		if err != nil {
 			t.Fatalf("load: %v", err)
 		}
-		if len(got) != 2 || got[0].Package != "openssl" || got[0].Fixed != "3.0.7" || len(got[1].Affected) != 1 {
+		if len(got) != 2 || got[0].Component != "openssl" || got[0].Fixed != "3.0.7" || len(got[1].Affected) != 1 {
 			t.Fatalf("parsed advisories wrong: %+v", got)
 		}
 	})
 
-	t.Run("missing id/package fails loud", func(t *testing.T) {
+	t.Run("missing id/component fails loud", func(t *testing.T) {
 		root := t.TempDir()
 		writeAdvisory(t, root, "bad.yaml", `advisories:
-  - package: openssl
+  - component: openssl
     fixed: "3.0.7"`)
-		if _, err := LoadPackageAdvisories(root); err == nil {
+		if _, err := LoadSoftwareAdvisories(root); err == nil {
 			t.Fatal("an advisory with no id must be a loud error")
 		}
 	})
@@ -51,8 +51,8 @@ func TestLoadPackageAdvisories(t *testing.T) {
 		root := t.TempDir()
 		writeAdvisory(t, root, "empty.yaml", `advisories:
   - id: CVE-X
-    package: openssl`)
-		if _, err := LoadPackageAdvisories(root); err == nil {
+    component: openssl`)
+		if _, err := LoadSoftwareAdvisories(root); err == nil {
 			t.Fatal("an advisory with neither fixed nor affected must be a loud error")
 		}
 	})

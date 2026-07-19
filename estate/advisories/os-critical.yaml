@@ -1,27 +1,36 @@
-# Patch/advisory ruleset (ADR-0080 slice 2): compliance-as-data. WHO decides
-# "vulnerable" is declared here in Git and loaded on the reconcile cadence — never
-# hardcoded — and checked against the software.package inventory a collector
-# projects onto each host (slice 2b). An affected package raises a patch/advisory
-# Finding whose remediation is a package upgrade at the host SoR (never a graph edit).
+# Software-advisory ruleset (ADR-0080): compliance-as-data over the whole software
+# dimension. An advisory targets a software COMPONENT by name — a package, a
+# container image, a chart — of ANY delivery form, and one form-agnostic check
+# raises patch/advisory Findings across packages and container images alike.
+# WHO decides "vulnerable" is declared here in Git, never hardcoded; remediation is
+# a package upgrade / image bump at the SoR (never a graph edit).
 #
-# An advisory affects an installed package when its version is below `fixed`
-# (upgrade-to-fix) OR appears in `affected` (explicit). A version the comparator
-# cannot rank (epoch/tilde) surfaces an `unassessable` Finding — never silent-safe.
+# A component is affected when its version/tag is below `fixed` (upgrade-to-fix) OR
+# appears in `affected` (explicit). A version/tag the comparator cannot rank
+# (epoch/tilde, "latest") surfaces an `unassessable` Finding — never silent-safe.
 advisories:
+  # Package form (software.package).
   - id: CVE-2022-3602
-    package: openssl
+    component: openssl
     title: "X.509 email address 4-byte buffer overflow (punycode)"
     fixed: "3.0.7"
     severity: high
 
   - id: CVE-2023-38545
-    package: curl
+    component: curl
     title: "SOCKS5 heap buffer overflow"
     fixed: "8.4.0"
     severity: high
 
   - id: DSA-EOL-openssl1
-    package: openssl
+    component: openssl
     title: "OpenSSL 1.x is end-of-life — no security fixes"
     affected: ["1.0.2", "1.1.0", "1.1.1"]
+    severity: critical
+
+  # Container form (software.container): same check, matched by image name + tag.
+  - id: CVE-2021-44228
+    component: log4j-app
+    title: "Log4Shell — vulnerable base image; rebuild off a patched tag"
+    fixed: "2.17"
     severity: critical
