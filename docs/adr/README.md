@@ -90,3 +90,4 @@ Status is `Accepted` unless noted. See **[../roadmap.md](../roadmap.md)** for ho
 | [0079](0079-identity-as-a-cross-cutting-dimension.md) | Identity is a cross-cutting projection dimension, not a lowest-level type | Accepted |
 | [0080](0080-software-as-an-estate-dimension.md) | Software as an estate dimension: installed packages, open delivery-form, patch/advisory Findings | Accepted |
 | [0081](0081-service-as-a-capability-dimension.md) | Service as a capability dimension: the deliverable↔service seam, grounded in K8s + Helm | Accepted |
+| [0082](0082-relation-liveness.md) | Relation liveness: cross-source edge GC, the edge analog of entity presence | Accepted |

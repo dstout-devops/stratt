@@ -267,7 +267,8 @@ func (p *Projector) UpsertRelation(ctx context.Context, prov types.Provenance, r
 		return err
 	}
 	defer tx.Rollback(ctx) //nolint:errcheck
-	if _, err := tx.Exec(ctx, `
+	var relID string
+	if err := tx.QueryRow(ctx, `
 		INSERT INTO graph.relation (type, from_id, to_id, prov_writer_kind, prov_writer_ref, prov_source_id, prov_cell, prov_at)
 		VALUES ($1, $2, $3, $4, $5, nullif($6, ''), $8, $7)
 		ON CONFLICT (type, from_id, to_id) DO UPDATE
@@ -275,10 +276,24 @@ func (p *Projector) UpsertRelation(ctx context.Context, prov types.Provenance, r
 		    prov_writer_ref = excluded.prov_writer_ref,
 		    prov_source_id = excluded.prov_source_id,
 		    prov_cell = excluded.prov_cell,
-		    prov_at = excluded.prov_at`,
+		    prov_at = excluded.prov_at
+		RETURNING id`,
 		relType, fromID, toID, string(prov.WriterKind), prov.WriterRef, prov.SourceID, prov.At, p.cell,
-	); err != nil {
+	).Scan(&relID); err != nil {
 		return fmt.Errorf("graph: upsert relation: %w", err)
+	}
+	// Relation liveness (ADR-0082): an OBSERVED edge (from a Source) records this
+	// Source's presence, so liveness is a UNION over Sources. A run-provenance edge
+	// (no Source) writes no presence and keeps the run/cascade lifecycle.
+	if prov.SourceID != "" {
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO graph.relation_presence (relation_id, source_id, last_seen)
+			VALUES ($1, $2, now())
+			ON CONFLICT (relation_id, source_id) DO UPDATE SET last_seen = now()`,
+			relID, prov.SourceID,
+		); err != nil {
+			return fmt.Errorf("graph: record relation presence: %w", err)
+		}
 	}
 	return tx.Commit(ctx)
 }
@@ -336,32 +351,42 @@ func (p *Projector) RetractRunRelationsFrom(ctx context.Context, relType, fromID
 	return tx.Commit(ctx)
 }
 
-// RetractSourceRelationsExcept deletes a Source's OWN (observed) edges of relType
-// EXCEPT the (keepFrom[i], keepTo[i]) pairs re-emitted this full sync — the
-// per-source full-sync delete-and-replace that keeps a single-owner projected edge
-// (the kubeservices `provides` M:N, ADR-0081) from dangling when a target reparents
-// to a different source-owned Entity between syncs, WITHOUT the global relation-GC
-// the ADR-0059 gap still lacks. Scoped to prov_source_id so it NEVER touches another
-// Source's edges (§1.2 cross-source respect); an empty keep-set retracts all of the
-// Source's edges of relType (the type-fully-gone case). The relation_write_path
-// trigger is satisfied by the projector's normalizer GUC (a DELETE skips the
-// writer-kind check). Returns the number retracted.
-func (p *Projector) RetractSourceRelationsExcept(ctx context.Context, sourceID, relType string, keepFrom, keepTo []string) (int64, error) {
+// RetractSourceRelationPresenceExcept is a Source's full-sync presence replace over
+// relation liveness (ADR-0082): it retracts THIS Source's presence for its edges of
+// relType EXCEPT the (keepFrom[i], keepTo[i]) pairs re-emitted this cycle, then
+// deletes any observed edge of relType whose LAST presence is now gone. A co-asserted
+// edge survives one Source dropping it (union liveness, the ADR-0042 rule for edges);
+// an edge asserted only by this Source is collected. An empty keep-set retracts all
+// of this Source's presence for relType (the type-fully-gone case). Returns the
+// number of EDGES deleted. Supersedes the ADR-0081 single-source direct delete.
+func (p *Projector) RetractSourceRelationPresenceExcept(ctx context.Context, sourceID, relType string, keepFrom, keepTo []string) (int64, error) {
 	tx, err := p.begin(ctx)
 	if err != nil {
 		return 0, err
 	}
 	defer tx.Rollback(ctx) //nolint:errcheck
-	tag, err := tx.Exec(ctx, `
-		DELETE FROM graph.relation r
-		WHERE r.prov_source_id = $1 AND r.type = $2
+	// 1. Retract this Source's presence for edges of relType it no longer emits.
+	if _, err := tx.Exec(ctx, `
+		DELETE FROM graph.relation_presence rp
+		USING graph.relation r
+		WHERE rp.relation_id = r.id AND rp.source_id = $1 AND r.type = $2
 		  AND NOT EXISTS (
 		    SELECT 1 FROM unnest($3::uuid[], $4::uuid[]) AS k(f, t)
 		    WHERE k.f = r.from_id AND k.t = r.to_id)`,
 		sourceID, relType, keepFrom, keepTo,
+	); err != nil {
+		return 0, fmt.Errorf("graph: retract relation presence: %w", err)
+	}
+	// 2. Delete observed edges of relType whose LAST presence row is now gone (no
+	// Source still asserts them). Run-provenance edges (no Source) are untouched.
+	tag, err := tx.Exec(ctx, `
+		DELETE FROM graph.relation r
+		WHERE r.type = $1 AND r.prov_writer_kind = 'syncer'
+		  AND NOT EXISTS (SELECT 1 FROM graph.relation_presence rp WHERE rp.relation_id = r.id)`,
+		relType,
 	)
 	if err != nil {
-		return 0, fmt.Errorf("graph: retract source relations: %w", err)
+		return 0, fmt.Errorf("graph: delete dead relations: %w", err)
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return 0, fmt.Errorf("graph: commit: %w", err)
@@ -369,11 +394,18 @@ func (p *Projector) RetractSourceRelationsExcept(ctx context.Context, sourceID, 
 	return tag.RowsAffected(), nil
 }
 
-// RelationTypesBySource returns the distinct relation types a Source currently owns
-// — so a full-sync replace also sweeps a type the Source stopped emitting entirely
-// (not just types re-emitted this cycle).
+// RelationTypesBySource returns the distinct relation types a Source currently
+// ASSERTS — so a full-sync replace also sweeps a type the Source stopped emitting
+// entirely. It reads relation_presence (the true per-Source asserting set, ADR-0082),
+// NOT graph.relation.prov_source_id (a LAST-WRITER field): a multi-source edge
+// co-asserted by this Source but last-written by another would otherwise be invisible
+// here, so this Source's presence for it would never be retracted (guardian MF-2).
 func (s *Store) RelationTypesBySource(ctx context.Context, sourceID string) ([]string, error) {
-	rows, err := s.pool.Query(ctx, `SELECT DISTINCT type FROM graph.relation WHERE prov_source_id = $1`, sourceID)
+	rows, err := s.pool.Query(ctx, `
+		SELECT DISTINCT r.type
+		FROM graph.relation_presence rp
+		JOIN graph.relation r ON r.id = rp.relation_id
+		WHERE rp.source_id = $1`, sourceID)
 	if err != nil {
 		return nil, fmt.Errorf("graph: relation types by source: %w", err)
 	}

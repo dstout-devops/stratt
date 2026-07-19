@@ -7,11 +7,11 @@ import (
 	"github.com/dstout-devops/stratt/types"
 )
 
-// TestRetractSourceRelationsExcept proves the ADR-0081 MF-2 mechanism: a Source's
-// full-sync delete-and-replace of its OWN observed edges — the reparent case a
-// global relation-GC would need but ADR-0059 still lacks. It also confirms the sweep
-// stays scoped to the Source (never another's edges).
-func TestRetractSourceRelationsExcept(t *testing.T) {
+// TestRelationPresenceReplace proves ADR-0082 relation liveness: a Source's full-sync
+// presence replace collects an edge it drops (the reparent case) BUT a co-asserted
+// edge survives because another Source still asserts it (cross-source union liveness,
+// the edge analog of ADR-0042). Also confirms the sweep never touches another Source.
+func TestRelationPresenceReplace(t *testing.T) {
 	store := testStore(t)
 	ctx := context.Background()
 
@@ -19,17 +19,15 @@ func TestRetractSourceRelationsExcept(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	other, err := store.RegisterSource(ctx, types.Source{Kind: "kubeservices", Name: "k8s-2"})
+	mesh, err := store.RegisterSource(ctx, types.Source{Kind: "mesh", Name: "istio"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	proj := store.NormalizerProjector()
-	prov := types.Provenance{WriterKind: types.WriterSyncer, WriterRef: "kubeservices", SourceID: src.ID}
+	srcProv := types.Provenance{WriterKind: types.WriterSyncer, WriterRef: "kubeservices", SourceID: src.ID}
+	meshProv := types.Provenance{WriterKind: types.WriterSyncer, WriterRef: "mesh", SourceID: mesh.ID}
 
-	// The reparent scenario: sync 1 had A provide S; sync 2 has B provide S, so both
-	// A→S (stale) and B→S (fresh) exist for this source. A distinct service S2 is
-	// provided by the OTHER source, and must survive the scoped sweep.
-	ids, err := proj.UpsertEntities(ctx, prov, []EntityUpsert{
+	ids, err := proj.UpsertEntities(ctx, srcProv, []EntityUpsert{
 		{Kind: "application", IdentityKeys: map[string]string{"helm.release": "prod/a"}},
 		{Kind: "application", IdentityKeys: map[string]string{"helm.release": "prod/b"}},
 		{Kind: "service", IdentityKeys: map[string]string{"k8s.service": "prod/s"}},
@@ -39,39 +37,54 @@ func TestRetractSourceRelationsExcept(t *testing.T) {
 		t.Fatal(err)
 	}
 	a, b, s, s2 := ids[0], ids[1], ids[2], ids[3]
-	for _, from := range []string{a, b} {
-		if err := proj.UpsertRelation(ctx, prov, "provides", from, s); err != nil {
+
+	// src asserts A→S (will become stale), B→S (re-emitted), and A→S2.
+	for _, e := range [][2]string{{a, s}, {b, s}, {a, s2}} {
+		if err := proj.UpsertRelation(ctx, srcProv, "provides", e[0], e[1]); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if err := proj.UpsertRelation(ctx,
-		types.Provenance{WriterKind: types.WriterSyncer, WriterRef: "other", SourceID: other.ID},
-		"provides", a, s2); err != nil {
+	// The mesh CO-ASSERTS A→S2 (the same edge) — two presence rows on it.
+	if err := proj.UpsertRelation(ctx, meshProv, "provides", a, s2); err != nil {
 		t.Fatal(err)
 	}
-
 	if got := count(t, store, `SELECT count(*) FROM graph.relation WHERE type='provides'`); got != 3 {
-		t.Fatalf("setup: want 3 provides edges (A→S, B→S from src; A→S2 from other), got %d", got)
+		t.Fatalf("setup: 3 edges (A→S, B→S, A→S2), got %d", got)
+	}
+	if got := count(t, store, `SELECT count(*) FROM graph.relation_presence`); got != 4 {
+		t.Fatalf("setup: 4 presence rows (src×3 + mesh×1), got %d", got)
 	}
 
-	// Full-sync replace keeping only the fresh B→S for THIS source: the stale A→S is
-	// swept; B→S kept; the OTHER source's A→S2 untouched.
-	n, err := proj.RetractSourceRelationsExcept(ctx, src.ID, "provides", []string{b}, []string{s})
+	// src's full sync now re-emits only B→S. Retract src presence for the rest;
+	// delete edges whose LAST presence is gone.
+	deleted, err := proj.RetractSourceRelationPresenceExcept(ctx, src.ID, "provides",
+		[]string{b}, []string{s})
 	if err != nil {
-		t.Fatalf("retract: %v", err)
+		t.Fatalf("replace: %v", err)
 	}
-	if n != 1 {
-		t.Fatalf("want 1 edge retracted (the stale A→S), got %d", n)
+	if deleted != 1 {
+		t.Fatalf("only A→S (src-only, now presence-less) must be deleted, got %d", deleted)
 	}
-	if got := count(t, store, `SELECT count(*) FROM graph.relation WHERE type='provides' AND prov_source_id='`+src.ID+`'`); got != 1 {
-		t.Fatalf("this source must keep exactly the fresh B→S, got %d", got)
-	}
-	if got := count(t, store, `SELECT count(*) FROM graph.relation WHERE type='provides' AND prov_source_id='`+other.ID+`'`); got != 1 {
-		t.Fatalf("the other source's A→S2 must be untouched, got %d", got)
-	}
-	_ = s2
 
-	// RelationTypesBySource reflects the surviving type.
+	// A→S gone (src was its only asserter). B→S survives (src still asserts).
+	// A→S2 SURVIVES — the mesh still asserts it (union liveness).
+	if got := count(t, store, `SELECT count(*) FROM graph.relation WHERE type='provides' AND from_id='`+a+`' AND to_id='`+s+`'`); got != 0 {
+		t.Fatal("A→S must be collected (its last presence is gone)")
+	}
+	if got := count(t, store, `SELECT count(*) FROM graph.relation WHERE type='provides' AND from_id='`+b+`' AND to_id='`+s+`'`); got != 1 {
+		t.Fatal("B→S must survive (src still asserts it)")
+	}
+	if got := count(t, store, `SELECT count(*) FROM graph.relation WHERE type='provides' AND from_id='`+a+`' AND to_id='`+s2+`'`); got != 1 {
+		t.Fatal("A→S2 must survive — the mesh still asserts it (cross-source union liveness)")
+	}
+	// A→S2 now has exactly the mesh's presence (src's was retracted).
+	if got := count(t, store, `
+		SELECT count(*) FROM graph.relation_presence rp JOIN graph.relation r ON r.id=rp.relation_id
+		WHERE r.from_id='`+a+`' AND r.to_id='`+s2+`'`); got != 1 {
+		t.Fatalf("A→S2 must hold exactly the mesh presence, got %d", got)
+	}
+
+	// RelationTypesBySource still reflects the source's surviving edges.
 	relTypes, err := store.RelationTypesBySource(ctx, src.ID)
 	if err != nil {
 		t.Fatal(err)
@@ -79,12 +92,59 @@ func TestRetractSourceRelationsExcept(t *testing.T) {
 	if len(relTypes) != 1 || relTypes[0] != "provides" {
 		t.Fatalf("relation types by source: %v", relTypes)
 	}
+}
 
-	// Empty keep-set retracts all of the source's edges of the type (type-fully-gone).
-	if _, err := proj.RetractSourceRelationsExcept(ctx, src.ID, "provides", nil, nil); err != nil {
+// TestRelationPresence_LastWriterIsOtherSource is the guardian MF-2 case: a Source
+// that co-asserts an edge LAST-WRITTEN by another Source must still be found via
+// relation_presence (not the edge's last-writer prov_source_id), so its full-sync
+// sweep retracts its presence — else its phantom presence keeps the edge alive
+// forever after every real asserter drops it.
+func TestRelationPresence_LastWriterIsOtherSource(t *testing.T) {
+	store := testStore(t)
+	ctx := context.Background()
+	src, _ := store.RegisterSource(ctx, types.Source{Kind: "kubeservices", Name: "k8s"})
+	mesh, _ := store.RegisterSource(ctx, types.Source{Kind: "mesh", Name: "istio"})
+	proj := store.NormalizerProjector()
+	ids, err := proj.UpsertEntities(ctx, types.Provenance{WriterKind: types.WriterSyncer, WriterRef: "k8s", SourceID: src.ID},
+		[]EntityUpsert{
+			{Kind: "service", IdentityKeys: map[string]string{"k8s.service": "prod/a"}},
+			{Kind: "service", IdentityKeys: map[string]string{"k8s.service": "prod/b"}},
+		})
+	if err != nil {
 		t.Fatal(err)
 	}
-	if got := count(t, store, `SELECT count(*) FROM graph.relation WHERE type='provides' AND prov_source_id='`+src.ID+`'`); got != 0 {
-		t.Fatalf("empty keep-set must retract all this source's provides, got %d", got)
+	a, b := ids[0], ids[1]
+	// src asserts A depends-on B FIRST; the mesh asserts the SAME edge LAST (so the
+	// edge's prov_source_id = mesh). src has no other edges.
+	if err := proj.UpsertRelation(ctx, types.Provenance{WriterKind: types.WriterSyncer, WriterRef: "k8s", SourceID: src.ID}, "depends-on", a, b); err != nil {
+		t.Fatal(err)
+	}
+	if err := proj.UpsertRelation(ctx, types.Provenance{WriterKind: types.WriterSyncer, WriterRef: "mesh", SourceID: mesh.ID}, "depends-on", a, b); err != nil {
+		t.Fatal(err)
+	}
+
+	// MF-2: the type is discoverable for src via PRESENCE, though the edge's
+	// last-writer is the mesh.
+	relTypes, err := store.RelationTypesBySource(ctx, src.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(relTypes) != 1 || relTypes[0] != "depends-on" {
+		t.Fatalf("MF-2: src must find `depends-on` via presence despite mesh being last-writer, got %v", relTypes)
+	}
+
+	// src full-sync drops the edge: its presence retracted; edge survives on mesh.
+	if _, err := proj.RetractSourceRelationPresenceExcept(ctx, src.ID, "depends-on", nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if got := count(t, store, `SELECT count(*) FROM graph.relation WHERE type='depends-on'`); got != 1 {
+		t.Fatal("the edge must survive — the mesh still asserts it")
+	}
+	// Now the mesh drops it too → last presence gone → edge collected.
+	if _, err := proj.RetractSourceRelationPresenceExcept(ctx, mesh.ID, "depends-on", nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if got := count(t, store, `SELECT count(*) FROM graph.relation WHERE type='depends-on'`); got != 0 {
+		t.Fatal("with every asserter gone, the edge must be collected")
 	}
 }

@@ -416,7 +416,7 @@ func (h *Host) Sync(ctx context.Context) error {
 					kf = append(kf, pair[0])
 					kt = append(kt, pair[1])
 				}
-				if _, err := projector.RetractSourceRelationsExcept(ctx, h.source.ID, t, kf, kt); err != nil {
+				if _, err := projector.RetractSourceRelationPresenceExcept(ctx, h.source.ID, t, kf, kt); err != nil {
 					return fmt.Errorf("pluginhost: replace source relations %q: %w", t, err)
 				}
 			}
