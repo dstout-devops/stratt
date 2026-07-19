@@ -12,6 +12,7 @@ use (
 	./packs
 	./plugins/ansible
 	./plugins/awsec2
+	./plugins/awx
 	./plugins/certissuer
 	./plugins/chef
 	./plugins/kubeservices

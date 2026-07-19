@@ -904,6 +904,47 @@ func run(ctx context.Context, log *slog.Logger) error {
 		log.Info("no declared-estate plugin configured (STRATT_DECLARED_PLUGIN_ADDR empty); syncer idle")
 	}
 
+	// ── AWX/AAP Connector: mirror the automation estate over the port (ADR-0025 arc) ──
+	// A read-only Syncer projecting an AWX Controller's job templates/workflows/schedules/
+	// orgs/teams as `ansible.*` ObservedEntities (§1.2 — AWX stays SoR and keeps executing;
+	// the mirror never materializes an executable Stratt Workflow — `stratt import awx` is
+	// the deliberate cutover). The grant owns the five ansible.* Facet + identity schemes
+	// (the schedule→template / team→org edges cross by those same owned schemes). Per §2.1
+	// the SOURCE NAME must be distinct per Controller so two Controllers never share a
+	// tombstone key — set STRATT_AWX_SOURCE_NAME per Controller (default carries the id).
+	if addr := os.Getenv("STRATT_AWX_PLUGIN_ADDR"); addr != "" {
+		ctrlID := env("STRATT_AWX_CONTROLLER_ID", "awx")
+		sourceName := env("STRATT_AWX_SOURCE_NAME", "awx-"+ctrlID)
+		interval, err := time.ParseDuration(env("STRATT_AWX_INTERVAL", "60s"))
+		if err != nil {
+			return fmt.Errorf("awx interval: %w", err)
+		}
+		conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+		if err != nil {
+			return fmt.Errorf("awx plugin dial %s: %w", addr, err)
+		}
+		defer conn.Close()
+		ansibleSchemes := []string{"ansible.template", "ansible.workflow", "ansible.schedule", "ansible.org", "ansible.team"}
+		grant := pluginhost.Grant{
+			PluginIdentity: env("STRATT_AWX_PLUGIN_ID", "awx"),
+			Tier:           pluginhost.Tier(env("STRATT_AWX_TIER", "trusted")),
+			Source:         types.Source{Kind: "awx", Name: sourceName, Endpoint: os.Getenv("STRATT_AWX_ENDPOINT")},
+			LabelKeys:      []string{"ansible.name", "ansible.org"},
+			// The five ansible.* projection namespaces the Connector owns (its manifest
+			// advertises exactly these; registration fails on any mismatch). Each is also
+			// the object's identity scheme, and the relation to_schemes (schedules /
+			// owned-by / member-of) reference these same owned schemes.
+			FacetNamespaces: ansibleSchemes,
+			IdentitySchemes: ansibleSchemes,
+		}
+		host := pluginhost.New(store, pluginv1.NewPluginServiceClient(conn), grant, log)
+		controllers = append(controllers, homeSupervise(sourceName, host.Register, func(cctx context.Context) error {
+			return host.SyncLoop(cctx, interval)
+		}))
+	} else {
+		log.Info("no AWX Connector configured (STRATT_AWX_PLUGIN_ADDR empty); syncer idle")
+	}
+
 	// ── NetBox topology Syncer over the port (ADR-0059) ──────────────────────
 	// NetBox (netbox-community) is the IPAM/DCIM source of truth. The plugin
 	// projects `subnet`/`vlan` Entities + the `in-vlan` placement Relation; the
