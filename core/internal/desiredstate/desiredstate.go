@@ -445,6 +445,99 @@ func dirKind(sub string) string {
 	}
 }
 
+// AdmitDeclarations runs the admission PEP (ADR-0073) over already-parsed
+// declarations arriving through an imperative door — POST /desired-state/{plan,
+// apply}, PUT /views/{name} — rather than the Git reconcile. It closes the
+// bypass (enterprise-readiness GOV-2) where admitEstate only guards ParseDir: an
+// operator or agent POSTing straight to the API reached the graph with no
+// admission. Each declaration is admitted as a {kind, ...} object through the PDP
+// port; a deny — or any evaluator error, since the port fails closed — rejects
+// the whole request. A nil decider or empty policy is a no-op (no engine
+// configured). The object is the typed declaration's JSON shape (the same shape
+// the graph holds); an admission control author writes CEL against that.
+func AdmitDeclarations(ctx context.Context, decls Declarations, controls []types.Control, decider policy.Decider) error {
+	if decider == nil || len(controls) == 0 {
+		return nil
+	}
+	type obj struct {
+		kind, name string
+		v          any
+	}
+	var all []obj
+	for i := range decls.Views {
+		all = append(all, obj{"View", decls.Views[i].Name, decls.Views[i]})
+	}
+	for i := range decls.Workflows {
+		all = append(all, obj{"Workflow", decls.Workflows[i].Name, decls.Workflows[i]})
+	}
+	for i := range decls.Triggers {
+		all = append(all, obj{"Trigger", decls.Triggers[i].Name, decls.Triggers[i]})
+	}
+	for i := range decls.Emitters {
+		all = append(all, obj{"Emitter", decls.Emitters[i].Name, decls.Emitters[i]})
+	}
+	for i := range decls.Baselines {
+		all = append(all, obj{"Baseline", decls.Baselines[i].Name, decls.Baselines[i]})
+	}
+	for i := range decls.MCPServers {
+		all = append(all, obj{"MCPServer", decls.MCPServers[i].Name, decls.MCPServers[i]})
+	}
+	for i := range decls.Intents {
+		all = append(all, obj{"Intent", decls.Intents[i].Name, decls.Intents[i]})
+	}
+	for i := range decls.Assignments {
+		all = append(all, obj{"Assignment", decls.Assignments[i].Name, decls.Assignments[i]})
+	}
+	for i := range decls.Blueprints {
+		all = append(all, obj{"Blueprint", decls.Blueprints[i].Name, decls.Blueprints[i]})
+	}
+	for i := range decls.Sites {
+		all = append(all, obj{"Site", decls.Sites[i].Name, decls.Sites[i]})
+	}
+	for i := range decls.Cells {
+		all = append(all, obj{"Cell", decls.Cells[i].Name, decls.Cells[i]})
+	}
+	for i := range decls.NotifySinks {
+		all = append(all, obj{"Sink", decls.NotifySinks[i].Name, decls.NotifySinks[i]})
+	}
+	for i := range decls.Subscriptions {
+		all = append(all, obj{"Subscription", decls.Subscriptions[i].Name, decls.Subscriptions[i]})
+	}
+	for _, o := range all {
+		m, err := declarationObject(o.kind, o.v)
+		if err != nil {
+			return fmt.Errorf("desiredstate: admission encode %s/%s: %w", o.kind, o.name, err)
+		}
+		d := decider.Admit(ctx, policy.AdmissionRequest{Object: m, Controls: controls})
+		if d.Outcome == types.OutcomeDeny {
+			return fmt.Errorf("desiredstate: %s/%s: admission denied — %s", o.kind, o.name, admissionReasons(d))
+		}
+	}
+	return nil
+}
+
+// declarationObject encodes a typed declaration to the generic admission object,
+// guaranteeing a `kind` — the declaration's own (e.g. an Intent's Certificate/
+// Application sub-kind) when present, else the declared fallback. Mirrors
+// manifestObject so the imperative door and the Git door admit the same shape.
+func declarationObject(fallbackKind string, v any) (map[string]any, error) {
+	raw, err := json.Marshal(v)
+	if err != nil {
+		return nil, err
+	}
+	var m map[string]any
+	if err := json.Unmarshal(raw, &m); err != nil {
+		return nil, err
+	}
+	if m == nil {
+		m = map[string]any{}
+	}
+	if k, _ := m["kind"].(string); k == "" {
+		m["kind"] = fallbackKind
+	}
+	return m, nil
+}
+
 func admissionReasons(d types.Decision) string {
 	parts := make([]string, 0, len(d.Reasons))
 	for _, r := range d.Reasons {

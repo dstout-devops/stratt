@@ -1076,6 +1076,11 @@ func run(ctx context.Context, log *slog.Logger) error {
 		}
 	})
 
+	// admissionControls is the estate's admission policy, snapshotted at boot so
+	// the API's imperative door (POST /desired-state/*, PUT /views/*) admits
+	// through the same PDP port the Git reconcile uses (enterprise-readiness
+	// GOV-2). Empty when no estate is configured.
+	var admissionControls []types.Control
 	// ── desired-state reconciliation (§1.2: Git is the declarer) ────────
 	if path := os.Getenv("STRATT_DESIRED_STATE_PATH"); path != "" {
 		interval, err := time.ParseDuration(env("STRATT_DESIRED_STATE_INTERVAL", "30s"))
@@ -1113,6 +1118,10 @@ func run(ctx context.Context, log *slog.Logger) error {
 		if err != nil {
 			return fmt.Errorf("desired-state parse (authz-home): %w", err)
 		}
+		// Snapshot the estate's admission policy for the API's imperative door
+		// (GOV-2). Parsed with a nil decider above (this load only reads Cells +
+		// admission controls; the reconcile controller admits live).
+		admissionControls = authzDecls.AdmissionControls
 		authzHome, err := isAuthzHome(cellID, authzDecls.Cells)
 		if err != nil {
 			return err
@@ -1290,7 +1299,7 @@ func run(ctx context.Context, log *slog.Logger) error {
 	if uiDir != "" {
 		log.Info("serving ui", "dir", uiDir)
 	}
-	server := &api.Server{Store: store, Bus: bus, Temporal: temporalClient, Authz: authorizer, Log: log, CellID: cellID, CellSecret: []byte(os.Getenv("STRATT_CELL_SECRET")), Peers: peerClient, Issuer: oidcIssuer, Audience: oidcAudience, DevPrincipalHeader: devPrincipal, OIDC: oidcResolver, UIDir: uiDir, StateBackend: stateHandler, EmitterIngest: emitters.New(store, bus, log).Handler(), SCIM: scim.New(store, log).Handler(), CompileStatus: compileStatus, Evidence: evidence, SourceStatus: func() map[string]string {
+	server := &api.Server{Store: store, Bus: bus, Temporal: temporalClient, Authz: authorizer, Log: log, CellID: cellID, CellSecret: []byte(os.Getenv("STRATT_CELL_SECRET")), Peers: peerClient, Issuer: oidcIssuer, Audience: oidcAudience, DevPrincipalHeader: devPrincipal, OIDC: oidcResolver, UIDir: uiDir, StateBackend: stateHandler, EmitterIngest: emitters.New(store, bus, log).Handler(), SCIM: scim.New(store, log).Handler(), CompileStatus: compileStatus, Evidence: evidence, Decider: decider, AdmissionControls: admissionControls, SourceStatus: func() map[string]string {
 		snap := sourceStatus.Snapshot()
 		out := make(map[string]string, len(snap))
 		for name, rt := range snap {

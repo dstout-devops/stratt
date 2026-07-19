@@ -84,3 +84,4 @@ Status is `Accepted` unless noted. See **[../roadmap.md](../roadmap.md)** for ho
 | [0073](0073-admission-pep-over-the-port.md) | The admission PEP: policy at the compile seam, over the PDP port | Accepted |
 | [0074](0074-external-policy-engine-subprocess.md) | External policy engines (OPA / Kyverno) over the subprocess transport | Accepted |
 | [0075](0075-obligation-enforcement.md) | Obligation enforcement: a binding rider is enforced, not recorded-and-dropped | Accepted |
+| [0076](0076-admission-on-the-imperative-door.md) | Admission on the imperative door: the API is not a bypass around the compile-seam PEP | Accepted |

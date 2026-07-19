@@ -28,6 +28,7 @@ import (
 	"github.com/dstout-devops/stratt/core/internal/graph"
 	"github.com/dstout-devops/stratt/core/internal/mcpserver"
 	"github.com/dstout-devops/stratt/core/internal/orchestrate"
+	"github.com/dstout-devops/stratt/core/internal/policy"
 	"github.com/dstout-devops/stratt/core/internal/triggers"
 	"github.com/dstout-devops/stratt/types"
 )
@@ -101,6 +102,18 @@ type Server struct {
 	// never gated (never lock out non-SCIM or break-glass identities). Returns a
 	// non-nil error to deny.
 	SCIMGate func(ctx context.Context, principalID string) error
+	// Decider is the PDP port (ADR-0072/0073). With AdmissionControls it admits
+	// every declaration arriving through the imperative door — POST
+	// /desired-state/{plan,apply}, PUT /views/{name} — closing the bypass
+	// (enterprise-readiness GOV-2) where only the Git reconcile (ParseDir) ran
+	// admission. Nil ⇒ admission is skipped on the API path (no engine).
+	Decider policy.Decider
+	// AdmissionControls is the estate's admission policy, snapshotted at boot
+	// from the same estate the reconcile controller admits against. Boot-snapshot
+	// semantics: a later estate admission-policy change is not picked up until
+	// restart (the Git reconcile door always admits live; this door is the
+	// imperative backstop). Empty ⇒ no admission on the API path.
+	AdmissionControls []types.Control
 }
 
 // Handler mounts the generated routes under /api/v1, behind the Principal
@@ -768,6 +781,13 @@ func (s *Server) DeclareView(w http.ResponseWriter, r *http.Request, name ViewNa
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	// Admission PEP on the imperative View door (GOV-2): admit this single View
+	// through the PDP port before it reaches the graph; fail closed on deny.
+	decls := desiredstate.Declarations{Views: []desiredstate.Declaration{{Name: name, Selector: sel}}}
+	if err := desiredstate.AdmitDeclarations(r.Context(), decls, s.AdmissionControls, s.Decider); err != nil {
+		writeErr(w, http.StatusForbidden, err.Error())
+		return
+	}
 	v, err := s.Store.DeclareView(r.Context(), name, sel)
 	if errors.Is(err, graph.ErrDeclaredByCaC) {
 		writeErr(w, http.StatusConflict, err.Error())
@@ -1127,6 +1147,13 @@ func (s *Server) desiredStateBody(w http.ResponseWriter, r *http.Request) (desir
 	decls, err := declarationsFromWire(body)
 	if err != nil {
 		writeErr(w, http.StatusBadRequest, err.Error())
+		return desiredstate.Declarations{}, false
+	}
+	// Admission PEP on the imperative door (GOV-2): the Git reconcile admits at
+	// ParseDir, but a direct POST bypassed it. Admit every incoming declaration
+	// through the PDP port against the estate's boot-snapshot policy; fail closed.
+	if err := desiredstate.AdmitDeclarations(r.Context(), decls, s.AdmissionControls, s.Decider); err != nil {
+		writeErr(w, http.StatusForbidden, err.Error())
 		return desiredstate.Declarations{}, false
 	}
 	return decls, true
