@@ -26,6 +26,14 @@ type Blueprint struct {
 	// For names the Intent kind this Blueprint composes (v1:
 	// Intent/Application).
 	For string `json:"for"`
+	// Defaults are the base Intent-spec values for the composed kind (G6, ADR-0083
+	// §5, ADR-0055 guardrail 6): the "sane defaults" an Assignment's Intent overrides.
+	// Layered UNDER the Intent's own spec via explicit overlay merge
+	// (core/internal/overlay) — the Blueprint is always the base, the Intent always
+	// the override; there is NO precedence field (§2.4/§4.1 anti-GPO). A field the
+	// Intent omits takes the default; a field it sets overrides, traceably. Referenced
+	// by routes via {{.spec.X}} exactly as a directly-declared spec value is.
+	Defaults map[string]any `json:"defaults,omitempty"`
 	// Routes match Entities on capability-scoped Facets and declare, per
 	// match, the observed Facet (with its claim type) and the remediation
 	// Workflow ref.

@@ -1548,6 +1548,7 @@ type blueprintFile struct {
 	Name                string           `yaml:"name"`
 	Version             int              `yaml:"version"`
 	For                 string           `yaml:"for"`
+	Defaults            map[string]any   `yaml:"defaults"`
 	Routes              []blueprintRoute `yaml:"routes"`
 	Severity            string           `yaml:"severity"`
 	DampingObservations int              `yaml:"dampingObservations"`
@@ -1581,6 +1582,7 @@ func parseBlueprintFile(path string, raw []byte) (string, types.Blueprint, error
 	}
 	b := types.Blueprint{
 		Name: f.Name, Version: f.Version, For: f.For,
+		Defaults: f.Defaults,
 		Severity: f.Severity, DampingObservations: f.DampingObservations,
 		RemoveWorkflow: f.RemoveWorkflow,
 	}
@@ -1638,6 +1640,18 @@ func ValidateBlueprint(b types.Blueprint) error {
 		return fmt.Errorf("blueprint %s@%d: %w", b.Name, b.Version, err)
 	} else if !ok {
 		return fmt.Errorf("blueprint %s@%d: for %q is not an implemented Intent kind", b.Name, b.Version, b.For)
+	}
+	// G6 (ADR-0083 §5): the Blueprint's defaults reach the compiled Baseline via the
+	// overlay merge, so they must cross the §1.1 Contract seam like an Intent's own spec
+	// does — validated partial-tolerant (defaults are a subset the Intent completes).
+	if len(b.Defaults) > 0 {
+		raw, err := json.Marshal(b.Defaults)
+		if err != nil {
+			return fmt.Errorf("blueprint %s@%d: marshal defaults: %w", b.Name, b.Version, err)
+		}
+		if _, err := contract.ValidateIntentSpecPartial(b.For, raw); err != nil {
+			return fmt.Errorf("blueprint %s@%d: defaults: %w", b.Name, b.Version, err)
+		}
 	}
 	switch b.Severity {
 	case "", types.SeverityInfo, types.SeverityWarning, types.SeverityCritical:

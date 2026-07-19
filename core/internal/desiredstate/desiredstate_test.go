@@ -688,3 +688,31 @@ func TestWorkflowPlanApplyLifecycle(t *testing.T) {
 		t.Fatal("pruned workflow should be gone")
 	}
 }
+
+// TestBlueprintDefaultsCrossContractSeam proves the guardian §1.1 fix (G6 slice 2): a
+// Blueprint's `defaults` must cross the composed kind's Contract seam like an Intent's
+// own spec — an author-supplied value cannot reach a compiled Baseline unvalidated.
+// Partial-tolerant: a subset passes; a schema-violating value is rejected at ingestion.
+func TestBlueprintDefaultsCrossContractSeam(t *testing.T) {
+	base := types.Blueprint{
+		Name: "webapp", Version: 1, For: types.IntentApplication,
+		Severity: types.SeverityWarning,
+		Routes: []types.BlueprintRoute{{
+			Observe: types.FacetExpectation{Namespace: "app.config", Equals: json.RawMessage(`"x"`)},
+			Claim:   types.ClaimAdditive,
+		}},
+	}
+	// A partial, well-typed defaults blob passes (channel is a string per the schema),
+	// even though it omits other fields — defaults are a subset the Intent completes.
+	ok := base
+	ok.Defaults = map[string]any{"channel": "stable"}
+	if err := ValidateBlueprint(ok); err != nil {
+		t.Fatalf("valid partial defaults must pass the Contract seam: %v", err)
+	}
+	// A schema-violating default (channel is typed string; here a number) is rejected.
+	bad := base
+	bad.Defaults = map[string]any{"channel": 123}
+	if err := ValidateBlueprint(bad); err == nil {
+		t.Fatal("a schema-violating Blueprint default must be rejected at ingestion (§1.1 seam)")
+	}
+}
