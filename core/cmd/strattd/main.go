@@ -193,12 +193,38 @@ func splitNonEmpty(s string) []string {
 
 func run(ctx context.Context, log *slog.Logger) error {
 	// ── graph plane ──────────────────────────────────────────────────────
-	store, err := graph.Connect(ctx, env("STRATT_DATABASE_URL", "postgres://stratt:stratt-dev@localhost:5432/stratt"))
-	if err != nil {
-		return err
+	dbURL := env("STRATT_DATABASE_URL", "postgres://stratt:stratt-dev@localhost:5432/stratt")
+	// Rolling-upgrade schema discipline (UPG-1, ADR-0078):
+	//   STRATT_MIGRATE_ONLY  — run migrations and exit 0. The Helm pre-upgrade Job
+	//                          uses this so a schema change lands ONCE, in a
+	//                          controlled step, before the serving pods roll.
+	//   STRATT_SKIP_MIGRATE  — serving replicas skip boot migration when that Job
+	//                          owns it, so N replicas never race Up().
+	if os.Getenv("STRATT_MIGRATE_ONLY") == "true" {
+		if err := graph.MigrateURL(ctx, dbURL); err != nil {
+			return err
+		}
+		log.Info("migrations applied (STRATT_MIGRATE_ONLY); exiting")
+		return nil
+	}
+	var (
+		store *graph.Store
+		err   error
+	)
+	if os.Getenv("STRATT_SKIP_MIGRATE") == "true" {
+		store, err = graph.ConnectNoMigrate(ctx, dbURL)
+		if err != nil {
+			return err
+		}
+		log.Info("graph store ready (migrations owned by the pre-upgrade Job; boot migration skipped)")
+	} else {
+		store, err = graph.Connect(ctx, dbURL)
+		if err != nil {
+			return err
+		}
+		log.Info("graph store ready (migrations applied)")
 	}
 	defer store.Close()
-	log.Info("graph store ready (migrations applied)")
 
 	// ── control-plane Cell identity (ADR-0044) ───────────────────────────
 	// A Cell is a region-local single-writer control-plane shard. STRATT_CELL_ID

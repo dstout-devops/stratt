@@ -58,6 +58,18 @@ temporal:
   address: "temporal-frontend:7233"
   namespace: "default"
 
+# ── schema migrations & rolling-upgrade discipline (UPG-1, ADR-0078) ─────────
+# By default each pod runs goose migrations at boot (idempotent, advisory-locked).
+# For a safe rolling upgrade, enable the hook: a Helm pre-install/pre-upgrade Job
+# applies the schema ONCE before the serving pods roll (they then boot with
+# STRATT_SKIP_MIGRATE), so N replicas never race Up(). Requires expand/contract-
+# compatible migrations (each release's schema stays compatible with the prior
+# release's code — enforced by `task migrate:lint`).
+migrations:
+  hook:
+    enabled: false
+    backoffLimit: 3
+
 # ── Evidence store: object-locked WORM compliance bundles (§2.4, ADR-0029) ───
 # enterprise-readiness DR-1. Without a bucket, Findings open UNSEALED and no
 # tamper-evident evidence is ever object-locked. The daemon REFUSES TO BOOT in a

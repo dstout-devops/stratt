@@ -42,6 +42,12 @@ spec:
           env:
             - name: STRATT_K8S_NAMESPACE
               value: {{ .Release.Namespace | quote }}
+            {{- if .Values.migrations.hook.enabled }}
+            # UPG-1: the pre-upgrade Job owns migrations; serving pods skip them so
+            # N replicas never race goose Up() during a rolling upgrade.
+            - name: STRATT_SKIP_MIGRATE
+              value: "true"
+            {{- end }}
             {{- if .Values.leaderElection.enabled }}
             # Leader election (ADR-0040): identity + namespace via the downward
             # API; controllers run only on the elected leader.

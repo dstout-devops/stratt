@@ -86,3 +86,4 @@ Status is `Accepted` unless noted. See **[../roadmap.md](../roadmap.md)** for ho
 | [0075](0075-obligation-enforcement.md) | Obligation enforcement: a binding rider is enforced, not recorded-and-dropped | Accepted |
 | [0076](0076-admission-on-the-imperative-door.md) | Admission on the imperative door: the API is not a bypass around the compile-seam PEP | Accepted |
 | [0077](0077-observability-otel.md) | Observability: OpenTelemetry providers, `/metrics` always-on, OTLP optional | Accepted |
+| [0078](0078-rolling-upgrade-expand-contract.md) | Rolling-upgrade schema discipline: expand/contract + a pre-upgrade migration Job | Accepted |

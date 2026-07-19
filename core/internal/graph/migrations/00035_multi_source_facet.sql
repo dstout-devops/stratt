@@ -9,6 +9,9 @@
 -- pick. See docs/adr/0060-multi-source-facet-ownership.md.
 
 -- +goose Up
+-- expand/contract-ok: pre-dates UPG-1/ADR-0078 (grandfathered). This release
+-- backfills prov_source_id to '' BEFORE the SET NOT NULL and re-keys the pkey as
+-- one shipped unit; it was applied before the rolling-upgrade discipline existed.
 -- +goose StatementBegin
 -- M7 backfill: existing run-provenance Facet rows carry prov_source_id NULL; a NULL
 -- cannot enter the new key. Assign the empty-string source ('' — the reserved

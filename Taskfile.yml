@@ -164,6 +164,7 @@ tasks:
       - task: lint
       - task: generate:check
       - task: proto:check
+      - task: migrate:lint
       - task: test
 
   dev:up:
@@ -186,6 +187,31 @@ tasks:
     desc: Provision the dev e2e service identities in Zitadel (ADR-0009 slice 5)
     cmds:
       - deploy/dev/zitadel-bootstrap.sh
+
+  migrate:lint:
+    desc: >
+      Expand/contract lint (UPG-1, ADR-0078): fail if a migration's Up section has
+      a DESTRUCTIVE change (drop/rename/type-change/set-not-null) that would break
+      the previous release's still-running replicas during a rolling upgrade. A
+      genuine contract step (a later release, after every replica is new) opts out
+      with a `-- expand/contract-ok: <reason>` marker in the file.
+    cmds:
+      - |
+        set -eu
+        dir=core/internal/graph/migrations
+        rc=0
+        for f in "$dir"/*.sql; do
+          up=$(awk '/-- \+goose Up/{u=1;next} /-- \+goose Down/{u=0} u' "$f")
+          if printf '%s\n' "$up" | grep -iqE 'DROP +TABLE|DROP +COLUMN|DROP +CONSTRAINT|RENAME +(COLUMN|TO)|ALTER +COLUMN.*TYPE|SET +NOT +NULL'; then
+            if grep -qiE 'expand/contract-ok' "$f"; then
+              echo "  ~ $(basename "$f"): destructive Up, acknowledged (expand/contract-ok)"
+            else
+              echo "  ✗ $(basename "$f"): destructive change in Up would break the previous release's replicas during a rolling upgrade (UPG-1). Split into a later contract release, or annotate '-- expand/contract-ok: <reason>'."
+              rc=1
+            fi
+          fi
+        done
+        [ "$rc" = 0 ] && echo "✓ migrations are expand/contract-safe" || exit 1
 
   dr:restore-test:
     desc: >

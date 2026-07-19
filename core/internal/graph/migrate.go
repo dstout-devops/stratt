@@ -15,6 +15,22 @@ import (
 //go:embed migrations/*.sql
 var migrationsFS embed.FS
 
+// MigrateURL opens a throwaway pool, brings the schema current, and closes it —
+// the one-shot entrypoint for the Helm pre-upgrade migration Job (UPG-1,
+// ADR-0078), so schema changes run ONCE in a controlled step before the serving
+// pods roll, rather than each replica racing Up() at boot.
+func MigrateURL(ctx context.Context, databaseURL string) error {
+	pool, err := pgxpool.New(ctx, databaseURL)
+	if err != nil {
+		return fmt.Errorf("graph: open pool: %w", err)
+	}
+	defer pool.Close()
+	if err := pool.Ping(ctx); err != nil {
+		return fmt.Errorf("graph: ping: %w", err)
+	}
+	return Migrate(ctx, pool)
+}
+
 // Migrate brings the graph schema to the latest version. Migrations are
 // hand-written SQL run by goose (ADR-0004), embedded so the control plane
 // stays a single static binary. goose needs database/sql, so the pool is
