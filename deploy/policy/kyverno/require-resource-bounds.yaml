@@ -1,0 +1,43 @@
+# Require CPU/memory limits on Stratt workloads (enterprise-readiness SEC-4,
+# defense beyond PSS — PSS does not cover resource bounds). An unbounded pod is a
+# noisy-neighbour / runaway risk; the EE Job (arbitrary tool content) especially
+# must be capped, and SEC-1 already sets its limits. This enforces that no Stratt
+# pod lands without memory + CPU limits.
+#
+# Shipped as Audit (report-only) rather than Enforce: a legitimate future workload
+# might set limits differently, and we would rather surface a violation on the
+# Kyverno policy report than hard-block a rollout on a bound. Flip to Enforce once
+# every workload in your estate is known-bounded.
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: stratt-require-resource-bounds
+  annotations:
+    policies.kyverno.io/title: Stratt — require resource limits
+    policies.kyverno.io/category: Resource Management
+    policies.kyverno.io/severity: medium
+    policies.kyverno.io/description: >-
+      Every container must declare memory and CPU limits — a runaway (especially
+      the arbitrary-content EE Job) must be capped. Enterprise-readiness SEC-4.
+spec:
+  validationFailureAction: Audit
+  background: true
+  rules:
+    - name: require-limits
+      match:
+        any:
+          - resources:
+              kinds:
+                - Pod
+              namespaceSelector:
+                matchLabels:
+                  stratt.dev/pod-security: restricted
+      validate:
+        message: "Every container must set resources.limits.memory and resources.limits.cpu."
+        pattern:
+          spec:
+            containers:
+              - resources:
+                  limits:
+                    memory: "?*"
+                    cpu: "?*"
