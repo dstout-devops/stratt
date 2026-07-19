@@ -1273,6 +1273,13 @@ func run(ctx context.Context, log *slog.Logger) error {
 			if err := store.ProjectSCIMEntities(ctx); err != nil {
 				log.Error("scim identity projection failed; keeping previous", "error", err)
 			}
+			// Identity correlation (ADR-0079 slice 4a): link credentials to the
+			// subjects they attest (`identifies`) and raise the leaver-credential
+			// Finding — a cross-source (PKI × IdP) signal no island model can see.
+			// Runs after the subject/credential projections so both exist. Best-effort.
+			if err := store.CorrelateIdentities(ctx); err != nil {
+				log.Error("identity correlation failed; keeping previous", "error", err)
+			}
 		}
 		reloadTuples()
 		// The ongoing reload cadence is leader-only: one writer keeps OpenFGA
