@@ -1,0 +1,69 @@
+{{- /*
+SIEM audit forwarder Deployment (ADR-0034, enterprise-readiness DR-1). The
+vendor-neutral forwarder tails the one audit stream and ships it to a SIEM Sink.
+It shipped with a Dockerfile but no Helm Deployment, so it was undeployable — the
+audit stream had no path off-box in a real install. Opt-in. Hardened like the
+control plane (nonroot, drop-ALL, readonly-root, seccomp).
+*/ -}}
+{{- if .Values.forwarder.enabled }}
+{{- if not .Values.forwarder.sink }}
+{{- fail "forwarder.enabled=true requires forwarder.sink (the SIEM Sink name)" }}
+{{- end }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "stratt.fullname" . }}-forwarder
+  labels:
+    {{- include "stratt.labels" . | nindent 4 }}
+    app.kubernetes.io/component: forwarder
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "stratt.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: forwarder
+  template:
+    metadata:
+      labels:
+        {{- include "stratt.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: forwarder
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: forwarder
+          image: {{ include "stratt.image" .Values.forwarder.image | quote }}
+          imagePullPolicy: {{ .Values.forwarder.image.pullPolicy | default "IfNotPresent" }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            capabilities:
+              drop: [ALL]
+          env:
+            - name: STRATT_SERVER
+              value: {{ .Values.forwarder.server | default (printf "http://%s:%v" (include "stratt.fullname" .) .Values.service.port) | quote }}
+            - name: STRATT_FORWARDER_SINK
+              value: {{ .Values.forwarder.sink | quote }}
+            - name: STRATT_FORWARDER_BATCH
+              value: {{ .Values.forwarder.batch | default 200 | quote }}
+            - name: STRATT_FORWARDER_INTERVAL
+              value: {{ .Values.forwarder.intervalSeconds | default 5 | quote }}
+            {{- if .Values.forwarder.existingSecret.name }}
+            - name: STRATT_FORWARDER_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.forwarder.existingSecret.name }}
+                  key: {{ .Values.forwarder.existingSecret.tokenKey | default "token" }}
+            {{- end }}
+          resources:
+            requests:
+              cpu: 25m
+              memory: 32Mi
+            limits:
+              cpu: 250m
+              memory: 128Mi
+{{- end }}

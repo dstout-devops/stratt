@@ -58,6 +58,68 @@ temporal:
   address: "temporal-frontend:7233"
   namespace: "default"
 
+# ── Evidence store: object-locked WORM compliance bundles (§2.4, ADR-0029) ───
+# enterprise-readiness DR-1. Without a bucket, Findings open UNSEALED and no
+# tamper-evident evidence is ever object-locked. The daemon REFUSES TO BOOT in a
+# production environment (env.name production/prod) with no bucket unless
+# allowUnsealed=true — a compliance platform must not silently skip WORM.
+evidence:
+  # S3-compatible bucket for sealed evidence. Empty ⇒ disabled (see the boot probe).
+  bucket: ""
+  # S3 API endpoint (any S3-compatible store; empty ⇒ AWS default resolver / real S3).
+  endpoint: ""
+  region: "us-east-1"
+  retentionDays: 365
+  # Explicitly acknowledge running UNSEALED in production (bypasses the boot
+  # probe). Leave false in prod unless you truly do not want compliance evidence.
+  allowUnsealed: false
+  # Object-store credentials via the standard AWS env chain (AWS_ACCESS_KEY_ID /
+  # AWS_SECRET_ACCESS_KEY). Prefer existingSecret; on EKS/IRSA leave both empty and
+  # attach the role to the ServiceAccount.
+  existingSecret:
+    name: ""
+    accessKeyKey: "AWS_ACCESS_KEY_ID"
+    secretKeyKey: "AWS_SECRET_ACCESS_KEY"
+
+# ── Postgres backup (enterprise-readiness DR-1) ──────────────────────────────
+# The graph is a rebuildable projection, but Run provenance + the per-Cell audit
+# chain are NOT rebuildable (DR-2). This opt-in CronJob pg_dumps the database to a
+# mounted PVC on a schedule. Off by default (a PVC + the operator's own PITR may
+# already cover it); pair with Postgres PITR for a real RPO. Restore drill:
+# `task dr:restore-test`.
+backup:
+  enabled: false
+  schedule: "0 2 * * *" # daily 02:00
+  image: postgres:18
+  # Retention: the CronJob keeps this many successful dumps on the PVC.
+  keep: 7
+  persistentVolume:
+    size: 10Gi
+    storageClass: "" # "" ⇒ cluster default
+  # The DSN to dump. Empty ⇒ reuse database.url / database.existingSecret.
+  databaseUrl: ""
+
+# ── SIEM audit forwarder (ADR-0034, enterprise-readiness DR-1) ───────────────
+# The vendor-neutral forwarder ships the one audit stream to a SIEM Sink. It had a
+# Dockerfile but no Helm Deployment, so it was undeployable. Opt-in.
+forwarder:
+  enabled: false
+  image:
+    repository: stratt/stratt-forwarder
+    tag: "dev"
+    digest: ""
+    pullPolicy: IfNotPresent
+  # The SIEM Sink name (declared in the estate, ADR-0034). Required when enabled.
+  sink: ""
+  # Platform API base the forwarder polls. Empty ⇒ the in-cluster service.
+  server: ""
+  batch: 200
+  intervalSeconds: 5
+  # The forwarder's own OIDC bearer token (a service Principal on audit:log), via secret.
+  existingSecret:
+    name: ""
+    tokenKey: "token"
+
 # ── control-plane Cell (ADR-0044) ───────────────────────────────────────────
 # Multi-region DR is done by REPOINTING the substrate env strings above
 # (database.url / nats.url / temporal.address / evidence store) to a Cell's

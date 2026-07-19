@@ -103,6 +103,25 @@ func checkDevPrincipalSafety(devPrincipal bool, oidcIssuer, environment string) 
 	return nil
 }
 
+// checkEvidenceConfigured is the WORM-sealing boot probe (enterprise-readiness
+// DR-1). The Evidence store (§2.4, ADR-0029) is what makes a Finding's compliance
+// bundle tamper-evident and object-locked. It is gated on STRATT_EVIDENCE_BUCKET,
+// so a production deploy that simply forgot to set it would run for months
+// silently never sealing WORM — a compliance platform's worst failure, and
+// invisible. A safe posture is a property of boot, not an operator's memory: in a
+// production environment, refuse to boot when no bucket is configured unless the
+// operator EXPLICITLY acknowledges unsealed operation (STRATT_EVIDENCE_ALLOW_UNSEALED=true).
+func checkEvidenceConfigured(environment, bucket string, allowUnsealed bool) error {
+	if bucket != "" || allowUnsealed {
+		return nil
+	}
+	switch strings.ToLower(strings.TrimSpace(environment)) {
+	case "production", "prod":
+		return fmt.Errorf("refusing to boot: STRATT_ENVIRONMENT=%q but STRATT_EVIDENCE_BUCKET is empty — Findings would open UNSEALED and no compliance evidence would ever be object-locked (§2.4). Configure the Evidence store, or explicitly acknowledge unsealed operation with STRATT_EVIDENCE_ALLOW_UNSEALED=true", environment)
+	}
+	return nil
+}
+
 // leaderLeaseName returns the Cell-scoped leader lease name (ADR-0044): the
 // legacy "strattd-leader" for the built-in local Cell, "strattd-leader-<cell>"
 // for a named Cell so peer Cells sharing a namespace never contend one lease.
@@ -654,6 +673,13 @@ func run(ctx context.Context, log *slog.Logger) error {
 	// Object-store credentials arrive via the SDK env chain (§2.5 env-stub),
 	// reusing the same AWS wiring as the EC2 Syncer.
 	var evidence *evidencestore.Store
+	// WORM-sealing boot probe (DR-1): a prod deploy that forgot the bucket must
+	// not silently run without ever sealing compliance evidence.
+	if err := checkEvidenceConfigured(env("STRATT_ENVIRONMENT", ""),
+		os.Getenv("STRATT_EVIDENCE_BUCKET"),
+		os.Getenv("STRATT_EVIDENCE_ALLOW_UNSEALED") == "true"); err != nil {
+		return err
+	}
 	if bucket := os.Getenv("STRATT_EVIDENCE_BUCKET"); bucket != "" {
 		retentionDays, _ := strconv.Atoi(env("STRATT_EVIDENCE_RETENTION_DAYS", "365"))
 		evidence, err = evidencestore.New(ctx, evidencestore.Config{

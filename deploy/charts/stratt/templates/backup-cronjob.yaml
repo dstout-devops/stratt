@@ -1,0 +1,90 @@
+{{- /*
+Postgres backup CronJob + PVC (enterprise-readiness DR-1). The graph is a
+rebuildable projection, but Run provenance and the per-Cell audit chain are NOT
+rebuildable (DR-2) — this pg_dumps the database to a mounted PVC on a schedule,
+keeping the newest N dumps. Opt-in; pair with Postgres PITR for a real RPO.
+Restore drill: `task dr:restore-test`.
+*/ -}}
+{{- if .Values.backup.enabled }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "stratt.fullname" . }}-backup
+  labels: {{- include "stratt.labels" . | nindent 4 }}
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: {{ .Values.backup.persistentVolume.size | default "10Gi" }}
+  {{- with .Values.backup.persistentVolume.storageClass }}
+  storageClassName: {{ . | quote }}
+  {{- end }}
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ include "stratt.fullname" . }}-backup
+  labels: {{- include "stratt.labels" . | nindent 4 }}
+spec:
+  schedule: {{ .Values.backup.schedule | default "0 2 * * *" | quote }}
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      template:
+        metadata:
+          labels: {{- include "stratt.selectorLabels" . | nindent 12 }}
+        spec:
+          restartPolicy: OnFailure
+          automountServiceAccountToken: false
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 999
+            fsGroup: 999
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+            - name: pg-dump
+              image: {{ .Values.backup.image | default "postgres:18" | quote }}
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: [ALL]
+              command: ["/bin/sh", "-c"]
+              args:
+                - |
+                  set -eu
+                  ts=$(date +%Y%m%d-%H%M%S)
+                  out="/backup/stratt-${ts}.sql.gz"
+                  echo "dumping to ${out}"
+                  pg_dump "$DATABASE_URL" | gzip > "$out"
+                  # Retention: keep the newest $KEEP dumps, delete older.
+                  ls -1t /backup/stratt-*.sql.gz | tail -n +$((KEEP + 1)) | xargs -r rm -f
+                  echo "backup complete; retained $(ls -1 /backup/stratt-*.sql.gz | wc -l) dumps"
+              env:
+                - name: KEEP
+                  value: {{ .Values.backup.keep | default 7 | quote }}
+                {{- if .Values.backup.databaseUrl }}
+                - name: DATABASE_URL
+                  value: {{ .Values.backup.databaseUrl | quote }}
+                {{- else if .Values.database.existingSecret.name }}
+                - name: DATABASE_URL
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ .Values.database.existingSecret.name }}
+                      key: {{ .Values.database.existingSecret.key | default "url" }}
+                {{- else }}
+                - name: DATABASE_URL
+                  value: {{ .Values.database.url | quote }}
+                {{- end }}
+              volumeMounts:
+                - name: backup
+                  mountPath: /backup
+          volumes:
+            - name: backup
+              persistentVolumeClaim:
+                claimName: {{ include "stratt.fullname" . }}-backup
+{{- end }}

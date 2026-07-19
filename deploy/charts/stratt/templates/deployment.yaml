@@ -134,6 +134,35 @@ spec:
               value: {{ $v | quote }}
             {{- end }}
             {{- end }}
+            {{- if .Values.evidence.bucket }}
+            # Evidence store (DR-1): object-locked WORM compliance bundles (§2.4).
+            - name: STRATT_EVIDENCE_BUCKET
+              value: {{ .Values.evidence.bucket | quote }}
+            {{- if .Values.evidence.endpoint }}
+            - name: STRATT_EVIDENCE_ENDPOINT
+              value: {{ .Values.evidence.endpoint | quote }}
+            {{- end }}
+            - name: STRATT_EVIDENCE_REGION
+              value: {{ .Values.evidence.region | default "us-east-1" | quote }}
+            - name: STRATT_EVIDENCE_RETENTION_DAYS
+              value: {{ .Values.evidence.retentionDays | default 365 | quote }}
+            {{- if .Values.evidence.existingSecret.name }}
+            - name: AWS_ACCESS_KEY_ID
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.evidence.existingSecret.name }}
+                  key: {{ .Values.evidence.existingSecret.accessKeyKey | default "AWS_ACCESS_KEY_ID" }}
+            - name: AWS_SECRET_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.evidence.existingSecret.name }}
+                  key: {{ .Values.evidence.existingSecret.secretKeyKey | default "AWS_SECRET_ACCESS_KEY" }}
+            {{- end }}
+            {{- end }}
+            {{- if .Values.evidence.allowUnsealed }}
+            - name: STRATT_EVIDENCE_ALLOW_UNSEALED
+              value: "true"
+            {{- end }}
             - name: STRATT_EE_IMAGE
               value: {{ include "stratt.image" .Values.ee.image | quote }}
             {{- if or .Values.stateBackend.key .Values.stateBackend.existingSecret.name }}

@@ -36,6 +36,34 @@ func TestCheckDevPrincipalSafety(t *testing.T) {
 	}
 }
 
+// TestCheckEvidenceConfigured proves the DR-1 WORM boot probe: production refuses
+// to boot with no Evidence bucket unless unsealed operation is explicitly ack'd.
+func TestCheckEvidenceConfigured(t *testing.T) {
+	cases := []struct {
+		name          string
+		environment   string
+		bucket        string
+		allowUnsealed bool
+		wantErr       bool
+	}{
+		{name: "prod, bucket set: ok", environment: "production", bucket: "evi", wantErr: false},
+		{name: "prod, no bucket: refuse", environment: "production", bucket: "", wantErr: true},
+		{name: "prod alias, no bucket: refuse", environment: "Prod", bucket: "", wantErr: true},
+		{name: "prod, no bucket, explicit ack: ok", environment: "production", bucket: "", allowUnsealed: true, wantErr: false},
+		{name: "dev, no bucket: ok (unsealed is fine in dev)", environment: "dev", bucket: "", wantErr: false},
+		{name: "unscoped, no bucket: ok", environment: "", bucket: "", wantErr: false},
+		{name: "staging, no bucket: ok (not prod)", environment: "staging", bucket: "", wantErr: false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			err := checkEvidenceConfigured(c.environment, c.bucket, c.allowUnsealed)
+			if (err != nil) != c.wantErr {
+				t.Fatalf("checkEvidenceConfigured(%q,%q,%v) err=%v, wantErr=%v", c.environment, c.bucket, c.allowUnsealed, err, c.wantErr)
+			}
+		})
+	}
+}
+
 // TestCACOwnsMappedTeam proves the §2.1 one-owner guard: a team is flagged only
 // when it is BOTH a SCIM-mapping target AND has its membership declared in CaC.
 func TestCACOwnsMappedTeam(t *testing.T) {

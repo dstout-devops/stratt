@@ -187,6 +187,33 @@ tasks:
     cmds:
       - deploy/dev/zitadel-bootstrap.sh
 
+  dr:restore-test:
+    desc: >
+      DR restore drill (enterprise-readiness DR-1): pg_dump the graph exactly as
+      the backup CronJob does, restore it into a throwaway database, and assert a
+      known table survives. Proves the backup FORMAT restores — a backup you have
+      never restored is not a backup. Needs the dev substrate (task dev:up).
+    vars:
+      URL: '{{.STRATT_DATABASE_URL | default "postgres://stratt:stratt-dev@localhost:5432/stratt"}}'
+    cmds:
+      - |
+        set -euo pipefail
+        base="{{.URL}}"; base="${base%/*}"
+        tmp="stratt_restore_test_$$"
+        dump="$(mktemp -t stratt-dr-XXXX.sql.gz)"
+        # The dump client major MUST be >= the server major (the backup CronJob's
+        # postgres:18 image guarantees this in-cluster). pipefail makes a failed
+        # pg_dump abort the drill rather than write an empty archive.
+        echo "→ dump (as the CronJob does)"
+        pg_dump "{{.URL}}" | gzip > "$dump" || { echo "pg_dump failed — ensure the client major >= server (the CronJob uses postgres:18)"; exit 1; }
+        trap 'rm -f "$dump"; psql "$base/postgres" -c "DROP DATABASE IF EXISTS $tmp WITH (FORCE)" >/dev/null 2>&1 || true' EXIT
+        echo "→ restore into $tmp"; createdb "$base/$tmp" >/dev/null 2>&1 || psql "$base/postgres" -c "CREATE DATABASE $tmp"
+        gunzip -c "$dump" | psql "$base/$tmp" >/dev/null
+        echo "→ verify the (non-rebuildable) audit chain table survived the roundtrip"
+        n=$(psql "$base/$tmp" -tAc "SELECT count(*) FROM information_schema.tables WHERE table_schema='audit' AND table_name='event'")
+        test "$n" = "1" || { echo "RESTORE FAILED: audit.event missing after restore"; exit 1; }
+        echo "✓ DR restore drill passed (dump→restore→verify)"
+
   dev:openbao:bootstrap:
     desc: Provision the dev CLM in OpenBao — PKI engine, root CA, role, demo certs (ADR-0030)
     cmds:
