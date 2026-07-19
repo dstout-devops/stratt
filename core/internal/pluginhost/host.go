@@ -278,7 +278,8 @@ func (h *Host) Sync(ctx context.Context) error {
 	}
 	prov := h.provenance()
 	projector := h.store.NormalizerProjector()
-	seen := map[string][]string{} // tombstone scheme -> seen values this full sync
+	seen := map[string][]string{}        // tombstone scheme -> seen values this full sync
+	seenRels := map[string][][2]string{} // relType -> [ [fromID, toID], … ] this full sync (ADR-0081 MF-2)
 
 	for {
 		resp, err := stream.Recv()
@@ -342,6 +343,7 @@ func (h *Host) Sync(ctx context.Context) error {
 			if err := projector.UpsertRelation(ctx, prov, rel.GetType(), pr.fromID, toID); err != nil {
 				return fmt.Errorf("pluginhost: upsert relation: %w", err)
 			}
+			seenRels[rel.GetType()] = append(seenRels[rel.GetType()], [2]string{pr.fromID, toID})
 		}
 
 		for _, g := range resp.GetGone() {
@@ -387,6 +389,35 @@ func (h *Host) Sync(ctx context.Context) error {
 			for _, s := range h.grant.TombstoneSchemes {
 				if _, err := projector.TombstoneAbsent(ctx, prov, s, seen[s]); err != nil {
 					return fmt.Errorf("pluginhost: tombstone absent %q: %w", s, err)
+				}
+			}
+			// Per-source full-sync delete-and-replace of this Source's OWN observed
+			// edges (ADR-0081 MF-2): a reparented target — an edge whose endpoints both
+			// still exist but that was not re-emitted — is retracted here, which neither
+			// GoneRelations (a full sync sends none) nor the endpoint-tombstone cascade
+			// (both endpoints live) would collect. Sweeps every relation type the Source
+			// emitted this cycle OR previously owned (so a type it stopped emitting
+			// entirely is also cleared). Scoped to this Source — never another's edges.
+			relTypes, err := h.store.RelationTypesBySource(ctx, h.source.ID)
+			if err != nil {
+				return fmt.Errorf("pluginhost: relation types: %w", err)
+			}
+			typeSet := map[string]struct{}{}
+			for _, t := range relTypes {
+				typeSet[t] = struct{}{}
+			}
+			for t := range seenRels {
+				typeSet[t] = struct{}{}
+			}
+			for t := range typeSet {
+				kf := make([]string, 0, len(seenRels[t]))
+				kt := make([]string, 0, len(seenRels[t]))
+				for _, pair := range seenRels[t] {
+					kf = append(kf, pair[0])
+					kt = append(kt, pair[1])
+				}
+				if _, err := projector.RetractSourceRelationsExcept(ctx, h.source.ID, t, kf, kt); err != nil {
+					return fmt.Errorf("pluginhost: replace source relations %q: %w", t, err)
 				}
 			}
 		}

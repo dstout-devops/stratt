@@ -336,6 +336,59 @@ func (p *Projector) RetractRunRelationsFrom(ctx context.Context, relType, fromID
 	return tx.Commit(ctx)
 }
 
+// RetractSourceRelationsExcept deletes a Source's OWN (observed) edges of relType
+// EXCEPT the (keepFrom[i], keepTo[i]) pairs re-emitted this full sync — the
+// per-source full-sync delete-and-replace that keeps a single-owner projected edge
+// (the kubeservices `provides` M:N, ADR-0081) from dangling when a target reparents
+// to a different source-owned Entity between syncs, WITHOUT the global relation-GC
+// the ADR-0059 gap still lacks. Scoped to prov_source_id so it NEVER touches another
+// Source's edges (§1.2 cross-source respect); an empty keep-set retracts all of the
+// Source's edges of relType (the type-fully-gone case). The relation_write_path
+// trigger is satisfied by the projector's normalizer GUC (a DELETE skips the
+// writer-kind check). Returns the number retracted.
+func (p *Projector) RetractSourceRelationsExcept(ctx context.Context, sourceID, relType string, keepFrom, keepTo []string) (int64, error) {
+	tx, err := p.begin(ctx)
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck
+	tag, err := tx.Exec(ctx, `
+		DELETE FROM graph.relation r
+		WHERE r.prov_source_id = $1 AND r.type = $2
+		  AND NOT EXISTS (
+		    SELECT 1 FROM unnest($3::uuid[], $4::uuid[]) AS k(f, t)
+		    WHERE k.f = r.from_id AND k.t = r.to_id)`,
+		sourceID, relType, keepFrom, keepTo,
+	)
+	if err != nil {
+		return 0, fmt.Errorf("graph: retract source relations: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return 0, fmt.Errorf("graph: commit: %w", err)
+	}
+	return tag.RowsAffected(), nil
+}
+
+// RelationTypesBySource returns the distinct relation types a Source currently owns
+// — so a full-sync replace also sweeps a type the Source stopped emitting entirely
+// (not just types re-emitted this cycle).
+func (s *Store) RelationTypesBySource(ctx context.Context, sourceID string) ([]string, error) {
+	rows, err := s.pool.Query(ctx, `SELECT DISTINCT type FROM graph.relation WHERE prov_source_id = $1`, sourceID)
+	if err != nil {
+		return nil, fmt.Errorf("graph: relation types by source: %w", err)
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var t string
+		if err := rows.Scan(&t); err != nil {
+			return nil, err
+		}
+		out = append(out, t)
+	}
+	return out, rows.Err()
+}
+
 // retractRelationsFor deletes every relation touching any of ids — the endpoint-
 // tombstone cascade (ADR-0059 decision 7b). Entities are SOFT-deleted (deleted_at),
 // so the relation FK's ON DELETE CASCADE never fires; a decommissioned endpoint must
