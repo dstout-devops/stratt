@@ -19,7 +19,7 @@ func TestProjectSCIMEntities(t *testing.T) {
 	if err := store.UpsertIDP(ctx, types.SCIMIdP{Name: "okta", TokenHash: "x"}); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.UpsertIdentity(ctx, types.SCIMIdentity{IDP: "okta", SCIMID: "u1", UserName: "alice", PrincipalID: "alice@x", Active: true}); err != nil {
+	if err := store.UpsertIdentity(ctx, types.SCIMIdentity{IDP: "okta", SCIMID: "u1", UserName: "alice", PrincipalID: "alice@corp", Active: true}); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.UpsertIdentity(ctx, types.SCIMIdentity{IDP: "okta", SCIMID: "u2", UserName: "bob", PrincipalID: "bob@x", Active: false}); err != nil {
@@ -51,6 +51,11 @@ func TestProjectSCIMEntities(t *testing.T) {
 	// projected, never authored).
 	if s := subjectStatus(t, store, "alice"); s != "active" {
 		t.Fatalf("alice status = %q, want active", s)
+	}
+	// authenticates-as (slice 4): alice's identity records her Principal as a
+	// correlation attribute (INV-3: never consulted by authz).
+	if p := subjectPrincipal(t, store, "alice"); p != "alice@corp" {
+		t.Fatalf("alice principalId = %q, want alice@corp", p)
 	}
 	if s := subjectStatus(t, store, "bob"); s != "disabled" {
 		t.Fatalf("bob status = %q, want disabled", s)
@@ -101,4 +106,21 @@ func subjectStatus(t *testing.T, s *Store, userName string) string {
 		t.Fatalf("identity.subject shape: %+v", subj)
 	}
 	return subj.Status
+}
+
+func subjectPrincipal(t *testing.T, s *Store, userName string) string {
+	t.Helper()
+	var raw []byte
+	if err := s.pool.QueryRow(context.Background(), `
+		SELECT f.value FROM graph.facet f
+		JOIN graph.entity e ON e.id = f.entity_id
+		WHERE e.kind='user' AND e.labels->>'identity.name'=$1 AND f.namespace='identity.subject'`,
+		userName).Scan(&raw); err != nil {
+		t.Fatalf("read identity.subject for %q: %v", userName, err)
+	}
+	var subj struct{ PrincipalID string }
+	if err := json.Unmarshal(raw, &subj); err != nil {
+		t.Fatalf("unmarshal identity.subject: %v", err)
+	}
+	return subj.PrincipalID
 }

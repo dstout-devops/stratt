@@ -75,6 +75,13 @@ func (s *Store) ProjectSCIMEntities(ctx context.Context) error {
 			if u.ExternalID != "" {
 				subj["externalId"] = u.ExternalID
 			}
+			// authenticates-as (ADR-0079 slice 4): record the Principal this identity
+			// authenticates as, as a CORRELATION attribute — bridges the audit/run/cost
+			// plane (Principal-keyed) to the estate identity without a principal graph
+			// node (no plane merge). Never read by authz (INV-3).
+			if u.PrincipalID != "" {
+				subj["principalId"] = u.PrincipalID
+			}
 			raw, err := json.Marshal(subj)
 			if err != nil {
 				return fmt.Errorf("scim-identity-projection: marshal user %q: %w", u.SCIMID, err)

@@ -22,7 +22,11 @@
       "description": "Lifecycle status projected from the SoR — active | disabled (never authored in the graph, INV-2)."
     },
     "externalId": { "type": "string" },
-    "email": { "type": "string" }
+    "email": { "type": "string" },
+    "principalId": {
+      "type": "string",
+      "description": "The authz Principal that authenticates AS this identity (ADR-0079 `authenticates-as`, realized as a correlation attribute — not a graph node, so the authz and estate planes never merge). CORRELATION-ONLY: read by Views/Findings to bridge audit/run/cost (Principal-keyed) to the estate identity; NEVER read by the authz evaluator (INV-3)."
+    }
   },
   "required": ["scheme", "name"],
   "additionalProperties": false
