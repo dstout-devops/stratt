@@ -55,8 +55,11 @@ hosts:
 		if fqdn == "" {
 			t.Errorf("entity missing dns.fqdn identity: %+v", e)
 		}
+		// These hosts declare no address, so they project no facet. Observed facets
+		// (fileset/os.kernel) are never declared here (§2.1); mgmt.address is the
+		// only declarable one and only when present (see TestEnumerateProjectsAddress).
 		if len(e.GetFacets()) != 0 {
-			t.Errorf("declared estate must project NO facet (§1.1), got %v", e.GetFacets())
+			t.Errorf("address-less host must project NO facet, got %v", e.GetFacets())
 		}
 		byFQDN[fqdn] = e
 	}
@@ -111,8 +114,10 @@ func TestManifestIsProjectionOnly(t *testing.T) {
 	if m.GetClass() != pluginv1.PluginClass_PLUGIN_CLASS_SYNCER {
 		t.Errorf("class = %v, want SYNCER", m.GetClass())
 	}
-	if len(m.GetContracts()) != 0 {
-		t.Errorf("expected NO facet Contracts (§1.1), got %v", m.GetContracts())
+	// The ONE declared facet (ADR-0084): mgmt.address reachability. Observed facets
+	// stay the collectors' (§2.1); the manifest must advertise exactly mgmt.address.
+	if cs := m.GetContracts(); len(cs) != 1 || cs[0].GetSchemaId() != "mgmt.address" {
+		t.Errorf("expected exactly the mgmt.address Contract (ADR-0084), got %v", cs)
 	}
 	if len(m.GetTombstoneSchemes()) != 0 {
 		t.Errorf("expected NO tombstone schemes (never silently delete a host, §5), got %v", m.GetTombstoneSchemes())
@@ -125,4 +130,38 @@ func keys(m map[string]*pluginv1.ObservedEntity) []string {
 		out = append(out, k)
 	}
 	return out
+}
+
+// TestEnumerateProjectsAddress pins ADR-0084: a host that DECLARES an address
+// projects the mgmt.address Facet (the AWX ansible_host, declared not observed);
+// one without stays facet-less (unroutable, never a silent local).
+func TestEnumerateProjectsAddress(t *testing.T) {
+	dir := t.TempDir()
+	write(t, dir, "web.yaml", `
+hosts:
+  - fqdn: managed-web-1.stratt.test
+    labels: { os: linux, role: web, demo: managed-web }
+    address: managed-web.stratt.svc.cluster.local
+  - fqdn: no-addr.stratt.test
+    labels: { os: linux }
+`)
+	ents, err := enumerate(dir)
+	if err != nil {
+		t.Fatalf("enumerate: %v", err)
+	}
+	byFQDN := map[string]*pluginv1.ObservedEntity{}
+	for _, e := range ents {
+		byFQDN[e.GetIdentityKeys()["dns.fqdn"]] = e
+	}
+	managed := byFQDN["managed-web-1.stratt.test"]
+	raw, ok := managed.GetFacets()["mgmt.address"]
+	if !ok {
+		t.Fatalf("declared address must project mgmt.address, got facets %v", managed.GetFacets())
+	}
+	if got := string(raw); got != `{"address":"managed-web.stratt.svc.cluster.local"}` {
+		t.Fatalf("mgmt.address wire value wrong: %s", got)
+	}
+	if len(byFQDN["no-addr.stratt.test"].GetFacets()) != 0 {
+		t.Fatalf("a host with no declared address must project no facet (unroutable, not silent-local)")
+	}
 }

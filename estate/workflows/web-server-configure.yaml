@@ -1,27 +1,62 @@
-# web-server-configure — the web-server materialization/remediation Workflow: converge the
-# desired listen port via ansible. Surfaced as a ref on a drift Finding — never
-# auto-launched (§5 Flow 2). The PLUGIN (ansible) materializes the state; the Blueprint
-# route NAMED it, core did not (ADR-0083 — the Blueprint route is the tool seam). As the
-# lifecycle grows (linux-onboard's "next slice"), a cert Step (certissuer) and an app Step
-# (helm) slot in alongside — co-management fanning across channels, one gated Workflow.
+# web-server-configure — the web-server materialization/remediation Workflow. Surfaced
+# as a ref on the drift Finding, never auto-launched (§5 Flow 2). The PLUGIN (ansible)
+# materializes the state; the Blueprint route NAMED it, core did not (ADR-0083). This is
+# the ADR-0084 CONVERGENCE path: a REAL ansible run over SSH to the managed-web node —
+# a genuine AWX-style job (real inventory host from mgmt.address, a machine credential,
+# a real connection), not a local no-op. It converges the listen port, READS IT BACK,
+# and reports the observed app.config via the stratt_facets fact-back so the drift
+# Finding RESOLVES once observed == desired.
 name: web-server-configure
 steps:
   - name: configure
-    viewName: web-hosts
+    # The dedicated real-node View (ADR-0084 fixture). ansible_host is rendered by the
+    # shim from each target's mgmt.address — the core never authored it (§1.4).
+    viewName: managed-web
     actuator: ansible
+    # The machine credential (SSH key) — mounted at spawn, use-checked against the
+    # launching Principal (§2.5). The AWX Machine-Credential half of the split.
+    credentialRefs: [web-machine]
+    # The remediation may write back ONLY app.config (ADR-0054) — the observed port.
+    facetWriteScope: [app.config]
     params:
+      extraVars:
+        # The play authors the connection vars (estate content, not the core): user +
+        # the mounted key path. Host-key checking off — this is an ephemeral demo node.
+        ansible_user: root
+        ansible_ssh_private_key_file: /runner/credentials/web-machine/id_ed25519
+        ansible_ssh_common_args: "-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
+        ansible_python_interpreter: /usr/bin/python3
+        # The desired listen port — the web-server onboarding default (8080).
+        web_server_port: "8080"
       play: |
-        - name: Converge web server listen port
+        - name: Converge the web server listen port
           hosts: all
-          become: true
+          gather_facts: false
           tasks:
-            - name: Ensure nginx listens on the desired port
-              ansible.builtin.lineinfile:
-                path: /etc/nginx/conf.d/listen.conf
-                regexp: '^listen '
-                line: "listen {{ web_server_port }};"
-                create: true
-            - name: Reload nginx
-              ansible.builtin.service:
-                name: nginx
-                state: reloaded
+            - name: Ensure the nginx conf.d directory exists
+              ansible.builtin.file:
+                path: /etc/nginx/conf.d
+                state: directory
+            - name: Set the desired nginx site (idempotent — changed once, ok on re-run)
+              ansible.builtin.copy:
+                dest: /etc/nginx/conf.d/stratt.conf
+                content: |
+                  server {
+                    listen {{ web_server_port }};
+                    server_name _;
+                    location / { return 200 'stratt managed-web listening on {{ web_server_port }}\n'; }
+                  }
+            - name: Reload nginx so the port takes effect (a real converge, not just a file)
+              ansible.builtin.command: nginx -s reload
+              register: reload
+              failed_when: false
+              changed_when: false
+            - name: OBSERVE the effective listen port back from the running config
+              ansible.builtin.shell: "grep -oE 'listen +[0-9]+' /etc/nginx/conf.d/stratt.conf | grep -oE '[0-9]+'"
+              register: observed_port
+              changed_when: false
+            - name: Report the observed app.config to Stratt (fact-back → Finding resolves)
+              ansible.builtin.set_fact:
+                stratt_facets:
+                  app.config:
+                    port: "{{ observed_port.stdout }}"

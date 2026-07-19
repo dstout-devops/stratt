@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "stratt:contract:facets/app.config:v1",
+  "title": "app.config Facet",
+  "description": "Demanded by the web-server onboarding Baseline (ADR-0055/0083): the OBSERVED application configuration of a host, projected by the remediation Run's fact-back (ADR-0084 generic stratt_facets convention) with Run provenance (§1.2) under the Step's FacetWriteScope (ADR-0054). port is the effective listen port the configure Run read back from the target after converging it — the observed value the Baseline's app.config.port expectation is checked against (drift while it differs from the Intent's resolved port, resolved once they agree). The schema is CLOSED (§9): the onboarding Baseline reads exactly port, so the seam carries exactly port — not an application-config ontology.",
+  "type": "object",
+  "properties": {
+    "port": { "type": "string", "minLength": 1 }
+  },
+  "required": ["port"],
+  "additionalProperties": false
+}

@@ -1,0 +1,10 @@
+# Binds the web-server Intent to the REAL managed-web node via the SAME web-server@1
+# Blueprint (Blueprint reuse across groups, §2.1). The resolved port is the Blueprint
+# default (8080) — this is the convergence demo: the compiler drift-checks
+# app.config.port on a reachable node, and the gated web-server-configure remediation
+# actually SSHes in, sets the port, and reports it back so the Finding RESOLVES.
+name: managed-web
+intent: web-server
+view: managed-web
+blueprint: web-server@1
+environments: [dev]

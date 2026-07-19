@@ -1,0 +1,14 @@
+# web-machine — the machine credential (SSH private key) the web-server-configure
+# remediation rides to reach the managed-web node (ADR-0084 convergence fixture).
+# This is the AWX "Machine Credential" model: the inventory host declares the
+# ADDRESS (mgmt.address → ansible_host), the credential carries the KEY — a clean
+# §2.5 split. POINTER only (never material): the dispatcher resolves it to the
+# k8s Secret and file-mounts the key into the EE pod at spawn, at
+# /runner/credentials/web-machine/id_ed25519. The launching Principal's use-check
+# (dev-runner, granted in authz/tuples.yaml) is the gate.
+name: web-machine
+ownerTeam: platform-admins
+backend: k8s-secret
+locator: { namespace: stratt, name: web-machine-creds }
+injection:
+  - { key: ssh-privatekey, as: file, name: id_ed25519 }

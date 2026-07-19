@@ -169,6 +169,19 @@ func extractFacts(ev RunnerEvent) map[string][]byte {
 			out["access.grants"] = raw
 		}
 	}
+	// Generic facet-report convention (ADR-0084 fact-back): a play projects ANY Facet
+	// by setting the reserved `stratt_facets` fact — a map of namespace -> value (the
+	// AWX artifacts model: the remediation reports the state it OBSERVED on the target).
+	// The per-Run FacetWriteScope (ADR-0054) gates WHICH namespaces are accepted
+	// core-side, so this convention never widens a Run's write authority. Generalizes
+	// the fixed stratt_fileset/stratt_hardening_* keys above without a per-facet map.
+	if sf, ok := facts["stratt_facets"].(map[string]any); ok {
+		for ns, v := range sf {
+			if raw, err := json.Marshal(v); err == nil {
+				out[ns] = raw
+			}
+		}
+	}
 	if len(out) == 0 {
 		return nil
 	}

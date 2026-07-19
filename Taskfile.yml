@@ -462,6 +462,25 @@ tasks:
       - mkdir -p {{.ROOT_DIR}}/deploy/charts/stratt/dev/declarations
       - cp -R {{.ROOT_DIR}}/estate/. {{.ROOT_DIR}}/deploy/charts/stratt/dev/declarations/
 
+  dev:managed-web:up:
+    desc: Deploy the REAL sshd/nginx managed node for the ADR-0084 convergence demo (keypair + machine-credential Secret + node, idempotent)
+    deps: [tools:kubectl]
+    vars:
+      KEYDIR: "{{.ROOT_DIR}}/deploy/dev/managed-web"
+    cmds:
+      - go run sigs.k8s.io/kind@v{{.KIND_VER}} export kubeconfig --name {{.KIND_CLUSTER}}
+      # A throwaway ed25519 keypair (idempotent): the PRIVATE half rides the
+      # web-machine CredentialRef (Secret web-machine-creds); the PUBLIC half is the
+      # node's authorized_keys. Material is git-ignored, never committed (§2.5).
+      - mkdir -p {{.KEYDIR}}
+      - test -f {{.KEYDIR}}/id_ed25519 || ssh-keygen -t ed25519 -N "" -C stratt-web-machine -f {{.KEYDIR}}/id_ed25519
+      # The machine credential the remediation Step use-checks + mounts (§2.5).
+      - "{{.KUBECTL}} --context {{.KIND_CONTEXT}} -n stratt create secret generic web-machine-creds --from-file=ssh-privatekey={{.KEYDIR}}/id_ed25519 --dry-run=client -o yaml | {{.KUBECTL}} --context {{.KIND_CONTEXT}} apply -f -"
+      # The node's authorized_keys (the public half).
+      - "{{.KUBECTL}} --context {{.KIND_CONTEXT}} -n stratt create secret generic managed-web-authorized-keys --from-file=authorized_keys={{.KEYDIR}}/id_ed25519.pub --dry-run=client -o yaml | {{.KUBECTL}} --context {{.KIND_CONTEXT}} apply -f -"
+      - "{{.KUBECTL}} --context {{.KIND_CONTEXT}} apply -f {{.ROOT_DIR}}/deploy/dev/managed-web.yaml"
+      - "{{.KUBECTL}} --context {{.KIND_CONTEXT}} -n stratt rollout status deploy/managed-web --timeout=120s"
+
   dev:crossplane:
     desc: Install REAL Crossplane + provider-kubernetes into kind for the topology build loop (ADR-0059, idempotent)
     deps: [tools:helm, tools:kubectl]

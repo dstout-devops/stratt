@@ -65,3 +65,6 @@ core/stratt
 # from /estate by `task dev:stage-estate` (Helm can't glob outside the chart dir);
 # the single source of truth is /estate, never this copy.
 /deploy/charts/stratt/dev/declarations/
+
+# ADR-0084 convergence-demo SSH keypair (machine credential material — never commit)
+deploy/dev/managed-web/

@@ -16,3 +16,7 @@ tuples:
   # …and may USE the aws-dev CredentialRef the build Action binds (§2.5 use-check).
   - { user: principal:dev-runner, relation: user, object: credential_ref:aws-dev }
   - { user: principal:dev-runner, relation: user, object: credential_ref:crossplane-dev }
+  # …and the machine credential (SSH key) the web-server-configure remediation
+  # rides to reach the managed-web node (ADR-0084 convergence fixture; §2.5 use-check).
+  - { user: principal:dev-runner, relation: runner, object: view:managed-web }
+  - { user: principal:dev-runner, relation: user, object: credential_ref:web-machine }
