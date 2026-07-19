@@ -7,6 +7,35 @@ import (
 	"github.com/dstout-devops/stratt/types"
 )
 
+// TestCheckDevPrincipalSafety proves the SEC-2 structural guard: the trusted-
+// header auth bypass refuses to boot alongside a real identity backend or in a
+// non-dev environment — a safe posture enforced by boot, not operator memory.
+func TestCheckDevPrincipalSafety(t *testing.T) {
+	cases := []struct {
+		name        string
+		dev         bool
+		oidcIssuer  string
+		environment string
+		wantErr     bool
+	}{
+		{name: "off: nothing to guard", dev: false, oidcIssuer: "https://idp", environment: "production", wantErr: false},
+		{name: "dev-only, unscoped env: allowed", dev: true, environment: "", wantErr: false},
+		{name: "dev-only, dev env: allowed", dev: true, environment: "dev", wantErr: false},
+		{name: "dev + OIDC issuer: refuse", dev: true, oidcIssuer: "https://idp", wantErr: true},
+		{name: "dev + production: refuse", dev: true, environment: "production", wantErr: true},
+		{name: "dev + prod alias: refuse", dev: true, environment: "Prod", wantErr: true},
+		{name: "dev + staging: refuse", dev: true, environment: " staging ", wantErr: true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			err := checkDevPrincipalSafety(c.dev, c.oidcIssuer, c.environment)
+			if (err != nil) != c.wantErr {
+				t.Fatalf("checkDevPrincipalSafety(%v,%q,%q) err=%v, wantErr=%v", c.dev, c.oidcIssuer, c.environment, err, c.wantErr)
+			}
+		})
+	}
+}
+
 // TestCACOwnsMappedTeam proves the §2.1 one-owner guard: a team is flagged only
 // when it is BOTH a SCIM-mapping target AND has its membership declared in CaC.
 func TestCACOwnsMappedTeam(t *testing.T) {

@@ -77,6 +77,27 @@ func env(key, def string) string {
 	return def
 }
 
+// checkDevPrincipalSafety is the structural auth-bypass guard (enterprise-
+// readiness SEC-2). The dev trusted-header resolver forges any Principal from an
+// unauthenticated request header — one flag away from a full auth bypass. It
+// must never be a deployment-config accident, so boot fails when it is enabled
+// alongside a real identity backend (OIDC) — where an attacker would simply omit
+// the Bearer and forge X-Stratt-Principal — or in a non-dev environment. Kept a
+// pure function so the refusal is unit-tested, not just asserted in review.
+func checkDevPrincipalSafety(devPrincipal bool, oidcIssuer, environment string) error {
+	if !devPrincipal {
+		return nil
+	}
+	if oidcIssuer != "" {
+		return fmt.Errorf("refusing to boot: STRATT_DEV_PRINCIPAL_HEADER=true trusts an unauthenticated header and cannot run alongside STRATT_OIDC_ISSUER (a real identity backend) — an attacker would omit the Bearer and forge X-Stratt-Principal; unset one")
+	}
+	switch strings.ToLower(strings.TrimSpace(environment)) {
+	case "production", "prod", "staging":
+		return fmt.Errorf("refusing to boot: STRATT_DEV_PRINCIPAL_HEADER=true (trusted-header auth bypass) is forbidden in STRATT_ENVIRONMENT=%q — dev harness only", environment)
+	}
+	return nil
+}
+
 // leaderLeaseName returns the Cell-scoped leader lease name (ADR-0044): the
 // legacy "strattd-leader" for the built-in local Cell, "strattd-leader-<cell>"
 // for a named Cell so peer Cells sharing a namespace never contend one lease.
@@ -294,6 +315,11 @@ func run(ctx context.Context, log *slog.Logger) error {
 	var oidcResolver *authz.OIDCResolver
 	oidcIssuer := os.Getenv("STRATT_OIDC_ISSUER")
 	oidcAudience := os.Getenv("STRATT_OIDC_AUDIENCE")
+	// Structural auth-bypass guard (enterprise-readiness SEC-2): a safe posture
+	// is a property of boot, not an operator's memory.
+	if err := checkDevPrincipalSafety(devPrincipal, oidcIssuer, env("STRATT_ENVIRONMENT", "")); err != nil {
+		return err
+	}
 	if issuer := oidcIssuer; issuer != "" {
 		// Production guard (ADR-0013, slice-5 guardian flag): an issuer
 		// without an audience accepts any token the IdP ever minted for any
