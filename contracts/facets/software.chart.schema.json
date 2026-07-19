@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "stratt:contract:facets/software.chart:v1",
+  "title": "software.chart Facet",
+  "description": "Demanded by the K8s/Helm collector (ADR-0081) and the software-advisory check (ADR-0080): the CHART form of the deliverable-software dimension, carried by an `application` Entity (a deployed deliverable instance). Same dimension as software.package/software.container, different form — it is a `charts` component list sharing the {name, version, origin, deliveryForm} software-component shape, so the ONE form-agnostic CheckSoftwareAdvisories pass covers charts too: a vulnerable chart version surfaces a patch/advisory Finding for free. A projection (§1.2) of the Helm release, observed by the collector; never authored. Single §2.1 write-owner.",
+  "type": "object",
+  "properties": {
+    "charts": {
+      "type": "array",
+      "description": "The chart(s) this application was deployed from (usually one; a list for subcharts/dependencies).",
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": { "type": "string", "description": "Chart name (the component name)." },
+          "version": { "type": "string", "description": "Chart version (the component version)." },
+          "appVersion": { "type": "string", "description": "The application version the chart deploys, when distinct." },
+          "origin": { "type": "string", "description": "Development lineage — OPEN: internal | external | vendor." },
+          "deliveryForm": { "type": "string", "description": "OPEN form; this facet is the `chart` form." }
+        },
+        "required": ["name", "version"],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": ["charts"],
+  "additionalProperties": false
+}

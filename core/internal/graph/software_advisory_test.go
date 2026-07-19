@@ -146,6 +146,40 @@ func TestCheckSoftwareAdvisories_Unassessable(t *testing.T) {
 	}
 }
 
+// TestCheckSoftwareAdvisories_Chart proves ADR-0081's "chart CVEs for free" claim:
+// software.chart (a Helm chart deliverable on an `application` Entity) flows through
+// the SAME form-agnostic check with zero check change — a vulnerable chart version
+// raises a patch/advisory Finding.
+func TestCheckSoftwareAdvisories_Chart(t *testing.T) {
+	store := testStore(t)
+	ctx := context.Background()
+	if err := store.RegisterFacetOwner(ctx, types.FacetOwner{
+		Namespace: "software.chart", OwnerKind: string(types.WriterSyncer), OwnerRef: "kubeservices",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	src, _ := store.RegisterSource(ctx, types.Source{Kind: "kubeservices", Name: "k8s"})
+	chart, _ := json.Marshal(map[string]any{"charts": []map[string]any{
+		{"name": "web-stack", "version": "1.4.2", "deliveryForm": "chart"},
+	}})
+	proj := store.NormalizerProjector()
+	prov := types.Provenance{WriterKind: types.WriterSyncer, WriterRef: "kubeservices", SourceID: src.ID}
+	if _, err := proj.UpsertEntities(ctx, prov, []EntityUpsert{{
+		Kind: "application", IdentityKeys: map[string]string{"helm.release": "prod/shop"},
+		Facets: map[string]json.RawMessage{"software.chart": chart},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.CheckSoftwareAdvisories(ctx, []types.SoftwareAdvisory{
+		{ID: "CHART-2024-1", Component: "web-stack", Fixed: "1.5.0", Severity: "high"},
+	}); err != nil {
+		t.Fatalf("check: %v", err)
+	}
+	if got := count(t, store, `SELECT count(*) FROM graph.finding WHERE framework='patch/advisory' AND status='open'`); got != 1 {
+		t.Fatalf("a vulnerable chart must raise a patch/advisory Finding (chart CVEs for free), got %d", got)
+	}
+}
+
 func mustMarshal(v any) []byte {
 	b, _ := json.Marshal(v)
 	return b
