@@ -125,6 +125,15 @@ spec:
             - name: STRATT_DEV_PRINCIPAL_HEADER
               value: "true"
             {{- end }}
+            {{- if .Values.observability.otlpEndpoint }}
+            # OBS-1: OTLP push for traces + metrics. Unset ⇒ /metrics only.
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              value: {{ .Values.observability.otlpEndpoint | quote }}
+            {{- range $k, $v := .Values.observability.otlpEnv }}
+            - name: {{ $k }}
+              value: {{ $v | quote }}
+            {{- end }}
+            {{- end }}
             - name: STRATT_EE_IMAGE
               value: {{ include "stratt.image" .Values.ee.image | quote }}
             {{- if or .Values.stateBackend.key .Values.stateBackend.existingSecret.name }}

@@ -42,6 +42,7 @@ import (
 	"github.com/dstout-devops/stratt/core/internal/homegate"
 	"github.com/dstout-devops/stratt/core/internal/leader"
 	"github.com/dstout-devops/stratt/core/internal/notify"
+	"github.com/dstout-devops/stratt/core/internal/observability"
 	"github.com/dstout-devops/stratt/core/internal/orchestrate"
 	"github.com/dstout-devops/stratt/core/internal/planstore"
 	"github.com/dstout-devops/stratt/core/internal/pluginhost"
@@ -58,6 +59,10 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 )
+
+// version is the build version stamped onto telemetry (OBS-1). Overridable via
+// -ldflags "-X main.version=<tag>"; "dev" for an unstamped local build.
+var version = "dev"
 
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -186,6 +191,31 @@ func run(ctx context.Context, log *slog.Logger) error {
 	// NATS-subject scoping are later ADR-0044 slices.)
 	cellID := env("STRATT_CELL_ID", types.LocalCell)
 	store.SetCell(cellID)
+	// ── observability (OBS-1) ────────────────────────────────────────────
+	// Providers back /metrics (always) + OTLP traces/metrics (when
+	// OTEL_EXPORTER_OTLP_ENDPOINT is set). Stamped with the Cell so multi-region
+	// signals are attributable. Never fatal on a missing endpoint (§1.8).
+	obs, err := observability.Setup(ctx, observability.Config{
+		ServiceName:    "stratt",
+		ServiceVersion: version,
+		Cell:           cellID,
+		OTLPEndpoint:   os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"),
+	})
+	if err != nil {
+		return fmt.Errorf("observability setup: %w", err)
+	}
+	defer func() {
+		shctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if serr := obs.Shutdown(shctx); serr != nil {
+			log.Warn("observability shutdown", "error", serr)
+		}
+	}()
+	if os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT") != "" {
+		log.Info("observability: OTLP export enabled + /metrics", "endpoint", os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"))
+	} else {
+		log.Info("observability: /metrics only (OTEL_EXPORTER_OTLP_ENDPOINT unset; traces are no-op)")
+	}
 	// Active environment (ADR-0057): a logical dev/staging/prod slice WITHIN this
 	// Cell. Empty = unscoped (reconciles every declaration, byte-identical to
 	// pre-ADR-0057). When set, the reconcile applies + prunes only its slice.
@@ -1299,7 +1329,7 @@ func run(ctx context.Context, log *slog.Logger) error {
 	if uiDir != "" {
 		log.Info("serving ui", "dir", uiDir)
 	}
-	server := &api.Server{Store: store, Bus: bus, Temporal: temporalClient, Authz: authorizer, Log: log, CellID: cellID, CellSecret: []byte(os.Getenv("STRATT_CELL_SECRET")), Peers: peerClient, Issuer: oidcIssuer, Audience: oidcAudience, DevPrincipalHeader: devPrincipal, OIDC: oidcResolver, UIDir: uiDir, StateBackend: stateHandler, EmitterIngest: emitters.New(store, bus, log).Handler(), SCIM: scim.New(store, log).Handler(), CompileStatus: compileStatus, Evidence: evidence, Decider: decider, AdmissionControls: admissionControls, SourceStatus: func() map[string]string {
+	server := &api.Server{Store: store, Bus: bus, Temporal: temporalClient, Authz: authorizer, Log: log, CellID: cellID, CellSecret: []byte(os.Getenv("STRATT_CELL_SECRET")), Peers: peerClient, Issuer: oidcIssuer, Audience: oidcAudience, DevPrincipalHeader: devPrincipal, OIDC: oidcResolver, UIDir: uiDir, StateBackend: stateHandler, EmitterIngest: emitters.New(store, bus, log).Handler(), SCIM: scim.New(store, log).Handler(), CompileStatus: compileStatus, Evidence: evidence, Decider: decider, AdmissionControls: admissionControls, Metrics: obs.MetricsHandler(), SourceStatus: func() map[string]string {
 		snap := sourceStatus.Snapshot()
 		out := make(map[string]string, len(snap))
 		for name, rt := range snap {

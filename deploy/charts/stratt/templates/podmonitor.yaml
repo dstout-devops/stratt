@@ -1,0 +1,24 @@
+{{- /*
+Prometheus-Operator PodMonitor scraping the control plane's /metrics (OBS-1).
+Opt-in (needs the monitoring.coreos.com PodMonitor CRD); off by default so a
+cluster without the operator still installs cleanly. When the operator is absent
+but you still want metrics, scrape :8080/metrics however you already do.
+*/ -}}
+{{- if .Values.observability.podMonitor.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: {{ include "stratt.fullname" . }}
+  labels:
+    {{- include "stratt.labels" . | nindent 4 }}
+    {{- with .Values.observability.podMonitor.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  selector:
+    matchLabels: {{- include "stratt.selectorLabels" . | nindent 6 }}
+  podMetricsEndpoints:
+    - port: http
+      path: /metrics
+      interval: {{ .Values.observability.podMonitor.interval | default "30s" }}
+{{- end }}

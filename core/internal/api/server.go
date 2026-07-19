@@ -31,6 +31,7 @@ import (
 	"github.com/dstout-devops/stratt/core/internal/policy"
 	"github.com/dstout-devops/stratt/core/internal/triggers"
 	"github.com/dstout-devops/stratt/types"
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 )
 
 // Server implements the generated ServerInterface over the graph store, the
@@ -80,6 +81,9 @@ type Server struct {
 	// (ADR-0035) — outside /api/v1: the customer's IdP pushes Users/Groups and
 	// authenticates by a per-IdP bearer token, not a Principal.
 	SCIM http.Handler
+	// Metrics, when set, serves the Prometheus exposition at /metrics (OBS-1) —
+	// unauthenticated scrape-only, outside /api/v1. Nil ⇒ /metrics 503s.
+	Metrics http.Handler
 	// CompileStatus, when set, is the shared Intent-compile status the
 	// controller updates and GET /compile serves (ADR-0023).
 	CompileStatus *compiler.Status
@@ -170,7 +174,13 @@ func (s *Server) Handler() http.Handler {
 	})
 	// principal resolves identity; audit records every request behind it (the
 	// full access log, §1.6) — audit is INNER so it sees the resolved Principal.
-	mux.Handle("/api/v1/", http.StripPrefix("/api/v1", s.principalMiddleware(s.auditMiddleware(fed))))
+	// otelhttp wraps the API surface (OBS-1): every /api/v1 request gets a server
+	// span + http.server.* metrics (duration, count, in-flight) on the global
+	// MeterProvider — the raw SLO signals (latency p95, error rate, throughput).
+	apiHandler := otelhttp.NewHandler(
+		http.StripPrefix("/api/v1", s.principalMiddleware(s.auditMiddleware(fed))),
+		"stratt-api")
+	mux.Handle("/api/v1/", apiHandler)
 	// Platform MCP server (§1.6, ADR-0021): the agent surface, same identity
 	// seam (ResolvePrincipal), same capabilities (tools invoke the generated
 	// router in-process). Never anonymous — 401 without a Principal. Tool calls
@@ -203,6 +213,12 @@ func (s *Server) Handler() http.Handler {
 	// Readiness (ADR-0040): distinct from liveness — verifies the substrate is
 	// reachable so a pod only takes traffic once Postgres + NATS are up.
 	mux.HandleFunc("/readyz", s.handleReadyz)
+	// Prometheus scrape surface (OBS-1): unauthenticated, no store/authz — a
+	// scraper reads SLO signals without a Principal. Network-scoped by the SEC-3
+	// NetworkPolicy, not by auth (the Prometheus convention).
+	if s.Metrics != nil {
+		mux.Handle("/metrics", s.Metrics)
+	}
 	// Cell info (ADR-0044 slice 4): UNAUTHENTICATED, NON-federated — a peer
 	// probes it BEFORE it can trust tokens, to verify the fleet shares one OIDC
 	// issuer + Contract registry version before federating. Advertises only

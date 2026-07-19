@@ -234,6 +234,24 @@ networkPolicy:
   apiIngressNamespaces: []
   #  - kubernetes.io/metadata.name: ingress-nginx
 
+# ── observability (enterprise-readiness OBS-1) ───────────────────────────────
+# The daemon always serves Prometheus metrics at :8080/metrics (SLO signals with
+# zero collector). Set otlpEndpoint to also push traces + metrics over OTLP/gRPC.
+observability:
+  # OTEL_EXPORTER_OTLP_ENDPOINT (e.g. http://otel-collector:4317). Empty ⇒ traces
+  # are a no-op; /metrics still serves.
+  otlpEndpoint: ""
+  # Extra OTEL_* env passthrough (headers, protocol, sampling…). Map of name→value.
+  otlpEnv: {}
+  #  OTEL_EXPORTER_OTLP_PROTOCOL: grpc
+  # A Prometheus-Operator PodMonitor scraping :8080/metrics. Opt-in (requires the
+  # PodMonitor CRD). Off by default so a cluster without the operator still installs.
+  podMonitor:
+    enabled: false
+    interval: 30s
+    # Extra labels so the operator's podMonitorSelector picks it up (e.g. release: kube-prometheus).
+    labels: {}
+
 resources:
   requests:
     cpu: 100m
