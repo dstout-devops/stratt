@@ -1225,6 +1225,13 @@ func run(ctx context.Context, log *slog.Logger) error {
 		// reload on the reconcile cadence. A failed reload keeps the
 		// previous grant set (never silently drop to deny-all mid-flight;
 		// never silently gain grants from a broken file either).
+		// Register the identity projector as the single §2.1 write-owner of
+		// identity.subject + identity.name before the reconcile projects (ADR-0079
+		// slice 3). Best-effort + loud (§1.8): an owner conflict skips identity
+		// projection but never crashes the daemon.
+		if err := store.EnsureIdentitySubjectOwner(ctx); err != nil {
+			log.Error("identity.subject owner registration failed; SCIM identity projection disabled", "error", err)
+		}
 		reloadTuples := func() {
 			if err := evaluator.LoadTuples(path); err != nil {
 				log.Error("authz tuple reload failed; keeping previous grants", "error", err)
@@ -1258,6 +1265,13 @@ func run(ctx context.Context, log *slog.Logger) error {
 				if err := fga.SyncTuples(ctx, evaluator.Snapshot()); err != nil {
 					log.Error("openfga tuple sync failed; server grants may be stale", "error", err)
 				}
+			}
+			// SCIM identities → graph (ADR-0079 slice 3): project users/groups as
+			// Entities carrying identity.subject + member-of Relations, on the same
+			// SCIM reconcile cadence. Best-effort — a failure keeps the previous
+			// projection (§1.8, logged). Leader-only (this closure runs on the leader).
+			if err := store.ProjectSCIMEntities(ctx); err != nil {
+				log.Error("scim identity projection failed; keeping previous", "error", err)
 			}
 		}
 		reloadTuples()
