@@ -133,6 +133,16 @@ honesty, fenced re-home over real HTTP) are **demonstrated end-to-end** by the t
 (`task e2e:cells`) against live Postgres — the measured SLO still needs a real fleet. Follow-up
 [ADR-0045](adr/0045-db-driven-syncer-home-gate.md) (full re-home auto-cutover) is Proposed, not scheduled.
 
+## Enterprise-readiness (the cracks)
+
+Capability is not the same as credibility as the dark-matter substrate. The gaps between what the charter/ADRs
+**claim** and what the shipped artifact **enforces** — the cracks an enterprise reviewer would point at — are
+tracked, evidence-backed and status-flagged, in **[enterprise-readiness.md](enterprise-readiness.md)**. Seeded
+2026-07-18 by three grounded code audits. The core is enterprise-grade; the enforcement wiring and operational
+envelope (obligation enforcement, admission on the API, EE-Job sandboxing, NetworkPolicy, supply-chain
+signing, observability, backup/DR, live-cluster e2e) are the unbuilt half. Maintain that tracker as cracks are
+found and closed. The one crack no code closes: **§7.4 OSPO/IP clearance** (repo stays private until then).
+
 ## Dev follow-ups / test hygiene
 
 - **Two timing-sensitive tests flake under concurrent `task ci` load** (each passes clean in isolation
