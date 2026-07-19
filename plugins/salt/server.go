@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -30,6 +31,13 @@ type Config struct {
 	Eauth    string
 	// EventTags is the Emitter's tag-prefix allowlist (empty = forward all).
 	EventTags []string
+	// CollectPackages opts into the OS-package inventory collector (ADR-0080 slice
+	// 2b): each Observe also runs `pkg.list_pkgs` and projects a software.package
+	// Facet per minion. OFF by default — unlike cache.grains (the master's cache,
+	// dead-minion-immune), pkg.list_pkgs round-trips live minions, so this trades
+	// resilience for inventory and is an explicit opt-in. When on, salt claims the
+	// single §2.1 write-owner of software.package.
+	CollectPackages bool
 }
 
 func (c Config) eauth() string {
@@ -61,11 +69,11 @@ func (s *Server) GetManifest(context.Context, *pluginv1.GetManifestRequest) (*pl
 		ProtocolVersion: "v1",
 		Class:           pluginv1.PluginClass_PLUGIN_CLASS_SYNCER,
 		Verbs:           []pluginv1.Verb{pluginv1.Verb_VERB_OBSERVE, pluginv1.Verb_VERB_EMIT},
-		Contracts: []*pluginv1.ContractDecl{
+		Contracts: append([]*pluginv1.ContractDecl{
 			{SchemaId: "salt.node.identity"},
 			{SchemaId: "salt.node.os"},
 			{SchemaId: "salt.node.network"},
-		},
+		}, s.packageContracts()...),
 		// Tombstone on the plugin's OWN identity scheme, not the shared dns.fqdn
 		// (which other Sources also emit): absent minions are salt-scoped removals.
 		TombstoneSchemes: []string{"salt.minion_id"},
@@ -88,8 +96,28 @@ func (s *Server) Observe(_ *pluginv1.ObserveRequest, stream grpc.ServerStreaming
 	if err != nil {
 		return err
 	}
+	// OS-package inventory (ADR-0080 slice 2b), opt-in. Best-effort: a pkg.list_pkgs
+	// failure (a dead minion, a timeout) must NOT block the grain sync — hosts still
+	// project; software.package is simply absent this cycle, logged loudly (§1.8).
+	if s.cfg.CollectPackages {
+		if pkgs, perr := client.listPkgs(ctx); perr != nil {
+			s.log.Warn("package collection failed; projecting hosts without software.package this cycle", "error", perr)
+		} else {
+			attachPackages(entities, pkgs)
+		}
+	}
 	s.log.Info("full sync", "entities", len(entities))
 	return stream.Send(&pluginv1.ObserveResponse{Entities: entities, FullSyncComplete: true})
+}
+
+// packageContracts declares the software.package Facet namespace as owned (§2.1)
+// only when the collector is enabled — so a salt deployment not collecting packages
+// never claims the shared namespace and blocks a dedicated collector.
+func (s *Server) packageContracts() []*pluginv1.ContractDecl {
+	if !s.cfg.CollectPackages {
+		return nil
+	}
+	return []*pluginv1.ContractDecl{{SchemaId: "software.package"}}
 }
 
 // connect builds a salt-api client and validates connectivity by minting an
@@ -249,4 +277,73 @@ func (c *saltClient) cacheGrains(ctx context.Context) (map[string]map[string]any
 		return map[string]map[string]any{}, nil
 	}
 	return out.Return[0], nil
+}
+
+// listPkgs runs the local `pkg.list_pkgs` across minions and returns
+// minion-id -> {package: version} (ADR-0080 slice 2b). Unlike cache.grains this is
+// a live minion round-trip (packages are not cached), which is why the collector
+// is opt-in. A version reported as a list (multi-version installs) is joined; a
+// non-string coerces via fmt.Sprint.
+func (c *saltClient) listPkgs(ctx context.Context) (map[string]map[string]string, error) {
+	token, err := c.authToken(ctx)
+	if err != nil {
+		return nil, err
+	}
+	lowstate, _ := json.Marshal(map[string]any{
+		"client":   "local",
+		"fun":      "pkg.list_pkgs",
+		"tgt":      "*",
+		"tgt_type": "glob",
+	})
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.cfg.APIURL+"/", bytes.NewReader(lowstate))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("X-Auth-Token", token)
+
+	res, err := c.http.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("salt: pkg.list_pkgs request: %w", err)
+	}
+	defer res.Body.Close() //nolint:errcheck
+	if res.StatusCode == http.StatusUnauthorized {
+		c.mu.Lock()
+		c.token = ""
+		c.mu.Unlock()
+		return nil, fmt.Errorf("salt: pkg.list_pkgs: unauthorized (token cleared for re-login)")
+	}
+	if res.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("salt: pkg.list_pkgs: %s", res.Status)
+	}
+	var out struct {
+		Return []map[string]map[string]any `json:"return"`
+	}
+	if err := json.NewDecoder(res.Body).Decode(&out); err != nil {
+		return nil, fmt.Errorf("salt: decode pkg.list_pkgs: %w", err)
+	}
+	result := map[string]map[string]string{}
+	if len(out.Return) == 0 {
+		return result, nil
+	}
+	for minion, pkgs := range out.Return[0] {
+		versions := map[string]string{}
+		for name, v := range pkgs {
+			switch t := v.(type) {
+			case string:
+				versions[name] = t
+			case []any:
+				parts := make([]string, 0, len(t))
+				for _, p := range t {
+					parts = append(parts, fmt.Sprint(p))
+				}
+				versions[name] = strings.Join(parts, ",")
+			default:
+				versions[name] = fmt.Sprint(v)
+			}
+		}
+		result[minion] = versions
+	}
+	return result, nil
 }

@@ -23,12 +23,20 @@ const simToken = "sim-token"
 // Sim is the in-memory fixture service.
 type Sim struct {
 	mu     sync.Mutex
-	grains map[string]map[string]any // minion id -> grains
+	grains map[string]map[string]any    // minion id -> grains
+	pkgs   map[string]map[string]string // minion id -> {package: version} (ADR-0080 2b)
 }
 
 // New returns an empty Sim. Seed minions with SetMinion.
 func New() *Sim {
-	return &Sim{grains: map[string]map[string]any{}}
+	return &Sim{grains: map[string]map[string]any{}, pkgs: map[string]map[string]string{}}
+}
+
+// SetPackages seeds a minion's installed-package list, served by pkg.list_pkgs.
+func (s *Sim) SetPackages(id string, pkgs map[string]string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.pkgs[id] = pkgs
 }
 
 // SetMinion adds or replaces a minion's grains (also via POST /_sim/minions).
@@ -85,18 +93,28 @@ func (s *Sim) run(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":"bad lowstate"}`, http.StatusBadRequest)
 		return
 	}
-	if low.Client != "runner" || low.Fun != "cache.grains" {
+	switch {
+	case low.Client == "runner" && low.Fun == "cache.grains":
+		s.mu.Lock()
+		out := map[string]map[string]any{}
+		for id, g := range s.grains {
+			out[id] = g
+		}
+		s.mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"return": []any{out}})
+	case low.Client == "local" && low.Fun == "pkg.list_pkgs":
+		s.mu.Lock()
+		out := map[string]map[string]string{}
+		for id, p := range s.pkgs {
+			out[id] = p
+		}
+		s.mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"return": []any{out}})
+	default:
 		http.Error(w, `{"error":"unsupported fun"}`, http.StatusBadRequest)
-		return
 	}
-	s.mu.Lock()
-	out := map[string]map[string]any{}
-	for id, g := range s.grains {
-		out[id] = g
-	}
-	s.mu.Unlock()
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]any{"return": []any{out}})
 }
 
 func (s *Sim) simSetMinion(w http.ResponseWriter, r *http.Request) {
