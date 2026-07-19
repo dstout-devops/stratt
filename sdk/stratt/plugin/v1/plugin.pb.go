@@ -2240,10 +2240,18 @@ func (x *ApplyRequest) GetTargets() []*ApplyTarget {
 // target Entity (resolve-don't-vivify). Tool *config* rides `desired`; only the
 // governance-bearing target SET is legible here.
 type ApplyTarget struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
-	IdentityKeys  map[string]string      `protobuf:"bytes,2,rep,name=identity_keys,json=identityKeys,proto3" json:"identity_keys,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
-	Vars          map[string]string      `protobuf:"bytes,3,rep,name=vars,proto3" json:"vars,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	state        protoimpl.MessageState `protogen:"open.v1"`
+	Name         string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	IdentityKeys map[string]string      `protobuf:"bytes,2,rep,name=identity_keys,json=identityKeys,proto3" json:"identity_keys,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	Vars         map[string]string      `protobuf:"bytes,3,rep,name=vars,proto3" json:"vars,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	// address is the typed management reachability coordinate the core resolved
+	// from the target's mgmt.address Facet (ADR-0084). It crosses the port as a
+	// FIRST-CLASS field — never a tool key in vars — so the spine stays tool-blind
+	// (§1.4): a connection actuator (ansible/ssh/winrm) renders its own connection
+	// var (ansible_host, etc.) FROM this, the core never authors one. Empty ⇒ the
+	// target declared no reachability (a resolve-time unroutable error upstream,
+	// never a silent local fallback, §1.8).
+	Address       string `protobuf:"bytes,4,opt,name=address,proto3" json:"address,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2297,6 +2305,13 @@ func (x *ApplyTarget) GetVars() map[string]string {
 		return x.Vars
 	}
 	return nil
+}
+
+func (x *ApplyTarget) GetAddress() string {
+	if x != nil {
+		return x.Address
+	}
+	return ""
 }
 
 type DestroyRequest struct {
@@ -3331,11 +3346,12 @@ const file_stratt_plugin_v1_plugin_proto_rawDesc = "" +
 	"\bplan_ref\x18\x05 \x01(\v2\x1d.stratt.plugin.v1.ArtifactRefR\aplanRef\x12\x1f\n" +
 	"\vpinned_plan\x18\a \x01(\fR\n" +
 	"pinnedPlan\x127\n" +
-	"\atargets\x18\x06 \x03(\v2\x1d.stratt.plugin.v1.ApplyTargetR\atargets\"\xae\x02\n" +
+	"\atargets\x18\x06 \x03(\v2\x1d.stratt.plugin.v1.ApplyTargetR\atargets\"\xc8\x02\n" +
 	"\vApplyTarget\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12T\n" +
 	"\ridentity_keys\x18\x02 \x03(\v2/.stratt.plugin.v1.ApplyTarget.IdentityKeysEntryR\fidentityKeys\x12;\n" +
-	"\x04vars\x18\x03 \x03(\v2'.stratt.plugin.v1.ApplyTarget.VarsEntryR\x04vars\x1a?\n" +
+	"\x04vars\x18\x03 \x03(\v2'.stratt.plugin.v1.ApplyTarget.VarsEntryR\x04vars\x12\x18\n" +
+	"\aaddress\x18\x04 \x01(\tR\aaddress\x1a?\n" +
 	"\x11IdentityKeysEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\x1a7\n" +

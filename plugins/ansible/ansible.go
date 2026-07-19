@@ -18,7 +18,11 @@ import (
 // self-reported hosts, so the hub's confused-deputy gate binds. Identity keys carry
 // the write-back correlation (a host's facts project onto its Entity by identity).
 type Target struct {
-	Name     string            `json:"name"`
+	Name string `json:"name"`
+	// Address is the core's typed reachability coordinate (ADR-0084). The shim —
+	// not the core — renders it into ansible's connection var: the spine never
+	// authors ansible_host.
+	Address  string            `json:"address,omitempty"`
 	Vars     map[string]string `json:"vars,omitempty"`
 	Identity map[string]string `json:"identity,omitempty"`
 }
@@ -43,12 +47,24 @@ const GatherFactsPlay = `- hosts: all
 `
 
 // buildInventory renders the legible targets into an INI [all] group — one line per
-// target Name with its connection Vars (ADR-0051 MF4: from the core-resolved set).
+// target Name (ADR-0051 MF4: from the core-resolved set). The SHIM maps the core's
+// typed Address (ADR-0084) into ansible's connection var — the core never authored
+// an ansible_host: a real address becomes `ansible_host=<addr>`; the reserved value
+// `local` becomes `ansible_connection=local` (a target that explicitly declares it
+// runs on the control node); an empty Address emits no connection var, so an
+// unreachable host fails LOUDLY rather than silently running local (§1.8). Genuine
+// tool Vars (never a connection key from core) still render.
 func buildInventory(targets []Target) string {
 	var b strings.Builder
 	b.WriteString("[all]\n")
 	for _, t := range targets {
 		b.WriteString(t.Name)
+		switch {
+		case t.Address == "local":
+			b.WriteString(" ansible_connection=local")
+		case t.Address != "":
+			fmt.Fprintf(&b, " ansible_host=%s", t.Address)
+		}
 		for k, v := range t.Vars {
 			fmt.Fprintf(&b, " %s=%s", k, v)
 		}

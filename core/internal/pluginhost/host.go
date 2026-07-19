@@ -629,10 +629,13 @@ func (h *Host) Invoke(ctx context.Context, runID, action string, args []byte, dr
 // ApplyTarget is one core-resolved actuation target, passed LEGIBLY to the plugin
 // (ADR-0047 §1.1): the target set carries blast-radius/authz weight and is the
 // correlation key, so it is NEVER baked into the opaque desired payload. Name is
-// the confused-deputy gate key; Vars are tool connection vars; IdentityKeys
+// the confused-deputy gate key; Address is the typed reachability coordinate
+// (ADR-0084 — the plugin renders its own connection var from it, the spine never
+// authors one); Vars are genuinely tool-authored vars only; IdentityKeys
 // re-correlate write-back to the target Entity.
 type ApplyTarget struct {
 	Name         string
+	Address      string
 	IdentityKeys map[string]string
 	Vars         map[string]string
 }
@@ -798,7 +801,7 @@ func (h *Host) ApplyRaw(ctx context.Context, req ApplyInvoke) (RawApplyResult, e
 	targets := make([]*pluginv1.ApplyTarget, 0, len(req.Targets))
 	for _, t := range req.Targets {
 		resolved[t.Name] = true
-		targets = append(targets, &pluginv1.ApplyTarget{Name: t.Name, IdentityKeys: t.IdentityKeys, Vars: t.Vars})
+		targets = append(targets, &pluginv1.ApplyTarget{Name: t.Name, Address: t.Address, IdentityKeys: t.IdentityKeys, Vars: t.Vars})
 	}
 	creds := make([]*pluginv1.CredentialRef, 0, len(req.CredentialRefs))
 	for _, n := range req.CredentialRefs {

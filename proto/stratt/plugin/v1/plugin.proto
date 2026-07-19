@@ -425,6 +425,14 @@ message ApplyTarget {
   string name = 1;
   map<string, string> identity_keys = 2;
   map<string, string> vars = 3;
+  // address is the typed management reachability coordinate the core resolved
+  // from the target's mgmt.address Facet (ADR-0084). It crosses the port as a
+  // FIRST-CLASS field — never a tool key in vars — so the spine stays tool-blind
+  // (§1.4): a connection actuator (ansible/ssh/winrm) renders its own connection
+  // var (ansible_host, etc.) FROM this, the core never authors one. Empty ⇒ the
+  // target declared no reachability (a resolve-time unroutable error upstream,
+  // never a silent local fallback, §1.8).
+  string address = 4;
 }
 
 message DestroyRequest {

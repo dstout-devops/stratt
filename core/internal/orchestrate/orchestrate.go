@@ -467,9 +467,13 @@ func (a *Activities) EnsureRun(ctx context.Context, in RunInput, workflowID stri
 	return run.ID, nil
 }
 
-// renderTarget renders one resolved Entity as an execution target. Phase-0
-// target semantics: local-connection per target (see ansible.GatherFactsPlay).
-func renderTarget(e types.Entity) actuators.Target {
+// renderTarget renders one resolved Entity as an execution target. Reachability is
+// the typed mgmt.address Facet (ADR-0084): the address becomes Target.Address — a
+// FIRST-CLASS field a connection Actuator renders into its own connection var
+// (ansible_host, …). The core never authors a tool var: the Phase-0
+// ansible_connection:local stub is retired. A target with no mgmt.address carries an
+// empty Address (unroutable — the actuator fails loudly, never a silent local run, §1.8).
+func renderTarget(e types.Entity, address string) actuators.Target {
 	name := e.Labels["vcenter.name"]
 	if name == "" {
 		name = e.ID
@@ -477,8 +481,21 @@ func renderTarget(e types.Entity) actuators.Target {
 	return actuators.Target{
 		EntityID: e.ID,
 		Name:     name,
-		Vars:     map[string]string{"ansible_connection": "local"},
+		Address:  address,
 	}
+}
+
+// addressOf extracts the reachability coordinate from an mgmt.address Facet raw
+// (ADR-0084 schema {address, port?}). Empty ⇒ the Entity declared no reachability.
+func addressOf(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	var a struct {
+		Address string `json:"address"`
+	}
+	_ = json.Unmarshal(raw, &a)
+	return a.Address
 }
 
 // ResolveTargets resolves the View to its live Entity set and renders
@@ -491,9 +508,17 @@ func (a *Activities) ResolveTargets(ctx context.Context, in RunInput) (ResolvedT
 	if len(ents) == 0 {
 		return ResolvedTargets{}, fmt.Errorf("orchestrate: view %s resolves to zero entities", in.ViewName)
 	}
+	ids := make([]string, len(ents))
+	for i, e := range ents {
+		ids[i] = e.ID
+	}
+	addrs, err := a.Store.FacetValuesByEntities(ctx, "mgmt.address", ids)
+	if err != nil {
+		return ResolvedTargets{}, err
+	}
 	out := ResolvedTargets{ViewVersion: v.Version}
 	for _, e := range ents {
-		out.Targets = append(out.Targets, renderTarget(e))
+		out.Targets = append(out.Targets, renderTarget(e, addressOf(addrs[e.ID])))
 	}
 	return out, nil
 }
@@ -526,6 +551,10 @@ func (a *Activities) ResolveTargetsBySite(ctx context.Context, in RunInput) (Rou
 	if err != nil {
 		return RoutedTargets{}, err
 	}
+	addrs, err := a.Store.FacetValuesByEntities(ctx, "mgmt.address", ids)
+	if err != nil {
+		return RoutedTargets{}, err
+	}
 	bySite := map[string][]actuators.Target{}
 	for _, e := range ents {
 		site := types.LocalSite
@@ -537,7 +566,7 @@ func (a *Activities) ResolveTargetsBySite(ctx context.Context, in RunInput) (Rou
 				site = loc.Site
 			}
 		}
-		bySite[site] = append(bySite[site], renderTarget(e))
+		bySite[site] = append(bySite[site], renderTarget(e, addressOf(addrs[e.ID])))
 	}
 	names := make([]string, 0, len(bySite))
 	for s := range bySite {
@@ -915,7 +944,7 @@ func (a *Activities) executePlugin(ctx context.Context, in RunInput, site string
 	// path today; passing them to identity-rendering actuators is a follow-up.)
 	targets := make([]pluginhost.ApplyTarget, 0, len(resolved.Targets))
 	for _, t := range resolved.Targets {
-		targets = append(targets, pluginhost.ApplyTarget{Name: t.Name, Vars: t.Vars})
+		targets = append(targets, pluginhost.ApplyTarget{Name: t.Name, Address: t.Address, Vars: t.Vars})
 	}
 	// Plan-pinned Apply (ADR-0047 §8): a Step that names a Plan source MUST carry a
 	// Gate-approved digest. FAIL CLOSED on an empty digest — never a silent unpinned
@@ -1007,8 +1036,8 @@ func (a *Activities) executeJobPlugin(ctx context.Context, in RunInput, slice in
 	ptargets := make([]*pluginv1.ApplyTarget, 0, len(resolved.Targets))
 	for _, t := range resolved.Targets {
 		ids := map[string]string{"host.name": t.Name}
-		targets = append(targets, pluginhost.ApplyTarget{Name: t.Name, Vars: t.Vars, IdentityKeys: ids})
-		ptargets = append(ptargets, &pluginv1.ApplyTarget{Name: t.Name, Vars: t.Vars, IdentityKeys: ids})
+		targets = append(targets, pluginhost.ApplyTarget{Name: t.Name, Address: t.Address, Vars: t.Vars, IdentityKeys: ids})
+		ptargets = append(ptargets, &pluginv1.ApplyTarget{Name: t.Name, Address: t.Address, Vars: t.Vars, IdentityKeys: ids})
 	}
 	// Only the use-checked, authorized names cross (§2.5); material stays on the
 	// kubelet secretKeyRef mounts (MF7 — one authz chokepoint, injection at the pod).

@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "stratt:contract:facets/mgmt.address:v1",
+  "title": "mgmt.address Facet",
+  "description": "Demanded by the connection-actuator dispatch path (ADR-0084; the consumer is orchestrate.renderTarget, which resolves this into the typed Target.Address the ansible/ssh/winrm Actuator renders into its own connection var — the core never authors ansible_host). The management reachability of an Entity: the address a satellite/EE reaches it at to run Steps against it. Written by Syncers/Normalizers with provenance (§1.2) — the declared-estate Syncer projects it from estate/hosts, the vcenter Syncer from the VM IP, a build from its project-back; never a writable device table. Parallel to mgmt.site (the execution LOCUS): this is the connection COORDINATE at that locus, a scalar physical fact carrying no capability precedence (§2.4), claimed under the same cross-source per-key Facet ownership (ADR-0041/0042), never last-writer-wins. The reserved value 'local' means the target runs on the control node itself (an explicit opt-in, never a silent fallback, §1.8). port is the optional management port a connection Actuator may use; the schema is CLOSED (no open-ended fields) so a reachability seam never grows into a device ontology (§9).",
+  "type": "object",
+  "properties": {
+    "address": { "type": "string", "minLength": 1 },
+    "port": { "type": "integer", "minimum": 1, "maximum": 65535 }
+  },
+  "required": ["address"],
+  "additionalProperties": false
+}

@@ -21,7 +21,14 @@ type Target struct {
 	EntityID string
 	// Name is the target alias used in tool content and per-target results.
 	Name string
-	// Vars are tool-level connection/host vars (e.g. ansible_connection).
+	// Address is the typed management reachability coordinate the core resolved
+	// from the Entity's mgmt.address Facet (ADR-0084). It is a FIRST-CLASS field,
+	// NOT a tool var: the core never authors a connection key (no ansible_host in
+	// the spine, §1.4) — a connection Actuator renders its own var FROM this.
+	// Empty ⇒ the target declared no reachability (unroutable, never silent-local).
+	Address string
+	// Vars are genuinely tool-authored vars only — never a core-emitted connection
+	// key. The reachability coordinate is Address above, not a var (ADR-0084 §1.4).
 	Vars map[string]string
 }
 
