@@ -15,6 +15,7 @@ use (
 	./plugins/certissuer
 	./plugins/chef
 	./plugins/kubeservices
+	./plugins/kubecontainers
 	./plugins/crossplane
 	./plugins/msgraph
 	./plugins/netbox
