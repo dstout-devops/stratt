@@ -165,6 +165,58 @@ func TestRunAgainstViewFanOutBySite(t *testing.T) {
 	}
 }
 
+// TestRunAgainstViewFailedTargetPropagates pins §1.8: when a Run's targets FAIL,
+// RunAgainstView must both record the Run failed AND return an error to its parent
+// — otherwise the parent Step (runActuationStep) folds to succeeded and a green
+// Workflow hides a red Run (the exact one-click-descent trust violation the charter
+// forbids). Regression guard for the live-e2e finding: ansible rc=2 on both hosts
+// had left graph.run=failed but workflow_run=succeeded.
+func TestRunAgainstViewFailedTargetPropagates(t *testing.T) {
+	ts := &testsuite.WorkflowTestSuite{}
+	env := ts.NewTestWorkflowEnvironment()
+	env.RegisterWorkflow(RunAgainstView)
+	var a *Activities
+
+	routed := RoutedTargets{ViewVersion: 1, Groups: []SiteGroup{
+		{Site: types.LocalSite, Targets: []actuators.Target{{EntityID: "e1", Name: "t1"}, {EntityID: "e2", Name: "t2"}}},
+	}}
+	env.OnActivity(a.CheckExecutionGrant, mock.Anything, mock.Anything).Return(nil)
+	env.OnActivity(a.ResolveTargetsBySite, mock.Anything, mock.Anything).Return(routed, nil)
+	env.OnActivity(a.MarkRunning, mock.Anything, mock.Anything).Return(nil)
+	env.OnActivity(a.ResolveCredentials, mock.Anything, mock.Anything).Return([]dispatch.CredentialMount(nil), nil)
+
+	// Every target fails (the ansible rc=2 shape) — Succeeded folds false.
+	env.OnActivity(a.Execute, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(
+		func(_ context.Context, _ RunInput, _ int, _ string, resolved ResolvedTargets, _ []dispatch.CredentialMount) (dispatch.Result, error) {
+			res := dispatch.Result{Succeeded: false, PerTarget: map[string]string{}}
+			for _, tgt := range resolved.Targets {
+				res.PerTarget[tgt.Name] = actuators.StatusFailed
+			}
+			return res, nil
+		})
+	env.OnActivity(a.CollectFacts, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(FactSet{}, nil)
+	env.OnActivity(a.ProjectFacts, mock.Anything, mock.Anything, mock.Anything).Return(nil)
+
+	var finishStatus types.RunStatus
+	env.OnActivity(a.FinishRun, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(
+		func(_ context.Context, _ RunInput, status types.RunStatus, _ dispatch.Result) error {
+			finishStatus = status
+			return nil
+		})
+
+	env.ExecuteWorkflow(RunAgainstView, RunInput{RunID: "r1", ViewName: "v", Principal: "alice"})
+	if !env.IsWorkflowCompleted() {
+		t.Fatal("workflow did not complete")
+	}
+	// The Run row folds failed AND the child returns an error (so the parent Step fails).
+	if finishStatus != types.RunFailed {
+		t.Fatalf("Run must be recorded failed, got %q", finishStatus)
+	}
+	if env.GetWorkflowError() == nil {
+		t.Fatal("§1.8: a failed-target Run must return an error so the parent Workflow cannot report succeeded over a failed Run")
+	}
+}
+
 func TestRunDAGApprovedPath(t *testing.T) {
 	spec := types.Workflow{Name: "patch", Steps: []types.Step{
 		{Name: "gather", ViewName: "v"},

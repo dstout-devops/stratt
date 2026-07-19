@@ -480,6 +480,12 @@ func (d *Dispatcher) createJob(ctx context.Context, name, runID string, spec act
 	// is deadline-bounded so it can never run forever. (readOnlyRootFilesystem is a
 	// follow-up: it needs the EE image's write-paths moved onto emptyDir mounts.)
 	noRoot, noPrivEsc, noAutomount := true, false, false
+	// The kubelet's RunAsNonRoot gate can only PROVE non-root from a NUMERIC uid:
+	// an image whose USER is a name (the EE image's `USER runner`) is rejected with
+	// "non-numeric user, cannot verify user is non-root" before the container ever
+	// starts. Pin the numeric uid the EE image is built with (useradd --uid 1000)
+	// so the enforcement above is satisfiable, not self-defeating.
+	runAsUser := int64(1000)
 	deadline := int64(6 * 3600) // 6h ceiling on total Job runtime (incl. retries)
 	seccomp := &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault}
 
@@ -503,6 +509,7 @@ func (d *Dispatcher) createJob(ctx context.Context, name, runID string, spec act
 					SecurityContext: &corev1.PodSecurityContext{
 						FSGroup:        &fsGroup,
 						RunAsNonRoot:   &noRoot,
+						RunAsUser:      &runAsUser,
 						SeccompProfile: seccomp,
 					},
 					AutomountServiceAccountToken: &noAutomount,
@@ -515,6 +522,7 @@ func (d *Dispatcher) createJob(ctx context.Context, name, runID string, spec act
 						VolumeMounts: mounts,
 						SecurityContext: &corev1.SecurityContext{
 							RunAsNonRoot:             &noRoot,
+							RunAsUser:                &runAsUser,
 							AllowPrivilegeEscalation: &noPrivEsc,
 							Capabilities:             &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}},
 							SeccompProfile:           seccomp,

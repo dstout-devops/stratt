@@ -306,7 +306,28 @@ func RunAgainstView(ctx workflow.Context, in RunInput) (RunOutcome, error) {
 	for _, t := range resolved.Targets {
 		outcome.EntityByTarget[t.Name] = t.EntityID
 	}
+	// §1.8: a Run whose targets FAILED must propagate that failure to the parent
+	// Workflow. Recording status=failed on the Run row is NOT enough — the parent
+	// step (runActuationStep) folds to succeeded unless this child returns an error,
+	// so a green Workflow would hide a red Run: the exact one-click-descent trust
+	// violation the charter forbids. The FinishRun error path already returns its
+	// cause (finishRun); the normal per-target fold must be just as honest.
+	if status == types.RunFailed && summaryErr == nil {
+		summaryErr = fmt.Errorf("run %s failed: %d of %d targets failed", in.RunID, failedTargets(result.PerTarget), len(result.PerTarget))
+	}
 	return outcome, summaryErr
+}
+
+// failedTargets counts the per-target outcomes that fold to a Run failure
+// (failed or unreachable) — the §1.8 propagation summary above.
+func failedTargets(perTarget map[string]string) int {
+	n := 0
+	for _, st := range perTarget {
+		if st == actuators.StatusFailed || st == actuators.StatusUnreachable {
+			n++
+		}
+	}
+	return n
 }
 
 func finishRun(ctx workflow.Context, a *Activities, in RunInput, status types.RunStatus, cause error) error {

@@ -37,6 +37,12 @@ func TestCreateJob_Sandboxed(t *testing.T) {
 	if pod.SecurityContext == nil || pod.SecurityContext.RunAsNonRoot == nil || !*pod.SecurityContext.RunAsNonRoot {
 		t.Fatal("pod must be enforced non-root")
 	}
+	// RunAsNonRoot is only SATISFIABLE with a numeric uid: the EE image's USER is a
+	// name (`runner`), which the kubelet rejects as "cannot verify non-root" before
+	// start. The pod spec must pin the numeric uid the EE image is built with.
+	if pod.SecurityContext.RunAsUser == nil || *pod.SecurityContext.RunAsUser == 0 {
+		t.Fatal("pod must pin a numeric non-zero RunAsUser (named image USER is unverifiable under RunAsNonRoot)")
+	}
 	c := pod.Containers[0]
 	sc := c.SecurityContext
 	if sc == nil {
@@ -44,6 +50,9 @@ func TestCreateJob_Sandboxed(t *testing.T) {
 	}
 	if sc.RunAsNonRoot == nil || !*sc.RunAsNonRoot {
 		t.Fatal("container must run as non-root")
+	}
+	if sc.RunAsUser == nil || *sc.RunAsUser == 0 {
+		t.Fatal("container must pin a numeric non-zero RunAsUser")
 	}
 	if sc.AllowPrivilegeEscalation == nil || *sc.AllowPrivilegeEscalation {
 		t.Fatal("privilege escalation must be off")
