@@ -716,3 +716,44 @@ func TestBlueprintDefaultsCrossContractSeam(t *testing.T) {
 		t.Fatal("a schema-violating Blueprint default must be rejected at ingestion (§1.1 seam)")
 	}
 }
+
+// TestEstateOnboardingTemplateReconciles proves G5 (ADR-0055/ADR-0083): the estate/
+// onboarding template — the DEFAULTED, overridable web-server unit — is valid CaC. It
+// parses the whole estate/ tree (so the §1.1 Contract seam / ValidateBlueprint runs over
+// the real web-server defaults), and asserts the defaulted/overridable shape: the
+// Blueprint carries the G6 defaults, the minimal Intent OMITS the overridable field, and
+// the override Intent SETS it.
+func TestEstateOnboardingTemplateReconciles(t *testing.T) {
+	root := filepath.Join("..", "..", "..", "estate")
+	decls, err := ParseDir(root, nil)
+	if err != nil {
+		t.Fatalf("estate/ must parse as valid CaC (incl. the web-server defaults §1.1 seam): %v", err)
+	}
+
+	var bp *types.Blueprint
+	for i := range decls.Blueprints {
+		if decls.Blueprints[i].Name == "web-server" {
+			bp = &decls.Blueprints[i]
+		}
+	}
+	if bp == nil {
+		t.Fatal("web-server Blueprint missing from estate/")
+	}
+	if bp.For != types.IntentApplication {
+		t.Fatalf("web-server Blueprint must be for Intent/Application, got %q", bp.For)
+	}
+	if bp.Defaults["port"] != "8080" || bp.Defaults["channel"] != "stable" {
+		t.Fatalf("web-server Blueprint must carry the G6 defaults {port:8080, channel:stable}, got %v", bp.Defaults)
+	}
+
+	specs := map[string]map[string]any{}
+	for _, in := range decls.Intents {
+		specs[in.Name] = in.Spec
+	}
+	if _, hasPort := specs["web-server"]["port"]; hasPort {
+		t.Fatal("the minimal web-server Intent must OMIT port (rely on the Blueprint default) — the 'simplest form'")
+	}
+	if specs["web-server-secure"]["port"] != "443" {
+		t.Fatalf("the override Intent must SET port=443 (the 'optional override'), got %v", specs["web-server-secure"]["port"])
+	}
+}

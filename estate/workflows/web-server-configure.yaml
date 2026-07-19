@@ -1,0 +1,27 @@
+# web-server-configure — the web-server materialization/remediation Workflow: converge the
+# desired listen port via ansible. Surfaced as a ref on a drift Finding — never
+# auto-launched (§5 Flow 2). The PLUGIN (ansible) materializes the state; the Blueprint
+# route NAMED it, core did not (ADR-0083 — the Blueprint route is the tool seam). As the
+# lifecycle grows (linux-onboard's "next slice"), a cert Step (certissuer) and an app Step
+# (helm) slot in alongside — co-management fanning across channels, one gated Workflow.
+name: web-server-configure
+steps:
+  - name: configure
+    viewName: web-hosts
+    actuator: ansible
+    params:
+      play: |
+        - name: Converge web server listen port
+          hosts: all
+          become: true
+          tasks:
+            - name: Ensure nginx listens on the desired port
+              ansible.builtin.lineinfile:
+                path: /etc/nginx/conf.d/listen.conf
+                regexp: '^listen '
+                line: "listen {{ web_server_port }};"
+                create: true
+            - name: Reload nginx
+              ansible.builtin.service:
+                name: nginx
+                state: reloaded

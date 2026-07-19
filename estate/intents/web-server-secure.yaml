@@ -1,0 +1,10 @@
+# web-server-secure — the OVERRIDE example (G6, ADR-0083 §5): the SAME web-server@1
+# Blueprint, but this Intent SETS port, overriding the Blueprint default (8080 → 443) via
+# explicit overlay layering. The only thing the operator writes is what DIFFERS from the
+# default — the override is traceable (provenance records both layers), never a silent
+# precedence rule (§2.4).
+name: web-server-secure
+kind: Intent/Application
+spec:
+  package: nginx
+  port: "443"

@@ -34,6 +34,27 @@ declarative constructs (the useful half of AWS CDK — see ADR-0055):
   for a `crossplane`/`opentofu`/`vsphere` Action without touching the rest of the estate. Provisioning is
   **gated** (§5 Flow 1 — never a silent auto-launch). Cert (certissuer) + app (helm) Steps are the next slice.
 
+## The defaulted unit: `web-server` (G6 defaults + the materialization seam)
+The onboarding template made concrete — "declare outcomes, not tool configs"
+([ADR-0083](../docs/adr/0083-blueprint-route-materialization-seam.md), the G6 defaults/override merge):
+
+- **`blueprints/web-server.yaml`** — an `Intent/Application` Blueprint carrying **`defaults: {port, channel}`**
+  (the "sane defaults" base layer). Its route observes `app.config` and routes drift to a **gated** ansible
+  remediation — the **plugin materializes** the state; core never learns "web server" or "ansible" (§1.4). The
+  tool appears in exactly one place, the Blueprint route; there is **no side-by-side helm/ansible/chef config**.
+- **`intents/web-server.yaml`** — the **simplest form**: `spec:{package:nginx}` and nothing else. It OMITS
+  `port`, so it takes the Blueprint default (`8080`).
+- **`intents/web-server-secure.yaml`** — the **optional override**: `spec:{package:nginx, port:"443"}`. The only
+  thing written is what DIFFERS from the default; the override layers on explicitly (provenance records both
+  layers — never a silent precedence rule, §2.4/§4.1).
+- **`assignments/web-server.yaml` / `web-server-secure.yaml`** — bind each to a group (`web-hosts` / `secure-hosts`)
+  via the SAME `web-server@1` Blueprint. Blueprint reuse across groups (§2.1); the compiler resolves each
+  Assignment's spec = `merge(Blueprint defaults, Intent spec)` and drift-checks the group.
+
+The Blueprint's `defaults` cross the composed kind's Contract at ingestion (§1.1 seam, partial-tolerant), so an
+author-supplied default never reaches a Baseline unvalidated. Co-management fans out by ADDING routes (a cert
+route, an app route) — the per-capability route map (ADR-0083 §3), each an independently-metered §7.6 channel.
+
 ## Environment slices ([ADR-0057](../docs/adr/0057-environment-scoped-reconciliation.md))
 One estate tree, many logical slices. A daemon carries an active `STRATT_ENVIRONMENT`; a launching
 declaration (Assignment · Trigger · Baseline) reconciles only where its `environments:` list contains that

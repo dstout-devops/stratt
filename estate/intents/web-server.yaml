@@ -1,0 +1,9 @@
+# web-server — Intent/Application (ADR-0023, ADR-0083): the SIMPLEST form. Declare the
+# app; the web-server@1 Blueprint supplies the rest (port, channel) as defaults (G6).
+# This is the "declare outcomes, not tool configs" surface — NO helm/ansible/chef config
+# here, no side-by-side per-tool stanzas. The Blueprint routes to the plugin that
+# materializes; the operator writes only what makes THIS app itself.
+name: web-server
+kind: Intent/Application
+spec:
+  package: nginx

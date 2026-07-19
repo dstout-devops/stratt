@@ -1,0 +1,10 @@
+# Binds the web-server Intent to the web-hosts group via web-server@1 — the minimal
+# defaulted unit (ADR-0055 "5-line simplest form"). The compiler fans it across the group;
+# drift on app.config.port opens a Finding whose remediation ref (web-server-configure) the
+# operator launches — never auto-run (§5 Flow 2). The resolved port is the Blueprint
+# default (8080), because this Intent omits it.
+name: web-server
+intent: web-server
+view: web-hosts
+blueprint: web-server@1
+environments: [dev]
