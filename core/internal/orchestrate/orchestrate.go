@@ -804,6 +804,47 @@ func (a *Activities) PlanStep(ctx context.Context, in RunInput) (string, error) 
 // ProjectFacts, the single batched Run-provenance writer (#2). The View-grant is
 // the authz chokepoint (already enforced in RunAgainstView), so zero creds is
 // legitimate — the Action path's ungated-refusal is NOT ported (#4).
+// surfaceRejections turns governor rejections (dropped land-grabs / confused-
+// deputy targets a plugin tried to write outside its grant) into first-class
+// §1.8 signals rather than a swallowed Warn (enterprise-readiness GOV-3): each
+// rejection is published as a `governance-rejected` RunEvent on the descent
+// stream AND recorded as a tracked, closeable governance Finding. A hostile or
+// misconfigured plugin's overreach is now visible on one-click descent and on the
+// Findings/compliance surface, not just in a log nobody reads. Best-effort: a
+// failed event/Finding write is logged, never fatal to the Run (the write-back was
+// already correctly refused by the governor — this is the visibility layer).
+func (a *Activities) surfaceRejections(ctx context.Context, runID, source, plugin string, rejections []pluginhost.Rejection) {
+	if len(rejections) == 0 {
+		return
+	}
+	lg := a.Log
+	if lg == nil {
+		lg = slog.Default()
+	}
+	for _, r := range rejections {
+		lg.Warn("plugin emission rejected (governance)",
+			"source", source, "plugin", plugin, "kind", r.Kind, "detail", r.Detail, "reason", r.Reason)
+		payload := map[string]any{
+			"source": source, "plugin": plugin,
+			"kind": r.Kind, "detail": r.Detail, "reason": r.Reason,
+		}
+		if a.Bus != nil && runID != "" {
+			if err := a.Bus.Publish(ctx, types.RunEvent{RunID: runID, Kind: "governance-rejected", Payload: payload}); err != nil {
+				lg.Warn("publish governance-rejected RunEvent failed", "error", err)
+			}
+		}
+		if a.Store != nil {
+			detail, _ := json.Marshal(payload)
+			// Keyed by (run, plugin, kind, detail) so repeated identical overreach
+			// within a Run folds to one open Finding (idempotent per offending target).
+			target := fmt.Sprintf("%s/%s/%s/%s", runID, plugin, r.Kind, r.Detail)
+			if err := a.Store.WriteGovernanceFinding(ctx, "governance/plugin-rejection", target, "warning", "governance/plugin-rejection", detail); err != nil {
+				lg.Warn("write governance-rejection Finding failed", "error", err)
+			}
+		}
+	}
+}
+
 func (a *Activities) executePlugin(ctx context.Context, in RunInput, site string, resolved ResolvedTargets, creds []dispatch.CredentialMount, pa PluginActuator) (dispatch.Result, error) {
 	// Dry-run refused CORE-SIDE from the reconciled capability, never delegated —
 	// a plugin that silently ignored dry_run would run live side effects (#6).
@@ -889,11 +930,9 @@ func (a *Activities) executePlugin(ctx context.Context, in RunInput, site string
 		return dispatch.Result{}, err
 	}
 	// Surface governance rejections (dropped land-grabs / confused-deputy targets)
-	// for §1.8 honesty — never swallowed. (Persisting as Findings is the follow-up.)
-	for _, r := range raw.Rejections {
-		activity.GetLogger(ctx).Warn("plugin apply emission rejected",
-			"actuator", in.Actuator, "kind", r.Kind, "detail", r.Detail, "reason", r.Reason)
-	}
+	// as first-class §1.8 signals — a RunEvent on the descent stream AND a tracked
+	// Finding — never a swallowed log line (enterprise-readiness GOV-3).
+	a.surfaceRejections(ctx, in.RunID, "apply", in.Actuator, raw.Rejections)
 	// Map the governed, UNPROJECTED result to dispatch.Result. CollectFacts →
 	// ProjectFacts perform the single batched projection with Run provenance (#2).
 	res := dispatch.Result{Succeeded: raw.Succeeded, PerTarget: raw.PerTarget, Drift: raw.Drift}
@@ -1027,10 +1066,7 @@ func (a *Activities) executeJobPlugin(ctx context.Context, in RunInput, slice in
 	}
 	raw := gr.raw
 
-	for _, r := range raw.Rejections {
-		activity.GetLogger(ctx).Warn("plugin apply emission rejected",
-			"actuator", in.Actuator, "kind", r.Kind, "detail", r.Detail, "reason", r.Reason)
-	}
+	a.surfaceRejections(ctx, in.RunID, "apply", in.Actuator, raw.Rejections)
 	// Map the governed, UNPROJECTED result to dispatch.Result. Succeeded folds BOTH
 	// §1.8/MF5 signals: the governor's terminal fold (raw.Succeeded) AND the K8s Job
 	// exit (jobOK) — a green terminal followed by a non-zero exit (OOMKill, torn
