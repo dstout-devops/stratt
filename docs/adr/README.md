@@ -87,3 +87,4 @@ Status is `Accepted` unless noted. See **[../roadmap.md](../roadmap.md)** for ho
 | [0076](0076-admission-on-the-imperative-door.md) | Admission on the imperative door: the API is not a bypass around the compile-seam PEP | Accepted |
 | [0077](0077-observability-otel.md) | Observability: OpenTelemetry providers, `/metrics` always-on, OTLP optional | Accepted |
 | [0078](0078-rolling-upgrade-expand-contract.md) | Rolling-upgrade schema discipline: expand/contract + a pre-upgrade migration Job | Accepted |
+| [0079](0079-identity-as-a-cross-cutting-dimension.md) | Identity is a cross-cutting projection dimension, not a lowest-level type | Accepted |
