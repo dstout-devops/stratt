@@ -155,7 +155,7 @@ func TestObserveEmitsCerts(t *testing.T) {
 	if e.GetLabels()["cert.commonName"] != "web.stratt.test" {
 		t.Errorf("labels: %v", e.GetLabels())
 	}
-	for _, ns := range []string{"cert.identity", "cert.expiry"} {
+	for _, ns := range []string{"cert.identity", "cert.expiry", "identity.credential"} {
 		if len(e.GetFacets()[ns]) == 0 {
 			t.Errorf("missing facet %q", ns)
 		}
@@ -169,6 +169,18 @@ func TestObserveEmitsCerts(t *testing.T) {
 	}
 	if id.CommonName != "web.stratt.test" || id.Issuer != "Stratt Dev Root CA" || len(id.DNSNames) != 1 {
 		t.Fatalf("cert.identity: %+v", id)
+	}
+	// ADR-0079 slice 2: the cert also carries the cross-form identity.credential —
+	// scheme=cert, the attested subject, and the expiry the cross-form query keys on.
+	var cred struct {
+		Scheme, SubjectName, Issuer, NotAfter string
+		SubjectAltNames                       []string
+	}
+	if err := json.Unmarshal(e.GetFacets()["identity.credential"], &cred); err != nil {
+		t.Fatalf("identity.credential: %v", err)
+	}
+	if cred.Scheme != "cert" || cred.SubjectName != "web.stratt.test" || cred.NotAfter == "" {
+		t.Fatalf("identity.credential: %+v", cred)
 	}
 }
 

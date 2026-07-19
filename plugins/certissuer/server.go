@@ -18,8 +18,9 @@ import (
 // facetNamespaces are the Facet namespaces this Syncer REQUESTS to own (§2.1); the
 // core honors them only where the operator grant allows.
 var facetNamespaces = []string{
-	"cert.identity", // commonName, serialNumber, issuer, dnsNames
-	"cert.expiry",   // notBefore, notAfter
+	"cert.identity",       // commonName, serialNumber, issuer, dnsNames
+	"cert.expiry",         // notBefore, notAfter
+	"identity.credential", // ADR-0079: cross-form credential projection (a cert IS an identity form). Single §2.1 write-owner: the cert connector.
 }
 
 // Config locates the CLM Source. The token is a spawn-time CredentialRef resolved
