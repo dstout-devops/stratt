@@ -88,3 +88,4 @@ Status is `Accepted` unless noted. See **[../roadmap.md](../roadmap.md)** for ho
 | [0077](0077-observability-otel.md) | Observability: OpenTelemetry providers, `/metrics` always-on, OTLP optional | Accepted |
 | [0078](0078-rolling-upgrade-expand-contract.md) | Rolling-upgrade schema discipline: expand/contract + a pre-upgrade migration Job | Accepted |
 | [0079](0079-identity-as-a-cross-cutting-dimension.md) | Identity is a cross-cutting projection dimension, not a lowest-level type | Accepted |
+| [0080](0080-software-as-an-estate-dimension.md) | Software as an estate dimension: installed packages, open delivery-form, patch/advisory Findings | Accepted |
