@@ -9,7 +9,7 @@ import (
 
 // mapJobTemplate transforms one AWX job template into a single-Step Workflow
 // (the actuation tuple: ansible + scm content-ref + viewName + credentialRefs).
-func mapJobTemplate(snap *awx.Snapshot, jt awx.JobTemplate, viewFor, credName map[int]string, name string, r *report) (string, error) {
+func mapJobTemplate(snap *awx.Snapshot, jt awx.JobTemplate, viewFor, credName map[int]string, name string, r *report, lineage *AdoptLineage) (string, error) {
 	step := yStep{Name: "run", Actuator: "ansible"}
 
 	view, ok := viewFor[jt.Inventory]
@@ -25,7 +25,7 @@ func mapJobTemplate(snap *awx.Snapshot, jt awx.JobTemplate, viewFor, credName ma
 		}
 	}
 
-	wf := yWorkflow{Name: name, Steps: []yStep{step}}
+	wf := yWorkflow{Name: name, AdoptedFrom: adoptBlock(lineage), Steps: []yStep{step}}
 	doc, err := marshalYAML(wf)
 	if err != nil {
 		return "", mapErr("job template", jt.Name, err)
@@ -66,7 +66,7 @@ func placeholderPlay(jt awx.JobTemplate) string {
 
 // mapWorkflow transforms an AWX workflow job template and its node graph into a
 // multi-Step Workflow: node edges → needs+when; approval nodes → Gates.
-func mapWorkflow(snap *awx.Snapshot, wjt awx.WorkflowJobTemplate, viewFor, credName map[int]string, name string, r *report) (string, error) {
+func mapWorkflow(snap *awx.Snapshot, wjt awx.WorkflowJobTemplate, viewFor, credName map[int]string, name string, r *report, lineage *AdoptLineage) (string, error) {
 	nodes := snap.WorkflowNodes[wjt.ID]
 	byID := map[int]awx.WorkflowNode{}
 	for _, n := range nodes {
@@ -124,7 +124,7 @@ func mapWorkflow(snap *awx.Snapshot, wjt awx.WorkflowJobTemplate, viewFor, credN
 		steps = append(steps, yStep{Name: "noop", Gate: &yGate{Approvers: yApprovers{Teams: []string{"REVIEW-ME"}}}})
 	}
 
-	wf := yWorkflow{Name: name, Steps: steps}
+	wf := yWorkflow{Name: name, AdoptedFrom: adoptBlock(lineage), Steps: steps}
 	doc, err := marshalYAML(wf)
 	if err != nil {
 		return "", mapErr("workflow job template", wjt.Name, err)

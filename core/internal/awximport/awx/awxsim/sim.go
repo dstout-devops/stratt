@@ -37,14 +37,17 @@ func (s *Sim) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/v2/ping/", s.auth(s.ping))
 	mux.HandleFunc("GET /api/v2/job_templates/", s.auth(s.jobTemplates))
+	mux.HandleFunc("GET /api/v2/job_templates/{id}/", s.auth(s.jobTemplate))
 	mux.HandleFunc("GET /api/v2/job_templates/{id}/survey_spec/", s.auth(s.surveySpec))
 	mux.HandleFunc("GET /api/v2/projects/{id}/", s.auth(s.project))
 	mux.HandleFunc("GET /api/v2/workflow_job_templates/", s.auth(s.workflowJTs))
 	mux.HandleFunc("GET /api/v2/workflow_job_templates/{id}/workflow_nodes/", s.auth(s.workflowNodes))
 	mux.HandleFunc("GET /api/v2/inventories/", s.auth(s.inventories))
+	mux.HandleFunc("GET /api/v2/inventories/{id}/", s.auth(s.inventory))
 	mux.HandleFunc("GET /api/v2/inventories/{id}/inventory_sources/", s.auth(s.inventorySources))
 	mux.HandleFunc("GET /api/v2/inventories/{id}/hosts/", s.auth(s.hosts))
 	mux.HandleFunc("GET /api/v2/credentials/", s.auth(s.credentials))
+	mux.HandleFunc("GET /api/v2/credentials/{id}/", s.auth(s.credential))
 	return mux
 }
 

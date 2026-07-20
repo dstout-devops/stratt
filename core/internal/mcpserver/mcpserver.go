@@ -294,6 +294,15 @@ type startRunIn struct {
 type startWorkflowRunIn struct {
 	WorkflowName string `json:"workflowName" jsonschema:"declared Workflow to launch"`
 }
+type adoptIn struct {
+	Kind          string `json:"kind" jsonschema:"projection kind to adopt, e.g. ansible.template"`
+	Identity      string `json:"identity" jsonschema:"controller-qualified projection identity, e.g. ctrl-a/10"`
+	Endpoint      string `json:"endpoint" jsonschema:"source system base URL for the targeted deep-read"`
+	CredentialRef string `json:"credentialRef" jsonschema:"CredentialRef name holding the AWX token; resolved in-pod via the SecretBroker (§2.5) — you need use on it, never read it"`
+}
+type getAdoptionIn struct {
+	RunID string `json:"runId" jsonschema:"the adoption Run id returned by adopt_object"`
+}
 type listUsageIn struct {
 	Principal string `json:"principal,omitempty" jsonschema:"filter: Principal id (empty = all)"`
 }
@@ -360,6 +369,14 @@ func registerTools(s *mcp.Server, cfg Config) {
 	mcp.AddTool(s, &mcp.Tool{Name: "get_entity", Description: "Get one Entity document: identity, labels, Facets with provenance, and observedBy (the Sources that currently observe it, with last-seen times)."},
 		func(ctx context.Context, req *mcp.CallToolRequest, in idIn) (*mcp.CallToolResult, any, error) {
 			return invoke(ctx, cfg, req, "get_entity", http.MethodGet, "/entities/"+url.PathEscape(in.ID), nil)
+		})
+	mcp.AddTool(s, &mcp.Tool{Name: "adopt_object", Description: "Adopt an already-observed foreign object (resolved from the live projection catalog) into a reviewable Git-declared Named-Kind bundle (ADR-0086/0088). We never import — the projection is always-on; this launches an async Run whose pod does a targeted read-only deep-read + transform, resolving the AWX CredentialRef via the SecretBroker at pod spawn (§2.5, use-without-read — you name a credential you have `use` on, never read it). Writes no graph state and never auto-launches. Requires the `adopt` grant on the object's Source + `use` on the CredentialRef. Returns the Run id; poll get_adoption for the emitted bundle."},
+		func(ctx context.Context, req *mcp.CallToolRequest, in adoptIn) (*mcp.CallToolResult, any, error) {
+			return invoke(ctx, cfg, req, "adopt_object", http.MethodPost, "/adoptions", in)
+		})
+	mcp.AddTool(s, &mcp.Tool{Name: "get_adoption", Description: "Fetch an adoption Run's status and, on success, its emitted bundle (files + report) — poll this after adopt_object returns a runId (ADR-0088)."},
+		func(ctx context.Context, req *mcp.CallToolRequest, in getAdoptionIn) (*mcp.CallToolResult, any, error) {
+			return invoke(ctx, cfg, req, "get_adoption", http.MethodGet, "/adoptions/"+url.PathEscape(in.RunID), nil)
 		})
 	mcp.AddTool(s, &mcp.Tool{Name: "list_runs", Description: "List recent Run summaries, newest first."},
 		func(ctx context.Context, req *mcp.CallToolRequest, in listRunsIn) (*mcp.CallToolResult, any, error) {

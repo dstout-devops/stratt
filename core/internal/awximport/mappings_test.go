@@ -75,7 +75,7 @@ func TestJobTemplateScmContentRef(t *testing.T) {
 		Projects:     map[int]awx.Project{1: {ID: 1, ScmType: "git", ScmURL: "https://x/repo.git", ScmBranch: "main"}},
 	}
 	r := newReport()
-	doc, err := mapJobTemplate(snap, snap.JobTemplates[0], map[int]string{2: "awx/cloud"}, map[int]string{}, "awx/deploy", r)
+	doc, err := mapJobTemplate(snap, snap.JobTemplates[0], map[int]string{2: "awx/cloud"}, map[int]string{}, "awx/deploy", r, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -92,7 +92,7 @@ func TestJobTemplateManualProjectGetsPlaceholderPlay(t *testing.T) {
 		Projects:     map[int]awx.Project{2: {ID: 2, ScmType: "", ScmURL: ""}},
 	}
 	r := newReport()
-	doc, err := mapJobTemplate(snap, snap.JobTemplates[0], map[int]string{1: "awx/legacy"}, map[int]string{}, "awx/local", r)
+	doc, err := mapJobTemplate(snap, snap.JobTemplates[0], map[int]string{1: "awx/legacy"}, map[int]string{}, "awx/local", r, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -124,7 +124,7 @@ func TestWorkflowEdgesApprovalAndFanout(t *testing.T) {
 		}},
 	}
 	r := newReport()
-	doc, err := mapWorkflow(snap, snap.WorkflowJTs[0], map[int]string{1: "awx/inv"}, map[int]string{}, "awx/pipe", r)
+	doc, err := mapWorkflow(snap, snap.WorkflowJTs[0], map[int]string{1: "awx/inv"}, map[int]string{}, "awx/pipe", r, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

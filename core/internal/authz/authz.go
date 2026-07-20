@@ -41,7 +41,18 @@ const (
 	// The destination Cell re-checks it against the global OpenFGA on the
 	// forwarded adopt (§1.6 one authz model), like every other cross-Cell write.
 	RelationRehome = "rehome"
+	// RelationAdopt authorizes `stratt adopt` (ADR-0086): materializing an observed
+	// object into a Stratt-authored Named Kind. Granted per Source (source:<id>),
+	// deny-by-default, never implied by reader/admin — flipping an object from
+	// foreign-executed to Stratt-executed is a deliberate, separately-granted act
+	// (§1.6 one authz model; the API/CLI/agents share this one grant). Distinct from
+	// the control-plane-internal `rehome` adopt (ADR-0044).
+	RelationAdopt = "adopt"
 )
+
+// SourceObject guards a Source for the adopt relation (ADR-0086): a principal must
+// hold `adopt` on source:<id> to materialize one of its observed objects.
+func SourceObject(source string) string { return "source:" + source }
 
 // CellObject guards a Cell for the re-home relation (ADR-0044 slice 7): a
 // principal must hold `rehome` on cell:<dest> to move a Source there.

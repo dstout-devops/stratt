@@ -975,12 +975,83 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/adoptions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Adopt an observed object into a reviewable Named-Kind bundle (ADR-0086/0088)
+         * @description Take an ALREADY-OBSERVED foreign object (resolved from the live projection catalog) and materialize it as reviewable Git-declared desired state (Named Kinds). We never import: the projection is always-on; adopt resolves ONE object from it. The credential-bearing deep-read + transform run in a first-party execution pod (ADR-0088): the control plane resolves the object from the graph, then launches an async Run whose pod resolves the AWX CredentialRef via the SecretBroker (§2.5 — the caller references a credential it may USE but never READ). Writes NO graph state (§1.2); the emitted bundle is the Run's output, reviewed and merged (§5, no auto-launch). Authz: `adopt` on the object's Source + `use` on the CredentialRef (§1.6). Distinct from the control-plane-internal rehome `adopt` (ADR-0044). Returns the Run id; poll GET /adoptions/{runId} for the emitted bundle.
+         */
+        post: operations["adoptObject"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/adoptions/{runId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Fetch an adoption Run's status and (on success) its emitted bundle (ADR-0088)
+         * @description Poll the async adoption Run launched by POST /adoptions. While pending/running the bundle is absent; on `succeeded` the files + report are the Run's typed outputs (Run provenance, §1.2). A `failed` Run carries no bundle.
+         */
+        get: operations["getAdoption"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
         Error: {
             message: string;
+        };
+        /** @description Names the observed object to adopt + the read-only connection for the targeted deep-read (ADR-0086/0088). The AWX token is NOT sent: the caller references a `credentialRef` it has `use` on; the material resolves only in the adopt execution pod, at pod spawn (§2.5 — use-without-read). */
+        AdoptRequest: {
+            /** @description The projection kind, e.g. ansible.template. */
+            kind: string;
+            /** @description The controller-qualified projection identity, e.g. "ctrl-a/10". */
+            identity: string;
+            /** @description The source system base URL for the targeted deep-read. */
+            endpoint: string;
+            /** @description The CredentialRef name holding the AWX token; resolved in-pod via the SecretBroker (§2.5). The caller needs `use` on it, never reads it. */
+            credentialRef: string;
+        };
+        /** @description The async adoption Run was launched (ADR-0088). Poll GET /adoptions/{runId}. */
+        AdoptAccepted: {
+            /** @description The adoption Run id. */
+            runId: string;
+        };
+        /** @description An adoption Run's status and, on success, the reviewable bundle (ADR-0088) — relative file path → CaC content (Named Kinds, adopted-from stamped) plus the adoption report (residual gaps + cutover guard, §1.8). files/report are present only when status is `succeeded`. */
+        AdoptStatus: {
+            runId: string;
+            /**
+             * @description The Run lifecycle state.
+             * @enum {string}
+             */
+            status: "pending" | "running" | "succeeded" | "failed" | "canceled" | "partial";
+            /** @description Relative path → declaration content (on success). */
+            files?: {
+                [key: string]: string;
+            };
+            /** @description The adoption report (on success). */
+            report?: string;
         };
         /** @description A request to re-home a Source to another Cell (ADR-0044 slice 7). */
         RehomeRequest: {
@@ -2988,6 +3059,56 @@ export interface operations {
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
+        };
+    };
+    adoptObject: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AdoptRequest"];
+            };
+        };
+        responses: {
+            /** @description Adoption Run accepted; poll GET /adoptions/{runId} for the bundle. */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdoptAccepted"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    getAdoption: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                runId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The adoption Run status and, on success, the reviewable bundle. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdoptStatus"];
+                };
+            };
+            404: components["responses"]["NotFound"];
         };
     };
 }

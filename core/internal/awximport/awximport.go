@@ -24,7 +24,17 @@ import (
 
 // Options tunes the transform. Zero value is valid.
 type Options struct {
-	// (reserved for future knobs — e.g. label-namespace overrides)
+	// AdoptedFrom, when set, stamps adopt lineage (ADR-0087) onto every emitted Workflow.
+	// `stratt adopt` sets it for its single-object bundle; the legacy full-estate importer
+	// leaves it nil. A pointer so the zero Options emits no lineage.
+	AdoptedFrom *AdoptLineage
+}
+
+// AdoptLineage is the source-object lineage stamped onto an adopted Workflow.
+type AdoptLineage struct {
+	Kind     string
+	Identity string
+	Source   string
 }
 
 // Emit is the in-memory bundle: relative file path → content, plus the report.
@@ -36,7 +46,7 @@ type Emit struct {
 
 // Bundle transforms a Snapshot into a desired-state bundle. It is pure (no I/O)
 // so the mappings are unit-testable end to end.
-func Bundle(snap *awx.Snapshot, _ Options) (*Emit, error) {
+func Bundle(snap *awx.Snapshot, opts Options) (*Emit, error) {
 	e := &Emit{Files: map[string]string{}}
 	r := newReport()
 
@@ -97,7 +107,7 @@ func Bundle(snap *awx.Snapshot, _ Options) (*Emit, error) {
 	// Job templates → single-Step Workflows.
 	for _, jt := range snap.JobTemplates {
 		s := uniq(slug(jt.Name))
-		doc, err := mapJobTemplate(snap, jt, viewFor, credName, "awx/"+s, r)
+		doc, err := mapJobTemplate(snap, jt, viewFor, credName, "awx/"+s, r, opts.AdoptedFrom)
 		if err != nil {
 			return nil, err
 		}
@@ -107,7 +117,7 @@ func Bundle(snap *awx.Snapshot, _ Options) (*Emit, error) {
 	// Workflow job templates → multi-Step Workflows.
 	for _, wjt := range snap.WorkflowJTs {
 		s := uniq(slug(wjt.Name))
-		doc, err := mapWorkflow(snap, wjt, viewFor, credName, "awx/"+s, r)
+		doc, err := mapWorkflow(snap, wjt, viewFor, credName, "awx/"+s, r, opts.AdoptedFrom)
 		if err != nil {
 			return nil, err
 		}

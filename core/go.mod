@@ -11,6 +11,7 @@ require (
 	github.com/dstout-devops/stratt/contracts v0.0.0-00010101000000-000000000000
 	github.com/dstout-devops/stratt/packs v0.0.0-00010101000000-000000000000
 	github.com/dstout-devops/stratt/sdk v0.0.0-00010101000000-000000000000
+	github.com/dstout-devops/stratt/sdk/secretbroker v0.0.0-00010101000000-000000000000
 	github.com/dstout-devops/stratt/types v0.0.0-00010101000000-000000000000
 	github.com/getkin/kin-openapi v0.141.0
 	github.com/google/cel-go v0.29.2
@@ -161,3 +162,5 @@ replace github.com/dstout-devops/stratt/contracts => ../contracts
 replace github.com/dstout-devops/stratt/packs => ../packs
 
 replace github.com/dstout-devops/stratt/sdk => ../sdk
+
+replace github.com/dstout-devops/stratt/sdk/secretbroker => ../sdk/secretbroker

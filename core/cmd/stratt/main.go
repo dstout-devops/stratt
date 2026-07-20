@@ -26,8 +26,20 @@ func main() {
 	}
 	cmd := os.Args[1]
 
-	// `import awx` is a one-shot migration tool with its own flags; it reads
-	// AWX and writes a local bundle, never touching the platform API.
+	// `adopt <kind> <identity>` (ADR-0086) materializes ONE already-observed object into a
+	// reviewable Named-Kind bundle, resolved from the live projection catalog + a targeted
+	// deep-read. It supersedes the one-shot `import` (we never import — the projection is
+	// always-on). `import` remains until adopt fully lands (ADR-0025 Superseded-in-part).
+	if cmd == "adopt" {
+		if err := runAdopt(os.Args[2:]); err != nil {
+			fmt.Fprintln(os.Stderr, "stratt:", err)
+			os.Exit(1)
+		}
+		return
+	}
+
+	// `import awx` is the legacy one-shot migration tool (ADR-0025, Superseded-in-part by
+	// ADR-0086): it reads AWX and writes a local bundle, never touching the platform API.
 	if cmd == "import" {
 		if err := runImport(os.Args[2:]); err != nil {
 			fmt.Fprintln(os.Stderr, "stratt:", err)
@@ -77,7 +89,8 @@ func main() {
 func usage() {
 	fmt.Fprintln(os.Stderr, `usage:
   stratt <plan|apply> [-d declarations-dir] [-s server-url]
-  stratt import awx --endpoint <url> [--token <t>] -o <out-dir>
+  stratt adopt <kind> <identity> --endpoint <url> [--token <t>] [-s server] -o <out-dir>
+  stratt import awx --endpoint <url> [--token <t>] -o <out-dir>   (legacy; superseded by adopt)
   stratt bundle push <content-dir> <ref> --name N --version V --actuator A
   stratt pack <list|show|install> [name] --view V -o <cac-dir>`)
 }

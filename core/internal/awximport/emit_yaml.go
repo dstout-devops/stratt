@@ -25,8 +25,25 @@ type yFacet struct {
 }
 
 type yWorkflow struct {
-	Name  string  `yaml:"name"`
-	Steps []yStep `yaml:"steps"`
+	Name        string        `yaml:"name"`
+	AdoptedFrom *yAdoptedFrom `yaml:"adoptedFrom,omitempty"`
+	Steps       []yStep       `yaml:"steps"`
+}
+
+// yAdoptedFrom is the adopt-lineage block on an adopted Workflow (ADR-0087); nil (omitted)
+// for the legacy full-estate importer, which has no per-object adopt lineage.
+type yAdoptedFrom struct {
+	Kind     string `yaml:"kind"`
+	Identity string `yaml:"identity"`
+	Source   string `yaml:"source"`
+}
+
+// adoptBlock renders the optional adopt lineage for an emitted Workflow.
+func adoptBlock(l *AdoptLineage) *yAdoptedFrom {
+	if l == nil {
+		return nil
+	}
+	return &yAdoptedFrom{Kind: l.Kind, Identity: l.Identity, Source: l.Source}
 }
 
 type yStep struct {

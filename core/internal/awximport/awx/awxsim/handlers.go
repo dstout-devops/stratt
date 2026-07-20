@@ -56,6 +56,42 @@ func (s *Sim) hosts(w http.ResponseWriter, r *http.Request) {
 	paged(s, w, r, "/api/v2/inventories/"+strconv.Itoa(id)+"/hosts/", s.data.Hosts[id])
 }
 
+// The single-object reads the ADR-0086 `adopt` deep-read uses (targeted, one object at a
+// time) — distinct from the collection reads the one-shot importer enumerated.
+
+func (s *Sim) jobTemplate(w http.ResponseWriter, r *http.Request) {
+	id := pathID(r)
+	for _, jt := range s.data.JobTemplates {
+		if jt.ID == id {
+			writeJSON(w, jt)
+			return
+		}
+	}
+	http.NotFound(w, r)
+}
+
+func (s *Sim) credential(w http.ResponseWriter, r *http.Request) {
+	id := pathID(r)
+	for _, c := range s.data.Credentials {
+		if c.ID == id {
+			writeJSON(w, c)
+			return
+		}
+	}
+	http.NotFound(w, r)
+}
+
+func (s *Sim) inventory(w http.ResponseWriter, r *http.Request) {
+	id := pathID(r)
+	for _, inv := range s.data.Inventories {
+		if inv.ID == id {
+			writeJSON(w, inv)
+			return
+		}
+	}
+	http.NotFound(w, r)
+}
+
 func pathID(r *http.Request) int {
 	n, _ := strconv.Atoi(r.PathValue("id"))
 	return n

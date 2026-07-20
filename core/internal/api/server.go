@@ -17,6 +17,7 @@ import (
 
 	"go.temporal.io/sdk/client"
 
+	"github.com/dstout-devops/stratt/core/internal/adopt"
 	"github.com/dstout-devops/stratt/core/internal/authz"
 	"github.com/dstout-devops/stratt/core/internal/awxfacade"
 	"github.com/dstout-devops/stratt/core/internal/cellrouter"
@@ -1256,6 +1257,102 @@ func (s *Server) GetEntity(w http.ResponseWriter, r *http.Request, id string) {
 		}
 	}
 	writeJSON(w, http.StatusOK, doc)
+}
+
+// AdoptObject implements (POST /adoptions, ADR-0086/0088): launch the async adoption of an
+// ALREADY-OBSERVED object into a reviewable Named-Kind bundle. It authorizes `adopt` on the
+// object's Source (§1.6 — CLI/UI/agents share this grant), resolves the object from the live
+// projection catalog IN-CORE (a graph read; no credential — adopt.Resolve), then launches a
+// Run of the adopt/materialize Action: the credential-bearing deep-read + transform run in a
+// first-party pod that resolves the AWX CredentialRef via the SecretBroker at pod spawn (§2.5,
+// use-without-read — no AWX material ever touches this process). It writes NO graph state
+// (§1.2); the emitted bundle is the Run's output, reviewed + merged, Gated (§5). Returns 202 +
+// the Run id; poll GET /adoptions/{runId}.
+func (s *Server) AdoptObject(w http.ResponseWriter, r *http.Request) {
+	var body AdoptRequest
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid request: "+err.Error())
+		return
+	}
+	if body.Kind == "" || body.Identity == "" || body.Endpoint == "" || body.CredentialRef == "" {
+		writeErr(w, http.StatusBadRequest, "kind, identity, endpoint, and credentialRef are required")
+		return
+	}
+	// Authz (§1.6): `adopt` is scoped to the object's Source — the controller-qualified
+	// identity prefix. Deny-by-default; flipping an object to Stratt-authored is deliberate.
+	// (The credential `use`-check is the standard RunAction chokepoint, §2.5.)
+	source := body.Identity
+	if slash := strings.LastIndexByte(body.Identity, '/'); slash >= 0 {
+		source = body.Identity[:slash]
+	}
+	if !s.requireGrant(w, r, authz.RelationAdopt, authz.SourceObject(source)) {
+		return
+	}
+
+	// Core-side Resolve: a graph read only (native id, source, live executions). No AWX I/O,
+	// no credential — that all happens in the adopt pod (ADR-0088).
+	resolved, err := adopt.Resolve(r.Context(), adopt.NewGraphCatalog(s.Store), adopt.Request{Kind: body.Kind, Identity: body.Identity})
+	if err != nil {
+		switch {
+		case errors.Is(err, adopt.ErrUnsupportedKind):
+			writeErr(w, http.StatusBadRequest, err.Error())
+		case errors.Is(err, adopt.ErrNotObserved):
+			writeErr(w, http.StatusNotFound, err.Error())
+		default:
+			s.Log.Error("adopt resolve failed", "kind", body.Kind, "identity", body.Identity, "error", err)
+			writeErr(w, http.StatusBadGateway, "adopt: catalog resolve failed")
+		}
+		return
+	}
+
+	// The Action params are the core-resolved coordinates the pod needs; credentialMount
+	// names the AWX CredentialRef whose material the pod resolves at spawn.
+	params, err := json.Marshal(map[string]any{
+		"kind":            body.Kind,
+		"identity":        body.Identity,
+		"endpoint":        body.Endpoint,
+		"nativeId":        resolved.NativeID,
+		"source":          resolved.Source,
+		"live":            resolved.Live,
+		"credentialMount": body.CredentialRef,
+	})
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "adopt: encode params")
+		return
+	}
+	p := orchestrate.LaunchParams{Action: "adopt/materialize", Params: params, CredentialRefs: []string{body.CredentialRef}}
+	if id, _, ok := authz.PrincipalFrom(r.Context()); ok {
+		p.Principal = id
+	}
+	run, err := orchestrate.LaunchRun(r.Context(), orchestrate.LaunchDeps{Store: s.Store, Temporal: s.Temporal}, p)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusAccepted, AdoptAccepted{RunId: run.ID})
+}
+
+// GetAdoption implements (GET /adoptions/{runId}, ADR-0088): the adoption Run's status and,
+// on success, its emitted bundle (the Run's typed outputs — Run provenance, §1.2). The caller
+// polls this after POST /adoptions returns 202.
+func (s *Server) GetAdoption(w http.ResponseWriter, r *http.Request, runID string) {
+	run, err := s.Store.GetRun(r.Context(), runID)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	out := AdoptStatus{RunId: run.ID, Status: AdoptStatusStatus(run.Status)}
+	if run.Status == types.RunSucceeded && len(run.Outputs) > 0 {
+		var bundle struct {
+			Files  map[string]string `json:"files"`
+			Report string            `json:"report"`
+		}
+		if err := json.Unmarshal(run.Outputs, &bundle); err == nil {
+			out.Files = &bundle.Files
+			out.Report = &bundle.Report
+		}
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 // StartRun implements (POST /runs): create the Run summary, then start the
