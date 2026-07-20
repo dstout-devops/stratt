@@ -14,6 +14,7 @@ import (
 	"log/slog"
 	"sort"
 	"strconv"
+	"strings"
 	"time"
 
 	"go.temporal.io/sdk/activity"
@@ -474,15 +475,33 @@ func (a *Activities) EnsureRun(ctx context.Context, in RunInput, workflowID stri
 // ansible_connection:local stub is retired. A target with no mgmt.address carries an
 // empty Address (unroutable — the actuator fails loudly, never a silent local run, §1.8).
 func renderTarget(e types.Entity, address string) actuators.Target {
-	name := e.Labels["vcenter.name"]
-	if name == "" {
-		name = e.ID
-	}
 	return actuators.Target{
 		EntityID: e.ID,
-		Name:     name,
+		Name:     observedName(e),
 		Address:  address,
 	}
+}
+
+// observedName picks a human name for an execution target from the projection's tool-blind
+// "<source>.name" label convention (aws.name, vcenter.name, ansible.name, graph.name, …) —
+// the spine knows the *.name CONVENTION, never a specific tool's label key (§1.4). Selection
+// is deterministic (the alphabetically-first matching label) so the Workflow replays
+// identically (Temporal), and it falls back to the stable entity id when no source stamped a
+// name.
+func observedName(e types.Entity) string {
+	name, bestKey := "", ""
+	for k, v := range e.Labels {
+		if v == "" || !strings.HasSuffix(k, ".name") {
+			continue
+		}
+		if bestKey == "" || k < bestKey {
+			bestKey, name = k, v
+		}
+	}
+	if name == "" {
+		return e.ID
+	}
+	return name
 }
 
 // addressOf extracts the reachability coordinate from an mgmt.address Facet raw

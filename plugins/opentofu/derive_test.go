@@ -1,4 +1,4 @@
-package contract
+package opentofu
 
 import (
 	"encoding/json"
@@ -6,8 +6,11 @@ import (
 	"testing"
 )
 
-func TestDeriveTofuOutputsSchema(t *testing.T) {
-	doc, err := DeriveTofuOutputsSchema(map[string]TofuOutputType{
+// TestDeriveOutputsSchema covers the tofu output-type → JSON Schema derivation the plugin OWNS
+// (ADR-0017 rung-2; moved from the retired in-tree core copy, ADR-0089). Scalars, nested
+// list(object), map, tuple, the sensitive marker, and determinism regardless of map order.
+func TestDeriveOutputsSchema(t *testing.T) {
+	doc, err := deriveOutputsSchema(map[string]tofuOutputType{
 		"name":    {Type: json.RawMessage(`"string"`)},
 		"count":   {Type: json.RawMessage(`"number"`)},
 		"enabled": {Type: json.RawMessage(`"bool"`)},
@@ -44,8 +47,8 @@ func TestDeriveTofuOutputsSchema(t *testing.T) {
 		t.Fatalf("sensitive marker: %v", props["secret"])
 	}
 
-	// Determinism: identical input → identical bytes (stable hash axis).
-	doc2, _ := DeriveTofuOutputsSchema(map[string]TofuOutputType{
+	// Determinism: identical input → identical bytes (the core recomputes + pins the hash).
+	doc2, _ := deriveOutputsSchema(map[string]tofuOutputType{
 		"tags":    {Type: json.RawMessage(`["map","string"]`)},
 		"pair":    {Type: json.RawMessage(`["tuple",["string","number"]]`)},
 		"name":    {Type: json.RawMessage(`"string"`)},
