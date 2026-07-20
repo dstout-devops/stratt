@@ -1,6 +1,7 @@
 # ADR 0003 — UX design principles: schema-driven rendering and one-click descent
 
-- **Status:** Proposed
+- **Status:** Accepted (ratified by ADR-0090, 2026-07-20 — charter-guardian PASS-WITH-CHANGES; the L6
+  max-delta-gate must-fix folded)
 - **Date:** 2026-07-11
 - **Deciders:** Stratt maintainers (project lead)
 - **Charter sections:** §1.8, §3.1, §1.1, §1.2, §1.3, §1.5, §1.6, §2.4, §4.3, §7.5
@@ -66,9 +67,13 @@ teardown synthesis.)
    descends to per-Entity Evidence.
 6. **Changes are gated: plan-then-apply with explicit confirm.** Mutating Runs
    surface a compiled plan — including the membership delta of L3 — and require
-   explicit confirmation (a Gate) unless an Assignment opts into auto-apply. *Test:*
-   no mutating Run applies without a plan (config change + Entity join/leave set) the
-   Principal could have reviewed.
+   explicit confirmation (a Gate) unless an Assignment opts into auto-apply.
+   **Auto-apply waives only the routine confirmation Gate; the mandatory §4.3
+   max-delta gate still fires and pauses execution regardless of auto-apply** — the
+   catastrophic-blast-radius insurance is never opt-out. *Test:* no mutating Run
+   applies without a plan (config change + Entity join/leave set) the Principal could
+   have reviewed, and a delta exceeding the Assignment's max-delta always pauses even
+   under auto-apply.
 7. **Presentation metadata lives in the schema.** Facet/Contract schemas carry UI
    hints (title, icon, description, ordering); a Connector that ships a schema gets a
    labeled UI for free, and no community code executes in the interface plane (§3.1,

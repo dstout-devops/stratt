@@ -11,7 +11,7 @@ Status is `Accepted` unless noted. See **[../roadmap.md](../roadmap.md)** for ho
 |---|---|---|
 | [0001](0001-charter-as-design-authority-and-claude-control-plane.md) | Charter as design authority; Claude Code as the initial build surface | Accepted |
 | [0002](0002-go-control-plane-python-in-pods-s3-generic-storage.md) | Go control plane; Python confined to pods & SDK; S3-generic storage | Accepted |
-| [0003](0003-ux-design-principles-schema-driven-rendering-and-descent.md) | UX design principles: schema-driven rendering and one-click descent | Proposed |
+| [0003](0003-ux-design-principles-schema-driven-rendering-and-descent.md) | UX design principles: schema-driven rendering and one-click descent | Accepted |
 | [0004](0004-db-tooling-pgx-goose.md) | Postgres tooling: pgx queries, goose migrations | Accepted |
 | [0005](0005-phase0-monorepo-layout-multi-module-workspace.md) | Phase-0 monorepo layout: multi-module Go workspace | Accepted |
 | [0006](0006-openapi-tooling-oapi-codegen.md) | OpenAPI tooling: spec-first with oapi-codegen | Accepted |
@@ -98,3 +98,4 @@ Status is `Accepted` unless noted. See **[../roadmap.md](../roadmap.md)** for ho
 | [0087](0087-standing-cutover-reconciler.md) | Standing cutover: a desired-state⋈projection reconciler flags double-execution after adopt; the tool-specifics ride a Connector-manifest descriptor (supersedes-in-part ADR-0086 §4) | Accepted |
 | [0088](0088-adopt-as-a-job.md) | adopt-as-a-job: the credential-bearing deep-read + transform runs in a core-owned Action over the port; AWX CredentialRef resolves in-pod via SecretBroker (use-without-read); adopt becomes an async Run (supersedes-in-part ADR-0086 credential note) | Accepted |
 | [0089](0089-awximport-to-awx-plugin.md) | the AWX→CaC transform is plugin breadth: move `awximport` (transform + rich deep-read client + `awxsim`) into the awx plugin; `adopt/materialize` becomes an awx-plugin Action; core keeps only tool-blind adopt; `awxfacade` stays; retire the legacy `import` verb (supersedes-in-part ADR-0088) | Accepted |
+| [0090](0090-ui-rebuild-greenfield-charter-stack.md) | UI rebuild: greenfield on the charter stack (React/Vite/TanStack/Tailwind4/vendored Radix-shadcn), gauntlet-informed responsiveness patterns over OpenAPI; descent-spine first; schema-driven rendering; ratifies ADR-0003 | Accepted |
