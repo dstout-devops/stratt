@@ -25,6 +25,12 @@ export function RunsList() {
         >
           Approvals
         </Link>
+        <Link
+          to="/workflows"
+          className="text-sm text-muted-foreground transition-colors hover:text-foreground [&.active]:text-foreground"
+        >
+          Workflows
+        </Link>
         <div className="flex-1" />
         <StartRunDialog />
       </div>

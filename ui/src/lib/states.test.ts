@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { runState, findingState } from "@/lib/states";
+import { runState, findingState, stepState } from "@/lib/states";
 
 // The state vocabulary is load-bearing: a color/icon means the same thing across every §1.8 descent
 // screen, so the status→State mapping is pinned here (design-tokens §5.1).
@@ -11,6 +11,16 @@ describe("runState", () => {
     expect(runState("partial")).toBe("degraded");
     expect(runState("canceled")).toBe("pending");
     expect(runState("weird-unknown")).toBe("pending");
+  });
+});
+
+describe("stepState", () => {
+  it("maps WorkflowRun step outcomes onto the shared palette", () => {
+    expect(stepState("succeeded")).toBe("ok");
+    expect(stepState("failed")).toBe("failed");
+    expect(stepState("running")).toBe("running");
+    expect(stepState("skipped")).toBe("attention");
+    expect(stepState("")).toBe("pending");
   });
 });
 

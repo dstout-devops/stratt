@@ -1,7 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { Placeholder } from "@/components/placeholder";
+import { WorkflowRunDetail } from "@/screens/workflow-runs";
 
 export const Route = createFileRoute("/workflow-runs/$id")({
-  component: () => <Placeholder title="WorkflowRun" slice="the next build step" />,
+  component: WorkflowRunDetail,
   staticData: { crumb: "WorkflowRun" },
 });

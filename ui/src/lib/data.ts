@@ -128,3 +128,32 @@ export const compileQuery = () =>
     queryFn: async () => unwrap(await api.GET("/compile")),
     staleTime: 15_000,
   });
+
+// Slice 3 — Connectors / Fleet / Admin (all read; CaC/Git or external SoR is authoritative, §1.2).
+export const sourcesQuery = () =>
+  queryOptions({ queryKey: keys.sources(), queryFn: async () => unwrap(await api.GET("/sources")) });
+
+export const sitesQuery = () =>
+  queryOptions({ queryKey: keys.sites(), queryFn: async () => unwrap(await api.GET("/sites")) });
+
+export const emittersQuery = () =>
+  queryOptions({ queryKey: keys.emitters(), queryFn: async () => unwrap(await api.GET("/emitters")) });
+
+export const auditQuery = (limit = 200) =>
+  queryOptions({
+    queryKey: keys.audit(limit),
+    queryFn: async () => unwrap(await api.GET("/audit", { params: { query: { limit } } })),
+    staleTime: 10_000,
+  });
+
+export const usageQuery = () =>
+  queryOptions({ queryKey: keys.usage(), queryFn: async () => unwrap(await api.GET("/usage")) });
+
+export const workflowsQuery = () =>
+  queryOptions({ queryKey: keys.workflows(), queryFn: async () => unwrap(await api.GET("/workflows")) });
+
+export const workflowQuery = (name: string) =>
+  queryOptions({
+    queryKey: keys.workflow(name),
+    queryFn: async () => unwrap(await api.GET("/workflows/{name}", { params: { path: { name } } })),
+  });

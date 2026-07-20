@@ -21,6 +21,22 @@ export function runState(status: string): State {
   }
 }
 
+/** stepState maps a WorkflowRun step's terminal outcome onto the shared state palette. */
+export function stepState(status: string): State {
+  switch (status) {
+    case "succeeded":
+      return "ok";
+    case "failed":
+      return "failed";
+    case "running":
+      return "running";
+    case "skipped":
+      return "attention";
+    default:
+      return "pending";
+  }
+}
+
 /** findingState maps a Finding severity onto the shared state palette. */
 export function findingState(severity: string): State {
   switch (severity) {

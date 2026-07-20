@@ -25,4 +25,11 @@ export const keys = {
   assignments: () => ["assignments"] as const,
   blueprints: () => ["blueprints"] as const,
   compile: () => ["compile"] as const,
+  sources: () => ["sources"] as const,
+  sites: () => ["sites"] as const,
+  emitters: () => ["emitters"] as const,
+  audit: (limit?: number) => ["audit", { limit }] as const,
+  usage: () => ["usage"] as const,
+  workflows: () => ["workflows"] as const,
+  workflow: (name: string) => ["workflow", name] as const,
 };

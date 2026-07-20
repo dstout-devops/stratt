@@ -24,6 +24,8 @@ import { Route as RunsIdRouteImport } from './routes/runs/$id'
 import { Route as RunsApprovalsRouteImport } from './routes/runs/approvals'
 import { Route as ViewsNameRouteImport } from './routes/views/$name'
 import { Route as WorkflowRunsIdRouteImport } from './routes/workflow-runs/$id'
+import { Route as WorkflowsIndexRouteImport } from './routes/workflows/index'
+import { Route as WorkflowsNameRouteImport } from './routes/workflows/$name'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
@@ -100,6 +102,16 @@ const WorkflowRunsIdRoute = WorkflowRunsIdRouteImport.update({
   path: '/workflow-runs/$id',
   getParentRoute: () => rootRouteImport,
 } as any)
+const WorkflowsIndexRoute = WorkflowsIndexRouteImport.update({
+  id: '/workflows/',
+  path: '/workflows/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const WorkflowsNameRoute = WorkflowsNameRouteImport.update({
+  id: '/workflows/$name',
+  path: '/workflows/$name',
+  getParentRoute: () => rootRouteImport,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
@@ -113,10 +125,12 @@ export interface FileRoutesByFullPath {
   '/runs/approvals': typeof RunsApprovalsRoute
   '/views/$name': typeof ViewsNameRoute
   '/workflow-runs/$id': typeof WorkflowRunsIdRoute
+  '/workflows/$name': typeof WorkflowsNameRoute
   '/findings/': typeof FindingsIndexRoute
   '/graph/': typeof GraphIndexRoute
   '/intents/': typeof IntentsIndexRoute
   '/runs/': typeof RunsIndexRoute
+  '/workflows/': typeof WorkflowsIndexRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
@@ -130,10 +144,12 @@ export interface FileRoutesByTo {
   '/runs/approvals': typeof RunsApprovalsRoute
   '/views/$name': typeof ViewsNameRoute
   '/workflow-runs/$id': typeof WorkflowRunsIdRoute
+  '/workflows/$name': typeof WorkflowsNameRoute
   '/findings': typeof FindingsIndexRoute
   '/graph': typeof GraphIndexRoute
   '/intents': typeof IntentsIndexRoute
   '/runs': typeof RunsIndexRoute
+  '/workflows': typeof WorkflowsIndexRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -148,10 +164,12 @@ export interface FileRoutesById {
   '/runs/approvals': typeof RunsApprovalsRoute
   '/views/$name': typeof ViewsNameRoute
   '/workflow-runs/$id': typeof WorkflowRunsIdRoute
+  '/workflows/$name': typeof WorkflowsNameRoute
   '/findings/': typeof FindingsIndexRoute
   '/graph/': typeof GraphIndexRoute
   '/intents/': typeof IntentsIndexRoute
   '/runs/': typeof RunsIndexRoute
+  '/workflows/': typeof WorkflowsIndexRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -167,10 +185,12 @@ export interface FileRouteTypes {
     | '/runs/approvals'
     | '/views/$name'
     | '/workflow-runs/$id'
+    | '/workflows/$name'
     | '/findings/'
     | '/graph/'
     | '/intents/'
     | '/runs/'
+    | '/workflows/'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
@@ -184,10 +204,12 @@ export interface FileRouteTypes {
     | '/runs/approvals'
     | '/views/$name'
     | '/workflow-runs/$id'
+    | '/workflows/$name'
     | '/findings'
     | '/graph'
     | '/intents'
     | '/runs'
+    | '/workflows'
   id:
     | '__root__'
     | '/'
@@ -201,10 +223,12 @@ export interface FileRouteTypes {
     | '/runs/approvals'
     | '/views/$name'
     | '/workflow-runs/$id'
+    | '/workflows/$name'
     | '/findings/'
     | '/graph/'
     | '/intents/'
     | '/runs/'
+    | '/workflows/'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -219,10 +243,12 @@ export interface RootRouteChildren {
   RunsApprovalsRoute: typeof RunsApprovalsRoute
   ViewsNameRoute: typeof ViewsNameRoute
   WorkflowRunsIdRoute: typeof WorkflowRunsIdRoute
+  WorkflowsNameRoute: typeof WorkflowsNameRoute
   FindingsIndexRoute: typeof FindingsIndexRoute
   GraphIndexRoute: typeof GraphIndexRoute
   IntentsIndexRoute: typeof IntentsIndexRoute
   RunsIndexRoute: typeof RunsIndexRoute
+  WorkflowsIndexRoute: typeof WorkflowsIndexRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -332,6 +358,20 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof WorkflowRunsIdRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/workflows/': {
+      id: '/workflows/'
+      path: '/workflows'
+      fullPath: '/workflows/'
+      preLoaderRoute: typeof WorkflowsIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/workflows/$name': {
+      id: '/workflows/$name'
+      path: '/workflows/$name'
+      fullPath: '/workflows/$name'
+      preLoaderRoute: typeof WorkflowsNameRouteImport
+      parentRoute: typeof rootRouteImport
+    }
   }
 }
 
@@ -347,10 +387,12 @@ const rootRouteChildren: RootRouteChildren = {
   RunsApprovalsRoute: RunsApprovalsRoute,
   ViewsNameRoute: ViewsNameRoute,
   WorkflowRunsIdRoute: WorkflowRunsIdRoute,
+  WorkflowsNameRoute: WorkflowsNameRoute,
   FindingsIndexRoute: FindingsIndexRoute,
   GraphIndexRoute: GraphIndexRoute,
   IntentsIndexRoute: IntentsIndexRoute,
   RunsIndexRoute: RunsIndexRoute,
+  WorkflowsIndexRoute: WorkflowsIndexRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

@@ -14,6 +14,13 @@
     no dependency. **Defer `@xyflow/react` + `elkjs` + `comlink` to slice 3** (graph canvas) — and record the
     **EPL-2.0** license election for `elkjs` (dual EPL-2.0/GPL-3.0; never let GPL default) + a **bundle-budget
     CI gate** on the graph route then. `sonner`/`cmdk` accepted (vendor `sonner` later only if it goes dark).
+    **elkjs EPL-2.0 election recorded (slice 3, 2026-07-20):** Stratt elects the **EPL-2.0** branch of
+    elkjs's EPL-2.0 OR GPL-3.0-or-later dual license. `elkjs` is consumed UNMODIFIED via npm and runs in a
+    Web Worker (`ui/src/workers/layout.worker.ts`); EPL-2.0's file-level reciprocity attaches only to
+    modifications of elkjs itself — none — so it does not reach Stratt's Apache-2.0 app code. The GPL-3.0
+    branch is never elected. `@xyflow/react` (MIT — Pro examples don't gate core), `comlink` (Apache-2.0)
+    are permissive. The graph libs are code-split behind the graph routes (`@xyflow`/`elk` never enter the
+    initial chunk); a bundle-budget check on those chunks is the follow-up.
   - *vocabulary-linter:* **Gate is not a Named Kind** — the approval inbox is a screen *within* the Runs
     section (Run/Workflow descent), never a top-level `/gates` nav section. **Adoption is not a Named Kind** —
     `adopt` is an Action producing a Run; it surfaces as an **Entity action** (Graph section) that launches a

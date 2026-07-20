@@ -1,7 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { Placeholder } from "@/components/placeholder";
+import { AdminPage } from "@/screens/admin";
 
 export const Route = createFileRoute("/admin")({
-  component: () => <Placeholder title="Admin" slice="slice 3" />,
+  component: AdminPage,
   staticData: { crumb: "Admin" },
 });
