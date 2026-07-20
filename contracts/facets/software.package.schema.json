@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "stratt:contract:facets/software.package:v1",
+  "title": "software.package Facet",
+  "description": "Demanded by the patch/advisory check (ADR-0080) and the OS-package collector: the installed-software inventory on a host — the PACKAGE form of the cross-cutting deliverable-software dimension. Software is a DIMENSION, not a taxonomy: `deliveryForm` (package|container|chart|binary|script) and `origin` (distro|internal|external|vendor) are OPEN strings (§1.4), so a binary, a container, and an apt package are the same dimension in different forms — never separate Entity kinds. A projection of the host's actual state (§1.2), observed by a collector; never authored in the graph. The patch/advisory check reads it to raise vulnerable/EOL Findings. A Facet exists only when a shipping Contract demands it (§1.1); validated at the Projector write path.",
+  "type": "object",
+  "properties": {
+    "packages": {
+      "type": "array",
+      "description": "The installed packages observed on this host.",
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": { "type": "string" },
+          "version": { "type": "string" },
+          "architecture": { "type": "string" },
+          "origin": {
+            "type": "string",
+            "description": "Development lineage — OPEN: distro | internal | external | vendor."
+          },
+          "deliveryForm": {
+            "type": "string",
+            "description": "OPEN form of the deliverable-software dimension; this facet is the `package` form."
+          }
+        },
+        "required": ["name", "version"],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": ["packages"],
+  "additionalProperties": false
+}

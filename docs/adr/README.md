@@ -33,7 +33,7 @@ Status is `Accepted` unless noted. See **[../roadmap.md](../roadmap.md)** for ho
 | [0022](0022-mcp-actuator.md) | mcp Actuator: consuming external MCP servers | Accepted |
 | [0023](0023-intent-compiler.md) | Intent/Assignment/Blueprint compiler | Accepted |
 | [0024](0024-templating-parametrized-views.md) | Payload templating + parametrized Views | Accepted |
-| [0025](0025-awx-importer-and-ansible-scm-content-ref.md) | AWX importer + ansible SCM content-ref | Accepted |
+| [0025](0025-awx-importer-and-ansible-scm-content-ref.md) | AWX importer + ansible SCM content-ref | Superseded-in-part by [0086](0086-adopt-per-object-in-place.md) |
 | [0026](0026-awx-api-v2-facade.md) | AWX-compatible `/api/v2` façade (+ native cancel & extraVars) | Accepted |
 | [0027](0027-notifications.md) | Notifications (outbound Run/Finding/Gate alerts) | Accepted |
 | [0028](0028-view-scoped-execution-authz.md) | View-scoped execution authz (full OpenFGA) | Accepted |
@@ -63,3 +63,38 @@ Status is `Accepted` unless noted. See **[../roadmap.md](../roadmap.md)** for ho
 | [0052](0052-secretbroker-port.md) | The SecretBroker port: per-call credential resolution for plugins (§2.5) | Accepted |
 | [0053](0053-mcp-transport-generic-connector.md) | MCP as a generic transport: the last domain logic leaves the core | Accepted |
 | [0054](0054-per-step-facet-claim.md) | Per-Step facet write-scope: narrow the write-back grant to what a Step declares | Accepted |
+| [0055](0055-estate-composition.md) | Estate Composition: what it means to "define the estate" (north-star model + guardrails + gap roadmap) | Accepted |
+| [0056](0056-estate-as-code.md) | Estate-as-Code: declaring Sources & Connectors in Git + the `stratt` estate CLI | Accepted |
+| [0057](0057-environment-scoped-reconciliation.md) | Environment-scoped reconciliation: one estate repo, N environments | Accepted |
+| [0058](0058-provisioning-from-intent.md) | Provisioning from Intent: declare desired infrastructure → gated build → project back (G1/G4) | Accepted |
+| [0059](0059-network-topology-primitives.md) | Network & topology primitives: subnet/dmz/az/dns kinds + placement as a Relation | Accepted |
+| [0060](0060-multi-source-facet-ownership.md) | Multi-source Facet projection: keep every signal, declare the authoritative view | Accepted |
+| [0061](0061-estate-governance-policy-decision-point.md) | Estate Governance: the policy decision point, the three authorships, and governance-as-data | Accepted |
+| [0062](0062-policy-contract-and-pdp-interface-v1.md) | Policy Contract & PDP interface v1: the four-way Decision, the CEL evaluator, and the most-restrictive lattice | Accepted (arch. superseded by 0072) |
+| [0063](0063-policy-step-dag-dispatch-v1.md) | Policy Step & DAG dispatch v1: the PDP as a synchronous checkpoint | Accepted |
+| [0064](0064-policy-require-approval-gate.md) | Policy REQUIRE_APPROVAL opens a human Gate; the approver check folds into one authz seam | Accepted |
+| [0065](0065-durable-policy-decision-recording.md) | Durable policy-decision recording: the audit stream, not a Finding | Accepted |
+| [0066](0066-mandatory-floors-pre-existing.md) | The mandatory safety floors pre-exist and are non-substitutable (ADR-0061 M1, closed) | Accepted |
+| [0067](0067-typed-control-library-timewindow.md) | The typed Control library: primitives as data, starting with TimeWindow | Accepted |
+| [0068](0068-typed-control-sod.md) | Typed Control library: Separation of Duties, and committer enrichment | Accepted |
+| [0069](0069-typed-control-waiver.md) | Typed Control library: Waiver, a time-boxed control exemption | Accepted |
+| [0070](0070-typed-control-breakglass.md) | Typed Control library: BreakGlass, emergency bypass with mandatory post-review | Accepted |
+| [0071](0071-quorum-gate-threshold.md) | Quorum (M-of-N): a gate threshold, not an evaluator Control | Accepted |
+| [0072](0072-policy-decision-point-is-a-port.md) | The Policy Decision Point is a PORT, not a core dependency (corrects ADR-0062) | Accepted |
+| [0073](0073-admission-pep-over-the-port.md) | The admission PEP: policy at the compile seam, over the PDP port | Accepted |
+| [0074](0074-external-policy-engine-subprocess.md) | External policy engines (OPA / Kyverno) over the subprocess transport | Accepted |
+| [0075](0075-obligation-enforcement.md) | Obligation enforcement: a binding rider is enforced, not recorded-and-dropped | Accepted |
+| [0076](0076-admission-on-the-imperative-door.md) | Admission on the imperative door: the API is not a bypass around the compile-seam PEP | Accepted |
+| [0077](0077-observability-otel.md) | Observability: OpenTelemetry providers, `/metrics` always-on, OTLP optional | Accepted |
+| [0078](0078-rolling-upgrade-expand-contract.md) | Rolling-upgrade schema discipline: expand/contract + a pre-upgrade migration Job | Accepted |
+| [0079](0079-identity-as-a-cross-cutting-dimension.md) | Identity is a cross-cutting projection dimension, not a lowest-level type | Accepted |
+| [0080](0080-software-as-an-estate-dimension.md) | Software as an estate dimension: installed packages, open delivery-form, patch/advisory Findings | Accepted |
+| [0081](0081-service-as-a-capability-dimension.md) | Service as a capability dimension: the deliverable↔service seam, grounded in K8s + Helm | Accepted |
+| [0082](0082-relation-liveness.md) | Relation liveness: cross-source edge GC, the edge analog of entity presence | Accepted |
+| [0083](0083-blueprint-route-materialization-seam.md) | The Blueprint route is the tool-materialization seam; declare outcomes, plugins materialize (+ G6 defaults/override) | Accepted |
+| [0084](0084-managed-node-reachability-address-facet.md) | Managed-node reachability is a typed address Facet; core resolves the connection seam, the plugin renders the connection | Accepted |
+| [0085](0085-relation-presence-baseline.md) | Relation-presence Baseline: desired state over graph topology (RequiredRelations), the orphan-template audit unifying AWX + raw Ansible | Accepted |
+| [0086](0086-adopt-per-object-in-place.md) | `adopt`: per-object, in-place, over the live projection — supersedes-in-part the one-shot AWX importer (we never import; we are connected and simply know) | Accepted |
+| [0087](0087-standing-cutover-reconciler.md) | Standing cutover: a desired-state⋈projection reconciler flags double-execution after adopt; the tool-specifics ride a Connector-manifest descriptor (supersedes-in-part ADR-0086 §4) | Accepted |
+| [0088](0088-adopt-as-a-job.md) | adopt-as-a-job: the credential-bearing deep-read + transform runs in a core-owned Action over the port; AWX CredentialRef resolves in-pod via SecretBroker (use-without-read); adopt becomes an async Run (supersedes-in-part ADR-0086 credential note) | Accepted |
+| [0089](0089-awximport-to-awx-plugin.md) | the AWX→CaC transform is plugin breadth: move `awximport` (transform + rich deep-read client + `awxsim`) into the awx plugin; `adopt/materialize` becomes an awx-plugin Action; core keeps only tool-blind adopt; `awxfacade` stays; retire the legacy `import` verb (supersedes-in-part ADR-0088) | Accepted |

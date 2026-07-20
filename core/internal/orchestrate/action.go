@@ -159,17 +159,19 @@ func (a *Activities) ExecuteAction(ctx context.Context, in RunInput, creds []dis
 		if err != nil {
 			return dispatch.Result{}, err
 		}
-		// Surface governance rejections (dropped land-grabs) for §1.8 honesty —
-		// never swallowed. (Persisting them as Findings is the tracked follow-up.)
-		for _, r := range raw.Rejections {
-			activity.GetLogger(ctx).Warn("plugin action emission rejected",
-				"action", in.Action, "kind", r.Kind, "detail", r.Detail, "reason", r.Reason)
-		}
+		// Surface governance rejections (dropped land-grabs) as first-class §1.8
+		// signals — a RunEvent + a tracked Finding, never a swallowed log line
+		// (enterprise-readiness GOV-3).
+		a.surfaceRejections(ctx, in.RunID, "action", in.Action, raw.Rejections)
 		// Entities are GOVERNED but UNPROJECTED — RecordActionResult performs the
 		// single write with RUN provenance (per-verb write path, ADR-0047 §2).
 		ents := make([]actuators.EntityObservation, 0, len(raw.Entities))
 		for _, e := range raw.Entities {
-			ents = append(ents, actuators.EntityObservation{Kind: e.Kind, IdentityKeys: e.IdentityKeys})
+			rels := make([]actuators.RelationObservation, 0, len(e.Relations))
+			for _, r := range e.Relations {
+				rels = append(rels, actuators.RelationObservation{Type: r.Type, ToScheme: r.ToScheme, ToValue: r.ToValue})
+			}
+			ents = append(ents, actuators.EntityObservation{Kind: e.Kind, IdentityKeys: e.IdentityKeys, Labels: e.Labels, Relations: rels})
 		}
 		return dispatch.Result{Succeeded: raw.OK, Outputs: raw.Outputs, Entities: ents}, nil
 	}

@@ -1,0 +1,18 @@
+# baseline-admission — the estate's admission policy, declared as code (ADR-0073
+# §7.4 / charter §3 "Kyverno-for-config"). At load, every OTHER declaration's
+# manifest is admitted through the PDP PORT (the built-in CEL provider by
+# default, swappable/bypassable); a `deny` rejects the declaration, fail-closed.
+# Controls are CEL predicates over `object` (the manifest, with a guaranteed
+# `kind`); guard field access with has() so a rule fires only for its target.
+name: baseline-admission
+controls:
+  # Charter §3: no exportable certificate Intents — a private key that may leave
+  # the platform is a policy violation, not a config choice.
+  - id: no-exportable-certs
+    when: "object.kind == 'Intent/Certificate' && has(object.spec) && has(object.spec.exportable) && object.spec.exportable == true"
+    outcome: deny
+  # Housekeeping demonstrator: no workflow may ship with a 'forbidden-' name
+  # prefix (a stand-in for an org naming/ownership rule).
+  - id: no-forbidden-workflows
+    when: "object.kind == 'Workflow' && has(object.name) && object.name.startsWith('forbidden-')"
+    outcome: deny

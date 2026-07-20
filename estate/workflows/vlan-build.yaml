@@ -1,0 +1,38 @@
+# vlan-build — the GATED build Workflow an Intent/Vlan launches (ADR-0059). Identical shape
+# to subnet-build — the model extends to a new kind with NO new machinery: same gate, same
+# crossplane/provision Action, same project-back + correlation. The Syncer projects the
+# built Object AS a vlan (the stratt.dev/project-kind stamp) with its net.vlan Facet.
+name: vlan-build
+steps:
+  - name: approve
+    gate:
+      approvers:
+        teams: [platform-admins]
+      timeoutSeconds: 86400
+  - name: build
+    needs: [approve]
+    action: crossplane/provision
+    credentialRefs: [crossplane-dev]
+    params:
+      group: kubernetes.crossplane.io
+      version: v1alpha2
+      resource: objects
+      kind: Object
+      name: net-vlan
+      readySeconds: 120
+      projectKind: vlan
+      identityScheme: crossplane.claim
+      projectLabels:
+        stratt.intent/singleton: Intent/Vlan/net-vlan
+      spec:
+        providerConfigRef:
+          name: default
+        forProvider:
+          manifest:
+            apiVersion: v1
+            kind: ConfigMap
+            metadata:
+              name: vlan-net-vlan
+              namespace: crossplane-system
+            data:
+              vid: "100"

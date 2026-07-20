@@ -1,0 +1,38 @@
+# linux-onboard — the L3 onboarding construct (ADR-0055): a gated lifecycle DAG that
+# composes plugin Actuators across landscapes. Provision is a Gate → Action seam
+# (§5 Flow 1 "gate before build" — NEVER a silent auto-launch), then configure over
+# the port. The provision Step's `action` is the LANDSCAPE BINDING: awsec2/create-vm
+# here (moto in dev), swappable for a crossplane/opentofu/vsphere Action without
+# touching the rest of the estate (§1.4/§5). Cross-Step output binding
+# ({{.steps.provision.outputs.*}}) threads the built instance downstream (ADR-0031).
+# NOTE: cert (certissuer) + app (helm) Steps are the next lifecycle slice.
+name: linux-onboard
+steps:
+  - name: approve
+    gate:
+      approvers:
+        teams: [platform-admins]
+      timeoutSeconds: 86400 # 24h to approve the build
+  - name: provision
+    needs: [approve]
+    action: awsec2/create-vm # landscape binding — swap for crossplane/opentofu/vsphere
+    params:
+      region: us-east-1
+      endpoint: http://moto:5000 # dev stand-in; prod omits (real AWS)
+      instanceType: t3.micro
+      ami: ami-0linuxbaseline000
+      name: linux-fleet-node
+  - name: configure
+    needs: [provision]
+    viewName: linux-fleet
+    actuator: ansible
+    params:
+      play: |
+        - name: Baseline a freshly-provisioned Linux server
+          hosts: all
+          become: true
+          gather_facts: false
+          tasks:
+            - name: Record onboarding
+              ansible.builtin.debug:
+                msg: "onboarded into linux-fleet"

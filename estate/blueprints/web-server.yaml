@@ -1,0 +1,29 @@
+# web-server — the L2 onboarding Blueprint (ADR-0055, ADR-0083): the DEFAULTED,
+# overridable unit for the "web server" capability on a group of hosts. An operator
+# declares the simplest form — an Intent/Application naming the app — and THIS Blueprint
+# supplies the sane DEFAULTS (G6, ADR-0083 §5): the listen port, the channel. A field the
+# Intent omits takes the default; a field it sets overrides, via explicit overlay layering
+# (no precedence field, §2.4/§4.1). The route observes the desired config and routes drift
+# to a GATED ansible remediation — the PLUGIN materializes the state; core never learns
+# "web server" or "ansible" (§1.4). "web-server" is a VALUE inside Intent/Application,
+# never a core kind (§9). Co-management (ADR-0083 §3) fans out by ADDING routes — a cert
+# route (certissuer), a package route (software.*) — the per-capability route map; each
+# is an independently-metered §7.6 channel. This slice ships the config route.
+name: web-server
+version: 1
+for: Intent/Application
+severity: warning
+dampingObservations: 1
+# Sane defaults for the composed Intent/Application spec — the BASE overlay layer that an
+# Assignment's Intent overrides. Validated against the Application Contract at ingestion
+# (§1.1 seam), partial-tolerant.
+defaults:
+  channel: stable
+  port: "8080"
+routes:
+  - observe:
+      namespace: app.config
+      path: port
+      equals: "{{.spec.port}}" # ← resolved from the Blueprint default OR the Intent override
+    claim: exclusive
+    remediationWorkflow: web-server-configure

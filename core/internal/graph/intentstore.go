@@ -129,7 +129,9 @@ func (s *Store) ListAssignments(ctx context.Context) ([]types.Assignment, error)
 		if err := json.Unmarshal(spec, &a); err != nil {
 			return nil, fmt.Errorf("graph: decode assignment spec: %w", err)
 		}
-		out = append(out, a)
+		if types.InScope(a.Environments, s.environment) { // env scope (ADR-0057)
+			out = append(out, a)
+		}
 	}
 	return out, rows.Err()
 }

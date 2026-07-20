@@ -150,8 +150,14 @@ func (h *Host) Register(ctx context.Context) error {
 	if m.GetPluginId() != h.grant.PluginIdentity {
 		return fmt.Errorf("pluginhost: manifest identity %q != granted identity %q", m.GetPluginId(), h.grant.PluginIdentity)
 	}
-	if m.GetClass() != pluginv1.PluginClass_PLUGIN_CLASS_SYNCER {
-		return fmt.Errorf("pluginhost: plugin %q is not a Syncer (class %v)", h.grant.PluginIdentity, m.GetClass())
+	// Gate on the OBSERVE verb, not a singular Class: a full-featured plugin may be
+	// BOTH an Actuator and a Syncer (e.g. Crossplane BUILDS its Claims and OBSERVES
+	// their as-built state as a registered Source). Consistent with the Actuator and
+	// Emitter paths, which gate on identity/verb and never on Class — "the Manifest is
+	// advertisement; the grant is truth" (ADR-0046). The Class field remains the
+	// plugin's declared primary kind; Verbs is the authoritative capability surface.
+	if !manifestHasVerb(m, pluginv1.Verb_VERB_OBSERVE) {
+		return fmt.Errorf("pluginhost: plugin %q cannot Observe (verbs %v) — a Syncer grant needs the OBSERVE verb", h.grant.PluginIdentity, m.GetVerbs())
 	}
 
 	// Every REQUESTED facet namespace must be granted. The sha256 of a declared
@@ -180,7 +186,8 @@ func (h *Host) Register(ctx context.Context) error {
 
 	ref := h.grant.WriterRef()
 	for _, ns := range h.grant.FacetNamespaces {
-		if err := h.store.RegisterFacetOwner(ctx, types.FacetOwner{Namespace: ns, OwnerKind: "syncer", OwnerRef: ref}); err != nil {
+		authoritative := contains(h.grant.AuthoritativeFacetNamespaces, ns)
+		if err := h.store.RegisterFacetOwner(ctx, types.FacetOwner{Namespace: ns, OwnerKind: "syncer", OwnerRef: ref, Authoritative: authoritative}); err != nil {
 			return fmt.Errorf("pluginhost: register facet owner %q: %w", ns, err)
 		}
 	}
@@ -232,6 +239,17 @@ func (h *Host) SyncLoop(ctx context.Context, interval time.Duration) error {
 	}
 }
 
+// manifestHasVerb reports whether the plugin advertises a verb — the capability
+// gate for a full-featured (multi-verb) plugin registering under one verb's grant.
+func manifestHasVerb(m *pluginv1.Manifest, v pluginv1.Verb) bool {
+	for _, got := range m.GetVerbs() {
+		if got == v {
+			return true
+		}
+	}
+	return false
+}
+
 func (h *Host) provenance() types.Provenance {
 	return types.Provenance{
 		WriterKind: types.WriterSyncer,
@@ -260,7 +278,8 @@ func (h *Host) Sync(ctx context.Context) error {
 	}
 	prov := h.provenance()
 	projector := h.store.NormalizerProjector()
-	seen := map[string][]string{} // tombstone scheme -> seen values this full sync
+	seen := map[string][]string{}        // tombstone scheme -> seen values this full sync
+	seenRels := map[string][][2]string{} // relType -> [ [fromID, toID], … ] this full sync (ADR-0081 MF-2)
 
 	for {
 		resp, err := stream.Recv()
@@ -324,6 +343,7 @@ func (h *Host) Sync(ctx context.Context) error {
 			if err := projector.UpsertRelation(ctx, prov, rel.GetType(), pr.fromID, toID); err != nil {
 				return fmt.Errorf("pluginhost: upsert relation: %w", err)
 			}
+			seenRels[rel.GetType()] = append(seenRels[rel.GetType()], [2]string{pr.fromID, toID})
 		}
 
 		for _, g := range resp.GetGone() {
@@ -336,10 +356,68 @@ func (h *Host) Sync(ctx context.Context) error {
 			}
 		}
 
+		// GoneRelations: a delta feed's retracted edges (ADR-0059 decision 7a — Syncer
+		// delta retraction). Both endpoints are resolved BY IDENTITY and tier+grant
+		// gated exactly as a relation TARGET is; an already-gone endpoint means the
+		// endpoint-tombstone cascade (7b) already retracted the edge, so it is a no-op.
+		for _, gr := range resp.GetGoneRelations() {
+			if ok, reason := h.grant.allowsIdentity(gr.GetFromScheme()); !ok {
+				h.reject("relation-gone-from", gr.GetFromScheme(), reason)
+				continue
+			}
+			if ok, reason := h.grant.allowsIdentity(gr.GetToScheme()); !ok {
+				h.reject("relation-gone-to", gr.GetToScheme(), reason)
+				continue
+			}
+			fromID, ffound, err := h.store.EntityIDByIdentity(ctx, gr.GetFromScheme(), gr.GetFromValue())
+			if err != nil {
+				return fmt.Errorf("pluginhost: resolve gone-relation from: %w", err)
+			}
+			toID, tfound, err := h.store.EntityIDByIdentity(ctx, gr.GetToScheme(), gr.GetToValue())
+			if err != nil {
+				return fmt.Errorf("pluginhost: resolve gone-relation to: %w", err)
+			}
+			if !ffound || !tfound {
+				continue // an endpoint already gone → its cascade retracted the edge
+			}
+			if err := projector.RetractRelation(ctx, gr.GetType(), fromID, toID); err != nil {
+				return fmt.Errorf("pluginhost: retract gone relation: %w", err)
+			}
+		}
+
 		if resp.GetFullSyncComplete() {
 			for _, s := range h.grant.TombstoneSchemes {
 				if _, err := projector.TombstoneAbsent(ctx, prov, s, seen[s]); err != nil {
 					return fmt.Errorf("pluginhost: tombstone absent %q: %w", s, err)
+				}
+			}
+			// Per-source full-sync delete-and-replace of this Source's OWN observed
+			// edges (ADR-0081 MF-2): a reparented target — an edge whose endpoints both
+			// still exist but that was not re-emitted — is retracted here, which neither
+			// GoneRelations (a full sync sends none) nor the endpoint-tombstone cascade
+			// (both endpoints live) would collect. Sweeps every relation type the Source
+			// emitted this cycle OR previously owned (so a type it stopped emitting
+			// entirely is also cleared). Scoped to this Source — never another's edges.
+			relTypes, err := h.store.RelationTypesBySource(ctx, h.source.ID)
+			if err != nil {
+				return fmt.Errorf("pluginhost: relation types: %w", err)
+			}
+			typeSet := map[string]struct{}{}
+			for _, t := range relTypes {
+				typeSet[t] = struct{}{}
+			}
+			for t := range seenRels {
+				typeSet[t] = struct{}{}
+			}
+			for t := range typeSet {
+				kf := make([]string, 0, len(seenRels[t]))
+				kt := make([]string, 0, len(seenRels[t]))
+				for _, pair := range seenRels[t] {
+					kf = append(kf, pair[0])
+					kt = append(kt, pair[1])
+				}
+				if _, err := projector.RetractSourceRelationPresenceExcept(ctx, h.source.ID, t, kf, kt); err != nil {
+					return fmt.Errorf("pluginhost: replace source relations %q: %w", t, err)
 				}
 			}
 		}
@@ -377,6 +455,25 @@ type ActionInvoke struct {
 type ActionEntity struct {
 	Kind         string
 	IdentityKeys map[string]string
+	// Labels the Action projects (ADR-0058 §6 estate overlay). Carried through to
+	// the single Run-provenance projection; unlike a Syncer's labels these are not
+	// ownership-gated — a Run write bypasses the label-owner trigger (§4.3), and
+	// they are the operator's build-declared overlay, not plugin-owned keys.
+	Labels map[string]string
+	// Relations the Action projects (a build's placed-in edge, ADR-0059) — the full
+	// build observation, not just identity: a build creates infra IN a subnet and
+	// projects the topology edge. Targeted BY IDENTITY and gated exactly as a Syncer's
+	// (the target scheme must be granted; an unresolved target drops the edge, never
+	// vivifies). Facets are NOT here by design — those arrive from the Syncer's poll.
+	Relations []GovernedRelation
+}
+
+// GovernedRelation is a build's write-back edge to a target named by identity — the
+// governed twin of a Syncer's ObservedRelation (ADR-0047 §1 / ADR-0059).
+type GovernedRelation struct {
+	Type     string
+	ToScheme string
+	ToValue  string
 }
 
 // RawInvokeResult is the governed result of an Action invocation with NOTHING
@@ -453,7 +550,22 @@ func (h *Host) InvokeRaw(ctx context.Context, req ActionInvoke) (RawInvokeResult
 				out.Rejections = append(out.Rejections, r)
 				continue
 			}
-			out.Entities = append(out.Entities, ActionEntity{Kind: e.GetKind(), IdentityKeys: ids})
+			// Relations: a build's write-back edges (ADR-0059), each targeting BY
+			// IDENTITY. The target scheme is tier+grant gated exactly as an emitted
+			// identity key (ADR-0047 §1); a rejected target drops the edge, never
+			// vivifies. Projection (resolve target + upsert) is the single Run-provenance
+			// write in RecordActionResult, mirroring the Syncer's two-phase resolve.
+			var rels []GovernedRelation
+			for _, rel := range e.GetRelations() {
+				if ok, reason := h.grant.allowsIdentity(rel.GetToScheme()); !ok {
+					r := Rejection{Kind: "relation-target", Detail: rel.GetToScheme(), Reason: "invoke: " + reason}
+					h.reject(r.Kind, r.Detail, r.Reason)
+					out.Rejections = append(out.Rejections, r)
+					continue
+				}
+				rels = append(rels, GovernedRelation{Type: rel.GetType(), ToScheme: rel.GetToScheme(), ToValue: rel.GetToValue()})
+			}
+			out.Entities = append(out.Entities, ActionEntity{Kind: e.GetKind(), IdentityKeys: ids, Labels: e.GetLabels(), Relations: rels})
 		}
 		for _, c := range res.GetProvisionedCreds() {
 			if !h.ownsCred(c.GetName()) {
@@ -487,11 +599,29 @@ func (h *Host) Invoke(ctx context.Context, runID, action string, args []byte, dr
 	prov := types.Provenance{WriterKind: types.WriterRun, WriterRef: runID, SourceID: h.source.ID, At: time.Now().UTC()}
 	projector := h.store.RunProjector()
 	for _, e := range raw.Entities {
-		gids, err := projector.UpsertEntities(ctx, prov, []graph.EntityUpsert{{Kind: e.Kind, IdentityKeys: e.IdentityKeys}})
+		gids, err := projector.UpsertEntities(ctx, prov, []graph.EntityUpsert{{Kind: e.Kind, IdentityKeys: e.IdentityKeys, Labels: e.Labels}})
 		if err != nil {
 			return out, fmt.Errorf("pluginhost: invoke project: %w", err)
 		}
 		out.ProvisionedEntity = append(out.ProvisionedEntity, gids...)
+		// The build's topology edges (ADR-0059): resolve BY IDENTITY, upsert
+		// Run-provenance, drop an unresolved target (no vivify) — same as the orchestrated
+		// RecordActionResult path, so projection stays one shape.
+		for _, rel := range e.Relations {
+			toID, found, err := h.store.EntityIDByIdentity(ctx, rel.ToScheme, rel.ToValue)
+			if err != nil {
+				return out, fmt.Errorf("pluginhost: invoke resolve relation: %w", err)
+			}
+			if !found {
+				// Visible drop (§1.8), mirroring the Syncer's resolve rejection — never a
+				// silent vanish.
+				h.reject("relation", rel.Type, "target "+rel.ToScheme+"="+rel.ToValue+" not found; edge dropped (no vivify)")
+				continue
+			}
+			if err := projector.UpsertRelation(ctx, prov, rel.Type, gids[0], toID); err != nil {
+				return out, fmt.Errorf("pluginhost: invoke project relation: %w", err)
+			}
+		}
 	}
 	return out, nil
 }
@@ -499,10 +629,13 @@ func (h *Host) Invoke(ctx context.Context, runID, action string, args []byte, dr
 // ApplyTarget is one core-resolved actuation target, passed LEGIBLY to the plugin
 // (ADR-0047 §1.1): the target set carries blast-radius/authz weight and is the
 // correlation key, so it is NEVER baked into the opaque desired payload. Name is
-// the confused-deputy gate key; Vars are tool connection vars; IdentityKeys
+// the confused-deputy gate key; Address is the typed reachability coordinate
+// (ADR-0084 — the plugin renders its own connection var from it, the spine never
+// authors one); Vars are genuinely tool-authored vars only; IdentityKeys
 // re-correlate write-back to the target Entity.
 type ApplyTarget struct {
 	Name         string
+	Address      string
 	IdentityKeys map[string]string
 	Vars         map[string]string
 }
@@ -668,7 +801,7 @@ func (h *Host) ApplyRaw(ctx context.Context, req ApplyInvoke) (RawApplyResult, e
 	targets := make([]*pluginv1.ApplyTarget, 0, len(req.Targets))
 	for _, t := range req.Targets {
 		resolved[t.Name] = true
-		targets = append(targets, &pluginv1.ApplyTarget{Name: t.Name, IdentityKeys: t.IdentityKeys, Vars: t.Vars})
+		targets = append(targets, &pluginv1.ApplyTarget{Name: t.Name, Address: t.Address, IdentityKeys: t.IdentityKeys, Vars: t.Vars})
 	}
 	creds := make([]*pluginv1.CredentialRef, 0, len(req.CredentialRefs))
 	for _, n := range req.CredentialRefs {

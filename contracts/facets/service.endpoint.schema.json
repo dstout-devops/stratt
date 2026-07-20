@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "stratt:contract:facets/service.endpoint:v1",
+  "title": "service.endpoint Facet",
+  "description": "Demanded by the K8s Services collector (ADR-0081): the capability seam of a `service` Entity — where it is reachable and how. A projection of the service's actual state (§1.2, K8s Service spec), observed by the collector; never authored (the writable-CMDB non-goal). `protocol` is an OPEN string (§1.4). Single §2.1 write-owner. Validated at the Projector write path (enforce_write_path).",
+  "type": "object",
+  "properties": {
+    "clusterAddress": { "type": "string", "description": "In-cluster address (ClusterIP), when applicable." },
+    "type": { "type": "string", "description": "Service exposure (ClusterIP | NodePort | LoadBalancer | ExternalName)." },
+    "ports": {
+      "type": "array",
+      "description": "The exposed ports.",
+      "items": {
+        "type": "object",
+        "properties": {
+          "port": { "type": "integer" },
+          "targetPort": { "type": "string" },
+          "protocol": { "type": "string", "description": "OPEN: http | grpc | tcp | udp | queue | … (an axis of variation, not a namespace-per-protocol)." },
+          "name": { "type": "string" }
+        },
+        "required": ["port"],
+        "additionalProperties": false
+      }
+    },
+    "selector": {
+      "type": "object",
+      "description": "The label selector naming what backs this service (the workloads it fronts).",
+      "additionalProperties": { "type": "string" }
+    }
+  },
+  "required": ["ports"],
+  "additionalProperties": false
+}

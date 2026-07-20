@@ -1,0 +1,22 @@
+# Real-time path (ADR-0039): the Salt event-bus Emitter publishes each Salt
+# event onto the shipped emitter-event stream as {tag, stamp, data}; the existing
+# Trigger engine matches it by emitter name + a CEL `when` and launches. This
+# demonstrates a minion-start event firing an onboarding Workflow — the payoff of
+# a stream-subscriber Emitter over cadenced projection alone.
+#
+# The Emitter's payload is flat: CEL sees event.tag / event.stamp / event.data.*
+# (the rules binding). The salt Emitter needs NO registration — Triggers match an
+# emitter by the name string it publishes under (STRATT_SALT_EMITTER_NAME=salt).
+name: salt-minion-start
+kind: event
+# Environment scope (ADR-0057): the production slice. This fires off the Salt
+# event bus and launches salt-minion-onboard — neither the Salt Emitter nor that
+# Workflow runs in the dev cell — so a dev daemon (STRATT_ENVIRONMENT=dev) skips
+# it. (The Salt Emitter itself is inert here: nothing publishes to its stream.)
+environments: [prod]
+emitter: salt
+when: 'event.tag.startsWith("salt/minion/") && event.tag.endsWith("/start")'
+cooldownSeconds: 300
+# salt-minion-onboard is an operator-declared Workflow (illustrative here).
+workflowName: salt-minion-onboard
+principal: svc-salt-events

@@ -43,7 +43,7 @@ selector:
 	writeDecl(t, root, "all-vms.yml", "name: all-vms\nselector:\n  kinds: [vm]\n")
 	writeDecl(t, root, "notes.txt", "not a declaration") // ignored
 
-	parsed, err := ParseDir(root)
+	parsed, err := ParseDir(root, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -62,26 +62,26 @@ selector:
 
 func TestParseDirRejects(t *testing.T) {
 	// Missing views/ directory is an error, never an empty (prune-all) set.
-	if _, err := ParseDir(t.TempDir()); err == nil {
+	if _, err := ParseDir(t.TempDir(), nil); err == nil {
 		t.Fatal("missing views/ must be an error")
 	}
 
 	root := t.TempDir()
 	writeDecl(t, root, "a.yaml", "name: dup\nselector: {kinds: [vm]}\n")
 	writeDecl(t, root, "b.yaml", "name: dup\nselector: {kinds: [host]}\n")
-	if _, err := ParseDir(root); err == nil || !strings.Contains(err.Error(), "declared in both") {
+	if _, err := ParseDir(root, nil); err == nil || !strings.Contains(err.Error(), "declared in both") {
 		t.Fatalf("duplicate names must be rejected, got %v", err)
 	}
 
 	root = t.TempDir()
 	writeDecl(t, root, "bad.yaml", "name: x\nselektor: {}\n") // typo field
-	if _, err := ParseDir(root); err == nil {
+	if _, err := ParseDir(root, nil); err == nil {
 		t.Fatal("unknown fields must be rejected (KnownFields)")
 	}
 
 	root = t.TempDir()
 	writeDecl(t, root, "noname.yaml", "selector: {kinds: [vm]}\n")
-	if _, err := ParseDir(root); err == nil {
+	if _, err := ParseDir(root, nil); err == nil {
 		t.Fatal("missing name must be rejected")
 	}
 }
@@ -266,7 +266,7 @@ injection:
   - { key: password, as: env, name: VC_PASS }
   - { key: username, as: file, name: user }
 `)
-	parsed, err := ParseDir(root)
+	parsed, err := ParseDir(root, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -290,7 +290,7 @@ injection:
 		bad := t.TempDir()
 		writeDecl(t, bad, "v.yaml", "name: v\nselector: {kinds: [vm]}\n")
 		writeCredRef(t, bad, "x.yaml", doc)
-		if _, err := ParseDir(bad); err == nil {
+		if _, err := ParseDir(bad, nil); err == nil {
 			t.Fatalf("invalid %s must be rejected", name)
 		}
 	}
@@ -298,7 +298,7 @@ injection:
 	// credential-refs/ absent → valid (pre-ADR-0009 repos).
 	old := t.TempDir()
 	writeDecl(t, old, "v.yaml", "name: v\nselector: {kinds: [vm]}\n")
-	if _, err := ParseDir(old); err != nil {
+	if _, err := ParseDir(old, nil); err != nil {
 		t.Fatalf("missing credential-refs dir must be fine: %v", err)
 	}
 }
@@ -411,7 +411,7 @@ actuator: ansible
 credentialRefs: [vcenter-dev]
 principal: "381351939796919559"
 `)
-	parsed, err := ParseDir(root)
+	parsed, err := ParseDir(root, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -437,7 +437,7 @@ principal: "381351939796919559"
 		bad := t.TempDir()
 		writeDecl(t, bad, "v.yaml", "name: v\nselector: {kinds: [vm]}\n")
 		writeTrigger(t, bad, "x.yaml", doc)
-		if _, err := ParseDir(bad); err == nil {
+		if _, err := ParseDir(bad, nil); err == nil {
 			t.Fatalf("invalid %s must be rejected", name)
 		}
 	}
@@ -445,7 +445,7 @@ principal: "381351939796919559"
 	// triggers/ absent → valid (repos predating ADR-0010).
 	old := t.TempDir()
 	writeDecl(t, old, "v.yaml", "name: v\nselector: {kinds: [vm]}\n")
-	if _, err := ParseDir(old); err != nil {
+	if _, err := ParseDir(old, nil); err != nil {
 		t.Fatalf("absent triggers/ must be valid: %v", err)
 	}
 }
@@ -556,7 +556,7 @@ steps:
     actuator: script
     params: { script: "echo cleanup" }
 `)
-	parsed, err := ParseDir(root)
+	parsed, err := ParseDir(root, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -592,7 +592,7 @@ steps:
 		bad := t.TempDir()
 		writeDecl(t, bad, "v.yaml", "name: v\nselector: {kinds: [vm]}\n")
 		writeWorkflow(t, bad, "x.yaml", doc)
-		if _, err := ParseDir(bad); err == nil {
+		if _, err := ParseDir(bad, nil); err == nil {
 			t.Fatalf("invalid %s must be rejected", name)
 		}
 	}
@@ -602,7 +602,7 @@ steps:
 	writeDecl(t, act, "v.yaml", "name: v\nselector: {kinds: [vm]}\n")
 	writeWorkflow(t, act, "cert.yaml",
 		"name: cert-revoke\nsteps:\n  - name: revoke\n    action: certissuer/revoke\n    credentialRefs: [cert-issuer]\n    params: {addr: 'http://x', serial: 'a:b'}\n")
-	parsedAct, err := ParseDir(act)
+	parsedAct, err := ParseDir(act, nil)
 	if err != nil {
 		t.Fatalf("valid action workflow must parse: %v", err)
 	}
@@ -618,14 +618,14 @@ steps:
 		"name: seam\nsteps:\n"+
 			"  - {name: provision, action: awsec2/create-vm, params: {region: us-east-1, ami: ami-1}}\n"+
 			"  - name: configure\n    needs: [provision]\n    viewName: v\n    actuator: script\n    params: {script: '{{.steps.provision.outputs.instanceId}}'}\n")
-	if _, err := ParseDir(bind); err != nil {
+	if _, err := ParseDir(bind, nil); err != nil {
 		t.Fatalf("steps-namespace binding must parse: %v", err)
 	}
 
 	// workflows/ absent → valid (repos predating ADR-0011).
 	old := t.TempDir()
 	writeDecl(t, old, "v.yaml", "name: v\nselector: {kinds: [vm]}\n")
-	if _, err := ParseDir(old); err != nil {
+	if _, err := ParseDir(old, nil); err != nil {
 		t.Fatalf("absent workflows/ must be valid: %v", err)
 	}
 }
@@ -686,5 +686,74 @@ func TestWorkflowPlanApplyLifecycle(t *testing.T) {
 	}
 	if _, err := s.GetWorkflow(ctx, "patch"); err == nil {
 		t.Fatal("pruned workflow should be gone")
+	}
+}
+
+// TestBlueprintDefaultsCrossContractSeam proves the guardian §1.1 fix (G6 slice 2): a
+// Blueprint's `defaults` must cross the composed kind's Contract seam like an Intent's
+// own spec — an author-supplied value cannot reach a compiled Baseline unvalidated.
+// Partial-tolerant: a subset passes; a schema-violating value is rejected at ingestion.
+func TestBlueprintDefaultsCrossContractSeam(t *testing.T) {
+	base := types.Blueprint{
+		Name: "webapp", Version: 1, For: types.IntentApplication,
+		Severity: types.SeverityWarning,
+		Routes: []types.BlueprintRoute{{
+			Observe: types.FacetExpectation{Namespace: "app.config", Equals: json.RawMessage(`"x"`)},
+			Claim:   types.ClaimAdditive,
+		}},
+	}
+	// A partial, well-typed defaults blob passes (channel is a string per the schema),
+	// even though it omits other fields — defaults are a subset the Intent completes.
+	ok := base
+	ok.Defaults = map[string]any{"channel": "stable"}
+	if err := ValidateBlueprint(ok); err != nil {
+		t.Fatalf("valid partial defaults must pass the Contract seam: %v", err)
+	}
+	// A schema-violating default (channel is typed string; here a number) is rejected.
+	bad := base
+	bad.Defaults = map[string]any{"channel": 123}
+	if err := ValidateBlueprint(bad); err == nil {
+		t.Fatal("a schema-violating Blueprint default must be rejected at ingestion (§1.1 seam)")
+	}
+}
+
+// TestEstateOnboardingTemplateReconciles proves G5 (ADR-0055/ADR-0083): the estate/
+// onboarding template — the DEFAULTED, overridable web-server unit — is valid CaC. It
+// parses the whole estate/ tree (so the §1.1 Contract seam / ValidateBlueprint runs over
+// the real web-server defaults), and asserts the defaulted/overridable shape: the
+// Blueprint carries the G6 defaults, the minimal Intent OMITS the overridable field, and
+// the override Intent SETS it.
+func TestEstateOnboardingTemplateReconciles(t *testing.T) {
+	root := filepath.Join("..", "..", "..", "estate")
+	decls, err := ParseDir(root, nil)
+	if err != nil {
+		t.Fatalf("estate/ must parse as valid CaC (incl. the web-server defaults §1.1 seam): %v", err)
+	}
+
+	var bp *types.Blueprint
+	for i := range decls.Blueprints {
+		if decls.Blueprints[i].Name == "web-server" {
+			bp = &decls.Blueprints[i]
+		}
+	}
+	if bp == nil {
+		t.Fatal("web-server Blueprint missing from estate/")
+	}
+	if bp.For != types.IntentApplication {
+		t.Fatalf("web-server Blueprint must be for Intent/Application, got %q", bp.For)
+	}
+	if bp.Defaults["port"] != "8080" || bp.Defaults["channel"] != "stable" {
+		t.Fatalf("web-server Blueprint must carry the G6 defaults {port:8080, channel:stable}, got %v", bp.Defaults)
+	}
+
+	specs := map[string]map[string]any{}
+	for _, in := range decls.Intents {
+		specs[in.Name] = in.Spec
+	}
+	if _, hasPort := specs["web-server"]["port"]; hasPort {
+		t.Fatal("the minimal web-server Intent must OMIT port (rely on the Blueprint default) — the 'simplest form'")
+	}
+	if specs["web-server-secure"]["port"] != "443" {
+		t.Fatalf("the override Intent must SET port=443 (the 'optional override'), got %v", specs["web-server-secure"]["port"])
 	}
 }

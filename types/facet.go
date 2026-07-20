@@ -21,8 +21,10 @@ type Facet struct {
 	Provenance Provenance `json:"provenance"`
 }
 
-// FacetOwner is one row of the facet-ownership registry (charter §2.1):
-// every Facet namespace has exactly one declared write owner, scoped by View.
+// FacetOwner is one row of the facet-ownership registry (charter §2.1): MANY
+// sources may be registered to write a namespace (ADR-0060), each retaining its
+// own per-source Facet row. `Authoritative` names at most one of them the
+// effective "truth" that a scalar read resolves to.
 type FacetOwner struct {
 	Namespace string `json:"namespace"`
 	// OwnerKind is who may write the namespace: a Syncer, a Blueprint output,
@@ -31,6 +33,12 @@ type FacetOwner struct {
 	OwnerRef  string `json:"ownerRef"`
 	// ViewScope optionally narrows ownership to Entities in a View.
 	ViewScope string `json:"viewScope,omitempty"`
+	// Authoritative marks this owner the declared effective "truth" for the
+	// namespace (ADR-0060): when many sources project it, a scalar read resolves
+	// to THIS owner's value. At most one authoritative owner per namespace (§2.4,
+	// enforced by a partial unique index). Undeclared → the read fails safe + a
+	// contention Finding. sources/ CaC (ADR-0056) later declares this from Git.
+	Authoritative bool `json:"authoritative,omitempty"`
 }
 
 // LabelOwner is one row of the Entity-label ownership registry (charter §2.1,

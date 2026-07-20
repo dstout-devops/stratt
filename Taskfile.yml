@@ -164,6 +164,7 @@ tasks:
       - task: lint
       - task: generate:check
       - task: proto:check
+      - task: migrate:lint
       - task: test
 
   dev:up:
@@ -186,6 +187,58 @@ tasks:
     desc: Provision the dev e2e service identities in Zitadel (ADR-0009 slice 5)
     cmds:
       - deploy/dev/zitadel-bootstrap.sh
+
+  migrate:lint:
+    desc: >
+      Expand/contract lint (UPG-1, ADR-0078): fail if a migration's Up section has
+      a DESTRUCTIVE change (drop/rename/type-change/set-not-null) that would break
+      the previous release's still-running replicas during a rolling upgrade. A
+      genuine contract step (a later release, after every replica is new) opts out
+      with a `-- expand/contract-ok: <reason>` marker in the file.
+    cmds:
+      - |
+        set -eu
+        dir=core/internal/graph/migrations
+        rc=0
+        for f in "$dir"/*.sql; do
+          up=$(awk '/-- \+goose Up/{u=1;next} /-- \+goose Down/{u=0} u' "$f")
+          if printf '%s\n' "$up" | grep -iqE 'DROP +TABLE|DROP +COLUMN|DROP +CONSTRAINT|RENAME +(COLUMN|TO)|ALTER +COLUMN.*TYPE|SET +NOT +NULL'; then
+            if grep -qiE 'expand/contract-ok' "$f"; then
+              echo "  ~ $(basename "$f"): destructive Up, acknowledged (expand/contract-ok)"
+            else
+              echo "  ✗ $(basename "$f"): destructive change in Up would break the previous release's replicas during a rolling upgrade (UPG-1). Split into a later contract release, or annotate '-- expand/contract-ok: <reason>'."
+              rc=1
+            fi
+          fi
+        done
+        [ "$rc" = 0 ] && echo "✓ migrations are expand/contract-safe" || exit 1
+
+  dr:restore-test:
+    desc: >
+      DR restore drill (enterprise-readiness DR-1): pg_dump the graph exactly as
+      the backup CronJob does, restore it into a throwaway database, and assert a
+      known table survives. Proves the backup FORMAT restores — a backup you have
+      never restored is not a backup. Needs the dev substrate (task dev:up).
+    vars:
+      URL: '{{.STRATT_DATABASE_URL | default "postgres://stratt:stratt-dev@localhost:5432/stratt"}}'
+    cmds:
+      - |
+        set -euo pipefail
+        base="{{.URL}}"; base="${base%/*}"
+        tmp="stratt_restore_test_$$"
+        dump="$(mktemp -t stratt-dr-XXXX.sql.gz)"
+        # The dump client major MUST be >= the server major (the backup CronJob's
+        # postgres:18 image guarantees this in-cluster). pipefail makes a failed
+        # pg_dump abort the drill rather than write an empty archive.
+        echo "→ dump (as the CronJob does)"
+        pg_dump "{{.URL}}" | gzip > "$dump" || { echo "pg_dump failed — ensure the client major >= server (the CronJob uses postgres:18)"; exit 1; }
+        trap 'rm -f "$dump"; psql "$base/postgres" -c "DROP DATABASE IF EXISTS $tmp WITH (FORCE)" >/dev/null 2>&1 || true' EXIT
+        echo "→ restore into $tmp"; createdb "$base/$tmp" >/dev/null 2>&1 || psql "$base/postgres" -c "CREATE DATABASE $tmp"
+        gunzip -c "$dump" | psql "$base/$tmp" >/dev/null
+        echo "→ verify the (non-rebuildable) audit chain table survived the roundtrip"
+        n=$(psql "$base/$tmp" -tAc "SELECT count(*) FROM information_schema.tables WHERE table_schema='audit' AND table_name='event'")
+        test "$n" = "1" || { echo "RESTORE FAILED: audit.event missing after restore"; exit 1; }
+        echo "✓ DR restore drill passed (dump→restore→verify)"
 
   dev:openbao:bootstrap:
     desc: Provision the dev CLM in OpenBao — PKI engine, root CA, role, demo certs (ADR-0030)
@@ -321,7 +374,7 @@ tasks:
 
   chart:lint:
     desc: Lint + render the Helm chart (ADR-0013)
-    deps: [tools:helm]
+    deps: [tools:helm, dev:stage-estate]
     cmds:
       - "{{.HELM}} lint deploy/charts/stratt"
       - "{{.HELM}} template stratt deploy/charts/stratt > /dev/null"
@@ -368,6 +421,30 @@ tasks:
       - docker build -f plugins/vcenter/Dockerfile -t stratt-plugin-vcenter:dev .
       - go run sigs.k8s.io/kind@v{{.KIND_VER}} load docker-image stratt-plugin-vcenter:dev --name {{.KIND_CLUSTER}}
 
+  image:declared-plugin:
+    desc: Build the declared-estate gRPC Syncer plugin image and load it into the kind cluster
+    cmds:
+      - docker build -f plugins/declared/Dockerfile -t stratt-plugin-declared:dev .
+      - go run sigs.k8s.io/kind@v{{.KIND_VER}} load docker-image stratt-plugin-declared:dev --name {{.KIND_CLUSTER}}
+
+  image:awsec2-plugin:
+    desc: Build the awsec2 gRPC plugin image (create-vm build Action) and load it into the kind cluster
+    cmds:
+      - docker build -f plugins/awsec2/Dockerfile -t stratt-plugin-awsec2:dev .
+      - go run sigs.k8s.io/kind@v{{.KIND_VER}} load docker-image stratt-plugin-awsec2:dev --name {{.KIND_CLUSTER}}
+
+  image:netbox-plugin:
+    desc: Build the NetBox topology Syncer plugin image (ADR-0059) and load it into the kind cluster
+    cmds:
+      - docker build -f plugins/netbox/Dockerfile -t stratt-plugin-netbox:dev .
+      - go run sigs.k8s.io/kind@v{{.KIND_VER}} load docker-image stratt-plugin-netbox:dev --name {{.KIND_CLUSTER}}
+
+  image:crossplane-plugin:
+    desc: Build the Crossplane build-Actuator plugin image (ADR-0059) and load it into the kind cluster
+    cmds:
+      - docker build -f plugins/crossplane/Dockerfile -t stratt-plugin-crossplane:dev .
+      - go run sigs.k8s.io/kind@v{{.KIND_VER}} load docker-image stratt-plugin-crossplane:dev --name {{.KIND_CLUSTER}}
+
   images:control-plane:
     desc: Build the CONTROL-PLANE images (no push/load) — the CI regression gate. Plugins & the EE image build in their OWN units (each plugin is its own build/CI unit, ADR-0046) — core CI never builds per-plugin (it must scale to hundreds of plugins).
     cmds:
@@ -375,9 +452,70 @@ tasks:
       - docker build -f deploy/docker/stratt-agent.Dockerfile -t stratt/stratt-agent:ci .
       - docker build -f deploy/docker/stratt-forwarder.Dockerfile -t stratt/stratt-forwarder:ci .
 
+  dev:stage-estate:
+    desc: Stage the reconciled /estate into the chart's inline-declarations path (Helm can't glob outside the chart)
+    cmds:
+      # /estate is the single source of truth; this git-ignored copy is what the
+      # inline-declarations ConfigMap globs. Mirror exactly (delete-extraneous) so
+      # a removed declaration doesn't linger in the staged tree.
+      - rm -rf {{.ROOT_DIR}}/deploy/charts/stratt/dev/declarations
+      - mkdir -p {{.ROOT_DIR}}/deploy/charts/stratt/dev/declarations
+      - cp -R {{.ROOT_DIR}}/estate/. {{.ROOT_DIR}}/deploy/charts/stratt/dev/declarations/
+
+  dev:managed-web:up:
+    desc: Deploy the REAL sshd/nginx managed node for the ADR-0084 convergence demo (keypair + machine-credential Secret + node, idempotent)
+    deps: [tools:kubectl]
+    vars:
+      KEYDIR: "{{.ROOT_DIR}}/deploy/dev/managed-web"
+    cmds:
+      - go run sigs.k8s.io/kind@v{{.KIND_VER}} export kubeconfig --name {{.KIND_CLUSTER}}
+      # A throwaway ed25519 keypair (idempotent): the PRIVATE half rides the
+      # web-machine CredentialRef (Secret web-machine-creds); the PUBLIC half is the
+      # node's authorized_keys. Material is git-ignored, never committed (§2.5).
+      - mkdir -p {{.KEYDIR}}
+      - test -f {{.KEYDIR}}/id_ed25519 || ssh-keygen -t ed25519 -N "" -C stratt-web-machine -f {{.KEYDIR}}/id_ed25519
+      # The machine credential the remediation Step use-checks + mounts (§2.5).
+      - "{{.KUBECTL}} --context {{.KIND_CONTEXT}} -n stratt create secret generic web-machine-creds --from-file=ssh-privatekey={{.KEYDIR}}/id_ed25519 --dry-run=client -o yaml | {{.KUBECTL}} --context {{.KIND_CONTEXT}} apply -f -"
+      # The node's authorized_keys (the public half).
+      - "{{.KUBECTL}} --context {{.KIND_CONTEXT}} -n stratt create secret generic managed-web-authorized-keys --from-file=authorized_keys={{.KEYDIR}}/id_ed25519.pub --dry-run=client -o yaml | {{.KUBECTL}} --context {{.KIND_CONTEXT}} apply -f -"
+      - "{{.KUBECTL}} --context {{.KIND_CONTEXT}} apply -f {{.ROOT_DIR}}/deploy/dev/managed-web.yaml"
+      - "{{.KUBECTL}} --context {{.KIND_CONTEXT}} -n stratt rollout status deploy/managed-web --timeout=120s"
+
+  dev:crossplane:
+    desc: Install REAL Crossplane + provider-kubernetes into kind for the topology build loop (ADR-0059, idempotent)
+    deps: [tools:helm, tools:kubectl]
+    cmds:
+      - go run sigs.k8s.io/kind@v{{.KIND_VER}} export kubeconfig --name {{.KIND_CLUSTER}}
+      - "{{.HELM}} repo add crossplane-stable https://charts.crossplane.io/stable --force-update"
+      - "{{.HELM}} repo update crossplane-stable"
+      - >-
+        {{.HELM}} --kube-context {{.KIND_CONTEXT}} upgrade --install crossplane
+        crossplane-stable/crossplane -n crossplane-system --create-namespace
+        --version 2.3.3 --wait --timeout 5m
+      # provider-kubernetes with a PINNED runtime SA (so RBAC can target it).
+      - |
+        cat <<'EOF' | {{.KUBECTL}} --context {{.KIND_CONTEXT}} apply -f -
+        apiVersion: pkg.crossplane.io/v1beta1
+        kind: DeploymentRuntimeConfig
+        metadata: { name: provider-kubernetes }
+        spec:
+          serviceAccountTemplate:
+            metadata: { name: provider-kubernetes }
+        ---
+        apiVersion: pkg.crossplane.io/v1
+        kind: Provider
+        metadata: { name: provider-kubernetes }
+        spec:
+          package: xpkg.upbound.io/crossplane-contrib/provider-kubernetes:v0.17.0
+          runtimeConfigRef: { name: provider-kubernetes }
+        EOF
+      - "{{.KUBECTL}} --context {{.KIND_CONTEXT}} wait --for=condition=Healthy provider/provider-kubernetes --timeout=180s"
+      # The subnet platform: ProviderConfig (InjectedIdentity) + confined provider RBAC.
+      - "{{.KUBECTL}} --context {{.KIND_CONTEXT}} apply -f {{.ROOT_DIR}}/deploy/dev/crossplane-subnet.yaml"
+
   dev:install:
     desc: Helm-install strattd (+ in-cluster plugins) into kind, wired to the compose substrate (idempotent)
-    deps: [tools:helm, tools:kubectl]
+    deps: [tools:helm, tools:kubectl, dev:stage-estate]
     vars:
       GW:
         sh: |
@@ -395,8 +533,9 @@ tasks:
           --set-string database.url="postgres://stratt:stratt-dev@${GW}:5432/stratt" \
           --set-string nats.url="nats://${GW}:4222" \
           --set-string temporal.address="${GW}:7233" \
-          --set-string "plugins[0].env.STRATT_VCENTER_URL=https://${GW}:8989/sdk" \
-          --set-string "plugins[0].hostEnv.STRATT_VCENTER_URL=https://${GW}:8989/sdk"
+          --set-string "plugins[1].env.STRATT_VCENTER_URL=https://${GW}:8989/sdk" \
+          --set-string "plugins[1].hostEnv.STRATT_VCENTER_URL=https://${GW}:8989/sdk" \
+          --set-string "plugins[2].env.STRATT_AWSEC2_ENDPOINT=http://${GW}:5000"
       - "{{.KUBECTL}} --context {{.KIND_CONTEXT}} -n stratt rollout status deploy/stratt --timeout=180s"
 
   dev:stack:up:
@@ -407,10 +546,12 @@ tasks:
       # NATS (bus), Temporal (orchestration), vcsim (the vcenter Syncer's SoR).
       # Scoping this away from the full `dev:up` keeps the turnkey path off the
       # kitchen-sink extras (zot registry, zitadel, …) a plugin run never touches.
-      - docker compose -f deploy/dev/docker-compose.yml up -d --wait postgres nats temporal vcsim
+      - docker compose -f deploy/dev/docker-compose.yml up -d --wait postgres nats temporal vcsim moto
       - task: image:kind-load
       - task: dev:ee:build
       - task: image:vcenter-plugin
+      - task: image:declared-plugin
+      - task: image:awsec2-plugin
       - task: dev:install
 
   dev:stack:down:
@@ -448,11 +589,18 @@ tasks:
     cmds:
       - go run ./cmd/stratt-dev-assert -mode=syncer -context={{.KIND_CONTEXT}}
 
+  e2e:plugin:devices:
+    desc: Prove devices-as-code — estate/hosts/*.yaml projects into the linux-fleet View via the declared-estate plugin (needs dev:stack:up)
+    dir: core
+    cmds:
+      - go run ./cmd/stratt-dev-assert -mode=devices -context={{.KIND_CONTEXT}}
+
   e2e:plugin:
-    desc: Full functional plugin e2e in kind — actuator (EE-Job) + syncer (gRPC). Run after `task dev:stack:up`.
+    desc: Full functional plugin e2e in kind — actuator (EE-Job) + syncer (gRPC) + devices-as-code (static-inv). Run after `task dev:stack:up`.
     cmds:
       - task: e2e:plugin:actuator
       - task: e2e:plugin:syncer
+      - task: e2e:plugin:devices
 
   dev:ee:build:
     desc: Build the dev EE image and load it into the kind cluster

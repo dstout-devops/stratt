@@ -161,6 +161,14 @@ type createVMParams struct {
 	InstanceType string `json:"instanceType"`
 	AMI          string `json:"ami"`
 	Name         string `json:"name"`
+	// ProjectKind/ProjectLabels are the estate OVERLAY the provisioning seam
+	// declares (ADR-0058 decision 6): the built instance projects AS this kind
+	// with these labels — carried on the Action's own Run-provenance output
+	// (never a reconcile write, §1.2). Empty ProjectKind keeps the native
+	// "instance". The labels must be keys the Run may own (§2.1 per-key) — the
+	// stratt.intent/instance correlation key + fleet keys, not another Source's.
+	ProjectKind   string            `json:"projectKind"`
+	ProjectLabels map[string]string `json:"projectLabels"`
 }
 
 // Invoke runs the create-vm Action: provision one EC2 instance as a single typed
@@ -255,12 +263,23 @@ func (s *Server) Invoke(req *pluginv1.InvokeRequest, stream grpc.ServerStreaming
 		return s.terminalFailure(stream, req, fmt.Errorf("awsec2/create-vm: marshal outputs: %w", err))
 	}
 
-	// Project the new instance with Run provenance (§1.2). The Action declares only
-	// identity + region; Facets arrive from the awsec2 Syncer's next poll.
+	// Project the new instance with Run provenance (§1.2). The Action declares
+	// identity + region; when the provisioning seam supplied a projectKind/labels
+	// overlay (ADR-0058 decision 6), the instance projects AS that estate kind
+	// with those labels — so a fleet View selects it and its provisioning Finding
+	// resolves. Facets still arrive from the awsec2 Syncer's next poll.
+	kind := "instance"
+	if p.ProjectKind != "" {
+		kind = p.ProjectKind
+	}
+	labels := map[string]string{"aws.region": p.Region}
+	for k, v := range p.ProjectLabels {
+		labels[k] = v
+	}
 	entity := &pluginv1.ObservedEntity{
-		Kind:         "instance",
+		Kind:         kind,
 		IdentityKeys: map[string]string{"aws.instanceId": instanceID},
-		Labels:       map[string]string{"aws.region": p.Region},
+		Labels:       labels,
 	}
 
 	s.log.Info("provisioned instance", "instanceId", instanceID, "privateIp", privateIP)

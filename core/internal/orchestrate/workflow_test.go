@@ -16,6 +16,7 @@ import (
 
 	"github.com/dstout-devops/stratt/core/internal/actuators"
 	"github.com/dstout-devops/stratt/core/internal/dispatch"
+	"github.com/dstout-devops/stratt/core/internal/policy"
 	"github.com/dstout-devops/stratt/types"
 )
 
@@ -71,8 +72,14 @@ func dagTestEnv(t *testing.T, spec types.Workflow, childStatus map[string]error)
 	env.OnActivity(a.RecordGateDecision, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
 	// Step params are resolved (event binding + re-validation) in an activity
 	// before each child Run (ADR-0024); stub it to a passthrough.
-	env.OnActivity(a.ResolveStepParams, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(
+	env.OnActivity(a.ResolveStepParams, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(
 		json.RawMessage(`{}`), nil)
+	// The policy activity delegates to the REAL evaluator, so a policy Step's
+	// DAG behaviour is driven by its actual controls (ADR-0063).
+	env.OnActivity(a.EvaluatePolicy, mock.Anything, mock.Anything).Return(
+		func(_ context.Context, arg PolicyEvalArg) (types.Decision, error) {
+			return policy.Evaluate(arg.Controls, arg.Context), nil
+		})
 
 	// Child Runs are stubbed per-step through OnWorkflow.
 	env.OnWorkflow(RunAgainstView, mock.Anything, mock.Anything).Return(
@@ -158,6 +165,58 @@ func TestRunAgainstViewFanOutBySite(t *testing.T) {
 	}
 }
 
+// TestRunAgainstViewFailedTargetPropagates pins §1.8: when a Run's targets FAIL,
+// RunAgainstView must both record the Run failed AND return an error to its parent
+// — otherwise the parent Step (runActuationStep) folds to succeeded and a green
+// Workflow hides a red Run (the exact one-click-descent trust violation the charter
+// forbids). Regression guard for the live-e2e finding: ansible rc=2 on both hosts
+// had left graph.run=failed but workflow_run=succeeded.
+func TestRunAgainstViewFailedTargetPropagates(t *testing.T) {
+	ts := &testsuite.WorkflowTestSuite{}
+	env := ts.NewTestWorkflowEnvironment()
+	env.RegisterWorkflow(RunAgainstView)
+	var a *Activities
+
+	routed := RoutedTargets{ViewVersion: 1, Groups: []SiteGroup{
+		{Site: types.LocalSite, Targets: []actuators.Target{{EntityID: "e1", Name: "t1"}, {EntityID: "e2", Name: "t2"}}},
+	}}
+	env.OnActivity(a.CheckExecutionGrant, mock.Anything, mock.Anything).Return(nil)
+	env.OnActivity(a.ResolveTargetsBySite, mock.Anything, mock.Anything).Return(routed, nil)
+	env.OnActivity(a.MarkRunning, mock.Anything, mock.Anything).Return(nil)
+	env.OnActivity(a.ResolveCredentials, mock.Anything, mock.Anything).Return([]dispatch.CredentialMount(nil), nil)
+
+	// Every target fails (the ansible rc=2 shape) — Succeeded folds false.
+	env.OnActivity(a.Execute, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(
+		func(_ context.Context, _ RunInput, _ int, _ string, resolved ResolvedTargets, _ []dispatch.CredentialMount) (dispatch.Result, error) {
+			res := dispatch.Result{Succeeded: false, PerTarget: map[string]string{}}
+			for _, tgt := range resolved.Targets {
+				res.PerTarget[tgt.Name] = actuators.StatusFailed
+			}
+			return res, nil
+		})
+	env.OnActivity(a.CollectFacts, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(FactSet{}, nil)
+	env.OnActivity(a.ProjectFacts, mock.Anything, mock.Anything, mock.Anything).Return(nil)
+
+	var finishStatus types.RunStatus
+	env.OnActivity(a.FinishRun, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(
+		func(_ context.Context, _ RunInput, status types.RunStatus, _ dispatch.Result) error {
+			finishStatus = status
+			return nil
+		})
+
+	env.ExecuteWorkflow(RunAgainstView, RunInput{RunID: "r1", ViewName: "v", Principal: "alice"})
+	if !env.IsWorkflowCompleted() {
+		t.Fatal("workflow did not complete")
+	}
+	// The Run row folds failed AND the child returns an error (so the parent Step fails).
+	if finishStatus != types.RunFailed {
+		t.Fatalf("Run must be recorded failed, got %q", finishStatus)
+	}
+	if env.GetWorkflowError() == nil {
+		t.Fatal("§1.8: a failed-target Run must return an error so the parent Workflow cannot report succeeded over a failed Run")
+	}
+}
+
 func TestRunDAGApprovedPath(t *testing.T) {
 	spec := types.Workflow{Name: "patch", Steps: []types.Step{
 		{Name: "gather", ViewName: "v"},
@@ -234,6 +293,64 @@ func TestRunDAGGateTimeoutExpires(t *testing.T) {
 	}
 	if *status != types.RunFailed {
 		t.Fatalf("expired gate must fail, got %s", *status)
+	}
+}
+
+// Quorum (ADR-0071): a Gate with threshold N proceeds only after N DISTINCT
+// approvals.
+func TestRunDAGGateQuorumMet(t *testing.T) {
+	spec := types.Workflow{Name: "w", Steps: []types.Step{
+		{Name: "approve", Gate: &types.GateSpec{Approvers: types.GateApprovers{Teams: []string{"platform"}}, Threshold: 2}},
+		{Name: "after", Needs: []string{"approve"}, ViewName: "v"},
+	}}
+	env, final, status := dagTestEnv(t, spec, map[string]error{})
+	env.RegisterDelayedCallback(func() {
+		env.SignalWorkflow(GateSignalName("approve"), GateDecision{Approved: true, Principal: "alice"})
+		env.SignalWorkflow(GateSignalName("approve"), GateDecision{Approved: true, Principal: "bob"})
+	}, time.Minute)
+	env.ExecuteWorkflow(RunDAG, DAGInput{WorkflowRunID: "wr-1", WorkflowName: "w"})
+	if !env.IsWorkflowCompleted() || env.GetWorkflowError() != nil {
+		t.Fatalf("workflow: completed=%v err=%v", env.IsWorkflowCompleted(), env.GetWorkflowError())
+	}
+	want := map[string]string{"approve": stepSucceeded, "after": stepSucceeded}
+	if !reflect.DeepEqual(*final, want) {
+		t.Fatalf("steps: got %v want %v", *final, want)
+	}
+	if *status != types.RunSucceeded {
+		t.Fatalf("two distinct approvals must meet quorum, got %s", *status)
+	}
+}
+
+// A single deny short-circuits a quorum Gate regardless of threshold.
+func TestRunDAGGateQuorumDenyShortCircuits(t *testing.T) {
+	spec := types.Workflow{Name: "w", Steps: []types.Step{
+		{Name: "approve", Gate: &types.GateSpec{Approvers: types.GateApprovers{Teams: []string{"platform"}}, Threshold: 3}},
+	}}
+	env, _, status := dagTestEnv(t, spec, map[string]error{})
+	env.RegisterDelayedCallback(func() {
+		env.SignalWorkflow(GateSignalName("approve"), GateDecision{Approved: false, Principal: "alice", Note: "no"})
+	}, time.Minute)
+	env.ExecuteWorkflow(RunDAG, DAGInput{WorkflowRunID: "wr-1", WorkflowName: "w"})
+	if *status != types.RunFailed {
+		t.Fatalf("a single deny must fail a quorum gate, got %s", *status)
+	}
+}
+
+// The SAME principal approving twice does not meet a threshold of 2 (distinct
+// approvals); the gate expires.
+func TestRunDAGGateQuorumDistinct(t *testing.T) {
+	spec := types.Workflow{Name: "w", Steps: []types.Step{
+		{Name: "approve", Gate: &types.GateSpec{
+			Approvers: types.GateApprovers{Teams: []string{"platform"}}, Threshold: 2, TimeoutSeconds: 60}},
+	}}
+	env, _, status := dagTestEnv(t, spec, map[string]error{})
+	env.RegisterDelayedCallback(func() {
+		env.SignalWorkflow(GateSignalName("approve"), GateDecision{Approved: true, Principal: "alice"})
+		env.SignalWorkflow(GateSignalName("approve"), GateDecision{Approved: true, Principal: "alice"})
+	}, 30*time.Second)
+	env.ExecuteWorkflow(RunDAG, DAGInput{WorkflowRunID: "wr-1", WorkflowName: "w"})
+	if *status != types.RunFailed {
+		t.Fatalf("one distinct approver cannot meet a quorum of 2, gate must expire, got %s", *status)
 	}
 }
 

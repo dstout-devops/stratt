@@ -45,3 +45,27 @@ type Relation struct {
 	FromID string `json:"fromId"`
 	ToID   string `json:"toId"`
 }
+
+// Placement Relation types (ADR-0059 decision 2): the topology composition backbone.
+// A host is placed-in a subnet; a subnet is in-dmz / in-az. Free-string Relation.Type
+// values (§2.1) — no edge-schema change. Written only by the two §1.2 paths (a
+// Syncer's observation or a build Run), never a hand-authored graph row.
+const (
+	RelPlacedIn = "placed-in"
+	RelInDmz    = "in-dmz"
+	RelInAz     = "in-az"
+	RelInVlan   = "in-vlan" // a subnet is in-vlan a vlan (the topology backbone, netbox emits it too)
+)
+
+// IsSingularPlacement reports whether a Relation type is a SINGULAR placement — a
+// from-Entity is in exactly ONE target of this type (a host is placed-in one subnet, a
+// subnet is in-vlan/in-dmz/in-az one of each). A build re-projecting such an edge to a new
+// target MOVES rather than adds (ADR-0059 re-placement); a multi-valued relation
+// (member-of, runs-on) is additive and never triggers the move retraction.
+func IsSingularPlacement(relType string) bool {
+	switch relType {
+	case RelPlacedIn, RelInVlan, RelInDmz, RelInAz:
+		return true
+	}
+	return false
+}

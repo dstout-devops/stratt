@@ -1,0 +1,46 @@
+# Kyverno enforcement of the Pod Security Standards "restricted" profile on Stratt
+# workloads (enterprise-readiness SEC-4, charter §7.1). We SHIP hardened pods (the
+# SEC-1 EE-Job sandbox + the control-plane/plugin security contexts), but nothing
+# ENFORCED it in-cluster — a hand-edited manifest could still deploy a privileged
+# pod into the estate. This leans on the EXTERNAL admission controller (Kyverno)
+# to enforce the standard PSS profile, the same posture as the OPA governance
+# engine: policy is external, over a seam, not trusted to our own templates.
+#
+# It uses Kyverno's built-in `validate.podSecurity` (the whole PSS restricted
+# profile in one rule) rather than hand-rolled per-field checks — the boring,
+# standard path. Every workload the chart ships (strattd, plugins, EE Jobs,
+# backup/forwarder/migrate Jobs) already satisfies restricted, so this enforces
+# the floor without blocking our own pods.
+#
+# Target: namespaces labelled `stratt.dev/pod-security: restricted` (label your
+# Stratt namespace + the EE-Job namespace). Apply with `kubectl apply -f` after
+# installing Kyverno; see README.md.
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: stratt-pod-security-restricted
+  annotations:
+    policies.kyverno.io/title: Stratt Pod Security — restricted
+    policies.kyverno.io/category: Pod Security Standards
+    policies.kyverno.io/severity: high
+    policies.kyverno.io/description: >-
+      Enforces the PSS 'restricted' profile (runAsNonRoot, drop ALL capabilities,
+      no privilege escalation, seccomp RuntimeDefault, no privileged/host access)
+      on Stratt workloads. Charter §7.1 / enterprise-readiness SEC-4.
+spec:
+  validationFailureAction: Enforce
+  background: true
+  rules:
+    - name: restricted
+      match:
+        any:
+          - resources:
+              kinds:
+                - Pod
+              namespaceSelector:
+                matchLabels:
+                  stratt.dev/pod-security: restricted
+      validate:
+        podSecurity:
+          level: restricted
+          version: latest

@@ -1,0 +1,12 @@
+# aws-dev — the CredentialRef the compute-build Action binds (§2.5 / ADR-0009). An
+# Action's CredentialRef use-check is its ONLY authz gate (core/internal/orchestrate
+# ExecuteAction: a credential-free Action is refused, "ActionUngated") — so even a
+# moto build must carry one. This holds a POINTER only (never material, §2.5): the
+# k8s Secret the awsec2 plugin's own broker would resolve. Against moto the plugin
+# uses ambient config, so the material is a formality — the gate is the point.
+name: aws-dev
+ownerTeam: platform-admins
+backend: k8s-secret
+locator: { namespace: stratt, name: aws-dev-creds }
+injection:
+  - { key: credentials, as: file, name: aws-credentials }

@@ -117,36 +117,53 @@ func TestFacetOwnership(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Double-claim by a different owner → registration error (§2.1).
-	err = s.RegisterFacetOwner(ctx, types.FacetOwner{Namespace: "os.kernel", OwnerKind: "syncer", OwnerRef: "other/syncer"})
-	if !errors.Is(err, ErrOwnerConflict) {
-		t.Fatalf("second owner registration should be ErrOwnerConflict, got: %v", err)
+	// ADR-0060: a SECOND source may register the same namespace (multi-owner) —
+	// no longer ErrOwnerConflict. Many systems legitimately know one namespace.
+	if err := s.RegisterFacetOwner(ctx, types.FacetOwner{Namespace: "os.kernel", OwnerKind: "syncer", OwnerRef: "other/syncer"}); err != nil {
+		t.Fatalf("a second source may register the same namespace (ADR-0060): %v", err)
 	}
 
-	// Owner writes → ok.
-	if err := p.UpsertFacet(ctx, prov(types.WriterSyncer, "vcenter/syncer"), id, "os.kernel", json.RawMessage(`{"family":"linux"}`)); err != nil {
+	// The registered owner writes → its own per-source row (SourceID vcenter-src).
+	vcp := types.Provenance{WriterKind: types.WriterSyncer, WriterRef: "vcenter/syncer", SourceID: "00000000-0000-0000-0000-0000000000bb", At: time.Now().UTC()}
+	if err := p.UpsertFacet(ctx, vcp, id, "os.kernel", json.RawMessage(`{"family":"linux"}`)); err != nil {
 		t.Fatal(err)
 	}
 
-	// A different Syncer writing the owned namespace → rejected.
-	err = p.UpsertFacet(ctx, prov(types.WriterSyncer, "other/syncer"), id, "os.kernel", json.RawMessage(`{"family":"bsd"}`))
-	if err == nil || !strings.Contains(err.Error(), "owned by") {
-		t.Fatalf("non-owner syncer write should be rejected, got: %v", err)
+	// An UNREGISTERED syncer writing the namespace → rejected (§2.5 bounded grant).
+	err = p.UpsertFacet(ctx, prov(types.WriterSyncer, "unregistered/syncer"), id, "os.kernel", json.RawMessage(`{"family":"bsd"}`))
+	if err == nil || !strings.Contains(err.Error(), "not a registered owner") {
+		t.Fatalf("unregistered syncer write should be rejected, got: %v", err)
 	}
 
-	// Run provenance writes ahead of Syncer lag (§4.3) → ok.
+	// The SECOND registered source writes under its OWN source → a distinct row;
+	// both are RETAINED, never overwritten (ADR-0060 — keep every signal).
+	otherp := types.Provenance{WriterKind: types.WriterSyncer, WriterRef: "other/syncer", SourceID: "00000000-0000-0000-0000-0000000000cc", At: time.Now().UTC()}
+	if err := p.UpsertFacet(ctx, otherp, id, "os.kernel", json.RawMessage(`{"family":"bsd"}`)); err != nil {
+		t.Fatalf("a registered second source must write its own per-source row: %v", err)
+	}
+
+	// Run provenance (§4.3) → admissible to a registered namespace; keyed to the
+	// reserved 'run' source (empty SourceID), a third distinct row.
 	rp := s.RunProjector()
-	if err := rp.UpsertFacet(ctx, prov(types.WriterRun, "run-123"), id, "os.kernel", json.RawMessage(`{"family":"linux","release":"6.6"}`)); err != nil {
+	runp := types.Provenance{WriterKind: types.WriterRun, WriterRef: "run-123", At: time.Now().UTC()}
+	if err := rp.UpsertFacet(ctx, runp, id, "os.kernel", json.RawMessage(`{"family":"linux","release":"6.6"}`)); err != nil {
 		t.Fatalf("run-provenance write should be admissible (§4.3): %v", err)
 	}
 
-	// Versioning: two successful writes → version 2, history has both.
+	// Retention: all three sources' os.kernel facets co-exist — signal is never
+	// dropped (ADR-0060 decision 2).
 	facets, err := s.GetFacets(ctx, id)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(facets) != 1 || facets[0].Provenance.WriterRef != "run-123" {
-		t.Fatalf("facet provenance should show the last writer, got %+v", facets)
+	osRows := 0
+	for _, f := range facets {
+		if f.Namespace == "os.kernel" {
+			osRows++
+		}
+	}
+	if osRows != 3 {
+		t.Fatalf("all three sources' os.kernel facets must be retained (ADR-0060), got %d rows", osRows)
 	}
 	var histCount int
 	if err := s.pool.QueryRow(ctx,
@@ -154,8 +171,284 @@ func TestFacetOwnership(t *testing.T) {
 	).Scan(&histCount); err != nil {
 		t.Fatal(err)
 	}
-	if histCount != 2 {
-		t.Fatalf("facet_history should hold every version, got %d rows", histCount)
+	if histCount != 3 {
+		t.Fatalf("facet_history should hold every source's write, got %d rows", histCount)
+	}
+}
+
+// TestObservedPlacements proves the observed side of the placement-drift check
+// (ADR-0059 S5): a unit's placed-in edges resolve to the target subnets' net.subnet
+// names, keyed by the unit's correlation label.
+func TestObservedPlacements(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	p := s.NormalizerProjector()
+	pv := prov(types.WriterSyncer, "vcenter/syncer")
+	if err := s.RegisterLabelOwner(ctx, types.LabelOwner{Key: "stratt.intent/instance", OwnerKind: "syncer", OwnerRef: "vcenter/syncer"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.RegisterFacetOwner(ctx, types.FacetOwner{Namespace: "net.subnet", OwnerKind: "syncer", OwnerRef: "vcenter/syncer"}); err != nil {
+		t.Fatal(err)
+	}
+
+	ids, err := p.UpsertEntities(ctx, pv, []EntityUpsert{
+		{Kind: "host", IdentityKeys: map[string]string{"host.name": "web-1"}, Labels: map[string]string{"stratt.intent/instance": "web-01"}},
+		{Kind: "subnet", IdentityKeys: map[string]string{"net.name": "legacy"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	hostID, subnetID := ids[0], ids[1]
+	fp := types.Provenance{WriterKind: types.WriterSyncer, WriterRef: "vcenter/syncer", SourceID: "00000000-0000-0000-0000-0000000000bb", At: time.Now().UTC()}
+	if err := p.UpsertFacet(ctx, fp, subnetID, "net.subnet", json.RawMessage(`{"name":"legacy-net"}`)); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.UpsertRelation(ctx, pv, types.RelPlacedIn, hostID, subnetID); err != nil {
+		t.Fatal(err)
+	}
+
+	obs, err := s.ObservedPlacements(ctx, "stratt.intent/instance")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := obs["web-01"]
+	if len(got) != 1 || got[0] != "legacy-net" {
+		t.Fatalf("expected web-01 observed placed-in legacy-net, got %v", obs)
+	}
+
+	// Finding lifecycle: a drift Finding opens, then resolves when the unit converges.
+	if err := s.WritePlacementDriftFinding(ctx, "web-01", json.RawMessage(`{"declared":"web-dmz","observed":["legacy-net"]}`)); err != nil {
+		t.Fatal(err)
+	}
+	openCount := func() int {
+		var n int
+		if err := s.pool.QueryRow(ctx,
+			`SELECT count(*) FROM graph.finding WHERE framework='placement' AND status='open' AND target='web-01'`).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	if openCount() != 1 {
+		t.Fatalf("expected 1 open placement-drift finding, got %d", openCount())
+	}
+	// web-01 no longer drifts (converged / not re-asserted) → resolves.
+	resolved, err := s.ResolvePlacementDriftFindingsExcept(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolved != 1 || openCount() != 0 {
+		t.Fatalf("converged drift must resolve, resolved=%d still-open=%d", resolved, openCount())
+	}
+}
+
+// TestRelationGC proves ADR-0059 decision 7's two relation-GC paths: the
+// endpoint-tombstone cascade (7b) and Syncer delta retraction (7a). No dangling
+// placement edge survives a decommissioned endpoint.
+func TestRelationGC(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	p := s.NormalizerProjector()
+	pv := prov(types.WriterSyncer, "vcenter/syncer")
+
+	// A host placed-in a subnet, plus a run-provenance placement edge (the build seam).
+	ids, err := p.UpsertEntities(ctx, pv, []EntityUpsert{
+		{Kind: "host", IdentityKeys: map[string]string{"host.name": "web-1"}},
+		{Kind: "subnet", IdentityKeys: map[string]string{"net.name": "web-dmz"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	hostID, subnetID := ids[0], ids[1]
+	if err := p.UpsertRelation(ctx, pv, "placed-in", hostID, subnetID); err != nil {
+		t.Fatal(err)
+	}
+	// A run-provenance edge too (never re-observed by a Syncer — only the cascade collects it).
+	rp := prov(types.WriterRun, "run-1")
+	if err := s.RunProjector().UpsertRelation(ctx, rp, "built-in", hostID, subnetID); err != nil {
+		t.Fatal(err)
+	}
+
+	relCount := func(from string) int {
+		var n int
+		if err := s.pool.QueryRow(ctx, `SELECT count(*) FROM graph.relation WHERE from_id = $1`, from).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	if relCount(hostID) != 2 {
+		t.Fatalf("expected 2 edges from the host, got %d", relCount(hostID))
+	}
+
+	// (7b) Tombstone the host → BOTH its edges (syncer + run) cascade-retract, so no
+	// placement edge dangles to the soft-deleted endpoint.
+	if _, err := p.TombstoneByIdentity(ctx, pv, "host.name", "web-1"); err != nil {
+		t.Fatal(err)
+	}
+	if relCount(hostID) != 0 {
+		t.Fatalf("endpoint-tombstone cascade must retract every edge of the gone host, got %d", relCount(hostID))
+	}
+
+	// (7a) Syncer delta retraction: re-create the host + a fresh edge, then retract it
+	// directly (the GoneRelations path resolves endpoints then calls this).
+	ids2, err := p.UpsertEntities(ctx, pv, []EntityUpsert{
+		{Kind: "host", IdentityKeys: map[string]string{"host.name": "web-2"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := p.UpsertRelation(ctx, pv, "placed-in", ids2[0], subnetID); err != nil {
+		t.Fatal(err)
+	}
+	if relCount(ids2[0]) != 1 {
+		t.Fatalf("expected the fresh edge, got %d", relCount(ids2[0]))
+	}
+	if err := p.RetractRelation(ctx, "placed-in", ids2[0], subnetID); err != nil {
+		t.Fatal(err)
+	}
+	if relCount(ids2[0]) != 0 {
+		t.Fatalf("delta retraction must remove the edge, got %d", relCount(ids2[0]))
+	}
+	// Idempotent: retracting a missing edge is a no-op.
+	if err := p.RetractRelation(ctx, "placed-in", ids2[0], subnetID); err != nil {
+		t.Fatalf("retracting a missing edge must be a no-op, got %v", err)
+	}
+}
+
+// TestRelationAwareViewSelection proves ADR-0059 decision 6: a View selects by
+// TOPOLOGY — "the hosts in the DMZ subnet" — via an outgoing placed-in edge, not
+// by label alone.
+func TestRelationAwareViewSelection(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	p := s.NormalizerProjector()
+	pv := prov(types.WriterSyncer, "vcenter/syncer")
+	if err := s.RegisterLabelOwner(ctx, types.LabelOwner{Key: "zone", OwnerKind: "syncer", OwnerRef: "vcenter/syncer"}); err != nil {
+		t.Fatal(err)
+	}
+
+	ids, err := p.UpsertEntities(ctx, pv, []EntityUpsert{
+		{Kind: "subnet", IdentityKeys: map[string]string{"net.name": "web-dmz"}, Labels: map[string]string{"zone": "dmz"}},
+		{Kind: "subnet", IdentityKeys: map[string]string{"net.name": "db-tier"}, Labels: map[string]string{"zone": "internal"}},
+		{Kind: "host", IdentityKeys: map[string]string{"host.name": "web-1"}},
+		{Kind: "host", IdentityKeys: map[string]string{"host.name": "web-2"}},
+		{Kind: "host", IdentityKeys: map[string]string{"host.name": "db-1"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	dmz, internal, web1, web2, db1 := ids[0], ids[1], ids[2], ids[3], ids[4]
+	// web-1, web-2 placed-in the DMZ subnet; db-1 placed-in the internal subnet.
+	for _, e := range [][2]string{{web1, dmz}, {web2, dmz}, {db1, internal}} {
+		if err := p.UpsertRelation(ctx, pv, types.RelPlacedIn, e[0], e[1]); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// "The hosts in the DMZ" — kind host + an outgoing placed-in edge to a subnet
+	// labeled zone=dmz. Selection by topology, not by a label on the host.
+	if _, err := s.DeclareView(ctx, "test/dmz-hosts", types.ViewSelector{
+		Kinds: []string{"host"},
+		Relations: []types.RelationPredicate{{
+			Type: types.RelPlacedIn, TargetKind: "subnet", TargetLabels: map[string]string{"zone": "dmz"},
+		}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	_, ents, err := s.ResolveView(ctx, "test/dmz-hosts", nil, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]bool{}
+	for _, e := range ents {
+		got[e.IdentityKeys["host.name"]] = true
+	}
+	if len(ents) != 2 || !got["web-1"] || !got["web-2"] {
+		t.Fatalf("relation-aware selection should yield the 2 DMZ hosts, got %d: %v", len(ents), got)
+	}
+
+	// Retract web-2's placement → it leaves the topology View (relation GC + selection
+	// compose): a decommissioned placement drops the host from the DMZ fleet.
+	if err := p.RetractRelation(ctx, types.RelPlacedIn, web2, dmz); err != nil {
+		t.Fatal(err)
+	}
+	_, ents2, err := s.ResolveView(ctx, "test/dmz-hosts", nil, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ents2) != 1 || ents2[0].IdentityKeys["host.name"] != "web-1" {
+		t.Fatalf("after retracting web-2's placement, only web-1 remains, got %d", len(ents2))
+	}
+}
+
+// TestFacetDeclaredAuthority proves the second half of ADR-0060: retaining all
+// per-source signal AND resolving a scalar read to the ONE declared authority.
+func TestFacetDeclaredAuthority(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	p := s.NormalizerProjector()
+
+	ids, err := p.UpsertEntities(ctx, prov(types.WriterSyncer, "netbox/syncer"), []EntityUpsert{
+		{Kind: "subnet", IdentityKeys: map[string]string{"netbox.prefix.id": "p-1"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := ids[0]
+
+	// NetBox is the declared IPAM truth for net.subnet; Crossplane co-owns it.
+	if err := s.RegisterFacetOwner(ctx, types.FacetOwner{Namespace: "net.subnet", OwnerKind: "syncer", OwnerRef: "netbox/syncer", Authoritative: true}); err != nil {
+		t.Fatal(err)
+	}
+	// §2.4: a SECOND authoritative claim on the same namespace is rejected — never
+	// two competing truths resolved by an implicit tiebreak.
+	if err := s.RegisterFacetOwner(ctx, types.FacetOwner{Namespace: "net.subnet", OwnerKind: "syncer", OwnerRef: "crossplane/syncer", Authoritative: true}); err == nil {
+		t.Fatal("a second authoritative owner for one namespace must be rejected (§2.4)")
+	}
+	// Crossplane registers as a NON-authoritative co-owner (retained signal).
+	if err := s.RegisterFacetOwner(ctx, types.FacetOwner{Namespace: "net.subnet", OwnerKind: "syncer", OwnerRef: "crossplane/syncer"}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Both sources project net.subnet with DIFFERENT values — both retained.
+	nbp := types.Provenance{WriterKind: types.WriterSyncer, WriterRef: "netbox/syncer", SourceID: "00000000-0000-0000-0000-0000000000bb", At: time.Now().UTC()}
+	if err := p.UpsertFacet(ctx, nbp, id, "net.subnet", json.RawMessage(`{"cidr":"10.0.0.0/24"}`)); err != nil {
+		t.Fatal(err)
+	}
+	cxp := types.Provenance{WriterKind: types.WriterSyncer, WriterRef: "crossplane/syncer", SourceID: "00000000-0000-0000-0000-0000000000dd", At: time.Now().UTC()}
+	if err := p.UpsertFacet(ctx, cxp, id, "net.subnet", json.RawMessage(`{"cidr":"10.0.0.0/25"}`)); err != nil {
+		t.Fatal(err)
+	}
+
+	// A scalar read resolves to the DECLARED authority (NetBox) — not a last-writer pick.
+	vals, err := s.FacetValuesByEntities(ctx, "net.subnet", []string{id})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// jsonb reformats with whitespace, so assert on content: NetBox's /24, not /25.
+	if !strings.Contains(string(vals[id]), "10.0.0.0/24") || strings.Contains(string(vals[id]), "/25") {
+		t.Fatalf("scalar read must resolve to the declared authority (NetBox /24), got %s", vals[id])
+	}
+
+	// Contrast: a namespace with NO declared authority + multi-source → OMITTED
+	// (fail-safe); the ownership-contention Finding surfaces it (§2.4/§1.8).
+	if err := s.RegisterFacetOwner(ctx, types.FacetOwner{Namespace: "net.mtu", OwnerKind: "syncer", OwnerRef: "netbox/syncer"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.RegisterFacetOwner(ctx, types.FacetOwner{Namespace: "net.mtu", OwnerKind: "syncer", OwnerRef: "crossplane/syncer"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.UpsertFacet(ctx, nbp, id, "net.mtu", json.RawMessage(`{"mtu":1500}`)); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.UpsertFacet(ctx, cxp, id, "net.mtu", json.RawMessage(`{"mtu":9000}`)); err != nil {
+		t.Fatal(err)
+	}
+	mtu, err := s.FacetValuesByEntities(ctx, "net.mtu", []string{id})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v, ok := mtu[id]; ok {
+		t.Fatalf("multi-source with NO declared authority must be omitted (fail-safe), got %s", v)
 	}
 }
 
@@ -491,5 +784,66 @@ func TestDerivedContractVersioning(t *testing.T) {
 	// Shipped (rung-1) semantics unchanged: same name+version, new hash blocks.
 	if err := s.RegisterContract(ctx, types.Contract{Name: "opentofu/ws.outputs", Version: 2, Rung: "tool-derived", Hash: "h3", Schema: []byte(`{}`)}); !errors.Is(err, ErrContractDrift) {
 		t.Fatalf("pin-path drift must still block: %v", err)
+	}
+}
+
+// TestReplacementMove proves the singular-placement move (ADR-0059): re-projecting a
+// host's placed-in edge to a NEW subnet retracts the stale Run-provenance edge (a MOVE),
+// while a Syncer's OBSERVED edge from the same host is left untouched (cross-source).
+func TestReplacementMove(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	np := s.NormalizerProjector()
+	rp := s.RunProjector()
+	pv := prov(types.WriterSyncer, "vcenter/syncer")
+
+	ids, err := np.UpsertEntities(ctx, pv, []EntityUpsert{
+		{Kind: "host", IdentityKeys: map[string]string{"host.name": "app-01"}},
+		{Kind: "subnet", IdentityKeys: map[string]string{"net.name": "app-subnet"}},
+		{Kind: "subnet", IdentityKeys: map[string]string{"net.name": "dmz-subnet"}},
+		{Kind: "subnet", IdentityKeys: map[string]string{"net.name": "observed-net"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	host, appSub, dmzSub, obsSub := ids[0], ids[1], ids[2], ids[3]
+	rpv := prov(types.WriterRun, "build-1")
+	// Build placed the host in app-subnet (Run-provenance); a Syncer separately observed
+	// it in observed-net (Syncer-provenance — a different, legitimate source).
+	if err := rp.UpsertRelation(ctx, rpv, types.RelPlacedIn, host, appSub); err != nil {
+		t.Fatal(err)
+	}
+	if err := np.UpsertRelation(ctx, pv, types.RelPlacedIn, host, obsSub); err != nil {
+		t.Fatal(err)
+	}
+
+	targets := func() map[string]string {
+		rows, _ := s.pool.Query(ctx, `SELECT to_id::text, prov_writer_kind FROM graph.relation WHERE from_id=$1 AND type='placed-in'`, host)
+		defer rows.Close()
+		out := map[string]string{}
+		for rows.Next() {
+			var to, kind string
+			_ = rows.Scan(&to, &kind)
+			out[to] = kind
+		}
+		return out
+	}
+	// The MOVE: re-project the placement to dmz-subnet — retract the build's own stale
+	// app-subnet edge, keep dmz-subnet.
+	if err := rp.RetractRunRelationsFrom(ctx, types.RelPlacedIn, host, dmzSub); err != nil {
+		t.Fatal(err)
+	}
+	if err := rp.UpsertRelation(ctx, rpv, types.RelPlacedIn, host, dmzSub); err != nil {
+		t.Fatal(err)
+	}
+	got := targets()
+	if _, stale := got[appSub]; stale {
+		t.Errorf("moved host must NOT keep the stale app-subnet edge, got %v", got)
+	}
+	if got[dmzSub] != "run" {
+		t.Errorf("moved host must be placed-in dmz-subnet (run), got %v", got)
+	}
+	if got[obsSub] != "syncer" {
+		t.Errorf("the Syncer's OBSERVED edge must be untouched (cross-source), got %v", got)
 	}
 }

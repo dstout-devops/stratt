@@ -1,0 +1,23 @@
+# app-tier — Intent/Compute (ADR-0058 + ADR-0059 decision 5): compute PLACED-IN a subnet.
+# "One app host, in the app-subnet" — declared from the simplest form. Not an Entity
+# (§1.2): the provisioning reconcile compares this count against the hosts already
+# projected+correlated and surfaces a GATED build. `placement.subnet` rides the Intent
+# (a Relation cannot be declared in Git) — the build honors it by projecting the host IN
+# that subnet (a placed-in edge, Run-provenance). When declared placement diverges from a
+# host's OBSERVED placement, the reconcile raises a placement-drift Finding (§1.8).
+#
+# Same builder as the subnet (crossplane/provision) — one full-featured builder for the
+# whole topology; the landscape swap point stays a params change (§1.4/§1.5).
+name: app-tier
+kind: Intent/Compute
+spec:
+  count: 1
+  namePrefix: app
+  projectKind: host
+  labels: { fleet: app }
+  builder: crossplane/provision
+  buildWorkflow: app-tier-build
+  placement:
+    subnet: app-subnet # placed-in the Crossplane-built subnet (decision 5)
+  params:
+    tier: app

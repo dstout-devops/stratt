@@ -128,6 +128,27 @@ Apache 2.0 product to depend on or promote.
 
 ---
 
+## Policy / governance decision engines (ADR-0061)
+
+Candidate **Policy Decision Point** engines for the governance decision surface. Stratt's
+**built-in** PDP is CEL (the existing `core/internal/rules`, cel-go) + a typed Control library —
+**no policy engine is embedded in the content-blind core**; external engines integrate as
+**plugins** behind the sovereign policy Contract (subprocess/gRPC), normalised to the four-way
+`ALLOW | DENY | REQUIRE_APPROVAL | ESCALATE` `Decision`. Dependency-scout reviewed 2026-07-18.
+
+| Engine | License | Verdict | Integration note |
+|---|---|---|---|
+| CEL (cel-go) | Apache-2.0 | **built-in** | already in core; hermetic, cost-bounded; the Tier-0 guard + Control-library predicate language. Plan the `google/cel-go`→`cel-expr/cel-go` import-path bump. |
+| Open Policy Agent (OPA/Rego) | Apache-2.0 (CNCF graduated) | **plugin — optional-only, never core-bundled** | flagship recommended engine; rich Rego. ~50 transitive deps (embedded KV, WASM runtime, OTel/OCI) must stay behind the plugin boundary — a CI `go.mod`-graph diff guards `core/`. Monitor governance post the 2025 Styra→Apple acquihire (CNCF ownership held). |
+| Cerbos (PDP) | Apache-2.0 | **plugin** | Go-native gRPC PDP; YAML+CEL policies. Never depend on the commercial **Cerbos Hub** — OSS PDP over gRPC only. |
+| Cedar | Apache-2.0 | **plugin — via Rust reference** | formally-verified RBAC/ABAC. Integrate over subprocess/gRPC against the Rust `cedar-policy` binary; do **not** vendor `cedar-go` (partial parity — lacks the validator/partial-eval that justify Cedar). AWS Verified Permissions = proprietary hosting, integration-only. |
+| Kyverno-JSON | Apache-2.0 (CNCF graduated) | **plugin** | validate a compiled OpenTofu/Crossplane **plan** pre-apply (admission PEP). |
+| ~~HashiCorp Sentinel~~ | **proprietary (enterprise-only)** | **excluded** | un-embeddable, incompatible with the Apache-2.0 posture; its IaC-guardrail role → OPA/conftest or Kyverno-JSON. |
+
+**Open-core watch:** Cerbos Hub, AWS Verified Permissions (Cedar), and Styra EOPA / OPA Control
+Plane are commercial or newly-open *hosting/tooling* layers — depend only on the Apache-2.0 engine
+cores, never the managed control planes; verify EOPA's post-2025 OSS license before recommending it.
+
 ## Practical Rules for Contributors
 
 1. **Bucket 1** — freely vendor SDKs, fork code, or statically/dynamically link.

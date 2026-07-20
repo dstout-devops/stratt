@@ -57,10 +57,30 @@ func normalizeCert(c Cert) (entity *pluginv1.ObservedEntity, ok bool, err error)
 		"notAfter":  crt.NotAfter.UTC().Format(time.RFC3339),
 	}
 
+	// identity.credential (ADR-0079 slice 2): the CROSS-FORM projection under which
+	// a cert is queryable alongside every other credential form (key, token) — e.g.
+	// "all credentials expiring in 30 days". A cert is not an identity island; it is
+	// a credential FORM. cert.identity/cert.expiry stay (more signal, not less); this
+	// is the unifying view demanded by the cert reconcile Contract (ADR-0050). No
+	// secret material (§2.5).
+	identityCredential := map[string]any{
+		"scheme":       "cert",
+		"subjectName":  crt.Subject.CommonName,
+		"issuer":       crt.Issuer.CommonName,
+		"serialNumber": c.Serial,
+		"notBefore":    crt.NotBefore.UTC().Format(time.RFC3339),
+		"notAfter":     crt.NotAfter.UTC().Format(time.RFC3339),
+		"algorithm":    crt.SignatureAlgorithm.String(),
+	}
+	if len(crt.DNSNames) > 0 {
+		identityCredential["subjectAltNames"] = crt.DNSNames
+	}
+
 	facets := map[string][]byte{}
 	for ns, doc := range map[string]map[string]any{
-		"cert.identity": certIdentity,
-		"cert.expiry":   certExpiry,
+		"cert.identity":       certIdentity,
+		"cert.expiry":         certExpiry,
+		"identity.credential": identityCredential,
 	} {
 		raw, err := json.Marshal(doc)
 		if err != nil {

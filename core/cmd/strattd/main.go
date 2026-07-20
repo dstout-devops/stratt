@@ -33,6 +33,7 @@ import (
 	"github.com/dstout-devops/stratt/core/internal/cellrouter"
 	"github.com/dstout-devops/stratt/core/internal/compiler"
 	"github.com/dstout-devops/stratt/core/internal/contract"
+	"github.com/dstout-devops/stratt/core/internal/cutover"
 	"github.com/dstout-devops/stratt/core/internal/desiredstate"
 	"github.com/dstout-devops/stratt/core/internal/dispatch"
 	"github.com/dstout-devops/stratt/core/internal/emitters"
@@ -42,9 +43,11 @@ import (
 	"github.com/dstout-devops/stratt/core/internal/homegate"
 	"github.com/dstout-devops/stratt/core/internal/leader"
 	"github.com/dstout-devops/stratt/core/internal/notify"
+	"github.com/dstout-devops/stratt/core/internal/observability"
 	"github.com/dstout-devops/stratt/core/internal/orchestrate"
 	"github.com/dstout-devops/stratt/core/internal/planstore"
 	"github.com/dstout-devops/stratt/core/internal/pluginhost"
+	"github.com/dstout-devops/stratt/core/internal/policy"
 	"github.com/dstout-devops/stratt/core/internal/scim"
 	"github.com/dstout-devops/stratt/core/internal/sitegw"
 	"github.com/dstout-devops/stratt/core/internal/siteproto"
@@ -57,6 +60,10 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 )
+
+// version is the build version stamped onto telemetry (OBS-1). Overridable via
+// -ldflags "-X main.version=<tag>"; "dev" for an unstamped local build.
+var version = "dev"
 
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -74,6 +81,46 @@ func env(key, def string) string {
 		return v
 	}
 	return def
+}
+
+// checkDevPrincipalSafety is the structural auth-bypass guard (enterprise-
+// readiness SEC-2). The dev trusted-header resolver forges any Principal from an
+// unauthenticated request header — one flag away from a full auth bypass. It
+// must never be a deployment-config accident, so boot fails when it is enabled
+// alongside a real identity backend (OIDC) — where an attacker would simply omit
+// the Bearer and forge X-Stratt-Principal — or in a non-dev environment. Kept a
+// pure function so the refusal is unit-tested, not just asserted in review.
+func checkDevPrincipalSafety(devPrincipal bool, oidcIssuer, environment string) error {
+	if !devPrincipal {
+		return nil
+	}
+	if oidcIssuer != "" {
+		return fmt.Errorf("refusing to boot: STRATT_DEV_PRINCIPAL_HEADER=true trusts an unauthenticated header and cannot run alongside STRATT_OIDC_ISSUER (a real identity backend) — an attacker would omit the Bearer and forge X-Stratt-Principal; unset one")
+	}
+	switch strings.ToLower(strings.TrimSpace(environment)) {
+	case "production", "prod", "staging":
+		return fmt.Errorf("refusing to boot: STRATT_DEV_PRINCIPAL_HEADER=true (trusted-header auth bypass) is forbidden in STRATT_ENVIRONMENT=%q — dev harness only", environment)
+	}
+	return nil
+}
+
+// checkEvidenceConfigured is the WORM-sealing boot probe (enterprise-readiness
+// DR-1). The Evidence store (§2.4, ADR-0029) is what makes a Finding's compliance
+// bundle tamper-evident and object-locked. It is gated on STRATT_EVIDENCE_BUCKET,
+// so a production deploy that simply forgot to set it would run for months
+// silently never sealing WORM — a compliance platform's worst failure, and
+// invisible. A safe posture is a property of boot, not an operator's memory: in a
+// production environment, refuse to boot when no bucket is configured unless the
+// operator EXPLICITLY acknowledges unsealed operation (STRATT_EVIDENCE_ALLOW_UNSEALED=true).
+func checkEvidenceConfigured(environment, bucket string, allowUnsealed bool) error {
+	if bucket != "" || allowUnsealed {
+		return nil
+	}
+	switch strings.ToLower(strings.TrimSpace(environment)) {
+	case "production", "prod":
+		return fmt.Errorf("refusing to boot: STRATT_ENVIRONMENT=%q but STRATT_EVIDENCE_BUCKET is empty — Findings would open UNSEALED and no compliance evidence would ever be object-locked (§2.4). Configure the Evidence store, or explicitly acknowledge unsealed operation with STRATT_EVIDENCE_ALLOW_UNSEALED=true", environment)
+	}
+	return nil
 }
 
 // leaderLeaseName returns the Cell-scoped leader lease name (ADR-0044): the
@@ -147,12 +194,38 @@ func splitNonEmpty(s string) []string {
 
 func run(ctx context.Context, log *slog.Logger) error {
 	// ── graph plane ──────────────────────────────────────────────────────
-	store, err := graph.Connect(ctx, env("STRATT_DATABASE_URL", "postgres://stratt:stratt-dev@localhost:5432/stratt"))
-	if err != nil {
-		return err
+	dbURL := env("STRATT_DATABASE_URL", "postgres://stratt:stratt-dev@localhost:5432/stratt")
+	// Rolling-upgrade schema discipline (UPG-1, ADR-0078):
+	//   STRATT_MIGRATE_ONLY  — run migrations and exit 0. The Helm pre-upgrade Job
+	//                          uses this so a schema change lands ONCE, in a
+	//                          controlled step, before the serving pods roll.
+	//   STRATT_SKIP_MIGRATE  — serving replicas skip boot migration when that Job
+	//                          owns it, so N replicas never race Up().
+	if os.Getenv("STRATT_MIGRATE_ONLY") == "true" {
+		if err := graph.MigrateURL(ctx, dbURL); err != nil {
+			return err
+		}
+		log.Info("migrations applied (STRATT_MIGRATE_ONLY); exiting")
+		return nil
+	}
+	var (
+		store *graph.Store
+		err   error
+	)
+	if os.Getenv("STRATT_SKIP_MIGRATE") == "true" {
+		store, err = graph.ConnectNoMigrate(ctx, dbURL)
+		if err != nil {
+			return err
+		}
+		log.Info("graph store ready (migrations owned by the pre-upgrade Job; boot migration skipped)")
+	} else {
+		store, err = graph.Connect(ctx, dbURL)
+		if err != nil {
+			return err
+		}
+		log.Info("graph store ready (migrations applied)")
 	}
 	defer store.Close()
-	log.Info("graph store ready (migrations applied)")
 
 	// ── control-plane Cell identity (ADR-0044) ───────────────────────────
 	// A Cell is a region-local single-writer control-plane shard. STRATT_CELL_ID
@@ -164,6 +237,35 @@ func run(ctx context.Context, log *slog.Logger) error {
 	// NATS-subject scoping are later ADR-0044 slices.)
 	cellID := env("STRATT_CELL_ID", types.LocalCell)
 	store.SetCell(cellID)
+	// ── observability (OBS-1) ────────────────────────────────────────────
+	// Providers back /metrics (always) + OTLP traces/metrics (when
+	// OTEL_EXPORTER_OTLP_ENDPOINT is set). Stamped with the Cell so multi-region
+	// signals are attributable. Never fatal on a missing endpoint (§1.8).
+	obs, err := observability.Setup(ctx, observability.Config{
+		ServiceName:    "stratt",
+		ServiceVersion: version,
+		Cell:           cellID,
+		OTLPEndpoint:   os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"),
+	})
+	if err != nil {
+		return fmt.Errorf("observability setup: %w", err)
+	}
+	defer func() {
+		shctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if serr := obs.Shutdown(shctx); serr != nil {
+			log.Warn("observability shutdown", "error", serr)
+		}
+	}()
+	if os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT") != "" {
+		log.Info("observability: OTLP export enabled + /metrics", "endpoint", os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"))
+	} else {
+		log.Info("observability: /metrics only (OTEL_EXPORTER_OTLP_ENDPOINT unset; traces are no-op)")
+	}
+	// Active environment (ADR-0057): a logical dev/staging/prod slice WITHIN this
+	// Cell. Empty = unscoped (reconciles every declaration, byte-identical to
+	// pre-ADR-0057). When set, the reconcile applies + prunes only its slice.
+	store.SetEnvironment(env("STRATT_ENVIRONMENT", ""))
 	// scopeTok is the Cell's NATS subject/stream scope token — the ONE string
 	// the hub and every Site agent derive identically from shared env so the two
 	// ends exchange on the same subjects (ADR-0044 slice 6). "" for LocalCell
@@ -289,6 +391,11 @@ func run(ctx context.Context, log *slog.Logger) error {
 	var oidcResolver *authz.OIDCResolver
 	oidcIssuer := os.Getenv("STRATT_OIDC_ISSUER")
 	oidcAudience := os.Getenv("STRATT_OIDC_AUDIENCE")
+	// Structural auth-bypass guard (enterprise-readiness SEC-2): a safe posture
+	// is a property of boot, not an operator's memory.
+	if err := checkDevPrincipalSafety(devPrincipal, oidcIssuer, env("STRATT_ENVIRONMENT", "")); err != nil {
+		return err
+	}
 	if issuer := oidcIssuer; issuer != "" {
 		// Production guard (ADR-0013, slice-5 guardian flag): an issuer
 		// without an audience accepts any token the IdP ever minted for any
@@ -382,6 +489,10 @@ func run(ctx context.Context, log *slog.Logger) error {
 				"os.hardening.sysctl", "os.hardening.sshd", "os.hardening.filesystem",
 				"os.hardening.auditd", "os.hardening.services",
 				"fileset.content", "access.grants",
+				// app.config: the observed application config an ansible remediation
+				// reports back via the stratt_facets convention (ADR-0084 fact-back).
+				// A Step's facetWriteScope is intersected with this grant (ADR-0054).
+				"app.config",
 			},
 			IdentitySchemes: []string{"host.name"},
 		}
@@ -470,6 +581,10 @@ func run(ctx context.Context, log *slog.Logger) error {
 		log.Info("no notify plugin configured (STRATT_NOTIFY_PLUGIN_ADDR empty); notifications disabled")
 	}
 
+	// adopt/materialize Action is provided by the AWX Connector plugin (ADR-0089), registered
+	// in the STRATT_AWX_PLUGIN_ADDR block below — the AWX→CaC transform is tool breadth that
+	// lives in the plugin, not a core-owned image. strattd links zero AWX transform code.
+
 	// mcp EE-Job transport (ADR-0053): MCP is a generic transport (charter §1.5), not
 	// an in-core protocol. The stratt-mcp shim (baked into the EE-mcp image) speaks
 	// JSON-RPC to the sandboxed server; the CORE keeps the seam — it resolves the
@@ -546,12 +661,60 @@ func run(ctx context.Context, log *slog.Logger) error {
 		log.Info("opentofu actuator disabled (STRATT_STATE_KEY empty)")
 	}
 
+	// ── Crossplane build Actuator over the port (ADR-0059) ───────────────
+	// The `builder:` a network Intent names: it applies a Crossplane Claim and
+	// projects the built resource back FULLY — existence, identity, labels, AND the
+	// net.subnet Facet it just built. NetBox (the IPAM SoR) ALSO knows net.subnet;
+	// that is resolved by multi-source Facet ownership (ADR-0060), never by stripping
+	// this grant. NetBox and Crossplane now co-own net.subnet (ADR-0060 multi-source):
+	// both project it, each its own row, NetBox declared authoritative.
+	if addr := os.Getenv("STRATT_CROSSPLANE_PLUGIN_ADDR"); addr != "" {
+		conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+		if err != nil {
+			return fmt.Errorf("crossplane plugin dial %s: %w", addr, err)
+		}
+		defer conn.Close()
+		// The Actuator grant: Crossplane BUILDS Claims (Apply/Destroy). Its write-backs
+		// are Run-provenance ('' source) — an Actuator is not a Source (ADR-0060). The
+		// SYNCER half (Crossplane observing its Claims' as-built state as a registered
+		// Source) is wired below in the Syncer section (full-featured dual-verb plugin).
+		grant := pluginhost.Grant{
+			PluginIdentity:  env("STRATT_CROSSPLANE_PLUGIN_ID", "crossplane"),
+			Tier:            pluginhost.Tier(env("STRATT_CROSSPLANE_TIER", "trusted")),
+			Source:          types.Source{Kind: "crossplane", Name: env("STRATT_CROSSPLANE_SOURCE_NAME", "crossplane")},
+			IdentitySchemes: []string{"crossplane.claim"},
+			LabelKeys:       []string{"source", "fleet", "role", "tier"},
+			FacetNamespaces: []string{"net.subnet"},
+		}
+		host := pluginhost.New(store, pluginv1.NewPluginServiceClient(conn), grant, log)
+		if err := registerPluginActuator("crossplane", host, true, grant, nil); err != nil {
+			return err
+		}
+		// crossplane/provision Action (ADR-0059): the targetless builder an
+		// Intent/Subnet launches. Reuses the host/grant; the build projects the subnet
+		// Entity + correlation label (entity-only, like awsec2/create-vm), and the
+		// Syncer below supplies net.subnet.
+		if err := registerPluginAction("crossplane/provision", host, true); err != nil {
+			return err
+		}
+		log.Info("crossplane plugin actuator registered", "addr", addr)
+	} else {
+		log.Info("no Crossplane plugin configured (STRATT_CROSSPLANE_PLUGIN_ADDR empty); actuator disabled")
+	}
+
 	// ── Evidence store (§2.4, ADR-0029) ─────────────────────────────────
 	// Gated on STRATT_EVIDENCE_BUCKET: without it, Findings open unsealed (a
 	// logged no-op), like the opentofu actuator is gated on a state key.
 	// Object-store credentials arrive via the SDK env chain (§2.5 env-stub),
 	// reusing the same AWS wiring as the EC2 Syncer.
 	var evidence *evidencestore.Store
+	// WORM-sealing boot probe (DR-1): a prod deploy that forgot the bucket must
+	// not silently run without ever sealing compliance evidence.
+	if err := checkEvidenceConfigured(env("STRATT_ENVIRONMENT", ""),
+		os.Getenv("STRATT_EVIDENCE_BUCKET"),
+		os.Getenv("STRATT_EVIDENCE_ALLOW_UNSEALED") == "true"); err != nil {
+		return err
+	}
 	if bucket := os.Getenv("STRATT_EVIDENCE_BUCKET"); bucket != "" {
 		retentionDays, _ := strconv.Atoi(env("STRATT_EVIDENCE_RETENTION_DAYS", "365"))
 		evidence, err = evidencestore.New(ctx, evidencestore.Config{
@@ -595,7 +758,26 @@ func run(ctx context.Context, log *slog.Logger) error {
 	relayDial := func(site, pluginID string) siterelay.Dialer {
 		return siterelay.NewNATSDialer(siteGateway.Conn(), site, pluginID)
 	}
-	w.RegisterActivity(&orchestrate.Activities{Store: store, Dispatcher: dispatcher, Bus: bus, Authz: authorizer, Log: log, RelayDial: relayDial, Actuators: registry, Actions: actionRegistry, PluginActions: pluginActions, PluginActuators: pluginActuators, Evidence: evidence, Sites: siteGateway, Peers: peerClient})
+	// Policy Decision Point port (ADR-0072): the built-in CEL provider by default;
+	// STRATT_POLICY_EXEC_CMD swaps in an EXTERNAL engine (OPA/Kyverno) over the
+	// subprocess transport (ADR-0074); STRATT_POLICY_BYPASS explicitly disables
+	// governance (recorded, never silent). Policy is external and
+	// swappable/bypassable — never a hardcoded core dependency.
+	var decider policy.Decider = policy.CEL{}
+	switch {
+	case os.Getenv("STRATT_POLICY_BYPASS") == "true":
+		decider = policy.Bypass{}
+		log.Warn("POLICY BYPASS: the policy decision point is disabled by STRATT_POLICY_BYPASS; all policy checks allow (recorded)")
+	case os.Getenv("STRATT_POLICY_EXEC_CMD") != "":
+		engine := os.Getenv("STRATT_POLICY_ENGINE")
+		if engine == "" {
+			engine = "exec"
+		}
+		cmd := os.Getenv("STRATT_POLICY_EXEC_CMD")
+		decider = policy.NewExecCommand(engine, cmd)
+		log.Info("policy engine: external subprocess (ADR-0074)", "engine", engine, "cmd", cmd)
+	}
+	w.RegisterActivity(&orchestrate.Activities{Store: store, Dispatcher: dispatcher, Bus: bus, Authz: authorizer, Decider: decider, Log: log, RelayDial: relayDial, Actuators: registry, Actions: actionRegistry, PluginActions: pluginActions, PluginActuators: pluginActuators, Evidence: evidence, Sites: siteGateway, Peers: peerClient})
 	if err := w.Start(); err != nil {
 		return fmt.Errorf("temporal worker: %w", err)
 	}
@@ -648,6 +830,11 @@ func run(ctx context.Context, log *slog.Logger) error {
 		return func(cctx context.Context) { homegate.Supervise(cctx, homeDeps, source, register, run) }
 	}
 
+	// Connectors that declare a cutover descriptor in their manifest (ADR-0087) collect their
+	// clients here; the standing cutover reconciler (registered after the Syncers) reads the
+	// descriptors blindly and flags any adopted object still executing at its Source.
+	var cutoverClients []cutover.ManifestSource
+
 	// ── vCenter Syncer plugin over the sovereign port (ADR-0046 Phase B) ──
 	// The govmomi content-expertise lives in the stratt-plugin-vcenter binary;
 	// the control plane connects to it and GOVERNS what it may write — ownership
@@ -669,12 +856,13 @@ func run(ctx context.Context, log *slog.Logger) error {
 			PluginIdentity:  env("STRATT_VCENTER_PLUGIN_ID", "vcenter"),
 			Tier:            pluginhost.Tier(env("STRATT_VCENTER_TIER", "trusted")),
 			Source:          types.Source{Kind: "vcenter", Name: sourceName, Endpoint: os.Getenv("STRATT_VCENTER_URL")},
-			FacetNamespaces: []string{"vm.config", "vm.runtime", "net.guest"},
-			LabelKeys:       []string{"vcenter.name"},
+			FacetNamespaces: []string{"vm.config", "vm.runtime", "net.guest", "net.subnet"},
+			LabelKeys:       []string{"vcenter.name", "source"},
 			// dns.fqdn is a shared cross-source scheme: only honored because the
-			// grant lists it AND the tier is trusted (finding #4).
-			IdentitySchemes:  []string{"vcenter.uuid", "vcenter.host.uuid", "dns.fqdn"},
-			TombstoneSchemes: []string{"vcenter.uuid", "vcenter.host.uuid"},
+			// grant lists it AND the tier is trusted (finding #4). vcenter.network.moref
+			// identifies vSphere portgroups projected as subnets (ADR-0059).
+			IdentitySchemes:  []string{"vcenter.uuid", "vcenter.host.uuid", "dns.fqdn", "vcenter.network.moref"},
+			TombstoneSchemes: []string{"vcenter.uuid", "vcenter.host.uuid", "vcenter.network.moref"},
 		}
 		host := pluginhost.New(store, pluginv1.NewPluginServiceClient(conn), grant, log)
 		controllers = append(controllers, homeSupervise(sourceName, host.Register, func(cctx context.Context) error {
@@ -682,6 +870,224 @@ func run(ctx context.Context, log *slog.Logger) error {
 		}))
 	} else {
 		log.Info("no vCenter plugin configured (STRATT_VCENTER_PLUGIN_ADDR empty); syncer idle")
+	}
+
+	// ── declared-estate Syncer plugin over the port (ADR-0056 §5) ───────────
+	// Devices-as-code: the plugin's system-of-record is a host-list file shipped
+	// with the estate (estate/hosts/*.yaml). It projects existence + dns.fqdn
+	// identity + labels; the FILE is authoritative and Stratt never writes back
+	// (§1.2 — a projection, not a writable CMDB). The Grant honors NO facet (the
+	// plugin declares none) and NO tombstone scheme, so a host dropped from the
+	// file is never silently deleted (§5). Grant assembled from env here — the
+	// Phase-0 stand-in for the sources/ CaC grant (ADR-0056 decisions 1–4).
+	if addr := os.Getenv("STRATT_DECLARED_PLUGIN_ADDR"); addr != "" {
+		sourceName := env("STRATT_DECLARED_SOURCE_NAME", "declared")
+		interval, err := time.ParseDuration(env("STRATT_DECLARED_INTERVAL", "30s"))
+		if err != nil {
+			return fmt.Errorf("declared interval: %w", err)
+		}
+		conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+		if err != nil {
+			return fmt.Errorf("declared plugin dial %s: %w", addr, err)
+		}
+		defer conn.Close()
+		grant := pluginhost.Grant{
+			PluginIdentity: env("STRATT_DECLARED_PLUGIN_ID", "declared"),
+			Tier:           pluginhost.Tier(env("STRATT_DECLARED_TIER", "trusted")),
+			Source:         types.Source{Kind: "declared", Name: sourceName, Endpoint: env("STRATT_DECLARED_PATH", "file:///hosts")},
+			LabelKeys:      []string{"os", "role", "tier", "demo"},
+			// The ONE declared facet the plugin may own: mgmt.address — the DECLARED
+			// reachability of a device (ADR-0084). The manifest advertises exactly this,
+			// so the grant must list exactly this (registration fails on any mismatch).
+			// Observed facets stay the collectors' (§2.1).
+			FacetNamespaces: []string{"mgmt.address"},
+			// dns.fqdn is a shared cross-source scheme: honored because the grant
+			// lists it AND the tier is trusted (finding #4). No TombstoneSchemes —
+			// projection-only, never a silent delete (§5).
+			IdentitySchemes: []string{"dns.fqdn"},
+		}
+		host := pluginhost.New(store, pluginv1.NewPluginServiceClient(conn), grant, log)
+		controllers = append(controllers, homeSupervise(sourceName, host.Register, func(cctx context.Context) error {
+			return host.SyncLoop(cctx, interval)
+		}))
+	} else {
+		log.Info("no declared-estate plugin configured (STRATT_DECLARED_PLUGIN_ADDR empty); syncer idle")
+	}
+
+	// ── AWX/AAP Connector: mirror the automation estate over the port (ADR-0025 arc) ──
+	// A read-only Syncer projecting an AWX Controller's job templates/workflows/schedules/
+	// orgs/teams as `ansible.*` ObservedEntities (§1.2 — AWX stays SoR and keeps executing;
+	// the mirror never materializes an executable Stratt Workflow — `stratt adopt` is the
+	// deliberate take-authority act, never an import: the projection is always-on, adopt
+	// flips an already-observed object to Stratt-managed). The grant owns the five ansible.* Facet + identity schemes
+	// (the schedule→template / team→org edges cross by those same owned schemes). Per §2.1
+	// the SOURCE NAME must be distinct per Controller so two Controllers never share a
+	// tombstone key — set STRATT_AWX_SOURCE_NAME per Controller (default carries the id).
+	if addr := os.Getenv("STRATT_AWX_PLUGIN_ADDR"); addr != "" {
+		ctrlID := env("STRATT_AWX_CONTROLLER_ID", "awx")
+		sourceName := env("STRATT_AWX_SOURCE_NAME", "awx-"+ctrlID)
+		interval, err := time.ParseDuration(env("STRATT_AWX_INTERVAL", "60s"))
+		if err != nil {
+			return fmt.Errorf("awx interval: %w", err)
+		}
+		conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+		if err != nil {
+			return fmt.Errorf("awx plugin dial %s: %w", addr, err)
+		}
+		defer conn.Close()
+		ansibleSchemes := []string{"ansible.template", "ansible.workflow", "ansible.schedule", "ansible.org", "ansible.team"}
+		grant := pluginhost.Grant{
+			PluginIdentity: env("STRATT_AWX_PLUGIN_ID", "awx"),
+			Tier:           pluginhost.Tier(env("STRATT_AWX_TIER", "trusted")),
+			Source:         types.Source{Kind: "awx", Name: sourceName, Endpoint: os.Getenv("STRATT_AWX_ENDPOINT")},
+			LabelKeys:      []string{"ansible.name", "ansible.org"},
+			// The five ansible.* projection namespaces the Connector owns (its manifest
+			// advertises exactly these; registration fails on any mismatch). Each is also
+			// the object's identity scheme, and the relation to_schemes (schedules /
+			// owned-by / member-of) reference these same owned schemes.
+			FacetNamespaces: ansibleSchemes,
+			// IdentitySchemes ⊇ FacetNamespaces PLUS ansible.playbook — a POINTABLE-ONLY
+			// scheme: AWX emits the cross-source `runs` edge onto ansible.playbook (owned by
+			// the ansible-project Syncer) but never writes its facets (not in FacetNamespaces).
+			// An extra IdentityScheme beyond the manifest is legal — Register only requires
+			// TombstoneSchemes ⊆ IdentitySchemes and Contracts ⊆ FacetNamespaces.
+			IdentitySchemes: append(append([]string{}, ansibleSchemes...), "ansible.playbook"),
+		}
+		awxClient := pluginv1.NewPluginServiceClient(conn)
+		host := pluginhost.New(store, awxClient, grant, log)
+		controllers = append(controllers, homeSupervise(sourceName, host.Register, func(cctx context.Context) error {
+			return host.SyncLoop(cctx, interval)
+		}))
+		// The AWX Connector declares a cutover descriptor in its manifest — collect it for the
+		// standing cutover reconciler (ADR-0087; the reconciler reads the descriptor blindly).
+		cutoverClients = append(cutoverClients, awxClient)
+		// The SAME plugin also provides the adopt/materialize Action (ADR-0089): the AWX→CaC
+		// transform is tool breadth living in the plugin, dispatched by the tool-blind RunAction
+		// path over the port (the awsec2 dual-class shape). The plugin resolves the AWX
+		// CredentialRef via its own SecretBroker in-pod (§2.5); strattd carries no AWX transform.
+		if err := registerPluginAction("adopt/materialize", host, false); err != nil {
+			return err
+		}
+		log.Info("adopt/materialize Action registered on the AWX Connector (ADR-0089)")
+	} else {
+		log.Info("no AWX Connector configured (STRATT_AWX_PLUGIN_ADDR empty); syncer idle")
+	}
+
+	// ── ansible-project Connector: "Ansible without AWX" over the port (ADR-0025 arc) ──
+	// A read-only Syncer projecting a raw Ansible content root (a mounted Git checkout of
+	// playbooks/roles/requirements.yml/inventory) as `ansible.*` ObservedEntities — the
+	// PRIMITIVE half of the `ansible` domain the AWX Connector's orchestration half feeds
+	// (§1.2 — Git stays SoR; nothing is written back or executed; the mirror never
+	// materializes an executable Stratt Workflow — `stratt adopt` is the deliberate
+	// take-authority act, never an import: we are always connected and simply know).
+	// The grant owns EXACTLY the four ansible.* Facet+identity schemes the plugin populates
+	// (§1.1: own what you project) — DISJOINT from AWX's five, so the two Sources co-project
+	// `ansible.*` with no overlap and no cross-source tombstone (ADR-0042/0060). Per §2.1 the
+	// SOURCE NAME is distinct per content root — set STRATT_ANSIBLE_PROJECT_SOURCE_NAME per
+	// project (default carries the project id).
+	if addr := os.Getenv("STRATT_ANSIBLE_PROJECT_PLUGIN_ADDR"); addr != "" {
+		projectID := env("STRATT_ANSIBLE_PROJECT_ID", "ansible")
+		sourceName := env("STRATT_ANSIBLE_PROJECT_SOURCE_NAME", "ansible-project-"+projectID)
+		interval, err := time.ParseDuration(env("STRATT_ANSIBLE_PROJECT_INTERVAL", "60s"))
+		if err != nil {
+			return fmt.Errorf("ansible-project interval: %w", err)
+		}
+		conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+		if err != nil {
+			return fmt.Errorf("ansible-project plugin dial %s: %w", addr, err)
+		}
+		defer conn.Close()
+		// The four ansible.* projection namespaces this Connector owns (its manifest
+		// advertises exactly these; registration fails on any mismatch). Each is also the
+		// artifact's identity scheme. No relation schemes this slice (flat projection).
+		primitiveSchemes := []string{"ansible.playbook", "ansible.role", "ansible.collection", "ansible.inventory"}
+		grant := pluginhost.Grant{
+			PluginIdentity:  env("STRATT_ANSIBLE_PROJECT_PLUGIN_ID", "ansibleproject"),
+			Tier:            pluginhost.Tier(env("STRATT_ANSIBLE_PROJECT_TIER", "trusted")),
+			Source:          types.Source{Kind: "ansible-project", Name: sourceName},
+			LabelKeys:       []string{"ansible.name", "ansible.project"},
+			FacetNamespaces: primitiveSchemes,
+			IdentitySchemes: primitiveSchemes,
+		}
+		host := pluginhost.New(store, pluginv1.NewPluginServiceClient(conn), grant, log)
+		controllers = append(controllers, homeSupervise(sourceName, host.Register, func(cctx context.Context) error {
+			return host.SyncLoop(cctx, interval)
+		}))
+	} else {
+		log.Info("no ansible-project Connector configured (STRATT_ANSIBLE_PROJECT_PLUGIN_ADDR empty); syncer idle")
+	}
+
+	// ── NetBox topology Syncer over the port (ADR-0059) ──────────────────────
+	// NetBox (netbox-community) is the IPAM/DCIM source of truth. The plugin
+	// projects `subnet`/`vlan` Entities + the `in-vlan` placement Relation; the
+	// grant owns the net.subnet/net.vlan Facet namespaces (owned-but-uncovered —
+	// no schema until a Contract consumes them, ADR-0059 M1). Grant from env is
+	// the Phase-0 stand-in for a sources/ CaC grant (ADR-0056 1-4).
+	if addr := os.Getenv("STRATT_NETBOX_PLUGIN_ADDR"); addr != "" {
+		sourceName := env("STRATT_NETBOX_SOURCE_NAME", "netbox")
+		interval, err := time.ParseDuration(env("STRATT_NETBOX_INTERVAL", "60s"))
+		if err != nil {
+			return fmt.Errorf("netbox interval: %w", err)
+		}
+		conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+		if err != nil {
+			return fmt.Errorf("netbox plugin dial %s: %w", addr, err)
+		}
+		defer conn.Close()
+		grant := pluginhost.Grant{
+			PluginIdentity:  env("STRATT_NETBOX_PLUGIN_ID", "netbox"),
+			Tier:            pluginhost.Tier(env("STRATT_NETBOX_TIER", "trusted")),
+			Source:          types.Source{Kind: "netbox", Name: sourceName, Endpoint: os.Getenv("STRATT_NETBOX_URL")},
+			FacetNamespaces: []string{"net.subnet", "net.vlan"},
+			// NetBox is the IPAM system-of-record: its net.subnet/net.vlan are the
+			// declared "truth" (ADR-0060). Crossplane also projects net.subnet (its
+			// as-built CIDR — retained signal), but a scalar read resolves to NetBox.
+			AuthoritativeFacetNamespaces: []string{"net.subnet", "net.vlan"},
+			LabelKeys:                    []string{"source", "net.cidr", "vlan.vid"},
+			IdentitySchemes:              []string{"netbox.prefix.id", "netbox.vlan.id"},
+			TombstoneSchemes:             []string{"netbox.prefix.id", "netbox.vlan.id"},
+		}
+		host := pluginhost.New(store, pluginv1.NewPluginServiceClient(conn), grant, log)
+		controllers = append(controllers, homeSupervise(sourceName, host.Register, func(cctx context.Context) error {
+			return host.SyncLoop(cctx, interval)
+		}))
+	} else {
+		log.Info("no NetBox plugin configured (STRATT_NETBOX_PLUGIN_ADDR empty); syncer idle")
+	}
+
+	// ── Crossplane Syncer over the port — the SYNCER half of the dual-verb plugin ──
+	// (ADR-0060). The Actuator half is registered above; here the SAME plugin Observes
+	// its Claims' as-built state back as a REGISTERED Source (resync-able +
+	// authority-declarable — the charter-clean path, not a synthesized Actuator source).
+	// Co-owns net.subnet but is NOT authoritative: NetBox (the IPAM SoR) is, so a scalar
+	// read resolves to NetBox while Crossplane's as-built CIDR is retained as signal.
+	if addr := os.Getenv("STRATT_CROSSPLANE_PLUGIN_ADDR"); addr != "" {
+		sourceName := env("STRATT_CROSSPLANE_SOURCE_NAME", "crossplane")
+		interval, err := time.ParseDuration(env("STRATT_CROSSPLANE_INTERVAL", "60s"))
+		if err != nil {
+			return fmt.Errorf("crossplane interval: %w", err)
+		}
+		conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+		if err != nil {
+			return fmt.Errorf("crossplane syncer dial %s: %w", addr, err)
+		}
+		defer conn.Close()
+		grant := pluginhost.Grant{
+			PluginIdentity:  env("STRATT_CROSSPLANE_PLUGIN_ID", "crossplane"),
+			Tier:            pluginhost.Tier(env("STRATT_CROSSPLANE_TIER", "trusted")),
+			Source:          types.Source{Kind: "crossplane", Name: sourceName},
+			FacetNamespaces: []string{"net.subnet", "net.vlan"}, // co-owner, NOT authoritative (NetBox is)
+			// No label ownership: the "source" of a subnet is its PROVENANCE
+			// (prov_source_id, ADR-0060), not a shared label key — which is per-key
+			// single-owner (ADR-0041) and legitimately held by another Syncer.
+			IdentitySchemes:  []string{"crossplane.claim"},
+			TombstoneSchemes: []string{"crossplane.claim"},
+		}
+		host := pluginhost.New(store, pluginv1.NewPluginServiceClient(conn), grant, log)
+		controllers = append(controllers, homeSupervise(sourceName, host.Register, func(cctx context.Context) error {
+			return host.SyncLoop(cctx, interval)
+		}))
+		log.Info("crossplane plugin syncer registered (dual-verb)", "addr", addr, "interval", interval.String())
 	}
 
 	// ── MS Graph device Syncer over the port (ADR-0046/0047 Phase C cutover) ─
@@ -714,8 +1120,14 @@ func run(ctx context.Context, log *slog.Logger) error {
 	}
 
 	// ── EC2 instance Syncer over the port (Phase C cutover) ──────────────
-	if awsHost != nil {
-		interval, err := time.ParseDuration(env("STRATT_AWS_INTERVAL", "60s"))
+	// The awsec2 plugin serves BOTH a create-vm build Action and an instance
+	// Syncer. The Syncer is OPT-IN (STRATT_AWS_INTERVAL must be set): a
+	// build-only deployment (the ADR-0058 provisioning builder) runs the Action
+	// without a competing Syncer projection that would re-kind the built instance
+	// (the decision-6 kind-unification hazard). Set the interval to enable steady-
+	// state observation.
+	if awsHost != nil && os.Getenv("STRATT_AWS_INTERVAL") != "" {
+		interval, err := time.ParseDuration(os.Getenv("STRATT_AWS_INTERVAL"))
 		if err != nil {
 			return fmt.Errorf("awsec2 interval: %w", err)
 		}
@@ -723,6 +1135,8 @@ func run(ctx context.Context, log *slog.Logger) error {
 		controllers = append(controllers, homeSupervise(src, awsHost.Register, func(cctx context.Context) error {
 			return awsHost.SyncLoop(cctx, interval)
 		}))
+	} else if awsHost != nil {
+		log.Info("awsec2 plugin: build Action only (STRATT_AWS_INTERVAL unset — Syncer off)")
 	} else {
 		log.Info("no EC2 plugin configured (STRATT_AWS_PLUGIN_ADDR empty); syncer idle")
 	}
@@ -866,6 +1280,29 @@ func run(ctx context.Context, log *slog.Logger) error {
 		}
 	})
 
+	// ── standing cutover reconcile (ADR-0087) ───────────────────────────
+	// Continuously flags an adopted object still executing at its Source: a Stratt Workflow's
+	// adoptedFrom whose foreign executor (an enabled AWX schedule) is still live becomes a
+	// Finding, so it never runs in both places (§7.6/§1.8). Tool-blind — the relation/facet to
+	// check comes from each Connector's manifest cutover descriptor. Idle when none declares one.
+	if len(cutoverClients) > 0 {
+		cutoverInterval, err := time.ParseDuration(env("STRATT_CUTOVER_INTERVAL", "5m"))
+		if err != nil {
+			return fmt.Errorf("cutover interval: %w", err)
+		}
+		controllers = append(controllers, func(cctx context.Context) {
+			rec := &cutover.Reconciler{Store: store, Clients: cutoverClients, Interval: cutoverInterval, Log: log}
+			if err := rec.Run(cctx); err != nil && !errors.Is(err, context.Canceled) {
+				log.Error("cutover reconcile stopped", "error", err)
+			}
+		})
+	}
+
+	// admissionControls is the estate's admission policy, snapshotted at boot so
+	// the API's imperative door (POST /desired-state/*, PUT /views/*) admits
+	// through the same PDP port the Git reconcile uses (enterprise-readiness
+	// GOV-2). Empty when no estate is configured.
+	var admissionControls []types.Control
 	// ── desired-state reconciliation (§1.2: Git is the declarer) ────────
 	if path := os.Getenv("STRATT_DESIRED_STATE_PATH"); path != "" {
 		interval, err := time.ParseDuration(env("STRATT_DESIRED_STATE_INTERVAL", "30s"))
@@ -888,6 +1325,7 @@ func run(ctx context.Context, log *slog.Logger) error {
 			Path: path, Interval: interval, Store: store, Log: log,
 			MaxPruneFraction: maxPrune,
 			MaxDelta:         maxDelta, CompileStatus: compileStatus,
+			Decider: decider,
 		}
 		controllers = append(controllers, func(cctx context.Context) {
 			if err := ctl.Run(cctx); err != nil && !errors.Is(err, context.Canceled) {
@@ -898,10 +1336,14 @@ func run(ctx context.Context, log *slog.Logger) error {
 		// Authz-home gate (ADR-0044 slice 4): only the authz-home Cell's daemon
 		// writes the shared OpenFGA tuple store — else N Cells thrash it. Derived
 		// from the CaC Cell set at boot (not the DB, which races the reconcile).
-		authzDecls, err := desiredstate.ParseDir(path)
+		authzDecls, err := desiredstate.ParseDir(path, nil)
 		if err != nil {
 			return fmt.Errorf("desired-state parse (authz-home): %w", err)
 		}
+		// Snapshot the estate's admission policy for the API's imperative door
+		// (GOV-2). Parsed with a nil decider above (this load only reads Cells +
+		// admission controls; the reconcile controller admits live).
+		admissionControls = authzDecls.AdmissionControls
 		authzHome, err := isAuthzHome(cellID, authzDecls.Cells)
 		if err != nil {
 			return err
@@ -923,6 +1365,13 @@ func run(ctx context.Context, log *slog.Logger) error {
 		// reload on the reconcile cadence. A failed reload keeps the
 		// previous grant set (never silently drop to deny-all mid-flight;
 		// never silently gain grants from a broken file either).
+		// Register the identity projector as the single §2.1 write-owner of
+		// identity.subject + identity.name before the reconcile projects (ADR-0079
+		// slice 3). Best-effort + loud (§1.8): an owner conflict skips identity
+		// projection but never crashes the daemon.
+		if err := store.EnsureIdentitySubjectOwner(ctx); err != nil {
+			log.Error("identity.subject owner registration failed; SCIM identity projection disabled", "error", err)
+		}
 		reloadTuples := func() {
 			if err := evaluator.LoadTuples(path); err != nil {
 				log.Error("authz tuple reload failed; keeping previous grants", "error", err)
@@ -956,6 +1405,30 @@ func run(ctx context.Context, log *slog.Logger) error {
 				if err := fga.SyncTuples(ctx, evaluator.Snapshot()); err != nil {
 					log.Error("openfga tuple sync failed; server grants may be stale", "error", err)
 				}
+			}
+			// SCIM identities → graph (ADR-0079 slice 3): project users/groups as
+			// Entities carrying identity.subject + member-of Relations, on the same
+			// SCIM reconcile cadence. Best-effort — a failure keeps the previous
+			// projection (§1.8, logged). Leader-only (this closure runs on the leader).
+			if err := store.ProjectSCIMEntities(ctx); err != nil {
+				log.Error("scim identity projection failed; keeping previous", "error", err)
+			}
+			// Identity correlation (ADR-0079 slice 4a): link credentials to the
+			// subjects they attest (`identifies`) and raise the leaver-credential
+			// Finding — a cross-source (PKI × IdP) signal no island model can see.
+			// Runs after the subject/credential projections so both exist. Best-effort.
+			if err := store.CorrelateIdentities(ctx); err != nil {
+				log.Error("identity correlation failed; keeping previous", "error", err)
+			}
+			// Software-advisory check (ADR-0080 slice 3): load the declarable advisory
+			// ruleset from the estate (compliance-as-data) and raise patch/advisory
+			// Findings across the WHOLE software dimension — packages, container
+			// images, charts — in one form-agnostic pass. Best-effort — a broken
+			// ruleset keeps the previous (§1.8).
+			if advisories, err := desiredstate.LoadSoftwareAdvisories(path); err != nil {
+				log.Error("load software advisories failed; keeping previous", "error", err)
+			} else if err := store.CheckSoftwareAdvisories(ctx, advisories); err != nil {
+				log.Error("software advisory check failed; keeping previous", "error", err)
 			}
 		}
 		reloadTuples()
@@ -1079,7 +1552,7 @@ func run(ctx context.Context, log *slog.Logger) error {
 	if uiDir != "" {
 		log.Info("serving ui", "dir", uiDir)
 	}
-	server := &api.Server{Store: store, Bus: bus, Temporal: temporalClient, Authz: authorizer, Log: log, CellID: cellID, CellSecret: []byte(os.Getenv("STRATT_CELL_SECRET")), Peers: peerClient, Issuer: oidcIssuer, Audience: oidcAudience, DevPrincipalHeader: devPrincipal, OIDC: oidcResolver, UIDir: uiDir, StateBackend: stateHandler, EmitterIngest: emitters.New(store, bus, log).Handler(), SCIM: scim.New(store, log).Handler(), CompileStatus: compileStatus, Evidence: evidence, SourceStatus: func() map[string]string {
+	server := &api.Server{Store: store, Bus: bus, Temporal: temporalClient, Authz: authorizer, Log: log, CellID: cellID, CellSecret: []byte(os.Getenv("STRATT_CELL_SECRET")), Peers: peerClient, Issuer: oidcIssuer, Audience: oidcAudience, DevPrincipalHeader: devPrincipal, OIDC: oidcResolver, UIDir: uiDir, StateBackend: stateHandler, EmitterIngest: emitters.New(store, bus, log).Handler(), SCIM: scim.New(store, log).Handler(), CompileStatus: compileStatus, Evidence: evidence, Decider: decider, AdmissionControls: admissionControls, Metrics: obs.MetricsHandler(), SourceStatus: func() map[string]string {
 		snap := sourceStatus.Snapshot()
 		out := make(map[string]string, len(snap))
 		for name, rt := range snap {

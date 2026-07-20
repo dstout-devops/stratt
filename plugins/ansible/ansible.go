@@ -18,7 +18,11 @@ import (
 // self-reported hosts, so the hub's confused-deputy gate binds. Identity keys carry
 // the write-back correlation (a host's facts project onto its Entity by identity).
 type Target struct {
-	Name     string            `json:"name"`
+	Name string `json:"name"`
+	// Address is the core's typed reachability coordinate (ADR-0084). The shim —
+	// not the core — renders it into ansible's connection var: the spine never
+	// authors ansible_host.
+	Address  string            `json:"address,omitempty"`
 	Vars     map[string]string `json:"vars,omitempty"`
 	Identity map[string]string `json:"identity,omitempty"`
 }
@@ -43,12 +47,24 @@ const GatherFactsPlay = `- hosts: all
 `
 
 // buildInventory renders the legible targets into an INI [all] group — one line per
-// target Name with its connection Vars (ADR-0051 MF4: from the core-resolved set).
+// target Name (ADR-0051 MF4: from the core-resolved set). The SHIM maps the core's
+// typed Address (ADR-0084) into ansible's connection var — the core never authored
+// an ansible_host: a real address becomes `ansible_host=<addr>`; the reserved value
+// `local` becomes `ansible_connection=local` (a target that explicitly declares it
+// runs on the control node); an empty Address emits no connection var, so an
+// unreachable host fails LOUDLY rather than silently running local (§1.8). Genuine
+// tool Vars (never a connection key from core) still render.
 func buildInventory(targets []Target) string {
 	var b strings.Builder
 	b.WriteString("[all]\n")
 	for _, t := range targets {
 		b.WriteString(t.Name)
+		switch {
+		case t.Address == "local":
+			b.WriteString(" ansible_connection=local")
+		case t.Address != "":
+			fmt.Fprintf(&b, " ansible_host=%s", t.Address)
+		}
 		for k, v := range t.Vars {
 			fmt.Fprintf(&b, " %s=%s", k, v)
 		}
@@ -151,6 +167,19 @@ func extractFacts(ev RunnerEvent) map[string][]byte {
 	if arr, ok := facts["stratt_access"].([]any); ok && len(arr) > 0 {
 		if raw, err := json.Marshal(arr); err == nil {
 			out["access.grants"] = raw
+		}
+	}
+	// Generic facet-report convention (ADR-0084 fact-back): a play projects ANY Facet
+	// by setting the reserved `stratt_facets` fact — a map of namespace -> value (the
+	// AWX artifacts model: the remediation reports the state it OBSERVED on the target).
+	// The per-Run FacetWriteScope (ADR-0054) gates WHICH namespaces are accepted
+	// core-side, so this convention never widens a Run's write authority. Generalizes
+	// the fixed stratt_fileset/stratt_hardening_* keys above without a per-facet map.
+	if sf, ok := facts["stratt_facets"].(map[string]any); ok {
+		for ns, v := range sf {
+			if raw, err := json.Marshal(v); err == nil {
+				out[ns] = raw
+			}
 		}
 	}
 	if len(out) == 0 {

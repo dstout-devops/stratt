@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "stratt:contract:facets/identity.subject:v1",
+  "title": "identity.subject Facet",
+  "description": "Demanded by the SCIM identity projector's Normalizer output Contract (ADR-0079 slice 3): the canonical coordinates any identity SUBJECT carries — a user, group, service, or machine. The cross-form projection under which subjects are queryable regardless of source (the peer of identity.credential). A rebuildable projection of the IdP system of record (§1.2, INV-1: written only by this Normalizer + Run provenance); the graph is never the identity authority and never writable as a directory (INV-2). No secret material (§2.5). `scheme` is an OPEN string (§1.4). Single write-owner per §2.1; validated at the Projector write path.",
+  "type": "object",
+  "properties": {
+    "scheme": {
+      "type": "string",
+      "description": "Subject form — OPEN (not a closed core enum): well-known values include user, group, service, machine."
+    },
+    "name": {
+      "type": "string",
+      "description": "The canonical subject name (userName/UPN/displayName/SPN)."
+    },
+    "authority": {
+      "type": "string",
+      "description": "The issuing IdP/directory this subject is projected from."
+    },
+    "status": {
+      "type": "string",
+      "description": "Lifecycle status projected from the SoR — active | disabled (never authored in the graph, INV-2)."
+    },
+    "externalId": { "type": "string" },
+    "email": { "type": "string" },
+    "principalId": {
+      "type": "string",
+      "description": "The authz Principal that authenticates AS this identity (ADR-0079 `authenticates-as`, realized as a correlation attribute — not a graph node, so the authz and estate planes never merge). CORRELATION-ONLY: read by Views/Findings to bridge audit/run/cost (Principal-keyed) to the estate identity; NEVER read by the authz evaluator (INV-3)."
+    }
+  },
+  "required": ["scheme", "name"],
+  "additionalProperties": false
+}

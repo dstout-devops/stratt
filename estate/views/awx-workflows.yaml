@@ -1,0 +1,6 @@
+# The AWX-estate audit View over the ansible.workflow mirror the awx Connector projects
+# (§1.2 read-only). The governance capability + operators query the AWX estate through
+# these — the app-of-apps-over-AWX surface, consuming the ansible.workflow projection.
+name: awx-workflows
+selector:
+  kinds: [ansible.workflow]

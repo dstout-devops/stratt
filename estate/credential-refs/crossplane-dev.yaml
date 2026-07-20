@@ -1,0 +1,12 @@
+# crossplane-dev — the CredentialRef the subnet-build Action binds (§2.5 / ADR-0009). An
+# Action's CredentialRef use-check is its ONLY authz gate (ExecuteAction refuses a
+# credential-free Action, "ActionUngated") — so even an in-cluster Crossplane build must
+# carry one. This holds a POINTER only (never material, §2.5). The crossplane plugin
+# provisions with its own in-cluster ServiceAccount (kubeAccess RBAC), so the material is
+# a formality here — the gate (the launching Principal's use-check) is the point.
+name: crossplane-dev
+ownerTeam: platform-admins
+backend: k8s-secret
+locator: { namespace: stratt, name: crossplane-dev-creds }
+injection:
+  - { key: kubeconfig, as: file, name: crossplane-kubeconfig }

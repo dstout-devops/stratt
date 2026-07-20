@@ -1,0 +1,58 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "stratt:contract:policy/decision:v1",
+  "title": "policy/decision",
+  "description": "The four-way Policy Decision Point result (ADR-0061 decision 1 / ADR-0062). outcome is a closed enum; a most-restrictive-wins lattice combines many controls (deny > escalate > require_approval > allow). reasons enumerate ALL contributing controls (§1.8); obligations are the binding riders of the winning controls; provenance stamps the evaluator + pinned policy. Engine plugins (OPA/Cerbos/Cedar, ADR-0061 §7.5) normalise their native output to this shape; the built-in CEL evaluator produces it directly.",
+  "type": "object",
+  "required": ["outcome", "provenance"],
+  "additionalProperties": false,
+  "properties": {
+    "outcome": {
+      "type": "string",
+      "enum": ["allow", "deny", "require_approval", "escalate"]
+    },
+    "reasons": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["code", "message"],
+        "additionalProperties": false,
+        "properties": {
+          "code": { "type": "string" },
+          "message": { "type": "string" },
+          "controlId": { "type": "string" }
+        }
+      }
+    },
+    "obligations": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/obligation" }
+    },
+    "provenance": {
+      "type": "object",
+      "required": ["engine", "evaluatedAt"],
+      "additionalProperties": false,
+      "properties": {
+        "engine": { "type": "string" },
+        "engineVersion": { "type": "string" },
+        "policyDigest": { "type": "string" },
+        "evaluatedAt": { "type": "string", "format": "date-time" }
+      }
+    }
+  },
+  "$defs": {
+    "obligation": {
+      "type": "object",
+      "required": ["type"],
+      "additionalProperties": false,
+      "description": "A binding rider on a decision. type is drawn from a CLOSED enum (ADR-0061 guardrail 1); a new obligation type is its own ADR, never an inline extension.",
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": ["require_approval", "ttl", "record_evidence", "notify"]
+        },
+        "params": { "type": "object", "additionalProperties": true }
+      }
+    }
+  }
+}

@@ -1,0 +1,6 @@
+# The AWX-estate audit View over the ansible.org mirror the awx Connector projects
+# (§1.2 read-only). The governance capability + operators query the AWX estate through
+# these — the app-of-apps-over-AWX surface, consuming the ansible.org projection.
+name: awx-orgs
+selector:
+  kinds: [ansible.org]

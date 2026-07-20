@@ -33,7 +33,7 @@ dampingObservations: 2
 remediationWorkflow: patch-dev
 framework: cis
 `)
-	parsed, err := ParseDir(root)
+	parsed, err := ParseDir(root, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -60,7 +60,7 @@ framework: cis
 		bad := t.TempDir()
 		writeDecl(t, bad, "v.yaml", "name: v\nselector: {kinds: [vm]}\n")
 		writeBaseline(t, bad, "x.yaml", doc)
-		if _, err := ParseDir(bad); err == nil {
+		if _, err := ParseDir(bad, nil); err == nil {
 			t.Fatalf("invalid baseline (%s) must be rejected", name)
 		}
 	}
@@ -72,14 +72,14 @@ framework: cis
 	okDir := t.TempDir()
 	writeDecl(t, okDir, "v.yaml", "name: v\nselector: {kinds: [vm]}\n")
 	writeBaseline(t, okDir, "x.yaml", "name: x\nviewName: v\nactuator: ansible\ncron: '* * * * *'\nseverity: info\nparams: {check: false}\n")
-	if _, err := ParseDir(okDir); err != nil {
+	if _, err := ParseDir(okDir, nil); err != nil {
 		t.Fatalf("content-blind validation must accept an inert declared params.check, got %v", err)
 	}
 
 	// baselines/ absent → valid (repos predating ADR-0019).
 	old := t.TempDir()
 	writeDecl(t, old, "v.yaml", "name: v\nselector: {kinds: [vm]}\n")
-	if _, err := ParseDir(old); err != nil {
+	if _, err := ParseDir(old, nil); err != nil {
 		t.Fatalf("absent baselines/ must be valid: %v", err)
 	}
 }
@@ -104,7 +104,7 @@ expected:
     path: running
     equals: true
 `)
-	parsed, err := ParseDir(root)
+	parsed, err := ParseDir(root, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -141,9 +141,45 @@ expected:
 		bad := t.TempDir()
 		writeDecl(t, bad, "v.yaml", "name: v\nselector: {kinds: [vm]}\n")
 		writeBaseline(t, bad, "x.yaml", doc)
-		if _, err := ParseDir(bad); err == nil {
+		if _, err := ParseDir(bad, nil); err == nil {
 			t.Fatalf("invalid facet-observation baseline (%s) must be rejected", name)
 		}
+	}
+}
+
+// TestParseRelationPresenceBaseline covers the ADR-0085 topology check: a
+// facet-observation Baseline may assert requiredRelations (with or without
+// expected), and an empty relation type is rejected.
+func TestParseRelationPresenceBaseline(t *testing.T) {
+	root := t.TempDir()
+	writeDecl(t, root, "v.yaml", "name: awx-templates\nselector: {kinds: [ansible.template]}\n")
+	writeBaseline(t, root, "orphan.yaml", `
+name: awx-template-covered
+viewName: awx-templates
+mode: facet-observation
+cron: "@every 5m"
+severity: warning
+dampingObservations: 2
+requiredRelations: [runs]
+`)
+	parsed, err := ParseDir(root, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(parsed.Baselines) != 1 {
+		t.Fatalf("baselines: %+v", parsed.Baselines)
+	}
+	b := parsed.Baselines[0]
+	if len(b.Expected) != 0 || len(b.RequiredRelations) != 1 || b.RequiredRelations[0] != "runs" {
+		t.Fatalf("requiredRelations not parsed: %+v", b)
+	}
+
+	// An empty relation type is rejected (a no-op topology check is a bug).
+	bad := t.TempDir()
+	writeDecl(t, bad, "v.yaml", "name: awx-templates\nselector: {kinds: [ansible.template]}\n")
+	writeBaseline(t, bad, "x.yaml", "name: x\nviewName: awx-templates\nmode: facet-observation\ncron: '* * * * *'\nseverity: info\nrequiredRelations: ['']\n")
+	if _, err := ParseDir(bad, nil); err == nil {
+		t.Fatal("empty requiredRelations type must be rejected")
 	}
 }
 

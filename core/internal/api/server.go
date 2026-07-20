@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"os"
@@ -16,6 +17,7 @@ import (
 
 	"go.temporal.io/sdk/client"
 
+	"github.com/dstout-devops/stratt/core/internal/adopt"
 	"github.com/dstout-devops/stratt/core/internal/authz"
 	"github.com/dstout-devops/stratt/core/internal/awxfacade"
 	"github.com/dstout-devops/stratt/core/internal/cellrouter"
@@ -27,8 +29,10 @@ import (
 	"github.com/dstout-devops/stratt/core/internal/graph"
 	"github.com/dstout-devops/stratt/core/internal/mcpserver"
 	"github.com/dstout-devops/stratt/core/internal/orchestrate"
+	"github.com/dstout-devops/stratt/core/internal/policy"
 	"github.com/dstout-devops/stratt/core/internal/triggers"
 	"github.com/dstout-devops/stratt/types"
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 )
 
 // Server implements the generated ServerInterface over the graph store, the
@@ -78,6 +82,9 @@ type Server struct {
 	// (ADR-0035) — outside /api/v1: the customer's IdP pushes Users/Groups and
 	// authenticates by a per-IdP bearer token, not a Principal.
 	SCIM http.Handler
+	// Metrics, when set, serves the Prometheus exposition at /metrics (OBS-1) —
+	// unauthenticated scrape-only, outside /api/v1. Nil ⇒ /metrics 503s.
+	Metrics http.Handler
 	// CompileStatus, when set, is the shared Intent-compile status the
 	// controller updates and GET /compile serves (ADR-0023).
 	CompileStatus *compiler.Status
@@ -100,6 +107,18 @@ type Server struct {
 	// never gated (never lock out non-SCIM or break-glass identities). Returns a
 	// non-nil error to deny.
 	SCIMGate func(ctx context.Context, principalID string) error
+	// Decider is the PDP port (ADR-0072/0073). With AdmissionControls it admits
+	// every declaration arriving through the imperative door — POST
+	// /desired-state/{plan,apply}, PUT /views/{name} — closing the bypass
+	// (enterprise-readiness GOV-2) where only the Git reconcile (ParseDir) ran
+	// admission. Nil ⇒ admission is skipped on the API path (no engine).
+	Decider policy.Decider
+	// AdmissionControls is the estate's admission policy, snapshotted at boot
+	// from the same estate the reconcile controller admits against. Boot-snapshot
+	// semantics: a later estate admission-policy change is not picked up until
+	// restart (the Git reconcile door always admits live; this door is the
+	// imperative backstop). Empty ⇒ no admission on the API path.
+	AdmissionControls []types.Control
 }
 
 // Handler mounts the generated routes under /api/v1, behind the Principal
@@ -156,7 +175,13 @@ func (s *Server) Handler() http.Handler {
 	})
 	// principal resolves identity; audit records every request behind it (the
 	// full access log, §1.6) — audit is INNER so it sees the resolved Principal.
-	mux.Handle("/api/v1/", http.StripPrefix("/api/v1", s.principalMiddleware(s.auditMiddleware(fed))))
+	// otelhttp wraps the API surface (OBS-1): every /api/v1 request gets a server
+	// span + http.server.* metrics (duration, count, in-flight) on the global
+	// MeterProvider — the raw SLO signals (latency p95, error rate, throughput).
+	apiHandler := otelhttp.NewHandler(
+		http.StripPrefix("/api/v1", s.principalMiddleware(s.auditMiddleware(fed))),
+		"stratt-api")
+	mux.Handle("/api/v1/", apiHandler)
 	// Platform MCP server (§1.6, ADR-0021): the agent surface, same identity
 	// seam (ResolvePrincipal), same capabilities (tools invoke the generated
 	// router in-process). Never anonymous — 401 without a Principal. Tool calls
@@ -189,6 +214,12 @@ func (s *Server) Handler() http.Handler {
 	// Readiness (ADR-0040): distinct from liveness — verifies the substrate is
 	// reachable so a pod only takes traffic once Postgres + NATS are up.
 	mux.HandleFunc("/readyz", s.handleReadyz)
+	// Prometheus scrape surface (OBS-1): unauthenticated, no store/authz — a
+	// scraper reads SLO signals without a Principal. Network-scoped by the SEC-3
+	// NetworkPolicy, not by auth (the Prometheus convention).
+	if s.Metrics != nil {
+		mux.Handle("/metrics", s.Metrics)
+	}
 	// Cell info (ADR-0044 slice 4): UNAUTHENTICATED, NON-federated — a peer
 	// probes it BEFORE it can trust tokens, to verify the fleet shares one OIDC
 	// issuer + Contract registry version before federating. Advertises only
@@ -767,6 +798,13 @@ func (s *Server) DeclareView(w http.ResponseWriter, r *http.Request, name ViewNa
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	// Admission PEP on the imperative View door (GOV-2): admit this single View
+	// through the PDP port before it reaches the graph; fail closed on deny.
+	decls := desiredstate.Declarations{Views: []desiredstate.Declaration{{Name: name, Selector: sel}}}
+	if err := desiredstate.AdmitDeclarations(r.Context(), decls, s.AdmissionControls, s.Decider); err != nil {
+		writeErr(w, http.StatusForbidden, err.Error())
+		return
+	}
 	v, err := s.Store.DeclareView(r.Context(), name, sel)
 	if errors.Is(err, graph.ErrDeclaredByCaC) {
 		writeErr(w, http.StatusConflict, err.Error())
@@ -1128,6 +1166,13 @@ func (s *Server) desiredStateBody(w http.ResponseWriter, r *http.Request) (desir
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return desiredstate.Declarations{}, false
 	}
+	// Admission PEP on the imperative door (GOV-2): the Git reconcile admits at
+	// ParseDir, but a direct POST bypassed it. Admit every incoming declaration
+	// through the PDP port against the estate's boot-snapshot policy; fail closed.
+	if err := desiredstate.AdmitDeclarations(r.Context(), decls, s.AdmissionControls, s.Decider); err != nil {
+		writeErr(w, http.StatusForbidden, err.Error())
+		return desiredstate.Declarations{}, false
+	}
 	return decls, true
 }
 
@@ -1212,6 +1257,102 @@ func (s *Server) GetEntity(w http.ResponseWriter, r *http.Request, id string) {
 		}
 	}
 	writeJSON(w, http.StatusOK, doc)
+}
+
+// AdoptObject implements (POST /adoptions, ADR-0086/0088): launch the async adoption of an
+// ALREADY-OBSERVED object into a reviewable Named-Kind bundle. It authorizes `adopt` on the
+// object's Source (§1.6 — CLI/UI/agents share this grant), resolves the object from the live
+// projection catalog IN-CORE (a graph read; no credential — adopt.Resolve), then launches a
+// Run of the adopt/materialize Action: the credential-bearing deep-read + transform run in a
+// first-party pod that resolves the AWX CredentialRef via the SecretBroker at pod spawn (§2.5,
+// use-without-read — no AWX material ever touches this process). It writes NO graph state
+// (§1.2); the emitted bundle is the Run's output, reviewed + merged, Gated (§5). Returns 202 +
+// the Run id; poll GET /adoptions/{runId}.
+func (s *Server) AdoptObject(w http.ResponseWriter, r *http.Request) {
+	var body AdoptRequest
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid request: "+err.Error())
+		return
+	}
+	if body.Kind == "" || body.Identity == "" || body.Endpoint == "" || body.CredentialRef == "" {
+		writeErr(w, http.StatusBadRequest, "kind, identity, endpoint, and credentialRef are required")
+		return
+	}
+	// Authz (§1.6): `adopt` is scoped to the object's Source — the controller-qualified
+	// identity prefix. Deny-by-default; flipping an object to Stratt-authored is deliberate.
+	// (The credential `use`-check is the standard RunAction chokepoint, §2.5.)
+	source := body.Identity
+	if slash := strings.LastIndexByte(body.Identity, '/'); slash >= 0 {
+		source = body.Identity[:slash]
+	}
+	if !s.requireGrant(w, r, authz.RelationAdopt, authz.SourceObject(source)) {
+		return
+	}
+
+	// Core-side Resolve: a graph read only (native id, source, live executions). No AWX I/O,
+	// no credential — that all happens in the adopt pod (ADR-0088).
+	resolved, err := adopt.Resolve(r.Context(), adopt.NewGraphCatalog(s.Store), adopt.Request{Kind: body.Kind, Identity: body.Identity})
+	if err != nil {
+		switch {
+		case errors.Is(err, adopt.ErrUnsupportedKind):
+			writeErr(w, http.StatusBadRequest, err.Error())
+		case errors.Is(err, adopt.ErrNotObserved):
+			writeErr(w, http.StatusNotFound, err.Error())
+		default:
+			s.Log.Error("adopt resolve failed", "kind", body.Kind, "identity", body.Identity, "error", err)
+			writeErr(w, http.StatusBadGateway, "adopt: catalog resolve failed")
+		}
+		return
+	}
+
+	// The Action params are the core-resolved coordinates the pod needs; credentialMount
+	// names the AWX CredentialRef whose material the pod resolves at spawn.
+	params, err := json.Marshal(map[string]any{
+		"kind":            body.Kind,
+		"identity":        body.Identity,
+		"endpoint":        body.Endpoint,
+		"nativeId":        resolved.NativeID,
+		"source":          resolved.Source,
+		"live":            resolved.Live,
+		"credentialMount": body.CredentialRef,
+	})
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "adopt: encode params")
+		return
+	}
+	p := orchestrate.LaunchParams{Action: "adopt/materialize", Params: params, CredentialRefs: []string{body.CredentialRef}}
+	if id, _, ok := authz.PrincipalFrom(r.Context()); ok {
+		p.Principal = id
+	}
+	run, err := orchestrate.LaunchRun(r.Context(), orchestrate.LaunchDeps{Store: s.Store, Temporal: s.Temporal}, p)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusAccepted, AdoptAccepted{RunId: run.ID})
+}
+
+// GetAdoption implements (GET /adoptions/{runId}, ADR-0088): the adoption Run's status and,
+// on success, its emitted bundle (the Run's typed outputs — Run provenance, §1.2). The caller
+// polls this after POST /adoptions returns 202.
+func (s *Server) GetAdoption(w http.ResponseWriter, r *http.Request, runID string) {
+	run, err := s.Store.GetRun(r.Context(), runID)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	out := AdoptStatus{RunId: run.ID, Status: AdoptStatusStatus(run.Status)}
+	if run.Status == types.RunSucceeded && len(run.Outputs) > 0 {
+		var bundle struct {
+			Files  map[string]string `json:"files"`
+			Report string            `json:"report"`
+		}
+		if err := json.Unmarshal(run.Outputs, &bundle); err == nil {
+			out.Files = &bundle.Files
+			out.Report = &bundle.Report
+		}
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 // StartRun implements (POST /runs): create the Run summary, then start the
@@ -1749,6 +1890,18 @@ func (s *Server) StartWorkflowRun(w http.ResponseWriter, r *http.Request, name s
 	if id, _, ok := authz.PrincipalFrom(r.Context()); ok {
 		principal = id
 	}
+	// Optional launch params (ADR-0059): the operator parameterizes what was declared
+	// (the target of a re-placement move, a per-instance build) — bound in Step params
+	// via {{.launch.x}}. The gate + View-runner authz above remain the control; this
+	// only fills declared placeholders, it cannot escalate what the Workflow may do.
+	var launchParams map[string]any
+	if r.Body != nil {
+		dec := json.NewDecoder(r.Body)
+		if err := dec.Decode(&launchParams); err != nil && !errors.Is(err, io.EOF) {
+			s.fail(w, fmt.Errorf("decode launch params: %w", err))
+			return
+		}
+	}
 	wr, err := s.Store.CreateWorkflowRun(r.Context(), name, "", principal, "")
 	if err != nil {
 		s.fail(w, err)
@@ -1759,7 +1912,7 @@ func (s *Server) StartWorkflowRun(w http.ResponseWriter, r *http.Request, name s
 		ID:        temporalID,
 		TaskQueue: orchestrate.TaskQueue,
 	}, orchestrate.RunDAG, orchestrate.DAGInput{
-		WorkflowRunID: wr.ID, WorkflowName: name, Principal: principal,
+		WorkflowRunID: wr.ID, WorkflowName: name, Principal: principal, LaunchParams: launchParams,
 	})
 	if err != nil {
 		_ = s.Store.SetWorkflowRunStatus(r.Context(), wr.ID, types.RunFailed, map[string]any{"error": "workflow start failed"})
@@ -1889,23 +2042,10 @@ func (s *Server) DecideGate(w http.ResponseWriter, r *http.Request, id string) {
 		writeErr(w, http.StatusForbidden, "no principal (authentication required)")
 		return
 	}
-	allowed := false
-	for _, p := range g.Approvers.Principals {
-		if p == principal {
-			allowed = true
-			break
-		}
-	}
-	for _, team := range g.Approvers.Teams {
-		if allowed {
-			break
-		}
-		member, err := s.Authz.Check(r.Context(), principal, authz.RelationMember, "team:"+team)
-		if err != nil {
-			s.fail(w, err)
-			return
-		}
-		allowed = member
+	allowed, err := authz.ApproverAuthorized(r.Context(), s.Authz, principal, g.Approvers.Principals, g.Approvers.Teams)
+	if err != nil {
+		s.fail(w, err)
+		return
 	}
 	if !allowed {
 		writeErr(w, http.StatusForbidden, fmt.Sprintf("principal %s is not an approver of gate %s", principal, id))

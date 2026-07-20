@@ -1,0 +1,43 @@
+# Zero-dependency fallback for SEC-4: native Pod Security Admission (built into
+# Kubernetes since 1.25 — no Kyverno required). Labelling a namespace with the
+# `restricted` enforce level makes the API server reject any pod that violates the
+# PSS restricted profile at admission — the same floor the Kyverno policy enforces,
+# without an extra controller.
+#
+# Two labels do the work:
+#   pod-security.kubernetes.io/enforce: restricted   → the API server blocks violators
+#   stratt.dev/pod-security: restricted              → the Kyverno policy's selector,
+#                                                       so BOTH mechanisms can coexist
+# The `warn`/`audit` levels surface violations without blocking — useful while you
+# confirm every workload complies before flipping enforce on.
+#
+# Apply to an EXISTING namespace with:
+#   kubectl label ns <stratt-ns> \
+#     pod-security.kubernetes.io/enforce=restricted \
+#     pod-security.kubernetes.io/enforce-version=latest \
+#     stratt.dev/pod-security=restricted
+# or create the namespace declaratively as below.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: stratt
+  labels:
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/enforce-version: latest
+    pod-security.kubernetes.io/warn: restricted
+    pod-security.kubernetes.io/audit: restricted
+    # Selector so the Kyverno ClusterPolicy (if also installed) targets this ns.
+    stratt.dev/pod-security: restricted
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  # The EE Job namespace (dispatch.go Namespace / STRATT_JOBS_NAMESPACE) — the one
+  # place arbitrary tool content runs, so it MUST be restricted.
+  name: stratt-jobs
+  labels:
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/enforce-version: latest
+    pod-security.kubernetes.io/warn: restricted
+    pod-security.kubernetes.io/audit: restricted
+    stratt.dev/pod-security: restricted

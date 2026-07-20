@@ -31,7 +31,7 @@ script: |
   import sys
   # server source, Git-reviewed
 `)
-	parsed, err := ParseDir(root)
+	parsed, err := ParseDir(root, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -52,7 +52,7 @@ script: |
 		bad := t.TempDir()
 		writeDecl(t, bad, "v.yaml", "name: v\nselector: {kinds: [vm]}\n")
 		writeMCPServer(t, bad, "x.yaml", doc)
-		if _, err := ParseDir(bad); err == nil {
+		if _, err := ParseDir(bad, nil); err == nil {
 			t.Fatalf("invalid mcp server (%s) must be rejected", name)
 		}
 	}

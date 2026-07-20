@@ -1,0 +1,12 @@
+# managed-web — a REAL managed node for the ADR-0084 convergence demo. Unlike the
+# synthetic edge-fleet hosts, this one DECLARES its reachability address, so the
+# declared-estate plugin projects mgmt.address and the web-server-configure
+# remediation can actually SSH in and converge it (a genuine AWX-style run, not a
+# local no-op). The address is the in-cluster Service DNS of the sshd/nginx pod
+# (deploy/dev/managed-web.yaml). Labelled `demo: managed-web` (NOT role: web) so it
+# lands in the dedicated managed-web View only — never double-claiming app.config
+# with the web-hosts fleet (§2.4 exclusive claim).
+hosts:
+  - fqdn: managed-web-1.stratt.test
+    labels: { os: linux, demo: managed-web }
+    address: managed-web.stratt.svc.cluster.local

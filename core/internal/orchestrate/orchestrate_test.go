@@ -7,6 +7,7 @@ import (
 
 	"github.com/dstout-devops/stratt/core/internal/actuators"
 	"github.com/dstout-devops/stratt/core/internal/dispatch"
+	"github.com/dstout-devops/stratt/types"
 )
 
 // TestSiteReachableFromCell pins the slice-6 Site→Cell binding decision: a Site
@@ -90,5 +91,27 @@ func TestMergeResults(t *testing.T) {
 	}
 	if merged.SpawnLatency != 900*time.Millisecond {
 		t.Fatalf("spawn latency must report the slowest slice, got %s", merged.SpawnLatency)
+	}
+}
+
+// TestObservedNameIsToolBlind locks the ADR-0089 cleanup: the target namer reads the tool-blind
+// "<source>.name" label CONVENTION (never a hardcoded tool key), picks deterministically, and
+// falls back to the entity id.
+func TestObservedNameIsToolBlind(t *testing.T) {
+	// Any source's <src>.name works — not just one tool.
+	if got := observedName(types.Entity{ID: "e1", Labels: map[string]string{"aws.name": "web-01"}}); got != "web-01" {
+		t.Fatalf("aws.name: got %q want web-01", got)
+	}
+	if got := observedName(types.Entity{ID: "e2", Labels: map[string]string{"vcenter.name": "vm-9"}}); got != "vm-9" {
+		t.Fatalf("vcenter.name: got %q want vm-9", got)
+	}
+	// Deterministic pick (alphabetically-first key) when multiple sources name it.
+	multi := types.Entity{ID: "e3", Labels: map[string]string{"vcenter.name": "z", "aws.name": "a"}}
+	if got := observedName(multi); got != "a" {
+		t.Fatalf("multi-source pick must be deterministic (aws.name < vcenter.name): got %q", got)
+	}
+	// Fallback to the stable entity id when no source stamped a name.
+	if got := observedName(types.Entity{ID: "e4", Labels: map[string]string{"mgmt.site": "x"}}); got != "e4" {
+		t.Fatalf("fallback: got %q want e4", got)
 	}
 }

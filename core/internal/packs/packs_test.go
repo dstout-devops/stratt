@@ -94,7 +94,7 @@ func TestMaterializeProducesValidCaC(t *testing.T) {
 		writeFile(t, filepath.Join(root, rel), string(body))
 	}
 
-	decls, err := desiredstate.ParseDir(root)
+	decls, err := desiredstate.ParseDir(root, nil)
 	if err != nil {
 		t.Fatalf("materialized pack is not valid CaC: %v", err)
 	}

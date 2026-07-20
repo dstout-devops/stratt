@@ -14,7 +14,33 @@ const (
 	// platform authorization, which stays the CaC/OpenFGA spine (§2.5).
 	IntentFileSet = "Intent/FileSet"
 	IntentAccess  = "Intent/Access"
+	// IntentCompute declares desired compute infrastructure (ADR-0058): a count
+	// of instances that SHOULD exist. Unlike the other kinds it does not compile
+	// to observation Baselines — a sibling provisioning reconcile compares its
+	// count against projected+correlated Entities and surfaces GATED builds
+	// (§5 Flow 1), never an Entity for the unbuilt (§1.2).
+	IntentCompute = "Intent/Compute"
+	// Network/topology provisioning Intents (ADR-0059): cardinality-1 NAMED
+	// SINGLETONS (a subnet IS a CIDR, not a count). Like Intent/Compute they do not
+	// compile to observation Baselines — the provisioning reconcile compares the one
+	// named desired Entity against its correlated projection and surfaces a GATED
+	// build (§5 Flow 1), never an Entity for the unbuilt (§1.2). The built infra
+	// projects as a subnet/dns-record/dmz Entity kind (decision 1).
+	IntentSubnet    = "Intent/Subnet"
+	IntentDnsRecord = "Intent/DnsRecord"
+	IntentDmz       = "Intent/Dmz"
+	IntentVlan      = "Intent/Vlan"
 )
+
+// SingletonIntentKinds are the provisioning Intent kinds planned as cardinality-1
+// named singletons (ADR-0059 decision 4), as opposed to Intent/Compute's count/ordinal
+// fan-out. The provisioning reconcile branches on membership here.
+var SingletonIntentKinds = map[string]bool{
+	IntentSubnet:    true,
+	IntentDnsRecord: true,
+	IntentDmz:       true,
+	IntentVlan:      true,
+}
 
 // onRemove lifecycle values (charter §2.4): what happens to compiled state
 // when the Intent (or its Assignment) is withdrawn. v1 implements `retain`

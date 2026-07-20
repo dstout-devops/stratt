@@ -1,7 +1,0 @@
-# Dev authz grants for the plugin e2e (in-proc tuple evaluator, no OpenFGA
-# server). The dev-runner principal (carried on the X-Stratt-Principal header,
-# devPrincipalHeader: true) may launch Runs against both dev Views — the
-# runner-on-View grant §2.5/ADR-0028 checks at the door.
-tuples:
-  - { user: principal:dev-runner, relation: runner, object: view:dev-hosts }
-  - { user: principal:dev-runner, relation: runner, object: view:dev-vms }

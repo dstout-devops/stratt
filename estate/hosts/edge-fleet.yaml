@@ -1,0 +1,18 @@
+# Devices-as-code (ADR-0056 §5). This FILE is the authoritative system-of-record
+# for these hosts; the declared-estate Connector (plugins/declared) PROJECTS
+# each one as a `host` Entity over the sovereign plugin port — Stratt never writes
+# back (§1.2 — a projection, not a writable CMDB). Add a host here, open a PR, and
+# on merge it becomes a graph member selected by the linux-fleet View and
+# drift-checked by the linux-baseline Assignment. Removing a host does NOT delete
+# its Entity (no tombstone scheme, §5) — a decommission is a deliberate decision.
+#
+# The plugin projects existence + dns.fqdn identity + these labels ONLY. Every
+# other Facet (fileset.content, os.kernel, access.grants) is OBSERVED by the
+# collector Runs — a different write-owner (§2.1), never declared here (§1.1).
+hosts:
+  - fqdn: web-01.edge.stratt.test
+    labels: { os: linux, role: web, tier: edge }
+  - fqdn: web-02.edge.stratt.test
+    labels: { os: linux, role: web, tier: edge }
+  - fqdn: db-01.edge.stratt.test
+    labels: { os: linux, role: db, tier: edge }

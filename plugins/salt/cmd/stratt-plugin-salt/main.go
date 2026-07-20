@@ -25,6 +25,9 @@ func main() {
 		Password:  os.Getenv("STRATT_SALT_PASSWORD"),
 		Eauth:     env("STRATT_SALT_EAUTH", "pam"),
 		EventTags: splitTags(os.Getenv("STRATT_SALT_EVENT_TAGS")),
+		// ADR-0080 slice 2b: opt into the OS-package inventory collector (a live
+		// pkg.list_pkgs round-trip; off by default to keep the cache-only default).
+		CollectPackages: os.Getenv("STRATT_SALT_COLLECT_PACKAGES") == "true",
 	}
 	addr := env("STRATT_PLUGIN_LISTEN", ":9090")
 

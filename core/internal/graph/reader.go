@@ -89,6 +89,19 @@ func (s *Store) RelationTargets(ctx context.Context, fromID, relType string) ([]
 	return pgx.CollectRows(rows, pgx.RowTo[string])
 }
 
+// RelationSources returns the from_ids of every relation of relType pointing AT toID —
+// the incoming-edge twin of RelationTargets. Used by the adopt cutover guard to find the
+// foreign-side executions (e.g. the AWX schedules that `schedules` a template) still
+// targeting an object being adopted (ADR-0086 §4).
+func (s *Store) RelationSources(ctx context.Context, toID, relType string) ([]string, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT from_id FROM graph.relation WHERE to_id = $1 AND type = $2`, toID, relType)
+	if err != nil {
+		return nil, fmt.Errorf("graph: relation sources: %w", err)
+	}
+	return pgx.CollectRows(rows, pgx.RowTo[string])
+}
+
 // GetFacets returns all Facets of an Entity with their Provenance — the
 // "why is this value here" surface (charter §2.1, §1.8).
 func (s *Store) GetFacets(ctx context.Context, entityID string) ([]types.Facet, error) {
@@ -150,23 +163,62 @@ func (s *Store) FacetValuesByEntities(ctx context.Context, namespace string, ent
 	if len(entityIDs) == 0 {
 		return map[string]json.RawMessage{}, nil
 	}
+	// ADR-0060 M5 + declared-authority: a scalar read resolves ONE effective value
+	// per Entity from now-possibly-many per-source rows — never a last-row/last-writer
+	// pick. Each row is flagged is_authority when its writer is the namespace's
+	// DECLARED authoritative owner (facet_owner.authoritative — at most one, §2.4):
+	// a syncer stamps prov_writer_ref = its owner_ref, so the join is exact. Run
+	// (empty-source) write-backs never match an authoritative syncer-owner, so a
+	// build's as-applied value defers to the declared IPAM/SoR truth by construction.
 	rows, err := s.pool.Query(ctx, `
-		SELECT entity_id, value FROM graph.facet
-		WHERE namespace = $1 AND entity_id = ANY($2::uuid[])`, namespace, entityIDs)
+		SELECT f.entity_id, f.value,
+		       (o.owner_ref IS NOT NULL) AS is_authority
+		FROM graph.facet f
+		LEFT JOIN graph.facet_owner o
+		  ON o.namespace = f.namespace AND o.owner_ref = f.prov_writer_ref AND o.authoritative
+		WHERE f.namespace = $1 AND f.entity_id = ANY($2::uuid[])`, namespace, entityIDs)
 	if err != nil {
 		return nil, fmt.Errorf("graph: facet values by entities: %w", err)
 	}
 	defer rows.Close()
-	out := make(map[string]json.RawMessage, len(entityIDs))
+	type candidate struct {
+		val         json.RawMessage
+		isAuthority bool
+	}
+	perEntity := make(map[string][]candidate, len(entityIDs))
 	for rows.Next() {
 		var id string
 		var val json.RawMessage
-		if err := rows.Scan(&id, &val); err != nil {
+		var isAuthority bool
+		if err := rows.Scan(&id, &val, &isAuthority); err != nil {
 			return nil, fmt.Errorf("graph: scan facet value: %w", err)
 		}
-		out[id] = val
+		perEntity[id] = append(perEntity[id], candidate{val, isAuthority})
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	// Resolve: a single source yields its value. Many sources resolve to the ONE
+	// declared authority if present; with none declared the read is OMITTED
+	// (fail-safe — e.g. mgmt.site routing falls to the default) so nothing is
+	// silently picked, and the ownership-contention Finding surfaces it (§2.4/§1.8).
+	out := make(map[string]json.RawMessage, len(perEntity))
+	for id, cands := range perEntity {
+		if len(cands) == 1 {
+			out[id] = cands[0].val
+			continue
+		}
+		var auth []json.RawMessage
+		for _, c := range cands {
+			if c.isAuthority {
+				auth = append(auth, c.val)
+			}
+		}
+		if len(auth) == 1 {
+			out[id] = auth[0]
+		}
+	}
+	return out, nil
 }
 
 // HomeCellsByEntities bulk-reads the home Cell of a set of Entities (ADR-0044)
@@ -225,6 +277,31 @@ func selectorSQL(sel types.ViewSelector) (where string, args []any, err error) {
 		conds = append(conds, fmt.Sprintf(
 			"EXISTS (SELECT 1 FROM graph.facet f WHERE f.entity_id = e.id AND f.namespace = %s AND f.value @> %s::jsonb)",
 			next(p.Namespace), next(string(doc))))
+	}
+	// Relation predicates (ADR-0059 decision 6): the Entity has an outgoing edge of
+	// Type to a live target of TargetKind carrying TargetLabels. An EXISTS join over
+	// graph.relation — topology-aware selection, additive (AND) with the other clauses.
+	for _, rp := range sel.Relations {
+		if rp.Type == "" {
+			return "", nil, errors.New("graph: relation predicate requires a type")
+		}
+		rc := []string{
+			fmt.Sprintf("r.from_id = e.id AND r.type = %s", next(rp.Type)),
+			"te.deleted_at IS NULL",
+		}
+		if rp.TargetKind != "" {
+			rc = append(rc, fmt.Sprintf("te.kind = %s", next(rp.TargetKind)))
+		}
+		if len(rp.TargetLabels) > 0 {
+			doc, err := json.Marshal(rp.TargetLabels)
+			if err != nil {
+				return "", nil, fmt.Errorf("graph: marshal relation target labels: %w", err)
+			}
+			rc = append(rc, fmt.Sprintf("te.labels @> %s::jsonb", next(string(doc))))
+		}
+		conds = append(conds, fmt.Sprintf(
+			"EXISTS (SELECT 1 FROM graph.relation r JOIN graph.entity te ON te.id = r.to_id WHERE %s)",
+			strings.Join(rc, " AND ")))
 	}
 	return strings.Join(conds, " AND "), args, nil
 }
@@ -345,7 +422,8 @@ func bindSelector(sel types.ViewSelector, params map[string]any) (types.ViewSele
 		return sel, nil
 	}
 	ns := template.Namespaces{"param": params}
-	out := types.ViewSelector{Kinds: sel.Kinds}
+	// Relations carry through unbound (topology predicates take no {{.param}} today).
+	out := types.ViewSelector{Kinds: sel.Kinds, Relations: sel.Relations}
 	if sel.Labels != nil {
 		out.Labels = make(map[string]string, len(sel.Labels))
 		for k, v := range sel.Labels {

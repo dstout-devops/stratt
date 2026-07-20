@@ -52,8 +52,9 @@ func (s *Server) GetManifest(context.Context, *pluginv1.GetManifestRequest) (*pl
 			{SchemaId: "vm.config"},
 			{SchemaId: "vm.runtime"},
 			{SchemaId: "net.guest"},
+			{SchemaId: "net.subnet"}, // vSphere portgroups project as subnets (ADR-0059)
 		},
-		TombstoneSchemes: []string{"vcenter.uuid", "vcenter.host.uuid"},
+		TombstoneSchemes: []string{"vcenter.uuid", "vcenter.host.uuid", "vcenter.network.moref"},
 	}}, nil
 }
 
@@ -95,6 +96,25 @@ func enumerate(ctx context.Context, c *vim25.Client) ([]*pluginv1.ObservedEntity
 	m := view.NewManager(c)
 	var out []*pluginv1.ObservedEntity
 	hostUUIDByRef := map[string]string{} // host moref -> vcenter.host.uuid, for the runs-on edge
+
+	// Networks (portgroups / DVPGs / opaque) → subnet Entities. vSphere is a network
+	// Source; its portgroups join the estate alongside cloud subnets (ADR-0059/0060).
+	nv, err := m.CreateContainerView(ctx, c.ServiceContent.RootFolder, []string{"Network"}, true)
+	if err != nil {
+		return nil, fmt.Errorf("vcenter: network view: %w", err)
+	}
+	defer nv.Destroy(ctx) //nolint:errcheck
+	var networks []mo.Network
+	if err := nv.Retrieve(ctx, []string{"Network"}, networkProps, &networks); err != nil {
+		return nil, fmt.Errorf("vcenter: retrieve networks: %w", err)
+	}
+	for _, n := range networks {
+		e, err := normalizeNetwork(n)
+		if err != nil {
+			continue
+		}
+		out = append(out, e)
+	}
 
 	hv, err := m.CreateContainerView(ctx, c.ServiceContent.RootFolder, []string{"HostSystem"}, true)
 	if err != nil {
@@ -138,6 +158,14 @@ func enumerate(ctx context.Context, c *vim25.Client) ([]*pluginv1.ObservedEntity
 					Type: "runs-on", ToScheme: "vcenter.host.uuid", ToValue: uuid,
 				})
 			}
+		}
+		// placed-in edges to each attached network (ADR-0059 decision 2): the VM sits
+		// in these portgroups. Observed placement — a cloud Syncer emits the same edge
+		// shape for its subnets, so "the VMs in network X" is one relation-aware View.
+		for _, netRef := range vm.Network {
+			e.Relations = append(e.Relations, &pluginv1.ObservedRelation{
+				Type: "placed-in", ToScheme: "vcenter.network.moref", ToValue: netRef.Value,
+			})
 		}
 		out = append(out, e)
 	}

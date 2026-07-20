@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "stratt:contract:actions/adopt/materialize.input:v1",
+  "title": "adopt/materialize input",
+  "description": "Input Contract for adopt/materialize (ADR-0088): the core-resolved coordinates the pod-side transform needs. The AWX token is NOT here — it resolves in-pod from the CredentialRef named by credentialMount via the SecretBroker (§2.5). kind/identity/source/nativeId/live are graph-read results from adopt.Resolve; the pod does the targeted deep-read + awximport transform.",
+  "type": "object",
+  "properties": {
+    "kind": { "type": "string", "description": "the projection kind, e.g. ansible.template" },
+    "identity": { "type": "string", "description": "the projection identity, e.g. ctrl-a/10" },
+    "endpoint": { "type": "string", "description": "the read-only AWX API endpoint for the targeted deep-read" },
+    "nativeId": { "type": "integer", "description": "the foreign-system object id the deep-read is keyed on" },
+    "source": { "type": "string", "description": "the Source that projects the object (stamps adopted-from lineage)" },
+    "live": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "pre-resolved still-enabled foreign-side executions for the cutover guard (ADR-0086 §4)"
+    },
+    "credentialMount": { "type": "string", "description": "the CredentialRef name whose material the SecretBroker resolves in-pod" }
+  },
+  "required": ["kind", "identity", "endpoint", "nativeId", "source", "credentialMount"],
+  "additionalProperties": false
+}

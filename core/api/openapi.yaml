@@ -987,6 +987,57 @@ paths:
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
+  /adoptions:
+    post:
+      operationId: adoptObject
+      summary: Adopt an observed object into a reviewable Named-Kind bundle (ADR-0086/0088)
+      description: >
+        Take an ALREADY-OBSERVED foreign object (resolved from the live projection
+        catalog) and materialize it as reviewable Git-declared desired state (Named
+        Kinds). We never import: the projection is always-on; adopt resolves ONE
+        object from it. The credential-bearing deep-read + transform run in a
+        first-party execution pod (ADR-0088): the control plane resolves the object
+        from the graph, then launches an async Run whose pod resolves the AWX
+        CredentialRef via the SecretBroker (§2.5 — the caller references a credential
+        it may USE but never READ). Writes NO graph state (§1.2); the emitted bundle
+        is the Run's output, reviewed and merged (§5, no auto-launch). Authz: `adopt`
+        on the object's Source + `use` on the CredentialRef (§1.6). Distinct from the
+        control-plane-internal rehome `adopt` (ADR-0044). Returns the Run id; poll
+        GET /adoptions/{runId} for the emitted bundle.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/AdoptRequest" }
+      responses:
+        "202":
+          description: Adoption Run accepted; poll GET /adoptions/{runId} for the bundle.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AdoptAccepted" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /adoptions/{runId}:
+    get:
+      operationId: getAdoption
+      summary: Fetch an adoption Run's status and (on success) its emitted bundle (ADR-0088)
+      description: >
+        Poll the async adoption Run launched by POST /adoptions. While pending/running
+        the bundle is absent; on `succeeded` the files + report are the Run's typed
+        outputs (Run provenance, §1.2). A `failed` Run carries no bundle.
+      parameters:
+        - name: runId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: The adoption Run status and, on success, the reviewable bundle.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AdoptStatus" }
+        "404": { $ref: "#/components/responses/NotFound" }
 components:
   parameters:
     ViewName:
@@ -1050,6 +1101,59 @@ components:
       required: [message]
       properties:
         message: { type: string }
+    AdoptRequest:
+      type: object
+      description: >
+        Names the observed object to adopt + the read-only connection for the
+        targeted deep-read (ADR-0086/0088). The AWX token is NOT sent: the caller
+        references a `credentialRef` it has `use` on; the material resolves only in
+        the adopt execution pod, at pod spawn (§2.5 — use-without-read).
+      required: [kind, identity, endpoint, credentialRef]
+      properties:
+        kind:
+          type: string
+          description: The projection kind, e.g. ansible.template.
+        identity:
+          type: string
+          description: The controller-qualified projection identity, e.g. "ctrl-a/10".
+        endpoint:
+          type: string
+          description: The source system base URL for the targeted deep-read.
+        credentialRef:
+          type: string
+          description: >
+            The CredentialRef name holding the AWX token; resolved in-pod via the
+            SecretBroker (§2.5). The caller needs `use` on it, never reads it.
+    AdoptAccepted:
+      type: object
+      description: The async adoption Run was launched (ADR-0088). Poll GET /adoptions/{runId}.
+      required: [runId]
+      properties:
+        runId:
+          type: string
+          description: The adoption Run id.
+    AdoptStatus:
+      type: object
+      description: >
+        An adoption Run's status and, on success, the reviewable bundle (ADR-0088) —
+        relative file path → CaC content (Named Kinds, adopted-from stamped) plus the
+        adoption report (residual gaps + cutover guard, §1.8). files/report are
+        present only when status is `succeeded`.
+      required: [runId, status]
+      properties:
+        runId:
+          type: string
+        status:
+          type: string
+          enum: [pending, running, succeeded, failed, canceled, partial]
+          description: The Run lifecycle state.
+        files:
+          type: object
+          additionalProperties: { type: string }
+          description: Relative path → declaration content (on success).
+        report:
+          type: string
+          description: The adoption report (on success).
     RehomeRequest:
       type: object
       required: [destCell]

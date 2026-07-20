@@ -1,0 +1,61 @@
+{{- /*
+Pre-upgrade schema migration Job (enterprise-readiness UPG-1, ADR-0078). Runs the
+control-plane binary in STRATT_MIGRATE_ONLY mode as a Helm pre-install/pre-upgrade
+hook, so a schema change lands ONCE, in a controlled step, BEFORE the serving pods
+roll — rather than each replica racing goose Up() at boot. When enabled the serving
+Deployment boots with STRATT_SKIP_MIGRATE. This leans on Helm's native hook
+lifecycle (the external orchestrator) instead of in-app boot coordination.
+
+REQUIRES expand/contract-compatible migrations (ADR-0078): the hook applies the
+new schema while the OLD replicas are still serving, so each release's schema must
+stay compatible with the PREVIOUS release's code. Destructive (contract) changes
+wait for the release after every replica is new.
+*/ -}}
+{{- if .Values.migrations.hook.enabled }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "stratt.fullname" . }}-migrate-{{ .Release.Revision }}
+  labels:
+    {{- include "stratt.labels" . | nindent 4 }}
+    app.kubernetes.io/component: migrate
+  annotations:
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-weight": "-5"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: {{ .Values.migrations.hook.backoffLimit | default 3 }}
+  template:
+    metadata:
+      labels:
+        {{- include "stratt.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: migrate
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: migrate
+          image: {{ include "stratt.image" .Values.image | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy | default "IfNotPresent" }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            capabilities:
+              drop: [ALL]
+          env:
+            - name: STRATT_MIGRATE_ONLY
+              value: "true"
+            {{- include "stratt.databaseEnv" . | nindent 12 }}
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: "1"
+              memory: 256Mi
+{{- end }}

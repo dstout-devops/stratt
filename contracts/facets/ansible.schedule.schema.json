@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "stratt:contract:facets/ansible.schedule:v1",
+  "title": "ansible.schedule Facet",
+  "description": "The OBSERVED definition of an AWX/AAP schedule, projected read-only by the awx Connector (§1.2). An observed foreign object (→ a Stratt Trigger on cutover). Demanded by the AWX-estate governance Baseline awx-schedule-enabled (enabled==true, the disabled/dead-automation audit) and the cutover. rrule is AWX's iCal recurrence; enabled is whether it fires. Closed (§9).",
+  "type": "object",
+  "properties": {
+    "name": { "type": "string" },
+    "rrule": { "type": "string" },
+    "enabled": { "type": "boolean" }
+  },
+  "required": ["name"],
+  "additionalProperties": false
+}

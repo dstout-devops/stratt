@@ -33,14 +33,24 @@ func environment() (*cel.Env, error) {
 	)
 }
 
-// Compile checks and plans a `when` expression. The result type must be
-// bool — a rule that cannot decide is a declaration error, caught at parse
-// (§1.8: fail the file, never silently at event time).
+// Compile checks and plans a Trigger `when` expression against the trigger
+// env (event/emitter). The result type must be bool — a rule that cannot
+// decide is a declaration error, caught at parse (§1.8: fail the file, never
+// silently at event time).
 func Compile(expr string) (*Program, error) {
 	env, err := environment()
 	if err != nil {
 		return nil, err
 	}
+	return CompileForEnv(env, expr)
+}
+
+// CompileForEnv checks and plans a bool `when` expression against an arbitrary
+// caller-supplied env, applying the same cost bounds and fail-closed discipline
+// as trigger rules. This is the shared primitive the policy PDP (ADR-0062)
+// reuses with its own, more strictly subsetted, ChangeContext env — the cost
+// gate and bool-only contract are policy-grade, not trigger-specific.
+func CompileForEnv(env *cel.Env, expr string) (*Program, error) {
 	ast, iss := env.Compile(expr)
 	if iss.Err() != nil {
 		return nil, fmt.Errorf("rules: %w", iss.Err())
@@ -73,14 +83,21 @@ func (defaultEstimator) EstimateCallCost(string, string, *checker.AstNode, []che
 	return nil
 }
 
-// Eval runs the rule against one event payload. Evaluation errors (type
+// Eval runs a trigger rule against one event payload. Evaluation errors (type
 // mismatches against this payload, missing keys) are returned — the engine
 // logs them and does not launch; they are not silent falses.
 func (p *Program) Eval(emitter string, payload map[string]any) (bool, error) {
-	out, _, err := p.prg.Eval(map[string]any{
+	return p.EvalVars(map[string]any{
 		"event":   payload,
 		"emitter": emitter,
 	})
+}
+
+// EvalVars runs the compiled program against an arbitrary variable binding and
+// returns the bool result. Evaluation errors are returned, never swallowed as a
+// silent false (§1.8); the policy PDP maps such an error to a fail-closed deny.
+func (p *Program) EvalVars(vars map[string]any) (bool, error) {
+	out, _, err := p.prg.Eval(vars)
 	if err != nil {
 		return false, fmt.Errorf("rules: eval: %w", err)
 	}

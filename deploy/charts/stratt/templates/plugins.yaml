@@ -9,7 +9,11 @@ scoped to exactly that namespace — never cluster-wide (the notify MF-A pattern
 {{- $name := printf "%s-%s" (include "stratt.fullname" $) .name }}
 {{- /* Plugin pods carry their OWN identity labels — NEVER strattd's selectorLabels,
        or the strattd Deployment/Service (which select app.kubernetes.io/name=<chart>)
-       would adopt the plugin pod and route API traffic to it. */ -}}
+       would adopt the plugin pod and route API traffic to it.
+       NOTE: this comment closes with `}}` (NOT `-}}`) on purpose — the trailing
+       newline is the ONLY separator keeping the leading `---` on its own line when
+       a PRIOR plugin iteration precedes it (else `targetPort: 9090---` glues two
+       documents and the second plugin's Service silently vanishes). */}}
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -36,7 +40,7 @@ spec:
         app.kubernetes.io/component: plugin
         stratt.dev/plugin: {{ .name }}
     spec:
-      {{- if .secretNamespace }}
+      {{- if or .secretNamespace .kubeAccess }}
       serviceAccountName: {{ $name }}
       {{- end }}
       securityContext: {{- toYaml $.Values.podSecurityContext | nindent 8 }}
@@ -60,6 +64,27 @@ spec:
               value: {{ $v | quote }}
             {{- end }}
           resources: {{- toYaml ($.Values.pluginResources | default $.Values.resources) | nindent 12 }}
+          {{- /* estateHosts: a file-backed Syncer (declared-estate, ADR-0056 §5)
+                 needs the estate's hosts/ files. Mount ONLY those keys from the
+                 inline declarations ConfigMap (least privilege — not the whole
+                 estate) at /hosts. Dev/inline path; prod delivers via git-sync. */ -}}
+          {{- if .estateHosts }}
+          volumeMounts:
+            - name: estate-hosts
+              mountPath: /hosts
+              readOnly: true
+          {{- end }}
+      {{- if .estateHosts }}
+      volumes:
+        - name: estate-hosts
+          configMap:
+            name: {{ include "stratt.fullname" $ }}-declarations
+            items:
+              {{- range $path, $bytes := $.Files.Glob "dev/declarations/hosts/**" }}
+              - key: {{ trimPrefix "dev/declarations/" $path | replace "/" "__" }}
+                path: {{ trimPrefix "dev/declarations/hosts/" $path }}
+              {{- end }}
+      {{- end }}
 ---
 apiVersion: v1
 kind: Service
@@ -79,13 +104,15 @@ spec:
     - name: grpc
       port: 9090
       targetPort: 9090
-{{- if .secretNamespace }}
+{{- if or .secretNamespace .kubeAccess }}
 ---
 apiVersion: v1
 kind: ServiceAccount
 metadata:
   name: {{ $name }}
   labels: {{- include "stratt.labels" $ | nindent 4 }}
+{{- end }}
+{{- if .secretNamespace }}
 ---
 # Confined to the brokerable-Secret namespace only (§2.5, notify MF-A) — never a
 # cluster-wide secrets reader. The RBAC gate ≈ the per-call use-grant the core
@@ -111,6 +138,37 @@ roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
   name: {{ $name }}-secret-reader
+subjects:
+  - kind: ServiceAccount
+    name: {{ $name }}
+    namespace: {{ $.Release.Namespace }}
+{{- end }}
+{{- if .kubeAccess }}
+---
+# CONFINED kube-API access to exactly the resources this plugin uses (§2.5): a plugin over
+# the kube API — a Syncer OBSERVING (e.g. Crossplane listing its Claim CRs) and/or a builder
+# APPLYING (Crossplane server-side-applying provider resources). Scoped to the declared
+# apiGroups/resources + verbs (default get/list/watch — a read-only Syncer); never a
+# cluster-admin. The RBAC gate ≈ the per-verb grant the core already governs.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ $name }}-kube-access
+  labels: {{- include "stratt.labels" $ | nindent 4 }}
+rules:
+  - apiGroups: {{ .kubeAccess.apiGroups | toJson }}
+    resources: {{ .kubeAccess.resources | toJson }}
+    verbs: {{ .kubeAccess.verbs | default (list "get" "list" "watch") | toJson }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ $name }}-kube-access
+  labels: {{- include "stratt.labels" $ | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ $name }}-kube-access
 subjects:
   - kind: ServiceAccount
     name: {{ $name }}

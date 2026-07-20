@@ -1,0 +1,92 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "stratt:contract:policy/decision-request:v1",
+  "title": "policy/decision-request",
+  "description": "The engine-agnostic request a Policy Enforcement Point sends to a PDP (ADR-0061 decision 1 / ADR-0062). principal is the acting Stratt Principal; action names the governed operation; resource references an Entity/Facet by frozen-vocabulary kind; context is the shared typed ChangeContext every control evaluates; refs carry the §1.8 one-click-descent linkage; pin hash-verifies the policy applied (§1.5). Sparse risk coordinates (context.blastRadius.maxCriticality, context.riskScore, target criticality) are OPTIONAL/computed — absent ⇒ fail-safe most-restrictive (ADR-0061 M4), never a required universal attribute (§1.1).",
+  "type": "object",
+  "required": ["action", "context"],
+  "additionalProperties": false,
+  "properties": {
+    "principal": { "$ref": "#/$defs/principal" },
+    "action": { "type": "string" },
+    "resource": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "kind": { "type": "string" },
+        "id": { "type": "string" },
+        "attr": { "type": "object", "additionalProperties": true }
+      }
+    },
+    "context": { "$ref": "#/$defs/changeContext" },
+    "refs": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "intent": { "type": "string" },
+        "run": { "type": "string" },
+        "workflow": { "type": "string" },
+        "target": { "type": "string" }
+      }
+    },
+    "pin": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "policyDigest": { "type": "string" },
+        "revision": { "type": "string" }
+      }
+    }
+  },
+  "$defs": {
+    "principal": {
+      "type": "object",
+      "required": ["id"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": "string" },
+        "kind": { "type": "string", "enum": ["human", "service", "agent"] },
+        "roles": { "type": "array", "items": { "type": "string" } },
+        "attr": { "type": "object", "additionalProperties": true }
+      }
+    },
+    "changeContext": {
+      "type": "object",
+      "required": ["actor", "blastRadius"],
+      "additionalProperties": false,
+      "properties": {
+        "actor": { "$ref": "#/$defs/principal" },
+        "committers": { "type": "array", "items": { "$ref": "#/$defs/principal" } },
+        "targets": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["entityRef"],
+            "additionalProperties": false,
+            "properties": {
+              "entityRef": { "type": "string" },
+              "kind": { "type": "string" },
+              "environment": { "type": "string" },
+              "criticality": { "type": "string" }
+            }
+          }
+        },
+        "blastRadius": {
+          "type": "object",
+          "required": ["entityCount", "serviceCount"],
+          "additionalProperties": false,
+          "properties": {
+            "entityCount": { "type": "integer", "minimum": 0 },
+            "serviceCount": { "type": "integer", "minimum": 0 },
+            "maxCriticality": { "type": "string" }
+          }
+        },
+        "environment": { "type": "string" },
+        "changeClass": { "type": "string", "enum": ["standard", "normal", "emergency"] },
+        "riskScore": { "type": "number" },
+        "scheduledAt": { "type": "string", "format": "date-time" },
+        "labels": { "type": "object", "additionalProperties": { "type": "string" } }
+      }
+    }
+  }
+}

@@ -305,6 +305,77 @@ func (s *Store) ResolveClearedCellPlacementFindings(ctx context.Context) (int64,
 // target) row via the partial unique index — a second withdrawal pass just
 // refreshes it, never duplicates. runID is empty (the Intent-layer
 // withdrawal, not a check Run, is the evidence).
+// WriteFacetContentionFindings surfaces multi-source Facet contention (ADR-0060 §4):
+// when >1 source projects the same (Entity, namespace) and no authority is declared,
+// the effective scalar value cannot be resolved — a §2.4/§1.8 diagnosis, never a
+// silent pick. One Finding per contended (Entity, namespace) carrying the contending
+// sources; idempotent on the live (baseline, target) row. Estate-wide, non-fatal.
+func (s *Store) WriteFacetContentionFindings(ctx context.Context) (int64, error) {
+	tag, err := s.pool.Exec(ctx, `
+		INSERT INTO graph.finding
+			(baseline, target, entity_id, status, severity, framework, consecutive_drifted, diff, opened_at)
+		SELECT 'ownership/' || f.namespace, f.entity_id::text, f.entity_id::text, 'open', 'warning', 'ownership', 1,
+		       jsonb_build_object(
+		           'namespace', f.namespace,
+		           'sources', array_agg(DISTINCT f.prov_source_id),
+		           'reason', 'multiple sources project this facet with no declared authority (ADR-0060 §4); declare the authoritative source in sources/ CaC'),
+		       now()
+		FROM graph.facet f
+		JOIN graph.entity e ON e.id = f.entity_id AND e.deleted_at IS NULL
+		GROUP BY f.entity_id, f.namespace
+		HAVING count(DISTINCT f.prov_source_id) > 1
+		ON CONFLICT (baseline, target) WHERE status <> 'resolved'
+		DO UPDATE SET diff = excluded.diff, last_observed = now()`)
+	if err != nil {
+		return 0, fmt.Errorf("graph: write facet contention findings: %w", err)
+	}
+	return tag.RowsAffected(), nil
+}
+
+// ResolveClearedFacetContentionFindings resolves an ownership-contention Finding
+// once the contention clears (≤1 source now projects that (Entity, namespace) —
+// a source was scoped out, or one tombstoned). The GC half (§1.8, ADR-0043).
+// ResolveClearedFindingsByFramework resolves every OPEN Finding of a framework whose
+// (baseline, target) is NOT in keep — the GC half of a reconciler that WriteGovernanceFinding's
+// the currently-live set each sweep (ADR-0087 cutover: a schedule since disabled, or an
+// adoption reverted, clears its Finding). keep empty ⇒ resolve all of that framework's opens.
+func (s *Store) ResolveClearedFindingsByFramework(ctx context.Context, framework string, keep [][2]string) (int64, error) {
+	baselines := make([]string, len(keep))
+	targets := make([]string, len(keep))
+	for i, k := range keep {
+		baselines[i], targets[i] = k[0], k[1]
+	}
+	tag, err := s.pool.Exec(ctx, `
+		UPDATE graph.finding
+		SET status = 'resolved', resolved_at = now(), last_observed = now(),
+		    consecutive_drifted = 0, resolved_reason = 'cutover-cleared'
+		WHERE framework = $1 AND status <> 'resolved'
+		  AND (baseline, target) NOT IN (SELECT b, t FROM unnest($2::text[], $3::text[]) AS k(b, t))`,
+		framework, baselines, targets)
+	if err != nil {
+		return 0, fmt.Errorf("graph: resolve cleared findings by framework: %w", err)
+	}
+	return tag.RowsAffected(), nil
+}
+
+func (s *Store) ResolveClearedFacetContentionFindings(ctx context.Context) (int64, error) {
+	tag, err := s.pool.Exec(ctx, `
+		UPDATE graph.finding fnd
+		SET status = 'resolved', resolved_at = now(), last_observed = now(),
+		    consecutive_drifted = 0, resolved_reason = 'contention-cleared'
+		WHERE fnd.framework = 'ownership' AND fnd.status <> 'resolved'
+		  AND NOT EXISTS (
+		      SELECT 1 FROM graph.facet f
+		      WHERE f.entity_id::text = fnd.target
+		        AND 'ownership/' || f.namespace = fnd.baseline
+		      GROUP BY f.entity_id, f.namespace
+		      HAVING count(DISTINCT f.prov_source_id) > 1)`)
+	if err != nil {
+		return 0, fmt.Errorf("graph: resolve cleared facet contention findings: %w", err)
+	}
+	return tag.RowsAffected(), nil
+}
+
 func (s *Store) WriteOrphanFinding(ctx context.Context, baseline, target, severity string, detail []byte) error {
 	_, err := s.pool.Exec(ctx, `
 		INSERT INTO graph.finding
@@ -315,6 +386,25 @@ func (s *Store) WriteOrphanFinding(ctx context.Context, baseline, target, severi
 		baseline, target, severity, detail)
 	if err != nil {
 		return fmt.Errorf("graph: write orphan finding: %w", err)
+	}
+	return nil
+}
+
+// WriteGovernanceFinding records a governance obligation as a TRACKED, closeable
+// Finding (ADR-0070 guardrail 6 / ADR-0075): a break-glass post-review, or any
+// binding rider that must not vanish, becomes an open Finding keyed by
+// (baseline, target) — idempotent and resolvable, reusing the shipped Findings
+// surface so "mandatory review" is a real item, never a discarded struct (§1.8).
+func (s *Store) WriteGovernanceFinding(ctx context.Context, baseline, target, severity, framework string, detail []byte) error {
+	_, err := s.pool.Exec(ctx, `
+		INSERT INTO graph.finding
+			(baseline, target, status, severity, framework, consecutive_drifted, diff, opened_at)
+		VALUES ($1, $2, 'open', $3, $4, 1, $5, now())
+		ON CONFLICT (baseline, target) WHERE status <> 'resolved'
+		DO UPDATE SET diff = excluded.diff, last_observed = now()`,
+		baseline, target, severity, framework, detail)
+	if err != nil {
+		return fmt.Errorf("graph: write governance finding: %w", err)
 	}
 	return nil
 }

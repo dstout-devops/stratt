@@ -60,3 +60,11 @@ core/stratt-forwarder
 core/strattd
 core/stratt-agent
 core/stratt
+
+# Staged reference estate for the dev inline-declarations ConfigMap. Populated
+# from /estate by `task dev:stage-estate` (Helm can't glob outside the chart dir);
+# the single source of truth is /estate, never this copy.
+/deploy/charts/stratt/dev/declarations/
+
+# ADR-0084 convergence-demo SSH keypair (machine credential material — never commit)
+deploy/dev/managed-web/

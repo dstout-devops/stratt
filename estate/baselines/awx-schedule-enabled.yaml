@@ -1,0 +1,19 @@
+# awx-schedule-enabled — govern the mirrored AWX estate from Stratt BEFORE (or without)
+# migrating (ADR-0025 arc; the app-of-apps-over-AWX audit surface). A facet-observation
+# Baseline (ADR-0033): it READS the ansible.schedule Facet the awx Connector projects
+# (§1.2) and opens a Finding for any schedule that is NOT enabled — a disabled schedule
+# is usually forgotten/dead automation worth a review. This is also the §1.1 CONSUMER
+# that demands the ansible.schedule Facet schema (the mirror feeds governance, never
+# free-floating). No actuator, no write-back — an observation reads (§2.4, no claim).
+name: awx-schedule-enabled
+viewName: awx-schedules
+mode: facet-observation
+framework: ansible-governance
+severity: warning
+cron: "@every 5m"
+dampingObservations: 1
+environments: [dev]
+expected:
+  - namespace: ansible.schedule
+    path: enabled
+    equals: true

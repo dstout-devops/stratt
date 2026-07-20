@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "stratt:contract:actions/adopt/materialize.output:v1",
+  "title": "adopt/materialize output",
+  "description": "Output Contract for adopt/materialize (ADR-0088): the reviewable adopted bundle the pod emits — relative file path -> CaC content (Named Kinds, adopted-from stamped), plus the adoption report (residual gaps + the cutover guard, §1.8). Captured as the Run's typed outputs (Run provenance, §1.2); the operator commits it to Git.",
+  "type": "object",
+  "properties": {
+    "files": {
+      "type": "object",
+      "additionalProperties": { "type": "string" },
+      "description": "relative file path -> Named-Kind CaC content"
+    },
+    "report": { "type": "string", "description": "the adoption report (residual gaps, cutover guard)" }
+  },
+  "required": ["files", "report"],
+  "additionalProperties": false
+}

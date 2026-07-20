@@ -1,12 +1,30 @@
 # ADR 0025 — AWX importer + ansible SCM content-ref
 
-- **Status:** Accepted
+- **Status:** Superseded-in-part by [ADR-0086](0086-adopt-per-object-in-place.md) — Decision #1 (the
+  one-shot `stratt import awx` verb + full-estate self-read) is retired and replaced by per-object
+  `adopt`; Decision #2's transform *input* re-homes to a targeted per-object read. Decision #2 mapping
+  logic, #3 (SCM content-ref `ansible.input.v3`), and #4 (clone-in-EE) **remain Accepted and live** —
+  this ADR stays the authority for them. See the 2026-07-19 amendment below.
 - **Date:** 2026-07-13
 - **Deciders:** Project steward (dstout)
 - **Charter sections:** §5.6 (AWX exodus, Flow 6), §1.2 (projections / no
   writable CMDB), §1.4/§3 (GPL boundary, boring spine), §1.5 (contracts are
   data), §1.8 (never hide diagnosis), §2 (vocabulary), §2.5 (secrets), §8
   (Phase-2 promote enabler); ADR-0022 (rung-2 derived Contracts)
+
+> **Amendment (2026-07-19) — the verb is `adopt`, not `import`; the one-shot model is
+> superseded.** This ADR's premise is a one-shot **`stratt import awx`** that reads an AWX
+> and writes a CaC bundle. The AWX/ansible Connector arc that followed (the always-on
+> Syncers projecting `ansible.*`, ADR-0085) obsoletes that framing: **we never import — the
+> projection is continuous, we are connected and simply know the estate.** The graph already
+> holds every AWX/ansible object; there is nothing to bulk-read. The deliberate act is
+> therefore **`stratt adopt`** — taking authority over an *already-observed* object, flipping
+> it in place from AWX-executed (read-only projection) to Stratt-executed (a Named Kind in
+> Git). "Import" is the legacy-tool verb (AWX "imports inventory") and carries the one-shot
+> mental model we reject. Wherever this document says import/importer/imported below, read
+> **adopt**. The SCM content-ref decision (a Step referencing playbook content by project+path)
+> stands unchanged — an adopted job template still needs its playbook. A future ADR will
+> record the adopt design proper (per-object, in-place, over the live projection).
 
 ## Context
 

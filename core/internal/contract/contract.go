@@ -126,7 +126,8 @@ func intentKindFromFile(base string) string {
 // intentKindSpelling pins the exact Named-Kind spelling for intent filenames
 // that are not a plain first-letter capitalization (§2 vocabulary is frozen).
 var intentKindSpelling = map[string]string{
-	"fileset": "Intent/FileSet",
+	"fileset":   "Intent/FileSet",
+	"dnsrecord": "Intent/DnsRecord",
 }
 
 func ensure() error {
@@ -383,4 +384,40 @@ func ValidateIntentSpec(kind string, spec json.RawMessage) (covered bool, err er
 		spec = []byte(`{}`)
 	}
 	return true, c.validate(spec)
+}
+
+// ValidateIntentSpecPartial validates a PARTIAL Intent spec — e.g. a Blueprint's
+// `defaults`, which need not be a complete spec — against the composed kind's Contract.
+// Every field that IS present must satisfy the schema (type, enum, additionalProperties,
+// …); a missing top-level `required` field is TOLERATED, since defaults supply a subset
+// the Intent completes. This closes the §1.1 seam for author-supplied default values
+// without demanding a whole spec (ADR-0083 §5; full resolved-spec revalidation at compile
+// is a follow-up). covered=false ⇒ the kind has no Contract (nothing to check).
+func ValidateIntentSpecPartial(kind string, spec json.RawMessage) (covered bool, err error) {
+	if err := ensure(); err != nil {
+		return false, err
+	}
+	c, ok := intentSet[kind]
+	if !ok {
+		return false, nil
+	}
+	if len(spec) == 0 {
+		return true, nil // no defaults ⇒ nothing to validate
+	}
+	stripped, err := stripTopRequired(c.contract.Schema)
+	if err != nil {
+		return true, fmt.Errorf("contract: partial schema for %s: %w", kind, err)
+	}
+	return true, ValidateDocument(c.contract.Name, stripped, spec)
+}
+
+// stripTopRequired returns the schema with its top-level `required` array removed, so a
+// partial instance validates present fields without failing on absent required ones.
+func stripTopRequired(schema json.RawMessage) (json.RawMessage, error) {
+	var doc map[string]any
+	if err := json.Unmarshal(schema, &doc); err != nil {
+		return nil, err
+	}
+	delete(doc, "required")
+	return json.Marshal(doc)
 }

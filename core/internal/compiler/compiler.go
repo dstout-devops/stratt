@@ -22,6 +22,7 @@ import (
 	"strings"
 
 	"github.com/dstout-devops/stratt/core/internal/graph"
+	"github.com/dstout-devops/stratt/core/internal/overlay"
 	"github.com/dstout-devops/stratt/core/internal/template"
 	"github.com/dstout-devops/stratt/types"
 )
@@ -168,9 +169,28 @@ func Compile(ctx context.Context, s Store, maxDelta float64) (Plan, error) {
 			}
 		}
 
+		// G6 (ADR-0083 §5): the EFFECTIVE Intent spec = the Blueprint's sane Defaults
+		// (base) layered UNDER the Intent's own values (override) — explicit overlay
+		// layering, no precedence field (§2.4/§4.1 anti-GPO). Routes substitute
+		// {{.spec.X}} from THIS resolved spec, so a field the Intent omits takes the
+		// Blueprint default; a field it sets overrides. A cross-type default/override
+		// clash fails this Assignment loudly (§1.8), never coerces.
+		resolvedSpec, _, merr := overlay.Merge([]overlay.Layer{
+			{Name: "blueprint:" + bp.Name + "/defaults", Values: bp.Defaults},
+			{Name: "intent:" + intent.Name, Values: intent.Spec},
+		})
+		if merr != nil {
+			skipped[a.Name] = true
+			plan.Errors = append(plan.Errors, fmt.Sprintf("assignment %s: defaults/spec merge: %v", a.Name, merr))
+			delta.Note = merr.Error()
+		}
+
 		// ── routing ──
 		routed := map[string]bool{}
 		for i, route := range bp.Routes {
+			if skipped[a.Name] {
+				break // a merge-failed (or already-skipped) Assignment routes nothing
+			}
 			matched, err := routeMatch(ctx, s, view.Selector, route)
 			if err != nil {
 				return Plan{}, err
@@ -181,7 +201,7 @@ func Compile(ctx context.Context, s Store, maxDelta float64) (Plan, error) {
 			for _, id := range matched {
 				routed[id] = true
 			}
-			exp, serr := substituteExpectation(route.Observe, intent.Spec)
+			exp, serr := substituteExpectation(route.Observe, resolvedSpec)
 			if serr != "" {
 				skipped[a.Name] = true
 				plan.Errors = append(plan.Errors, fmt.Sprintf("assignment %s: route %d: %s", a.Name, i, serr))
@@ -388,6 +408,7 @@ func compiledBaseline(a types.Assignment, bp types.Blueprint, intent types.Inten
 		Selector:            &sel,
 		Expected:            []types.FacetExpectation{exp},
 		Claim:               route.Claim,
+		Environments:        a.Environments, // inherit env scope (ADR-0057): dev-compiled ⇒ invisible to prod prune
 		Cron:                "@every 1m",
 		Severity:            severityOr(bp.Severity),
 		DampingObservations: bp.DampingObservations,

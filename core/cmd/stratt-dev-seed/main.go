@@ -9,6 +9,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"log"
 	"os"
 	"time"
@@ -40,6 +41,16 @@ func main() {
 		log.Fatalf("stratt-dev-seed: register source: %v", err)
 	}
 
+	// ADR-0084: reachability is the typed mgmt.address Facet — the silent
+	// ansible_connection:local default is retired. This synthetic host runs on the
+	// EE pod itself, so it declares `local` EXPLICITLY (an opt-in, not a fallback),
+	// registering itself as an owner of the namespace first (§2.1 / ADR-0060).
+	if err := store.RegisterFacetOwner(ctx, types.FacetOwner{
+		Namespace: "mgmt.address", OwnerKind: "syncer", OwnerRef: "dev-seed/syncer",
+	}); err != nil {
+		log.Fatalf("stratt-dev-seed: register mgmt.address owner: %v", err)
+	}
+
 	ids, err := store.NormalizerProjector().UpsertEntities(ctx, types.Provenance{
 		WriterKind: types.WriterSyncer,
 		WriterRef:  "dev-seed/syncer",
@@ -48,6 +59,7 @@ func main() {
 	}, []graph.EntityUpsert{{
 		Kind:         "dev-host",
 		IdentityKeys: map[string]string{"dns.fqdn": "dev-1"},
+		Facets:       map[string]json.RawMessage{"mgmt.address": json.RawMessage(`{"address":"local"}`)},
 	}})
 	if err != nil {
 		log.Fatalf("stratt-dev-seed: upsert entity: %v", err)

@@ -2,6 +2,7 @@ package desiredstate
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -11,6 +12,9 @@ import (
 
 	"github.com/dstout-devops/stratt/core/internal/compiler"
 	"github.com/dstout-devops/stratt/core/internal/graph"
+	"github.com/dstout-devops/stratt/core/internal/policy"
+	"github.com/dstout-devops/stratt/core/internal/provision"
+	"github.com/dstout-devops/stratt/types"
 )
 
 // Controller is the desired-state reconcile loop (charter §3 reconciliation
@@ -40,6 +44,10 @@ type Controller struct {
 	// CompileStatus, when set, receives each pass's compile summary for the
 	// read-only GET /compile surface.
 	CompileStatus *compiler.Status
+	// Decider is the PDP port for the admission PEP (ADR-0073): each reconcile
+	// admits the estate's declarations through it, rejecting a denied load. Nil
+	// ⇒ admission is skipped (no policy engine configured).
+	Decider policy.Decider
 }
 
 // Run reconciles until ctx ends.
@@ -79,13 +87,19 @@ func (c *Controller) reconcile(ctx context.Context, log *slog.Logger) {
 		}
 	}
 
-	decls, err := ParseDir(c.Path)
+	decls, err := ParseDir(c.Path, c.Decider)
 	if err != nil {
 		// Fail-safe: never apply (and above all never prune) off a broken
 		// read of the desired state.
 		log.Error("declarations unreadable; skipping cycle", "error", err)
 		return
 	}
+
+	// Environment scope (ADR-0057): a scoped daemon applies only its slice. The
+	// store's cac list reads are scoped identically, so the prune candidate set
+	// and the compiler see the same slice — out-of-scope declarations are neither
+	// applied nor pruned (the §1.2 data-layer partition, never a convention).
+	decls = ScopeToEnvironment(decls, c.Store.ActiveEnvironment())
 
 	plan, err := ComputePlan(ctx, c.Store, decls)
 	if err != nil {
@@ -150,6 +164,214 @@ func (c *Controller) reconcile(ctx context.Context, log *slog.Logger) {
 		log.Error("cell placement resolve failed", "error", err)
 	} else if n > 0 {
 		log.Info("resolved reconciled cell placement findings", "count", n)
+	}
+
+	// Multi-source Facet contention (ADR-0060): when >1 source projects the same
+	// (Entity, namespace) and no authority is declared, the effective scalar value
+	// can't be resolved — surface it as a Finding, resolve when it clears. Non-fatal.
+	if n, err := c.Store.WriteFacetContentionFindings(ctx); err != nil {
+		log.Error("facet contention check failed", "error", err)
+	} else if n > 0 {
+		log.Warn("multi-source facet contention findings", "count", n)
+	}
+	if n, err := c.Store.ResolveClearedFacetContentionFindings(ctx); err != nil {
+		log.Error("facet contention resolve failed", "error", err)
+	} else if n > 0 {
+		log.Info("resolved cleared facet contention findings", "count", n)
+	}
+
+	// Provisioning reconcile (ADR-0058): surface GATED builds for Intent/Compute
+	// shortfalls (desired count vs projected+correlated Entities). It never builds
+	// and never writes an Entity for the unbuilt (§1.2) — the shortfall is
+	// recomputed each cycle and the provisioning Findings reconciled. Non-fatal.
+	c.reconcileProvisioning(ctx, decls, log)
+}
+
+// reconcileProvisioning turns Intent/Compute declarations into gated-build
+// Findings (ADR-0058). The desired count minus the already-projected+correlated
+// instances is the shortfall; each missing instance becomes a provisioning
+// Finding referencing the gated build Workflow the operator launches (§5 Flow 1),
+// a delta beyond §4.3 pauses as one batch Finding, and instances that have since
+// built resolve. Nothing here writes an Entity or persists desired state (§1.2).
+func (c *Controller) reconcileProvisioning(ctx context.Context, decls Declarations, log *slog.Logger) {
+	log = log.With("component", "provision")
+	var intents []provision.Intent
+	specs := map[string]provision.ComputeSpec{}
+	var singletons []provision.SingletonIntent
+	singSpecs := map[string]provision.SingletonIntent{}
+	for _, in := range decls.Intents {
+		switch {
+		case in.Kind == types.IntentCompute:
+			pi, err := provision.FromIntent(in)
+			if err != nil {
+				log.Error("intent/compute decode failed", "intent", in.Name, "error", err)
+				return
+			}
+			intents = append(intents, pi)
+			specs[pi.Name] = pi.Spec
+		case types.SingletonIntentKinds[in.Kind]:
+			si, err := provision.FromSingletonIntent(in)
+			if err != nil {
+				log.Error("singleton intent decode failed", "intent", in.Name, "kind", in.Kind, "error", err)
+				return
+			}
+			singletons = append(singletons, si)
+			singSpecs[in.Name] = si
+		}
+	}
+
+	built, err := c.Store.ProvisionedInstances(ctx)
+	if err != nil {
+		log.Error("provisioned-instances read failed", "error", err)
+		return
+	}
+	res, err := provision.Plan(intents, built, 0)
+	if err != nil {
+		// Exclusive-claim collision (§2.4) — a declaration error to fix, not a
+		// build to run. Surface loudly; apply nothing.
+		log.Error("provisioning plan rejected", "error", err)
+		return
+	}
+	// Named-singleton mode (ADR-0059 decision 4) — the same gated-Finding plumbing.
+	builtSing, err := c.Store.ProvisionedSingletons(ctx)
+	if err != nil {
+		log.Error("provisioned-singletons read failed", "error", err)
+		return
+	}
+	sres, err := provision.PlanSingletons(singletons, builtSing, 0)
+	if err != nil {
+		log.Error("singleton provisioning plan rejected", "error", err)
+		return
+	}
+
+	var keepB, keepT []string
+	keep := func(b, t string) { keepB = append(keepB, b); keepT = append(keepT, t) }
+
+	for _, inst := range res.ToBuild {
+		sp := specs[inst.Intent]
+		detail, _ := json.Marshal(map[string]any{
+			"instance": inst.Name, "intent": inst.Intent, "ordinal": inst.Ordinal,
+			"builder": sp.Builder, "buildWorkflow": sp.BuildWorkflow,
+			"projectKind": sp.ProjectKind, "labels": sp.Labels, "params": sp.Params,
+			"placement": sp.Placement,
+			"reason":    "declared but not built — launch the gated build Workflow (never auto-run, §5 Flow 1)",
+		})
+		b := "provision/" + inst.Intent
+		if err := c.Store.WriteProvisionFinding(ctx, b, inst.Name, "warning", detail); err != nil {
+			log.Error("write provision finding failed", "instance", inst.Name, "error", err)
+			continue
+		}
+		keep(b, inst.Name)
+	}
+	// Singleton builds: baseline provision/<intent>, target = the (kind/name)
+	// correlation key the built Entity will carry as stratt.intent/singleton.
+	for _, inst := range sres.ToBuild {
+		si := singSpecs[inst.Intent]
+		detail, _ := json.Marshal(map[string]any{
+			"singleton": inst.Name, "intent": inst.Intent, "intentKind": si.Kind,
+			"correlationLabel": map[string]string{"stratt.intent/singleton": inst.Name},
+			"builder":          si.Spec.Builder, "buildWorkflow": si.Spec.BuildWorkflow,
+			"projectKind": si.Spec.ProjectKind, "labels": si.Spec.Labels, "params": si.Spec.Params,
+			"placement": si.Spec.Placement,
+			"reason":    "declared but not built — launch the gated build Workflow (never auto-run, §5 Flow 1)",
+		})
+		b := "provision/" + inst.Intent
+		if err := c.Store.WriteProvisionFinding(ctx, b, inst.Name, "warning", detail); err != nil {
+			log.Error("write singleton provision finding failed", "singleton", inst.Name, "error", err)
+			continue
+		}
+		keep(b, inst.Name)
+	}
+	for _, p := range sres.Paused {
+		detail, _ := json.Marshal(map[string]any{
+			"missing": p.Missing, "desired": p.Desired, "limit": p.Limit,
+			"reason": "singleton provisioning batch exceeds the §4.3 max-delta gate — review, then apply explicitly",
+		})
+		b := "provision/" + p.Intent
+		const batch = "(batch)"
+		if err := c.Store.WriteProvisionFinding(ctx, b, batch, "warning", detail); err != nil {
+			log.Error("write singleton batch finding failed", "error", err)
+			continue
+		}
+		keep(b, batch)
+		log.Warn("singleton provisioning paused: max-delta gate", "missing", p.Missing, "limit", p.Limit)
+	}
+	for _, p := range res.Paused {
+		detail, _ := json.Marshal(map[string]any{
+			"intent": p.Intent, "missing": p.Missing, "desired": p.Desired, "limit": p.Limit,
+			"reason": "provisioning delta exceeds the §4.3 max-delta gate — review, then raise maxDelta or apply explicitly",
+		})
+		b := "provision/" + p.Intent
+		const batch = "(batch)"
+		if err := c.Store.WriteProvisionFinding(ctx, b, batch, "warning", detail); err != nil {
+			log.Error("write provision batch finding failed", "intent", p.Intent, "error", err)
+			continue
+		}
+		keep(b, batch)
+		log.Warn("provisioning paused: max-delta gate", "intent", p.Intent, "missing", p.Missing, "limit", p.Limit)
+	}
+
+	resolved, err := c.Store.ResolveProvisionFindingsExcept(ctx, keepB, keepT)
+	if err != nil {
+		log.Error("resolve provision findings failed", "error", err)
+	}
+	if len(res.ToBuild) > 0 || len(res.Paused) > 0 || len(sres.ToBuild) > 0 || len(sres.Paused) > 0 || resolved > 0 {
+		log.Info("provisioning reconcile",
+			"toBuild", len(res.ToBuild), "paused", len(res.Paused),
+			"singletonBuild", len(sres.ToBuild), "singletonPaused", len(sres.Paused), "resolved", resolved)
+	}
+
+	// Placement drift (ADR-0059 decision 5, S5): declared placement vs observed.
+	c.reconcilePlacementDrift(ctx, intents, singletons, log)
+}
+
+// reconcilePlacementDrift surfaces the desired-vs-observed placement gap as Findings
+// (ADR-0059 S5, §1.8): a unit whose Intent declares placement.subnet but is OBSERVED
+// placed-in a different subnet drifts. Nothing here writes an Entity or edge (§1.2) —
+// converging a drift (re-placing a live host) is a gated move Workflow, a separate slice;
+// until then the Finding is the signal. Findings resolve when the unit converges, stops
+// being observed, or its placement is withdrawn.
+func (c *Controller) reconcilePlacementDrift(ctx context.Context, compute []provision.Intent, singletons []provision.SingletonIntent, log *slog.Logger) {
+	declaredC := provision.DeclaredComputePlacements(compute)
+	declaredS := provision.DeclaredSingletonPlacements(singletons)
+	if len(declaredC) == 0 && len(declaredS) == 0 {
+		// No placement declared anywhere — clear any stale drift Findings and stop.
+		if _, err := c.Store.ResolvePlacementDriftFindingsExcept(ctx, nil); err != nil {
+			log.Error("resolve placement findings failed", "error", err)
+		}
+		return
+	}
+	observedC, err := c.Store.ObservedPlacements(ctx, "stratt.intent/instance")
+	if err != nil {
+		log.Error("observed placements (instance) failed", "error", err)
+		return
+	}
+	observedS, err := c.Store.ObservedPlacements(ctx, "stratt.intent/singleton")
+	if err != nil {
+		log.Error("observed placements (singleton) failed", "error", err)
+		return
+	}
+	drifts := append(provision.DetectPlacementDrift(declaredC, observedC),
+		provision.DetectPlacementDrift(declaredS, observedS)...)
+
+	var keep []string
+	for _, d := range drifts {
+		detail, _ := json.Marshal(map[string]any{
+			"unit": d.Unit, "declared": d.Declared, "observed": d.Observed,
+			"reason": "declared placement diverges from observed placement — re-place via a gated move Workflow (never a reconcile edit, §5)",
+		})
+		if err := c.Store.WritePlacementDriftFinding(ctx, d.Unit, detail); err != nil {
+			log.Error("write placement drift finding failed", "unit", d.Unit, "error", err)
+			continue
+		}
+		keep = append(keep, d.Unit)
+	}
+	resolved, err := c.Store.ResolvePlacementDriftFindingsExcept(ctx, keep)
+	if err != nil {
+		log.Error("resolve placement findings failed", "error", err)
+	}
+	if len(drifts) > 0 || resolved > 0 {
+		log.Info("placement-drift reconcile", "drifted", len(drifts), "resolved", resolved)
 	}
 }
 

@@ -726,7 +726,9 @@ func TestHost_ApplyCoreSideFold(t *testing.T) {
 		Principal: "alice",
 		Params:    []byte(`{"module":"nginx"}`),
 		Targets: []pluginhost.ApplyTarget{
-			{Name: "web-1", IdentityKeys: map[string]string{"vcenter.uuid": "u1"}, Vars: map[string]string{"ansible_host": "10.0.0.1"}},
+			// ADR-0084: reachability is the typed Address field, NOT a core-emitted
+			// ansible_host in Vars — the spine never authors a tool connection key.
+			{Name: "web-1", Address: "10.0.0.1", IdentityKeys: map[string]string{"vcenter.uuid": "u1"}},
 			{Name: "web-2", IdentityKeys: map[string]string{"vcenter.uuid": "u2"}},
 		},
 	})
@@ -744,7 +746,7 @@ func TestHost_ApplyCoreSideFold(t *testing.T) {
 	if captured == nil || len(captured.GetTargets()) != 2 {
 		t.Fatalf("targets must reach the plugin as a legible field, got %+v", captured.GetTargets())
 	}
-	if captured.GetTargets()[0].GetName() != "web-1" || captured.GetTargets()[0].GetVars()["ansible_host"] != "10.0.0.1" {
+	if captured.GetTargets()[0].GetName() != "web-1" || captured.GetTargets()[0].GetAddress() != "10.0.0.1" {
 		t.Fatalf("legible target detail lost: %+v", captured.GetTargets()[0])
 	}
 	if string(captured.GetDesired().GetBytes()) != `{"module":"nginx"}` {

@@ -1,0 +1,9 @@
+# Binds the override Intent to the secure-hosts group via the SAME web-server@1 Blueprint —
+# Blueprint reuse across groups (§2.1). The secure fleet simply overrides the port default
+# to 443; nothing else is re-declared. A different View than web-server so the exclusive
+# app.config claim never collides across the two fleets.
+name: web-server-secure
+intent: web-server-secure
+view: secure-hosts
+blueprint: web-server@1
+environments: [dev]

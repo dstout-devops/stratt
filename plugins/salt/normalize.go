@@ -12,9 +12,49 @@ package salt
 import (
 	"encoding/json"
 	"fmt"
+	"sort"
 
 	pluginv1 "github.com/dstout-devops/stratt/sdk/stratt/plugin/v1"
 )
+
+// attachPackages sets a software.package Facet (ADR-0080 slice 2b) on each observed
+// entity whose minion reported an installed-package list. Correlated by the salt
+// minion id the Syncer already keys on. A minion with no packages is left untouched.
+func attachPackages(entities []*pluginv1.ObservedEntity, pkgsByMinion map[string]map[string]string) {
+	for _, e := range entities {
+		pkgs, ok := pkgsByMinion[e.GetIdentityKeys()["salt.minion_id"]]
+		if !ok || len(pkgs) == 0 {
+			continue
+		}
+		if e.Facets == nil {
+			e.Facets = map[string][]byte{}
+		}
+		e.Facets["software.package"] = softwarePackageFacet(pkgs)
+	}
+}
+
+// softwarePackageFacet renders a minion's {package: version} map into the
+// software.package Facet — the package form of the deliverable-software dimension
+// (ADR-0080): origin "distro", deliveryForm "package". Deterministic order (sorted
+// by name) so the projection is stable across cycles and tests.
+func softwarePackageFacet(pkgs map[string]string) []byte {
+	names := make([]string, 0, len(pkgs))
+	for name := range pkgs {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	list := make([]map[string]any, 0, len(names))
+	for _, name := range names {
+		list = append(list, map[string]any{
+			"name":         name,
+			"version":      pkgs[name],
+			"origin":       "distro",
+			"deliveryForm": "package",
+		})
+	}
+	raw, _ := json.Marshal(map[string]any{"packages": list})
+	return raw
+}
 
 // normalizeMinion maps one minion's grains onto an ObservedEntity. Pure
 // content-expertise — no graph writes (the plugin holds no DB path).

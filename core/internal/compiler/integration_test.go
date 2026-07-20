@@ -347,6 +347,56 @@ func TestCompileOnRemoveRevoke(t *testing.T) {
 	}
 }
 
+// TestCompileBlueprintDefaults proves G6 (ADR-0083 §5): a Blueprint's `defaults`
+// supply Intent-spec values the Intent omits (sane defaults), and an Intent that sets
+// the same field overrides the default — via explicit overlay layering (no precedence
+// field). The resolved value flows into the compiled Baseline's expectation exactly as
+// a directly-declared spec value does.
+func TestCompileBlueprintDefaults(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	seedEntity(t, s, "u1", "x86_64")
+	seedView(t, s, "dev-vms")
+	must(t, s.UpsertWorkflow(ctx, types.Workflow{Name: "app-apply", Steps: []types.Step{{Name: "apply", ViewName: "dev-vms", Actuator: "ansible"}}}))
+
+	bp := types.Blueprint{
+		Name: "webapp", Version: 1, For: types.IntentApplication,
+		Severity: types.SeverityWarning, DampingObservations: 1,
+		// Sane defaults for the composed Intent kind's spec (the base layer).
+		Defaults: map[string]any{"channel": "stable", "port": "8080"},
+		Routes: []types.BlueprintRoute{{
+			Observe: types.FacetExpectation{Namespace: "app.config", Path: "port", Equals: json.RawMessage(`"{{.spec.port}}"`)},
+			Claim:   types.ClaimAdditive, RemediationWorkflow: "app-apply",
+		}},
+	}
+	must(t, s.UpsertBlueprint(ctx, bp))
+
+	// (a) An Intent that OMITS `port` takes the Blueprint default (8080).
+	must(t, s.UpsertIntent(ctx, types.Intent{Name: "web-default", Kind: types.IntentApplication, Spec: map[string]any{"package": "nginx"}}))
+	must(t, s.UpsertAssignment(ctx, types.Assignment{Name: "web1", Intent: "web-default", View: "dev-vms", Blueprint: "webapp", BlueprintVersion: 1}))
+	// (b) An Intent that SETS `port` overrides the default (9090).
+	must(t, s.UpsertIntent(ctx, types.Intent{Name: "web-override", Kind: types.IntentApplication, Spec: map[string]any{"package": "nginx", "port": "9090"}}))
+	must(t, s.UpsertAssignment(ctx, types.Assignment{Name: "web2", Intent: "web-override", View: "dev-vms", Blueprint: "webapp", BlueprintVersion: 1}))
+
+	compileApply(t, s, 0)
+
+	bDefault, err := s.GetBaseline(ctx, CompiledName("web1", "webapp", 1, 0))
+	if err != nil {
+		t.Fatalf("default-case baseline missing: %v", err)
+	}
+	if got := string(bDefault.Expected[0].Equals); got != `"8080"` {
+		t.Fatalf("omitted field must take the Blueprint default 8080, got %s", got)
+	}
+
+	bOverride, err := s.GetBaseline(ctx, CompiledName("web2", "webapp", 1, 0))
+	if err != nil {
+		t.Fatalf("override-case baseline missing: %v", err)
+	}
+	if got := string(bOverride.Expected[0].Equals); got != `"9090"` {
+		t.Fatalf("set field must override the default to 9090, got %s", got)
+	}
+}
+
 // TestCompileFileSet proves an Intent/FileSet Blueprint compiles a
 // digest-Equals facet-observation Baseline (spec substituted into the observe
 // path + value), and that withdrawing the Assignment with onRemove=revert

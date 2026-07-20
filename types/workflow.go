@@ -17,6 +17,19 @@ const (
 type Workflow struct {
 	Name  string `json:"name"`
 	Steps []Step `json:"steps"`
+	// AdoptedFrom is the lineage of a Workflow materialized by `stratt adopt` (ADR-0086/0087):
+	// the observed object it was adopted from. It stays on the Named Kind's Git lineage — never
+	// a projection facet (§1.2) — and is what the standing cutover reconciler reads to detect an
+	// adopted object still executing at its Source. Nil for hand-written Workflows.
+	AdoptedFrom *AdoptedFrom `json:"adoptedFrom,omitempty"`
+}
+
+// AdoptedFrom records the observed object a Named Kind was adopted from (ADR-0087) — the
+// §1.8 descent link back to the source projection. Mirrors Baseline.CompiledFrom's role.
+type AdoptedFrom struct {
+	Kind     string `json:"kind"`     // the projection kind, e.g. ansible.template
+	Identity string `json:"identity"` // the controller-qualified identity, e.g. ctrl-a/10
+	Source   string `json:"source"`   // the source qualifier (Controller id)
 }
 
 // Step is one node of the DAG (§2.3): an actuation (Actuator + params against a
@@ -32,6 +45,12 @@ type Step struct {
 
 	// Gate makes this a human-approval Step (§2: Gates).
 	Gate *GateSpec `json:"gate,omitempty"`
+
+	// Policy makes this an automated policy-decision checkpoint (ADR-0061 §7.2 /
+	// ADR-0063): the built-in PDP evaluates the controls over a ChangeContext
+	// assembled from the run and gates the DAG on the four-way outcome. Mutually
+	// exclusive with Gate/Action/actuation.
+	Policy *PolicySpec `json:"policy,omitempty"`
 
 	// Actuation fields (mirror StartRun / Trigger launch parameters).
 	ViewName string `json:"viewName,omitempty"`
@@ -63,12 +82,23 @@ type Step struct {
 	PlanFrom string `json:"planFrom,omitempty"`
 }
 
+// PolicySpec is an automated policy-decision checkpoint (ADR-0063). v1 carries
+// inline Controls; target-anchored governance.controls Facets are ADR-0061 §7.6.
+// Each Control's When predicate is CEL-compiled at load (fail-closed, §1.8).
+type PolicySpec struct {
+	Controls []Control `json:"controls"`
+}
+
 // GateSpec declares who may decide a Gate and how long it waits.
 type GateSpec struct {
 	Approvers GateApprovers `json:"approvers"`
 	// TimeoutSeconds expires the Gate (recorded as expired, treated as
 	// denial) after this long pending; 0 waits forever.
 	TimeoutSeconds int `json:"timeoutSeconds,omitempty"`
+	// Threshold is the quorum: the number of DISTINCT authorized approvals
+	// required before the Gate proceeds (M-of-N, ADR-0071). 0 or 1 means a
+	// single approval; any single deny short-circuits regardless of threshold.
+	Threshold int `json:"threshold,omitempty"`
 }
 
 // GateApprovers authorizes a decision: the Principal is listed explicitly or

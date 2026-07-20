@@ -11,11 +11,19 @@ use (
 	./core
 	./packs
 	./plugins/ansible
+	./plugins/ansibleproject
 	./plugins/awsec2
+	./plugins/awx
 	./plugins/certissuer
 	./plugins/chef
-	./plugins/msgraph
+	./plugins/crossplane
+	./plugins/declared
+	./plugins/kubecontainers
+	./plugins/kubeservices
 	./plugins/mcp
+	./plugins/mesh
+	./plugins/msgraph
+	./plugins/netbox
 	./plugins/notify
 	./plugins/opentofu
 	./plugins/puppet

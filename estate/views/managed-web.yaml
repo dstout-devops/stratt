@@ -1,0 +1,10 @@
+# managed-web — the dedicated View for the ADR-0084 convergence demo: the ONE real
+# reachable node (the sshd/nginx pod), selected by its demo label so it never
+# overlaps the synthetic web-hosts fleet. The web-server@1 Blueprint is bound here
+# by the managed-web Assignment; the compiler drift-checks app.config.port and the
+# gated remediation actually converges it.
+name: managed-web
+selector:
+  kinds: [host]
+  labels:
+    demo: managed-web

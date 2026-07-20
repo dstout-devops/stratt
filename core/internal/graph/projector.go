@@ -224,17 +224,23 @@ func upsertFacetTx(ctx context.Context, tx pgx.Tx, prov types.Provenance, cell, 
 	if _, err := contract.ValidateFacet(namespace, value); err != nil {
 		return fmt.Errorf("graph: facet %s on %s: %w", namespace, entityID, err)
 	}
+	// The Facet grain includes the SOURCE (ADR-0060): each source retains its own
+	// row, so two sources projecting one namespace never overwrite each other. A
+	// write with no Source (a Run/Actuator write-back) uses the empty-string key —
+	// NOT NULL (a valid PK dimension), bounded (never per-Run writer_ref), and
+	// skipped by the home-gate uuid cast (`sid <> ''`). A genuine per-Actuator
+	// source is the ADR-0060 M2 follow-up.
+	source := prov.SourceID
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO graph.facet (entity_id, namespace, value, prov_writer_kind, prov_writer_ref, prov_source_id, prov_cell, prov_at)
-		VALUES ($1, $2, $3, $4, $5, nullif($6, ''), $8, $7)
-		ON CONFLICT (entity_id, namespace) DO UPDATE
+		VALUES ($1, $2, $3, $4, $5, $6, $8, $7)
+		ON CONFLICT (entity_id, namespace, prov_source_id) DO UPDATE
 		SET value = excluded.value,
 		    prov_writer_kind = excluded.prov_writer_kind,
 		    prov_writer_ref = excluded.prov_writer_ref,
-		    prov_source_id = excluded.prov_source_id,
 		    prov_cell = excluded.prov_cell,
 		    prov_at = excluded.prov_at`,
-		entityID, namespace, value, string(prov.WriterKind), prov.WriterRef, prov.SourceID, prov.At, cell,
+		entityID, namespace, value, string(prov.WriterKind), prov.WriterRef, source, prov.At, cell,
 	); err != nil {
 		return fmt.Errorf("graph: upsert facet %s on %s: %w", namespace, entityID, err)
 	}
@@ -261,7 +267,8 @@ func (p *Projector) UpsertRelation(ctx context.Context, prov types.Provenance, r
 		return err
 	}
 	defer tx.Rollback(ctx) //nolint:errcheck
-	if _, err := tx.Exec(ctx, `
+	var relID string
+	if err := tx.QueryRow(ctx, `
 		INSERT INTO graph.relation (type, from_id, to_id, prov_writer_kind, prov_writer_ref, prov_source_id, prov_cell, prov_at)
 		VALUES ($1, $2, $3, $4, $5, nullif($6, ''), $8, $7)
 		ON CONFLICT (type, from_id, to_id) DO UPDATE
@@ -269,12 +276,170 @@ func (p *Projector) UpsertRelation(ctx context.Context, prov types.Provenance, r
 		    prov_writer_ref = excluded.prov_writer_ref,
 		    prov_source_id = excluded.prov_source_id,
 		    prov_cell = excluded.prov_cell,
-		    prov_at = excluded.prov_at`,
+		    prov_at = excluded.prov_at
+		RETURNING id`,
 		relType, fromID, toID, string(prov.WriterKind), prov.WriterRef, prov.SourceID, prov.At, p.cell,
-	); err != nil {
+	).Scan(&relID); err != nil {
 		return fmt.Errorf("graph: upsert relation: %w", err)
 	}
+	// Relation liveness (ADR-0082): an OBSERVED edge (from a Source) records this
+	// Source's presence, so liveness is a UNION over Sources. A run-provenance edge
+	// (no Source) writes no presence and keeps the run/cascade lifecycle.
+	if prov.SourceID != "" {
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO graph.relation_presence (relation_id, source_id, last_seen)
+			VALUES ($1, $2, now())
+			ON CONFLICT (relation_id, source_id) DO UPDATE SET last_seen = now()`,
+			relID, prov.SourceID,
+		); err != nil {
+			return fmt.Errorf("graph: record relation presence: %w", err)
+		}
+	}
 	return tx.Commit(ctx)
+}
+
+// RetractRelation deletes one edge — the Syncer delta-retraction half of relation
+// GC (ADR-0059 decision 7a): a connector that stops observing an edge (the Observe
+// stream's GoneRelations) retracts it, so a placement edge never dangles after its
+// Source stops asserting it. Idempotent (a missing edge is a no-op). The §1.2
+// relation_write_path trigger is satisfied by the projector's write-path GUC; a
+// DELETE skips the writer-kind agreement check, so a Syncer may retract the edge it
+// (as a Source) wrote. The write PATH (normalizer/run) comes from this projector.
+func (p *Projector) RetractRelation(ctx context.Context, relType, fromID, toID string) error {
+	tx, err := p.begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck
+	if _, err := tx.Exec(ctx,
+		`DELETE FROM graph.relation WHERE type = $1 AND from_id = $2 AND to_id = $3`,
+		relType, fromID, toID,
+	); err != nil {
+		return fmt.Errorf("graph: retract relation: %w", err)
+	}
+	return tx.Commit(ctx)
+}
+
+// RetractRunRelationsFrom deletes the caller's OWN (Run-provenance) edges of relType from
+// fromID whose target is NOT keepTo — the MOVE half of a singular placement relation
+// (ADR-0059): a host is placed-in ONE subnet, so re-projecting its placement retracts the
+// stale edge rather than leaving it in two. Scoped to prov_writer_kind='run' so a build
+// NEVER clobbers a Syncer's OBSERVED edge (cross-source respect, §1.2). Idempotent; the
+// §1.2 relation_write_path trigger is satisfied by the projector's run-provenance GUC.
+//
+// §2.4 SINGLE-OWNING-BUILD RELIANCE (guardian-flagged): the run-wide scope would be
+// last-writer-wins if TWO builds placed one from-Entity. That is prevented upstream by the
+// provisioning EXCLUSIVE CLAIM (provision.Plan / PlanSingletons: one Intent per
+// (intentKind, name) / instance name is a compile error, §2.4) — so exactly one Intent
+// owns a unit, hence one buildWorkflow, hence one owning build projects its placement.
+// The proper STRUCTURAL guard (a Relation-ownership registry, the edge analogue of the
+// Facet ownership registry §2.1, catching an ad-hoc second workflow that hand-places the
+// same host) is a named follow-up — until it lands, the exclusive-claim is the guard and a
+// manual double-build of one host is an operator declaration error, not a silent tiebreak.
+func (p *Projector) RetractRunRelationsFrom(ctx context.Context, relType, fromID, keepTo string) error {
+	tx, err := p.begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck
+	if _, err := tx.Exec(ctx,
+		`DELETE FROM graph.relation WHERE type = $1 AND from_id = $2 AND to_id <> $3 AND prov_writer_kind = 'run'`,
+		relType, fromID, keepTo,
+	); err != nil {
+		return fmt.Errorf("graph: retract run relations from: %w", err)
+	}
+	return tx.Commit(ctx)
+}
+
+// RetractSourceRelationPresenceExcept is a Source's full-sync presence replace over
+// relation liveness (ADR-0082): it retracts THIS Source's presence for its edges of
+// relType EXCEPT the (keepFrom[i], keepTo[i]) pairs re-emitted this cycle, then
+// deletes any observed edge of relType whose LAST presence is now gone. A co-asserted
+// edge survives one Source dropping it (union liveness, the ADR-0042 rule for edges);
+// an edge asserted only by this Source is collected. An empty keep-set retracts all
+// of this Source's presence for relType (the type-fully-gone case). Returns the
+// number of EDGES deleted. Supersedes the ADR-0081 single-source direct delete.
+func (p *Projector) RetractSourceRelationPresenceExcept(ctx context.Context, sourceID, relType string, keepFrom, keepTo []string) (int64, error) {
+	tx, err := p.begin(ctx)
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck
+	// 1. Retract this Source's presence for edges of relType it no longer emits.
+	if _, err := tx.Exec(ctx, `
+		DELETE FROM graph.relation_presence rp
+		USING graph.relation r
+		WHERE rp.relation_id = r.id AND rp.source_id = $1 AND r.type = $2
+		  AND NOT EXISTS (
+		    SELECT 1 FROM unnest($3::uuid[], $4::uuid[]) AS k(f, t)
+		    WHERE k.f = r.from_id AND k.t = r.to_id)`,
+		sourceID, relType, keepFrom, keepTo,
+	); err != nil {
+		return 0, fmt.Errorf("graph: retract relation presence: %w", err)
+	}
+	// 2. Delete observed edges of relType whose LAST presence row is now gone (no
+	// Source still asserts them). Run-provenance edges (no Source) are untouched.
+	tag, err := tx.Exec(ctx, `
+		DELETE FROM graph.relation r
+		WHERE r.type = $1 AND r.prov_writer_kind = 'syncer'
+		  AND NOT EXISTS (SELECT 1 FROM graph.relation_presence rp WHERE rp.relation_id = r.id)`,
+		relType,
+	)
+	if err != nil {
+		return 0, fmt.Errorf("graph: delete dead relations: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return 0, fmt.Errorf("graph: commit: %w", err)
+	}
+	return tag.RowsAffected(), nil
+}
+
+// RelationTypesBySource returns the distinct relation types a Source currently
+// ASSERTS — so a full-sync replace also sweeps a type the Source stopped emitting
+// entirely. It reads relation_presence (the true per-Source asserting set, ADR-0082),
+// NOT graph.relation.prov_source_id (a LAST-WRITER field): a multi-source edge
+// co-asserted by this Source but last-written by another would otherwise be invisible
+// here, so this Source's presence for it would never be retracted (guardian MF-2).
+func (s *Store) RelationTypesBySource(ctx context.Context, sourceID string) ([]string, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT DISTINCT r.type
+		FROM graph.relation_presence rp
+		JOIN graph.relation r ON r.id = rp.relation_id
+		WHERE rp.source_id = $1`, sourceID)
+	if err != nil {
+		return nil, fmt.Errorf("graph: relation types by source: %w", err)
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var t string
+		if err := rows.Scan(&t); err != nil {
+			return nil, err
+		}
+		out = append(out, t)
+	}
+	return out, rows.Err()
+}
+
+// retractRelationsFor deletes every relation touching any of ids — the endpoint-
+// tombstone cascade (ADR-0059 decision 7b). Entities are SOFT-deleted (deleted_at),
+// so the relation FK's ON DELETE CASCADE never fires; a decommissioned endpoint must
+// not leave a dangling placement (or any) edge, so the tombstone path sweeps them
+// explicitly. Runs INSIDE the caller's tombstone tx, so the §1.2 write-path GUC is
+// already set; a relation DELETE skips the writer-kind check, so this retracts BOTH
+// syncer- and run-provenance edges of the gone endpoint (a build-Run-written
+// placement edge is never re-observed by any Syncer, so only this cascade collects it).
+func retractRelationsFor(ctx context.Context, tx pgx.Tx, ids []string) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	if _, err := tx.Exec(ctx,
+		`DELETE FROM graph.relation WHERE from_id = ANY($1::uuid[]) OR to_id = ANY($1::uuid[])`,
+		ids,
+	); err != nil {
+		return fmt.Errorf("graph: cascade-retract relations: %w", err)
+	}
+	return nil
 }
 
 // TombstoneAbsent retracts the calling Source's presence for every Entity it
@@ -322,22 +487,31 @@ func (p *Projector) TombstoneAbsent(ctx context.Context, prov types.Provenance, 
 	// Stmt B: tombstone only the retracted Entities whose LAST presence row is
 	// now gone, restamping the retracting Syncer's provenance (which keeps the
 	// enforce_write_path prov-check satisfied on the normalizer path).
-	tag, err := tx.Exec(ctx, `
+	rows2, err := tx.Query(ctx, `
 		UPDATE graph.entity e
 		SET deleted_at = now(),
 		    prov_writer_kind = $1, prov_writer_ref = $2, prov_source_id = nullif($3, ''), prov_at = $4
 		WHERE e.id = ANY($5::uuid[])
 		  AND e.deleted_at IS NULL
-		  AND NOT EXISTS (SELECT 1 FROM graph.entity_presence p2 WHERE p2.entity_id = e.id)`,
+		  AND NOT EXISTS (SELECT 1 FROM graph.entity_presence p2 WHERE p2.entity_id = e.id)
+		RETURNING e.id`,
 		string(prov.WriterKind), prov.WriterRef, prov.SourceID, prov.At, retracted,
 	)
 	if err != nil {
 		return 0, fmt.Errorf("graph: tombstone absent: %w", err)
 	}
+	tombstoned, err := pgx.CollectRows(rows2, pgx.RowTo[string])
+	if err != nil {
+		return 0, fmt.Errorf("graph: collect tombstoned: %w", err)
+	}
+	// Cascade: retract every edge touching a now-tombstoned endpoint (decision 7b).
+	if err := retractRelationsFor(ctx, tx, tombstoned); err != nil {
+		return 0, err
+	}
 	if err := tx.Commit(ctx); err != nil {
 		return 0, err
 	}
-	return tag.RowsAffected(), nil
+	return int64(len(tombstoned)), nil
 }
 
 // TombstoneByIdentity retracts the calling Source's presence for the single
@@ -376,22 +550,31 @@ func (p *Projector) TombstoneByIdentity(ctx context.Context, prov types.Provenan
 	}
 
 	// Stmt B: tombstone the Entity iff its last presence row is now gone.
-	tag, err := tx.Exec(ctx, `
+	rows2, err := tx.Query(ctx, `
 		UPDATE graph.entity e
 		SET deleted_at = now(),
 		    prov_writer_kind = $1, prov_writer_ref = $2, prov_source_id = nullif($3, ''), prov_at = $4
 		WHERE e.id = ANY($5::uuid[])
 		  AND e.deleted_at IS NULL
-		  AND NOT EXISTS (SELECT 1 FROM graph.entity_presence p2 WHERE p2.entity_id = e.id)`,
+		  AND NOT EXISTS (SELECT 1 FROM graph.entity_presence p2 WHERE p2.entity_id = e.id)
+		RETURNING e.id`,
 		string(prov.WriterKind), prov.WriterRef, prov.SourceID, prov.At, retracted,
 	)
 	if err != nil {
 		return false, fmt.Errorf("graph: tombstone by identity: %w", err)
 	}
+	tombstoned, err := pgx.CollectRows(rows2, pgx.RowTo[string])
+	if err != nil {
+		return false, fmt.Errorf("graph: collect tombstoned: %w", err)
+	}
+	// Cascade: retract every edge touching a now-tombstoned endpoint (decision 7b).
+	if err := retractRelationsFor(ctx, tx, tombstoned); err != nil {
+		return false, err
+	}
 	if err := tx.Commit(ctx); err != nil {
 		return false, err
 	}
-	return tag.RowsAffected() > 0, nil
+	return len(tombstoned) > 0, nil
 }
 
 func orEmpty(m map[string]string) map[string]string {

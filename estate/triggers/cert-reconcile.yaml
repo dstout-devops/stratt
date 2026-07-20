@@ -1,0 +1,44 @@
+# Certificate reconcile (ADR-0050) — the replacement for the ADR-0030
+# intent->Baseline(notBefore)->Finding->remediation-Workflow shape.
+#
+# A scheduled, ungated reconcile: each fire runs the certissuer ACTUATOR's Apply,
+# which observes OpenBao for the commonName's live cert and CONVERGES — issue if
+# absent, renew if within renewBefore, noop if healthy (the semantic diff lives in
+# the plugin, ADR-0050 §2). "tofu plan on cron is drift detection" generalized:
+# "certissuer apply on cron is cert lifecycle." Routine renewal is ungated (§1.6);
+# revoke is the gated Destroy verb, launched separately.
+#
+# KEY DELIVERY (ADR-0050 §3, the integration contract still to build): `csr` is the
+# TARGET's certificate-signing request. The private key is born on the target and
+# never crosses — the Actuator calls OpenBao /sign, not /issue. Here the csr is a
+# static placeholder; the real flow (the target generates its keypair + CSR and
+# Stratt fetches the CSR at reconcile time) is the born-on-target integration point.
+#
+# The CLM token rides credentialRefs (a spawn-time CredentialRef the plugin resolves
+# against its OWN broker; material never crosses the core, §2.5).
+name: cert-reconcile-web
+kind: schedule
+# Environment scope (ADR-0057): the production slice. This fire runs the
+# certissuer Actuator against OpenBao for a real cert target — a plugin the dev
+# cell doesn't deploy — so a dev daemon (STRATT_ENVIRONMENT=dev) never launches
+# it (and, data-layer-scoped, never prunes it either). Untag to run everywhere.
+environments: [prod]
+cron: "0 */6 * * *" # every 6h — converge well inside renewBefore
+viewName: managed-certs
+principal: svc-cert-reconcile
+actuator: certissuer
+credentialRefs: [cert-issuer]
+# certissuer's Apply projects the issued cert's cert.identity/cert.expiry Facets
+# back (ADR-0054 write-scope): the effective write-back is the certissuer grant ∩
+# this scope. Without it the tight default would drop the projection at the one
+# governor and the reconcile would converge OpenBao but never update the graph.
+facetWriteScope: [cert.identity, cert.expiry]
+params:
+  commonName: web.stratt.test
+  role: stratt-dev
+  ttl: 720h
+  renewBefore: 168h
+  csr: |
+    -----BEGIN CERTIFICATE REQUEST-----
+    # target-generated CSR (born-on-target); the private key never leaves the host
+    -----END CERTIFICATE REQUEST-----

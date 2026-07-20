@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "stratt:contract:facets/software.container:v1",
+  "title": "software.container Facet",
+  "description": "Demanded by the software-advisory check (ADR-0080) and a container collector (a registry / K8s pod reader): the CONTAINER-IMAGE form of the deliverable-software dimension, the sibling of software.package. Same dimension, different form — a component's `name` is the image repository and its `version` is the tag, so the one form-agnostic advisory check covers packages and images alike. `digest` pins the exact image (the version's identity); `deliveryForm` is `container`. A projection of the running state (§1.2), observed by a collector; never authored. Single §2.1 write-owner per the software.* convention. Validated at the Projector write path.",
+  "type": "object",
+  "properties": {
+    "containers": {
+      "type": "array",
+      "description": "The container images observed on this entity (host / pod).",
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": { "type": "string", "description": "Image repository (the component name), e.g. `nginx` or `ghcr.io/acme/api`." },
+          "version": { "type": "string", "description": "Image tag (the component version), e.g. `1.25.3`." },
+          "digest": { "type": "string", "description": "Immutable image digest, e.g. `sha256:...` — the tag's true identity." },
+          "origin": { "type": "string", "description": "Development lineage — OPEN: internal | external | vendor." },
+          "deliveryForm": { "type": "string", "description": "OPEN form; this facet is the `container` form." }
+        },
+        "required": ["name", "version"],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": ["containers"],
+  "additionalProperties": false
+}

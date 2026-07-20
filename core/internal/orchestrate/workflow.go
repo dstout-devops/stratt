@@ -33,6 +33,11 @@ type DAGInput struct {
 	// for schedule/API launches) — the source for a Step's {{.event.x}}
 	// param bindings (ADR-0024).
 	Event map[string]any
+	// LaunchParams are the operator-supplied inputs from POST /workflows/{name}/runs
+	// — the source for a Step's {{.launch.x}} bindings (ADR-0059 re-placement /
+	// per-instance builds). The gate + the launching Principal's authz remain the
+	// control; these only parameterize what was already declared and gated.
+	LaunchParams map[string]any
 }
 
 // GateDecision is the signal payload an authorized Principal sends to a
@@ -123,6 +128,8 @@ func RunDAG(ctx workflow.Context, in DAGInput) error {
 			switch {
 			case step.Gate != nil:
 				status = runGateStep(gctx, a, in, step, boundOutputs)
+			case step.Policy != nil:
+				status = runPolicyStep(gctx, a, in, step)
 			case step.Action != "":
 				status, outputs = runActionStep(gctx, in, step, boundOutputs)
 			default:
@@ -229,7 +236,7 @@ func runActuationStep(ctx workflow.Context, in DAGInput, step types.Step, steps 
 	// never reaching the Actuator.
 	var params json.RawMessage
 	var a *Activities
-	if err := workflow.ExecuteActivity(ctx, a.ResolveStepParams, step.Actuator, step.Params, in.Event, steps).Get(ctx, &params); err != nil {
+	if err := workflow.ExecuteActivity(ctx, a.ResolveStepParams, step.Actuator, step.Params, in.Event, steps, in.LaunchParams).Get(ctx, &params); err != nil {
 		return stepFailed, nil
 	}
 
@@ -294,7 +301,7 @@ func digestFromStep(steps map[string]json.RawMessage, planStep string) string {
 func runActionStep(ctx workflow.Context, in DAGInput, step types.Step, steps map[string]json.RawMessage) (string, json.RawMessage) {
 	var params json.RawMessage
 	var a *Activities
-	if err := workflow.ExecuteActivity(ctx, a.ResolveActionStepParams, step.Action, step.Params, in.Event, steps).Get(ctx, &params); err != nil {
+	if err := workflow.ExecuteActivity(ctx, a.ResolveActionStepParams, step.Action, step.Params, in.Event, steps, in.LaunchParams).Get(ctx, &params); err != nil {
 		return stepFailed, nil
 	}
 	cctx := workflow.WithChildOptions(ctx, workflow.ChildWorkflowOptions{
@@ -327,31 +334,66 @@ func runGateStep(ctx workflow.Context, a *Activities, in DAGInput, step types.St
 	if step.PlanFrom != "" {
 		planDigest = digestFromStep(steps, step.PlanFrom)
 	}
+	return awaitGate(ctx, a, in.WorkflowRunID, step.Name, step.Gate.Approvers, step.Gate.TimeoutSeconds, step.Gate.Threshold, planDigest)
+}
+
+// awaitGate opens a Gate record and blocks on human decision signals, racing the
+// declared timeout (ADR-0011). It is the shared human-approval primitive: a
+// declared Gate Step (runGateStep) and a policy REQUIRE_APPROVAL/ESCALATE
+// outcome (runPolicyStep, ADR-0064) both call it, so a policy-opened Gate is
+// decided through the identical API/audit path as a declared one.
+//
+// Quorum (ADR-0071): the Gate proceeds only after `threshold` DISTINCT authorized
+// approvals (threshold < 1 ⇒ 1, the single-approval default). Each DecideGate
+// call signals one authorized approval; the workflow accumulates the distinct
+// principals in replay-safe state, so a re-approval by the same principal never
+// double-counts. Any single DENY short-circuits to failure regardless of
+// threshold; the timeout expires the Gate. Approved ⇒ the step succeeds.
+func awaitGate(ctx workflow.Context, a *Activities, workflowRunID, stepName string, approvers types.GateApprovers, timeoutSeconds, threshold int, planDigest string) string {
+	if threshold < 1 {
+		threshold = 1
+	}
 	var gate types.Gate
-	if err := workflow.ExecuteActivity(ctx, a.CreateGateRecord, in.WorkflowRunID, step.Name, planDigest, step.Gate.Approvers).Get(ctx, &gate); err != nil {
+	if err := workflow.ExecuteActivity(ctx, a.CreateGateRecord, workflowRunID, stepName, planDigest, approvers).Get(ctx, &gate); err != nil {
 		return stepFailed
 	}
 
-	decision := GateDecision{}
-	decided := false
-	sel := workflow.NewSelector(ctx)
-	sel.AddReceive(workflow.GetSignalChannel(ctx, GateSignalName(step.Name)), func(c workflow.ReceiveChannel, _ bool) {
-		c.Receive(ctx, &decision)
-		decided = true
-	})
-	if step.Gate.TimeoutSeconds > 0 {
-		sel.AddFuture(workflow.NewTimer(ctx, time.Duration(step.Gate.TimeoutSeconds)*time.Second), func(workflow.Future) {})
+	approvedBy := map[string]bool{} // distinct approving principals
+	denied := false
+	timedOut := false
+	lastPrincipal, note := "", ""
+
+	sigChan := workflow.GetSignalChannel(ctx, GateSignalName(stepName))
+	var timer workflow.Future
+	if timeoutSeconds > 0 {
+		timer = workflow.NewTimer(ctx, time.Duration(timeoutSeconds)*time.Second)
 	}
-	sel.Select(ctx)
+	for len(approvedBy) < threshold && !denied && !timedOut {
+		sel := workflow.NewSelector(ctx)
+		sel.AddReceive(sigChan, func(c workflow.ReceiveChannel, _ bool) {
+			var d GateDecision
+			c.Receive(ctx, &d)
+			if d.Approved {
+				approvedBy[d.Principal] = true
+			} else {
+				denied = true
+			}
+			lastPrincipal, note = d.Principal, d.Note
+		})
+		if timer != nil {
+			sel.AddFuture(timer, func(workflow.Future) { timedOut = true })
+		}
+		sel.Select(ctx)
+	}
 
 	status := types.GateExpired
-	if decided {
+	switch {
+	case denied:
 		status = types.GateDenied
-		if decision.Approved {
-			status = types.GateApproved
-		}
+	case len(approvedBy) >= threshold:
+		status = types.GateApproved
 	}
-	if err := workflow.ExecuteActivity(ctx, a.RecordGateDecision, gate.ID, status, decision.Principal, decision.Note).Get(ctx, nil); err != nil {
+	if err := workflow.ExecuteActivity(ctx, a.RecordGateDecision, gate.ID, status, lastPrincipal, note).Get(ctx, nil); err != nil {
 		return stepFailed
 	}
 	if status == types.GateApproved {
@@ -396,14 +438,14 @@ func stepsNamespace(steps map[string]json.RawMessage) map[string]any {
 // ResolveStepParams substitutes a Step's {{.event.x}} / {{.steps.x}} bindings
 // (the firing event and prior Steps' outputs), then re-validates the resolved
 // params against the Actuator's input Contract before dispatch (ADR-0024/0031).
-func (a *Activities) ResolveStepParams(ctx context.Context, actuator string, params map[string]any, event map[string]any, steps map[string]json.RawMessage) (json.RawMessage, error) {
+func (a *Activities) ResolveStepParams(ctx context.Context, actuator string, params map[string]any, event map[string]any, steps map[string]json.RawMessage, launch map[string]any) (json.RawMessage, error) {
 	// A Workflow actuation Step names its Actuator explicitly (no platform default,
 	// ADR-0046); validated at Workflow declaration, so empty here is a bug.
 	name := actuator
 	if name == "" {
 		return nil, fmt.Errorf("workflow actuation step requires an explicit actuator (no platform default)")
 	}
-	ns := template.Namespaces{"event": event, "steps": stepsNamespace(steps)}
+	ns := template.Namespaces{"event": event, "steps": stepsNamespace(steps), "launch": launch}
 	raw, err := contract.ResolveActuatorParams(name, params, ns)
 	if err != nil {
 		return nil, temporal.NewNonRetryableApplicationError(err.Error(), "InvalidStepParams", err)
@@ -413,8 +455,8 @@ func (a *Activities) ResolveStepParams(ctx context.Context, actuator string, par
 
 // ResolveActionStepParams is the Action counterpart: substitute event/steps
 // bindings and re-validate against the Action's input Contract (§2.2, ADR-0031).
-func (a *Activities) ResolveActionStepParams(ctx context.Context, action string, params map[string]any, event map[string]any, steps map[string]json.RawMessage) (json.RawMessage, error) {
-	ns := template.Namespaces{"event": event, "steps": stepsNamespace(steps)}
+func (a *Activities) ResolveActionStepParams(ctx context.Context, action string, params map[string]any, event map[string]any, steps map[string]json.RawMessage, launch map[string]any) (json.RawMessage, error) {
+	ns := template.Namespaces{"event": event, "steps": stepsNamespace(steps), "launch": launch}
 	raw, err := contract.ResolveActionParams(action, params, ns)
 	if err != nil {
 		return nil, temporal.NewNonRetryableApplicationError(err.Error(), "InvalidStepParams", err)

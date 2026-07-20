@@ -14,6 +14,7 @@ import (
 	"log/slog"
 	"sort"
 	"strconv"
+	"strings"
 	"time"
 
 	"go.temporal.io/sdk/activity"
@@ -32,6 +33,7 @@ import (
 	"github.com/dstout-devops/stratt/core/internal/graph"
 	"github.com/dstout-devops/stratt/core/internal/planstore"
 	"github.com/dstout-devops/stratt/core/internal/pluginhost"
+	"github.com/dstout-devops/stratt/core/internal/policy"
 	"github.com/dstout-devops/stratt/core/internal/siteproto"
 	"github.com/dstout-devops/stratt/core/internal/siterelay"
 	mcpcanon "github.com/dstout-devops/stratt/sdk/mcp"
@@ -305,7 +307,28 @@ func RunAgainstView(ctx workflow.Context, in RunInput) (RunOutcome, error) {
 	for _, t := range resolved.Targets {
 		outcome.EntityByTarget[t.Name] = t.EntityID
 	}
+	// §1.8: a Run whose targets FAILED must propagate that failure to the parent
+	// Workflow. Recording status=failed on the Run row is NOT enough — the parent
+	// step (runActuationStep) folds to succeeded unless this child returns an error,
+	// so a green Workflow would hide a red Run: the exact one-click-descent trust
+	// violation the charter forbids. The FinishRun error path already returns its
+	// cause (finishRun); the normal per-target fold must be just as honest.
+	if status == types.RunFailed && summaryErr == nil {
+		summaryErr = fmt.Errorf("run %s failed: %d of %d targets failed", in.RunID, failedTargets(result.PerTarget), len(result.PerTarget))
+	}
 	return outcome, summaryErr
+}
+
+// failedTargets counts the per-target outcomes that fold to a Run failure
+// (failed or unreachable) — the §1.8 propagation summary above.
+func failedTargets(perTarget map[string]string) int {
+	n := 0
+	for _, st := range perTarget {
+		if st == actuators.StatusFailed || st == actuators.StatusUnreachable {
+			n++
+		}
+	}
+	return n
 }
 
 func finishRun(ctx workflow.Context, a *Activities, in RunInput, status types.RunStatus, cause error) error {
@@ -383,6 +406,12 @@ type Activities struct {
 	Dispatcher *dispatch.Dispatcher
 	Bus        *events.Bus
 	Authz      authz.Authorizer
+	// Decider is the Policy Decision Point PORT (ADR-0072): the policy Step
+	// obtains its Decision through this seam, never a concrete engine. Nil ⇒ the
+	// built-in CEL provider (the default); swap for an external engine or
+	// policy.Bypass to disable governance. Content-blind: the core sends controls
+	// + context and acts on the Decision.
+	Decider policy.Decider
 	// Log is the base logger for on-demand hosts (Site relay). Nil → slog.Default().
 	Log *slog.Logger
 	// RelayDial yields the relay transport to one plugin at a Site's agent
@@ -439,18 +468,53 @@ func (a *Activities) EnsureRun(ctx context.Context, in RunInput, workflowID stri
 	return run.ID, nil
 }
 
-// renderTarget renders one resolved Entity as an execution target. Phase-0
-// target semantics: local-connection per target (see ansible.GatherFactsPlay).
-func renderTarget(e types.Entity) actuators.Target {
-	name := e.Labels["vcenter.name"]
-	if name == "" {
-		name = e.ID
-	}
+// renderTarget renders one resolved Entity as an execution target. Reachability is
+// the typed mgmt.address Facet (ADR-0084): the address becomes Target.Address — a
+// FIRST-CLASS field a connection Actuator renders into its own connection var
+// (ansible_host, …). The core never authors a tool var: the Phase-0
+// ansible_connection:local stub is retired. A target with no mgmt.address carries an
+// empty Address (unroutable — the actuator fails loudly, never a silent local run, §1.8).
+func renderTarget(e types.Entity, address string) actuators.Target {
 	return actuators.Target{
 		EntityID: e.ID,
-		Name:     name,
-		Vars:     map[string]string{"ansible_connection": "local"},
+		Name:     observedName(e),
+		Address:  address,
 	}
+}
+
+// observedName picks a human name for an execution target from the projection's tool-blind
+// "<source>.name" label convention (aws.name, vcenter.name, ansible.name, graph.name, …) —
+// the spine knows the *.name CONVENTION, never a specific tool's label key (§1.4). Selection
+// is deterministic (the alphabetically-first matching label) so the Workflow replays
+// identically (Temporal), and it falls back to the stable entity id when no source stamped a
+// name.
+func observedName(e types.Entity) string {
+	name, bestKey := "", ""
+	for k, v := range e.Labels {
+		if v == "" || !strings.HasSuffix(k, ".name") {
+			continue
+		}
+		if bestKey == "" || k < bestKey {
+			bestKey, name = k, v
+		}
+	}
+	if name == "" {
+		return e.ID
+	}
+	return name
+}
+
+// addressOf extracts the reachability coordinate from an mgmt.address Facet raw
+// (ADR-0084 schema {address, port?}). Empty ⇒ the Entity declared no reachability.
+func addressOf(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	var a struct {
+		Address string `json:"address"`
+	}
+	_ = json.Unmarshal(raw, &a)
+	return a.Address
 }
 
 // ResolveTargets resolves the View to its live Entity set and renders
@@ -463,9 +527,17 @@ func (a *Activities) ResolveTargets(ctx context.Context, in RunInput) (ResolvedT
 	if len(ents) == 0 {
 		return ResolvedTargets{}, fmt.Errorf("orchestrate: view %s resolves to zero entities", in.ViewName)
 	}
+	ids := make([]string, len(ents))
+	for i, e := range ents {
+		ids[i] = e.ID
+	}
+	addrs, err := a.Store.FacetValuesByEntities(ctx, "mgmt.address", ids)
+	if err != nil {
+		return ResolvedTargets{}, err
+	}
 	out := ResolvedTargets{ViewVersion: v.Version}
 	for _, e := range ents {
-		out.Targets = append(out.Targets, renderTarget(e))
+		out.Targets = append(out.Targets, renderTarget(e, addressOf(addrs[e.ID])))
 	}
 	return out, nil
 }
@@ -498,6 +570,10 @@ func (a *Activities) ResolveTargetsBySite(ctx context.Context, in RunInput) (Rou
 	if err != nil {
 		return RoutedTargets{}, err
 	}
+	addrs, err := a.Store.FacetValuesByEntities(ctx, "mgmt.address", ids)
+	if err != nil {
+		return RoutedTargets{}, err
+	}
 	bySite := map[string][]actuators.Target{}
 	for _, e := range ents {
 		site := types.LocalSite
@@ -509,7 +585,7 @@ func (a *Activities) ResolveTargetsBySite(ctx context.Context, in RunInput) (Rou
 				site = loc.Site
 			}
 		}
-		bySite[site] = append(bySite[site], renderTarget(e))
+		bySite[site] = append(bySite[site], renderTarget(e, addressOf(addrs[e.ID])))
 	}
 	names := make([]string, 0, len(bySite))
 	for s := range bySite {
@@ -797,6 +873,47 @@ func (a *Activities) PlanStep(ctx context.Context, in RunInput) (string, error) 
 // ProjectFacts, the single batched Run-provenance writer (#2). The View-grant is
 // the authz chokepoint (already enforced in RunAgainstView), so zero creds is
 // legitimate — the Action path's ungated-refusal is NOT ported (#4).
+// surfaceRejections turns governor rejections (dropped land-grabs / confused-
+// deputy targets a plugin tried to write outside its grant) into first-class
+// §1.8 signals rather than a swallowed Warn (enterprise-readiness GOV-3): each
+// rejection is published as a `governance-rejected` RunEvent on the descent
+// stream AND recorded as a tracked, closeable governance Finding. A hostile or
+// misconfigured plugin's overreach is now visible on one-click descent and on the
+// Findings/compliance surface, not just in a log nobody reads. Best-effort: a
+// failed event/Finding write is logged, never fatal to the Run (the write-back was
+// already correctly refused by the governor — this is the visibility layer).
+func (a *Activities) surfaceRejections(ctx context.Context, runID, source, plugin string, rejections []pluginhost.Rejection) {
+	if len(rejections) == 0 {
+		return
+	}
+	lg := a.Log
+	if lg == nil {
+		lg = slog.Default()
+	}
+	for _, r := range rejections {
+		lg.Warn("plugin emission rejected (governance)",
+			"source", source, "plugin", plugin, "kind", r.Kind, "detail", r.Detail, "reason", r.Reason)
+		payload := map[string]any{
+			"source": source, "plugin": plugin,
+			"kind": r.Kind, "detail": r.Detail, "reason": r.Reason,
+		}
+		if a.Bus != nil && runID != "" {
+			if err := a.Bus.Publish(ctx, types.RunEvent{RunID: runID, Kind: "governance-rejected", Payload: payload}); err != nil {
+				lg.Warn("publish governance-rejected RunEvent failed", "error", err)
+			}
+		}
+		if a.Store != nil {
+			detail, _ := json.Marshal(payload)
+			// Keyed by (run, plugin, kind, detail) so repeated identical overreach
+			// within a Run folds to one open Finding (idempotent per offending target).
+			target := fmt.Sprintf("%s/%s/%s/%s", runID, plugin, r.Kind, r.Detail)
+			if err := a.Store.WriteGovernanceFinding(ctx, "governance/plugin-rejection", target, "warning", "governance/plugin-rejection", detail); err != nil {
+				lg.Warn("write governance-rejection Finding failed", "error", err)
+			}
+		}
+	}
+}
+
 func (a *Activities) executePlugin(ctx context.Context, in RunInput, site string, resolved ResolvedTargets, creds []dispatch.CredentialMount, pa PluginActuator) (dispatch.Result, error) {
 	// Dry-run refused CORE-SIDE from the reconciled capability, never delegated —
 	// a plugin that silently ignored dry_run would run live side effects (#6).
@@ -846,7 +963,7 @@ func (a *Activities) executePlugin(ctx context.Context, in RunInput, site string
 	// path today; passing them to identity-rendering actuators is a follow-up.)
 	targets := make([]pluginhost.ApplyTarget, 0, len(resolved.Targets))
 	for _, t := range resolved.Targets {
-		targets = append(targets, pluginhost.ApplyTarget{Name: t.Name, Vars: t.Vars})
+		targets = append(targets, pluginhost.ApplyTarget{Name: t.Name, Address: t.Address, Vars: t.Vars})
 	}
 	// Plan-pinned Apply (ADR-0047 §8): a Step that names a Plan source MUST carry a
 	// Gate-approved digest. FAIL CLOSED on an empty digest — never a silent unpinned
@@ -882,11 +999,9 @@ func (a *Activities) executePlugin(ctx context.Context, in RunInput, site string
 		return dispatch.Result{}, err
 	}
 	// Surface governance rejections (dropped land-grabs / confused-deputy targets)
-	// for §1.8 honesty — never swallowed. (Persisting as Findings is the follow-up.)
-	for _, r := range raw.Rejections {
-		activity.GetLogger(ctx).Warn("plugin apply emission rejected",
-			"actuator", in.Actuator, "kind", r.Kind, "detail", r.Detail, "reason", r.Reason)
-	}
+	// as first-class §1.8 signals — a RunEvent on the descent stream AND a tracked
+	// Finding — never a swallowed log line (enterprise-readiness GOV-3).
+	a.surfaceRejections(ctx, in.RunID, "apply", in.Actuator, raw.Rejections)
 	// Map the governed, UNPROJECTED result to dispatch.Result. CollectFacts →
 	// ProjectFacts perform the single batched projection with Run provenance (#2).
 	res := dispatch.Result{Succeeded: raw.Succeeded, PerTarget: raw.PerTarget, Drift: raw.Drift}
@@ -940,8 +1055,8 @@ func (a *Activities) executeJobPlugin(ctx context.Context, in RunInput, slice in
 	ptargets := make([]*pluginv1.ApplyTarget, 0, len(resolved.Targets))
 	for _, t := range resolved.Targets {
 		ids := map[string]string{"host.name": t.Name}
-		targets = append(targets, pluginhost.ApplyTarget{Name: t.Name, Vars: t.Vars, IdentityKeys: ids})
-		ptargets = append(ptargets, &pluginv1.ApplyTarget{Name: t.Name, Vars: t.Vars, IdentityKeys: ids})
+		targets = append(targets, pluginhost.ApplyTarget{Name: t.Name, Address: t.Address, Vars: t.Vars, IdentityKeys: ids})
+		ptargets = append(ptargets, &pluginv1.ApplyTarget{Name: t.Name, Address: t.Address, Vars: t.Vars, IdentityKeys: ids})
 	}
 	// Only the use-checked, authorized names cross (§2.5); material stays on the
 	// kubelet secretKeyRef mounts (MF7 — one authz chokepoint, injection at the pod).
@@ -1020,10 +1135,7 @@ func (a *Activities) executeJobPlugin(ctx context.Context, in RunInput, slice in
 	}
 	raw := gr.raw
 
-	for _, r := range raw.Rejections {
-		activity.GetLogger(ctx).Warn("plugin apply emission rejected",
-			"actuator", in.Actuator, "kind", r.Kind, "detail", r.Detail, "reason", r.Reason)
-	}
+	a.surfaceRejections(ctx, in.RunID, "apply", in.Actuator, raw.Rejections)
 	// Map the governed, UNPROJECTED result to dispatch.Result. Succeeded folds BOTH
 	// §1.8/MF5 signals: the governor's terminal fold (raw.Succeeded) AND the K8s Job
 	// exit (jobOK) — a green terminal followed by a non-zero exit (OOMKill, torn
@@ -1335,15 +1447,50 @@ func (a *Activities) ProjectFacts(ctx context.Context, runID string, facts FactS
 			// label (ADR-0017; parametrized Views are the follow-up).
 			labels["stratt.workspace"] = facts.Workspace
 		}
-		if _, err := p.UpsertEntities(ctx, prov, []graph.EntityUpsert{{
+		ids, err := p.UpsertEntities(ctx, prov, []graph.EntityUpsert{{
 			Kind: obs.Kind, IdentityKeys: obs.IdentityKeys, Labels: labels,
-		}}); err != nil {
+		}})
+		if err != nil {
 			if errors.Is(err, graph.ErrIdentityConflict) {
 				// Surface, never merge (§1.2) — mirror the Syncer posture.
 				return temporal.NewNonRetryableApplicationError(
 					fmt.Sprintf("output entity identity conflict: %v", err), "IdentityConflict", err)
 			}
 			return err
+		}
+		// Project the build's topology edges (ADR-0059): resolve each target BY
+		// IDENTITY, then upsert Run-provenance — an unresolved target drops the edge
+		// (never vivifies a placeholder, §1.2), mirroring the Syncer's resolve.
+		for _, rel := range obs.Relations {
+			toID, found, err := a.Store.EntityIDByIdentity(ctx, rel.ToScheme, rel.ToValue)
+			if err != nil {
+				return err
+			}
+			if !found {
+				// Surface the drop (§1.8 diagnosis-parity with the Syncer, host.go): a
+				// build's declared edge whose target isn't present vanishes WITH a trace,
+				// never silently — a build is ordering-sensitive (the target's build may
+				// not have run yet), so the Intent→Run descent must be able to explain it.
+				activity.GetLogger(ctx).Warn("build relation dropped: target not found (no vivify, §1.2)",
+					"type", rel.Type, "toScheme", rel.ToScheme, "toValue", rel.ToValue, "runId", runID)
+				continue
+			}
+			// Singular placement is a MOVE, not an add (ADR-0059 re-placement): a re-run
+			// with a new target retracts this Entity's OWN stale placement edge of this
+			// type before adding the new one, so it is never in two subnets at once. Scoped
+			// to Run-provenance — never touches a Syncer's observed edge (§1.2 cross-source).
+			// §2.4 single-owning-build: the run-scoped retract is safe from last-writer-wins
+			// because the provisioning exclusive-claim gives one Intent per unit, hence one
+			// owning build per Entity (see RetractRunRelationsFrom for the guard + the
+			// Relation-ownership-registry follow-up that would make it structural).
+			if types.IsSingularPlacement(rel.Type) {
+				if err := p.RetractRunRelationsFrom(ctx, rel.Type, ids[0], toID); err != nil {
+					return err
+				}
+			}
+			if err := p.UpsertRelation(ctx, prov, rel.Type, ids[0], toID); err != nil {
+				return err
+			}
 		}
 	}
 	if len(facts.OutputsContract) > 0 && facts.OutputsContractName != "" {

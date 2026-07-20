@@ -24,11 +24,13 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	yaml "go.yaml.in/yaml/v3"
 
 	"github.com/dstout-devops/stratt/core/internal/contract"
 	"github.com/dstout-devops/stratt/core/internal/graph"
+	"github.com/dstout-devops/stratt/core/internal/policy"
 	"github.com/dstout-devops/stratt/core/internal/rules"
 	"github.com/dstout-devops/stratt/core/internal/template"
 	"github.com/dstout-devops/stratt/types"
@@ -60,6 +62,10 @@ type Declarations struct {
 	Sites          []types.Site          `json:"sites"`
 	Cells          []types.Cell          `json:"cells"`
 	SCIMIdPs       []types.SCIMIdP       `json:"scimIdps"`
+	// AdmissionControls are the estate's admission policy (ADR-0073 §7.4b): CEL
+	// predicates over each declaration's manifest, evaluated at load through the
+	// PDP port. A deny rejects the declaration (§7.4c).
+	AdmissionControls []types.Control `json:"admissionControls,omitempty"`
 }
 
 // Declared kinds appearing in plans.
@@ -182,8 +188,28 @@ type declFacet struct {
 // directory is an error, not an empty set — an empty set prunes every
 // cac-declared View, and a mistyped path must never look like one.
 // (credential-refs/ is optional: repos predating ADR-0009 stay valid.)
-func ParseDir(root string) (Declarations, error) {
+// ParseDir loads and validates the estate declarations. decider is the PDP port
+// for the admission PEP (ADR-0073 §7.4c): when the estate declares an admission
+// policy (admission/) and a decider is supplied, every OTHER declaration's
+// manifest is admitted through the port and a deny rejects the load, fail-closed
+// (§1.8). A nil decider skips admission (e.g. a boot-time authz-only load).
+func ParseDir(root string, decider policy.Decider) (Declarations, error) {
 	var out Declarations
+
+	// Admission policy first: it governs every other declaration (§3
+	// Kyverno-for-config). Controls are validated at load (CEL-only, allow/deny).
+	admissionDecls, err := parseKind(filepath.Join(root, "admission"), true, parseAdmissionFile)
+	if err != nil {
+		return out, err
+	}
+	for _, a := range admissionDecls {
+		out.AdmissionControls = append(out.AdmissionControls, a.Controls...)
+	}
+	if len(out.AdmissionControls) > 0 && decider != nil {
+		if err := admitEstate(root, out.AdmissionControls, decider); err != nil {
+			return out, err
+		}
+	}
 
 	views, err := parseKind(filepath.Join(root, "views"), false, parseViewFile)
 	if err != nil {
@@ -298,6 +324,230 @@ func ParseDir(root string) (Declarations, error) {
 		return out.Blueprints[i].Version < out.Blueprints[j].Version
 	})
 	return out, nil
+}
+
+// admissionFileYAML is one estate admission policy (ADR-0073 §7.4b): a named set
+// of CEL-only admission controls. Reuses controlYAML; only id/when/outcome are
+// meaningful (ValidateAdmissionControls rejects run-time typed primitives).
+type admissionFileYAML struct {
+	Name     string        `yaml:"name"`
+	Controls []controlYAML `yaml:"controls"`
+}
+type admissionDecl struct {
+	Name     string
+	Controls []types.Control
+}
+
+func parseAdmissionFile(path string, raw []byte) (string, admissionDecl, error) {
+	var f admissionFileYAML
+	dec := yaml.NewDecoder(strings.NewReader(string(raw)))
+	dec.KnownFields(true)
+	if err := dec.Decode(&f); err != nil {
+		return "", admissionDecl{}, fmt.Errorf("desiredstate: %s: %w", path, err)
+	}
+	if f.Name == "" {
+		return "", admissionDecl{}, fmt.Errorf("desiredstate: %s: admission policy requires a name", path)
+	}
+	ctrls := make([]types.Control, 0, len(f.Controls))
+	for _, c := range f.Controls {
+		ctrls = append(ctrls, types.Control{ID: c.ID, When: c.When, Outcome: c.Outcome})
+	}
+	if err := policy.ValidateAdmissionControls(ctrls); err != nil {
+		return "", admissionDecl{}, fmt.Errorf("desiredstate: %s: %w", path, err)
+	}
+	return f.Name, admissionDecl{Name: f.Name, Controls: ctrls}, nil
+}
+
+// admissionDirs are the declaration directories admission judges — every estate
+// kind except admission/ itself (a policy does not admit itself).
+var admissionDirs = []string{
+	"views", "credential-refs", "triggers", "workflows", "emitters", "sites",
+	"cells", "scim", "notify-sinks", "subscriptions", "baselines", "mcp-servers",
+	"intents", "assignments", "blueprints",
+}
+
+// admitEstate runs the admission PEP over every declaration manifest through the
+// PDP port (ADR-0073 §7.4c). A deny rejects the load with the reasons on the
+// record (§1.8). The manifest is admitted as a generic object with a guaranteed
+// `kind` (the manifest's own, or the directory's), so admission controls can
+// match reliably (e.g. object.kind == 'Workflow').
+func admitEstate(root string, controls []types.Control, decider policy.Decider) error {
+	for _, sub := range admissionDirs {
+		entries, err := os.ReadDir(filepath.Join(root, sub))
+		if os.IsNotExist(err) {
+			continue
+		}
+		if err != nil {
+			return fmt.Errorf("desiredstate: admission read %s: %w", sub, err)
+		}
+		for _, e := range entries {
+			if e.IsDir() {
+				continue
+			}
+			ext := strings.ToLower(filepath.Ext(e.Name()))
+			if ext != ".yaml" && ext != ".yml" {
+				continue
+			}
+			path := filepath.Join(sub, e.Name())
+			raw, err := os.ReadFile(filepath.Join(root, path))
+			if err != nil {
+				return fmt.Errorf("desiredstate: %s: %w", path, err)
+			}
+			obj, err := manifestObject(raw, sub)
+			if err != nil {
+				return fmt.Errorf("desiredstate: admission parse %s: %w", path, err)
+			}
+			d := decider.Admit(context.Background(), policy.AdmissionRequest{Object: obj, Controls: controls})
+			if d.Outcome == types.OutcomeDeny {
+				return fmt.Errorf("desiredstate: %s: admission denied — %s", path, admissionReasons(d))
+			}
+		}
+	}
+	return nil
+}
+
+// manifestObject decodes a declaration into a generic object for admission,
+// guaranteeing a `kind` (the manifest's own, else the directory's singular kind).
+func manifestObject(raw []byte, sub string) (map[string]any, error) {
+	var m map[string]any
+	if err := yaml.Unmarshal(raw, &m); err != nil {
+		return nil, err
+	}
+	if m == nil {
+		m = map[string]any{}
+	}
+	if _, ok := m["kind"]; !ok {
+		m["kind"] = dirKind(sub)
+	}
+	return m, nil
+}
+
+func dirKind(sub string) string {
+	switch sub {
+	case "views":
+		return "View"
+	case "workflows":
+		return "Workflow"
+	case "assignments":
+		return "Assignment"
+	case "blueprints":
+		return "Blueprint"
+	case "baselines":
+		return "Baseline"
+	case "triggers":
+		return "Trigger"
+	case "emitters":
+		return "Emitter"
+	case "sites":
+		return "Site"
+	default:
+		return sub
+	}
+}
+
+// AdmitDeclarations runs the admission PEP (ADR-0073) over already-parsed
+// declarations arriving through an imperative door — POST /desired-state/{plan,
+// apply}, PUT /views/{name} — rather than the Git reconcile. It closes the
+// bypass (enterprise-readiness GOV-2) where admitEstate only guards ParseDir: an
+// operator or agent POSTing straight to the API reached the graph with no
+// admission. Each declaration is admitted as a {kind, ...} object through the PDP
+// port; a deny — or any evaluator error, since the port fails closed — rejects
+// the whole request. A nil decider or empty policy is a no-op (no engine
+// configured). The object is the typed declaration's JSON shape (the same shape
+// the graph holds); an admission control author writes CEL against that.
+func AdmitDeclarations(ctx context.Context, decls Declarations, controls []types.Control, decider policy.Decider) error {
+	if decider == nil || len(controls) == 0 {
+		return nil
+	}
+	type obj struct {
+		kind, name string
+		v          any
+	}
+	var all []obj
+	for i := range decls.Views {
+		all = append(all, obj{"View", decls.Views[i].Name, decls.Views[i]})
+	}
+	for i := range decls.Workflows {
+		all = append(all, obj{"Workflow", decls.Workflows[i].Name, decls.Workflows[i]})
+	}
+	for i := range decls.Triggers {
+		all = append(all, obj{"Trigger", decls.Triggers[i].Name, decls.Triggers[i]})
+	}
+	for i := range decls.Emitters {
+		all = append(all, obj{"Emitter", decls.Emitters[i].Name, decls.Emitters[i]})
+	}
+	for i := range decls.Baselines {
+		all = append(all, obj{"Baseline", decls.Baselines[i].Name, decls.Baselines[i]})
+	}
+	for i := range decls.MCPServers {
+		all = append(all, obj{"MCPServer", decls.MCPServers[i].Name, decls.MCPServers[i]})
+	}
+	for i := range decls.Intents {
+		all = append(all, obj{"Intent", decls.Intents[i].Name, decls.Intents[i]})
+	}
+	for i := range decls.Assignments {
+		all = append(all, obj{"Assignment", decls.Assignments[i].Name, decls.Assignments[i]})
+	}
+	for i := range decls.Blueprints {
+		all = append(all, obj{"Blueprint", decls.Blueprints[i].Name, decls.Blueprints[i]})
+	}
+	for i := range decls.Sites {
+		all = append(all, obj{"Site", decls.Sites[i].Name, decls.Sites[i]})
+	}
+	for i := range decls.Cells {
+		all = append(all, obj{"Cell", decls.Cells[i].Name, decls.Cells[i]})
+	}
+	for i := range decls.NotifySinks {
+		all = append(all, obj{"Sink", decls.NotifySinks[i].Name, decls.NotifySinks[i]})
+	}
+	for i := range decls.Subscriptions {
+		all = append(all, obj{"Subscription", decls.Subscriptions[i].Name, decls.Subscriptions[i]})
+	}
+	for _, o := range all {
+		m, err := declarationObject(o.kind, o.v)
+		if err != nil {
+			return fmt.Errorf("desiredstate: admission encode %s/%s: %w", o.kind, o.name, err)
+		}
+		d := decider.Admit(ctx, policy.AdmissionRequest{Object: m, Controls: controls})
+		if d.Outcome == types.OutcomeDeny {
+			return fmt.Errorf("desiredstate: %s/%s: admission denied — %s", o.kind, o.name, admissionReasons(d))
+		}
+	}
+	return nil
+}
+
+// declarationObject encodes a typed declaration to the generic admission object,
+// guaranteeing a `kind` — the declaration's own (e.g. an Intent's Certificate/
+// Application sub-kind) when present, else the declared fallback. Mirrors
+// manifestObject so the imperative door and the Git door admit the same shape.
+func declarationObject(fallbackKind string, v any) (map[string]any, error) {
+	raw, err := json.Marshal(v)
+	if err != nil {
+		return nil, err
+	}
+	var m map[string]any
+	if err := json.Unmarshal(raw, &m); err != nil {
+		return nil, err
+	}
+	if m == nil {
+		m = map[string]any{}
+	}
+	if k, _ := m["kind"].(string); k == "" {
+		m["kind"] = fallbackKind
+	}
+	return m, nil
+}
+
+func admissionReasons(d types.Decision) string {
+	parts := make([]string, 0, len(d.Reasons))
+	for _, r := range d.Reasons {
+		if r.ControlID != "" {
+			parts = append(parts, r.ControlID+": "+r.Message)
+		} else {
+			parts = append(parts, r.Message)
+		}
+	}
+	return strings.Join(parts, "; ")
 }
 
 // parseKind reads one declaration directory; optional dirs may be absent.
@@ -459,6 +709,7 @@ type triggerFile struct {
 	Principal       string         `yaml:"principal"`
 	WorkflowName    string         `yaml:"workflowName"`
 	FacetWriteScope []string       `yaml:"facetWriteScope"`
+	Environments    []string       `yaml:"environments"`
 }
 
 func parseTriggerFile(path string, raw []byte) (string, types.Trigger, error) {
@@ -478,6 +729,7 @@ func parseTriggerFile(path string, raw []byte) (string, types.Trigger, error) {
 		Actuator: f.Actuator, Params: f.Params,
 		Slices: f.Slices, CredentialRefs: f.CredentialRefs, Principal: f.Principal,
 		WorkflowName: f.WorkflowName, FacetWriteScope: f.FacetWriteScope,
+		Environments: f.Environments,
 	}
 	if err := ValidateTrigger(t); err != nil {
 		return "", types.Trigger{}, fmt.Errorf("desiredstate: %s: %w", path, err)
@@ -926,6 +1178,7 @@ type baselineFile struct {
 	DampingObservations int            `yaml:"dampingObservations"`
 	RemediationWorkflow string         `yaml:"remediationWorkflow"`
 	Framework           string         `yaml:"framework"`
+	Environments        []string       `yaml:"environments"`
 	// FacetWriteScope is the Facet namespaces this Baseline's actuation may write
 	// back (ADR-0054): the effective allowlist is the actuator's grant ∩ this scope.
 	// Empty admits no facet write-back (tight default). Moot for the observation
@@ -941,6 +1194,9 @@ type baselineFile struct {
 	// concept is the compiler's, over Assignment-owned writes — ADR-0023/§2.4).
 	Mode     string                 `yaml:"mode"`
 	Expected []facetExpectationFile `yaml:"expected"`
+	// RequiredRelations are outgoing relation types each targeted Entity must carry
+	// (ADR-0085) — the topology sibling of Expected. Presence-only, tool-blind.
+	RequiredRelations []string `yaml:"requiredRelations"`
 }
 
 // facetExpectationFile is the yaml shape of one facet-observation expectation.
@@ -988,7 +1244,8 @@ func parseBaselineFile(path string, raw []byte) (string, types.Baseline, error) 
 		Cron: f.Cron, Paused: f.Paused, Severity: f.Severity,
 		DampingObservations: f.DampingObservations,
 		RemediationWorkflow: f.RemediationWorkflow, Framework: f.Framework,
-		Mode: f.Mode, FacetWriteScope: f.FacetWriteScope,
+		Mode: f.Mode, FacetWriteScope: f.FacetWriteScope, Environments: f.Environments,
+		RequiredRelations: f.RequiredRelations,
 	}
 	for _, ef := range f.Expected {
 		exp, err := ef.toExpectation()
@@ -1041,8 +1298,16 @@ func ValidateBaseline(b types.Baseline) error {
 		if len(b.CredentialRefs) > 0 {
 			return fmt.Errorf("baseline %s: facet-observation baselines take no credentialRefs", b.Name)
 		}
-		if len(b.Expected) == 0 {
-			return fmt.Errorf("baseline %s: facet-observation requires at least one expected value", b.Name)
+		// A facet-observation Baseline asserts per-node facet values (Expected)
+		// and/or graph topology (RequiredRelations, ADR-0085) — at least one
+		// expectation of either kind is required (an empty check is a no-op bug).
+		if len(b.Expected) == 0 && len(b.RequiredRelations) == 0 {
+			return fmt.Errorf("baseline %s: facet-observation requires at least one expected value or required relation", b.Name)
+		}
+		for i, rel := range b.RequiredRelations {
+			if rel == "" {
+				return fmt.Errorf("baseline %s: requiredRelations[%d]: relation type must not be empty", b.Name, i)
+			}
 		}
 		for i, exp := range b.Expected {
 			if exp.Namespace == "" {
@@ -1295,6 +1560,7 @@ type blueprintFile struct {
 	Name                string           `yaml:"name"`
 	Version             int              `yaml:"version"`
 	For                 string           `yaml:"for"`
+	Defaults            map[string]any   `yaml:"defaults"`
 	Routes              []blueprintRoute `yaml:"routes"`
 	Severity            string           `yaml:"severity"`
 	DampingObservations int              `yaml:"dampingObservations"`
@@ -1328,6 +1594,7 @@ func parseBlueprintFile(path string, raw []byte) (string, types.Blueprint, error
 	}
 	b := types.Blueprint{
 		Name: f.Name, Version: f.Version, For: f.For,
+		Defaults: f.Defaults,
 		Severity: f.Severity, DampingObservations: f.DampingObservations,
 		RemoveWorkflow: f.RemoveWorkflow,
 	}
@@ -1385,6 +1652,18 @@ func ValidateBlueprint(b types.Blueprint) error {
 		return fmt.Errorf("blueprint %s@%d: %w", b.Name, b.Version, err)
 	} else if !ok {
 		return fmt.Errorf("blueprint %s@%d: for %q is not an implemented Intent kind", b.Name, b.Version, b.For)
+	}
+	// G6 (ADR-0083 §5): the Blueprint's defaults reach the compiled Baseline via the
+	// overlay merge, so they must cross the §1.1 Contract seam like an Intent's own spec
+	// does — validated partial-tolerant (defaults are a subset the Intent completes).
+	if len(b.Defaults) > 0 {
+		raw, err := json.Marshal(b.Defaults)
+		if err != nil {
+			return fmt.Errorf("blueprint %s@%d: marshal defaults: %w", b.Name, b.Version, err)
+		}
+		if _, err := contract.ValidateIntentSpecPartial(b.For, raw); err != nil {
+			return fmt.Errorf("blueprint %s@%d: defaults: %w", b.Name, b.Version, err)
+		}
 	}
 	switch b.Severity {
 	case "", types.SeverityInfo, types.SeverityWarning, types.SeverityCritical:
@@ -1480,12 +1759,22 @@ func checkTemplateNamespaces(what string, allowed map[string]bool, vals ...any) 
 type workflowFile struct {
 	Name  string     `yaml:"name"`
 	Steps []stepYAML `yaml:"steps"`
+	// AdoptedFrom is the adopt lineage (ADR-0087) — present on Workflows materialized by
+	// `stratt adopt`, read by the standing cutover reconciler. yaml.v3 ignores json tags,
+	// so this mirrors types.AdoptedFrom with yaml tags.
+	AdoptedFrom *adoptedFromYAML `yaml:"adoptedFrom"`
+}
+type adoptedFromYAML struct {
+	Kind     string `yaml:"kind"`
+	Identity string `yaml:"identity"`
+	Source   string `yaml:"source"`
 }
 type stepYAML struct {
 	Name            string         `yaml:"name"`
 	Needs           []string       `yaml:"needs"`
 	When            string         `yaml:"when"`
 	Gate            *gateYAML      `yaml:"gate"`
+	Policy          *policyYAML    `yaml:"policy"`
 	ViewName        string         `yaml:"viewName"`
 	Actuator        string         `yaml:"actuator"`
 	Action          string         `yaml:"action"`
@@ -1501,6 +1790,81 @@ type gateYAML struct {
 		Teams      []string `yaml:"teams"`
 	} `yaml:"approvers"`
 	TimeoutSeconds int `yaml:"timeoutSeconds"`
+	Threshold      int `yaml:"threshold"` // M-of-N quorum (ADR-0071)
+}
+
+// policyYAML is the estate declaration surface for a policy checkpoint Step
+// (ADR-0063/0067–0071): the CEL provider's inline-Control dialect. yaml.v3 does
+// not read json tags, so these mirror types/policy.go with yaml tags. The typed
+// primitives are optional pointers; controlYAML maps 1:1 to types.Control.
+type policyYAML struct {
+	Controls []controlYAML `yaml:"controls"`
+}
+type controlYAML struct {
+	ID          string           `yaml:"id"`
+	Type        string           `yaml:"type"`
+	When        string           `yaml:"when"`
+	Outcome     string           `yaml:"outcome"`
+	Obligations []obligationYAML `yaml:"obligations"`
+	TimeWindow  *timeWindowYAML  `yaml:"timeWindow"`
+	SoD         *sodYAML         `yaml:"sod"`
+	Waiver      *waiverYAML      `yaml:"waiver"`
+	BreakGlass  *breakGlassYAML  `yaml:"breakGlass"`
+}
+type obligationYAML struct {
+	Type   string         `yaml:"type"`
+	Params map[string]any `yaml:"params"`
+}
+type timeWindowYAML struct {
+	Mode         string   `yaml:"mode"`
+	Days         []string `yaml:"days"`
+	StartHourUTC int      `yaml:"startHourUtc"`
+	EndHourUTC   int      `yaml:"endHourUtc"`
+}
+type sodYAML struct {
+	DistinctFrom []string `yaml:"distinctFrom"`
+}
+type waiverYAML struct {
+	ControlRef    string    `yaml:"controlRef"`
+	ExpiresAt     time.Time `yaml:"expiresAt"`
+	Justification string    `yaml:"justification"`
+	ApprovedBy    string    `yaml:"approvedBy"`
+}
+type breakGlassYAML struct {
+	Bypasses     []string `yaml:"bypasses"`
+	PostReviewBy string   `yaml:"postReviewBy"`
+}
+
+// toPolicySpec maps the declared policy YAML into the typed PolicySpec. Load
+// validation (ValidateWorkflow → the CEL provider's dialect check) runs after.
+func toPolicySpec(p *policyYAML) *types.PolicySpec {
+	ctrls := make([]types.Control, 0, len(p.Controls))
+	for _, c := range p.Controls {
+		tc := types.Control{ID: c.ID, Type: c.Type, When: c.When, Outcome: c.Outcome}
+		for _, o := range c.Obligations {
+			tc.Obligations = append(tc.Obligations, types.Obligation{Type: o.Type, Params: o.Params})
+		}
+		if c.TimeWindow != nil {
+			tc.TimeWindow = &types.TimeWindowSpec{
+				Mode: c.TimeWindow.Mode, Days: c.TimeWindow.Days,
+				StartHourUTC: c.TimeWindow.StartHourUTC, EndHourUTC: c.TimeWindow.EndHourUTC,
+			}
+		}
+		if c.SoD != nil {
+			tc.SoD = &types.SoDSpec{DistinctFrom: c.SoD.DistinctFrom}
+		}
+		if c.Waiver != nil {
+			tc.Waiver = &types.WaiverSpec{
+				ControlRef: c.Waiver.ControlRef, ExpiresAt: c.Waiver.ExpiresAt,
+				Justification: c.Waiver.Justification, ApprovedBy: c.Waiver.ApprovedBy,
+			}
+		}
+		if c.BreakGlass != nil {
+			tc.BreakGlass = &types.BreakGlassSpec{Bypasses: c.BreakGlass.Bypasses, PostReviewBy: c.BreakGlass.PostReviewBy}
+		}
+		ctrls = append(ctrls, tc)
+	}
+	return &types.PolicySpec{Controls: ctrls}
 }
 
 func parseWorkflowFile(path string, raw []byte) (string, types.Workflow, error) {
@@ -1511,6 +1875,11 @@ func parseWorkflowFile(path string, raw []byte) (string, types.Workflow, error) 
 		return "", types.Workflow{}, fmt.Errorf("desiredstate: %s: %w", path, err)
 	}
 	w := types.Workflow{Name: f.Name}
+	if f.AdoptedFrom != nil {
+		w.AdoptedFrom = &types.AdoptedFrom{
+			Kind: f.AdoptedFrom.Kind, Identity: f.AdoptedFrom.Identity, Source: f.AdoptedFrom.Source,
+		}
+	}
 	for _, s := range f.Steps {
 		step := types.Step{
 			Name: s.Name, Needs: s.Needs, When: s.When,
@@ -1526,7 +1895,11 @@ func parseWorkflowFile(path string, raw []byte) (string, types.Workflow, error) 
 					Teams:      s.Gate.Approvers.Teams,
 				},
 				TimeoutSeconds: s.Gate.TimeoutSeconds,
+				Threshold:      s.Gate.Threshold,
 			}
+		}
+		if s.Policy != nil {
+			step.Policy = toPolicySpec(s.Policy)
 		}
 		w.Steps = append(w.Steps, step)
 	}
@@ -1559,29 +1932,46 @@ func ValidateWorkflow(w types.Workflow) error {
 		if s.When != "" && s.When != types.WhenSuccess && len(s.Needs) == 0 {
 			return fmt.Errorf("workflow %s: step %s: when %s requires needs", w.Name, s.Name, s.When)
 		}
-		// A Step is exactly one of three shapes (§2.3, ADR-0031): a Gate, an
-		// Action (targetless typed operation), or an Actuation (Actuator+View).
+		// A Step is exactly one of four shapes (§2.3, ADR-0031, ADR-0063): a Gate,
+		// a Policy checkpoint, an Action (targetless typed operation), or an
+		// Actuation (Actuator+View).
 		isGate := s.Gate != nil
+		isPolicy := s.Policy != nil
 		isAction := s.Action != ""
 		isActuation := s.ViewName != "" || s.Actuator != "" || s.Slices != 0
 		switch {
-		case isGate && (isAction || isActuation):
-			return fmt.Errorf("workflow %s: step %s: a step is a gate, an action, or an actuation — not multiple", w.Name, s.Name)
+		case isPolicy && (isGate || isAction || isActuation),
+			isGate && (isAction || isActuation):
+			return fmt.Errorf("workflow %s: step %s: a step is a gate, a policy, an action, or an actuation — not multiple", w.Name, s.Name)
 		case isAction && isActuation:
 			return fmt.Errorf("workflow %s: step %s: a step is an action or an actuation, not both (actions are targetless — no viewName/actuator/slices)", w.Name, s.Name)
-		case !isGate && !isAction && s.ViewName == "":
+		case !isGate && !isPolicy && !isAction && s.ViewName == "":
 			return fmt.Errorf("workflow %s: step %s: actuation step requires viewName", w.Name, s.Name)
 		case isGate && len(s.Gate.Approvers.Principals) == 0 && len(s.Gate.Approvers.Teams) == 0:
 			return fmt.Errorf("workflow %s: step %s: gate requires approvers (principals and/or teams)", w.Name, s.Name)
 		case isGate && s.Gate.TimeoutSeconds < 0:
 			return fmt.Errorf("workflow %s: step %s: gate timeoutSeconds must be >= 0", w.Name, s.Name)
-		case !isGate && s.Slices < 0:
+		case isGate && s.Gate.Threshold < 0:
+			return fmt.Errorf("workflow %s: step %s: gate threshold must be >= 0", w.Name, s.Name)
+		case isPolicy && len(s.Policy.Controls) == 0:
+			return fmt.Errorf("workflow %s: step %s: policy step requires controls", w.Name, s.Name)
+		case !isGate && !isPolicy && s.Slices < 0:
 			return fmt.Errorf("workflow %s: step %s: slices must be >= 0", w.Name, s.Name)
 		}
+		// A policy Step's control predicates are CEL-compiled at load — fail the
+		// file, never silently at decision time (§1.8, ADR-0063).
+		if isPolicy {
+			if err := policy.ValidateControls(s.Policy.Controls); err != nil {
+				return fmt.Errorf("workflow %s: step %s: %w", w.Name, s.Name, err)
+			}
+		}
 		// Params/CredentialRefs may bind the event namespace (firing Emitter,
-		// ADR-0024) and the steps namespace (a prior Step's outputs, ADR-0031),
-		// both resolved at launch by ResolveStepParams.
-		bindable := map[string]bool{"event": true, "steps": true}
+		// ADR-0024), the steps namespace (a prior Step's outputs, ADR-0031), and
+		// the launch namespace (operator-supplied launch params for a parameterized
+		// build/re-placement Workflow, ADR-0059) — all resolved at launch by
+		// ResolveStepParams. Launch values only fill declared placeholders in an
+		// already-gated, Contract-bounded Step (§2.5); they cannot move the target.
+		bindable := map[string]bool{"event": true, "steps": true, "launch": true}
 		switch {
 		case isAction:
 			if err := validateActionParamsContract(s.Action, s.Params); err != nil {
@@ -1591,7 +1981,7 @@ func ValidateWorkflow(w types.Workflow) error {
 				fmt.Sprintf("workflow %s step %s", w.Name, s.Name), bindable, s.Params); err != nil {
 				return err
 			}
-		case !isGate:
+		case !isGate && !isPolicy:
 			if err := validateParamsContract(s.Actuator, s.Params); err != nil {
 				return fmt.Errorf("workflow %s: step %s: %w", w.Name, s.Name, err)
 			}
@@ -1731,6 +2121,38 @@ func (ds declSelector) toSelector() (types.ViewSelector, error) {
 }
 
 // ── plan / apply ─────────────────────────────────────────────────────────────
+
+// ScopeToEnvironment filters the parsed declarations to the apply-set in scope
+// for the active environment (ADR-0057), consistent with the store's env-scoped
+// list reads (which scope the prune candidates + the compiler). Only the
+// launching/active kinds (Assignment/Trigger/Baseline) carry an environment in
+// v1; Views/Workflows are targets reached only through a scoped kind and are not
+// independently scoped. env == "" (unscoped daemon) keeps everything unchanged.
+func ScopeToEnvironment(d Declarations, env string) Declarations {
+	if env == "" {
+		return d
+	}
+	assigns := make([]types.Assignment, 0, len(d.Assignments))
+	for _, a := range d.Assignments {
+		if types.InScope(a.Environments, env) {
+			assigns = append(assigns, a)
+		}
+	}
+	trigs := make([]types.Trigger, 0, len(d.Triggers))
+	for _, t := range d.Triggers {
+		if types.InScope(t.Environments, env) {
+			trigs = append(trigs, t)
+		}
+	}
+	bls := make([]types.Baseline, 0, len(d.Baselines))
+	for _, b := range d.Baselines {
+		if types.InScope(b.Environments, env) {
+			bls = append(bls, b)
+		}
+	}
+	d.Assignments, d.Triggers, d.Baselines = assigns, trigs, bls
+	return d
+}
 
 // ComputePlan diffs the declarations against the graph's current state
 // across every declared kind.

@@ -58,6 +58,80 @@ temporal:
   address: "temporal-frontend:7233"
   namespace: "default"
 
+# ── schema migrations & rolling-upgrade discipline (UPG-1, ADR-0078) ─────────
+# By default each pod runs goose migrations at boot (idempotent, advisory-locked).
+# For a safe rolling upgrade, enable the hook: a Helm pre-install/pre-upgrade Job
+# applies the schema ONCE before the serving pods roll (they then boot with
+# STRATT_SKIP_MIGRATE), so N replicas never race Up(). Requires expand/contract-
+# compatible migrations (each release's schema stays compatible with the prior
+# release's code — enforced by `task migrate:lint`).
+migrations:
+  hook:
+    enabled: false
+    backoffLimit: 3
+
+# ── Evidence store: object-locked WORM compliance bundles (§2.4, ADR-0029) ───
+# enterprise-readiness DR-1. Without a bucket, Findings open UNSEALED and no
+# tamper-evident evidence is ever object-locked. The daemon REFUSES TO BOOT in a
+# production environment (env.name production/prod) with no bucket unless
+# allowUnsealed=true — a compliance platform must not silently skip WORM.
+evidence:
+  # S3-compatible bucket for sealed evidence. Empty ⇒ disabled (see the boot probe).
+  bucket: ""
+  # S3 API endpoint (any S3-compatible store; empty ⇒ AWS default resolver / real S3).
+  endpoint: ""
+  region: "us-east-1"
+  retentionDays: 365
+  # Explicitly acknowledge running UNSEALED in production (bypasses the boot
+  # probe). Leave false in prod unless you truly do not want compliance evidence.
+  allowUnsealed: false
+  # Object-store credentials via the standard AWS env chain (AWS_ACCESS_KEY_ID /
+  # AWS_SECRET_ACCESS_KEY). Prefer existingSecret; on EKS/IRSA leave both empty and
+  # attach the role to the ServiceAccount.
+  existingSecret:
+    name: ""
+    accessKeyKey: "AWS_ACCESS_KEY_ID"
+    secretKeyKey: "AWS_SECRET_ACCESS_KEY"
+
+# ── Postgres backup (enterprise-readiness DR-1) ──────────────────────────────
+# The graph is a rebuildable projection, but Run provenance + the per-Cell audit
+# chain are NOT rebuildable (DR-2). This opt-in CronJob pg_dumps the database to a
+# mounted PVC on a schedule. Off by default (a PVC + the operator's own PITR may
+# already cover it); pair with Postgres PITR for a real RPO. Restore drill:
+# `task dr:restore-test`.
+backup:
+  enabled: false
+  schedule: "0 2 * * *" # daily 02:00
+  image: postgres:18
+  # Retention: the CronJob keeps this many successful dumps on the PVC.
+  keep: 7
+  persistentVolume:
+    size: 10Gi
+    storageClass: "" # "" ⇒ cluster default
+  # The DSN to dump. Empty ⇒ reuse database.url / database.existingSecret.
+  databaseUrl: ""
+
+# ── SIEM audit forwarder (ADR-0034, enterprise-readiness DR-1) ───────────────
+# The vendor-neutral forwarder ships the one audit stream to a SIEM Sink. It had a
+# Dockerfile but no Helm Deployment, so it was undeployable. Opt-in.
+forwarder:
+  enabled: false
+  image:
+    repository: stratt/stratt-forwarder
+    tag: "dev"
+    digest: ""
+    pullPolicy: IfNotPresent
+  # The SIEM Sink name (declared in the estate, ADR-0034). Required when enabled.
+  sink: ""
+  # Platform API base the forwarder polls. Empty ⇒ the in-cluster service.
+  server: ""
+  batch: 200
+  intervalSeconds: 5
+  # The forwarder's own OIDC bearer token (a service Principal on audit:log), via secret.
+  existingSecret:
+    name: ""
+    tokenKey: "token"
+
 # ── control-plane Cell (ADR-0044) ───────────────────────────────────────────
 # Multi-region DR is done by REPOINTING the substrate env strings above
 # (database.url / nats.url / temporal.address / evidence store) to a Cell's
@@ -76,6 +150,14 @@ cell:
   dispatchPrefix: ""
   secretName: ""
   secretKey: "cell-secret"
+
+# ── active environment (ADR-0057) ───────────────────────────────────────────
+# The logical dev/staging/prod slice this daemon reconciles — a DIFFERENT axis
+# from cell (cell = physical residency; environment = logical slice within it).
+# Empty ⇒ unscoped: reconciles every declaration (byte-identical to pre-ADR-0057).
+# When set, the reconcile applies + prunes ONLY declarations tagged for this
+# environment (or untagged); a dev cell never fires prod's schedules.
+environment: ""
 
 # ── identity + authorization (ADR-0009) ─────────────────────────────────────
 oidc:
@@ -163,10 +245,11 @@ declarations:
     existingSecret: ""
   interval: "30s"
   maxPruneFraction: "" # "" ⇒ controller default 0.5
-  # inline delivers a small CaC checkout as a chart-rendered ConfigMap (no git
-  # server, no baked image) — the dev/e2e path. The fixtures live under the
-  # chart at dev/declarations/**; keys are restored to their nested paths on
-  # mount. Mutually exclusive with gitSync (git-sync is the production path).
+  # inline delivers a CaC checkout as a chart-rendered ConfigMap (no git server,
+  # no baked image) — the dev/e2e path. The reconciled /estate is staged under
+  # the chart at dev/declarations/** by `task dev:stage-estate`; keys are restored
+  # to their nested paths on mount. Mutually exclusive with gitSync (git-sync is
+  # the production path).
   inline:
     enabled: false
     interval: "30s"
@@ -186,6 +269,62 @@ declarations:
 #     hostEnv: {STRATT_VCENTER_SOURCE_NAME: "..."}  # extra env injected into strattd
 #     secretNamespace: ""               # when set, a confined get-Secrets Role there (SecretBroker, §2.5)
 plugins: []
+
+# ── network microsegmentation (enterprise-readiness SEC-3) ───────────────────
+# Default-deny egress + ingress for the three workload classes (control plane,
+# gRPC plugins, and the ephemeral EE Jobs that run arbitrary tool content), with
+# an allow-list for DNS + in-namespace substrate + operator-declared external
+# endpoints. OPT-IN: enabling this without declaring the egress your deployment
+# needs (managed Postgres/OIDC/object-store/cloud/webhook targets) WILL break
+# those calls. A NetworkPolicy that silently drops substrate egress is exactly the
+# hidden failure §1.8 forbids, so it stays off until you scope it — then it is the
+# recommended production posture (a CNI that enforces NetworkPolicy is required).
+networkPolicy:
+  enabled: false
+  # kube-dns's namespace; egress to :53 (UDP+TCP) is always allowed so name
+  # resolution keeps working under default-deny.
+  dnsNamespace: kube-system
+  # Allow egress to every pod in the release namespace. The self-contained profile
+  # runs Postgres/NATS/Temporal/OpenFGA/plugins in-namespace, so this keeps it
+  # working. Set false to lock down to only the extraEgress CIDRs (managed/external
+  # substrate) — the tightest posture.
+  allowSameNamespaceEgress: true
+  # External endpoints the CONTROL PLANE must reach: managed Postgres, the OIDC
+  # issuer, S3/object store, cloud provider APIs, webhook actuator targets. Each:
+  # {cidr, ports?}. Omit ports to allow all ports to that CIDR.
+  extraEgress: []
+  #  - cidr: 10.0.0.0/8
+  #    ports:
+  #      - {protocol: TCP, port: 5432}
+  # External endpoints the PLUGIN pods must reach (the systems of record they
+  # broker — vCenter, cloud APIs, a Chef/Puppet server…). Same shape as extraEgress.
+  extraPluginEgress: []
+  # External endpoints the EE JOB pods must reach (the infra a tool actuates —
+  # cloud APIs, target hosts). Same shape. Kept deliberately separate so the
+  # arbitrary-content pods get the narrowest, most-scrutinized allow-list.
+  extraJobEgress: []
+  # namespaceSelector matchLabels for namespaces allowed to reach the API on :8080
+  # (an ingress controller, peer Cells). Empty ⇒ same-namespace clients only.
+  apiIngressNamespaces: []
+  #  - kubernetes.io/metadata.name: ingress-nginx
+
+# ── observability (enterprise-readiness OBS-1) ───────────────────────────────
+# The daemon always serves Prometheus metrics at :8080/metrics (SLO signals with
+# zero collector). Set otlpEndpoint to also push traces + metrics over OTLP/gRPC.
+observability:
+  # OTEL_EXPORTER_OTLP_ENDPOINT (e.g. http://otel-collector:4317). Empty ⇒ traces
+  # are a no-op; /metrics still serves.
+  otlpEndpoint: ""
+  # Extra OTEL_* env passthrough (headers, protocol, sampling…). Map of name→value.
+  otlpEnv: {}
+  #  OTEL_EXPORTER_OTLP_PROTOCOL: grpc
+  # A Prometheus-Operator PodMonitor scraping :8080/metrics. Opt-in (requires the
+  # PodMonitor CRD). Off by default so a cluster without the operator still installs.
+  podMonitor:
+    enabled: false
+    interval: 30s
+    # Extra labels so the operator's podMonitorSelector picks it up (e.g. release: kube-prometheus).
+    labels: {}
 
 resources:
   requests:

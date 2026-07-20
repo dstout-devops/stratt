@@ -1,0 +1,41 @@
+# subnet-provision — a PARAMETERIZED gated build Workflow: build ANY subnet from launch
+# params (ADR-0059 re-placement / per-instance builds). The operator launches it with
+# {subnetName, cidr}; the {{.launch.x}} bindings fill the declared placeholders. This is
+# the general form of subnet-build — one Workflow for the whole estate's subnets, the
+# per-instance parameterization the compute-build note flagged. The gate + the launching
+# Principal's authz remain the control; the params only fill what was declared and gated.
+name: subnet-provision
+steps:
+  - name: approve
+    gate:
+      approvers:
+        teams: [platform-admins]
+      timeoutSeconds: 86400
+  - name: build
+    needs: [approve]
+    action: crossplane/provision
+    credentialRefs: [crossplane-dev]
+    params:
+      group: kubernetes.crossplane.io
+      version: v1alpha2
+      resource: objects
+      kind: Object
+      name: "{{.launch.subnetName}}"
+      cidr: "{{.launch.cidr}}"
+      readySeconds: 120
+      projectKind: subnet
+      identityScheme: crossplane.claim
+      projectLabels:
+        stratt.intent/singleton: "Intent/Subnet/{{.launch.subnetName}}"
+      spec:
+        providerConfigRef:
+          name: default
+        forProvider:
+          manifest:
+            apiVersion: v1
+            kind: ConfigMap
+            metadata:
+              name: "subnet-{{.launch.subnetName}}"
+              namespace: crossplane-system
+            data:
+              cidr: "{{.launch.cidr}}"

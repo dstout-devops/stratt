@@ -2,6 +2,7 @@ package desiredstate
 
 import (
 	"context"
+	"os"
 	"testing"
 
 	"github.com/dstout-devops/stratt/types"
@@ -11,7 +12,7 @@ func TestViewSelectorNamespaceScope(t *testing.T) {
 	root := t.TempDir()
 	// A param-bound View is fine.
 	writeDecl(t, root, "ok.yaml", "name: ok\nselector: {kinds: [vm], labels: {host: \"{{.param.host}}\"}}\n")
-	if _, err := ParseDir(root); err != nil {
+	if _, err := ParseDir(root, nil); err != nil {
 		t.Fatalf("param View must be allowed: %v", err)
 	}
 	// An event/spec binding in a View selector is rejected at declaration.
@@ -21,7 +22,7 @@ func TestViewSelectorNamespaceScope(t *testing.T) {
 	} {
 		d := t.TempDir()
 		writeDecl(t, d, "b.yaml", bad)
-		if _, err := ParseDir(d); err == nil {
+		if _, err := ParseDir(d, nil); err == nil {
 			t.Fatalf("View selector with a non-param namespace must be rejected: %s", bad)
 		}
 	}
@@ -57,12 +58,173 @@ func TestWorkflowStepParamNamespaceScope(t *testing.T) {
 	if err := ValidateWorkflow(ok); err != nil {
 		t.Fatalf("event binding on a Step must be allowed: %v", err)
 	}
+	// A Step param may bind the launch namespace (operator-supplied launch params
+	// for a parameterized build/re-placement Workflow, ADR-0059).
+	okLaunch := types.Workflow{Name: "w", Steps: []types.Step{
+		{Name: "s", ViewName: "v", Actuator: "script", Params: map[string]any{"script": "echo {{.launch.targetSubnet}}"}},
+	}}
+	if err := ValidateWorkflow(okLaunch); err != nil {
+		t.Fatalf("launch binding on a Step must be allowed: %v", err)
+	}
 	// spec/param are not available on a Step.
 	bad := types.Workflow{Name: "w", Steps: []types.Step{
 		{Name: "s", ViewName: "v", Actuator: "script", Params: map[string]any{"script": "{{.spec.x}}"}},
 	}}
 	if err := ValidateWorkflow(bad); err == nil {
 		t.Fatal("spec namespace on a Step must be rejected")
+	}
+}
+
+// A policy Step is a valid Step shape; its control predicates are CEL-compiled
+// at load and a bad predicate or empty control set fails the file (ADR-0063).
+func TestWorkflowPolicyStep(t *testing.T) {
+	good := types.Workflow{Name: "w", Steps: []types.Step{
+		{Name: "guard", Policy: &types.PolicySpec{Controls: []types.Control{
+			{ID: "freeze", When: "ctx.environment == 'prod'", Outcome: types.OutcomeDeny},
+		}}},
+	}}
+	if err := ValidateWorkflow(good); err != nil {
+		t.Fatalf("valid policy step must pass, got %v", err)
+	}
+	bads := map[string]types.Workflow{
+		"empty controls": {Name: "w", Steps: []types.Step{
+			{Name: "guard", Policy: &types.PolicySpec{}},
+		}},
+		"uncompilable predicate": {Name: "w", Steps: []types.Step{
+			{Name: "guard", Policy: &types.PolicySpec{Controls: []types.Control{
+				{ID: "x", When: "!!! not cel", Outcome: types.OutcomeDeny}},
+			}},
+		}},
+		"mixed shape (policy+actuation)": {Name: "w", Steps: []types.Step{
+			{Name: "guard", ViewName: "v", Policy: &types.PolicySpec{Controls: []types.Control{
+				{ID: "x", When: "true", Outcome: types.OutcomeDeny}},
+			}},
+		}},
+	}
+	for name, wf := range bads {
+		if err := ValidateWorkflow(wf); err == nil {
+			t.Fatalf("%s: must be rejected at load", name)
+		}
+	}
+}
+
+// M1 (ADR-0061 / ADR-0066): the §5 plan-gate floor is non-substitutable — a
+// plan-pinned Apply "guarded" only by a policy Step (which binds no plan digest)
+// is rejected at load, exactly as one guarded by nothing. A real plan-binding
+// Gate is required.
+func TestPlanGateFloorNotSubstitutableByPolicy(t *testing.T) {
+	act := func(name string, needs []string) types.Step {
+		return types.Step{Name: name, Needs: needs, ViewName: "v", Actuator: "script",
+			Params: map[string]any{"script": "echo hi"}}
+	}
+	planStep := act("plan", nil)
+	planStep.Plan = true
+
+	applyPolicy := act("apply", []string{"guard"})
+	applyPolicy.PlanFrom = "plan"
+	policyGuarded := types.Workflow{Name: "w", Steps: []types.Step{
+		planStep,
+		{Name: "guard", Needs: []string{"plan"}, Policy: &types.PolicySpec{Controls: []types.Control{
+			{ID: "c", When: "true", Outcome: types.OutcomeRequireApproval}},
+		}},
+		applyPolicy,
+	}}
+	if err := ValidateWorkflow(policyGuarded); err == nil {
+		t.Fatal("a plan-pinned Apply guarded only by a policy Step must be rejected (the plan-gate floor is Gate-only, §5)")
+	}
+	// The same shape with a real plan-binding Gate passes.
+	applyGate := act("apply", []string{"approve"})
+	applyGate.PlanFrom = "plan"
+	gateGuarded := types.Workflow{Name: "w", Steps: []types.Step{
+		planStep,
+		{Name: "approve", Needs: []string{"plan"}, PlanFrom: "plan", Gate: &types.GateSpec{
+			Approvers: types.GateApprovers{Teams: []string{"platform"}}}},
+		applyGate,
+	}}
+	if err := ValidateWorkflow(gateGuarded); err != nil {
+		t.Fatalf("a plan-pinned Apply behind a real plan-binding Gate must pass, got %v", err)
+	}
+}
+
+// A policy Step + its typed control library round-trips from estate YAML through
+// the loader into a typed PolicySpec (ADR-0063/0067–0071 declaration surface).
+func TestParseWorkflowPolicyStep(t *testing.T) {
+	src := `name: guarded-deploy
+steps:
+  - name: guard
+    policy:
+      controls:
+        - id: prod-freeze
+          timeWindow: { mode: deny, days: [sat, sun], startHourUtc: 0, endHourUtc: 24 }
+          outcome: deny
+        - id: four-eyes
+          sod: { distinctFrom: [committers] }
+          outcome: require_approval
+          obligations:
+            - type: require_approval
+              params: { teams: [platform-admins], count: 2 }
+        - id: waive-freeze
+          waiver:
+            controlRef: prod-freeze
+            expiresAt: 2026-07-20T00:00:00Z
+            justification: incident-4471
+            approvedBy: sre-lead
+  - name: apply
+    needs: [guard]
+    viewName: v
+    actuator: script
+    params: { script: "echo hi" }
+`
+	_, wf, err := parseWorkflowFile("guarded.yaml", []byte(src))
+	if err != nil {
+		t.Fatalf("valid policy workflow must parse + validate, got %v", err)
+	}
+	if wf.Steps[0].Policy == nil || len(wf.Steps[0].Policy.Controls) != 3 {
+		t.Fatalf("policy step did not round-trip: %+v", wf.Steps[0].Policy)
+	}
+	cs := wf.Steps[0].Policy.Controls
+	if cs[0].TimeWindow == nil || cs[0].TimeWindow.Mode != types.TimeWindowDeny || len(cs[0].TimeWindow.Days) != 2 {
+		t.Fatalf("time-window control mismapped: %+v", cs[0])
+	}
+	if cs[1].SoD == nil || cs[1].SoD.DistinctFrom[0] != types.SoDDistinctFromCommitters || cs[1].Outcome != types.OutcomeRequireApproval {
+		t.Fatalf("sod control mismapped: %+v", cs[1])
+	}
+	if len(cs[1].Obligations) != 1 || cs[1].Obligations[0].Type != types.ObligationRequireApproval {
+		t.Fatalf("obligation mismapped: %+v", cs[1].Obligations)
+	}
+	if cs[2].Waiver == nil || cs[2].Waiver.ControlRef != "prod-freeze" || cs[2].Waiver.ApprovedBy != "sre-lead" {
+		t.Fatalf("waiver control mismapped: %+v", cs[2])
+	}
+	if y := cs[2].Waiver.ExpiresAt.UTC().Year(); y != 2026 {
+		t.Fatalf("waiver expiresAt not parsed as a timestamp: %v", cs[2].Waiver.ExpiresAt)
+	}
+}
+
+// The shipped estate governance example must boot-validate — CI guards it so the
+// declaration surface and the example never drift apart.
+func TestEstateChangeReviewValidates(t *testing.T) {
+	raw, err := os.ReadFile("../../../estate/workflows/change-review.yaml")
+	if err != nil {
+		t.Fatalf("read estate example: %v", err)
+	}
+	if _, _, err := parseWorkflowFile("change-review.yaml", raw); err != nil {
+		t.Fatalf("estate governance example must parse + validate at load: %v", err)
+	}
+}
+
+// An invalid control (uncompilable predicate) fails the file at load.
+func TestParseWorkflowPolicyStep_InvalidRejected(t *testing.T) {
+	src := `name: bad
+steps:
+  - name: guard
+    policy:
+      controls:
+        - id: broken
+          when: "!!! not cel"
+          outcome: deny
+`
+	if _, _, err := parseWorkflowFile("bad.yaml", []byte(src)); err == nil {
+		t.Fatal("an uncompilable control must fail the file at load")
 	}
 }
 

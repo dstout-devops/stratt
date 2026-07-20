@@ -41,7 +41,18 @@ const (
 	// The destination Cell re-checks it against the global OpenFGA on the
 	// forwarded adopt (§1.6 one authz model), like every other cross-Cell write.
 	RelationRehome = "rehome"
+	// RelationAdopt authorizes `stratt adopt` (ADR-0086): materializing an observed
+	// object into a Stratt-authored Named Kind. Granted per Source (source:<id>),
+	// deny-by-default, never implied by reader/admin — flipping an object from
+	// foreign-executed to Stratt-executed is a deliberate, separately-granted act
+	// (§1.6 one authz model; the API/CLI/agents share this one grant). Distinct from
+	// the control-plane-internal `rehome` adopt (ADR-0044).
+	RelationAdopt = "adopt"
 )
+
+// SourceObject guards a Source for the adopt relation (ADR-0086): a principal must
+// hold `adopt` on source:<id> to materialize one of its observed objects.
+func SourceObject(source string) string { return "source:" + source }
 
 // CellObject guards a Cell for the re-home relation (ADR-0044 slice 7): a
 // principal must hold `rehome` on cell:<dest> to move a Source there.
@@ -62,6 +73,31 @@ type Authorizer interface {
 	// CheckHealth verifies the authorization backend is reachable — the
 	// readiness signal (ADR-0040). Nil = ready.
 	CheckHealth(ctx context.Context) error
+}
+
+// ApproverAuthorized is the ONE seam that answers "may this principal decide
+// this Gate" (§1.6, ADR-0011's deferred note, ADR-0064): a match against the
+// declaration-scoped explicit principals list, OR ReBAC membership of one of
+// the approver teams via Check. Used by both the human-Gate and policy-opened-
+// Gate decision paths, so approver authorization has one implementation. The
+// explicit principals list stays declaration data (not an OpenFGA object type),
+// checked inside this helper.
+func ApproverAuthorized(ctx context.Context, a Authorizer, principal string, principals, teams []string) (bool, error) {
+	for _, p := range principals {
+		if p == principal {
+			return true, nil
+		}
+	}
+	for _, team := range teams {
+		member, err := a.Check(ctx, principal, RelationMember, "team:"+team)
+		if err != nil {
+			return false, err
+		}
+		if member {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 type ctxKey struct{}

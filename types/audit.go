@@ -41,14 +41,18 @@ type AuditEvent struct {
 
 // Audit action constants — the stable Action vocabulary (one audit path, §1.6).
 const (
-	AuditRunStart      = "run.start"
-	AuditRunCancel     = "run.cancel"
-	AuditRunFinish     = "run.finish"
-	AuditDesiredApply  = "desired-state.apply"
-	AuditGateDecision  = "gate.decision"
-	AuditExecGrant     = "authz.exec-grant"
-	AuditCredentialUse = "credential.use"
-	AuditMCPToolCall   = "mcp.tool-call"
+	AuditRunStart     = "run.start"
+	AuditRunCancel    = "run.cancel"
+	AuditRunFinish    = "run.finish"
+	AuditDesiredApply = "desired-state.apply"
+	AuditGateDecision = "gate.decision"
+	// AuditPolicyDecision records one PDP verdict on a Run (ADR-0065): a
+	// point-in-time allow/deny/require_approval/escalate, Principal-stamped,
+	// tamper-evident. Object is the WorkflowRun; Detail carries the reasons.
+	AuditPolicyDecision = "policy.decision"
+	AuditExecGrant      = "authz.exec-grant"
+	AuditCredentialUse  = "credential.use"
+	AuditMCPToolCall    = "mcp.tool-call"
 	// AuditRehome records each phase of a fenced cross-Cell Source re-home
 	// (ADR-0044 slice 7). Recorded on BOTH Cells' per-Cell hash chains — the
 	// source Cell logs seal/complete/abort, the destination Cell logs adopt — so
