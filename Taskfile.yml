@@ -166,6 +166,7 @@ tasks:
       - task: proto:check
       - task: migrate:lint
       - task: test
+      - task: ui:ci
 
   dev:up:
     desc: Start the Phase-0 dev substrate (Postgres 18, NATS JetStream, Temporal, vcsim)
@@ -674,7 +675,27 @@ tasks:
       - npm run build
 
   ui:lint:
-    desc: Type-check the UI (the CI signal, ADR-0012)
+    desc: ESLint the UI (0 warnings; ADR-0090)
     dir: ui
     cmds:
       - npm run lint
+
+  ui:typecheck:
+    desc: Type-check the UI (tsc, ADR-0090)
+    dir: ui
+    cmds:
+      - npm run typecheck
+
+  ui:test:
+    desc: Run the UI unit tests (vitest, ADR-0090)
+    dir: ui
+    cmds:
+      - npm run test
+
+  ui:ci:
+    desc: UI gate — typecheck + lint + tests + build (ADR-0090). Runs in the aggregate `ci`.
+    cmds:
+      - task: ui:typecheck
+      - task: ui:lint
+      - task: ui:test
+      - task: ui:build
