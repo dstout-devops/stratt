@@ -222,6 +222,22 @@ message ContractDecl {
   string band = 3; // the band this contract's data lives at ("" if band-agnostic)
 }
 
+// CutoverDescriptor — the Connector's declaration of what "still executing at the
+// Source" means for one of its projected kinds (ADR-0087). It lets the core cutover
+// reconciler detect double-execution after a `stratt adopt` (ADR-0086) WITHOUT the
+// spine learning any tool: the reconciler reads these fields blindly. For AWX:
+// target_kind=ansible.template, relation=schedules (the INVERSE edge — schedules that
+// launch the template), liveness ns/path/value = ansible.schedule / enabled / "true".
+// The descriptor rides the manifest so it travels with the plugin binary (§1.4 —
+// the Connector owns its own relation/facet names, not core).
+message CutoverDescriptor {
+  string target_kind = 1;         // the adopted projection kind, e.g. ansible.template
+  string relation = 2;            // the INVERSE relation whose sources are the foreign executors
+  string liveness_namespace = 3;  // the executor facet namespace, e.g. ansible.schedule
+  string liveness_path = 4;       // dotted path within that facet, e.g. enabled
+  string liveness_value = 5;      // the JSON value meaning "still live", e.g. true
+}
+
 // ActionDecl advertises one Action a plugin ships (a plugin may ship many —
 // certissuer = issue/renew/revoke). Content-blind discovery (invariant #2); the
 // InvokeRequest.action selector picks one. input/output are pinned Contract refs.
@@ -264,6 +280,11 @@ message Manifest {
   // unbounded 1..N fossil matrix.
   string min_protocol = 10;
   string max_protocol = 11;
+
+  // Cutover descriptors (ADR-0087): per projected kind, what "still executing at the
+  // Source" means — so the core cutover reconciler can flag double-execution after an
+  // adopt without learning the tool. Optional; empty ⇒ no standing cutover check.
+  repeated CutoverDescriptor cutover = 12;
 }
 
 // GetManifestResponse wraps the Manifest so the RPC has a dedicated,

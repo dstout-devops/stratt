@@ -18,6 +18,13 @@ const (
 	KindSchedule = "ansible.schedule" // an AWX schedule (→ Trigger on cutover)
 	KindOrg      = "ansible.org"      // an AWX organization (tenancy)
 	KindTeam     = "ansible.team"     // an AWX RBAC team
+
+	// schemePlaybook is the ansible-project Syncer's OWNED kind — referenced here only
+	// as a cross-source relation TARGET (the `runs` edge), never owned or written by AWX.
+	// Module isolation (ADR-0046) forbids importing that plugin's package, so the seam is
+	// the contract STRING, not a shared Go symbol (the same way a SchemaId crosses modules).
+	// AWX must be granted this as a pointable IdentityScheme (strattd), NOT a FacetNamespace.
+	schemePlaybook = "ansible.playbook"
 )
 
 // qualify controller-namespaces an AWX object id: "<controllerID>/<id>".
@@ -50,7 +57,7 @@ func (c *Client) Normalize(snap *Snapshot) ([]*pluginv1.ObservedEntity, error) {
 			IdentityKeys: map[string]string{KindTemplate: c.qualify(jt.ID)},
 			Labels:       labels(jt.Name, jt.SummaryFields.Organization.Name),
 			Facets:       map[string][]byte{KindTemplate: facet},
-			Relations:    orgRel(jt.SummaryFields.Organization.ID),
+			Relations:    append(orgRel(jt.SummaryFields.Organization.ID), runsRel(jt)...),
 		})
 	}
 
@@ -126,6 +133,24 @@ func (c *Client) Normalize(snap *Snapshot) ([]*pluginv1.ObservedEntity, error) {
 	}
 
 	return out, nil
+}
+
+// runsRel is the CROSS-SOURCE edge that unifies AWX's orchestration layer with the raw
+// Ansible content the ansible-project Syncer projects: `ansible.template --runs-->
+// ansible.playbook`. The target is named BY IDENTITY as `<project.name>/<playbook>` —
+// the same `<projectID>/<relpath>` key the ansible-project Syncer qualifies playbooks
+// under, so the operator aligns STRATT_ANSIBLE_PROJECT_ID with the AWX Project name (the
+// statement "this AWX Project IS this Git content root"). It is a SOFT reference: the
+// host resolves it against the graph and, if the playbook is not projected by any known
+// project, DROPS the edge (no vivify, §1.2) — that dropped edge is exactly the
+// orphan-template signal the governance Baseline reads. No edge is emitted when AWX gives
+// us neither a project name nor a playbook path (nothing to point at).
+func runsRel(jt JobTemplate) []*pluginv1.ObservedRelation {
+	proj, pb := jt.SummaryFields.Project.Name, jt.Playbook
+	if proj == "" || pb == "" {
+		return nil
+	}
+	return []*pluginv1.ObservedRelation{{Type: "runs", ToScheme: schemePlaybook, ToValue: proj + "/" + pb}}
 }
 
 // labels renders the operator-selectable labels: the object name and (when known)

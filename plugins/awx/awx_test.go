@@ -23,7 +23,10 @@ func fakeAWX(t *testing.T) *httptest.Server {
 	mux.HandleFunc("/api/v2/job_templates/", func(w http.ResponseWriter, r *http.Request) {
 		w.Write(page([]map[string]any{{
 			"id": 10, "name": "Deploy Web", "job_type": "run", "playbook": "site.yml",
-			"survey_enabled": true, "summary_fields": map[string]any{"organization": map[string]any{"id": 1, "name": "Platform"}},
+			"survey_enabled": true, "summary_fields": map[string]any{
+				"organization": map[string]any{"id": 1, "name": "Platform"},
+				"project":      map[string]any{"id": 5, "name": "web-content"},
+			},
 		}}))
 	})
 	mux.HandleFunc("/api/v2/workflow_job_templates/", func(w http.ResponseWriter, r *http.Request) {
@@ -83,6 +86,23 @@ func TestEnumerateAndNormalize(t *testing.T) {
 	// Identity is controller-qualified so two Controllers never collide.
 	if got := byKind[KindTemplate].GetIdentityKeys()[KindTemplate]; got != "ctrl-a/10" {
 		t.Fatalf("template identity = %q, want ctrl-a/10", got)
+	}
+
+	// The CROSS-SOURCE edge that unifies the two ansible Sources: the template --runs-->
+	// the ansible.playbook the ansible-project Syncer projects, named by the same
+	// `<project>/<playbook>` identity key. Target scheme is the FOREIGN owned kind — AWX
+	// only points at it. (The template also carries its owned-by org edge.)
+	var runs *pluginv1.ObservedRelation
+	for _, r := range byKind[KindTemplate].GetRelations() {
+		if r.GetType() == "runs" {
+			runs = r
+		}
+	}
+	if runs == nil {
+		t.Fatalf("template must carry a runs edge; got %+v", byKind[KindTemplate].GetRelations())
+	}
+	if runs.GetToScheme() != "ansible.playbook" || runs.GetToValue() != "web-content/site.yml" {
+		t.Fatalf("runs edge wrong: scheme=%q value=%q (want ansible.playbook web-content/site.yml)", runs.GetToScheme(), runs.GetToValue())
 	}
 
 	// The graph edge the mirror exists for: the schedule → the template it launches.

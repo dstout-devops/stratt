@@ -155,6 +155,21 @@ func (a *Activities) EvaluateFacetBaseline(ctx context.Context, b types.Baseline
 				})
 			}
 		}
+		// Topology expectations (ADR-0085): each required relation type must be
+		// present as an outgoing edge. A missing edge is drift — the analog of a
+		// missing Facet above. Tool-blind: the type string is the only input, and
+		// a dropped cross-source edge (no-vivify, ADR-0042) reads here as absent.
+		for _, relType := range b.RequiredRelations {
+			targets, err := a.Store.RelationTargets(ctx, e.ID, relType)
+			if err != nil {
+				return graph.ObservationOutcome{}, err
+			}
+			if len(targets) == 0 {
+				unmet = append(unmet, map[string]any{
+					"relation": relType, "reason": "relation absent",
+				})
+			}
+		}
 		o := graph.BaselineObservation{EntityID: e.ID}
 		if len(unmet) > 0 {
 			o.Drifted = true

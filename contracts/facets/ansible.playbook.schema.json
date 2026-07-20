@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "stratt:contract:facets/ansible.playbook:v1",
+  "title": "ansible.playbook Facet",
+  "description": "The OBSERVED metadata of a raw Ansible playbook file, projected read-only by the ansible-project Connector (§1.2) — a foreign artifact (a playbook file stays a playbook), never a Stratt Named Kind. Demanded by that Connector's playbook-facet projection Contract (its manifest ContractDecl): shipping this schema hardens the write seam — every projected playbook facet is now validated (covered), §1.1 progressive hardening. It is METADATA only (name/path/plays/hosts) — never a reinterpretation of Ansible's execution model (the §9 no-new-language line). NOTE (ADR-0085): the orphan-template Baseline is the motivating governance consumer but is NOT the §1.1 demander — a relation-presence check reads no content; a writer demands the schema. plays is the play count; hosts are the host patterns the plays target (observed, not resolved). Closed (§9).",
+  "type": "object",
+  "properties": {
+    "name": { "type": "string" },
+    "path": { "type": "string" },
+    "plays": { "type": "integer", "minimum": 0 },
+    "hosts": {
+      "type": "array",
+      "items": { "type": "string" }
+    }
+  },
+  "required": ["name", "path"],
+  "additionalProperties": false
+}

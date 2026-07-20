@@ -1194,6 +1194,9 @@ type baselineFile struct {
 	// concept is the compiler's, over Assignment-owned writes — ADR-0023/§2.4).
 	Mode     string                 `yaml:"mode"`
 	Expected []facetExpectationFile `yaml:"expected"`
+	// RequiredRelations are outgoing relation types each targeted Entity must carry
+	// (ADR-0085) — the topology sibling of Expected. Presence-only, tool-blind.
+	RequiredRelations []string `yaml:"requiredRelations"`
 }
 
 // facetExpectationFile is the yaml shape of one facet-observation expectation.
@@ -1242,6 +1245,7 @@ func parseBaselineFile(path string, raw []byte) (string, types.Baseline, error) 
 		DampingObservations: f.DampingObservations,
 		RemediationWorkflow: f.RemediationWorkflow, Framework: f.Framework,
 		Mode: f.Mode, FacetWriteScope: f.FacetWriteScope, Environments: f.Environments,
+		RequiredRelations: f.RequiredRelations,
 	}
 	for _, ef := range f.Expected {
 		exp, err := ef.toExpectation()
@@ -1294,8 +1298,16 @@ func ValidateBaseline(b types.Baseline) error {
 		if len(b.CredentialRefs) > 0 {
 			return fmt.Errorf("baseline %s: facet-observation baselines take no credentialRefs", b.Name)
 		}
-		if len(b.Expected) == 0 {
-			return fmt.Errorf("baseline %s: facet-observation requires at least one expected value", b.Name)
+		// A facet-observation Baseline asserts per-node facet values (Expected)
+		// and/or graph topology (RequiredRelations, ADR-0085) — at least one
+		// expectation of either kind is required (an empty check is a no-op bug).
+		if len(b.Expected) == 0 && len(b.RequiredRelations) == 0 {
+			return fmt.Errorf("baseline %s: facet-observation requires at least one expected value or required relation", b.Name)
+		}
+		for i, rel := range b.RequiredRelations {
+			if rel == "" {
+				return fmt.Errorf("baseline %s: requiredRelations[%d]: relation type must not be empty", b.Name, i)
+			}
 		}
 		for i, exp := range b.Expected {
 			if exp.Namespace == "" {
@@ -1747,6 +1759,15 @@ func checkTemplateNamespaces(what string, allowed map[string]bool, vals ...any) 
 type workflowFile struct {
 	Name  string     `yaml:"name"`
 	Steps []stepYAML `yaml:"steps"`
+	// AdoptedFrom is the adopt lineage (ADR-0087) — present on Workflows materialized by
+	// `stratt adopt`, read by the standing cutover reconciler. yaml.v3 ignores json tags,
+	// so this mirrors types.AdoptedFrom with yaml tags.
+	AdoptedFrom *adoptedFromYAML `yaml:"adoptedFrom"`
+}
+type adoptedFromYAML struct {
+	Kind     string `yaml:"kind"`
+	Identity string `yaml:"identity"`
+	Source   string `yaml:"source"`
 }
 type stepYAML struct {
 	Name            string         `yaml:"name"`
@@ -1854,6 +1875,11 @@ func parseWorkflowFile(path string, raw []byte) (string, types.Workflow, error) 
 		return "", types.Workflow{}, fmt.Errorf("desiredstate: %s: %w", path, err)
 	}
 	w := types.Workflow{Name: f.Name}
+	if f.AdoptedFrom != nil {
+		w.AdoptedFrom = &types.AdoptedFrom{
+			Kind: f.AdoptedFrom.Kind, Identity: f.AdoptedFrom.Identity, Source: f.AdoptedFrom.Source,
+		}
+	}
 	for _, s := range f.Steps {
 		step := types.Step{
 			Name: s.Name, Needs: s.Needs, When: s.When,

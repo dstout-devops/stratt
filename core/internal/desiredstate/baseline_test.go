@@ -147,6 +147,42 @@ expected:
 	}
 }
 
+// TestParseRelationPresenceBaseline covers the ADR-0085 topology check: a
+// facet-observation Baseline may assert requiredRelations (with or without
+// expected), and an empty relation type is rejected.
+func TestParseRelationPresenceBaseline(t *testing.T) {
+	root := t.TempDir()
+	writeDecl(t, root, "v.yaml", "name: awx-templates\nselector: {kinds: [ansible.template]}\n")
+	writeBaseline(t, root, "orphan.yaml", `
+name: awx-template-covered
+viewName: awx-templates
+mode: facet-observation
+cron: "@every 5m"
+severity: warning
+dampingObservations: 2
+requiredRelations: [runs]
+`)
+	parsed, err := ParseDir(root, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(parsed.Baselines) != 1 {
+		t.Fatalf("baselines: %+v", parsed.Baselines)
+	}
+	b := parsed.Baselines[0]
+	if len(b.Expected) != 0 || len(b.RequiredRelations) != 1 || b.RequiredRelations[0] != "runs" {
+		t.Fatalf("requiredRelations not parsed: %+v", b)
+	}
+
+	// An empty relation type is rejected (a no-op topology check is a bug).
+	bad := t.TempDir()
+	writeDecl(t, bad, "v.yaml", "name: awx-templates\nselector: {kinds: [ansible.template]}\n")
+	writeBaseline(t, bad, "x.yaml", "name: x\nviewName: awx-templates\nmode: facet-observation\ncron: '* * * * *'\nseverity: info\nrequiredRelations: ['']\n")
+	if _, err := ParseDir(bad, nil); err == nil {
+		t.Fatal("empty requiredRelations type must be rejected")
+	}
+}
+
 func TestBaselinePlanApplyLifecycle(t *testing.T) {
 	s := testStore(t)
 	ctx := context.Background()

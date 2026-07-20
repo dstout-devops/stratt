@@ -17,6 +17,19 @@ const (
 type Workflow struct {
 	Name  string `json:"name"`
 	Steps []Step `json:"steps"`
+	// AdoptedFrom is the lineage of a Workflow materialized by `stratt adopt` (ADR-0086/0087):
+	// the observed object it was adopted from. It stays on the Named Kind's Git lineage — never
+	// a projection facet (§1.2) — and is what the standing cutover reconciler reads to detect an
+	// adopted object still executing at its Source. Nil for hand-written Workflows.
+	AdoptedFrom *AdoptedFrom `json:"adoptedFrom,omitempty"`
+}
+
+// AdoptedFrom records the observed object a Named Kind was adopted from (ADR-0087) — the
+// §1.8 descent link back to the source projection. Mirrors Baseline.CompiledFrom's role.
+type AdoptedFrom struct {
+	Kind     string `json:"kind"`     // the projection kind, e.g. ansible.template
+	Identity string `json:"identity"` // the controller-qualified identity, e.g. ctrl-a/10
+	Source   string `json:"source"`   // the source qualifier (Controller id)
 }
 
 // Step is one node of the DAG (§2.3): an actuation (Actuator + params against a

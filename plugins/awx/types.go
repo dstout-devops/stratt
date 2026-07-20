@@ -12,12 +12,16 @@ type JobTemplate struct {
 	Name          string `json:"name"`
 	Description   string `json:"description"`
 	JobType       string `json:"job_type"` // run | check
-	Playbook      string `json:"playbook"`
+	Playbook      string `json:"playbook"` // the playbook path within its project's SCM repo
 	Project       int    `json:"project"`
 	Inventory     int    `json:"inventory"`
 	SurveyEnabled bool   `json:"survey_enabled"`
 	SummaryFields struct {
 		Organization named `json:"organization"`
+		// Project is the SCM-backed content source (an AWX "Project"); its NAME is the
+		// join key onto the ansible-project Syncer's projectID — the cross-source
+		// `runs` edge points at `<project.name>/<playbook>`.
+		Project named `json:"project"`
 	} `json:"summary_fields"`
 }
 

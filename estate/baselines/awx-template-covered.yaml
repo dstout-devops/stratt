@@ -1,0 +1,28 @@
+# awx-template-covered — the ORPHAN-TEMPLATE audit: govern the AWX estate from Stratt by
+# unifying it with the raw Ansible content (ADR-0085; the app-of-apps-over-AWX surface).
+# A facet-observation Baseline (ADR-0033) that asserts graph TOPOLOGY, not a node facet:
+# every ansible.template the awx Connector projects must carry an outgoing `runs` edge to a
+# known ansible.playbook (projected by the ansible-project Connector). A template whose
+# playbook lives in NO managed content root has no `runs` edge — the host drops the
+# cross-source edge when its target does not resolve (no-vivify, §1.2 / ADR-0042) — so the
+# absence IS the orphan signal: automation running content Stratt cannot see or govern.
+#
+# §1.8 / §4.3 FALSE-POSITIVE MODE (documented, not hidden): a playbook not YET enumerated by
+# the ansible-project Syncer → its edge drops → the template momentarily looks orphaned. This
+# is projection lag, not real drift. dampingObservations absorbs the transient case (a Finding
+# opens only after 2 consecutive orphaned observations); a persistently-behind Syncer still
+# surfaces — an operability property of the mirror, made diagnosable rather than mysterious.
+#
+# Pure read (§1.2, §2.4): opens Findings, no actuator, no write-back, no claim. The `runs`
+# edge is written by AWX (AWX provenance); ansible.playbook is owned by the ansible-project
+# Connector — two disjoint writers, no second truth.
+name: awx-template-covered
+viewName: awx-templates
+mode: facet-observation
+framework: ansible-governance
+severity: warning
+cron: "@every 5m"
+dampingObservations: 2
+environments: [dev]
+requiredRelations:
+  - runs

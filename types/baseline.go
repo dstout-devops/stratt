@@ -68,6 +68,15 @@ type Baseline struct {
 	// Expected are the Facet checks a facet-observation Baseline evaluates
 	// per targeted Entity.
 	Expected []FacetExpectation `json:"expected,omitempty"`
+	// RequiredRelations are outgoing relation types each targeted Entity must
+	// carry ≥1 of (ADR-0085): the topology sibling of Expected — "a missing edge
+	// is drift", the analog of "a missing Facet is drift". A tool-blind presence
+	// predicate (the type strings are CaC, never core semantics); it opens the
+	// same Findings through the same §4.3 damping. A facet-observation Baseline
+	// may set expected, requiredRelations, or both. Presence-only by design —
+	// never a cardinality/predicate/expression grammar (the §9 no-new-language
+	// line, ADR-0085 scope boundary).
+	RequiredRelations []string `json:"requiredRelations,omitempty"`
 	// Claim records how the observed namespace is claimed (exclusive|
 	// additive) — informational on the row; the conflict check runs at
 	// compile (anti-GPO, §2.4).
