@@ -33,7 +33,7 @@ Status is `Accepted` unless noted. See **[../roadmap.md](../roadmap.md)** for ho
 | [0022](0022-mcp-actuator.md) | mcp Actuator: consuming external MCP servers | Accepted |
 | [0023](0023-intent-compiler.md) | Intent/Assignment/Blueprint compiler | Accepted |
 | [0024](0024-templating-parametrized-views.md) | Payload templating + parametrized Views | Accepted |
-| [0025](0025-awx-importer-and-ansible-scm-content-ref.md) | AWX importer + ansible SCM content-ref | Accepted |
+| [0025](0025-awx-importer-and-ansible-scm-content-ref.md) | AWX importer + ansible SCM content-ref | Superseded-in-part by [0086](0086-adopt-per-object-in-place.md) |
 | [0026](0026-awx-api-v2-facade.md) | AWX-compatible `/api/v2` façade (+ native cancel & extraVars) | Accepted |
 | [0027](0027-notifications.md) | Notifications (outbound Run/Finding/Gate alerts) | Accepted |
 | [0028](0028-view-scoped-execution-authz.md) | View-scoped execution authz (full OpenFGA) | Accepted |
@@ -93,3 +93,7 @@ Status is `Accepted` unless noted. See **[../roadmap.md](../roadmap.md)** for ho
 | [0082](0082-relation-liveness.md) | Relation liveness: cross-source edge GC, the edge analog of entity presence | Accepted |
 | [0083](0083-blueprint-route-materialization-seam.md) | The Blueprint route is the tool-materialization seam; declare outcomes, plugins materialize (+ G6 defaults/override) | Accepted |
 | [0084](0084-managed-node-reachability-address-facet.md) | Managed-node reachability is a typed address Facet; core resolves the connection seam, the plugin renders the connection | Accepted |
+| [0085](0085-relation-presence-baseline.md) | Relation-presence Baseline: desired state over graph topology (RequiredRelations), the orphan-template audit unifying AWX + raw Ansible | Accepted |
+| [0086](0086-adopt-per-object-in-place.md) | `adopt`: per-object, in-place, over the live projection — supersedes-in-part the one-shot AWX importer (we never import; we are connected and simply know) | Accepted |
+| [0087](0087-standing-cutover-reconciler.md) | Standing cutover: a desired-state⋈projection reconciler flags double-execution after adopt; the tool-specifics ride a Connector-manifest descriptor (supersedes-in-part ADR-0086 §4) | Accepted |
+| [0088](0088-adopt-as-a-job.md) | adopt-as-a-job: the credential-bearing deep-read + transform runs in a core-owned Action over the port; AWX CredentialRef resolves in-pod via SecretBroker (use-without-read); adopt becomes an async Run (supersedes-in-part ADR-0086 credential note) | Accepted |

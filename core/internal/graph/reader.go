@@ -89,6 +89,19 @@ func (s *Store) RelationTargets(ctx context.Context, fromID, relType string) ([]
 	return pgx.CollectRows(rows, pgx.RowTo[string])
 }
 
+// RelationSources returns the from_ids of every relation of relType pointing AT toID —
+// the incoming-edge twin of RelationTargets. Used by the adopt cutover guard to find the
+// foreign-side executions (e.g. the AWX schedules that `schedules` a template) still
+// targeting an object being adopted (ADR-0086 §4).
+func (s *Store) RelationSources(ctx context.Context, toID, relType string) ([]string, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT from_id FROM graph.relation WHERE to_id = $1 AND type = $2`, toID, relType)
+	if err != nil {
+		return nil, fmt.Errorf("graph: relation sources: %w", err)
+	}
+	return pgx.CollectRows(rows, pgx.RowTo[string])
+}
+
 // GetFacets returns all Facets of an Entity with their Provenance — the
 // "why is this value here" surface (charter §2.1, §1.8).
 func (s *Store) GetFacets(ctx context.Context, entityID string) ([]types.Facet, error) {

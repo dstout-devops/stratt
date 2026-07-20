@@ -335,6 +335,29 @@ func (s *Store) WriteFacetContentionFindings(ctx context.Context) (int64, error)
 // ResolveClearedFacetContentionFindings resolves an ownership-contention Finding
 // once the contention clears (≤1 source now projects that (Entity, namespace) —
 // a source was scoped out, or one tombstoned). The GC half (§1.8, ADR-0043).
+// ResolveClearedFindingsByFramework resolves every OPEN Finding of a framework whose
+// (baseline, target) is NOT in keep — the GC half of a reconciler that WriteGovernanceFinding's
+// the currently-live set each sweep (ADR-0087 cutover: a schedule since disabled, or an
+// adoption reverted, clears its Finding). keep empty ⇒ resolve all of that framework's opens.
+func (s *Store) ResolveClearedFindingsByFramework(ctx context.Context, framework string, keep [][2]string) (int64, error) {
+	baselines := make([]string, len(keep))
+	targets := make([]string, len(keep))
+	for i, k := range keep {
+		baselines[i], targets[i] = k[0], k[1]
+	}
+	tag, err := s.pool.Exec(ctx, `
+		UPDATE graph.finding
+		SET status = 'resolved', resolved_at = now(), last_observed = now(),
+		    consecutive_drifted = 0, resolved_reason = 'cutover-cleared'
+		WHERE framework = $1 AND status <> 'resolved'
+		  AND (baseline, target) NOT IN (SELECT b, t FROM unnest($2::text[], $3::text[]) AS k(b, t))`,
+		framework, baselines, targets)
+	if err != nil {
+		return 0, fmt.Errorf("graph: resolve cleared findings by framework: %w", err)
+	}
+	return tag.RowsAffected(), nil
+}
+
 func (s *Store) ResolveClearedFacetContentionFindings(ctx context.Context) (int64, error) {
 	tag, err := s.pool.Exec(ctx, `
 		UPDATE graph.finding fnd
