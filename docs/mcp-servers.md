@@ -10,17 +10,18 @@ workspace).
 | Server | Transport | Why | Notes |
 |---|---|---|---|
 | **context7** | http | Live, version-pinned library docs at query time. Directly serves the **Evergreen contract** (charter §1.7) and keeps the `dependency-scout` subagent accurate. | Works keyless (rate-limited). For higher limits, get a key at context7.com and add `"headers": { "Authorization": "Bearer ${CONTEXT7_API_KEY}" }` to the server entry, then export `CONTEXT7_API_KEY`. |
-| **playwright** | stdio (`npx @playwright/mcp`) | Drives a real browser so Claude can visually verify the React UI (charter §3.1) once it exists. | First real use may need `npx playwright install chromium`. |
+| **playwright** | stdio (`npx @playwright/mcp`) | Drives a real browser so Claude can visually verify the React UI (charter §3.1). | First real use may need `npx playwright install chromium`. |
 
 GitHub is intentionally **not** an MCP server — per Claude Code best practices the `gh` CLI is the
 most context-efficient path, and it's installed in the devcontainer. Use `gh` for PRs/issues/releases
 (and remember `git commit -s` for DCO, charter §1.3).
 
-## Deferred until Phase-0 substrate exists (charter §8)
+## Optional — substrate MCP servers (wire when running the dev stack)
 
-Postgres (the estate **graph** plane) and Temporal (the **orchestration** plane) don't exist yet, so
-wiring their MCP servers now would just fail to connect every session. Add them once the Phase-0
-spike stands up the services. Paste into the `mcpServers` object in `.mcp.json`:
+The substrate now exists (`task dev …` stands up Postgres/NATS/Temporal). These two servers let Claude
+inspect the estate **graph** (Postgres) and **orchestration** (Temporal) planes directly. They're kept
+**out of `.mcp.json` by default** so sessions don't fail to connect when the stack isn't running — add
+them when you want live introspection during a dev-stack session. Paste into the `mcpServers` object:
 
 ```jsonc
 // Postgres — read/inspect the estate graph. Pin a *read-scoped* role; the graph is a projection

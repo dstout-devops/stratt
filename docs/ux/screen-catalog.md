@@ -1,6 +1,8 @@
 # Stratt Screen & Component Catalog
 
-**Status:** Design foundation (the UX baseline the Views/Findings UI was built on). **Charter authority:** §3.1
+**Status:** Design foundation & target — the UX reference the UI is built against (it informed the
+greenfield UI rebuild, ADR-0090/0091). Aspirational superset: it catalogs screens beyond what the current
+`ui/src/routes/` yet ships. **Charter authority:** §3.1
 (center-of-gravity screens, schema-driven rendering), §1.8 (one-click descent),
 §6 (power gradient). **Vocabulary:** every screen and component is named from the
 frozen Named Kinds (§2); no banned term (`inventory`, `playbook`, `job template`,

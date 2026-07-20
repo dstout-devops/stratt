@@ -1,6 +1,7 @@
 # Stratt Design Tokens
 
-**Status:** Design foundation (the UX baseline the Views/Findings UI was built on). **Charter authority:** §3.1
+**Status:** Design foundation & spec-of-record — the token system the UI is built against (it informed the
+greenfield UI rebuild, ADR-0090/0091; `ui/src/index.css` implements the three-tier scheme). **Charter authority:** §3.1
 ("design tokens as data: all theming via CSS variables; no hardcoded styling in
 components") and the [frontend-react rule](../../.claude/rules/frontend-react.md).
 

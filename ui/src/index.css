@@ -1,0 +1,221 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "@fontsource-variable/geist";
+@import "@fontsource-variable/geist-mono";
+
+/* Stratt design tokens (docs/ux/design-tokens.md is the source of truth; ADR-0090).
+ * Three tiers: REFERENCE (our exact validated hexes) → SEMANTIC (shadcn-canonical names, so
+ * vendored primitives work with zero friction; the design-tokens.md semantic names map onto
+ * these one-to-one) → DOMAIN (state/log/plan/categorical). Components consume SEMANTIC + DOMAIN
+ * only — a raw hex or a reference-tier token in a component is a lint defect. Dark is a SELECTED
+ * theme (validated steps), never an auto-invert. */
+
+@custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
+
+:root {
+  /* ── reference — neutrals / chrome (light) ─────────────────────────────── */
+  --page-plane: #f9f9f7;
+  --surface-1: #fcfcfb;
+  --surface-2: #f0efec;
+  --ink-primary: #0b0b0b;
+  --ink-secondary: #52514e;
+  --ink-muted: #898781;
+  --hairline: #e1e0d9;
+  --rule: #c3c2b7;
+  --ring-color: rgba(11, 11, 11, 0.1);
+  /* reference — brand-neutral blue accent anchor + focus */
+  --stratt-blue-400: #3987e5;
+  --stratt-blue-450: #2a78d6;
+  /* reference — fixed status ramp (never brand-themed; sub-3:1 steps mitigated by icon+label) */
+  --status-good: #0ca30c;
+  --status-warning: #fab219;
+  --status-serious: #ec835a;
+  --status-critical: #d03b3b;
+  /* reference — validated 8-series categorical (fixed order, never cycled) */
+  --cat-1: #2a78d6;
+  --cat-2: #1baf7a;
+  --cat-3: #eda100;
+  --cat-4: #008300;
+  --cat-5: #4a3aa7;
+  --cat-6: #e34948;
+  --cat-7: #e87ba4;
+  --cat-8: #eb6834;
+
+  /* ── semantic — the tier components use (shadcn names ← design-tokens.md roles) ── */
+  --background: var(--page-plane); /* --color-bg */
+  --foreground: var(--ink-primary); /* --text-primary */
+  --card: var(--surface-1); /* --color-surface */
+  --card-foreground: var(--ink-primary);
+  --popover: var(--surface-1);
+  --popover-foreground: var(--ink-primary);
+  --surface-sunken: var(--surface-2); /* --color-surface-sunken (log/graph canvas) */
+  --primary: var(--stratt-blue-450); /* --color-accent (action, links, running) */
+  --primary-foreground: #ffffff;
+  --secondary: var(--surface-2);
+  --secondary-foreground: var(--ink-primary);
+  --muted: var(--surface-2);
+  --muted-foreground: var(--ink-muted); /* --text-muted */
+  --subtle-foreground: var(--ink-secondary); /* --text-secondary */
+  --accent: var(--surface-2); /* shadcn hover surface (NOT the brand accent) */
+  --accent-foreground: var(--ink-primary);
+  --destructive: var(--status-critical);
+  --destructive-foreground: #ffffff;
+  --border: var(--hairline); /* --color-border */
+  --input: var(--hairline);
+  --ring: var(--stratt-blue-400); /* --color-focus (≥2px, always visible) */
+  --scrim: rgba(0, 0, 0, 0.4);
+
+  /* ── domain — one state palette for Run/Step/task-event AND Finding severity ── */
+  --state-pending: var(--ink-muted);
+  --state-running: var(--stratt-blue-450);
+  --state-ok: var(--status-good);
+  --state-attention: var(--status-warning);
+  --state-degraded: var(--status-serious);
+  --state-failed: var(--status-critical);
+  /* domain — live log severity map */
+  --log-info: var(--ink-secondary);
+  --log-warn: var(--status-warning);
+  --log-error: var(--status-critical);
+  --log-debug: var(--ink-muted);
+  --log-success: var(--status-good);
+  /* domain — plan/drift diff (reuses status + sigils + - ~) */
+  --plan-add: var(--status-good);
+  --plan-destroy: var(--status-critical);
+  --plan-change: var(--status-warning);
+  --plan-noop: var(--ink-muted);
+
+  /* reference — space / radius / motion / elevation */
+  --radius: 6px;
+  --ease-standard: cubic-bezier(0.2, 0, 0, 1);
+  --duration-fast: 120ms;
+  --duration-base: 200ms;
+  --duration-slow: 320ms;
+  --shadow-1: 0 2px 8px var(--ring-color);
+  --shadow-2: 0 6px 24px var(--ring-color);
+}
+
+/* dark — validated steps, applied by the theme toggle (data-theme) and by system preference
+ * when the user hasn't chosen. Reference steps flip; semantic/domain inherit through the vars. */
+:root[data-theme="dark"] {
+  --page-plane: #0d0d0d;
+  --surface-1: #1a1a19;
+  --surface-2: #242422;
+  --ink-primary: #ffffff;
+  --ink-secondary: #c3c2b7;
+  --ink-muted: #898781;
+  --hairline: #2c2c2a;
+  --rule: #383835;
+  --ring-color: rgba(255, 255, 255, 0.1);
+  --stratt-blue-450: #3987e5;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --page-plane: #0d0d0d;
+    --surface-1: #1a1a19;
+    --surface-2: #242422;
+    --ink-primary: #ffffff;
+    --ink-secondary: #c3c2b7;
+    --ink-muted: #898781;
+    --hairline: #2c2c2a;
+    --rule: #383835;
+    --ring-color: rgba(255, 255, 255, 0.1);
+    --stratt-blue-450: #3987e5;
+  }
+}
+
+/* ── Tailwind v4 bridge: expose the semantic + domain vars as utilities ─────── */
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-surface-sunken: var(--surface-sunken);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-subtle-foreground: var(--subtle-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+
+  /* domain state utilities (bg-state-ok, text-state-failed, …) */
+  --color-state-pending: var(--state-pending);
+  --color-state-running: var(--state-running);
+  --color-state-ok: var(--state-ok);
+  --color-state-attention: var(--state-attention);
+  --color-state-degraded: var(--state-degraded);
+  --color-state-failed: var(--state-failed);
+  --color-log-warn: var(--log-warn);
+  --color-log-error: var(--log-error);
+  --color-log-success: var(--log-success);
+  --color-plan-add: var(--plan-add);
+  --color-plan-destroy: var(--plan-destroy);
+  --color-plan-change: var(--plan-change);
+  --color-cat-1: var(--cat-1);
+  --color-cat-2: var(--cat-2);
+  --color-cat-3: var(--cat-3);
+  --color-cat-4: var(--cat-4);
+  --color-cat-5: var(--cat-5);
+  --color-cat-6: var(--cat-6);
+  --color-cat-7: var(--cat-7);
+  --color-cat-8: var(--cat-8);
+
+  --font-sans: "Geist Variable", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "Geist Mono Variable", ui-monospace, "SFMono-Regular", monospace;
+
+  --radius-sm: 4px;
+  --radius-md: var(--radius);
+  --radius-lg: 10px;
+  --radius-xl: 14px;
+
+  --ease-standard: var(--ease-standard);
+}
+
+@layer base {
+  * {
+    border-color: var(--border);
+  }
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+  body {
+    background: var(--background);
+    color: var(--foreground);
+    font-family: var(--font-sans);
+    font-size: 14px;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+  /* focus ring — always visible, ≥2px (design-tokens §4 / a11y) */
+  :focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: 2px;
+  }
+  .tabular {
+    font-variant-numeric: tabular-nums;
+  }
+  /* theme-aware scrollbars */
+  * {
+    scrollbar-color: var(--rule) transparent;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 1ms !important;
+      transition-duration: 1ms !important;
+    }
+  }
+}

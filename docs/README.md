@@ -9,10 +9,15 @@ everything here; **[CLAUDE.md](../CLAUDE.md)** is the operating guide for workin
 
 ## Map
 
+**New here? Start with [overview.md](overview.md), then [architecture.md](architecture.md).** They
+answer "what does this do?" and "how does it work?" in plain language, grounded in the charter.
+
 | Area | What's here |
 |---|---|
-| **[roadmap.md](roadmap.md)** | Phase status vs charter §8 — what's built, what's gated, what's deferred. Start here for "where are we?" |
-| **[adr/](adr/README.md)** | Architecture Decision Records (57, indexed). Every decision of consequence; run `/new-adr` to add one. |
+| **[overview.md](overview.md)** | **What Stratt is** — the thesis, the problem it solves, the three-planes mental model, the Named Kinds glossary, status in plain language. The front door. |
+| **[architecture.md](architecture.md)** | **How it works** — the deployable shape, the three runtime loops (projection / orchestration / intent-drift), the sovereign plugin port, Cells/Sites, the repo layout, how to run it. |
+| **[roadmap.md](roadmap.md)** | Phase status vs charter §8 — what's built, what's gated, what's deferred. The authoritative "where are we?" with evidence. |
+| **[adr/](adr/README.md)** | Architecture Decision Records (~91, indexed). Every decision of consequence; run `/new-adr` to add one. |
 | **[runbooks/](runbooks/)** | Operational procedures: [ha-dr.md](runbooks/ha-dr.md) (in-region HA + DR), [cell-failover-drill.md](runbooks/cell-failover-drill.md) (multi-region Cell failover + fenced Source re-home). |
 | **[evidence/](evidence/multi-region-99_99.md)** | Requirement→evidence maps that back an availability/compliance claim (e.g. the 99.99% multi-region path). |
 | **[ux/](ux/)** | Design system + product UX: [design-tokens.md](ux/design-tokens.md), [screen-catalog.md](ux/screen-catalog.md), [competitive-teardown.md](ux/competitive-teardown.md). |

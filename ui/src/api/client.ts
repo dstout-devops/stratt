@@ -1,96 +1,32 @@
-// Thin typed client over /api/v1 — the same API the CLI, CI, and agents use
-// (§1.6). Types are generated from core/api/openapi.yaml (task generate).
-import type { components } from "./schema";
-import { currentTokens, devPrincipal } from "../auth/oidc";
+import createClient, { type Middleware } from "openapi-fetch";
+import type { paths, components } from "@/api/schema";
+import { authHeader } from "@/lib/session";
 
-export type View = components["schemas"]["View"];
-export type Entity = components["schemas"]["Entity"];
-export type ViewResolution = components["schemas"]["ViewResolution"];
-export type Run = components["schemas"]["Run"];
-export type Workflow = components["schemas"]["Workflow"];
-export type Step = components["schemas"]["Step"];
-export type WorkflowRun = components["schemas"]["WorkflowRun"];
-export type WorkflowRunDetail = components["schemas"]["WorkflowRunDetail"];
-export type Gate = components["schemas"]["Gate"];
-export type EntityDocument = components["schemas"]["EntityDocument"];
-export type Trigger = components["schemas"]["Trigger"];
-export type TriggerDetail = components["schemas"]["TriggerDetail"];
-export type Baseline = components["schemas"]["Baseline"];
-export type Finding = components["schemas"]["Finding"];
-export type Evidence = components["schemas"]["Evidence"];
+/** Schema is the generated view-model namespace — `Schema["Run"]`, `Schema["Finding"]`, … */
+export type Schema = components["schemas"];
 
-export class ApiError extends Error {
-  status: number;
-  constructor(status: number, message: string) {
-    super(message);
-    this.status = status;
-  }
-}
-
-function headers(): HeadersInit {
-  const h: Record<string, string> = { "Content-Type": "application/json" };
-  const t = currentTokens();
-  if (t) {
-    h["Authorization"] = `Bearer ${t.accessToken}`;
-  } else if (devPrincipal()) {
-    h["X-Stratt-Principal"] = devPrincipal();
-  }
-  return h;
-}
-
-async function call<T>(method: string, path: string, body?: unknown): Promise<T> {
-  const res = await fetch(`/api/v1${path}`, {
-    method,
-    headers: headers(),
-    body: body === undefined ? undefined : JSON.stringify(body),
-  });
-  if (!res.ok) {
-    // Surface the API's own message verbatim — an authz denial names the
-    // principal and grant; hiding that would hide diagnosis (§1.8).
-    let msg = `${res.status}`;
-    try {
-      const e = (await res.json()) as { message?: string };
-      if (e.message) msg = e.message;
-    } catch {
-      /* non-JSON error body */
-    }
-    throw new ApiError(res.status, msg);
-  }
-  if (res.status === 202 || res.status === 204) return undefined as T;
-  return (await res.json()) as T;
-}
-
-export const api = {
-  listViews: () => call<View[]>("GET", "/views"),
-  getView: (name: string) => call<View>("GET", `/views/${encodeURIComponent(name)}`),
-  resolveView: (name: string) =>
-    call<ViewResolution>("GET", `/views/${encodeURIComponent(name)}/entities`),
-  getEntity: (id: string) => call<EntityDocument>("GET", `/entities/${encodeURIComponent(id)}`),
-  listRuns: (limit = 100) => call<Run[]>("GET", `/runs?limit=${limit}`),
-  getRun: (id: string) => call<Run>("GET", `/runs/${encodeURIComponent(id)}`),
-  listWorkflows: () => call<Workflow[]>("GET", "/workflows"),
-  getWorkflow: (name: string) => call<Workflow>("GET", `/workflows/${encodeURIComponent(name)}`),
-  startWorkflowRun: (name: string) =>
-    call<WorkflowRun>("POST", `/workflows/${encodeURIComponent(name)}/runs`),
-  listWorkflowRuns: (limit = 100) => call<WorkflowRun[]>("GET", `/workflow-runs?limit=${limit}`),
-  getWorkflowRun: (id: string) =>
-    call<WorkflowRunDetail>("GET", `/workflow-runs/${encodeURIComponent(id)}`),
-  listGates: (status?: string) =>
-    call<Gate[]>("GET", `/gates${status ? `?status=${status}` : ""}`),
-  decideGate: (id: string, approve: boolean, note: string) =>
-    call<void>("POST", `/gates/${encodeURIComponent(id)}/decision`, { approve, note }),
-  listTriggers: () => call<Trigger[]>("GET", "/triggers"),
-  getTrigger: (name: string) => call<TriggerDetail>("GET", `/triggers/${encodeURIComponent(name)}`),
-  listBaselines: () => call<Baseline[]>("GET", "/baselines"),
-  getBaseline: (name: string) => call<Baseline>("GET", `/baselines/${encodeURIComponent(name)}`),
-  listFindings: (opts: { baseline?: string; status?: string; limit?: number } = {}) => {
-    const p = new URLSearchParams();
-    if (opts.baseline) p.set("baseline", opts.baseline);
-    if (opts.status) p.set("status", opts.status);
-    p.set("limit", String(opts.limit ?? 500));
-    return call<Finding[]>("GET", `/findings?${p}`);
+// One shared, typed client over /api/v1 (dev-proxied to strattd :8080). openapi-fetch gives
+// end-to-end typed PATHS + params + responses — closing the old hand-written client's untyped-path
+// gap (ADR-0090 §1). Auth rides a per-request middleware so identity switches need no rebuild.
+const auth: Middleware = {
+  onRequest({ request }) {
+    for (const [k, v] of Object.entries(authHeader())) request.headers.set(k, v);
+    return request;
   },
-  getFinding: (id: string) => call<Finding>("GET", `/findings/${encodeURIComponent(id)}`),
-  getFindingEvidence: (id: string) =>
-    call<Evidence>("GET", `/findings/${encodeURIComponent(id)}/evidence`),
 };
+
+export const api = createClient<paths>({ baseUrl: "/api/v1" });
+api.use(auth);
+
+/** unwrap turns openapi-fetch's {data,error} into a throwing queryFn result, surfacing the API's
+ * own error message verbatim (§1.8 — never swallow the diagnosis). */
+export function unwrap<T>(res: { data?: T; error?: unknown }): T {
+  if (res.error !== undefined) {
+    const msg =
+      res.error && typeof res.error === "object" && "message" in res.error
+        ? String((res.error as { message?: unknown }).message)
+        : "request failed";
+    throw new Error(msg);
+  }
+  return res.data as T;
+}

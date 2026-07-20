@@ -1,125 +1,125 @@
-// AppShell: primary nav is the mental model (screen-catalog §1) — only the
-// sections this slice can honestly serve appear; DescentRail is the
-// cross-cutting §1.8 breadcrumb, not a nav entry.
-import { Link, useRouterState } from "@tanstack/react-router";
-import { useState, type ReactNode } from "react";
-import { login, logout, oidcConfigured, principalLabel, setDevPrincipal, devPrincipal } from "../auth/oidc";
-import { Button } from "./ui";
+import { Link, Outlet, useMatches } from "@tanstack/react-router";
+import {
+  Network,
+  Target,
+  Play,
+  ShieldAlert,
+  Plug,
+  Server,
+  Settings,
+  PanelLeftClose,
+  PanelLeft,
+  Sun,
+  Moon,
+  Monitor,
+  Command as CommandIcon,
+} from "lucide-react";
+import type { LucideIcon } from "lucide-react";
+import { cn } from "@/lib/utils";
+import { Button } from "@/components/ui/button";
+import { CommandPalette } from "@/components/command-palette";
+import { useUI, type Theme } from "@/store/ui";
 
-const NAV = [
-  { to: "/views", label: "Graph" },
-  { to: "/runs", label: "Runs" },
-  { to: "/workflows", label: "Workflows" },
-  { to: "/gates", label: "Gates" },
-  { to: "/triggers", label: "Triggers" },
-  { to: "/findings", label: "Findings" },
-  { to: "/baselines", label: "Baselines" },
+// Seven-section IA from docs/ux/screen-catalog.md — the mental model, not the DB. Every name is a
+// Named Kind grouping (charter §2); the §1.8 descent is a cross-cutting rail, not a section.
+const NAV: { to: string; label: string; icon: LucideIcon }[] = [
+  { to: "/graph", label: "Graph", icon: Network },
+  { to: "/intents", label: "Intents", icon: Target },
+  { to: "/runs", label: "Runs", icon: Play },
+  { to: "/findings", label: "Findings", icon: ShieldAlert },
+  { to: "/connectors", label: "Connectors", icon: Plug },
+  { to: "/fleet", label: "Fleet", icon: Server },
+  { to: "/admin", label: "Admin", icon: Settings },
 ];
 
-function themeNow(): string {
-  return document.documentElement.dataset.theme ?? "";
-}
+const THEME_CYCLE: Record<Theme, Theme> = { system: "light", light: "dark", dark: "system" };
+const THEME_ICON: Record<Theme, LucideIcon> = { system: Monitor, light: Sun, dark: Moon };
 
-export function AppShell({ children }: { children: ReactNode }) {
-  const path = useRouterState({ select: (s) => s.location.pathname });
-  const [, force] = useState(0);
-  const who = principalLabel();
+export function AppShell() {
+  const collapsed = useUI((s) => s.sidebarCollapsed);
+  const toggleSidebar = useUI((s) => s.toggleSidebar);
+  const theme = useUI((s) => s.theme);
+  const setTheme = useUI((s) => s.setTheme);
+  const setPaletteOpen = useUI((s) => s.setPaletteOpen);
+  const ThemeIcon = THEME_ICON[theme];
+
   return (
     <div className="flex h-full">
-      <nav
-        className="flex w-[200px] shrink-0 flex-col gap-[var(--space-1)] border-r p-[var(--space-4)]"
-        style={{ background: "var(--color-surface)", borderColor: "var(--color-border)" }}
+      <aside
+        className={cn(
+          "flex shrink-0 flex-col border-r border-border bg-card transition-[width] duration-200",
+          collapsed ? "w-[52px]" : "w-[208px]",
+        )}
       >
-        <div className="mb-[var(--space-4)] text-[19px] font-semibold tracking-tight">stratt</div>
-        {NAV.map((n) => {
-          const active = path.startsWith(n.to);
-          return (
-            <Link
-              key={n.to}
-              to={n.to}
-              className="rounded-[var(--radius-md)] px-[var(--space-3)] py-[var(--space-2)] text-[13px]"
-              style={{
-                background: active ? "var(--color-surface-sunken)" : "transparent",
-                color: active ? "var(--text-primary)" : "var(--text-secondary)",
-                textDecoration: "none",
-              }}
-            >
-              {n.label}
-            </Link>
-          );
-        })}
-        <div className="mt-auto flex flex-col gap-[var(--space-2)] text-[12px]" style={{ color: "var(--text-muted)" }}>
-          <button
-            type="button"
-            className="cursor-pointer self-start rounded-[var(--radius-md)] border px-[var(--space-2)] py-[2px]"
-            style={{ borderColor: "var(--color-border)", color: "var(--text-secondary)", background: "transparent" }}
-            onClick={() => {
-              const next = themeNow() === "dark" ? "light" : "dark";
-              document.documentElement.dataset.theme = next;
-              force((n) => n + 1);
-            }}
-          >
-            theme: {themeNow() || "auto"}
-          </button>
-          {who ? (
-            <>
-              <span data-testid="principal" className="break-all" style={{ color: "var(--text-secondary)" }}>
-                {who}
-              </span>
-              <Button kind="quiet" onClick={() => (oidcConfigured ? logout() : (setDevPrincipal(""), location.reload()))}>
-                sign out
-              </Button>
-            </>
-          ) : oidcConfigured ? (
-            <Button onClick={() => login(path)}>sign in</Button>
-          ) : (
-            <DevPrincipalField />
-          )}
+        <div className="flex h-12 items-center gap-2 px-3">
+          <div className="grid size-6 place-items-center rounded bg-primary text-primary-foreground text-xs font-bold">
+            S
+          </div>
+          {!collapsed && <span className="text-sm font-semibold tracking-tight">Stratt</span>}
         </div>
-      </nav>
-      <main className="min-w-0 flex-1 overflow-auto p-[var(--space-5)]">{children}</main>
+        <nav className="flex flex-1 flex-col gap-0.5 p-2">
+          {NAV.map(({ to, label, icon: Icon }) => (
+            <Link
+              key={to}
+              to={to}
+              className="flex items-center gap-2.5 rounded-md px-2.5 py-1.5 text-[13px] text-subtle-foreground transition-colors hover:bg-accent hover:text-foreground [&.active]:bg-accent [&.active]:text-foreground [&.active]:font-medium"
+              title={label}
+            >
+              <Icon className="size-4 shrink-0" />
+              {!collapsed && label}
+            </Link>
+          ))}
+        </nav>
+        <div className="p-2">
+          <Button variant="ghost" size="icon-sm" onClick={toggleSidebar} title="Toggle sidebar">
+            {collapsed ? <PanelLeft /> : <PanelLeftClose />}
+          </Button>
+        </div>
+      </aside>
+
+      <div className="flex min-w-0 flex-1 flex-col">
+        <header className="flex h-12 shrink-0 items-center gap-3 border-b border-border px-4">
+          <DescentRail />
+          <div className="flex-1" />
+          <Button
+            variant="outline"
+            size="sm"
+            className="gap-1.5 text-muted-foreground"
+            onClick={() => setPaletteOpen(true)}
+          >
+            <CommandIcon className="size-3.5" />
+            <kbd className="text-[11px]">⌘K</kbd>
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            onClick={() => setTheme(THEME_CYCLE[theme])}
+            title={`Theme: ${theme}`}
+          >
+            <ThemeIcon />
+          </Button>
+        </header>
+        <main className="min-h-0 flex-1 overflow-auto">
+          <Outlet />
+        </main>
+      </div>
+      <CommandPalette />
     </div>
   );
 }
 
-// Substrate-less fallback mirroring the server's gated dev-header mode.
-function DevPrincipalField() {
-  const [v, setV] = useState(devPrincipal());
+// DescentRail — the §1.8 breadcrumb, on every screen. Built from the active route's crumb data so a
+// descent step is always visible and the ladder never dead-ends (ADR-0003 L2/L4).
+function DescentRail() {
+  const matches = useMatches();
+  const crumbs = matches.map((m) => m.staticData?.crumb).filter((c): c is string => Boolean(c));
+  if (crumbs.length === 0) return null;
   return (
-    <form
-      onSubmit={(e) => {
-        e.preventDefault();
-        setDevPrincipal(v);
-        location.reload();
-      }}
-      className="flex flex-col gap-[var(--space-1)]"
-    >
-      <label htmlFor="devp">dev principal</label>
-      <input
-        id="devp"
-        value={v}
-        onChange={(e) => setV(e.target.value)}
-        className="rounded-[var(--radius-sm)] border px-[var(--space-2)] py-[2px]"
-        style={{ background: "var(--color-surface-sunken)", borderColor: "var(--color-border)", color: "var(--text-primary)" }}
-      />
-    </form>
-  );
-}
-
-// DescentRail: the §1.8 ladder as a breadcrumb — every rung a link (L4/L10).
-export function DescentRail({ rungs }: { rungs: { label: string; to?: string }[] }) {
-  return (
-    <nav className="mb-[var(--space-4)] flex flex-wrap items-center gap-[var(--space-2)] text-[12px]" aria-label="descent">
-      {rungs.map((r, i) => (
-        <span key={i} className="flex items-center gap-[var(--space-2)]">
-          {i > 0 && <span style={{ color: "var(--text-muted)" }}>→</span>}
-          {r.to ? (
-            <Link to={r.to} style={{ color: "var(--color-accent)" }}>
-              {r.label}
-            </Link>
-          ) : (
-            <span style={{ color: "var(--text-secondary)" }}>{r.label}</span>
-          )}
+    <nav aria-label="Descent" className="flex items-center gap-1.5 text-xs text-muted-foreground">
+      {crumbs.map((c, i) => (
+        <span key={i} className="flex items-center gap-1.5">
+          {i > 0 && <span className="text-border">/</span>}
+          <span className={cn(i === crumbs.length - 1 && "text-foreground")}>{c}</span>
         </span>
       ))}
     </nav>
