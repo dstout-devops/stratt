@@ -421,12 +421,6 @@ tasks:
       - docker build -f plugins/vcenter/Dockerfile -t stratt-plugin-vcenter:dev .
       - go run sigs.k8s.io/kind@v{{.KIND_VER}} load docker-image stratt-plugin-vcenter:dev --name {{.KIND_CLUSTER}}
 
-  image:adopt-plugin:
-    desc: Build the core-owned adopt/materialize Action image (ADR-0088) and load it into the kind cluster
-    cmds:
-      - docker build -f deploy/docker/stratt-adopt.Dockerfile -t stratt-adopt:dev .
-      - go run sigs.k8s.io/kind@v{{.KIND_VER}} load docker-image stratt-adopt:dev --name {{.KIND_CLUSTER}}
-
   image:declared-plugin:
     desc: Build the declared-estate gRPC Syncer plugin image and load it into the kind cluster
     cmds:

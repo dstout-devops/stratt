@@ -38,16 +38,6 @@ func main() {
 		return
 	}
 
-	// `import awx` is the legacy one-shot migration tool (ADR-0025, Superseded-in-part by
-	// ADR-0086): it reads AWX and writes a local bundle, never touching the platform API.
-	if cmd == "import" {
-		if err := runImport(os.Args[2:]); err != nil {
-			fmt.Fprintln(os.Stderr, "stratt:", err)
-			os.Exit(1)
-		}
-		return
-	}
-
 	// `bundle` packages Step content into a cosign-signable OCI Bundle for
 	// pull-mode Sites (ADR-0032); it talks to a registry, not the platform API.
 	if cmd == "bundle" {

@@ -6,6 +6,7 @@ import (
 
 	"google.golang.org/grpc"
 
+	"github.com/dstout-devops/stratt/sdk/secretbroker"
 	pluginv1 "github.com/dstout-devops/stratt/sdk/stratt/plugin/v1"
 )
 
@@ -32,14 +33,18 @@ type Server struct {
 	pluginv1.UnimplementedPluginServiceServer
 	cfg    ServerConfig
 	client *Client
+	// broker resolves the AWX CredentialRef for the adopt/materialize Action, in-pod, under
+	// this plugin's own confined RBAC (§2.5). Nil ⇒ the Action fails closed (a Syncer-only
+	// deployment with no Secret access). The Syncer path never touches it.
+	broker *secretbroker.Resolver
 	log    *slog.Logger
 }
 
-func NewServer(cfg ServerConfig, client *Client, log *slog.Logger) *Server {
+func NewServer(cfg ServerConfig, client *Client, broker *secretbroker.Resolver, log *slog.Logger) *Server {
 	if cfg.PluginID == "" {
 		cfg.PluginID = "awx"
 	}
-	return &Server{cfg: cfg, client: client, log: log.With("plugin", "awx")}
+	return &Server{cfg: cfg, client: client, broker: broker, log: log.With("plugin", "awx")}
 }
 
 // GetManifest advertises the SYNCER class + the `ansible.*` Facet namespaces this
@@ -49,9 +54,13 @@ func (s *Server) GetManifest(context.Context, *pluginv1.GetManifestRequest) (*pl
 	return &pluginv1.GetManifestResponse{Manifest: &pluginv1.Manifest{
 		PluginId:        s.cfg.PluginID,
 		ProtocolVersion: "v1",
-		Class:           pluginv1.PluginClass_PLUGIN_CLASS_SYNCER,
-		Verbs:           []pluginv1.Verb{pluginv1.Verb_VERB_OBSERVE},
-		ObserveMode:     pluginv1.Manifest_OBSERVE_MODE_POLL,
+		// SYNCER class that ALSO advertises INVOKE: the awx plugin both OBSERVEs the Controller
+		// (the projection) and provides the adopt/materialize Action — the deep-read + AWX→CaC
+		// transform (ADR-0089, the awsec2 dual-class precedent). The AWX-specific breadth lives
+		// here, not the spine.
+		Class:       pluginv1.PluginClass_PLUGIN_CLASS_SYNCER,
+		Verbs:       []pluginv1.Verb{pluginv1.Verb_VERB_OBSERVE, pluginv1.Verb_VERB_INVOKE},
+		ObserveMode: pluginv1.Manifest_OBSERVE_MODE_POLL,
 		Contracts: []*pluginv1.ContractDecl{
 			{SchemaId: KindTemplate},
 			{SchemaId: KindWorkflow},
@@ -59,6 +68,13 @@ func (s *Server) GetManifest(context.Context, *pluginv1.GetManifestRequest) (*pl
 			{SchemaId: KindOrg},
 			{SchemaId: KindTeam},
 		},
+		Actions: []*pluginv1.ActionDecl{{
+			Name:        actionMaterialize,
+			Input:       &pluginv1.ContractRef{SchemaId: inputContract},
+			Output:      &pluginv1.ContractRef{SchemaId: outputContract},
+			Idempotent:  true,  // a read + transform has no side effect; re-runs re-emit the same bundle
+			DryRunnable: false, // adopt is already a read-only proposal; there is no separate plan
+		}},
 		// A removed AWX object retracts on the full-sync boundary, per object-type scheme.
 		// Union liveness (ADR-0042) keeps an entity alive if another Source still asserts it.
 		TombstoneSchemes: []string{KindTemplate, KindWorkflow, KindSchedule, KindOrg, KindTeam},

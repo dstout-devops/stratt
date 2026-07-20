@@ -1,0 +1,38 @@
+{
+  "$id": "stratt:contract:surveys/deploy-web.input:v1",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "api_token": {
+      "title": "API Token",
+      "type": "string",
+      "x-stratt-sensitive": true
+    },
+    "app_version": {
+      "default": "1.0",
+      "title": "App Version",
+      "type": "string"
+    },
+    "replicas": {
+      "default": 3,
+      "maximum": 10,
+      "minimum": 1,
+      "title": "Replicas",
+      "type": "integer"
+    },
+    "tier": {
+      "enum": [
+        "gold",
+        "silver"
+      ],
+      "title": "Tier",
+      "type": "string"
+    }
+  },
+  "required": [
+    "app_version",
+    "tier"
+  ],
+  "title": "Deploy Web",
+  "type": "object"
+}

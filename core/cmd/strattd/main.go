@@ -581,32 +581,9 @@ func run(ctx context.Context, log *slog.Logger) error {
 		log.Info("no notify plugin configured (STRATT_NOTIFY_PLUGIN_ADDR empty); notifications disabled")
 	}
 
-	// adopt/materialize Action (ADR-0088): the credential-bearing deep-read + awximport
-	// transform run in the core-owned stratt-adopt pod, resolving the AWX CredentialRef via
-	// the SecretBroker (§2.5 use-without-read — no AWX material touches strattd). It is a
-	// core-owned Action over the port (not a dark-matter plugin: the transform is core code).
-	// The grant is BARE (the Action emits typed Outputs {files,report}, never Facets/Entities);
-	// TierTrusted because SecretBroker resolution is trusted-tier. Unset ⇒ no adopt Action is
-	// registered and POST /adoptions launches fail closed.
-	if addr := os.Getenv("STRATT_ADOPT_PLUGIN_ADDR"); addr != "" {
-		conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
-		if err != nil {
-			return fmt.Errorf("adopt plugin dial %s: %w", addr, err)
-		}
-		defer conn.Close()
-		grant := pluginhost.Grant{
-			PluginIdentity: env("STRATT_ADOPT_PLUGIN_ID", "adopt"),
-			Tier:           pluginhost.TierTrusted, // SecretBroker resolution is trusted-tier (MF-A)
-			Source:         types.Source{Kind: "adopt", Name: env("STRATT_ADOPT_SOURCE_NAME", "adopt")},
-		}
-		host := pluginhost.New(store, pluginv1.NewPluginServiceClient(conn), grant, log)
-		if err := registerPluginAction("adopt/materialize", host, false); err != nil {
-			return err
-		}
-		log.Info("adopt plugin action registered (ADR-0088 SecretBroker)", "addr", addr)
-	} else {
-		log.Info("no adopt plugin configured (STRATT_ADOPT_PLUGIN_ADDR empty); adopt disabled")
-	}
+	// adopt/materialize Action is provided by the AWX Connector plugin (ADR-0089), registered
+	// in the STRATT_AWX_PLUGIN_ADDR block below — the AWX→CaC transform is tool breadth that
+	// lives in the plugin, not a core-owned image. strattd links zero AWX transform code.
 
 	// mcp EE-Job transport (ADR-0053): MCP is a generic transport (charter §1.5), not
 	// an in-core protocol. The stratt-mcp shim (baked into the EE-mcp image) speaks
@@ -984,6 +961,14 @@ func run(ctx context.Context, log *slog.Logger) error {
 		// The AWX Connector declares a cutover descriptor in its manifest — collect it for the
 		// standing cutover reconciler (ADR-0087; the reconciler reads the descriptor blindly).
 		cutoverClients = append(cutoverClients, awxClient)
+		// The SAME plugin also provides the adopt/materialize Action (ADR-0089): the AWX→CaC
+		// transform is tool breadth living in the plugin, dispatched by the tool-blind RunAction
+		// path over the port (the awsec2 dual-class shape). The plugin resolves the AWX
+		// CredentialRef via its own SecretBroker in-pod (§2.5); strattd carries no AWX transform.
+		if err := registerPluginAction("adopt/materialize", host, false); err != nil {
+			return err
+		}
+		log.Info("adopt/materialize Action registered on the AWX Connector (ADR-0089)")
 	} else {
 		log.Info("no AWX Connector configured (STRATT_AWX_PLUGIN_ADDR empty); syncer idle")
 	}

@@ -7,9 +7,10 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
+	"path/filepath"
+	"sort"
 	"time"
-
-	"github.com/dstout-devops/stratt/core/internal/awximport"
 )
 
 // runAdopt dispatches `stratt adopt <kind> <identity>` (ADR-0086/0088): materialize an
@@ -67,7 +68,7 @@ func runAdopt(args []string) error {
 	if status != "succeeded" {
 		return fmt.Errorf("adopt: Run %s ended %s (descend: stratt run %s)", accepted.RunID, status, accepted.RunID)
 	}
-	if err := awximport.WriteBundle(*out, &awximport.Emit{Files: files, Report: report}); err != nil {
+	if err := writeBundle(*out, files, report); err != nil {
 		return err
 	}
 	fmt.Printf("stratt: adopted %s %s → %d declaration file(s) in %s\n", rest[0], rest[1], len(files), *out)
@@ -106,4 +107,32 @@ func pollAdoption(server, runID string, timeout time.Duration) (status string, f
 		}
 		time.Sleep(time.Second)
 	}
+}
+
+// writeBundle writes the adopted bundle to dir: each declaration file under its kind
+// subdirectory plus migration-report.md. Tool-agnostic file I/O (the transform that
+// PRODUCES the bundle now lives in the awx plugin, ADR-0089); the CLI only lands the
+// returned files. An existing non-empty dir is an error — a bundle is written fresh.
+func writeBundle(dir string, files map[string]string, report string) error {
+	if entries, err := os.ReadDir(dir); err == nil && len(entries) > 0 {
+		return fmt.Errorf("adopt: output dir %q is not empty; choose a fresh directory", dir)
+	}
+	paths := make([]string, 0, len(files))
+	for p := range files {
+		paths = append(paths, p)
+	}
+	sort.Strings(paths)
+	for _, rel := range paths {
+		full := filepath.Join(dir, rel)
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			return fmt.Errorf("adopt: %w", err)
+		}
+		if err := os.WriteFile(full, []byte(files[rel]), 0o644); err != nil {
+			return fmt.Errorf("adopt: %w", err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(dir, "migration-report.md"), []byte(report), 0o644); err != nil {
+		return fmt.Errorf("adopt: %w", err)
+	}
+	return nil
 }
