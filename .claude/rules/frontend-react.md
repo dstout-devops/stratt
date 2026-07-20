@@ -7,6 +7,14 @@ paths:
 
 # Frontend (React/TS) rules — charter §3.1
 
+- **The UI is a first-party, pure `/api/v1` client (ADR-0091).** The **OpenAPI contract**
+  (`core/api/openapi.yaml` → generated `ui/src/api/schema.d.ts`) is the SINGLE seam between the UI and
+  Stratt. The UI imports nothing from the Go core, holds no privileged path, and authenticates as an
+  ordinary Principal (same grants/authz/audit as CLI/MCP, §1.6). **API-first:** a new UI capability
+  requires the corresponding API capability *first* — the UI can do nothing the API doesn't expose, so a
+  change is cleanly *either* backend/contract *or* UI presentation. Never a sovereign-port plugin (that
+  port is outbound tool breadth); never gated/paywalled/optional-for-diagnosis (§1.3/§7.5/§1.8, L9).
+  Served-by-default by strattd (`STRATT_UI_DIR` → `go:embed`), but serving is packaging, not coupling.
 - **Stack:** React + TypeScript + Vite · TanStack Router + Query. Node current-or-previous LTS,
   framework majors ≤ N-1, CI-gated (§1.7).
 - **Components are vendored, not depended-upon.** Headless accessible primitives (Radix today; Base
