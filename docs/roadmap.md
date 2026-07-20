@@ -111,9 +111,11 @@ of existing capabilities, not new phase work — the deliverables above still st
 | Per-Step facet write-scope (least-authority write-back at the one governor) | ✅ | [ADR-0054](adr/0054-per-step-facet-claim.md); `pluginhost.govern` grant∩scope |
 
 **Verified in-repo (structural):** `core/internal/connectors/` is empty; `internal/actuators`,
-`internal/actions`, `internal/emitters` hold only the seam interfaces, no tool logic; **12 tools** live in
-`plugins/` (ansible, awsec2, certissuer, chef, mcp, msgraph, notify, opentofu, puppet, salt, script, vcenter);
-the execution path routes by registry lookup, not a tool-name switch, with no platform-default actuator
+`internal/actions`, `internal/emitters` hold only the seam interfaces, no tool logic; **20 plugin packages**
+live in `plugins/` (ansible, ansibleproject, awsec2, awx, certissuer, chef, crossplane, declared,
+kubecontainers, kubeservices, mcp, mesh, msgraph, netbox, notify, opentofu, puppet, salt, script, vcenter),
+each self-contained with its own `go.mod` + `cmd` + `Dockerfile`; the execution path routes by registry
+lookup, not a tool-name switch, with no platform-default actuator
 (ADR-0046). The residual tool-name strings in core are legitimate — opaque routing-key registration in the
 composition root (`cmd/strattd`), the AWX `/api/v2` compat façade, and the AWX one-shot migration tool.
 
@@ -153,11 +155,18 @@ found and closed. The one crack no code closes: **§7.4 OSPO/IP clearance** (rep
   poll-until-condition-with-deadline (e.g. `require.Eventually`-style) so the gate is deterministic
   regardless of host load. Low-risk, isolated to test files; do before wiring CI on a shared runner.
 
+> **Note on scope.** The phase tables above cite ADRs through ~0054 (the phase + dark-matter work). Later
+> ADRs (0055–0091) extend the platform beyond the original phase plan — observability/OTel, API admission
+> PEPs, in-place adopt + standing cutover reconciler, new estate dimensions (identity/software/service), and
+> the **greenfield UI rebuild** ([ADR-0090](adr/0090-ui-rebuild-greenfield-charter-stack.md)/[0091](adr/0091-ui-is-a-first-party-bundled-pure-api-client.md): the UI is now a first-party, pure `/api/v1` client). Treat
+> the tables as the phase spine, not an exhaustive log of recent work — the [ADR index](adr/README.md) is that.
+
 ## Where we are, in one line
 
 Phases 0–2 code-complete; Phase 3 code ~90% (Jamf + ConfigMgr Connectors deferred by choice); multi-region
-Cells shipped ahead of schedule; and the whole platform has been **re-centered onto the sovereign plugin port
-(dark-matter, ADR-0046 arc)** — the core spine is content-blind and every tool is a plugin, verified structurally
-in-repo and by unit/integration tests, with the live-cluster e2e still outstanding. **No phase's promote/OSS
-exit gate is met** — every one ultimately waits on the charter §7.4 going-public step (OSPO/IP clearance) plus
-real operational evidence (SLO, security review, adoption), none of which is a coding task.
+Cells shipped ahead of schedule; the UI has been rebuilt greenfield as a pure API client (ADR-0090/0091); and
+the whole platform has been **re-centered onto the sovereign plugin port (dark-matter, ADR-0046 arc)** — the
+core spine is content-blind and every tool is a plugin, verified structurally in-repo and by unit/integration
+tests, with the live-cluster e2e still outstanding. **No phase's promote/OSS exit gate is met** — every one
+ultimately waits on the charter §7.4 going-public step (OSPO/IP clearance) plus real operational evidence
+(SLO, security review, adoption), none of which is a coding task.
