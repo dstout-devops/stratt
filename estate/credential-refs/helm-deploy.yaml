@@ -1,0 +1,11 @@
+# helm-deploy — the CredentialRef the helm/deploy Action binds (§2.5 / ADR-0009).
+# An Action's CredentialRef use-check is its ONLY authz gate (core/internal/orchestrate
+# ExecuteAction refuses a credential-free Action, "ActionUngated") — so even a helm
+# deploy that reaches the API via the plugin pod's OWN in-cluster ServiceAccount
+# (never brokered material, ADR-0092 §6) must carry one. POINTER only (§2.5); the
+# credential is purely the authz gate here (like aws-dev against moto — the gate is
+# the point). No injection: helm uses the pod SA, so no material is resolved.
+name: helm-deploy
+ownerTeam: platform-admins
+backend: k8s-secret
+locator: { namespace: stratt-m2, name: helm-deploy-authz }

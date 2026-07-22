@@ -1,0 +1,29 @@
+# helm-deploy — the GATED build Workflow that deploys a Helm release via the
+# targetless helm/deploy Action (ADR-0092 dual-surface). It proves the self-managing
+# loop end to end (M2): Stratt materializes a Kubernetes release through its OWN gated
+# reconcile/actuator path — "declare -> gated build -> helm materializes -> converge".
+#
+# §5 Flow 1: the launch IS a gate, and the approve Step adds a platform-admin Gate
+# BEFORE the deploy (a mutating helm upgrade --install). An agent (or a human) decides
+# the Gate via POST /gates/{id}/decision (§1.6 — the same path for both). helm/deploy
+# is TARGETLESS (no View anchor) — the deploy names its own release + namespace.
+name: helm-deploy
+steps:
+  - name: approve
+    gate:
+      approvers:
+        teams: [platform-admins]
+      timeoutSeconds: 86400 # 24h to approve the deploy
+  - name: deploy
+    needs: [approve]
+    action: helm/deploy
+    # §2.5 — an Action's CredentialRef use-check is its only authz gate (ActionUngated
+    # otherwise). helm reaches the API via the plugin pod's own SA, so this is a
+    # pure authz-gate pointer (no material). The launching Principal needs `use`.
+    credentialRefs: [helm-deploy]
+    params:
+      # The self-contained demo chart mounted into the plugin (deploy/charts/stratt
+      # files/hello, ADR-0092 M2). Renders one ConfigMap — the observable proof.
+      chart: hello
+      release: hello
+      namespace: stratt-m2
