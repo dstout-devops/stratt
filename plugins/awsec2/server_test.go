@@ -25,6 +25,17 @@ type fakeEC2 struct {
 	runOut      *ec2.RunInstancesOutput
 	runErr      error
 	lastRun     *ec2.RunInstancesInput
+	// Lifecycle + tag (ADR-0095): a single err drives the injected failure; the
+	// last* fields record what the plugin sent.
+	startOut  *ec2.StartInstancesOutput
+	stopOut   *ec2.StopInstancesOutput
+	termOut   *ec2.TerminateInstancesOutput
+	opErr     error
+	lastStart *ec2.StartInstancesInput
+	lastStop  *ec2.StopInstancesInput
+	lastReb   *ec2.RebootInstancesInput
+	lastTerm  *ec2.TerminateInstancesInput
+	lastTags  *ec2.CreateTagsInput
 }
 
 func (f *fakeEC2) DescribeInstances(_ context.Context, _ *ec2.DescribeInstancesInput, _ ...func(*ec2.Options)) (*ec2.DescribeInstancesOutput, error) {
@@ -34,6 +45,31 @@ func (f *fakeEC2) DescribeInstances(_ context.Context, _ *ec2.DescribeInstancesI
 func (f *fakeEC2) RunInstances(_ context.Context, in *ec2.RunInstancesInput, _ ...func(*ec2.Options)) (*ec2.RunInstancesOutput, error) {
 	f.lastRun = in
 	return f.runOut, f.runErr
+}
+
+func (f *fakeEC2) StartInstances(_ context.Context, in *ec2.StartInstancesInput, _ ...func(*ec2.Options)) (*ec2.StartInstancesOutput, error) {
+	f.lastStart = in
+	return f.startOut, f.opErr
+}
+
+func (f *fakeEC2) StopInstances(_ context.Context, in *ec2.StopInstancesInput, _ ...func(*ec2.Options)) (*ec2.StopInstancesOutput, error) {
+	f.lastStop = in
+	return f.stopOut, f.opErr
+}
+
+func (f *fakeEC2) RebootInstances(_ context.Context, in *ec2.RebootInstancesInput, _ ...func(*ec2.Options)) (*ec2.RebootInstancesOutput, error) {
+	f.lastReb = in
+	return &ec2.RebootInstancesOutput{}, f.opErr
+}
+
+func (f *fakeEC2) TerminateInstances(_ context.Context, in *ec2.TerminateInstancesInput, _ ...func(*ec2.Options)) (*ec2.TerminateInstancesOutput, error) {
+	f.lastTerm = in
+	return f.termOut, f.opErr
+}
+
+func (f *fakeEC2) CreateTags(_ context.Context, in *ec2.CreateTagsInput, _ ...func(*ec2.Options)) (*ec2.CreateTagsOutput, error) {
+	f.lastTags = in
+	return &ec2.CreateTagsOutput{}, f.opErr
 }
 
 // captureStream is a fake grpc.ServerStreamingServer[T] recording sent messages.
@@ -255,14 +291,148 @@ func TestGetManifest(t *testing.T) {
 	if len(m.GetTombstoneSchemes()) != 1 || m.GetTombstoneSchemes()[0] != "aws.instanceId" {
 		t.Errorf("tombstone schemes = %v", m.GetTombstoneSchemes())
 	}
-	if len(m.GetActions()) != 1 {
-		t.Fatalf("expected 1 action, got %d", len(m.GetActions()))
+	// create-vm + start/stop/reboot/terminate/tag (ADR-0095).
+	byName := map[string]*pluginv1.ActionDecl{}
+	for _, a := range m.GetActions() {
+		byName[a.GetName()] = a
 	}
-	a := m.GetActions()[0]
-	if a.GetName() != "awsec2/create-vm" || !a.GetDryRunnable() || a.GetIdempotent() {
-		t.Errorf("action decl: name=%q dryRunnable=%v idempotent=%v", a.GetName(), a.GetDryRunnable(), a.GetIdempotent())
+	for _, want := range []string{"awsec2/create-vm", "awsec2/start", "awsec2/stop", "awsec2/reboot", "awsec2/terminate", "awsec2/tag"} {
+		a := byName[want]
+		if a == nil {
+			t.Fatalf("missing ActionDecl %q (got %d actions)", want, len(m.GetActions()))
+		}
+		op := want[len("awsec2/"):]
+		if a.GetInput().GetSchemaId() != "actions/awsec2/"+op+".input" || a.GetOutput().GetSchemaId() != "actions/awsec2/"+op+".output" {
+			t.Errorf("%s contract refs: in=%q out=%q", want, a.GetInput().GetSchemaId(), a.GetOutput().GetSchemaId())
+		}
+		if !a.GetDryRunnable() {
+			t.Errorf("%s must be DryRunnable", want)
+		}
 	}
-	if a.GetInput().GetSchemaId() != "actions/awsec2/create-vm.input" || a.GetOutput().GetSchemaId() != "actions/awsec2/create-vm.output" {
-		t.Errorf("contract refs: in=%q out=%q", a.GetInput().GetSchemaId(), a.GetOutput().GetSchemaId())
+	// reboot has no stable end-state ⇒ not idempotent; the others are.
+	if byName["awsec2/reboot"].GetIdempotent() {
+		t.Error("reboot must not be marked idempotent")
 	}
+	if !byName["awsec2/start"].GetIdempotent() {
+		t.Error("start must be idempotent (starting a running instance is a no-op)")
+	}
+}
+
+// TestInvokeLifecycle proves the lifecycle Actions: each drives its EC2 call with the
+// target instance id + DryRun, and projects ONLY instance.state with Run provenance
+// (ADR-0095 flag 3) — never compute/network (the Syncer owns those).
+func TestInvokeLifecycle(t *testing.T) {
+	cases := []struct {
+		action, wantState string
+		setup             func(*fakeEC2)
+		check             func(*testing.T, *fakeEC2)
+	}{
+		{"awsec2/start", "pending", func(f *fakeEC2) {
+			f.startOut = &ec2.StartInstancesOutput{StartingInstances: []ec2types.InstanceStateChange{{CurrentState: &ec2types.InstanceState{Name: ec2types.InstanceStateNamePending}}}}
+		}, func(t *testing.T, f *fakeEC2) {
+			if f.lastStart == nil || f.lastStart.InstanceIds[0] != "i-1" {
+				t.Fatalf("start not called with i-1: %+v", f.lastStart)
+			}
+		}},
+		{"awsec2/stop", "stopping", func(f *fakeEC2) {
+			f.stopOut = &ec2.StopInstancesOutput{StoppingInstances: []ec2types.InstanceStateChange{{CurrentState: &ec2types.InstanceState{Name: ec2types.InstanceStateNameStopping}}}}
+		}, func(t *testing.T, f *fakeEC2) {
+			if f.lastStop == nil || f.lastStop.InstanceIds[0] != "i-1" {
+				t.Fatalf("stop not called with i-1")
+			}
+		}},
+		{"awsec2/terminate", "shutting-down", func(f *fakeEC2) {
+			f.termOut = &ec2.TerminateInstancesOutput{TerminatingInstances: []ec2types.InstanceStateChange{{CurrentState: &ec2types.InstanceState{Name: ec2types.InstanceStateNameShuttingDown}}}}
+		}, func(t *testing.T, f *fakeEC2) {
+			if f.lastTerm == nil || f.lastTerm.InstanceIds[0] != "i-1" {
+				t.Fatalf("terminate not called with i-1")
+			}
+		}},
+		{"awsec2/reboot", "", func(f *fakeEC2) {}, func(t *testing.T, f *fakeEC2) {
+			if f.lastReb == nil || f.lastReb.InstanceIds[0] != "i-1" {
+				t.Fatalf("reboot not called with i-1")
+			}
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.action, func(t *testing.T) {
+			api := &fakeEC2{}
+			tc.setup(api)
+			args, _ := json.Marshal(lifecycleParams{InstanceID: "i-1"})
+			stream := &captureStream[pluginv1.InvokeResponse]{ctx: context.Background()}
+			if err := newServer(t, api).Invoke(&pluginv1.InvokeRequest{Action: tc.action, Args: &pluginv1.Payload{Bytes: args}}, stream); err != nil {
+				t.Fatalf("invoke: %v", err)
+			}
+			tc.check(t, api)
+			term := stream.sent[len(stream.sent)-1]
+			if !term.GetEvent().GetTerminal() || !term.GetEvent().GetOk() {
+				t.Fatalf("expected terminal ok, got %+v", term.GetEvent())
+			}
+			op := tc.action[len("awsec2/"):]
+			if term.GetResult().GetOutputContract().GetSchemaId() != "actions/awsec2/"+op+".output" {
+				t.Errorf("output contract: %q", term.GetResult().GetOutputContract().GetSchemaId())
+			}
+			ents := term.GetResult().GetEntities()
+			if tc.wantState == "" {
+				if len(ents) != 0 {
+					t.Fatalf("reboot must project no state entity, got %d", len(ents))
+				}
+				return
+			}
+			if len(ents) != 1 {
+				t.Fatalf("expected one instance.state projection, got %d", len(ents))
+			}
+			e := ents[0]
+			if e.GetKind() != "instance" || e.GetIdentityKeys()["aws.instanceId"] != "i-1" {
+				t.Fatalf("entity identity: %+v", e)
+			}
+			// ONLY instance.state — never compute/network (flag 3).
+			if len(e.GetFacets()) != 1 || len(e.GetFacets()["instance.state"]) == 0 {
+				t.Fatalf("lifecycle must project ONLY instance.state, got facets %v", facetKeys(e.GetFacets()))
+			}
+			var st map[string]any
+			if err := json.Unmarshal(e.GetFacets()["instance.state"], &st); err != nil || st["state"] != tc.wantState {
+				t.Fatalf("state facet = %s (want %s), err=%v", e.GetFacets()["instance.state"], tc.wantState, err)
+			}
+		})
+	}
+}
+
+// TestInvokeTag proves awsec2/tag maps tags → CreateTags and returns a count, with no
+// Run-provenance Entity (the Syncer reflects tags on its next poll, §1.2).
+func TestInvokeTag(t *testing.T) {
+	api := &fakeEC2{}
+	args, _ := json.Marshal(tagParams{InstanceID: "i-1", Tags: map[string]string{"env": "dev", "team": "platform"}})
+	stream := &captureStream[pluginv1.InvokeResponse]{ctx: context.Background()}
+	if err := newServer(t, api).Invoke(&pluginv1.InvokeRequest{Action: "awsec2/tag", Args: &pluginv1.Payload{Bytes: args}}, stream); err != nil {
+		t.Fatalf("invoke: %v", err)
+	}
+	if api.lastTags == nil || len(api.lastTags.Tags) != 2 || api.lastTags.Resources[0] != "i-1" {
+		t.Fatalf("CreateTags not called correctly: %+v", api.lastTags)
+	}
+	term := stream.sent[len(stream.sent)-1]
+	if !term.GetEvent().GetOk() || len(term.GetResult().GetEntities()) != 0 {
+		t.Fatalf("tag must be terminal-ok with no entity: %+v", term)
+	}
+	var out map[string]any
+	_ = json.Unmarshal(term.GetResult().GetOutputs().GetBytes(), &out)
+	if out["tagged"].(float64) != 2 {
+		t.Fatalf("tagged count = %v", out["tagged"])
+	}
+}
+
+// TestLifecycleRequiresInstanceID — a lifecycle Action with no instanceId is rejected.
+func TestLifecycleRequiresInstanceID(t *testing.T) {
+	stream := &captureStream[pluginv1.InvokeResponse]{ctx: context.Background()}
+	if err := newServer(t, &fakeEC2{}).Invoke(&pluginv1.InvokeRequest{Action: "awsec2/stop"}, stream); err == nil {
+		t.Fatal("stop without instanceId must be rejected")
+	}
+}
+
+func facetKeys(m map[string][]byte) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	return out
 }

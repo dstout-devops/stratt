@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "stratt:contract:facets/instance.compute:v1",
+  "title": "instance.compute Facet",
+  "description": "Demanded by the awsec2 Syncer Contract (charter §1.1: a Facet schema exists only when a shipping Contract demands it; ADR-0095). The compute shape of a cloud instance Entity — emitted by normalizeInstance, validated at the Projector write path.",
+  "type": "object",
+  "properties": {
+    "instanceType": { "type": "string", "description": "provider instance type (e.g. t3.micro)" },
+    "architecture": { "type": "string", "description": "CPU architecture (e.g. x86_64, arm64)" },
+    "imageId": { "type": "string", "description": "the image/AMI the instance booted from" }
+  },
+  "additionalProperties": false
+}

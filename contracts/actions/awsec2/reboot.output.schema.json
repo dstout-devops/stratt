@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "stratt:contract:actions/awsec2/reboot.output:v1",
+  "title": "awsec2/reboot output",
+  "description": "Output Contract for awsec2/reboot: the instance id and (where the transition reports one) its resulting provider state. Bindable: {{.steps.<name>.outputs.state}}.",
+  "type": "object",
+  "properties": {
+    "instanceId": { "type": "string" },
+    "state": { "type": "string", "description": "resulting provider lifecycle state; absent for reboot (no state-change response)" }
+  },
+  "required": ["instanceId"],
+  "additionalProperties": false
+}

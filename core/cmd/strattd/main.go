@@ -549,10 +549,26 @@ func run(ctx context.Context, log *slog.Logger) error {
 			TombstoneSchemes: []string{"aws.instanceId"},
 		}
 		awsHost = pluginhost.New(store, pluginv1.NewPluginServiceClient(conn), grant, log)
-		if err := registerPluginAction("awsec2/create-vm", awsHost, true); err != nil {
-			return err
+		// create-vm + the instance lifecycle & tag Actions (ADR-0095), all on the one
+		// host/grant. reboot has no stable end-state ⇒ effectful, not DryRun-planned as
+		// idempotent, but still DryRunnable via the EC2 API's own dry-run.
+		awsActions := []struct {
+			name        string
+			dryRunnable bool
+		}{
+			{"awsec2/create-vm", true},
+			{"awsec2/start", true},
+			{"awsec2/stop", true},
+			{"awsec2/reboot", true},
+			{"awsec2/terminate", true},
+			{"awsec2/tag", true},
 		}
-		log.Info("awsec2 plugin actions registered", "addr", awsPluginAddr)
+		for _, a := range awsActions {
+			if err := registerPluginAction(a.name, awsHost, a.dryRunnable); err != nil {
+				return err
+			}
+		}
+		log.Info("awsec2 plugin actions registered", "addr", awsPluginAddr, "actions", len(awsActions))
 	}
 
 	// notify/webhook plugin Action (ADR-0046 Category A / ADR-0052): the notification

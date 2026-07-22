@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "stratt:contract:actions/awsec2/tag.output:v1",
+  "title": "awsec2/tag output",
+  "description": "Output Contract for awsec2/tag: the instance id and the number of tags set.",
+  "type": "object",
+  "properties": {
+    "instanceId": { "type": "string" },
+    "tagged": { "type": "integer", "description": "count of tags applied" }
+  },
+  "required": ["instanceId"],
+  "additionalProperties": false
+}

@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "stratt:contract:facets/instance.network:v1",
+  "title": "instance.network Facet",
+  "description": "Demanded by the awsec2 Syncer Contract (charter §1.1; ADR-0095). The network placement of a cloud instance Entity — emitted by normalizeInstance, validated at the Projector write path.",
+  "type": "object",
+  "properties": {
+    "privateIp": { "type": "string", "description": "primary private IPv4 address" },
+    "publicIp": { "type": "string", "description": "public IPv4 address, when assigned" },
+    "vpcId": { "type": "string", "description": "the VPC the instance is placed in" },
+    "subnetId": { "type": "string", "description": "the subnet the instance is placed in" },
+    "availabilityZone": { "type": "string", "description": "the AZ the instance runs in" }
+  },
+  "additionalProperties": false
+}

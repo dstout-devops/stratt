@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "stratt:contract:actions/awsec2/tag.input:v1",
+  "title": "awsec2/tag input",
+  "description": "Input Contract for the awsec2/tag Action (ADR-0095): set tags on an instance. Tags surface as labels on the next Syncer poll. AWS credentials inject as a CredentialRef (§2.5), not params.",
+  "type": "object",
+  "properties": {
+    "instanceId": { "type": "string", "description": "the aws.instanceId of the target instance" },
+    "tags": {
+      "type": "object",
+      "additionalProperties": { "type": "string" },
+      "minProperties": 1,
+      "description": "tag key→value pairs to set on the instance"
+    }
+  },
+  "required": ["instanceId", "tags"],
+  "additionalProperties": false
+}

@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "stratt:contract:facets/instance.state:v1",
+  "title": "instance.state Facet",
+  "description": "Demanded by the awsec2 Syncer Contract (charter §1.1; ADR-0095). The lifecycle state of a cloud instance Entity — emitted by normalizeInstance, validated at the Projector write path. Lifecycle Actions (start/stop/reboot/terminate) drive real transitions the next Syncer poll reflects here.",
+  "type": "object",
+  "properties": {
+    "state": { "type": "string", "description": "provider lifecycle state (e.g. pending, running, stopping, stopped, shutting-down)" },
+    "launchTime": { "type": "string", "format": "date-time", "description": "RFC3339 UTC launch timestamp" }
+  },
+  "additionalProperties": false
+}

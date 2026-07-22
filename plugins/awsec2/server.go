@@ -20,9 +20,16 @@ import (
 	pluginv1 "github.com/dstout-devops/stratt/sdk/stratt/plugin/v1"
 )
 
-// actionCreateVM is the sole Action this plugin advertises (ActionDecl.name); the
-// InvokeRequest.action selector picks it. "" is accepted as the sole Action.
-const actionCreateVM = "awsec2/create-vm"
+// Action names this plugin advertises (ActionDecl.name); the InvokeRequest.action
+// selector picks one. "" is accepted as the create-vm default (back-compat).
+const (
+	actionCreateVM  = "awsec2/create-vm"
+	actionStart     = "awsec2/start"
+	actionStop      = "awsec2/stop"
+	actionReboot    = "awsec2/reboot"
+	actionTerminate = "awsec2/terminate"
+	actionTag       = "awsec2/tag"
+)
 
 // Facet namespaces this Syncer REQUESTS to own (§2.1); the core honors them only
 // where the operator grant allows.
@@ -40,6 +47,12 @@ var facetNamespaces = []string{
 type EC2API interface {
 	DescribeInstances(ctx context.Context, in *ec2.DescribeInstancesInput, opts ...func(*ec2.Options)) (*ec2.DescribeInstancesOutput, error)
 	RunInstances(ctx context.Context, in *ec2.RunInstancesInput, opts ...func(*ec2.Options)) (*ec2.RunInstancesOutput, error)
+	// Lifecycle (ADR-0095): each drives a real instance state transition.
+	StartInstances(ctx context.Context, in *ec2.StartInstancesInput, opts ...func(*ec2.Options)) (*ec2.StartInstancesOutput, error)
+	StopInstances(ctx context.Context, in *ec2.StopInstancesInput, opts ...func(*ec2.Options)) (*ec2.StopInstancesOutput, error)
+	RebootInstances(ctx context.Context, in *ec2.RebootInstancesInput, opts ...func(*ec2.Options)) (*ec2.RebootInstancesOutput, error)
+	TerminateInstances(ctx context.Context, in *ec2.TerminateInstancesInput, opts ...func(*ec2.Options)) (*ec2.TerminateInstancesOutput, error)
+	CreateTags(ctx context.Context, in *ec2.CreateTagsInput, opts ...func(*ec2.Options)) (*ec2.CreateTagsOutput, error)
 }
 
 // Config locates the EC2 Source. Credentials arrive resolved from the plugin's OWN
@@ -98,14 +111,37 @@ func (s *Server) GetManifest(context.Context, *pluginv1.GetManifestRequest) (*pl
 		Verbs:            []pluginv1.Verb{pluginv1.Verb_VERB_OBSERVE, pluginv1.Verb_VERB_INVOKE},
 		Contracts:        contracts,
 		TombstoneSchemes: []string{"aws.instanceId"},
-		Actions: []*pluginv1.ActionDecl{{
-			Name:        actionCreateVM,
-			Input:       &pluginv1.ContractRef{SchemaId: "actions/awsec2/create-vm.input"},
-			Output:      &pluginv1.ContractRef{SchemaId: "actions/awsec2/create-vm.output"},
-			Idempotent:  false, // each call provisions a new instance
-			DryRunnable: true,  // RunInstances supports DryRun
-		}},
+		Actions: []*pluginv1.ActionDecl{
+			{
+				Name:        actionCreateVM,
+				Input:       &pluginv1.ContractRef{SchemaId: "actions/awsec2/create-vm.input"},
+				Output:      &pluginv1.ContractRef{SchemaId: "actions/awsec2/create-vm.output"},
+				Idempotent:  false, // each call provisions a new instance
+				DryRunnable: true,  // RunInstances supports DryRun
+			},
+			// Lifecycle Actions (ADR-0095): idempotent w.r.t. the target END state
+			// (starting a running instance is a no-op), each DryRunnable via the EC2
+			// API's own DryRun. reboot has no stable end-state to assert idempotent.
+			lifecycleDecl(actionStart, true),
+			lifecycleDecl(actionStop, true),
+			lifecycleDecl(actionReboot, false),
+			lifecycleDecl(actionTerminate, true),
+			lifecycleDecl(actionTag, true),
+		},
 	}}, nil
+}
+
+// lifecycleDecl builds an ActionDecl for an instance-scoped Action whose input+output
+// contracts follow the actions/awsec2/<op>.{input,output} convention.
+func lifecycleDecl(name string, idempotent bool) *pluginv1.ActionDecl {
+	op := name[len("awsec2/"):]
+	return &pluginv1.ActionDecl{
+		Name:        name,
+		Input:       &pluginv1.ContractRef{SchemaId: "actions/awsec2/" + op + ".input"},
+		Output:      &pluginv1.ContractRef{SchemaId: "actions/awsec2/" + op + ".output"},
+		Idempotent:  idempotent,
+		DryRunnable: true,
+	}
 }
 
 // Observe performs a full sync: EC2 exposes no change feed, so each cycle is an
@@ -177,10 +213,27 @@ type createVMParams struct {
 // Run provenance, §1.2). Result is set ONLY on the terminal message.
 func (s *Server) Invoke(req *pluginv1.InvokeRequest, stream grpc.ServerStreamingServer[pluginv1.InvokeResponse]) error {
 	ctx := stream.Context()
-	if action := req.GetAction(); action != "" && action != actionCreateVM {
-		return status.Errorf(codes.InvalidArgument, "awsec2: unknown action %q", action)
+	api, err := s.newAPI(ctx)
+	if err != nil {
+		return err
 	}
+	// Content-blind dispatch: an action the plugin does not ship is rejected, never
+	// guessed (§1.5). "" defaults to create-vm for back-compat with the first slice.
+	switch req.GetAction() {
+	case "", actionCreateVM:
+		return s.invokeCreateVM(ctx, req, stream, api)
+	case actionStart, actionStop, actionReboot, actionTerminate:
+		return s.invokeLifecycle(ctx, req, stream, api)
+	case actionTag:
+		return s.invokeTag(ctx, req, stream, api)
+	default:
+		return status.Errorf(codes.InvalidArgument, "awsec2: unknown action %q", req.GetAction())
+	}
+}
 
+// invokeCreateVM provisions one EC2 instance and projects it with Run provenance —
+// the original create-vm Action (ADR-0058 provisioning seam).
+func (s *Server) invokeCreateVM(ctx context.Context, req *pluginv1.InvokeRequest, stream grpc.ServerStreamingServer[pluginv1.InvokeResponse], api EC2API) error {
 	var p createVMParams
 	if args := req.GetArgs(); args != nil && len(args.GetBytes()) > 0 {
 		if err := json.Unmarshal(args.GetBytes(), &p); err != nil {
@@ -192,11 +245,6 @@ func (s *Server) Invoke(req *pluginv1.InvokeRequest, stream grpc.ServerStreaming
 	}
 	if p.InstanceType == "" {
 		p.InstanceType = "t3.micro"
-	}
-
-	api, err := s.newAPI(ctx)
-	if err != nil {
-		return err
 	}
 
 	// Progress event (typed, core-legible descent — §1.8).
@@ -301,10 +349,194 @@ func (s *Server) Invoke(req *pluginv1.InvokeRequest, stream grpc.ServerStreaming
 	})
 }
 
+// lifecycleParams is the input for the instance lifecycle Actions (start/stop/reboot/
+// terminate): the instance to act on, by its native id.
+type lifecycleParams struct {
+	InstanceID string `json:"instanceId"`
+}
+
+// lifecycleOutput is the bindable output of a lifecycle Action: the instance id and
+// its resulting provider state (empty for reboot, which has no state-change response).
+type lifecycleOutput struct {
+	InstanceID string `json:"instanceId"`
+	State      string `json:"state,omitempty"`
+}
+
+// invokeLifecycle drives a real instance state transition and projects the instance
+// with Run provenance — ONLY the instance.state Facet it authoritatively affects
+// (ADR-0095 flag 3); the Syncer owns compute/network. DryRun rides the EC2 API's own
+// dry-run (the DryRunOperation signal is plan-success).
+func (s *Server) invokeLifecycle(ctx context.Context, req *pluginv1.InvokeRequest, stream grpc.ServerStreamingServer[pluginv1.InvokeResponse], api EC2API) error {
+	action := req.GetAction()
+	op := action[len("awsec2/"):]
+	var p lifecycleParams
+	if args := req.GetArgs(); args != nil && len(args.GetBytes()) > 0 {
+		if err := json.Unmarshal(args.GetBytes(), &p); err != nil {
+			return status.Errorf(codes.InvalidArgument, "%s: invalid args: %v", action, err)
+		}
+	}
+	if p.InstanceID == "" {
+		return status.Errorf(codes.InvalidArgument, "%s requires instanceId", action)
+	}
+	if err := stream.Send(&pluginv1.InvokeResponse{Event: &pluginv1.TaskEvent{
+		Level:         pluginv1.TaskEvent_LEVEL_INFO,
+		Message:       fmt.Sprintf("%s %s", op, p.InstanceID),
+		At:            timestamppb.Now(),
+		CorrelationId: req.GetEnvelope().GetCorrelationId(),
+		Fields:        map[string]string{"instanceId": p.InstanceID},
+	}}); err != nil {
+		return err
+	}
+
+	dry := aws.Bool(req.GetDryRun())
+	ids := []string{p.InstanceID}
+	var newState string
+	var err error
+	switch action {
+	case actionStart:
+		out, e := api.StartInstances(ctx, &ec2.StartInstancesInput{InstanceIds: ids, DryRun: dry})
+		if err = e; e == nil && len(out.StartingInstances) > 0 {
+			newState = string(out.StartingInstances[0].CurrentState.Name)
+		}
+	case actionStop:
+		out, e := api.StopInstances(ctx, &ec2.StopInstancesInput{InstanceIds: ids, DryRun: dry})
+		if err = e; e == nil && len(out.StoppingInstances) > 0 {
+			newState = string(out.StoppingInstances[0].CurrentState.Name)
+		}
+	case actionReboot:
+		// reboot returns no state change — the instance stays running.
+		_, err = api.RebootInstances(ctx, &ec2.RebootInstancesInput{InstanceIds: ids, DryRun: dry})
+	case actionTerminate:
+		out, e := api.TerminateInstances(ctx, &ec2.TerminateInstancesInput{InstanceIds: ids, DryRun: dry})
+		if err = e; e == nil && len(out.TerminatingInstances) > 0 {
+			newState = string(out.TerminatingInstances[0].CurrentState.Name)
+		}
+	}
+	if err != nil {
+		if req.GetDryRun() && isDryRunSuccess(err) {
+			return s.terminalDryRun(stream, req, fmt.Sprintf("dry-run ok: would %s %s", op, p.InstanceID), "actions/awsec2/"+op+".output")
+		}
+		return s.terminalFailure(stream, req, fmt.Errorf("%s: %w", action, err))
+	}
+
+	outputs, err := json.Marshal(lifecycleOutput{InstanceID: p.InstanceID, State: newState})
+	if err != nil {
+		return s.terminalFailure(stream, req, fmt.Errorf("%s: marshal outputs: %w", action, err))
+	}
+	// Project ONLY instance.state with Run provenance (flag 3) — and only when the
+	// transition yielded an observable state (not reboot).
+	var entities []*pluginv1.ObservedEntity
+	if newState != "" {
+		stateDoc, merr := json.Marshal(map[string]any{"state": newState})
+		if merr != nil {
+			return s.terminalFailure(stream, req, fmt.Errorf("%s: marshal state facet: %w", action, merr))
+		}
+		entities = []*pluginv1.ObservedEntity{{
+			Kind:         "instance",
+			IdentityKeys: map[string]string{"aws.instanceId": p.InstanceID},
+			Facets:       map[string][]byte{"instance.state": stateDoc},
+		}}
+	}
+	s.log.Info("lifecycle", "op", op, "instanceId", p.InstanceID, "state", newState)
+	return stream.Send(&pluginv1.InvokeResponse{
+		Event: &pluginv1.TaskEvent{
+			Level:         pluginv1.TaskEvent_LEVEL_INFO,
+			Message:       fmt.Sprintf("%s %s ok", op, p.InstanceID),
+			At:            timestamppb.Now(),
+			CorrelationId: req.GetEnvelope().GetCorrelationId(),
+			Fields:        map[string]string{"instanceId": p.InstanceID, "state": newState},
+			Terminal:      true,
+			Ok:            true,
+		},
+		Result: &pluginv1.InvokeResult{
+			Outputs:        &pluginv1.Payload{Bytes: outputs},
+			OutputContract: &pluginv1.ContractRef{SchemaId: "actions/awsec2/" + op + ".output"},
+			Entities:       entities,
+		},
+	})
+}
+
+// tagParams is the input for awsec2/tag: the instance and the tags to set on it.
+type tagParams struct {
+	InstanceID string            `json:"instanceId"`
+	Tags       map[string]string `json:"tags"`
+}
+
+// invokeTag sets tags on an instance (CreateTags). Tags surface as labels on the next
+// Syncer poll (the Syncer owns the projection, §1.2), so this Action returns outputs
+// only — no Run-provenance Entity write.
+func (s *Server) invokeTag(ctx context.Context, req *pluginv1.InvokeRequest, stream grpc.ServerStreamingServer[pluginv1.InvokeResponse], api EC2API) error {
+	var p tagParams
+	if args := req.GetArgs(); args != nil && len(args.GetBytes()) > 0 {
+		if err := json.Unmarshal(args.GetBytes(), &p); err != nil {
+			return status.Errorf(codes.InvalidArgument, "awsec2/tag: invalid args: %v", err)
+		}
+	}
+	if p.InstanceID == "" || len(p.Tags) == 0 {
+		return status.Errorf(codes.InvalidArgument, "awsec2/tag requires instanceId and at least one tag")
+	}
+	tags := make([]ec2types.Tag, 0, len(p.Tags))
+	for k, v := range p.Tags {
+		tags = append(tags, ec2types.Tag{Key: aws.String(k), Value: aws.String(v)})
+	}
+	if err := stream.Send(&pluginv1.InvokeResponse{Event: &pluginv1.TaskEvent{
+		Level:         pluginv1.TaskEvent_LEVEL_INFO,
+		Message:       fmt.Sprintf("tagging %s (%d tags)", p.InstanceID, len(tags)),
+		At:            timestamppb.Now(),
+		CorrelationId: req.GetEnvelope().GetCorrelationId(),
+		Fields:        map[string]string{"instanceId": p.InstanceID},
+	}}); err != nil {
+		return err
+	}
+	_, err := api.CreateTags(ctx, &ec2.CreateTagsInput{Resources: []string{p.InstanceID}, Tags: tags, DryRun: aws.Bool(req.GetDryRun())})
+	if err != nil {
+		if req.GetDryRun() && isDryRunSuccess(err) {
+			return s.terminalDryRun(stream, req, fmt.Sprintf("dry-run ok: would tag %s", p.InstanceID), "actions/awsec2/tag.output")
+		}
+		return s.terminalFailure(stream, req, fmt.Errorf("awsec2/tag: %w", err))
+	}
+	outputs, err := json.Marshal(map[string]any{"instanceId": p.InstanceID, "tagged": len(tags)})
+	if err != nil {
+		return s.terminalFailure(stream, req, fmt.Errorf("awsec2/tag: marshal outputs: %w", err))
+	}
+	return stream.Send(&pluginv1.InvokeResponse{
+		Event: &pluginv1.TaskEvent{
+			Level:         pluginv1.TaskEvent_LEVEL_INFO,
+			Message:       fmt.Sprintf("tagged %s", p.InstanceID),
+			At:            timestamppb.Now(),
+			CorrelationId: req.GetEnvelope().GetCorrelationId(),
+			Fields:        map[string]string{"instanceId": p.InstanceID},
+			Terminal:      true,
+			Ok:            true,
+		},
+		Result: &pluginv1.InvokeResult{
+			Outputs:        &pluginv1.Payload{Bytes: outputs},
+			OutputContract: &pluginv1.ContractRef{SchemaId: "actions/awsec2/tag.output"},
+		},
+	})
+}
+
+// terminalDryRun emits a terminal ok event for a dry-run that passed the EC2 permission
+// check (no side effect happened): the plan succeeded, so the Result carries the output
+// contract but no bindable outputs and no Entity.
+func (s *Server) terminalDryRun(stream grpc.ServerStreamingServer[pluginv1.InvokeResponse], req *pluginv1.InvokeRequest, msg, outputContract string) error {
+	return stream.Send(&pluginv1.InvokeResponse{
+		Event: &pluginv1.TaskEvent{
+			Level:         pluginv1.TaskEvent_LEVEL_INFO,
+			Message:       msg,
+			At:            timestamppb.Now(),
+			CorrelationId: req.GetEnvelope().GetCorrelationId(),
+			Terminal:      true,
+			Ok:            true,
+		},
+		Result: &pluginv1.InvokeResult{OutputContract: &pluginv1.ContractRef{SchemaId: outputContract}},
+	})
+}
+
 // terminalFailure emits the terminal, not-ok TaskEvent (no Result) and returns nil
 // — a domain failure rides the typed descent channel, it is not a transport error.
 func (s *Server) terminalFailure(stream grpc.ServerStreamingServer[pluginv1.InvokeResponse], req *pluginv1.InvokeRequest, cause error) error {
-	s.log.Error("create-vm failed", "error", cause)
+	s.log.Error("action failed", "error", cause)
 	return stream.Send(&pluginv1.InvokeResponse{Event: &pluginv1.TaskEvent{
 		Level:         pluginv1.TaskEvent_LEVEL_ERROR,
 		Message:       cause.Error(),
