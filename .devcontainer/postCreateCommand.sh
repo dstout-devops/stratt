@@ -8,3 +8,6 @@ WORKSPACE="${WORKSPACE_ROOT:-$PWD}"
 
 echo "Stratt devcontainer post-create bootstrap"
 task --dir "$WORKSPACE" setup:devcontainer
+
+# Teach gh to borrow the forwarded git credential (container-only; no stored/committed secret).
+task --dir "$WORKSPACE" setup:gh-auth

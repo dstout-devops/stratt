@@ -16,3 +16,8 @@ services:
     volumes:
       - ..:/workspaces/${WORKSPACE_NAME:-workspace}:cached
     command: sleep infinity
+networks:
+  default:
+    ipam:
+      config:
+        - subnet: 172.200.0.0/16 

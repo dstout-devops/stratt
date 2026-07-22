@@ -11,7 +11,7 @@ request contradicts the charter, surface the conflict — don't silently follow 
 **Status: Phases 0–2 code-complete; Phase 3 ~90%; multi-region Cells shipped ahead of plan; and the whole
 platform re-centered onto the sovereign plugin port (dark-matter, ADR-0046 arc) — the core spine is
 content-blind and every tool is a plugin, verified in-repo (live-cluster e2e still outstanding).** The Go
-control plane (`core/`), the React UI (`ui/`), 60 ADRs, and the Helm chart are all real and substantial —
+control plane (`core/`), the React UI (`ui/`), 90+ ADRs, and the Helm chart are all real and substantial —
 this is a working platform, not a spike. The living, evidence-backed tracker is
 **[docs/roadmap.md](docs/roadmap.md)**; the decision record is **[docs/adr/](docs/adr/README.md)**. Follow
 the charter §8 phasing and the roadmap — build the *next* thing, not ahead recklessly — and keep new work
@@ -76,13 +76,23 @@ and AWX→Stratt migration mapping: invoke the **`/vocabulary`** skill.
   cosign / SLSA / SBOM.
 - **Ansible is subprocess-only** (GPLv3 boundary): the Go control plane never links it; it shells out
   to `ansible-runner` in the EE image. **OpenTofu over Terraform.**
-- Task runner: `task` (Taskfile). Prefer it for repeatable commands once they are defined.
+- Task runner: `task` (Taskfile). Prefer it for repeatable commands (`Bash(task:*)` is pre-approved).
+
+## Commands — verify with a real signal (charter §1.8)
+Run repeatable work through the **Taskfile**; never assert success without the matching gate.
+- **`task ci`** — the full pre-push gate: evergreen + `fmt:check` + lint + codegen freshness + tests.
+  Run this before proposing a change is done.
+- **`task test`** (all Go workspace modules) · **`task lint`** · **`task fmt`** / **`task fmt:check`**.
+- **`task evergreen`** — fail if any toolchain dep drops below its N-1 floor (§1.7) · **`task versions`**.
+- **`task generate:check`** / **`task proto:check`** — codegen (OpenAPI / proto) is committed and fresh.
+- **UI** (in `ui/`): **`task ui:ci`**, or `npm run typecheck` / `lint` / `test` / `build` directly.
+- **Dev substrate:** `task dev:up` / `dev:down` (Postgres 18 · NATS · Temporal); e2e tests need it up.
 
 ## Workflow
 - **Explore → plan → implement → verify.** Use plan mode for multi-file or architecture-affecting
   work. The charter is the spec — check the result against it.
-- **Verify every non-trivial change** with a real signal (test, build, or run) and show the evidence.
-  Never assert success without it. (Add concrete test/build commands here once they exist.)
+- **Verify every non-trivial change** with a real signal (the relevant `task` gate above) and show
+  the evidence. Never assert success without it.
 - **Charter review:** for changes to the data model, Contracts, vocabulary, authz, or a new
   dependency, delegate to the **`charter-guardian`** subagent to check against §1 and the non-goals
   before finalizing.

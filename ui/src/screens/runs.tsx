@@ -5,7 +5,8 @@ import { useHoverPrefetch } from "@/lib/prefetch";
 import { StateChip } from "@/components/state-chip";
 import { LiveLog } from "@/components/live-log";
 import { StartRunDialog } from "@/components/start-run-dialog";
-import { ErrorLine } from "@/components/feedback";
+import { TableShell } from "@/components/table";
+import { ErrorLine, EmptyState, ListSkeleton } from "@/components/feedback";
 import { runState } from "@/lib/states";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
@@ -38,26 +39,15 @@ export function RunsList() {
       {isPending ? (
         <ListSkeleton />
       ) : runs.length === 0 ? (
-        <Empty label="No Runs yet." />
+        <EmptyState label="No Runs yet." />
       ) : (
-        <div className="overflow-hidden rounded-lg border border-border">
-          <table className="w-full text-sm">
-            <thead className="bg-card text-left text-xs text-muted-foreground">
-              <tr>
-                <th className="px-3 py-2 font-medium">Status</th>
-                <th className="px-3 py-2 font-medium">Run</th>
-                <th className="px-3 py-2 font-medium">Against</th>
-                <th className="px-3 py-2 font-medium">Descent</th>
-                <th className="px-3 py-2 text-right font-medium">Started</th>
-              </tr>
-            </thead>
-            <tbody>
-              {runs.map((r) => (
-                <RunRow key={r.id} run={r} />
-              ))}
-            </tbody>
-          </table>
-        </div>
+        <TableShell
+          head={["Status", "Run", "Against", "Descent", { label: "Started", align: "right" }]}
+        >
+          {runs.map((r) => (
+            <RunRow key={r.id} run={r} />
+          ))}
+        </TableShell>
       )}
     </div>
   );
@@ -131,23 +121,6 @@ export function RunDetail() {
       </div>
       {/* The virtualized, uncapped, follow-tail live task-event stream — the floor of descent. */}
       <LiveLog runId={run.id} />
-    </div>
-  );
-}
-
-function ListSkeleton() {
-  return (
-    <div className="space-y-2">
-      {Array.from({ length: 8 }).map((_, i) => (
-        <Skeleton key={i} className="h-9 w-full" />
-      ))}
-    </div>
-  );
-}
-function Empty({ label }: { label: string }) {
-  return (
-    <div className="rounded-lg border border-dashed border-border p-8 text-center text-sm text-muted-foreground">
-      {label}
     </div>
   );
 }

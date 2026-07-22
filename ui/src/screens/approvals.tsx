@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
 import { relTime } from "@/lib/format";
-import { ErrorLine } from "@/components/feedback";
+import { ErrorLine, EmptyState } from "@/components/feedback";
 import type { Schema } from "@/api/client";
 
 // The approval inbox lives UNDER Runs (vocabulary-linter: Gate is a Workflow feature, not a
@@ -30,9 +30,7 @@ export function ApprovalsInbox() {
       {isPending ? (
         <Skeleton className="h-32 w-full" />
       ) : gates.length === 0 ? (
-        <div className="rounded-lg border border-dashed border-border p-8 text-center text-sm text-muted-foreground">
-          No Gates awaiting a decision.
-        </div>
+        <EmptyState label="No Gates awaiting a decision." />
       ) : (
         <div className="grid gap-3">
           {gates.map((g) => (

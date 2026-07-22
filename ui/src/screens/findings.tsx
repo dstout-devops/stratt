@@ -5,10 +5,11 @@ import { findingsQuery, findingQuery, findingEvidenceQuery } from "@/lib/data";
 import { useHoverPrefetch } from "@/lib/prefetch";
 import { StateChip } from "@/components/state-chip";
 import { findingState } from "@/lib/states";
+import { TableShell } from "@/components/table";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
 import { relTime } from "@/lib/format";
-import { ErrorLine } from "@/components/feedback";
+import { ErrorLine, EmptyState, ListSkeleton } from "@/components/feedback";
 import type { Schema } from "@/api/client";
 
 export function FindingsList() {
@@ -28,34 +29,23 @@ export function FindingsList() {
       </div>
       {error && <ErrorLine error={error} />}
       {isPending ? (
-        <div className="space-y-2">
-          {Array.from({ length: 8 }).map((_, i) => (
-            <Skeleton key={i} className="h-9 w-full" />
-          ))}
-        </div>
+        <ListSkeleton />
       ) : findings.length === 0 ? (
-        <div className="rounded-lg border border-dashed border-border p-8 text-center text-sm text-muted-foreground">
-          Clean estate — no Findings.
-        </div>
+        <EmptyState label="Clean estate — no Findings." />
       ) : (
-        <div className="overflow-hidden rounded-lg border border-border">
-          <table className="w-full text-sm">
-            <thead className="bg-card text-left text-xs text-muted-foreground">
-              <tr>
-                <th className="px-3 py-2 font-medium">Severity</th>
-                <th className="px-3 py-2 font-medium">Target</th>
-                <th className="px-3 py-2 font-medium">Baseline</th>
-                <th className="px-3 py-2 font-medium">Status</th>
-                <th className="px-3 py-2 text-right font-medium">Last seen</th>
-              </tr>
-            </thead>
-            <tbody>
-              {findings.map((f) => (
-                <FindingRow key={f.id} f={f} />
-              ))}
-            </tbody>
-          </table>
-        </div>
+        <TableShell
+          head={[
+            "Severity",
+            "Target",
+            "Baseline",
+            "Status",
+            { label: "Last seen", align: "right" },
+          ]}
+        >
+          {findings.map((f) => (
+            <FindingRow key={f.id} f={f} />
+          ))}
+        </TableShell>
       )}
     </div>
   );

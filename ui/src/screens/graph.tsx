@@ -4,10 +4,11 @@ import { viewsQuery, viewEntitiesQuery, entityQuery, contractsQuery } from "@/li
 import { useHoverPrefetch } from "@/lib/prefetch";
 import { SchemaValue } from "@/components/schema-value";
 import { contractIndex } from "@/lib/schema";
+import { TableShell } from "@/components/table";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
 import { relTime } from "@/lib/format";
-import { ErrorLine } from "@/components/feedback";
+import { ErrorLine, EmptyState } from "@/components/feedback";
 import type { Schema } from "@/api/client";
 
 export function ViewsList() {
@@ -20,7 +21,7 @@ export function ViewsList() {
       {isPending ? (
         <Skeleton className="h-40 w-full" />
       ) : views.length === 0 ? (
-        <Empty label="No Views declared." />
+        <EmptyState label="No Views declared." />
       ) : (
         <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-3">
           {views.map((v) => (
@@ -65,25 +66,13 @@ export function ViewDetail() {
       {isPending ? (
         <Skeleton className="h-40 w-full" />
       ) : entities.length === 0 ? (
-        <Empty label="No entities match this View." />
+        <EmptyState label="No entities match this View." />
       ) : (
-        <div className="overflow-hidden rounded-lg border border-border">
-          <table className="w-full text-sm">
-            <thead className="bg-card text-left text-xs text-muted-foreground">
-              <tr>
-                <th className="px-3 py-2 font-medium">Kind</th>
-                <th className="px-3 py-2 font-medium">Entity</th>
-                <th className="px-3 py-2 font-medium">Labels</th>
-                <th className="px-3 py-2 font-medium">Observed by</th>
-              </tr>
-            </thead>
-            <tbody>
-              {entities.map((e) => (
-                <EntityRow key={e.id} e={e} />
-              ))}
-            </tbody>
-          </table>
-        </div>
+        <TableShell head={["Kind", "Entity", "Labels", "Observed by"]}>
+          {entities.map((e) => (
+            <EntityRow key={e.id} e={e} />
+          ))}
+        </TableShell>
       )}
     </div>
   );
@@ -166,7 +155,7 @@ export function EntityDetail() {
             <SchemaValue value={f.value} schema={index.get(`facets/${f.namespace}`)} />
           </div>
         ))}
-        {facets.length === 0 && <Empty label="No Facets on this Entity yet." />}
+        {facets.length === 0 && <EmptyState label="No Facets on this Entity yet." />}
       </div>
     </div>
   );
@@ -187,12 +176,4 @@ function ProvenanceBadge({ p }: { p: Schema["Provenance"] }) {
     );
   }
   return inner;
-}
-
-function Empty({ label }: { label: string }) {
-  return (
-    <div className="rounded-lg border border-dashed border-border p-8 text-center text-sm text-muted-foreground">
-      {label}
-    </div>
-  );
 }

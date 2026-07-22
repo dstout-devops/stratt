@@ -4,6 +4,7 @@ import { sourcesQuery, emittersQuery } from "@/lib/data";
 import { TableShell, Tabs } from "@/components/table";
 import { Badge } from "@/components/ui/badge";
 import { StateChip } from "@/components/state-chip";
+import { homeState } from "@/lib/states";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ErrorLine, EmptyState } from "@/components/feedback";
 import type { Schema } from "@/api/client";
@@ -72,11 +73,4 @@ function EmittersTab() {
       ))}
     </TableShell>
   );
-}
-
-function homeState(status: string): Parameters<typeof StateChip>[0]["state"] {
-  if (status.includes("active")) return "ok";
-  if (status.includes("standby") || status.includes("sealed")) return "attention";
-  if (status.includes("degraded") || status.includes("uncertain")) return "degraded";
-  return "pending";
 }

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { runState, findingState, stepState } from "@/lib/states";
+import { runState, findingState, stepState, homeState } from "@/lib/states";
 
 // The state vocabulary is load-bearing: a color/icon means the same thing across every §1.8 descent
 // screen, so the status→State mapping is pinned here (design-tokens §5.1).
@@ -30,5 +30,17 @@ describe("findingState", () => {
     expect(findingState("serious")).toBe("degraded");
     expect(findingState("warning")).toBe("attention");
     expect(findingState("info")).toBe("ok");
+  });
+});
+
+describe("homeState", () => {
+  it("maps a Source's Cell-homing status onto the shared palette (substring, rehoming suffix)", () => {
+    expect(homeState("active")).toBe("ok");
+    expect(homeState("active→cell-b")).toBe("ok");
+    expect(homeState("standby")).toBe("attention");
+    expect(homeState("sealed")).toBe("attention");
+    expect(homeState("degraded")).toBe("degraded");
+    expect(homeState("uncertain")).toBe("degraded");
+    expect(homeState("unknown-status")).toBe("pending");
   });
 });

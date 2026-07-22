@@ -13,8 +13,22 @@ workspace).
 | **playwright** | stdio (`npx @playwright/mcp`) | Drives a real browser so Claude can visually verify the React UI (charter §3.1). | First real use may need `npx playwright install chromium`. |
 
 GitHub is intentionally **not** an MCP server — per Claude Code best practices the `gh` CLI is the
-most context-efficient path, and it's installed in the devcontainer. Use `gh` for PRs/issues/releases
-(and remember `git commit -s` for DCO, charter §1.3).
+most context-efficient path, and it's installed by the `github-cli` devcontainer feature. Use `gh`
+for PRs/issues/releases (and remember `git commit -s` for DCO, charter §1.3).
+
+> **Auth is automatic — no stored token.** `gh` needs its own token: the devcontainer forwards your
+> host's **git** credentials via VSCode's credential helper (so `git push` / `pull` / `fetch` work
+> out of the box), but that does **not** authenticate `gh`. The container bootstrap
+> ([`.devcontainer/setup-gh-auth.sh`](../.devcontainer/setup-gh-auth.sh), run by `postCreateCommand`)
+> teaches every new shell to **borrow the same forwarded credential** as `GH_TOKEN`, derived live
+> from `git credential fill` — nothing is written to disk or committed. So `gh` (and Claude Code's
+> Bash tool, which initializes from the shell profile) work out of the box.
+>
+> Scope note: the borrowed VSCode OAuth token carries `repo`, `workflow`, `gist` — enough for
+> PRs / issues / releases / commit history, **not** org-admin (`read:org`). `gh auth login
+> --with-token` is *rejected* for that missing scope, which is exactly why the snippet uses the
+> `GH_TOKEN` env path (it skips the login-time gate). A GitHub MCP server would need the same token,
+> so it buys nothing over `gh` here — this, not a server.
 
 ## Optional — substrate MCP servers (wire when running the dev stack)
 

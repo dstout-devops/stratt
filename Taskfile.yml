@@ -45,6 +45,14 @@ tasks:
       - task: versions
       - task: evergreen
 
+  setup:gh-auth:
+    # Kept OUT of setup:devcontainer (which is host-reproducible + side-effect-free): this appends to
+    # the shell rc files, so it is container-only and invoked explicitly from postCreateCommand.sh.
+    desc: Container-only — let gh borrow the VSCode-forwarded git credential (no stored token)
+    silent: true
+    cmds:
+      - bash {{.ROOT_DIR}}/.devcontainer/setup-gh-auth.sh
+
   versions:
     desc: Print installed toolchain versions
     silent: true

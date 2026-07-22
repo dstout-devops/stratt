@@ -11,36 +11,23 @@ import {
 } from "@/lib/data";
 import { SchemaValue } from "@/components/schema-value";
 import { contractIndex } from "@/lib/schema";
+import { TableShell, Tabs } from "@/components/table";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
 import { StateChip } from "@/components/state-chip";
 import { findingState } from "@/lib/states";
 import { relTime } from "@/lib/format";
-import { ErrorLine } from "@/components/feedback";
+import { ErrorLine, EmptyState } from "@/components/feedback";
 import type { Schema } from "@/api/client";
 
 type Tab = "intents" | "assignments" | "blueprints" | "plan";
-const TABS: Tab[] = ["intents", "assignments", "blueprints", "plan"];
+const TABS = ["intents", "assignments", "blueprints", "plan"] as const;
 
 export function IntentsPage() {
   const [tab, setTab] = useState<Tab>("intents");
   return (
     <div className="p-6">
-      <div className="mb-4 flex items-center gap-1">
-        {TABS.map((t) => (
-          <button
-            key={t}
-            onClick={() => setTab(t)}
-            className={
-              tab === t
-                ? "rounded-md bg-accent px-3 py-1.5 text-sm font-medium capitalize"
-                : "rounded-md px-3 py-1.5 text-sm capitalize text-muted-foreground hover:text-foreground"
-            }
-          >
-            {t}
-          </button>
-        ))}
-      </div>
+      <Tabs tabs={TABS} value={tab} onChange={setTab} />
       {tab === "intents" && <IntentsTab />}
       {tab === "assignments" && <AssignmentsTab />}
       {tab === "blueprints" && <BlueprintsTab />}
@@ -54,7 +41,7 @@ function IntentsTab() {
   const intents = data ?? [];
   if (isPending) return <Skeleton className="h-40 w-full" />;
   if (error) return <ErrorLine error={error} />;
-  if (intents.length === 0) return <Empty label="No Intents declared." />;
+  if (intents.length === 0) return <EmptyState label="No Intents declared." />;
   return (
     <TableShell head={["Intent", "Kind", "On remove"]}>
       {intents.map((i) => (
@@ -83,7 +70,7 @@ function AssignmentsTab() {
   const rows = data ?? [];
   if (isPending) return <Skeleton className="h-40 w-full" />;
   if (error) return <ErrorLine error={error} />;
-  if (rows.length === 0) return <Empty label="No Assignments." />;
+  if (rows.length === 0) return <EmptyState label="No Assignments." />;
   return (
     <TableShell head={["Assignment", "Intent", "View", "Blueprint", "Max delta"]}>
       {rows.map((a) => (
@@ -114,7 +101,7 @@ function BlueprintsTab() {
   const rows = data ?? [];
   if (isPending) return <Skeleton className="h-40 w-full" />;
   if (error) return <ErrorLine error={error} />;
-  if (rows.length === 0) return <Empty label="No Blueprints." />;
+  if (rows.length === 0) return <EmptyState label="No Blueprints." />;
   return (
     <TableShell head={["Blueprint", "Version", "For", "Severity", "Routes"]}>
       {rows.map((b) => (
@@ -183,7 +170,7 @@ function PlanTab() {
           </div>
         </div>
       ))}
-      {(c.deltas ?? []).length === 0 && <Empty label="No Assignment deltas." />}
+      {(c.deltas ?? []).length === 0 && <EmptyState label="No Assignment deltas." />}
     </div>
   );
 }
@@ -208,7 +195,7 @@ export function IntentDetail() {
   if (!intent)
     return (
       <div className="p-6">
-        <Empty label="Intent not found." />
+        <EmptyState label="Intent not found." />
       </div>
     );
   const schema = contractIndex(contracts.data).get(`intents/${intent.kind}`);
@@ -225,33 +212,6 @@ export function IntentDetail() {
       <div className="rounded-lg border border-border bg-card p-4">
         <SchemaValue value={intent.spec} schema={schema} />
       </div>
-    </div>
-  );
-}
-
-function TableShell({ head, children }: { head: string[]; children: React.ReactNode }) {
-  return (
-    <div className="overflow-hidden rounded-lg border border-border">
-      <table className="w-full text-sm">
-        <thead className="bg-card text-left text-xs text-muted-foreground">
-          <tr>
-            {head.map((h) => (
-              <th key={h} className="px-3 py-2 font-medium">
-                {h}
-              </th>
-            ))}
-          </tr>
-        </thead>
-        <tbody>{children}</tbody>
-      </table>
-    </div>
-  );
-}
-
-function Empty({ label }: { label: string }) {
-  return (
-    <div className="rounded-lg border border-dashed border-border p-8 text-center text-sm text-muted-foreground">
-      {label}
     </div>
   );
 }

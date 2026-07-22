@@ -50,3 +50,12 @@ export function findingState(severity: string): State {
       return "ok";
   }
 }
+
+/** homeState maps a Source's Cell-homing status (active / standby / sealed / degraded …) onto the
+ * shared state palette. Substring match because the status carries a rehoming suffix. */
+export function homeState(status: string): State {
+  if (status.includes("active")) return "ok";
+  if (status.includes("standby") || status.includes("sealed")) return "attention";
+  if (status.includes("degraded") || status.includes("uncertain")) return "degraded";
+  return "pending";
+}
