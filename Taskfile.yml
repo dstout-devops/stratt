@@ -397,6 +397,10 @@ tasks:
       - "{{.HELM}} template stratt deploy/charts/stratt -f deploy/charts/stratt/values-dev-kind.yaml -f deploy/charts/stratt/values-e2e.yaml > /dev/null"
       # Self-contained bootstrap profile (in-cluster substrate) — must render too.
       - "{{.HELM}} template stratt deploy/charts/stratt -f deploy/charts/stratt/values-allinone.yaml > /dev/null"
+      # Self-deploy profile (helm Actuator plugin + demo chart, M2/ADR-0092).
+      - "{{.HELM}} template stratt deploy/charts/stratt -f deploy/charts/stratt/values-allinone.yaml -f deploy/charts/stratt/values-selfdeploy.yaml > /dev/null"
+      # Self-deploy profile (helm Actuator plugin + demo chart, M2/ADR-0092).
+      - "{{.HELM}} template stratt deploy/charts/stratt -f deploy/charts/stratt/values-allinone.yaml -f deploy/charts/stratt/values-selfdeploy.yaml > /dev/null"
 
   tools:helm:
     desc: Install the pinned helm binary to .bin/ (idempotent; zero-manual bootstrap)

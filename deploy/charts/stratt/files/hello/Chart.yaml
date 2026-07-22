@@ -1,0 +1,11 @@
+# A tiny, dependency-free demo chart the Helm Actuator deploys to prove the
+# self-managing loop end to end (M2, ADR-0092): "Stratt deploys a workload into its
+# own cluster via helm". Delivered to the plugin pod as a ConfigMap (no chart repo,
+# no OCI pull) and installed with `helm upgrade --install`. Renders one ConfigMap so
+# the proof is observable with `kubectl get configmap` — nothing to schedule or pull.
+apiVersion: v2
+name: hello
+description: Stratt self-deploy dogfood marker (M2)
+type: application
+version: 0.1.0
+appVersion: "1.0"

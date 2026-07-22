@@ -1,0 +1,27 @@
+# M2 self-deploy overlay (ADR-0092): deploys the Helm Actuator plugin in-cluster and
+# the tiny demo chart it will install, so Stratt materializes a Kubernetes release
+# through its OWN reconcile/actuator loop. Layer ON TOP of values-allinone.yaml.
+# Release name "stratt" (any namespace — service names are release-prefixed). DEV.
+
+# Ship the demo chart ConfigMap (templates/helm-demo-chart.yaml).
+helmDemoChart: true
+
+plugins:
+  - name: helm
+    image:
+      repository: stratt-plugin-helm
+      tag: dev
+      pullPolicy: Never # kind-loaded (task image:helm-plugin)
+    tmpDir: true # writable /tmp for helm's cache (read-only rootfs)
+    demoChart: true # mount the hello chart at /charts/hello
+    env:
+      STRATT_HELM_CHART_ROOT: /charts
+    # Core-tier self-deploy deploy RBAC. charter-guardian: a broad-SA path is
+    # admissible for the core-tier self-deploy dogfood; per-route/per-namespace
+    # scoped ServiceAccounts are the REQUIRED model for general chart deploys
+    # (ADR-0092 §6 follow-up). Scoped to the kinds the demo chart + a plugin
+    # Deployment touch — never cluster-admin.
+    kubeAccess:
+      apiGroups: ["", "apps"]
+      resources: ["configmaps", "services", "deployments", "serviceaccounts", "secrets"]
+      verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]

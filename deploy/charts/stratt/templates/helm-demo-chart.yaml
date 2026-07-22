@@ -1,0 +1,17 @@
+{{- if .Values.helmDemoChart }}
+# The tiny demo chart (files/hello/**) shipped as a ConfigMap the helm Actuator
+# plugin mounts at its chart root — a self-contained self-deploy proof (M2, ADR-0092):
+# no chart repo, no OCI pull. ConfigMap keys can't contain "/", so files are flattened
+# (templates__configmap.yaml) and restored to nested paths on mount (plugins.yaml
+# .demoChart). DEV — gated on .Values.helmDemoChart, off in production.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "stratt.fullname" . }}-hello-chart
+  labels: {{- include "stratt.labels" . | nindent 4 }}
+data:
+{{- range $path, $bytes := .Files.Glob "files/hello/**" }}
+  {{ trimPrefix "files/hello/" $path | replace "/" "__" }}: |-
+{{ $.Files.Get $path | indent 4 }}
+{{- end }}
+{{- end }}

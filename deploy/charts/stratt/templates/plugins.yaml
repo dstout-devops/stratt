@@ -68,7 +68,7 @@ spec:
                  needs the estate's hosts/ files. Mount ONLY those keys from the
                  inline declarations ConfigMap (least privilege — not the whole
                  estate) at /hosts. Dev/inline path; prod delivers via git-sync. */ -}}
-          {{- if or .estateHosts .tmpDir }}
+          {{- if or .estateHosts .tmpDir .demoChart }}
           volumeMounts:
             {{- if .estateHosts }}
             - name: estate-hosts
@@ -81,8 +81,15 @@ spec:
             - name: tmp
               mountPath: /tmp
             {{- end }}
+            {{- if .demoChart }}
+            # The M2 self-deploy demo chart, mounted at the helm Actuator's chart root
+            # (STRATT_HELM_CHART_ROOT=/charts → chart "hello" resolves to /charts/hello).
+            - name: demo-chart
+              mountPath: /charts/hello
+              readOnly: true
+            {{- end }}
           {{- end }}
-      {{- if or .estateHosts .tmpDir }}
+      {{- if or .estateHosts .tmpDir .demoChart }}
       volumes:
         {{- if .estateHosts }}
         - name: estate-hosts
@@ -97,6 +104,16 @@ spec:
         {{- if .tmpDir }}
         - name: tmp
           emptyDir: {}
+        {{- end }}
+        {{- if .demoChart }}
+        - name: demo-chart
+          configMap:
+            name: {{ include "stratt.fullname" $ }}-hello-chart
+            items:
+              {{- range $path, $bytes := $.Files.Glob "files/hello/**" }}
+              - key: {{ trimPrefix "files/hello/" $path | replace "/" "__" }}
+                path: {{ trimPrefix "files/hello/" $path }}
+              {{- end }}
         {{- end }}
       {{- end }}
 ---
