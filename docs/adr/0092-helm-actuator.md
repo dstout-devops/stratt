@@ -101,6 +101,24 @@ dry-run), the `uninstall` verb, and release-status → Entity projection — eac
    **verify the chart's cosign signature / `.prov` provenance alongside the digest** (charter-guardian
    hardening). lint/NOTES warn on an unpinned or unverified chart.
 
+8. **Dual surface — the complete plugin ships BOTH an Actuator and an Action**
+   (amendment 2026-07-22, steward direction "most complete and proper"; the live
+   integration exposed the gap). helm has two legitimate uses and the exemplar is
+   `crossplane` (Apply + Invoke + Observe — the full-featured plugin, ADR-0060):
+   - **`helm/deploy` Action** (`Invoke`) — deploy ONE release to ONE named namespace,
+     **targetless** (the `RunAction` launch path needs no View). This is the
+     self-deploy / single-release build path, mirroring `crossplane/provision`. It
+     exists because an `actuator:` Run **requires a View resolving to ≥1 Entity**
+     (`ResolveTargets` fails on an empty View — Actuators are per-target), which a
+     cluster-scoped single deploy has no host to satisfy.
+   - **`helm` Actuator** (`Plan`/`Apply`) — deploy a release to **each** target in a
+     View (fleet / multi-namespace / multi-cluster rollout — the ADR-0083 route-to-a-
+     group). **Refinement (follow-up):** the v1 Apply is release-scoped (item_key "");
+     true per-target fan-out needs a target→namespace/release mapping (each View
+     Entity is a namespace/cluster) — the fleet-deploy completion, its own slice.
+   Both reuse one plugin + one grant; contracts `actions/helm/deploy.{input,output}`
+   (Action) and `actuators/helm.input` (Actuator).
+
 ## Charter alignment
 
 - **§2.3 Actuator (not Action):** helm interprets *tool content* (a chart) and produces many effects

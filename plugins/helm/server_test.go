@@ -114,8 +114,85 @@ func TestGetManifest_ActuatorPlanApplyNoDestroy(t *testing.T) {
 	if !verbs[pluginv1.Verb_VERB_PLAN] || !verbs[pluginv1.Verb_VERB_APPLY] {
 		t.Fatalf("actuator must advertise PLAN + APPLY, got %v", man.GetVerbs())
 	}
+	if !verbs[pluginv1.Verb_VERB_INVOKE] {
+		t.Fatal("actuator must advertise INVOKE (the targetless helm/deploy Action — dual-surface)")
+	}
 	if verbs[pluginv1.Verb_VERB_DESTROY] {
 		t.Fatal("v1 must NOT advertise DESTROY (ADR-0092 §4 — uninstall arrives with its own review)")
+	}
+}
+
+type invokeCapture struct {
+	grpc.ServerStream
+	ctx  context.Context
+	msgs []*pluginv1.InvokeResponse
+}
+
+func (c *invokeCapture) Send(m *pluginv1.InvokeResponse) error {
+	c.msgs = append(c.msgs, m)
+	return nil
+}
+func (c *invokeCapture) Context() context.Context { return c.ctx }
+
+func runInvoke(t *testing.T, s *Server, action, args string, dryRun bool) []*pluginv1.InvokeResponse {
+	t.Helper()
+	cap := &invokeCapture{ctx: context.Background()}
+	err := s.Invoke(&pluginv1.InvokeRequest{
+		Action: action, Args: &pluginv1.Payload{Bytes: []byte(args)}, DryRun: dryRun,
+		Envelope: &pluginv1.Envelope{CorrelationId: "cid-1"},
+	}, cap)
+	if err != nil {
+		t.Fatalf("invoke: %v", err)
+	}
+	return cap.msgs
+}
+
+func invokeTerminal(msgs []*pluginv1.InvokeResponse) *pluginv1.InvokeResponse {
+	for _, m := range msgs {
+		if m.GetEvent().GetTerminal() {
+			return m
+		}
+	}
+	return nil
+}
+
+// TestInvoke_DeployAction proves the targetless helm/deploy Action runs
+// `helm upgrade --install` (Helm-4 flags), streams with the correlation id, and
+// folds an ok terminal naming its output contract.
+func TestInvoke_DeployAction(t *testing.T) {
+	f := &fakeHelm{out: map[string]string{"upgrade": "Release \"app\" has been deployed"}, rc: map[string]int{"upgrade": 0}}
+	msgs := runInvoke(t, newServer(f), "helm/deploy", desired, false)
+	if f.lastArgs[0] != "upgrade" || !argsContain(f.lastArgs, "--install") || !argsContain(f.lastArgs, "--rollback-on-failure") {
+		t.Fatalf("Invoke must run helm upgrade --install with Helm-4 flags, got %v", f.lastArgs)
+	}
+	term := invokeTerminal(msgs)
+	if term == nil || !term.GetEvent().GetOk() {
+		t.Fatal("a successful deploy must terminate ok")
+	}
+	if term.GetEvent().GetCorrelationId() != "cid-1" {
+		t.Fatal("the terminal must carry the correlation id (§1.8 descent)")
+	}
+	if term.GetResult().GetOutputContract().GetSchemaId() == "" {
+		t.Fatal("the deploy action must name an output contract")
+	}
+}
+
+// TestInvoke_UnknownActionRejected proves an unknown action name is refused.
+func TestInvoke_UnknownActionRejected(t *testing.T) {
+	err := newServer(&fakeHelm{}).Invoke(
+		&pluginv1.InvokeRequest{Action: "helm/bogus", Args: &pluginv1.Payload{Bytes: []byte(desired)}},
+		&invokeCapture{ctx: context.Background()})
+	if err == nil {
+		t.Fatal("an unknown action must be rejected")
+	}
+}
+
+// TestInvoke_FailureFolds proves a non-zero helm upgrade folds to a not-ok terminal.
+func TestInvoke_FailureFolds(t *testing.T) {
+	f := &fakeHelm{out: map[string]string{"upgrade": "Error: UPGRADE FAILED"}, rc: map[string]int{"upgrade": 1}}
+	term := invokeTerminal(runInvoke(t, newServer(f), "helm/deploy", desired, false))
+	if term == nil || term.GetEvent().GetOk() {
+		t.Fatal("a failed deploy must terminate not-ok")
 	}
 }
 

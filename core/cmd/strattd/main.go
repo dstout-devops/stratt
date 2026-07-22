@@ -721,10 +721,19 @@ func run(ctx context.Context, log *slog.Logger) error {
 			Source:         types.Source{Kind: "helm", Name: env("STRATT_HELM_SOURCE_NAME", "helm")},
 		}
 		host := pluginhost.New(store, pluginv1.NewPluginServiceClient(conn), grant, log)
+		// The per-target Actuator (Plan/Apply — fleet deploy across a View, ADR-0083
+		// route materialization).
 		if err := registerPluginActuator("helm", host, true, grant, nil); err != nil {
 			return err
 		}
-		log.Info("helm plugin actuator registered", "addr", addr)
+		// The targetless helm/deploy Action (Invoke — deploy one release to one
+		// namespace, no View anchor; the self-deploy / single-release build path,
+		// mirrors crossplane/provision). Dual-surface plugin (ADR-0092). Reuses the
+		// host/grant; the Gate + the launching Principal's authz remain the control.
+		if err := registerPluginAction("helm/deploy", host, true); err != nil {
+			return err
+		}
+		log.Info("helm plugin actuator + helm/deploy action registered", "addr", addr)
 	} else {
 		log.Info("no Helm plugin configured (STRATT_HELM_PLUGIN_ADDR empty); actuator disabled")
 	}

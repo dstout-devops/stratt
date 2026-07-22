@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "stratt:contract:actions/helm/deploy.output:v1",
+  "title": "helm/deploy output",
+  "description": "Output Contract for the helm/deploy Action (ADR-0092): the deployed release identity. Release-status → Entity projection is a follow-up Normalizer.",
+  "type": "object",
+  "properties": {
+    "release": { "type": "string" },
+    "namespace": { "type": "string" }
+  },
+  "additionalProperties": false
+}

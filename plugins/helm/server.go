@@ -22,12 +22,20 @@ import (
 	"sync/atomic"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	pluginv1 "github.com/dstout-devops/stratt/sdk/stratt/plugin/v1"
 )
 
 const protocolVersion = "v1"
+
+// actionDeploy is the targetless Action this plugin serves over Invoke: deploy ONE
+// release to ONE named namespace (no View anchor). The per-target Actuator (Apply)
+// is the fleet-deploy half; the Action is the single-release build (ADR-0092
+// dual-surface, mirroring crossplane/provision).
+const actionDeploy = "helm/deploy"
 
 // params is the opaque `desired` payload the plugin parses (the core never reads it,
 // §1.1). The input Contract (contracts/actuators/helm.input) is validated core-side
@@ -64,10 +72,13 @@ func (s *Server) GetManifest(context.Context, *pluginv1.GetManifestRequest) (*pl
 		PluginId:        s.cfg.PluginID,
 		ProtocolVersion: protocolVersion,
 		Class:           pluginv1.PluginClass_PLUGIN_CLASS_ACTUATOR,
-		// PLAN (helm template) + APPLY (helm upgrade --install). NO DESTROY in v1
-		// (ADR-0092 §4) — the uninstall verb arrives with its own review, as opentofu
-		// deferred destroy.
-		Verbs:        []pluginv1.Verb{pluginv1.Verb_VERB_PLAN, pluginv1.Verb_VERB_APPLY},
+		// PLAN (helm template) + APPLY (helm upgrade --install, per-target Actuator) +
+		// INVOKE (the targetless `helm/deploy` Action — deploy one release to one named
+		// namespace, no View anchor; ADR-0092 dual-surface). NO DESTROY in v1 (§4) — the
+		// uninstall verb arrives with its own review, as opentofu deferred destroy.
+		Verbs: []pluginv1.Verb{
+			pluginv1.Verb_VERB_PLAN, pluginv1.Verb_VERB_APPLY, pluginv1.Verb_VERB_INVOKE,
+		},
 		Capabilities: []string{"apply.dry-run"}, // helm upgrade --dry-run=server
 		MinProtocol:  protocolVersion,
 		MaxProtocol:  protocolVersion,
@@ -196,19 +207,7 @@ func (s *Server) Apply(req *pluginv1.ApplyRequest, stream grpc.ServerStreamingSe
 		}
 	}
 
-	args := []string{"upgrade", "--install"}
-	args = append(args, tail...)
-	if req.GetDryRun() {
-		// Server-side dry run: render + validate against the API server, never apply.
-		args = append(args, "--dry-run=server")
-	} else {
-		// Helm-4 flags (dependency-scout): --rollback-on-failure is v4's --atomic.
-		args = append(args, "--rollback-on-failure", "--wait")
-		if p.CreateNamespace {
-			args = append(args, "--create-namespace")
-		}
-	}
-	_, rc, rerr := s.run.run(ctx, "", env, args, onLine)
+	_, rc, rerr := s.run.run(ctx, "", env, upgradeArgs(tail, p.CreateNamespace, req.GetDryRun()), onLine)
 	if rerr != nil {
 		return sendApplyTerminal(stream, false, pluginv1.ItemResult_STATUS_FAILED, rerr.Error(), next())
 	}
@@ -237,6 +236,78 @@ func sendApplyTerminal(stream grpc.ServerStreamingServer[pluginv1.ApplyResponse]
 		Event:  &pluginv1.TaskEvent{Terminal: true, Ok: ok, At: timestamppb.Now(), Message: msg, Fields: map[string]string{"kind": "finished"}},
 		Result: &pluginv1.ItemResult{ItemKey: "", Status: status},
 	})
+}
+
+// upgradeArgs builds the `helm upgrade --install` argument list shared by the Apply
+// (Actuator) and Invoke (Action) paths. Helm-4 flags (dependency-scout):
+// --rollback-on-failure is v4's --atomic; a dry run is server-side and never mutates.
+func upgradeArgs(tail []string, createNamespace, dryRun bool) []string {
+	args := append([]string{"upgrade", "--install"}, tail...)
+	if dryRun {
+		return append(args, "--dry-run=server")
+	}
+	args = append(args, "--rollback-on-failure", "--wait")
+	if createNamespace {
+		args = append(args, "--create-namespace")
+	}
+	return args
+}
+
+// Invoke serves the targetless `helm/deploy` Action (ADR-0092 dual-surface): deploy
+// ONE release to ONE named namespace with no View anchor — the launch path is
+// RunAction (targetless), so a self-deploy / single-release build never needs a host
+// Entity to point at (mirrors crossplane/provision). It runs the same
+// `helm upgrade --install` as Apply, streaming each line as a typed InvokeResponse
+// event (§1.8). No graph write-back in v1 (release-status → Entity is a follow-up
+// Normalizer). dry_run is a server-side dry run that never mutates.
+func (s *Server) Invoke(req *pluginv1.InvokeRequest, stream grpc.ServerStreamingServer[pluginv1.InvokeResponse]) error {
+	ctx := stream.Context()
+	if action := req.GetAction(); action != "" && action != actionDeploy {
+		return status.Errorf(codes.InvalidArgument, "helm: unknown action %q (only %q)", action, actionDeploy)
+	}
+	cid := req.GetEnvelope().GetCorrelationId()
+	p, tail, env, valuesFile, err := s.prepare(req.GetArgs().GetBytes())
+	if err != nil {
+		return invokeFailed(stream, cid, err)
+	}
+	if valuesFile != "" {
+		defer os.Remove(valuesFile)
+	}
+	var seq int64
+	next := func() int64 { return atomic.AddInt64(&seq, 1) }
+	onLine := func(line []byte) {
+		if ev := lineToEvent(next(), timestamppb.Now(), line); ev != nil {
+			ev.CorrelationId = cid
+			_ = stream.Send(&pluginv1.InvokeResponse{Event: ev})
+		}
+	}
+	_, rc, rerr := s.run.run(ctx, "", env, upgradeArgs(tail, p.CreateNamespace, req.GetDryRun()), onLine)
+	if rerr != nil {
+		return invokeFailed(stream, cid, rerr)
+	}
+	if rc != 0 {
+		return invokeFailed(stream, cid, fmt.Errorf("helm upgrade failed (rc=%d): %s", rc, "see the streamed diagnostics"))
+	}
+	msg := fmt.Sprintf("helm deployed release %q to namespace %q", p.Release, p.Namespace)
+	if req.GetDryRun() {
+		msg = fmt.Sprintf("dry-run ok: release %q would deploy to %q", p.Release, p.Namespace)
+	}
+	return stream.Send(&pluginv1.InvokeResponse{
+		Event: &pluginv1.TaskEvent{
+			Level: pluginv1.TaskEvent_LEVEL_INFO, At: timestamppb.Now(), CorrelationId: cid,
+			Terminal: true, Ok: true, Message: msg, Fields: map[string]string{"kind": "finished", "release": p.Release},
+		},
+		Result: &pluginv1.InvokeResult{OutputContract: &pluginv1.ContractRef{SchemaId: "actions/helm/deploy.output"}},
+	})
+}
+
+// invokeFailed emits the terminal not-ok InvokeResponse — a domain failure rides the
+// typed descent channel (§1.8), never a bare transport error.
+func invokeFailed(stream grpc.ServerStreamingServer[pluginv1.InvokeResponse], cid string, cause error) error {
+	return stream.Send(&pluginv1.InvokeResponse{Event: &pluginv1.TaskEvent{
+		Level: pluginv1.TaskEvent_LEVEL_ERROR, At: timestamppb.Now(), CorrelationId: cid,
+		Terminal: true, Ok: false, Message: cause.Error(), Fields: map[string]string{"kind": "finished"},
+	}})
 }
 
 // tailLines returns the last n non-empty lines of helm output, for a concise error

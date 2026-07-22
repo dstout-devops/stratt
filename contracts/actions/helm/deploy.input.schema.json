@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "stratt:contract:actions/helm/deploy.input:v1",
+  "title": "helm/deploy input",
+  "description": "Input Contract for the targetless helm/deploy Action (ADR-0092 dual-surface): deploy ONE Helm release to ONE named namespace (helm upgrade --install, Helm-4 flags), with no View anchor — the self-deploy / single-release build path (mirrors crossplane/provision). The per-target Actuator (actuators/helm.input) is the fleet-deploy half. MUTATING — this Action must sit behind a Gate. `values` is opaque, validated against the chart's own schema by helm (§1.1).",
+  "type": "object",
+  "required": ["chart", "release", "namespace"],
+  "properties": {
+    "chart": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Chart reference: an OCI ref (oci://…, pin by digest — §7.3), a repo chart name (with `repo`), or a local path under the plugin's chart root."
+    },
+    "repo": {
+      "type": "string",
+      "description": "Chart repository URL for a non-OCI repo chart (helm --repo)."
+    },
+    "version": {
+      "type": "string",
+      "description": "Exact chart version (or digest) — pin in production (§7.3)."
+    },
+    "release": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^[a-z0-9]([a-z0-9-]*[a-z0-9])?$",
+      "description": "Helm release name."
+    },
+    "namespace": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^[a-z0-9]([a-z0-9-]*[a-z0-9])?$",
+      "description": "Target namespace for the release."
+    },
+    "values": {
+      "type": "object",
+      "description": "Values overlay, rendered as a values file. Opaque to Stratt (§1.1)."
+    },
+    "createNamespace": {
+      "type": "boolean",
+      "description": "Create the target namespace if absent (helm --create-namespace)."
+    }
+  },
+  "additionalProperties": false
+}
