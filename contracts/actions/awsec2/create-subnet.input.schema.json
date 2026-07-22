@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "stratt:contract:actions/awsec2/create-subnet.input:v1",
+  "title": "awsec2/create-subnet input",
+  "description": "Input for awsec2/create-subnet (ADR-0095 C2, fire-and-return). AWS credentials inject as a CredentialRef (§2.5).",
+  "type": "object",
+  "properties": {
+    "vpcId": { "type": "string" },
+    "cidrBlock": { "type": "string", "description": "IPv4 CIDR within the VPC, e.g. 10.0.1.0/24" },
+    "availabilityZone": { "type": "string", "description": "omit to let the provider choose" }
+  },
+  "required": ["vpcId", "cidrBlock"],
+  "additionalProperties": false
+}

@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "stratt:contract:actions/awsec2/create-volume.input:v1",
+  "title": "awsec2/create-volume input",
+  "description": "Input for awsec2/create-volume (ADR-0095 C2, fire-and-return). AWS credentials inject as a CredentialRef (§2.5).",
+  "type": "object",
+  "properties": {
+    "availabilityZone": { "type": "string" },
+    "sizeGiB": { "type": "integer", "minimum": 1 },
+    "volumeType": { "type": "string", "description": "e.g. gp3, gp2, io1; omit for the provider default" }
+  },
+  "required": ["availabilityZone", "sizeGiB"],
+  "additionalProperties": false
+}

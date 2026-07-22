@@ -1,0 +1,10 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "stratt:contract:actions/awsec2/create-vpc.output:v1",
+  "title": "awsec2/create-vpc output",
+  "description": "Output: the created VPC id (bindable). stratt:managed-tagged for C3.",
+  "type": "object",
+  "properties": { "vpcId": { "type": "string" } },
+  "required": ["vpcId"],
+  "additionalProperties": false
+}

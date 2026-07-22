@@ -29,6 +29,14 @@ const (
 	actionReboot    = "awsec2/reboot"
 	actionTerminate = "awsec2/terminate"
 	actionTag       = "awsec2/tag"
+	// Resource-provisioning Actions (ADR-0095 C2, fire-and-return). Each stamps a
+	// stratt-owned marker tag at creation so the C3 Syncer / an orphan scan can find
+	// what the platform made (guardian flag 1 — no silent billable leak).
+	actionCreateSG     = "awsec2/create-security-group"
+	actionImportKey    = "awsec2/import-key-pair" // ImportKeyPair (public key) — NEVER CreateKeyPair, whose private-key return would cross the core (§2.5)
+	actionCreateVolume = "awsec2/create-volume"
+	actionCreateVPC    = "awsec2/create-vpc"
+	actionCreateSubnet = "awsec2/create-subnet"
 )
 
 // Facet namespaces this Syncer REQUESTS to own (§2.1); the core honors them only
@@ -53,6 +61,14 @@ type EC2API interface {
 	RebootInstances(ctx context.Context, in *ec2.RebootInstancesInput, opts ...func(*ec2.Options)) (*ec2.RebootInstancesOutput, error)
 	TerminateInstances(ctx context.Context, in *ec2.TerminateInstancesInput, opts ...func(*ec2.Options)) (*ec2.TerminateInstancesOutput, error)
 	CreateTags(ctx context.Context, in *ec2.CreateTagsInput, opts ...func(*ec2.Options)) (*ec2.CreateTagsOutput, error)
+	// Resource provisioning (ADR-0095 C2, fire-and-return). ImportKeyPair — NOT
+	// CreateKeyPair — because CreateKeyPair returns generated PRIVATE key material,
+	// which must never cross the core (§2.5); import takes a caller public key.
+	CreateSecurityGroup(ctx context.Context, in *ec2.CreateSecurityGroupInput, opts ...func(*ec2.Options)) (*ec2.CreateSecurityGroupOutput, error)
+	ImportKeyPair(ctx context.Context, in *ec2.ImportKeyPairInput, opts ...func(*ec2.Options)) (*ec2.ImportKeyPairOutput, error)
+	CreateVolume(ctx context.Context, in *ec2.CreateVolumeInput, opts ...func(*ec2.Options)) (*ec2.CreateVolumeOutput, error)
+	CreateVpc(ctx context.Context, in *ec2.CreateVpcInput, opts ...func(*ec2.Options)) (*ec2.CreateVpcOutput, error)
+	CreateSubnet(ctx context.Context, in *ec2.CreateSubnetInput, opts ...func(*ec2.Options)) (*ec2.CreateSubnetOutput, error)
 }
 
 // Config locates the EC2 Source. Credentials arrive resolved from the plugin's OWN
@@ -127,6 +143,13 @@ func (s *Server) GetManifest(context.Context, *pluginv1.GetManifestRequest) (*pl
 			lifecycleDecl(actionReboot, false),
 			lifecycleDecl(actionTerminate, true),
 			lifecycleDecl(actionTag, true),
+			// Resource-provisioning Actions (C2). Not idempotent — each call creates a
+			// new object; DryRunnable via the EC2 API's own dry-run.
+			lifecycleDecl(actionCreateSG, false),
+			lifecycleDecl(actionImportKey, false),
+			lifecycleDecl(actionCreateVolume, false),
+			lifecycleDecl(actionCreateVPC, false),
+			lifecycleDecl(actionCreateSubnet, false),
 		},
 	}}, nil
 }
@@ -226,6 +249,8 @@ func (s *Server) Invoke(req *pluginv1.InvokeRequest, stream grpc.ServerStreaming
 		return s.invokeLifecycle(ctx, req, stream, api)
 	case actionTag:
 		return s.invokeTag(ctx, req, stream, api)
+	case actionCreateSG, actionImportKey, actionCreateVolume, actionCreateVPC, actionCreateSubnet:
+		return s.invokeCreateResource(ctx, req, stream, api)
 	default:
 		return status.Errorf(codes.InvalidArgument, "awsec2: unknown action %q", req.GetAction())
 	}

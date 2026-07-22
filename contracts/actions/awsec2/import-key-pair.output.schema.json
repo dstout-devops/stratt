@@ -1,0 +1,10 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "stratt:contract:actions/awsec2/import-key-pair.output:v1",
+  "title": "awsec2/import-key-pair output",
+  "description": "Output: the imported key pair name + id (bindable).",
+  "type": "object",
+  "properties": { "keyName": { "type": "string" }, "keyPairId": { "type": "string" } },
+  "required": ["keyName"],
+  "additionalProperties": false
+}

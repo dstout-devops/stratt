@@ -562,6 +562,13 @@ func run(ctx context.Context, log *slog.Logger) error {
 			{"awsec2/reboot", true},
 			{"awsec2/terminate", true},
 			{"awsec2/tag", true},
+			// Resource-provisioning Actions (ADR-0095 C2), each DryRunnable via the
+			// EC2 API's own dry-run; fire-and-return (no Entity until C3).
+			{"awsec2/create-security-group", true},
+			{"awsec2/import-key-pair", true},
+			{"awsec2/create-volume", true},
+			{"awsec2/create-vpc", true},
+			{"awsec2/create-subnet", true},
 		}
 		for _, a := range awsActions {
 			if err := registerPluginAction(a.name, awsHost, a.dryRunnable); err != nil {

@@ -36,6 +36,17 @@ type fakeEC2 struct {
 	lastReb   *ec2.RebootInstancesInput
 	lastTerm  *ec2.TerminateInstancesInput
 	lastTags  *ec2.CreateTagsInput
+	// Resource creates (ADR-0095 C2).
+	sgOut      *ec2.CreateSecurityGroupOutput
+	keyOut     *ec2.ImportKeyPairOutput
+	volOut     *ec2.CreateVolumeOutput
+	vpcOut     *ec2.CreateVpcOutput
+	subnetOut  *ec2.CreateSubnetOutput
+	lastSG     *ec2.CreateSecurityGroupInput
+	lastKey    *ec2.ImportKeyPairInput
+	lastVol    *ec2.CreateVolumeInput
+	lastVpc    *ec2.CreateVpcInput
+	lastSubnet *ec2.CreateSubnetInput
 }
 
 func (f *fakeEC2) DescribeInstances(_ context.Context, _ *ec2.DescribeInstancesInput, _ ...func(*ec2.Options)) (*ec2.DescribeInstancesOutput, error) {
@@ -70,6 +81,31 @@ func (f *fakeEC2) TerminateInstances(_ context.Context, in *ec2.TerminateInstanc
 func (f *fakeEC2) CreateTags(_ context.Context, in *ec2.CreateTagsInput, _ ...func(*ec2.Options)) (*ec2.CreateTagsOutput, error) {
 	f.lastTags = in
 	return &ec2.CreateTagsOutput{}, f.opErr
+}
+
+func (f *fakeEC2) CreateSecurityGroup(_ context.Context, in *ec2.CreateSecurityGroupInput, _ ...func(*ec2.Options)) (*ec2.CreateSecurityGroupOutput, error) {
+	f.lastSG = in
+	return f.sgOut, f.opErr
+}
+
+func (f *fakeEC2) ImportKeyPair(_ context.Context, in *ec2.ImportKeyPairInput, _ ...func(*ec2.Options)) (*ec2.ImportKeyPairOutput, error) {
+	f.lastKey = in
+	return f.keyOut, f.opErr
+}
+
+func (f *fakeEC2) CreateVolume(_ context.Context, in *ec2.CreateVolumeInput, _ ...func(*ec2.Options)) (*ec2.CreateVolumeOutput, error) {
+	f.lastVol = in
+	return f.volOut, f.opErr
+}
+
+func (f *fakeEC2) CreateVpc(_ context.Context, in *ec2.CreateVpcInput, _ ...func(*ec2.Options)) (*ec2.CreateVpcOutput, error) {
+	f.lastVpc = in
+	return f.vpcOut, f.opErr
+}
+
+func (f *fakeEC2) CreateSubnet(_ context.Context, in *ec2.CreateSubnetInput, _ ...func(*ec2.Options)) (*ec2.CreateSubnetOutput, error) {
+	f.lastSubnet = in
+	return f.subnetOut, f.opErr
 }
 
 // captureStream is a fake grpc.ServerStreamingServer[T] recording sent messages.
@@ -296,7 +332,10 @@ func TestGetManifest(t *testing.T) {
 	for _, a := range m.GetActions() {
 		byName[a.GetName()] = a
 	}
-	for _, want := range []string{"awsec2/create-vm", "awsec2/start", "awsec2/stop", "awsec2/reboot", "awsec2/terminate", "awsec2/tag"} {
+	for _, want := range []string{
+		"awsec2/create-vm", "awsec2/start", "awsec2/stop", "awsec2/reboot", "awsec2/terminate", "awsec2/tag",
+		"awsec2/create-security-group", "awsec2/import-key-pair", "awsec2/create-volume", "awsec2/create-vpc", "awsec2/create-subnet",
+	} {
 		a := byName[want]
 		if a == nil {
 			t.Fatalf("missing ActionDecl %q (got %d actions)", want, len(m.GetActions()))

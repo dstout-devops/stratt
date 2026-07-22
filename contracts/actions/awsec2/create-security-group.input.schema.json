@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "stratt:contract:actions/awsec2/create-security-group.input:v1",
+  "title": "awsec2/create-security-group input",
+  "description": "Input for awsec2/create-security-group (ADR-0095 C2, fire-and-return). AWS credentials inject as a CredentialRef (§2.5).",
+  "type": "object",
+  "properties": {
+    "groupName": { "type": "string" },
+    "description": { "type": "string" },
+    "vpcId": { "type": "string", "description": "the VPC to create the group in; omit for the default VPC" }
+  },
+  "required": ["groupName", "description"],
+  "additionalProperties": false
+}

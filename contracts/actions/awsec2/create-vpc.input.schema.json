@@ -1,0 +1,10 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "stratt:contract:actions/awsec2/create-vpc.input:v1",
+  "title": "awsec2/create-vpc input",
+  "description": "Input for awsec2/create-vpc (ADR-0095 C2, fire-and-return). AWS credentials inject as a CredentialRef (§2.5).",
+  "type": "object",
+  "properties": { "cidrBlock": { "type": "string", "description": "IPv4 CIDR, e.g. 10.0.0.0/16" } },
+  "required": ["cidrBlock"],
+  "additionalProperties": false
+}

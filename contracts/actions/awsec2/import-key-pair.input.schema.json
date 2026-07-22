@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "stratt:contract:actions/awsec2/import-key-pair.input:v1",
+  "title": "awsec2/import-key-pair input",
+  "description": "Input for awsec2/import-key-pair (ADR-0095 C2). Imports a caller-supplied PUBLIC key — Stratt never generates or handles a private key (§2.5: material never transits the core; server-side CreateKeyPair is deliberately NOT used).",
+  "type": "object",
+  "properties": {
+    "keyName": { "type": "string" },
+    "publicKey": { "type": "string", "description": "OpenSSH/PEM PUBLIC key material — public, not secret" }
+  },
+  "required": ["keyName", "publicKey"],
+  "additionalProperties": false
+}

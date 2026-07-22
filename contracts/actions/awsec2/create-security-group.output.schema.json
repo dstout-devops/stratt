@@ -1,0 +1,10 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "stratt:contract:actions/awsec2/create-security-group.output:v1",
+  "title": "awsec2/create-security-group output",
+  "description": "Output: the created security group id (bindable). The object is stratt:managed-tagged for C3 orphan discovery.",
+  "type": "object",
+  "properties": { "securityGroupId": { "type": "string" } },
+  "required": ["securityGroupId"],
+  "additionalProperties": false
+}

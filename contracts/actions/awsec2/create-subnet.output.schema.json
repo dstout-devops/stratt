@@ -1,0 +1,10 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "stratt:contract:actions/awsec2/create-subnet.output:v1",
+  "title": "awsec2/create-subnet output",
+  "description": "Output: the created subnet id (bindable). stratt:managed-tagged for C3.",
+  "type": "object",
+  "properties": { "subnetId": { "type": "string" } },
+  "required": ["subnetId"],
+  "additionalProperties": false
+}
