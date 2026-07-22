@@ -86,6 +86,11 @@ type CredentialMount struct {
 	SecretNamespace string
 	// SecretName is the K8s Secret holding the material.
 	SecretName string
+	// Vault, when non-nil, is a backend: vault KV coordinate (ADR-0094) INSTEAD OF
+	// the SecretName pair. It is resolvable ONLY on the plugin SecretBroker path —
+	// the kubelet cannot inject Vault material into a pod, so the pod dispatch path
+	// rejects a vault mount (fail-closed, §1.8).
+	Vault *types.VaultLocator
 	// Injection is the per-key projection policy (env | file).
 	Injection []types.CredentialInjection
 }
@@ -380,6 +385,15 @@ func (d *Dispatcher) DeleteRunJobs(ctx context.Context, runID string) error {
 }
 
 func (d *Dispatcher) createJob(ctx context.Context, name, runID string, spec actuators.JobSpec, creds []CredentialMount) error {
+	// A vault-backed CredentialRef cannot be injected into a pod — the kubelet
+	// resolves secretKeyRef against K8s Secrets, not Vault. Refuse LOUDLY here
+	// rather than degrade to an empty injection (ADR-0094 §1.8). Vault material is
+	// resolvable ONLY on the plugin SecretBroker path (the plugin reads it itself).
+	for _, c := range creds {
+		if c.Vault != nil {
+			return fmt.Errorf("dispatch: credential_ref %s uses backend: vault, which is not injectable into a pod/EE-Job — only the plugin SecretBroker path can resolve it (ADR-0094)", c.RefName)
+		}
+	}
 	backoff := int32(0)
 	ttl := int32(3600)
 

@@ -712,25 +712,45 @@ func (a *Activities) ResolveCredentials(ctx context.Context, in RunInput) ([]dis
 		if err != nil {
 			return nil, temporal.NewNonRetryableApplicationError(err.Error(), "CredentialRefNotFound", err)
 		}
-		if ref.Backend != types.BackendK8sSecret {
+		// Backend switch — coordinates only, NEVER material (§2.5). The use-check +
+		// audit above is the single audit-of-record (MF-D) for every backend; the
+		// per-backend locator parse slots beneath it.
+		switch ref.Backend {
+		case types.BackendK8sSecret:
+			var loc struct {
+				Namespace string `json:"namespace"`
+				Name      string `json:"name"`
+			}
+			if err := json.Unmarshal(ref.Locator, &loc); err != nil || loc.Name == "" {
+				return nil, temporal.NewNonRetryableApplicationError(
+					fmt.Sprintf("credential_ref %s: invalid k8s-secret locator", name), "InvalidLocator", err)
+			}
+			out = append(out, dispatch.CredentialMount{
+				RefName:         name,
+				SecretNamespace: loc.Namespace, // "" = the Job's namespace; a mismatch fails at dispatch
+				SecretName:      loc.Name,
+				Injection:       ref.Injection,
+			})
+		case types.BackendVault:
+			// backend: vault (ADR-0094) — KV coordinates only. Resolvable ONLY on the
+			// plugin SecretBroker path; the pod dispatch path rejects the resulting
+			// mount (fail-closed, §1.8) since the kubelet cannot inject Vault material.
+			var vl types.VaultLocator
+			if err := json.Unmarshal(ref.Locator, &vl); err != nil || vl.Mount == "" || vl.Path == "" {
+				return nil, temporal.NewNonRetryableApplicationError(
+					fmt.Sprintf("credential_ref %s: invalid vault locator (need mount+path)", name), "InvalidLocator", err)
+			}
+			out = append(out, dispatch.CredentialMount{
+				RefName:   name,
+				Vault:     &vl,
+				Injection: ref.Injection,
+			})
+		default:
+			// workload-identity (and any future backend) not yet implemented.
 			return nil, temporal.NewNonRetryableApplicationError(
 				fmt.Sprintf("credential_ref %s: backend %s not yet implemented (ADR-0009)", name, ref.Backend),
 				"BackendUnimplemented", nil)
 		}
-		var loc struct {
-			Namespace string `json:"namespace"`
-			Name      string `json:"name"`
-		}
-		if err := json.Unmarshal(ref.Locator, &loc); err != nil || loc.Name == "" {
-			return nil, temporal.NewNonRetryableApplicationError(
-				fmt.Sprintf("credential_ref %s: invalid k8s-secret locator", name), "InvalidLocator", err)
-		}
-		out = append(out, dispatch.CredentialMount{
-			RefName:         name,
-			SecretNamespace: loc.Namespace, // "" = the Job's namespace; a mismatch fails at dispatch
-			SecretName:      loc.Name,
-			Injection:       ref.Injection,
-		})
 	}
 	return out, nil
 }

@@ -145,7 +145,9 @@ func (a *Activities) ExecuteAction(ctx context.Context, in RunInput, creds []dis
 				keys = append(keys, pluginhost.CredentialKey{Key: inj.Key, As: inj.As, Name: inj.Name})
 			}
 			portCreds = append(portCreds, pluginhost.Credential{
-				RefName: c.RefName, SecretNamespace: c.SecretNamespace, SecretName: c.SecretName, Keys: keys,
+				RefName: c.RefName, SecretNamespace: c.SecretNamespace, SecretName: c.SecretName,
+				Vault: c.Vault, // backend: vault KV coordinate (ADR-0094), nil for k8s-secret
+				Keys:  keys,
 			})
 		}
 		raw, err := pa.Host.InvokeRaw(ctx, pluginhost.ActionInvoke{

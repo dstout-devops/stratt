@@ -170,13 +170,30 @@ message CredentialRef {
   ResolvedRef resolved = 2;
 }
 // ResolvedRef is a use-checked pointer to WHERE a CredentialRef's material lives
-// (ADR-0052): a K8s Secret's coordinates + the per-key mapping. NO material field.
+// (ADR-0052): backend COORDINATES + the per-key mapping. NO material field, EVER.
+// Exactly ONE coordinate set is populated per ResolvedRef: either the K8s Secret
+// pair (secret_namespace, secret_name) OR `vault` (ADR-0094). The plugin's SDK
+// SecretBroker dispatches on which is set.
 message ResolvedRef {
+  // K8s-secret backend coordinates (backend: k8s-secret). Empty when `vault` is set.
   string secret_namespace = 1;
   string secret_name = 2;
-  // keys the plugin is authorized to read, mirroring the CredentialRef's Injection —
-  // the Secret DATA keys + the logical name/mode the pod path would have projected.
+  // keys the plugin is authorized to read, mirroring the CredentialRef's Injection.
+  // `key` is the field name within the backend material — a K8s Secret DATA key, or
+  // (for `vault`) a field within the KV secret; never a value.
   repeated ResolvedKey keys = 3;
+  // OpenBao/Vault KV backend coordinates (backend: vault, ADR-0094). Set INSTEAD OF
+  // the secret_* pair; the plugin authenticates to OpenBao as itself (its own token/
+  // role, a policy scoped to the granted paths — MF-A) and reads the KV secret. Still
+  // coordinates only — no material transits the core (§2.5).
+  VaultCoords vault = 4;
+}
+// VaultCoords addresses one KV secret in an OpenBao/Vault store (ADR-0094). A path,
+// not a value — the material is read plugin-side, never by the core.
+message VaultCoords {
+  string mount = 1;  // KV engine mount (e.g. "secret")
+  string path = 2;   // secret path under the mount
+  bool kv_v2 = 3;    // KV v2 (nested `data` wrapper) vs v1
 }
 message ResolvedKey {
   string key = 1;  // the Secret DATA key (e.g. "url", "token") — a name, never a value

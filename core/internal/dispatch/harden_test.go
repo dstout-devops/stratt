@@ -9,7 +9,26 @@ import (
 	"k8s.io/client-go/kubernetes/fake"
 
 	"github.com/dstout-devops/stratt/core/internal/actuators"
+	"github.com/dstout-devops/stratt/types"
 )
+
+// TestCreateJob_RejectsVaultMount proves the pod/EE-Job path refuses a backend: vault
+// CredentialRef LOUDLY (ADR-0094 §1.8) — the kubelet cannot inject Vault material, so a
+// vault mount must never degrade to an empty secretKeyRef. Vault is plugin-path only.
+func TestCreateJob_RejectsVaultMount(t *testing.T) {
+	cs := fake.NewSimpleClientset()
+	d := New(Config{Namespace: "stratt-jobs", EEImage: "ee:test"}, cs, nil, slog.Default())
+
+	err := d.createJob(context.Background(), "stratt-run-r0-s0", "r0",
+		actuators.JobSpec{Command: []string{"echo", "hi"}},
+		[]CredentialMount{{RefName: "cred/vaulted", Vault: &types.VaultLocator{Mount: "secret", Path: "x"}}})
+	if err == nil {
+		t.Fatal("a vault-backed CredentialRef must fail closed on the pod path, not inject empty")
+	}
+	if _, getErr := cs.BatchV1().Jobs("stratt-jobs").Get(context.Background(), "stratt-run-r0-s0", metav1.GetOptions{}); getErr == nil {
+		t.Fatal("no Job must be created when a vault mount is refused")
+	}
+}
 
 // The ephemeral EE Job — the one pod that runs arbitrary tool content — must be
 // sandboxed (§7.1/§3, enterprise-readiness hardening): non-root, no privilege

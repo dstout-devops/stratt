@@ -85,4 +85,19 @@ else
     echo "issued  api.stratt.test (ttl 48h, expiring)"
 fi
 
+# 5. KV v2 secrets engine at /secret + a demo secret for the SecretBroker vault
+#    backend (ADR-0094). A plugin resolving a CredentialRef{backend: vault,
+#    locator: {mount:"secret", path:"demo/aws", kvV2:true}} reads THIS secret — the
+#    per-call credential seam, proven against the real OpenBao (never a mock).
+if [ "$(probe GET /v1/sys/mounts/secret/tune)" = "200" ]; then
+    echo "exists  kv-v2 secrets engine (secret/)"
+else
+    api POST /v1/sys/mounts/secret '{"type":"kv","options":{"version":"2"}}' >/dev/null
+    echo "created kv-v2 secrets engine (secret/)"
+fi
+# KV v2 writes wrap fields under {"data": {...}}. Idempotent (a re-put overwrites).
+api POST /v1/secret/data/demo/aws \
+    '{"data":{"access_key":"AKIADEMOKEY000000000","secret_key":"dev/secret/material+never/logged","note":"SecretBroker vault demo (ADR-0094)"}}' >/dev/null
+echo "seeded  secret/demo/aws (access_key + secret_key) for the vault SecretBroker"
+
 echo "openbao-bootstrap: done"

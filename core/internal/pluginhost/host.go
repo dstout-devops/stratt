@@ -71,7 +71,11 @@ type Credential struct {
 	RefName         string
 	SecretNamespace string
 	SecretName      string
-	Keys            []CredentialKey
+	// Vault, when non-nil, is a backend: vault KV coordinate (ADR-0094) rendered
+	// INSTEAD OF the SecretName pair. The plugin's SDK SecretBroker reads the KV
+	// secret itself, as itself (§2.5) — the core carries only the coordinate.
+	Vault *types.VaultLocator
+	Keys  []CredentialKey
 }
 
 // CredentialKey mirrors one CredentialRef Injection entry: the Secret DATA key the
@@ -90,11 +94,15 @@ func (h *Host) wireCred(c Credential) *pluginv1.CredentialRef {
 	for _, k := range c.Keys {
 		keys = append(keys, &pluginv1.ResolvedKey{Key: k.Key, As: k.As, Name: k.Name})
 	}
-	ref.Resolved = &pluginv1.ResolvedRef{
-		SecretNamespace: c.SecretNamespace,
-		SecretName:      c.SecretName,
-		Keys:            keys,
+	resolved := &pluginv1.ResolvedRef{Keys: keys}
+	if c.Vault != nil {
+		// backend: vault (ADR-0094) — KV coordinates INSTEAD OF the K8s Secret pair.
+		resolved.Vault = &pluginv1.VaultCoords{Mount: c.Vault.Mount, Path: c.Vault.Path, KvV2: c.Vault.KVv2}
+	} else {
+		resolved.SecretNamespace = c.SecretNamespace
+		resolved.SecretName = c.SecretName
 	}
+	ref.Resolved = resolved
 	return ref
 }
 

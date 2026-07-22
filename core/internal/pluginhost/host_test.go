@@ -1113,3 +1113,34 @@ func TestHost_WireCred_CoordinatesLocalOnly(t *testing.T) {
 		t.Fatal("MF-C: a relay-backed host must NEVER attach hub Secret coordinates")
 	}
 }
+
+// TestHost_WireCred_VaultCoordinates proves the vault backend renders VAULT coordinates
+// (mount/path/kvV2) into the Envelope instead of the K8s Secret pair (ADR-0094) — still
+// coordinates only, never material — and that a relay host withholds them too (MF-C).
+func TestHost_WireCred_VaultCoordinates(t *testing.T) {
+	cred := pluginhost.Credential{
+		RefName: "cred/awsec2/deploy",
+		Vault:   &types.VaultLocator{Mount: "secret", Path: "aws/deploy", KVv2: true},
+		Keys:    []pluginhost.CredentialKey{{Key: "access_key", As: "env", Name: "AWS_ACCESS_KEY_ID"}},
+	}
+
+	local := pluginhost.New(nil, nil, ansibleGrant(), discardLog())
+	r := local.WireCredForTest(cred).GetResolved()
+	if r == nil || r.GetVault() == nil {
+		t.Fatalf("local host must attach vault coordinates: %+v", r)
+	}
+	if r.GetVault().GetMount() != "secret" || r.GetVault().GetPath() != "aws/deploy" || !r.GetVault().GetKvV2() {
+		t.Fatalf("vault coordinates wrong: %+v", r.GetVault())
+	}
+	if r.GetSecretName() != "" {
+		t.Fatalf("a vault ref must NOT also carry a K8s secret name: %q", r.GetSecretName())
+	}
+	if len(r.GetKeys()) != 1 || r.GetKeys()[0].GetKey() != "access_key" {
+		t.Fatalf("authorized field keys must ride the vault ref: %+v", r.GetKeys())
+	}
+
+	relay := pluginhost.New(nil, nil, ansibleGrant(), discardLog()).WithoutCredentialCoordinates()
+	if relay.WireCredForTest(cred).GetResolved() != nil {
+		t.Fatal("MF-C: a relay-backed host must NEVER attach vault coordinates either")
+	}
+}

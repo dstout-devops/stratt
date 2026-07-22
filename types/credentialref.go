@@ -40,6 +40,17 @@ type CredentialRef struct {
 	DeclaredBy string `json:"declaredBy,omitempty"`
 }
 
+// VaultLocator is the parsed CredentialRef.Locator for backend: vault (ADR-0094)
+// — a KV COORDINATE, never material. Mount/Path address the secret within an
+// OpenBao/Vault store; KVv2 selects the KV v2 (nested `data` wrapper) read shape.
+// The plugin resolves the material itself, as itself (§2.5); the core only ever
+// composes these coordinates after the use-check.
+type VaultLocator struct {
+	Mount string `json:"mount"`
+	Path  string `json:"path"`
+	KVv2  bool   `json:"kvV2"`
+}
+
 // CredentialInjection projects one backend field into the execution pod.
 type CredentialInjection struct {
 	// Key is the field within the backend material (e.g. the Secret data
