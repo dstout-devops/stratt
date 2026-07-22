@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "stratt:contract:facets/storage.volume:v1",
+  "title": "storage.volume Facet",
+  "description": "A cloud block-storage volume, projected by the awsec2 Syncer (ADR-0096; charter §1.1). Closed schema matching normalizeVolume.",
+  "type": "object",
+  "properties": {
+    "sizeGiB": { "type": "integer", "minimum": 1 },
+    "volumeType": { "type": "string", "description": "e.g. gp3, gp2, io1" },
+    "state": { "type": "string", "description": "provider state (e.g. available, in-use)" },
+    "availabilityZone": { "type": "string" }
+  },
+  "additionalProperties": false
+}

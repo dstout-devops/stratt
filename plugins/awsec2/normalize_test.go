@@ -57,6 +57,62 @@ func TestNormalizedFacetsMatchContracts(t *testing.T) {
 	}
 }
 
+// TestNormalizedResourceFacetsMatchContracts extends the co-fidelity guard (ADR-0096
+// flag 2) to the four resource kinds: each normalizer's emitted Facet keys must be a
+// subset of its closed schema, so a live Syncer write is never rejected.
+func TestNormalizedResourceFacetsMatchContracts(t *testing.T) {
+	check := func(t *testing.T, ns string, facets map[string][]byte) {
+		allowed := schemaProperties(t, ns)
+		var doc map[string]any
+		if err := json.Unmarshal(facets[ns], &doc); err != nil {
+			t.Fatalf("%s: %v", ns, err)
+		}
+		if len(doc) == 0 {
+			t.Fatalf("%s: fully-populated object emitted an empty facet", ns)
+		}
+		for k := range doc {
+			if !allowed[k] {
+				t.Errorf("%s emits key %q not in its CLOSED schema — the live Syncer would REJECT this write", ns, k)
+			}
+		}
+	}
+	t.Run("vpc", func(t *testing.T) {
+		e := normalizeVPC("us-east-1", ec2types.Vpc{VpcId: aws.String("vpc-1"), CidrBlock: aws.String("10.0.0.0/16"), State: ec2types.VpcStateAvailable, IsDefault: aws.Bool(true)})
+		check(t, "net.vpc", e.GetFacets())
+	})
+	t.Run("subnet", func(t *testing.T) {
+		e := normalizeSubnet("us-east-1", ec2types.Subnet{SubnetId: aws.String("subnet-1"), VpcId: aws.String("vpc-1"), CidrBlock: aws.String("10.0.1.0/24"), AvailabilityZone: aws.String("us-east-1a"), State: ec2types.SubnetStateAvailable})
+		check(t, "net.subnet", e.GetFacets())
+		if len(e.GetRelations()) != 1 || e.GetRelations()[0].GetType() != "in-vpc" {
+			t.Fatalf("subnet must carry an in-vpc relation: %+v", e.GetRelations())
+		}
+	})
+	t.Run("security-group", func(t *testing.T) {
+		e := normalizeSecurityGroup("us-east-1", ec2types.SecurityGroup{GroupId: aws.String("sg-1"), GroupName: aws.String("web"), Description: aws.String("web sg"), VpcId: aws.String("vpc-1")})
+		check(t, "net.securitygroup", e.GetFacets())
+	})
+	t.Run("volume", func(t *testing.T) {
+		e := normalizeVolume("us-east-1", ec2types.Volume{VolumeId: aws.String("vol-1"), Size: aws.Int32(8), VolumeType: ec2types.VolumeTypeGp3, State: ec2types.VolumeStateInUse, AvailabilityZone: aws.String("us-east-1a"), Attachments: []ec2types.VolumeAttachment{{InstanceId: aws.String("i-1")}}})
+		check(t, "storage.volume", e.GetFacets())
+		if len(e.GetRelations()) != 1 || e.GetRelations()[0].GetType() != "attached-to" {
+			t.Fatalf("attached volume must carry an attached-to relation: %+v", e.GetRelations())
+		}
+	})
+}
+
+// TestStrattManagedLabel proves the anti-orphan marker (ADR-0095 flag 1) surfaces as a
+// stratt.managed label on the observed Entity, so queries can enumerate what Stratt made.
+func TestStrattManagedLabel(t *testing.T) {
+	managed := normalizeVPC("us-east-1", ec2types.Vpc{VpcId: aws.String("vpc-m"), Tags: []ec2types.Tag{{Key: aws.String("stratt:managed"), Value: aws.String("true")}}})
+	if managed.GetLabels()["stratt.managed"] != "true" {
+		t.Fatalf("stratt:managed tag must surface as the stratt.managed label: %v", managed.GetLabels())
+	}
+	unmanaged := normalizeVPC("us-east-1", ec2types.Vpc{VpcId: aws.String("vpc-u")})
+	if _, ok := unmanaged.GetLabels()["stratt.managed"]; ok {
+		t.Fatal("an unmarked object must NOT carry the stratt.managed label")
+	}
+}
+
 // schemaProperties reads the shipped facet schema for ns and returns its declared
 // property names.
 func schemaProperties(t *testing.T, ns string) map[string]bool {

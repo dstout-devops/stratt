@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "stratt:contract:facets/net.vpc:v1",
+  "title": "net.vpc Facet",
+  "description": "A cloud VPC, projected by the awsec2 Syncer (ADR-0096; charter §1.1). Closed schema matching normalizeVPC.",
+  "type": "object",
+  "properties": {
+    "cidr": { "type": "string", "description": "primary IPv4 CIDR block" },
+    "state": { "type": "string", "description": "provider state (e.g. available)" },
+    "isDefault": { "type": "boolean", "description": "whether this is the account default VPC" }
+  },
+  "additionalProperties": false
+}

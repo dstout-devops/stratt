@@ -63,13 +63,33 @@ func TestValidateFacet(t *testing.T) {
 	}
 }
 
+// TestNetSubnetUnionCoFidelity is the BLOCKING cross-plugin co-fidelity gate for the
+// shared net.subnet Facet (ADR-0096 guardian flag 2): the closed union schema now
+// governs the LIVE write path of BOTH crossplane and awsec2. If either Source's real
+// emission stops validating, its projection breaks silently at write time — so this test
+// pins both shapes against the SAME ValidateFacet the write path uses.
+func TestNetSubnetUnionCoFidelity(t *testing.T) {
+	// crossplane's emission (plugins/crossplane/crossplane.go): {claim, name, cidr}.
+	if covered, err := ValidateFacet("net.subnet", []byte(`{"claim":"SubnetClaim","name":"web","cidr":"10.0.0.0/24"}`)); !covered || err != nil {
+		t.Fatalf("crossplane net.subnet emission must validate: covered=%v err=%v", covered, err)
+	}
+	// awsec2's emission (plugins/awsec2/normalize_resources.go): {cidr, availabilityZone, state, vpcId}.
+	if covered, err := ValidateFacet("net.subnet", []byte(`{"cidr":"10.0.1.0/24","availabilityZone":"us-east-1a","state":"available","vpcId":"vpc-1"}`)); !covered || err != nil {
+		t.Fatalf("awsec2 net.subnet emission must validate: covered=%v err=%v", covered, err)
+	}
+	// A field no Source emits is rejected (the schema stays closed — drift is blocking).
+	if covered, err := ValidateFacet("net.subnet", []byte(`{"cidr":"10.0.0.0/24","undeclared":true}`)); !covered || err == nil {
+		t.Fatalf("net.subnet must reject undeclared keys (closed): covered=%v err=%v", covered, err)
+	}
+}
+
 func TestPinsAreStable(t *testing.T) {
 	all, err := All()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(all) != 83 {
-		t.Fatalf("expected 83 embedded documents, got %d", len(all))
+	if len(all) != 87 {
+		t.Fatalf("expected 87 embedded documents, got %d", len(all))
 	}
 	versions := map[string]int{}
 	for _, c := range all {

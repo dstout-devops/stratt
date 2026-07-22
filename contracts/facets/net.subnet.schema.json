@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "stratt:contract:facets/net.subnet:v1",
+  "title": "net.subnet Facet",
+  "description": "A network subnet, projected by MULTIPLE Sources under multi-source Facet ownership (ADR-0059/0060; ADR-0096). UNION of every Source's fields: crossplane/NetBox emit {claim,name,cidr}; awsec2 emits {cidr,availabilityZone,state,vpcId}. All optional — each Source fills what it observes; closed so drift is caught (§1.5).",
+  "type": "object",
+  "properties": {
+    "claim": { "type": "string", "description": "crossplane claim kind (crossplane Source)" },
+    "name": { "type": "string", "description": "claim/resource name (crossplane Source)" },
+    "cidr": { "type": "string", "description": "IPv4 CIDR (all Sources)" },
+    "availabilityZone": { "type": "string", "description": "AZ (awsec2 Source)" },
+    "state": { "type": "string", "description": "provider state (awsec2 Source)" },
+    "vpcId": { "type": "string", "description": "owning VPC id (awsec2 Source)" }
+  },
+  "additionalProperties": false
+}

@@ -45,6 +45,18 @@ var facetNamespaces = []string{
 	"instance.compute", // instanceType, architecture, imageId
 	"instance.network", // ips, vpc, subnet, az
 	"instance.state",   // lifecycle state, launch time
+	// Resource-graph Facets (ADR-0096). net.subnet is co-owned with crossplane/NetBox
+	// (multi-source, ADR-0060) — awsec2 is NOT authoritative for it.
+	"net.vpc",
+	"net.subnet",
+	"net.securitygroup",
+	"storage.volume",
+}
+
+// tombstoneSchemes are the identity schemes this Syncer fully enumerates — one per
+// Observed Entity kind, so the host tombstones absent objects on each full-sync (ADR-0096).
+var tombstoneSchemes = []string{
+	"aws.instanceId", "aws.vpcId", "aws.subnetId", "aws.securityGroupId", "aws.volumeId",
 }
 
 // EC2API is the small slice of the EC2 API this plugin needs — DescribeInstances
@@ -69,6 +81,12 @@ type EC2API interface {
 	CreateVolume(ctx context.Context, in *ec2.CreateVolumeInput, opts ...func(*ec2.Options)) (*ec2.CreateVolumeOutput, error)
 	CreateVpc(ctx context.Context, in *ec2.CreateVpcInput, opts ...func(*ec2.Options)) (*ec2.CreateVpcOutput, error)
 	CreateSubnet(ctx context.Context, in *ec2.CreateSubnetInput, opts ...func(*ec2.Options)) (*ec2.CreateSubnetOutput, error)
+	// Resource-graph observation (ADR-0096 C3): the Syncer enumerates each kind as a
+	// full-sync alongside instances.
+	DescribeVpcs(ctx context.Context, in *ec2.DescribeVpcsInput, opts ...func(*ec2.Options)) (*ec2.DescribeVpcsOutput, error)
+	DescribeSubnets(ctx context.Context, in *ec2.DescribeSubnetsInput, opts ...func(*ec2.Options)) (*ec2.DescribeSubnetsOutput, error)
+	DescribeSecurityGroups(ctx context.Context, in *ec2.DescribeSecurityGroupsInput, opts ...func(*ec2.Options)) (*ec2.DescribeSecurityGroupsOutput, error)
+	DescribeVolumes(ctx context.Context, in *ec2.DescribeVolumesInput, opts ...func(*ec2.Options)) (*ec2.DescribeVolumesOutput, error)
 }
 
 // Config locates the EC2 Source. Credentials arrive resolved from the plugin's OWN
@@ -126,7 +144,7 @@ func (s *Server) GetManifest(context.Context, *pluginv1.GetManifestRequest) (*pl
 		Class:            pluginv1.PluginClass_PLUGIN_CLASS_SYNCER,
 		Verbs:            []pluginv1.Verb{pluginv1.Verb_VERB_OBSERVE, pluginv1.Verb_VERB_INVOKE},
 		Contracts:        contracts,
-		TombstoneSchemes: []string{"aws.instanceId"},
+		TombstoneSchemes: tombstoneSchemes,
 		Actions: []*pluginv1.ActionDecl{
 			{
 				Name:        actionCreateVM,
@@ -186,9 +204,29 @@ func (s *Server) Observe(_ *pluginv1.ObserveRequest, stream grpc.ServerStreaming
 	return stream.Send(&pluginv1.ObserveResponse{Entities: entities, FullSyncComplete: true})
 }
 
-// observe paginates DescribeInstances and normalizes each live instance. Pure
-// content-expertise; no graph writes (the plugin holds no DB path).
+// observe enumerates the full resource graph (ADR-0096): instances PLUS vpc / subnet /
+// security-group / volume, each a full enumeration appended to the one full-sync so the
+// host tombstones absent objects per identity scheme. Pure content-expertise; no graph
+// writes (the plugin holds no DB path). A per-kind failure fails the whole sync (§1.8).
 func observe(ctx context.Context, api EC2API, region string) ([]*pluginv1.ObservedEntity, error) {
+	out, err := observeInstances(ctx, api, region)
+	if err != nil {
+		return nil, err
+	}
+	for _, enum := range []func(context.Context, EC2API, string) ([]*pluginv1.ObservedEntity, error){
+		observeVPCs, observeSubnets, observeSecurityGroups, observeVolumes,
+	} {
+		es, err := enum(ctx, api, region)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, es...)
+	}
+	return out, nil
+}
+
+// observeInstances paginates DescribeInstances and normalizes each live instance.
+func observeInstances(ctx context.Context, api EC2API, region string) ([]*pluginv1.ObservedEntity, error) {
 	var out []*pluginv1.ObservedEntity
 	pager := ec2.NewDescribeInstancesPaginator(api, &ec2.DescribeInstancesInput{})
 	for pager.HasMorePages() {

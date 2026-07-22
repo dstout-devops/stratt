@@ -540,13 +540,24 @@ func run(ctx context.Context, log *slog.Logger) error {
 		}
 		defer conn.Close()
 		grant := pluginhost.Grant{
-			PluginIdentity:   env("STRATT_AWS_PLUGIN_ID", "awsec2"),
-			Tier:             pluginhost.Tier(env("STRATT_AWS_TIER", "trusted")),
-			Source:           types.Source{Kind: "awsec2", Name: env("STRATT_AWS_SOURCE_NAME", "awsec2"), Endpoint: os.Getenv("STRATT_AWS_ENDPOINT")},
-			FacetNamespaces:  []string{"instance.compute", "instance.network", "instance.state"},
-			LabelKeys:        []string{"aws.region", "aws.name"},
-			IdentitySchemes:  []string{"aws.instanceId"},
-			TombstoneSchemes: []string{"aws.instanceId"},
+			PluginIdentity: env("STRATT_AWS_PLUGIN_ID", "awsec2"),
+			Tier:           pluginhost.Tier(env("STRATT_AWS_TIER", "trusted")),
+			Source:         types.Source{Kind: "awsec2", Name: env("STRATT_AWS_SOURCE_NAME", "awsec2"), Endpoint: os.Getenv("STRATT_AWS_ENDPOINT")},
+			// instance Facets + the resource-graph Facets (ADR-0096). net.subnet is
+			// co-owned with crossplane/NetBox — awsec2 is NOT authoritative for it
+			// (no AuthoritativeFacetNamespaces entry), so a scalar read resolves to the
+			// IPAM SoR while awsec2's as-observed row is retained signal (ADR-0060).
+			FacetNamespaces: []string{
+				"instance.compute", "instance.network", "instance.state",
+				"net.vpc", "net.subnet", "net.securitygroup", "storage.volume",
+			},
+			LabelKeys: []string{"aws.region", "aws.name", "stratt.managed"},
+			IdentitySchemes: []string{
+				"aws.instanceId", "aws.vpcId", "aws.subnetId", "aws.securityGroupId", "aws.volumeId",
+			},
+			TombstoneSchemes: []string{
+				"aws.instanceId", "aws.vpcId", "aws.subnetId", "aws.securityGroupId", "aws.volumeId",
+			},
 		}
 		awsHost = pluginhost.New(store, pluginv1.NewPluginServiceClient(conn), grant, log)
 		// create-vm + the instance lifecycle & tag Actions (ADR-0095), all on the one

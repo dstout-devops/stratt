@@ -47,6 +47,39 @@ type fakeEC2 struct {
 	lastVol    *ec2.CreateVolumeInput
 	lastVpc    *ec2.CreateVpcInput
 	lastSubnet *ec2.CreateSubnetInput
+	// Resource-graph observation (ADR-0096 C3).
+	vpcsOut    *ec2.DescribeVpcsOutput
+	subnetsOut *ec2.DescribeSubnetsOutput
+	sgsOut     *ec2.DescribeSecurityGroupsOutput
+	volsOut    *ec2.DescribeVolumesOutput
+}
+
+func (f *fakeEC2) DescribeVpcs(_ context.Context, _ *ec2.DescribeVpcsInput, _ ...func(*ec2.Options)) (*ec2.DescribeVpcsOutput, error) {
+	if f.vpcsOut == nil {
+		return &ec2.DescribeVpcsOutput{}, f.describeErr
+	}
+	return f.vpcsOut, f.describeErr
+}
+
+func (f *fakeEC2) DescribeSubnets(_ context.Context, _ *ec2.DescribeSubnetsInput, _ ...func(*ec2.Options)) (*ec2.DescribeSubnetsOutput, error) {
+	if f.subnetsOut == nil {
+		return &ec2.DescribeSubnetsOutput{}, f.describeErr
+	}
+	return f.subnetsOut, f.describeErr
+}
+
+func (f *fakeEC2) DescribeSecurityGroups(_ context.Context, _ *ec2.DescribeSecurityGroupsInput, _ ...func(*ec2.Options)) (*ec2.DescribeSecurityGroupsOutput, error) {
+	if f.sgsOut == nil {
+		return &ec2.DescribeSecurityGroupsOutput{}, f.describeErr
+	}
+	return f.sgsOut, f.describeErr
+}
+
+func (f *fakeEC2) DescribeVolumes(_ context.Context, _ *ec2.DescribeVolumesInput, _ ...func(*ec2.Options)) (*ec2.DescribeVolumesOutput, error) {
+	if f.volsOut == nil {
+		return &ec2.DescribeVolumesOutput{}, f.describeErr
+	}
+	return f.volsOut, f.describeErr
 }
 
 func (f *fakeEC2) DescribeInstances(_ context.Context, _ *ec2.DescribeInstancesInput, _ ...func(*ec2.Options)) (*ec2.DescribeInstancesOutput, error) {
@@ -191,6 +224,55 @@ func TestObserveEmitsInstances(t *testing.T) {
 	}
 }
 
+// TestObserveEmitsResourceGraph proves the C3 Syncer enumerates the full resource graph
+// (ADR-0096): instances PLUS vpc/subnet/security-group/volume, each with its identity
+// scheme + Facet, in the one full-sync.
+func TestObserveEmitsResourceGraph(t *testing.T) {
+	api := &fakeEC2{
+		describeOut: &ec2.DescribeInstancesOutput{Reservations: []ec2types.Reservation{{Instances: []ec2types.Instance{{
+			InstanceId: aws.String("i-1"), State: &ec2types.InstanceState{Name: ec2types.InstanceStateNameRunning},
+		}}}}},
+		vpcsOut:    &ec2.DescribeVpcsOutput{Vpcs: []ec2types.Vpc{{VpcId: aws.String("vpc-1"), CidrBlock: aws.String("10.0.0.0/16")}}},
+		subnetsOut: &ec2.DescribeSubnetsOutput{Subnets: []ec2types.Subnet{{SubnetId: aws.String("subnet-1"), VpcId: aws.String("vpc-1"), CidrBlock: aws.String("10.0.1.0/24")}}},
+		sgsOut:     &ec2.DescribeSecurityGroupsOutput{SecurityGroups: []ec2types.SecurityGroup{{GroupId: aws.String("sg-1"), GroupName: aws.String("web"), VpcId: aws.String("vpc-1")}}},
+		volsOut:    &ec2.DescribeVolumesOutput{Volumes: []ec2types.Volume{{VolumeId: aws.String("vol-1"), Size: aws.Int32(8)}}},
+	}
+	stream := &captureStream[pluginv1.ObserveResponse]{ctx: context.Background()}
+	if err := newServer(t, api).Observe(&pluginv1.ObserveRequest{}, stream); err != nil {
+		t.Fatalf("observe: %v", err)
+	}
+	byKind := map[string]*pluginv1.ObservedEntity{}
+	for _, resp := range stream.sent {
+		for _, e := range resp.GetEntities() {
+			byKind[e.GetKind()] = e
+		}
+	}
+	for _, k := range []string{"instance", "vpc", "subnet", "security-group", "volume"} {
+		if byKind[k] == nil {
+			t.Fatalf("Observe must emit a %q Entity; got kinds %v", k, kindKeys(byKind))
+		}
+	}
+	if byKind["vpc"].GetIdentityKeys()["aws.vpcId"] != "vpc-1" {
+		t.Errorf("vpc identity: %v", byKind["vpc"].GetIdentityKeys())
+	}
+	// subnet carries its in-vpc Relation.
+	rels := byKind["subnet"].GetRelations()
+	if len(rels) != 1 || rels[0].GetType() != "in-vpc" || rels[0].GetToValue() != "vpc-1" {
+		t.Errorf("subnet in-vpc relation: %+v", rels)
+	}
+	if len(byKind["volume"].GetFacets()["storage.volume"]) == 0 {
+		t.Error("volume must carry a storage.volume facet")
+	}
+}
+
+func kindKeys(m map[string]*pluginv1.ObservedEntity) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	return out
+}
+
 // TestInvokeCreateVM proves the Action half of the port (the FIRST Invoke plugin):
 // RunInstances → a terminal InvokeResponse carrying the typed outputs (instanceId,
 // privateIp) AND the new instance as an ObservedEntity. Result is set ONLY on the
@@ -321,11 +403,19 @@ func TestGetManifest(t *testing.T) {
 	if !verbs[pluginv1.Verb_VERB_OBSERVE] || !verbs[pluginv1.Verb_VERB_INVOKE] {
 		t.Errorf("verbs = %v, want OBSERVE+INVOKE", m.GetVerbs())
 	}
-	if len(m.GetContracts()) != 3 {
-		t.Errorf("expected 3 facet contracts, got %d", len(m.GetContracts()))
+	// instance.{compute,network,state} + net.{vpc,subnet,securitygroup} + storage.volume.
+	if len(m.GetContracts()) != 7 {
+		t.Errorf("expected 7 facet contracts, got %d", len(m.GetContracts()))
 	}
-	if len(m.GetTombstoneSchemes()) != 1 || m.GetTombstoneSchemes()[0] != "aws.instanceId" {
-		t.Errorf("tombstone schemes = %v", m.GetTombstoneSchemes())
+	// One tombstone scheme per Observed Entity kind (instance + the 4 resource kinds).
+	tomb := map[string]bool{}
+	for _, s := range m.GetTombstoneSchemes() {
+		tomb[s] = true
+	}
+	for _, want := range []string{"aws.instanceId", "aws.vpcId", "aws.subnetId", "aws.securityGroupId", "aws.volumeId"} {
+		if !tomb[want] {
+			t.Errorf("missing tombstone scheme %q (got %v)", want, m.GetTombstoneSchemes())
+		}
 	}
 	// create-vm + start/stop/reboot/terminate/tag (ADR-0095).
 	byName := map[string]*pluginv1.ActionDecl{}

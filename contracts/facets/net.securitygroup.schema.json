@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "stratt:contract:facets/net.securitygroup:v1",
+  "title": "net.securitygroup Facet",
+  "description": "A cloud security group (firewall), projected by the awsec2 Syncer (ADR-0096; charter §1.1). Closed schema matching normalizeSecurityGroup. Ingress/egress rule sub-modeling is a follow-up.",
+  "type": "object",
+  "properties": {
+    "groupName": { "type": "string" },
+    "description": { "type": "string" },
+    "vpcId": { "type": "string", "description": "owning VPC id" }
+  },
+  "additionalProperties": false
+}
