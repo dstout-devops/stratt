@@ -1,0 +1,41 @@
+# Self-contained dev bootstrap: "nothing -> Stratt in Kubernetes" with a single
+# `helm install`. Turns on the in-cluster substrate (Postgres/NATS/Temporal) so
+# NO compose stack is needed — this is the minimal from-nothing path.
+#
+# Assumes release name "stratt" (the `task bootstrap:kind` entrypoint): the
+# substrate Service names below are release-prefixed (stratt-postgres, …). If you
+# `helm install <other>`, update the URLs to <other>-postgres etc.
+#
+# DEV ONLY: ephemeral storage, inline dev creds, the dev principal header, no
+# OIDC. NOTES.txt will shout accordingly. Never derive production values from this.
+
+image:
+  repository: stratt/strattd
+  tag: dev
+  pullPolicy: Never # kind-loaded image (task image:kind-load)
+
+# Stand the substrate up in-cluster (templates/substrate.yaml).
+substrate:
+  inCluster:
+    enabled: true
+
+# Wire strattd to the in-cluster substrate Services (release "stratt").
+# The password matches substrate.inCluster.postgres.password.
+database:
+  url: "postgres://stratt:stratt-dev@stratt-postgres:5432/stratt"
+nats:
+  url: "nats://stratt-nats:4222"
+temporal:
+  address: "stratt-temporal:7233"
+  namespace: default
+
+devPrincipalHeader: true
+
+ee:
+  image:
+    repository: stratt-ee
+    tag: dev
+
+resources:
+  requests: { cpu: 50m, memory: 64Mi }
+  limits: { memory: 256Mi }

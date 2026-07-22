@@ -58,6 +58,32 @@ temporal:
   address: "temporal-frontend:7233"
   namespace: "default"
 
+# ── in-cluster DEV substrate (opt-in; self-contained bootstrap) ──────────────
+# Default stays bring-your-own (ADR-0013 / §1.4). The `allInOne` profile
+# (values-allinone.yaml) flips inCluster.enabled so a single `helm install`
+# stands up Postgres/NATS/Temporal in-namespace — "nothing -> Stratt in kube"
+# with no compose stack. DEV ONLY: ephemeral emptyDir storage, inline dev creds,
+# a standalone in-memory Temporal dev server. Blessed upstream images, NO
+# third-party Helm subchart (avoids Bitnami-style relicensing exposure, §1.3/§1.7).
+# Wire database.url / nats.url / temporal.address at the in-cluster Services when
+# enabling (values-allinone.yaml does this). Never enable in production.
+substrate:
+  inCluster:
+    enabled: false
+    postgres:
+      image: postgres:18 # pin a digest for reproducibility (§7.3)
+      user: stratt
+      password: stratt-dev # dev-only; NOTES warns. Never a production credential.
+      db: stratt
+    nats:
+      image: nats:2.10-alpine
+    temporal:
+      image: temporalio/temporal:latest # dev CLI dev-server; pin a digest for repro (§7.3)
+      namespace: default
+    resources:
+      requests: { cpu: 50m, memory: 64Mi }
+      limits: { memory: 512Mi }
+
 # ── schema migrations & rolling-upgrade discipline (UPG-1, ADR-0078) ─────────
 # By default each pod runs goose migrations at boot (idempotent, advisory-locked).
 # For a safe rolling upgrade, enable the hook: a Helm pre-install/pre-upgrade Job

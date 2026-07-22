@@ -389,6 +389,8 @@ tasks:
       - "{{.HELM}} template stratt deploy/charts/stratt > /dev/null"
       - "{{.HELM}} template stratt deploy/charts/stratt -f deploy/charts/stratt/values-dev-kind.yaml > /dev/null"
       - "{{.HELM}} template stratt deploy/charts/stratt -f deploy/charts/stratt/values-dev-kind.yaml -f deploy/charts/stratt/values-e2e.yaml > /dev/null"
+      # Self-contained bootstrap profile (in-cluster substrate) — must render too.
+      - "{{.HELM}} template stratt deploy/charts/stratt -f deploy/charts/stratt/values-allinone.yaml > /dev/null"
 
   tools:helm:
     desc: Install the pinned helm binary to .bin/ (idempotent; zero-manual bootstrap)
@@ -546,6 +548,23 @@ tasks:
           --set-string "plugins[1].hostEnv.STRATT_VCENTER_URL=https://${GW}:8989/sdk" \
           --set-string "plugins[2].env.STRATT_AWSEC2_ENDPOINT=http://${GW}:5000"
       - "{{.KUBECTL}} --context {{.KIND_CONTEXT}} -n stratt rollout status deploy/stratt --timeout=180s"
+
+  bootstrap:kind:
+    # The minimal "nothing -> Stratt in Kubernetes" path (M0): kind + the in-cluster
+    # substrate (Postgres/NATS/Temporal) + strattd, from a single helm install — no
+    # compose stack. Self-contained on purpose (values-allinone.yaml). DEV ONLY.
+    # From here, Stratt's own plugins manage the rest of the deployment (M1/M2).
+    desc: From nothing -> Stratt in kind, self-contained (kind + in-cluster substrate + helm install)
+    deps: [tools:helm, tools:kubectl]
+    cmds:
+      - task: dev:kind:up
+      - task: image:kind-load
+      - |
+        set -eu
+        "{{.HELM}}" upgrade --install stratt {{.ROOT_DIR}}/deploy/charts/stratt \
+          --kube-context {{.KIND_CONTEXT}} -n stratt --create-namespace \
+          -f {{.ROOT_DIR}}/deploy/charts/stratt/values-allinone.yaml
+      - "{{.KUBECTL}} --context {{.KIND_CONTEXT}} -n stratt rollout status deploy/stratt --timeout=240s"
 
   dev:stack:up:
     desc: Turnkey — substrate + kind + images + helm-install strattd & plugins, wait-ready (fully task-driven)
