@@ -281,11 +281,14 @@ injection:
 		t.Fatalf("injection: %+v", ref.Injection)
 	}
 
-	// Rejections: bad backend, bad injection mode, missing injection.
+	// Rejections: bad backend, bad injection mode, empty injection WITHOUT the
+	// gateOnly marker (§1.8 — an accidentally-dropped injection block must still fail
+	// compile, not silently degrade), and a contradictory gateOnly+injection ref.
 	for name, doc := range map[string]string{
-		"backend":   "name: x\nownerTeam: t\nbackend: sqlite\nlocator: {name: n}\ninjection: [{key: k, as: env, name: N}]\n",
-		"mode":      "name: x\nownerTeam: t\nbackend: k8s-secret\nlocator: {name: n}\ninjection: [{key: k, as: extra_vars, name: N}]\n",
-		"injection": "name: x\nownerTeam: t\nbackend: k8s-secret\nlocator: {name: n}\ninjection: []\n",
+		"backend":         "name: x\nownerTeam: t\nbackend: sqlite\nlocator: {name: n}\ninjection: [{key: k, as: env, name: N}]\n",
+		"mode":            "name: x\nownerTeam: t\nbackend: k8s-secret\nlocator: {name: n}\ninjection: [{key: k, as: extra_vars, name: N}]\n",
+		"empty-no-marker": "name: x\nownerTeam: t\nbackend: k8s-secret\nlocator: {name: n}\ninjection: []\n",
+		"gateonly-clash":  "name: x\nownerTeam: t\nbackend: k8s-secret\nlocator: {name: n}\ngateOnly: true\ninjection: [{key: k, as: env, name: N}]\n",
 	} {
 		bad := t.TempDir()
 		writeDecl(t, bad, "v.yaml", "name: v\nselector: {kinds: [vm]}\n")
@@ -293,6 +296,21 @@ injection:
 		if _, err := ParseDir(bad, nil); err == nil {
 			t.Fatalf("invalid %s must be rejected", name)
 		}
+	}
+
+	// Gate-only CredentialRef (ADR-0052/0092): an Action's cred is its authz gate
+	// even when NO material is resolved (the plugin acts via its own pod SA). With
+	// the DELIBERATE gateOnly: true marker, an injection-less ref is VALID — purely
+	// the use-check surface.
+	gate := t.TempDir()
+	writeDecl(t, gate, "v.yaml", "name: v\nselector: {kinds: [vm]}\n")
+	writeCredRef(t, gate, "g.yaml", "name: gate\nownerTeam: t\nbackend: k8s-secret\nlocator: {name: n}\ngateOnly: true\n")
+	gp, err := ParseDir(gate, nil)
+	if err != nil {
+		t.Fatalf("gate-only (gateOnly: true, injection-less) CredentialRef must be valid: %v", err)
+	}
+	if len(gp.CredentialRefs) != 1 || len(gp.CredentialRefs[0].Injection) != 0 {
+		t.Fatalf("gate-only ref must parse with zero injection: %+v", gp.CredentialRefs)
 	}
 
 	// credential-refs/ absent → valid (pre-ADR-0009 repos).

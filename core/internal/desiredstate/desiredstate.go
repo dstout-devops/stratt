@@ -631,6 +631,11 @@ type credRefFile struct {
 	Backend   string            `yaml:"backend"`
 	Locator   map[string]any    `yaml:"locator"`
 	Injection []credRefInjxYAML `yaml:"injection"`
+	// GateOnly asserts the ref brokers NO material — it is purely an Action's authz
+	// gate (ADR-0052/0092). It makes an injection-less ref DELIBERATE, so an author
+	// who merely dropped the injection block still fails compile (§1.8), and a
+	// reviewer sees the intent in Git rather than inferring it from an absent block.
+	GateOnly bool `yaml:"gateOnly"`
 }
 type credRefInjxYAML struct {
 	Key  string `yaml:"key"`
@@ -669,8 +674,18 @@ func (f credRefFile) toCredentialRef() (types.CredentialRef, error) {
 	if err != nil {
 		return ref, err
 	}
-	if len(f.Injection) == 0 {
-		return ref, fmt.Errorf("credential ref %s: injection policy is required", f.Name)
+	// Injection drives ALL material projection — pod secretKeyRef/volumes AND the
+	// plugin SecretBroker's authorized keys — so empty injection ⇒ nothing resolved.
+	// That is legal ONLY as a DELIBERATE gate-only ref (gateOnly: true, ADR-0052 §2.5
+	// / ADR-0092 — an Action's cred is its authz gate even when the plugin acts via
+	// its own pod ServiceAccount). Requiring the marker keeps an ACCIDENTALLY-dropped
+	// injection block failing at compile (§1.8), not silently degrading to "resolves
+	// nothing". A gateOnly ref with injection entries is contradictory — reject it.
+	switch {
+	case len(f.Injection) == 0 && !f.GateOnly:
+		return ref, fmt.Errorf("credential ref %s: injection policy is required (or set gateOnly: true for a material-less authz-gate ref — ADR-0052/0092)", f.Name)
+	case len(f.Injection) > 0 && f.GateOnly:
+		return ref, fmt.Errorf("credential ref %s: gateOnly refs broker no material — remove either the injection block or gateOnly", f.Name)
 	}
 	inj := make([]types.CredentialInjection, len(f.Injection))
 	for i, x := range f.Injection {

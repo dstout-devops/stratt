@@ -8,4 +8,8 @@
 name: helm-deploy
 ownerTeam: platform-admins
 backend: k8s-secret
+# Pointer-only (§2.5): the locator names an authz-marker Secret; the crossing
+# coordinate is a POINTER, never material. No injection — helm acts via the pod SA
+# (ADR-0092 §6) — so this is a DELIBERATE gate-only ref (gateOnly, ADR-0052).
+gateOnly: true
 locator: { namespace: stratt-m2, name: helm-deploy-authz }
