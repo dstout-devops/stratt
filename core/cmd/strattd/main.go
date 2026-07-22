@@ -589,6 +589,34 @@ func run(ctx context.Context, log *slog.Logger) error {
 		log.Info("awsec2 plugin actions registered", "addr", awsPluginAddr, "actions", len(awsActions))
 	}
 
+	// awss3 plugin (ADR-0097): bucket lifecycle Actions + a metadata-only bucket
+	// Syncer (opt-in via STRATT_AWSS3_INTERVAL, Block B below). One host/grant.
+	var s3Host *pluginhost.Host
+	if s3Addr := os.Getenv("STRATT_AWSS3_PLUGIN_ADDR"); s3Addr != "" {
+		conn, err := grpc.NewClient(s3Addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+		if err != nil {
+			return fmt.Errorf("awss3 plugin dial %s: %w", s3Addr, err)
+		}
+		defer conn.Close()
+		grant := pluginhost.Grant{
+			PluginIdentity:   env("STRATT_AWSS3_PLUGIN_ID", "awss3"),
+			Tier:             pluginhost.Tier(env("STRATT_AWSS3_TIER", "trusted")),
+			Source:           types.Source{Kind: "awss3", Name: env("STRATT_AWSS3_SOURCE_NAME", "awss3"), Endpoint: os.Getenv("STRATT_AWSS3_ENDPOINT")},
+			FacetNamespaces:  []string{"bucket.config"},
+			LabelKeys:        []string{"aws.region", "stratt.managed"},
+			IdentitySchemes:  []string{"aws.bucketArn"},
+			TombstoneSchemes: []string{"aws.bucketArn"},
+		}
+		s3Host = pluginhost.New(store, pluginv1.NewPluginServiceClient(conn), grant, log)
+		// S3 has no dry-run operation ⇒ every Action is non-DryRunnable.
+		for _, name := range []string{"awss3/create-bucket", "awss3/delete-bucket", "awss3/enable-versioning", "awss3/put-bucket-policy"} {
+			if err := registerPluginAction(name, s3Host, false); err != nil {
+				return err
+			}
+		}
+		log.Info("awss3 plugin actions registered", "addr", s3Addr)
+	}
+
 	// notify/webhook plugin Action (ADR-0046 Category A / ADR-0052): the notification
 	// delivery left the core. When configured, the stratt-notify plugin issues the POST
 	// in-process, resolving the Sink's per-call url/token via the SecretBroker — the
@@ -1209,6 +1237,21 @@ func run(ctx context.Context, log *slog.Logger) error {
 		log.Info("awsec2 plugin: build Action only (STRATT_AWS_INTERVAL unset — Syncer off)")
 	} else {
 		log.Info("no EC2 plugin configured (STRATT_AWS_PLUGIN_ADDR empty); syncer idle")
+	}
+
+	// ── awss3 bucket Syncer over the port (ADR-0097) — OPT-IN (STRATT_AWSS3_INTERVAL).
+	// Metadata-only: bucket existence/config, NEVER object bytes (§1.2).
+	if s3Host != nil && os.Getenv("STRATT_AWSS3_INTERVAL") != "" {
+		interval, err := time.ParseDuration(os.Getenv("STRATT_AWSS3_INTERVAL"))
+		if err != nil {
+			return fmt.Errorf("awss3 interval: %w", err)
+		}
+		src := env("STRATT_AWSS3_SOURCE_NAME", "awss3")
+		controllers = append(controllers, homeSupervise(src, s3Host.Register, func(cctx context.Context) error {
+			return s3Host.SyncLoop(cctx, interval)
+		}))
+	} else if s3Host != nil {
+		log.Info("awss3 plugin: Actions only (STRATT_AWSS3_INTERVAL unset — Syncer off)")
 	}
 
 	// ── cert-issuer (CLM) Syncer + reconcile Actuator over the port (ADR-0050) ─

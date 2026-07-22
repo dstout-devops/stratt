@@ -1,0 +1,3 @@
+{ "$schema": "https://json-schema.org/draft/2020-12/schema", "$id": "stratt:contract:actions/awss3/put-bucket-policy.input:v1", "title": "awss3/put-bucket-policy input",
+  "description": "Set an S3 bucket policy (ADR-0097). The policy is an OPAQUE JSON document string — the seam is typed and pinned; the policy's internal structure is deliberately not modeled (§1.1, avoids ontology creep). REFUSED for protected buckets. AWS credentials inject as a CredentialRef (§2.5).",
+  "type": "object", "properties": { "name": {"type":"string"}, "policy": {"type":"string","description":"opaque IAM policy JSON document"} }, "required": ["name","policy"], "additionalProperties": false }

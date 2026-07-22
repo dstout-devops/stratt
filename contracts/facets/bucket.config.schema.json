@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "stratt:contract:facets/bucket.config:v1",
+  "title": "bucket.config Facet",
+  "description": "Object-storage bucket METADATA, projected by the awss3 Syncer (ADR-0097; §1.1). Metadata ONLY — never object contents (§1.2). versioning is optional (a non-reporting backend omits it rather than emitting a false value). Closed schema matching normalizeBucket.",
+  "type": "object",
+  "properties": {
+    "creationDate": { "type": "string", "format": "date-time", "description": "RFC3339 UTC bucket creation time" },
+    "versioning": { "type": "string", "description": "versioning status (e.g. Enabled, Suspended); omitted when the backend does not report it" }
+  },
+  "additionalProperties": false
+}

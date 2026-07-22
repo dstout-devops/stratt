@@ -1,0 +1,4 @@
+{ "$schema": "https://json-schema.org/draft/2020-12/schema", "$id": "stratt:contract:actions/awss3/create-bucket.input:v1", "title": "awss3/create-bucket input",
+  "description": "Create an S3 bucket (ADR-0097). AWS credentials inject as a CredentialRef (§2.5).",
+  "type": "object", "properties": { "name": {"type":"string"}, "region": {"type":"string","description":"location constraint; omit for us-east-1"} },
+  "required": ["name"], "additionalProperties": false }

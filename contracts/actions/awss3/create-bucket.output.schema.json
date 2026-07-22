@@ -1,0 +1,3 @@
+{ "$schema": "https://json-schema.org/draft/2020-12/schema", "$id": "stratt:contract:actions/awss3/create-bucket.output:v1", "title": "awss3/create-bucket output",
+  "description": "The created bucket ARN (bindable). Best-effort stratt:managed-tagged for orphan discovery.",
+  "type": "object", "properties": { "bucketArn": {"type":"string"} }, "required": ["bucketArn"], "additionalProperties": false }

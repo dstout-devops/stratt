@@ -168,12 +168,16 @@ services:
     # storage-layer immutability.
     image: chrislusf/seaweedfs:4.40
     # All-in-one (master+volume+filer+s3); path-style S3 on 8333. -ip.bind=0.0.0.0
-    # so the mapped port reaches it from strattd on the host.
-    command: ["server", "-dir=/data", "-s3", "-s3.port=8333", "-ip.bind=0.0.0.0", "-master.volumeSizeLimitMB=100"]
+    # so the mapped port reaches it from strattd on the host. -s3.config declares an
+    # admin identity (testing/testing — the AWS_ACCESS_KEY_ID the Evidence store +
+    # the awss3 Connector, ADR-0097, sign with): SeaweedFS 4.x rejects SIGNED requests
+    # with an unknown key even when auth is nominally off, and the AWS SDK always signs.
+    command: ["server", "-dir=/data", "-s3", "-s3.port=8333", "-s3.config=/etc/seaweedfs/s3.json", "-ip.bind=0.0.0.0", "-master.volumeSizeLimitMB=100"]
     ports:
       - "8333:8333"
     volumes:
       - seaweeddata:/data
+      - ./seaweedfs-s3.json:/etc/seaweedfs/s3.json:ro
     healthcheck:
       test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:8333/ || exit 1"]
       interval: 3s

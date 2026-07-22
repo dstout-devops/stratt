@@ -1,0 +1,2 @@
+{ "$schema": "https://json-schema.org/draft/2020-12/schema", "$id": "stratt:contract:actions/awss3/delete-bucket.output:v1", "title": "awss3/delete-bucket output",
+  "type": "object", "properties": { "name": {"type":"string"} }, "required": ["name"], "additionalProperties": false }

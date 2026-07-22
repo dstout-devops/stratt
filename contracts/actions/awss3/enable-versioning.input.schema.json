@@ -1,0 +1,3 @@
+{ "$schema": "https://json-schema.org/draft/2020-12/schema", "$id": "stratt:contract:actions/awss3/enable-versioning.input:v1", "title": "awss3/enable-versioning input",
+  "description": "Enable versioning on an S3 bucket (ADR-0097). AWS credentials inject as a CredentialRef (§2.5).",
+  "type": "object", "properties": { "name": {"type":"string"} }, "required": ["name"], "additionalProperties": false }

@@ -13,6 +13,7 @@ use (
 	./plugins/ansible
 	./plugins/ansibleproject
 	./plugins/awsec2
+	./plugins/awss3
 	./plugins/awx
 	./plugins/certissuer
 	./plugins/chef

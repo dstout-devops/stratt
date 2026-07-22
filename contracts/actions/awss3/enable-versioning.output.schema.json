@@ -1,0 +1,2 @@
+{ "$schema": "https://json-schema.org/draft/2020-12/schema", "$id": "stratt:contract:actions/awss3/enable-versioning.output:v1", "title": "awss3/enable-versioning output",
+  "type": "object", "properties": { "name": {"type":"string"}, "versioning": {"type":"string"} }, "required": ["name"], "additionalProperties": false }
