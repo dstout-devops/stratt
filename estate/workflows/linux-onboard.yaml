@@ -18,7 +18,7 @@ steps:
     action: awsec2/create-vm # landscape binding — swap for crossplane/opentofu/vsphere
     params:
       region: us-east-1
-      endpoint: http://moto:5000 # dev stand-in; prod omits (real AWS)
+      endpoint: http://floci:4566 # floci real-host EC2 dev backend (ADR-0093); prod omits (real AWS)
       instanceType: t3.micro
       ami: ami-0linuxbaseline000
       name: linux-fleet-node

@@ -1,8 +1,9 @@
 # ADR 0093 — Real dev backends: Floci (EC2) replaces moto; SeaweedFS bump (S3)
 
-- **Status:** Proposed
+- **Status:** **Accepted** (2026-07-22) — steward approved Slice A of the two-plugin plan;
+  charter-guardian PASS (two flags folded); dependency-scout verdicts folded.
 - **Date:** 2026-07-22
-- **Deciders:** steward (dstout), dependency-scout
+- **Deciders:** steward (dstout), dependency-scout, charter-guardian
 - **Charter sections:** §1.3 (rug-pull-proof), §1.4 (boring spine), §1.7 (evergreen), §3 (dev harness),
   §7.1 (any-Kubernetes / self-hostable)
 - **Frames:** the AWS full-featured work (Slice C full EC2, Slice D S3 connector) — this slice gives
@@ -46,9 +47,16 @@ core S3 API, replication, and bucket versioning remain in the Apache-2.0 core to
 **3. Evergreen gates (§1.7)** — wired in CI for both:
 - Pin by **digest**, not floating tag; run the S3-path + EC2-connector tests against **both** the
   pinned and N-1 image on every bump.
-- **Floci tripwire:** solo-maintainer, ~4-month-old project, zero major-version track record — pin by
-  digest and re-validate on every bump before trusting SemVer claims; MIT means Stratt can fork/vendor
-  if it stalls (the mitigant).
+- **Floci tripwire (with a concrete trigger — charter-guardian Flag A):** solo-maintainer,
+  ~4-month-old project, zero major-version track record — so N-1-in-CI alone is thin (N-1 is days old,
+  no upgrade record to evaluate, §1.7). Pin by digest, re-validate on every bump, AND add an
+  **upstream-liveness check**; **execute the MIT fork/vendor decision when** either fires: no upstream
+  release for **> 6 months**, or an unpatched CVE open **> 30 days**. This makes §1.7's
+  "evaluated-before-adoption" auditable rather than aspirational.
+- **Dev-harness-only boundary (charter-guardian Flag B):** Floci is accepted (steward, 2026-07-22)
+  strictly as a **dev/CI backend reached only via `STRATT_AWSEC2_ENDPOINT`** — no code-level
+  dependency. If it ever creeps toward load-bearing for anything a user runs, it needs a fresh charter
+  pass.
 - **SeaweedFS tripwire:** single-vendor with a commercial Enterprise arm. If any release moves the
   **core S3 verbs, basic versioning, or lifecycle** behind the Enterprise license, treat it as a hard
   rug-pull and **fail over to Garage** (AGPLv3 — admissible only as an unmodified subprocess/sidecar
@@ -103,5 +111,13 @@ no plugin code.
   no upgrade track record → digest-pin + N-1 gate; MIT fork-able). SeaweedFS 4.40 = RECOMMEND
   (Apache-2.0 core; single-vendor Enterprise-arm risk → Garage failover tripwire). ministack = REJECT
   for EC2 (mocked). Full report folded into the Decision + tripwires above.
-- **charter-guardian:** _pending_ (dev-harness dep swap; §1.3/§1.7 rug-pull posture).
+- **charter-guardian (2026-07-22): PASS — with two judgment-call flags (folded), no hard violations,
+  no non-goals crossed.** Correctly dev-harness-scoped (production spine untouched); routes around the
+  §1.3 LocalStack anti-pattern rather than into it; residual risks carry pre-declared failovers.
+  Folded: (A) the Floci fork tripwire now has a concrete trigger + upstream-liveness check; (B) the
+  acceptance is dated and bounded dev-harness-only. Precision note (applied): dependency-selection
+  governance lives most precisely in **§1.4** (boring/huge-community) + **§1.7** (upgrade record) +
+  **§3** (the MinIO single-vendor warning; SeaweedFS/Garage are charter-*named* reference S3 impls) —
+  §1.3 proper is Stratt's own licensing. The Garage-AGPL-as-unmodified-sidecar reading was affirmed
+  correct (mirrors the §3 Ansible subprocess boundary).
 - **vocabulary-linter:** _n/a_ (no new core-model identifiers; `floci`/`seaweedfs` are tool/image names).

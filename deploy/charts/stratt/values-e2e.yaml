@@ -83,7 +83,7 @@ plugins:
       digest: ""
       pullPolicy: Never # kind-loaded (task image:awsec2-plugin)
     env:
-      STRATT_AWSEC2_ENDPOINT: "http://192.168.102.1:5000" # moto stand-in on the host gateway
+      STRATT_AWSEC2_ENDPOINT: "http://192.168.102.1:4566" # floci real-host EC2 on the host gateway (ADR-0093)
       STRATT_AWSEC2_REGION: "us-east-1"
       # Dummy static creds: moto accepts ANY credentials, but the AWS SDK's
       # LoadDefaultConfig must resolve SOME (else it probes IMDS and times out).

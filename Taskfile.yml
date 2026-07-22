@@ -571,7 +571,7 @@ tasks:
           --set-string temporal.address="${GW}:7233" \
           --set-string "plugins[1].env.STRATT_VCENTER_URL=https://${GW}:8989/sdk" \
           --set-string "plugins[1].hostEnv.STRATT_VCENTER_URL=https://${GW}:8989/sdk" \
-          --set-string "plugins[2].env.STRATT_AWSEC2_ENDPOINT=http://${GW}:5000"
+          --set-string "plugins[2].env.STRATT_AWSEC2_ENDPOINT=http://${GW}:4566"
       - "{{.KUBECTL}} --context {{.KIND_CONTEXT}} -n stratt rollout status deploy/stratt --timeout=180s"
 
   bootstrap:kind:
@@ -599,7 +599,7 @@ tasks:
       # NATS (bus), Temporal (orchestration), vcsim (the vcenter Syncer's SoR).
       # Scoping this away from the full `dev:up` keeps the turnkey path off the
       # kitchen-sink extras (zot registry, zitadel, …) a plugin run never touches.
-      - docker compose -f deploy/dev/docker-compose.yml up -d --wait postgres nats temporal vcsim moto
+      - docker compose -f deploy/dev/docker-compose.yml up -d --wait postgres nats temporal vcsim floci openbao
       - task: image:kind-load
       - task: dev:ee:build
       - task: image:vcenter-plugin

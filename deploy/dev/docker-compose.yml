@@ -137,15 +137,23 @@ services:
     # with). The Syncer's own connect/retry loop is the effective readiness
     # signal in dev.
 
-  moto:
-    # Dev stand-in for the EC2 API (ADR-0014; the vcsim posture). moto over
-    # LocalStack: dependency-scout 2026-07-12 — LocalStack's free tier
-    # dropped EC2 behind an auth-gated paid plan (March 2026); moto is
-    # Apache-2.0, community-governed, actively maintained, and mocks the
-    # run/describe/terminate-instances surface the Syncer e2e needs.
-    image: motoserver/moto:5.2.2
+  floci:
+    # REAL-host EC2 dev backend (ADR-0093), replacing the moto MOCK. Floci runs real
+    # Docker containers as EC2 instances (SSH-able, cloud-init/IMDS, real lifecycle),
+    # serving the AWS API on :4566. floci-io/floci, MIT (dependency-scout 2026-07-22;
+    # LocalStack rug-pulled its free tier, moto is a mock — neither gives real hosts).
+    # It needs the Docker socket to launch instance containers (dind siblings). Pin;
+    # pin by DIGEST in CI (§1.7). moto retired (may return for mock-OK non-EC2 svcs).
+    image: floci/floci:1.5.33
     ports:
-      - "5000:5000"
+      - "4566:4566"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:4566/_localstack/health 2>/dev/null || wget -q -O /dev/null http://127.0.0.1:4566/ || exit 1"]
+      interval: 3s
+      timeout: 3s
+      retries: 30
 
   seaweedfs:
     # S3-compatible object store for the Evidence store (charter §2.4, ADR-0029).
@@ -158,7 +166,7 @@ services:
     # WORM. Real WORM enforcement needs a compliant production store (AWS S3
     # Object Lock). This dev container proves the S3 path + tamper-evidence, not
     # storage-layer immutability.
-    image: chrislusf/seaweedfs:3.97
+    image: chrislusf/seaweedfs:4.40
     # All-in-one (master+volume+filer+s3); path-style S3 on 8333. -ip.bind=0.0.0.0
     # so the mapped port reaches it from strattd on the host.
     command: ["server", "-dir=/data", "-s3", "-s3.port=8333", "-ip.bind=0.0.0.0", "-master.volumeSizeLimitMB=100"]
