@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "stratt:contract:actuators/helm.input:v1",
+  "title": "helm Step params",
+  "description": "Input Contract for the helm Actuator (charter §2.3; ADR-0092). Hand-written — derivation ladder rung 1 (§2.2). mode=template is read-only (renders manifests); mode=apply mutates (helm upgrade --install) and is a MUTATING capability that must sit behind a Gate — compile-enforced (ADR-0092 decision 3b). Targets Helm 4 (dependency-scout: v4.2.3, N-1 v3.21.3).",
+  "type": "object",
+  "required": ["chart", "release", "namespace", "mode"],
+  "properties": {
+    "chart": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Chart reference: an OCI ref (oci://…, pin by digest — §7.3), a repo chart name (with `repo`), or a local path under the plugin's chart root."
+    },
+    "repo": {
+      "type": "string",
+      "description": "Chart repository URL for a non-OCI repo chart (passed as helm --repo; no persistent `helm repo add` state)."
+    },
+    "version": {
+      "type": "string",
+      "description": "Exact chart version (or digest) to install — pin in production (§7.3). Never a floating tag."
+    },
+    "release": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^[a-z0-9]([a-z0-9-]*[a-z0-9])?$",
+      "description": "Helm release name; the template and apply Steps of one Workflow share it (ADR-0092 §3)."
+    },
+    "namespace": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^[a-z0-9]([a-z0-9-]*[a-z0-9])?$",
+      "description": "Target namespace for the release."
+    },
+    "mode": {
+      "type": "string",
+      "enum": ["template", "apply"],
+      "description": "template: render the manifests that WOULD apply (read-only, the plan-equivalent). apply: `helm upgrade --install` against the release — MUTATING, must be Gated (ADR-0092 §3/§3b).",
+      "x-stratt-mutating-values": ["apply"]
+    },
+    "values": {
+      "type": "object",
+      "description": "Values overlay, rendered as a values file. OPAQUE to Stratt — validated against the chart's own values schema by helm downstream, never typed by this Contract (§1.1)."
+    },
+    "createNamespace": {
+      "type": "boolean",
+      "description": "Create the target namespace on apply if absent (helm --create-namespace). template never creates anything."
+    }
+  },
+  "additionalProperties": false
+}

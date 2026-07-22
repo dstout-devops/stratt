@@ -23,7 +23,13 @@ vars:
   # Cluster tooling — pinned + installed to repo-local .bin/ so the dev stack
   # stands up with ZERO manual installs beyond go+task (quarterly upgrade train).
   KIND_VER: "0.32.0"
-  HELM_VER: "3.16.4"
+  # Helm 4 line (ADR-0092 / dependency-scout): Helm 3 bug-fix support lapsed
+  # 2026-07-08 (security EOL 2026-11-11), so the pin moved off the stale 3.16.4.
+  # N-1 v3.21.3 must keep working; the plugin image pins the same v4.2.3.
+  # sha256 verified against get.helm.sh (§7.3 — verify, don't trust a bare curl).
+  HELM_VER: "4.2.3"
+  HELM_SHA256_AMD64: "e9b88b4ee95b18c706839c28d3a0220e5bc470e9cd9262410c90793c45ff8b7c"
+  HELM_SHA256_ARM64: "21abd9354d39b2cd79a8d76be6912cd137a983cbf997193503fb8a6a6e2f2785"
   KUBECTL_VER: "1.34.1" # within skew of the kind node (K8s N-2, §1.7)
   BIN: "{{.ROOT_DIR}}/.bin"
   HELM: "{{.ROOT_DIR}}/.bin/helm"
@@ -401,8 +407,17 @@ tasks:
       - |
         set -eu
         arch=$(uname -m); case "$arch" in x86_64) arch=amd64;; aarch64|arm64) arch=arm64;; esac
+        # Verify the pinned sha256 before install (§7.3 — no bare `curl | tar`;
+        # dependency-scout binding condition, ADR-0092).
+        case "$arch" in
+          amd64) sha="{{.HELM_SHA256_AMD64}}";;
+          arm64) sha="{{.HELM_SHA256_ARM64}}";;
+          *) echo "unsupported arch: $arch" >&2; exit 1;;
+        esac
         tmp=$(mktemp -d)
-        curl -fsSL "https://get.helm.sh/helm-v{{.HELM_VER}}-linux-${arch}.tar.gz" | tar -xz -C "$tmp"
+        curl -fsSL -o "$tmp/helm.tgz" "https://get.helm.sh/helm-v{{.HELM_VER}}-linux-${arch}.tar.gz"
+        echo "${sha}  $tmp/helm.tgz" | sha256sum -c -
+        tar -xz -C "$tmp" -f "$tmp/helm.tgz"
         install -m 0755 "$tmp/linux-${arch}/helm" "{{.HELM}}"
         rm -rf "$tmp"
 
@@ -449,6 +464,12 @@ tasks:
     cmds:
       - docker build -f plugins/netbox/Dockerfile -t stratt-plugin-netbox:dev .
       - go run sigs.k8s.io/kind@v{{.KIND_VER}} load docker-image stratt-plugin-netbox:dev --name {{.KIND_CLUSTER}}
+
+  image:helm-plugin:
+    desc: Build the helm Actuator plugin image and load it into the kind cluster (ADR-0092)
+    cmds:
+      - docker build -f plugins/helm/Dockerfile -t stratt-plugin-helm:dev .
+      - go run sigs.k8s.io/kind@v{{.KIND_VER}} load docker-image stratt-plugin-helm:dev --name {{.KIND_CLUSTER}}
 
   image:crossplane-plugin:
     desc: Build the Crossplane build-Actuator plugin image (ADR-0059) and load it into the kind cluster

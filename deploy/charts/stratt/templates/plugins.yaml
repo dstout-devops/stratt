@@ -68,14 +68,23 @@ spec:
                  needs the estate's hosts/ files. Mount ONLY those keys from the
                  inline declarations ConfigMap (least privilege — not the whole
                  estate) at /hosts. Dev/inline path; prod delivers via git-sync. */ -}}
-          {{- if .estateHosts }}
+          {{- if or .estateHosts .tmpDir }}
           volumeMounts:
+            {{- if .estateHosts }}
             - name: estate-hosts
               mountPath: /hosts
               readOnly: true
+            {{- end }}
+            {{- if .tmpDir }}
+            # Writable scratch for a plugin with a read-only rootfs that needs /tmp —
+            # the helm Actuator's cache/config + rendered values (ADR-0092 / §7.3).
+            - name: tmp
+              mountPath: /tmp
+            {{- end }}
           {{- end }}
-      {{- if .estateHosts }}
+      {{- if or .estateHosts .tmpDir }}
       volumes:
+        {{- if .estateHosts }}
         - name: estate-hosts
           configMap:
             name: {{ include "stratt.fullname" $ }}-declarations
@@ -84,6 +93,11 @@ spec:
               - key: {{ trimPrefix "dev/declarations/" $path | replace "/" "__" }}
                 path: {{ trimPrefix "dev/declarations/hosts/" $path }}
               {{- end }}
+        {{- end }}
+        {{- if .tmpDir }}
+        - name: tmp
+          emptyDir: {}
+        {{- end }}
       {{- end }}
 ---
 apiVersion: v1

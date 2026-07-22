@@ -702,6 +702,33 @@ func run(ctx context.Context, log *slog.Logger) error {
 		log.Info("no Crossplane plugin configured (STRATT_CROSSPLANE_PLUGIN_ADDR empty); actuator disabled")
 	}
 
+	// ── Helm Actuator over the port (ADR-0092) ──────────────────────────
+	// The `helm-actuator` Blueprint route target (ADR-0083): Plan renders (helm
+	// template — the Gate-reviewed artifact), Apply converges (helm upgrade --install,
+	// Helm-4 flags). helm is a subprocess in the plugin pod; kube access is the
+	// plugin's per-route scoped ServiceAccount (ADR-0092 §6). No graph write-back in
+	// v1 (release-status → Entity is a follow-up Normalizer): grants stay empty, so an
+	// ungranted emission is rejected, not silently written.
+	if addr := os.Getenv("STRATT_HELM_PLUGIN_ADDR"); addr != "" {
+		conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+		if err != nil {
+			return fmt.Errorf("helm plugin dial %s: %w", addr, err)
+		}
+		defer conn.Close()
+		grant := pluginhost.Grant{
+			PluginIdentity: env("STRATT_HELM_PLUGIN_ID", "helm"),
+			Tier:           pluginhost.Tier(env("STRATT_HELM_TIER", "trusted")),
+			Source:         types.Source{Kind: "helm", Name: env("STRATT_HELM_SOURCE_NAME", "helm")},
+		}
+		host := pluginhost.New(store, pluginv1.NewPluginServiceClient(conn), grant, log)
+		if err := registerPluginActuator("helm", host, true, grant, nil); err != nil {
+			return err
+		}
+		log.Info("helm plugin actuator registered", "addr", addr)
+	} else {
+		log.Info("no Helm plugin configured (STRATT_HELM_PLUGIN_ADDR empty); actuator disabled")
+	}
+
 	// ── Evidence store (§2.4, ADR-0029) ─────────────────────────────────
 	// Gated on STRATT_EVIDENCE_BUCKET: without it, Findings open unsealed (a
 	// logged no-op), like the opentofu actuator is gated on a state key.
