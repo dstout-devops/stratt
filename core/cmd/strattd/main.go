@@ -33,6 +33,7 @@ import (
 	"github.com/dstout-devops/stratt/core/internal/baselines"
 	"github.com/dstout-devops/stratt/core/internal/cellrouter"
 	"github.com/dstout-devops/stratt/core/internal/compiler"
+	"github.com/dstout-devops/stratt/core/internal/connectorregistry"
 	"github.com/dstout-devops/stratt/core/internal/contract"
 	"github.com/dstout-devops/stratt/core/internal/cutover"
 	"github.com/dstout-devops/stratt/core/internal/desiredstate"
@@ -1502,6 +1503,20 @@ func run(ctx context.Context, log *slog.Logger) error {
 				log.Error("desired-state controller stopped", "error", err)
 			}
 		})
+
+		// Runtime Connector/Actuator registry (ADR-0103): reconcile the declared
+		// Connector/Actuator rows (populated by the desired-state loop above) into dialed +
+		// registered plugins with NO restart. Actuators reconcile on EVERY replica (their
+		// dispatch-map membership must be visible to any worker — D3); Connector Syncers
+		// reconcile LEADER-ONLY (graph writers, home-gated). helm's planstore is nil (as its
+		// boot-env block was); an Actuator that needs one is a later-slice concern.
+		connReg := connectorregistry.New(store, plugins, homeDeps, nil,
+			func(addr string) (*grpc.ClientConn, error) {
+				return grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+			},
+			interval, log)
+		go connReg.RunActuators(ctx)                             // every replica
+		controllers = append(controllers, connReg.RunConnectors) // leader-only
 
 		// Authz-home gate (ADR-0044 slice 4): only the authz-home Cell's daemon
 		// writes the shared OpenFGA tuple store — else N Cells thrash it. Derived
