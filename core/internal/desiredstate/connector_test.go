@@ -147,6 +147,17 @@ func TestParseRealEstate(t *testing.T) {
 	if !haveProvider {
 		t.Fatalf("estate/actuators/s3-statestore.yaml must parse into a statestore provider; got %+v", d.Actuators)
 	}
+	// openbao is the ADR-0106 multi-capability provider (provides:[keycustodian, certissuer]).
+	var haveOpenBao bool
+	for _, a := range d.Actuators {
+		if a.Name == "openbao" && len(a.Provides) == 2 &&
+			a.Provides[0] == "keycustodian" && a.Provides[1] == "certissuer" && len(a.ActionNames) == 0 {
+			haveOpenBao = true
+		}
+	}
+	if !haveOpenBao {
+		t.Fatalf("estate/actuators/openbao.yaml must parse into a keycustodian+certissuer provider (no resolve Action); got %+v", d.Actuators)
+	}
 	if !haveConn {
 		t.Fatalf("estate/connectors/declared.yaml must parse into the declared Connector; got %+v", d.Connectors)
 	}
