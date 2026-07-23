@@ -46,6 +46,7 @@ import (
 	"github.com/dstout-devops/stratt/core/internal/keycustodian"
 	"github.com/dstout-devops/stratt/core/internal/leader"
 	"github.com/dstout-devops/stratt/core/internal/notify"
+	"github.com/dstout-devops/stratt/core/internal/objectstore"
 	"github.com/dstout-devops/stratt/core/internal/observability"
 	"github.com/dstout-devops/stratt/core/internal/orchestrate"
 	"github.com/dstout-devops/stratt/core/internal/planstore"
@@ -834,16 +835,14 @@ func run(ctx context.Context, log *slog.Logger) error {
 	}
 	if bucket := os.Getenv("STRATT_EVIDENCE_BUCKET"); bucket != "" {
 		retentionDays, _ := strconv.Atoi(env("STRATT_EVIDENCE_RETENTION_DAYS", "365"))
-		evidence, err = evidencestore.New(ctx, evidencestore.Config{
-			// A dedicated endpoint (the object store is a distinct service from
-			// the EC2 mock on STRATT_AWS_ENDPOINT); empty falls back to the AWS
-			// default resolver (real S3).
-			Endpoint:      env("STRATT_EVIDENCE_ENDPOINT", os.Getenv("STRATT_AWS_ENDPOINT")),
-			Region:        env("STRATT_EVIDENCE_REGION", env("STRATT_AWS_REGION", "us-east-1")),
-			Bucket:        bucket,
-			RetentionDays: retentionDays,
-			PathStyle:     true,
-		})
+		// One shared object-store client (objectstore.ConfigFromEnv resolves the
+		// endpoint/region once — canonical STRATT_OBJECTSTORE_*, with the historical
+		// STRATT_EVIDENCE_*/STRATT_AWS_* vars honored as fallbacks).
+		objClient, oerr := objectstore.New(ctx, objectstore.ConfigFromEnv())
+		if oerr != nil {
+			return oerr
+		}
+		evidence, err = evidencestore.New(objClient, bucket, retentionDays)
 		if err != nil {
 			return err
 		}

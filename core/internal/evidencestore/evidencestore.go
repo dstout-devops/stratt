@@ -29,25 +29,15 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
-	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/aws/smithy-go"
+
+	"github.com/dstout-devops/stratt/core/internal/objectstore"
 )
 
-// Config locates the object store. Endpoint is the S3 API (dev: SeaweedFS);
-// empty uses the SDK default (real AWS). RetentionDays sets the object-lock
-// retain window applied at seal time.
-type Config struct {
-	Endpoint      string
-	Region        string
-	Bucket        string
-	RetentionDays int
-	// PathStyle is required for S3-compatible servers (SeaweedFS, moto).
-	PathStyle bool
-}
-
-// Store seals and retrieves Evidence objects.
+// Store seals and retrieves Evidence objects. It layers WORM object-lock +
+// sha256 tamper-evidence over a shared object-store client (objectstore).
 type Store struct {
 	cl     *s3.Client
 	bucket string
@@ -62,27 +52,21 @@ type Sealed struct {
 	RetainUntil time.Time
 }
 
-// New builds a Store from the standard config chain (mirrors the EC2 Syncer's
-// client()). It does NOT touch the network; call EnsureBucket to provision.
-func New(ctx context.Context, cfg Config) (*Store, error) {
-	if cfg.Bucket == "" {
+// New builds a Store over a shared object-store Client (objectstore.New). bucket is
+// the evidence WORM bucket; retentionDays sets the object-lock retain window applied
+// at seal time (≤0 ⇒ 365). It does NOT touch the network; call EnsureBucket to provision.
+func New(cl *objectstore.Client, bucket string, retentionDays int) (*Store, error) {
+	if bucket == "" {
 		return nil, fmt.Errorf("evidencestore: bucket is required")
 	}
-	awsCfg, err := awsconfig.LoadDefaultConfig(ctx, awsconfig.WithRegion(cfg.Region))
-	if err != nil {
-		return nil, fmt.Errorf("evidencestore: load config: %w", err)
+	if cl == nil || cl.S3 == nil {
+		return nil, fmt.Errorf("evidencestore: object-store client is required")
 	}
-	cl := s3.NewFromConfig(awsCfg, func(o *s3.Options) {
-		if cfg.Endpoint != "" {
-			o.BaseEndpoint = aws.String(cfg.Endpoint)
-		}
-		o.UsePathStyle = cfg.PathStyle
-	})
-	days := cfg.RetentionDays
+	days := retentionDays
 	if days <= 0 {
 		days = 365
 	}
-	return &Store{cl: cl, bucket: cfg.Bucket, retain: time.Duration(days) * 24 * time.Hour}, nil
+	return &Store{cl: cl.S3, bucket: bucket, retain: time.Duration(days) * 24 * time.Hour}, nil
 }
 
 // EnsureBucket creates the bucket with Object Lock enabled if absent

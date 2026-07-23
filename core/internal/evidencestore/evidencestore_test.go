@@ -9,6 +9,8 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+
+	"github.com/dstout-devops/stratt/core/internal/objectstore"
 )
 
 // testStore returns a Store against the dev SeaweedFS, skipping when unreachable
@@ -23,7 +25,11 @@ func testStore(t *testing.T) *Store {
 	t.Setenv("AWS_ACCESS_KEY_ID", "dev")
 	t.Setenv("AWS_SECRET_ACCESS_KEY", "devsecret")
 	ctx := context.Background()
-	s, err := New(ctx, Config{Endpoint: endpoint, Region: "us-east-1", Bucket: "stratt-evidence-test", PathStyle: true, RetentionDays: 1})
+	cl, err := objectstore.New(ctx, objectstore.Config{Endpoint: endpoint, Region: "us-east-1", PathStyle: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, err := New(cl, "stratt-evidence-test", 1)
 	if err != nil {
 		t.Fatal(err)
 	}
