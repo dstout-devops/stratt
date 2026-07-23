@@ -404,6 +404,11 @@ message ObserveResponse {
 message PlanRequest {
   Envelope envelope = 1;
   Payload desired = 2;
+  // Core-resolved capability handles (ADR-0105), keyed by capability class — the SAME legible
+  // channel as ApplyRequest.resolved_capabilities. Plan and Apply MUST see the same handle (e.g.
+  // the same statestore backend), or a pinned plan would be computed against a different state
+  // than it is applied to. Injected by the core PlanStep exactly as executePlugin injects Apply.
+  map<string, CapabilityHandle> resolved_capabilities = 3;
 }
 
 // PlanResponse is the plugin's domain diff, returned as an opaque Payload the core

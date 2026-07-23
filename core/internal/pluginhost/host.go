@@ -702,11 +702,28 @@ type CapabilityHandle struct {
 	CredentialRef string
 }
 
+// wireCapabilities translates the core-resolved capability handles onto the wire — shared by the
+// Apply and Plan paths so both carry the SAME handle (ADR-0105: a pinned plan must be computed
+// against the same state backend it is applied to). Nil/empty ⇒ nil (no injection).
+func wireCapabilities(in map[string]CapabilityHandle) map[string]*pluginv1.CapabilityHandle {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[string]*pluginv1.CapabilityHandle, len(in))
+	for class, ch := range in {
+		out[class] = &pluginv1.CapabilityHandle{Kind: ch.Kind, Config: ch.Config, CredentialRef: ch.CredentialRef}
+	}
+	return out
+}
+
 // PlanInvoke is a governed Actuator Plan request (the unary, pinnable producer).
 type PlanInvoke struct {
 	Principal      string
 	Params         []byte
 	CredentialRefs []string
+	// ResolvedCapabilities are the core-resolved handles (ADR-0105) — the SAME the Apply gets, so
+	// the pinned plan is computed against the same state backend it will be applied to.
+	ResolvedCapabilities map[string]CapabilityHandle
 }
 
 // PlanOutcome is the governed result of a Plan. Digest is the content-address of
@@ -736,7 +753,8 @@ func (h *Host) Plan(ctx context.Context, req PlanInvoke) (PlanOutcome, error) {
 			Principal: &pluginv1.Principal{Id: req.Principal, Kind: "user"},
 			Creds:     creds,
 		},
-		Desired: &pluginv1.Payload{Bytes: req.Params},
+		Desired:              &pluginv1.Payload{Bytes: req.Params},
+		ResolvedCapabilities: wireCapabilities(req.ResolvedCapabilities),
 	})
 	if err != nil {
 		return out, fmt.Errorf("pluginhost: plan: %w", err)
@@ -866,13 +884,7 @@ func (h *Host) ApplyRaw(ctx context.Context, req ApplyInvoke) (RawApplyResult, e
 		applyReq.PinnedPlan = req.PinnedPlan
 	}
 	// Core-resolved capability handles (ADR-0105) ride the LEGIBLE channel, never `desired`.
-	if len(req.ResolvedCapabilities) > 0 {
-		rc := make(map[string]*pluginv1.CapabilityHandle, len(req.ResolvedCapabilities))
-		for class, ch := range req.ResolvedCapabilities {
-			rc[class] = &pluginv1.CapabilityHandle{Kind: ch.Kind, Config: ch.Config, CredentialRef: ch.CredentialRef}
-		}
-		applyReq.ResolvedCapabilities = rc
-	}
+	applyReq.ResolvedCapabilities = wireCapabilities(req.ResolvedCapabilities)
 	stream, err := h.client.Apply(ctx, applyReq)
 	if err != nil {
 		return out, fmt.Errorf("pluginhost: apply: %w", err)

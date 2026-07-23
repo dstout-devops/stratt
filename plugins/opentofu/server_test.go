@@ -218,3 +218,53 @@ func TestGetManifest_Actuator(t *testing.T) {
 		t.Fatalf("actuator must advertise PLAN/APPLY/DESTROY, got %v", man.GetVerbs())
 	}
 }
+
+// TestStatestoreInjection proves the ADR-0105 consumer half: a core-injected statestore handle
+// drives -backend-config (provider-agnostic), and its presence skips the http-backend floor cred;
+// with no handle the plugin falls back to the http floor unchanged (opt-in is additive).
+func TestStatestoreInjection(t *testing.T) {
+	s := NewServer(Config{PluginID: "opentofu", BackendURL: "http://core:8080", StateKeyHex: "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"}, discard())
+
+	// No handle → the http floor: address points at the core backend, http creds set.
+	floor := strings.Join(s.initArgs("web-prod", nil), " ")
+	if !strings.Contains(floor, "-backend-config=address=http://core:8080/web-prod") {
+		t.Fatalf("no handle ⇒ http floor backend, got %q", floor)
+	}
+	_, _, floorEnv, _, err := s.prepare([]byte(`{"module":"m","workspace":"web-prod"}`), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !hasEnvPrefix(floorEnv, "TF_HTTP_PASSWORD=") {
+		t.Fatal("http floor must set the per-workspace TF_HTTP_PASSWORD")
+	}
+
+	// A core-injected s3 handle → -backend-config from its config (sorted), and NO http floor.
+	h := &pluginv1.CapabilityHandle{Kind: "s3", Config: map[string]string{
+		"bucket": "tfstate", "key": "stratt/web-prod.tfstate", "region": "us-east-1", "use_lockfile": "true",
+	}}
+	injected := strings.Join(s.initArgs("web-prod", h), " ")
+	for _, want := range []string{"-backend-config=bucket=tfstate", "-backend-config=key=stratt/web-prod.tfstate", "-backend-config=region=us-east-1", "-backend-config=use_lockfile=true"} {
+		if !strings.Contains(injected, want) {
+			t.Fatalf("injected backend must render %q, got %q", want, injected)
+		}
+	}
+	if strings.Contains(injected, "http://core:8080") {
+		t.Fatalf("an injected backend must NOT fall back to the http floor, got %q", injected)
+	}
+	_, _, injEnv, _, err := s.prepare([]byte(`{"module":"m","workspace":"web-prod"}`), h)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hasEnvPrefix(injEnv, "TF_HTTP_PASSWORD=") {
+		t.Fatal("an injected (non-http) backend must NOT set the http-floor cred")
+	}
+}
+
+func hasEnvPrefix(env []string, prefix string) bool {
+	for _, e := range env {
+		if strings.HasPrefix(e, prefix) {
+			return true
+		}
+	}
+	return false
+}

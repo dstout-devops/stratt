@@ -17,6 +17,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"sort"
 	"sync/atomic"
 
 	"google.golang.org/grpc"
@@ -73,7 +74,7 @@ func (s *Server) Health(context.Context, *pluginv1.HealthRequest) (*pluginv1.Hea
 // prepare parses params and builds the tofu run context. varFile is a temp
 // -var-file (JSON), "" when no vars. Env carries the per-workspace state
 // credential (TF_HTTP_PASSWORD) derived in the plugin, never from the core (§2.5).
-func (s *Server) prepare(raw []byte) (p params, dir string, env []string, varFile string, err error) {
+func (s *Server) prepare(raw []byte, stateBackend *pluginv1.CapabilityHandle) (p params, dir string, env []string, varFile string, err error) {
 	if err = json.Unmarshal(raw, &p); err != nil {
 		return p, "", nil, "", fmt.Errorf("invalid params: %w", err)
 	}
@@ -85,7 +86,11 @@ func (s *Server) prepare(raw []byte) (p params, dir string, env []string, varFil
 		"TF_IN_AUTOMATION=1",
 		"TF_DATA_DIR="+filepath.Join(dir, ".terraform"),
 	)
-	if s.cfg.BackendURL != "" {
+	// The http-backend FLOOR (ADR-0016) injects a per-workspace HMAC cred. When the core injects a
+	// statestore handle (ADR-0105) the backend is provider-resolved instead (e.g. s3, whose creds
+	// arrive via the pod's env chain, mounted from the handle's §2.5 CredentialRef) — skip the http
+	// cred so we don't send it to a non-http backend.
+	if stateBackend == nil && s.cfg.BackendURL != "" {
 		env = append(env, "TF_HTTP_USERNAME=stratt", "TF_HTTP_PASSWORD="+s.cfg.workspaceCredential(p.Workspace))
 	}
 	if len(p.Vars) > 0 {
@@ -99,8 +104,23 @@ func (s *Server) prepare(raw []byte) (p params, dir string, env []string, varFil
 	return p, dir, env, varFile, nil
 }
 
-func (s *Server) initArgs(workspace string) []string {
+func (s *Server) initArgs(workspace string, stateBackend *pluginv1.CapabilityHandle) []string {
 	args := []string{"init", "-input=false", "-no-color", "-json"}
+	if stateBackend != nil {
+		// Core-injected statestore backend (ADR-0105): the module declares `backend "<kind>" {}`
+		// and the core-resolved settings fill it via -backend-config. Provider-agnostic — s3, gcs,
+		// http alike; the consumer just renders the resolved key/values (sorted for determinism).
+		cfg := stateBackend.GetConfig()
+		keys := make([]string, 0, len(cfg))
+		for k := range cfg {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		for _, k := range keys {
+			args = append(args, "-backend-config="+k+"="+cfg[k])
+		}
+		return args
+	}
 	if s.cfg.BackendURL != "" {
 		addr := s.cfg.BackendURL + "/" + workspace
 		args = append(args,
@@ -120,7 +140,8 @@ func (s *Server) initArgs(workspace string) []string {
 // scoped, no per-host targets; the host folds it as the root, no confused-deputy).
 func (s *Server) Apply(req *pluginv1.ApplyRequest, stream grpc.ServerStreamingServer[pluginv1.ApplyResponse]) error {
 	ctx := stream.Context()
-	p, dir, env, varFile, err := s.prepare(req.GetDesired().GetBytes())
+	stateBackend := req.GetResolvedCapabilities()["statestore"] // ADR-0105: nil ⇒ the http floor
+	p, dir, env, varFile, err := s.prepare(req.GetDesired().GetBytes(), stateBackend)
 	if err != nil {
 		return sendApplyTerminal(stream, false, pluginv1.ItemResult_STATUS_FAILED, err.Error(), 1)
 	}
@@ -134,7 +155,7 @@ func (s *Server) Apply(req *pluginv1.ApplyRequest, stream grpc.ServerStreamingSe
 	}
 
 	// tofu init.
-	if _, rc, ierr := s.run.run(ctx, dir, env, s.initArgs(p.Workspace), stream0); ierr != nil {
+	if _, rc, ierr := s.run.run(ctx, dir, env, s.initArgs(p.Workspace, stateBackend), stream0); ierr != nil {
 		return sendApplyTerminal(stream, false, pluginv1.ItemResult_STATUS_FAILED, "init: "+ierr.Error(), next())
 	} else if rc != 0 {
 		return sendApplyTerminal(stream, false, pluginv1.ItemResult_STATUS_FAILED, "tofu init failed", next())
@@ -227,14 +248,15 @@ func (s *Server) Apply(req *pluginv1.ApplyRequest, stream grpc.ServerStreamingSe
 // content-addressed re-hash is the flagged additive proto step. Until then the
 // plugin computes the digest but does not yet ship the bytes.
 func (s *Server) Plan(ctx context.Context, req *pluginv1.PlanRequest) (*pluginv1.PlanResponse, error) {
-	p, dir, env, varFile, err := s.prepare(req.GetDesired().GetBytes())
+	stateBackend := req.GetResolvedCapabilities()["statestore"] // ADR-0105: same handle as Apply
+	p, dir, env, varFile, err := s.prepare(req.GetDesired().GetBytes(), stateBackend)
 	if err != nil {
 		return nil, err
 	}
 	if varFile != "" {
 		defer os.Remove(varFile)
 	}
-	if _, rc, ierr := s.run.run(ctx, dir, env, s.initArgs(p.Workspace), nil); ierr != nil || rc != 0 {
+	if _, rc, ierr := s.run.run(ctx, dir, env, s.initArgs(p.Workspace, stateBackend), nil); ierr != nil || rc != 0 {
 		return nil, fmt.Errorf("tofu init failed (rc=%d): %v", rc, ierr)
 	}
 	planPath := filepath.Join(dir, ".terraform", "stratt.tfplan")

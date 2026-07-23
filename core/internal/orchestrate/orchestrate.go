@@ -990,10 +990,17 @@ func (a *Activities) PlanStep(ctx context.Context, in RunInput) (string, error) 
 		return "", temporal.NewNonRetryableApplicationError(
 			fmt.Sprintf("actuator %q does not support the Plan verb (not a plugin actuator)", in.Actuator), "PlanUnsupported", nil)
 	}
+	// Resolve the SAME capability handles the Apply gets (ADR-0105) so the pinned plan is computed
+	// against the same state backend it will be applied to — else plan/apply state diverges.
+	resolvedCaps, err := a.resolveCapabilities(ctx, in, pa.Requires)
+	if err != nil {
+		return "", temporal.NewNonRetryableApplicationError(err.Error(), "CapabilityResolveFailed", err)
+	}
 	out, err := pa.Host.Plan(ctx, pluginhost.PlanInvoke{
-		Principal:      in.Principal,
-		Params:         in.Params,
-		CredentialRefs: in.CredentialRefs,
+		Principal:            in.Principal,
+		Params:               in.Params,
+		CredentialRefs:       in.CredentialRefs,
+		ResolvedCapabilities: resolvedCaps,
 	})
 	if err != nil {
 		return "", err
