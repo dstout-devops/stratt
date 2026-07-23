@@ -128,7 +128,7 @@ func TestParseRealEstate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse /estate: %v", err)
 	}
-	var haveConn, haveAct bool
+	var haveConn, haveAct, haveProvider bool
 	for _, c := range d.Connectors {
 		if c.Name == "declared" && c.Class == "syncer" && c.Source.Name == "declared-dev" {
 			haveConn = true
@@ -138,6 +138,14 @@ func TestParseRealEstate(t *testing.T) {
 		if a.Name == "helm" && len(a.ActionNames) == 1 && a.ActionNames[0] == "helm/deploy" {
 			haveAct = true
 		}
+		// s3-statestore is the ADR-0105 statestore capability provider (provides:[statestore]).
+		if a.Name == "s3-statestore" && len(a.Provides) == 1 && a.Provides[0] == "statestore" &&
+			len(a.ActionNames) == 1 && a.ActionNames[0] == "awss3/statestore-resolve" {
+			haveProvider = true
+		}
+	}
+	if !haveProvider {
+		t.Fatalf("estate/actuators/s3-statestore.yaml must parse into a statestore provider; got %+v", d.Actuators)
 	}
 	if !haveConn {
 		t.Fatalf("estate/connectors/declared.yaml must parse into the declared Connector; got %+v", d.Connectors)

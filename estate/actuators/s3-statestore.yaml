@@ -1,0 +1,15 @@
+# s3-statestore — the S3 `statestore` capability PROVIDER (ADR-0105), registered as an Actuator
+# Kind (ADR-0103) that exposes the awss3/statestore-resolve Action and advertises
+# provides:[statestore]. It dials the same awss3 plugin pod (the bucket Syncer stays boot-env for
+# now); provider verification (ADR-0104 D1) confirms the pod's Manifest advertises statestore
+# before any consumer binds — the pod must run with STRATT_AWSS3_STATE_BUCKET set, else it is
+# verified=false and never counts.
+#
+# S3 is provider #1. Artifactory/GCS would be sibling providers of the SAME statestore contract,
+# selected by an estate capability-binding once ≥2 exist (ADR-0105 D5) — never a code change.
+name: s3-statestore
+address: stratt-awss3:9090
+pluginIdentity: awss3
+tier: trusted
+actionNames: [awss3/statestore-resolve]
+provides: [statestore]
