@@ -168,6 +168,16 @@ func TestParseRealEstate(t *testing.T) {
 	if !haveConsumer {
 		t.Fatalf("estate/actuators/opentofu-s3.yaml must parse into a statestore consumer (requires:[statestore]); got %+v", d.Actuators)
 	}
+	// awsec2 is the ADR-0107 provisioning provider (provides:[provisioning], enablement-gate).
+	var haveEC2 bool
+	for _, a := range d.Actuators {
+		if a.Name == "awsec2" && len(a.Provides) == 1 && a.Provides[0] == "provisioning" && len(a.ActionNames) == 0 {
+			haveEC2 = true
+		}
+	}
+	if !haveEC2 {
+		t.Fatalf("estate/actuators/awsec2.yaml must parse into a provisioning provider; got %+v", d.Actuators)
+	}
 	if !haveConn {
 		t.Fatalf("estate/connectors/declared.yaml must parse into the declared Connector; got %+v", d.Connectors)
 	}

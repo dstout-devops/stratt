@@ -1,0 +1,18 @@
+# awsec2 — the EC2 `provisioning` capability PROVIDER (ADR-0107), registered as an Actuator Kind
+# (ADR-0103) declaring provides:[provisioning]. It dials the awsec2 plugin pod (whose VM/network
+# Actions + resource Syncer stay boot-env for now); provider verification (ADR-0104 D1) confirms the
+# pod's Manifest advertises provisioning before any consumer binds.
+#
+# provisioning is ENABLEMENT-GATE (ADR-0106 D1 / ADR-0107 D1), not resolve-inject — so there is NO
+# resolve Action here: provisioning is a target-scoped Apply/Action (create the machine, then
+# provision→configure it, ADR-0017). `requires:[provisioning]` only gates that a verified provisioner
+# EXISTS; the reach-path (how a consumer reaches it) is the provisioning CLASS contract, bound by the
+# ADR-0106 D1 guardrail — never awsec2's specific create-vm.
+#
+# EC2 is provider #1 (§1.5) — GCE / KubeVirt / Cobbler / bare-metal are siblings behind the same
+# contract.
+name: awsec2
+address: stratt-awsec2:9090
+pluginIdentity: awsec2
+tier: trusted
+provides: [provisioning]
