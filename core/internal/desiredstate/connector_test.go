@@ -158,6 +158,16 @@ func TestParseRealEstate(t *testing.T) {
 	if !haveOpenBao {
 		t.Fatalf("estate/actuators/openbao.yaml must parse into a keycustodian+certissuer provider (no resolve Action); got %+v", d.Actuators)
 	}
+	// opentofu-s3 is the first real `requires:` CONSUMER (ADR-0105 D4): requires:[statestore].
+	var haveConsumer bool
+	for _, a := range d.Actuators {
+		if a.Name == "opentofu-s3" && len(a.Requires) == 1 && a.Requires[0] == "statestore" {
+			haveConsumer = true
+		}
+	}
+	if !haveConsumer {
+		t.Fatalf("estate/actuators/opentofu-s3.yaml must parse into a statestore consumer (requires:[statestore]); got %+v", d.Actuators)
+	}
 	if !haveConn {
 		t.Fatalf("estate/connectors/declared.yaml must parse into the declared Connector; got %+v", d.Connectors)
 	}
