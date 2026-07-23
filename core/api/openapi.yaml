@@ -2179,6 +2179,7 @@ components:
       properties:
         connector: { $ref: "#/components/schemas/Connector" }
         status: { $ref: "#/components/schemas/PluginRuntimeStatus" }
+        capabilityVerification: { $ref: "#/components/schemas/CapabilityVerification" }
     Actuator:
       type: object
       description: >
@@ -2215,6 +2216,20 @@ components:
       properties:
         actuator: { $ref: "#/components/schemas/Actuator" }
         status: { $ref: "#/components/schemas/PluginRuntimeStatus" }
+        capabilityVerification: { $ref: "#/components/schemas/CapabilityVerification" }
+    CapabilityVerification:
+      type: object
+      description: >
+        A capability PROVIDER's verification outcome (ADR-0104 D1): whether the provider's dialed
+        Manifest actually backs the capability classes it declares it `provides`. Absent for a
+        declaration that provides nothing. The descent surface (§1.8) for a phantom provider — a
+        declared `provides` its plugin does not advertise is verified=false and never counts.
+      required: [verified]
+      properties:
+        verified: { type: boolean }
+        reason:
+          type: string
+          description: The phantom/pending reason when verified=false; empty when verified.
     Workflow:
       type: object
       description: >

@@ -1455,8 +1455,9 @@ func run(ctx context.Context, log *slog.Logger) error {
 				return grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
 			},
 			interval, log)
-		go connReg.RunActuators(ctx)                             // every replica
-		controllers = append(controllers, connReg.RunConnectors) // leader-only
+		go connReg.RunActuators(ctx)                                       // every replica
+		controllers = append(controllers, connReg.RunConnectors)           // leader-only
+		controllers = append(controllers, connReg.RunProviderVerification) // leader-only (ADR-0104 D1)
 
 		// Authz-home gate (ADR-0044 slice 4): only the authz-home Cell's daemon
 		// writes the shared OpenFGA tuple store — else N Cells thrash it. Derived

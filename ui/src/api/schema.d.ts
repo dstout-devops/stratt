@@ -1794,6 +1794,7 @@ export interface components {
         ConnectorDetail: {
             connector: components["schemas"]["Connector"];
             status?: components["schemas"]["PluginRuntimeStatus"];
+            capabilityVerification?: components["schemas"]["CapabilityVerification"];
         };
         /** @description An execution-engine plugin that runs tool content (charter §2.3: helm, opentofu, ansible, script, mcp). Binds no Source. CaC-only (ADR-0103). */
         Actuator: {
@@ -1816,6 +1817,13 @@ export interface components {
         ActuatorDetail: {
             actuator: components["schemas"]["Actuator"];
             status?: components["schemas"]["PluginRuntimeStatus"];
+            capabilityVerification?: components["schemas"]["CapabilityVerification"];
+        };
+        /** @description A capability PROVIDER's verification outcome (ADR-0104 D1): whether the provider's dialed Manifest actually backs the capability classes it declares it `provides`. Absent for a declaration that provides nothing. The descent surface (§1.8) for a phantom provider — a declared `provides` its plugin does not advertise is verified=false and never counts. */
+        CapabilityVerification: {
+            verified: boolean;
+            /** @description The phantom/pending reason when verified=false; empty when verified. */
+            reason?: string;
         };
         /** @description A Temporal-backed DAG of Steps with Gates (charter §2, ADR-0011). CaC-only in v1. */
         Workflow: {

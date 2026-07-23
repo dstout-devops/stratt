@@ -32,9 +32,10 @@ func (s *Server) GetConnector(w http.ResponseWriter, r *http.Request, name strin
 		return
 	}
 	writeJSON(w, http.StatusOK, struct {
-		Connector types.Connector      `json:"connector"`
-		Status    *PluginRuntimeStatus `json:"status,omitempty"`
-	}{Connector: c, Status: s.pluginStatus("connector/" + name)})
+		Connector              types.Connector         `json:"connector"`
+		Status                 *PluginRuntimeStatus    `json:"status,omitempty"`
+		CapabilityVerification *capabilityVerification `json:"capabilityVerification,omitempty"`
+	}{Connector: c, Status: s.pluginStatus("connector/" + name), CapabilityVerification: s.capabilityVerification(r, "connector", name)})
 }
 
 func (s *Server) ListActuators(w http.ResponseWriter, r *http.Request) {
@@ -56,9 +57,10 @@ func (s *Server) GetActuator(w http.ResponseWriter, r *http.Request, name string
 		return
 	}
 	writeJSON(w, http.StatusOK, struct {
-		Actuator types.Actuator       `json:"actuator"`
-		Status   *PluginRuntimeStatus `json:"status,omitempty"`
-	}{Actuator: a, Status: s.pluginStatus("actuator/" + name)})
+		Actuator               types.Actuator          `json:"actuator"`
+		Status                 *PluginRuntimeStatus    `json:"status,omitempty"`
+		CapabilityVerification *capabilityVerification `json:"capabilityVerification,omitempty"`
+	}{Actuator: a, Status: s.pluginStatus("actuator/" + name), CapabilityVerification: s.capabilityVerification(r, "actuator", name)})
 }
 
 // pluginStatus looks up one declaration's runtime registry status (key "<kind>/<name>"),
@@ -71,4 +73,21 @@ func (s *Server) pluginStatus(key string) *PluginRuntimeStatus {
 		return &st
 	}
 	return nil
+}
+
+// capabilityVerification is the descent surface for a capability PROVIDER (ADR-0104 D1, §1.8):
+// whether the provider's dialed Manifest actually backs the capability classes it declares it
+// `provides`. Nil for a declaration that provides nothing (no row) — the field is omitted. Read
+// from the store projection, so it is the same replica-consistent verdict resolution uses.
+type capabilityVerification struct {
+	Verified bool   `json:"verified"`
+	Reason   string `json:"reason,omitempty"`
+}
+
+func (s *Server) capabilityVerification(r *http.Request, kind, name string) *capabilityVerification {
+	v, ok, err := s.Store.GetProviderVerification(r.Context(), kind, name)
+	if err != nil || !ok {
+		return nil
+	}
+	return &capabilityVerification{Verified: v.Verified, Reason: v.Reason}
 }

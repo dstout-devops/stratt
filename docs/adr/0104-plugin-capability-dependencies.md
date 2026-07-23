@@ -94,6 +94,31 @@ slice that MUST precede the first real provider** (OpenBao/S3) — never an open
 until it lands a mis-declared provider could silently satisfy a gate. (In the first resolver slice no
 estate declares `provides`, so the window is not yet reachable.)
 
+**Implemented (slice 2):** a leader-only verification reconcile (`connectorregistry.ReconcileProvider­Verification`)
+dials each declared provider, reads its `Manifest.capabilities`, and persists the outcome to a runtime
+projection `graph.capability_provider` (verified + reason). `buildProviderIndex` counts **only verified**
+providers — so the check is store-visible and thus identical on every replica (the D3 property: an
+every-replica Actuator consumer resolves a leader-only Connector provider the same everywhere), never from
+per-replica dial state. A structural phantom is `verified=false` with a queryable reason and contributes 0.
+
+Two hardening points (charter-guardian slice-2 review):
+
+- **Structural vs transient (§2.4/D3).** A *structural* mismatch (manifest fetched, a declared token
+  absent) may zero a verdict; a *transient* dial/fetch failure must **preserve the last-confirmed
+  verdict** — else a blip in the leader's pass would drop an established provider, collapsing `≥2 → 1`
+  and silently auto-binding a consumer (precedence-by-liveness). Health is never a binding input.
+- **Descent surface (§1.8).** The verdict is not just DB-queryable: it is surfaced on the provider's
+  `/connectors|/actuators/{name}` D6 status as an additive `capabilityVerification: {verified, reason}`
+  (never clobbering the provider's own `enabled` — a plugin can be a working Syncer *and* a provider),
+  and the consumer's unmet reason distinguishes "none declared" from "declared but rejected — inspect
+  provider status."
+
+**Contract-shape scope (honest):** verification checks capability-**token membership** only. Capability
+classes today are sovereign-port verb shapes with **no** per-class JSON-Schema contract and **no** enforced
+`min/max_protocol` gate in core — so there is no capability contract hash to verify yet. Enforcing
+capability verb-shape compatibility (a per-class hash and/or a blocking protocol-version check) is **booked
+hardening**, not performed here; no estate declares `provides` in such a class today.
+
 ### D2 — `requires` is a **gate**, orthogonal to §2.4 claim precedence
 
 The single sharpest charter hazard. §2.4 (no implicit precedence) governs **claim resolution** — which
@@ -248,11 +273,11 @@ The enterprise adds as *providers* (manifest side, no consumer ceremony):
    `connectorregistry` (provider set over the *enabled* set, health-independent — D3/Finding 1); the
    pending/ambiguous D6 reasons; race-tested reconcile. A one-line `plugin.proto` comment marking the
    reserved `DurableExec` class as *reserved-not-planned* (D6), so the code-level vocabulary matches.
-2. **Required, blocking provider-verification slice (D1) — MUST land before follow-up #3.** At provider
-   registration, cross-check the dialed plugin's `Manifest.capabilities` against its declared `provides`
-   and hash-verify each capability's pinned contract; a phantom `provides` → PENDING/rejected provider
-   declaration with a D6 reason, not counted toward any consumer. Closes the §1.5-drift / §1.8-late-
-   diagnosis seam that governing provision by CaC opens.
+2. **Provider-verification slice (D1) — ✅ IMPLEMENTED (slice 2).** Leader-only verification reconcile +
+   `graph.capability_provider` projection; `buildProviderIndex` counts only verified providers, so a
+   phantom `provides` is recorded verified=false with a queryable reason and never counts toward a
+   consumer. Closes the §1.5-drift / §1.8-late-diagnosis seam. (Contract-hash: N/A for today's proto
+   verb-shape classes — see D1.)
 3. The four enterprise providers/consumers (Temporal-as-spine wiring, OpenBao multi-capability, S3
    storage, EC2 provisioning) — each its own ADR, consuming this framework. **Gated on #2.**
 4. (Deferred) unify the core's own `keycustodian` consumption (ADR-0100 `portCustodian`) into the same
