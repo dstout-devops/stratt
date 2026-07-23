@@ -1254,25 +1254,27 @@ func run(ctx context.Context, log *slog.Logger) error {
 		log.Info("awss3 plugin: Actions only (STRATT_AWSS3_INTERVAL unset — Syncer off)")
 	}
 
-	// ── cert-issuer (CLM) Syncer + reconcile Actuator over the port (ADR-0050) ─
-	// Both the cert Syncer (Observe) AND the cert lifecycle Actuator (Plan/Apply/
-	// Destroy) run over the port on one plugin host; the in-tree pod Action is
-	// retired. Edge issuance rides the Site relay (ADR-0049).
-	if addr := os.Getenv("STRATT_CLM_PLUGIN_ADDR"); addr != "" {
-		sourceName := env("STRATT_CLM_SOURCE_NAME", "certissuer")
-		interval, err := time.ParseDuration(env("STRATT_CLM_INTERVAL", "60s"))
+	// ── openbao plugin: cert-issuer Syncer + reconcile Actuator over the port ─────
+	// (ADR-0050/0098). Both the cert Syncer (Observe) AND the cert lifecycle Actuator
+	// (Plan/Apply/Destroy) run over the port on one plugin host; the in-tree pod Action
+	// is retired. The plugin is tool-named `openbao` (its backend); the Actuator is the
+	// NEUTRAL `cert-issuer` (§1.5 — a step-ca plugin could implement it). Edge issuance
+	// rides the Site relay (ADR-0049).
+	if addr := os.Getenv("STRATT_OPENBAO_PLUGIN_ADDR"); addr != "" {
+		sourceName := env("STRATT_OPENBAO_SOURCE_NAME", "openbao")
+		interval, err := time.ParseDuration(env("STRATT_OPENBAO_INTERVAL", "60s"))
 		if err != nil {
-			return fmt.Errorf("certissuer interval: %w", err)
+			return fmt.Errorf("openbao interval: %w", err)
 		}
 		conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
 		if err != nil {
-			return fmt.Errorf("certissuer plugin dial %s: %w", addr, err)
+			return fmt.Errorf("openbao plugin dial %s: %w", addr, err)
 		}
 		defer conn.Close()
 		grant := pluginhost.Grant{
-			PluginIdentity:   env("STRATT_CLM_PLUGIN_ID", "certissuer"),
-			Tier:             pluginhost.Tier(env("STRATT_CLM_TIER", "trusted")),
-			Source:           types.Source{Kind: "certissuer", Name: sourceName, Endpoint: os.Getenv("STRATT_CLM_ADDR")},
+			PluginIdentity:   env("STRATT_OPENBAO_PLUGIN_ID", "openbao"),
+			Tier:             pluginhost.Tier(env("STRATT_OPENBAO_TIER", "trusted")),
+			Source:           types.Source{Kind: "openbao", Name: sourceName, Endpoint: os.Getenv("STRATT_OPENBAO_ADDR")},
 			FacetNamespaces:  []string{"cert.identity", "cert.expiry"},
 			LabelKeys:        []string{"cert.commonName"},
 			IdentitySchemes:  []string{"cert.serial"},
@@ -1282,14 +1284,14 @@ func run(ctx context.Context, log *slog.Logger) error {
 		controllers = append(controllers, homeSupervise(sourceName, host.Register, func(cctx context.Context) error {
 			return host.SyncLoop(cctx, interval)
 		}))
-		// Same host, reconcile Actuator role (ADR-0050): Plan/Apply/Destroy the cert
-		// lifecycle. Model Y (no plan-artifact) → no plan store. Dry-runnable.
-		if err := registerPluginActuator("certissuer", host, true, grant, nil); err != nil {
+		// Same host, NEUTRAL cert-issuer reconcile Actuator (ADR-0050): Plan/Apply/
+		// Destroy the cert lifecycle. Model Y (no plan-artifact) → no plan store.
+		if err := registerPluginActuator("cert-issuer", host, true, grant, nil); err != nil {
 			return err
 		}
-		log.Info("certissuer plugin ready (Syncer + reconcile Actuator)", "addr", addr)
+		log.Info("openbao plugin ready (cert-issuer Syncer + reconcile Actuator)", "addr", addr)
 	} else {
-		log.Info("no CLM plugin configured (STRATT_CLM_PLUGIN_ADDR empty); cert syncer idle")
+		log.Info("no openbao plugin configured (STRATT_OPENBAO_PLUGIN_ADDR empty); cert syncer idle")
 	}
 
 	// ── Chef Infra node Syncer over the port (ADR-0046/0047 Phase C cutover) ─

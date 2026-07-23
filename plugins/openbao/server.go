@@ -1,4 +1,4 @@
-package certissuer
+package openbao
 
 import (
 	"context"
@@ -33,7 +33,7 @@ type Config struct {
 	Mount    string // PKI secrets-engine mount (default "pki")
 }
 
-// Server implements the sovereign plugin port for the certissuer Connector — a
+// Server implements the sovereign plugin port for the cert-issuer Connector — a
 // multi-role plugin advertising OBSERVE (the cert Syncer) AND the reconcile
 // ACTUATOR verbs PLAN/APPLY/DESTROY (cert lifecycle, ADR-0050). It advertises the
 // facet namespaces + tombstone scheme it REQUESTS to own; the core-side host honors
@@ -49,9 +49,9 @@ type Server struct {
 
 func NewServer(cfg Config, log *slog.Logger) *Server {
 	if cfg.PluginID == "" {
-		cfg.PluginID = "certissuer"
+		cfg.PluginID = "openbao"
 	}
-	s := &Server{cfg: cfg, log: log.With("plugin", "certissuer")}
+	s := &Server{cfg: cfg, log: log.With("plugin", "openbao")}
 	s.newCA = func(context.Context) (CA, error) {
 		return NewClient(s.cfg.Addr, s.cfg.Token, s.cfg.Mount), nil
 	}
@@ -124,7 +124,7 @@ func observe(ctx context.Context, ca CA, log *slog.Logger) ([]*pluginv1.Observed
 	return out, nil
 }
 
-// desired is the reconcile input Contract (actuators/certissuer.input, ADR-0050):
+// desired is the reconcile input Contract (actuators/cert-issuer.input, ADR-0050):
 // a valid cert for commonName under role, refreshed before renewBefore. The CSR is
 // the TARGET's — the private key is born on the target and never crosses (§2.5).
 // The CLM token is NOT here (a spawn-time CredentialRef from the plugin's broker).
@@ -189,7 +189,7 @@ func (s *Server) Plan(ctx context.Context, req *pluginv1.PlanRequest) (*pluginv1
 	}
 	win, err := d.window()
 	if err != nil {
-		return nil, status.Errorf(codes.InvalidArgument, "certissuer: invalid renewBefore: %v", err)
+		return nil, status.Errorf(codes.InvalidArgument, "openbao: invalid renewBefore: %v", err)
 	}
 	ca, err := s.newCA(ctx)
 	if err != nil {
@@ -308,10 +308,10 @@ func (s *Server) Destroy(req *pluginv1.DestroyRequest, stream grpc.ServerStreami
 func parseDesired(raw []byte) (desired, error) {
 	var d desired
 	if err := json.Unmarshal(raw, &d); err != nil {
-		return d, status.Errorf(codes.InvalidArgument, "certissuer: invalid desired: %v", err)
+		return d, status.Errorf(codes.InvalidArgument, "openbao: invalid desired: %v", err)
 	}
 	if d.CommonName == "" || d.Role == "" {
-		return d, status.Errorf(codes.InvalidArgument, "certissuer: commonName and role are required")
+		return d, status.Errorf(codes.InvalidArgument, "openbao: commonName and role are required")
 	}
 	return d, nil
 }

@@ -15,7 +15,7 @@ use (
 	./plugins/awsec2
 	./plugins/awss3
 	./plugins/awx
-	./plugins/certissuer
+	./plugins/openbao
 	./plugins/chef
 	./plugins/crossplane
 	./plugins/declared

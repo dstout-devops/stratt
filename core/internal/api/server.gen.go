@@ -1382,7 +1382,7 @@ type SourceObservation struct {
 
 // StartRun One Step: an Actuator against a View (charter §2.3: Actuator + content + params), or a targetless Connector Action (Action + params, ADR-0031). Set viewName+actuator OR action, not both.
 type StartRun struct {
-	// Action A Connector Action (namespaced, e.g. certissuer/revoke). When set, this is a targetless typed operation — viewName/actuator are ignored and the CredentialRef `use` grant is the authz gate, not runner-on-View.
+	// Action A Connector Action (namespaced, e.g. awsec2/start). When set, this is a targetless typed operation — viewName/actuator are ignored and the CredentialRef `use` grant is the authz gate, not runner-on-View.
 	Action *string `json:"action,omitempty"`
 
 	// Actuator Names the Actuator as an OPAQUE routing key (ADR-0046 — the spine does not enumerate tools): any registered in-tree Actuator or plugin Actuator. An unknown name fails the Run terminally at launch. Matches the open-string workflow-step actuator field.

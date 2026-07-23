@@ -5,7 +5,7 @@
 # here (moto in dev), swappable for a crossplane/opentofu/vsphere Action without
 # touching the rest of the estate (§1.4/§5). Cross-Step output binding
 # ({{.steps.provision.outputs.*}}) threads the built instance downstream (ADR-0031).
-# NOTE: cert (certissuer) + app (helm) Steps are the next lifecycle slice.
+# NOTE: cert (cert-issuer) + app (helm) Steps are the next lifecycle slice.
 name: linux-onboard
 steps:
   - name: approve

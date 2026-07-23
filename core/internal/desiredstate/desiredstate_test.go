@@ -602,10 +602,10 @@ steps:
 		"when-no-needs":  "name: w\nsteps:\n  - {name: a, when: failure, viewName: v}\n",
 		"no-steps":       "name: w\nsteps: []\n",
 		// Action shape (ADR-0031): an action step is targetless.
-		"action+view":    "name: w\nsteps:\n  - {name: a, action: certissuer/revoke, viewName: v, params: {addr: 'http://x', serial: 'a:b'}, credentialRefs: [c]}\n",
-		"action+gate":    "name: w\nsteps:\n  - {name: a, action: certissuer/revoke, gate: {approvers: {teams: [t]}}}\n",
-		"bad-action-in":  "name: w\nsteps:\n  - {name: a, action: certissuer/revoke, params: {addr: 'http://x'}}\n", // missing serial
-		"unknown-action": "name: w\nsteps:\n  - {name: a, action: certissuer/nope, params: {}}\n",
+		"action+view":    "name: w\nsteps:\n  - {name: a, action: awss3/put-bucket-policy, viewName: v, params: {name: b, policy: '{}'}, credentialRefs: [c]}\n",
+		"action+gate":    "name: w\nsteps:\n  - {name: a, action: awss3/put-bucket-policy, gate: {approvers: {teams: [t]}}}\n",
+		"bad-action-in":  "name: w\nsteps:\n  - {name: a, action: awss3/put-bucket-policy, params: {name: b}}\n", // missing policy
+		"unknown-action": "name: w\nsteps:\n  - {name: a, action: awss3/nope, params: {}}\n",
 	} {
 		bad := t.TempDir()
 		writeDecl(t, bad, "v.yaml", "name: v\nselector: {kinds: [vm]}\n")
@@ -619,12 +619,12 @@ steps:
 	act := t.TempDir()
 	writeDecl(t, act, "v.yaml", "name: v\nselector: {kinds: [vm]}\n")
 	writeWorkflow(t, act, "cert.yaml",
-		"name: cert-revoke\nsteps:\n  - name: revoke\n    action: certissuer/revoke\n    credentialRefs: [cert-issuer]\n    params: {addr: 'http://x', serial: 'a:b'}\n")
+		"name: cert-revoke\nsteps:\n  - name: revoke\n    action: awss3/put-bucket-policy\n    credentialRefs: [cert-issuer]\n    params: {name: b, policy: '{}'}\n")
 	parsedAct, err := ParseDir(act, nil)
 	if err != nil {
 		t.Fatalf("valid action workflow must parse: %v", err)
 	}
-	if s := parsedAct.Workflows[0].Steps[0]; s.Action != "certissuer/revoke" || s.ViewName != "" {
+	if s := parsedAct.Workflows[0].Steps[0]; s.Action != "awss3/put-bucket-policy" || s.ViewName != "" {
 		t.Fatalf("action step: %+v", s)
 	}
 

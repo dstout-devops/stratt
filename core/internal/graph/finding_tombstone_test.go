@@ -64,7 +64,7 @@ func findingByTarget(t *testing.T, s *Store, baseline, target string) types.Find
 func TestResolveFindingsForTombstonedEntities(t *testing.T) {
 	s := testStore(t)
 	ctx := context.Background()
-	certs := syncerProv("certissuer/syncer", mustSource(t, s, "certissuer", "acme-certs"))
+	certs := syncerProv("openbao/syncer", mustSource(t, s, "openbao", "acme-certs"))
 
 	_, oldFinding := openFindingOnEntity(t, s, certs, "serialA", "serialA")
 	// A second cert stays live — its Finding must NOT be swept (T3).
@@ -167,7 +167,7 @@ func TestSweepSkipsCoManagedAndEntityless(t *testing.T) {
 func TestSweepIdempotentAndSelfHealing(t *testing.T) {
 	s := testStore(t)
 	ctx := context.Background()
-	certs := syncerProv("certissuer/syncer", mustSource(t, s, "certissuer", "acme-certs"))
+	certs := syncerProv("openbao/syncer", mustSource(t, s, "openbao", "acme-certs"))
 
 	eid, fid := openFindingOnEntity(t, s, certs, "serialA", "serialA")
 	// Tombstone FIRST, then run the sweep — the Finding was opened before the

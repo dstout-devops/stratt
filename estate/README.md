@@ -32,7 +32,7 @@ declarative constructs (the useful half of AWS CDK — see ADR-0055):
 - **`workflows/linux-onboard.yaml`** — the L3 onboarding lifecycle: `Gate → provision (Action) → configure
   (ansible)`. The provision Step's `action` is the **landscape binding** — `awsec2/create-vm` in dev, swappable
   for a `crossplane`/`opentofu`/`vsphere` Action without touching the rest of the estate. Provisioning is
-  **gated** (§5 Flow 1 — never a silent auto-launch). Cert (certissuer) + app (helm) Steps are the next slice.
+  **gated** (§5 Flow 1 — never a silent auto-launch). Cert (cert-issuer) + app (helm) Steps are the next slice.
 
 ## The defaulted unit: `web-server` (G6 defaults + the materialization seam)
 The onboarding template made concrete — "declare outcomes, not tool configs"
@@ -61,7 +61,7 @@ declaration (Assignment · Trigger · Baseline) reconciles only where its `envir
 value (untagged ⇒ every environment). Empty `STRATT_ENVIRONMENT` ⇒ unscoped (reconciles everything).
 
 The four Triggers under `triggers/` are tagged `environments: [prod]` — each fires a Run needing a plugin or
-target set the dev cell doesn't run (certissuer, real host fleets, the Salt event bus). So the **turnkey dev
+target set the dev cell doesn't run (cert-issuer, real host fleets, the Salt event bus). So the **turnkey dev
 stack** (`values-e2e`, `STRATT_ENVIRONMENT=dev`) reconciles the whole estate but launches **none** of them:
 no cross-env schedule noise, and — data-layer-scoped — they are never prune targets either. Scoping is a
 boolean membership filter, never precedence (§2.4); Views/Workflows are reached only through a scoped kind and

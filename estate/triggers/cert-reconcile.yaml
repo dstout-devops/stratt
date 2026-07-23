@@ -1,11 +1,11 @@
 # Certificate reconcile (ADR-0050) — the replacement for the ADR-0030
 # intent->Baseline(notBefore)->Finding->remediation-Workflow shape.
 #
-# A scheduled, ungated reconcile: each fire runs the certissuer ACTUATOR's Apply,
+# A scheduled, ungated reconcile: each fire runs the cert-issuer ACTUATOR's Apply,
 # which observes OpenBao for the commonName's live cert and CONVERGES — issue if
 # absent, renew if within renewBefore, noop if healthy (the semantic diff lives in
 # the plugin, ADR-0050 §2). "tofu plan on cron is drift detection" generalized:
-# "certissuer apply on cron is cert lifecycle." Routine renewal is ungated (§1.6);
+# "cert-issuer apply on cron is cert lifecycle." Routine renewal is ungated (§1.6);
 # revoke is the gated Destroy verb, launched separately.
 #
 # KEY DELIVERY (ADR-0050 §3, the integration contract still to build): `csr` is the
@@ -19,17 +19,17 @@
 name: cert-reconcile-web
 kind: schedule
 # Environment scope (ADR-0057): the production slice. This fire runs the
-# certissuer Actuator against OpenBao for a real cert target — a plugin the dev
+# cert-issuer Actuator against OpenBao for a real cert target — a plugin the dev
 # cell doesn't deploy — so a dev daemon (STRATT_ENVIRONMENT=dev) never launches
 # it (and, data-layer-scoped, never prunes it either). Untag to run everywhere.
 environments: [prod]
 cron: "0 */6 * * *" # every 6h — converge well inside renewBefore
 viewName: managed-certs
 principal: svc-cert-reconcile
-actuator: certissuer
+actuator: cert-issuer
 credentialRefs: [cert-issuer]
-# certissuer's Apply projects the issued cert's cert.identity/cert.expiry Facets
-# back (ADR-0054 write-scope): the effective write-back is the certissuer grant ∩
+# cert-issuer's Apply projects the issued cert's cert.identity/cert.expiry Facets
+# back (ADR-0054 write-scope): the effective write-back is the cert-issuer grant ∩
 # this scope. Without it the tight default would drop the projection at the one
 # governor and the reconcile would converge OpenBao but never update the graph.
 facetWriteScope: [cert.identity, cert.expiry]

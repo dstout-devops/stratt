@@ -14,7 +14,7 @@ import (
 const estateRoot = "../../../estate"
 
 // The estate's production-slice Triggers (ADR-0057): each fires a Run needing a
-// plugin or target set the dev cell doesn't run (certissuer, real host fleets,
+// plugin or target set the dev cell doesn't run (openbao, real host fleets,
 // the Salt event bus). Tagged `environments: [prod]`, so a dev daemon skips them.
 var prodTriggers = map[string]bool{
 	"cert-reconcile-web": true,

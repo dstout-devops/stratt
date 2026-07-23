@@ -7,7 +7,7 @@
 # to a GATED ansible remediation — the PLUGIN materializes the state; core never learns
 # "web server" or "ansible" (§1.4). "web-server" is a VALUE inside Intent/Application,
 # never a core kind (§9). Co-management (ADR-0083 §3) fans out by ADDING routes — a cert
-# route (certissuer), a package route (software.*) — the per-capability route map; each
+# route (cert-issuer), a package route (software.*) — the per-capability route map; each
 # is an independently-metered §7.6 channel. This slice ships the config route.
 name: web-server
 version: 1

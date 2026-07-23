@@ -103,7 +103,7 @@ func TestCertificateIntentGA(t *testing.T) {
 	writeDecl(t, root, "v.yaml", "name: certs\nselector: {kinds: [cert]}\n")
 	writeKind(t, root, "intents", "c.yaml",
 		"name: web-cert\nkind: Intent/Certificate\nonRemove: remove\n"+
-			"spec: {issuer: certissuer/stratt-dev, commonName: web.stratt.test, renewBefore: 360h, exportable: false}\n")
+			"spec: {issuer: cert-issuer/stratt-dev, commonName: web.stratt.test, renewBefore: 360h, exportable: false}\n")
 	writeKind(t, root, "blueprints", "b.yaml",
 		"name: certificate\nversion: 1\nfor: Intent/Certificate\nseverity: warning\nremoveWorkflow: cert-revoke\n"+
 			"routes: [{observe: {namespace: cert.expiry, path: notAfter, notBefore: '{{.spec.renewBefore}}'}, claim: exclusive, remediationWorkflow: cert-renew}]\n")

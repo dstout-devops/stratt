@@ -88,8 +88,8 @@ func TestPinsAreStable(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(all) != 96 {
-		t.Fatalf("expected 96 embedded documents, got %d", len(all))
+	if len(all) != 90 {
+		t.Fatalf("expected 90 embedded documents, got %d", len(all))
 	}
 	versions := map[string]int{}
 	for _, c := range all {
@@ -117,22 +117,22 @@ func TestPinsAreStable(t *testing.T) {
 // TestActionContracts covers the Action input/output validation direction
 // (§2.2, ADR-0031) — the direction that distinguishes an Action from an Actuator.
 func TestActionContracts(t *testing.T) {
-	// Input: a valid revoke; a missing required field; an unknown action.
-	if err := ValidateActionInput("certissuer/revoke", []byte(`{"addr":"http://x","serial":"a:b"}`)); err != nil {
-		t.Fatalf("valid revoke input: %v", err)
+	// Input: a valid put-bucket-policy; a missing required field; an unknown action.
+	if err := ValidateActionInput("awss3/put-bucket-policy", []byte(`{"name":"b","policy":"{}"}`)); err != nil {
+		t.Fatalf("valid put-bucket-policy input: %v", err)
 	}
-	if err := ValidateActionInput("certissuer/revoke", []byte(`{"addr":"http://x"}`)); err == nil {
-		t.Fatal("revoke input missing serial must be rejected")
+	if err := ValidateActionInput("awss3/put-bucket-policy", []byte(`{"name":"b"}`)); err == nil {
+		t.Fatal("put-bucket-policy input missing policy must be rejected")
 	}
-	if err := ValidateActionInput("certissuer/nope", []byte(`{}`)); err == nil {
+	if err := ValidateActionInput("awss3/nope", []byte(`{}`)); err == nil {
 		t.Fatal("an uncontracted action must be refused")
 	}
-	// Output: a valid issue output; a bad one (missing serial) rejected.
-	if err := ValidateActionOutput("certissuer/issue", []byte(`{"serial":"aa:bb"}`)); err != nil {
-		t.Fatalf("valid issue output: %v", err)
+	// Output: a valid create-bucket output; a bad one (missing bucketArn) rejected.
+	if err := ValidateActionOutput("awss3/create-bucket", []byte(`{"bucketArn":"arn:aws:s3:::b"}`)); err != nil {
+		t.Fatalf("valid create-bucket output: %v", err)
 	}
-	if err := ValidateActionOutput("certissuer/issue", []byte(`{"notAfter":"x"}`)); err == nil {
-		t.Fatal("issue output missing serial must fail validation (§1.8)")
+	if err := ValidateActionOutput("awss3/create-bucket", []byte(`{"name":"x"}`)); err == nil {
+		t.Fatal("create-bucket output missing bucketArn must fail validation (§1.8)")
 	}
 	if err := ValidateActionOutput("awsec2/create-vm", []byte(`{"instanceId":"i-1","privateIp":"10.0.0.1"}`)); err != nil {
 		t.Fatalf("valid create-vm output: %v", err)

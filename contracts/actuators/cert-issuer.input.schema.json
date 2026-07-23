@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "stratt:contract:actuators/certissuer.input:v1",
-  "title": "certissuer Step params",
-  "description": "Input Contract for the certissuer reconcile Actuator (ADR-0050). Desired state: a valid cert for commonName under role, refreshed before renewBefore. csr is the TARGET's certificate-signing request — the private key is born on the target and never crosses the wire (§2.5, CSR/sign). Hand-written — derivation ladder rung 1 (§2.2).",
+  "$id": "stratt:contract:actuators/cert-issuer.input:v1",
+  "title": "cert-issuer Step params",
+  "description": "Input Contract for the cert-issuer reconcile Actuator (ADR-0050). Desired state: a valid cert for commonName under role, refreshed before renewBefore. csr is the TARGET's certificate-signing request — the private key is born on the target and never crosses the wire (§2.5, CSR/sign). Hand-written — derivation ladder rung 1 (§2.2).",
   "type": "object",
   "required": ["commonName", "role"],
   "properties": {

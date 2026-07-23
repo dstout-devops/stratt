@@ -1,11 +1,11 @@
-// Package certissuer is the cert-issuer Connector plugin: the Vault-compatible
+// Package openbao is the cert-issuer Connector plugin: the Vault-compatible
 // PKI content-expertise that used to live in core/internal/connectors/certissuer
 // (the Syncer) and core/internal/actions/certissuer (the issue/renew/revoke
 // Actions), now behind the sovereign plugin port (ADR-0046). It maps issued X.509
 // certs to core-legible ObservedEntity wire values and runs the three write ops;
 // the core-side host governs what it may write (ownership, identity gating, Run
 // provenance). The plugin holds no graph write path (§1.2).
-package certissuer
+package openbao
 
 import (
 	"crypto/x509"
@@ -29,11 +29,11 @@ import (
 func normalizeCert(c Cert) (entity *pluginv1.ObservedEntity, ok bool, err error) {
 	block, _ := pem.Decode([]byte(c.PEM))
 	if block == nil {
-		return nil, false, fmt.Errorf("certissuer: serial %s: no PEM block", c.Serial)
+		return nil, false, fmt.Errorf("openbao: serial %s: no PEM block", c.Serial)
 	}
 	crt, err := x509.ParseCertificate(block.Bytes)
 	if err != nil {
-		return nil, false, fmt.Errorf("certissuer: serial %s: parse: %w", c.Serial, err)
+		return nil, false, fmt.Errorf("openbao: serial %s: parse: %w", c.Serial, err)
 	}
 	// The CA root/intermediate is the issuer, not an estate leaf cert (§2.4:
 	// Intent/Certificate governs issued certs, not the authority itself).
@@ -84,7 +84,7 @@ func normalizeCert(c Cert) (entity *pluginv1.ObservedEntity, ok bool, err error)
 	} {
 		raw, err := json.Marshal(doc)
 		if err != nil {
-			return nil, false, fmt.Errorf("certissuer: marshal facet %s: %w", ns, err)
+			return nil, false, fmt.Errorf("openbao: marshal facet %s: %w", ns, err)
 		}
 		facets[ns] = raw
 	}

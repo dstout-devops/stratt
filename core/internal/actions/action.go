@@ -22,7 +22,7 @@ import (
 
 // Action is one typed operation on a Connector (§2.2).
 type Action interface {
-	// Name is the registry key, namespaced by Connector: "certissuer/revoke",
+	// Name is the registry key, namespaced by Connector: "awsec2/start",
 	// "awsec2/create-vm". Its Contract pair lives at actions/<Name>.input and
 	// actions/<Name>.output.
 	Name() string

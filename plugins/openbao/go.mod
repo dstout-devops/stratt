@@ -1,16 +1,17 @@
-// The cert-issuer Connector plugin (ADR-0046 Phase B) — extracted out of the
-// control plane into its own build/test/CI unit. It ships BOTH capabilities of the
-// certissuer Connector: a Syncer (Observe issued certs) and a MULTI-OP Action
-// (Invoke certissuer/issue | certissuer/renew | certissuer/revoke against a
-// Vault-compatible PKI CLM). It imports the lean plugin SDK and the Go standard
-// library HTTP client, and NOTHING from core/: the CLM transport no longer touches
-// the control plane's dependency graph (the module-isolation discipline of ADR-0046).
+// The openbao plugin (ADR-0046 Phase B / ADR-0098) — the tool-named home for the
+// OpenBao-backed surfaces, its own build/test/CI unit. It implements the NEUTRAL
+// cert-issuer Contract (§1.5 — a step-ca plugin could implement the same Contract):
+// a Syncer (Observe issued certs) + a reconcile Actuator (Plan/Apply/Destroy the cert
+// lifecycle via born-on-target CSR/sign, ADR-0050). Future OpenBao surfaces (KV
+// metadata Syncer, Transit-adjacent) consolidate here. It imports the lean plugin SDK
+// and the Go standard-library HTTP client, and NOTHING from core/: the OpenBao
+// transport no longer touches the control plane's dependency graph (ADR-0046).
 //
 // The plugin holds no graph write path (§1.2): it proposes typed ObservedEntity /
 // InvokeResult values on the wire; the core-side host governs what it may write
 // (ownership, identity gating, Run provenance). The CLM token is a spawn-time
 // CredentialRef; it never crosses the core and is never echoed (§2.5, §1.8).
-module github.com/dstout-devops/stratt/plugins/certissuer
+module github.com/dstout-devops/stratt/plugins/openbao
 
 go 1.25.0
 

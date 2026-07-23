@@ -287,7 +287,7 @@ declarations:
 # Each entry renders a Deployment + Service serving the sovereign plugin port on
 # :9090, and auto-wires STRATT_<NAME>_PLUGIN_ADDR into strattd so it dials the
 # in-cluster Service. This is the prod-aligned home for every gRPC plugin
-# (vcenter/opentofu/certissuer/msgraph/awsec2…). Empty ⇒ no plugins deployed.
+# (vcenter/opentofu/openbao/msgraph/awsec2…). Empty ⇒ no plugins deployed.
 # Entry shape:
 #   - name: vcenter                     # Deployment/Service "<release>-vcenter"; env key STRATT_VCENTER_PLUGIN_ADDR
 #     image: {repository, tag, digest, pullPolicy}

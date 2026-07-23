@@ -1,4 +1,4 @@
-# The cert View the reconcile Trigger launches against. certissuer is CN-scoped
+# The cert View the reconcile Trigger launches against. cert-issuer is CN-scoped
 # (the commonName is a param, not a View target — like opentofu is workspace-
 # scoped), so this View is vestigial for the Actuator itself; the schedule Trigger
 # requires a launch target, and this View also surfaces the cert Entities the

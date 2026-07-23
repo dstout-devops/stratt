@@ -33,19 +33,19 @@ func TestCorrelateIdentities(t *testing.T) {
 		t.Fatalf("project subjects: %v", err)
 	}
 
-	// Two client certs (as the certissuer plugin would project): one for alice, one
+	// Two client certs (as the openbao plugin would project): one for alice, one
 	// for the leaver bob. Register the identity.credential owner (the cert connector).
 	if err := store.RegisterFacetOwner(ctx, types.FacetOwner{
-		Namespace: "identity.credential", OwnerKind: string(types.WriterSyncer), OwnerRef: "certissuer",
+		Namespace: "identity.credential", OwnerKind: string(types.WriterSyncer), OwnerRef: "openbao",
 	}); err != nil {
 		t.Fatal(err)
 	}
-	src, err := store.RegisterSource(ctx, types.Source{Kind: "certissuer", Name: "pki"})
+	src, err := store.RegisterSource(ctx, types.Source{Kind: "openbao", Name: "pki"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	proj := store.NormalizerProjector()
-	prov := types.Provenance{WriterKind: types.WriterSyncer, WriterRef: "certissuer", SourceID: src.ID}
+	prov := types.Provenance{WriterKind: types.WriterSyncer, WriterRef: "openbao", SourceID: src.ID}
 	if _, err := proj.UpsertEntities(ctx, prov, []EntityUpsert{
 		{Kind: "cert", IdentityKeys: map[string]string{"cert.serial": "S-ALICE"},
 			Facets: map[string]json.RawMessage{"identity.credential": cred("alice@corp")}},
@@ -111,17 +111,17 @@ func TestCorrelateIdentities_Service(t *testing.T) {
 
 	// A cert whose SAN is the service FQDN (a service mTLS cert).
 	if err := store.RegisterFacetOwner(ctx, types.FacetOwner{
-		Namespace: "identity.credential", OwnerKind: string(types.WriterSyncer), OwnerRef: "certissuer",
+		Namespace: "identity.credential", OwnerKind: string(types.WriterSyncer), OwnerRef: "openbao",
 	}); err != nil {
 		t.Fatal(err)
 	}
-	pkiSrc, _ := store.RegisterSource(ctx, types.Source{Kind: "certissuer", Name: "pki"})
+	pkiSrc, _ := store.RegisterSource(ctx, types.Source{Kind: "openbao", Name: "pki"})
 	credDoc, _ := json.Marshal(map[string]any{
 		"scheme": "cert", "subjectName": "web", "notAfter": "2027-01-01T00:00:00Z",
 		"subjectAltNames": []string{"web.prod.svc.cluster.local"},
 	})
 	if _, err := store.NormalizerProjector().UpsertEntities(ctx,
-		types.Provenance{WriterKind: types.WriterSyncer, WriterRef: "certissuer", SourceID: pkiSrc.ID},
+		types.Provenance{WriterKind: types.WriterSyncer, WriterRef: "openbao", SourceID: pkiSrc.ID},
 		[]EntityUpsert{{Kind: "cert", IdentityKeys: map[string]string{"cert.serial": "S-web"},
 			Facets: map[string]json.RawMessage{"identity.credential": credDoc}}}); err != nil {
 		t.Fatal(err)

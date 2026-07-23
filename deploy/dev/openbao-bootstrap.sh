@@ -16,9 +16,9 @@
 # Usage: deploy/dev/openbao-bootstrap.sh  (or: task dev:openbao:bootstrap)
 set -eu
 
-base=${STRATT_CLM_ADDR:-http://localhost:8200}
-token=${STRATT_CLM_TOKEN:-stratt-dev-root}
-role=${STRATT_CLM_ROLE:-stratt-dev}
+base=${STRATT_OPENBAO_ADDR:-http://localhost:8200}
+token=${STRATT_OPENBAO_TOKEN:-stratt-dev-root}
+role=${STRATT_OPENBAO_ROLE:-stratt-dev}
 
 api() {
     method=$1

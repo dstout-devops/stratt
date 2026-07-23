@@ -1,4 +1,4 @@
-package certissuer
+package openbao
 
 import (
 	"context"
@@ -308,6 +308,6 @@ func TestGetManifest_ActuatorVerbs(t *testing.T) {
 		verbs[v] = true
 	}
 	if !verbs[pluginv1.Verb_VERB_PLAN] || !verbs[pluginv1.Verb_VERB_APPLY] || !verbs[pluginv1.Verb_VERB_DESTROY] || !verbs[pluginv1.Verb_VERB_OBSERVE] {
-		t.Fatalf("certissuer must advertise OBSERVE+PLAN+APPLY+DESTROY, got %v", m.GetManifest().GetVerbs())
+		t.Fatalf("cert-issuer must advertise OBSERVE+PLAN+APPLY+DESTROY, got %v", m.GetManifest().GetVerbs())
 	}
 }

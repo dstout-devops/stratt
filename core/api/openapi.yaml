@@ -1411,7 +1411,7 @@ components:
         action:
           type: string
           description: >
-            A Connector Action (namespaced, e.g. certissuer/revoke). When set,
+            A Connector Action (namespaced, e.g. awsec2/start). When set,
             this is a targetless typed operation — viewName/actuator are ignored
             and the CredentialRef `use` grant is the authz gate, not runner-on-View.
         dryRun:

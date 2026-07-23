@@ -1,4 +1,4 @@
-package certissuer
+package openbao
 
 import (
 	"bytes"
@@ -233,7 +233,7 @@ func (c *Client) Current(ctx context.Context, commonName string) (*CurrentCert, 
 func parseLeaf(pemStr string) (*x509.Certificate, error) {
 	block, _ := pem.Decode([]byte(pemStr))
 	if block == nil {
-		return nil, fmt.Errorf("certissuer: no PEM block")
+		return nil, fmt.Errorf("openbao: no PEM block")
 	}
 	return x509.ParseCertificate(block.Bytes)
 }
