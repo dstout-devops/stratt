@@ -1209,7 +1209,7 @@ export interface components {
             viewName?: string;
             /** @description Names the Actuator as an OPAQUE routing key (ADR-0046 — the spine does not enumerate tools): any registered in-tree Actuator or plugin Actuator. An unknown name fails the Run terminally at launch. Matches the open-string workflow-step actuator field. */
             actuator?: string;
-            /** @description A Connector Action (namespaced, e.g. certissuer/revoke). When set, this is a targetless typed operation — viewName/actuator are ignored and the CredentialRef `use` grant is the authz gate, not runner-on-View. */
+            /** @description A Connector Action (namespaced, e.g. awsec2/start). When set, this is a targetless typed operation — viewName/actuator are ignored and the CredentialRef `use` grant is the authz gate, not runner-on-View. */
             action?: string;
             /** @description Ask a DryRunnable Action to plan without side effects. */
             dryRun?: boolean;
