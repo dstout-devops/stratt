@@ -47,7 +47,7 @@ Stratt makes the mess **legible and consolidatable, one route at a time** (the "
 ## The mental model — three planes and one spine
 
 Everything in Stratt is one of a small set of **Named Kinds** (the vocabulary is frozen API — see the
-[glossary](#glossary-the-named-kinds) below). They organize into three planes stitched by one spine:
+[glossary](#glossary--the-named-kinds) below). They organize into three planes stitched by one spine:
 
 ```mermaid
 flowchart TB
@@ -135,12 +135,12 @@ Phases 0–2 are **code-complete**; Phase 3 is **~90%** (two Connectors delibera
 multi-region **Cells shipped ahead of plan**; and the whole platform has been **re-centered onto the
 sovereign plugin port** — verified in-repo and by unit/integration tests, with a live-cluster
 end-to-end run still outstanding. It is a real, substantial working platform — the Go control plane, the
-React UI, ~91 ADRs, and the Helm chart are all real — **not a spike**.
+React UI, ~110 ADRs, and the Helm chart are all real — **not a spike**.
 
-**But no phase's promote/OSS exit gate is met.** Those gates need real-world operation (an SLO window, a
-security review, adoption) and, above all, the charter **§7.4** going-public step (employer OSPO/IP
-clearance) — none of which is a coding task. **Until that clearance lands the repo stays private**, and
-we do not add public-facing OSS files (a root README, SECURITY.md, CONTRIBUTING). The full,
+**But no phase's promote/OSS exit gate is fully met.** Charter **§7.4** (employer OSPO/IP clearance) is
+now **cleared** — public-facing OSS files like **[CONTRIBUTING.md](../CONTRIBUTING.md)** may exist and the
+repo may go public. Each phase's own promote/OSS gate still separately needs real-world operational
+evidence (an SLO window, a security review, adoption) — none of which is a coding task. The full,
 evidence-backed status lives in **[roadmap.md](roadmap.md)**; the honest gaps an enterprise reviewer
 would point at are tracked in **[enterprise-readiness.md](enterprise-readiness.md)**.
 

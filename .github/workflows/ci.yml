@@ -1,9 +1,7 @@
 # Stratt CI — charter §1.7 (evergreen gate), §1.3 (DCO), §7.3 (supply chain).
 #
-# Pre-Phase-0 note: this repo stays private until §7.4 OSPO/IP clearance, so this
-# workflow does not run yet — it is authored now so the gates exist the moment the
-# repo lands on a (private) GitHub remote. It is CI config, not a public-facing OSS
-# file (SECURITY.md / CONTRIBUTING stay withheld per §7.4).
+# §7.4 OSPO/IP clearance is cleared; this workflow is authored so the gates exist the
+# moment the repo lands on a GitHub remote.
 #
 # Supply-chain discipline (§7.3): every action is pinned to a commit digest, never a
 # floating tag. Bump digests on the quarterly upgrade train alongside Taskfile floors.

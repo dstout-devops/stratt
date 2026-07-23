@@ -15,10 +15,10 @@ control plane (`core/`), the React UI (`ui/`), 90+ ADRs, and the Helm chart are 
 this is a working platform, not a spike. The living, evidence-backed tracker is
 **[docs/roadmap.md](docs/roadmap.md)**; the decision record is **[docs/adr/](docs/adr/README.md)**. Follow
 the charter §8 phasing and the roadmap — build the *next* thing, not ahead recklessly — and keep new work
-behind an ADR (`/new-adr`) when it is a decision of consequence. **No phase's promote/OSS exit gate is met:**
-every one ultimately waits on the charter **§7.4** going-public step (OSPO/IP clearance) plus operational
-evidence (SLO, security review, adoption) — none of which is a coding task, and the repo stays **private**
-until then.
+behind an ADR (`/new-adr`) when it is a decision of consequence. Charter **§7.4** (OSPO/IP clearance) is
+now **cleared** — the repo may go public and public-facing OSS files may be created. Each phase's
+promote/OSS exit gate still separately requires its own operational evidence (SLO, security review,
+adoption) — none of which is a coding task.
 
 ## Founding Disciplines — binding on every decision (charter §1)
 1. **Type the seams, not the world.** JSON Schema attaches only at plugin boundaries and named
@@ -112,9 +112,10 @@ Run repeatable work through the **Taskfile**; never assert success without the m
 - Trunk-based; branch off `main`. Commit and push only when asked.
 - **DCO sign-off is required on every commit:** `git commit -s`. No CLA, ever.
 - Descriptive, conventional commit messages.
-- **§7.4 blocker — highest-severity project risk:** the repo stays **private** until written employer
-  OSPO/IP clearance is obtained. Until then do **not** create public-facing OSS files (SECURITY.md,
-  CONTRIBUTING, a public README) and do **not** push to any public remote.
+- **§7.4 (OSPO/IP clearance) is cleared.** Public-facing OSS files (SECURITY.md, CONTRIBUTING, a public
+  README) may now be created, and the repo may go public / be pushed to a public remote. Still confirm
+  with the user before actually flipping repo visibility or pushing to a public remote for the first
+  time — that's a one-way, highly visible action.
 - **Never edit `LICENSE` or `stratt-charter.md` without explicit instruction.** The charter is the
   design authority; changes to §1/§2 require the highest review bar in the project.
 

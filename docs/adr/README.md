@@ -100,3 +100,22 @@ Status is `Accepted` unless noted. See **[../roadmap.md](../roadmap.md)** for ho
 | [0089](0089-awximport-to-awx-plugin.md) | the AWX→CaC transform is plugin breadth: move `awximport` (transform + rich deep-read client + `awxsim`) into the awx plugin; `adopt/materialize` becomes an awx-plugin Action; core keeps only tool-blind adopt; `awxfacade` stays; retire the legacy `import` verb (supersedes-in-part ADR-0088) | Accepted |
 | [0090](0090-ui-rebuild-greenfield-charter-stack.md) | UI rebuild: greenfield on the charter stack (React/Vite/TanStack/Tailwind4/vendored Radix-shadcn), gauntlet-informed responsiveness patterns over OpenAPI; descent-spine first; schema-driven rendering; ratifies ADR-0003 | Accepted |
 | [0091](0091-ui-is-a-first-party-bundled-pure-api-client.md) | the UI is a first-party, served-by-default, pure `/api/v1` client — the OpenAPI contract is the single seam; never a sovereign-port plugin, never a gated/optional-for-diagnosis add-on (§1.3/§1.6/§1.8) | Accepted |
+| [0092](0092-helm-actuator.md) | Helm Actuator: chart → release behind Gates, over the sovereign port | Accepted |
+| [0093](0093-real-dev-backends-floci-seaweedfs.md) | Real dev backends: Floci (EC2) replaces moto; SeaweedFS bump (S3) | Accepted |
+| [0094](0094-secretbroker-openbao-vault-backend.md) | SecretBroker OpenBao/Vault backend: per-call material from a KV store (§2.5) | Accepted |
+| [0095](0095-full-featured-ec2-connector.md) | Full-featured EC2 connector: instance lifecycle + resource Actions, and the instance.* Facet contracts | Accepted |
+| [0096](0096-ec2-resource-graph-entities.md) | The EC2 resource graph: VPC / subnet / security-group / volume as Observed Entities | Accepted |
+| [0097](0097-awss3-connector.md) | The awss3 Connector: bucket lifecycle Actions + metadata-only bucket Syncer | Accepted |
+| [0098](0098-openbao-plugin-consolidation-pki.md) | Consolidate the OpenBao surfaces into `plugins/openbao`; full-featured PKI behind the neutral cert-issuer Contract | Accepted |
+| [0099](0099-openbao-kv-metadata-syncer.md) | OpenBao KV metadata Syncer: secret existence/metadata as a projection, never material | Accepted |
+| [0100](0100-keycustodian-kms-envelope-encryption.md) | The KeyCustodian capability: envelope encryption with a self-sufficient local floor and optional, transport-plural KMS providers | Accepted |
+| [0101](0101-cluster-authz-activation-openbao-oidc-workload-identity.md) | Activate real cluster authz; OpenBao-OIDC workload identity; multi-issuer Principal resolution | Accepted |
+| [0102](0102-tiered-genesis-bootstrap.md) | Tiered genesis bootstrap: a minimal self-retiring floor, then Stratt self-deploys the rest | Proposed |
+| [0103](0103-runtime-connector-registry.md) | Runtime Connector registry: enable/disable Connectors without a strattd restart | Proposed |
+| [0104](0104-plugin-capability-dependencies.md) | Capability dependencies: plugins require capability *contracts*, resolved first-class | Accepted |
+| [0105](0105-s3-capability-provider-agnostic.md) | Capability providers are provider-agnostic: S3 is provider #1 of statestore/artifactstore, never "the provider" | Accepted |
+| [0106](0106-openbao-multi-capability-provider.md) | OpenBao as a multi-capability provider; enablement-gate vs resolve-inject capabilities | Accepted |
+| [0107](0107-ec2-provisioning-provider.md) | EC2 as the `provisioning` capability provider (enablement-gate) | Accepted |
+| [0108](0108-adr-scout-prior-art-scan.md) | `adr-scout` + a mandatory prior-art scan before drafting an ADR | Proposed |
+| [0109](0109-adr-knowledge-graph.md) | The ADR knowledge graph: a generated subsystem map for discovery | Proposed |
+| [0110](0110-provisioning-class-reach-path.md) | The `provisioning` class reach-path: `Intent.builder:` → `requires: [provisioning]` | Proposed |
