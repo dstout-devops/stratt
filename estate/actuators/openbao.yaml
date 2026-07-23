@@ -1,0 +1,18 @@
+# openbao — the OpenBao multi-capability PROVIDER (ADR-0106), registered as an Actuator Kind
+# (ADR-0103) declaring provides:[keycustodian, certissuer]. It dials the same openbao plugin pod
+# (whose cert Syncer + cert-issuer reconcile Actuator + WrapKey/UnwrapKey stay boot-env for now);
+# provider verification (ADR-0104 D1) confirms the pod's Manifest advertises both classes before
+# any consumer binds.
+#
+# BOTH capabilities are ENABLEMENT-GATE (ADR-0106 D1), not resolve-inject — so there are NO resolve
+# Actions here: keycustodian is consumed via WrapKey/UnwrapKey + portCustodian (ADR-0100, and the
+# core's own use deliberately stays there, D4); certissuer via the target-scoped cert-issuer Actuator
+# (ADR-0098). `requires:[…]` on either only gates that a verified provider EXISTS. secretbroker is
+# NOT provided here — its material resolution is SDK-side (ADR-0094/0106 D3).
+#
+# OpenBao is provider #1 of each class (§1.5) — swappable behind the same contract.
+name: openbao
+address: stratt-openbao:9090
+pluginIdentity: openbao
+tier: trusted
+provides: [keycustodian, certissuer]

@@ -71,6 +71,25 @@ func TestConnectorValidation(t *testing.T) {
 	}
 }
 
+// TestCapabilityVocabulary is the ADR-0104 §1.5 gate: a plugin never mints a capability's
+// meaning — an unknown provides/requires token is rejected at admission on both Kinds.
+func TestCapabilityVocabulary(t *testing.T) {
+	// A known capability validates on both Kinds.
+	if err := ValidateConnector(types.Connector{Name: "n", Class: "syncer", Address: "a", PluginIdentity: "p", Source: types.Source{Name: "s"}, Requires: []string{"keycustodian"}}); err != nil {
+		t.Fatalf("a known capability must validate: %v", err)
+	}
+	if err := ValidateActuator(types.Actuator{Name: "n", PluginIdentity: "p", Address: "a", Provides: []string{"statestore"}}); err != nil {
+		t.Fatalf("a known capability must validate: %v", err)
+	}
+	// An unknown token is rejected in provides and in requires, on both Kinds.
+	if err := ValidateConnector(types.Connector{Name: "n", Class: "syncer", Address: "a", PluginIdentity: "p", Source: types.Source{Name: "s"}, Requires: []string{"durableexec"}}); err == nil {
+		t.Fatal("durableexec is spine, not a requirable capability (ADR-0104 D6) — must be rejected")
+	}
+	if err := ValidateActuator(types.Actuator{Name: "n", PluginIdentity: "p", Address: "a", Provides: []string{"bogus"}}); err == nil {
+		t.Fatal("an unknown provides token must be rejected (core-owned vocabulary, §1.5)")
+	}
+}
+
 func TestParseActuatorFile(t *testing.T) {
 	yaml := `
 name: helm
@@ -109,7 +128,7 @@ func TestParseRealEstate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse /estate: %v", err)
 	}
-	var haveConn, haveAct bool
+	var haveConn, haveAct, haveProvider bool
 	for _, c := range d.Connectors {
 		if c.Name == "declared" && c.Class == "syncer" && c.Source.Name == "declared-dev" {
 			haveConn = true
@@ -119,6 +138,45 @@ func TestParseRealEstate(t *testing.T) {
 		if a.Name == "helm" && len(a.ActionNames) == 1 && a.ActionNames[0] == "helm/deploy" {
 			haveAct = true
 		}
+		// s3-statestore is the ADR-0105 statestore capability provider (provides:[statestore]).
+		if a.Name == "s3-statestore" && len(a.Provides) == 1 && a.Provides[0] == "statestore" &&
+			len(a.ActionNames) == 1 && a.ActionNames[0] == "awss3/statestore-resolve" {
+			haveProvider = true
+		}
+	}
+	if !haveProvider {
+		t.Fatalf("estate/actuators/s3-statestore.yaml must parse into a statestore provider; got %+v", d.Actuators)
+	}
+	// openbao is the ADR-0106 multi-capability provider (provides:[keycustodian, certissuer]).
+	var haveOpenBao bool
+	for _, a := range d.Actuators {
+		if a.Name == "openbao" && len(a.Provides) == 2 &&
+			a.Provides[0] == "keycustodian" && a.Provides[1] == "certissuer" && len(a.ActionNames) == 0 {
+			haveOpenBao = true
+		}
+	}
+	if !haveOpenBao {
+		t.Fatalf("estate/actuators/openbao.yaml must parse into a keycustodian+certissuer provider (no resolve Action); got %+v", d.Actuators)
+	}
+	// opentofu-s3 is the first real `requires:` CONSUMER (ADR-0105 D4): requires:[statestore].
+	var haveConsumer bool
+	for _, a := range d.Actuators {
+		if a.Name == "opentofu-s3" && len(a.Requires) == 1 && a.Requires[0] == "statestore" {
+			haveConsumer = true
+		}
+	}
+	if !haveConsumer {
+		t.Fatalf("estate/actuators/opentofu-s3.yaml must parse into a statestore consumer (requires:[statestore]); got %+v", d.Actuators)
+	}
+	// awsec2 is the ADR-0107 provisioning provider (provides:[provisioning], enablement-gate).
+	var haveEC2 bool
+	for _, a := range d.Actuators {
+		if a.Name == "awsec2" && len(a.Provides) == 1 && a.Provides[0] == "provisioning" && len(a.ActionNames) == 0 {
+			haveEC2 = true
+		}
+	}
+	if !haveEC2 {
+		t.Fatalf("estate/actuators/awsec2.yaml must parse into a provisioning provider; got %+v", d.Actuators)
 	}
 	if !haveConn {
 		t.Fatalf("estate/connectors/declared.yaml must parse into the declared Connector; got %+v", d.Connectors)

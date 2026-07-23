@@ -1,0 +1,16 @@
+# opentofu-s3 — an OpenTofu Actuator that OPTS IN to a plugin-provided statestore (ADR-0105 D4),
+# the first real `requires:` consumer in the estate. It declares requires:[statestore], so the
+# registry gates its enablement on a VERIFIED statestore provider (ADR-0104): until one exists it
+# stays PENDING (observable, §1.8); once s3-statestore is verified, it enables, and every Run
+# against it resolves the bound provider's resolve Action and injects the s3 backend config at
+# dispatch (ADR-0105) — OpenTofu renders `-backend-config` from the handle instead of the http floor.
+#
+# Additive, never a forced migration (D4): the default boot-env `opentofu` Actuator keeps the
+# http-over-Postgres floor untouched. This declaration is the opt-in demonstration of the full
+# resolve-inject edge; it enables live only where the awss3 provider runs with a state bucket.
+name: opentofu-s3
+address: stratt-opentofu:9090
+pluginIdentity: opentofu
+tier: trusted
+dryRunnable: true
+requires: [statestore]

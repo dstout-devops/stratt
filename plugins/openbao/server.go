@@ -75,6 +75,15 @@ func (s *Server) GetManifest(context.Context, *pluginv1.GetManifestRequest) (*pl
 	for _, ns := range facetNamespaces {
 		contracts = append(contracts, &pluginv1.ContractDecl{SchemaId: ns})
 	}
+	// Capability classes this plugin PROVIDES (ADR-0104/0106) — both enablement-gate (no resolve
+	// Action): keycustodian via WrapKey/UnwrapKey (ADR-0100), certissuer via the PKI Actuator
+	// (ADR-0098). certissuer is advertised ONLY where a PKI mount is configured, so provider
+	// verification (ADR-0104 D1) stays honest. secretbroker is deliberately NOT here — material
+	// resolution is SDK-side (ADR-0094/0106 D3), never this plugin's job.
+	capabilities := []string{"apply.dry-run", "keycustodian"}
+	if s.cfg.Mount != "" {
+		capabilities = append(capabilities, "certissuer")
+	}
 	return &pluginv1.GetManifestResponse{Manifest: &pluginv1.Manifest{
 		PluginId:        s.cfg.PluginID,
 		ProtocolVersion: "v1",
@@ -82,7 +91,7 @@ func (s *Server) GetManifest(context.Context, *pluginv1.GetManifestRequest) (*pl
 		// is the reconcile ACTUATOR verbs (ADR-0050) — a multi-role Connector.
 		Class:            pluginv1.PluginClass_PLUGIN_CLASS_SYNCER,
 		Verbs:            []pluginv1.Verb{pluginv1.Verb_VERB_OBSERVE, pluginv1.Verb_VERB_PLAN, pluginv1.Verb_VERB_APPLY, pluginv1.Verb_VERB_DESTROY, pluginv1.Verb_VERB_INVOKE},
-		Capabilities:     []string{"apply.dry-run", "keycustodian"}, // ADR-0100: provides the KeyCustodian wrap/unwrap capability
+		Capabilities:     capabilities,
 		Contracts:        contracts,
 		TombstoneSchemes: []string{"cert.serial", "pki.caSerial"},
 		// Administrative PKI Actions (ADR-0098 E2) — CA admin, NOT the retired per-cert

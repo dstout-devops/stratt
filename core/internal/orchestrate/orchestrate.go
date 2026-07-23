@@ -396,6 +396,10 @@ type PluginActuator struct {
 	// declaration + the rung-3 pin seam around the generic EE-Job dispatch — the
 	// protocol lives in the stratt-mcp shim; the pinning + graph resolution stay core.
 	MCP bool
+	// Requires are the capability classes this Actuator depends on (ADR-0105): at dispatch the
+	// core resolves each to its bound provider, invokes the provider's resolve Action, and injects
+	// the handle onto the Apply. Empty for boot-env/in-tree actuators (no capability requirement).
+	Requires []string
 }
 
 // jobTransport reports whether this Actuator runs as an EE-Job shim (ADR-0051)
@@ -553,6 +557,11 @@ type Activities struct {
 	// federation. Nil on a single-Cell estate; RunAcrossCells is never reached
 	// there (LaunchRun sees no peers), so the nil is never dereferenced.
 	Peers *cellrouter.PeerClient
+	// ResolveCapability maps a required capability class to the resolve-Action name of its single
+	// VERIFIED bound provider (ADR-0105), failing closed on 0/≥2 (the connectorregistry implements
+	// it). Nil ⇒ capability requirements can't be met, so an Actuator that `requires` one fails
+	// visibly (§1.8), never silently runs without the resolved handle.
+	ResolveCapability func(ctx context.Context, capability string) (actionName string, err error)
 }
 
 // EnsureRun creates the Run summary row for a Trigger-started execution
@@ -981,10 +990,17 @@ func (a *Activities) PlanStep(ctx context.Context, in RunInput) (string, error) 
 		return "", temporal.NewNonRetryableApplicationError(
 			fmt.Sprintf("actuator %q does not support the Plan verb (not a plugin actuator)", in.Actuator), "PlanUnsupported", nil)
 	}
+	// Resolve the SAME capability handles the Apply gets (ADR-0105) so the pinned plan is computed
+	// against the same state backend it will be applied to — else plan/apply state diverges.
+	resolvedCaps, err := a.resolveCapabilities(ctx, in, pa.Requires)
+	if err != nil {
+		return "", temporal.NewNonRetryableApplicationError(err.Error(), "CapabilityResolveFailed", err)
+	}
 	out, err := pa.Host.Plan(ctx, pluginhost.PlanInvoke{
-		Principal:      in.Principal,
-		Params:         in.Params,
-		CredentialRefs: in.CredentialRefs,
+		Principal:            in.Principal,
+		Params:               in.Params,
+		CredentialRefs:       in.CredentialRefs,
+		ResolvedCapabilities: resolvedCaps,
 	})
 	if err != nil {
 		return "", err
@@ -1039,6 +1055,74 @@ func (a *Activities) surfaceRejections(ctx context.Context, runID, source, plugi
 			}
 		}
 	}
+}
+
+// resolveCapabilities resolves each capability the Actuator `requires` (ADR-0105) into a handle to
+// inject onto the Apply: it finds the bound provider's resolve Action (via ResolveCapability),
+// invokes it (reusing Action governance + the class-level output-Contract reconcile), validates the
+// output against the CLASS-level Contract, and returns the handles keyed by class. Fails closed +
+// visibly (§1.8) — a required capability that can't be resolved aborts the Run, never a silent
+// apply without its resolved handle (e.g. tofu running against no state backend).
+func (a *Activities) resolveCapabilities(ctx context.Context, in RunInput, requires []string) (map[string]pluginhost.CapabilityHandle, error) {
+	if len(requires) == 0 {
+		return nil, nil
+	}
+	// The workspace the provider keys state by — read from the opaque desired, as the facts path
+	// does (a read of a core-owned selection label, not a projection write, §1.2). A malformed
+	// desired fails closed HERE with a clear diagnostic (§1.8), never a silent empty workspace.
+	var wsp struct {
+		Workspace string `json:"workspace"`
+	}
+	if len(in.Params) > 0 {
+		if err := json.Unmarshal(in.Params, &wsp); err != nil {
+			return nil, fmt.Errorf("actuator %q: read workspace from params: %w", in.Actuator, err)
+		}
+	}
+	handles := make(map[string]pluginhost.CapabilityHandle, len(requires))
+	for _, capClass := range requires {
+		if a.ResolveCapability == nil {
+			return nil, fmt.Errorf("actuator %q requires %q but no capability resolver is configured", in.Actuator, capClass)
+		}
+		actionName, err := a.ResolveCapability(ctx, capClass)
+		if err != nil {
+			return nil, fmt.Errorf("actuator %q: resolve capability %q: %w", in.Actuator, capClass, err)
+		}
+		pa, ok := a.Plugins.Action(actionName)
+		if !ok {
+			return nil, fmt.Errorf("actuator %q: capability %q resolve Action %q is not registered", in.Actuator, capClass, actionName)
+		}
+		args, _ := json.Marshal(map[string]string{"workspace": wsp.Workspace})
+		// Validate the resolve INPUT against the class Contract too (symmetric with the output) —
+		// so an empty/malformed workspace fails closed in the core, not deferred to the provider.
+		inContract := "capabilities/" + capClass + ".input"
+		if err := contract.ValidateNamed(inContract, args); err != nil {
+			return nil, fmt.Errorf("actuator %q: capability %q resolve input failed its Contract: %w", in.Actuator, capClass, err)
+		}
+		outContract := "capabilities/" + capClass + ".output"
+		raw, err := pa.Host.InvokeRaw(ctx, pluginhost.ActionInvoke{
+			Principal: in.Principal, Action: actionName, Args: args, ExpectOutputContract: outContract,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("actuator %q: invoke resolve %q: %w", in.Actuator, actionName, err)
+		}
+		if !raw.OK {
+			return nil, fmt.Errorf("actuator %q: capability resolve %q did not succeed", in.Actuator, actionName)
+		}
+		// The output must satisfy the CLASS-level Contract (§1.5) — the same shape every provider fills.
+		if err := contract.ValidateNamed(outContract, raw.Outputs); err != nil {
+			return nil, fmt.Errorf("actuator %q: capability %q resolve output failed its Contract: %w", in.Actuator, capClass, err)
+		}
+		var h struct {
+			Backend       string            `json:"backend"`
+			Config        map[string]string `json:"config"`
+			CredentialRef string            `json:"credentialRef"`
+		}
+		if err := json.Unmarshal(raw.Outputs, &h); err != nil {
+			return nil, fmt.Errorf("actuator %q: decode capability %q handle: %w", in.Actuator, capClass, err)
+		}
+		handles[capClass] = pluginhost.CapabilityHandle{Kind: h.Backend, Config: h.Config, CredentialRef: h.CredentialRef}
+	}
+	return handles, nil
 }
 
 func (a *Activities) executePlugin(ctx context.Context, in RunInput, site string, resolved ResolvedTargets, creds []dispatch.CredentialMount, pa PluginActuator) (dispatch.Result, error) {
@@ -1111,16 +1195,24 @@ func (a *Activities) executePlugin(ctx context.Context, in RunInput, site string
 				"PlanPinVerifyFailed", verr)
 		}
 	}
+	// Resolve any capability the Actuator `requires` (ADR-0105) and inject the handles LEGIBLY —
+	// e.g. a statestore backend config for tofu, replacing the static STRATT_STATE_BACKEND_URL.
+	// Fails closed: an unresolvable required capability aborts the Run (§1.8), never a silent apply.
+	resolvedCaps, err := a.resolveCapabilities(ctx, in, pa.Requires)
+	if err != nil {
+		return dispatch.Result{}, temporal.NewNonRetryableApplicationError(err.Error(), "CapabilityResolveFailed", err)
+	}
 	activity.RecordHeartbeat(ctx) // canceled Run stops promptly (ADR-0026)
 	raw, err := host.ApplyRaw(ctx, pluginhost.ApplyInvoke{
-		Principal:       in.Principal,
-		Params:          in.Params,
-		Targets:         targets,
-		DryRun:          in.DryRun,
-		CredentialRefs:  names,
-		PlanDigest:      in.PlanDigest,
-		PinnedPlan:      pinnedPlan,
-		FacetWriteScope: in.FacetWriteScope,
+		Principal:            in.Principal,
+		Params:               in.Params,
+		Targets:              targets,
+		DryRun:               in.DryRun,
+		CredentialRefs:       names,
+		PlanDigest:           in.PlanDigest,
+		PinnedPlan:           pinnedPlan,
+		FacetWriteScope:      in.FacetWriteScope,
+		ResolvedCapabilities: resolvedCaps,
 	})
 	if err != nil {
 		return dispatch.Result{}, err

@@ -228,6 +228,70 @@ func TestGetManifest(t *testing.T) {
 	}
 }
 
+// TestStatestoreProvider proves the statestore capability (ADR-0105): with a state bucket
+// configured the plugin advertises `statestore` + the resolve Action, and the resolve returns a
+// provider-agnostic s3 backend-config handle against the CLASS-level output Contract. Without a
+// state bucket it advertises neither (so provider verification, ADR-0104 D1, stays honest).
+func TestStatestoreProvider(t *testing.T) {
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+
+	t.Run("advertised only when configured", func(t *testing.T) {
+		bare := NewServer(Config{Region: "us-east-1"}, log)
+		m, _ := bare.GetManifest(context.Background(), &pluginv1.GetManifestRequest{})
+		if caps := m.GetManifest().GetCapabilities(); len(caps) != 0 {
+			t.Fatalf("no state bucket ⇒ no statestore capability, got %v", caps)
+		}
+
+		prov := NewServer(Config{Region: "eu-west-1", Endpoint: "http://seaweed:8333", PathStyle: true, StateBucket: "tfstate"}, log)
+		m, _ = prov.GetManifest(context.Background(), &pluginv1.GetManifestRequest{})
+		caps := m.GetManifest().GetCapabilities()
+		if len(caps) != 1 || caps[0] != "statestore" {
+			t.Fatalf("state bucket ⇒ advertise statestore, got %v", caps)
+		}
+		var haveAction bool
+		for _, a := range m.GetManifest().GetActions() {
+			if a.GetName() == "awss3/statestore-resolve" {
+				haveAction = true
+				if a.GetOutput().GetSchemaId() != "capabilities/statestore.output" {
+					t.Fatalf("resolve Action must reference the CLASS-level Contract, got %q", a.GetOutput().GetSchemaId())
+				}
+			}
+		}
+		if !haveAction {
+			t.Fatal("statestore provider must expose awss3/statestore-resolve")
+		}
+	})
+
+	t.Run("resolve returns a provider-agnostic backend config", func(t *testing.T) {
+		prov := NewServer(Config{Region: "eu-west-1", Endpoint: "http://seaweed:8333", PathStyle: true, StateBucket: "tfstate", StateCredentialRef: "cred/awss3/state"}, log)
+		res := invoke(t, prov, "awss3/statestore-resolve", map[string]any{"workspace": "web-prod"})
+		if id := res.GetOutputContract().GetSchemaId(); id != "capabilities/statestore.output" {
+			t.Fatalf("output contract must be the class-level id, got %q", id)
+		}
+		out := outMap(t, res)
+		if out["backend"] != "s3" {
+			t.Fatalf("backend: %v", out["backend"])
+		}
+		cfg, _ := out["config"].(map[string]any)
+		if cfg["bucket"] != "tfstate" || cfg["key"] != "stratt/web-prod.tfstate" || cfg["region"] != "eu-west-1" ||
+			cfg["use_lockfile"] != "true" || cfg["use_path_style"] != "true" || cfg["endpoints.s3"] != "http://seaweed:8333" {
+			t.Fatalf("backend config: %v", cfg)
+		}
+		if out["credentialRef"] != "cred/awss3/state" {
+			t.Fatalf("credentialRef: %v", out["credentialRef"])
+		}
+	})
+
+	t.Run("resolve requires a workspace", func(t *testing.T) {
+		prov := NewServer(Config{StateBucket: "tfstate"}, log)
+		raw, _ := json.Marshal(map[string]any{})
+		stream := &captureStream[pluginv1.InvokeResponse]{ctx: context.Background()}
+		if err := prov.Invoke(&pluginv1.InvokeRequest{Action: "awss3/statestore-resolve", Args: &pluginv1.Payload{Bytes: raw}}, stream); err == nil {
+			t.Fatal("statestore-resolve with no workspace must be rejected")
+		}
+	})
+}
+
 // TestNormalizedBucketFacetMatchesContract is the co-fidelity guard (ADR-0095 flag-2
 // discipline): the emitted bucket.config keys are a subset of the closed schema.
 func TestNormalizedBucketFacetMatchesContract(t *testing.T) {

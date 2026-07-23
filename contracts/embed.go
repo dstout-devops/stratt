@@ -13,5 +13,5 @@ import "embed"
 // actions/<connector>/<op>.input|output.schema.json,
 // policy/<name>.schema.json (the PDP request/decision Contract, ADR-0062).
 //
-//go:embed actuators/*.schema.json facets/*.schema.json outputs/*.schema.json intents/*.schema.json actions/*/*.schema.json policy/*.schema.json
+//go:embed actuators/*.schema.json facets/*.schema.json outputs/*.schema.json intents/*.schema.json actions/*/*.schema.json policy/*.schema.json capabilities/*.schema.json
 var FS embed.FS

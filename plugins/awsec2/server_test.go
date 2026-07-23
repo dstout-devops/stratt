@@ -407,6 +407,16 @@ func TestGetManifest(t *testing.T) {
 	if len(m.GetContracts()) != 7 {
 		t.Errorf("expected 7 facet contracts, got %d", len(m.GetContracts()))
 	}
+	// provisioning capability (ADR-0107) — advertised so provider verification (ADR-0104 D1) can bind it.
+	var provisions bool
+	for _, c := range m.GetCapabilities() {
+		if c == "provisioning" {
+			provisions = true
+		}
+	}
+	if !provisions {
+		t.Errorf("manifest must advertise the provisioning capability, got %v", m.GetCapabilities())
+	}
 	// One tombstone scheme per Observed Entity kind (instance + the 4 resource kinds).
 	tomb := map[string]bool{}
 	for _, s := range m.GetTombstoneSchemes() {

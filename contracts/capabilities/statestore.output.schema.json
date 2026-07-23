@@ -1,0 +1,9 @@
+{ "$schema": "https://json-schema.org/draft/2020-12/schema", "$id": "stratt:contract:capabilities/statestore.output:v1", "title": "statestore resolve output",
+  "description": "Class-level, PROVIDER-AGNOSTIC (ADR-0105) statestore handle: the tool-backend config the consumer injects into its own state engine. `backend` names the tool backend TYPE (e.g. 's3','http','gcs'); `config` is that backend's string settings (bucket/key/region/endpoint/address/lock_address…); `credentialRef` is a §2.5 CredentialRef NAME for backend auth material — resolved at pod spawn, NEVER inline material. Every provider fills this same shape, so a provider swap (S3→Artifactory→GCS) changes zero consumer declarations (D1).",
+  "type": "object",
+  "properties": {
+    "backend": {"type":"string","minLength":1},
+    "config": {"type":"object","additionalProperties":{"type":"string"}},
+    "credentialRef": {"type":"string"}
+  },
+  "required": ["backend","config"], "additionalProperties": false }

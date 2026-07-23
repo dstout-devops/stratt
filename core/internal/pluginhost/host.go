@@ -687,6 +687,33 @@ type ApplyInvoke struct {
 	// FacetWriteScope is the per-Run facet FLOOR (ADR-0054): the effective write-back
 	// allowlist is the plugin grant ∩ this scope. Empty admits no facet write-back.
 	FacetWriteScope []string
+	// ResolvedCapabilities are the core-resolved capability handles (ADR-0105), keyed by capability
+	// class (e.g. "statestore"). Injected LEGIBLY onto the Apply (never the opaque `desired`) when
+	// the Actuator `requires` a capability; the plugin consumes the handle (e.g. tofu -backend-config).
+	ResolvedCapabilities map[string]CapabilityHandle
+}
+
+// CapabilityHandle is a core-resolved capability's provider-agnostic handle (ADR-0105): Kind is the
+// provider-neutral variant (for statestore, the tool backend type — s3/http/gcs), Config its string
+// settings, CredentialRef a §2.5 CredentialRef NAME (resolved at the pod, never material).
+type CapabilityHandle struct {
+	Kind          string
+	Config        map[string]string
+	CredentialRef string
+}
+
+// wireCapabilities translates the core-resolved capability handles onto the wire — shared by the
+// Apply and Plan paths so both carry the SAME handle (ADR-0105: a pinned plan must be computed
+// against the same state backend it is applied to). Nil/empty ⇒ nil (no injection).
+func wireCapabilities(in map[string]CapabilityHandle) map[string]*pluginv1.CapabilityHandle {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[string]*pluginv1.CapabilityHandle, len(in))
+	for class, ch := range in {
+		out[class] = &pluginv1.CapabilityHandle{Kind: ch.Kind, Config: ch.Config, CredentialRef: ch.CredentialRef}
+	}
+	return out
 }
 
 // PlanInvoke is a governed Actuator Plan request (the unary, pinnable producer).
@@ -694,6 +721,9 @@ type PlanInvoke struct {
 	Principal      string
 	Params         []byte
 	CredentialRefs []string
+	// ResolvedCapabilities are the core-resolved handles (ADR-0105) — the SAME the Apply gets, so
+	// the pinned plan is computed against the same state backend it will be applied to.
+	ResolvedCapabilities map[string]CapabilityHandle
 }
 
 // PlanOutcome is the governed result of a Plan. Digest is the content-address of
@@ -723,7 +753,8 @@ func (h *Host) Plan(ctx context.Context, req PlanInvoke) (PlanOutcome, error) {
 			Principal: &pluginv1.Principal{Id: req.Principal, Kind: "user"},
 			Creds:     creds,
 		},
-		Desired: &pluginv1.Payload{Bytes: req.Params},
+		Desired:              &pluginv1.Payload{Bytes: req.Params},
+		ResolvedCapabilities: wireCapabilities(req.ResolvedCapabilities),
 	})
 	if err != nil {
 		return out, fmt.Errorf("pluginhost: plan: %w", err)
@@ -852,6 +883,8 @@ func (h *Host) ApplyRaw(ctx context.Context, req ApplyInvoke) (RawApplyResult, e
 		applyReq.PlanRef = &pluginv1.ArtifactRef{Sha256: req.PlanDigest}
 		applyReq.PinnedPlan = req.PinnedPlan
 	}
+	// Core-resolved capability handles (ADR-0105) ride the LEGIBLE channel, never `desired`.
+	applyReq.ResolvedCapabilities = wireCapabilities(req.ResolvedCapabilities)
 	stream, err := h.client.Apply(ctx, applyReq)
 	if err != nil {
 		return out, fmt.Errorf("pluginhost: apply: %w", err)

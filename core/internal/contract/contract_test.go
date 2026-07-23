@@ -5,6 +5,33 @@ import (
 	"testing"
 )
 
+// TestStatestoreOutputContract is the co-fidelity guard for ADR-0105: the class-level
+// capabilities/statestore.output Contract accepts a representative provider-agnostic backend-config
+// handle (the shape awss3/statestore-resolve produces) and rejects a malformed one.
+func TestStatestoreOutputContract(t *testing.T) {
+	ok := []byte(`{"backend":"s3","config":{"bucket":"tfstate","key":"stratt/web-prod.tfstate","region":"eu-west-1","use_lockfile":"true"},"credentialRef":"cred/awss3/state"}`)
+	if err := ValidateNamed("capabilities/statestore.output", ok); err != nil {
+		t.Fatalf("a valid statestore handle must validate: %v", err)
+	}
+	// A non-string config value violates the provider-agnostic string-map contract.
+	bad := []byte(`{"backend":"s3","config":{"use_lockfile":true}}`)
+	if err := ValidateNamed("capabilities/statestore.output", bad); err == nil {
+		t.Fatal("a non-string config value must be rejected (config is a string map)")
+	}
+	// Missing the required backend type.
+	if err := ValidateNamed("capabilities/statestore.output", []byte(`{"config":{}}`)); err == nil {
+		t.Fatal("a handle without a backend type must be rejected")
+	}
+	if err := ValidateNamed("capabilities/statestore.input", []byte(`{"workspace":"web-prod"}`)); err != nil {
+		t.Fatalf("a valid resolve input must validate: %v", err)
+	}
+	// An empty workspace must fail closed at the input Contract (guardian slice-3 Flag B): the core
+	// validates the resolve INPUT before invoking, so a malformed/empty workspace fails in the core.
+	if err := ValidateNamed("capabilities/statestore.input", []byte(`{"workspace":""}`)); err == nil {
+		t.Fatal("an empty workspace must be rejected by the input Contract")
+	}
+}
+
 func TestValidateActuatorParams(t *testing.T) {
 	// Valid.
 	if err := ValidateActuatorParams("script", []byte(`{"script":"echo hi"}`)); err != nil {
@@ -88,8 +115,8 @@ func TestPinsAreStable(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(all) != 96 {
-		t.Fatalf("expected 96 embedded documents, got %d", len(all))
+	if len(all) != 98 {
+		t.Fatalf("expected 98 embedded documents, got %d", len(all))
 	}
 	versions := map[string]int{}
 	for _, c := range all {

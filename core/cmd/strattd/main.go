@@ -46,6 +46,7 @@ import (
 	"github.com/dstout-devops/stratt/core/internal/keycustodian"
 	"github.com/dstout-devops/stratt/core/internal/leader"
 	"github.com/dstout-devops/stratt/core/internal/notify"
+	"github.com/dstout-devops/stratt/core/internal/objectstore"
 	"github.com/dstout-devops/stratt/core/internal/observability"
 	"github.com/dstout-devops/stratt/core/internal/orchestrate"
 	"github.com/dstout-devops/stratt/core/internal/planstore"
@@ -834,16 +835,14 @@ func run(ctx context.Context, log *slog.Logger) error {
 	}
 	if bucket := os.Getenv("STRATT_EVIDENCE_BUCKET"); bucket != "" {
 		retentionDays, _ := strconv.Atoi(env("STRATT_EVIDENCE_RETENTION_DAYS", "365"))
-		evidence, err = evidencestore.New(ctx, evidencestore.Config{
-			// A dedicated endpoint (the object store is a distinct service from
-			// the EC2 mock on STRATT_AWS_ENDPOINT); empty falls back to the AWS
-			// default resolver (real S3).
-			Endpoint:      env("STRATT_EVIDENCE_ENDPOINT", os.Getenv("STRATT_AWS_ENDPOINT")),
-			Region:        env("STRATT_EVIDENCE_REGION", env("STRATT_AWS_REGION", "us-east-1")),
-			Bucket:        bucket,
-			RetentionDays: retentionDays,
-			PathStyle:     true,
-		})
+		// One shared object-store client (objectstore.ConfigFromEnv resolves the
+		// endpoint/region once — canonical STRATT_OBJECTSTORE_*, with the historical
+		// STRATT_EVIDENCE_*/STRATT_AWS_* vars honored as fallbacks).
+		objClient, oerr := objectstore.New(ctx, objectstore.ConfigFromEnv())
+		if oerr != nil {
+			return oerr
+		}
+		evidence, err = evidencestore.New(objClient, bucket, retentionDays)
 		if err != nil {
 			return err
 		}
@@ -894,7 +893,20 @@ func run(ctx context.Context, log *slog.Logger) error {
 		decider = policy.NewExecCommand(engine, cmd)
 		log.Info("policy engine: external subprocess (ADR-0074)", "engine", engine, "cmd", cmd)
 	}
-	w.RegisterActivity(&orchestrate.Activities{Store: store, Dispatcher: dispatcher, Bus: bus, Authz: authorizer, Decider: decider, Log: log, RelayDial: relayDial, Actuators: registry, Actions: actionRegistry, Plugins: plugins, Evidence: evidence, Sites: siteGateway, Peers: peerClient})
+	// connReg (the runtime registry, ADR-0103) is built later in the desired-state block; hoisted
+	// here so the capability resolver (ADR-0105) can close over it before the worker starts.
+	var connReg *connectorregistry.Registry
+	acts := &orchestrate.Activities{Store: store, Dispatcher: dispatcher, Bus: bus, Authz: authorizer, Decider: decider, Log: log, RelayDial: relayDial, Actuators: registry, Actions: actionRegistry, Plugins: plugins, Evidence: evidence, Sites: siteGateway, Peers: peerClient}
+	// ResolveCapability (ADR-0105): resolve a required capability's bound provider through the
+	// runtime registry, read LAZILY so it works regardless of build order — nil-guarded so an
+	// Actuator that `requires` a capability before the registry exists fails visibly (§1.8).
+	acts.ResolveCapability = func(ctx context.Context, capClass string) (string, error) {
+		if connReg == nil {
+			return "", fmt.Errorf("capability resolver not ready (runtime registry disabled)")
+		}
+		return connReg.ResolveCapabilityAction(ctx, capClass)
+	}
+	w.RegisterActivity(acts)
 	if err := w.Start(); err != nil {
 		return fmt.Errorf("temporal worker: %w", err)
 	}
@@ -1413,9 +1425,9 @@ func run(ctx context.Context, log *slog.Logger) error {
 	var admissionControls []types.Control
 	// ── desired-state reconciliation (§1.2: Git is the declarer) ────────
 	// The runtime Connector/Actuator registry (ADR-0103) is built inside the desired-state
-	// block below (it needs the reconcile cadence); hoisted here so the API server can read
-	// its per-declaration status (D6). Nil when reconciliation is off.
-	var connReg *connectorregistry.Registry
+	// block below (it needs the reconcile cadence); connReg is hoisted up by the worker setup so
+	// the API server can read its per-declaration status (D6) and the capability resolver can close
+	// over it. Nil when reconciliation is off.
 	if path := os.Getenv("STRATT_DESIRED_STATE_PATH"); path != "" {
 		interval, err := time.ParseDuration(env("STRATT_DESIRED_STATE_INTERVAL", "30s"))
 		if err != nil {
@@ -1456,8 +1468,9 @@ func run(ctx context.Context, log *slog.Logger) error {
 				return grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
 			},
 			interval, log)
-		go connReg.RunActuators(ctx)                             // every replica
-		controllers = append(controllers, connReg.RunConnectors) // leader-only
+		go connReg.RunActuators(ctx)                                       // every replica
+		controllers = append(controllers, connReg.RunConnectors)           // leader-only
+		controllers = append(controllers, connReg.RunProviderVerification) // leader-only (ADR-0104 D1)
 
 		// Authz-home gate (ADR-0044 slice 4): only the authz-home Cell's daemon
 		// writes the shared OpenFGA tuple store — else N Cells thrash it. Derived

@@ -179,6 +179,7 @@ tasks:
       - task: generate:check
       - task: proto:check
       - task: migrate:lint
+      - task: adr:index:check
       - task: test
       - task: ui:ci
 
@@ -768,6 +769,16 @@ tasks:
     cmds:
       - task: generate
       - git diff --exit-code -- '**/*.gen.go' 'ui/src/api/schema.d.ts'
+
+  adr:index:
+    desc: Regenerate the ADR knowledge-graph map (docs/adr/MAP.md) from topics.json (ADR-0109)
+    cmds:
+      - go run ./tools/adrmap
+
+  adr:index:check:
+    desc: Fail if the ADR map is stale or an ADR is untagged (CI gate, ADR-0109)
+    cmds:
+      - go run ./tools/adrmap -check
 
   proto:generate:
     desc: Regenerate Go bindings from the sovereign plugin port proto (ADR-0046 Phase A)

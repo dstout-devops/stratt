@@ -2160,6 +2160,18 @@ components:
         emitterName: { type: string }
         actionNames: { type: array, items: { type: string } }
         intervalSeconds: { type: integer, format: int64 }
+        provides:
+          type: array
+          items: { type: string }
+          description: >
+            Capability classes this Connector fulfils (ADR-0104). Governed CaC provision.
+        requires:
+          type: array
+          items: { type: string }
+          description: >
+            Capability classes this Connector depends on (ADR-0104). It stays PENDING (see
+            status) until a provider for each is declared — a dependency on the contract, not a
+            named provider (§1.5).
         environments: { type: array, items: { type: string } }
     ConnectorDetail:
       type: object
@@ -2167,6 +2179,7 @@ components:
       properties:
         connector: { $ref: "#/components/schemas/Connector" }
         status: { $ref: "#/components/schemas/PluginRuntimeStatus" }
+        capabilityVerification: { $ref: "#/components/schemas/CapabilityVerification" }
     Actuator:
       type: object
       description: >
@@ -2185,6 +2198,17 @@ components:
         jobCommand: { type: array, items: { type: string } }
         image: { type: string }
         mcp: { type: boolean }
+        provides:
+          type: array
+          items: { type: string }
+          description: >
+            Capability classes this Actuator fulfils (ADR-0104). Governed CaC provision.
+        requires:
+          type: array
+          items: { type: string }
+          description: >
+            Capability classes this Actuator depends on (ADR-0104). It is withheld from the
+            dispatch table (see status) until a provider for each is declared (§1.5).
         environments: { type: array, items: { type: string } }
     ActuatorDetail:
       type: object
@@ -2192,6 +2216,20 @@ components:
       properties:
         actuator: { $ref: "#/components/schemas/Actuator" }
         status: { $ref: "#/components/schemas/PluginRuntimeStatus" }
+        capabilityVerification: { $ref: "#/components/schemas/CapabilityVerification" }
+    CapabilityVerification:
+      type: object
+      description: >
+        A capability PROVIDER's verification outcome (ADR-0104 D1): whether the provider's dialed
+        Manifest actually backs the capability classes it declares it `provides`. Absent for a
+        declaration that provides nothing. The descent surface (§1.8) for a phantom provider — a
+        declared `provides` its plugin does not advertise is verified=false and never counts.
+      required: [verified]
+      properties:
+        verified: { type: boolean }
+        reason:
+          type: string
+          description: The phantom/pending reason when verified=false; empty when verified.
     Workflow:
       type: object
       description: >

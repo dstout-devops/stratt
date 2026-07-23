@@ -358,6 +358,37 @@ func TestGetManifest_ActuatorVerbs(t *testing.T) {
 	}
 }
 
+// TestManifestCapabilities proves the ADR-0106 provider advertisement: keycustodian is always
+// provided (WrapKey/UnwrapKey); certissuer is advertised ONLY where a PKI mount is configured, so
+// provider verification (ADR-0104 D1) stays honest; secretbroker is never advertised (SDK-side, D3).
+func TestManifestCapabilities(t *testing.T) {
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+
+	// No PKI mount → keycustodian yes, certissuer no.
+	bare, _ := NewServer(Config{Addr: "http://x", Token: "t"}, log).GetManifest(context.Background(), &pluginv1.GetManifestRequest{})
+	if !hasCap(bare, "keycustodian") || hasCap(bare, "certissuer") || hasCap(bare, "secretbroker") {
+		t.Fatalf("no PKI mount ⇒ keycustodian only, got %v", bare.GetManifest().GetCapabilities())
+	}
+
+	// With a PKI mount → certissuer advertised (still no secretbroker — SDK-side).
+	pki, _ := NewServer(Config{Addr: "http://x", Token: "t", Mount: "pki"}, log).GetManifest(context.Background(), &pluginv1.GetManifestRequest{})
+	if !hasCap(pki, "keycustodian") || !hasCap(pki, "certissuer") {
+		t.Fatalf("PKI mount ⇒ keycustodian + certissuer, got %v", pki.GetManifest().GetCapabilities())
+	}
+	if hasCap(pki, "secretbroker") {
+		t.Fatal("secretbroker must NEVER be advertised — material resolution is SDK-side (ADR-0106 D3)")
+	}
+}
+
+func hasCap(m *pluginv1.GetManifestResponse, capClass string) bool {
+	for _, c := range m.GetManifest().GetCapabilities() {
+		if c == capClass {
+			return true
+		}
+	}
+	return false
+}
+
 // invokeE2 runs one admin Action and returns the terminal response.
 func invokeE2(t *testing.T, f *fakeCA, action string, args any) *pluginv1.InvokeResponse {
 	t.Helper()

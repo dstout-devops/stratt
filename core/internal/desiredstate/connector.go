@@ -45,6 +45,8 @@ type connectorFile struct {
 	EmitterName                  string     `yaml:"emitterName"`
 	ActionNames                  []string   `yaml:"actionNames"`
 	IntervalSeconds              int        `yaml:"intervalSeconds"`
+	Provides                     []string   `yaml:"provides"`
+	Requires                     []string   `yaml:"requires"`
 	Environments                 []string   `yaml:"environments"`
 }
 
@@ -64,7 +66,7 @@ func parseConnectorFile(path string, raw []byte) (string, types.Connector, error
 		FacetNamespaces: f.FacetNamespaces, AuthoritativeFacetNamespaces: f.AuthoritativeFacetNamespaces,
 		LabelKeys: f.LabelKeys, IdentitySchemes: f.IdentitySchemes, TombstoneSchemes: f.TombstoneSchemes,
 		EmitterName: f.EmitterName, ActionNames: f.ActionNames, IntervalSeconds: f.IntervalSeconds,
-		Environments: f.Environments,
+		Provides: f.Provides, Requires: f.Requires, Environments: f.Environments,
 	}
 	if err := ValidateConnector(c); err != nil {
 		return "", types.Connector{}, fmt.Errorf("desiredstate: %s: %w", path, err)
@@ -105,6 +107,25 @@ func ValidateConnector(c types.Connector) error {
 	}
 	if !subsetOf(c.TombstoneSchemes, c.IdentitySchemes) {
 		return fmt.Errorf("connector %q: tombstoneSchemes must be a subset of identitySchemes (ADR-0042)", c.Name)
+	}
+	if err := validateCapabilities(c.Name, c.Provides, c.Requires); err != nil {
+		return err
+	}
+	return nil
+}
+
+// validateCapabilities enforces the ADR-0104 core-owned capability vocabulary (§1.5 — a plugin
+// never mints a capability's meaning): every provides/requires token must be a known class.
+func validateCapabilities(name string, provides, requires []string) error {
+	for _, tok := range provides {
+		if !types.ValidCapability(tok) {
+			return fmt.Errorf("%q: unknown capability %q in provides (core-owned vocabulary, ADR-0104 §1.5)", name, tok)
+		}
+	}
+	for _, tok := range requires {
+		if !types.ValidCapability(tok) {
+			return fmt.Errorf("%q: unknown capability %q in requires (core-owned vocabulary, ADR-0104 §1.5)", name, tok)
+		}
 	}
 	return nil
 }
@@ -154,6 +175,8 @@ type actuatorFile struct {
 	JobCommand     []string `yaml:"jobCommand"`
 	Image          string   `yaml:"image"`
 	MCP            bool     `yaml:"mcp"`
+	Provides       []string `yaml:"provides"`
+	Requires       []string `yaml:"requires"`
 	Environments   []string `yaml:"environments"`
 }
 
@@ -167,7 +190,7 @@ func parseActuatorFile(path string, raw []byte) (string, types.Actuator, error) 
 	a := types.Actuator{
 		Name: f.Name, Address: f.Address, PluginIdentity: f.PluginIdentity, Tier: f.Tier,
 		DryRunnable: f.DryRunnable, ActionNames: f.ActionNames, JobCommand: f.JobCommand,
-		Image: f.Image, MCP: f.MCP, Environments: f.Environments,
+		Image: f.Image, MCP: f.MCP, Provides: f.Provides, Requires: f.Requires, Environments: f.Environments,
 	}
 	if err := ValidateActuator(a); err != nil {
 		return "", types.Actuator{}, fmt.Errorf("desiredstate: %s: %w", path, err)
@@ -189,6 +212,9 @@ func ValidateActuator(a types.Actuator) error {
 		return fmt.Errorf("actuator %q: one of address (gRPC) or jobCommand (EE-Job) is required", a.Name)
 	case a.Address != "" && len(a.JobCommand) > 0:
 		return fmt.Errorf("actuator %q: address and jobCommand are mutually exclusive transports", a.Name)
+	}
+	if err := validateCapabilities(a.Name, a.Provides, a.Requires); err != nil {
+		return err
 	}
 	return nil
 }

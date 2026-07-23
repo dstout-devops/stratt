@@ -139,10 +139,14 @@ func (s *Server) GetManifest(context.Context, *pluginv1.GetManifestRequest) (*pl
 		contracts = append(contracts, &pluginv1.ContractDecl{SchemaId: ns})
 	}
 	return &pluginv1.GetManifestResponse{Manifest: &pluginv1.Manifest{
-		PluginId:         s.cfg.PluginID,
-		ProtocolVersion:  "v1",
-		Class:            pluginv1.PluginClass_PLUGIN_CLASS_SYNCER,
-		Verbs:            []pluginv1.Verb{pluginv1.Verb_VERB_OBSERVE, pluginv1.Verb_VERB_INVOKE},
+		PluginId:        s.cfg.PluginID,
+		ProtocolVersion: "v1",
+		Class:           pluginv1.PluginClass_PLUGIN_CLASS_SYNCER,
+		Verbs:           []pluginv1.Verb{pluginv1.Verb_VERB_OBSERVE, pluginv1.Verb_VERB_INVOKE},
+		// provisioning capability (ADR-0107) — enablement-gate (ADR-0106 D1), no resolve Action.
+		// Advertised unconditionally: provisioning is the plugin's core function, needing only the
+		// Region + AWS creds a running plugin already has (like keycustodian, ADR-0106 D2).
+		Capabilities:     []string{"provisioning"},
 		Contracts:        contracts,
 		TombstoneSchemes: tombstoneSchemes,
 		Actions: []*pluginv1.ActionDecl{
