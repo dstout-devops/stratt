@@ -395,6 +395,8 @@ tasks:
       - "{{.HELM}} template stratt deploy/charts/stratt > /dev/null"
       - "{{.HELM}} template stratt deploy/charts/stratt -f deploy/charts/stratt/values-dev-kind.yaml > /dev/null"
       - "{{.HELM}} template stratt deploy/charts/stratt -f deploy/charts/stratt/values-dev-kind.yaml -f deploy/charts/stratt/values-e2e.yaml > /dev/null"
+      # Real-authz profile (ADR-0101 Phase A): openfga.enabled + oidc.issuers, dev header off.
+      - "{{.HELM}} template stratt deploy/charts/stratt -f deploy/charts/stratt/values-dev-kind.yaml -f deploy/charts/stratt/values-e2e.yaml -f deploy/charts/stratt/values-authz.yaml > /dev/null"
       # Self-contained bootstrap profile (in-cluster substrate) — must render too.
       - "{{.HELM}} template stratt deploy/charts/stratt -f deploy/charts/stratt/values-allinone.yaml > /dev/null"
       # Self-deploy profile (helm Actuator plugin + demo chart, M2/ADR-0092).

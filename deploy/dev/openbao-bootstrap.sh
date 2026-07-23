@@ -124,3 +124,68 @@ else
     api POST /v1/sys/mounts/transit '{"type":"transit"}' >/dev/null
     echo "created transit secrets engine (KeyCustodian, ADR-0100)"
 fi
+
+# 8. identity/oidc workload-identity provider (ADR-0101 Phase B): OpenBao mints signed
+#    OIDC ID tokens for its entities, which the strattd multi-issuer OIDCResolver verifies
+#    → Principal. This is the SOVEREIGN identity floor — a cut-off Cell mints its own
+#    workload identities locally (ADR-0100 alignment).
+#
+#    EMPIRICAL (proven in-repo): the token `sub` is the entity UUID (non-reassignable ⇒
+#    I-4 by construction), NOT the entity name; `iss` = <addr>/v1/identity/oidc. So the
+#    Stratt Principal is `openbao/<entity-uuid>` (the resolver prepends the issuer
+#    namespace) — this script PRINTS the uuid so CaC tuples / the live proof can grant it.
+#
+#    IN-CLUSTER this uses OpenBao **Kubernetes auth** (a pod's projected SA token, audience-
+#    restricted to OpenBao, I-6 → its entity). Compose has no K8s, so dev uses a **userpass**
+#    alias as the login stand-in; the identity/oidc half (key/role/token) is IDENTICAL to prod.
+echo "openbao-bootstrap: identity/oidc workload identity (ADR-0101)"
+
+# 8a. Named RS256 signing key + role. allowed_client_ids "*" for dev; prod pins the audience.
+api POST /v1/identity/oidc/key/stratt \
+    '{"allowed_client_ids":["*"],"algorithm":"RS256","rotation_period":"24h","verification_ttl":"24h"}' >/dev/null
+echo "ensured identity/oidc key stratt (RS256)"
+api POST /v1/identity/oidc/role/stratt \
+    '{"key":"stratt","ttl":"10m","client_id":"stratt"}' >/dev/null
+echo "ensured identity/oidc role stratt (aud=stratt, ttl=10m)"
+
+# 8b. Mint policy: read the role's token endpoint (the default policy does NOT grant this).
+#     Prod attaches this to the K8s-auth role's token_policies; dev to the userpass user.
+if [ "$(probe GET /v1/sys/policies/acl/stratt-oidc-mint)" = "200" ]; then
+    echo "exists  stratt-oidc-mint policy"
+else
+    api PUT /v1/sys/policies/acl/stratt-oidc-mint \
+        '{"policy":"path \"identity/oidc/token/stratt\" { capabilities = [\"read\"] }"}' >/dev/null
+    echo "created stratt-oidc-mint policy"
+fi
+
+# 8c. Demo workload entity 'svc-syncer'. Its UUID (not its name) becomes the Principal.
+eid=$(api POST /v1/identity/entity \
+        '{"name":"svc-syncer","metadata":{"stratt_role":"syncer"}}' 2>/dev/null \
+      | python3 -c 'import json,sys
+try: print(json.load(sys.stdin)["data"]["id"])
+except Exception: print("")' 2>/dev/null)
+if [ -z "$eid" ]; then
+    # Already exists (POST returns no body on update) — look it up by name.
+    eid=$(api GET /v1/identity/entity/name/svc-syncer 2>/dev/null \
+          | python3 -c 'import json,sys; print(json.load(sys.stdin)["data"]["id"])' 2>/dev/null || echo "")
+fi
+echo "ensured entity svc-syncer -> Principal openbao/${eid}"
+
+# 8d. Userpass login stand-in (dev only; prod = K8s auth). Alias binds the login → entity.
+api POST /v1/sys/auth/userpass '{"type":"userpass"}' >/dev/null 2>&1 || true
+accessor=$(api GET /v1/sys/auth 2>/dev/null \
+    | python3 -c 'import json,sys; print(json.load(sys.stdin)["data"]["userpass/"]["accessor"])' 2>/dev/null || echo "")
+api POST /v1/auth/userpass/users/svc-syncer \
+    '{"password":"devpw","token_policies":"stratt-oidc-mint","token_ttl":"10m"}' >/dev/null
+if [ -n "$accessor" ] && [ -n "$eid" ]; then
+    api POST /v1/identity/entity-alias \
+        "{\"name\":\"svc-syncer\",\"canonical_id\":\"$eid\",\"mount_accessor\":\"$accessor\"}" >/dev/null 2>&1 || true
+    echo "ensured userpass login svc-syncer (dev stand-in for K8s auth, I-6)"
+fi
+
+# 8e. Report the issuer URL the resolver must trust (STRATT_OIDC_ISSUERS[].issuer).
+issuer=$(curl -sS "$base/v1/identity/oidc/.well-known/openid-configuration" 2>/dev/null \
+    | python3 -c 'import json,sys; print(json.load(sys.stdin)["issuer"])' 2>/dev/null || echo "")
+echo "identity/oidc issuer: ${issuer:-<addr>/v1/identity/oidc}  (aud=stratt, subNamespace=openbao/)"
+
+echo "openbao-bootstrap: done"

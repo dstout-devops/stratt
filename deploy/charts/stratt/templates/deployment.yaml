@@ -112,7 +112,17 @@ spec:
               value: {{ .Values.temporal.address | quote }}
             - name: STRATT_TEMPORAL_NAMESPACE
               value: {{ .Values.temporal.namespace | quote }}
-            {{- if .Values.oidc.issuer }}
+            {{- if .Values.oidc.issuers }}
+            # Multi-issuer workload identity (ADR-0101): a JSON list of trusted issuers,
+            # each with its disjoint Principal namespace (I-1). Takes precedence over the
+            # single-issuer alias below.
+            - name: STRATT_OIDC_ISSUERS
+              value: {{ .Values.oidc.issuers | toJson | quote }}
+            {{- if .Values.oidc.allowNoAudience }}
+            - name: STRATT_OIDC_ALLOW_NO_AUDIENCE
+              value: "true"
+            {{- end }}
+            {{- else if .Values.oidc.issuer }}
             - name: STRATT_OIDC_ISSUER
               value: {{ .Values.oidc.issuer | quote }}
             {{- if .Values.oidc.audience }}

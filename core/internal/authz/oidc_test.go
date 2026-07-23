@@ -125,3 +125,100 @@ func TestOIDCResolver(t *testing.T) {
 		t.Fatalf("matching audience must pass: %v", err)
 	}
 }
+
+// TestMultiIssuerResolver proves the ADR-0101 multi-issuer invariants — above all I-1:
+// an issuer CANNOT assert a Principal in another issuer's namespace (the cross-issuer
+// privilege-escalation guard), and an unconfigured issuer is denied (I-5).
+func TestMultiIssuerResolver(t *testing.T) {
+	a := newTestIssuer(t)
+	b := newTestIssuer(t)
+	ctx := context.Background()
+	r, err := NewMultiIssuerResolver(ctx, []IssuerConfig{
+		{Issuer: a.server.URL, Audience: "stratt", SubNamespace: "openbao/", Alias: "openbao"},
+		{Issuer: b.server.URL, Audience: "stratt", SubNamespace: "zitadel/", Alias: "zitadel"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Each issuer's Principal id is its namespace PREPENDED to the raw sub (which, for a
+	// real OpenBao entity, is a UUID — here a bare string stands in). The namespace comes
+	// from the VERIFYING issuer, never from the token.
+	if id, kind, err := r.Resolve(ctx, a.mint(t, map[string]any{"sub": "svc-syncer", "aud": "stratt"})); err != nil || id != "openbao/svc-syncer" || kind != KindService {
+		t.Fatalf("openbao issuer: id=%q kind=%q err=%v", id, kind, err)
+	}
+	if id, kind, err := r.Resolve(ctx, b.mint(t, map[string]any{"sub": "alice", "aud": "stratt", "email": "alice@x"})); err != nil || id != "zitadel/alice" || kind != KindHuman {
+		t.Fatalf("zitadel issuer: id=%q kind=%q err=%v", id, kind, err)
+	}
+	// I-1 ESCALATION GUARD (the load-bearing security test): issuer B mints a token whose
+	// `sub` is BYTE-IDENTICAL to the one issuer A uses ("svc-syncer"). B's verifier
+	// validates it (B's key), but the resolver scopes it under B's namespace — so it
+	// resolves to "zitadel/svc-syncer", NEVER "openbao/svc-syncer". B can therefore never
+	// forge a Principal that issuer A's tuples grant.
+	if id, _, err := r.Resolve(ctx, b.mint(t, map[string]any{"sub": "svc-syncer", "aud": "stratt"})); err != nil || id == "openbao/svc-syncer" {
+		t.Fatalf("I-1 VIOLATION: issuer B produced id=%q (must be zitadel-namespaced, never openbao/svc-syncer) err=%v", id, err)
+	} else if id != "zitadel/svc-syncer" {
+		t.Fatalf("I-1: expected B's sub scoped under its own namespace, got %q", id)
+	}
+	// I-5: a token from an issuer NOT in the trust set is denied (no verifier passes).
+	c := newTestIssuer(t)
+	if _, _, err := r.Resolve(ctx, c.mint(t, map[string]any{"sub": "openbao:x", "aud": "stratt"})); err == nil {
+		t.Fatal("I-5: a token from an unconfigured issuer must be denied")
+	}
+}
+
+// TestIssuerConfigParsesHelmJSON locks the helm↔Go contract: the STRATT_OIDC_ISSUERS
+// value the chart renders (values-authz.yaml → deployment.yaml `toJson`) must unmarshal
+// into IssuerConfig. Field names are lowercase-first (issuer/audience/subNamespace/alias);
+// Go's case-insensitive match binds them to the struct.
+func TestIssuerConfigParsesHelmJSON(t *testing.T) {
+	// Byte-for-byte the chart's rendered value (helm template … values-authz.yaml).
+	raw := `[{"alias":"openbao","audience":"stratt","issuer":"http://openbao.stratt-dev.svc:8200/v1/identity/oidc","subNamespace":"openbao/"}]`
+	var cfgs []IssuerConfig
+	if err := json.Unmarshal([]byte(raw), &cfgs); err != nil {
+		t.Fatalf("the rendered STRATT_OIDC_ISSUERS must parse into IssuerConfig: %v", err)
+	}
+	if len(cfgs) != 1 {
+		t.Fatalf("got %d issuers", len(cfgs))
+	}
+	c := cfgs[0]
+	if c.Issuer == "" || c.Audience != "stratt" || c.SubNamespace != "openbao/" || c.Alias != "openbao" {
+		t.Fatalf("field binding wrong: %+v", c)
+	}
+}
+
+// TestMultiIssuerDisjointRequired proves the I-1 boot-time disjointness validation.
+func TestMultiIssuerDisjointRequired(t *testing.T) {
+	a := newTestIssuer(t)
+	b := newTestIssuer(t)
+	ctx := context.Background()
+	// Overlapping namespaces ("svc/" is a prefix of "svc/sub/") — construction fails.
+	if _, err := NewMultiIssuerResolver(ctx, []IssuerConfig{
+		{Issuer: a.server.URL, SubNamespace: "svc/", Audience: "x"},
+		{Issuer: b.server.URL, SubNamespace: "svc/sub/", Audience: "x"},
+	}); err == nil {
+		t.Fatal("overlapping sub namespaces must be rejected at construction (I-1)")
+	}
+	// Empty namespace with multiple issuers — construction fails.
+	if _, err := NewMultiIssuerResolver(ctx, []IssuerConfig{
+		{Issuer: a.server.URL, SubNamespace: "a/", Audience: "x"},
+		{Issuer: b.server.URL, SubNamespace: "", Audience: "x"},
+	}); err == nil {
+		t.Fatal("empty subNamespace with multiple issuers must be rejected (I-1)")
+	}
+	// A duplicate issuer URL is an ambiguous trust map — rejected at construction
+	// (guardian flag 2: else the first-match loop silently shadows the second entry).
+	if _, err := NewMultiIssuerResolver(ctx, []IssuerConfig{
+		{Issuer: a.server.URL, SubNamespace: "x/", Audience: "s"},
+		{Issuer: a.server.URL, SubNamespace: "y/", Audience: "s"},
+	}); err == nil {
+		t.Fatal("a duplicate issuer URL must be rejected at construction")
+	}
+	// A ':' in the namespace would make the Principal an unparseable OpenFGA subject id
+	// (`principal:<ns><sub>`, where ':' is the reserved type separator) — rejected at boot
+	// so every authz check can't silently 400 at runtime. Applies to a lone issuer too.
+	if _, err := NewMultiIssuerResolver(ctx, []IssuerConfig{
+		{Issuer: a.server.URL, SubNamespace: "openbao:", Audience: "x"},
+	}); err == nil {
+		t.Fatal("a subNamespace containing ':' must be rejected (authz-subject-unsafe)")
+	}
+}

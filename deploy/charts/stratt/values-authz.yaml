@@ -1,0 +1,49 @@
+# Real-authz profile (ADR-0101 Phase A) — layered AFTER values-dev-kind.yaml
+# + values-e2e.yaml to FLIP the dev bypass into the production authz posture:
+# a real OpenFGA server makes every decision, and workload identity comes from
+# OpenBao-issued OIDC tokens (Phase B), never the trusted dev header.
+#
+#   values-e2e.yaml (dev bypass)          values-authz.yaml (this file)
+#   ────────────────────────────          ─────────────────────────────
+#   openfga.enabled: false        →       openfga.enabled: true   (real server)
+#   devPrincipalHeader: true      →       devPrincipalHeader: false (no forgeable header)
+#   oidc: (none)                  →       oidc.issuers: [<Cell OpenBao>] (real Bearer → Principal)
+#
+# The structural boot guard (checkDevPrincipalSafety, SEC-2) makes this profile
+# self-checking: strattd REFUSES to boot if devPrincipalHeader is true alongside
+# an OIDC issuer, or in a prod/staging environment with the dev header — so the
+# two halves of this flip can never drift apart into an unsafe posture.
+#
+# NOTE (ADR-0101): this profile packages the settings; the full in-kind e2e
+# (OpenBao Kubernetes-auth + a pod minting its own token in-cluster) is the
+# ADR's bound follow-up. The chain itself — real OpenBao Bearer → multi-issuer
+# resolver → real OpenFGA deny/allow/revoke — is proven against the compose
+# backends by core/internal/authz TestLivePhaseAAuthzChain + TestLiveOpenBao*.
+
+# Real OpenFGA server (the vendored subchart). The DSN is a pre-provisioned
+# Secret (§2.5) — set openfga.datastore.existingSecret at install; never inline.
+openfga:
+  enabled: true
+
+# The forgeable dev header is OFF. Every Principal must now present a real,
+# cryptographically-verified Bearer (a human/service via Zitadel, or a workload
+# via its Cell's OpenBao — see oidc.issuers).
+devPrincipalHeader: false
+
+# Multi-issuer workload identity (ADR-0101). Per-Cell OpenBao is the sovereign
+# issuer for workloads; a central Zitadel can be added as a second entry for
+# human SSO. subNamespace is PREPENDED to the verified `sub` to form the
+# issuer-scoped Principal (I-1) and must be OpenFGA-subject-safe (no ':').
+# The issuer URL below is the in-cluster OpenBao identity/oidc endpoint — set it
+# to this Cell's OpenBao Service at install; the tuple manifest grants the
+# resulting `openbao/<entity-uuid>` Principal the runner/use relations it needs.
+oidc:
+  issuers:
+    - issuer: "http://openbao.stratt-dev.svc:8200/v1/identity/oidc"
+      audience: "stratt"
+      subNamespace: "openbao/"
+      alias: "openbao"
+    # - issuer: "https://zitadel.example/.well-known/..."   # optional human SSO
+    #   audience: "stratt"
+    #   subNamespace: "zitadel/"
+    #   alias: "zitadel"

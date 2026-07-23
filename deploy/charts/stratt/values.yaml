@@ -192,6 +192,19 @@ oidc:
   # Dev-only, explicit opt-out: issuer without audience refuses to boot
   # otherwise (slice-5 guardian flag; ADR-0013).
   allowNoAudience: false
+  # Multi-issuer workload identity (ADR-0101): a LIST of trusted OIDC issuers,
+  # each verified independently, each contributing an issuer-scoped Principal
+  # namespace (I-1: the resolver PREPENDS subNamespace to the verified `sub`, so
+  # a `sub` from one issuer can never become another issuer's Principal). Renders
+  # to STRATT_OIDC_ISSUERS (JSON) and takes precedence over the single `issuer`
+  # above. Use this for "per-Cell OpenBao for workloads + optional Zitadel for
+  # humans" on one Cell. Each entry: {issuer, audience, subNamespace, alias}.
+  # subNamespace MUST be non-empty and pairwise-disjoint when more than one issuer.
+  issuers: []
+  #  - issuer: "https://openbao.cell.svc/v1/identity/oidc"
+  #    audience: "stratt"
+  #    subNamespace: "openbao/"
+  #    alias: "openbao"
 
 # In-cluster OpenFGA subchart (postgres engine; its chart runs
 # `openfga migrate` as a hook). Values under `openfga:` pass through to the
