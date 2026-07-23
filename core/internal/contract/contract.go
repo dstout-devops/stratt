@@ -278,6 +278,25 @@ func ValidateActionOutput(action string, outputs json.RawMessage) error {
 	return c.validate(outputs)
 }
 
+// ValidateNamed validates a document against a pinned Contract by its exact name (e.g. a
+// class-level capability Contract like "capabilities/statestore.output", ADR-0105 D3 — used when
+// the core reconciles a capability provider's resolve-Action output against the CLASS-level shape
+// rather than a plugin-scoped one). An unknown name is refused (a capability with no pinned
+// Contract must not resolve — §1.5).
+func ValidateNamed(name string, doc json.RawMessage) error {
+	if err := ensure(); err != nil {
+		return err
+	}
+	c, ok := byName[name]
+	if !ok {
+		return fmt.Errorf("contract: no pinned contract %q", name)
+	}
+	if len(doc) == 0 {
+		doc = []byte(`{}`)
+	}
+	return c.validate(doc)
+}
+
 // ResolveActionParams binds a launch-time param map's {{.ns.x}} templates
 // (ADR-0024/0031 cross-Step binding) then re-validates against the Action's
 // input Contract — the Action counterpart of ResolveActuatorParams.

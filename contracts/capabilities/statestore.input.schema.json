@@ -1,0 +1,3 @@
+{ "$schema": "https://json-schema.org/draft/2020-12/schema", "$id": "stratt:contract:capabilities/statestore.input:v1", "title": "statestore resolve input",
+  "description": "Class-level, PROVIDER-AGNOSTIC (ADR-0105) input to a statestore provider's resolve Action: the workspace whose durable tool state is being located. One shape for every provider (S3, Artifactory, GCS), so a provider swap changes no consumer.",
+  "type": "object", "properties": { "workspace": {"type":"string","minLength":1} }, "required": ["workspace"], "additionalProperties": false }

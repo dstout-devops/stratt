@@ -25,6 +25,10 @@ func main() {
 		// Destructive Actions refuse these (ADR-0097): an operator list PLUS the
 		// Evidence WORM bucket (ADR-0029), so awss3 can't be the hole in write-once.
 		ProtectedBuckets: protectedBuckets(),
+		// statestore capability (ADR-0105): set STRATT_AWSS3_STATE_BUCKET to make this plugin a
+		// statestore provider; STRATT_AWSS3_STATE_CREDENTIAL_REF names the §2.5 CredentialRef.
+		StateBucket:        os.Getenv("STRATT_AWSS3_STATE_BUCKET"),
+		StateCredentialRef: os.Getenv("STRATT_AWSS3_STATE_CREDENTIAL_REF"),
 	}
 	addr := env("STRATT_PLUGIN_LISTEN", ":9090")
 

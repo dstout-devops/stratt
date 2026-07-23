@@ -28,10 +28,11 @@ func nowpb() *timestamppb.Timestamp { return timestamppb.Now() }
 
 // Action names this plugin advertises.
 const (
-	actionCreateBucket     = "awss3/create-bucket"
-	actionDeleteBucket     = "awss3/delete-bucket"
-	actionEnableVersioning = "awss3/enable-versioning"
-	actionPutPolicy        = "awss3/put-bucket-policy"
+	actionCreateBucket      = "awss3/create-bucket"
+	actionDeleteBucket      = "awss3/delete-bucket"
+	actionEnableVersioning  = "awss3/enable-versioning"
+	actionPutPolicy         = "awss3/put-bucket-policy"
+	actionStatestoreResolve = "awss3/statestore-resolve" // the statestore capability's resolve Action (ADR-0105)
 )
 
 // facetNamespaces this Syncer REQUESTS to own (§2.1) — metadata only.
@@ -63,6 +64,13 @@ type Config struct {
 	// store's WORM bucket (ADR-0029), which SeaweedFS does not protect in dev. So the
 	// connector can never become the hole in the Evidence store's write-once story.
 	ProtectedBuckets []string
+	// StateBucket, when set, makes this plugin a `statestore` capability provider (ADR-0105):
+	// the awss3/statestore-resolve Action returns an s3 tofu-backend config keyed into this
+	// bucket. Empty ⇒ the plugin does not provide statestore.
+	StateBucket string
+	// StateCredentialRef is the §2.5 CredentialRef NAME for the state bucket's auth material
+	// (resolved at the consumer pod's spawn, never inline). Empty ⇒ the consumer's SDK env chain.
+	StateCredentialRef string
 }
 
 // isProtected reports whether a bucket is on the refuse-list for destructive Actions.
@@ -129,6 +137,26 @@ func (s *Server) GetManifest(context.Context, *pluginv1.GetManifestRequest) (*pl
 			Idempotent: idempotent,
 		}
 	}
+	actions := []*pluginv1.ActionDecl{
+		decl(actionCreateBucket, false),
+		decl(actionDeleteBucket, false),
+		decl(actionEnableVersioning, true),
+		decl(actionPutPolicy, true),
+	}
+	// statestore capability (ADR-0105): advertised ONLY when a state bucket is configured, so
+	// provider verification (ADR-0104 D1) confirms the plugin genuinely backs what it declares.
+	// Its resolve Action references the CLASS-level, provider-agnostic Contract (not a plugin-
+	// scoped one), so every statestore provider conforms to one shape (D3).
+	var capabilities []string
+	if s.cfg.StateBucket != "" {
+		capabilities = append(capabilities, "statestore")
+		actions = append(actions, &pluginv1.ActionDecl{
+			Name:       actionStatestoreResolve,
+			Input:      &pluginv1.ContractRef{SchemaId: "capabilities/statestore.input"},
+			Output:     &pluginv1.ContractRef{SchemaId: "capabilities/statestore.output"},
+			Idempotent: true, // resolution is a pure read of config — no side effects
+		})
+	}
 	return &pluginv1.GetManifestResponse{Manifest: &pluginv1.Manifest{
 		PluginId:         s.cfg.PluginID,
 		ProtocolVersion:  "v1",
@@ -136,12 +164,8 @@ func (s *Server) GetManifest(context.Context, *pluginv1.GetManifestRequest) (*pl
 		Verbs:            []pluginv1.Verb{pluginv1.Verb_VERB_OBSERVE, pluginv1.Verb_VERB_INVOKE},
 		Contracts:        contracts,
 		TombstoneSchemes: []string{"aws.bucketArn"},
-		Actions: []*pluginv1.ActionDecl{
-			decl(actionCreateBucket, false),
-			decl(actionDeleteBucket, false),
-			decl(actionEnableVersioning, true),
-			decl(actionPutPolicy, true),
-		},
+		Capabilities:     capabilities,
+		Actions:          actions,
 	}}, nil
 }
 
@@ -217,6 +241,11 @@ type bucketParams struct {
 // rejected, never guessed.
 func (s *Server) Invoke(req *pluginv1.InvokeRequest, stream grpc.ServerStreamingServer[pluginv1.InvokeResponse]) error {
 	ctx := stream.Context()
+	// statestore/resolve is workspace-scoped (not bucket-scoped) and touches no S3 API — a pure
+	// config read (ADR-0105). Handle it before the bucket-Action path.
+	if req.GetAction() == actionStatestoreResolve {
+		return s.resolveStatestore(stream, req)
+	}
 	api, err := s.newAPI(ctx)
 	if err != nil {
 		return err
@@ -302,23 +331,75 @@ func (s *Server) progress(stream grpc.ServerStreamingServer[pluginv1.InvokeRespo
 	}})
 }
 
-// terminalOK emits the terminal ok event with typed outputs + the output contract. The
-// bucket Entity itself arrives from the Syncer's next poll (§1.2), not a Run-provenance
-// write here — this Action mutates config the Syncer owns projecting.
+// resolveStatestore is the statestore capability's resolve Action (ADR-0105): given a workspace,
+// it returns a PROVIDER-AGNOSTIC tofu-backend config handle (backend type + string settings + an
+// optional §2.5 CredentialRef name) that the core injects into the consuming tofu Apply. It reads
+// no S3 API and holds no secret material — the credential is a NAME, resolved at the consumer pod.
+func (s *Server) resolveStatestore(stream grpc.ServerStreamingServer[pluginv1.InvokeResponse], req *pluginv1.InvokeRequest) error {
+	var in struct {
+		Workspace string `json:"workspace"`
+	}
+	if args := req.GetArgs(); args != nil && len(args.GetBytes()) > 0 {
+		if err := json.Unmarshal(args.GetBytes(), &in); err != nil {
+			return status.Errorf(codes.InvalidArgument, "statestore-resolve: invalid args: %v", err)
+		}
+	}
+	if in.Workspace == "" {
+		return status.Errorf(codes.InvalidArgument, "statestore-resolve requires workspace")
+	}
+	if s.cfg.StateBucket == "" {
+		return s.terminalFailure(stream, req, fmt.Errorf("statestore-resolve: no state bucket configured (STRATT_AWSS3_STATE_BUCKET)"))
+	}
+	region := s.cfg.Region
+	if region == "" {
+		region = "us-east-1"
+	}
+	// The s3 tofu backend settings (emitted by the consumer as -backend-config). Native S3
+	// locking (use_lockfile) — no external lock table. Endpoint/path-style for S3-compatibles.
+	config := map[string]string{
+		"bucket":       s.cfg.StateBucket,
+		"key":          "stratt/" + in.Workspace + ".tfstate",
+		"region":       region,
+		"use_lockfile": "true",
+	}
+	if s.cfg.PathStyle {
+		config["use_path_style"] = "true"
+	}
+	if s.cfg.Endpoint != "" {
+		config["endpoints.s3"] = s.cfg.Endpoint
+	}
+	out := map[string]any{"backend": "s3", "config": config}
+	if s.cfg.StateCredentialRef != "" {
+		out["credentialRef"] = s.cfg.StateCredentialRef
+	}
+	s.log.Info("statestore resolved", "workspace", in.Workspace, "bucket", s.cfg.StateBucket)
+	return s.sendTerminalResult(stream, req, "statestore-resolve "+in.Workspace, out, "capabilities/statestore.output")
+}
+
+// terminalOK emits the terminal ok event with typed outputs + the plugin-scoped output contract.
+// The bucket Entity itself arrives from the Syncer's next poll (§1.2), not a Run-provenance write
+// here — this Action mutates config the Syncer owns projecting.
 func (s *Server) terminalOK(stream grpc.ServerStreamingServer[pluginv1.InvokeResponse], req *pluginv1.InvokeRequest, op, name string, outputs map[string]any) error {
+	s.log.Info("bucket action ok", "op", op, "bucket", name)
+	return s.sendTerminalResult(stream, req, fmt.Sprintf("%s %s ok", op, name), outputs, "actions/awss3/"+op+".output")
+}
+
+// sendTerminalResult marshals outputs and emits the terminal ok event with the given output
+// Contract id (plugin-scoped for bucket Actions; the CLASS-level capabilities/… id for a
+// capability resolve Action — ADR-0105 D3).
+func (s *Server) sendTerminalResult(stream grpc.ServerStreamingServer[pluginv1.InvokeResponse], req *pluginv1.InvokeRequest, msg string, outputs map[string]any, contractID string) error {
 	raw, err := json.Marshal(outputs)
 	if err != nil {
-		return s.terminalFailure(stream, req, fmt.Errorf("awss3/%s: marshal outputs: %w", op, err))
+		return s.terminalFailure(stream, req, fmt.Errorf("marshal outputs: %w", err))
 	}
-	s.log.Info("bucket action ok", "op", op, "bucket", name)
 	return stream.Send(&pluginv1.InvokeResponse{
 		Event: &pluginv1.TaskEvent{
-			Level: pluginv1.TaskEvent_LEVEL_INFO, Message: fmt.Sprintf("%s %s ok", op, name),
+			Level: pluginv1.TaskEvent_LEVEL_INFO, Message: msg,
 			At: nowpb(), CorrelationId: req.GetEnvelope().GetCorrelationId(), Terminal: true, Ok: true,
 		},
 		Result: &pluginv1.InvokeResult{
 			Outputs:        &pluginv1.Payload{Bytes: raw},
-			OutputContract: &pluginv1.ContractRef{SchemaId: "actions/awss3/" + op + ".output"},
+			OutputContract: &pluginv1.ContractRef{SchemaId: contractID},
 		},
 	})
 }
