@@ -82,6 +82,10 @@ func New(hexKey string, db ArtifactDB) (*Store, error) {
 	return &Store{db: db, aead: aead, custodian: custodian, domain: "default"}, nil
 }
 
+// UseCustodian replaces the envelope custodian (ADR-0100), like statebackend's — the
+// legacy read path and content-addressing are unaffected.
+func (s *Store) UseCustodian(c keycustodian.Custodian) { s.custodian = c }
+
 // Put content-addresses and stores a plan, returning its digest (the pin a Gate
 // binds). The digest is over the PLAINTEXT plan, so the pin anchors plan content,
 // not the (nonce-randomized) ciphertext; write-once means re-Putting the same

@@ -68,6 +68,8 @@ const (
 	mDestroy     = "Destroy"
 	mInvoke      = "Invoke"
 	mSubscribe   = "Subscribe"
+	mWrapKey     = "WrapKey" // KeyCustodian capability over the relay (ADR-0100) — cross-DC transport
+	mUnwrapKey   = "UnwrapKey"
 )
 
 // Serve runs the Site-agent side: it accepts relayed calls and proxies each to the

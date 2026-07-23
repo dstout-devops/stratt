@@ -54,6 +54,16 @@ func (c *Client) Health(ctx context.Context, in *pluginv1.HealthRequest, _ ...gr
 	return out, c.unary(ctx, mHealth, in, out)
 }
 
+func (c *Client) WrapKey(ctx context.Context, in *pluginv1.WrapKeyRequest, _ ...grpc.CallOption) (*pluginv1.WrapKeyResponse, error) {
+	out := &pluginv1.WrapKeyResponse{}
+	return out, c.unary(ctx, mWrapKey, in, out)
+}
+
+func (c *Client) UnwrapKey(ctx context.Context, in *pluginv1.UnwrapKeyRequest, _ ...grpc.CallOption) (*pluginv1.UnwrapKeyResponse, error) {
+	out := &pluginv1.UnwrapKeyResponse{}
+	return out, c.unary(ctx, mUnwrapKey, in, out)
+}
+
 func (c *Client) Plan(ctx context.Context, in *pluginv1.PlanRequest, _ ...grpc.CallOption) (*pluginv1.PlanResponse, error) {
 	out := &pluginv1.PlanResponse{}
 	return out, c.unary(ctx, mPlan, in, out)

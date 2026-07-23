@@ -114,3 +114,13 @@ else
         '{"policy":"path \"secret/metadata/*\" { capabilities = [\"read\",\"list\"] }\npath \"secret/data/*\" { capabilities = [\"deny\"] }"}' >/dev/null
     echo "created kv-metadata-reader policy (read metadata, DENY data)"
 fi
+
+# 7. Transit secrets engine for the KeyCustodian capability (ADR-0100): envelope-
+#    encryption key wrapping where the KEK never leaves OpenBao. The plugin auto-creates
+#    per-domain keys on first wrap; here we just enable the engine.
+if [ "$(probe GET /v1/sys/mounts/transit/tune)" = "200" ]; then
+    echo "exists  transit secrets engine"
+else
+    api POST /v1/sys/mounts/transit '{"type":"transit"}' >/dev/null
+    echo "created transit secrets engine (KeyCustodian, ADR-0100)"
+fi

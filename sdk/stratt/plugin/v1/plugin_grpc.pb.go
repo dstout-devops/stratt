@@ -63,6 +63,8 @@ const (
 	PluginService_Destroy_FullMethodName     = "/stratt.plugin.v1.PluginService/Destroy"
 	PluginService_Invoke_FullMethodName      = "/stratt.plugin.v1.PluginService/Invoke"
 	PluginService_Subscribe_FullMethodName   = "/stratt.plugin.v1.PluginService/Subscribe"
+	PluginService_WrapKey_FullMethodName     = "/stratt.plugin.v1.PluginService/WrapKey"
+	PluginService_UnwrapKey_FullMethodName   = "/stratt.plugin.v1.PluginService/UnwrapKey"
 )
 
 // PluginServiceClient is the client API for PluginService service.
@@ -92,6 +94,13 @@ type PluginServiceClient interface {
 	Invoke(ctx context.Context, in *InvokeRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[InvokeResponse], error)
 	// Emitter: plugin→core push over a long-lived stream (invariant #4).
 	Subscribe(ctx context.Context, in *SubscribeRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[SubscribeResponse], error)
+	// KeyCustodian (ADR-0100): wrap/unwrap a data key for envelope encryption — a
+	// capability the CORE consumes (advertised via Manifest.capabilities "keycustodian").
+	// The plugin wraps the DEK in its KMS (e.g. OpenBao Transit) so the KEK never leaves
+	// the KMS. Low-rate + off the data hot path (the DEK does the local AES); the in-core
+	// localCustodian floor means this port is NEVER required to encrypt state.
+	WrapKey(ctx context.Context, in *WrapKeyRequest, opts ...grpc.CallOption) (*WrapKeyResponse, error)
+	UnwrapKey(ctx context.Context, in *UnwrapKeyRequest, opts ...grpc.CallOption) (*UnwrapKeyResponse, error)
 }
 
 type pluginServiceClient struct {
@@ -227,6 +236,26 @@ func (c *pluginServiceClient) Subscribe(ctx context.Context, in *SubscribeReques
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type PluginService_SubscribeClient = grpc.ServerStreamingClient[SubscribeResponse]
 
+func (c *pluginServiceClient) WrapKey(ctx context.Context, in *WrapKeyRequest, opts ...grpc.CallOption) (*WrapKeyResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(WrapKeyResponse)
+	err := c.cc.Invoke(ctx, PluginService_WrapKey_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *pluginServiceClient) UnwrapKey(ctx context.Context, in *UnwrapKeyRequest, opts ...grpc.CallOption) (*UnwrapKeyResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(UnwrapKeyResponse)
+	err := c.cc.Invoke(ctx, PluginService_UnwrapKey_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // PluginServiceServer is the server API for PluginService service.
 // All implementations must embed UnimplementedPluginServiceServer
 // for forward compatibility.
@@ -254,6 +283,13 @@ type PluginServiceServer interface {
 	Invoke(*InvokeRequest, grpc.ServerStreamingServer[InvokeResponse]) error
 	// Emitter: plugin→core push over a long-lived stream (invariant #4).
 	Subscribe(*SubscribeRequest, grpc.ServerStreamingServer[SubscribeResponse]) error
+	// KeyCustodian (ADR-0100): wrap/unwrap a data key for envelope encryption — a
+	// capability the CORE consumes (advertised via Manifest.capabilities "keycustodian").
+	// The plugin wraps the DEK in its KMS (e.g. OpenBao Transit) so the KEK never leaves
+	// the KMS. Low-rate + off the data hot path (the DEK does the local AES); the in-core
+	// localCustodian floor means this port is NEVER required to encrypt state.
+	WrapKey(context.Context, *WrapKeyRequest) (*WrapKeyResponse, error)
+	UnwrapKey(context.Context, *UnwrapKeyRequest) (*UnwrapKeyResponse, error)
 	mustEmbedUnimplementedPluginServiceServer()
 }
 
@@ -287,6 +323,12 @@ func (UnimplementedPluginServiceServer) Invoke(*InvokeRequest, grpc.ServerStream
 }
 func (UnimplementedPluginServiceServer) Subscribe(*SubscribeRequest, grpc.ServerStreamingServer[SubscribeResponse]) error {
 	return status.Errorf(codes.Unimplemented, "method Subscribe not implemented")
+}
+func (UnimplementedPluginServiceServer) WrapKey(context.Context, *WrapKeyRequest) (*WrapKeyResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method WrapKey not implemented")
+}
+func (UnimplementedPluginServiceServer) UnwrapKey(context.Context, *UnwrapKeyRequest) (*UnwrapKeyResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method UnwrapKey not implemented")
 }
 func (UnimplementedPluginServiceServer) mustEmbedUnimplementedPluginServiceServer() {}
 func (UnimplementedPluginServiceServer) testEmbeddedByValue()                       {}
@@ -418,6 +460,42 @@ func _PluginService_Subscribe_Handler(srv interface{}, stream grpc.ServerStream)
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type PluginService_SubscribeServer = grpc.ServerStreamingServer[SubscribeResponse]
 
+func _PluginService_WrapKey_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(WrapKeyRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PluginServiceServer).WrapKey(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PluginService_WrapKey_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PluginServiceServer).WrapKey(ctx, req.(*WrapKeyRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _PluginService_UnwrapKey_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(UnwrapKeyRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PluginServiceServer).UnwrapKey(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PluginService_UnwrapKey_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PluginServiceServer).UnwrapKey(ctx, req.(*UnwrapKeyRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // PluginService_ServiceDesc is the grpc.ServiceDesc for PluginService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -436,6 +514,14 @@ var PluginService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "Plan",
 			Handler:    _PluginService_Plan_Handler,
+		},
+		{
+			MethodName: "WrapKey",
+			Handler:    _PluginService_WrapKey_Handler,
+		},
+		{
+			MethodName: "UnwrapKey",
+			Handler:    _PluginService_UnwrapKey_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

@@ -68,6 +68,11 @@ func New(hexKey string, store *graph.Store, log *slog.Logger) (*Backend, error) 
 	}, nil
 }
 
+// UseCustodian replaces the envelope custodian (ADR-0100): strattd injects a mux over
+// the local floor + an optional KMS-backed provider when one is configured for a domain.
+// The legacy bare-AES read path (aead) is unchanged, so pre-envelope blobs still decrypt.
+func (b *Backend) UseCustodian(c keycustodian.Custodian) { b.custodian = c }
+
 // WorkspaceCredential derives the per-workspace pod credential:
 // hex(HMAC-SHA256(key, workspace)). Stateless to verify, scoped to one
 // workspace, delivered to pods as TF_HTTP_PASSWORD (never in files).

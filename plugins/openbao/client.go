@@ -55,22 +55,24 @@ type CurrentCert struct {
 // and the Connector contract sovereign over the transport (§1.5). The same shape
 // serves step-ca/Vault/cert-manager behind the cert-issuer contract later.
 type Client struct {
-	addr  string // e.g. http://localhost:8200
-	token string // X-Vault-Token; spawn-time CredentialRef, never persisted (§2.5)
-	mount string // secrets-engine mount, e.g. "pki"
-	hc    *http.Client
+	addr         string // e.g. http://localhost:8200
+	token        string // X-Vault-Token; spawn-time CredentialRef, never persisted (§2.5)
+	mount        string // PKI secrets-engine mount, e.g. "pki"
+	transitMount string // Transit secrets-engine mount for KeyCustodian (ADR-0100), e.g. "transit"
+	hc           *http.Client
 }
 
-// NewClient builds a PKI client. mount defaults to "pki".
+// NewClient builds a client. mount defaults to "pki", the Transit mount to "transit".
 func NewClient(addr, token, mount string) *Client {
 	if mount == "" {
 		mount = "pki"
 	}
 	return &Client{
-		addr:  strings.TrimRight(addr, "/"),
-		token: token,
-		mount: mount,
-		hc:    &http.Client{Timeout: 15 * time.Second},
+		addr:         strings.TrimRight(addr, "/"),
+		token:        token,
+		mount:        mount,
+		transitMount: "transit",
+		hc:           &http.Client{Timeout: 15 * time.Second},
 	}
 }
 

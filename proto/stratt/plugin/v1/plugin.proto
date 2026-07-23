@@ -654,13 +654,42 @@ service PluginService {
 
   // Emitter: plugin→core push over a long-lived stream (invariant #4).
   rpc Subscribe(SubscribeRequest) returns (stream SubscribeResponse);
+
+  // KeyCustodian (ADR-0100): wrap/unwrap a data key for envelope encryption — a
+  // capability the CORE consumes (advertised via Manifest.capabilities "keycustodian").
+  // The plugin wraps the DEK in its KMS (e.g. OpenBao Transit) so the KEK never leaves
+  // the KMS. Low-rate + off the data hot path (the DEK does the local AES); the in-core
+  // localCustodian floor means this port is NEVER required to encrypt state.
+  rpc WrapKey(WrapKeyRequest) returns (WrapKeyResponse);
+  rpc UnwrapKey(UnwrapKeyRequest) returns (UnwrapKeyResponse);
+}
+
+// KeyCustodian capability messages (ADR-0100). The wrapped bytes are opaque to the core;
+// the core-side portCustodian adds the self-describing {provider,domain,keyVersion}
+// envelope around them. The DEK is a CORE-generated working key (not brokered credential
+// material, so distinct from the §2.5 SecretBroker path); it crosses to the plugin only
+// to be wrapped/unwrapped by the KMS.
+message WrapKeyRequest {
+  string domain = 1; // custody domain (a Cell) — KMS key/context selection
+  bytes dek = 2;     // the data key to wrap
+}
+message WrapKeyResponse {
+  bytes wrapped = 1;     // KMS-wrapped DEK (e.g. Transit "vault:v1:..." bytes)
+  int32 key_version = 2; // the KMS key version that wrapped it (rotation-aware)
+}
+message UnwrapKeyRequest {
+  bytes wrapped = 1;
+  string domain = 2; // the custody domain (selects the KMS key, as WrapKey did)
+}
+message UnwrapKeyResponse {
+  bytes dek = 1;
 }
 
 // ─────────────────────────────────────────────────────────────────────────
-// RESERVED — Phase D capability classes (StateStore, EventBus, SecretBroker,
-// DurableExec, ArtifactStore) are siblings on THIS bus but carry a different,
-// coordinate-free verb-shape. They are intentionally NOT defined in Phase A;
-// defining them here now would be speculative. See ADR-0046 discipline (d):
+// RESERVED — the remaining Phase D capability classes (StateStore, EventBus,
+// SecretBroker, DurableExec, ArtifactStore) are siblings on THIS bus but carry a
+// different, coordinate-free verb-shape. KeyCustodian (above) is the first defined
+// (ADR-0100); the rest stay undefined until a measured need. See ADR-0046 discipline (d):
 // Postgres/NATS/Temporal remain the blessed, named, evergreen-tracked spine;
 // these ports are a measured-pain escape hatch, not a vendor-neutrality mandate.
 // ─────────────────────────────────────────────────────────────────────────

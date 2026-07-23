@@ -47,9 +47,10 @@ type Server struct {
 	pluginv1.UnimplementedPluginServiceServer
 	cfg Config
 	log *slog.Logger
-	// newCA / newKV build the OpenBao clients; overridable in tests to inject fakes.
-	newCA func(context.Context) (CA, error)
-	newKV func(context.Context) (KV, error)
+	// newCA / newKV / newTransit build the OpenBao clients; overridable in tests.
+	newCA      func(context.Context) (CA, error)
+	newKV      func(context.Context) (KV, error)
+	newTransit func(context.Context) (Transit, error)
 }
 
 func NewServer(cfg Config, log *slog.Logger) *Server {
@@ -61,6 +62,9 @@ func NewServer(cfg Config, log *slog.Logger) *Server {
 		return NewClient(s.cfg.Addr, s.cfg.Token, s.cfg.Mount), nil
 	}
 	s.newKV = func(context.Context) (KV, error) {
+		return NewClient(s.cfg.Addr, s.cfg.Token, s.cfg.Mount), nil
+	}
+	s.newTransit = func(context.Context) (Transit, error) {
 		return NewClient(s.cfg.Addr, s.cfg.Token, s.cfg.Mount), nil
 	}
 	return s
@@ -78,7 +82,7 @@ func (s *Server) GetManifest(context.Context, *pluginv1.GetManifestRequest) (*pl
 		// is the reconcile ACTUATOR verbs (ADR-0050) — a multi-role Connector.
 		Class:            pluginv1.PluginClass_PLUGIN_CLASS_SYNCER,
 		Verbs:            []pluginv1.Verb{pluginv1.Verb_VERB_OBSERVE, pluginv1.Verb_VERB_PLAN, pluginv1.Verb_VERB_APPLY, pluginv1.Verb_VERB_DESTROY, pluginv1.Verb_VERB_INVOKE},
-		Capabilities:     []string{"apply.dry-run"},
+		Capabilities:     []string{"apply.dry-run", "keycustodian"}, // ADR-0100: provides the KeyCustodian wrap/unwrap capability
 		Contracts:        contracts,
 		TombstoneSchemes: []string{"cert.serial", "pki.caSerial"},
 		// Administrative PKI Actions (ADR-0098 E2) — CA admin, NOT the retired per-cert

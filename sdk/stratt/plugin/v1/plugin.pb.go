@@ -3371,6 +3371,211 @@ func (x *SubscribeResponse) GetEvent() *EmittedEvent {
 	return nil
 }
 
+// KeyCustodian capability messages (ADR-0100). The wrapped bytes are opaque to the core;
+// the core-side portCustodian adds the self-describing {provider,domain,keyVersion}
+// envelope around them. The DEK is a CORE-generated working key (not brokered credential
+// material, so distinct from the §2.5 SecretBroker path); it crosses to the plugin only
+// to be wrapped/unwrapped by the KMS.
+type WrapKeyRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Domain        string                 `protobuf:"bytes,1,opt,name=domain,proto3" json:"domain,omitempty"` // custody domain (a Cell) — KMS key/context selection
+	Dek           []byte                 `protobuf:"bytes,2,opt,name=dek,proto3" json:"dek,omitempty"`       // the data key to wrap
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *WrapKeyRequest) Reset() {
+	*x = WrapKeyRequest{}
+	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[42]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *WrapKeyRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*WrapKeyRequest) ProtoMessage() {}
+
+func (x *WrapKeyRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[42]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use WrapKeyRequest.ProtoReflect.Descriptor instead.
+func (*WrapKeyRequest) Descriptor() ([]byte, []int) {
+	return file_stratt_plugin_v1_plugin_proto_rawDescGZIP(), []int{42}
+}
+
+func (x *WrapKeyRequest) GetDomain() string {
+	if x != nil {
+		return x.Domain
+	}
+	return ""
+}
+
+func (x *WrapKeyRequest) GetDek() []byte {
+	if x != nil {
+		return x.Dek
+	}
+	return nil
+}
+
+type WrapKeyResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Wrapped       []byte                 `protobuf:"bytes,1,opt,name=wrapped,proto3" json:"wrapped,omitempty"`                          // KMS-wrapped DEK (e.g. Transit "vault:v1:..." bytes)
+	KeyVersion    int32                  `protobuf:"varint,2,opt,name=key_version,json=keyVersion,proto3" json:"key_version,omitempty"` // the KMS key version that wrapped it (rotation-aware)
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *WrapKeyResponse) Reset() {
+	*x = WrapKeyResponse{}
+	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[43]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *WrapKeyResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*WrapKeyResponse) ProtoMessage() {}
+
+func (x *WrapKeyResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[43]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use WrapKeyResponse.ProtoReflect.Descriptor instead.
+func (*WrapKeyResponse) Descriptor() ([]byte, []int) {
+	return file_stratt_plugin_v1_plugin_proto_rawDescGZIP(), []int{43}
+}
+
+func (x *WrapKeyResponse) GetWrapped() []byte {
+	if x != nil {
+		return x.Wrapped
+	}
+	return nil
+}
+
+func (x *WrapKeyResponse) GetKeyVersion() int32 {
+	if x != nil {
+		return x.KeyVersion
+	}
+	return 0
+}
+
+type UnwrapKeyRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Wrapped       []byte                 `protobuf:"bytes,1,opt,name=wrapped,proto3" json:"wrapped,omitempty"`
+	Domain        string                 `protobuf:"bytes,2,opt,name=domain,proto3" json:"domain,omitempty"` // the custody domain (selects the KMS key, as WrapKey did)
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *UnwrapKeyRequest) Reset() {
+	*x = UnwrapKeyRequest{}
+	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[44]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *UnwrapKeyRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*UnwrapKeyRequest) ProtoMessage() {}
+
+func (x *UnwrapKeyRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[44]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use UnwrapKeyRequest.ProtoReflect.Descriptor instead.
+func (*UnwrapKeyRequest) Descriptor() ([]byte, []int) {
+	return file_stratt_plugin_v1_plugin_proto_rawDescGZIP(), []int{44}
+}
+
+func (x *UnwrapKeyRequest) GetWrapped() []byte {
+	if x != nil {
+		return x.Wrapped
+	}
+	return nil
+}
+
+func (x *UnwrapKeyRequest) GetDomain() string {
+	if x != nil {
+		return x.Domain
+	}
+	return ""
+}
+
+type UnwrapKeyResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Dek           []byte                 `protobuf:"bytes,1,opt,name=dek,proto3" json:"dek,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *UnwrapKeyResponse) Reset() {
+	*x = UnwrapKeyResponse{}
+	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[45]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *UnwrapKeyResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*UnwrapKeyResponse) ProtoMessage() {}
+
+func (x *UnwrapKeyResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[45]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use UnwrapKeyResponse.ProtoReflect.Descriptor instead.
+func (*UnwrapKeyResponse) Descriptor() ([]byte, []int) {
+	return file_stratt_plugin_v1_plugin_proto_rawDescGZIP(), []int{45}
+}
+
+func (x *UnwrapKeyResponse) GetDek() []byte {
+	if x != nil {
+		return x.Dek
+	}
+	return nil
+}
+
 var File_stratt_plugin_v1_plugin_proto protoreflect.FileDescriptor
 
 const file_stratt_plugin_v1_plugin_proto_rawDesc = "" +
@@ -3630,7 +3835,19 @@ const file_stratt_plugin_v1_plugin_proto_rawDesc = "" +
 	"\voccurred_at\x18\a \x01(\v2\x1a.google.protobuf.TimestampR\n" +
 	"occurredAt\"I\n" +
 	"\x11SubscribeResponse\x124\n" +
-	"\x05event\x18\x01 \x01(\v2\x1e.stratt.plugin.v1.EmittedEventR\x05event*\x92\x01\n" +
+	"\x05event\x18\x01 \x01(\v2\x1e.stratt.plugin.v1.EmittedEventR\x05event\":\n" +
+	"\x0eWrapKeyRequest\x12\x16\n" +
+	"\x06domain\x18\x01 \x01(\tR\x06domain\x12\x10\n" +
+	"\x03dek\x18\x02 \x01(\fR\x03dek\"L\n" +
+	"\x0fWrapKeyResponse\x12\x18\n" +
+	"\awrapped\x18\x01 \x01(\fR\awrapped\x12\x1f\n" +
+	"\vkey_version\x18\x02 \x01(\x05R\n" +
+	"keyVersion\"D\n" +
+	"\x10UnwrapKeyRequest\x12\x18\n" +
+	"\awrapped\x18\x01 \x01(\fR\awrapped\x12\x16\n" +
+	"\x06domain\x18\x02 \x01(\tR\x06domain\"%\n" +
+	"\x11UnwrapKeyResponse\x12\x10\n" +
+	"\x03dek\x18\x01 \x01(\fR\x03dek*\x92\x01\n" +
 	"\vPluginClass\x12\x1c\n" +
 	"\x18PLUGIN_CLASS_UNSPECIFIED\x10\x00\x12\x17\n" +
 	"\x13PLUGIN_CLASS_SYNCER\x10\x01\x12\x19\n" +
@@ -3645,7 +3862,7 @@ const file_stratt_plugin_v1_plugin_proto_rawDesc = "" +
 	"VERB_APPLY\x10\x03\x12\x10\n" +
 	"\fVERB_DESTROY\x10\x04\x12\x0f\n" +
 	"\vVERB_INVOKE\x10\x05\x12\r\n" +
-	"\tVERB_EMIT\x10\x062\x96\x05\n" +
+	"\tVERB_EMIT\x10\x062\xbc\x06\n" +
 	"\rPluginService\x12Z\n" +
 	"\vGetManifest\x12$.stratt.plugin.v1.GetManifestRequest\x1a%.stratt.plugin.v1.GetManifestResponse\x12K\n" +
 	"\x06Health\x12\x1f.stratt.plugin.v1.HealthRequest\x1a .stratt.plugin.v1.HealthResponse\x12P\n" +
@@ -3654,7 +3871,9 @@ const file_stratt_plugin_v1_plugin_proto_rawDesc = "" +
 	"\x05Apply\x12\x1e.stratt.plugin.v1.ApplyRequest\x1a\x1f.stratt.plugin.v1.ApplyResponse0\x01\x12P\n" +
 	"\aDestroy\x12 .stratt.plugin.v1.DestroyRequest\x1a!.stratt.plugin.v1.DestroyResponse0\x01\x12M\n" +
 	"\x06Invoke\x12\x1f.stratt.plugin.v1.InvokeRequest\x1a .stratt.plugin.v1.InvokeResponse0\x01\x12V\n" +
-	"\tSubscribe\x12\".stratt.plugin.v1.SubscribeRequest\x1a#.stratt.plugin.v1.SubscribeResponse0\x01B?Z=github.com/dstout-devops/stratt/sdk/stratt/plugin/v1;pluginv1b\x06proto3"
+	"\tSubscribe\x12\".stratt.plugin.v1.SubscribeRequest\x1a#.stratt.plugin.v1.SubscribeResponse0\x01\x12N\n" +
+	"\aWrapKey\x12 .stratt.plugin.v1.WrapKeyRequest\x1a!.stratt.plugin.v1.WrapKeyResponse\x12T\n" +
+	"\tUnwrapKey\x12\".stratt.plugin.v1.UnwrapKeyRequest\x1a#.stratt.plugin.v1.UnwrapKeyResponseB?Z=github.com/dstout-devops/stratt/sdk/stratt/plugin/v1;pluginv1b\x06proto3"
 
 var (
 	file_stratt_plugin_v1_plugin_proto_rawDescOnce sync.Once
@@ -3669,7 +3888,7 @@ func file_stratt_plugin_v1_plugin_proto_rawDescGZIP() []byte {
 }
 
 var file_stratt_plugin_v1_plugin_proto_enumTypes = make([]protoimpl.EnumInfo, 7)
-var file_stratt_plugin_v1_plugin_proto_msgTypes = make([]protoimpl.MessageInfo, 48)
+var file_stratt_plugin_v1_plugin_proto_msgTypes = make([]protoimpl.MessageInfo, 52)
 var file_stratt_plugin_v1_plugin_proto_goTypes = []any{
 	(PluginClass)(0),              // 0: stratt.plugin.v1.PluginClass
 	(Verb)(0),                     // 1: stratt.plugin.v1.Verb
@@ -3720,14 +3939,18 @@ var file_stratt_plugin_v1_plugin_proto_goTypes = []any{
 	(*InvokeResponse)(nil),        // 46: stratt.plugin.v1.InvokeResponse
 	(*EmittedEvent)(nil),          // 47: stratt.plugin.v1.EmittedEvent
 	(*SubscribeResponse)(nil),     // 48: stratt.plugin.v1.SubscribeResponse
-	nil,                           // 49: stratt.plugin.v1.ObservedEntity.IdentityKeysEntry
-	nil,                           // 50: stratt.plugin.v1.ObservedEntity.LabelsEntry
-	nil,                           // 51: stratt.plugin.v1.ObservedEntity.FacetsEntry
-	nil,                           // 52: stratt.plugin.v1.ApplyTarget.IdentityKeysEntry
-	nil,                           // 53: stratt.plugin.v1.ApplyTarget.VarsEntry
-	nil,                           // 54: stratt.plugin.v1.TaskEvent.FieldsEntry
-	(*timestamppb.Timestamp)(nil), // 55: google.protobuf.Timestamp
-	(*structpb.Struct)(nil),       // 56: google.protobuf.Struct
+	(*WrapKeyRequest)(nil),        // 49: stratt.plugin.v1.WrapKeyRequest
+	(*WrapKeyResponse)(nil),       // 50: stratt.plugin.v1.WrapKeyResponse
+	(*UnwrapKeyRequest)(nil),      // 51: stratt.plugin.v1.UnwrapKeyRequest
+	(*UnwrapKeyResponse)(nil),     // 52: stratt.plugin.v1.UnwrapKeyResponse
+	nil,                           // 53: stratt.plugin.v1.ObservedEntity.IdentityKeysEntry
+	nil,                           // 54: stratt.plugin.v1.ObservedEntity.LabelsEntry
+	nil,                           // 55: stratt.plugin.v1.ObservedEntity.FacetsEntry
+	nil,                           // 56: stratt.plugin.v1.ApplyTarget.IdentityKeysEntry
+	nil,                           // 57: stratt.plugin.v1.ApplyTarget.VarsEntry
+	nil,                           // 58: stratt.plugin.v1.TaskEvent.FieldsEntry
+	(*timestamppb.Timestamp)(nil), // 59: google.protobuf.Timestamp
+	(*structpb.Struct)(nil),       // 60: google.protobuf.Struct
 }
 var file_stratt_plugin_v1_plugin_proto_depIdxs = []int32{
 	11, // 0: stratt.plugin.v1.Envelope.coordinates:type_name -> stratt.plugin.v1.Coordinates
@@ -3751,9 +3974,9 @@ var file_stratt_plugin_v1_plugin_proto_depIdxs = []int32{
 	20, // 18: stratt.plugin.v1.Manifest.cutover:type_name -> stratt.plugin.v1.CutoverDescriptor
 	22, // 19: stratt.plugin.v1.GetManifestResponse.manifest:type_name -> stratt.plugin.v1.Manifest
 	3,  // 20: stratt.plugin.v1.HealthResponse.status:type_name -> stratt.plugin.v1.HealthResponse.Serving
-	49, // 21: stratt.plugin.v1.ObservedEntity.identity_keys:type_name -> stratt.plugin.v1.ObservedEntity.IdentityKeysEntry
-	50, // 22: stratt.plugin.v1.ObservedEntity.labels:type_name -> stratt.plugin.v1.ObservedEntity.LabelsEntry
-	51, // 23: stratt.plugin.v1.ObservedEntity.facets:type_name -> stratt.plugin.v1.ObservedEntity.FacetsEntry
+	53, // 21: stratt.plugin.v1.ObservedEntity.identity_keys:type_name -> stratt.plugin.v1.ObservedEntity.IdentityKeysEntry
+	54, // 22: stratt.plugin.v1.ObservedEntity.labels:type_name -> stratt.plugin.v1.ObservedEntity.LabelsEntry
+	55, // 23: stratt.plugin.v1.ObservedEntity.facets:type_name -> stratt.plugin.v1.ObservedEntity.FacetsEntry
 	28, // 24: stratt.plugin.v1.ObservedEntity.relations:type_name -> stratt.plugin.v1.ObservedRelation
 	27, // 25: stratt.plugin.v1.ObserveResponse.entities:type_name -> stratt.plugin.v1.ObservedEntity
 	29, // 26: stratt.plugin.v1.ObserveResponse.gone:type_name -> stratt.plugin.v1.GoneEntity
@@ -3766,16 +3989,16 @@ var file_stratt_plugin_v1_plugin_proto_depIdxs = []int32{
 	8,  // 33: stratt.plugin.v1.ApplyRequest.desired:type_name -> stratt.plugin.v1.Payload
 	9,  // 34: stratt.plugin.v1.ApplyRequest.plan_ref:type_name -> stratt.plugin.v1.ArtifactRef
 	35, // 35: stratt.plugin.v1.ApplyRequest.targets:type_name -> stratt.plugin.v1.ApplyTarget
-	52, // 36: stratt.plugin.v1.ApplyTarget.identity_keys:type_name -> stratt.plugin.v1.ApplyTarget.IdentityKeysEntry
-	53, // 37: stratt.plugin.v1.ApplyTarget.vars:type_name -> stratt.plugin.v1.ApplyTarget.VarsEntry
+	56, // 36: stratt.plugin.v1.ApplyTarget.identity_keys:type_name -> stratt.plugin.v1.ApplyTarget.IdentityKeysEntry
+	57, // 37: stratt.plugin.v1.ApplyTarget.vars:type_name -> stratt.plugin.v1.ApplyTarget.VarsEntry
 	7,  // 38: stratt.plugin.v1.DestroyRequest.envelope:type_name -> stratt.plugin.v1.Envelope
 	35, // 39: stratt.plugin.v1.DestroyRequest.targets:type_name -> stratt.plugin.v1.ApplyTarget
 	8,  // 40: stratt.plugin.v1.DestroyRequest.desired:type_name -> stratt.plugin.v1.Payload
 	7,  // 41: stratt.plugin.v1.InvokeRequest.envelope:type_name -> stratt.plugin.v1.Envelope
 	8,  // 42: stratt.plugin.v1.InvokeRequest.args:type_name -> stratt.plugin.v1.Payload
 	4,  // 43: stratt.plugin.v1.TaskEvent.level:type_name -> stratt.plugin.v1.TaskEvent.Level
-	55, // 44: stratt.plugin.v1.TaskEvent.at:type_name -> google.protobuf.Timestamp
-	54, // 45: stratt.plugin.v1.TaskEvent.fields:type_name -> stratt.plugin.v1.TaskEvent.FieldsEntry
+	59, // 44: stratt.plugin.v1.TaskEvent.at:type_name -> google.protobuf.Timestamp
+	58, // 45: stratt.plugin.v1.TaskEvent.fields:type_name -> stratt.plugin.v1.TaskEvent.FieldsEntry
 	5,  // 46: stratt.plugin.v1.ItemResult.status:type_name -> stratt.plugin.v1.ItemResult.Status
 	8,  // 47: stratt.plugin.v1.DiffFragment.detail:type_name -> stratt.plugin.v1.Payload
 	6,  // 48: stratt.plugin.v1.DerivedContract.rung:type_name -> stratt.plugin.v1.DerivedContract.Rung
@@ -3795,8 +4018,8 @@ var file_stratt_plugin_v1_plugin_proto_depIdxs = []int32{
 	45, // 62: stratt.plugin.v1.InvokeResponse.result:type_name -> stratt.plugin.v1.InvokeResult
 	7,  // 63: stratt.plugin.v1.EmittedEvent.envelope:type_name -> stratt.plugin.v1.Envelope
 	8,  // 64: stratt.plugin.v1.EmittedEvent.payload:type_name -> stratt.plugin.v1.Payload
-	56, // 65: stratt.plugin.v1.EmittedEvent.match:type_name -> google.protobuf.Struct
-	55, // 66: stratt.plugin.v1.EmittedEvent.occurred_at:type_name -> google.protobuf.Timestamp
+	60, // 65: stratt.plugin.v1.EmittedEvent.match:type_name -> google.protobuf.Struct
+	59, // 66: stratt.plugin.v1.EmittedEvent.occurred_at:type_name -> google.protobuf.Timestamp
 	47, // 67: stratt.plugin.v1.SubscribeResponse.event:type_name -> stratt.plugin.v1.EmittedEvent
 	18, // 68: stratt.plugin.v1.PluginService.GetManifest:input_type -> stratt.plugin.v1.GetManifestRequest
 	24, // 69: stratt.plugin.v1.PluginService.Health:input_type -> stratt.plugin.v1.HealthRequest
@@ -3806,16 +4029,20 @@ var file_stratt_plugin_v1_plugin_proto_depIdxs = []int32{
 	36, // 73: stratt.plugin.v1.PluginService.Destroy:input_type -> stratt.plugin.v1.DestroyRequest
 	37, // 74: stratt.plugin.v1.PluginService.Invoke:input_type -> stratt.plugin.v1.InvokeRequest
 	38, // 75: stratt.plugin.v1.PluginService.Subscribe:input_type -> stratt.plugin.v1.SubscribeRequest
-	23, // 76: stratt.plugin.v1.PluginService.GetManifest:output_type -> stratt.plugin.v1.GetManifestResponse
-	25, // 77: stratt.plugin.v1.PluginService.Health:output_type -> stratt.plugin.v1.HealthResponse
-	31, // 78: stratt.plugin.v1.PluginService.Observe:output_type -> stratt.plugin.v1.ObserveResponse
-	33, // 79: stratt.plugin.v1.PluginService.Plan:output_type -> stratt.plugin.v1.PlanResponse
-	43, // 80: stratt.plugin.v1.PluginService.Apply:output_type -> stratt.plugin.v1.ApplyResponse
-	44, // 81: stratt.plugin.v1.PluginService.Destroy:output_type -> stratt.plugin.v1.DestroyResponse
-	46, // 82: stratt.plugin.v1.PluginService.Invoke:output_type -> stratt.plugin.v1.InvokeResponse
-	48, // 83: stratt.plugin.v1.PluginService.Subscribe:output_type -> stratt.plugin.v1.SubscribeResponse
-	76, // [76:84] is the sub-list for method output_type
-	68, // [68:76] is the sub-list for method input_type
+	49, // 76: stratt.plugin.v1.PluginService.WrapKey:input_type -> stratt.plugin.v1.WrapKeyRequest
+	51, // 77: stratt.plugin.v1.PluginService.UnwrapKey:input_type -> stratt.plugin.v1.UnwrapKeyRequest
+	23, // 78: stratt.plugin.v1.PluginService.GetManifest:output_type -> stratt.plugin.v1.GetManifestResponse
+	25, // 79: stratt.plugin.v1.PluginService.Health:output_type -> stratt.plugin.v1.HealthResponse
+	31, // 80: stratt.plugin.v1.PluginService.Observe:output_type -> stratt.plugin.v1.ObserveResponse
+	33, // 81: stratt.plugin.v1.PluginService.Plan:output_type -> stratt.plugin.v1.PlanResponse
+	43, // 82: stratt.plugin.v1.PluginService.Apply:output_type -> stratt.plugin.v1.ApplyResponse
+	44, // 83: stratt.plugin.v1.PluginService.Destroy:output_type -> stratt.plugin.v1.DestroyResponse
+	46, // 84: stratt.plugin.v1.PluginService.Invoke:output_type -> stratt.plugin.v1.InvokeResponse
+	48, // 85: stratt.plugin.v1.PluginService.Subscribe:output_type -> stratt.plugin.v1.SubscribeResponse
+	50, // 86: stratt.plugin.v1.PluginService.WrapKey:output_type -> stratt.plugin.v1.WrapKeyResponse
+	52, // 87: stratt.plugin.v1.PluginService.UnwrapKey:output_type -> stratt.plugin.v1.UnwrapKeyResponse
+	78, // [78:88] is the sub-list for method output_type
+	68, // [68:78] is the sub-list for method input_type
 	68, // [68:68] is the sub-list for extension type_name
 	68, // [68:68] is the sub-list for extension extendee
 	0,  // [0:68] is the sub-list for field type_name
@@ -3832,7 +4059,7 @@ func file_stratt_plugin_v1_plugin_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_stratt_plugin_v1_plugin_proto_rawDesc), len(file_stratt_plugin_v1_plugin_proto_rawDesc)),
 			NumEnums:      7,
-			NumMessages:   48,
+			NumMessages:   52,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

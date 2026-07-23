@@ -5,6 +5,7 @@ package main
 
 import (
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -41,6 +42,7 @@ import (
 	"github.com/dstout-devops/stratt/core/internal/evidencestore"
 	"github.com/dstout-devops/stratt/core/internal/graph"
 	"github.com/dstout-devops/stratt/core/internal/homegate"
+	"github.com/dstout-devops/stratt/core/internal/keycustodian"
 	"github.com/dstout-devops/stratt/core/internal/leader"
 	"github.com/dstout-devops/stratt/core/internal/notify"
 	"github.com/dstout-devops/stratt/core/internal/observability"
@@ -190,6 +192,41 @@ func splitNonEmpty(s string) []string {
 		}
 	}
 	return out
+}
+
+// buildKeyCustodian returns the envelope-encryption custodian for the encrypted stores
+// (ADR-0100). The in-core local floor is ALWAYS the default (no external service); when
+// STRATT_KEYCUSTODIAN_PROVIDER=openbao-transit AND the openbao plugin is configured, it
+// returns a mux whose PRIMARY is the Transit-backed port provider (new writes get a
+// KMS-wrapped DEK) while the local floor stays in the set so local-wrapped and legacy
+// blobs remain readable (migration + no lock-in). Never required — an unset/absent
+// provider is just the floor.
+func buildKeyCustodian(stateKey string, log *slog.Logger) (keycustodian.Custodian, error) {
+	key, err := hex.DecodeString(stateKey)
+	if err != nil || len(key) != 32 {
+		return nil, fmt.Errorf("keycustodian: STRATT_STATE_KEY must be 32 bytes of hex")
+	}
+	local, err := keycustodian.NewLocal(key)
+	if err != nil {
+		return nil, err
+	}
+	if os.Getenv("STRATT_KEYCUSTODIAN_PROVIDER") != "openbao-transit" {
+		return local, nil // the floor — the default everywhere incl. dev
+	}
+	addr := os.Getenv("STRATT_OPENBAO_PLUGIN_ADDR")
+	if addr == "" {
+		log.Warn("STRATT_KEYCUSTODIAN_PROVIDER=openbao-transit but STRATT_OPENBAO_PLUGIN_ADDR is empty — falling back to the local floor")
+		return local, nil
+	}
+	conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		return nil, fmt.Errorf("keycustodian: openbao plugin dial %s: %w", addr, err)
+	}
+	// The conn is held for the process lifetime (the custodian is used on every state
+	// write/read); it is not deferred-closed here.
+	port := keycustodian.NewPort(pluginv1.NewPluginServiceClient(conn), "openbao-transit")
+	log.Info("keycustodian: OpenBao Transit provider enabled (in-core floor retained for migration + eject)", "addr", addr)
+	return keycustodian.NewMux(port, local), nil
 }
 
 func run(ctx context.Context, log *slog.Logger) error {
@@ -681,6 +718,15 @@ func run(ctx context.Context, log *slog.Logger) error {
 			return err
 		}
 		stateHandler = sb.Handler()
+		// KeyCustodian (ADR-0100): the in-core local floor by default; an OPT-IN mux over
+		// an OpenBao Transit provider when STRATT_KEYCUSTODIAN_PROVIDER=openbao-transit
+		// (never required — the floor always encrypts state on its own). Same custodian
+		// for both encrypted stores.
+		custodian, err := buildKeyCustodian(stateKey, log)
+		if err != nil {
+			return err
+		}
+		sb.UseCustodian(custodian)
 		if tofuPluginAddr := os.Getenv("STRATT_OPENTOFU_PLUGIN_ADDR"); tofuPluginAddr != "" {
 			// Cutover (ADR-0046/0047): the opentofu Actuator runs over the sovereign
 			// port — Plan/Apply/Destroy, plan-as-artifact (§8). The in-tree Actuator
@@ -691,6 +737,7 @@ func run(ctx context.Context, log *slog.Logger) error {
 			if err != nil {
 				return err
 			}
+			plans.UseCustodian(custodian)
 			conn, err := grpc.NewClient(tofuPluginAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
 			if err != nil {
 				return fmt.Errorf("opentofu plugin dial %s: %w", tofuPluginAddr, err)
