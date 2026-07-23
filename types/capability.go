@@ -14,14 +14,17 @@ package types
 // (Temporal), an ambient platform guarantee — never a requirable, swappable capability. Likewise
 // the core's own KeyCustodian consumption stays on ADR-0100's portCustodian (D7); `keycustodian`
 // here is for the plugin→plugin edge.
+// Each class is a PROVIDER-AGNOSTIC contract (§1.5, ADR-0105): the provider is a swappable
+// transport, never baked into the class. Vendors named below are example provider #1s, never
+// "the" provider — S3 vs Artifactory/GCS/Garage is an operator choice, not a code change.
 const (
-	CapKeyCustodian  = "keycustodian"  // wrap/unwrap a DEK in a KMS (ADR-0100, OpenBao Transit)
-	CapSecretBroker  = "secretbroker"  // resolve CredentialRef material at the SoR (ADR-0094 KV)
-	CapCertIssuer    = "certissuer"    // issue/renew certificates (ADR-0098 OpenBao PKI)
-	CapStateStore    = "statestore"    // durable tool state (tofu remote state) — S3-backed
-	CapArtifactStore = "artifactstore" // content-addressed artifacts/evidence (S3-backed)
+	CapKeyCustodian  = "keycustodian"  // wrap/unwrap a DEK in a KMS (provider #1: OpenBao Transit, ADR-0100)
+	CapSecretBroker  = "secretbroker"  // resolve CredentialRef material at the SoR (e.g. OpenBao KV, ADR-0094)
+	CapCertIssuer    = "certissuer"    // issue/renew certificates (e.g. OpenBao PKI, ADR-0098)
+	CapStateStore    = "statestore"    // durable tool state, e.g. tofu remote state (provider #1: S3, ADR-0105)
+	CapArtifactStore = "artifactstore" // content-addressed artifacts/evidence (provider #1: S3, ADR-0105)
 	CapEventBus      = "eventbus"      // an estate-facing alternate event backend (reserved, ADR-0046)
-	CapProvisioning  = "provisioning"  // provision machines other plugins target (EC2)
+	CapProvisioning  = "provisioning"  // provision machines other plugins target (e.g. EC2)
 )
 
 // capabilityClasses is the closed set the validator admits. Extending it is a core decision
