@@ -109,6 +109,8 @@ of existing capabilities, not new phase work — the deliverables above still st
 | SecretBroker port (per-call resolution; core holds no material, §2.5) | ✅ | [ADR-0052](adr/0052-secretbroker-port.md); `sdk/secretbroker` |
 | MCP as a generic transport (the last domain logic leaves the core) | ✅ | [ADR-0053](adr/0053-mcp-transport-generic-connector.md); `plugins/mcp` EE-Job shim |
 | Per-Step facet write-scope (least-authority write-back at the one governor) | ✅ | [ADR-0054](adr/0054-per-step-facet-claim.md); `pluginhost.govern` grant∩scope |
+| Tiered genesis bootstrap — Stratt self-deploys its own services/plugins (dogfood) | ✅ | [ADR-0102](adr/0102-tiered-genesis-bootstrap.md); `dev:genesis`; helm/deploy self-deploy of the real OpenFGA server + backend promotion, **proven live in kind** |
+| Runtime Connector/Actuator registry — enable/disable plugins with **no restart**, reconciled from CaC | ✅ | [ADR-0103](adr/0103-runtime-connector-registry.md); `connectorregistry`; helm (Actuator) + declared (Connector) enabled+disabled at runtime, strattd `restarts=0`, **proven live fully in-kind (no compose)** |
 
 **Verified in-repo (structural):** `core/internal/connectors/` is empty; `internal/actuators`,
 `internal/actions`, `internal/emitters` hold only the seam interfaces, no tool logic; **20 plugin packages**
@@ -119,10 +121,15 @@ lookup, not a tool-name switch, with no platform-default actuator
 (ADR-0046). The residual tool-name strings in core are legitimate — opaque routing-key registration in the
 composition root (`cmd/strattd`), the AWX `/api/v2` compat façade, and the AWX one-shot migration tool.
 
-**Honest caveat:** this is **structurally code-complete and proven by unit/integration tests** (Site-forwarded
-governance, the govern grant∩scope intersection) — **not** yet by a live end-to-end run on a real
-NATS+K8s+Temporal cluster (environment-blocked). The exit gates are unchanged: the re-centering does not move
-any promote/OSS gate, which still waits on §7.4.
+**Live proof landed (ADR-0102/0103).** The arc is no longer only unit/integration-proven: it now has a **first
+live end-to-end run on a real in-cluster NATS+K8s+Temporal** (kind, in-cluster substrate, **zero compose**) —
+Stratt self-deploys the real OpenFGA server through its own gated helm/deploy loop (ADR-0102), and the runtime
+registry enables/disables a Connector (declared) and an Actuator (helm) at runtime from CaC with the strattd
+pod at `restarts=0` (ADR-0103). This is the foundational threshold: the spine + orchestration + sovereign port
++ reconcile, proven together against a live cluster. Broader live coverage is still ahead — fleet scale, the
+remaining 17 boot-env plugins migrated onto the registry, and targets beyond kind (KubeVirt / bare-metal /
+Cobbler / richer Ansible connectors). The exit gates are unchanged: none of this moves a promote/OSS gate,
+which still waits on §7.4.
 
 ## Ahead of the roadmap: multi-region Cells
 
@@ -166,7 +173,9 @@ found and closed. The one crack no code closes: **§7.4 OSPO/IP clearance** (rep
 Phases 0–2 code-complete; Phase 3 code ~90% (Jamf + ConfigMgr Connectors deferred by choice); multi-region
 Cells shipped ahead of schedule; the UI has been rebuilt greenfield as a pure API client (ADR-0090/0091); and
 the whole platform has been **re-centered onto the sovereign plugin port (dark-matter, ADR-0046 arc)** — the
-core spine is content-blind and every tool is a plugin, verified structurally in-repo and by unit/integration
-tests, with the live-cluster e2e still outstanding. **No phase's promote/OSS exit gate is met** — every one
+core spine is content-blind and every tool is a plugin, now proven not only structurally + by unit/integration
+tests but by a **first live in-cluster e2e** (ADR-0102 self-deploy + ADR-0103 no-restart connector lifecycle,
+fully in-kind, no compose); broader live coverage (fleet scale, all plugins, non-kind targets) is the road
+ahead. **No phase's promote/OSS exit gate is met** — every one
 ultimately waits on the charter §7.4 going-public step (OSPO/IP clearance) plus real operational evidence
 (SLO, security review, adoption), none of which is a coding task.
