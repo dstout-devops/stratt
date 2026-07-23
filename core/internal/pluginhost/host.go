@@ -208,6 +208,28 @@ func (h *Host) Register(ctx context.Context) error {
 	return nil
 }
 
+// Deregister reverses Register's ownership claims (ADR-0103 Connector disable): it releases
+// the facet/label ownership grant rows this host registered, keyed by the grant's WriterRef
+// so it never revokes another source's claim. It deliberately does NOT delete the Source row
+// or tombstone Entities — that placement/lifecycle is the home-gate/re-home single writer's
+// domain (§2.4); the Source projection is rebuildable (§1.2). Idempotent — safe to call on a
+// host that never registered, or twice.
+func (h *Host) Deregister(ctx context.Context) error {
+	ref := h.grant.WriterRef()
+	for _, ns := range h.grant.FacetNamespaces {
+		if err := h.store.DeregisterFacetOwner(ctx, ns, ref); err != nil {
+			return fmt.Errorf("pluginhost: deregister facet owner %q: %w", ns, err)
+		}
+	}
+	for _, k := range h.grant.LabelKeys {
+		if err := h.store.DeregisterLabelOwner(ctx, k, ref); err != nil {
+			return fmt.Errorf("pluginhost: deregister label owner %q: %w", k, err)
+		}
+	}
+	h.log.Info("deregistered", "source", h.grant.Source.Name, "facets", h.grant.FacetNamespaces)
+	return nil
+}
+
 // ValidateManifest fetches the plugin's Manifest and checks its asserted identity
 // against the hub-held grant (ADR-0049 F1) — the anti-spoof binding for a RELAYED
 // Site plugin, where manifest.plugin_id is a string the Site controls and a

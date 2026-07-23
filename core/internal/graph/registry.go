@@ -83,6 +83,42 @@ func (s *Store) RegisterLabelOwner(ctx context.Context, o types.LabelOwner) erro
 	return nil
 }
 
+// DeregisterFacetOwner releases one owner's claim on a Facet namespace (ADR-0103 Connector
+// disable). Keyed on the exact (namespace, owner_ref) PK, so it is idempotent and NEVER
+// touches a different source's claim on the same namespace (multi-source ownership,
+// ADR-0060). Leaves the Facets themselves — a disabled source's data becomes retained,
+// non-authoritative signal that ages out via sync boundaries (§1.2, no tombstone race).
+func (s *Store) DeregisterFacetOwner(ctx context.Context, namespace, ownerRef string) error {
+	if _, err := s.pool.Exec(ctx,
+		`DELETE FROM graph.facet_owner WHERE namespace = $1 AND owner_ref = $2`, namespace, ownerRef); err != nil {
+		return fmt.Errorf("graph: deregister facet owner %s: %w", namespace, err)
+	}
+	return nil
+}
+
+// DeregisterLabelOwner releases one owner's claim on a label KEY. Keyed on (key, owner_ref)
+// so a mismatched owner is a no-op — it never revokes another writer's key.
+func (s *Store) DeregisterLabelOwner(ctx context.Context, key, ownerRef string) error {
+	if _, err := s.pool.Exec(ctx,
+		`DELETE FROM graph.label_owner WHERE key = $1 AND owner_ref = $2`, key, ownerRef); err != nil {
+		return fmt.Errorf("graph: deregister label owner %s: %w", key, err)
+	}
+	return nil
+}
+
+// DeregisterSource removes a Source projection (ADR-0103 primitive for an explicit
+// tombstone / re-home path — it is NOT called on Connector disable, which leaves the
+// rebuildable Source, §1.2). Seal-safe (§2.4): a fenced/rehoming Source (rehoming_to set)
+// is never deleted here; that placement is the home-gate/re-home single writer's domain.
+// source_sync rows cascade (FK ON DELETE CASCADE). Idempotent.
+func (s *Store) DeregisterSource(ctx context.Context, name string) error {
+	if _, err := s.pool.Exec(ctx,
+		`DELETE FROM graph.source WHERE name = $1 AND rehoming_to IS NULL`, name); err != nil {
+		return fmt.Errorf("graph: deregister source %s: %w", name, err)
+	}
+	return nil
+}
+
 // GetLabelOwner returns the registered owner of a label key; ok=false when the
 // key is unowned.
 func (s *Store) GetLabelOwner(ctx context.Context, key string) (types.LabelOwner, bool, error) {
