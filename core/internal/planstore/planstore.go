@@ -23,11 +23,12 @@ import (
 	"context"
 	"crypto/aes"
 	"crypto/cipher"
-	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
+
+	"github.com/dstout-devops/stratt/core/internal/keycustodian"
 )
 
 // ArtifactDB is the persistence seam (graph.Store satisfies it). Kept narrow so
@@ -51,8 +52,12 @@ var ErrNotFound = errors.New("planstore: no plan artifact for digest")
 
 // Store encrypts and content-addresses saved plans.
 type Store struct {
-	db   ArtifactDB
-	aead cipher.AEAD
+	db ArtifactDB
+	// aead is the KEK-derived AES-GCM, retained for the LEGACY read path (plans
+	// written before ADR-0100); new writes go through envelope encryption.
+	aead      cipher.AEAD
+	custodian keycustodian.Custodian // in-core envelope floor (ADR-0100)
+	domain    string
 }
 
 // New builds the store from a 32-byte hex key (the STRATT_STATE_KEY class, reused
@@ -70,7 +75,11 @@ func New(hexKey string, db ArtifactDB) (*Store, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Store{db: db, aead: aead}, nil
+	custodian, err := keycustodian.NewLocal(key)
+	if err != nil {
+		return nil, err
+	}
+	return &Store{db: db, aead: aead, custodian: custodian, domain: "default"}, nil
 }
 
 // Put content-addresses and stores a plan, returning its digest (the pin a Gate
@@ -80,7 +89,7 @@ func New(hexKey string, db ArtifactDB) (*Store, error) {
 func (s *Store) Put(ctx context.Context, plan []byte) (string, error) {
 	sum := sha256.Sum256(plan)
 	digest := hex.EncodeToString(sum[:])
-	ct, err := s.encrypt(plan)
+	ct, err := s.encrypt(ctx, plan)
 	if err != nil {
 		return "", fmt.Errorf("planstore: encrypt: %w", err)
 	}
@@ -99,7 +108,7 @@ func (s *Store) GetVerified(ctx context.Context, digest string) ([]byte, error) 
 	if err != nil {
 		return nil, err // ErrNotFound propagates
 	}
-	plan, err := s.decrypt(ct)
+	plan, err := s.decrypt(ctx, ct)
 	if err != nil {
 		return nil, fmt.Errorf("planstore: decrypt %s: %w", digest, err)
 	}
@@ -110,18 +119,24 @@ func (s *Store) GetVerified(ctx context.Context, digest string) ([]byte, error) 
 	return plan, nil
 }
 
-func (s *Store) encrypt(plaintext []byte) ([]byte, error) {
-	nonce := make([]byte, s.aead.NonceSize())
-	if _, err := rand.Read(nonce); err != nil {
-		return nil, err
-	}
-	return append(nonce, s.aead.Seal(nil, nonce, plaintext, nil)...), nil
+// encrypt envelope-encrypts a plan (ADR-0100): per-blob DEK + custodian-wrapped key.
+func (s *Store) encrypt(ctx context.Context, plaintext []byte) ([]byte, error) {
+	return keycustodian.Seal(ctx, s.custodian, s.domain, plaintext)
 }
 
-func (s *Store) decrypt(ciphertext []byte) ([]byte, error) {
+// decrypt opens an enveloped plan, falling back to the LEGACY bare-AES read path for
+// plans stored before ADR-0100 (the content-address re-hash in GetVerified is unchanged).
+func (s *Store) decrypt(ctx context.Context, blob []byte) ([]byte, error) {
+	pt, enveloped, err := keycustodian.Open(ctx, s.custodian, blob)
+	if err != nil {
+		return nil, err
+	}
+	if enveloped {
+		return pt, nil
+	}
 	n := s.aead.NonceSize()
-	if len(ciphertext) < n {
+	if len(blob) < n {
 		return nil, fmt.Errorf("planstore: ciphertext too short")
 	}
-	return s.aead.Open(nil, ciphertext[:n], ciphertext[n:], nil)
+	return s.aead.Open(nil, blob[:n], blob[n:], nil)
 }

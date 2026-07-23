@@ -104,8 +104,8 @@ abandonment of the seam.
 One versioned, hash-pinned protobuf/gRPC **bus** with typed **plugin classes** (the USB model — one bus,
 standard device classes; here the classes are *plugin* classes). A `PluginService` (`Observe/Plan/Apply/
 Destroy/Invoke/Subscribe`, capability-negotiated via `GetManifest`); capability classes (`StateStore`,
-`EventBus`, `SecretBroker`, `DurableExec`, `ArtifactStore`) are siblings on the same authenticated/versioned
-bus. The load-bearing wire shape is **opaque `Payload` + typed governance `Envelope`** (coordinates,
+`EventBus`, `SecretBroker`, `DurableExec`, `ArtifactStore`, and `KeyCustodian` — added by ADR-0100 for
+optional envelope-encryption key custody) are siblings on the same authenticated/versioned bus. The load-bearing wire shape is **opaque `Payload` + typed governance `Envelope`** (coordinates,
 contract-ref, principal, credential-refs, idempotency-key, plugin-computed content-hash) — the opaque message
 is **`Payload`, never `Resource`** (`resource` is a §2-banned core-model identifier). The core reads the
 envelope and governs; it hands the payload to the plugin untouched. Thirteen invariants must be right at t=0

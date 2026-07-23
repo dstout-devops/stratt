@@ -3,6 +3,9 @@ package statebackend
 import (
 	"bytes"
 	"context"
+	"crypto/aes"
+	"crypto/cipher"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"log/slog"
@@ -17,6 +20,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/dstout-devops/stratt/core/internal/graph"
+	"github.com/dstout-devops/stratt/core/internal/keycustodian"
 )
 
 const testKey = "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"
@@ -63,25 +67,48 @@ func TestCryptoRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	enc, err := b.encrypt([]byte(`{"version":4}`))
+	enc, err := b.encrypt(context.Background(), []byte(`{"version":4}`))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if bytes.Contains(enc, []byte("version")) {
 		t.Fatal("ciphertext must not contain plaintext")
 	}
-	plain, err := b.decrypt(enc)
+	plain, err := b.decrypt(context.Background(), enc)
 	if err != nil || string(plain) != `{"version":4}` {
 		t.Fatalf("round trip: %s %v", plain, err)
 	}
 	// A different key cannot decrypt.
 	b2, _ := New(strings.Repeat("ff", 32), nil, slog.New(slog.NewTextHandler(os.Stderr, nil)))
-	if _, err := b2.decrypt(enc); err == nil {
+	if _, err := b2.decrypt(context.Background(), enc); err == nil {
 		t.Fatal("wrong key must fail to decrypt")
 	}
 	// Bad key shapes are refused.
 	if _, err := New("shortkey", nil, slog.Default()); err == nil {
 		t.Fatal("short key must be refused")
+	}
+}
+
+// TestLegacyBlobStillDecrypts is the load-bearing migration guarantee (ADR-0100): state
+// written by the pre-envelope code (bare AES-GCM under the state key) must still decrypt
+// through the legacy fallback — a rebuilt/upgraded backend never loses existing state.
+func TestLegacyBlobStillDecrypts(t *testing.T) {
+	b, _ := New(testKey, nil, slog.New(slog.NewTextHandler(os.Stderr, nil)))
+	// Reproduce exactly what the old encrypt() produced: nonce || AES-256-GCM(stateKey).
+	key, _ := hex.DecodeString(testKey)
+	block, _ := aes.NewCipher(key)
+	aead, _ := cipher.NewGCM(block)
+	nonce := make([]byte, aead.NonceSize())
+	legacy := append(nonce, aead.Seal(nil, nonce, []byte(`{"legacy":true}`), nil)...)
+
+	plain, err := b.decrypt(context.Background(), legacy)
+	if err != nil || string(plain) != `{"legacy":true}` {
+		t.Fatalf("legacy bare-AES blob must decrypt via fallback: %s %v", plain, err)
+	}
+	// And a fresh write is an envelope (the migration re-seals on next write).
+	enc, _ := b.encrypt(context.Background(), []byte(`{"new":true}`))
+	if !keycustodian.IsEnveloped(enc) {
+		t.Fatal("new writes must be envelope-encrypted")
 	}
 }
 

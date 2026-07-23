@@ -3,8 +3,14 @@ package planstore
 import (
 	"bytes"
 	"context"
+	"crypto/aes"
+	"crypto/cipher"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"testing"
+
+	"github.com/dstout-devops/stratt/core/internal/keycustodian"
 )
 
 // fakeDB is an in-memory, write-once ArtifactDB — lets the crypto + content-
@@ -102,5 +108,33 @@ func TestPlanStore_MissingFailsClosed(t *testing.T) {
 func TestPlanStore_BadKeyRejected(t *testing.T) {
 	if _, err := New("tooshort", newFakeDB()); err == nil {
 		t.Fatal("a non-32-byte key must be rejected")
+	}
+}
+
+// TestPlanStore_LegacyBlobStillVerifies is the migration guarantee (ADR-0100): a plan
+// stored by the pre-envelope code (bare AES-GCM under the state key) still decrypts +
+// content-verifies through the legacy fallback — secret-bearing plans are never lost on
+// upgrade.
+func TestPlanStore_LegacyBlobStillVerifies(t *testing.T) {
+	db := newFakeDB()
+	s, _ := New(testKey, db)
+	plan := []byte(`{"resource_changes":[],"legacy":true}`)
+	sum := sha256.Sum256(plan)
+	digest := hex.EncodeToString(sum[:])
+	// Store exactly what the old encrypt() produced, directly under the content address.
+	key, _ := hex.DecodeString(testKey)
+	block, _ := aes.NewCipher(key)
+	aead, _ := cipher.NewGCM(block)
+	nonce := make([]byte, aead.NonceSize())
+	db.m[digest] = append(nonce, aead.Seal(nil, nonce, plan, nil)...)
+
+	got, err := s.GetVerified(context.Background(), digest)
+	if err != nil || !bytes.Equal(got, plan) {
+		t.Fatalf("legacy plan must decrypt + verify via fallback: %v", err)
+	}
+	// A fresh Put is envelope-encrypted (and still content-verifies).
+	d2, _ := s.Put(context.Background(), []byte(`{"new":true}`))
+	if !keycustodian.IsEnveloped(db.m[d2]) {
+		t.Fatal("new plans must be envelope-encrypted at rest")
 	}
 }
