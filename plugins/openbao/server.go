@@ -21,16 +21,18 @@ var facetNamespaces = []string{
 	"cert.identity",       // commonName, serialNumber, issuer, dnsNames
 	"cert.expiry",         // notBefore, notAfter
 	"identity.credential", // ADR-0079: cross-form credential projection (a cert IS an identity form). Single §2.1 write-owner: the cert connector.
+	"ca.config",           // ADR-0098 E2: the CA-hierarchy observation (commonName, notAfter, isCA)
 }
 
 // Config locates the CLM Source. The token is a spawn-time CredentialRef resolved
-// from the plugin's OWN broker (dev: STRATT_CLM_TOKEN); material never crosses the
+// from the plugin's OWN broker (dev: STRATT_OPENBAO_TOKEN); material never crosses the
 // core and is never echoed (§2.5, §1.8).
 type Config struct {
 	PluginID string // the authenticated channel identity the operator grant is keyed on
 	Addr     string // CLM base URL (dev: OpenBao on :8200)
 	Token    string // X-Vault-Token; read + write credential
 	Mount    string // PKI secrets-engine mount (default "pki")
+	IntMount string // intermediate-CA mount for create-intermediate (default "pki_int")
 }
 
 // Server implements the sovereign plugin port for the cert-issuer Connector — a
@@ -69,11 +71,119 @@ func (s *Server) GetManifest(context.Context, *pluginv1.GetManifestRequest) (*pl
 		// SYNCER class (the Observe registration path checks it); the cert lifecycle
 		// is the reconcile ACTUATOR verbs (ADR-0050) — a multi-role Connector.
 		Class:            pluginv1.PluginClass_PLUGIN_CLASS_SYNCER,
-		Verbs:            []pluginv1.Verb{pluginv1.Verb_VERB_OBSERVE, pluginv1.Verb_VERB_PLAN, pluginv1.Verb_VERB_APPLY, pluginv1.Verb_VERB_DESTROY},
+		Verbs:            []pluginv1.Verb{pluginv1.Verb_VERB_OBSERVE, pluginv1.Verb_VERB_PLAN, pluginv1.Verb_VERB_APPLY, pluginv1.Verb_VERB_DESTROY, pluginv1.Verb_VERB_INVOKE},
 		Capabilities:     []string{"apply.dry-run"},
 		Contracts:        contracts,
-		TombstoneSchemes: []string{"cert.serial"},
+		TombstoneSchemes: []string{"cert.serial", "pki.caSerial"},
+		// Administrative PKI Actions (ADR-0098 E2) — CA admin, NOT the retired per-cert
+		// lifecycle (that stays the reconcile Actuator verbs above). Not idempotent
+		// (create-intermediate fails closed on an existing CA; rotate-crl mutates).
+		Actions: []*pluginv1.ActionDecl{
+			{
+				Name:   actionCreateIntermediate,
+				Input:  &pluginv1.ContractRef{SchemaId: "actions/cert-issuer/create-intermediate.input"},
+				Output: &pluginv1.ContractRef{SchemaId: "actions/cert-issuer/create-intermediate.output"},
+			},
+			{
+				Name:   actionRotateCRL,
+				Input:  &pluginv1.ContractRef{SchemaId: "actions/cert-issuer/rotate-crl.input"},
+				Output: &pluginv1.ContractRef{SchemaId: "actions/cert-issuer/rotate-crl.output"},
+			},
+		},
 	}}, nil
+}
+
+// Administrative PKI Action names (ADR-0098 E2).
+const (
+	actionCreateIntermediate = "cert-issuer/create-intermediate"
+	actionRotateCRL          = "cert-issuer/rotate-crl"
+)
+
+// Invoke dispatches the administrative PKI Actions. Content-blind: an unshipped action
+// is rejected, never guessed. These are thin OpenBao /pki calls — Stratt integrates the
+// CLM, it never generates or signs certificate material in-process (ADR-0030 non-goal).
+func (s *Server) Invoke(req *pluginv1.InvokeRequest, stream grpc.ServerStreamingServer[pluginv1.InvokeResponse]) error {
+	ctx := stream.Context()
+	ca, err := s.newCA(ctx)
+	if err != nil {
+		return err
+	}
+	action := req.GetAction()
+	switch action {
+	case actionCreateIntermediate:
+		return s.invokeCreateIntermediate(ctx, req, stream, ca)
+	case actionRotateCRL:
+		return s.invokeRotateCRL(ctx, req, stream, ca)
+	default:
+		return status.Errorf(codes.InvalidArgument, "openbao: unknown action %q", action)
+	}
+}
+
+// invokeCreateIntermediate provisions an intermediate CA (fail-closed on an existing
+// one) and returns its serial as bindable output.
+func (s *Server) invokeCreateIntermediate(ctx context.Context, req *pluginv1.InvokeRequest, stream grpc.ServerStreamingServer[pluginv1.InvokeResponse], ca CA) error {
+	var p struct {
+		CommonName string `json:"commonName"`
+		TTL        string `json:"ttl"`
+	}
+	if args := req.GetArgs(); args != nil && len(args.GetBytes()) > 0 {
+		if err := json.Unmarshal(args.GetBytes(), &p); err != nil {
+			return status.Errorf(codes.InvalidArgument, "%s: invalid args: %v", actionCreateIntermediate, err)
+		}
+	}
+	if p.CommonName == "" {
+		return status.Errorf(codes.InvalidArgument, "%s requires commonName", actionCreateIntermediate)
+	}
+	intMount := s.cfg.IntMount
+	if intMount == "" {
+		intMount = "pki_int"
+	}
+	_ = s.progress(stream, req, "creating intermediate CA "+p.CommonName)
+	serial, err := ca.CreateIntermediate(ctx, intMount, p.CommonName, p.TTL)
+	if err != nil {
+		return s.terminalFail(stream, req, fmt.Errorf("%s: %w", actionCreateIntermediate, err))
+	}
+	out, _ := json.Marshal(map[string]any{"caSerial": serial})
+	return s.terminalOK(stream, req, "created intermediate CA "+serial, out, "actions/cert-issuer/create-intermediate.output")
+}
+
+// invokeRotateCRL rotates the mount's CRL.
+func (s *Server) invokeRotateCRL(ctx context.Context, req *pluginv1.InvokeRequest, stream grpc.ServerStreamingServer[pluginv1.InvokeResponse], ca CA) error {
+	_ = s.progress(stream, req, "rotating CRL")
+	if err := ca.RotateCRL(ctx); err != nil {
+		return s.terminalFail(stream, req, fmt.Errorf("%s: %w", actionRotateCRL, err))
+	}
+	out, _ := json.Marshal(map[string]any{"rotated": true})
+	return s.terminalOK(stream, req, "rotated CRL", out, "actions/cert-issuer/rotate-crl.output")
+}
+
+func (s *Server) progress(stream grpc.ServerStreamingServer[pluginv1.InvokeResponse], req *pluginv1.InvokeRequest, msg string) error {
+	return stream.Send(&pluginv1.InvokeResponse{Event: &pluginv1.TaskEvent{
+		Level: pluginv1.TaskEvent_LEVEL_INFO, Message: msg,
+		At: timestamppb.Now(), CorrelationId: req.GetEnvelope().GetCorrelationId(),
+	}})
+}
+
+func (s *Server) terminalOK(stream grpc.ServerStreamingServer[pluginv1.InvokeResponse], req *pluginv1.InvokeRequest, msg string, outputs []byte, outputContract string) error {
+	s.log.Info("pki admin action ok", "msg", msg)
+	return stream.Send(&pluginv1.InvokeResponse{
+		Event: &pluginv1.TaskEvent{
+			Level: pluginv1.TaskEvent_LEVEL_INFO, Message: msg,
+			At: timestamppb.Now(), CorrelationId: req.GetEnvelope().GetCorrelationId(), Terminal: true, Ok: true,
+		},
+		Result: &pluginv1.InvokeResult{
+			Outputs:        &pluginv1.Payload{Bytes: outputs},
+			OutputContract: &pluginv1.ContractRef{SchemaId: outputContract},
+		},
+	})
+}
+
+func (s *Server) terminalFail(stream grpc.ServerStreamingServer[pluginv1.InvokeResponse], req *pluginv1.InvokeRequest, cause error) error {
+	s.log.Error("pki admin action failed", "error", cause)
+	return stream.Send(&pluginv1.InvokeResponse{Event: &pluginv1.TaskEvent{
+		Level: pluginv1.TaskEvent_LEVEL_ERROR, Message: cause.Error(),
+		At: timestamppb.Now(), CorrelationId: req.GetEnvelope().GetCorrelationId(), Terminal: true, Ok: false,
+	}})
 }
 
 // Observe performs a full sync: the CLM has no change feed, so each cycle is an
@@ -111,15 +221,19 @@ func observe(ctx context.Context, ca CA, log *slog.Logger) ([]*pluginv1.Observed
 		if crt.Revoked {
 			continue // revoked = absent; the host tombstones any prior Entity
 		}
-		e, ok, err := normalizeCert(crt)
-		if err != nil {
+		// A leaf projects as a cert Entity; a CA projects as a `ca` Entity (ADR-0098 E2).
+		if e, ok, err := normalizeCert(crt); err != nil {
 			log.Warn("skipping cert", "serial", serial, "error", err)
 			continue
+		} else if ok {
+			out = append(out, e)
+			continue
 		}
-		if !ok {
-			continue // CA / non-leaf
+		if e, ok, err := normalizeCA(crt); err != nil {
+			log.Warn("skipping ca cert", "serial", serial, "error", err)
+		} else if ok {
+			out = append(out, e)
 		}
-		out = append(out, e)
 	}
 	return out, nil
 }

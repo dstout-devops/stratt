@@ -1,0 +1,2 @@
+{ "$schema": "https://json-schema.org/draft/2020-12/schema", "$id": "stratt:contract:actions/cert-issuer/rotate-crl.output:v1", "title": "cert-issuer/rotate-crl output",
+  "type": "object", "properties": { "rotated": {"type":"boolean"} }, "required": ["rotated"], "additionalProperties": false }

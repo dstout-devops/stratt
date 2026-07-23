@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "stratt:contract:facets/ca.config:v1",
+  "title": "ca.config Facet",
+  "description": "A certificate authority's configuration, projected by the openbao cert-issuer Syncer (ADR-0098 E2; §1.1). Metadata only (§1.2) — never private key material. Closed schema matching normalizeCA.",
+  "type": "object",
+  "properties": {
+    "commonName": { "type": "string" },
+    "notAfter": { "type": "string", "format": "date-time" },
+    "isCA": { "type": "boolean" }
+  },
+  "additionalProperties": false
+}

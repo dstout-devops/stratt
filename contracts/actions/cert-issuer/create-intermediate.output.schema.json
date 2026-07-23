@@ -1,0 +1,3 @@
+{ "$schema": "https://json-schema.org/draft/2020-12/schema", "$id": "stratt:contract:actions/cert-issuer/create-intermediate.output:v1", "title": "cert-issuer/create-intermediate output",
+  "description": "The signed intermediate CA's serial (bindable). Observable as a ca Entity once the intermediate mount is synced (multi-mount observation is a follow-up).",
+  "type": "object", "properties": { "caSerial": {"type":"string"} }, "required": ["caSerial"], "additionalProperties": false }

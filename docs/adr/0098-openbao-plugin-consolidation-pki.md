@@ -77,13 +77,23 @@ setup, NOT the retired per-cert issue/renew/revoke) + richer observation:
    re-invoke does not mint a second intermediate and report green — §1.8). Output `{caSerial}`.
 2. **Issuing roles** — NOT an Action (guardian §2.3): a named role is declarative config, so it stays
    OpenBao-administered (seeded by `openbao-bootstrap.sh`); reconcile-to-declared-role is a follow-up.
-3. **CRL / revocation observation** — the Syncer projects revocation state as a closed
-   **`cert.revocation`** Facet `{revoked, revokedAt}` on the cert Entity, and observes the CA
-   hierarchy as a **`ca`** Entity kind (identity `pki.caSerial`, Facet `ca.config {commonName,
-   type, notAfter}`) with a `signed-by` Relation to its parent. `cert-issuer/rotate-crl` rotates the
-   CRL.
+3. **CA-hierarchy observation** — the Syncer projects the mount's issuing CA as a **`ca`** Entity kind
+   (identity `pki.caSerial`, closed Facet `ca.config {commonName, notAfter, isCA}`). `cert-issuer/
+   rotate-crl` rotates the CRL (thin admin call).
 4. All new Actions are gated by CredentialRef use-check (§2.5); the plugin talks OpenBao with its own
    token (`STRATT_OPENBAO_TOKEN`), never through the core.
+
+**Deliberately NOT in E2 (conflicts surfaced during implementation):**
+- **`cert.revocation` Facet — dropped.** Revocation is already observed by the ADR-0050 **tombstone**
+  model: a revoked cert is *absent* on the next full-sync and the host tombstones it — that absence
+  IS the revocation signal. Retaining revoked certs with a `{revoked}` Facet would *contradict* the
+  Destroy-tombstones-cert model; the audit trail lives in Run history + Findings/Evidence (§7), not a
+  retained graph Entity.
+- **`signed-by` Relation + intermediate observation — deferred.** An intermediate lives in a *separate*
+  mount (`pki_int`) the single-mount Syncer does not enumerate, and a `pki.caSerial` Relation needs the
+  parent's serial the child cert does not carry. Multi-mount CA-graph observation (root→intermediate
+  `signed-by`) is a named follow-up; `create-intermediate` returns the `caSerial` as bindable output
+  meanwhile.
 
 ## Charter alignment
 

@@ -1,10 +1,11 @@
-// Package openbao is the cert-issuer Connector plugin: the Vault-compatible
-// PKI content-expertise that used to live in core/internal/connectors/certissuer
-// (the Syncer) and core/internal/actions/certissuer (the issue/renew/revoke
-// Actions), now behind the sovereign plugin port (ADR-0046). It maps issued X.509
-// certs to core-legible ObservedEntity wire values and runs the three write ops;
-// the core-side host governs what it may write (ownership, identity gating, Run
-// provenance). The plugin holds no graph write path (§1.2).
+// Package openbao is the tool-named home for the OpenBao-backed surfaces (ADR-0098).
+// It implements the NEUTRAL cert-issuer Contract (§1.5): the Vault-compatible PKI
+// content-expertise behind the sovereign plugin port (ADR-0046) — a Syncer (Observe
+// issued certs + the CA hierarchy), a reconcile Actuator (Plan/Apply/Destroy the cert
+// lifecycle via born-on-target CSR/sign, ADR-0050), and administrative PKI Actions
+// (create-intermediate, rotate-crl). It maps X.509 certs to core-legible
+// ObservedEntity wire values; the core-side host governs what it may write. The plugin
+// holds no graph write path (§1.2).
 package openbao
 
 import (
@@ -94,5 +95,38 @@ func normalizeCert(c Cert) (entity *pluginv1.ObservedEntity, ok bool, err error)
 		IdentityKeys: identity,
 		Labels:       labels,
 		Facets:       facets,
+	}, true, nil
+}
+
+// normalizeCA maps a CA certificate onto a `ca` Entity — the CA-hierarchy observation
+// (ADR-0098 E2). Identity is pki.caSerial; the closed ca.config Facet carries the CA's
+// commonName / notAfter / isCA. ok=false (no error) for a non-CA cert (a leaf goes
+// through normalizeCert instead). Pure content-expertise; no material (§2.5).
+func normalizeCA(c Cert) (*pluginv1.ObservedEntity, bool, error) {
+	block, _ := pem.Decode([]byte(c.PEM))
+	if block == nil {
+		return nil, false, fmt.Errorf("openbao: ca serial %s: no PEM block", c.Serial)
+	}
+	crt, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		return nil, false, fmt.Errorf("openbao: ca serial %s: parse: %w", c.Serial, err)
+	}
+	if !crt.IsCA {
+		return nil, false, nil // a leaf — normalizeCert handles it
+	}
+	caConfig := map[string]any{
+		"commonName": crt.Subject.CommonName,
+		"notAfter":   crt.NotAfter.UTC().Format(time.RFC3339),
+		"isCA":       true,
+	}
+	raw, err := json.Marshal(caConfig)
+	if err != nil {
+		return nil, false, fmt.Errorf("openbao: marshal ca.config %s: %w", c.Serial, err)
+	}
+	return &pluginv1.ObservedEntity{
+		Kind:         "ca",
+		IdentityKeys: map[string]string{"pki.caSerial": c.Serial},
+		Labels:       map[string]string{"cert.commonName": crt.Subject.CommonName},
+		Facets:       map[string][]byte{"ca.config": raw},
 	}, true, nil
 }

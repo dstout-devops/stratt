@@ -1,0 +1,4 @@
+{ "$schema": "https://json-schema.org/draft/2020-12/schema", "$id": "stratt:contract:actions/cert-issuer/create-intermediate.input:v1", "title": "cert-issuer/create-intermediate input",
+  "description": "Provision an intermediate CA signed under the root (ADR-0098 E2). Thin OpenBao /pki calls; Stratt never signs in-process. Fails closed if an intermediate CA already exists. Credentials inject as a CredentialRef (§2.5).",
+  "type": "object", "properties": { "commonName": {"type":"string"}, "ttl": {"type":"string","description":"intermediate validity (e.g. 43800h); omit for default"} },
+  "required": ["commonName"], "additionalProperties": false }

@@ -25,6 +25,7 @@ func main() {
 		Addr:     env("STRATT_OPENBAO_ADDR", "http://localhost:8200"),
 		Token:    os.Getenv("STRATT_OPENBAO_TOKEN"),
 		Mount:    env("STRATT_OPENBAO_MOUNT", "pki"),
+		IntMount: env("STRATT_OPENBAO_INT_MOUNT", "pki_int"),
 	}
 	addr := env("STRATT_PLUGIN_LISTEN", ":9090")
 

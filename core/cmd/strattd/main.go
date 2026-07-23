@@ -1275,10 +1275,10 @@ func run(ctx context.Context, log *slog.Logger) error {
 			PluginIdentity:   env("STRATT_OPENBAO_PLUGIN_ID", "openbao"),
 			Tier:             pluginhost.Tier(env("STRATT_OPENBAO_TIER", "trusted")),
 			Source:           types.Source{Kind: "openbao", Name: sourceName, Endpoint: os.Getenv("STRATT_OPENBAO_ADDR")},
-			FacetNamespaces:  []string{"cert.identity", "cert.expiry"},
+			FacetNamespaces:  []string{"cert.identity", "cert.expiry", "identity.credential", "ca.config"},
 			LabelKeys:        []string{"cert.commonName"},
-			IdentitySchemes:  []string{"cert.serial"},
-			TombstoneSchemes: []string{"cert.serial"},
+			IdentitySchemes:  []string{"cert.serial", "pki.caSerial"},
+			TombstoneSchemes: []string{"cert.serial", "pki.caSerial"},
 		}
 		host := pluginhost.New(store, pluginv1.NewPluginServiceClient(conn), grant, log)
 		controllers = append(controllers, homeSupervise(sourceName, host.Register, func(cctx context.Context) error {
@@ -1289,7 +1289,15 @@ func run(ctx context.Context, log *slog.Logger) error {
 		if err := registerPluginActuator("cert-issuer", host, true, grant, nil); err != nil {
 			return err
 		}
-		log.Info("openbao plugin ready (cert-issuer Syncer + reconcile Actuator)", "addr", addr)
+		// Administrative PKI Actions (ADR-0098 E2): CA admin, NOT the retired per-cert
+		// lifecycle (that stays the reconcile Actuator above). Not DryRunnable (thin
+		// OpenBao /pki calls; create-intermediate fails closed on an existing CA).
+		for _, name := range []string{"cert-issuer/create-intermediate", "cert-issuer/rotate-crl"} {
+			if err := registerPluginAction(name, host, false); err != nil {
+				return err
+			}
+		}
+		log.Info("openbao plugin ready (cert-issuer Syncer + reconcile Actuator + PKI admin Actions)", "addr", addr)
 	} else {
 		log.Info("no openbao plugin configured (STRATT_OPENBAO_PLUGIN_ADDR empty); cert syncer idle")
 	}

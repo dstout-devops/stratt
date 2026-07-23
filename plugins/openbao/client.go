@@ -29,6 +29,17 @@ type CA interface {
 	// Current returns the live cert observed for a commonName (Plan's diff input).
 	Current(ctx context.Context, commonName string) (*CurrentCert, error)
 	Revoke(ctx context.Context, serial string) (int64, error)
+	// GetCA reads the issuing CA cert of the mount (GET /cert/ca) for CA-hierarchy
+	// observation (ADR-0098 E2); ok=false when the mount has no CA yet.
+	GetCA(ctx context.Context) (pem string, ok bool, err error)
+	// RotateCRL rotates the mount's CRL (POST /crl/rotate) — a thin admin call.
+	RotateCRL(ctx context.Context) error
+	// CreateIntermediate provisions an intermediate CA in intMount, signed under this
+	// mount's root, and returns the signed intermediate's serial. Thin OpenBao /pki
+	// calls only (never in-process key generation/signing — Stratt is not a CA,
+	// ADR-0030). FAILS CLOSED if intMount already has an issuing CA (converge-to-one,
+	// never double-mint-reported-green — ADR-0098 §E2/§1.8).
+	CreateIntermediate(ctx context.Context, intMount, commonName, ttl string) (caSerial string, err error)
 }
 
 // CurrentCert is the live (non-revoked) leaf observed for a commonName — the state
@@ -152,11 +163,12 @@ func (c *Client) ListSerials(ctx context.Context) ([]string, error) {
 	return d.Keys, nil
 }
 
-// Cert is one read certificate: its PEM plus whether it is revoked.
+// Cert is one read certificate: its PEM plus revocation state.
 type Cert struct {
-	Serial  string
-	PEM     string
-	Revoked bool
+	Serial    string
+	PEM       string
+	Revoked   bool
+	RevokedAt time.Time // zero when live; the revocation instant otherwise
 }
 
 // GetCert fetches one cert by serial (colon-hex).
@@ -169,7 +181,11 @@ func (c *Client) GetCert(ctx context.Context, serial string) (Cert, error) {
 	if err := json.Unmarshal(data, &d); err != nil {
 		return Cert{}, fmt.Errorf("clm: decode cert %s: %w", serial, err)
 	}
-	return Cert{Serial: serial, PEM: d.Certificate, Revoked: d.RevocationTime != 0}, nil
+	cert := Cert{Serial: serial, PEM: d.Certificate, Revoked: d.RevocationTime != 0}
+	if d.RevocationTime != 0 {
+		cert.RevokedAt = time.Unix(d.RevocationTime, 0).UTC()
+	}
+	return cert, nil
 }
 
 // Issued is the result of issuing a leaf certificate — serial, PEM, and the

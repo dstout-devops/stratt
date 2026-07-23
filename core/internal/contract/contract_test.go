@@ -88,8 +88,8 @@ func TestPinsAreStable(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(all) != 90 {
-		t.Fatalf("expected 90 embedded documents, got %d", len(all))
+	if len(all) != 95 {
+		t.Fatalf("expected 95 embedded documents, got %d", len(all))
 	}
 	versions := map[string]int{}
 	for _, c := range all {

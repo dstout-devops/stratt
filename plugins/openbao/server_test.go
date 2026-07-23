@@ -9,6 +9,7 @@ import (
 	"crypto/x509/pkix"
 	"encoding/json"
 	"encoding/pem"
+	"fmt"
 	"io"
 	"log/slog"
 	"math/big"
@@ -33,6 +34,12 @@ type fakeCA struct {
 	signedCSR  string   // the CSR passed to Sign (proves born-on-target)
 	revoked    []string // serials passed to Revoke
 	revocation int64    // what Revoke returns
+	// CA-admin (ADR-0098 E2).
+	caPEM                   string // GetCA returns this (ok = caPEM != "")
+	rotated                 bool   // set by RotateCRL
+	intExists               bool   // when true, CreateIntermediate fails closed
+	intSerial               string // serial CreateIntermediate returns
+	lastIntMount, lastIntCN string
 }
 
 func (f *fakeCA) ListSerials(context.Context) ([]string, error) { return f.serials, nil }
@@ -51,6 +58,23 @@ func (f *fakeCA) Sign(_ context.Context, _, csrPEM, _ string) (Issued, error) {
 func (f *fakeCA) Revoke(_ context.Context, serial string) (int64, error) {
 	f.revoked = append(f.revoked, serial)
 	return f.revocation, nil
+}
+
+func (f *fakeCA) GetCA(context.Context) (string, bool, error) {
+	return f.caPEM, f.caPEM != "", nil
+}
+
+func (f *fakeCA) RotateCRL(context.Context) error {
+	f.rotated = true
+	return nil
+}
+
+func (f *fakeCA) CreateIntermediate(_ context.Context, intMount, cn, _ string) (string, error) {
+	f.lastIntMount, f.lastIntCN = intMount, cn
+	if f.intExists {
+		return "", fmt.Errorf("openbao: intermediate mount %q already has an issuing CA — refusing (fail-closed)", intMount)
+	}
+	return f.intSerial, nil
 }
 
 // captureStream is a fake grpc.ServerStreamingServer[T] recording sent messages —
@@ -142,12 +166,22 @@ func TestObserveEmitsCerts(t *testing.T) {
 	if !resp.GetFullSyncComplete() {
 		t.Error("full sync must set full_sync_complete for the tombstone boundary")
 	}
-	if len(resp.GetEntities()) != 1 {
-		t.Fatalf("expected one live leaf cert (CA + revoked skipped), got %d", len(resp.GetEntities()))
+	// The live leaf projects as a cert Entity AND the CA projects as a `ca` Entity
+	// (ADR-0098 E2); the revoked leaf is skipped (tombstoned).
+	byKind := map[string]*pluginv1.ObservedEntity{}
+	for _, ent := range resp.GetEntities() {
+		byKind[ent.GetKind()] = ent
 	}
-	e := resp.GetEntities()[0]
-	if e.GetKind() != "cert" {
-		t.Errorf("kind = %q, want cert", e.GetKind())
+	if len(resp.GetEntities()) != 2 {
+		t.Fatalf("expected the live leaf (cert) + the CA (ca); revoked skipped, got %d", len(resp.GetEntities()))
+	}
+	caEnt := byKind["ca"]
+	if caEnt == nil || caEnt.GetIdentityKeys()["pki.caSerial"] != "ca01" || len(caEnt.GetFacets()["ca.config"]) == 0 {
+		t.Fatalf("CA must project as a ca Entity with ca.config: %+v", caEnt)
+	}
+	e := byKind["cert"]
+	if e == nil {
+		t.Fatal("missing the leaf cert Entity")
 	}
 	if e.GetIdentityKeys()["cert.serial"] != "2a:9a" {
 		t.Errorf("identity: %v", e.GetIdentityKeys())
@@ -309,5 +343,74 @@ func TestGetManifest_ActuatorVerbs(t *testing.T) {
 	}
 	if !verbs[pluginv1.Verb_VERB_PLAN] || !verbs[pluginv1.Verb_VERB_APPLY] || !verbs[pluginv1.Verb_VERB_DESTROY] || !verbs[pluginv1.Verb_VERB_OBSERVE] {
 		t.Fatalf("cert-issuer must advertise OBSERVE+PLAN+APPLY+DESTROY, got %v", m.GetManifest().GetVerbs())
+	}
+	// ADR-0098 E2: also INVOKE for the PKI admin Actions.
+	if !verbs[pluginv1.Verb_VERB_INVOKE] {
+		t.Error("E2 PKI admin Actions need VERB_INVOKE")
+	}
+	names := map[string]bool{}
+	for _, a := range m.GetManifest().GetActions() {
+		names[a.GetName()] = true
+	}
+	if !names["cert-issuer/create-intermediate"] || !names["cert-issuer/rotate-crl"] {
+		t.Errorf("missing PKI admin ActionDecls: %v", names)
+	}
+}
+
+// invokeE2 runs one admin Action and returns the terminal response.
+func invokeE2(t *testing.T, f *fakeCA, action string, args any) *pluginv1.InvokeResponse {
+	t.Helper()
+	raw, _ := json.Marshal(args)
+	stream := &captureStream[pluginv1.InvokeResponse]{ctx: context.Background()}
+	if err := newServer(t, f).Invoke(&pluginv1.InvokeRequest{Action: action, Args: &pluginv1.Payload{Bytes: raw}}, stream); err != nil {
+		t.Fatalf("%s transport: %v", action, err)
+	}
+	return stream.sent[len(stream.sent)-1]
+}
+
+// TestInvokeCreateIntermediate proves the CA-admin Action: on success it returns the
+// intermediate's serial; when a CA already exists it FAILS CLOSED (ADR-0098 §1.8 —
+// never double-mint reported green).
+func TestInvokeCreateIntermediate(t *testing.T) {
+	f := &fakeCA{intSerial: "int-1a2b"}
+	term := invokeE2(t, f, "cert-issuer/create-intermediate", map[string]any{"commonName": "Stratt Dev Intermediate"})
+	if !term.GetEvent().GetOk() {
+		t.Fatalf("create-intermediate should succeed: %q", term.GetEvent().GetMessage())
+	}
+	var out map[string]any
+	_ = json.Unmarshal(term.GetResult().GetOutputs().GetBytes(), &out)
+	if out["caSerial"] != "int-1a2b" || f.lastIntCN != "Stratt Dev Intermediate" {
+		t.Fatalf("create-intermediate: out=%v cn=%q", out, f.lastIntCN)
+	}
+	// Fail-closed when a CA already exists.
+	fx := &fakeCA{intExists: true}
+	term = invokeE2(t, fx, "cert-issuer/create-intermediate", map[string]any{"commonName": "X"})
+	if term.GetEvent().GetOk() {
+		t.Fatal("create-intermediate must FAIL CLOSED when an issuing CA already exists")
+	}
+}
+
+// TestInvokeCreateIntermediateRequiresCN — commonName is required.
+func TestInvokeCreateIntermediateRequiresCN(t *testing.T) {
+	stream := &captureStream[pluginv1.InvokeResponse]{ctx: context.Background()}
+	if err := newServer(t, &fakeCA{}).Invoke(&pluginv1.InvokeRequest{Action: "cert-issuer/create-intermediate"}, stream); err == nil {
+		t.Fatal("create-intermediate without commonName must be rejected")
+	}
+}
+
+// TestInvokeRotateCRL proves the thin CRL rotation Action.
+func TestInvokeRotateCRL(t *testing.T) {
+	f := &fakeCA{}
+	term := invokeE2(t, f, "cert-issuer/rotate-crl", map[string]any{})
+	if !term.GetEvent().GetOk() || !f.rotated {
+		t.Fatalf("rotate-crl must call RotateCRL and succeed: ok=%v rotated=%v", term.GetEvent().GetOk(), f.rotated)
+	}
+}
+
+// TestInvokeUnknownActionRejected — a content-blind selector naming no shipped Action.
+func TestInvokeUnknownActionRejected(t *testing.T) {
+	stream := &captureStream[pluginv1.InvokeResponse]{ctx: context.Background()}
+	if err := newServer(t, &fakeCA{}).Invoke(&pluginv1.InvokeRequest{Action: "cert-issuer/delete-everything"}, stream); err == nil {
+		t.Fatal("unknown action must be rejected")
 	}
 }
