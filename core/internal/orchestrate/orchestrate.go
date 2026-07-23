@@ -15,6 +15,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"go.temporal.io/sdk/activity"
@@ -401,6 +402,114 @@ type PluginActuator struct {
 // rather than a long-lived gRPC plugin.
 func (p PluginActuator) jobTransport() bool { return len(p.JobCommand) > 0 }
 
+// PluginRegistry is the concurrency-safe routing table of plugin-provided Actuators and
+// Connector Actions over the sovereign port. It is the single home of the §2.4
+// exclusive-name guarantee: a name claimed by two plugins, or colliding with an in-tree
+// Actuator/Action, is an error on Register. The BOOT-env wiring crashes on that error;
+// the runtime Connector registry (ADR-0103) downgrades it to a logged reject — but the
+// check lives here, once. Boot and the runtime registry both write through it; the
+// Temporal worker (which runs on every replica) reads through it. Before this type the
+// two maps were shared with the worker with NO synchronization — a data race the instant
+// anything wrote at runtime; every access now takes the RWMutex.
+type PluginRegistry struct {
+	mu             sync.RWMutex
+	actuators      map[string]PluginActuator
+	actions        map[string]PluginAction
+	inTreeActuator func(string) bool // reports an in-tree Actuator name (§2.4 collision)
+	inTreeAction   func(string) bool // reports an in-tree Action name (§2.4 collision)
+}
+
+// NewPluginRegistry builds an empty registry. The two predicates report whether a name is
+// already claimed by an in-tree Actuator/Action — passed as funcs so the registry never
+// imports the in-tree maps. Either may be nil (no in-tree collision check, e.g. tests).
+func NewPluginRegistry(inTreeActuator, inTreeAction func(string) bool) *PluginRegistry {
+	return &PluginRegistry{
+		actuators:      map[string]PluginActuator{},
+		actions:        map[string]PluginAction{},
+		inTreeActuator: inTreeActuator,
+		inTreeAction:   inTreeAction,
+	}
+}
+
+// NewPluginRegistryWith seeds a registry from literal maps (test convenience; no in-tree
+// collision predicates).
+func NewPluginRegistryWith(actuators map[string]PluginActuator, actions map[string]PluginAction) *PluginRegistry {
+	r := NewPluginRegistry(nil, nil)
+	if actuators != nil {
+		r.actuators = actuators
+	}
+	if actions != nil {
+		r.actions = actions
+	}
+	return r
+}
+
+// Actuator/Action route a name to its plugin provider (RLock — the worker's read path).
+// A nil registry reads as empty (matches the old nil-map behavior for an Activities with
+// no plugins wired — e.g. in-tree-only tests).
+func (r *PluginRegistry) Actuator(name string) (PluginActuator, bool) {
+	if r == nil {
+		return PluginActuator{}, false
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	p, ok := r.actuators[name]
+	return p, ok
+}
+
+func (r *PluginRegistry) Action(name string) (PluginAction, bool) {
+	if r == nil {
+		return PluginAction{}, false
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	p, ok := r.actions[name]
+	return p, ok
+}
+
+// RegisterActuator adds a plugin Actuator, enforcing §2.4 exclusivity (dup across plugins
+// or collision with an in-tree Actuator → error).
+func (r *PluginRegistry) RegisterActuator(name string, p PluginActuator) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if _, dup := r.actuators[name]; dup {
+		return fmt.Errorf("plugin actuator %q claimed by two plugins (§2.4 exclusive)", name)
+	}
+	if r.inTreeActuator != nil && r.inTreeActuator(name) {
+		return fmt.Errorf("plugin actuator %q collides with an in-tree Actuator (§2.4 exclusive)", name)
+	}
+	r.actuators[name] = p
+	return nil
+}
+
+// RegisterAction adds a plugin Connector Action, enforcing §2.4 exclusivity.
+func (r *PluginRegistry) RegisterAction(name string, p PluginAction) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if _, dup := r.actions[name]; dup {
+		return fmt.Errorf("plugin action %q claimed by two plugins (§2.4 exclusive)", name)
+	}
+	if r.inTreeAction != nil && r.inTreeAction(name) {
+		return fmt.Errorf("plugin action %q collides with an in-tree Action (§2.4 exclusive)", name)
+	}
+	r.actions[name] = p
+	return nil
+}
+
+// DeregisterActuator/DeregisterAction remove a runtime-added entry (ADR-0103 Connector
+// disable). Idempotent — removing an absent name is a no-op.
+func (r *PluginRegistry) DeregisterActuator(name string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	delete(r.actuators, name)
+}
+
+func (r *PluginRegistry) DeregisterAction(name string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	delete(r.actions, name)
+}
+
 type Activities struct {
 	Store      *graph.Store
 	Dispatcher *dispatch.Dispatcher
@@ -424,14 +533,12 @@ type Activities struct {
 	// Actions is the registry of in-tree Connector Actions by namespaced name
 	// (§2.2, ADR-0031) — the targetless typed-operation seam.
 	Actions actions.Registry
-	// PluginActions routes a Connector Action name to the plugin that provides it
-	// over the sovereign port (ADR-0047/0048). Exclusive with the in-tree registry
-	// and across plugins — main.go fails registration on a collision (§2.4).
-	PluginActions map[string]PluginAction
-	// PluginActuators routes an Actuator name to the plugin that provides its
-	// Plan/Apply/Destroy verbs over the port (ADR-0047/0048). Exclusive with the
-	// in-tree Actuators registry and across plugins — main.go fails on a collision.
-	PluginActuators map[string]PluginActuator
+	// Plugins is the concurrency-safe routing table of plugin-provided Actuators and
+	// Connector Actions over the sovereign port (ADR-0047/0048). Boot-env wiring and the
+	// runtime Connector registry (ADR-0103) register through it; the worker reads through
+	// it. Exclusivity with the in-tree registries + across plugins is enforced on Register
+	// (§2.4). Replaces the previously-unsynchronized PluginActions/PluginActuators maps.
+	Plugins *PluginRegistry
 	// Evidence seals Finding audit bundles into the object store (§2.4,
 	// ADR-0029). Nil when no object store is configured — Findings then open
 	// unsealed (a logged no-op), like the opentofu actuator is gated on a state
@@ -774,7 +881,7 @@ func (a *Activities) Execute(ctx context.Context, in RunInput, slice int, site s
 	// The authz chokepoint is the runner-on-View grant (RunAgainstView, ADR-0028)
 	// already enforced BEFORE this activity — NOT the Action path's credential
 	// use-check — so a plugin actuation Step may carry zero creds (guardian #4).
-	if pa, ok := a.PluginActuators[name]; ok {
+	if pa, ok := a.Plugins.Actuator(name); ok {
 		// Admission lint (ADR-0054 MF-2): a declared FacetWriteScope must be a SUBSET
 		// of the actuator's registered facet grant. An out-of-grant entry can never
 		// write back — the one governor's grant∩scope AND would silently drop it — so
@@ -869,7 +976,7 @@ func firstOutsideGrant(scope, grant []string) string {
 // actuator supports it (the in-tree pod Actuators do not produce a pinnable plan).
 // Returns the digest; a plan that produced none (empty converge) returns "".
 func (a *Activities) PlanStep(ctx context.Context, in RunInput) (string, error) {
-	pa, ok := a.PluginActuators[in.Actuator]
+	pa, ok := a.Plugins.Actuator(in.Actuator)
 	if !ok {
 		return "", temporal.NewNonRetryableApplicationError(
 			fmt.Sprintf("actuator %q does not support the Plan verb (not a plugin actuator)", in.Actuator), "PlanUnsupported", nil)

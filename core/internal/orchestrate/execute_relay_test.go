@@ -80,9 +80,9 @@ func TestExecutePlugin_RemoteSiteViaRelay(t *testing.T) {
 	a := &Activities{
 		Log:       slog.New(slog.NewTextHandler(io.Discard, nil)),
 		RelayDial: func(string, string) siterelay.Dialer { return dialer },
-		PluginActuators: map[string]PluginActuator{
+		Plugins: NewPluginRegistryWith(map[string]PluginActuator{
 			"tofu": {Grant: grant, DryRunnable: true}, // no hub-local Host — Site-only
-		},
+		}, nil),
 	}
 	// Execute uses activity.RecordHeartbeat/GetLogger → run it in a Temporal test
 	// activity env (the established orchestrate-test pattern).
@@ -111,7 +111,7 @@ func TestExecutePlugin_RemoteSiteViaRelay(t *testing.T) {
 // TestExecutePlugin_RemoteSiteNoRelayFailsVisibly proves a remote-Site plugin Step
 // with no relay configured fails VISIBLY, never silently hub-local (§1.8).
 func TestExecutePlugin_RemoteSiteNoRelayFailsVisibly(t *testing.T) {
-	a := &Activities{PluginActuators: map[string]PluginActuator{"tofu": {DryRunnable: true}}}
+	a := &Activities{Plugins: NewPluginRegistryWith(map[string]PluginActuator{"tofu": {DryRunnable: true}}, nil)}
 	_, err := a.Execute(context.Background(), RunInput{Actuator: "tofu"}, 0, "edge-1", ResolvedTargets{}, nil)
 	if err == nil || !strings.Contains(err.Error(), "no plugin relay is configured") {
 		t.Fatalf("remote-Site plugin with no relay must fail visibly, got %v", err)
@@ -132,9 +132,9 @@ func TestExecutePlugin_SiteManifestMismatchRejected(t *testing.T) {
 	grant := pluginhost.Grant{PluginIdentity: "vcenter-dev", Tier: pluginhost.TierTrusted,
 		Source: types.Source{Kind: "vcenter", Name: "vcenter-dev"}, IdentitySchemes: []string{"vcenter.uuid"}}
 	a := &Activities{
-		Log:             slog.New(slog.NewTextHandler(io.Discard, nil)),
-		RelayDial:       func(string, string) siterelay.Dialer { return dialer },
-		PluginActuators: map[string]PluginActuator{"tofu": {Grant: grant, DryRunnable: true}},
+		Log:       slog.New(slog.NewTextHandler(io.Discard, nil)),
+		RelayDial: func(string, string) siterelay.Dialer { return dialer },
+		Plugins:   NewPluginRegistryWith(map[string]PluginActuator{"tofu": {Grant: grant, DryRunnable: true}}, nil),
 	}
 	ts := &testsuite.WorkflowTestSuite{}
 	env := ts.NewTestActivityEnvironment()

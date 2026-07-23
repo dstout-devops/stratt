@@ -493,35 +493,23 @@ func run(ctx context.Context, log *slog.Logger) error {
 	}
 	log.Info("action registry ready", "actions", len(actionRegistry))
 
-	// ── Plugin-provided Actions over the port (ADR-0047/0048 cutover) ────────
-	// A plugin Action name is EXCLUSIVE with the in-tree registry and across
-	// plugins (§2.4): a collision fails startup, never silently overwrites.
-	pluginActions := map[string]orchestrate.PluginAction{}
+	// ── Plugin-provided Actuators + Actions over the port (ADR-0047/0048) ────
+	// The concurrency-safe routing table shared with the Temporal worker (which runs
+	// on every replica) and, at runtime, the Connector/Actuator registry (ADR-0103).
+	// It owns the §2.4 exclusive-name check (dup across plugins OR collision with an
+	// in-tree Actuator/Action). At boot a collision is fatal — the register* closures
+	// propagate the error and crash-loud; the runtime registry downgrades it to a reject.
+	plugins := orchestrate.NewPluginRegistry(
+		func(name string) bool { _, ok := registry[name]; return ok },       // in-tree Actuator
+		func(name string) bool { _, ok := actionRegistry[name]; return ok }, // in-tree Action
+	)
 	registerPluginAction := func(name string, host *pluginhost.Host, dryRunnable bool) error {
-		if _, dup := pluginActions[name]; dup {
-			return fmt.Errorf("plugin action %q claimed by two plugins (§2.4 exclusive)", name)
-		}
-		if _, inTree := actionRegistry[name]; inTree {
-			return fmt.Errorf("plugin action %q collides with an in-tree Action (§2.4 exclusive)", name)
-		}
-		pluginActions[name] = orchestrate.PluginAction{Host: host, DryRunnable: dryRunnable}
-		return nil
+		return plugins.RegisterAction(name, orchestrate.PluginAction{Host: host, DryRunnable: dryRunnable})
 	}
-
-	// A plugin Actuator name is EXCLUSIVE with the in-tree Actuator registry and
-	// across plugins (§2.4): a collision fails startup, never silently overwrites.
-	pluginActuators := map[string]orchestrate.PluginActuator{}
 	// grant + plans travel with the actuator so Execute can build a Site-backed host
 	// with identical governance (the grant never leaves the hub, ADR-0049 V1).
 	registerPluginActuator := func(name string, host *pluginhost.Host, dryRunnable bool, grant pluginhost.Grant, plans *planstore.Store) error {
-		if _, dup := pluginActuators[name]; dup {
-			return fmt.Errorf("plugin actuator %q claimed by two plugins (§2.4 exclusive)", name)
-		}
-		if _, inTree := registry[name]; inTree {
-			return fmt.Errorf("plugin actuator %q collides with an in-tree Actuator (§2.4 exclusive)", name)
-		}
-		pluginActuators[name] = orchestrate.PluginActuator{Host: host, DryRunnable: dryRunnable, Grant: grant, PlanStore: plans}
-		return nil
+		return plugins.RegisterActuator(name, orchestrate.PluginActuator{Host: host, DryRunnable: dryRunnable, Grant: grant, PlanStore: plans})
 	}
 
 	// Ansible EE-Job (subprocess) transport (ADR-0051): the flagship Actuator over
@@ -548,13 +536,12 @@ func run(ctx context.Context, log *slog.Logger) error {
 			},
 			IdentitySchemes: []string{"host.name"},
 		}
-		if _, dup := pluginActuators["ansible"]; dup {
-			return fmt.Errorf("ansible EE-Job actuator collides with a registered plugin actuator (§2.4 exclusive)")
-		}
 		host := pluginhost.New(store, nil, grant, log) // nil client: the Job is the transport; govern uses only the grant
-		pluginActuators["ansible"] = orchestrate.PluginActuator{
+		if err := plugins.RegisterActuator("ansible", orchestrate.PluginActuator{
 			Host: host, DryRunnable: true, Grant: grant,
 			JobCommand: []string{env("STRATT_ANSIBLE_SHIM", "stratt-ansible")},
+		}); err != nil {
+			return err
 		}
 		log.Info("ansible EE-Job actuator registered (ADR-0051 subprocess transport)", "shim", env("STRATT_ANSIBLE_SHIM", "stratt-ansible"))
 	}
@@ -571,13 +558,12 @@ func run(ctx context.Context, log *slog.Logger) error {
 			Tier:           pluginhost.TierTrusted,
 			Source:         types.Source{Kind: "script", Name: env("STRATT_SCRIPT_SOURCE_NAME", "script")},
 		}
-		if _, dup := pluginActuators["script"]; dup {
-			return fmt.Errorf("script EE-Job actuator collides with a registered plugin actuator (§2.4 exclusive)")
-		}
 		host := pluginhost.New(store, nil, grant, log)
-		pluginActuators["script"] = orchestrate.PluginActuator{
+		if err := plugins.RegisterActuator("script", orchestrate.PluginActuator{
 			Host: host, DryRunnable: false, Grant: grant,
 			JobCommand: []string{env("STRATT_SCRIPT_SHIM", "stratt-script")},
+		}); err != nil {
+			return err
 		}
 		log.Info("script EE-Job actuator registered (ADR-0046 subprocess transport)", "shim", env("STRATT_SCRIPT_SHIM", "stratt-script"))
 	}
@@ -711,14 +697,13 @@ func run(ctx context.Context, log *slog.Logger) error {
 			Tier:           pluginhost.TierTrusted,
 			Source:         types.Source{Kind: "mcp", Name: "mcp"},
 		}
-		if _, dup := pluginActuators["mcp"]; dup {
-			return fmt.Errorf("mcp actuator collides with a registered plugin actuator (§2.4 exclusive)")
-		}
 		host := pluginhost.New(store, nil, grant, log)
-		pluginActuators["mcp"] = orchestrate.PluginActuator{
+		if err := plugins.RegisterActuator("mcp", orchestrate.PluginActuator{
 			Host: host, DryRunnable: false, Grant: grant, MCP: true,
 			JobCommand: []string{env("STRATT_MCP_SHIM", "stratt-mcp")},
 			Image:      env("STRATT_EE_MCP_IMAGE", "stratt-ee-mcp:dev"),
+		}); err != nil {
+			return err
 		}
 		log.Info("mcp EE-Job actuator registered (ADR-0053 generic MCP transport)", "eeImage", env("STRATT_EE_MCP_IMAGE", "stratt-ee-mcp:dev"))
 	}
@@ -937,7 +922,7 @@ func run(ctx context.Context, log *slog.Logger) error {
 		decider = policy.NewExecCommand(engine, cmd)
 		log.Info("policy engine: external subprocess (ADR-0074)", "engine", engine, "cmd", cmd)
 	}
-	w.RegisterActivity(&orchestrate.Activities{Store: store, Dispatcher: dispatcher, Bus: bus, Authz: authorizer, Decider: decider, Log: log, RelayDial: relayDial, Actuators: registry, Actions: actionRegistry, PluginActions: pluginActions, PluginActuators: pluginActuators, Evidence: evidence, Sites: siteGateway, Peers: peerClient})
+	w.RegisterActivity(&orchestrate.Activities{Store: store, Dispatcher: dispatcher, Bus: bus, Authz: authorizer, Decider: decider, Log: log, RelayDial: relayDial, Actuators: registry, Actions: actionRegistry, Plugins: plugins, Evidence: evidence, Sites: siteGateway, Peers: peerClient})
 	if err := w.Start(); err != nil {
 		return fmt.Errorf("temporal worker: %w", err)
 	}

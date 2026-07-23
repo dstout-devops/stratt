@@ -17,7 +17,7 @@ import (
 func TestExecutePlugin_DryRunRefusedCoreSide(t *testing.T) {
 	discard := slog.New(slog.NewTextHandler(io.Discard, nil))
 	host := pluginhost.New(nil, nil, pluginhost.Grant{Source: types.Source{Name: "opentofu"}}, discard)
-	a := &Activities{PluginActuators: map[string]PluginActuator{"opentofu": {Host: host, DryRunnable: false}}}
+	a := &Activities{Plugins: NewPluginRegistryWith(map[string]PluginActuator{"opentofu": {Host: host, DryRunnable: false}}, nil)}
 	_, err := a.Execute(context.Background(), RunInput{Actuator: "opentofu", DryRun: true}, 0, "", ResolvedTargets{}, nil)
 	if err == nil || !strings.Contains(err.Error(), "does not support dry-run") {
 		t.Fatalf("non-dry-runnable plugin actuator must refuse dry-run core-side, got %v", err)
@@ -33,7 +33,7 @@ func TestExecutePlugin_DryRunRefusedCoreSide(t *testing.T) {
 func TestExecutePlugin_ZeroCredsNotUngated(t *testing.T) {
 	discard := slog.New(slog.NewTextHandler(io.Discard, nil))
 	host := pluginhost.New(nil, nil, pluginhost.Grant{Source: types.Source{Name: "opentofu"}}, discard)
-	a := &Activities{PluginActuators: map[string]PluginActuator{"opentofu": {Host: host, DryRunnable: true}}}
+	a := &Activities{Plugins: NewPluginRegistryWith(map[string]PluginActuator{"opentofu": {Host: host, DryRunnable: true}}, nil)}
 	_, err := a.Execute(context.Background(), RunInput{Actuator: "opentofu"}, 0, "remote-1", ResolvedTargets{}, nil)
 	if err == nil || !strings.Contains(err.Error(), "no plugin relay is configured") {
 		t.Fatalf("zero-cred plugin actuation must pass credential-gating (guardian #4), got %v", err)
@@ -50,7 +50,7 @@ func TestExecutePlugin_ZeroCredsNotUngated(t *testing.T) {
 func TestExecutePlugin_PlanPinMissingFailsClosed(t *testing.T) {
 	discard := slog.New(slog.NewTextHandler(io.Discard, nil))
 	host := pluginhost.New(nil, nil, pluginhost.Grant{Source: types.Source{Name: "opentofu"}}, discard)
-	a := &Activities{PluginActuators: map[string]PluginActuator{"opentofu": {Host: host, DryRunnable: true}}}
+	a := &Activities{Plugins: NewPluginRegistryWith(map[string]PluginActuator{"opentofu": {Host: host, DryRunnable: true}}, nil)}
 	_, err := a.Execute(context.Background(),
 		RunInput{Actuator: "opentofu", PlanFrom: "plan-step" /* PlanDigest empty */}, 0, "", ResolvedTargets{}, nil)
 	if err == nil || !strings.Contains(err.Error(), "refusing an unpinned apply") {

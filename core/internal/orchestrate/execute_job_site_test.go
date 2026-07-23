@@ -81,9 +81,9 @@ func TestExecuteJobPlugin_RemoteSiteGovernsHubSide(t *testing.T) {
 	a := &Activities{
 		Log:   slog.New(slog.NewTextHandler(io.Discard, nil)),
 		Sites: gw,
-		PluginActuators: map[string]PluginActuator{
+		Plugins: NewPluginRegistryWith(map[string]PluginActuator{
 			"ansible": {Host: host, DryRunnable: true, Grant: grant, JobCommand: []string{"stratt-ansible"}},
-		},
+		}, nil),
 	}
 	resolved := ResolvedTargets{Targets: []actuators.Target{{EntityID: "e-web-2", Name: "web-2"}}}
 
@@ -138,13 +138,14 @@ func TestExecuteJobPlugin_RemoteSiteNoGatewayFailsVisibly(t *testing.T) {
 	host := pluginhost.New(nil, nil, grant, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	a := &Activities{
 		Log: slog.New(slog.NewTextHandler(io.Discard, nil)),
-		PluginActuators: map[string]PluginActuator{
+		Plugins: NewPluginRegistryWith(map[string]PluginActuator{
 			"ansible": {Host: host, DryRunnable: true, Grant: grant, JobCommand: []string{"stratt-ansible"}},
-		},
+		}, nil),
 	}
+	ansAct, _ := a.Plugins.Actuator("ansible")
 	_, err := a.executeJobPlugin(context.Background(),
 		RunInput{Actuator: "ansible"}, 0, "edge-1", ResolvedTargets{}, nil,
-		a.PluginActuators["ansible"])
+		ansAct)
 	if err == nil {
 		t.Fatal("a Site EE-Job Step with no site gateway must fail visibly")
 	}
@@ -166,9 +167,9 @@ func TestExecute_FacetWriteScopeAdmissionLint(t *testing.T) {
 	host := pluginhost.New(nil, nil, grant, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	a := &Activities{
 		Log: slog.New(slog.NewTextHandler(io.Discard, nil)),
-		PluginActuators: map[string]PluginActuator{
+		Plugins: NewPluginRegistryWith(map[string]PluginActuator{
 			"ansible": {Host: host, DryRunnable: true, Grant: grant, JobCommand: []string{"stratt-ansible"}},
-		},
+		}, nil),
 	}
 	ts := &testsuite.WorkflowTestSuite{}
 	env := ts.NewTestActivityEnvironment()

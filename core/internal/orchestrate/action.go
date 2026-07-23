@@ -126,7 +126,7 @@ func (a *Activities) ExecuteAction(ctx context.Context, in RunInput, creds []dis
 	}
 
 	// ── Route: a plugin-provided Action goes over the port; else the pod path ─
-	if pa, ok := a.PluginActions[in.Action]; ok {
+	if pa, ok := a.Plugins.Action(in.Action); ok {
 		// Dry-run is refused CORE-SIDE from the reconciled ActionDecl, never
 		// delegated (a plugin that ignores dry_run would run live side effects).
 		if in.DryRun && !pa.DryRunnable {

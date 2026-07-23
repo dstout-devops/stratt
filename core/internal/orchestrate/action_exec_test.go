@@ -29,7 +29,7 @@ func TestExecuteAction_UngatedRefused(t *testing.T) {
 func TestExecuteAction_PluginDryRunRefusedCoreSide(t *testing.T) {
 	discard := slog.New(slog.NewTextHandler(io.Discard, nil))
 	host := pluginhost.New(nil, nil, pluginhost.Grant{Source: types.Source{Name: "x"}}, discard)
-	a := &Activities{PluginActions: map[string]PluginAction{"x/y": {Host: host, DryRunnable: false}}}
+	a := &Activities{Plugins: NewPluginRegistryWith(nil, map[string]PluginAction{"x/y": {Host: host, DryRunnable: false}})}
 	_, err := a.ExecuteAction(context.Background(), RunInput{Action: "x/y", DryRun: true},
 		[]dispatch.CredentialMount{{RefName: "c"}})
 	if err == nil || !strings.Contains(err.Error(), "does not support dry-run") {
