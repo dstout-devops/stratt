@@ -34,6 +34,14 @@ type Actuator struct {
 	Image string `json:"image,omitempty"`
 	// MCP marks the mcp EE-Job transport (ADR-0053).
 	MCP bool `json:"mcp,omitempty"`
+	// Provides are the capability classes this Actuator fulfils (ADR-0104) — governed CaC
+	// provision, store-visible on every replica (§1.5). Each token must be a known
+	// types.ValidCapability.
+	Provides []string `json:"provides,omitempty"`
+	// Requires are the capability classes this Actuator depends on (ADR-0104): it is withheld from
+	// the dispatch table (registry D6 PENDING status) until a provider for each is declared. A
+	// dependency on the CONTRACT, never a named provider (§1.5); a gate, never a precedence (§2.4).
+	Requires []string `json:"requires,omitempty"`
 	// Environments scopes this Actuator (ADR-0057); empty ⇒ every environment.
 	Environments []string `json:"environments,omitempty"`
 }

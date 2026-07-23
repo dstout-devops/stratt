@@ -71,6 +71,25 @@ func TestConnectorValidation(t *testing.T) {
 	}
 }
 
+// TestCapabilityVocabulary is the ADR-0104 §1.5 gate: a plugin never mints a capability's
+// meaning — an unknown provides/requires token is rejected at admission on both Kinds.
+func TestCapabilityVocabulary(t *testing.T) {
+	// A known capability validates on both Kinds.
+	if err := ValidateConnector(types.Connector{Name: "n", Class: "syncer", Address: "a", PluginIdentity: "p", Source: types.Source{Name: "s"}, Requires: []string{"keycustodian"}}); err != nil {
+		t.Fatalf("a known capability must validate: %v", err)
+	}
+	if err := ValidateActuator(types.Actuator{Name: "n", PluginIdentity: "p", Address: "a", Provides: []string{"statestore"}}); err != nil {
+		t.Fatalf("a known capability must validate: %v", err)
+	}
+	// An unknown token is rejected in provides and in requires, on both Kinds.
+	if err := ValidateConnector(types.Connector{Name: "n", Class: "syncer", Address: "a", PluginIdentity: "p", Source: types.Source{Name: "s"}, Requires: []string{"durableexec"}}); err == nil {
+		t.Fatal("durableexec is spine, not a requirable capability (ADR-0104 D6) — must be rejected")
+	}
+	if err := ValidateActuator(types.Actuator{Name: "n", PluginIdentity: "p", Address: "a", Provides: []string{"bogus"}}); err == nil {
+		t.Fatal("an unknown provides token must be rejected (core-owned vocabulary, §1.5)")
+	}
+}
+
 func TestParseActuatorFile(t *testing.T) {
 	yaml := `
 name: helm

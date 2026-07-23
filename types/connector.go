@@ -49,6 +49,14 @@ type Connector struct {
 	ActionNames []string `json:"actionNames,omitempty"`
 	// IntervalSeconds is the Syncer's Observe cadence (Class "syncer"); 0 ⇒ a sane default.
 	IntervalSeconds int `json:"intervalSeconds,omitempty"`
+	// Provides are the capability classes this Connector fulfils (ADR-0104) — governed CaC
+	// provision, resolved against on every replica ("the Manifest is advertisement; the grant is
+	// truth", §1.5). Each token must be a known types.ValidCapability.
+	Provides []string `json:"provides,omitempty"`
+	// Requires are the capability classes this Connector depends on (ADR-0104): it stays PENDING
+	// (registry D6 status) until a provider for each is declared. A dependency on the CONTRACT,
+	// never a named provider (§1.5); a gate, never a precedence (§2.4).
+	Requires []string `json:"requires,omitempty"`
 	// Environments scopes this Connector to a subset of dev/staging/prod (ADR-0057); empty ⇒
 	// every environment.
 	Environments []string `json:"environments,omitempty"`

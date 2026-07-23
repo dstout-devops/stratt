@@ -18,6 +18,7 @@ package connectorregistry
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"sync"
 	"time"
@@ -139,6 +140,11 @@ func (r *Registry) ReconcileActuators(ctx context.Context) {
 		r.log.Warn("connectorregistry: list actuators", "err", err)
 		return
 	}
+	idx, err := r.buildProviderIndex(ctx)
+	if err != nil {
+		r.log.Warn("connectorregistry: build provider index", "err", err)
+		return
+	}
 	declared := make(map[string]types.Actuator, len(decls))
 	for _, a := range decls {
 		declared[a.Name] = a
@@ -158,12 +164,21 @@ func (r *Registry) ReconcileActuators(ctx context.Context) {
 			}
 			r.disableActuatorLocked(name, e) // spec changed → re-enable fresh
 		}
-		r.enableActuatorLocked(a, spec)
+		r.enableActuatorLocked(a, spec, idx)
 	}
 }
 
-func (r *Registry) enableActuatorLocked(a types.Actuator, spec string) {
+func (r *Registry) enableActuatorLocked(a types.Actuator, spec string, idx providerIndex) {
 	key := "actuator/" + a.Name
+	// Capability dependency gate (ADR-0104 D3): withhold the Actuator from the dispatch table
+	// while any required capability is unmet/ambiguous — surfaced as a PENDING D6 status, not a
+	// crash. Gating happens only here (at enable), never a cascade-disable of an already-running
+	// Actuator when a provider later disappears (D5 — provider outages are diagnosed per-Run).
+	if ok, reason := classifyRequires(a.Requires, idx); !ok {
+		r.setStatus(key, false, reason)
+		r.log.Info("connector registry: actuator pending on dependency", "name", a.Name, "reason", reason)
+		return
+	}
 	grant := actuatorGrant(a)
 	var conn *grpc.ClientConn
 	var client pluginv1.PluginServiceClient
@@ -251,6 +266,11 @@ func (r *Registry) ReconcileConnectors(ctx context.Context) {
 		r.log.Warn("connectorregistry: list connectors", "err", err)
 		return
 	}
+	idx, err := r.buildProviderIndex(ctx)
+	if err != nil {
+		r.log.Warn("connectorregistry: build provider index", "err", err)
+		return
+	}
 	declared := make(map[string]types.Connector, len(decls))
 	for _, c := range decls {
 		if c.Class != types.ConnectorSyncer {
@@ -274,12 +294,19 @@ func (r *Registry) ReconcileConnectors(ctx context.Context) {
 			}
 			r.disableConnectorLocked(ctx, name, e)
 		}
-		r.enableConnectorLocked(ctx, c, spec)
+		r.enableConnectorLocked(ctx, c, spec, idx)
 	}
 }
 
-func (r *Registry) enableConnectorLocked(ctx context.Context, c types.Connector, spec string) {
+func (r *Registry) enableConnectorLocked(ctx context.Context, c types.Connector, spec string, idx providerIndex) {
 	key := "connector/" + c.Name
+	// Capability dependency gate (ADR-0104 D3): hold the Syncer PENDING (unregistered, unhomed)
+	// while any required capability is unmet/ambiguous — observable via D6, never a crash (§1.8).
+	if ok, reason := classifyRequires(c.Requires, idx); !ok {
+		r.setStatus(key, false, reason)
+		r.log.Info("connector registry: connector pending on dependency", "name", c.Name, "reason", reason)
+		return
+	}
 	conn, err := r.dial(c.Address)
 	if err != nil {
 		r.setStatus(key, false, "dial "+c.Address+": "+err.Error())
@@ -315,6 +342,62 @@ func (r *Registry) disableConnectorLocked(ctx context.Context, name string, e *e
 	delete(r.connEntries, name)
 	r.clearStatus("connector/" + name)
 	r.log.Info("connector registry: connector disabled", "name", name)
+}
+
+// ── capability dependency resolution (ADR-0104) ──────────────────────────────
+
+// providerIndex counts, per capability class, how many DECLARED providers advertise it (both
+// Connectors and Actuators, env-scoped via the store). Resolution counts DECLARED providers —
+// never locally-dialed ones — for two load-bearing reasons: (1) the Actuator loop reconciles on
+// EVERY replica while the Connector loop is LEADER-ONLY, so only a store read gives an identical
+// view everywhere (a follower would otherwise never see a leader-only connector-provider and
+// wrongly withhold an Actuator that requires it — the D3 routing hazard); (2) it is independent
+// of runtime health, which is a per-Run diagnosis (D5), never an input to whether a consumer binds
+// (a health-filtered count would collapse ≥2 → 1 on a transient blip — a §2.4 precedence-by-liveness).
+type providerIndex map[string]int
+
+// buildProviderIndex reads the governed `provides` of every declared Connector + Actuator ("the
+// Manifest is advertisement; the grant is truth", §1.5 — provision is operator CaC, not the
+// plugin's runtime self-claim).
+func (r *Registry) buildProviderIndex(ctx context.Context) (providerIndex, error) {
+	idx := providerIndex{}
+	conns, err := r.store.ListConnectors(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for _, c := range conns {
+		for _, tok := range c.Provides {
+			idx[tok]++
+		}
+	}
+	acts, err := r.store.ListActuators(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for _, a := range acts {
+		for _, tok := range a.Provides {
+			idx[tok]++
+		}
+	}
+	return idx, nil
+}
+
+// classifyRequires resolves a declaration's required capabilities against the provider index
+// (ADR-0104 D3). It fails CLOSED + OBSERVABLE: an unmet or ambiguous requirement returns a human
+// reason for the D6 pending status, never a crash and never a silent stall (§1.8). 0 providers →
+// unmet; exactly 1 → bound; ≥2 → ambiguous — the registry NEVER silently tiebreaks which provider
+// (§2.4); an estate-level capability→provider binding disambiguates, and until that surface ships
+// (ADR-0104 follow-up) ≥2 is surfaced as pending, not guessed.
+func classifyRequires(requires []string, idx providerIndex) (ok bool, reason string) {
+	for _, tok := range requires {
+		switch n := idx[tok]; {
+		case n == 0:
+			return false, "unmet dependency: no provider for '" + tok + "'"
+		case n >= 2:
+			return false, fmt.Sprintf("ambiguous: %d providers for '%s'; add an estate binding (ADR-0104 follow-up)", n, tok)
+		}
+	}
+	return true, ""
 }
 
 // ── grant construction ──────────────────────────────────────────────────────

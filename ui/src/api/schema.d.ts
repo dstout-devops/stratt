@@ -1785,6 +1785,10 @@ export interface components {
             actionNames?: string[];
             /** Format: int64 */
             intervalSeconds?: number;
+            /** @description Capability classes this Connector fulfils (ADR-0104). Governed CaC provision. */
+            provides?: string[];
+            /** @description Capability classes this Connector depends on (ADR-0104). It stays PENDING (see status) until a provider for each is declared — a dependency on the contract, not a named provider (§1.5). */
+            requires?: string[];
             environments?: string[];
         };
         ConnectorDetail: {
@@ -1803,6 +1807,10 @@ export interface components {
             jobCommand?: string[];
             image?: string;
             mcp?: boolean;
+            /** @description Capability classes this Actuator fulfils (ADR-0104). Governed CaC provision. */
+            provides?: string[];
+            /** @description Capability classes this Actuator depends on (ADR-0104). It is withheld from the dispatch table (see status) until a provider for each is declared (§1.5). */
+            requires?: string[];
             environments?: string[];
         };
         ActuatorDetail: {

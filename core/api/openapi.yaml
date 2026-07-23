@@ -2160,6 +2160,18 @@ components:
         emitterName: { type: string }
         actionNames: { type: array, items: { type: string } }
         intervalSeconds: { type: integer, format: int64 }
+        provides:
+          type: array
+          items: { type: string }
+          description: >
+            Capability classes this Connector fulfils (ADR-0104). Governed CaC provision.
+        requires:
+          type: array
+          items: { type: string }
+          description: >
+            Capability classes this Connector depends on (ADR-0104). It stays PENDING (see
+            status) until a provider for each is declared — a dependency on the contract, not a
+            named provider (§1.5).
         environments: { type: array, items: { type: string } }
     ConnectorDetail:
       type: object
@@ -2185,6 +2197,17 @@ components:
         jobCommand: { type: array, items: { type: string } }
         image: { type: string }
         mcp: { type: boolean }
+        provides:
+          type: array
+          items: { type: string }
+          description: >
+            Capability classes this Actuator fulfils (ADR-0104). Governed CaC provision.
+        requires:
+          type: array
+          items: { type: string }
+          description: >
+            Capability classes this Actuator depends on (ADR-0104). It is withheld from the
+            dispatch table (see status) until a provider for each is declared (§1.5).
         environments: { type: array, items: { type: string } }
     ActuatorDetail:
       type: object
