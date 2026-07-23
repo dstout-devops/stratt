@@ -26,6 +26,7 @@ func main() {
 		Token:    os.Getenv("STRATT_OPENBAO_TOKEN"),
 		Mount:    env("STRATT_OPENBAO_MOUNT", "pki"),
 		IntMount: env("STRATT_OPENBAO_INT_MOUNT", "pki_int"),
+		KVMount:  os.Getenv("STRATT_OPENBAO_KV_MOUNT"), // empty ⇒ KV Syncer off (ADR-0099)
 	}
 	addr := env("STRATT_PLUGIN_LISTEN", ":9090")
 

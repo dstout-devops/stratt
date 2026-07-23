@@ -22,6 +22,7 @@ var facetNamespaces = []string{
 	"cert.expiry",         // notBefore, notAfter
 	"identity.credential", // ADR-0079: cross-form credential projection (a cert IS an identity form). Single §2.1 write-owner: the cert connector.
 	"ca.config",           // ADR-0098 E2: the CA-hierarchy observation (commonName, notAfter, isCA)
+	"kv.metadata",         // ADR-0099: KV secret metadata (path/version/timestamps) — NEVER the value
 }
 
 // Config locates the CLM Source. The token is a spawn-time CredentialRef resolved
@@ -33,6 +34,7 @@ type Config struct {
 	Token    string // X-Vault-Token; read + write credential
 	Mount    string // PKI secrets-engine mount (default "pki")
 	IntMount string // intermediate-CA mount for create-intermediate (default "pki_int")
+	KVMount  string // KV v2 mount for the metadata Syncer (ADR-0099); empty ⇒ KV Observe off
 }
 
 // Server implements the sovereign plugin port for the cert-issuer Connector — a
@@ -45,8 +47,9 @@ type Server struct {
 	pluginv1.UnimplementedPluginServiceServer
 	cfg Config
 	log *slog.Logger
-	// newCA builds the CLM client; overridable in tests to inject a fake.
+	// newCA / newKV build the OpenBao clients; overridable in tests to inject fakes.
 	newCA func(context.Context) (CA, error)
+	newKV func(context.Context) (KV, error)
 }
 
 func NewServer(cfg Config, log *slog.Logger) *Server {
@@ -55,6 +58,9 @@ func NewServer(cfg Config, log *slog.Logger) *Server {
 	}
 	s := &Server{cfg: cfg, log: log.With("plugin", "openbao")}
 	s.newCA = func(context.Context) (CA, error) {
+		return NewClient(s.cfg.Addr, s.cfg.Token, s.cfg.Mount), nil
+	}
+	s.newKV = func(context.Context) (KV, error) {
 		return NewClient(s.cfg.Addr, s.cfg.Token, s.cfg.Mount), nil
 	}
 	return s
@@ -200,8 +206,45 @@ func (s *Server) Observe(_ *pluginv1.ObserveRequest, stream grpc.ServerStreaming
 	if err != nil {
 		return err
 	}
-	s.log.Info("full sync", "certs", len(entities))
+	certs := len(entities)
+	// KV metadata Syncer (ADR-0099) — opt-in when a KV mount is configured. Metadata
+	// ONLY: paths/versions/timestamps, NEVER secret values (§1.2/§2.5).
+	if s.cfg.KVMount != "" {
+		kv, err := s.newKV(ctx)
+		if err != nil {
+			return err
+		}
+		secrets, err := observeKV(ctx, kv, s.cfg.KVMount, s.log)
+		if err != nil {
+			return err
+		}
+		entities = append(entities, secrets...)
+	}
+	s.log.Info("full sync", "certs", certs, "kv", len(entities)-certs)
 	return stream.Send(&pluginv1.ObserveResponse{Entities: entities, FullSyncComplete: true})
+}
+
+// observeKV enumerates a KV v2 mount's secret paths and projects each secret's METADATA
+// as a `secret` Entity — NEVER the value (§1.2/§2.5). Pure content-expertise.
+func observeKV(ctx context.Context, kv KV, mount string, log *slog.Logger) ([]*pluginv1.ObservedEntity, error) {
+	paths, err := kv.ListKVPaths(ctx, mount)
+	if err != nil {
+		return nil, fmt.Errorf("openbao: list kv paths: %w", err)
+	}
+	var out []*pluginv1.ObservedEntity
+	for _, p := range paths {
+		md, err := kv.GetKVMetadata(ctx, mount, p)
+		if err != nil {
+			// FAIL LOUD, never skip (guardian §1.8): a full-sync that silently drops a
+			// listed secret would TOMBSTONE it (false "secret deleted"), and a coverage/
+			// rotation Baseline on an incomplete projection reads as false assurance.
+			return nil, fmt.Errorf("openbao: kv metadata read %s failed — refusing a partial full-sync that would false-tombstone secrets: %w", p, err)
+		}
+		if e := normalizeSecret(mount, p, md); e != nil {
+			out = append(out, e)
+		}
+	}
+	return out, nil
 }
 
 // observe enumerates every issued cert and normalizes the live leaf certs. Pure

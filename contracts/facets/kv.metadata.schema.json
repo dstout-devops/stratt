@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "stratt:contract:facets/kv.metadata:v1",
+  "title": "kv.metadata Facet",
+  "description": "A KV secret's METADATA, projected by the openbao KV Syncer (ADR-0099; §1.1). Metadata ONLY — path/version/timestamps, NEVER the secret value (§1.2/§2.5). The secret-path map is sensitive by aggregation; the kv-secret kind is View/ReBAC-scoped. Closed schema matching normalizeSecret.",
+  "type": "object",
+  "properties": {
+    "mount": { "type": "string" },
+    "path": { "type": "string" },
+    "currentVersion": { "type": "integer" },
+    "createdTime": { "type": "string" },
+    "updatedTime": { "type": "string" }
+  },
+  "required": ["mount", "path"],
+  "additionalProperties": false
+}

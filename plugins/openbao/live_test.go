@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"strings"
 	"testing"
 
 	pluginv1 "github.com/dstout-devops/stratt/sdk/stratt/plugin/v1"
@@ -90,5 +91,46 @@ func TestLivePKIAgainstOpenBao(t *testing.T) {
 	req2.Header.Set("X-Vault-Token", token)
 	if resp, err := http.DefaultClient.Do(req2); err == nil {
 		_ = resp.Body.Close()
+	}
+}
+
+// TestLiveKVMetadataAgainstOpenBao proves the KV metadata Syncer against real OpenBao
+// (ADR-0099): the secret/demo/aws secret (seeded by openbao-bootstrap) projects as a
+// kv-secret Entity with metadata (version/timestamps) and NEVER its values. Gated on
+// STRATT_LIVE_OPENBAO_ADDR.
+func TestLiveKVMetadataAgainstOpenBao(t *testing.T) {
+	addr := os.Getenv("STRATT_LIVE_OPENBAO_ADDR")
+	if addr == "" {
+		t.Skip("set STRATT_LIVE_OPENBAO_ADDR to run the live KV metadata proof")
+	}
+	srv := NewServer(Config{Addr: addr, Token: os.Getenv("STRATT_LIVE_OPENBAO_TOKEN"), Mount: "pki", KVMount: "secret"},
+		slog.New(slog.NewTextHandler(io.Discard, nil)))
+	stream := &captureStream[pluginv1.ObserveResponse]{ctx: context.Background()}
+	if err := srv.Observe(&pluginv1.ObserveRequest{}, stream); err != nil {
+		t.Fatalf("observe: %v", err)
+	}
+	var demo *pluginv1.ObservedEntity
+	for _, resp := range stream.sent {
+		for _, e := range resp.GetEntities() {
+			if e.GetKind() == "kv-secret" && e.GetIdentityKeys()["kv.path"] == "secret/demo/aws" {
+				demo = e
+			}
+		}
+	}
+	if demo == nil {
+		t.Fatal("Observe did not project the seeded KV secret secret/demo/aws as a kv-secret")
+	}
+	var md map[string]any
+	_ = json.Unmarshal(demo.GetFacets()["kv.metadata"], &md)
+	t.Logf("LIVE kv-secret secret/demo/aws metadata: %v", md)
+	// The seeded secret's values (access_key, secret_key) must NEVER appear.
+	blob, _ := json.Marshal(md)
+	for _, forbidden := range []string{"access_key", "secret_key", "AKIADEMO", "dev/secret/material"} {
+		if strings.Contains(string(blob), forbidden) {
+			t.Fatalf("§2.5 VIOLATION: kv.metadata leaked secret material (%q): %s", forbidden, blob)
+		}
+	}
+	if _, ok := md["currentVersion"]; !ok {
+		t.Error("kv.metadata should carry currentVersion")
 	}
 }

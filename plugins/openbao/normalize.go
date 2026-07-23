@@ -130,3 +130,32 @@ func normalizeCA(c Cert) (*pluginv1.ObservedEntity, bool, error) {
 		Facets:       map[string][]byte{"ca.config": raw},
 	}, true, nil
 }
+
+// normalizeSecret maps a KV secret's METADATA onto a `secret` Entity (ADR-0099). Identity
+// is kv.path = mount/path; the closed kv.metadata Facet carries version + timestamps —
+// NEVER the secret value (§1.2/§2.5: the graph records that the secret exists, not what
+// it is). This is the observed external secret's metadata, NOT a CredentialRef (which is
+// Stratt's Git-declared desired-state pointer).
+func normalizeSecret(mount, path string, md KVMetadata) *pluginv1.ObservedEntity {
+	doc := map[string]any{
+		"mount":          mount,
+		"path":           path,
+		"currentVersion": md.CurrentVersion,
+	}
+	if md.CreatedTime != "" {
+		doc["createdTime"] = md.CreatedTime
+	}
+	if md.UpdatedTime != "" {
+		doc["updatedTime"] = md.UpdatedTime
+	}
+	raw, err := json.Marshal(doc)
+	if err != nil {
+		return nil
+	}
+	return &pluginv1.ObservedEntity{
+		Kind:         "kv-secret", // hyphenated to harden the disambiguation from CredentialRef
+		IdentityKeys: map[string]string{"kv.path": mount + "/" + path},
+		Labels:       map[string]string{"kv.mount": mount},
+		Facets:       map[string][]byte{"kv.metadata": raw},
+	}
+}

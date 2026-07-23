@@ -101,3 +101,16 @@ api POST /v1/secret/data/demo/aws \
 echo "seeded  secret/demo/aws (access_key + secret_key) for the vault SecretBroker"
 
 echo "openbao-bootstrap: done"
+
+# 6. KV metadata-reader policy (ADR-0099 defense-in-depth, guardian finding 1): the
+#    KV Syncer's token should read secret/metadata/* and be DENIED secret/data/*, so
+#    the never-read-values invariant holds at the ACL layer too (not only the client's
+#    no-data-method). Dev runs the plugin on the root token; production wires a token
+#    with THIS policy.
+if [ "$(probe GET /v1/sys/policies/acl/kv-metadata-reader)" = "200" ]; then
+    echo "exists  kv-metadata-reader policy"
+else
+    api PUT /v1/sys/policies/acl/kv-metadata-reader \
+        '{"policy":"path \"secret/metadata/*\" { capabilities = [\"read\",\"list\"] }\npath \"secret/data/*\" { capabilities = [\"deny\"] }"}' >/dev/null
+    echo "created kv-metadata-reader policy (read metadata, DENY data)"
+fi

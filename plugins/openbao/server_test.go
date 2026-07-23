@@ -13,6 +13,7 @@ import (
 	"io"
 	"log/slog"
 	"math/big"
+	"os"
 	"testing"
 	"time"
 
@@ -412,5 +413,105 @@ func TestInvokeUnknownActionRejected(t *testing.T) {
 	stream := &captureStream[pluginv1.InvokeResponse]{ctx: context.Background()}
 	if err := newServer(t, &fakeCA{}).Invoke(&pluginv1.InvokeRequest{Action: "cert-issuer/delete-everything"}, stream); err == nil {
 		t.Fatal("unknown action must be rejected")
+	}
+}
+
+// fakeKV stands in for the KV v2 METADATA API — it exposes only metadata reads (there
+// is deliberately no data method, mirroring the KV interface), so a test cannot even
+// simulate reading a secret value (§1.2/§2.5).
+type fakeKV struct {
+	paths   []string
+	meta    map[string]KVMetadata
+	listErr error
+	metaErr error
+}
+
+func (f *fakeKV) ListKVPaths(context.Context, string) ([]string, error) { return f.paths, f.listErr }
+func (f *fakeKV) GetKVMetadata(_ context.Context, _, path string) (KVMetadata, error) {
+	if f.metaErr != nil {
+		return KVMetadata{}, f.metaErr
+	}
+	return f.meta[path], nil
+}
+
+func kvServer(t *testing.T, fkv *fakeKV) *Server {
+	t.Helper()
+	s := NewServer(Config{Addr: "http://clm.test", Token: "tok", KVMount: "secret"}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	s.newCA = func(context.Context) (CA, error) { return &fakeCA{}, nil } // no certs
+	s.newKV = func(context.Context) (KV, error) { return fkv, nil }
+	return s
+}
+
+// TestObserveKVMetadata proves the KV Syncer projects secret METADATA as kv-secret
+// Entities — path/version/timestamps — and NEVER a secret value (§1.2/§2.5).
+func TestObserveKVMetadata(t *testing.T) {
+	fkv := &fakeKV{
+		paths: []string{"demo/aws", "app/db"},
+		meta: map[string]KVMetadata{
+			"demo/aws": {CurrentVersion: 3, CreatedTime: "2026-07-01T00:00:00Z", UpdatedTime: "2026-07-20T00:00:00Z"},
+			"app/db":   {CurrentVersion: 1},
+		},
+	}
+	stream := &captureStream[pluginv1.ObserveResponse]{ctx: context.Background()}
+	if err := kvServer(t, fkv).Observe(&pluginv1.ObserveRequest{}, stream); err != nil {
+		t.Fatalf("observe: %v", err)
+	}
+	byPath := map[string]*pluginv1.ObservedEntity{}
+	for _, e := range stream.sent[0].GetEntities() {
+		if e.GetKind() != "kv-secret" {
+			t.Fatalf("kind = %q, want kv-secret", e.GetKind())
+		}
+		byPath[e.GetIdentityKeys()["kv.path"]] = e
+	}
+	e := byPath["secret/demo/aws"]
+	if e == nil {
+		t.Fatalf("missing kv-secret secret/demo/aws; got %v", byPath)
+	}
+	var md map[string]any
+	_ = json.Unmarshal(e.GetFacets()["kv.metadata"], &md)
+	if md["currentVersion"].(float64) != 3 || md["path"] != "demo/aws" {
+		t.Fatalf("kv.metadata: %v", md)
+	}
+	// The value must NEVER appear — only metadata keys.
+	for k := range md {
+		switch k {
+		case "mount", "path", "currentVersion", "createdTime", "updatedTime":
+		default:
+			t.Fatalf("kv.metadata leaked a non-metadata key %q — a secret value must NEVER be projected (§2.5)", k)
+		}
+	}
+}
+
+// TestObserveKVFailsLoudOnReadError proves guardian §1.8: a metadata read failure fails
+// the sync (never a partial full-sync that would false-tombstone secrets).
+func TestObserveKVFailsLoudOnReadError(t *testing.T) {
+	fkv := &fakeKV{paths: []string{"x"}, metaErr: fmt.Errorf("boom")}
+	stream := &captureStream[pluginv1.ObserveResponse]{ctx: context.Background()}
+	if err := kvServer(t, fkv).Observe(&pluginv1.ObserveRequest{}, stream); err == nil {
+		t.Fatal("a KV metadata read failure must FAIL the sync, not silently drop (false-tombstone)")
+	}
+}
+
+// TestKVMetadataCoFidelity: normalizeSecret's keys are a subset of the closed schema.
+func TestKVMetadataCoFidelity(t *testing.T) {
+	e := normalizeSecret("secret", "demo/aws", KVMetadata{CurrentVersion: 2, CreatedTime: "t", UpdatedTime: "t"})
+	raw, err := os.ReadFile("../../contracts/facets/kv.metadata.schema.json")
+	if err != nil {
+		t.Fatalf("read schema: %v", err)
+	}
+	var sch struct {
+		Properties           map[string]json.RawMessage `json:"properties"`
+		AdditionalProperties *bool                      `json:"additionalProperties"`
+	}
+	_ = json.Unmarshal(raw, &sch)
+	if sch.AdditionalProperties == nil || *sch.AdditionalProperties {
+		t.Fatal("kv.metadata must be CLOSED")
+	}
+	var doc map[string]any
+	_ = json.Unmarshal(e.GetFacets()["kv.metadata"], &doc)
+	for k := range doc {
+		if _, ok := sch.Properties[k]; !ok {
+			t.Errorf("kv.metadata emits key %q not in its CLOSED schema", k)
+		}
 	}
 }

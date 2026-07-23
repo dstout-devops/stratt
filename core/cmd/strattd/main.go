@@ -1275,10 +1275,10 @@ func run(ctx context.Context, log *slog.Logger) error {
 			PluginIdentity:   env("STRATT_OPENBAO_PLUGIN_ID", "openbao"),
 			Tier:             pluginhost.Tier(env("STRATT_OPENBAO_TIER", "trusted")),
 			Source:           types.Source{Kind: "openbao", Name: sourceName, Endpoint: os.Getenv("STRATT_OPENBAO_ADDR")},
-			FacetNamespaces:  []string{"cert.identity", "cert.expiry", "identity.credential", "ca.config"},
-			LabelKeys:        []string{"cert.commonName"},
-			IdentitySchemes:  []string{"cert.serial", "pki.caSerial"},
-			TombstoneSchemes: []string{"cert.serial", "pki.caSerial"},
+			FacetNamespaces:  []string{"cert.identity", "cert.expiry", "identity.credential", "ca.config", "kv.metadata"},
+			LabelKeys:        []string{"cert.commonName", "kv.mount"},
+			IdentitySchemes:  []string{"cert.serial", "pki.caSerial", "kv.path"},
+			TombstoneSchemes: []string{"cert.serial", "pki.caSerial", "kv.path"},
 		}
 		host := pluginhost.New(store, pluginv1.NewPluginServiceClient(conn), grant, log)
 		controllers = append(controllers, homeSupervise(sourceName, host.Register, func(cctx context.Context) error {
