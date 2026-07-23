@@ -41,7 +41,7 @@ deserves its own ADR. This slice deliberately stops short of that.
    with Run provenance (§1.2), live-proven against Floci.
 2. **Tagging**: `awsec2/tag` (CreateTags) — instance metadata the next Syncer poll reflects.
 3. **Resource-provisioning Actions, fire-and-return**: `awsec2/create-security-group`,
-   `create-key-pair`, `create-volume`, `create-vpc`, `create-subnet` — provision the resource and
+   `import-key-pair`, `create-volume`, `create-vpc`, `create-subnet` — provision the resource and
    return its typed id as bindable output (the crossplane `create-subnet` pattern), **without** minting
    a new Observed Entity kind. They are convenience seams for building an instance's network/storage
    context; the resources are not yet graph Entities.
@@ -64,9 +64,12 @@ Grow `plugins/awsec2` from one Action to a lifecycle-complete instance connector
 
 1. **`EC2API` interface** gains exactly the methods the new Actions call — `StartInstances`,
    `StopInstances`, `RebootInstances`, `TerminateInstances`, `CreateTags`, `CreateSecurityGroup`,
-   `CreateKeyPair`, `CreateVolume`, `CreateVpc`, `CreateSubnet` — each matching the `*ec2.Client`
+   `ImportKeyPair`, `CreateVolume`, `CreateVpc`, `CreateSubnet` — each matching the `*ec2.Client`
    signature so the real client still satisfies it and tests still inject a fake (the ADR-0046
-   isolation proof).
+   isolation proof). **`ImportKeyPair` (public key only), never `CreateKeyPair`** — AWS's `CreateKeyPair`
+   *returns the generated private key* in its response, which would cross the core; §2.5 forbids that, so
+   awsec2 only ever *imports* an operator-supplied public key. (As-shipped correction — the earlier draft
+   named `create-key-pair`/`CreateKeyPair`; the code landed import-only, and ADR-0107 §2.5 relies on it.)
 2. **`Invoke` becomes a switch-on-action-name** dispatcher (today it is a single-action guard). Each
    case unmarshals its own params struct, does manual required-field validation, performs the AWS
    call, streams a typed progress `TaskEvent` + a terminal `InvokeResult` carrying **its own**
