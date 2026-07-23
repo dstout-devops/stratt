@@ -403,6 +403,8 @@ tasks:
       - "{{.HELM}} template stratt deploy/charts/stratt -f deploy/charts/stratt/values-allinone.yaml -f deploy/charts/stratt/values-selfdeploy.yaml > /dev/null"
       # Genesis profile (ADR-0102): minimal floor + self-deploy + inline declarations.
       - "{{.HELM}} template stratt deploy/charts/stratt -f deploy/charts/stratt/values-allinone.yaml -f deploy/charts/stratt/values-selfdeploy.yaml -f deploy/charts/stratt/values-genesis.yaml > /dev/null"
+      # Connector-e2e profile (ADR-0103): fully in-kind — allinone substrate + helm/declared plugins + estate.
+      - "{{.HELM}} template stratt deploy/charts/stratt -f deploy/charts/stratt/values-allinone.yaml -f deploy/charts/stratt/values-connector-e2e.yaml > /dev/null"
 
   tools:helm:
     desc: Install the pinned helm binary to .bin/ (idempotent; zero-manual bootstrap)
@@ -649,6 +651,29 @@ tasks:
           -f {{.ROOT_DIR}}/deploy/charts/stratt/values-selfdeploy.yaml \
           -f {{.ROOT_DIR}}/deploy/charts/stratt/values-genesis.yaml \
           --set-string externalOpenfga.url=http://openfga.stratt-authz.svc:8080
+      - "{{.KUBECTL}} --context {{.KIND_CONTEXT}} -n stratt rollout status deploy/stratt --timeout=240s"
+
+  dev:connector-e2e:
+    # ADR-0103 S7: the FULLY IN-KIND runtime-registry proof — NO compose. kind + the
+    # in-cluster substrate (values-allinone) + the helm Actuator + declared Syncer plugin
+    # pods + the full estate; the runtime Connector/Actuator registry dials + registers them
+    # from estate/{actuators/helm,connectors/declared}.yaml with no strattd restart. From
+    # here: edit a Connector declaration and watch the registry enable/disable it live
+    # (GET /connectors, GET /actuators) while the strattd pod's start time never changes.
+    desc: "ADR-0103: fully in-kind runtime-registry proof (no compose) — substrate + helm/declared plugins + estate"
+    deps: [tools:helm, tools:kubectl]
+    cmds:
+      - task: dev:kind:up
+      - task: image:kind-load # strattd
+      - task: image:helm-plugin
+      - task: image:declared-plugin
+      - task: dev:stage-estate # full estate incl. connectors/actuators
+      - |
+        set -eu
+        "{{.HELM}}" upgrade --install stratt {{.ROOT_DIR}}/deploy/charts/stratt \
+          --kube-context {{.KIND_CONTEXT}} -n stratt --create-namespace \
+          -f {{.ROOT_DIR}}/deploy/charts/stratt/values-allinone.yaml \
+          -f {{.ROOT_DIR}}/deploy/charts/stratt/values-connector-e2e.yaml
       - "{{.KUBECTL}} --context {{.KIND_CONTEXT}} -n stratt rollout status deploy/stratt --timeout=240s"
 
   dev:stack:up:

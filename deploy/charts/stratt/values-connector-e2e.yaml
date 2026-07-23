@@ -1,0 +1,39 @@
+# values-connector-e2e.yaml (ADR-0103 S7) — the FULLY IN-KIND proof, NO compose.
+#
+# Layer on values-allinone.yaml (in-cluster Postgres/NATS/Temporal — the self-contained
+# substrate, no external bootstrap dependency). It deploys the helm Actuator + the declared
+# Syncer plugin PODS and reconciles the full estate inline, so the runtime Connector/Actuator
+# registry (ADR-0103) dials + registers them — from estate/actuators/helm.yaml +
+# estate/connectors/declared.yaml — and enables/disables them with NO strattd restart.
+#
+# Both plugins are backend-free (helm needs no SoR; declared is file-based via /hosts), so
+# the whole proof runs in one kind cluster with zero compose services. DEV ONLY.
+
+declarations:
+  inline:
+    enabled: true
+    interval: "10s" # tighten the reconcile so enable/disable of a Connector goes live fast
+    maxPruneFraction: "1"
+
+environment: dev
+
+# The plugin PODS (the registry dials their Services). strattd's STRATT_<NAME>_PLUGIN_ADDR is
+# still auto-wired by the chart but IGNORED — the boot-env blocks for helm+declared are
+# retired (ADR-0103 S7); the estate Connector/Actuator declarations drive registration now.
+plugins:
+  - name: declared
+    image:
+      repository: stratt-plugin-declared
+      tag: dev
+      digest: ""
+      pullPolicy: Never # kind-loaded (task image:declared-plugin)
+    estateHosts: true # mounts estate/hosts/** at /hosts (the declared Source's file SoR)
+    env:
+      STRATT_DECLARED_PATH: /hosts
+  - name: helm
+    image:
+      repository: stratt-plugin-helm
+      tag: dev
+      digest: ""
+      pullPolicy: Never # kind-loaded (task image:helm-plugin)
+    tmpDir: true # writable /tmp for helm's cache (read-only rootfs)
