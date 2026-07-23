@@ -1,0 +1,18 @@
+# declared — the devices-as-code Syncer (ADR-0056 §5) as a runtime-registered Connector Kind
+# (ADR-0103): its Source binding + ownership grant are now CaC — what ADR-0056's "sources/
+# CaC grant" always wanted — dialed + home-gated + supervised (leader-only) with NO strattd
+# restart. The host-list FILE stays authoritative (§1.2, a projection not a writable CMDB);
+# NO tombstoneSchemes → a host dropped from the file is never silently deleted (§5).
+name: declared
+class: syncer
+address: stratt-declared:9090
+pluginIdentity: declared
+tier: trusted
+source:
+  kind: declared
+  name: declared-dev
+  endpoint: file:///hosts
+labelKeys: [os, role, tier, demo]
+facetNamespaces: [mgmt.address]
+identitySchemes: [dns.fqdn]
+intervalSeconds: 15

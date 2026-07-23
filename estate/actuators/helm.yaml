@@ -1,0 +1,10 @@
+# helm — the Helm Actuator (charter §2.3, ADR-0092) as a runtime-registered Actuator Kind
+# (ADR-0103): dialed + registered by the connectorregistry with NO strattd restart, on every
+# replica. Dual-surface — the per-target Actuator (Plan/Apply across a View) + the targetless
+# helm/deploy Action (the self-deploy path). Migrated off its boot-env block (first of 19).
+name: helm
+address: stratt-helm:9090
+pluginIdentity: helm
+tier: trusted
+dryRunnable: true
+actionNames: [helm/deploy]

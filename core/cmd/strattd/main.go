@@ -812,41 +812,12 @@ func run(ctx context.Context, log *slog.Logger) error {
 		log.Info("no Crossplane plugin configured (STRATT_CROSSPLANE_PLUGIN_ADDR empty); actuator disabled")
 	}
 
-	// ── Helm Actuator over the port (ADR-0092) ──────────────────────────
-	// The `helm-actuator` Blueprint route target (ADR-0083): Plan renders (helm
-	// template — the Gate-reviewed artifact), Apply converges (helm upgrade --install,
-	// Helm-4 flags). helm is a subprocess in the plugin pod; kube access is the
-	// plugin's per-route scoped ServiceAccount (ADR-0092 §6). No graph write-back in
-	// v1 (release-status → Entity is a follow-up Normalizer): grants stay empty, so an
-	// ungranted emission is rejected, not silently written.
-	if addr := os.Getenv("STRATT_HELM_PLUGIN_ADDR"); addr != "" {
-		conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
-		if err != nil {
-			return fmt.Errorf("helm plugin dial %s: %w", addr, err)
-		}
-		defer conn.Close()
-		grant := pluginhost.Grant{
-			PluginIdentity: env("STRATT_HELM_PLUGIN_ID", "helm"),
-			Tier:           pluginhost.Tier(env("STRATT_HELM_TIER", "trusted")),
-			Source:         types.Source{Kind: "helm", Name: env("STRATT_HELM_SOURCE_NAME", "helm")},
-		}
-		host := pluginhost.New(store, pluginv1.NewPluginServiceClient(conn), grant, log)
-		// The per-target Actuator (Plan/Apply — fleet deploy across a View, ADR-0083
-		// route materialization).
-		if err := registerPluginActuator("helm", host, true, grant, nil); err != nil {
-			return err
-		}
-		// The targetless helm/deploy Action (Invoke — deploy one release to one
-		// namespace, no View anchor; the self-deploy / single-release build path,
-		// mirrors crossplane/provision). Dual-surface plugin (ADR-0092). Reuses the
-		// host/grant; the Gate + the launching Principal's authz remain the control.
-		if err := registerPluginAction("helm/deploy", host, true); err != nil {
-			return err
-		}
-		log.Info("helm plugin actuator + helm/deploy action registered", "addr", addr)
-	} else {
-		log.Info("no Helm plugin configured (STRATT_HELM_PLUGIN_ADDR empty); actuator disabled")
-	}
+	// ── Helm Actuator (ADR-0092) — MIGRATED to the runtime registry (ADR-0103) ──
+	// helm is now declared as an `Actuator` Kind (estate/actuators/helm.yaml) and dialed +
+	// registered at runtime by the connectorregistry (dual-surface: the helm Actuator +
+	// the targetless helm/deploy Action), so it enables/disables with NO strattd restart.
+	// Its boot-env block (STRATT_HELM_PLUGIN_ADDR) is retired — the first of the 19 boot
+	// plugins onto the registry (the other 17 remain env-wired; strangler).
 
 	// ── Evidence store (§2.4, ADR-0029) ─────────────────────────────────
 	// Gated on STRATT_EVIDENCE_BUCKET: without it, Findings open unsealed (a
@@ -1018,47 +989,13 @@ func run(ctx context.Context, log *slog.Logger) error {
 		log.Info("no vCenter plugin configured (STRATT_VCENTER_PLUGIN_ADDR empty); syncer idle")
 	}
 
-	// ── declared-estate Syncer plugin over the port (ADR-0056 §5) ───────────
-	// Devices-as-code: the plugin's system-of-record is a host-list file shipped
-	// with the estate (estate/hosts/*.yaml). It projects existence + dns.fqdn
-	// identity + labels; the FILE is authoritative and Stratt never writes back
-	// (§1.2 — a projection, not a writable CMDB). The Grant honors NO facet (the
-	// plugin declares none) and NO tombstone scheme, so a host dropped from the
-	// file is never silently deleted (§5). Grant assembled from env here — the
-	// Phase-0 stand-in for the sources/ CaC grant (ADR-0056 decisions 1–4).
-	if addr := os.Getenv("STRATT_DECLARED_PLUGIN_ADDR"); addr != "" {
-		sourceName := env("STRATT_DECLARED_SOURCE_NAME", "declared")
-		interval, err := time.ParseDuration(env("STRATT_DECLARED_INTERVAL", "30s"))
-		if err != nil {
-			return fmt.Errorf("declared interval: %w", err)
-		}
-		conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
-		if err != nil {
-			return fmt.Errorf("declared plugin dial %s: %w", addr, err)
-		}
-		defer conn.Close()
-		grant := pluginhost.Grant{
-			PluginIdentity: env("STRATT_DECLARED_PLUGIN_ID", "declared"),
-			Tier:           pluginhost.Tier(env("STRATT_DECLARED_TIER", "trusted")),
-			Source:         types.Source{Kind: "declared", Name: sourceName, Endpoint: env("STRATT_DECLARED_PATH", "file:///hosts")},
-			LabelKeys:      []string{"os", "role", "tier", "demo"},
-			// The ONE declared facet the plugin may own: mgmt.address — the DECLARED
-			// reachability of a device (ADR-0084). The manifest advertises exactly this,
-			// so the grant must list exactly this (registration fails on any mismatch).
-			// Observed facets stay the collectors' (§2.1).
-			FacetNamespaces: []string{"mgmt.address"},
-			// dns.fqdn is a shared cross-source scheme: honored because the grant
-			// lists it AND the tier is trusted (finding #4). No TombstoneSchemes —
-			// projection-only, never a silent delete (§5).
-			IdentitySchemes: []string{"dns.fqdn"},
-		}
-		host := pluginhost.New(store, pluginv1.NewPluginServiceClient(conn), grant, log)
-		controllers = append(controllers, homeSupervise(sourceName, host.Register, func(cctx context.Context) error {
-			return host.SyncLoop(cctx, interval)
-		}))
-	} else {
-		log.Info("no declared-estate plugin configured (STRATT_DECLARED_PLUGIN_ADDR empty); syncer idle")
-	}
+	// ── declared-estate Syncer (ADR-0056) — MIGRATED to the runtime registry (ADR-0103) ──
+	// declared is now a `Connector` Kind (estate/connectors/declared.yaml) — its Source
+	// binding + ownership grant become CaC (what the ADR-0056 "sources/ CaC grant" always
+	// wanted) — dialed + home-gated + supervised at runtime by the connectorregistry, so it
+	// enables/disables with NO strattd restart. Its boot-env block (STRATT_DECLARED_*) is
+	// retired; the FILE stays authoritative (§1.2) and no tombstone scheme means a dropped
+	// host is never silently deleted (§5).
 
 	// ── AWX/AAP Connector: mirror the automation estate over the port (ADR-0025 arc) ──
 	// A read-only Syncer projecting an AWX Controller's job templates/workflows/schedules/

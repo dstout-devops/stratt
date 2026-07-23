@@ -101,3 +101,29 @@ func TestActuatorValidation(t *testing.T) {
 		t.Fatalf("an EE-Job actuator (jobCommand only) must validate: %v", err)
 	}
 }
+
+// TestParseRealEstate validates the migrated estate declarations (ADR-0103 S7) parse through
+// the full ParseDir the daemon uses.
+func TestParseRealEstate(t *testing.T) {
+	d, err := ParseDir("../../../estate", nil)
+	if err != nil {
+		t.Fatalf("parse /estate: %v", err)
+	}
+	var haveConn, haveAct bool
+	for _, c := range d.Connectors {
+		if c.Name == "declared" && c.Class == "syncer" && c.Source.Name == "declared-dev" {
+			haveConn = true
+		}
+	}
+	for _, a := range d.Actuators {
+		if a.Name == "helm" && len(a.ActionNames) == 1 && a.ActionNames[0] == "helm/deploy" {
+			haveAct = true
+		}
+	}
+	if !haveConn {
+		t.Fatalf("estate/connectors/declared.yaml must parse into the declared Connector; got %+v", d.Connectors)
+	}
+	if !haveAct {
+		t.Fatalf("estate/actuators/helm.yaml must parse into the helm Actuator; got %+v", d.Actuators)
+	}
+}
