@@ -11,12 +11,17 @@ Create a new ADR for: **$ARGUMENTS**
 0. **Prior-art scan (MANDATORY — do this BEFORE drafting).** The corpus is 100+ ADRs plus a live
    estate and codebase; a decision that *feels* greenfield often is not (a new ADR once designed a
    provisioning reach-path while ADR-0058 already shipped one — caught only in review). So, before
-   writing anything: launch the **`adr-scout`** subagent with a one-to-three-sentence description of
-   this decision, OR (for a small/obvious ADR) do the scan yourself — grep `docs/adr/*.md` **bodies**
-   (not just titles) for the concept + its synonyms/mechanism words, and grep `estate/`, `core/`,
-   `plugins/`, `contracts/`, `proto/` for an already-shipped seam. **Read the related ADRs.** In the
-   ADR you write, cross-reference them and state the reconciliation each demands — supersede, refactor,
-   extend, or coexist — and never claim greenfield when a coupled/overlapping seam already ships.
+   writing anything: consult **`docs/adr/MAP.md`** (the generated subsystem knowledge graph, ADR-0109)
+   to find the relevant subsystem + its adjacent ones, then launch the **`adr-scout`** subagent with a
+   one-to-three-sentence description of this decision (it seeds from MAP.md and still greps live seams),
+   OR (for a small/obvious ADR) do the scan yourself — MAP.md + grep `docs/adr/*.md` **bodies** (not
+   just titles) and grep `estate/`, `core/`, `plugins/`, `contracts/`, `proto/` for an already-shipped
+   seam. **Read the related ADRs.** In the ADR you write, cross-reference them and state the
+   reconciliation each demands — supersede, refactor, extend, or coexist — never claim greenfield when
+   a coupled/overlapping seam already ships.
+0b. **Place the ADR on the map.** After you pick the ADR number (step 1), add it to >=1 subsystem in
+   `docs/adr/topics.json` and run `task adr:index` (the map is a single ontology file, not per-ADR
+   frontmatter). `task adr:index:check` (a CI gate) fails if a new ADR is left untagged.
 1. List `docs/adr/` and find the highest existing `NNNN-*.md` number. The next ADR number is that
    + 1, zero-padded to 4 digits (`0001`, `0002`, …).
 2. Read `docs/adr/0000-template.md` for the structure.

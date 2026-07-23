@@ -27,6 +27,12 @@ art it must reconcile with. You do NOT judge the design (that's charter-guardian
 
 Do not answer from the ADR titles alone; a relevant ADR's title often won't contain your keyword.
 
+0. **Seed from the map (ADR-0109).** Read `docs/adr/MAP.md` — the generated subsystem knowledge
+   graph. Find the subsystem(s) the proposal belongs to, take their ADRs AND the ADRs of *adjacent*
+   subsystems (the `depends_on` edges) as your starting candidate set. This surfaces the non-obvious
+   neighbours cheaply. **But the map is a seed, not the answer:** it indexes ADRs, and a shipped seam
+   can exist in `estate/`/`core/`/`plugins/` with no ADR — so you must still do steps 1–3 below. Never
+   let the tag map substitute for the live shipped-seam search (step 3).
 1. **Expand the concept into search terms** — the noun, its synonyms, the mechanism words, the
    substrate. (e.g. "provisioning" → provision, builder, Intent/Compute, provision→configure,
    create-vm, machine, infra; "credential resolution" → CredentialRef, secretbroker, vault,

@@ -1,0 +1,105 @@
+{
+  "note": "Source of truth for the ADR knowledge graph (ADR-0109). Views are GENERATED into MAP.md by `task adr:index`; `task adr:index:check` fails the build if MAP.md is stale or an ADR is untagged. When you add an ADR, add its number to >=1 subsystem below (coverage is enforced). Edit THIS file, never MAP.md. Multi-membership is expected for cross-cutting ADRs — that adjacency is the whole point (it is how a new design finds prior art it must reconcile with).",
+  "subsystems": {
+    "foundation": {
+      "title": "Foundation — charter authority, control plane, language/tooling, monorepo, meta-process",
+      "adrs": [1, 2, 4, 5, 6, 8, 108, 109],
+      "depends_on": []
+    },
+    "graph-model": {
+      "title": "Graph model — Entity/Facet/Relation/Contract primitives, projection & liveness",
+      "adrs": [15, 17, 41, 42, 59, 60, 79, 80, 81, 82, 84, 85, 96],
+      "depends_on": ["foundation"]
+    },
+    "plugin-port": {
+      "title": "Sovereign plugin port — the dark-matter substrate, transports, runtime registry",
+      "adrs": [46, 47, 48, 49, 51, 53, 54, 103],
+      "depends_on": ["foundation"]
+    },
+    "connectors": {
+      "title": "Connectors & Syncers — SoR ingest breadth, the Syncer SDK, adopt/AWX-import",
+      "adrs": [7, 14, 25, 26, 37, 38, 39, 45, 86, 87, 88, 89, 95, 97, 99],
+      "depends_on": ["plugin-port", "graph-model"]
+    },
+    "actuators": {
+      "title": "Actuators — execution engines (opentofu, helm, mcp, cert-issuer reconcile)",
+      "adrs": [16, 22, 50, 53, 92],
+      "depends_on": ["plugin-port"]
+    },
+    "orchestration": {
+      "title": "Orchestration — Triggers, Workflows/Gates, Steps, Runs, Actions, notifications",
+      "adrs": [10, 11, 18, 27, 31, 63],
+      "depends_on": ["graph-model", "plugin-port"]
+    },
+    "estate-as-code": {
+      "title": "Estate-as-Code — CaC declarations, environments, composition, the estate CLI",
+      "adrs": [55, 56, 57, 103],
+      "depends_on": ["connectors"]
+    },
+    "intent-compiler": {
+      "title": "Intent compiler — Intent/Assignment/Blueprint/Baseline compile to Runs",
+      "adrs": [23, 30, 36, 55, 58, 83, 85],
+      "depends_on": ["graph-model", "orchestration", "actuators", "estate-as-code"]
+    },
+    "provisioning": {
+      "title": "Provisioning — declare & build infra (Intent -> builder -> machines), provision->configure",
+      "adrs": [17, 58, 95, 96, 107],
+      "depends_on": ["intent-compiler", "capability-framework", "actuators", "connectors"]
+    },
+    "capability-framework": {
+      "title": "Capability framework — provides/requires, verification, resolve-inject vs enablement-gate, providers",
+      "adrs": [100, 104, 105, 106, 107],
+      "depends_on": ["plugin-port", "connectors", "actuators", "graph-model", "estate-as-code"]
+    },
+    "credentials-secrets": {
+      "title": "Credentials & secrets (§2.5) — brokering, the SecretBroker port, KV, KeyCustodian",
+      "adrs": [9, 29, 52, 94, 98, 99, 100, 106],
+      "depends_on": ["plugin-port"]
+    },
+    "certificates-pki": {
+      "title": "Certificates & PKI — cert lifecycle as a reconcile Actuator, OpenBao PKI",
+      "adrs": [30, 43, 50, 98, 106],
+      "depends_on": ["capability-framework", "actuators", "intent-compiler", "credentials-secrets"]
+    },
+    "state-artifacts": {
+      "title": "Tool state & artifacts — state backend, evidence store, object storage, statestore/artifactstore",
+      "adrs": [16, 29, 93, 97, 105],
+      "depends_on": ["capability-framework", "credentials-secrets", "actuators"]
+    },
+    "authz-identity": {
+      "title": "Authorization & identity — OpenFGA, Principal, SCIM, workload identity",
+      "adrs": [9, 28, 35, 79, 101],
+      "depends_on": ["foundation"]
+    },
+    "policy-governance": {
+      "title": "Policy & governance — the PDP port, typed Controls, admission PEPs, obligations",
+      "adrs": [61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76],
+      "depends_on": ["orchestration", "plugin-port", "authz-identity"]
+    },
+    "findings-drift": {
+      "title": "Findings & drift — Baselines, Findings, compliance packs, drift/GC",
+      "adrs": [19, 20, 33, 43, 80, 85],
+      "depends_on": ["graph-model", "intent-compiler"]
+    },
+    "ui": {
+      "title": "UI — React shell, schema-driven rendering, Views, descent, the first-party client",
+      "adrs": [3, 12, 20, 24, 90, 91],
+      "depends_on": ["api-surface"]
+    },
+    "api-surface": {
+      "title": "API surface — OpenAPI /api/v1, the AWX /api/v2 façade, the platform MCP server",
+      "adrs": [6, 21, 26, 76, 91],
+      "depends_on": ["orchestration", "authz-identity", "policy-governance"]
+    },
+    "substrate-ops": {
+      "title": "Substrate & ops — HA/DR, Cells/multi-region, Sites, deploy, bootstrap, upgrade, observability, dev backends",
+      "adrs": [13, 32, 40, 44, 45, 49, 77, 78, 93, 101, 102],
+      "depends_on": ["foundation", "plugin-port"]
+    },
+    "audit-telemetry": {
+      "title": "Audit & telemetry — the one audit stream, SIEM forwarder, decision recording, OpenTelemetry",
+      "adrs": [34, 65, 77],
+      "depends_on": ["policy-governance", "substrate-ops"]
+    }
+  }
+}

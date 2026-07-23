@@ -72,9 +72,10 @@ performed *after* drafting to *before* it — earlier and cheaper.
 
 ## Follow-ups
 
-1. **The durable concept→ADR index** (the structural complement): a `topics:` frontmatter tag on ADRs
-   + a **generated** by-topic view + a freshness lint (mirroring `generate:check` / `migrate:lint`, so
-   it cannot silently rot), so discovery does not depend on the author guessing the right keyword.
-   Continues ADR-0001's on-demand-context thread; its own ADR + a 108-ADR tag backfill.
+1. **The durable concept→ADR index** (the structural complement) — ✅ **CLOSED by [ADR-0109](0109-adr-knowledge-graph.md):**
+   a curated `docs/adr/topics.json` ontology → a generated `docs/adr/MAP.md` (subsystem graph +
+   by-topic index) + a `task adr:index:check` freshness/coverage gate in `ci`, with `adr-scout` seeding
+   from it. (ADR-0109 D1 refined the "frontmatter tag" sketch to a single ontology file, so the graph's
+   subsystem edges are expressible and the 108-ADR backfill is one reviewable diff.)
 2. Re-scope `adr-scout`'s search-term expansion as the corpus grows; consider seeding it from the
    `topics:` tags once (1) lands.

@@ -34,5 +34,6 @@ use (
 	./plugins/vcenter
 	./sdk
 	./sdk/secretbroker
+	./tools/adrmap
 	./types
 )
