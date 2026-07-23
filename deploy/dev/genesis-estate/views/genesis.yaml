@@ -1,0 +1,8 @@
+# The genesis floor has NO estate targets to reconcile yet — it deploys services and
+# plugins (via the self-deploy loop), it does not manage a fleet. This placeholder View
+# exists ONLY to satisfy the desired-state parser's non-optional views/ directory
+# (core/internal/desiredstate/desiredstate.go:214). Its selector matches no Entity kind,
+# so it resolves to zero targets and is completely inert (no runner grant references it).
+name: genesis-none
+selector:
+  kinds: [__genesis_none__]

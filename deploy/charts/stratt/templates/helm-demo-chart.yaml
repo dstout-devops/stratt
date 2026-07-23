@@ -15,3 +15,20 @@ data:
 {{ $.Files.Get $path | indent 4 }}
 {{- end }}
 {{- end }}
+{{- if .Values.helmOpenfgaChart }}
+---
+# The OpenFGA-memory self-deploy chart (files/openfga-memory/**, ADR-0102), shipped as
+# a ConfigMap the helm Actuator plugin mounts at /charts/openfga-memory — the "Stratt
+# self-deploys a REAL service" dogfood. Same flatten/restore mechanism as the hello
+# chart (plugins.yaml .openfgaChart). DEV — gated on .Values.helmOpenfgaChart.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "stratt.fullname" . }}-openfga-chart
+  labels: {{- include "stratt.labels" . | nindent 4 }}
+data:
+{{- range $path, $bytes := .Files.Glob "files/openfga-memory/**" }}
+  {{ trimPrefix "files/openfga-memory/" $path | replace "/" "__" }}: |-
+{{ $.Files.Get $path | indent 4 }}
+{{- end }}
+{{- end }}

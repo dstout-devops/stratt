@@ -183,7 +183,7 @@ tasks:
       - task: ui:ci
 
   dev:up:
-    desc: Start the Phase-0 dev substrate (Postgres 18, NATS JetStream, Temporal, vcsim)
+    desc: "EXTRAS (opt-in; genesis needs none of this): full compose dev substrate (Postgres 18, NATS, Temporal, vcsim, …)"
     cmds:
       - docker compose -f deploy/dev/docker-compose.yml up -d --wait
 
@@ -401,8 +401,8 @@ tasks:
       - "{{.HELM}} template stratt deploy/charts/stratt -f deploy/charts/stratt/values-allinone.yaml > /dev/null"
       # Self-deploy profile (helm Actuator plugin + demo chart, M2/ADR-0092).
       - "{{.HELM}} template stratt deploy/charts/stratt -f deploy/charts/stratt/values-allinone.yaml -f deploy/charts/stratt/values-selfdeploy.yaml > /dev/null"
-      # Self-deploy profile (helm Actuator plugin + demo chart, M2/ADR-0092).
-      - "{{.HELM}} template stratt deploy/charts/stratt -f deploy/charts/stratt/values-allinone.yaml -f deploy/charts/stratt/values-selfdeploy.yaml > /dev/null"
+      # Genesis profile (ADR-0102): minimal floor + self-deploy + inline declarations.
+      - "{{.HELM}} template stratt deploy/charts/stratt -f deploy/charts/stratt/values-allinone.yaml -f deploy/charts/stratt/values-selfdeploy.yaml -f deploy/charts/stratt/values-genesis.yaml > /dev/null"
 
   tools:helm:
     desc: Install the pinned helm binary to .bin/ (idempotent; zero-manual bootstrap)
@@ -500,6 +500,17 @@ tasks:
       - mkdir -p {{.ROOT_DIR}}/deploy/charts/stratt/dev/declarations
       - cp -R {{.ROOT_DIR}}/estate/. {{.ROOT_DIR}}/deploy/charts/stratt/dev/declarations/
 
+  dev:stage-genesis:
+    # The LEAN genesis slice (ADR-0102): stage ONLY deploy/dev/genesis-estate into the
+    # inline-declarations path — the one bootstrap-admin grant + the genesis self-deploy
+    # Workflow/CredentialRef, NOT the full /estate. Same mirror-exactly mechanism as
+    # dev:stage-estate, different (minimal) source, so genesis boots with just its floor.
+    desc: Stage the lean genesis slice (bootstrap-admin grant + self-deploy Workflow) into the inline-declarations path
+    cmds:
+      - rm -rf {{.ROOT_DIR}}/deploy/charts/stratt/dev/declarations
+      - mkdir -p {{.ROOT_DIR}}/deploy/charts/stratt/dev/declarations
+      - cp -R {{.ROOT_DIR}}/deploy/dev/genesis-estate/. {{.ROOT_DIR}}/deploy/charts/stratt/dev/declarations/
+
   dev:managed-web:up:
     desc: Deploy the REAL sshd/nginx managed node for the ADR-0084 convergence demo (keypair + machine-credential Secret + node, idempotent)
     deps: [tools:kubectl]
@@ -552,7 +563,7 @@ tasks:
       - "{{.KUBECTL}} --context {{.KIND_CONTEXT}} apply -f {{.ROOT_DIR}}/deploy/dev/crossplane-subnet.yaml"
 
   dev:install:
-    desc: Helm-install strattd (+ in-cluster plugins) into kind, wired to the compose substrate (idempotent)
+    desc: "EXTRAS (advanced): helm-install strattd + all in-cluster plugins into kind, wired to the compose substrate (the plugin-e2e path; genesis uses dev:genesis instead)"
     deps: [tools:helm, tools:kubectl, dev:stage-estate]
     vars:
       GW:
@@ -576,25 +587,72 @@ tasks:
           --set-string "plugins[2].env.STRATT_AWSEC2_ENDPOINT=http://${GW}:4566"
       - "{{.KUBECTL}} --context {{.KIND_CONTEXT}} -n stratt rollout status deploy/stratt --timeout=180s"
 
-  bootstrap:kind:
-    # The minimal "nothing -> Stratt in Kubernetes" path (M0): kind + the in-cluster
-    # substrate (Postgres/NATS/Temporal) + strattd, from a single helm install — no
-    # compose stack. Self-contained on purpose (values-allinone.yaml). DEV ONLY.
-    # From here, Stratt's own plugins manage the rest of the deployment (M1/M2).
-    desc: From nothing -> Stratt in kind, self-contained (kind + in-cluster substrate + helm install)
+  dev:genesis:
+    # THE default dev entrypoint (ADR-0102): nothing -> minimal Stratt in kind. kind +
+    # the in-cluster spine (Postgres/NATS/Temporal, charter §1.4) + strattd + the in-proc
+    # authz evaluator + ONE self-retiring dev-header bootstrap-admin Principal (granted
+    # only enough to drive self-deploy — see deploy/dev/genesis-estate). No compose, no
+    # tool plugins. From here Stratt self-deploys the rest through its OWN gated helm/deploy
+    # loop (dev:genesis:selfdeploy). The self-retiring floor: the boot guard forbids the
+    # dev header alongside OIDC, so it cannot persist into the real-authz posture. DEV ONLY.
+    desc: THE default dev entrypoint — nothing -> minimal Stratt in kind (spine + strattd + bootstrap-admin), which then self-deploys the rest
     deps: [tools:helm, tools:kubectl]
     cmds:
       - task: dev:kind:up
       - task: image:kind-load
+      - task: image:helm-plugin # the self-deploy Actuator Stratt uses to deploy the rest
+      - task: dev:stage-genesis
       - |
         set -eu
         "{{.HELM}}" upgrade --install stratt {{.ROOT_DIR}}/deploy/charts/stratt \
           --kube-context {{.KIND_CONTEXT}} -n stratt --create-namespace \
-          -f {{.ROOT_DIR}}/deploy/charts/stratt/values-allinone.yaml
+          -f {{.ROOT_DIR}}/deploy/charts/stratt/values-allinone.yaml \
+          -f {{.ROOT_DIR}}/deploy/charts/stratt/values-selfdeploy.yaml \
+          -f {{.ROOT_DIR}}/deploy/charts/stratt/values-genesis.yaml
+      - "{{.KUBECTL}} --context {{.KIND_CONTEXT}} -n stratt rollout status deploy/stratt --timeout=240s"
+
+  bootstrap:kind:
+    desc: "Alias of dev:genesis (ADR-0102 renamed the minimal-core entrypoint)"
+    cmds:
+      - task: dev:genesis
+
+  dev:genesis:selfdeploy:
+    # Dogfood (ADR-0102): from the genesis floor, have Stratt self-deploy a REAL service —
+    # the OpenFGA server (memory mode) — through its own gated helm/deploy loop. Ensures
+    # the target namespace exists (the self-deploy plugin's ClusterRole is scoped to
+    # workloads, NOT namespace-create — least authority), then launches the
+    # genesis-authz-deploy Workflow, approves the platform-admins Gate as bootstrap-admin,
+    # and waits for the WorkflowRun to converge. Run AFTER `task dev:genesis`.
+    desc: "Dogfood: Stratt self-deploys the real OpenFGA server via its own gated helm/deploy loop"
+    deps: [tools:kubectl]
+    cmds:
+      # The stratt-authz namespace is created by the chart (deployNamespace); here we just
+      # seed the gate-marker Secret the gateOnly CredentialRef points at (pointer, no material).
+      - "{{.KUBECTL}} --context {{.KIND_CONTEXT}} -n stratt-authz create secret generic helm-deploy-authz --from-literal=marker=1 --dry-run=client -o yaml | {{.KUBECTL}} --context {{.KIND_CONTEXT}} apply -f -"
+      - KUBECONTEXT={{.KIND_CONTEXT}} KUBECTL={{.KUBECTL}} bash {{.ROOT_DIR}}/deploy/dev/genesis-selfdeploy.sh
+
+  dev:promote:authz:
+    # Genesis -> real-authz promotion, BACKEND axis (ADR-0102, docs/runbooks/genesis-to-authz.md):
+    # point strattd's authz backend at the self-deployed OpenFGA server (in-proc -> server).
+    # ONE strattd restart (backend selection is boot-time env); on boot SyncTuples pushes the
+    # CaC tuples into the fresh server. Dev-header identity is RETAINED (legal — the boot guard
+    # forbids only dev-header + OIDC). Run AFTER dev:genesis:selfdeploy. The full OIDC identity
+    # flip (dev-header -> OpenBao) is the ADR-0101 follow-up.
+    desc: "Promote authz backend in-proc -> the self-deployed OpenFGA server (one strattd restart)"
+    deps: [tools:helm, tools:kubectl]
+    cmds:
+      - |
+        set -eu
+        "{{.HELM}}" upgrade --install stratt {{.ROOT_DIR}}/deploy/charts/stratt \
+          --kube-context {{.KIND_CONTEXT}} -n stratt \
+          -f {{.ROOT_DIR}}/deploy/charts/stratt/values-allinone.yaml \
+          -f {{.ROOT_DIR}}/deploy/charts/stratt/values-selfdeploy.yaml \
+          -f {{.ROOT_DIR}}/deploy/charts/stratt/values-genesis.yaml \
+          --set-string externalOpenfga.url=http://openfga.stratt-authz.svc:8080
       - "{{.KUBECTL}} --context {{.KIND_CONTEXT}} -n stratt rollout status deploy/stratt --timeout=240s"
 
   dev:stack:up:
-    desc: Turnkey — substrate + kind + images + helm-install strattd & plugins, wait-ready (fully task-driven)
+    desc: "EXTRAS (turnkey plugin-e2e stack): compose substrate + kind + all plugin images + helm-install (opt-in; genesis is the minimal default)"
     deps: [dev:kind:up]
     cmds:
       # Only the substrate the plugin e2e actually needs — Postgres (graph),

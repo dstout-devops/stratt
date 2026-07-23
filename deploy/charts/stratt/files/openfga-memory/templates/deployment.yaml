@@ -1,0 +1,41 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}
+  labels:
+    app.kubernetes.io/name: {{ .Release.Name }}
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+    stratt.dev/deployed-by: helm-actuator
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: {{ .Release.Name }}
+    spec:
+      containers:
+        - name: openfga
+          # ADR-0009-vetted pin; identical to the compose dev image (docker-compose.yml).
+          image: {{ .Values.image | default "openfga/openfga:v1.17.0" | quote }}
+          args:
+            - run
+            - --datastore-engine
+            - memory
+            - --playground-enabled=false
+          ports:
+            - { name: http, containerPort: 8080 } # REST API — strattd's OpenFGA client dials this
+            - { name: grpc, containerPort: 8081 }
+          readinessProbe:
+            httpGet: { path: /healthz, port: http }
+            initialDelaySeconds: 2
+            periodSeconds: 3
+          livenessProbe:
+            httpGet: { path: /healthz, port: http }
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            requests: { cpu: 25m, memory: 64Mi }
+            limits: { memory: 256Mi }

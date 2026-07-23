@@ -292,12 +292,22 @@ func (s *Server) Invoke(req *pluginv1.InvokeRequest, stream grpc.ServerStreaming
 	if req.GetDryRun() {
 		msg = fmt.Sprintf("dry-run ok: release %q would deploy to %q", p.Release, p.Namespace)
 	}
+	// The output Contract (actions/helm/deploy.output) demands the deployed release
+	// identity as an object — emit it as the typed Outputs payload, not just the schema
+	// ref, or ValidateActionOutputs sees a null and fails the Run.
+	outputs, err := json.Marshal(map[string]string{"release": p.Release, "namespace": p.Namespace})
+	if err != nil {
+		return invokeFailed(stream, cid, err)
+	}
 	return stream.Send(&pluginv1.InvokeResponse{
 		Event: &pluginv1.TaskEvent{
 			Level: pluginv1.TaskEvent_LEVEL_INFO, At: timestamppb.Now(), CorrelationId: cid,
 			Terminal: true, Ok: true, Message: msg, Fields: map[string]string{"kind": "finished", "release": p.Release},
 		},
-		Result: &pluginv1.InvokeResult{OutputContract: &pluginv1.ContractRef{SchemaId: "actions/helm/deploy.output"}},
+		Result: &pluginv1.InvokeResult{
+			Outputs:        &pluginv1.Payload{Bytes: outputs},
+			OutputContract: &pluginv1.ContractRef{SchemaId: "actions/helm/deploy.output"},
+		},
 	})
 }
 

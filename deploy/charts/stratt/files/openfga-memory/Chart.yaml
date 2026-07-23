@@ -1,0 +1,17 @@
+# openfga-memory (ADR-0102) — a self-contained chart the Stratt helm Actuator deploys
+# to prove Stratt can stand up a REAL service through its own gated self-deploy loop.
+# Runs the ADR-0009-vetted openfga/openfga:v1.17.0 server in MEMORY mode: a genuine
+# Deployment + Service (not a toy ConfigMap), but with no Postgres DSN and no migration
+# hook, so the whole thing ships as a ConfigMap the plugin mounts (no repo/OCI pull).
+#
+# This is a CAPABILITY PROOF, distinct from the production openfga.enabled postgres
+# subchart (values-authz.yaml): memory loses tuples on restart, but strattd's SyncTuples
+# re-pushes the CaC tuple set on every reconcile, so a dev server self-heals. On the
+# genesis→real-authz promotion path: once up, `task dev:promote:authz` points strattd's
+# authz backend at this server's HTTP API.
+apiVersion: v2
+name: openfga-memory
+description: OpenFGA (memory engine) — Stratt self-deploy capability proof (ADR-0102)
+type: application
+version: 0.1.0
+appVersion: "v1.17.0"

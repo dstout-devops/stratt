@@ -1,0 +1,31 @@
+# genesis-authz-deploy (ADR-0102) — the dogfood: from the minimal genesis floor,
+# Stratt self-deploys a REAL service (the OpenFGA server, memory mode) through its
+# OWN gated reconcile/actuator loop. This proves the self-managing thesis with a real
+# workload — a Deployment+Service running openfga/openfga:v1.17.0 — not a toy ConfigMap.
+# It also sits on the genesis→real-authz promotion path (docs/runbooks/genesis-to-authz.md):
+# once this OpenFGA is up, `task dev:promote:authz` flips strattd's authz backend onto it.
+#
+# §5 Flow 1: the launch IS a gate — the approve Step adds a platform-admins Gate BEFORE
+# the mutating helm upgrade --install. The bootstrap-admin Principal (dev-header) is a
+# platform-admins member, so it may approve (POST /gates/{id}/decision, §1.6). helm/deploy
+# is TARGETLESS — it names its own release + namespace.
+name: genesis-authz-deploy
+steps:
+  - name: approve
+    gate:
+      approvers:
+        teams: [platform-admins]
+      timeoutSeconds: 86400 # 24h to approve the deploy
+  - name: deploy
+    needs: [approve]
+    action: helm/deploy
+    # §2.5 — the Action's CredentialRef use-check is its only authz gate; the launching
+    # Principal needs `user of credential_ref:helm-deploy`. gateOnly pointer, no material.
+    credentialRefs: [helm-deploy]
+    params:
+      # The self-contained OpenFGA-memory chart mounted into the helm plugin
+      # (deploy/charts/stratt/files/openfga-memory, ADR-0102). Renders a real
+      # Deployment + Service — the observable proof of self-deploying a service.
+      chart: openfga-memory
+      release: openfga
+      namespace: stratt-authz

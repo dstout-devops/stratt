@@ -3,8 +3,10 @@
 # through its OWN reconcile/actuator loop. Layer ON TOP of values-allinone.yaml.
 # Release name "stratt" (any namespace — service names are release-prefixed). DEV.
 
-# Ship the demo chart ConfigMap (templates/helm-demo-chart.yaml).
+# Ship the demo chart ConfigMaps (templates/helm-demo-chart.yaml): the hello marker
+# (M2, ADR-0092) and the OpenFGA-memory service chart (the genesis dogfood, ADR-0102).
 helmDemoChart: true
+helmOpenfgaChart: true
 
 plugins:
   - name: helm
@@ -14,14 +16,26 @@ plugins:
       pullPolicy: Never # kind-loaded (task image:helm-plugin)
     tmpDir: true # writable /tmp for helm's cache (read-only rootfs)
     demoChart: true # mount the hello chart at /charts/hello
+    openfgaChart: true # mount the openfga-memory chart at /charts/openfga-memory (ADR-0102)
     env:
       STRATT_HELM_CHART_ROOT: /charts
-    # Core-tier self-deploy deploy RBAC. charter-guardian: a broad-SA path is
-    # admissible for the core-tier self-deploy dogfood; per-route/per-namespace
-    # scoped ServiceAccounts are the REQUIRED model for general chart deploys
-    # (ADR-0092 §6 follow-up). Scoped to the kinds the demo chart + a plugin
-    # Deployment touch — never cluster-admin.
+    # Self-deploy RBAC CONFINED to the one pre-created target namespace (ADR-0102 Q3 /
+    # ADR-0092 required model): deployNamespace renders a namespaced Role+RoleBinding in
+    # stratt-authz instead of a cluster-wide ClusterRole — so the self-deploy SA has NO
+    # cluster-wide `secrets` reach and cannot touch any other namespace's brokerable
+    # Secrets (§2.5). Scoped to the kinds the openfga-memory chart touches; never
+    # cluster-admin, never namespace-create (the namespace is pre-created out-of-band).
+    deployNamespace: stratt-authz
+    # Write access to exactly the kinds the release creates (openfga-memory: a
+    # Deployment + Service; helm also writes its release Secret + ConfigMaps).
     kubeAccess:
       apiGroups: ["", "apps"]
       resources: ["configmaps", "services", "deployments", "serviceaccounts", "secrets"]
       verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+    # READ-ONLY, separate rule (least authority): helm --wait watches Pods + ReplicaSets
+    # to confirm rollout readiness — without it, --wait never observes Ready and the deploy
+    # hangs until cancelled. The self-deploy plugin never mutates these.
+    kubeAccessRead:
+      apiGroups: ["", "apps"]
+      resources: ["pods", "replicasets"]
+      verbs: ["get", "list", "watch"]

@@ -1,0 +1,20 @@
+# Genesis overlay (ADR-0102) — layered on values-allinone.yaml + values-selfdeploy.yaml
+# by `task dev:genesis`. Everything the minimal genesis floor needs beyond the spine:
+# turn ON inline declarations so the ONE bootstrap-admin grant (staged by
+# dev:stage-genesis) actually loads — without it, genesis boots deny-by-default with
+# zero tuples and the bootstrap admin cannot even approve the self-deploy Gate.
+#
+# Inherits from allinone: in-cluster Postgres/NATS/Temporal + devPrincipalHeader: true
+# (the self-retiring dev-header bootstrap admin — the boot guard forbids it alongside
+# OIDC, so it cannot survive into the real-authz posture). Inherits from selfdeploy:
+# the helm Actuator plugin + the hello/openfga-memory self-deploy charts.
+declarations:
+  inline:
+    enabled: true
+    interval: "10s" # tighten the reconcile so the genesis grant + Workflow go live fast
+    # This inline set IS the authoritative genesis desired state; let it prune a
+    # dirty/shared dev graph down to just the staged genesis slice.
+    maxPruneFraction: "1"
+
+# Reconcile the dev slice (the genesis fixtures are untagged ⇒ live in every env).
+environment: dev

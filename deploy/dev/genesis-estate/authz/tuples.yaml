@@ -1,0 +1,17 @@
+# Genesis authz (ADR-0102) — the LEAN bootstrap grant, staged into the inline
+# declarations by `task dev:stage-genesis`. This is deliberately NOT the full
+# /estate: the genesis floor loads exactly the two grants the one self-retiring
+# bootstrap-admin Principal needs to drive self-deploy, and nothing else.
+#
+# The dev-header resolves `X-Stratt-Principal: bootstrap-admin` to this Principal;
+# deny-by-default still holds — it simply holds these two explicit grants. The
+# floor is self-retiring: the boot guard (checkDevPrincipalSafety) forbids the dev
+# header coexisting with OIDC, so this Principal cannot survive into the real-authz
+# posture (charter §1.3 — the root is provably temporary, ADR-0102).
+tuples:
+  # Approve the §5 Flow-1 Gate that fronts the self-deploy Workflow (helm/deploy is
+  # a mutating helm upgrade --install, so it is gated on team:platform-admins).
+  - { user: principal:bootstrap-admin, relation: member, object: team:platform-admins }
+  # Use the helm/deploy Action's authz-gate CredentialRef (§2.5 use-check — an
+  # Action's CredentialRef is its only authz gate; ADR-0092).
+  - { user: principal:bootstrap-admin, relation: user, object: credential_ref:helm-deploy }

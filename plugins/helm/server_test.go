@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"io"
 	"log/slog"
 	"strings"
@@ -174,6 +175,20 @@ func TestInvoke_DeployAction(t *testing.T) {
 	}
 	if term.GetResult().GetOutputContract().GetSchemaId() == "" {
 		t.Fatal("the deploy action must name an output contract")
+	}
+	// The output Contract demands an OBJECT {release, namespace} — the Action must emit
+	// the typed Outputs payload, not only name the contract, or ValidateActionOutputs
+	// sees null and fails the Run (regression: the first functional self-deploy hit this).
+	raw := term.GetResult().GetOutputs().GetBytes()
+	if len(raw) == 0 {
+		t.Fatal("the deploy action must emit the typed Outputs payload, not just the contract ref")
+	}
+	var got map[string]string
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatalf("Outputs must be a JSON object: %v", err)
+	}
+	if got["release"] != "app" || got["namespace"] != "default" {
+		t.Fatalf("Outputs must carry the deployed release identity, got %v", got)
 	}
 }
 
