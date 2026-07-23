@@ -160,6 +160,65 @@ func TestPhantomProviderRejected(t *testing.T) {
 	}
 }
 
+// TestResolveCapabilityAction proves the ADR-0105 dispatch-time resolution: a required capability
+// maps to the single VERIFIED provider's resolve Action (<pluginIdentity>/<class>-resolve), and
+// fails closed on none/ambiguous/undeclared.
+func TestResolveCapabilityAction(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	plugins := orchestrate.NewPluginRegistry(nil, nil)
+	r := New(s, plugins, homegate.Deps{}, nil, lazyDial, time.Second, discard())
+	r.manifest = fakeManifest(map[string][]string{"localhost:9090": {"statestore"}})
+
+	// No provider declared yet → resolution fails closed.
+	if _, err := r.ResolveCapabilityAction(ctx, "statestore"); err == nil {
+		t.Fatal("no provider must fail closed")
+	}
+
+	// A verified provider that declares its resolve Action → resolves to it.
+	if err := s.UpsertActuator(ctx, types.Actuator{Name: "t-s3-state", Address: "localhost:9090", PluginIdentity: "awss3", ActionNames: []string{"awss3/statestore-resolve"}, Provides: []string{"statestore"}}); err != nil {
+		t.Fatal(err)
+	}
+	defer s.DeleteActuator(ctx, "t-s3-state")
+	defer s.DeleteProviderVerification(ctx, "actuator", "t-s3-state")
+
+	// Before verification, the declared-but-unverified provider must NOT resolve (fail closed).
+	if _, err := r.ResolveCapabilityAction(ctx, "statestore"); err == nil {
+		t.Fatal("a declared-but-unverified provider must not resolve")
+	}
+	r.ReconcileProviderVerification(ctx)
+	action, err := r.ResolveCapabilityAction(ctx, "statestore")
+	if err != nil {
+		t.Fatalf("a verified provider must resolve: %v", err)
+	}
+	if action != "awss3/statestore-resolve" {
+		t.Fatalf("resolve Action = <pluginIdentity>/<class>-resolve, got %q", action)
+	}
+
+	// A verified provider that advertises the capability but does NOT declare the resolve Action → error.
+	if err := s.UpsertActuator(ctx, types.Actuator{Name: "t-bad-state", Address: "localhost:9091", PluginIdentity: "bad", Provides: []string{"artifactstore"}}); err != nil {
+		t.Fatal(err)
+	}
+	defer s.DeleteActuator(ctx, "t-bad-state")
+	defer s.DeleteProviderVerification(ctx, "actuator", "t-bad-state")
+	r.manifest = fakeManifest(map[string][]string{"localhost:9090": {"statestore"}, "localhost:9091": {"artifactstore"}})
+	r.ReconcileProviderVerification(ctx)
+	if _, err := r.ResolveCapabilityAction(ctx, "artifactstore"); err == nil {
+		t.Fatal("a provider that doesn't declare its resolve Action must fail closed")
+	}
+
+	// Two verified statestore providers → ambiguous (needs an estate binding, §2.4).
+	if err := s.UpsertActuator(ctx, types.Actuator{Name: "t-s3-state2", Address: "localhost:9090", PluginIdentity: "awss3", ActionNames: []string{"awss3/statestore-resolve"}, Provides: []string{"statestore"}}); err != nil {
+		t.Fatal(err)
+	}
+	defer s.DeleteActuator(ctx, "t-s3-state2")
+	defer s.DeleteProviderVerification(ctx, "actuator", "t-s3-state2")
+	r.ReconcileProviderVerification(ctx)
+	if _, err := r.ResolveCapabilityAction(ctx, "statestore"); err == nil || !strings.Contains(err.Error(), "ambiguous") {
+		t.Fatalf("≥2 providers must be ambiguous (no silent tiebreak, §2.4): %v", err)
+	}
+}
+
 // TestVerificationTransientBlipPreservesVerdict is guardian Finding 1: a provider that verified
 // once must NOT be dropped to verified=false by a later TRANSIENT manifest-fetch failure — else a
 // blip in the leader's pass would collapse an established provider count and silently tiebreak a

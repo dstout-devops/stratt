@@ -450,6 +450,23 @@ message ApplyRequest {
   // it is the confused-deputy gate — the core REJECTS any ItemResult/write-back
   // keyed to a target NOT in this set. Empty for workspace-scoped actuators (tofu).
   repeated ApplyTarget targets = 6;
+  // Core-resolved capability handles (ADR-0105), keyed by capability class (e.g. "statestore").
+  // A LEGIBLE, core-authored channel — like `targets`, NEVER baked into the opaque `desired`
+  // (§1.5/§1.8). When an Actuator `requires: [X]`, the core resolves the bound provider, invokes
+  // its resolve Action, validates the result against the CLASS-level Contract, and injects the
+  // handle here; the plugin consumes it (e.g. tofu renders -backend-config from the statestore
+  // handle). Provider-agnostic: S3, Artifactory, GCS each fill the same shape (D1).
+  map<string, CapabilityHandle> resolved_capabilities = 8;
+}
+
+// CapabilityHandle is a core-resolved capability's handle (ADR-0105) — provider-agnostic so a
+// provider swap changes no consumer. `kind` is the provider-neutral variant (for statestore, the
+// tool backend TYPE — s3/http/gcs); `config` its string settings (bucket/key/region/endpoint/
+// address…); `credential_ref` a §2.5 CredentialRef NAME (resolved at the pod, NEVER material).
+message CapabilityHandle {
+  string kind = 1;
+  map<string, string> config = 2;
+  string credential_ref = 3;
 }
 
 // ApplyTarget is one core-resolved target. `name` is the stable alias the plugin

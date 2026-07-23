@@ -221,7 +221,7 @@ func (r *Registry) enableActuatorLocked(a types.Actuator, spec string, res resol
 	}
 	pa := orchestrate.PluginActuator{
 		Host: host, DryRunnable: a.DryRunnable, Grant: grant, PlanStore: r.plans,
-		JobCommand: a.JobCommand, Image: a.Image, MCP: a.MCP,
+		JobCommand: a.JobCommand, Image: a.Image, MCP: a.MCP, Requires: a.Requires,
 	}
 	if err := r.plugins.RegisterActuator(a.Name, pa); err != nil {
 		// §2.4 collision → reject + surface (D4/D6), never crash the daemon.
@@ -451,6 +451,68 @@ func classifyRequires(requires []string, res resolution) (ok bool, reason string
 		}
 	}
 	return true, ""
+}
+
+// ResolveCapabilityAction returns the resolve-Action name of the single VERIFIED provider of a
+// capability class (ADR-0105) — the mapping the orchestration invokes at dispatch. Fails CLOSED:
+// 0 verified providers → error; ≥2 → ambiguous (an estate binding must name one, ADR-0105 D5), never
+// a silent tiebreak (§2.4). The resolve Action is the provider's `<pluginIdentity>/<class>-resolve`
+// (the frozen <plugin>/<op> convention), and it must be one of the provider's declared ActionNames.
+func (r *Registry) ResolveCapabilityAction(ctx context.Context, capClass string) (string, error) {
+	verifs, err := r.store.ListProviderVerifications(ctx)
+	if err != nil {
+		return "", err
+	}
+	verified := make(map[string]bool, len(verifs))
+	for _, v := range verifs {
+		if v.Verified {
+			verified[v.Kind+"/"+v.Name] = true
+		}
+	}
+	type provider struct {
+		pluginIdentity string
+		actionNames    []string
+	}
+	var providers []provider
+	conns, err := r.store.ListConnectors(ctx)
+	if err != nil {
+		return "", err
+	}
+	for _, c := range conns {
+		if verified["connector/"+c.Name] && contains(c.Provides, capClass) {
+			providers = append(providers, provider{c.PluginIdentity, c.ActionNames})
+		}
+	}
+	acts, err := r.store.ListActuators(ctx)
+	if err != nil {
+		return "", err
+	}
+	for _, a := range acts {
+		if verified["actuator/"+a.Name] && contains(a.Provides, capClass) {
+			providers = append(providers, provider{a.PluginIdentity, a.ActionNames})
+		}
+	}
+	switch len(providers) {
+	case 0:
+		return "", fmt.Errorf("no verified provider for capability %q", capClass)
+	case 1:
+		want := providers[0].pluginIdentity + "/" + capClass + "-resolve"
+		if !contains(providers[0].actionNames, want) {
+			return "", fmt.Errorf("capability %q provider %q does not declare its resolve Action %q", capClass, providers[0].pluginIdentity, want)
+		}
+		return want, nil
+	default:
+		return "", fmt.Errorf("ambiguous: %d verified providers for capability %q; add an estate binding (ADR-0105 D5)", len(providers), capClass)
+	}
+}
+
+func contains(xs []string, x string) bool {
+	for _, v := range xs {
+		if v == x {
+			return true
+		}
+	}
+	return false
 }
 
 // ── provider verification (leader-only; ADR-0104 D1) ─────────────────────────

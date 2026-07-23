@@ -687,6 +687,19 @@ type ApplyInvoke struct {
 	// FacetWriteScope is the per-Run facet FLOOR (ADR-0054): the effective write-back
 	// allowlist is the plugin grant ∩ this scope. Empty admits no facet write-back.
 	FacetWriteScope []string
+	// ResolvedCapabilities are the core-resolved capability handles (ADR-0105), keyed by capability
+	// class (e.g. "statestore"). Injected LEGIBLY onto the Apply (never the opaque `desired`) when
+	// the Actuator `requires` a capability; the plugin consumes the handle (e.g. tofu -backend-config).
+	ResolvedCapabilities map[string]CapabilityHandle
+}
+
+// CapabilityHandle is a core-resolved capability's provider-agnostic handle (ADR-0105): Kind is the
+// provider-neutral variant (for statestore, the tool backend type — s3/http/gcs), Config its string
+// settings, CredentialRef a §2.5 CredentialRef NAME (resolved at the pod, never material).
+type CapabilityHandle struct {
+	Kind          string
+	Config        map[string]string
+	CredentialRef string
 }
 
 // PlanInvoke is a governed Actuator Plan request (the unary, pinnable producer).
@@ -851,6 +864,14 @@ func (h *Host) ApplyRaw(ctx context.Context, req ApplyInvoke) (RawApplyResult, e
 	if len(req.PinnedPlan) > 0 {
 		applyReq.PlanRef = &pluginv1.ArtifactRef{Sha256: req.PlanDigest}
 		applyReq.PinnedPlan = req.PinnedPlan
+	}
+	// Core-resolved capability handles (ADR-0105) ride the LEGIBLE channel, never `desired`.
+	if len(req.ResolvedCapabilities) > 0 {
+		rc := make(map[string]*pluginv1.CapabilityHandle, len(req.ResolvedCapabilities))
+		for class, ch := range req.ResolvedCapabilities {
+			rc[class] = &pluginv1.CapabilityHandle{Kind: ch.Kind, Config: ch.Config, CredentialRef: ch.CredentialRef}
+		}
+		applyReq.ResolvedCapabilities = rc
 	}
 	stream, err := h.client.Apply(ctx, applyReq)
 	if err != nil {

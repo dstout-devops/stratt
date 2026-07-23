@@ -162,7 +162,11 @@ future core-side coordinate-resolver) — not shared across the module boundary.
    provider).
 2. The estate `capability-bindings.yaml` surface (ADR-0104 D3 / follow-up) — deferred until a **second**
    `statestore` provider lands (Artifactory/GCS/Garage), which is what first makes `requires: [statestore]`
-   ambiguous (D5). Not needed while S3 is sole.
+   ambiguous (D5). Not needed while S3 is sole. **When it lands, the binding must carry the resolve-Action
+   name EXPLICITLY** (charter-guardian Flag A): the first slice *derives* `<pluginIdentity>/<class>-resolve`
+   and sanity-checks it against the provider's declared ActionNames — fine for sole-provider auto-bind, but
+   a provider whose resolve action is named differently must not be locked out by naming coincidence, so the
+   binding (not re-derivation) becomes the source of the capability→action mapping.
 3. `artifactstore` provider **and its Contract** — authored only when a consumer Contract demands it (a
    plugin artifact path, or re-homing a core producer off Postgres per D7); pinning a guessed I/O shape
    beforehand would itself be speculative (§1.1).

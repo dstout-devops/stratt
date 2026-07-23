@@ -25,6 +25,11 @@ func TestStatestoreOutputContract(t *testing.T) {
 	if err := ValidateNamed("capabilities/statestore.input", []byte(`{"workspace":"web-prod"}`)); err != nil {
 		t.Fatalf("a valid resolve input must validate: %v", err)
 	}
+	// An empty workspace must fail closed at the input Contract (guardian slice-3 Flag B): the core
+	// validates the resolve INPUT before invoking, so a malformed/empty workspace fails in the core.
+	if err := ValidateNamed("capabilities/statestore.input", []byte(`{"workspace":""}`)); err == nil {
+		t.Fatal("an empty workspace must be rejected by the input Contract")
+	}
 }
 
 func TestValidateActuatorParams(t *testing.T) {
