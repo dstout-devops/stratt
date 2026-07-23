@@ -49,6 +49,8 @@ type Declaration struct {
 type Declarations struct {
 	Views          []Declaration         `json:"views"`
 	CredentialRefs []types.CredentialRef `json:"credentialRefs"`
+	Connectors     []types.Connector     `json:"connectors"` // ADR-0103: runtime-registered Connectors
+	Actuators      []types.Actuator      `json:"actuators"`  // ADR-0103: runtime-registered plugin Actuators
 	Triggers       []types.Trigger       `json:"triggers"`
 	Workflows      []types.Workflow      `json:"workflows"`
 	Emitters       []types.Emitter       `json:"emitters"`
@@ -72,6 +74,8 @@ type Declarations struct {
 const (
 	KindView          = "view"
 	KindCredentialRef = "credential-ref"
+	KindConnector     = "connector"
+	KindActuator      = "actuator"
 	KindTrigger       = "trigger"
 	KindWorkflow      = "workflow"
 	KindEmitter       = "emitter"
@@ -224,6 +228,20 @@ func ParseDir(root string, decider policy.Decider) (Declarations, error) {
 	}
 	out.CredentialRefs = refs
 	sort.Slice(out.CredentialRefs, func(i, j int) bool { return out.CredentialRefs[i].Name < out.CredentialRefs[j].Name })
+
+	connectors, err := parseKind(filepath.Join(root, "connectors"), true, parseConnectorFile)
+	if err != nil {
+		return out, err
+	}
+	out.Connectors = connectors
+	sort.Slice(out.Connectors, func(i, j int) bool { return out.Connectors[i].Name < out.Connectors[j].Name })
+
+	actuatorDecls, err := parseKind(filepath.Join(root, "actuators"), true, parseActuatorFile)
+	if err != nil {
+		return out, err
+	}
+	out.Actuators = actuatorDecls
+	sort.Slice(out.Actuators, func(i, j int) bool { return out.Actuators[i].Name < out.Actuators[j].Name })
 
 	triggers, err := parseKind(filepath.Join(root, "triggers"), true, parseTriggerFile)
 	if err != nil {
@@ -2181,6 +2199,16 @@ func ComputePlan(ctx context.Context, store *graph.Store, decls Declarations) (P
 		return Plan{}, err
 	}
 	plan.Entries = append(plan.Entries, refPlan.Entries...)
+	connPlan, err := computeConnectorPlan(ctx, store, decls.Connectors)
+	if err != nil {
+		return Plan{}, err
+	}
+	plan.Entries = append(plan.Entries, connPlan.Entries...)
+	actPlan, err := computeActuatorPlan(ctx, store, decls.Actuators)
+	if err != nil {
+		return Plan{}, err
+	}
+	plan.Entries = append(plan.Entries, actPlan.Entries...)
 	trigPlan, err := computeTriggerPlan(ctx, store, decls.Triggers)
 	if err != nil {
 		return Plan{}, err
@@ -2847,6 +2875,14 @@ func Apply(ctx context.Context, store *graph.Store, decls Declarations) (Plan, e
 	for _, d := range decls.CredentialRefs {
 		refByName[d.Name] = d
 	}
+	connByName := map[string]types.Connector{}
+	for _, d := range decls.Connectors {
+		connByName[d.Name] = d
+	}
+	actByName := map[string]types.Actuator{}
+	for _, d := range decls.Actuators {
+		actByName[d.Name] = d
+	}
 	trigByName := map[string]types.Trigger{}
 	for _, d := range decls.Triggers {
 		trigByName[d.Name] = d
@@ -2914,6 +2950,14 @@ func Apply(ctx context.Context, store *graph.Store, decls Declarations) (Plan, e
 			err = store.DeleteCredentialRef(ctx, e.Name, graph.DeclaredByCaC)
 		case e.Kind == KindCredentialRef:
 			_, err = store.DeclareCredentialRefAs(ctx, refByName[e.Name], graph.DeclaredByCaC)
+		case e.Kind == KindConnector && e.Action == ActionDelete:
+			err = store.DeleteConnector(ctx, e.Name)
+		case e.Kind == KindConnector:
+			err = store.UpsertConnector(ctx, connByName[e.Name])
+		case e.Kind == KindActuator && e.Action == ActionDelete:
+			err = store.DeleteActuator(ctx, e.Name)
+		case e.Kind == KindActuator:
+			err = store.UpsertActuator(ctx, actByName[e.Name])
 		case e.Kind == KindTrigger && e.Action == ActionDelete:
 			err = store.DeleteTrigger(ctx, e.Name)
 		case e.Kind == KindTrigger:
