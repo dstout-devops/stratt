@@ -8,6 +8,15 @@ disable-model-invocation: true
 
 Create a new ADR for: **$ARGUMENTS**
 
+0. **Prior-art scan (MANDATORY — do this BEFORE drafting).** The corpus is 100+ ADRs plus a live
+   estate and codebase; a decision that *feels* greenfield often is not (a new ADR once designed a
+   provisioning reach-path while ADR-0058 already shipped one — caught only in review). So, before
+   writing anything: launch the **`adr-scout`** subagent with a one-to-three-sentence description of
+   this decision, OR (for a small/obvious ADR) do the scan yourself — grep `docs/adr/*.md` **bodies**
+   (not just titles) for the concept + its synonyms/mechanism words, and grep `estate/`, `core/`,
+   `plugins/`, `contracts/`, `proto/` for an already-shipped seam. **Read the related ADRs.** In the
+   ADR you write, cross-reference them and state the reconciliation each demands — supersede, refactor,
+   extend, or coexist — and never claim greenfield when a coupled/overlapping seam already ships.
 1. List `docs/adr/` and find the highest existing `NNNN-*.md` number. The next ADR number is that
    + 1, zero-padded to 4 digits (`0001`, `0002`, …).
 2. Read `docs/adr/0000-template.md` for the structure.

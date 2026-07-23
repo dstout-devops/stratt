@@ -101,7 +101,12 @@ Run repeatable work through the **Taskfile**; never assert success without the m
 - **New core-model identifier?** Before merging a new Entity/Facet/Contract type name, API route, DB
   table/column, or CLI noun, run the **`vocabulary-linter`** subagent against it (charter §2 — naming
   is frozen v1.0 API).
-- **Decisions of consequence** get an ADR under `docs/adr/` — run **`/new-adr`**.
+- **New ADR / non-trivial design?** BEFORE drafting, run the **`adr-scout`** subagent (or scan
+  yourself) to surface prior ADRs + already-shipped seams the decision must reconcile with — the
+  corpus is 100+ ADRs and a decision that *feels* greenfield often isn't. Then reconcile with them in
+  the ADR (supersede / refactor / extend / coexist); never claim greenfield when a coupled seam ships.
+- **Decisions of consequence** get an ADR under `docs/adr/` — run **`/new-adr`** (its step 0 is the
+  `adr-scout` prior-art scan).
 
 ## Repo etiquette
 - Trunk-based; branch off `main`. Commit and push only when asked.
