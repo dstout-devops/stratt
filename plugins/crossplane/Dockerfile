@@ -1,3 +1,4 @@
+# syntax=docker/dockerfile:1
 # stratt-plugin-crossplane — the Crossplane build Actuator over the sovereign port
 # (ADR-0046/0059). A long-lived gRPC service the control plane dials as the
 # `builder:` for network Intents; it applies Crossplane Claims via the K8s API and
@@ -11,7 +12,7 @@ COPY sdk/ sdk/
 COPY plugins/crossplane/ plugins/crossplane/
 WORKDIR /src/plugins/crossplane
 ENV GOWORK=off CGO_ENABLED=0
-RUN go build -trimpath -o /out/stratt-plugin-crossplane ./cmd/stratt-plugin-crossplane
+RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build go build -trimpath -o /out/stratt-plugin-crossplane ./cmd/stratt-plugin-crossplane
 
 FROM gcr.io/distroless/static-debian12:nonroot
 COPY --from=build /out/stratt-plugin-crossplane /usr/local/bin/stratt-plugin-crossplane

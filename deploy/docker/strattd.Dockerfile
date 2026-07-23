@@ -1,3 +1,4 @@
+# syntax=docker/dockerfile:1
 # strattd control-plane image (ADR-0013). Multi-stage: the UI builds in a
 # Node stage, the Go binary builds static, and the runtime is distroless —
 # no shell, no package manager, non-root (§7.3 supply-chain posture).
@@ -38,8 +39,15 @@ COPY contracts/ contracts/
 COPY packs/ packs/
 COPY sdk/ sdk/
 COPY core/ core/
-RUN go -C core mod download
-RUN CGO_ENABLED=0 go build -C core -trimpath -ldflags "-s -w" -o /out/strattd ./cmd/strattd
+# BuildKit cache mounts (§7.3): persist the module + build caches across image
+# builds, so a rebuild recompiles only what changed instead of the whole dependency
+# graph cold every time — dramatically faster, and it stops exposing the rare Go
+# compiler ICE that full-cold-graph compilation at -p=NumCPU can hit.
+RUN --mount=type=cache,target=/go/pkg/mod \
+    go -C core mod download
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    CGO_ENABLED=0 go build -C core -trimpath -ldflags "-s -w" -o /out/strattd ./cmd/strattd
 
 # ── runtime ──────────────────────────────────────────────────────────────────
 FROM gcr.io/distroless/static-debian12:nonroot

@@ -1,3 +1,4 @@
+# syntax=docker/dockerfile:1
 # stratt-plugin-mesh — the service-mesh dependency Syncer plugin over the sovereign
 # port (ADR-0046/0047, ADR-0082 slice 2). A long-lived gRPC service the control plane
 # dials; it reads a mesh's request telemetry from a Prometheus-compatible backend
@@ -13,7 +14,7 @@ COPY sdk/ sdk/
 COPY plugins/mesh/ plugins/mesh/
 WORKDIR /src/plugins/mesh
 ENV GOWORK=off CGO_ENABLED=0
-RUN go build -trimpath -o /out/stratt-plugin-mesh ./cmd/stratt-plugin-mesh
+RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build go build -trimpath -o /out/stratt-plugin-mesh ./cmd/stratt-plugin-mesh
 
 FROM gcr.io/distroless/static-debian12:nonroot
 COPY --from=build /out/stratt-plugin-mesh /usr/local/bin/stratt-plugin-mesh

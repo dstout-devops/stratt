@@ -1,3 +1,4 @@
+# syntax=docker/dockerfile:1
 # stratt-plugin-awx — the AWX/AAP Connector over the sovereign port (ADR-0046/0089). A
 # long-lived gRPC service the control plane dials. It BOTH projects the Controller's
 # /api/v2 (read-only, §1.2) as `ansible.*` ObservedEntities AND provides the
@@ -15,7 +16,7 @@ COPY types/ types/
 COPY plugins/awx/ plugins/awx/
 WORKDIR /src/plugins/awx
 ENV GOWORK=off CGO_ENABLED=0
-RUN go build -trimpath -o /out/stratt-plugin-awx ./cmd/stratt-plugin-awx
+RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build go build -trimpath -o /out/stratt-plugin-awx ./cmd/stratt-plugin-awx
 
 FROM gcr.io/distroless/static-debian12:nonroot
 COPY --from=build /out/stratt-plugin-awx /usr/local/bin/stratt-plugin-awx

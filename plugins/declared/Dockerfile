@@ -1,3 +1,4 @@
+# syntax=docker/dockerfile:1
 # stratt-plugin-declared — the declared-estate Syncer plugin over the sovereign
 # port (ADR-0056 §5). A long-lived gRPC service the control plane dials
 # (STRATT_DECLARED_PLUGIN_ADDR); it reads the estate's host-list files and
@@ -11,7 +12,7 @@ COPY sdk/ sdk/
 COPY plugins/declared/ plugins/declared/
 WORKDIR /src/plugins/declared
 ENV GOWORK=off CGO_ENABLED=0
-RUN go build -trimpath -o /out/stratt-plugin-declared ./cmd/stratt-plugin-declared
+RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build go build -trimpath -o /out/stratt-plugin-declared ./cmd/stratt-plugin-declared
 
 FROM gcr.io/distroless/static-debian12:nonroot
 COPY --from=build /out/stratt-plugin-declared /usr/local/bin/stratt-plugin-declared

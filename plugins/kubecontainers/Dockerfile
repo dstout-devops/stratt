@@ -1,3 +1,4 @@
+# syntax=docker/dockerfile:1
 # stratt-plugin-kubecontainers — the K8s container-image Syncer plugin over the sovereign port
 # (ADR-0046/0080). A long-lived gRPC service the control plane dials; it reads running
 # Pods and projects the software.container image inventory onto the node (host) that runs
@@ -12,7 +13,7 @@ COPY sdk/ sdk/
 COPY plugins/kubecontainers/ plugins/kubecontainers/
 WORKDIR /src/plugins/kubecontainers
 ENV GOWORK=off CGO_ENABLED=0
-RUN go build -trimpath -o /out/stratt-plugin-kubecontainers ./cmd/stratt-plugin-kubecontainers
+RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build go build -trimpath -o /out/stratt-plugin-kubecontainers ./cmd/stratt-plugin-kubecontainers
 
 FROM gcr.io/distroless/static-debian12:nonroot
 COPY --from=build /out/stratt-plugin-kubecontainers /usr/local/bin/stratt-plugin-kubecontainers

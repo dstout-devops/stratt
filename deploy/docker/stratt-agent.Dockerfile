@@ -1,3 +1,4 @@
+# syntax=docker/dockerfile:1
 # stratt-agent image (ADR-0032): the Site satellite dispatcher. A single static
 # Go binary on distroless nonroot — it needs no shell and no python (tool content
 # runs in the EE pods it spawns, not here). §1.4 boring-spine: same build shape
@@ -20,9 +21,9 @@ COPY contracts/ contracts/
 COPY packs/ packs/
 COPY sdk/ sdk/
 COPY core/ core/
-RUN go -C core mod download
+RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build go -C core mod download
 ARG VERSION=dev
-RUN CGO_ENABLED=0 go build -C core -trimpath \
+RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build CGO_ENABLED=0 go build -C core -trimpath \
     -ldflags "-s -w -X main.version=${VERSION}" -o /out/stratt-agent ./cmd/stratt-agent
 
 FROM gcr.io/distroless/static-debian12:nonroot

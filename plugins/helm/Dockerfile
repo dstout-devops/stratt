@@ -1,3 +1,4 @@
+# syntax=docker/dockerfile:1
 # stratt-plugin-helm — the Helm Actuator over the sovereign port (ADR-0092). A
 # long-lived gRPC service the control plane dials as a Blueprint route's `app:`
 # materializer: Plan renders (helm template), Apply converges (helm upgrade
@@ -10,7 +11,7 @@ COPY sdk/ sdk/
 COPY plugins/helm/ plugins/helm/
 WORKDIR /src/plugins/helm
 ENV GOWORK=off CGO_ENABLED=0
-RUN go build -trimpath -o /out/stratt-plugin-helm ./cmd/stratt-plugin-helm
+RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build go build -trimpath -o /out/stratt-plugin-helm ./cmd/stratt-plugin-helm
 
 # Fetch + VERIFY the pinned Helm 4 binary (§7.3 supply chain; dependency-scout
 # binding condition — checksum-verified, not a bare download). helm ships as a

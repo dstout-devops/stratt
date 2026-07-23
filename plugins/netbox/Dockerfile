@@ -1,3 +1,4 @@
+# syntax=docker/dockerfile:1
 # stratt-plugin-netbox — the NetBox Syncer plugin over the sovereign port
 # (ADR-0046/0059). A long-lived gRPC service the control plane dials
 # (STRATT_NETBOX_PLUGIN_ADDR); it reads NetBox's IPAM/DCIM REST API and streams
@@ -11,7 +12,7 @@ COPY sdk/ sdk/
 COPY plugins/netbox/ plugins/netbox/
 WORKDIR /src/plugins/netbox
 ENV GOWORK=off CGO_ENABLED=0
-RUN go build -trimpath -o /out/stratt-plugin-netbox ./cmd/stratt-plugin-netbox
+RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build go build -trimpath -o /out/stratt-plugin-netbox ./cmd/stratt-plugin-netbox
 
 FROM gcr.io/distroless/static-debian12:nonroot
 COPY --from=build /out/stratt-plugin-netbox /usr/local/bin/stratt-plugin-netbox

@@ -1,3 +1,4 @@
+# syntax=docker/dockerfile:1
 # Stratt execution-environment (EE) image — the ansible Actuator's runtime
 # (charter §3, ADR-0002). This is the GPLv3 boundary: Ansible lives HERE, in a
 # separate image executed as a subprocess in ephemeral K8s Job pods. The Go
@@ -21,9 +22,9 @@ COPY sdk/ sdk/
 COPY plugins/ansible/ plugins/ansible/
 COPY plugins/script/ plugins/script/
 ENV GOWORK=off CGO_ENABLED=0
-RUN cd plugins/ansible && go build -trimpath -o /out/stratt-ansible ./cmd/stratt-ansible
+RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build cd plugins/ansible && go build -trimpath -o /out/stratt-ansible ./cmd/stratt-ansible
 # stratt-script (ADR-0046 Category A): the per-target script-runner over the port.
-RUN cd plugins/script && go build -trimpath -o /out/stratt-script ./cmd/stratt-script
+RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build cd plugins/script && go build -trimpath -o /out/stratt-script ./cmd/stratt-script
 
 FROM python:3.14-slim
 

@@ -1,3 +1,4 @@
+# syntax=docker/dockerfile:1
 # MCP execution environment (ADR-0022/0053): the sandbox where the stratt-mcp shim
 # runs and — for stdio transport — where the Git-declared server script runs.
 # Deliberately minimal (§1.4, §7.3). After ADR-0053 the MCP client PROTOCOL is the
@@ -13,7 +14,7 @@ COPY sdk/ sdk/
 COPY plugins/mcp/ plugins/mcp/
 WORKDIR /src/plugins/mcp
 ENV GOWORK=off CGO_ENABLED=0
-RUN go build -trimpath -o /out/stratt-mcp ./cmd/stratt-mcp
+RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build go build -trimpath -o /out/stratt-mcp ./cmd/stratt-mcp
 
 FROM python:3.14-alpine
 

@@ -1,3 +1,4 @@
+# syntax=docker/dockerfile:1
 # stratt-plugin-vcenter — the vCenter Syncer plugin over the sovereign port
 # (ADR-0046). A long-lived gRPC service the control plane dials
 # (STRATT_VCENTER_PLUGIN_ADDR); it enumerates the vCenter/vcsim inventory with
@@ -11,7 +12,7 @@ COPY sdk/ sdk/
 COPY plugins/vcenter/ plugins/vcenter/
 WORKDIR /src/plugins/vcenter
 ENV GOWORK=off CGO_ENABLED=0
-RUN go build -trimpath -o /out/stratt-plugin-vcenter ./cmd/stratt-plugin-vcenter
+RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build go build -trimpath -o /out/stratt-plugin-vcenter ./cmd/stratt-plugin-vcenter
 
 FROM gcr.io/distroless/static-debian12:nonroot
 COPY --from=build /out/stratt-plugin-vcenter /usr/local/bin/stratt-plugin-vcenter
