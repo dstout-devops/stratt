@@ -424,6 +424,17 @@ func registerTools(s *mcp.Server, cfg Config) {
 		func(ctx context.Context, req *mcp.CallToolRequest, in nameIn) (*mcp.CallToolResult, any, error) {
 			return invoke(ctx, cfg, req, "get_trigger", http.MethodGet, "/triggers/"+url.PathEscape(in.Name), nil)
 		})
+
+	get("list_connectors", "List declared Connectors (Source-binding integrations; ADR-0103).", func() string { return "/connectors" })
+	mcp.AddTool(s, &mcp.Tool{Name: "get_connector", Description: "Get one Connector declaration and its live runtime registry status (why it is/ isn't running)."},
+		func(ctx context.Context, req *mcp.CallToolRequest, in nameIn) (*mcp.CallToolResult, any, error) {
+			return invoke(ctx, cfg, req, "get_connector", http.MethodGet, "/connectors/"+url.PathEscape(in.Name), nil)
+		})
+	get("list_actuators", "List declared plugin Actuators (tool-content execution engines; ADR-0103).", func() string { return "/actuators" })
+	mcp.AddTool(s, &mcp.Tool{Name: "get_actuator", Description: "Get one Actuator declaration and its live runtime registry status."},
+		func(ctx context.Context, req *mcp.CallToolRequest, in nameIn) (*mcp.CallToolResult, any, error) {
+			return invoke(ctx, cfg, req, "get_actuator", http.MethodGet, "/actuators/"+url.PathEscape(in.Name), nil)
+		})
 	get("list_contracts", "List pinned Contracts: JSON Schema documents with sha256 pins and derivation rungs.", func() string { return "/contracts" })
 	get("list_emitters", "List declared Emitters (event ingest points; declarations hold token hashes only).", func() string { return "/emitters" })
 	mcp.AddTool(s, &mcp.Tool{Name: "get_credential_ref", Description: "Get one CredentialRef pointer (never material). Requires the reader grant."},

@@ -100,6 +100,11 @@ type Server struct {
 	// read from the in-memory homegate supervisor (never the graph, §1.2). Nil on
 	// a daemon that runs no Connectors. Keyed by Source name.
 	SourceStatus func() map[string]string
+	// PluginStatus, when set, returns the runtime Connector/Actuator registry status
+	// (ADR-0103 D6) keyed "<kind>/<name>" — whether each declared integration is currently
+	// dialed + registered on this daemon, and why not if disabled. In-memory, never the
+	// graph (§1.2/§1.8). Nil ⇒ the detail endpoints omit status.
+	PluginStatus func() map[string]PluginRuntimeStatus
 	// SCIMGate, when set, blocks a SCIM-managed human Principal that the IdP has
 	// deactivated at request-time resolution (ADR-0035) — closing the access-
 	// token-TTL window that grant-revocation alone leaves open. It is consulted

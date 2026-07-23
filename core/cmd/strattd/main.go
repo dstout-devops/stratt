@@ -1475,6 +1475,10 @@ func run(ctx context.Context, log *slog.Logger) error {
 	// GOV-2). Empty when no estate is configured.
 	var admissionControls []types.Control
 	// ── desired-state reconciliation (§1.2: Git is the declarer) ────────
+	// The runtime Connector/Actuator registry (ADR-0103) is built inside the desired-state
+	// block below (it needs the reconcile cadence); hoisted here so the API server can read
+	// its per-declaration status (D6). Nil when reconciliation is off.
+	var connReg *connectorregistry.Registry
 	if path := os.Getenv("STRATT_DESIRED_STATE_PATH"); path != "" {
 		interval, err := time.ParseDuration(env("STRATT_DESIRED_STATE_INTERVAL", "30s"))
 		if err != nil {
@@ -1510,7 +1514,7 @@ func run(ctx context.Context, log *slog.Logger) error {
 		// dispatch-map membership must be visible to any worker — D3); Connector Syncers
 		// reconcile LEADER-ONLY (graph writers, home-gated). helm's planstore is nil (as its
 		// boot-env block was); an Actuator that needs one is a later-slice concern.
-		connReg := connectorregistry.New(store, plugins, homeDeps, nil,
+		connReg = connectorregistry.New(store, plugins, homeDeps, nil,
 			func(addr string) (*grpc.ClientConn, error) {
 				return grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
 			},
@@ -1742,6 +1746,21 @@ func run(ctx context.Context, log *slog.Logger) error {
 		out := make(map[string]string, len(snap))
 		for name, rt := range snap {
 			out[name] = string(rt.State)
+		}
+		return out
+	}, PluginStatus: func() map[string]api.PluginRuntimeStatus {
+		if connReg == nil {
+			return nil
+		}
+		snap := connReg.Statuses()
+		out := make(map[string]api.PluginRuntimeStatus, len(snap))
+		for k, st := range snap {
+			v := api.PluginRuntimeStatus{Enabled: st.Enabled}
+			if st.Error != "" {
+				e := st.Error
+				v.Error = &e
+			}
+			out[k] = v
 		}
 		return out
 	}, SiteLiveness: func(ctx context.Context) (map[string]bool, error) {

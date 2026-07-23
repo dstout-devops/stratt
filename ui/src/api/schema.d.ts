@@ -750,6 +750,90 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/connectors": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List declared Connectors
+         * @description Connectors are CaC-only (charter §2.2, ADR-0103): declared in the Git desired-state repo, reconciled at runtime into dialed + registered plugins with no restart. Read-only; there is no API write path.
+         */
+        get: operations["listConnectors"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/connectors/{name}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                name: string;
+            };
+            cookie?: never;
+        };
+        /**
+         * Get one Connector with its live registry status
+         * @description The declaration plus the runtime registry status (ADR-0103 D6, §1.8): a declared Connector that is not currently running shows why.
+         */
+        get: operations["getConnector"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/actuators": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List declared plugin Actuators
+         * @description Actuators are CaC-only (charter §2.3, ADR-0103): execution-engine plugins that run tool content, reconciled at runtime with no restart. Read-only.
+         */
+        get: operations["listActuators"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/actuators/{name}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                name: string;
+            };
+            cookie?: never;
+        };
+        /**
+         * Get one Actuator with its live registry status
+         * @description The declaration plus the runtime registry status (ADR-0103 D6, §1.8).
+         */
+        get: operations["getActuator"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/workflows": {
         parameters: {
             query?: never;
@@ -1676,6 +1760,54 @@ export interface components {
         TriggerDetail: {
             trigger: components["schemas"]["Trigger"];
             schedule?: components["schemas"]["TriggerScheduleState"];
+        };
+        /** @description The runtime registry's live enable state for one Connector/Actuator on this daemon (charter §1.8, ADR-0103 D6): whether it is currently dialed + registered, and why not if disabled. In-memory runtime state, never the graph (§1.2) — a declared-but-not-running integration must show why (a dial error, a §2.4 name collision, or a not-yet-wired capability). */
+        PluginRuntimeStatus: {
+            enabled: boolean;
+            error?: string;
+        };
+        /** @description The versioned integration package that binds a Source (charter §2.2: Syncer/Action/Emitter). CaC-only, reconciled at runtime (ADR-0103). */
+        Connector: {
+            name: string;
+            /** @enum {string} */
+            class: "syncer" | "action";
+            /** @description The plugin's sovereign-port endpoint the core dials. */
+            address: string;
+            pluginIdentity?: string;
+            tier?: string;
+            source?: components["schemas"]["Source"];
+            facetNamespaces?: string[];
+            authoritativeFacetNamespaces?: string[];
+            labelKeys?: string[];
+            identitySchemes?: string[];
+            tombstoneSchemes?: string[];
+            emitterName?: string;
+            actionNames?: string[];
+            /** Format: int64 */
+            intervalSeconds?: number;
+            environments?: string[];
+        };
+        ConnectorDetail: {
+            connector: components["schemas"]["Connector"];
+            status?: components["schemas"]["PluginRuntimeStatus"];
+        };
+        /** @description An execution-engine plugin that runs tool content (charter §2.3: helm, opentofu, ansible, script, mcp). Binds no Source. CaC-only (ADR-0103). */
+        Actuator: {
+            name: string;
+            /** @description gRPC endpoint (empty for an EE-Job actuator, which sets jobCommand). */
+            address?: string;
+            pluginIdentity?: string;
+            tier?: string;
+            dryRunnable?: boolean;
+            actionNames?: string[];
+            jobCommand?: string[];
+            image?: string;
+            mcp?: boolean;
+            environments?: string[];
+        };
+        ActuatorDetail: {
+            actuator: components["schemas"]["Actuator"];
+            status?: components["schemas"]["PluginRuntimeStatus"];
         };
         /** @description A Temporal-backed DAG of Steps with Gates (charter §2, ADR-0011). CaC-only in v1. */
         Workflow: {
@@ -2794,6 +2926,92 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["TriggerDetail"];
+                };
+            };
+            404: components["responses"]["NotFound"];
+        };
+    };
+    listConnectors: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Every declared Connector in the active environment. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Connector"][];
+                };
+            };
+        };
+    };
+    getConnector: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The Connector and its runtime status. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConnectorDetail"];
+                };
+            };
+            404: components["responses"]["NotFound"];
+        };
+    };
+    listActuators: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Every declared Actuator in the active environment. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Actuator"][];
+                };
+            };
+        };
+    };
+    getActuator: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The Actuator and its runtime status. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ActuatorDetail"];
                 };
             };
             404: components["responses"]["NotFound"];

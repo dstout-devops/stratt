@@ -769,6 +769,74 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/TriggerDetail" }
         "404": { $ref: "#/components/responses/NotFound" }
+  /connectors:
+    get:
+      operationId: listConnectors
+      summary: List declared Connectors
+      description: >
+        Connectors are CaC-only (charter §2.2, ADR-0103): declared in the Git
+        desired-state repo, reconciled at runtime into dialed + registered plugins
+        with no restart. Read-only; there is no API write path.
+      responses:
+        "200":
+          description: Every declared Connector in the active environment.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Connector" }
+  /connectors/{name}:
+    parameters:
+      - name: name
+        in: path
+        required: true
+        schema: { type: string }
+    get:
+      operationId: getConnector
+      summary: Get one Connector with its live registry status
+      description: >
+        The declaration plus the runtime registry status (ADR-0103 D6, §1.8): a
+        declared Connector that is not currently running shows why.
+      responses:
+        "200":
+          description: The Connector and its runtime status.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ConnectorDetail" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /actuators:
+    get:
+      operationId: listActuators
+      summary: List declared plugin Actuators
+      description: >
+        Actuators are CaC-only (charter §2.3, ADR-0103): execution-engine plugins
+        that run tool content, reconciled at runtime with no restart. Read-only.
+      responses:
+        "200":
+          description: Every declared Actuator in the active environment.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Actuator" }
+  /actuators/{name}:
+    parameters:
+      - name: name
+        in: path
+        required: true
+        schema: { type: string }
+    get:
+      operationId: getActuator
+      summary: Get one Actuator with its live registry status
+      description: >
+        The declaration plus the runtime registry status (ADR-0103 D6, §1.8).
+      responses:
+        "200":
+          description: The Actuator and its runtime status.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ActuatorDetail" }
+        "404": { $ref: "#/components/responses/NotFound" }
   /workflows:
     get:
       operationId: listWorkflows
@@ -2055,6 +2123,75 @@ components:
       properties:
         trigger: { $ref: "#/components/schemas/Trigger" }
         schedule: { $ref: "#/components/schemas/TriggerScheduleState" }
+    PluginRuntimeStatus:
+      type: object
+      description: >
+        The runtime registry's live enable state for one Connector/Actuator on this
+        daemon (charter §1.8, ADR-0103 D6): whether it is currently dialed + registered,
+        and why not if disabled. In-memory runtime state, never the graph (§1.2) — a
+        declared-but-not-running integration must show why (a dial error, a §2.4 name
+        collision, or a not-yet-wired capability).
+      required: [enabled]
+      properties:
+        enabled: { type: boolean }
+        error: { type: string }
+    Connector:
+      type: object
+      description: >
+        The versioned integration package that binds a Source (charter §2.2:
+        Syncer/Action/Emitter). CaC-only, reconciled at runtime (ADR-0103).
+      required: [name, class, address]
+      properties:
+        name: { type: string }
+        class:
+          type: string
+          enum: [syncer, action]
+        address:
+          type: string
+          description: The plugin's sovereign-port endpoint the core dials.
+        pluginIdentity: { type: string }
+        tier: { type: string }
+        source: { $ref: "#/components/schemas/Source" }
+        facetNamespaces: { type: array, items: { type: string } }
+        authoritativeFacetNamespaces: { type: array, items: { type: string } }
+        labelKeys: { type: array, items: { type: string } }
+        identitySchemes: { type: array, items: { type: string } }
+        tombstoneSchemes: { type: array, items: { type: string } }
+        emitterName: { type: string }
+        actionNames: { type: array, items: { type: string } }
+        intervalSeconds: { type: integer, format: int64 }
+        environments: { type: array, items: { type: string } }
+    ConnectorDetail:
+      type: object
+      required: [connector]
+      properties:
+        connector: { $ref: "#/components/schemas/Connector" }
+        status: { $ref: "#/components/schemas/PluginRuntimeStatus" }
+    Actuator:
+      type: object
+      description: >
+        An execution-engine plugin that runs tool content (charter §2.3: helm,
+        opentofu, ansible, script, mcp). Binds no Source. CaC-only (ADR-0103).
+      required: [name]
+      properties:
+        name: { type: string }
+        address:
+          type: string
+          description: gRPC endpoint (empty for an EE-Job actuator, which sets jobCommand).
+        pluginIdentity: { type: string }
+        tier: { type: string }
+        dryRunnable: { type: boolean }
+        actionNames: { type: array, items: { type: string } }
+        jobCommand: { type: array, items: { type: string } }
+        image: { type: string }
+        mcp: { type: boolean }
+        environments: { type: array, items: { type: string } }
+    ActuatorDetail:
+      type: object
+      required: [actuator]
+      properties:
+        actuator: { $ref: "#/components/schemas/Actuator" }
+        status: { $ref: "#/components/schemas/PluginRuntimeStatus" }
     Workflow:
       type: object
       description: >

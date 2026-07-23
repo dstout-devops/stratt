@@ -54,6 +54,12 @@ const (
 // hold `adopt` on source:<id> to materialize one of its observed objects.
 func SourceObject(source string) string { return "source:" + source }
 
+// ConnectorObject / ActuatorObject guard a Connector/Actuator declaration (ADR-0103). Reads
+// follow the v1 open-CaC-read posture (like Triggers); these are the objects a future
+// enable/disable toggle or write path would gate on (requireGrant admin/reader).
+func ConnectorObject(name string) string { return "connector:" + name }
+func ActuatorObject(name string) string  { return "actuator:" + name }
+
 // CellObject guards a Cell for the re-home relation (ADR-0044 slice 7): a
 // principal must hold `rehome` on cell:<dest> to move a Source there.
 func CellObject(cell string) string { return "cell:" + cell }
