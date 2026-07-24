@@ -20,6 +20,11 @@ steps:
     credentialRefs: [vsphere-dev] # §2.5 — an Action's use-check is its only authz gate
     params:
       name: web-01
+      # Placement: create-vm builds into the datacenter's default when the estate has ONE datacenter.
+      # When it spans MULTIPLE (e.g. after `task dev:vsphere:bootstrap` seeds regions), add
+      # `datacenter: <name>` here — govmomi's default is ambiguous otherwise, and the target must carry
+      # compute + storage capacity (the create-vm error names the datacenter if it lacks either, §1.8).
+      # A production Intent binds the target region per the resolved environment (ADR-0113 D2).
       cpus: 2
       memoryMB: 2048
       # The estate OVERLAY (ADR-0058 §6): the built VM projects AS this kind with these labels (Run
