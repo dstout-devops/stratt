@@ -74,6 +74,16 @@ func RunAction(ctx workflow.Context, in RunInput) (RunOutcome, error) {
 		return RunOutcome{RunID: in.RunID}, finishRun(ctx, a, in, types.RunFailed, err)
 	}
 
+	// A failed Action carries no contracted output — surface its REAL cause (§1.8),
+	// never let the "got null, want object" output-validation error below mask it.
+	if !res.Succeeded {
+		cause := errors.New(res.Error)
+		if res.Error == "" {
+			cause = fmt.Errorf("action %q failed", in.Action)
+		}
+		return RunOutcome{RunID: in.RunID}, finishRun(ctx, a, in, types.RunFailed, cause)
+	}
+
 	// The output Contract is the Action's defining feature (§2.2). A dry-run's
 	// plan is not the contracted output, so it is not validated here.
 	if !in.DryRun {
@@ -175,7 +185,7 @@ func (a *Activities) ExecuteAction(ctx context.Context, in RunInput, creds []dis
 			}
 			ents = append(ents, actuators.EntityObservation{Kind: e.Kind, IdentityKeys: e.IdentityKeys, Labels: e.Labels, Relations: rels})
 		}
-		return dispatch.Result{Succeeded: raw.OK, Outputs: raw.Outputs, Entities: ents}, nil
+		return dispatch.Result{Succeeded: raw.OK, Error: raw.Error, Outputs: raw.Outputs, Entities: ents}, nil
 	}
 
 	// ── In-tree pod path ─────────────────────────────────────────────────────

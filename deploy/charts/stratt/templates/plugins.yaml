@@ -68,7 +68,7 @@ spec:
                  needs the estate's hosts/ files. Mount ONLY those keys from the
                  inline declarations ConfigMap (least privilege — not the whole
                  estate) at /hosts. Dev/inline path; prod delivers via git-sync. */ -}}
-          {{- if or .estateHosts .tmpDir .demoChart }}
+          {{- if or .estateHosts .tmpDir .demoChart .helloStrattChart }}
           volumeMounts:
             {{- if .estateHosts }}
             - name: estate-hosts
@@ -95,8 +95,15 @@ spec:
               mountPath: /charts/openfga-memory
               readOnly: true
             {{- end }}
+            {{- if .helloStrattChart }}
+            # The k8s-deploy demo app (ADR-0116, files/hello-stratt/**), mounted so chart
+            # "hello-stratt" resolves to /charts/hello-stratt — a real Deployment + Service.
+            - name: hello-stratt-chart
+              mountPath: /charts/hello-stratt
+              readOnly: true
+            {{- end }}
           {{- end }}
-      {{- if or .estateHosts .tmpDir .demoChart .openfgaChart }}
+      {{- if or .estateHosts .tmpDir .demoChart .openfgaChart .helloStrattChart }}
       volumes:
         {{- if .estateHosts }}
         - name: estate-hosts
@@ -130,6 +137,16 @@ spec:
               {{- range $path, $bytes := $.Files.Glob "files/openfga-memory/**" }}
               - key: {{ trimPrefix "files/openfga-memory/" $path | replace "/" "__" }}
                 path: {{ trimPrefix "files/openfga-memory/" $path }}
+              {{- end }}
+        {{- end }}
+        {{- if .helloStrattChart }}
+        - name: hello-stratt-chart
+          configMap:
+            name: {{ include "stratt.fullname" $ }}-hello-stratt-chart
+            items:
+              {{- range $path, $bytes := $.Files.Glob "files/hello-stratt/**" }}
+              - key: {{ trimPrefix "files/hello-stratt/" $path | replace "/" "__" }}
+                path: {{ trimPrefix "files/hello-stratt/" $path }}
               {{- end }}
         {{- end }}
       {{- end }}
@@ -192,46 +209,50 @@ subjects:
     namespace: {{ $.Release.Namespace }}
 {{- end }}
 {{- if .deployNamespace }}
+{{- /* deployNamespace accepts ONE namespace or a LIST — one pre-created, least-privilege
+       target per entry (e.g. a demo target beside the self-deploy target). Normalize to a list. */ -}}
+{{- $plugin := . }}
+{{- $targets := .deployNamespace }}
+{{- if kindIs "string" .deployNamespace }}{{- $targets = list .deployNamespace }}{{- end }}
+{{- range $ns := $targets }}
 ---
-# The single self-deploy target namespace, created by the chart (at the operator's
-# install privilege) so the namespaced Role below has a namespace to bind into and the
-# self-deploy plugin itself needs NO namespace-create grant (ADR-0102 Q3, least authority).
+# A self-deploy target namespace, created by the chart (at the operator's install privilege)
+# so the namespaced Role below has a namespace to bind into and the self-deploy plugin itself
+# needs NO namespace-create grant (ADR-0102 Q3, least authority).
 apiVersion: v1
 kind: Namespace
 metadata:
-  name: {{ .deployNamespace }}
+  name: {{ $ns }}
   labels: {{- include "stratt.labels" $ | nindent 4 }}
-{{- end }}
-{{- if and .kubeAccess .deployNamespace }}
+{{- if $plugin.kubeAccess }}
 ---
-# CONFINED to a SINGLE namespace (§2.5, ADR-0092 required model): the self-deploy helm
-# Actuator materializes releases into exactly one pre-created namespace, so its kube-API
-# grant is a namespaced Role there — NOT a cluster-wide reader/writer. This is the sharp
+# CONFINED to THIS namespace only (§2.5, ADR-0092 required model): the self-deploy helm
+# Actuator materializes releases into exactly these pre-created namespace(s), so its kube-API
+# grant is a namespaced Role in each — NOT a cluster-wide reader/writer. This is the sharp
 # alternative to the ClusterRole below: no cluster-wide `secrets` reach, no access to any
-# other namespace's brokerable Secrets. The target namespace is pre-created out-of-band
-# (the SA holds NO namespace-create). charter-guardian ADR-0102 Q3.
+# other namespace's brokerable Secrets. The SA holds NO namespace-create. charter-guardian ADR-0102 Q3.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
   name: {{ $name }}-kube-access
-  namespace: {{ .deployNamespace }}
+  namespace: {{ $ns }}
   labels: {{- include "stratt.labels" $ | nindent 4 }}
 rules:
-  - apiGroups: {{ .kubeAccess.apiGroups | toJson }}
-    resources: {{ .kubeAccess.resources | toJson }}
-    verbs: {{ .kubeAccess.verbs | default (list "get" "list" "watch") | toJson }}
-  {{- if .kubeAccessRead }}
+  - apiGroups: {{ $plugin.kubeAccess.apiGroups | toJson }}
+    resources: {{ $plugin.kubeAccess.resources | toJson }}
+    verbs: {{ $plugin.kubeAccess.verbs | default (list "get" "list" "watch") | toJson }}
+  {{- if $plugin.kubeAccessRead }}
   # Separate READ-ONLY rule (least authority) — e.g. helm --wait watching Pods/ReplicaSets.
-  - apiGroups: {{ .kubeAccessRead.apiGroups | toJson }}
-    resources: {{ .kubeAccessRead.resources | toJson }}
-    verbs: {{ .kubeAccessRead.verbs | default (list "get" "list" "watch") | toJson }}
+  - apiGroups: {{ $plugin.kubeAccessRead.apiGroups | toJson }}
+    resources: {{ $plugin.kubeAccessRead.resources | toJson }}
+    verbs: {{ $plugin.kubeAccessRead.verbs | default (list "get" "list" "watch") | toJson }}
   {{- end }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
   name: {{ $name }}-kube-access
-  namespace: {{ .deployNamespace }}
+  namespace: {{ $ns }}
   labels: {{- include "stratt.labels" $ | nindent 4 }}
 roleRef:
   apiGroup: rbac.authorization.k8s.io
@@ -241,6 +262,8 @@ subjects:
   - kind: ServiceAccount
     name: {{ $name }}
     namespace: {{ $.Release.Namespace }}
+{{- end }}
+{{- end }}
 {{- else if .kubeAccess }}
 ---
 # CONFINED kube-API access to exactly the resources this plugin uses (§2.5): a plugin over

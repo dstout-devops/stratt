@@ -79,6 +79,7 @@ type fakePlugin struct {
 	invokeOutputs          []byte
 	invokeCreds            []string
 	invokeOutputContractID string
+	invokeFailMsg          string // when set, Invoke ends in a terminal !ok event carrying this cause (no Result)
 	subscribeEvents        []*pluginv1.EmittedEvent
 	// delta-cursor knobs: on an empty-cursor (full) Observe, NextCursor=nextCursor;
 	// on a cursored (delta) Observe, emit deltaGone + NextCursor=deltaCursor.
@@ -158,6 +159,12 @@ func (f *fakePlugin) Observe(req *pluginv1.ObserveRequest, stream grpc.ServerStr
 
 func (f *fakePlugin) Invoke(_ *pluginv1.InvokeRequest, stream grpc.ServerStreamingServer[pluginv1.InvokeResponse]) error {
 	_ = stream.Send(&pluginv1.InvokeResponse{Event: &pluginv1.TaskEvent{Level: pluginv1.TaskEvent_LEVEL_INFO, Message: "working"}})
+	if f.invokeFailMsg != "" {
+		// Mirror a real plugin's terminalFailure: a terminal !ok event carrying the cause, no Result.
+		return stream.Send(&pluginv1.InvokeResponse{Event: &pluginv1.TaskEvent{
+			Level: pluginv1.TaskEvent_LEVEL_ERROR, Message: f.invokeFailMsg, Terminal: true, Ok: false,
+		}})
+	}
 	var creds []*pluginv1.CredentialRef
 	for _, c := range f.invokeCreds {
 		creds = append(creds, &pluginv1.CredentialRef{Name: c})
@@ -569,6 +576,27 @@ func TestHost_InvokeRawOutputContractDrift(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("plugin output-contract drift must be a blocking error (§1.5)")
+	}
+}
+
+// TestHost_InvokeRawCapturesFailureCause proves a failed Action's terminal message
+// (the plugin's terminalFailure) is captured into RawInvokeResult.Error, so the Run
+// records WHY it failed instead of a downstream "got null, want object" masking the
+// real cause (§1.8 — the abstraction must never hide diagnosis).
+func TestHost_InvokeRawCapturesFailureCause(t *testing.T) {
+	const cause = "vcenter/create-vm: datastore '*' not found"
+	grant := vcenterGrant(pluginhost.TierTrusted, []string{"vcenter.uuid"})
+	client := serve(t, &fakePlugin{pluginID: "vcenter-dev", invokeFailMsg: cause})
+	h := pluginhost.New(nil, client, grant, discardLog())
+	raw, err := h.InvokeRaw(context.Background(), pluginhost.ActionInvoke{Principal: "alice", Action: "vcenter/create-vm"})
+	if err != nil {
+		t.Fatalf("invokeRaw: %v", err)
+	}
+	if raw.OK {
+		t.Fatal("expected a non-ok terminal result")
+	}
+	if raw.Error != cause {
+		t.Fatalf("failure cause not captured: got %q, want %q", raw.Error, cause)
 	}
 }
 

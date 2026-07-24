@@ -50,6 +50,10 @@ type Run struct {
 	StepName      string     `json:"stepName,omitempty"`
 	StartedAt     time.Time  `json:"startedAt"`
 	FinishedAt    *time.Time `json:"finishedAt,omitempty"`
+	// Error is the terminal failure cause on a failed Run (§1.8) — the real
+	// message (e.g. a plugin Action's), read from the Run summary so the descent
+	// shows WHY it failed. Empty unless the Run failed with a recorded cause.
+	Error string `json:"error,omitempty"`
 	// Outputs are an Action Run's typed output VALUES (§2.2, ADR-0031),
 	// validated against the Action's output Contract and available for
 	// cross-Step binding. Nil for Actuator Runs.

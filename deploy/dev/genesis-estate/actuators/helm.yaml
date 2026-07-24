@@ -1,0 +1,15 @@
+# helm — the Helm Actuator (charter §2.3, ADR-0092) as a runtime-registered Actuator Kind (ADR-0103):
+# dialed + registered by the connectorregistry (RunActuators, every replica, on a cadence — no strattd
+# restart) once this declaration lands in the store. Dual-surface — the per-target Actuator + the
+# TARGETLESS helm/deploy Action the genesis self-deploy Workflow (genesis-authz-deploy) invokes.
+#
+# WITHOUT this declaration the genesis floor registers ZERO Actuators, so helm/deploy is unknown and
+# the self-deploy dogfood cannot execute (UnknownAction). Actuators are CaC-only (charter §2.2/§2.3 —
+# Git review authorizes plugin registration), so the floor's helm Actuator MUST be declared here in the
+# staged genesis estate, not conjured via the API. Address is the in-cluster helm plugin Service.
+name: helm
+address: stratt-helm:9090
+pluginIdentity: helm
+tier: trusted
+dryRunnable: true
+actionNames: [helm/deploy]

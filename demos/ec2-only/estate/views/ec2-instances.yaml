@@ -1,0 +1,7 @@
+# ec2-instances — a View selecting the awsec2 Syncer's projected EC2 instances (from floci). floci starts
+# EMPTY, so this View is empty until the build runs — then the freshly-provisioned instance appears here
+# on the Syncer's next OBSERVE (the `instance` kind, keyed on aws.instanceId). That's the read side of the
+# estate model: a live, rebuildable read-model of what's actually running in EC2 (charter §1.2).
+name: ec2-instances
+selector:
+  kinds: [instance]

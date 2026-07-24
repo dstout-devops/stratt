@@ -10,17 +10,19 @@ request contradicts the charter, surface the conflict — don't silently follow 
 
 **Status: Phases 0–2 code-complete; Phase 3 ~90%; multi-region Cells shipped ahead of plan; and the whole
 platform re-centered onto the sovereign plugin port (dark-matter, ADR-0046 arc) — the core spine is
-content-blind and every tool is a plugin, verified in-repo (live-cluster e2e still outstanding).** The Go
+content-blind and every tool is a plugin, verified in-repo — and now partly **live-cluster verified** by the
+[demo library](demos/README.md) (ADR-0116: three turnkey demos proven end-to-end on kind).** The Go
 control plane (`core/`), the React UI (`ui/`), 90+ ADRs, and the Helm chart are all real and substantial —
 this is a working platform, not a spike. The living, evidence-backed tracker is
 **[docs/roadmap.md](docs/roadmap.md)**; the decision record is **[docs/adr/](docs/adr/README.md)**. Follow
-the charter §8 phasing and the roadmap — build the *next* thing, not ahead recklessly — and keep new work
+the charter §8 phasing and the roadmap — build the _next_ thing, not ahead recklessly — and keep new work
 behind an ADR (`/new-adr`) when it is a decision of consequence. Charter **§7.4** (OSPO/IP clearance) is
 now **cleared** — the repo may go public and public-facing OSS files may be created. Each phase's
 promote/OSS exit gate still separately requires its own operational evidence (SLO, security review,
 adoption) — none of which is a coding task.
 
 ## Founding Disciplines — binding on every decision (charter §1)
+
 1. **Type the seams, not the world.** JSON Schema attaches only at plugin boundaries and named
    **Facets** — never to whole Entities, never as a universal ontology. Every Facet schema must be
    demanded by a shipping Contract.
@@ -41,7 +43,7 @@ adoption) — none of which is a coding task.
 7. **Evergreen contract.** Every runtime/toolchain/substrate dependency stays ≥ N-1 on its
    major/LTS line, CI-gated. Upgrade-friendliness is a first-class selection criterion. Never become
    the monolith fossil AWX did.
-8. **The abstraction must never hide diagnosis.** Hiding *mechanism* is the product; hiding *failure*
+8. **The abstraction must never hide diagnosis.** Hiding _mechanism_ is the product; hiding _failure_
    kills trust. One-click descent — Intent → Blueprint route → Workflow → Run → task event — must
    always exist.
 
@@ -50,6 +52,7 @@ OS imaging / bare-metal; new configuration languages; a writable CMDB; a paid ti
 feature that violates these.
 
 ## Vocabulary is API — frozen at v1.0 (charter §2)
+
 Use the **Named Kinds** exactly: Entity, Relation, Facet, Provenance, View · Source, Connector
 (Syncer / Action / Emitter) · Actuator, Contract, Step, Workflow, Run, Trigger, Bundle, Site ·
 Intent, Assignment, Blueprint, Baseline, Finding, Evidence · Principal, CredentialRef.
@@ -59,6 +62,7 @@ Intent, Assignment, Blueprint, Baseline, Finding, Evidence · Principal, Credent
 and AWX→Stratt migration mapping: invoke the **`/vocabulary`** skill.
 
 ## Tech stack (charter §3)
+
 - **Control plane: Go.** Reconciliation controllers (sync controller, dispatcher, compiler cadences),
   graph-store frontend, K8s-native operator posture — client-go/controller-runtime plus Go-native
   SDKs for NATS / Temporal / OpenFGA. One language, shared with the pull agent. **API is
@@ -79,7 +83,9 @@ and AWX→Stratt migration mapping: invoke the **`/vocabulary`** skill.
 - Task runner: `task` (Taskfile). Prefer it for repeatable commands (`Bash(task:*)` is pre-approved).
 
 ## Commands — verify with a real signal (charter §1.8)
+
 Run repeatable work through the **Taskfile**; never assert success without the matching gate.
+
 - **`task ci`** — the full pre-push gate: evergreen + `fmt:check` + lint + codegen freshness + tests.
   Run this before proposing a change is done.
 - **`task test`** (all Go workspace modules) · **`task lint`** · **`task fmt`** / **`task fmt:check`**.
@@ -87,8 +93,13 @@ Run repeatable work through the **Taskfile**; never assert success without the m
 - **`task generate:check`** / **`task proto:check`** — codegen (OpenAPI / proto) is committed and fresh.
 - **UI** (in `ui/`): **`task ui:ci`**, or `npm run typecheck` / `lint` / `test` / `build` directly.
 - **Dev substrate:** `task dev:up` / `dev:down` (Postgres 18 · NATS · Temporal); e2e tests need it up.
+- **Demos** ([demos/](demos/README.md), ADR-0116): `task demo:<name>:run` stands up a floor and drives the
+  scenario end-to-end, asserting the outcome (`demo:<name>:down` tears it back down). Live-verified on kind:
+  `k8s-deploy`, `vsphere-only`, `ec2-only`. Treat a demo run as integration testing — they have repeatedly
+  surfaced real defects; keep them green when touching orchestration, plugins, or the estate.
 
 ## Workflow
+
 - **Explore → plan → implement → verify.** Use plan mode for multi-file or architecture-affecting
   work. The charter is the spec — check the result against it.
 - **Verify every non-trivial change** with a real signal (the relevant `task` gate above) and show
@@ -103,12 +114,13 @@ Run repeatable work through the **Taskfile**; never assert success without the m
   is frozen v1.0 API).
 - **New ADR / non-trivial design?** BEFORE drafting, run the **`adr-scout`** subagent (or scan
   yourself) to surface prior ADRs + already-shipped seams the decision must reconcile with — the
-  corpus is 100+ ADRs and a decision that *feels* greenfield often isn't. Then reconcile with them in
+  corpus is 100+ ADRs and a decision that _feels_ greenfield often isn't. Then reconcile with them in
   the ADR (supersede / refactor / extend / coexist); never claim greenfield when a coupled seam ships.
 - **Decisions of consequence** get an ADR under `docs/adr/` — run **`/new-adr`** (its step 0 is the
   `adr-scout` prior-art scan).
 
 ## Repo etiquette
+
 - Trunk-based; branch off `main`. Commit and push only when asked.
 - **DCO sign-off is required on every commit:** `git commit -s`. No CLA, ever.
 - Descriptive, conventional commit messages.

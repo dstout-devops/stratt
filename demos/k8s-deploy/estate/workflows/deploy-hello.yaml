@@ -1,0 +1,26 @@
+# deploy-hello (ADR-0116, the k8s-deploy demo) — the gated Workflow the demo launches. It mirrors the
+# shipped genesis-authz-deploy shape: an `approve` gate Step (platform-admins) BEFORE the mutating
+# helm/deploy, then the deploy itself. §5 Flow 1: the launch IS a gate, and the approve Step adds a
+# second platform-admins approval before anything mutates the cluster.
+#
+# helm/deploy is a TARGETLESS Action (it names its own release + namespace — ADR-0092 dual surface). It
+# renders the `hello-stratt` chart mounted into the helm plugin (deploy/charts/stratt/files/hello-stratt),
+# producing a real Deployment + Service. The `helm-deploy` CredentialRef (../credential-refs) is a
+# gate-only ref — an Action's CredentialRef use-check is its only authz gate (§2.5); the demo's
+# authz/tuples.yaml grants the bootstrap-admin Principal `user` of it. This whole estate is delivered as
+# CaC through the declarations mount the reconcile controller enforces (actuators are CaC-only, §2.2/2.3).
+name: deploy-hello
+steps:
+  - name: approve
+    gate:
+      approvers:
+        teams: [platform-admins]
+      timeoutSeconds: 86400 # 24h to approve the deploy
+  - name: deploy
+    needs: [approve]
+    action: helm/deploy
+    credentialRefs: [helm-deploy]
+    params:
+      chart: hello-stratt
+      release: hello
+      namespace: demo # pre-created least-privilege target (deployNamespace in values-selfdeploy)

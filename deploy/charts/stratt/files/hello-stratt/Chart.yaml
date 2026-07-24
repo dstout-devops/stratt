@@ -1,0 +1,12 @@
+# hello-stratt (ADR-0116) — the friendly demo workload for the "k8s: deploy an app" demo.
+# A self-contained chart the Stratt helm Actuator deploys through a gated Workflow: a real
+# Deployment + Service running nginx that serves a "Hello from Stratt" page, plus a ConfigMap
+# holding that page. Mirrors the openfga-memory pattern (a chart baked into the helm plugin,
+# no repo/OCI pull) but a friendlier, distinct app than genesis's OpenFGA — so the demo TEACHES
+# "declare in CaC -> gated Workflow -> real release" rather than re-running genesis.
+apiVersion: v2
+name: hello-stratt
+description: A friendly nginx "Hello from Stratt" workload — the k8s-deploy demo app (ADR-0116)
+type: application
+version: 0.1.0
+appVersion: "1.27"

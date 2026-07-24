@@ -1,0 +1,21 @@
+# demo.yaml — the demo manifest (ADR-0116 D1/D3). Declared metadata the turnkey runner READS and
+# surfaces, so the human-facing claims (especially `fidelity`) can't quietly rot away from the code
+# (D3: hide mechanism, never fidelity — charter §1.8). Not an estate declaration; a demo descriptor.
+name: k8s-deploy
+title: "k8s: deploy an app"
+summary: >
+  Declare a workload in Config-as-Code, approve a gate, and watch Stratt deploy it through its own
+  sovereign plugin port — the descent Intent → Workflow → Run → task event, ending in a real release.
+
+# fidelity (D3): how real is what you're watching? The turnkey runner prints this up front.
+#   real       — real workloads on real substrate (kind + helm here: a real Deployment/Service).
+#   build-real — provisioning/lifecycle APIs are real, guest-OS/runtime simulated (e.g. vcsim).
+#   simulated  — the substrate itself is faked end to end.
+fidelity: real
+fidelityNote: A real Deployment + Service in a real (kind) cluster, rendered by the real helm Actuator.
+
+# What the runner drives (mirrors deploy-hello.yaml).
+workflow: deploy-hello
+namespace: demo
+release: hello
+substrate: kubernetes

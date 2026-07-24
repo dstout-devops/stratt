@@ -18,9 +18,9 @@ graph TD
   certificates_pki["certificates-pki<br/><small>0030 0043 0050 0098 0106</small>"]
   connectors["connectors<br/><small>0007 0014 0025 0026 0037 0038<br/>0039 0045 0086 0087 0088 0089<br/>0095 0097 0099 0113 0114 0115</small>"]
   credentials_secrets["credentials-secrets<br/><small>0009 0029 0052 0094 0098 0099<br/>0100 0106</small>"]
-  estate_as_code["estate-as-code<br/><small>0055 0056 0057 0103 0113</small>"]
+  estate_as_code["estate-as-code<br/><small>0055 0056 0057 0103 0113 0116</small>"]
   findings_drift["findings-drift<br/><small>0019 0020 0033 0043 0080 0085</small>"]
-  foundation["foundation<br/><small>0001 0002 0004 0005 0006 0008<br/>0108 0109</small>"]
+  foundation["foundation<br/><small>0001 0002 0004 0005 0006 0008<br/>0108 0109 0116</small>"]
   graph_model["graph-model<br/><small>0015 0017 0041 0042 0059 0060<br/>0079 0080 0081 0082 0084 0085<br/>0096 0114 0115</small>"]
   intent_compiler["intent-compiler<br/><small>0023 0030 0036 0055 0058 0083<br/>0085 0114</small>"]
   orchestration["orchestration<br/><small>0010 0011 0018 0027 0031 0063</small>"]
@@ -29,7 +29,7 @@ graph TD
   provisioning["provisioning<br/><small>0017 0058 0095 0096 0107 0110<br/>0111 0112 0113 0114 0115</small>"]
   state_artifacts["state-artifacts<br/><small>0016 0029 0093 0097 0105 0112</small>"]
   substrate_ops["substrate-ops<br/><small>0013 0032 0040 0044 0045 0049<br/>0077 0078 0093 0101 0102</small>"]
-  ui["ui<br/><small>0003 0012 0020 0024 0090 0091</small>"]
+  ui["ui<br/><small>0003 0012 0020 0024 0090 0091<br/>0116</small>"]
 
   actuators --> plugin_port
   api_surface --> orchestration
@@ -204,6 +204,7 @@ Estate-as-Code — CaC declarations, environments, composition, the estate CLI.
 - [ADR-0057](0057-environment-scoped-reconciliation.md) — Environment-scoped reconciliation: one estate repo, N environments
 - [ADR-0103](0103-runtime-connector-registry.md) — Runtime Connector registry: enable/disable Connectors without a strattd restart
 - [ADR-0113](0113-vsphere-provisioning-provider.md) — vSphere as a `provisioning` provider: the vcenter plugin gains a build verb (VM + DVPortgroup)
+- [ADR-0116](0116-demo-library.md) — The demo library: reproducible, narrated, turnkey teaching scenarios
 
 ### findings-drift
 
@@ -230,6 +231,7 @@ Foundation — charter authority, control plane, language/tooling, monorepo, met
 - [ADR-0008](0008-phase0-go-no-go-measurements.md) — Phase-0 go/no-go gate measurements: graph spine proves out
 - [ADR-0108](0108-adr-scout-prior-art-scan.md) — `adr-scout` + a mandatory prior-art scan before drafting an ADR
 - [ADR-0109](0109-adr-knowledge-graph.md) — The ADR knowledge graph: a generated subsystem map for discovery
+- [ADR-0116](0116-demo-library.md) — The demo library: reproducible, narrated, turnkey teaching scenarios
 
 ### graph-model
 
@@ -380,6 +382,7 @@ UI — React shell, schema-driven rendering, Views, descent, the first-party cli
 - [ADR-0024](0024-templating-parametrized-views.md) — Payload templating + parametrized Views
 - [ADR-0090](0090-ui-rebuild-greenfield-charter-stack.md) — UI rebuild: greenfield on the charter stack, gauntlet-informed patterns
 - [ADR-0091](0091-ui-is-a-first-party-bundled-pure-api-client.md) — the UI is a first-party, served-by-default, pure `/api/v1` client (never a port-plugin, never a gated add-on)
+- [ADR-0116](0116-demo-library.md) — The demo library: reproducible, narrated, turnkey teaching scenarios
 
 ## By ADR (reverse index)
 
@@ -500,3 +503,4 @@ UI — React shell, schema-driven rendering, Views, descent, the first-party cli
 | [0113](0113-vsphere-provisioning-provider.md) | capability-framework, connectors, estate-as-code, provisioning |
 | [0114](0114-entity-lifecycle-and-decommission-reach-path.md) | capability-framework, connectors, graph-model, intent-compiler, provisioning |
 | [0115](0115-vsphere-read-breadth.md) | connectors, graph-model, provisioning |
+| [0116](0116-demo-library.md) | estate-as-code, foundation, ui |

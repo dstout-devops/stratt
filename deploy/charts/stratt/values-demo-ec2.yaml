@@ -1,0 +1,25 @@
+# ec2-only demo overlay (ADR-0116) — layered on values-allinone.yaml + values-genesis.yaml by
+# `task demo:ec2-only:run`. Adds ONLY the awsec2 plugin (unlike values-e2e, which also brings up
+# vcenter/crossplane/helm/declared) so the floor is genuinely "EC2-only".
+#
+# The `plugins:` entry is named `aws` so the chart derives STRATT_AWS_PLUGIN_ADDR on strattd
+# (deployment.yaml → stratt-aws:9090), which boot-wires the awsec2 Actions (awsec2/create-vm …) AND —
+# because STRATT_AWS_INTERVAL is set below — the instance Syncer (opt-in; core/cmd/strattd/main.go). So
+# the demo gets BOTH verbs: provision + observe. `env` configures the plugin pod (it dials the floci
+# real-host EC2 backend on the kind host-gateway 192.168.102.1:4566, ADR-0093); `hostEnv` injects
+# strattd's Syncer wiring. awsec2 reaches an external EC2 API, not the K8s API, so no kubeAccess.
+plugins:
+  - name: aws
+    image:
+      repository: stratt-plugin-awsec2
+      tag: dev
+      pullPolicy: Never # kind-loaded (task image:awsec2-plugin)
+    env:
+      STRATT_AWSEC2_ENDPOINT: "http://192.168.102.1:4566"
+      STRATT_AWSEC2_REGION: "us-east-1"
+      AWS_ACCESS_KEY_ID: "testing"
+      AWS_SECRET_ACCESS_KEY: "testing"
+    hostEnv:
+      STRATT_AWS_SOURCE_NAME: "awsec2-dev"
+      STRATT_AWS_ENDPOINT: "http://192.168.102.1:4566"
+      STRATT_AWS_INTERVAL: "15s" # ENABLE the instance Syncer (opt-in) so the built instance projects

@@ -509,7 +509,11 @@ type GovernedRelation struct {
 // RawInvokeResult is the governed result of an Action invocation with NOTHING
 // written to the graph — the caller performs the single projection.
 type RawInvokeResult struct {
-	OK               bool
+	OK bool
+	// Error is the plugin's terminal-failure message (the TaskEvent Message on a
+	// !Ok terminal event) — the real diagnosis, surfaced so a failed Action's Run
+	// carries WHY it failed instead of a downstream "got null" (§1.8). Empty on OK.
+	Error            string
 	Outputs          []byte
 	Entities         []ActionEntity
 	ProvisionedCreds []string
@@ -553,6 +557,9 @@ func (h *Host) InvokeRaw(ctx context.Context, req ActionInvoke) (RawInvokeResult
 		}
 		if ev := resp.GetEvent(); ev != nil && ev.GetTerminal() {
 			out.OK = ev.GetOk()
+			if !ev.GetOk() {
+				out.Error = ev.GetMessage() // the real failure cause (§1.8) — the terminal message rides here, no Result
+			}
 		}
 		res := resp.GetResult()
 		if res == nil {

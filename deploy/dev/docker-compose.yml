@@ -150,10 +150,13 @@ services:
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
     healthcheck:
+      # floci's native (Quarkus) image ships curl, NOT wget — the old wget probe always
+      # failed (127 not-found), so the container reported unhealthy while serving fine and
+      # `--wait` timed out. curl is present at /usr/bin/curl.
       test:
         [
           "CMD-SHELL",
-          "wget -q -O /dev/null http://127.0.0.1:4566/_localstack/health 2>/dev/null || wget -q -O /dev/null http://127.0.0.1:4566/ || exit 1",
+          "curl -fsS -o /dev/null http://127.0.0.1:4566/ || exit 1",
         ]
       interval: 3s
       timeout: 3s

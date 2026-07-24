@@ -3,7 +3,7 @@
   "subsystems": {
     "foundation": {
       "title": "Foundation — charter authority, control plane, language/tooling, monorepo, meta-process",
-      "adrs": [1, 2, 4, 5, 6, 8, 108, 109],
+      "adrs": [1, 2, 4, 5, 6, 8, 108, 109, 116],
       "depends_on": []
     },
     "graph-model": {
@@ -33,7 +33,7 @@
     },
     "estate-as-code": {
       "title": "Estate-as-Code — CaC declarations, environments, composition, the estate CLI",
-      "adrs": [55, 56, 57, 103, 113],
+      "adrs": [55, 56, 57, 103, 113, 116],
       "depends_on": ["connectors"]
     },
     "intent-compiler": {
@@ -83,7 +83,7 @@
     },
     "ui": {
       "title": "UI — React shell, schema-driven rendering, Views, descent, the first-party client",
-      "adrs": [3, 12, 20, 24, 90, 91],
+      "adrs": [3, 12, 20, 24, 90, 91, 116],
       "depends_on": ["api-surface"]
     },
     "api-surface": {

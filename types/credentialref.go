@@ -34,8 +34,16 @@ type CredentialRef struct {
 	// Locator addresses the material inside the backend — backend-shaped
 	// data (k8s-secret: {"namespace": ..., "name": ...}).
 	Locator json.RawMessage `json:"locator"`
-	// Injection is the per-field projection policy.
+	// Injection is the per-field projection policy. Empty ⇒ the ref brokers NO
+	// material (a gate-only ref, ADR-0052/0092) — legal ONLY when GateOnly asserts
+	// that emptiness is deliberate.
 	Injection []CredentialInjection `json:"injection"`
+	// GateOnly asserts an injection-less ref is DELIBERATELY material-less — purely
+	// an Action's authz gate. It keeps an accidentally-dropped injection block failing
+	// at apply (§1.8) rather than silently degrading to "resolves nothing", on the
+	// API door as well as the Git door. Informational (behavior follows empty
+	// Injection); carried so the wire path can validate intent as ParseDir does.
+	GateOnly bool `json:"gateOnly,omitempty"`
 	// DeclaredBy mirrors Views: "cac" (Git-declared) or "api".
 	DeclaredBy string `json:"declaredBy,omitempty"`
 }

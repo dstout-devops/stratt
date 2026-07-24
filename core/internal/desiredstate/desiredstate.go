@@ -729,7 +729,7 @@ func (f credRefFile) toCredentialRef() (types.CredentialRef, error) {
 	}
 	return types.CredentialRef{
 		Name: f.Name, OwnerTeam: f.OwnerTeam, Backend: f.Backend,
-		Locator: locator, Injection: inj,
+		Locator: locator, Injection: inj, GateOnly: f.GateOnly,
 	}, nil
 }
 
