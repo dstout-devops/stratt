@@ -26,16 +26,21 @@ var vmProps = []string{
 	"runtime.powerState",
 	"runtime.connectionState",
 	"runtime.host",
-	"network", // the portgroups/networks the VM is attached to — the placed-in edge
+	"network",   // the portgroups/networks the VM is attached to — the placed-in edge
+	"datastore", // the datastores backing the VM — the stored-on edge (ADR-0115)
 	"guest.hostName",
 	"guest.ipAddress",
 	"guest.toolsRunningStatus",
 }
 
+// datastoreProps: the summary carries the capacity/free/type the storage.datastore Facet demands.
+var datastoreProps = []string{"name", "summary"}
+
 var hostProps = []string{
 	"name",
 	"summary.hardware.uuid",
-	"parent", // the cluster (ClusterComputeResource) a host belongs to — the member-of edge
+	"parent",    // the cluster (ClusterComputeResource) a host belongs to — the member-of edge
+	"datastore", // the datastores the host mounts — the has-datastore edge (ADR-0115)
 }
 
 // Topology property sets (ADR-0115). Datacenters/clusters carry `parent` for the AZ→region
@@ -160,6 +165,31 @@ func normalizeAvailabilityZone(cl mo.ClusterComputeResource) (*pluginv1.Observed
 		Kind:         "availability-zone",
 		IdentityKeys: map[string]string{"vcenter.cluster.moref": ref},
 		Labels:       map[string]string{"source": "vsphere", "vcenter.name": cl.Name},
+	}, nil
+}
+
+// normalizeDatastore maps a vSphere datastore to the `datastore` kind (ADR-0115). Unlike region/AZ it
+// carries a Facet — `storage.datastore` (capacity/free/type) — because a shipping consumer (the
+// `datastores` View) demands it (§1.1); this is the one pinned Facet schema of read breadth.
+func normalizeDatastore(d mo.Datastore) (*pluginv1.ObservedEntity, error) {
+	ref := d.Self.Value
+	if ref == "" {
+		return nil, fmt.Errorf("vcenter: datastore %q has no moref; cannot project without identity", d.Name)
+	}
+	facet, err := json.Marshal(map[string]any{
+		"name":      d.Summary.Name,
+		"type":      d.Summary.Type,
+		"capacity":  d.Summary.Capacity,
+		"freeSpace": d.Summary.FreeSpace,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("vcenter: marshal facet storage.datastore: %w", err)
+	}
+	return &pluginv1.ObservedEntity{
+		Kind:         "datastore",
+		IdentityKeys: map[string]string{"vcenter.datastore.moref": ref},
+		Labels:       map[string]string{"source": "vsphere", "vcenter.name": d.Name},
+		Facets:       map[string][]byte{"storage.datastore": facet},
 	}, nil
 }
 

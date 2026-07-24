@@ -985,7 +985,7 @@ func run(ctx context.Context, log *slog.Logger) error {
 			PluginIdentity:  env("STRATT_VCENTER_PLUGIN_ID", "vcenter"),
 			Tier:            pluginhost.Tier(env("STRATT_VCENTER_TIER", "trusted")),
 			Source:          types.Source{Kind: "vcenter", Name: sourceName, Endpoint: os.Getenv("STRATT_VCENTER_URL")},
-			FacetNamespaces: []string{"vm.config", "vm.runtime", "net.guest", "net.subnet"},
+			FacetNamespaces: []string{"vm.config", "vm.runtime", "net.guest", "net.subnet", "storage.datastore"},
 			LabelKeys:       []string{"vcenter.name", "source"},
 			// dns.fqdn is a shared cross-source scheme: only honored because the
 			// grant lists it AND the tier is trusted (finding #4). vcenter.network.moref
@@ -994,11 +994,11 @@ func run(ctx context.Context, log *slog.Logger) error {
 			// (vcenter.cluster.moref) — shared kinds, first projected here.
 			IdentitySchemes: []string{
 				"vcenter.uuid", "vcenter.host.uuid", "dns.fqdn", "vcenter.network.moref",
-				"vcenter.datacenter.moref", "vcenter.cluster.moref",
+				"vcenter.datacenter.moref", "vcenter.cluster.moref", "vcenter.datastore.moref",
 			},
 			TombstoneSchemes: []string{
 				"vcenter.uuid", "vcenter.host.uuid", "vcenter.network.moref",
-				"vcenter.datacenter.moref", "vcenter.cluster.moref",
+				"vcenter.datacenter.moref", "vcenter.cluster.moref", "vcenter.datastore.moref",
 			},
 		}
 		host := pluginhost.New(store, pluginv1.NewPluginServiceClient(conn), grant, log)

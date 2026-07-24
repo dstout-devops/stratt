@@ -58,11 +58,18 @@ func TestEnumerateAgainstSimulator(t *testing.T) {
 				if e.GetIdentityKeys()["vcenter.cluster.moref"] == "" {
 					t.Errorf("availability-zone missing vcenter.cluster.moref identity")
 				}
+			case "datastore": // ADR-0115 slice 2 — the pinned storage.datastore Facet
+				if e.GetIdentityKeys()["vcenter.datastore.moref"] == "" {
+					t.Errorf("datastore missing vcenter.datastore.moref identity")
+				}
+				if len(e.GetFacets()["storage.datastore"]) == 0 {
+					t.Errorf("datastore missing storage.datastore facet blob")
+				}
 			default:
 				t.Errorf("unexpected kind %q", e.GetKind())
 			}
 		}
-		for _, k := range []string{"vm", "host", "subnet", "region", "availability-zone"} {
+		for _, k := range []string{"vm", "host", "subnet", "region", "availability-zone", "datastore"} {
 			if count[k] == 0 {
 				t.Errorf("expected at least one %q from the simulator, got 0", k)
 			}
@@ -202,5 +209,50 @@ func TestEnumerateTopologyEdges(t *testing.T) {
 			t.Error("expected at least one host --member-of--> availability-zone edge")
 		}
 		t.Logf("topology edges: in-region=%d member-of=%d", inRegion, memberOf)
+	})
+}
+
+// TestEnumerateStorageEdges proves the ADR-0115 storage relations: vm --stored-on--> datastore and
+// host --has-datastore--> datastore, both targeting by vcenter.datastore.moref and resolving to an
+// emitted datastore Entity.
+func TestEnumerateStorageEdges(t *testing.T) {
+	simulator.Test(func(ctx context.Context, c *vim25.Client) {
+		entities, err := enumerate(ctx, c)
+		if err != nil {
+			t.Fatalf("enumerate: %v", err)
+		}
+		datastores := map[string]bool{}
+		for _, e := range entities {
+			if e.GetKind() == "datastore" {
+				datastores[e.GetIdentityKeys()["vcenter.datastore.moref"]] = true
+			}
+		}
+		if len(datastores) == 0 {
+			t.Fatal("expected at least one datastore from the simulator")
+		}
+		var storedOn, hasDatastore int
+		for _, e := range entities {
+			for _, r := range e.GetRelations() {
+				switch r.GetType() {
+				case "stored-on":
+					storedOn++
+					if r.GetToScheme() != "vcenter.datastore.moref" || !datastores[r.GetToValue()] {
+						t.Errorf("stored-on must resolve to an emitted datastore, got %s=%s", r.GetToScheme(), r.GetToValue())
+					}
+				case "has-datastore":
+					hasDatastore++
+					if r.GetToScheme() != "vcenter.datastore.moref" || !datastores[r.GetToValue()] {
+						t.Errorf("has-datastore must resolve to an emitted datastore, got %s=%s", r.GetToScheme(), r.GetToValue())
+					}
+				}
+			}
+		}
+		if storedOn == 0 {
+			t.Error("expected at least one vm --stored-on--> datastore edge")
+		}
+		if hasDatastore == 0 {
+			t.Error("expected at least one host --has-datastore--> datastore edge")
+		}
+		t.Logf("storage edges: stored-on=%d has-datastore=%d", storedOn, hasDatastore)
 	})
 }

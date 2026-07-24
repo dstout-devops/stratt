@@ -54,14 +54,15 @@ func (s *Server) GetManifest(context.Context, *pluginv1.GetManifestRequest) (*pl
 			{SchemaId: "vm.config"},
 			{SchemaId: "vm.runtime"},
 			{SchemaId: "net.guest"},
-			{SchemaId: "net.subnet"}, // vSphere portgroups project as subnets (ADR-0059)
+			{SchemaId: "net.subnet"},        // vSphere portgroups project as subnets (ADR-0059)
+			{SchemaId: "storage.datastore"}, // datastore capacity/free/type (ADR-0115, pinned)
 		},
 		// Tombstone schemes per kind (ADR-0096 observe-all + full-sync tombstone). Read breadth
-		// (ADR-0115) adds region (datacenter) + availability-zone (cluster) — shared kinds, keyed by
-		// vSphere moref. Bare Entities, so no new Facet Contracts.
+		// (ADR-0115) adds region (datacenter) + availability-zone (cluster) — shared kinds — and
+		// datastore, all keyed by vSphere moref.
 		TombstoneSchemes: []string{
 			"vcenter.uuid", "vcenter.host.uuid", "vcenter.network.moref",
-			"vcenter.datacenter.moref", "vcenter.cluster.moref",
+			"vcenter.datacenter.moref", "vcenter.cluster.moref", "vcenter.datastore.moref",
 		},
 		// The `provisioning` capability build Actions (ADR-0113). create-vm is NOT idempotent
 		// (each call builds a new VM); it supports a side-effect-free dry-run.
@@ -249,7 +250,18 @@ func enumerate(ctx context.Context, c *vim25.Client) ([]*pluginv1.ObservedEntity
 		out = append(out, e)
 	}
 
-	// Hosts → host + the member-of edge to its cluster (availability-zone).
+	// Datastores → datastore Entities (ADR-0115, the pinned storage.datastore Facet).
+	datastores, err := retrieve[mo.Datastore](ctx, m, root, "Datastore", datastoreProps)
+	if err != nil {
+		return nil, err
+	}
+	for _, d := range datastores {
+		if e, err := normalizeDatastore(d); err == nil {
+			out = append(out, e)
+		}
+	}
+
+	// Hosts → host + the member-of edge (cluster) + has-datastore edges.
 	hosts, err := retrieve[mo.HostSystem](ctx, m, root, "HostSystem", hostProps)
 	if err != nil {
 		return nil, err
@@ -265,6 +277,11 @@ func enumerate(ctx context.Context, c *vim25.Client) ([]*pluginv1.ObservedEntity
 		if h.Parent != nil && h.Parent.Type == "ClusterComputeResource" {
 			e.Relations = append(e.Relations, &pluginv1.ObservedRelation{
 				Type: "member-of", ToScheme: "vcenter.cluster.moref", ToValue: h.Parent.Value,
+			})
+		}
+		for _, ds := range h.Datastore {
+			e.Relations = append(e.Relations, &pluginv1.ObservedRelation{
+				Type: "has-datastore", ToScheme: "vcenter.datastore.moref", ToValue: ds.Value,
 			})
 		}
 		out = append(out, e)
@@ -293,6 +310,12 @@ func enumerate(ctx context.Context, c *vim25.Client) ([]*pluginv1.ObservedEntity
 		for _, netRef := range vm.Network {
 			e.Relations = append(e.Relations, &pluginv1.ObservedRelation{
 				Type: "placed-in", ToScheme: "vcenter.network.moref", ToValue: netRef.Value,
+			})
+		}
+		// stored-on edges to each backing datastore (ADR-0115).
+		for _, ds := range vm.Datastore {
+			e.Relations = append(e.Relations, &pluginv1.ObservedRelation{
+				Type: "stored-on", ToScheme: "vcenter.datastore.moref", ToValue: ds.Value,
 			})
 		}
 		out = append(out, e)

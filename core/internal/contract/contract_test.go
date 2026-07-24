@@ -179,6 +179,22 @@ func TestValidateFacet(t *testing.T) {
 	}
 }
 
+// TestStorageDatastoreContract is the ADR-0115 co-fidelity guard: the pinned storage.datastore Facet
+// (the one schema read breadth ships, WITH its consuming datastores View, §1.1) accepts the vcenter
+// plugin's real emission and rejects drift (closed).
+func TestStorageDatastoreContract(t *testing.T) {
+	ok := []byte(`{"name":"ds-vmfs-01","type":"VMFS","capacity":1099511627776,"freeSpace":549755813888}`)
+	if covered, err := ValidateFacet("storage.datastore", ok); !covered || err != nil {
+		t.Fatalf("a valid datastore facet must validate: covered=%v err=%v", covered, err)
+	}
+	if covered, err := ValidateFacet("storage.datastore", []byte(`{"type":"VMFS","undeclared":true}`)); !covered || err == nil {
+		t.Fatalf("storage.datastore must reject undeclared keys (closed): covered=%v err=%v", covered, err)
+	}
+	if covered, err := ValidateFacet("storage.datastore", []byte(`{"capacity":"lots"}`)); !covered || err == nil {
+		t.Fatalf("storage.datastore must reject a non-integer capacity: covered=%v err=%v", covered, err)
+	}
+}
+
 // TestNetSubnetUnionCoFidelity is the BLOCKING cross-plugin co-fidelity gate for the
 // shared net.subnet Facet (ADR-0096 guardian flag 2): the closed union schema now
 // governs the LIVE write path of BOTH crossplane and awsec2. If either Source's real
@@ -215,8 +231,8 @@ func TestPinsAreStable(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(all) != 138 {
-		t.Fatalf("expected 138 embedded documents, got %d", len(all))
+	if len(all) != 139 {
+		t.Fatalf("expected 139 embedded documents, got %d", len(all))
 	}
 	versions := map[string]int{}
 	for _, c := range all {
