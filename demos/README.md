@@ -17,7 +17,9 @@ Every `demos/<name>/` is:
   config language (charter §1.1).
 - **`run.sh`** + a **`demo:<name>:run`** Taskfile task — the turnkey path: bring-up → apply → launch
   the gated Workflow → approve → **assert** the outcome. Reproducible and CI-able, so it can't
-  silently rot; reuses the proven `genesis-selfdeploy` launch/approve/assert loop.
+  silently rot; reuses the proven `genesis-selfdeploy` launch/approve/assert loop. A matching
+  **`demo:<name>:down`** tears the demo's footprint back down (full nuke: `task dev:kind:down`), so
+  every demo has a clean build-up ⇄ tear-down lifecycle and re-runs from a known state.
 - **`README.md`** — the narrated walkthrough: the turnkey one-liner _and_ the by-hand path, with
   "open the UI to watch the descent" (charter §1.8).
 

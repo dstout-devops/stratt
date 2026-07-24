@@ -39,10 +39,11 @@ Prerequisites: Docker, `go`, `kubectl`, `jq`, and this repo. Then:
 task demo:k8s-deploy:run
 ```
 
-That will (from nothing): bring up a minimal Stratt on kind (`dev:genesis`), apply this demo's
-estate, launch the `deploy-hello` Workflow, **auto-approve** its gate as the dev bootstrap-admin,
-wait for the Run to converge, and assert the `hello` Deployment is Ready in the `demo` namespace. It
-prints the declared **fidelity** up front so the claim can't drift from the code.
+That will (from nothing): bring up kind + a minimal Stratt whose desired state IS this demo's
+estate (staged as Config-as-Code into the declarations mount), let the reconcile controller register
+the helm Actuator, launch the `deploy-hello` Workflow, **auto-approve** its gate as the dev
+bootstrap-admin, wait for the Run to converge, and assert the `hello` Deployment is Ready in the
+`demo` namespace. It prints the declared **fidelity** up front so the claim can't drift from the code.
 
 See the page it deployed:
 
@@ -50,17 +51,33 @@ See the page it deployed:
 kubectl -n demo port-forward svc/hello 8888:80   # → open http://localhost:8888
 ```
 
+## Clean up
+
+```bash
+task demo:k8s-deploy:down   # uninstall the hello release; leave the demo floor up to re-run
+task dev:kind:down          # full teardown — delete the whole kind cluster
+```
+
+`demo:k8s-deploy:run` is idempotent (helm `upgrade --install` re-converges the floor), so you can
+re-run it without tearing down. `demo:k8s-deploy:down` removes only the deployed app so the next run
+starts clean; `dev:kind:down` nukes everything.
+
 ## Walk it by hand (the narrated path)
 
 The turnkey runner does these for you; do them yourself to _feel_ the descent.
 
-1. **Stand up the floor.** `task dev:genesis` — nothing → a minimal Stratt on kind (spine + strattd +
-   a self-retiring `bootstrap-admin`), with the helm Actuator and `helm-deploy` CredentialRef
-   registered. (This demo reuses that platform CredentialRef rather than minting new authz.)
-2. **Apply the demo estate.** `stratt apply -d demos/k8s-deploy/estate -s http://localhost:8080` —
-   this adds the `deploy-hello` Workflow and the `hello` View. Read
+1. **Stand up the floor with the demo estate as its desired state.** `task demo:k8s-deploy:run` stages
+   [estate/](estate/) into Stratt's declarations mount and brings up kind + the spine + strattd + the
+   helm plugin. The estate is delivered as **Config-as-Code** — the reconcile controller enforces it —
+   because Actuators and CredentialRefs are CaC-only (charter §2.2/§2.3: Git review authorizes plugin
+   registration; the imperative `stratt apply` door cannot register them). The estate carries its own
+   authz grant, the `helm` Actuator, the `helm-deploy` gate-only CredentialRef, the `deploy-hello`
+   Workflow, and the `hello` View. Read
    [estate/workflows/deploy-hello.yaml](estate/workflows/deploy-hello.yaml): an `approve` gate Step,
    then a `helm/deploy` Step that renders the `hello-stratt` chart.
+2. **Watch the reconcile register the Actuator.** On its cadence, the connectorregistry dials the helm
+   plugin and registers the targetless `helm/deploy` Action (ADR-0103) — no strattd restart. Confirm:
+   `GET /api/v1/actuators` lists `helm`.
 3. **Launch the Workflow.** In the UI (`cd ui && npm run dev`) open **Workflows → deploy-hello → Run**,
    or `POST /api/v1/workflows/deploy-hello/runs`. It immediately parks on the gate.
 4. **Approve the gate** as a `platform-admins` member. Watch the Run advance to the `deploy` Step.

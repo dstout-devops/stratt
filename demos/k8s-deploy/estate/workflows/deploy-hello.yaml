@@ -4,10 +4,11 @@
 # second platform-admins approval before anything mutates the cluster.
 #
 # helm/deploy is a TARGETLESS Action (it names its own release + namespace — ADR-0092 dual surface). It
-# renders the `hello-stratt` chart baked into the helm plugin (deploy/charts/stratt/files/hello-stratt),
-# producing a real Deployment + Service. The `helm-deploy` CredentialRef is the platform's own gate-only
-# ref (already granted to the bootstrap-admin Principal post-genesis) — an Action's CredentialRef
-# use-check is its only authz gate (§2.5); the demo reuses it rather than minting new authz.
+# renders the `hello-stratt` chart mounted into the helm plugin (deploy/charts/stratt/files/hello-stratt),
+# producing a real Deployment + Service. The `helm-deploy` CredentialRef (../credential-refs) is a
+# gate-only ref — an Action's CredentialRef use-check is its only authz gate (§2.5); the demo's
+# authz/tuples.yaml grants the bootstrap-admin Principal `user` of it. This whole estate is delivered as
+# CaC through the declarations mount the reconcile controller enforces (actuators are CaC-only, §2.2/2.3).
 name: deploy-hello
 steps:
   - name: approve

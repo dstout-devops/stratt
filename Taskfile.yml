@@ -671,19 +671,53 @@ tasks:
       - "{{.KUBECTL}} --context {{.KIND_CONTEXT}} -n stratt-authz create secret generic helm-deploy-authz --from-literal=marker=1 --dry-run=client -o yaml | {{.KUBECTL}} --context {{.KIND_CONTEXT}} apply -f -"
       - KUBECONTEXT={{.KIND_CONTEXT}} KUBECTL={{.KUBECTL}} bash {{.ROOT_DIR}}/deploy/dev/genesis-selfdeploy.sh
 
-  demo:k8s-deploy:run:
-    # The turnkey "k8s: deploy an app" demo (ADR-0116, the first demos/ scenario). From the genesis
-    # floor, apply the demo estate and drive its gated deploy-hello Workflow end to end — approve the
-    # platform-admins gate as bootstrap-admin, converge the WorkflowRun, assert the real `hello`
-    # Deployment is Ready. Reuses the platform `helm-deploy` CredentialRef (so it seeds the same
-    # gate-marker Secret genesis:selfdeploy does) and the hello-stratt chart baked into the helm
-    # plugin image by dev:genesis. Narrative + by-hand walk: demos/k8s-deploy/README.md.
-    desc: "Demo — from the genesis floor, deploy a real app through a gated Workflow (demos/k8s-deploy)"
-    deps: [dev:genesis]
+  demo:k8s-deploy:stage:
+    # Stage the k8s-deploy demo's SELF-CONTAINED estate (ADR-0116) into the inline-declarations
+    # path — its authz grant + helm Actuator + gate-only CredentialRef + deploy-hello Workflow +
+    # hello View. Same mirror-exactly mechanism as dev:stage-genesis, different source: the floor
+    # boots with the demo's whole desired state as CaC (actuators/credential-refs are CaC-only,
+    # §2.2/2.3 — never `stratt apply`), which the reconcile controller then enforces.
+    desc: Stage the k8s-deploy demo estate into the inline-declarations path
     cmds:
-      # Reused helm-deploy is a gateOnly CredentialRef pointing at this marker Secret (pointer, no material).
+      - rm -rf {{.ROOT_DIR}}/deploy/charts/stratt/dev/declarations
+      - mkdir -p {{.ROOT_DIR}}/deploy/charts/stratt/dev/declarations
+      - cp -R {{.ROOT_DIR}}/demos/k8s-deploy/estate/. {{.ROOT_DIR}}/deploy/charts/stratt/dev/declarations/
+
+  demo:k8s-deploy:run:
+    # The turnkey "k8s: deploy an app" demo (ADR-0116, the first demos/ scenario). Stands up a Stratt
+    # floor whose desired state IS the demo estate (kind + spine + strattd + the helm plugin + the
+    # staged CaC), then drives its gated deploy-hello Workflow end to end — approve the platform-admins
+    # gate as bootstrap-admin, converge the WorkflowRun, assert the real `hello` Deployment is Ready.
+    # The hello-stratt chart rides the helm plugin image (image:helm-plugin). By-hand walk:
+    # demos/k8s-deploy/README.md. Teardown: demo:k8s-deploy:down (full nuke: dev:kind:down).
+    desc: "Demo — stand up a floor and deploy a real app through a gated Workflow (demos/k8s-deploy)"
+    deps: [tools:helm, tools:kubectl]
+    cmds:
+      - task: dev:kind:up
+      - task: image:kind-load
+      - task: image:helm-plugin # the helm Actuator + the baked hello-stratt chart
+      - task: demo:k8s-deploy:stage
+      - |
+        set -eu
+        "{{.HELM}}" upgrade --install stratt {{.ROOT_DIR}}/deploy/charts/stratt \
+          --kube-context {{.KIND_CONTEXT}} -n stratt --create-namespace \
+          -f {{.ROOT_DIR}}/deploy/charts/stratt/values-allinone.yaml \
+          -f {{.ROOT_DIR}}/deploy/charts/stratt/values-selfdeploy.yaml \
+          -f {{.ROOT_DIR}}/deploy/charts/stratt/values-genesis.yaml
+      - "{{.KUBECTL}} --context {{.KIND_CONTEXT}} -n stratt rollout status deploy/stratt --timeout=240s"
+      # The gate-only CredentialRef points at this marker Secret (pointer, no material).
       - "{{.KUBECTL}} --context {{.KIND_CONTEXT}} -n stratt-authz create secret generic helm-deploy-authz --from-literal=marker=1 --dry-run=client -o yaml | {{.KUBECTL}} --context {{.KIND_CONTEXT}} apply -f -"
       - KUBECONTEXT={{.KIND_CONTEXT}} KUBECTL={{.KUBECTL}} bash {{.ROOT_DIR}}/demos/k8s-deploy/run.sh
+
+  demo:k8s-deploy:down:
+    # Tear down JUST the demo's footprint — uninstall the `hello` release (Deployment +
+    # Service + ConfigMap + release Secret) via the in-cluster helm the plugin used, leaving
+    # the genesis floor up so `demo:k8s-deploy:run` can re-run fast. Idempotent: a missing
+    # release is not an error. For a FULL teardown (nuke the cluster) use `task dev:kind:down`.
+    desc: "Demo teardown — uninstall the hello release, leave the genesis floor up (full nuke: dev:kind:down)"
+    cmds:
+      - "{{.HELM}} uninstall hello -n demo --kube-context {{.KIND_CONTEXT}} --ignore-not-found"
+      - "{{.KUBECTL}} --context {{.KIND_CONTEXT}} -n demo get deploy,svc,cm -l app.kubernetes.io/name=hello 2>/dev/null || true"
 
   dev:promote:authz:
     # Genesis -> real-authz promotion, BACKEND axis (ADR-0102, docs/runbooks/genesis-to-authz.md):
