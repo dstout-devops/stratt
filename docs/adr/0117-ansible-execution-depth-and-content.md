@@ -3,11 +3,14 @@
 - **Status:** **Proposed** (2026-07-24, steward) — vocabulary-linter **CLEAN**; charter-guardian
   **PASS after fixes** (V1: the v4/v5 "opt-in" ladder was contradicted by the resolver — versions collapse
   to one live contract and `Step` has no version pin, so v5 is now additive-only; V2: `check` has a live
-  writer in the AWX materializer, so v5 *deprecates* rather than deletes it and the writer is redirected to
+  writer in the AWX materializer, so v5 _deprecates_ rather than deletes it and the writer is redirected to
   `Step.DryRun`; F1: the Control-gating claim was unreachable — `ChangeContext` carries no Step params — so
   it is downgraded to declared+audited with content-blind gating booked; F2: `content` moved OUT of the
   run-time Contract into the EE build declaration, since a field the runtime ignores is the very defect D2
-  corrects)
+  corrects). **Amended 2026-07-24 (still Proposed), from the implementation-state survey:** (i) the claim
+  that `eeImage` was "already honored" was FALSE — it is read by nothing, so per-Step EE selection is a
+  prerequisite, resolved content-blind by **D3a** (image on the Actuator declaration, not a param);
+  (ii) **roles** were omitted from D3 and are now in scope alongside collections.
 - **Date:** 2026-07-24
 - **Deciders:** steward
 - **Charter sections:** §1.1 (type the seams), §1.5 (sovereign contracts, pinned + hash-verified), §1.4
@@ -46,7 +49,7 @@ Three seams are settled and are **not** reopened here:
    `if req.DryRun { args = append(args, "--cmdline", "--check --diff") }`), per ADR-0051 MF6, which
    superseded [ADR-0019](0019-baselines-findings-v1.md)'s original `params.check`; the field survived in
    v4 as vestige. **A Contract that advertises a knob the runtime ignores is a lying seam** (§1.5, §1.8) —
-   but the AWX materializer (`plugins/awx/materialize/workflows.go`) *does* write it for imported check
+   but the AWX materializer (`plugins/awx/materialize/workflows.go`) _does_ write it for imported check
    templates, so it cannot simply be deleted (D2).
 3. **There is no content story.** The EE image installs `ansible-core` + `ansible-runner` and **no
    collections** — so `community.crypto` is unavailable and the certificate demo cannot run at all.
@@ -75,11 +78,16 @@ charter non-goal; the plugin model substitutes).
 | `limit`             | string                                          | `--limit`                                      |
 | `tags` / `skipTags` | string[]                                        | `--tags` / `--skip-tags`                       |
 | `forks`             | integer                                         | `--forks`                                      |
-| `serial`            | string \| integer                               | `--cmdline` serial (rolling)                   |
 | `diff`              | bool                                            | `--diff`                                       |
 | `verbosity`         | integer 0–4                                     | `-v`…`-vvvv`                                   |
 | `timeout`           | integer (seconds)                               | runner timeout                                 |
 | `vault`             | `{credentialRef: string}`                       | `--vault-password-file` (file-injected, D4)    |
+
+> **Dropped during implementation: `serial`.** An earlier revision listed a `serial` (rolling-batch) knob.
+> `serial` is an ansible **play-level keyword with no `ansible-playbook` CLI flag** — it can only be
+> honored by rewriting the operator's play, which this ADR will not do. Shipping it would have been
+> precisely the lying seam D2 exists to remove, so it is omitted rather than faked. Rolling execution
+> stays a property of the play (or a future play-templating decision).
 
 **These are typed fields, NOT a free-form `args`/`cmdline` string.** An arbitrary-flag passthrough would be
 an untyped seam at exactly the boundary §1.1 says to type, and an injection surface into a subprocess we
@@ -148,25 +156,60 @@ So v5 does **not** delete it:
 `diff` remains a _separate_ v5 field (D1) because diff-without-check is a legitimate apply-time request —
 "converge, and show me what changed" — distinct from "don't converge at all."
 
-### D3 — Content is an EE **build-time** declaration, pinned and hash-verified; the image digest is the run's single truth
+### D3 — Content (collections **and roles**) is an EE **build-time** declaration, pinned and hash-verified; the image digest is the run's single truth
 
-Collections are declared where they are _resolved_ — in the **Execution Environment build declaration**
-(the `ansible-builder`-compatible input the EE factory consumes), **not** as a field on the run-time
+Content is declared where it is _resolved_ — in the **Execution Environment build declaration** (the
+`ansible-builder`-compatible input the EE factory consumes), **not** as a field on the run-time
 `ansible.input` Contract:
 
 ```yaml
 # EE build declaration (consumed by the EE factory — parity P5), NOT ansible.input.v5
 collections:
   - { name: community.crypto, version: "2.22.3" }
-requirements: { scm: { ... }, path: requirements.yml } # or a content-ref to a requirements file
+roles:
+  - { name: geerlingguy.certbot, version: "5.2.0" }
+requirements: { scm: { ... }, path: requirements.yml } # both sections of a requirements file
 ```
+
+**Roles are in scope, and were an omission in the first revision of this ADR.** `requirements.yml` has
+two sections and Stratt currently handles neither: there is **no** `roles_path`, no `ANSIBLE_ROLES_PATH`,
+and no role installation anywhere in the runtime — so roles work only incidentally, when an SCM-cloned
+repo happens to contain `roles/` next to its play. An **inline `play` can never use a role at all**,
+because the shim writes only `play.yml` into `project/`. Since a certificate/app-install play is exactly
+the kind that reaches for a community role, roles get the same treatment as collections here: declared in
+the EE build, installed at build time, pinned and hash-verified, with the image digest as the single truth.
+(`plugins/ansibleproject` already _projects_ `ansible.role` Entities read-only, but that is observation of
+a content root, not execution — a different seam, and dormant.)
 
 **Why content stays out of the run-time Contract.** A `content:` field on `ansible.input.v5` would be a
 Contract field the runtime does not honor — the _identical_ defect D2 exists to correct, re-introduced two
 decisions later. Worse, once the factory exists, a Step's declared pins and the digest-pinned image's
 actual contents would be two assertions of one fact with no stated winner. **The EE image digest is the
 single truth about what content a Run had** (§1.2 in spirit: one authority per fact). A Step selects
-content by selecting its `eeImage` — a field that already exists and is already honored.
+content by selecting its EE image.
+
+> **Correction (post-merge, ADR still Proposed).** An earlier revision claimed `eeImage` "already exists
+> and is already honored." **It does not.** The field exists in `ansible.input.v4` but is read by nothing:
+> `executeJobPlugin` builds `actuators.JobSpec{Files, Command}` with **no `Image`**
+> (`core/internal/orchestrate/orchestrate.go`), so the dispatcher always falls back to the global
+> `STRATT_EE_IMAGE` (`core/internal/dispatch/dispatch.go`). Per-Step EE selection is therefore a
+> **prerequisite** of D3, not a given — and it carries a real §1.4 tension, because honoring
+> `params.eeImage` means the core reading _inside_ an ansible param, the `if ansible{}` this ADR
+> otherwise refuses. **D3a resolves it below.**
+
+#### D3a — Per-Step EE selection is content-blind: a declared Actuator carries its image, not a param
+
+The core does **not** learn to read `params.eeImage`. Instead, an EE is selected the way every other
+plugin image already is — **by declaration**: a Step selects an Actuator, and the Actuator declaration
+(ADR-0103, the same runtime-registered shape `helm`/`vcenter` use) carries the image. Two Actuator
+declarations — say `ansible` and `ansible-crypto` — differing only in their EE image give per-Step
+content selection with **zero** ansible awareness in core, and the image lands on `JobSpec.Image` from the
+registration struct exactly as the MCP path already does.
+
+`params.eeImage` is therefore **deprecated in v5 alongside `check`** (D2): retained so nothing breaks,
+documented as ignored, removal booked once no writer emits it. This keeps the rule uniform — _a Contract
+field the runtime ignores is a lying seam, and the fix is to delete the lie, not to teach the core a
+tool's vocabulary._
 
 **The default posture is therefore that the EE image is the content boundary**: collections are installed
 at build time with pinned versions and verified hashes, and the Run consumes that immutable, digest-pinned
@@ -221,7 +264,7 @@ This ADR is PLG-1's first application, and it resolves it for Ansible:
 - **§3 (GPLv3 boundary) — non-negotiable, and reinforced.** Ansible and `ansible-galaxy` remain
   **subprocesses inside the EE image**; nothing is Go-linked (the Go shim builds in an isolated stage and
   arrives as a static binary; `ansible-core`/`ansible-runner` install into a separate Python layer).
-  Build-time collection installation is one more subprocess in that layer writing *content* into the image,
+  Build-time collection installation is one more subprocess in that layer writing _content_ into the image,
   so D3 strengthens rather than strains the boundary. **A distinct question, noted not settled:** baking
   third-party collections makes an EE a **distribution** artifact (collection licenses travel in the
   image) — separate from the linking question, and relevant only if Stratt ever publishes pre-baked EEs.
@@ -251,7 +294,9 @@ This ADR is PLG-1's first application, and it resolves it for Ansible:
   urgent, not less**; until it exists, EE builds stay hand-rolled. Build-time resolution trades run-time
   flexibility for reproducibility (deliberate); teams wanting ad-hoc collections must opt into the
   non-default run-time path or rebuild an EE. **Air-gap seeding remains unsolved.**
-- **Follow-ups.** (a0) **Redirect the AWX materializer** (`plugins/awx/materialize/workflows.go`) from
+- **Follow-ups.** (a00) **Per-Step EE selection (D3a)** — declare a second ansible Actuator carrying its own
+  EE image (ADR-0103 shape); deprecate the unread `params.eeImage`. Prerequisite for D3's content story.
+  (a0) **Redirect the AWX materializer** (`plugins/awx/materialize/workflows.go`) from
   `params["check"]` to `Step.DryRun` (D2) — the prerequisite for ever removing the deprecated field.
   (a) The `ansible-builder`-compatible EE factory (parity P5) — this ADR defines the
   contract it must satisfy. (b) Air-gap content seeding. (c) Survey → input-Contract enforcement on Steps

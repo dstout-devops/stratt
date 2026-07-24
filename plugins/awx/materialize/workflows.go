@@ -18,6 +18,7 @@ func mapJobTemplate(snap *awx.Snapshot, jt awx.JobTemplate, viewFor, credName ma
 	}
 	step.ViewName = view
 	step.Params = actuationParams(snap, jt, r, name)
+	step.DryRun = isCheckTemplate(jt)
 
 	for _, c := range jt.SummaryFields.Credentials {
 		if n, ok := credName[c.ID]; ok {
@@ -47,12 +48,14 @@ func actuationParams(snap *awx.Snapshot, jt awx.JobTemplate, r *report, wfName s
 	if proj.ScmBranch != "" {
 		scm["ref"] = proj.ScmBranch
 	}
-	params := map[string]any{"scm": scm}
-	if jt.JobType == "check" {
-		params["check"] = true
-	}
-	return params
+	return map[string]any{"scm": scm}
 }
+
+// isCheckTemplate reports whether an imported job template ran in check mode. The
+// caller sets Step.DryRun from it — the port's check-mode bit — because
+// params.check is read by nothing (ADR-0117 D2). Writing the old field would make
+// an imported check template converge for real on its first apply.
+func isCheckTemplate(jt awx.JobTemplate) bool { return jt.JobType == "check" }
 
 // placeholderPlay is a valid (round-tripping) play that does nothing but flag
 // the migration TODO — used when a job template's content is not importable.
@@ -153,6 +156,7 @@ func buildNode(snap *awx.Snapshot, n awx.WorkflowNode, viewFor, credName map[int
 	step := yStep{Name: stepName(n), Actuator: "ansible"}
 	step.ViewName = viewFor[jt.Inventory]
 	step.Params = actuationParams(snap, jt, r, wfName)
+	step.DryRun = isCheckTemplate(jt)
 	for _, c := range jt.SummaryFields.Credentials {
 		if nm, ok := credName[c.ID]; ok {
 			step.CredentialRefs = append(step.CredentialRefs, nm)

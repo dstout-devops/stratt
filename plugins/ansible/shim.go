@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"google.golang.org/protobuf/encoding/protojson"
@@ -58,6 +59,40 @@ type params struct {
 	// SCM, when set, fetches the playbook from a git content-ref INSIDE the EE (the
 	// git/GPL tooling stays a subprocess on this side of the port, never the core).
 	SCM *scmParams `json:"scm,omitempty"`
+
+	// ── The typed run knobs (ansible.input.v5, ADR-0117 D1) ──────────────────────
+	// Each is a TYPED field, never a free-form flag string: the Contract bounds every
+	// value (enums, patterns, ranges), and playbookFlags renders each as its own
+	// token. That is what keeps this an argument surface rather than an injection one.
+	Become    *becomeParams `json:"become,omitempty"`
+	Limit     string        `json:"limit,omitempty"`
+	Tags      []string      `json:"tags,omitempty"`
+	SkipTags  []string      `json:"skipTags,omitempty"`
+	Forks     int           `json:"forks,omitempty"`
+	Diff      bool          `json:"diff,omitempty"`
+	Verbosity int           `json:"verbosity,omitempty"`
+	Timeout   int           `json:"timeout,omitempty"`
+	Vault     *vaultParams  `json:"vault,omitempty"`
+
+	// NOTE: `check` and `eeImage` are deliberately ABSENT here even though the
+	// Contract still carries them (deprecated). Check-mode is the port's DryRun bit
+	// (ADR-0051 MF6 / ADR-0117 D2); per-Step EE selection is by Actuator declaration
+	// (ADR-0117 D3a). Reading them here would re-create the lying seam v5 documents.
+}
+
+// becomeParams is privilege escalation as a declared, reviewable value (ADR-0117 D1).
+type becomeParams struct {
+	Enabled bool   `json:"enabled"`
+	User    string `json:"user,omitempty"`
+	Method  string `json:"method,omitempty"`
+}
+
+// vaultParams points at a CredentialRef ALREADY on the Step (§2.5): the use-grant
+// check at dispatch stays the single authorization path. File is optional — omitted
+// when the ref injects exactly one file.
+type vaultParams struct {
+	CredentialRef string `json:"credentialRef"`
+	File          string `json:"file,omitempty"`
 }
 
 // scmParams is a git content-ref: the repo to clone in the EE and the playbook path
@@ -66,6 +101,102 @@ type scmParams struct {
 	Repo     string `json:"repo"`
 	Ref      string `json:"ref,omitempty"`
 	Playbook string `json:"playbook"`
+}
+
+// credentialsMount is where file-injected CredentialRefs land in the EE pod
+// (dispatch mounts each ref at /runner/credentials/<refName>/, items 0400).
+const credentialsMount = "/runner/credentials"
+
+// vaultPasswordFile resolves a vault CredentialRef to its in-pod file path. When the
+// ref injects exactly one file the name is inferred; otherwise the Step must name it
+// (params.vault.file) and the failure says so rather than guessing (§1.8).
+func vaultPasswordFile(v *vaultParams, readDir func(string) ([]string, error)) (string, error) {
+	dir := filepath.Join(credentialsMount, v.CredentialRef)
+	if v.File != "" {
+		return filepath.Join(dir, v.File), nil
+	}
+	names, err := readDir(dir)
+	if err != nil {
+		return "", fmt.Errorf("vault credentialRef %q is not mounted at %s — is it on the Step's credentialRefs? (%w)", v.CredentialRef, dir, err)
+	}
+	switch len(names) {
+	case 0:
+		return "", fmt.Errorf("vault credentialRef %q injects no files at %s", v.CredentialRef, dir)
+	case 1:
+		return filepath.Join(dir, names[0]), nil
+	default:
+		return "", fmt.Errorf("vault credentialRef %q injects %d files (%s) — set params.vault.file to choose one", v.CredentialRef, len(names), strings.Join(names, ", "))
+	}
+}
+
+// osReadDirNames lists the entry names of dir — the production vaultPasswordFile lister.
+func osReadDirNames(dir string) ([]string, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, err
+	}
+	names := make([]string, 0, len(entries))
+	for _, e := range entries {
+		names = append(names, e.Name())
+	}
+	return names, nil
+}
+
+// playbookFlags renders the v5 typed run knobs (ADR-0117 D1) into ansible-playbook
+// flags. EVERY token comes from a Contract-bounded value — enums, patterns, and
+// integer ranges — and each is appended as its own token, never concatenated from
+// operator-supplied text. That distinction is the whole argument for typing these
+// fields instead of accepting a `cmdline` string (§1.1): there is no position at
+// which an operator value can introduce a new flag or a shell metacharacter.
+//
+// dryRun is the port's check-mode bit (ADR-0051 MF6), NOT a param — it always wins
+// and always implies --diff.
+func playbookFlags(p params, dryRun bool, readDir func(string) ([]string, error)) ([]string, error) {
+	var f []string
+	if dryRun {
+		f = append(f, "--check", "--diff")
+	} else if p.Diff {
+		f = append(f, "--diff") // apply-and-show-me — distinct from check-mode
+	}
+	if p.Become != nil {
+		if p.Become.Enabled {
+			f = append(f, "--become")
+		}
+		if p.Become.User != "" {
+			f = append(f, "--become-user", p.Become.User)
+		}
+		if p.Become.Method != "" {
+			f = append(f, "--become-method", p.Become.Method)
+		}
+	}
+	if p.Limit != "" {
+		// Narrows the core-resolved set; it can never widen it — the rendered
+		// inventory is the View's targets (ADR-0051 MF4).
+		f = append(f, "--limit", p.Limit)
+	}
+	if len(p.Tags) > 0 {
+		f = append(f, "--tags", strings.Join(p.Tags, ","))
+	}
+	if len(p.SkipTags) > 0 {
+		f = append(f, "--skip-tags", strings.Join(p.SkipTags, ","))
+	}
+	if p.Forks > 0 {
+		f = append(f, "--forks", strconv.Itoa(p.Forks))
+	}
+	if p.Timeout > 0 {
+		f = append(f, "--timeout", strconv.Itoa(p.Timeout))
+	}
+	if p.Verbosity > 0 {
+		f = append(f, "-"+strings.Repeat("v", p.Verbosity))
+	}
+	if p.Vault != nil {
+		path, err := vaultPasswordFile(p.Vault, readDir)
+		if err != nil {
+			return nil, err
+		}
+		f = append(f, "--vault-password-file", path)
+	}
+	return f, nil
 }
 
 // validateSCM rejects a content-ref that would fail (or be exploited) in-pod: a repo
@@ -151,8 +282,16 @@ func Run(ctx context.Context, w io.Writer, dir string, req Request, run commandR
 		}
 	}
 	args := []string{"run", dir, "-p", playbook, "-j"}
-	if req.DryRun { // MF6: check-mode is the port DryRun bit, mapped here — not a core param
-		args = append(args, "--cmdline", "--check --diff")
+	// MF6: check-mode is the port DryRun bit, mapped here — not a core param. The v5
+	// run knobs (ADR-0117 D1) join it on the same cmdline; every token is
+	// Contract-bounded, so the joined string can carry no operator-authored flag or
+	// metacharacter (playbookFlags).
+	flags, ferr := playbookFlags(p, req.DryRun, osReadDirNames)
+	if ferr != nil {
+		return emitFatal(w, ferr.Error())
+	}
+	if len(flags) > 0 {
+		args = append(args, "--cmdline", strings.Join(flags, " "))
 	}
 
 	byHost := make(map[string]Target, len(req.Targets))

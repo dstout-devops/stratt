@@ -47,12 +47,17 @@ func adoptBlock(l *AdoptLineage) *yAdoptedFrom {
 }
 
 type yStep struct {
-	Name           string         `yaml:"name"`
-	Needs          []string       `yaml:"needs,omitempty"`
-	When           string         `yaml:"when,omitempty"`
-	Gate           *yGate         `yaml:"gate,omitempty"`
-	ViewName       string         `yaml:"viewName,omitempty"`
-	Actuator       string         `yaml:"actuator,omitempty"`
+	Name     string   `yaml:"name"`
+	Needs    []string `yaml:"needs,omitempty"`
+	When     string   `yaml:"when,omitempty"`
+	Gate     *yGate   `yaml:"gate,omitempty"`
+	ViewName string   `yaml:"viewName,omitempty"`
+	Actuator string   `yaml:"actuator,omitempty"`
+	// DryRun carries an imported AWX "check" job template. Check-mode has exactly
+	// one mechanism — the port's DryRun bit (ADR-0051 MF6 / ADR-0117 D2) — so the
+	// import lands here, NOT in params.check (which the runtime never reads; a
+	// check template written there would silently converge on apply, §1.8).
+	DryRun         bool           `yaml:"dryRun,omitempty"`
 	Params         map[string]any `yaml:"params,omitempty"`
 	CredentialRefs []string       `yaml:"credentialRefs,omitempty"`
 }

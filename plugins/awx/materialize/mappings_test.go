@@ -219,3 +219,36 @@ func anyContains(ss []string, sub string) bool {
 	}
 	return false
 }
+
+// TestJobTemplateCheckMapsToDryRun locks ADR-0117 D2's redirect: an imported AWX
+// "check" job template must land on the Step's DryRun bit — the ONE check-mode
+// mechanism (ADR-0051 MF6) — and must NOT emit params.check, which the runtime
+// reads nowhere. Getting this wrong silently converts an imported check job into a
+// converging apply on its first run (§1.8), which is why it is pinned here.
+func TestJobTemplateCheckMapsToDryRun(t *testing.T) {
+	snap := &awx.Snapshot{
+		JobTemplates: []awx.JobTemplate{{ID: 11, Name: "Audit", Playbook: "audit.yml", Project: 1, Inventory: 2, JobType: "check"}},
+		Projects:     map[int]awx.Project{1: {ID: 1, ScmType: "git", ScmURL: "https://x/repo.git"}},
+	}
+	r := newReport()
+	doc, err := mapJobTemplate(snap, snap.JobTemplates[0], map[int]string{2: "awx/cloud"}, map[int]string{}, "awx/audit", r, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(doc, "dryRun: true") {
+		t.Errorf("check job template must set the Step dryRun bit:\n%s", doc)
+	}
+	if strings.Contains(doc, "check: true") {
+		t.Errorf("check job template must NOT emit the deprecated params.check:\n%s", doc)
+	}
+
+	// A normal (run) template stays an applying Step.
+	snap.JobTemplates[0].JobType = "run"
+	doc, err = mapJobTemplate(snap, snap.JobTemplates[0], map[int]string{2: "awx/cloud"}, map[int]string{}, "awx/audit", r, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(doc, "dryRun") {
+		t.Errorf("a run template must not be marked dryRun:\n%s", doc)
+	}
+}

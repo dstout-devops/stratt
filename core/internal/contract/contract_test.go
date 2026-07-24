@@ -231,8 +231,8 @@ func TestPinsAreStable(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(all) != 139 {
-		t.Fatalf("expected 139 embedded documents, got %d", len(all))
+	if len(all) != 140 {
+		t.Fatalf("expected 140 embedded documents, got %d", len(all))
 	}
 	versions := map[string]int{}
 	for _, c := range all {
@@ -243,9 +243,10 @@ func TestPinsAreStable(t *testing.T) {
 			versions[c.Name] = c.Version
 		}
 	}
-	// ansible.input v4 (extraVars, ADR-0026) resolves as the current version;
-	// v1/v2/v3 stay pinned alongside it.
-	if versions["actuators/ansible.input"] != 4 {
+	// ansible.input v5 (typed run knobs, ADR-0117 D1) resolves as the current
+	// version; v1–v4 stay pinned alongside it (every version keeps its own pin
+	// row — only the LOOKUP collapses to the highest).
+	if versions["actuators/ansible.input"] != 5 {
 		t.Fatalf("ansible.input current version: %d", versions["actuators/ansible.input"])
 	}
 	// Same process, same documents → identical pins on re-read.
