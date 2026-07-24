@@ -164,6 +164,38 @@ tasks:
         if [ -f pyproject.toml ]; then echo '→ pytest'; uv run pytest; ran=1; fi
         if [ "$ran" = 0 ]; then echo "No packages yet — nothing to test."; fi
 
+  plugins:standalone:
+    desc: Build every plugin module OUTSIDE the go workspace (GOWORK=off) — the way its container image builds it
+    silent: true
+    cmds:
+      - |
+        set -eu
+        # A plugin is a SEPARATE Go module and its image builds it with GOWORK=off
+        # (see ee/Dockerfile). Inside the workspace, go.work satisfies imports from
+        # sibling modules, so an INCOMPLETE go.sum stays invisible here and fails
+        # only at docker build — far from the change that caused it. This gate moves
+        # that failure left. It has bitten ansible, vcenter, awsec2 and (silently)
+        # ten more; plugins/script is baked into the EE image, so its breakage would
+        # have taken the execution environment down with it.
+        failed=""
+        for mod in $(find plugins -maxdepth 2 -name go.mod | sort); do
+          dir=$(dirname "$mod")
+          if (cd "$dir" && GOWORK=off go build ./... >/dev/null 2>&1); then
+            echo "  ✓ $dir"
+          else
+            echo "  ✗ $dir — does not build standalone:"
+            (cd "$dir" && GOWORK=off go build ./... 2>&1 | head -5 | sed 's/^/      /') || true
+            failed="$failed $dir"
+          fi
+        done
+        if [ -n "$failed" ]; then
+          echo ""
+          echo "✗ plugins:standalone — these modules build only inside the workspace:$failed"
+          echo "  Fix each with:  (cd <module> && GOWORK=off go mod tidy)"
+          exit 1
+        fi
+        echo "✓ plugins:standalone — every plugin module builds outside the workspace"
+
   e2e:cells:
     desc: Two-Cell end-to-end harness — federated read + fenced Source re-home over real HTTP (ADR-0044; needs `task dev:up`)
     dir: core
@@ -181,6 +213,7 @@ tasks:
       - task: migrate:lint
       - task: adr:index:check
       - task: test
+      - task: plugins:standalone
       - task: ui:ci
 
   dev:up:
