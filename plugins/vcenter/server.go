@@ -74,8 +74,29 @@ func (s *Server) GetManifest(context.Context, *pluginv1.GetManifestRequest) (*pl
 				Idempotent:  false,
 				DryRunnable: true,
 			},
+			// Lifecycle Actions (ADR-0114): power/reconfigure/delete on an existing VM by uuid. delete-vm
+			// is idempotent (a re-issue over the sync-lag window is a no-op success, D2); the rest are not.
+			lifecycleDecl(actionPowerOff, false),
+			lifecycleDecl(actionPowerOn, false),
+			lifecycleDecl(actionReset, false),
+			lifecycleDecl(actionSuspend, false),
+			lifecycleDecl(actionShutdownGuest, false),
+			lifecycleDecl(actionReconfigure, false),
+			lifecycleDecl(actionDeleteVM, true),
 		},
 	}}, nil
+}
+
+// lifecycleDecl builds an ActionDecl for a lifecycle Action by the actions/<name>.{input,output}
+// convention (ADR-0114). All lifecycle ops are dry-runnable (a side-effect-free plan).
+func lifecycleDecl(name string, idempotent bool) *pluginv1.ActionDecl {
+	return &pluginv1.ActionDecl{
+		Name:        name,
+		Input:       &pluginv1.ContractRef{SchemaId: "actions/" + name + ".input"},
+		Output:      &pluginv1.ContractRef{SchemaId: "actions/" + name + ".output"},
+		Idempotent:  idempotent,
+		DryRunnable: true,
+	}
 }
 
 // Observe performs a full sync: it enumerates hosts + VMs and streams them as

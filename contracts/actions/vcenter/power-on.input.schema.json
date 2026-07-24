@@ -1,0 +1,10 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "stratt:contract:actions/vcenter/power-on.input:v1",
+  "title": "vcenter/power-on input",
+  "description": "Target an existing VM by its vcenter.uuid (ADR-0114 D1).",
+  "type": "object",
+  "properties": { "uuid": { "type": "string" } },
+  "required": ["uuid"],
+  "additionalProperties": false
+}

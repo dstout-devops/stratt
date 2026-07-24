@@ -1,0 +1,10 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "stratt:contract:actions/vcenter/power-off.input:v1",
+  "title": "vcenter/power-off input",
+  "description": "Target an existing VM by its vcenter.uuid (ADR-0114 D1). vCenter credentials inject at the plugin's own broker (§2.5).",
+  "type": "object",
+  "properties": { "uuid": { "type": "string" } },
+  "required": ["uuid"],
+  "additionalProperties": false
+}

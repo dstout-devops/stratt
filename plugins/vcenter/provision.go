@@ -152,6 +152,12 @@ func (s *Server) Invoke(req *pluginv1.InvokeRequest, stream grpc.ServerStreaming
 		return s.invokeCreateVM(stream.Context(), req, stream)
 	case actionCreatePortgroup:
 		return s.invokeCreatePortgroup(stream.Context(), req, stream)
+	case actionPowerOff, actionPowerOn, actionReset, actionSuspend, actionShutdownGuest:
+		return s.invokeVMPower(stream.Context(), req, stream, req.GetAction())
+	case actionReconfigure:
+		return s.invokeReconfigure(stream.Context(), req, stream)
+	case actionDeleteVM:
+		return s.invokeDeleteVM(stream.Context(), req, stream)
 	default:
 		return status.Errorf(codes.InvalidArgument, "vcenter: unknown action %q", req.GetAction())
 	}

@@ -1006,6 +1006,17 @@ func run(ctx context.Context, log *slog.Logger) error {
 		if err := registerPluginAction("vcenter/create-portgroup", host, true); err != nil {
 			return err
 		}
+		// vcenter lifecycle Actions (ADR-0114): power/reconfigure/delete on an existing VM by uuid, on
+		// the same host as the OBSERVE Syncer. All dry-runnable; delete-vm relies on the Syncer's next
+		// full-sync to tombstone (ADR-0042) and is idempotent-on-absence (D2).
+		for _, op := range []string{
+			"vcenter/power-off", "vcenter/power-on", "vcenter/reset", "vcenter/suspend",
+			"vcenter/shutdown-guest", "vcenter/reconfigure", "vcenter/delete-vm",
+		} {
+			if err := registerPluginAction(op, host, true); err != nil {
+				return err
+			}
+		}
 		controllers = append(controllers, homeSupervise(sourceName, host.Register, func(cctx context.Context) error {
 			return host.SyncLoop(cctx, interval)
 		}))
