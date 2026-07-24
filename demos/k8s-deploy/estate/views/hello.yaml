@@ -1,0 +1,8 @@
+# hello — a View is a saved, live query over the estate graph (a group of Entities). Every estate needs
+# at least one; this one selects the `host` kind (the fleet a Syncer projects). This first demo deploys a
+# workload via helm/deploy, which does NOT project a graph Entity in v1 — so its result shows in the
+# Run DESCENT (Intent → Workflow → Run → task event) and as the real Deployment, not here. Views come
+# alive in the read-heavy demos (e.g. the vsphere-only demo, where the Syncer projects a rich graph).
+name: hello
+selector:
+  kinds: [host]

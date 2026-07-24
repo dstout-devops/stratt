@@ -671,6 +671,20 @@ tasks:
       - "{{.KUBECTL}} --context {{.KIND_CONTEXT}} -n stratt-authz create secret generic helm-deploy-authz --from-literal=marker=1 --dry-run=client -o yaml | {{.KUBECTL}} --context {{.KIND_CONTEXT}} apply -f -"
       - KUBECONTEXT={{.KIND_CONTEXT}} KUBECTL={{.KUBECTL}} bash {{.ROOT_DIR}}/deploy/dev/genesis-selfdeploy.sh
 
+  demo:k8s-deploy:run:
+    # The turnkey "k8s: deploy an app" demo (ADR-0116, the first demos/ scenario). From the genesis
+    # floor, apply the demo estate and drive its gated deploy-hello Workflow end to end — approve the
+    # platform-admins gate as bootstrap-admin, converge the WorkflowRun, assert the real `hello`
+    # Deployment is Ready. Reuses the platform `helm-deploy` CredentialRef (so it seeds the same
+    # gate-marker Secret genesis:selfdeploy does) and the hello-stratt chart baked into the helm
+    # plugin image by dev:genesis. Narrative + by-hand walk: demos/k8s-deploy/README.md.
+    desc: "Demo — from the genesis floor, deploy a real app through a gated Workflow (demos/k8s-deploy)"
+    deps: [dev:genesis]
+    cmds:
+      # Reused helm-deploy is a gateOnly CredentialRef pointing at this marker Secret (pointer, no material).
+      - "{{.KUBECTL}} --context {{.KIND_CONTEXT}} -n stratt-authz create secret generic helm-deploy-authz --from-literal=marker=1 --dry-run=client -o yaml | {{.KUBECTL}} --context {{.KIND_CONTEXT}} apply -f -"
+      - KUBECONTEXT={{.KIND_CONTEXT}} KUBECTL={{.KUBECTL}} bash {{.ROOT_DIR}}/demos/k8s-deploy/run.sh
+
   dev:promote:authz:
     # Genesis -> real-authz promotion, BACKEND axis (ADR-0102, docs/runbooks/genesis-to-authz.md):
     # point strattd's authz backend at the self-deployed OpenFGA server (in-proc -> server).

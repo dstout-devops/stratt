@@ -32,3 +32,20 @@ data:
 {{ $.Files.Get $path | indent 4 }}
 {{- end }}
 {{- end }}
+{{- if .Values.helmHelloStrattChart }}
+---
+# The k8s-deploy demo app (files/hello-stratt/**, ADR-0116), shipped as a ConfigMap the
+# helm Actuator plugin mounts at /charts/hello-stratt — the first demos/ scenario deploys a
+# REAL Deployment + Service you can port-forward and view. Same flatten/restore mechanism as
+# the hello/openfga charts (plugins.yaml .helloStrattChart). DEV — gated on .Values.helmHelloStrattChart.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "stratt.fullname" . }}-hello-stratt-chart
+  labels: {{- include "stratt.labels" . | nindent 4 }}
+data:
+{{- range $path, $bytes := .Files.Glob "files/hello-stratt/**" }}
+  {{ trimPrefix "files/hello-stratt/" $path | replace "/" "__" }}: |-
+{{ $.Files.Get $path | indent 4 }}
+{{- end }}
+{{- end }}
