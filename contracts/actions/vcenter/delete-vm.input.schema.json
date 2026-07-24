@@ -1,0 +1,10 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "stratt:contract:actions/vcenter/delete-vm.input:v1",
+  "title": "vcenter/delete-vm input",
+  "description": "Destroy an existing VM by its vcenter.uuid (ADR-0114 D2). Idempotent on absence — a re-issue over the tombstone sync-lag window is a no-op success.",
+  "type": "object",
+  "properties": { "uuid": { "type": "string" } },
+  "required": ["uuid"],
+  "additionalProperties": false
+}

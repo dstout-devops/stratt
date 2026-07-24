@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "stratt:contract:actions/vcenter/create-vm.input:v1",
+  "title": "vcenter/create-vm input",
+  "description": "Input Contract for the vcenter/create-vm Action (ADR-0113): build a VM in vSphere via govmomi. vCenter credentials inject as a CredentialRef at the plugin's own broker (§2.5), never as params.",
+  "type": "object",
+  "properties": {
+    "name": { "type": "string" },
+    "datacenter": {
+      "type": "string",
+      "description": "target datacenter; empty selects the sole datacenter"
+    },
+    "cpus": { "type": "integer", "minimum": 1 },
+    "memoryMB": { "type": "integer", "minimum": 1 },
+    "guestId": {
+      "type": "string",
+      "description": "vSphere guest OS identifier; empty defaults to otherGuest"
+    },
+    "projectKind": {
+      "type": "string",
+      "description": "estate overlay (ADR-0058 §6): the Entity kind the built VM projects AS (e.g. host), so a fleet View selects it. Empty keeps the native 'vm'."
+    },
+    "projectLabels": {
+      "type": "object",
+      "additionalProperties": { "type": "string" },
+      "description": "estate overlay labels carried on the built VM's Run-provenance projection — the stratt.intent/instance correlation key + fleet labels the Run may own (§2.1 per-key ownership)."
+    }
+  },
+  "required": ["name"],
+  "additionalProperties": false
+}

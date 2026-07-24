@@ -1,0 +1,10 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "stratt:contract:actions/vcenter/reconfigure.output:v1",
+  "title": "vcenter/reconfigure output",
+  "description": "The reconfigured VM's identity (ADR-0114 D3 — the Syncer re-observes the new vm.config next poll).",
+  "type": "object",
+  "properties": { "uuid": { "type": "string" } },
+  "required": ["uuid"],
+  "additionalProperties": false
+}

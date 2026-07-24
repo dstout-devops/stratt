@@ -1,0 +1,11 @@
+# netbox-dev — the CredentialRef the netbox/ipam-resolve Action binds when invoked as an explicit
+# Workflow Step (§2.5 / ADR-0009 / ADR-0113 D4). An Action's CredentialRef use-check is its ONLY authz
+# gate (core/internal/orchestrate ExecuteAction refuses a credential-free Action, "ActionUngated") — so
+# the allocate-vlan Step must carry one even though the netbox plugin resolves its own API token at pod
+# spawn (§2.5). A DELIBERATE gate-only ref (gateOnly, ADR-0052): the launching Principal's use-check is
+# the point.
+name: netbox-dev
+ownerTeam: platform-admins
+backend: k8s-secret
+gateOnly: true
+locator: { namespace: stratt, name: netbox-dev-authz }

@@ -1,0 +1,10 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "stratt:contract:actions/vcenter/delete-portgroup.input:v1",
+  "title": "vcenter/delete-portgroup input",
+  "description": "Destroy a DVS portgroup by its vcenter.network.moref (ADR-0114 D2). Idempotent on absence.",
+  "type": "object",
+  "properties": { "moref": { "type": "string" } },
+  "required": ["moref"],
+  "additionalProperties": false
+}

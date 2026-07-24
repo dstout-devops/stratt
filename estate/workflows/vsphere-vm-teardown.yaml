@@ -1,0 +1,21 @@
+# vsphere-vm-teardown — the GATED teardown Workflow the decommission reach-path resolves to (ADR-0114
+# D4), the symmetric counterpart to vsphere-vm-build. When an Intent/Compute declared with
+# onRemove:remove drops its count, reconcileDecommission surfaces a `decommission/<intent>` Finding per
+# EXCESS built VM (ordinal-descending), carrying that VM's vcenter.uuid. An operator launches THIS
+# Workflow with launchParams {uuid: <that vcenter.uuid>} to tear the VM down — never an auto-destroy
+# (§5 Flow, destructive ⇒ gated). delete-vm is idempotent-on-absence (ADR-0114 D2), so a re-launch over
+# the tombstone sync-lag window is a safe no-op; the Syncer's next full-sync tombstones the Entity.
+name: vsphere-vm-teardown
+steps:
+  - name: approve
+    gate:
+      approvers:
+        teams: [platform-admins]
+      timeoutSeconds: 86400 # 24h to approve the teardown
+  - name: teardown
+    needs: [approve]
+    action: vcenter/delete-vm # vSphere's Compute teardown (swap point, §1.4/§1.5)
+    credentialRefs: [vsphere-dev] # §2.5 — an Action's use-check is its only authz gate
+    params:
+      # The target VM's vcenter.uuid, supplied at launch from the decommission Finding's identityKeys.
+      uuid: "{{.launch.uuid}}"

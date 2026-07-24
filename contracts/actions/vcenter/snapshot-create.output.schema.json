@@ -1,0 +1,10 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "stratt:contract:actions/vcenter/snapshot-create.output:v1",
+  "title": "vcenter/snapshot-create output",
+  "description": "The VM identity + snapshot name. A snapshot is a VM sub-object, not a graph Entity (ADR-0114 D3) — no projection.",
+  "type": "object",
+  "properties": { "uuid": { "type": "string" }, "snapshot": { "type": "string" } },
+  "required": ["uuid"],
+  "additionalProperties": false
+}

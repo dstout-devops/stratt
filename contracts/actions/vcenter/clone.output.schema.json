@@ -1,0 +1,10 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "stratt:contract:actions/vcenter/clone.output:v1",
+  "title": "vcenter/clone output",
+  "description": "The NEW (cloned) VM's vcenter.uuid — the identity the Syncer will key on, projected identity-only (ADR-0114 D3).",
+  "type": "object",
+  "properties": { "uuid": { "type": "string" } },
+  "required": ["uuid"],
+  "additionalProperties": false
+}

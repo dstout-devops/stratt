@@ -1,0 +1,10 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "stratt:contract:actions/vcenter/power-off.output:v1",
+  "title": "vcenter/power-off output",
+  "description": "The targeted VM's identity + observed power state (ADR-0114 D3 — the Syncer re-projects vm.runtime authoritatively next poll). powerState bindable via {{.steps.<name>.outputs.powerState}}.",
+  "type": "object",
+  "properties": { "uuid": { "type": "string" }, "powerState": { "type": "string" } },
+  "required": ["uuid"],
+  "additionalProperties": false
+}

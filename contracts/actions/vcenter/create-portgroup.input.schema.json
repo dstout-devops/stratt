@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "stratt:contract:actions/vcenter/create-portgroup.input:v1",
+  "title": "vcenter/create-portgroup input",
+  "description": "Input Contract for the vcenter/create-portgroup Action (ADR-0113 D4): create a DVS portgroup with an 802.1Q VLAN. vlanId (and optionally cidr) are bound from a prior netbox/ipam-resolve Workflow Step's outputs — an explicit, legible allocation Step, never resolve-inject. vCenter credentials inject at the plugin's own broker (§2.5).",
+  "type": "object",
+  "properties": {
+    "name": { "type": "string" },
+    "datacenter": {
+      "type": "string",
+      "description": "target datacenter; empty selects the sole datacenter"
+    },
+    "dvs": {
+      "type": "string",
+      "description": "target distributed virtual switch; empty selects the sole DVS"
+    },
+    "vlanId": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 4094,
+      "description": "the 802.1Q VLAN id, bound from netbox/ipam-resolve outputs"
+    },
+    "cidr": {
+      "type": "string",
+      "description": "the ipam-allocated prefix, carried for legibility (the Syncer OBSERVEs the authoritative net.subnet Facet)"
+    },
+    "projectKind": {
+      "type": "string",
+      "description": "estate overlay (ADR-0058 §6): the Entity kind the built portgroup projects AS. Empty keeps the native 'subnet'."
+    },
+    "projectLabels": {
+      "type": "object",
+      "additionalProperties": { "type": "string" },
+      "description": "estate overlay labels carried on the built portgroup's Run-provenance projection (§2.1 per-key ownership)."
+    }
+  },
+  "required": ["name", "vlanId"],
+  "additionalProperties": false
+}

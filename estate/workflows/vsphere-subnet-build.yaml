@@ -1,0 +1,43 @@
+# vsphere-subnet-build — the GATED build Workflow an Intent/Subnet launches when it resolves to the
+# vcenter provisioning provider in the vsphere-dc environment (ADR-0113 D4 / ADR-0110 D3).
+#
+# It composes the `ipam` capability EXPLICITLY (ADR-0113 D4, the corrected mechanism): step 1
+# netbox/ipam-resolve ALLOCATES the prefix + VLAN (anchored in NetBox, idempotent on `key`, §1.2 — no
+# allocation record in Stratt); step 2 vcenter/create-portgroup reads the allocated vlanId + cidr via
+# the shipped step-output binding ({{.steps.allocate-vlan.outputs.x}}, ADR-0031 — the template engine
+# preserves the native integer type of vlanId) and builds a VLAN-tagged DVS portgroup. The allocation
+# is a VISIBLE descent Step (§1.8), not a hidden resolve-inject — resolve-inject is workspace-shaped and
+# Actuator-Apply-only, and a per-build allocation is more legibly a Step. The `needs` edge is the
+# observable dependency. The build projects the portgroup back BY IDENTITY ONLY (vcenter.network.moref,
+# ADR-0113 D3); the vcenter Syncer OBSERVEs the authoritative net.subnet Facet on its next poll.
+name: vsphere-subnet-build
+steps:
+  - name: approve
+    gate:
+      approvers:
+        teams: [platform-admins]
+      timeoutSeconds: 86400 # 24h to approve the build
+  - name: allocate-vlan
+    needs: [approve]
+    action: netbox/ipam-resolve # the ipam capability's allocate Action, composed as an explicit Step
+    credentialRefs: [netbox-dev] # §2.5 — an Action's use-check is its only authz gate
+    params:
+      key: dmz-subnet-01 # idempotency key — a re-run returns the SAME prefix + VLAN (anchored in NetBox)
+      role: dmz
+      size: 24
+      vlanGroup: dc1
+  - name: build
+    needs: [allocate-vlan]
+    action: vcenter/create-portgroup # vSphere's Subnet builder (swap point, §1.4/§1.5)
+    credentialRefs: [vsphere-dev] # §2.5
+    params:
+      name: dmz-pg
+      # The VLAN + prefix come from the allocate-vlan Step's typed outputs (native-type-preserving bind).
+      vlanId: "{{.steps.allocate-vlan.outputs.vlanId}}"
+      cidr: "{{.steps.allocate-vlan.outputs.cidr}}"
+      # The estate OVERLAY (ADR-0058 §6): the built portgroup projects AS this kind with these labels
+      # (Run provenance, never a reconcile write). stratt.intent/subnet resolves the provisioning Finding.
+      projectKind: subnet
+      projectLabels:
+        zone: dmz
+        stratt.intent/subnet: dmz-subnet-01

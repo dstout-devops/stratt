@@ -1,0 +1,10 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "stratt:contract:actions/vcenter/delete-vm.output:v1",
+  "title": "vcenter/delete-vm output",
+  "description": "The destroyed VM's identity. NO Entity/tombstone is emitted (ADR-0114 D2) — the graph tombstones by the next Syncer full-sync absence (ADR-0042).",
+  "type": "object",
+  "properties": { "uuid": { "type": "string" } },
+  "required": ["uuid"],
+  "additionalProperties": false
+}

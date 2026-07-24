@@ -194,3 +194,21 @@ func TestBlueprintVersionsCoexist(t *testing.T) {
 		t.Fatalf("blueprints: %+v", parsed.Blueprints)
 	}
 }
+
+// TestComputeOnRemoveDecommission proves ADR-0114 D4: onRemove:remove is now VALID for Intent/Compute
+// (the decommission reach-path), where it was rejected before. It parses cleanly and carries the
+// removal semantic through.
+func TestComputeOnRemoveDecommission(t *testing.T) {
+	root := t.TempDir()
+	writeDecl(t, root, "v.yaml", "name: v\nselector: {kinds: [host]}\n")
+	writeKind(t, root, "intents", "c.yaml",
+		"name: web-fleet\nkind: Intent/Compute\nonRemove: remove\n"+
+			"spec: {count: 3, namePrefix: web, projectKind: host, requires: [provisioning]}\n")
+	parsed, err := ParseDir(root, nil)
+	if err != nil {
+		t.Fatalf("Intent/Compute with onRemove:remove must parse (ADR-0114 D4): %v", err)
+	}
+	if in := parsed.Intents[0]; in.Kind != types.IntentCompute || in.OnRemove != types.OnRemoveRemove {
+		t.Fatalf("parsed intent: kind=%s onRemove=%s", in.Kind, in.OnRemove)
+	}
+}

@@ -1,0 +1,10 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "stratt:contract:actions/vcenter/shutdown-guest.output:v1",
+  "title": "vcenter/shutdown-guest output",
+  "description": "The targeted VM's identity + observed power state (ADR-0114 D3). Guest shutdown is async; the Syncer reflects the final state next poll.",
+  "type": "object",
+  "properties": { "uuid": { "type": "string" }, "powerState": { "type": "string" } },
+  "required": ["uuid"],
+  "additionalProperties": false
+}

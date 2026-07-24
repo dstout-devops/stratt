@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "stratt:contract:actions/vcenter/clone.input:v1",
+  "title": "vcenter/clone input",
+  "description": "Clone an existing VM (source by vcenter.uuid) into a new VM named `name` (ADR-0114 — the D3 create-exception: the new VM projects identity-only).",
+  "type": "object",
+  "properties": {
+    "uuid": { "type": "string", "description": "source VM vcenter.uuid" },
+    "name": { "type": "string", "description": "the new VM's name" },
+    "projectKind": {
+      "type": "string",
+      "description": "estate overlay for the new VM (ADR-0058 §6)"
+    },
+    "projectLabels": {
+      "type": "object",
+      "additionalProperties": { "type": "string" },
+      "description": "estate overlay labels carried on the new VM's Run-provenance projection"
+    }
+  },
+  "required": ["uuid", "name"],
+  "additionalProperties": false
+}

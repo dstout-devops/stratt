@@ -1,0 +1,10 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "stratt:contract:actions/vcenter/migrate.output:v1",
+  "title": "vcenter/migrate output",
+  "description": "The migrated VM's identity (the Syncer re-observes its new placement next poll, ADR-0114 D3).",
+  "type": "object",
+  "properties": { "uuid": { "type": "string" } },
+  "required": ["uuid"],
+  "additionalProperties": false
+}
