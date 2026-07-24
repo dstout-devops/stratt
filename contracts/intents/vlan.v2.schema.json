@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "stratt:contract:intents/vlan:v2",
+  "title": "Intent/Vlan spec",
+  "description": "Desired a VLAN (an L2 segment) declared in Git (ADR-0059/0110, a named-singleton provisioning Intent). NOT an Entity (§1.2): cardinality-1, correlated desired<->built by (intentKind, name). v2 (ADR-0110) closes the provider-coupling of the `builder:` seam: the Intent names the `provisioning` capability CLASS via `requires`, never a provider (§1.5); the reconcile resolves the bound provider + its build Workflow and surfaces a GATED build (§5 Flow 1), never auto-launches. 'params' is opaque, validated only against the resolved provider's own input Contract (§1.5) — no per-provider network fields here (§1.1).",
+  "type": "object",
+  "properties": {
+    "projectKind": {
+      "type": "string",
+      "description": "The Entity kind the built infra projects AS (default vlan), so Views select it. Carried on the build's Run-provenance projection — NEVER written by the reconcile (§1.2)."
+    },
+    "labels": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      },
+      "description": "Selection labels stamped on the built Entity's projection (per-key owned, ADR-0041)."
+    },
+    "requires": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "minItems": 1,
+      "contains": {
+        "const": "provisioning"
+      },
+      "description": "The capability CLASSES this singleton Intent depends on to be built (ADR-0110 D1). Must include `provisioning` (the class, never a named provider — §1.5); the reconcile resolves the concrete provider + its build Workflow via the verified-provider index + estate capability-bindings, fail-closed + observable (§1.8) when none resolves."
+    },
+    "params": {
+      "type": "object",
+      "additionalProperties": true,
+      "description": "Opaque build params passed to the resolved provider, validated against ITS input Contract downstream (§1.5). Never typed here (§1.1)."
+    }
+  },
+  "required": ["requires"],
+  "additionalProperties": false
+}

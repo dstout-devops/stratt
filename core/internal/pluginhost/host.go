@@ -700,6 +700,10 @@ type CapabilityHandle struct {
 	Kind          string
 	Config        map[string]string
 	CredentialRef string
+	// Output is the contract-validated resolve output bytes verbatim (ADR-0112 D2) — carried so a
+	// non-statestore-shaped handle (ipam's {cidr,…}) reaches its consumer; the consumer decodes it
+	// against its own capabilities/<class>.output Contract.
+	Output []byte
 }
 
 // wireCapabilities translates the core-resolved capability handles onto the wire — shared by the
@@ -711,7 +715,7 @@ func wireCapabilities(in map[string]CapabilityHandle) map[string]*pluginv1.Capab
 	}
 	out := make(map[string]*pluginv1.CapabilityHandle, len(in))
 	for class, ch := range in {
-		out[class] = &pluginv1.CapabilityHandle{Kind: ch.Kind, Config: ch.Config, CredentialRef: ch.CredentialRef}
+		out[class] = &pluginv1.CapabilityHandle{Kind: ch.Kind, Config: ch.Config, CredentialRef: ch.CredentialRef, Output: ch.Output}
 	}
 	return out
 }

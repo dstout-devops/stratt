@@ -63,6 +63,31 @@ func (s *Server) GetActuator(w http.ResponseWriter, r *http.Request, name string
 	}{Actuator: a, Status: s.pluginStatus("actuator/" + name), CapabilityVerification: s.capabilityVerification(r, "actuator", name)})
 }
 
+// Capability-bindings (ADR-0110 D3) are CaC-only config the capability registry reconciles — NOT a
+// Named Kind. Surfaced read-only (no API write path — the desired-state engine is the sole writer),
+// and with no runtime status: a binding is pure operator SELECTION, not a dialed integration.
+
+func (s *Server) ListCapabilityBindings(w http.ResponseWriter, r *http.Request) {
+	bs, err := s.Store.ListCapabilityBindings(r.Context())
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	if bs == nil {
+		bs = []types.CapabilityBinding{}
+	}
+	writeJSON(w, http.StatusOK, bs)
+}
+
+func (s *Server) GetCapabilityBinding(w http.ResponseWriter, r *http.Request, name string) {
+	b, err := s.Store.GetCapabilityBinding(r.Context(), name)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, b)
+}
+
 // pluginStatus looks up one declaration's runtime registry status (key "<kind>/<name>"),
 // nil when no registry status provider is wired or the entry is absent.
 func (s *Server) pluginStatus(key string) *PluginRuntimeStatus {

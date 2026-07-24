@@ -61,7 +61,12 @@ func (s *Server) GetManifest(context.Context, *pluginv1.GetManifestRequest) (*pl
 		Verbs: []pluginv1.Verb{
 			pluginv1.Verb_VERB_PLAN, pluginv1.Verb_VERB_APPLY, pluginv1.Verb_VERB_DESTROY,
 		},
-		Capabilities: []string{"apply.dry-run"}, // plan/--check as a streaming dry-run
+		// apply.dry-run: plan/--check as a streaming dry-run. provisioning (ADR-0112): OpenTofu
+		// builds infra a consumer targets — it is a `provisioning` provider (the charter-canonical
+		// network builder, §5.1). Advertised unconditionally (running a build module is the plugin's
+		// core function); the estate declaration (estate/actuators/opentofu-network.yaml) + its
+		// requires:[statestore, ipam] gate any actual build.
+		Capabilities: []string{"apply.dry-run", "provisioning"},
 		MinProtocol:  protocolVersion,
 		MaxProtocol:  protocolVersion,
 	}}, nil
@@ -74,7 +79,7 @@ func (s *Server) Health(context.Context, *pluginv1.HealthRequest) (*pluginv1.Hea
 // prepare parses params and builds the tofu run context. varFile is a temp
 // -var-file (JSON), "" when no vars. Env carries the per-workspace state
 // credential (TF_HTTP_PASSWORD) derived in the plugin, never from the core (§2.5).
-func (s *Server) prepare(raw []byte, stateBackend *pluginv1.CapabilityHandle) (p params, dir string, env []string, varFile string, err error) {
+func (s *Server) prepare(raw []byte, stateBackend, ipam *pluginv1.CapabilityHandle) (p params, dir string, env []string, varFile string, err error) {
 	if err = json.Unmarshal(raw, &p); err != nil {
 		return p, "", nil, "", fmt.Errorf("invalid params: %w", err)
 	}
@@ -92,6 +97,29 @@ func (s *Server) prepare(raw []byte, stateBackend *pluginv1.CapabilityHandle) (p
 	// cred so we don't send it to a non-http backend.
 	if stateBackend == nil && s.cfg.BackendURL != "" {
 		env = append(env, "TF_HTTP_USERNAME=stratt", "TF_HTTP_PASSWORD="+s.cfg.workspaceCredential(p.Workspace))
+	}
+	// Core-injected ipam handle (ADR-0111/0112): merge the NetBox-allocated network identity as
+	// module vars so the module references var.stratt_ipam_cidr. The handle's Output carries the
+	// contract-validated capabilities/ipam.output payload verbatim (ADR-0112 D2) — a different
+	// injection mechanism (a module var) than statestore's -backend-config.
+	if ipam != nil && len(ipam.GetOutput()) > 0 {
+		var h struct {
+			CIDR    string `json:"cidr"`
+			VLANID  int    `json:"vlanId"`
+			Gateway string `json:"gateway"`
+		}
+		if uerr := json.Unmarshal(ipam.GetOutput(), &h); uerr == nil && h.CIDR != "" {
+			if p.Vars == nil {
+				p.Vars = map[string]any{}
+			}
+			p.Vars["stratt_ipam_cidr"] = h.CIDR
+			if h.VLANID != 0 {
+				p.Vars["stratt_ipam_vlan_id"] = h.VLANID
+			}
+			if h.Gateway != "" {
+				p.Vars["stratt_ipam_gateway"] = h.Gateway
+			}
+		}
 	}
 	if len(p.Vars) > 0 {
 		f, ferr := os.CreateTemp("", "stratt-tofu-*.tfvars.json")
@@ -141,7 +169,8 @@ func (s *Server) initArgs(workspace string, stateBackend *pluginv1.CapabilityHan
 func (s *Server) Apply(req *pluginv1.ApplyRequest, stream grpc.ServerStreamingServer[pluginv1.ApplyResponse]) error {
 	ctx := stream.Context()
 	stateBackend := req.GetResolvedCapabilities()["statestore"] // ADR-0105: nil ⇒ the http floor
-	p, dir, env, varFile, err := s.prepare(req.GetDesired().GetBytes(), stateBackend)
+	ipam := req.GetResolvedCapabilities()["ipam"]               // ADR-0111/0112: nil ⇒ no injected CIDR
+	p, dir, env, varFile, err := s.prepare(req.GetDesired().GetBytes(), stateBackend, ipam)
 	if err != nil {
 		return sendApplyTerminal(stream, false, pluginv1.ItemResult_STATUS_FAILED, err.Error(), 1)
 	}
@@ -249,7 +278,8 @@ func (s *Server) Apply(req *pluginv1.ApplyRequest, stream grpc.ServerStreamingSe
 // plugin computes the digest but does not yet ship the bytes.
 func (s *Server) Plan(ctx context.Context, req *pluginv1.PlanRequest) (*pluginv1.PlanResponse, error) {
 	stateBackend := req.GetResolvedCapabilities()["statestore"] // ADR-0105: same handle as Apply
-	p, dir, env, varFile, err := s.prepare(req.GetDesired().GetBytes(), stateBackend)
+	ipam := req.GetResolvedCapabilities()["ipam"]               // ADR-0111/0112: same handle as Apply
+	p, dir, env, varFile, err := s.prepare(req.GetDesired().GetBytes(), stateBackend, ipam)
 	if err != nil {
 		return nil, err
 	}

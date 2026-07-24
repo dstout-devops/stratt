@@ -1,0 +1,22 @@
+# crossplane — a `provisioning` capability PROVIDER (ADR-0110 D5), registered as an Actuator Kind
+# declaring provides:[provisioning]. It dials the crossplane plugin pod (whose Apply/Observe build
+# loop stays boot-env for now); provider verification (ADR-0104 D1) confirms the pod's Manifest
+# advertises provisioning before any consumer binds.
+#
+# `provisions` advertises Crossplane's per-kind build WORKFLOWS (ADR-0110 D3): it is the SOLE builder
+# of Vlan (AWS has no VLAN primitive — the acknowledged exception, ADR-0110 D5) and, until an
+# alternative subnet provider lands (Slice 1), the sole builder of Subnet too — so both auto-bind here
+# with no explicit capability-binding. When Slice 1 adds an awsec2/opentofu subnet builder, Subnet
+# gains a second provider and an estate capability-binding selects one (the build demotion, ADR-0110 D5).
+#
+# Crossplane stays BINDABLE, never the default by fiat: it is one provider among several behind the
+# `provisioning` class (§1.5). Its OBSERVE/Syncer role (projecting Crossplane-managed resources) is
+# unchanged and orthogonal to this build-provider advertisement.
+name: crossplane
+address: stratt-crossplane:9090
+pluginIdentity: crossplane
+tier: trusted
+provides: [provisioning]
+provisions:
+  Subnet: subnet-build
+  Vlan: vlan-build

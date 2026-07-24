@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "stratt:contract:capabilities/ipam.input:v1",
+  "title": "ipam resolve input",
+  "description": "Class-level, PROVIDER-AGNOSTIC (ADR-0111) allocation request to an ipam provider's resolve Action: carve a prefix (and optionally a VLAN) from a pool or role, scoped by enterprise topology (region/AZ/tenant/VLAN group). One shape for every provider (NetBox, Nautobot, CAPI-IPAM), so a provider swap changes no consumer. `pool` and `role` are mutually exclusive (oneOf) — exactly one names the allocation source; no implicit precedence (§2.4). The scope fields reference the EXISTING ADR-0059 topology Entity kinds (region, availability-zone), never a new concept.",
+  "type": "object",
+  "properties": {
+    "key": {
+      "type": "string",
+      "minLength": 1,
+      "description": "The STABLE request identity (e.g. the subnet's name). The provider anchors idempotency on it (a re-resolve returns the same allocation) — ADR-0111 D4/F1. Stratt holds no allocation record; the mapping lives in the provider (a NetBox prefix description)."
+    },
+    "pool": {
+      "type": "string",
+      "minLength": 1,
+      "description": "The parent prefix/supernet (or provider pool id) to carve from."
+    },
+    "role": {
+      "type": "string",
+      "minLength": 1,
+      "description": "A named allocation role/purpose the provider maps to a pool."
+    },
+    "size": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 128,
+      "description": "The requested prefix length (e.g. 24 for a /24; IPv4/IPv6 determined by the pool)."
+    },
+    "region": {
+      "type": "string",
+      "description": "Scope: the region Entity name (ADR-0059) to allocate within."
+    },
+    "availabilityZone": {
+      "type": "string",
+      "description": "Scope: the availability-zone Entity name (ADR-0059)."
+    },
+    "tenant": {
+      "type": "string",
+      "description": "Scope: the sovereignty/ownership tenant to allocate within."
+    },
+    "vlanGroup": {
+      "type": "string",
+      "description": "Scope: the VLAN group to draw a VLAN id from (when a VLAN is requested)."
+    }
+  },
+  "required": ["key", "size"],
+  "oneOf": [{ "required": ["pool"] }, { "required": ["role"] }],
+  "additionalProperties": false
+}

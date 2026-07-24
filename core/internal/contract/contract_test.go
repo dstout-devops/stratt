@@ -32,6 +32,48 @@ func TestStatestoreOutputContract(t *testing.T) {
 	}
 }
 
+// TestIpamContract is the co-fidelity guard for ADR-0111: the class-level capabilities/ipam.{input,output}
+// Contracts accept a representative provider-agnostic allocation request + handle and reject malformed ones —
+// especially the §2.4 pool/role mutual-exclusion in the input.
+func TestIpamContract(t *testing.T) {
+	// A valid request: allocate a /24 from a pool, scoped to a region, keyed for idempotency.
+	if err := ValidateNamed("capabilities/ipam.input", []byte(`{"key":"app-subnet","pool":"10.30.0.0/16","size":24,"region":"eu-west"}`)); err != nil {
+		t.Fatalf("a valid ipam request must validate: %v", err)
+	}
+	// A valid request via role instead of pool.
+	if err := ValidateNamed("capabilities/ipam.input", []byte(`{"key":"db-subnet","role":"app-prod","size":26,"tenant":"eu-sovereign","vlanGroup":"prod"}`)); err != nil {
+		t.Fatalf("a valid role-based ipam request must validate: %v", err)
+	}
+	// §2.4: pool AND role together is a schema violation (no implicit precedence).
+	if err := ValidateNamed("capabilities/ipam.input", []byte(`{"key":"x","pool":"10.0.0.0/8","role":"app-prod","size":24}`)); err == nil {
+		t.Fatal("pool and role together must be rejected (oneOf, §2.4)")
+	}
+	// Neither pool nor role is a violation (exactly one required).
+	if err := ValidateNamed("capabilities/ipam.input", []byte(`{"key":"x","size":24}`)); err == nil {
+		t.Fatal("a request with neither pool nor role must be rejected")
+	}
+	// Missing the required key (idempotency identity, F1).
+	if err := ValidateNamed("capabilities/ipam.input", []byte(`{"pool":"10.0.0.0/8","size":24}`)); err == nil {
+		t.Fatal("a request without key must be rejected")
+	}
+	// Missing the required size.
+	if err := ValidateNamed("capabilities/ipam.input", []byte(`{"key":"x","pool":"10.0.0.0/8"}`)); err == nil {
+		t.Fatal("a request without size must be rejected")
+	}
+	// A valid handle.
+	if err := ValidateNamed("capabilities/ipam.output", []byte(`{"cidr":"10.30.4.0/24","vlanId":100,"gateway":"10.30.4.1"}`)); err != nil {
+		t.Fatalf("a valid ipam handle must validate: %v", err)
+	}
+	// A handle without a cidr is malformed.
+	if err := ValidateNamed("capabilities/ipam.output", []byte(`{"vlanId":100}`)); err == nil {
+		t.Fatal("an ipam handle without a cidr must be rejected")
+	}
+	// A VLAN id out of range must fail closed at the class Contract.
+	if err := ValidateNamed("capabilities/ipam.output", []byte(`{"cidr":"10.30.4.0/24","vlanId":9999}`)); err == nil {
+		t.Fatal("an out-of-range vlanId must be rejected")
+	}
+}
+
 func TestValidateActuatorParams(t *testing.T) {
 	// Valid.
 	if err := ValidateActuatorParams("script", []byte(`{"script":"echo hi"}`)); err != nil {
@@ -115,8 +157,8 @@ func TestPinsAreStable(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(all) != 98 {
-		t.Fatalf("expected 98 embedded documents, got %d", len(all))
+	if len(all) != 104 {
+		t.Fatalf("expected 104 embedded documents, got %d", len(all))
 	}
 	versions := map[string]int{}
 	for _, c := range all {

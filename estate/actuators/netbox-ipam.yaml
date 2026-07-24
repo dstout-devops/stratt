@@ -1,0 +1,16 @@
+# netbox-ipam — the NetBox `ipam` capability PROVIDER (ADR-0111), registered as an Actuator Kind
+# (ADR-0103) that exposes the netbox/ipam-resolve Action and advertises provides:[ipam]. It dials
+# the same netbox plugin pod (the IPAM/DCIM Syncer stays boot-env for now); provider verification
+# (ADR-0104 D1) confirms the pod's Manifest advertises ipam before any consumer binds.
+#
+# `ipam` is RESOLVE-INJECT (ADR-0111 D1), the statestore shape: a build Actuator that declares
+# requires:[ipam] has its ipam-resolve invoked at Run dispatch and the {cidr,vlanId} handle injected
+# (ADR-0105 machinery, reused whole). NetBox is provider #1 (§1.5) — Nautobot / a CAPI-IPAM provider
+# are siblings behind the SAME capabilities/ipam.{input,output} contract, selected by a binding once
+# ≥2 exist. Allocation is idempotent and anchored IN NetBox (D4/F1) — Stratt holds no allocation record.
+name: netbox-ipam
+address: stratt-netbox:9090
+pluginIdentity: netbox
+tier: trusted
+actionNames: [netbox/ipam-resolve]
+provides: [ipam]

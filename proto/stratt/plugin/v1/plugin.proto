@@ -472,6 +472,15 @@ message CapabilityHandle {
   string kind = 1;
   map<string, string> config = 2;
   string credential_ref = 3;
+  // output is the resolve Action's CONTRACT-VALIDATED output bytes verbatim
+  // (capabilities/<class>.output), so a capability whose handle is not the
+  // statestore backend/config shape (e.g. ipam's {cidr,vlanId,gateway}) reaches
+  // its consumer intact (ADR-0112 D2). kind/config stay populated for statestore
+  // back-compat; new consumers decode `output` against their own class Contract.
+  // The core validates it against the closed class Contract before injecting, so
+  // no inline secret material can ride through (credentials are CredentialRef
+  // names only — the standing §2.5 invariant).
+  bytes output = 4;
 }
 
 // ApplyTarget is one core-resolved target. `name` is the stable alias the plugin

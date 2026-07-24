@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "stratt:contract:capabilities/ipam.output:v1",
+  "title": "ipam resolve output",
+  "description": "Class-level, PROVIDER-AGNOSTIC (ADR-0111) ipam handle: the network identity the consumer injects into its build. `cidr` is the allocated prefix; `vlanId` and `gateway` are optional; `credentialRef` is a §2.5 CredentialRef NAME for any backend auth material — resolved at pod spawn, NEVER inline material. Every provider (NetBox, Nautobot, CAPI-IPAM) fills this same shape, so a provider swap changes zero consumer declarations. The handle is INJECTED into the build (ADR-0111 D3); it is never written to the net.subnet Facet (the Syncer's OBSERVE projection owns that).",
+  "type": "object",
+  "properties": {
+    "cidr": {
+      "type": "string",
+      "minLength": 1,
+      "description": "The allocated prefix in CIDR notation (e.g. 10.30.4.0/24)."
+    },
+    "vlanId": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 4094,
+      "description": "The allocated 802.1Q VLAN id, when a VLAN was requested."
+    },
+    "gateway": {
+      "type": "string",
+      "description": "The gateway address for the allocated prefix, when the provider assigns one."
+    },
+    "credentialRef": {
+      "type": "string",
+      "description": "A §2.5 CredentialRef NAME (never material) for backend auth, when the handle carries one."
+    }
+  },
+  "required": ["cidr"],
+  "additionalProperties": false
+}

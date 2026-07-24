@@ -41,17 +41,19 @@ type Placement struct {
 	AvailabilityZone string `json:"availabilityZone,omitempty"`
 }
 
-// ComputeSpec is the decoded Intent/Compute payload (contracts/intents/compute.schema.json).
+// ComputeSpec is the decoded Intent/Compute payload (contracts/intents/compute.v3.schema.json).
+// v3 (ADR-0110): the provider-coupled Builder/BuildWorkflow fields are gone — the Intent names the
+// `provisioning` capability CLASS via Requires, and the reconcile resolves the concrete provider +
+// its build Workflow (§1.5).
 type ComputeSpec struct {
-	Count         int               `json:"count"`
-	NamePrefix    string            `json:"namePrefix"`
-	ProjectKind   string            `json:"projectKind"`
-	Labels        map[string]string `json:"labels"`
-	Builder       string            `json:"builder"`
-	BuildWorkflow string            `json:"buildWorkflow"`
-	Params        map[string]any    `json:"params"`
-	MaxDelta      float64           `json:"maxDelta"`  // 0 => use the controller cap
-	Placement     *Placement        `json:"placement"` // optional desired topology placement
+	Count       int               `json:"count"`
+	NamePrefix  string            `json:"namePrefix"`
+	ProjectKind string            `json:"projectKind"`
+	Labels      map[string]string `json:"labels"`
+	Requires    []string          `json:"requires"` // capability classes (ADR-0110); must include "provisioning"
+	Params      map[string]any    `json:"params"`
+	MaxDelta    float64           `json:"maxDelta"`  // 0 => use the controller cap
+	Placement   *Placement        `json:"placement"` // optional desired topology placement
 }
 
 // Intent pairs a declaration name with its decoded compute spec.
@@ -129,14 +131,15 @@ func desired(in Intent) []Instance {
 // keyed on build count, not ordinal count.
 
 // SingletonSpec is the decoded named-singleton Intent payload
-// (contracts/intents/{subnet,dnsrecord,dmz}.schema.json).
+// (contracts/intents/{subnet,vlan,dmz}.v2.schema.json). v2 (ADR-0110): the provider-coupled
+// Builder/BuildWorkflow fields are gone — the Intent names the `provisioning` capability CLASS via
+// Requires, and the reconcile resolves the concrete provider + its build Workflow (§1.5).
 type SingletonSpec struct {
-	ProjectKind   string            `json:"projectKind"`
-	Labels        map[string]string `json:"labels"`
-	Builder       string            `json:"builder"`
-	BuildWorkflow string            `json:"buildWorkflow"`
-	Params        map[string]any    `json:"params"`
-	Placement     *Placement        `json:"placement"` // optional desired topology placement
+	ProjectKind string            `json:"projectKind"`
+	Labels      map[string]string `json:"labels"`
+	Requires    []string          `json:"requires"` // capability classes (ADR-0110); must include "provisioning"
+	Params      map[string]any    `json:"params"`
+	Placement   *Placement        `json:"placement"` // optional desired topology placement
 }
 
 // SingletonIntent pairs a declaration name + its Intent kind with the decoded spec.

@@ -1112,6 +1112,9 @@ func (a *Activities) resolveCapabilities(ctx context.Context, in RunInput, requi
 		if err := contract.ValidateNamed(outContract, raw.Outputs); err != nil {
 			return nil, fmt.Errorf("actuator %q: capability %q resolve output failed its Contract: %w", in.Actuator, capClass, err)
 		}
+		// statestore back-compat: populate the typed backend/config/credentialRef fields (the
+		// statestore consumer reads Kind/Config). A differently-shaped output (e.g. ipam's
+		// {cidr,vlanId,gateway}) leaves these empty — harmless; that consumer reads `Output` instead.
 		var h struct {
 			Backend       string            `json:"backend"`
 			Config        map[string]string `json:"config"`
@@ -1120,7 +1123,9 @@ func (a *Activities) resolveCapabilities(ctx context.Context, in RunInput, requi
 		if err := json.Unmarshal(raw.Outputs, &h); err != nil {
 			return nil, fmt.Errorf("actuator %q: decode capability %q handle: %w", in.Actuator, capClass, err)
 		}
-		handles[capClass] = pluginhost.CapabilityHandle{Kind: h.Backend, Config: h.Config, CredentialRef: h.CredentialRef}
+		// Output carries the contract-validated bytes verbatim (ADR-0112 D2), so ANY capability's
+		// handle reaches its consumer — the generalization that unblocks non-statestore classes.
+		handles[capClass] = pluginhost.CapabilityHandle{Kind: h.Backend, Config: h.Config, CredentialRef: h.CredentialRef, Output: raw.Outputs}
 	}
 	return handles, nil
 }

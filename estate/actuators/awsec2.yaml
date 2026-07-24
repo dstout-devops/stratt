@@ -16,3 +16,10 @@ address: stratt-awsec2:9090
 pluginIdentity: awsec2
 tier: trusted
 provides: [provisioning]
+# provisions advertises awsec2's per-kind build WORKFLOWS (ADR-0110 D3). It is the sole Compute
+# provider, so Intent/Compute auto-binds here with no explicit capability-binding. (awsec2 also has
+# create-vpc/subnet/security-group Actions, but wiring those as network build Workflows — with a VPC
+# to place subnets in — is Slice 1, the real-AWS network path; it is deliberately NOT advertised for
+# Subnet here, so Subnet stays on Crossplane until then, ADR-0110 D5.)
+provisions:
+  Compute: compute-build

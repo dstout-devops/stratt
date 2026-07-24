@@ -10,6 +10,7 @@ import (
 
 	"log/slog"
 
+	"github.com/dstout-devops/stratt/core/internal/capability"
 	"github.com/dstout-devops/stratt/core/internal/compiler"
 	"github.com/dstout-devops/stratt/core/internal/graph"
 	"github.com/dstout-devops/stratt/core/internal/policy"
@@ -247,15 +248,31 @@ func (c *Controller) reconcileProvisioning(ctx context.Context, decls Declaratio
 	var keepB, keepT []string
 	keep := func(b, t string) { keepB = append(keepB, b); keepT = append(keepT, t) }
 
+	// Resolve each Intent kind's `requires: [provisioning]` to a concrete provider + build Workflow
+	// ONCE per kind (ADR-0110 D4) — resolution is per-(class, kind), identical across instances of a
+	// kind. A resolution error (store read) is treated as PENDING so the Finding is observable, never
+	// a silent skip (§1.8).
+	resolveCache := map[string]capability.Result{}
+	resolveKind := func(kind string) capability.Result {
+		if r, ok := resolveCache[kind]; ok {
+			return r
+		}
+		r, err := c.resolveProvisioning(ctx, kind)
+		if err != nil {
+			r = capability.Result{Status: capability.StatusPending, Reason: "provisioning resolution failed: " + err.Error()}
+			log.Error("provisioning resolution failed", "kind", kind, "error", err)
+		}
+		resolveCache[kind] = r
+		return r
+	}
+
 	for _, inst := range res.ToBuild {
 		sp := specs[inst.Intent]
-		detail, _ := json.Marshal(map[string]any{
+		detail, _ := json.Marshal(provisionFindingDetail(resolveKind("Compute"), map[string]any{
 			"instance": inst.Name, "intent": inst.Intent, "ordinal": inst.Ordinal,
-			"builder": sp.Builder, "buildWorkflow": sp.BuildWorkflow,
 			"projectKind": sp.ProjectKind, "labels": sp.Labels, "params": sp.Params,
 			"placement": sp.Placement,
-			"reason":    "declared but not built — launch the gated build Workflow (never auto-run, §5 Flow 1)",
-		})
+		}))
 		b := "provision/" + inst.Intent
 		if err := c.Store.WriteProvisionFinding(ctx, b, inst.Name, "warning", detail); err != nil {
 			log.Error("write provision finding failed", "instance", inst.Name, "error", err)
@@ -267,14 +284,12 @@ func (c *Controller) reconcileProvisioning(ctx context.Context, decls Declaratio
 	// correlation key the built Entity will carry as stratt.intent/singleton.
 	for _, inst := range sres.ToBuild {
 		si := singSpecs[inst.Intent]
-		detail, _ := json.Marshal(map[string]any{
+		detail, _ := json.Marshal(provisionFindingDetail(resolveKind(shortIntentKind(si.Kind)), map[string]any{
 			"singleton": inst.Name, "intent": inst.Intent, "intentKind": si.Kind,
 			"correlationLabel": map[string]string{"stratt.intent/singleton": inst.Name},
-			"builder":          si.Spec.Builder, "buildWorkflow": si.Spec.BuildWorkflow,
-			"projectKind": si.Spec.ProjectKind, "labels": si.Spec.Labels, "params": si.Spec.Params,
+			"projectKind":      si.Spec.ProjectKind, "labels": si.Spec.Labels, "params": si.Spec.Params,
 			"placement": si.Spec.Placement,
-			"reason":    "declared but not built — launch the gated build Workflow (never auto-run, §5 Flow 1)",
-		})
+		}))
 		b := "provision/" + inst.Intent
 		if err := c.Store.WriteProvisionFinding(ctx, b, inst.Name, "warning", detail); err != nil {
 			log.Error("write singleton provision finding failed", "singleton", inst.Name, "error", err)

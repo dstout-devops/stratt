@@ -25,6 +25,7 @@ const (
 	CapArtifactStore = "artifactstore" // content-addressed artifacts/evidence (provider #1: S3, ADR-0105)
 	CapEventBus      = "eventbus"      // an estate-facing alternate event backend (reserved, ADR-0046)
 	CapProvisioning  = "provisioning"  // provision machines other plugins target (e.g. EC2)
+	CapIPAM          = "ipam"          // allocate a prefix/VLAN from a global IPAM (provider #1: NetBox, ADR-0111)
 )
 
 // capabilityClasses is the closed set the validator admits. Extending it is a core decision
@@ -37,6 +38,7 @@ var capabilityClasses = map[string]bool{
 	CapArtifactStore: true,
 	CapEventBus:      true,
 	CapProvisioning:  true,
+	CapIPAM:          true,
 }
 
 // ValidCapability reports whether tok is a known capability class (§1.5 — a plugin never mints a

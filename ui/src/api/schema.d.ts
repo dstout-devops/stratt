@@ -834,6 +834,48 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/capability-bindings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List capability→provider bindings
+         * @description Capability-bindings (ADR-0110 D3) select which verified provider fulfils a capability class for a given Intent kind, so an Intent's `requires: [provisioning]` resolves to a concrete provider + build Workflow. A CaC declaration FORM the capability registry reconciles — NOT a Named Kind (§2 frozen). CaC-only, read-only (no API write path).
+         */
+        get: operations["listCapabilityBindings"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/capability-bindings/{name}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                name: string;
+            };
+            cookie?: never;
+        };
+        /**
+         * Get one capability-binding
+         * @description The capability-binding declaration (ADR-0110). CaC-only, read-only.
+         */
+        get: operations["getCapabilityBinding"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/workflows": {
         parameters: {
             query?: never;
@@ -1824,6 +1866,21 @@ export interface components {
             verified: boolean;
             /** @description The phantom/pending reason when verified=false; empty when verified. */
             reason?: string;
+        };
+        /** @description Selects which verified provider fulfils a capability class for a given Intent kind (ADR-0110 D3), so an Intent's `requires: [provisioning]` resolves to a concrete provider + build Workflow. A CaC declaration FORM the capability registry reconciles — NOT a Named Kind (§2 frozen); the binding selects only the provider (the provider owns its per-kind build Workflow via its `provisions` map). */
+        CapabilityBinding: {
+            name: string;
+            entries: components["schemas"]["CapabilityBindingEntry"][];
+            environments?: string[];
+        };
+        /** @description One capability→provider selection for a specific Intent kind (ADR-0110 D3). */
+        CapabilityBindingEntry: {
+            /** @description The capability class being bound (e.g. provisioning) — a core-owned class (§1.5). */
+            capability: string;
+            /** @description The verified provider's declaration name (an Actuator/Connector that `provides` the class). */
+            provider: string;
+            /** @description The Intent kind this entry routes, WITHOUT the "Intent/" prefix (e.g. Compute, Subnet, Vlan, Dmz). */
+            intentKind: string;
         };
         /** @description A Temporal-backed DAG of Steps with Gates (charter §2, ADR-0011). CaC-only in v1. */
         Workflow: {
@@ -3028,6 +3085,49 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ActuatorDetail"];
+                };
+            };
+            404: components["responses"]["NotFound"];
+        };
+    };
+    listCapabilityBindings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Every capability-binding in the active environment. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CapabilityBinding"][];
+                };
+            };
+        };
+    };
+    getCapabilityBinding: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The capability-binding. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CapabilityBinding"];
                 };
             };
             404: components["responses"]["NotFound"];

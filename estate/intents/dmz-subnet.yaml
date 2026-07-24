@@ -5,7 +5,6 @@ name: dmz-subnet
 kind: Intent/Subnet
 spec:
   projectKind: subnet
-  builder: crossplane/provision
-  buildWorkflow: subnet-provision
+  requires: [provisioning] # the capability CLASS (ADR-0110); Subnet resolves to crossplane → subnet-build (sole provider)
   params:
     cidr: 10.40.0.0/24

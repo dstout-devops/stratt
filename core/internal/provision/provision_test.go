@@ -125,8 +125,8 @@ func TestPlanMaxDeltaPauses(t *testing.T) {
 // one desired Entity per Intent, correlated by (kind, name), missing ones surfaced.
 func TestPlanSingletonsShortfall(t *testing.T) {
 	intents := []SingletonIntent{
-		{Name: "web-dmz", Kind: "Intent/Subnet", Spec: SingletonSpec{Builder: "crossplane", BuildWorkflow: "net-build"}},
-		{Name: "db-tier", Kind: "Intent/Subnet", Spec: SingletonSpec{Builder: "crossplane", BuildWorkflow: "net-build"}},
+		{Name: "web-dmz", Kind: "Intent/Subnet", Spec: SingletonSpec{Requires: []string{"provisioning"}}},
+		{Name: "db-tier", Kind: "Intent/Subnet", Spec: SingletonSpec{Requires: []string{"provisioning"}}},
 	}
 	// web-dmz already built; db-tier is not.
 	built := map[string]bool{"Intent/Subnet/web-dmz": true}
@@ -146,8 +146,8 @@ func TestPlanSingletonsShortfall(t *testing.T) {
 // do NOT collide — the correlation key namespaces by kind (§2).
 func TestPlanSingletonsNoCrossKindCollision(t *testing.T) {
 	intents := []SingletonIntent{
-		{Name: "edge", Kind: "Intent/Subnet", Spec: SingletonSpec{Builder: "x", BuildWorkflow: "w"}},
-		{Name: "edge", Kind: "Intent/Dmz", Spec: SingletonSpec{Builder: "x", BuildWorkflow: "w"}},
+		{Name: "edge", Kind: "Intent/Subnet", Spec: SingletonSpec{Requires: []string{"provisioning"}}},
+		{Name: "edge", Kind: "Intent/Dmz", Spec: SingletonSpec{Requires: []string{"provisioning"}}},
 	}
 	r, err := PlanSingletons(intents, nil, 0)
 	if err != nil {
@@ -165,7 +165,7 @@ func TestPlanSingletonsBatchPauses(t *testing.T) {
 	for i := 0; i < 30; i++ {
 		intents = append(intents, SingletonIntent{
 			Name: "rec-" + string(rune('a'+i%26)) + string(rune('a'+i/26)),
-			Kind: "Intent/DnsRecord", Spec: SingletonSpec{Builder: "dns", BuildWorkflow: "w"},
+			Kind: "Intent/DnsRecord", Spec: SingletonSpec{Requires: []string{"provisioning"}},
 		})
 	}
 	r, err := PlanSingletons(intents, nil, 25)
@@ -184,8 +184,8 @@ func TestPlanSingletonsBatchPauses(t *testing.T) {
 // is a compile error (§2.4), never a silent tiebreak.
 func TestPlanSingletonsExclusiveClaim(t *testing.T) {
 	intents := []SingletonIntent{
-		{Name: "web-dmz", Kind: "Intent/Subnet", Spec: SingletonSpec{Builder: "a", BuildWorkflow: "w"}},
-		{Name: "web-dmz", Kind: "Intent/Subnet", Spec: SingletonSpec{Builder: "b", BuildWorkflow: "w"}},
+		{Name: "web-dmz", Kind: "Intent/Subnet", Spec: SingletonSpec{Requires: []string{"provisioning"}}},
+		{Name: "web-dmz", Kind: "Intent/Subnet", Spec: SingletonSpec{Requires: []string{"provisioning"}}},
 	}
 	if _, err := PlanSingletons(intents, nil, 0); err == nil {
 		t.Fatal("two Intents claiming the same (kind, name) must be a compile error")

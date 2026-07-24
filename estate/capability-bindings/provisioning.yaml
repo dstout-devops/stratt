@@ -1,0 +1,16 @@
+# provisioning-subnet — the FIRST live capability-binding (ADR-0110 D3/D5, landed by ADR-0112 D6).
+# Subnet now has TWO verified provisioning providers — crossplane (subnet-build) and opentofu-network
+# (opentofu-subnet-build) — so per-(class,kind) resolution fails closed on the ambiguity (§2.4, never
+# a silent tiebreak). This binding disambiguates it: Subnet builds via OpenTofu — the charter-canonical
+# network builder (§5.1/§5.2/§3) — DEMOTING Crossplane's opaque-Claim subnet build.
+#
+# NOT bound here (deliberately):
+#   - Compute → awsec2 (sole provider, auto-binds; ADR-0107).
+#   - Vlan    → crossplane (SOLE VLAN builder — AWS/OpenTofu have no VLAN primitive in this estate;
+#               the acknowledged sole-VLAN exception, ADR-0110 D5). Auto-binds; needs no entry.
+# A binding is required ONLY to disambiguate >1 provider — Subnet is the only such case.
+name: provisioning-subnet
+entries:
+  - capability: provisioning
+    provider: opentofu-network
+    intentKind: Subnet

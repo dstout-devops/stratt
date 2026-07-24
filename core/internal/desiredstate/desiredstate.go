@@ -51,19 +51,22 @@ type Declarations struct {
 	CredentialRefs []types.CredentialRef `json:"credentialRefs"`
 	Connectors     []types.Connector     `json:"connectors"` // ADR-0103: runtime-registered Connectors
 	Actuators      []types.Actuator      `json:"actuators"`  // ADR-0103: runtime-registered plugin Actuators
-	Triggers       []types.Trigger       `json:"triggers"`
-	Workflows      []types.Workflow      `json:"workflows"`
-	Emitters       []types.Emitter       `json:"emitters"`
-	Baselines      []types.Baseline      `json:"baselines"`
-	MCPServers     []types.MCPServer     `json:"mcpServers"`
-	Intents        []types.Intent        `json:"intents"`
-	Assignments    []types.Assignment    `json:"assignments"`
-	Blueprints     []types.Blueprint     `json:"blueprints"`
-	NotifySinks    []types.Sink          `json:"notifySinks"`
-	Subscriptions  []types.Subscription  `json:"subscriptions"`
-	Sites          []types.Site          `json:"sites"`
-	Cells          []types.Cell          `json:"cells"`
-	SCIMIdPs       []types.SCIMIdP       `json:"scimIdps"`
+	// CapabilityBindings select which verified provider fulfils a capability class for a given
+	// Intent kind (ADR-0110 D3) — a CaC declaration form, not a Named Kind (§2 frozen).
+	CapabilityBindings []types.CapabilityBinding `json:"capabilityBindings"`
+	Triggers           []types.Trigger           `json:"triggers"`
+	Workflows          []types.Workflow          `json:"workflows"`
+	Emitters           []types.Emitter           `json:"emitters"`
+	Baselines          []types.Baseline          `json:"baselines"`
+	MCPServers         []types.MCPServer         `json:"mcpServers"`
+	Intents            []types.Intent            `json:"intents"`
+	Assignments        []types.Assignment        `json:"assignments"`
+	Blueprints         []types.Blueprint         `json:"blueprints"`
+	NotifySinks        []types.Sink              `json:"notifySinks"`
+	Subscriptions      []types.Subscription      `json:"subscriptions"`
+	Sites              []types.Site              `json:"sites"`
+	Cells              []types.Cell              `json:"cells"`
+	SCIMIdPs           []types.SCIMIdP           `json:"scimIdps"`
 	// AdmissionControls are the estate's admission policy (ADR-0073 §7.4b): CEL
 	// predicates over each declaration's manifest, evaluated at load through the
 	// PDP port. A deny rejects the declaration (§7.4c).
@@ -76,19 +79,21 @@ const (
 	KindCredentialRef = "credential-ref"
 	KindConnector     = "connector"
 	KindActuator      = "actuator"
-	KindTrigger       = "trigger"
-	KindWorkflow      = "workflow"
-	KindEmitter       = "emitter"
-	KindBaseline      = "baseline"
-	KindMCPServer     = "mcp-server"
-	KindIntent        = "intent"
-	KindAssignment    = "assignment"
-	KindBlueprint     = "blueprint"
-	KindNotifySink    = "notify-sink"
-	KindSubscription  = "subscription"
-	KindSite          = "site"
-	KindCell          = "cell"
-	KindSCIMIdP       = "scim-idp"
+	// KindCapabilityBinding is a CaC declaration form (ADR-0110), not a Named Kind (§2 frozen).
+	KindCapabilityBinding = "capability-binding"
+	KindTrigger           = "trigger"
+	KindWorkflow          = "workflow"
+	KindEmitter           = "emitter"
+	KindBaseline          = "baseline"
+	KindMCPServer         = "mcp-server"
+	KindIntent            = "intent"
+	KindAssignment        = "assignment"
+	KindBlueprint         = "blueprint"
+	KindNotifySink        = "notify-sink"
+	KindSubscription      = "subscription"
+	KindSite              = "site"
+	KindCell              = "cell"
+	KindSCIMIdP           = "scim-idp"
 )
 
 // Action is what reconciliation will do (or did) to one declared object.
@@ -242,6 +247,13 @@ func ParseDir(root string, decider policy.Decider) (Declarations, error) {
 	}
 	out.Actuators = actuatorDecls
 	sort.Slice(out.Actuators, func(i, j int) bool { return out.Actuators[i].Name < out.Actuators[j].Name })
+
+	capBindings, err := parseKind(filepath.Join(root, "capability-bindings"), true, parseCapabilityBindingFile)
+	if err != nil {
+		return out, err
+	}
+	out.CapabilityBindings = capBindings
+	sort.Slice(out.CapabilityBindings, func(i, j int) bool { return out.CapabilityBindings[i].Name < out.CapabilityBindings[j].Name })
 
 	triggers, err := parseKind(filepath.Join(root, "triggers"), true, parseTriggerFile)
 	if err != nil {
@@ -2209,6 +2221,11 @@ func ComputePlan(ctx context.Context, store *graph.Store, decls Declarations) (P
 		return Plan{}, err
 	}
 	plan.Entries = append(plan.Entries, actPlan.Entries...)
+	cbPlan, err := computeCapabilityBindingPlan(ctx, store, decls.CapabilityBindings)
+	if err != nil {
+		return Plan{}, err
+	}
+	plan.Entries = append(plan.Entries, cbPlan.Entries...)
 	trigPlan, err := computeTriggerPlan(ctx, store, decls.Triggers)
 	if err != nil {
 		return Plan{}, err
@@ -2883,6 +2900,10 @@ func Apply(ctx context.Context, store *graph.Store, decls Declarations) (Plan, e
 	for _, d := range decls.Actuators {
 		actByName[d.Name] = d
 	}
+	cbByName := map[string]types.CapabilityBinding{}
+	for _, d := range decls.CapabilityBindings {
+		cbByName[d.Name] = d
+	}
 	trigByName := map[string]types.Trigger{}
 	for _, d := range decls.Triggers {
 		trigByName[d.Name] = d
@@ -2958,6 +2979,10 @@ func Apply(ctx context.Context, store *graph.Store, decls Declarations) (Plan, e
 			err = store.DeleteActuator(ctx, e.Name)
 		case e.Kind == KindActuator:
 			err = store.UpsertActuator(ctx, actByName[e.Name])
+		case e.Kind == KindCapabilityBinding && e.Action == ActionDelete:
+			err = store.DeleteCapabilityBinding(ctx, e.Name)
+		case e.Kind == KindCapabilityBinding:
+			err = store.UpsertCapabilityBinding(ctx, cbByName[e.Name])
 		case e.Kind == KindTrigger && e.Action == ActionDelete:
 			err = store.DeleteTrigger(ctx, e.Name)
 		case e.Kind == KindTrigger:
