@@ -335,11 +335,11 @@ func TestShim_ImplicitLocalhostIsNotActuation(t *testing.T) {
 // play may have matched and simply had no tasks. Two different fixes for the operator.
 func TestVacuousMessageDoesNotAssertAnUnobservedCause(t *testing.T) {
 	tgt := []Target{{Name: "web-01"}}
-	matched := vacuousRun(0, tgt, 0, "", true)
+	matched := vacuousRun(0, tgt, 0, "", true, 0)
 	if !strings.Contains(matched, "no hosts matched") || !strings.Contains(matched, "`hosts:` pattern") {
 		t.Fatalf("with ansible's signal, name the pattern: %q", matched)
 	}
-	unobserved := vacuousRun(0, tgt, 0, "", false)
+	unobserved := vacuousRun(0, tgt, 0, "", false, 0)
 	if strings.Contains(unobserved, "no hosts matched") {
 		t.Fatalf("without ansible's signal, must not assert the pattern matched nothing: %q", unobserved)
 	}
@@ -348,7 +348,7 @@ func TestVacuousMessageDoesNotAssertAnUnobservedCause(t *testing.T) {
 	}
 	// limit is named as a thing to check, never asserted as the cause — narrowing to
 	// empty is an rc=1 path (live-verified), not this one.
-	withLimit := vacuousRun(0, tgt, 0, "web-99", true)
+	withLimit := vacuousRun(0, tgt, 0, "web-99", true, 0)
 	if !strings.Contains(withLimit, "disjoint") {
 		t.Fatalf("limit must be framed as possibly disjoint, not as narrowing-to-empty: %q", withLimit)
 	}

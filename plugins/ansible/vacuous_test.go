@@ -12,7 +12,7 @@ import (
 func TestVacuousRun_ZeroActuationIsNotSuccess(t *testing.T) {
 	targets := []Target{{Name: "web-02"}, {Name: "web-01"}}
 
-	got := vacuousRun(0, targets, 0, "", false)
+	got := vacuousRun(0, targets, 0, "", false, 0)
 	if got == "" {
 		t.Fatal("rc=0 with a non-empty target set and ZERO hosts actuated must FAIL, not report green")
 	}
@@ -31,7 +31,7 @@ func TestVacuousRun_ZeroActuationIsNotSuccess(t *testing.T) {
 // cause — it narrows the core-resolved set and can narrow it to EMPTY. A run that
 // actuated nothing under a limit must say so, with the offending value.
 func TestVacuousRun_NamesLimitWhenSet(t *testing.T) {
-	got := vacuousRun(0, []Target{{Name: "web-01"}}, 0, "nonexistent", true)
+	got := vacuousRun(0, []Target{{Name: "web-01"}}, 0, "nonexistent", true, 0)
 	if !strings.Contains(got, `params.limit="nonexistent"`) {
 		t.Fatalf("a vacuous run under a limit must name the limit value: %q", got)
 	}
@@ -46,10 +46,10 @@ func TestVacuousRun_NamesLimitWhenSet(t *testing.T) {
 func TestVacuousRun_LegitimateRunsAreUntouched(t *testing.T) {
 	three := []Target{{Name: "a"}, {Name: "b"}, {Name: "c"}}
 	cases := map[string]string{
-		"narrowed by limit":  vacuousRun(0, three, 1, "a", false),
-		"all actuated":       vacuousRun(0, three, 3, "", false),
-		"targetless run":     vacuousRun(0, nil, 0, "", false),
-		"already failing rc": vacuousRun(2, three, 0, "", false),
+		"narrowed by limit":  vacuousRun(0, three, 1, "a", false, 0),
+		"all actuated":       vacuousRun(0, three, 3, "", false, 0),
+		"targetless run":     vacuousRun(0, nil, 0, "", false, 0),
+		"already failing rc": vacuousRun(2, three, 0, "", false, 0),
 	}
 	for name, got := range cases {
 		if got != "" {

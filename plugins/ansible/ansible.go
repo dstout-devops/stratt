@@ -6,6 +6,7 @@
 package ansible
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"maps"
@@ -99,12 +100,40 @@ type RunnerEvent struct {
 // parseEvent decodes one `ansible-runner run -j` stdout line; non-event lines
 // (runner banners, tracebacks) return ok=false — the caller surfaces them as
 // diagnostics (ADR-0051 MF5), never dropped.
+//
+// UseNumber is LOAD-BEARING, not a style preference. EventData is map[string]any, and
+// encoding/json decodes every JSON number in an `any` into float64 — but real module
+// results carry integers far outside float64's range: an RSA modulus from
+// community.crypto.openssl_privatekey is ~617 digits. encoding/json then rejects the
+// WHOLE line ("cannot unmarshal number … into Go value of type float64"), so a genuine
+// runner_on_ok / runner_on_failed silently degraded into an untyped diagnostic and its
+// ItemResult, facts write-back, and drift were LOST (§1.8 — the abstraction must never
+// hide diagnosis). json.Number keeps the literal instead, so nothing overflows and
+// facts round-trip byte-exactly rather than through float64. Live-verified against the
+// EE image: a one-task openssl_privatekey play emitted ZERO ItemResults before this.
 func parseEvent(line []byte) (RunnerEvent, bool) {
 	var ev RunnerEvent
-	if err := json.Unmarshal(line, &ev); err != nil || ev.Event == "" {
+	dec := json.NewDecoder(bytes.NewReader(line))
+	dec.UseNumber()
+	if err := dec.Decode(&ev); err != nil || ev.Event == "" {
 		return RunnerEvent{}, false
 	}
 	return ev, true
+}
+
+// eventShaped reports that line IS a JSON object carrying a non-empty "event" field —
+// an ansible-runner event parseEvent should have understood. It separates a real decode
+// failure (a type-shape surprise that LOSES typed signal) from the ordinary non-JSON
+// banners and tracebacks MF5 legitimately forwards as diagnostics. Without this
+// distinction a misparse is indistinguishable from normal output, which is exactly how
+// the float64 overflow above survived unnoticed.
+func eventShaped(line []byte) bool {
+	var probe struct {
+		Event string `json:"event"`
+	}
+	dec := json.NewDecoder(bytes.NewReader(line))
+	dec.UseNumber() // never let the probe itself overflow — it must classify, not parse
+	return dec.Decode(&probe) == nil && probe.Event != ""
 }
 
 // hostStatus classifies a terminal per-host event into the port's ItemResult status

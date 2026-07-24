@@ -313,14 +313,27 @@ func Run(ctx context.Context, w io.Writer, dir string, req Request, run commandR
 	// only the ansible plugin knows a play can no-op; the spine stays content-blind.
 	actuated := map[string]bool{}
 	noHostsMatched := false
+	// unparsedEvents counts lines that WERE ansible-runner events but failed to decode.
+	// Such a line loses its ItemResult / facts / drift, so the shim no longer knows what
+	// happened on that host — and must not then assert a cause it cannot support (§1.8).
+	unparsedEvents := 0
 
 	onLine := func(line []byte) {
 		ev, ok := parseEvent(line)
 		if !ok {
 			// MF5: banners / python tracebacks / stderr → typed diagnostic, never dropped.
+			level, kind := pluginv1.TaskEvent_LEVEL_INFO, "diagnostic"
+			if eventShaped(line) {
+				// Not a banner: a real event whose typed signal we just LOST. WARN under
+				// its own kind so it is visible as a DEFECT during descent rather than
+				// hiding among ordinary output — the failure mode that let the float64
+				// overflow in parseEvent go unnoticed until a crypto play hit it.
+				level, kind = pluginv1.TaskEvent_LEVEL_WARN, "unparsed-event"
+				unparsedEvents++
+			}
 			emit(&pluginv1.ApplyResponse{Event: &pluginv1.TaskEvent{
-				Level: pluginv1.TaskEvent_LEVEL_INFO, Message: string(line), At: timestamppb.Now(),
-				Fields: map[string]string{"kind": "diagnostic"},
+				Level: level, Message: string(line), At: timestamppb.Now(),
+				Fields: map[string]string{"kind": kind},
 			}})
 			return
 		}
@@ -370,7 +383,7 @@ func Run(ctx context.Context, w io.Writer, dir string, req Request, run commandR
 	// Succeeded from the per-host ItemResults + this terminal, never from ok alone.
 	// A zero-actuation run is FAILED here rather than reported green (§1.8).
 	ok, msg := rc == 0, fmt.Sprintf("ansible-runner rc=%d", rc)
-	if vac := vacuousRun(rc, req.Targets, len(actuated), p.Limit, noHostsMatched); vac != "" {
+	if vac := vacuousRun(rc, req.Targets, len(actuated), p.Limit, noHostsMatched, unparsedEvents); vac != "" {
 		ok, msg = false, vac
 	}
 	emit(&pluginv1.ApplyResponse{Event: &pluginv1.TaskEvent{
@@ -406,7 +419,15 @@ func isNoHostsMatched(ev RunnerEvent) bool {
 //
 // Deliberately NOT "every target produced a result": `limit` narrowing 3 targets to
 // 1 is a legitimate, requested narrowing. Only actuating NOTHING is vacuous.
-func vacuousRun(rc int, targets []Target, actuated int, limit string, noHostsMatched bool) string {
+//
+// unparsedEvents takes PRECEDENCE over every other cause: when the shim failed to
+// decode events it does not know whether hosts were actuated, so blaming the play's
+// pattern would be asserting an unobserved cause. It still fails the Run — "I cannot
+// tell what happened" is not a success — but names the real, different reason. This
+// case is not hypothetical: the float64 overflow fixed in parseEvent made a successful
+// one-task openssl_privatekey play report zero actuation, and this check then declared
+// that success a failure with the wrong explanation.
+func vacuousRun(rc int, targets []Target, actuated int, limit string, noHostsMatched bool, unparsedEvents int) string {
 	if rc != 0 || actuated > 0 || len(targets) == 0 {
 		return ""
 	}
@@ -416,7 +437,10 @@ func vacuousRun(rc int, targets []Target, actuated int, limit string, noHostsMat
 	}
 	slices.Sort(names)
 	cause := "the play ran but produced no result for any of them (a play with no tasks does this)"
-	if noHostsMatched {
+	switch {
+	case unparsedEvents > 0:
+		cause = fmt.Sprintf("%d ansible event(s) could not be DECODED by this shim, so per-host results were lost and actuation is unknown — this is a shim defect, not necessarily a problem with the play (see the unparsed-event diagnostics above)", unparsedEvents)
+	case noHostsMatched:
 		cause = "ansible reported no hosts matched — the play's `hosts:` pattern names nothing in the inventory, which holds exactly these targets (so `hosts: all` always matches)"
 	}
 	msg := fmt.Sprintf("ansible-runner rc=0 but NO host was actuated out of the %d resolved target(s) [%s]: %s. This run changed nothing and is not a success",
