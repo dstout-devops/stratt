@@ -186,10 +186,20 @@ Action's real cause was masked and no Run surfaced any error (§1.8 — see DESC
 for their standalone image builds; and floci's healthcheck probed with a `wget` its image lacks
 (false-unhealthy, also breaking `dev:stack:up`). Budget demo work accordingly.
 
-**Next:** an **app-install demo** — install an app that requires a **TLS certificate** (a web server), so
-certificate issuance/renewal is taught alongside install. That rung is a prerequisite for the
-**enterprise-estate capstone** (multi-substrate, one Intent), which additionally needs per-instance
-fan-out (ADR-0058), a K8s `Compute` provider, and multi-substrate simultaneous reconcile.
+**Next, in order:**
+
+1. **A fully-featured Ansible plugin.** Ansible ships today only as an **EE-Job subprocess shim**
+   (ADR-0051, `plugins/ansible` — ~800 lines incl. tests); the app-install demo needs the real thing.
+   ⚠️ **Design it against PLG-1** ([enterprise-readiness.md](enterprise-readiness.md)): every substrate a
+   plugin talks to in dev is one _we_ run and own (vcsim, floci, the in-cluster `managed-web` sshd node);
+   in production these are **external, operator-owned systems** — a customer's AAP/AWX, Galaxy/Automation
+   Hub, credential vault, and a fleet behind bastions. Do not bake dev's reachability/ownership
+   conveniences into the plugin contract. This already bit us: the ec2-only demo's SSH-converge act is
+   deferred precisely because floci's instances are reachable only because we host them.
+2. **An app-install demo** — install an app that requires a **TLS certificate** (a web server), so
+   certificate issuance/renewal is taught alongside install.
+3. **The enterprise-estate capstone** (multi-substrate, one Intent), which additionally needs per-instance
+   fan-out (ADR-0058), a K8s `Compute` provider, and multi-substrate simultaneous reconcile.
 
 ## Dev follow-ups / test hygiene
 

@@ -43,6 +43,11 @@ Each future demo teaches _and closes one gap_ toward the full multi-substrate ca
   application that _requires a TLS certificate_ (e.g. a web server), so the demo teaches **certificate
   issuance and renewal** alongside install. The three shipped demos deploy or provision; none yet installs
   an app with its supporting material, which the capstone's "shared services" story depends on.
+  **Blocked on a fully-featured Ansible plugin** (Ansible ships today only as an EE-Job subprocess shim,
+  ADR-0051) — which must be designed against **PLG-1** in
+  [enterprise-readiness.md](../docs/enterprise-readiness.md): in dev every substrate is one _we_ run and
+  own, but in production they are external, operator-owned systems (a customer's AAP/AWX, vault, and a
+  fleet behind bastions). Dev's reachability conveniences must not become the plugin contract.
 - **enterprise estate (capstone)** — networks/VLANs across regions + shared services across
   Kubernetes, vSphere, and EC2 in one Intent. Depends on the app-install rung above, plus per-instance
   fan-out (ADR-0058), a K8s Compute provider, and multi-substrate simultaneous reconcile.
