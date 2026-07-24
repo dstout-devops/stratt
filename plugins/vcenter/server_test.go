@@ -19,11 +19,11 @@ func TestEnumerateAgainstSimulator(t *testing.T) {
 		if err != nil {
 			t.Fatalf("enumerate: %v", err)
 		}
-		var vms, hosts, subnets int
+		count := map[string]int{}
 		for _, e := range entities {
+			count[e.GetKind()]++
 			switch e.GetKind() {
 			case "vm":
-				vms++
 				if e.GetIdentityKeys()["vcenter.uuid"] == "" {
 					t.Errorf("vm missing vcenter.uuid identity")
 				}
@@ -34,12 +34,10 @@ func TestEnumerateAgainstSimulator(t *testing.T) {
 					t.Errorf("vm missing vm.runtime facet blob")
 				}
 			case "host":
-				hosts++
 				if e.GetIdentityKeys()["vcenter.host.uuid"] == "" {
 					t.Errorf("host missing vcenter.host.uuid identity")
 				}
 			case "subnet":
-				subnets++
 				if e.GetIdentityKeys()["vcenter.network.moref"] == "" {
 					t.Errorf("subnet missing vcenter.network.moref identity")
 				}
@@ -49,14 +47,27 @@ func TestEnumerateAgainstSimulator(t *testing.T) {
 				if e.GetLabels()["source"] != "vsphere" {
 					t.Errorf("vSphere subnet must carry source=vsphere, got %q", e.GetLabels()["source"])
 				}
+			case "region": // datacenter (ADR-0115 D1)
+				if e.GetIdentityKeys()["vcenter.datacenter.moref"] == "" {
+					t.Errorf("region missing vcenter.datacenter.moref identity")
+				}
+				if len(e.GetFacets()) != 0 {
+					t.Errorf("region must be a bare Entity (no Facet), got %v", e.GetFacets())
+				}
+			case "availability-zone": // cluster (ADR-0115 D1)
+				if e.GetIdentityKeys()["vcenter.cluster.moref"] == "" {
+					t.Errorf("availability-zone missing vcenter.cluster.moref identity")
+				}
 			default:
 				t.Errorf("unexpected kind %q", e.GetKind())
 			}
 		}
-		if vms == 0 || hosts == 0 || subnets == 0 {
-			t.Fatalf("expected vms, hosts, and subnets from simulator, got %d vms / %d hosts / %d subnets", vms, hosts, subnets)
+		for _, k := range []string{"vm", "host", "subnet", "region", "availability-zone"} {
+			if count[k] == 0 {
+				t.Errorf("expected at least one %q from the simulator, got 0", k)
+			}
 		}
-		t.Logf("enumerated %d vms, %d hosts, %d subnets (vSphere networks)", vms, hosts, subnets)
+		t.Logf("enumerated %v", count)
 	})
 }
 
@@ -139,5 +150,57 @@ func TestEnumerateEmitsPlacedIn(t *testing.T) {
 			t.Fatal("expected at least one placed-in edge from a vm to its network")
 		}
 		t.Logf("emitted %d placed-in edges (vm -> vSphere network)", edges)
+	})
+}
+
+// TestEnumerateTopologyEdges proves the ADR-0115 D5 topology relations: availability-zone (cluster)
+// --in-region--> region (datacenter) via the parent-walk, and host --member-of--> availability-zone.
+// Both target BY IDENTITY and must resolve to an emitted Entity.
+func TestEnumerateTopologyEdges(t *testing.T) {
+	simulator.Test(func(ctx context.Context, c *vim25.Client) {
+		entities, err := enumerate(ctx, c)
+		if err != nil {
+			t.Fatalf("enumerate: %v", err)
+		}
+		regions := map[string]bool{}
+		azs := map[string]bool{}
+		for _, e := range entities {
+			switch e.GetKind() {
+			case "region":
+				regions[e.GetIdentityKeys()["vcenter.datacenter.moref"]] = true
+			case "availability-zone":
+				azs[e.GetIdentityKeys()["vcenter.cluster.moref"]] = true
+			}
+		}
+		var inRegion, memberOf int
+		for _, e := range entities {
+			for _, r := range e.GetRelations() {
+				switch r.GetType() {
+				case "in-region":
+					inRegion++
+					if r.GetToScheme() != "vcenter.datacenter.moref" {
+						t.Errorf("in-region must target vcenter.datacenter.moref, got %q", r.GetToScheme())
+					}
+					if !regions[r.GetToValue()] {
+						t.Errorf("in-region target %q is not an emitted region", r.GetToValue())
+					}
+				case "member-of":
+					memberOf++
+					if r.GetToScheme() != "vcenter.cluster.moref" {
+						t.Errorf("member-of must target vcenter.cluster.moref, got %q", r.GetToScheme())
+					}
+					if !azs[r.GetToValue()] {
+						t.Errorf("member-of target %q is not an emitted availability-zone", r.GetToValue())
+					}
+				}
+			}
+		}
+		if inRegion == 0 {
+			t.Error("expected at least one availability-zone --in-region--> region edge (the parent-walk)")
+		}
+		if memberOf == 0 {
+			t.Error("expected at least one host --member-of--> availability-zone edge")
+		}
+		t.Logf("topology edges: in-region=%d member-of=%d", inRegion, memberOf)
 	})
 }

@@ -989,9 +989,17 @@ func run(ctx context.Context, log *slog.Logger) error {
 			LabelKeys:       []string{"vcenter.name", "source"},
 			// dns.fqdn is a shared cross-source scheme: only honored because the
 			// grant lists it AND the tier is trusted (finding #4). vcenter.network.moref
-			// identifies vSphere portgroups projected as subnets (ADR-0059).
-			IdentitySchemes:  []string{"vcenter.uuid", "vcenter.host.uuid", "dns.fqdn", "vcenter.network.moref"},
-			TombstoneSchemes: []string{"vcenter.uuid", "vcenter.host.uuid", "vcenter.network.moref"},
+			// identifies vSphere portgroups projected as subnets (ADR-0059). Read breadth
+			// (ADR-0115) adds region (vcenter.datacenter.moref) + availability-zone
+			// (vcenter.cluster.moref) — shared kinds, first projected here.
+			IdentitySchemes: []string{
+				"vcenter.uuid", "vcenter.host.uuid", "dns.fqdn", "vcenter.network.moref",
+				"vcenter.datacenter.moref", "vcenter.cluster.moref",
+			},
+			TombstoneSchemes: []string{
+				"vcenter.uuid", "vcenter.host.uuid", "vcenter.network.moref",
+				"vcenter.datacenter.moref", "vcenter.cluster.moref",
+			},
 		}
 		host := pluginhost.New(store, pluginv1.NewPluginServiceClient(conn), grant, log)
 		// The dual-verb INVOKE surface (ADR-0113): the vcenter/create-vm provisioning build Action,

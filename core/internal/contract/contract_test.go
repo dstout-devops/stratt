@@ -193,6 +193,17 @@ func TestNetSubnetUnionCoFidelity(t *testing.T) {
 	if covered, err := ValidateFacet("net.subnet", []byte(`{"cidr":"10.0.1.0/24","availabilityZone":"us-east-1a","state":"available","vpcId":"vpc-1"}`)); !covered || err != nil {
 		t.Fatalf("awsec2 net.subnet emission must validate: covered=%v err=%v", covered, err)
 	}
+	// vSphere's emission (plugins/vcenter/normalize.go, ADR-0115 F1): {name} ONLY — a portgroup has no
+	// cidr; its moref is the identity key and source is a label, so the shared union carries just the
+	// declared name. This is the third Source; it was the latent write-path break charter-guardian caught.
+	if covered, err := ValidateFacet("net.subnet", []byte(`{"name":"dc1-web-vlan100"}`)); !covered || err != nil {
+		t.Fatalf("vSphere net.subnet emission must validate: covered=%v err=%v", covered, err)
+	}
+	// The pre-fix vSphere shape (with the provider-local moref/kind/source keys) MUST be rejected — proof
+	// the closed union would have broken vSphere's write path, and that F1 removed exactly those keys.
+	if covered, err := ValidateFacet("net.subnet", []byte(`{"name":"pg","moref":"dvportgroup-1","kind":"DistributedVirtualPortgroup","source":"vsphere"}`)); !covered || err == nil {
+		t.Fatalf("the pre-F1 vSphere shape (moref/kind/source) must be rejected by the closed union: covered=%v err=%v", covered, err)
+	}
 	// A field no Source emits is rejected (the schema stays closed — drift is blocking).
 	if covered, err := ValidateFacet("net.subnet", []byte(`{"cidr":"10.0.0.0/24","undeclared":true}`)); !covered || err == nil {
 		t.Fatalf("net.subnet must reject undeclared keys (closed): covered=%v err=%v", covered, err)

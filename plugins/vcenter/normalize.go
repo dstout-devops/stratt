@@ -35,7 +35,16 @@ var vmProps = []string{
 var hostProps = []string{
 	"name",
 	"summary.hardware.uuid",
+	"parent", // the cluster (ClusterComputeResource) a host belongs to — the member-of edge
 }
+
+// Topology property sets (ADR-0115). Datacenters/clusters carry `parent` for the AZ→region
+// walk; folders are retrieved for the walk map only (not projected as Entities until slice 3).
+var (
+	datacenterProps = []string{"name", "parent"}
+	clusterProps    = []string{"name", "parent"}
+	folderProps     = []string{"parent"}
+)
 
 // networkProps is the minimum a vSphere network (portgroup/DVPG/opaque) needs to
 // project as a subnet — the name; the moref (identity) rides the object's Self ref.
@@ -44,20 +53,20 @@ var networkProps = []string{"name"}
 // normalizeNetwork maps one vSphere network — a standard portgroup, a distributed
 // virtual portgroup, or an opaque network — to a `subnet` Entity (ADR-0059). vSphere
 // is a network Source too: its portgroups co-exist in one estate with cloud subnets a
-// Crossplane Source projects (ADR-0060 multi-source, each its own per-source row). The
-// moref is the stable per-object identity; net.subnet carries the vSphere-known
-// attributes as an owned-but-uncovered Facet (no schema ahead of a consumer, §1.1).
+// Crossplane Source projects (ADR-0060 multi-source, each its own per-source row).
+//
+// net.subnet is a co-owned CLOSED union (ADR-0096); vSphere emits ONLY declared fields
+// (ADR-0115 F1). The moref is already the identity key (vcenter.network.moref) and the
+// Source is already a label — emitting them into the shared union would be rejected by
+// the write-path validator (undeclared keys, additionalProperties:false), so a portgroup
+// carries just the declared `name`. Its distinct-vs-shared portgroup TYPE is read live in
+// enumerate (n.Self.Type) for the on-switch edge, never stamped into the shared facet.
 func normalizeNetwork(n mo.Network) (*pluginv1.ObservedEntity, error) {
 	ref := n.Self.Value
 	if ref == "" {
 		return nil, fmt.Errorf("vcenter: network %q has no moref; cannot project without identity", n.Name)
 	}
-	facet, err := json.Marshal(map[string]any{
-		"name":   n.Name,
-		"moref":  ref,
-		"kind":   n.Self.Type, // Network | DistributedVirtualPortgroup | OpaqueNetwork
-		"source": "vsphere",
-	})
+	facet, err := json.Marshal(map[string]any{"name": n.Name})
 	if err != nil {
 		return nil, fmt.Errorf("vcenter: marshal facet net.subnet: %w", err)
 	}
@@ -122,6 +131,36 @@ func normalizeVM(vm mo.VirtualMachine) (*pluginv1.ObservedEntity, error) {
 	}
 
 	return &pluginv1.ObservedEntity{Kind: "vm", IdentityKeys: ids, Labels: labels, Facets: facets}, nil
+}
+
+// normalizeRegion maps a vSphere datacenter to the SHARED `region` kind (ADR-0059 / ADR-0115 D1) —
+// reused, not a vsphere-specific kind, so a cross-substrate topology View can span EC2 + vSphere. A
+// bare Entity: identity + name label, no Facet (region has no consumer yet, §1.1).
+func normalizeRegion(d mo.Datacenter) (*pluginv1.ObservedEntity, error) {
+	ref := d.Self.Value
+	if ref == "" {
+		return nil, fmt.Errorf("vcenter: datacenter %q has no moref; cannot project without identity", d.Name)
+	}
+	return &pluginv1.ObservedEntity{
+		Kind:         "region",
+		IdentityKeys: map[string]string{"vcenter.datacenter.moref": ref},
+		Labels:       map[string]string{"source": "vsphere", "vcenter.name": d.Name},
+	}, nil
+}
+
+// normalizeAvailabilityZone maps a vSphere cluster to the SHARED `availability-zone` kind (ADR-0059 /
+// ADR-0115 D1). A vSphere cluster is a host failure-domain ≈ an AZ (distinct from Stratt's Named Kind
+// Cell). Bare Entity — identity + name label, no Facet.
+func normalizeAvailabilityZone(cl mo.ClusterComputeResource) (*pluginv1.ObservedEntity, error) {
+	ref := cl.Self.Value
+	if ref == "" {
+		return nil, fmt.Errorf("vcenter: cluster %q has no moref; cannot project without identity", cl.Name)
+	}
+	return &pluginv1.ObservedEntity{
+		Kind:         "availability-zone",
+		IdentityKeys: map[string]string{"vcenter.cluster.moref": ref},
+		Labels:       map[string]string{"source": "vsphere", "vcenter.name": cl.Name},
+	}, nil
 }
 
 // normalizeHost maps one HostSystem to an ObservedEntity.
