@@ -597,11 +597,12 @@ func (a *Activities) EnsureRun(ctx context.Context, in RunInput, workflowID stri
 // (ansible_host, …). The core never authors a tool var: the Phase-0
 // ansible_connection:local stub is retired. A target with no mgmt.address carries an
 // empty Address (unroutable — the actuator fails loudly, never a silent local run, §1.8).
-func renderTarget(e types.Entity, address string) actuators.Target {
+func renderTarget(e types.Entity, address string, port int32) actuators.Target {
 	return actuators.Target{
 		EntityID: e.ID,
 		Name:     observedName(e),
 		Address:  address,
+		Port:     port,
 	}
 }
 
@@ -628,16 +629,21 @@ func observedName(e types.Entity) string {
 }
 
 // addressOf extracts the reachability coordinate from an mgmt.address Facet raw
-// (ADR-0084 schema {address, port?}). Empty ⇒ the Entity declared no reachability.
-func addressOf(raw json.RawMessage) string {
+// (ADR-0084 schema {address, port?}). Empty address ⇒ the Entity declared no
+// reachability; port 0 ⇒ it declared no port and the Actuator's tool default
+// applies. BOTH declared fields are read: the Facet schema is closed precisely so
+// this stays a two-field coordinate, and silently dropping `port` here would make
+// the schema advertise a knob no run could ever honor (§1.8).
+func addressOf(raw json.RawMessage) (string, int32) {
 	if len(raw) == 0 {
-		return ""
+		return "", 0
 	}
 	var a struct {
 		Address string `json:"address"`
+		Port    int32  `json:"port"`
 	}
 	_ = json.Unmarshal(raw, &a)
-	return a.Address
+	return a.Address, a.Port
 }
 
 // ResolveTargets resolves the View to its live Entity set and renders
@@ -660,7 +666,8 @@ func (a *Activities) ResolveTargets(ctx context.Context, in RunInput) (ResolvedT
 	}
 	out := ResolvedTargets{ViewVersion: v.Version}
 	for _, e := range ents {
-		out.Targets = append(out.Targets, renderTarget(e, addressOf(addrs[e.ID])))
+		addr, port := addressOf(addrs[e.ID])
+		out.Targets = append(out.Targets, renderTarget(e, addr, port))
 	}
 	return out, nil
 }
@@ -708,7 +715,8 @@ func (a *Activities) ResolveTargetsBySite(ctx context.Context, in RunInput) (Rou
 				site = loc.Site
 			}
 		}
-		bySite[site] = append(bySite[site], renderTarget(e, addressOf(addrs[e.ID])))
+		addr, port := addressOf(addrs[e.ID])
+		bySite[site] = append(bySite[site], renderTarget(e, addr, port))
 	}
 	names := make([]string, 0, len(bySite))
 	for s := range bySite {
@@ -1186,7 +1194,7 @@ func (a *Activities) executePlugin(ctx context.Context, in RunInput, site string
 	// path today; passing them to identity-rendering actuators is a follow-up.)
 	targets := make([]pluginhost.ApplyTarget, 0, len(resolved.Targets))
 	for _, t := range resolved.Targets {
-		targets = append(targets, pluginhost.ApplyTarget{Name: t.Name, Address: t.Address, Vars: t.Vars})
+		targets = append(targets, pluginhost.ApplyTarget{Name: t.Name, Address: t.Address, Port: t.Port, Vars: t.Vars})
 	}
 	// Plan-pinned Apply (ADR-0047 §8): a Step that names a Plan source MUST carry a
 	// Gate-approved digest. FAIL CLOSED on an empty digest — never a silent unpinned
@@ -1286,8 +1294,8 @@ func (a *Activities) executeJobPlugin(ctx context.Context, in RunInput, slice in
 	ptargets := make([]*pluginv1.ApplyTarget, 0, len(resolved.Targets))
 	for _, t := range resolved.Targets {
 		ids := map[string]string{"host.name": t.Name}
-		targets = append(targets, pluginhost.ApplyTarget{Name: t.Name, Address: t.Address, Vars: t.Vars, IdentityKeys: ids})
-		ptargets = append(ptargets, &pluginv1.ApplyTarget{Name: t.Name, Address: t.Address, Vars: t.Vars, IdentityKeys: ids})
+		targets = append(targets, pluginhost.ApplyTarget{Name: t.Name, Address: t.Address, Port: t.Port, Vars: t.Vars, IdentityKeys: ids})
+		ptargets = append(ptargets, &pluginv1.ApplyTarget{Name: t.Name, Address: t.Address, Port: t.Port, Vars: t.Vars, IdentityKeys: ids})
 	}
 	// Only the use-checked, authorized names cross (§2.5); material stays on the
 	// kubelet secretKeyRef mounts (MF7 — one authz chokepoint, injection at the pod).

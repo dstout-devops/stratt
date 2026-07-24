@@ -2531,7 +2531,15 @@ type ApplyTarget struct {
 	// var (ansible_host, etc.) FROM this, the core never authors one. Empty ⇒ the
 	// target declared no reachability (a resolve-time unroutable error upstream,
 	// never a silent local fallback, §1.8).
-	Address       string `protobuf:"bytes,4,opt,name=address,proto3" json:"address,omitempty"`
+	Address string `protobuf:"bytes,4,opt,name=address,proto3" json:"address,omitempty"`
+	// port is the OPTIONAL management port paired with `address`, resolved from the
+	// same mgmt.address Facet (ADR-0084, where it has always been a typed field).
+	// It crosses as its own typed field rather than fused into `address` as
+	// "host:port": a fused string would be an untyped seam the plugin has to
+	// re-parse, exactly what §1.1 forbids at a plugin boundary. 0 ⇒ the target
+	// declared no port; the connection actuator uses the tool's own default (ssh 22,
+	// winrm 5986) — the core never invents one.
+	Port          int32 `protobuf:"varint,5,opt,name=port,proto3" json:"port,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2592,6 +2600,13 @@ func (x *ApplyTarget) GetAddress() string {
 		return x.Address
 	}
 	return ""
+}
+
+func (x *ApplyTarget) GetPort() int32 {
+	if x != nil {
+		return x.Port
+	}
+	return 0
 }
 
 type DestroyRequest struct {
@@ -3860,12 +3875,13 @@ const file_stratt_plugin_v1_plugin_proto_rawDesc = "" +
 	"\x06output\x18\x04 \x01(\fR\x06output\x1a9\n" +
 	"\vConfigEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xc8\x02\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xdc\x02\n" +
 	"\vApplyTarget\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12T\n" +
 	"\ridentity_keys\x18\x02 \x03(\v2/.stratt.plugin.v1.ApplyTarget.IdentityKeysEntryR\fidentityKeys\x12;\n" +
 	"\x04vars\x18\x03 \x03(\v2'.stratt.plugin.v1.ApplyTarget.VarsEntryR\x04vars\x12\x18\n" +
-	"\aaddress\x18\x04 \x01(\tR\aaddress\x1a?\n" +
+	"\aaddress\x18\x04 \x01(\tR\aaddress\x12\x12\n" +
+	"\x04port\x18\x05 \x01(\x05R\x04port\x1a?\n" +
 	"\x11IdentityKeysEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\x1a7\n" +

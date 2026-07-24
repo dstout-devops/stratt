@@ -8,6 +8,8 @@ package ansible
 import (
 	"encoding/json"
 	"fmt"
+	"maps"
+	"slices"
 	"strings"
 
 	pluginv1 "github.com/dstout-devops/stratt/sdk/stratt/plugin/v1"
@@ -22,7 +24,12 @@ type Target struct {
 	// Address is the core's typed reachability coordinate (ADR-0084). The shim —
 	// not the core — renders it into ansible's connection var: the spine never
 	// authors ansible_host.
-	Address  string            `json:"address,omitempty"`
+	Address string `json:"address,omitempty"`
+	// Port is the core's optional typed management port paired with Address
+	// (ADR-0084). Same rule as Address: the SHIM turns it into ansible_port; the
+	// spine never authors an ansible key. 0 ⇒ undeclared, so ansible's own default
+	// applies — the shim never substitutes 22.
+	Port     int32             `json:"port,omitempty"`
 	Vars     map[string]string `json:"vars,omitempty"`
 	Identity map[string]string `json:"identity,omitempty"`
 }
@@ -49,11 +56,15 @@ const GatherFactsPlay = `- hosts: all
 // buildInventory renders the legible targets into an INI [all] group — one line per
 // target Name (ADR-0051 MF4: from the core-resolved set). The SHIM maps the core's
 // typed Address (ADR-0084) into ansible's connection var — the core never authored
-// an ansible_host: a real address becomes `ansible_host=<addr>`; the reserved value
-// `local` becomes `ansible_connection=local` (a target that explicitly declares it
-// runs on the control node); an empty Address emits no connection var, so an
-// unreachable host fails LOUDLY rather than silently running local (§1.8). Genuine
-// tool Vars (never a connection key from core) still render.
+// an ansible_host: a real address becomes `ansible_host=<addr>`, joined by
+// `ansible_port=<port>` when the Facet declared one; the reserved value `local`
+// becomes `ansible_connection=local` (a target that explicitly declares it runs on
+// the control node — a control-node connection has no network port, so Port is not
+// rendered there); an empty Address emits no connection var, so an unreachable host
+// fails LOUDLY rather than silently running local (§1.8). Genuine tool Vars (never a
+// connection key from core) still render, in sorted key order so the same resolved
+// target set always renders the SAME inventory — a byte-stable artifact is what makes
+// two Runs comparable during descent (§1.8).
 func buildInventory(targets []Target) string {
 	var b strings.Builder
 	b.WriteString("[all]\n")
@@ -64,9 +75,12 @@ func buildInventory(targets []Target) string {
 			b.WriteString(" ansible_connection=local")
 		case t.Address != "":
 			fmt.Fprintf(&b, " ansible_host=%s", t.Address)
+			if t.Port > 0 {
+				fmt.Fprintf(&b, " ansible_port=%d", t.Port)
+			}
 		}
-		for k, v := range t.Vars {
-			fmt.Fprintf(&b, " %s=%s", k, v)
+		for _, k := range slices.Sorted(maps.Keys(t.Vars)) {
+			fmt.Fprintf(&b, " %s=%s", k, t.Vars[k])
 		}
 		b.WriteByte('\n')
 	}

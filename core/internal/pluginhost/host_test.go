@@ -1172,3 +1172,52 @@ func TestHost_WireCred_VaultCoordinates(t *testing.T) {
 		t.Fatal("MF-C: a relay-backed host must NEVER attach vault coordinates either")
 	}
 }
+
+// TestHost_GovernStream_RedTerminalIsBelieved pins the ASYMMETRIC trust in the
+// terminal's ok. The fold has always refused to trust a GREEN terminal (the
+// per-target results must agree) — but it also discarded a RED one, so a plugin that
+// declared its own failure with no per-target result folded SUCCEEDED. That silently
+// greened every plugin-declared failure: invalid params, an SCM refusal, a git-clone
+// or runner-spawn failure, a playbook syntax error, and a run that actuated no host
+// at all (ADR-0117 D5c, whose whole terminal was inert without this).
+func TestHost_GovernStream_RedTerminalIsBelieved(t *testing.T) {
+	stream := func(t *testing.T, resp *pluginv1.ApplyResponse) pluginhost.RawApplyResult {
+		t.Helper()
+		b, err := protojson.Marshal(resp)
+		if err != nil {
+			t.Fatalf("marshal: %v", err)
+		}
+		lines, i := [][]byte{b}, 0
+		next := func() ([]byte, error) {
+			if i >= len(lines) {
+				return nil, io.EOF
+			}
+			b := lines[i]
+			i++
+			return b, nil
+		}
+		h := pluginhost.New(nil, nil, vcenterGrant(pluginhost.TierCommunity, []string{"vcenter.uuid"}), discardLog())
+		raw, err := h.GovernStream(context.Background(), pluginhost.NewJobStream(next),
+			[]pluginhost.ApplyTarget{{Name: "web-1"}}, nil)
+		if err != nil {
+			t.Fatalf("governStream: %v", err)
+		}
+		return raw
+	}
+
+	// A plugin declaring FAILURE, with zero ItemResults — the vacuous-run shape.
+	red := stream(t, &pluginv1.ApplyResponse{Event: &pluginv1.TaskEvent{
+		Terminal: true, Ok: false, Message: "no host was actuated",
+	}})
+	if red.Succeeded {
+		t.Fatal("a terminal declaring Ok=false with zero per-target results must NOT fold Succeeded")
+	}
+
+	// The converse must still hold: a green terminal alone is NOT trusted to prove
+	// success beyond itself, but with no in-set failure it remains the success signal
+	// (guardian fix #3 — unchanged by the asymmetry).
+	green := stream(t, &pluginv1.ApplyResponse{Event: &pluginv1.TaskEvent{Terminal: true, Ok: true}})
+	if !green.Succeeded {
+		t.Fatal("a green terminal with no in-set failure must still fold Succeeded")
+	}
+}

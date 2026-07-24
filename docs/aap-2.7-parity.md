@@ -43,7 +43,7 @@ in the `awxfacade` wire layer.
 | Job Templates | 🟢 | [orchestrate/](../core/internal/orchestrate/), ansible Actuator [plugins/ansible/](../plugins/ansible/), ADR-0051 |
 | Workflow DAG + approval nodes | 🟢 | [orchestrate/workflow.go](../core/internal/orchestrate/workflow.go) (`RunDAG`, gates), ADR-0011 |
 | Projects (SCM content) | 🟢 | in-EE git clone [plugins/ansible/shim.go](../plugins/ansible/shim.go), ADR-0025 |
-| Inventories (+ dynamic/smart/constructed) | 🟢 | Views [graph/reader.go](../core/internal/graph/reader.go) + Syncers; façade `viewToInventory`, ADR-0012/0024 |
+| Inventories (+ dynamic/smart/constructed) | 🟢 | Views [graph/reader.go](../core/internal/graph/reader.go) + Syncers; façade `viewToInventory`, ADR-0012/0024. Host connection vars are the closed `mgmt.address` coordinate — `ansible_host` **and `ansible_port`** (ADR-0084, completed by ADR-0117 D5a). **Inventory groups are deliberately not rendered**: a View *is* the group (ADR-0055 G3), imported AWX groups land as `awx.group.name` labels (ADR-0025), and run-time narrowing is `params.limit` (ADR-0117 D1/D5b) |
 | Credentials + injectors | 🟢 | CredentialRef + SecretBroker [sdk/secretbroker/](../sdk/secretbroker/), ADR-0052 |
 | Execution Environments | 🟢 | [ee/Dockerfile](../ee/Dockerfile) (ansible-runner `/runner` contract), ADR-0051 |
 | Schedules | 🟢 | [triggers/reconcile.go](../core/internal/triggers/reconcile.go) (Temporal Schedules), ADR-0010 |

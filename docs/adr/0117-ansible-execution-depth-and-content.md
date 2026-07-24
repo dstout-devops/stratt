@@ -11,6 +11,23 @@
   that `eeImage` was "already honored" was FALSE — it is read by nothing, so per-Step EE selection is a
   prerequisite, resolved content-blind by **D3a** (image on the Actuator declaration, not a param);
   (ii) **roles** were omitted from D3 and are now in scope alongside collections.
+  **Amended again 2026-07-24 (still Proposed), from the inventory-depth survey:** **D5** added — (a) ADR-0084's
+  `port` was declarable but read by nothing, so the closed-coordinate justification ("every field is pulled by
+  a consumer") did not hold; it now crosses the port typed and renders as `ansible_port`; (b) inventory
+  **groups are refused** (a View _is_ the group; no source of truth for subsets exists);
+  (c) a run that actuates **zero** hosts now FAILS — `ansible-playbook` exits 0 when a play matches nothing,
+  and the hub's fold reported it green.
+  **charter-guardian on D5 (2026-07-24): CHANGES REQUIRED → resolved.** V1 — D5c was **inert**: `govern`
+  discarded the terminal's `ok`, so the shim's failure never reached the fold; fixed by asymmetric trust
+  (a red terminal is believed, a green one still is not), which also closed the same hole for every
+  `emitFatal` path. V2 — actuation counted any host, including ansible's implicit localhost, and is now gated
+  on the resolved set. F1/F5 — the message asserted an unobserved cause and named `params.limit` as
+  narrowing-to-empty; **live-verified against the EE image** that limit-to-empty is rc=**1** (already loud)
+  while a non-matching play `hosts:` pattern is the real rc=0 path, and the wording now branches on ansible's
+  own signal. F3 — D5b **miscited ADR-0055 G3** as a prohibition when it is a permitted charter-safe gap;
+  re-grounded on the absence of any source of truth for subsets (§1.2/§9). F4 — `address: local` with a
+  `port` was accepted and rendered by nothing (the very defect D5a fixes) and is now rejected. F2 — the WARN
+  level is honestly recorded as not yet operator-visible, with the plumbing booked as follow-up (g).
 - **Date:** 2026-07-24
 - **Deciders:** steward
 - **Charter sections:** §1.1 (type the seams), §1.5 (sovereign contracts, pinned + hash-verified), §1.4
@@ -252,6 +269,83 @@ This ADR is PLG-1's first application, and it resolves it for Ansible:
   Dev's conveniences — a reachable in-cluster sshd pod, a floci instance on our own docker network — are a
   **harness, never the contract**.
 
+### D5 — Inventory depth is the _existing_ coordinate finished, not a new grouping model; and a run that actuates nothing is a **failure**
+
+"Inventories" was one of the five nouns this work was scoped against. Surveying it produced one thing to
+finish, one thing to **refuse**, and one hole to close.
+
+**D5a — Finish the `mgmt.address` coordinate: render `port`.** ADR-0084 defined the Facet as the closed
+pair `{address, port?}` and justified the closure on the grounds that **every field is pulled by a
+consumer**. That was not true: `addressOf` unmarshalled only `address`, so `port` was declarable in the
+schema and reachable by no Run — a Contract advertising a knob nothing honors, the same defect D2 corrects
+for `check`. `port` now crosses the plugin port as its **own typed `int32` field** (`ApplyTarget.port`,
+field 5 — additive, `buf breaking`-clean), and the ansible shim renders `ansible_port` from it, exactly as
+it renders `ansible_host` from `address`. It is deliberately **not** fused into `address` as `"host:port"`:
+a fused string is an untyped seam the plugin must re-parse, which §1.1 forbids at a plugin boundary. `0` ⇒
+undeclared, and the tool's own default applies — the core never invents `22`. The declared-estate Syncer
+(the Facet's write-owner) gains the matching `port:` field; a port declared without an address is
+**rejected**, not dropped, because half a coordinate reaches nothing.
+
+**D5b — No inventory groups. The View _is_ the group.** AWX-parity instinct says "add groups to the
+rendered inventory." Rejected — but **not** on the authority of [ADR-0055](0055-estate-composition.md) **G3**,
+which an earlier draft of this decision miscited. G3 is a row in that ADR's _gap_ table marked "charter-safe
+(guard OR-creep)", and ADR-0055 decision 3 says explicitly that _"charter-safe gaps (G5, G3) may proceed as
+ordinary typed extensions with a short ADR each"_ — a green light, not a prohibition. The refusal stands on
+its own merits instead:
+
+- **There is no source of truth to render from.** `types.View` has no notion of a named subset and
+  `ViewSelector` is a single AND-conjunction (`types/view.go`) — a View resolves to exactly one flat set. A
+  group renderer would therefore have to **invent** its grouping inside the ansible plugin, from labels it
+  chose by convention. That is a second truth for estate structure, living neither in Git nor the graph
+  (§1.2), and a grouping ontology the core never modelled (§9 / ADR-0055 guardrail 1).
+- **A View already _is_ the group** — that is ADR-0055's framing of the same primitive, and
+  [ADR-0025](0025-awx-importer-and-ansible-scm-content-ref.md) already made the call in this direction by
+  downgrading imported AWX groups to `awx.group.name` **labels**. Labels are the selector primitive, so the
+  shipped answer to "target a subgroup" is **another View**, with `params.limit` (D1) for run-time narrowing.
+
+Anyone who still wants inventory groups must first give **Views** a sub-grouping model — an ADR-0055
+extension in its own right (which G3 permits), not an ansible-plugin feature. Doing it plugin-side would
+prejudge that design and strand it behind one tool.
+
+**D5c — A run that actuates no host FAILS — _and_ the spine must believe a plugin that declares its own
+failure.** `ansible-playbook` exits **0** when a play's `hosts:` pattern names nothing in the rendered
+inventory. **Live-verified** against the EE image, not assumed: such a run emits
+`playbook_on_no_hosts_matched` and `ansible-runner` exits `0`. The hub folds
+`Succeeded = sawTerminal && !failed` where `failed` is set only by a per-target result — and zero hosts means
+zero per-target results — so the Run reported **green having changed nothing**. The §1.8 failure mode in its
+purest form.
+
+The fix is in two places, because the shim's half alone was **inert**:
+
+1. **Shim (content-expertise).** It counts hosts that produced a terminal per-host result **and are in the
+   core-resolved set**, and on `rc=0` with a non-empty resolved set and **zero** actuation emits a terminal
+   `ok=false`. Membership matters: a play using `hosts: localhost` (ansible's implicit localhost, absent from
+   the rendered inventory) produces a result the hub rejects as a confused deputy (MF4), so counting it would
+   let a run that touched nothing in the View still read green. The message branches on ansible's own signal
+   rather than asserting a cause it did not observe — with `no_hosts_matched` the pattern demonstrably matched
+   nothing; without it the play matched but produced no result (a play with no tasks), a different fix for the
+   operator. This lives in the shim, not the spine: only the ansible plugin knows a play can no-op (§1.4).
+2. **Spine (content-blind).** `pluginhost.govern` **discarded the terminal's `ok` entirely** — the comment
+   read _"ev.GetOk() intentionally ignored"_ — so the shim's `ok=false` changed nothing. Trust is now
+   **asymmetric**: a **green** terminal is still not believed (the per-target results must agree — the
+   original guardian fix is intact), but a **red** one is, because a plugin declaring its own failure is the
+   most reliable signal available. This was a far larger hole than the one D5c set out to close: it silently
+   greened **every** plugin-declared failure that produced no per-target result — invalid params, an SCM
+   refusal, a git-clone or runner-spawn failure, a playbook syntax error. The rule is content-blind and
+   applies to every plugin, not just ansible.
+
+Two things are deliberately **not** claimed. `params.limit` narrowing the host list to **empty** is _not_ an
+rc=0 path — ansible raises "…leaves us with no hosts to target" and exits `1` (also live-verified), so it
+already failed loudly; `limit` is named in the diagnosis only as a possibly-disjoint contributor, never as
+the cause. And the check is **not** "every target produced a result": narrowing 3 targets to 1 with `limit`
+is a requested narrowing. Only actuating _nothing_ is vacuous.
+
+Ansible's `playbook_on_no_hosts_matched` is also raised to **WARN**, which is the correct level at the port
+and keeps _partial_ vacuity (one play of several no-opping) distinguishable. Note honestly that this is
+**not yet visible to an operator as a warning**: `TaskEvent.Level` is dropped at the dispatcher and
+`types.RunEvent` has no level field, so the event surfaces by kind and message only. Carrying level through
+RunEvent → API → UI is booked as follow-up (g).
+
 ## Charter alignment
 
 - **§1.1 (type the seams).** The Contract _is_ the plugin boundary; D1 types it rather than opening an
@@ -288,7 +382,10 @@ This ADR is PLG-1's first application, and it resolves it for Ansible:
   parity score. Makes **privilege escalation a declared, reviewable, audited** value rather than an opaque
   flag string — with Control-gating a booked follow-up via a content-blind signal (D1), not a claim made
   today. Gives content a supply-chain story (pinned, hash-verified, digest-pinned EE)
-  consistent with §7.3. Resolves PLG-1 for Ansible and sets the pattern for every later plugin.
+  consistent with §7.3. Resolves PLG-1 for Ansible and sets the pattern for every later plugin. **D5c's spine
+  half is the widest win here and was not the goal**: because `govern` discarded a red terminal, every
+  plugin-declared failure with no per-target result folded SUCCEEDED — for every plugin, not just ansible.
+  That is now closed platform-wide.
 - **Negative / trade-offs.** A v5 Contract plus a build-time content path is real work, and baking content
   into EEs pushes **EE proliferation** — which makes the `ansible-builder` **factory (parity P5) more
   urgent, not less**; until it exists, EE builds stay hand-rolled. Build-time resolution trades run-time
@@ -305,6 +402,11 @@ This ADR is PLG-1's first application, and it resolves it for Ansible:
   **narrow or close PLG-1** in `enterprise-readiness.md`. (f) A demo exercising the new knobs end to end —
   the app-install + certificate scenario is that demo, and per the demo-library experience
   ([ADR-0116](0116-demo-library.md)) it should be treated as the integration test for this work.
+  (g) **Carry `TaskEvent.Level` through to the operator** — it is dropped at the dispatcher and
+  `types.RunEvent` has no level field, so D5c's WARN on a no-op play is correct at the port but invisible as
+  a warning in the API/UI. Needs a `RunEvent.Level` + OpenAPI + UI slice.
+  (h) **A live demo asserting the vacuous-run guard** — the rc=0 behaviour behind D5c was verified by hand
+  against the EE image in the session that shipped it; that proof belongs in a demo so it cannot rot.
 
 ## Alternatives considered
 

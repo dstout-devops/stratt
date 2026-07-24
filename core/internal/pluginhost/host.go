@@ -673,6 +673,7 @@ func (h *Host) Invoke(ctx context.Context, runID, action string, args []byte, dr
 type ApplyTarget struct {
 	Name         string
 	Address      string
+	Port         int32
 	IdentityKeys map[string]string
 	Vars         map[string]string
 }
@@ -873,7 +874,7 @@ func (h *Host) ApplyRaw(ctx context.Context, req ApplyInvoke) (RawApplyResult, e
 	targets := make([]*pluginv1.ApplyTarget, 0, len(req.Targets))
 	for _, t := range req.Targets {
 		resolved[t.Name] = true
-		targets = append(targets, &pluginv1.ApplyTarget{Name: t.Name, Address: t.Address, IdentityKeys: t.IdentityKeys, Vars: t.Vars})
+		targets = append(targets, &pluginv1.ApplyTarget{Name: t.Name, Address: t.Address, Port: t.Port, IdentityKeys: t.IdentityKeys, Vars: t.Vars})
 	}
 	creds := make([]*pluginv1.CredentialRef, 0, len(req.CredentialRefs))
 	for _, n := range req.CredentialRefs {
@@ -962,7 +963,19 @@ func (h *Host) govern(ctx context.Context, stream applyStream, resolved, writeSc
 				out.Checkpoint = cp
 			}
 			if ev.GetTerminal() {
-				sawTerminal = true // ev.GetOk() intentionally ignored — fold below
+				sawTerminal = true
+				// ASYMMETRIC trust in the terminal's ok (§1.8). A GREEN terminal is
+				// still not believed — the fold below requires the per-target results
+				// to agree, so a plugin cannot declare success it did not achieve
+				// (guardian fix #3, intact). A RED terminal IS believed: a plugin
+				// declaring its OWN failure is the most reliable signal there is, and
+				// discarding it silently converted every plugin-declared failure with
+				// no per-target result into a SUCCEEDED Run — invalid params, an SCM
+				// refusal, a git-clone or runner-spawn failure, a playbook syntax
+				// error, and a run that actuated no host at all (ADR-0117 D5c).
+				if !ev.GetOk() {
+					failed = true
+				}
 			}
 		}
 		// Per-target status: confused-deputy gated, sticky-fail folded.
@@ -1056,8 +1069,10 @@ func (h *Host) govern(ctx context.Context, stream applyStream, resolved, writeSc
 			}
 		}
 	}
-	// Core-side fold (guardian fix #3): the plugin's terminal ok is NOT trusted.
-	// A stream that never terminated is also a failure (partial/torn stream).
+	// Core-side fold (guardian fix #3): a plugin's terminal ok is not trusted to
+	// declare SUCCESS — the per-target results must agree. A terminal that declared
+	// FAILURE is believed (see above). A stream that never terminated is also a
+	// failure (partial/torn stream).
 	out.Succeeded = sawTerminal && !failed
 	return out, nil
 }

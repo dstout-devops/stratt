@@ -1,6 +1,7 @@
 package orchestrate
 
 import (
+	"encoding/json"
 	"fmt"
 	"testing"
 	"time"
@@ -113,5 +114,37 @@ func TestObservedNameIsToolBlind(t *testing.T) {
 	// Fallback to the stable entity id when no source stamped a name.
 	if got := observedName(types.Entity{ID: "e4", Labels: map[string]string{"mgmt.site": "x"}}); got != "e4" {
 		t.Fatalf("fallback: got %q want e4", got)
+	}
+}
+
+// TestAddressOfReadsBothCoordinateFields pins that the core resolves the WHOLE
+// closed mgmt.address Facet (ADR-0084 {address, port?}) into the typed Target, not
+// just the address. The port was declarable in the Facet schema but silently dropped
+// here, so the schema advertised a knob no Run could honor (§1.8). Both fields cross
+// the plugin port TYPED — the core never fuses them into "host:port" for a plugin to
+// re-parse (§1.1), and never invents a default port (that is the tool's business).
+func TestAddressOfReadsBothCoordinateFields(t *testing.T) {
+	cases := map[string]struct {
+		raw      string
+		wantAddr string
+		wantPort int32
+	}{
+		"address and port": {`{"address":"10.0.0.7","port":2222}`, "10.0.0.7", 2222},
+		"address only":     {`{"address":"10.0.0.7"}`, "10.0.0.7", 0},
+		"reserved local":   {`{"address":"local"}`, "local", 0},
+		"empty raw":        {``, "", 0},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			addr, port := addressOf(json.RawMessage(tc.raw))
+			if addr != tc.wantAddr || port != tc.wantPort {
+				t.Fatalf("addressOf(%s) = (%q, %d), want (%q, %d)", tc.raw, addr, port, tc.wantAddr, tc.wantPort)
+			}
+		})
+	}
+	// The resolved coordinate reaches the Target typed and whole.
+	addr, port := addressOf(json.RawMessage(`{"address":"10.0.0.7","port":2222}`))
+	if got := renderTarget(types.Entity{ID: "e1"}, addr, port); got.Address != "10.0.0.7" || got.Port != 2222 {
+		t.Fatalf("renderTarget dropped part of the coordinate: %+v", got)
 	}
 }
