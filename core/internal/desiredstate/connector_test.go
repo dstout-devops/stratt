@@ -121,6 +121,30 @@ func TestActuatorValidation(t *testing.T) {
 	}
 }
 
+// TestDecommissionsValidation proves ADR-0114 D4's decommissions map is validated symmetrically to
+// provisions: only on a provisioning provider, bare Intent kinds, non-empty teardown Workflows.
+func TestDecommissionsValidation(t *testing.T) {
+	base := func(dec map[string]string, provides []string) types.Actuator {
+		return types.Actuator{Name: "vcenter", PluginIdentity: "vcenter", Address: "a", Provides: provides, Decommissions: dec}
+	}
+	// Valid: a provisioning provider with a bare-kind → teardown-Workflow map.
+	if err := ValidateActuator(base(map[string]string{"Compute": "vsphere-vm-teardown"}, []string{"provisioning"})); err != nil {
+		t.Fatalf("a valid decommissions map must validate: %v", err)
+	}
+	// decommissions without provides:[provisioning] is rejected.
+	if err := ValidateActuator(base(map[string]string{"Compute": "t"}, nil)); err == nil {
+		t.Fatal("decommissions on a non-provisioning provider must be rejected")
+	}
+	// Intent/-prefixed kind is rejected (must be bare).
+	if err := ValidateActuator(base(map[string]string{"Intent/Compute": "t"}, []string{"provisioning"})); err == nil {
+		t.Fatal("a decommissions kind with the Intent/ prefix must be rejected")
+	}
+	// Empty teardown Workflow is rejected.
+	if err := ValidateActuator(base(map[string]string{"Compute": ""}, []string{"provisioning"})); err == nil {
+		t.Fatal("an empty teardown Workflow must be rejected")
+	}
+}
+
 // TestParseRealEstate validates the migrated estate declarations (ADR-0103 S7) parse through
 // the full ParseDir the daemon uses.
 func TestParseRealEstate(t *testing.T) {

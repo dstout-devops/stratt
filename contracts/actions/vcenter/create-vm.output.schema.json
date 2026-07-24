@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "stratt:contract:actions/vcenter/create-vm.output:v1",
+  "title": "vcenter/create-vm output",
+  "description": "Output Contract: the provisioned VM's identity — uuid is the vcenter.uuid scheme the Syncer keys on (ADR-0113 D3); bindable into a downstream configure Step ({{.steps.<name>.outputs.uuid}}).",
+  "type": "object",
+  "properties": {
+    "uuid": { "type": "string" },
+    "moref": { "type": "string" }
+  },
+  "required": ["uuid"],
+  "additionalProperties": false
+}

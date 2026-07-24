@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "stratt:contract:actions/vcenter/create-portgroup.output:v1",
+  "title": "vcenter/create-portgroup output",
+  "description": "Output Contract: the provisioned portgroup's identity — moref is the vcenter.network.moref scheme the Syncer keys subnets on (ADR-0113 D3); bindable into a downstream Step ({{.steps.<name>.outputs.moref}}).",
+  "type": "object",
+  "properties": {
+    "moref": { "type": "string" }
+  },
+  "required": ["moref"],
+  "additionalProperties": false
+}

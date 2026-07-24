@@ -13,6 +13,8 @@ import (
 	"fmt"
 	"math"
 	"sort"
+	"strconv"
+	"strings"
 
 	"github.com/dstout-devops/stratt/types"
 )
@@ -119,6 +121,44 @@ func desired(in Intent) []Instance {
 		out = append(out, Instance{Name: InstanceName(in.Spec.NamePrefix, i, in.Spec.Count), Intent: in.Name, Ordinal: i})
 	}
 	return out
+}
+
+// Excess returns the BUILT instances of an Intent that are no longer desired — the count-down teardown
+// set (ADR-0114 D4): built correlation names matching this Intent's `<prefix>-<ordinal>` scheme whose
+// ordinal exceeds the current count. Returned ORDINAL-DESCENDING so a deterministic, exclusive selection
+// tears down the highest-ordinal instances first (web-05, web-04 …) — never a §2.4 tiebreak over which
+// instance dies. Pure; the caller pairs each name with its Entity identity to build the gated teardown.
+func Excess(in Intent, built map[string]bool) []Instance {
+	desiredSet := map[string]bool{}
+	for _, d := range desired(in) {
+		desiredSet[d.Name] = true
+	}
+	var out []Instance
+	for name := range built {
+		if desiredSet[name] {
+			continue
+		}
+		if ord, ok := instanceOrdinal(in.Spec.NamePrefix, name); ok {
+			out = append(out, Instance{Name: name, Intent: in.Name, Ordinal: ord})
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Ordinal > out[j].Ordinal })
+	return out
+}
+
+// instanceOrdinal parses a built correlation name of the form "<prefix>-<digits>" and returns its
+// ordinal. Reports false when the name does not belong to this prefix's fleet (so a differently-prefixed
+// Intent's instances are never mis-attributed).
+func instanceOrdinal(prefix, name string) (int, bool) {
+	rest, ok := strings.CutPrefix(name, prefix+"-")
+	if !ok {
+		return 0, false
+	}
+	ord, err := strconv.Atoi(rest)
+	if err != nil || ord < 1 {
+		return 0, false
+	}
+	return ord, true
 }
 
 // ── Named-singleton provisioning (ADR-0059 decision 4) ──────────────────────

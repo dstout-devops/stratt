@@ -1,0 +1,10 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "stratt:contract:actions/vcenter/snapshot-revert.output:v1",
+  "title": "vcenter/snapshot-revert output",
+  "description": "The VM identity + snapshot name reverted to.",
+  "type": "object",
+  "properties": { "uuid": { "type": "string" }, "snapshot": { "type": "string" } },
+  "required": ["uuid"],
+  "additionalProperties": false
+}

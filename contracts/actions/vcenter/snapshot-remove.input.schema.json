@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "stratt:contract:actions/vcenter/snapshot-remove.input:v1",
+  "title": "vcenter/snapshot-remove input",
+  "description": "Remove a named snapshot from an existing VM, by vcenter.uuid (ADR-0114).",
+  "type": "object",
+  "properties": {
+    "uuid": { "type": "string" },
+    "name": { "type": "string" },
+    "removeChildren": { "type": "boolean", "description": "also remove child snapshots" }
+  },
+  "required": ["uuid", "name"],
+  "additionalProperties": false
+}

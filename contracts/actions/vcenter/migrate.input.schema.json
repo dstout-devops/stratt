@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "stratt:contract:actions/vcenter/migrate.input:v1",
+  "title": "vcenter/migrate input",
+  "description": "Relocate (vMotion) an existing VM by vcenter.uuid to a named host and/or resource pool (ADR-0114). Empty targets keep the current placement.",
+  "type": "object",
+  "properties": {
+    "uuid": { "type": "string" },
+    "host": { "type": "string", "description": "target host name" },
+    "pool": { "type": "string", "description": "target resource pool name" }
+  },
+  "required": ["uuid"],
+  "additionalProperties": false
+}

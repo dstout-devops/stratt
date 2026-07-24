@@ -982,18 +982,58 @@ func run(ctx context.Context, log *slog.Logger) error {
 		}
 		defer conn.Close()
 		grant := pluginhost.Grant{
-			PluginIdentity:  env("STRATT_VCENTER_PLUGIN_ID", "vcenter"),
-			Tier:            pluginhost.Tier(env("STRATT_VCENTER_TIER", "trusted")),
-			Source:          types.Source{Kind: "vcenter", Name: sourceName, Endpoint: os.Getenv("STRATT_VCENTER_URL")},
-			FacetNamespaces: []string{"vm.config", "vm.runtime", "net.guest", "net.subnet"},
-			LabelKeys:       []string{"vcenter.name", "source"},
+			PluginIdentity: env("STRATT_VCENTER_PLUGIN_ID", "vcenter"),
+			Tier:           pluginhost.Tier(env("STRATT_VCENTER_TIER", "trusted")),
+			Source:         types.Source{Kind: "vcenter", Name: sourceName, Endpoint: os.Getenv("STRATT_VCENTER_URL")},
+			FacetNamespaces: []string{
+				"vm.config", "vm.runtime", "net.guest", "net.subnet",
+				"storage.datastore", "compute.pool", "net.dvswitch",
+			},
+			LabelKeys: []string{"vcenter.name", "source"},
 			// dns.fqdn is a shared cross-source scheme: only honored because the
 			// grant lists it AND the tier is trusted (finding #4). vcenter.network.moref
-			// identifies vSphere portgroups projected as subnets (ADR-0059).
-			IdentitySchemes:  []string{"vcenter.uuid", "vcenter.host.uuid", "dns.fqdn", "vcenter.network.moref"},
-			TombstoneSchemes: []string{"vcenter.uuid", "vcenter.host.uuid", "vcenter.network.moref"},
+			// identifies vSphere portgroups projected as subnets (ADR-0059). Read breadth
+			// (ADR-0115) adds region (vcenter.datacenter.moref) + availability-zone
+			// (vcenter.cluster.moref) — shared kinds, first projected here.
+			IdentitySchemes: []string{
+				"vcenter.uuid", "vcenter.host.uuid", "dns.fqdn", "vcenter.network.moref",
+				"vcenter.datacenter.moref", "vcenter.cluster.moref", "vcenter.datastore.moref",
+				"vcenter.pool.moref", "vcenter.dvs.uuid", "vcenter.folder.moref",
+			},
+			TombstoneSchemes: []string{
+				"vcenter.uuid", "vcenter.host.uuid", "vcenter.network.moref",
+				"vcenter.datacenter.moref", "vcenter.cluster.moref", "vcenter.datastore.moref",
+				"vcenter.pool.moref", "vcenter.dvs.uuid", "vcenter.folder.moref",
+			},
 		}
 		host := pluginhost.New(store, pluginv1.NewPluginServiceClient(conn), grant, log)
+		// The dual-verb INVOKE surface (ADR-0113): the vcenter/create-vm provisioning build Action,
+		// on the SAME host as the OBSERVE Syncer below — so the build output's vcenter.uuid identity
+		// correlates structurally with what the Syncer observes (ADR-0113 D1/D3). dry-runnable.
+		if err := registerPluginAction("vcenter/create-vm", host, true); err != nil {
+			return err
+		}
+		// vcenter/create-portgroup (ADR-0113 D4): the Subnet builder — a VLAN-tagged DVS portgroup.
+		// The VLAN is composed via an explicit netbox/ipam-resolve Step in vsphere-subnet-build, not
+		// resolve-inject; this Action just takes the resolved vlanId as a param. dry-runnable.
+		if err := registerPluginAction("vcenter/create-portgroup", host, true); err != nil {
+			return err
+		}
+		// vcenter lifecycle Actions (ADR-0114): power/reconfigure/delete on an existing VM by uuid, on
+		// the same host as the OBSERVE Syncer. All dry-runnable; delete-vm relies on the Syncer's next
+		// full-sync to tombstone (ADR-0042) and is idempotent-on-absence (D2).
+		for _, op := range []string{
+			"vcenter/power-off", "vcenter/power-on", "vcenter/reset", "vcenter/suspend",
+			"vcenter/shutdown-guest", "vcenter/reconfigure", "vcenter/delete-vm",
+			// snapshot + mobility + portgroup lifecycle (ADR-0114 slice 2)
+			"vcenter/snapshot-create", "vcenter/snapshot-revert", "vcenter/snapshot-remove",
+			"vcenter/migrate", "vcenter/clone",
+			"vcenter/reconfigure-portgroup", "vcenter/delete-portgroup",
+		} {
+			if err := registerPluginAction(op, host, true); err != nil {
+				return err
+			}
+		}
 		controllers = append(controllers, homeSupervise(sourceName, host.Register, func(cctx context.Context) error {
 			return host.SyncLoop(cctx, interval)
 		}))

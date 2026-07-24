@@ -1,0 +1,11 @@
+# vsphere-dev — the CredentialRef the vcenter/create-vm Action binds (§2.5 / ADR-0009 / ADR-0113).
+# An Action's CredentialRef use-check is its ONLY authz gate (core/internal/orchestrate ExecuteAction
+# refuses a credential-free Action, "ActionUngated") — so even a vcsim build must carry one. The
+# vcenter plugin connects to vCenter with its OWN broker-resolved credentials at pod spawn (the Syncer
+# already does), so no material is resolved through this ref here — it is a DELIBERATE gate-only ref
+# (gateOnly, ADR-0052): the launching Principal's use-check is the point.
+name: vsphere-dev
+ownerTeam: platform-admins
+backend: k8s-secret
+gateOnly: true
+locator: { namespace: stratt, name: vsphere-dev-authz }

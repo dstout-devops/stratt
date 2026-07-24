@@ -11,6 +11,7 @@ import (
 	"github.com/vmware/govmomi/vim25"
 	"github.com/vmware/govmomi/vim25/mo"
 	"github.com/vmware/govmomi/vim25/soap"
+	vimtypes "github.com/vmware/govmomi/vim25/types"
 	"google.golang.org/grpc"
 
 	pluginv1 "github.com/dstout-devops/stratt/sdk/stratt/plugin/v1"
@@ -47,15 +48,75 @@ func (s *Server) GetManifest(context.Context, *pluginv1.GetManifestRequest) (*pl
 		PluginId:        s.cfg.PluginID,
 		ProtocolVersion: "v1",
 		Class:           pluginv1.PluginClass_PLUGIN_CLASS_SYNCER,
-		Verbs:           []pluginv1.Verb{pluginv1.Verb_VERB_OBSERVE},
+		// Dual-verb (ADR-0060/0113): OBSERVE the estate, INVOKE the provisioning build Actions.
+		Verbs: []pluginv1.Verb{pluginv1.Verb_VERB_OBSERVE, pluginv1.Verb_VERB_INVOKE},
 		Contracts: []*pluginv1.ContractDecl{
 			{SchemaId: "vm.config"},
 			{SchemaId: "vm.runtime"},
 			{SchemaId: "net.guest"},
-			{SchemaId: "net.subnet"}, // vSphere portgroups project as subnets (ADR-0059)
+			{SchemaId: "net.subnet"},        // vSphere portgroups project as subnets (ADR-0059)
+			{SchemaId: "storage.datastore"}, // datastore capacity/free/type (ADR-0115, pinned)
+			{SchemaId: "compute.pool"},      // compute-pool cpu/mem allocation (ADR-0115, uncovered)
+			{SchemaId: "net.dvswitch"},      // DVS name/uuid/ports (ADR-0115, uncovered)
 		},
-		TombstoneSchemes: []string{"vcenter.uuid", "vcenter.host.uuid", "vcenter.network.moref"},
+		// Tombstone schemes per kind (ADR-0096 observe-all + full-sync tombstone). Read breadth
+		// (ADR-0115) adds region (datacenter) + availability-zone (cluster) — shared kinds — plus
+		// datastore, compute-pool, dvswitch (native uuid), and folder.
+		TombstoneSchemes: []string{
+			"vcenter.uuid", "vcenter.host.uuid", "vcenter.network.moref",
+			"vcenter.datacenter.moref", "vcenter.cluster.moref", "vcenter.datastore.moref",
+			"vcenter.pool.moref", "vcenter.dvs.uuid", "vcenter.folder.moref",
+		},
+		// The `provisioning` capability build Actions (ADR-0113). create-vm is NOT idempotent
+		// (each call builds a new VM); it supports a side-effect-free dry-run.
+		Capabilities: []string{"provisioning"},
+		Actions: []*pluginv1.ActionDecl{
+			{
+				Name:        actionCreateVM,
+				Input:       &pluginv1.ContractRef{SchemaId: "actions/vcenter/create-vm.input"},
+				Output:      &pluginv1.ContractRef{SchemaId: "actions/vcenter/create-vm.output"},
+				Idempotent:  false,
+				DryRunnable: true,
+			},
+			{
+				Name:        actionCreatePortgroup,
+				Input:       &pluginv1.ContractRef{SchemaId: "actions/vcenter/create-portgroup.input"},
+				Output:      &pluginv1.ContractRef{SchemaId: "actions/vcenter/create-portgroup.output"},
+				Idempotent:  false,
+				DryRunnable: true,
+			},
+			// Lifecycle Actions (ADR-0114): power/reconfigure/delete on an existing VM by uuid. delete-vm
+			// is idempotent (a re-issue over the sync-lag window is a no-op success, D2); the rest are not.
+			lifecycleDecl(actionPowerOff, false),
+			lifecycleDecl(actionPowerOn, false),
+			lifecycleDecl(actionReset, false),
+			lifecycleDecl(actionSuspend, false),
+			lifecycleDecl(actionShutdownGuest, false),
+			lifecycleDecl(actionReconfigure, false),
+			lifecycleDecl(actionDeleteVM, true),
+			// Snapshot + mobility + portgroup lifecycle (ADR-0114 slice 2). delete-portgroup is
+			// idempotent (tombstone-by-absence); the rest are not.
+			lifecycleDecl(actionSnapshotCreate, false),
+			lifecycleDecl(actionSnapshotRevert, false),
+			lifecycleDecl(actionSnapshotRemove, false),
+			lifecycleDecl(actionMigrate, false),
+			lifecycleDecl(actionClone, false),
+			lifecycleDecl(actionReconfigurePG, false),
+			lifecycleDecl(actionDeletePortgroup, true),
+		},
 	}}, nil
+}
+
+// lifecycleDecl builds an ActionDecl for a lifecycle Action by the actions/<name>.{input,output}
+// convention (ADR-0114). All lifecycle ops are dry-runnable (a side-effect-free plan).
+func lifecycleDecl(name string, idempotent bool) *pluginv1.ActionDecl {
+	return &pluginv1.ActionDecl{
+		Name:        name,
+		Input:       &pluginv1.ContractRef{SchemaId: "actions/" + name + ".input"},
+		Output:      &pluginv1.ContractRef{SchemaId: "actions/" + name + ".output"},
+		Idempotent:  idempotent,
+		DryRunnable: true,
+	}
 }
 
 // Observe performs a full sync: it enumerates hosts + VMs and streams them as
@@ -90,68 +151,210 @@ func connect(ctx context.Context, cfg Config) (*govmomi.Client, error) {
 	return client, nil
 }
 
-// enumerate bulk-reads hosts + VMs and normalizes them. Pure content-expertise;
-// no graph writes (the plugin holds no DB path).
+// retrieve bulk-reads one managed-object type into a typed slice via a container view (the shared
+// enumerate primitive). Generic over the mo.* struct so each kind is one call.
+func retrieve[T any](ctx context.Context, m *view.Manager, root vimtypes.ManagedObjectReference, typ string, props []string) ([]T, error) {
+	v, err := m.CreateContainerView(ctx, root, []string{typ}, true)
+	if err != nil {
+		return nil, fmt.Errorf("vcenter: %s view: %w", typ, err)
+	}
+	defer v.Destroy(ctx) //nolint:errcheck
+	var out []T
+	if err := v.Retrieve(ctx, []string{typ}, props, &out); err != nil {
+		return nil, fmt.Errorf("vcenter: retrieve %s: %w", typ, err)
+	}
+	return out, nil
+}
+
+// regionOf walks a moref up its parent chain (cluster → hostFolder → datacenter) to the containing
+// Datacenter's moref — the AZ→region edge target (ADR-0115 D5). parentOf must already hold the folder
+// chain (folders are retrieved before clusters). Bounded to guard against a malformed cycle.
+func regionOf(start string, parentOf map[string]vimtypes.ManagedObjectReference) (string, bool) {
+	cur := start
+	for i := 0; i < 64; i++ {
+		p, ok := parentOf[cur]
+		if !ok {
+			return "", false
+		}
+		if p.Type == "Datacenter" {
+			return p.Value, true
+		}
+		cur = p.Value
+	}
+	return "", false
+}
+
+// enumerate bulk-reads the vSphere inventory and normalizes it to ObservedEntities + Relations. Pure
+// content-expertise; no graph writes (the plugin holds no DB path). Observe-all (ADR-0096): every object
+// the account reports, not just Stratt-created ones. Order matters for the AZ→region walk: datacenters
+// and folders populate parentOf before clusters resolve their region.
 func enumerate(ctx context.Context, c *vim25.Client) ([]*pluginv1.ObservedEntity, error) {
 	m := view.NewManager(c)
+	root := c.ServiceContent.RootFolder
 	var out []*pluginv1.ObservedEntity
-	hostUUIDByRef := map[string]string{} // host moref -> vcenter.host.uuid, for the runs-on edge
+	hostUUIDByRef := map[string]string{}                     // host moref -> vcenter.host.uuid (runs-on target)
+	parentOf := map[string]vimtypes.ManagedObjectReference{} // moref -> parent ref (AZ→region walk)
 
-	// Networks (portgroups / DVPGs / opaque) → subnet Entities. vSphere is a network
-	// Source; its portgroups join the estate alongside cloud subnets (ADR-0059/0060).
-	nv, err := m.CreateContainerView(ctx, c.ServiceContent.RootFolder, []string{"Network"}, true)
+	// Distributed virtual switches → `dvswitch` Entities + a moref→uuid map. The DVS identity is its
+	// native uuid, but portgroups reference it BY MOREF, and vcsim doesn't populate the DVS.portgroup
+	// back-ref — so the switch↔portgroup edge is emitted from the portgroup side (subnet --on-switch-->
+	// dvswitch) using the portgroup's config.distributedVirtualSwitch forward-ref (ADR-0115 D5).
+	dvsUUIDByRef := map[string]string{}
+	switches, err := retrieve[mo.DistributedVirtualSwitch](ctx, m, root, "DistributedVirtualSwitch", dvsProps)
 	if err != nil {
-		return nil, fmt.Errorf("vcenter: network view: %w", err)
+		return nil, err
 	}
-	defer nv.Destroy(ctx) //nolint:errcheck
-	var networks []mo.Network
-	if err := nv.Retrieve(ctx, []string{"Network"}, networkProps, &networks); err != nil {
-		return nil, fmt.Errorf("vcenter: retrieve networks: %w", err)
+	for _, dvs := range switches {
+		if dvs.Uuid != "" {
+			dvsUUIDByRef[dvs.Self.Value] = dvs.Uuid
+		}
+		if e, err := normalizeDVS(dvs); err == nil {
+			out = append(out, e)
+		}
+	}
+	// Portgroup → DVS moref map (config.distributedVirtualSwitch), for the on-switch edge.
+	pgToDVS := map[string]string{}
+	dvpgs, err := retrieve[mo.DistributedVirtualPortgroup](ctx, m, root, "DistributedVirtualPortgroup", []string{"config.distributedVirtualSwitch"})
+	if err != nil {
+		return nil, err
+	}
+	for _, pg := range dvpgs {
+		if pg.Config.DistributedVirtualSwitch != nil {
+			pgToDVS[pg.Self.Value] = pg.Config.DistributedVirtualSwitch.Value
+		}
+	}
+
+	// Networks (portgroups / DVPGs / opaque) → subnet Entities (ADR-0059/0060) + the on-switch edge for
+	// distributed portgroups.
+	networks, err := retrieve[mo.Network](ctx, m, root, "Network", networkProps)
+	if err != nil {
+		return nil, err
 	}
 	for _, n := range networks {
 		e, err := normalizeNetwork(n)
 		if err != nil {
 			continue
 		}
+		if dvsRef, ok := pgToDVS[n.Self.Value]; ok {
+			if uuid, ok := dvsUUIDByRef[dvsRef]; ok {
+				e.Relations = append(e.Relations, &pluginv1.ObservedRelation{
+					Type: "on-switch", ToScheme: "vcenter.dvs.uuid", ToValue: uuid,
+				})
+			}
+		}
 		out = append(out, e)
 	}
 
-	hv, err := m.CreateContainerView(ctx, c.ServiceContent.RootFolder, []string{"HostSystem"}, true)
+	// Datacenters → the SHARED `region` kind (ADR-0115 D1). Seed the parent map.
+	datacenters, err := retrieve[mo.Datacenter](ctx, m, root, "Datacenter", datacenterProps)
 	if err != nil {
-		return nil, fmt.Errorf("vcenter: host view: %w", err)
+		return nil, err
 	}
-	defer hv.Destroy(ctx) //nolint:errcheck
-	var hosts []mo.HostSystem
-	if err := hv.Retrieve(ctx, []string{"HostSystem"}, hostProps, &hosts); err != nil {
-		return nil, fmt.Errorf("vcenter: retrieve hosts: %w", err)
+	for _, d := range datacenters {
+		if d.Parent != nil {
+			parentOf[d.Self.Value] = *d.Parent
+		}
+		if e, err := normalizeRegion(d); err == nil {
+			out = append(out, e)
+		}
+	}
+
+	// Folders → `folder` Entities (the tenant/org hierarchy, ADR-0115) AND the parent chain for the
+	// AZ→region walk. Must precede clusters so cluster → hostFolder → datacenter resolves.
+	folders, err := retrieve[mo.Folder](ctx, m, root, "Folder", folderProps)
+	if err != nil {
+		return nil, err
+	}
+	for _, f := range folders {
+		if f.Parent != nil {
+			parentOf[f.Self.Value] = *f.Parent
+		}
+		if e, err := normalizeFolder(f); err == nil {
+			out = append(out, e)
+		}
+	}
+
+	// Resource pools → `compute-pool` Entities (ADR-0115 D3).
+	pools, err := retrieve[mo.ResourcePool](ctx, m, root, "ResourcePool", poolProps)
+	if err != nil {
+		return nil, err
+	}
+	for _, rp := range pools {
+		if e, err := normalizeComputePool(rp); err == nil {
+			out = append(out, e)
+		}
+	}
+
+	// Clusters → the SHARED `availability-zone` kind + the in-region edge (ADR-0115 D1/D5).
+	clusters, err := retrieve[mo.ClusterComputeResource](ctx, m, root, "ClusterComputeResource", clusterProps)
+	if err != nil {
+		return nil, err
+	}
+	for _, cl := range clusters {
+		if cl.Parent != nil {
+			parentOf[cl.Self.Value] = *cl.Parent
+		}
+		e, err := normalizeAvailabilityZone(cl)
+		if err != nil {
+			continue
+		}
+		if region, ok := regionOf(cl.Self.Value, parentOf); ok {
+			e.Relations = append(e.Relations, &pluginv1.ObservedRelation{
+				Type: "in-region", ToScheme: "vcenter.datacenter.moref", ToValue: region,
+			})
+		}
+		out = append(out, e)
+	}
+
+	// Datastores → datastore Entities (ADR-0115, the pinned storage.datastore Facet).
+	datastores, err := retrieve[mo.Datastore](ctx, m, root, "Datastore", datastoreProps)
+	if err != nil {
+		return nil, err
+	}
+	for _, d := range datastores {
+		if e, err := normalizeDatastore(d); err == nil {
+			out = append(out, e)
+		}
+	}
+
+	// Hosts → host + the member-of edge (cluster) + has-datastore edges.
+	hosts, err := retrieve[mo.HostSystem](ctx, m, root, "HostSystem", hostProps)
+	if err != nil {
+		return nil, err
 	}
 	for _, h := range hosts {
 		e, err := normalizeHost(h)
 		if err != nil {
 			continue
 		}
-		out = append(out, e)
 		if h.Summary.Hardware != nil && h.Summary.Hardware.Uuid != "" {
 			hostUUIDByRef[h.Self.Value] = h.Summary.Hardware.Uuid
 		}
+		if h.Parent != nil && h.Parent.Type == "ClusterComputeResource" {
+			e.Relations = append(e.Relations, &pluginv1.ObservedRelation{
+				Type: "member-of", ToScheme: "vcenter.cluster.moref", ToValue: h.Parent.Value,
+			})
+		}
+		for _, ds := range h.Datastore {
+			e.Relations = append(e.Relations, &pluginv1.ObservedRelation{
+				Type: "has-datastore", ToScheme: "vcenter.datastore.moref", ToValue: ds.Value,
+			})
+		}
+		out = append(out, e)
 	}
 
-	vv, err := m.CreateContainerView(ctx, c.ServiceContent.RootFolder, []string{"VirtualMachine"}, true)
+	// VMs → vm + runs-on (to host) + placed-in (to network).
+	machines, err := retrieve[mo.VirtualMachine](ctx, m, root, "VirtualMachine", vmProps)
 	if err != nil {
-		return nil, fmt.Errorf("vcenter: vm view: %w", err)
-	}
-	defer vv.Destroy(ctx) //nolint:errcheck
-	var machines []mo.VirtualMachine
-	if err := vv.Retrieve(ctx, []string{"VirtualMachine"}, vmProps, &machines); err != nil {
-		return nil, fmt.Errorf("vcenter: retrieve vms: %w", err)
+		return nil, err
 	}
 	for _, vm := range machines {
 		e, err := normalizeVM(vm)
 		if err != nil {
 			continue
 		}
-		// runs-on edge to the ESXi host, named BY IDENTITY (vcenter.host.uuid) —
-		// the plugin never sees graph ids; the host resolves + stamps (ADR-0047 §1).
+		// runs-on edge to the ESXi host, named BY IDENTITY (vcenter.host.uuid) — the plugin never sees
+		// graph ids; the host resolves + stamps (ADR-0047 §1).
 		if vm.Runtime.Host != nil {
 			if uuid, ok := hostUUIDByRef[vm.Runtime.Host.Value]; ok {
 				e.Relations = append(e.Relations, &pluginv1.ObservedRelation{
@@ -159,12 +362,28 @@ func enumerate(ctx context.Context, c *vim25.Client) ([]*pluginv1.ObservedEntity
 				})
 			}
 		}
-		// placed-in edges to each attached network (ADR-0059 decision 2): the VM sits
-		// in these portgroups. Observed placement — a cloud Syncer emits the same edge
-		// shape for its subnets, so "the VMs in network X" is one relation-aware View.
+		// placed-in edges to each attached network (ADR-0059 decision 2).
 		for _, netRef := range vm.Network {
 			e.Relations = append(e.Relations, &pluginv1.ObservedRelation{
 				Type: "placed-in", ToScheme: "vcenter.network.moref", ToValue: netRef.Value,
+			})
+		}
+		// stored-on edges to each backing datastore (ADR-0115).
+		for _, ds := range vm.Datastore {
+			e.Relations = append(e.Relations, &pluginv1.ObservedRelation{
+				Type: "stored-on", ToScheme: "vcenter.datastore.moref", ToValue: ds.Value,
+			})
+		}
+		// in-pool edge to the compute-pool the VM draws from (ADR-0115).
+		if vm.ResourcePool != nil {
+			e.Relations = append(e.Relations, &pluginv1.ObservedRelation{
+				Type: "in-pool", ToScheme: "vcenter.pool.moref", ToValue: vm.ResourcePool.Value,
+			})
+		}
+		// contained-in edge to the VM folder (tenant/org) — the sovereignty edge (ADR-0115).
+		if vm.Parent != nil && vm.Parent.Type == "Folder" {
+			e.Relations = append(e.Relations, &pluginv1.ObservedRelation{
+				Type: "contained-in", ToScheme: "vcenter.folder.moref", ToValue: vm.Parent.Value,
 			})
 		}
 		out = append(out, e)

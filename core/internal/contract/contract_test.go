@@ -5,6 +5,53 @@ import (
 	"testing"
 )
 
+// TestIpamResolveActionContractCoFidelity is the ADR-0113 D4 drift guard: the Workflow-facing
+// actions/netbox/ipam-resolve.{input,output} Contracts are INTENTIONALLY identical in shape to the
+// class-level capabilities/ipam.{input,output} (ADR-0111). They exist because a capability-resolve
+// Action invoked as an explicit Workflow Step is validated by the actions/<name> convention, while
+// resolve-inject validates the same shape against the class contract. This test binds them so they
+// cannot drift: the same representative payloads must validate (and fail) identically against both.
+func TestIpamResolveActionContractCoFidelity(t *testing.T) {
+	pairs := []struct{ action, class string }{
+		{"actions/netbox/ipam-resolve.input", "capabilities/ipam.input"},
+		{"actions/netbox/ipam-resolve.output", "capabilities/ipam.output"},
+	}
+	samples := map[string][]struct {
+		payload string
+		valid   bool
+	}{
+		"input": {
+			{`{"key":"dmz-subnet-01","role":"dmz","size":24,"vlanGroup":"dc1"}`, true},
+			{`{"key":"x","pool":"10.30.0.0/16","size":24}`, true},
+			{`{"role":"dmz","size":24}`, false},                             // missing key
+			{`{"key":"x","size":24,"pool":"p","role":"r"}`, false},          // pool XOR role
+			{`{"key":"x","role":"dmz","size":24,"undeclared":true}`, false}, // closed
+		},
+		"output": {
+			{`{"cidr":"10.30.4.0/24","vlanId":1234}`, true},
+			{`{"vlanId":1234}`, false},                           // missing cidr
+			{`{"cidr":"10.30.4.0/24","vlanId":9999}`, false},     // vlan out of range
+			{`{"cidr":"10.30.4.0/24","undeclared":true}`, false}, // closed
+		},
+	}
+	for _, p := range pairs {
+		kind := "input"
+		if strings.HasSuffix(p.action, ".output") {
+			kind = "output"
+		}
+		for _, s := range samples[kind] {
+			actErr := ValidateNamed(p.action, []byte(s.payload))
+			clsErr := ValidateNamed(p.class, []byte(s.payload))
+			if (actErr == nil) != s.valid {
+				t.Errorf("%s: payload %s expected valid=%v, got err=%v", p.action, s.payload, s.valid, actErr)
+			}
+			if (actErr == nil) != (clsErr == nil) {
+				t.Errorf("co-fidelity drift: %s and %s disagree on %s (action err=%v, class err=%v)", p.action, p.class, s.payload, actErr, clsErr)
+			}
+		}
+	}
+}
+
 // TestStatestoreOutputContract is the co-fidelity guard for ADR-0105: the class-level
 // capabilities/statestore.output Contract accepts a representative provider-agnostic backend-config
 // handle (the shape awss3/statestore-resolve produces) and rejects a malformed one.
@@ -132,6 +179,22 @@ func TestValidateFacet(t *testing.T) {
 	}
 }
 
+// TestStorageDatastoreContract is the ADR-0115 co-fidelity guard: the pinned storage.datastore Facet
+// (the one schema read breadth ships, WITH its consuming datastores View, §1.1) accepts the vcenter
+// plugin's real emission and rejects drift (closed).
+func TestStorageDatastoreContract(t *testing.T) {
+	ok := []byte(`{"name":"ds-vmfs-01","type":"VMFS","capacity":1099511627776,"freeSpace":549755813888}`)
+	if covered, err := ValidateFacet("storage.datastore", ok); !covered || err != nil {
+		t.Fatalf("a valid datastore facet must validate: covered=%v err=%v", covered, err)
+	}
+	if covered, err := ValidateFacet("storage.datastore", []byte(`{"type":"VMFS","undeclared":true}`)); !covered || err == nil {
+		t.Fatalf("storage.datastore must reject undeclared keys (closed): covered=%v err=%v", covered, err)
+	}
+	if covered, err := ValidateFacet("storage.datastore", []byte(`{"capacity":"lots"}`)); !covered || err == nil {
+		t.Fatalf("storage.datastore must reject a non-integer capacity: covered=%v err=%v", covered, err)
+	}
+}
+
 // TestNetSubnetUnionCoFidelity is the BLOCKING cross-plugin co-fidelity gate for the
 // shared net.subnet Facet (ADR-0096 guardian flag 2): the closed union schema now
 // governs the LIVE write path of BOTH crossplane and awsec2. If either Source's real
@@ -146,6 +209,17 @@ func TestNetSubnetUnionCoFidelity(t *testing.T) {
 	if covered, err := ValidateFacet("net.subnet", []byte(`{"cidr":"10.0.1.0/24","availabilityZone":"us-east-1a","state":"available","vpcId":"vpc-1"}`)); !covered || err != nil {
 		t.Fatalf("awsec2 net.subnet emission must validate: covered=%v err=%v", covered, err)
 	}
+	// vSphere's emission (plugins/vcenter/normalize.go, ADR-0115 F1): {name} ONLY — a portgroup has no
+	// cidr; its moref is the identity key and source is a label, so the shared union carries just the
+	// declared name. This is the third Source; it was the latent write-path break charter-guardian caught.
+	if covered, err := ValidateFacet("net.subnet", []byte(`{"name":"dc1-web-vlan100"}`)); !covered || err != nil {
+		t.Fatalf("vSphere net.subnet emission must validate: covered=%v err=%v", covered, err)
+	}
+	// The pre-fix vSphere shape (with the provider-local moref/kind/source keys) MUST be rejected — proof
+	// the closed union would have broken vSphere's write path, and that F1 removed exactly those keys.
+	if covered, err := ValidateFacet("net.subnet", []byte(`{"name":"pg","moref":"dvportgroup-1","kind":"DistributedVirtualPortgroup","source":"vsphere"}`)); !covered || err == nil {
+		t.Fatalf("the pre-F1 vSphere shape (moref/kind/source) must be rejected by the closed union: covered=%v err=%v", covered, err)
+	}
 	// A field no Source emits is rejected (the schema stays closed — drift is blocking).
 	if covered, err := ValidateFacet("net.subnet", []byte(`{"cidr":"10.0.0.0/24","undeclared":true}`)); !covered || err == nil {
 		t.Fatalf("net.subnet must reject undeclared keys (closed): covered=%v err=%v", covered, err)
@@ -157,8 +231,8 @@ func TestPinsAreStable(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(all) != 104 {
-		t.Fatalf("expected 104 embedded documents, got %d", len(all))
+	if len(all) != 139 {
+		t.Fatalf("expected 139 embedded documents, got %d", len(all))
 	}
 	versions := map[string]int{}
 	for _, c := range all {

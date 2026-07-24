@@ -186,6 +186,12 @@ func (c *Controller) reconcile(ctx context.Context, log *slog.Logger) {
 	// and never writes an Entity for the unbuilt (§1.2) — the shortfall is
 	// recomputed each cycle and the provisioning Findings reconciled. Non-fatal.
 	c.reconcileProvisioning(ctx, decls, log)
+
+	// Decommission reconcile (ADR-0114 D4): the symmetric teardown half — surface GATED teardowns for
+	// Intent/Compute count-down EXCESS (built instances beyond the desired count) when onRemove:remove.
+	// Never tears down and never deletes an Entity (§1.2, §2.4 — destructive ⇒ gated); the excess is
+	// recomputed each cycle and the decommission Findings reconciled. Non-fatal.
+	c.reconcileDecommission(ctx, decls, log)
 }
 
 // reconcileProvisioning turns Intent/Compute declarations into gated-build
@@ -338,6 +344,109 @@ func (c *Controller) reconcileProvisioning(ctx context.Context, decls Declaratio
 
 	// Placement drift (ADR-0059 decision 5, S5): declared placement vs observed.
 	c.reconcilePlacementDrift(ctx, intents, singletons, log)
+}
+
+// reconcileDecommission turns Intent/Compute count-down EXCESS into gated teardown Findings (ADR-0114
+// D4): for each Intent/Compute declared with onRemove:remove, the built instances beyond the desired
+// count are the excess; each becomes a `decommission/<intent>` Finding the operator launches to tear
+// down (§5 Flow, destructive ⇒ gated), carrying the Entity's identity + the resolved teardown Workflow.
+// Ordinal-descending (Excess) so the highest instances go first — a deterministic exclusive selection,
+// never a §2.4 tiebreak. Nothing here deletes an Entity or writes desired state (§1.2); a torn-down unit
+// drops out of the excess next cycle and its Finding resolves. Whole-Intent withdrawal (onRemove gone
+// with the Intent) reuses the shipped retain limitation — a booked follow-up (ADR-0114).
+func (c *Controller) reconcileDecommission(ctx context.Context, decls Declarations, log *slog.Logger) {
+	log = log.With("component", "decommission")
+	var intents []provision.Intent
+	for _, in := range decls.Intents {
+		if in.Kind == types.IntentCompute && in.OnRemove == types.OnRemoveRemove {
+			pi, err := provision.FromIntent(in)
+			if err != nil {
+				log.Error("intent/compute decode failed", "intent", in.Name, "error", err)
+				return
+			}
+			intents = append(intents, pi)
+		}
+	}
+	if len(intents) == 0 {
+		// No onRemove:remove Compute Intents in scope — resolve any stale decommission Findings.
+		if _, err := c.Store.ResolveDecommissionFindingsExcept(ctx, nil, nil); err != nil {
+			log.Error("resolve decommission findings failed", "error", err)
+		}
+		return
+	}
+
+	candidates, err := c.Store.DecommissionCandidates(ctx)
+	if err != nil {
+		log.Error("decommission candidates read failed", "error", err)
+		return
+	}
+	builtNames := map[string]bool{}
+	candByName := map[string]graph.DecommissionCandidate{}
+	for _, cand := range candidates {
+		if cand.Name == "" {
+			continue
+		}
+		builtNames[cand.Name] = true
+		candByName[cand.Name] = cand
+	}
+
+	resolveCache := map[string]capability.Result{}
+	resolveKind := func(kind string) capability.Result {
+		if r, ok := resolveCache[kind]; ok {
+			return r
+		}
+		r, err := c.resolveDecommission(ctx, kind)
+		if err != nil {
+			r = capability.Result{Status: capability.StatusPending, Reason: "decommission resolution failed: " + err.Error()}
+			log.Error("decommission resolution failed", "kind", kind, "error", err)
+		}
+		resolveCache[kind] = r
+		return r
+	}
+
+	var keepB, keepT []string
+	var excessCount int
+	for _, in := range intents {
+		for _, ex := range provision.Excess(in, builtNames) {
+			cand := candByName[ex.Name]
+			detail, _ := json.Marshal(decommissionFindingDetail(resolveKind("Compute"), map[string]any{
+				"instance": ex.Name, "intent": in.Name, "ordinal": ex.Ordinal,
+				"identityKeys": cand.IdentityKeys, "kind": cand.Kind,
+			}))
+			baseline := "decommission/" + in.Name
+			if err := c.Store.WriteDecommissionFinding(ctx, baseline, ex.Name, "warning", detail); err != nil {
+				log.Error("write decommission finding failed", "instance", ex.Name, "error", err)
+				continue
+			}
+			keepB = append(keepB, baseline)
+			keepT = append(keepT, ex.Name)
+			excessCount++
+		}
+	}
+	resolved, err := c.Store.ResolveDecommissionFindingsExcept(ctx, keepB, keepT)
+	if err != nil {
+		log.Error("resolve decommission findings failed", "error", err)
+	}
+	if excessCount > 0 || resolved > 0 {
+		log.Info("decommission reconcile", "excess", excessCount, "resolved", resolved)
+	}
+}
+
+// decommissionFindingDetail enriches a teardown Finding's detail with the resolution outcome (ADR-0114
+// D4), mirroring provisionFindingDetail: a RESOLVED teardown names the bound provider + the gated
+// teardown Workflow to launch (pass the Entity's provider identity as the launch uuid); a PENDING/
+// AMBIGUOUS one carries the observable reason and NO workflow — fail-closed, nothing to launch (§2.4).
+func decommissionFindingDetail(r capability.Result, base map[string]any) map[string]any {
+	base["onRemove"] = types.OnRemoveRemove
+	if r.Status == capability.StatusResolved {
+		base["provider"] = r.Provider
+		base["teardownWorkflow"] = r.Workflow
+		base["reason"] = "built but no longer desired (count-down) with onRemove:remove — launch the gated teardown Workflow (never auto-run, §5 Flow)"
+		return base
+	}
+	base["unresolved"] = r.Reason
+	base["reason"] = "built but no longer desired, and decommission is UNRESOLVED — " + r.Reason
+	return base
 }
 
 // reconcilePlacementDrift surfaces the desired-vs-observed placement gap as Findings

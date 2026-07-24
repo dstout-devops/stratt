@@ -1,0 +1,8 @@
+# availability-zones — the topology View the read-breadth backbone demands (ADR-0115 D1/§1.1). It selects
+# the SHARED `availability-zone` kind — vSphere clusters today, awsec2/other substrates once they co-own the
+# kind — so "the AZs across the estate" is one relation-navigable surface (each AZ's --in-region--> region
+# and the hosts --member-of--> it). This is the shipping consumer that demands the region/AZ projection;
+# region/AZ are bare Entities (no Facet), so the selector is kinds-only.
+name: availability-zones
+selector:
+  kinds: [availability-zone]

@@ -1,0 +1,11 @@
+# datastores — the shipping consumer that demands the storage.datastore Facet schema (ADR-0115 §1.1 / F2).
+# Its `facets:` selector references a storage.datastore FIELD (type), so pinning the schema is justified —
+# unlike a kinds-only View, this is the Contract that consumes the projection. Selects production VMFS
+# datastores (the capacity/free the facet carries drives a storage-capacity surface).
+name: datastores
+selector:
+  kinds: [datastore]
+  facets:
+    - namespace: storage.datastore
+      path: type
+      equals: VMFS

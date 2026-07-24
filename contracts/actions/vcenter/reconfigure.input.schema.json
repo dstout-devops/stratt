@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "stratt:contract:actions/vcenter/reconfigure.input:v1",
+  "title": "vcenter/reconfigure input",
+  "description": "Reconfigure an existing VM's sizing by its vcenter.uuid (ADR-0114 D1). At least one of cpus/memoryMB must be set.",
+  "type": "object",
+  "properties": {
+    "uuid": { "type": "string" },
+    "cpus": { "type": "integer", "minimum": 1 },
+    "memoryMB": { "type": "integer", "minimum": 1 }
+  },
+  "required": ["uuid"],
+  "additionalProperties": false
+}

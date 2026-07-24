@@ -230,3 +230,31 @@ func TestDeclaredComputePlacements(t *testing.T) {
 		t.Fatalf("expected web-01/web-02 -> web-dmz, got %v", got)
 	}
 }
+
+// TestExcessCountDown proves the ADR-0114 D4 count-down selection: built instances beyond the desired
+// count are the excess, returned ORDINAL-DESCENDING (highest instances torn down first — deterministic,
+// no §2.4 tiebreak). A same-sized fleet has no excess; a differently-prefixed name is never mis-attributed.
+func TestExcessCountDown(t *testing.T) {
+	in := Intent{Name: "web-fleet", Spec: ComputeSpec{Count: 3, NamePrefix: "web"}}
+	built := map[string]bool{"web-01": true, "web-02": true, "web-03": true, "web-04": true, "web-05": true}
+	ex := Excess(in, built)
+	if len(ex) != 2 {
+		t.Fatalf("count 5->3 must yield 2 excess, got %d (%+v)", len(ex), ex)
+	}
+	if ex[0].Name != "web-05" || ex[1].Name != "web-04" {
+		t.Errorf("excess must be ordinal-descending web-05 then web-04, got %s then %s", ex[0].Name, ex[1].Name)
+	}
+	if ex[0].Ordinal != 5 || ex[1].Ordinal != 4 {
+		t.Errorf("excess ordinals must be 5,4, got %d,%d", ex[0].Ordinal, ex[1].Ordinal)
+	}
+
+	// No excess when built matches desired.
+	if ex := Excess(in, map[string]bool{"web-01": true, "web-02": true, "web-03": true}); len(ex) != 0 {
+		t.Errorf("a converged fleet has no excess, got %+v", ex)
+	}
+
+	// A different fleet's instances are not mis-attributed to this Intent's prefix.
+	if ex := Excess(in, map[string]bool{"db-04": true, "webapp-04": true}); len(ex) != 0 {
+		t.Errorf("only <prefix>-<ordinal> names belong to the fleet, got %+v", ex)
+	}
+}

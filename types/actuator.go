@@ -48,6 +48,12 @@ type Actuator struct {
 	// mechanism so an Intent's `requires: [provisioning]` resolves to a concrete Action — the
 	// provider owns its mechanism (§1.5); a capability-binding only selects WHICH provider.
 	Provisions map[string]string `json:"provisions,omitempty"`
+	// Decommissions maps an Intent kind to THIS provider's gated TEARDOWN Workflow for it (ADR-0114
+	// D4) — the symmetric counterpart to Provisions. It is how a provisioning provider advertises its
+	// per-kind teardown so a withdrawn/counted-down Intent (onRemove: remove) resolves to a concrete
+	// gated teardown; the provider owns its mechanism (§1.5). Meaningful only when this Actuator
+	// `provides` provisioning.
+	Decommissions map[string]string `json:"decommissions,omitempty"`
 	// Environments scopes this Actuator (ADR-0057); empty ⇒ every environment.
 	Environments []string `json:"environments,omitempty"`
 }

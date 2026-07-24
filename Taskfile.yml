@@ -266,6 +266,12 @@ tasks:
     cmds:
       - deploy/dev/netbox-bootstrap.sh
 
+  dev:vsphere:bootstrap:
+    desc: Seed the dev vcsim with an enterprise topology — regions (datacenters), AZs (clusters), sovereignty (tenant folders), VLAN portgroups (ADR-0113)
+    dir: plugins/vcenter
+    cmds:
+      - STRATT_VCENTER_URL={{.STRATT_VCENTER_URL | default "https://localhost:8989/sdk"}} go run ./cmd/vsphere-seed
+
   dev:scim:bootstrap:
     desc: Drive the SCIM SP like an IdP — push Users/Group, filter, deactivate (ADR-0035)
     cmds:

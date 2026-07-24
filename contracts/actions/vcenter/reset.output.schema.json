@@ -1,0 +1,10 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "stratt:contract:actions/vcenter/reset.output:v1",
+  "title": "vcenter/reset output",
+  "description": "The targeted VM's identity + observed power state (ADR-0114 D3).",
+  "type": "object",
+  "properties": { "uuid": { "type": "string" }, "powerState": { "type": "string" } },
+  "required": ["uuid"],
+  "additionalProperties": false
+}

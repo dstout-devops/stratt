@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "stratt:contract:facets/storage.datastore:v1",
+  "title": "storage.datastore",
+  "description": "A storage datastore's capacity/free/type (ADR-0115). The ONE pinned Facet of vSphere read breadth — demanded by the `datastores` View's facets selector (§1.1). Closed (additionalProperties:false) so drift is caught at the write path. capacity/freeSpace are bytes.",
+  "type": "object",
+  "properties": {
+    "name": { "type": "string" },
+    "type": {
+      "type": "string",
+      "description": "the datastore filesystem type (e.g. VMFS, NFS, vSAN)"
+    },
+    "capacity": { "type": "integer", "minimum": 0, "description": "total capacity in bytes" },
+    "freeSpace": { "type": "integer", "minimum": 0, "description": "free space in bytes" }
+  },
+  "additionalProperties": false
+}
