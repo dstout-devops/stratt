@@ -130,7 +130,7 @@ func (s *Store) SetRunCells(ctx context.Context, runID string, cells []string) e
 // execution — the §1.8 Workflow → Run descent query.
 func (s *Store) ListRunsForWorkflowRun(ctx context.Context, workflowRunID string) ([]types.Run, error) {
 	rows, err := s.pool.Query(ctx, `
-		SELECT id, step_name, workflow_id, status, started_at, finished_at
+		SELECT id, step_name, workflow_id, status, started_at, finished_at, summary->>'error'
 		FROM graph.run WHERE workflow_run_id = $1 ORDER BY started_at`, workflowRunID)
 	if err != nil {
 		return nil, fmt.Errorf("graph: list runs for workflow run: %w", err)
@@ -140,14 +140,17 @@ func (s *Store) ListRunsForWorkflowRun(ctx context.Context, workflowRunID string
 	for rows.Next() {
 		var r types.Run
 		var status string
-		var stepName *string
-		if err := rows.Scan(&r.ID, &stepName, &r.WorkflowID, &status, &r.StartedAt, &r.FinishedAt); err != nil {
+		var stepName, runErr *string
+		if err := rows.Scan(&r.ID, &stepName, &r.WorkflowID, &status, &r.StartedAt, &r.FinishedAt, &runErr); err != nil {
 			return nil, fmt.Errorf("graph: list runs for workflow run: %w", err)
 		}
 		r.Status = types.RunStatus(status)
 		r.WorkflowRunID = workflowRunID
 		if stepName != nil {
 			r.StepName = *stepName
+		}
+		if runErr != nil {
+			r.Error = *runErr
 		}
 		out = append(out, r)
 	}
@@ -160,7 +163,7 @@ func (s *Store) ListRuns(ctx context.Context, limit int) ([]types.Run, error) {
 		limit = 100
 	}
 	rows, err := s.pool.Query(ctx, `
-		SELECT id, workflow_id, status, view_ref, view_version, triggered_by, baseline, workflow_run_id, step_name, started_at, finished_at
+		SELECT id, workflow_id, status, view_ref, view_version, triggered_by, baseline, workflow_run_id, step_name, started_at, finished_at, summary->>'error'
 		FROM graph.run ORDER BY started_at DESC, id ASC LIMIT $1`, limit)
 	if err != nil {
 		return nil, fmt.Errorf("graph: list runs: %w", err)
@@ -170,13 +173,16 @@ func (s *Store) ListRuns(ctx context.Context, limit int) ([]types.Run, error) {
 	for rows.Next() {
 		var r types.Run
 		var status string
-		var viewRef, triggeredBy, baseline, workflowRunID, stepName *string
+		var viewRef, triggeredBy, baseline, workflowRunID, stepName, runErr *string
 		var viewVersion *int64
 		if err := rows.Scan(&r.ID, &r.WorkflowID, &status, &viewRef, &viewVersion,
-			&triggeredBy, &baseline, &workflowRunID, &stepName, &r.StartedAt, &r.FinishedAt); err != nil {
+			&triggeredBy, &baseline, &workflowRunID, &stepName, &r.StartedAt, &r.FinishedAt, &runErr); err != nil {
 			return nil, fmt.Errorf("graph: list runs: %w", err)
 		}
 		r.Status = types.RunStatus(status)
+		if runErr != nil {
+			r.Error = *runErr
+		}
 		if viewRef != nil {
 			r.ViewRef = *viewRef
 		}
@@ -206,12 +212,12 @@ func (s *Store) GetRun(ctx context.Context, runID string) (types.Run, error) {
 	var status string
 	var viewRef *string
 	var viewVersion *int64
-	var triggeredBy, baseline, workflowRunID, stepName, cell *string
+	var triggeredBy, baseline, workflowRunID, stepName, cell, runErr *string
 	var outputs, sites, cells []byte
 	err := s.pool.QueryRow(ctx, `
-		SELECT id, workflow_id, status, view_ref, view_version, triggered_by, baseline, workflow_run_id, step_name, started_at, finished_at, outputs, sites, cell, cells
+		SELECT id, workflow_id, status, view_ref, view_version, triggered_by, baseline, workflow_run_id, step_name, started_at, finished_at, outputs, sites, cell, cells, summary->>'error'
 		FROM graph.run WHERE id = $1`, runID,
-	).Scan(&r.ID, &r.WorkflowID, &status, &viewRef, &viewVersion, &triggeredBy, &baseline, &workflowRunID, &stepName, &r.StartedAt, &r.FinishedAt, &outputs, &sites, &cell, &cells)
+	).Scan(&r.ID, &r.WorkflowID, &status, &viewRef, &viewVersion, &triggeredBy, &baseline, &workflowRunID, &stepName, &r.StartedAt, &r.FinishedAt, &outputs, &sites, &cell, &cells, &runErr)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return r, fmt.Errorf("%w: run %s", ErrNotFound, runID)
 	}
@@ -219,6 +225,9 @@ func (s *Store) GetRun(ctx context.Context, runID string) (types.Run, error) {
 		return r, fmt.Errorf("graph: get run: %w", err)
 	}
 	r.Status = types.RunStatus(status)
+	if runErr != nil {
+		r.Error = *runErr
+	}
 	if viewRef != nil {
 		r.ViewRef = *viewRef
 	}

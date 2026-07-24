@@ -576,6 +576,9 @@ func runToWire(r types.Run) Run {
 	if r.StepName != "" {
 		out.StepName = &r.StepName
 	}
+	if r.Error != "" {
+		out.Error = &r.Error
+	}
 	if len(r.Outputs) > 0 {
 		var m map[string]any
 		if json.Unmarshal(r.Outputs, &m) == nil {

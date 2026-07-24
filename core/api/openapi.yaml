@@ -1584,6 +1584,12 @@ components:
         stepName:
           type: string
           description: The Step within that Workflow.
+        error:
+          type: string
+          description: >
+            The terminal failure cause on a failed Run (charter §1.8) — the real
+            message (e.g. a plugin Action's), so the descent shows WHY it failed.
+            Absent unless the Run failed with a recorded cause.
         outputs:
           type: object
           description: >

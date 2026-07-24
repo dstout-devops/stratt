@@ -1371,6 +1371,8 @@ export interface components {
             workflowRunId?: string;
             /** @description The Step within that Workflow. */
             stepName?: string;
+            /** @description The terminal failure cause on a failed Run (charter §1.8) — the real message (e.g. a plugin Action's), so the descent shows WHY it failed. Absent unless the Run failed with a recorded cause. */
+            error?: string;
             /** @description An Action Run's typed output values, validated against the Action's output Contract (charter §2.2, ADR-0031); absent for Actuator Runs. */
             outputs?: Record<string, never>;
             /** @description The execution loci this Run touched (charter §1.8 descent, ADR-0032): ["local"], a Site name, or a union when per-target routing fanned the Run across Sites. Absent for legacy Runs and targetless Actions. */
