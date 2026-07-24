@@ -47,10 +47,27 @@ not the first increment.
 
 ### D1 — Demos are a top-level `demos/` library of self-contained scenarios
 
-Each demo is a self-contained directory `demos/<name>/` holding: `README.md` (the narrated walkthrough), an
-`estate/` fragment (the scenario's CaC, applied with `stratt apply -d demos/<name>/estate` on top of a
-running Stratt), any demo assets (e.g. a chart), and its turnkey runner. `demos/README.md` is the library
-index (registered in `docs/README.md`).
+Each demo is a self-contained directory `demos/<name>/` holding: `README.md` (the narrated walkthrough), a
+`demo.yaml` manifest (title/summary + the declared `fidelity`, D3), an `estate/` fragment (the scenario's
+CaC), any demo assets (e.g. a chart), and its turnkey runner. `demos/README.md` is the library index
+(registered in `docs/README.md`).
+
+**How a demo's estate is delivered — CaC through the declarations mount, NOT `stratt apply`** (corrected
+against the first live runs; this ADR was still Proposed): a demo stages its `estate/` into the
+inline-declarations path (a `demo:<name>:stage` task, mirroring `dev:stage-genesis`) so the floor boots with
+the demo's estate as its desired state and the reconcile controller enforces it. Two structural facts forced
+this and are worth recording, because they constrain every future demo:
+
+1. **Actuators and CredentialRefs are CaC-only** (§2.2/§2.3, ADR-0103) — Git review authorizes plugin
+   registration, so the imperative apply door cannot register them (`DeclareCredentialRefAs(…, api)` is
+   refused).
+2. **`stratt apply` is the same authority as the reconcile controller**, not a supplement — it declares
+   `DeclaredBy=cac` and prunes whatever is absent, so applying a fragment "on top of" a running floor is
+   reverted within a reconcile tick.
+
+Each demo estate is therefore **whole and self-contained** (its own authz grant, CredentialRef, Workflow,
+Views), and still uses only the same typed primitives as the reference estate (ADR-0055/0056/0057) — never a
+new configuration language (§1.1).
 
 **Reconciling the `managed-web` in-`estate/` precedent:** a _single embedded_ demo (`managed-web`) was fine as
 label-scoped content inside the one reference estate. But a _growing library_ of standalone teaching
@@ -63,10 +80,14 @@ stays where it is; it is not migrated.)
 
 ### D2 — Every demo is BOTH turnkey and narrated
 
-- **Turnkey:** a `demo:<name>:run` task — one command that brings up the substrate, `stratt apply`s the
-  demo estate, launches the gated Workflow, **auto-approves** the approval gate Step, and **asserts** the outcome, reusing
-  the shipped `genesis-selfdeploy.sh` / `stratt-dev-assert` loop. This makes every demo reproducible,
-  CI-able, and **non-rotting** — a demo that stops working fails its own runner.
+- **Turnkey:** a `demo:<name>:run` task — one command that stands up the floor with the demo estate staged
+  as its desired state (D1), launches the gated Workflow, **auto-approves** the approval gate Step, and
+  **asserts** the outcome, reusing the shipped `genesis-selfdeploy.sh` launch/approve/assert loop. A paired
+  `demo:<name>:down` tears the demo's footprint back down, so every demo has a build-up ⇄ tear-down
+  lifecycle and re-runs from a known state. This makes every demo reproducible, CI-able, and
+  **non-rotting** — a demo that stops working fails its own runner. (Auto-approval automates the human but
+  goes through the real `POST /gates/{id}/decision` → authz → Temporal signal path; the gate is a durable
+  Temporal signal wait, never a scripted sleep.)
 - **Narrated:** a `README.md` that walks a human through the same steps by hand, with plain-language
   explanations of each Named Kind and the descent, and "open the UI to watch it happen."
 
@@ -119,11 +140,25 @@ a demo is estate CaC + assets + a runner + docs. The consequential decision is s
   demo's live-green acceptance needs a real dev cluster (kind), so CI/live verification is heavier than a
   unit test (mitigated: the turnkey runner IS that verification; the reproducible+asserting runner is the
   deliverable even where a sandbox can't stand up kind).
-- **Follow-ups.** The substrate demos (ec2-only real provision→configure via floci; vsphere-only provision/
-  lifecycle via vcsim) and then the **enterprise-estate capstone** — which first requires the deferred
-  prerequisites, each its own demo-that-closes-a-gap: per-instance/region build fan-out (ADR-0058), a K8s
-  `Compute` provider (or the workloads reframe), awsec2 region/AZ projection (ADR-0115 #1), and multi-
-  substrate simultaneous reconcile via environment scoping (ADR-0113 D2).
+- **Demos are a bug-finding instrument, not just documentation** (observed across the first three). Running
+  a scenario end to end on a real cluster exercised shipped seams no unit test covered, and each demo
+  surfaced real defects that were fixed as part of landing it: the desired-state wire API could not carry a
+  targetless `action` Step or a `gateOnly` CredentialRef (a §1.6 asymmetry vs the Git door); the genesis
+  floor declared **no** helm Actuator, so the shipped self-deploy dogfood could never register `helm/deploy`;
+  a failed plugin Action's real cause was masked by a downstream "got null" and no Run surfaced any error
+  (§1.8); `plugins/{vcenter,awsec2}/go.sum` were incomplete for their standalone (`GOWORK=off`) image
+  builds; and floci's compose healthcheck probed with `wget`, which its image lacks (false-unhealthy, also
+  breaking `dev:stack:up`). This is a positive consequence worth planning for: **budget demo work as
+  integration testing with a teaching artifact as the output.**
+- **Follow-ups.** Shipped: k8s-deploy (`real`), vsphere-only (`build-real`), ec2-only (`real`). Next rung
+  before the capstone: an **app-install demo** — install an application that requires a **certificate**
+  (e.g. a TLS web server), so the demo teaches certificate issuance/renewal alongside install. Then the
+  **enterprise-estate capstone**, which additionally requires the deferred prerequisites, each its own
+  demo-that-closes-a-gap: per-instance/region build fan-out (ADR-0058), a K8s `Compute` provider (or the
+  workloads reframe), awsec2 region/AZ projection (ADR-0115 #1), and multi-substrate simultaneous reconcile
+  via environment scoping (ADR-0113 D2). Also deferred: the **real SSH converge** act (provision → configure
+  over SSH into a floci instance, the ADR-0084 pattern) — floci gives real SSH-able instances, but the EE
+  Job (in kind) reaching them across the host/kind network boundary is unsolved.
 
 ## Alternatives considered
 

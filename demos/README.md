@@ -39,6 +39,22 @@ patterns — they don't fork them.
 
 Each future demo teaches _and closes one gap_ toward the full multi-substrate capstone:
 
+- **app install (with a certificate)** — the next rung, and a capstone prerequisite: install a real
+  application that _requires a TLS certificate_ (e.g. a web server), so the demo teaches **certificate
+  issuance and renewal** alongside install. The three shipped demos deploy or provision; none yet installs
+  an app with its supporting material, which the capstone's "shared services" story depends on.
 - **enterprise estate (capstone)** — networks/VLANs across regions + shared services across
-  Kubernetes, vSphere, and EC2 in one Intent. Depends on per-instance fan-out (ADR-0058), a K8s
-  Compute provider, and multi-substrate simultaneous reconcile — built up by the demos above.
+  Kubernetes, vSphere, and EC2 in one Intent. Depends on the app-install rung above, plus per-instance
+  fan-out (ADR-0058), a K8s Compute provider, and multi-substrate simultaneous reconcile.
+- **real SSH converge** (follow-on to ec2-only) — provision _then configure_ over SSH into a floci
+  instance (the ADR-0084 pattern). floci gives real SSH-able instances; the open problem is the EE Job (in
+  kind) reaching them across the host/kind network boundary.
+
+## A note on what actually runs these
+
+The `run.sh` scripts are only the turnkey harness — they call the same `/api/v1` endpoints the UI, CLI, and
+MCP agents call (§1.6). **The orchestration is real Temporal**: each demo's Workflow is declarative YAML
+compiled to a Temporal DAG, every Step is an activity, and an approval gate is a durable Temporal **signal
+wait** (`workflow.GetSignalChannel` + a timeout timer) — which is why a gate can park for 24h with nothing
+running. The runner's auto-approval goes through the real `POST /gates/{id}/decision` → authz check →
+Temporal signal. Delete the scripts and click through the UI: the same Temporal workflow runs.
