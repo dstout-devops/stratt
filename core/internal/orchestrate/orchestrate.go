@@ -333,7 +333,14 @@ func failedTargets(perTarget map[string]string) int {
 }
 
 func finishRun(ctx workflow.Context, a *Activities, in RunInput, status types.RunStatus, cause error) error {
-	_ = workflow.ExecuteActivity(ctx, a.FinishRun, in, status, dispatch.Result{}).Get(ctx, nil)
+	// Record the failure cause on the Run summary so it surfaces in the §1.8 descent
+	// (GET /runs/{id}.error), not only in the Temporal history — the abstraction must
+	// never hide diagnosis.
+	res := dispatch.Result{}
+	if cause != nil {
+		res.Error = cause.Error()
+	}
+	_ = workflow.ExecuteActivity(ctx, a.FinishRun, in, status, res).Get(ctx, nil)
 	return cause
 }
 
@@ -1789,6 +1796,11 @@ func (a *Activities) FinishRun(ctx context.Context, in RunInput, status types.Ru
 	sites := sitesTouched(result)
 	if len(sites) > 0 {
 		summary["sites"] = sites
+	}
+	// The failure cause (§1.8) — a plugin Action's real terminal message, so the Run
+	// records WHY it failed instead of leaving the descent blank on a red-herring.
+	if result.Error != "" {
+		summary["error"] = result.Error
 	}
 	if err := a.Store.SetRunStatus(ctx, in.RunID, status, summary); err != nil {
 		return err

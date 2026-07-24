@@ -1,0 +1,9 @@
+# datastores — selects the `datastore` kind the vcenter Syncer projects. Each datastore Entity carries a
+# `storage.datastore` Facet (capacity / free / type) — typed attributes at a named seam (§1.1), stamped
+# by the Syncer's normalizer, not invented here. This View is kinds-only so it reliably populates against
+# vcsim (whose datastores don't all report a VMFS type); the reference estate's datastores View adds a
+# `facets:` filter on storage.datastore.type to demonstrate value-level Facet selection — the Contract
+# that pins the schema. Either way, the Facet rides the projection: click a datastore in the UI to see it.
+name: datastores
+selector:
+  kinds: [datastore]

@@ -1,0 +1,22 @@
+# demo.yaml — the vsphere-only demo manifest (ADR-0116 D1/D3). Declared metadata the turnkey runner
+# READS and surfaces, so the human-facing claims (especially `fidelity`) can't quietly rot.
+name: vsphere-only
+title: "vSphere: provision a VM + watch the graph come alive"
+summary: >
+  Point Stratt at a vSphere (vcsim) datacenter: its Syncer projects the topology into a live, queryable
+  graph (region, availability-zone, datastore, VM Entities with Facets + Relations), then a gated
+  Workflow provisions a new VM through the vcenter plugin — and the Syncer observes it back. The read +
+  write halves of the estate model on one substrate.
+
+# fidelity (D3): how real is what you're watching?
+#   real       — real workloads on real substrate.
+#   build-real — provisioning/lifecycle APIs are real, guest-OS/runtime simulated.
+#   simulated  — the substrate itself is faked end to end.
+fidelity: build-real
+fidelityNote: >
+  vcsim is a real vCenter API (govmomi) — create-vm/portgroup, power, snapshot, migrate all execute
+  and the inventory is real; there is no guest OS booting. The projection + orchestration are 100% real.
+
+# What the runner drives (mirrors the estate).
+workflow: vsphere-vm-build
+substrate: vsphere-vcsim

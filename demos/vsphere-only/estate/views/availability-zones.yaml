@@ -1,0 +1,7 @@
+# availability-zones — selects the SHARED `availability-zone` kind (vSphere clusters, projected by the
+# Syncer with each AZ's --in-region--> region and hosts --member-of--> it). "The AZs across the estate"
+# as one relation-navigable surface (ADR-0115 D1). In a multi-substrate estate this same kind would also
+# hold EC2/other AZs — the seam the enterprise capstone builds on.
+name: availability-zones
+selector:
+  kinds: [availability-zone]

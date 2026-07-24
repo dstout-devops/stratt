@@ -1,0 +1,21 @@
+# demo.yaml — the ec2-only demo manifest (ADR-0116 D1/D3). Declared metadata the turnkey runner READS
+# and surfaces, so the human-facing claims (especially `fidelity`) can't quietly rot.
+name: ec2-only
+title: "EC2: provision a real instance through a gated Workflow"
+summary: >
+  Declare an EC2 instance in Config-as-Code, approve a gate, and Stratt provisions a REAL instance via
+  the awsec2 plugin against floci (a real-host EC2 backend) — then its Syncer observes the new instance
+  back into the graph. Real provisioning + a live read-model on one substrate.
+
+# fidelity (D3): how real is what you're watching?
+#   real       — real workloads on real substrate.
+#   build-real — provisioning/lifecycle APIs are real, guest-OS/runtime simulated.
+#   simulated  — the substrate itself is faked end to end.
+fidelity: real
+fidelityNote: >
+  floci (ADR-0093) runs REAL Docker containers as EC2 instances — SSH-able, real lifecycle, real EC2
+  API. Not a mock (it replaced moto). RunInstances actually launches a Linux instance.
+
+# What the runner drives (mirrors the estate).
+workflow: compute-build
+substrate: ec2-floci

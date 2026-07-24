@@ -7,6 +7,7 @@
 # (M2, ADR-0092) and the OpenFGA-memory service chart (the genesis dogfood, ADR-0102).
 helmDemoChart: true
 helmOpenfgaChart: true
+helmHelloStrattChart: true # the k8s-deploy demo app (ADR-0116), mounted at /charts/hello-stratt
 
 plugins:
   - name: helm
@@ -17,6 +18,7 @@ plugins:
     tmpDir: true # writable /tmp for helm's cache (read-only rootfs)
     demoChart: true # mount the hello chart at /charts/hello
     openfgaChart: true # mount the openfga-memory chart at /charts/openfga-memory (ADR-0102)
+    helloStrattChart: true # mount the k8s-deploy demo app at /charts/hello-stratt (ADR-0116)
     env:
       STRATT_HELM_CHART_ROOT: /charts
     # Self-deploy RBAC CONFINED to the one pre-created target namespace (ADR-0102 Q3 /
@@ -25,7 +27,10 @@ plugins:
     # cluster-wide `secrets` reach and cannot touch any other namespace's brokerable
     # Secrets (§2.5). Scoped to the kinds the openfga-memory chart touches; never
     # cluster-admin, never namespace-create (the namespace is pre-created out-of-band).
-    deployNamespace: stratt-authz
+    # Two least-privilege self-deploy targets (deployNamespace accepts a list): the
+    # genesis dogfood (stratt-authz, ADR-0102) and the k8s-deploy demo (demo, ADR-0116).
+    # Each gets its own pre-created Namespace + namespaced Role — NEVER cluster-wide.
+    deployNamespace: [stratt-authz, demo]
     # Write access to exactly the kinds the release creates (openfga-memory: a
     # Deployment + Service; helm also writes its release Secret + ConfigMaps).
     kubeAccess:

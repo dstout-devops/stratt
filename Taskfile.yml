@@ -671,6 +671,150 @@ tasks:
       - "{{.KUBECTL}} --context {{.KIND_CONTEXT}} -n stratt-authz create secret generic helm-deploy-authz --from-literal=marker=1 --dry-run=client -o yaml | {{.KUBECTL}} --context {{.KIND_CONTEXT}} apply -f -"
       - KUBECONTEXT={{.KIND_CONTEXT}} KUBECTL={{.KUBECTL}} bash {{.ROOT_DIR}}/deploy/dev/genesis-selfdeploy.sh
 
+  demo:k8s-deploy:stage:
+    # Stage the k8s-deploy demo's SELF-CONTAINED estate (ADR-0116) into the inline-declarations
+    # path — its authz grant + helm Actuator + gate-only CredentialRef + deploy-hello Workflow +
+    # hello View. Same mirror-exactly mechanism as dev:stage-genesis, different source: the floor
+    # boots with the demo's whole desired state as CaC (actuators/credential-refs are CaC-only,
+    # §2.2/2.3 — never `stratt apply`), which the reconcile controller then enforces.
+    desc: Stage the k8s-deploy demo estate into the inline-declarations path
+    cmds:
+      - rm -rf {{.ROOT_DIR}}/deploy/charts/stratt/dev/declarations
+      - mkdir -p {{.ROOT_DIR}}/deploy/charts/stratt/dev/declarations
+      - cp -R {{.ROOT_DIR}}/demos/k8s-deploy/estate/. {{.ROOT_DIR}}/deploy/charts/stratt/dev/declarations/
+
+  demo:k8s-deploy:run:
+    # The turnkey "k8s: deploy an app" demo (ADR-0116, the first demos/ scenario). Stands up a Stratt
+    # floor whose desired state IS the demo estate (kind + spine + strattd + the helm plugin + the
+    # staged CaC), then drives its gated deploy-hello Workflow end to end — approve the platform-admins
+    # gate as bootstrap-admin, converge the WorkflowRun, assert the real `hello` Deployment is Ready.
+    # The hello-stratt chart rides the helm plugin image (image:helm-plugin). By-hand walk:
+    # demos/k8s-deploy/README.md. Teardown: demo:k8s-deploy:down (full nuke: dev:kind:down).
+    desc: "Demo — stand up a floor and deploy a real app through a gated Workflow (demos/k8s-deploy)"
+    deps: [tools:helm, tools:kubectl]
+    cmds:
+      - task: dev:kind:up
+      - task: image:kind-load
+      - task: image:helm-plugin # the helm Actuator + the baked hello-stratt chart
+      - task: demo:k8s-deploy:stage
+      - |
+        set -eu
+        "{{.HELM}}" upgrade --install stratt {{.ROOT_DIR}}/deploy/charts/stratt \
+          --kube-context {{.KIND_CONTEXT}} -n stratt --create-namespace \
+          -f {{.ROOT_DIR}}/deploy/charts/stratt/values-allinone.yaml \
+          -f {{.ROOT_DIR}}/deploy/charts/stratt/values-selfdeploy.yaml \
+          -f {{.ROOT_DIR}}/deploy/charts/stratt/values-genesis.yaml
+      - "{{.KUBECTL}} --context {{.KIND_CONTEXT}} -n stratt rollout status deploy/stratt --timeout=240s"
+      # The gate-only CredentialRef points at this marker Secret (pointer, no material).
+      - "{{.KUBECTL}} --context {{.KIND_CONTEXT}} -n stratt-authz create secret generic helm-deploy-authz --from-literal=marker=1 --dry-run=client -o yaml | {{.KUBECTL}} --context {{.KIND_CONTEXT}} apply -f -"
+      - KUBECONTEXT={{.KIND_CONTEXT}} KUBECTL={{.KUBECTL}} bash {{.ROOT_DIR}}/demos/k8s-deploy/run.sh
+
+  demo:k8s-deploy:down:
+    # Tear down JUST the demo's footprint — uninstall the `hello` release (Deployment +
+    # Service + ConfigMap + release Secret) via the in-cluster helm the plugin used, leaving
+    # the genesis floor up so `demo:k8s-deploy:run` can re-run fast. Idempotent: a missing
+    # release is not an error. For a FULL teardown (nuke the cluster) use `task dev:kind:down`.
+    desc: "Demo teardown — uninstall the hello release, leave the genesis floor up (full nuke: dev:kind:down)"
+    cmds:
+      - "{{.HELM}} uninstall hello -n demo --kube-context {{.KIND_CONTEXT}} --ignore-not-found"
+      - "{{.KUBECTL}} --context {{.KIND_CONTEXT}} -n demo get deploy,svc,cm -l app.kubernetes.io/name=hello 2>/dev/null || true"
+
+  demo:vsphere-only:stage:
+    # Stage the vsphere-only demo's SELF-CONTAINED estate (ADR-0116) into the inline-declarations
+    # path — its authz grant + gate-only vsphere-dev CredentialRef + vsphere-vm-build Workflow +
+    # the dev-vms/availability-zones/datastores Views. The vcenter Actuator/Actions are boot-wired
+    # via the plugin's hostEnv (values-demo-vsphere), NOT a CaC actuator, so the estate carries no
+    # actuator file. Delivered as CaC through the declarations mount the reconcile controller enforces.
+    desc: Stage the vsphere-only demo estate into the inline-declarations path
+    cmds:
+      - rm -rf {{.ROOT_DIR}}/deploy/charts/stratt/dev/declarations
+      - mkdir -p {{.ROOT_DIR}}/deploy/charts/stratt/dev/declarations
+      - cp -R {{.ROOT_DIR}}/demos/vsphere-only/estate/. {{.ROOT_DIR}}/deploy/charts/stratt/dev/declarations/
+
+  demo:vsphere-only:run:
+    # The turnkey "vSphere: provision a VM + watch the graph come alive" demo (ADR-0116). Stands up a
+    # vSphere-only Stratt floor — kind + spine + strattd + the vcenter plugin + an external vcsim (a real
+    # vCenter API) seeded with an enterprise topology + the staged CaC estate — then drives BOTH halves:
+    # the vcenter Syncer projects the vcsim topology into a live graph (Views come alive), and a gated
+    # Workflow provisions a new VM through vcenter/create-vm. By-hand walk: demos/vsphere-only/README.md.
+    desc: "Demo — stand up a vSphere floor, project the graph, and provision a VM through a gated Workflow"
+    deps: [tools:helm, tools:kubectl]
+    cmds:
+      - task: dev:kind:up
+      # vcsim runs as a compose service on the host; the plugin reaches it on the kind host-gateway.
+      # force-recreate so every run starts from vcsim's clean default topology (no leftover web-01).
+      - docker compose -f {{.ROOT_DIR}}/deploy/dev/docker-compose.yml up -d --force-recreate --wait vcsim
+      - task: image:kind-load
+      - task: image:vcenter-plugin # the vcenter Syncer + the boot-wired create-vm Action
+      - task: demo:vsphere-only:stage
+      - |
+        set -eu
+        "{{.HELM}}" upgrade --install stratt {{.ROOT_DIR}}/deploy/charts/stratt \
+          --kube-context {{.KIND_CONTEXT}} -n stratt --create-namespace \
+          -f {{.ROOT_DIR}}/deploy/charts/stratt/values-allinone.yaml \
+          -f {{.ROOT_DIR}}/deploy/charts/stratt/values-genesis.yaml \
+          -f {{.ROOT_DIR}}/deploy/charts/stratt/values-demo-vsphere.yaml
+      - "{{.KUBECTL}} --context {{.KIND_CONTEXT}} -n stratt rollout status deploy/stratt --timeout=240s"
+      # The gate-only vsphere-dev CredentialRef points at this marker Secret (pointer, no material).
+      - "{{.KUBECTL}} --context {{.KIND_CONTEXT}} -n stratt create secret generic vsphere-dev-authz --from-literal=marker=1 --dry-run=client -o yaml | {{.KUBECTL}} --context {{.KIND_CONTEXT}} apply -f -"
+      - KUBECONTEXT={{.KIND_CONTEXT}} KUBECTL={{.KUBECTL}} bash {{.ROOT_DIR}}/demos/vsphere-only/run.sh
+
+  demo:vsphere-only:down:
+    # Tear down the vsphere-only demo: uninstall the stratt release and stop the vcsim substrate
+    # (kind cluster kept for a fast re-run; full nuke: `task dev:kind:down`). Idempotent.
+    desc: "Demo teardown — uninstall stratt + stop vcsim (full nuke: dev:kind:down)"
+    cmds:
+      - "{{.HELM}} uninstall stratt -n stratt --kube-context {{.KIND_CONTEXT}} --ignore-not-found 2>/dev/null || true"
+      - docker compose -f {{.ROOT_DIR}}/deploy/dev/docker-compose.yml stop vcsim 2>/dev/null || true
+
+  demo:ec2-only:stage:
+    # Stage the ec2-only demo's SELF-CONTAINED estate (ADR-0116) into the inline-declarations path —
+    # its authz grant + gate-only aws-dev CredentialRef + compute-build Workflow + the ec2-instances
+    # View. The awsec2 Actuator/Actions + instance Syncer are boot-wired via the plugin's hostEnv
+    # (values-demo-ec2), NOT a CaC actuator, so the estate carries no actuator file. Delivered as CaC.
+    desc: Stage the ec2-only demo estate into the inline-declarations path
+    cmds:
+      - rm -rf {{.ROOT_DIR}}/deploy/charts/stratt/dev/declarations
+      - mkdir -p {{.ROOT_DIR}}/deploy/charts/stratt/dev/declarations
+      - cp -R {{.ROOT_DIR}}/demos/ec2-only/estate/. {{.ROOT_DIR}}/deploy/charts/stratt/dev/declarations/
+
+  demo:ec2-only:run:
+    # The turnkey "EC2: provision a real instance" demo (ADR-0116). Stands up an EC2-only Stratt floor —
+    # kind + spine + strattd + the awsec2 plugin + an external floci (a real-host EC2 backend that runs
+    # real SSH-able instance containers, ADR-0093) + the staged CaC estate — then drives a gated Workflow
+    # that provisions a REAL instance via awsec2/create-vm; the awsec2 Syncer observes it into the graph.
+    # By-hand walk: demos/ec2-only/README.md.
+    desc: "Demo — stand up an EC2 floor (floci) and provision a real instance through a gated Workflow"
+    deps: [tools:helm, tools:kubectl]
+    cmds:
+      - task: dev:kind:up
+      # floci runs as a compose service on the host; the plugin reaches its EC2 API on the kind
+      # host-gateway. force-recreate so every run starts clean (no leftover instances).
+      - docker compose -f {{.ROOT_DIR}}/deploy/dev/docker-compose.yml up -d --force-recreate --wait floci
+      - task: image:kind-load
+      - task: image:awsec2-plugin # the awsec2 create-vm Action + the instance Syncer
+      - task: demo:ec2-only:stage
+      - |
+        set -eu
+        "{{.HELM}}" upgrade --install stratt {{.ROOT_DIR}}/deploy/charts/stratt \
+          --kube-context {{.KIND_CONTEXT}} -n stratt --create-namespace \
+          -f {{.ROOT_DIR}}/deploy/charts/stratt/values-allinone.yaml \
+          -f {{.ROOT_DIR}}/deploy/charts/stratt/values-genesis.yaml \
+          -f {{.ROOT_DIR}}/deploy/charts/stratt/values-demo-ec2.yaml
+      - "{{.KUBECTL}} --context {{.KIND_CONTEXT}} -n stratt rollout status deploy/stratt --timeout=240s"
+      # The gate-only aws-dev CredentialRef points at this marker Secret (pointer, no material).
+      - "{{.KUBECTL}} --context {{.KIND_CONTEXT}} -n stratt create secret generic aws-dev-authz --from-literal=marker=1 --dry-run=client -o yaml | {{.KUBECTL}} --context {{.KIND_CONTEXT}} apply -f -"
+      - KUBECONTEXT={{.KIND_CONTEXT}} KUBECTL={{.KUBECTL}} bash {{.ROOT_DIR}}/demos/ec2-only/run.sh
+
+  demo:ec2-only:down:
+    # Tear down the ec2-only demo: uninstall the stratt release and stop the floci substrate (which
+    # also stops the instance containers it spawned). kind cluster kept for a fast re-run; full nuke:
+    # `task dev:kind:down`. Idempotent.
+    desc: "Demo teardown — uninstall stratt + stop floci (full nuke: dev:kind:down)"
+    cmds:
+      - "{{.HELM}} uninstall stratt -n stratt --kube-context {{.KIND_CONTEXT}} --ignore-not-found 2>/dev/null || true"
+      - docker compose -f {{.ROOT_DIR}}/deploy/dev/docker-compose.yml stop floci 2>/dev/null || true
+
   dev:promote:authz:
     # Genesis -> real-authz promotion, BACKEND axis (ADR-0102, docs/runbooks/genesis-to-authz.md):
     # point strattd's authz backend at the self-deployed OpenFGA server (in-proc -> server).

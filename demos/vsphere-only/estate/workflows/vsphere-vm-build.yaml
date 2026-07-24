@@ -1,0 +1,35 @@
+# vsphere-vm-build (ADR-0113 / ADR-0116) — the GATED build Workflow this demo launches. An `approve`
+# gate Step (platform-admins) fronts the mutating vcenter/create-vm build (§5 Flow 1 — the launch IS a
+# gate, and approve adds a second platform-admin approval before anything is created in vSphere).
+#
+# vcenter/create-vm is a TARGETLESS Action registered by the boot-wired vcenter plugin host (the SAME
+# host as the OBSERVE Syncer, ADR-0113 D1/D3), so the build output's vcenter.uuid identity correlates
+# with what the Syncer observes. The build projects the VM back BY IDENTITY ONLY with Run provenance —
+# projectKind + labels ride that projection (never a reconcile-side write, §1.2). Facets arrive on the
+# Syncer's next OBSERVE, so the new VM shows up in the dev-vms View. The vsphere-dev CredentialRef is a
+# gate-only ref — an Action's use-check is its only authz gate (§2.5); the plugin connects to vSphere
+# with its own broker creds. This whole estate is delivered as CaC through the declarations mount.
+name: vsphere-vm-build
+steps:
+  - name: approve
+    gate:
+      approvers:
+        teams: [platform-admins]
+      timeoutSeconds: 86400 # 24h to approve the build
+  - name: build
+    needs: [approve]
+    action: vcenter/create-vm
+    credentialRefs: [vsphere-dev]
+    params:
+      name: web-01
+      # No datacenter specified — the demo floor runs a single vSphere datacenter (the default vcsim
+      # topology), so create-vm places into it (govmomi DefaultDatacenter). In a multi-datacenter estate
+      # you would name the target datacenter here (create-vm accepts a `datacenter` param); provisioning
+      # into a specific named region across many is the enterprise-capstone story.
+      cpus: 2
+      memoryMB: 2048
+      # The built VM projects AS this kind with these labels (Run provenance, never a reconcile write).
+      projectKind: host
+      projectLabels:
+        fleet: web
+        stratt.intent/instance: web-01

@@ -1,0 +1,23 @@
+# vsphere-only demo overlay (ADR-0116) — layered on values-allinone.yaml + values-genesis.yaml by
+# `task demo:vsphere-only:run`. Adds ONLY the vcenter plugin (unlike values-e2e, which also brings up
+# awsec2/crossplane/helm/declared) so the floor is genuinely "vSphere-only".
+#
+# The `plugins:` entry (a) deploys the vcenter plugin pod (Service stratt-vcenter:9090, image
+# kind-loaded by image:vcenter-plugin) and (b) makes the chart auto-derive STRATT_VCENTER_PLUGIN_ADDR
+# on strattd (deployment.yaml) so the boot-wired vcenter Syncer + INVOKE Actions (vcenter/create-vm …)
+# register (core/cmd/strattd/main.go). `env` configures the plugin pod (it dials vcsim on the kind
+# host-gateway 192.168.102.1:8989); `hostEnv` injects strattd's Syncer wiring (Source name, endpoint,
+# interval). vcenter reaches an external vcsim, not the K8s API, so no kubeAccess.
+plugins:
+  - name: vcenter
+    image:
+      repository: stratt-plugin-vcenter
+      tag: dev
+      pullPolicy: Never # kind-loaded (task image:vcenter-plugin)
+    env:
+      STRATT_VCENTER_URL: "https://192.168.102.1:8989/sdk"
+      STRATT_VCENTER_INSECURE: "true"
+    hostEnv:
+      STRATT_VCENTER_SOURCE_NAME: "vcenter-dev"
+      STRATT_VCENTER_URL: "https://192.168.102.1:8989/sdk"
+      STRATT_VCENTER_INTERVAL: "15s"

@@ -1,0 +1,15 @@
+# helm-deploy — the gate-only CredentialRef the deploy-hello Action binds (ADR-0116,
+# reusing ADR-0092/0102's pattern). An Action's CredentialRef use-check is its ONLY authz
+# gate (ExecuteAction refuses a credential-free Action, "ActionUngated"), so the deploy Step
+# must carry one even though helm acts via the plugin pod's OWN in-cluster ServiceAccount
+# (never brokered material). POINTER only (§2.5); gateOnly (ADR-0052) — no material resolved.
+#
+# `stratt apply` reconciles the WHOLE desired state (it prunes anything absent), so this demo
+# estate re-declares helm-deploy rather than assuming the genesis copy survives the apply. Same
+# NAME as the genesis ref, so the persisting `bootstrap-admin user of credential_ref:helm-deploy`
+# authz grant (applied separately, not via ParseDir) still matches — the demo mints no new authz.
+name: helm-deploy
+ownerTeam: platform-admins
+backend: k8s-secret
+gateOnly: true
+locator: { namespace: stratt-authz, name: helm-deploy-authz }

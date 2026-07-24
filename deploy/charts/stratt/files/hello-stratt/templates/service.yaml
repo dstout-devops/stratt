@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Release.Name }}
+  labels:
+    app.kubernetes.io/name: {{ .Release.Name }}
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+    stratt.dev/deployed-by: helm-actuator
+spec:
+  selector:
+    app.kubernetes.io/name: {{ .Release.Name }}
+  ports:
+    # `kubectl port-forward svc/<release> 8888:80` then open http://localhost:8888 to see the page.
+    - { name: http, port: 80, targetPort: http }

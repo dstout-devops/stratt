@@ -107,6 +107,10 @@ type Interpreter interface {
 // each target reported (to project back with Run provenance, §8).
 type Result struct {
 	Succeeded bool
+	// Error is the failure cause when !Succeeded — a plugin Action's terminal
+	// message (§1.8), carried so the Run records WHY it failed instead of a
+	// downstream masking error. Empty when Succeeded.
+	Error string
 	// PerTarget maps target name → status (ok | changed | failed |
 	// unreachable). Failures are sticky: a target that ever failed is never
 	// downgraded by a later ok.

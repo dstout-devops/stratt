@@ -66,20 +66,22 @@ func provisionVM(ctx context.Context, c *vim25.Client, p createVMParams) (vmResu
 		dc, err = finder.DefaultDatacenter(ctx)
 	}
 	if err != nil {
-		return vmResult{}, fmt.Errorf("datacenter: %w", err)
+		// Actionable placement diagnosis (§1.8): the common cause is >1 datacenter with no
+		// `datacenter` param — name the one to build into.
+		return vmResult{}, fmt.Errorf("datacenter %q: %w (set params.datacenter to the target datacenter)", p.Datacenter, err)
 	}
 	finder.SetDatacenter(dc)
 	folders, err := dc.Folders(ctx)
 	if err != nil {
-		return vmResult{}, fmt.Errorf("folders: %w", err)
+		return vmResult{}, fmt.Errorf("datacenter %q folders: %w", dc.Name(), err)
 	}
 	pools, err := finder.ResourcePoolList(ctx, "*")
 	if err != nil || len(pools) == 0 {
-		return vmResult{}, fmt.Errorf("resource pool: %w", err)
+		return vmResult{}, fmt.Errorf("datacenter %q has no resource pool to place the VM — target a datacenter with compute capacity (params.datacenter)", dc.Name())
 	}
 	dss, err := finder.DatastoreList(ctx, "*")
 	if err != nil || len(dss) == 0 {
-		return vmResult{}, fmt.Errorf("datastore: %w", err)
+		return vmResult{}, fmt.Errorf("datacenter %q has no datastore to place the VM — target a datacenter with storage capacity (params.datacenter)", dc.Name())
 	}
 	guestID := p.GuestID
 	if guestID == "" {
