@@ -1414,7 +1414,16 @@ components:
           description: "Backend-shaped address (k8s-secret: namespace, name)."
         injection:
           type: array
+          description: >
+            Per-field projection policy. Empty (with gateOnly:true) ⇒ a
+            material-less authz-gate ref.
           items: { $ref: "#/components/schemas/CredentialInjection" }
+        gateOnly:
+          type: boolean
+          description: >
+            Assert an injection-less ref is DELIBERATELY material-less — purely
+            an Action's authz gate (ADR-0052/0092). Required to be true when
+            injection is empty; illegal alongside a non-empty injection block.
         declaredBy:
           type: string
           enum: [api, cac]
@@ -2307,8 +2316,9 @@ components:
     Step:
       type: object
       description: >
-        One DAG node — an actuation (Actuator + params against a View,
-        charter §2.3) or a Gate; exactly one shape is set.
+        One DAG node — a Gate, a targetless Action (Action + params, ADR-0031),
+        or an actuation (Actuator + params against a View, charter §2.3);
+        exactly one shape is set.
       required: [name]
       properties:
         name: { type: string }
@@ -2323,6 +2333,12 @@ components:
             Edge condition on the needs' outcomes; success is the default
             (all needs succeeded).
         gate: { $ref: "#/components/schemas/GateSpec" }
+        action:
+          type: string
+          description: >
+            A namespaced targetless Connector Action (e.g. helm/deploy). Set
+            this OR viewName+actuator, never both — an Action carries no View
+            (ADR-0031).
         viewName: { type: string }
         actuator: { type: string }
         params: { type: object }

@@ -1288,7 +1288,10 @@ export interface components {
             backend: "k8s-secret" | "vault" | "workload-identity";
             /** @description Backend-shaped address (k8s-secret: namespace, name). */
             locator: Record<string, never>;
+            /** @description Per-field projection policy. Empty (with gateOnly:true) ⇒ a material-less authz-gate ref. */
             injection: components["schemas"]["CredentialInjection"][];
+            /** @description Assert an injection-less ref is DELIBERATELY material-less — purely an Action's authz gate (ADR-0052/0092). Required to be true when injection is empty; illegal alongside a non-empty injection block. */
+            gateOnly?: boolean;
             /** @enum {string} */
             readonly declaredBy?: "api" | "cac";
         };
@@ -1887,7 +1890,7 @@ export interface components {
             name: string;
             steps: components["schemas"]["Step"][];
         };
-        /** @description One DAG node — an actuation (Actuator + params against a View, charter §2.3) or a Gate; exactly one shape is set. */
+        /** @description One DAG node — a Gate, a targetless Action (Action + params, ADR-0031), or an actuation (Actuator + params against a View, charter §2.3); exactly one shape is set. */
         Step: {
             name: string;
             /** @description Step names that must reach a terminal state first. */
@@ -1898,6 +1901,8 @@ export interface components {
              */
             when?: "success" | "failure" | "always";
             gate?: components["schemas"]["GateSpec"];
+            /** @description A namespaced targetless Connector Action (e.g. helm/deploy). Set this OR viewName+actuator, never both — an Action carries no View (ADR-0031). */
+            action?: string;
             viewName?: string;
             actuator?: string;
             params?: Record<string, never>;

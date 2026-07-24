@@ -836,6 +836,12 @@ func credentialRefToWire(ref types.CredentialRef) CredentialRef {
 		Locator:   locator,
 		Injection: make([]CredentialInjection, len(ref.Injection)),
 	}
+	// A material-less ref is gate-only; surface it explicitly (derive from empty
+	// injection so GET reflects reality even for stored refs predating the field).
+	if ref.GateOnly || len(ref.Injection) == 0 {
+		gate := true
+		out.GateOnly = &gate
+	}
 	for i, inj := range ref.Injection {
 		out.Injection[i] = CredentialInjection{Key: inj.Key, As: CredentialInjectionAs(inj.As), Name: inj.Name}
 	}
@@ -857,12 +863,20 @@ func credentialRefFromWire(in CredentialRef) (types.CredentialRef, error) {
 	if err != nil {
 		return types.CredentialRef{}, err
 	}
-	if len(in.Injection) == 0 {
-		return types.CredentialRef{}, fmt.Errorf("injection policy is required")
+	// Mirror the Git/ParseDir door (desiredstate.parseCredentialRefFile): empty
+	// injection is legal ONLY as a DELIBERATE gate-only ref, and gateOnly with a
+	// non-empty injection block is contradictory (§1.8 — the API door fails at apply,
+	// never silently degrades to "resolves nothing").
+	gateOnly := in.GateOnly != nil && *in.GateOnly
+	switch {
+	case len(in.Injection) == 0 && !gateOnly:
+		return types.CredentialRef{}, fmt.Errorf("injection policy is required (or set gateOnly: true for a material-less authz-gate ref — ADR-0052/0092)")
+	case len(in.Injection) > 0 && gateOnly:
+		return types.CredentialRef{}, fmt.Errorf("gateOnly refs broker no material — remove either the injection block or gateOnly")
 	}
 	out := types.CredentialRef{
 		Name: in.Name, OwnerTeam: in.OwnerTeam, Backend: string(in.Backend),
-		Locator: locator, Injection: make([]types.CredentialInjection, len(in.Injection)),
+		Locator: locator, GateOnly: gateOnly, Injection: make([]types.CredentialInjection, len(in.Injection)),
 	}
 	for i, inj := range in.Injection {
 		if inj.Key == "" || inj.Name == "" || !inj.As.Valid() {
@@ -1735,6 +1749,9 @@ func stepToWire(s types.Step) Step {
 		}
 		out.Gate = &spec
 	}
+	if s.Action != "" {
+		out.Action = &s.Action
+	}
 	if s.ViewName != "" {
 		out.ViewName = &s.ViewName
 	}
@@ -1789,6 +1806,9 @@ func workflowFromWire(in Workflow) (types.Workflow, error) {
 				g.TimeoutSeconds = int(*s.Gate.TimeoutSeconds)
 			}
 			step.Gate = g
+		}
+		if s.Action != nil {
+			step.Action = *s.Action
 		}
 		if s.ViewName != nil {
 			step.ViewName = *s.ViewName
