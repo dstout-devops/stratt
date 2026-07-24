@@ -4,7 +4,10 @@
   (F1: D2 now states that landing vcenter requires scoping the sibling providers or adding explicit bindings, else the
   shared/default environment goes AMBIGUOUS on merge; F2: the stale `ScopeToEnvironment` doc-comment update is booked as
   slice-1 work; F3: `Actuator`/`CapabilityBinding` gain a `ScopedEnvironments()` (the `EnvScoped` interface) rather than
-  a one-off field read).
+  a one-off field read). **D4 amended during slice 2** (steward): the portgroup VLAN composes ipam via an EXPLICIT
+  `netbox/ipam-resolve` Workflow Step + step-output binding, **not** resolve-inject — resolve-inject is workspace-shaped
+  and Actuator-`Apply`-only, and a per-build VLAN allocation is more legibly a visible Step (§1.8). vcenter drops
+  `requires: [ipam]`.
 - **Date:** 2026-07-24
 - **Deciders:** Project steward (dstout)
 - **Charter sections:** §1.5 (an Intent targets the `provisioning` _class_; vcenter is a swappable provider chosen
@@ -16,8 +19,8 @@
   slot and swaps [ADR-0058](0058-provisioning-from-intent.md)'s named `vsphere` builder onto the
   [ADR-0110](0110-provisioning-class-reach-path.md) reach-path** (ADR-0058's `builder:` field is **superseded** — the
   provider binds via `requires: [provisioning]`, never `builder: vsphere/create-vm`). Mirrors **ADR-0107** (EC2 as
-  provisioning provider #1, enablement-gate) as provider #N; composes **ADR-0111** (ipam) for the portgroup VLAN via the
-  **ADR-0112 D2** generic capability-handle `output` channel; follows **ADR-0112 D5** (build output identity-only,
+  provisioning provider #1, enablement-gate) as provider #N; composes **ADR-0111** (ipam) for the portgroup VLAN via an
+  explicit `netbox/ipam-resolve` Workflow Step + step-output binding (D4, corrected mechanism); follows **ADR-0112 D5** (build output identity-only,
   keyed by the Syncer's own scheme) and **ADR-0017** (provision→configure identity projection); extends **ADR-0057**
   (environment scope) to the provisioning provider-selection path; builds on **ADR-0007** (the shipped vcenter Syncer +
   vcsim) and **ADR-0060** (the dual-verb OBSERVE+INVOKE plugin shape, as netbox `ipam` used). Reconciles with
@@ -102,15 +105,32 @@ next sync fills the Facets. Because one module owns both verbs (D1), the co-owne
 duplicate Entity, no fourth `net.subnet` writer, so **ADR-0096's `net.subnet` closed-union + blocking co-fidelity test
 are untouched**.
 
-### D4 — The Subnet build composes ipam for the portgroup VLAN (ADR-0111 + ADR-0112 D2)
+### D4 — The Subnet build composes ipam for the portgroup VLAN via an EXPLICIT allocation Step (not resolve-inject)
 
-`vcenter/create-portgroup` declares its dependency through the Actuator's `requires: [ipam]`. At Run dispatch the core
-resolves + injects the ipam handle; the plugin reads `req.GetResolvedCapabilities()["ipam"]`, decodes its `output`
-bytes against `capabilities/ipam.output` (`{cidr, vlanId, gateway}` — the generic **ADR-0112 D2** output channel, the
-same one the opentofu plugin consumes), and sets the DVPortgroup's VLAN from `vlanId`. Allocation stays anchored in
-NetBox (ADR-0111 D4) — Stratt persists no allocation record (§1.2). The Actuator stays **PENDING** and observable
-(§1.8) until a verified `ipam` provider exists — never a silent no-op. (`vcenter/create-vm` needs no capability; it
-places the VM on a portgroup the Subnet build already created.)
+**Corrected mechanism (supersedes this ADR's original resolve-inject framing).** The build implementation revealed that
+resolve-inject (ADR-0105/0111) is **workspace-shaped and Actuator-`Apply`-only**: the core's `resolveCapabilities`
+assembles the resolve _input_ as `{workspace}` and injects only onto `Plan`/`Apply` (`InvokeRequest` carries no
+`resolved_capabilities`). That model fits an **ambient backend** (statestore — one backend keyed by a workspace,
+injected transparently). It fits **ipam poorly**: an allocation's input is **per-build** (`{key, role|pool, size,
+vlanGroup, region, …}`), not a workspace, and a VLAN allocation is a discrete act that §1.8 wants **visible**, not
+hidden in an injected handle. And `vcenter/create-portgroup` is an INVOKE **Action**, which the resolve-inject path
+does not serve.
+
+So the `vsphere-subnet-build` Workflow composes the two Actions **explicitly**, using the shipped step-output binding
+(ADR-0031): step 1 `netbox/ipam-resolve` allocates the prefix + VLAN and emits `capabilities/ipam.output`
+(`{cidr, vlanId, gateway}`); step 2 `vcenter/create-portgroup` reads `vlanId` (and `cidr`) via
+`{{.steps.allocate-vlan.outputs.vlanId}}` — the template engine preserves the native integer type — and sets the
+DVPortgroup VLAN. This is the **general composition primitive** (any capability Action composes this way), it keeps the
+allocation a **legible descent Step** (§1.8), and NetBox stays the sole allocation SoR (ADR-0111 D4, §1.2 — Stratt
+persists no allocation record). So the vcenter Actuator does **NOT** declare `requires: [ipam]` (that is the ambient
+resolve-inject gate, which this build does not use); the dependency is the Workflow's `needs: [allocate-vlan]` edge,
+observable in the DAG. (`vcenter/create-vm` needs no allocation; a VM is placed on a portgroup a prior Subnet build
+already created.)
+
+**Reconciliation (ADR-0112 follow-up #7).** This deliberately does **not** generalize resolve-inject to the Invoke
+verb. Generalizing the resolve-_input_ assembly so ambient-backend capabilities can also be consumed on the Action verb
+is a real, separate port evolution — it earns its own ADR when an _ambient_ capability first needs the Action verb. For
+a per-build allocation like ipam, explicit-Step composition is the correct model, not a stopgap.
 
 ### D5 — vcsim write-fidelity is PROVEN; real-vCenter smoke test is the deferred validation
 
@@ -138,8 +158,8 @@ is the SoR, the graph projects it — the build writes identity only, the Syncer
 explicit binding; environment scope is additive, D2), §2.5 (D6), §1.4 (govmomi/vcsim plugin-tier; spine untouched). It
 **touches the data model** (a new estate Actuator + capability-binding + two Action Contracts) and a **core
 reconcile-path change** (D2 environment scoping of provider selection) — highest review bar (charter-guardian +
-vocabulary-linter). It does **not** touch the sovereign plugin port proto (it consumes the ADR-0112 D2 `output` channel
-as-is).
+vocabulary-linter). It does **not** touch the sovereign plugin port proto: the portgroup VLAN composes ipam via an
+explicit Workflow Step + step-output binding (D4), not resolve-inject.
 
 ## Consequences
 
@@ -158,7 +178,13 @@ as-is).
   `vcenter/apply`-style Action wrapper; reuse whatever ADR-0112's follow-up settles). (3) The enterprise-topology dev
   seed (`vsphere-bootstrap.sh` shaping vcsim into multi-region/AZ/sovereign-zone inventory). (4) Ansible **configure**
   Step on the built VM — the §5.1 provision→configure close, shared with ADR-0112. (5) A PDP sovereignty gate on the
-  region/tenant selection (shared with ADR-0111 D5).
+  region/tenant selection (shared with ADR-0111 D5). (6) **Eliminate the ipam-resolve contract mirror.** Invoking the
+  capability-resolve Action `netbox/ipam-resolve` as an explicit Workflow Step required a Workflow-facing
+  `actions/netbox/ipam-resolve.{input,output}` Contract surface mirroring the class `capabilities/ipam.{input,output}`
+  (bound by a co-fidelity test) — because the Workflow-step validator resolves an Action's Contract by the
+  `actions/<name>` convention, while a capability-resolve Action declares the class contract. A follow-up could teach
+  the validator to resolve a capability-resolve Action's Contract from the estate's action→class mapping, removing the
+  per-provider mirror.
 
 ## Alternatives considered
 

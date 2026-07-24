@@ -13,3 +13,6 @@ entries:
   - capability: provisioning
     provider: vcenter
     intentKind: Compute
+  - capability: provisioning
+    provider: vcenter
+    intentKind: Subnet

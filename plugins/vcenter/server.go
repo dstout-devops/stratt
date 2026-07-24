@@ -67,6 +67,13 @@ func (s *Server) GetManifest(context.Context, *pluginv1.GetManifestRequest) (*pl
 				Idempotent:  false,
 				DryRunnable: true,
 			},
+			{
+				Name:        actionCreatePortgroup,
+				Input:       &pluginv1.ContractRef{SchemaId: "actions/vcenter/create-portgroup.input"},
+				Output:      &pluginv1.ContractRef{SchemaId: "actions/vcenter/create-portgroup.output"},
+				Idempotent:  false,
+				DryRunnable: true,
+			},
 		},
 	}}, nil
 }

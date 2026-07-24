@@ -5,6 +5,53 @@ import (
 	"testing"
 )
 
+// TestIpamResolveActionContractCoFidelity is the ADR-0113 D4 drift guard: the Workflow-facing
+// actions/netbox/ipam-resolve.{input,output} Contracts are INTENTIONALLY identical in shape to the
+// class-level capabilities/ipam.{input,output} (ADR-0111). They exist because a capability-resolve
+// Action invoked as an explicit Workflow Step is validated by the actions/<name> convention, while
+// resolve-inject validates the same shape against the class contract. This test binds them so they
+// cannot drift: the same representative payloads must validate (and fail) identically against both.
+func TestIpamResolveActionContractCoFidelity(t *testing.T) {
+	pairs := []struct{ action, class string }{
+		{"actions/netbox/ipam-resolve.input", "capabilities/ipam.input"},
+		{"actions/netbox/ipam-resolve.output", "capabilities/ipam.output"},
+	}
+	samples := map[string][]struct {
+		payload string
+		valid   bool
+	}{
+		"input": {
+			{`{"key":"dmz-subnet-01","role":"dmz","size":24,"vlanGroup":"dc1"}`, true},
+			{`{"key":"x","pool":"10.30.0.0/16","size":24}`, true},
+			{`{"role":"dmz","size":24}`, false},                             // missing key
+			{`{"key":"x","size":24,"pool":"p","role":"r"}`, false},          // pool XOR role
+			{`{"key":"x","role":"dmz","size":24,"undeclared":true}`, false}, // closed
+		},
+		"output": {
+			{`{"cidr":"10.30.4.0/24","vlanId":1234}`, true},
+			{`{"vlanId":1234}`, false},                           // missing cidr
+			{`{"cidr":"10.30.4.0/24","vlanId":9999}`, false},     // vlan out of range
+			{`{"cidr":"10.30.4.0/24","undeclared":true}`, false}, // closed
+		},
+	}
+	for _, p := range pairs {
+		kind := "input"
+		if strings.HasSuffix(p.action, ".output") {
+			kind = "output"
+		}
+		for _, s := range samples[kind] {
+			actErr := ValidateNamed(p.action, []byte(s.payload))
+			clsErr := ValidateNamed(p.class, []byte(s.payload))
+			if (actErr == nil) != s.valid {
+				t.Errorf("%s: payload %s expected valid=%v, got err=%v", p.action, s.payload, s.valid, actErr)
+			}
+			if (actErr == nil) != (clsErr == nil) {
+				t.Errorf("co-fidelity drift: %s and %s disagree on %s (action err=%v, class err=%v)", p.action, p.class, s.payload, actErr, clsErr)
+			}
+		}
+	}
+}
+
 // TestStatestoreOutputContract is the co-fidelity guard for ADR-0105: the class-level
 // capabilities/statestore.output Contract accepts a representative provider-agnostic backend-config
 // handle (the shape awss3/statestore-resolve produces) and rejects a malformed one.
@@ -157,8 +204,8 @@ func TestPinsAreStable(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(all) != 106 {
-		t.Fatalf("expected 106 embedded documents, got %d", len(all))
+	if len(all) != 110 {
+		t.Fatalf("expected 110 embedded documents, got %d", len(all))
 	}
 	versions := map[string]int{}
 	for _, c := range all {

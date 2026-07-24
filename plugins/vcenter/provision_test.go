@@ -69,6 +69,53 @@ func TestBuildEntityIsIdentityOnly(t *testing.T) {
 	}
 }
 
+// TestProvisionPortgroupCreatesWithVLAN proves the Subnet build (ADR-0113 D4): create-portgroup builds
+// a DVS portgroup with the given 802.1Q VLAN against in-process vcsim, and the Syncer OBSERVEs it back
+// as a subnet by vcenter.network.moref. The VLAN arrives as a plain param (bound from a prior
+// netbox/ipam-resolve Step's outputs at the Workflow layer) — no resolve-inject.
+func TestProvisionPortgroupCreatesWithVLAN(t *testing.T) {
+	simulator.Test(func(ctx context.Context, c *vim25.Client) {
+		res, err := provisionPortgroup(ctx, c, createPortgroupParams{Name: "dmz-pg", VLANID: 1234})
+		if err != nil {
+			t.Fatalf("provisionPortgroup: %v", err)
+		}
+		if res.Moref == "" {
+			t.Fatal("built portgroup has empty moref — Syncer could not correlate it")
+		}
+		entities, err := enumerate(ctx, c)
+		if err != nil {
+			t.Fatalf("enumerate: %v", err)
+		}
+		var observed bool
+		for _, e := range entities {
+			if e.GetKind() == "subnet" && e.GetIdentityKeys()["vcenter.network.moref"] == res.Moref {
+				observed = true
+			}
+		}
+		if !observed {
+			t.Errorf("Syncer did not OBSERVE the built portgroup by vcenter.network.moref=%s", res.Moref)
+		}
+	})
+}
+
+// TestBuildPortgroupEntityIsIdentityOnly guards ADR-0113 D3 for the portgroup build: identity + labels
+// only, keyed by vcenter.network.moref, NEVER a net.subnet Facet (the Syncer owns it).
+func TestBuildPortgroupEntityIsIdentityOnly(t *testing.T) {
+	e := buildPortgroupEntity(createPortgroupParams{Name: "dmz-pg", ProjectLabels: map[string]string{"zone": "dmz"}}, pgResult{Moref: "dvportgroup-77"})
+	if len(e.GetFacets()) != 0 {
+		t.Errorf("portgroup build must write NO Facets (Syncer owns net.subnet), got %v", e.GetFacets())
+	}
+	if e.GetIdentityKeys()["vcenter.network.moref"] != "dvportgroup-77" {
+		t.Errorf("portgroup build must key by vcenter.network.moref, got %v", e.GetIdentityKeys())
+	}
+	if e.GetKind() != "subnet" {
+		t.Errorf("default kind must be subnet, got %q", e.GetKind())
+	}
+	if e.GetLabels()["source"] != "vsphere" || e.GetLabels()["zone"] != "dmz" {
+		t.Errorf("labels/overlay not applied: %v", e.GetLabels())
+	}
+}
+
 // TestUnknownActionRejected: content-blind dispatch rejects an action the plugin does not ship (§1.5)
 // rather than guessing.
 func TestUnknownActionRejected(t *testing.T) {

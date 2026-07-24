@@ -17,9 +17,15 @@ pluginIdentity: vcenter
 tier: trusted
 environments: [vsphere-dc]
 provides: [provisioning]
-# provisions advertises vcenter's per-kind build Workflow (ADR-0110 D3). In the vsphere-dc environment
-# Compute has TWO providers (awsec2 unscoped + vcenter) → per-(class,kind) resolution fails closed on
-# the ambiguity (§2.4); the estate/capability-bindings/provisioning-vsphere.yaml entry selects vcenter.
-# (Subnet/DVPortgroup provisioning — requires:[ipam] for the VLAN — is the next slice, ADR-0113 D4.)
+# provisions advertises vcenter's per-kind build Workflows (ADR-0110 D3). In the vsphere-dc environment
+# BOTH Compute (awsec2 unscoped + vcenter) and Subnet (crossplane/opentofu unscoped + vcenter) have >1
+# provider → per-(class,kind) resolution fails closed on the ambiguity (§2.4); the
+# estate/capability-bindings/provisioning-vsphere.yaml entries select vcenter for both.
+#
+# Note there is NO requires:[ipam] here (ADR-0113 D4, corrected): the Subnet build composes ipam via an
+# EXPLICIT netbox/ipam-resolve Step in vsphere-subnet-build (resolve-inject is workspace-shaped and
+# Actuator-Apply-only; a per-build VLAN allocation is more legibly a visible Step, §1.8). The dependency
+# is the Workflow's `needs` edge, not a resolve-inject gate.
 provisions:
   Compute: vsphere-vm-build
+  Subnet: vsphere-subnet-build

@@ -1000,6 +1000,12 @@ func run(ctx context.Context, log *slog.Logger) error {
 		if err := registerPluginAction("vcenter/create-vm", host, true); err != nil {
 			return err
 		}
+		// vcenter/create-portgroup (ADR-0113 D4): the Subnet builder — a VLAN-tagged DVS portgroup.
+		// The VLAN is composed via an explicit netbox/ipam-resolve Step in vsphere-subnet-build, not
+		// resolve-inject; this Action just takes the resolved vlanId as a param. dry-runnable.
+		if err := registerPluginAction("vcenter/create-portgroup", host, true); err != nil {
+			return err
+		}
 		controllers = append(controllers, homeSupervise(sourceName, host.Register, func(cctx context.Context) error {
 			return host.SyncLoop(cctx, interval)
 		}))
