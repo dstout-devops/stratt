@@ -994,6 +994,12 @@ func run(ctx context.Context, log *slog.Logger) error {
 			TombstoneSchemes: []string{"vcenter.uuid", "vcenter.host.uuid", "vcenter.network.moref"},
 		}
 		host := pluginhost.New(store, pluginv1.NewPluginServiceClient(conn), grant, log)
+		// The dual-verb INVOKE surface (ADR-0113): the vcenter/create-vm provisioning build Action,
+		// on the SAME host as the OBSERVE Syncer below — so the build output's vcenter.uuid identity
+		// correlates structurally with what the Syncer observes (ADR-0113 D1/D3). dry-runnable.
+		if err := registerPluginAction("vcenter/create-vm", host, true); err != nil {
+			return err
+		}
 		controllers = append(controllers, homeSupervise(sourceName, host.Register, func(cctx context.Context) error {
 			return host.SyncLoop(cctx, interval)
 		}))

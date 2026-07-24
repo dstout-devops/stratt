@@ -1,0 +1,32 @@
+# vsphere-vm-build — the GATED build Workflow an Intent/Compute launches when it resolves to the
+# vcenter provisioning provider (ADR-0113 / ADR-0110 D3, the vsphere-dc environment's Compute builder).
+# Mirrors compute-build (ADR-0058): the provisioning reconcile surfaces a `provision/<intent>` Finding
+# per missing instance; an operator launches THIS Workflow to build one (§5 Flow 1 — the launch IS the
+# gate, and the approve Step adds a second platform-admin approval). The build Action projects the VM
+# back BY IDENTITY ONLY with Run provenance (ADR-0113 D3); the projectKind + labels + the
+# stratt.intent/instance correlation label ride that projection (never a reconcile-side write, §1.2) so
+# the next reconcile sees it built and resolves the Finding. Facets arrive from the vcenter Syncer's
+# next OBSERVE.
+name: vsphere-vm-build
+steps:
+  - name: approve
+    gate:
+      approvers:
+        teams: [platform-admins]
+      timeoutSeconds: 86400 # 24h to approve the build
+  - name: build
+    needs: [approve]
+    action: vcenter/create-vm # landscape binding — vSphere's Compute builder (swap point, §1.4/§1.5)
+    credentialRefs: [vsphere-dev] # §2.5 — an Action's use-check is its only authz gate
+    params:
+      name: web-01
+      cpus: 2
+      memoryMB: 2048
+      # The estate OVERLAY (ADR-0058 §6): the built VM projects AS this kind with these labels (Run
+      # provenance, never a reconcile write). stratt.intent/instance resolves the provisioning Finding;
+      # fleet is the selection label web-servers picks up. Per-instance parameterization (web-02…) via
+      # launch params is the follow-up — this concrete Workflow builds web-01.
+      projectKind: host
+      projectLabels:
+        fleet: web
+        stratt.intent/instance: web-01

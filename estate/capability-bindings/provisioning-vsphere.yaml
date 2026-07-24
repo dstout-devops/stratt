@@ -1,0 +1,15 @@
+# provisioning-vsphere — the capability-binding that selects vcenter as the Compute provisioning
+# provider in the vsphere-dc environment (ADR-0113 D2, extending ADR-0110 D3/D4 with environment scope).
+#
+# In the vsphere-dc environment, Compute has TWO verified providers — awsec2 (unscoped ⇒ in every
+# environment) and vcenter (scoped to vsphere-dc) — so per-(class,kind) resolution fails closed on the
+# ambiguity (§2.4, never a silent tiebreak). This binding disambiguates it: Compute builds via vcenter
+# in vsphere-dc. It is ITSELF environment-scoped, so it does NOT leak into the aws (or default)
+# environment, where awsec2 stays the sole Compute provider and auto-binds (ADR-0107). This is how a
+# region/sovereignty boundary selects its substrate: an environment, never a global switch.
+name: provisioning-vsphere
+environments: [vsphere-dc]
+entries:
+  - capability: provisioning
+    provider: vcenter
+    intentKind: Compute

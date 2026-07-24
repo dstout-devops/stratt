@@ -47,7 +47,8 @@ func (s *Server) GetManifest(context.Context, *pluginv1.GetManifestRequest) (*pl
 		PluginId:        s.cfg.PluginID,
 		ProtocolVersion: "v1",
 		Class:           pluginv1.PluginClass_PLUGIN_CLASS_SYNCER,
-		Verbs:           []pluginv1.Verb{pluginv1.Verb_VERB_OBSERVE},
+		// Dual-verb (ADR-0060/0113): OBSERVE the estate, INVOKE the provisioning build Actions.
+		Verbs: []pluginv1.Verb{pluginv1.Verb_VERB_OBSERVE, pluginv1.Verb_VERB_INVOKE},
 		Contracts: []*pluginv1.ContractDecl{
 			{SchemaId: "vm.config"},
 			{SchemaId: "vm.runtime"},
@@ -55,6 +56,18 @@ func (s *Server) GetManifest(context.Context, *pluginv1.GetManifestRequest) (*pl
 			{SchemaId: "net.subnet"}, // vSphere portgroups project as subnets (ADR-0059)
 		},
 		TombstoneSchemes: []string{"vcenter.uuid", "vcenter.host.uuid", "vcenter.network.moref"},
+		// The `provisioning` capability build Actions (ADR-0113). create-vm is NOT idempotent
+		// (each call builds a new VM); it supports a side-effect-free dry-run.
+		Capabilities: []string{"provisioning"},
+		Actions: []*pluginv1.ActionDecl{
+			{
+				Name:        actionCreateVM,
+				Input:       &pluginv1.ContractRef{SchemaId: "actions/vcenter/create-vm.input"},
+				Output:      &pluginv1.ContractRef{SchemaId: "actions/vcenter/create-vm.output"},
+				Idempotent:  false,
+				DryRunnable: true,
+			},
+		},
 	}}, nil
 }
 

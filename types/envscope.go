@@ -17,6 +17,14 @@ func (a Assignment) ScopedEnvironments() []string { return a.Environments }
 func (t Trigger) ScopedEnvironments() []string    { return t.Environments }
 func (b Baseline) ScopedEnvironments() []string   { return b.Environments }
 
+// Provider-selection declarations are env-scoped too (ADR-0113 D2): the provisioning
+// reach-path resolves a provider per environment, so an Actuator/Connector that
+// `provides` a capability and the CapabilityBinding that selects it both join the
+// EnvScoped contract — an environment is the substrate/sovereignty boundary.
+func (a Actuator) ScopedEnvironments() []string          { return a.Environments }
+func (c Connector) ScopedEnvironments() []string         { return c.Environments }
+func (b CapabilityBinding) ScopedEnvironments() []string { return b.Environments }
+
 // InScope reports whether a declaration tagged for `envs` is in scope for a
 // daemon whose active environment is `active` (ADR-0057). An unscoped daemon
 // (active == "") sees everything; an untagged declaration (envs empty) is in

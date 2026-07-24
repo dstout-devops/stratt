@@ -2169,9 +2169,12 @@ func (ds declSelector) toSelector() (types.ViewSelector, error) {
 
 // ScopeToEnvironment filters the parsed declarations to the apply-set in scope
 // for the active environment (ADR-0057), consistent with the store's env-scoped
-// list reads (which scope the prune candidates + the compiler). Only the
-// launching/active kinds (Assignment/Trigger/Baseline) carry an environment in
-// v1; Views/Workflows are targets reached only through a scoped kind and are not
+// list reads (which scope the prune candidates + the compiler). The launching/
+// active kinds (Assignment/Trigger/Baseline) carry an environment and are filtered
+// here; provider-selection kinds (Actuator/Connector/CapabilityBinding) are also
+// env-scoped but filtered at resolution time in the provisioning reach-path
+// (ADR-0113 D2, see provisioning_resolve.go), not in this apply-set filter.
+// Views/Workflows are targets reached only through a scoped kind and are not
 // independently scoped. env == "" (unscoped daemon) keeps everything unchanged.
 func ScopeToEnvironment(d Declarations, env string) Declarations {
 	if env == "" {

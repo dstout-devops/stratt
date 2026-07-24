@@ -1,0 +1,25 @@
+# vcenter — vSphere as a `provisioning` capability PROVIDER (ADR-0113), registered as an Actuator Kind
+# (ADR-0103) declaring provides:[provisioning]. It dials the SAME vcenter plugin pod whose OBSERVE
+# Syncer already reads the vSphere estate — the dual-verb shape (ADR-0060): one plugin, both verbs, so
+# the build output's identity scheme correlates structurally with the Syncer's (ADR-0113 D1/D3).
+# Provider verification (ADR-0104 D1) confirms the pod's Manifest advertises provisioning before any
+# consumer binds.
+#
+# provisioning is ENABLEMENT-GATE (ADR-0107 D1), not resolve-inject — no resolve Action here; the build
+# is a target-scoped Action (create the VM, then provision→configure it, ADR-0017).
+#
+# ENVIRONMENT-SCOPED (ADR-0113 D2): scoped to the vsphere-dc environment so it is the Compute provider
+# THERE, coexisting with awsec2 (the aws environment's Compute provider) — a region/sovereignty
+# boundary is an environment. vSphere is provider #N of provisioning (§1.5); EC2/opentofu are siblings.
+name: vcenter
+address: stratt-vcenter:9090
+pluginIdentity: vcenter
+tier: trusted
+environments: [vsphere-dc]
+provides: [provisioning]
+# provisions advertises vcenter's per-kind build Workflow (ADR-0110 D3). In the vsphere-dc environment
+# Compute has TWO providers (awsec2 unscoped + vcenter) → per-(class,kind) resolution fails closed on
+# the ambiguity (§2.4); the estate/capability-bindings/provisioning-vsphere.yaml entry selects vcenter.
+# (Subnet/DVPortgroup provisioning — requires:[ipam] for the VLAN — is the next slice, ADR-0113 D4.)
+provisions:
+  Compute: vsphere-vm-build
