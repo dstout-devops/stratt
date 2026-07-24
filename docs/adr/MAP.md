@@ -10,7 +10,7 @@ design must reconcile with. Chronological list: [README.md](README.md); phase vi
 
 ```mermaid
 graph TD
-  actuators["actuators<br/><small>0016 0022 0050 0053 0092</small>"]
+  actuators["actuators<br/><small>0016 0022 0050 0053 0092 0117</small>"]
   api_surface["api-surface<br/><small>0006 0021 0026 0076 0091</small>"]
   audit_telemetry["audit-telemetry<br/><small>0034 0065 0077</small>"]
   authz_identity["authz-identity<br/><small>0009 0028 0035 0079 0101</small>"]
@@ -24,7 +24,7 @@ graph TD
   graph_model["graph-model<br/><small>0015 0017 0041 0042 0059 0060<br/>0079 0080 0081 0082 0084 0085<br/>0096 0114 0115</small>"]
   intent_compiler["intent-compiler<br/><small>0023 0030 0036 0055 0058 0083<br/>0085 0114</small>"]
   orchestration["orchestration<br/><small>0010 0011 0018 0027 0031 0063</small>"]
-  plugin_port["plugin-port<br/><small>0046 0047 0048 0049 0051 0053<br/>0054 0103</small>"]
+  plugin_port["plugin-port<br/><small>0046 0047 0048 0049 0051 0053<br/>0054 0103 0117</small>"]
   policy_governance["policy-governance<br/><small>0061 0062 0063 0064 0065 0066<br/>0067 0068 0069 0070 0071 0072<br/>0073 0074 0075 0076</small>"]
   provisioning["provisioning<br/><small>0017 0058 0095 0096 0107 0110<br/>0111 0112 0113 0114 0115</small>"]
   state_artifacts["state-artifacts<br/><small>0016 0029 0093 0097 0105 0112</small>"]
@@ -89,6 +89,7 @@ Actuators — execution engines (opentofu, helm, mcp, cert-issuer reconcile).
 - [ADR-0050](0050-certificate-reconcile-actuator.md) — Certificate lifecycle as a reconcile Actuator (CSR/sign over the port)
 - [ADR-0053](0053-mcp-transport-generic-connector.md) — MCP as a generic transport: the last domain logic leaves the core
 - [ADR-0092](0092-helm-actuator.md) — Helm Actuator: chart → release behind Gates, over the sovereign port
+- [ADR-0117](0117-ansible-execution-depth-and-content.md) — Ansible execution depth + content: the run-knob Contract (v5) and collections as pinned, external-sourced content
 
 ### api-surface
 
@@ -297,6 +298,7 @@ Sovereign plugin port — the dark-matter substrate, transports, runtime registr
 - [ADR-0053](0053-mcp-transport-generic-connector.md) — MCP as a generic transport: the last domain logic leaves the core
 - [ADR-0054](0054-per-step-facet-claim.md) — Per-Step facet write-scope: narrow the write-back grant to what a Step declares
 - [ADR-0103](0103-runtime-connector-registry.md) — Runtime Connector registry: enable/disable Connectors without a strattd restart
+- [ADR-0117](0117-ansible-execution-depth-and-content.md) — Ansible execution depth + content: the run-knob Contract (v5) and collections as pinned, external-sourced content
 
 ### policy-governance
 
@@ -504,3 +506,4 @@ UI — React shell, schema-driven rendering, Views, descent, the first-party cli
 | [0114](0114-entity-lifecycle-and-decommission-reach-path.md) | capability-framework, connectors, graph-model, intent-compiler, provisioning |
 | [0115](0115-vsphere-read-breadth.md) | connectors, graph-model, provisioning |
 | [0116](0116-demo-library.md) | estate-as-code, foundation, ui |
+| [0117](0117-ansible-execution-depth-and-content.md) | actuators, plugin-port |
