@@ -175,8 +175,10 @@ explicit Workflow Step + step-output binding (D4), not resolve-inject.
 - **Follow-ups.** (1) The live real-vCenter (or HOL) smoke test — guest customization + power transitions vcsim may not
   model (D5). (2) The Actuator-builder Workflow-Step form (the ADR-0112 follow-up #7 open question — an Actuator's apply
   is workspace-scoped; `vsphere-vm-build`/`vsphere-subnet-build` need either a synthetic anchor View or a targetless
-  `vcenter/apply`-style Action wrapper; reuse whatever ADR-0112's follow-up settles). (3) The enterprise-topology dev
-  seed (`vsphere-bootstrap.sh` shaping vcsim into multi-region/AZ/sovereign-zone inventory). (4) Ansible **configure**
+  `vcenter/apply`-style Action wrapper; reuse whatever ADR-0112's follow-up settles). (3) ~~The
+  enterprise-topology dev seed~~ **DONE** — `plugins/vcenter/cmd/vsphere-seed` + `task dev:vsphere:bootstrap` shape
+  vcsim into multi-region datacenters / AZ clusters / sovereignty tenant folders / VLAN portgroups, idempotently.
+  (4) Ansible **configure**
   Step on the built VM — the §5.1 provision→configure close, shared with ADR-0112. (5) A PDP sovereignty gate on the
   region/tenant selection (shared with ADR-0111 D5). (6) **Eliminate the ipam-resolve contract mirror.** Invoking the
   capability-resolve Action `netbox/ipam-resolve` as an explicit Workflow Step required a Workflow-facing
