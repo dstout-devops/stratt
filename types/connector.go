@@ -57,6 +57,12 @@ type Connector struct {
 	// (registry D6 status) until a provider for each is declared. A dependency on the CONTRACT,
 	// never a named provider (§1.5); a gate, never a precedence (§2.4).
 	Requires []string `json:"requires,omitempty"`
+	// Provisions maps an Intent kind (no "Intent/" prefix — "Compute", "Subnet", …) to THIS
+	// provider's build Action for it (ADR-0110 D3), meaningful only when this Connector `provides`
+	// provisioning. It advertises the provider's per-kind build mechanism so an Intent's
+	// `requires: [provisioning]` resolves to a concrete Action — the provider owns its mechanism
+	// (§1.5); a capability-binding only selects WHICH provider.
+	Provisions map[string]string `json:"provisions,omitempty"`
 	// Environments scopes this Connector to a subset of dev/staging/prod (ADR-0057); empty ⇒
 	// every environment.
 	Environments []string `json:"environments,omitempty"`

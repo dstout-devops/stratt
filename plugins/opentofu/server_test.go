@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"io"
 	"log/slog"
+	"os"
 	"strings"
 	"testing"
 
@@ -230,7 +231,7 @@ func TestStatestoreInjection(t *testing.T) {
 	if !strings.Contains(floor, "-backend-config=address=http://core:8080/web-prod") {
 		t.Fatalf("no handle ⇒ http floor backend, got %q", floor)
 	}
-	_, _, floorEnv, _, err := s.prepare([]byte(`{"module":"m","workspace":"web-prod"}`), nil)
+	_, _, floorEnv, _, err := s.prepare([]byte(`{"module":"m","workspace":"web-prod"}`), nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -251,12 +252,42 @@ func TestStatestoreInjection(t *testing.T) {
 	if strings.Contains(injected, "http://core:8080") {
 		t.Fatalf("an injected backend must NOT fall back to the http floor, got %q", injected)
 	}
-	_, _, injEnv, _, err := s.prepare([]byte(`{"module":"m","workspace":"web-prod"}`), h)
+	_, _, injEnv, _, err := s.prepare([]byte(`{"module":"m","workspace":"web-prod"}`), h, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if hasEnvPrefix(injEnv, "TF_HTTP_PASSWORD=") {
 		t.Fatal("an injected (non-http) backend must NOT set the http-floor cred")
+	}
+}
+
+// TestIPAMInjection proves the ADR-0112 D3 path: a core-injected ipam handle (its Output carrying
+// the capabilities/ipam.output payload) is decoded and written as module vars, so a network module
+// references var.stratt_ipam_cidr — the CIDR flows NetBox → ipam-resolve → handle → tofu var.
+func TestIPAMInjection(t *testing.T) {
+	s := NewServer(Config{PluginID: "opentofu"}, discard())
+	ipam := &pluginv1.CapabilityHandle{Output: []byte(`{"cidr":"10.30.4.0/24","vlanId":100,"gateway":"10.30.4.1"}`)}
+	_, _, _, varFile, err := s.prepare([]byte(`{"module":"aws-network","workspace":"app-subnet"}`), nil, ipam)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if varFile == "" {
+		t.Fatal("an ipam handle must produce a -var-file")
+	}
+	defer os.Remove(varFile)
+	data, err := os.ReadFile(varFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var vars map[string]any
+	if err := json.Unmarshal(data, &vars); err != nil {
+		t.Fatal(err)
+	}
+	if vars["stratt_ipam_cidr"] != "10.30.4.0/24" {
+		t.Fatalf("stratt_ipam_cidr = %v, want 10.30.4.0/24", vars["stratt_ipam_cidr"])
+	}
+	if vars["stratt_ipam_vlan_id"] != float64(100) { // JSON round-trips ints as float64
+		t.Fatalf("stratt_ipam_vlan_id = %v, want 100", vars["stratt_ipam_vlan_id"])
 	}
 }
 

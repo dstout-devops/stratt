@@ -15,8 +15,7 @@ spec:
   namePrefix: app
   projectKind: host
   labels: { fleet: app }
-  builder: crossplane/provision
-  buildWorkflow: app-tier-build
+  requires: [provisioning] # the capability CLASS (ADR-0110); Compute resolves to awsec2 → compute-build
   placement:
     subnet: app-subnet # placed-in the Crossplane-built subnet (decision 5)
   params:

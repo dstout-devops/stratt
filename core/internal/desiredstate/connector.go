@@ -3,6 +3,7 @@ package desiredstate
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 
 	"go.yaml.in/yaml/v3"
@@ -31,23 +32,24 @@ type sourceFile struct {
 }
 
 type connectorFile struct {
-	Name                         string     `yaml:"name"`
-	Class                        string     `yaml:"class"`
-	Address                      string     `yaml:"address"`
-	PluginIdentity               string     `yaml:"pluginIdentity"`
-	Tier                         string     `yaml:"tier"`
-	Source                       sourceFile `yaml:"source"`
-	FacetNamespaces              []string   `yaml:"facetNamespaces"`
-	AuthoritativeFacetNamespaces []string   `yaml:"authoritativeFacetNamespaces"`
-	LabelKeys                    []string   `yaml:"labelKeys"`
-	IdentitySchemes              []string   `yaml:"identitySchemes"`
-	TombstoneSchemes             []string   `yaml:"tombstoneSchemes"`
-	EmitterName                  string     `yaml:"emitterName"`
-	ActionNames                  []string   `yaml:"actionNames"`
-	IntervalSeconds              int        `yaml:"intervalSeconds"`
-	Provides                     []string   `yaml:"provides"`
-	Requires                     []string   `yaml:"requires"`
-	Environments                 []string   `yaml:"environments"`
+	Name                         string            `yaml:"name"`
+	Class                        string            `yaml:"class"`
+	Address                      string            `yaml:"address"`
+	PluginIdentity               string            `yaml:"pluginIdentity"`
+	Tier                         string            `yaml:"tier"`
+	Source                       sourceFile        `yaml:"source"`
+	FacetNamespaces              []string          `yaml:"facetNamespaces"`
+	AuthoritativeFacetNamespaces []string          `yaml:"authoritativeFacetNamespaces"`
+	LabelKeys                    []string          `yaml:"labelKeys"`
+	IdentitySchemes              []string          `yaml:"identitySchemes"`
+	TombstoneSchemes             []string          `yaml:"tombstoneSchemes"`
+	EmitterName                  string            `yaml:"emitterName"`
+	ActionNames                  []string          `yaml:"actionNames"`
+	IntervalSeconds              int               `yaml:"intervalSeconds"`
+	Provides                     []string          `yaml:"provides"`
+	Requires                     []string          `yaml:"requires"`
+	Provisions                   map[string]string `yaml:"provisions"`
+	Environments                 []string          `yaml:"environments"`
 }
 
 func parseConnectorFile(path string, raw []byte) (string, types.Connector, error) {
@@ -66,7 +68,7 @@ func parseConnectorFile(path string, raw []byte) (string, types.Connector, error
 		FacetNamespaces: f.FacetNamespaces, AuthoritativeFacetNamespaces: f.AuthoritativeFacetNamespaces,
 		LabelKeys: f.LabelKeys, IdentitySchemes: f.IdentitySchemes, TombstoneSchemes: f.TombstoneSchemes,
 		EmitterName: f.EmitterName, ActionNames: f.ActionNames, IntervalSeconds: f.IntervalSeconds,
-		Provides: f.Provides, Requires: f.Requires, Environments: f.Environments,
+		Provides: f.Provides, Requires: f.Requires, Provisions: f.Provisions, Environments: f.Environments,
 	}
 	if err := ValidateConnector(c); err != nil {
 		return "", types.Connector{}, fmt.Errorf("desiredstate: %s: %w", path, err)
@@ -111,6 +113,9 @@ func ValidateConnector(c types.Connector) error {
 	if err := validateCapabilities(c.Name, c.Provides, c.Requires); err != nil {
 		return err
 	}
+	if err := validateProvisions(c.Name, c.Provides, c.Provisions); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -125,6 +130,31 @@ func validateCapabilities(name string, provides, requires []string) error {
 	for _, tok := range requires {
 		if !types.ValidCapability(tok) {
 			return fmt.Errorf("%q: unknown capability %q in requires (core-owned vocabulary, ADR-0104 §1.5)", name, tok)
+		}
+	}
+	return nil
+}
+
+// validateProvisions enforces the ADR-0110 D3 per-kind build-Action advertisement: a `provisions`
+// map is meaningful ONLY on a provider that `provides` provisioning (else it advertises a mechanism
+// for a capability it doesn't fulfil), and each entry maps a bare Intent kind (no "Intent/" prefix)
+// to a non-empty build Action ref.
+func validateProvisions(name string, provides []string, provisions map[string]string) error {
+	if len(provisions) == 0 {
+		return nil
+	}
+	if !slices.Contains(provides, types.CapProvisioning) {
+		return fmt.Errorf("%q: provisions is set but %q is not in provides — only a provisioning provider advertises per-kind build Actions (ADR-0110 D3)", name, types.CapProvisioning)
+	}
+	for kind, action := range provisions {
+		if kind == "" {
+			return fmt.Errorf("%q: provisions has an empty Intent kind", name)
+		}
+		if short, ok := strings.CutPrefix(kind, "Intent/"); ok {
+			return fmt.Errorf("%q: provisions kind %q must omit the Intent/ prefix (write %q)", name, kind, short)
+		}
+		if action == "" {
+			return fmt.Errorf("%q: provisions[%q] has an empty build Action", name, kind)
 		}
 	}
 	return nil
@@ -166,18 +196,19 @@ func computeConnectorPlan(ctx context.Context, store *graph.Store, decls []types
 // ── Actuator (runs tool content; no Source) ─────────────────────────────────
 
 type actuatorFile struct {
-	Name           string   `yaml:"name"`
-	Address        string   `yaml:"address"`
-	PluginIdentity string   `yaml:"pluginIdentity"`
-	Tier           string   `yaml:"tier"`
-	DryRunnable    bool     `yaml:"dryRunnable"`
-	ActionNames    []string `yaml:"actionNames"`
-	JobCommand     []string `yaml:"jobCommand"`
-	Image          string   `yaml:"image"`
-	MCP            bool     `yaml:"mcp"`
-	Provides       []string `yaml:"provides"`
-	Requires       []string `yaml:"requires"`
-	Environments   []string `yaml:"environments"`
+	Name           string            `yaml:"name"`
+	Address        string            `yaml:"address"`
+	PluginIdentity string            `yaml:"pluginIdentity"`
+	Tier           string            `yaml:"tier"`
+	DryRunnable    bool              `yaml:"dryRunnable"`
+	ActionNames    []string          `yaml:"actionNames"`
+	JobCommand     []string          `yaml:"jobCommand"`
+	Image          string            `yaml:"image"`
+	MCP            bool              `yaml:"mcp"`
+	Provides       []string          `yaml:"provides"`
+	Requires       []string          `yaml:"requires"`
+	Provisions     map[string]string `yaml:"provisions"`
+	Environments   []string          `yaml:"environments"`
 }
 
 func parseActuatorFile(path string, raw []byte) (string, types.Actuator, error) {
@@ -190,7 +221,8 @@ func parseActuatorFile(path string, raw []byte) (string, types.Actuator, error) 
 	a := types.Actuator{
 		Name: f.Name, Address: f.Address, PluginIdentity: f.PluginIdentity, Tier: f.Tier,
 		DryRunnable: f.DryRunnable, ActionNames: f.ActionNames, JobCommand: f.JobCommand,
-		Image: f.Image, MCP: f.MCP, Provides: f.Provides, Requires: f.Requires, Environments: f.Environments,
+		Image: f.Image, MCP: f.MCP, Provides: f.Provides, Requires: f.Requires,
+		Provisions: f.Provisions, Environments: f.Environments,
 	}
 	if err := ValidateActuator(a); err != nil {
 		return "", types.Actuator{}, fmt.Errorf("desiredstate: %s: %w", path, err)
@@ -214,6 +246,9 @@ func ValidateActuator(a types.Actuator) error {
 		return fmt.Errorf("actuator %q: address and jobCommand are mutually exclusive transports", a.Name)
 	}
 	if err := validateCapabilities(a.Name, a.Provides, a.Requires); err != nil {
+		return err
+	}
+	if err := validateProvisions(a.Name, a.Provides, a.Provisions); err != nil {
 		return err
 	}
 	return nil

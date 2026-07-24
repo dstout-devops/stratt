@@ -43,12 +43,12 @@
     },
     "provisioning": {
       "title": "Provisioning — declare & build infra (Intent -> builder -> machines), provision->configure",
-      "adrs": [17, 58, 95, 96, 107],
+      "adrs": [17, 58, 95, 96, 107, 110, 111, 112],
       "depends_on": ["intent-compiler", "capability-framework", "actuators", "connectors"]
     },
     "capability-framework": {
       "title": "Capability framework — provides/requires, verification, resolve-inject vs enablement-gate, providers",
-      "adrs": [100, 104, 105, 106, 107],
+      "adrs": [100, 104, 105, 106, 107, 110, 111, 112],
       "depends_on": ["plugin-port", "connectors", "actuators", "graph-model", "estate-as-code"]
     },
     "credentials-secrets": {
@@ -63,7 +63,7 @@
     },
     "state-artifacts": {
       "title": "Tool state & artifacts — state backend, evidence store, object storage, statestore/artifactstore",
-      "adrs": [16, 29, 93, 97, 105],
+      "adrs": [16, 29, 93, 97, 105, 112],
       "depends_on": ["capability-framework", "credentials-secrets", "actuators"]
     },
     "authz-identity": {

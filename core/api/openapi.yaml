@@ -837,6 +837,40 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/ActuatorDetail" }
         "404": { $ref: "#/components/responses/NotFound" }
+  /capability-bindings:
+    get:
+      operationId: listCapabilityBindings
+      summary: List capability→provider bindings
+      description: >
+        Capability-bindings (ADR-0110 D3) select which verified provider fulfils a capability
+        class for a given Intent kind, so an Intent's `requires: [provisioning]` resolves to a
+        concrete provider + build Workflow. A CaC declaration FORM the capability registry
+        reconciles — NOT a Named Kind (§2 frozen). CaC-only, read-only (no API write path).
+      responses:
+        "200":
+          description: Every capability-binding in the active environment.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/CapabilityBinding" }
+  /capability-bindings/{name}:
+    parameters:
+      - name: name
+        in: path
+        required: true
+        schema: { type: string }
+    get:
+      operationId: getCapabilityBinding
+      summary: Get one capability-binding
+      description: The capability-binding declaration (ADR-0110). CaC-only, read-only.
+      responses:
+        "200":
+          description: The capability-binding.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CapabilityBinding" }
+        "404": { $ref: "#/components/responses/NotFound" }
   /workflows:
     get:
       operationId: listWorkflows
@@ -2230,6 +2264,35 @@ components:
         reason:
           type: string
           description: The phantom/pending reason when verified=false; empty when verified.
+    CapabilityBinding:
+      type: object
+      description: >
+        Selects which verified provider fulfils a capability class for a given Intent kind
+        (ADR-0110 D3), so an Intent's `requires: [provisioning]` resolves to a concrete provider +
+        build Workflow. A CaC declaration FORM the capability registry reconciles — NOT a Named
+        Kind (§2 frozen); the binding selects only the provider (the provider owns its per-kind
+        build Workflow via its `provisions` map).
+      required: [name, entries]
+      properties:
+        name: { type: string }
+        entries:
+          type: array
+          items: { $ref: "#/components/schemas/CapabilityBindingEntry" }
+        environments: { type: array, items: { type: string } }
+    CapabilityBindingEntry:
+      type: object
+      description: One capability→provider selection for a specific Intent kind (ADR-0110 D3).
+      required: [capability, provider, intentKind]
+      properties:
+        capability:
+          type: string
+          description: The capability class being bound (e.g. provisioning) — a core-owned class (§1.5).
+        provider:
+          type: string
+          description: The verified provider's declaration name (an Actuator/Connector that `provides` the class).
+        intentKind:
+          type: string
+          description: The Intent kind this entry routes, WITHOUT the "Intent/" prefix (e.g. Compute, Subnet, Vlan, Dmz).
     Workflow:
       type: object
       description: >

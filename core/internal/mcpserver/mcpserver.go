@@ -435,6 +435,11 @@ func registerTools(s *mcp.Server, cfg Config) {
 		func(ctx context.Context, req *mcp.CallToolRequest, in nameIn) (*mcp.CallToolResult, any, error) {
 			return invoke(ctx, cfg, req, "get_actuator", http.MethodGet, "/actuators/"+url.PathEscape(in.Name), nil)
 		})
+	get("list_capability_bindings", "List capability→provider bindings (which provider builds each Intent kind for a capability; ADR-0110).", func() string { return "/capability-bindings" })
+	mcp.AddTool(s, &mcp.Tool{Name: "get_capability_binding", Description: "Get one capability-binding declaration (ADR-0110)."},
+		func(ctx context.Context, req *mcp.CallToolRequest, in nameIn) (*mcp.CallToolResult, any, error) {
+			return invoke(ctx, cfg, req, "get_capability_binding", http.MethodGet, "/capability-bindings/"+url.PathEscape(in.Name), nil)
+		})
 	get("list_contracts", "List pinned Contracts: JSON Schema documents with sha256 pins and derivation rungs.", func() string { return "/contracts" })
 	get("list_emitters", "List declared Emitters (event ingest points; declarations hold token hashes only).", func() string { return "/emitters" })
 	mcp.AddTool(s, &mcp.Tool{Name: "get_credential_ref", Description: "Get one CredentialRef pointer (never material). Requires the reader grant."},

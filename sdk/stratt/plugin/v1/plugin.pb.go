@@ -2441,6 +2441,15 @@ type CapabilityHandle struct {
 	Kind          string                 `protobuf:"bytes,1,opt,name=kind,proto3" json:"kind,omitempty"`
 	Config        map[string]string      `protobuf:"bytes,2,rep,name=config,proto3" json:"config,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
 	CredentialRef string                 `protobuf:"bytes,3,opt,name=credential_ref,json=credentialRef,proto3" json:"credential_ref,omitempty"`
+	// output is the resolve Action's CONTRACT-VALIDATED output bytes verbatim
+	// (capabilities/<class>.output), so a capability whose handle is not the
+	// statestore backend/config shape (e.g. ipam's {cidr,vlanId,gateway}) reaches
+	// its consumer intact (ADR-0112 D2). kind/config stay populated for statestore
+	// back-compat; new consumers decode `output` against their own class Contract.
+	// The core validates it against the closed class Contract before injecting, so
+	// no inline secret material can ride through (credentials are CredentialRef
+	// names only — the standing §2.5 invariant).
+	Output        []byte `protobuf:"bytes,4,opt,name=output,proto3" json:"output,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2494,6 +2503,13 @@ func (x *CapabilityHandle) GetCredentialRef() string {
 		return x.CredentialRef
 	}
 	return ""
+}
+
+func (x *CapabilityHandle) GetOutput() []byte {
+	if x != nil {
+		return x.Output
+	}
+	return nil
 }
 
 // ApplyTarget is one core-resolved target. `name` is the stable alias the plugin
@@ -3836,11 +3852,12 @@ const file_stratt_plugin_v1_plugin_proto_rawDesc = "" +
 	"\x15resolved_capabilities\x18\b \x03(\v28.stratt.plugin.v1.ApplyRequest.ResolvedCapabilitiesEntryR\x14resolvedCapabilities\x1ak\n" +
 	"\x19ResolvedCapabilitiesEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x128\n" +
-	"\x05value\x18\x02 \x01(\v2\".stratt.plugin.v1.CapabilityHandleR\x05value:\x028\x01\"\xd0\x01\n" +
+	"\x05value\x18\x02 \x01(\v2\".stratt.plugin.v1.CapabilityHandleR\x05value:\x028\x01\"\xe8\x01\n" +
 	"\x10CapabilityHandle\x12\x12\n" +
 	"\x04kind\x18\x01 \x01(\tR\x04kind\x12F\n" +
 	"\x06config\x18\x02 \x03(\v2..stratt.plugin.v1.CapabilityHandle.ConfigEntryR\x06config\x12%\n" +
-	"\x0ecredential_ref\x18\x03 \x01(\tR\rcredentialRef\x1a9\n" +
+	"\x0ecredential_ref\x18\x03 \x01(\tR\rcredentialRef\x12\x16\n" +
+	"\x06output\x18\x04 \x01(\fR\x06output\x1a9\n" +
 	"\vConfigEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xc8\x02\n" +

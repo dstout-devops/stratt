@@ -1,0 +1,24 @@
+# opentofu-network — OpenTofu as the AWS network `provisioning` provider (ADR-0112), the
+# charter-canonical network builder (§5.1: tofu apply → outputs → Normalizer → ansible Step).
+# It dials the same opentofu plugin pod as opentofu-s3; provider verification (ADR-0104 D1) confirms
+# the pod's Manifest advertises `provisioning` before any consumer binds.
+#
+# It composes TWO capabilities on one build Actuator (ADR-0112 D1):
+#   requires: [statestore, ipam]
+#     - statestore (ADR-0105) → the S3 tofu backend, resolved+injected at Run dispatch.
+#     - ipam       (ADR-0111) → a NetBox-allocated CIDR, injected as a module var (stratt_ipam_cidr).
+#   So this Actuator stays PENDING (registry D6, §1.8) until BOTH a verified statestore AND a verified
+#   ipam provider exist — observable, never a silent no-op.
+#
+# provisions advertises its per-kind build Workflow (ADR-0110 D3): Subnet → opentofu-subnet-build,
+# which runs the AWS network module. This makes Subnet a >1-provider case (opentofu + crossplane) →
+# the explicit estate/capability-bindings/ entry selects opentofu (ADR-0110 D5 demotion, ADR-0112 D6).
+name: opentofu-network
+address: stratt-opentofu:9090
+pluginIdentity: opentofu
+tier: trusted
+dryRunnable: true
+provides: [provisioning]
+requires: [statestore, ipam]
+provisions:
+  Subnet: opentofu-subnet-build

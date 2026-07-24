@@ -57,9 +57,12 @@ func (s *Server) GetManifest(context.Context, *pluginv1.GetManifestRequest) (*pl
 	return &pluginv1.GetManifestResponse{Manifest: &pluginv1.Manifest{
 		PluginId:        s.cfg.PluginID,
 		ProtocolVersion: "v1",
-		Class:           pluginv1.PluginClass_PLUGIN_CLASS_SYNCER,
-		Verbs:           []pluginv1.Verb{pluginv1.Verb_VERB_OBSERVE},
-		ObserveMode:     pluginv1.Manifest_OBSERVE_MODE_POLL,
+		// Dual-verb (ADR-0111 D4, on the ADR-0060 Crossplane precedent): a Syncer that OBSERVEs
+		// NetBox AND an INVOKE surface providing the `ipam` capability. Class stays the advisory
+		// primary kind; Verbs are the authoritative capability surface (the host gates on the verb).
+		Class:       pluginv1.PluginClass_PLUGIN_CLASS_SYNCER,
+		Verbs:       []pluginv1.Verb{pluginv1.Verb_VERB_OBSERVE, pluginv1.Verb_VERB_INVOKE},
+		ObserveMode: pluginv1.Manifest_OBSERVE_MODE_POLL,
 		// Facet namespaces REQUESTED to own (owned-but-uncovered, ADR-0059 M1 — no
 		// JSON Schema until a Contract consumes the fields, §1.1).
 		Contracts: []*pluginv1.ContractDecl{
@@ -69,6 +72,17 @@ func (s *Server) GetManifest(context.Context, *pluginv1.GetManifestRequest) (*pl
 		// NetBox ids are the stable per-object identity; tombstone by them on a
 		// full sync (ADR-0042).
 		TombstoneSchemes: []string{"netbox.prefix.id", "netbox.vlan.id"},
+		// `ipam` capability (ADR-0111): NetBox is a global IP/VLAN allocator. Advertised
+		// unconditionally — allocation is the plugin's core function and needs only the NetBox
+		// endpoint + token a running plugin already has (the honesty argument, ADR-0106 D2). The
+		// resolve Action references the CLASS-level, provider-agnostic Contract (ADR-0111 D1).
+		Capabilities: []string{"ipam"},
+		Actions: []*pluginv1.ActionDecl{{
+			Name:       actionIPAMResolve,
+			Input:      &pluginv1.ContractRef{SchemaId: "capabilities/ipam.input"},
+			Output:     &pluginv1.ContractRef{SchemaId: "capabilities/ipam.output"},
+			Idempotent: true, // allocate-or-return-existing, anchored in NetBox (D4/F1)
+		}},
 	}}, nil
 }
 

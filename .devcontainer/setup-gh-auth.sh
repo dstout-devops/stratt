@@ -4,28 +4,49 @@
 # OAuth token; `gh` reuses it via GH_TOKEN. (`gh auth login --with-token` is rejected for missing the
 # 'read:org' scope on VSCode's OAuth token; the GH_TOKEN env path skips that login-time gate.)
 #
-# Idempotent — safe to re-run. Appends a live-derivation snippet to the interactive shell rc files, so
-# every new shell (including Claude Code's Bash tool, which initializes from the profile) re-derives
-# the token from the same credential VSCode already hands `git`. See docs/mcp-servers.md.
+# Installs a lazy `gh` WRAPPER FUNCTION (not an eager export): the credential helper is called ONLY the
+# first time `gh` is invoked in a shell — no per-command latency, nothing on disk. Critically it lands
+# in ~/.zshenv, which zsh sources for EVERY invocation including NON-interactive ones — so Claude Code's
+# Bash tool (a non-interactive zsh that does NOT source ~/.zshrc) gets `gh` auth too, not just terminals.
+#
+# Idempotent — safe to re-run; it strips any prior block before re-adding.
 set -euo pipefail
 
-marker="# >>> stratt gh auto-auth >>>"
-read -r -d '' snippet <<'EOF' || true
-# >>> stratt gh auto-auth >>>
-# Borrow the VSCode-forwarded git credential as gh's token — nothing stored on disk or in git.
-if command -v gh >/dev/null 2>&1 && [ -z "${GH_TOKEN:-}" ]; then
-  export GH_TOKEN="$(printf 'protocol=https\nhost=github.com\n\n' \
-    | GIT_TERMINAL_PROMPT=0 git credential fill 2>/dev/null | sed -n 's/^password=//p')"
-fi
-# <<< stratt gh auto-auth <<<
+begin="# >>> stratt gh auto-auth >>>"
+end="# <<< stratt gh auto-auth <<<"
+
+read -r -d '' block <<EOF || true
+${begin}
+# Lazily borrow VSCode's forwarded git credential as gh's token, only when gh is first used — nothing
+# stored on disk or in git. (gh auth login --with-token is rejected for lacking read:org; GH_TOKEN skips it.)
+gh() {
+  if [ -z "\${GH_TOKEN:-}" ]; then
+    GH_TOKEN="\$(printf 'protocol=https\\nhost=github.com\\n\\n' \\
+      | GIT_TERMINAL_PROMPT=0 git credential fill 2>/dev/null | sed -n 's/^password=//p')"
+    [ -n "\$GH_TOKEN" ] && export GH_TOKEN
+  fi
+  command gh "\$@"
+}
+${end}
 EOF
 
-for rc in "$HOME/.bashrc" "$HOME/.zshrc"; do
-  touch "$rc"
-  if grep -qF "$marker" "$rc"; then
-    echo "gh auto-auth: already present in $rc"
-  else
-    printf '\n%s\n' "$snippet" >>"$rc"
-    echo "gh auto-auth: snippet added to $rc"
-  fi
+# Remove any existing marker block so a re-run UPDATES (older versions wrote an eager export to
+# ~/.zshrc/~/.bashrc; strip those too), then re-add the current wrapper.
+strip_block() {
+  local rc="$1"
+  [ -f "$rc" ] || return 0
+  sed -i "/^${begin}$/,/^${end}$/d" "$rc"
+}
+
+# ~/.zshenv — ALL zsh (interactive + non-interactive; covers the Claude Code Bash tool).
+# ~/.bashrc — interactive bash terminals.
+# ~/.zshrc  — clean only: superseded by ~/.zshenv for zsh (prevents a stale/duplicate block).
+for rc in "$HOME/.zshenv" "$HOME/.bashrc" "$HOME/.zshrc"; do
+  strip_block "$rc"
 done
+for rc in "$HOME/.zshenv" "$HOME/.bashrc"; do
+  touch "$rc"
+  printf '\n%s\n' "$block" >>"$rc"
+  echo "gh auto-auth: installed the lazy gh wrapper in $rc"
+done
+echo "gh auto-auth: done (non-interactive shells covered via ~/.zshenv)"

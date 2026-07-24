@@ -1,0 +1,73 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "stratt:contract:intents/compute:v3",
+  "title": "Intent/Compute spec",
+  "description": "Desired compute infrastructure declared in Git (ADR-0058/0110). NOT an Entity (§1.2): the graph holds only what is BUILT; this declares what SHOULD exist. v3 (ADR-0110) closes the provider-coupling of the ADR-0058 `builder:` seam: the Intent names the `provisioning` capability CLASS via `requires`, never a provider (§1.5). The reconcile resolves the bound provider + its per-kind build Workflow (an estate capability-binding, or the sole verified provider auto-binds) and surfaces a GATED build (§5 Flow 1) — it never auto-launches. `params` stays opaque (the bound provider's own inputs, validated downstream, never typed here — §1.1). Optional `placement` (ADR-0059 decision 5).",
+  "type": "object",
+  "properties": {
+    "count": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Cardinality (G2): how many instances SHOULD exist. A typed field expanded by the reconcile — never a config-language loop (§1 non-goal)."
+    },
+    "namePrefix": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]*$",
+      "description": "Instance identities are namePrefix + ordinal (web -> web-01, web-02). Stable + idempotent: the reconcile correlates desired<->built by this name (stratt.intent/instance label). Exclusively claimed across Intents (§2.4)."
+    },
+    "projectKind": {
+      "type": "string",
+      "description": "The Entity kind the built infra projects AS, so the fleet's Views select it (e.g. host). Carried on the build's Run-provenance projection or a relabel Normalizer — NEVER written by the reconcile (§1.2, decision 6)."
+    },
+    "labels": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      },
+      "description": "Selection labels stamped on the built Entity's projection (per-key owned, ADR-0041), e.g. {os: linux, role: web}."
+    },
+    "requires": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "minItems": 1,
+      "contains": {
+        "const": "provisioning"
+      },
+      "description": "The capability CLASSES this Intent depends on to be built (ADR-0110 D1). Must include `provisioning` (the class, never a named provider — §1.5); the reconcile resolves the concrete provider + its build Workflow via the verified-provider index + estate capability-bindings, fail-closed + observable (§1.8) when none resolves."
+    },
+    "params": {
+      "type": "object",
+      "additionalProperties": true,
+      "description": "Opaque build params passed to the resolved provider, validated against ITS input Contract downstream (§1.5). Provider-shaped by design (EC2's region/ami ≠ GCE's zone/image); Intent/Compute never types these — no per-landscape fields here (§1.1)."
+    },
+    "maxDelta": {
+      "type": "number",
+      "exclusiveMinimum": 0,
+      "maximum": 1,
+      "description": "Optional §4.3 blast-radius fraction: if more than this fraction of `count` is missing in one reconcile, the batch PAUSES pending explicit approval instead of surfacing every build (never a silent fan-out). Defaults to the controller's absolute cap."
+    },
+    "placement": {
+      "type": "object",
+      "description": "Optional desired topology placement (ADR-0059 decision 5): the built unit's subnet + zone. A Relation cannot be declared in Git (§1.2), so placement's CaC home is the Intent; the build projects the placed-in edge (Run-provenance). Divergence from a built unit's OBSERVED placement raises a placement-drift Finding (§1.8) — never a silent reconcile edit.",
+      "properties": {
+        "subnet": {
+          "type": "string",
+          "description": "The subnet Entity name the unit is placed in (an Intent/Subnet name) — a placed-in edge."
+        },
+        "dmz": {
+          "type": "string",
+          "description": "The dmz Entity name the unit sits in (an in-dmz edge). Distinct from availabilityZone (decision 3: no generic zone)."
+        },
+        "availabilityZone": {
+          "type": "string",
+          "description": "The availability-zone Entity name the unit sits in (an in-az edge)."
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "required": ["count", "namePrefix", "requires"],
+  "additionalProperties": false
+}

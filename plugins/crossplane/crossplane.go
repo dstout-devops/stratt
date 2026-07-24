@@ -105,7 +105,10 @@ func (s *Server) GetManifest(context.Context, *pluginv1.GetManifestRequest) (*pl
 			Idempotent:  true, // server-side-apply of the named resource is idempotent
 			DryRunnable: true,
 		}},
-		Capabilities: []string{"apply.dry-run"},
+		// provisioning (ADR-0110): Crossplane is a `provisioning` capability provider — it builds
+		// infra (subnets/vlans) other plugins target. Advertised unconditionally (building is the
+		// plugin's core function); the estate declaration + verification (ADR-0104) gate any consumer.
+		Capabilities: []string{"apply.dry-run", "provisioning"},
 	}}, nil
 }
 

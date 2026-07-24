@@ -8,7 +8,6 @@ name: net-vlan
 kind: Intent/Vlan
 spec:
   projectKind: vlan
-  builder: crossplane/provision
-  buildWorkflow: vlan-build
+  requires: [provisioning] # the capability CLASS (ADR-0110); Vlan resolves to crossplane → vlan-build (SOLE VLAN builder — AWS has no VLAN primitive, ADR-0110 D5)
   params:
     vid: "100"
