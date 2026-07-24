@@ -6,6 +6,14 @@
   idempotent-on-absence + D4 suppresses an already-torn-down Finding, making the lagged tombstone _safe_ across the
   sync window; flag 3: D4 anchors teardown-provider resolution to the Entity's BUILD provider via Run provenance,
   so a post-build binding change can't misroute teardown).
+- **Implementation note (slice 3, steward):** the **count-down** teardown reach-path is WIRED end to end
+  (`reconcileDecommission` surfaces gated ordinal-descending `decommission/<entity>` Findings for
+  Intent/Compute count-down excess — the ADR-0058 D4 item). **Whole-Intent withdrawal** reuses the shipped
+  "retain" limitation (compiler.go: an Intent gone from CaC leaves its `onRemove` unknowable, so its built
+  Entities retain + raise the orphan Finding, per ADR-0042's deferred run-retract) — a booked follow-up, not
+  a silent gap. Finding-suppression across the sync-lag window relies on the idempotent-on-absence delete
+  (slice 1) making any double-launch a safe no-op, plus natural resolution when the torn-down Entity drops
+  from the next full-sync; a lag-window Finding-suppression refinement is booked.
 - **Date:** 2026-07-24
 - **Deciders:** Project steward (dstout)
 - **Charter sections:** §1.5 (an Intent targets a capability _class_; teardown resolves a provider the same

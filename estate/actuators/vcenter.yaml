@@ -29,3 +29,9 @@ provides: [provisioning]
 provisions:
   Compute: vsphere-vm-build
   Subnet: vsphere-subnet-build
+# decommissions advertises vcenter's per-kind gated TEARDOWN Workflow (ADR-0114 D4), symmetric to
+# provisions. When an Intent/Compute declared onRemove:remove drops its count, the excess built VMs
+# resolve to this teardown Workflow — a gated decommission Finding per excess, never an auto-destroy
+# (§2.4). (Subnet teardown pairs with whole-Intent withdrawal, the booked follow-up — not wired here.)
+decommissions:
+  Compute: vsphere-vm-teardown

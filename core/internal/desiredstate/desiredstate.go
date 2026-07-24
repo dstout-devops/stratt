@@ -1522,6 +1522,11 @@ func validateOnRemove(name, kind, onRemove string) error {
 		switch kind {
 		case types.IntentCertificate, types.IntentAccess:
 			return nil
+		case types.IntentCompute, types.IntentSubnet:
+			// Provisioning kinds: onRemove:remove routes to the desired-state decommission reach-path
+			// (ADR-0114 D4) — a gated teardown, never an auto-destroy. Compute count-down is fully
+			// wired; whole-Intent withdrawal reuses the shipped retain limitation (booked follow-up).
+			return nil
 		}
 		return fmt.Errorf("intent %s: onRemove %q is not implemented for kind %s", name, onRemove, kind)
 	case types.OnRemoveRevert:

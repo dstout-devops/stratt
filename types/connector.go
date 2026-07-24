@@ -63,6 +63,9 @@ type Connector struct {
 	// `requires: [provisioning]` resolves to a concrete Action — the provider owns its mechanism
 	// (§1.5); a capability-binding only selects WHICH provider.
 	Provisions map[string]string `json:"provisions,omitempty"`
+	// Decommissions maps an Intent kind to THIS provider's gated TEARDOWN Workflow for it (ADR-0114
+	// D4), symmetric to Provisions — the per-kind teardown a withdrawn/counted-down Intent resolves to.
+	Decommissions map[string]string `json:"decommissions,omitempty"`
 	// Environments scopes this Connector to a subset of dev/staging/prod (ADR-0057); empty ⇒
 	// every environment.
 	Environments []string `json:"environments,omitempty"`

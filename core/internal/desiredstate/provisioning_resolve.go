@@ -58,6 +58,62 @@ func verifiedProvisioningProviders(ctx context.Context, store *graph.Store, env 
 	return assembleProvisioningProviders(verified, acts, conns, env), nil
 }
 
+// resolveDecommission binds an Intent kind to a concrete teardown Workflow (ADR-0114 D4), the symmetric
+// counterpart to resolveProvisioning: it resolves the SAME verified, in-environment provisioning
+// providers, but over their `decommissions` map instead of `provisions`. Because the teardown targets an
+// Entity identified by a provider-specific scheme (e.g. vcenter.uuid → vcenter), env-scoped class
+// resolution lands on the build provider in the common single-provider case; fail-closed on ambiguity.
+func (c *Controller) resolveDecommission(ctx context.Context, intentKind string) (capability.Result, error) {
+	env := c.Store.ActiveEnvironment()
+	providers, err := decommissionProviders(ctx, c.Store, env)
+	if err != nil {
+		return capability.Result{}, err
+	}
+	allBindings, err := c.Store.ListCapabilityBindings(ctx)
+	if err != nil {
+		return capability.Result{}, err
+	}
+	return capability.Resolve(types.CapProvisioning, intentKind, providers, inScopeBindings(allBindings, env)), nil
+}
+
+// decommissionProviders assembles the verified, in-environment providers that `provides` provisioning
+// and advertise per-kind TEARDOWN Workflows — the pure resolver keys on the `decommissions` map (passed
+// as capability.Provider.Provisions, which is a generic kind→workflow map).
+func decommissionProviders(ctx context.Context, store *graph.Store, env string) ([]capability.Provider, error) {
+	verifs, err := store.ListProviderVerifications(ctx)
+	if err != nil {
+		return nil, err
+	}
+	verified := map[string]bool{}
+	for _, v := range verifs {
+		if v.Verified {
+			verified[v.Kind+"/"+v.Name] = true
+		}
+	}
+	acts, err := store.ListActuators(ctx)
+	if err != nil {
+		return nil, err
+	}
+	conns, err := store.ListConnectors(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var out []capability.Provider
+	for _, a := range acts {
+		if verified["actuator/"+a.Name] && types.InScope(a.ScopedEnvironments(), env) &&
+			slices.Contains(a.Provides, types.CapProvisioning) && len(a.Decommissions) > 0 {
+			out = append(out, capability.Provider{Name: a.Name, Provisions: a.Decommissions})
+		}
+	}
+	for _, cn := range conns {
+		if verified["connector/"+cn.Name] && types.InScope(cn.ScopedEnvironments(), env) &&
+			slices.Contains(cn.Provides, types.CapProvisioning) && len(cn.Decommissions) > 0 {
+			out = append(out, capability.Provider{Name: cn.Name, Provisions: cn.Decommissions})
+		}
+	}
+	return out, nil
+}
+
 // assembleProvisioningProviders is the PURE selection (ADR-0104 D1 / ADR-0113 D2): a provider is
 // included only if it is verified, `provides` provisioning, advertises ≥1 build Workflow, AND is in
 // scope for env (types.InScope membership). A phantom/unverified provider, a provider without a

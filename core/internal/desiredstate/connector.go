@@ -49,6 +49,7 @@ type connectorFile struct {
 	Provides                     []string          `yaml:"provides"`
 	Requires                     []string          `yaml:"requires"`
 	Provisions                   map[string]string `yaml:"provisions"`
+	Decommissions                map[string]string `yaml:"decommissions"`
 	Environments                 []string          `yaml:"environments"`
 }
 
@@ -68,7 +69,8 @@ func parseConnectorFile(path string, raw []byte) (string, types.Connector, error
 		FacetNamespaces: f.FacetNamespaces, AuthoritativeFacetNamespaces: f.AuthoritativeFacetNamespaces,
 		LabelKeys: f.LabelKeys, IdentitySchemes: f.IdentitySchemes, TombstoneSchemes: f.TombstoneSchemes,
 		EmitterName: f.EmitterName, ActionNames: f.ActionNames, IntervalSeconds: f.IntervalSeconds,
-		Provides: f.Provides, Requires: f.Requires, Provisions: f.Provisions, Environments: f.Environments,
+		Provides: f.Provides, Requires: f.Requires, Provisions: f.Provisions,
+		Decommissions: f.Decommissions, Environments: f.Environments,
 	}
 	if err := ValidateConnector(c); err != nil {
 		return "", types.Connector{}, fmt.Errorf("desiredstate: %s: %w", path, err)
@@ -116,6 +118,9 @@ func ValidateConnector(c types.Connector) error {
 	if err := validateProvisions(c.Name, c.Provides, c.Provisions); err != nil {
 		return err
 	}
+	if err := validateDecommissions(c.Name, c.Provides, c.Decommissions); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -155,6 +160,30 @@ func validateProvisions(name string, provides []string, provisions map[string]st
 		}
 		if action == "" {
 			return fmt.Errorf("%q: provisions[%q] has an empty build Action", name, kind)
+		}
+	}
+	return nil
+}
+
+// validateDecommissions is the ADR-0114 D4 counterpart of validateProvisions for the teardown map: a
+// `decommissions` map is meaningful only on a provisioning provider, and each entry maps a bare Intent
+// kind to a non-empty gated teardown Workflow ref.
+func validateDecommissions(name string, provides []string, decommissions map[string]string) error {
+	if len(decommissions) == 0 {
+		return nil
+	}
+	if !slices.Contains(provides, types.CapProvisioning) {
+		return fmt.Errorf("%q: decommissions is set but %q is not in provides — only a provisioning provider advertises per-kind teardown Workflows (ADR-0114 D4)", name, types.CapProvisioning)
+	}
+	for kind, wf := range decommissions {
+		if kind == "" {
+			return fmt.Errorf("%q: decommissions has an empty Intent kind", name)
+		}
+		if short, ok := strings.CutPrefix(kind, "Intent/"); ok {
+			return fmt.Errorf("%q: decommissions kind %q must omit the Intent/ prefix (write %q)", name, kind, short)
+		}
+		if wf == "" {
+			return fmt.Errorf("%q: decommissions[%q] has an empty teardown Workflow", name, kind)
 		}
 	}
 	return nil
@@ -208,6 +237,7 @@ type actuatorFile struct {
 	Provides       []string          `yaml:"provides"`
 	Requires       []string          `yaml:"requires"`
 	Provisions     map[string]string `yaml:"provisions"`
+	Decommissions  map[string]string `yaml:"decommissions"`
 	Environments   []string          `yaml:"environments"`
 }
 
@@ -222,7 +252,7 @@ func parseActuatorFile(path string, raw []byte) (string, types.Actuator, error) 
 		Name: f.Name, Address: f.Address, PluginIdentity: f.PluginIdentity, Tier: f.Tier,
 		DryRunnable: f.DryRunnable, ActionNames: f.ActionNames, JobCommand: f.JobCommand,
 		Image: f.Image, MCP: f.MCP, Provides: f.Provides, Requires: f.Requires,
-		Provisions: f.Provisions, Environments: f.Environments,
+		Provisions: f.Provisions, Decommissions: f.Decommissions, Environments: f.Environments,
 	}
 	if err := ValidateActuator(a); err != nil {
 		return "", types.Actuator{}, fmt.Errorf("desiredstate: %s: %w", path, err)
@@ -249,6 +279,9 @@ func ValidateActuator(a types.Actuator) error {
 		return err
 	}
 	if err := validateProvisions(a.Name, a.Provides, a.Provisions); err != nil {
+		return err
+	}
+	if err := validateDecommissions(a.Name, a.Provides, a.Decommissions); err != nil {
 		return err
 	}
 	return nil
