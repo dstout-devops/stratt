@@ -719,6 +719,54 @@ tasks:
       - "{{.HELM}} uninstall hello -n demo --kube-context {{.KIND_CONTEXT}} --ignore-not-found"
       - "{{.KUBECTL}} --context {{.KIND_CONTEXT}} -n demo get deploy,svc,cm -l app.kubernetes.io/name=hello 2>/dev/null || true"
 
+  demo:vsphere-only:stage:
+    # Stage the vsphere-only demo's SELF-CONTAINED estate (ADR-0116) into the inline-declarations
+    # path — its authz grant + gate-only vsphere-dev CredentialRef + vsphere-vm-build Workflow +
+    # the dev-vms/availability-zones/datastores Views. The vcenter Actuator/Actions are boot-wired
+    # via the plugin's hostEnv (values-demo-vsphere), NOT a CaC actuator, so the estate carries no
+    # actuator file. Delivered as CaC through the declarations mount the reconcile controller enforces.
+    desc: Stage the vsphere-only demo estate into the inline-declarations path
+    cmds:
+      - rm -rf {{.ROOT_DIR}}/deploy/charts/stratt/dev/declarations
+      - mkdir -p {{.ROOT_DIR}}/deploy/charts/stratt/dev/declarations
+      - cp -R {{.ROOT_DIR}}/demos/vsphere-only/estate/. {{.ROOT_DIR}}/deploy/charts/stratt/dev/declarations/
+
+  demo:vsphere-only:run:
+    # The turnkey "vSphere: provision a VM + watch the graph come alive" demo (ADR-0116). Stands up a
+    # vSphere-only Stratt floor — kind + spine + strattd + the vcenter plugin + an external vcsim (a real
+    # vCenter API) seeded with an enterprise topology + the staged CaC estate — then drives BOTH halves:
+    # the vcenter Syncer projects the vcsim topology into a live graph (Views come alive), and a gated
+    # Workflow provisions a new VM through vcenter/create-vm. By-hand walk: demos/vsphere-only/README.md.
+    desc: "Demo — stand up a vSphere floor, project the graph, and provision a VM through a gated Workflow"
+    deps: [tools:helm, tools:kubectl]
+    cmds:
+      - task: dev:kind:up
+      # vcsim runs as a compose service on the host; the plugin reaches it on the kind host-gateway.
+      # force-recreate so every run starts from vcsim's clean default topology (no leftover web-01).
+      - docker compose -f {{.ROOT_DIR}}/deploy/dev/docker-compose.yml up -d --force-recreate --wait vcsim
+      - task: image:kind-load
+      - task: image:vcenter-plugin # the vcenter Syncer + the boot-wired create-vm Action
+      - task: demo:vsphere-only:stage
+      - |
+        set -eu
+        "{{.HELM}}" upgrade --install stratt {{.ROOT_DIR}}/deploy/charts/stratt \
+          --kube-context {{.KIND_CONTEXT}} -n stratt --create-namespace \
+          -f {{.ROOT_DIR}}/deploy/charts/stratt/values-allinone.yaml \
+          -f {{.ROOT_DIR}}/deploy/charts/stratt/values-genesis.yaml \
+          -f {{.ROOT_DIR}}/deploy/charts/stratt/values-demo-vsphere.yaml
+      - "{{.KUBECTL}} --context {{.KIND_CONTEXT}} -n stratt rollout status deploy/stratt --timeout=240s"
+      # The gate-only vsphere-dev CredentialRef points at this marker Secret (pointer, no material).
+      - "{{.KUBECTL}} --context {{.KIND_CONTEXT}} -n stratt create secret generic vsphere-dev-authz --from-literal=marker=1 --dry-run=client -o yaml | {{.KUBECTL}} --context {{.KIND_CONTEXT}} apply -f -"
+      - KUBECONTEXT={{.KIND_CONTEXT}} KUBECTL={{.KUBECTL}} bash {{.ROOT_DIR}}/demos/vsphere-only/run.sh
+
+  demo:vsphere-only:down:
+    # Tear down the vsphere-only demo: uninstall the stratt release and stop the vcsim substrate
+    # (kind cluster kept for a fast re-run; full nuke: `task dev:kind:down`). Idempotent.
+    desc: "Demo teardown — uninstall stratt + stop vcsim (full nuke: dev:kind:down)"
+    cmds:
+      - "{{.HELM}} uninstall stratt -n stratt --kube-context {{.KIND_CONTEXT}} --ignore-not-found 2>/dev/null || true"
+      - docker compose -f {{.ROOT_DIR}}/deploy/dev/docker-compose.yml stop vcsim 2>/dev/null || true
+
   dev:promote:authz:
     # Genesis -> real-authz promotion, BACKEND axis (ADR-0102, docs/runbooks/genesis-to-authz.md):
     # point strattd's authz backend at the self-deployed OpenFGA server (in-proc -> server).
