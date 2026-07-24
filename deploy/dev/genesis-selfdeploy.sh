@@ -32,6 +32,19 @@ trap 'kill "$PF_PID" 2>/dev/null || true' EXIT
 # Wait for the forward to answer (/healthz is at the root, not under /api/v1).
 for _ in $(seq 1 30); do curl -fsS "${ROOT}/healthz" >/dev/null 2>&1 && break; sleep 1; done
 
+# Wait for the helm Actuator to be DISPATCHABLE (status.enabled), not merely declared: the reconcile
+# controller declares it from the staged genesis estate (actuators/helm.yaml), then RunActuators dials
+# stratt-helm + registers helm/deploy on its cadence (ADR-0103, no restart). Launching before that
+# registers loses the race — the deploy Step fails terminally with UnknownAction (§1.8 descent).
+echo "genesis-selfdeploy: awaiting helm/deploy Actuator registration (status.enabled)…"
+enabled=""
+for _ in $(seq 1 45); do
+    enabled=$(api GET "/actuators/helm" 2>/dev/null | jq -r '.status.enabled // false')
+    [ "$enabled" = "true" ] && break
+    sleep 2
+done
+[ "$enabled" = "true" ] || { echo "FAIL: helm Actuator never reached status.enabled=true"; exit 1; }
+
 echo "genesis-selfdeploy: launch Workflow ${WORKFLOW} as ${PRINCIPAL}"
 run_id=$(api POST "/workflows/${WORKFLOW}/runs" | jq -r '.id')
 [ -n "$run_id" ] && [ "$run_id" != "null" ] || { echo "FAIL: no WorkflowRun id returned"; exit 1; }
