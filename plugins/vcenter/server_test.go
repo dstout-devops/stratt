@@ -65,11 +65,23 @@ func TestEnumerateAgainstSimulator(t *testing.T) {
 				if len(e.GetFacets()["storage.datastore"]) == 0 {
 					t.Errorf("datastore missing storage.datastore facet blob")
 				}
+			case "compute-pool": // ADR-0115 slice 3 (NOT resource*, §2-banned)
+				if e.GetIdentityKeys()["vcenter.pool.moref"] == "" {
+					t.Errorf("compute-pool missing vcenter.pool.moref identity")
+				}
+			case "dvswitch": // ADR-0115 slice 3 — keyed by native uuid
+				if e.GetIdentityKeys()["vcenter.dvs.uuid"] == "" {
+					t.Errorf("dvswitch missing vcenter.dvs.uuid identity")
+				}
+			case "folder": // ADR-0115 slice 3 — tenant/org hierarchy, bare
+				if e.GetIdentityKeys()["vcenter.folder.moref"] == "" {
+					t.Errorf("folder missing vcenter.folder.moref identity")
+				}
 			default:
 				t.Errorf("unexpected kind %q", e.GetKind())
 			}
 		}
-		for _, k := range []string{"vm", "host", "subnet", "region", "availability-zone", "datastore"} {
+		for _, k := range []string{"vm", "host", "subnet", "region", "availability-zone", "datastore", "compute-pool", "dvswitch", "folder"} {
 			if count[k] == 0 {
 				t.Errorf("expected at least one %q from the simulator, got 0", k)
 			}
@@ -254,5 +266,60 @@ func TestEnumerateStorageEdges(t *testing.T) {
 			t.Error("expected at least one host --has-datastore--> datastore edge")
 		}
 		t.Logf("storage edges: stored-on=%d has-datastore=%d", storedOn, hasDatastore)
+	})
+}
+
+// TestEnumerateStructureEdges proves the ADR-0115 slice-3 relations: vm --in-pool--> compute-pool,
+// dvswitch --has-portgroup--> subnet, and vm --contained-in--> folder — each targeting by identity and
+// resolving to an emitted Entity.
+func TestEnumerateStructureEdges(t *testing.T) {
+	simulator.Test(func(ctx context.Context, c *vim25.Client) {
+		entities, err := enumerate(ctx, c)
+		if err != nil {
+			t.Fatalf("enumerate: %v", err)
+		}
+		pools, switches, folders := map[string]bool{}, map[string]bool{}, map[string]bool{}
+		for _, e := range entities {
+			switch e.GetKind() {
+			case "compute-pool":
+				pools[e.GetIdentityKeys()["vcenter.pool.moref"]] = true
+			case "dvswitch":
+				switches[e.GetIdentityKeys()["vcenter.dvs.uuid"]] = true
+			case "folder":
+				folders[e.GetIdentityKeys()["vcenter.folder.moref"]] = true
+			}
+		}
+		var inPool, onSwitch, containedIn int
+		for _, e := range entities {
+			for _, r := range e.GetRelations() {
+				switch r.GetType() {
+				case "in-pool":
+					inPool++
+					if r.GetToScheme() != "vcenter.pool.moref" || !pools[r.GetToValue()] {
+						t.Errorf("in-pool must resolve to an emitted compute-pool, got %s=%s", r.GetToScheme(), r.GetToValue())
+					}
+				case "on-switch":
+					onSwitch++
+					if r.GetToScheme() != "vcenter.dvs.uuid" || !switches[r.GetToValue()] {
+						t.Errorf("on-switch must resolve to an emitted dvswitch, got %s=%s", r.GetToScheme(), r.GetToValue())
+					}
+				case "contained-in":
+					containedIn++
+					if r.GetToScheme() != "vcenter.folder.moref" || !folders[r.GetToValue()] {
+						t.Errorf("contained-in must resolve to an emitted folder, got %s=%s", r.GetToScheme(), r.GetToValue())
+					}
+				}
+			}
+		}
+		if inPool == 0 {
+			t.Error("expected at least one vm --in-pool--> compute-pool edge")
+		}
+		if onSwitch == 0 {
+			t.Error("expected at least one subnet --on-switch--> dvswitch edge")
+		}
+		if containedIn == 0 {
+			t.Error("expected at least one vm --contained-in--> folder edge")
+		}
+		t.Logf("structure edges: in-pool=%d on-switch=%d contained-in=%d", inPool, onSwitch, containedIn)
 	})
 }

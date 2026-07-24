@@ -26,8 +26,10 @@ var vmProps = []string{
 	"runtime.powerState",
 	"runtime.connectionState",
 	"runtime.host",
-	"network",   // the portgroups/networks the VM is attached to — the placed-in edge
-	"datastore", // the datastores backing the VM — the stored-on edge (ADR-0115)
+	"network",      // the portgroups/networks the VM is attached to — the placed-in edge
+	"datastore",    // the datastores backing the VM — the stored-on edge (ADR-0115)
+	"resourcePool", // the compute-pool the VM draws from — the in-pool edge (ADR-0115)
+	"parent",       // the VM folder (tenant/org) the VM lives in — the contained-in edge (ADR-0115)
 	"guest.hostName",
 	"guest.ipAddress",
 	"guest.toolsRunningStatus",
@@ -43,12 +45,15 @@ var hostProps = []string{
 	"datastore", // the datastores the host mounts — the has-datastore edge (ADR-0115)
 }
 
-// Topology property sets (ADR-0115). Datacenters/clusters carry `parent` for the AZ→region
-// walk; folders are retrieved for the walk map only (not projected as Entities until slice 3).
+// Topology property sets (ADR-0115). Datacenters/clusters carry `parent` for the AZ→region walk;
+// folders carry parent too (both the walk and the `folder` projection, slice 3). compute-pool +
+// dvswitch (slice 3) carry their allocation/summary for the uncovered compute.pool / net.dvswitch blobs.
 var (
 	datacenterProps = []string{"name", "parent"}
 	clusterProps    = []string{"name", "parent"}
-	folderProps     = []string{"parent"}
+	folderProps     = []string{"name", "parent"}
+	poolProps       = []string{"name", "config"}
+	dvsProps        = []string{"uuid", "summary"}
 )
 
 // networkProps is the minimum a vSphere network (portgroup/DVPG/opaque) needs to
@@ -190,6 +195,76 @@ func normalizeDatastore(d mo.Datastore) (*pluginv1.ObservedEntity, error) {
 		IdentityKeys: map[string]string{"vcenter.datastore.moref": ref},
 		Labels:       map[string]string{"source": "vsphere", "vcenter.name": d.Name},
 		Facets:       map[string][]byte{"storage.datastore": facet},
+	}, nil
+}
+
+// normalizeComputePool maps a vSphere resource pool to the `compute-pool` kind (ADR-0115 D3 —
+// `compute-pool`, NEVER `resource*`, §2-banned). Emits an owned-but-UNCOVERED `compute.pool` blob
+// (cpu/mem allocation) — no schema until a consumer (§1.1); the data is queryable now.
+func normalizeComputePool(rp mo.ResourcePool) (*pluginv1.ObservedEntity, error) {
+	ref := rp.Self.Value
+	if ref == "" {
+		return nil, fmt.Errorf("vcenter: resource pool %q has no moref; cannot project without identity", rp.Name)
+	}
+	pool := map[string]any{"name": rp.Name}
+	if l := rp.Config.CpuAllocation.Limit; l != nil {
+		pool["cpuLimitMHz"] = *l
+	}
+	if r := rp.Config.CpuAllocation.Reservation; r != nil {
+		pool["cpuReservationMHz"] = *r
+	}
+	if l := rp.Config.MemoryAllocation.Limit; l != nil {
+		pool["memLimitMB"] = *l
+	}
+	if r := rp.Config.MemoryAllocation.Reservation; r != nil {
+		pool["memReservationMB"] = *r
+	}
+	facet, err := json.Marshal(pool)
+	if err != nil {
+		return nil, fmt.Errorf("vcenter: marshal facet compute.pool: %w", err)
+	}
+	return &pluginv1.ObservedEntity{
+		Kind:         "compute-pool",
+		IdentityKeys: map[string]string{"vcenter.pool.moref": ref},
+		Labels:       map[string]string{"source": "vsphere", "vcenter.name": rp.Name},
+		Facets:       map[string][]byte{"compute.pool": facet},
+	}, nil
+}
+
+// normalizeDVS maps a distributed virtual switch to the `dvswitch` kind (ADR-0115). Keyed by the DVS's
+// native UUID (vcenter.dvs.uuid), not a moref. Emits an owned-but-UNCOVERED `net.dvswitch` blob. Uses the
+// BASE mo.DistributedVirtualSwitch so both base and Vmware-subtype switches project.
+func normalizeDVS(dvs mo.DistributedVirtualSwitch) (*pluginv1.ObservedEntity, error) {
+	if dvs.Uuid == "" {
+		return nil, fmt.Errorf("vcenter: dvs %q has no uuid; cannot project without identity", dvs.Summary.Name)
+	}
+	facet, err := json.Marshal(map[string]any{
+		"name":     dvs.Summary.Name,
+		"uuid":     dvs.Uuid,
+		"numPorts": dvs.Summary.NumPorts,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("vcenter: marshal facet net.dvswitch: %w", err)
+	}
+	return &pluginv1.ObservedEntity{
+		Kind:         "dvswitch",
+		IdentityKeys: map[string]string{"vcenter.dvs.uuid": dvs.Uuid},
+		Labels:       map[string]string{"source": "vsphere", "vcenter.name": dvs.Summary.Name},
+		Facets:       map[string][]byte{"net.dvswitch": facet},
+	}, nil
+}
+
+// normalizeFolder maps a vSphere folder to the `folder` kind (ADR-0115) — the tenant/organizational
+// hierarchy (the seed's tenant folders live here). Bare Entity: identity + name label, no Facet.
+func normalizeFolder(f mo.Folder) (*pluginv1.ObservedEntity, error) {
+	ref := f.Self.Value
+	if ref == "" {
+		return nil, fmt.Errorf("vcenter: folder %q has no moref; cannot project without identity", f.Name)
+	}
+	return &pluginv1.ObservedEntity{
+		Kind:         "folder",
+		IdentityKeys: map[string]string{"vcenter.folder.moref": ref},
+		Labels:       map[string]string{"source": "vsphere", "vcenter.name": f.Name},
 	}, nil
 }
 
