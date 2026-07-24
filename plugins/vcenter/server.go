@@ -83,6 +83,15 @@ func (s *Server) GetManifest(context.Context, *pluginv1.GetManifestRequest) (*pl
 			lifecycleDecl(actionShutdownGuest, false),
 			lifecycleDecl(actionReconfigure, false),
 			lifecycleDecl(actionDeleteVM, true),
+			// Snapshot + mobility + portgroup lifecycle (ADR-0114 slice 2). delete-portgroup is
+			// idempotent (tombstone-by-absence); the rest are not.
+			lifecycleDecl(actionSnapshotCreate, false),
+			lifecycleDecl(actionSnapshotRevert, false),
+			lifecycleDecl(actionSnapshotRemove, false),
+			lifecycleDecl(actionMigrate, false),
+			lifecycleDecl(actionClone, false),
+			lifecycleDecl(actionReconfigurePG, false),
+			lifecycleDecl(actionDeletePortgroup, true),
 		},
 	}}, nil
 }

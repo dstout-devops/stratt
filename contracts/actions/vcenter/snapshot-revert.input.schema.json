@@ -1,0 +1,10 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "stratt:contract:actions/vcenter/snapshot-revert.input:v1",
+  "title": "vcenter/snapshot-revert input",
+  "description": "Revert an existing VM to a named snapshot, by vcenter.uuid (ADR-0114).",
+  "type": "object",
+  "properties": { "uuid": { "type": "string" }, "name": { "type": "string" } },
+  "required": ["uuid", "name"],
+  "additionalProperties": false
+}

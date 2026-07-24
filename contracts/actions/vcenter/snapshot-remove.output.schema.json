@@ -1,0 +1,10 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "stratt:contract:actions/vcenter/snapshot-remove.output:v1",
+  "title": "vcenter/snapshot-remove output",
+  "description": "The VM identity + snapshot name removed.",
+  "type": "object",
+  "properties": { "uuid": { "type": "string" }, "snapshot": { "type": "string" } },
+  "required": ["uuid"],
+  "additionalProperties": false
+}

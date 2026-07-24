@@ -1,0 +1,10 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "stratt:contract:actions/vcenter/reconfigure-portgroup.output:v1",
+  "title": "vcenter/reconfigure-portgroup output",
+  "description": "The reconfigured portgroup's identity (the Syncer re-observes net.subnet next poll, ADR-0114 D3).",
+  "type": "object",
+  "properties": { "moref": { "type": "string" } },
+  "required": ["moref"],
+  "additionalProperties": false
+}

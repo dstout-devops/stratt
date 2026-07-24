@@ -158,6 +158,18 @@ func (s *Server) Invoke(req *pluginv1.InvokeRequest, stream grpc.ServerStreaming
 		return s.invokeReconfigure(stream.Context(), req, stream)
 	case actionDeleteVM:
 		return s.invokeDeleteVM(stream.Context(), req, stream)
+	case actionSnapshotCreate:
+		return s.invokeSnapshotCreate(stream.Context(), req, stream)
+	case actionSnapshotRevert, actionSnapshotRemove:
+		return s.invokeSnapshotOp(stream.Context(), req, stream, req.GetAction())
+	case actionMigrate:
+		return s.invokeMigrate(stream.Context(), req, stream)
+	case actionClone:
+		return s.invokeClone(stream.Context(), req, stream)
+	case actionReconfigurePG:
+		return s.invokeReconfigurePortgroup(stream.Context(), req, stream)
+	case actionDeletePortgroup:
+		return s.invokeDeletePortgroup(stream.Context(), req, stream)
 	default:
 		return status.Errorf(codes.InvalidArgument, "vcenter: unknown action %q", req.GetAction())
 	}

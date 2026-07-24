@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "stratt:contract:actions/vcenter/reconfigure-portgroup.input:v1",
+  "title": "vcenter/reconfigure-portgroup input",
+  "description": "Change a DVS portgroup's 802.1Q VLAN, targeted by its vcenter.network.moref (ADR-0114).",
+  "type": "object",
+  "properties": {
+    "moref": { "type": "string" },
+    "vlanId": { "type": "integer", "minimum": 1, "maximum": 4094 }
+  },
+  "required": ["moref", "vlanId"],
+  "additionalProperties": false
+}

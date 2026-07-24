@@ -1,0 +1,10 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "stratt:contract:actions/vcenter/delete-portgroup.output:v1",
+  "title": "vcenter/delete-portgroup output",
+  "description": "The destroyed portgroup's identity. NO Entity/tombstone (ADR-0114 D2) — the graph tombstones by the next Syncer full-sync absence.",
+  "type": "object",
+  "properties": { "moref": { "type": "string" } },
+  "required": ["moref"],
+  "additionalProperties": false
+}

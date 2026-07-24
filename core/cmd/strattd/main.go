@@ -1012,6 +1012,10 @@ func run(ctx context.Context, log *slog.Logger) error {
 		for _, op := range []string{
 			"vcenter/power-off", "vcenter/power-on", "vcenter/reset", "vcenter/suspend",
 			"vcenter/shutdown-guest", "vcenter/reconfigure", "vcenter/delete-vm",
+			// snapshot + mobility + portgroup lifecycle (ADR-0114 slice 2)
+			"vcenter/snapshot-create", "vcenter/snapshot-revert", "vcenter/snapshot-remove",
+			"vcenter/migrate", "vcenter/clone",
+			"vcenter/reconfigure-portgroup", "vcenter/delete-portgroup",
 		} {
 			if err := registerPluginAction(op, host, true); err != nil {
 				return err

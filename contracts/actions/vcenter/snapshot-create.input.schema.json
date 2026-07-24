@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "stratt:contract:actions/vcenter/snapshot-create.input:v1",
+  "title": "vcenter/snapshot-create input",
+  "description": "Snapshot an existing VM by its vcenter.uuid (ADR-0114).",
+  "type": "object",
+  "properties": {
+    "uuid": { "type": "string" },
+    "name": { "type": "string" },
+    "description": { "type": "string" },
+    "memory": { "type": "boolean", "description": "include the VM's memory state" },
+    "quiesce": {
+      "type": "boolean",
+      "description": "quiesce the guest file system (needs VMware Tools)"
+    }
+  },
+  "required": ["uuid", "name"],
+  "additionalProperties": false
+}
