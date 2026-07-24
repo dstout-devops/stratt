@@ -18,7 +18,7 @@
     },
     "connectors": {
       "title": "Connectors & Syncers — SoR ingest breadth, the Syncer SDK, adopt/AWX-import",
-      "adrs": [7, 14, 25, 26, 37, 38, 39, 45, 86, 87, 88, 89, 95, 97, 99],
+      "adrs": [7, 14, 25, 26, 37, 38, 39, 45, 86, 87, 88, 89, 95, 97, 99, 113],
       "depends_on": ["plugin-port", "graph-model"]
     },
     "actuators": {
@@ -33,7 +33,7 @@
     },
     "estate-as-code": {
       "title": "Estate-as-Code — CaC declarations, environments, composition, the estate CLI",
-      "adrs": [55, 56, 57, 103],
+      "adrs": [55, 56, 57, 103, 113],
       "depends_on": ["connectors"]
     },
     "intent-compiler": {
@@ -43,12 +43,12 @@
     },
     "provisioning": {
       "title": "Provisioning — declare & build infra (Intent -> builder -> machines), provision->configure",
-      "adrs": [17, 58, 95, 96, 107, 110, 111, 112],
+      "adrs": [17, 58, 95, 96, 107, 110, 111, 112, 113],
       "depends_on": ["intent-compiler", "capability-framework", "actuators", "connectors"]
     },
     "capability-framework": {
       "title": "Capability framework — provides/requires, verification, resolve-inject vs enablement-gate, providers",
-      "adrs": [100, 104, 105, 106, 107, 110, 111, 112],
+      "adrs": [100, 104, 105, 106, 107, 110, 111, 112, 113],
       "depends_on": ["plugin-port", "connectors", "actuators", "graph-model", "estate-as-code"]
     },
     "credentials-secrets": {

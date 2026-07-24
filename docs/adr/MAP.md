@@ -14,11 +14,11 @@ graph TD
   api_surface["api-surface<br/><small>0006 0021 0026 0076 0091</small>"]
   audit_telemetry["audit-telemetry<br/><small>0034 0065 0077</small>"]
   authz_identity["authz-identity<br/><small>0009 0028 0035 0079 0101</small>"]
-  capability_framework["capability-framework<br/><small>0100 0104 0105 0106 0107 0110<br/>0111 0112</small>"]
+  capability_framework["capability-framework<br/><small>0100 0104 0105 0106 0107 0110<br/>0111 0112 0113</small>"]
   certificates_pki["certificates-pki<br/><small>0030 0043 0050 0098 0106</small>"]
-  connectors["connectors<br/><small>0007 0014 0025 0026 0037 0038<br/>0039 0045 0086 0087 0088 0089<br/>0095 0097 0099</small>"]
+  connectors["connectors<br/><small>0007 0014 0025 0026 0037 0038<br/>0039 0045 0086 0087 0088 0089<br/>0095 0097 0099 0113</small>"]
   credentials_secrets["credentials-secrets<br/><small>0009 0029 0052 0094 0098 0099<br/>0100 0106</small>"]
-  estate_as_code["estate-as-code<br/><small>0055 0056 0057 0103</small>"]
+  estate_as_code["estate-as-code<br/><small>0055 0056 0057 0103 0113</small>"]
   findings_drift["findings-drift<br/><small>0019 0020 0033 0043 0080 0085</small>"]
   foundation["foundation<br/><small>0001 0002 0004 0005 0006 0008<br/>0108 0109</small>"]
   graph_model["graph-model<br/><small>0015 0017 0041 0042 0059 0060<br/>0079 0080 0081 0082 0084 0085<br/>0096</small>"]
@@ -26,7 +26,7 @@ graph TD
   orchestration["orchestration<br/><small>0010 0011 0018 0027 0031 0063</small>"]
   plugin_port["plugin-port<br/><small>0046 0047 0048 0049 0051 0053<br/>0054 0103</small>"]
   policy_governance["policy-governance<br/><small>0061 0062 0063 0064 0065 0066<br/>0067 0068 0069 0070 0071 0072<br/>0073 0074 0075 0076</small>"]
-  provisioning["provisioning<br/><small>0017 0058 0095 0096 0107 0110<br/>0111 0112</small>"]
+  provisioning["provisioning<br/><small>0017 0058 0095 0096 0107 0110<br/>0111 0112 0113</small>"]
   state_artifacts["state-artifacts<br/><small>0016 0029 0093 0097 0105 0112</small>"]
   substrate_ops["substrate-ops<br/><small>0013 0032 0040 0044 0045 0049<br/>0077 0078 0093 0101 0102</small>"]
   ui["ui<br/><small>0003 0012 0020 0024 0090 0091</small>"]
@@ -138,6 +138,7 @@ Capability framework — provides/requires, verification, resolve-inject vs enab
 - [ADR-0110](0110-provisioning-class-reach-path.md) — The `provisioning` class reach-path: `Intent.builder:` → `requires: [provisioning]`
 - [ADR-0111](0111-ipam-capability-netbox-provider.md) — The `ipam` capability: global IP/VLAN allocation as resolve-inject, NetBox provider #1
 - [ADR-0112](0112-opentofu-network-provider-capability-composition.md) — OpenTofu as the AWS network `provisioning` provider, composing statestore + ipam
+- [ADR-0113](0113-vsphere-provisioning-provider.md) — vSphere as a `provisioning` provider: the vcenter plugin gains a build verb (VM + DVPortgroup)
 
 ### certificates-pki
 
@@ -172,6 +173,7 @@ Connectors & Syncers — SoR ingest breadth, the Syncer SDK, adopt/AWX-import.
 - [ADR-0095](0095-full-featured-ec2-connector.md) — Full-featured EC2 connector: instance lifecycle + resource Actions, and the instance.* Facet contracts
 - [ADR-0097](0097-awss3-connector.md) — The awss3 Connector: bucket lifecycle Actions + metadata-only bucket Syncer
 - [ADR-0099](0099-openbao-kv-metadata-syncer.md) — OpenBao KV metadata Syncer: secret existence/metadata as a projection, never material
+- [ADR-0113](0113-vsphere-provisioning-provider.md) — vSphere as a `provisioning` provider: the vcenter plugin gains a build verb (VM + DVPortgroup)
 
 ### credentials-secrets
 
@@ -198,6 +200,7 @@ Estate-as-Code — CaC declarations, environments, composition, the estate CLI.
 - [ADR-0056](0056-estate-as-code.md) — Estate-as-Code: declaring Sources & Connectors in Git + the `stratt` estate CLI
 - [ADR-0057](0057-environment-scoped-reconciliation.md) — Environment-scoped reconciliation: one estate repo, N environments
 - [ADR-0103](0103-runtime-connector-registry.md) — Runtime Connector registry: enable/disable Connectors without a strattd restart
+- [ADR-0113](0113-vsphere-provisioning-provider.md) — vSphere as a `provisioning` provider: the vcenter plugin gains a build verb (VM + DVPortgroup)
 
 ### findings-drift
 
@@ -324,6 +327,7 @@ Provisioning — declare & build infra (Intent -> builder -> machines), provisio
 - [ADR-0110](0110-provisioning-class-reach-path.md) — The `provisioning` class reach-path: `Intent.builder:` → `requires: [provisioning]`
 - [ADR-0111](0111-ipam-capability-netbox-provider.md) — The `ipam` capability: global IP/VLAN allocation as resolve-inject, NetBox provider #1
 - [ADR-0112](0112-opentofu-network-provider-capability-composition.md) — OpenTofu as the AWS network `provisioning` provider, composing statestore + ipam
+- [ADR-0113](0113-vsphere-provisioning-provider.md) — vSphere as a `provisioning` provider: the vcenter plugin gains a build verb (VM + DVPortgroup)
 
 ### state-artifacts
 
@@ -485,3 +489,4 @@ UI — React shell, schema-driven rendering, Views, descent, the first-party cli
 | [0110](0110-provisioning-class-reach-path.md) | capability-framework, provisioning |
 | [0111](0111-ipam-capability-netbox-provider.md) | capability-framework, provisioning |
 | [0112](0112-opentofu-network-provider-capability-composition.md) | capability-framework, provisioning, state-artifacts |
+| [0113](0113-vsphere-provisioning-provider.md) | capability-framework, connectors, estate-as-code, provisioning |
