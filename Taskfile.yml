@@ -261,6 +261,11 @@ tasks:
     cmds:
       - deploy/dev/openbao-bootstrap.sh
 
+  dev:netbox:bootstrap:
+    desc: Seed the dev NetBox with an enterprise topology — regions, AZs, tenants (sovereignty), VLANs, the app supernet (ADR-0111)
+    cmds:
+      - deploy/dev/netbox-bootstrap.sh
+
   dev:scim:bootstrap:
     desc: Drive the SCIM SP like an IdP — push Users/Group, filter, deactivate (ADR-0035)
     cmds:
@@ -311,7 +316,33 @@ tasks:
   dev:kind:down:
     desc: Delete the kind dev cluster
     cmds:
-      - go run sigs.k8s.io/kind@v0.32.0 delete cluster --name stratt-dev
+      - go run sigs.k8s.io/kind@v{{.KIND_VER}} delete cluster --name {{.KIND_CLUSTER}}
+
+  dev:status:
+    desc: "Show the dev environment at a glance — kind cluster, strattd + plugin pods (with age; the ADR-0103 no-restart signal), and the compose substrate"
+    silent: true
+    deps: [tools:kubectl]
+    cmds:
+      - |
+        set -eu
+        echo "── kind cluster ─────────────────────────────────"
+        if go run sigs.k8s.io/kind@v{{.KIND_VER}} get clusters 2>/dev/null | grep -qx {{.KIND_CLUSTER}}; then
+          echo "  ✓ {{.KIND_CLUSTER}} up  (context {{.KIND_CONTEXT}})"
+          echo
+          echo "── workloads: namespace stratt ──────────────────"
+          if {{.KUBECTL}} --context {{.KIND_CONTEXT}} get ns stratt >/dev/null 2>&1; then
+            # AGE is the no-restart proof (ADR-0103): a runtime Connector enable/disable
+            # must NOT bump the strattd pod's age.
+            {{.KUBECTL}} --context {{.KIND_CONTEXT}} -n stratt get pods 2>/dev/null
+          else
+            echo "  (no 'stratt' namespace — not installed; run: task dev:genesis)"
+          fi
+        else
+          echo "  ✗ {{.KIND_CLUSTER}} not found  (run: task dev:genesis)"
+        fi
+        echo
+        echo "── compose substrate ────────────────────────────"
+        docker compose -f deploy/dev/docker-compose.yml ps 2>/dev/null || echo "  (compose not running)"
 
   image:build:
     desc: Build the strattd control-plane image (ADR-0013)
@@ -322,19 +353,19 @@ tasks:
     desc: Build the strattd image and load it into the dev kind cluster
     cmds:
       - task: image:build
-      - go run sigs.k8s.io/kind@v0.32.0 load docker-image stratt/strattd:dev --name stratt-dev
+      - go run sigs.k8s.io/kind@v{{.KIND_VER}} load docker-image stratt/strattd:dev --name {{.KIND_CLUSTER}}
 
   image:agent:
     desc: Build the stratt-agent (Site satellite) image and load it into kind (ADR-0032)
     cmds:
       - docker build -f deploy/docker/stratt-agent.Dockerfile -t stratt/stratt-agent:dev .
-      - go run sigs.k8s.io/kind@v0.32.0 load docker-image stratt/stratt-agent:dev --name stratt-dev
+      - go run sigs.k8s.io/kind@v{{.KIND_VER}} load docker-image stratt/stratt-agent:dev --name {{.KIND_CLUSTER}}
 
   image:forwarder:
     desc: Build the stratt-forwarder (audit→SIEM) image and load it into kind (ADR-0034)
     cmds:
       - docker build -f deploy/docker/stratt-forwarder.Dockerfile -t stratt/stratt-forwarder:dev .
-      - go run sigs.k8s.io/kind@v0.32.0 load docker-image stratt/stratt-forwarder:dev --name stratt-dev
+      - go run sigs.k8s.io/kind@v{{.KIND_VER}} load docker-image stratt/stratt-forwarder:dev --name {{.KIND_CLUSTER}}
 
   dev:forwarder:demo:
     desc: >-
@@ -747,7 +778,7 @@ tasks:
       # Context is the repo root: the multi-stage build compiles the stratt-ansible
       # shim (ADR-0051) from plugins/ansible + sdk before baking the EE runtime.
       - docker build -f ee/Dockerfile -t stratt-ee:dev .
-      - go run sigs.k8s.io/kind@v0.32.0 load docker-image stratt-ee:dev --name stratt-dev
+      - go run sigs.k8s.io/kind@v{{.KIND_VER}} load docker-image stratt-ee:dev --name {{.KIND_CLUSTER}}
 
   dev:ee-mcp:build:
     desc: Build the MCP EE image and load it into the kind cluster (ADR-0022)
@@ -755,7 +786,7 @@ tasks:
       # Context is the repo root: the multi-stage build compiles the stratt-mcp shim
       # (ADR-0053) from plugins/mcp + sdk before baking the sandbox runtime.
       - docker build -f ee/mcp.Dockerfile -t stratt-ee-mcp:dev .
-      - go run sigs.k8s.io/kind@v0.32.0 load docker-image stratt-ee-mcp:dev --name stratt-dev
+      - go run sigs.k8s.io/kind@v{{.KIND_VER}} load docker-image stratt-ee-mcp:dev --name {{.KIND_CLUSTER}}
 
   generate:
     desc: Regenerate code from specs (OpenAPI → server stubs + UI types, ADR-0006/0012; proto → plugin port, ADR-0046)
