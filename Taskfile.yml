@@ -767,6 +767,54 @@ tasks:
       - "{{.HELM}} uninstall stratt -n stratt --kube-context {{.KIND_CONTEXT}} --ignore-not-found 2>/dev/null || true"
       - docker compose -f {{.ROOT_DIR}}/deploy/dev/docker-compose.yml stop vcsim 2>/dev/null || true
 
+  demo:ec2-only:stage:
+    # Stage the ec2-only demo's SELF-CONTAINED estate (ADR-0116) into the inline-declarations path —
+    # its authz grant + gate-only aws-dev CredentialRef + compute-build Workflow + the ec2-instances
+    # View. The awsec2 Actuator/Actions + instance Syncer are boot-wired via the plugin's hostEnv
+    # (values-demo-ec2), NOT a CaC actuator, so the estate carries no actuator file. Delivered as CaC.
+    desc: Stage the ec2-only demo estate into the inline-declarations path
+    cmds:
+      - rm -rf {{.ROOT_DIR}}/deploy/charts/stratt/dev/declarations
+      - mkdir -p {{.ROOT_DIR}}/deploy/charts/stratt/dev/declarations
+      - cp -R {{.ROOT_DIR}}/demos/ec2-only/estate/. {{.ROOT_DIR}}/deploy/charts/stratt/dev/declarations/
+
+  demo:ec2-only:run:
+    # The turnkey "EC2: provision a real instance" demo (ADR-0116). Stands up an EC2-only Stratt floor —
+    # kind + spine + strattd + the awsec2 plugin + an external floci (a real-host EC2 backend that runs
+    # real SSH-able instance containers, ADR-0093) + the staged CaC estate — then drives a gated Workflow
+    # that provisions a REAL instance via awsec2/create-vm; the awsec2 Syncer observes it into the graph.
+    # By-hand walk: demos/ec2-only/README.md.
+    desc: "Demo — stand up an EC2 floor (floci) and provision a real instance through a gated Workflow"
+    deps: [tools:helm, tools:kubectl]
+    cmds:
+      - task: dev:kind:up
+      # floci runs as a compose service on the host; the plugin reaches its EC2 API on the kind
+      # host-gateway. force-recreate so every run starts clean (no leftover instances).
+      - docker compose -f {{.ROOT_DIR}}/deploy/dev/docker-compose.yml up -d --force-recreate --wait floci
+      - task: image:kind-load
+      - task: image:awsec2-plugin # the awsec2 create-vm Action + the instance Syncer
+      - task: demo:ec2-only:stage
+      - |
+        set -eu
+        "{{.HELM}}" upgrade --install stratt {{.ROOT_DIR}}/deploy/charts/stratt \
+          --kube-context {{.KIND_CONTEXT}} -n stratt --create-namespace \
+          -f {{.ROOT_DIR}}/deploy/charts/stratt/values-allinone.yaml \
+          -f {{.ROOT_DIR}}/deploy/charts/stratt/values-genesis.yaml \
+          -f {{.ROOT_DIR}}/deploy/charts/stratt/values-demo-ec2.yaml
+      - "{{.KUBECTL}} --context {{.KIND_CONTEXT}} -n stratt rollout status deploy/stratt --timeout=240s"
+      # The gate-only aws-dev CredentialRef points at this marker Secret (pointer, no material).
+      - "{{.KUBECTL}} --context {{.KIND_CONTEXT}} -n stratt create secret generic aws-dev-authz --from-literal=marker=1 --dry-run=client -o yaml | {{.KUBECTL}} --context {{.KIND_CONTEXT}} apply -f -"
+      - KUBECONTEXT={{.KIND_CONTEXT}} KUBECTL={{.KUBECTL}} bash {{.ROOT_DIR}}/demos/ec2-only/run.sh
+
+  demo:ec2-only:down:
+    # Tear down the ec2-only demo: uninstall the stratt release and stop the floci substrate (which
+    # also stops the instance containers it spawned). kind cluster kept for a fast re-run; full nuke:
+    # `task dev:kind:down`. Idempotent.
+    desc: "Demo teardown — uninstall stratt + stop floci (full nuke: dev:kind:down)"
+    cmds:
+      - "{{.HELM}} uninstall stratt -n stratt --kube-context {{.KIND_CONTEXT}} --ignore-not-found 2>/dev/null || true"
+      - docker compose -f {{.ROOT_DIR}}/deploy/dev/docker-compose.yml stop floci 2>/dev/null || true
+
   dev:promote:authz:
     # Genesis -> real-authz promotion, BACKEND axis (ADR-0102, docs/runbooks/genesis-to-authz.md):
     # point strattd's authz backend at the self-deployed OpenFGA server (in-proc -> server).
