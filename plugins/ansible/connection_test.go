@@ -14,7 +14,9 @@ func twoKeys(string) ([]string, error) { return []string{"id_rsa", "id_ed25519"}
 func noMount(string) ([]string, error) { return nil, errors.New("no such directory") }
 
 // fakeStage stands in for the 0600 staging copy, returning a predictable path.
-func fakeStage(mounted string) (string, error) { return "/runner/staged/" + filepath.Base(mounted), nil }
+func fakeStage(mounted string) (string, error) {
+	return "/runner/staged/" + filepath.Base(mounted), nil
+}
 
 // The decision in one assertion (ADR-0126 D1): the private-key path is DERIVED from the
 // CredentialRef the Step is authorized to use, not written by hand. Before this, every
@@ -24,7 +26,7 @@ func fakeStage(mounted string) (string, error) { return "/runner/staged/" + file
 func TestConnectionKeyComesFromTheCredentialMount(t *testing.T) {
 	vars, err := connectionVars(&connectionParams{
 		User: "appops", CredentialRef: "app-node-key",
-	}, "/runner/known_hosts", oneKey, fakeStage)
+	}, nil, "/runner/known_hosts", oneKey, fakeStage)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -41,7 +43,7 @@ func TestConnectionKeyComesFromTheCredentialMount(t *testing.T) {
 // an operator looking in the wrong place entirely (§1.8). Inherited verbatim from
 // vaultPasswordFile by sharing credentialFile rather than copying it.
 func TestUnmountedConnectionRefNamesTheFix(t *testing.T) {
-	_, err := connectionVars(&connectionParams{CredentialRef: "missing"}, "", noMount, fakeStage)
+	_, err := connectionVars(&connectionParams{CredentialRef: "missing"}, nil, "", noMount, fakeStage)
 	if err == nil || !strings.Contains(err.Error(), "is it on the Step's credentialRefs?") {
 		t.Fatalf("an unmounted ref must name the fix, got %v", err)
 	}
@@ -53,7 +55,7 @@ func TestUnmountedConnectionRefNamesTheFix(t *testing.T) {
 // An ambiguous mount is diagnosed rather than guessed — picking one would work until the
 // day it silently picked the wrong key.
 func TestAmbiguousConnectionMountIsDiagnosed(t *testing.T) {
-	_, err := connectionVars(&connectionParams{CredentialRef: "multi"}, "", twoKeys, fakeStage)
+	_, err := connectionVars(&connectionParams{CredentialRef: "multi"}, nil, "", twoKeys, fakeStage)
 	if err == nil || !strings.Contains(err.Error(), "params.connection.file") {
 		t.Fatalf("an ambiguous mount must name the knob that resolves it, got %v", err)
 	}
@@ -70,7 +72,7 @@ func TestAmbiguousConnectionMountIsDiagnosed(t *testing.T) {
 // Workflow, which does not merely disable the check — with a /dev/null known-hosts it
 // makes every connection a fresh trust-on-first-use, so nothing is ever detected.
 func TestHostKeyCheckingDefaultsToVerifying(t *testing.T) {
-	vars, err := connectionVars(&connectionParams{}, "/runner/known_hosts", oneKey, fakeStage)
+	vars, err := connectionVars(&connectionParams{}, nil, "/runner/known_hosts", oneKey, fakeStage)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -90,7 +92,7 @@ func TestHostKeyCheckingDefaultsToVerifying(t *testing.T) {
 // `off` still exists — some estates need it — but it now has to be WRITTEN DOWN, which
 // is the whole change: a reviewer sees the word, not an argument buried in a flag string.
 func TestHostKeyCheckingOffIsExplicit(t *testing.T) {
-	vars, err := connectionVars(&connectionParams{HostKeyChecking: HostKeyOff}, "/runner/known_hosts", oneKey, fakeStage)
+	vars, err := connectionVars(&connectionParams{HostKeyChecking: HostKeyOff}, nil, "/runner/known_hosts", oneKey, fakeStage)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -103,7 +105,7 @@ func TestHostKeyCheckingOffIsExplicit(t *testing.T) {
 	if strings.Contains(args, "UserKnownHostsFile") {
 		t.Errorf("off must not pretend to remember anything: %q", args)
 	}
-	if _, err := connectionVars(&connectionParams{HostKeyChecking: "maybe"}, "", oneKey, fakeStage); err == nil {
+	if _, err := connectionVars(&connectionParams{HostKeyChecking: "maybe"}, nil, "", oneKey, fakeStage); err == nil {
 		t.Error("an unknown policy must be refused, not silently defaulted")
 	}
 }
@@ -112,7 +114,7 @@ func TestHostKeyCheckingOffIsExplicit(t *testing.T) {
 // connection block is legitimately absent, and a nil-hostile shim would break every
 // gather-facts Run against a control-node target.
 func TestNoConnectionBlockStillRuns(t *testing.T) {
-	vars, err := connectionVars(nil, "/runner/known_hosts", noMount, fakeStage)
+	vars, err := connectionVars(nil, nil, "/runner/known_hosts", noMount, fakeStage)
 	if err != nil {
 		t.Fatalf("an absent connection block is legitimate: %v", err)
 	}

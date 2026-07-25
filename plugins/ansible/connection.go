@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -50,7 +51,7 @@ const (
 // tested seam vaultPasswordFile uses rather than a second one. stage copies the resolved
 // key to a private-mode file and returns its path — see the call site for why that copy
 // is unavoidable. Both are injected so the rendering is unit-tested without a pod.
-func connectionVars(c *connectionParams, knownHosts string, readDir func(string) ([]string, error), stage func(string) (string, error)) (map[string]string, error) {
+func connectionVars(c *connectionParams, hops []Hop, knownHosts string, readDir func(string) ([]string, error), stage func(string) (string, error)) (map[string]string, error) {
 	vars := map[string]string{}
 	if c == nil {
 		c = &connectionParams{}
@@ -86,6 +87,15 @@ func connectionVars(c *connectionParams, knownHosts string, readDir func(string)
 	if err != nil {
 		return nil, err
 	}
+	// The jump chain, rendered by the SHIM from the core-resolved coordinates.
+	jspec, keyOpts, jerr := proxyJump(hops, c.Jump, stage, readDir)
+	if jerr != nil {
+		return nil, jerr
+	}
+	if jspec != "" {
+		args = append(args, "-o", "ProxyJump="+jspec)
+		args = append(args, keyOpts...)
+	}
 	if len(args) > 0 {
 		vars["ansible_ssh_common_args"] = strings.Join(args, " ")
 	}
@@ -118,6 +128,74 @@ func sshCommonArgs(c *connectionParams, knownHosts string, readDir func(string) 
 		args = append(args, "-o", "UserKnownHostsFile="+knownHosts)
 	}
 	return args, nil
+}
+
+// proxyJump renders the core-resolved reached-via chain into ssh's ProxyJump (ADR-0126
+// D3). The chain's TOPOLOGY comes from the graph — one hop per reached-via Relation,
+// each carrying the coordinate from its OWN Entity's mgmt.address — and the per-hop
+// AUTH comes from params.connection.jump, the same address-vs-credential split ADR-0084
+// D4 drew for the target itself.
+//
+// ssh's -J takes hops nearest-first as [user@]host[:port], comma-separated, which is
+// exactly the order the core resolves them in; nothing here re-orders, because a
+// silently-reversed chain would connect through the wrong box and still look like it
+// worked.
+func proxyJump(hops []Hop, auth []connectionAuth, stage func(string) (string, error), readDir func(string) ([]string, error)) (string, []string, error) {
+	if len(hops) == 0 {
+		return "", nil, nil
+	}
+	var specs []string
+	var keyOpts []string
+	for i, h := range hops {
+		if h.Address == "" {
+			// Core refuses this at resolve time; the shim refuses it again rather than
+			// emitting a spec that would silently drop the hop and connect direct.
+			return "", nil, fmt.Errorf("reached-via hop %d (%s) has no address", i, h.Name)
+		}
+		a := hopAuth(auth, i)
+		spec := h.Address
+		if a.User != "" {
+			spec = a.User + "@" + spec
+		}
+		if h.Port > 0 {
+			spec = spec + ":" + strconv.Itoa(int(h.Port))
+		}
+		specs = append(specs, spec)
+
+		if a.CredentialRef != "" {
+			mounted, err := credentialFile("connection.jump", a.CredentialRef, a.File, "params.connection.jump[].file", readDir)
+			if err != nil {
+				return "", nil, err
+			}
+			// Same 0440-vs-ssh constraint as the target's own key: a bastion key is a
+			// private key too, and ssh applies the same permission check to it.
+			path, err := stage(mounted)
+			if err != nil {
+				return "", nil, err
+			}
+			// -o IdentityFile is additive in ssh and applies across the jump chain;
+			// ssh tries each offered key. Per-hop key BINDING (which key for which hop)
+			// needs a generated ssh_config, which is a bigger seam than one estate has
+			// asked for — stated here rather than pretended.
+			keyOpts = append(keyOpts, "-o", "IdentityFile="+path)
+		}
+	}
+	return strings.Join(specs, ","), keyOpts, nil
+}
+
+// hopAuth picks the auth entry for hop i, reusing the LAST entry when the array is
+// shorter — the common "same jump credential for every hop" case, declared once. An
+// empty array means no per-hop auth at all, which is legitimate: an agent-forwarded or
+// certificate-based bastion needs none.
+func hopAuth(auth []connectionAuth, i int) connectionAuth {
+	switch {
+	case len(auth) == 0:
+		return connectionAuth{}
+	case i < len(auth):
+		return auth[i]
+	default:
+		return auth[len(auth)-1]
+	}
 }
 
 // renderInventory is buildInventory plus the connection's group vars. It is a separate
@@ -183,10 +261,65 @@ func stageKeyIn(dir string) func(string) (string, error) {
 		if err != nil {
 			return "", fmt.Errorf("connection key %s is not readable in the pod: %w", mounted, err)
 		}
-		dst := filepath.Join(dir, "connection_key")
+		dst := stagedPathFor(dir, mounted)
 		if err := os.WriteFile(dst, raw, 0o600); err != nil {
 			return "", fmt.Errorf("stage connection key: %w", err)
 		}
 		return dst, nil
 	}
+}
+
+// jumpChainOf returns the reached-via chain shared by every target in this slice, and
+// REFUSES a slice whose targets disagree.
+//
+// The connection vars are inventory GROUP vars ([all:vars]) — one ProxyJump for the
+// whole run — so a slice mixing targets behind different bastions cannot be rendered
+// correctly, and rendering one of the chains would silently route the others through
+// the wrong box. Core groups by Site already (ADR-0032); grouping by chain is the
+// natural extension and is what this failure asks for, rather than the shim guessing
+// (§1.8, §2.4).
+func jumpChainOf(targets []Target) ([]Hop, error) {
+	if err := requireOneChain(targets); err != nil {
+		// Returning an empty chain here instead would connect DIRECT to every target —
+		// silently ignoring a declared bastion, which is the precise failure this whole
+		// decision exists to prevent (§1.8).
+		return nil, err
+	}
+	if len(targets) == 0 {
+		return nil, nil
+	}
+	return targets[0].Jump, nil
+}
+
+// chainKey is a comparable rendering of a chain, for the agreement check only.
+func chainKey(hops []Hop) string {
+	parts := make([]string, 0, len(hops))
+	for _, h := range hops {
+		parts = append(parts, h.Address+":"+strconv.Itoa(int(h.Port)))
+	}
+	return strings.Join(parts, "|")
+}
+
+// requireOneChain reports the disagreement jumpChainOf detects, as an error the caller
+// surfaces — separated so the check is testable and the message names both offenders.
+func requireOneChain(targets []Target) error {
+	if len(targets) < 2 {
+		return nil
+	}
+	first := chainKey(targets[0].Jump)
+	for _, t := range targets[1:] {
+		if k := chainKey(t.Jump); k != first {
+			return fmt.Errorf("targets %s and %s are reached through different bastion chains (%q vs %q) — one Run renders ONE ProxyJump, so split them into separate Steps or Views rather than have the shim pick", targets[0].Name, t.Name, first, k)
+		}
+	}
+	return nil
+}
+
+// stagedPathFor names a staged key from the mount it came from. A FIXED name here made
+// the target key and every hop key overwrite one another, so the last one written
+// silently became the key for all of them — the destination is computed separately so
+// that collision is directly testable.
+func stagedPathFor(dir, mounted string) string {
+	rel := strings.TrimPrefix(mounted, credentialsMount+"/")
+	return filepath.Join(dir, "key_"+strings.NewReplacer("/", "_", ".", "_").Replace(rel))
 }

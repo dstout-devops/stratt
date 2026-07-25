@@ -148,9 +148,27 @@ address and machine credential. So how to authenticate _to the bastion_ is `conn
 credentialRef, file}`, and a second CredentialRef needs no new mechanism: `credentialRefs` is already a
 list, and the existing per-name use-check already gates it (§2.5).
 
-**A cycle in the chain is a compile-time error**, and a hop whose Entity carries no `mgmt.address` is a
-loud unroutable failure naming the hop — never a silent direct connection, which would defeat the point
-by reaching the target some other way (§1.8, matching ADR-0084 D2's no-silent-localhost rule).
+**Three failures are loud, and all three for the same reason: reaching a target _around_ its declared
+bastion is worse than failing to reach it at all** (§1.8, matching ADR-0084 D2's no-silent-localhost
+rule).
+
+- A **cycle** — caught explicitly, so the diagnosis says "cycles" rather than "too many hops".
+- A hop whose Entity carries **no `mgmt.address`** — a bastion nothing can reach is not a route. Refused
+  at _both_ layers: core at resolve time, and the shim again before it renders, because a spec that
+  simply omitted the hop would connect direct and look like it worked.
+- **Two `reached-via` edges from one host** — an ambiguity core will not resolve. Picking one would be
+  precisely the implicit precedence §2.4 forbids, and there is deliberately no tiebreak field to add.
+
+**One Run renders one `ProxyJump`.** The connection vars are inventory group vars, so a slice whose
+targets sit behind _different_ bastions cannot be rendered correctly, and it is **refused naming both
+offenders** rather than rendered from one of the chains. Grouping targets by chain is the natural
+extension of the Site grouping that already ships (ADR-0032) and is what that failure asks the author
+for; the shim guessing would route the other targets through the wrong bastion.
+
+**Per-hop key _binding_ is not solved.** A hop's key is offered via `-o IdentityFile`, which ssh treats
+as additive across the chain rather than bound to a specific hop. Binding needs a generated `ssh_config`,
+which is a larger seam than any shipping estate has asked for — stated here rather than implied by the
+per-hop shape of `connection.jump`.
 
 ### D4 — Sites and ProxyJump are complementary; neither is "the" answer
 

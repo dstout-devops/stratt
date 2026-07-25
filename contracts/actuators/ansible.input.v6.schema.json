@@ -50,7 +50,7 @@
     },
     "connection": {
       "type": "object",
-      "description": "How to reach the targets (ADR-0126). The ADDRESS is never here — it is the mgmt.address Facet core resolves into the typed Target coordinate (ADR-0084 D1/D2). This block is the AUTHENTICATION half of that split, exactly as AWX splits inventory-host from machine-credential. The shim renders every ansible key; core authors none (§1.4). The reached-via JUMP chain (ADR-0126 D3) is deliberately NOT declared here yet: its per-hop auth would be a Contract field no shim consumes, which is the accepted-but-inert shape §1.1 refuses. It lands with the renderer.",
+      "description": "How to reach the targets (ADR-0126). The ADDRESS is never here — it is the mgmt.address Facet core resolves into the typed Target coordinate (ADR-0084 D1/D2). This block is the AUTHENTICATION half of that split, exactly as AWX splits inventory-host from machine-credential. The shim renders every ansible key; core authors none (§1.4).",
       "properties": {
         "user": {
           "type": "string",
@@ -76,6 +76,31 @@
           ],
           "default": "accept-new",
           "description": "SSH host-key policy (ADR-0126 D2). Defaults to accept-new: it accepts a first key — which a just-provisioned host necessarily needs — and REFUSES a changed one, the property that actually matters. `strict` requires a pre-seeded known-hosts and fails first contact. `off` disables verification and must be written down to be used, instead of hiding inside a copy-pasted flag string. NOTE the honest limit: the accepted key is remembered for the RUN only; cross-Run memory is the booked follow-up (host key as a Facet + drift Finding)."
+        },
+        "jump": {
+          "type": "array",
+          "maxItems": 8,
+          "description": "Per-hop AUTH for the reached-via chain (ADR-0126 D3), nearest hop first. The chain's TOPOLOGY is graph data — reached-via Relations to bastion Entities, each carrying its own mgmt.address — so no address appears here: a copy would be a second home for a fact the graph already holds (§2.4). One entry per hop; a SHORTER array reuses its last entry for the remaining hops, which is the common 'same jump credential throughout' case declared once. An EMPTY array is legitimate (an agent-forwarded or certificate-based bastion needs no per-hop auth).",
+          "items": {
+            "type": "object",
+            "properties": {
+              "user": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "^[A-Za-z0-9_][A-Za-z0-9_.@-]*$"
+              },
+              "credentialRef": {
+                "type": "string",
+                "minLength": 1,
+                "description": "A CredentialRef already on this Step — the bastion's key. credentialRefs is a list, so a second credential needs no new channel and the existing per-name use-check gates it exactly as it gates the target's (§2.5)."
+              },
+              "file": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9_][A-Za-z0-9_.-]*$"
+              }
+            },
+            "additionalProperties": false
+          }
         }
       },
       "additionalProperties": false

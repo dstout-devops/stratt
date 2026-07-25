@@ -44,14 +44,21 @@ func TestV6AcceptsTheConnectionBlock(t *testing.T) {
 	}
 }
 
-// The jump chain (ADR-0126 D3) is NOT in v6 yet, and this pins that on purpose: a
-// Contract field no shim consumes is accepted-but-inert, indistinguishable from a
-// working one until someone relies on it. It goes in with its renderer, and this test
-// is what should fail — loudly, by name — when that happens.
-func TestV6DoesNotYetDeclareTheJumpChain(t *testing.T) {
-	doc := json.RawMessage(`{"play":"- hosts: all","connection":{"jump":[{"user":"j"}]}}`)
-	if err := ValidateActuatorParams("ansible", doc); err == nil {
-		t.Fatal("connection.jump must not be accepted until a shim renders it (ADR-0126 D3)")
+// The jump chain (ADR-0126 D3) landed WITH its renderer — plugins/ansible.proxyJump —
+// which is the only condition under which a Contract field should exist at all: an
+// accepted-but-unconsumed field is indistinguishable from a working one until someone
+// relies on it. The predecessor of this test asserted its ABSENCE for exactly one
+// commit, and failing that test is what marked the renderer's arrival.
+func TestV6DeclaresTheJumpChainAuth(t *testing.T) {
+	ok := json.RawMessage(`{"play":"- hosts: all","connection":{"jump":[{"user":"jump","credentialRef":"bastion-key"}]}}`)
+	if err := ValidateActuatorParams("ansible", ok); err != nil {
+		t.Fatalf("per-hop jump auth must validate: %v", err)
+	}
+	// No ADDRESS field: a hop's coordinate comes from its Entity's mgmt.address, and
+	// accepting one here would create the second home §2.4 forbids.
+	bad := json.RawMessage(`{"play":"- hosts: all","connection":{"jump":[{"address":"10.0.0.9"}]}}`)
+	if err := ValidateActuatorParams("ansible", bad); err == nil {
+		t.Fatal("a hop ADDRESS must be refused — the graph owns the topology, not the Step")
 	}
 }
 

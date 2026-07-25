@@ -257,7 +257,11 @@ func Run(ctx context.Context, w io.Writer, dir string, req Request, run commandR
 	// nothing without somewhere to remember the key, which is exactly what the old
 	// `UserKnownHostsFile=/dev/null` guaranteed (ADR-0126 D2 — cross-Run memory is the
 	// booked follow-up, and is deliberately NOT claimed here).
-	connVars, cerr := connectionVars(p.Connection, filepath.Join(dir, "known_hosts"), osReadDirNames, stageKeyIn(dir))
+	chain, cherr := jumpChainOf(req.Targets)
+	if cherr != nil {
+		return emitFatal(w, cherr.Error())
+	}
+	connVars, cerr := connectionVars(p.Connection, chain, filepath.Join(dir, "known_hosts"), osReadDirNames, stageKeyIn(dir))
 	if cerr != nil {
 		return emitFatal(w, cerr.Error())
 	}

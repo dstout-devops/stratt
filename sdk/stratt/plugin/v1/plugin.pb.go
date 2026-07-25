@@ -331,7 +331,7 @@ func (x TaskEvent_Level) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use TaskEvent_Level.Descriptor instead.
 func (TaskEvent_Level) EnumDescriptor() ([]byte, []int) {
-	return file_stratt_plugin_v1_plugin_proto_rawDescGZIP(), []int{33, 0}
+	return file_stratt_plugin_v1_plugin_proto_rawDescGZIP(), []int{34, 0}
 }
 
 // Scope says which DESCRIPTIVE LEVEL an event is about, so the spine can pin run-level
@@ -394,7 +394,7 @@ func (x TaskEvent_Scope) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use TaskEvent_Scope.Descriptor instead.
 func (TaskEvent_Scope) EnumDescriptor() ([]byte, []int) {
-	return file_stratt_plugin_v1_plugin_proto_rawDescGZIP(), []int{33, 1}
+	return file_stratt_plugin_v1_plugin_proto_rawDescGZIP(), []int{34, 1}
 }
 
 type ItemResult_Status int32
@@ -449,7 +449,7 @@ func (x ItemResult_Status) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use ItemResult_Status.Descriptor instead.
 func (ItemResult_Status) EnumDescriptor() ([]byte, []int) {
-	return file_stratt_plugin_v1_plugin_proto_rawDescGZIP(), []int{34, 0}
+	return file_stratt_plugin_v1_plugin_proto_rawDescGZIP(), []int{35, 0}
 }
 
 type DerivedContract_Rung int32
@@ -500,7 +500,7 @@ func (x DerivedContract_Rung) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use DerivedContract_Rung.Descriptor instead.
 func (DerivedContract_Rung) EnumDescriptor() ([]byte, []int) {
-	return file_stratt_plugin_v1_plugin_proto_rawDescGZIP(), []int{36, 0}
+	return file_stratt_plugin_v1_plugin_proto_rawDescGZIP(), []int{37, 0}
 }
 
 // Envelope is the TYPED half the core reads and governs on. Every field here is
@@ -2602,7 +2602,19 @@ type ApplyTarget struct {
 	// re-parse, exactly what §1.1 forbids at a plugin boundary. 0 ⇒ the target
 	// declared no port; the connection actuator uses the tool's own default (ssh 22,
 	// winrm 5986) — the core never invents one.
-	Port          int32 `protobuf:"varint,5,opt,name=port,proto3" json:"port,omitempty"`
+	Port int32 `protobuf:"varint,5,opt,name=port,proto3" json:"port,omitempty"`
+	// jump is the resolved reached-via chain, NEAREST HOP FIRST (ADR-0126 D3): the
+	// bastions this target is reachable through. Each hop's coordinate comes from
+	// that hop Entity's OWN mgmt.address, so a bastion's address has exactly one
+	// home in the model and cannot drift from the graph's (§2.4) — which is why the
+	// topology is a Relation and not a field grown onto mgmt.address, whose schema
+	// ADR-0084 D1 closed against exactly that (§9).
+	//
+	// Coordinates only, and no credential: authenticating to a hop is Step config
+	// (params.connection.jump), the same address-vs-credential split ADR-0084 D4
+	// drew for the target itself. The plugin renders the connection — ProxyJump, -J,
+	// whatever its transport calls it. There is no ssh flag anywhere in core (§1.4).
+	Jump          []*JumpHop `protobuf:"bytes,6,rep,name=jump,proto3" json:"jump,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2672,6 +2684,79 @@ func (x *ApplyTarget) GetPort() int32 {
 	return 0
 }
 
+func (x *ApplyTarget) GetJump() []*JumpHop {
+	if x != nil {
+		return x.Jump
+	}
+	return nil
+}
+
+// JumpHop is one resolved link in a reached-via chain — a bastion's reachability
+// coordinate, nothing more.
+type JumpHop struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// name is the hop Entity's observed name, carried for diagnosis so a failure can
+	// say WHICH bastion was unreachable rather than only its address (§1.8).
+	Name    string `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	Address string `protobuf:"bytes,2,opt,name=address,proto3" json:"address,omitempty"`
+	// port is optional, exactly as ApplyTarget.port is: 0 ⇒ the hop declared none and
+	// the tool's own default applies.
+	Port          int32 `protobuf:"varint,3,opt,name=port,proto3" json:"port,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *JumpHop) Reset() {
+	*x = JumpHop{}
+	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[30]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *JumpHop) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*JumpHop) ProtoMessage() {}
+
+func (x *JumpHop) ProtoReflect() protoreflect.Message {
+	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[30]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use JumpHop.ProtoReflect.Descriptor instead.
+func (*JumpHop) Descriptor() ([]byte, []int) {
+	return file_stratt_plugin_v1_plugin_proto_rawDescGZIP(), []int{30}
+}
+
+func (x *JumpHop) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *JumpHop) GetAddress() string {
+	if x != nil {
+		return x.Address
+	}
+	return ""
+}
+
+func (x *JumpHop) GetPort() int32 {
+	if x != nil {
+		return x.Port
+	}
+	return 0
+}
+
 type DestroyRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Envelope      *Envelope              `protobuf:"bytes,1,opt,name=envelope,proto3" json:"envelope,omitempty"`
@@ -2683,7 +2768,7 @@ type DestroyRequest struct {
 
 func (x *DestroyRequest) Reset() {
 	*x = DestroyRequest{}
-	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[30]
+	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[31]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2695,7 +2780,7 @@ func (x *DestroyRequest) String() string {
 func (*DestroyRequest) ProtoMessage() {}
 
 func (x *DestroyRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[30]
+	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[31]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2708,7 +2793,7 @@ func (x *DestroyRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DestroyRequest.ProtoReflect.Descriptor instead.
 func (*DestroyRequest) Descriptor() ([]byte, []int) {
-	return file_stratt_plugin_v1_plugin_proto_rawDescGZIP(), []int{30}
+	return file_stratt_plugin_v1_plugin_proto_rawDescGZIP(), []int{31}
 }
 
 func (x *DestroyRequest) GetEnvelope() *Envelope {
@@ -2746,7 +2831,7 @@ type InvokeRequest struct {
 
 func (x *InvokeRequest) Reset() {
 	*x = InvokeRequest{}
-	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[31]
+	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[32]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2758,7 +2843,7 @@ func (x *InvokeRequest) String() string {
 func (*InvokeRequest) ProtoMessage() {}
 
 func (x *InvokeRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[31]
+	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[32]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2771,7 +2856,7 @@ func (x *InvokeRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use InvokeRequest.ProtoReflect.Descriptor instead.
 func (*InvokeRequest) Descriptor() ([]byte, []int) {
-	return file_stratt_plugin_v1_plugin_proto_rawDescGZIP(), []int{31}
+	return file_stratt_plugin_v1_plugin_proto_rawDescGZIP(), []int{32}
 }
 
 func (x *InvokeRequest) GetEnvelope() *Envelope {
@@ -2812,7 +2897,7 @@ type SubscribeRequest struct {
 
 func (x *SubscribeRequest) Reset() {
 	*x = SubscribeRequest{}
-	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[32]
+	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[33]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2824,7 +2909,7 @@ func (x *SubscribeRequest) String() string {
 func (*SubscribeRequest) ProtoMessage() {}
 
 func (x *SubscribeRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[32]
+	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[33]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2837,7 +2922,7 @@ func (x *SubscribeRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SubscribeRequest.ProtoReflect.Descriptor instead.
 func (*SubscribeRequest) Descriptor() ([]byte, []int) {
-	return file_stratt_plugin_v1_plugin_proto_rawDescGZIP(), []int{32}
+	return file_stratt_plugin_v1_plugin_proto_rawDescGZIP(), []int{33}
 }
 
 func (x *SubscribeRequest) GetCursor() string {
@@ -2869,7 +2954,7 @@ type TaskEvent struct {
 
 func (x *TaskEvent) Reset() {
 	*x = TaskEvent{}
-	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[33]
+	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[34]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2881,7 +2966,7 @@ func (x *TaskEvent) String() string {
 func (*TaskEvent) ProtoMessage() {}
 
 func (x *TaskEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[33]
+	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[34]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2894,7 +2979,7 @@ func (x *TaskEvent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TaskEvent.ProtoReflect.Descriptor instead.
 func (*TaskEvent) Descriptor() ([]byte, []int) {
-	return file_stratt_plugin_v1_plugin_proto_rawDescGZIP(), []int{33}
+	return file_stratt_plugin_v1_plugin_proto_rawDescGZIP(), []int{34}
 }
 
 func (x *TaskEvent) GetLevel() TaskEvent_Level {
@@ -2975,7 +3060,7 @@ type ItemResult struct {
 
 func (x *ItemResult) Reset() {
 	*x = ItemResult{}
-	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[34]
+	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[35]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2987,7 +3072,7 @@ func (x *ItemResult) String() string {
 func (*ItemResult) ProtoMessage() {}
 
 func (x *ItemResult) ProtoReflect() protoreflect.Message {
-	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[34]
+	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[35]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3000,7 +3085,7 @@ func (x *ItemResult) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ItemResult.ProtoReflect.Descriptor instead.
 func (*ItemResult) Descriptor() ([]byte, []int) {
-	return file_stratt_plugin_v1_plugin_proto_rawDescGZIP(), []int{34}
+	return file_stratt_plugin_v1_plugin_proto_rawDescGZIP(), []int{35}
 }
 
 func (x *ItemResult) GetItemKey() string {
@@ -3030,7 +3115,7 @@ type DiffFragment struct {
 
 func (x *DiffFragment) Reset() {
 	*x = DiffFragment{}
-	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[35]
+	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[36]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3042,7 +3127,7 @@ func (x *DiffFragment) String() string {
 func (*DiffFragment) ProtoMessage() {}
 
 func (x *DiffFragment) ProtoReflect() protoreflect.Message {
-	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[35]
+	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[36]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3055,7 +3140,7 @@ func (x *DiffFragment) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DiffFragment.ProtoReflect.Descriptor instead.
 func (*DiffFragment) Descriptor() ([]byte, []int) {
-	return file_stratt_plugin_v1_plugin_proto_rawDescGZIP(), []int{35}
+	return file_stratt_plugin_v1_plugin_proto_rawDescGZIP(), []int{36}
 }
 
 func (x *DiffFragment) GetItemKey() string {
@@ -3091,7 +3176,7 @@ type DerivedContract struct {
 
 func (x *DerivedContract) Reset() {
 	*x = DerivedContract{}
-	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[36]
+	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[37]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3103,7 +3188,7 @@ func (x *DerivedContract) String() string {
 func (*DerivedContract) ProtoMessage() {}
 
 func (x *DerivedContract) ProtoReflect() protoreflect.Message {
-	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[36]
+	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[37]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3116,7 +3201,7 @@ func (x *DerivedContract) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DerivedContract.ProtoReflect.Descriptor instead.
 func (*DerivedContract) Descriptor() ([]byte, []int) {
-	return file_stratt_plugin_v1_plugin_proto_rawDescGZIP(), []int{36}
+	return file_stratt_plugin_v1_plugin_proto_rawDescGZIP(), []int{37}
 }
 
 func (x *DerivedContract) GetRung() DerivedContract_Rung {
@@ -3175,7 +3260,7 @@ type ApplyResponse struct {
 
 func (x *ApplyResponse) Reset() {
 	*x = ApplyResponse{}
-	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[37]
+	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[38]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3187,7 +3272,7 @@ func (x *ApplyResponse) String() string {
 func (*ApplyResponse) ProtoMessage() {}
 
 func (x *ApplyResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[37]
+	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[38]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3200,7 +3285,7 @@ func (x *ApplyResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ApplyResponse.ProtoReflect.Descriptor instead.
 func (*ApplyResponse) Descriptor() ([]byte, []int) {
-	return file_stratt_plugin_v1_plugin_proto_rawDescGZIP(), []int{37}
+	return file_stratt_plugin_v1_plugin_proto_rawDescGZIP(), []int{38}
 }
 
 func (x *ApplyResponse) GetEvent() *TaskEvent {
@@ -3249,7 +3334,7 @@ type DestroyResponse struct {
 
 func (x *DestroyResponse) Reset() {
 	*x = DestroyResponse{}
-	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[38]
+	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[39]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3261,7 +3346,7 @@ func (x *DestroyResponse) String() string {
 func (*DestroyResponse) ProtoMessage() {}
 
 func (x *DestroyResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[38]
+	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[39]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3274,7 +3359,7 @@ func (x *DestroyResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DestroyResponse.ProtoReflect.Descriptor instead.
 func (*DestroyResponse) Descriptor() ([]byte, []int) {
-	return file_stratt_plugin_v1_plugin_proto_rawDescGZIP(), []int{38}
+	return file_stratt_plugin_v1_plugin_proto_rawDescGZIP(), []int{39}
 }
 
 func (x *DestroyResponse) GetEvent() *TaskEvent {
@@ -3315,7 +3400,7 @@ type InvokeResult struct {
 
 func (x *InvokeResult) Reset() {
 	*x = InvokeResult{}
-	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[39]
+	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[40]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3327,7 +3412,7 @@ func (x *InvokeResult) String() string {
 func (*InvokeResult) ProtoMessage() {}
 
 func (x *InvokeResult) ProtoReflect() protoreflect.Message {
-	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[39]
+	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[40]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3340,7 +3425,7 @@ func (x *InvokeResult) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use InvokeResult.ProtoReflect.Descriptor instead.
 func (*InvokeResult) Descriptor() ([]byte, []int) {
-	return file_stratt_plugin_v1_plugin_proto_rawDescGZIP(), []int{39}
+	return file_stratt_plugin_v1_plugin_proto_rawDescGZIP(), []int{40}
 }
 
 func (x *InvokeResult) GetOutputs() *Payload {
@@ -3381,7 +3466,7 @@ type InvokeResponse struct {
 
 func (x *InvokeResponse) Reset() {
 	*x = InvokeResponse{}
-	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[40]
+	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[41]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3393,7 +3478,7 @@ func (x *InvokeResponse) String() string {
 func (*InvokeResponse) ProtoMessage() {}
 
 func (x *InvokeResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[40]
+	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[41]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3406,7 +3491,7 @@ func (x *InvokeResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use InvokeResponse.ProtoReflect.Descriptor instead.
 func (*InvokeResponse) Descriptor() ([]byte, []int) {
-	return file_stratt_plugin_v1_plugin_proto_rawDescGZIP(), []int{40}
+	return file_stratt_plugin_v1_plugin_proto_rawDescGZIP(), []int{41}
 }
 
 func (x *InvokeResponse) GetEvent() *TaskEvent {
@@ -3443,7 +3528,7 @@ type EmittedEvent struct {
 
 func (x *EmittedEvent) Reset() {
 	*x = EmittedEvent{}
-	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[41]
+	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[42]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3455,7 +3540,7 @@ func (x *EmittedEvent) String() string {
 func (*EmittedEvent) ProtoMessage() {}
 
 func (x *EmittedEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[41]
+	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[42]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3468,7 +3553,7 @@ func (x *EmittedEvent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EmittedEvent.ProtoReflect.Descriptor instead.
 func (*EmittedEvent) Descriptor() ([]byte, []int) {
-	return file_stratt_plugin_v1_plugin_proto_rawDescGZIP(), []int{41}
+	return file_stratt_plugin_v1_plugin_proto_rawDescGZIP(), []int{42}
 }
 
 func (x *EmittedEvent) GetEnvelope() *Envelope {
@@ -3529,7 +3614,7 @@ type SubscribeResponse struct {
 
 func (x *SubscribeResponse) Reset() {
 	*x = SubscribeResponse{}
-	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[42]
+	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[43]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3541,7 +3626,7 @@ func (x *SubscribeResponse) String() string {
 func (*SubscribeResponse) ProtoMessage() {}
 
 func (x *SubscribeResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[42]
+	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[43]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3554,7 +3639,7 @@ func (x *SubscribeResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SubscribeResponse.ProtoReflect.Descriptor instead.
 func (*SubscribeResponse) Descriptor() ([]byte, []int) {
-	return file_stratt_plugin_v1_plugin_proto_rawDescGZIP(), []int{42}
+	return file_stratt_plugin_v1_plugin_proto_rawDescGZIP(), []int{43}
 }
 
 func (x *SubscribeResponse) GetEvent() *EmittedEvent {
@@ -3579,7 +3664,7 @@ type WrapKeyRequest struct {
 
 func (x *WrapKeyRequest) Reset() {
 	*x = WrapKeyRequest{}
-	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[43]
+	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[44]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3591,7 +3676,7 @@ func (x *WrapKeyRequest) String() string {
 func (*WrapKeyRequest) ProtoMessage() {}
 
 func (x *WrapKeyRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[43]
+	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[44]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3604,7 +3689,7 @@ func (x *WrapKeyRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use WrapKeyRequest.ProtoReflect.Descriptor instead.
 func (*WrapKeyRequest) Descriptor() ([]byte, []int) {
-	return file_stratt_plugin_v1_plugin_proto_rawDescGZIP(), []int{43}
+	return file_stratt_plugin_v1_plugin_proto_rawDescGZIP(), []int{44}
 }
 
 func (x *WrapKeyRequest) GetDomain() string {
@@ -3631,7 +3716,7 @@ type WrapKeyResponse struct {
 
 func (x *WrapKeyResponse) Reset() {
 	*x = WrapKeyResponse{}
-	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[44]
+	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[45]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3643,7 +3728,7 @@ func (x *WrapKeyResponse) String() string {
 func (*WrapKeyResponse) ProtoMessage() {}
 
 func (x *WrapKeyResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[44]
+	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[45]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3656,7 +3741,7 @@ func (x *WrapKeyResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use WrapKeyResponse.ProtoReflect.Descriptor instead.
 func (*WrapKeyResponse) Descriptor() ([]byte, []int) {
-	return file_stratt_plugin_v1_plugin_proto_rawDescGZIP(), []int{44}
+	return file_stratt_plugin_v1_plugin_proto_rawDescGZIP(), []int{45}
 }
 
 func (x *WrapKeyResponse) GetWrapped() []byte {
@@ -3683,7 +3768,7 @@ type UnwrapKeyRequest struct {
 
 func (x *UnwrapKeyRequest) Reset() {
 	*x = UnwrapKeyRequest{}
-	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[45]
+	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[46]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3695,7 +3780,7 @@ func (x *UnwrapKeyRequest) String() string {
 func (*UnwrapKeyRequest) ProtoMessage() {}
 
 func (x *UnwrapKeyRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[45]
+	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[46]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3708,7 +3793,7 @@ func (x *UnwrapKeyRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UnwrapKeyRequest.ProtoReflect.Descriptor instead.
 func (*UnwrapKeyRequest) Descriptor() ([]byte, []int) {
-	return file_stratt_plugin_v1_plugin_proto_rawDescGZIP(), []int{45}
+	return file_stratt_plugin_v1_plugin_proto_rawDescGZIP(), []int{46}
 }
 
 func (x *UnwrapKeyRequest) GetWrapped() []byte {
@@ -3734,7 +3819,7 @@ type UnwrapKeyResponse struct {
 
 func (x *UnwrapKeyResponse) Reset() {
 	*x = UnwrapKeyResponse{}
-	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[46]
+	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[47]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3746,7 +3831,7 @@ func (x *UnwrapKeyResponse) String() string {
 func (*UnwrapKeyResponse) ProtoMessage() {}
 
 func (x *UnwrapKeyResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[46]
+	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[47]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3759,7 +3844,7 @@ func (x *UnwrapKeyResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UnwrapKeyResponse.ProtoReflect.Descriptor instead.
 func (*UnwrapKeyResponse) Descriptor() ([]byte, []int) {
-	return file_stratt_plugin_v1_plugin_proto_rawDescGZIP(), []int{46}
+	return file_stratt_plugin_v1_plugin_proto_rawDescGZIP(), []int{47}
 }
 
 func (x *UnwrapKeyResponse) GetDek() []byte {
@@ -3947,19 +4032,24 @@ const file_stratt_plugin_v1_plugin_proto_rawDesc = "" +
 	"\x06output\x18\x04 \x01(\fR\x06output\x1a9\n" +
 	"\vConfigEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xdc\x02\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\x8b\x03\n" +
 	"\vApplyTarget\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12T\n" +
 	"\ridentity_keys\x18\x02 \x03(\v2/.stratt.plugin.v1.ApplyTarget.IdentityKeysEntryR\fidentityKeys\x12;\n" +
 	"\x04vars\x18\x03 \x03(\v2'.stratt.plugin.v1.ApplyTarget.VarsEntryR\x04vars\x12\x18\n" +
 	"\aaddress\x18\x04 \x01(\tR\aaddress\x12\x12\n" +
-	"\x04port\x18\x05 \x01(\x05R\x04port\x1a?\n" +
+	"\x04port\x18\x05 \x01(\x05R\x04port\x12-\n" +
+	"\x04jump\x18\x06 \x03(\v2\x19.stratt.plugin.v1.JumpHopR\x04jump\x1a?\n" +
 	"\x11IdentityKeysEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\x1a7\n" +
 	"\tVarsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xb6\x01\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"K\n" +
+	"\aJumpHop\x12\x12\n" +
+	"\x04name\x18\x01 \x01(\tR\x04name\x12\x18\n" +
+	"\aaddress\x18\x02 \x01(\tR\aaddress\x12\x12\n" +
+	"\x04port\x18\x03 \x01(\x05R\x04port\"\xb6\x01\n" +
 	"\x0eDestroyRequest\x126\n" +
 	"\benvelope\x18\x01 \x01(\v2\x1a.stratt.plugin.v1.EnvelopeR\benvelope\x127\n" +
 	"\atargets\x18\x02 \x03(\v2\x1d.stratt.plugin.v1.ApplyTargetR\atargets\x123\n" +
@@ -4104,7 +4194,7 @@ func file_stratt_plugin_v1_plugin_proto_rawDescGZIP() []byte {
 }
 
 var file_stratt_plugin_v1_plugin_proto_enumTypes = make([]protoimpl.EnumInfo, 8)
-var file_stratt_plugin_v1_plugin_proto_msgTypes = make([]protoimpl.MessageInfo, 56)
+var file_stratt_plugin_v1_plugin_proto_msgTypes = make([]protoimpl.MessageInfo, 57)
 var file_stratt_plugin_v1_plugin_proto_goTypes = []any{
 	(PluginClass)(0),              // 0: stratt.plugin.v1.PluginClass
 	(Verb)(0),                     // 1: stratt.plugin.v1.Verb
@@ -4144,34 +4234,35 @@ var file_stratt_plugin_v1_plugin_proto_goTypes = []any{
 	(*ApplyRequest)(nil),          // 35: stratt.plugin.v1.ApplyRequest
 	(*CapabilityHandle)(nil),      // 36: stratt.plugin.v1.CapabilityHandle
 	(*ApplyTarget)(nil),           // 37: stratt.plugin.v1.ApplyTarget
-	(*DestroyRequest)(nil),        // 38: stratt.plugin.v1.DestroyRequest
-	(*InvokeRequest)(nil),         // 39: stratt.plugin.v1.InvokeRequest
-	(*SubscribeRequest)(nil),      // 40: stratt.plugin.v1.SubscribeRequest
-	(*TaskEvent)(nil),             // 41: stratt.plugin.v1.TaskEvent
-	(*ItemResult)(nil),            // 42: stratt.plugin.v1.ItemResult
-	(*DiffFragment)(nil),          // 43: stratt.plugin.v1.DiffFragment
-	(*DerivedContract)(nil),       // 44: stratt.plugin.v1.DerivedContract
-	(*ApplyResponse)(nil),         // 45: stratt.plugin.v1.ApplyResponse
-	(*DestroyResponse)(nil),       // 46: stratt.plugin.v1.DestroyResponse
-	(*InvokeResult)(nil),          // 47: stratt.plugin.v1.InvokeResult
-	(*InvokeResponse)(nil),        // 48: stratt.plugin.v1.InvokeResponse
-	(*EmittedEvent)(nil),          // 49: stratt.plugin.v1.EmittedEvent
-	(*SubscribeResponse)(nil),     // 50: stratt.plugin.v1.SubscribeResponse
-	(*WrapKeyRequest)(nil),        // 51: stratt.plugin.v1.WrapKeyRequest
-	(*WrapKeyResponse)(nil),       // 52: stratt.plugin.v1.WrapKeyResponse
-	(*UnwrapKeyRequest)(nil),      // 53: stratt.plugin.v1.UnwrapKeyRequest
-	(*UnwrapKeyResponse)(nil),     // 54: stratt.plugin.v1.UnwrapKeyResponse
-	nil,                           // 55: stratt.plugin.v1.ObservedEntity.IdentityKeysEntry
-	nil,                           // 56: stratt.plugin.v1.ObservedEntity.LabelsEntry
-	nil,                           // 57: stratt.plugin.v1.ObservedEntity.FacetsEntry
-	nil,                           // 58: stratt.plugin.v1.PlanRequest.ResolvedCapabilitiesEntry
-	nil,                           // 59: stratt.plugin.v1.ApplyRequest.ResolvedCapabilitiesEntry
-	nil,                           // 60: stratt.plugin.v1.CapabilityHandle.ConfigEntry
-	nil,                           // 61: stratt.plugin.v1.ApplyTarget.IdentityKeysEntry
-	nil,                           // 62: stratt.plugin.v1.ApplyTarget.VarsEntry
-	nil,                           // 63: stratt.plugin.v1.TaskEvent.FieldsEntry
-	(*timestamppb.Timestamp)(nil), // 64: google.protobuf.Timestamp
-	(*structpb.Struct)(nil),       // 65: google.protobuf.Struct
+	(*JumpHop)(nil),               // 38: stratt.plugin.v1.JumpHop
+	(*DestroyRequest)(nil),        // 39: stratt.plugin.v1.DestroyRequest
+	(*InvokeRequest)(nil),         // 40: stratt.plugin.v1.InvokeRequest
+	(*SubscribeRequest)(nil),      // 41: stratt.plugin.v1.SubscribeRequest
+	(*TaskEvent)(nil),             // 42: stratt.plugin.v1.TaskEvent
+	(*ItemResult)(nil),            // 43: stratt.plugin.v1.ItemResult
+	(*DiffFragment)(nil),          // 44: stratt.plugin.v1.DiffFragment
+	(*DerivedContract)(nil),       // 45: stratt.plugin.v1.DerivedContract
+	(*ApplyResponse)(nil),         // 46: stratt.plugin.v1.ApplyResponse
+	(*DestroyResponse)(nil),       // 47: stratt.plugin.v1.DestroyResponse
+	(*InvokeResult)(nil),          // 48: stratt.plugin.v1.InvokeResult
+	(*InvokeResponse)(nil),        // 49: stratt.plugin.v1.InvokeResponse
+	(*EmittedEvent)(nil),          // 50: stratt.plugin.v1.EmittedEvent
+	(*SubscribeResponse)(nil),     // 51: stratt.plugin.v1.SubscribeResponse
+	(*WrapKeyRequest)(nil),        // 52: stratt.plugin.v1.WrapKeyRequest
+	(*WrapKeyResponse)(nil),       // 53: stratt.plugin.v1.WrapKeyResponse
+	(*UnwrapKeyRequest)(nil),      // 54: stratt.plugin.v1.UnwrapKeyRequest
+	(*UnwrapKeyResponse)(nil),     // 55: stratt.plugin.v1.UnwrapKeyResponse
+	nil,                           // 56: stratt.plugin.v1.ObservedEntity.IdentityKeysEntry
+	nil,                           // 57: stratt.plugin.v1.ObservedEntity.LabelsEntry
+	nil,                           // 58: stratt.plugin.v1.ObservedEntity.FacetsEntry
+	nil,                           // 59: stratt.plugin.v1.PlanRequest.ResolvedCapabilitiesEntry
+	nil,                           // 60: stratt.plugin.v1.ApplyRequest.ResolvedCapabilitiesEntry
+	nil,                           // 61: stratt.plugin.v1.CapabilityHandle.ConfigEntry
+	nil,                           // 62: stratt.plugin.v1.ApplyTarget.IdentityKeysEntry
+	nil,                           // 63: stratt.plugin.v1.ApplyTarget.VarsEntry
+	nil,                           // 64: stratt.plugin.v1.TaskEvent.FieldsEntry
+	(*timestamppb.Timestamp)(nil), // 65: google.protobuf.Timestamp
+	(*structpb.Struct)(nil),       // 66: google.protobuf.Struct
 }
 var file_stratt_plugin_v1_plugin_proto_depIdxs = []int32{
 	12, // 0: stratt.plugin.v1.Envelope.coordinates:type_name -> stratt.plugin.v1.Coordinates
@@ -4195,84 +4286,85 @@ var file_stratt_plugin_v1_plugin_proto_depIdxs = []int32{
 	21, // 18: stratt.plugin.v1.Manifest.cutover:type_name -> stratt.plugin.v1.CutoverDescriptor
 	23, // 19: stratt.plugin.v1.GetManifestResponse.manifest:type_name -> stratt.plugin.v1.Manifest
 	3,  // 20: stratt.plugin.v1.HealthResponse.status:type_name -> stratt.plugin.v1.HealthResponse.Serving
-	55, // 21: stratt.plugin.v1.ObservedEntity.identity_keys:type_name -> stratt.plugin.v1.ObservedEntity.IdentityKeysEntry
-	56, // 22: stratt.plugin.v1.ObservedEntity.labels:type_name -> stratt.plugin.v1.ObservedEntity.LabelsEntry
-	57, // 23: stratt.plugin.v1.ObservedEntity.facets:type_name -> stratt.plugin.v1.ObservedEntity.FacetsEntry
+	56, // 21: stratt.plugin.v1.ObservedEntity.identity_keys:type_name -> stratt.plugin.v1.ObservedEntity.IdentityKeysEntry
+	57, // 22: stratt.plugin.v1.ObservedEntity.labels:type_name -> stratt.plugin.v1.ObservedEntity.LabelsEntry
+	58, // 23: stratt.plugin.v1.ObservedEntity.facets:type_name -> stratt.plugin.v1.ObservedEntity.FacetsEntry
 	29, // 24: stratt.plugin.v1.ObservedEntity.relations:type_name -> stratt.plugin.v1.ObservedRelation
 	28, // 25: stratt.plugin.v1.ObserveResponse.entities:type_name -> stratt.plugin.v1.ObservedEntity
 	30, // 26: stratt.plugin.v1.ObserveResponse.gone:type_name -> stratt.plugin.v1.GoneEntity
 	31, // 27: stratt.plugin.v1.ObserveResponse.gone_relations:type_name -> stratt.plugin.v1.GoneRelation
 	8,  // 28: stratt.plugin.v1.PlanRequest.envelope:type_name -> stratt.plugin.v1.Envelope
 	9,  // 29: stratt.plugin.v1.PlanRequest.desired:type_name -> stratt.plugin.v1.Payload
-	58, // 30: stratt.plugin.v1.PlanRequest.resolved_capabilities:type_name -> stratt.plugin.v1.PlanRequest.ResolvedCapabilitiesEntry
+	59, // 30: stratt.plugin.v1.PlanRequest.resolved_capabilities:type_name -> stratt.plugin.v1.PlanRequest.ResolvedCapabilitiesEntry
 	9,  // 31: stratt.plugin.v1.PlanResponse.diff:type_name -> stratt.plugin.v1.Payload
 	10, // 32: stratt.plugin.v1.PlanResponse.plan:type_name -> stratt.plugin.v1.ArtifactRef
 	8,  // 33: stratt.plugin.v1.ApplyRequest.envelope:type_name -> stratt.plugin.v1.Envelope
 	9,  // 34: stratt.plugin.v1.ApplyRequest.desired:type_name -> stratt.plugin.v1.Payload
 	10, // 35: stratt.plugin.v1.ApplyRequest.plan_ref:type_name -> stratt.plugin.v1.ArtifactRef
 	37, // 36: stratt.plugin.v1.ApplyRequest.targets:type_name -> stratt.plugin.v1.ApplyTarget
-	59, // 37: stratt.plugin.v1.ApplyRequest.resolved_capabilities:type_name -> stratt.plugin.v1.ApplyRequest.ResolvedCapabilitiesEntry
-	60, // 38: stratt.plugin.v1.CapabilityHandle.config:type_name -> stratt.plugin.v1.CapabilityHandle.ConfigEntry
-	61, // 39: stratt.plugin.v1.ApplyTarget.identity_keys:type_name -> stratt.plugin.v1.ApplyTarget.IdentityKeysEntry
-	62, // 40: stratt.plugin.v1.ApplyTarget.vars:type_name -> stratt.plugin.v1.ApplyTarget.VarsEntry
-	8,  // 41: stratt.plugin.v1.DestroyRequest.envelope:type_name -> stratt.plugin.v1.Envelope
-	37, // 42: stratt.plugin.v1.DestroyRequest.targets:type_name -> stratt.plugin.v1.ApplyTarget
-	9,  // 43: stratt.plugin.v1.DestroyRequest.desired:type_name -> stratt.plugin.v1.Payload
-	8,  // 44: stratt.plugin.v1.InvokeRequest.envelope:type_name -> stratt.plugin.v1.Envelope
-	9,  // 45: stratt.plugin.v1.InvokeRequest.args:type_name -> stratt.plugin.v1.Payload
-	4,  // 46: stratt.plugin.v1.TaskEvent.level:type_name -> stratt.plugin.v1.TaskEvent.Level
-	64, // 47: stratt.plugin.v1.TaskEvent.at:type_name -> google.protobuf.Timestamp
-	63, // 48: stratt.plugin.v1.TaskEvent.fields:type_name -> stratt.plugin.v1.TaskEvent.FieldsEntry
-	5,  // 49: stratt.plugin.v1.TaskEvent.scope:type_name -> stratt.plugin.v1.TaskEvent.Scope
-	6,  // 50: stratt.plugin.v1.ItemResult.status:type_name -> stratt.plugin.v1.ItemResult.Status
-	9,  // 51: stratt.plugin.v1.DiffFragment.detail:type_name -> stratt.plugin.v1.Payload
-	7,  // 52: stratt.plugin.v1.DerivedContract.rung:type_name -> stratt.plugin.v1.DerivedContract.Rung
-	41, // 53: stratt.plugin.v1.ApplyResponse.event:type_name -> stratt.plugin.v1.TaskEvent
-	28, // 54: stratt.plugin.v1.ApplyResponse.write_back:type_name -> stratt.plugin.v1.ObservedEntity
-	42, // 55: stratt.plugin.v1.ApplyResponse.result:type_name -> stratt.plugin.v1.ItemResult
-	43, // 56: stratt.plugin.v1.ApplyResponse.drift:type_name -> stratt.plugin.v1.DiffFragment
-	44, // 57: stratt.plugin.v1.ApplyResponse.derived_contract:type_name -> stratt.plugin.v1.DerivedContract
-	41, // 58: stratt.plugin.v1.DestroyResponse.event:type_name -> stratt.plugin.v1.TaskEvent
-	42, // 59: stratt.plugin.v1.DestroyResponse.result:type_name -> stratt.plugin.v1.ItemResult
-	30, // 60: stratt.plugin.v1.DestroyResponse.gone:type_name -> stratt.plugin.v1.GoneEntity
-	9,  // 61: stratt.plugin.v1.InvokeResult.outputs:type_name -> stratt.plugin.v1.Payload
-	13, // 62: stratt.plugin.v1.InvokeResult.output_contract:type_name -> stratt.plugin.v1.ContractRef
-	28, // 63: stratt.plugin.v1.InvokeResult.entities:type_name -> stratt.plugin.v1.ObservedEntity
-	15, // 64: stratt.plugin.v1.InvokeResult.provisioned_creds:type_name -> stratt.plugin.v1.CredentialRef
-	41, // 65: stratt.plugin.v1.InvokeResponse.event:type_name -> stratt.plugin.v1.TaskEvent
-	47, // 66: stratt.plugin.v1.InvokeResponse.result:type_name -> stratt.plugin.v1.InvokeResult
-	8,  // 67: stratt.plugin.v1.EmittedEvent.envelope:type_name -> stratt.plugin.v1.Envelope
-	9,  // 68: stratt.plugin.v1.EmittedEvent.payload:type_name -> stratt.plugin.v1.Payload
-	65, // 69: stratt.plugin.v1.EmittedEvent.match:type_name -> google.protobuf.Struct
-	64, // 70: stratt.plugin.v1.EmittedEvent.occurred_at:type_name -> google.protobuf.Timestamp
-	49, // 71: stratt.plugin.v1.SubscribeResponse.event:type_name -> stratt.plugin.v1.EmittedEvent
-	36, // 72: stratt.plugin.v1.PlanRequest.ResolvedCapabilitiesEntry.value:type_name -> stratt.plugin.v1.CapabilityHandle
-	36, // 73: stratt.plugin.v1.ApplyRequest.ResolvedCapabilitiesEntry.value:type_name -> stratt.plugin.v1.CapabilityHandle
-	19, // 74: stratt.plugin.v1.PluginService.GetManifest:input_type -> stratt.plugin.v1.GetManifestRequest
-	25, // 75: stratt.plugin.v1.PluginService.Health:input_type -> stratt.plugin.v1.HealthRequest
-	27, // 76: stratt.plugin.v1.PluginService.Observe:input_type -> stratt.plugin.v1.ObserveRequest
-	33, // 77: stratt.plugin.v1.PluginService.Plan:input_type -> stratt.plugin.v1.PlanRequest
-	35, // 78: stratt.plugin.v1.PluginService.Apply:input_type -> stratt.plugin.v1.ApplyRequest
-	38, // 79: stratt.plugin.v1.PluginService.Destroy:input_type -> stratt.plugin.v1.DestroyRequest
-	39, // 80: stratt.plugin.v1.PluginService.Invoke:input_type -> stratt.plugin.v1.InvokeRequest
-	40, // 81: stratt.plugin.v1.PluginService.Subscribe:input_type -> stratt.plugin.v1.SubscribeRequest
-	51, // 82: stratt.plugin.v1.PluginService.WrapKey:input_type -> stratt.plugin.v1.WrapKeyRequest
-	53, // 83: stratt.plugin.v1.PluginService.UnwrapKey:input_type -> stratt.plugin.v1.UnwrapKeyRequest
-	24, // 84: stratt.plugin.v1.PluginService.GetManifest:output_type -> stratt.plugin.v1.GetManifestResponse
-	26, // 85: stratt.plugin.v1.PluginService.Health:output_type -> stratt.plugin.v1.HealthResponse
-	32, // 86: stratt.plugin.v1.PluginService.Observe:output_type -> stratt.plugin.v1.ObserveResponse
-	34, // 87: stratt.plugin.v1.PluginService.Plan:output_type -> stratt.plugin.v1.PlanResponse
-	45, // 88: stratt.plugin.v1.PluginService.Apply:output_type -> stratt.plugin.v1.ApplyResponse
-	46, // 89: stratt.plugin.v1.PluginService.Destroy:output_type -> stratt.plugin.v1.DestroyResponse
-	48, // 90: stratt.plugin.v1.PluginService.Invoke:output_type -> stratt.plugin.v1.InvokeResponse
-	50, // 91: stratt.plugin.v1.PluginService.Subscribe:output_type -> stratt.plugin.v1.SubscribeResponse
-	52, // 92: stratt.plugin.v1.PluginService.WrapKey:output_type -> stratt.plugin.v1.WrapKeyResponse
-	54, // 93: stratt.plugin.v1.PluginService.UnwrapKey:output_type -> stratt.plugin.v1.UnwrapKeyResponse
-	84, // [84:94] is the sub-list for method output_type
-	74, // [74:84] is the sub-list for method input_type
-	74, // [74:74] is the sub-list for extension type_name
-	74, // [74:74] is the sub-list for extension extendee
-	0,  // [0:74] is the sub-list for field type_name
+	60, // 37: stratt.plugin.v1.ApplyRequest.resolved_capabilities:type_name -> stratt.plugin.v1.ApplyRequest.ResolvedCapabilitiesEntry
+	61, // 38: stratt.plugin.v1.CapabilityHandle.config:type_name -> stratt.plugin.v1.CapabilityHandle.ConfigEntry
+	62, // 39: stratt.plugin.v1.ApplyTarget.identity_keys:type_name -> stratt.plugin.v1.ApplyTarget.IdentityKeysEntry
+	63, // 40: stratt.plugin.v1.ApplyTarget.vars:type_name -> stratt.plugin.v1.ApplyTarget.VarsEntry
+	38, // 41: stratt.plugin.v1.ApplyTarget.jump:type_name -> stratt.plugin.v1.JumpHop
+	8,  // 42: stratt.plugin.v1.DestroyRequest.envelope:type_name -> stratt.plugin.v1.Envelope
+	37, // 43: stratt.plugin.v1.DestroyRequest.targets:type_name -> stratt.plugin.v1.ApplyTarget
+	9,  // 44: stratt.plugin.v1.DestroyRequest.desired:type_name -> stratt.plugin.v1.Payload
+	8,  // 45: stratt.plugin.v1.InvokeRequest.envelope:type_name -> stratt.plugin.v1.Envelope
+	9,  // 46: stratt.plugin.v1.InvokeRequest.args:type_name -> stratt.plugin.v1.Payload
+	4,  // 47: stratt.plugin.v1.TaskEvent.level:type_name -> stratt.plugin.v1.TaskEvent.Level
+	65, // 48: stratt.plugin.v1.TaskEvent.at:type_name -> google.protobuf.Timestamp
+	64, // 49: stratt.plugin.v1.TaskEvent.fields:type_name -> stratt.plugin.v1.TaskEvent.FieldsEntry
+	5,  // 50: stratt.plugin.v1.TaskEvent.scope:type_name -> stratt.plugin.v1.TaskEvent.Scope
+	6,  // 51: stratt.plugin.v1.ItemResult.status:type_name -> stratt.plugin.v1.ItemResult.Status
+	9,  // 52: stratt.plugin.v1.DiffFragment.detail:type_name -> stratt.plugin.v1.Payload
+	7,  // 53: stratt.plugin.v1.DerivedContract.rung:type_name -> stratt.plugin.v1.DerivedContract.Rung
+	42, // 54: stratt.plugin.v1.ApplyResponse.event:type_name -> stratt.plugin.v1.TaskEvent
+	28, // 55: stratt.plugin.v1.ApplyResponse.write_back:type_name -> stratt.plugin.v1.ObservedEntity
+	43, // 56: stratt.plugin.v1.ApplyResponse.result:type_name -> stratt.plugin.v1.ItemResult
+	44, // 57: stratt.plugin.v1.ApplyResponse.drift:type_name -> stratt.plugin.v1.DiffFragment
+	45, // 58: stratt.plugin.v1.ApplyResponse.derived_contract:type_name -> stratt.plugin.v1.DerivedContract
+	42, // 59: stratt.plugin.v1.DestroyResponse.event:type_name -> stratt.plugin.v1.TaskEvent
+	43, // 60: stratt.plugin.v1.DestroyResponse.result:type_name -> stratt.plugin.v1.ItemResult
+	30, // 61: stratt.plugin.v1.DestroyResponse.gone:type_name -> stratt.plugin.v1.GoneEntity
+	9,  // 62: stratt.plugin.v1.InvokeResult.outputs:type_name -> stratt.plugin.v1.Payload
+	13, // 63: stratt.plugin.v1.InvokeResult.output_contract:type_name -> stratt.plugin.v1.ContractRef
+	28, // 64: stratt.plugin.v1.InvokeResult.entities:type_name -> stratt.plugin.v1.ObservedEntity
+	15, // 65: stratt.plugin.v1.InvokeResult.provisioned_creds:type_name -> stratt.plugin.v1.CredentialRef
+	42, // 66: stratt.plugin.v1.InvokeResponse.event:type_name -> stratt.plugin.v1.TaskEvent
+	48, // 67: stratt.plugin.v1.InvokeResponse.result:type_name -> stratt.plugin.v1.InvokeResult
+	8,  // 68: stratt.plugin.v1.EmittedEvent.envelope:type_name -> stratt.plugin.v1.Envelope
+	9,  // 69: stratt.plugin.v1.EmittedEvent.payload:type_name -> stratt.plugin.v1.Payload
+	66, // 70: stratt.plugin.v1.EmittedEvent.match:type_name -> google.protobuf.Struct
+	65, // 71: stratt.plugin.v1.EmittedEvent.occurred_at:type_name -> google.protobuf.Timestamp
+	50, // 72: stratt.plugin.v1.SubscribeResponse.event:type_name -> stratt.plugin.v1.EmittedEvent
+	36, // 73: stratt.plugin.v1.PlanRequest.ResolvedCapabilitiesEntry.value:type_name -> stratt.plugin.v1.CapabilityHandle
+	36, // 74: stratt.plugin.v1.ApplyRequest.ResolvedCapabilitiesEntry.value:type_name -> stratt.plugin.v1.CapabilityHandle
+	19, // 75: stratt.plugin.v1.PluginService.GetManifest:input_type -> stratt.plugin.v1.GetManifestRequest
+	25, // 76: stratt.plugin.v1.PluginService.Health:input_type -> stratt.plugin.v1.HealthRequest
+	27, // 77: stratt.plugin.v1.PluginService.Observe:input_type -> stratt.plugin.v1.ObserveRequest
+	33, // 78: stratt.plugin.v1.PluginService.Plan:input_type -> stratt.plugin.v1.PlanRequest
+	35, // 79: stratt.plugin.v1.PluginService.Apply:input_type -> stratt.plugin.v1.ApplyRequest
+	39, // 80: stratt.plugin.v1.PluginService.Destroy:input_type -> stratt.plugin.v1.DestroyRequest
+	40, // 81: stratt.plugin.v1.PluginService.Invoke:input_type -> stratt.plugin.v1.InvokeRequest
+	41, // 82: stratt.plugin.v1.PluginService.Subscribe:input_type -> stratt.plugin.v1.SubscribeRequest
+	52, // 83: stratt.plugin.v1.PluginService.WrapKey:input_type -> stratt.plugin.v1.WrapKeyRequest
+	54, // 84: stratt.plugin.v1.PluginService.UnwrapKey:input_type -> stratt.plugin.v1.UnwrapKeyRequest
+	24, // 85: stratt.plugin.v1.PluginService.GetManifest:output_type -> stratt.plugin.v1.GetManifestResponse
+	26, // 86: stratt.plugin.v1.PluginService.Health:output_type -> stratt.plugin.v1.HealthResponse
+	32, // 87: stratt.plugin.v1.PluginService.Observe:output_type -> stratt.plugin.v1.ObserveResponse
+	34, // 88: stratt.plugin.v1.PluginService.Plan:output_type -> stratt.plugin.v1.PlanResponse
+	46, // 89: stratt.plugin.v1.PluginService.Apply:output_type -> stratt.plugin.v1.ApplyResponse
+	47, // 90: stratt.plugin.v1.PluginService.Destroy:output_type -> stratt.plugin.v1.DestroyResponse
+	49, // 91: stratt.plugin.v1.PluginService.Invoke:output_type -> stratt.plugin.v1.InvokeResponse
+	51, // 92: stratt.plugin.v1.PluginService.Subscribe:output_type -> stratt.plugin.v1.SubscribeResponse
+	53, // 93: stratt.plugin.v1.PluginService.WrapKey:output_type -> stratt.plugin.v1.WrapKeyResponse
+	55, // 94: stratt.plugin.v1.PluginService.UnwrapKey:output_type -> stratt.plugin.v1.UnwrapKeyResponse
+	85, // [85:95] is the sub-list for method output_type
+	75, // [75:85] is the sub-list for method input_type
+	75, // [75:75] is the sub-list for extension type_name
+	75, // [75:75] is the sub-list for extension extendee
+	0,  // [0:75] is the sub-list for field type_name
 }
 
 func init() { file_stratt_plugin_v1_plugin_proto_init() }
@@ -4286,7 +4378,7 @@ func file_stratt_plugin_v1_plugin_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_stratt_plugin_v1_plugin_proto_rawDesc), len(file_stratt_plugin_v1_plugin_proto_rawDesc)),
 			NumEnums:      8,
-			NumMessages:   56,
+			NumMessages:   57,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

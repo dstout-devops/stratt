@@ -36,6 +36,29 @@ type Target struct {
 	// Vars are genuinely tool-authored vars only — never a core-emitted connection
 	// key. The reachability coordinate is Address above, not a var (ADR-0084 §1.4).
 	Vars map[string]string
+	// Jump is the resolved reached-via chain, NEAREST HOP FIRST: the bastions this
+	// target is reachable through (ADR-0126 D3). Each hop's coordinate comes from that
+	// hop Entity's OWN mgmt.address, so a bastion's address has exactly one home in the
+	// model and cannot drift from the graph's (§2.4) — which is why the topology is a
+	// Relation and not a string field on the target's own Facet (§9: the mgmt.address
+	// schema stays closed).
+	//
+	// Typed and first-class for the same reason Address is: the core resolves the
+	// COORDINATE, the plugin renders the connection (ProxyJump, -J, whatever its
+	// transport calls it). There is no ssh flag anywhere in core.
+	Jump []Hop
+}
+
+// Hop is one resolved link in a reached-via chain — a bastion's reachability
+// coordinate, nothing more. No credential and no user: authenticating to a hop is Step
+// config (params.connection.jump), the same address-vs-credential split ADR-0084 D4 drew
+// for the target itself.
+type Hop struct {
+	// Name is the hop Entity's observed name — carried for diagnosis, so a failure can
+	// say WHICH bastion was unreachable rather than only its address (§1.8).
+	Name    string
+	Address string
+	Port    int32
 }
 
 // JobSpec is everything a prepared Step needs from the dispatcher. The

@@ -57,6 +57,14 @@ const (
 	RelInVlan   = "in-vlan" // a subnet is in-vlan a vlan (the topology backbone, netbox emits it too)
 )
 
+// RelReachedVia is the reachability edge (ADR-0126 D3): a host is reached-via a bastion
+// Entity. A free-string Relation.Type like the placement family above, so a jump path
+// needs no schema change — and deliberately NOT a field on mgmt.address, whose schema
+// ADR-0084 D1 closed against exactly this kind of growth (§9). The hop's own Entity
+// carries its address, so a bastion's coordinate has one home rather than a copy on
+// every host behind it (§2.4).
+const RelReachedVia = "reached-via"
+
 // IsSingularPlacement reports whether a Relation type is a SINGULAR placement — a
 // from-Entity is in exactly ONE target of this type (a host is placed-in one subnet, a
 // subnet is in-vlan/in-dmz/in-az one of each). A build re-projecting such an edge to a new

@@ -47,9 +47,13 @@ func run() error {
 		req.Params = d.GetBytes()
 	}
 	for _, t := range applyReq.GetTargets() {
+		hops := make([]ansible.Hop, 0, len(t.GetJump()))
+		for _, h := range t.GetJump() {
+			hops = append(hops, ansible.Hop{Name: h.GetName(), Address: h.GetAddress(), Port: h.GetPort()})
+		}
 		req.Targets = append(req.Targets, ansible.Target{
 			Name: t.GetName(), Address: t.GetAddress(), Port: t.GetPort(),
-			Vars: t.GetVars(), Identity: t.GetIdentityKeys(),
+			Vars: t.GetVars(), Identity: t.GetIdentityKeys(), Jump: hops,
 		})
 	}
 
