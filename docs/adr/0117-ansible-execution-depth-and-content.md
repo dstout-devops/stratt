@@ -125,9 +125,17 @@ yet Control-gateable, and this ADR does not claim otherwise. `types.ChangeContex
 unifier that keeps the spine content-blind" — carries Actor/Targets/BlastRadius/Environment/ChangeClass/
 RiskScore/Labels and **no Step params**, so no Control can see `params.become`. Teaching the PDP to read
 inside an ansible field would be precisely the `if ansible{}` that ADR-0046/ADR-0051 Phase 5b closed.
-Gating is booked as a **follow-up via a content-blind mechanism**: the plugin declares a typed signal (a
+~~Gating is booked as a **follow-up via a content-blind mechanism**: the plugin declares a typed signal (a
 `changeClass`, or a typed token on the existing non-precedence-bearing channel) that the PDP gates on —
-never a tool-specific field.
+never a tool-specific field.~~ — **done as [ADR-0122](0122-change-context-is-typed-and-partly-derived.md)
+D3.** The signal is declared, but on the **Actuator** rather than in the tool's input Contract:
+`elevatedInputs: [become.enabled]`. Core walks that declared path in each Step's params and derives the
+core-owned `stratt.change/privileged` change-context label, which a Control gates on — so core still never
+learns the word `become`, exactly as this passage required. The Contract would be the better long-run home
+and is not available: `ansible.input.v5` is pinned and hash-verified, so annotating it in place is blocking
+drift, and minting v6 pulls in D2's deferred `check`/`eeImage` removal. The mapping moves there whenever a
+v6 exists for its own reasons. `stratt.change/` is a reserved namespace a launcher may not assert into, or
+the gate would be defeatable by asserting the fact away.
 
 Core stays **content-blind** (§1.4, ADR-0046): it validates the Contract as data (ADR-0015) and passes it
 through; only `stratt-ansible` inside the EE knows these map to `ansible-playbook` flags. No `if ansible{}`

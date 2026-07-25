@@ -136,7 +136,7 @@ func (r *Reconciler) Reconcile(ctx context.Context) error {
 // compile renders a Trigger declaration into the Temporal Schedule pieces:
 // the spec, the workflow action (carrying the declaration hash in its memo),
 // and the hash itself.
-func compile(t types.Trigger) (client.ScheduleSpec, *client.ScheduleWorkflowAction, string, error) {
+func compile(t types.Trigger, environment string) (client.ScheduleSpec, *client.ScheduleWorkflowAction, string, error) {
 	var params json.RawMessage
 	if t.Params != nil {
 		raw, err := json.Marshal(t.Params)
@@ -170,6 +170,9 @@ func compile(t types.Trigger) (client.ScheduleSpec, *client.ScheduleWorkflowActi
 			Principal:    t.Principal,
 			Trigger:      t.Name,
 			LaunchParams: t.Inputs,
+			// The floor's own environment (ADR-0122 D2) — see the event-Trigger path for why a
+			// Trigger's own `environments:` list is a different question.
+			Environment: environment,
 		}}
 	} else {
 		action.Workflow = orchestrate.RunAgainstView
@@ -193,7 +196,7 @@ func compile(t types.Trigger) (client.ScheduleSpec, *client.ScheduleWorkflowActi
 }
 
 func (r *Reconciler) create(ctx context.Context, t types.Trigger) error {
-	spec, action, _, err := compile(t)
+	spec, action, _, err := compile(t, r.Store.ActiveEnvironment())
 	if err != nil {
 		return err
 	}
@@ -218,7 +221,7 @@ func (r *Reconciler) create(ctx context.Context, t types.Trigger) error {
 // Describe (the server compiles it to a structured calendar), so the hash on
 // the action memo is the drift signal.
 func (r *Reconciler) converge(ctx context.Context, log *slog.Logger, t types.Trigger) error {
-	spec, action, wantHash, err := compile(t)
+	spec, action, wantHash, err := compile(t, r.Store.ActiveEnvironment())
 	if err != nil {
 		return err
 	}

@@ -70,6 +70,12 @@ func dagTestEnv(t *testing.T, spec types.Workflow, childStatus map[string]error)
 	// path walks. Mocking it here would have made the chokepoint invisible to exactly the
 	// tests that prove RunDAG's shape.
 	env.RegisterActivity(a.ResolveLaunchInputs)
+	// Same treatment for the change-context chokepoint (ADR-0122): registered for real so
+	// every DAG test walks the actual admission — an asserted environment or an unknown
+	// changeClass is refused here, and a test that mocked past it would prove nothing about
+	// the seam that refuses them. With a nil Store the derivation half is a no-op; it has its
+	// own unit tests over the pure function.
+	env.RegisterActivity(a.ResolveChangeContext)
 	env.OnActivity(a.MarkWorkflowRunRunning, mock.Anything, "wr-1").Return(nil)
 	env.OnActivity(a.CreateGateRecord, mock.Anything, "wr-1", mock.Anything, mock.Anything, mock.Anything).Return(
 		func(_ context.Context, _, step, planDigest string, approvers types.GateApprovers) (types.Gate, error) {
@@ -438,5 +444,87 @@ func TestRunDAGAppliesLaunchDefaults(t *testing.T) {
 	}
 	if *status != types.RunSucceeded {
 		t.Fatalf("expected success, got %q", *status)
+	}
+}
+
+// TestRunDAGRejectsAnAssertedEnvironment proves the CHANGE-CONTEXT chokepoint is wired
+// (ADR-0122), and it exists because removing the ResolveChangeContext call from RunDAG broke
+// nothing at all: the pure validator had its own tests, the activity was registered, and the
+// suite stayed green — the same inert-mechanism shape this arc keeps finding, on a governance
+// seam this time.
+//
+// A launcher asserting an environment is the sharp case rather than a typo'd change class: on a
+// prod floor, `environment: dev` would have walked past a prod freeze window, and `dev` is a
+// perfectly valid environment name so no amount of typing the string would have caught it.
+func TestRunDAGRejectsAnAssertedEnvironment(t *testing.T) {
+	spec := types.Workflow{
+		Name:  "converge",
+		Steps: []types.Step{{Name: "run", ViewName: "v", Actuator: "script", Params: map[string]any{"script": "echo hi"}}},
+	}
+	env, _, status := dagTestEnv(t, spec, map[string]error{"run": nil})
+	env.ExecuteWorkflow(RunDAG, DAGInput{
+		WorkflowRunID: "wr-1", WorkflowName: spec.Name, Principal: "alice",
+		Environment: "prod", // the floor's
+		Context:     map[string]any{types.ChangeContextEnvironmentKey: "dev"},
+	})
+	if !env.IsWorkflowCompleted() {
+		t.Fatal("workflow did not complete")
+	}
+	if env.GetWorkflowError() == nil {
+		t.Fatal("a launcher-asserted environment must fail the run at the chokepoint, before any Step")
+	}
+	if *status != types.RunFailed {
+		t.Fatalf("the WorkflowRun must be recorded failed, got %q", *status)
+	}
+}
+
+// The same door refuses an unknown change class — the fail-OPEN half, where a Control keyed on
+// the intended class silently never fires and the change proceeds (ADR-0122 D1).
+func TestRunDAGRejectsAnUnknownChangeClass(t *testing.T) {
+	spec := types.Workflow{
+		Name:  "converge",
+		Steps: []types.Step{{Name: "run", ViewName: "v", Actuator: "script", Params: map[string]any{"script": "echo hi"}}},
+	}
+	env, _, status := dagTestEnv(t, spec, map[string]error{"run": nil})
+	env.ExecuteWorkflow(RunDAG, DAGInput{
+		WorkflowRunID: "wr-1", WorkflowName: spec.Name, Principal: "alice",
+		Context: map[string]any{types.ChangeContextClassKey: "emergancy"},
+	})
+	if !env.IsWorkflowCompleted() {
+		t.Fatal("workflow did not complete")
+	}
+	if env.GetWorkflowError() == nil {
+		t.Fatal("an unknown change class must fail the run rather than be coerced")
+	}
+	if *status != types.RunFailed {
+		t.Fatalf("the WorkflowRun must be recorded failed, got %q", *status)
+	}
+}
+
+// And an ordinary change context must still launch — otherwise the two tests above would be
+// satisfied by a chokepoint that refused everything.
+func TestRunDAGAcceptsAnOrdinaryChangeContext(t *testing.T) {
+	spec := types.Workflow{
+		Name:  "converge",
+		Steps: []types.Step{{Name: "run", ViewName: "v", Actuator: "script", Params: map[string]any{"script": "echo hi"}}},
+	}
+	env, _, status := dagTestEnv(t, spec, map[string]error{"run": nil})
+	env.ExecuteWorkflow(RunDAG, DAGInput{
+		WorkflowRunID: "wr-1", WorkflowName: spec.Name, Principal: "alice",
+		Environment: "prod",
+		Context: map[string]any{
+			types.ChangeContextClassKey: types.ChangeClassEmergency,
+			"incident":                  "INC-42",
+			"team":                      "sre",
+		},
+	})
+	if !env.IsWorkflowCompleted() {
+		t.Fatal("workflow did not complete")
+	}
+	if err := env.GetWorkflowError(); err != nil {
+		t.Fatalf("a valid change context must not fail the run: %v", err)
+	}
+	if *status != types.RunSucceeded {
+		t.Fatalf("run status: %q", *status)
 	}
 }

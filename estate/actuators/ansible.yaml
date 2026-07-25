@@ -36,3 +36,13 @@ facetNamespaces:
   # (ADR-0084 fact-back), e.g. the effective listen port after a converge.
   - app.config
 identitySchemes: [host.name]
+# elevatedInputs makes privilege escalation Control-GATEABLE (ADR-0122 D3), closing the gap
+# ADR-0117 D1 recorded honestly: typed `become` was declared and audited, but ChangeContext
+# carries no Step params, so no Control could see it — and teaching the PDP to read inside an
+# ansible field is the `if ansible{}` §1.4 forbids.
+#
+# Core walks this path in each Step's params and, when it is truthy, derives the
+# `stratt.change/privileged` change-context label. Core never learns the word `become`: it
+# reads a declared path and a boolean, exactly as facetNamespaces above lets it enforce a
+# write ceiling without knowing what a namespace means. A Control gates on the label.
+elevatedInputs: [become.enabled]

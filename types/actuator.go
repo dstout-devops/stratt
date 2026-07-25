@@ -52,6 +52,26 @@ type Actuator struct {
 	// IdentitySchemes are the identity schemes this Actuator may correlate write-back by
 	// (ansible correlates facts by host.name). Same CaC-grant rationale as FacetNamespaces.
 	IdentitySchemes []string `json:"identitySchemes,omitempty"`
+	// ElevatedInputs are dotted paths into this Actuator's Step params whose presence (truthy)
+	// means the Step ELEVATES PRIVILEGE on its target — `become.enabled` for ansible
+	// (ADR-0122 D3). Core walks them and derives the `stratt.change/privileged` change-context
+	// label, which a Control can then gate on.
+	//
+	// This is what closes ADR-0117 D1's honest gap: typed `become` was declared and audited but
+	// not Control-gateable, because ChangeContext carries no Step params and teaching the PDP to
+	// read inside an ansible field is the `if ansible{}` §1.4 forbids. Core reads a declared path
+	// list and a boolean and never learns the word `become` — the same content-blind shape as
+	// FacetNamespaces above, where core enforces a ceiling without knowing what a namespace means.
+	//
+	// It lives on the Actuator rather than in the tool's input Contract, which would be the better
+	// long-run home: `ansible.input.v5` is pinned and hash-verified (§1.5), so annotating it in
+	// place is blocking drift, and minting v6 pulls in ADR-0117 D2's deferred removal of the
+	// deprecated `check`/`eeImage` fields. Reviewed in Git here, beside the other CaC grants it
+	// resembles; it moves to the Contract whenever a v6 is minted for its own reasons.
+	//
+	// Empty ⇒ this Actuator elevates nothing as far as core can tell. Honest and visible in
+	// review, but not automatic: an Actuator that omits it derives no label.
+	ElevatedInputs []string `json:"elevatedInputs,omitempty"`
 	// MCP marks the mcp EE-Job transport (ADR-0053).
 	MCP bool `json:"mcp,omitempty"`
 	// Provides are the capability classes this Actuator fulfils (ADR-0104) — governed CaC

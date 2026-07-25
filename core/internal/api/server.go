@@ -2153,6 +2153,14 @@ func (s *Server) launchWorkflow(w http.ResponseWriter, r *http.Request, wf types
 		writeErr(w, http.StatusBadRequest, verr.Error())
 		return
 	}
+	// The change context is admitted at the door for the same reason (ADR-0122): a caller
+	// asserting an environment, a core-owned `stratt.change/` label, or an unknown changeClass
+	// gets a 400 naming the key, not a Run that dies inside the DAG. The RunDAG chokepoint calls
+	// the same function, because that is the one nothing can skip.
+	if verr := policy.ValidateChangeContext(changeContext); verr != nil {
+		writeErr(w, http.StatusBadRequest, verr.Error())
+		return
+	}
 
 	wr, err := s.Store.CreateWorkflowRun(r.Context(), wf.Name, "", principal, "")
 	if err != nil {
@@ -2166,6 +2174,8 @@ func (s *Server) launchWorkflow(w http.ResponseWriter, r *http.Request, wf types
 	}, orchestrate.RunDAG, orchestrate.DAGInput{
 		WorkflowRunID: wr.ID, WorkflowName: wf.Name, Principal: principal,
 		LaunchParams: resolved, Context: changeContext,
+		// The floor's own environment, not the caller's claim about it (ADR-0122 D2).
+		Environment: s.Store.ActiveEnvironment(),
 	})
 	if err != nil {
 		_ = s.Store.SetWorkflowRunStatus(r.Context(), wr.ID, types.RunFailed, map[string]any{"error": "workflow start failed"})

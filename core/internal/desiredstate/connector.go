@@ -235,6 +235,7 @@ type actuatorFile struct {
 	Image           string            `yaml:"image"`
 	FacetNamespaces []string          `yaml:"facetNamespaces"`
 	IdentitySchemes []string          `yaml:"identitySchemes"`
+	ElevatedInputs  []string          `yaml:"elevatedInputs"`
 	MCP             bool              `yaml:"mcp"`
 	Provides        []string          `yaml:"provides"`
 	Requires        []string          `yaml:"requires"`
@@ -254,7 +255,8 @@ func parseActuatorFile(path string, raw []byte) (string, types.Actuator, error) 
 		Name: f.Name, Address: f.Address, PluginIdentity: f.PluginIdentity, Tier: f.Tier,
 		DryRunnable: f.DryRunnable, ActionNames: f.ActionNames, JobCommand: f.JobCommand,
 		Image: f.Image, FacetNamespaces: f.FacetNamespaces, IdentitySchemes: f.IdentitySchemes,
-		MCP: f.MCP, Provides: f.Provides, Requires: f.Requires,
+		ElevatedInputs: f.ElevatedInputs,
+		MCP:            f.MCP, Provides: f.Provides, Requires: f.Requires,
 		Provisions: f.Provisions, Decommissions: f.Decommissions, Environments: f.Environments,
 	}
 	if err := ValidateActuator(a); err != nil {

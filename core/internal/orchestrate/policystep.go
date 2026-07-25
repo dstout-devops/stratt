@@ -224,12 +224,10 @@ func paramInt(params map[string]any, key string) (int, bool) {
 // typed properly — the Workflow's inputs could not be closed, and the context could not be
 // schema'd at all.
 //
-// KNOWN GAP, recorded rather than implied: this context is still UNTYPED. `environment` is
-// a bare string, so `environment: "prd"` silently produces a different policy decision than
-// `"prod"` — a prod freeze window (ADR-0067) simply does not match, and the change
-// proceeds. Same exposure for changeClass driving break-glass (ADR-0070) and committers
-// feeding SoD (ADR-0068). A core-owned ChangeContext schema with enums is the fix; it is
-// booked in ADR-0118, not done here.
+// The context is TYPED at the chokepoint before this runs (ADR-0122): an unknown `changeClass`
+// is refused rather than coerced, and the two things core can establish itself are no longer
+// the launcher's to assert. So this function assembles a context whose governance-bearing
+// fields have already been admitted, which is what it always assumed and never got.
 func assembleChangeContext(in DAGInput) types.ChangeContext {
 	cc := types.ChangeContext{
 		Actor:  types.PrincipalRef{ID: in.Principal},
@@ -240,18 +238,21 @@ func assembleChangeContext(in DAGInput) types.ChangeContext {
 			cc.Labels[k] = s
 		}
 	}
-	if env, ok := cc.Labels["environment"]; ok {
-		cc.Environment = env
-	}
-	// change_class (standard|normal|emergency) drives break-glass activation
-	// (ADR-0070); the incident/reasonCode ride in labels generically.
-	if cls, ok := cc.Labels["changeClass"]; ok {
+	// The environment is the FLOOR's, stamped at launch — never read out of the launcher's
+	// labels (ADR-0122 D2). It used to come from `Context["environment"]`, which meant a caller
+	// on a prod floor could assert `environment: dev` and miss a prod freeze window: not a typo
+	// hole but an authorization one, since typing the string would have left the choice intact.
+	cc.Environment = in.Environment
+	// changeClass (standard|normal|emergency) drives break-glass activation (ADR-0070); the
+	// incident/reasonCode ride in labels generically. Validated against the closed set at the
+	// chokepoint, so an unknown class never reaches a Control as a silently-non-matching value.
+	if cls, ok := cc.Labels[types.ChangeContextClassKey]; ok {
 		cc.ChangeClass = cls
 	}
 	// Committers (the change authors) from a `committers` launch param — the
 	// source SoD checks the actor against (ADR-0068). A CI/operator launching the
 	// change supplies them; richer committer provenance is a follow-up.
-	for _, id := range paramStrings(in.Context, "committers") {
+	for _, id := range paramStrings(in.Context, types.ChangeContextCommittersKey) {
 		cc.Committers = append(cc.Committers, types.PrincipalRef{ID: id})
 	}
 	return cc

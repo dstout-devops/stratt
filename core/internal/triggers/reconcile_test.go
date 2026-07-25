@@ -205,7 +205,7 @@ func TestCompileCarriesLaunchInputsToRunDAG(t *testing.T) {
 		WorkflowName: "subnet-provision", Principal: "svc",
 		Inputs: map[string]any{"subnetName": "app-subnet", "cidr": "10.20.0.0/24"},
 	}
-	_, action, _, err := compile(tr)
+	_, action, _, err := compile(tr, "dev")
 	if err != nil {
 		t.Fatalf("compile: %v", err)
 	}
@@ -230,7 +230,7 @@ func TestCompileWorkflowScheduleWithoutInputs(t *testing.T) {
 	_, action, _, err := compile(types.Trigger{
 		Name: "nightly", Kind: types.TriggerSchedule, Cron: "0 2 * * *",
 		WorkflowName: "vacuum", Principal: "svc",
-	})
+	}, "dev")
 	if err != nil {
 		t.Fatalf("compile: %v", err)
 	}
@@ -248,7 +248,7 @@ func TestCompileRunScheduleStillCarriesStepParams(t *testing.T) {
 		Name: "collect", Kind: types.TriggerSchedule, Cron: "0 * * * *",
 		ViewName: "hosts", Actuator: "ansible", Principal: "svc",
 		Params: map[string]any{"play": "- hosts: all"},
-	})
+	}, "dev")
 	if err != nil {
 		t.Fatalf("compile: %v", err)
 	}

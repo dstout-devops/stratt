@@ -3,6 +3,7 @@ package desiredstate
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 
 	"github.com/dstout-devops/stratt/types"
@@ -148,6 +149,17 @@ func TestReferenceEstateDeclaresTheEEJobActuators(t *testing.T) {
 	for ns := range got {
 		t.Errorf("ansible's declared grant WIDENED to facet namespace %q, which the boot registration did not carry — "+
 			"a grant grows only by decision (§2.1)", ns)
+	}
+
+	// elevatedInputs is what makes ansible's typed `become` Control-gateable (ADR-0122 D3,
+	// closing ADR-0117 D1). Pinned rather than left to review because losing it is INVISIBLE: the
+	// estate still parses, every Run still works, and the only thing that changes is that a
+	// Control gating on `stratt.change/privileged` stops firing — a governance check that silently
+	// passes everything, which is the worst failure shape available here (§1.8).
+	if !slices.Contains(ansible.ElevatedInputs, "become.enabled") {
+		t.Errorf("ansible must declare become.enabled as an elevating input, got %v — without it core "+
+			"derives no privileged label and any Control gating on privilege escalation silently "+
+			"never fires", ansible.ElevatedInputs)
 	}
 
 	script, ok := byName["script"]

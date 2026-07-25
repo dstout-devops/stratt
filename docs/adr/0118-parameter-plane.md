@@ -495,8 +495,16 @@ changes instance identity and owes a migration story for fleets already carrying
 ## Follow-ups
 
 - **ADR-0119** (versioned promotion) and **ADR-0120** (keyed spread) — see _Deferred_.
-- **A core-owned `ChangeContext` schema** with enums for `environment`/`changeClass`, validated at D4's
-  chokepoint — closes D4b's typo hole on a security-relevant seam.
+- ~~**A core-owned `ChangeContext` schema** with enums for `environment`/`changeClass`, validated at D4's
+  chokepoint — closes D4b's typo hole on a security-relevant seam.~~ — **done as
+  [ADR-0122](0122-change-context-is-typed-and-partly-derived.md), and it was not a typo hole.**
+  `changeClass` did become a validated closed enum (`standard|normal|emergency` — core already depended on
+  `emergency` for break-glass, unvalidated). But `environment` got no enum at all: asking where the enum
+  comes from exposed the real defect, which is that a launcher **could choose its own policy environment**
+  and walk past a prod freeze window with a perfectly valid environment name. Typing the string would have
+  left that intact. So environment left the asserted set entirely — core stamps it from the floor
+  (ADR-0057) and refuses a launcher-supplied one. D4b's framing as a data-quality problem was too kind to
+  it.
 - ~~**Compiled params for the withdrawal path**~~ — **done**, as `Blueprint.removeParams`; see D3. The premise
   recorded here was wrong: it said this "needs the orphan branch to carry the effective spec", when the
   **compile** already has it. The withdrawal path only ever needed to read what the compile knew, so the params

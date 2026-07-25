@@ -13,19 +13,19 @@ graph TD
   actuators["actuators<br/><small>0016 0022 0050 0053 0092 0117</small>"]
   api_surface["api-surface<br/><small>0006 0021 0026 0076 0091 0121</small>"]
   audit_telemetry["audit-telemetry<br/><small>0034 0065 0077 0121</small>"]
-  authz_identity["authz-identity<br/><small>0009 0028 0035 0079 0101</small>"]
+  authz_identity["authz-identity<br/><small>0009 0028 0035 0079 0101 0122</small>"]
   capability_framework["capability-framework<br/><small>0100 0104 0105 0106 0107 0110<br/>0111 0112 0113 0114</small>"]
   certificates_pki["certificates-pki<br/><small>0030 0043 0050 0098 0106</small>"]
   connectors["connectors<br/><small>0007 0014 0025 0026 0037 0038<br/>0039 0045 0086 0087 0088 0089<br/>0095 0097 0099 0113 0114 0115</small>"]
   credentials_secrets["credentials-secrets<br/><small>0009 0029 0052 0094 0098 0099<br/>0100 0106</small>"]
-  estate_as_code["estate-as-code<br/><small>0055 0056 0057 0103 0113 0116<br/>0118 0119 0120</small>"]
+  estate_as_code["estate-as-code<br/><small>0055 0056 0057 0103 0113 0116<br/>0118 0119 0120 0122</small>"]
   findings_drift["findings-drift<br/><small>0019 0020 0033 0043 0080 0085</small>"]
   foundation["foundation<br/><small>0001 0002 0004 0005 0006 0008<br/>0108 0109 0116</small>"]
   graph_model["graph-model<br/><small>0015 0017 0041 0042 0059 0060<br/>0079 0080 0081 0082 0084 0085<br/>0096 0114 0115 0119 0120</small>"]
   intent_compiler["intent-compiler<br/><small>0023 0030 0036 0055 0058 0083<br/>0085 0114 0118 0119</small>"]
-  orchestration["orchestration<br/><small>0010 0011 0018 0027 0031 0063<br/>0118</small>"]
+  orchestration["orchestration<br/><small>0010 0011 0018 0027 0031 0063<br/>0118 0122</small>"]
   plugin_port["plugin-port<br/><small>0046 0047 0048 0049 0051 0053<br/>0054 0103 0117 0121</small>"]
-  policy_governance["policy-governance<br/><small>0061 0062 0063 0064 0065 0066<br/>0067 0068 0069 0070 0071 0072<br/>0073 0074 0075 0076</small>"]
+  policy_governance["policy-governance<br/><small>0061 0062 0063 0064 0065 0066<br/>0067 0068 0069 0070 0071 0072<br/>0073 0074 0075 0076 0122</small>"]
   provisioning["provisioning<br/><small>0017 0058 0095 0096 0107 0110<br/>0111 0112 0113 0114 0115 0120</small>"]
   state_artifacts["state-artifacts<br/><small>0016 0029 0093 0097 0105 0112</small>"]
   substrate_ops["substrate-ops<br/><small>0013 0032 0040 0044 0045 0049<br/>0077 0078 0093 0101 0102</small>"]
@@ -126,6 +126,7 @@ Authorization & identity — OpenFGA, Principal, SCIM, workload identity.
 - [ADR-0035](0035-scim-service-provider.md) — SCIM 2.0 Service Provider: IdP-driven Principal lifecycle + group→team authz
 - [ADR-0079](0079-identity-as-a-cross-cutting-dimension.md) — Identity is a cross-cutting projection dimension, not a lowest-level type
 - [ADR-0101](0101-cluster-authz-activation-openbao-oidc-workload-identity.md) — Activate real cluster authz; OpenBao-OIDC workload identity; multi-issuer Principal resolution
+- [ADR-0122](0122-change-context-is-typed-and-partly-derived.md) — The change context is typed, and the facts core can know are derived, not asserted
 
 ### capability-framework
 
@@ -211,6 +212,7 @@ Estate-as-Code — CaC declarations, environments, composition, the estate CLI.
 - [ADR-0118](0118-parameter-plane.md) — The parameter plane: values reach the things that execute
 - [ADR-0119](0119-versioned-configuration-and-promotion.md) — Versioned configuration and promotion: one estate, N rings, immutable once pinned
 - [ADR-0120](0120-provisioning-joins-the-parameter-plane.md) — Provisioning joins the parameter plane: a Finding carries its own launch spec
+- [ADR-0122](0122-change-context-is-typed-and-partly-derived.md) — The change context is typed, and the facts core can know are derived, not asserted
 
 ### findings-drift
 
@@ -293,6 +295,7 @@ Orchestration — Triggers, Workflows/Gates, Steps, Runs, Actions, notifications
 - [ADR-0031](0031-action-execution-framework.md) — Action-execution framework (+ provision→configure seam)
 - [ADR-0063](0063-policy-step-dag-dispatch-v1.md) — Policy Step & DAG dispatch v1: the PDP as a synchronous checkpoint
 - [ADR-0118](0118-parameter-plane.md) — The parameter plane: values reach the things that execute
+- [ADR-0122](0122-change-context-is-typed-and-partly-derived.md) — The change context is typed, and the facts core can know are derived, not asserted
 
 ### plugin-port
 
@@ -333,6 +336,7 @@ Policy & governance — the PDP port, typed Controls, admission PEPs, obligation
 - [ADR-0074](0074-external-policy-engine-subprocess.md) — External policy engines (OPA / Kyverno) over the subprocess transport
 - [ADR-0075](0075-obligation-enforcement.md) — Obligation enforcement: a binding rider is enforced, not recorded-and-dropped
 - [ADR-0076](0076-admission-on-the-imperative-door.md) — Admission on the imperative door: the API is not a bypass around the compile-seam PEP
+- [ADR-0122](0122-change-context-is-typed-and-partly-derived.md) — The change context is typed, and the facts core can know are derived, not asserted
 
 ### provisioning
 
@@ -524,3 +528,4 @@ UI — React shell, schema-driven rendering, Views, descent, the first-party cli
 | [0119](0119-versioned-configuration-and-promotion.md) | estate-as-code, graph-model, intent-compiler |
 | [0120](0120-provisioning-joins-the-parameter-plane.md) | estate-as-code, graph-model, provisioning |
 | [0121](0121-task-event-scope.md) | api-surface, audit-telemetry, plugin-port, ui |
+| [0122](0122-change-context-is-typed-and-partly-derived.md) | authz-identity, estate-as-code, orchestration, policy-governance |

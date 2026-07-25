@@ -96,7 +96,7 @@ func TestRunDAG_PolicyRequiresApproval_Approved(t *testing.T) {
 	}, time.Minute)
 	env.ExecuteWorkflow(RunDAG, DAGInput{
 		WorkflowRunID: "wr-1", WorkflowName: "guarded", Principal: "alice",
-		Context: map[string]any{"environment": "prod"},
+		Environment: "prod", // stamped from the floor, never asserted (ADR-0122 D2)
 	})
 
 	if !env.IsWorkflowCompleted() || env.GetWorkflowError() != nil {
@@ -123,7 +123,7 @@ func TestRunDAG_PolicyRequiresApproval_NoApprover_FailsClosed(t *testing.T) {
 	env, final, status := dagTestEnv(t, spec, map[string]error{})
 	env.ExecuteWorkflow(RunDAG, DAGInput{
 		WorkflowRunID: "wr-1", WorkflowName: "guarded", Principal: "alice",
-		Context: map[string]any{"environment": "prod"},
+		Environment: "prod", // stamped from the floor, never asserted (ADR-0122 D2)
 	})
 
 	if !env.IsWorkflowCompleted() || env.GetWorkflowError() != nil {
@@ -158,8 +158,9 @@ func TestPolicyStepStatus(t *testing.T) {
 // as labels + environment, deterministically (ADR-0063).
 func TestAssembleChangeContext(t *testing.T) {
 	cc := assembleChangeContext(DAGInput{
-		Principal: "alice",
-		Context:   map[string]any{"environment": "prod", "team": "sre", "count": 3},
+		Principal:   "alice",
+		Environment: "prod", // the FLOOR's, stamped at launch (ADR-0122 D2)
+		Context:     map[string]any{"team": "sre", "count": 3},
 	})
 	if cc.Actor.ID != "alice" {
 		t.Fatalf("actor: %s", cc.Actor.ID)
@@ -224,7 +225,7 @@ func TestRunDAG_PolicyDenies(t *testing.T) {
 	env, final, status := dagTestEnv(t, spec, map[string]error{})
 	env.ExecuteWorkflow(RunDAG, DAGInput{
 		WorkflowRunID: "wr-1", WorkflowName: "guarded", Principal: "alice",
-		Context: map[string]any{"environment": "prod"},
+		Environment: "prod", // stamped from the floor, never asserted (ADR-0122 D2)
 	})
 
 	if !env.IsWorkflowCompleted() || env.GetWorkflowError() != nil {
@@ -251,20 +252,29 @@ func TestRunDAG_PolicyDenies(t *testing.T) {
 func TestChangeContextIsNotWorkflowInputs(t *testing.T) {
 	// Context populates the policy decision; LaunchParams must NOT.
 	cc := assembleChangeContext(DAGInput{
-		Principal: "alice",
-		Context:   map[string]any{"environment": "prod", "changeClass": "emergency"},
+		Principal:   "alice",
+		Environment: "prod",
+		Context:     map[string]any{"changeClass": "emergency"},
 		// A Workflow input that happens to be named like context must not leak into the
 		// decision — otherwise a parameter could silently change a policy outcome.
 		LaunchParams: map[string]any{"environment": "dev"},
 	})
 	if cc.Environment != "prod" {
-		t.Fatalf("environment must come from Context, got %q", cc.Environment)
+		t.Fatalf("environment must come from the floor, got %q", cc.Environment)
 	}
 	if cc.ChangeClass != "emergency" {
 		t.Fatalf("changeClass must come from Context, got %q", cc.ChangeClass)
 	}
-	if got := cc.Labels["environment"]; got != "prod" {
-		t.Fatalf("a LaunchParam must not overwrite a context label, got %q", got)
+	// ADR-0122 D2 made this stronger than "an input cannot overwrite a context label": the
+	// CONTEXT cannot supply an environment either. A launcher asserting one is refused at the
+	// chokepoint, so nothing that arrives here can move the policy environment off the floor's.
+	stamped := assembleChangeContext(DAGInput{
+		Principal:   "alice",
+		Environment: "prod",
+		Context:     map[string]any{"environment": "dev"},
+	})
+	if stamped.Environment != "prod" {
+		t.Errorf("the floor's environment is authoritative; a context key must not move it, got %q", stamped.Environment)
 	}
 	// And with no context at all, a Workflow's inputs cannot manufacture one.
 	bare := assembleChangeContext(DAGInput{

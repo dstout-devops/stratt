@@ -22,7 +22,7 @@ func TestWorkflowDAGInputCarriesEventAndInputs(t *testing.T) {
 	}
 	payload := map[string]any{"hostname": "web-07", "extra": "ignored"}
 
-	in, err := workflowDAGInput(tr, payload)
+	in, err := workflowDAGInput(tr, payload, "dev")
 	if err != nil {
 		t.Fatalf("workflowDAGInput: %v", err)
 	}
@@ -49,7 +49,7 @@ func TestWorkflowDAGInputCarriesEventAndInputs(t *testing.T) {
 func TestWorkflowDAGInputUnresolvableBindingErrors(t *testing.T) {
 	_, err := workflowDAGInput(types.Trigger{
 		Name: "t", WorkflowName: "w", Inputs: map[string]any{"host": "{{.event.missing}}"},
-	}, map[string]any{"hostname": "web-07"})
+	}, map[string]any{"hostname": "web-07"}, "dev")
 	if err == nil {
 		t.Fatal("a binding the payload cannot satisfy must error, not silently resolve to empty")
 	}
@@ -58,7 +58,7 @@ func TestWorkflowDAGInputUnresolvableBindingErrors(t *testing.T) {
 // TestWorkflowDAGInputWithoutInputs: the field is optional — a Workflow needing nothing must be
 // launchable by an event Trigger exactly as before.
 func TestWorkflowDAGInputWithoutInputs(t *testing.T) {
-	in, err := workflowDAGInput(types.Trigger{Name: "t", WorkflowName: "w"}, map[string]any{"a": 1})
+	in, err := workflowDAGInput(types.Trigger{Name: "t", WorkflowName: "w"}, map[string]any{"a": 1}, "dev")
 	if err != nil {
 		t.Fatal(err)
 	}

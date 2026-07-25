@@ -10,6 +10,7 @@ import (
 	"go.temporal.io/sdk/workflow"
 
 	"github.com/dstout-devops/stratt/core/internal/contract"
+	"github.com/dstout-devops/stratt/core/internal/policy"
 	"github.com/dstout-devops/stratt/core/internal/template"
 	"github.com/dstout-devops/stratt/types"
 )
@@ -39,8 +40,14 @@ type DAGInput struct {
 	// Principal's authz remain the control; these only parameterize what was already
 	// declared and gated.
 	LaunchParams map[string]any
+	// Environment is the floor's own active environment, stamped at launch and NOT asserted by
+	// the launcher (ADR-0122 D2). It used to arrive inside Context as a plain string, which
+	// meant a caller on a prod floor could assert `environment: dev` and walk past a prod
+	// freeze window — an authorization defect that typing the string would not have fixed.
+	Environment string
 	// Context is what the launcher asserts about the CHANGE, which policy Steps decide on
-	// (ADR-0063): environment, changeClass, committers, plus arbitrary labels.
+	// (ADR-0063): changeClass, committers, plus arbitrary labels. Environment is NOT in here
+	// any more (see above), and the core-owned `stratt.change/` namespace is refused from it.
 	//
 	// It is a SEPARATE field from LaunchParams deliberately (ADR-0118 D4). Both used to
 	// ride one bag, which made the two concepts indistinguishable: closing the world over
@@ -129,6 +136,17 @@ func RunDAG(ctx workflow.Context, in DAGInput) error {
 	// Same function, two call sites: one for a good error, one that nothing can skip.
 	if err := workflow.ExecuteActivity(ctx, a.ResolveLaunchInputs, spec, in.LaunchParams).
 		Get(ctx, &in.LaunchParams); err != nil {
+		return finishWorkflowRun(ctx, a, in, types.RunFailed, nil, err)
+	}
+	// The change context gets the SAME treatment at the SAME chokepoint (ADR-0122): what the
+	// launcher asserted is validated, and what core can establish is derived rather than
+	// accepted. An activity because the derivation reads the estate's Actuator declarations to
+	// learn which inputs elevate — I/O, so it cannot sit on the workflow goroutine.
+	//
+	// A refusal FAILS the Run rather than being dropped: the whole point is that a Run whose
+	// governance inputs are wrong must not proceed with a policy decision made on them.
+	if err := workflow.ExecuteActivity(ctx, a.ResolveChangeContext, spec, in.Context).
+		Get(ctx, &in.Context); err != nil {
 		return finishWorkflowRun(ctx, a, in, types.RunFailed, nil, err)
 	}
 	if err := workflow.ExecuteActivity(ctx, a.MarkWorkflowRunRunning, in.WorkflowRunID).Get(ctx, nil); err != nil {
@@ -477,6 +495,61 @@ func (a *Activities) ResolveLaunchInputs(_ context.Context, spec types.Workflow,
 		return nil, temporal.NewNonRetryableApplicationError(err.Error(), "InvalidLaunchInputs", err)
 	}
 	return resolved, nil
+}
+
+// ResolveChangeContext admits what a launcher asserted about the change and derives what core can
+// establish itself (ADR-0122) — the change-context half of the ADR-0118 D4 chokepoint, called
+// immediately after ResolveLaunchInputs so every transport gets the same admission.
+//
+// Two kinds of work, deliberately in one activity because they answer one question:
+//
+//   - VALIDATE the asserted set: an unknown `changeClass` is refused rather than coerced (an
+//     unknown class makes the Controls keyed on the intended one silently not fire — fail-open),
+//     and an asserted `environment` or `stratt.change/*` key is refused outright because those are
+//     core's to establish, not a launcher's to claim.
+//   - DERIVE the `stratt.change/privileged` label from the Workflow's own Steps and their
+//     Actuators' declared `elevatedInputs`. This is what makes ADR-0117 D1's typed `become`
+//     Control-gateable without core learning any tool's field names.
+//
+// NON-RETRYABLE on a violation, like its sibling: a rejected governance assertion is a data error
+// and the same body fails identically three attempts later (ADR-0024 D6).
+//
+// A missing Actuator declaration is NOT an error here — a Step naming an unknown Actuator fails at
+// dispatch with a better message, and turning that into a change-context failure would report the
+// wrong cause (§1.8). It simply derives nothing for that Step.
+func (a *Activities) ResolveChangeContext(ctx context.Context, spec types.Workflow, supplied map[string]any) (map[string]any, error) {
+	if err := policy.ValidateChangeContext(supplied); err != nil {
+		return nil, temporal.NewNonRetryableApplicationError(err.Error(), "InvalidChangeContext", err)
+	}
+	out := make(map[string]any, len(supplied)+1)
+	for k, v := range supplied {
+		out[k] = v
+	}
+	if a == nil || a.Store == nil {
+		// No store ⇒ no Actuator declarations to read, so nothing is derivable. This is the
+		// test harness, which registers this activity FOR REAL so every DAG test walks the
+		// admission half rather than mocking past it — the half that refuses a spoofed
+		// environment or a bogus change class, and the half that must never be skippable.
+		// Production always has a store: RunDAG's first activity is LoadWorkflow, which reads
+		// it, so a nil store fails long before here.
+		return out, nil
+	}
+	acts, err := a.Store.ListActuators(ctx)
+	if err != nil {
+		// Retryable on purpose: a store blip is not a governance verdict. Failing OPEN here
+		// would silently drop the privileged label and with it the Control that gates on it.
+		return nil, err
+	}
+	elevatedBy := make(map[string][]string, len(acts))
+	for _, act := range acts {
+		if len(act.ElevatedInputs) > 0 {
+			elevatedBy[act.Name] = act.ElevatedInputs
+		}
+	}
+	for k, v := range policy.DeriveElevation(spec.Steps, elevatedBy) {
+		out[k] = v
+	}
+	return out, nil
 }
 
 // ResolveStepParams substitutes a Step's {{.event.x}} / {{.steps.x}} bindings

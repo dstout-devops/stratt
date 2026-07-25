@@ -132,7 +132,7 @@ func (e *Engine) program(t types.Trigger) (*rules.Program, error) {
 // (which each Step resolves its own {{.event.x}} bindings from — ADR-0024 D2) AND the Trigger's
 // declared launch inputs, substituted against that same payload (ADR-0118 D5). Pure, so it is
 // testable without a Temporal client.
-func workflowDAGInput(t types.Trigger, payload map[string]any) (orchestrate.DAGInput, error) {
+func workflowDAGInput(t types.Trigger, payload map[string]any, environment string) (orchestrate.DAGInput, error) {
 	inputs, err := template.SubstituteParams(t.Inputs, template.Namespaces{"event": payload})
 	if err != nil {
 		return orchestrate.DAGInput{}, err
@@ -143,6 +143,10 @@ func workflowDAGInput(t types.Trigger, payload map[string]any) (orchestrate.DAGI
 		Trigger:      t.Name,
 		Event:        payload,
 		LaunchParams: inputs,
+		// The floor's own environment (ADR-0122 D2). A Trigger declares no environment for the
+		// change context: its `environments:` list selects WHETHER it fires here, which is a
+		// different question from what environment the resulting Run is in (ADR-0057).
+		Environment: environment,
 	}, nil
 }
 
@@ -168,7 +172,7 @@ func (e *Engine) launch(ctx context.Context, log *slog.Logger, t types.Trigger, 
 		//
 		// Built by a pure helper so what a firing Trigger actually sends is testable without a
 		// Temporal client — this package had no tests at all, which is how the gap survived.
-		in, perr := workflowDAGInput(t, ev.Payload)
+		in, perr := workflowDAGInput(t, ev.Payload, e.Store.ActiveEnvironment())
 		if perr != nil {
 			// A binding that cannot resolve against THIS payload is a terminal data error: the
 			// same event will never bind, so it is dropped, never redelivered (ADR-0024 D6 — a
