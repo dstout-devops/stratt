@@ -1853,6 +1853,10 @@ export interface components {
             cooldownSeconds?: number;
             /** @description Launch a declared Workflow instead of a single Run. */
             workflowName?: string;
+            /** @description Launch inputs for a `workflowName` target — the values its declared `inputs` schema validates, bound in Step params via {{.launch.x}} (ADR-0118 D5). Distinct from `params`, which are Step fields and are refused on a Workflow target. For an EVENT Trigger these may bind {{.event.x}} and are validated after substitution; for a SCHEDULE Trigger they are literal and validated at declaration. Invalid on a `viewName` target, which has no launch interface. */
+            inputs?: {
+                [key: string]: unknown;
+            };
             viewName?: string;
             /** @description Binds a parametrized View's {{.param.x}} placeholders; values may reference the firing event ({{.event.x}}) — ADR-0024. */
             viewParams?: Record<string, never>;

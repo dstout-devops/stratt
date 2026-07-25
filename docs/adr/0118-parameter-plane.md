@@ -322,18 +322,40 @@ plane — the split neither introduces nor worsens it — but the split is what 
 core-owned `ChangeContext` schema with enums, validated at the same chokepoint. Booked deliberately, because
 it is a security-relevant seam that deserves its own decision rather than riding in on a plumbing change.
 
-### D5 — A Trigger's params reach a Workflow target, on both paths
+### D5 — A Trigger declares `inputs` for a Workflow target — a new field, not a resurrected one
 
-`triggerengine` resolves `t.Params` and uses them on the Run-target path, then passes only `Event` for Workflow
-targets (`engine.go:141`); `triggers/reconcile.go` marshals `params` and then uses them **only** on the
-`RunAgainstView` branch, dropping them on `RunDAG` (`:161`). Both are fixed, or a scheduled Workflow Trigger
-stays silently inert (§1.8). Params are passed as launch inputs and validated by D4's chokepoint; a violation
-is a **terminal** data error — logged and dropped, never redelivered (ADR-0024 D6: a poison message must not
-loop).
+**Corrected during implementation.** The review's F8 read the two Trigger paths as _dropping_ `t.Params` for
+Workflow targets: `triggerengine` resolves them and passes only `Event` (`engine.go:141`), and
+`triggers/reconcile.go` marshals them then uses them only on the `RunAgainstView` branch (`:161`). Both
+readings of the code are accurate. The conclusion was not.
+
+`ValidateTrigger` **already refuses** `params` on a Workflow target — _"workflowName launches carry no Step
+fields (the Workflow declares its own)"_ (`desiredstate.go:852`) — and it is right to: `params` are the
+Actuator's Step params, which a Workflow's own Steps declare. So the drop sites were unreachable, and the real
+situation was larger than a dropped field: **a Trigger could not parameterize a Workflow at all.** The only
+Workflows a Trigger could launch were ones that needed no inputs.
+
+That was harmless while launches accepted anything, and becomes **fatal** under D2: a scheduled Trigger firing
+a Workflow with a `required` input now fails at every fire. Which is why it belongs in this change rather than
+a later one.
+
+So a Trigger gains **`inputs`**, distinct from `params`. Reusing `params` — making one field mean Step params
+on a Run target and launch inputs on a Workflow target — is precisely the overloading D4a had to undo, where
+one bag carried both a Workflow's parameters and the policy change context and neither could be typed. The
+existing prohibition on `params` stays intact and gains a pointer to the right field, and the mirror rule is
+added: `inputs` on a **Run** target is refused, because a Run has no launch interface and the field would be
+accepted and read by nothing (ADR-0117 D5a's port-with-no-address shape).
+
+Validation timing splits by kind, following ADR-0024 D4's precedent: a **schedule** Trigger's inputs are
+literal (event templates are rejected at declaration, D7), so they are validated against the Workflow's schema
+**at declaration** — in Git review, not when the schedule first fires. An **event** Trigger's inputs bind
+`{{.event.x}}`, so the placeholder is not the value the schema must accept; they are validated after
+substitution by D4's chokepoint, and a binding that cannot resolve against the payload is a **terminal** data
+error — dropped, never redelivered (ADR-0024 D6: a poison message must not loop).
 
 This **sharpens ADR-0024 D2**, which deliberately routed the payload for Workflow targets through
-`DAGInput.Event` for per-Step resolution; it is recorded as such rather than as a pure bug fix, and ADR-0024's
-deferred list is updated.
+`DAGInput.Event` for per-Step resolution. That still happens; what D2 did not cover is a Trigger that also
+wants to bind the Workflow's declared inputs. Both now travel.
 
 ### D6 — Core never parses tool content to discover parameters
 

@@ -369,7 +369,45 @@ func ParseDir(root string, decider policy.Decider) (Declarations, error) {
 		}
 		return out.Blueprints[i].Version < out.Blueprints[j].Version
 	})
+	if err := checkTriggerLaunchInputs(out); err != nil {
+		return out, err
+	}
 	return out, nil
+}
+
+// checkTriggerLaunchInputs validates a SCHEDULE Trigger's inputs against the declared inputs
+// of the Workflow it launches (ADR-0118 D5).
+//
+// It runs here, after every kind is parsed, because a Trigger is parsed BEFORE the Workflows
+// it may reference — so this is the earliest point both documents exist. That earliness is the
+// whole reason to do it: a schedule has no firing event, so its inputs are literal values
+// (event templates are rejected at declaration, ADR-0024 D7), which means they can be checked
+// in Git review instead of when the schedule first fires at 3am.
+//
+// EVENT Triggers are deliberately excluded. Their inputs carry {{.event.x}} bindings that
+// resolve only against a real payload, so the placeholder is not the value the schema must
+// accept — the same reasoning ADR-0024 D4 recorded for Actuator params, and they are validated
+// after substitution by the launch chokepoint instead. A Trigger naming a Workflow that does
+// not exist is likewise left alone: that is the compiler's existing cross-reference check, and
+// duplicating it here would give two different errors for one mistake.
+func checkTriggerLaunchInputs(decls Declarations) error {
+	byName := make(map[string]types.Workflow, len(decls.Workflows))
+	for _, w := range decls.Workflows {
+		byName[w.Name] = w
+	}
+	for _, t := range decls.Triggers {
+		if t.WorkflowName == "" || t.Kind != types.TriggerSchedule || len(t.Inputs) == 0 {
+			continue
+		}
+		wf, ok := byName[t.WorkflowName]
+		if !ok {
+			continue // unresolved ref: the compiler's job, not a second opinion here
+		}
+		if _, err := contract.ResolveLaunchInputs(wf.Name, wf.Inputs, t.Inputs); err != nil {
+			return fmt.Errorf("trigger %s: inputs do not satisfy workflow %s: %w", t.Name, wf.Name, err)
+		}
+	}
+	return nil
 }
 
 // admissionFileYAML is one estate admission policy (ADR-0073 §7.4b): a named set
@@ -765,6 +803,7 @@ type triggerFile struct {
 	ViewParams      map[string]any `yaml:"viewParams"`
 	Actuator        string         `yaml:"actuator"`
 	Params          map[string]any `yaml:"params"`
+	Inputs          map[string]any `yaml:"inputs"`
 	Slices          int            `yaml:"slices"`
 	CredentialRefs  []string       `yaml:"credentialRefs"`
 	Principal       string         `yaml:"principal"`
@@ -789,7 +828,7 @@ func parseTriggerFile(path string, raw []byte, opts ...ValidateOption) (string, 
 		ViewName: f.ViewName, ViewParams: f.ViewParams,
 		Actuator: f.Actuator, Params: f.Params,
 		Slices: f.Slices, CredentialRefs: f.CredentialRefs, Principal: f.Principal,
-		WorkflowName: f.WorkflowName, FacetWriteScope: f.FacetWriteScope,
+		WorkflowName: f.WorkflowName, Inputs: f.Inputs, FacetWriteScope: f.FacetWriteScope,
 		Environments: f.Environments,
 	}
 	if err := ValidateTrigger(t, opts...); err != nil {
@@ -812,7 +851,15 @@ func ValidateTrigger(t types.Trigger, opts ...ValidateOption) error {
 		return fmt.Errorf("trigger %s: exactly one launch target — viewName or workflowName", t.Name)
 	}
 	if workflowLaunch && (t.Actuator != "" || t.Params != nil || t.Slices != 0 || len(t.CredentialRefs) > 0) {
-		return fmt.Errorf("trigger %s: workflowName launches carry no Step fields (the Workflow declares its own)", t.Name)
+		return fmt.Errorf("trigger %s: workflowName launches carry no Step fields (the Workflow declares its own) — "+
+			"to parameterize the Workflow itself, use `inputs` (ADR-0118 D5)", t.Name)
+	}
+	// The mirror of the rule above: a Run target has no launch interface to fill, so `inputs`
+	// there would be accepted and read by nothing — the half-declaration shape this codebase
+	// keeps finding (ADR-0117 D5a's port with no address).
+	if runLaunch && t.Inputs != nil {
+		return fmt.Errorf("trigger %s: inputs are the launch interface of a workflowName target; "+
+			"a viewName Run has none (its Step params are `params`)", t.Name)
 	}
 	// Template namespace scope (ADR-0024): a Trigger's params/viewParams may
 	// bind {{.event.x}} only on event-kind Triggers (a schedule fire has no
@@ -822,7 +869,7 @@ func ValidateTrigger(t types.Trigger, opts ...ValidateOption) error {
 	if t.Kind == types.TriggerEvent {
 		allowed["event"] = true
 	}
-	if err := checkTemplateNamespaces("trigger "+t.Name, allowed, t.Params, t.ViewParams); err != nil {
+	if err := checkTemplateNamespaces("trigger "+t.Name, allowed, t.Params, t.ViewParams, t.Inputs); err != nil {
 		return err
 	}
 	switch t.Kind {

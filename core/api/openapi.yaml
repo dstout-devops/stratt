@@ -2282,6 +2282,17 @@ components:
         workflowName:
           type: string
           description: Launch a declared Workflow instead of a single Run.
+        inputs:
+          type: object
+          additionalProperties: true
+          description: >
+            Launch inputs for a `workflowName` target — the values its declared
+            `inputs` schema validates, bound in Step params via {{.launch.x}}
+            (ADR-0118 D5). Distinct from `params`, which are Step fields and are
+            refused on a Workflow target. For an EVENT Trigger these may bind
+            {{.event.x}} and are validated after substitution; for a SCHEDULE
+            Trigger they are literal and validated at declaration. Invalid on a
+            `viewName` target, which has no launch interface.
         viewName: { type: string }
         viewParams:
           type: object

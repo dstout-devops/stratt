@@ -158,11 +158,18 @@ func compile(t types.Trigger) (client.ScheduleSpec, *client.ScheduleWorkflowActi
 	if t.WorkflowName != "" {
 		// Workflow-launching schedule (the ADR-0010 rider): RunDAG creates
 		// its own execution row via EnsureWorkflowRun.
+		//
+		// `inputs` fill the target Workflow's declared launch interface (ADR-0118 D5). A
+		// schedule has no firing event, so these are literal values — event templates are
+		// rejected at declaration (ADR-0024 D7) — which is why they are validated against the
+		// Workflow's declared inputs at DECLARATION, in Git review, rather than when the
+		// schedule first fires.
 		action.Workflow = orchestrate.RunDAG
 		action.Args = []any{orchestrate.DAGInput{
 			WorkflowName: t.WorkflowName,
 			Principal:    t.Principal,
 			Trigger:      t.Name,
+			LaunchParams: t.Inputs,
 		}}
 	} else {
 		action.Workflow = orchestrate.RunAgainstView

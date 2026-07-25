@@ -186,3 +186,33 @@ func TestRemediationInputsHaveOneBindingSite(t *testing.T) {
 		t.Fatalf("with no compiled params the caller is the only binding site; got %#v %v", merged, clashes)
 	}
 }
+
+// TestTriggerWireRoundTripInputs: a Workflow-target Trigger's launch inputs must survive the
+// wire, for the same reason a Workflow's own inputs must (ADR-0118 D5).
+//
+// If the API path stripped them, `stratt apply` and the Git/reconcile path would disagree about
+// the same document: one would launch the Workflow parameterized, the other would launch it with
+// nothing and fail on a required input. A one-surface difference in behaviour, which is the §1.6
+// asymmetry this file's first test was written for.
+func TestTriggerWireRoundTripInputs(t *testing.T) {
+	inputs := map[string]any{"targetSubnet": "app-subnet"}
+	in := Trigger{
+		Name:         "nightly",
+		Kind:         TriggerKind("schedule"),
+		Cron:         ptr("0 2 * * *"),
+		WorkflowName: ptr("subnet-provision"),
+		Principal:    ptr("svc"),
+		Inputs:       &inputs,
+	}
+	got, err := triggerFromWire(in)
+	if err != nil {
+		t.Fatalf("a Trigger with launch inputs must survive the wire: %v", err)
+	}
+	if got.Inputs["targetSubnet"] != "app-subnet" {
+		t.Fatalf("inputs were dropped or mangled: %#v", got.Inputs)
+	}
+	back := triggerToWire(got)
+	if back.Inputs == nil || (*back.Inputs)["targetSubnet"] != "app-subnet" {
+		t.Fatalf("triggerToWire must publish inputs, got %#v", back.Inputs)
+	}
+}

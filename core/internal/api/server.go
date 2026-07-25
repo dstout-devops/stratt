@@ -675,6 +675,12 @@ func triggerToWire(t types.Trigger) Trigger {
 	if t.Params != nil {
 		out.Params = &t.Params
 	}
+	// The Workflow-target launch interface (ADR-0118 D5). Must round-trip, or the API path
+	// would strip a field the Git path honours — the §1.6 asymmetry that made a Workflow's
+	// own `inputs` falsely rejected at admission until it was caught.
+	if t.Inputs != nil {
+		out.Inputs = &t.Inputs
+	}
 	if t.Slices != 0 {
 		s := int64(t.Slices)
 		out.Slices = &s
@@ -1175,6 +1181,9 @@ func triggerFromWire(w Trigger, opts ...desiredstate.ValidateOption) (types.Trig
 	}
 	if w.Actuator != nil {
 		t.Actuator = *w.Actuator
+	}
+	if w.Inputs != nil {
+		t.Inputs = *w.Inputs
 	}
 	if w.Params != nil {
 		t.Params = *w.Params

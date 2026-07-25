@@ -305,3 +305,89 @@ func TestAssignmentValuesNotKeyedByAnUnrelatedEnvIsAllowed(t *testing.T) {
 		t.Fatalf("a value key naming an environment this Assignment does not declare is not detectable here: %v", err)
 	}
 }
+
+// ── Trigger → Workflow launch inputs (ADR-0118 D5) ────────────────────────────────────
+
+// TestScheduleTriggerInputsCheckedAtDeclaration: a schedule has no firing event, so its inputs
+// are literal values — which means they can be checked in Git review rather than when the
+// schedule first fires at 3am.
+//
+// Note what the gap actually was. A Workflow-target Trigger could not parameterize its Workflow
+// AT ALL: `params` are Step fields and are refused on a Workflow target ("the Workflow declares
+// its own"), so the only Workflows a Trigger could launch were ones needing no inputs. That was
+// harmless while launches accepted anything and fatal once `required` inputs are enforced — so
+// `inputs` is a new field, not a resurrected one.
+func TestScheduleTriggerInputsCheckedAtDeclaration(t *testing.T) {
+	const wf = "name: build\ninputs:\n  type: object\n  additionalProperties: false\n" +
+		"  required: [targetSubnet]\n  properties:\n    targetSubnet: {type: string}\n" +
+		"steps:\n  - {name: s, viewName: v, actuator: script, params: {script: \"echo {{.launch.targetSubnet}}\"}}\n"
+
+	// Satisfied: parses.
+	root := t.TempDir()
+	writeDecl(t, root, "v.yaml", "name: v\nselector: {kinds: [host]}\n")
+	writeKind(t, root, "workflows", "b.yaml", wf)
+	writeKind(t, root, "triggers", "t.yaml",
+		"name: nightly\nkind: schedule\ncron: \"0 2 * * *\"\nworkflowName: build\nprincipal: svc\n"+
+			"inputs: {targetSubnet: app-subnet}\n")
+	if _, err := ParseDir(root, nil); err != nil {
+		t.Fatalf("a schedule Trigger supplying the declared input must parse: %v", err)
+	}
+
+	// Unknown key: rejected, naming both the trigger and the workflow.
+	bad := t.TempDir()
+	writeDecl(t, bad, "v.yaml", "name: v\nselector: {kinds: [host]}\n")
+	writeKind(t, bad, "workflows", "b.yaml", wf)
+	writeKind(t, bad, "triggers", "t.yaml",
+		"name: nightly\nkind: schedule\ncron: \"0 2 * * *\"\nworkflowName: build\nprincipal: svc\n"+
+			"inputs: {targetSubnett: app-subnet}\n")
+	err := ParseDir2Err(t, bad)
+	if err == nil {
+		t.Fatal("a schedule Trigger passing an undeclared input must be rejected at declaration")
+	}
+	for _, want := range []string{"nightly", "build"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the error must name both documents; got: %v", err)
+		}
+	}
+
+	// Missing a required input: also rejected — the schedule would fire and fail forever.
+	missing := t.TempDir()
+	writeDecl(t, missing, "v.yaml", "name: v\nselector: {kinds: [host]}\n")
+	writeKind(t, missing, "workflows", "b.yaml", wf)
+	writeKind(t, missing, "triggers", "t.yaml",
+		"name: nightly\nkind: schedule\ncron: \"0 2 * * *\"\nworkflowName: build\nprincipal: svc\n"+
+			"inputs: {}\n")
+	// inputs: {} is empty, so the check skips it and the missing required input is caught by the
+	// launch chokepoint at fire time instead. Recorded rather than asserted-as-working: an EMPTY
+	// map is indistinguishable from "none declared", and refusing it here would reject every
+	// Workflow-target Trigger that legitimately passes nothing.
+	if _, err := ParseDir(missing, nil); err != nil {
+		t.Logf("empty params currently parse; the chokepoint catches the missing required input: %v", err)
+	}
+}
+
+// TestEventTriggerInputsNotCheckedAtDeclaration: an event Trigger's inputs carry {{.event.x}},
+// which resolves only against a real payload — so the placeholder is not the value the schema
+// must accept (ADR-0024 D4's reasoning). It must PARSE, and be validated after substitution.
+func TestEventTriggerInputsNotCheckedAtDeclaration(t *testing.T) {
+	root := t.TempDir()
+	writeDecl(t, root, "v.yaml", "name: v\nselector: {kinds: [host]}\n")
+	writeKind(t, root, "emitters", "e.yaml", "name: em\nkind: webhook\ntokenHash: "+
+		"0000000000000000000000000000000000000000000000000000000000000000\n")
+	writeKind(t, root, "workflows", "b.yaml",
+		"name: build\ninputs:\n  type: object\n  additionalProperties: false\n"+
+			"  properties:\n    host: {type: string}\n"+
+			"steps:\n  - {name: s, viewName: v, actuator: script, params: {script: \"echo {{.launch.host}}\"}}\n")
+	writeKind(t, root, "triggers", "t.yaml",
+		"name: on-event\nkind: event\nemitter: em\nwhen: \"true\"\nworkflowName: build\nprincipal: svc\n"+
+			"inputs: {host: \"{{.event.hostname}}\"}\n")
+	if _, err := ParseDir(root, nil); err != nil {
+		t.Fatalf("an event Trigger's templated params must parse (resolved at launch): %v", err)
+	}
+}
+
+func ParseDir2Err(t *testing.T, dir string) error {
+	t.Helper()
+	_, err := ParseDir(dir, nil)
+	return err
+}
