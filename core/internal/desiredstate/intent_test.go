@@ -823,3 +823,146 @@ func TestBlueprintNamingAnUndeclaredWorkflowIsLeftToTheCompiler(t *testing.T) {
 		t.Fatalf("an unresolved workflow ref must not be reported by this check: %v", err)
 	}
 }
+
+// checkProvisioningBuildInputs is the provisioning half of ADR-0118 D3's cross-check (ADR-0120 D3).
+// Provisioning has no compile, so this is the earliest point a build Workflow's interface can be
+// checked against what the reconcile will actually hand it — and unlike a Blueprint route, the params
+// are CORE-generated, so a mismatch is always a Workflow authoring error.
+//
+// It earned its keep immediately: it caught estate/workflows/vsphere-vm-build.yaml declaring no
+// `inputs` at all, which meant the vsphere-dc environment's Compute builder could not be told which
+// instance to build.
+func TestProvisioningBuildInputsCheckedAtDeclaration(t *testing.T) {
+	const intent = "name: web-fleet\nkind: Intent/Compute\nspec:\n" +
+		"  count: 2\n  namePrefix: web\n  projectKind: host\n  labels: {fleet: web}\n" +
+		"  requires: [provisioning]\n  params: {region: us-east-1}\n"
+	// An Actuator advertising a Compute builder is what makes a Workflow a build Workflow.
+	const act = "name: awsec2\naddress: stratt-awsec2:9090\npluginIdentity: awsec2\ntier: trusted\n" +
+		"provides: [provisioning]\nprovisions: {Compute: compute-build}\n"
+
+	// The step's params are LITERAL, not {{.launch.x}} bindings. That is faithful to the defect:
+	// the real vsphere-vm-build hardcoded `name: web-01`, so checkLaunchFields — which only fires on
+	// a {{.launch.x}} binding — saw nothing wrong. A Workflow that binds nothing is exactly the one
+	// this check has to catch, and a fixture that bound something would be caught by the older check
+	// and prove nothing about this one.
+	setup := func(t *testing.T, wfInputs string) string {
+		t.Helper()
+		root := t.TempDir()
+		writeDecl(t, root, "v.yaml", "name: v\nselector: {kinds: [host]}\n")
+		writeKind(t, root, "intents", "i.yaml", intent)
+		writeKind(t, root, "actuators", "a.yaml", act)
+		writeKind(t, root, "workflows", "w.yaml",
+			"name: compute-build\n"+wfInputs+
+				"steps:\n  - {name: s, viewName: v, actuator: script, params: {script: \"echo web-01\"}}\n")
+		return root
+	}
+
+	// The full generated set: parses.
+	full := "inputs:\n  type: object\n  additionalProperties: false\n  required: [instance]\n  properties:\n" +
+		"    instance: {type: string}\n    ordinal: {type: integer}\n    projectKind: {type: string}\n" +
+		"    labels: {type: object, additionalProperties: true}\n" +
+		"    placement: {type: object, additionalProperties: true}\n" +
+		"    params: {type: object, additionalProperties: true}\n"
+	if _, err := ParseDir(setup(t, full), nil); err != nil {
+		t.Fatalf("a build Workflow declaring the generated set must parse: %v", err)
+	}
+
+	// NO inputs at all — the defect this whole ADR is about: the reconcile cannot say which
+	// instance, so every instance after the first is unbuildable through the gated path.
+	err := ParseDir2Err(t, setup(t, ""))
+	if err == nil {
+		t.Fatal("a build Workflow with no inputs must be refused")
+	}
+	for _, want := range []string{"web-fleet", "compute-build", "declares no `inputs`", "unbuildable"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the refusal must name both documents and the consequence; want %q in: %v", want, err)
+		}
+	}
+
+	// Missing ONE key the reconcile supplies: an undeclared input makes the launch a 400, so the
+	// build could never run. Names the key and the declared set.
+	partial := "inputs:\n  type: object\n  additionalProperties: false\n  properties:\n" +
+		"    instance: {type: string}\n    ordinal: {type: integer}\n    projectKind: {type: string}\n" +
+		"    labels: {type: object, additionalProperties: true}\n" +
+		"    placement: {type: object, additionalProperties: true}\n"
+	err = ParseDir2Err(t, setup(t, partial))
+	if err == nil {
+		t.Fatal("a build Workflow missing a supplied input must be refused")
+	}
+	if !strings.Contains(err.Error(), `"params" is not a declared input`) {
+		t.Errorf("the refusal must name the missing key: %v", err)
+	}
+
+	// REQUIRING something the reconcile never sends: every build would be refused at launch. This is
+	// the direction a Workflow author gets wrong by copying a hand-launched Workflow.
+	extra := full + "  required: [instance, targetSubnet]\n"
+	_ = extra // required is declared once above; build the variant explicitly instead
+	needsExtra := "inputs:\n  type: object\n  additionalProperties: false\n  required: [instance, targetSubnet]\n  properties:\n" +
+		"    instance: {type: string}\n    ordinal: {type: integer}\n    projectKind: {type: string}\n" +
+		"    labels: {type: object, additionalProperties: true}\n" +
+		"    placement: {type: object, additionalProperties: true}\n" +
+		"    params: {type: object, additionalProperties: true}\n    targetSubnet: {type: string}\n"
+	err = ParseDir2Err(t, setup(t, needsExtra))
+	if err == nil {
+		t.Fatal("a build Workflow requiring an input the reconcile never supplies must be refused")
+	}
+	if !strings.Contains(err.Error(), `requires input "targetSubnet"`) {
+		t.Errorf("the refusal must name the unsatisfiable requirement: %v", err)
+	}
+}
+
+// The check must cover EVERY advertised Compute builder, not just whichever one this environment
+// happens to bind. Provider selection depends on the active environment and on which providers are
+// VERIFIED — runtime state Git cannot see (ADR-0110 D3, ADR-0113 D2) — so a fix that satisfied only
+// the bound provider would break the other on a binding change, at exactly the moment nobody is
+// looking at the build Workflow.
+func TestEveryAdvertisedBuilderIsChecked(t *testing.T) {
+	root := t.TempDir()
+	writeDecl(t, root, "v.yaml", "name: v\nselector: {kinds: [host]}\n")
+	writeKind(t, root, "intents", "i.yaml",
+		"name: web-fleet\nkind: Intent/Compute\nspec:\n  count: 1\n  namePrefix: web\n"+
+			"  projectKind: host\n  labels: {fleet: web}\n  requires: [provisioning]\n")
+	writeKind(t, root, "actuators", "a1.yaml",
+		"name: awsec2\naddress: stratt-awsec2:9090\npluginIdentity: awsec2\ntier: trusted\n"+
+			"provides: [provisioning]\nprovisions: {Compute: compute-build}\n")
+	// A SECOND provider for the same kind — the vcenter/awsec2 situation in the real estate.
+	writeKind(t, root, "actuators", "a2.yaml",
+		"name: vcenter\naddress: stratt-vcenter:9090\npluginIdentity: vcenter\ntier: trusted\n"+
+			"provides: [provisioning]\nprovisions: {Compute: vsphere-vm-build}\n")
+	good := "inputs:\n  type: object\n  additionalProperties: false\n  properties:\n" +
+		"    instance: {type: string}\n    ordinal: {type: integer}\n    projectKind: {type: string}\n" +
+		"    labels: {type: object, additionalProperties: true}\n"
+	writeKind(t, root, "workflows", "w1.yaml", "name: compute-build\n"+good+
+		"steps:\n  - {name: s, viewName: v, actuator: script, params: {script: \"echo web-01\"}}\n")
+	// The second builder is NOT parameterized — must still be caught.
+	writeKind(t, root, "workflows", "w2.yaml", "name: vsphere-vm-build\n"+
+		"steps:\n  - {name: s, viewName: v, actuator: script, params: {script: echo}}\n")
+
+	err := ParseDir2Err(t, root)
+	if err == nil {
+		t.Fatal("a second advertised builder must be checked too")
+	}
+	if !strings.Contains(err.Error(), "vsphere-vm-build") {
+		t.Fatalf("the refusal must name the unfixed builder, not stop at the first: %v", err)
+	}
+}
+
+// A SINGLETON kind is deliberately not checked: its params differ (stratt.intent/singleton rather
+// than instance/ordinal) and ADR-0120 books that as a follow-up. Checking it here would assert a
+// shape that does not exist yet and fail the shipped subnet/vlan builders for the wrong reason.
+func TestSingletonKindsAreNotYetChecked(t *testing.T) {
+	root := t.TempDir()
+	writeDecl(t, root, "v.yaml", "name: v\nselector: {kinds: [host]}\n")
+	writeKind(t, root, "intents", "i.yaml",
+		"name: app-subnet\nkind: Intent/Subnet\nspec:\n  projectKind: subnet\n"+
+			"  requires: [provisioning]\n  params: {cidr: 10.0.1.0/24}\n")
+	writeKind(t, root, "actuators", "a.yaml",
+		"name: crossplane\naddress: stratt-crossplane:9090\npluginIdentity: crossplane\ntier: trusted\n"+
+			"provides: [provisioning]\nprovisions: {Subnet: subnet-build}\n")
+	writeKind(t, root, "workflows", "w.yaml",
+		"name: subnet-build\nsteps:\n  - {name: s, viewName: v, actuator: script, params: {script: echo}}\n")
+
+	if _, err := ParseDir(root, nil); err != nil {
+		t.Fatalf("singleton builders are a booked follow-up, not a failure: %v", err)
+	}
+}

@@ -208,9 +208,18 @@ Two consequences to name, because they are work rather than surprises:
 1. The declaration check is per-**(Intent, resolved build Workflow)** pair, not per-Workflow: whether
    `placement` is supplied depends on whether that Intent declares it. So `placement` must be **optional**
    in every build Workflow's closed schema.
-2. `estate/workflows/app-tier-build.yaml` currently declares `required: [targetSubnet]`, which is not in
-   D2's table. That Workflow must be rewritten to take `placement` — the check will fail it otherwise,
-   correctly.
+2. The review expected `estate/workflows/app-tier-build.yaml` to fail this check, since it declares
+   `required: [targetSubnet]` which D2's table does not supply. **It does not fail, and the reason is
+   worth recording: that Workflow is unreachable.** No provider's `provisions` map names it, and
+   `app-tier` is an `Intent/Compute`, so its build resolves through `provisions[Compute]` — to
+   `compute-build` or `vsphere-vm-build`, never to `app-tier-build`. Nothing else references it either.
+   It is dead estate, and the same smell ADR-0083 D4's sufficiency gate catches for Facet schemas and
+   routes with no consumer. Booked below rather than deleted here, because deleting a shipped
+   declaration is a separate decision from plumbing values.
+
+   What the check DOES fail is `vsphere-vm-build`, which declared no `inputs` at all — so the
+   vsphere-dc environment's Compute builder could not be told which instance to build. It is fixed in
+   the same change, which is the check earning its keep on its first run.
 
 ### D4 — `Placement` reaches the build unchanged, and stays per-fleet for now
 
@@ -280,6 +289,17 @@ possible _with the right values_, which is what removes the incentive to reach f
 ## Follow-ups
 
 - **Keyed placement-aware spread** (per-AZ replicas) — the next ADR, with D2 as its prerequisite.
+- **`estate/workflows/app-tier-build.yaml` is unreachable** (see D3): no `provisions` map names it and
+  nothing launches it. Either advertise it or delete it; a build Workflow no provider routes to is a
+  declaration that cannot be exercised, and it misled this ADR's own review into predicting a failure
+  that could not happen.
+- **Fleet-shape provider params still live in the build Workflow.** `vsphere-vm-build` keeps literal
+  `cpus`/`memoryMB` because `Intent/Compute.params` is opaque and provider-shaped: the reference
+  estate's Compute Intents carry EC2's `region`/`instanceType`/`ami`, so binding
+  `{{.launch.params.cpus}}` would fail CLOSED against exactly the Intents that exist (the substituter
+  refuses an unknown field, and there are no conditionals — ADR-0083 D5). The honest fix is an Intent
+  per substrate boundary (ADR-0113 D2 already makes environment that boundary), not a template that
+  guesses. Recorded because it is the one remaining place a build Workflow holds configuration.
 - **The singleton path** (`PlanSingletons`, ADR-0059 D4) has the same detail-blob shape and should join
   D2; its params differ (`stratt.intent/singleton` rather than `instance`/`ordinal`) but the mechanism is
   identical. Until then `subnet-build.yaml` and `vlan-build.yaml` keep hardcoded correlation labels —

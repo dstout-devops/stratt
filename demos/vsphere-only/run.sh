@@ -54,7 +54,20 @@ printf "    regions/AZs: %s   datastores: %s   VMs: %s\n" "$(count availability-
 
 # ── WRITE: launch the gated build Workflow, approve, converge ──────────────────────────────────────
 echo "demo: launch Workflow ${WORKFLOW} as ${PRINCIPAL} (provision web-01)"
-run_id=$(api POST "/workflows/${WORKFLOW}/runs" | jq -r '.id')
+# The instance identity is SUPPLIED AT LAUNCH, not baked into the Workflow (ADR-0120 D2). This demo
+# has no Intent/Compute, so it plays the part the provisioning reconcile plays in the reference
+# estate: it names which instance to build and the labels the projection must carry, INCLUDING the
+# stratt.intent/instance correlation label the next reconcile matches on.
+INSTANCE="${STRATT_DEMO_INSTANCE:-web-01}"
+launch_body=$(jq -nc --arg i "$INSTANCE" '{
+  inputs: {
+    instance: $i,
+    ordinal: 1,
+    projectKind: "host",
+    labels: { fleet: "web", "stratt.intent/instance": $i }
+  }
+}')
+run_id=$(api POST "/workflows/${WORKFLOW}/runs" -d "$launch_body" | jq -r '.id')
 [ -n "$run_id" ] && [ "$run_id" != "null" ] || { echo "FAIL: no WorkflowRun id returned"; exit 1; }
 echo "  WorkflowRun ${run_id}"
 

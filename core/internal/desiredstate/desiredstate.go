@@ -21,6 +21,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -31,6 +32,7 @@ import (
 	"github.com/dstout-devops/stratt/core/internal/contract"
 	"github.com/dstout-devops/stratt/core/internal/graph"
 	"github.com/dstout-devops/stratt/core/internal/policy"
+	"github.com/dstout-devops/stratt/core/internal/provision"
 	"github.com/dstout-devops/stratt/core/internal/rules"
 	"github.com/dstout-devops/stratt/core/internal/template"
 	"github.com/dstout-devops/stratt/types"
@@ -383,6 +385,9 @@ func ParseDir(root string, decider policy.Decider) (Declarations, error) {
 	if err := checkBlueprintParamNames(out); err != nil {
 		return out, err
 	}
+	if err := checkProvisioningBuildInputs(out); err != nil {
+		return out, err
+	}
 	return out, nil
 }
 
@@ -499,6 +504,125 @@ func checkBlueprintParamNames(decls Declarations) error {
 		}
 	}
 	return nil
+}
+
+// checkProvisioningBuildInputs validates that every Workflow a provider advertises as a gated
+// BUILD Workflow can actually accept what the provisioning reconcile will hand it (ADR-0120 D3).
+//
+// Provisioning has no compile — it is a sibling reconcile (ADR-0058) — so this is the equivalent of
+// the compile-time cross-check a Blueprint route gets, at the earliest point it can run (§1.8:
+// declaration > compile > launch). It matters more here than for a route, because the params are
+// CORE-GENERATED: a mismatch is always a Workflow authoring error, and the author is the only
+// person who can fix it.
+//
+// IT CHECKS EVERY CANDIDATE, NOT THE WINNER, and that is deliberately stronger than the reconcile.
+// Which provider wins depends on the daemon's active environment and on which providers are
+// VERIFIED — runtime state Git cannot see (ADR-0110 D3, ADR-0113 D2). So every Workflow named in any
+// provider's `provisions` map for a kind must fit. `estate/actuators/awsec2.yaml` and
+// `vcenter.yaml` both advertise a Compute builder; a fix that satisfied only the one bound in this
+// environment would break the other on a binding change, which is precisely the moment nobody is
+// looking at the build Workflow.
+//
+// The expected param set is taken from provision.BuildLaunchParams itself rather than a list
+// duplicated here, so the check cannot drift from what the reconcile actually sends.
+func checkProvisioningBuildInputs(decls Declarations) error {
+	byName := make(map[string]types.Workflow, len(decls.Workflows))
+	for _, w := range decls.Workflows {
+		byName[w.Name] = w
+	}
+	// Every Workflow any provider advertises for a kind, keyed by the bare kind ("Compute").
+	builders := map[string][]string{}
+	add := func(provisions map[string]string) {
+		for kind, wf := range provisions {
+			if !slices.Contains(builders[kind], wf) {
+				builders[kind] = append(builders[kind], wf)
+			}
+		}
+	}
+	for _, a := range decls.Actuators {
+		add(a.Provisions)
+	}
+	for _, c := range decls.Connectors {
+		add(c.Provisions)
+	}
+	for k := range builders {
+		sort.Strings(builders[k])
+	}
+
+	for _, in := range decls.Intents {
+		// Compute only. The singleton kinds' params differ (stratt.intent/singleton rather than
+		// instance/ordinal) and ADR-0120 books them as a follow-up rather than guessing, so
+		// checking them here would assert a shape that does not exist yet.
+		if in.Kind != types.IntentCompute {
+			continue
+		}
+		pin, err := provision.FromIntent(in)
+		if err != nil {
+			return fmt.Errorf("intent %s: %w", in.Name, err)
+		}
+		// One representative instance is enough: the ordinal changes the VALUES, never the KEY
+		// SET, and this check is about keys.
+		sample := provision.Instance{
+			Name:    provision.InstanceName(pin.Spec.NamePrefix, 1, pin.Spec.Count),
+			Intent:  in.Name,
+			Ordinal: 1,
+		}
+		supplied := provision.BuildLaunchParams(pin, sample)
+
+		for _, wfName := range builders["Compute"] {
+			wf, ok := byName[wfName]
+			if !ok {
+				continue // declared elsewhere (or nowhere): the reconcile's cross-ref check, not a second opinion here
+			}
+			what := fmt.Sprintf("intent %s builds via workflow %s", in.Name, wfName)
+			declared, err := contract.InputNames(wf.Inputs)
+			if err != nil {
+				return fmt.Errorf("%s: inputs: %w", what, err)
+			}
+			if len(declared) == 0 {
+				return fmt.Errorf(
+					"%s, which declares no `inputs` — so the reconcile cannot tell it WHICH instance to "+
+						"build and every instance after the first is unbuildable through the gated path "+
+						"(ADR-0120 D2). Declare inputs for: %v", what, sortedKeys(supplied))
+			}
+			names := make([]string, 0, len(declared))
+			for n := range declared {
+				names = append(names, n)
+			}
+			sort.Strings(names)
+			for _, k := range sortedKeys(supplied) {
+				if !declared[k] {
+					return fmt.Errorf(
+						"%s, but %q is not a declared input of that workflow (declared: %v). The reconcile "+
+							"supplies it, and a launch carrying an undeclared input is refused, so this "+
+							"build could never run", what, k, names)
+				}
+			}
+			required, err := contract.RequiredNames(wf.Inputs)
+			if err != nil {
+				return fmt.Errorf("%s: inputs: %w", what, err)
+			}
+			for _, req := range required {
+				if _, ok := supplied[req]; !ok {
+					return fmt.Errorf(
+						"%s, which requires input %q — but the provisioning reconcile never supplies that, "+
+							"so every build would be refused. It sends: %v",
+						what, req, sortedKeys(supplied))
+				}
+			}
+		}
+	}
+	return nil
+}
+
+// sortedKeys returns a map's keys in deterministic order, so an error message reads the same twice.
+func sortedKeys(m map[string]any) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // admissionFileYAML is one estate admission policy (ADR-0073 §7.4b): a named set
