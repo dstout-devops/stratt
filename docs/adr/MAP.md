@@ -18,11 +18,11 @@ graph TD
   certificates_pki["certificates-pki<br/><small>0030 0043 0050 0098 0106</small>"]
   connectors["connectors<br/><small>0007 0014 0025 0026 0037 0038<br/>0039 0045 0086 0087 0088 0089<br/>0095 0097 0099 0113 0114 0115</small>"]
   credentials_secrets["credentials-secrets<br/><small>0009 0029 0052 0094 0098 0099<br/>0100 0106</small>"]
-  estate_as_code["estate-as-code<br/><small>0055 0056 0057 0103 0113 0116<br/>0118</small>"]
+  estate_as_code["estate-as-code<br/><small>0055 0056 0057 0103 0113 0116<br/>0118 0119</small>"]
   findings_drift["findings-drift<br/><small>0019 0020 0033 0043 0080 0085</small>"]
   foundation["foundation<br/><small>0001 0002 0004 0005 0006 0008<br/>0108 0109 0116</small>"]
-  graph_model["graph-model<br/><small>0015 0017 0041 0042 0059 0060<br/>0079 0080 0081 0082 0084 0085<br/>0096 0114 0115</small>"]
-  intent_compiler["intent-compiler<br/><small>0023 0030 0036 0055 0058 0083<br/>0085 0114 0118</small>"]
+  graph_model["graph-model<br/><small>0015 0017 0041 0042 0059 0060<br/>0079 0080 0081 0082 0084 0085<br/>0096 0114 0115 0119</small>"]
+  intent_compiler["intent-compiler<br/><small>0023 0030 0036 0055 0058 0083<br/>0085 0114 0118 0119</small>"]
   orchestration["orchestration<br/><small>0010 0011 0018 0027 0031 0063<br/>0118</small>"]
   plugin_port["plugin-port<br/><small>0046 0047 0048 0049 0051 0053<br/>0054 0103 0117</small>"]
   policy_governance["policy-governance<br/><small>0061 0062 0063 0064 0065 0066<br/>0067 0068 0069 0070 0071 0072<br/>0073 0074 0075 0076</small>"]
@@ -207,6 +207,7 @@ Estate-as-Code — CaC declarations, environments, composition, the estate CLI.
 - [ADR-0113](0113-vsphere-provisioning-provider.md) — vSphere as a `provisioning` provider: the vcenter plugin gains a build verb (VM + DVPortgroup)
 - [ADR-0116](0116-demo-library.md) — The demo library: reproducible, narrated, turnkey teaching scenarios
 - [ADR-0118](0118-parameter-plane.md) — The parameter plane: values reach the things that execute
+- [ADR-0119](0119-versioned-configuration-and-promotion.md) — Versioned configuration and promotion: one estate, N rings, immutable once pinned
 
 ### findings-drift
 
@@ -256,6 +257,7 @@ Graph model — Entity/Facet/Relation/Contract primitives, projection & liveness
 - [ADR-0096](0096-ec2-resource-graph-entities.md) — The EC2 resource graph: VPC / subnet / security-group / volume as Observed Entities
 - [ADR-0114](0114-entity-lifecycle-and-decommission-reach-path.md) — Entity lifecycle Actions + the desired-state decommission reach-path
 - [ADR-0115](0115-vsphere-read-breadth.md) — vSphere read breadth: the inventory graph (region/AZ reuse, uncovered-Facet posture)
+- [ADR-0119](0119-versioned-configuration-and-promotion.md) — Versioned configuration and promotion: one estate, N rings, immutable once pinned
 
 ### intent-compiler
 
@@ -272,6 +274,7 @@ Intent compiler — Intent/Assignment/Blueprint/Baseline compile to Runs.
 - [ADR-0085](0085-relation-presence-baseline.md) — Relation-presence Baseline: desired state over graph topology, not just node facets
 - [ADR-0114](0114-entity-lifecycle-and-decommission-reach-path.md) — Entity lifecycle Actions + the desired-state decommission reach-path
 - [ADR-0118](0118-parameter-plane.md) — The parameter plane: values reach the things that execute
+- [ADR-0119](0119-versioned-configuration-and-promotion.md) — Versioned configuration and promotion: one estate, N rings, immutable once pinned
 
 ### orchestration
 
@@ -511,3 +514,4 @@ UI — React shell, schema-driven rendering, Views, descent, the first-party cli
 | [0116](0116-demo-library.md) | estate-as-code, foundation, ui |
 | [0117](0117-ansible-execution-depth-and-content.md) | actuators, plugin-port |
 | [0118](0118-parameter-plane.md) | estate-as-code, intent-compiler, orchestration |
+| [0119](0119-versioned-configuration-and-promotion.md) | estate-as-code, graph-model, intent-compiler |

@@ -485,8 +485,11 @@ changes instance identity and owes a migration story for fleets already carrying
   branch to carry the effective spec, not the raw `Intent.Spec` — see D3.
 - **A fourth per-environment overlay layer**, if duplication across sibling Assignments becomes real pain.
   Note it must obey D1's disjointness or it re-introduces the ladder.
-- **Tighten `contracts/intents/application.schema.json`** — currently `additionalProperties: true` with no
-  `required`, so `port` is untyped at the Intent seam. Until then, D2's input schema is the only real type
-  check in the chain, which is an argument for doing it soon.
+- ~~**Tighten `contracts/intents/application.schema.json`**~~ — **done.** Landed as
+  `application.v2.schema.json` (a sibling version, because tightening a type is breaking) typing `port` as a
+  string to match the `app.config` Facet. The live run had already shown the cost of leaving it: an Intent
+  declaring `port: 443` parsed cleanly and failed only at facet write-back. Still deliberately OPEN — closing
+  it would force core to know every application's config fields (§1.1/§9), so only fields a shipping route
+  consumes are typed.
 - **`environments` as a single value rather than a set**, if per-environment values make the set genuinely
   awkward. Not proposed here; it would touch every EnvScoped Kind.
