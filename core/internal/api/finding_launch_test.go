@@ -139,3 +139,41 @@ func TestBaselineWithoutRemediationRoutesToNothing(t *testing.T) {
 		t.Fatalf("the message must name the Baseline: %s", prob.Message)
 	}
 }
+
+// A PROVISION Finding must resolve through the same door as the others (ADR-0120 D5). Its Baseline
+// name — provision/<intent> — is synthetic and has no row at all, so like an orphan it must resolve
+// without a Baseline read; the injected lookup fails on purpose to prove it never tries.
+//
+// This is the end of the cascade the whole arc is about: an Intent declares desired state, the
+// reconcile derives which instance is missing and what to build it with, the Finding carries that
+// typed, and this door hands it to a gated Workflow. Without this test the last hop is asserted by
+// a comment.
+func TestProvisionFindingResolvesThroughTheSameDoor(t *testing.T) {
+	f := types.Finding{
+		ID: "p1", Baseline: "provision/web-fleet", Target: "web-02", Framework: "provision",
+		LaunchWorkflow: "compute-build", LaunchKind: types.LaunchBuild,
+		LaunchParams: map[string]any{
+			"instance": "web-02",
+			"labels":   map[string]any{"stratt.intent/instance": "web-02"},
+		},
+	}
+	fl, prob := resolveFindingLaunch(f, noBaseline)
+	if prob != nil {
+		t.Fatalf("a provision Finding must resolve from the Finding alone: %+v", prob)
+	}
+	if fl.Workflow != "compute-build" {
+		t.Fatalf("workflow: got %q", fl.Workflow)
+	}
+	if fl.Kind != types.LaunchBuild {
+		t.Fatalf("the act must be named build, not inferred: got %q", fl.Kind)
+	}
+	if fl.Params["instance"] != "web-02" {
+		t.Fatalf("the per-instance identity must reach the launch: %#v", fl.Params)
+	}
+	// The correlation label has to survive too: the next reconcile matches on it to decide the
+	// instance is built, so losing it here means a build that never resolves its own Finding.
+	labels, _ := fl.Params["labels"].(map[string]any)
+	if labels["stratt.intent/instance"] != "web-02" {
+		t.Fatalf("the correlation label must reach the launch: %#v", fl.Params)
+	}
+}
