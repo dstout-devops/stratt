@@ -598,7 +598,15 @@ what a reasonable schema would look like.** Nothing short of running `community.
   digest (`2f03c37e…`), a corrupted locked hash fails the build with the republished-artifact diagnosis, a
   missing lockfile fails it with the fix, and a base EE (no declared content) still builds — there is no
   content whose bytes could change.
-  (j) **Surface `kind=ee-content` in the UI's Run descent** — **reframed, deliberately not done as written.**
+  ~~(j) **Surface `kind=ee-content` in the UI's Run descent**~~ — **done, via the port change this entry
+  said it needed: [ADR-0121](0121-task-event-scope.md).** `TaskEvent.scope` (`SCOPE_RUN` / `SCOPE_TASK`,
+  unspecified ⇒ empty) is the generic marker; it rides `RunEvent.scope` through the OpenAPI seam, the shim
+  stamps the `ee-content` event `SCOPE_RUN`, the spine stamps its own run-level events (`pod-start-*`,
+  `governance-rejected`, the Bundle refusal), and the log header gains an "N about this Run" filter beside
+  the warned/failed one. The interface plane still matches on nothing tool-shaped. ADR-0121 D2 records the
+  one member that was refused: `SCOPE_TARGET` would have duplicated `RunEvent.target` and been able to
+  disagree with it, which is the two-discriminator defect ADR-0120 D1 found between `Framework` and
+  `launchKind`. The original reframing, kept because its reasoning is what produced the ADR:
   Landing (g) made the honest shape clear: the UI cannot pin `ee-content` as run metadata without
   hardcoding one plugin's kind vocabulary in the interface plane, which is exactly the `if ansible{}` §1.4
   forbids. What shipped instead is the content-blind half that carries the actual §1.8 value: the log

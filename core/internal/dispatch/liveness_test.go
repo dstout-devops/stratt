@@ -109,3 +109,20 @@ func TestTypedEventLevelMapping(t *testing.T) {
 		}
 	}
 }
+
+// TestTypedEventScopeMapping: SCOPE_UNSPECIFIED must map to EMPTY, never to `task` (ADR-0121 D1).
+// The field is newer than every producer, so defaulting unstated to `task` would assert that no
+// plugin has ever described a Run — a confident claim built from missing data, which is the §1.8
+// failure the level mapping one function up exists to avoid.
+func TestTypedEventScopeMapping(t *testing.T) {
+	cases := map[pluginv1.TaskEvent_Scope]string{
+		pluginv1.TaskEvent_SCOPE_UNSPECIFIED: "",
+		pluginv1.TaskEvent_SCOPE_RUN:         types.RunEventScopeRun,
+		pluginv1.TaskEvent_SCOPE_TASK:        types.RunEventScopeTask,
+	}
+	for in, want := range cases {
+		if got := typedEventScope(in); got != want {
+			t.Errorf("typedEventScope(%v) = %q, want %q", in, got, want)
+		}
+	}
+}

@@ -614,6 +614,12 @@ func runEventToWire(ev types.RunEvent) RunEvent {
 		lvl := RunEventLevel(ev.Level)
 		out.Level = &lvl
 	}
+	if ev.Scope != "" {
+		// Same rule as the level: empty stays ABSENT, because "the producer did not state a
+		// scope" is not "task" (§1.8, ADR-0121 D1).
+		sc := RunEventScope(ev.Scope)
+		out.Scope = &sc
+	}
 	if ev.Target != "" {
 		out.Target = &ev.Target
 	}

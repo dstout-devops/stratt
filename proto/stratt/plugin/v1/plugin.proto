@@ -544,6 +544,25 @@ message TaskEvent {
     LEVEL_WARN = 3;
     LEVEL_ERROR = 4;
   }
+  // Scope says which DESCRIPTIVE LEVEL an event is about, so the spine can pin run-level
+  // facts without learning any plugin's `kind` vocabulary (ADR-0121). Spine-owned and
+  // closed, exactly like Level: these are the properties every tool means identically, and
+  // they are the only things the content-blind spine may read off an event (§1.4). Anything
+  // tool-shaped goes in `fields`.
+  //
+  // There is deliberately NO per-target member: RunEvent.target already names the Entity an
+  // event applies to, and a second field able to disagree with it is the §2.4 defect
+  // ADR-0120 D1 found between Finding.Framework and launchKind. A per-target event is
+  // SCOPE_TASK with a target set.
+  enum Scope {
+    // Unstated. The core maps this to EMPTY, never to `task`: most of the stream predates
+    // the field, so defaulting it would assert that no plugin has ever emitted run-level
+    // output — a confident claim built from missing data (§1.8, the same rule
+    // LEVEL_UNSPECIFIED follows).
+    SCOPE_UNSPECIFIED = 0;
+    SCOPE_RUN = 1;  // describes the RUN as a whole (the image it ran in, the content it carried)
+    SCOPE_TASK = 2; // describes one unit of work within the Run
+  }
   Level level = 1;
   string message = 2;                 // human/core-legible line
   google.protobuf.Timestamp at = 3;
@@ -553,6 +572,7 @@ message TaskEvent {
   bool ok = 7;                        // meaningful only when terminal == true
   string checkpoint = 8;              // a gracefully-aborting Apply emits where it stopped; the core
                                       // persists it and feeds a later ApplyRequest.resume_token (ADR-0047)
+  Scope scope = 9;                    // ADR-0121; see the enum above
 }
 
 // ItemResult is a per-target outcome (ansible/script fan out). It is an OUTCOME,

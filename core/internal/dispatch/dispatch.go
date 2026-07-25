@@ -385,6 +385,7 @@ func (d *Dispatcher) followTyped(ctx context.Context, runID string, slice int, p
 				RunID: runID, Slice: slice, Seq: seq, Site: d.site(),
 				Kind:    typedEventKind(ev),
 				Level:   typedEventLevel(ev.GetLevel()),
+				Scope:   typedEventScope(ev.GetScope()),
 				Target:  ev.GetFields()["host"],
 				Payload: map[string]any{"message": ev.GetMessage()},
 			}
@@ -425,6 +426,25 @@ func typedEventLevel(l pluginv1.TaskEvent_Level) string {
 		return types.RunEventWarn
 	case pluginv1.TaskEvent_LEVEL_ERROR:
 		return types.RunEventError
+	default:
+		return ""
+	}
+}
+
+// typedEventScope carries the port's typed descriptive level onto the Run's event stream
+// (ADR-0121). It is what lets a descent surface pin "what did this Run run in" without
+// matching a tool-shaped kind — the `if ansible{}` §1.4 forbids, which is why follow-up (j)
+// of ADR-0117 was refused as originally written.
+//
+// SCOPE_UNSPECIFIED stays EMPTY rather than defaulting to task, for the reason
+// typedEventLevel records one function up: most of the stream predates the field, so
+// defaulting would assert that no plugin ever emitted run-level output.
+func typedEventScope(sc pluginv1.TaskEvent_Scope) string {
+	switch sc {
+	case pluginv1.TaskEvent_SCOPE_RUN:
+		return types.RunEventScopeRun
+	case pluginv1.TaskEvent_SCOPE_TASK:
+		return types.RunEventScopeTask
 	default:
 		return ""
 	}
@@ -815,6 +835,10 @@ func (d *Dispatcher) publishPreStart(ctx context.Context, runID string, slice in
 	}
 	ev := types.RunEvent{
 		RunID: runID, Slice: slice, Seq: seq, Site: d.site(), Kind: kind, Level: level,
+		// A pod that never started is a fact about the RUN, not about any task inside it —
+		// there are no tasks (ADR-0121 D4). Stamped here so the spine's own run-level events
+		// are pinnable by the same content-blind rule a plugin's are.
+		Scope:   types.RunEventScopeRun,
 		Payload: map[string]any{"message": b.Error(), "pod": b.pod, "reason": b.reason},
 	}
 	if err := d.bus.Publish(ctx, ev); err != nil {

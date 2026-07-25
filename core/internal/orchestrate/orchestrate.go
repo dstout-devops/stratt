@@ -1080,7 +1080,11 @@ func (a *Activities) surfaceRejections(ctx context.Context, runID, source, plugi
 			// plugin claim the spine refused, and the operator sees the stream.
 			if err := a.Bus.Publish(ctx, types.RunEvent{
 				RunID: runID, Kind: "governance-rejected",
-				Level: types.RunEventWarn, Payload: payload,
+				Level: types.RunEventWarn,
+				// A refused emission is a fact about what this RUN's plugin tried to write,
+				// not about any one task's work — and there is no per-task attribution here
+				// to give it (ADR-0121 D4).
+				Scope: types.RunEventScopeRun, Payload: payload,
 			}); err != nil {
 				lg.Warn("publish governance-rejected RunEvent failed", "error", err)
 			}

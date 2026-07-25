@@ -33,7 +33,7 @@ export function LiveLog({ runId }: { runId: string }) {
   const { events, status } = useRunEvents(runId);
   const parentRef = useRef<HTMLDivElement>(null);
   const [follow, setFollow] = useState(true);
-  const [onlyProblems, setOnlyProblems] = useState(false);
+  const [filter, setFilter] = useState<"all" | "problems" | "run">("all");
 
   // A warned Run must be findable in an uncapped stream. Before the port's level reached the UI
   // (ADR-0117 g) a WARN was one line in fifty thousand, tinted by kind guesswork — so "this play
@@ -41,7 +41,19 @@ export function LiveLog({ runId }: { runId: string }) {
   // here. Counting and filtering by tone is deliberately content-blind: it reads `level`, never a
   // tool's kind vocabulary (§1.4).
   const problems = useMemo(() => events.filter((ev) => PROBLEM_TONES.has(eventTone(ev))), [events]);
-  const shown = onlyProblems ? problems : events;
+
+  // The events that describe the RUN rather than a task in it — the EE image and the content it
+  // carried, a pod that never started, a refused emission (ADR-0121). Same content-blind rule as the
+  // problem filter one line up: it reads the spine-owned `scope`, never a tool's `kind`. That is the
+  // whole reason ADR-0117 follow-up (j) was refused as first written — the alternative was matching
+  // `kind === "ee-content"` here, which is `if ansible{}` relocated into the interface plane (§1.4).
+  //
+  // `scope` is absent on most of the stream (the field is newer than the producers), and absent is NOT
+  // "task": an unstamped plugin simply contributes nothing here, which is why this is a filter over
+  // stated facts and not a claim that the rest are task-scoped.
+  const runScoped = useMemo(() => events.filter((ev) => ev.scope === "run"), [events]);
+
+  const shown = filter === "problems" ? problems : filter === "run" ? runScoped : events;
 
   const virt = useVirtualizer({
     count: shown.length,
@@ -69,14 +81,26 @@ export function LiveLog({ runId }: { runId: string }) {
         <span className="tabular text-muted-foreground">{events.length} events</span>
         {problems.length > 0 && (
           <button
-            onClick={() => setOnlyProblems((v) => !v)}
-            aria-pressed={onlyProblems}
+            onClick={() => setFilter((f) => (f === "problems" ? "all" : "problems"))}
+            aria-pressed={filter === "problems"}
             className={cn(
               "tabular rounded px-1.5 hover:underline",
-              onlyProblems ? "bg-log-warn/15 text-log-warn" : "text-log-warn",
+              filter === "problems" ? "bg-log-warn/15 text-log-warn" : "text-log-warn",
             )}
           >
             {problems.length} warned or failed
+          </button>
+        )}
+        {runScoped.length > 0 && (
+          <button
+            onClick={() => setFilter((f) => (f === "run" ? "all" : "run"))}
+            aria-pressed={filter === "run"}
+            className={cn(
+              "tabular rounded px-1.5 hover:underline",
+              filter === "run" ? "bg-primary/15 text-primary" : "text-primary",
+            )}
+          >
+            {runScoped.length} about this Run
           </button>
         )}
         <div className="flex-1" />
@@ -97,7 +121,11 @@ export function LiveLog({ runId }: { runId: string }) {
       >
         {shown.length === 0 && status !== "connecting" ? (
           <div className="p-4 text-muted-foreground">
-            {onlyProblems ? "No warnings or failures in this Run." : "No task events."}
+            {filter === "problems"
+              ? "No warnings or failures in this Run."
+              : filter === "run"
+                ? "Nothing in this Run described the Run itself."
+                : "No task events."}
           </div>
         ) : (
           <div style={{ height: virt.getTotalSize(), position: "relative" }}>

@@ -4,6 +4,8 @@ import (
 	"errors"
 	"strings"
 	"testing"
+
+	pluginv1 "github.com/dstout-devops/stratt/sdk/stratt/plugin/v1"
 )
 
 // TestContentSummary covers ADR-0117 D3's §1.8 half. D3 makes the EE image digest the
@@ -73,6 +75,14 @@ func TestShim_EmitsContentEveryRun(t *testing.T) {
 		if ev := r.GetEvent(); ev != nil && ev.GetFields()["kind"] == "ee-content" {
 			if ev.GetMessage() == "" {
 				t.Fatal("the ee-content event must carry a statement")
+			}
+			// SCOPE_RUN is what makes the statement REACHABLE (ADR-0121): it says this event
+			// describes the whole Run, so a descent surface pins it by reading a spine-owned
+			// field instead of matching the word "ee-content" — the `if ansible{}` §1.4
+			// forbids, and the reason ADR-0117 (j) was refused as first written. Unstamped,
+			// the event is still correct and still one line in fifty thousand.
+			if ev.GetScope() != pluginv1.TaskEvent_SCOPE_RUN {
+				t.Fatalf("the ee-content event must be SCOPE_RUN or it stays unfindable, got %v", ev.GetScope())
 			}
 			return
 		}

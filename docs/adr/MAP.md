@@ -11,8 +11,8 @@ design must reconcile with. Chronological list: [README.md](README.md); phase vi
 ```mermaid
 graph TD
   actuators["actuators<br/><small>0016 0022 0050 0053 0092 0117</small>"]
-  api_surface["api-surface<br/><small>0006 0021 0026 0076 0091</small>"]
-  audit_telemetry["audit-telemetry<br/><small>0034 0065 0077</small>"]
+  api_surface["api-surface<br/><small>0006 0021 0026 0076 0091 0121</small>"]
+  audit_telemetry["audit-telemetry<br/><small>0034 0065 0077 0121</small>"]
   authz_identity["authz-identity<br/><small>0009 0028 0035 0079 0101</small>"]
   capability_framework["capability-framework<br/><small>0100 0104 0105 0106 0107 0110<br/>0111 0112 0113 0114</small>"]
   certificates_pki["certificates-pki<br/><small>0030 0043 0050 0098 0106</small>"]
@@ -24,12 +24,12 @@ graph TD
   graph_model["graph-model<br/><small>0015 0017 0041 0042 0059 0060<br/>0079 0080 0081 0082 0084 0085<br/>0096 0114 0115 0119 0120</small>"]
   intent_compiler["intent-compiler<br/><small>0023 0030 0036 0055 0058 0083<br/>0085 0114 0118 0119</small>"]
   orchestration["orchestration<br/><small>0010 0011 0018 0027 0031 0063<br/>0118</small>"]
-  plugin_port["plugin-port<br/><small>0046 0047 0048 0049 0051 0053<br/>0054 0103 0117</small>"]
+  plugin_port["plugin-port<br/><small>0046 0047 0048 0049 0051 0053<br/>0054 0103 0117 0121</small>"]
   policy_governance["policy-governance<br/><small>0061 0062 0063 0064 0065 0066<br/>0067 0068 0069 0070 0071 0072<br/>0073 0074 0075 0076</small>"]
   provisioning["provisioning<br/><small>0017 0058 0095 0096 0107 0110<br/>0111 0112 0113 0114 0115 0120</small>"]
   state_artifacts["state-artifacts<br/><small>0016 0029 0093 0097 0105 0112</small>"]
   substrate_ops["substrate-ops<br/><small>0013 0032 0040 0044 0045 0049<br/>0077 0078 0093 0101 0102</small>"]
-  ui["ui<br/><small>0003 0012 0020 0024 0090 0091<br/>0116</small>"]
+  ui["ui<br/><small>0003 0012 0020 0024 0090 0091<br/>0116 0121</small>"]
 
   actuators --> plugin_port
   api_surface --> orchestration
@@ -102,6 +102,7 @@ API surface — OpenAPI /api/v1, the AWX /api/v2 façade, the platform MCP serve
 - [ADR-0026](0026-awx-api-v2-facade.md) — AWX-compatible `/api/v2` façade (+ native cancel & ansible extraVars)
 - [ADR-0076](0076-admission-on-the-imperative-door.md) — Admission on the imperative door: the API is not a bypass around the compile-seam PEP
 - [ADR-0091](0091-ui-is-a-first-party-bundled-pure-api-client.md) — the UI is a first-party, served-by-default, pure `/api/v1` client (never a port-plugin, never a gated add-on)
+- [ADR-0121](0121-task-event-scope.md) — `TaskEvent.scope`: an event says whether it describes the Run or a task
 
 ### audit-telemetry
 
@@ -112,6 +113,7 @@ Audit & telemetry — the one audit stream, SIEM forwarder, decision recording, 
 - [ADR-0034](0034-audit-stream-and-siem-forwarder.md) — The one audit stream + vendor-neutral SIEM forwarder
 - [ADR-0065](0065-durable-policy-decision-recording.md) — Durable policy-decision recording: the audit stream, not a Finding
 - [ADR-0077](0077-observability-otel.md) — Observability: OpenTelemetry providers, `/metrics` always-on, OTLP optional
+- [ADR-0121](0121-task-event-scope.md) — `TaskEvent.scope`: an event says whether it describes the Run or a task
 
 ### authz-identity
 
@@ -307,6 +309,7 @@ Sovereign plugin port — the dark-matter substrate, transports, runtime registr
 - [ADR-0054](0054-per-step-facet-claim.md) — Per-Step facet write-scope: narrow the write-back grant to what a Step declares
 - [ADR-0103](0103-runtime-connector-registry.md) — Runtime Connector registry: enable/disable Connectors without a strattd restart
 - [ADR-0117](0117-ansible-execution-depth-and-content.md) — Ansible execution depth + content: the run-knob Contract (v5) and collections as pinned, external-sourced content
+- [ADR-0121](0121-task-event-scope.md) — `TaskEvent.scope`: an event says whether it describes the Run or a task
 
 ### policy-governance
 
@@ -394,6 +397,7 @@ UI — React shell, schema-driven rendering, Views, descent, the first-party cli
 - [ADR-0090](0090-ui-rebuild-greenfield-charter-stack.md) — UI rebuild: greenfield on the charter stack, gauntlet-informed patterns
 - [ADR-0091](0091-ui-is-a-first-party-bundled-pure-api-client.md) — the UI is a first-party, served-by-default, pure `/api/v1` client (never a port-plugin, never a gated add-on)
 - [ADR-0116](0116-demo-library.md) — The demo library: reproducible, narrated, turnkey teaching scenarios
+- [ADR-0121](0121-task-event-scope.md) — `TaskEvent.scope`: an event says whether it describes the Run or a task
 
 ## By ADR (reverse index)
 
@@ -519,3 +523,4 @@ UI — React shell, schema-driven rendering, Views, descent, the first-party cli
 | [0118](0118-parameter-plane.md) | estate-as-code, intent-compiler, orchestration |
 | [0119](0119-versioned-configuration-and-promotion.md) | estate-as-code, graph-model, intent-compiler |
 | [0120](0120-provisioning-joins-the-parameter-plane.md) | estate-as-code, graph-model, provisioning |
+| [0121](0121-task-event-scope.md) | api-surface, audit-telemetry, plugin-port, ui |

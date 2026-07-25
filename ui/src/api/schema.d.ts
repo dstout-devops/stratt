@@ -1425,7 +1425,12 @@ export interface components {
              * @enum {string}
              */
             level?: "debug" | "info" | "warn" | "error";
-            /** @description The Entity this event applies to, when per-target. */
+            /**
+             * @description Which DESCRIPTIVE LEVEL this event is about, carried from the plugin port's typed TaskEvent.Scope (ADR-0121). `run` describes the Run as a whole — the image it executed in, the content that image carried, a pod that never started; `task` describes one unit of work inside it. Like `level` it is spine-owned and content-blind, which is the point: a descent surface can pin "what did this Run run in" without matching an open, tool-shaped `kind` (§1.4). ABSENT means the producer did not state a scope, and must not be read as `task` (§1.8). There is deliberately no per-target member — `target` already names the Entity, and a second field able to disagree with it would be an implicit precedence (§2.4).
+             * @enum {string}
+             */
+            scope?: "run" | "task";
+            /** @description The Entity this event applies to, when per-target. The only field that says which Entity; a per-target event is `scope: task` with this set. */
             target?: string;
             /** @description The execution locus this event came from (ADR-0032) — "local" for the central cluster, a Site name for a remote leaf. Descriptive only: never part of the event's identity. */
             site?: string;

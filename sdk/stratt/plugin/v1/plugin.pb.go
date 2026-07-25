@@ -334,6 +334,69 @@ func (TaskEvent_Level) EnumDescriptor() ([]byte, []int) {
 	return file_stratt_plugin_v1_plugin_proto_rawDescGZIP(), []int{33, 0}
 }
 
+// Scope says which DESCRIPTIVE LEVEL an event is about, so the spine can pin run-level
+// facts without learning any plugin's `kind` vocabulary (ADR-0121). Spine-owned and
+// closed, exactly like Level: these are the properties every tool means identically, and
+// they are the only things the content-blind spine may read off an event (§1.4). Anything
+// tool-shaped goes in `fields`.
+//
+// There is deliberately NO per-target member: RunEvent.target already names the Entity an
+// event applies to, and a second field able to disagree with it is the §2.4 defect
+// ADR-0120 D1 found between Finding.Framework and launchKind. A per-target event is
+// SCOPE_TASK with a target set.
+type TaskEvent_Scope int32
+
+const (
+	// Unstated. The core maps this to EMPTY, never to `task`: most of the stream predates
+	// the field, so defaulting it would assert that no plugin has ever emitted run-level
+	// output — a confident claim built from missing data (§1.8, the same rule
+	// LEVEL_UNSPECIFIED follows).
+	TaskEvent_SCOPE_UNSPECIFIED TaskEvent_Scope = 0
+	TaskEvent_SCOPE_RUN         TaskEvent_Scope = 1 // describes the RUN as a whole (the image it ran in, the content it carried)
+	TaskEvent_SCOPE_TASK        TaskEvent_Scope = 2 // describes one unit of work within the Run
+)
+
+// Enum value maps for TaskEvent_Scope.
+var (
+	TaskEvent_Scope_name = map[int32]string{
+		0: "SCOPE_UNSPECIFIED",
+		1: "SCOPE_RUN",
+		2: "SCOPE_TASK",
+	}
+	TaskEvent_Scope_value = map[string]int32{
+		"SCOPE_UNSPECIFIED": 0,
+		"SCOPE_RUN":         1,
+		"SCOPE_TASK":        2,
+	}
+)
+
+func (x TaskEvent_Scope) Enum() *TaskEvent_Scope {
+	p := new(TaskEvent_Scope)
+	*p = x
+	return p
+}
+
+func (x TaskEvent_Scope) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (TaskEvent_Scope) Descriptor() protoreflect.EnumDescriptor {
+	return file_stratt_plugin_v1_plugin_proto_enumTypes[5].Descriptor()
+}
+
+func (TaskEvent_Scope) Type() protoreflect.EnumType {
+	return &file_stratt_plugin_v1_plugin_proto_enumTypes[5]
+}
+
+func (x TaskEvent_Scope) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use TaskEvent_Scope.Descriptor instead.
+func (TaskEvent_Scope) EnumDescriptor() ([]byte, []int) {
+	return file_stratt_plugin_v1_plugin_proto_rawDescGZIP(), []int{33, 1}
+}
+
 type ItemResult_Status int32
 
 const (
@@ -373,11 +436,11 @@ func (x ItemResult_Status) String() string {
 }
 
 func (ItemResult_Status) Descriptor() protoreflect.EnumDescriptor {
-	return file_stratt_plugin_v1_plugin_proto_enumTypes[5].Descriptor()
+	return file_stratt_plugin_v1_plugin_proto_enumTypes[6].Descriptor()
 }
 
 func (ItemResult_Status) Type() protoreflect.EnumType {
-	return &file_stratt_plugin_v1_plugin_proto_enumTypes[5]
+	return &file_stratt_plugin_v1_plugin_proto_enumTypes[6]
 }
 
 func (x ItemResult_Status) Number() protoreflect.EnumNumber {
@@ -424,11 +487,11 @@ func (x DerivedContract_Rung) String() string {
 }
 
 func (DerivedContract_Rung) Descriptor() protoreflect.EnumDescriptor {
-	return file_stratt_plugin_v1_plugin_proto_enumTypes[6].Descriptor()
+	return file_stratt_plugin_v1_plugin_proto_enumTypes[7].Descriptor()
 }
 
 func (DerivedContract_Rung) Type() protoreflect.EnumType {
-	return &file_stratt_plugin_v1_plugin_proto_enumTypes[6]
+	return &file_stratt_plugin_v1_plugin_proto_enumTypes[7]
 }
 
 func (x DerivedContract_Rung) Number() protoreflect.EnumNumber {
@@ -2798,6 +2861,8 @@ type TaskEvent struct {
 	Terminal      bool                   `protobuf:"varint,6,opt,name=terminal,proto3" json:"terminal,omitempty"`                                                                      // true on the final event of the stream
 	Ok            bool                   `protobuf:"varint,7,opt,name=ok,proto3" json:"ok,omitempty"`                                                                                  // meaningful only when terminal == true
 	Checkpoint    string                 `protobuf:"bytes,8,opt,name=checkpoint,proto3" json:"checkpoint,omitempty"`                                                                   // a gracefully-aborting Apply emits where it stopped; the core
+	// persists it and feeds a later ApplyRequest.resume_token (ADR-0047)
+	Scope         TaskEvent_Scope `protobuf:"varint,9,opt,name=scope,proto3,enum=stratt.plugin.v1.TaskEvent_Scope" json:"scope,omitempty"` // ADR-0121; see the enum above
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2886,6 +2951,13 @@ func (x *TaskEvent) GetCheckpoint() string {
 		return x.Checkpoint
 	}
 	return ""
+}
+
+func (x *TaskEvent) GetScope() TaskEvent_Scope {
+	if x != nil {
+		return x.Scope
+	}
+	return TaskEvent_SCOPE_UNSPECIFIED
 }
 
 // ItemResult is a per-target outcome (ansible/script fan out). It is an OUTCOME,
@@ -3898,7 +3970,7 @@ const file_stratt_plugin_v1_plugin_proto_rawDesc = "" +
 	"\x06action\x18\x03 \x01(\tR\x06action\x12\x17\n" +
 	"\adry_run\x18\x04 \x01(\bR\x06dryRun\"*\n" +
 	"\x10SubscribeRequest\x12\x16\n" +
-	"\x06cursor\x18\x01 \x01(\tR\x06cursor\"\xdb\x03\n" +
+	"\x06cursor\x18\x01 \x01(\tR\x06cursor\"\xd3\x04\n" +
 	"\tTaskEvent\x127\n" +
 	"\x05level\x18\x01 \x01(\x0e2!.stratt.plugin.v1.TaskEvent.LevelR\x05level\x12\x18\n" +
 	"\amessage\x18\x02 \x01(\tR\amessage\x12*\n" +
@@ -3909,7 +3981,8 @@ const file_stratt_plugin_v1_plugin_proto_rawDesc = "" +
 	"\x02ok\x18\a \x01(\bR\x02ok\x12\x1e\n" +
 	"\n" +
 	"checkpoint\x18\b \x01(\tR\n" +
-	"checkpoint\x1a9\n" +
+	"checkpoint\x127\n" +
+	"\x05scope\x18\t \x01(\x0e2!.stratt.plugin.v1.TaskEvent.ScopeR\x05scope\x1a9\n" +
 	"\vFieldsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"`\n" +
@@ -3920,7 +3993,12 @@ const file_stratt_plugin_v1_plugin_proto_rawDesc = "" +
 	"LEVEL_INFO\x10\x02\x12\x0e\n" +
 	"\n" +
 	"LEVEL_WARN\x10\x03\x12\x0f\n" +
-	"\vLEVEL_ERROR\x10\x04\"\xd4\x01\n" +
+	"\vLEVEL_ERROR\x10\x04\"=\n" +
+	"\x05Scope\x12\x15\n" +
+	"\x11SCOPE_UNSPECIFIED\x10\x00\x12\r\n" +
+	"\tSCOPE_RUN\x10\x01\x12\x0e\n" +
+	"\n" +
+	"SCOPE_TASK\x10\x02\"\xd4\x01\n" +
 	"\n" +
 	"ItemResult\x12\x19\n" +
 	"\bitem_key\x18\x01 \x01(\tR\aitemKey\x12;\n" +
@@ -4025,7 +4103,7 @@ func file_stratt_plugin_v1_plugin_proto_rawDescGZIP() []byte {
 	return file_stratt_plugin_v1_plugin_proto_rawDescData
 }
 
-var file_stratt_plugin_v1_plugin_proto_enumTypes = make([]protoimpl.EnumInfo, 7)
+var file_stratt_plugin_v1_plugin_proto_enumTypes = make([]protoimpl.EnumInfo, 8)
 var file_stratt_plugin_v1_plugin_proto_msgTypes = make([]protoimpl.MessageInfo, 56)
 var file_stratt_plugin_v1_plugin_proto_goTypes = []any{
 	(PluginClass)(0),              // 0: stratt.plugin.v1.PluginClass
@@ -4033,166 +4111,168 @@ var file_stratt_plugin_v1_plugin_proto_goTypes = []any{
 	(Manifest_ObserveMode)(0),     // 2: stratt.plugin.v1.Manifest.ObserveMode
 	(HealthResponse_Serving)(0),   // 3: stratt.plugin.v1.HealthResponse.Serving
 	(TaskEvent_Level)(0),          // 4: stratt.plugin.v1.TaskEvent.Level
-	(ItemResult_Status)(0),        // 5: stratt.plugin.v1.ItemResult.Status
-	(DerivedContract_Rung)(0),     // 6: stratt.plugin.v1.DerivedContract.Rung
-	(*Envelope)(nil),              // 7: stratt.plugin.v1.Envelope
-	(*Payload)(nil),               // 8: stratt.plugin.v1.Payload
-	(*ArtifactRef)(nil),           // 9: stratt.plugin.v1.ArtifactRef
-	(*Item)(nil),                  // 10: stratt.plugin.v1.Item
-	(*Coordinates)(nil),           // 11: stratt.plugin.v1.Coordinates
-	(*ContractRef)(nil),           // 12: stratt.plugin.v1.ContractRef
-	(*Principal)(nil),             // 13: stratt.plugin.v1.Principal
-	(*CredentialRef)(nil),         // 14: stratt.plugin.v1.CredentialRef
-	(*ResolvedRef)(nil),           // 15: stratt.plugin.v1.ResolvedRef
-	(*VaultCoords)(nil),           // 16: stratt.plugin.v1.VaultCoords
-	(*ResolvedKey)(nil),           // 17: stratt.plugin.v1.ResolvedKey
-	(*GetManifestRequest)(nil),    // 18: stratt.plugin.v1.GetManifestRequest
-	(*ContractDecl)(nil),          // 19: stratt.plugin.v1.ContractDecl
-	(*CutoverDescriptor)(nil),     // 20: stratt.plugin.v1.CutoverDescriptor
-	(*ActionDecl)(nil),            // 21: stratt.plugin.v1.ActionDecl
-	(*Manifest)(nil),              // 22: stratt.plugin.v1.Manifest
-	(*GetManifestResponse)(nil),   // 23: stratt.plugin.v1.GetManifestResponse
-	(*HealthRequest)(nil),         // 24: stratt.plugin.v1.HealthRequest
-	(*HealthResponse)(nil),        // 25: stratt.plugin.v1.HealthResponse
-	(*ObserveRequest)(nil),        // 26: stratt.plugin.v1.ObserveRequest
-	(*ObservedEntity)(nil),        // 27: stratt.plugin.v1.ObservedEntity
-	(*ObservedRelation)(nil),      // 28: stratt.plugin.v1.ObservedRelation
-	(*GoneEntity)(nil),            // 29: stratt.plugin.v1.GoneEntity
-	(*GoneRelation)(nil),          // 30: stratt.plugin.v1.GoneRelation
-	(*ObserveResponse)(nil),       // 31: stratt.plugin.v1.ObserveResponse
-	(*PlanRequest)(nil),           // 32: stratt.plugin.v1.PlanRequest
-	(*PlanResponse)(nil),          // 33: stratt.plugin.v1.PlanResponse
-	(*ApplyRequest)(nil),          // 34: stratt.plugin.v1.ApplyRequest
-	(*CapabilityHandle)(nil),      // 35: stratt.plugin.v1.CapabilityHandle
-	(*ApplyTarget)(nil),           // 36: stratt.plugin.v1.ApplyTarget
-	(*DestroyRequest)(nil),        // 37: stratt.plugin.v1.DestroyRequest
-	(*InvokeRequest)(nil),         // 38: stratt.plugin.v1.InvokeRequest
-	(*SubscribeRequest)(nil),      // 39: stratt.plugin.v1.SubscribeRequest
-	(*TaskEvent)(nil),             // 40: stratt.plugin.v1.TaskEvent
-	(*ItemResult)(nil),            // 41: stratt.plugin.v1.ItemResult
-	(*DiffFragment)(nil),          // 42: stratt.plugin.v1.DiffFragment
-	(*DerivedContract)(nil),       // 43: stratt.plugin.v1.DerivedContract
-	(*ApplyResponse)(nil),         // 44: stratt.plugin.v1.ApplyResponse
-	(*DestroyResponse)(nil),       // 45: stratt.plugin.v1.DestroyResponse
-	(*InvokeResult)(nil),          // 46: stratt.plugin.v1.InvokeResult
-	(*InvokeResponse)(nil),        // 47: stratt.plugin.v1.InvokeResponse
-	(*EmittedEvent)(nil),          // 48: stratt.plugin.v1.EmittedEvent
-	(*SubscribeResponse)(nil),     // 49: stratt.plugin.v1.SubscribeResponse
-	(*WrapKeyRequest)(nil),        // 50: stratt.plugin.v1.WrapKeyRequest
-	(*WrapKeyResponse)(nil),       // 51: stratt.plugin.v1.WrapKeyResponse
-	(*UnwrapKeyRequest)(nil),      // 52: stratt.plugin.v1.UnwrapKeyRequest
-	(*UnwrapKeyResponse)(nil),     // 53: stratt.plugin.v1.UnwrapKeyResponse
-	nil,                           // 54: stratt.plugin.v1.ObservedEntity.IdentityKeysEntry
-	nil,                           // 55: stratt.plugin.v1.ObservedEntity.LabelsEntry
-	nil,                           // 56: stratt.plugin.v1.ObservedEntity.FacetsEntry
-	nil,                           // 57: stratt.plugin.v1.PlanRequest.ResolvedCapabilitiesEntry
-	nil,                           // 58: stratt.plugin.v1.ApplyRequest.ResolvedCapabilitiesEntry
-	nil,                           // 59: stratt.plugin.v1.CapabilityHandle.ConfigEntry
-	nil,                           // 60: stratt.plugin.v1.ApplyTarget.IdentityKeysEntry
-	nil,                           // 61: stratt.plugin.v1.ApplyTarget.VarsEntry
-	nil,                           // 62: stratt.plugin.v1.TaskEvent.FieldsEntry
-	(*timestamppb.Timestamp)(nil), // 63: google.protobuf.Timestamp
-	(*structpb.Struct)(nil),       // 64: google.protobuf.Struct
+	(TaskEvent_Scope)(0),          // 5: stratt.plugin.v1.TaskEvent.Scope
+	(ItemResult_Status)(0),        // 6: stratt.plugin.v1.ItemResult.Status
+	(DerivedContract_Rung)(0),     // 7: stratt.plugin.v1.DerivedContract.Rung
+	(*Envelope)(nil),              // 8: stratt.plugin.v1.Envelope
+	(*Payload)(nil),               // 9: stratt.plugin.v1.Payload
+	(*ArtifactRef)(nil),           // 10: stratt.plugin.v1.ArtifactRef
+	(*Item)(nil),                  // 11: stratt.plugin.v1.Item
+	(*Coordinates)(nil),           // 12: stratt.plugin.v1.Coordinates
+	(*ContractRef)(nil),           // 13: stratt.plugin.v1.ContractRef
+	(*Principal)(nil),             // 14: stratt.plugin.v1.Principal
+	(*CredentialRef)(nil),         // 15: stratt.plugin.v1.CredentialRef
+	(*ResolvedRef)(nil),           // 16: stratt.plugin.v1.ResolvedRef
+	(*VaultCoords)(nil),           // 17: stratt.plugin.v1.VaultCoords
+	(*ResolvedKey)(nil),           // 18: stratt.plugin.v1.ResolvedKey
+	(*GetManifestRequest)(nil),    // 19: stratt.plugin.v1.GetManifestRequest
+	(*ContractDecl)(nil),          // 20: stratt.plugin.v1.ContractDecl
+	(*CutoverDescriptor)(nil),     // 21: stratt.plugin.v1.CutoverDescriptor
+	(*ActionDecl)(nil),            // 22: stratt.plugin.v1.ActionDecl
+	(*Manifest)(nil),              // 23: stratt.plugin.v1.Manifest
+	(*GetManifestResponse)(nil),   // 24: stratt.plugin.v1.GetManifestResponse
+	(*HealthRequest)(nil),         // 25: stratt.plugin.v1.HealthRequest
+	(*HealthResponse)(nil),        // 26: stratt.plugin.v1.HealthResponse
+	(*ObserveRequest)(nil),        // 27: stratt.plugin.v1.ObserveRequest
+	(*ObservedEntity)(nil),        // 28: stratt.plugin.v1.ObservedEntity
+	(*ObservedRelation)(nil),      // 29: stratt.plugin.v1.ObservedRelation
+	(*GoneEntity)(nil),            // 30: stratt.plugin.v1.GoneEntity
+	(*GoneRelation)(nil),          // 31: stratt.plugin.v1.GoneRelation
+	(*ObserveResponse)(nil),       // 32: stratt.plugin.v1.ObserveResponse
+	(*PlanRequest)(nil),           // 33: stratt.plugin.v1.PlanRequest
+	(*PlanResponse)(nil),          // 34: stratt.plugin.v1.PlanResponse
+	(*ApplyRequest)(nil),          // 35: stratt.plugin.v1.ApplyRequest
+	(*CapabilityHandle)(nil),      // 36: stratt.plugin.v1.CapabilityHandle
+	(*ApplyTarget)(nil),           // 37: stratt.plugin.v1.ApplyTarget
+	(*DestroyRequest)(nil),        // 38: stratt.plugin.v1.DestroyRequest
+	(*InvokeRequest)(nil),         // 39: stratt.plugin.v1.InvokeRequest
+	(*SubscribeRequest)(nil),      // 40: stratt.plugin.v1.SubscribeRequest
+	(*TaskEvent)(nil),             // 41: stratt.plugin.v1.TaskEvent
+	(*ItemResult)(nil),            // 42: stratt.plugin.v1.ItemResult
+	(*DiffFragment)(nil),          // 43: stratt.plugin.v1.DiffFragment
+	(*DerivedContract)(nil),       // 44: stratt.plugin.v1.DerivedContract
+	(*ApplyResponse)(nil),         // 45: stratt.plugin.v1.ApplyResponse
+	(*DestroyResponse)(nil),       // 46: stratt.plugin.v1.DestroyResponse
+	(*InvokeResult)(nil),          // 47: stratt.plugin.v1.InvokeResult
+	(*InvokeResponse)(nil),        // 48: stratt.plugin.v1.InvokeResponse
+	(*EmittedEvent)(nil),          // 49: stratt.plugin.v1.EmittedEvent
+	(*SubscribeResponse)(nil),     // 50: stratt.plugin.v1.SubscribeResponse
+	(*WrapKeyRequest)(nil),        // 51: stratt.plugin.v1.WrapKeyRequest
+	(*WrapKeyResponse)(nil),       // 52: stratt.plugin.v1.WrapKeyResponse
+	(*UnwrapKeyRequest)(nil),      // 53: stratt.plugin.v1.UnwrapKeyRequest
+	(*UnwrapKeyResponse)(nil),     // 54: stratt.plugin.v1.UnwrapKeyResponse
+	nil,                           // 55: stratt.plugin.v1.ObservedEntity.IdentityKeysEntry
+	nil,                           // 56: stratt.plugin.v1.ObservedEntity.LabelsEntry
+	nil,                           // 57: stratt.plugin.v1.ObservedEntity.FacetsEntry
+	nil,                           // 58: stratt.plugin.v1.PlanRequest.ResolvedCapabilitiesEntry
+	nil,                           // 59: stratt.plugin.v1.ApplyRequest.ResolvedCapabilitiesEntry
+	nil,                           // 60: stratt.plugin.v1.CapabilityHandle.ConfigEntry
+	nil,                           // 61: stratt.plugin.v1.ApplyTarget.IdentityKeysEntry
+	nil,                           // 62: stratt.plugin.v1.ApplyTarget.VarsEntry
+	nil,                           // 63: stratt.plugin.v1.TaskEvent.FieldsEntry
+	(*timestamppb.Timestamp)(nil), // 64: google.protobuf.Timestamp
+	(*structpb.Struct)(nil),       // 65: google.protobuf.Struct
 }
 var file_stratt_plugin_v1_plugin_proto_depIdxs = []int32{
-	11, // 0: stratt.plugin.v1.Envelope.coordinates:type_name -> stratt.plugin.v1.Coordinates
-	12, // 1: stratt.plugin.v1.Envelope.contract:type_name -> stratt.plugin.v1.ContractRef
-	13, // 2: stratt.plugin.v1.Envelope.principal:type_name -> stratt.plugin.v1.Principal
-	14, // 3: stratt.plugin.v1.Envelope.creds:type_name -> stratt.plugin.v1.CredentialRef
-	9,  // 4: stratt.plugin.v1.Envelope.artifact:type_name -> stratt.plugin.v1.ArtifactRef
-	7,  // 5: stratt.plugin.v1.Item.envelope:type_name -> stratt.plugin.v1.Envelope
-	8,  // 6: stratt.plugin.v1.Item.payload:type_name -> stratt.plugin.v1.Payload
-	10, // 7: stratt.plugin.v1.Item.children:type_name -> stratt.plugin.v1.Item
-	15, // 8: stratt.plugin.v1.CredentialRef.resolved:type_name -> stratt.plugin.v1.ResolvedRef
-	17, // 9: stratt.plugin.v1.ResolvedRef.keys:type_name -> stratt.plugin.v1.ResolvedKey
-	16, // 10: stratt.plugin.v1.ResolvedRef.vault:type_name -> stratt.plugin.v1.VaultCoords
-	12, // 11: stratt.plugin.v1.ActionDecl.input:type_name -> stratt.plugin.v1.ContractRef
-	12, // 12: stratt.plugin.v1.ActionDecl.output:type_name -> stratt.plugin.v1.ContractRef
+	12, // 0: stratt.plugin.v1.Envelope.coordinates:type_name -> stratt.plugin.v1.Coordinates
+	13, // 1: stratt.plugin.v1.Envelope.contract:type_name -> stratt.plugin.v1.ContractRef
+	14, // 2: stratt.plugin.v1.Envelope.principal:type_name -> stratt.plugin.v1.Principal
+	15, // 3: stratt.plugin.v1.Envelope.creds:type_name -> stratt.plugin.v1.CredentialRef
+	10, // 4: stratt.plugin.v1.Envelope.artifact:type_name -> stratt.plugin.v1.ArtifactRef
+	8,  // 5: stratt.plugin.v1.Item.envelope:type_name -> stratt.plugin.v1.Envelope
+	9,  // 6: stratt.plugin.v1.Item.payload:type_name -> stratt.plugin.v1.Payload
+	11, // 7: stratt.plugin.v1.Item.children:type_name -> stratt.plugin.v1.Item
+	16, // 8: stratt.plugin.v1.CredentialRef.resolved:type_name -> stratt.plugin.v1.ResolvedRef
+	18, // 9: stratt.plugin.v1.ResolvedRef.keys:type_name -> stratt.plugin.v1.ResolvedKey
+	17, // 10: stratt.plugin.v1.ResolvedRef.vault:type_name -> stratt.plugin.v1.VaultCoords
+	13, // 11: stratt.plugin.v1.ActionDecl.input:type_name -> stratt.plugin.v1.ContractRef
+	13, // 12: stratt.plugin.v1.ActionDecl.output:type_name -> stratt.plugin.v1.ContractRef
 	0,  // 13: stratt.plugin.v1.Manifest.class:type_name -> stratt.plugin.v1.PluginClass
 	1,  // 14: stratt.plugin.v1.Manifest.verbs:type_name -> stratt.plugin.v1.Verb
-	19, // 15: stratt.plugin.v1.Manifest.contracts:type_name -> stratt.plugin.v1.ContractDecl
-	21, // 16: stratt.plugin.v1.Manifest.actions:type_name -> stratt.plugin.v1.ActionDecl
+	20, // 15: stratt.plugin.v1.Manifest.contracts:type_name -> stratt.plugin.v1.ContractDecl
+	22, // 16: stratt.plugin.v1.Manifest.actions:type_name -> stratt.plugin.v1.ActionDecl
 	2,  // 17: stratt.plugin.v1.Manifest.observe_mode:type_name -> stratt.plugin.v1.Manifest.ObserveMode
-	20, // 18: stratt.plugin.v1.Manifest.cutover:type_name -> stratt.plugin.v1.CutoverDescriptor
-	22, // 19: stratt.plugin.v1.GetManifestResponse.manifest:type_name -> stratt.plugin.v1.Manifest
+	21, // 18: stratt.plugin.v1.Manifest.cutover:type_name -> stratt.plugin.v1.CutoverDescriptor
+	23, // 19: stratt.plugin.v1.GetManifestResponse.manifest:type_name -> stratt.plugin.v1.Manifest
 	3,  // 20: stratt.plugin.v1.HealthResponse.status:type_name -> stratt.plugin.v1.HealthResponse.Serving
-	54, // 21: stratt.plugin.v1.ObservedEntity.identity_keys:type_name -> stratt.plugin.v1.ObservedEntity.IdentityKeysEntry
-	55, // 22: stratt.plugin.v1.ObservedEntity.labels:type_name -> stratt.plugin.v1.ObservedEntity.LabelsEntry
-	56, // 23: stratt.plugin.v1.ObservedEntity.facets:type_name -> stratt.plugin.v1.ObservedEntity.FacetsEntry
-	28, // 24: stratt.plugin.v1.ObservedEntity.relations:type_name -> stratt.plugin.v1.ObservedRelation
-	27, // 25: stratt.plugin.v1.ObserveResponse.entities:type_name -> stratt.plugin.v1.ObservedEntity
-	29, // 26: stratt.plugin.v1.ObserveResponse.gone:type_name -> stratt.plugin.v1.GoneEntity
-	30, // 27: stratt.plugin.v1.ObserveResponse.gone_relations:type_name -> stratt.plugin.v1.GoneRelation
-	7,  // 28: stratt.plugin.v1.PlanRequest.envelope:type_name -> stratt.plugin.v1.Envelope
-	8,  // 29: stratt.plugin.v1.PlanRequest.desired:type_name -> stratt.plugin.v1.Payload
-	57, // 30: stratt.plugin.v1.PlanRequest.resolved_capabilities:type_name -> stratt.plugin.v1.PlanRequest.ResolvedCapabilitiesEntry
-	8,  // 31: stratt.plugin.v1.PlanResponse.diff:type_name -> stratt.plugin.v1.Payload
-	9,  // 32: stratt.plugin.v1.PlanResponse.plan:type_name -> stratt.plugin.v1.ArtifactRef
-	7,  // 33: stratt.plugin.v1.ApplyRequest.envelope:type_name -> stratt.plugin.v1.Envelope
-	8,  // 34: stratt.plugin.v1.ApplyRequest.desired:type_name -> stratt.plugin.v1.Payload
-	9,  // 35: stratt.plugin.v1.ApplyRequest.plan_ref:type_name -> stratt.plugin.v1.ArtifactRef
-	36, // 36: stratt.plugin.v1.ApplyRequest.targets:type_name -> stratt.plugin.v1.ApplyTarget
-	58, // 37: stratt.plugin.v1.ApplyRequest.resolved_capabilities:type_name -> stratt.plugin.v1.ApplyRequest.ResolvedCapabilitiesEntry
-	59, // 38: stratt.plugin.v1.CapabilityHandle.config:type_name -> stratt.plugin.v1.CapabilityHandle.ConfigEntry
-	60, // 39: stratt.plugin.v1.ApplyTarget.identity_keys:type_name -> stratt.plugin.v1.ApplyTarget.IdentityKeysEntry
-	61, // 40: stratt.plugin.v1.ApplyTarget.vars:type_name -> stratt.plugin.v1.ApplyTarget.VarsEntry
-	7,  // 41: stratt.plugin.v1.DestroyRequest.envelope:type_name -> stratt.plugin.v1.Envelope
-	36, // 42: stratt.plugin.v1.DestroyRequest.targets:type_name -> stratt.plugin.v1.ApplyTarget
-	8,  // 43: stratt.plugin.v1.DestroyRequest.desired:type_name -> stratt.plugin.v1.Payload
-	7,  // 44: stratt.plugin.v1.InvokeRequest.envelope:type_name -> stratt.plugin.v1.Envelope
-	8,  // 45: stratt.plugin.v1.InvokeRequest.args:type_name -> stratt.plugin.v1.Payload
+	55, // 21: stratt.plugin.v1.ObservedEntity.identity_keys:type_name -> stratt.plugin.v1.ObservedEntity.IdentityKeysEntry
+	56, // 22: stratt.plugin.v1.ObservedEntity.labels:type_name -> stratt.plugin.v1.ObservedEntity.LabelsEntry
+	57, // 23: stratt.plugin.v1.ObservedEntity.facets:type_name -> stratt.plugin.v1.ObservedEntity.FacetsEntry
+	29, // 24: stratt.plugin.v1.ObservedEntity.relations:type_name -> stratt.plugin.v1.ObservedRelation
+	28, // 25: stratt.plugin.v1.ObserveResponse.entities:type_name -> stratt.plugin.v1.ObservedEntity
+	30, // 26: stratt.plugin.v1.ObserveResponse.gone:type_name -> stratt.plugin.v1.GoneEntity
+	31, // 27: stratt.plugin.v1.ObserveResponse.gone_relations:type_name -> stratt.plugin.v1.GoneRelation
+	8,  // 28: stratt.plugin.v1.PlanRequest.envelope:type_name -> stratt.plugin.v1.Envelope
+	9,  // 29: stratt.plugin.v1.PlanRequest.desired:type_name -> stratt.plugin.v1.Payload
+	58, // 30: stratt.plugin.v1.PlanRequest.resolved_capabilities:type_name -> stratt.plugin.v1.PlanRequest.ResolvedCapabilitiesEntry
+	9,  // 31: stratt.plugin.v1.PlanResponse.diff:type_name -> stratt.plugin.v1.Payload
+	10, // 32: stratt.plugin.v1.PlanResponse.plan:type_name -> stratt.plugin.v1.ArtifactRef
+	8,  // 33: stratt.plugin.v1.ApplyRequest.envelope:type_name -> stratt.plugin.v1.Envelope
+	9,  // 34: stratt.plugin.v1.ApplyRequest.desired:type_name -> stratt.plugin.v1.Payload
+	10, // 35: stratt.plugin.v1.ApplyRequest.plan_ref:type_name -> stratt.plugin.v1.ArtifactRef
+	37, // 36: stratt.plugin.v1.ApplyRequest.targets:type_name -> stratt.plugin.v1.ApplyTarget
+	59, // 37: stratt.plugin.v1.ApplyRequest.resolved_capabilities:type_name -> stratt.plugin.v1.ApplyRequest.ResolvedCapabilitiesEntry
+	60, // 38: stratt.plugin.v1.CapabilityHandle.config:type_name -> stratt.plugin.v1.CapabilityHandle.ConfigEntry
+	61, // 39: stratt.plugin.v1.ApplyTarget.identity_keys:type_name -> stratt.plugin.v1.ApplyTarget.IdentityKeysEntry
+	62, // 40: stratt.plugin.v1.ApplyTarget.vars:type_name -> stratt.plugin.v1.ApplyTarget.VarsEntry
+	8,  // 41: stratt.plugin.v1.DestroyRequest.envelope:type_name -> stratt.plugin.v1.Envelope
+	37, // 42: stratt.plugin.v1.DestroyRequest.targets:type_name -> stratt.plugin.v1.ApplyTarget
+	9,  // 43: stratt.plugin.v1.DestroyRequest.desired:type_name -> stratt.plugin.v1.Payload
+	8,  // 44: stratt.plugin.v1.InvokeRequest.envelope:type_name -> stratt.plugin.v1.Envelope
+	9,  // 45: stratt.plugin.v1.InvokeRequest.args:type_name -> stratt.plugin.v1.Payload
 	4,  // 46: stratt.plugin.v1.TaskEvent.level:type_name -> stratt.plugin.v1.TaskEvent.Level
-	63, // 47: stratt.plugin.v1.TaskEvent.at:type_name -> google.protobuf.Timestamp
-	62, // 48: stratt.plugin.v1.TaskEvent.fields:type_name -> stratt.plugin.v1.TaskEvent.FieldsEntry
-	5,  // 49: stratt.plugin.v1.ItemResult.status:type_name -> stratt.plugin.v1.ItemResult.Status
-	8,  // 50: stratt.plugin.v1.DiffFragment.detail:type_name -> stratt.plugin.v1.Payload
-	6,  // 51: stratt.plugin.v1.DerivedContract.rung:type_name -> stratt.plugin.v1.DerivedContract.Rung
-	40, // 52: stratt.plugin.v1.ApplyResponse.event:type_name -> stratt.plugin.v1.TaskEvent
-	27, // 53: stratt.plugin.v1.ApplyResponse.write_back:type_name -> stratt.plugin.v1.ObservedEntity
-	41, // 54: stratt.plugin.v1.ApplyResponse.result:type_name -> stratt.plugin.v1.ItemResult
-	42, // 55: stratt.plugin.v1.ApplyResponse.drift:type_name -> stratt.plugin.v1.DiffFragment
-	43, // 56: stratt.plugin.v1.ApplyResponse.derived_contract:type_name -> stratt.plugin.v1.DerivedContract
-	40, // 57: stratt.plugin.v1.DestroyResponse.event:type_name -> stratt.plugin.v1.TaskEvent
-	41, // 58: stratt.plugin.v1.DestroyResponse.result:type_name -> stratt.plugin.v1.ItemResult
-	29, // 59: stratt.plugin.v1.DestroyResponse.gone:type_name -> stratt.plugin.v1.GoneEntity
-	8,  // 60: stratt.plugin.v1.InvokeResult.outputs:type_name -> stratt.plugin.v1.Payload
-	12, // 61: stratt.plugin.v1.InvokeResult.output_contract:type_name -> stratt.plugin.v1.ContractRef
-	27, // 62: stratt.plugin.v1.InvokeResult.entities:type_name -> stratt.plugin.v1.ObservedEntity
-	14, // 63: stratt.plugin.v1.InvokeResult.provisioned_creds:type_name -> stratt.plugin.v1.CredentialRef
-	40, // 64: stratt.plugin.v1.InvokeResponse.event:type_name -> stratt.plugin.v1.TaskEvent
-	46, // 65: stratt.plugin.v1.InvokeResponse.result:type_name -> stratt.plugin.v1.InvokeResult
-	7,  // 66: stratt.plugin.v1.EmittedEvent.envelope:type_name -> stratt.plugin.v1.Envelope
-	8,  // 67: stratt.plugin.v1.EmittedEvent.payload:type_name -> stratt.plugin.v1.Payload
-	64, // 68: stratt.plugin.v1.EmittedEvent.match:type_name -> google.protobuf.Struct
-	63, // 69: stratt.plugin.v1.EmittedEvent.occurred_at:type_name -> google.protobuf.Timestamp
-	48, // 70: stratt.plugin.v1.SubscribeResponse.event:type_name -> stratt.plugin.v1.EmittedEvent
-	35, // 71: stratt.plugin.v1.PlanRequest.ResolvedCapabilitiesEntry.value:type_name -> stratt.plugin.v1.CapabilityHandle
-	35, // 72: stratt.plugin.v1.ApplyRequest.ResolvedCapabilitiesEntry.value:type_name -> stratt.plugin.v1.CapabilityHandle
-	18, // 73: stratt.plugin.v1.PluginService.GetManifest:input_type -> stratt.plugin.v1.GetManifestRequest
-	24, // 74: stratt.plugin.v1.PluginService.Health:input_type -> stratt.plugin.v1.HealthRequest
-	26, // 75: stratt.plugin.v1.PluginService.Observe:input_type -> stratt.plugin.v1.ObserveRequest
-	32, // 76: stratt.plugin.v1.PluginService.Plan:input_type -> stratt.plugin.v1.PlanRequest
-	34, // 77: stratt.plugin.v1.PluginService.Apply:input_type -> stratt.plugin.v1.ApplyRequest
-	37, // 78: stratt.plugin.v1.PluginService.Destroy:input_type -> stratt.plugin.v1.DestroyRequest
-	38, // 79: stratt.plugin.v1.PluginService.Invoke:input_type -> stratt.plugin.v1.InvokeRequest
-	39, // 80: stratt.plugin.v1.PluginService.Subscribe:input_type -> stratt.plugin.v1.SubscribeRequest
-	50, // 81: stratt.plugin.v1.PluginService.WrapKey:input_type -> stratt.plugin.v1.WrapKeyRequest
-	52, // 82: stratt.plugin.v1.PluginService.UnwrapKey:input_type -> stratt.plugin.v1.UnwrapKeyRequest
-	23, // 83: stratt.plugin.v1.PluginService.GetManifest:output_type -> stratt.plugin.v1.GetManifestResponse
-	25, // 84: stratt.plugin.v1.PluginService.Health:output_type -> stratt.plugin.v1.HealthResponse
-	31, // 85: stratt.plugin.v1.PluginService.Observe:output_type -> stratt.plugin.v1.ObserveResponse
-	33, // 86: stratt.plugin.v1.PluginService.Plan:output_type -> stratt.plugin.v1.PlanResponse
-	44, // 87: stratt.plugin.v1.PluginService.Apply:output_type -> stratt.plugin.v1.ApplyResponse
-	45, // 88: stratt.plugin.v1.PluginService.Destroy:output_type -> stratt.plugin.v1.DestroyResponse
-	47, // 89: stratt.plugin.v1.PluginService.Invoke:output_type -> stratt.plugin.v1.InvokeResponse
-	49, // 90: stratt.plugin.v1.PluginService.Subscribe:output_type -> stratt.plugin.v1.SubscribeResponse
-	51, // 91: stratt.plugin.v1.PluginService.WrapKey:output_type -> stratt.plugin.v1.WrapKeyResponse
-	53, // 92: stratt.plugin.v1.PluginService.UnwrapKey:output_type -> stratt.plugin.v1.UnwrapKeyResponse
-	83, // [83:93] is the sub-list for method output_type
-	73, // [73:83] is the sub-list for method input_type
-	73, // [73:73] is the sub-list for extension type_name
-	73, // [73:73] is the sub-list for extension extendee
-	0,  // [0:73] is the sub-list for field type_name
+	64, // 47: stratt.plugin.v1.TaskEvent.at:type_name -> google.protobuf.Timestamp
+	63, // 48: stratt.plugin.v1.TaskEvent.fields:type_name -> stratt.plugin.v1.TaskEvent.FieldsEntry
+	5,  // 49: stratt.plugin.v1.TaskEvent.scope:type_name -> stratt.plugin.v1.TaskEvent.Scope
+	6,  // 50: stratt.plugin.v1.ItemResult.status:type_name -> stratt.plugin.v1.ItemResult.Status
+	9,  // 51: stratt.plugin.v1.DiffFragment.detail:type_name -> stratt.plugin.v1.Payload
+	7,  // 52: stratt.plugin.v1.DerivedContract.rung:type_name -> stratt.plugin.v1.DerivedContract.Rung
+	41, // 53: stratt.plugin.v1.ApplyResponse.event:type_name -> stratt.plugin.v1.TaskEvent
+	28, // 54: stratt.plugin.v1.ApplyResponse.write_back:type_name -> stratt.plugin.v1.ObservedEntity
+	42, // 55: stratt.plugin.v1.ApplyResponse.result:type_name -> stratt.plugin.v1.ItemResult
+	43, // 56: stratt.plugin.v1.ApplyResponse.drift:type_name -> stratt.plugin.v1.DiffFragment
+	44, // 57: stratt.plugin.v1.ApplyResponse.derived_contract:type_name -> stratt.plugin.v1.DerivedContract
+	41, // 58: stratt.plugin.v1.DestroyResponse.event:type_name -> stratt.plugin.v1.TaskEvent
+	42, // 59: stratt.plugin.v1.DestroyResponse.result:type_name -> stratt.plugin.v1.ItemResult
+	30, // 60: stratt.plugin.v1.DestroyResponse.gone:type_name -> stratt.plugin.v1.GoneEntity
+	9,  // 61: stratt.plugin.v1.InvokeResult.outputs:type_name -> stratt.plugin.v1.Payload
+	13, // 62: stratt.plugin.v1.InvokeResult.output_contract:type_name -> stratt.plugin.v1.ContractRef
+	28, // 63: stratt.plugin.v1.InvokeResult.entities:type_name -> stratt.plugin.v1.ObservedEntity
+	15, // 64: stratt.plugin.v1.InvokeResult.provisioned_creds:type_name -> stratt.plugin.v1.CredentialRef
+	41, // 65: stratt.plugin.v1.InvokeResponse.event:type_name -> stratt.plugin.v1.TaskEvent
+	47, // 66: stratt.plugin.v1.InvokeResponse.result:type_name -> stratt.plugin.v1.InvokeResult
+	8,  // 67: stratt.plugin.v1.EmittedEvent.envelope:type_name -> stratt.plugin.v1.Envelope
+	9,  // 68: stratt.plugin.v1.EmittedEvent.payload:type_name -> stratt.plugin.v1.Payload
+	65, // 69: stratt.plugin.v1.EmittedEvent.match:type_name -> google.protobuf.Struct
+	64, // 70: stratt.plugin.v1.EmittedEvent.occurred_at:type_name -> google.protobuf.Timestamp
+	49, // 71: stratt.plugin.v1.SubscribeResponse.event:type_name -> stratt.plugin.v1.EmittedEvent
+	36, // 72: stratt.plugin.v1.PlanRequest.ResolvedCapabilitiesEntry.value:type_name -> stratt.plugin.v1.CapabilityHandle
+	36, // 73: stratt.plugin.v1.ApplyRequest.ResolvedCapabilitiesEntry.value:type_name -> stratt.plugin.v1.CapabilityHandle
+	19, // 74: stratt.plugin.v1.PluginService.GetManifest:input_type -> stratt.plugin.v1.GetManifestRequest
+	25, // 75: stratt.plugin.v1.PluginService.Health:input_type -> stratt.plugin.v1.HealthRequest
+	27, // 76: stratt.plugin.v1.PluginService.Observe:input_type -> stratt.plugin.v1.ObserveRequest
+	33, // 77: stratt.plugin.v1.PluginService.Plan:input_type -> stratt.plugin.v1.PlanRequest
+	35, // 78: stratt.plugin.v1.PluginService.Apply:input_type -> stratt.plugin.v1.ApplyRequest
+	38, // 79: stratt.plugin.v1.PluginService.Destroy:input_type -> stratt.plugin.v1.DestroyRequest
+	39, // 80: stratt.plugin.v1.PluginService.Invoke:input_type -> stratt.plugin.v1.InvokeRequest
+	40, // 81: stratt.plugin.v1.PluginService.Subscribe:input_type -> stratt.plugin.v1.SubscribeRequest
+	51, // 82: stratt.plugin.v1.PluginService.WrapKey:input_type -> stratt.plugin.v1.WrapKeyRequest
+	53, // 83: stratt.plugin.v1.PluginService.UnwrapKey:input_type -> stratt.plugin.v1.UnwrapKeyRequest
+	24, // 84: stratt.plugin.v1.PluginService.GetManifest:output_type -> stratt.plugin.v1.GetManifestResponse
+	26, // 85: stratt.plugin.v1.PluginService.Health:output_type -> stratt.plugin.v1.HealthResponse
+	32, // 86: stratt.plugin.v1.PluginService.Observe:output_type -> stratt.plugin.v1.ObserveResponse
+	34, // 87: stratt.plugin.v1.PluginService.Plan:output_type -> stratt.plugin.v1.PlanResponse
+	45, // 88: stratt.plugin.v1.PluginService.Apply:output_type -> stratt.plugin.v1.ApplyResponse
+	46, // 89: stratt.plugin.v1.PluginService.Destroy:output_type -> stratt.plugin.v1.DestroyResponse
+	48, // 90: stratt.plugin.v1.PluginService.Invoke:output_type -> stratt.plugin.v1.InvokeResponse
+	50, // 91: stratt.plugin.v1.PluginService.Subscribe:output_type -> stratt.plugin.v1.SubscribeResponse
+	52, // 92: stratt.plugin.v1.PluginService.WrapKey:output_type -> stratt.plugin.v1.WrapKeyResponse
+	54, // 93: stratt.plugin.v1.PluginService.UnwrapKey:output_type -> stratt.plugin.v1.UnwrapKeyResponse
+	84, // [84:94] is the sub-list for method output_type
+	74, // [74:84] is the sub-list for method input_type
+	74, // [74:74] is the sub-list for extension type_name
+	74, // [74:74] is the sub-list for extension extendee
+	0,  // [0:74] is the sub-list for field type_name
 }
 
 func init() { file_stratt_plugin_v1_plugin_proto_init() }
@@ -4205,7 +4285,7 @@ func file_stratt_plugin_v1_plugin_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_stratt_plugin_v1_plugin_proto_rawDesc), len(file_stratt_plugin_v1_plugin_proto_rawDesc)),
-			NumEnums:      7,
+			NumEnums:      8,
 			NumMessages:   56,
 			NumExtensions: 0,
 			NumServices:   1,

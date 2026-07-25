@@ -309,8 +309,16 @@ func Run(ctx context.Context, w io.Writer, dir string, req Request, run commandR
 	// What content this EE actually carries (ADR-0117 D3), stated once per Run so the
 	// descent can answer "which collections/roles did this Run have?" without inspecting
 	// an image digest by hand (§1.8).
+	//
+	// SCOPE_RUN (ADR-0121) is what makes that answerable without the interface plane
+	// learning the word "ee-content". This event describes the image the whole Run executed
+	// in, not any task in it — so a descent surface pins it as Run metadata by reading a
+	// spine-owned field, the same way it already reads Level. ADR-0117 follow-up (j) was
+	// refused as originally written precisely because the alternative was a `kind` match in
+	// the UI, which is the `if ansible{}` §1.4 forbids, relocated into TypeScript.
 	emit(&pluginv1.ApplyResponse{Event: &pluginv1.TaskEvent{
 		Level: pluginv1.TaskEvent_LEVEL_INFO, Message: contentSummary(os.ReadFile), At: timestamppb.Now(),
+		Scope:  pluginv1.TaskEvent_SCOPE_RUN,
 		Fields: map[string]string{"kind": "ee-content"},
 	}})
 
