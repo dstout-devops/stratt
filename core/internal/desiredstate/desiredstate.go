@@ -549,31 +549,60 @@ func checkProvisioningBuildInputs(decls Declarations) error {
 		sort.Strings(builders[k])
 	}
 
-	for _, in := range decls.Intents {
-		// Compute only. The singleton kinds' params differ (stratt.intent/singleton rather than
-		// instance/ordinal) and ADR-0120 books them as a follow-up rather than guessing, so
-		// checking them here would assert a shape that does not exist yet.
-		if in.Kind != types.IntentCompute {
-			continue
-		}
-		pin, err := provision.FromIntent(in)
-		if err != nil {
-			return fmt.Errorf("intent %s: %w", in.Name, err)
-		}
-		// One representative instance is enough: the ordinal changes the VALUES, never the KEY
-		// SET, and this check is about keys.
-		sample := provision.Instance{
-			Name:    provision.InstanceName(pin.Spec.NamePrefix, 1, pin.Spec.Count),
-			Intent:  in.Name,
-			Ordinal: 1,
-		}
-		supplied := provision.BuildLaunchParams(pin, sample)
-
-		for _, wfName := range builders["Compute"] {
-			wf, ok := byName[wfName]
-			if !ok {
-				continue // declared elsewhere (or nowhere): the reconcile's cross-ref check, not a second opinion here
+	// A provisions map naming a Workflow that does not exist is caught HERE and nowhere else.
+	// validateProvisions only checks the entry is non-empty, and the reconcile simply copies the name
+	// onto the Finding — so `provisions: {Subnet: opentofu-subnet-build}` against a Workflow nobody
+	// declared produced a build Finding offering a Workflow that cannot be launched, discovered by an
+	// operator at the gate (§1.8). A provider must not advertise a capability it has no Workflow for.
+	for kind, wfNames := range builders {
+		for _, wfName := range wfNames {
+			if _, ok := byName[wfName]; !ok {
+				return fmt.Errorf(
+					"a provisioning provider advertises workflow %q as its %s builder, but no such "+
+						"Workflow is declared — the build Finding would name a Workflow nobody can "+
+						"launch. Declare it, or drop the provisions entry: advertising a capability "+
+						"with no Workflow behind it is a promise the estate cannot keep", wfName, kind)
 			}
+		}
+	}
+
+	for _, in := range decls.Intents {
+		// The generated param set differs per provisioning shape: a fleet instance has an ordinal
+		// and stratt.intent/instance; a named singleton has a per-kind (intentKind, name) key and
+		// stratt.intent/singleton. Taken from the same functions the reconcile calls, so neither can
+		// drift from what is actually sent.
+		var supplied map[string]any
+		var kind, unit string
+		switch {
+		case in.Kind == types.IntentCompute:
+			pin, err := provision.FromIntent(in)
+			if err != nil {
+				return fmt.Errorf("intent %s: %w", in.Name, err)
+			}
+			// One representative instance is enough: the ordinal changes the VALUES, never the
+			// KEY SET, and this check is about keys.
+			supplied = provision.BuildLaunchParams(pin, provision.Instance{
+				Name:    provision.InstanceName(pin.Spec.NamePrefix, 1, pin.Spec.Count),
+				Intent:  in.Name,
+				Ordinal: 1,
+			})
+			kind, unit = "Compute", "instance"
+		case types.SingletonIntentKinds[in.Kind]:
+			sin, err := provision.FromSingletonIntent(in)
+			if err != nil {
+				return fmt.Errorf("intent %s: %w", in.Name, err)
+			}
+			supplied = provision.SingletonLaunchParams(sin, provision.Instance{
+				Name:   provision.SingletonKey(in.Kind, in.Name),
+				Intent: in.Name,
+			})
+			kind, unit = strings.TrimPrefix(in.Kind, "Intent/"), "singleton"
+		default:
+			continue // not a provisioning kind
+		}
+
+		for _, wfName := range builders[kind] {
+			wf := byName[wfName]
 			what := fmt.Sprintf("intent %s builds via workflow %s", in.Name, wfName)
 			declared, err := contract.InputNames(wf.Inputs)
 			if err != nil {
@@ -581,9 +610,9 @@ func checkProvisioningBuildInputs(decls Declarations) error {
 			}
 			if len(declared) == 0 {
 				return fmt.Errorf(
-					"%s, which declares no `inputs` — so the reconcile cannot tell it WHICH instance to "+
-						"build and every instance after the first is unbuildable through the gated path "+
-						"(ADR-0120 D2). Declare inputs for: %v", what, sortedKeys(supplied))
+					"%s, which declares no `inputs` — so the reconcile cannot tell it WHICH %s to build, "+
+						"and a %s it was not told about is unbuildable through the gated path "+
+						"(ADR-0120 D2). Declare inputs for: %v", what, unit, unit, sortedKeys(supplied))
 			}
 			names := make([]string, 0, len(declared))
 			for n := range declared {
@@ -597,6 +626,14 @@ func checkProvisioningBuildInputs(decls Declarations) error {
 							"supplies it, and a launch carrying an undeclared input is refused, so this "+
 							"build could never run", what, k, names)
 				}
+			}
+			if label, bad := hardcodedCorrelationLabel(wf); bad {
+				return fmt.Errorf(
+					"%s, but that workflow hardcodes the correlation label %q in a step. It must forward "+
+						"{{.launch.labels}} instead: the reconcile derives the exact key and value it will "+
+						"later match on, and a hand-written one that is wrong still BUILDS — the Entity "+
+						"appears, the Finding never resolves, and the same gated build is surfaced forever",
+					what, label)
 			}
 			required, err := contract.RequiredNames(wf.Inputs)
 			if err != nil {
@@ -613,6 +650,55 @@ func checkProvisioningBuildInputs(decls Declarations) error {
 		}
 	}
 	return nil
+}
+
+// hardcodedCorrelationLabel reports the first `stratt.intent/*` key a build Workflow writes BY HAND,
+// which a build Workflow must never do (ADR-0120 D3).
+//
+// This guards a bug class, not just the bug that motivated it. The correlation label is how the next
+// reconcile decides a unit is built: it must be the exact key the planner reads
+// (stratt.intent/instance for a fleet, stratt.intent/singleton for a named singleton) carrying the
+// exact value the planner derived. Hand-writing it can get the KEY wrong or the VALUE wrong, and both
+// failures look like success — the build runs, the Entity appears, and the Finding never resolves, so
+// the reconcile keeps surfacing the same gated build forever.
+//
+// estate/workflows/vsphere-subnet-build.yaml shipped exactly that: it projected
+// `stratt.intent/subnet`, a key nothing reads. Forwarding {{.launch.labels}} makes the failure
+// impossible instead of merely absent, because the reconcile owns both halves.
+func hardcodedCorrelationLabel(w types.Workflow) (string, bool) {
+	const prefix = "stratt.intent/"
+	var walk func(v any) (string, bool)
+	walk = func(v any) (string, bool) {
+		switch t := v.(type) {
+		case map[string]any:
+			keys := make([]string, 0, len(t))
+			for k := range t {
+				keys = append(keys, k)
+			}
+			sort.Strings(keys)
+			for _, k := range keys {
+				if strings.HasPrefix(k, prefix) {
+					return k, true
+				}
+				if found, ok := walk(t[k]); ok {
+					return found, true
+				}
+			}
+		case []any:
+			for _, e := range t {
+				if found, ok := walk(e); ok {
+					return found, true
+				}
+			}
+		}
+		return "", false
+	}
+	for _, st := range w.Steps {
+		if found, ok := walk(map[string]any(st.Params)); ok {
+			return found, true
+		}
+	}
+	return "", false
 }
 
 // sortedKeys returns a map's keys in deterministic order, so an error message reads the same twice.

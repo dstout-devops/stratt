@@ -446,3 +446,55 @@ func BuildLaunchParams(in Intent, inst Instance) map[string]any {
 	}
 	return out
 }
+
+// SingletonLabel is the correlation label key a built named-singleton carries (ADR-0059 D4). It is
+// the ONLY key ProvisionedSingletons reads, so a build projecting any other spelling produces an
+// Entity that never resolves its own Finding — which is exactly what
+// estate/workflows/vsphere-subnet-build.yaml did with `stratt.intent/subnet` until ADR-0120.
+const SingletonLabel = "stratt.intent/singleton"
+
+// SingletonLaunchParams derives the launch inputs for ONE named-singleton's gated build
+// (ADR-0120 D2, extended to the ADR-0059 D4 path).
+//
+// The singleton sibling of BuildLaunchParams, and the params differ for a real reason rather than by
+// accident: a singleton has no ordinal, and its correlation key is per-kind — (intentKind, name), so
+// a Subnet named "web-dmz" can never collide with a Compute instance of the same name (§2). `name`
+// is carried BESIDE the key because the two are different things: the key correlates desired with
+// built, while the name is what the resource is actually called in the provider.
+//
+// `params` passes through whole, for the reason BuildLaunchParams records.
+func SingletonLaunchParams(si SingletonIntent, inst Instance) map[string]any {
+	labels := make(map[string]any, len(si.Spec.Labels)+1)
+	for k, v := range si.Spec.Labels {
+		labels[k] = v
+	}
+	// inst.Name IS the correlation key (SingletonKey → "Intent/Subnet/app-subnet"), per PlanSingletons.
+	labels[SingletonLabel] = inst.Name
+
+	out := map[string]any{
+		"singleton":   inst.Name,
+		"name":        si.Name,
+		"intentKind":  si.Kind,
+		"projectKind": si.Spec.ProjectKind,
+		"labels":      labels,
+	}
+	if pl := si.Spec.Placement; pl != nil {
+		place := map[string]any{}
+		if pl.Subnet != "" {
+			place["subnet"] = pl.Subnet
+		}
+		if pl.Dmz != "" {
+			place["dmz"] = pl.Dmz
+		}
+		if pl.AvailabilityZone != "" {
+			place["availabilityZone"] = pl.AvailabilityZone
+		}
+		if len(place) > 0 {
+			out["placement"] = place
+		}
+	}
+	if len(si.Spec.Params) > 0 {
+		out["params"] = si.Spec.Params
+	}
+	return out
+}

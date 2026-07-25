@@ -306,13 +306,15 @@ func (c *Controller) reconcileProvisioning(ctx context.Context, decls Declaratio
 			"placement": si.Spec.Placement,
 		}))
 		b := "provision/" + inst.Intent
-		// No launch spec yet: the singleton path's params differ (stratt.intent/singleton rather
-		// than instance/ordinal) and ADR-0120 books it as a follow-up rather than guessing at it.
-		// Its build Workflows (subnet-build, vlan-build) therefore keep hardcoded correlation
-		// labels for now — stated so the compute fix is not read as full coverage.
-		if err := c.Store.WriteProvisionFinding(ctx, graph.ProvisionFinding{
-			Baseline: b, Target: inst.Name, Severity: "warning", Detail: detail,
-		}); err != nil {
+		// The typed per-singleton launch spec (ADR-0120 D2, extended to the ADR-0059 D4 path).
+		// Empty when provisioning is unresolved: nothing to launch, and the detail names the
+		// capability that could not be bound.
+		pf := graph.ProvisionFinding{Baseline: b, Target: inst.Name, Severity: "warning", Detail: detail}
+		if r := resolveKind(shortIntentKind(si.Kind)); r.Status == capability.StatusResolved {
+			pf.LaunchWorkflow = r.Workflow
+			pf.LaunchParams = provision.SingletonLaunchParams(si, inst)
+		}
+		if err := c.Store.WriteProvisionFinding(ctx, pf); err != nil {
 			log.Error("write singleton provision finding failed", "singleton", inst.Name, "error", err)
 			continue
 		}

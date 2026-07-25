@@ -947,10 +947,11 @@ func TestEveryAdvertisedBuilderIsChecked(t *testing.T) {
 	}
 }
 
-// A SINGLETON kind is deliberately not checked: its params differ (stratt.intent/singleton rather
-// than instance/ordinal) and ADR-0120 books that as a follow-up. Checking it here would assert a
-// shape that does not exist yet and fail the shipped subnet/vlan builders for the wrong reason.
-func TestSingletonKindsAreNotYetChecked(t *testing.T) {
+// Singleton builders are checked with the SINGLETON param set, which differs from a fleet's for a
+// real reason: no ordinal, and a per-kind (intentKind, name) correlation key so a Subnet named
+// "web-dmz" can never collide with a Compute instance of that name (§2). A check that applied the
+// fleet set here would demand `instance`/`ordinal` from a Workflow that will never receive them.
+func TestSingletonBuildInputsCheckedAtDeclaration(t *testing.T) {
 	root := t.TempDir()
 	writeDecl(t, root, "v.yaml", "name: v\nselector: {kinds: [host]}\n")
 	writeKind(t, root, "intents", "i.yaml",
@@ -962,7 +963,42 @@ func TestSingletonKindsAreNotYetChecked(t *testing.T) {
 	writeKind(t, root, "workflows", "w.yaml",
 		"name: subnet-build\nsteps:\n  - {name: s, viewName: v, actuator: script, params: {script: echo}}\n")
 
-	if _, err := ParseDir(root, nil); err != nil {
-		t.Fatalf("singleton builders are a booked follow-up, not a failure: %v", err)
+	err := ParseDir2Err(t, root)
+	if err == nil {
+		t.Fatal("a singleton builder with no inputs must be refused")
+	}
+	// The SINGLETON set, not the fleet set: `singleton` and `name`, and NOT instance/ordinal.
+	for _, want := range []string{"app-subnet", "subnet-build", "singleton", "name"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("want %q in: %v", want, err)
+		}
+	}
+	for _, unwanted := range []string{"ordinal", "instance "} {
+		if strings.Contains(err.Error(), unwanted) {
+			t.Errorf("the fleet param %q must not be demanded of a singleton builder: %v", unwanted, err)
+		}
+	}
+}
+
+// A provisions map naming a Workflow that does not exist must be refused at declaration. Nothing
+// caught this before: validateProvisions only checks the entry is non-empty, and the reconcile copies
+// the name onto the build Finding — so the reference estate advertised `Subnet: opentofu-subnet-build`
+// against a Workflow that was never written, and a declared Intent/Subnet produced a Finding offering
+// a Workflow nobody could launch. Subnet provisioning was dead and the suite was green.
+func TestDanglingProvisionsTargetIsRefused(t *testing.T) {
+	root := t.TempDir()
+	writeDecl(t, root, "v.yaml", "name: v\nselector: {kinds: [host]}\n")
+	writeKind(t, root, "actuators", "a.yaml",
+		"name: opentofu-network\naddress: stratt-opentofu:9090\npluginIdentity: opentofu\ntier: trusted\n"+
+			"provides: [provisioning]\nprovisions: {Subnet: opentofu-subnet-build}\n")
+
+	err := ParseDir2Err(t, root)
+	if err == nil {
+		t.Fatal("advertising a build Workflow that does not exist must be refused")
+	}
+	for _, want := range []string{"opentofu-subnet-build", "Subnet", "no such", "cannot keep"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the refusal must name the phantom Workflow and the promise; want %q in: %v", want, err)
+		}
 	}
 }

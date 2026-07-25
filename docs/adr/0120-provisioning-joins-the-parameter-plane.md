@@ -289,6 +289,10 @@ possible _with the right values_, which is what removes the incentive to reach f
 ## Follow-ups
 
 - **Keyed placement-aware spread** (per-AZ replicas) — the next ADR, with D2 as its prerequisite.
+- **Two unreachable build Workflows.** `app-tier-build.yaml` (see D3) and `subnet-provision.yaml` are
+  both declared and advertised by nobody. `subnet-provision` is the one this ADR's Context cites as the
+  proven in-repo pattern — it is proven and correct, and nothing routes to it, which is how the
+  advertised singleton builders drifted wrong while a correct example sat beside them unexercised.
 - **`estate/workflows/app-tier-build.yaml` is unreachable** (see D3): no `provisions` map names it and
   nothing launches it. Either advertise it or delete it; a build Workflow no provider routes to is a
   declaration that cannot be exercised, and it misled this ADR's own review into predicting a failure
@@ -300,10 +304,34 @@ possible _with the right values_, which is what removes the incentive to reach f
   refuses an unknown field, and there are no conditionals — ADR-0083 D5). The honest fix is an Intent
   per substrate boundary (ADR-0113 D2 already makes environment that boundary), not a template that
   guesses. Recorded because it is the one remaining place a build Workflow holds configuration.
-- **The singleton path** (`PlanSingletons`, ADR-0059 D4) has the same detail-blob shape and should join
-  D2; its params differ (`stratt.intent/singleton` rather than `instance`/`ordinal`) but the mechanism is
-  identical. Until then `subnet-build.yaml` and `vlan-build.yaml` keep hardcoded correlation labels —
-  stated so the count above is not read as complete coverage.
+- ~~**The singleton path**~~ — **done**, via `provision.SingletonLaunchParams`. Its params differ for a
+  real reason: no ordinal, and a per-kind `(intentKind, name)` correlation key so a Subnet named
+  "web-dmz" can never collide with a Compute instance of that name (§2). `subnet-build`, `vlan-build`
+  and `vsphere-subnet-build` are all parameterized, and D3's check applies the singleton set to them.
+
+  **Extending it uncovered three more defects, and the singleton cascade was dead end-to-end:**
+
+  1. **`opentofu-network` advertised `Subnet: opentofu-subnet-build`, a Workflow that was never
+     written.** `validateProvisions` only checks the entry is non-empty, and the reconcile copies the
+     name onto the Finding — so with `estate/capability-bindings/provisioning.yaml` explicitly
+     selecting that provider for Subnet, **`app-subnet` and `dmz-subnet` could not be built at all**,
+     and `app-tier`'s placement depends on `app-subnet`. D3 now refuses a dangling `provisions` target
+     at declaration: a provider must not advertise a capability it has no Workflow for.
+  2. **`vsphere-subnet-build` projected `stratt.intent/subnet`** — a key nothing reads;
+     `ProvisionedSingletons` matches only `stratt.intent/singleton`. A successful build therefore
+     produced a portgroup that never resolved its own Finding, so the reconcile re-surfaced the same
+     gated build forever. Both failure modes look like success, which is why it survived. D3 now
+     refuses any build Workflow that hardcodes a `stratt.intent/*` label instead of forwarding
+     `{{.launch.labels}}` — guarding the class, not the instance.
+  3. **`subnet-build` and `vlan-build` hardcoded one singleton's name and key**, so only the named one
+     was ever buildable — the fleet defect in singleton clothing.
+
+  **Consequence recorded rather than buried: ADR-0110 D5's demotion of Crossplane in favour of OpenTofu
+  for Subnet was DECLARED BUT NEVER DELIVERED.** The advertisement and its binding are removed, so
+  Subnet resolves to Crossplane's `subnet-build`, which exists. This defers D5 rather than reversing
+  it — re-add both the moment `opentofu-subnet-build` is written. `provides: [provisioning]` stays on
+  the Actuator: OpenTofu genuinely provides the class for the enablement gate; what it lacks is a
+  per-kind builder.
 - **ADR-0114's decommission path** should carry `launchKind: decommission` through the same field rather
   than growing its own. That is the first real test of whether D1's discriminator holds, and if it needs
   a fourth member the "stays at three" claim was wrong.
