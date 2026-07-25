@@ -161,7 +161,7 @@ func (e *Engine) launch(ctx context.Context, log *slog.Logger, t types.Trigger, 
 	// message must not loop). Only infrastructure failures below redeliver.
 	// The trigger declaration's actuator — required for a View-actuation trigger
 	// (validated at declaration; no platform default, ADR-0046).
-	params, err := contract.ResolveActuatorParams(t.Actuator, t.Params, ns)
+	params, err := contract.ResolveActuatorParamsFor(t.Actuator, e.Store.PluginIdentityOf(ctx, t.Actuator), t.Params, ns)
 	if err != nil {
 		log.Error("trigger binding failed; event dropped (not redelivered)", "trigger", t.Name, "error", err)
 		return nil

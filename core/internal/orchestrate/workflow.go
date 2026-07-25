@@ -446,7 +446,7 @@ func (a *Activities) ResolveStepParams(ctx context.Context, actuator string, par
 		return nil, fmt.Errorf("workflow actuation step requires an explicit actuator (no platform default)")
 	}
 	ns := template.Namespaces{"event": event, "steps": stepsNamespace(steps), "launch": launch}
-	raw, err := contract.ResolveActuatorParams(name, params, ns)
+	raw, err := contract.ResolveActuatorParamsFor(name, a.Store.PluginIdentityOf(ctx, name), params, ns)
 	if err != nil {
 		return nil, temporal.NewNonRetryableApplicationError(err.Error(), "InvalidStepParams", err)
 	}

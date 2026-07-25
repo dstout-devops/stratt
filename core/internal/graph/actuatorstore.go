@@ -50,6 +50,24 @@ func (s *Store) GetActuator(ctx context.Context, name string) (types.Actuator, e
 	return a, nil
 }
 
+// PluginIdentityOf resolves a declared Actuator's plugin identity, or empty when the
+// Actuator is not CaC-declared (a boot-registered one, whose name IS its identity) or
+// the read fails.
+//
+// It exists because an input Contract belongs to the TOOL, not to the local name an
+// estate gives one of its Actuators (§1.5) — so every path that validates params
+// against a Contract needs this resolution, or a second declaration of the same plugin
+// (an ansible Actuator bound to a content-bearing EE, ADR-0117 D3a) is unusable.
+// Empty is not an error: it means "resolve by name", which is the right answer for
+// every boot-registered Actuator and the behaviour that predates variants.
+func (s *Store) PluginIdentityOf(ctx context.Context, name string) string {
+	a, err := s.GetActuator(ctx, name)
+	if err != nil {
+		return ""
+	}
+	return a.PluginIdentity
+}
+
 // ListActuators returns every Actuator declaration in the active environment, by name.
 func (s *Store) ListActuators(ctx context.Context) ([]types.Actuator, error) {
 	rows, err := s.pool.Query(ctx, `SELECT spec FROM graph.actuator ORDER BY name`)

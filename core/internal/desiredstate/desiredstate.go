@@ -248,6 +248,13 @@ func ParseDir(root string, decider policy.Decider) (Declarations, error) {
 	out.Actuators = actuatorDecls
 	sort.Slice(out.Actuators, func(i, j int) bool { return out.Actuators[i].Name < out.Actuators[j].Name })
 
+	// An input Contract belongs to the TOOL, not to the local name this estate gives one
+	// of its Actuators, so every declaration that names an Actuator is validated with the
+	// name → pluginIdentity map in hand (ADR-0117 D3a; see
+	// contract.ValidateActuatorParamsFor). Actuators are parsed BEFORE the kinds that
+	// reference them, which is what makes this available here.
+	actuatorIDs := WithActuatorIdentities(actuatorIdentities(actuatorDecls))
+
 	capBindings, err := parseKind(filepath.Join(root, "capability-bindings"), true, parseCapabilityBindingFile)
 	if err != nil {
 		return out, err
@@ -255,14 +262,20 @@ func ParseDir(root string, decider policy.Decider) (Declarations, error) {
 	out.CapabilityBindings = capBindings
 	sort.Slice(out.CapabilityBindings, func(i, j int) bool { return out.CapabilityBindings[i].Name < out.CapabilityBindings[j].Name })
 
-	triggers, err := parseKind(filepath.Join(root, "triggers"), true, parseTriggerFile)
+	triggers, err := parseKind(filepath.Join(root, "triggers"), true,
+		func(path string, raw []byte) (string, types.Trigger, error) {
+			return parseTriggerFile(path, raw, actuatorIDs)
+		})
 	if err != nil {
 		return out, err
 	}
 	out.Triggers = triggers
 	sort.Slice(out.Triggers, func(i, j int) bool { return out.Triggers[i].Name < out.Triggers[j].Name })
 
-	workflows, err := parseKind(filepath.Join(root, "workflows"), true, parseWorkflowFile)
+	workflows, err := parseKind(filepath.Join(root, "workflows"), true,
+		func(path string, raw []byte) (string, types.Workflow, error) {
+			return parseWorkflowFile(path, raw, actuatorIDs)
+		})
 	if err != nil {
 		return out, err
 	}
@@ -314,7 +327,10 @@ func ParseDir(root string, decider policy.Decider) (Declarations, error) {
 	out.Subscriptions = subscriptions
 	sort.Slice(out.Subscriptions, func(i, j int) bool { return out.Subscriptions[i].Name < out.Subscriptions[j].Name })
 
-	baselines, err := parseKind(filepath.Join(root, "baselines"), true, parseBaselineFile)
+	baselines, err := parseKind(filepath.Join(root, "baselines"), true,
+		func(path string, raw []byte) (string, types.Baseline, error) {
+			return parseBaselineFile(path, raw, actuatorIDs)
+		})
 	if err != nil {
 		return out, err
 	}
@@ -757,7 +773,7 @@ type triggerFile struct {
 	Environments    []string       `yaml:"environments"`
 }
 
-func parseTriggerFile(path string, raw []byte) (string, types.Trigger, error) {
+func parseTriggerFile(path string, raw []byte, opts ...ValidateOption) (string, types.Trigger, error) {
 	var f triggerFile
 	dec := yaml.NewDecoder(strings.NewReader(string(raw)))
 	dec.KnownFields(true)
@@ -776,7 +792,7 @@ func parseTriggerFile(path string, raw []byte) (string, types.Trigger, error) {
 		WorkflowName: f.WorkflowName, FacetWriteScope: f.FacetWriteScope,
 		Environments: f.Environments,
 	}
-	if err := ValidateTrigger(t); err != nil {
+	if err := ValidateTrigger(t, opts...); err != nil {
 		return "", types.Trigger{}, fmt.Errorf("desiredstate: %s: %w", path, err)
 	}
 	return t.Name, t, nil
@@ -785,7 +801,7 @@ func parseTriggerFile(path string, raw []byte) (string, types.Trigger, error) {
 // ValidateTrigger checks one Trigger declaration; exported because the API's
 // desired-state plan/apply path (the CLI applying the same Git checkout)
 // validates the identical document shape.
-func ValidateTrigger(t types.Trigger) error {
+func ValidateTrigger(t types.Trigger, opts ...ValidateOption) error {
 	if t.Name == "" {
 		return fmt.Errorf("trigger requires a name")
 	}
@@ -842,7 +858,7 @@ func ValidateTrigger(t types.Trigger) error {
 		return fmt.Errorf("trigger %s: credentialRefs require a principal", t.Name)
 	}
 	if runLaunch {
-		if err := validateParamsContract(t.Actuator, t.Params); err != nil {
+		if err := validateParamsContract(t.Actuator, t.Params, opts...); err != nil {
 			return fmt.Errorf("trigger %s: %w", t.Name, err)
 		}
 	}
@@ -1276,7 +1292,7 @@ func (e facetExpectationFile) toExpectation() (types.FacetExpectation, error) {
 	return exp, nil
 }
 
-func parseBaselineFile(path string, raw []byte) (string, types.Baseline, error) {
+func parseBaselineFile(path string, raw []byte, opts ...ValidateOption) (string, types.Baseline, error) {
 	var f baselineFile
 	dec := yaml.NewDecoder(strings.NewReader(string(raw)))
 	dec.KnownFields(true)
@@ -1299,7 +1315,7 @@ func parseBaselineFile(path string, raw []byte) (string, types.Baseline, error) 
 		}
 		b.Expected = append(b.Expected, exp)
 	}
-	if err := ValidateBaseline(b); err != nil {
+	if err := ValidateBaseline(b, opts...); err != nil {
 		return "", types.Baseline{}, fmt.Errorf("desiredstate: %s: %w", path, err)
 	}
 	return b.Name, b, nil
@@ -1309,7 +1325,7 @@ func parseBaselineFile(path string, raw []byte) (string, types.Baseline, error) 
 // must be read-only by construction: only Actuators with check semantics are
 // accepted, opentofu is pinned to plan mode, and ansible's check flag is the
 // platform's to set — a declaration cannot even ask for a mutating check.
-func ValidateBaseline(b types.Baseline) error {
+func ValidateBaseline(b types.Baseline, opts ...ValidateOption) error {
 	if b.Name == "" {
 		return fmt.Errorf("baseline requires a name")
 	}
@@ -1386,7 +1402,7 @@ func ValidateBaseline(b types.Baseline) error {
 	if len(b.CredentialRefs) > 0 && b.Principal == "" {
 		return fmt.Errorf("baseline %s: credentialRefs require a principal", b.Name)
 	}
-	if err := validateParamsContract(b.Actuator, b.Params); err != nil {
+	if err := validateParamsContract(b.Actuator, b.Params, opts...); err != nil {
 		return fmt.Errorf("baseline %s: %w", b.Name, err)
 	}
 	return nil
@@ -1745,7 +1761,36 @@ func ValidateBlueprint(b types.Blueprint) error {
 // (ADR-0024) are validated at LAUNCH against their resolved values instead
 // (the placeholder isn't the value the schema must accept), so their
 // contract check is skipped here.
-func validateParamsContract(actuator string, params map[string]any) error {
+// ValidateOption tunes a declaration validator. It exists so a validator can be
+// given estate-wide context it cannot get from the single declaration in front of
+// it, without breaking every caller that has none.
+type ValidateOption func(*validateOpts)
+
+type validateOpts struct {
+	// identities maps a declared Actuator NAME to its pluginIdentity. Needed
+	// because an input Contract belongs to the tool, not to the local name an
+	// estate gives one of its Actuators — see contract.ValidateActuatorParamsFor.
+	identities map[string]string
+}
+
+func apply(opts []ValidateOption) validateOpts {
+	var o validateOpts
+	for _, fn := range opts {
+		fn(&o)
+	}
+	return o
+}
+
+// WithActuatorIdentities supplies the estate's Actuator name → pluginIdentity map,
+// so a Step naming a declared Actuator variant (e.g. an ansible Actuator bound to a
+// content-bearing EE, ADR-0117 D3a) resolves its plugin's input Contract instead of
+// being rejected as uncontracted. Without it, validation falls back to the name —
+// correct for boot-registered Actuators, whose name IS their identity.
+func WithActuatorIdentities(m map[string]string) ValidateOption {
+	return func(o *validateOpts) { o.identities = m }
+}
+
+func validateParamsContract(actuator string, params map[string]any, opts ...ValidateOption) error {
 	// A View actuation names its Actuator EXPLICITLY (no platform default, ADR-0046):
 	// this validator is reached only on the view-actuation branch (actions, gates, and
 	// facet-observation baselines never call it), so an empty actuator is an
@@ -1756,7 +1801,6 @@ func validateParamsContract(actuator string, params map[string]any) error {
 	if template.Has(params) {
 		return nil
 	}
-	name := actuator
 	raw := json.RawMessage(`{}`)
 	if params != nil {
 		b, err := json.Marshal(params)
@@ -1765,7 +1809,7 @@ func validateParamsContract(actuator string, params map[string]any) error {
 		}
 		raw = b
 	}
-	return contract.ValidateActuatorParams(name, raw)
+	return contract.ValidateActuatorParamsFor(actuator, apply(opts).identities[actuator], raw)
 }
 
 // validateActionParamsContract checks an Action Step's params against the
@@ -1917,7 +1961,7 @@ func toPolicySpec(p *policyYAML) *types.PolicySpec {
 	return &types.PolicySpec{Controls: ctrls}
 }
 
-func parseWorkflowFile(path string, raw []byte) (string, types.Workflow, error) {
+func parseWorkflowFile(path string, raw []byte, opts ...ValidateOption) (string, types.Workflow, error) {
 	var f workflowFile
 	dec := yaml.NewDecoder(strings.NewReader(string(raw)))
 	dec.KnownFields(true)
@@ -1953,7 +1997,7 @@ func parseWorkflowFile(path string, raw []byte) (string, types.Workflow, error) 
 		}
 		w.Steps = append(w.Steps, step)
 	}
-	if err := ValidateWorkflow(w); err != nil {
+	if err := ValidateWorkflow(w, opts...); err != nil {
 		return "", types.Workflow{}, fmt.Errorf("desiredstate: %s: %w", path, err)
 	}
 	return w.Name, w, nil
@@ -1961,7 +2005,7 @@ func parseWorkflowFile(path string, raw []byte) (string, types.Workflow, error) 
 
 // ValidateWorkflow checks one Workflow declaration; exported for the API's
 // desired-state plan/apply path (same document shape as the Git checkout).
-func ValidateWorkflow(w types.Workflow) error {
+func ValidateWorkflow(w types.Workflow, opts ...ValidateOption) error {
 	if w.Name == "" || len(w.Steps) == 0 {
 		return fmt.Errorf("workflow requires name and at least one step")
 	}
@@ -2032,7 +2076,7 @@ func ValidateWorkflow(w types.Workflow) error {
 				return err
 			}
 		case !isGate && !isPolicy:
-			if err := validateParamsContract(s.Actuator, s.Params); err != nil {
+			if err := validateParamsContract(s.Actuator, s.Params, opts...); err != nil {
 				return fmt.Errorf("workflow %s: step %s: %w", w.Name, s.Name, err)
 			}
 			if err := checkTemplateNamespaces(
@@ -3106,4 +3150,20 @@ func selectorsEqual(a, b types.ViewSelector) bool {
 		return false
 	}
 	return reflect.DeepEqual(va, vb)
+}
+
+// actuatorIdentities indexes declared Actuators by name → pluginIdentity. Only
+// declarations that state an identity are indexed; a boot-registered Actuator is
+// absent, and its name IS its identity, so name-based resolution stays right for it.
+func actuatorIdentities(as []types.Actuator) map[string]string {
+	if len(as) == 0 {
+		return nil
+	}
+	m := make(map[string]string, len(as))
+	for _, a := range as {
+		if a.PluginIdentity != "" {
+			m[a.Name] = a.PluginIdentity
+		}
+	}
+	return m
 }

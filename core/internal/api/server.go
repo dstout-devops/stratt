@@ -755,7 +755,7 @@ func baselineToWire(b types.Baseline) Baseline {
 // baselineFromWire mirrors baselineToWire; same CaC declaration the
 // desired-state controller reads from Git (the CLI plan/apply path sends the
 // checkout verbatim — Git review stays the authorization).
-func baselineFromWire(w Baseline) (types.Baseline, error) {
+func baselineFromWire(w Baseline, opts ...desiredstate.ValidateOption) (types.Baseline, error) {
 	b := types.Baseline{Name: w.Name, ViewName: w.ViewName, Cron: w.Cron, Severity: string(w.Severity)}
 	if w.Actuator != nil {
 		b.Actuator = string(*w.Actuator)
@@ -784,7 +784,7 @@ func baselineFromWire(w Baseline) (types.Baseline, error) {
 	if w.Framework != nil {
 		b.Framework = *w.Framework
 	}
-	if err := desiredstate.ValidateBaseline(b); err != nil {
+	if err := desiredstate.ValidateBaseline(b, opts...); err != nil {
 		return b, err
 	}
 	return b, nil
@@ -997,7 +997,7 @@ func (s *Server) DeclareCredentialRef(w http.ResponseWriter, r *http.Request, na
 
 // ── desired state (§1.2: drift is the diff) ─────────────────────────────────
 
-func declarationsFromWire(in DesiredState) (desiredstate.Declarations, error) {
+func declarationsFromWire(in DesiredState, ids desiredstate.ValidateOption) (desiredstate.Declarations, error) {
 	var out desiredstate.Declarations
 	out.Views = make([]desiredstate.Declaration, len(in.Views))
 	for i, d := range in.Views {
@@ -1021,7 +1021,7 @@ func declarationsFromWire(in DesiredState) (desiredstate.Declarations, error) {
 	}
 	if in.Triggers != nil {
 		for _, w := range *in.Triggers {
-			t, err := triggerFromWire(w)
+			t, err := triggerFromWire(w, ids)
 			if err != nil {
 				return out, fmt.Errorf("trigger %s: %w", w.Name, err)
 			}
@@ -1030,7 +1030,7 @@ func declarationsFromWire(in DesiredState) (desiredstate.Declarations, error) {
 	}
 	if in.Workflows != nil {
 		for _, w := range *in.Workflows {
-			wf, err := workflowFromWire(w)
+			wf, err := workflowFromWire(w, ids)
 			if err != nil {
 				return out, fmt.Errorf("workflow %s: %w", w.Name, err)
 			}
@@ -1048,7 +1048,7 @@ func declarationsFromWire(in DesiredState) (desiredstate.Declarations, error) {
 	}
 	if in.Baselines != nil {
 		for _, w := range *in.Baselines {
-			b, err := baselineFromWire(w)
+			b, err := baselineFromWire(w, ids)
 			if err != nil {
 				return out, fmt.Errorf("baseline %s: %w", w.Name, err)
 			}
@@ -1136,7 +1136,7 @@ func declarationsFromWire(in DesiredState) (desiredstate.Declarations, error) {
 // declaration the desired-state controller reads from Git — the CLI plan/
 // apply path sends the checkout verbatim (ADR-0010: Git review stays the
 // authorization; there is no other write surface).
-func triggerFromWire(w Trigger) (types.Trigger, error) {
+func triggerFromWire(w Trigger, opts ...desiredstate.ValidateOption) (types.Trigger, error) {
 	t := types.Trigger{Name: w.Name, Kind: string(w.Kind)}
 	if w.Cron != nil {
 		t.Cron = *w.Cron
@@ -1180,7 +1180,7 @@ func triggerFromWire(w Trigger) (types.Trigger, error) {
 	if w.Principal != nil {
 		t.Principal = *w.Principal
 	}
-	if err := desiredstate.ValidateTrigger(t); err != nil {
+	if err := desiredstate.ValidateTrigger(t, opts...); err != nil {
 		return t, err
 	}
 	return t, nil
@@ -1217,7 +1217,13 @@ func (s *Server) desiredStateBody(w http.ResponseWriter, r *http.Request) (desir
 		writeErr(w, http.StatusBadRequest, "invalid desired state: "+err.Error())
 		return desiredstate.Declarations{}, false
 	}
-	decls, err := declarationsFromWire(body)
+	// Actuators are CaC-only, so a submission never carries them — but a submitted
+	// Workflow may legitimately NAME one (an ansible Actuator bound to a content-bearing
+	// EE, ADR-0117 D3a). Resolve identities from what is already declared, or the API
+	// door would reject a Workflow the Git path accepts (§1.6 — one capability, every
+	// surface). A store read that fails is not fatal here: validation falls back to
+	// name-based resolution, which is exactly the pre-D3a behaviour.
+	decls, err := declarationsFromWire(body, s.actuatorIdentities(r.Context()))
 	if err != nil {
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return desiredstate.Declarations{}, false
@@ -1821,7 +1827,7 @@ func approversToWire(a types.GateApprovers) GateApprovers {
 
 // workflowFromWire mirrors workflowToWire; same CaC document the controller
 // reads from Git — the CLI plan/apply path sends the checkout verbatim.
-func workflowFromWire(in Workflow) (types.Workflow, error) {
+func workflowFromWire(in Workflow, opts ...desiredstate.ValidateOption) (types.Workflow, error) {
 	w := types.Workflow{Name: in.Name}
 	for _, s := range in.Steps {
 		step := types.Step{Name: s.Name}
@@ -1864,7 +1870,7 @@ func workflowFromWire(in Workflow) (types.Workflow, error) {
 		}
 		w.Steps = append(w.Steps, step)
 	}
-	if err := desiredstate.ValidateWorkflow(w); err != nil {
+	if err := desiredstate.ValidateWorkflow(w, opts...); err != nil {
 		return w, err
 	}
 	return w, nil
@@ -2739,4 +2745,24 @@ func (s *Server) DownloadEvidence(w http.ResponseWriter, r *http.Request, id str
 	w.Header().Set("X-Stratt-Evidence-SHA256", e.SHA256)
 	w.Header().Set("Content-Disposition", "attachment; filename=evidence-"+e.FindingID+".json")
 	_, _ = w.Write(body)
+}
+
+// actuatorIdentities reads the estate's declared Actuators and returns the
+// name → pluginIdentity resolution their Steps' Contracts need (see
+// contract.ValidateActuatorParamsFor). A read failure yields the no-op option:
+// validation then resolves by name, the behaviour before Actuator variants existed,
+// so a store blip narrows what the door accepts rather than what it lets through.
+func (s *Server) actuatorIdentities(ctx context.Context) desiredstate.ValidateOption {
+	as, err := s.Store.ListActuators(ctx)
+	if err != nil {
+		s.Log.Warn("could not read declared Actuators for contract resolution", "error", err)
+		return desiredstate.WithActuatorIdentities(nil)
+	}
+	m := make(map[string]string, len(as))
+	for _, a := range as {
+		if a.PluginIdentity != "" {
+			m[a.Name] = a.PluginIdentity
+		}
+	}
+	return desiredstate.WithActuatorIdentities(m)
 }
