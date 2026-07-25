@@ -380,14 +380,30 @@ possible _with the right values_, which is what removes the incentive to reach f
   3. **`subnet-build` and `vlan-build` hardcoded one singleton's name and key**, so only the named one
      was ever buildable — the fleet defect in singleton clothing.
 
-  **Consequence recorded rather than buried: ADR-0110 D5's demotion of Crossplane in favour of OpenTofu
-  for Subnet was DECLARED BUT NEVER DELIVERED.** The advertisement and its binding are removed, so
-  Subnet resolves to Crossplane's `subnet-build`, which exists. `provides: [provisioning]` stays on the
+  **Consequence recorded rather than buried: ADR-0112 D1/D6 was DECLARED BUT NEVER DELIVERED.** D1
+  declares the `opentofu-network` Actuator with `provisions: {Subnet: opentofu-subnet-build}` and D6
+  makes its binding "the first live explicit capability-binding" — but `opentofu-subnet-build` was
+  never written. ADR-0112 knew it would be awkward and said so: an Actuator apply is workspace-scoped,
+  so the Workflow "needs either a synthetic/anchor View for the actuation" or a redesign. That
+  unresolved note is where it stopped. The advertisement and its binding are removed, so Subnet
+  resolves to Crossplane's `subnet-build`, which exists. `provides: [provisioning]` stays on the
   Actuator: OpenTofu genuinely provides the class for the enablement gate; what it lacked is a per-kind
   builder.
 
-  **And the deeper point, which reframes D5 rather than deferring it: "OpenTofu over Crossplane for
-  Subnet" is not an ADR-shaped decision at all.** Which plugin performs which operation is a LANDSCAPE
+  **A correction to this ADR's own first telling, since it is a document of record.** An earlier
+  revision attributed the undelivered builder to ADR-0110 D5. That is wrong. D5 demotes Crossplane to
+  _one bindable provider_ and names **awsec2** (`create-subnet`) as Subnet's end state; OpenTofu
+  appears nowhere in it. ADR-0112 then **superseded** that half, explicitly rejecting "provision via
+  awsec2-native `create-subnet` (my earlier plan)" as unrealistic, and substituted OpenTofu. So the
+  live estate carried the third plan's advertisement with none of the three plans' Workflows: D5's
+  awsec2 builder unbuilt because 0112 replaced it, 0112's OpenTofu builder unbuilt because it stopped
+  at a design note, and Crossplane — the provider both ADRs were demoting — quietly still doing the
+  work while a binding pointed away from it. The removal restores what actually runs.
+
+  **And the deeper point, which the three-plan sequence above makes hard to avoid: "which tool builds
+  Subnet" is not an ADR-shaped decision at all.** Three ADRs picked three different winners for one
+  slot, and the estate ended up running none of them. Which plugin performs which operation is a
+  LANDSCAPE
   choice (§1.5) — per provider, per Intent kind, per environment — and the seam for it already ships:
   `CapabilityBinding.Entries` selects a provider per `(capability, intentKind)` and is environment-scoped
   (ADR-0110 D3, ADR-0113 D2, ADR-0057). `capability.Resolve` auto-binds the sole verified builder and
@@ -398,7 +414,8 @@ possible _with the right values_, which is what removes the incentive to reach f
   implicit cross-provider fallback.
   So the two removals are unconditionally right (a provider must not advertise a builder it lacks, which
   D3 now enforces), and re-adding them is an OPERATOR's act in a binding once `opentofu-subnet-build`
-  exists, not a re-litigation of D5. What is genuinely additive, and only noted here: `capability.Resolve`
+  exists — not a fourth ADR picking a fourth winner. What is genuinely additive, and only noted here:
+  `capability.Resolve`
   is reached solely from `desiredstate/provisioning_resolve.go`, so this per-operation selection exists
   for `provisioning` alone — `certissuer`, `keycustodian`, `statestore` and `ipam` have no equivalent
   per-operation binding surface yet. Widening it is additive to this ADR and belongs with whichever class
