@@ -15,6 +15,7 @@ import (
 	"github.com/dstout-devops/stratt/core/internal/graph"
 	"github.com/dstout-devops/stratt/core/internal/homegate"
 	"github.com/dstout-devops/stratt/core/internal/orchestrate"
+	"github.com/dstout-devops/stratt/core/internal/pluginhost"
 	"github.com/dstout-devops/stratt/types"
 )
 
@@ -143,4 +144,31 @@ func TestReconcileRace(t *testing.T) {
 		}
 	}()
 	wg.Wait()
+}
+
+// TestActuatorGrantCarriesDeclaredBounds pins ADR-0117 D3a's grant half: the CaC
+// declaration's facetNamespaces/identitySchemes must reach the govern grant, or a
+// declared EE-Job Actuator is not equivalent to a boot-registered one — it would run
+// and then have every fact write-back refused by the hub, which is exactly the kind of
+// silently-weaker seam §1.8 forbids.
+func TestActuatorGrantCarriesDeclaredBounds(t *testing.T) {
+	g := actuatorGrant(types.Actuator{
+		Name: "ansible-crypto", PluginIdentity: "ansible", Tier: "trusted",
+		FacetNamespaces: []string{"app.config", "os.kernel"},
+		IdentitySchemes: []string{"host.name"},
+	})
+	if g.PluginIdentity != "ansible" || g.Tier != pluginhost.TierTrusted {
+		t.Fatalf("identity/tier must survive: %+v", g)
+	}
+	if len(g.FacetNamespaces) != 2 {
+		t.Fatalf("declared facet bounds must reach the grant, got %v", g.FacetNamespaces)
+	}
+	if len(g.IdentitySchemes) != 1 || g.IdentitySchemes[0] != "host.name" {
+		t.Fatalf("declared identity schemes must reach the grant, got %v", g.IdentitySchemes)
+	}
+	// The bound stays BOUNDED — declaring nothing grants nothing, never a wildcard (MF3).
+	bare := actuatorGrant(types.Actuator{Name: "helm", PluginIdentity: "helm", Tier: "trusted"})
+	if len(bare.FacetNamespaces) != 0 || len(bare.IdentitySchemes) != 0 {
+		t.Fatalf("an Actuator declaring no grant must get NO facet authority: %+v", bare)
+	}
 }

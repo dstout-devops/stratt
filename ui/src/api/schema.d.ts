@@ -1853,7 +1853,12 @@ export interface components {
             dryRunnable?: boolean;
             actionNames?: string[];
             jobCommand?: string[];
+            /** @description EE image override for this Actuator's Jobs. Also how per-Step ansible content is selected (ADR-0117 D3a): two declarations differing only in their image, so the spine never reads a tool's params to choose one. Empty ⇒ the dispatcher default. */
             image?: string;
+            /** @description Facet namespaces this Actuator's write-back may touch — the MF3 bounded grant, declared as CaC (ADR-0103). Empty ⇒ may write no facet (a pure executor). */
+            facetNamespaces?: string[];
+            /** @description Identity schemes this Actuator may correlate write-back by (ansible uses host.name). Required whenever facetNamespaces is set — a facet grant with no scheme to resolve by would be honored by nothing. */
+            identitySchemes?: string[];
             mcp?: boolean;
             /** @description Capability classes this Actuator fulfils (ADR-0104). Governed CaC provision. */
             provides?: string[];

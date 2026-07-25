@@ -1318,6 +1318,14 @@ func (a *Activities) executeJobPlugin(ctx context.Context, in RunInput, slice in
 	spec := actuators.JobSpec{
 		Files:   map[string]string{"stratt/request.json": string(reqBytes)},
 		Command: pa.JobCommand,
+		// The Actuator's DECLARED image (ADR-0117 D3a). Per-Step EE selection is by
+		// declaration, never by reading inside a tool's params: a Step selects an
+		// Actuator, and the Actuator declaration carries the image — so two
+		// declarations differing only in their EE give per-Step content selection with
+		// ZERO ansible awareness in the spine (§1.4). Empty ⇒ the dispatcher's global
+		// default, unchanged. Omitting this line was the reason `params.eeImage` looked
+		// honored and was not (ADR-0117 D3a's correction); executeMCP always set it.
+		Image: pa.Image,
 	}
 
 	// Bridge: the dispatcher streams decoded ApplyResponses onto ch (folding nothing,
@@ -1402,6 +1410,15 @@ func (a *Activities) executeJobPlugin(ctx context.Context, in RunInput, slice in
 		// against the resolved set), so do not remove it when refactoring CollectFacts.
 		name := e.IdentityKeys["host.name"]
 		if name == "" {
+			// host.name is the ONLY scheme this path consumes. A write-back keyed by any
+			// other granted scheme (dns.fqdn, say) would otherwise be dropped here in
+			// silence — governance having ADMITTED it — so the declaration would read as
+			// permitted and be honored by nothing (§1.8). Validation rejects that
+			// combination up front for an EE-Job Actuator; this is the runtime backstop,
+			// and it must say something rather than `continue` quietly.
+			a.Log.Warn("EE-Job write-back dropped: no host.name identity key",
+				"kind", e.Kind, "identitySchemes", sortedKeys(e.IdentityKeys),
+				"facets", sortedKeys(e.Facets))
 			continue
 		}
 		facets := make(map[string]json.RawMessage, len(e.Facets))
@@ -1411,6 +1428,17 @@ func (a *Activities) executeJobPlugin(ctx context.Context, in RunInput, slice in
 		res.Facts[name] = facets
 	}
 	return res, nil
+}
+
+// sortedKeys returns a map's keys in deterministic order — for diagnostics, where a
+// stable ordering is what makes two Runs' logs comparable during descent (§1.8).
+func sortedKeys[V any](m map[string]V) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // executeMCP dispatches an mcp Step over the EE-Job transport, keeping the §1.5/§2.2

@@ -121,6 +121,78 @@ func TestActuatorValidation(t *testing.T) {
 	}
 }
 
+// TestActuatorCaCGrant covers the ADR-0117 D3a grant fields: a CaC-declared EE-Job
+// Actuator must be able to carry the SAME bounded MF3 grant the boot registration
+// inlines, or a declared ansible variant would run while having every fact write-back
+// refused — a strictly weaker Actuator that looks identical (§1.8).
+func TestActuatorCaCGrant(t *testing.T) {
+	yaml := `
+name: ansible-crypto
+pluginIdentity: ansible
+tier: trusted
+dryRunnable: true
+jobCommand: [stratt-ansible]
+image: stratt-ee-crypto:dev
+facetNamespaces: [app.config]
+identitySchemes: [host.name]
+`
+	name, a, err := parseActuatorFile("ansible-crypto.yaml", []byte(yaml))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if name != "ansible-crypto" || a.Image != "stratt-ee-crypto:dev" {
+		t.Fatalf("the declared EE image must survive the parse: %+v", a)
+	}
+	if len(a.FacetNamespaces) != 1 || a.FacetNamespaces[0] != "app.config" {
+		t.Fatalf("facetNamespaces must survive the parse: %+v", a.FacetNamespaces)
+	}
+	if len(a.IdentitySchemes) != 1 || a.IdentitySchemes[0] != "host.name" {
+		t.Fatalf("identitySchemes must survive the parse: %+v", a.IdentitySchemes)
+	}
+
+	// A facet grant with no scheme to correlate write-back BY is honored by nothing:
+	// the hub cannot resolve which Entity the facet belongs to, so every write is
+	// refused while the declaration reads as permitted. Rejected, not ignored — the
+	// same half-declaration rule as a port with no address (D5a).
+	half := types.Actuator{
+		Name: "n", PluginIdentity: "p", JobCommand: []string{"stratt-ansible"},
+		FacetNamespaces: []string{"app.config"},
+	}
+	if err := ValidateActuator(half); err == nil {
+		t.Fatal("facetNamespaces without identitySchemes must be REJECTED, not silently unhonored")
+	}
+	// Non-empty is NOT sufficient, which is the subtler half. The EE-Job write-back path
+	// correlates by host.name and nothing else, so a grant of dns.fqdn passes governance
+	// and is then discarded at correlation time — admitted, dropped, reported nowhere.
+	// That is the same half-declaration defect one level BELOW the check above.
+	wrongScheme := types.Actuator{
+		Name: "n", PluginIdentity: "p", JobCommand: []string{"stratt-ansible"},
+		FacetNamespaces: []string{"app.config"}, IdentitySchemes: []string{"dns.fqdn"},
+	}
+	if err := ValidateActuator(wrongScheme); err == nil {
+		t.Fatal("an EE-Job actuator writing facets under a scheme the write-back path cannot correlate (dns.fqdn) must be REJECTED — it would be admitted then silently dropped")
+	}
+	// host.name present alongside others is fine.
+	okScheme := wrongScheme
+	okScheme.IdentitySchemes = []string{"dns.fqdn", "host.name"}
+	if err := ValidateActuator(okScheme); err != nil {
+		t.Fatalf("host.name present (with others) must validate: %v", err)
+	}
+	// The rule is scoped to the EE-Job transport: a gRPC Actuator writes back over a
+	// different path and must not be constrained by the EE-Job path's correlation key.
+	grpcActuator := types.Actuator{
+		Name: "n", PluginIdentity: "p", Address: "a",
+		FacetNamespaces: []string{"app.config"}, IdentitySchemes: []string{"dns.fqdn"},
+	}
+	if err := ValidateActuator(grpcActuator); err != nil {
+		t.Fatalf("a gRPC actuator must not be held to the EE-Job correlation key: %v", err)
+	}
+	// A pure executor declaring neither stays valid — every shipped Actuator is unaffected.
+	if err := ValidateActuator(types.Actuator{Name: "n", PluginIdentity: "p", Address: "a"}); err != nil {
+		t.Fatalf("an Actuator declaring no grant must remain valid: %v", err)
+	}
+}
+
 // TestDecommissionsValidation proves ADR-0114 D4's decommissions map is validated symmetrically to
 // provisions: only on a provisioning provider, bare Intent kinds, non-empty teardown Workflows.
 func TestDecommissionsValidation(t *testing.T) {
