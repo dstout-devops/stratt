@@ -715,6 +715,55 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/Evidence" }
         "404": { $ref: "#/components/responses/NotFound" }
+  /findings/{id}/remediation:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: { type: string }
+    get:
+      operationId: getFindingRemediation
+      summary: Preview what remediating this Finding would launch
+      description: >
+        The Workflow this Finding's Baseline routes remediation to, the launch
+        inputs that would be passed (resolved from the Intent layer at compile —
+        ADR-0118 D3), and that Workflow's declared input schema. Read this BEFORE
+        launching: §1.8 forbids a door that acts without first showing what it
+        will do. 404 when the Baseline declares no remediation Workflow.
+      responses:
+        "200":
+          description: What a remediation launch would do.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/FindingRemediation" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    post:
+      operationId: remediateFinding
+      summary: Launch this Finding's remediation Workflow
+      description: >
+        Launches the Baseline's remediation Workflow with the compiled
+        remediationParams as its inputs (ADR-0118 D3). Never automatic — an
+        operator or agent invokes this deliberately, and any Gate Steps still wait
+        for their approvers (§5 Flow 2).
+
+        `inputs` may supply values the compiled params do NOT already set. A key
+        the compiled params already set is REJECTED rather than merged: two
+        bindings for one input would need a precedence rule to resolve, which
+        §2.4 forbids. `context` carries facts about the change for policy Steps,
+        exactly as on a direct Workflow launch.
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/WorkflowLaunch" }
+      responses:
+        "201":
+          description: The created WorkflowRun.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/WorkflowRun" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "404": { $ref: "#/components/responses/NotFound" }
   /evidence/{id}/download:
     parameters:
       - name: id
@@ -2410,6 +2459,31 @@ components:
         intentKind:
           type: string
           description: The Intent kind this entry routes, WITHOUT the "Intent/" prefix (e.g. Compute, Subnet, Vlan, Dmz).
+    FindingRemediation:
+      type: object
+      description: >
+        What remediating a Finding would launch, rendered before it is launched
+        (ADR-0118 D3, §1.8). Read-only.
+      required: [workflow, baseline]
+      properties:
+        baseline:
+          type: string
+          description: The Baseline that routed this remediation.
+        workflow:
+          type: string
+          description: The Workflow that would be launched.
+        params:
+          type: object
+          additionalProperties: true
+          description: >
+            The launch inputs that would be passed, resolved from the Intent layer
+            at compile. Absent when the route declares none.
+        inputs:
+          type: object
+          additionalProperties: true
+          description: >
+            The Workflow's declared input schema, so a caller can see which inputs
+            it may still supply itself (those the compiled params do not set).
     WorkflowLaunch:
       type: object
       description: >

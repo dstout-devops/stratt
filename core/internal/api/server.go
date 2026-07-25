@@ -1971,61 +1971,88 @@ func (s *Server) StartWorkflowRun(w http.ResponseWriter, r *http.Request, name s
 		s.fail(w, err)
 		return
 	}
-	// View-scoped execution authz (§2.5, ADR-0028): the launching Principal must
-	// hold `runner` on EVERY actuation Step's View (gate Steps target none). The
-	// per-Step child Runs re-check at the RunAgainstView chokepoint; this is the
-	// fail-fast 403 at the door.
+	principal, ok := s.authorizeLaunch(w, r, wf)
+	if !ok {
+		return
+	}
+	// Optional launch inputs (ADR-0059): the operator parameterizes what was declared (the
+	// target of a re-placement move, a per-instance build) — bound in Step params via
+	// {{.launch.x}}. Two concepts, two fields (ADR-0118 D4): `inputs` are the Workflow's OWN
+	// declared parameters, `context` is what the launcher asserts about the CHANGE for policy
+	// Steps to decide on. They shared one untyped bag until the split, which is why the inputs
+	// schema could not be closed — a policy-gated Workflow's `environment` was
+	// indistinguishable from a stray parameter.
+	inputs, changeContext, ok2 := decodeLaunchBody(w, r)
+	if !ok2 {
+		return
+	}
+	s.launchWorkflow(w, r, wf, principal, inputs, changeContext)
+}
+
+// authorizeLaunch enforces View-scoped execution authz (§2.5, ADR-0028): the launching
+// Principal must hold `runner` on EVERY actuation Step's View (gate Steps target none). The
+// per-Step child Runs re-check at the RunAgainstView chokepoint; this is the fail-fast 403 at
+// the door. Shared by both launch doors so remediation cannot become a softer path to the
+// same execution.
+func (s *Server) authorizeLaunch(w http.ResponseWriter, r *http.Request, wf types.Workflow) (string, bool) {
 	for _, st := range wf.Steps {
 		if st.ViewName == "" {
 			continue
 		}
 		if !s.requireGrant(w, r, authz.RelationRunner, "view:"+st.ViewName) {
-			return
+			return "", false
 		}
 	}
 	principal := ""
 	if id, _, ok := authz.PrincipalFrom(r.Context()); ok {
 		principal = id
 	}
-	// Optional launch params (ADR-0059): the operator parameterizes what was declared
-	// (the target of a re-placement move, a per-instance build) — bound in Step params
-	// via {{.launch.x}}. The gate + View-runner authz above remain the control; this
-	// only fills declared placeholders, it cannot escalate what the Workflow may do.
-	// Two concepts, two fields (ADR-0118 D4): `inputs` are the Workflow's OWN declared
-	// parameters, `context` is what the launcher asserts about the CHANGE for policy Steps to
-	// decide on. They shared one untyped bag until this split, which is why the inputs schema
-	// could not be closed — a policy-gated Workflow's `environment` was indistinguishable
-	// from a stray parameter.
+	return principal, true
+}
+
+// decodeLaunchBody reads the {inputs, context} launch body (ADR-0118 D4). An unknown
+// top-level field is a 400, not a silent no-op — sending `input:` and having it ignored is
+// exactly the class of quiet mismatch this seam exists to remove.
+func decodeLaunchBody(w http.ResponseWriter, r *http.Request) (inputs, changeContext map[string]any, ok bool) {
 	var body WorkflowLaunch
 	if r.Body != nil {
 		dec := json.NewDecoder(r.Body)
-		dec.DisallowUnknownFields() // a misspelled top-level field is a 400, not a silent no-op
+		dec.DisallowUnknownFields()
 		if err := dec.Decode(&body); err != nil && !errors.Is(err, io.EOF) {
 			writeErr(w, http.StatusBadRequest, "decode launch body: "+err.Error())
-			return
+			return nil, nil, false
 		}
 	}
-	var launchParams, changeContext map[string]any
 	if body.Inputs != nil {
-		launchParams = *body.Inputs
+		inputs = *body.Inputs
 	}
 	if body.Context != nil {
 		changeContext = *body.Context
 	}
+	return inputs, changeContext, true
+}
+
+// launchWorkflow is THE server-side launch sequence, shared by the direct door
+// (POST /workflows/{name}/runs) and the remediation door (POST /findings/{id}/remediation).
+//
+// One function on purpose. A second launch path would grow its own authz check, its own
+// validation, and its own drift — which is precisely the §1.6 asymmetry that let MCP POST a
+// nil body for as long as it did. Both doors therefore get identical View-runner authz,
+// identical input validation, and identical Run bookkeeping.
+func (s *Server) launchWorkflow(w http.ResponseWriter, r *http.Request, wf types.Workflow, principal string, inputs, changeContext map[string]any) {
 	// Validate at the DOOR so a caller gets a 400 naming the offending input, rather than a
 	// created-then-failed Run they have to go read (§1.8). This is the same
 	// contract.ResolveLaunchInputs the RunDAG chokepoint calls — one implementation, two
 	// call sites: this one for the error message, that one because no transport can skip it
 	// (ADR-0118 D4). Resolving here also means the defaults are visible in the Run's
 	// recorded params, not conjured later.
-	resolved, verr := contract.ResolveLaunchInputs(wf.Name, wf.Inputs, launchParams)
+	resolved, verr := contract.ResolveLaunchInputs(wf.Name, wf.Inputs, inputs)
 	if verr != nil {
 		writeErr(w, http.StatusBadRequest, verr.Error())
 		return
 	}
-	launchParams = resolved
 
-	wr, err := s.Store.CreateWorkflowRun(r.Context(), name, "", principal, "")
+	wr, err := s.Store.CreateWorkflowRun(r.Context(), wf.Name, "", principal, "")
 	if err != nil {
 		s.fail(w, err)
 		return
@@ -2035,8 +2062,8 @@ func (s *Server) StartWorkflowRun(w http.ResponseWriter, r *http.Request, name s
 		ID:        temporalID,
 		TaskQueue: orchestrate.TaskQueue,
 	}, orchestrate.RunDAG, orchestrate.DAGInput{
-		WorkflowRunID: wr.ID, WorkflowName: name, Principal: principal,
-		LaunchParams: launchParams, Context: changeContext,
+		WorkflowRunID: wr.ID, WorkflowName: wf.Name, Principal: principal,
+		LaunchParams: resolved, Context: changeContext,
 	})
 	if err != nil {
 		_ = s.Store.SetWorkflowRunStatus(r.Context(), wr.ID, types.RunFailed, map[string]any{"error": "workflow start failed"})
@@ -2049,6 +2076,122 @@ func (s *Server) StartWorkflowRun(w http.ResponseWriter, r *http.Request, name s
 		return
 	}
 	writeJSON(w, http.StatusCreated, workflowRunToWire(wr))
+}
+
+// GetFindingRemediation implements (GET /findings/{id}/remediation): render what remediating
+// this Finding WOULD launch, before anything is launched (ADR-0118 D3).
+//
+// §1.8 is the reason this exists as its own read: a door that acts without first showing what
+// it will do hides mechanism at exactly the moment an operator needs it. The params were
+// resolved from the Intent layer at compile, so this is also where "which values will the fix
+// use" is answerable without reading the compiler.
+func (s *Server) GetFindingRemediation(w http.ResponseWriter, r *http.Request, id string) {
+	_, b, ok := s.findingRemediation(w, r, id)
+	if !ok {
+		return
+	}
+	out := FindingRemediation{Baseline: b.Name, Workflow: b.RemediationWorkflow}
+	if len(b.RemediationParams) > 0 {
+		params := b.RemediationParams
+		out.Params = &params
+	}
+	// The Workflow's own schema, so a caller can see which inputs it may still supply —
+	// namely the ones the compiled params do not already set.
+	if wf, err := s.Store.GetWorkflow(r.Context(), b.RemediationWorkflow); err == nil && len(wf.Inputs) > 0 {
+		var doc map[string]any
+		if json.Unmarshal(wf.Inputs, &doc) == nil {
+			out.Inputs = &doc
+		}
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+// RemediateFinding implements (POST /findings/{id}/remediation): launch the Baseline's
+// remediation Workflow with the compiled params as its inputs (ADR-0118 D3).
+//
+// Until this existed, `Baseline.RemediationWorkflow` was a name nothing server-side ever read
+// — remediation was a ref an operator had to carry by hand to the generic launch door. That
+// worked only because launches accepted anything; the moment inputs became `required`, a
+// hand-launched remediation would have FAILED where it previously ran with wrong values.
+//
+// Never automatic (§5 Flow 2): a human or agent invokes it, Gate Steps still wait for their
+// approvers, and it goes through the same authz and validation as a direct launch.
+func (s *Server) RemediateFinding(w http.ResponseWriter, r *http.Request, id string) {
+	_, b, ok := s.findingRemediation(w, r, id)
+	if !ok {
+		return
+	}
+	wf, err := s.Store.GetWorkflow(r.Context(), b.RemediationWorkflow)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	principal, ok := s.authorizeLaunch(w, r, wf)
+	if !ok {
+		return
+	}
+	supplied, changeContext, ok := decodeLaunchBody(w, r)
+	if !ok {
+		return
+	}
+	merged, clashes := mergeRemediationInputs(b.RemediationParams, supplied)
+	if len(clashes) > 0 {
+		writeErr(w, http.StatusBadRequest, fmt.Sprintf(
+			"input(s) %v are already set by baseline %s's compiled remediationParams — a value cannot be "+
+				"bound twice for one launch (§2.4: resolving that would need a precedence rule). Supply only "+
+				"inputs the route leaves unset, or change the route",
+			clashes, b.Name))
+		return
+	}
+	s.launchWorkflow(w, r, wf, principal, merged, changeContext)
+}
+
+// mergeRemediationInputs folds a caller's supplied inputs onto the Baseline's compiled ones,
+// returning the merge and any keys BOTH set.
+//
+// ONE BINDING SITE PER INPUT (ADR-0118 D3). The compiled params and the request body are two
+// independent sources for one value, and picking a winner would be exactly the implicit
+// precedence §2.4 forbids — at a worse boundary than the Intent layer, because it would be
+// resolved at run time with no declaration anyone can read afterwards. So an overlap is
+// refused rather than merged: a caller may fill inputs the route leaves unset, never
+// contradict one it set. Clashes are sorted so the error is deterministic.
+func mergeRemediationInputs(compiled, supplied map[string]any) (map[string]any, []string) {
+	merged := make(map[string]any, len(compiled)+len(supplied))
+	for k, v := range compiled {
+		merged[k] = v
+	}
+	var clashes []string
+	for k, v := range supplied {
+		if _, set := compiled[k]; set {
+			clashes = append(clashes, k)
+			continue
+		}
+		merged[k] = v
+	}
+	sort.Strings(clashes)
+	return merged, clashes
+}
+
+// findingRemediation resolves a Finding to the Baseline that routes its remediation, 404ing
+// when there is none to launch. Shared by the preview and the launch so they can never
+// disagree about what a Finding routes to.
+func (s *Server) findingRemediation(w http.ResponseWriter, r *http.Request, id string) (types.Finding, types.Baseline, bool) {
+	f, err := s.Store.GetFinding(r.Context(), id)
+	if err != nil {
+		s.fail(w, err)
+		return types.Finding{}, types.Baseline{}, false
+	}
+	b, err := s.Store.GetBaseline(r.Context(), f.Baseline)
+	if err != nil {
+		s.fail(w, err)
+		return types.Finding{}, types.Baseline{}, false
+	}
+	if b.RemediationWorkflow == "" {
+		writeErr(w, http.StatusNotFound, fmt.Sprintf(
+			"baseline %s declares no remediationWorkflow, so this Finding has no remediation to launch", b.Name))
+		return types.Finding{}, types.Baseline{}, false
+	}
+	return f, b, true
 }
 
 // GetWorkflowRun implements (GET /workflow-runs/{id}): the Workflow → Run

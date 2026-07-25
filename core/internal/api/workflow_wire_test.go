@@ -151,3 +151,38 @@ func TestWorkflowWireRoundTripInputs(t *testing.T) {
 		t.Fatalf("the closed-world flag must round-trip intact, got %v", (*back.Inputs)["additionalProperties"])
 	}
 }
+
+// ── the remediation door's binding rule (ADR-0118 D3) ─────────────────────────────────
+
+// TestRemediationInputsHaveOneBindingSite: the compiled params and a caller's body are two
+// independent sources for one value. Merging them would need a precedence rule — "the caller
+// wins" or "the route wins" — and that is the implicit precedence §2.4 forbids, at a WORSE
+// boundary than the Intent layer: resolved at run time, with no declaration to read
+// afterwards to explain which value was used.
+//
+// So the overlap is refused. A caller may still fill inputs the route leaves unset, which is
+// what makes the door usable for a Workflow whose interface is only partly compiled.
+func TestRemediationInputsHaveOneBindingSite(t *testing.T) {
+	compiled := map[string]any{"port": "8443", "channel": "stable"}
+
+	// Filling an input the route leaves unset is allowed and merges.
+	merged, clashes := mergeRemediationInputs(compiled, map[string]any{"reason": "incident-42"})
+	if len(clashes) != 0 {
+		t.Fatalf("supplying an input the route does not set must be allowed, got clashes %v", clashes)
+	}
+	if merged["reason"] != "incident-42" || merged["port"] != "8443" {
+		t.Fatalf("merge must keep both sources' distinct keys, got %#v", merged)
+	}
+
+	// Contradicting a compiled input is refused, and every offending key is named.
+	_, clashes = mergeRemediationInputs(compiled, map[string]any{"port": "9999", "channel": "beta"})
+	if len(clashes) != 2 || clashes[0] != "channel" || clashes[1] != "port" {
+		t.Fatalf("both clashing keys must be reported, sorted; got %v", clashes)
+	}
+
+	// No compiled params at all: the caller supplies everything, nothing clashes.
+	merged, clashes = mergeRemediationInputs(nil, map[string]any{"port": "443"})
+	if len(clashes) != 0 || merged["port"] != "443" {
+		t.Fatalf("with no compiled params the caller is the only binding site; got %#v %v", merged, clashes)
+	}
+}

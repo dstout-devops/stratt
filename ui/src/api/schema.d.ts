@@ -686,6 +686,33 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/findings/{id}/remediation": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        /**
+         * Preview what remediating this Finding would launch
+         * @description The Workflow this Finding's Baseline routes remediation to, the launch inputs that would be passed (resolved from the Intent layer at compile — ADR-0118 D3), and that Workflow's declared input schema. Read this BEFORE launching: §1.8 forbids a door that acts without first showing what it will do. 404 when the Baseline declares no remediation Workflow.
+         */
+        get: operations["getFindingRemediation"];
+        put?: never;
+        /**
+         * Launch this Finding's remediation Workflow
+         * @description Launches the Baseline's remediation Workflow with the compiled remediationParams as its inputs (ADR-0118 D3). Never automatic — an operator or agent invokes this deliberately, and any Gate Steps still wait for their approvers (§5 Flow 2).
+         *     `inputs` may supply values the compiled params do NOT already set. A key the compiled params already set is REJECTED rather than merged: two bindings for one input would need a precedence rule to resolve, which §2.4 forbids. `context` carries facts about the change for policy Steps, exactly as on a direct Workflow launch.
+         */
+        post: operations["remediateFinding"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/evidence/{id}/download": {
         parameters: {
             query?: never;
@@ -1925,6 +1952,21 @@ export interface components {
             /** @description The Intent kind this entry routes, WITHOUT the "Intent/" prefix (e.g. Compute, Subnet, Vlan, Dmz). */
             intentKind: string;
         };
+        /** @description What remediating a Finding would launch, rendered before it is launched (ADR-0118 D3, §1.8). Read-only. */
+        FindingRemediation: {
+            /** @description The Baseline that routed this remediation. */
+            baseline: string;
+            /** @description The Workflow that would be launched. */
+            workflow: string;
+            /** @description The launch inputs that would be passed, resolved from the Intent layer at compile. Absent when the route declares none. */
+            params?: {
+                [key: string]: unknown;
+            };
+            /** @description The Workflow's declared input schema, so a caller can see which inputs it may still supply itself (those the compiled params do not set). */
+            inputs?: {
+                [key: string]: unknown;
+            };
+        };
         /** @description What a launch supplies, with the two concepts on their own fields (ADR-0118 D4). They were one untyped bag until this split, which meant closing the world over a Workflow's own parameters was impossible — every policy-gated Workflow would have had to declare `environment` as one of its inputs, which it is not. */
         WorkflowLaunch: {
             /** @description This Workflow's declared launch inputs, validated against the schema published on GET /workflows/{name}. CLOSED: an unknown or wrongly-typed key is a 400, and declared defaults are applied. Bound in Step params via {{.launch.x}}. */
@@ -2988,6 +3030,57 @@ export interface operations {
                     "application/json": components["schemas"]["Evidence"];
                 };
             };
+            404: components["responses"]["NotFound"];
+        };
+    };
+    getFindingRemediation: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description What a remediation launch would do. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FindingRemediation"];
+                };
+            };
+            404: components["responses"]["NotFound"];
+        };
+    };
+    remediateFinding: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["WorkflowLaunch"];
+            };
+        };
+        responses: {
+            /** @description The created WorkflowRun. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkflowRun"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
             404: components["responses"]["NotFound"];
         };
     };
