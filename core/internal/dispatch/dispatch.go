@@ -381,18 +381,7 @@ func (d *Dispatcher) followTyped(ctx context.Context, runID string, slice int, p
 		seq++
 		unclaimed.maxSeq = seq
 		if ev := resp.GetEvent(); ev != nil {
-			re := types.RunEvent{
-				RunID: runID, Slice: slice, Seq: seq, Site: d.site(),
-				Kind:    typedEventKind(ev),
-				Level:   typedEventLevel(ev.GetLevel()),
-				Scope:   typedEventScope(ev.GetScope()),
-				Target:  ev.GetFields()["host"],
-				Payload: map[string]any{"message": ev.GetMessage()},
-			}
-			if ev.GetAt() != nil {
-				re.At = ev.GetAt().AsTime()
-			}
-			if err := d.bus.Publish(ctx, re); err != nil {
+			if err := d.bus.Publish(ctx, runEventFromTaskEvent(ev, runID, slice, seq, d.site())); err != nil {
 				return unclaimed, interpreted, err
 			}
 		}
@@ -429,6 +418,28 @@ func typedEventLevel(l pluginv1.TaskEvent_Level) string {
 	default:
 		return ""
 	}
+}
+
+// runEventFromTaskEvent is the ONE place a port TaskEvent becomes a Run's event, and it exists
+// as a named function rather than a struct literal inside the follow loop for a reason worth
+// stating: every field below is a mapping that has been silently absent at some point.
+// TaskEvent.Level was decoded and dropped (ADR-0117 g); TaskEvent.Scope did not exist
+// (ADR-0121). Both mappers had unit tests while the CALL had none, so deleting the call changed
+// nothing observable — the inert-mechanism shape this repo keeps finding. With the conversion in
+// one function, one test covers what actually reaches the operator.
+func runEventFromTaskEvent(ev *pluginv1.TaskEvent, runID string, slice int, seq int64, site string) types.RunEvent {
+	re := types.RunEvent{
+		RunID: runID, Slice: slice, Seq: seq, Site: site,
+		Kind:    typedEventKind(ev),
+		Level:   typedEventLevel(ev.GetLevel()),
+		Scope:   typedEventScope(ev.GetScope()),
+		Target:  ev.GetFields()["host"],
+		Payload: map[string]any{"message": ev.GetMessage()},
+	}
+	if ev.GetAt() != nil {
+		re.At = ev.GetAt().AsTime()
+	}
+	return re
 }
 
 // typedEventScope carries the port's typed descriptive level onto the Run's event stream
@@ -825,6 +836,22 @@ func (d *Dispatcher) podStartGrace() time.Duration {
 	return podStartGraceDefault
 }
 
+// preStartRunEvent builds the pod-start diagnosis event. Split out of publishPreStart because the
+// dispatcher's bus is a concrete *events.Bus and every pod-start test constructs a dispatcher
+// WITHOUT one — so an assertion about the event's contents had nowhere to live, and the Scope
+// stamping below would have been unverifiable (the same untested-call gap runEventFromTaskEvent
+// exists to close).
+func preStartRunEvent(runID string, slice int, seq int64, kind, level, site string, b podBlock) types.RunEvent {
+	return types.RunEvent{
+		RunID: runID, Slice: slice, Seq: seq, Site: site, Kind: kind, Level: level,
+		// A pod that never started is a fact about the RUN, not about any task inside it —
+		// there are no tasks (ADR-0121 D4). Stamped so the spine's own run-level events are
+		// pinnable by the same content-blind rule a plugin's are.
+		Scope:   types.RunEventScopeRun,
+		Payload: map[string]any{"message": b.Error(), "pod": b.pod, "reason": b.reason},
+	}
+}
+
 // publishPreStart puts the cluster's reason on the Run's own event stream, so the
 // §1.8 descent shows why a Run is sitting still — or died before its tool ever
 // ran — without an operator needing cluster access to find out.
@@ -833,14 +860,7 @@ func (d *Dispatcher) publishPreStart(ctx context.Context, runID string, slice in
 		d.log.Warn("no event bus: pod-start diagnosis reaches logs only", "run", runID, "reason", b.reason)
 		return
 	}
-	ev := types.RunEvent{
-		RunID: runID, Slice: slice, Seq: seq, Site: d.site(), Kind: kind, Level: level,
-		// A pod that never started is a fact about the RUN, not about any task inside it —
-		// there are no tasks (ADR-0121 D4). Stamped here so the spine's own run-level events
-		// are pinnable by the same content-blind rule a plugin's are.
-		Scope:   types.RunEventScopeRun,
-		Payload: map[string]any{"message": b.Error(), "pod": b.pod, "reason": b.reason},
-	}
+	ev := preStartRunEvent(runID, slice, seq, kind, level, d.site(), b)
 	if err := d.bus.Publish(ctx, ev); err != nil {
 		// Never let the diagnostic channel's own failure mask the diagnosis.
 		d.log.Warn("publishing pod-start diagnosis failed", "run", runID, "reason", b.reason, "err", err)

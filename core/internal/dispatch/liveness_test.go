@@ -6,6 +6,8 @@ import (
 	"testing"
 	"time"
 
+	"google.golang.org/protobuf/types/known/timestamppb"
+
 	pluginv1 "github.com/dstout-devops/stratt/sdk/stratt/plugin/v1"
 	"github.com/dstout-devops/stratt/types"
 )
@@ -124,5 +126,53 @@ func TestTypedEventScopeMapping(t *testing.T) {
 		if got := typedEventScope(in); got != want {
 			t.Errorf("typedEventScope(%v) = %q, want %q", in, got, want)
 		}
+	}
+}
+
+// TestRunEventFromTaskEvent_CarriesEveryPortField covers the CONVERSION, not the mappers — the
+// distinction that matters, because both mappers had passing unit tests while the call that used
+// them was untested. Deleting `Scope:` from the struct literal this replaced changed nothing
+// observable in the whole suite; that is why the conversion is a named function now.
+//
+// Every field asserted here has been absent from the operator's view at some point: Level was
+// decoded and dropped (ADR-0117 g), Scope did not exist (ADR-0121), and the descent shows the
+// rest.
+func TestRunEventFromTaskEvent_CarriesEveryPortField(t *testing.T) {
+	at := time.Date(2026, 7, 25, 12, 0, 0, 0, time.UTC)
+	re := runEventFromTaskEvent(&pluginv1.TaskEvent{
+		Level:   pluginv1.TaskEvent_LEVEL_WARN,
+		Scope:   pluginv1.TaskEvent_SCOPE_RUN,
+		Message: "community.crypto 2.22.3",
+		At:      timestamppb.New(at),
+		Fields:  map[string]string{"kind": "ee-content", "host": "web-01"},
+	}, "run-1", 2, 7, "site-a")
+
+	if re.Level != types.RunEventWarn {
+		t.Errorf("level dropped: %q", re.Level)
+	}
+	if re.Scope != types.RunEventScopeRun {
+		t.Errorf("scope dropped — a run-level fact stays unfindable in an uncapped stream: %q", re.Scope)
+	}
+	if re.Kind != "ee-content" || re.Target != "web-01" {
+		t.Errorf("kind/target: %q %q", re.Kind, re.Target)
+	}
+	if re.RunID != "run-1" || re.Slice != 2 || re.Seq != 7 || re.Site != "site-a" {
+		t.Errorf("identity/locus: %#v", re)
+	}
+	if !re.At.Equal(at) {
+		t.Errorf("timestamp: %v", re.At)
+	}
+	if re.Payload["message"] != "community.crypto 2.22.3" {
+		t.Errorf("payload: %#v", re.Payload)
+	}
+}
+
+// An event stating nothing must carry nothing stated: no level, no scope, no target. An empty
+// string for either would make "the producer did not say" indistinguishable from a stated value
+// downstream, and the wire layer relies on empty to omit the field entirely (§1.8).
+func TestRunEventFromTaskEvent_StatesNothingItWasNotTold(t *testing.T) {
+	re := runEventFromTaskEvent(&pluginv1.TaskEvent{Message: "line"}, "run-1", 0, 1, "")
+	if re.Level != "" || re.Scope != "" || re.Target != "" {
+		t.Errorf("unstated fields must stay empty: level=%q scope=%q target=%q", re.Level, re.Scope, re.Target)
 	}
 }

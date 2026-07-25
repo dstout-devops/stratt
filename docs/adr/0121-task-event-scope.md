@@ -100,7 +100,15 @@ says which descriptive level, and the two never overlap.** A per-target event is
 
 `scope` rides the same path `level` does, and every rung is load-bearing:
 
-- `dispatch.go` maps `TaskEvent.Scope` → `RunEvent.Scope` at the single conversion site.
+- `dispatch.go` maps `TaskEvent.Scope` → `RunEvent.Scope` at the single conversion site — now a named
+  `runEventFromTaskEvent`, not a struct literal inside the follow loop. **That change was forced by
+  falsification, and it matters beyond this field.** Deleting the `Scope:` mapping from the literal broke
+  no test: the mapper had a unit test and the CALL had none, which is the inert-mechanism shape this repo
+  keeps finding. `TaskEvent.Level` has had the same gap since ADR-0117 (g) — its mapper is tested, its
+  wiring was not. With the conversion in one function, one test covers every field that actually reaches
+  the operator, and both fields are now falsifiable. The pod-start diagnosis event was split out for the
+  same reason: every dispatcher in `podstart_test.go` is built with a nil bus, so an assertion about that
+  event's contents had nowhere to live.
 - `types.RunEvent` gains `Scope string`, with the `RunEventScope*` constants beside the level ones.
 - `core/api/openapi.yaml` declares it on the `RunEvent` schema. **Not optional bookkeeping**: the SSE tail
   is marshalled through a generated wire type, so a field absent from the spec is served by the server and

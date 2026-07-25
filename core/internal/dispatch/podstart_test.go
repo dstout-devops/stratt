@@ -11,6 +11,8 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/kubernetes/fake"
+
+	"github.com/dstout-devops/stratt/types"
 )
 
 // These tests exist because an EE image that did not exist produced a Run that
@@ -208,5 +210,29 @@ func TestPreStartSeqsCannotCollideWithATool(t *testing.T) {
 	if preStartSeqFloor+preStartNarrationCap > preStartFailSeq {
 		t.Errorf("narration (%d..%d) overruns the reserved give-up seq %d",
 			preStartSeqFloor, preStartSeqFloor+preStartNarrationCap-1, preStartFailSeq)
+	}
+}
+
+// TestPreStartEventIsRunScoped: a pod that never started is a fact about the RUN — there are no
+// tasks for it to be about (ADR-0121 D4). The spine stamps its own run-level events so a descent
+// surface pins them by the same content-blind rule it pins a plugin's, rather than needing a case
+// per spine kind.
+//
+// Asserted on the constructed event rather than through the bus, because every dispatcher in this
+// file is built without one; before the construction was split out, this stamping had nowhere to be
+// verified and would have been another mechanism nothing exercised.
+func TestPreStartEventIsRunScoped(t *testing.T) {
+	ev := preStartRunEvent("r1", 0, -2, "pod-start-blocked", types.RunEventError, "site-a", podBlock{
+		pod: "stratt-run-r1-s0-abc", reason: "ImagePullBackOff", container: "ee",
+		message: `Back-off pulling image "stratt-ee-crypto:dev"`,
+	})
+	if ev.Scope != types.RunEventScopeRun {
+		t.Errorf("a pod that never started describes the Run, not a task; got scope %q", ev.Scope)
+	}
+	if ev.Level != types.RunEventError || ev.Kind != "pod-start-blocked" {
+		t.Errorf("level/kind must survive the split: %q %q", ev.Level, ev.Kind)
+	}
+	if ev.Payload["reason"] != "ImagePullBackOff" {
+		t.Errorf("the cluster's own reason must reach the stream: %#v", ev.Payload)
 	}
 }
