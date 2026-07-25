@@ -475,11 +475,10 @@ func run(ctx context.Context, log *slog.Logger) error {
 	// In-tree Actuator registry (§2.3); out-of-tree Actuators arrive via the
 	// plugin Contract surfaces, not this map.
 	//
-	// Out-of-tree Actuators arrive via the plugin Contract surfaces, not this map.
 	// ansible (ADR-0051), script + webhook/notify (ADR-0046 Category A) have LEFT the
-	// Apache core — ansible/script as EE-Job shims, notify/webhook as a gRPC plugin
-	// Action (§1.4 — no `if <tool> {…}` in the spine). Only mcp remains in-tree
-	// (registered below) pending its own extraction slice.
+	// Apache core — ansible/script as EE-Job shims declared as CaC (see below),
+	// notify/webhook as a gRPC plugin Action (§1.4 — no `if <tool> {…}` in the spine).
+	// Only mcp remains in-tree (registered below) pending its own extraction slice.
 	registry := map[string]actuators.Actuator{}
 
 	// In-tree Action registry (§2.2, ADR-0031): targetless typed operations shipped by
@@ -514,61 +513,21 @@ func run(ctx context.Context, log *slog.Logger) error {
 		return plugins.RegisterActuator(name, orchestrate.PluginActuator{Host: host, DryRunnable: dryRunnable, Grant: grant, PlanStore: plans})
 	}
 
-	// Ansible EE-Job (subprocess) transport (ADR-0051): the flagship Actuator over
-	// the sovereign port, the SOLE ansible path (Phase 5b cutover). No gRPC dial —
-	// the transport IS the K8s Job running the stratt-ansible shim. The host carries
-	// only the MF3 BOUNDED grant (never a wildcard): exactly the Facet namespaces the
-	// shim projects and the host.name identity scheme it correlates facts by.
-	// GovernStream gates the Job's typed stdout against this grant hub-side; the gRPC
-	// client is nil (govern never dials).
-	{
-		grant := pluginhost.Grant{
-			PluginIdentity: env("STRATT_ANSIBLE_PLUGIN_ID", "ansible"),
-			Tier:           pluginhost.TierTrusted,
-			Source:         types.Source{Kind: "ansible", Name: env("STRATT_ANSIBLE_SOURCE_NAME", "ansible")},
-			FacetNamespaces: []string{
-				"os.kernel",
-				"os.hardening.sysctl", "os.hardening.sshd", "os.hardening.filesystem",
-				"os.hardening.auditd", "os.hardening.services",
-				"fileset.content", "access.grants",
-				// app.config: the observed application config an ansible remediation
-				// reports back via the stratt_facets convention (ADR-0084 fact-back).
-				// A Step's facetWriteScope is intersected with this grant (ADR-0054).
-				"app.config",
-			},
-			IdentitySchemes: []string{"host.name"},
-		}
-		host := pluginhost.New(store, nil, grant, log) // nil client: the Job is the transport; govern uses only the grant
-		if err := plugins.RegisterActuator("ansible", orchestrate.PluginActuator{
-			Host: host, DryRunnable: true, Grant: grant,
-			JobCommand: []string{env("STRATT_ANSIBLE_SHIM", "stratt-ansible")},
-		}); err != nil {
-			return err
-		}
-		log.Info("ansible EE-Job actuator registered (ADR-0051 subprocess transport)", "shim", env("STRATT_ANSIBLE_SHIM", "stratt-ansible"))
-	}
-
-	// Script EE-Job (subprocess) transport (ADR-0046 Category A): the per-target
-	// script-runner over the sovereign port. Effectful (no read-only capability →
-	// NOT DryRunnable, so a dry-run/baseline against it is rejected at launch). Its
-	// grant is EMPTY (script proposes no Facets/identity write-back — GovernStream
-	// folds only the per-target ItemResults, confused-deputy gated on the resolved
-	// set). No gRPC dial — the transport is the K8s Job running stratt-script.
-	{
-		grant := pluginhost.Grant{
-			PluginIdentity: env("STRATT_SCRIPT_PLUGIN_ID", "script"),
-			Tier:           pluginhost.TierTrusted,
-			Source:         types.Source{Kind: "script", Name: env("STRATT_SCRIPT_SOURCE_NAME", "script")},
-		}
-		host := pluginhost.New(store, nil, grant, log)
-		if err := plugins.RegisterActuator("script", orchestrate.PluginActuator{
-			Host: host, DryRunnable: false, Grant: grant,
-			JobCommand: []string{env("STRATT_SCRIPT_SHIM", "stratt-script")},
-		}); err != nil {
-			return err
-		}
-		log.Info("script EE-Job actuator registered (ADR-0046 subprocess transport)", "shim", env("STRATT_SCRIPT_SHIM", "stratt-script"))
-	}
+	// The `ansible` (ADR-0051) and `script` (ADR-0046 Category A) EE-Job Actuators used to
+	// be registered here, inline, with their grants hardcoded in Go. They are now CaC
+	// declarations — estate/actuators/{ansible,script}.yaml — reconciled into the dispatch
+	// table by the connectorregistry on every replica with no strattd restart (ADR-0103,
+	// ADR-0117 follow-up k). The blocker was never the transport: it was that a declaration
+	// could not express ansible's BOUNDED MF3 facet grant until ADR-0117 D3a added
+	// facetNamespaces/identitySchemes to the Actuator Kind. With those fields the
+	// declaration is strictly more capable than the boot block was (it can also select the
+	// EE image), so the boot block is gone rather than kept as a fallback: two registration
+	// paths for one name would collide at §2.4 and make "which grant is live?" unanswerable
+	// from Git.
+	//
+	// Consequence worth stating plainly: a floor that declares neither Actuator has neither.
+	// That is the intended CaC posture (Git review authorizes plugin registration, §2.2/§2.3)
+	// and it is why the reference estate declares both.
 
 	// awsec2 plugin: when configured it provides BOTH the instance Syncer and the
 	// create-vm Action over the port; the in-tree awsec2 is then disabled.

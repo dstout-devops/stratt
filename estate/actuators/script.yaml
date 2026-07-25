@@ -1,0 +1,23 @@
+# script — the per-target script-runner EE-Job Actuator (ADR-0046 Category A) as a CaC
+# declaration (ADR-0103, ADR-0117 follow-up k). Migrated off its boot block in strattd
+# alongside `ansible`: the two were registered by the same block for the same reason
+# (both are EE-Job shims with no gRPC endpoint to dial), so they move together.
+#
+# Transport: `jobCommand`, no address — the transport IS the K8s Job running
+# stratt-script. No `image`, so it runs the floor's default EE.
+#
+# dryRunnable is FALSE, deliberately and consequentially: an arbitrary script has no
+# read-only capability, so there is nothing a dry run could truthfully report. A
+# dry-run or Baseline Step naming this Actuator is REJECTED at launch rather than
+# executed-for-real-and-called-a-preview (§1.8 — never present an effectful run as a
+# preview).
+#
+# No facetNamespaces and no identitySchemes: script proposes no Facets and no identity
+# write-back at all. GovernStream folds only its per-target ItemResults, confused-deputy
+# gated on the resolved target set. An empty grant is the correct declaration for a pure
+# executor, not an omission.
+name: script
+pluginIdentity: script
+tier: trusted
+dryRunnable: false
+jobCommand: [stratt-script]

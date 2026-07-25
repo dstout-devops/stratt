@@ -4,9 +4,11 @@
 # This is the declaration ADR-0117 deliberately withheld until a demo selected it. It is
 # the whole point of D3a: which EE a Step runs in is a property of the ACTUATOR it names,
 # declared in Git and reviewable, never a params.eeImage string a tool passes at run time.
-# The boot-registered `ansible` Actuator keeps the base EE; naming this one instead is how
-# a Step asks for content — and the Run says which content it got, on its own event
-# stream (kind=ee-content).
+# The reference estate's `ansible` Actuator (estate/actuators/ansible.yaml) keeps the base
+# EE; naming this one instead is how a Step asks for content — and the Run says which
+# content it got, on its own event stream (kind=ee-content). Both are ordinary CaC
+# declarations differing only in `image` and grant, which is the point: content selection
+# is a reviewable Git diff, not a code change.
 #
 # The grant is bounded twice over (§2.1, ADR-0051 MF3): facetNamespaces is the CEILING on
 # what a Run through this Actuator may write back — no more than app.config, whatever a

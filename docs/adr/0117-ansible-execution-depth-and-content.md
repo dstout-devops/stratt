@@ -547,7 +547,7 @@ what a reasonable schema would look like.** Nothing short of running `community.
   events were given levels in the same pass (`diagnostic-output`, `governance-rejected`, the bundle refusal).
   ~~(h) **A live demo asserting the vacuous-run guard.**~~ — **done**: the app-cert demo launches a
   `vacuous-run-guard` Workflow whose play matches no host and asserts the Run **fails AND names why**, so
-  the hand-verified rc=0 proof cannot rot. Asserting the *naming* half is what exposed defects (3) and (4)
+  the hand-verified rc=0 proof cannot rot. Asserting the _naming_ half is what exposed defects (3) and (4)
   above — asserting only the failure would have passed against a Run that said nothing.
   (i) **Per-artifact content hashes (a lockfile).** D3 pins exact versions and verifies the resolved set,
   but the **registry remains the checksum authority**: a republished version at the same version number
@@ -597,10 +597,27 @@ what a reasonable schema would look like.** Nothing short of running `community.
   short default deliberately, since a long ceiling there converts a wedged control-plane call into a silent
   stall. Liveness is now a ticker for the whole execution (`keepAlive`, 20s) rather than a function of tool
   chattiness, mutex-serialized because `activity.RecordHeartbeat` is not documented as goroutine-safe.
-  (k) **Migrate the boot-registered `ansible`/`script` Actuators to CaC** (ADR-0103's remaining
-  boot blocks). Now unblocked for `ansible`, since the declaration can finally express its bounded grant —
-  the reason it could not move before. Note the registry rejects a declaration colliding with a
-  boot-registered name, so the boot block must be removed in the same change.
+  ~~(k) **Migrate the boot-registered `ansible`/`script` Actuators to CaC** (ADR-0103's remaining
+  boot blocks).~~ — **done.** Unblocked by D3a: the declaration could not express `ansible`'s bounded MF3
+  grant until `facetNamespaces`/`identitySchemes` existed on the Actuator Kind, which is the whole reason it
+  stayed hardcoded. Both boot blocks are **deleted** (not kept as a fallback — two registration paths for one
+  name collide at §2.4 and make "which grant is live?" unanswerable from Git), replaced by
+  `estate/actuators/{ansible,script}.yaml`, reconciled onto every replica by the connectorregistry with no
+  strattd restart. The declarations are behaviour-identical to the blocks they replace: `actuatorGrant`
+  derives `Source{Kind,Name}` from the Actuator name, which for these two _is_ the plugin identity, and an
+  Actuator with no `image` falls back to the floor's `cfg.EEImage`. Three undocumented env knobs per
+  Actuator (`STRATT_{ANSIBLE,SCRIPT}_{SHIM,PLUGIN_ID,SOURCE_NAME}`) are removed with them — nothing in the
+  repo set any of them, and their replacement is a reviewable file.
+  What this change also revealed, and what the slice therefore had to add: the migration converts a
+  **deleted declaration into a run-time failure a long way from the deletion**. Seven Steps and Triggers in
+  the reference estate name `ansible`; without the file each fails at dispatch with an unknown Actuator and
+  nothing in the build says a word. `TestEstateDeclaresTheActuatorsItNames` closes that across the reference
+  estate _and_ every demo, with the residual boot-registered names (`mcp`, `cert-issuer`) held in an explicit
+  map that doubles as ADR-0103's migration tracker — shrinking it is how the next migration is proven. A
+  second test pins the grant itself, because a dropped namespace would not fail to parse, it would silently
+  refuse fact write-back at run time (the D5c failure mode), and because `script`'s `dryRunnable: false` is a
+  safety property: flipped, a dry-run Step against an arbitrary script would be _executed_ and reported as a
+  preview.
 
 ## Alternatives considered
 
