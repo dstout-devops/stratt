@@ -169,14 +169,15 @@ func Compile(ctx context.Context, s Store, maxDelta float64) (Plan, error) {
 			}
 		}
 
-		// G6 (ADR-0083 §5): the EFFECTIVE Intent spec = the Blueprint's sane Defaults
-		// (base) layered UNDER the Intent's own values (override) — explicit overlay
-		// layering, no precedence field (§2.4/§4.1 anti-GPO). Routes substitute
-		// {{.spec.X}} from THIS resolved spec, so a field the Intent omits takes the
-		// Blueprint default; a field it sets overrides. A cross-type default/override
-		// clash fails this Assignment loudly (§1.8), never coerces.
+		// G6 (ADR-0083 §5): the EFFECTIVE Intent spec = the Blueprint's YIELDING defaults
+		// filling whatever the Intent's DECLARING spec leaves unset — explicit overlay
+		// layering with no precedence field and no rung order among declarations
+		// (§2.4/§4.1 anti-GPO, ADR-0118 D1). Routes substitute {{.spec.X}} from THIS
+		// resolved spec, so a field the Intent omits takes the Blueprint default. A
+		// cross-type clash, or two DECLARING layers asserting one path, fails this
+		// Assignment loudly (§1.8) — never coerced, never silently resolved.
 		resolvedSpec, _, merr := overlay.Merge([]overlay.Layer{
-			{Name: "blueprint:" + bp.Name + "/defaults", Values: bp.Defaults},
+			{Name: "blueprint:" + bp.Name + "/defaults", Values: bp.Defaults, Yielding: true},
 			{Name: "intent:" + intent.Name, Values: intent.Spec},
 		})
 		if merr != nil {
