@@ -19,14 +19,20 @@ steps:
     # The remediation may write back ONLY app.config (ADR-0054) — the observed port.
     facetWriteScope: [app.config]
     params:
+      # HOW to reach the targets (ADR-0126 D1). This is the REFERENCE estate, so it is
+      # what an operator copies — which is exactly why it no longer teaches
+      # `StrictHostKeyChecking=no` with a /dev/null known-hosts by example. The key path
+      # is derived from the credentialRef above rather than restated as a literal (§2.4),
+      # and the shim stages it at the mode SSH requires.
+      connection:
+        user: root
+        credentialRef: web-machine
+        # accept-new is the default and is stated anyway, because this node is ephemeral
+        # and a reader should see the policy rather than infer it.
+        hostKeyChecking: accept-new
       extraVars:
-        # The play authors the connection vars (estate content, not the core): user +
-        # the STAGED key path (see the first task). Host-key checking off — ephemeral node.
         # ansible_python_interpreter is left to auto-discovery so localhost (the EE) and
         # the target (alpine + python3) each resolve their own.
-        ansible_user: root
-        ansible_ssh_private_key_file: /tmp/web-machine-key
-        ansible_ssh_common_args: "-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
         # The desired listen port — the web-server onboarding default (8080).
         web_server_port: "8080"
       play: |
@@ -34,15 +40,9 @@ steps:
           hosts: all
           gather_facts: false
           tasks:
-            - name: Stage the SSH key at 0600 (mounts are group-readable; SSH refuses that)
-              delegate_to: localhost
-              connection: local
-              run_once: true
-              ansible.builtin.copy:
-                src: /runner/credentials/web-machine/id_ed25519
-                dest: /tmp/web-machine-key
-                mode: "0600"
-                remote_src: true
+            # The key-staging bootstrap task is GONE (ADR-0126 D1): the shim stages the
+            # credentialRef's key at the mode SSH requires, so a play no longer opens with
+            # a copy task it had to know to write.
             - name: Ensure the nginx conf.d directory exists
               ansible.builtin.file:
                 path: /etc/nginx/conf.d

@@ -20,9 +20,10 @@ steps:
     actuator: ansible-crypto
     credentialRefs: [app-node-ssh]
     params:
-      extraVars:
-        ansible_user: appops
-        ansible_ssh_private_key_file: /tmp/app-node-key
+      # ADR-0126 D1 — derived from the credentialRef above, not a literal path.
+      connection:
+        user: appops
+        credentialRef: app-node-ssh
       play: |
         - name: A play whose pattern matches no host in the generated inventory
           hosts: hosts-that-do-not-exist

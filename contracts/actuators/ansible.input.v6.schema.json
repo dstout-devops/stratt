@@ -1,0 +1,195 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "stratt:contract:actuators/ansible.input:v6",
+  "title": "ansible Actuator input (v6)",
+  "description": "Input Contract for the ansible Actuator (charter §2.3). Hand-written — derivation ladder rung 1 (§2.2). v6 (ADR-0126) adds the typed `connection` block: the machine credential is resolved from its CredentialRef MOUNT by the shim, closing ADR-0084 D4, which described that mechanism but was never built — every Workflow hand-wrote `ansible_ssh_private_key_file: /tmp/<name>-key` in extraVars instead, so the AUTHORIZED credential and the USED file were two facts nothing kept in agreement (§2.4). Connection keys in extraVars are now REFUSED rather than merged: a merge needs a winner, and a silent winner between the two is the same defect restated. v6 is ADDITIVE over v5 (the registry keeps ONE live actuators/ansible.input — the highest version — and a Step cannot pin a version), so every v5 field is retained.",
+  "type": "object",
+  "properties": {
+    "play": {
+      "type": "string",
+      "description": "Play file content: a YAML sequence of plays (validated as YAML at Prepare). Mutually exclusive with scm."
+    },
+    "scm": {
+      "type": "object",
+      "description": "SCM content-ref: clone a repo in the EE pod and run a playbook from it. The clone execs git inside the EE image (GPL boundary, §3); the control plane never fetches content.",
+      "properties": {
+        "repo": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Clone URL (https:// or ssh://). Private-repo credentials arrive via the Step's credentialRefs, never here (§2.5)."
+        },
+        "ref": {
+          "type": "string",
+          "description": "Branch, tag, or commit to check out. Empty means the repo default branch."
+        },
+        "playbook": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Playbook path within the repo (e.g. site.yml or playbooks/deploy.yml)."
+        }
+      },
+      "required": [
+        "repo",
+        "playbook"
+      ],
+      "additionalProperties": false
+    },
+    "extraVars": {
+      "type": "object",
+      "description": "Extra variables passed to ansible-runner as --extra-vars (written to the runner's env/extravars). The landing field for AWX launch extra_vars and survey answers (§5.6). Never carries secret material (§2.5); credentials stay on credentialRefs. CONNECTION KEYS ARE REFUSED HERE (ADR-0126 D1): ansible_user, ansible_ssh_private_key_file and ansible_ssh_common_args are rendered by the shim from `connection`, which binds them to the CredentialRef the Step is actually authorized to use. Declaring one here is a Contract error naming the offending key.",
+      "propertyNames": {
+        "not": {
+          "enum": [
+            "ansible_user",
+            "ansible_ssh_private_key_file",
+            "ansible_ssh_common_args"
+          ]
+        },
+        "$comment": "ADR-0126 D1 — these belong in `connection`; see this field's description."
+      }
+    },
+    "connection": {
+      "type": "object",
+      "description": "How to reach the targets (ADR-0126). The ADDRESS is never here — it is the mgmt.address Facet core resolves into the typed Target coordinate (ADR-0084 D1/D2). This block is the AUTHENTICATION half of that split, exactly as AWX splits inventory-host from machine-credential. The shim renders every ansible key; core authors none (§1.4). The reached-via JUMP chain (ADR-0126 D3) is deliberately NOT declared here yet: its per-hop auth would be a Contract field no shim consumes, which is the accepted-but-inert shape §1.1 refuses. It lands with the renderer.",
+      "properties": {
+        "user": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9_][A-Za-z0-9_.@-]*$",
+          "description": "Login user; the shim renders ansible_user. Pattern-bounded — it reaches an ssh command line."
+        },
+        "credentialRef": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Name of a CredentialRef ALREADY on this Step's credentialRefs — no second credential channel is opened, and the existing per-name use-check at dispatch stays the single authorization path (§2.5, ADR-0009/0052). The shim renders ansible_ssh_private_key_file pointing at its mount."
+        },
+        "file": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_][A-Za-z0-9_.-]*$",
+          "description": "Optional filename within the CredentialRef's mount (/runner/credentials/<ref>/<file>). Omit when the ref injects exactly one file — the shim resolves it; required (and diagnosed, §1.8) when the ref injects several. Identical rule to vault.file."
+        },
+        "hostKeyChecking": {
+          "enum": [
+            "strict",
+            "accept-new",
+            "off"
+          ],
+          "default": "accept-new",
+          "description": "SSH host-key policy (ADR-0126 D2). Defaults to accept-new: it accepts a first key — which a just-provisioned host necessarily needs — and REFUSES a changed one, the property that actually matters. `strict` requires a pre-seeded known-hosts and fails first contact. `off` disables verification and must be written down to be used, instead of hiding inside a copy-pasted flag string. NOTE the honest limit: the accepted key is remembered for the RUN only; cross-Run memory is the booked follow-up (host key as a Facet + drift Finding)."
+        }
+      },
+      "additionalProperties": false
+    },
+    "become": {
+      "type": "object",
+      "description": "Privilege escalation (ADR-0117 D1). Typed — not a flag string — so escalation is a declared, reviewable value in Git and a recorded value on the Run, and so a future content-blind Control can gate it (via a declared changeClass, never by the PDP reading this field).",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "description": "Escalate privileges (--become)."
+        },
+        "user": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_][A-Za-z0-9_.-]*$",
+          "description": "Escalate to this user (--become-user). Pattern-bounded: the value is rendered as an argv element, never concatenated into a command string."
+        },
+        "method": {
+          "type": "string",
+          "enum": [
+            "sudo",
+            "su",
+            "doas",
+            "pbrun",
+            "pfexec",
+            "runas",
+            "machinectl"
+          ],
+          "description": "Escalation method (--become-method). Enumerated: an open string here would be an injection seam."
+        }
+      },
+      "additionalProperties": false
+    },
+    "limit": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 4096,
+      "pattern": "^[^\\s;|&$`<>\\\\]+$",
+      "description": "Host-subset pattern (--limit). Narrows the core-resolved target set; it can never widen it — the inventory the shim renders is the View's resolved set (ADR-0051 MF4, the confused-deputy gate). Shell metacharacters are rejected."
+    },
+    "tags": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^[A-Za-z0-9_][A-Za-z0-9_.-]*$"
+      },
+      "description": "Only run tasks with these tags (--tags). Each element is rendered as its own argv value."
+    },
+    "skipTags": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^[A-Za-z0-9_][A-Za-z0-9_.-]*$"
+      },
+      "description": "Skip tasks with these tags (--skip-tags)."
+    },
+    "forks": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 500,
+      "description": "Parallel host connections (--forks). Bounded so a Step cannot exhaust the execution pod."
+    },
+    "diff": {
+      "type": "boolean",
+      "description": "Show per-task changes (--diff) on an APPLYING run — 'converge, and show me what changed'. Distinct from check-mode (which converges nothing and arrives via the port's DryRun bit); a dry run already implies --diff."
+    },
+    "verbosity": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 4,
+      "description": "ansible verbosity (-v … -vvvv). Bounded; 0 means default."
+    },
+    "timeout": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 86400,
+      "description": "Connection timeout in seconds (--timeout)."
+    },
+    "vault": {
+      "type": "object",
+      "description": "ansible-vault password source. The referenced CredentialRef MUST already be on the Step's credentialRefs — the existing use-grant check at dispatch stays the single authorization path (§2.5, ADR-0009/0052). No second credential channel is opened.",
+      "properties": {
+        "credentialRef": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Name of a CredentialRef on this Step, file-injected; the shim passes its path as --vault-password-file."
+        },
+        "file": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_][A-Za-z0-9_.-]*$",
+          "description": "Optional filename within the CredentialRef's mount (/runner/credentials/<ref>/<file>). Omit when the ref injects exactly one file — the shim resolves it; required (and diagnosed, §1.8) when the ref injects several."
+        }
+      },
+      "required": [
+        "credentialRef"
+      ],
+      "additionalProperties": false
+    },
+    "eeImage": {
+      "deprecated": true,
+      "type": "string",
+      "description": "DEPRECATED and IGNORED (ADR-0117 D3a). No runtime path reads it: executeJobPlugin builds JobSpec without an Image, so the dispatcher always uses the global EE. Per-Step EE selection is by Actuator declaration (ADR-0103) — a Step selects an Actuator whose declaration carries the image — which keeps the core content-blind instead of teaching it to read an ansible param. Retained so nothing breaks; removal booked once no writer emits it."
+    },
+    "check": {
+      "deprecated": true,
+      "type": "boolean",
+      "description": "DEPRECATED and IGNORED (ADR-0117 D2). Check-mode has exactly one mechanism — the sovereign port's DryRun bit, which the shim maps to --check --diff (ADR-0051 MF6, superseding ADR-0019's params.check). Retained because the AWX materializer still writes it for imported check templates; deleting it before that writer is redirected to Step.DryRun would silently convert an imported check job into a converging apply (§1.8). Removal booked once no writer emits it."
+    }
+  },
+  "not": {
+    "required": [
+      "play",
+      "scm"
+    ]
+  },
+  "additionalProperties": false
+}
