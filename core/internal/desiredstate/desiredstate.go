@@ -1512,7 +1512,11 @@ func ValidateIntent(in types.Intent) error {
 	if err != nil {
 		return fmt.Errorf("intent %s: marshal spec: %w", in.Name, err)
 	}
-	covered, err := contract.ValidateIntentSpec(in.Kind, specRaw)
+	// PARTIAL, not complete (ADR-0118 D1): an Intent may legitimately omit a field it
+	// leaves to its Assignment's values, so completeness is judged once on the MERGED spec
+	// at compile (compiler.validateResolvedSpec). Every field that IS present is still
+	// typed here, and an unimplemented kind is still rejected here.
+	covered, err := contract.ValidateIntentSpecPartial(in.Kind, specRaw)
 	if err != nil {
 		return fmt.Errorf("intent %s: %w", in.Name, err)
 	}
@@ -1558,13 +1562,14 @@ func validateOnRemove(name, kind, onRemove string) error {
 
 // assignmentFile is the assignments/*.yaml shape. blueprint is "name@version".
 type assignmentFile struct {
-	Name         string   `yaml:"name"`
-	Intent       string   `yaml:"intent"`
-	View         string   `yaml:"view"`
-	Blueprint    string   `yaml:"blueprint"`
-	Environments []string `yaml:"environments"`
-	MaxDelta     *float64 `yaml:"maxDelta"`
-	AckDelta     int      `yaml:"ackDelta"`
+	Name         string         `yaml:"name"`
+	Intent       string         `yaml:"intent"`
+	View         string         `yaml:"view"`
+	Blueprint    string         `yaml:"blueprint"`
+	Environments []string       `yaml:"environments"`
+	MaxDelta     *float64       `yaml:"maxDelta"`
+	AckDelta     int            `yaml:"ackDelta"`
+	Values       map[string]any `yaml:"values"`
 }
 
 func parseAssignmentFile(path string, raw []byte) (string, types.Assignment, error) {
@@ -1582,6 +1587,7 @@ func parseAssignmentFile(path string, raw []byte) (string, types.Assignment, err
 		Name: f.Name, Intent: f.Intent, View: f.View,
 		Blueprint: name, BlueprintVersion: version,
 		Environments: f.Environments, MaxDelta: f.MaxDelta, AckDelta: f.AckDelta,
+		Values: f.Values,
 	}
 	if err := ValidateAssignment(a); err != nil {
 		return "", types.Assignment{}, fmt.Errorf("desiredstate: %s: %w", path, err)
@@ -1617,6 +1623,37 @@ func ValidateAssignment(a types.Assignment) error {
 	}
 	if a.AckDelta < 0 {
 		return fmt.Errorf("assignment %s: ackDelta must be >= 0", a.Name)
+	}
+	if err := rejectEnvKeyedValues(a); err != nil {
+		return err
+	}
+	return nil
+}
+
+// rejectEnvKeyedValues refuses the shape `values: {prod: {...}, staging: {...}}`
+// (ADR-0118 D1). Environment-conditional config values are the new-configuration-language
+// non-goal, and `types.EnvScoped` already binds it: environments is a boolean MEMBERSHIP
+// filter, "never a source of env-conditional values". The compliant shape is one
+// Assignment per environment, each carrying flat values.
+//
+// The check is deliberately narrow rather than clever: it fires only when a TOP-LEVEL
+// values key equals one of THIS Assignment's own declared environments, which is the
+// shape someone actually writes when reaching for a conditional. It is a guardrail, not
+// a proof — a nested env-keyed map, or one keyed by an environment this Assignment does
+// not declare, is not detectable here and is caught only by review.
+func rejectEnvKeyedValues(a types.Assignment) error {
+	if len(a.Values) == 0 || len(a.Environments) == 0 {
+		return nil
+	}
+	for _, env := range a.Environments {
+		if _, ok := a.Values[env]; ok {
+			return fmt.Errorf(
+				"assignment %s: values has a top-level key %q matching one of this Assignment's own "+
+					"environments — env-conditional config values are forbidden (§2.4/§1 non-goal; "+
+					"environments is a membership filter, not a value selector). Declare one Assignment "+
+					"per environment, each with flat values, instead",
+				a.Name, env)
+		}
 	}
 	return nil
 }

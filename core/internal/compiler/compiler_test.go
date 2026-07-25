@@ -91,3 +91,65 @@ func TestCompiledNameDeterministic(t *testing.T) {
 		t.Fatalf("name: %q", a)
 	}
 }
+
+// TestValidateResolvedSpecRejectsAnIncompleteSpec is the OTHER HALF of a validation
+// change ADR-0118 D1 made, and it exists so that change cannot become a silent
+// relaxation.
+//
+// Declaration-time Intent validation moved from COMPLETE to PARTIAL, because with values
+// spread across Blueprint defaults, the Intent and the Assignment, an Intent legitimately
+// omits a field it leaves to its Assignment — so `spec: {}` for a kind with required
+// fields must now PARSE. That is only defensible if completeness is enforced somewhere,
+// and this is that somewhere: the merged spec, at compile.
+//
+// The case is the one that used to be caught at parse (desiredstate's intent_test.go
+// rejection table): Intent/Certificate requires issuer + commonName + renewBefore.
+func TestValidateResolvedSpecRejectsAnIncompleteSpec(t *testing.T) {
+	if err := validateResolvedSpec("Intent/Certificate", map[string]any{}); err == nil {
+		t.Fatal("an empty resolved spec must fail its kind's required fields at compile")
+	}
+	// A partial merge is still incomplete: two of three required fields is not enough.
+	partial := map[string]any{"issuer": "cert-issuer/stratt-dev", "commonName": "web.test"}
+	if err := validateResolvedSpec("Intent/Certificate", partial); err == nil {
+		t.Fatal("a resolved spec missing renewBefore must fail at compile")
+	}
+}
+
+// TestValidateResolvedSpecAcceptsWhatTheLayersCompleted is the case the whole change
+// exists to allow: no single layer is a complete spec, but the MERGE is — so an Intent may
+// leave renewBefore to its Assignment's values without either declaration being invalid.
+func TestValidateResolvedSpecAcceptsWhatTheLayersCompleted(t *testing.T) {
+	resolved := map[string]any{
+		"issuer":      "cert-issuer/stratt-dev", // from the Intent
+		"commonName":  "web.test",               // from the Intent
+		"renewBefore": "360h",                   // from the Assignment's values
+	}
+	if err := validateResolvedSpec("Intent/Certificate", resolved); err != nil {
+		t.Fatalf("a spec completed ACROSS layers must validate: %v", err)
+	}
+}
+
+// TestValidateResolvedSpecStillTypesPresentFields: relaxing declaration to partial must
+// not become "anything goes" — a present field with the wrong type still fails, and
+// additionalProperties: false still bites.
+func TestValidateResolvedSpecStillTypesPresentFields(t *testing.T) {
+	wrongType := map[string]any{"issuer": 7, "commonName": "web.test", "renewBefore": "360h"}
+	if err := validateResolvedSpec("Intent/Certificate", wrongType); err == nil {
+		t.Fatal("a wrongly-typed field must fail even though the spec is complete")
+	}
+	unknown := map[string]any{
+		"issuer": "cert-issuer/x", "commonName": "web.test", "renewBefore": "360h", "sneaky": true,
+	}
+	if err := validateResolvedSpec("Intent/Certificate", unknown); err == nil {
+		t.Fatal("additionalProperties: false must still reject an unknown field")
+	}
+}
+
+// TestValidateResolvedSpecRejectsAnUnschemadKind: reaching compile with a kind that has no
+// schema means the registry changed under a live Assignment, which must not compile
+// silently (§1.8).
+func TestValidateResolvedSpecRejectsAnUnschemadKind(t *testing.T) {
+	if err := validateResolvedSpec("Intent/Config", map[string]any{}); err == nil {
+		t.Fatal("a kind with no spec schema must not validate silently")
+	}
+}

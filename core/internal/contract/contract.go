@@ -442,8 +442,15 @@ func ValidateIntentSpec(kind string, spec json.RawMessage) (covered bool, err er
 // Every field that IS present must satisfy the schema (type, enum, additionalProperties,
 // …); a missing top-level `required` field is TOLERATED, since defaults supply a subset
 // the Intent completes. This closes the §1.1 seam for author-supplied default values
-// without demanding a whole spec (ADR-0083 §5; full resolved-spec revalidation at compile
-// is a follow-up). covered=false ⇒ the kind has no Contract (nothing to check).
+// without demanding a whole spec (ADR-0083 §5). covered=false ⇒ the kind has no Contract
+// (nothing to check).
+//
+// As of ADR-0118 D1 this validates an INTENT's own spec too, not just Blueprint defaults:
+// with values spread across defaults, the Intent and the Assignment, no single layer is a
+// complete spec. The "full resolved-spec revalidation at compile" this doc used to book as
+// a follow-up now exists — compiler.validateResolvedSpec — and it is the ONLY place
+// completeness is judged, so this function must never be mistaken for one that guarantees
+// a usable spec.
 func ValidateIntentSpecPartial(kind string, spec json.RawMessage) (covered bool, err error) {
 	if err := ensure(); err != nil {
 		return false, err

@@ -94,6 +94,18 @@ type CompiledOrigin struct {
 	Blueprint        string `json:"blueprint"`
 	BlueprintVersion int    `json:"blueprintVersion"`
 	Route            int    `json:"route"`
+	// SpecLayers maps each dotted path in the effective spec to the ordered layers that
+	// produced it ("blueprint:web-server/defaults", "intent:tls-app",
+	// "assignment:prod-web"), last entry effective — so "why is this 443, and which
+	// declaration decided it" is answerable from the compiled artifact instead of being
+	// re-derived by hand (§1.8 descent; ADR-0118 D1). The merge engine has always
+	// computed this and the compiler used to discard it.
+	//
+	// NOT called "provenance": Provenance is a frozen Named Kind (§2.1) meaning the
+	// graph-plane write stamp — which Run or Syncer wrote an attribute, when, from which
+	// Source. Layer lineage has no Run and no Source, and spending a frozen term on a
+	// second meaning would teach two models for one word.
+	SpecLayers map[string][]string `json:"specLayers,omitempty"`
 }
 
 // FacetObservation is the Baseline mode for compiler-emitted, graph-side

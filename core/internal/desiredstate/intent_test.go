@@ -3,6 +3,7 @@ package desiredstate
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/dstout-devops/stratt/types"
@@ -75,14 +76,21 @@ maxDelta: 0.4
 
 	// Rejections.
 	for name, docs := range map[string]map[string]string{
-		"unimplemented kind": {"intents": "name: x\nkind: Intent/Config\nspec: {}\n"},      // charter-named, no schema yet
-		"invalid cert spec":  {"intents": "name: x\nkind: Intent/Certificate\nspec: {}\n"}, // missing required issuer/commonName/renewBefore
-		"remove on non-cert": {"intents": "name: x\nkind: Intent/Application\nonRemove: remove\n"},
-		"revert on non-file": {"intents": "name: x\nkind: Intent/Application\nonRemove: revert\n"}, // Application supports neither
-		"blueprint no ver":   {"blueprints": "name: b\nfor: Intent/Application\nroutes: [{observe: {namespace: n, equals: 1}, claim: additive}]\n"},
-		"blueprint bad kind": {"blueprints": "name: b\nversion: 1\nfor: Intent/Config\nroutes: [{observe: {namespace: n, equals: 1}, claim: additive}]\n"},
-		"bad claim":          {"blueprints": "name: b\nversion: 1\nfor: Intent/Application\nroutes: [{observe: {namespace: n, equals: 1}, claim: priority}]\n"},
-		"bad blueprint ref":  {"assignments": "name: a\nintent: i\nview: v\nblueprint: application\n"},
+		"unimplemented kind": {"intents": "name: x\nkind: Intent/Config\nspec: {}\n"}, // charter-named, no schema yet
+		// NOTE: "invalid cert spec" (Intent/Certificate with spec: {}) used to live here.
+		// ADR-0118 D1 moved Intent spec validation at DECLARATION from complete to PARTIAL,
+		// because a layered spec means an Intent may legitimately omit a field its
+		// Assignment's `values` supply — so an incomplete fragment must now parse.
+		// Completeness is enforced once on the MERGED spec at compile; the rejection is
+		// pinned there by compiler.TestValidateResolvedSpecRejectsAnIncompleteSpec, and
+		// TestIncompleteIntentSpecParsesButIsNotComplete below pins this half.
+		"bad cert field type": {"intents": "name: x\nkind: Intent/Certificate\nspec: {issuer: 7}\n"}, // present ⇒ still typed
+		"remove on non-cert":  {"intents": "name: x\nkind: Intent/Application\nonRemove: remove\n"},
+		"revert on non-file":  {"intents": "name: x\nkind: Intent/Application\nonRemove: revert\n"}, // Application supports neither
+		"blueprint no ver":    {"blueprints": "name: b\nfor: Intent/Application\nroutes: [{observe: {namespace: n, equals: 1}, claim: additive}]\n"},
+		"blueprint bad kind":  {"blueprints": "name: b\nversion: 1\nfor: Intent/Config\nroutes: [{observe: {namespace: n, equals: 1}, claim: additive}]\n"},
+		"bad claim":           {"blueprints": "name: b\nversion: 1\nfor: Intent/Application\nroutes: [{observe: {namespace: n, equals: 1}, claim: priority}]\n"},
+		"bad blueprint ref":   {"assignments": "name: a\nintent: i\nview: v\nblueprint: application\n"},
 	} {
 		bad := t.TempDir()
 		writeDecl(t, bad, "v.yaml", "name: v\nselector: {kinds: [vm]}\n")
@@ -210,5 +218,90 @@ func TestComputeOnRemoveDecommission(t *testing.T) {
 	}
 	if in := parsed.Intents[0]; in.Kind != types.IntentCompute || in.OnRemove != types.OnRemoveRemove {
 		t.Fatalf("parsed intent: kind=%s onRemove=%s", in.Kind, in.OnRemove)
+	}
+}
+
+// TestIncompleteIntentSpecParsesButIsNotComplete pins the declaration half of ADR-0118
+// D1's validation move, and states its cost plainly.
+//
+// An Intent may omit a field it leaves to its Assignment's `values`, so declaration-time
+// validation is PARTIAL: every field present is still typed, but a missing `required`
+// field no longer fails here. Completeness moved to the compiler, against the merged spec
+// (compiler.validateResolvedSpec) — which is the only place all the layers exist.
+//
+// The cost, recorded rather than hidden: an Intent that NO Assignment references is never
+// completeness-checked at all, because nothing ever merges it. That is tolerable only
+// because such an Intent compiles no Baselines and therefore does nothing — but it does
+// mean "it parsed" is a weaker statement than it used to be.
+func TestIncompleteIntentSpecParsesButIsNotComplete(t *testing.T) {
+	dir := t.TempDir()
+	writeDecl(t, dir, "v.yaml", "name: v\nselector: {kinds: [vm]}\n")
+	// Missing required issuer/commonName/renewBefore — a fragment the Assignment completes.
+	writeKind(t, dir, "intents", "c.yaml", "name: c\nkind: Intent/Certificate\nspec: {commonName: web.test}\n")
+	parsed, err := ParseDir(dir, nil)
+	if err != nil {
+		t.Fatalf("a partial Intent spec must PARSE (its Assignment may complete it): %v", err)
+	}
+	if len(parsed.Intents) != 1 || parsed.Intents[0].Spec["commonName"] != "web.test" {
+		t.Fatalf("the fragment must survive parsing intact, got %+v", parsed.Intents)
+	}
+}
+
+// TestAssignmentValuesParse pins the field ADR-0083 D1 promised ("plus optional
+// overrides") and ADR-0118 D1 finally delivers: an Assignment carries parameter values,
+// which the compiler merges as a co-equal declaration alongside the Intent's spec.
+func TestAssignmentValuesParse(t *testing.T) {
+	root := t.TempDir()
+	writeDecl(t, root, "v.yaml", "name: hosts\nselector: {kinds: [host]}\n")
+	writeKind(t, root, "assignments", "a.yaml",
+		"name: prod-web\nintent: web\nview: hosts\nblueprint: web-server@1\nenvironments: [prod]\n"+
+			"values: {port: 8443, replicas: 6}\n")
+	parsed, err := ParseDir(root, nil)
+	if err != nil {
+		t.Fatalf("an Assignment with values must parse: %v", err)
+	}
+	a := parsed.Assignments[0]
+	if a.Values["port"] != 8443 || a.Values["replicas"] != 6 {
+		t.Fatalf("values must survive parsing, got %+v", a.Values)
+	}
+}
+
+// TestAssignmentRejectsEnvKeyedValues guards the creep vector ADR-0118 D1 names
+// explicitly, because it is the first thing someone reaches for once per-environment
+// values exist: `values: {prod: {...}, staging: {...}}`.
+//
+// types.EnvScoped already binds this — `environments` is a boolean MEMBERSHIP filter and
+// "never a source of env-conditional values", which would be the new-configuration-language
+// non-goal. The compliant shape is one Assignment per environment.
+func TestAssignmentRejectsEnvKeyedValues(t *testing.T) {
+	root := t.TempDir()
+	writeDecl(t, root, "v.yaml", "name: hosts\nselector: {kinds: [host]}\n")
+	writeKind(t, root, "assignments", "a.yaml",
+		"name: web\nintent: web\nview: hosts\nblueprint: web-server@1\nenvironments: [prod, staging]\n"+
+			"values: {prod: {port: 443}, staging: {port: 8443}}\n")
+	_, err := ParseDir(root, nil)
+	if err == nil {
+		t.Fatal("environment-keyed values must be rejected (§1 non-goal, EnvScoped contract)")
+	}
+	// §1.8: the message has to say which key and what to do instead.
+	for _, want := range []string{"prod", "one Assignment"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error must mention %q so the fix is obvious; got: %v", want, err)
+		}
+	}
+}
+
+// TestAssignmentValuesNotKeyedByAnUnrelatedEnvIsAllowed records the guardrail's honest
+// limit: it fires only on a key matching one of THIS Assignment's own environments, so a
+// legitimate value that happens to be named after some other environment still parses. It
+// is a guardrail against the shape people write, not a proof.
+func TestAssignmentValuesNotKeyedByAnUnrelatedEnvIsAllowed(t *testing.T) {
+	root := t.TempDir()
+	writeDecl(t, root, "v.yaml", "name: hosts\nselector: {kinds: [host]}\n")
+	writeKind(t, root, "assignments", "a.yaml",
+		"name: web\nintent: web\nview: hosts\nblueprint: web-server@1\nenvironments: [prod]\n"+
+			"values: {staging: something}\n")
+	if _, err := ParseDir(root, nil); err != nil {
+		t.Fatalf("a value key naming an environment this Assignment does not declare is not detectable here: %v", err)
 	}
 }

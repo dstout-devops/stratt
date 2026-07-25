@@ -21,6 +21,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/dstout-devops/stratt/core/internal/contract"
 	"github.com/dstout-devops/stratt/core/internal/graph"
 	"github.com/dstout-devops/stratt/core/internal/overlay"
 	"github.com/dstout-devops/stratt/core/internal/template"
@@ -176,14 +177,29 @@ func Compile(ctx context.Context, s Store, maxDelta float64) (Plan, error) {
 		// resolved spec, so a field the Intent omits takes the Blueprint default. A
 		// cross-type clash, or two DECLARING layers asserting one path, fails this
 		// Assignment loudly (§1.8) — never coerced, never silently resolved.
-		resolvedSpec, _, merr := overlay.Merge([]overlay.Layer{
+		resolvedSpec, specLayers, merr := overlay.Merge([]overlay.Layer{
 			{Name: "blueprint:" + bp.Name + "/defaults", Values: bp.Defaults, Yielding: true},
 			{Name: "intent:" + intent.Name, Values: intent.Spec},
+			{Name: "assignment:" + a.Name, Values: a.Values},
 		})
 		if merr != nil {
 			skipped[a.Name] = true
 			plan.Errors = append(plan.Errors, fmt.Sprintf("assignment %s: defaults/spec merge: %v", a.Name, merr))
 			delta.Note = merr.Error()
+		}
+		// The MERGED spec is where completeness is judged (ADR-0118 D1). Each layer is
+		// validated as PARTIAL at declaration, because a layer legitimately holds a
+		// fragment — an Intent that leaves a field to its Assignment must not fail its own
+		// declaration. So the kind's schema is enforced HERE, once, against the whole
+		// resolved document; without this the omit-to-override rule would have quietly
+		// dropped required-field enforcement altogether. Same precedent as ADR-0024 D4:
+		// validate resolved data, not placeholders.
+		if !skipped[a.Name] {
+			if verr := validateResolvedSpec(intent.Kind, resolvedSpec); verr != nil {
+				skipped[a.Name] = true
+				plan.Errors = append(plan.Errors, fmt.Sprintf("assignment %s: %v", a.Name, verr))
+				delta.Note = verr.Error()
+			}
 		}
 
 		// ── routing ──
@@ -209,7 +225,7 @@ func Compile(ctx context.Context, s Store, maxDelta float64) (Plan, error) {
 				delta.Note = serr
 				break
 			}
-			b := compiledBaseline(a, bp, intent, i, view, route, exp, matched)
+			b := compiledBaseline(a, bp, intent, i, view, route, exp, matched, specLayers)
 			candidates[a.Name] = append(candidates[a.Name], b)
 			for _, id := range matched {
 				claims = append(claims, claimRecord{exp.Namespace, id, route.Claim, a.Name})
@@ -396,7 +412,7 @@ func selectorParametrized(sel types.ViewSelector) bool {
 // compiledBaseline builds one facet-observation Baseline for an (Assignment,
 // route) pair. The name is deterministic and origin-stamped so the compiler
 // owns exactly its rows.
-func compiledBaseline(a types.Assignment, bp types.Blueprint, intent types.Intent, routeIdx int, view types.View, route types.BlueprintRoute, exp types.FacetExpectation, _ []string) types.Baseline {
+func compiledBaseline(a types.Assignment, bp types.Blueprint, intent types.Intent, routeIdx int, view types.View, route types.BlueprintRoute, exp types.FacetExpectation, _ []string, specLayers map[string][]string) types.Baseline {
 	sel := types.ViewSelector{
 		Kinds:  view.Selector.Kinds,
 		Labels: view.Selector.Labels,
@@ -418,8 +434,38 @@ func compiledBaseline(a types.Assignment, bp types.Blueprint, intent types.Inten
 		CompiledFrom: &types.CompiledOrigin{
 			Assignment: a.Name, Intent: intent.Name, Blueprint: bp.Name,
 			BlueprintVersion: bp.Version, Route: routeIdx,
+			SpecLayers: specLayers,
 		},
 	}
+}
+
+// validateResolvedSpec enforces the Intent kind's schema against the MERGED spec — the
+// completeness check that moved here from declaration time (ADR-0118 D1).
+//
+// Why it has to be here: with values spread across Blueprint defaults, the Intent and the
+// Assignment, no single layer is a complete spec, so each is validated as PARTIAL where it
+// is declared. That leaves exactly one place where "is this spec actually complete and
+// well-typed" can be answered — after the merge. `ValidateIntentSpecPartial`'s own doc
+// already booked this as a follow-up ("full resolved-spec revalidation at compile is a
+// follow-up"); this is it.
+//
+// A failure skips the one Assignment and is surfaced on the plan (§1.8), never silently
+// compiling a Baseline from a spec that does not satisfy its kind.
+func validateResolvedSpec(kind string, resolved map[string]any) error {
+	raw, err := json.Marshal(resolved)
+	if err != nil {
+		return fmt.Errorf("marshal resolved spec: %w", err)
+	}
+	covered, err := contract.ValidateIntentSpec(kind, raw)
+	if err != nil {
+		return fmt.Errorf("resolved spec (blueprint defaults + intent + assignment values) violates kind %q: %w", kind, err)
+	}
+	if !covered {
+		// Declaration-time validation already rejects an unimplemented kind; reaching
+		// here would mean the schema registry changed under a live Assignment.
+		return fmt.Errorf("kind %q has no spec schema, so the resolved spec cannot be validated", kind)
+	}
+	return nil
 }
 
 // removeVerb renders the onRemove intent for the orphan-Finding message.

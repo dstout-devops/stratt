@@ -1461,6 +1461,10 @@ export interface components {
             /** Format: int64 */
             blueprintVersion: number;
             environments?: string[];
+            /** @description This Assignment's parameter DECLARATIONS, merged with the Intent's spec and the Blueprint's defaults into the effective spec routes substitute {{.spec.X}} from (ADR-0118 D1). Co-equal with the Intent's spec: a path set by BOTH fails the compile naming both layers (§2.4 — only the Blueprint's defaults yield), so deciding a value per environment means the Intent omits it. Environment-KEYED maps are forbidden; declare one Assignment per environment. */
+            values?: {
+                [key: string]: unknown;
+            };
             /** @description Per-Assignment max-delta gate fraction override (§4.3). */
             maxDelta?: number;
             /**
@@ -1617,6 +1621,10 @@ export interface components {
                 blueprintVersion?: number;
                 /** Format: int64 */
                 route?: number;
+                /** @description Each dotted path in the effective spec mapped to the ordered layers that produced it ("blueprint:x/defaults", "intent:y", "assignment:z"), last entry effective — so "which declaration decided this value" is answerable from the compiled artifact (§1.8 descent, ADR-0118 D1). NOT the Named Kind Provenance, which is the graph-plane write stamp on an Entity attribute. */
+                specLayers?: {
+                    [key: string]: string[];
+                };
             };
             viewName: string;
             /** @description Names the Actuator as an OPAQUE routing key (ADR-0046). A baseline is read-only by platform invariant, so the named Actuator must be read-only-capable (a DryRunnable plugin) — an Actuator that cannot run read-only is rejected terminally at launch, not by a closed enum here. */

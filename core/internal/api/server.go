@@ -705,11 +705,12 @@ func baselineToWire(b types.Baseline) Baseline {
 	}
 	if b.CompiledFrom != nil {
 		out.CompiledFrom = &struct {
-			Assignment       *string `json:"assignment,omitempty"`
-			Blueprint        *string `json:"blueprint,omitempty"`
-			BlueprintVersion *int64  `json:"blueprintVersion,omitempty"`
-			Intent           *string `json:"intent,omitempty"`
-			Route            *int64  `json:"route,omitempty"`
+			Assignment       *string              `json:"assignment,omitempty"`
+			Blueprint        *string              `json:"blueprint,omitempty"`
+			BlueprintVersion *int64               `json:"blueprintVersion,omitempty"`
+			Intent           *string              `json:"intent,omitempty"`
+			Route            *int64               `json:"route,omitempty"`
+			SpecLayers       *map[string][]string `json:"specLayers,omitempty"`
 		}{}
 		out.CompiledFrom.Assignment = &b.CompiledFrom.Assignment
 		out.CompiledFrom.Intent = &b.CompiledFrom.Intent
@@ -718,6 +719,13 @@ func baselineToWire(b types.Baseline) Baseline {
 		out.CompiledFrom.BlueprintVersion = &v
 		r := int64(b.CompiledFrom.Route)
 		out.CompiledFrom.Route = &r
+		// The layer lineage the merge engine computes (ADR-0118 D1) — the answer to
+		// "which declaration decided this value", published so the descent works from
+		// the UI/CLI/MCP and not only from a compiler log (§1.8, §1.6).
+		if len(b.CompiledFrom.SpecLayers) > 0 {
+			layers := b.CompiledFrom.SpecLayers
+			out.CompiledFrom.SpecLayers = &layers
+		}
 	}
 	if b.Actuator != "" {
 		a := b.Actuator
