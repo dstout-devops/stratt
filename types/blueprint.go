@@ -47,6 +47,26 @@ type Blueprint struct {
 	// e.g. a certificate revoke Workflow. A ref only: the operator launches it
 	// (§5 Flow 2), never auto-run. Empty ⇒ withdrawal is retain-only.
 	RemoveWorkflow string `json:"removeWorkflow,omitempty"`
+	// RemoveParams are the values passed to RemoveWorkflow, {{.spec.X}}-substituted from the
+	// resolved spec at compile and CARRIED ONTO THE COMPILED BASELINE — the withdrawal half of
+	// the parameter plane (ADR-0118 D3).
+	//
+	// Blueprint-level rather than per-route, because RemoveWorkflow is: withdrawal retires the
+	// Assignment's whole compiled set, not one route's expectation.
+	//
+	// WHY THE COMPILED VALUES MUST BE STORED, and not recomputed at withdrawal like
+	// RemoveWorkflow is: the resolved spec is Blueprint defaults + Intent spec + ASSIGNMENT
+	// VALUES, and withdrawal means the Assignment is gone from Git. Its values cannot be read
+	// back at the moment they are needed. So the ref — a property of the pinned Blueprint,
+	// still declared — is read then, and the params — a property of the compiled
+	// instantiation, unrecoverable — are stamped on the Baseline at compile. Storing the ref
+	// too would give one fact two authorities (§1.2); storing only what cannot be recovered is
+	// the line.
+	//
+	// Validated against RemoveWorkflow's declared input schema at compile, exactly as
+	// RemediationParams is: a withdrawal Workflow wired to params it does not fit must fail in
+	// front of the author, not in front of the operator holding an orphan Finding (§1.8).
+	RemoveParams map[string]any `json:"removeParams,omitempty"`
 }
 
 // BlueprintRoute is one capability route: a Facet-predicate match → an

@@ -155,6 +155,30 @@ func InputNames(doc json.RawMessage) (map[string]bool, error) {
 	return out, nil
 }
 
+// RequiredNames returns the input names a Workflow's schema marks `required`, sorted.
+//
+// Split out from InputNames because the two questions have different callers: a
+// {{.launch.X}} binding must name a DECLARED input, while a caller that supplies a whole
+// param set — a Blueprint's remediationParams or removeParams — must additionally cover the
+// REQUIRED ones. Reading `required` here keeps schema shape knowledge in this package rather
+// than letting the loader re-parse the document (§3: schemas are data, read in one place).
+//
+// Nil doc ⇒ nothing required.
+func RequiredNames(doc json.RawMessage) ([]string, error) {
+	if len(doc) == 0 {
+		return nil, nil
+	}
+	var shape struct {
+		Required []string `json:"required"`
+	}
+	if err := json.Unmarshal(doc, &shape); err != nil {
+		return nil, err
+	}
+	out := append([]string(nil), shape.Required...)
+	sort.Strings(out)
+	return out, nil
+}
+
 // ResolveLaunchInputs applies a Workflow's declared defaults to the supplied launch params
 // and validates the result against its input schema, returning the resolved set that
 // {{.launch.x}} bindings then read (ADR-0118 D2/D4).

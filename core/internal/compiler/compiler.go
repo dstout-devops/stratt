@@ -234,6 +234,21 @@ func Compile(ctx context.Context, s Store, maxDelta float64) (Plan, error) {
 			}
 		}
 
+		// The WITHDRAWAL params, resolved once per Assignment rather than per route: the
+		// Blueprint's removeWorkflow retires the whole compiled set, not one route's
+		// expectation. Stamped onto every Baseline below so the orphan branch can read them
+		// after the Assignment is gone from Git (ADR-0118 D3).
+		var remvParams map[string]any
+		if !skipped[a.Name] {
+			var rverr string
+			remvParams, rverr = resolveRemoveParams(ctx, s, bp, resolvedSpec)
+			if rverr != "" {
+				skipped[a.Name] = true
+				plan.Errors = append(plan.Errors, fmt.Sprintf("assignment %s: %s", a.Name, rverr))
+				delta.Note = rverr
+			}
+		}
+
 		// ── routing ──
 		routed := map[string]bool{}
 		for i, route := range bp.Routes {
@@ -267,7 +282,7 @@ func Compile(ctx context.Context, s Store, maxDelta float64) (Plan, error) {
 				delta.Note = rerr
 				break
 			}
-			b := compiledBaseline(a, bp, intent, i, view, route, exp, matched, specLayers, remParams)
+			b := compiledBaseline(a, bp, intent, i, view, route, exp, matched, specLayers, remParams, remvParams)
 			candidates[a.Name] = append(candidates[a.Name], b)
 			for _, id := range matched {
 				claims = append(claims, claimRecord{exp.Namespace, id, route.Claim, a.Name})
@@ -397,6 +412,14 @@ func Compile(ctx context.Context, s Store, maxDelta float64) (Plan, error) {
 						in.OnRemove, removeVerb(in.OnRemove))
 					detail["onRemove"] = in.OnRemove
 					detail["removeWorkflow"] = bp.RemoveWorkflow
+					// The params come off the BASELINE, not off the Blueprint we just read:
+					// they were resolved from a spec that included the now-withdrawn
+					// Assignment's values, so this row is their only surviving record. The
+					// ref above is read live because the pinned Blueprint still declares it
+					// (§1.2 — each fact from its one authority).
+					if len(eb.RemoveParams) > 0 {
+						detail["removeParams"] = eb.RemoveParams
+					}
 				}
 			}
 			d, _ := json.Marshal(detail)
@@ -483,7 +506,7 @@ func selectorParametrized(sel types.ViewSelector) bool {
 // compiledBaseline builds one facet-observation Baseline for an (Assignment,
 // route) pair. The name is deterministic and origin-stamped so the compiler
 // owns exactly its rows.
-func compiledBaseline(a types.Assignment, bp types.Blueprint, intent types.Intent, routeIdx int, view types.View, route types.BlueprintRoute, exp types.FacetExpectation, _ []string, specLayers map[string][]string, remParams map[string]any) types.Baseline {
+func compiledBaseline(a types.Assignment, bp types.Blueprint, intent types.Intent, routeIdx int, view types.View, route types.BlueprintRoute, exp types.FacetExpectation, _ []string, specLayers map[string][]string, remParams, remvParams map[string]any) types.Baseline {
 	sel := types.ViewSelector{
 		Kinds:  view.Selector.Kinds,
 		Labels: view.Selector.Labels,
@@ -502,6 +525,7 @@ func compiledBaseline(a types.Assignment, bp types.Blueprint, intent types.Inten
 		DampingObservations: bp.DampingObservations,
 		RemediationWorkflow: route.RemediationWorkflow,
 		RemediationParams:   remParams,
+		RemoveParams:        remvParams,
 		Framework:           "intent",
 		CompiledFrom: &types.CompiledOrigin{
 			Assignment: a.Name, Intent: intent.Name, IntentVersion: intent.Version,
@@ -546,6 +570,43 @@ func resolveRemediationParams(ctx context.Context, s Store, route types.Blueprin
 	}
 	if _, err := contract.ResolveLaunchInputs(wf.Name, wf.Inputs, resolved); err != nil {
 		return nil, fmt.Sprintf("remediationParams do not satisfy workflow %s: %v", wf.Name, err)
+	}
+	return resolved, ""
+}
+
+// resolveRemoveParams substitutes a Blueprint's removeParams from the resolved spec and checks
+// them against removeWorkflow's declared input schema (ADR-0118 D3) — the withdrawal half of
+// the same rule resolveRemediationParams applies to a route.
+//
+// Blueprint-level, because removeWorkflow is: one withdrawal retires the Assignment's whole
+// compiled set. The result is stamped on every Baseline the Assignment compiles, which is what
+// makes withdrawal work at all — see types.Baseline.RemoveParams: the resolved spec includes
+// the Assignment's own values, and withdrawal is precisely the moment the Assignment no longer
+// exists to be read.
+//
+// Returns a non-empty string on failure, the compiler's per-Assignment skip convention.
+func resolveRemoveParams(ctx context.Context, s Store, bp types.Blueprint, spec map[string]any) (map[string]any, string) {
+	if bp.RemoveWorkflow == "" {
+		if len(bp.RemoveParams) > 0 {
+			// Params with nothing to pass them to — the same half-declaration refusal
+			// remediationParams gets, rather than silently ignoring an author's intent.
+			return nil, "removeParams declared with no removeWorkflow to pass them to"
+		}
+		return nil, ""
+	}
+	if len(bp.RemoveParams) == 0 {
+		return nil, ""
+	}
+	resolved, err := template.SubstituteParams(bp.RemoveParams, template.Namespaces{"spec": spec})
+	if err != nil {
+		return nil, fmt.Sprintf("removeParams: %v", err)
+	}
+	wf, err := s.GetWorkflow(ctx, bp.RemoveWorkflow)
+	if err != nil {
+		return nil, fmt.Sprintf("removeParams: read workflow %s: %v", bp.RemoveWorkflow, err)
+	}
+	if _, err := contract.ResolveLaunchInputs(wf.Name, wf.Inputs, resolved); err != nil {
+		return nil, fmt.Sprintf("removeParams do not satisfy workflow %s: %v", wf.Name, err)
 	}
 	return resolved, ""
 }

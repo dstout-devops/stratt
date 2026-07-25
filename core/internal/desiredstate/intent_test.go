@@ -729,3 +729,97 @@ func TestGuardUsesDeclaredAssignmentsNotStored(t *testing.T) {
 			plan.Entries[0].Error)
 	}
 }
+
+// The KEY half of the Blueprint→Workflow param check, moved to declaration (ADR-0118 D3).
+//
+// The compiler already validates the substituted params, but Compile() is only driven by a test
+// that skips without Postgres — so a mistyped param key in the reference estate passed `task ci`
+// and would have surfaced at the first real compile instead. Keys and required-ness need no
+// substitution, so they can be checked in Git review; only value TYPES have to wait for the
+// resolved spec.
+func TestBlueprintParamKeysCheckedAtDeclaration(t *testing.T) {
+	const revoke = "name: retire\ninputs:\n  type: object\n  additionalProperties: false\n" +
+		"  required: [subject]\n  properties:\n    subject: {type: string}\n    note: {type: string}\n" +
+		"steps:\n  - {name: s, viewName: v, actuator: script, params: {script: \"echo {{.launch.subject}}\"}}\n"
+	bp := func(removeParams string) string {
+		return "name: access\nversion: 1\nfor: Intent/Access\nseverity: warning\n" +
+			"removeWorkflow: retire\n" + removeParams +
+			"routes: [{observe: {namespace: access.grants, contains: {subject: '{{.spec.subject}}'}}, claim: additive}]\n"
+	}
+	setup := func(t *testing.T, removeParams string) string {
+		t.Helper()
+		root := t.TempDir()
+		writeDecl(t, root, "v.yaml", "name: v\nselector: {kinds: [host]}\n")
+		writeKind(t, root, "workflows", "w.yaml", revoke)
+		writeKind(t, root, "blueprints", "b.yaml", bp(removeParams))
+		return root
+	}
+
+	// Satisfied: parses.
+	if _, err := ParseDir(setup(t, "removeParams: {subject: '{{.spec.subject}}'}\n"), nil); err != nil {
+		t.Fatalf("removeParams naming a declared input must parse: %v", err)
+	}
+
+	// Unknown key.
+	err := ParseDir2Err(t, setup(t, "removeParams: {subjekt: '{{.spec.subject}}'}\n"))
+	if err == nil {
+		t.Fatal("removeParams passing an undeclared input must be rejected at declaration")
+	}
+	for _, want := range []string{"access@1", "subjekt", "retire", "[note subject]"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the error must name the blueprint, the bad key, the workflow and the valid set; got: %v", err)
+		}
+	}
+
+	// A required input nobody passes — the withdrawal would be refused at launch, at the one
+	// moment an operator is trying to clean up retired state.
+	err = ParseDir2Err(t, setup(t, "removeParams: {note: retired}\n"))
+	if err == nil {
+		t.Fatal("removeParams omitting a required input must be rejected at declaration")
+	}
+	if !strings.Contains(err.Error(), `requires input "subject"`) {
+		t.Errorf("the error must name the missing required input; got: %v", err)
+	}
+}
+
+// The same check covers a ROUTE's remediationParams, not just removeParams — otherwise the
+// earlier failure would be a withdrawal-only privilege while the far more frequently exercised
+// remediation path kept waiting for a Postgres-gated compile.
+func TestRouteRemediationParamKeysCheckedAtDeclaration(t *testing.T) {
+	const apply = "name: converge\ninputs:\n  type: object\n  additionalProperties: false\n" +
+		"  properties:\n    subject: {type: string}\n" +
+		"steps:\n  - {name: s, viewName: v, actuator: script, params: {script: \"echo {{.launch.subject}}\"}}\n"
+	root := t.TempDir()
+	writeDecl(t, root, "v.yaml", "name: v\nselector: {kinds: [host]}\n")
+	writeKind(t, root, "workflows", "w.yaml", apply)
+	writeKind(t, root, "blueprints", "b.yaml",
+		"name: access\nversion: 1\nfor: Intent/Access\nseverity: warning\n"+
+			"routes: [{observe: {namespace: access.grants, contains: {subject: '{{.spec.subject}}'}}, "+
+			"claim: additive, remediationWorkflow: converge, remediationParams: {subjekt: x}}]\n")
+
+	err := ParseDir2Err(t, root)
+	if err == nil {
+		t.Fatal("a route's remediationParams must be key-checked at declaration too")
+	}
+	for _, want := range []string{"route 0 remediationParams", "subjekt", "converge"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the error must locate the route; got: %v", err)
+		}
+	}
+}
+
+// A Blueprint naming a Workflow that is not declared here must be left alone: unresolved refs are
+// the compiler's cross-reference check, and two different errors for one mistake is worse than
+// one. Without this the loader would start reporting missing Workflows in its own words.
+func TestBlueprintNamingAnUndeclaredWorkflowIsLeftToTheCompiler(t *testing.T) {
+	root := t.TempDir()
+	writeDecl(t, root, "v.yaml", "name: v\nselector: {kinds: [host]}\n")
+	writeKind(t, root, "blueprints", "b.yaml",
+		"name: access\nversion: 1\nfor: Intent/Access\nseverity: warning\n"+
+			"removeWorkflow: nowhere\nremoveParams: {anything: x}\n"+
+			"routes: [{observe: {namespace: access.grants, contains: {subject: '{{.spec.subject}}'}}, claim: additive}]\n")
+
+	if _, err := ParseDir(root, nil); err != nil {
+		t.Fatalf("an unresolved workflow ref must not be reported by this check: %v", err)
+	}
+}

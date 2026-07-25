@@ -7,20 +7,17 @@
 # access_subject/access_scope/access_kind, which nothing defined. See access-apply.yaml for
 # the full account.
 #
-# HOW THIS ONE IS LAUNCHED, AND THE GAP THAT REMAINS. access-apply is a route's
-# remediationWorkflow, so its params are compiled onto the Baseline and passed by the
-# remediation door (ADR-0118 D3). This is a Blueprint's `removeWorkflow`, surfaced on the
-# ORPHAN Finding when an Assignment is withdrawn — and that path carries the Workflow name
-# as a string inside a freeform detail blob, with no typed param channel at all
-# (compiler.go: detail["removeWorkflow"]).
+# HOW THIS ONE IS LAUNCHED. access-apply is a route's remediationWorkflow, so its params are
+# compiled onto the Baseline and passed by the remediation door (ADR-0118 D3). This is a
+# Blueprint's `removeWorkflow`, surfaced on the ORPHAN Finding when an Assignment is withdrawn.
+# That path used to carry the Workflow name as a string in a freeform detail blob with no param
+# channel at all, so these inputs had to be supplied by hand at launch.
 #
-# So these inputs must be supplied BY THE LAUNCHER. That is still a strict improvement:
-# before, launching this Workflow ran a play that failed on an undefined variable; now the
-# API refuses the launch and names exactly which inputs it wants. But it is not the finished
-# shape — a withdrawal path deserves the same compiled params a remediation route gets, and
-# resolving them properly needs the withdrawn Intent's EFFECTIVE spec (defaults + Assignment
-# values), which the orphan branch does not currently have. Booked in ADR-0118 rather than
-# half-built here against the raw Intent spec, which would silently ignore both other layers.
+# It now carries them: the access Blueprint declares `removeParams`, resolved from the effective
+# spec at compile and stamped on the Baseline. The earlier note here said the orphan branch
+# "does not currently have" the effective spec — true of the orphan branch, but the wrong place
+# to look. The COMPILE has it; withdrawal only has to read what the compile already knew, which
+# is why the params are stored rather than recomputed.
 name: access-revoke
 inputs:
   type: object

@@ -558,3 +558,126 @@ func TestUnchangedRecompileIsSilent(t *testing.T) {
 		t.Fatalf("and it must still compile normally, got %d", len(plan.Upserts))
 	}
 }
+
+// ── withdrawal params (ADR-0118 D3, the follow-up half) ──
+
+// removeStore is appStore plus a withdrawal Workflow and a Blueprint that declares
+// removeParams — the shape the access and fileset Blueprints now ship.
+func removeStore(removeParams map[string]any, inputs json.RawMessage) *fakeStore {
+	s := appStore(map[string]any{"package": "nginx", "channel": "stable"},
+		map[string]any{"port": "8443"}, nil)
+	s.intents["web"] = types.Intent{
+		Name: "web", Kind: types.IntentApplication, OnRemove: types.OnRemoveRevert,
+		Spec: map[string]any{"package": "nginx", "channel": "stable"},
+	}
+	bp := s.blueprints["web-server@1"]
+	bp.RemoveWorkflow = "web-retire"
+	bp.RemoveParams = removeParams
+	s.blueprints["web-server@1"] = bp
+	s.workflows = map[string]types.Workflow{
+		"web-retire": {Name: "web-retire", Inputs: inputs},
+	}
+	return s
+}
+
+var retireInputs = json.RawMessage(`{
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["port"],
+  "properties": {"port": {"type": "string"}}
+}`)
+
+// The withdrawal params must be resolved from the EFFECTIVE spec — including a value declared
+// only on the Assignment — and land on every Baseline the Assignment compiles. Reading
+// bp.RemoveParams raw would leave `{{.spec.port}}` unsubstituted; reading only the Intent's spec
+// would resolve it to nothing, since `port` here is the Assignment's declaration.
+func TestRemoveParamsAreResolvedFromTheEffectiveSpec(t *testing.T) {
+	s := removeStore(map[string]any{"port": "{{.spec.port}}"}, retireInputs)
+	plan := compileOne(t, s)
+	if len(plan.Upserts) != 1 {
+		t.Fatalf("expected one compiled baseline, got %d (%v)", len(plan.Upserts), plan.Errors)
+	}
+	if got := plan.Upserts[0].RemoveParams["port"]; got != "8443" {
+		t.Fatalf("removeParams must carry the Assignment-declared value, got %#v", got)
+	}
+}
+
+// THE POINT OF THE WHOLE CHANGE. Withdraw the Assignment — which is what makes an orphan — and
+// the params must still be there. They cannot be recomputed at this moment: the Assignment that
+// declared `port: 8443` is gone from Git, so the compiled Baseline is the only surviving record.
+// Before this, the orphan Finding named a Workflow and carried no values, and the operator had
+// to reconstruct them from a deleted declaration.
+func TestWithdrawalParamsSurviveTheAssignmentThatDeclaredThem(t *testing.T) {
+	s := removeStore(map[string]any{"port": "{{.spec.port}}"}, retireInputs)
+	compiled := compileOne(t, s).Upserts
+	if len(compiled) != 1 {
+		t.Fatalf("setup: expected one baseline, got %d", len(compiled))
+	}
+
+	// Now the Assignment is withdrawn: gone from Git, its Baseline still live.
+	s.assignments = nil
+	s.prior = compiled
+
+	plan := compileOne(t, s)
+	if len(plan.Orphans) != 1 {
+		t.Fatalf("a withdrawn Assignment with onRemove=revert owes one orphan, got %d", len(plan.Orphans))
+	}
+	var detail map[string]any
+	if err := json.Unmarshal(plan.Orphans[0].Detail, &detail); err != nil {
+		t.Fatal(err)
+	}
+	if detail["removeWorkflow"] != "web-retire" {
+		t.Fatalf("the orphan must still name the withdrawal Workflow: %v", detail)
+	}
+	params, ok := detail["removeParams"].(map[string]any)
+	if !ok {
+		t.Fatalf("the orphan must carry the compiled withdrawal params, got %v", detail)
+	}
+	if params["port"] != "8443" {
+		t.Fatalf("the params must be the values the retired configuration actually ran with, got %#v", params)
+	}
+}
+
+// A withdrawal Workflow wired to params it does not accept must fail the COMPILE, in front of
+// the author — not at the moment an operator launches a retirement from an orphan Finding.
+func TestRemoveParamsMustSatisfyTheWithdrawalWorkflowInputs(t *testing.T) {
+	s := removeStore(map[string]any{"prot": "{{.spec.port}}"}, retireInputs) // typo: prot
+	plan := compileOne(t, s)
+	if len(plan.Upserts) != 0 {
+		t.Fatalf("a route whose removeParams do not fit its Workflow must not compile, got %d", len(plan.Upserts))
+	}
+	if len(plan.Errors) == 0 || !strings.Contains(plan.Errors[0], "removeParams do not satisfy workflow web-retire") {
+		t.Fatalf("the error must name the Workflow and the field: %v", plan.Errors)
+	}
+}
+
+// Params with no Workflow to pass them to is a half-declaration: refused rather than ignored,
+// the same rule remediationParams gets. Silently dropping them would mean an author who
+// mistyped `removeWorkflow` gets a withdrawal path that carries nothing and says nothing.
+func TestRemoveParamsWithoutARemoveWorkflowAreRefused(t *testing.T) {
+	s := removeStore(map[string]any{"port": "{{.spec.port}}"}, retireInputs)
+	bp := s.blueprints["web-server@1"]
+	bp.RemoveWorkflow = ""
+	s.blueprints["web-server@1"] = bp
+
+	plan := compileOne(t, s)
+	if len(plan.Errors) == 0 || !strings.Contains(plan.Errors[0], "removeParams declared with no removeWorkflow") {
+		t.Fatalf("a half-declaration must be refused by name: %v", plan.Errors)
+	}
+}
+
+// A Blueprint with a removeWorkflow but no removeParams must keep compiling exactly as before —
+// the field is additive, and the estate has Blueprints that legitimately need no values.
+func TestARemoveWorkflowWithoutParamsStillCompiles(t *testing.T) {
+	s := removeStore(nil, retireInputs)
+	plan := compileOne(t, s)
+	if len(plan.Errors) != 0 {
+		t.Fatalf("removeParams is optional: %v", plan.Errors)
+	}
+	if len(plan.Upserts) != 1 {
+		t.Fatalf("expected one baseline, got %d", len(plan.Upserts))
+	}
+	if plan.Upserts[0].RemoveParams != nil {
+		t.Fatalf("absent params must stay absent, got %#v", plan.Upserts[0].RemoveParams)
+	}
+}

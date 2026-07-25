@@ -12,6 +12,13 @@ for: Intent/FileSet
 severity: warning
 dampingObservations: 1
 removeWorkflow: fileset-revert
+# The withdrawal half of the same wire (ADR-0118 D3): the path to remove, resolved from the
+# effective spec at compile and stamped on every compiled Baseline. It must be stored rather
+# than recomputed because withdrawal deletes the Assignment whose values fed the merge — and
+# removing the WRONG path is not a recoverable mistake, so the value has to be the one the file
+# was actually distributed under.
+removeParams:
+  path: "{{.spec.path}}"
 routes:
   - observe:
       namespace: fileset.content

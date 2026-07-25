@@ -380,6 +380,9 @@ func ParseDir(root string, decider policy.Decider) (Declarations, error) {
 	if err := checkTriggerLaunchInputs(out); err != nil {
 		return out, err
 	}
+	if err := checkBlueprintParamNames(out); err != nil {
+		return out, err
+	}
 	return out, nil
 }
 
@@ -413,6 +416,86 @@ func checkTriggerLaunchInputs(decls Declarations) error {
 		}
 		if _, err := contract.ResolveLaunchInputs(wf.Name, wf.Inputs, t.Inputs); err != nil {
 			return fmt.Errorf("trigger %s: inputs do not satisfy workflow %s: %w", t.Name, wf.Name, err)
+		}
+	}
+	return nil
+}
+
+// checkBlueprintParamNames validates that every KEY a Blueprint passes to a Workflow is a
+// declared input of that Workflow, and that no required input is left unsupplied (ADR-0118 D3).
+// Covers a route's `remediationParams` and the Blueprint's own `removeParams`.
+//
+// The compiler already performs the full check, against the SUBSTITUTED values. This is not a
+// duplicate of it — it is the half of that check which does not need substitution, moved to the
+// earliest point it can run (§1.8: declaration > compile > launch). Keys and required-ness are
+// literal in the declaration; only value TYPES depend on the resolved spec, which needs an
+// Assignment and therefore belongs to the compile.
+//
+// Earliness is the entire payoff, and it is not theoretical: the compiler's check lives behind
+// Compile(), whose only test driver skips without a live Postgres — so a mistyped param key in
+// the reference estate passed `task ci` and would have failed at the first real compile. Here it
+// fails in front of whoever edits the Blueprint.
+//
+// A Blueprint naming a Workflow that does not exist is left alone: that is the compiler's
+// cross-reference check, and two errors for one mistake is worse than one.
+func checkBlueprintParamNames(decls Declarations) error {
+	byName := make(map[string]types.Workflow, len(decls.Workflows))
+	for _, w := range decls.Workflows {
+		byName[w.Name] = w
+	}
+	check := func(what, workflow string, params map[string]any) error {
+		if workflow == "" || len(params) == 0 {
+			return nil
+		}
+		wf, ok := byName[workflow]
+		if !ok {
+			return nil
+		}
+		// Only KEYS and required-ness are checked. A `{{.spec.x}}` placeholder is not the value
+		// the schema will see, so its TYPE cannot be judged here — the same reasoning ADR-0024
+		// D4 records for Actuator params, and why the typed check stays at compile.
+		declared, err := contract.InputNames(wf.Inputs)
+		if err != nil {
+			return fmt.Errorf("%s: workflow %s inputs: %w", what, wf.Name, err)
+		}
+		required, err := contract.RequiredNames(wf.Inputs)
+		if err != nil {
+			return fmt.Errorf("%s: workflow %s inputs: %w", what, wf.Name, err)
+		}
+		names := make([]string, 0, len(declared))
+		for n := range declared {
+			names = append(names, n)
+		}
+		sort.Strings(names)
+		keys := make([]string, 0, len(params))
+		for k := range params {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		for _, k := range keys {
+			if !declared[k] {
+				return fmt.Errorf("%s: %q is not a declared input of workflow %s (declared: %v)",
+					what, k, wf.Name, names)
+			}
+		}
+		for _, req := range required {
+			if _, ok := params[req]; !ok {
+				return fmt.Errorf("%s: workflow %s requires input %q, which this Blueprint does not pass",
+					what, wf.Name, req)
+			}
+		}
+		return nil
+	}
+	for _, b := range decls.Blueprints {
+		if err := check(fmt.Sprintf("blueprint %s@%d removeParams", b.Name, b.Version),
+			b.RemoveWorkflow, b.RemoveParams); err != nil {
+			return err
+		}
+		for i, r := range b.Routes {
+			if err := check(fmt.Sprintf("blueprint %s@%d route %d remediationParams", b.Name, b.Version, i),
+				r.RemediationWorkflow, r.RemediationParams); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
@@ -1875,6 +1958,7 @@ type blueprintFile struct {
 	Severity            string           `yaml:"severity"`
 	DampingObservations int              `yaml:"dampingObservations"`
 	RemoveWorkflow      string           `yaml:"removeWorkflow"`
+	RemoveParams        map[string]any   `yaml:"removeParams"`
 }
 type blueprintRoute struct {
 	Match               []declFacetPred `yaml:"match"`
@@ -1907,7 +1991,7 @@ func parseBlueprintFile(path string, raw []byte) (string, types.Blueprint, error
 		Name: f.Name, Version: f.Version, For: f.For,
 		Defaults: f.Defaults,
 		Severity: f.Severity, DampingObservations: f.DampingObservations,
-		RemoveWorkflow: f.RemoveWorkflow,
+		RemoveWorkflow: f.RemoveWorkflow, RemoveParams: f.RemoveParams,
 	}
 	for i, r := range f.Routes {
 		var match []types.FacetPredicate

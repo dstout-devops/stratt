@@ -55,6 +55,19 @@ type Baseline struct {
 	// Git-derived fact for no gain — nothing in the parameter plane is per-Entity. The
 	// remediation door reads them from here at launch.
 	RemediationParams map[string]any `json:"remediationParams,omitempty"`
+	// RemoveParams are the launch inputs for the WITHDRAWAL Workflow — the Blueprint's
+	// removeWorkflow, surfaced on the orphan Finding when this Baseline's Assignment is
+	// withdrawn (ADR-0118 D3).
+	//
+	// Stamped here at compile because by the time they are needed the Assignment is gone from
+	// Git, so the resolved spec they came from cannot be rebuilt: this row is the only surviving
+	// record of what the retired configuration actually said. That is also why the withdrawal
+	// Workflow REF is not stored beside them — it lives on the still-declared, version-pinned
+	// Blueprint, and duplicating it here would give one fact two authorities (§1.2).
+	//
+	// Unlike RemediationParams these carry no per-route component: withdrawal retires the whole
+	// compiled set, so every Baseline an Assignment compiled carries the same values.
+	RemoveParams map[string]any `json:"removeParams,omitempty"`
 	// Framework tags the Findings (e.g. "cis") — "one kind, framework-
 	// tagged" (§2.4).
 	Framework string `json:"framework,omitempty"`

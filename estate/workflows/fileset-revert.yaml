@@ -11,6 +11,11 @@
 # The values were in the Intent all along (estate/intents/nginx-conf.yaml declares path, source,
 # mode, owner, group). What was missing was a way for the Blueprint route to pass them (D3) and a
 # way for this Workflow to declare it needs them (D2).
+#
+# `path` now arrives compiled, from the fileset Blueprint's `removeParams` stamped on the
+# Baseline, rather than being typed in at launch — which matters more here than for most
+# withdrawal Workflows, because this play removes a file by absolute path and a hand-typed path
+# is a hand-typed deletion target.
 name: fileset-revert
 inputs:
   type: object
