@@ -14,6 +14,7 @@ import json
 import os
 from pathlib import Path
 
+import content
 import pytest
 from content import (
     PinError,
@@ -379,3 +380,126 @@ def test_shipped_declaration_is_locked() -> None:
     """
     shipped = Path(__file__).parent / "content" / "crypto.requirements.yml"
     assert check_locks([shipped]) > 0, "the shipped declaration must lock at least one artifact"
+
+
+# ── ADR-0124 D1: the ansible-builder execution-environment.yml front door ────────────────
+
+
+def _ee(tmp_path: Path, body: str) -> Path:
+    p = tmp_path / "execution-environment.yml"
+    p.write_text(body)
+    return p
+
+
+def test_ee_inline_galaxy_requirements_are_read(tmp_path: Path) -> None:
+    """Compatibility is at the DECLARATION boundary (ADR-0124 D1): an operator's own definition
+    names content, and we install it through the pipeline that byte-pins it."""
+    doc, notes = content.ee_galaxy_requirements(
+        _ee(
+            tmp_path,
+            "version: 3\n"
+            "dependencies:\n"
+            "  galaxy:\n"
+            "    collections:\n"
+            "      - name: community.crypto\n"
+            '        version: "2.22.3"\n',
+        )
+    )
+    assert doc["collections"][0]["name"] == "community.crypto"
+    assert notes == []
+
+
+def test_ee_galaxy_path_is_followed(tmp_path: Path) -> None:
+    """`dependencies.galaxy` may be a PATH to a requirements.yml — ansible-builder's own
+    semantics, so a definition written for it works unchanged."""
+    (tmp_path / "requirements.yml").write_text(
+        'collections:\n  - name: community.crypto\n    version: "2.22.3"\n'
+    )
+    doc, _ = content.ee_galaxy_requirements(
+        _ee(tmp_path, "version: 3\ndependencies:\n  galaxy: requirements.yml\n")
+    )
+    assert doc["collections"][0]["version"] == "2.22.3"
+
+
+def test_ee_unsupported_sections_are_reported_not_dropped(tmp_path: Path) -> None:
+    """§1.8: a section that does not carry over must be NAMED. Silently producing an image missing
+    an operator's build steps is the failure this reporting exists to prevent."""
+    _, notes = content.ee_galaxy_requirements(
+        _ee(
+            tmp_path,
+            "version: 3\n"
+            "images:\n  base_image:\n    name: registry.example/ee-base:latest\n"
+            "additional_build_steps:\n  prepend_final:\n    - RUN echo hi\n"
+            "dependencies:\n"
+            "  python:\n    - jmespath\n"
+            "  system:\n    - openssl-dev\n"
+            '  galaxy:\n    collections:\n      - name: community.crypto\n        version: "2.22.3"\n',
+        )
+    )
+    joined = " ".join(notes)
+    for want in ("additional_build_steps", "images", "dependencies.python", "dependencies.system"):
+        assert want in joined, f"{want} must be reported as not carried over: {notes}"
+
+
+def test_ee_without_galaxy_content_is_refused(tmp_path: Path) -> None:
+    """A definition naming no content is not an empty content file — it is a base EE, which is built
+    by passing no content file at all. Refusing it names the right action (§1.8)."""
+    with pytest.raises(content.PinError, match="declares no Ansible content|dependencies"):
+        content.ee_galaxy_requirements(_ee(tmp_path, "version: 3\ndependencies:\n  python: []\n"))
+
+
+def test_ee_galaxy_path_that_does_not_exist_is_refused(tmp_path: Path) -> None:
+    with pytest.raises(content.PinError, match="does not exist"):
+        content.ee_galaxy_requirements(_ee(tmp_path, "version: 3\ndependencies:\n  galaxy: nope.yml\n"))
+
+
+# ── ADR-0124 D2: the offline artifact source ─────────────────────────────────────────────
+
+
+def test_artifact_filename_is_derivable_from_the_declaration(tmp_path: Path) -> None:
+    """What makes an offline directory checkable without a manifest of its own: ansible-galaxy names
+    a downloaded collection <namespace>-<name>-<version>.tar.gz."""
+    got = content.artifact_for({"name": "community.crypto", "version": "2.22.3"}, tmp_path)
+    assert got.name == "community-crypto-2.22.3.tar.gz"
+
+
+def test_offline_install_refuses_a_missing_artifact(tmp_path: Path) -> None:
+    """Fail closed and name the fix. The alternative — falling back to Galaxy — would make an
+    air-gapped build silently network-dependent, which is the whole thing D2 removes."""
+    req = tmp_path / "r.yml"
+    req.write_text('collections:\n  - name: community.crypto\n    version: "2.22.3"\n')
+    lock = content.lock_path_for(req)
+    lock.write_text(
+        json.dumps(
+            {"collections": [{"name": "community.crypto", "version": "2.22.3", "digest": "x"}], "roles": []}
+        )
+    )
+    with pytest.raises(content.PinError, match="missing artifact"):
+        content.install(
+            [req],
+            tmp_path / "colls",
+            tmp_path / "roles",
+            tmp_path / "manifest.json",
+            artifacts=tmp_path / "artifacts",
+        )
+
+
+def test_offline_install_states_the_roles_limit(tmp_path: Path) -> None:
+    """Stated, not half-supported (§1.1/§1.8): a role has no canonical artifact filename to resolve
+    locally, so the offline path refuses rather than guessing a naming scheme nothing demands."""
+    req = tmp_path / "r.yml"
+    req.write_text('collections: []\nroles:\n  - name: geerlingguy.nginx\n    version: "3.1.4"\n')
+    lock = content.lock_path_for(req)
+    lock.write_text(
+        json.dumps(
+            {"collections": [], "roles": [{"name": "geerlingguy.nginx", "version": "3.1.4", "digest": "x"}]}
+        )
+    )
+    with pytest.raises(content.PinError, match="roles are not supported offline"):
+        content.install(
+            [req],
+            tmp_path / "colls",
+            tmp_path / "roles",
+            tmp_path / "manifest.json",
+            artifacts=tmp_path / "artifacts",
+        )

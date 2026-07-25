@@ -1152,6 +1152,31 @@ tasks:
         echo "wrote ee/content/${lock} — REVIEW THE DIFF before committing:"
         git --no-pager diff --stat -- "ee/content/${lock}" || true
 
+  ee:content:pull:
+    desc: "Download declared collections for an AIR-GAPPED EE build (ADR-0124 D2) — never relocks"
+    vars:
+      CONTENT: '{{.CONTENT | default "crypto.requirements.yml"}}'
+      OUT: '{{.OUT | default "artifacts"}}'
+    cmds:
+      # Run this on a CONNECTED machine, then copy ee/content/<OUT>/ to the air-gapped builder and
+      # build with EE_OFFLINE=<OUT>. Deliberately not a relock: it fetches the declared versions and
+      # stops, so the lockfile stays what git says and the offline install verifies against it
+      # exactly as an online one does. A pull that relocked would launder the very event the
+      # lockfile exists to catch (ADR-0117 i).
+      - uv run --quiet --with pyyaml=={{.PYYAML_VER}} python ee/content.py pull
+          --artifacts ee/content/{{.OUT}} ee/content/{{.CONTENT}}
+
+  ee:factory:requirements:
+    desc: "Read an ansible-builder execution-environment.yml and report what carries over (ADR-0124 D1)"
+    vars:
+      EE: '{{.EE}}'
+    cmds:
+      # The compatibility front door: an operator arriving from AAP has this file. This prints the
+      # Galaxy requirements it declares — feed them to the pinned pipeline — and names on stderr
+      # every section that does NOT carry over, rather than producing an image quietly missing it.
+      - 'test -n "{{.EE}}" || { echo "usage: task ee:factory:requirements EE=path/to/execution-environment.yml" >&2; exit 1; }' 
+      - uv run --quiet --with pyyaml=={{.PYYAML_VER}} python ee/content.py ee-requirements {{.EE}}
+
   dev:ee-crypto:build:
     desc: Build the crypto-content EE variant and load it into the kind cluster (ADR-0117 D3/D3a)
     cmds:

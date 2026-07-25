@@ -523,8 +523,18 @@ what a reasonable schema would look like.** Nothing short of running `community.
   slice: `isCheckTemplate` maps an imported AWX check template onto the Step's DryRun bit, and nothing in
   tree writes or reads `params.check` any more. The field itself stays in `ansible.input.v5` as deprecated
   and unread — a pinned Contract is not edited in place (§1.5), so its **removal is a v6 change**.
-  (a) The `ansible-builder`-compatible EE factory (parity P5) — this ADR defines the
-  contract it must satisfy. (b) Air-gap content seeding. ~~(c) Survey → input-Contract enforcement on Steps
+  ~~(a) The `ansible-builder`-compatible EE factory (parity P5) — this ADR defines the
+  contract it must satisfy. (b) Air-gap content seeding.~~ — **both done as
+  [ADR-0124](0124-ee-content-supply-factory-and-offline-source.md)**, batched because they are one
+  seam from two ends. (a) is an INPUT-FORMAT problem, not a build-engine one: `content.py` reads an
+  `execution-environment.yml` and feeds its `dependencies.galaxy` to the pipeline that already
+  byte-pins content — adopting `ansible-builder` itself would have traded away the lockfile, since it
+  has no byte-pinning at all. Sections that do not carry over (`additional_build_steps`, custom base
+  images, python/system deps) are **reported, never dropped** (§1.8). (b) is a SOURCE problem whose
+  hard half was already solved: `install --artifacts <dir>` installs from local tarballs and reaches
+  no registry, with the pin check and the lockfile check unchanged — so an air-gapped build gets the
+  IDENTICAL byte guarantee a connected one gets rather than a weaker one. `task ee:content:pull`
+  populates the directory on a connected machine and is deliberately not a relock. ~~(c) Survey → input-Contract enforcement on Steps
   (the named deferred item in ADR-0025/0026).~~ — **done, at the Workflow rather than the Step.** ADR-0118 D2
   built the seam this was waiting on, so an imported AWX survey now lands as `Workflow.inputs` and each
   answer binds into the Step's `extraVars` from `{{.launch.<var>}}` — the field this ADR's own v5 Contract

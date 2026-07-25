@@ -88,10 +88,17 @@ RUN uv pip install --system --no-cache \
 # oversight.
 ARG EE_CONTENT=""
 ARG EE_LOCK_MODE="verify"
+# EE_OFFLINE (ADR-0124 D2): a subdirectory of ee/content/ holding pre-downloaded collection
+# tarballs. Set it and the install reaches NO registry — the pin check and the lockfile check are
+# unchanged, so an air-gapped build is verified by the same hash a connected one is, not trusted
+# because of where the bytes came from. Populate it with `task ee:content:pull` on a connected
+# machine. Empty (the default) installs from Galaxy exactly as before.
+ARG EE_OFFLINE=""
 COPY ee/content.py /usr/local/bin/stratt-ee-content
 COPY ee/content/ /usr/share/stratt/ee-content/
 RUN python /usr/local/bin/stratt-ee-content install \
       --lock-mode="${EE_LOCK_MODE}" \
+      ${EE_OFFLINE:+--artifacts=/usr/share/stratt/ee-content/${EE_OFFLINE}} \
       ${EE_CONTENT:+/usr/share/stratt/ee-content/${EE_CONTENT}} \
     && chmod -R a+rX /usr/share/ansible
 

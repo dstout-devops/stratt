@@ -164,6 +164,80 @@ def _entries(doc: dict[str, Any], section: str, path: Path) -> list[dict[str, An
     return out
 
 
+# ansible-builder's execution-environment.yml sections we do NOT carry over. Reported, never
+# silently dropped (§1.8, ADR-0124 D1): an operator whose definition leans on one must be told which
+# part did not come across, rather than receiving an image quietly missing it.
+UNSUPPORTED_EE_SECTIONS = {
+    "additional_build_steps": "build steps are the Dockerfile's, not a declaration's",
+    "additional_build_files": "extra build context is the Dockerfile's COPY",
+    "images": "the base image is ee/Dockerfile's, so a custom base is an operator edit there",
+    "options": "ansible-builder build options have no analogue in this pipeline",
+}
+
+
+def ee_galaxy_requirements(path: Path) -> tuple[dict[str, Any], list[str]]:
+    """Extract the Galaxy requirements from an ansible-builder execution-environment.yml.
+
+    ADR-0124 D1: compatibility is at the DECLARATION boundary. An operator arriving from AAP has
+    this file; what they need is for the content in it to be installed at the versions it names, by
+    the pipeline that byte-pins content (which ansible-builder itself does not do). We read one
+    section of a format we do not own, deliberately — not its build graph.
+
+    `dependencies.galaxy` may be inline requirements or a path to a requirements.yml, which is
+    ansible-builder's own contract; both are handled. Returns (requirements-doc, notes) where notes
+    names every section that did NOT carry over.
+    """
+    # A plain YAML read, NOT _load: that one is the requirements-file loader and correctly refuses
+    # any key other than collections:/roles:. An execution-environment.yml is a different document
+    # we do not own, so it is read raw and only the one section we honour is interpreted.
+    try:
+        raw = yaml.safe_load(path.read_text()) or {}
+    except yaml.YAMLError as err:
+        raise PinError(f"{path}: not valid YAML: {err}") from err
+    if not isinstance(raw, dict):
+        raise PinError(f"{path}: an execution-environment.yml must be a mapping")
+    doc: dict[str, Any] = raw
+    notes: list[str] = []
+    for section, why in sorted(UNSUPPORTED_EE_SECTIONS.items()):
+        if doc.get(section):
+            notes.append(f"{section}: not carried over — {why}")
+
+    deps = doc.get("dependencies")
+    if not isinstance(deps, dict):
+        raise PinError(
+            f"{path}: no `dependencies` section, so it declares no content to install. "
+            f"An execution-environment.yml with nothing under dependencies.galaxy is a base EE — "
+            f"build one with no content file instead of an empty definition"
+        )
+    for section in ("python", "system"):
+        if deps.get(section):
+            notes.append(
+                f"dependencies.{section}: not carried over — python/system packages belong in "
+                f"ee/Dockerfile, where the layer they land in is reviewable"
+            )
+
+    galaxy = deps.get("galaxy")
+    if galaxy is None:
+        raise PinError(
+            f"{path}: dependencies.galaxy is absent, so this definition names no Ansible content. "
+            f"Nothing to install"
+        )
+    if isinstance(galaxy, str):
+        # A path, relative to the definition — ansible-builder's own semantics.
+        ref = (path.parent / galaxy).resolve()
+        if not ref.is_file():
+            raise PinError(
+                f"{path}: dependencies.galaxy points at {galaxy!r}, which does not exist (resolved to {ref})"
+            )
+        return _load(ref), notes
+    if isinstance(galaxy, dict):
+        return galaxy, notes
+    raise PinError(
+        f"{path}: dependencies.galaxy must be a requirements mapping or a path to one, got "
+        f"{type(galaxy).__name__}"
+    )
+
+
 def verify(paths: list[Path]) -> dict[str, list[dict[str, Any]]]:
     """Parse + assert every declared entry is exactly pinned. No network, no install."""
     merged: dict[str, list[dict[str, Any]]] = {"collections": [], "roles": []}
@@ -428,14 +502,60 @@ def _assert_on_search_path(collections_dir: Path, roles_dir: Path) -> None:
             )
 
 
+def artifact_for(entry: dict[str, Any], artifacts: Path) -> Path:
+    """The local tarball an offline install uses for one declared collection (ADR-0124 D2).
+
+    `ansible-galaxy` names a downloaded collection `<namespace>-<name>-<version>.tar.gz`, so the
+    filename is derivable from the declaration — which is what makes an offline directory checkable
+    without a manifest of its own.
+    """
+    name = str(entry["name"]).replace(".", "-", 1)
+    return artifacts / f"{name}-{entry['version']}.tar.gz"
+
+
+def _assert_offline_artifacts(declared: dict[str, list[dict[str, Any]]], artifacts: Path) -> None:
+    """Refuse an offline install the directory cannot satisfy (ADR-0124 D2).
+
+    Fails CLOSED and names the fix. The alternative — falling back to Galaxy for whatever is absent —
+    would make an air-gapped build silently network-dependent, which is precisely what D2 removes.
+    """
+    missing = [
+        str(artifact_for(e, artifacts))
+        for e in declared["collections"]
+        if not artifact_for(e, artifacts).is_file()
+    ]
+    if missing:
+        raise PinError(
+            f"offline install from {artifacts}: missing artifact(s) {missing}. Populate the "
+            f"directory on a connected machine with `task ee:content:pull` and copy it in — this "
+            f"path never reaches Galaxy by design (ADR-0124 D2)"
+        )
+    if declared["roles"]:
+        # Stated rather than half-supported: a role has no single canonical artifact filename (it may
+        # come from git, a tarball, or Galaxy), so there is nothing to derive a local path from.
+        # Nothing shipping declares one; when something does, that is the moment to decide the naming
+        # rather than guess it now (§1.1).
+        raise PinError(
+            f"offline install from {artifacts}: roles are not supported offline yet, and this "
+            f"declaration has {len(declared['roles'])}. A role has no canonical artifact filename to "
+            f"resolve locally; install it from a connected build, or vendor it into the image"
+        )
+
+
 def install(
     paths: list[Path],
     collections_dir: Path,
     roles_dir: Path,
     manifest_path: Path,
     lock_mode: str = "verify",
+    artifacts: Path | None = None,
 ) -> None:
     declared = verify(paths)  # pins are enforced BEFORE anything touches the network
+    if artifacts is not None:
+        # Checked HERE, before anything else: an absent artifact is a pin-class failure and §1.8 says
+        # fail at the earliest rung. It also means the refusal does not depend on an ansible toolchain
+        # being present, so it is testable without one.
+        _assert_offline_artifacts(declared, artifacts)
     collections_dir.mkdir(parents=True, exist_ok=True)
     roles_dir.mkdir(parents=True, exist_ok=True)
     if declared["collections"] or declared["roles"]:
@@ -443,15 +563,32 @@ def install(
         # there is no search-path assumption to hold it to.
         _assert_on_search_path(collections_dir, roles_dir)
 
-    for path in paths:
-        # Both subcommands run unconditionally: `ansible-galaxy` treats a file with no
-        # matching section as "Skipping install, no requirements found" and exits 0
-        # (verified), so no conditional logic is needed to handle a one-section file.
-        for args in (
-            ["ansible-galaxy", "collection", "install", "-r", str(path), "-p", str(collections_dir)],
-            ["ansible-galaxy", "role", "install", "-r", str(path), "-p", str(roles_dir)],
-        ):
-            subprocess.run(args, check=True)
+    if artifacts is not None:
+        # OFFLINE (ADR-0124 D2): install from local tarballs, so nothing reaches Galaxy. The pin
+        # check and the lockfile check are UNCHANGED, which is the whole argument for trusting this
+        # path — an air-gapped build gets the IDENTICAL byte guarantee a connected one gets.
+        for entry in declared["collections"]:
+            subprocess.run(
+                [
+                    "ansible-galaxy",
+                    "collection",
+                    "install",
+                    str(artifact_for(entry, artifacts)),
+                    "-p",
+                    str(collections_dir),
+                ],
+                check=True,
+            )
+    else:
+        for path in paths:
+            # Both subcommands run unconditionally: `ansible-galaxy` treats a file with no
+            # matching section as "Skipping install, no requirements found" and exits 0
+            # (verified), so no conditional logic is needed to handle a one-section file.
+            for args in (
+                ["ansible-galaxy", "collection", "install", "-r", str(path), "-p", str(collections_dir)],
+                ["ansible-galaxy", "role", "install", "-r", str(path), "-p", str(roles_dir)],
+            ):
+                subprocess.run(args, check=True)
 
     # Verify-don't-trust: assert the RESOLVED set actually matches the declared pins.
     # `ansible-galaxy` can satisfy a request with a different version (dependency
@@ -541,6 +678,43 @@ def install(
         print(f"stratt-ee-content: {n} artifact(s) match {lock_path.name}", file=sys.stderr)
 
 
+def pull(paths: list[Path], artifacts: Path) -> int:
+    """Download the declared collections to a local directory for an offline build (ADR-0124 D2).
+
+    Deliberately NOT a relock. It fetches the declared VERSIONS and stops; the lockfile stays what
+    git says it is, and the offline install verifies against it exactly as an online one does. A pull
+    that relocked would launder the event the lockfile exists to catch — the same version resolving
+    to different bytes (ADR-0117 i).
+    """
+    declared = verify(paths)  # pins first, before the network, as everywhere else
+    if declared["roles"]:
+        raise PinError(
+            f"pull: roles are not supported offline yet ({len(declared['roles'])} declared) — see "
+            f"the install path for why"
+        )
+    artifacts.mkdir(parents=True, exist_ok=True)
+    for entry in declared["collections"]:
+        subprocess.run(
+            [
+                "ansible-galaxy",
+                "collection",
+                "download",
+                f"{entry['name']}:{entry['version']}",
+                "-p",
+                str(artifacts),
+            ],
+            check=True,
+        )
+    n = len(declared["collections"])
+    print(
+        f"stratt-ee-content: downloaded {n} collection artifact(s) to {artifacts}. "
+        f"Copy this directory to the air-gapped builder and pass --artifacts; the lockfile still "
+        f"decides whether the bytes are accepted (ADR-0124 D2)",
+        file=sys.stderr,
+    )
+    return 0
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -569,9 +743,31 @@ def main() -> int:
         help="Galaxy requirements files; NONE is legal and yields a base EE "
         "with an explicit empty manifest (stated, not merely absent)",
     )
+    i.add_argument(
+        "--artifacts",
+        type=Path,
+        default=None,
+        help="install from local collection tarballs in this directory instead of Galaxy "
+        "(ADR-0124 D2, air-gap). The pin check and the lockfile check are UNCHANGED — an "
+        "offline build gets the same byte guarantee, not a weaker one",
+    )
     i.add_argument("--collections-dir", type=Path, default=Path("/usr/share/ansible/collections"))
     i.add_argument("--roles-dir", type=Path, default=Path("/usr/share/ansible/roles"))
     i.add_argument("--manifest", type=Path, default=Path(MANIFEST_PATH))
+
+    p = sub.add_parser(
+        "pull",
+        help="download the declared collections for an offline build (ADR-0124 D2); never relocks",
+    )
+    p.add_argument("files", nargs="+", type=Path)
+    p.add_argument("--artifacts", type=Path, required=True)
+
+    e = sub.add_parser(
+        "ee-requirements",
+        help="print the Galaxy requirements an ansible-builder execution-environment.yml declares, "
+        "and report every section that does NOT carry over (ADR-0124 D1)",
+    )
+    e.add_argument("file", type=Path)
 
     args = ap.parse_args()
     try:
@@ -583,8 +779,22 @@ def main() -> int:
                 f"stratt-ee-content: {n[0]} collection(s), {n[1]} role(s) exactly pinned; "
                 f"{locked} locked (hashes are verified by the BUILD, not here)"
             )
+        elif args.cmd == "pull":
+            return pull(args.files, args.artifacts)
+        elif args.cmd == "ee-requirements":
+            doc, notes = ee_galaxy_requirements(args.file)
+            for note in notes:
+                print(f"stratt-ee-content: {args.file}: {note}", file=sys.stderr)
+            print(yaml.safe_dump(doc, sort_keys=False), end="")
         else:
-            install(args.files, args.collections_dir, args.roles_dir, args.manifest, lock_mode=args.lock_mode)
+            install(
+                args.files,
+                args.collections_dir,
+                args.roles_dir,
+                args.manifest,
+                lock_mode=args.lock_mode,
+                artifacts=args.artifacts,
+            )
     except PinError as err:
         print(f"stratt-ee-content: {err}", file=sys.stderr)
         return 1
