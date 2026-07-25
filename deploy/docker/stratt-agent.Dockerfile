@@ -14,6 +14,12 @@
 # are NOT in this image's context (the control plane never links them, ADR-0046).
 # core's replace directives resolve types/contracts/packs/sdk locally.
 FROM golang:1.26 AS build
+# Bound compile fan-out (same lever + default as the Taskfile's host gates). Without it a
+# cold cache compiles the whole dependency graph at -p=NumCPU, which on a many-core host
+# over overlayfs corrupts the build cache it is writing (`internal compiler error: export
+# data desync` in a random dependency) and can exhaust host memory outright.
+ARG GO_PARALLEL=8
+ENV GOFLAGS=-p=${GO_PARALLEL}
 WORKDIR /src
 ENV GOWORK=off
 COPY types/ types/

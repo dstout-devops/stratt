@@ -48,6 +48,15 @@ vars:
   # a build-cache entry that another writer had left truncated. Type-checking has
   # sharply diminishing returns past ~8 workers, so this costs little wall clock on
   # a warm cache and makes the gate reproducible instead of a coin flip.
+  #
+  # It governs IMAGE builds too, threaded in as a --build-arg to every Dockerfile that
+  # compiles Go (each sets GOFLAGS=-p from it). Bounding only the host gates was not
+  # enough, and the gap was worse than the original symptom: a single
+  # `go build ./cmd/strattd` inside a builder stage still fans out to every core over the
+  # same overlayfs, and on a COLD BuildKit cache — the exact state a `docker builder
+  # prune` leaves behind — the whole client-go graph compiles at once. Observed: `export
+  # data desync` in k8s.io/client-go/informers, and then the host itself going down under
+  # the memory load. One knob for both, so the two cannot drift apart.
   # Override on a beefy CI runner: `GO_PARALLEL=16 task ci`.
   GO_PARALLEL: '{{.GO_PARALLEL | default "8"}}'
   BIN: "{{.ROOT_DIR}}/.bin"
@@ -417,7 +426,7 @@ tasks:
   image:build:
     desc: Build the strattd control-plane image (ADR-0013)
     cmds:
-      - docker build -f deploy/docker/strattd.Dockerfile -t stratt/strattd:dev .
+      - docker build --build-arg GO_PARALLEL={{.GO_PARALLEL}} -f deploy/docker/strattd.Dockerfile -t stratt/strattd:dev .
 
   image:kind-load:
     desc: Build the strattd image and load it into the dev kind cluster
@@ -428,13 +437,13 @@ tasks:
   image:agent:
     desc: Build the stratt-agent (Site satellite) image and load it into kind (ADR-0032)
     cmds:
-      - docker build -f deploy/docker/stratt-agent.Dockerfile -t stratt/stratt-agent:dev .
+      - docker build --build-arg GO_PARALLEL={{.GO_PARALLEL}} -f deploy/docker/stratt-agent.Dockerfile -t stratt/stratt-agent:dev .
       - go run sigs.k8s.io/kind@v{{.KIND_VER}} load docker-image stratt/stratt-agent:dev --name {{.KIND_CLUSTER}}
 
   image:forwarder:
     desc: Build the stratt-forwarder (audit→SIEM) image and load it into kind (ADR-0034)
     cmds:
-      - docker build -f deploy/docker/stratt-forwarder.Dockerfile -t stratt/stratt-forwarder:dev .
+      - docker build --build-arg GO_PARALLEL={{.GO_PARALLEL}} -f deploy/docker/stratt-forwarder.Dockerfile -t stratt/stratt-forwarder:dev .
       - go run sigs.k8s.io/kind@v{{.KIND_VER}} load docker-image stratt/stratt-forwarder:dev --name {{.KIND_CLUSTER}}
 
   dev:forwarder:demo:
@@ -554,45 +563,45 @@ tasks:
   image:vcenter-plugin:
     desc: Build the vcenter gRPC Syncer plugin image and load it into the kind cluster
     cmds:
-      - docker build -f plugins/vcenter/Dockerfile -t stratt-plugin-vcenter:dev .
+      - docker build --build-arg GO_PARALLEL={{.GO_PARALLEL}} -f plugins/vcenter/Dockerfile -t stratt-plugin-vcenter:dev .
       - go run sigs.k8s.io/kind@v{{.KIND_VER}} load docker-image stratt-plugin-vcenter:dev --name {{.KIND_CLUSTER}}
 
   image:declared-plugin:
     desc: Build the declared-estate gRPC Syncer plugin image and load it into the kind cluster
     cmds:
-      - docker build -f plugins/declared/Dockerfile -t stratt-plugin-declared:dev .
+      - docker build --build-arg GO_PARALLEL={{.GO_PARALLEL}} -f plugins/declared/Dockerfile -t stratt-plugin-declared:dev .
       - go run sigs.k8s.io/kind@v{{.KIND_VER}} load docker-image stratt-plugin-declared:dev --name {{.KIND_CLUSTER}}
 
   image:awsec2-plugin:
     desc: Build the awsec2 gRPC plugin image (create-vm build Action) and load it into the kind cluster
     cmds:
-      - docker build -f plugins/awsec2/Dockerfile -t stratt-plugin-awsec2:dev .
+      - docker build --build-arg GO_PARALLEL={{.GO_PARALLEL}} -f plugins/awsec2/Dockerfile -t stratt-plugin-awsec2:dev .
       - go run sigs.k8s.io/kind@v{{.KIND_VER}} load docker-image stratt-plugin-awsec2:dev --name {{.KIND_CLUSTER}}
 
   image:netbox-plugin:
     desc: Build the NetBox topology Syncer plugin image (ADR-0059) and load it into the kind cluster
     cmds:
-      - docker build -f plugins/netbox/Dockerfile -t stratt-plugin-netbox:dev .
+      - docker build --build-arg GO_PARALLEL={{.GO_PARALLEL}} -f plugins/netbox/Dockerfile -t stratt-plugin-netbox:dev .
       - go run sigs.k8s.io/kind@v{{.KIND_VER}} load docker-image stratt-plugin-netbox:dev --name {{.KIND_CLUSTER}}
 
   image:helm-plugin:
     desc: Build the helm Actuator plugin image and load it into the kind cluster (ADR-0092)
     cmds:
-      - docker build -f plugins/helm/Dockerfile -t stratt-plugin-helm:dev .
+      - docker build --build-arg GO_PARALLEL={{.GO_PARALLEL}} -f plugins/helm/Dockerfile -t stratt-plugin-helm:dev .
       - go run sigs.k8s.io/kind@v{{.KIND_VER}} load docker-image stratt-plugin-helm:dev --name {{.KIND_CLUSTER}}
 
   image:crossplane-plugin:
     desc: Build the Crossplane build-Actuator plugin image (ADR-0059) and load it into the kind cluster
     cmds:
-      - docker build -f plugins/crossplane/Dockerfile -t stratt-plugin-crossplane:dev .
+      - docker build --build-arg GO_PARALLEL={{.GO_PARALLEL}} -f plugins/crossplane/Dockerfile -t stratt-plugin-crossplane:dev .
       - go run sigs.k8s.io/kind@v{{.KIND_VER}} load docker-image stratt-plugin-crossplane:dev --name {{.KIND_CLUSTER}}
 
   images:control-plane:
     desc: Build the CONTROL-PLANE images (no push/load) — the CI regression gate. Plugins & the EE image build in their OWN units (each plugin is its own build/CI unit, ADR-0046) — core CI never builds per-plugin (it must scale to hundreds of plugins).
     cmds:
-      - docker build -f deploy/docker/strattd.Dockerfile -t stratt/strattd:ci .
-      - docker build -f deploy/docker/stratt-agent.Dockerfile -t stratt/stratt-agent:ci .
-      - docker build -f deploy/docker/stratt-forwarder.Dockerfile -t stratt/stratt-forwarder:ci .
+      - docker build --build-arg GO_PARALLEL={{.GO_PARALLEL}} -f deploy/docker/strattd.Dockerfile -t stratt/strattd:ci .
+      - docker build --build-arg GO_PARALLEL={{.GO_PARALLEL}} -f deploy/docker/stratt-agent.Dockerfile -t stratt/stratt-agent:ci .
+      - docker build --build-arg GO_PARALLEL={{.GO_PARALLEL}} -f deploy/docker/stratt-forwarder.Dockerfile -t stratt/stratt-forwarder:ci .
 
   dev:stage-estate:
     desc: Stage the reconciled /estate into the chart's inline-declarations path (Helm can't glob outside the chart)
@@ -1062,7 +1071,7 @@ tasks:
     cmds:
       # Context is the repo root: the multi-stage build compiles the stratt-ansible
       # shim (ADR-0051) from plugins/ansible + sdk before baking the EE runtime.
-      - docker build -f ee/Dockerfile -t stratt-ee:dev .
+      - docker build --build-arg GO_PARALLEL={{.GO_PARALLEL}} -f ee/Dockerfile -t stratt-ee:dev .
       - go run sigs.k8s.io/kind@v{{.KIND_VER}} load docker-image stratt-ee:dev --name {{.KIND_CLUSTER}}
 
   ee:content:check:
@@ -1099,7 +1108,7 @@ tasks:
         content="{{.CONTENT}}"
         lock="${content%.yml}.lock.json"
         test -f "ee/content/${content}" || { echo "no such declaration: ee/content/${content}"; exit 1; }
-        docker build -f ee/Dockerfile \
+        docker build --build-arg GO_PARALLEL={{.GO_PARALLEL}} -f ee/Dockerfile \
           --build-arg "EE_CONTENT=${content}" --build-arg EE_LOCK_MODE=write \
           -t "stratt-ee-relock:tmp" .
         docker run --rm "stratt-ee-relock:tmp" cat "/usr/share/stratt/ee-content/${lock}" > "ee/content/${lock}"
@@ -1114,7 +1123,7 @@ tasks:
       # of the image definition. The declared collections are installed at BUILD time, the
       # resolved set is verified against the pins, and each artifact's SHA-256 is verified
       # against ee/content/crypto.requirements.lock.json (ee/content.py).
-      - docker build -f ee/Dockerfile --build-arg EE_CONTENT=crypto.requirements.yml -t stratt-ee-crypto:dev .
+      - docker build --build-arg GO_PARALLEL={{.GO_PARALLEL}} --build-arg EE_CONTENT=crypto.requirements.yml -f ee/Dockerfile -t stratt-ee-crypto:dev .
       - go run sigs.k8s.io/kind@v{{.KIND_VER}} load docker-image stratt-ee-crypto:dev --name {{.KIND_CLUSTER}}
 
   dev:ee-mcp:build:
@@ -1122,7 +1131,7 @@ tasks:
     cmds:
       # Context is the repo root: the multi-stage build compiles the stratt-mcp shim
       # (ADR-0053) from plugins/mcp + sdk before baking the sandbox runtime.
-      - docker build -f ee/mcp.Dockerfile -t stratt-ee-mcp:dev .
+      - docker build --build-arg GO_PARALLEL={{.GO_PARALLEL}} -f ee/mcp.Dockerfile -t stratt-ee-mcp:dev .
       - go run sigs.k8s.io/kind@v{{.KIND_VER}} load docker-image stratt-ee-mcp:dev --name {{.KIND_CLUSTER}}
 
   generate:
