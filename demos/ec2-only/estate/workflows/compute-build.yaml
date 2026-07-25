@@ -10,6 +10,43 @@
 # closure. The aws-dev CredentialRef is gate-only — an Action's use-check is its only authz gate (§2.5);
 # the plugin authenticates to EC2 with its own config. Delivered as CaC through the declarations mount.
 name: compute-build
+# The per-instance launch interface (ADR-0118 D2, ADR-0120 D2). Before this the Workflow
+# hardcoded web-01, so a `count: 2` fleet raised two Findings and the gated path could only
+# ever build the first — and the second Finding never resolved, because the correlation label
+# it matches on was never projected.
+#
+# The reconcile supplies every one of these; none is typed by hand at launch. `params` is
+# OPAQUE on purpose: Intent/Compute declares it additionalProperties:true and the provider's
+# own Action Contract types it downstream (§1.5), so enumerating region/instanceType/ami here
+# would re-couple this Workflow to one landscape (ADR-0110).
+inputs:
+  type: object
+  additionalProperties: false
+  required: [instance, projectKind, labels]
+  properties:
+    instance:
+      type: string
+      description: The desired instance's correlation name (namePrefix + ordinal), e.g. web-02.
+    ordinal:
+      type: integer
+      description: Its 1-based position in the fleet.
+    projectKind:
+      type: string
+      description: The Entity kind the built instance projects as.
+    labels:
+      type: object
+      additionalProperties: { type: string }
+      description: >
+        Labels the projection carries, INCLUDING stratt.intent/instance — the correlation
+        label the next reconcile matches to decide this instance is built.
+    placement:
+      type: object
+      additionalProperties: true
+      description: Declared topology placement (subnet / dmz / availabilityZone), when the Intent declares one.
+    params:
+      type: object
+      additionalProperties: true
+      description: Opaque provider build params, typed by the provider's Action Contract, never here.
 steps:
   - name: approve
     gate:
@@ -21,12 +58,14 @@ steps:
     action: awsec2/create-vm
     credentialRefs: [aws-dev]
     params:
-      region: us-east-1
-      instanceType: t3.micro
-      ami: ami-0linuxbaseline000 # the floci baseline image (ADR-0093)
-      name: web-01
-      # The built instance projects AS this kind with these labels (Run provenance, never a reconcile write).
-      projectKind: host
-      projectLabels:
-        fleet: web
-        stratt.intent/instance: web-01
+      # Forwarded from the Intent's opaque `params` — the floci baseline image (ADR-0093) and the
+      # region are the Intent's to declare, not this Workflow's to know.
+      region: "{{.launch.params.region}}"
+      instanceType: "{{.launch.params.instanceType}}"
+      ami: "{{.launch.params.ami}}"
+      name: "{{.launch.instance}}"
+      # The built instance projects AS this kind with these labels (Run provenance, never a
+      # reconcile write). labels carries stratt.intent/instance, so this builds whichever instance
+      # its Finding is for rather than always web-01 (ADR-0120 D2).
+      projectKind: "{{.launch.projectKind}}"
+      projectLabels: "{{.launch.labels}}"

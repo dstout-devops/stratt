@@ -274,13 +274,22 @@ func (c *Controller) reconcileProvisioning(ctx context.Context, decls Declaratio
 
 	for _, inst := range res.ToBuild {
 		sp := specs[inst.Intent]
-		detail, _ := json.Marshal(provisionFindingDetail(resolveKind("Compute"), map[string]any{
+		r := resolveKind("Compute")
+		detail, _ := json.Marshal(provisionFindingDetail(r, map[string]any{
 			"instance": inst.Name, "intent": inst.Intent, "ordinal": inst.Ordinal,
 			"projectKind": sp.ProjectKind, "labels": sp.Labels, "params": sp.Params,
 			"placement": sp.Placement,
 		}))
 		b := "provision/" + inst.Intent
-		if err := c.Store.WriteProvisionFinding(ctx, b, inst.Name, "warning", detail); err != nil {
+		// The TYPED per-instance launch spec beside the display blob (ADR-0120 D2). Empty when
+		// provisioning is unresolved: there is then genuinely nothing to launch, and the detail
+		// above names the capability that could not be bound.
+		pf := graph.ProvisionFinding{Baseline: b, Target: inst.Name, Severity: "warning", Detail: detail}
+		if r.Status == capability.StatusResolved {
+			pf.LaunchWorkflow = r.Workflow
+			pf.LaunchParams = provision.BuildLaunchParams(provision.Intent{Name: inst.Intent, Spec: sp}, inst)
+		}
+		if err := c.Store.WriteProvisionFinding(ctx, pf); err != nil {
 			log.Error("write provision finding failed", "instance", inst.Name, "error", err)
 			continue
 		}
@@ -297,7 +306,13 @@ func (c *Controller) reconcileProvisioning(ctx context.Context, decls Declaratio
 			"placement": si.Spec.Placement,
 		}))
 		b := "provision/" + inst.Intent
-		if err := c.Store.WriteProvisionFinding(ctx, b, inst.Name, "warning", detail); err != nil {
+		// No launch spec yet: the singleton path's params differ (stratt.intent/singleton rather
+		// than instance/ordinal) and ADR-0120 books it as a follow-up rather than guessing at it.
+		// Its build Workflows (subnet-build, vlan-build) therefore keep hardcoded correlation
+		// labels for now — stated so the compute fix is not read as full coverage.
+		if err := c.Store.WriteProvisionFinding(ctx, graph.ProvisionFinding{
+			Baseline: b, Target: inst.Name, Severity: "warning", Detail: detail,
+		}); err != nil {
 			log.Error("write singleton provision finding failed", "singleton", inst.Name, "error", err)
 			continue
 		}
@@ -310,7 +325,11 @@ func (c *Controller) reconcileProvisioning(ctx context.Context, decls Declaratio
 		})
 		b := "provision/" + p.Intent
 		const batch = "(batch)"
-		if err := c.Store.WriteProvisionFinding(ctx, b, batch, "warning", detail); err != nil {
+		// A paused BATCH carries no launch spec: it is not one build, and offering a Workflow
+		// would invite launching a batch one instance at a time past its own §4.3 gate.
+		if err := c.Store.WriteProvisionFinding(ctx, graph.ProvisionFinding{
+			Baseline: b, Target: batch, Severity: "warning", Detail: detail,
+		}); err != nil {
 			log.Error("write singleton batch finding failed", "error", err)
 			continue
 		}
@@ -324,7 +343,10 @@ func (c *Controller) reconcileProvisioning(ctx context.Context, decls Declaratio
 		})
 		b := "provision/" + p.Intent
 		const batch = "(batch)"
-		if err := c.Store.WriteProvisionFinding(ctx, b, batch, "warning", detail); err != nil {
+		// As above: a paused batch is a review item, not a launchable build.
+		if err := c.Store.WriteProvisionFinding(ctx, graph.ProvisionFinding{
+			Baseline: b, Target: batch, Severity: "warning", Detail: detail,
+		}); err != nil {
 			log.Error("write provision batch finding failed", "intent", p.Intent, "error", err)
 			continue
 		}

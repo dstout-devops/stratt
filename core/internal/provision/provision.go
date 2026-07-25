@@ -374,3 +374,75 @@ func Plan(intents []Intent, built map[string]bool, cap int) (Result, error) {
 	}
 	return r, nil
 }
+
+// InstanceLabel is the correlation label key a built instance carries so the next reconcile can
+// tell desired from built (ADR-0058 M1). Named here because ADR-0120 D2 makes the build Workflow
+// responsible for projecting it, and a build that projects the wrong key produces a host nobody
+// asked for AND a Finding that never resolves.
+const InstanceLabel = "stratt.intent/instance"
+
+// BuildLaunchParams derives the launch inputs for ONE instance's gated build (ADR-0120 D2).
+//
+// This is the fix for a live defect: `count: 2` expands to web-01 and web-02 and raises two
+// Findings, but the build Workflow had no typed channel to receive WHICH instance, so it hardcoded
+// web-01 and the second instance could not be built through the gated path at all.
+//
+// Pure, and deliberately so — it is the whole per-instance decision, and the controller around it
+// needs a substrate. Every value here is already computed by the reconcile; what was missing was
+// somewhere typed to put it.
+//
+// `params` is passed through WHOLE rather than flattened into sibling inputs.
+// contracts/intents/compute.v3.schema.json declares it `additionalProperties: true` — "opaque build
+// params passed to the resolved provider, validated against ITS input Contract downstream (§1.5) …
+// Intent/Compute never types these" — while a Workflow's `inputs` schema must be
+// `additionalProperties: false`. Flattening would force every build Workflow to enumerate
+// region/instanceType/ami, so adding one Intent param would break the launch until an estate
+// Workflow was edited: the provider coupling ADR-0110 removed, reintroduced one layer down. Passing
+// it whole also makes a key collision inexpressible — `params` is open, so `params: {instance: …}`
+// is legal today, and flattened it would collide with the key below with no exclusive-claim rule to
+// resolve it (§2.4).
+func BuildLaunchParams(in Intent, inst Instance) map[string]any {
+	// map[string]any, not map[string]string, and placement as a map rather than the struct:
+	// these params are stored as jsonb and read back as map[string]any, so building them in the
+	// JSON-canonical shape here means the in-memory value and the stored one behave identically.
+	// template.lookup traverses map[string]any only, so a map[string]string would resolve as a
+	// whole value and then fail the moment anything addressed a field inside it — a mismatch that
+	// would surface far from its cause.
+	labels := make(map[string]any, len(in.Spec.Labels)+1)
+	for k, v := range in.Spec.Labels {
+		labels[k] = v
+	}
+	// The correlation label is DERIVED here rather than forwarded: the compute branch of the
+	// reconcile never emitted one (only the singleton branch did), so this is where it starts
+	// existing. It is also the load-bearing param — the next reconcile matches on it.
+	labels[InstanceLabel] = inst.Name
+
+	out := map[string]any{
+		"instance":    inst.Name,
+		"ordinal":     inst.Ordinal,
+		"projectKind": in.Spec.ProjectKind,
+		"labels":      labels,
+	}
+	if pl := in.Spec.Placement; pl != nil {
+		// Fields stay DISTINCT per topology kind (ADR-0059 D3 rejected a generic `zone` string so
+		// a build never disambiguates the edge type by resolving its target's kind). Only declared
+		// ones are emitted, so a build Workflow can tell "no zone declared" from "zone is empty".
+		place := map[string]any{}
+		if pl.Subnet != "" {
+			place["subnet"] = pl.Subnet
+		}
+		if pl.Dmz != "" {
+			place["dmz"] = pl.Dmz
+		}
+		if pl.AvailabilityZone != "" {
+			place["availabilityZone"] = pl.AvailabilityZone
+		}
+		if len(place) > 0 {
+			out["placement"] = place
+		}
+	}
+	if len(in.Spec.Params) > 0 {
+		out["params"] = in.Spec.Params
+	}
+	return out
+}
