@@ -15,6 +15,12 @@ vars:
   NODE_MIN: "22" # previous LTS (container ships current LTS 24)
   PYTHON_MIN: "3.13" # N-1 of 3.14 (pods / plugin SDK only — charter §3)
   TASK_MIN: "3.0"
+  # uv RUNS the pinned Python gate tools below (uvx ruff@…, uvx mypy@…, uv run pytest),
+  # so it is a gate prerequisite, not an optional convenience. It is checked by
+  # `task evergreen` because it was NOT, once: the Taskfile moved to `uvx <tool>@<ver>`
+  # while CI installed only go/node/python, and the gate failed deep inside fmt:check
+  # with a bare `"uvx": executable file not found` instead of naming the missing tool.
+  UV_MIN: "0.5"
   # Sovereign plugin port codegen (ADR-0046 Phase A). Pinned like the other
   # `go run <tool>@<ver>` tools; bump on the quarterly upgrade train.
   BUF_VER: "1.71.0"
@@ -122,6 +128,7 @@ tasks:
         check node   "{{.NODE_MIN}}"   "$(node --version 2>/dev/null | sed 's/^v//' | cut -d. -f1)"
         check python "{{.PYTHON_MIN}}" "$(python3 --version 2>/dev/null | awk '{print $2}')"
         check task   "{{.TASK_MIN}}"   "$(task --version 2>/dev/null | sed 's/^v//')"
+        check uv     "{{.UV_MIN}}"     "$(uv --version 2>/dev/null | awk '{print $2}')"
         if [ "$fail" != 0 ]; then
           echo "Evergreen gate FAILED (charter §1.7 — stay >= N-1)."; exit 1
         fi

@@ -101,6 +101,16 @@ jobs:
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
           python-version: "3.14"
+      - name: Install uv
+        # `task fmt:check` and `task lint` invoke the Python toolchain as
+        # `uvx ruff@<pin>` / `uvx mypy@<pin>` — version-pinned per the evergreen
+        # contract (§1.7) rather than "whatever is installed". uv is the runner
+        # (uvx ships with it), and the runner image has neither.
+        #
+        # Installed via the setup-python pip above rather than a fourth setup-*
+        # action: it needs no new Action dependency to pin and review (§1.4), and
+        # the versions that matter are the tool pins in the Taskfile, not uv's.
+        run: python -m pip install --disable-pip-version-check uv
       - name: Install Task (pinned)
         run: |
           set -eu
