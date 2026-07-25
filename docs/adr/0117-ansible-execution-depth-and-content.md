@@ -605,12 +605,27 @@ what a reasonable schema would look like.** Nothing short of running `community.
   — a reason we have never seen reaches the operator but cannot invent a failure. `ImagePullBackOff` is a
   _backoff, not a verdict_, so pull-class reasons fail only after a bounded grace (`PodStartGrace`, default
   2m ≈ 4 kubelet pull attempts); `InvalidImageName` fails at once; `Unschedulable` is narrated and never
-  failed, because a cluster autoscaler legitimately takes minutes. **Residual, still open:** an EE-Job
-  Actuator is still marked healthy without any image check (`enableActuatorLocked` skips the dial for a
-  `jobCommand` Actuator), so a declaration naming a nonexistent image still _reports_ healthy — it now
-  fails its first Run in ~2m with the reason instead of hanging. The cheap partial remains a CI gate tying
-  each `estate/actuators/*.yaml` `image:` to a build task, and it is why the `ansible-crypto` declaration
-  still lands with the demo (f) rather than alone.
+  failed, because a cluster autoscaler legitimately takes minutes. **The residual is now closed at the
+  declaration end.** An EE-Job Actuator is still marked healthy without an image check — `enableActuatorLocked`
+  skips the dial for a `jobCommand` Actuator because there is nothing to dial, which is structural and not a
+  bug to fix there — so a declaration naming a nonexistent image reports healthy and fails its first Run ~2m
+  later with the reason. The cheap partial this entry booked has shipped as
+  `TestEveryDeclaredActuatorImageIsBuiltByATask`, beside the (k) guards: every `image:` an Actuator declares,
+  in the reference estate and in every demo, must be produced by a `docker build -t` somewhere in the
+  Taskfile.
+  The **second** half is the one that actually bites and was not in the original booking: for a demo, the
+  image must be built by that demo's own `demo:<name>:run`, resolved transitively through `deps:` and `task:`
+  steps. An image some unrelated task builds is not a working demo — it is a demo that passes on a machine
+  where the maintainer happened to build it last week and fails on a fresh clone, two minutes into the run,
+  with a dispatcher error. `demo:app-cert:run` already builds `dev:ee-crypto:build` for exactly this reason
+  and says so in a comment citing this entry; the guard is what keeps that comment true. Both halves were
+  falsified: a typo'd tag and a removed build step each fail with the offending Actuator, image and task
+  named.
+  Its limits are stated in the test rather than implied: an Actuator with **no** image falls back to the
+  floor's `cfg.EEImage`, which is a chart value and not an estate declaration; and it verifies that a build
+  **exists**, never that it has been **run** — checking the latter needs a docker daemon, which `task ci`
+  must not. That is also why the `ansible-crypto` declaration still lands with the demo (f) rather than
+  alone: the guard proves the tag is buildable, the demo proves the image works.
   ~~(m) **Execution liveness is bounded far below what a Step is allowed to take (§1.8, platform-wide).**~~ — **done.**
   Found while measuring (l). Two ceilings contradict the Job the dispatcher itself creates
   (`ActiveDeadlineSeconds` **6h**): `a.Execute` inherits `StartToCloseTimeout` **10m**, so a Step whose pod
