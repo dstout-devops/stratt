@@ -1268,7 +1268,7 @@ func (a *Activities) executePlugin(ctx context.Context, in RunInput, site string
 	a.surfaceRejections(ctx, in.RunID, "apply", in.Actuator, raw.Rejections)
 	// Map the governed, UNPROJECTED result to dispatch.Result. CollectFacts →
 	// ProjectFacts perform the single batched projection with Run provenance (#2).
-	res := dispatch.Result{Succeeded: raw.Succeeded, PerTarget: raw.PerTarget, Drift: raw.Drift}
+	res := dispatch.Result{Succeeded: raw.Succeeded, Error: raw.Error, PerTarget: raw.PerTarget, Drift: raw.Drift}
 	for _, e := range raw.WriteBack {
 		res.Entities = append(res.Entities, actuators.EntityObservation{
 			Kind: e.Kind, IdentityKeys: e.IdentityKeys, Labels: e.Labels})
@@ -1414,7 +1414,7 @@ func (a *Activities) executeJobPlugin(ctx context.Context, in RunInput, slice in
 	// cleanup, shim serialize error) must read NOT-OK, restoring parity with the
 	// in-tree floor (dispatch.Run's res.Succeeded = the Job exit).
 	res := dispatch.Result{
-		Succeeded: raw.Succeeded && jobOK, PerTarget: raw.PerTarget, Drift: raw.Drift,
+		Succeeded: raw.Succeeded && jobOK, Error: raw.Error, PerTarget: raw.PerTarget, Drift: raw.Drift,
 		Facts: map[string]map[string]json.RawMessage{},
 	}
 	if remote {
@@ -1597,7 +1597,7 @@ func (a *Activities) executeMCP(ctx context.Context, in RunInput, slice int, pa 
 			return dispatch.Result{}, err
 		}
 	}
-	return dispatch.Result{Succeeded: raw.Succeeded && jobOK, PerTarget: raw.PerTarget}, nil
+	return dispatch.Result{Succeeded: raw.Succeeded && jobOK, Error: raw.Error, PerTarget: raw.PerTarget}, nil
 }
 
 // CleanupRun deletes a Run's K8s Jobs on cancellation (invoked from the
@@ -1660,6 +1660,15 @@ func mergeResults(slices []dispatch.Result) dispatch.Result {
 	}
 	for _, r := range slices {
 		out.Succeeded = out.Succeeded && r.Succeeded
+		// The FIRST slice's cause wins, and a cause must survive the merge at all: the
+		// fold carried Succeeded but dropped Error, so a Run that failed for a reason a
+		// slice had already reported landed on the API with status=failed and no cause —
+		// the descent said "failed" and stopped talking (§1.8). Found by the app-cert
+		// demo asserting that its vacuous-run guard NAMES why it failed, not just that
+		// it did.
+		if out.Error == "" && r.Error != "" {
+			out.Error = r.Error
+		}
 		for t, s := range r.PerTarget {
 			out.PerTarget[t] = s
 		}

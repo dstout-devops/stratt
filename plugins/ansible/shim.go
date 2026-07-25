@@ -350,12 +350,19 @@ func Run(ctx context.Context, w io.Writer, dir string, req Request, run commandR
 		// no-opped. Surfaced at WARN (not INFO) so it is visible during descent even
 		// when OTHER plays in the same playbook did run — the partial-vacuity case
 		// the terminal check below cannot see.
-		level := pluginv1.TaskEvent_LEVEL_INFO
+		level := eventSeverity(ev)
 		if isNoHostsMatched(ev) {
 			noHostsMatched, level = true, pluginv1.TaskEvent_LEVEL_WARN
 		}
+		// Carry ansible's own account of what happened. The event NAME alone left a
+		// failure saying only THAT it failed — and the pod's logs go with the Job, so
+		// the reason was gone for good (§1.8).
+		msg := ev.Event
+		if reason := eventReason(ev); reason != "" {
+			msg += ": " + reason
+		}
 		emit(&pluginv1.ApplyResponse{Event: &pluginv1.TaskEvent{
-			Level: level, Message: ev.Event, At: timestamppb.Now(),
+			Level: level, Message: msg, At: timestamppb.Now(),
 			Fields: map[string]string{"host": host, "kind": ev.Event},
 		}})
 		if h, st := hostStatus(ev); st != pluginv1.ItemResult_STATUS_UNSPECIFIED && h != "" {

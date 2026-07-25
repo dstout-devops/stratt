@@ -835,7 +835,15 @@ type DerivedSchema struct {
 // self-asserted terminal ok — a plugin that returns ok=true alongside a FAILED
 // target still yields a non-OK Run (§1.8).
 type RawApplyResult struct {
-	Succeeded  bool
+	Succeeded bool
+	// Error is the plugin's OWN account of why it failed — the message on a red
+	// terminal. The governor kept the FACT of that terminal and discarded its text,
+	// so a failed Run recorded no cause at all: the descent said "failed" and the
+	// reason (an unreachable host, a syntax error, a refused clone) existed only in
+	// the pod's log, which is deleted with the Job. Same shape as the discarded-red-
+	// terminal defect one layer down (ADR-0117 D5c) — this is its message half.
+	// Empty when Succeeded, or when the plugin failed without saying anything.
+	Error      string
 	PerTarget  map[string]string // resolved target name -> status; sticky-fail folded
 	WriteBack  []ApplyEntity
 	Drift      map[string][]json.RawMessage
@@ -975,6 +983,7 @@ func (h *Host) govern(ctx context.Context, stream applyStream, resolved, writeSc
 				// error, and a run that actuated no host at all (ADR-0117 D5c).
 				if !ev.GetOk() {
 					failed = true
+					out.Error = ev.GetMessage() // and WHY, not just that it did
 				}
 			}
 		}

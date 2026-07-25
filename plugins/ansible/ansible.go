@@ -230,6 +230,57 @@ func hostStatus(ev RunnerEvent) (host string, status pluginv1.ItemResult_Status)
 	return h, pluginv1.ItemResult_STATUS_UNSPECIFIED
 }
 
+// eventSeverity classifies a runner event for the descent. ansible's own failure
+// events used to be forwarded at INFO — so a task that FAILED, or a host that was
+// never even reachable, reached the operator tinted exactly like a task that worked.
+// The level is the one severity signal every consumer reads (ADR-0117 g), so getting
+// it wrong here is worse than not having it.
+func eventSeverity(ev RunnerEvent) pluginv1.TaskEvent_Level {
+	switch ev.Event {
+	case "runner_on_failed", "runner_item_on_failed", "runner_on_unreachable", "runner_on_async_failed":
+		return pluginv1.TaskEvent_LEVEL_ERROR
+	case "runner_on_skipped", "runner_on_retry":
+		return pluginv1.TaskEvent_LEVEL_WARN
+	default:
+		return pluginv1.TaskEvent_LEVEL_INFO
+	}
+}
+
+// reasonCap bounds a carried reason. A module result can hold a whole command's
+// stdout; the full text stays on the pod's stream, this is the descent's summary.
+const reasonCap = 1024
+
+// eventReason pulls the human cause out of a runner event's result, so a failure
+// SAYS why rather than only that it happened (§1.8).
+//
+// This existed as a gap the app-cert demo walked straight into: the play could not
+// SSH to its target, and the Run's event stream said `runner_on_unreachable` and
+// nothing else. The actual sentence — "User appops not allowed because account is
+// locked" — was in the event's own result payload the whole time, and diagnosing it
+// meant reading sshd's logs on the target instead. The pod's logs are gone with the
+// Job, so an operator would have had nothing.
+func eventReason(ev RunnerEvent) string {
+	res, ok := ev.EventData["res"].(map[string]any)
+	if !ok {
+		// Unreachable/failed events sometimes carry the text at the top level.
+		res = ev.EventData
+	}
+	// Order matters: msg is ansible's own summary; stderr and module_stdout are what
+	// a failing command actually printed; reason is the connection-plugin's word.
+	for _, key := range []string{"msg", "reason", "stderr", "module_stdout", "stdout"} {
+		if s, ok := res[key].(string); ok {
+			if s = strings.TrimSpace(s); s != "" {
+				if len(s) > reasonCap {
+					// Never truncate silently (§1.8).
+					s = s[:reasonCap] + "… (truncated; full text on the Run's diagnostic stream)"
+				}
+				return s
+			}
+		}
+	}
+	return ""
+}
+
 // hardeningDomains are the os.hardening.<domain> Facet namespaces the CIS collector
 // projects (each pinned + Baseline-demanded, charter §1.1).
 var hardeningDomains = []string{"sysctl", "sshd", "filesystem", "auditd", "services"}
