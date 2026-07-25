@@ -207,8 +207,17 @@ for the whole roll window.
   `ON CONFLICT (name, version)` and reading `WHERE name = $1 AND version = $2`. Old and new replicas both work.
   **Consequence stated:** while the `(name)` PK survives, two versions of one name **cannot** coexist, so D1's
   actual feature does not light up in release N — and a declaration with more than one version of a name is
-  rejected **at load** with a real message rather than surfacing a raw duplicate-key error.
-- **Release N+1 (contract, marked):** drop the `(name)` PK, promote `(name, version)`. Rings work here.
+  rejected **at load**, by `desiredstate.validateSingleIntentVersion`, naming the surviving primary key, the
+  release that removes it, and the way to promote meanwhile. The loader's dedup key is nonetheless
+  `name@version`, symmetric with Blueprint's, so the temporary restriction lives in **one named function**
+  rather than being encoded in a key the contract release would have to edit back. Left un-named it would
+  have surfaced as a raw duplicate-key error at Apply, against a constraint the author has never heard of
+  (§1.8) — the loader's previous message, `"tls-app" declared in both v1.yaml and v2.yaml`, was worse than
+  nothing, since it describes an accidental duplicate and sends the author to delete a file they meant to
+  write.
+- **Release N+1 (contract, marked):** drop the `(name)` PK, promote `(name, version)`. Rings work here. The
+  code change is deleting `validateSingleIntentVersion` and its one call site; nothing else in the loader
+  moves.
 
 The `intent_touch_updated_at` trigger (`00013_intent_layer.sql`) is unaffected. `Down` is written explicitly
 (ADR-0078 follow-up MIG-1).

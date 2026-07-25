@@ -204,6 +204,57 @@ func TestBlueprintVersionsCoexist(t *testing.T) {
 	}
 }
 
+// Two versions of one INTENT are refused for now, and the refusal must name the mechanism
+// rather than look like an authoring mistake (ADR-0119 D7, §1.8). Before this, the dedup key
+// was the bare name, so the author got `"tls-app" declared in both v1.yaml and v2.yaml` — a
+// message that says "you did this twice by accident" about something they meant to do, and
+// sends them to delete a file instead of telling them rings are not available until the
+// contract migration ships.
+func TestTwoIntentVersionsAreRefusedByMechanismNotByDuplicateFile(t *testing.T) {
+	root := t.TempDir()
+	writeDecl(t, root, "v.yaml", "name: v\nselector: {kinds: [vm]}\n")
+	base := "name: tls-app\nkind: Intent/Application\nspec: {package: nginx, channel: stable}\nversion: "
+	writeKind(t, root, "intents", "v1.yaml", base+"1\n")
+	writeKind(t, root, "intents", "v2.yaml", base+"2\n")
+
+	_, err := ParseDir(root, nil)
+	if err == nil {
+		t.Fatal("two versions of one Intent must be refused while the (name) primary key survives")
+	}
+	// The diagnosis, not just the refusal: the author must learn WHY it is refused, WHEN it
+	// stops being refused, and WHAT to do meanwhile. A test on the presence of an error alone
+	// would pass against the old misleading message.
+	for _, want := range []string{"tls-app", "version 1", "version 2", "primary key", "Rings light up", "ONE commit"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("refusal must mention %q, got: %v", want, err)
+		}
+	}
+	// And it must NOT read as a duplicate-file collision, which is a different defect with a
+	// different fix.
+	if strings.Contains(err.Error(), "declared in both") {
+		t.Errorf("the refusal still reads as an accidental duplicate declaration: %v", err)
+	}
+}
+
+// The same NAME and the same VERSION in two files is still an ordinary duplicate, and must
+// still be caught — versioning the dedup key must not open a hole where one file silently
+// wins over another.
+func TestSameIntentNameAndVersionInTwoFilesIsStillADuplicate(t *testing.T) {
+	root := t.TempDir()
+	writeDecl(t, root, "v.yaml", "name: v\nselector: {kinds: [vm]}\n")
+	base := "name: tls-app\nkind: Intent/Application\nspec: {package: nginx, channel: stable}\nversion: 1\n"
+	writeKind(t, root, "intents", "a.yaml", base)
+	writeKind(t, root, "intents", "b.yaml", base)
+
+	_, err := ParseDir(root, nil)
+	if err == nil {
+		t.Fatal("one Intent name+version declared in two files must be refused")
+	}
+	if !strings.Contains(err.Error(), "declared in both") {
+		t.Fatalf("a genuine duplicate must still be reported as one: %v", err)
+	}
+}
+
 // TestComputeOnRemoveDecommission proves ADR-0114 D4: onRemove:remove is now VALID for Intent/Compute
 // (the decommission reach-path), where it was rejected before. It parses cleanly and carries the
 // removal semantic through.

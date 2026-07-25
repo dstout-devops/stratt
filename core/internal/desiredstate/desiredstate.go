@@ -349,7 +349,15 @@ func ParseDir(root string, decider policy.Decider) (Declarations, error) {
 		return out, err
 	}
 	out.Intents = intents
-	sort.Slice(out.Intents, func(i, j int) bool { return out.Intents[i].Name < out.Intents[j].Name })
+	sort.Slice(out.Intents, func(i, j int) bool {
+		if out.Intents[i].Name != out.Intents[j].Name {
+			return out.Intents[i].Name < out.Intents[j].Name
+		}
+		return out.Intents[i].Version < out.Intents[j].Version
+	})
+	if err := validateSingleIntentVersion(out.Intents); err != nil {
+		return out, err
+	}
 
 	assignments, err := parseKind(filepath.Join(root, "assignments"), true, parseAssignmentFile)
 	if err != nil {
@@ -1548,7 +1556,46 @@ func parseIntentFile(path string, raw []byte) (string, types.Intent, error) {
 	if err := ValidateIntent(in); err != nil {
 		return "", types.Intent{}, fmt.Errorf("desiredstate: %s: %w", path, err)
 	}
-	return in.Name, in, nil
+	// Dedup key is name@version, symmetric with parseBlueprintFile — two versions of one
+	// Intent are a DELIBERATE declaration (rings), not a duplicate file. The separate,
+	// temporary refusal of coexisting versions lives in validateSingleIntentVersion so the
+	// contract release deletes one named function instead of editing this key back.
+	return versionedRef(in.Name, in.Version), in, nil
+}
+
+// validateSingleIntentVersion refuses two coexisting versions of one Intent name for as long
+// as migration 00041's EXPAND half is the whole story (ADR-0119 D7).
+//
+// The restriction is real and belongs here rather than being discovered at write time:
+// graph.intent still carries its original (name) PRIMARY KEY beside the new unique
+// (name, version) index, because ADR-0078 runs migrations while the previous release's
+// replicas — which write ON CONFLICT (name) — are still serving. So the second version of a
+// name would satisfy the ON CONFLICT target and then be rejected by the surviving PK with a
+// raw duplicate-key error from Postgres, at Apply, naming a constraint the author has never
+// heard of. That is the §1.8 failure this replaces: a refusal that names the mechanism and
+// the way forward.
+//
+// DELETE THIS FUNCTION AND ITS CALL in the contract release, once every replica is new and
+// 00042 has promoted (name, version) to the primary key. Nothing else in the loader needs to
+// change then — that is the point of keeping the dedup key versioned above.
+func validateSingleIntentVersion(intents []types.Intent) error {
+	seen := map[string]int{} // Intent name → the version already declared for it
+	for _, in := range intents {
+		prev, dup := seen[in.Name]
+		if dup {
+			lo, hi := min(prev, in.Version), max(prev, in.Version)
+			return fmt.Errorf("desiredstate: intent %s is declared at both version %d and version %d, "+
+				"and two versions of one Intent cannot coexist yet: graph.intent still holds the (name) "+
+				"primary key from before ADR-0119's contract migration, so the second would fail to store. "+
+				"Rings light up when that migration ships. Until then promote in ONE commit — retire "+
+				"%s@%d, declare %s@%d, and repin every Assignment that names it in the same change, which "+
+				"the pinned-version guard permits precisely because no declared Assignment is left pinning "+
+				"the retired version",
+				in.Name, lo, hi, in.Name, lo, in.Name, hi)
+		}
+		seen[in.Name] = in.Version
+	}
+	return nil
 }
 
 // ValidateIntent checks one Intent declaration (ADR-0023, ADR-0030). The kind

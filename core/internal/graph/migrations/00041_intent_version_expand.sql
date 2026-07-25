@@ -17,9 +17,11 @@
 -- CONSEQUENCE, stated because it is easy to mistake this migration for the whole feature:
 -- while the (name) PK survives, two versions of one name CANNOT coexist. Rings do not light
 -- up in this release. The contract migration (a later release, after every replica is new)
--- drops the (name) PK and promotes (name, version); until then the desired-state loader
--- rejects a second version of a name with a real message rather than letting a raw
--- duplicate-key error surface (ADR-0119 D7).
+-- drops the (name) PK and promotes (name, version); until then
+-- desiredstate.validateSingleIntentVersion rejects a second version of a name, naming this
+-- surviving PK and the way to promote meanwhile, rather than letting a raw duplicate-key
+-- error surface at Apply against a constraint the author has never heard of (ADR-0119 D7).
+-- That function and its one call site are what the contract release deletes.
 --
 -- `version int NOT NULL DEFAULT 1` is safe under the expand/contract lint precisely because
 -- it has a default: an old replica inserting without the column still produces a valid row.
