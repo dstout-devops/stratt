@@ -2,12 +2,31 @@
 # file, restoring the host's prior state. Surfaced on the orphan Finding when the
 # Assignment is withdrawn — a ref the operator launches, never auto-run
 # (§5 Flow 2). ansible file state: absent is idempotent.
+# BROKEN UNTIL ADR-0118. The play referenced `fileset_path` —
+# Ansible variables nothing supplied. Found by the unbound-play-variable guard, which also
+# reported three more that turned out to be FINE: mode/owner/group carry `| default(...)`, Jinja's
+# own idiom for "may be undefined". Two real defects out of five reports, which is why the guard
+# now understands `default()`.
+#
+# The values were in the Intent all along (estate/intents/nginx-conf.yaml declares path, source,
+# mode, owner, group). What was missing was a way for the Blueprint route to pass them (D3) and a
+# way for this Workflow to declare it needs them (D2).
 name: fileset-revert
+inputs:
+  type: object
+  additionalProperties: false
+  required: [path]
+  properties:
+    path:
+      type: string
+      description: Absolute path of the managed file to remove from the host.
 steps:
   - name: revert
     viewName: web-hosts
     actuator: ansible
     params:
+      extraVars:
+        fileset_path: "{{.launch.path}}"
       play: |
         - name: Remove managed file
           hosts: all

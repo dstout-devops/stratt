@@ -21,6 +21,29 @@
 # project from — one authority per fact (§1.2). The Actuator's grant enforces that ceiling
 # no matter what a play claims.
 name: app-install-with-cert
+# The launch interface (ADR-0118 D2). These are the values the app's Intent declares; the
+# Blueprint route passes them (D3), and this schema is what the route's params are validated
+# against AT COMPILE — so a route/Workflow mismatch fails the Assignment, not the remediation.
+#
+# Both required with no defaults, deliberately. A default here would be a SECOND declaration of
+# a value the Intent already owns, which is the exact duplication this ADR removed: `port: 443`
+# used to live in the Intent, in the Blueprint defaults, and in this file's extraVars.
+inputs:
+  type: object
+  additionalProperties: false
+  required: [commonName, tlsPort]
+  properties:
+    commonName:
+      type: string
+      description: The certificate subject and nginx server_name for the app.
+    tlsPort:
+      # A STRING, matching contracts/facets/app.config.schema.json's `port`. The chain is only
+      # sound if the Intent spec, this input, and the observed Facet all agree on type, because
+      # nothing coerces between them (ADR-0118 D1) — and the pinned Facet Contract is the end
+      # that gets to decide.
+      type: string
+      minLength: 1
+      description: The port the app serves TLS on, as a string (the app.config Facet types it so).
 steps:
   - name: approve
     # The launch is itself a gate; this adds a human approval before anything mutates a
@@ -44,13 +67,18 @@ steps:
         method: sudo
         user: root
       extraVars:
-        # The play authors the connection vars; the core never does (§1.4). ansible_host
-        # comes from each target's mgmt.address, rendered by the shim.
+        # CONNECTION vars stay literal here: the play authors them and the core never does
+        # (§1.4). ansible_host comes from each target's mgmt.address, rendered by the shim, and
+        # the key path is a pod-local mount — neither is estate configuration, so neither is
+        # duplicated anywhere and neither belongs in the Intent.
         ansible_user: appops
         ansible_ssh_private_key_file: /tmp/app-node-key
         ansible_ssh_common_args: "-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
-        app_common_name: app-node.stratt.svc.cluster.local
-        app_tls_port: "443"
+        # APP CONFIG comes from the launch inputs, which the route filled from the Intent
+        # (ADR-0118 D3). This mapping — Stratt input to Ansible variable name — is declared
+        # explicitly because core never parses play content to infer what it needs (D6).
+        app_common_name: "{{.launch.commonName}}"
+        app_tls_port: "{{.launch.tlsPort}}"
       play: |
         - name: Install the app and issue its certificate
           hosts: all
@@ -141,6 +169,11 @@ steps:
               changed_when: false
 
             - name: Report the observed app.config to Stratt (write-back under the Step's scope)
+              # A STRING, because contracts/facets/app.config.schema.json says so — the write-back
+              # is validated against that Facet Contract and an int is REFUSED (observed live:
+              # "/port: got number, want string"). The expectation compiled from the Intent is
+              # compared to this value, so all three agree on type by construction; nothing
+              # coerces between them (ADR-0118 D1).
               ansible.builtin.set_fact:
                 stratt_facets:
                   app.config:

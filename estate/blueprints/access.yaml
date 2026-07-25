@@ -21,3 +21,14 @@ routes:
         scope: "{{.spec.scope}}"
     claim: additive
     remediationWorkflow: access-apply
+    # The same three values the expectation is built from, passed to the Workflow that
+    # converges them (ADR-0118 D3). Before this field existed the route named a Workflow and
+    # passed it nothing, so access-apply's play referenced variables nothing supplied — it
+    # would have failed at run time on an undefined variable.
+    #
+    # Validated against access-apply's declared inputs AT COMPILE, so a typo here fails this
+    # Assignment rather than the remediation an operator launches from a Finding.
+    remediationParams:
+      subject: "{{.spec.subject}}"
+      kind: "{{.spec.kind}}"
+      scope: "{{.spec.scope}}"

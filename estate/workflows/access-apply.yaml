@@ -2,12 +2,51 @@
 # (add the account to a group / place the sudoers rule / install the
 # authorized_key). Surfaced as a ref on a drift Finding — never auto-launched
 # (§5 Flow 2). ansible user/lineinfile/authorized_key modules are idempotent.
+#
+# THIS WORKFLOW WAS BROKEN. Its play referenced `access_subject`, `access_scope` and
+# `access_kind` — three variables defined NOWHERE in the repository. They are Ansible
+# `{{ var }}`, not Stratt `{{.ns.field}}`, so the substituter never saw them and they
+# passed straight through to a play that fails at run time on an undefined variable. The
+# two syntaxes are visually identical in YAML and only one was ever checked.
+#
+# The values were one hop away the whole time: estate/intents/alice-wheel.yaml declares
+# `spec: {subject: alice, kind: group, scope: wheel}`. What was missing was any way for a
+# Blueprint route to pass them here (ADR-0118 D3) and any way for this Workflow to declare
+# that it needs them (D2). Both now exist, so the chain is:
+#
+#   Intent spec → Blueprint route remediationParams → these inputs → extraVars → the play
+#
+# One declaration, checked at every hop: the route's params are validated against this
+# schema AT COMPILE, so a mismatch fails the Assignment rather than the remediation.
 name: access-apply
+inputs:
+  type: object
+  additionalProperties: false
+  required: [subject, kind, scope]
+  properties:
+    subject:
+      type: string
+      description: The host-local account the grant is for (not a platform Principal).
+    kind:
+      # Mirrors the Intent/Access spec schema's enum, so a route passing a kind this play
+      # cannot handle fails at compile rather than running a no-op and reporting success.
+      enum: [sudo, group, authorized_key, account]
+      description: The grant kind.
+    scope:
+      type: string
+      description: Kind-scoped detail — group name, sudo command spec, key fingerprint, or shell.
 steps:
   - name: apply
     viewName: secure-hosts
     actuator: ansible
     params:
+      # The launch inputs mapped onto the play's own variable names. This mapping is the
+      # boundary D6 draws: core never parses play content to discover what it needs, so the
+      # translation from Stratt inputs to Ansible variables is declared here, explicitly.
+      extraVars:
+        access_subject: "{{.launch.subject}}"
+        access_kind: "{{.launch.kind}}"
+        access_scope: "{{.launch.scope}}"
       play: |
         - name: Converge host-access grant
           hosts: all

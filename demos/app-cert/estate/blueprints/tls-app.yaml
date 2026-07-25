@@ -18,8 +18,11 @@ for: Intent/Application
 severity: warning
 dampingObservations: 1
 defaults:
+  # `channel` is a genuine default: an Intent that omits it takes stable. `port` used to sit
+  # here too, duplicating the Intent's — harmless (a default YIELDS to a declaration, so it was
+  # never a claim conflict) but a second place to change one value. It is gone; the port is the
+  # app's config and lives in the Intent alone.
   channel: stable
-  port: "443"
 routes:
   - observe:
       namespace: app.config
@@ -27,3 +30,12 @@ routes:
       equals: "{{.spec.port}}" # resolved from the Intent override, or this default
     claim: exclusive
     remediationWorkflow: app-install-with-cert
+    # The values the install needs, from the SAME resolved spec the expectation above is built
+    # from (ADR-0118 D3). This is the line whose absence made the demo hardcode: the route named
+    # the Workflow that converges the estate and passed it nothing.
+    #
+    # Validated against app-install-with-cert's declared inputs AT COMPILE, so a typo or a type
+    # mismatch fails this Assignment rather than the remediation an operator launches.
+    remediationParams:
+      commonName: "{{.spec.commonName}}"
+      tlsPort: "{{.spec.port}}"

@@ -19,3 +19,12 @@ routes:
       equals: "{{.spec.digest}}"
     claim: additive
     remediationWorkflow: fileset-apply
+    # The Intent's own values, passed to the Workflow that converges them (ADR-0118 D3).
+    # Without this the play's `fileset_path`/`fileset_src` were unsupplied and the remediation
+    # failed at run time on an undefined variable.
+    remediationParams:
+      path: "{{.spec.path}}"
+      src: "{{.spec.source}}"
+      mode: "{{.spec.mode}}"
+      owner: "{{.spec.owner}}"
+      group: "{{.spec.group}}"

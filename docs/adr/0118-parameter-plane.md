@@ -253,7 +253,16 @@ for the already-frozen `params` used on `Step`, `Baseline` and `Trigger`.
 **Compile-time cross-check.** Every key must validate against the named `remediationWorkflow`'s input schema,
 and every `required` input must be supplied. A route wired to a Workflow it does not fit **fails the compile**
 — the failure lands on the person editing the declaration, not on the operator at 3am.
-`Blueprint.removeWorkflow` gets the same treatment.
+**`Blueprint.removeWorkflow` does NOT get the same treatment, and this ADR overstated it.** A route's
+remediation params are compiled onto the Baseline, which the remediation door reads; `removeWorkflow` is
+surfaced on the **orphan** Finding as a bare string inside a freeform detail blob
+(`compiler.go`: `detail["removeWorkflow"]`), with no typed param channel. Giving it one properly needs the
+withdrawn Intent's **effective** spec — defaults plus Assignment values — which the orphan branch does not
+have; it holds only the raw `Intent.Spec`. Resolving against that would silently ignore two layers, so it is
+booked rather than half-built. Consequence, stated plainly: a `removeWorkflow` declaring required inputs must
+have them supplied by whoever launches it. That is still an improvement over the status quo — the API refuses
+the launch and names the missing inputs, where previously the play ran and failed on an undefined variable —
+but it is not the finished shape.
 
 **Remediation needs a named launch path, and today there isn't one.** Remediation is a ref only
 (`core/internal/api/server.go:746`); nothing server-side reads `Baseline.RemediationWorkflow` and launches it.
@@ -471,6 +480,9 @@ changes instance identity and owes a migration story for fleets already carrying
 - **ADR-0119** (versioned promotion) and **ADR-0120** (keyed spread) — see _Deferred_.
 - **A core-owned `ChangeContext` schema** with enums for `environment`/`changeClass`, validated at D4's
   chokepoint — closes D4b's typo hole on a security-relevant seam.
+- **Compiled params for the withdrawal path** (`Blueprint.removeWorkflow`), so a revoke/revert Workflow gets
+  the values its grant was declared with instead of requiring the launcher to retype them. Needs the orphan
+  branch to carry the effective spec, not the raw `Intent.Spec` — see D3.
 - **A fourth per-environment overlay layer**, if duplication across sibling Assignments becomes real pain.
   Note it must obey D1's disjointness or it re-introduces the ladder.
 - **Tighten `contracts/intents/application.schema.json`** — currently `additionalProperties: true` with no

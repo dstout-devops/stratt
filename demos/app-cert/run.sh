@@ -85,8 +85,47 @@ ee_image="$(api GET "/actuators/${ACTUATOR}" | jq -r '.actuator.image // empty')
 [ -n "$ee_image" ] || { echo "FAIL: ${ACTUATOR} declares no EE image — the Step would silently run the default EE"; exit 1; }
 echo "  ${ACTUATOR} enabled, and the API reports its declared EE: ${ee_image}"
 
-echo "demo: launch Workflow ${WORKFLOW} as ${PRINCIPAL}"
-run_id=$(api POST "/workflows/${WORKFLOW}/runs" | jq -r '.id')
+# ── Drift → Finding → remediation, which is the product's actual Flow 2 ───────────────────────
+# The demo used to POST straight to /workflows/app-install-with-cert/runs. It cannot any more,
+# and that is the point: the install Workflow now DECLARES its inputs (commonName, tlsPort,
+# ADR-0118 D2), and a direct launch supplies neither. The values live in the Intent, the Blueprint
+# route passes them (D3), and the remediation door reads them off the compiled Baseline (4b).
+#
+# So the demo now drives the real path: the host has no app.config facet, that is drift ("a
+# missing Facet is unmet — desired state absent is drift"), a Finding opens, and remediating it
+# launches the install with the Intent's own values. Strictly more faithful AND it removes the
+# last hardcoded copy of 443.
+echo "demo: awaiting the drift Finding (host has no app.config yet → desired state absent)…"
+finding_id=""
+for _ in $(seq 1 60); do
+    finding_id=$(api GET "/findings?status=open" 2>/dev/null |
+        jq -r '.[]? | select(.baseline | test("tls-app")) | .id' | head -1)
+    [ -n "$finding_id" ] && [ "$finding_id" != "null" ] && break
+    sleep 3
+done
+[ -n "$finding_id" ] && [ "$finding_id" != "null" ] || {
+    echo "FAIL: no drift Finding opened for the tls-app Baseline"
+    api GET "/findings" | jq -r '.[]? | "  finding: " + .baseline + " " + .status' | head -5
+    exit 1
+}
+echo "  Finding ${finding_id}"
+
+# §1.8: the door RENDERS what it would launch before launching it. Assert that, because a door
+# that acts without showing its hand is the thing ADR-0118 D3 refused to ship.
+echo "demo: assert the remediation preview names the Workflow AND the params from the Intent"
+prev="$(api GET "/findings/${finding_id}/remediation")"
+jq -r '"  workflow=" + .workflow + "  params=" + (.params | tostring)' <<<"$prev"
+[ "$(jq -r '.workflow' <<<"$prev")" = "${WORKFLOW}" ] || {
+    echo "FAIL: the preview names workflow '$(jq -r '.workflow' <<<"$prev")', want ${WORKFLOW}"; exit 1; }
+# The params must have come from the Intent, not from anything in this script or the Workflow.
+[ "$(jq -r '.params.commonName' <<<"$prev")" = "app-node.stratt.svc.cluster.local" ] || {
+    echo "FAIL: preview commonName = '$(jq -r '.params.commonName' <<<"$prev")' — not the Intent's"; exit 1; }
+[ "$(jq -r '.params.tlsPort' <<<"$prev")" = "443" ] || {
+    echo "FAIL: preview tlsPort = '$(jq -r '.params.tlsPort' <<<"$prev")' — not the Intent's"; exit 1; }
+echo "  preview params came from the Intent spec, via the Blueprint route (ADR-0118 D3)"
+
+echo "demo: remediate the Finding as ${PRINCIPAL}"
+run_id=$(api POST "/findings/${finding_id}/remediation" | jq -r '.id')
 [ -n "$run_id" ] && [ "$run_id" != "null" ] || { echo "FAIL: no WorkflowRun id returned"; exit 1; }
 echo "  WorkflowRun ${run_id}"
 
@@ -142,7 +181,34 @@ writer="$(jq -r '.provenance.writerKind // empty' <<<"$facet")"
 echo "  app.config.port = ${port}, writerKind=${writer} (under facetWriteScope ∩ the Actuator's grant,"
 echo "    on a namespace the tls-app Blueprint owns — registration precedes writes, §2.1)"
 
-# ── Assertion 3: a play that reaches nothing FAILS (ADR-0117 D5 / follow-up h) ────────────────────
+# ── Assertion 3: the Finding RESOLVES — expectation and observation agree ─────────────────────
+# The demo never asserted this before: it launched the install directly and checked the facet
+# value, which passes whether or not the Baseline agrees the estate converged. Closing the loop
+# is what proves the expectation and the observation are actually COMPARABLE.
+#
+# That is not theoretical. Attempting F9's "make the port a real number" produced a live failure
+# on this very path — `facets/app.config: /port: got number, want string` — because the pinned
+# Facet Contract types it as a string. Had the write-back been coerced instead of refused, the
+# graph would read 443, this Finding would never close, and the estate would look converged while
+# permanently drifted. Nothing coerces between types (ADR-0118 D1), and the Facet Contract is the
+# end that decides which type the whole chain uses.
+echo "demo: assert the drift Finding resolves now that the estate converged"
+resolved=""
+for _ in $(seq 1 40); do
+    resolved=$(api GET "/findings/${finding_id}" | jq -r '.status')
+    [ "$resolved" = "resolved" ] && break
+    sleep 3
+done
+[ "$resolved" = "resolved" ] || {
+    echo "FAIL: Finding ${finding_id} is '${resolved}', not resolved — the observed app.config does not"
+    echo "      satisfy the compiled expectation (most likely a TYPE mismatch: expected number 443"
+    echo "      vs observed string \"443\", which nothing coerces between)"
+    api GET "/findings/${finding_id}" | jq -r '"  diff: " + (.diff | tostring)'
+    exit 1
+}
+echo "  Finding resolved — the value the Intent declared is the value the host reports, same type"
+
+# ── Assertion 4: a play that reaches nothing FAILS (ADR-0117 D5 / follow-up h) ────────────────────
 # The behaviour that used to be a green Run: ansible-playbook exits 0 when its pattern matches no
 # host. A fleet-wide change that silently reached zero machines must never look like one that
 # worked. This was hand-verified the day it shipped; asserting it here is what stops it rotting.
