@@ -7,8 +7,11 @@ import (
 
 	yaml "go.yaml.in/yaml/v3"
 
+	"github.com/dstout-devops/stratt/core/internal/contract"
 	"github.com/dstout-devops/stratt/core/internal/graph"
 	"github.com/dstout-devops/stratt/core/internal/orchestrate"
+	"github.com/dstout-devops/stratt/core/internal/template"
+	"github.com/dstout-devops/stratt/types"
 )
 
 // launchBody is the subset of an AWX launch request the façade honors. Fields
@@ -35,7 +38,6 @@ func (f *Facade) launch(w http.ResponseWriter, r *http.Request) {
 		awxErr(w, http.StatusNotFound, "Not found.")
 		return
 	}
-	_ = wf
 
 	var body launchBody
 	if r.ContentLength != 0 {
@@ -51,27 +53,19 @@ func (f *Facade) launch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Merge onto the Step's declared params (launch-time values win).
 	params := cloneParams(step.Params)
-	if len(extra) > 0 {
-		merged := map[string]any{}
-		if existing, ok := params["extraVars"].(map[string]any); ok {
-			for k, v := range existing {
-				merged[k] = v
-			}
-		}
-		for k, v := range extra {
-			merged[k] = v
-		}
-		params["extraVars"] = merged
-	}
 	if body.ScmBranch != "" {
 		if scm, ok := params["scm"].(map[string]any); ok {
 			scm["ref"] = body.ScmBranch
 		}
 	}
 
-	raw, err := json.Marshal(params)
+	// `wf` used to be discarded here (`_ = wf`) — the whole defect. It is now load-bearing,
+	// which also means removing this call does not silently revert the behaviour: it leaves
+	// `wf` unused and fails the build.
+	raw, err := resolveLaunchParams(wf, step, params, extra, func(actuator string) string {
+		return f.cfg.Store.PluginIdentityOf(r.Context(), actuator)
+	})
 	if err != nil {
 		awxErr(w, http.StatusBadRequest, err.Error())
 		return
@@ -113,6 +107,57 @@ func (f *Facade) launch(w http.ResponseWriter, r *http.Request) {
 		"url":            jt("/api/v2/jobs/%d/", jobID),
 		"ignored_fields": ignoredFields(body),
 	})
+}
+
+// resolveLaunchParams turns a façade launch into the Step params a Run receives, honoring
+// the Workflow's declared launch interface when it has one.
+//
+// Two shapes, and the split is not a precedence ladder — it is which of two different
+// declarations the Workflow actually made:
+//
+//   - **The Workflow declares `inputs`** (ADR-0118 D2 — where an imported AWX survey now
+//     lands, ADR-0025 follow-up). The caller's extra_vars ARE the answers: they go through
+//     contract.ResolveLaunchInputs, which applies declared defaults and rejects an answer to
+//     a question the survey does not ask, then bind into the Step through its own
+//     `{{.launch.x}}` tokens. Merging them into params.extraVars instead would be a second,
+//     unauthored binding of the same values (§2.4) — and would leave the Step's own tokens
+//     unresolved for every input the caller omitted, handing ansible a literal
+//     `{{.launch.replicas}}` to interpret as Jinja.
+//   - **The Workflow declares none.** Then extra_vars merge onto params.extraVars exactly as
+//     before, launch-time values winning — AWX's own untyped `ask_variables_on_launch`
+//     behaviour, which is what this compat surface exists to emulate. Nothing typed the seam,
+//     so nothing here may pretend it did.
+//
+// The point of routing the first case through the SAME resolver the native and MCP doors use
+// is §1.6: an imported survey must mean the same thing on every surface. A façade that
+// merged blindly would be the one door where a typo'd answer reached the play.
+//
+// `identityOf` is passed rather than read off f.cfg.Store because Store is a concrete
+// *graph.Store: a test that needed one would be Postgres-gated and therefore SKIPPED in
+// `task ci`, which is how this repo's inert mechanisms have repeatedly stayed green. Same
+// split as ADR-0118's resolveFindingLaunch, for the same reason.
+func resolveLaunchParams(wf types.Workflow, step types.Step, params, extra map[string]any, identityOf func(string) string) (json.RawMessage, error) {
+	if len(wf.Inputs) == 0 {
+		if len(extra) > 0 {
+			merged := map[string]any{}
+			if existing, ok := params["extraVars"].(map[string]any); ok {
+				for k, v := range existing {
+					merged[k] = v
+				}
+			}
+			for k, v := range extra {
+				merged[k] = v
+			}
+			params["extraVars"] = merged
+		}
+		return json.Marshal(params)
+	}
+	launch, err := contract.ResolveLaunchInputs(wf.Name, wf.Inputs, extra)
+	if err != nil {
+		return nil, err
+	}
+	ns := template.Namespaces{"launch": launch}
+	return contract.ResolveActuatorParamsFor(step.Actuator, identityOf(step.Actuator), params, ns)
 }
 
 // parseExtraVars accepts AWX extra_vars as a JSON object or a YAML/JSON string.

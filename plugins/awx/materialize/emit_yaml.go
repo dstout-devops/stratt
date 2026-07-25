@@ -25,9 +25,14 @@ type yFacet struct {
 }
 
 type yWorkflow struct {
-	Name        string        `yaml:"name"`
-	AdoptedFrom *yAdoptedFrom `yaml:"adoptedFrom,omitempty"`
-	Steps       []yStep       `yaml:"steps"`
+	Name string `yaml:"name"`
+	// Inputs is the imported survey, as the Workflow's declared launch interface
+	// (ADR-0118 D2). This is where a survey lands — charter line 34's migration table
+	// says "survey → input Contract", and until D2 shipped there was no seam on a
+	// Workflow to put one, which is exactly why ADR-0025 deferred enforcement.
+	Inputs      map[string]any `yaml:"inputs,omitempty"`
+	AdoptedFrom *yAdoptedFrom  `yaml:"adoptedFrom,omitempty"`
+	Steps       []yStep        `yaml:"steps"`
 }
 
 // yAdoptedFrom is the adopt-lineage block on an adopted Workflow (ADR-0087); nil (omitted)

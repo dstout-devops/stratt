@@ -516,8 +516,17 @@ what a reasonable schema would look like.** Nothing short of running `community.
   tree writes or reads `params.check` any more. The field itself stays in `ansible.input.v5` as deprecated
   and unread — a pinned Contract is not edited in place (§1.5), so its **removal is a v6 change**.
   (a) The `ansible-builder`-compatible EE factory (parity P5) — this ADR defines the
-  contract it must satisfy. (b) Air-gap content seeding. (c) Survey → input-Contract enforcement on Steps
-  (the named deferred item in ADR-0025/0026). (d) `/api/v2` route breadth + notification sinks (P2/P3) —
+  contract it must satisfy. (b) Air-gap content seeding. ~~(c) Survey → input-Contract enforcement on Steps
+  (the named deferred item in ADR-0025/0026).~~ — **done, at the Workflow rather than the Step.** ADR-0118 D2
+  built the seam this was waiting on, so an imported AWX survey now lands as `Workflow.inputs` and each
+  answer binds into the Step's `extraVars` from `{{.launch.<var>}}` — the field this ADR's own v5 Contract
+  already calls "the landing field for AWX launch extra_vars and survey answers". The detached
+  `contracts/*.survey.schema.json` is no longer emitted (§1.2). Enforcing it surfaced a §2.5 defect that was
+  latent while the document was read by nothing: a **password** question used to be typed as a string marked
+  `x-stratt-sensitive`, which as a live launch input would have carried secret material onto the Run, into
+  the audit stream, and out to `--extra-vars`. Password questions are now refused with a blocking
+  re-broker entry, exactly as an imported credential is. It also forced a `/api/v2` fix — see ADR-0026,
+  where the façade was discarding the Workflow it had just resolved. (d) `/api/v2` route breadth + notification sinks (P2/P3) —
   separate ADRs. (e) Update [`aap-2.7-parity.md`](../aap-2.7-parity.md) when v5 + content land, and
   **narrow or close PLG-1** in `enterprise-readiness.md`. ~~(f) A demo exercising the new knobs end to end.~~ — **done**: the
   [app-cert demo](../../demos/app-cert/README.md), **live-green on kind**. Treating it as the integration

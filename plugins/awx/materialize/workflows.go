@@ -8,7 +8,8 @@ import (
 )
 
 // mapJobTemplate transforms one AWX job template into a single-Step Workflow
-// (the actuation tuple: ansible + scm content-ref + viewName + credentialRefs).
+// (the actuation tuple: ansible + scm content-ref + viewName + credentialRefs),
+// with its survey as the Workflow's declared launch interface.
 func mapJobTemplate(snap *awx.Snapshot, jt awx.JobTemplate, viewFor, credName map[int]string, name string, r *report, lineage *AdoptLineage) (string, error) {
 	step := yStep{Name: "run", Actuator: "ansible"}
 
@@ -26,12 +27,62 @@ func mapJobTemplate(snap *awx.Snapshot, jt awx.JobTemplate, viewFor, credName ma
 		}
 	}
 
-	wf := yWorkflow{Name: name, AdoptedFrom: adoptBlock(lineage), Steps: []yStep{step}}
+	inputs, vars, err := surveyInterface(snap, jt, name, r)
+	if err != nil {
+		return "", err
+	}
+	bindSurveyAnswers(&step, vars)
+
+	wf := yWorkflow{Name: name, Inputs: inputs, AdoptedFrom: adoptBlock(lineage), Steps: []yStep{step}}
 	doc, err := marshalYAML(wf)
 	if err != nil {
 		return "", mapErr("job template", jt.Name, err)
 	}
 	return doc, nil
+}
+
+// surveyInterface renders a job template's survey as the Workflow's `inputs` schema,
+// returning the answerable variable names alongside it. No survey ⇒ no inputs, which is
+// what a Workflow taking nothing must declare (ADR-0118 D2 rejects launch params against
+// an undeclared interface rather than dropping them).
+func surveyInterface(snap *awx.Snapshot, jt awx.JobTemplate, name string, r *report) (map[string]any, []string, error) {
+	spec, ok := snap.Surveys[jt.ID]
+	if !ok {
+		return nil, nil, nil
+	}
+	inputs, vars, err := mapSurvey(jt, spec, name, r)
+	if err != nil {
+		return nil, nil, mapErr("survey", jt.Name, err)
+	}
+	return inputs, vars, nil
+}
+
+// bindSurveyAnswers wires each declared input into the Step that consumes it, as
+// extraVars: {var: "{{.launch.var}}"}.
+//
+// Doing this is the whole point, and omitting it would have shipped the exact defect
+// ADR-0120 names: an input a Workflow DECLARES, validates, and then silently drops. AWX
+// delivers survey answers as job extra_vars, and `ansible.input.v5`'s extraVars is
+// documented as "the landing field for AWX launch extra_vars and survey answers" — so
+// this is the same single variable authority (--extra-vars, rung 22), reached by the
+// declared route instead of by ambient injection.
+//
+// A survey answer that collides with a key the actuation params already carry is NOT
+// overwritten silently — but no such key exists today, because actuationParams emits only
+// `scm`/`play`, never extraVars. If that changes, the merge below must become a conflict
+// (§2.4 forbids a last-writer-wins), which is why it asserts rather than assumes.
+func bindSurveyAnswers(step *yStep, vars []string) {
+	if len(vars) == 0 {
+		return
+	}
+	extra := map[string]any{}
+	for _, v := range vars {
+		extra[v] = "{{.launch." + v + "}}"
+	}
+	if step.Params == nil {
+		step.Params = map[string]any{}
+	}
+	step.Params["extraVars"] = extra
 }
 
 // actuationParams builds the ansible Step params from a job template. A
@@ -157,6 +208,15 @@ func buildNode(snap *awx.Snapshot, n awx.WorkflowNode, viewFor, credName map[int
 	step.ViewName = viewFor[jt.Inventory]
 	step.Params = actuationParams(snap, jt, r, wfName)
 	step.DryRun = isCheckTemplate(jt)
+	if _, ok := snap.Surveys[jt.ID]; ok {
+		// The same job template imported as a NODE gets no inputs of its own: a survey
+		// belongs to a Workflow's launch boundary, and this Step is in the middle of
+		// someone else's DAG. AWX answers it from the workflow job template's own survey
+		// plus node extra_data, neither of which /api/v2 exposes per node here. Said out
+		// loud rather than dropped — the standalone import of this job template IS
+		// enforced, so a silent difference between the two would be the confusing kind.
+		r.note("Workflow %q: Step %q (was: job template %q) has a survey in AWX, but a Step inside a DAG has no launch boundary to declare it on. Its answers are not imported — supply them as this Step's params.extraVars, or launch the standalone Workflow that declares the survey as its inputs.", wfName, stepName(n), jt.Name)
+	}
 	for _, c := range jt.SummaryFields.Credentials {
 		if nm, ok := credName[c.ID]; ok {
 			step.CredentialRefs = append(step.CredentialRefs, nm)
