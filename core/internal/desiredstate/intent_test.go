@@ -391,3 +391,43 @@ func ParseDir2Err(t *testing.T, dir string) error {
 	_, err := ParseDir(dir, nil)
 	return err
 }
+
+// TestApplicationPortTypedAtTheIntentSeam pins the tightening ADR-0118 booked as a follow-up,
+// and it exists because the loose version cost a live cluster round-trip.
+//
+// contracts/intents/application.schema.json was `additionalProperties: true` with only
+// package/channel typed, so an Intent could declare `port: 443` (a number) and parse cleanly.
+// The app.config Facet declares port as a STRING, so the mismatch surfaced only when a real Run
+// tried to write the observed value back: "/port: got number, want string". Typed at this seam
+// it fails at declaration.
+//
+// The schema stays OPEN on purpose — Intent/Application carries app-specific fields like the
+// demo's commonName, and closing it would make core learn every application's configuration
+// (§1.1/§9 ontology creep). So this asserts both halves: the typed field is enforced, and an
+// untyped one is still allowed.
+func TestApplicationPortTypedAtTheIntentSeam(t *testing.T) {
+	write := func(t *testing.T, spec string) error {
+		t.Helper()
+		root := t.TempDir()
+		writeDecl(t, root, "v.yaml", "name: v\nselector: {kinds: [host]}\n")
+		writeKind(t, root, "intents", "a.yaml", "name: app\nkind: Intent/Application\nspec: "+spec+"\n")
+		_, err := ParseDir(root, nil)
+		return err
+	}
+
+	if err := write(t, "{package: nginx, port: \"443\"}"); err != nil {
+		t.Fatalf("a string port must be accepted: %v", err)
+	}
+	err := write(t, "{package: nginx, port: 443}")
+	if err == nil {
+		t.Fatal("a NUMBER port must now be rejected at the Intent seam — the app.config Facet types it as a string, " +
+			"so a number is unusable and used to fail only at facet write-back, after a full cluster round-trip")
+	}
+	if !strings.Contains(err.Error(), "port") {
+		t.Errorf("the error must name the offending field; got: %v", err)
+	}
+	// Still open: an app-specific field core knows nothing about must pass.
+	if err := write(t, "{package: nginx, commonName: app.example.test}"); err != nil {
+		t.Fatalf("an app-specific field must still be allowed (the kind is generic, §1.1): %v", err)
+	}
+}

@@ -231,8 +231,8 @@ func TestPinsAreStable(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(all) != 140 {
-		t.Fatalf("expected 140 embedded documents, got %d", len(all))
+	if len(all) != 141 {
+		t.Fatalf("expected 141 embedded documents, got %d", len(all))
 	}
 	versions := map[string]int{}
 	for _, c := range all {
@@ -248,6 +248,12 @@ func TestPinsAreStable(t *testing.T) {
 	// row — only the LOOKUP collapses to the highest).
 	if versions["actuators/ansible.input"] != 5 {
 		t.Fatalf("ansible.input current version: %d", versions["actuators/ansible.input"])
+	}
+	// intents/application v2 types `port` (ADR-0118 follow-up). A sibling version rather than an
+	// edit to v1, because tightening a type is BREAKING: `port: 443` parsed under v1 and does not
+	// under v2. v1 keeps its pin row; only the lookup moves.
+	if versions["intents/application"] != 2 {
+		t.Fatalf("intents/application current version: %d", versions["intents/application"])
 	}
 	// Same process, same documents → identical pins on re-read.
 	again, _ := All()

@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "stratt:contract:intents/application:v2",
+  "title": "Intent/Application spec",
+  "description": "The desired-state payload for an application Intent (charter §2.4, ADR-0023). v2 types `port` (ADR-0118 follow-up). A SIBLING VERSION rather than an edit to v1 because tightening a type is a BREAKING change — an Intent declaring `port: 443` parsed under v1 and does not under v2 — and the registry's convention is a new file per version (the resolver keys by kind and takes the newest, so v1 stays as a pin row for history while v2 is what validates). Still deliberately OPEN (additionalProperties: true): Intent/Application is a generic kind whose spec carries application-specific values — the app-cert demo's commonName, for instance — and closing it would force core to know every application's configuration fields, the ontology creep §1.1 and §9 forbid. Blueprints reference spec fields by explicit lookup ({{.spec.package}}).",
+  "type": "object",
+  "properties": {
+    "package": {
+      "type": "string"
+    },
+    "channel": {
+      "type": "string"
+    },
+    "port": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Desired listen port, as a STRING — the type is load-bearing, not stylistic. contracts/facets/app.config.schema.json declares the OBSERVED port as a string, and a compiled expectation from this spec is compared against that observed value; nothing coerces between types (ADR-0118 D1), so the two must agree or they are never comparable. Typed here because two shipping Blueprint routes read it (estate/blueprints/web-server.yaml and the app-cert demo) — and because leaving it untyped cost a full cluster round-trip: an Intent declaring a number parsed cleanly and failed only at facet write-back with '/port: got number, want string'."
+    }
+  },
+  "additionalProperties": true
+}
