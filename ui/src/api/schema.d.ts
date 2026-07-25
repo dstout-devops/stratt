@@ -1382,6 +1382,31 @@ export interface components {
             /** Format: date-time */
             finishedAt?: string;
         };
+        /** @description One task event — the floor of the §1.8 descent ladder (Intent → Blueprint route → Workflow → Run → task event). Streamed as the `data:` payload of each frame from `GET /runs/{id}/events`; never persisted (charter §3, ADR-0003). Declared here because the stream is a first-class part of the API contract even though its transport is `text/event-stream`: the same shape is what the UI, the CLI, and an MCP agent all read (§1.6). */
+        RunEvent: {
+            runId: string;
+            /** @description The target-set slice this event came from, 0 when the Run is unsliced. (runId, slice, seq) is the event's identity — seq is unique only within one slice's tool stream, and pre-execution diagnostics use negative seqs so they can never collide with it. */
+            slice?: number;
+            /** Format: int64 */
+            seq: number;
+            /** Format: date-time */
+            at: string;
+            /** @description The event type. Tool-shaped and deliberately open — the spine does not enumerate what a plugin may emit (§1.4). Well-known spine kinds are `stream-end`, `diagnostic-output`, `governance-rejected`, `pod-start-blocked` and `pod-start-failed`. */
+            kind: string;
+            /**
+             * @description The event's severity, carried from the plugin port's typed TaskEvent.Level. Content-blind and the one property every tool means identically, so a consumer can show "this Run warned" without parsing tool-shaped kinds. ABSENT means the producer did not state a level — which must not be read as `info` (§1.8: an absent signal is not a benign one).
+             * @enum {string}
+             */
+            level?: "debug" | "info" | "warn" | "error";
+            /** @description The Entity this event applies to, when per-target. */
+            target?: string;
+            /** @description The execution locus this event came from (ADR-0032) — "local" for the central cluster, a Site name for a remote leaf. Descriptive only: never part of the event's identity. */
+            site?: string;
+            /** @description The event body — tool-shaped, opaque to the spine. */
+            payload?: {
+                [key: string]: unknown;
+            };
+        };
         /** @description A remote execution locus — a satellite dispatcher reachable over a NATS leaf (charter §2.3, ADR-0032). CaC-declared; live up/down status is ephemeral (NATS KV), surfaced via the `live` field on reads. */
         Site: {
             name: string;
@@ -2407,13 +2432,13 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Server-sent event stream; each `data:` line is a RunEvent. */
+            /** @description Server-sent event stream. The schema below is the shape of ONE frame's `data:` payload, not of the whole body — SSE framing has no OpenAPI expression: `id:` carries the event's seq and the `event:` name carries its kind. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "text/event-stream": string;
+                    "text/event-stream": components["schemas"]["RunEvent"];
                 };
             };
             404: components["responses"]["NotFound"];

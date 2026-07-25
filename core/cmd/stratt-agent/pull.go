@@ -98,7 +98,7 @@ func (ag *agent) emitRefusal(ctx context.Context, ref, digest string, cause erro
 	}
 	runID := "pull-" + ag.site + "-" + shortDigest(digest)
 	_ = ag.bus.Publish(ctx, types.RunEvent{
-		RunID: runID, Seq: 1, Kind: "run.failed", Site: ag.site,
+		RunID: runID, Seq: 1, Kind: "run.failed", Level: types.RunEventError, Site: ag.site,
 		Payload: map[string]any{
 			"reason":    "bundle-verification-refused",
 			"bundleRef": ref,

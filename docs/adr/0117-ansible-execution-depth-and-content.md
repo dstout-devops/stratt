@@ -515,9 +515,21 @@ what a reasonable schema would look like.** Nothing short of running `community.
   **narrow or close PLG-1** in `enterprise-readiness.md`. (f) A demo exercising the new knobs end to end —
   the app-install + certificate scenario is that demo, and per the demo-library experience
   ([ADR-0116](0116-demo-library.md)) it should be treated as the integration test for this work.
-  (g) **Carry `TaskEvent.Level` through to the operator** — it is dropped at the dispatcher and
-  `types.RunEvent` has no level field, so D5c's WARN on a no-op play is correct at the port but invisible as
-  a warning in the API/UI. Needs a `RunEvent.Level` + OpenAPI + UI slice.
+  ~~(g) **Carry `TaskEvent.Level` through to the operator.**~~ — **done.** The port's typed level was
+  dropped at the dispatcher and `types.RunEvent` had no field for it, so D5c's WARN on a no-op play and the
+  shim's `unparsed-event` were correct at the plugin and invisible as warnings everywhere an operator looks.
+  Now: `RunEvent.Level` carried from `TaskEvent.Level` (`LEVEL_UNSPECIFIED` maps to **empty, not `info`** —
+  §1.8, an absent signal must not read as a benign one), a documented `RunEvent` schema in the OpenAPI spec,
+  and the UI reading the stated level instead of guessing from the kind. Three things fell out of doing it
+  properly. **One:** the SSE tail was the only response body on the API not built from the published
+  schema — it marshalled the internal struct directly — so it now goes through a generated wire type like
+  every other handler, and a drift test ties the spec to the struct field-by-field (the schema is pruned
+  from Go codegen as unreferenced, so nothing else would have caught a divergence). **Two:** the UI's
+  `RunEvent` was a hand-copied mirror of the Go struct; it is now the generated contract type (ADR-0091 —
+  the OpenAPI seam is the only seam). **Three:** a stated `info` cannot be flattened onto the palette, since
+  the port's level has no `success` member — ok-vs-changed is a _kind_ distinction, and ansible reports both
+  at INFO, so an explicit `info` caps escalation but keeps the kind's downward refinement. The spine's own
+  events were given levels in the same pass (`diagnostic-output`, `governance-rejected`, the bundle refusal).
   (h) **A live demo asserting the vacuous-run guard** — the rc=0 behaviour behind D5c was verified by hand
   against the EE image in the session that shipped it; that proof belongs in a demo so it cannot rot.
   (i) **Per-artifact content hashes (a lockfile).** D3 pins exact versions and verifies the resolved set,
@@ -525,8 +537,15 @@ what a reasonable schema would look like.** Nothing short of running `community.
   would not be detected. Closing it means recording each artifact's SHA-256 in an in-repo lockfile and
   failing the build on mismatch. Named explicitly because the earlier "hash-verified" wording implied this
   already existed.
-  (j) **Surface `kind=ee-content` in the UI's Run descent.** Each Run now states its EE content on the event
-  stream (D3), but it reads as an ordinary event; the descent should show it as run metadata. Pairs with (g).
+  (j) **Surface `kind=ee-content` in the UI's Run descent** — **reframed, deliberately not done as written.**
+  Landing (g) made the honest shape clear: the UI cannot pin `ee-content` as run metadata without
+  hardcoding one plugin's kind vocabulary in the interface plane, which is exactly the `if ansible{}` §1.4
+  forbids. What shipped instead is the content-blind half that carries the actual §1.8 value: the log
+  header counts the Run's warned/failed events and filters to them, so a WARN is findable in an uncapped
+  stream — previously one line in fifty thousand, tinted by kind guesswork. Pinning run-scoped metadata
+  properly needs a **generic marker on the port** distinguishing "this event describes the Run" from "this
+  event describes a task" (a `scope` on `TaskEvent`, spine-blind to which plugin sent it). That is a port
+  change, so it belongs in its own ADR — booked here rather than smuggled into the UI.
   ~~(l) **An unpullable EE image hangs a Run instead of failing (§1.8, platform-wide).**~~ — **done**, and
   the original entry **overstated the magnitude**: it said "up to 24 hours", attributing `RunAcrossCells`'s
   `ForwardChildRun` ceiling to Step dispatch. Measured: `a.Execute` runs under `RunAgainstView`'s options —

@@ -268,10 +268,13 @@ func (d *Dispatcher) Run(ctx context.Context, runID string, slice int, spec actu
 		d.log.Warn("publishing diagnostic output", "pod", pod, "lines", unclaimed.len(), "interpreted", interpreted)
 		for i, line := range unclaimed.lines {
 			ev := types.RunEvent{
-				RunID:   runID,
-				Slice:   slice,
-				Seq:     unclaimed.maxSeq + int64(i) + 1,
-				Kind:    "diagnostic-output",
+				RunID: runID,
+				Slice: slice,
+				Seq:   unclaimed.maxSeq + int64(i) + 1,
+				Kind:  "diagnostic-output",
+				// The floor only fires when the tool never spoke its protocol or
+				// the Job died abnormally, so these lines are never routine.
+				Level:   types.RunEventWarn,
 				Payload: map[string]any{"line": line},
 			}
 			if err := d.bus.Publish(ctx, ev); err != nil {
@@ -332,7 +335,11 @@ func (d *Dispatcher) RunStream(ctx context.Context, runID string, slice int, spe
 	if unclaimed.len() > 0 && (interpreted == 0 || !ok) {
 		d.log.Warn("publishing diagnostic output (typed transport)", "pod", pod, "lines", unclaimed.len(), "interpreted", interpreted)
 		for i, line := range unclaimed.lines {
-			ev := types.RunEvent{RunID: runID, Slice: slice, Seq: unclaimed.maxSeq + int64(i) + 1, Kind: "diagnostic-output", Payload: map[string]any{"line": line}}
+			ev := types.RunEvent{
+				RunID: runID, Slice: slice, Seq: unclaimed.maxSeq + int64(i) + 1,
+				Kind: "diagnostic-output", Level: types.RunEventWarn,
+				Payload: map[string]any{"line": line},
+			}
 			if err := d.bus.Publish(ctx, ev); err != nil {
 				return false, spawn, err
 			}
@@ -377,6 +384,7 @@ func (d *Dispatcher) followTyped(ctx context.Context, runID string, slice int, p
 			re := types.RunEvent{
 				RunID: runID, Slice: slice, Seq: seq, Site: d.site(),
 				Kind:    typedEventKind(ev),
+				Level:   typedEventLevel(ev.GetLevel()),
 				Target:  ev.GetFields()["host"],
 				Payload: map[string]any{"message": ev.GetMessage()},
 			}
@@ -399,6 +407,27 @@ func (d *Dispatcher) followTyped(ctx context.Context, runID string, slice int, p
 		return unclaimed, interpreted, fmt.Errorf("dispatch: read logs (typed transport): %w", err)
 	}
 	return unclaimed, interpreted, nil
+}
+
+// typedEventLevel carries the port's typed severity onto the Run's event stream.
+// It was dropped here, which meant a plugin's WARN — the vacuous-run guard's
+// "this play matched no hosts", the shim's "an event could not be decoded" — was
+// correct at the port and invisible as a warning everywhere an operator looks
+// (ADR-0117 g). LEVEL_UNSPECIFIED stays empty rather than defaulting to info: a
+// plugin that says nothing must not be reported as having said "fine".
+func typedEventLevel(l pluginv1.TaskEvent_Level) string {
+	switch l {
+	case pluginv1.TaskEvent_LEVEL_DEBUG:
+		return types.RunEventDebug
+	case pluginv1.TaskEvent_LEVEL_INFO:
+		return types.RunEventInfo
+	case pluginv1.TaskEvent_LEVEL_WARN:
+		return types.RunEventWarn
+	case pluginv1.TaskEvent_LEVEL_ERROR:
+		return types.RunEventError
+	default:
+		return ""
+	}
 }
 
 // typedEventKind renders a port TaskEvent's kind for the §1.8 event stream: the
@@ -779,13 +808,13 @@ func (d *Dispatcher) podStartGrace() time.Duration {
 // publishPreStart puts the cluster's reason on the Run's own event stream, so the
 // §1.8 descent shows why a Run is sitting still — or died before its tool ever
 // ran — without an operator needing cluster access to find out.
-func (d *Dispatcher) publishPreStart(ctx context.Context, runID string, slice int, seq int64, kind string, b podBlock) {
+func (d *Dispatcher) publishPreStart(ctx context.Context, runID string, slice int, seq int64, kind, level string, b podBlock) {
 	if d.bus == nil { // tests construct a dispatcher without a bus
 		d.log.Warn("no event bus: pod-start diagnosis reaches logs only", "run", runID, "reason", b.reason)
 		return
 	}
 	ev := types.RunEvent{
-		RunID: runID, Slice: slice, Seq: seq, Site: d.site(), Kind: kind,
+		RunID: runID, Slice: slice, Seq: seq, Site: d.site(), Kind: kind, Level: level,
 		Payload: map[string]any{"message": b.Error(), "pod": b.pod, "reason": b.reason},
 	}
 	if err := d.bus.Publish(ctx, ev); err != nil {
@@ -819,7 +848,8 @@ func (d *Dispatcher) waitForPod(ctx context.Context, runID string, slice int, jo
 				d.log.Warn("pod not starting", "job", jobName, "pod", b.pod,
 					"container", b.container, "reason", b.reason, "message", b.message)
 				if narrations < preStartNarrationCap {
-					d.publishPreStart(ctx, runID, slice, int64(preStartSeqFloor+narrations), "pod-start-blocked", b)
+					d.publishPreStart(ctx, runID, slice, int64(preStartSeqFloor+narrations),
+						"pod-start-blocked", types.RunEventWarn, b)
 					narrations++
 				}
 			}
@@ -827,7 +857,7 @@ func (d *Dispatcher) waitForPod(ctx context.Context, runID string, slice int, jo
 				blockedSince = time.Now()
 			}
 			if b.action == blockFatal || (b.action == blockGrace && time.Since(blockedSince) >= d.podStartGrace()) {
-				d.publishPreStart(ctx, runID, slice, preStartFailSeq, "pod-start-failed", b)
+				d.publishPreStart(ctx, runID, slice, preStartFailSeq, "pod-start-failed", types.RunEventError, b)
 				return "", fmt.Errorf("dispatch: %w", b)
 			}
 		} else {

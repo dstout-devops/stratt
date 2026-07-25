@@ -86,6 +86,13 @@ type RunEvent struct {
 	// Kind is the event type (e.g. "task-start", "task-ok", "task-failed",
 	// "stdout").
 	Kind string `json:"kind"`
+	// Level is the event's severity, carried from the plugin port's typed
+	// TaskEvent.Level. It is spine-level and content-blind — the ONE property of
+	// a task event that every tool means the same way — so the descent can show
+	// "this Run warned" without any consumer parsing tool-shaped kinds. Empty
+	// means unstated: a consumer must not read that as "info", because most of
+	// the stream predates the field. See RunEventLevel*.
+	Level string `json:"level,omitempty"`
 	// Target is the Entity the event applies to, when per-target.
 	Target string `json:"target,omitempty"`
 	// Site is the execution locus this event came from (ADR-0032) — stamped by
@@ -96,3 +103,14 @@ type RunEvent struct {
 	// Payload is the event body (tool-shaped, opaque to the spine).
 	Payload map[string]any `json:"payload,omitempty"`
 }
+
+// RunEvent severities. These mirror the plugin port's TaskEvent.Level, minus
+// LEVEL_UNSPECIFIED — which is represented by the empty string, so "the plugin
+// did not say" and "the plugin said info" stay distinguishable (§1.8: an absent
+// signal must not masquerade as a benign one).
+const (
+	RunEventDebug = "debug"
+	RunEventInfo  = "info"
+	RunEventWarn  = "warn"
+	RunEventError = "error"
+)

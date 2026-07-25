@@ -592,6 +592,40 @@ func runToWire(r types.Run) Run {
 	return out
 }
 
+// runEventToWire renders one task event for the SSE tail. This path used to
+// marshal types.RunEvent directly — the only response body on the API not built
+// from the published schema — so the wire shape was whatever the internal struct
+// happened to hold. Going through the generated type means an internal field
+// cannot reach a client undeclared, and the spec cannot promise a field the
+// encoder never sends (§1.6: the CLI and an MCP agent read this same contract,
+// not just the first-party UI).
+func runEventToWire(ev types.RunEvent) RunEvent {
+	out := RunEvent{
+		RunId: ev.RunID,
+		Seq:   ev.Seq,
+		At:    ev.At,
+		Kind:  ev.Kind,
+	}
+	if ev.Slice != 0 {
+		out.Slice = &ev.Slice
+	}
+	if ev.Level != "" {
+		// Empty stays absent: "the producer did not state a level" is not "info".
+		lvl := RunEventLevel(ev.Level)
+		out.Level = &lvl
+	}
+	if ev.Target != "" {
+		out.Target = &ev.Target
+	}
+	if ev.Site != "" {
+		out.Site = &ev.Site
+	}
+	if len(ev.Payload) > 0 {
+		out.Payload = &ev.Payload
+	}
+	return out
+}
+
 // siteToWire renders a Site declaration with its live agent status (ADR-0032).
 func siteToWire(s types.Site, live bool) Site {
 	out := Site{Name: s.Name, Mode: SiteMode(s.Mode), Live: &live}
@@ -1637,7 +1671,7 @@ func (s *Server) TailRunEvents(w http.ResponseWriter, r *http.Request, id RunID)
 	}()
 
 	err := s.Bus.Tail(ctx, id, func(ev types.RunEvent) error {
-		payload, err := json.Marshal(ev)
+		payload, err := json.Marshal(runEventToWire(ev))
 		if err != nil {
 			return err
 		}

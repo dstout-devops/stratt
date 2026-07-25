@@ -1,19 +1,14 @@
 import { useEffect, useRef, useState } from "react";
 import { streamSSE } from "@/lib/sse";
 import { authHeader } from "@/lib/session";
+import type { Schema } from "@/api/client";
 
-// One task event — the floor of the §1.8 descent ladder. Mirrors types/run.go RunEvent. Not a
-// generated schema (the endpoint is typed text/event-stream), so it lives here.
-export interface RunEvent {
-  runId: string;
-  slice?: number;
-  seq: number;
-  at: string;
-  kind: string;
-  target?: string;
-  site?: string;
-  payload?: Record<string, unknown>;
-}
+// One task event — the floor of the §1.8 descent ladder. The generated contract type: the SSE
+// payload IS declared in openapi.yaml (components/schemas/RunEvent), so this is no longer a
+// hand-copied mirror of the Go struct that could drift from it (ADR-0091 — the OpenAPI contract is
+// the single seam). Level arrived with ADR-0117 (g); the server holds it to the same shape via
+// TestRunEventSpecMatchesTheWireStruct.
+export type RunEvent = Schema["RunEvent"];
 
 export type StreamStatus = "connecting" | "streaming" | "ended" | "error";
 

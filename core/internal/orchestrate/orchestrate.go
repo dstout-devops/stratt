@@ -1076,7 +1076,12 @@ func (a *Activities) surfaceRejections(ctx context.Context, runID, source, plugi
 			"kind": r.Kind, "detail": r.Detail, "reason": r.Reason,
 		}
 		if a.Bus != nil && runID != "" {
-			if err := a.Bus.Publish(ctx, types.RunEvent{RunID: runID, Kind: "governance-rejected", Payload: payload}); err != nil {
+			// Warn on the stream as well as in the log: a rejected emission is a
+			// plugin claim the spine refused, and the operator sees the stream.
+			if err := a.Bus.Publish(ctx, types.RunEvent{
+				RunID: runID, Kind: "governance-rejected",
+				Level: types.RunEventWarn, Payload: payload,
+			}); err != nil {
 				lg.Warn("publish governance-rejected RunEvent failed", "error", err)
 			}
 		}

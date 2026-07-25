@@ -5,6 +5,9 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	pluginv1 "github.com/dstout-devops/stratt/sdk/stratt/plugin/v1"
+	"github.com/dstout-devops/stratt/types"
 )
 
 // TestKeepAlive_BeatsWhileTheToolIsSilent is the regression for a Step being
@@ -84,5 +87,25 @@ func TestMaxStepRuntimeIsTheJobsOwnDeadline(t *testing.T) {
 	}
 	if heartbeatInterval >= time.Minute {
 		t.Fatalf("heartbeatInterval %v leaves no margin under a minute-scale HeartbeatTimeout", heartbeatInterval)
+	}
+}
+
+// TestTypedEventLevelMapping pins the port→stream severity mapping, and in
+// particular that LEVEL_UNSPECIFIED becomes EMPTY rather than "info": a plugin
+// that states no level must not be reported as having said everything is fine
+// (§1.8). This is the mapping that was simply absent — the port's level was
+// decoded and then dropped (ADR-0117 g).
+func TestTypedEventLevelMapping(t *testing.T) {
+	cases := map[pluginv1.TaskEvent_Level]string{
+		pluginv1.TaskEvent_LEVEL_UNSPECIFIED: "",
+		pluginv1.TaskEvent_LEVEL_DEBUG:       types.RunEventDebug,
+		pluginv1.TaskEvent_LEVEL_INFO:        types.RunEventInfo,
+		pluginv1.TaskEvent_LEVEL_WARN:        types.RunEventWarn,
+		pluginv1.TaskEvent_LEVEL_ERROR:       types.RunEventError,
+	}
+	for in, want := range cases {
+		if got := typedEventLevel(in); got != want {
+			t.Errorf("typedEventLevel(%v) = %q, want %q", in, got, want)
+		}
 	}
 }
