@@ -527,16 +527,34 @@ what a reasonable schema would look like.** Nothing short of running `community.
   already existed.
   (j) **Surface `kind=ee-content` in the UI's Run descent.** Each Run now states its EE content on the event
   stream (D3), but it reads as an ordinary event; the descent should show it as run metadata. Pairs with (g).
-  (l) **An unpullable EE image hangs a Run for up to 24 hours instead of failing (§1.8, platform-wide).**
-  Surfaced by the charter-guardian review of this slice, and **not specific to ansible or to content**: an
-  EE-Job Actuator is marked healthy without any image check (`enableActuatorLocked` skips the dial for a
-  `jobCommand` Actuator), and `dispatch.waitForPod` switches only on `Pod.Status.Phase`, so a pod stuck in
-  `ImagePullBackOff` stays `Pending` and heartbeats until the activity's 24h `StartToCloseTimeout`. Net: a
-  healthy-looking Actuator, a Run that hangs for a day, and a Temporal timeout as the only diagnosis — the
-  abstraction hiding a failure it can plainly see. Fix is `waitForPod` reading
-  `containerStatuses[].state.waiting.reason` and failing loudly; a cheap partial is a CI gate tying each
-  `estate/actuators/*.yaml` `image:` to a build task. This is the direct reason the `ansible-crypto`
-  declaration is held back from (a00) until the demo lands.
+  ~~(l) **An unpullable EE image hangs a Run instead of failing (§1.8, platform-wide).**~~ — **done**, and
+  the original entry **overstated the magnitude**: it said "up to 24 hours", attributing `RunAcrossCells`'s
+  `ForwardChildRun` ceiling to Step dispatch. Measured: `a.Execute` runs under `RunAgainstView`'s options —
+  `StartToCloseTimeout` **10m**, 3 attempts — so the real hang was ~30 minutes, still diagnosed only as a
+  Temporal timeout. The defect itself was real and **not specific to ansible or to content**:
+  `dispatch.waitForPod` switched on nothing but `Pod.Status.Phase`, so a pod parked in `ImagePullBackOff`
+  stayed `Pending` and the loop heartbeated happily while kubelet's plain-text reason sat in the pod the
+  whole time. Now `waitForPod` reads container `waiting` reasons (init containers included) and the
+  `PodScheduled` condition, publishes them to the Run's own event stream so the §1.8 descent shows them
+  without cluster access, and **narrates everything while failing only on reasons it positively recognizes**
+  — a reason we have never seen reaches the operator but cannot invent a failure. `ImagePullBackOff` is a
+  _backoff, not a verdict_, so pull-class reasons fail only after a bounded grace (`PodStartGrace`, default
+  2m ≈ 4 kubelet pull attempts); `InvalidImageName` fails at once; `Unschedulable` is narrated and never
+  failed, because a cluster autoscaler legitimately takes minutes. **Residual, still open:** an EE-Job
+  Actuator is still marked healthy without any image check (`enableActuatorLocked` skips the dial for a
+  `jobCommand` Actuator), so a declaration naming a nonexistent image still _reports_ healthy — it now
+  fails its first Run in ~2m with the reason instead of hanging. The cheap partial remains a CI gate tying
+  each `estate/actuators/*.yaml` `image:` to a build task, and it is why the `ansible-crypto` declaration
+  still lands with the demo (f) rather than alone.
+  (m) **Execution liveness is bounded far below what a Step is allowed to take (§1.8, platform-wide).**
+  Found while measuring (l). Two ceilings contradict the Job the dispatcher itself creates
+  (`ActiveDeadlineSeconds` **6h**): `a.Execute` inherits `StartToCloseTimeout` **10m**, so a Step whose pod
+  legitimately runs longer can never succeed — it is killed and retried 3× into a timeout; and
+  `HeartbeatTimeout` is **1m** while the heartbeat is driven _per output line_, so a single task that is
+  silent for over a minute (`apt install`, a long `command`) trips a heartbeat timeout even though the pod is
+  perfectly healthy. Nothing in-repo has caught this because every play we run finishes in seconds. Fix:
+  give `a.Execute` its own ceiling derived from the same authority as the Job's deadline, and drive the
+  heartbeat from a ticker for the duration of the follow rather than from tool output.
   (k) **Migrate the boot-registered `ansible`/`script` Actuators to CaC** (ADR-0103's remaining
   boot blocks). Now unblocked for `ansible`, since the declaration can finally express its bounded grant —
   the reason it could not move before. Note the registry rejects a declaration colliding with a

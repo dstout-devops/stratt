@@ -45,6 +45,10 @@ type Config struct {
 	// the EE's non-root user reads them via group. Must match the EE image's
 	// runtime gid. <=0 defaults to 1000 (the stratt-ee `runner` user).
 	FSGroup int64
+	// PodStartGrace bounds how long an execution pod may sit blocked on a reason
+	// the cluster reports as terminal-ish (ImagePullBackOff and friends) before
+	// the Step is failed with that reason. <=0 uses podStartGraceDefault.
+	PodStartGrace time.Duration
 	// Site is the execution locus this dispatcher runs at (ADR-0032). The hub
 	// leaves it empty (⇒ "local"); a remote Site's stratt-agent sets its Site
 	// name. Every published event and per-target result is stamped with it so
@@ -174,7 +178,7 @@ func (d *Dispatcher) Run(ctx context.Context, runID string, slice int, spec actu
 		return nil, err
 	}
 
-	pod, err := d.waitForPod(ctx, jobName, heartbeat)
+	pod, err := d.waitForPod(ctx, runID, slice, jobName, heartbeat)
 	if err != nil {
 		return nil, err
 	}
@@ -243,7 +247,7 @@ func (d *Dispatcher) RunStream(ctx context.Context, runID string, slice int, spe
 		return false, 0, err
 	}
 
-	pod, err := d.waitForPod(ctx, jobName, heartbeat)
+	pod, err := d.waitForPod(ctx, runID, slice, jobName, heartbeat)
 	if err != nil {
 		return false, 0, err
 	}
@@ -322,6 +326,15 @@ func (d *Dispatcher) followTyped(ctx context.Context, runID string, slice int, p
 			}
 		}
 		onResp(resp)
+	}
+	// A torn stream must not read as a clean end of output (§1.8): a read error
+	// or an over-long line would otherwise end the follow silently, and the
+	// governor would fold whatever it had seen so far as the whole truth. Failing
+	// lets the activity retry re-follow from the start — event seqs are
+	// deterministic, so replayed events dedup in JetStream. followLogs has always
+	// done this; the typed transport did not, which is the asymmetry fixed here.
+	if err := sc.Err(); err != nil && ctx.Err() == nil {
+		return unclaimed, interpreted, fmt.Errorf("dispatch: read logs (typed transport): %w", err)
 	}
 	return unclaimed, interpreted, nil
 }
@@ -575,8 +588,156 @@ func (d *Dispatcher) createJob(ctx context.Context, name, runID string, spec act
 	return nil
 }
 
-// waitForPod polls until the Job's pod is running or terminal.
-func (d *Dispatcher) waitForPod(ctx context.Context, jobName string, heartbeat func()) (string, error) {
+// Pod start-up diagnosis (§1.8 — hiding mechanism is the product, hiding failure
+// kills trust). A pod that will not start says exactly why: in a container's
+// `waiting` reason, or in its PodScheduled condition. The dispatcher's job is to
+// RELAY that, never to wait it out. waitForPod used to switch on nothing but
+// Pod.Status.Phase, so an EE image that did not exist left the pod Pending and
+// this loop heartbeating happily until the Step activity's StartToClose ceiling
+// (10m, 3 attempts) — a Run that hung for half an hour, whose only diagnosis was
+// a Temporal timeout, while the real reason sat in the pod the entire time.
+// Nothing here is ansible- or content-specific: it is every EE-Job Actuator.
+const (
+	// podStartGraceDefault bounds how long a pod may sit blocked for a reason we
+	// know is terminal-ish before the Step fails. kubelet's image-pull backoff
+	// runs 10s, 20s, 40s, 80s…, so two minutes leaves room for ~4 pull attempts:
+	// a registry blip still self-heals, while an image that does not exist fails
+	// in ~2m instead of ~30m. Deliberately not zero — ImagePullBackOff is a
+	// *backoff*, not a verdict.
+	podStartGraceDefault = 2 * time.Minute
+
+	// preStartSeqFloor is where pre-stream event seqs begin. A tool's stream
+	// numbers from 1, so pre-start narration must be negative: (RunID, Slice,
+	// Seq) is the JetStream dedup identity, so a collision would silently drop
+	// either the diagnosis or a real event. Counting UP from a floor keeps the
+	// narration chronological under an ascending sort, and leaves -1 free.
+	preStartSeqFloor = -100
+	// preStartNarrationCap bounds the narration — a bounded ring is the house
+	// rule for anything a pod can emit without limit. Distinct reasons are few
+	// in practice (Unschedulable → ErrImagePull → ImagePullBackOff).
+	preStartNarrationCap = 8
+	// preStartFailSeq is reserved for the give-up event, so it always lands even
+	// when narration has hit its cap, and sorts last among pre-stream events —
+	// immediately before the tool stream that never began.
+	preStartFailSeq = -1
+)
+
+// blockAction is what the dispatcher does about a reason a pod is not starting.
+// The asymmetry is deliberate: we NARRATE everything the cluster tells us, and
+// FAIL only on the reasons we positively recognize. A reason we have never seen
+// therefore reaches the operator instead of vanishing into a silent wait, but
+// cannot invent a failure.
+type blockAction int
+
+const (
+	blockNarrate blockAction = iota // say it, keep waiting
+	blockGrace                      // say it, fail if it outlives the grace
+	blockFatal                      // say it, fail now
+)
+
+// startReasonAction maps kubelet's container `waiting` reasons to that decision.
+var startReasonAction = map[string]blockAction{
+	"InvalidImageName":  blockFatal, // a malformed reference: no amount of retrying parses it
+	"ErrImageNeverPull": blockFatal, // PullPolicy: Never and the image is absent from the node
+	"ErrImagePull":      blockGrace,
+	"ImagePullBackOff":  blockGrace,
+	"ImageInspectError": blockGrace,
+	// A CredentialRef Secret that never appeared, or a key that is not in it
+	// (§2.5): brokered material is created ahead of the pod, so its absence is a
+	// real failure — but give the broker the grace window before saying so.
+	"CreateContainerConfigError": blockGrace,
+	"CreateContainerError":       blockGrace,
+	"RunContainerError":          blockGrace,
+}
+
+// benignWaitingReasons are the states a healthy pod passes through on its way to
+// Running. Everything else is at least narrated.
+var benignWaitingReasons = map[string]bool{"ContainerCreating": true, "PodInitializing": true}
+
+// podBlock is the cluster's own account of why a pod has not started. It is an
+// error so that the failure message an operator reads and the event published to
+// the Run's stream are the SAME rendering — one truth, two surfaces.
+type podBlock struct {
+	pod       string
+	container string // empty when the pod itself never got scheduled
+	reason    string
+	message   string
+	action    blockAction
+}
+
+func (b podBlock) Error() string {
+	where := b.container
+	if where == "" {
+		where = "scheduling"
+	}
+	msg := b.message
+	if msg == "" {
+		msg = "(the cluster gave no further detail)"
+	}
+	return fmt.Sprintf("pod %s: %s: %s: %s", b.pod, where, b.reason, msg)
+}
+
+// classifyPodBlock asks the pods themselves why none of them is running yet.
+func classifyPodBlock(pods []corev1.Pod) (podBlock, bool) {
+	for i := range pods {
+		p := &pods[i]
+		statuses := make([]corev1.ContainerStatus, 0, len(p.Status.InitContainerStatuses)+len(p.Status.ContainerStatuses))
+		statuses = append(statuses, p.Status.InitContainerStatuses...)
+		statuses = append(statuses, p.Status.ContainerStatuses...)
+		for _, cs := range statuses {
+			w := cs.State.Waiting
+			if w == nil || w.Reason == "" || benignWaitingReasons[w.Reason] {
+				continue
+			}
+			return podBlock{
+				pod: p.Name, container: cs.Name, reason: w.Reason, message: w.Message,
+				action: startReasonAction[w.Reason], // unknown ⇒ blockNarrate
+			}, true
+		}
+		// No container is complaining — the pod may not have been scheduled at
+		// all (Unschedulable: no capacity, taints, no matching node). Narrated,
+		// never failed: a cluster autoscaler legitimately takes minutes to add a
+		// node, and that is a healthy deployment shape we do not own.
+		for _, c := range p.Status.Conditions {
+			if c.Type == corev1.PodScheduled && c.Status == corev1.ConditionFalse && c.Reason != "" {
+				return podBlock{pod: p.Name, reason: c.Reason, message: c.Message}, true
+			}
+		}
+	}
+	return podBlock{}, false
+}
+
+func (d *Dispatcher) podStartGrace() time.Duration {
+	if d.cfg.PodStartGrace > 0 {
+		return d.cfg.PodStartGrace
+	}
+	return podStartGraceDefault
+}
+
+// publishPreStart puts the cluster's reason on the Run's own event stream, so the
+// §1.8 descent shows why a Run is sitting still — or died before its tool ever
+// ran — without an operator needing cluster access to find out.
+func (d *Dispatcher) publishPreStart(ctx context.Context, runID string, slice int, seq int64, kind string, b podBlock) {
+	if d.bus == nil { // tests construct a dispatcher without a bus
+		d.log.Warn("no event bus: pod-start diagnosis reaches logs only", "run", runID, "reason", b.reason)
+		return
+	}
+	ev := types.RunEvent{
+		RunID: runID, Slice: slice, Seq: seq, Site: d.site(), Kind: kind,
+		Payload: map[string]any{"message": b.Error(), "pod": b.pod, "reason": b.reason},
+	}
+	if err := d.bus.Publish(ctx, ev); err != nil {
+		// Never let the diagnostic channel's own failure mask the diagnosis.
+		d.log.Warn("publishing pod-start diagnosis failed", "run", runID, "reason", b.reason, "err", err)
+	}
+}
+
+// waitForPod polls until the Job's pod is running or terminal — or until the
+// cluster has made clear that it never will be.
+func (d *Dispatcher) waitForPod(ctx context.Context, runID string, slice int, jobName string, heartbeat func()) (string, error) {
+	var blockedSince time.Time
+	narrated := map[string]bool{}
+	narrations := 0
 	for {
 		pods, err := d.client.CoreV1().Pods(d.cfg.Namespace).List(ctx, metav1.ListOptions{
 			LabelSelector: "job-name=" + jobName,
@@ -589,6 +750,26 @@ func (d *Dispatcher) waitForPod(ctx context.Context, jobName string, heartbeat f
 			case corev1.PodRunning, corev1.PodSucceeded, corev1.PodFailed:
 				return p.Name, nil
 			}
+		}
+		if b, blocked := classifyPodBlock(pods.Items); blocked {
+			if key := b.pod + "/" + b.container + "/" + b.reason; !narrated[key] {
+				narrated[key] = true
+				d.log.Warn("pod not starting", "job", jobName, "pod", b.pod,
+					"container", b.container, "reason", b.reason, "message", b.message)
+				if narrations < preStartNarrationCap {
+					d.publishPreStart(ctx, runID, slice, int64(preStartSeqFloor+narrations), "pod-start-blocked", b)
+					narrations++
+				}
+			}
+			if blockedSince.IsZero() {
+				blockedSince = time.Now()
+			}
+			if b.action == blockFatal || (b.action == blockGrace && time.Since(blockedSince) >= d.podStartGrace()) {
+				d.publishPreStart(ctx, runID, slice, preStartFailSeq, "pod-start-failed", b)
+				return "", fmt.Errorf("dispatch: %w", b)
+			}
+		} else {
+			blockedSince = time.Time{} // recovered; the grace starts over
 		}
 		hb(heartbeat)
 		select {
