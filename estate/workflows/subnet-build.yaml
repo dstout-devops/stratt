@@ -83,6 +83,16 @@ steps:
         - type: in-vlan
           toScheme: crossplane.claim
           toValue: net-vlan
+      # The NESTED manifest is what provider-kubernetes actually applies, and it was the last place
+      # this Workflow still hardcoded one singleton. Parameterizing `name`/`cidr` above was not
+      # enough: with `subnet-app-subnet` and `10.30.0.0/24` literal here, building dmz-subnet applied
+      # a ConfigMap under app-subnet's NAME carrying app-subnet's CIDR — silently overwriting the
+      # other subnet's resource rather than failing. Both Intent/Subnet declarations resolve to this
+      # one Workflow (crossplane is the sole Subnet provider), so the collision was reachable the
+      # moment dmz-subnet was built. Finding it prompted the D3 check that now makes the class
+      # unshippable: a builder may not contain any literal belonging to a declaration of the kind it
+      # builds — not a name, not a declared params value, at any depth including inside an opaque
+      # provider blob. The literals below are exactly what that check refuses.
       spec:
         providerConfigRef:
           name: default
@@ -91,7 +101,7 @@ steps:
             apiVersion: v1
             kind: ConfigMap
             metadata:
-              name: subnet-app-subnet
+              name: "subnet-{{.launch.name}}"
               namespace: crossplane-system
             data:
-              cidr: 10.30.0.0/24
+              cidr: "{{.launch.params.cidr}}"

@@ -980,6 +980,101 @@ func TestSingletonBuildInputsCheckedAtDeclaration(t *testing.T) {
 	}
 }
 
+// singletonBuilder is a fully-parameterized Intent/Subnet builder whose step params can be varied to
+// plant one literal. Everything the reconcile sends is declared, so the input checks pass and the
+// identity check is what these tests actually exercise.
+//
+// The step uses the `mcp` Actuator rather than `script` because the defect being guarded lives INSIDE
+// an opaque provider blob, and every core Actuator Contract is additionalProperties:false — a `script`
+// step cannot legally carry a nested object at all. mcp's `arguments` is a free-form object, so it
+// stands in for crossplane/provision's `spec.forProvider.manifest` and keeps the test faithful to the
+// depth the real literal hid at.
+func singletonBuilder(args string) string {
+	return "name: subnet-build\ninputs:\n  type: object\n  additionalProperties: false\n  properties:\n" +
+		"    singleton: {type: string}\n    name: {type: string}\n    intentKind: {type: string}\n" +
+		"    projectKind: {type: string}\n    labels: {type: object, additionalProperties: true}\n" +
+		"    placement: {type: object, additionalProperties: true}\n" +
+		"    params: {type: object, additionalProperties: true}\n" +
+		"steps:\n  - {name: s, viewName: v, actuator: mcp, params: {server: prov, arguments: " + args + "}}\n"
+}
+
+func singletonEstate(t *testing.T, stepParams string) string {
+	t.Helper()
+	root := t.TempDir()
+	writeDecl(t, root, "v.yaml", "name: v\nselector: {kinds: [host]}\n")
+	writeKind(t, root, "intents", "i.yaml",
+		"name: app-subnet\nkind: Intent/Subnet\nspec:\n  projectKind: subnet\n"+
+			"  requires: [provisioning]\n  params: {cidr: 10.30.0.0/24}\n")
+	writeKind(t, root, "actuators", "a.yaml",
+		"name: crossplane\naddress: stratt-crossplane:9090\npluginIdentity: crossplane\ntier: trusted\n"+
+			"provides: [provisioning]\nprovisions: {Subnet: subnet-build}\n")
+	writeKind(t, root, "workflows", "w.yaml", singletonBuilder(stepParams))
+	return root
+}
+
+// A builder must not name a declaration of the kind it builds, AT ANY DEPTH — including inside the
+// opaque provider blob, which is where the real one hid.
+//
+// estate/workflows/subnet-build.yaml bound {{.launch.name}} in its step params while its nested
+// spec.forProvider.manifest still said `subnet-app-subnet`. app-subnet and dmz-subnet are both
+// Intent/Subnet and both route to that one Workflow, so building dmz-subnet would have applied a
+// ConfigMap under APP-SUBNET's name — an overwrite of the other subnet's resource, not a failure any
+// operator would see. The top-level binding made it look parameterized.
+func TestBuilderMustNotNameOneDeclarationItBuilds(t *testing.T) {
+	root := singletonEstate(t, "{spec: {forProvider: {manifest: {metadata: {name: subnet-app-subnet}}}}}")
+
+	err := ParseDir2Err(t, root)
+	if err == nil {
+		t.Fatal("a builder that hardcodes one declaration's name must be refused, however deeply nested")
+	}
+	for _, want := range []string{"subnet-app-subnet", "app-subnet", "{{.launch.name}}", "identity-BLIND"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("want %q in: %v", want, err)
+		}
+	}
+}
+
+// The other half: a builder must not carry a declaration's opaque `params` VALUE either. Getting the
+// name right and the config wrong is the quieter failure — the resource lands under the correct name
+// with the wrong CIDR, so the estate looks built and is misconfigured.
+func TestBuilderMustNotCarryOneDeclarationsParamValue(t *testing.T) {
+	root := singletonEstate(t, "{spec: {forProvider: {manifest: {data: {cidr: 10.30.0.0/24}}}}}")
+
+	err := ParseDir2Err(t, root)
+	if err == nil {
+		t.Fatal("a builder that hardcodes one declaration's declared param value must be refused")
+	}
+	for _, want := range []string{"10.30.0.0/24", "params.cidr", "{{.launch.params.cidr}}"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("want %q in: %v", want, err)
+		}
+	}
+}
+
+// The check must stay QUIET on a correctly-parameterized builder, and — the part that matters for
+// false positives — on literals belonging to a DIFFERENT kind. subnet-build legitimately targets the
+// Intent/Vlan "net-vlan" as its in-vlan edge; comparing a Subnet builder against Vlan declarations
+// would refuse a correct estate and push authors to silence the check.
+func TestBuilderMayNameADeclarationOfAnotherKind(t *testing.T) {
+	root := singletonEstate(t,
+		"{name: \"{{.launch.name}}\", cidr: \"{{.launch.params.cidr}}\", "+
+			"relations: [{type: in-vlan, toScheme: crossplane.claim, toValue: net-vlan}]}")
+	writeKind(t, root, "intents", "i2.yaml",
+		"name: net-vlan\nkind: Intent/Vlan\nspec:\n  projectKind: vlan\n"+
+			"  requires: [provisioning]\n  params: {vid: \"100\"}\n")
+	// net-vlan needs its own builder, or the dangling/unbuildable checks fire for an unrelated reason.
+	writeKind(t, root, "actuators", "a.yaml",
+		"name: crossplane\naddress: stratt-crossplane:9090\npluginIdentity: crossplane\ntier: trusted\n"+
+			"provides: [provisioning]\nprovisions: {Subnet: subnet-build, Vlan: vlan-build}\n")
+	writeKind(t, root, "workflows", "w2.yaml",
+		strings.Replace(singletonBuilder("{vid: \"{{.launch.params.vid}}\"}"),
+			"name: subnet-build", "name: vlan-build", 1))
+
+	if err := ParseDir2Err(t, root); err != nil {
+		t.Fatalf("a correctly-parameterized builder naming another KIND's declaration must pass: %v", err)
+	}
+}
+
 // A provisions map naming a Workflow that does not exist must be refused at declaration. Nothing
 // caught this before: validateProvisions only checks the entry is non-empty, and the reconcile copies
 // the name onto the build Finding — so the reference estate advertised `Subnet: opentofu-subnet-build`

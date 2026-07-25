@@ -4,11 +4,14 @@
 # built Object AS a vlan (the stratt.dev/project-kind stamp) with its net.vlan Facet.
 name: vlan-build
 # The per-singleton launch interface (ADR-0120 D2, extended to the ADR-0059 D4 path). Before this the
-# Workflow hardcoded ONE singleton's name and correlation key, so it could only ever build that one —
-# app-subnet and dmz-subnet are both declared Intent/Subnet, and only the hardcoded one was buildable.
+# Workflow hardcoded ONE singleton's name and correlation key, so it could only ever build that one.
+# net-vlan is currently the ONLY declared Intent/Vlan, so unlike subnet-build the hardcoding was
+# LATENT here rather than already-reachable — a second Vlan would have collided with it. Fixed on the
+# same pass regardless: a builder that only works while exactly one Intent of its kind exists is a
+# defect waiting for the second declaration, not a working builder.
 #
-# `singleton` is the per-kind correlation key ("Intent/Subnet/app-subnet"), `name` is what the resource
-# is called in the provider; they are different things and both are needed. `params` stays OPAQUE — the
+# `singleton` is the per-kind correlation key ("Intent/Vlan/net-vlan"), `name` is what the resource is
+# called in the provider; they are different things and both are needed. `params` stays OPAQUE — the
 # provider's own Action Contract types it downstream (§1.5).
 inputs:
   type: object
@@ -62,6 +65,10 @@ steps:
       projectKind: "{{.launch.projectKind}}"
       identityScheme: crossplane.claim
       projectLabels: "{{.launch.labels}}"
+      # The NESTED manifest is what provider-kubernetes applies — see subnet-build for why
+      # parameterizing only the top-level params left a silent per-instance collision behind.
+      # `vid` comes from the Intent's opaque params (net-vlan declares vid: "100"), so the VLAN id
+      # is the Intent's to declare and not this Workflow's to know (§1.5).
       spec:
         providerConfigRef:
           name: default
@@ -70,7 +77,7 @@ steps:
             apiVersion: v1
             kind: ConfigMap
             metadata:
-              name: vlan-net-vlan
+              name: "vlan-{{.launch.name}}"
               namespace: crossplane-system
             data:
-              vid: "100"
+              vid: "{{.launch.params.vid}}"

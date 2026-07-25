@@ -635,6 +635,16 @@ func checkProvisioningBuildInputs(decls Declarations) error {
 						"appears, the Finding never resolves, and the same gated build is surfaced forever",
 					what, label)
 			}
+			if lit, why, bad := hardcodedInstanceLiteral(wf, in); bad {
+				return fmt.Errorf(
+					"%s, but that workflow hardcodes %q in a step — %s. A builder is shared by every "+
+						"declaration of its kind, so it must be identity-BLIND and take all of it from "+
+						"{{.launch.*}}. Binding the top-level params is not enough: the literal that "+
+						"motivated this check sat inside an opaque provider manifest, where building the "+
+						"SECOND declaration applied a resource under the FIRST one's name and config — "+
+						"an overwrite, not a failure (ADR-0120 D3)",
+					what, lit, why)
+			}
 			required, err := contract.RequiredNames(wf.Inputs)
 			if err != nil {
 				return fmt.Errorf("%s: inputs: %w", what, err)
@@ -699,6 +709,84 @@ func hardcodedCorrelationLabel(w types.Workflow) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+// hardcodedInstanceLiteral reports the first string literal in a build Workflow's steps that belongs
+// to a SPECIFIC declaration of the kind it builds — the Intent's own name, or one of the opaque
+// `params` values the Intent declares. It returns the literal and a phrase naming what it collided
+// with (ADR-0120 D3).
+//
+// This is the sibling of hardcodedCorrelationLabel, guarding the other half of the same class. That
+// one catches a builder writing the correlation key by hand; this one catches a builder that knows
+// WHICH declaration it is building. A builder is shared by every Intent of its kind, so any per-
+// declaration literal means it builds one of them and silently mis-builds the rest.
+//
+// It exists because parameterizing the top level was not enough. estate/workflows/subnet-build.yaml
+// bound {{.launch.name}} and {{.launch.params.cidr}} in its step params while its nested
+// spec.forProvider.manifest — the manifest provider-kubernetes actually applies — still read
+// `subnet-app-subnet` and `10.30.0.0/24`. app-subnet and dmz-subnet are both Intent/Subnet and both
+// route here, so building dmz-subnet would have applied a ConfigMap under app-subnet's NAME carrying
+// app-subnet's CIDR: an overwrite of the other subnet's resource, not a visible failure. vlan-build
+// had the identical shape (`vlan-net-vlan`, vid "100"), latent only because exactly one Intent/Vlan
+// is declared — a builder that works while one declaration exists is a defect awaiting the second.
+//
+// The walk is deliberately literal-only and needs no rendering: anything correctly parameterized is a
+// {{.launch.*}} token, so a bare occurrence of a declaration's identity is by construction wrong.
+// Names match on SUBSTRING because they get composed ("subnet-" + name); params match on the WHOLE
+// value, since a param value is passed through as-is and a substring test on short values ("100")
+// would collide with unrelated literals.
+//
+// Scoped to Intents of the kind this Workflow builds, which is what keeps it quiet: subnet-build's
+// `toValue: net-vlan` is an Intent/Vlan name, never compared against a Subnet builder. That literal
+// is a real cross-kind topology coupling, but it is placement's to answer, not this check's.
+func hardcodedInstanceLiteral(w types.Workflow, in types.Intent) (string, string, bool) {
+	values := map[string]string{}
+	if params, ok := in.Spec["params"].(map[string]any); ok {
+		for k, v := range params {
+			if s, ok := v.(string); ok && s != "" {
+				values[s] = k
+			}
+		}
+	}
+	var hit, why string
+	var walk func(v any) bool
+	walk = func(v any) bool {
+		switch t := v.(type) {
+		case string:
+			if in.Name != "" && strings.Contains(t, in.Name) {
+				hit, why = t, fmt.Sprintf("it names the %s declaration %q, which must arrive as {{.launch.name}}", in.Kind, in.Name)
+				return true
+			}
+			if key, ok := values[t]; ok {
+				hit, why = t, fmt.Sprintf("it is %s's declared params.%s, which must arrive as {{.launch.params.%s}}", in.Name, key, key)
+				return true
+			}
+		case map[string]any:
+			keys := make([]string, 0, len(t))
+			for k := range t {
+				keys = append(keys, k)
+			}
+			sort.Strings(keys)
+			for _, k := range keys {
+				if walk(t[k]) {
+					return true
+				}
+			}
+		case []any:
+			for _, e := range t {
+				if walk(e) {
+					return true
+				}
+			}
+		}
+		return false
+	}
+	for _, st := range w.Steps {
+		if walk(map[string]any(st.Params)) {
+			return hit, why, true
+		}
+	}
+	return "", "", false
 }
 
 // sortedKeys returns a map's keys in deterministic order, so an error message reads the same twice.

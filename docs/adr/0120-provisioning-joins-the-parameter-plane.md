@@ -60,8 +60,10 @@ The values are not missing. The reconcile computes them and already puts them on
 blob** with no typed channel to a Workflow: the shape the withdrawal path had before ADR-0118's
 follow-up, and what §1.8 calls hiding mechanism — present, displayed, unusable.
 
-**And the target shape already ships.** `estate/workflows/subnet-provision.yaml` does exactly this for a
-singleton, correlation label included:
+**And the target shape already ships.** `estate/workflows/subnet-provision.yaml` did exactly this for a
+singleton, correlation label included (the file has since been deleted — see the follow-up: it was a
+duplicate of the advertised `subnet-build`, whose input shape could never match what the reconcile sends,
+so nothing could ever route to it):
 
 ```yaml
 stratt.intent/singleton: "Intent/Subnet/{{.launch.subnetName}}"
@@ -289,14 +291,66 @@ possible _with the right values_, which is what removes the incentive to reach f
 ## Follow-ups
 
 - **Keyed placement-aware spread** (per-AZ replicas) — the next ADR, with D2 as its prerequisite.
-- **Two unreachable build Workflows.** `app-tier-build.yaml` (see D3) and `subnet-provision.yaml` are
-  both declared and advertised by nobody. `subnet-provision` is the one this ADR's Context cites as the
-  proven in-repo pattern — it is proven and correct, and nothing routes to it, which is how the
-  advertised singleton builders drifted wrong while a correct example sat beside them unexercised.
-- **`estate/workflows/app-tier-build.yaml` is unreachable** (see D3): no `provisions` map names it and
-  nothing launches it. Either advertise it or delete it; a build Workflow no provider routes to is a
-  declaration that cannot be exercised, and it misled this ADR's own review into predicting a failure
-  that could not happen.
+- ~~**Two unreachable build Workflows**~~ — **resolved, and resolving them found a worse defect than
+  the unreachability.** Reading the unrouted `subnet-provision` against the advertised `subnet-build`
+  showed that D2's singleton parameterization had stopped one level short: `subnet-build` bound
+  `{{.launch.name}}` and `{{.launch.params.cidr}}` at the TOP level while its nested
+  `spec.forProvider.manifest` — the manifest provider-kubernetes actually applies — still said
+  `name: subnet-app-subnet` and `cidr: 10.30.0.0/24` **literally**. Both declared Intent/Subnet
+  resolve to this one Workflow, so building `dmz-subnet` would have applied a ConfigMap under
+  **app-subnet's name carrying app-subnet's CIDR** — not "dmz-subnet is unbuildable" but "dmz-subnet
+  silently overwrites app-subnet". `vlan-build` had the same shape latently (`vlan-net-vlan`,
+  `vid: "100"`), harmless only while exactly one Intent/Vlan exists. Both are now fully bound,
+  `vid` included, from the Intent's opaque params.
+
+  **The claim in 90946f7 that the singleton builders were "all parameterized" was therefore wrong.**
+  The first instinct was to call this unguardable — core cannot know which of a provider's opaque
+  literals are per-instance, since §1.5 makes the manifest body deliberately opaque. That was wrong
+  too, and in a useful way: core does not need to know which literals are per-instance, because it
+  already knows every declaration's identity. **D3 now refuses a builder containing any literal that
+  belongs to a declaration of the kind it builds** — the Intent's name (substring, since names get
+  composed into `subnet-<name>`) or any of its declared `params` values (whole-value, since a
+  substring test on `"100"` would collide with unrelated literals) — at any depth, inside opaque
+  blobs included. No rendering is needed: anything correctly parameterized is a `{{.launch.*}}` token,
+  so a bare occurrence of a declaration's identity is wrong by construction. Both real defects were
+  falsified back in and the check named each literal, the declaration it belonged to, and the binding
+  that should replace it.
+
+  It stays quiet where it should: the scope is Intents **of the kind this Workflow builds**, so
+  `subnet-build`'s `toValue: net-vlan` — an Intent/Vlan name in a Subnet builder — is never compared.
+  That literal is a genuine cross-kind topology coupling, and it is placement's to answer, not this
+  check's.
+
+  `subnet-provision.yaml` is **deleted**: `subnet-build` now does everything it did and is the
+  advertised builder, while `subnet-provision`'s inputs (`subnetName`/`cidr`) could never match what
+  the reconcile sends, so no `provisions` map could ever legally name it. Keeping both would leave two
+  Workflows that build a subnet with only one reachable — and the unreachable one still projected a
+  valid `stratt.intent/singleton` label, so hand-launching it would have **resolved a provisioning
+  Finding without going through the bound provider at all**, quietly making the CapabilityBinding
+  non-authoritative about who builds a kind. That is the same hole as the `startAction` follow-up
+  below, reached from a different direction.
+
+- **`estate/workflows/app-tier-build.yaml` is unreachable — and it is the ONLY consumer of declared
+  placement, which makes this bigger than dead estate.** `placement` is declared as an input by all
+  seven build Workflows and bound by **none** of them; `BuildLaunchParams` faithfully derives it and
+  every advertised builder ignores it. `app-tier` declares `placement.subnet: app-subnet` and is the
+  one Intent in the estate that does — so **its declared placement currently reaches nothing**, and
+  the one Workflow that would project the `placed-in` edge is the one nothing routes to.
+
+  It cannot simply be folded into the shared `compute-build`, and the reason is structural:
+  `BuildLaunchParams` omits `placement` entirely when the Intent declares none, the substituter fails
+  closed on an unknown field, and ADR-0083 D5 rules out conditionals — so `{{.launch.placement.subnet}}`
+  in a shared builder would break every unplaced Compute Intent (`web-fleet` today). Exactly the trap
+  the `{{.launch.params.cpus}}` note above records.
+
+  There is a second, sharper problem underneath: `additionalProperties: false` **forces** every builder
+  to declare each param the reconcile might send, so an accepted-but-unbound input is structurally
+  required and indistinguishable from a consumed one. A build Workflow can validate `placement`,
+  accept it, and silently drop it, and nothing at declaration, compile, launch or dispatch says so —
+  a §1.8 gap in the parameter plane itself, not in any one Workflow. `app-tier-build` is therefore
+  **kept, not deleted**: it is the only worked example of the projection this needs, and deleting it
+  would erase the evidence. All of this is handed to the keyed-placement ADR, which owns placement.
+
 - **Fleet-shape provider params still live in the build Workflow.** `vsphere-vm-build` keeps literal
   `cpus`/`memoryMB` because `Intent/Compute.params` is opaque and provider-shaped: the reference
   estate's Compute Intents carry EC2's `region`/`instanceType`/`ami`, so binding
@@ -328,10 +382,28 @@ possible _with the right values_, which is what removes the incentive to reach f
 
   **Consequence recorded rather than buried: ADR-0110 D5's demotion of Crossplane in favour of OpenTofu
   for Subnet was DECLARED BUT NEVER DELIVERED.** The advertisement and its binding are removed, so
-  Subnet resolves to Crossplane's `subnet-build`, which exists. This defers D5 rather than reversing
-  it — re-add both the moment `opentofu-subnet-build` is written. `provides: [provisioning]` stays on
-  the Actuator: OpenTofu genuinely provides the class for the enablement gate; what it lacks is a
-  per-kind builder.
+  Subnet resolves to Crossplane's `subnet-build`, which exists. `provides: [provisioning]` stays on the
+  Actuator: OpenTofu genuinely provides the class for the enablement gate; what it lacked is a per-kind
+  builder.
+
+  **And the deeper point, which reframes D5 rather than deferring it: "OpenTofu over Crossplane for
+  Subnet" is not an ADR-shaped decision at all.** Which plugin performs which operation is a LANDSCAPE
+  choice (§1.5) — per provider, per Intent kind, per environment — and the seam for it already ships:
+  `CapabilityBinding.Entries` selects a provider per `(capability, intentKind)` and is environment-scoped
+  (ADR-0110 D3, ADR-0113 D2, ADR-0057). `capability.Resolve` auto-binds the sole verified builder and
+  makes >1-with-no-binding a §2.4 error, so the operator declares the choice exactly when there is a
+  choice to make. A repo-level "X over Y" verdict pre-empts that, and pre-empted it wrongly here: it
+  named a winner that could not build anything, and because the estate's binding then pinned the loser
+  out, the kind became unbuildable rather than falling back — correctly so, since §2.4 forbids an
+  implicit cross-provider fallback.
+  So the two removals are unconditionally right (a provider must not advertise a builder it lacks, which
+  D3 now enforces), and re-adding them is an OPERATOR's act in a binding once `opentofu-subnet-build`
+  exists, not a re-litigation of D5. What is genuinely additive, and only noted here: `capability.Resolve`
+  is reached solely from `desiredstate/provisioning_resolve.go`, so this per-operation selection exists
+  for `provisioning` alone — `certissuer`, `keycustodian`, `statestore` and `ipam` have no equivalent
+  per-operation binding surface yet. Widening it is additive to this ADR and belongs with whichever class
+  first ships a second provider.
+
 - **ADR-0114's decommission path** should carry `launchKind: decommission` through the same field rather
   than growing its own. That is the first real test of whether D1's discriminator holds, and if it needs
   a fourth member the "stays at three" claim was wrong.
