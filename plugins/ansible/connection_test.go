@@ -149,3 +149,37 @@ func TestRenderInventoryAppendsSortedGroupVars(t *testing.T) {
 		t.Errorf("an empty connection must not add a section:\n%s", got)
 	}
 }
+
+// projectedMount is what a credential mount ACTUALLY looks like in the pod — the
+// Kubernetes atomic-writer layout, not the flat directory the other fakes model. This
+// fixture exists because the flat fakes let a real bug through: a single-key ref listed
+// as three entries and the ambiguity diagnosis fired on a ref that was unambiguous.
+func projectedMount(string) ([]string, error) {
+	return []string{"..2026_07_25_23_34_34.3778146225", "..data", "id_ed25519"}, nil
+}
+
+// The bug the app-cert demo caught, pinned. A projected Secret volume carries `..data`
+// and a timestamped data directory beside the key symlinks; inferring "the single file"
+// has to ignore them.
+func TestSingleKeyIsInferredThroughTheProjectedVolumeLayout(t *testing.T) {
+	vars, err := connectionVars(&connectionParams{CredentialRef: "app-node-ssh"}, nil, "", projectedMount, fakeStage)
+	if err != nil {
+		t.Fatalf("a single-key ref must resolve on a REAL mount layout, not just a flat one: %v", err)
+	}
+	if got := vars["ansible_ssh_private_key_file"]; !strings.HasSuffix(got, "id_ed25519") {
+		t.Errorf("the inferred key must be the real one, got %q", got)
+	}
+	// vault takes the same path, and carried the same bug since ADR-0117 — invisible
+	// because vault declarations set `file:` and never infer.
+	if _, verr := vaultPasswordFile(&vaultParams{CredentialRef: "v"}, projectedMount); verr != nil {
+		t.Errorf("vault must infer through the same layout: %v", verr)
+	}
+	// Genuine ambiguity must STILL be diagnosed — the filter must not hide a real
+	// two-key mount by over-filtering.
+	twoReal := func(string) ([]string, error) {
+		return []string{"..data", "id_rsa", "id_ed25519"}, nil
+	}
+	if _, err := connectionVars(&connectionParams{CredentialRef: "multi"}, nil, "", twoReal, fakeStage); err == nil {
+		t.Error("a ref with two real keys must still be diagnosed as ambiguous")
+	}
+}

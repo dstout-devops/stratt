@@ -241,6 +241,7 @@ func credentialFile(kind, ref, file, setting string, readDir func(string) ([]str
 	if err != nil {
 		return "", fmt.Errorf("%s credentialRef %q is not mounted at %s — is it on the Step's credentialRefs? (%w)", kind, ref, dir, err)
 	}
+	names = credentialKeys(names)
 	switch len(names) {
 	case 0:
 		return "", fmt.Errorf("%s credentialRef %q injects no files at %s", kind, ref, dir)
@@ -322,4 +323,34 @@ func requireOneChain(targets []Target) error {
 func stagedPathFor(dir, mounted string) string {
 	rel := strings.TrimPrefix(mounted, credentialsMount+"/")
 	return filepath.Join(dir, "key_"+strings.NewReplacer("/", "_", ".", "_").Replace(rel))
+}
+
+// credentialKeys drops Kubernetes' atomic-writer internals from a credential mount
+// listing. A projected Secret volume is NOT a flat directory: it holds a timestamped
+// data directory and a `..data` symlink pointing at it, alongside one symlink per key.
+//
+//	/runner/credentials/app-node-ssh/
+//	  ..2026_07_25_23_34_34.3778146225/   ← the real data dir
+//	  ..data -> ..2026_07_25_23_34_34.…   ← the atomic-swap pointer
+//	  id_ed25519 -> ..data/id_ed25519     ← the only entry that is a KEY
+//
+// Every internal entry begins with "..", which the kubelet guarantees precisely so a
+// consumer can filter them; a Secret data key cannot start with "." at all (K8s validates
+// keys against [-._a-zA-Z0-9]+ with no leading dot for projected volumes).
+//
+// Without this, a single-key ref lists as THREE entries and the "which file did you mean"
+// diagnosis fires on a ref that is completely unambiguous. Found by the app-cert demo, on
+// a real mount; no unit test could have found it, because the fake listers all return the
+// flat directory a mount is imagined to be. vaultPasswordFile has carried the same bug
+// since ADR-0117 — invisible because vault declarations set `file:` and never take the
+// inference path — and is fixed by sharing this function.
+func credentialKeys(names []string) []string {
+	out := make([]string, 0, len(names))
+	for _, n := range names {
+		if strings.HasPrefix(n, "..") {
+			continue
+		}
+		out = append(out, n)
+	}
+	return out
 }
