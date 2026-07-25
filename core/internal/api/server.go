@@ -832,16 +832,20 @@ func findingToWire(f types.Finding) Finding {
 	if len(f.Diff) > 0 {
 		out.Diff = json.RawMessage(f.Diff)
 	}
-	// The withdrawal spec on an orphan Finding (ADR-0118 D3). Surfaced on the Finding itself,
-	// not only through the remediation door, because this row is the ONLY record of it — the
-	// compiled Baseline that carried these values is pruned in the same pass, so a client that
-	// could not read them here could not reconstruct them anywhere (§1.8).
-	if f.RemoveWorkflow != "" {
-		out.RemoveWorkflow = &f.RemoveWorkflow
+	// The Finding's own launch spec (ADR-0120 D1). Surfaced on the Finding itself, not only
+	// through the launch door, because for an orphan this row is the ONLY record of it — the
+	// Baseline that carried the values is pruned in the same pass, so a client that could not
+	// read them here could not reconstruct them anywhere (§1.8).
+	if f.LaunchWorkflow != "" {
+		out.LaunchWorkflow = &f.LaunchWorkflow
 	}
-	if len(f.RemoveParams) > 0 {
-		params := f.RemoveParams
-		out.RemoveParams = &params
+	if len(f.LaunchParams) > 0 {
+		params := f.LaunchParams
+		out.LaunchParams = &params
+	}
+	if f.LaunchKind != "" {
+		k := FindingLaunchKind(f.LaunchKind)
+		out.LaunchKind = &k
 	}
 	return out
 }
@@ -2116,9 +2120,9 @@ func (s *Server) GetFindingRemediation(w http.ResponseWriter, r *http.Request, i
 		return
 	}
 	out := FindingRemediation{Baseline: fl.Baseline, Workflow: fl.Workflow}
-	if fl.Withdrawal {
-		wd := true
-		out.Withdrawal = &wd
+	if fl.Kind != "" {
+		k := FindingRemediationKind(fl.Kind)
+		out.Kind = &k
 	}
 	if len(fl.Params) > 0 {
 		params := fl.Params
@@ -2166,8 +2170,11 @@ func (s *Server) RemediateFinding(w http.ResponseWriter, r *http.Request, id str
 	merged, clashes := mergeRemediationInputs(fl.Params, supplied)
 	if len(clashes) > 0 {
 		what, where := "remediationParams", "route"
-		if fl.Withdrawal {
+		switch fl.Kind {
+		case types.LaunchRemove:
 			what, where = "removeParams", "blueprint"
+		case types.LaunchBuild:
+			what, where = "launchParams", "Intent"
 		}
 		writeErr(w, http.StatusBadRequest, fmt.Sprintf(
 			"input(s) %v are already set by baseline %s's compiled %s — a value cannot be "+
@@ -2211,10 +2218,10 @@ type findingLaunch struct {
 	Baseline string
 	Workflow string
 	Params   map[string]any
-	// Withdrawal distinguishes retiring abandoned state from converging live state. Both are
-	// launched through the same door because from the operator's side both answer "resolve this
-	// Finding", but they are not the same act and the preview says which one it is.
-	Withdrawal bool
+	// Kind is the act: types.LaunchRemediate | LaunchRemove | LaunchBuild. All three go
+	// through the same door because from the operator's side all three answer "resolve this
+	// Finding", and all three are named because they are not interchangeable.
+	Kind string
 }
 
 // findingRemediation resolves a Finding to what would be launched to fix it, 404ing when there
@@ -2272,10 +2279,10 @@ func resolveFindingLaunch(f types.Finding, getBaseline func(string) (types.Basel
 	// construction is not there: Apply writes an orphan Finding and then prunes the compiled
 	// Baseline, and graph.finding.baseline has no foreign key, so the Finding survives pointing
 	// at a row that is gone.
-	if f.RemoveWorkflow != "" {
+	if f.LaunchWorkflow != "" {
 		return findingLaunch{
-			Baseline: f.Baseline, Workflow: f.RemoveWorkflow,
-			Params: f.RemoveParams, Withdrawal: true,
+			Baseline: f.Baseline, Workflow: f.LaunchWorkflow,
+			Params: f.LaunchParams, Kind: f.LaunchKind,
 		}, nil
 	}
 	b, err := getBaseline(f.Baseline)
@@ -2285,12 +2292,19 @@ func resolveFindingLaunch(f types.Finding, getBaseline func(string) (types.Basel
 		// to launch. Before this branch existed every such request reported "baseline <name>
 		// not found" — a missing row, when the real answer is that the declaration asked for
 		// the state to be kept (§1.8: name the actual cause).
-		if errors.Is(err, graph.ErrNotFound) && f.Framework == "orphan" {
+		// NOTE: this deliberately does NOT branch on f.Framework. Framework carries "orphan"
+		// and "provision", and testing it here would make it a second discriminator alongside
+		// LaunchKind, able to disagree (ADR-0120 D1/V5). The question asked is the honest one:
+		// this Finding has no Baseline AND no launch spec, so whatever raised it left nothing
+		// to launch.
+		if errors.Is(err, graph.ErrNotFound) {
 			return findingLaunch{}, &launchProblem{Status: http.StatusNotFound, Message: fmt.Sprintf(
-				"finding %s reports state abandoned by a withdrawn Assignment, and its compiled baseline "+
-					"%s is pruned, but no removeWorkflow was recorded — the Intent's onRemove was retain, "+
-					"or its Blueprint declares no removeWorkflow. The state is retained deliberately; "+
-					"there is nothing to launch here", f.ID, f.Baseline)}
+				"finding %s has no baseline %q and carries no launch spec of its own, so there is "+
+					"nothing to launch. The Finding's detail says why; the usual causes are an "+
+					"Intent withdrawn with onRemove: retain (the state is kept deliberately), a "+
+					"Blueprint that declares no removeWorkflow, unresolved provisioning for a "+
+					"declared-but-unbuilt instance, or a Baseline no longer declared in Git",
+				f.ID, f.Baseline)}
 		}
 		return findingLaunch{}, &launchProblem{Err: err}
 	}
@@ -2300,6 +2314,7 @@ func resolveFindingLaunch(f types.Finding, getBaseline func(string) (types.Basel
 	}
 	return findingLaunch{
 		Baseline: b.Name, Workflow: b.RemediationWorkflow, Params: b.RemediationParams,
+		Kind: types.LaunchRemediate,
 	}, nil
 }
 

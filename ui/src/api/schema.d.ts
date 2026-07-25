@@ -1746,12 +1746,17 @@ export interface components {
             consecutiveDrifted: number;
             /** @description Latest observed-vs-expected detail (redacted, size-capped visibly). */
             diff?: unknown;
-            /** @description On an ORPHAN Finding, the Workflow that retires the abandoned state (ADR-0118 D3). Absent on every other Finding, and absent on an orphan whose Intent declared onRemove:retain — there is nothing to launch. */
-            removeWorkflow?: string;
-            /** @description The launch inputs for removeWorkflow, compiled under the Assignment that has since been withdrawn. Carried here because the Baseline holding them is pruned in the same pass, making this their only surviving record. */
-            removeParams?: {
+            /** @description This Finding's OWN launch Workflow (ADR-0120 D1), present when no Baseline can hold its spec: an ORPHAN (its Baseline is pruned in the same pass) or a PROVISION Finding (it never had one). Absent on a drift Finding, whose spec lives on its live Baseline, and absent on an orphan whose Intent declared onRemove:retain — there is nothing to launch. */
+            launchWorkflow?: string;
+            /** @description The launch inputs for launchWorkflow. For an orphan these were compiled under an Assignment that has since been withdrawn, so this is their only surviving record. For a provision Finding they are DERIVED from Git and refreshed every reconcile, so they always describe current desired state. */
+            launchParams?: {
                 [key: string]: unknown;
             };
+            /**
+             * @description What launchWorkflow DOES — the single discriminator for the act (ADR-0120 D1). remediate converges live state to its expectation; remove retires state the estate no longer declares; build creates declared state that does not exist yet (gated, never auto-run). Absent together with launchWorkflow.
+             * @enum {string}
+             */
+            launchKind?: "remediate" | "remove" | "build";
             /** @description The check Run behind the latest observation — the Evidence ref (§1.8). */
             runId?: string;
             /** Format: date-time */
@@ -1990,13 +1995,16 @@ export interface components {
         };
         /** @description What remediating a Finding would launch, rendered before it is launched (ADR-0118 D3, §1.8). Read-only. */
         FindingRemediation: {
-            /** @description The Baseline this Finding was raised against. For a WITHDRAWAL (see `withdrawal`) this names a Baseline that has already been pruned — the Assignment is gone, so the row is too. It is still the right identifier for the compiled state being retired. */
+            /** @description The Baseline this Finding was raised against. For `remove` this names a Baseline that has already been pruned (the Assignment is gone, so the row is too); for `build` it is the synthetic `provision/<intent>` grouping name, which never had a row at all. In both cases it is still the right identifier for the state in question. */
             baseline: string;
             /** @description The Workflow that would be launched. */
             workflow: string;
-            /** @description True when this RETIRES abandoned state (the Blueprint's removeWorkflow on an orphan Finding) rather than converging live state to its expectation. The two are different acts and the caller is told which one it is asking for: remediation makes the estate match desired state, withdrawal removes state that is no longer desired at all. */
-            withdrawal?: boolean;
-            /** @description The launch inputs that would be passed, resolved from the Intent layer at compile. Absent when the route declares none. For a withdrawal these come off the orphan Finding, which is their only surviving record. */
+            /**
+             * @description Which ACT this would perform (ADR-0120 D5). remediate converges live state to its expectation; remove retires state the estate no longer declares; build creates declared state that does not exist yet. Three acts need a name rather than a boolean, and they are not interchangeable — an operator about to approve a gate is entitled to know which one they are approving (§1.8).
+             * @enum {string}
+             */
+            kind?: "remediate" | "remove" | "build";
+            /** @description The launch inputs that would be passed. For remediate they were resolved from the Intent layer at compile and read from the Baseline; for remove and build they come off the Finding, which is the only place they can live. Absent when there are none. */
             params?: {
                 [key: string]: unknown;
             };

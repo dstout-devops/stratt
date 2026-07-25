@@ -697,11 +697,11 @@ func TestOrphanCarriesTheWithdrawalSpecTyped(t *testing.T) {
 		t.Fatalf("expected one orphan, got %d", len(plan.Orphans))
 	}
 	o := plan.Orphans[0]
-	if o.RemoveWorkflow != "web-retire" {
-		t.Fatalf("the orphan must carry the withdrawal Workflow as a typed field, got %q", o.RemoveWorkflow)
+	if o.LaunchWorkflow != "web-retire" {
+		t.Fatalf("the orphan must carry the withdrawal Workflow as a typed field, got %q", o.LaunchWorkflow)
 	}
-	if o.RemoveParams["port"] != "8443" {
-		t.Fatalf("and its compiled params, got %#v", o.RemoveParams)
+	if o.LaunchParams["port"] != "8443" {
+		t.Fatalf("and its compiled params, got %#v", o.LaunchParams)
 	}
 }
 
@@ -721,7 +721,7 @@ func TestRetainedOrphanCarriesNoWithdrawalSpec(t *testing.T) {
 	if len(plan.Orphans) != 1 {
 		t.Fatalf("a retained withdrawal still owes an orphan Finding, got %d", len(plan.Orphans))
 	}
-	if plan.Orphans[0].RemoveWorkflow != "" || plan.Orphans[0].RemoveParams != nil {
+	if plan.Orphans[0].LaunchWorkflow != "" || plan.Orphans[0].LaunchParams != nil {
 		t.Fatalf("onRemove=retain must offer nothing to launch, got %+v", plan.Orphans[0])
 	}
 }

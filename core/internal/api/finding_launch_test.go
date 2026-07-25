@@ -1,6 +1,7 @@
 package api
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -26,7 +27,11 @@ func noBaseline(string) (types.Baseline, error) {
 func TestOrphanFindingResolvesWithoutItsPrunedBaseline(t *testing.T) {
 	f := types.Finding{
 		ID: "f1", Baseline: "compiled:prod-web/web-server@1/0", Framework: "orphan",
-		RemoveWorkflow: "web-retire", RemoveParams: map[string]any{"port": "8443"},
+		LaunchWorkflow: "web-retire", LaunchParams: map[string]any{"port": "8443"},
+		// Kind travels WITH the workflow — migration 00042's finding_launch_spec_complete
+		// constraint makes (workflow set, kind null) unstorable, so a fixture without it would
+		// be testing a row the database cannot hold.
+		LaunchKind: types.LaunchRemove,
 	}
 	fl, prob := resolveFindingLaunch(f, noBaseline)
 	if prob != nil {
@@ -35,8 +40,8 @@ func TestOrphanFindingResolvesWithoutItsPrunedBaseline(t *testing.T) {
 	if fl.Workflow != "web-retire" || fl.Params["port"] != "8443" {
 		t.Fatalf("wrong launch: %+v", fl)
 	}
-	if !fl.Withdrawal {
-		t.Fatal("it must be marked a withdrawal: retiring abandoned state is not the same act as converging live state, and the preview says which")
+	if fl.Kind != types.LaunchRemove {
+		t.Fatalf("the act must be named: retiring abandoned state is not converging live state, and the preview says which; got %q", fl.Kind)
 	}
 	if fl.Baseline != f.Baseline {
 		t.Fatalf("the pruned Baseline is still the right identifier for the state being retired, got %q", fl.Baseline)
@@ -58,24 +63,47 @@ func TestRetainedOrphanExplainsWhyThereIsNothingToLaunch(t *testing.T) {
 	if prob.Status != http.StatusNotFound {
 		t.Fatalf("status: got %d", prob.Status)
 	}
-	for _, want := range []string{"f2", "pruned", "onRemove was retain", "retained deliberately"} {
+	for _, want := range []string{"f2", "nothing to launch", "onRemove: retain", "kept deliberately"} {
 		if !strings.Contains(prob.Message, want) {
 			t.Errorf("the message must explain the declaration, not the missing row; want %q in: %s", want, prob.Message)
 		}
 	}
+	// It must NOT assert which cause applies. The framework check that used to let it speak
+	// confidently about withdrawal was removed (ADR-0120 V5) because it made Framework a second
+	// discriminator beside LaunchKind; the honest replacement states the facts and lists causes.
+	if strings.Contains(prob.Message, "reports state abandoned") {
+		t.Errorf("the message must not assert a cause it cannot know: %s", prob.Message)
+	}
 }
 
-// A NON-orphan Finding whose Baseline read fails is a real error and must reach fail(), which
-// owns the error→status mapping. Swallowing it into a 404 with a withdrawal-flavoured message
-// would misreport an ordinary lookup failure as a deliberate retention.
-func TestNonOrphanBaselineFailureIsStillAnError(t *testing.T) {
+// A store failure that is NOT "no such row" must reach fail(), which owns the error→status
+// mapping. Only a missing Baseline is a decision this function is entitled to make; a dropped
+// connection is not, and turning one into "nothing to launch" would report a substrate outage as
+// a deliberate declaration.
+func TestRealStoreFailureIsHandedToFail(t *testing.T) {
 	f := types.Finding{ID: "f3", Baseline: "cis-1", Framework: "cis"}
-	_, prob := resolveFindingLaunch(f, noBaseline)
+	_, prob := resolveFindingLaunch(f, func(string) (types.Baseline, error) {
+		return types.Baseline{}, errors.New("connection reset")
+	})
 	if prob == nil {
-		t.Fatal("a missing baseline on a drift Finding is not resolvable")
+		t.Fatal("a store failure is not resolvable")
 	}
 	if prob.Err == nil {
 		t.Fatalf("it must be handed to fail() rather than turned into a message here: %+v", prob)
+	}
+}
+
+// A MISSING Baseline is a 404 decision regardless of framework — this is the observable proof
+// that the Framework == "orphan" branch is gone (ADR-0120 V5). Framework carried "orphan" and
+// "provision" while LaunchKind now carries the act; branching on both would let them disagree,
+// with the winner decided by whichever test ran first (§2.4).
+func TestMissingBaselineIsADecisionWhateverTheFramework(t *testing.T) {
+	for _, framework := range []string{"", "cis", "orphan", "provision"} {
+		f := types.Finding{ID: "f6", Baseline: "gone", Framework: framework}
+		_, prob := resolveFindingLaunch(f, noBaseline)
+		if prob == nil || prob.Err != nil || prob.Status != http.StatusNotFound {
+			t.Errorf("framework %q: a missing baseline with no launch spec must be one 404 decision, got %+v", framework, prob)
+		}
 	}
 }
 
@@ -92,7 +120,7 @@ func TestDriftFindingResolvesFromItsBaseline(t *testing.T) {
 	if prob != nil {
 		t.Fatalf("unexpected problem: %+v", prob)
 	}
-	if fl.Workflow != "web-converge" || fl.Withdrawal {
+	if fl.Workflow != "web-converge" || fl.Kind != types.LaunchRemediate {
 		t.Fatalf("wrong launch: %+v", fl)
 	}
 }

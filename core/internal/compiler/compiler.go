@@ -96,11 +96,12 @@ type Orphan struct {
 	Target   string
 	Severity string
 	Detail   []byte
-	// RemoveWorkflow + RemoveParams are the withdrawal launch spec carried ONTO the orphan
-	// Finding, because the Baseline they came from is pruned in the same Apply (ADR-0118 D3).
-	// Without them the Finding names abandoned state and offers no way to retire it.
-	RemoveWorkflow string
-	RemoveParams   map[string]any
+	// LaunchWorkflow + LaunchParams are the withdrawal launch spec carried ONTO the orphan
+	// Finding, because the Baseline they came from is pruned in the same Apply (ADR-0118 D3,
+	// ADR-0120 D1). Without them the Finding names abandoned state and offers no way to
+	// retire it.
+	LaunchWorkflow string
+	LaunchParams   map[string]any
 }
 
 // Store is the compiler's read surface (satisfied by *graph.Store).
@@ -433,8 +434,8 @@ func Compile(ctx context.Context, s Store, maxDelta float64) (Plan, error) {
 					// graph.finding.diff, documented as redacted and size-capped — so a launch
 					// that parsed its way back out of it would break the day anything capped it,
 					// with no failing test to notice.
-					orphan.RemoveWorkflow = bp.RemoveWorkflow
-					orphan.RemoveParams = eb.RemoveParams
+					orphan.LaunchWorkflow = bp.RemoveWorkflow
+					orphan.LaunchParams = eb.RemoveParams
 				}
 			}
 			orphan.Detail, _ = json.Marshal(detail)

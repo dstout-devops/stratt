@@ -14,6 +14,37 @@ const (
 	FindingResolved = "resolved"
 )
 
+// Finding launch kinds (ADR-0120 D1): what a Finding's LaunchWorkflow DOES. A closed,
+// core-owned set, because these are SPINE acts — converge live state, retire abandoned
+// state, create declared state. A plugin never adds one; that is what keeps the field from
+// becoming an extension point (§1.4), and it is why the set stays small enough to enumerate
+// rather than growing a field per act (which is what it replaced).
+//
+// A fourth member must argue its way in. ADR-0114's decommission path is the first real
+// test: if it needs `decommission` rather than reusing `remove`, this set was drawn wrong.
+const (
+	// LaunchRemediate converges live state to its compiled expectation.
+	LaunchRemediate = "remediate"
+	// LaunchRemove retires state the estate no longer declares (an orphan's withdrawal).
+	// `remove` and not `withdraw`: the chain already reads onRemove: remove →
+	// Blueprint.removeWorkflow → Baseline.RemoveParams, and a frozen vocabulary does not
+	// get a synonym for an act it already names (§2).
+	LaunchRemove = "remove"
+	// LaunchBuild creates state the estate declares but which does not exist yet — the
+	// gated provisioning build (§5 Flow 1: never auto-run).
+	LaunchBuild = "build"
+)
+
+// ValidLaunchKind reports whether k is a known launch act. Empty is valid and means "this
+// Finding's spec lives on its Baseline", which is the common case.
+func ValidLaunchKind(k string) bool {
+	switch k {
+	case "", LaunchRemediate, LaunchRemove, LaunchBuild:
+		return true
+	}
+	return false
+}
+
 // Finding is a drift/compliance result (charter §2.4): Entity + Baseline +
 // observed-vs-expected diff + severity + Evidence ref. One kind, framework-
 // tagged. v1 Evidence is the redacted diff snapshot plus the Run ref; the
@@ -37,24 +68,37 @@ type Finding struct {
 	// Diff is the latest observed-vs-expected detail (redacted upstream,
 	// size-capped with visible truncation).
 	Diff json.RawMessage `json:"diff,omitempty"`
-	// RemoveWorkflow and RemoveParams are the launch spec for RETIRING the abandoned state
-	// an ORPHAN Finding reports — the Blueprint's removeWorkflow and the params compiled
-	// under the withdrawn Assignment (ADR-0118 D3). Empty on every other Finding.
+	// LaunchWorkflow, LaunchParams and LaunchKind are this Finding's OWN launch spec —
+	// the Workflow that resolves it and the inputs to pass (ADR-0120 D1). Empty on a
+	// Finding whose spec lives on its Baseline.
 	//
-	// This is the ONE case where a Finding carries its own launch spec instead of reading it
-	// from its Baseline. ADR-0118 refused that copy deliberately — "a Finding already
-	// references its Baseline, so a copy would be a second, staleable record of a Git-derived
-	// fact for no gain" — and that reasoning holds exactly as long as the Baseline exists.
-	// For an orphan it does not: Apply writes the orphan Finding and then PRUNES the
-	// compiled Baseline, because a Baseline whose Assignment is withdrawn must stop being
-	// observed. So this is not a second record of the fact, it is the only one, and without
-	// it the values die with the row (§1.8: the fix for abandoned state must remain
-	// reachable, and abandoned state is exactly the case where nothing else remembers).
+	// A Finding carries its own spec exactly when no Baseline can hold it, which is two of
+	// the three cases and for different permanent reasons:
 	//
-	// Same names as Blueprint.removeWorkflow/removeParams and Baseline.RemoveParams — one
-	// concept, one name down the whole chain (§2).
-	RemoveWorkflow string         `json:"removeWorkflow,omitempty"`
-	RemoveParams   map[string]any `json:"removeParams,omitempty"`
+	//   - ORPHAN: the Baseline existed and is PRUNED by the same Apply that wrote the
+	//     Finding, because a Baseline whose Assignment is withdrawn must stop being
+	//     observed. ADR-0118 refused to copy launch params onto Findings — "a copy would be
+	//     a second, staleable record of a Git-derived fact for no gain" — and that holds
+	//     only while the Baseline exists. Here the copy is the ONLY record.
+	//   - PROVISION: there was never a Baseline. `provision/<intent>` is a synthetic
+	//     grouping name, not a row; a real Baseline would be a compiled expectation over
+	//     something that does not exist yet, which ADR-0058 M1 and §1.2 both refuse.
+	//
+	// THE TWO ARE NOT THE SAME KIND OF COPY, and confusing them is a §1.2 bug. An orphan's
+	// spec is IMMUTABLE — nothing else remembers it, so it is written once. A provision
+	// Finding's is DERIVED from Git and must be REDERIVED every reconcile, or an already-open
+	// Finding keeps serving its first pass's values and a later edit to labels/placement
+	// launches yesterday's desired state (see graph.WriteProvisionFinding's DO UPDATE).
+	LaunchWorkflow string         `json:"launchWorkflow,omitempty"`
+	LaunchParams   map[string]any `json:"launchParams,omitempty"`
+	// LaunchKind names the ACT, and is the SINGLE branch point for what launches.
+	//
+	// Framework used to double as one — it carries "orphan" and "provision", and the launch
+	// door branched on `Framework == "orphan"`. Two discriminators that can disagree, with
+	// the winner decided by whichever branch ran first, is the kind of implicit resolution
+	// §2.4 forbids. So Framework reverts to what §2.4 calls it — the compliance tag, "one
+	// kind, framework-tagged" — and this field decides.
+	LaunchKind string `json:"launchKind,omitempty"`
 	// RunID is the Evidence ref: the check Run that made the latest
 	// observation (§1.8 descent: Finding → Run → task events).
 	RunID         string     `json:"runId,omitempty"`

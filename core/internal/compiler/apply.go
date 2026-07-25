@@ -50,7 +50,7 @@ func (p Plan) Apply(ctx context.Context, a Applier) []string {
 	for _, o := range p.Orphans {
 		if err := a.WriteOrphanFinding(ctx, graph.OrphanFinding{
 			Baseline: o.Baseline, Target: o.Target, Severity: o.Severity, Detail: o.Detail,
-			RemoveWorkflow: o.RemoveWorkflow, RemoveParams: o.RemoveParams,
+			LaunchWorkflow: o.LaunchWorkflow, LaunchParams: o.LaunchParams,
 		}); err != nil {
 			errs = append(errs, fmt.Sprintf("orphan finding %s: %v", o.Baseline, err))
 		}

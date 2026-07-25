@@ -185,24 +185,40 @@ func (s *Store) RecordBaselineObservations(ctx context.Context, b types.Baseline
 
 const findingColumns = `id, baseline, target, entity_id, status, severity, framework,
 	consecutive_drifted, diff, run_id, first_observed, last_observed, opened_at, resolved_at,
-	resolved_reason, remove_workflow, remove_params`
+	resolved_reason, launch_workflow, launch_params, launch_kind`
+
+// marshalLaunchParams encodes a Finding's launch params for storage; nil for an empty set so the
+// column stays NULL rather than holding a `{}` that reads as "an empty set was intended".
+func marshalLaunchParams(p map[string]any) ([]byte, error) {
+	if len(p) == 0 {
+		return nil, nil
+	}
+	b, err := json.Marshal(p)
+	if err != nil {
+		return nil, fmt.Errorf("marshal launch params: %w", err)
+	}
+	return b, nil
+}
 
 func scanFinding(row pgx.Row) (types.Finding, error) {
 	var f types.Finding
-	var entityID, runID, resolvedReason, removeWorkflow *string
-	var diff, removeParams []byte
+	var entityID, runID, resolvedReason, launchWorkflow, launchKind *string
+	var diff, launchParams []byte
 	if err := row.Scan(&f.ID, &f.Baseline, &f.Target, &entityID, &f.Status,
 		&f.Severity, &f.Framework, &f.ConsecutiveDrifted, &diff, &runID,
 		&f.FirstObserved, &f.LastObserved, &f.OpenedAt, &f.ResolvedAt, &resolvedReason,
-		&removeWorkflow, &removeParams); err != nil {
+		&launchWorkflow, &launchParams, &launchKind); err != nil {
 		return f, err
 	}
-	if removeWorkflow != nil {
-		f.RemoveWorkflow = *removeWorkflow
+	if launchWorkflow != nil {
+		f.LaunchWorkflow = *launchWorkflow
 	}
-	if len(removeParams) > 0 {
-		if err := json.Unmarshal(removeParams, &f.RemoveParams); err != nil {
-			return f, fmt.Errorf("graph: unmarshal finding remove params: %w", err)
+	if launchKind != nil {
+		f.LaunchKind = *launchKind
+	}
+	if len(launchParams) > 0 {
+		if err := json.Unmarshal(launchParams, &f.LaunchParams); err != nil {
+			return f, fmt.Errorf("graph: unmarshal finding launch params: %w", err)
 		}
 	}
 	if entityID != nil {
@@ -394,31 +410,37 @@ type OrphanFinding struct {
 	Severity string
 	// Detail is the human-facing reason blob (graph.finding.diff).
 	Detail []byte
-	// RemoveWorkflow + RemoveParams are the withdrawal launch spec. Stored in their own
-	// columns rather than read back out of Detail, which carries the same values for display:
-	// diff is documented as redacted and size-capped, so a launch that depended on it would
-	// break silently the day anything capped it.
-	RemoveWorkflow string
-	RemoveParams   map[string]any
+	// LaunchWorkflow + LaunchParams are the withdrawal launch spec (LaunchKind is always
+	// types.LaunchRemove here — an orphan has exactly one act). Stored in their own columns
+	// rather than read back out of Detail, which carries the same values for display: diff is
+	// documented as redacted and size-capped, so a launch that depended on it would break
+	// silently the day anything capped it.
+	//
+	// Write-once by nature: this is the ONLY surviving record of the retired configuration,
+	// unlike a provision Finding's spec, which is derived and refreshed every pass.
+	LaunchWorkflow string
+	LaunchParams   map[string]any
 }
 
 func (s *Store) WriteOrphanFinding(ctx context.Context, o OrphanFinding) error {
-	var params []byte
-	if len(o.RemoveParams) > 0 {
-		var err error
-		if params, err = json.Marshal(o.RemoveParams); err != nil {
-			return fmt.Errorf("graph: marshal orphan remove params: %w", err)
-		}
+	params, err := marshalLaunchParams(o.LaunchParams)
+	if err != nil {
+		return fmt.Errorf("graph: orphan finding: %w", err)
 	}
-	_, err := s.pool.Exec(ctx, `
+	kind := ""
+	if o.LaunchWorkflow != "" {
+		kind = types.LaunchRemove
+	}
+	_, err = s.pool.Exec(ctx, `
 		INSERT INTO graph.finding
 			(baseline, target, status, severity, framework, consecutive_drifted, diff, opened_at,
-			 remove_workflow, remove_params)
-		VALUES ($1, $2, 'open', $3, 'orphan', 1, $4, now(), nullif($5, ''), $6)
+			 launch_workflow, launch_params, launch_kind)
+		VALUES ($1, $2, 'open', $3, 'orphan', 1, $4, now(), nullif($5, ''), $6, nullif($7, ''))
 		ON CONFLICT (baseline, target) WHERE status <> 'resolved'
 		DO UPDATE SET diff = excluded.diff, last_observed = now(),
-			remove_workflow = excluded.remove_workflow, remove_params = excluded.remove_params`,
-		o.Baseline, o.Target, o.Severity, o.Detail, o.RemoveWorkflow, params)
+			launch_workflow = excluded.launch_workflow, launch_params = excluded.launch_params,
+			launch_kind = excluded.launch_kind`,
+		o.Baseline, o.Target, o.Severity, o.Detail, o.LaunchWorkflow, params, kind)
 	if err != nil {
 		return fmt.Errorf("graph: write orphan finding: %w", err)
 	}
