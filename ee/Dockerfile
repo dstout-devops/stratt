@@ -66,15 +66,26 @@ RUN uv pip install --system --no-cache \
 # RESOLVED set against the declaration (verify-don't-trust): an image whose contents
 # differ from what it declares makes its digest an unreliable claim about the Run.
 #
+# It then verifies each installed artifact's SHA-256 against the in-repo LOCKFILE beside
+# the declaration (ADR-0117 follow-up i). The pin rule bounds which VERSION; only the
+# lockfile bounds which BYTES — without it the registry was the sole checksum authority, so
+# a republished artifact at the same version number produced a different image from an
+# unchanged declaration and nothing said so. Build FAILS on any mismatch, and on an
+# artifact (including a new transitive dependency) that no lockfile entry covers.
+# EE_LOCK_MODE=write regenerates the lockfile instead of checking it, and is for
+# `task ee:content:lock` alone — a build that writes its own expectations proves nothing.
+#
 # Note the deliberate asymmetry with the ansible-core/ansible-runner ranges above: the
 # TOOLCHAIN floats within a supported band because evergreen (§1.7) wants it current and
 # CI-gated at N-1, whereas CONTENT is pinned exactly because reproducibility of what a Run
 # executed is the property D3 buys. Different properties, different rules — not an
 # oversight.
 ARG EE_CONTENT=""
+ARG EE_LOCK_MODE="verify"
 COPY ee/content.py /usr/local/bin/stratt-ee-content
 COPY ee/content/ /usr/share/stratt/ee-content/
 RUN python /usr/local/bin/stratt-ee-content install \
+      --lock-mode="${EE_LOCK_MODE}" \
       ${EE_CONTENT:+/usr/share/stratt/ee-content/${EE_CONTENT}} \
     && chmod -R a+rX /usr/share/ansible
 

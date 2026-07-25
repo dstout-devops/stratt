@@ -10,6 +10,14 @@
 # that resolves differently on different days makes the image digest a lie about what
 # content a Run actually had, which is the whole thing D3 exists to prevent.
 #
+# EDITING THIS FILE MEANS RELOCKING IT. A version bounds which version is requested; the
+# lockfile beside it — crypto.requirements.lock.json — bounds which BYTES are accepted, for
+# this file's artifacts AND for anything ansible-galaxy pulls in transitively (follow-up i).
+# `task ee:content:lock CONTENT=crypto.requirements.yml` regenerates it from a real install;
+# `task ci` fails if a declared version has no matching lock entry, and the EE build fails on
+# any content-hash mismatch. Review the lockfile diff: an unexplained hash change on an
+# unchanged version is the supply-chain event this exists to catch.
+#
 # A Step selects this content by selecting an Actuator declared with this EE image
 # (estate/actuators/ansible-crypto.yaml) — never by a run-time params field.
 

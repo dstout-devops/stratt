@@ -116,9 +116,12 @@ as independently-shipped **plugin images**, each its own CI unit (ADR-0046). Wha
   SEC-5/SUP-1, now sharper because the container collector projects digests.)*
 - **Remote/upstream sync** — no Galaxy mirror and **no air-gap content seeding**; `requirements.yml`
   resolution now exists but only at **EE build time**, pinned and verified (ADR-0117 D3), which is
-  deliberately not a run-time resolver. The **registry stays the checksum authority** — a republished
-  version at the same version number would go undetected — so an in-repo per-artifact hash lockfile is
-  still owed (ADR-0117 follow-up i). (git-sync covers SCM-project delivery only.)
+  deliberately not a run-time resolver. The registry is **no longer the checksum authority**: each
+  artifact's content SHA-256 is recorded in an in-repo lockfile beside its declaration
+  ([ee/content/](../ee/content/)) and every EE build fails on a mismatch, so a republished version at the
+  same version number is caught rather than silently changing what a Run executed (ADR-0117 follow-up i —
+  which also closes the roles half, where there had been no checksum step at all). Air-gap seeding remains
+  owed. (git-sync covers SCM-project delivery only.)
 
 ---
 

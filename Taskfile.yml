@@ -1066,20 +1066,54 @@ tasks:
       - go run sigs.k8s.io/kind@v{{.KIND_VER}} load docker-image stratt-ee:dev --name {{.KIND_CLUSTER}}
 
   ee:content:check:
-    desc: Fail if any EE ansible-content declaration is not pinned to an exact version (ADR-0117 D3)
+    desc: Fail if any EE ansible-content declaration is unpinned or unlocked (ADR-0117 D3, follow-up i)
     cmds:
       # The SAME implementation the EE build runs (ee/content.py), so CI and the image
       # cannot disagree about what "pinned" means. uv supplies pyyaml without adding a
       # repo dependency (.claude/rules/backend-python.md — uv is the only sanctioned
       # Python package manager, and this content is EE-side, never the control plane).
+      #
+      # This is the WEAKER of the two lock gates and says so: verifying a content hash means
+      # installing the artifact, which means the network, which a pin check must not need. So
+      # it asserts every declared artifact IS locked at the declared version (the mistake
+      # that actually happens — bump a version, forget to relock) and leaves the hashes to
+      # the build, which is where they can be computed from real bytes.
       - uv run --quiet --with pyyaml=={{.PYYAML_VER}} python ee/content.py verify ee/content/*.requirements.yml
+
+  ee:content:lock:
+    desc: "(Re)generate an EE content lockfile from a real install — review the diff before committing (ADR-0117 i)"
+    vars:
+      CONTENT: '{{.CONTENT | default "crypto.requirements.yml"}}'
+    cmds:
+      # Writing a lockfile requires ACTUALLY INSTALLING the content, because the hash is over
+      # the bytes the registry served — there is no offline way to know them. So this runs the
+      # real EE build with EE_LOCK_MODE=write (which verifies nothing) and copies the result
+      # back out of the image.
+      #
+      # Regenerating is a DELIBERATE, reviewable act, never part of a build or of `task ci`:
+      # an automatic relock would launder exactly the event the lockfile exists to catch —
+      # the same version resolving to different bytes — into a silent no-op. Commit the diff
+      # only once you know why it changed.
+      - |
+        set -eu
+        content="{{.CONTENT}}"
+        lock="${content%.yml}.lock.json"
+        test -f "ee/content/${content}" || { echo "no such declaration: ee/content/${content}"; exit 1; }
+        docker build -f ee/Dockerfile \
+          --build-arg "EE_CONTENT=${content}" --build-arg EE_LOCK_MODE=write \
+          -t "stratt-ee-relock:tmp" .
+        docker run --rm "stratt-ee-relock:tmp" cat "/usr/share/stratt/ee-content/${lock}" > "ee/content/${lock}"
+        docker image rm "stratt-ee-relock:tmp" >/dev/null
+        echo "wrote ee/content/${lock} — REVIEW THE DIFF before committing:"
+        git --no-pager diff --stat -- "ee/content/${lock}" || true
 
   dev:ee-crypto:build:
     desc: Build the crypto-content EE variant and load it into the kind cluster (ADR-0117 D3/D3a)
     cmds:
       # Same Dockerfile as the base EE — content is selected by build ARG, not by a fork
-      # of the image definition. The declared collections are installed at BUILD time and
-      # the resolved set is verified against the pins (ee/content.py).
+      # of the image definition. The declared collections are installed at BUILD time, the
+      # resolved set is verified against the pins, and each artifact's SHA-256 is verified
+      # against ee/content/crypto.requirements.lock.json (ee/content.py).
       - docker build -f ee/Dockerfile --build-arg EE_CONTENT=crypto.requirements.yml -t stratt-ee-crypto:dev .
       - go run sigs.k8s.io/kind@v{{.KIND_VER}} load docker-image stratt-ee-crypto:dev --name {{.KIND_CLUSTER}}
 

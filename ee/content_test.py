@@ -10,10 +10,19 @@ the same regression cannot land twice.
 
 from __future__ import annotations
 
+import json
+import os
 from pathlib import Path
 
 import pytest
-from content import PinError, verify
+from content import (
+    PinError,
+    _tree_digest,
+    check_locks,
+    lock_path_for,
+    verify,
+    verify_lock,
+)
 
 
 def _write(tmp_path: Path, body: str) -> Path:
@@ -160,3 +169,213 @@ def test_empty_and_absent_sections(tmp_path: Path) -> None:
 def test_verify_accepts_no_files() -> None:
     """A base EE declares no content at all; that is legal, not an error."""
     assert verify([]) == {"collections": [], "roles": []}
+
+
+# ── the content lockfile: per-artifact hashes (ADR-0117 follow-up i) ──────────────────
+#
+# These cover the half of the supply chain the pin rule above CANNOT reach. A pin bounds
+# which VERSION is requested; until the lockfile existed the registry was the only checksum
+# authority, so a republished artifact at the same version number resolved clean and changed
+# what every Run executed from an unchanged declaration. The digest is also the only real
+# protection for ROLES, whose resolved-set check is tautological by construction
+# (ansible-galaxy writes meta/.galaxy_install_info from the request, not the artifact).
+
+
+def _tree(tmp_path: Path, files: dict[str, str]) -> Path:
+    root = tmp_path / "artifact"
+    for rel, body in files.items():
+        path = root / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(body)
+    root.mkdir(parents=True, exist_ok=True)
+    return root
+
+
+def test_tree_digest_is_stable_across_identical_trees(tmp_path: Path) -> None:
+    """The property the whole gate rests on: same content, same digest.
+
+    Measured rather than assumed, because a digest that drifts between two installs of the
+    same artifact would make the build fail at random and get the gate deleted. (Verified
+    live too: two --no-cache EE builds of community.crypto 2.22.3 produce the same hash.)
+    """
+    a = _tree(tmp_path / "a", {"plugins/x.py": "body", "README.md": "hi"})
+    b = _tree(tmp_path / "b", {"README.md": "hi", "plugins/x.py": "body"})
+    assert _tree_digest(a) == _tree_digest(b)
+
+
+def test_tree_digest_ignores_mtime(tmp_path: Path) -> None:
+    root = _tree(tmp_path, {"f": "same"})
+    before = _tree_digest(root)
+    os.utime(root / "f", (0, 0))
+    assert _tree_digest(root) == before
+
+
+def test_tree_digest_changes_with_content(tmp_path: Path) -> None:
+    """The republished-artifact case, reduced to one byte."""
+    a = _tree(tmp_path / "a", {"plugins/x.py": "original"})
+    b = _tree(tmp_path / "b", {"plugins/x.py": "originaI"})
+    assert _tree_digest(a) != _tree_digest(b)
+
+
+def test_tree_digest_changes_with_layout(tmp_path: Path) -> None:
+    """Same bytes, different path — a file moved into an autoloaded location is a real change."""
+    a = _tree(tmp_path / "a", {"plugins/x.py": "body"})
+    b = _tree(tmp_path / "b", {"plugins/y.py": "body"})
+    assert _tree_digest(a) != _tree_digest(b)
+
+
+def test_tree_digest_covers_the_executable_bit(tmp_path: Path) -> None:
+    """Making a shipped script executable changes what the artifact can do; it must hash."""
+    root = _tree(tmp_path, {"scripts/run": "#!/bin/sh\n"})
+    before = _tree_digest(root)
+    (root / "scripts" / "run").chmod(0o755)
+    assert _tree_digest(root) != before
+
+
+def test_tree_digest_hashes_symlinks_by_target(tmp_path: Path) -> None:
+    """A symlink is content. Following one would double-count it or escape the tree."""
+    root = _tree(tmp_path, {"real": "body"})
+    (root / "link").symlink_to("real")
+    before = _tree_digest(root)
+    (root / "link").unlink()
+    (root / "link").symlink_to("elsewhere")
+    assert _tree_digest(root) != before
+
+
+def test_tree_digest_skips_install_generated_files(tmp_path: Path) -> None:
+    """meta/.galaxy_install_info restates our own request and varies per install."""
+    root = _tree(tmp_path, {"tasks/main.yml": "- debug:"})
+    before = _tree_digest(root)
+    (root / "meta").mkdir()
+    (root / "meta" / ".galaxy_install_info").write_text("install_date: today\nversion: 1.0.0\n")
+    assert _tree_digest(root) == before
+
+
+def test_tree_digest_skips_pycache(tmp_path: Path) -> None:
+    """Compiler output is not distributed content and is not byte-reproducible."""
+    root = _tree(tmp_path, {"plugins/x.py": "body"})
+    before = _tree_digest(root)
+    (root / "plugins" / "__pycache__").mkdir()
+    (root / "plugins" / "__pycache__" / "x.cpython-314.pyc").write_bytes(b"\x00garbage")
+    assert _tree_digest(root) == before
+
+
+def test_lock_path_is_derived_not_configured() -> None:
+    assert lock_path_for(Path("ee/content/crypto.requirements.yml")) == Path(
+        "ee/content/crypto.requirements.lock.json"
+    )
+
+
+def _lock(tmp_path: Path, body: object) -> Path:
+    path = tmp_path / "x.lock.json"
+    path.write_text(json.dumps(body))
+    return path
+
+
+def _manifest(*entries: dict[str, object]) -> dict[str, list[dict[str, object]]]:
+    return {"collections": list(entries), "roles": []}
+
+
+_GOOD = {"name": "c.d", "version": "1.0.0", "sha256": "a" * 64, "declared": True}
+
+
+def test_verify_lock_accepts_a_match(tmp_path: Path) -> None:
+    path = _lock(tmp_path, {"lockfileVersion": 1, "collections": [_GOOD], "roles": []})
+    verify_lock(_manifest(_GOOD), path)  # no raise
+
+
+def test_verify_lock_rejects_a_republished_artifact(tmp_path: Path) -> None:
+    """The case the ADR named: same version, different bytes."""
+    path = _lock(tmp_path, {"lockfileVersion": 1, "collections": [_GOOD], "roles": []})
+    installed = {**_GOOD, "sha256": "b" * 64}
+    with pytest.raises(PinError, match="DIFFERENT bytes"):
+        verify_lock(_manifest(installed), path)
+
+
+def test_verify_lock_rejects_a_version_change(tmp_path: Path) -> None:
+    path = _lock(tmp_path, {"lockfileVersion": 1, "collections": [_GOOD], "roles": []})
+    with pytest.raises(PinError, match="locked at version"):
+        verify_lock(_manifest({**_GOOD, "version": "1.0.1"}), path)
+
+
+def test_verify_lock_rejects_an_unlocked_transitive_dependency(tmp_path: Path) -> None:
+    """The direction that is easy to forget: ansible-galaxy resolves deps without asking."""
+    path = _lock(tmp_path, {"lockfileVersion": 1, "collections": [_GOOD], "roles": []})
+    extra = {"name": "e.f", "version": "2.0.0", "sha256": "c" * 64, "declared": False}
+    with pytest.raises(PinError, match="NOT locked"):
+        verify_lock(_manifest(_GOOD, extra), path)
+
+
+def test_verify_lock_rejects_a_locked_artifact_that_vanished(tmp_path: Path) -> None:
+    path = _lock(tmp_path, {"lockfileVersion": 1, "collections": [_GOOD], "roles": []})
+    with pytest.raises(PinError, match="is not installed"):
+        verify_lock({"collections": [], "roles": []}, path)
+
+
+def test_verify_lock_rejects_a_declared_flag_flip(tmp_path: Path) -> None:
+    path = _lock(tmp_path, {"lockfileVersion": 1, "collections": [_GOOD], "roles": []})
+    with pytest.raises(PinError, match="transitive dependency"):
+        verify_lock(_manifest({**_GOOD, "declared": False}), path)
+
+
+def test_lockfile_version_is_checked(tmp_path: Path) -> None:
+    path = _lock(tmp_path, {"lockfileVersion": 99, "collections": [], "roles": []})
+    with pytest.raises(PinError, match="lockfileVersion"):
+        verify_lock({"collections": [], "roles": []}, path)
+
+
+@pytest.mark.parametrize("digest", ["", "abc", "A" * 64, "z" * 64, "a" * 63])
+def test_malformed_digest_rejected(tmp_path: Path, digest: str) -> None:
+    """A malformed hash is not a weaker check, it is no check — so it must not load."""
+    path = _lock(tmp_path, {"lockfileVersion": 1, "collections": [{**_GOOD, "sha256": digest}], "roles": []})
+    with pytest.raises(PinError, match="hex digest"):
+        verify_lock(_manifest(_GOOD), path)
+
+
+def test_corrupt_lockfile_names_the_fix(tmp_path: Path) -> None:
+    path = tmp_path / "x.lock.json"
+    path.write_text("{not json")
+    with pytest.raises(PinError, match="ee:content:lock"):
+        verify_lock({"collections": [], "roles": []}, path)
+
+
+# ── check_locks: the OFFLINE gate `task ci` runs (weaker on purpose) ──────────────────
+
+
+def test_check_locks_requires_a_lockfile(tmp_path: Path) -> None:
+    req = tmp_path / "x.requirements.yml"
+    req.write_text('collections:\n  - name: c.d\n    version: "1.0.0"\n')
+    with pytest.raises(PinError, match="no lockfile"):
+        check_locks([req])
+
+
+def test_check_locks_catches_a_bump_without_a_relock(tmp_path: Path) -> None:
+    """The mistake that actually happens: edit the version, forget the lockfile."""
+    req = tmp_path / "x.requirements.yml"
+    req.write_text('collections:\n  - name: c.d\n    version: "1.0.1"\n')
+    _lock(tmp_path, {"lockfileVersion": 1, "collections": [_GOOD], "roles": []}).rename(
+        tmp_path / "x.requirements.lock.json"
+    )
+    with pytest.raises(PinError, match="relock"):
+        check_locks([req])
+
+
+def test_check_locks_catches_a_newly_declared_transitive_dependency(tmp_path: Path) -> None:
+    req = tmp_path / "x.requirements.yml"
+    req.write_text('collections:\n  - name: c.d\n    version: "1.0.0"\n')
+    _lock(
+        tmp_path, {"lockfileVersion": 1, "collections": [{**_GOOD, "declared": False}], "roles": []}
+    ).rename(tmp_path / "x.requirements.lock.json")
+    with pytest.raises(PinError, match="transitive"):
+        check_locks([req])
+
+
+def test_shipped_declaration_is_locked() -> None:
+    """The shipped pair must satisfy its own gate — a gate nothing satisfies is theatre.
+
+    Note what this does NOT claim: the recorded hash is verified against real bytes only by
+    the EE BUILD (`task ee:content:lock` produced it from a live install, and two --no-cache
+    builds agree). Here it is checked for existence, shape and version agreement.
+    """
+    shipped = Path(__file__).parent / "content" / "crypto.requirements.yml"
+    assert check_locks([shipped]) > 0, "the shipped declaration must lock at least one artifact"
