@@ -337,8 +337,14 @@ would be a category error.
   already being read for the prune. Served on `GET /compile` and declared in `openapi.yaml`, so the UI, CLI and
   MCP see it identically (§1.6) — the handler marshals the compiler snapshot directly, so a field absent from
   the spec would have been served but invisible to every generated client.
-- **An estate-guide section on rings**, covering D3's asymmetry and the canary-freezes-the-stable-ring
-  consequence — neither is discoverable from the schemas.
+- ~~**An estate-guide section on rings**, covering D3's asymmetry and the canary-freezes-the-stable-ring
+  consequence — neither is discoverable from the schemas.~~ — **done**, as _Rings and promotion_ in
+  [`estate/README.md`](../../estate/README.md), beside the environment-slices section it depends on. It
+  states the pin grammar and why `@N` is required on both halves, D3's rule as the **structural** property
+  (versionable iff a seam exists to carry the pin — so provisioning kinds, selected by name, are not) rather
+  than as a list a reader would have to keep in sync, that cross-environment rings cannot collide, and that
+  a canary that poisons an exclusive claim freezes the stable ring with it. The last one is the reason the
+  section exists: it reads as a canary-only risk and is not.
 - **Promotion ergonomics** — a `stratt promote <assignment> --to <env>` that edits the pins and shows the
   expectation diff. Now unblocked (the diff exists), still deliberately not now: the mechanism should earn its
   sugar, and the pins are two lines of YAML.

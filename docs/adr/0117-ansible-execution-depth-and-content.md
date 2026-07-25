@@ -527,8 +527,14 @@ what a reasonable schema would look like.** Nothing short of running `community.
   the audit stream, and out to `--extra-vars`. Password questions are now refused with a blocking
   re-broker entry, exactly as an imported credential is. It also forced a `/api/v2` fix — see ADR-0026,
   where the façade was discarding the Workflow it had just resolved. (d) `/api/v2` route breadth + notification sinks (P2/P3) —
-  separate ADRs. (e) Update [`aap-2.7-parity.md`](../aap-2.7-parity.md) when v5 + content land, and
-  **narrow or close PLG-1** in `enterprise-readiness.md`. ~~(f) A demo exercising the new knobs end to end.~~ — **done**: the
+  separate ADRs. ~~(e) Update [`aap-2.7-parity.md`](../aap-2.7-parity.md) when v5 + content land, and
+  **narrow or close PLG-1** in `enterprise-readiness.md`.~~ — **done.** Parity's Inventories, Execution
+  Environments and Surveys rows now cite what actually shipped (D5a's `ansible_port`, D3/D3a's build-time
+  content and per-Actuator EE, and `Workflow.inputs` for surveys). PLG-1 is **narrowed, not closed**: its
+  design-rule half (D4) and its content half (D3) are settled, so the row is now solely about
+  **reachability to an operator-owned fleet** — bastion/jump and Site-local execution are unproven, and
+  every managed node we converge is still one we run. It stays Serious, because that is the half a
+  customer meets first. ~~(f) A demo exercising the new knobs end to end.~~ — **done**: the
   [app-cert demo](../../demos/app-cert/README.md), **live-green on kind**. Treating it as the integration
   test for this work (per [ADR-0116](0116-demo-library.md)) paid for itself immediately — it found **four
   real defects in four runs**, each of them a §1.8 diagnosis failure that no unit test had reached:

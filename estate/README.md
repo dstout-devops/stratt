@@ -10,16 +10,18 @@ the sovereign port. Nothing here models "server" or "network" generically (§1.1
 world), and there are no loops/conditionals/expressions (§1 — no new config language).
 
 ## Layout
-| dir | kind | role |
-|---|---|---|
-| `views/` | View | **groups** (label/kind/facet selectors) |
-| `intents/` `blueprints/` `assignments/` | Intent · Blueprint · Assignment | the **template layer** — a Blueprint is a template with defaults, an Assignment binds it to a group; the compiler emits drift-checked Baselines |
-| `workflows/` | Workflow | **lifecycle DAGs** (Gate → Actuator Steps) composing plugins |
-| `triggers/` `emitters/` | Trigger · Emitter | event/schedule → launch |
-| `hosts/` | (declared-estate Connector content) | **devices-as-code** — a file that a Syncer projects (not a writable CMDB); populated in the Estate-as-Code slice ([ADR-0056](../docs/adr/0056-estate-as-code.md)) |
-| `authz/tuples.yaml` | — | grants (pointers only, §2.5) |
+
+| dir                                     | kind                                | role                                                                                                                                                              |
+| --------------------------------------- | ----------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `views/`                                | View                                | **groups** (label/kind/facet selectors)                                                                                                                           |
+| `intents/` `blueprints/` `assignments/` | Intent · Blueprint · Assignment     | the **template layer** — a Blueprint is a template with defaults, an Assignment binds it to a group; the compiler emits drift-checked Baselines                   |
+| `workflows/`                            | Workflow                            | **lifecycle DAGs** (Gate → Actuator Steps) composing plugins                                                                                                      |
+| `triggers/` `emitters/`                 | Trigger · Emitter                   | event/schedule → launch                                                                                                                                           |
+| `hosts/`                                | (declared-estate Connector content) | **devices-as-code** — a file that a Syncer projects (not a writable CMDB); populated in the Estate-as-Code slice ([ADR-0056](../docs/adr/0056-estate-as-code.md)) |
+| `authz/tuples.yaml`                     | —                                   | grants (pointers only, §2.5)                                                                                                                                      |
 
 ## The flagship: `linux-fleet` (the layered / CDK-style construct model)
+
 "Onboard Linux servers from the simplest form, with defaults + optional overrides," realized as typed
 declarative constructs (the useful half of AWS CDK — see ADR-0055):
 
@@ -30,11 +32,12 @@ declarative constructs (the useful half of AWS CDK — see ADR-0055):
   The flagship REUSES the one `fileset` Blueprint (a namespace has a single Blueprint owner, §2.1; additive keys
   union within it), so the fleet's `sshd-config` key and web-files' `nginx-conf` key coexist in `fileset.content`.
 - **`workflows/linux-onboard.yaml`** — the L3 onboarding lifecycle: `Gate → provision (Action) → configure
-  (ansible)`. The provision Step's `action` is the **landscape binding** — `awsec2/create-vm` in dev, swappable
+(ansible)`. The provision Step's `action` is the **landscape binding** — `awsec2/create-vm` in dev, swappable
   for a `crossplane`/`opentofu`/`vsphere` Action without touching the rest of the estate. Provisioning is
   **gated** (§5 Flow 1 — never a silent auto-launch). Cert (cert-issuer) + app (helm) Steps are the next slice.
 
 ## The defaulted unit: `web-server` (G6 defaults + the materialization seam)
+
 The onboarding template made concrete — "declare outcomes, not tool configs"
 ([ADR-0083](../docs/adr/0083-blueprint-route-materialization-seam.md), the G6 defaults/override merge):
 
@@ -56,6 +59,7 @@ author-supplied default never reaches a Baseline unvalidated. Co-management fans
 route, an app route) — the per-capability route map (ADR-0083 §3), each an independently-metered §7.6 channel.
 
 ## Environment slices ([ADR-0057](../docs/adr/0057-environment-scoped-reconciliation.md))
+
 One estate tree, many logical slices. A daemon carries an active `STRATT_ENVIRONMENT`; a launching
 declaration (Assignment · Trigger · Baseline) reconciles only where its `environments:` list contains that
 value (untagged ⇒ every environment). Empty `STRATT_ENVIRONMENT` ⇒ unscoped (reconciles everything).
@@ -69,3 +73,37 @@ are never filtered. `task dev:stage-estate` stages this tree into the inline-dec
 
 > `views/dev-hosts.yaml` + `views/dev-vms.yaml` and their `dev-runner` grants are the **plugin-e2e** target
 > Views (the seeded synthetic host; the vcenter Syncer's vcsim VMs). Untagged ⇒ present in every slice.
+
+## Rings and promotion ([ADR-0119](../docs/adr/0119-versioned-configuration-and-promotion.md))
+
+An Assignment pins **both** halves of what an environment runs — the WHAT and the HOW:
+
+```yaml
+intent: linux-baseline@1 # the configuration version
+blueprint: fileset@1 # the composition version
+environments: [prod]
+```
+
+`@N` is **required on both**, not defaulted. An implicit pin would leave prod's configuration identity
+unstated in prod's own Assignment, so a promotion diff would be a one-line change against an invisible
+baseline. A **ring** is therefore just sibling Assignments in different environments pinning different
+versions of the same Intent, and **promotion is a reviewed Git bump of two numbers** — between bumps,
+editing the Intent cannot change what prod runs.
+
+Three things follow that the schemas do not show you, and each has bitten in review:
+
+- **Not every Intent kind is versionable, and the rule is structural, not a list.** A kind is versionable
+  exactly when a seam exists to carry the pin. An Assignment selects application-shaped Intents, so it can
+  pin them. **Provisioning kinds (`Intent/Compute` and the ADR-0059 singletons) are selected _by name_ by
+  the provisioning reconcile**, so there is nowhere for a pin to live — and two versions of one fleet are
+  not two rings, they are two claims on the same machines. `version:` on such a kind is rejected at
+  declaration, derived from `types.AssignableIntentKind` so a new provisioning kind inherits the rejection
+  instead of quietly opening a hole.
+- **Across environments, two rings cannot collide.** Assignment listing is environment-scoped, so test,
+  stage and prod running three versions of one Intent is structurally safe.
+- **Inside one environment — a canary — a bad ring freezes the good one.** Two Assignments in the same
+  environment claiming the same `(namespace, entity)` exclusively poison **both**, and both keep their
+  previously-compiled Baselines. That is the anti-GPO rule (§2.4) failing loud as designed, but the
+  consequence is sharper than it reads: the canary does not fail alone. Before running two rings in one
+  environment, check the compile's expectation diff — a change beyond `maxDelta` pauses the compile until
+  `ackDelta` is bumped, and the live expectations stay in force meanwhile.
