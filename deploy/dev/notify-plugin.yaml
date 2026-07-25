@@ -1,5 +1,8 @@
-# stratt-notify plugin deployment (ADR-0046/0052) — the notification-delivery Action
-# over the sovereign port. The control plane dials it (STRATT_NOTIFY_PLUGIN_ADDR).
+# stratt-notify plugin deployment (ADR-0046/0052) — the notification-delivery Actions
+# (notify/webhook, notify/smtp) over the sovereign port. The control plane dials it at
+# the address estate/actuators/notify.yaml declares (ADR-0125 D3); there is no longer a
+# STRATT_NOTIFY_PLUGIN_ADDR env knob, because the address is CaC like every other
+# gRPC Actuator's.
 #
 # MF-A (the guardian §2.5 must-fix): the plugin's Secret-read RBAC is confined to ONLY
 # its brokerable Secrets — a dedicated namespace (stratt-secrets) holding the webhook
@@ -81,4 +84,5 @@ spec:
   selector: { app: stratt-notify }
   ports:
     - { name: grpc, port: 9090, targetPort: 9090 }
-# The control plane then dials it: STRATT_NOTIFY_PLUGIN_ADDR=stratt-notify.stratt.svc:9090
+# The control plane then dials it at estate/actuators/notify.yaml's `address:` —
+# stratt-notify:9090 — reconciled by the connectorregistry, no restart.

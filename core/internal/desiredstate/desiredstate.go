@@ -1711,12 +1711,16 @@ type notifySinkFile struct {
 	Principal     string `yaml:"principal"`
 	CredentialRef string `yaml:"credentialRef"`
 	Config        struct {
-		Method       string `yaml:"method"`
 		BodyTemplate string `yaml:"bodyTemplate"`
-		Endpoint     string `yaml:"endpoint"`
-		Index        string `yaml:"index"`
-		Facility     int    `yaml:"facility"`
-		Insecure     bool   `yaml:"insecure"`
+		// Params is the driver's own bag (ADR-0125 D2) — deliberately NOT
+		// KnownFields-checked here, because core does not know the driver's
+		// fields. The driver's pinned input Contract is what refuses an unknown
+		// one, at delivery, by name (§1.5).
+		Params   map[string]any `yaml:"params"`
+		Endpoint string         `yaml:"endpoint"`
+		Index    string         `yaml:"index"`
+		Facility int            `yaml:"facility"`
+		Insecure bool           `yaml:"insecure"`
 	} `yaml:"config"`
 }
 
@@ -1729,7 +1733,7 @@ func parseNotifySinkFile(path string, raw []byte) (string, types.Sink, error) {
 	}
 	s := types.Sink{Name: f.Name, Kind: f.Kind, Principal: f.Principal, CredentialRef: f.CredentialRef,
 		Config: types.SinkConfig{
-			Method: f.Config.Method, BodyTemplate: f.Config.BodyTemplate,
+			BodyTemplate: f.Config.BodyTemplate, Params: f.Config.Params,
 			Endpoint: f.Config.Endpoint, Index: f.Config.Index,
 			Facility: f.Config.Facility, Insecure: f.Config.Insecure,
 		}}
@@ -1757,8 +1761,14 @@ func ValidateNotifySink(s types.Sink) error {
 		}
 		return nil
 	}
-	if s.Kind != types.SinkWebhook {
-		return fmt.Errorf("sink %s: unknown kind %q (webhook, splunk-hec, syslog, otel-logs)", s.Name, s.Kind)
+	// Everything else is a NOTIFY sink, and core deliberately does not hold a list
+	// of the kinds it may be (ADR-0125 D1). The kind names a delivery Action; a
+	// kind no plugin provides is an unresolvable Action at delivery, reported by
+	// name on the notify_delivery surface. A closed set here would mean a
+	// third-party driver could not ship without a core release — the exact
+	// content-blindness §1.4 buys, and the reason the webhook switch is gone.
+	if s.Kind == "" {
+		return fmt.Errorf("sink %s: kind is required (it names the delivery Action, e.g. webhook → notify/webhook)", s.Name)
 	}
 	if s.CredentialRef == "" {
 		return fmt.Errorf("notify sink %s: credentialRef is required (the delivery url/token are injected from it, never inline — §2.5)", s.Name)

@@ -231,8 +231,8 @@ func TestPinsAreStable(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(all) != 142 { // +compute.v4 (ADR-0123 keyed spread)
-		t.Fatalf("expected 142 embedded documents, got %d", len(all))
+	if len(all) != 144 { // +notify/smtp.{input,output} (ADR-0125 D4)
+		t.Fatalf("expected 144 embedded documents, got %d", len(all))
 	}
 	versions := map[string]int{}
 	for _, c := range all {

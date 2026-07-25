@@ -13,14 +13,13 @@ const (
 	NoticeGatePending = "gate.pending"
 )
 
-// Sink kinds — the outbound destinations. webhook (notify, ADR-0027) delivers
-// Notices from the notifier; the SIEM kinds (ADR-0034) are audit-egress
-// destinations the stratt-forwarder ships the audit stream to. "Sink" is one
-// delivery-plane noun, NOT a core Named Kind (§2); the kind selects the driver.
-// Splunk/syslog/OTel are drivers beneath a neutral seam — none is load-bearing
-// in core (§1.4/§1.5, mirroring "S3-compatible, never MinIO-by-name").
+// SIEM Sink kinds (ADR-0034) — audit-egress destinations the stratt-forwarder
+// ships the audit stream to. These are a CLOSED set because the forwarder links
+// their drivers in-process; notify's kinds are deliberately NOT (see
+// NotifyActionFor). Splunk/syslog/OTel are drivers beneath a neutral seam —
+// none is load-bearing in core (§1.4/§1.5, mirroring "S3-compatible, never
+// MinIO-by-name").
 const (
-	SinkWebhook   = "webhook"
 	SinkSplunkHEC = "splunk-hec"
 	SinkSyslog    = "syslog"
 	SinkOTelLogs  = "otel-logs"
@@ -28,6 +27,17 @@ const (
 
 // SIEMSinkKinds are the audit-egress Sink kinds the forwarder handles.
 var SIEMSinkKinds = map[string]bool{SinkSplunkHEC: true, SinkSyslog: true, SinkOTelLogs: true}
+
+// NotifyActionFor derives the delivery Action a notify Sink's kind names
+// (ADR-0125 D1). It is the WHOLE of core's knowledge about notification
+// drivers: `kind: webhook` delivers through the `notify/webhook` Action,
+// `kind: smtp` through `notify/smtp`, and a kind core has never heard of
+// through `notify/<kind>` — resolved from the plugin registry like any other
+// Action, never from a Go switch (§1.4, the content-blind spine).
+//
+// One field, so there is nothing to disagree with (§2.4): the kind IS the
+// selector, not a second name alongside an `action:` field.
+func NotifyActionFor(kind string) string { return "notify/" + kind }
 
 // Sink is a CaC-declared outbound delivery endpoint (ADR-0027). It is
 // delivery-plane infra, NOT a core-model Named Kind (§2) — hence the notify_
@@ -37,7 +47,11 @@ var SIEMSinkKinds = map[string]bool{SinkSplunkHEC: true, SinkSyslog: true, SinkO
 // pod at spawn (§2.5) — the control plane handles pointers only.
 type Sink struct {
 	Name string `json:"name"`
-	// Kind is webhook (v1).
+	// Kind names the delivery driver, and through NotifyActionFor it names the
+	// Action that delivers (ADR-0125 D1) — `webhook`, `smtp`, or any kind a
+	// registered plugin provides. Core validates none of these names against a
+	// list: an unknown kind is a missing Action at delivery, reported by name,
+	// not a closed set core has to be taught.
 	Kind string `json:"kind"`
 	// Principal is the identity deliveries authenticate as — it must hold the
 	// `use` grant on CredentialRef (§2.5 use-without-read, §1.6 one authz
@@ -54,17 +68,34 @@ type Sink struct {
 	Config SinkConfig `json:"config,omitempty"`
 }
 
-// SinkConfig is the non-secret delivery configuration of a Sink. The webhook
-// fields serve notify; the SIEM fields serve the audit forwarder. All are
-// non-secret — the credential (HEC token, TLS material) is a CredentialRef,
-// never inline (§2.5).
+// SinkConfig is the non-secret delivery configuration of a Sink. All of it is
+// non-secret — the credential (webhook url/token, SMTP password, HEC token, TLS
+// material) is a CredentialRef, never inline (§2.5).
+//
+// The notify half is deliberately TWO fields and no more: a rendered body, and
+// an opaque per-driver params bag. Every driver-specific knob a per-kind field
+// union would have accumulated (`method`, `headers`, `from`, `to`, `subject`,
+// `routingKey`…) lives in Params, where the driver's own input Contract types it
+// and core stays blind (§1.1 type the seams; §1.4). The SIEM fields below predate
+// this and stay, because the forwarder links those drivers in-process.
 type SinkConfig struct {
-	// Method is the HTTP method (default POST). (webhook)
-	Method string `json:"method,omitempty"`
 	// BodyTemplate is a Go text/template rendered over the Notice — it may
 	// reference {{.kind}}, {{.subject}}, {{.at}}, and {{.payload.X}}. Empty
-	// renders a default JSON body of the whole Notice. (webhook)
+	// renders a default JSON body of the whole Notice. Core renders the body
+	// because that is the Notice→text step, which every driver needs and none
+	// should reimplement. (notify)
 	BodyTemplate string `json:"bodyTemplate,omitempty"`
+	// Params are the driver's own non-secret arguments, merged into the
+	// delivery Action's input and validated against that Action's pinned input
+	// Contract (§1.5) — `{method: PUT}` or `{headers: {...}}` for webhook,
+	// `{from, to, subject}` for smtp. Core never reads a key here: an unknown
+	// one is the CONTRACT's rejection, at delivery, naming the offender.
+	//
+	// Secret material has no path here — a driver reads its own from the
+	// brokered CredentialRef (§2.5). That is exactly why a target whose secret
+	// rides in the request BODY (PagerDuty's routing_key) needs a driver rather
+	// than a bodyTemplate: a template lives in Git. (notify)
+	Params map[string]any `json:"params,omitempty"`
 
 	// Endpoint is the SIEM destination: an https URL for splunk-hec / otel-logs,
 	// or host:port for syslog. (SIEM)

@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "stratt:contract:actions/notify/smtp.input:v1",
+  "title": "notify/smtp input",
+  "description": "Input Contract for notify/smtp (ADR-0125): one outbound email. The relay host/port/envelope are non-secret Sink params; the username/password are injected credential keys (from credentialMount), never params (§2.5). This Contract is what types a Sink's config.params — core validates against it without knowing a single field name here.",
+  "type": "object",
+  "properties": {
+    "body": { "type": "string" },
+    "credentialMount": { "type": "string" },
+    "host": { "type": "string", "minLength": 1 },
+    "port": { "type": "integer", "minimum": 1, "maximum": 65535 },
+    "from": { "type": "string", "minLength": 1 },
+    "to": { "type": "array", "items": { "type": "string", "minLength": 1 }, "minItems": 1 },
+    "subject": { "type": "string" },
+    "tls": { "type": "string", "enum": ["starttls", "implicit", "none"] }
+  },
+  "required": ["body", "host", "from", "to"],
+  "additionalProperties": false
+}

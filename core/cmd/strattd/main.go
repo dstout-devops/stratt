@@ -616,31 +616,18 @@ func run(ctx context.Context, log *slog.Logger) error {
 		log.Info("awss3 plugin actions registered", "addr", s3Addr)
 	}
 
-	// notify/webhook plugin Action (ADR-0046 Category A / ADR-0052): the notification
-	// delivery left the core. When configured, the stratt-notify plugin issues the POST
-	// in-process, resolving the Sink's per-call url/token via the SecretBroker — the
-	// core hands COORDINATES (never material) in the Envelope (§2.5). NOT DryRunnable
-	// (a POST has no read-only plan). Unset ⇒ no notify/webhook Action is registered
-	// and notifications fail closed (the in-tree pod Action was retired — the cutover).
-	if addr := os.Getenv("STRATT_NOTIFY_PLUGIN_ADDR"); addr != "" {
-		conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
-		if err != nil {
-			return fmt.Errorf("notify plugin dial %s: %w", addr, err)
-		}
-		defer conn.Close()
-		grant := pluginhost.Grant{
-			PluginIdentity: env("STRATT_NOTIFY_PLUGIN_ID", "notify"),
-			Tier:           pluginhost.TierTrusted, // SecretBroker resolution is trusted-tier (MF-A)
-			Source:         types.Source{Kind: "notify", Name: env("STRATT_NOTIFY_SOURCE_NAME", "notify")},
-		}
-		host := pluginhost.New(store, pluginv1.NewPluginServiceClient(conn), grant, log)
-		if err := registerPluginAction("notify/webhook", host, false); err != nil {
-			return err
-		}
-		log.Info("notify plugin action registered (ADR-0052 SecretBroker)", "addr", addr)
-	} else {
-		log.Info("no notify plugin configured (STRATT_NOTIFY_PLUGIN_ADDR empty); notifications disabled")
-	}
+	// The notify delivery Actions used to be registered HERE, inline, on
+	// STRATT_NOTIFY_PLUGIN_ADDR — one hardcoded `registerPluginAction("notify/webhook")`
+	// call that was, quietly, the reason the platform could deliver to exactly one kind of
+	// destination. estate/actuators/notify.yaml replaces it (ADR-0125 D3), reconciled by the
+	// connectorregistry on every replica with no strattd restart, and it declares BOTH
+	// notify/webhook and notify/smtp. Adding a third destination is now a driver plus a name
+	// in that file — the boot block is deleted rather than kept as a fallback, because two
+	// registration paths for one Action name collide at §2.4 and make "which one is live?"
+	// unanswerable from Git (the same call ADR-0117 (k) made for ansible/script).
+	//
+	// Three undocumented env knobs go with it — STRATT_NOTIFY_{PLUGIN_ADDR,PLUGIN_ID,
+	// SOURCE_NAME} — none of which anything in the repo set.
 
 	// adopt/materialize Action is provided by the AWX Connector plugin (ADR-0089), registered
 	// in the STRATT_AWX_PLUGIN_ADDR block below — the AWX→CaC transform is tool breadth that

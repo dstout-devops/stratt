@@ -17,14 +17,14 @@ graph TD
   capability_framework["capability-framework<br/><small>0100 0104 0105 0106 0107 0110<br/>0111 0112 0113 0114</small>"]
   certificates_pki["certificates-pki<br/><small>0030 0043 0050 0098 0106</small>"]
   connectors["connectors<br/><small>0007 0014 0025 0026 0037 0038<br/>0039 0045 0086 0087 0088 0089<br/>0095 0097 0099 0113 0114 0115</small>"]
-  credentials_secrets["credentials-secrets<br/><small>0009 0029 0052 0094 0098 0099<br/>0100 0106</small>"]
+  credentials_secrets["credentials-secrets<br/><small>0009 0029 0052 0094 0098 0099<br/>0100 0106 0125</small>"]
   estate_as_code["estate-as-code<br/><small>0055 0056 0057 0103 0113 0116<br/>0118 0119 0120 0122 0123</small>"]
   findings_drift["findings-drift<br/><small>0019 0020 0033 0043 0080 0085</small>"]
   foundation["foundation<br/><small>0001 0002 0004 0005 0006 0008<br/>0108 0109 0116</small>"]
   graph_model["graph-model<br/><small>0015 0017 0041 0042 0059 0060<br/>0079 0080 0081 0082 0084 0085<br/>0096 0114 0115 0119 0120 0123</small>"]
   intent_compiler["intent-compiler<br/><small>0023 0030 0036 0055 0058 0083<br/>0085 0114 0118 0119 0123</small>"]
-  orchestration["orchestration<br/><small>0010 0011 0018 0027 0031 0063<br/>0118 0122</small>"]
-  plugin_port["plugin-port<br/><small>0046 0047 0048 0049 0051 0053<br/>0054 0103 0117 0121 0124</small>"]
+  orchestration["orchestration<br/><small>0010 0011 0018 0027 0031 0063<br/>0118 0122 0125</small>"]
+  plugin_port["plugin-port<br/><small>0046 0047 0048 0049 0051 0053<br/>0054 0103 0117 0121 0124 0125</small>"]
   policy_governance["policy-governance<br/><small>0061 0062 0063 0064 0065 0066<br/>0067 0068 0069 0070 0071 0072<br/>0073 0074 0075 0076 0122</small>"]
   provisioning["provisioning<br/><small>0017 0058 0095 0096 0107 0110<br/>0111 0112 0113 0114 0115 0120<br/>0123</small>"]
   state_artifacts["state-artifacts<br/><small>0016 0029 0093 0097 0105 0112</small>"]
@@ -197,6 +197,7 @@ Credentials & secrets (§2.5) — brokering, the SecretBroker port, KV, KeyCusto
 - [ADR-0099](0099-openbao-kv-metadata-syncer.md) — OpenBao KV metadata Syncer: secret existence/metadata as a projection, never material
 - [ADR-0100](0100-keycustodian-kms-envelope-encryption.md) — The KeyCustodian capability: envelope encryption with a self-sufficient local floor and optional, transport-plural KMS providers
 - [ADR-0106](0106-openbao-multi-capability-provider.md) — OpenBao as a multi-capability provider; enablement-gate vs resolve-inject capabilities
+- [ADR-0125](0125-notification-sinks-are-drivers-not-a-core-switch.md) — Notification sinks are drivers behind a seam, not a switch in the daemon
 
 ### estate-as-code
 
@@ -300,6 +301,7 @@ Orchestration — Triggers, Workflows/Gates, Steps, Runs, Actions, notifications
 - [ADR-0063](0063-policy-step-dag-dispatch-v1.md) — Policy Step & DAG dispatch v1: the PDP as a synchronous checkpoint
 - [ADR-0118](0118-parameter-plane.md) — The parameter plane: values reach the things that execute
 - [ADR-0122](0122-change-context-is-typed-and-partly-derived.md) — The change context is typed, and the facts core can know are derived, not asserted
+- [ADR-0125](0125-notification-sinks-are-drivers-not-a-core-switch.md) — Notification sinks are drivers behind a seam, not a switch in the daemon
 
 ### plugin-port
 
@@ -318,6 +320,7 @@ Sovereign plugin port — the dark-matter substrate, transports, runtime registr
 - [ADR-0117](0117-ansible-execution-depth-and-content.md) — Ansible execution depth + content: the run-knob Contract (v5) and collections as pinned, external-sourced content
 - [ADR-0121](0121-task-event-scope.md) — `TaskEvent.scope`: an event says whether it describes the Run or a task
 - [ADR-0124](0124-ee-content-supply-factory-and-offline-source.md) — EE content supply: an `execution-environment.yml` front door, and an offline source that is verified the same way
+- [ADR-0125](0125-notification-sinks-are-drivers-not-a-core-switch.md) — Notification sinks are drivers behind a seam, not a switch in the daemon
 
 ### policy-governance
 
@@ -538,3 +541,4 @@ UI — React shell, schema-driven rendering, Views, descent, the first-party cli
 | [0122](0122-change-context-is-typed-and-partly-derived.md) | authz-identity, estate-as-code, orchestration, policy-governance |
 | [0123](0123-keyed-placement-aware-spread.md) | estate-as-code, graph-model, intent-compiler, provisioning |
 | [0124](0124-ee-content-supply-factory-and-offline-source.md) | actuators, plugin-port, substrate-ops |
+| [0125](0125-notification-sinks-are-drivers-not-a-core-switch.md) | credentials-secrets, orchestration, plugin-port |

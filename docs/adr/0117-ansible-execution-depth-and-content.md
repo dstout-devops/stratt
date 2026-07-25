@@ -544,8 +544,10 @@ what a reasonable schema would look like.** Nothing short of running `community.
   `x-stratt-sensitive`, which as a live launch input would have carried secret material onto the Run, into
   the audit stream, and out to `--extra-vars`. Password questions are now refused with a blocking
   re-broker entry, exactly as an imported credential is. It also forced a `/api/v2` fix — see ADR-0026,
-  where the façade was discarding the Workflow it had just resolved. (d) `/api/v2` route breadth + notification sinks (P2/P3) —
-  separate ADRs. ~~(e) Update [`aap-2.7-parity.md`](../aap-2.7-parity.md) when v5 + content land, and
+  where the façade was discarding the Workflow it had just resolved. (d) `/api/v2` route breadth +
+  notification sinks (P2/P3) — separate ADRs. **The notification half is done: ADR-0125**, which found the
+  gap was not three missing drivers but three places where the spine named the one driver it had. `/api/v2`
+  route breadth remains open. ~~(e) Update [`aap-2.7-parity.md`](../aap-2.7-parity.md) when v5 + content land, and
   **narrow or close PLG-1** in `enterprise-readiness.md`.~~ — **done.** Parity's Inventories, Execution
   Environments and Surveys rows now cite what actually shipped (D5a's `ansible_port`, D3/D3a's build-time
   content and per-Actuator EE, and `Workflow.inputs` for surveys). PLG-1 is **narrowed, not closed**: its
