@@ -82,7 +82,7 @@ type Orphan struct {
 type Store interface {
 	ListIntents(ctx context.Context) ([]types.Intent, error)
 	ListAssignments(ctx context.Context) ([]types.Assignment, error)
-	GetIntent(ctx context.Context, name string) (types.Intent, error)
+	GetIntent(ctx context.Context, name string, version int) (types.Intent, error)
 	GetView(ctx context.Context, name string) (types.View, error)
 	ResolveSelector(ctx context.Context, sel types.ViewSelector, params map[string]any, limit int) ([]types.Entity, error)
 	GetBlueprint(ctx context.Context, name string, version int) (types.Blueprint, error)
@@ -334,7 +334,10 @@ func Compile(ctx context.Context, s Store, maxDelta float64) (Plan, error) {
 			// removeWorkflow — a ref only: the operator launches it, never auto-run
 			// (§5 Flow 2, §1.8). If the Intent is also gone we cannot know its
 			// removal semantics → retain.
-			if in, err := s.GetIntent(ctx, eb.CompiledFrom.Intent); err == nil &&
+			// Read the Intent AT THE VERSION THIS BASELINE WAS COMPILED FROM (ADR-0119 D4): the
+			// withdrawal semantics that apply are the ones the compiled state was produced under,
+			// not whatever the newest version happens to say.
+			if in, err := s.GetIntent(ctx, eb.CompiledFrom.Intent, eb.CompiledFrom.IntentVersion); err == nil &&
 				(in.OnRemove == types.OnRemoveRemove || in.OnRemove == types.OnRemoveRevert) {
 				if bp, err := s.GetBlueprint(ctx, eb.CompiledFrom.Blueprint, eb.CompiledFrom.BlueprintVersion); err == nil && bp.RemoveWorkflow != "" {
 					detail["reason"] = fmt.Sprintf("assignment withdrawn with onRemove=%s; launch the remove workflow to %s (never auto-run, §5 Flow 2)",
@@ -373,9 +376,14 @@ func validateRefs(ctx context.Context, s Store, a types.Assignment) (types.Bluep
 		return types.Blueprint{}, types.Intent{}, fmt.Sprintf(
 			"assignment %s: view %q is parametrized ({{.param.x}}) — parametrized Views bind only at launch, not as a compile target (ADR-0024: the max-delta gate is undefined against param variance)", a.Name, a.View)
 	}
-	intent, err := s.GetIntent(ctx, a.Intent)
+	// Pinned, like the Blueprint below it (ADR-0119 D2): an Assignment names WHICH version of the
+	// Intent it means, so editing another version cannot change what this environment is running.
+	// The version is in the message because "intent tls-app not found" while tls-app sits in Git
+	// sends an operator to the wrong place (F4).
+	intent, err := s.GetIntent(ctx, a.Intent, a.IntentVersion)
 	if err != nil {
-		return types.Blueprint{}, types.Intent{}, fmt.Sprintf("assignment %s: intent %q not found", a.Name, a.Intent)
+		return types.Blueprint{}, types.Intent{}, fmt.Sprintf(
+			"assignment %s: intent %s@%d not found", a.Name, a.Intent, a.IntentVersion)
 	}
 	bp, err := s.GetBlueprint(ctx, a.Blueprint, a.BlueprintVersion)
 	if err != nil {
@@ -443,8 +451,8 @@ func compiledBaseline(a types.Assignment, bp types.Blueprint, intent types.Inten
 		RemediationParams:   remParams,
 		Framework:           "intent",
 		CompiledFrom: &types.CompiledOrigin{
-			Assignment: a.Name, Intent: intent.Name, Blueprint: bp.Name,
-			BlueprintVersion: bp.Version, Route: routeIdx,
+			Assignment: a.Name, Intent: intent.Name, IntentVersion: intent.Version,
+			Blueprint: bp.Name, BlueprintVersion: bp.Version, Route: routeIdx,
 			SpecLayers: specLayers,
 		},
 	}

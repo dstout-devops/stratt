@@ -9,6 +9,17 @@ type Assignment struct {
 	Name string `json:"name"`
 	// Intent names the declared Intent this Assignment targets.
 	Intent string `json:"intent"`
+	// IntentVersion pins WHICH version of that Intent this Assignment means (ADR-0119 D2),
+	// declared as `intent: tls-app@3` — the same name@N grammar and parser `blueprint:` uses.
+	//
+	// REQUIRED, not defaulted. An implicit pin would leave prod's configuration identity unstated
+	// in prod's own Assignment, which is precisely what a promotion diff needs to show; and one
+	// parser serving two requiredness rules (erroring for Blueprints, defaulting for Intents) is a
+	// grammar that has to be explained rather than read.
+	//
+	// With this and BlueprintVersion, an Assignment pins BOTH halves of what it means — the WHAT
+	// and the HOW — and that pair is the unit a promotion moves.
+	IntentVersion int `json:"intentVersion"`
 	// View is the cac-declared View naming the target Entity set.
 	View string `json:"view"`
 	// Blueprint + BlueprintVersion pin the composition that compiles this

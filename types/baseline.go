@@ -98,8 +98,18 @@ type Baseline struct {
 // CompiledOrigin is the §1.8 descent linkage from a compiled Baseline back
 // to the Intent-layer documents that produced it (ADR-0023).
 type CompiledOrigin struct {
-	Assignment       string `json:"assignment"`
-	Intent           string `json:"intent"`
+	Assignment string `json:"assignment"`
+	Intent     string `json:"intent"`
+	// IntentVersion is the Intent version this Baseline was compiled from (ADR-0119 D4). Without
+	// it the §1.8 descent is ambiguous the moment two versions exist, and the withdrawn-Assignment
+	// orphan branch — which re-reads the Intent to learn its onRemove semantics — has no version
+	// to read at.
+	//
+	// It answers "which version is EXPECTED now", not "which version produced this still-open
+	// Finding": CompiledName deliberately excludes the version so a promotion updates Baselines in
+	// place (preserving Finding continuity) rather than pruning and recreating them, and
+	// Finding.Diff is overwritten on each observation.
+	IntentVersion    int    `json:"intentVersion,omitempty"`
 	Blueprint        string `json:"blueprint"`
 	BlueprintVersion int    `json:"blueprintVersion"`
 	Route            int    `json:"route"`

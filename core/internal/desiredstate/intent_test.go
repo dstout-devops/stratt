@@ -1,6 +1,7 @@
 package desiredstate
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -43,7 +44,7 @@ routes:
 `)
 	writeKind(t, root, "assignments", "kiosks.yaml", `
 name: kiosks
-intent: chrome
+intent: chrome@1
 view: dev-vms
 blueprint: application@3
 environments: [prod]
@@ -90,7 +91,7 @@ maxDelta: 0.4
 		"blueprint no ver":    {"blueprints": "name: b\nfor: Intent/Application\nroutes: [{observe: {namespace: n, equals: 1}, claim: additive}]\n"},
 		"blueprint bad kind":  {"blueprints": "name: b\nversion: 1\nfor: Intent/Config\nroutes: [{observe: {namespace: n, equals: 1}, claim: additive}]\n"},
 		"bad claim":           {"blueprints": "name: b\nversion: 1\nfor: Intent/Application\nroutes: [{observe: {namespace: n, equals: 1}, claim: priority}]\n"},
-		"bad blueprint ref":   {"assignments": "name: a\nintent: i\nview: v\nblueprint: application\n"},
+		"bad blueprint ref":   {"assignments": "name: a\nintent: i@1\nview: v\nblueprint: application\n"},
 	} {
 		bad := t.TempDir()
 		writeDecl(t, bad, "v.yaml", "name: v\nselector: {kinds: [vm]}\n")
@@ -254,7 +255,7 @@ func TestAssignmentValuesParse(t *testing.T) {
 	root := t.TempDir()
 	writeDecl(t, root, "v.yaml", "name: hosts\nselector: {kinds: [host]}\n")
 	writeKind(t, root, "assignments", "a.yaml",
-		"name: prod-web\nintent: web\nview: hosts\nblueprint: web-server@1\nenvironments: [prod]\n"+
+		"name: prod-web\nintent: web@1\nview: hosts\nblueprint: web-server@1\nenvironments: [prod]\n"+
 			"values: {port: 8443, replicas: 6}\n")
 	parsed, err := ParseDir(root, nil)
 	if err != nil {
@@ -277,7 +278,7 @@ func TestAssignmentRejectsEnvKeyedValues(t *testing.T) {
 	root := t.TempDir()
 	writeDecl(t, root, "v.yaml", "name: hosts\nselector: {kinds: [host]}\n")
 	writeKind(t, root, "assignments", "a.yaml",
-		"name: web\nintent: web\nview: hosts\nblueprint: web-server@1\nenvironments: [prod, staging]\n"+
+		"name: web\nintent: web@1\nview: hosts\nblueprint: web-server@1\nenvironments: [prod, staging]\n"+
 			"values: {prod: {port: 443}, staging: {port: 8443}}\n")
 	_, err := ParseDir(root, nil)
 	if err == nil {
@@ -299,7 +300,7 @@ func TestAssignmentValuesNotKeyedByAnUnrelatedEnvIsAllowed(t *testing.T) {
 	root := t.TempDir()
 	writeDecl(t, root, "v.yaml", "name: hosts\nselector: {kinds: [host]}\n")
 	writeKind(t, root, "assignments", "a.yaml",
-		"name: web\nintent: web\nview: hosts\nblueprint: web-server@1\nenvironments: [prod]\n"+
+		"name: web\nintent: web@1\nview: hosts\nblueprint: web-server@1\nenvironments: [prod]\n"+
 			"values: {staging: something}\n")
 	if _, err := ParseDir(root, nil); err != nil {
 		t.Fatalf("a value key naming an environment this Assignment does not declare is not detectable here: %v", err)
@@ -429,5 +430,251 @@ func TestApplicationPortTypedAtTheIntentSeam(t *testing.T) {
 	// Still open: an app-specific field core knows nothing about must pass.
 	if err := write(t, "{package: nginx, commonName: app.example.test}"); err != nil {
 		t.Fatalf("an app-specific field must still be allowed (the kind is generic, §1.1): %v", err)
+	}
+}
+
+// ── ADR-0119: versioned configuration ─────────────────────────────────────────────────
+
+// TestPinnedVersionCannotBeEditedInPlace is D6, the decision that makes "immutable once it passes
+// go" true rather than aspirational — and it exists because the first draft of ADR-0119 assumed
+// versioning alone delivered it.
+//
+// It does not: UpsertIntent updates a row in place, and computeIntentLayerPlan emits ActionUpdate
+// for a same-version content edit. So editing an Intent WITHOUT touching `version:` would change
+// what a pinned environment is running at the next reconcile, which is exactly the failure the ADR
+// claimed was structurally impossible.
+func TestPinnedVersionCannotBeEditedInPlace(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+
+	base := Declarations{
+		Views: []Declaration{{Name: "hosts", Selector: types.ViewSelector{Kinds: []string{"host"}}}},
+		Intents: []types.Intent{{
+			Name: "app-v", Kind: types.IntentApplication, Version: 1,
+			Spec: map[string]any{"package": "nginx"},
+		}},
+		Assignments: []types.Assignment{{
+			Name: "prod-v", Intent: "app-v", IntentVersion: 1, View: "hosts",
+			Blueprint: "bp-v", BlueprintVersion: 1,
+		}},
+		Blueprints: []types.Blueprint{{
+			Name: "bp-v", Version: 1, For: types.IntentApplication,
+			Routes: []types.BlueprintRoute{{
+				Observe: types.FacetExpectation{Namespace: "app.config", Path: "port", Equals: []byte(`"443"`)},
+				Claim:   types.ClaimExclusive,
+			}},
+		}},
+	}
+	if _, err := Apply(ctx, s, base); err != nil {
+		t.Fatalf("initial apply: %v", err)
+	}
+
+	// Same version, different content — the natural careless edit.
+	edited := base
+	edited.Intents = []types.Intent{{
+		Name: "app-v", Kind: types.IntentApplication, Version: 1,
+		Spec: map[string]any{"package": "apache"}, // changed under a pinned version
+	}}
+	plan, err := Apply(ctx, s, edited)
+	if err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	var entry *PlanEntry
+	for i := range plan.Entries {
+		if plan.Entries[i].Kind == KindIntent && plan.Entries[i].Name == "app-v@1" {
+			entry = &plan.Entries[i]
+		}
+	}
+	if entry == nil {
+		t.Fatal("no plan entry for intent app-v@1 — the plan key should be name@version")
+	}
+	if entry.Error == "" {
+		t.Fatal("editing a PINNED version in place must be refused (ADR-0119 D6)")
+	}
+	for _, want := range []string{"prod-v", "new version"} {
+		if !strings.Contains(entry.Error, want) {
+			t.Errorf("the refusal must name the pinning Assignment and the fix; got: %s", entry.Error)
+		}
+	}
+	// And the refusal must be BEHAVIOUR, not just a message: the stored spec is unchanged.
+	stored, err := s.GetIntent(ctx, "app-v", 1)
+	if err != nil {
+		t.Fatalf("get intent: %v", err)
+	}
+	if stored.Spec["package"] != "nginx" {
+		t.Fatalf("a refused edit must not be applied — stored spec is %v", stored.Spec)
+	}
+}
+
+// TestPinnedVersionCannotBeDeleted: the other half of D6. The natural in-place bump
+// (version: 1 → 2 in one file) produces Create @2 + Delete @1 in a single plan, and deleting @1
+// while a ring still pins it makes that Assignment fail validateRefs — which RETAINS its prior
+// Baselines, so the environment freezes on stale expectations while erroring. MaxPruneFraction does
+// not catch it: it is a per-kind fraction, and one delete among N intents is under any threshold.
+func TestPinnedVersionCannotBeDeleted(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	base := Declarations{
+		Views: []Declaration{{Name: "hosts2", Selector: types.ViewSelector{Kinds: []string{"host"}}}},
+		Intents: []types.Intent{{
+			Name: "app-d", Kind: types.IntentApplication, Version: 1,
+			Spec: map[string]any{"package": "nginx"},
+		}},
+		Assignments: []types.Assignment{{
+			Name: "prod-d", Intent: "app-d", IntentVersion: 1, View: "hosts2",
+			Blueprint: "bp-d", BlueprintVersion: 1,
+		}},
+		Blueprints: []types.Blueprint{{
+			Name: "bp-d", Version: 1, For: types.IntentApplication,
+			Routes: []types.BlueprintRoute{{
+				Observe: types.FacetExpectation{Namespace: "app.config", Path: "port", Equals: []byte(`"443"`)},
+				Claim:   types.ClaimExclusive,
+			}},
+		}},
+	}
+	if _, err := Apply(ctx, s, base); err != nil {
+		t.Fatalf("initial apply: %v", err)
+	}
+	// The in-place bump: @1 disappears from Git, @2 appears, the Assignment still pins @1.
+	bumped := base
+	bumped.Intents = []types.Intent{{
+		Name: "app-d", Kind: types.IntentApplication, Version: 2,
+		Spec: map[string]any{"package": "apache"},
+	}}
+	plan, err := Apply(ctx, s, bumped)
+	if err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	var del *PlanEntry
+	for i := range plan.Entries {
+		if plan.Entries[i].Kind == KindIntent && plan.Entries[i].Action == ActionDelete {
+			del = &plan.Entries[i]
+		}
+	}
+	if del == nil || del.Error == "" {
+		t.Fatalf("deleting a PINNED version must be refused; got %+v", del)
+	}
+	if _, err := s.GetIntent(ctx, "app-d", 1); err != nil {
+		t.Fatalf("the pinned version must survive a refused delete: %v", err)
+	}
+}
+
+// TestUnpinnedVersionIsFreelyEditable: the guard must not freeze the estate. A version NO declared
+// Assignment pins — a draft, or one whose Assignment was repointed in the same change — is ordinary
+// desired state and updates normally. Without this the rule would make iteration impossible.
+func TestUnpinnedVersionIsFreelyEditable(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	decls := Declarations{
+		Intents: []types.Intent{{
+			Name: "draft", Kind: types.IntentApplication, Version: 1,
+			Spec: map[string]any{"package": "nginx"},
+		}},
+	}
+	if _, err := Apply(ctx, s, decls); err != nil {
+		t.Fatalf("initial apply: %v", err)
+	}
+	decls.Intents[0].Spec = map[string]any{"package": "apache"}
+	plan, err := Apply(ctx, s, decls)
+	if err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	for _, e := range plan.Entries {
+		if e.Kind == KindIntent && e.Error != "" {
+			t.Fatalf("an unpinned version must be editable, got refusal: %s", e.Error)
+		}
+	}
+	stored, err := s.GetIntent(ctx, "draft", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.Spec["package"] != "apache" {
+		t.Fatalf("an unpinned edit must apply, got %v", stored.Spec)
+	}
+}
+
+// TestProvisioningKindRefusesAVersion is D3, enforced through the DERIVED predicate so a new
+// provisioning kind inherits the refusal instead of needing someone to remember a list.
+func TestProvisioningKindRefusesAVersion(t *testing.T) {
+	for _, kind := range []string{types.IntentCompute, types.IntentSubnet, types.IntentVlan} {
+		if types.AssignableIntentKind(kind) {
+			t.Errorf("%s must not be assignable/versionable", kind)
+		}
+		err := ValidateIntent(types.Intent{Name: "x", Kind: kind, Version: 2})
+		if err == nil {
+			t.Errorf("%s must refuse a version (ADR-0119 D3)", kind)
+			continue
+		}
+		if !strings.Contains(err.Error(), "cannot carry a version") {
+			t.Errorf("%s: the refusal must explain itself; got %v", kind, err)
+		}
+	}
+	// Application-shaped kinds are versionable, which is the whole point.
+	if !types.AssignableIntentKind(types.IntentApplication) {
+		t.Error("Intent/Application must be versionable")
+	}
+}
+
+// TestGuardPinnedVersionsIsPure covers D6's decision logic WITHOUT a database, because the
+// end-to-end tests above t.Skip() when no Postgres is reachable — which means they do not guard
+// anything in `task ci`. That gap has bitten this arc three times (the compiler's wiring, the
+// schedule Trigger's params, the trigger engine having no tests at all), so the rule gets a pure
+// test as well as an integration one.
+func TestGuardPinnedVersionsIsPure(t *testing.T) {
+	decls := Declarations{Assignments: []types.Assignment{
+		{Name: "prod", Intent: "app", IntentVersion: 1, Blueprint: "bp", BlueprintVersion: 2},
+		{Name: "stage", Intent: "app", IntentVersion: 2, Blueprint: "bp", BlueprintVersion: 2},
+	}}
+
+	entry := func(kind, name string, action Action) PlanEntry {
+		return PlanEntry{Kind: kind, Name: name, Action: action}
+	}
+	plan := &Plan{Entries: []PlanEntry{
+		entry(KindIntent, "app@1", ActionUpdate),   // pinned by prod  → refuse
+		entry(KindIntent, "app@2", ActionDelete),   // pinned by stage → refuse
+		entry(KindIntent, "app@3", ActionUpdate),   // pinned by nobody → allow
+		entry(KindIntent, "app@1", ActionCreate),   // create is never a refusal
+		entry(KindBlueprint, "bp@2", ActionUpdate), // same rule, other Kind → refuse
+		entry(KindBlueprint, "bp@9", ActionDelete), // unpinned → allow
+		entry(KindView, "hosts", ActionDelete),     // unrelated Kind → untouched
+	}}
+	if err := guardPinnedVersions(plan, decls); err != nil {
+		t.Fatal(err)
+	}
+	want := []bool{true, true, false, false, true, false, false} // true = refused
+	for i, refused := range want {
+		got := plan.Entries[i].Error != ""
+		if got != refused {
+			t.Errorf("entry %d (%s %s %s): refused=%v, want %v (err=%q)",
+				i, plan.Entries[i].Kind, plan.Entries[i].Name, plan.Entries[i].Action, got, refused,
+				plan.Entries[i].Error)
+		}
+	}
+	// The message must name every pinning Assignment, since retiring a version means finding them
+	// all. Both rings pin bp@2, so both must appear.
+	if e := plan.Entries[4].Error; !strings.Contains(e, "prod") || !strings.Contains(e, "stage") {
+		t.Errorf("a refusal must name EVERY pinning Assignment; got: %s", e)
+	}
+	// And it must distinguish the two verbs, because the fix differs.
+	if !strings.Contains(plan.Entries[0].Error, "edited in place") {
+		t.Errorf("an update refusal should say so; got: %s", plan.Entries[0].Error)
+	}
+	if !strings.Contains(plan.Entries[1].Error, "removed") {
+		t.Errorf("a delete refusal should say so; got: %s", plan.Entries[1].Error)
+	}
+}
+
+// TestGuardUsesDeclaredAssignmentsNotStored pins a deliberate choice: "pinned" means a DECLARED
+// Assignment names it. So removing an Assignment AND the version it pinned in one commit is legal —
+// the dependency disappears in the same change as its target. Keying off the STORED set instead
+// would make that edit permanently impossible without a two-step dance.
+func TestGuardUsesDeclaredAssignmentsNotStored(t *testing.T) {
+	plan := &Plan{Entries: []PlanEntry{{Kind: KindIntent, Name: "app@1", Action: ActionDelete}}}
+	if err := guardPinnedVersions(plan, Declarations{}); err != nil {
+		t.Fatal(err)
+	}
+	if plan.Entries[0].Error != "" {
+		t.Fatalf("with no declared Assignment pinning it, a version must be deletable; got: %s",
+			plan.Entries[0].Error)
 	}
 }

@@ -1473,6 +1473,11 @@ export interface components {
         };
         /** @description A declarative document of *what* (charter §2.4), bound to a View by an Assignment. CaC-only. v1: Intent/Application. */
         Intent: {
+            /**
+             * Format: int64
+             * @description Configuration version of this Intent document (ADR-0119 D1); absent means 1. With the name it is the storage identity, so test/stage/prod can run three configurations of one Intent simultaneously, each pinned by its own environment-scoped Assignment. Identity-forming like Blueprint.version — NOT View.version's monotonic revision counter, and NOT the schema-shape version Contract carries. Refused on provisioning kinds, which have no Assignment to pin them (D3).
+             */
+            version?: number;
             name: string;
             kind: string;
             spec?: Record<string, never>;
@@ -1483,6 +1488,11 @@ export interface components {
         Assignment: {
             name: string;
             intent: string;
+            /**
+             * Format: int64
+             * @description The Intent version this Assignment pins (ADR-0119 D2), declared as `intent: tls-app@3`. Required, like blueprintVersion — an implicit pin would leave an environment's configuration identity unstated in its own Assignment.
+             */
+            intentVersion?: number;
             view: string;
             blueprint: string;
             /** Format: int64 */
@@ -1643,6 +1653,11 @@ export interface components {
             compiledFrom?: {
                 assignment?: string;
                 intent?: string;
+                /**
+                 * Format: int64
+                 * @description The Intent version this Baseline was compiled from (ADR-0119 D4) — which version is EXPECTED now, not which produced a still-open Finding.
+                 */
+                intentVersion?: number;
                 blueprint?: string;
                 /** Format: int64 */
                 blueprintVersion?: number;

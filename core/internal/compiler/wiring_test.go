@@ -48,11 +48,24 @@ func (f *fakeStore) ListIntents(context.Context) ([]types.Intent, error) {
 func (f *fakeStore) ListAssignments(context.Context) ([]types.Assignment, error) {
 	return f.assignments, nil
 }
-func (f *fakeStore) GetIntent(_ context.Context, name string) (types.Intent, error) {
+
+// Keyed by name@version like the real store (ADR-0119 D1); the fixtures declare version 0, which
+// normalizes to 1 exactly as the store does.
+func (f *fakeStore) GetIntent(_ context.Context, name string, version int) (types.Intent, error) {
+	if version < 1 {
+		version = 1
+	}
 	if in, ok := f.intents[name]; ok {
+		got := in.Version
+		if got < 1 {
+			got = 1
+		}
+		if got != version {
+			return types.Intent{}, fmt.Errorf("no intent %s@%d", name, version)
+		}
 		return in, nil
 	}
-	return types.Intent{}, fmt.Errorf("no intent %q", name)
+	return types.Intent{}, fmt.Errorf("no intent %s@%d", name, version)
 }
 func (f *fakeStore) GetView(_ context.Context, name string) (types.View, error) {
 	if v, ok := f.views[name]; ok {

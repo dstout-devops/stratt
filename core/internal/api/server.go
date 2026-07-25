@@ -715,6 +715,7 @@ func baselineToWire(b types.Baseline) Baseline {
 			Blueprint        *string              `json:"blueprint,omitempty"`
 			BlueprintVersion *int64               `json:"blueprintVersion,omitempty"`
 			Intent           *string              `json:"intent,omitempty"`
+			IntentVersion    *int64               `json:"intentVersion,omitempty"`
 			Route            *int64               `json:"route,omitempty"`
 			SpecLayers       *map[string][]string `json:"specLayers,omitempty"`
 		}{}
@@ -723,6 +724,10 @@ func baselineToWire(b types.Baseline) Baseline {
 		out.CompiledFrom.Blueprint = &b.CompiledFrom.Blueprint
 		v := int64(b.CompiledFrom.BlueprintVersion)
 		out.CompiledFrom.BlueprintVersion = &v
+		if b.CompiledFrom.IntentVersion > 0 {
+			iv := int64(b.CompiledFrom.IntentVersion)
+			out.CompiledFrom.IntentVersion = &iv
+		}
 		r := int64(b.CompiledFrom.Route)
 		out.CompiledFrom.Route = &r
 		// The layer lineage the merge engine computes (ADR-0118 D1) — the answer to

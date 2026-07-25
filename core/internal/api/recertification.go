@@ -176,7 +176,9 @@ func (s *Server) buildRecertification(r *http.Request, view string) (AccessRecer
 		if a.View != view {
 			continue
 		}
-		in, err := s.Store.GetIntent(ctx, a.Intent)
+		// At the version this Assignment PINS (ADR-0119 D2): recertification must report the grant
+		// the environment is actually running, not whichever version was edited most recently.
+		in, err := s.Store.GetIntent(ctx, a.Intent, a.IntentVersion)
 		if err != nil || in.Kind != types.IntentAccess {
 			continue
 		}

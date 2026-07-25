@@ -1529,8 +1529,10 @@ func ValidateMCPServer(m types.MCPServer) error {
 
 // intentFile is the intents/*.yaml shape.
 type intentFile struct {
-	Name     string         `yaml:"name"`
-	Kind     string         `yaml:"kind"`
+	Name string `yaml:"name"`
+	Kind string `yaml:"kind"`
+	// Version is the configuration version (ADR-0119 D1); absent means 1.
+	Version  int            `yaml:"version"`
 	Spec     map[string]any `yaml:"spec"`
 	OnRemove string         `yaml:"onRemove"`
 }
@@ -1542,7 +1544,7 @@ func parseIntentFile(path string, raw []byte) (string, types.Intent, error) {
 	if err := dec.Decode(&f); err != nil {
 		return "", types.Intent{}, fmt.Errorf("desiredstate: %s: %w", path, err)
 	}
-	in := types.Intent{Name: f.Name, Kind: f.Kind, Spec: f.Spec, OnRemove: f.OnRemove}
+	in := types.Intent{Name: f.Name, Kind: f.Kind, Version: f.Version, Spec: f.Spec, OnRemove: f.OnRemove}
 	if err := ValidateIntent(in); err != nil {
 		return "", types.Intent{}, fmt.Errorf("desiredstate: %s: %w", path, err)
 	}
@@ -1556,6 +1558,25 @@ func parseIntentFile(path string, raw []byte) (string, types.Intent, error) {
 func ValidateIntent(in types.Intent) error {
 	if in.Name == "" {
 		return fmt.Errorf("intent requires a name")
+	}
+	if in.Version < 0 {
+		return fmt.Errorf("intent %s: version must be a positive integer, got %d", in.Name, in.Version)
+	}
+	// ADR-0119 D3: versionable iff a seam exists to carry the pin. An Assignment pins
+	// application-shaped Intents; provisioning kinds are selected BY NAME by the provisioning
+	// reconcile, which has no Assignment, so a version there could never be selected — and two
+	// versions of one fleet would be two claims on the same instance identities, which ADR-0058 D5
+	// rejects as a collision. Refused here rather than failing later in provision.Plan, which would
+	// blame the wrong document (§1.8).
+	//
+	// The predicate is DERIVED from the kind constants (types.AssignableIntentKind), so a new
+	// provisioning kind inherits this refusal instead of needing someone to remember.
+	if in.Version > 0 && !types.AssignableIntentKind(in.Kind) {
+		return fmt.Errorf(
+			"intent %s: kind %s cannot carry a version — it is selected by NAME by the provisioning "+
+				"reconcile, which has no Assignment to pin a version with, and two versions of one fleet "+
+				"would be two claims on the same instance identities (ADR-0119 D3, ADR-0058 D5)",
+			in.Name, in.Kind)
 	}
 	specRaw, err := json.Marshal(in.Spec)
 	if err != nil {
@@ -1628,12 +1649,18 @@ func parseAssignmentFile(path string, raw []byte) (string, types.Assignment, err
 	if err := dec.Decode(&f); err != nil {
 		return "", types.Assignment{}, fmt.Errorf("desiredstate: %s: %w", path, err)
 	}
-	name, version, err := splitBlueprintRef(f.Blueprint)
+	name, version, err := splitVersionedRef("blueprint", f.Blueprint)
 	if err != nil {
 		return "", types.Assignment{}, fmt.Errorf("desiredstate: %s: %w", path, err)
 	}
+	// `intent: tls-app@3` — the same grammar, equally required (ADR-0119 D2). An Assignment pins
+	// BOTH halves of what it means: the WHAT and the HOW.
+	iname, iversion, ierr := splitVersionedRef("intent", f.Intent)
+	if ierr != nil {
+		return "", types.Assignment{}, fmt.Errorf("desiredstate: %s: %w", path, ierr)
+	}
 	a := types.Assignment{
-		Name: f.Name, Intent: f.Intent, View: f.View,
+		Name: f.Name, Intent: iname, IntentVersion: iversion, View: f.View,
 		Blueprint: name, BlueprintVersion: version,
 		Environments: f.Environments, MaxDelta: f.MaxDelta, AckDelta: f.AckDelta,
 		Values: f.Values,
@@ -1644,18 +1671,88 @@ func parseAssignmentFile(path string, raw []byte) (string, types.Assignment, err
 	return a.Name, a, nil
 }
 
-// splitBlueprintRef parses "name@version".
-func splitBlueprintRef(ref string) (string, int, error) {
+// guardPinnedVersions turns an update-or-delete of a PINNED version into a plan error (ADR-0119 D6).
+//
+// "Pinned" means some declared Assignment names it. That is deliberately the DECLARED set, not the
+// stored one: the question is whether this commit still depends on the version, so removing the
+// Assignment and the version it pinned in one commit is legal — the pin goes away in the same
+// change that removes the target.
+//
+// The error is on the PlanEntry rather than returned, so `stratt plan` shows every offending
+// document at once instead of stopping at the first (§1.8: an operator fixing a promotion wants the
+// whole list).
+func guardPinnedVersions(plan *Plan, decls Declarations) error {
+	pinnedIntents := map[string][]string{} // name@version → assignments pinning it
+	pinnedBlueprints := map[string][]string{}
+	for _, a := range decls.Assignments {
+		if a.Intent != "" {
+			k := versionedRef(a.Intent, a.IntentVersion)
+			pinnedIntents[k] = append(pinnedIntents[k], a.Name)
+		}
+		if a.Blueprint != "" {
+			k := versionedRef(a.Blueprint, a.BlueprintVersion)
+			pinnedBlueprints[k] = append(pinnedBlueprints[k], a.Name)
+		}
+	}
+	for i := range plan.Entries {
+		e := &plan.Entries[i]
+		if e.Action != ActionUpdate && e.Action != ActionDelete {
+			continue
+		}
+		var by []string
+		switch e.Kind {
+		case KindIntent:
+			by = pinnedIntents[e.Name]
+		case KindBlueprint:
+			by = pinnedBlueprints[e.Name]
+		default:
+			continue
+		}
+		if len(by) == 0 {
+			continue
+		}
+		sort.Strings(by)
+		verb := "edited in place"
+		if e.Action == ActionDelete {
+			verb = "removed"
+		}
+		e.Error = fmt.Sprintf(
+			"published %s %s is pinned by assignment(s) %v and cannot be %s — declare a new version "+
+				"instead (ADR-0119 D6: a pinned configuration is immutable, or promotion means nothing). "+
+				"To retire this version, remove or repoint those Assignments in the same change",
+			e.Kind, e.Name, by, verb)
+	}
+	return nil
+}
+
+// splitVersionedRef parses the `name@version` grammar shared by `blueprint:` and `intent:`
+// (ADR-0119 D2). One grammar, one implementation, one error shape — `kind` only names the field in
+// the message. Required for both: an optional pin would leave an environment's identity unstated in
+// its own Assignment, and a parser with two requiredness rules is a grammar you have to explain
+// rather than read.
+func splitVersionedRef(kind, ref string) (string, int, error) {
 	at := strings.LastIndex(ref, "@")
 	if at <= 0 || at == len(ref)-1 {
-		return "", 0, fmt.Errorf("blueprint must be name@version, got %q", ref)
+		return "", 0, fmt.Errorf("%s must be name@version, got %q", kind, ref)
 	}
 	version, err := strconv.Atoi(ref[at+1:])
 	if err != nil || version < 1 {
-		return "", 0, fmt.Errorf("blueprint version must be a positive integer, got %q", ref[at+1:])
+		return "", 0, fmt.Errorf("%s version must be a positive integer, got %q", kind, ref[at+1:])
 	}
 	return ref[:at], version, nil
 }
+
+// versionedRef renders the same grammar — the plan key and the wire form of a versioned CaC
+// document's identity.
+func versionedRef(name string, version int) string {
+	if version < 1 {
+		version = 1
+	}
+	return fmt.Sprintf("%s@%d", name, version)
+}
+
+// splitBlueprintRef is retained as the Blueprint-named spelling of splitVersionedRef.
+func splitBlueprintRef(ref string) (string, int, error) { return splitVersionedRef("blueprint", ref) }
 
 // ValidateAssignment checks one Assignment declaration (ADR-0023). Full
 // cross-reference validation (View is cac; Intent/Blueprint/Workflow exist)
@@ -1666,6 +1763,20 @@ func ValidateAssignment(a types.Assignment) error {
 	}
 	if a.Intent == "" || a.View == "" || a.Blueprint == "" {
 		return fmt.Errorf("assignment %s: intent, view, and blueprint are required", a.Name)
+	}
+	// Both pins are required (ADR-0119 D2), and this check exists because the YAML and API doors
+	// reach here by different routes: the parser gets the version from splitVersionedRef, which
+	// cannot yield less than 1, while the admission path JSON-round-trips a wire struct where the
+	// field can simply be absent. Without this, the API would accept an unpinned Assignment that
+	// Git refuses — a one-surface difference in what the same document means, which is the §1.6
+	// asymmetry this codebase has produced twice already.
+	if a.IntentVersion < 1 {
+		return fmt.Errorf(
+			"assignment %s: intentVersion is required (declare `intent: %s@N`) — an environment's "+
+				"configuration identity must be stated in its own Assignment, not implied", a.Name, a.Intent)
+	}
+	if a.BlueprintVersion < 1 {
+		return fmt.Errorf("assignment %s: blueprintVersion is required (declare `blueprint: %s@N`)", a.Name, a.Blueprint)
 	}
 	if a.MaxDelta != nil && (*a.MaxDelta <= 0 || *a.MaxDelta > 1) {
 		return fmt.Errorf("assignment %s: maxDelta must be in (0, 1]", a.Name)
@@ -3005,22 +3116,44 @@ func computeIntentLayerPlan(ctx context.Context, store *graph.Store, decls Decla
 	if err != nil {
 		return Plan{}, err
 	}
-	inByName := map[string]types.Intent{}
+	// Intents are keyed name@version (ADR-0119 D1), exactly as Blueprints are in the sibling block
+	// below. The source map is re-keyed with them, because Apply looks the declaration up by
+	// PlanEntry.Name — an inByName map would miss every entry the moment the key carries a version.
+	//
+	// PlanEntry.Name is a WIRE field, so this changes `stratt plan` output and the plan artifact for
+	// intents: `intent tls-app@3: update` rather than `intent tls-app: update`. Deliberate — the
+	// version is the half of the identity that was previously invisible.
+	inByKey := map[string]types.Intent{}
 	for _, in := range curIntents {
-		inByName[in.Name] = in
+		inByKey[versionedRef(in.Name, in.Version)] = in
 	}
 	declaredIn := map[string]bool{}
 	for _, d := range decls.Intents {
-		declaredIn[d.Name] = true
-		e := PlanEntry{Kind: KindIntent, Name: d.Name}
-		cur, ok := inByName[d.Name]
+		k := versionedRef(d.Name, d.Version)
+		declaredIn[k] = true
+		e := PlanEntry{Kind: KindIntent, Name: k}
+		cur, ok := inByKey[k]
 		e.Action = diffAction(ok, declDocsEqual(cur, d))
 		plan.Entries = append(plan.Entries, e)
 	}
 	for _, in := range curIntents {
-		if !declaredIn[in.Name] {
-			plan.Entries = append(plan.Entries, PlanEntry{Kind: KindIntent, Name: in.Name, Action: ActionDelete})
+		if k := versionedRef(in.Name, in.Version); !declaredIn[k] {
+			plan.Entries = append(plan.Entries, PlanEntry{Kind: KindIntent, Name: k, Action: ActionDelete})
 		}
+	}
+
+	// ADR-0119 D6 — THE guard that makes "immutable once it passes go" true. Versioning alone does
+	// not: UpsertIntent still updates a row in place, and an ActionUpdate on a same-version content
+	// edit would change what a pinned environment is running at the next reconcile. So a version a
+	// DECLARED Assignment pins may be neither updated nor deleted; the author must declare a new
+	// version, which is the reviewable act promotion is built on.
+	//
+	// Applied to Intents AND Blueprints below, as one rule: Blueprints have had the same exposure
+	// since they were versioned (their in-repo layout is one file per name with an inline
+	// `version:`, so the natural bump edits in place too), and a second divergent rule for the same
+	// situation would be worse than the gap.
+	if err := guardPinnedVersions(&plan, decls); err != nil {
+		return Plan{}, err
 	}
 
 	curAsgs, err := store.ListAssignments(ctx)
@@ -3150,9 +3283,11 @@ func Apply(ctx context.Context, store *graph.Store, decls Declarations) (Plan, e
 	for _, d := range decls.MCPServers {
 		msByName[d.Name] = d
 	}
-	inByName := map[string]types.Intent{}
+	// Keyed name@version to match PlanEntry.Name for KindIntent (ADR-0119 D1) — the same shape
+	// bpByKey uses below. Keyed by name alone, every intent lookup here would miss.
+	inByKey := map[string]types.Intent{}
 	for _, d := range decls.Intents {
-		inByName[d.Name] = d
+		inByKey[versionedRef(d.Name, d.Version)] = d
 	}
 	asgByName := map[string]types.Assignment{}
 	for _, d := range decls.Assignments {
@@ -3165,6 +3300,17 @@ func Apply(ctx context.Context, store *graph.Store, decls Declarations) (Plan, e
 	for i := range plan.Entries {
 		e := &plan.Entries[i]
 		if e.Action == ActionNoop {
+			continue
+		}
+		// An entry that ComputePlan already REFUSED is not applied. Without this the pinned-version
+		// guard (ADR-0119 D6) would be inert: it would attach an error to the entry and the very
+		// next line would carry out the update anyway — a mechanism that reports a refusal while
+		// performing the act. The refusal has to be the behaviour, not the message.
+		//
+		// Skipping rather than aborting the whole apply is deliberate: one poisoned document must
+		// not stop every unrelated declaration from converging, and the error is already on the
+		// entry for `stratt plan`/the reconcile log to surface (§1.8).
+		if e.Error != "" {
 			continue
 		}
 		var err error
@@ -3230,9 +3376,16 @@ func Apply(ctx context.Context, store *graph.Store, decls Declarations) (Plan, e
 		case e.Kind == KindMCPServer:
 			err = store.UpsertMCPServer(ctx, msByName[e.Name])
 		case e.Kind == KindIntent && e.Action == ActionDelete:
-			err = store.DeleteIntent(ctx, e.Name)
+			// e.Name is name@version (ADR-0119 D1); split it so the version reaches the store,
+			// mirroring the Blueprint delete case below.
+			name, version, perr := splitVersionedRef("intent", e.Name)
+			if perr != nil {
+				err = perr
+			} else {
+				err = store.DeleteIntent(ctx, name, version)
+			}
 		case e.Kind == KindIntent:
-			err = store.UpsertIntent(ctx, inByName[e.Name])
+			err = store.UpsertIntent(ctx, inByKey[e.Name])
 		case e.Kind == KindAssignment && e.Action == ActionDelete:
 			err = store.DeleteAssignment(ctx, e.Name)
 		case e.Kind == KindAssignment:
