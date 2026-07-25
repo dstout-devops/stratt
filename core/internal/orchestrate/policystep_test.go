@@ -96,7 +96,7 @@ func TestRunDAG_PolicyRequiresApproval_Approved(t *testing.T) {
 	}, time.Minute)
 	env.ExecuteWorkflow(RunDAG, DAGInput{
 		WorkflowRunID: "wr-1", WorkflowName: "guarded", Principal: "alice",
-		LaunchParams: map[string]any{"environment": "prod"},
+		Context: map[string]any{"environment": "prod"},
 	})
 
 	if !env.IsWorkflowCompleted() || env.GetWorkflowError() != nil {
@@ -123,7 +123,7 @@ func TestRunDAG_PolicyRequiresApproval_NoApprover_FailsClosed(t *testing.T) {
 	env, final, status := dagTestEnv(t, spec, map[string]error{})
 	env.ExecuteWorkflow(RunDAG, DAGInput{
 		WorkflowRunID: "wr-1", WorkflowName: "guarded", Principal: "alice",
-		LaunchParams: map[string]any{"environment": "prod"},
+		Context: map[string]any{"environment": "prod"},
 	})
 
 	if !env.IsWorkflowCompleted() || env.GetWorkflowError() != nil {
@@ -158,8 +158,8 @@ func TestPolicyStepStatus(t *testing.T) {
 // as labels + environment, deterministically (ADR-0063).
 func TestAssembleChangeContext(t *testing.T) {
 	cc := assembleChangeContext(DAGInput{
-		Principal:    "alice",
-		LaunchParams: map[string]any{"environment": "prod", "team": "sre", "count": 3},
+		Principal: "alice",
+		Context:   map[string]any{"environment": "prod", "team": "sre", "count": 3},
 	})
 	if cc.Actor.ID != "alice" {
 		t.Fatalf("actor: %s", cc.Actor.ID)
@@ -179,8 +179,8 @@ func TestAssembleChangeContext(t *testing.T) {
 // param, tolerating both []string and []any.
 func TestAssembleChangeContext_Committers(t *testing.T) {
 	cc := assembleChangeContext(DAGInput{
-		Principal:    "alice",
-		LaunchParams: map[string]any{"committers": []any{"alice", "bob"}},
+		Principal: "alice",
+		Context:   map[string]any{"committers": []any{"alice", "bob"}},
 	})
 	if len(cc.Committers) != 2 || cc.Committers[0].ID != "alice" || cc.Committers[1].ID != "bob" {
 		t.Fatalf("committers not surfaced: %+v", cc.Committers)
@@ -224,7 +224,7 @@ func TestRunDAG_PolicyDenies(t *testing.T) {
 	env, final, status := dagTestEnv(t, spec, map[string]error{})
 	env.ExecuteWorkflow(RunDAG, DAGInput{
 		WorkflowRunID: "wr-1", WorkflowName: "guarded", Principal: "alice",
-		LaunchParams: map[string]any{"environment": "prod"},
+		Context: map[string]any{"environment": "prod"},
 	})
 
 	if !env.IsWorkflowCompleted() || env.GetWorkflowError() != nil {
@@ -236,5 +236,45 @@ func TestRunDAG_PolicyDenies(t *testing.T) {
 	}
 	if *status != types.RunFailed {
 		t.Fatalf("denied policy must fail the workflow run, got %s", *status)
+	}
+}
+
+// TestChangeContextIsNotWorkflowInputs pins the split ADR-0118 D4 made, because the two
+// fields are easy to re-conflate: they are both string-keyed bags on the same struct, and
+// the old code path read policy context out of LaunchParams.
+//
+// The distinction is not cosmetic. A Workflow's `inputs` are CLOSED — an undeclared key is
+// rejected — so if policy context still rode that bag, every policy-gated Workflow would
+// have to declare `environment` as one of its own inputs. It is not one: a Workflow does not
+// declare facts about the change being made to it. Conflating them meant neither could be
+// typed, which is why the inputs schema could not be closed until now.
+func TestChangeContextIsNotWorkflowInputs(t *testing.T) {
+	// Context populates the policy decision; LaunchParams must NOT.
+	cc := assembleChangeContext(DAGInput{
+		Principal: "alice",
+		Context:   map[string]any{"environment": "prod", "changeClass": "emergency"},
+		// A Workflow input that happens to be named like context must not leak into the
+		// decision — otherwise a parameter could silently change a policy outcome.
+		LaunchParams: map[string]any{"environment": "dev"},
+	})
+	if cc.Environment != "prod" {
+		t.Fatalf("environment must come from Context, got %q", cc.Environment)
+	}
+	if cc.ChangeClass != "emergency" {
+		t.Fatalf("changeClass must come from Context, got %q", cc.ChangeClass)
+	}
+	if got := cc.Labels["environment"]; got != "prod" {
+		t.Fatalf("a LaunchParam must not overwrite a context label, got %q", got)
+	}
+	// And with no context at all, a Workflow's inputs cannot manufacture one.
+	bare := assembleChangeContext(DAGInput{
+		Principal:    "alice",
+		LaunchParams: map[string]any{"environment": "prod", "committers": []any{"mallory"}},
+	})
+	if bare.Environment != "" {
+		t.Errorf("inputs must not supply a policy environment, got %q", bare.Environment)
+	}
+	if len(bare.Committers) != 0 {
+		t.Errorf("inputs must not supply SoD committers, got %v", bare.Committers)
 	}
 }

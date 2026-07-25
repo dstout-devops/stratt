@@ -2,6 +2,7 @@ package contract
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -160,5 +161,122 @@ func TestInputNames(t *testing.T) {
 	}
 	if got, err := InputNames(nil); err != nil || got != nil {
 		t.Fatalf("no inputs ⇒ no names, got %v %v", got, err)
+	}
+}
+
+// ── ResolveLaunchInputs: the chokepoint every transport passes through ────────────────
+
+func resolve(t *testing.T, schema string, supplied map[string]any) (map[string]any, error) {
+	t.Helper()
+	var raw json.RawMessage
+	if schema != "" {
+		raw = doc(t, schema)
+	}
+	return ResolveLaunchInputs("w", raw, supplied)
+}
+
+const portSchema = `{
+	"type": "object",
+	"additionalProperties": false,
+	"required": ["commonName"],
+	"properties": {
+		"commonName": {"type": "string"},
+		"tlsPort": {"type": "integer", "default": 443}
+	}
+}`
+
+// Resolved numbers come back as json.Number, NOT float64 — deliberately. The canonicalizing
+// pass preserves integer precision rather than rounding through a float64, which is the same
+// hazard ADR-0117 D6 hit when a big integer in a module result voided a whole event. A
+// json.Number marshals back to an unquoted JSON number, so the wire form is unchanged.
+func TestDefaultsAreApplied(t *testing.T) {
+	got, err := resolve(t, portSchema, map[string]any{"commonName": "web.test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fmt.Sprint(got["tlsPort"]) != "443" {
+		t.Fatalf("an unsupplied input must take its declared default, got %#v", got["tlsPort"])
+	}
+	if _, ok := got["tlsPort"].(json.Number); !ok {
+		t.Errorf("numbers must stay json.Number to preserve integer precision, got %T", got["tlsPort"])
+	}
+}
+
+// TestLargeIntegerPrecisionSurvives: the reason for json.Number, made explicit. A float64
+// cannot hold 2^53+1 exactly, so a value round-tripped through one comes back WRONG — the
+// ADR-0117 D6 defect shape, at the launch boundary this time.
+func TestLargeIntegerPrecisionSurvives(t *testing.T) {
+	got, err := resolve(t, `{"type":"object","additionalProperties":false,`+
+		`"properties":{"n":{"type":"integer"}}}`, map[string]any{"n": json.Number("9007199254740993")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fmt.Sprint(got["n"]) != "9007199254740993" {
+		t.Fatalf("a large integer must survive resolution exactly, got %v", got["n"])
+	}
+}
+
+func TestSuppliedValueBeatsTheDefault(t *testing.T) {
+	got, err := resolve(t, portSchema, map[string]any{"commonName": "web.test", "tlsPort": 8443})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fmt.Sprint(got["tlsPort"]) != "8443" {
+		t.Fatalf("a supplied value must stand, got %#v", got["tlsPort"])
+	}
+}
+
+// TestExplicitNullIsNotDefaulted: a caller passing null is STATING null. Overwriting it
+// with a default would be a silent override of an explicit value — the same class of
+// implicit resolution §2.4 rejects, one layer down.
+func TestExplicitNullIsNotDefaulted(t *testing.T) {
+	_, err := resolve(t, portSchema, map[string]any{"commonName": "web.test", "tlsPort": nil})
+	if err == nil {
+		t.Fatal("explicit null must be validated as null (and fail an integer input), not replaced by the default")
+	}
+}
+
+func TestMissingRequiredInputRejected(t *testing.T) {
+	if _, err := resolve(t, portSchema, map[string]any{"tlsPort": 8443}); err == nil {
+		t.Fatal("a missing required input must be rejected")
+	}
+}
+
+// TestUnknownInputRejected is the property ADR-0118 D2 promised and that only became
+// enforceable once change context moved to its own field (D4): while both shared one bag, a
+// policy-gated Workflow's `environment` was indistinguishable from a stray parameter.
+func TestUnknownInputRejected(t *testing.T) {
+	_, err := resolve(t, portSchema, map[string]any{"commonName": "web.test", "tlsPrt": 8443})
+	if err == nil {
+		t.Fatal("an unknown input must be rejected, not silently dropped")
+	}
+	if !strings.Contains(err.Error(), "tlsPrt") {
+		t.Errorf("the error should name the offending key; got: %v", err)
+	}
+}
+
+func TestWrongTypeRejected(t *testing.T) {
+	if _, err := resolve(t, portSchema, map[string]any{"commonName": "web.test", "tlsPort": "8443"}); err == nil {
+		t.Fatal(`"8443" must not satisfy an integer input — no coercion`)
+	}
+}
+
+// TestNoSchemaWithParamsRejectedAndPointsAtContext: the error has to teach the split,
+// because "my params were rejected" is otherwise a dead end for someone who was passing
+// policy context.
+func TestNoSchemaWithParamsRejectedAndPointsAtContext(t *testing.T) {
+	_, err := resolve(t, "", map[string]any{"environment": "prod"})
+	if err == nil {
+		t.Fatal("a Workflow declaring no inputs must reject supplied inputs")
+	}
+	if !strings.Contains(err.Error(), "context") {
+		t.Errorf("the error must point at `context` for change facts; got: %v", err)
+	}
+}
+
+func TestNoSchemaNoParamsIsFine(t *testing.T) {
+	got, err := resolve(t, "", nil)
+	if err != nil || got != nil {
+		t.Fatalf("a Workflow that takes nothing, given nothing, resolves to nothing: %v %v", got, err)
 	}
 }

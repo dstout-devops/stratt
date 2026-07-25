@@ -214,15 +214,28 @@ func paramInt(params map[string]any, key string) (int, bool) {
 // assembleChangeContext builds the typed ChangeContext a policy Step evaluates
 // from the run's DAGInput (ADR-0063). It is deterministic (no I/O, no clock), so
 // it is safe on the workflow goroutine. v1 surfaces the launching Principal as
-// the actor and the launch inputs as labels + environment; richer enrichment
+// the actor and the supplied change context as labels + environment; richer enrichment
 // (blast-radius from View membership, per-target criticality) is sparse and
 // fail-safe (ADR-0061 M4) and lands with §7.6.
+//
+// Reads DAGInput.Context, NOT LaunchParams (ADR-0118 D4). They were the same bag until
+// the split: a Workflow's own parameters and the launcher's assertions about the change
+// are different concepts with different owners, and conflating them meant neither could be
+// typed properly — the Workflow's inputs could not be closed, and the context could not be
+// schema'd at all.
+//
+// KNOWN GAP, recorded rather than implied: this context is still UNTYPED. `environment` is
+// a bare string, so `environment: "prd"` silently produces a different policy decision than
+// `"prod"` — a prod freeze window (ADR-0067) simply does not match, and the change
+// proceeds. Same exposure for changeClass driving break-glass (ADR-0070) and committers
+// feeding SoD (ADR-0068). A core-owned ChangeContext schema with enums is the fix; it is
+// booked in ADR-0118, not done here.
 func assembleChangeContext(in DAGInput) types.ChangeContext {
 	cc := types.ChangeContext{
 		Actor:  types.PrincipalRef{ID: in.Principal},
 		Labels: map[string]string{},
 	}
-	for k, v := range in.LaunchParams {
+	for k, v := range in.Context {
 		if s, ok := v.(string); ok {
 			cc.Labels[k] = s
 		}
@@ -238,7 +251,7 @@ func assembleChangeContext(in DAGInput) types.ChangeContext {
 	// Committers (the change authors) from a `committers` launch param — the
 	// source SoD checks the actor against (ADR-0068). A CI/operator launching the
 	// change supplies them; richer committer provenance is a follow-up.
-	for _, id := range paramStrings(in.LaunchParams, "committers") {
+	for _, id := range paramStrings(in.Context, "committers") {
 		cc.Committers = append(cc.Committers, types.PrincipalRef{ID: id})
 	}
 	return cc

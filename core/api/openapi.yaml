@@ -918,7 +918,14 @@ paths:
       description: >
         The launching Principal rides every actuation Step's credential
         `use` check (charter §2.5), exactly as if it had started each Run
-        directly.
+        directly. The body separates the two things a launch supplies:
+        `inputs` (this Workflow's own declared parameters) and `context`
+        (facts about the CHANGE, which policy Steps decide on) — ADR-0118 D4.
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/WorkflowLaunch" }
       responses:
         "201":
           description: The created WorkflowRun.
@@ -2403,6 +2410,33 @@ components:
         intentKind:
           type: string
           description: The Intent kind this entry routes, WITHOUT the "Intent/" prefix (e.g. Compute, Subnet, Vlan, Dmz).
+    WorkflowLaunch:
+      type: object
+      description: >
+        What a launch supplies, with the two concepts on their own fields
+        (ADR-0118 D4). They were one untyped bag until this split, which meant
+        closing the world over a Workflow's own parameters was impossible —
+        every policy-gated Workflow would have had to declare `environment` as
+        one of its inputs, which it is not.
+      properties:
+        inputs:
+          type: object
+          additionalProperties: true
+          description: >
+            This Workflow's declared launch inputs, validated against the schema
+            published on GET /workflows/{name}. CLOSED: an unknown or
+            wrongly-typed key is a 400, and declared defaults are applied.
+            Bound in Step params via {{.launch.x}}.
+        context:
+          type: object
+          additionalProperties: true
+          description: >
+            Facts about the change, which policy Steps evaluate (ADR-0063):
+            `environment`, `changeClass` (standard|normal|emergency, driving
+            break-glass), `committers` (the SoD source), plus arbitrary string
+            labels. NOT part of the Workflow's interface and never bound by
+            {{.launch.x}} — a Workflow does not declare these, the launcher
+            asserts them about the change.
     Workflow:
       type: object
       description: >

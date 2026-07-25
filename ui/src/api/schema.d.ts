@@ -928,7 +928,7 @@ export interface paths {
         put?: never;
         /**
          * Start one execution of a Workflow
-         * @description The launching Principal rides every actuation Step's credential `use` check (charter §2.5), exactly as if it had started each Run directly.
+         * @description The launching Principal rides every actuation Step's credential `use` check (charter §2.5), exactly as if it had started each Run directly. The body separates the two things a launch supplies: `inputs` (this Workflow's own declared parameters) and `context` (facts about the CHANGE, which policy Steps decide on) — ADR-0118 D4.
          */
         post: operations["startWorkflowRun"];
         delete?: never;
@@ -1924,6 +1924,17 @@ export interface components {
             provider: string;
             /** @description The Intent kind this entry routes, WITHOUT the "Intent/" prefix (e.g. Compute, Subnet, Vlan, Dmz). */
             intentKind: string;
+        };
+        /** @description What a launch supplies, with the two concepts on their own fields (ADR-0118 D4). They were one untyped bag until this split, which meant closing the world over a Workflow's own parameters was impossible — every policy-gated Workflow would have had to declare `environment` as one of its inputs, which it is not. */
+        WorkflowLaunch: {
+            /** @description This Workflow's declared launch inputs, validated against the schema published on GET /workflows/{name}. CLOSED: an unknown or wrongly-typed key is a 400, and declared defaults are applied. Bound in Step params via {{.launch.x}}. */
+            inputs?: {
+                [key: string]: unknown;
+            };
+            /** @description Facts about the change, which policy Steps evaluate (ADR-0063): `environment`, `changeClass` (standard|normal|emergency, driving break-glass), `committers` (the SoD source), plus arbitrary string labels. NOT part of the Workflow's interface and never bound by {{.launch.x}} — a Workflow does not declare these, the launcher asserts them about the change. */
+            context?: {
+                [key: string]: unknown;
+            };
         };
         /** @description A Temporal-backed DAG of Steps with Gates (charter §2, ADR-0011). CaC-only in v1. */
         Workflow: {
@@ -3234,7 +3245,11 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["WorkflowLaunch"];
+            };
+        };
         responses: {
             /** @description The created WorkflowRun. */
             201: {

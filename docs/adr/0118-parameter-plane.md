@@ -283,9 +283,44 @@ bypassing it.
 
 So resolution-and-validation is **one function below all transports**, in the shape
 `contract.ResolveActuatorParamsFor` already takes for the Actuator seam: one capability, one validation model,
-one audit stream (§1.6). And **MCP must be able to supply inputs** — `start_workflow_run` currently POSTs a
-`nil` body, so the moment inputs exist an agent could _see_ declared inputs and never provide them, which is a
-§1.6 violation on the door §1.6 exists to protect.
+one audit stream (§1.6). Concretely it is called in **`RunDAG`, immediately after `LoadWorkflow`** — the line
+every transport reaches — as an _activity_ rather than inline, because pinning replay determinism to a
+validator library's behaviour across upgrades would be a latent trap. The API door calls the **same function**
+eagerly so a human gets a 400 naming the offending input instead of a created-then-failed Run: one
+implementation, two call sites, one for the error and one that nothing can skip. And **MCP can now supply
+inputs** — `start_workflow_run` previously POSTed a `nil` body, so the moment inputs existed an agent could
+_see_ declared inputs and never provide them, a §1.6 violation on the door §1.6 exists to protect.
+
+#### D4a — Launch inputs and change context are separate fields (found while implementing D4)
+
+Implementing the chokepoint surfaced a collision that invalidates D2's "rejects unknown keys" as originally
+written: **`DAGInput.LaunchParams` already had a second consumer.**
+`orchestrate.assembleChangeContext` reads it to build the policy `ChangeContext` (ADR-0063) — `environment`
+sets the policy environment, `changeClass` drives break-glass (ADR-0070), `committers` feeds SoD (ADR-0068),
+and **every string param becomes a policy label**. One bag carried two concepts: a Workflow's own parameters,
+and facts about the change being made. Closing the world over that bag would have forced every policy-gated
+Workflow to declare `environment` as one of _its_ inputs, which it is not — a Workflow does not declare facts
+about the change applied to it.
+
+So they are split: `LaunchParams` is the Workflow's declared, closed, defaulted interface; a new
+`DAGInput.Context` carries what the launcher asserts about the change, and the request body becomes
+`{inputs, context}` (a `WorkflowLaunch` schema — the endpoint previously declared **no** `requestBody` at all,
+so the flat body was never a documented contract). `{{.launch.x}}` binds only the former. Nothing in-repo
+produced a flat body: every demo and genesis script POSTs none, the UI does not launch with params, and
+`awxfacade`'s `LaunchParams` is an unrelated struct of the same name.
+
+Two properties fall out, both tested. `additionalProperties: false` finally bites, because a stray key can no
+longer be mistaken for policy context. And a Workflow **input can no longer spoof the policy decision** — a
+parameter named `environment` does not reach `ChangeContext`, which it did before the split.
+
+#### D4b — The change context is still untyped, and that is a live gap
+
+Recorded rather than fixed. `environment` remains a bare string, so `environment: "prd"` silently produces a
+different policy outcome than `"prod"`: a prod freeze window (ADR-0067) simply does not match and the change
+proceeds. Same exposure for `changeClass` (break-glass) and `committers` (SoD). This predates the parameter
+plane — the split neither introduces nor worsens it — but the split is what makes the fix expressible: a
+core-owned `ChangeContext` schema with enums, validated at the same chokepoint. Booked deliberately, because
+it is a security-relevant seam that deserves its own decision rather than riding in on a plumbing change.
 
 ### D5 — A Trigger's params reach a Workflow target, on both paths
 
@@ -412,6 +447,8 @@ changes instance identity and owes a migration story for fleets already carrying
 ## Follow-ups
 
 - **ADR-0119** (versioned promotion) and **ADR-0120** (keyed spread) — see _Deferred_.
+- **A core-owned `ChangeContext` schema** with enums for `environment`/`changeClass`, validated at D4's
+  chokepoint — closes D4b's typo hole on a security-relevant seam.
 - **A fourth per-environment overlay layer**, if duplication across sibling Assignments becomes real pain.
   Note it must obey D1's disjointness or it re-introduces the ladder.
 - **Tighten `contracts/intents/application.schema.json`** — currently `additionalProperties: true` with no

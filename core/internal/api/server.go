@@ -1991,14 +1991,40 @@ func (s *Server) StartWorkflowRun(w http.ResponseWriter, r *http.Request, name s
 	// (the target of a re-placement move, a per-instance build) — bound in Step params
 	// via {{.launch.x}}. The gate + View-runner authz above remain the control; this
 	// only fills declared placeholders, it cannot escalate what the Workflow may do.
-	var launchParams map[string]any
+	// Two concepts, two fields (ADR-0118 D4): `inputs` are the Workflow's OWN declared
+	// parameters, `context` is what the launcher asserts about the CHANGE for policy Steps to
+	// decide on. They shared one untyped bag until this split, which is why the inputs schema
+	// could not be closed — a policy-gated Workflow's `environment` was indistinguishable
+	// from a stray parameter.
+	var body WorkflowLaunch
 	if r.Body != nil {
 		dec := json.NewDecoder(r.Body)
-		if err := dec.Decode(&launchParams); err != nil && !errors.Is(err, io.EOF) {
-			s.fail(w, fmt.Errorf("decode launch params: %w", err))
+		dec.DisallowUnknownFields() // a misspelled top-level field is a 400, not a silent no-op
+		if err := dec.Decode(&body); err != nil && !errors.Is(err, io.EOF) {
+			writeErr(w, http.StatusBadRequest, "decode launch body: "+err.Error())
 			return
 		}
 	}
+	var launchParams, changeContext map[string]any
+	if body.Inputs != nil {
+		launchParams = *body.Inputs
+	}
+	if body.Context != nil {
+		changeContext = *body.Context
+	}
+	// Validate at the DOOR so a caller gets a 400 naming the offending input, rather than a
+	// created-then-failed Run they have to go read (§1.8). This is the same
+	// contract.ResolveLaunchInputs the RunDAG chokepoint calls — one implementation, two
+	// call sites: this one for the error message, that one because no transport can skip it
+	// (ADR-0118 D4). Resolving here also means the defaults are visible in the Run's
+	// recorded params, not conjured later.
+	resolved, verr := contract.ResolveLaunchInputs(wf.Name, wf.Inputs, launchParams)
+	if verr != nil {
+		writeErr(w, http.StatusBadRequest, verr.Error())
+		return
+	}
+	launchParams = resolved
+
 	wr, err := s.Store.CreateWorkflowRun(r.Context(), name, "", principal, "")
 	if err != nil {
 		s.fail(w, err)
@@ -2009,7 +2035,8 @@ func (s *Server) StartWorkflowRun(w http.ResponseWriter, r *http.Request, name s
 		ID:        temporalID,
 		TaskQueue: orchestrate.TaskQueue,
 	}, orchestrate.RunDAG, orchestrate.DAGInput{
-		WorkflowRunID: wr.ID, WorkflowName: name, Principal: principal, LaunchParams: launchParams,
+		WorkflowRunID: wr.ID, WorkflowName: name, Principal: principal,
+		LaunchParams: launchParams, Context: changeContext,
 	})
 	if err != nil {
 		_ = s.Store.SetWorkflowRunStatus(r.Context(), wr.ID, types.RunFailed, map[string]any{"error": "workflow start failed"})

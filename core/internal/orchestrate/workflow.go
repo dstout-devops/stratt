@@ -33,11 +33,25 @@ type DAGInput struct {
 	// for schedule/API launches) — the source for a Step's {{.event.x}}
 	// param bindings (ADR-0024).
 	Event map[string]any
-	// LaunchParams are the operator-supplied inputs from POST /workflows/{name}/runs
-	// — the source for a Step's {{.launch.x}} bindings (ADR-0059 re-placement /
-	// per-instance builds). The gate + the launching Principal's authz remain the
-	// control; these only parameterize what was already declared and gated.
+	// LaunchParams are this Workflow's own declared inputs, resolved against its input
+	// schema (defaults applied, required enforced, unknown keys REJECTED — ADR-0118 D2/D4)
+	// — the source for a Step's {{.launch.x}} bindings. The gate + the launching
+	// Principal's authz remain the control; these only parameterize what was already
+	// declared and gated.
 	LaunchParams map[string]any
+	// Context is what the launcher asserts about the CHANGE, which policy Steps decide on
+	// (ADR-0063): environment, changeClass, committers, plus arbitrary labels.
+	//
+	// It is a SEPARATE field from LaunchParams deliberately (ADR-0118 D4). Both used to
+	// ride one bag, which made the two concepts indistinguishable: closing the world over
+	// a Workflow's parameters would have forced every policy-gated Workflow to declare
+	// `environment` as one of its own inputs, which it is not — a Workflow does not declare
+	// facts about the change being made to it. Splitting them is what lets the input schema
+	// actually be closed.
+	//
+	// Never bound by {{.launch.x}}: a Step reads the Workflow's parameters, not the
+	// change's context.
+	Context map[string]any
 }
 
 // GateDecision is the signal payload an authorized Principal sends to a
@@ -100,6 +114,21 @@ func RunDAG(ctx workflow.Context, in DAGInput) error {
 	// changes future WorkflowRuns, never this one.
 	var spec types.Workflow
 	if err := workflow.ExecuteActivity(ctx, a.LoadWorkflow, in.WorkflowName).Get(ctx, &spec); err != nil {
+		return finishWorkflowRun(ctx, a, in, types.RunFailed, nil, err)
+	}
+	// THE launch-input chokepoint (ADR-0118 D4). Every transport reaches this line — the
+	// API handler, MCP, the event Trigger and the schedule Trigger — so validating here is
+	// what makes "one capability, one validation model" true rather than aspirational
+	// (§1.6). Validating in the HTTP handler alone would leave the other three bypassing it.
+	//
+	// It runs as an ACTIVITY rather than inline: schema compilation is deterministic today,
+	// but pinning replay determinism to a validator library's behaviour across upgrades
+	// would be a latent trap, and workflow code must stay replay-safe.
+	//
+	// The API door ALSO validates eagerly so a human gets a 400 instead of a failed Run.
+	// Same function, two call sites: one for a good error, one that nothing can skip.
+	if err := workflow.ExecuteActivity(ctx, a.ResolveLaunchInputs, spec, in.LaunchParams).
+		Get(ctx, &in.LaunchParams); err != nil {
 		return finishWorkflowRun(ctx, a, in, types.RunFailed, nil, err)
 	}
 	if err := workflow.ExecuteActivity(ctx, a.MarkWorkflowRunRunning, in.WorkflowRunID).Get(ctx, nil); err != nil {
@@ -433,6 +462,21 @@ func stepsNamespace(steps map[string]json.RawMessage) map[string]any {
 		}
 	}
 	return ns
+}
+
+// ResolveLaunchInputs applies a Workflow's declared input defaults to the launch params and
+// validates the result against its schema (ADR-0118 D2/D4) — the chokepoint RunDAG calls
+// before any Step runs, so no transport can supply params the declaration forbids.
+//
+// A violation is NON-RETRYABLE: bad launch params are a data error, and the same body will
+// fail identically three attempts later (the ADR-0024 D6 discipline — a poison input must
+// not loop).
+func (a *Activities) ResolveLaunchInputs(_ context.Context, spec types.Workflow, supplied map[string]any) (map[string]any, error) {
+	resolved, err := contract.ResolveLaunchInputs(spec.Name, spec.Inputs, supplied)
+	if err != nil {
+		return nil, temporal.NewNonRetryableApplicationError(err.Error(), "InvalidLaunchInputs", err)
+	}
+	return resolved, nil
 }
 
 // ResolveStepParams substitutes a Step's {{.event.x}} / {{.steps.x}} bindings

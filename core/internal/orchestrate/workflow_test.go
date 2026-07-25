@@ -64,6 +64,12 @@ func dagTestEnv(t *testing.T, spec types.Workflow, childStatus map[string]error)
 
 	var a *Activities
 	env.OnActivity(a.LoadWorkflow, mock.Anything, spec.Name).Return(spec, nil)
+	// The launch-input chokepoint is REGISTERED FOR REAL rather than mocked (ADR-0118 D4).
+	// It touches no store — only the spec and the supplied params — so a nil *Activities
+	// receiver is fine, and every DAG test then walks the actual validation the production
+	// path walks. Mocking it here would have made the chokepoint invisible to exactly the
+	// tests that prove RunDAG's shape.
+	env.RegisterActivity(a.ResolveLaunchInputs)
 	env.OnActivity(a.MarkWorkflowRunRunning, mock.Anything, "wr-1").Return(nil)
 	env.OnActivity(a.CreateGateRecord, mock.Anything, "wr-1", mock.Anything, mock.Anything, mock.Anything).Return(
 		func(_ context.Context, _, step, planDigest string, approvers types.GateApprovers) (types.Gate, error) {
@@ -373,5 +379,64 @@ func TestRunDAGFailedStepSkipsDownstream(t *testing.T) {
 	}
 	if *status != types.RunFailed {
 		t.Fatalf("status: %s", *status)
+	}
+}
+
+// TestRunDAGRejectsInvalidLaunchInputs proves the chokepoint is WIRED, not merely written
+// (ADR-0118 D4).
+//
+// Slice 1b of this arc taught the lesson the hard way: a mechanism can be implemented,
+// unit-tested in isolation, and still called by nothing — and the suite stays green. So this
+// drives the real RunDAG with launch inputs that violate the Workflow's declared schema and
+// asserts the run FAILS before any Step runs. Removing the ResolveLaunchInputs activity call
+// from RunDAG fails here.
+func TestRunDAGRejectsInvalidLaunchInputs(t *testing.T) {
+	spec := types.Workflow{
+		Name: "needs-subnet",
+		Inputs: []byte(`{"type":"object","additionalProperties":false,` +
+			`"required":["targetSubnet"],"properties":{"targetSubnet":{"type":"string"}}}`),
+		Steps: []types.Step{{Name: "build", ViewName: "v", Actuator: "script",
+			Params: map[string]any{"script": "echo {{.launch.targetSubnet}}"}}},
+	}
+	env, _, status := dagTestEnv(t, spec, map[string]error{"build": nil})
+	env.ExecuteWorkflow(RunDAG, DAGInput{
+		WorkflowRunID: "wr-1", WorkflowName: spec.Name, Principal: "alice",
+		// Wrong type for a declared input, and the required one is absent.
+		LaunchParams: map[string]any{"targetSubnet": 42},
+	})
+	if !env.IsWorkflowCompleted() {
+		t.Fatal("workflow did not complete")
+	}
+	if env.GetWorkflowError() == nil {
+		t.Fatal("invalid launch inputs must fail the run at the chokepoint, before any Step")
+	}
+	if *status != types.RunFailed {
+		t.Fatalf("the WorkflowRun must be recorded failed, got %q", *status)
+	}
+}
+
+// TestRunDAGAppliesLaunchDefaults: the chokepoint's other half — a declared default must be
+// materialized before Steps bind {{.launch.x}}, or an omitted-but-defaulted input would
+// resolve to nothing.
+func TestRunDAGAppliesLaunchDefaults(t *testing.T) {
+	spec := types.Workflow{
+		Name: "defaulted",
+		Inputs: []byte(`{"type":"object","additionalProperties":false,` +
+			`"properties":{"tlsPort":{"type":"integer","default":443}}}`),
+		Steps: []types.Step{{Name: "build", ViewName: "v", Actuator: "script",
+			Params: map[string]any{"script": "echo {{.launch.tlsPort}}"}}},
+	}
+	env, _, status := dagTestEnv(t, spec, map[string]error{"build": nil})
+	env.ExecuteWorkflow(RunDAG, DAGInput{
+		WorkflowRunID: "wr-1", WorkflowName: spec.Name, Principal: "alice",
+	})
+	if !env.IsWorkflowCompleted() {
+		t.Fatal("workflow did not complete")
+	}
+	if err := env.GetWorkflowError(); err != nil {
+		t.Fatalf("an omitted input with a declared default must not fail the run: %v", err)
+	}
+	if *status != types.RunSucceeded {
+		t.Fatalf("expected success, got %q", *status)
 	}
 }

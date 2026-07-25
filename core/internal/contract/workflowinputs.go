@@ -154,3 +154,103 @@ func InputNames(doc json.RawMessage) (map[string]bool, error) {
 	}
 	return out, nil
 }
+
+// ResolveLaunchInputs applies a Workflow's declared defaults to the supplied launch params
+// and validates the result against its input schema, returning the resolved set that
+// {{.launch.x}} bindings then read (ADR-0118 D2/D4).
+//
+// This is THE chokepoint, and it is deliberately one function rather than a check per
+// transport. Four paths launch a Workflow — POST /workflows/{name}/runs, MCP
+// start_workflow_run, the event Trigger, and the schedule Trigger — and three of them reach
+// Temporal without passing through the HTTP handler. Validating in the handler would leave
+// the others bypassing it: one capability, one validation model, one audit stream (§1.6).
+// It is called at the floor (RunDAG, which no path can skip) and, for a good error message,
+// eagerly at the API door.
+//
+// Instances are canonicalized through JSON before validating, for two reasons: the
+// validator expects JSON-shaped values (a Go `int` is not one), and the resolved map then
+// carries JSON types consistently regardless of whether it arrived from a request body, a
+// YAML Trigger declaration, or a compiled Baseline.
+func ResolveLaunchInputs(workflow string, schema json.RawMessage, supplied map[string]any) (map[string]any, error) {
+	if len(schema) == 0 {
+		// A Workflow declaring no inputs takes none. Accepting them would mean silently
+		// discarding what a caller asked for — the same lie as an ignored unknown key, which
+		// is what the closed world exists to prevent. This is only enforceable because
+		// change context now rides its own field (ADR-0118 D4): while both shared one bag, a
+		// policy-gated Workflow's `environment` was indistinguishable from a stray param.
+		if len(supplied) > 0 {
+			return nil, fmt.Errorf(
+				"workflow %s declares no `inputs`, so it accepts no launch inputs (got %v) — declare the launch "+
+					"interface, or stop sending them. If these are facts about the CHANGE (environment, "+
+					"changeClass, committers), send them as `context`, which policy Steps read and a Workflow "+
+					"does not declare", workflow, sortedKeys(supplied))
+		}
+		return nil, nil
+	}
+	sch, err := CompileInputSchema(workflow, schema)
+	if err != nil {
+		return nil, err
+	}
+	merged, err := withDefaults(schema, supplied)
+	if err != nil {
+		return nil, err
+	}
+	inst, err := canonicalize(merged)
+	if err != nil {
+		return nil, fmt.Errorf("workflow %s: launch inputs: %w", workflow, err)
+	}
+	// The schema is closed (CompileInputSchema requires additionalProperties: false), so an
+	// unknown key fails HERE rather than being quietly dropped — the property D2 promised and
+	// the split finally allows.
+	if err := sch.Validate(inst); err != nil {
+		return nil, fmt.Errorf("workflow %s: launch inputs violate its declared interface: %w", workflow, err)
+	}
+	out, _ := inst.(map[string]any)
+	return out, nil
+}
+
+func withDefaults(schema json.RawMessage, supplied map[string]any) (map[string]any, error) {
+	var shape struct {
+		Properties map[string]struct {
+			Default json.RawMessage `json:"default"`
+		} `json:"properties"`
+	}
+	if err := json.Unmarshal(schema, &shape); err != nil {
+		return nil, err
+	}
+	out := make(map[string]any, len(supplied)+len(shape.Properties))
+	for k, v := range supplied {
+		out[k] = v
+	}
+	for name, prop := range shape.Properties {
+		if len(prop.Default) == 0 {
+			continue
+		}
+		if _, supplied := out[name]; supplied {
+			continue
+		}
+		var def any
+		if err := json.Unmarshal(prop.Default, &def); err != nil {
+			return nil, fmt.Errorf("inputs.properties.%s.default: %w", name, err)
+		}
+		out[name] = def
+	}
+	return out, nil
+}
+
+func canonicalize(v map[string]any) (any, error) {
+	raw, err := json.Marshal(v)
+	if err != nil {
+		return nil, err
+	}
+	return jsonschema.UnmarshalJSON(bytes.NewReader(raw))
+}
+
+func sortedKeys(m map[string]any) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}
