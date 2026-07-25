@@ -348,4 +348,19 @@ would be a category error.
 - **Promotion ergonomics** — a `stratt promote <assignment> --to <env>` that edits the pins and shows the
   expectation diff. Now unblocked (the diff exists), still deliberately not now: the mechanism should earn its
   sugar, and the pins are two lines of YAML.
-- **Extend D6's guard to any future versioned CaC Kind** by construction, rather than per-Kind.
+- ~~**Extend D6's guard to any future versioned CaC Kind** by construction, rather than per-Kind.~~ —
+  **done, and deliberately NOT by making the guard generic.** `guardPinnedVersions` keeps its explicit
+  `switch e.Kind`, because a reader of the function that enforces immutability should see which Kinds are
+  protected without following a reflection trail. The risk was never the switch; it was the **omission** —
+  a third versioned Kind means adding an `X`/`XVersion` pair to `types.Assignment`, and forgetting the
+  `case` would make a pinned version of it silently editable in place, which is prod changing without a
+  pin bump: the exact failure D6 exists to prevent, with nothing failing.
+  So the COVERAGE is derived structurally and checked behaviourally: `TestEveryPinnableKindIsGuarded`
+  reflects over `types.Assignment` for every `X string` paired with an `XVersion int` — which is also D3's
+  definition of versionable, "a version lives on the seam that references it" — and for each one actually
+  runs the guard over a pinned update and a pinned delete. Falsified by deleting the blueprint case: the
+  failure names the Kind, the action, and the `case KindBlueprint:` to add.
+  A second test pins the negative half, because a guard that refused EVERY update would satisfy "is this
+  Kind guarded" while freezing the estate. It is not redundant with `TestUnpinnedVersionIsFreelyEditable`:
+  that one goes through `Apply` and is Postgres-gated, so it skips in a CI without a database — the
+  condition under which several defects in this repo stayed green — and covers Intent only.
