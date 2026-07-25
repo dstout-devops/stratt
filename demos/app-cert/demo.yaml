@@ -1,0 +1,30 @@
+# demo.yaml — the demo manifest (ADR-0116 D1/D3). Declared metadata the turnkey runner READS and
+# surfaces, so the human-facing claims (especially `fidelity`) can't quietly rot away from the code
+# (D3: hide mechanism, never fidelity — charter §1.8). Not an estate declaration; a demo descriptor.
+name: app-cert
+title: "app install with a certificate"
+summary: >
+  Approve a gate, then watch Stratt SSH into a real managed host as an unprivileged user, escalate,
+  mint an X.509 certificate with a collection baked into a purpose-built execution environment,
+  install an app on it, and report the observed state back into the graph — then watch a play that
+  reaches no host fail rather than report green.
+
+# fidelity (D3): how real is what you're watching? The turnkey runner prints this up front.
+#   real       — real workloads on real substrate.
+#   build-real — provisioning/lifecycle APIs are real, guest-OS/runtime simulated (e.g. vcsim).
+#   simulated  — the substrate itself is faked end to end.
+fidelity: real
+fidelityNote: >
+  A real SSH connection to a real sshd, real sudo escalation, a real RSA key and X.509 certificate,
+  and a real TLS handshake read back off the wire. The one concession: the host is a container in the
+  same kind cluster (that is what makes it reachable from an execution pod at all — PLG-1), and the
+  certificate is self-signed, because a real CA is a Connector, not something a play should mint.
+
+# What the runner drives (mirrors the estate/ declarations).
+workflow: app-install-with-cert
+guardWorkflow: vacuous-run-guard
+view: app-nodes
+actuator: ansible-crypto
+executionEnvironment: stratt-ee-crypto:dev
+collection: community.crypto
+substrate: ssh

@@ -506,15 +506,30 @@ what a reasonable schema would look like.** Nothing short of running `community.
   The **estate declaration itself is deliberately not shipped yet** and lands with the certificate demo (f):
   an `ansible-crypto` Actuator that no Workflow selects would be "declared and read by nothing", and worse,
   see (l) — it would report _healthy_ while its image did not exist.
-  (a0) **Redirect the AWX materializer** (`plugins/awx/materialize/workflows.go`) from
-  `params["check"]` to `Step.DryRun` (D2) — the prerequisite for ever removing the deprecated field.
+  ~~(a0) **Redirect the AWX materializer from `params["check"]` to `Step.DryRun`**~~ — **done** in the D2
+  slice: `isCheckTemplate` maps an imported AWX check template onto the Step's DryRun bit, and nothing in
+  tree writes or reads `params.check` any more. The field itself stays in `ansible.input.v5` as deprecated
+  and unread — a pinned Contract is not edited in place (§1.5), so its **removal is a v6 change**.
   (a) The `ansible-builder`-compatible EE factory (parity P5) — this ADR defines the
   contract it must satisfy. (b) Air-gap content seeding. (c) Survey → input-Contract enforcement on Steps
   (the named deferred item in ADR-0025/0026). (d) `/api/v2` route breadth + notification sinks (P2/P3) —
   separate ADRs. (e) Update [`aap-2.7-parity.md`](../aap-2.7-parity.md) when v5 + content land, and
-  **narrow or close PLG-1** in `enterprise-readiness.md`. (f) A demo exercising the new knobs end to end —
-  the app-install + certificate scenario is that demo, and per the demo-library experience
-  ([ADR-0116](0116-demo-library.md)) it should be treated as the integration test for this work.
+  **narrow or close PLG-1** in `enterprise-readiness.md`. ~~(f) A demo exercising the new knobs end to end.~~ — **done**: the
+  [app-cert demo](../../demos/app-cert/README.md), **live-green on kind**. Treating it as the integration
+  test for this work (per [ADR-0116](0116-demo-library.md)) paid for itself immediately — it found **four
+  real defects in four runs**, each of them a §1.8 diagnosis failure that no unit test had reached:
+  **(1)** an input Contract resolved by Actuator NAME, so a second declaration of the same plugin — the
+  entire point of D3a — was rejected as uncontracted at parse time; the mechanism shipped and the thing it
+  existed for could not be declared. Contracts belong to the TOOL, so resolution now falls back to
+  `pluginIdentity` on every path that validates params (parse, API door, direct launch, template
+  re-validation). **(2)** ansible's own failure events were forwarded at **INFO with no reason**: an
+  unreachable host reached the descent as the bare word `runner_on_unreachable`, while the sentence that
+  explained it sat in the event's result payload — and an EE pod's logs are deleted with its Job, so for
+  anyone without shell on the target there was nothing at all. **(3)** the streaming governor kept the FACT
+  of a red terminal and **discarded its message** — the same shape as the D5c defect one layer down, its
+  message half — so a failed Run recorded no cause. **(4)** `mergeResults` folded `Succeeded` but **dropped
+  `Error`**, so even a cause a slice HAD reported was lost before it reached the API. Defects 2–4 compound:
+  a Run could fail with the reason known at three separate layers and reported at none.
   ~~(g) **Carry `TaskEvent.Level` through to the operator.**~~ — **done.** The port's typed level was
   dropped at the dispatcher and `types.RunEvent` had no field for it, so D5c's WARN on a no-op play and the
   shim's `unparsed-event` were correct at the plugin and invisible as warnings everywhere an operator looks.
@@ -530,8 +545,10 @@ what a reasonable schema would look like.** Nothing short of running `community.
   the port's level has no `success` member — ok-vs-changed is a _kind_ distinction, and ansible reports both
   at INFO, so an explicit `info` caps escalation but keeps the kind's downward refinement. The spine's own
   events were given levels in the same pass (`diagnostic-output`, `governance-rejected`, the bundle refusal).
-  (h) **A live demo asserting the vacuous-run guard** — the rc=0 behaviour behind D5c was verified by hand
-  against the EE image in the session that shipped it; that proof belongs in a demo so it cannot rot.
+  ~~(h) **A live demo asserting the vacuous-run guard.**~~ — **done**: the app-cert demo launches a
+  `vacuous-run-guard` Workflow whose play matches no host and asserts the Run **fails AND names why**, so
+  the hand-verified rc=0 proof cannot rot. Asserting the *naming* half is what exposed defects (3) and (4)
+  above — asserting only the failure would have passed against a Run that said nothing.
   (i) **Per-artifact content hashes (a lockfile).** D3 pins exact versions and verifies the resolved set,
   but the **registry remains the checksum authority**: a republished version at the same version number
   would not be detected. Closing it means recording each artifact's SHA-256 in an in-repo lockfile and

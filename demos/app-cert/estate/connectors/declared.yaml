@@ -1,0 +1,22 @@
+# declared — the devices-as-code Syncer (ADR-0056 §5, runtime-registered per ADR-0103).
+# Re-declared here rather than referenced: a demo estate REPLACES the declarations mount,
+# so it must carry everything it depends on (ADR-0116 D1).
+#
+# It is what turns hosts/app-node.yaml into an Entity with a reachable address: the file
+# stays authoritative (§1.2 — a projection, never a writable CMDB), the Syncer projects
+# mgmt.address, and the shim renders that as ansible_host. The core never authors a
+# connection key. No tombstoneSchemes: a host dropped from the file is never silently
+# deleted.
+name: declared
+class: syncer
+address: stratt-declared:9090
+pluginIdentity: declared
+tier: trusted
+source:
+  kind: declared
+  name: declared-dev
+  endpoint: file:///hosts
+labelKeys: [os, role, tier, demo]
+facetNamespaces: [mgmt.address]
+identitySchemes: [dns.fqdn]
+intervalSeconds: 15

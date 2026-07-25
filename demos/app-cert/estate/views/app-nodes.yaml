@@ -1,0 +1,9 @@
+# app-nodes — the target set the install Workflow runs against. Label-scoped, so it selects
+# exactly the hosts this demo declares. A View is the unit of execution authz (§2.5): the
+# launching Principal needs `runner` on it, and the Run records which View at which version
+# it targeted — the blast-radius audit trail.
+name: app-nodes
+selector:
+  kinds: [host]
+  labels:
+    demo: app-cert

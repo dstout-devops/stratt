@@ -45,9 +45,9 @@ in the `awxfacade` wire layer.
 | Projects (SCM content) | 🟢 | in-EE git clone [plugins/ansible/shim.go](../plugins/ansible/shim.go), ADR-0025 |
 | Inventories (+ dynamic/smart/constructed) | 🟢 | Views [graph/reader.go](../core/internal/graph/reader.go) + Syncers; façade `viewToInventory`, ADR-0012/0024. Host connection vars are the closed `mgmt.address` coordinate — `ansible_host` **and `ansible_port`** (ADR-0084, completed by ADR-0117 D5a). **Inventory groups are deliberately not rendered**: a View *is* the group (ADR-0055 G3), imported AWX groups land as `awx.group.name` labels (ADR-0025), and run-time narrowing is `params.limit` (ADR-0117 D1/D5b) |
 | Credentials + injectors | 🟢 | CredentialRef + SecretBroker [sdk/secretbroker/](../sdk/secretbroker/), ADR-0052 |
-| Execution Environments | 🟢 | [ee/Dockerfile](../ee/Dockerfile) (ansible-runner `/runner` contract), ADR-0051 |
+| Execution Environments | 🟢 | [ee/Dockerfile](../ee/Dockerfile) (ansible-runner `/runner` contract), ADR-0051. **Content (collections + roles) is a pinned build-time declaration** verified against the resolved set ([ee/content.py](../ee/content.py), ADR-0117 D3), and **which EE a Step runs in is the Actuator's declaration** — not a run-time parameter (D3a). Proven end to end by the [app-cert demo](../demos/app-cert/README.md). The **factory** to build them from an `execution-environment.yml` is still P5 below |
 | Schedules | 🟢 | [triggers/reconcile.go](../core/internal/triggers/reconcile.go) (Temporal Schedules), ADR-0010 |
-| Surveys | 🟢 | input Contract `ansible.input.v4` + parametrized Views, ADR-0024 |
+| Surveys | 🟢 | input Contract `ansible.input.v5` + parametrized Views, ADR-0024/0117 D1 |
 | Job slicing / per-target results | 🟢 | `RunOutcome.PerTarget`, `Slices` [orchestrate/across.go](../core/internal/orchestrate/across.go), ADR-0054 |
 | Fact caching | 🟢 | facts → governed Facets w/ Provenance, ADR-0054 |
 | Webhooks | 🟢 | Emitter receiver [emitters/](../core/internal/emitters/), ADR-0018 |
@@ -114,8 +114,11 @@ as independently-shipped **plugin images**, each its own CI unit (ADR-0046). Wha
   [.github/workflows/ci.yml](../.github/workflows/ci.yml) implements only DCO. Image signing + SBOM + SLSA
   attestation are **unbuilt** (signing is real only on the pull-Bundle path). *(This is enterprise-crack
   SEC-5/SUP-1, now sharper because the container collector projects digests.)*
-- **Remote/upstream sync** — no Galaxy mirror, no `requirements.yml` resolution, no air-gap content seeding
-  (git-sync covers SCM-project delivery only).
+- **Remote/upstream sync** — no Galaxy mirror and **no air-gap content seeding**; `requirements.yml`
+  resolution now exists but only at **EE build time**, pinned and verified (ADR-0117 D3), which is
+  deliberately not a run-time resolver. The **registry stays the checksum authority** — a republished
+  version at the same version number would go undetected — so an in-repo per-artifact hash lockfile is
+  still owed (ADR-0117 follow-up i). (git-sync covers SCM-project delivery only.)
 
 ---
 

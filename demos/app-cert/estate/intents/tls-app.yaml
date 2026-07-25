@@ -1,0 +1,9 @@
+# tls-app — Intent/Application (ADR-0023): the outcome, declared in the simplest form
+# there is. "Run this app, and serve it over TLS on 443." No mention of Ansible, no
+# collection, no execution environment, no play — the operator writes what makes the app
+# itself, and the Blueprint beside this routes it to whatever materializes that.
+name: tls-app
+kind: Intent/Application
+spec:
+  package: nginx
+  port: "443"

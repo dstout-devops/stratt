@@ -1,0 +1,29 @@
+# tls-app — the Blueprint that turns the Intent's outcome into an EXPECTATION about the
+# estate, and claims the Facet namespace that expectation is checked against.
+#
+# It is here for a reason worth understanding: a Run may not write an observed Facet that
+# nothing expects. Ownership of a Facet namespace is REGISTERED before any write, by a
+# Blueprint route claiming it (§2.1 — registration precedes writes, enforced in the data
+# layer, not by convention). Without this file the install Run's fact-back is refused with
+# exactly that message, which is what happened the first time this demo ran. The Actuator's
+# `facetNamespaces` grant is a write CEILING, not a claim of ownership — the two are
+# deliberately different things, and both must agree for a write to land.
+#
+# The route also names the Workflow that materializes the state, so drift is routed to a
+# remediation the platform never invents: the PLUGIN materializes, and core never learns
+# what "a TLS app" is (§1.4). It is surfaced as a ref on the Finding, never auto-launched.
+name: tls-app
+version: 1
+for: Intent/Application
+severity: warning
+dampingObservations: 1
+defaults:
+  channel: stable
+  port: "443"
+routes:
+  - observe:
+      namespace: app.config
+      path: port
+      equals: "{{.spec.port}}" # resolved from the Intent override, or this default
+    claim: exclusive
+    remediationWorkflow: app-install-with-cert

@@ -1,0 +1,14 @@
+# app-node-ssh — the machine credential for the managed host: a POINTER, never material
+# (§2.5). The control plane cannot hold the key; the kubelet dereferences this Secret and
+# projects it into the execution pod at spawn, and nothing writes it to the graph or a log.
+#
+# This is the AWX split done properly: the host list carries the ADDRESS (hosts/app-node.yaml
+# → mgmt.address), the CredentialRef carries the KEY, and the Step's use-check against the
+# launching Principal is the authorization gate. `injection` names how the material lands —
+# one file, mounted read-only under /runner/credentials/<ref>/.
+name: app-node-ssh
+ownerTeam: platform-admins
+backend: k8s-secret
+locator: { namespace: stratt, name: app-node-creds }
+injection:
+  - { key: ssh-privatekey, as: file, name: id_ed25519 }

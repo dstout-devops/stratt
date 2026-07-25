@@ -1,0 +1,147 @@
+# app-install-with-cert — install an app on a managed host and give it a TLS certificate,
+# through a gated Workflow, over a real SSH connection, with privilege escalation.
+#
+# This is the demo ADR-0117 was written for. Four things that did not work before it are
+# all load-bearing here, so the demo fails if any of them regresses:
+#
+#   * CONTENT (D3). The play calls community.crypto modules. They exist only because the
+#     Actuator this Step names runs an EE built with that collection declared and pinned.
+#   * PER-STEP EE SELECTION (D3a). `actuator: ansible-crypto` is how the Step asks for that
+#     image. Nothing here passes an image name as a parameter — the Actuator declaration is
+#     the authority, and the Run states the content it actually got (kind=ee-content).
+#   * PRIVILEGE ESCALATION (D1). The node disables root login, so writing /etc/ssl and
+#     /etc/nginx is only reachable by escalating. `become` is typed and reviewable in Git
+#     rather than a flag string, and it is recorded on the Run.
+#   * ACTUATION ACCOUNTING (D5). A play that matched no host, or changed nothing, is a
+#     FAILURE — see the vacuous-run-guard Workflow beside this one, which proves it.
+#
+# The write-back reports the app's observed listen port and nothing else. The certificate's
+# own attributes are NOT projected: cert.identity/cert.expiry belong to the cert-issuer
+# Connector's Syncer, and a self-signed cert minted on the node has no system of record to
+# project from — one authority per fact (§1.2). The Actuator's grant enforces that ceiling
+# no matter what a play claims.
+name: app-install-with-cert
+steps:
+  - name: approve
+    # The launch is itself a gate; this adds a human approval before anything mutates a
+    # managed host (§5 Flow 1). 24h to approve.
+    gate:
+      approvers:
+        teams: [platform-admins]
+      timeoutSeconds: 86400
+
+  - name: install
+    needs: [approve]
+    viewName: app-nodes
+    actuator: ansible-crypto
+    credentialRefs: [app-node-ssh]
+    # The ceiling on this Step's write-back, intersected with the Actuator's own grant.
+    facetWriteScope: [app.config]
+    params:
+      # Typed privilege escalation (D1) — a declared value, not an opaque flag string.
+      become:
+        enabled: true
+        method: sudo
+        user: root
+      extraVars:
+        # The play authors the connection vars; the core never does (§1.4). ansible_host
+        # comes from each target's mgmt.address, rendered by the shim.
+        ansible_user: appops
+        ansible_ssh_private_key_file: /tmp/app-node-key
+        ansible_ssh_common_args: "-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
+        app_common_name: app-node.stratt.svc.cluster.local
+        app_tls_port: "443"
+      play: |
+        - name: Install the app and issue its certificate
+          hosts: all
+          gather_facts: false
+          tasks:
+            - name: Stage the SSH key at 0600 (the mount is group-readable; SSH refuses that)
+              # become:false is REQUIRED, not tidiness: the Step escalates, and without this
+              # override ansible would try to sudo on localhost — inside an EE pod that runs
+              # as an unprivileged user and ships no sudo. A task-level become wins over the
+              # play-wide flag.
+              become: false
+              delegate_to: localhost
+              connection: local
+              run_once: true
+              ansible.builtin.copy:
+                src: /runner/credentials/app-node-ssh/id_ed25519
+                dest: /tmp/app-node-key
+                mode: "0600"
+                remote_src: true
+
+            - name: Ensure the TLS material directories exist
+              ansible.builtin.file:
+                path: "{{ item }}"
+                state: directory
+                mode: "0755"
+              loop:
+                - /etc/ssl/private
+                - /etc/nginx/conf.d
+
+            # ── community.crypto: the collection this demo's EE was built to carry ──
+            - name: Generate the app's private key
+              community.crypto.openssl_privatekey:
+                path: /etc/ssl/private/app.key
+                size: 2048
+                mode: "0600"
+
+            - name: Build a certificate signing request for the app's name
+              community.crypto.openssl_csr:
+                path: /etc/ssl/private/app.csr
+                privatekey_path: /etc/ssl/private/app.key
+                common_name: "{{ app_common_name }}"
+                subject_alt_name: "DNS:{{ app_common_name }}"
+
+            - name: Issue the certificate (self-signed — a real CA is a Connector, not a play)
+              community.crypto.x509_certificate:
+                path: /etc/ssl/certs/app.crt
+                csr_path: /etc/ssl/private/app.csr
+                privatekey_path: /etc/ssl/private/app.key
+                provider: selfsigned
+                selfsigned_not_after: "+365d"
+                mode: "0644"
+
+            # ── install the app on that certificate ──
+            - name: Install the app's TLS site
+              ansible.builtin.copy:
+                dest: /etc/nginx/conf.d/app-tls.conf
+                mode: "0644"
+                content: |
+                  server {
+                    listen {{ app_tls_port }} ssl;
+                    server_name {{ app_common_name }};
+                    ssl_certificate     /etc/ssl/certs/app.crt;
+                    ssl_certificate_key /etc/ssl/private/app.key;
+                    location / { return 200 'stratt app-cert demo: served over TLS\n'; }
+                  }
+
+            - name: Check the config before reloading (a broken reload leaves nginx serving the OLD config — a silent no-op)
+              ansible.builtin.command: nginx -t
+              changed_when: false
+
+            - name: Reload nginx so the certificate takes effect (a real converge, not just a file on disk)
+              ansible.builtin.command: nginx -s reload
+              changed_when: true
+
+            - name: Wait until the app is actually accepting TLS connections
+              ansible.builtin.wait_for:
+                port: "{{ app_tls_port | int }}"
+                host: 127.0.0.1
+                timeout: 30
+
+            - name: OBSERVE the effective TLS port from nginx's own loaded config
+              # The fact-back below must report what is TRUE, not what was requested, so
+              # the value comes from `nginx -T` — the configuration the RUNNING server
+              # has loaded — rather than from the variable that asked for it.
+              ansible.builtin.shell: >
+                nginx -T 2>/dev/null | grep -oE 'listen[[:space:]]+[0-9]+[[:space:]]+ssl' | grep -oE '[0-9]+' | head -1
+              register: observed_port
+              changed_when: false
+
+            - name: Report the observed app.config to Stratt (write-back under the Step's scope)
+              ansible.builtin.set_fact:
+                stratt_facets:
+                  app.config:
+                    port: "{{ observed_port.stdout | trim }}"

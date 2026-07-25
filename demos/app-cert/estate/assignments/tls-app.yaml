@@ -1,0 +1,9 @@
+# Binds the Intent to the target set through the Blueprint — the three-part join that makes
+# an outcome apply to actual machines: WHAT (Intent), WHERE (View), HOW-IT-IS-JUDGED
+# (Blueprint@version, pinned so a Blueprint revision cannot silently change what a live
+# Assignment means).
+name: tls-app
+intent: tls-app
+view: app-nodes
+blueprint: tls-app@1
+environments: [dev]

@@ -11,7 +11,7 @@ request contradicts the charter, surface the conflict — don't silently follow 
 **Status: Phases 0–2 code-complete; Phase 3 ~90%; multi-region Cells shipped ahead of plan; and the whole
 platform re-centered onto the sovereign plugin port (dark-matter, ADR-0046 arc) — the core spine is
 content-blind and every tool is a plugin, verified in-repo — and now partly **live-cluster verified** by the
-[demo library](demos/README.md) (ADR-0116: three turnkey demos proven end-to-end on kind).** The Go
+[demo library](demos/README.md) (ADR-0116: four turnkey demos proven end-to-end on kind).** The Go
 control plane (`core/`), the React UI (`ui/`), 90+ ADRs, and the Helm chart are all real and substantial —
 this is a working platform, not a spike. The living, evidence-backed tracker is
 **[docs/roadmap.md](docs/roadmap.md)**; the decision record is **[docs/adr/](docs/adr/README.md)**. Follow
@@ -95,7 +95,7 @@ Run repeatable work through the **Taskfile**; never assert success without the m
 - **Dev substrate:** `task dev:up` / `dev:down` (Postgres 18 · NATS · Temporal); e2e tests need it up.
 - **Demos** ([demos/](demos/README.md), ADR-0116): `task demo:<name>:run` stands up a floor and drives the
   scenario end-to-end, asserting the outcome (`demo:<name>:down` tears it back down). Live-verified on kind:
-  `k8s-deploy`, `vsphere-only`, `ec2-only`. Treat a demo run as integration testing — they have repeatedly
+  `k8s-deploy`, `vsphere-only`, `ec2-only`, `app-cert`. Treat a demo run as integration testing — they have repeatedly
   surfaced real defects; keep them green when touching orchestration, plugins, or the estate.
 
 ## Workflow
