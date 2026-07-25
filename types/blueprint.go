@@ -66,6 +66,21 @@ type BlueprintRoute struct {
 	// route's Findings — a ref only, never auto-launched (§5 Flow 2). Same
 	// field name as Baseline.RemediationWorkflow (one frozen concept, §2).
 	RemediationWorkflow string `json:"remediationWorkflow,omitempty"`
+	// RemediationParams are the values this route passes to its RemediationWorkflow,
+	// {{.spec.X}}-substituted from the resolved spec at compile and carried onto the
+	// compiled Baseline (ADR-0118 D3).
+	//
+	// This field is the whole reason the parameter plane used to stop at the observation
+	// boundary. A route named the Workflow that converges the estate and passed it NOTHING,
+	// so every remediation Workflow had to re-declare by hand what its Intent already said —
+	// which is why `port: "443"` appeared three times in the app-cert demo.
+	//
+	// Validated against the named Workflow's declared input schema AT COMPILE: an unknown key
+	// or a missing required input fails the Assignment, so a route wired to a Workflow it
+	// does not fit breaks in front of the person editing the declaration rather than in front
+	// of the operator at 3am (§1.8). Same field name as Baseline.RemediationParams — one
+	// concept, one name (§2), the rule already applied to RemediationWorkflow above.
+	RemediationParams map[string]any `json:"remediationParams,omitempty"`
 }
 
 // FacetExpectation is one check the compiled facet-observation Baseline

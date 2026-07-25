@@ -275,3 +275,125 @@ func TestLayersCompleteASpecAcrossDeclarations(t *testing.T) {
 		t.Fatalf("expected 1 compiled Baseline, got %d", len(plan.Upserts))
 	}
 }
+
+// ── route → Baseline remediation params (ADR-0118 D3) ─────────────────────────────────
+//
+// These close the defect the whole ADR started from: a Blueprint route named the Workflow
+// that converges the estate and passed it NOTHING, so every remediation Workflow re-declared
+// by hand what its Intent already said — which is why `port: "443"` appeared three times in
+// one demo.
+
+// withRemediation wires the fixture's route to a Workflow with the given input schema, and
+// gives the route params substituted from the spec.
+func withRemediation(s *fakeStore, inputs string, params map[string]any) *fakeStore {
+	s.workflows = map[string]types.Workflow{
+		"fix-it": {Name: "fix-it", Inputs: json.RawMessage(inputs), Steps: []types.Step{{Name: "go", ViewName: "v", Actuator: "script"}}},
+	}
+	bp := s.blueprints["web-server@1"]
+	bp.Routes[0].RemediationWorkflow = "fix-it"
+	bp.Routes[0].RemediationParams = params
+	s.blueprints["web-server@1"] = bp
+	return s
+}
+
+const fixItInputs = `{"type":"object","additionalProperties":false,` +
+	`"required":["port"],"properties":{"port":{"type":"string"},"channel":{"type":"string"}}}`
+
+// TestRemediationParamsResolveFromTheSpecOntoTheBaseline is the wire itself: a value declared
+// ONCE in the Intent layer reaches the Workflow that fixes drift, with no second declaration.
+func TestRemediationParamsResolveFromTheSpecOntoTheBaseline(t *testing.T) {
+	s := withRemediation(
+		appStore(map[string]any{"package": "nginx", "port": "8443"}, nil, nil),
+		fixItInputs,
+		map[string]any{"port": "{{.spec.port}}"},
+	)
+	plan := compileOne(t, s)
+	if len(plan.Errors) != 0 {
+		t.Fatalf("unexpected compile errors: %v", plan.Errors)
+	}
+	got := plan.Upserts[0].RemediationParams
+	if got["port"] != "8443" {
+		t.Fatalf("the route's params must resolve from the spec, got %#v", got)
+	}
+}
+
+// TestRemediationParamsResolveFromAnAssignmentValue: the params see the WHOLE resolved spec,
+// so a per-environment value on the Assignment reaches the remediation too. Without this the
+// environment-specific fix would silently use the fleet-wide value.
+func TestRemediationParamsResolveFromAnAssignmentValue(t *testing.T) {
+	s := withRemediation(
+		appStore(map[string]any{"package": "nginx"}, map[string]any{"port": "9443"}, nil),
+		fixItInputs,
+		map[string]any{"port": "{{.spec.port}}"},
+	)
+	plan := compileOne(t, s)
+	if len(plan.Errors) != 0 {
+		t.Fatalf("unexpected compile errors: %v", plan.Errors)
+	}
+	if got := plan.Upserts[0].RemediationParams["port"]; got != "9443" {
+		t.Fatalf("an Assignment-declared value must reach the remediation, got %#v", got)
+	}
+}
+
+// TestRouteParamsUnknownToTheWorkflowFailCompile: the cross-check. A route wired to a Workflow
+// it does not fit breaks in front of the declaration's author, not the operator answering a
+// Finding at 3am.
+func TestRouteParamsUnknownToTheWorkflowFailCompile(t *testing.T) {
+	s := withRemediation(
+		appStore(map[string]any{"package": "nginx", "port": "8443"}, nil, nil),
+		fixItInputs,
+		map[string]any{"port": "{{.spec.port}}", "prt": "typo"},
+	)
+	plan := compileOne(t, s)
+	if len(plan.Upserts) != 0 {
+		t.Fatalf("a mismatched route must compile nothing, got %d Baselines", len(plan.Upserts))
+	}
+	joined := strings.Join(plan.Errors, "\n")
+	if !strings.Contains(joined, "fix-it") || !strings.Contains(joined, "prt") {
+		t.Fatalf("the error must name the workflow and the offending key; got: %s", joined)
+	}
+}
+
+// TestRouteMissingARequiredInputFailsCompile: the other direction — the Workflow demands an
+// input the route never passes, which would otherwise fail only at launch.
+func TestRouteMissingARequiredInputFailsCompile(t *testing.T) {
+	s := withRemediation(
+		appStore(map[string]any{"package": "nginx", "port": "8443"}, nil, nil),
+		fixItInputs,
+		map[string]any{"channel": "stable"}, // `port` is required and absent
+	)
+	plan := compileOne(t, s)
+	if len(plan.Errors) == 0 {
+		t.Fatal("a route omitting a required input must fail the compile")
+	}
+	if len(plan.Upserts) != 0 {
+		t.Fatalf("nothing may compile from a route that cannot launch, got %d", len(plan.Upserts))
+	}
+}
+
+// TestRouteParamsWithNoRemediationWorkflowRejected: params with nothing to pass them to is a
+// half-declaration — accepted-and-ignored is the shape ADR-0117 kept finding (a declared port
+// with no address, facetNamespaces with no identityScheme).
+func TestRouteParamsWithNoRemediationWorkflowRejected(t *testing.T) {
+	s := appStore(map[string]any{"package": "nginx", "port": "8443"}, nil, nil)
+	bp := s.blueprints["web-server@1"]
+	bp.Routes[0].RemediationParams = map[string]any{"port": "{{.spec.port}}"}
+	s.blueprints["web-server@1"] = bp
+	plan := compileOne(t, s)
+	if len(plan.Errors) == 0 {
+		t.Fatal("remediationParams with no remediationWorkflow must be rejected, not ignored")
+	}
+}
+
+// TestRouteWithoutParamsStillCompiles: the whole feature is additive. Every existing route
+// declares no remediationParams and must be untouched.
+func TestRouteWithoutParamsStillCompiles(t *testing.T) {
+	s := withRemediation(appStore(map[string]any{"package": "nginx", "port": "8443"}, nil, nil), fixItInputs, nil)
+	plan := compileOne(t, s)
+	if len(plan.Errors) != 0 {
+		t.Fatalf("a route with no params must compile exactly as before: %v", plan.Errors)
+	}
+	if plan.Upserts[0].RemediationParams != nil {
+		t.Fatalf("no params declared ⇒ none carried, got %#v", plan.Upserts[0].RemediationParams)
+	}
+}

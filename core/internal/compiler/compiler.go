@@ -225,7 +225,17 @@ func Compile(ctx context.Context, s Store, maxDelta float64) (Plan, error) {
 				delta.Note = serr
 				break
 			}
-			b := compiledBaseline(a, bp, intent, i, view, route, exp, matched, specLayers)
+			// The route's params for its remediation Workflow, resolved from the SAME spec the
+			// expectation is (ADR-0118 D3) — so what we expect and what we would do to fix it
+			// are stated once, in one place, instead of the Workflow re-declaring them.
+			remParams, rerr := resolveRemediationParams(ctx, s, route, resolvedSpec)
+			if rerr != "" {
+				skipped[a.Name] = true
+				plan.Errors = append(plan.Errors, fmt.Sprintf("assignment %s: route %d: %s", a.Name, i, rerr))
+				delta.Note = rerr
+				break
+			}
+			b := compiledBaseline(a, bp, intent, i, view, route, exp, matched, specLayers, remParams)
 			candidates[a.Name] = append(candidates[a.Name], b)
 			for _, id := range matched {
 				claims = append(claims, claimRecord{exp.Namespace, id, route.Claim, a.Name})
@@ -412,7 +422,7 @@ func selectorParametrized(sel types.ViewSelector) bool {
 // compiledBaseline builds one facet-observation Baseline for an (Assignment,
 // route) pair. The name is deterministic and origin-stamped so the compiler
 // owns exactly its rows.
-func compiledBaseline(a types.Assignment, bp types.Blueprint, intent types.Intent, routeIdx int, view types.View, route types.BlueprintRoute, exp types.FacetExpectation, _ []string, specLayers map[string][]string) types.Baseline {
+func compiledBaseline(a types.Assignment, bp types.Blueprint, intent types.Intent, routeIdx int, view types.View, route types.BlueprintRoute, exp types.FacetExpectation, _ []string, specLayers map[string][]string, remParams map[string]any) types.Baseline {
 	sel := types.ViewSelector{
 		Kinds:  view.Selector.Kinds,
 		Labels: view.Selector.Labels,
@@ -430,6 +440,7 @@ func compiledBaseline(a types.Assignment, bp types.Blueprint, intent types.Inten
 		Severity:            severityOr(bp.Severity),
 		DampingObservations: bp.DampingObservations,
 		RemediationWorkflow: route.RemediationWorkflow,
+		RemediationParams:   remParams,
 		Framework:           "intent",
 		CompiledFrom: &types.CompiledOrigin{
 			Assignment: a.Name, Intent: intent.Name, Blueprint: bp.Name,
@@ -437,6 +448,45 @@ func compiledBaseline(a types.Assignment, bp types.Blueprint, intent types.Inten
 			SpecLayers: specLayers,
 		},
 	}
+}
+
+// resolveRemediationParams substitutes a route's remediationParams from the resolved spec and
+// checks them against the named Workflow's declared input schema (ADR-0118 D3).
+//
+// The cross-check is the part that earns its keep. A route wired to a Workflow it does not
+// fit — an unknown key, a wrongly-typed value, a required input nobody supplies — fails the
+// COMPILE, so the failure lands on the person editing the declaration. Without it the same
+// mistake would surface as a failed remediation launch, at the worst possible moment: an
+// operator responding to a Finding, told only that their launch was rejected.
+//
+// Returns a non-empty string on failure (the compiler's convention for a per-Assignment skip
+// reason, matching substituteExpectation).
+func resolveRemediationParams(ctx context.Context, s Store, route types.BlueprintRoute, spec map[string]any) (map[string]any, string) {
+	if route.RemediationWorkflow == "" {
+		if len(route.RemediationParams) > 0 {
+			// A half-declaration: params with nothing to pass them to. Rejected rather than
+			// ignored, the same rule as facetNamespaces without identitySchemes (ADR-0117).
+			return nil, "remediationParams declared with no remediationWorkflow to pass them to"
+		}
+		return nil, ""
+	}
+	if len(route.RemediationParams) == 0 {
+		return nil, ""
+	}
+	resolved, err := template.SubstituteParams(route.RemediationParams, template.Namespaces{"spec": spec})
+	if err != nil {
+		return nil, fmt.Sprintf("remediationParams: %v", err)
+	}
+	// validateRefs already proved the Workflow exists, so a read failure here is not the
+	// missing-ref case and should surface as itself.
+	wf, err := s.GetWorkflow(ctx, route.RemediationWorkflow)
+	if err != nil {
+		return nil, fmt.Sprintf("remediationParams: read workflow %s: %v", route.RemediationWorkflow, err)
+	}
+	if _, err := contract.ResolveLaunchInputs(wf.Name, wf.Inputs, resolved); err != nil {
+		return nil, fmt.Sprintf("remediationParams do not satisfy workflow %s: %v", wf.Name, err)
+	}
+	return resolved, ""
 }
 
 // validateResolvedSpec enforces the Intent kind's schema against the MERGED spec — the

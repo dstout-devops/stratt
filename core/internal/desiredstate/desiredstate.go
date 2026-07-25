@@ -1238,6 +1238,7 @@ type baselineFile struct {
 	Severity            string         `yaml:"severity"`
 	DampingObservations int            `yaml:"dampingObservations"`
 	RemediationWorkflow string         `yaml:"remediationWorkflow"`
+	RemediationParams   map[string]any `yaml:"remediationParams"`
 	Framework           string         `yaml:"framework"`
 	Environments        []string       `yaml:"environments"`
 	// FacetWriteScope is the Facet namespaces this Baseline's actuation may write
@@ -1304,8 +1305,9 @@ func parseBaselineFile(path string, raw []byte, opts ...ValidateOption) (string,
 		Slices: f.Slices, CredentialRefs: f.CredentialRefs, Principal: f.Principal,
 		Cron: f.Cron, Paused: f.Paused, Severity: f.Severity,
 		DampingObservations: f.DampingObservations,
-		RemediationWorkflow: f.RemediationWorkflow, Framework: f.Framework,
-		Mode: f.Mode, FacetWriteScope: f.FacetWriteScope, Environments: f.Environments,
+		RemediationWorkflow: f.RemediationWorkflow, RemediationParams: f.RemediationParams,
+		Framework: f.Framework,
+		Mode:      f.Mode, FacetWriteScope: f.FacetWriteScope, Environments: f.Environments,
 		RequiredRelations: f.RequiredRelations,
 	}
 	for _, ef := range f.Expected {
@@ -1674,6 +1676,7 @@ type blueprintRoute struct {
 	Observe             declExpectation `yaml:"observe"`
 	Claim               string          `yaml:"claim"`
 	RemediationWorkflow string          `yaml:"remediationWorkflow"`
+	RemediationParams   map[string]any  `yaml:"remediationParams"`
 }
 type declFacetPred struct {
 	Namespace string `yaml:"namespace"`
@@ -1725,6 +1728,7 @@ func parseBlueprintFile(path string, raw []byte) (string, types.Blueprint, error
 				Equals: eq, Contains: con, NotBefore: r.Observe.NotBefore,
 			},
 			Claim: r.Claim, RemediationWorkflow: r.RemediationWorkflow,
+			RemediationParams: r.RemediationParams,
 		})
 	}
 	if err := ValidateBlueprint(b); err != nil {

@@ -46,6 +46,15 @@ type Baseline struct {
 	// Baseline's Findings. A ref only — remediation is never auto-launched
 	// (§5 Flow 2: remediation behind Gates).
 	RemediationWorkflow string `json:"remediationWorkflow,omitempty"`
+	// RemediationParams are the launch inputs to pass that Workflow, resolved from the
+	// Intent layer at compile (ADR-0118 D3). Compiler-written only; a hand-written Baseline
+	// may declare them directly.
+	//
+	// They are NOT copied onto the Findings this Baseline raises. A Finding already
+	// references its Baseline, so a copy would be a second, staleable record of a
+	// Git-derived fact for no gain — nothing in the parameter plane is per-Entity. The
+	// remediation door reads them from here at launch.
+	RemediationParams map[string]any `json:"remediationParams,omitempty"`
 	// Framework tags the Findings (e.g. "cis") — "one kind, framework-
 	// tagged" (§2.4).
 	Framework string `json:"framework,omitempty"`
