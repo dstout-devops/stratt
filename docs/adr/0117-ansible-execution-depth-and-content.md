@@ -546,15 +546,21 @@ what a reasonable schema would look like.** Nothing short of running `community.
   fails its first Run in ~2m with the reason instead of hanging. The cheap partial remains a CI gate tying
   each `estate/actuators/*.yaml` `image:` to a build task, and it is why the `ansible-crypto` declaration
   still lands with the demo (f) rather than alone.
-  (m) **Execution liveness is bounded far below what a Step is allowed to take (§1.8, platform-wide).**
+  ~~(m) **Execution liveness is bounded far below what a Step is allowed to take (§1.8, platform-wide).**~~ — **done.**
   Found while measuring (l). Two ceilings contradict the Job the dispatcher itself creates
   (`ActiveDeadlineSeconds` **6h**): `a.Execute` inherits `StartToCloseTimeout` **10m**, so a Step whose pod
   legitimately runs longer can never succeed — it is killed and retried 3× into a timeout; and
   `HeartbeatTimeout` is **1m** while the heartbeat is driven _per output line_, so a single task that is
   silent for over a minute (`apt install`, a long `command`) trips a heartbeat timeout even though the pod is
-  perfectly healthy. Nothing in-repo has caught this because every play we run finishes in seconds. Fix:
-  give `a.Execute` its own ceiling derived from the same authority as the Job's deadline, and drive the
-  heartbeat from a ticker for the duration of the follow rather than from tool output.
+  perfectly healthy. Nothing in-repo caught either one because every play we run finishes in seconds — both
+  were found by _reading_ the ceilings while correcting (l)'s magnitude, not by any test. Fixed by making the
+  Job's deadline the single authority: `dispatch.MaxStepRuntime` is what goes on `ActiveDeadlineSeconds`, and
+  `execActivityOptions` derives the activity ceiling from it (with margin for spawn, log drain, and cleanup),
+  applied to the two activities that run a pod — `a.Execute` and `a.ExecuteAction` (Actions are where the
+  genuinely long ones live: a tofu apply routinely outlives ten minutes). The bookkeeping activities keep the
+  short default deliberately, since a long ceiling there converts a wedged control-plane call into a silent
+  stall. Liveness is now a ticker for the whole execution (`keepAlive`, 20s) rather than a function of tool
+  chattiness, mutex-serialized because `activity.RecordHeartbeat` is not documented as goroutine-safe.
   (k) **Migrate the boot-registered `ansible`/`script` Actuators to CaC** (ADR-0103's remaining
   boot blocks). Now unblocked for `ansible`, since the declaration can finally express its bounded grant —
   the reason it could not move before. Note the registry rejects a declaration colliding with a

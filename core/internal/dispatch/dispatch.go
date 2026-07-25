@@ -17,6 +17,7 @@ import (
 	"log/slog"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	batchv1 "k8s.io/api/batch/v1"
@@ -142,6 +143,59 @@ type Result struct {
 	SpawnLatency time.Duration
 }
 
+// MaxStepRuntime is the ceiling on one Step's execution: the Job's own
+// ActiveDeadlineSeconds, and the SINGLE authority for how long a Step may run
+// (§1.2 — one authority per fact). The orchestration layer derives its activity
+// StartToCloseTimeout from this instead of carrying an independent number. The
+// two used to disagree — a 10m activity ceiling against this 6h Job deadline —
+// so Temporal killed and retried any Step that ran longer than ten minutes while
+// the Job it had just created was still permitted five more hours. Nothing in
+// repo caught it because every play we run finishes in seconds.
+const MaxStepRuntime = 6 * time.Hour
+
+// heartbeatInterval is how often an execution reports liveness while its tool is
+// silent. The activity's HeartbeatTimeout is the real liveness check, and the
+// heartbeat used to be driven by the tool's OUTPUT — so one task that printed
+// nothing for longer than that timeout (an `apt install`, a long `command`) was
+// declared dead while its pod was perfectly healthy. Liveness is a property of
+// the execution, not of how chatty the tool happens to be.
+const heartbeatInterval = 20 * time.Second
+
+// keepAlive reports liveness on a ticker for as long as stop has not been
+// called, and returns a beat func the follow loops can keep calling — the tool's
+// own output still heartbeats promptly, the ticker only guarantees a floor.
+// RecordHeartbeat is not documented as goroutine-safe, so serialize rather than
+// assume.
+func keepAlive(heartbeat func()) (beat func(), stop func()) {
+	return keepAliveEvery(heartbeat, heartbeatInterval)
+}
+
+func keepAliveEvery(heartbeat func(), interval time.Duration) (beat func(), stop func()) {
+	if heartbeat == nil {
+		return nil, func() {}
+	}
+	var mu sync.Mutex
+	beat = func() {
+		mu.Lock()
+		defer mu.Unlock()
+		heartbeat()
+	}
+	done := make(chan struct{})
+	go func() {
+		t := time.NewTicker(interval)
+		defer t.Stop()
+		for {
+			select {
+			case <-t.C:
+				beat()
+			case <-done:
+				return
+			}
+		}
+	}()
+	return beat, func() { close(done) }
+}
+
 // driftCapBytes bounds the accumulated drift detail per target. Findings
 // carry the capped detail; the full stream stays on the Run's events.
 const driftCapBytes = 16 * 1024
@@ -168,6 +222,10 @@ func (d *Dispatcher) Run(ctx context.Context, runID string, slice int, spec actu
 	// Runs (or two slices) adopt each other's execution (ADR-0008 review).
 	jobName := fmt.Sprintf("stratt-run-%s-s%d", runID, slice)
 	created := time.Now()
+
+	// Liveness for the whole execution, not just its chatty parts.
+	heartbeat, stopBeat := keepAlive(heartbeat)
+	defer stopBeat()
 
 	if err := d.createContent(ctx, jobName, spec.Files); err != nil {
 		return nil, err
@@ -237,6 +295,10 @@ func (d *Dispatcher) Run(ctx context.Context, runID string, slice int, spec actu
 func (d *Dispatcher) RunStream(ctx context.Context, runID string, slice int, spec actuators.JobSpec, creds []CredentialMount, heartbeat func(), onResp func(*pluginv1.ApplyResponse)) (bool, time.Duration, error) {
 	jobName := fmt.Sprintf("stratt-run-%s-s%d", runID, slice)
 	created := time.Now()
+
+	// Liveness for the whole execution, not just its chatty parts.
+	heartbeat, stopBeat := keepAlive(heartbeat)
+	defer stopBeat()
 
 	if err := d.createContent(ctx, jobName, spec.Files); err != nil {
 		return false, 0, err
@@ -517,7 +579,7 @@ func (d *Dispatcher) createJob(ctx context.Context, name, runID string, spec act
 	// starts. Pin the numeric uid the EE image is built with (useradd --uid 1000)
 	// so the enforcement above is satisfiable, not self-defeating.
 	runAsUser := int64(1000)
-	deadline := int64(6 * 3600) // 6h ceiling on total Job runtime (incl. retries)
+	deadline := int64(MaxStepRuntime.Seconds())
 	seccomp := &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault}
 
 	job := &batchv1.Job{

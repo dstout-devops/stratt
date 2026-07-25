@@ -184,6 +184,25 @@ type RunOutcome struct {
 	Outputs json.RawMessage
 }
 
+// execActivityOptions widens a Run's activity options for the activities that
+// actually run a pod. The short default is right for the bookkeeping around them
+// (resolve, mark, project, finish) — a long ceiling there would turn a wedged
+// control-plane call into a silent stall — but it is wrong for execution itself:
+// dispatch puts dispatch.MaxStepRuntime on the Job, so an independent 10m
+// activity ceiling meant Temporal killed and retried any Step that legitimately
+// ran longer, and the only diagnosis was a Temporal timeout (§1.8). Deriving both
+// from one authority is the point; the margin covers pod spawn, log drain, and
+// cleanup either side of the Job's own deadline.
+func execActivityOptions(base workflow.ActivityOptions) workflow.ActivityOptions {
+	o := base
+	o.StartToCloseTimeout = dispatch.MaxStepRuntime + 15*time.Minute
+	// The real liveness check. dispatch beats every 20s for the whole execution,
+	// including while the tool is silent, so this needs no headroom for a long
+	// quiet task — only for a stalled worker.
+	o.HeartbeatTimeout = 2 * time.Minute
+	return o
+}
+
 // RunAgainstView is the Phase-0 Workflow. Every state transition is a
 // Temporal event — the descent ladder's Workflow → Run rungs (§1.8) fall out
 // of its history.
@@ -267,9 +286,10 @@ func RunAgainstView(ctx workflow.Context, in RunInput) (RunOutcome, error) {
 	// name unique (ADR-0032). Targets are disjoint, so results merge by union.
 	var futures []workflow.Future
 	gslice := 0
+	xctx := workflow.WithActivityOptions(ctx, execActivityOptions(opts))
 	for _, g := range routed.Groups {
 		for _, chunk := range splitTargets(g.Targets, in.Slices) {
-			futures = append(futures, workflow.ExecuteActivity(ctx, a.Execute, in, gslice, g.Site,
+			futures = append(futures, workflow.ExecuteActivity(xctx, a.Execute, in, gslice, g.Site,
 				ResolvedTargets{ViewVersion: routed.ViewVersion, Targets: chunk}, creds))
 			gslice++
 		}
