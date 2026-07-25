@@ -832,6 +832,17 @@ func findingToWire(f types.Finding) Finding {
 	if len(f.Diff) > 0 {
 		out.Diff = json.RawMessage(f.Diff)
 	}
+	// The withdrawal spec on an orphan Finding (ADR-0118 D3). Surfaced on the Finding itself,
+	// not only through the remediation door, because this row is the ONLY record of it — the
+	// compiled Baseline that carried these values is pruned in the same pass, so a client that
+	// could not read them here could not reconstruct them anywhere (§1.8).
+	if f.RemoveWorkflow != "" {
+		out.RemoveWorkflow = &f.RemoveWorkflow
+	}
+	if len(f.RemoveParams) > 0 {
+		params := f.RemoveParams
+		out.RemoveParams = &params
+	}
 	return out
 }
 
@@ -2100,18 +2111,22 @@ func (s *Server) launchWorkflow(w http.ResponseWriter, r *http.Request, wf types
 // resolved from the Intent layer at compile, so this is also where "which values will the fix
 // use" is answerable without reading the compiler.
 func (s *Server) GetFindingRemediation(w http.ResponseWriter, r *http.Request, id string) {
-	_, b, ok := s.findingRemediation(w, r, id)
+	_, fl, ok := s.findingRemediation(w, r, id)
 	if !ok {
 		return
 	}
-	out := FindingRemediation{Baseline: b.Name, Workflow: b.RemediationWorkflow}
-	if len(b.RemediationParams) > 0 {
-		params := b.RemediationParams
+	out := FindingRemediation{Baseline: fl.Baseline, Workflow: fl.Workflow}
+	if fl.Withdrawal {
+		wd := true
+		out.Withdrawal = &wd
+	}
+	if len(fl.Params) > 0 {
+		params := fl.Params
 		out.Params = &params
 	}
 	// The Workflow's own schema, so a caller can see which inputs it may still supply —
 	// namely the ones the compiled params do not already set.
-	if wf, err := s.Store.GetWorkflow(r.Context(), b.RemediationWorkflow); err == nil && len(wf.Inputs) > 0 {
+	if wf, err := s.Store.GetWorkflow(r.Context(), fl.Workflow); err == nil && len(wf.Inputs) > 0 {
 		var doc map[string]any
 		if json.Unmarshal(wf.Inputs, &doc) == nil {
 			out.Inputs = &doc
@@ -2131,11 +2146,11 @@ func (s *Server) GetFindingRemediation(w http.ResponseWriter, r *http.Request, i
 // Never automatic (§5 Flow 2): a human or agent invokes it, Gate Steps still wait for their
 // approvers, and it goes through the same authz and validation as a direct launch.
 func (s *Server) RemediateFinding(w http.ResponseWriter, r *http.Request, id string) {
-	_, b, ok := s.findingRemediation(w, r, id)
+	_, fl, ok := s.findingRemediation(w, r, id)
 	if !ok {
 		return
 	}
-	wf, err := s.Store.GetWorkflow(r.Context(), b.RemediationWorkflow)
+	wf, err := s.Store.GetWorkflow(r.Context(), fl.Workflow)
 	if err != nil {
 		s.fail(w, err)
 		return
@@ -2148,13 +2163,17 @@ func (s *Server) RemediateFinding(w http.ResponseWriter, r *http.Request, id str
 	if !ok {
 		return
 	}
-	merged, clashes := mergeRemediationInputs(b.RemediationParams, supplied)
+	merged, clashes := mergeRemediationInputs(fl.Params, supplied)
 	if len(clashes) > 0 {
+		what, where := "remediationParams", "route"
+		if fl.Withdrawal {
+			what, where = "removeParams", "blueprint"
+		}
 		writeErr(w, http.StatusBadRequest, fmt.Sprintf(
-			"input(s) %v are already set by baseline %s's compiled remediationParams — a value cannot be "+
+			"input(s) %v are already set by baseline %s's compiled %s — a value cannot be "+
 				"bound twice for one launch (§2.4: resolving that would need a precedence rule). Supply only "+
-				"inputs the route leaves unset, or change the route",
-			clashes, b.Name))
+				"inputs the %s leaves unset, or change the %s",
+			clashes, fl.Baseline, what, where, where))
 		return
 	}
 	s.launchWorkflow(w, r, wf, principal, merged, changeContext)
@@ -2186,26 +2205,102 @@ func mergeRemediationInputs(compiled, supplied map[string]any) (map[string]any, 
 	return merged, clashes
 }
 
-// findingRemediation resolves a Finding to the Baseline that routes its remediation, 404ing
-// when there is none to launch. Shared by the preview and the launch so they can never
-// disagree about what a Finding routes to.
-func (s *Server) findingRemediation(w http.ResponseWriter, r *http.Request, id string) (types.Finding, types.Baseline, bool) {
+// findingLaunch is the resolved answer to "what fixes this Finding": the Workflow, the params
+// compiled for it, and which KIND of fix it is.
+type findingLaunch struct {
+	Baseline string
+	Workflow string
+	Params   map[string]any
+	// Withdrawal distinguishes retiring abandoned state from converging live state. Both are
+	// launched through the same door because from the operator's side both answer "resolve this
+	// Finding", but they are not the same act and the preview says which one it is.
+	Withdrawal bool
+}
+
+// findingRemediation resolves a Finding to what would be launched to fix it, 404ing when there
+// is nothing. Shared by the preview and the launch so they can never disagree.
+//
+// TWO SOURCES, AND THE ORDER MATTERS. A drift Finding reads its spec from its Baseline, which is
+// live. An ORPHAN Finding cannot: Apply writes it and then prunes the compiled Baseline, because
+// a Baseline whose Assignment is withdrawn must stop being observed, and graph.finding.baseline
+// has no foreign key — so the Finding survives pointing at a row that is gone. Its spec therefore
+// travels ON the Finding, and it must be checked FIRST, before any attempt to read a Baseline
+// that by construction is not there.
+//
+// Before this, both doors called GetBaseline unconditionally, so every orphan Finding got
+// "baseline <name> not found" — a message that describes a missing row when the real answer is
+// "this Finding retires abandoned state, and here is the Workflow that does it" (§1.8: the
+// failure must name its actual cause).
+func (s *Server) findingRemediation(w http.ResponseWriter, r *http.Request, id string) (types.Finding, findingLaunch, bool) {
 	f, err := s.Store.GetFinding(r.Context(), id)
 	if err != nil {
 		s.fail(w, err)
-		return types.Finding{}, types.Baseline{}, false
+		return types.Finding{}, findingLaunch{}, false
 	}
-	b, err := s.Store.GetBaseline(r.Context(), f.Baseline)
+	fl, prob := resolveFindingLaunch(f, func(name string) (types.Baseline, error) {
+		return s.Store.GetBaseline(r.Context(), name)
+	})
+	if prob != nil {
+		if prob.Err != nil {
+			s.fail(w, prob.Err)
+		} else {
+			writeErr(w, prob.Status, prob.Message)
+		}
+		return types.Finding{}, findingLaunch{}, false
+	}
+	return f, fl, true
+}
+
+// launchProblem is why a Finding routes to nothing: either a decision this code made (Status +
+// Message) or a store error to surface through s.fail, which owns the error→status mapping.
+type launchProblem struct {
+	Status  int
+	Message string
+	Err     error
+}
+
+// resolveFindingLaunch is the DECISION half of findingRemediation, split out from the I/O so it
+// runs in `task ci`.
+//
+// Server.Store is a concrete *graph.Store, so anything testing the handler needs a live Postgres
+// — and a Postgres-gated test is skipped in CI, which is how this repo has repeatedly shipped
+// mechanisms nothing exercised. The Baseline read is injected instead, so every branch below
+// (including the two that exist purely to produce an honest message) is provable without a
+// substrate.
+func resolveFindingLaunch(f types.Finding, getBaseline func(string) (types.Baseline, error)) (findingLaunch, *launchProblem) {
+	// The withdrawal spec is checked FIRST, before any attempt to read a Baseline that by
+	// construction is not there: Apply writes an orphan Finding and then prunes the compiled
+	// Baseline, and graph.finding.baseline has no foreign key, so the Finding survives pointing
+	// at a row that is gone.
+	if f.RemoveWorkflow != "" {
+		return findingLaunch{
+			Baseline: f.Baseline, Workflow: f.RemoveWorkflow,
+			Params: f.RemoveParams, Withdrawal: true,
+		}, nil
+	}
+	b, err := getBaseline(f.Baseline)
 	if err != nil {
-		s.fail(w, err)
-		return types.Finding{}, types.Baseline{}, false
+		// An orphan whose Baseline is gone and which carries no withdrawal Workflow is the
+		// onRemove:retain case: the state was deliberately left in place and there is nothing
+		// to launch. Before this branch existed every such request reported "baseline <name>
+		// not found" — a missing row, when the real answer is that the declaration asked for
+		// the state to be kept (§1.8: name the actual cause).
+		if errors.Is(err, graph.ErrNotFound) && f.Framework == "orphan" {
+			return findingLaunch{}, &launchProblem{Status: http.StatusNotFound, Message: fmt.Sprintf(
+				"finding %s reports state abandoned by a withdrawn Assignment, and its compiled baseline "+
+					"%s is pruned, but no removeWorkflow was recorded — the Intent's onRemove was retain, "+
+					"or its Blueprint declares no removeWorkflow. The state is retained deliberately; "+
+					"there is nothing to launch here", f.ID, f.Baseline)}
+		}
+		return findingLaunch{}, &launchProblem{Err: err}
 	}
 	if b.RemediationWorkflow == "" {
-		writeErr(w, http.StatusNotFound, fmt.Sprintf(
-			"baseline %s declares no remediationWorkflow, so this Finding has no remediation to launch", b.Name))
-		return types.Finding{}, types.Baseline{}, false
+		return findingLaunch{}, &launchProblem{Status: http.StatusNotFound, Message: fmt.Sprintf(
+			"baseline %s declares no remediationWorkflow, so this Finding has no remediation to launch", b.Name)}
 	}
-	return f, b, true
+	return findingLaunch{
+		Baseline: b.Name, Workflow: b.RemediationWorkflow, Params: b.RemediationParams,
+	}, nil
 }
 
 // GetWorkflowRun implements (GET /workflow-runs/{id}): the Workflow → Run

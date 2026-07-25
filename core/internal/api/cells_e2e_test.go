@@ -59,8 +59,8 @@ func TestCellsE2E(t *testing.T) {
 
 	// ── Slice 3: federated read unions both Cells' data ──────────────────────
 	t.Run("federated read unions both cells", func(t *testing.T) {
-		mustNil(t, storeEU.WriteOrphanFinding(ctx, "b-eu", "entity:eu-1", "warning", []byte(`{}`)))
-		mustNil(t, storeUS.WriteOrphanFinding(ctx, "b-us", "entity:us-1", "critical", []byte(`{}`)))
+		mustNil(t, storeEU.WriteOrphanFinding(ctx, graph.OrphanFinding{Baseline: "b-eu", Target: "entity:eu-1", Severity: "warning", Detail: []byte(`{}`)}))
+		mustNil(t, storeUS.WriteOrphanFinding(ctx, graph.OrphanFinding{Baseline: "b-us", Target: "entity:us-1", Severity: "critical", Detail: []byte(`{}`)}))
 
 		status, hdr, body := e2eGET(t, srvEU.URL+"/api/v1/findings", "admin")
 		if status != http.StatusOK {

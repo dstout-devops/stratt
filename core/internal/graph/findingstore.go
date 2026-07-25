@@ -185,16 +185,25 @@ func (s *Store) RecordBaselineObservations(ctx context.Context, b types.Baseline
 
 const findingColumns = `id, baseline, target, entity_id, status, severity, framework,
 	consecutive_drifted, diff, run_id, first_observed, last_observed, opened_at, resolved_at,
-	resolved_reason`
+	resolved_reason, remove_workflow, remove_params`
 
 func scanFinding(row pgx.Row) (types.Finding, error) {
 	var f types.Finding
-	var entityID, runID, resolvedReason *string
-	var diff []byte
+	var entityID, runID, resolvedReason, removeWorkflow *string
+	var diff, removeParams []byte
 	if err := row.Scan(&f.ID, &f.Baseline, &f.Target, &entityID, &f.Status,
 		&f.Severity, &f.Framework, &f.ConsecutiveDrifted, &diff, &runID,
-		&f.FirstObserved, &f.LastObserved, &f.OpenedAt, &f.ResolvedAt, &resolvedReason); err != nil {
+		&f.FirstObserved, &f.LastObserved, &f.OpenedAt, &f.ResolvedAt, &resolvedReason,
+		&removeWorkflow, &removeParams); err != nil {
 		return f, err
+	}
+	if removeWorkflow != nil {
+		f.RemoveWorkflow = *removeWorkflow
+	}
+	if len(removeParams) > 0 {
+		if err := json.Unmarshal(removeParams, &f.RemoveParams); err != nil {
+			return f, fmt.Errorf("graph: unmarshal finding remove params: %w", err)
+		}
 	}
 	if entityID != nil {
 		f.EntityID = *entityID
@@ -376,14 +385,40 @@ func (s *Store) ResolveClearedFacetContentionFindings(ctx context.Context) (int6
 	return tag.RowsAffected(), nil
 }
 
-func (s *Store) WriteOrphanFinding(ctx context.Context, baseline, target, severity string, detail []byte) error {
+// OrphanFinding is one orphan Finding to write: abandoned state plus the launch spec that
+// retires it (ADR-0118 D3). A struct rather than six positional arguments because the last two
+// are the reason this exists and would read as anonymous strings at the call site.
+type OrphanFinding struct {
+	Baseline string
+	Target   string
+	Severity string
+	// Detail is the human-facing reason blob (graph.finding.diff).
+	Detail []byte
+	// RemoveWorkflow + RemoveParams are the withdrawal launch spec. Stored in their own
+	// columns rather than read back out of Detail, which carries the same values for display:
+	// diff is documented as redacted and size-capped, so a launch that depended on it would
+	// break silently the day anything capped it.
+	RemoveWorkflow string
+	RemoveParams   map[string]any
+}
+
+func (s *Store) WriteOrphanFinding(ctx context.Context, o OrphanFinding) error {
+	var params []byte
+	if len(o.RemoveParams) > 0 {
+		var err error
+		if params, err = json.Marshal(o.RemoveParams); err != nil {
+			return fmt.Errorf("graph: marshal orphan remove params: %w", err)
+		}
+	}
 	_, err := s.pool.Exec(ctx, `
 		INSERT INTO graph.finding
-			(baseline, target, status, severity, framework, consecutive_drifted, diff, opened_at)
-		VALUES ($1, $2, 'open', $3, 'orphan', 1, $4, now())
+			(baseline, target, status, severity, framework, consecutive_drifted, diff, opened_at,
+			 remove_workflow, remove_params)
+		VALUES ($1, $2, 'open', $3, 'orphan', 1, $4, now(), nullif($5, ''), $6)
 		ON CONFLICT (baseline, target) WHERE status <> 'resolved'
-		DO UPDATE SET diff = excluded.diff, last_observed = now()`,
-		baseline, target, severity, detail)
+		DO UPDATE SET diff = excluded.diff, last_observed = now(),
+			remove_workflow = excluded.remove_workflow, remove_params = excluded.remove_params`,
+		o.Baseline, o.Target, o.Severity, o.Detail, o.RemoveWorkflow, params)
 	if err != nil {
 		return fmt.Errorf("graph: write orphan finding: %w", err)
 	}

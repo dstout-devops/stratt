@@ -1746,6 +1746,12 @@ export interface components {
             consecutiveDrifted: number;
             /** @description Latest observed-vs-expected detail (redacted, size-capped visibly). */
             diff?: unknown;
+            /** @description On an ORPHAN Finding, the Workflow that retires the abandoned state (ADR-0118 D3). Absent on every other Finding, and absent on an orphan whose Intent declared onRemove:retain — there is nothing to launch. */
+            removeWorkflow?: string;
+            /** @description The launch inputs for removeWorkflow, compiled under the Assignment that has since been withdrawn. Carried here because the Baseline holding them is pruned in the same pass, making this their only surviving record. */
+            removeParams?: {
+                [key: string]: unknown;
+            };
             /** @description The check Run behind the latest observation — the Evidence ref (§1.8). */
             runId?: string;
             /** Format: date-time */
@@ -1984,11 +1990,13 @@ export interface components {
         };
         /** @description What remediating a Finding would launch, rendered before it is launched (ADR-0118 D3, §1.8). Read-only. */
         FindingRemediation: {
-            /** @description The Baseline that routed this remediation. */
+            /** @description The Baseline this Finding was raised against. For a WITHDRAWAL (see `withdrawal`) this names a Baseline that has already been pruned — the Assignment is gone, so the row is too. It is still the right identifier for the compiled state being retired. */
             baseline: string;
             /** @description The Workflow that would be launched. */
             workflow: string;
-            /** @description The launch inputs that would be passed, resolved from the Intent layer at compile. Absent when the route declares none. */
+            /** @description True when this RETIRES abandoned state (the Blueprint's removeWorkflow on an orphan Finding) rather than converging live state to its expectation. The two are different acts and the caller is told which one it is asking for: remediation makes the estate match desired state, withdrawal removes state that is no longer desired at all. */
+            withdrawal?: boolean;
+            /** @description The launch inputs that would be passed, resolved from the Intent layer at compile. Absent when the route declares none. For a withdrawal these come off the orphan Finding, which is their only surviving record. */
             params?: {
                 [key: string]: unknown;
             };

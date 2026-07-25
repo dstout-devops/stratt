@@ -14,7 +14,7 @@ type Applier interface {
 	RegisterFacetOwner(ctx context.Context, o types.FacetOwner) error
 	UpsertBaseline(ctx context.Context, b types.Baseline) error
 	DeleteBaseline(ctx context.Context, name string) error
-	WriteOrphanFinding(ctx context.Context, baseline, target, severity string, detail []byte) error
+	WriteOrphanFinding(ctx context.Context, o graph.OrphanFinding) error
 	PutAssignmentMembership(ctx context.Context, m graph.AssignmentMembership) error
 	DeleteAssignmentMembership(ctx context.Context, assignment string) error
 }
@@ -48,7 +48,10 @@ func (p Plan) Apply(ctx context.Context, a Applier) []string {
 		}
 	}
 	for _, o := range p.Orphans {
-		if err := a.WriteOrphanFinding(ctx, o.Baseline, o.Target, o.Severity, o.Detail); err != nil {
+		if err := a.WriteOrphanFinding(ctx, graph.OrphanFinding{
+			Baseline: o.Baseline, Target: o.Target, Severity: o.Severity, Detail: o.Detail,
+			RemoveWorkflow: o.RemoveWorkflow, RemoveParams: o.RemoveParams,
+		}); err != nil {
 			errs = append(errs, fmt.Sprintf("orphan finding %s: %v", o.Baseline, err))
 		}
 	}

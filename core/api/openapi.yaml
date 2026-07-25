@@ -2160,6 +2160,19 @@ components:
           description: Drifted observations since the last clean one (§4.3 damping counter).
         diff:
           description: Latest observed-vs-expected detail (redacted, size-capped visibly).
+        removeWorkflow:
+          type: string
+          description: >
+            On an ORPHAN Finding, the Workflow that retires the abandoned state
+            (ADR-0118 D3). Absent on every other Finding, and absent on an orphan
+            whose Intent declared onRemove:retain — there is nothing to launch.
+        removeParams:
+          type: object
+          additionalProperties: true
+          description: >
+            The launch inputs for removeWorkflow, compiled under the Assignment that
+            has since been withdrawn. Carried here because the Baseline holding them
+            is pruned in the same pass, making this their only surviving record.
         runId:
           type: string
           description: The check Run behind the latest observation — the Evidence ref (§1.8).
@@ -2529,16 +2542,29 @@ components:
       properties:
         baseline:
           type: string
-          description: The Baseline that routed this remediation.
+          description: >
+            The Baseline this Finding was raised against. For a WITHDRAWAL (see
+            `withdrawal`) this names a Baseline that has already been pruned — the
+            Assignment is gone, so the row is too. It is still the right identifier
+            for the compiled state being retired.
         workflow:
           type: string
           description: The Workflow that would be launched.
+        withdrawal:
+          type: boolean
+          description: >
+            True when this RETIRES abandoned state (the Blueprint's removeWorkflow on
+            an orphan Finding) rather than converging live state to its expectation.
+            The two are different acts and the caller is told which one it is asking
+            for: remediation makes the estate match desired state, withdrawal removes
+            state that is no longer desired at all.
         params:
           type: object
           additionalProperties: true
           description: >
             The launch inputs that would be passed, resolved from the Intent layer
-            at compile. Absent when the route declares none.
+            at compile. Absent when the route declares none. For a withdrawal these
+            come off the orphan Finding, which is their only surviving record.
         inputs:
           type: object
           additionalProperties: true

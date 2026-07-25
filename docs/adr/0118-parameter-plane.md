@@ -273,12 +273,13 @@ authorities (§1.2); storing only what cannot be recovered is the line.
 Blueprint-level rather than per-route, matching `removeWorkflow`: a withdrawal retires the Assignment's whole
 compiled set, not one route's expectation.
 
-**What is still missing, and it is a door, not a value.** `findingRemediation` resolves a Finding's params via
-`GetBaseline`, and `Apply` writes the orphan Finding and then **prunes** the Baseline — so an orphan Finding
-references a row that no longer exists and the remediation door cannot serve it. The compiled withdrawal params
-are therefore _visible_ (they ride in the orphan Finding's `diff`, published on `GET /findings/{id}`) but not
-_launchable in one click_. That gap predates this change — `removeWorkflow` never had a door either — and is
-booked below rather than folded in, because it is an API surface with its own schema, not a parameter question.
+**And the withdrawal is launchable, not merely readable.** `Apply` writes the orphan Finding and then **prunes**
+the Baseline, so the params have to leave the Baseline with the Finding: `Finding.removeWorkflow` /
+`removeParams` (migration 00042) carry them in typed columns, and `resolveFindingLaunch` consults them **before**
+attempting a Baseline read that by construction cannot succeed. `GET`/`POST /findings/{id}/remediation` serve
+orphans through the same door as drift, with `withdrawal: true` marking which act it is. See the follow-up list
+for why the values are not scraped back out of the Finding's `diff`, which carries the same information for
+display, and for the `onRemove: retain` case that now explains itself instead of reporting a missing row.
 
 **Remediation needs a named launch path, and today there isn't one.** Remediation is a ref only
 (`core/internal/api/server.go:746`); nothing server-side reads `Baseline.RemediationWorkflow` and launches it.
@@ -503,11 +504,29 @@ changes instance identity and owes a migration story for fleets already carrying
   withdrawal deletes the Assignment whose values fed the merge. `estate/blueprints/{access,fileset}.yaml` now
   declare them, so `access-revoke` and `fileset-revert` receive the grant/path the state was created under
   instead of having it retyped. The `fileset` case is the sharp one: that play removes a file by absolute path.
-- **A launch door for the withdrawal path.** Now the residual half of the item above, and a §1.6/§1.8 gap
-  rather than a parameter one. `Apply` writes the orphan Finding then prunes its Baseline, so
-  `findingRemediation`'s `GetBaseline` cannot resolve an orphan and `POST /findings/{id}/remediation` cannot
-  serve it. The compiled params are visible in the Finding's `diff` but not launchable in one click. Predates
-  `removeParams` — `removeWorkflow` never had a door — and needs its own endpoint + schema.
+- ~~**A launch door for the withdrawal path.**~~ — **done**, and it needed no new endpoint. The existing
+  `GET`/`POST /findings/{id}/remediation` now serves orphans: `resolveFindingLaunch` checks the Finding's own
+  withdrawal spec **before** attempting the Baseline read, since `Apply` writes the orphan Finding and then
+  prunes the Baseline (correctly — a Baseline whose Assignment is withdrawn must stop being observed), and
+  `graph.finding.baseline` has no foreign key, so the Finding survives pointing at a row that is gone.
+  - **The spec travels on the Finding, in typed columns.** `Finding.removeWorkflow` / `removeParams`
+    (migration 00042, additive). This is the one place a Finding carries its own launch spec rather than
+    reading it from its Baseline — the copy this ADR refused elsewhere as "a second, staleable record of a
+    Git-derived fact" is here the **only** record, so that reasoning does not apply.
+  - **Not scraped from `diff`.** The same values already ride in the orphan's detail blob for humans, but
+    `diff` is documented as redacted and size-capped; a launch that parsed its way back out of it would break
+    the day anything capped it, with no failing test to notice.
+  - **One door, two acts, said out loud.** `FindingRemediation.withdrawal` distinguishes retiring abandoned
+    state from converging live state. Same door because both answer "resolve this Finding"; flagged because
+    they are not the same act.
+  - **`onRemove: retain` now explains itself.** A retained orphan has no Baseline and no withdrawal Workflow;
+    it used to answer `baseline <name> not found`, which describes a missing row when the real answer is that
+    the declaration asked for the state to be kept (§1.8).
+  - The decision is split from the I/O (`resolveFindingLaunch` takes the Baseline lookup as a parameter)
+    because `Server.Store` is a concrete `*graph.Store` and a handler test would be Postgres-gated, hence
+    skipped in `task ci` — the failure mode this repo has hit repeatedly. The withdrawal branch, which exists
+    precisely to serve a Finding whose Baseline is **gone**, would otherwise have been the hardest path to
+    cover and the least covered.
 - **A fourth per-environment overlay layer**, if duplication across sibling Assignments becomes real pain.
   Note it must obey D1's disjointness or it re-introduces the ladder.
 - ~~**Tighten `contracts/intents/application.schema.json`**~~ — **done.** Landed as

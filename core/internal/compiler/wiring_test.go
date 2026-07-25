@@ -681,3 +681,47 @@ func TestARemoveWorkflowWithoutParamsStillCompiles(t *testing.T) {
 		t.Fatalf("absent params must stay absent, got %#v", plan.Upserts[0].RemoveParams)
 	}
 }
+
+// The withdrawal spec must reach the orphan Finding TYPED, not only inside the human-facing
+// detail blob. The blob lands in graph.finding.diff, documented as redacted and size-capped, so a
+// launch door that parsed its way back out of it would break silently the first time anything
+// capped it. This is what makes retiring abandoned state launchable rather than merely readable.
+func TestOrphanCarriesTheWithdrawalSpecTyped(t *testing.T) {
+	s := removeStore(map[string]any{"port": "{{.spec.port}}"}, retireInputs)
+	compiled := compileOne(t, s).Upserts
+	s.assignments = nil
+	s.prior = compiled
+
+	plan := compileOne(t, s)
+	if len(plan.Orphans) != 1 {
+		t.Fatalf("expected one orphan, got %d", len(plan.Orphans))
+	}
+	o := plan.Orphans[0]
+	if o.RemoveWorkflow != "web-retire" {
+		t.Fatalf("the orphan must carry the withdrawal Workflow as a typed field, got %q", o.RemoveWorkflow)
+	}
+	if o.RemoveParams["port"] != "8443" {
+		t.Fatalf("and its compiled params, got %#v", o.RemoveParams)
+	}
+}
+
+// onRemove:retain (the default) must carry NO withdrawal spec: the state is deliberately left in
+// place, so offering a Workflow to retire it would misrepresent the declaration. The orphan
+// Finding still exists — abandoned state is never silent (§2.4) — it just has nothing to launch.
+func TestRetainedOrphanCarriesNoWithdrawalSpec(t *testing.T) {
+	s := removeStore(map[string]any{"port": "{{.spec.port}}"}, retireInputs)
+	in := s.intents["web"]
+	in.OnRemove = "" // retain, the default
+	s.intents["web"] = in
+	compiled := compileOne(t, s).Upserts
+	s.assignments = nil
+	s.prior = compiled
+
+	plan := compileOne(t, s)
+	if len(plan.Orphans) != 1 {
+		t.Fatalf("a retained withdrawal still owes an orphan Finding, got %d", len(plan.Orphans))
+	}
+	if plan.Orphans[0].RemoveWorkflow != "" || plan.Orphans[0].RemoveParams != nil {
+		t.Fatalf("onRemove=retain must offer nothing to launch, got %+v", plan.Orphans[0])
+	}
+}

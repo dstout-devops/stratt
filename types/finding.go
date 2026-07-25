@@ -37,6 +37,24 @@ type Finding struct {
 	// Diff is the latest observed-vs-expected detail (redacted upstream,
 	// size-capped with visible truncation).
 	Diff json.RawMessage `json:"diff,omitempty"`
+	// RemoveWorkflow and RemoveParams are the launch spec for RETIRING the abandoned state
+	// an ORPHAN Finding reports — the Blueprint's removeWorkflow and the params compiled
+	// under the withdrawn Assignment (ADR-0118 D3). Empty on every other Finding.
+	//
+	// This is the ONE case where a Finding carries its own launch spec instead of reading it
+	// from its Baseline. ADR-0118 refused that copy deliberately — "a Finding already
+	// references its Baseline, so a copy would be a second, staleable record of a Git-derived
+	// fact for no gain" — and that reasoning holds exactly as long as the Baseline exists.
+	// For an orphan it does not: Apply writes the orphan Finding and then PRUNES the
+	// compiled Baseline, because a Baseline whose Assignment is withdrawn must stop being
+	// observed. So this is not a second record of the fact, it is the only one, and without
+	// it the values die with the row (§1.8: the fix for abandoned state must remain
+	// reachable, and abandoned state is exactly the case where nothing else remembers).
+	//
+	// Same names as Blueprint.removeWorkflow/removeParams and Baseline.RemoveParams — one
+	// concept, one name down the whole chain (§2).
+	RemoveWorkflow string         `json:"removeWorkflow,omitempty"`
+	RemoveParams   map[string]any `json:"removeParams,omitempty"`
 	// RunID is the Evidence ref: the check Run that made the latest
 	// observation (§1.8 descent: Finding → Run → task events).
 	RunID         string     `json:"runId,omitempty"`

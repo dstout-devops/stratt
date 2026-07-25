@@ -129,7 +129,7 @@ func TestSweepSkipsCoManagedAndEntityless(t *testing.T) {
 		t.Fatal(err)
 	}
 	// An orphan Finding (entity-less) and a workspace Finding (entity-less).
-	if err := s.WriteOrphanFinding(ctx, "cert-expiry", "assignment:foo", "warning", json.RawMessage(`{}`)); err != nil {
+	if err := s.WriteOrphanFinding(ctx, OrphanFinding{Baseline: "cert-expiry", Target: "assignment:foo", Severity: "warning", Detail: json.RawMessage(`{}`)}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.RecordBaselineObservations(ctx, certBaseline(), run.ID, map[string]BaselineObservation{

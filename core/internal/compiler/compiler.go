@@ -96,6 +96,11 @@ type Orphan struct {
 	Target   string
 	Severity string
 	Detail   []byte
+	// RemoveWorkflow + RemoveParams are the withdrawal launch spec carried ONTO the orphan
+	// Finding, because the Baseline they came from is pruned in the same Apply (ADR-0118 D3).
+	// Without them the Finding names abandoned state and offers no way to retire it.
+	RemoveWorkflow string
+	RemoveParams   map[string]any
 }
 
 // Store is the compiler's read surface (satisfied by *graph.Store).
@@ -405,6 +410,9 @@ func Compile(ctx context.Context, s Store, maxDelta float64) (Plan, error) {
 			// Read the Intent AT THE VERSION THIS BASELINE WAS COMPILED FROM (ADR-0119 D4): the
 			// withdrawal semantics that apply are the ones the compiled state was produced under,
 			// not whatever the newest version happens to say.
+			orphan := Orphan{
+				Baseline: eb.Name, Target: "assignment:" + asg, Severity: eb.Severity,
+			}
 			if in, err := s.GetIntent(ctx, eb.CompiledFrom.Intent, eb.CompiledFrom.IntentVersion); err == nil &&
 				(in.OnRemove == types.OnRemoveRemove || in.OnRemove == types.OnRemoveRevert) {
 				if bp, err := s.GetBlueprint(ctx, eb.CompiledFrom.Blueprint, eb.CompiledFrom.BlueprintVersion); err == nil && bp.RemoveWorkflow != "" {
@@ -420,13 +428,17 @@ func Compile(ctx context.Context, s Store, maxDelta float64) (Plan, error) {
 					if len(eb.RemoveParams) > 0 {
 						detail["removeParams"] = eb.RemoveParams
 					}
+					// The same two values, TYPED, so the withdrawal is LAUNCHABLE and not merely
+					// readable. detail above is the human-facing blob — it lands in
+					// graph.finding.diff, documented as redacted and size-capped — so a launch
+					// that parsed its way back out of it would break the day anything capped it,
+					// with no failing test to notice.
+					orphan.RemoveWorkflow = bp.RemoveWorkflow
+					orphan.RemoveParams = eb.RemoveParams
 				}
 			}
-			d, _ := json.Marshal(detail)
-			plan.Orphans = append(plan.Orphans, Orphan{
-				Baseline: eb.Name, Target: "assignment:" + asg,
-				Severity: eb.Severity, Detail: d,
-			})
+			orphan.Detail, _ = json.Marshal(detail)
+			plan.Orphans = append(plan.Orphans, orphan)
 		}
 	}
 	sort.Strings(plan.Prunes)
