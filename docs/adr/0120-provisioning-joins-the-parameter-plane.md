@@ -407,9 +407,32 @@ possible _with the right values_, which is what removes the incentive to reach f
 - **ADR-0114's decommission path** should carry `launchKind: decommission` through the same field rather
   than growing its own. That is the first real test of whether D1's discriminator holds, and if it needs
   a fourth member the "stays at three" claim was wrong.
-- **The ungated `startAction` route** to a correlated build (Context) deserves its own look: an Action
-  that projects a `stratt.intent/*` correlation label is participating in provisioning without passing
-  its gate. Not this ADR's scope, but it is a §5 Flow 1 hole and should not stay unrecorded.
+- ~~**The ungated `startAction` route**~~ — **closed at both doors.** `POST /runs {action}` is the one
+  path to real infrastructure with no Workflow and therefore no approval Step; its only authz is the
+  CredentialRef `use`-check. That is right for the operations it was built for, but an Action carrying
+  a `stratt.intent/*` label is not one of them: the label is how the reconcile decides a declared unit
+  EXISTS, so projecting it there creates infrastructure with no approval on the path **and resolves the
+  provisioning Finding that would otherwise have demanded one** — the gate is not merely skipped, it is
+  retired by the thing that skipped it. It also sidesteps the CapabilityBinding, which is the estate's
+  authority on which provider builds a kind (the same hole `subnet-provision` opened from the
+  declaration side).
+
+  Two guards, because one door cannot see the other. **At declaration**, D3 now requires every
+  advertised builder to carry a human approval gate Step — all five already did, which is the reason to
+  pin it: the invariant held by convention, and convention is what this check keeps finding broken. **At
+  launch**, `startAction` refuses any `stratt.intent/*` key at any depth in an Action's params. The walk
+  is depth-first over decoded JSON rather than a check on a known field, because the param that carries
+  projected labels is named by each plugin's own Contract — core must not need to know the spelling to
+  police its own namespace, and §2 makes that namespace core's.
+
+  Worth recording how close this came to being another inert mechanism: the pure function was tested
+  and the CALL was not. Stubbing the call out changed nothing observable, because no test exercised the
+  handler. It now has one, running against the real `awsec2/create-vm` Contract with a nil Store and
+  Temporal, so a guard that stops returning early fails loudly instead of passing quietly.
+
+  What is deliberately NOT closed: an operator may still declare an ungated Workflow and launch it by
+  name. That is a general property of Workflows, not a provisioning hole, and narrowing it belongs with
+  whatever decides which Workflows are privileged — not here.
 
 ## Review record
 

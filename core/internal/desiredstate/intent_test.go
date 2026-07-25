@@ -852,8 +852,11 @@ func TestProvisioningBuildInputsCheckedAtDeclaration(t *testing.T) {
 		writeKind(t, root, "intents", "i.yaml", intent)
 		writeKind(t, root, "actuators", "a.yaml", act)
 		writeKind(t, root, "workflows", "w.yaml",
+			// A gate Step, because a provisioning build is gated (§5 Flow 1) and the check now
+			// refuses a builder without one. Not what these cases are about, so it is constant.
 			"name: compute-build\n"+wfInputs+
-				"steps:\n  - {name: s, viewName: v, actuator: script, params: {script: \"echo web-01\"}}\n")
+				"steps:\n  - {name: approve, gate: {approvers: {teams: [platform-admins]}, timeoutSeconds: 3600}}\n"+
+				"  - {name: s, needs: [approve], viewName: v, actuator: script, params: {script: \"echo web-01\"}}\n")
 		return root
 	}
 
@@ -933,7 +936,8 @@ func TestEveryAdvertisedBuilderIsChecked(t *testing.T) {
 		"    instance: {type: string}\n    ordinal: {type: integer}\n    projectKind: {type: string}\n" +
 		"    labels: {type: object, additionalProperties: true}\n"
 	writeKind(t, root, "workflows", "w1.yaml", "name: compute-build\n"+good+
-		"steps:\n  - {name: s, viewName: v, actuator: script, params: {script: \"echo web-01\"}}\n")
+		"steps:\n  - {name: approve, gate: {approvers: {teams: [platform-admins]}, timeoutSeconds: 3600}}\n"+
+		"  - {name: s, needs: [approve], viewName: v, actuator: script, params: {script: \"echo web-01\"}}\n")
 	// The second builder is NOT parameterized — must still be caught.
 	writeKind(t, root, "workflows", "w2.yaml", "name: vsphere-vm-build\n"+
 		"steps:\n  - {name: s, viewName: v, actuator: script, params: {script: echo}}\n")
@@ -995,7 +999,8 @@ func singletonBuilder(args string) string {
 		"    projectKind: {type: string}\n    labels: {type: object, additionalProperties: true}\n" +
 		"    placement: {type: object, additionalProperties: true}\n" +
 		"    params: {type: object, additionalProperties: true}\n" +
-		"steps:\n  - {name: s, viewName: v, actuator: mcp, params: {server: prov, arguments: " + args + "}}\n"
+		"steps:\n  - {name: approve, gate: {approvers: {teams: [platform-admins]}, timeoutSeconds: 3600}}\n" +
+		"  - {name: s, needs: [approve], viewName: v, actuator: mcp, params: {server: prov, arguments: " + args + "}}\n"
 }
 
 func singletonEstate(t *testing.T, stepParams string) string {
@@ -1010,6 +1015,42 @@ func singletonEstate(t *testing.T, stepParams string) string {
 			"provides: [provisioning]\nprovisions: {Subnet: subnet-build}\n")
 	writeKind(t, root, "workflows", "w.yaml", singletonBuilder(stepParams))
 	return root
+}
+
+// An advertised build Workflow must carry a human approval gate: a provisioning build is GATED, never
+// auto-run (§5 Flow 1). Every builder in the reference estate already has one, which is precisely the
+// reason to pin it — the invariant held by convention, and this check has repeatedly found conventions
+// broken. A builder reaching an operator without a gate turns "launch this build" into "this build has
+// happened", with no approval anywhere on the path to real infrastructure.
+func TestAdvertisedBuilderMustBeGated(t *testing.T) {
+	root := t.TempDir()
+	writeDecl(t, root, "v.yaml", "name: v\nselector: {kinds: [host]}\n")
+	writeKind(t, root, "intents", "i.yaml",
+		"name: app-subnet\nkind: Intent/Subnet\nspec:\n  projectKind: subnet\n"+
+			"  requires: [provisioning]\n  params: {cidr: 10.30.0.0/24}\n")
+	writeKind(t, root, "actuators", "a.yaml",
+		"name: crossplane\naddress: stratt-crossplane:9090\npluginIdentity: crossplane\ntier: trusted\n"+
+			"provides: [provisioning]\nprovisions: {Subnet: subnet-build}\n")
+	// Fully parameterized and correctly typed — the ONLY thing wrong is the missing gate, so a pass
+	// here could not be explained by any other check.
+	writeKind(t, root, "workflows", "w.yaml",
+		"name: subnet-build\ninputs:\n  type: object\n  additionalProperties: false\n  properties:\n"+
+			"    singleton: {type: string}\n    name: {type: string}\n    intentKind: {type: string}\n"+
+			"    projectKind: {type: string}\n    labels: {type: object, additionalProperties: true}\n"+
+			"    placement: {type: object, additionalProperties: true}\n"+
+			"    params: {type: object, additionalProperties: true}\n"+
+			"steps:\n  - {name: s, viewName: v, actuator: mcp, params: {server: prov, "+
+			"arguments: {name: \"{{.launch.name}}\"}}}\n")
+
+	err := ParseDir2Err(t, root)
+	if err == nil {
+		t.Fatal("an ungated provisioning builder must be refused (§5 Flow 1)")
+	}
+	for _, want := range []string{"subnet-build", "no approval gate", "GATED", "never auto-run"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("want %q in: %v", want, err)
+		}
+	}
 }
 
 // A builder must not name a declaration of the kind it builds, AT ANY DEPTH — including inside the

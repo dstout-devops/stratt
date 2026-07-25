@@ -635,6 +635,18 @@ func checkProvisioningBuildInputs(decls Declarations) error {
 						"appears, the Finding never resolves, and the same gated build is surfaced forever",
 					what, label)
 			}
+			// §5 Flow 1: a build is GATED, never auto-run. The gate lives in the Workflow as an
+			// approval Step, so a builder without one converts "launch this build" into "this build
+			// has happened" with no approval anywhere on the path. Every advertised builder already
+			// carries one, which is exactly why this is worth pinning: the invariant currently holds
+			// by convention, and convention is what the rest of this check keeps finding broken.
+			if !hasApprovalGate(wf) {
+				return fmt.Errorf(
+					"%s, but that workflow declares no approval gate Step — a provisioning build is "+
+						"GATED, never auto-run (§5 Flow 1). Launching it would create real "+
+						"infrastructure with no approval on the path. Add a Step with a `gate:`",
+					what)
+			}
 			if lit, why, bad := hardcodedInstanceLiteral(wf, in); bad {
 				return fmt.Errorf(
 					"%s, but that workflow hardcodes %q in a step — %s. A builder is shared by every "+
@@ -709,6 +721,18 @@ func hardcodedCorrelationLabel(w types.Workflow) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+// hasApprovalGate reports whether a Workflow contains a human-approval Step (§2 Gates). A Policy Step
+// is deliberately NOT accepted: it is an automated decision point, and §5 Flow 1's gate is a human
+// one. A builder wanting both declares both.
+func hasApprovalGate(w types.Workflow) bool {
+	for _, st := range w.Steps {
+		if st.Gate != nil {
+			return true
+		}
+	}
+	return false
 }
 
 // hardcodedInstanceLiteral reports the first string literal in a build Workflow's steps that belongs

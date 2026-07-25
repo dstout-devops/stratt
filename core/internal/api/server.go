@@ -1529,6 +1529,58 @@ func (s *Server) StartRun(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, runToWire(run))
 }
 
+// correlationLabelInParams reports the first `stratt.intent/*` key anywhere in an Action's params
+// (ADR-0120). It walks the decoded JSON rather than the typed params because the param that carries
+// projected labels is named by each plugin's own Contract (`projectLabels` for crossplane and awsec2,
+// something else for the next provider) — core must not have to know the spelling to police its own
+// namespace. The `stratt.intent/` prefix IS core's: §2 makes the vocabulary core-owned, and the
+// correlation label is the reconcile's private handle on desired-vs-built.
+//
+// The sibling of desiredstate.hardcodedCorrelationLabel, one layer out: that one refuses a build
+// Workflow that writes the label by hand at DECLARATION, this one refuses a caller that writes it at
+// LAUNCH. Same invariant — only the reconcile mints correlation — enforced at both doors, because a
+// declaration-time check cannot see a request body.
+//
+// Malformed JSON is not this function's error to raise: the contract validator ran first and will
+// have rejected it, so an unparseable body reports "no label found" and the earlier failure stands.
+func correlationLabelInParams(params json.RawMessage) (string, bool) {
+	if len(params) == 0 {
+		return "", false
+	}
+	var v any
+	if err := json.Unmarshal(params, &v); err != nil {
+		return "", false
+	}
+	const prefix = "stratt.intent/"
+	var walk func(any) (string, bool)
+	walk = func(v any) (string, bool) {
+		switch t := v.(type) {
+		case map[string]any:
+			keys := make([]string, 0, len(t))
+			for k := range t {
+				keys = append(keys, k)
+			}
+			sort.Strings(keys)
+			for _, k := range keys {
+				if strings.HasPrefix(k, prefix) {
+					return k, true
+				}
+				if found, ok := walk(t[k]); ok {
+					return found, true
+				}
+			}
+		case []any:
+			for _, e := range t {
+				if found, ok := walk(e); ok {
+					return found, true
+				}
+			}
+		}
+		return "", false
+	}
+	return walk(v)
+}
+
 // startAction launches a targetless Connector Action (§2.2, ADR-0031). Input
 // validated at the door; authz is the CredentialRef `use`-check inside
 // RunAction (Actions are not View-scoped).
@@ -1544,6 +1596,21 @@ func (s *Server) startAction(w http.ResponseWriter, r *http.Request, body StartR
 	}
 	if err := contract.ValidateActionInput(*body.Action, params); err != nil {
 		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	// §5 Flow 1: a provisioning build is GATED. This route is the ungated one — a targetless Action
+	// with no Workflow, so no approval Step, authorized only by the CredentialRef use-check. That is
+	// correct for the operations it was built for, but an Action that stamps a stratt.intent/*
+	// correlation label is not one of them: the label is how the reconcile decides a declared unit
+	// EXISTS, so projecting it here both creates real infrastructure with no approval on the path and
+	// resolves the provisioning Finding that would otherwise have demanded one. It also sidesteps the
+	// CapabilityBinding, which is the estate's authority on which provider builds a kind.
+	if key, bad := correlationLabelInParams(params); bad {
+		writeErr(w, http.StatusBadRequest, fmt.Sprintf(
+			"this Run projects the correlation label %q, which only a gated build may do. That label is "+
+				"how the provisioning reconcile decides a declared unit is built, and this route has no "+
+				"approval gate and no provider binding (§5 Flow 1). Launch the build Workflow the "+
+				"provider advertises for the Intent kind instead", key))
 		return
 	}
 	p := orchestrate.LaunchParams{Action: *body.Action, Params: params}
