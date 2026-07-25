@@ -1552,8 +1552,19 @@ export interface components {
             joins?: string[];
             leaves?: string[];
             unrouted?: string[];
+            /** @description The compiled expectations whose VALUE changed since the last compile (ADR-0119 D5) — the axis the membership delta above cannot see. A pinned version bump rewrites expected values while joins and leaves stay empty, so promotion is invisible without this. A change beyond the Assignment's maxDelta pauses the compile until ackDelta is bumped. */
+            expectationChanges?: components["schemas"]["ExpectationChange"][];
             paused?: boolean;
             note?: string;
+        };
+        /** @description One compiled expectation whose value differs from the previous compile (ADR-0119 D5). from/to are the RENDERED value, not structured: an expectation is one of Equals/Contains/NotBefore, and the surface owes a readable diff rather than a second expectation encoding. */
+        ExpectationChange: {
+            baseline: string;
+            /** @description The Facet namespace the expectation reads. */
+            namespace: string;
+            path?: string;
+            from?: string;
+            to?: string;
         };
         /** @description One (Principal, tool) aggregate of platform-MCP-server calls (charter §1.6 accounting per identity, ADR-0021). */
         UsageEntry: {

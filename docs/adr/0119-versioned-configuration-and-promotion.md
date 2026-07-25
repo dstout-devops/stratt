@@ -124,7 +124,7 @@ consequence, stated so D4 does not over-promise: `CompiledOrigin.IntentVersion` 
 expected now"_, not _"which version produced this still-open Finding"_ — `Finding.Diff` is overwritten on each
 observation.
 
-### D5 — Promotion is a reviewed Git bump, and Git review is the ONLY gate
+### D5 — Promotion is a reviewed Git bump, gated by an expectation-change acknowledgement
 
 Promotion test → stage → prod is editing the target environment's Assignment to pin the new refs.
 
@@ -137,9 +137,26 @@ There is also no pre-merge compile-diff at all: `compiler.Compile` runs only ins
 (`controller.go:507`), and `stratt plan` shows the CaC entry level (`Assignment prod-web: update`) — i.e. the
 Git diff a reviewer has already read.
 
-So: **a version bump silently rewrites every expectation across that Assignment's whole target set, gated by
-nothing but code review.** That is stated plainly rather than dressed up, and the expectation-diff surface is
-booked as a **blocking follow-up** below. Claiming coverage that cannot fire is the §1.8 line.
+So a version bump would silently rewrite every expectation across that Assignment's whole target set, gated by
+nothing but code review. **That gap is now closed** — the blocking follow-up was built rather than left
+outstanding, because shipping the ergonomics of promotion without a gate on it was the weakest point of the
+design:
+
+- `AssignmentDelta.ExpectationChanges` renders every compiled expectation whose value changes, with its
+  Baseline, namespace, path, and both values. "What does promoting this actually change" is answerable from
+  the plan instead of inferred from a Git diff of the Intent.
+- A change beyond the Assignment's `MaxDelta` fraction **pauses the compile** until `AckDelta` is bumped —
+  and while paused the LIVE expectations stay in force, so an unacknowledged promotion changes nothing.
+- The same `MaxDelta`/`AckDelta` pair as membership, deliberately, not a second pair. §4.3's acknowledgement
+  means "I have reviewed this Assignment's pending change"; two independent acks would let an operator
+  acknowledge a membership shift while ignoring a total expectation rewrite, which is the worse failure. One
+  ack, both axes.
+- A first compile is **not** a change (every expectation is new), and an unchanged recompile reports nothing —
+  otherwise the gate would fire on every bootstrap and then continuously on a converged estate.
+
+What remains true, and is the reason this is a §4.3 _sibling_ rather than an extension: the membership gate
+still cannot see a value-only change, and the expectation gate still cannot see a membership-only one. They
+are two axes over one acknowledgement, not one gate.
 
 **The Crossplane analogy is dropped**, not just softened. `CompositionRevision`s are _system-generated_, which
 is where their immutability comes from; Stratt cannot copy that, because an auto-generated revision row would
@@ -257,18 +274,18 @@ would be a category error.
 
 ## Review record
 
-| Finding                                                                                                                         | Verdict            | Resolution                                                                                                    |
-| ------------------------------------------------------------------------------------------------------------------------------- | ------------------ | ------------------------------------------------------------------------------------------------------------- |
-| **F1 (critical)** — identity ≠ immutability: a same-version edit still updates prod, so D5's central promise was false          | accepted, verified | **D6** added: a pinned version cannot be updated or deleted in place, for Intent and Blueprint alike          |
-| **F2 (critical)** — §4.3 coverage claimed but structurally impossible (max-delta keys on membership; no pre-merge compile-diff) | accepted, verified | D5 rewritten to state Git review is the only gate; expectation-diff booked as blocking                        |
-| **F3** — the in-place bump breaks pinned rings and `MaxPruneFraction` cannot catch it                                           | accepted           | D6 covers delete as well as update                                                                            |
-| **F4** — errors omit the version, so "intent tls-app not found" while it sits in Git                                            | accepted           | version rendered in `validateRefs`, the store, and the claim-conflict message                                 |
-| **V** — migration violates ADR-0078; `task migrate:lint` would fail it                                                          | accepted, verified | **D7**: two releases, expand then contract, with release-N's limitation stated                                |
-| Charge 1 — `@N` optional is not a §2.4 violation but is the wrong default here                                                  | accepted           | D2 makes it required, estates migrated in the same change                                                     |
-| Charge 2 — could two versions collide on the exclusive facet claim?                                                             | answered           | No new collision class; cross-environment is structurally impossible; written up in its own section           |
-| Charge 3 — `version` already has adjacent meanings                                                                              | accepted           | `View.version` disambiguated at the field and in the blast radius                                             |
-| Charge 5 — D3's kind deny-list is a smell                                                                                       | accepted           | reframed to the seam property + a derived `types.AssignableIntentKind` predicate                              |
-| Review's own error — "Blueprint versions live in per-version files"                                                             | corrected          | In-repo Blueprints are one file with an inline `version:`; the footgun is shared, which is why D6 is one rule |
+| Finding                                                                                                                         | Verdict            | Resolution                                                                                                                             |
+| ------------------------------------------------------------------------------------------------------------------------------- | ------------------ | -------------------------------------------------------------------------------------------------------------------------------------- |
+| **F1 (critical)** — identity ≠ immutability: a same-version edit still updates prod, so D5's central promise was false          | accepted, verified | **D6** added: a pinned version cannot be updated or deleted in place, for Intent and Blueprint alike                                   |
+| **F2 (critical)** — §4.3 coverage claimed but structurally impossible (max-delta keys on membership; no pre-merge compile-diff) | accepted, verified | D5 rewritten; then the gap CLOSED — an expectation-change diff plus a pause-until-acked gate reusing §4.3's own MaxDelta/AckDelta pair |
+| **F3** — the in-place bump breaks pinned rings and `MaxPruneFraction` cannot catch it                                           | accepted           | D6 covers delete as well as update                                                                                                     |
+| **F4** — errors omit the version, so "intent tls-app not found" while it sits in Git                                            | accepted           | version rendered in `validateRefs`, the store, and the claim-conflict message                                                          |
+| **V** — migration violates ADR-0078; `task migrate:lint` would fail it                                                          | accepted, verified | **D7**: two releases, expand then contract, with release-N's limitation stated                                                         |
+| Charge 1 — `@N` optional is not a §2.4 violation but is the wrong default here                                                  | accepted           | D2 makes it required, estates migrated in the same change                                                                              |
+| Charge 2 — could two versions collide on the exclusive facet claim?                                                             | answered           | No new collision class; cross-environment is structurally impossible; written up in its own section                                    |
+| Charge 3 — `version` already has adjacent meanings                                                                              | accepted           | `View.version` disambiguated at the field and in the blast radius                                                                      |
+| Charge 5 — D3's kind deny-list is a smell                                                                                       | accepted           | reframed to the seam property + a derived `types.AssignableIntentKind` predicate                                                       |
+| Review's own error — "Blueprint versions live in per-version files"                                                             | corrected          | In-repo Blueprints are one file with an inline `version:`; the footgun is shared, which is why D6 is one rule                          |
 
 ## Consequences
 
@@ -278,8 +295,9 @@ would be a category error.
 - **Iterating on a pinned version requires bumping it** (D6). Real friction in dev, accepted deliberately.
 - **The feature is dark for one release** (D7): expand ships the column and the code, contract lights up
   coexisting versions.
-- **Promotion is gated by review alone** until the expectation-diff surface exists. This is the weakest point
-  of the design and is stated as such rather than implied to be covered.
+- **Promotion is gated by an explicit acknowledgement**, not by review alone: an unacknowledged expectation
+  rewrite pauses and the live expectations stay in force. The residual honesty is that the two gates see
+  different axes — membership cannot see a value change and vice versa — so they are siblings over one ack.
 - **Provisioning Intents are asymmetric** — versionable configuration for Assignment-selected kinds only. Real,
   and owed a line in the estate guide, not just here.
 
@@ -303,12 +321,16 @@ would be a category error.
 
 ## Follow-ups
 
-- **BLOCKING before this is called complete: an expectation-diff surface.** `Plan.Deltas` (or `stratt plan`)
-  must render _which compiled expectations change_ on a version bump, and a bump beyond a threshold should
-  require an explicit acknowledgement the way `AckDelta` does for membership. Until it exists, D5's honest
-  position is "Git review is the only gate".
+- ~~**BLOCKING: an expectation-diff surface.**~~ — **DONE**, see D5. `AssignmentDelta.ExpectationChanges`
+  renders every changed expectation, a change beyond `MaxDelta` pauses the compile until `AckDelta` is bumped,
+  and the live expectations stay in force meanwhile. Built rather than deferred because a promotion mechanism
+  whose only gate is code review is the design's weakest point, and it was cheap once the prior Baselines were
+  already being read for the prune. Served on `GET /compile` and declared in `openapi.yaml`, so the UI, CLI and
+  MCP see it identically (§1.6) — the handler marshals the compiler snapshot directly, so a field absent from
+  the spec would have been served but invisible to every generated client.
 - **An estate-guide section on rings**, covering D3's asymmetry and the canary-freezes-the-stable-ring
   consequence — neither is discoverable from the schemas.
 - **Promotion ergonomics** — a `stratt promote <assignment> --to <env>` that edits the pins and shows the
-  expectation diff, once that diff exists. Deliberately not now: the mechanism should earn its sugar.
+  expectation diff. Now unblocked (the diff exists), still deliberately not now: the mechanism should earn its
+  sugar, and the pins are two lines of YAML.
 - **Extend D6's guard to any future versioned CaC Kind** by construction, rather than per-Kind.

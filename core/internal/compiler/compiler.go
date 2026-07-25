@@ -63,10 +63,30 @@ type AssignmentDelta struct {
 	Joins       []string `json:"joins,omitempty"`
 	Leaves      []string `json:"leaves,omitempty"`
 	Unrouted    []string `json:"unrouted,omitempty"`
+	// ExpectationChanges are the compiled expectations whose VALUE changed since the last
+	// compile — the §4.3 surface for a change the membership delta above cannot see
+	// (ADR-0119 D5). A pinned-version bump rewrites expected values while joins and leaves
+	// stay empty, so before this existed a promotion was invisible to every runtime gate.
+	ExpectationChanges []ExpectationChange `json:"expectationChanges,omitempty"`
 	// Paused is set when the max-delta gate held this Assignment's recompile.
 	Paused bool `json:"paused,omitempty"`
 	// Note explains a pause or skip (§1.8: the wait is visible).
 	Note string `json:"note,omitempty"`
+}
+
+// ExpectationChange is one compiled expectation whose value differs from the previous
+// compile (ADR-0119 D5). Rendered so "what does promoting this actually change" is
+// answerable before the change lands, rather than inferred from a Git diff of the Intent.
+//
+// From/To are the rendered JSON of the expectation's value, not structured — the point is a
+// human-readable diff, and an expectation is one of Equals/Contains/NotBefore, so a single
+// string column keeps the surface honest about what it is.
+type ExpectationChange struct {
+	Baseline  string `json:"baseline"`
+	Namespace string `json:"namespace"`
+	Path      string `json:"path,omitempty"`
+	From      string `json:"from,omitempty"`
+	To        string `json:"to,omitempty"`
 }
 
 // Orphan is a Finding owed for compiled state left behind by a withdrawn
@@ -121,6 +141,18 @@ func Compile(ctx context.Context, s Store, maxDelta float64) (Plan, error) {
 	declared := map[string]bool{}
 	for _, a := range assignments {
 		declared[a.Name] = true
+	}
+
+	// Read the previously-compiled Baselines ONCE, before the loop: the prune below needs them,
+	// and so does the per-Assignment expectation diff (ADR-0119 D5), which has to compare what
+	// this pass would write against what is already live.
+	existing, err := s.ListBaselines(ctx)
+	if err != nil {
+		return Plan{}, err
+	}
+	priorByName := make(map[string]types.Baseline, len(existing))
+	for _, eb := range existing {
+		priorByName[eb.Name] = eb
 	}
 
 	var plan Plan
@@ -257,6 +289,31 @@ func Compile(ctx context.Context, s Store, maxDelta float64) (Plan, error) {
 				delta.Unrouted = append(delta.Unrouted, id)
 			}
 		}
+		// ── expectation-change gate (§4.3, ADR-0119 D5) ──
+		// The membership gate above cannot see a pinned-version bump: promoting a configuration
+		// rewrites expected VALUES while joins and leaves stay empty, so `exceedsDelta` is
+		// structurally incapable of firing on it. Without this, a promotion silently replaced every
+		// expectation across the Assignment's whole target set, gated by nothing but code review.
+		//
+		// Deliberately the SAME MaxDelta fraction and the SAME AckDelta counter as membership,
+		// rather than a second pair. §4.3's acknowledgement means "I have reviewed this
+		// Assignment's pending change"; two independent acks would let an operator acknowledge a
+		// membership shift while ignoring a total expectation rewrite, which is the worse failure.
+		// One ack, both axes.
+		changes, total := expectationChanges(candidates[a.Name], priorByName)
+		delta.ExpectationChanges = changes
+		if !skipped[a.Name] && total > 0 && len(changes) > 0 &&
+			exceedsDelta(total, len(changes), effMax) && a.AckDelta <= prev.AckedDelta {
+			skipped[a.Name] = true
+			delta.Paused = true
+			delta.Note = fmt.Sprintf(
+				"expectation-change gate: %d of %d compiled expectations change (> %.0f%%); "+
+					"bump ackDelta to acknowledge. The live expectations stay in force until you do",
+				len(changes), total, effMax*100)
+			plan.Deltas = append(plan.Deltas, delta)
+			continue
+		}
+
 		newAcked := prev.AckedDelta
 		if a.AckDelta > newAcked {
 			newAcked = a.AckDelta
@@ -307,10 +364,6 @@ func Compile(ctx context.Context, s Store, maxDelta float64) (Plan, error) {
 		}
 	}
 
-	existing, err := s.ListBaselines(ctx)
-	if err != nil {
-		return Plan{}, err
-	}
 	for _, eb := range existing {
 		if eb.CompiledFrom == nil || desired[eb.Name] {
 			continue
@@ -495,6 +548,51 @@ func resolveRemediationParams(ctx context.Context, s Store, route types.Blueprin
 		return nil, fmt.Sprintf("remediationParams do not satisfy workflow %s: %v", wf.Name, err)
 	}
 	return resolved, ""
+}
+
+// expectationChanges diffs the expectations this pass would write against the ones already
+// compiled, returning the changed set and the total examined (ADR-0119 D5).
+//
+// A Baseline with no prior row is a CREATE, not a change: its expectations are new, and counting
+// them as changes would make the first compile of any Assignment look like a total rewrite. Same
+// for an expectation index that did not exist before.
+//
+// Compares the rendered value rather than the struct, because an expectation carries exactly one
+// of Equals/Contains/NotBefore and the question is only "is the asserted value different".
+func expectationChanges(compiled []types.Baseline, prior map[string]types.Baseline) ([]ExpectationChange, int) {
+	var out []ExpectationChange
+	total := 0
+	for _, b := range compiled {
+		pb, had := prior[b.Name]
+		for i, exp := range b.Expected {
+			total++
+			if !had || i >= len(pb.Expected) {
+				continue // new Baseline or new expectation: a create, not a change
+			}
+			from, to := expectationValue(pb.Expected[i]), expectationValue(exp)
+			if from == to {
+				continue
+			}
+			out = append(out, ExpectationChange{
+				Baseline: b.Name, Namespace: exp.Namespace, Path: exp.Path, From: from, To: to,
+			})
+		}
+	}
+	return out, total
+}
+
+// expectationValue renders the one assertion an expectation carries, for display and comparison.
+func expectationValue(e types.FacetExpectation) string {
+	switch {
+	case len(e.Equals) > 0:
+		return "equals " + string(e.Equals)
+	case len(e.Contains) > 0:
+		return "contains " + string(e.Contains)
+	case e.NotBefore != "":
+		return "notBefore " + e.NotBefore
+	default:
+		return ""
+	}
 }
 
 // validateResolvedSpec enforces the Intent kind's schema against the MERGED spec — the

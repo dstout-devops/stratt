@@ -36,6 +36,14 @@ type fakeStore struct {
 	blueprints  map[string]types.Blueprint // "name@version"
 	workflows   map[string]types.Workflow
 	entities    []types.Entity
+	// prior are the already-compiled Baselines a previous pass wrote — the input the
+	// expectation-change gate diffs against (ADR-0119 D5).
+	prior []types.Baseline
+	// membership is what a previous pass recorded. Without it every compile looks like a FIRST
+	// compile for membership, so every entity appears to "join" — which would hide the property
+	// the expectation gate exists for: that a promotion moves NO members while rewriting every
+	// expected value.
+	membership map[string]graph.AssignmentMembership
 }
 
 func (f *fakeStore) ListIntents(context.Context) ([]types.Intent, error) {
@@ -88,13 +96,14 @@ func (f *fakeStore) GetWorkflow(_ context.Context, name string) (types.Workflow,
 	}
 	return types.Workflow{}, fmt.Errorf("no workflow %q", name)
 }
-func (f *fakeStore) GetAssignmentMembership(context.Context, string) (graph.AssignmentMembership, bool, error) {
-	return graph.AssignmentMembership{}, false, nil // first compile: no previous set
+func (f *fakeStore) GetAssignmentMembership(_ context.Context, a string) (graph.AssignmentMembership, bool, error) {
+	m, ok := f.membership[a]
+	return m, ok, nil
 }
 func (f *fakeStore) GetFacetOwner(context.Context, string) (types.FacetOwner, bool, error) {
 	return types.FacetOwner{}, false, nil
 }
-func (f *fakeStore) ListBaselines(context.Context) ([]types.Baseline, error) { return nil, nil }
+func (f *fakeStore) ListBaselines(context.Context) ([]types.Baseline, error) { return f.prior, nil }
 
 // appStore builds a minimal compilable estate: one Intent/Application, one Blueprint whose
 // route observes app.config.port from {{.spec.port}}, one cac View with one member.
@@ -408,5 +417,144 @@ func TestRouteWithoutParamsStillCompiles(t *testing.T) {
 	}
 	if plan.Upserts[0].RemediationParams != nil {
 		t.Fatalf("no params declared ⇒ none carried, got %#v", plan.Upserts[0].RemediationParams)
+	}
+}
+
+// ── the expectation-change gate (ADR-0119 D5) ─────────────────────────────────────────
+//
+// These exist because the ADR had to withdraw a claim: it said a promotion "goes through the
+// existing compile-diff and max-delta gate like any other change", and that was verified FALSE.
+// The membership gate keys on View membership, and a version bump changes expected VALUES with
+// joins and leaves both empty — so `exceedsDelta` could never fire on the one change promotion
+// actually makes. A bump silently rewrote every expectation for the Assignment.
+
+// compiledPriorFor runs one compile and returns its Upserts, so a second compile has something
+// to diff against — the shape a real second reconcile pass sees.
+func compiledPriorFor(t *testing.T, s *fakeStore) []types.Baseline {
+	t.Helper()
+	plan := compileOne(t, s)
+	// Record the membership that pass computed, exactly as Apply would — otherwise the next
+	// compile sees no previous set and reports every entity as a join.
+	s.membership = map[string]graph.AssignmentMembership{}
+	for _, m := range plan.Memberships {
+		s.membership[m.Assignment] = m
+	}
+	return plan.Upserts
+}
+
+// TestExpectationChangeIsRendered is the §1.8 half: "what would promoting this change" must be
+// answerable from the plan, not inferred from a Git diff of the Intent.
+func TestExpectationChangeIsRendered(t *testing.T) {
+	s := appStore(map[string]any{"package": "nginx", "port": "443"}, nil, nil)
+	prior := compiledPriorFor(t, s)
+
+	// The promotion: same Assignment, a new expected value.
+	s.prior = prior
+	s.intents["web"] = types.Intent{
+		Name: "web", Kind: types.IntentApplication,
+		Spec: map[string]any{"package": "nginx", "port": "8443"},
+	}
+	// Acked, so the gate does not pause — this test is about the RENDERING.
+	s.assignments[0].AckDelta = 1
+
+	plan := compileOne(t, s)
+	if len(plan.Deltas) != 1 {
+		t.Fatalf("expected one delta, got %d", len(plan.Deltas))
+	}
+	ch := plan.Deltas[0].ExpectationChanges
+	if len(ch) != 1 {
+		t.Fatalf("expected exactly one expectation change, got %+v", ch)
+	}
+	if ch[0].Namespace != "app.config" || ch[0].Path != "port" {
+		t.Errorf("the change must name the expectation it belongs to, got %+v", ch[0])
+	}
+	if !strings.Contains(ch[0].From, "443") || !strings.Contains(ch[0].To, "8443") {
+		t.Errorf("the change must render both values, got from=%q to=%q", ch[0].From, ch[0].To)
+	}
+	// Membership did NOT change — which is precisely why this surface had to exist.
+	if len(plan.Deltas[0].Joins) != 0 || len(plan.Deltas[0].Leaves) != 0 {
+		t.Errorf("this change moves no members; the membership gate cannot see it: %+v", plan.Deltas[0])
+	}
+}
+
+// TestExpectationChangeGatePauses is the gate half, and the one that matters: an unacknowledged
+// total rewrite must NOT compile. Reporting the change while applying it would be the same
+// inert-mechanism defect this arc has hit repeatedly.
+func TestExpectationChangeGatePauses(t *testing.T) {
+	s := appStore(map[string]any{"package": "nginx", "port": "443"}, nil, nil)
+	s.prior = compiledPriorFor(t, s)
+	s.intents["web"] = types.Intent{
+		Name: "web", Kind: types.IntentApplication,
+		Spec: map[string]any{"package": "nginx", "port": "8443"},
+	}
+
+	plan := compileOne(t, s)
+	if len(plan.Upserts) != 0 {
+		t.Fatalf("an unacknowledged expectation rewrite must compile NOTHING, got %d Baselines — "+
+			"the live expectations have to stay in force until it is acked", len(plan.Upserts))
+	}
+	d := plan.Deltas[0]
+	if !d.Paused {
+		t.Fatal("the delta must be marked paused")
+	}
+	if !strings.Contains(d.Note, "expectation-change gate") || !strings.Contains(d.Note, "ackDelta") {
+		t.Errorf("the note must name the gate and how to clear it (§1.8); got: %s", d.Note)
+	}
+	// And the changes are still rendered while paused — an operator deciding whether to ack needs
+	// to see what they would be acking.
+	if len(d.ExpectationChanges) == 0 {
+		t.Error("a paused delta must still render what changed, or the ack is a blind signature")
+	}
+}
+
+// TestAckDeltaClearsTheExpectationGate: bumping the same counter §4.3 already uses for membership
+// unblocks it. One ack, both axes — deliberately, because two independent acks would let an
+// operator acknowledge a membership shift while ignoring a total expectation rewrite.
+func TestAckDeltaClearsTheExpectationGate(t *testing.T) {
+	s := appStore(map[string]any{"package": "nginx", "port": "443"}, nil, nil)
+	s.prior = compiledPriorFor(t, s)
+	s.intents["web"] = types.Intent{
+		Name: "web", Kind: types.IntentApplication,
+		Spec: map[string]any{"package": "nginx", "port": "8443"},
+	}
+	s.assignments[0].AckDelta = 1
+
+	plan := compileOne(t, s)
+	if len(plan.Upserts) != 1 {
+		t.Fatalf("an acknowledged change must compile, got %d Baselines", len(plan.Upserts))
+	}
+	if got := string(plan.Upserts[0].Expected[0].Equals); got != `"8443"` {
+		t.Fatalf("the new expectation must land, got %s", got)
+	}
+}
+
+// TestFirstCompileIsNotAnExpectationChange: with no prior Baseline every expectation is NEW, and
+// counting those as changes would gate the very first compile of every Assignment behind an ack —
+// making the estate un-bootstrappable.
+func TestFirstCompileIsNotAnExpectationChange(t *testing.T) {
+	s := appStore(map[string]any{"package": "nginx", "port": "443"}, nil, nil)
+	plan := compileOne(t, s)
+	if len(plan.Upserts) != 1 {
+		t.Fatalf("a first compile must not be gated, got %d Baselines", len(plan.Upserts))
+	}
+	if len(plan.Deltas[0].ExpectationChanges) != 0 {
+		t.Fatalf("new expectations are creates, not changes: %+v", plan.Deltas[0].ExpectationChanges)
+	}
+}
+
+// TestUnchangedRecompileIsSilent: the reconcile runs every pass, so a no-op recompile must produce
+// no changes and no gate. Otherwise the gate would fire continuously on a converged estate.
+func TestUnchangedRecompileIsSilent(t *testing.T) {
+	s := appStore(map[string]any{"package": "nginx", "port": "443"}, nil, nil)
+	s.prior = compiledPriorFor(t, s)
+	plan := compileOne(t, s)
+	if len(plan.Deltas[0].ExpectationChanges) != 0 {
+		t.Fatalf("an unchanged recompile must report nothing: %+v", plan.Deltas[0].ExpectationChanges)
+	}
+	if plan.Deltas[0].Paused {
+		t.Fatal("an unchanged recompile must not pause")
+	}
+	if len(plan.Upserts) != 1 {
+		t.Fatalf("and it must still compile normally, got %d", len(plan.Upserts))
 	}
 }
