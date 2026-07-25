@@ -545,8 +545,28 @@ func checkProvisioningBuildInputs(decls Declarations) error {
 	for _, c := range decls.Connectors {
 		add(c.Provisions)
 	}
+	// The teardown counterpart (ADR-0114 D4's `decommissions:` map). Collected the same way and
+	// checked by the same rules: until the decommission Finding carried a launch spec, a mismatched
+	// teardown Workflow was invisible because nothing launched it from the Finding at all.
+	teardowns := map[string][]string{}
+	addT := func(decommissions map[string]string) {
+		for kind, wf := range decommissions {
+			if !slices.Contains(teardowns[kind], wf) {
+				teardowns[kind] = append(teardowns[kind], wf)
+			}
+		}
+	}
+	for _, a := range decls.Actuators {
+		addT(a.Decommissions)
+	}
+	for _, c := range decls.Connectors {
+		addT(c.Decommissions)
+	}
 	for k := range builders {
 		sort.Strings(builders[k])
+	}
+	for k := range teardowns {
+		sort.Strings(teardowns[k])
 	}
 
 	// A provisions map naming a Workflow that does not exist is caught HERE and nowhere else.
@@ -562,6 +582,19 @@ func checkProvisioningBuildInputs(decls Declarations) error {
 						"Workflow is declared — the build Finding would name a Workflow nobody can "+
 						"launch. Declare it, or drop the provisions entry: advertising a capability "+
 						"with no Workflow behind it is a promise the estate cannot keep", wfName, kind)
+			}
+		}
+	}
+	// Same rule for teardown, and validateDecommissions is the same partial check validateProvisions
+	// was: it verifies the entry is non-empty and nothing more. A dangling teardown target is worse
+	// than a dangling builder, because the operator meets it while trying to destroy something.
+	for kind, wfNames := range teardowns {
+		for _, wfName := range wfNames {
+			if _, ok := byName[wfName]; !ok {
+				return fmt.Errorf(
+					"a provisioning provider advertises workflow %q as its %s teardown, but no such "+
+						"Workflow is declared — the decommission Finding would name a Workflow nobody "+
+						"can launch. Declare it, or drop the decommissions entry (ADR-0114 D4)", wfName, kind)
 			}
 		}
 	}
@@ -602,73 +635,113 @@ func checkProvisioningBuildInputs(decls Declarations) error {
 		}
 
 		for _, wfName := range builders[kind] {
-			wf := byName[wfName]
 			what := fmt.Sprintf("intent %s builds via workflow %s", in.Name, wfName)
-			declared, err := contract.InputNames(wf.Inputs)
-			if err != nil {
-				return fmt.Errorf("%s: inputs: %w", what, err)
+			if err := checkAdvertisedWorkflow(what, byName[wfName], in, supplied, unit, "build"); err != nil {
+				return err
 			}
-			if len(declared) == 0 {
-				return fmt.Errorf(
-					"%s, which declares no `inputs` — so the reconcile cannot tell it WHICH %s to build, "+
-						"and a %s it was not told about is unbuildable through the gated path "+
-						"(ADR-0120 D2). Declare inputs for: %v", what, unit, unit, sortedKeys(supplied))
+		}
+		// The teardown half (ADR-0114 D4). Same checks, same reason: the decommission reconcile
+		// now sends a launch spec, so an advertised teardown Workflow that cannot accept it is a
+		// destructive act an operator discovers at the gate. Only Compute has a teardown reach-path
+		// today (whole-Intent withdrawal for singletons is ADR-0114's own booked follow-up), so a
+		// singleton kind simply has no entry here rather than a special case.
+		for _, wfName := range teardowns[kind] {
+			what := fmt.Sprintf("intent %s tears down via workflow %s", in.Name, wfName)
+			// Representative values: this check is about the KEY SET, and a placeholder identity
+			// carries the same keys a real one does.
+			td := provision.TeardownLaunchParams(in.Name,
+				provision.Instance{Name: teardownProbeName(supplied), Intent: in.Name, Ordinal: 1},
+				"provider.identity", "probe")
+			if err := checkAdvertisedWorkflow(what, byName[wfName], in, td, unit, "tear down"); err != nil {
+				return err
 			}
-			names := make([]string, 0, len(declared))
-			for n := range declared {
-				names = append(names, n)
-			}
-			sort.Strings(names)
-			for _, k := range sortedKeys(supplied) {
-				if !declared[k] {
-					return fmt.Errorf(
-						"%s, but %q is not a declared input of that workflow (declared: %v). The reconcile "+
-							"supplies it, and a launch carrying an undeclared input is refused, so this "+
-							"build could never run", what, k, names)
-				}
-			}
-			if label, bad := hardcodedCorrelationLabel(wf); bad {
-				return fmt.Errorf(
-					"%s, but that workflow hardcodes the correlation label %q in a step. It must forward "+
-						"{{.launch.labels}} instead: the reconcile derives the exact key and value it will "+
-						"later match on, and a hand-written one that is wrong still BUILDS — the Entity "+
-						"appears, the Finding never resolves, and the same gated build is surfaced forever",
-					what, label)
-			}
-			// §5 Flow 1: a build is GATED, never auto-run. The gate lives in the Workflow as an
-			// approval Step, so a builder without one converts "launch this build" into "this build
-			// has happened" with no approval anywhere on the path. Every advertised builder already
-			// carries one, which is exactly why this is worth pinning: the invariant currently holds
-			// by convention, and convention is what the rest of this check keeps finding broken.
-			if !hasApprovalGate(wf) {
-				return fmt.Errorf(
-					"%s, but that workflow declares no approval gate Step — a provisioning build is "+
-						"GATED, never auto-run (§5 Flow 1). Launching it would create real "+
-						"infrastructure with no approval on the path. Add a Step with a `gate:`",
-					what)
-			}
-			if lit, why, bad := hardcodedInstanceLiteral(wf, in); bad {
-				return fmt.Errorf(
-					"%s, but that workflow hardcodes %q in a step — %s. A builder is shared by every "+
-						"declaration of its kind, so it must be identity-BLIND and take all of it from "+
-						"{{.launch.*}}. Binding the top-level params is not enough: the literal that "+
-						"motivated this check sat inside an opaque provider manifest, where building the "+
-						"SECOND declaration applied a resource under the FIRST one's name and config — "+
-						"an overwrite, not a failure (ADR-0120 D3)",
-					what, lit, why)
-			}
-			required, err := contract.RequiredNames(wf.Inputs)
-			if err != nil {
-				return fmt.Errorf("%s: inputs: %w", what, err)
-			}
-			for _, req := range required {
-				if _, ok := supplied[req]; !ok {
-					return fmt.Errorf(
-						"%s, which requires input %q — but the provisioning reconcile never supplies that, "+
-							"so every build would be refused. It sends: %v",
-						what, req, sortedKeys(supplied))
-				}
-			}
+		}
+	}
+	return nil
+}
+
+// teardownProbeName reuses the build side's derived instance name for the teardown probe, so the
+// hardcoded-literal check inside checkAdvertisedWorkflow compares against a realistic value.
+func teardownProbeName(supplied map[string]any) string {
+	if s, ok := supplied["instance"].(string); ok {
+		return s
+	}
+	if s, ok := supplied["singleton"].(string); ok {
+		return s
+	}
+	return ""
+}
+
+// checkAdvertisedWorkflow is the per-(Intent, advertised Workflow) check, shared by the build and
+// teardown halves (ADR-0120 D3, extended to ADR-0114 D4).
+//
+// Shared rather than duplicated because every one of these properties was found broken on the build
+// side, and a teardown is the MORE dangerous act: the gate check in particular protects a destroy.
+// `act` is the verb for the message ("build" / "tear down") — the only thing that differs.
+func checkAdvertisedWorkflow(what string, wf types.Workflow, in types.Intent, supplied map[string]any, unit, act string) error {
+	declared, err := contract.InputNames(wf.Inputs)
+	if err != nil {
+		return fmt.Errorf("%s: inputs: %w", what, err)
+	}
+	if len(declared) == 0 {
+		return fmt.Errorf(
+			"%s, which declares no `inputs` — so the reconcile cannot tell it WHICH %s to %s, and a "+
+				"%s it cannot name is unreachable through the gated path (ADR-0120 D2). "+
+				"Declare inputs for: %v", what, unit, act, unit, sortedKeys(supplied))
+	}
+	names := make([]string, 0, len(declared))
+	for n := range declared {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	for _, k := range sortedKeys(supplied) {
+		if !declared[k] {
+			return fmt.Errorf(
+				"%s, but %q is not a declared input of that workflow (declared: %v). The reconcile "+
+					"supplies it, and a launch carrying an undeclared input is refused, so this "+
+					"%s could never run", what, k, names, act)
+		}
+	}
+	if label, bad := hardcodedCorrelationLabel(wf); bad {
+		return fmt.Errorf(
+			"%s, but that workflow hardcodes the correlation label %q in a step. It must forward "+
+				"{{.launch.labels}} instead: the reconcile derives the exact key and value it will "+
+				"later match on, and a hand-written one that is wrong still BUILDS — the Entity "+
+				"appears, the Finding never resolves, and the same gated act is surfaced forever",
+			what, label)
+	}
+	// §5 Flow 1: a build is GATED, never auto-run, and a teardown all the more so. The gate lives
+	// in the Workflow as an approval Step, so a Workflow without one converts "launch this" into
+	// "this has happened" with no approval anywhere on the path. Every advertised Workflow already
+	// carries one, which is exactly why this is worth pinning: the invariant holds by convention,
+	// and convention is what the rest of this check keeps finding broken.
+	if !hasApprovalGate(wf) {
+		return fmt.Errorf(
+			"%s, but that workflow declares no approval gate Step — a provisioning act is "+
+				"GATED, never auto-run (§5 Flow 1). Launching it would %s real "+
+				"infrastructure with no approval on the path. Add a Step with a `gate:`",
+			what, act)
+	}
+	if lit, why, bad := hardcodedInstanceLiteral(wf, in); bad {
+		return fmt.Errorf(
+			"%s, but that workflow hardcodes %q in a step — %s. It is shared by every "+
+				"declaration of its kind, so it must be identity-BLIND and take all of it from "+
+				"{{.launch.*}}. Binding the top-level params is not enough: the literal that "+
+				"motivated this check sat inside an opaque provider manifest, where building the "+
+				"SECOND declaration applied a resource under the FIRST one's name and config — "+
+				"an overwrite, not a failure (ADR-0120 D3)",
+			what, lit, why)
+	}
+	required, err := contract.RequiredNames(wf.Inputs)
+	if err != nil {
+		return fmt.Errorf("%s: inputs: %w", what, err)
+	}
+	for _, req := range required {
+		if _, ok := supplied[req]; !ok {
+			return fmt.Errorf(
+				"%s, which requires input %q — but the provisioning reconcile never supplies that, "+
+					"so every launch would be refused. It sends: %v",
+				what, req, sortedKeys(supplied))
 		}
 	}
 	return nil

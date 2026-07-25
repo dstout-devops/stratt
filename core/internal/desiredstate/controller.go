@@ -3,9 +3,12 @@ package desiredstate
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
+	"strings"
 	"time"
 
 	"log/slog"
@@ -433,15 +436,29 @@ func (c *Controller) reconcileDecommission(ctx context.Context, decls Declaratio
 	for _, in := range intents {
 		for _, ex := range provision.Excess(in, builtNames) {
 			cand := candByName[ex.Name]
-			detail, _ := json.Marshal(decommissionFindingDetail(resolveKind("Compute"), map[string]any{
+			res := resolveKind("Compute")
+			scheme, value, idErr := soleIdentity(cand)
+			detail, _ := json.Marshal(decommissionFindingDetail(res, idErr, map[string]any{
 				"instance": ex.Name, "intent": in.Name, "ordinal": ex.Ordinal,
 				"identityKeys": cand.IdentityKeys, "kind": cand.Kind,
 			}))
-			baseline := "decommission/" + in.Name
-			if err := c.Store.WriteDecommissionFinding(ctx, baseline, ex.Name, "warning", detail); err != nil {
+			f := graph.DecommissionFinding{
+				Baseline: "decommission/" + in.Name, Target: ex.Name,
+				Severity: "warning", Detail: detail,
+			}
+			// The launch spec rides the Finding only when BOTH halves resolved: a bound
+			// teardown Workflow and an unambiguous target identity. Either missing and the
+			// Finding still surfaces (the operator must know the unit is undesired) but
+			// carries nothing to launch — fail-closed, with the reason in the detail (§2.4/§1.8).
+			if res.Status == capability.StatusResolved && idErr == nil {
+				f.LaunchWorkflow = res.Workflow
+				f.LaunchParams = provision.TeardownLaunchParams(in.Name, ex, scheme, value)
+			}
+			if err := c.Store.WriteDecommissionFinding(ctx, f); err != nil {
 				log.Error("write decommission finding failed", "instance", ex.Name, "error", err)
 				continue
 			}
+			baseline := f.Baseline
 			keepB = append(keepB, baseline)
 			keepT = append(keepT, ex.Name)
 			excessCount++
@@ -456,20 +473,68 @@ func (c *Controller) reconcileDecommission(ctx context.Context, decls Declaratio
 	}
 }
 
+// soleIdentity picks the ONE identity a teardown targets, and refuses to guess.
+//
+// A teardown Workflow needs an identity for the thing it destroys, and that identity is
+// provider-shaped (`vcenter.uuid`, `aws.instance-id`) — §1.5 says core does not know the
+// spelling. So core sends the pair (scheme, value) and the provider's own Workflow renames it
+// into its Action's param, exactly as a build Workflow maps core's uniform launch shape onto
+// its opaque provider params.
+//
+// It cannot be a nested `identity` object keyed by scheme, which was the first idea: the
+// substituter splits a binding path on `.`, so `{{.launch.identity.vcenter.uuid}}` resolves as
+// identity → vcenter → uuid and fails. Fail-closed rather than silently wrong, but unusable.
+//
+// More than one identity is a §2.4 tiebreak core must NOT make, so it fails closed and says so.
+// This is deliberately not solved by extending `decommissions:` to name a scheme: no built
+// Entity in tree carries two, and inventing a declaration for a case that does not exist is how
+// a schema grows fields nothing demands (§1.1). If it ever fires, the reason names both schemes
+// and that is the moment to decide.
+func soleIdentity(c graph.DecommissionCandidate) (scheme, value string, err error) {
+	switch len(c.IdentityKeys) {
+	case 0:
+		return "", "", fmt.Errorf("the built Entity carries no identity, so there is no target to hand a teardown Workflow")
+	case 1:
+		for s, v := range c.IdentityKeys {
+			return s, v, nil
+		}
+	}
+	schemes := make([]string, 0, len(c.IdentityKeys))
+	for s := range c.IdentityKeys {
+		schemes = append(schemes, s)
+	}
+	sort.Strings(schemes)
+	return "", "", fmt.Errorf(
+		"the built Entity carries %d identities (%s) and nothing declares which one names the teardown "+
+			"target — core will not pick one (§2.4). Tear this unit down by hand and open the decision",
+		len(schemes), strings.Join(schemes, ", "))
+}
+
 // decommissionFindingDetail enriches a teardown Finding's detail with the resolution outcome (ADR-0114
 // D4), mirroring provisionFindingDetail: a RESOLVED teardown names the bound provider + the gated
-// teardown Workflow to launch (pass the Entity's provider identity as the launch uuid); a PENDING/
-// AMBIGUOUS one carries the observable reason and NO workflow — fail-closed, nothing to launch (§2.4).
-func decommissionFindingDetail(r capability.Result, base map[string]any) map[string]any {
+// teardown Workflow to launch; a PENDING/AMBIGUOUS one carries the observable reason and NO workflow —
+// fail-closed, nothing to launch (§2.4).
+//
+// idErr is the second way a teardown can be unlaunchable, and it is reported separately rather than
+// folded into the provider reason: "no provider advertises a teardown for this kind" and "this Entity's
+// identity is ambiguous" are different problems with different fixes, and a Finding that blurred them
+// would send an operator to the wrong file (§1.8).
+func decommissionFindingDetail(r capability.Result, idErr error, base map[string]any) map[string]any {
 	base["onRemove"] = types.OnRemoveRemove
-	if r.Status == capability.StatusResolved {
+	switch {
+	case r.Status != capability.StatusResolved:
+		base["unresolved"] = r.Reason
+		base["reason"] = "built but no longer desired, and decommission is UNRESOLVED — " + r.Reason
+	case idErr != nil:
+		base["provider"] = r.Provider
+		base["teardownWorkflow"] = r.Workflow
+		base["unresolved"] = idErr.Error()
+		base["reason"] = "built but no longer desired, and its teardown TARGET is unresolved — " + idErr.Error()
+	default:
 		base["provider"] = r.Provider
 		base["teardownWorkflow"] = r.Workflow
 		base["reason"] = "built but no longer desired (count-down) with onRemove:remove — launch the gated teardown Workflow (never auto-run, §5 Flow)"
-		return base
 	}
-	base["unresolved"] = r.Reason
-	base["reason"] = "built but no longer desired, and decommission is UNRESOLVED — " + r.Reason
 	return base
 }
 

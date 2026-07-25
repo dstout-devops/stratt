@@ -165,6 +165,49 @@ proto: lifecycle Actions reuse the shipped `Invoke`/`InvokeResult` surface.
   correlation, per-entity gated teardown). State-change visibility is sync-interval-latent (D3). The protection
   guard's vSphere-side marker may be deferred (D6). Delete correctness rides the Syncer full-sync, not a
   synchronous tombstone (D2) — a deleted object lingers in the graph until the next sync (bounded, observable).
+- **The teardown was UNLAUNCHABLE, and D4's own text is where the tell was.** D4 said the operator
+  "launches the gated teardown Workflow (`approve` → `vcenter/delete-vm` with `{{.launch.uuid}}`)", and the
+  reconcile recorded the resolved Workflow and the target's identity **only inside the Finding's `diff`
+  detail blob**. `resolveFindingLaunch` reads `launchWorkflow` first and otherwise falls through to a
+  Baseline read — and there is no `decommission/<intent>` Baseline; nothing creates one — so every teardown
+  answered **404 "no baseline and no launch spec, nothing to launch"**. The remaining path was to read the
+  blob and hand-launch the Workflow by name with a retyped identity, which **also sidesteps D4's
+  build-provenance anchor**, the entire point of resolving the teardown of the provider that built the
+  thing. `diff` is documented as redacted and size-capped, so parsing a launch back out of it was never an
+  option (ADR-0118 made the same call for the withdrawal path). Fixed: the decommission Finding now carries
+  ADR-0120 D1's typed launch spec, rederived every pass like the provision Finding's.
+
+  **`launchKind` is `remove`, and the enum stays at three.** ADR-0120 D1 left the rule "a fourth act must
+  argue membership rather than add a field", and named this as the first real test of it. The argument
+  fails, correctly: D1's three acts are converging live state, **retiring abandoned state**, and creating
+  declared state. A count-down teardown retires state Stratt created whose declaration no longer asks for
+  it — the same act as an orphan's `removeWorkflow`. What differs is only _which_ declaration lapsed (an
+  Assignment vs. an Intent's cardinality) and _who_ supplies the Workflow (a Blueprint vs. a provider's
+  `decommissions` map), and both of those already ride in `launchWorkflow`. It also lands on the same side
+  of the read split: `remediate` reads its spec from the Baseline, `build` and `remove` from the Finding.
+
+  **The identity is a (scheme, value) pair, and core refuses to guess it.** A teardown needs an identity
+  for the thing it destroys, and that identity is provider-shaped — §1.5 says core does not know the
+  spelling. So `provision.TeardownLaunchParams` sends the pair and the provider's own Workflow renames it
+  (`uuid: "{{.launch.identityValue}}"`), exactly as a build Workflow maps the uniform launch shape onto its
+  opaque params. Not a nested `identity` object keyed by scheme, which was the first idea and does not
+  work: the substituter splits a binding path on `.`, so a dotted scheme like `vcenter.uuid` is
+  unaddressable inside one. A built Entity carrying **more than one** identity is a §2.4 tiebreak core must
+  not make, so the Finding surfaces with **nothing to launch** and a reason naming every competing scheme.
+  Deliberately not solved by extending `decommissions:` to name a scheme: no built Entity in tree carries
+  two, and inventing a declaration for a case that does not exist is how a schema grows fields nothing
+  demands (§1.1). If it ever fires, that is the moment to decide.
+
+  **And the check ADR-0120 D3 built for builders now covers teardowns**, because it had to: until the
+  Finding carried a launch spec, a mismatched teardown Workflow was invisible — nothing launched it from
+  the Finding at all. `validateDecommissions` was the same partial check `validateProvisions` was (entry
+  non-empty, nothing more), so a **dangling teardown target** was possible, which is worse than a dangling
+  builder because the operator meets it while trying to destroy something. The per-(Intent, Workflow) rules
+  are now one shared function over both halves: inputs declared, every supplied key declared, every
+  required key supplied, no hand-written correlation label, no hardcoded declaration literal, and an
+  **approval gate** — the last one sharper here than on the build side, since §5 Flow's destructive-⇒-gated
+  is what stops a launch from deleting a VM with no approval on the path.
+
 - **Follow-ups.** (1) The protection-marker read (D6) if deferred. (2) Per-instance/entity build+teardown
   parameterization (shared with ADR-0058/0113 — launch-param driven). (3) `onRemove: revert` for provisioning
   kinds (restore-to-declared), distinct from `remove`. (4) A symmetric **ipam release** Step on

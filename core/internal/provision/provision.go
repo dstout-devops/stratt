@@ -447,6 +447,35 @@ func BuildLaunchParams(in Intent, inst Instance) map[string]any {
 	return out
 }
 
+// TeardownLaunchParams derives the launch inputs for ONE excess instance's gated teardown
+// (ADR-0114 D4, joining ADR-0120 D1's launch spec).
+//
+// The mirror of BuildLaunchParams, and deliberately in this package beside it for one reason: the
+// declaration-time check on advertised teardown Workflows calls THIS function, so the keys it
+// verifies a Workflow declares are the keys the reconcile actually sends. A second hand-written
+// list in the validator is how that check would go quietly stale.
+//
+// (scheme, value) rather than a provider-named param: the identity of the thing being destroyed is
+// provider-shaped and core does not know its spelling (§1.5). The scheme rides ALONG with the value
+// so a teardown Workflow can assert what it was handed rather than assume — a destructive Action
+// pointed at an identity from the wrong scheme is the worst failure available here. Not a nested
+// object keyed by scheme: template.lookup splits a binding path on `.`, so a dotted scheme like
+// `vcenter.uuid` is unaddressable inside one.
+//
+// `intent` and `ordinal` are sent because a teardown Workflow may legitimately want to say WHICH
+// declaration shrank and where in the order this unit fell — the same descent value the build side
+// gets (§1.8). They are not required inputs; a Workflow that ignores them still has to declare them,
+// which is the accepted-vs-consumed gap ADR-0120 books for the keyed-placement ADR.
+func TeardownLaunchParams(intent string, inst Instance, identityScheme, identityValue string) map[string]any {
+	return map[string]any{
+		"instance":       inst.Name,
+		"intent":         intent,
+		"ordinal":        inst.Ordinal,
+		"identityScheme": identityScheme,
+		"identityValue":  identityValue,
+	}
+}
+
 // SingletonLabel is the correlation label key a built named-singleton carries (ADR-0059 D4). It is
 // the ONLY key ProvisionedSingletons reads, so a build projecting any other spelling produces an
 // Entity that never resolves its own Finding — which is exactly what

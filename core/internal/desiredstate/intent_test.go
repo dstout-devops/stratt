@@ -876,7 +876,9 @@ func TestProvisioningBuildInputsCheckedAtDeclaration(t *testing.T) {
 	if err == nil {
 		t.Fatal("a build Workflow with no inputs must be refused")
 	}
-	for _, want := range []string{"web-fleet", "compute-build", "declares no `inputs`", "unbuildable"} {
+	// "unreachable" rather than "unbuildable": the same check now covers advertised TEARDOWN
+	// Workflows too (ADR-0114 D4), so the consequence is worded for both acts.
+	for _, want := range []string{"web-fleet", "compute-build", "declares no `inputs`", "unreachable through the gated path"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("the refusal must name both documents and the consequence; want %q in: %v", want, err)
 		}

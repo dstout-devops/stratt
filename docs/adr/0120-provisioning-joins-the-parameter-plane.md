@@ -421,9 +421,30 @@ possible _with the right values_, which is what removes the incentive to reach f
   per-operation binding surface yet. Widening it is additive to this ADR and belongs with whichever class
   first ships a second provider.
 
-- **ADR-0114's decommission path** should carry `launchKind: decommission` through the same field rather
+- ~~**ADR-0114's decommission path** should carry `launchKind: decommission` through the same field rather
   than growing its own. That is the first real test of whether D1's discriminator holds, and if it needs
-  a fourth member the "stays at three" claim was wrong.
+  a fourth member the "stays at three" claim was wrong.~~ — **done, and the field held with no fourth
+  member.** The right answer turned out to be **`remove`**, not `decommission`: D1's `remove` is "retiring
+  abandoned state", and a count-down teardown retires state Stratt created whose declaration no longer asks
+  for it. What differs from an orphan's withdrawal is only which declaration lapsed and who supplies the
+  Workflow, both of which already ride in `launchWorkflow`. So this follow-up's own wording was wrong about
+  the value while right about the field — a fourth act has to argue membership, and this one loses the
+  argument. It also lands on the same side of the read split D1 created: `remediate` reads from the
+  Baseline, `build` and `remove` from the Finding.
+
+  Wiring it exposed a bigger defect than the enum question, and one this ADR's family should have
+  predicted: **the ADR-0114 teardown was not launchable at all.** The reconcile put the resolved teardown
+  Workflow and the target identity only in the Finding's `diff` blob, so `POST
+/findings/{id}/remediation` fell through to a Baseline that does not exist and answered 404. That is the
+  same shape as this ADR's own D1 finding, one reach-path over — which suggests the pattern worth watching
+  is not "does the enum hold" but "does every reconcile that surfaces a launchable Finding write the typed
+  spec, or narrate it into `diff`". The full record, including the (scheme, value) identity rule and why
+  core refuses to pick between two identities, is in ADR-0114's Consequences.
+
+  D3's check now runs over advertised **teardown** Workflows too, sharing one function with the build half.
+  It had to: until the Finding carried a launch spec, nothing launched a teardown Workflow from a Finding,
+  so a mismatched or dangling one was structurally invisible.
+
 - ~~**The ungated `startAction` route**~~ — **closed at both doors.** `POST /runs {action}` is the one
   path to real infrastructure with no Workflow and therefore no approval Step; its only authz is the
   CredentialRef `use`-check. That is right for the operations it was built for, but an Action carrying
