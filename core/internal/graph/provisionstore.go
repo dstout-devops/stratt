@@ -3,6 +3,8 @@ package graph
 import (
 	"context"
 	"fmt"
+
+	"github.com/dstout-devops/stratt/types"
 )
 
 // ProvisionedInstances returns the set of stratt.intent/instance correlation
@@ -60,20 +62,60 @@ func (s *Store) ProvisionedSingletons(ctx context.Context) (map[string]bool, err
 	return out, rows.Err()
 }
 
+// ProvisionFinding is one gated build to surface (ADR-0058, ADR-0120 D2): the desired-but-unbuilt
+// unit, plus the launch spec that builds it.
+type ProvisionFinding struct {
+	// Baseline is the per-Intent grouping name "provision/<intent>". It is SYNTHETIC — no
+	// graph.baseline row exists or should, since a Baseline is a compiled expectation and there
+	// is nothing to evaluate before the instance exists (ADR-0058 M1, §1.2). That is precisely
+	// why the launch spec below has to live on the Finding.
+	Baseline string
+	// Target is the desired instance/singleton correlation name. NOT an Entity — entity_id stays
+	// null, so there is no phantom for the unbuilt.
+	Target   string
+	Severity string
+	// Detail is the human-facing reason blob (graph.finding.diff).
+	Detail []byte
+	// LaunchWorkflow is the RESOLVED provider's build Workflow; LaunchParams are the
+	// per-instance values. Empty when provisioning is unresolved — there is then genuinely
+	// nothing to launch, and the detail says which capability could not be bound.
+	LaunchWorkflow string
+	LaunchParams   map[string]any
+}
+
 // WriteProvisionFinding records/refreshes one open provisioning Finding
 // (ADR-0058): a gated build the operator must launch (§5 Flow 1). It is keyed to
 // the INTENT via baseline "provision/<intent>"; target is the desired instance
 // name, which is NOT an Entity — entity_id stays null, so there is no phantom for
 // the unbuilt (§1.2 / guardian M2). Idempotent on the live (baseline,target) row;
 // recomputed every reconcile.
-func (s *Store) WriteProvisionFinding(ctx context.Context, baseline, target, severity string, detail []byte) error {
-	_, err := s.pool.Exec(ctx, `
+//
+// THE DO UPDATE REFRESHES THE LAUNCH SPEC, AND THAT IS NOT OPTIONAL (ADR-0120 D2).
+// Unlike an orphan Finding — whose spec is the only surviving record of a configuration that
+// has left Git, so it is written once and never touched — this spec is DERIVED from current
+// declarations. Refresh only diff and an already-open Finding keeps serving the params from its
+// FIRST reconcile, so an edit to labels or placement, or a CapabilityBinding change that swaps
+// the build Workflow, would launch yesterday's desired state from a Finding that looks current.
+// That is the second truth §1.2 forbids, reachable by omitting one line.
+func (s *Store) WriteProvisionFinding(ctx context.Context, f ProvisionFinding) error {
+	params, err := marshalLaunchParams(f.LaunchParams)
+	if err != nil {
+		return fmt.Errorf("graph: provision finding: %w", err)
+	}
+	kind := ""
+	if f.LaunchWorkflow != "" {
+		kind = types.LaunchBuild
+	}
+	_, err = s.pool.Exec(ctx, `
 		INSERT INTO graph.finding
-			(baseline, target, status, severity, framework, consecutive_drifted, diff, opened_at)
-		VALUES ($1, $2, 'open', $3, 'provision', 1, $4, now())
+			(baseline, target, status, severity, framework, consecutive_drifted, diff, opened_at,
+			 launch_workflow, launch_params, launch_kind)
+		VALUES ($1, $2, 'open', $3, 'provision', 1, $4, now(), nullif($5, ''), $6, nullif($7, ''))
 		ON CONFLICT (baseline, target) WHERE status <> 'resolved'
-		DO UPDATE SET diff = excluded.diff, last_observed = now()`,
-		baseline, target, severity, detail)
+		DO UPDATE SET diff = excluded.diff, last_observed = now(),
+			launch_workflow = excluded.launch_workflow, launch_params = excluded.launch_params,
+			launch_kind = excluded.launch_kind`,
+		f.Baseline, f.Target, f.Severity, f.Detail, f.LaunchWorkflow, params, kind)
 	if err != nil {
 		return fmt.Errorf("graph: write provision finding: %w", err)
 	}

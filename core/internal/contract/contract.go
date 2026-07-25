@@ -229,11 +229,36 @@ func flatten(v *jsonschema.ValidationError) string {
 // Contract. Actuators without a registered Contract are refused — an
 // uncontracted Step surface must not exist (§2.3).
 func ValidateActuatorParams(actuator string, params json.RawMessage) error {
+	return ValidateActuatorParamsFor(actuator, "", params)
+}
+
+// ValidateActuatorParamsFor is ValidateActuatorParams with the Actuator's PLUGIN
+// IDENTITY available, which is what makes a second declaration of the same plugin
+// usable at all.
+//
+// An input Contract belongs to the TOOL, not to the local name an estate gives one
+// of its Actuators (§1.5 — the plugin's declared seam is the contract). Resolution
+// by name alone meant per-Step EE selection (ADR-0117 D3a) worked in the dispatcher
+// and was unreachable from an estate: declaring `ansible-crypto` (pluginIdentity
+// ansible) to select a content-bearing EE produced an Actuator whose every Step was
+// rejected at parse time as uncontracted — the mechanism shipped, the thing it
+// existed for did not. Found by the app-cert demo, which is what a demo is for.
+//
+// Name is still tried FIRST, so a plugin that ships a contract under a specific
+// Actuator name keeps it; the identity is a fallback, never an override.
+func ValidateActuatorParamsFor(actuator, pluginIdentity string, params json.RawMessage) error {
 	if err := ensure(); err != nil {
 		return err
 	}
 	c, ok := byName["actuators/"+actuator+".input"]
+	if !ok && pluginIdentity != "" && pluginIdentity != actuator {
+		c, ok = byName["actuators/"+pluginIdentity+".input"]
+	}
 	if !ok {
+		if pluginIdentity != "" && pluginIdentity != actuator {
+			return fmt.Errorf("contract: no input contract for actuator %q (nor for its plugin identity %q)",
+				actuator, pluginIdentity)
+		}
 		return fmt.Errorf("contract: no input contract for actuator %q", actuator)
 	}
 	if len(params) == 0 {
@@ -324,6 +349,13 @@ func ResolveActionParams(action string, params map[string]any, ns template.Names
 // the resolved value, not the placeholder, is what must satisfy the schema —
 // while guaranteeing the Actuator never sees unvalidated params (§1.5, §1.8).
 func ResolveActuatorParams(actuator string, params map[string]any, ns template.Namespaces) (json.RawMessage, error) {
+	return ResolveActuatorParamsFor(actuator, "", params, ns)
+}
+
+// ResolveActuatorParamsFor is ResolveActuatorParams with the Actuator's plugin
+// identity available — see ValidateActuatorParamsFor for why a Contract cannot be
+// resolved by the local Actuator name alone.
+func ResolveActuatorParamsFor(actuator, pluginIdentity string, params map[string]any, ns template.Namespaces) (json.RawMessage, error) {
 	resolved, err := template.SubstituteParams(params, ns)
 	if err != nil {
 		return nil, err
@@ -334,7 +366,7 @@ func ResolveActuatorParams(actuator string, params map[string]any, ns template.N
 			return nil, err
 		}
 	}
-	if err := ValidateActuatorParams(actuator, raw); err != nil {
+	if err := ValidateActuatorParamsFor(actuator, pluginIdentity, raw); err != nil {
 		return nil, err
 	}
 	return raw, nil
@@ -410,8 +442,15 @@ func ValidateIntentSpec(kind string, spec json.RawMessage) (covered bool, err er
 // Every field that IS present must satisfy the schema (type, enum, additionalProperties,
 // …); a missing top-level `required` field is TOLERATED, since defaults supply a subset
 // the Intent completes. This closes the §1.1 seam for author-supplied default values
-// without demanding a whole spec (ADR-0083 §5; full resolved-spec revalidation at compile
-// is a follow-up). covered=false ⇒ the kind has no Contract (nothing to check).
+// without demanding a whole spec (ADR-0083 §5). covered=false ⇒ the kind has no Contract
+// (nothing to check).
+//
+// As of ADR-0118 D1 this validates an INTENT's own spec too, not just Blueprint defaults:
+// with values spread across defaults, the Intent and the Assignment, no single layer is a
+// complete spec. The "full resolved-spec revalidation at compile" this doc used to book as
+// a follow-up now exists — compiler.validateResolvedSpec — and it is the ONLY place
+// completeness is judged, so this function must never be mistaken for one that guarantees
+// a usable spec.
 func ValidateIntentSpecPartial(kind string, spec json.RawMessage) (covered bool, err error) {
 	if err := ensure(); err != nil {
 		return false, err

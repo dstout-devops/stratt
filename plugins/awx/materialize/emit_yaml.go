@@ -25,9 +25,14 @@ type yFacet struct {
 }
 
 type yWorkflow struct {
-	Name        string        `yaml:"name"`
-	AdoptedFrom *yAdoptedFrom `yaml:"adoptedFrom,omitempty"`
-	Steps       []yStep       `yaml:"steps"`
+	Name string `yaml:"name"`
+	// Inputs is the imported survey, as the Workflow's declared launch interface
+	// (ADR-0118 D2). This is where a survey lands — charter line 34's migration table
+	// says "survey → input Contract", and until D2 shipped there was no seam on a
+	// Workflow to put one, which is exactly why ADR-0025 deferred enforcement.
+	Inputs      map[string]any `yaml:"inputs,omitempty"`
+	AdoptedFrom *yAdoptedFrom  `yaml:"adoptedFrom,omitempty"`
+	Steps       []yStep        `yaml:"steps"`
 }
 
 // yAdoptedFrom is the adopt-lineage block on an adopted Workflow (ADR-0087); nil (omitted)
@@ -47,12 +52,17 @@ func adoptBlock(l *AdoptLineage) *yAdoptedFrom {
 }
 
 type yStep struct {
-	Name           string         `yaml:"name"`
-	Needs          []string       `yaml:"needs,omitempty"`
-	When           string         `yaml:"when,omitempty"`
-	Gate           *yGate         `yaml:"gate,omitempty"`
-	ViewName       string         `yaml:"viewName,omitempty"`
-	Actuator       string         `yaml:"actuator,omitempty"`
+	Name     string   `yaml:"name"`
+	Needs    []string `yaml:"needs,omitempty"`
+	When     string   `yaml:"when,omitempty"`
+	Gate     *yGate   `yaml:"gate,omitempty"`
+	ViewName string   `yaml:"viewName,omitempty"`
+	Actuator string   `yaml:"actuator,omitempty"`
+	// DryRun carries an imported AWX "check" job template. Check-mode has exactly
+	// one mechanism — the port's DryRun bit (ADR-0051 MF6 / ADR-0117 D2) — so the
+	// import lands here, NOT in params.check (which the runtime never reads; a
+	// check template written there would silently converge on apply, §1.8).
+	DryRun         bool           `yaml:"dryRun,omitempty"`
 	Params         map[string]any `yaml:"params,omitempty"`
 	CredentialRefs []string       `yaml:"credentialRefs,omitempty"`
 }

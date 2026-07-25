@@ -12,6 +12,17 @@ for: Intent/Access
 severity: warning
 dampingObservations: 1
 removeWorkflow: access-revoke
+# The withdrawal half of the same wire (ADR-0118 D3). Resolved from the effective spec at
+# compile and stamped on every Baseline this Assignment produces, because withdrawal is exactly
+# the moment the Assignment stops existing — its values cannot be read back then, so the
+# compiled Baseline is the only surviving record of what the retired grant said.
+#
+# The same three values as remediationParams below, deliberately: revoking a grant needs to
+# identify the same tuple that granting it did.
+removeParams:
+  subject: "{{.spec.subject}}"
+  kind: "{{.spec.kind}}"
+  scope: "{{.spec.scope}}"
 routes:
   - observe:
       namespace: access.grants
@@ -21,3 +32,14 @@ routes:
         scope: "{{.spec.scope}}"
     claim: additive
     remediationWorkflow: access-apply
+    # The same three values the expectation is built from, passed to the Workflow that
+    # converges them (ADR-0118 D3). Before this field existed the route named a Workflow and
+    # passed it nothing, so access-apply's play referenced variables nothing supplied — it
+    # would have failed at run time on an undefined variable.
+    #
+    # Validated against access-apply's declared inputs AT COMPILE, so a typo here fails this
+    # Assignment rather than the remediation an operator launches from a Finding.
+    remediationParams:
+      subject: "{{.spec.subject}}"
+      kind: "{{.spec.kind}}"
+      scope: "{{.spec.scope}}"

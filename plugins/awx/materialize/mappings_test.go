@@ -146,25 +146,44 @@ func TestSurveyToInputContract(t *testing.T) {
 		{Variable: "tok", Type: "password"},
 	}}
 	r := newReport()
-	doc, err := mapSurvey(awx.JobTemplate{Name: "Deploy"}, spec, r)
+	schema, vars, err := mapSurvey(awx.JobTemplate{Name: "Deploy"}, spec, "awx/deploy", r)
 	if err != nil {
 		t.Fatal(err)
 	}
-	var schema map[string]any
-	if err := json.Unmarshal([]byte(doc), &schema); err != nil {
-		t.Fatalf("survey schema is not valid JSON: %v", err)
+	// The schema must satisfy what a Workflow's declared launch interface requires
+	// (ADR-0118 D2), because that is now where it lands — an open or non-object survey
+	// would fail the importer's own bundle parse.
+	if schema["type"] != "object" || schema["additionalProperties"] != false {
+		t.Errorf("a survey must render as a CLOSED object schema, or CompileInputSchema rejects the "+
+			"Workflow it lands on: type=%v additionalProperties=%v", schema["type"], schema["additionalProperties"])
+	}
+	// No $id: these are git-declared estate inputs, not registry Contracts. An $id would
+	// advertise a rung-2 pin and hash-verification that never happens (§1.8).
+	if _, ok := schema["$id"]; ok {
+		t.Errorf("a Workflow's inputs carry no registry identity; $id would claim a pin that does not exist: %v", schema["$id"])
+	}
+	if strings.Join(vars, ",") != "n,tier,ver" {
+		t.Errorf("answerable variables must come back sorted, password excluded, got %v", vars)
 	}
 	props := schema["properties"].(map[string]any)
 	if props["n"].(map[string]any)["type"] != "integer" {
 		t.Errorf("integer question type: %v", props["n"])
 	}
-	if props["tok"].(map[string]any)["x-stratt-sensitive"] != true {
-		t.Errorf("password must be marked sensitive: %v", props["tok"])
+	// A password question is secret material. Importing it as a launch input would carry
+	// that material onto the Run, into the audit stream, and out to --extra-vars, whose
+	// own Contract forbids it (§2.5) — so it must be refused and re-brokered, not typed.
+	// Marking it x-stratt-sensitive was adequate while the document was detached and
+	// enforced by nothing; it is not adequate now that inputs are live.
+	if _, ok := props["tok"]; ok {
+		t.Errorf("a password question must NOT become a launch input (§2.5): %v", props["tok"])
+	}
+	if !hasBlock(r, "must be brokered") {
+		t.Errorf("a password question must BLOCK the bundle on re-broker, not pass with a note; blocking=%v", r.blocking)
 	}
 	if _, ok := props["tier"].(map[string]any)["enum"]; !ok {
 		t.Errorf("multiplechoice must produce enum: %v", props["tier"])
 	}
-	req, _ := schema["required"].([]any)
+	req, _ := schema["required"].([]string)
 	if len(req) != 1 || req[0] != "ver" {
 		t.Errorf("required: %v", schema["required"])
 	}
@@ -218,4 +237,37 @@ func anyContains(ss []string, sub string) bool {
 		}
 	}
 	return false
+}
+
+// TestJobTemplateCheckMapsToDryRun locks ADR-0117 D2's redirect: an imported AWX
+// "check" job template must land on the Step's DryRun bit — the ONE check-mode
+// mechanism (ADR-0051 MF6) — and must NOT emit params.check, which the runtime
+// reads nowhere. Getting this wrong silently converts an imported check job into a
+// converging apply on its first run (§1.8), which is why it is pinned here.
+func TestJobTemplateCheckMapsToDryRun(t *testing.T) {
+	snap := &awx.Snapshot{
+		JobTemplates: []awx.JobTemplate{{ID: 11, Name: "Audit", Playbook: "audit.yml", Project: 1, Inventory: 2, JobType: "check"}},
+		Projects:     map[int]awx.Project{1: {ID: 1, ScmType: "git", ScmURL: "https://x/repo.git"}},
+	}
+	r := newReport()
+	doc, err := mapJobTemplate(snap, snap.JobTemplates[0], map[int]string{2: "awx/cloud"}, map[int]string{}, "awx/audit", r, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(doc, "dryRun: true") {
+		t.Errorf("check job template must set the Step dryRun bit:\n%s", doc)
+	}
+	if strings.Contains(doc, "check: true") {
+		t.Errorf("check job template must NOT emit the deprecated params.check:\n%s", doc)
+	}
+
+	// A normal (run) template stays an applying Step.
+	snap.JobTemplates[0].JobType = "run"
+	doc, err = mapJobTemplate(snap, snap.JobTemplates[0], map[int]string{2: "awx/cloud"}, map[int]string{}, "awx/audit", r, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(doc, "dryRun") {
+		t.Errorf("a run template must not be marked dryRun:\n%s", doc)
+	}
 }

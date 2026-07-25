@@ -13,8 +13,11 @@ func TestNotifySinkCRUD(t *testing.T) {
 	ctx := context.Background()
 
 	sink := types.Sink{
-		Name: "ops-webhook", Kind: types.SinkWebhook, CredentialRef: "ops-hook-cred",
-		Config: types.SinkConfig{Method: "POST", BodyTemplate: `{"text":"{{.subject}}"}`},
+		Name: "ops-webhook", Kind: "webhook", CredentialRef: "ops-hook-cred",
+		Config: types.SinkConfig{
+			BodyTemplate: `{"text":"{{.subject}}"}`,
+			Params:       map[string]any{"method": "POST"},
+		},
 	}
 	if err := store.UpsertNotifySink(ctx, sink); err != nil {
 		t.Fatalf("upsert: %v", err)
@@ -28,11 +31,13 @@ func TestNotifySinkCRUD(t *testing.T) {
 	}
 
 	// Upsert is idempotent + updates.
-	sink.Config.Method = "PUT"
+	sink.Config.Params = map[string]any{"method": "PUT"}
 	if err := store.UpsertNotifySink(ctx, sink); err != nil {
 		t.Fatalf("re-upsert: %v", err)
 	}
-	if got, _ = store.GetNotifySink(ctx, "ops-webhook"); got.Config.Method != "PUT" {
+	// The opaque params bag must survive the JSON round-trip through the store —
+	// core stores it without reading it, which is the point (ADR-0125 D2).
+	if got, _ = store.GetNotifySink(ctx, "ops-webhook"); got.Config.Params["method"] != "PUT" {
 		t.Fatalf("update not applied: %+v", got)
 	}
 

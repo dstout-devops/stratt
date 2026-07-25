@@ -1,0 +1,23 @@
+# app-cert demo overlay (ADR-0116, ADR-0117 f) — layered on values-allinone.yaml +
+# values-genesis.yaml by `task demo:app-cert:run`.
+#
+# Adds ONLY the `declared` plugin, because that is the one plugin pod this demo needs: it is the
+# Syncer that turns demos/app-cert/estate/hosts/*.yaml into an Entity carrying mgmt.address, which
+# the shim renders as ansible_host. `estateHosts: true` mounts the staged declarations' hosts/**
+# keys at /hosts — the host-list FILE stays the system of record (§1.2).
+#
+# Note what is NOT here: the ansible Actuator needs no plugin pod at all. It is an EE-Job Actuator —
+# the "plugin" is a container image the dispatcher runs per Step, and which image is chosen comes
+# from the Actuator declaration in the demo's estate (ADR-0117 D3a), not from these values.
+plugins:
+  - name: declared
+    image:
+      repository: stratt-plugin-declared
+      tag: dev
+      pullPolicy: Never # kind-loaded (task image:declared-plugin)
+    estateHosts: true
+    env:
+      STRATT_DECLARED_PATH: /hosts
+    hostEnv:
+      STRATT_DECLARED_SOURCE_NAME: declared-dev
+      STRATT_DECLARED_INTERVAL: "15s"

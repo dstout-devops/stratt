@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"google.golang.org/protobuf/encoding/protojson"
@@ -247,5 +248,108 @@ func TestShim_SCMValidation(t *testing.T) {
 				t.Fatalf("a rejected SCM ref must emit a terminal fatal, got %s", buf.Bytes())
 			}
 		})
+	}
+}
+
+// TestShim_VacuousRunFailsTerminal is the END-TO-END proof of the §1.8 fix: a play
+// that matches no host makes ansible-runner exit 0, and the shim must emit a
+// terminal Ok=FALSE. Without it the hub's fold (sawTerminal && !failed) reports a
+// green Run that actuated nothing. This is reachable today via params.limit.
+func TestShim_VacuousRunFailsTerminal(t *testing.T) {
+	req := Request{
+		Params:  json.RawMessage(`{"play":"- hosts: nope","limit":"nope"}`),
+		Targets: []Target{{Name: "web-01", Address: "10.0.0.1"}},
+	}
+	// rc=0, and the only event is ansible saying the play matched nothing.
+	out := runShim(t, req, fakeRunner{rc: 0, lines: []string{
+		`{"uuid":"1","counter":1,"event":"playbook_on_no_hosts_matched","event_data":{}}`,
+	}})
+
+	var terminal *pluginv1.TaskEvent
+	sawWarn := false
+	for _, r := range out {
+		ev := r.GetEvent()
+		if ev == nil {
+			continue
+		}
+		if ev.GetTerminal() {
+			terminal = ev
+		}
+		if ev.GetMessage() == "playbook_on_no_hosts_matched" && ev.GetLevel() == pluginv1.TaskEvent_LEVEL_WARN {
+			sawWarn = true
+		}
+	}
+	if terminal == nil {
+		t.Fatal("no terminal emitted (MF5)")
+	}
+	if terminal.GetOk() {
+		t.Fatalf("rc=0 having actuated NO host must terminate NOT-ok: %q", terminal.GetMessage())
+	}
+	if !strings.Contains(terminal.GetMessage(), `params.limit="nope"`) {
+		t.Fatalf("terminal must diagnose the cause, got %q", terminal.GetMessage())
+	}
+	if !sawWarn {
+		t.Error("ansible's no-hosts-matched event must surface at WARN, not INFO (partial-vacuity visibility)")
+	}
+}
+
+// TestShim_ActuatedRunStaysGreen: the guard must not regress the normal path — one
+// real per-host result is enough to make the run legitimately successful.
+func TestShim_ActuatedRunStaysGreen(t *testing.T) {
+	req := Request{Targets: []Target{{Name: "web-01"}, {Name: "web-02"}}}
+	out := runShim(t, req, fakeRunner{rc: 0, lines: []string{
+		`{"uuid":"1","counter":1,"event":"runner_on_ok","event_data":{"host":"web-01","res":{}}}`,
+	}})
+	for _, r := range out {
+		if ev := r.GetEvent(); ev.GetTerminal() && !ev.GetOk() {
+			t.Fatalf("a run that actuated a host must stay green: %q", ev.GetMessage())
+		}
+	}
+}
+
+// TestShim_ImplicitLocalhostIsNotActuation: a play using `hosts: localhost` (ansible's
+// implicit localhost, absent from the rendered inventory) produces a per-host result
+// the HUB rejects as a confused deputy (MF4). It must not satisfy the actuation check
+// either — otherwise a run that touched nothing in the View still reads as green.
+func TestShim_ImplicitLocalhostIsNotActuation(t *testing.T) {
+	req := Request{Targets: []Target{{Name: "web-01", Address: "10.0.0.1"}}}
+	out := runShim(t, req, fakeRunner{rc: 0, lines: []string{
+		`{"uuid":"1","counter":1,"event":"runner_on_ok","event_data":{"host":"localhost","res":{}}}`,
+	}})
+	var terminal *pluginv1.TaskEvent
+	for _, r := range out {
+		if ev := r.GetEvent(); ev.GetTerminal() {
+			terminal = ev
+		}
+	}
+	if terminal == nil {
+		t.Fatal("no terminal emitted")
+	}
+	if terminal.GetOk() {
+		t.Fatalf("a result for a host OUTSIDE the resolved set is not actuation: %q", terminal.GetMessage())
+	}
+}
+
+// TestVacuousMessageDoesNotAssertAnUnobservedCause: without ansible's
+// no-hosts-matched signal the shim must NOT claim the pattern matched nothing — the
+// play may have matched and simply had no tasks. Two different fixes for the operator.
+func TestVacuousMessageDoesNotAssertAnUnobservedCause(t *testing.T) {
+	tgt := []Target{{Name: "web-01"}}
+	matched := vacuousRun(0, tgt, 0, "", true, 0)
+	if !strings.Contains(matched, "no hosts matched") || !strings.Contains(matched, "`hosts:` pattern") {
+		t.Fatalf("with ansible's signal, name the pattern: %q", matched)
+	}
+	unobserved := vacuousRun(0, tgt, 0, "", false, 0)
+	if strings.Contains(unobserved, "no hosts matched") {
+		t.Fatalf("without ansible's signal, must not assert the pattern matched nothing: %q", unobserved)
+	}
+	if !strings.Contains(unobserved, "no tasks") {
+		t.Fatalf("must offer the cause it actually observed: %q", unobserved)
+	}
+	// limit is named as a thing to check, never asserted as the cause — narrowing to
+	// empty is an rc=1 path (live-verified), not this one.
+	withLimit := vacuousRun(0, tgt, 0, "web-99", true, 0)
+	if !strings.Contains(withLimit, "disjoint") {
+		t.Fatalf("limit must be framed as possibly disjoint, not as narrowing-to-empty: %q", withLimit)
 	}
 }

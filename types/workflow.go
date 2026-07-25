@@ -1,6 +1,9 @@
 package types
 
-import "time"
+import (
+	"encoding/json"
+	"time"
+)
 
 // Step edge conditions: when a Step becomes eligible relative to its needs
 // (charter §2: success/failure/always edges). Empty means success.
@@ -17,6 +20,22 @@ const (
 type Workflow struct {
 	Name  string `json:"name"`
 	Steps []Step `json:"steps"`
+	// Inputs is this Workflow's launch interface: a JSON Schema OBJECT document declaring
+	// what it takes — property types, descriptions, defaults, and `required`
+	// (ADR-0118 D2). It must close itself (`additionalProperties: false`) so a typo at
+	// launch is rejected rather than silently ignored.
+	//
+	// JSON Schema rather than a Go shape, deliberately: charter §2's migration table maps
+	// "survey → input Contract with UI hints", §3 requires Contracts be JSON Schema
+	// documents "validated by a standard JSON Schema validator, never language classes",
+	// and §3.1 generates Step-input FORMS from schema so plugins extend the UI by
+	// "shipping schemas, not React code". A bespoke struct could not drive that.
+	//
+	// It is a GIT-declared Contract, NOT a plugin Contract: no hash pin, no registry row,
+	// no §1.5 drift check — it is estate desired state reviewed in Git. Nil means the
+	// Workflow takes no launch inputs, and a `{{.launch.x}}` binding is then rejected at
+	// declaration.
+	Inputs json.RawMessage `json:"inputs,omitempty"`
 	// AdoptedFrom is the lineage of a Workflow materialized by `stratt adopt` (ADR-0086/0087):
 	// the observed object it was adopted from. It stays on the Named Kind's Git lineage — never
 	// a projection facet (§1.2) — and is what the standing cutover reconciler reads to detect an

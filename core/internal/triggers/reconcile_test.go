@@ -13,6 +13,7 @@ import (
 	"go.temporal.io/sdk/client"
 
 	"github.com/dstout-devops/stratt/core/internal/graph"
+	"github.com/dstout-devops/stratt/core/internal/orchestrate"
 	"github.com/dstout-devops/stratt/types"
 )
 
@@ -185,5 +186,77 @@ func TestReconcileLifecycle(t *testing.T) {
 	}
 	if _, err := handle.Describe(ctx); err == nil {
 		t.Fatal("undeclared trigger's schedule must be deleted")
+	}
+}
+
+// ── compile(): the schedule action's payload (ADR-0118 D5) ────────────────────────────
+//
+// These exist because falsification found a hole, again. Deleting `LaunchParams: t.Inputs`
+// from compile() left the whole suite green: TestReconcileLifecycle is the only test that
+// touches this file and it t.Skip()s without a live Postgres, so `task ci` never checked what
+// the schedule action actually carries. Same shape as the compiler gap slice 1b hit — a
+// mechanism written, unit-tested nowhere, and called by nothing observable.
+//
+// compile() is pure, so it needs no substrate at all.
+
+func TestCompileCarriesLaunchInputsToRunDAG(t *testing.T) {
+	tr := types.Trigger{
+		Name: "nightly", Kind: types.TriggerSchedule, Cron: "0 2 * * *",
+		WorkflowName: "subnet-provision", Principal: "svc",
+		Inputs: map[string]any{"subnetName": "app-subnet", "cidr": "10.20.0.0/24"},
+	}
+	_, action, _, err := compile(tr, "dev")
+	if err != nil {
+		t.Fatalf("compile: %v", err)
+	}
+	if len(action.Args) != 1 {
+		t.Fatalf("expected one arg, got %d", len(action.Args))
+	}
+	in, ok := action.Args[0].(orchestrate.DAGInput)
+	if !ok {
+		t.Fatalf("a workflowName schedule must launch RunDAG with a DAGInput, got %T", action.Args[0])
+	}
+	if in.WorkflowName != "subnet-provision" || in.Trigger != "nightly" {
+		t.Fatalf("target/lineage lost: %+v", in)
+	}
+	if in.LaunchParams["subnetName"] != "app-subnet" || in.LaunchParams["cidr"] != "10.20.0.0/24" {
+		t.Fatalf("a schedule Trigger's inputs must reach the DAG, got %#v", in.LaunchParams)
+	}
+}
+
+// TestCompileWorkflowScheduleWithoutInputs: the field is optional, and a Workflow needing no
+// inputs must still be launchable by schedule exactly as before.
+func TestCompileWorkflowScheduleWithoutInputs(t *testing.T) {
+	_, action, _, err := compile(types.Trigger{
+		Name: "nightly", Kind: types.TriggerSchedule, Cron: "0 2 * * *",
+		WorkflowName: "vacuum", Principal: "svc",
+	}, "dev")
+	if err != nil {
+		t.Fatalf("compile: %v", err)
+	}
+	in := action.Args[0].(orchestrate.DAGInput)
+	if in.LaunchParams != nil {
+		t.Fatalf("no inputs declared ⇒ none carried, got %#v", in.LaunchParams)
+	}
+}
+
+// TestCompileRunScheduleStillCarriesStepParams guards the other branch: `params` are Step
+// fields for a viewName target and must be unaffected by the new field. The two are separate
+// concepts and this proves they stayed separate.
+func TestCompileRunScheduleStillCarriesStepParams(t *testing.T) {
+	_, action, _, err := compile(types.Trigger{
+		Name: "collect", Kind: types.TriggerSchedule, Cron: "0 * * * *",
+		ViewName: "hosts", Actuator: "ansible", Principal: "svc",
+		Params: map[string]any{"play": "- hosts: all"},
+	}, "dev")
+	if err != nil {
+		t.Fatalf("compile: %v", err)
+	}
+	in, ok := action.Args[0].(orchestrate.RunInput)
+	if !ok {
+		t.Fatalf("a viewName schedule must launch RunAgainstView, got %T", action.Args[0])
+	}
+	if len(in.Params) == 0 {
+		t.Fatal("a Run-target schedule's Step params must still travel")
 	}
 }

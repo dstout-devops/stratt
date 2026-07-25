@@ -17,6 +17,7 @@ import (
 	"log/slog"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	batchv1 "k8s.io/api/batch/v1"
@@ -45,6 +46,10 @@ type Config struct {
 	// the EE's non-root user reads them via group. Must match the EE image's
 	// runtime gid. <=0 defaults to 1000 (the stratt-ee `runner` user).
 	FSGroup int64
+	// PodStartGrace bounds how long an execution pod may sit blocked on a reason
+	// the cluster reports as terminal-ish (ImagePullBackOff and friends) before
+	// the Step is failed with that reason. <=0 uses podStartGraceDefault.
+	PodStartGrace time.Duration
 	// Site is the execution locus this dispatcher runs at (ADR-0032). The hub
 	// leaves it empty (⇒ "local"); a remote Site's stratt-agent sets its Site
 	// name. Every published event and per-target result is stamped with it so
@@ -138,6 +143,59 @@ type Result struct {
 	SpawnLatency time.Duration
 }
 
+// MaxStepRuntime is the ceiling on one Step's execution: the Job's own
+// ActiveDeadlineSeconds, and the SINGLE authority for how long a Step may run
+// (§1.2 — one authority per fact). The orchestration layer derives its activity
+// StartToCloseTimeout from this instead of carrying an independent number. The
+// two used to disagree — a 10m activity ceiling against this 6h Job deadline —
+// so Temporal killed and retried any Step that ran longer than ten minutes while
+// the Job it had just created was still permitted five more hours. Nothing in
+// repo caught it because every play we run finishes in seconds.
+const MaxStepRuntime = 6 * time.Hour
+
+// heartbeatInterval is how often an execution reports liveness while its tool is
+// silent. The activity's HeartbeatTimeout is the real liveness check, and the
+// heartbeat used to be driven by the tool's OUTPUT — so one task that printed
+// nothing for longer than that timeout (an `apt install`, a long `command`) was
+// declared dead while its pod was perfectly healthy. Liveness is a property of
+// the execution, not of how chatty the tool happens to be.
+const heartbeatInterval = 20 * time.Second
+
+// keepAlive reports liveness on a ticker for as long as stop has not been
+// called, and returns a beat func the follow loops can keep calling — the tool's
+// own output still heartbeats promptly, the ticker only guarantees a floor.
+// RecordHeartbeat is not documented as goroutine-safe, so serialize rather than
+// assume.
+func keepAlive(heartbeat func()) (beat func(), stop func()) {
+	return keepAliveEvery(heartbeat, heartbeatInterval)
+}
+
+func keepAliveEvery(heartbeat func(), interval time.Duration) (beat func(), stop func()) {
+	if heartbeat == nil {
+		return nil, func() {}
+	}
+	var mu sync.Mutex
+	beat = func() {
+		mu.Lock()
+		defer mu.Unlock()
+		heartbeat()
+	}
+	done := make(chan struct{})
+	go func() {
+		t := time.NewTicker(interval)
+		defer t.Stop()
+		for {
+			select {
+			case <-t.C:
+				beat()
+			case <-done:
+				return
+			}
+		}
+	}()
+	return beat, func() { close(done) }
+}
+
 // driftCapBytes bounds the accumulated drift detail per target. Findings
 // carry the capped detail; the full stream stays on the Run's events.
 const driftCapBytes = 16 * 1024
@@ -165,6 +223,10 @@ func (d *Dispatcher) Run(ctx context.Context, runID string, slice int, spec actu
 	jobName := fmt.Sprintf("stratt-run-%s-s%d", runID, slice)
 	created := time.Now()
 
+	// Liveness for the whole execution, not just its chatty parts.
+	heartbeat, stopBeat := keepAlive(heartbeat)
+	defer stopBeat()
+
 	if err := d.createContent(ctx, jobName, spec.Files); err != nil {
 		return nil, err
 	}
@@ -174,7 +236,7 @@ func (d *Dispatcher) Run(ctx context.Context, runID string, slice int, spec actu
 		return nil, err
 	}
 
-	pod, err := d.waitForPod(ctx, jobName, heartbeat)
+	pod, err := d.waitForPod(ctx, runID, slice, jobName, heartbeat)
 	if err != nil {
 		return nil, err
 	}
@@ -206,10 +268,13 @@ func (d *Dispatcher) Run(ctx context.Context, runID string, slice int, spec actu
 		d.log.Warn("publishing diagnostic output", "pod", pod, "lines", unclaimed.len(), "interpreted", interpreted)
 		for i, line := range unclaimed.lines {
 			ev := types.RunEvent{
-				RunID:   runID,
-				Slice:   slice,
-				Seq:     unclaimed.maxSeq + int64(i) + 1,
-				Kind:    "diagnostic-output",
+				RunID: runID,
+				Slice: slice,
+				Seq:   unclaimed.maxSeq + int64(i) + 1,
+				Kind:  "diagnostic-output",
+				// The floor only fires when the tool never spoke its protocol or
+				// the Job died abnormally, so these lines are never routine.
+				Level:   types.RunEventWarn,
 				Payload: map[string]any{"line": line},
 			}
 			if err := d.bus.Publish(ctx, ev); err != nil {
@@ -234,6 +299,10 @@ func (d *Dispatcher) RunStream(ctx context.Context, runID string, slice int, spe
 	jobName := fmt.Sprintf("stratt-run-%s-s%d", runID, slice)
 	created := time.Now()
 
+	// Liveness for the whole execution, not just its chatty parts.
+	heartbeat, stopBeat := keepAlive(heartbeat)
+	defer stopBeat()
+
 	if err := d.createContent(ctx, jobName, spec.Files); err != nil {
 		return false, 0, err
 	}
@@ -243,7 +312,7 @@ func (d *Dispatcher) RunStream(ctx context.Context, runID string, slice int, spe
 		return false, 0, err
 	}
 
-	pod, err := d.waitForPod(ctx, jobName, heartbeat)
+	pod, err := d.waitForPod(ctx, runID, slice, jobName, heartbeat)
 	if err != nil {
 		return false, 0, err
 	}
@@ -266,7 +335,11 @@ func (d *Dispatcher) RunStream(ctx context.Context, runID string, slice int, spe
 	if unclaimed.len() > 0 && (interpreted == 0 || !ok) {
 		d.log.Warn("publishing diagnostic output (typed transport)", "pod", pod, "lines", unclaimed.len(), "interpreted", interpreted)
 		for i, line := range unclaimed.lines {
-			ev := types.RunEvent{RunID: runID, Slice: slice, Seq: unclaimed.maxSeq + int64(i) + 1, Kind: "diagnostic-output", Payload: map[string]any{"line": line}}
+			ev := types.RunEvent{
+				RunID: runID, Slice: slice, Seq: unclaimed.maxSeq + int64(i) + 1,
+				Kind: "diagnostic-output", Level: types.RunEventWarn,
+				Payload: map[string]any{"line": line},
+			}
 			if err := d.bus.Publish(ctx, ev); err != nil {
 				return false, spawn, err
 			}
@@ -308,22 +381,84 @@ func (d *Dispatcher) followTyped(ctx context.Context, runID string, slice int, p
 		seq++
 		unclaimed.maxSeq = seq
 		if ev := resp.GetEvent(); ev != nil {
-			re := types.RunEvent{
-				RunID: runID, Slice: slice, Seq: seq, Site: d.site(),
-				Kind:    typedEventKind(ev),
-				Target:  ev.GetFields()["host"],
-				Payload: map[string]any{"message": ev.GetMessage()},
-			}
-			if ev.GetAt() != nil {
-				re.At = ev.GetAt().AsTime()
-			}
-			if err := d.bus.Publish(ctx, re); err != nil {
+			if err := d.bus.Publish(ctx, runEventFromTaskEvent(ev, runID, slice, seq, d.site())); err != nil {
 				return unclaimed, interpreted, err
 			}
 		}
 		onResp(resp)
 	}
+	// A torn stream must not read as a clean end of output (§1.8): a read error
+	// or an over-long line would otherwise end the follow silently, and the
+	// governor would fold whatever it had seen so far as the whole truth. Failing
+	// lets the activity retry re-follow from the start — event seqs are
+	// deterministic, so replayed events dedup in JetStream. followLogs has always
+	// done this; the typed transport did not, which is the asymmetry fixed here.
+	if err := sc.Err(); err != nil && ctx.Err() == nil {
+		return unclaimed, interpreted, fmt.Errorf("dispatch: read logs (typed transport): %w", err)
+	}
 	return unclaimed, interpreted, nil
+}
+
+// typedEventLevel carries the port's typed severity onto the Run's event stream.
+// It was dropped here, which meant a plugin's WARN — the vacuous-run guard's
+// "this play matched no hosts", the shim's "an event could not be decoded" — was
+// correct at the port and invisible as a warning everywhere an operator looks
+// (ADR-0117 g). LEVEL_UNSPECIFIED stays empty rather than defaulting to info: a
+// plugin that says nothing must not be reported as having said "fine".
+func typedEventLevel(l pluginv1.TaskEvent_Level) string {
+	switch l {
+	case pluginv1.TaskEvent_LEVEL_DEBUG:
+		return types.RunEventDebug
+	case pluginv1.TaskEvent_LEVEL_INFO:
+		return types.RunEventInfo
+	case pluginv1.TaskEvent_LEVEL_WARN:
+		return types.RunEventWarn
+	case pluginv1.TaskEvent_LEVEL_ERROR:
+		return types.RunEventError
+	default:
+		return ""
+	}
+}
+
+// runEventFromTaskEvent is the ONE place a port TaskEvent becomes a Run's event, and it exists
+// as a named function rather than a struct literal inside the follow loop for a reason worth
+// stating: every field below is a mapping that has been silently absent at some point.
+// TaskEvent.Level was decoded and dropped (ADR-0117 g); TaskEvent.Scope did not exist
+// (ADR-0121). Both mappers had unit tests while the CALL had none, so deleting the call changed
+// nothing observable — the inert-mechanism shape this repo keeps finding. With the conversion in
+// one function, one test covers what actually reaches the operator.
+func runEventFromTaskEvent(ev *pluginv1.TaskEvent, runID string, slice int, seq int64, site string) types.RunEvent {
+	re := types.RunEvent{
+		RunID: runID, Slice: slice, Seq: seq, Site: site,
+		Kind:    typedEventKind(ev),
+		Level:   typedEventLevel(ev.GetLevel()),
+		Scope:   typedEventScope(ev.GetScope()),
+		Target:  ev.GetFields()["host"],
+		Payload: map[string]any{"message": ev.GetMessage()},
+	}
+	if ev.GetAt() != nil {
+		re.At = ev.GetAt().AsTime()
+	}
+	return re
+}
+
+// typedEventScope carries the port's typed descriptive level onto the Run's event stream
+// (ADR-0121). It is what lets a descent surface pin "what did this Run run in" without
+// matching a tool-shaped kind — the `if ansible{}` §1.4 forbids, which is why follow-up (j)
+// of ADR-0117 was refused as originally written.
+//
+// SCOPE_UNSPECIFIED stays EMPTY rather than defaulting to task, for the reason
+// typedEventLevel records one function up: most of the stream predates the field, so
+// defaulting would assert that no plugin ever emitted run-level output.
+func typedEventScope(sc pluginv1.TaskEvent_Scope) string {
+	switch sc {
+	case pluginv1.TaskEvent_SCOPE_RUN:
+		return types.RunEventScopeRun
+	case pluginv1.TaskEvent_SCOPE_TASK:
+		return types.RunEventScopeTask
+	default:
+		return ""
+	}
 }
 
 // typedEventKind renders a port TaskEvent's kind for the §1.8 event stream: the
@@ -504,7 +639,7 @@ func (d *Dispatcher) createJob(ctx context.Context, name, runID string, spec act
 	// starts. Pin the numeric uid the EE image is built with (useradd --uid 1000)
 	// so the enforcement above is satisfiable, not self-defeating.
 	runAsUser := int64(1000)
-	deadline := int64(6 * 3600) // 6h ceiling on total Job runtime (incl. retries)
+	deadline := int64(MaxStepRuntime.Seconds())
 	seccomp := &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault}
 
 	job := &batchv1.Job{
@@ -575,8 +710,169 @@ func (d *Dispatcher) createJob(ctx context.Context, name, runID string, spec act
 	return nil
 }
 
-// waitForPod polls until the Job's pod is running or terminal.
-func (d *Dispatcher) waitForPod(ctx context.Context, jobName string, heartbeat func()) (string, error) {
+// Pod start-up diagnosis (§1.8 — hiding mechanism is the product, hiding failure
+// kills trust). A pod that will not start says exactly why: in a container's
+// `waiting` reason, or in its PodScheduled condition. The dispatcher's job is to
+// RELAY that, never to wait it out. waitForPod used to switch on nothing but
+// Pod.Status.Phase, so an EE image that did not exist left the pod Pending and
+// this loop heartbeating happily until the Step activity's StartToClose ceiling
+// (10m, 3 attempts) — a Run that hung for half an hour, whose only diagnosis was
+// a Temporal timeout, while the real reason sat in the pod the entire time.
+// Nothing here is ansible- or content-specific: it is every EE-Job Actuator.
+const (
+	// podStartGraceDefault bounds how long a pod may sit blocked for a reason we
+	// know is terminal-ish before the Step fails. kubelet's image-pull backoff
+	// runs 10s, 20s, 40s, 80s…, so two minutes leaves room for ~4 pull attempts:
+	// a registry blip still self-heals, while an image that does not exist fails
+	// in ~2m instead of ~30m. Deliberately not zero — ImagePullBackOff is a
+	// *backoff*, not a verdict.
+	podStartGraceDefault = 2 * time.Minute
+
+	// preStartSeqFloor is where pre-stream event seqs begin. A tool's stream
+	// numbers from 1, so pre-start narration must be negative: (RunID, Slice,
+	// Seq) is the JetStream dedup identity, so a collision would silently drop
+	// either the diagnosis or a real event. Counting UP from a floor keeps the
+	// narration chronological under an ascending sort, and leaves -1 free.
+	preStartSeqFloor = -100
+	// preStartNarrationCap bounds the narration — a bounded ring is the house
+	// rule for anything a pod can emit without limit. Distinct reasons are few
+	// in practice (Unschedulable → ErrImagePull → ImagePullBackOff).
+	preStartNarrationCap = 8
+	// preStartFailSeq is reserved for the give-up event, so it always lands even
+	// when narration has hit its cap, and sorts last among pre-stream events —
+	// immediately before the tool stream that never began.
+	preStartFailSeq = -1
+)
+
+// blockAction is what the dispatcher does about a reason a pod is not starting.
+// The asymmetry is deliberate: we NARRATE everything the cluster tells us, and
+// FAIL only on the reasons we positively recognize. A reason we have never seen
+// therefore reaches the operator instead of vanishing into a silent wait, but
+// cannot invent a failure.
+type blockAction int
+
+const (
+	blockNarrate blockAction = iota // say it, keep waiting
+	blockGrace                      // say it, fail if it outlives the grace
+	blockFatal                      // say it, fail now
+)
+
+// startReasonAction maps kubelet's container `waiting` reasons to that decision.
+var startReasonAction = map[string]blockAction{
+	"InvalidImageName":  blockFatal, // a malformed reference: no amount of retrying parses it
+	"ErrImageNeverPull": blockFatal, // PullPolicy: Never and the image is absent from the node
+	"ErrImagePull":      blockGrace,
+	"ImagePullBackOff":  blockGrace,
+	"ImageInspectError": blockGrace,
+	// A CredentialRef Secret that never appeared, or a key that is not in it
+	// (§2.5): brokered material is created ahead of the pod, so its absence is a
+	// real failure — but give the broker the grace window before saying so.
+	"CreateContainerConfigError": blockGrace,
+	"CreateContainerError":       blockGrace,
+	"RunContainerError":          blockGrace,
+}
+
+// benignWaitingReasons are the states a healthy pod passes through on its way to
+// Running. Everything else is at least narrated.
+var benignWaitingReasons = map[string]bool{"ContainerCreating": true, "PodInitializing": true}
+
+// podBlock is the cluster's own account of why a pod has not started. It is an
+// error so that the failure message an operator reads and the event published to
+// the Run's stream are the SAME rendering — one truth, two surfaces.
+type podBlock struct {
+	pod       string
+	container string // empty when the pod itself never got scheduled
+	reason    string
+	message   string
+	action    blockAction
+}
+
+func (b podBlock) Error() string {
+	where := b.container
+	if where == "" {
+		where = "scheduling"
+	}
+	msg := b.message
+	if msg == "" {
+		msg = "(the cluster gave no further detail)"
+	}
+	return fmt.Sprintf("pod %s: %s: %s: %s", b.pod, where, b.reason, msg)
+}
+
+// classifyPodBlock asks the pods themselves why none of them is running yet.
+func classifyPodBlock(pods []corev1.Pod) (podBlock, bool) {
+	for i := range pods {
+		p := &pods[i]
+		statuses := make([]corev1.ContainerStatus, 0, len(p.Status.InitContainerStatuses)+len(p.Status.ContainerStatuses))
+		statuses = append(statuses, p.Status.InitContainerStatuses...)
+		statuses = append(statuses, p.Status.ContainerStatuses...)
+		for _, cs := range statuses {
+			w := cs.State.Waiting
+			if w == nil || w.Reason == "" || benignWaitingReasons[w.Reason] {
+				continue
+			}
+			return podBlock{
+				pod: p.Name, container: cs.Name, reason: w.Reason, message: w.Message,
+				action: startReasonAction[w.Reason], // unknown ⇒ blockNarrate
+			}, true
+		}
+		// No container is complaining — the pod may not have been scheduled at
+		// all (Unschedulable: no capacity, taints, no matching node). Narrated,
+		// never failed: a cluster autoscaler legitimately takes minutes to add a
+		// node, and that is a healthy deployment shape we do not own.
+		for _, c := range p.Status.Conditions {
+			if c.Type == corev1.PodScheduled && c.Status == corev1.ConditionFalse && c.Reason != "" {
+				return podBlock{pod: p.Name, reason: c.Reason, message: c.Message}, true
+			}
+		}
+	}
+	return podBlock{}, false
+}
+
+func (d *Dispatcher) podStartGrace() time.Duration {
+	if d.cfg.PodStartGrace > 0 {
+		return d.cfg.PodStartGrace
+	}
+	return podStartGraceDefault
+}
+
+// preStartRunEvent builds the pod-start diagnosis event. Split out of publishPreStart because the
+// dispatcher's bus is a concrete *events.Bus and every pod-start test constructs a dispatcher
+// WITHOUT one — so an assertion about the event's contents had nowhere to live, and the Scope
+// stamping below would have been unverifiable (the same untested-call gap runEventFromTaskEvent
+// exists to close).
+func preStartRunEvent(runID string, slice int, seq int64, kind, level, site string, b podBlock) types.RunEvent {
+	return types.RunEvent{
+		RunID: runID, Slice: slice, Seq: seq, Site: site, Kind: kind, Level: level,
+		// A pod that never started is a fact about the RUN, not about any task inside it —
+		// there are no tasks (ADR-0121 D4). Stamped so the spine's own run-level events are
+		// pinnable by the same content-blind rule a plugin's are.
+		Scope:   types.RunEventScopeRun,
+		Payload: map[string]any{"message": b.Error(), "pod": b.pod, "reason": b.reason},
+	}
+}
+
+// publishPreStart puts the cluster's reason on the Run's own event stream, so the
+// §1.8 descent shows why a Run is sitting still — or died before its tool ever
+// ran — without an operator needing cluster access to find out.
+func (d *Dispatcher) publishPreStart(ctx context.Context, runID string, slice int, seq int64, kind, level string, b podBlock) {
+	if d.bus == nil { // tests construct a dispatcher without a bus
+		d.log.Warn("no event bus: pod-start diagnosis reaches logs only", "run", runID, "reason", b.reason)
+		return
+	}
+	ev := preStartRunEvent(runID, slice, seq, kind, level, d.site(), b)
+	if err := d.bus.Publish(ctx, ev); err != nil {
+		// Never let the diagnostic channel's own failure mask the diagnosis.
+		d.log.Warn("publishing pod-start diagnosis failed", "run", runID, "reason", b.reason, "err", err)
+	}
+}
+
+// waitForPod polls until the Job's pod is running or terminal — or until the
+// cluster has made clear that it never will be.
+func (d *Dispatcher) waitForPod(ctx context.Context, runID string, slice int, jobName string, heartbeat func()) (string, error) {
+	var blockedSince time.Time
+	narrated := map[string]bool{}
+	narrations := 0
 	for {
 		pods, err := d.client.CoreV1().Pods(d.cfg.Namespace).List(ctx, metav1.ListOptions{
 			LabelSelector: "job-name=" + jobName,
@@ -589,6 +885,27 @@ func (d *Dispatcher) waitForPod(ctx context.Context, jobName string, heartbeat f
 			case corev1.PodRunning, corev1.PodSucceeded, corev1.PodFailed:
 				return p.Name, nil
 			}
+		}
+		if b, blocked := classifyPodBlock(pods.Items); blocked {
+			if key := b.pod + "/" + b.container + "/" + b.reason; !narrated[key] {
+				narrated[key] = true
+				d.log.Warn("pod not starting", "job", jobName, "pod", b.pod,
+					"container", b.container, "reason", b.reason, "message", b.message)
+				if narrations < preStartNarrationCap {
+					d.publishPreStart(ctx, runID, slice, int64(preStartSeqFloor+narrations),
+						"pod-start-blocked", types.RunEventWarn, b)
+					narrations++
+				}
+			}
+			if blockedSince.IsZero() {
+				blockedSince = time.Now()
+			}
+			if b.action == blockFatal || (b.action == blockGrace && time.Since(blockedSince) >= d.podStartGrace()) {
+				d.publishPreStart(ctx, runID, slice, preStartFailSeq, "pod-start-failed", types.RunEventError, b)
+				return "", fmt.Errorf("dispatch: %w", b)
+			}
+		} else {
+			blockedSince = time.Time{} // recovered; the grace starts over
 		}
 		hb(heartbeat)
 		select {

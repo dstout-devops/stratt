@@ -32,6 +32,7 @@ package declared
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"os"
@@ -113,6 +114,12 @@ type hostEntry struct {
 	// reachability declared — a connection Run against it fails loudly (§1.8),
 	// never a silent local. This is the ONE declared facet (the AWX ansible_host).
 	Address string `yaml:"address"`
+	// Port is the OPTIONAL management port paired with Address — the second (and
+	// last) field of the closed mgmt.address schema, the AWX ansible_port. Stated,
+	// not observed, so it passes the admission gate above. Absent/0 ⇒ undeclared and
+	// the connection Actuator's own default applies; declaring it without an address
+	// is a file error (a port alone reaches nothing).
+	Port int `yaml:"port"`
 }
 
 // enumerate reads every *.yaml host-list file under dir and maps each declared
@@ -182,13 +189,39 @@ func normalize(h hostEntry) (*pluginv1.ObservedEntity, error) {
 		Labels:       labels,
 	}
 	// The ONE declared facet (ADR-0084): management reachability, projected only
-	// when the file declares it. The wire value is the closed {address} schema —
-	// the shim/core render the connection var, the file just states the address.
-	if addr := strings.TrimSpace(h.Address); addr != "" {
-		if strings.ContainsAny(addr, " \t\r\n") {
-			return nil, fmt.Errorf("address %q contains whitespace", h.Address)
+	// when the file declares it. The wire value is the closed {address, port?}
+	// schema — the shim/core render the connection vars, the file just states the
+	// coordinate. A port without an address is REJECTED rather than dropped: it
+	// reaches nothing, and silently ignoring half a declaration is the §1.8 failure
+	// the closed schema exists to prevent.
+	addr := strings.TrimSpace(h.Address)
+	if addr == "" {
+		if h.Port != 0 {
+			return nil, fmt.Errorf("host %s declares port %d with no address — a port alone reaches nothing", fqdn, h.Port)
 		}
-		ent.Facets = map[string][]byte{"mgmt.address": []byte(fmt.Sprintf(`{"address":%q}`, addr))}
+		return ent, nil
 	}
+	if strings.ContainsAny(addr, " \t\r\n") {
+		return nil, fmt.Errorf("address %q contains whitespace", h.Address)
+	}
+	if h.Port < 0 || h.Port > 65535 {
+		return nil, fmt.Errorf("host %s declares port %d outside 1-65535", fqdn, h.Port)
+	}
+	// The reserved address "local" means the target runs on the control node itself —
+	// there is no network port to connect to, and no connection Actuator renders one.
+	// Rejected rather than accepted-and-ignored: a declaration honored by nothing is
+	// the very defect this port field was added to fix (§1.8).
+	if addr == "local" && h.Port != 0 {
+		return nil, fmt.Errorf("host %s declares port %d with the reserved address \"local\" — a control-node connection has no port", fqdn, h.Port)
+	}
+	facet := struct {
+		Address string `json:"address"`
+		Port    int    `json:"port,omitempty"`
+	}{Address: addr, Port: h.Port}
+	raw, err := json.Marshal(facet)
+	if err != nil {
+		return nil, fmt.Errorf("host %s: encode mgmt.address: %w", fqdn, err)
+	}
+	ent.Facets = map[string][]byte{"mgmt.address": raw}
 	return ent, nil
 }

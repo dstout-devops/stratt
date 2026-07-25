@@ -9,6 +9,12 @@
 #
 # Build context is the repo root — the module + its deps (the lean sdk).
 FROM golang:1.26 AS build
+# Bound compile fan-out (same lever + default as the Taskfile's host gates). Without it a
+# cold cache compiles the whole dependency graph at -p=NumCPU, which on a many-core host
+# over overlayfs corrupts the build cache it is writing (`internal compiler error: export
+# data desync` in a random dependency) and can exhaust host memory outright.
+ARG GO_PARALLEL=8
+ENV GOFLAGS=-p=${GO_PARALLEL}
 WORKDIR /src
 COPY sdk/ sdk/
 COPY plugins/mesh/ plugins/mesh/

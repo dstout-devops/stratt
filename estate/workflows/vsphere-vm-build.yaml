@@ -8,6 +8,32 @@
 # the next reconcile sees it built and resolves the Finding. Facets arrive from the vcenter Syncer's
 # next OBSERVE.
 name: vsphere-vm-build
+# The per-instance launch interface (ADR-0118 D2, ADR-0120 D2). Identical to compute-build's,
+# because the reconcile sends the same core-generated set to whichever provider is bound — that
+# symmetry is the point of resolving a capability CLASS rather than a named provider (§1.5), and
+# checkProvisioningBuildInputs enforces it against EVERY advertised Compute builder rather than
+# only the one bound in this environment. It found this Workflow, which had no inputs at all.
+#
+# `params` is OPAQUE: Intent/Compute declares it additionalProperties:true and vcenter/create-vm's
+# own Action Contract types it downstream (§1.5). Enumerating cpus/memoryMB here would re-couple
+# this Workflow to one landscape (ADR-0110).
+inputs:
+  type: object
+  additionalProperties: false
+  required: [instance, projectKind, labels]
+  properties:
+    instance:
+      type: string
+      description: The desired instance's correlation name (namePrefix + ordinal), e.g. app-01.
+    projectKind:
+      type: string
+      description: The Entity kind the built VM projects as.
+    labels:
+      type: object
+      additionalProperties: { type: string }
+      description: >
+        Labels the projection carries, INCLUDING stratt.intent/instance — the correlation label
+        the next reconcile matches to decide this instance is built.
 steps:
   - name: approve
     gate:
@@ -19,19 +45,32 @@ steps:
     action: vcenter/create-vm # landscape binding — vSphere's Compute builder (swap point, §1.4/§1.5)
     credentialRefs: [vsphere-dev] # §2.5 — an Action's use-check is its only authz gate
     params:
-      name: web-01
+      name: "{{.launch.instance}}"
       # Placement: create-vm builds into the datacenter's default when the estate has ONE datacenter.
-      # When it spans MULTIPLE (e.g. after `task dev:vsphere:bootstrap` seeds regions), add
-      # `datacenter: <name>` here — govmomi's default is ambiguous otherwise, and the target must carry
-      # compute + storage capacity (the create-vm error names the datacenter if it lacks either, §1.8).
-      # A production Intent binds the target region per the resolved environment (ADR-0113 D2).
+      # When it spans MULTIPLE (e.g. after `task dev:vsphere:bootstrap` seeds regions), the Intent's
+      # own params carry `datacenter` and it arrives below — govmomi's default is ambiguous otherwise,
+      # and the target must carry compute + storage capacity (the create-vm error names the datacenter
+      # if it lacks either, §1.8). A production Intent binds the target region per the resolved
+      # environment (ADR-0113 D2).
+      #
+      # Sizing stays LITERAL here, and the reason is a real constraint rather than an oversight.
+      # Intent/Compute's `params` is opaque and PROVIDER-SHAPED by design (§1.5) — the reference
+      # estate's Compute Intents carry EC2's region/instanceType/ami, because ADR-0113 D2 makes the
+      # environment the substrate boundary and those Intents resolve to awsec2 there. Binding
+      # {{.launch.params.cpus}} would therefore fail CLOSED at launch against exactly the Intents
+      # that exist, since the substituter refuses an unknown field rather than defaulting it
+      # (ADR-0024, and no conditionals in the template language, ADR-0083 D5).
+      #
+      # These are also fleet-shape, not per-instance: every instance of a fleet gets the same size,
+      # so they are not what ADR-0120 D2 is about. A vsphere-environment Intent puts cpus/memoryMB in
+      # its own `params` and this becomes a forward — booked in ADR-0120 rather than half-done here,
+      # because the honest fix is an Intent per substrate boundary, not a template that guesses.
       cpus: 2
       memoryMB: 2048
       # The estate OVERLAY (ADR-0058 §6): the built VM projects AS this kind with these labels (Run
-      # provenance, never a reconcile write). stratt.intent/instance resolves the provisioning Finding;
-      # fleet is the selection label web-servers picks up. Per-instance parameterization (web-02…) via
-      # launch params is the follow-up — this concrete Workflow builds web-01.
-      projectKind: host
-      projectLabels:
-        fleet: web
-        stratt.intent/instance: web-01
+      # provenance, never a reconcile write, §1.2 — routing them through launch params does not change
+      # the writer). labels already carries stratt.intent/instance, which resolves the provisioning
+      # Finding, so this Workflow no longer names any single instance and builds whichever one its
+      # Finding is for.
+      projectKind: "{{.launch.projectKind}}"
+      projectLabels: "{{.launch.labels}}"

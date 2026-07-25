@@ -319,7 +319,17 @@ func TestCompileOnRemoveRevoke(t *testing.T) {
 	seedEntity(t, s, "u1", "x86_64")
 	seedView(t, s, "dev-vms")
 	must(t, s.UpsertWorkflow(ctx, types.Workflow{Name: "cert-revoke", Steps: []types.Step{{Name: "revoke", ViewName: "dev-vms", Actuator: "cert-issuer"}}}))
-	must(t, s.UpsertIntent(ctx, types.Intent{Name: "web-cert", Kind: types.IntentCertificate, OnRemove: types.OnRemoveRemove}))
+	// A VALID Certificate spec. This fixture carried no spec at all until ADR-0118 D1 started
+	// validating the resolved spec at compile — which correctly refused it, skipped the Assignment,
+	// and compiled no Baseline. The failure was invisible because this test t.Skip()s without a
+	// Postgres, so `task ci` never ran it; it surfaced only when the dev substrate was up.
+	// Intent/Certificate requires issuer + commonName + renewBefore.
+	must(t, s.UpsertIntent(ctx, types.Intent{
+		Name: "web-cert", Kind: types.IntentCertificate, OnRemove: types.OnRemoveRemove,
+		Spec: map[string]any{
+			"issuer": "cert-issuer/stratt-dev", "commonName": "web.stratt.test", "renewBefore": "360h",
+		},
+	}))
 	bp := appBlueprint("certificate", 1, types.ClaimAdditive)
 	bp.For = types.IntentCertificate
 	bp.RemoveWorkflow = "cert-revoke"
@@ -410,7 +420,13 @@ func TestCompileFileSet(t *testing.T) {
 	must(t, s.UpsertWorkflow(ctx, types.Workflow{Name: "fileset-revert", Steps: []types.Step{{Name: "revert", ViewName: "dev-vms", Actuator: "ansible"}}}))
 	must(t, s.UpsertIntent(ctx, types.Intent{
 		Name: "nginx-conf", Kind: types.IntentFileSet, OnRemove: types.OnRemoveRevert,
-		Spec: map[string]any{"key": "nginx-conf", "path": "/etc/nginx/nginx.conf", "digest": "sha256:abc"},
+		// A REAL sha256:<64hex> digest. "sha256:abc" was accepted here only because nothing validated
+		// the resolved spec at compile before ADR-0118 D1; the fileset schema has always required the
+		// full form. Same masked-by-t.Skip() story as the certificate fixture above.
+		Spec: map[string]any{
+			"key": "nginx-conf", "path": "/etc/nginx/nginx.conf",
+			"digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+		},
 	}))
 	bp := types.Blueprint{
 		Name: "fileset", Version: 1, For: types.IntentFileSet,
@@ -433,7 +449,7 @@ func TestCompileFileSet(t *testing.T) {
 	if b.Mode != types.FacetObservation || exp.Namespace != "fileset.content" || exp.Path != "nginx-conf.digest" {
 		t.Fatalf("compiled observe not substituted: %+v", exp)
 	}
-	if string(exp.Equals) != `"sha256:abc"` {
+	if string(exp.Equals) != `"sha256:0000000000000000000000000000000000000000000000000000000000000000"` {
 		t.Fatalf("digest not substituted into equals: %s", exp.Equals)
 	}
 	// The Blueprint remediates fileset.content → it owns the namespace (§2.1).

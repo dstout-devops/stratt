@@ -41,8 +41,17 @@ COPY sdk/ sdk/
 COPY core/ core/
 # BuildKit cache mounts (§7.3): persist the module + build caches across image
 # builds, so a rebuild recompiles only what changed instead of the whole dependency
-# graph cold every time — dramatically faster, and it stops exposing the rare Go
-# compiler ICE that full-cold-graph compilation at -p=NumCPU can hit.
+# graph cold every time — dramatically faster.
+#
+# GO_PARALLEL bounds compile fan-out, the same lever and default as the Taskfile's
+# host-side gates. The cache mount alone was NOT enough: whenever the cache is cold or
+# evicted, the whole client-go-sized graph still compiles at -p=NumCPU, and on a
+# many-core host over overlayfs that reliably corrupts the build cache it is writing —
+# surfacing as `internal compiler error: export data desync` / `unexpected decoding
+# error: EOF` in a random k8s.io package, which reads as a toolchain bug rather than
+# something the build did to itself. Observed live on a 32-core WSL2 host.
+ARG GO_PARALLEL=8
+ENV GOFLAGS=-p=${GO_PARALLEL}
 RUN --mount=type=cache,target=/go/pkg/mod \
     go -C core mod download
 RUN --mount=type=cache,target=/go/pkg/mod \

@@ -673,6 +673,7 @@ func (h *Host) Invoke(ctx context.Context, runID, action string, args []byte, dr
 type ApplyTarget struct {
 	Name         string
 	Address      string
+	Port         int32
 	IdentityKeys map[string]string
 	Vars         map[string]string
 }
@@ -834,7 +835,15 @@ type DerivedSchema struct {
 // self-asserted terminal ok — a plugin that returns ok=true alongside a FAILED
 // target still yields a non-OK Run (§1.8).
 type RawApplyResult struct {
-	Succeeded  bool
+	Succeeded bool
+	// Error is the plugin's OWN account of why it failed — the message on a red
+	// terminal. The governor kept the FACT of that terminal and discarded its text,
+	// so a failed Run recorded no cause at all: the descent said "failed" and the
+	// reason (an unreachable host, a syntax error, a refused clone) existed only in
+	// the pod's log, which is deleted with the Job. Same shape as the discarded-red-
+	// terminal defect one layer down (ADR-0117 D5c) — this is its message half.
+	// Empty when Succeeded, or when the plugin failed without saying anything.
+	Error      string
 	PerTarget  map[string]string // resolved target name -> status; sticky-fail folded
 	WriteBack  []ApplyEntity
 	Drift      map[string][]json.RawMessage
@@ -873,7 +882,7 @@ func (h *Host) ApplyRaw(ctx context.Context, req ApplyInvoke) (RawApplyResult, e
 	targets := make([]*pluginv1.ApplyTarget, 0, len(req.Targets))
 	for _, t := range req.Targets {
 		resolved[t.Name] = true
-		targets = append(targets, &pluginv1.ApplyTarget{Name: t.Name, Address: t.Address, IdentityKeys: t.IdentityKeys, Vars: t.Vars})
+		targets = append(targets, &pluginv1.ApplyTarget{Name: t.Name, Address: t.Address, Port: t.Port, IdentityKeys: t.IdentityKeys, Vars: t.Vars})
 	}
 	creds := make([]*pluginv1.CredentialRef, 0, len(req.CredentialRefs))
 	for _, n := range req.CredentialRefs {
@@ -962,7 +971,20 @@ func (h *Host) govern(ctx context.Context, stream applyStream, resolved, writeSc
 				out.Checkpoint = cp
 			}
 			if ev.GetTerminal() {
-				sawTerminal = true // ev.GetOk() intentionally ignored — fold below
+				sawTerminal = true
+				// ASYMMETRIC trust in the terminal's ok (§1.8). A GREEN terminal is
+				// still not believed — the fold below requires the per-target results
+				// to agree, so a plugin cannot declare success it did not achieve
+				// (guardian fix #3, intact). A RED terminal IS believed: a plugin
+				// declaring its OWN failure is the most reliable signal there is, and
+				// discarding it silently converted every plugin-declared failure with
+				// no per-target result into a SUCCEEDED Run — invalid params, an SCM
+				// refusal, a git-clone or runner-spawn failure, a playbook syntax
+				// error, and a run that actuated no host at all (ADR-0117 D5c).
+				if !ev.GetOk() {
+					failed = true
+					out.Error = ev.GetMessage() // and WHY, not just that it did
+				}
 			}
 		}
 		// Per-target status: confused-deputy gated, sticky-fail folded.
@@ -1056,8 +1078,10 @@ func (h *Host) govern(ctx context.Context, stream applyStream, resolved, writeSc
 			}
 		}
 	}
-	// Core-side fold (guardian fix #3): the plugin's terminal ok is NOT trusted.
-	// A stream that never terminated is also a failure (partial/torn stream).
+	// Core-side fold (guardian fix #3): a plugin's terminal ok is not trusted to
+	// declare SUCCESS — the per-target results must agree. A terminal that declared
+	// FAILURE is believed (see above). A stream that never terminated is also a
+	// failure (partial/torn stream).
 	out.Succeeded = sawTerminal && !failed
 	return out, nil
 }

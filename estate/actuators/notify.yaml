@@ -1,0 +1,24 @@
+# notify — the notification-delivery plugin (ADR-0027 → ADR-0052 → ADR-0125), declared as an
+# Actuator Kind (ADR-0103) so that its ACTIONS are CaC. It was the last hand-registered
+# notification seam: strattd used to dial STRATT_NOTIFY_PLUGIN_ADDR and call
+# registerPluginAction("notify/webhook") inline, which meant the set of destinations Stratt could
+# deliver to was a constant compiled into the daemon.
+#
+# That is the whole reason "add a Slack/SMTP/PagerDuty sink" looked like core work. It was not:
+# a Sink's `kind` names its delivery Action (ADR-0125 D1), the Action resolves through the
+# registry like any other, and so a new destination is a driver in the plugin plus a name in
+# `actionNames` below — reconciled onto every replica with no strattd restart, and no core change.
+#
+# Action-only: this plugin implements no per-target Plan/Apply, so nothing should name `notify`
+# as a Step's `actuator:`. It is declared as an Actuator because that is the Kind the
+# connectorregistry reconciles Actions from (registry.go — `for _, an := range a.ActionNames`),
+# exactly as helm declares helm/deploy alongside its per-target surface.
+name: notify
+address: stratt-notify:9090
+pluginIdentity: notify
+# trusted: the SecretBroker resolves the Sink's credential material SDK-side (ADR-0052 MF-A).
+# The core hands COORDINATES only — material never enters the control plane (§2.5).
+tier: trusted
+# Neither a POST nor a sent mail has a read-only plan, so no delivery is ever previewable.
+dryRunnable: false
+actionNames: [notify/webhook, notify/smtp]

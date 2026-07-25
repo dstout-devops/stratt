@@ -1,0 +1,11 @@
+# app-node — the demo's managed host, declared as data (ADR-0056). `address` is what the
+# declared Syncer projects as the mgmt.address Facet, and it is the in-cluster Service DNS
+# of demos/app-cert/node.yaml — so the EE Job can actually open a TCP connection to it.
+#
+# Labelled `demo: app-cert` (not `role: web`) so it lands in this demo's View alone and
+# never double-claims app.config with the reference estate's web fleet (§2.4 — claims are
+# exclusive-fails-compile, never resolved by precedence).
+hosts:
+  - fqdn: app-node-1.stratt.test
+    labels: { os: linux, demo: app-cert }
+    address: app-node.stratt.svc.cluster.local

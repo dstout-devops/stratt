@@ -21,7 +21,7 @@ cutover (Flow 6: "keeps existing tooling alive during cutover").
 Per §1.5 the façade is a **thin, stateless compat transport, never
 load-bearing**: the native `/api/v1` stays the sovereign contract; the façade
 presents Stratt objects as AWX objects and **stores no new truth**. Two native
-gaps blocked a *useful* façade — AWX launches carry `extra_vars` (no home on the
+gaps blocked a _useful_ façade — AWX launches carry `extra_vars` (no home on the
 ansible Contract) and AWX tooling cancels jobs (Stratt had the status but no
 cancel path) — so both land here as first-class platform capabilities.
 
@@ -45,8 +45,7 @@ cancel path) — so both land here as first-class platform capabilities.
    `strconv.Atoi`, awxkit URL interpolation); Stratt objects are names/uuids.
    `awxID(s) = md5(s)[:4] big-endian & 0x7fffffff`. Names (Workflows/Views, few)
    reverse by list-and-match; uuids (Runs, many) reverse via a **twin IMMUTABLE
-   SQL function** `graph.awx_run_id(uuid)` + a **functional index** (migration
-   00014) — `GetRunByAWXID` is an indexed query. **No mapping table, nothing
+   SQL function** `graph.awx_run_id(uuid)` + a **functional index** (migration 00014) — `GetRunByAWXID` is an indexed query. **No mapping table, nothing
    persisted** (§1.5): the id is a pure function of the uuid; the index stores no
    new datum (drop it and every id is still recomputable). Go↔SQL parity is
    verified live (`TestGetRunByAWXID`). Int31 collisions resolve to the newest
@@ -73,7 +72,7 @@ cancel path) — so both land here as first-class platform capabilities.
    object-gated. Run/View-scoped execution authz (a `run`/`view` type in the
    OpenFGA model, which today defines only `principal`/`org`/`team`/
    `credential_ref`) is the deferred Phase-2/3 extension of the ADR-0009 model.
-   Launch and cancel share one posture so the façade cannot be a *weaker* authz
+   Launch and cancel share one posture so the façade cannot be a _weaker_ authz
    path than `/api/v1` (§1.6) — the charter-guardian's symmetry requirement — and
    gating on the unmodeled `run` type would fail-closed for every caller.
 
@@ -94,9 +93,22 @@ cancel path) — so both land here as first-class platform capabilities.
   - `workflow_job_templates` / multi-Step launch — a second object family
     (`workflow_jobs`) + threading launch `extraVars` through `DAGInput`.
   - Incremental stdout beyond `?format=txt`; the `job_events` surface.
-  - Step `inputContract` binding to *enforce* imported survey Contracts against
-    launch `extraVars` (ADR-0025 runway — extraVars gives them a home now, typed
-    enforcement is separate).
+  - ~~Step `inputContract` binding to _enforce_ imported survey Contracts against
+    launch `extraVars`~~ — **closed, at the Workflow rather than the Step.** A survey
+    is a **launch** interface, so it lands as `Workflow.inputs` (ADR-0118 D2) and each
+    answer is bound into the Step's `extraVars` from `{{.launch.<var>}}`.
+    **This façade had to change, and finding out why is the useful part.** `launch`
+    resolved the Workflow and then discarded it (`_ = wf`), merging `extra_vars` straight
+    onto `params.extraVars` — fine while no Workflow declared anything, wrong the moment
+    one did. Against an imported Workflow it would have sent the play the literal string
+    `{{.launch.replicas}}` for every input the caller omitted, for Jinja to choke on.
+    Now: when the Workflow declares `inputs`, `extra_vars` ARE the survey answers and go
+    through the same `contract.ResolveLaunchInputs` the native and MCP doors use — defaults
+    applied, an answer to a question the survey does not ask **rejected** rather than
+    passed to the play (§1.6: one capability, one validation model, every surface). When
+    the Workflow declares none, `extra_vars` merge exactly as before — that is AWX's own
+    untyped `ask_variables_on_launch`, which this surface exists to emulate, and nothing
+    typed the seam so nothing here may pretend it did.
   - Prompt cancellation of a play that emits no output for >HeartbeatTimeout: the
     heartbeat fires from the wait/log loops, so a fully-silent long task is the
     edge; a concurrent heartbeat ticker is the follow-up if needed.
@@ -110,5 +122,6 @@ cancel path) — so both land here as first-class platform capabilities.
   compat-shim names, not Stratt core-model identifiers (§2).
 
 ## Runway after
+
 Notifications (outbound Finding/Gate alerts); Intent kinds GA + object-locked
 Evidence store (Phase 3); the deferred façade surfaces above.

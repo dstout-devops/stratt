@@ -1,0 +1,35 @@
+# Ansible content for the `ansible-crypto` EE variant (ADR-0117 D3, D3a).
+#
+# This is a REAL Galaxy requirements.yml — the same file `ansible-galaxy install -r` and
+# `ansible-builder` consume. Stratt invents no content format (§1.1), and
+# ansible-builder EE compatibility is a charter §3 commitment, so an
+# ansible-builder-produced EE stays a drop-in replacement for this hand-built one.
+#
+# Every entry MUST carry an exact version. `ee/content.py verify` fails the build (and
+# `task ci`) on a range, a moving ref, or the unpinned `- ns.name` shorthand: content
+# that resolves differently on different days makes the image digest a lie about what
+# content a Run actually had, which is the whole thing D3 exists to prevent.
+#
+# EDITING THIS FILE MEANS RELOCKING IT. A version bounds which version is requested; the
+# lockfile beside it — crypto.requirements.lock.json — bounds which BYTES are accepted, for
+# this file's artifacts AND for anything ansible-galaxy pulls in transitively (follow-up i).
+# `task ee:content:lock CONTENT=crypto.requirements.yml` regenerates it from a real install;
+# `task ci` fails if a declared version has no matching lock entry, and the EE build fails on
+# any content-hash mismatch. Review the lockfile diff: an unexplained hash change on an
+# unchanged version is the supply-chain event this exists to catch.
+#
+# A Step selects this content by selecting an Actuator declared with this EE image
+# (estate/actuators/ansible-crypto.yaml) — never by a run-time params field.
+
+collections:
+  # community.crypto — openssl_privatekey / openssl_csr / x509_certificate. The
+  # certificate demo's hard dependency, and the reason this variant exists.
+  - name: community.crypto
+    version: "2.22.3"
+
+# roles: — supported and installed identically (ADR-0117 D3 put roles in scope after the
+# first revision omitted them), but deliberately EMPTY: nothing shipping demands a Galaxy
+# role yet, and pinning content no Contract needs would be inventory to maintain for no
+# consumer. The install path handles both sections and is tested; add entries here as
+# `- { name: ns.role, version: "x.y.z" }` when a shipping Workflow needs one.
+roles: []

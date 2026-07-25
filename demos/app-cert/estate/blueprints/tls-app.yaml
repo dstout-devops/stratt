@@ -1,0 +1,41 @@
+# tls-app — the Blueprint that turns the Intent's outcome into an EXPECTATION about the
+# estate, and claims the Facet namespace that expectation is checked against.
+#
+# It is here for a reason worth understanding: a Run may not write an observed Facet that
+# nothing expects. Ownership of a Facet namespace is REGISTERED before any write, by a
+# Blueprint route claiming it (§2.1 — registration precedes writes, enforced in the data
+# layer, not by convention). Without this file the install Run's fact-back is refused with
+# exactly that message, which is what happened the first time this demo ran. The Actuator's
+# `facetNamespaces` grant is a write CEILING, not a claim of ownership — the two are
+# deliberately different things, and both must agree for a write to land.
+#
+# The route also names the Workflow that materializes the state, so drift is routed to a
+# remediation the platform never invents: the PLUGIN materializes, and core never learns
+# what "a TLS app" is (§1.4). It is surfaced as a ref on the Finding, never auto-launched.
+name: tls-app
+version: 1
+for: Intent/Application
+severity: warning
+dampingObservations: 1
+defaults:
+  # `channel` is a genuine default: an Intent that omits it takes stable. `port` used to sit
+  # here too, duplicating the Intent's — harmless (a default YIELDS to a declaration, so it was
+  # never a claim conflict) but a second place to change one value. It is gone; the port is the
+  # app's config and lives in the Intent alone.
+  channel: stable
+routes:
+  - observe:
+      namespace: app.config
+      path: port
+      equals: "{{.spec.port}}" # resolved from the Intent override, or this default
+    claim: exclusive
+    remediationWorkflow: app-install-with-cert
+    # The values the install needs, from the SAME resolved spec the expectation above is built
+    # from (ADR-0118 D3). This is the line whose absence made the demo hardcode: the route named
+    # the Workflow that converges the estate and passed it nothing.
+    #
+    # Validated against app-install-with-cert's declared inputs AT COMPILE, so a typo or a type
+    # mismatch fails this Assignment rather than the remediation an operator launches.
+    remediationParams:
+      commonName: "{{.spec.commonName}}"
+      tlsPort: "{{.spec.port}}"

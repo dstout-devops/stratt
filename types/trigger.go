@@ -48,6 +48,21 @@ type Trigger struct {
 	Params          map[string]any `json:"params,omitempty"`
 	Slices          int            `json:"slices,omitempty"`
 	CredentialRefs  []string       `json:"credentialRefs,omitempty"`
+	// Inputs are the LAUNCH INPUTS for a WorkflowName target — the values its declared
+	// `inputs` schema validates, bound in Step params via {{.launch.x}} (ADR-0118 D5).
+	//
+	// A SEPARATE field from Params on purpose. Params are Step fields (Actuator params), and a
+	// Workflow-target Trigger is correctly forbidden from carrying those: "the Workflow declares
+	// its own". Reusing Params for launch inputs would make one field mean two different things
+	// depending on the target — the exact overloading that made LaunchParams carry both a
+	// Workflow's parameters and the policy change context (ADR-0118 D4a), and that had to be
+	// undone to type either of them.
+	//
+	// Valid ONLY on a Workflow target; a Run target has no launch interface to fill. For an
+	// EVENT Trigger these may bind {{.event.x}} and are validated after substitution at launch;
+	// for a SCHEDULE Trigger they are literal and validated at DECLARATION, where the mistake is
+	// still cheap.
+	Inputs map[string]any `json:"inputs,omitempty"`
 	// WorkflowName launches a declared Workflow instead of a single Run
 	// (the ADR-0010 rider, valid for both kinds).
 	WorkflowName string `json:"workflowName,omitempty"`

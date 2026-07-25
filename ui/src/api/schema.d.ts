@@ -686,6 +686,33 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/findings/{id}/remediation": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        /**
+         * Preview what remediating this Finding would launch
+         * @description The Workflow this Finding's Baseline routes remediation to, the launch inputs that would be passed (resolved from the Intent layer at compile — ADR-0118 D3), and that Workflow's declared input schema. Read this BEFORE launching: §1.8 forbids a door that acts without first showing what it will do. 404 when the Baseline declares no remediation Workflow.
+         */
+        get: operations["getFindingRemediation"];
+        put?: never;
+        /**
+         * Launch this Finding's remediation Workflow
+         * @description Launches the Baseline's remediation Workflow with the compiled remediationParams as its inputs (ADR-0118 D3). Never automatic — an operator or agent invokes this deliberately, and any Gate Steps still wait for their approvers (§5 Flow 2).
+         *     `inputs` may supply values the compiled params do NOT already set. A key the compiled params already set is REJECTED rather than merged: two bindings for one input would need a precedence rule to resolve, which §2.4 forbids. `context` carries facts about the change for policy Steps, exactly as on a direct Workflow launch.
+         */
+        post: operations["remediateFinding"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/evidence/{id}/download": {
         parameters: {
             query?: never;
@@ -928,7 +955,7 @@ export interface paths {
         put?: never;
         /**
          * Start one execution of a Workflow
-         * @description The launching Principal rides every actuation Step's credential `use` check (charter §2.5), exactly as if it had started each Run directly.
+         * @description The launching Principal rides every actuation Step's credential `use` check (charter §2.5), exactly as if it had started each Run directly. The body separates the two things a launch supplies: `inputs` (this Workflow's own declared parameters) and `context` (facts about the CHANGE, which policy Steps decide on) — ADR-0118 D4.
          */
         post: operations["startWorkflowRun"];
         delete?: never;
@@ -1382,6 +1409,36 @@ export interface components {
             /** Format: date-time */
             finishedAt?: string;
         };
+        /** @description One task event — the floor of the §1.8 descent ladder (Intent → Blueprint route → Workflow → Run → task event). Streamed as the `data:` payload of each frame from `GET /runs/{id}/events`; never persisted (charter §3, ADR-0003). Declared here because the stream is a first-class part of the API contract even though its transport is `text/event-stream`: the same shape is what the UI, the CLI, and an MCP agent all read (§1.6). */
+        RunEvent: {
+            runId: string;
+            /** @description The target-set slice this event came from, 0 when the Run is unsliced. (runId, slice, seq) is the event's identity — seq is unique only within one slice's tool stream, and pre-execution diagnostics use negative seqs so they can never collide with it. */
+            slice?: number;
+            /** Format: int64 */
+            seq: number;
+            /** Format: date-time */
+            at: string;
+            /** @description The event type. Tool-shaped and deliberately open — the spine does not enumerate what a plugin may emit (§1.4). Well-known spine kinds are `stream-end`, `diagnostic-output`, `governance-rejected`, `pod-start-blocked` and `pod-start-failed`. */
+            kind: string;
+            /**
+             * @description The event's severity, carried from the plugin port's typed TaskEvent.Level. Content-blind and the one property every tool means identically, so a consumer can show "this Run warned" without parsing tool-shaped kinds. ABSENT means the producer did not state a level — which must not be read as `info` (§1.8: an absent signal is not a benign one).
+             * @enum {string}
+             */
+            level?: "debug" | "info" | "warn" | "error";
+            /**
+             * @description Which DESCRIPTIVE LEVEL this event is about, carried from the plugin port's typed TaskEvent.Scope (ADR-0121). `run` describes the Run as a whole — the image it executed in, the content that image carried, a pod that never started; `task` describes one unit of work inside it. Like `level` it is spine-owned and content-blind, which is the point: a descent surface can pin "what did this Run run in" without matching an open, tool-shaped `kind` (§1.4). ABSENT means the producer did not state a scope, and must not be read as `task` (§1.8). There is deliberately no per-target member — `target` already names the Entity, and a second field able to disagree with it would be an implicit precedence (§2.4).
+             * @enum {string}
+             */
+            scope?: "run" | "task";
+            /** @description The Entity this event applies to, when per-target. The only field that says which Entity; a per-target event is `scope: task` with this set. */
+            target?: string;
+            /** @description The execution locus this event came from (ADR-0032) — "local" for the central cluster, a Site name for a remote leaf. Descriptive only: never part of the event's identity. */
+            site?: string;
+            /** @description The event body — tool-shaped, opaque to the spine. */
+            payload?: {
+                [key: string]: unknown;
+            };
+        };
         /** @description A remote execution locus — a satellite dispatcher reachable over a NATS leaf (charter §2.3, ADR-0032). CaC-declared; live up/down status is ephemeral (NATS KV), surfaced via the `live` field on reads. */
         Site: {
             name: string;
@@ -1421,6 +1478,11 @@ export interface components {
         };
         /** @description A declarative document of *what* (charter §2.4), bound to a View by an Assignment. CaC-only. v1: Intent/Application. */
         Intent: {
+            /**
+             * Format: int64
+             * @description Configuration version of this Intent document (ADR-0119 D1); absent means 1. With the name it is the storage identity, so test/stage/prod can run three configurations of one Intent simultaneously, each pinned by its own environment-scoped Assignment. Identity-forming like Blueprint.version — NOT View.version's monotonic revision counter, and NOT the schema-shape version Contract carries. Refused on provisioning kinds, which have no Assignment to pin them (D3).
+             */
+            version?: number;
             name: string;
             kind: string;
             spec?: Record<string, never>;
@@ -1431,11 +1493,20 @@ export interface components {
         Assignment: {
             name: string;
             intent: string;
+            /**
+             * Format: int64
+             * @description The Intent version this Assignment pins (ADR-0119 D2), declared as `intent: tls-app@3`. Required, like blueprintVersion — an implicit pin would leave an environment's configuration identity unstated in its own Assignment.
+             */
+            intentVersion?: number;
             view: string;
             blueprint: string;
             /** Format: int64 */
             blueprintVersion: number;
             environments?: string[];
+            /** @description This Assignment's parameter DECLARATIONS, merged with the Intent's spec and the Blueprint's defaults into the effective spec routes substitute {{.spec.X}} from (ADR-0118 D1). Co-equal with the Intent's spec: a path set by BOTH fails the compile naming both layers (§2.4 — only the Blueprint's defaults yield), so deciding a value per environment means the Intent omits it. Environment-KEYED maps are forbidden; declare one Assignment per environment. */
+            values?: {
+                [key: string]: unknown;
+            };
             /** @description Per-Assignment max-delta gate fraction override (§4.3). */
             maxDelta?: number;
             /**
@@ -1486,8 +1557,19 @@ export interface components {
             joins?: string[];
             leaves?: string[];
             unrouted?: string[];
+            /** @description The compiled expectations whose VALUE changed since the last compile (ADR-0119 D5) — the axis the membership delta above cannot see. A pinned version bump rewrites expected values while joins and leaves stay empty, so promotion is invisible without this. A change beyond the Assignment's maxDelta pauses the compile until ackDelta is bumped. */
+            expectationChanges?: components["schemas"]["ExpectationChange"][];
             paused?: boolean;
             note?: string;
+        };
+        /** @description One compiled expectation whose value differs from the previous compile (ADR-0119 D5). from/to are the RENDERED value, not structured: an expectation is one of Equals/Contains/NotBefore, and the surface owes a readable diff rather than a second expectation encoding. */
+        ExpectationChange: {
+            baseline: string;
+            /** @description The Facet namespace the expectation reads. */
+            namespace: string;
+            path?: string;
+            from?: string;
+            to?: string;
         };
         /** @description One (Principal, tool) aggregate of platform-MCP-server calls (charter §1.6 accounting per identity, ADR-0021). */
         UsageEntry: {
@@ -1587,11 +1669,20 @@ export interface components {
             compiledFrom?: {
                 assignment?: string;
                 intent?: string;
+                /**
+                 * Format: int64
+                 * @description The Intent version this Baseline was compiled from (ADR-0119 D4) — which version is EXPECTED now, not which produced a still-open Finding.
+                 */
+                intentVersion?: number;
                 blueprint?: string;
                 /** Format: int64 */
                 blueprintVersion?: number;
                 /** Format: int64 */
                 route?: number;
+                /** @description Each dotted path in the effective spec mapped to the ordered layers that produced it ("blueprint:x/defaults", "intent:y", "assignment:z"), last entry effective — so "which declaration decided this value" is answerable from the compiled artifact (§1.8 descent, ADR-0118 D1). NOT the Named Kind Provenance, which is the graph-plane write stamp on an Entity attribute. */
+                specLayers?: {
+                    [key: string]: string[];
+                };
             };
             viewName: string;
             /** @description Names the Actuator as an OPAQUE routing key (ADR-0046). A baseline is read-only by platform invariant, so the named Actuator must be read-only-capable (a DryRunnable plugin) — an Actuator that cannot run read-only is rejected terminally at launch, not by a closed enum here. */
@@ -1660,6 +1751,17 @@ export interface components {
             consecutiveDrifted: number;
             /** @description Latest observed-vs-expected detail (redacted, size-capped visibly). */
             diff?: unknown;
+            /** @description This Finding's OWN launch Workflow (ADR-0120 D1), present when no Baseline can hold its spec: an ORPHAN (its Baseline is pruned in the same pass) or a PROVISION Finding (it never had one). Absent on a drift Finding, whose spec lives on its live Baseline, and absent on an orphan whose Intent declared onRemove:retain — there is nothing to launch. */
+            launchWorkflow?: string;
+            /** @description The launch inputs for launchWorkflow. For an orphan these were compiled under an Assignment that has since been withdrawn, so this is their only surviving record. For a provision Finding they are DERIVED from Git and refreshed every reconcile, so they always describe current desired state. */
+            launchParams?: {
+                [key: string]: unknown;
+            };
+            /**
+             * @description What launchWorkflow DOES — the single discriminator for the act (ADR-0120 D1). remediate converges live state to its expectation; remove retires state the estate no longer declares; build creates declared state that does not exist yet (gated, never auto-run). Absent together with launchWorkflow.
+             * @enum {string}
+             */
+            launchKind?: "remediate" | "remove" | "build";
             /** @description The check Run behind the latest observation — the Evidence ref (§1.8). */
             runId?: string;
             /** Format: date-time */
@@ -1793,6 +1895,10 @@ export interface components {
             cooldownSeconds?: number;
             /** @description Launch a declared Workflow instead of a single Run. */
             workflowName?: string;
+            /** @description Launch inputs for a `workflowName` target — the values its declared `inputs` schema validates, bound in Step params via {{.launch.x}} (ADR-0118 D5). Distinct from `params`, which are Step fields and are refused on a Workflow target. For an EVENT Trigger these may bind {{.event.x}} and are validated after substitution; for a SCHEDULE Trigger they are literal and validated at declaration. Invalid on a `viewName` target, which has no launch interface. */
+            inputs?: {
+                [key: string]: unknown;
+            };
             viewName?: string;
             /** @description Binds a parametrized View's {{.param.x}} placeholders; values may reference the firing event ({{.event.x}}) — ADR-0024. */
             viewParams?: Record<string, never>;
@@ -1853,7 +1959,12 @@ export interface components {
             dryRunnable?: boolean;
             actionNames?: string[];
             jobCommand?: string[];
+            /** @description EE image override for this Actuator's Jobs. Also how per-Step ansible content is selected (ADR-0117 D3a): two declarations differing only in their image, so the spine never reads a tool's params to choose one. Empty ⇒ the dispatcher default. */
             image?: string;
+            /** @description Facet namespaces this Actuator's write-back may touch — the MF3 bounded grant, declared as CaC (ADR-0103). Empty ⇒ may write no facet (a pure executor). */
+            facetNamespaces?: string[];
+            /** @description Identity schemes this Actuator may correlate write-back by (ansible uses host.name). Required whenever facetNamespaces is set — a facet grant with no scheme to resolve by would be honored by nothing. */
+            identitySchemes?: string[];
             mcp?: boolean;
             /** @description Capability classes this Actuator fulfils (ADR-0104). Governed CaC provision. */
             provides?: string[];
@@ -1887,10 +1998,45 @@ export interface components {
             /** @description The Intent kind this entry routes, WITHOUT the "Intent/" prefix (e.g. Compute, Subnet, Vlan, Dmz). */
             intentKind: string;
         };
+        /** @description What remediating a Finding would launch, rendered before it is launched (ADR-0118 D3, §1.8). Read-only. */
+        FindingRemediation: {
+            /** @description The Baseline this Finding was raised against. For `remove` this names a Baseline that has already been pruned (the Assignment is gone, so the row is too); for `build` it is the synthetic `provision/<intent>` grouping name, which never had a row at all. In both cases it is still the right identifier for the state in question. */
+            baseline: string;
+            /** @description The Workflow that would be launched. */
+            workflow: string;
+            /**
+             * @description Which ACT this would perform (ADR-0120 D5). remediate converges live state to its expectation; remove retires state the estate no longer declares; build creates declared state that does not exist yet. Three acts need a name rather than a boolean, and they are not interchangeable — an operator about to approve a gate is entitled to know which one they are approving (§1.8).
+             * @enum {string}
+             */
+            kind?: "remediate" | "remove" | "build";
+            /** @description The launch inputs that would be passed. For remediate they were resolved from the Intent layer at compile and read from the Baseline; for remove and build they come off the Finding, which is the only place they can live. Absent when there are none. */
+            params?: {
+                [key: string]: unknown;
+            };
+            /** @description The Workflow's declared input schema, so a caller can see which inputs it may still supply itself (those the compiled params do not set). */
+            inputs?: {
+                [key: string]: unknown;
+            };
+        };
+        /** @description What a launch supplies, with the two concepts on their own fields (ADR-0118 D4). They were one untyped bag until this split, which meant closing the world over a Workflow's own parameters was impossible — every policy-gated Workflow would have had to declare `environment` as one of its inputs, which it is not. */
+        WorkflowLaunch: {
+            /** @description This Workflow's declared launch inputs, validated against the schema published on GET /workflows/{name}. CLOSED: an unknown or wrongly-typed key is a 400, and declared defaults are applied. Bound in Step params via {{.launch.x}}. */
+            inputs?: {
+                [key: string]: unknown;
+            };
+            /** @description Facts about the change, which policy Steps evaluate (ADR-0063): `environment`, `changeClass` (standard|normal|emergency, driving break-glass), `committers` (the SoD source), plus arbitrary string labels. NOT part of the Workflow's interface and never bound by {{.launch.x}} — a Workflow does not declare these, the launcher asserts them about the change. */
+            context?: {
+                [key: string]: unknown;
+            };
+        };
         /** @description A Temporal-backed DAG of Steps with Gates (charter §2, ADR-0011). CaC-only in v1. */
         Workflow: {
             name: string;
             steps: components["schemas"]["Step"][];
+            /** @description This Workflow's launch interface as a JSON Schema OBJECT document — property types, descriptions, defaults and `required` (ADR-0118 D2). Closed (`additionalProperties: false`), so an unknown key at launch is rejected rather than ignored. Published here so the UI form, the CLI and an MCP tool signature are all generated from ONE document (§1.6; charter §3.1 "schemas, not React code"). A GIT-declared Contract, NOT a plugin Contract: no hash pin and no registry row, so it is not §1.5 drift-checked. Absent ⇒ takes no launch inputs. */
+            inputs?: {
+                [key: string]: unknown;
+            };
         };
         /** @description One DAG node — a Gate, a targetless Action (Action + params, ADR-0031), or an actuation (Actuator + params against a View, charter §2.3); exactly one shape is set. */
         Step: {
@@ -2402,13 +2548,13 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Server-sent event stream; each `data:` line is a RunEvent. */
+            /** @description Server-sent event stream. The schema below is the shape of ONE frame's `data:` payload, not of the whole body — SSE framing has no OpenAPI expression: `id:` carries the event's seq and the `event:` name carries its kind. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "text/event-stream": string;
+                    "text/event-stream": components["schemas"]["RunEvent"];
                 };
             };
             404: components["responses"]["NotFound"];
@@ -2938,6 +3084,57 @@ export interface operations {
             404: components["responses"]["NotFound"];
         };
     };
+    getFindingRemediation: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description What a remediation launch would do. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FindingRemediation"];
+                };
+            };
+            404: components["responses"]["NotFound"];
+        };
+    };
+    remediateFinding: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["WorkflowLaunch"];
+            };
+        };
+        responses: {
+            /** @description The created WorkflowRun. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkflowRun"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            404: components["responses"]["NotFound"];
+        };
+    };
     downloadEvidence: {
         parameters: {
             query?: never;
@@ -3192,7 +3389,11 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["WorkflowLaunch"];
+            };
+        };
         responses: {
             /** @description The created WorkflowRun. */
             201: {

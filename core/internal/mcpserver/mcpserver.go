@@ -293,6 +293,21 @@ type startRunIn struct {
 }
 type startWorkflowRunIn struct {
 	WorkflowName string `json:"workflowName" jsonschema:"declared Workflow to launch"`
+	// Inputs are the Workflow's declared launch inputs (ADR-0118 D2/D4). Without this an
+	// agent could READ a Workflow's published input schema via GET /workflows/{name} and
+	// then be unable to SUPPLY any of it — a capability open to UI/CLI/API and closed to
+	// agents, which is the §1.6 asymmetry the agent-native door exists to prevent. Validated
+	// by the same chokepoint every other transport hits; unknown or missing-required keys
+	// are rejected, never silently dropped.
+	Inputs map[string]any `json:"inputs,omitempty" jsonschema:"launch inputs, validated against the Workflow's declared input schema (see GET /workflows/{name}); omit for a Workflow that declares none"`
+	// Context is what you assert about the CHANGE, which policy Steps evaluate — separate
+	// from the Workflow's own inputs (ADR-0118 D4).
+	Context map[string]any `json:"context,omitempty" jsonschema:"facts about the change for policy Steps: environment, changeClass (standard|normal|emergency), committers, plus labels. NOT the Workflow's parameters"`
+}
+type remediateFindingIn struct {
+	ID      string         `json:"id" jsonschema:"Finding id to remediate"`
+	Inputs  map[string]any `json:"inputs,omitempty" jsonschema:"launch inputs the route leaves unset; a key the compiled remediationParams already set is rejected, not merged"`
+	Context map[string]any `json:"context,omitempty" jsonschema:"facts about the change for policy Steps: environment, changeClass, committers"`
 }
 type adoptIn struct {
 	Kind          string `json:"kind" jsonschema:"projection kind to adopt, e.g. ansible.template"`
@@ -351,6 +366,31 @@ func registerTools(s *mcp.Server, cfg Config) {
 	mcp.AddTool(s, &mcp.Tool{Name: "get_finding", Description: "Get one Finding: status, severity, observed-vs-expected diff, and its Evidence Run ref."},
 		func(ctx context.Context, req *mcp.CallToolRequest, in idIn) (*mcp.CallToolResult, any, error) {
 			return invoke(ctx, cfg, req, "get_finding", http.MethodGet, "/findings/"+url.PathEscape(in.ID), nil)
+		})
+	// The remediation door, agent-side (ADR-0118 D3, §1.6). Two tools rather than one on
+	// purpose: an agent should be able to see what a fix would do before doing it, which is the
+	// same §1.8 rule the HTTP preview exists for — and it is the difference between an agent
+	// that can explain a proposed change and one that can only perform it.
+	mcp.AddTool(s, &mcp.Tool{Name: "get_finding_remediation", Description: "Preview what remediating a Finding would launch: the Workflow, the launch inputs resolved from the Intent layer at compile, and that Workflow's declared input schema. Read this before calling remediate_finding."},
+		func(ctx context.Context, req *mcp.CallToolRequest, in idIn) (*mcp.CallToolResult, any, error) {
+			return invoke(ctx, cfg, req, "get_finding_remediation", http.MethodGet,
+				"/findings/"+url.PathEscape(in.ID)+"/remediation", nil)
+		})
+	mcp.AddTool(s, &mcp.Tool{Name: "remediate_finding", Description: "Launch a Finding's remediation Workflow with the params its Baseline compiled. Gate Steps still wait for their approvers — this does not bypass them. `inputs` may fill inputs the route leaves unset; a key the compiled params already set is REJECTED rather than merged."},
+		func(ctx context.Context, req *mcp.CallToolRequest, in remediateFindingIn) (*mcp.CallToolResult, any, error) {
+			var body any
+			if len(in.Inputs) > 0 || len(in.Context) > 0 {
+				b := map[string]any{}
+				if len(in.Inputs) > 0 {
+					b["inputs"] = in.Inputs
+				}
+				if len(in.Context) > 0 {
+					b["context"] = in.Context
+				}
+				body = b
+			}
+			return invoke(ctx, cfg, req, "remediate_finding", http.MethodPost,
+				"/findings/"+url.PathEscape(in.ID)+"/remediation", body)
 		})
 	mcp.AddTool(s, &mcp.Tool{Name: "get_finding_evidence", Description: "Get a Finding's Evidence manifest: the object key, sha256 integrity anchor, size, and retain-until of its sealed, object-locked audit bundle (§2.4)."},
 		func(ctx context.Context, req *mcp.CallToolRequest, in idIn) (*mcp.CallToolResult, any, error) {
@@ -487,9 +527,23 @@ func registerTools(s *mcp.Server, cfg Config) {
 		func(ctx context.Context, req *mcp.CallToolRequest, in startRunIn) (*mcp.CallToolResult, any, error) {
 			return invoke(ctx, cfg, req, "start_run", http.MethodPost, "/runs", in)
 		})
-	mcp.AddTool(s, &mcp.Tool{Name: "start_workflow_run", Description: "Launch a declared Workflow (e.g. a Finding's remediation Workflow). Gate Steps wait for their declared approvers — launching does not bypass them."},
+	mcp.AddTool(s, &mcp.Tool{Name: "start_workflow_run", Description: "Launch a declared Workflow (e.g. a Finding's remediation Workflow). Pass `inputs` for a Workflow that declares a launch schema — read it from GET /workflows/{name}; unknown or missing-required inputs are rejected. Gate Steps wait for their declared approvers — launching does not bypass them."},
 		func(ctx context.Context, req *mcp.CallToolRequest, in startWorkflowRunIn) (*mcp.CallToolResult, any, error) {
-			return invoke(ctx, cfg, req, "start_workflow_run", http.MethodPost, "/workflows/"+url.PathEscape(in.WorkflowName)+"/runs", nil)
+			// nil body only when the caller supplied nothing: the handler treats an absent
+			// body as "no inputs", and sending an empty object instead would be
+			// indistinguishable from explicitly passing none.
+			var body any
+			if len(in.Inputs) > 0 || len(in.Context) > 0 {
+				b := map[string]any{}
+				if len(in.Inputs) > 0 {
+					b["inputs"] = in.Inputs
+				}
+				if len(in.Context) > 0 {
+					b["context"] = in.Context
+				}
+				body = b
+			}
+			return invoke(ctx, cfg, req, "start_workflow_run", http.MethodPost, "/workflows/"+url.PathEscape(in.WorkflowName)+"/runs", body)
 		})
 	mcp.AddTool(s, &mcp.Tool{Name: "decide_gate", Description: "Decide a pending Gate. Authorized only for the Gate's pinned approvers (principals or team members) — the policy decides, not the transport."},
 		func(ctx context.Context, req *mcp.CallToolRequest, in decideGateIn) (*mcp.CallToolResult, any, error) {

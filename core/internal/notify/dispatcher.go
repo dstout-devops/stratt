@@ -14,7 +14,6 @@ import (
 	"go.temporal.io/sdk/client"
 
 	"github.com/dstout-devops/stratt/core/internal/authz"
-	"github.com/dstout-devops/stratt/core/internal/contract"
 	"github.com/dstout-devops/stratt/core/internal/events"
 	"github.com/dstout-devops/stratt/core/internal/graph"
 	"github.com/dstout-devops/stratt/core/internal/orchestrate"
@@ -141,9 +140,9 @@ func (d *Dispatcher) suppressed(sub types.Subscription) bool {
 	return false
 }
 
-// deliver renders the Notice and launches the webhook Connector Action as a
-// first-class, DESCENDABLE Run via RunAction (§1.8, ADR-0040) — no longer a
-// bespoke direct-dispatch. The §2.5 credential-`use` check is now the standard
+// deliver renders the Notice and launches the Sink's delivery Connector Action —
+// whichever one its kind names (deliveryFor, ADR-0125 D1) — as a first-class,
+// DESCENDABLE Run via RunAction (§1.8, ADR-0040). The §2.5 credential-`use` check is the standard
 // Action chokepoint (RunAction.ResolveCredentials), literally shared with every
 // Run (§1.6). Returns a non-nil error ONLY for transient infra failures (retry
 // the whole Notice); terminal per-delivery problems are recorded and swallowed.
@@ -151,9 +150,6 @@ func (d *Dispatcher) deliver(ctx context.Context, log *slog.Logger, sub types.Su
 	sink, err := d.Store.GetNotifySink(ctx, sub.Sink)
 	if err != nil {
 		return d.poison(ctx, log, sub, n, "sink "+sub.Sink+" not found")
-	}
-	if sink.Kind != types.SinkWebhook {
-		return d.poison(ctx, log, sub, n, fmt.Sprintf("sink %s: unsupported kind %q", sink.Name, sink.Kind))
 	}
 	// Pre-flight credential-use authz: fail fast before spawning a delivery Run
 	// for an ungranted Sink (RunAction re-checks at pod spawn — defense in depth).
@@ -164,16 +160,9 @@ func (d *Dispatcher) deliver(ctx context.Context, log *slog.Logger, sub types.Su
 	if err != nil {
 		return d.poison(ctx, log, sub, n, err.Error())
 	}
-	// credentialMount = the Sink's CredentialRef name: RunAction mounts the
-	// secret at /runner/credentials/<name>/ and the driver reads it there.
-	params, err := json.Marshal(map[string]any{
-		"body": body, "method": sink.Config.Method, "credentialMount": sink.CredentialRef,
-	})
+	action, params, err := deliveryFor(sink, body)
 	if err != nil {
 		return d.poison(ctx, log, sub, n, err.Error())
-	}
-	if err := contract.ValidateActionInput("notify/webhook", params); err != nil {
-		return d.poison(ctx, log, sub, n, "contract: "+err.Error())
 	}
 
 	// A deterministic workflow id dedups a redelivered Notice: a duplicate is
@@ -183,7 +172,7 @@ func (d *Dispatcher) deliver(ctx context.Context, log *slog.Logger, sub types.Su
 		ID: wfID, TaskQueue: orchestrate.TaskQueue,
 		WorkflowIDReusePolicy: enumspb.WORKFLOW_ID_REUSE_POLICY_REJECT_DUPLICATE,
 	}, orchestrate.RunAction, orchestrate.RunInput{
-		Action: "notify/webhook", Params: params,
+		Action: action, Params: params,
 		CredentialRefs: []string{sink.CredentialRef}, Principal: sink.Principal,
 	})
 	if err != nil {

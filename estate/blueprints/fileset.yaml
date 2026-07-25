@@ -12,6 +12,13 @@ for: Intent/FileSet
 severity: warning
 dampingObservations: 1
 removeWorkflow: fileset-revert
+# The withdrawal half of the same wire (ADR-0118 D3): the path to remove, resolved from the
+# effective spec at compile and stamped on every compiled Baseline. It must be stored rather
+# than recomputed because withdrawal deletes the Assignment whose values fed the merge — and
+# removing the WRONG path is not a recoverable mistake, so the value has to be the one the file
+# was actually distributed under.
+removeParams:
+  path: "{{.spec.path}}"
 routes:
   - observe:
       namespace: fileset.content
@@ -19,3 +26,12 @@ routes:
       equals: "{{.spec.digest}}"
     claim: additive
     remediationWorkflow: fileset-apply
+    # The Intent's own values, passed to the Workflow that converges them (ADR-0118 D3).
+    # Without this the play's `fileset_path`/`fileset_src` were unsupplied and the remediation
+    # failed at run time on an undefined variable.
+    remediationParams:
+      path: "{{.spec.path}}"
+      src: "{{.spec.source}}"
+      mode: "{{.spec.mode}}"
+      owner: "{{.spec.owner}}"
+      group: "{{.spec.group}}"

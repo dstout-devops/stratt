@@ -21,6 +21,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/dstout-devops/stratt/core/internal/contract"
 	"github.com/dstout-devops/stratt/core/internal/graph"
 	"github.com/dstout-devops/stratt/core/internal/overlay"
 	"github.com/dstout-devops/stratt/core/internal/template"
@@ -62,10 +63,30 @@ type AssignmentDelta struct {
 	Joins       []string `json:"joins,omitempty"`
 	Leaves      []string `json:"leaves,omitempty"`
 	Unrouted    []string `json:"unrouted,omitempty"`
+	// ExpectationChanges are the compiled expectations whose VALUE changed since the last
+	// compile — the §4.3 surface for a change the membership delta above cannot see
+	// (ADR-0119 D5). A pinned-version bump rewrites expected values while joins and leaves
+	// stay empty, so before this existed a promotion was invisible to every runtime gate.
+	ExpectationChanges []ExpectationChange `json:"expectationChanges,omitempty"`
 	// Paused is set when the max-delta gate held this Assignment's recompile.
 	Paused bool `json:"paused,omitempty"`
 	// Note explains a pause or skip (§1.8: the wait is visible).
 	Note string `json:"note,omitempty"`
+}
+
+// ExpectationChange is one compiled expectation whose value differs from the previous
+// compile (ADR-0119 D5). Rendered so "what does promoting this actually change" is
+// answerable before the change lands, rather than inferred from a Git diff of the Intent.
+//
+// From/To are the rendered JSON of the expectation's value, not structured — the point is a
+// human-readable diff, and an expectation is one of Equals/Contains/NotBefore, so a single
+// string column keeps the surface honest about what it is.
+type ExpectationChange struct {
+	Baseline  string `json:"baseline"`
+	Namespace string `json:"namespace"`
+	Path      string `json:"path,omitempty"`
+	From      string `json:"from,omitempty"`
+	To        string `json:"to,omitempty"`
 }
 
 // Orphan is a Finding owed for compiled state left behind by a withdrawn
@@ -75,13 +96,19 @@ type Orphan struct {
 	Target   string
 	Severity string
 	Detail   []byte
+	// LaunchWorkflow + LaunchParams are the withdrawal launch spec carried ONTO the orphan
+	// Finding, because the Baseline they came from is pruned in the same Apply (ADR-0118 D3,
+	// ADR-0120 D1). Without them the Finding names abandoned state and offers no way to
+	// retire it.
+	LaunchWorkflow string
+	LaunchParams   map[string]any
 }
 
 // Store is the compiler's read surface (satisfied by *graph.Store).
 type Store interface {
 	ListIntents(ctx context.Context) ([]types.Intent, error)
 	ListAssignments(ctx context.Context) ([]types.Assignment, error)
-	GetIntent(ctx context.Context, name string) (types.Intent, error)
+	GetIntent(ctx context.Context, name string, version int) (types.Intent, error)
 	GetView(ctx context.Context, name string) (types.View, error)
 	ResolveSelector(ctx context.Context, sel types.ViewSelector, params map[string]any, limit int) ([]types.Entity, error)
 	GetBlueprint(ctx context.Context, name string, version int) (types.Blueprint, error)
@@ -120,6 +147,18 @@ func Compile(ctx context.Context, s Store, maxDelta float64) (Plan, error) {
 	declared := map[string]bool{}
 	for _, a := range assignments {
 		declared[a.Name] = true
+	}
+
+	// Read the previously-compiled Baselines ONCE, before the loop: the prune below needs them,
+	// and so does the per-Assignment expectation diff (ADR-0119 D5), which has to compare what
+	// this pass would write against what is already live.
+	existing, err := s.ListBaselines(ctx)
+	if err != nil {
+		return Plan{}, err
+	}
+	priorByName := make(map[string]types.Baseline, len(existing))
+	for _, eb := range existing {
+		priorByName[eb.Name] = eb
 	}
 
 	var plan Plan
@@ -169,20 +208,51 @@ func Compile(ctx context.Context, s Store, maxDelta float64) (Plan, error) {
 			}
 		}
 
-		// G6 (ADR-0083 §5): the EFFECTIVE Intent spec = the Blueprint's sane Defaults
-		// (base) layered UNDER the Intent's own values (override) — explicit overlay
-		// layering, no precedence field (§2.4/§4.1 anti-GPO). Routes substitute
-		// {{.spec.X}} from THIS resolved spec, so a field the Intent omits takes the
-		// Blueprint default; a field it sets overrides. A cross-type default/override
-		// clash fails this Assignment loudly (§1.8), never coerces.
-		resolvedSpec, _, merr := overlay.Merge([]overlay.Layer{
-			{Name: "blueprint:" + bp.Name + "/defaults", Values: bp.Defaults},
+		// G6 (ADR-0083 §5): the EFFECTIVE Intent spec = the Blueprint's YIELDING defaults
+		// filling whatever the Intent's DECLARING spec leaves unset — explicit overlay
+		// layering with no precedence field and no rung order among declarations
+		// (§2.4/§4.1 anti-GPO, ADR-0118 D1). Routes substitute {{.spec.X}} from THIS
+		// resolved spec, so a field the Intent omits takes the Blueprint default. A
+		// cross-type clash, or two DECLARING layers asserting one path, fails this
+		// Assignment loudly (§1.8) — never coerced, never silently resolved.
+		resolvedSpec, specLayers, merr := overlay.Merge([]overlay.Layer{
+			{Name: "blueprint:" + bp.Name + "/defaults", Values: bp.Defaults, Yielding: true},
 			{Name: "intent:" + intent.Name, Values: intent.Spec},
+			{Name: "assignment:" + a.Name, Values: a.Values},
 		})
 		if merr != nil {
 			skipped[a.Name] = true
 			plan.Errors = append(plan.Errors, fmt.Sprintf("assignment %s: defaults/spec merge: %v", a.Name, merr))
 			delta.Note = merr.Error()
+		}
+		// The MERGED spec is where completeness is judged (ADR-0118 D1). Each layer is
+		// validated as PARTIAL at declaration, because a layer legitimately holds a
+		// fragment — an Intent that leaves a field to its Assignment must not fail its own
+		// declaration. So the kind's schema is enforced HERE, once, against the whole
+		// resolved document; without this the omit-to-override rule would have quietly
+		// dropped required-field enforcement altogether. Same precedent as ADR-0024 D4:
+		// validate resolved data, not placeholders.
+		if !skipped[a.Name] {
+			if verr := validateResolvedSpec(intent.Kind, resolvedSpec); verr != nil {
+				skipped[a.Name] = true
+				plan.Errors = append(plan.Errors, fmt.Sprintf("assignment %s: %v", a.Name, verr))
+				delta.Note = verr.Error()
+			}
+		}
+
+		// The WITHDRAWAL params, resolved once per Assignment rather than per route: the
+		// Blueprint's removeWorkflow retires the whole compiled set, not one route's
+		// expectation. Stamped onto every Baseline below so the orphan branch can read them
+		// after the Assignment is gone from Git (ADR-0118 D3).
+		var remvParams map[string]any
+		if !skipped[a.Name] {
+			var rverr string
+			remvParams, rverr = resolveRemoveParams(ctx, s, bp, resolvedSpec)
+			if rverr != "" {
+				skipped[a.Name] = true
+				plan.Errors = append(plan.Errors, fmt.Sprintf("assignment %s: %s", a.Name, rverr))
+				delta.Note = rverr
+			}
 		}
 
 		// ── routing ──
@@ -208,7 +278,17 @@ func Compile(ctx context.Context, s Store, maxDelta float64) (Plan, error) {
 				delta.Note = serr
 				break
 			}
-			b := compiledBaseline(a, bp, intent, i, view, route, exp, matched)
+			// The route's params for its remediation Workflow, resolved from the SAME spec the
+			// expectation is (ADR-0118 D3) — so what we expect and what we would do to fix it
+			// are stated once, in one place, instead of the Workflow re-declaring them.
+			remParams, rerr := resolveRemediationParams(ctx, s, route, resolvedSpec)
+			if rerr != "" {
+				skipped[a.Name] = true
+				plan.Errors = append(plan.Errors, fmt.Sprintf("assignment %s: route %d: %s", a.Name, i, rerr))
+				delta.Note = rerr
+				break
+			}
+			b := compiledBaseline(a, bp, intent, i, view, route, exp, matched, specLayers, remParams, remvParams)
 			candidates[a.Name] = append(candidates[a.Name], b)
 			for _, id := range matched {
 				claims = append(claims, claimRecord{exp.Namespace, id, route.Claim, a.Name})
@@ -230,6 +310,31 @@ func Compile(ctx context.Context, s Store, maxDelta float64) (Plan, error) {
 				delta.Unrouted = append(delta.Unrouted, id)
 			}
 		}
+		// ── expectation-change gate (§4.3, ADR-0119 D5) ──
+		// The membership gate above cannot see a pinned-version bump: promoting a configuration
+		// rewrites expected VALUES while joins and leaves stay empty, so `exceedsDelta` is
+		// structurally incapable of firing on it. Without this, a promotion silently replaced every
+		// expectation across the Assignment's whole target set, gated by nothing but code review.
+		//
+		// Deliberately the SAME MaxDelta fraction and the SAME AckDelta counter as membership,
+		// rather than a second pair. §4.3's acknowledgement means "I have reviewed this
+		// Assignment's pending change"; two independent acks would let an operator acknowledge a
+		// membership shift while ignoring a total expectation rewrite, which is the worse failure.
+		// One ack, both axes.
+		changes, total := expectationChanges(candidates[a.Name], priorByName)
+		delta.ExpectationChanges = changes
+		if !skipped[a.Name] && total > 0 && len(changes) > 0 &&
+			exceedsDelta(total, len(changes), effMax) && a.AckDelta <= prev.AckedDelta {
+			skipped[a.Name] = true
+			delta.Paused = true
+			delta.Note = fmt.Sprintf(
+				"expectation-change gate: %d of %d compiled expectations change (> %.0f%%); "+
+					"bump ackDelta to acknowledge. The live expectations stay in force until you do",
+				len(changes), total, effMax*100)
+			plan.Deltas = append(plan.Deltas, delta)
+			continue
+		}
+
 		newAcked := prev.AckedDelta
 		if a.AckDelta > newAcked {
 			newAcked = a.AckDelta
@@ -280,10 +385,6 @@ func Compile(ctx context.Context, s Store, maxDelta float64) (Plan, error) {
 		}
 	}
 
-	existing, err := s.ListBaselines(ctx)
-	if err != nil {
-		return Plan{}, err
-	}
 	for _, eb := range existing {
 		if eb.CompiledFrom == nil || desired[eb.Name] {
 			continue
@@ -307,20 +408,38 @@ func Compile(ctx context.Context, s Store, maxDelta float64) (Plan, error) {
 			// removeWorkflow — a ref only: the operator launches it, never auto-run
 			// (§5 Flow 2, §1.8). If the Intent is also gone we cannot know its
 			// removal semantics → retain.
-			if in, err := s.GetIntent(ctx, eb.CompiledFrom.Intent); err == nil &&
+			// Read the Intent AT THE VERSION THIS BASELINE WAS COMPILED FROM (ADR-0119 D4): the
+			// withdrawal semantics that apply are the ones the compiled state was produced under,
+			// not whatever the newest version happens to say.
+			orphan := Orphan{
+				Baseline: eb.Name, Target: "assignment:" + asg, Severity: eb.Severity,
+			}
+			if in, err := s.GetIntent(ctx, eb.CompiledFrom.Intent, eb.CompiledFrom.IntentVersion); err == nil &&
 				(in.OnRemove == types.OnRemoveRemove || in.OnRemove == types.OnRemoveRevert) {
 				if bp, err := s.GetBlueprint(ctx, eb.CompiledFrom.Blueprint, eb.CompiledFrom.BlueprintVersion); err == nil && bp.RemoveWorkflow != "" {
 					detail["reason"] = fmt.Sprintf("assignment withdrawn with onRemove=%s; launch the remove workflow to %s (never auto-run, §5 Flow 2)",
 						in.OnRemove, removeVerb(in.OnRemove))
 					detail["onRemove"] = in.OnRemove
 					detail["removeWorkflow"] = bp.RemoveWorkflow
+					// The params come off the BASELINE, not off the Blueprint we just read:
+					// they were resolved from a spec that included the now-withdrawn
+					// Assignment's values, so this row is their only surviving record. The
+					// ref above is read live because the pinned Blueprint still declares it
+					// (§1.2 — each fact from its one authority).
+					if len(eb.RemoveParams) > 0 {
+						detail["removeParams"] = eb.RemoveParams
+					}
+					// The same two values, TYPED, so the withdrawal is LAUNCHABLE and not merely
+					// readable. detail above is the human-facing blob — it lands in
+					// graph.finding.diff, documented as redacted and size-capped — so a launch
+					// that parsed its way back out of it would break the day anything capped it,
+					// with no failing test to notice.
+					orphan.LaunchWorkflow = bp.RemoveWorkflow
+					orphan.LaunchParams = eb.RemoveParams
 				}
 			}
-			d, _ := json.Marshal(detail)
-			plan.Orphans = append(plan.Orphans, Orphan{
-				Baseline: eb.Name, Target: "assignment:" + asg,
-				Severity: eb.Severity, Detail: d,
-			})
+			orphan.Detail, _ = json.Marshal(detail)
+			plan.Orphans = append(plan.Orphans, orphan)
 		}
 	}
 	sort.Strings(plan.Prunes)
@@ -346,9 +465,14 @@ func validateRefs(ctx context.Context, s Store, a types.Assignment) (types.Bluep
 		return types.Blueprint{}, types.Intent{}, fmt.Sprintf(
 			"assignment %s: view %q is parametrized ({{.param.x}}) — parametrized Views bind only at launch, not as a compile target (ADR-0024: the max-delta gate is undefined against param variance)", a.Name, a.View)
 	}
-	intent, err := s.GetIntent(ctx, a.Intent)
+	// Pinned, like the Blueprint below it (ADR-0119 D2): an Assignment names WHICH version of the
+	// Intent it means, so editing another version cannot change what this environment is running.
+	// The version is in the message because "intent tls-app not found" while tls-app sits in Git
+	// sends an operator to the wrong place (F4).
+	intent, err := s.GetIntent(ctx, a.Intent, a.IntentVersion)
 	if err != nil {
-		return types.Blueprint{}, types.Intent{}, fmt.Sprintf("assignment %s: intent %q not found", a.Name, a.Intent)
+		return types.Blueprint{}, types.Intent{}, fmt.Sprintf(
+			"assignment %s: intent %s@%d not found", a.Name, a.Intent, a.IntentVersion)
 	}
 	bp, err := s.GetBlueprint(ctx, a.Blueprint, a.BlueprintVersion)
 	if err != nil {
@@ -395,7 +519,7 @@ func selectorParametrized(sel types.ViewSelector) bool {
 // compiledBaseline builds one facet-observation Baseline for an (Assignment,
 // route) pair. The name is deterministic and origin-stamped so the compiler
 // owns exactly its rows.
-func compiledBaseline(a types.Assignment, bp types.Blueprint, intent types.Intent, routeIdx int, view types.View, route types.BlueprintRoute, exp types.FacetExpectation, _ []string) types.Baseline {
+func compiledBaseline(a types.Assignment, bp types.Blueprint, intent types.Intent, routeIdx int, view types.View, route types.BlueprintRoute, exp types.FacetExpectation, _ []string, specLayers map[string][]string, remParams, remvParams map[string]any) types.Baseline {
 	sel := types.ViewSelector{
 		Kinds:  view.Selector.Kinds,
 		Labels: view.Selector.Labels,
@@ -413,12 +537,165 @@ func compiledBaseline(a types.Assignment, bp types.Blueprint, intent types.Inten
 		Severity:            severityOr(bp.Severity),
 		DampingObservations: bp.DampingObservations,
 		RemediationWorkflow: route.RemediationWorkflow,
+		RemediationParams:   remParams,
+		RemoveParams:        remvParams,
 		Framework:           "intent",
 		CompiledFrom: &types.CompiledOrigin{
-			Assignment: a.Name, Intent: intent.Name, Blueprint: bp.Name,
-			BlueprintVersion: bp.Version, Route: routeIdx,
+			Assignment: a.Name, Intent: intent.Name, IntentVersion: intent.Version,
+			Blueprint: bp.Name, BlueprintVersion: bp.Version, Route: routeIdx,
+			SpecLayers: specLayers,
 		},
 	}
+}
+
+// resolveRemediationParams substitutes a route's remediationParams from the resolved spec and
+// checks them against the named Workflow's declared input schema (ADR-0118 D3).
+//
+// The cross-check is the part that earns its keep. A route wired to a Workflow it does not
+// fit — an unknown key, a wrongly-typed value, a required input nobody supplies — fails the
+// COMPILE, so the failure lands on the person editing the declaration. Without it the same
+// mistake would surface as a failed remediation launch, at the worst possible moment: an
+// operator responding to a Finding, told only that their launch was rejected.
+//
+// Returns a non-empty string on failure (the compiler's convention for a per-Assignment skip
+// reason, matching substituteExpectation).
+func resolveRemediationParams(ctx context.Context, s Store, route types.BlueprintRoute, spec map[string]any) (map[string]any, string) {
+	if route.RemediationWorkflow == "" {
+		if len(route.RemediationParams) > 0 {
+			// A half-declaration: params with nothing to pass them to. Rejected rather than
+			// ignored, the same rule as facetNamespaces without identitySchemes (ADR-0117).
+			return nil, "remediationParams declared with no remediationWorkflow to pass them to"
+		}
+		return nil, ""
+	}
+	if len(route.RemediationParams) == 0 {
+		return nil, ""
+	}
+	resolved, err := template.SubstituteParams(route.RemediationParams, template.Namespaces{"spec": spec})
+	if err != nil {
+		return nil, fmt.Sprintf("remediationParams: %v", err)
+	}
+	// validateRefs already proved the Workflow exists, so a read failure here is not the
+	// missing-ref case and should surface as itself.
+	wf, err := s.GetWorkflow(ctx, route.RemediationWorkflow)
+	if err != nil {
+		return nil, fmt.Sprintf("remediationParams: read workflow %s: %v", route.RemediationWorkflow, err)
+	}
+	if _, err := contract.ResolveLaunchInputs(wf.Name, wf.Inputs, resolved); err != nil {
+		return nil, fmt.Sprintf("remediationParams do not satisfy workflow %s: %v", wf.Name, err)
+	}
+	return resolved, ""
+}
+
+// resolveRemoveParams substitutes a Blueprint's removeParams from the resolved spec and checks
+// them against removeWorkflow's declared input schema (ADR-0118 D3) — the withdrawal half of
+// the same rule resolveRemediationParams applies to a route.
+//
+// Blueprint-level, because removeWorkflow is: one withdrawal retires the Assignment's whole
+// compiled set. The result is stamped on every Baseline the Assignment compiles, which is what
+// makes withdrawal work at all — see types.Baseline.RemoveParams: the resolved spec includes
+// the Assignment's own values, and withdrawal is precisely the moment the Assignment no longer
+// exists to be read.
+//
+// Returns a non-empty string on failure, the compiler's per-Assignment skip convention.
+func resolveRemoveParams(ctx context.Context, s Store, bp types.Blueprint, spec map[string]any) (map[string]any, string) {
+	if bp.RemoveWorkflow == "" {
+		if len(bp.RemoveParams) > 0 {
+			// Params with nothing to pass them to — the same half-declaration refusal
+			// remediationParams gets, rather than silently ignoring an author's intent.
+			return nil, "removeParams declared with no removeWorkflow to pass them to"
+		}
+		return nil, ""
+	}
+	if len(bp.RemoveParams) == 0 {
+		return nil, ""
+	}
+	resolved, err := template.SubstituteParams(bp.RemoveParams, template.Namespaces{"spec": spec})
+	if err != nil {
+		return nil, fmt.Sprintf("removeParams: %v", err)
+	}
+	wf, err := s.GetWorkflow(ctx, bp.RemoveWorkflow)
+	if err != nil {
+		return nil, fmt.Sprintf("removeParams: read workflow %s: %v", bp.RemoveWorkflow, err)
+	}
+	if _, err := contract.ResolveLaunchInputs(wf.Name, wf.Inputs, resolved); err != nil {
+		return nil, fmt.Sprintf("removeParams do not satisfy workflow %s: %v", wf.Name, err)
+	}
+	return resolved, ""
+}
+
+// expectationChanges diffs the expectations this pass would write against the ones already
+// compiled, returning the changed set and the total examined (ADR-0119 D5).
+//
+// A Baseline with no prior row is a CREATE, not a change: its expectations are new, and counting
+// them as changes would make the first compile of any Assignment look like a total rewrite. Same
+// for an expectation index that did not exist before.
+//
+// Compares the rendered value rather than the struct, because an expectation carries exactly one
+// of Equals/Contains/NotBefore and the question is only "is the asserted value different".
+func expectationChanges(compiled []types.Baseline, prior map[string]types.Baseline) ([]ExpectationChange, int) {
+	var out []ExpectationChange
+	total := 0
+	for _, b := range compiled {
+		pb, had := prior[b.Name]
+		for i, exp := range b.Expected {
+			total++
+			if !had || i >= len(pb.Expected) {
+				continue // new Baseline or new expectation: a create, not a change
+			}
+			from, to := expectationValue(pb.Expected[i]), expectationValue(exp)
+			if from == to {
+				continue
+			}
+			out = append(out, ExpectationChange{
+				Baseline: b.Name, Namespace: exp.Namespace, Path: exp.Path, From: from, To: to,
+			})
+		}
+	}
+	return out, total
+}
+
+// expectationValue renders the one assertion an expectation carries, for display and comparison.
+func expectationValue(e types.FacetExpectation) string {
+	switch {
+	case len(e.Equals) > 0:
+		return "equals " + string(e.Equals)
+	case len(e.Contains) > 0:
+		return "contains " + string(e.Contains)
+	case e.NotBefore != "":
+		return "notBefore " + e.NotBefore
+	default:
+		return ""
+	}
+}
+
+// validateResolvedSpec enforces the Intent kind's schema against the MERGED spec — the
+// completeness check that moved here from declaration time (ADR-0118 D1).
+//
+// Why it has to be here: with values spread across Blueprint defaults, the Intent and the
+// Assignment, no single layer is a complete spec, so each is validated as PARTIAL where it
+// is declared. That leaves exactly one place where "is this spec actually complete and
+// well-typed" can be answered — after the merge. `ValidateIntentSpecPartial`'s own doc
+// already booked this as a follow-up ("full resolved-spec revalidation at compile is a
+// follow-up"); this is it.
+//
+// A failure skips the one Assignment and is surfaced on the plan (§1.8), never silently
+// compiling a Baseline from a spec that does not satisfy its kind.
+func validateResolvedSpec(kind string, resolved map[string]any) error {
+	raw, err := json.Marshal(resolved)
+	if err != nil {
+		return fmt.Errorf("marshal resolved spec: %w", err)
+	}
+	covered, err := contract.ValidateIntentSpec(kind, raw)
+	if err != nil {
+		return fmt.Errorf("resolved spec (blueprint defaults + intent + assignment values) violates kind %q: %w", kind, err)
+	}
+	if !covered {
+		// Declaration-time validation already rejects an unimplemented kind; reaching
+		// here would mean the schema registry changed under a live Assignment.
+		return fmt.Errorf("kind %q has no spec schema, so the resolved spec cannot be validated", kind)
+	}
+	return nil
 }
 
 // removeVerb renders the onRemove intent for the orphan-Finding message.

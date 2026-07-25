@@ -1,0 +1,42 @@
+# ansible-crypto — an ansible Actuator that runs a DIFFERENT execution environment: the
+# EE variant built with the community.crypto collection baked in (ADR-0117 D3/D3a).
+#
+# This is the declaration ADR-0117 deliberately withheld until a demo selected it. It is
+# the whole point of D3a: which EE a Step runs in is a property of the ACTUATOR it names,
+# declared in Git and reviewable, never a params.eeImage string a tool passes at run time.
+# The reference estate's `ansible` Actuator (estate/actuators/ansible.yaml) keeps the base
+# EE; naming this one instead is how a Step asks for content — and the Run says which
+# content it got, on its own event stream (kind=ee-content). Both are ordinary CaC
+# declarations differing only in `image` and grant, which is the point: content selection
+# is a reviewable Git diff, not a code change.
+#
+# The grant is bounded twice over (§2.1, ADR-0051 MF3): facetNamespaces is the CEILING on
+# what a Run through this Actuator may write back — no more than app.config, whatever a
+# play claims — and the Step's own facetWriteScope is intersected with it. identitySchemes
+# names how write-back correlates a target to an Entity; host.name is required for an
+# EE-Job Actuator that writes facets, because that is the only key the write-back path
+# reads (declare anything else and the validator rejects the declaration rather than
+# admitting facts it would silently drop).
+#
+# NOT granted: cert.expiry / cert.identity. A self-signed certificate minted on the node
+# has no system of record to project FROM, and those namespaces belong to the cert-issuer
+# Connector's Syncer — one authority per fact (§1.2). What this Run legitimately observes
+# is the app's effective listen port, and that is all it writes.
+name: ansible-crypto
+pluginIdentity: ansible
+tier: trusted
+dryRunnable: true
+jobCommand: [stratt-ansible]
+image: stratt-ee-crypto:dev
+facetNamespaces: [app.config]
+identitySchemes: [host.name]
+# elevatedInputs makes privilege escalation Control-GATEABLE (ADR-0122 D3), closing the gap
+# ADR-0117 D1 recorded honestly: typed `become` was declared and audited, but ChangeContext
+# carries no Step params, so no Control could see it — and teaching the PDP to read inside an
+# ansible field is the `if ansible{}` §1.4 forbids.
+#
+# Core walks this path in each Step's params and, when it is truthy, derives the
+# `stratt.change/privileged` change-context label. Core never learns the word `become`: it
+# reads a declared path and a boolean, exactly as facetNamespaces above lets it enforce a
+# write ceiling without knowing what a namespace means. A Control gates on the label.
+elevatedInputs: [become.enabled]

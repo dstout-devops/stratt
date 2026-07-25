@@ -17,6 +17,12 @@
 # the core forwards its typed stream and governs hub-side (GovernStream). Build
 # context is the repo root — the module + its only dep (the lean sdk, via replace).
 FROM golang:1.26 AS shim
+# Bound compile fan-out (same lever + default as the Taskfile's host gates). Without it a
+# cold cache compiles the whole dependency graph at -p=NumCPU, which on a many-core host
+# over overlayfs corrupts the build cache it is writing (`internal compiler error: export
+# data desync` in a random dependency) and can exhaust host memory outright.
+ARG GO_PARALLEL=8
+ENV GOFLAGS=-p=${GO_PARALLEL}
 WORKDIR /src
 COPY sdk/ sdk/
 COPY plugins/ansible/ plugins/ansible/
@@ -41,6 +47,60 @@ COPY --from=ghcr.io/astral-sh/uv:0.9 /uv /usr/local/bin/uv
 RUN uv pip install --system --no-cache \
     "ansible-core>=2.19,<2.20" \
     "ansible-runner>=2.4,<3"
+
+# ── Ansible content: collections + roles (ADR-0117 D3) ────────────────────────
+# Content is declared where it is RESOLVED — HERE, in the build — never as a field on
+# the run-time ansible.input Contract. A Step selects content by selecting an Actuator
+# whose declaration carries this image (D3a), so the image is the content boundary.
+# (Digest-PINNING an image reference in production is the operator's job under §7.3; this
+# dev tag is not a digest.) Build-time because a run
+# pod fetching content from the network has no provenance (§7.3), because Galaxy/private
+# Hub is an EXTERNAL system that must not be in the critical path of every converge
+# (PLG-1), and because air-gap is then a seeding problem rather than a runtime one.
+#
+# EE_CONTENT names a Galaxy requirements file under ee/content/ (the real format, which
+# ansible-builder also consumes — §3 compatibility). Empty ⇒ a base EE with no content;
+# the manifest is still written, so "no content" is stated rather than merely absent.
+#
+# Installs into /usr/share/ansible/{collections,roles}, which is on ansible's DEFAULT
+# search path — verified live: ansible-runner adds its own project dirs WITHOUT replacing
+# the defaults, so no ANSIBLE_ROLES_PATH / ANSIBLE_COLLECTIONS_PATH / ansible.cfg is
+# needed, and an INLINE play can use a build-time role. content.py asserts this at build
+# time rather than trusting it, since ansible-runner floats within its version band.
+#
+# content.py enforces exact pins BEFORE touching the network and then verifies the
+# RESOLVED set against the declaration (verify-don't-trust): an image whose contents
+# differ from what it declares makes its digest an unreliable claim about the Run.
+#
+# It then verifies each installed artifact's SHA-256 against the in-repo LOCKFILE beside
+# the declaration (ADR-0117 follow-up i). The pin rule bounds which VERSION; only the
+# lockfile bounds which BYTES — without it the registry was the sole checksum authority, so
+# a republished artifact at the same version number produced a different image from an
+# unchanged declaration and nothing said so. Build FAILS on any mismatch, and on an
+# artifact (including a new transitive dependency) that no lockfile entry covers.
+# EE_LOCK_MODE=write regenerates the lockfile instead of checking it, and is for
+# `task ee:content:lock` alone — a build that writes its own expectations proves nothing.
+#
+# Note the deliberate asymmetry with the ansible-core/ansible-runner ranges above: the
+# TOOLCHAIN floats within a supported band because evergreen (§1.7) wants it current and
+# CI-gated at N-1, whereas CONTENT is pinned exactly because reproducibility of what a Run
+# executed is the property D3 buys. Different properties, different rules — not an
+# oversight.
+ARG EE_CONTENT=""
+ARG EE_LOCK_MODE="verify"
+# EE_OFFLINE (ADR-0124 D2): a subdirectory of ee/content/ holding pre-downloaded collection
+# tarballs. Set it and the install reaches NO registry — the pin check and the lockfile check are
+# unchanged, so an air-gapped build is verified by the same hash a connected one is, not trusted
+# because of where the bytes came from. Populate it with `task ee:content:pull` on a connected
+# machine. Empty (the default) installs from Galaxy exactly as before.
+ARG EE_OFFLINE=""
+COPY ee/content.py /usr/local/bin/stratt-ee-content
+COPY ee/content/ /usr/share/stratt/ee-content/
+RUN python /usr/local/bin/stratt-ee-content install \
+      --lock-mode="${EE_LOCK_MODE}" \
+      ${EE_OFFLINE:+--artifacts=/usr/share/stratt/ee-content/${EE_OFFLINE}} \
+      ${EE_CONTENT:+/usr/share/stratt/ee-content/${EE_CONTENT}} \
+    && chmod -R a+rX /usr/share/ansible
 
 # The port-speaking shims (ADR-0051/0046): the EE-Job transport's pod commands. Each
 # reads /runner/stratt/request.json (the sovereign ApplyRequest) and emits typed

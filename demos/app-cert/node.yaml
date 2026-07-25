@@ -1,0 +1,83 @@
+# app-node — the managed host this demo converges: a REAL sshd + nginx node, reachable
+# from an EE Job because it runs inside the same kind cluster (the reason the shipped
+# floci/EC2 instances cannot be SSH targets yet — PLG-1).
+#
+# It differs from deploy/dev/managed-web.yaml in the two ways this demo needs, and it is
+# a separate fixture precisely so those differences cannot perturb the ADR-0084
+# convergence demo:
+#
+#   1. ROOT LOGIN IS DISABLED. The play connects as the unprivileged `appops` user and
+#      must escalate with sudo to write /etc/ssl and /etc/nginx. So `become` (ADR-0117
+#      D1) is load-bearing here: strip it from the Step and the demo fails. On the
+#      managed-web fixture the SSH user is already root, which makes escalation a no-op
+#      you cannot tell apart from working.
+#   2. py3-cryptography is installed. community.crypto's modules run ON THE TARGET and
+#      need the cryptography library there — the collection in the EE image gets the
+#      module to the host, it does not carry the host's Python dependency.
+#
+# Throwaway dev fixture: key-only login, ephemeral pod, a self-signed certificate.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: app-node
+  namespace: stratt
+  labels: { app: app-node }
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: app-node }
+  template:
+    metadata:
+      labels: { app: app-node }
+    spec:
+      containers:
+        - name: node
+          image: nginx:alpine
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -e
+              # openssl for the demo's own assertion (reading the served cert back);
+              # sudo for the escalation path; py3-cryptography for community.crypto.
+              apk add --no-cache openssh python3 py3-cryptography sudo openssl >/dev/null 2>&1
+              ssh-keygen -A
+              # The unprivileged login. NOTE the deliberate absence of a root
+              # authorized_keys: escalation is the only way to reach /etc.
+              adduser -D -s /bin/sh appops
+              # `adduser -D` leaves the account LOCKED (a `!` in /etc/shadow), and sshd
+              # refuses a locked account even for public-key auth — "User appops not
+              # allowed because account is locked", with the connection closed before
+              # any key is considered. `*` keeps password login impossible while
+              # leaving the account usable, which is what a key-only login needs.
+              sed -i 's/^appops:!/appops:*/' /etc/shadow
+              mkdir -p /home/appops/.ssh
+              cp /authorized_keys/authorized_keys /home/appops/.ssh/authorized_keys
+              chown -R appops:appops /home/appops/.ssh
+              chmod 700 /home/appops/.ssh && chmod 600 /home/appops/.ssh/authorized_keys
+              echo 'appops ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/appops
+              chmod 440 /etc/sudoers.d/appops
+              sed -i 's/^#*PermitRootLogin.*/PermitRootLogin no/' /etc/ssh/sshd_config
+              mkdir -p /etc/nginx/conf.d
+              nginx
+              exec /usr/sbin/sshd -D -e
+          ports:
+            - { containerPort: 22, name: ssh }
+            - { containerPort: 80, name: http }
+            - { containerPort: 443, name: https }
+          volumeMounts:
+            - { name: authkeys, mountPath: /authorized_keys, readOnly: true }
+      volumes:
+        - name: authkeys
+          secret: { secretName: app-node-authorized-keys }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: app-node
+  namespace: stratt
+spec:
+  selector: { app: app-node }
+  ports:
+    - { name: ssh, port: 22, targetPort: 22 }
+    - { name: http, port: 80, targetPort: 80 }
+    - { name: https, port: 443, targetPort: 443 }

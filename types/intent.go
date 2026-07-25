@@ -42,6 +42,22 @@ var SingletonIntentKinds = map[string]bool{
 	IntentVlan:      true,
 }
 
+// AssignableIntentKind reports whether an Intent kind may carry a `version` (ADR-0119 D3).
+//
+// The rule is structural, not a list: a version is only meaningful where a SEAM EXISTS TO CARRY
+// THE PIN. An Assignment selects application-shaped Intents, so it can pin one. Provisioning
+// kinds are selected by NAME by the provisioning reconcile (ADR-0058 makes it a sibling loop with
+// no Assignment), so there is nowhere for a pin to live — and two versions of one fleet are not
+// two rings, they are two claims on the same machines, which ADR-0058 D5 already rejects as an
+// exclusive-instance-identity collision.
+//
+// DERIVED from the kind constants on purpose. A literal list in the validator would rot: the
+// ADR-0059 provisioning family is still growing (ADR-0110/0111/0112), and a new kind must inherit
+// the refusal automatically rather than by someone remembering to add it here.
+func AssignableIntentKind(kind string) bool {
+	return kind != IntentCompute && !SingletonIntentKinds[kind]
+}
+
 // onRemove lifecycle values (charter §2.4): what happens to compiled state
 // when the Intent (or its Assignment) is withdrawn. v1 implements `retain`
 // (leave compiled state, raise an orphan Finding — never silent); `revert`
@@ -58,6 +74,20 @@ const (
 // View. CaC-only, like every desired-state declaration (§1.2).
 type Intent struct {
 	Name string `json:"name"`
+	// Version is the CONFIGURATION version of this document (ADR-0119 D1), default 1. Together
+	// with Name it is the storage identity, exactly as for Blueprint — so test, stage and prod
+	// can run three configurations of one Intent simultaneously, each pinned by its own
+	// environment-scoped Assignment.
+	//
+	// Identity-forming, like Blueprint.version: rows coexist. NOT the monotonic revision counter
+	// View.version is (auto-bumped by a trigger, one row per name), and NOT the schema-SHAPE
+	// version Contract.Version / the .vN.schema.json convention carries. Three adjacent meanings
+	// of one word; this is the first kind.
+	//
+	// Versioning alone does NOT make a published configuration immutable — the plan-time
+	// pinned-version guard does (ADR-0119 D6). A same-version content edit would otherwise still
+	// update what a pinned environment is running.
+	Version int `json:"version,omitempty"`
 	// Kind is the payload kind (v1: Intent/Application). Each kind has a
 	// schema driving forms/validation.
 	Kind string `json:"kind"`

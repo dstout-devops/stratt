@@ -10,7 +10,25 @@
 # Actuator-Apply-only, and a per-build allocation is more legibly a Step. The `needs` edge is the
 # observable dependency. The build projects the portgroup back BY IDENTITY ONLY (vcenter.network.moref,
 # ADR-0113 D3); the vcenter Syncer OBSERVEs the authoritative net.subnet Facet on its next poll.
+# CORRECTED BY ADR-0120 D3, and the correlation label was a real bug rather than only hardcoding: this
+# Workflow projected `stratt.intent/subnet`, while ProvisionedSingletons reads ONLY
+# `stratt.intent/singleton`. So a successful build produced a portgroup that never resolved its own
+# provisioning Finding — the reconcile kept surfacing the same gated build forever. It now forwards
+# {{.launch.labels}}, where the reconcile puts the key it will actually match on.
 name: vsphere-subnet-build
+inputs:
+  type: object
+  additionalProperties: false
+  required: [name, projectKind, labels]
+  properties:
+    name:
+      type: string
+      description: The declared Intent name — also the ipam idempotency key, so a re-run re-allocates nothing.
+    projectKind: { type: string }
+    labels:
+      type: object
+      additionalProperties: { type: string }
+      description: Labels the projection carries, INCLUDING stratt.intent/singleton.
 steps:
   - name: approve
     gate:
@@ -22,7 +40,17 @@ steps:
     action: netbox/ipam-resolve # the ipam capability's allocate Action, composed as an explicit Step
     credentialRefs: [netbox-dev] # §2.5 — an Action's use-check is its only authz gate
     params:
-      key: dmz-subnet-01 # idempotency key — a re-run returns the SAME prefix + VLAN (anchored in NetBox)
+      # The Intent's own name is the idempotency key — a re-run returns the SAME prefix + VLAN
+      # (anchored in NetBox). Hardcoding it meant every subnet shared one allocation.
+      key: "{{.launch.name}}"
+      # role/size/vlanGroup stay LITERAL for the reason vsphere-vm-build records for cpus/memoryMB:
+      # Intent/Subnet's `params` is opaque and PROVIDER-shaped (§1.5), and the reference estate's
+      # Subnet Intents carry crossplane's `cidr` because they resolve to crossplane outside vsphere-dc.
+      # Binding {{.launch.params.role}} would fail CLOSED against exactly the Intents that exist — the
+      # substituter refuses an unknown field and there are no conditionals (ADR-0083 D5). ADR-0113 D2
+      # makes the environment the substrate boundary, so a vsphere-dc estate declares Subnet Intents
+      # with vSphere-shaped params and these become forwards. ADR-0120 moves per-unit IDENTITY, which
+      # is universal; provider-shaped config is a separate question.
       role: dmz
       size: 24
       vlanGroup: dc1
@@ -31,13 +59,13 @@ steps:
     action: vcenter/create-portgroup # vSphere's Subnet builder (swap point, §1.4/§1.5)
     credentialRefs: [vsphere-dev] # §2.5
     params:
-      name: dmz-pg
+      name: "{{.launch.name}}"
       # The VLAN + prefix come from the allocate-vlan Step's typed outputs (native-type-preserving bind).
       vlanId: "{{.steps.allocate-vlan.outputs.vlanId}}"
       cidr: "{{.steps.allocate-vlan.outputs.cidr}}"
       # The estate OVERLAY (ADR-0058 §6): the built portgroup projects AS this kind with these labels
       # (Run provenance, never a reconcile write). stratt.intent/subnet resolves the provisioning Finding.
-      projectKind: subnet
-      projectLabels:
-        zone: dmz
-        stratt.intent/subnet: dmz-subnet-01
+      projectKind: "{{.launch.projectKind}}"
+      # labels carries stratt.intent/singleton — the key ProvisionedSingletons reads. The previous
+      # `stratt.intent/subnet` spelling was read by nothing, so the build never resolved its Finding.
+      projectLabels: "{{.launch.labels}}"

@@ -10,26 +10,26 @@ design must reconcile with. Chronological list: [README.md](README.md); phase vi
 
 ```mermaid
 graph TD
-  actuators["actuators<br/><small>0016 0022 0050 0053 0092 0117</small>"]
-  api_surface["api-surface<br/><small>0006 0021 0026 0076 0091</small>"]
-  audit_telemetry["audit-telemetry<br/><small>0034 0065 0077</small>"]
-  authz_identity["authz-identity<br/><small>0009 0028 0035 0079 0101</small>"]
+  actuators["actuators<br/><small>0016 0022 0050 0053 0092 0117<br/>0124</small>"]
+  api_surface["api-surface<br/><small>0006 0021 0026 0076 0091 0121</small>"]
+  audit_telemetry["audit-telemetry<br/><small>0034 0065 0077 0121</small>"]
+  authz_identity["authz-identity<br/><small>0009 0028 0035 0079 0101 0122</small>"]
   capability_framework["capability-framework<br/><small>0100 0104 0105 0106 0107 0110<br/>0111 0112 0113 0114</small>"]
   certificates_pki["certificates-pki<br/><small>0030 0043 0050 0098 0106</small>"]
   connectors["connectors<br/><small>0007 0014 0025 0026 0037 0038<br/>0039 0045 0086 0087 0088 0089<br/>0095 0097 0099 0113 0114 0115</small>"]
-  credentials_secrets["credentials-secrets<br/><small>0009 0029 0052 0094 0098 0099<br/>0100 0106</small>"]
-  estate_as_code["estate-as-code<br/><small>0055 0056 0057 0103 0113 0116</small>"]
+  credentials_secrets["credentials-secrets<br/><small>0009 0029 0052 0094 0098 0099<br/>0100 0106 0125</small>"]
+  estate_as_code["estate-as-code<br/><small>0055 0056 0057 0103 0113 0116<br/>0118 0119 0120 0122 0123</small>"]
   findings_drift["findings-drift<br/><small>0019 0020 0033 0043 0080 0085</small>"]
   foundation["foundation<br/><small>0001 0002 0004 0005 0006 0008<br/>0108 0109 0116</small>"]
-  graph_model["graph-model<br/><small>0015 0017 0041 0042 0059 0060<br/>0079 0080 0081 0082 0084 0085<br/>0096 0114 0115</small>"]
-  intent_compiler["intent-compiler<br/><small>0023 0030 0036 0055 0058 0083<br/>0085 0114</small>"]
-  orchestration["orchestration<br/><small>0010 0011 0018 0027 0031 0063</small>"]
-  plugin_port["plugin-port<br/><small>0046 0047 0048 0049 0051 0053<br/>0054 0103 0117</small>"]
-  policy_governance["policy-governance<br/><small>0061 0062 0063 0064 0065 0066<br/>0067 0068 0069 0070 0071 0072<br/>0073 0074 0075 0076</small>"]
-  provisioning["provisioning<br/><small>0017 0058 0095 0096 0107 0110<br/>0111 0112 0113 0114 0115</small>"]
+  graph_model["graph-model<br/><small>0015 0017 0041 0042 0059 0060<br/>0079 0080 0081 0082 0084 0085<br/>0096 0114 0115 0119 0120 0123</small>"]
+  intent_compiler["intent-compiler<br/><small>0023 0030 0036 0055 0058 0083<br/>0085 0114 0118 0119 0123</small>"]
+  orchestration["orchestration<br/><small>0010 0011 0018 0027 0031 0063<br/>0118 0122 0125</small>"]
+  plugin_port["plugin-port<br/><small>0046 0047 0048 0049 0051 0053<br/>0054 0103 0117 0121 0124 0125</small>"]
+  policy_governance["policy-governance<br/><small>0061 0062 0063 0064 0065 0066<br/>0067 0068 0069 0070 0071 0072<br/>0073 0074 0075 0076 0122</small>"]
+  provisioning["provisioning<br/><small>0017 0058 0095 0096 0107 0110<br/>0111 0112 0113 0114 0115 0120<br/>0123</small>"]
   state_artifacts["state-artifacts<br/><small>0016 0029 0093 0097 0105 0112</small>"]
-  substrate_ops["substrate-ops<br/><small>0013 0032 0040 0044 0045 0049<br/>0077 0078 0093 0101 0102</small>"]
-  ui["ui<br/><small>0003 0012 0020 0024 0090 0091<br/>0116</small>"]
+  substrate_ops["substrate-ops<br/><small>0013 0032 0040 0044 0045 0049<br/>0077 0078 0093 0101 0102 0124</small>"]
+  ui["ui<br/><small>0003 0012 0020 0024 0090 0091<br/>0116 0121</small>"]
 
   actuators --> plugin_port
   api_surface --> orchestration
@@ -90,6 +90,7 @@ Actuators — execution engines (opentofu, helm, mcp, cert-issuer reconcile).
 - [ADR-0053](0053-mcp-transport-generic-connector.md) — MCP as a generic transport: the last domain logic leaves the core
 - [ADR-0092](0092-helm-actuator.md) — Helm Actuator: chart → release behind Gates, over the sovereign port
 - [ADR-0117](0117-ansible-execution-depth-and-content.md) — Ansible execution depth + content: the run-knob Contract (v5) and collections as pinned, external-sourced content
+- [ADR-0124](0124-ee-content-supply-factory-and-offline-source.md) — EE content supply: an `execution-environment.yml` front door, and an offline source that is verified the same way
 
 ### api-surface
 
@@ -102,6 +103,7 @@ API surface — OpenAPI /api/v1, the AWX /api/v2 façade, the platform MCP serve
 - [ADR-0026](0026-awx-api-v2-facade.md) — AWX-compatible `/api/v2` façade (+ native cancel & ansible extraVars)
 - [ADR-0076](0076-admission-on-the-imperative-door.md) — Admission on the imperative door: the API is not a bypass around the compile-seam PEP
 - [ADR-0091](0091-ui-is-a-first-party-bundled-pure-api-client.md) — the UI is a first-party, served-by-default, pure `/api/v1` client (never a port-plugin, never a gated add-on)
+- [ADR-0121](0121-task-event-scope.md) — `TaskEvent.scope`: an event says whether it describes the Run or a task
 
 ### audit-telemetry
 
@@ -112,6 +114,7 @@ Audit & telemetry — the one audit stream, SIEM forwarder, decision recording, 
 - [ADR-0034](0034-audit-stream-and-siem-forwarder.md) — The one audit stream + vendor-neutral SIEM forwarder
 - [ADR-0065](0065-durable-policy-decision-recording.md) — Durable policy-decision recording: the audit stream, not a Finding
 - [ADR-0077](0077-observability-otel.md) — Observability: OpenTelemetry providers, `/metrics` always-on, OTLP optional
+- [ADR-0121](0121-task-event-scope.md) — `TaskEvent.scope`: an event says whether it describes the Run or a task
 
 ### authz-identity
 
@@ -124,6 +127,7 @@ Authorization & identity — OpenFGA, Principal, SCIM, workload identity.
 - [ADR-0035](0035-scim-service-provider.md) — SCIM 2.0 Service Provider: IdP-driven Principal lifecycle + group→team authz
 - [ADR-0079](0079-identity-as-a-cross-cutting-dimension.md) — Identity is a cross-cutting projection dimension, not a lowest-level type
 - [ADR-0101](0101-cluster-authz-activation-openbao-oidc-workload-identity.md) — Activate real cluster authz; OpenBao-OIDC workload identity; multi-issuer Principal resolution
+- [ADR-0122](0122-change-context-is-typed-and-partly-derived.md) — The change context is typed, and the facts core can know are derived, not asserted
 
 ### capability-framework
 
@@ -193,6 +197,7 @@ Credentials & secrets (§2.5) — brokering, the SecretBroker port, KV, KeyCusto
 - [ADR-0099](0099-openbao-kv-metadata-syncer.md) — OpenBao KV metadata Syncer: secret existence/metadata as a projection, never material
 - [ADR-0100](0100-keycustodian-kms-envelope-encryption.md) — The KeyCustodian capability: envelope encryption with a self-sufficient local floor and optional, transport-plural KMS providers
 - [ADR-0106](0106-openbao-multi-capability-provider.md) — OpenBao as a multi-capability provider; enablement-gate vs resolve-inject capabilities
+- [ADR-0125](0125-notification-sinks-are-drivers-not-a-core-switch.md) — Notification sinks are drivers behind a seam, not a switch in the daemon
 
 ### estate-as-code
 
@@ -206,6 +211,11 @@ Estate-as-Code — CaC declarations, environments, composition, the estate CLI.
 - [ADR-0103](0103-runtime-connector-registry.md) — Runtime Connector registry: enable/disable Connectors without a strattd restart
 - [ADR-0113](0113-vsphere-provisioning-provider.md) — vSphere as a `provisioning` provider: the vcenter plugin gains a build verb (VM + DVPortgroup)
 - [ADR-0116](0116-demo-library.md) — The demo library: reproducible, narrated, turnkey teaching scenarios
+- [ADR-0118](0118-parameter-plane.md) — The parameter plane: values reach the things that execute
+- [ADR-0119](0119-versioned-configuration-and-promotion.md) — Versioned configuration and promotion: one estate, N rings, immutable once pinned
+- [ADR-0120](0120-provisioning-joins-the-parameter-plane.md) — Provisioning joins the parameter plane: a Finding carries its own launch spec
+- [ADR-0122](0122-change-context-is-typed-and-partly-derived.md) — The change context is typed, and the facts core can know are derived, not asserted
+- [ADR-0123](0123-keyed-placement-aware-spread.md) — Keyed, placement-aware spread: identity survives a zone-list edit, and declared placement finally reaches the build
 
 ### findings-drift
 
@@ -255,6 +265,9 @@ Graph model — Entity/Facet/Relation/Contract primitives, projection & liveness
 - [ADR-0096](0096-ec2-resource-graph-entities.md) — The EC2 resource graph: VPC / subnet / security-group / volume as Observed Entities
 - [ADR-0114](0114-entity-lifecycle-and-decommission-reach-path.md) — Entity lifecycle Actions + the desired-state decommission reach-path
 - [ADR-0115](0115-vsphere-read-breadth.md) — vSphere read breadth: the inventory graph (region/AZ reuse, uncovered-Facet posture)
+- [ADR-0119](0119-versioned-configuration-and-promotion.md) — Versioned configuration and promotion: one estate, N rings, immutable once pinned
+- [ADR-0120](0120-provisioning-joins-the-parameter-plane.md) — Provisioning joins the parameter plane: a Finding carries its own launch spec
+- [ADR-0123](0123-keyed-placement-aware-spread.md) — Keyed, placement-aware spread: identity survives a zone-list edit, and declared placement finally reaches the build
 
 ### intent-compiler
 
@@ -270,6 +283,9 @@ Intent compiler — Intent/Assignment/Blueprint/Baseline compile to Runs.
 - [ADR-0083](0083-blueprint-route-materialization-seam.md) — The Blueprint route is the tool-materialization seam; declare outcomes, plugins materialize (+ G6 defaults/override)
 - [ADR-0085](0085-relation-presence-baseline.md) — Relation-presence Baseline: desired state over graph topology, not just node facets
 - [ADR-0114](0114-entity-lifecycle-and-decommission-reach-path.md) — Entity lifecycle Actions + the desired-state decommission reach-path
+- [ADR-0118](0118-parameter-plane.md) — The parameter plane: values reach the things that execute
+- [ADR-0119](0119-versioned-configuration-and-promotion.md) — Versioned configuration and promotion: one estate, N rings, immutable once pinned
+- [ADR-0123](0123-keyed-placement-aware-spread.md) — Keyed, placement-aware spread: identity survives a zone-list edit, and declared placement finally reaches the build
 
 ### orchestration
 
@@ -283,6 +299,9 @@ Orchestration — Triggers, Workflows/Gates, Steps, Runs, Actions, notifications
 - [ADR-0027](0027-notifications.md) — Notifications (outbound Run/Finding/Gate alerts)
 - [ADR-0031](0031-action-execution-framework.md) — Action-execution framework (+ provision→configure seam)
 - [ADR-0063](0063-policy-step-dag-dispatch-v1.md) — Policy Step & DAG dispatch v1: the PDP as a synchronous checkpoint
+- [ADR-0118](0118-parameter-plane.md) — The parameter plane: values reach the things that execute
+- [ADR-0122](0122-change-context-is-typed-and-partly-derived.md) — The change context is typed, and the facts core can know are derived, not asserted
+- [ADR-0125](0125-notification-sinks-are-drivers-not-a-core-switch.md) — Notification sinks are drivers behind a seam, not a switch in the daemon
 
 ### plugin-port
 
@@ -299,6 +318,9 @@ Sovereign plugin port — the dark-matter substrate, transports, runtime registr
 - [ADR-0054](0054-per-step-facet-claim.md) — Per-Step facet write-scope: narrow the write-back grant to what a Step declares
 - [ADR-0103](0103-runtime-connector-registry.md) — Runtime Connector registry: enable/disable Connectors without a strattd restart
 - [ADR-0117](0117-ansible-execution-depth-and-content.md) — Ansible execution depth + content: the run-knob Contract (v5) and collections as pinned, external-sourced content
+- [ADR-0121](0121-task-event-scope.md) — `TaskEvent.scope`: an event says whether it describes the Run or a task
+- [ADR-0124](0124-ee-content-supply-factory-and-offline-source.md) — EE content supply: an `execution-environment.yml` front door, and an offline source that is verified the same way
+- [ADR-0125](0125-notification-sinks-are-drivers-not-a-core-switch.md) — Notification sinks are drivers behind a seam, not a switch in the daemon
 
 ### policy-governance
 
@@ -322,6 +344,7 @@ Policy & governance — the PDP port, typed Controls, admission PEPs, obligation
 - [ADR-0074](0074-external-policy-engine-subprocess.md) — External policy engines (OPA / Kyverno) over the subprocess transport
 - [ADR-0075](0075-obligation-enforcement.md) — Obligation enforcement: a binding rider is enforced, not recorded-and-dropped
 - [ADR-0076](0076-admission-on-the-imperative-door.md) — Admission on the imperative door: the API is not a bypass around the compile-seam PEP
+- [ADR-0122](0122-change-context-is-typed-and-partly-derived.md) — The change context is typed, and the facts core can know are derived, not asserted
 
 ### provisioning
 
@@ -340,6 +363,8 @@ Provisioning — declare & build infra (Intent -> builder -> machines), provisio
 - [ADR-0113](0113-vsphere-provisioning-provider.md) — vSphere as a `provisioning` provider: the vcenter plugin gains a build verb (VM + DVPortgroup)
 - [ADR-0114](0114-entity-lifecycle-and-decommission-reach-path.md) — Entity lifecycle Actions + the desired-state decommission reach-path
 - [ADR-0115](0115-vsphere-read-breadth.md) — vSphere read breadth: the inventory graph (region/AZ reuse, uncovered-Facet posture)
+- [ADR-0120](0120-provisioning-joins-the-parameter-plane.md) — Provisioning joins the parameter plane: a Finding carries its own launch spec
+- [ADR-0123](0123-keyed-placement-aware-spread.md) — Keyed, placement-aware spread: identity survives a zone-list edit, and declared placement finally reaches the build
 
 ### state-artifacts
 
@@ -371,6 +396,7 @@ Substrate & ops — HA/DR, Cells/multi-region, Sites, deploy, bootstrap, upgrade
 - [ADR-0093](0093-real-dev-backends-floci-seaweedfs.md) — Real dev backends: Floci (EC2) replaces moto; SeaweedFS bump (S3)
 - [ADR-0101](0101-cluster-authz-activation-openbao-oidc-workload-identity.md) — Activate real cluster authz; OpenBao-OIDC workload identity; multi-issuer Principal resolution
 - [ADR-0102](0102-tiered-genesis-bootstrap.md) — Tiered genesis bootstrap: a minimal self-retiring floor, then Stratt self-deploys the rest
+- [ADR-0124](0124-ee-content-supply-factory-and-offline-source.md) — EE content supply: an `execution-environment.yml` front door, and an offline source that is verified the same way
 
 ### ui
 
@@ -385,6 +411,7 @@ UI — React shell, schema-driven rendering, Views, descent, the first-party cli
 - [ADR-0090](0090-ui-rebuild-greenfield-charter-stack.md) — UI rebuild: greenfield on the charter stack, gauntlet-informed patterns
 - [ADR-0091](0091-ui-is-a-first-party-bundled-pure-api-client.md) — the UI is a first-party, served-by-default, pure `/api/v1` client (never a port-plugin, never a gated add-on)
 - [ADR-0116](0116-demo-library.md) — The demo library: reproducible, narrated, turnkey teaching scenarios
+- [ADR-0121](0121-task-event-scope.md) — `TaskEvent.scope`: an event says whether it describes the Run or a task
 
 ## By ADR (reverse index)
 
@@ -507,3 +534,11 @@ UI — React shell, schema-driven rendering, Views, descent, the first-party cli
 | [0115](0115-vsphere-read-breadth.md) | connectors, graph-model, provisioning |
 | [0116](0116-demo-library.md) | estate-as-code, foundation, ui |
 | [0117](0117-ansible-execution-depth-and-content.md) | actuators, plugin-port |
+| [0118](0118-parameter-plane.md) | estate-as-code, intent-compiler, orchestration |
+| [0119](0119-versioned-configuration-and-promotion.md) | estate-as-code, graph-model, intent-compiler |
+| [0120](0120-provisioning-joins-the-parameter-plane.md) | estate-as-code, graph-model, provisioning |
+| [0121](0121-task-event-scope.md) | api-surface, audit-telemetry, plugin-port, ui |
+| [0122](0122-change-context-is-typed-and-partly-derived.md) | authz-identity, estate-as-code, orchestration, policy-governance |
+| [0123](0123-keyed-placement-aware-spread.md) | estate-as-code, graph-model, intent-compiler, provisioning |
+| [0124](0124-ee-content-supply-factory-and-offline-source.md) | actuators, plugin-port, substrate-ops |
+| [0125](0125-notification-sinks-are-drivers-not-a-core-switch.md) | credentials-secrets, orchestration, plugin-port |

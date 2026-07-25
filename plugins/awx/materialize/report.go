@@ -35,7 +35,9 @@ func (r *report) render(snap *awx.Snapshot) string {
 	fmt.Fprintf(&b, "- Workflows (from job templates): %d\n", len(snap.JobTemplates))
 	fmt.Fprintf(&b, "- Workflows (from workflow job templates): %d\n", len(snap.WorkflowJTs))
 	fmt.Fprintf(&b, "- CredentialRefs (from credentials): %d\n", len(snap.Credentials))
-	fmt.Fprintf(&b, "- Input Contracts (from surveys): %d\n\n", len(snap.Surveys))
+	// Surveys are counted as what they now become — a Workflow's declared launch interface
+	// (ADR-0118 D2) — not as free-standing Contract files, which are no longer emitted.
+	fmt.Fprintf(&b, "- Workflow launch interfaces (from surveys): %d\n\n", len(snap.Surveys))
 
 	if len(r.blocking) > 0 {
 		b.WriteString("## Blocking items — resolve before `stratt apply`\n\n")

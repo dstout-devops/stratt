@@ -86,7 +86,24 @@ type RunEvent struct {
 	// Kind is the event type (e.g. "task-start", "task-ok", "task-failed",
 	// "stdout").
 	Kind string `json:"kind"`
-	// Target is the Entity the event applies to, when per-target.
+	// Level is the event's severity, carried from the plugin port's typed
+	// TaskEvent.Level. It is spine-level and content-blind — the ONE property of
+	// a task event that every tool means the same way — so the descent can show
+	// "this Run warned" without any consumer parsing tool-shaped kinds. Empty
+	// means unstated: a consumer must not read that as "info", because most of
+	// the stream predates the field. See RunEventLevel*.
+	Level string `json:"level,omitempty"`
+	// Scope is which DESCRIPTIVE LEVEL this event is about, carried from the plugin
+	// port's TaskEvent.Scope (ADR-0121). Like Level it is spine-level and
+	// content-blind, which is the point: a consumer can pin "what did this Run run
+	// in" without matching a tool-shaped Kind — the `if ansible{}` §1.4 forbids,
+	// relocated into the interface plane. Empty means the producer did not state a
+	// scope and must NOT be read as "task". See RunEventScope*.
+	Scope string `json:"scope,omitempty"`
+	// Target is the Entity the event applies to, when per-target. It is the ONLY
+	// field that says which Entity: Scope deliberately has no per-target member, so
+	// the two can never disagree (§2.4, ADR-0121 D2). A per-target event is
+	// RunEventScopeTask with Target set.
 	Target string `json:"target,omitempty"`
 	// Site is the execution locus this event came from (ADR-0032) — stamped by
 	// the dispatcher so §1.8 descent shows *where* a target ran. Empty/"local"
@@ -96,3 +113,31 @@ type RunEvent struct {
 	// Payload is the event body (tool-shaped, opaque to the spine).
 	Payload map[string]any `json:"payload,omitempty"`
 }
+
+// RunEvent severities. These mirror the plugin port's TaskEvent.Level, minus
+// LEVEL_UNSPECIFIED — which is represented by the empty string, so "the plugin
+// did not say" and "the plugin said info" stay distinguishable (§1.8: an absent
+// signal must not masquerade as a benign one).
+const (
+	RunEventDebug = "debug"
+	RunEventInfo  = "info"
+	RunEventWarn  = "warn"
+	RunEventError = "error"
+)
+
+// RunEvent scopes (ADR-0121). These mirror the port's TaskEvent.Scope minus
+// SCOPE_UNSPECIFIED, which is the empty string for the same reason the level's is: most
+// of the stream predates the field, so treating unstated as "task" would assert that no
+// plugin has ever emitted run-level output — a confident claim built from missing data.
+//
+// There is no per-target member on purpose. RunEvent.Target already names the Entity, and
+// a second field able to contradict it is the two-discriminator defect ADR-0120 D1 found
+// between Finding.Framework and launchKind (§2.4).
+const (
+	// RunEventScopeRun marks an event describing the RUN as a whole — the image it
+	// executed in, the content that image carried, a pod that never started. These are
+	// the events a descent surface pins as Run metadata.
+	RunEventScopeRun = "run"
+	// RunEventScopeTask marks an event describing one unit of work inside the Run.
+	RunEventScopeTask = "task"
+)

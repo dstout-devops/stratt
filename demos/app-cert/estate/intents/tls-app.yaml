@@ -1,0 +1,26 @@
+# tls-app — Intent/Application (ADR-0023): the outcome, declared in the simplest form
+# there is. "Run this app, and serve it over TLS on 443." No mention of Ansible, no
+# collection, no execution environment, no play — the operator writes what makes the app
+# itself, and the Blueprint beside this routes it to whatever materializes that.
+name: tls-app
+kind: Intent/Application
+spec:
+  package: nginx
+  # The app's identity and listen port — declared HERE, once, and nowhere else. Before
+  # ADR-0118 the same 443 appeared three times: in this spec, as a Blueprint default, and
+  # hardcoded again in the install Workflow's extraVars, because a Blueprint route could name
+  # a remediation Workflow but pass it nothing.
+  #
+  # A STRING, and the type is not a matter of taste — it is decided by a pinned Contract.
+  # contracts/facets/app.config.schema.json declares `port` as {type: string}, and that Facet
+  # is what the observed value is validated against on write-back. The expectation compiled
+  # from this spec is compared to that observed value, so the spec MUST agree with the Facet
+  # or the two are never comparable.
+  #
+  # Learned the hard way in this arc: ADR-0118's F9 said "fix the demo's spec to a real
+  # number", and doing that produced a live failure — `facets/app.config: /port: got number,
+  # want string`. F9's PRINCIPLE was right (types must agree end to end, and nothing coerces
+  # between them); its prescription named the wrong end. The Facet Contract is the authority,
+  # not the estate author's preference.
+  port: "443"
+  commonName: app-node.stratt.svc.cluster.local

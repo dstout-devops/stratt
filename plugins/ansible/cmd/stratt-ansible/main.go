@@ -48,7 +48,8 @@ func run() error {
 	}
 	for _, t := range applyReq.GetTargets() {
 		req.Targets = append(req.Targets, ansible.Target{
-			Name: t.GetName(), Address: t.GetAddress(), Vars: t.GetVars(), Identity: t.GetIdentityKeys(),
+			Name: t.GetName(), Address: t.GetAddress(), Port: t.GetPort(),
+			Vars: t.GetVars(), Identity: t.GetIdentityKeys(),
 		})
 	}
 

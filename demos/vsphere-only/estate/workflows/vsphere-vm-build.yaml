@@ -10,6 +10,36 @@
 # gate-only ref — an Action's use-check is its only authz gate (§2.5); the plugin connects to vSphere
 # with its own broker creds. This whole estate is delivered as CaC through the declarations mount.
 name: vsphere-vm-build
+# The per-instance launch interface (ADR-0120 D2), matching the reference estate's
+# vsphere-vm-build. This demo drives the build Workflow directly (it declares no Intent/Compute), so
+# its run.sh plays the part the provisioning reconcile plays and names the instance at launch. Before
+# this the Workflow hardcoded web-01, which made the baked-in identity invisible from the script.
+inputs:
+  type: object
+  additionalProperties: false
+  required: [instance, projectKind, labels]
+  properties:
+    instance:
+      type: string
+      description: The instance's correlation name, e.g. web-01.
+    ordinal:
+      type: integer
+      description: Its 1-based position in the fleet.
+    projectKind:
+      type: string
+      description: The Entity kind the built VM projects as.
+    labels:
+      type: object
+      additionalProperties: { type: string }
+      description: Labels the projection carries, INCLUDING stratt.intent/instance.
+    placement:
+      type: object
+      additionalProperties: true
+      description: Declared topology placement, when there is one.
+    params:
+      type: object
+      additionalProperties: true
+      description: Opaque provider build params, typed by vcenter/create-vm's Contract.
 steps:
   - name: approve
     gate:
@@ -21,15 +51,18 @@ steps:
     action: vcenter/create-vm
     credentialRefs: [vsphere-dev]
     params:
-      name: web-01
+      name: "{{.launch.instance}}"
       # No datacenter specified — the demo floor runs a single vSphere datacenter (the default vcsim
       # topology), so create-vm places into it (govmomi DefaultDatacenter). In a multi-datacenter estate
       # you would name the target datacenter here (create-vm accepts a `datacenter` param); provisioning
       # into a specific named region across many is the enterprise-capstone story.
+      #
+      # Sizing stays literal for the reason the reference Workflow records: it is fleet-shape rather
+      # than per-instance, and Intent/Compute's `params` is provider-shaped, so forwarding it would
+      # fail closed against an Intent that does not declare it.
       cpus: 2
       memoryMB: 2048
       # The built VM projects AS this kind with these labels (Run provenance, never a reconcile write).
-      projectKind: host
-      projectLabels:
-        fleet: web
-        stratt.intent/instance: web-01
+      # labels carries stratt.intent/instance, so this builds whichever instance it is asked for.
+      projectKind: "{{.launch.projectKind}}"
+      projectLabels: "{{.launch.labels}}"

@@ -2,7 +2,11 @@ package types
 
 // Actuator is an execution-engine plugin that runs TOOL CONTENT (helm, opentofu, ansible,
 // script, mcp) — charter §2.3. It is a DISTINCT, permanent Named Kind from Connector (§2.2):
-// it binds NO Source and holds NO facet/label ownership. It is the operator-declared
+// it binds NO Source and holds NO facet/label ownership — registering an Actuator never
+// claims a facet OWNER row, so the §2.1 one-writer-per-namespace rule is neither tripped
+// nor bypassed. FacetNamespaces below is a write CEILING for a Run's write-back (ANDed with
+// the Step's own scope), not an ownership claim; the write itself is stamped with Run
+// provenance, which §1.2 permits. It is the operator-declared
 // (Config-as-Code) authority for one such plugin, reconciled at runtime by the registry
 // (ADR-0103): declared → dialed + registered into the Actuator/Action dispatch table on
 // every replica, no strattd restart.
@@ -30,8 +34,44 @@ type Actuator struct {
 	// dispatches a K8s Job whose entrypoint is this command instead of a long-lived gRPC Apply.
 	JobCommand []string `json:"jobCommand,omitempty"`
 	// Image overrides the dispatcher's default EE image for this Actuator's Jobs (ADR-0053:
-	// mcp needs the python-bearing EE-mcp image).
+	// mcp needs the python-bearing EE-mcp image; ADR-0117 D3a: it is ALSO how per-Step
+	// ansible content is selected — two declarations differing only in their EE image,
+	// so the spine never reads a tool's params to pick an image).
 	Image string `json:"image,omitempty"`
+	// FacetNamespaces are the Facet namespaces this Actuator's write-back may touch — the
+	// MF3 BOUNDED grant, declared as CaC exactly as a Connector declares its own (ADR-0103).
+	// An Actuator owns no Source and does not sync, but a tool-content Run can still report
+	// OBSERVED state back (ansible's fact-back convention, ADR-0084), and that write must be
+	// gated by an explicit, reviewable grant rather than a wildcard. Empty ⇒ this Actuator
+	// may write NO facet, which is the correct default for a pure executor.
+	//
+	// Declaring it here is what makes a CaC-declared EE-Job Actuator equivalent to a
+	// boot-registered one: without it, a declared ansible variant would run but have every
+	// fact write-back refused — a strictly weaker Actuator that looks identical (§1.8).
+	FacetNamespaces []string `json:"facetNamespaces,omitempty"`
+	// IdentitySchemes are the identity schemes this Actuator may correlate write-back by
+	// (ansible correlates facts by host.name). Same CaC-grant rationale as FacetNamespaces.
+	IdentitySchemes []string `json:"identitySchemes,omitempty"`
+	// ElevatedInputs are dotted paths into this Actuator's Step params whose presence (truthy)
+	// means the Step ELEVATES PRIVILEGE on its target — `become.enabled` for ansible
+	// (ADR-0122 D3). Core walks them and derives the `stratt.change/privileged` change-context
+	// label, which a Control can then gate on.
+	//
+	// This is what closes ADR-0117 D1's honest gap: typed `become` was declared and audited but
+	// not Control-gateable, because ChangeContext carries no Step params and teaching the PDP to
+	// read inside an ansible field is the `if ansible{}` §1.4 forbids. Core reads a declared path
+	// list and a boolean and never learns the word `become` — the same content-blind shape as
+	// FacetNamespaces above, where core enforces a ceiling without knowing what a namespace means.
+	//
+	// It lives on the Actuator rather than in the tool's input Contract, which would be the better
+	// long-run home: `ansible.input.v5` is pinned and hash-verified (§1.5), so annotating it in
+	// place is blocking drift, and minting v6 pulls in ADR-0117 D2's deferred removal of the
+	// deprecated `check`/`eeImage` fields. Reviewed in Git here, beside the other CaC grants it
+	// resembles; it moves to the Contract whenever a v6 is minted for its own reasons.
+	//
+	// Empty ⇒ this Actuator elevates nothing as far as core can tell. Honest and visible in
+	// review, but not automatic: an Actuator that omits it derives no label.
+	ElevatedInputs []string `json:"elevatedInputs,omitempty"`
 	// MCP marks the mcp EE-Job transport (ADR-0053).
 	MCP bool `json:"mcp,omitempty"`
 	// Provides are the capability classes this Actuator fulfils (ADR-0104) — governed CaC

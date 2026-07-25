@@ -679,6 +679,12 @@ func actuatorGrant(a types.Actuator) pluginhost.Grant {
 		PluginIdentity: a.PluginIdentity,
 		Tier:           pluginhost.Tier(a.Tier),
 		Source:         types.Source{Kind: a.Name, Name: a.Name},
+		// The declared MF3 bounds (ADR-0103 CaC grant, ADR-0117 D3a). Empty stays empty —
+		// a pure executor writes no facet — but a declared ansible-class Actuator can now
+		// carry the same bounded grant the boot registration inlines, instead of silently
+		// being a weaker Actuator whose fact write-back is refused.
+		FacetNamespaces: a.FacetNamespaces,
+		IdentitySchemes: a.IdentitySchemes,
 	}
 }
 

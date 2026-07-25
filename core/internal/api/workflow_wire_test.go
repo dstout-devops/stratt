@@ -103,3 +103,116 @@ func TestCredentialRefWireGateOnly(t *testing.T) {
 }
 
 func ptr[T any](v T) *T { return &v }
+
+// TestWorkflowWireRoundTripInputs is the same bug class as the targetless-Action case
+// above, one field along: the launch interface must survive the wire.
+//
+// It is not merely cosmetic. ValidateWorkflow checks every {{.launch.x}} binding against
+// the DECLARED inputs (ADR-0118 D2), so if `inputs` were dropped in workflowFromWire the
+// server would reject a perfectly valid Workflow — reporting that it binds an undeclared
+// input while the Git/reconcile path accepts the identical document. A false rejection that
+// only appears on one surface is exactly the §1.6 asymmetry the precedent above was written
+// for.
+func TestWorkflowWireRoundTripInputs(t *testing.T) {
+	inputs := map[string]any{
+		"type":                 "object",
+		"additionalProperties": false,
+		"required":             []any{"targetSubnet"},
+		"properties": map[string]any{
+			"targetSubnet": map[string]any{"type": "string"},
+		},
+	}
+	in := Workflow{
+		Name:   "subnet-provision",
+		Inputs: &inputs,
+		Steps: []Step{
+			{Name: "approve", Gate: &GateSpec{Approvers: GateApprovers{Teams: ptr([]string{"platform-admins"})}}},
+			{
+				Name:   "build",
+				Needs:  ptr([]string{"approve"}),
+				Action: ptr("script"),
+				Params: &map[string]any{"script": "echo {{.launch.targetSubnet}}"},
+			},
+		},
+	}
+	got, err := workflowFromWire(in)
+	if err != nil {
+		t.Fatalf("a Workflow declaring inputs must survive the wire: %v", err)
+	}
+	if len(got.Inputs) == 0 {
+		t.Fatal("inputs were dropped — a {{.launch.x}} binding would then be falsely rejected")
+	}
+	// And the round trip is symmetric, so GET returns what was applied.
+	back := workflowToWire(got)
+	if back.Inputs == nil {
+		t.Fatal("workflowToWire must publish inputs; without it no surface can generate a launch form")
+	}
+	if (*back.Inputs)["additionalProperties"] != false {
+		t.Fatalf("the closed-world flag must round-trip intact, got %v", (*back.Inputs)["additionalProperties"])
+	}
+}
+
+// ── the remediation door's binding rule (ADR-0118 D3) ─────────────────────────────────
+
+// TestRemediationInputsHaveOneBindingSite: the compiled params and a caller's body are two
+// independent sources for one value. Merging them would need a precedence rule — "the caller
+// wins" or "the route wins" — and that is the implicit precedence §2.4 forbids, at a WORSE
+// boundary than the Intent layer: resolved at run time, with no declaration to read
+// afterwards to explain which value was used.
+//
+// So the overlap is refused. A caller may still fill inputs the route leaves unset, which is
+// what makes the door usable for a Workflow whose interface is only partly compiled.
+func TestRemediationInputsHaveOneBindingSite(t *testing.T) {
+	compiled := map[string]any{"port": "8443", "channel": "stable"}
+
+	// Filling an input the route leaves unset is allowed and merges.
+	merged, clashes := mergeRemediationInputs(compiled, map[string]any{"reason": "incident-42"})
+	if len(clashes) != 0 {
+		t.Fatalf("supplying an input the route does not set must be allowed, got clashes %v", clashes)
+	}
+	if merged["reason"] != "incident-42" || merged["port"] != "8443" {
+		t.Fatalf("merge must keep both sources' distinct keys, got %#v", merged)
+	}
+
+	// Contradicting a compiled input is refused, and every offending key is named.
+	_, clashes = mergeRemediationInputs(compiled, map[string]any{"port": "9999", "channel": "beta"})
+	if len(clashes) != 2 || clashes[0] != "channel" || clashes[1] != "port" {
+		t.Fatalf("both clashing keys must be reported, sorted; got %v", clashes)
+	}
+
+	// No compiled params at all: the caller supplies everything, nothing clashes.
+	merged, clashes = mergeRemediationInputs(nil, map[string]any{"port": "443"})
+	if len(clashes) != 0 || merged["port"] != "443" {
+		t.Fatalf("with no compiled params the caller is the only binding site; got %#v %v", merged, clashes)
+	}
+}
+
+// TestTriggerWireRoundTripInputs: a Workflow-target Trigger's launch inputs must survive the
+// wire, for the same reason a Workflow's own inputs must (ADR-0118 D5).
+//
+// If the API path stripped them, `stratt apply` and the Git/reconcile path would disagree about
+// the same document: one would launch the Workflow parameterized, the other would launch it with
+// nothing and fail on a required input. A one-surface difference in behaviour, which is the §1.6
+// asymmetry this file's first test was written for.
+func TestTriggerWireRoundTripInputs(t *testing.T) {
+	inputs := map[string]any{"targetSubnet": "app-subnet"}
+	in := Trigger{
+		Name:         "nightly",
+		Kind:         TriggerKind("schedule"),
+		Cron:         ptr("0 2 * * *"),
+		WorkflowName: ptr("subnet-provision"),
+		Principal:    ptr("svc"),
+		Inputs:       &inputs,
+	}
+	got, err := triggerFromWire(in)
+	if err != nil {
+		t.Fatalf("a Trigger with launch inputs must survive the wire: %v", err)
+	}
+	if got.Inputs["targetSubnet"] != "app-subnet" {
+		t.Fatalf("inputs were dropped or mangled: %#v", got.Inputs)
+	}
+	back := triggerToWire(got)
+	if back.Inputs == nil || (*back.Inputs)["targetSubnet"] != "app-subnet" {
+		t.Fatalf("triggerToWire must publish inputs, got %#v", back.Inputs)
+	}
+}

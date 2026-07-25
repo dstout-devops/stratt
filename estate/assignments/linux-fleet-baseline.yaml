@@ -9,7 +9,10 @@
 # so this fleet's sshd-config key and web-files' nginx-conf key coexist in
 # fileset.content without fighting. Blueprint reuse across fleets is the feature.
 name: linux-fleet-baseline
-intent: linux-baseline
+# `intent: name@N` pins WHICH configuration version this environment runs (ADR-0119 D2) —
+# required, exactly as `blueprint: name@N` is, so an environment's identity is stated in its own
+# Assignment rather than implied. Editing another version cannot change what this one means.
+intent: linux-baseline@1
 view: linux-fleet
 blueprint: fileset@1
 environments: [dev]

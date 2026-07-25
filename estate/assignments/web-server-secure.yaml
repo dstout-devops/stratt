@@ -3,7 +3,10 @@
 # to 443; nothing else is re-declared. A different View than web-server so the exclusive
 # app.config claim never collides across the two fleets.
 name: web-server-secure
-intent: web-server-secure
+# `intent: name@N` pins WHICH configuration version this environment runs (ADR-0119 D2) —
+# required, exactly as `blueprint: name@N` is, so an environment's identity is stated in its own
+# Assignment rather than implied. Editing another version cannot change what this one means.
+intent: web-server-secure@1
 view: secure-hosts
 blueprint: web-server@1
 environments: [dev]

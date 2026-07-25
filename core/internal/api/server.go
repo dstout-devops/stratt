@@ -592,6 +592,46 @@ func runToWire(r types.Run) Run {
 	return out
 }
 
+// runEventToWire renders one task event for the SSE tail. This path used to
+// marshal types.RunEvent directly — the only response body on the API not built
+// from the published schema — so the wire shape was whatever the internal struct
+// happened to hold. Going through the generated type means an internal field
+// cannot reach a client undeclared, and the spec cannot promise a field the
+// encoder never sends (§1.6: the CLI and an MCP agent read this same contract,
+// not just the first-party UI).
+func runEventToWire(ev types.RunEvent) RunEvent {
+	out := RunEvent{
+		RunId: ev.RunID,
+		Seq:   ev.Seq,
+		At:    ev.At,
+		Kind:  ev.Kind,
+	}
+	if ev.Slice != 0 {
+		out.Slice = &ev.Slice
+	}
+	if ev.Level != "" {
+		// Empty stays absent: "the producer did not state a level" is not "info".
+		lvl := RunEventLevel(ev.Level)
+		out.Level = &lvl
+	}
+	if ev.Scope != "" {
+		// Same rule as the level: empty stays ABSENT, because "the producer did not state a
+		// scope" is not "task" (§1.8, ADR-0121 D1).
+		sc := RunEventScope(ev.Scope)
+		out.Scope = &sc
+	}
+	if ev.Target != "" {
+		out.Target = &ev.Target
+	}
+	if ev.Site != "" {
+		out.Site = &ev.Site
+	}
+	if len(ev.Payload) > 0 {
+		out.Payload = &ev.Payload
+	}
+	return out
+}
+
 // siteToWire renders a Site declaration with its live agent status (ADR-0032).
 func siteToWire(s types.Site, live bool) Site {
 	out := Site{Name: s.Name, Mode: SiteMode(s.Mode), Live: &live}
@@ -641,6 +681,12 @@ func triggerToWire(t types.Trigger) Trigger {
 	if t.Params != nil {
 		out.Params = &t.Params
 	}
+	// The Workflow-target launch interface (ADR-0118 D5). Must round-trip, or the API path
+	// would strip a field the Git path honours — the §1.6 asymmetry that made a Workflow's
+	// own `inputs` falsely rejected at admission until it was caught.
+	if t.Inputs != nil {
+		out.Inputs = &t.Inputs
+	}
 	if t.Slices != 0 {
 		s := int64(t.Slices)
 		out.Slices = &s
@@ -671,19 +717,32 @@ func baselineToWire(b types.Baseline) Baseline {
 	}
 	if b.CompiledFrom != nil {
 		out.CompiledFrom = &struct {
-			Assignment       *string `json:"assignment,omitempty"`
-			Blueprint        *string `json:"blueprint,omitempty"`
-			BlueprintVersion *int64  `json:"blueprintVersion,omitempty"`
-			Intent           *string `json:"intent,omitempty"`
-			Route            *int64  `json:"route,omitempty"`
+			Assignment       *string              `json:"assignment,omitempty"`
+			Blueprint        *string              `json:"blueprint,omitempty"`
+			BlueprintVersion *int64               `json:"blueprintVersion,omitempty"`
+			Intent           *string              `json:"intent,omitempty"`
+			IntentVersion    *int64               `json:"intentVersion,omitempty"`
+			Route            *int64               `json:"route,omitempty"`
+			SpecLayers       *map[string][]string `json:"specLayers,omitempty"`
 		}{}
 		out.CompiledFrom.Assignment = &b.CompiledFrom.Assignment
 		out.CompiledFrom.Intent = &b.CompiledFrom.Intent
 		out.CompiledFrom.Blueprint = &b.CompiledFrom.Blueprint
 		v := int64(b.CompiledFrom.BlueprintVersion)
 		out.CompiledFrom.BlueprintVersion = &v
+		if b.CompiledFrom.IntentVersion > 0 {
+			iv := int64(b.CompiledFrom.IntentVersion)
+			out.CompiledFrom.IntentVersion = &iv
+		}
 		r := int64(b.CompiledFrom.Route)
 		out.CompiledFrom.Route = &r
+		// The layer lineage the merge engine computes (ADR-0118 D1) — the answer to
+		// "which declaration decided this value", published so the descent works from
+		// the UI/CLI/MCP and not only from a compiler log (§1.8, §1.6).
+		if len(b.CompiledFrom.SpecLayers) > 0 {
+			layers := b.CompiledFrom.SpecLayers
+			out.CompiledFrom.SpecLayers = &layers
+		}
 	}
 	if b.Actuator != "" {
 		a := b.Actuator
@@ -721,7 +780,7 @@ func baselineToWire(b types.Baseline) Baseline {
 // baselineFromWire mirrors baselineToWire; same CaC declaration the
 // desired-state controller reads from Git (the CLI plan/apply path sends the
 // checkout verbatim — Git review stays the authorization).
-func baselineFromWire(w Baseline) (types.Baseline, error) {
+func baselineFromWire(w Baseline, opts ...desiredstate.ValidateOption) (types.Baseline, error) {
 	b := types.Baseline{Name: w.Name, ViewName: w.ViewName, Cron: w.Cron, Severity: string(w.Severity)}
 	if w.Actuator != nil {
 		b.Actuator = string(*w.Actuator)
@@ -750,7 +809,7 @@ func baselineFromWire(w Baseline) (types.Baseline, error) {
 	if w.Framework != nil {
 		b.Framework = *w.Framework
 	}
-	if err := desiredstate.ValidateBaseline(b); err != nil {
+	if err := desiredstate.ValidateBaseline(b, opts...); err != nil {
 		return b, err
 	}
 	return b, nil
@@ -778,6 +837,21 @@ func findingToWire(f types.Finding) Finding {
 	}
 	if len(f.Diff) > 0 {
 		out.Diff = json.RawMessage(f.Diff)
+	}
+	// The Finding's own launch spec (ADR-0120 D1). Surfaced on the Finding itself, not only
+	// through the launch door, because for an orphan this row is the ONLY record of it — the
+	// Baseline that carried the values is pruned in the same pass, so a client that could not
+	// read them here could not reconstruct them anywhere (§1.8).
+	if f.LaunchWorkflow != "" {
+		out.LaunchWorkflow = &f.LaunchWorkflow
+	}
+	if len(f.LaunchParams) > 0 {
+		params := f.LaunchParams
+		out.LaunchParams = &params
+	}
+	if f.LaunchKind != "" {
+		k := FindingLaunchKind(f.LaunchKind)
+		out.LaunchKind = &k
 	}
 	return out
 }
@@ -963,7 +1037,7 @@ func (s *Server) DeclareCredentialRef(w http.ResponseWriter, r *http.Request, na
 
 // ── desired state (§1.2: drift is the diff) ─────────────────────────────────
 
-func declarationsFromWire(in DesiredState) (desiredstate.Declarations, error) {
+func declarationsFromWire(in DesiredState, ids desiredstate.ValidateOption) (desiredstate.Declarations, error) {
 	var out desiredstate.Declarations
 	out.Views = make([]desiredstate.Declaration, len(in.Views))
 	for i, d := range in.Views {
@@ -987,7 +1061,7 @@ func declarationsFromWire(in DesiredState) (desiredstate.Declarations, error) {
 	}
 	if in.Triggers != nil {
 		for _, w := range *in.Triggers {
-			t, err := triggerFromWire(w)
+			t, err := triggerFromWire(w, ids)
 			if err != nil {
 				return out, fmt.Errorf("trigger %s: %w", w.Name, err)
 			}
@@ -996,7 +1070,7 @@ func declarationsFromWire(in DesiredState) (desiredstate.Declarations, error) {
 	}
 	if in.Workflows != nil {
 		for _, w := range *in.Workflows {
-			wf, err := workflowFromWire(w)
+			wf, err := workflowFromWire(w, ids)
 			if err != nil {
 				return out, fmt.Errorf("workflow %s: %w", w.Name, err)
 			}
@@ -1014,7 +1088,7 @@ func declarationsFromWire(in DesiredState) (desiredstate.Declarations, error) {
 	}
 	if in.Baselines != nil {
 		for _, w := range *in.Baselines {
-			b, err := baselineFromWire(w)
+			b, err := baselineFromWire(w, ids)
 			if err != nil {
 				return out, fmt.Errorf("baseline %s: %w", w.Name, err)
 			}
@@ -1102,7 +1176,7 @@ func declarationsFromWire(in DesiredState) (desiredstate.Declarations, error) {
 // declaration the desired-state controller reads from Git — the CLI plan/
 // apply path sends the checkout verbatim (ADR-0010: Git review stays the
 // authorization; there is no other write surface).
-func triggerFromWire(w Trigger) (types.Trigger, error) {
+func triggerFromWire(w Trigger, opts ...desiredstate.ValidateOption) (types.Trigger, error) {
 	t := types.Trigger{Name: w.Name, Kind: string(w.Kind)}
 	if w.Cron != nil {
 		t.Cron = *w.Cron
@@ -1134,6 +1208,9 @@ func triggerFromWire(w Trigger) (types.Trigger, error) {
 	if w.Actuator != nil {
 		t.Actuator = *w.Actuator
 	}
+	if w.Inputs != nil {
+		t.Inputs = *w.Inputs
+	}
 	if w.Params != nil {
 		t.Params = *w.Params
 	}
@@ -1146,7 +1223,7 @@ func triggerFromWire(w Trigger) (types.Trigger, error) {
 	if w.Principal != nil {
 		t.Principal = *w.Principal
 	}
-	if err := desiredstate.ValidateTrigger(t); err != nil {
+	if err := desiredstate.ValidateTrigger(t, opts...); err != nil {
 		return t, err
 	}
 	return t, nil
@@ -1183,7 +1260,13 @@ func (s *Server) desiredStateBody(w http.ResponseWriter, r *http.Request) (desir
 		writeErr(w, http.StatusBadRequest, "invalid desired state: "+err.Error())
 		return desiredstate.Declarations{}, false
 	}
-	decls, err := declarationsFromWire(body)
+	// Actuators are CaC-only, so a submission never carries them — but a submitted
+	// Workflow may legitimately NAME one (an ansible Actuator bound to a content-bearing
+	// EE, ADR-0117 D3a). Resolve identities from what is already declared, or the API
+	// door would reject a Workflow the Git path accepts (§1.6 — one capability, every
+	// surface). A store read that fails is not fatal here: validation falls back to
+	// name-based resolution, which is exactly the pre-D3a behaviour.
+	decls, err := declarationsFromWire(body, s.actuatorIdentities(r.Context()))
 	if err != nil {
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return desiredstate.Declarations{}, false
@@ -1452,6 +1535,58 @@ func (s *Server) StartRun(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, runToWire(run))
 }
 
+// correlationLabelInParams reports the first `stratt.intent/*` key anywhere in an Action's params
+// (ADR-0120). It walks the decoded JSON rather than the typed params because the param that carries
+// projected labels is named by each plugin's own Contract (`projectLabels` for crossplane and awsec2,
+// something else for the next provider) — core must not have to know the spelling to police its own
+// namespace. The `stratt.intent/` prefix IS core's: §2 makes the vocabulary core-owned, and the
+// correlation label is the reconcile's private handle on desired-vs-built.
+//
+// The sibling of desiredstate.hardcodedCorrelationLabel, one layer out: that one refuses a build
+// Workflow that writes the label by hand at DECLARATION, this one refuses a caller that writes it at
+// LAUNCH. Same invariant — only the reconcile mints correlation — enforced at both doors, because a
+// declaration-time check cannot see a request body.
+//
+// Malformed JSON is not this function's error to raise: the contract validator ran first and will
+// have rejected it, so an unparseable body reports "no label found" and the earlier failure stands.
+func correlationLabelInParams(params json.RawMessage) (string, bool) {
+	if len(params) == 0 {
+		return "", false
+	}
+	var v any
+	if err := json.Unmarshal(params, &v); err != nil {
+		return "", false
+	}
+	const prefix = "stratt.intent/"
+	var walk func(any) (string, bool)
+	walk = func(v any) (string, bool) {
+		switch t := v.(type) {
+		case map[string]any:
+			keys := make([]string, 0, len(t))
+			for k := range t {
+				keys = append(keys, k)
+			}
+			sort.Strings(keys)
+			for _, k := range keys {
+				if strings.HasPrefix(k, prefix) {
+					return k, true
+				}
+				if found, ok := walk(t[k]); ok {
+					return found, true
+				}
+			}
+		case []any:
+			for _, e := range t {
+				if found, ok := walk(e); ok {
+					return found, true
+				}
+			}
+		}
+		return "", false
+	}
+	return walk(v)
+}
+
 // startAction launches a targetless Connector Action (§2.2, ADR-0031). Input
 // validated at the door; authz is the CredentialRef `use`-check inside
 // RunAction (Actions are not View-scoped).
@@ -1467,6 +1602,21 @@ func (s *Server) startAction(w http.ResponseWriter, r *http.Request, body StartR
 	}
 	if err := contract.ValidateActionInput(*body.Action, params); err != nil {
 		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	// §5 Flow 1: a provisioning build is GATED. This route is the ungated one — a targetless Action
+	// with no Workflow, so no approval Step, authorized only by the CredentialRef use-check. That is
+	// correct for the operations it was built for, but an Action that stamps a stratt.intent/*
+	// correlation label is not one of them: the label is how the reconcile decides a declared unit
+	// EXISTS, so projecting it here both creates real infrastructure with no approval on the path and
+	// resolves the provisioning Finding that would otherwise have demanded one. It also sidesteps the
+	// CapabilityBinding, which is the estate's authority on which provider builds a kind.
+	if key, bad := correlationLabelInParams(params); bad {
+		writeErr(w, http.StatusBadRequest, fmt.Sprintf(
+			"this Run projects the correlation label %q, which only a gated build may do. That label is "+
+				"how the provisioning reconcile decides a declared unit is built, and this route has no "+
+				"approval gate and no provider binding (§5 Flow 1). Launch the build Workflow the "+
+				"provider advertises for the Intent kind instead", key))
 		return
 	}
 	p := orchestrate.LaunchParams{Action: *body.Action, Params: params}
@@ -1637,7 +1787,7 @@ func (s *Server) TailRunEvents(w http.ResponseWriter, r *http.Request, id RunID)
 	}()
 
 	err := s.Bus.Tail(ctx, id, func(ev types.RunEvent) error {
-		payload, err := json.Marshal(ev)
+		payload, err := json.Marshal(runEventToWire(ev))
 		if err != nil {
 			return err
 		}
@@ -1732,6 +1882,16 @@ func workflowToWire(w types.Workflow) Workflow {
 	for _, s := range w.Steps {
 		out.Steps = append(out.Steps, stepToWire(s))
 	}
+	// The launch interface (ADR-0118 D2). Published so every surface generates its own
+	// affordance from the same document — the UI a form, the CLI a flag set, MCP a tool
+	// signature (§1.6). An agent that cannot introspect a Workflow's inputs cannot launch
+	// it correctly, which is the §1.6 hole this closes.
+	if len(w.Inputs) > 0 {
+		var doc map[string]any
+		if err := json.Unmarshal(w.Inputs, &doc); err == nil {
+			out.Inputs = &doc
+		}
+	}
 	return out
 }
 
@@ -1787,8 +1947,19 @@ func approversToWire(a types.GateApprovers) GateApprovers {
 
 // workflowFromWire mirrors workflowToWire; same CaC document the controller
 // reads from Git — the CLI plan/apply path sends the checkout verbatim.
-func workflowFromWire(in Workflow) (types.Workflow, error) {
+func workflowFromWire(in Workflow, opts ...desiredstate.ValidateOption) (types.Workflow, error) {
 	w := types.Workflow{Name: in.Name}
+	// The launch interface must survive the round trip, or admission would FALSELY REJECT a
+	// valid Workflow: ValidateWorkflow checks every {{.launch.x}} binding against the
+	// declared inputs, so dropping them here would make a correct declaration look like it
+	// binds an undeclared field (ADR-0118 D2).
+	if in.Inputs != nil {
+		raw, err := json.Marshal(*in.Inputs)
+		if err != nil {
+			return types.Workflow{}, fmt.Errorf("inputs: %w", err)
+		}
+		w.Inputs = raw
+	}
 	for _, s := range in.Steps {
 		step := types.Step{Name: s.Name}
 		if s.Needs != nil {
@@ -1830,7 +2001,7 @@ func workflowFromWire(in Workflow) (types.Workflow, error) {
 		}
 		w.Steps = append(w.Steps, step)
 	}
-	if err := desiredstate.ValidateWorkflow(w); err != nil {
+	if err := desiredstate.ValidateWorkflow(w, opts...); err != nil {
 		return w, err
 	}
 	return w, nil
@@ -1902,35 +2073,96 @@ func (s *Server) StartWorkflowRun(w http.ResponseWriter, r *http.Request, name s
 		s.fail(w, err)
 		return
 	}
-	// View-scoped execution authz (§2.5, ADR-0028): the launching Principal must
-	// hold `runner` on EVERY actuation Step's View (gate Steps target none). The
-	// per-Step child Runs re-check at the RunAgainstView chokepoint; this is the
-	// fail-fast 403 at the door.
+	principal, ok := s.authorizeLaunch(w, r, wf)
+	if !ok {
+		return
+	}
+	// Optional launch inputs (ADR-0059): the operator parameterizes what was declared (the
+	// target of a re-placement move, a per-instance build) — bound in Step params via
+	// {{.launch.x}}. Two concepts, two fields (ADR-0118 D4): `inputs` are the Workflow's OWN
+	// declared parameters, `context` is what the launcher asserts about the CHANGE for policy
+	// Steps to decide on. They shared one untyped bag until the split, which is why the inputs
+	// schema could not be closed — a policy-gated Workflow's `environment` was
+	// indistinguishable from a stray parameter.
+	inputs, changeContext, ok2 := decodeLaunchBody(w, r)
+	if !ok2 {
+		return
+	}
+	s.launchWorkflow(w, r, wf, principal, inputs, changeContext)
+}
+
+// authorizeLaunch enforces View-scoped execution authz (§2.5, ADR-0028): the launching
+// Principal must hold `runner` on EVERY actuation Step's View (gate Steps target none). The
+// per-Step child Runs re-check at the RunAgainstView chokepoint; this is the fail-fast 403 at
+// the door. Shared by both launch doors so remediation cannot become a softer path to the
+// same execution.
+func (s *Server) authorizeLaunch(w http.ResponseWriter, r *http.Request, wf types.Workflow) (string, bool) {
 	for _, st := range wf.Steps {
 		if st.ViewName == "" {
 			continue
 		}
 		if !s.requireGrant(w, r, authz.RelationRunner, "view:"+st.ViewName) {
-			return
+			return "", false
 		}
 	}
 	principal := ""
 	if id, _, ok := authz.PrincipalFrom(r.Context()); ok {
 		principal = id
 	}
-	// Optional launch params (ADR-0059): the operator parameterizes what was declared
-	// (the target of a re-placement move, a per-instance build) — bound in Step params
-	// via {{.launch.x}}. The gate + View-runner authz above remain the control; this
-	// only fills declared placeholders, it cannot escalate what the Workflow may do.
-	var launchParams map[string]any
+	return principal, true
+}
+
+// decodeLaunchBody reads the {inputs, context} launch body (ADR-0118 D4). An unknown
+// top-level field is a 400, not a silent no-op — sending `input:` and having it ignored is
+// exactly the class of quiet mismatch this seam exists to remove.
+func decodeLaunchBody(w http.ResponseWriter, r *http.Request) (inputs, changeContext map[string]any, ok bool) {
+	var body WorkflowLaunch
 	if r.Body != nil {
 		dec := json.NewDecoder(r.Body)
-		if err := dec.Decode(&launchParams); err != nil && !errors.Is(err, io.EOF) {
-			s.fail(w, fmt.Errorf("decode launch params: %w", err))
-			return
+		dec.DisallowUnknownFields()
+		if err := dec.Decode(&body); err != nil && !errors.Is(err, io.EOF) {
+			writeErr(w, http.StatusBadRequest, "decode launch body: "+err.Error())
+			return nil, nil, false
 		}
 	}
-	wr, err := s.Store.CreateWorkflowRun(r.Context(), name, "", principal, "")
+	if body.Inputs != nil {
+		inputs = *body.Inputs
+	}
+	if body.Context != nil {
+		changeContext = *body.Context
+	}
+	return inputs, changeContext, true
+}
+
+// launchWorkflow is THE server-side launch sequence, shared by the direct door
+// (POST /workflows/{name}/runs) and the remediation door (POST /findings/{id}/remediation).
+//
+// One function on purpose. A second launch path would grow its own authz check, its own
+// validation, and its own drift — which is precisely the §1.6 asymmetry that let MCP POST a
+// nil body for as long as it did. Both doors therefore get identical View-runner authz,
+// identical input validation, and identical Run bookkeeping.
+func (s *Server) launchWorkflow(w http.ResponseWriter, r *http.Request, wf types.Workflow, principal string, inputs, changeContext map[string]any) {
+	// Validate at the DOOR so a caller gets a 400 naming the offending input, rather than a
+	// created-then-failed Run they have to go read (§1.8). This is the same
+	// contract.ResolveLaunchInputs the RunDAG chokepoint calls — one implementation, two
+	// call sites: this one for the error message, that one because no transport can skip it
+	// (ADR-0118 D4). Resolving here also means the defaults are visible in the Run's
+	// recorded params, not conjured later.
+	resolved, verr := contract.ResolveLaunchInputs(wf.Name, wf.Inputs, inputs)
+	if verr != nil {
+		writeErr(w, http.StatusBadRequest, verr.Error())
+		return
+	}
+	// The change context is admitted at the door for the same reason (ADR-0122): a caller
+	// asserting an environment, a core-owned `stratt.change/` label, or an unknown changeClass
+	// gets a 400 naming the key, not a Run that dies inside the DAG. The RunDAG chokepoint calls
+	// the same function, because that is the one nothing can skip.
+	if verr := policy.ValidateChangeContext(changeContext); verr != nil {
+		writeErr(w, http.StatusBadRequest, verr.Error())
+		return
+	}
+
+	wr, err := s.Store.CreateWorkflowRun(r.Context(), wf.Name, "", principal, "")
 	if err != nil {
 		s.fail(w, err)
 		return
@@ -1940,7 +2172,10 @@ func (s *Server) StartWorkflowRun(w http.ResponseWriter, r *http.Request, name s
 		ID:        temporalID,
 		TaskQueue: orchestrate.TaskQueue,
 	}, orchestrate.RunDAG, orchestrate.DAGInput{
-		WorkflowRunID: wr.ID, WorkflowName: name, Principal: principal, LaunchParams: launchParams,
+		WorkflowRunID: wr.ID, WorkflowName: wf.Name, Principal: principal,
+		LaunchParams: resolved, Context: changeContext,
+		// The floor's own environment, not the caller's claim about it (ADR-0122 D2).
+		Environment: s.Store.ActiveEnvironment(),
 	})
 	if err != nil {
 		_ = s.Store.SetWorkflowRunStatus(r.Context(), wr.ID, types.RunFailed, map[string]any{"error": "workflow start failed"})
@@ -1953,6 +2188,217 @@ func (s *Server) StartWorkflowRun(w http.ResponseWriter, r *http.Request, name s
 		return
 	}
 	writeJSON(w, http.StatusCreated, workflowRunToWire(wr))
+}
+
+// GetFindingRemediation implements (GET /findings/{id}/remediation): render what remediating
+// this Finding WOULD launch, before anything is launched (ADR-0118 D3).
+//
+// §1.8 is the reason this exists as its own read: a door that acts without first showing what
+// it will do hides mechanism at exactly the moment an operator needs it. The params were
+// resolved from the Intent layer at compile, so this is also where "which values will the fix
+// use" is answerable without reading the compiler.
+func (s *Server) GetFindingRemediation(w http.ResponseWriter, r *http.Request, id string) {
+	_, fl, ok := s.findingRemediation(w, r, id)
+	if !ok {
+		return
+	}
+	out := FindingRemediation{Baseline: fl.Baseline, Workflow: fl.Workflow}
+	if fl.Kind != "" {
+		k := FindingRemediationKind(fl.Kind)
+		out.Kind = &k
+	}
+	if len(fl.Params) > 0 {
+		params := fl.Params
+		out.Params = &params
+	}
+	// The Workflow's own schema, so a caller can see which inputs it may still supply —
+	// namely the ones the compiled params do not already set.
+	if wf, err := s.Store.GetWorkflow(r.Context(), fl.Workflow); err == nil && len(wf.Inputs) > 0 {
+		var doc map[string]any
+		if json.Unmarshal(wf.Inputs, &doc) == nil {
+			out.Inputs = &doc
+		}
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+// RemediateFinding implements (POST /findings/{id}/remediation): launch the Baseline's
+// remediation Workflow with the compiled params as its inputs (ADR-0118 D3).
+//
+// Until this existed, `Baseline.RemediationWorkflow` was a name nothing server-side ever read
+// — remediation was a ref an operator had to carry by hand to the generic launch door. That
+// worked only because launches accepted anything; the moment inputs became `required`, a
+// hand-launched remediation would have FAILED where it previously ran with wrong values.
+//
+// Never automatic (§5 Flow 2): a human or agent invokes it, Gate Steps still wait for their
+// approvers, and it goes through the same authz and validation as a direct launch.
+func (s *Server) RemediateFinding(w http.ResponseWriter, r *http.Request, id string) {
+	_, fl, ok := s.findingRemediation(w, r, id)
+	if !ok {
+		return
+	}
+	wf, err := s.Store.GetWorkflow(r.Context(), fl.Workflow)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	principal, ok := s.authorizeLaunch(w, r, wf)
+	if !ok {
+		return
+	}
+	supplied, changeContext, ok := decodeLaunchBody(w, r)
+	if !ok {
+		return
+	}
+	merged, clashes := mergeRemediationInputs(fl.Params, supplied)
+	if len(clashes) > 0 {
+		what, where := "remediationParams", "route"
+		switch fl.Kind {
+		case types.LaunchRemove:
+			what, where = "removeParams", "blueprint"
+		case types.LaunchBuild:
+			what, where = "launchParams", "Intent"
+		}
+		writeErr(w, http.StatusBadRequest, fmt.Sprintf(
+			"input(s) %v are already set by baseline %s's compiled %s — a value cannot be "+
+				"bound twice for one launch (§2.4: resolving that would need a precedence rule). Supply only "+
+				"inputs the %s leaves unset, or change the %s",
+			clashes, fl.Baseline, what, where, where))
+		return
+	}
+	s.launchWorkflow(w, r, wf, principal, merged, changeContext)
+}
+
+// mergeRemediationInputs folds a caller's supplied inputs onto the Baseline's compiled ones,
+// returning the merge and any keys BOTH set.
+//
+// ONE BINDING SITE PER INPUT (ADR-0118 D3). The compiled params and the request body are two
+// independent sources for one value, and picking a winner would be exactly the implicit
+// precedence §2.4 forbids — at a worse boundary than the Intent layer, because it would be
+// resolved at run time with no declaration anyone can read afterwards. So an overlap is
+// refused rather than merged: a caller may fill inputs the route leaves unset, never
+// contradict one it set. Clashes are sorted so the error is deterministic.
+func mergeRemediationInputs(compiled, supplied map[string]any) (map[string]any, []string) {
+	merged := make(map[string]any, len(compiled)+len(supplied))
+	for k, v := range compiled {
+		merged[k] = v
+	}
+	var clashes []string
+	for k, v := range supplied {
+		if _, set := compiled[k]; set {
+			clashes = append(clashes, k)
+			continue
+		}
+		merged[k] = v
+	}
+	sort.Strings(clashes)
+	return merged, clashes
+}
+
+// findingLaunch is the resolved answer to "what fixes this Finding": the Workflow, the params
+// compiled for it, and which KIND of fix it is.
+type findingLaunch struct {
+	Baseline string
+	Workflow string
+	Params   map[string]any
+	// Kind is the act: types.LaunchRemediate | LaunchRemove | LaunchBuild. All three go
+	// through the same door because from the operator's side all three answer "resolve this
+	// Finding", and all three are named because they are not interchangeable.
+	Kind string
+}
+
+// findingRemediation resolves a Finding to what would be launched to fix it, 404ing when there
+// is nothing. Shared by the preview and the launch so they can never disagree.
+//
+// TWO SOURCES, AND THE ORDER MATTERS. A drift Finding reads its spec from its Baseline, which is
+// live. An ORPHAN Finding cannot: Apply writes it and then prunes the compiled Baseline, because
+// a Baseline whose Assignment is withdrawn must stop being observed, and graph.finding.baseline
+// has no foreign key — so the Finding survives pointing at a row that is gone. Its spec therefore
+// travels ON the Finding, and it must be checked FIRST, before any attempt to read a Baseline
+// that by construction is not there.
+//
+// Before this, both doors called GetBaseline unconditionally, so every orphan Finding got
+// "baseline <name> not found" — a message that describes a missing row when the real answer is
+// "this Finding retires abandoned state, and here is the Workflow that does it" (§1.8: the
+// failure must name its actual cause).
+func (s *Server) findingRemediation(w http.ResponseWriter, r *http.Request, id string) (types.Finding, findingLaunch, bool) {
+	f, err := s.Store.GetFinding(r.Context(), id)
+	if err != nil {
+		s.fail(w, err)
+		return types.Finding{}, findingLaunch{}, false
+	}
+	fl, prob := resolveFindingLaunch(f, func(name string) (types.Baseline, error) {
+		return s.Store.GetBaseline(r.Context(), name)
+	})
+	if prob != nil {
+		if prob.Err != nil {
+			s.fail(w, prob.Err)
+		} else {
+			writeErr(w, prob.Status, prob.Message)
+		}
+		return types.Finding{}, findingLaunch{}, false
+	}
+	return f, fl, true
+}
+
+// launchProblem is why a Finding routes to nothing: either a decision this code made (Status +
+// Message) or a store error to surface through s.fail, which owns the error→status mapping.
+type launchProblem struct {
+	Status  int
+	Message string
+	Err     error
+}
+
+// resolveFindingLaunch is the DECISION half of findingRemediation, split out from the I/O so it
+// runs in `task ci`.
+//
+// Server.Store is a concrete *graph.Store, so anything testing the handler needs a live Postgres
+// — and a Postgres-gated test is skipped in CI, which is how this repo has repeatedly shipped
+// mechanisms nothing exercised. The Baseline read is injected instead, so every branch below
+// (including the two that exist purely to produce an honest message) is provable without a
+// substrate.
+func resolveFindingLaunch(f types.Finding, getBaseline func(string) (types.Baseline, error)) (findingLaunch, *launchProblem) {
+	// The withdrawal spec is checked FIRST, before any attempt to read a Baseline that by
+	// construction is not there: Apply writes an orphan Finding and then prunes the compiled
+	// Baseline, and graph.finding.baseline has no foreign key, so the Finding survives pointing
+	// at a row that is gone.
+	if f.LaunchWorkflow != "" {
+		return findingLaunch{
+			Baseline: f.Baseline, Workflow: f.LaunchWorkflow,
+			Params: f.LaunchParams, Kind: f.LaunchKind,
+		}, nil
+	}
+	b, err := getBaseline(f.Baseline)
+	if err != nil {
+		// An orphan whose Baseline is gone and which carries no withdrawal Workflow is the
+		// onRemove:retain case: the state was deliberately left in place and there is nothing
+		// to launch. Before this branch existed every such request reported "baseline <name>
+		// not found" — a missing row, when the real answer is that the declaration asked for
+		// the state to be kept (§1.8: name the actual cause).
+		// NOTE: this deliberately does NOT branch on f.Framework. Framework carries "orphan"
+		// and "provision", and testing it here would make it a second discriminator alongside
+		// LaunchKind, able to disagree (ADR-0120 D1/V5). The question asked is the honest one:
+		// this Finding has no Baseline AND no launch spec, so whatever raised it left nothing
+		// to launch.
+		if errors.Is(err, graph.ErrNotFound) {
+			return findingLaunch{}, &launchProblem{Status: http.StatusNotFound, Message: fmt.Sprintf(
+				"finding %s has no baseline %q and carries no launch spec of its own, so there is "+
+					"nothing to launch. The Finding's detail says why; the usual causes are an "+
+					"Intent withdrawn with onRemove: retain (the state is kept deliberately), a "+
+					"Blueprint that declares no removeWorkflow, unresolved provisioning for a "+
+					"declared-but-unbuilt instance, or a Baseline no longer declared in Git",
+				f.ID, f.Baseline)}
+		}
+		return findingLaunch{}, &launchProblem{Err: err}
+	}
+	if b.RemediationWorkflow == "" {
+		return findingLaunch{}, &launchProblem{Status: http.StatusNotFound, Message: fmt.Sprintf(
+			"baseline %s declares no remediationWorkflow, so this Finding has no remediation to launch", b.Name)}
+	}
+	return findingLaunch{
+		Baseline: b.Name, Workflow: b.RemediationWorkflow, Params: b.RemediationParams,
+		Kind: types.LaunchRemediate,
+	}, nil
 }
 
 // GetWorkflowRun implements (GET /workflow-runs/{id}): the Workflow → Run
@@ -2705,4 +3151,24 @@ func (s *Server) DownloadEvidence(w http.ResponseWriter, r *http.Request, id str
 	w.Header().Set("X-Stratt-Evidence-SHA256", e.SHA256)
 	w.Header().Set("Content-Disposition", "attachment; filename=evidence-"+e.FindingID+".json")
 	_, _ = w.Write(body)
+}
+
+// actuatorIdentities reads the estate's declared Actuators and returns the
+// name → pluginIdentity resolution their Steps' Contracts need (see
+// contract.ValidateActuatorParamsFor). A read failure yields the no-op option:
+// validation then resolves by name, the behaviour before Actuator variants existed,
+// so a store blip narrows what the door accepts rather than what it lets through.
+func (s *Server) actuatorIdentities(ctx context.Context) desiredstate.ValidateOption {
+	as, err := s.Store.ListActuators(ctx)
+	if err != nil {
+		s.Log.Warn("could not read declared Actuators for contract resolution", "error", err)
+		return desiredstate.WithActuatorIdentities(nil)
+	}
+	m := make(map[string]string, len(as))
+	for _, a := range as {
+		if a.PluginIdentity != "" {
+			m[a.Name] = a.PluginIdentity
+		}
+	}
+	return desiredstate.WithActuatorIdentities(m)
 }

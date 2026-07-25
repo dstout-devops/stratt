@@ -163,7 +163,7 @@ exit gate still requires its own operational evidence (SLO, security review, ado
 ## The demo library — and the live-cluster e2e it delivered
 
 **[demos/](../demos/README.md)** ([ADR-0116](adr/0116-demo-library.md)) is a growing library of
-self-contained, narrated, **turnkey** scenarios that teach Stratt by running it. Three ship, each
+self-contained, narrated, **turnkey** scenarios that teach Stratt by running it. Four ship, each
 **live-verified end to end on kind** (build-up → gated Workflow → asserted real outcome → teardown):
 
 | Demo                                                                        | Substrate         | Fidelity     | Proven live                                                                                       |
@@ -171,6 +171,7 @@ self-contained, narrated, **turnkey** scenarios that teach Stratt by running it.
 | [k8s: deploy an app](../demos/k8s-deploy/README.md)                         | Kubernetes (kind) | `real`       | gated `helm/deploy` → a real Deployment 1/1 Ready serving its page                                |
 | [vSphere: provision a VM + the live graph](../demos/vsphere-only/README.md) | vSphere (vcsim)   | `build-real` | Syncer projects the topology; gated `vcenter/create-vm` → the built VM observed back (VMs 50→51)  |
 | [EC2: provision a real instance](../demos/ec2-only/README.md)               | EC2 (floci)       | `real`       | gated `awsec2/create-vm` → a real floci instance container running, observed into the graph (0→1) |
+| [app install with a certificate](../demos/app-cert/README.md)                | SSH (Linux host)  | `real`       | gated ansible converge: SSH as an unprivileged user → privilege escalation → a `community.crypto` X.509 cert → TLS read back off the wire, `app.config` projected with Run provenance, and a no-op Run refused |
 
 **This is the first real dent in the "live-cluster e2e" gap** named in the enterprise-readiness section
 below: the platform is now proven not only structurally and by unit/integration tests, but by

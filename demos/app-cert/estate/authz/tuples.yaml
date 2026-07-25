@@ -1,0 +1,8 @@
+# The dev-floor grants this demo needs, as data. The bootstrap-admin Principal is a member
+# of platform-admins (so it can approve the Gate) and holds `user` of the machine credential
+# (the per-ref use-check is the Step's authorization gate, §2.5) and `runner` on the View
+# (execution authz, ADR-0028 — checked before a single target resolves or a pod spawns).
+tuples:
+  - { user: principal:bootstrap-admin, relation: member, object: team:platform-admins }
+  - { user: principal:bootstrap-admin, relation: user, object: credential_ref:app-node-ssh }
+  - { user: principal:bootstrap-admin, relation: runner, object: view:app-nodes }

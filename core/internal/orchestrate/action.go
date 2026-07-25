@@ -70,7 +70,11 @@ func RunAction(ctx workflow.Context, in RunInput) (RunOutcome, error) {
 	}
 
 	var res dispatch.Result
-	if err := workflow.ExecuteActivity(ctx, a.ExecuteAction, in, creds).Get(ctx, &res); err != nil {
+	// An Action runs a pod too — and Actions are where the long ones live (a tofu
+	// apply routinely outlives ten minutes), so it takes the same execution-scoped
+	// ceiling as a Step.
+	xctx := workflow.WithActivityOptions(ctx, execActivityOptions(opts))
+	if err := workflow.ExecuteActivity(xctx, a.ExecuteAction, in, creds).Get(xctx, &res); err != nil {
 		return RunOutcome{RunID: in.RunID}, finishRun(ctx, a, in, types.RunFailed, err)
 	}
 

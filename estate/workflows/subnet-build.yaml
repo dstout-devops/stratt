@@ -10,6 +10,35 @@
 # `action:` is the landscape binding — crossplane/provision (provider-kubernetes in
 # dev), swappable for a real cloud provider without touching the estate around it.
 name: subnet-build
+# The per-singleton launch interface (ADR-0120 D2, extended to the ADR-0059 D4 path). Before this the
+# Workflow hardcoded ONE singleton's name and correlation key, so it could only ever build that one —
+# app-subnet and dmz-subnet are both declared Intent/Subnet, and only the hardcoded one was buildable.
+#
+# `singleton` is the per-kind correlation key ("Intent/Subnet/app-subnet"), `name` is what the resource
+# is called in the provider; they are different things and both are needed. `params` stays OPAQUE — the
+# provider's own Action Contract types it downstream (§1.5).
+inputs:
+  type: object
+  additionalProperties: false
+  required: [name, projectKind, labels]
+  properties:
+    name:
+      type: string
+      description: The declared Intent name — what the provisioned resource is called.
+    projectKind:
+      type: string
+      description: The Entity kind the built resource projects as.
+    labels:
+      type: object
+      additionalProperties: { type: string }
+      description: >
+        Labels the projection carries, INCLUDING stratt.intent/singleton — the ONLY key
+        ProvisionedSingletons reads, so any other spelling builds an Entity that never resolves
+        its own Finding.
+    params:
+      type: object
+      additionalProperties: true
+      description: Opaque provider build params, typed by the provider's Action Contract, never here.
 steps:
   - name: approve
     gate:
@@ -27,15 +56,16 @@ steps:
       version: v1alpha2
       resource: objects
       kind: Object
-      name: app-subnet
-      cidr: 10.30.0.0/24
+      name: "{{.launch.name}}"
+      cidr: "{{.launch.params.cidr}}"
       readySeconds: 120
       # The estate overlay (ADR-0059 §6): the built subnet projects AS this kind, correlated
       # by the stratt.intent/singleton label so the provision/app-subnet Finding resolves.
-      projectKind: subnet
+      projectKind: "{{.launch.projectKind}}"
       identityScheme: crossplane.claim
-      projectLabels:
-        stratt.intent/singleton: Intent/Subnet/app-subnet
+      # labels already carries stratt.intent/singleton, so this builds whichever Subnet its Finding
+      # is for rather than only app-subnet.
+      projectLabels: "{{.launch.labels}}"
       # Topology composition (ADR-0059): the subnet is in-vlan the net-vlan — the build
       # projects the edge (relation primitive), targeted by identity. If the vlan isn't
       # built yet the edge drops with a visible trace (§1.8), never silently.
@@ -43,6 +73,16 @@ steps:
         - type: in-vlan
           toScheme: crossplane.claim
           toValue: net-vlan
+      # The NESTED manifest is what provider-kubernetes actually applies, and it was the last place
+      # this Workflow still hardcoded one singleton. Parameterizing `name`/`cidr` above was not
+      # enough: with `subnet-app-subnet` and `10.30.0.0/24` literal here, building dmz-subnet applied
+      # a ConfigMap under app-subnet's NAME carrying app-subnet's CIDR — silently overwriting the
+      # other subnet's resource rather than failing. Both Intent/Subnet declarations resolve to this
+      # one Workflow (crossplane is the sole Subnet provider), so the collision was reachable the
+      # moment dmz-subnet was built. Finding it prompted the D3 check that now makes the class
+      # unshippable: a builder may not contain any literal belonging to a declaration of the kind it
+      # builds — not a name, not a declared params value, at any depth including inside an opaque
+      # provider blob. The literals below are exactly what that check refuses.
       spec:
         providerConfigRef:
           name: default
@@ -51,7 +91,7 @@ steps:
             apiVersion: v1
             kind: ConfigMap
             metadata:
-              name: subnet-app-subnet
+              name: "subnet-{{.launch.name}}"
               namespace: crossplane-system
             data:
-              cidr: 10.30.0.0/24
+              cidr: "{{.launch.params.cidr}}"

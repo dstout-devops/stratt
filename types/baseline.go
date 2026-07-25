@@ -46,6 +46,28 @@ type Baseline struct {
 	// Baseline's Findings. A ref only — remediation is never auto-launched
 	// (§5 Flow 2: remediation behind Gates).
 	RemediationWorkflow string `json:"remediationWorkflow,omitempty"`
+	// RemediationParams are the launch inputs to pass that Workflow, resolved from the
+	// Intent layer at compile (ADR-0118 D3). Compiler-written only; a hand-written Baseline
+	// may declare them directly.
+	//
+	// They are NOT copied onto the Findings this Baseline raises. A Finding already
+	// references its Baseline, so a copy would be a second, staleable record of a
+	// Git-derived fact for no gain — nothing in the parameter plane is per-Entity. The
+	// remediation door reads them from here at launch.
+	RemediationParams map[string]any `json:"remediationParams,omitempty"`
+	// RemoveParams are the launch inputs for the WITHDRAWAL Workflow — the Blueprint's
+	// removeWorkflow, surfaced on the orphan Finding when this Baseline's Assignment is
+	// withdrawn (ADR-0118 D3).
+	//
+	// Stamped here at compile because by the time they are needed the Assignment is gone from
+	// Git, so the resolved spec they came from cannot be rebuilt: this row is the only surviving
+	// record of what the retired configuration actually said. That is also why the withdrawal
+	// Workflow REF is not stored beside them — it lives on the still-declared, version-pinned
+	// Blueprint, and duplicating it here would give one fact two authorities (§1.2).
+	//
+	// Unlike RemediationParams these carry no per-route component: withdrawal retires the whole
+	// compiled set, so every Baseline an Assignment compiled carries the same values.
+	RemoveParams map[string]any `json:"removeParams,omitempty"`
 	// Framework tags the Findings (e.g. "cis") — "one kind, framework-
 	// tagged" (§2.4).
 	Framework string `json:"framework,omitempty"`
@@ -89,11 +111,33 @@ type Baseline struct {
 // CompiledOrigin is the §1.8 descent linkage from a compiled Baseline back
 // to the Intent-layer documents that produced it (ADR-0023).
 type CompiledOrigin struct {
-	Assignment       string `json:"assignment"`
-	Intent           string `json:"intent"`
+	Assignment string `json:"assignment"`
+	Intent     string `json:"intent"`
+	// IntentVersion is the Intent version this Baseline was compiled from (ADR-0119 D4). Without
+	// it the §1.8 descent is ambiguous the moment two versions exist, and the withdrawn-Assignment
+	// orphan branch — which re-reads the Intent to learn its onRemove semantics — has no version
+	// to read at.
+	//
+	// It answers "which version is EXPECTED now", not "which version produced this still-open
+	// Finding": CompiledName deliberately excludes the version so a promotion updates Baselines in
+	// place (preserving Finding continuity) rather than pruning and recreating them, and
+	// Finding.Diff is overwritten on each observation.
+	IntentVersion    int    `json:"intentVersion,omitempty"`
 	Blueprint        string `json:"blueprint"`
 	BlueprintVersion int    `json:"blueprintVersion"`
 	Route            int    `json:"route"`
+	// SpecLayers maps each dotted path in the effective spec to the ordered layers that
+	// produced it ("blueprint:web-server/defaults", "intent:tls-app",
+	// "assignment:prod-web"), last entry effective — so "why is this 443, and which
+	// declaration decided it" is answerable from the compiled artifact instead of being
+	// re-derived by hand (§1.8 descent; ADR-0118 D1). The merge engine has always
+	// computed this and the compiler used to discard it.
+	//
+	// NOT called "provenance": Provenance is a frozen Named Kind (§2.1) meaning the
+	// graph-plane write stamp — which Run or Syncer wrote an attribute, when, from which
+	// Source. Layer lineage has no Run and no Source, and spending a frozen term on a
+	// second meaning would teach two models for one word.
+	SpecLayers map[string][]string `json:"specLayers,omitempty"`
 }
 
 // FacetObservation is the Baseline mode for compiler-emitted, graph-side

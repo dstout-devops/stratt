@@ -14,27 +14,48 @@ import (
 // Intents, Assignments, and Blueprints (ADR-0023) are CaC-only: the
 // desired-state engine is the sole writer, mirroring the other declarables.
 
-// UpsertIntent writes one declared Intent.
+// intentVersionOr normalizes a version for storage: 0 (an unset field on a document that
+// predates ADR-0119) means version 1, matching the column default.
+func intentVersionOr(v int) int {
+	if v < 1 {
+		return 1
+	}
+	return v
+}
+
+// UpsertIntent writes one declared Intent version (ADR-0119 D1).
+//
+// ON CONFLICT targets (name, version) — the unique index the EXPAND migration added — not the
+// (name) primary key that still exists in this release. That is what lets a previous release's
+// replicas keep writing `ON CONFLICT (name)` through a rolling upgrade (ADR-0078): both
+// constraints are present, each statement names the one it needs.
 func (s *Store) UpsertIntent(ctx context.Context, in types.Intent) error {
+	in.Version = intentVersionOr(in.Version)
 	spec, err := json.Marshal(in)
 	if err != nil {
 		return fmt.Errorf("graph: marshal intent spec: %w", err)
 	}
 	_, err = s.pool.Exec(ctx, `
-		INSERT INTO graph.intent (name, spec) VALUES ($1, $2)
-		ON CONFLICT (name) DO UPDATE SET spec = excluded.spec`, in.Name, spec)
+		INSERT INTO graph.intent (name, version, spec) VALUES ($1, $2, $3)
+		ON CONFLICT (name, version) DO UPDATE SET spec = excluded.spec`, in.Name, in.Version, spec)
 	if err != nil {
-		return fmt.Errorf("graph: upsert intent: %w", err)
+		return fmt.Errorf("graph: upsert intent %s@%d: %w", in.Name, in.Version, err)
 	}
 	return nil
 }
 
-// GetIntent returns one Intent declaration.
-func (s *Store) GetIntent(ctx context.Context, name string) (types.Intent, error) {
+// GetIntent returns one Intent version.
+//
+// The version is in the not-found message deliberately (ADR-0119 F4): "intent tls-app not found"
+// while tls-app sits right there in Git is a message that sends an operator looking in the wrong
+// place. The Blueprint equivalent has always rendered name@version; this now matches it.
+func (s *Store) GetIntent(ctx context.Context, name string, version int) (types.Intent, error) {
+	version = intentVersionOr(version)
 	var spec []byte
-	err := s.pool.QueryRow(ctx, `SELECT spec FROM graph.intent WHERE name = $1`, name).Scan(&spec)
+	err := s.pool.QueryRow(ctx,
+		`SELECT spec FROM graph.intent WHERE name = $1 AND version = $2`, name, version).Scan(&spec)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return types.Intent{}, fmt.Errorf("%w: intent %s", ErrNotFound, name)
+		return types.Intent{}, fmt.Errorf("%w: intent %s@%d", ErrNotFound, name, version)
 	}
 	if err != nil {
 		return types.Intent{}, fmt.Errorf("graph: get intent: %w", err)
@@ -46,9 +67,9 @@ func (s *Store) GetIntent(ctx context.Context, name string) (types.Intent, error
 	return in, nil
 }
 
-// ListIntents returns every Intent declaration, ordered by name.
+// ListIntents returns every Intent version, ordered by name then version.
 func (s *Store) ListIntents(ctx context.Context) ([]types.Intent, error) {
-	rows, err := s.pool.Query(ctx, `SELECT spec FROM graph.intent ORDER BY name`)
+	rows, err := s.pool.Query(ctx, `SELECT spec FROM graph.intent ORDER BY name, version`)
 	if err != nil {
 		return nil, fmt.Errorf("graph: list intents: %w", err)
 	}
@@ -69,13 +90,15 @@ func (s *Store) ListIntents(ctx context.Context) ([]types.Intent, error) {
 }
 
 // DeleteIntent removes one Intent declaration.
-func (s *Store) DeleteIntent(ctx context.Context, name string) error {
-	tag, err := s.pool.Exec(ctx, `DELETE FROM graph.intent WHERE name = $1`, name)
+func (s *Store) DeleteIntent(ctx context.Context, name string, version int) error {
+	version = intentVersionOr(version)
+	tag, err := s.pool.Exec(ctx,
+		`DELETE FROM graph.intent WHERE name = $1 AND version = $2`, name, version)
 	if err != nil {
-		return fmt.Errorf("graph: delete intent: %w", err)
+		return fmt.Errorf("graph: delete intent %s@%d: %w", name, version, err)
 	}
 	if tag.RowsAffected() == 0 {
-		return fmt.Errorf("%w: intent %s", ErrNotFound, name)
+		return fmt.Errorf("%w: intent %s@%d", ErrNotFound, name, version)
 	}
 	return nil
 }

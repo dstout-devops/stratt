@@ -15,6 +15,12 @@ vars:
   NODE_MIN: "22" # previous LTS (container ships current LTS 24)
   PYTHON_MIN: "3.13" # N-1 of 3.14 (pods / plugin SDK only — charter §3)
   TASK_MIN: "3.0"
+  # uv RUNS the pinned Python gate tools below (uvx ruff@…, uvx mypy@…, uv run pytest),
+  # so it is a gate prerequisite, not an optional convenience. It is checked by
+  # `task evergreen` because it was NOT, once: the Taskfile moved to `uvx <tool>@<ver>`
+  # while CI installed only go/node/python, and the gate failed deep inside fmt:check
+  # with a bare `"uvx": executable file not found` instead of naming the missing tool.
+  UV_MIN: "0.5"
   # Sovereign plugin port codegen (ADR-0046 Phase A). Pinned like the other
   # `go run <tool>@<ver>` tools; bump on the quarterly upgrade train.
   BUF_VER: "1.71.0"
@@ -31,6 +37,34 @@ vars:
   HELM_SHA256_AMD64: "e9b88b4ee95b18c706839c28d3a0220e5bc470e9cd9262410c90793c45ff8b7c"
   HELM_SHA256_ARM64: "21abd9354d39b2cd79a8d76be6912cd137a983cbf997193503fb8a6a6e2f2785"
   KUBECTL_VER: "1.34.1" # within skew of the kind node (K8s N-2, §1.7)
+  # Python gate tools (ADR-0117 D3). Run via `uvx <tool>@<ver>` — project-independent,
+  # so they work regardless of UV_PROJECT — and PINNED: a gate whose whole thesis is
+  # "unpinned things resolve differently on different days" must not itself float.
+  RUFF_VER: "0.14.5"
+  MYPY_VER: "1.18.2"
+  PYYAML_VER: "6.0.3"
+  PYTEST_VER: "9.1.1"
+  # Go build/test parallelism. Deliberately BOUNDED rather than left at the Go
+  # default of GOMAXPROCS: the gates loop over ~29 workspace modules, and an
+  # unbounded `go vet ./...` / `go test ./...` fans out to every core, so on a
+  # many-core box you get dozens of concurrent type-checkers over dependency trees
+  # the size of client-go, all writing one build cache. That pins the machine at
+  # 100% and — observed repeatedly on this container (overlayfs on WSL2) — produced
+  # `internal compiler error: unexpected decoding error: EOF`: the compiler reading
+  # a build-cache entry that another writer had left truncated. Type-checking has
+  # sharply diminishing returns past ~8 workers, so this costs little wall clock on
+  # a warm cache and makes the gate reproducible instead of a coin flip.
+  #
+  # It governs IMAGE builds too, threaded in as a --build-arg to every Dockerfile that
+  # compiles Go (each sets GOFLAGS=-p from it). Bounding only the host gates was not
+  # enough, and the gap was worse than the original symptom: a single
+  # `go build ./cmd/strattd` inside a builder stage still fans out to every core over the
+  # same overlayfs, and on a COLD BuildKit cache — the exact state a `docker builder
+  # prune` leaves behind — the whole client-go graph compiles at once. Observed: `export
+  # data desync` in k8s.io/client-go/informers, and then the host itself going down under
+  # the memory load. One knob for both, so the two cannot drift apart.
+  # Override on a beefy CI runner: `GO_PARALLEL=16 task ci`.
+  GO_PARALLEL: '{{.GO_PARALLEL | default "8"}}'
   BIN: "{{.ROOT_DIR}}/.bin"
   HELM: "{{.ROOT_DIR}}/.bin/helm"
   KUBECTL: "{{.ROOT_DIR}}/.bin/kubectl"
@@ -94,6 +128,7 @@ tasks:
         check node   "{{.NODE_MIN}}"   "$(node --version 2>/dev/null | sed 's/^v//' | cut -d. -f1)"
         check python "{{.PYTHON_MIN}}" "$(python3 --version 2>/dev/null | awk '{print $2}')"
         check task   "{{.TASK_MIN}}"   "$(task --version 2>/dev/null | sed 's/^v//')"
+        check uv     "{{.UV_MIN}}"     "$(uv --version 2>/dev/null | awk '{print $2}')"
         if [ "$fail" != 0 ]; then
           echo "Evergreen gate FAILED (charter §1.7 — stay >= N-1)."; exit 1
         fi
@@ -112,7 +147,7 @@ tasks:
           [ -z "$files" ] || { echo '→ gofmt'; gofmt -w $files; }
         fi
         if [ -f package.json ]; then echo '→ prettier'; npx --yes prettier --write . >/dev/null; fi
-        if [ -f pyproject.toml ]; then echo '→ ruff format'; uv run ruff format .; fi
+        if [ -f pyproject.toml ]; then echo '→ ruff format'; uvx ruff@{{.RUFF_VER}} format .; fi
         echo "fmt done."
 
   fmt:check:
@@ -129,7 +164,7 @@ tasks:
           fi
         fi
         if [ -f package.json ]; then npx --yes prettier --check . || rc=1; fi
-        if [ -f pyproject.toml ]; then uv run ruff format --check . || rc=1; fi
+        if [ -f pyproject.toml ]; then uvx ruff@{{.RUFF_VER}} format --check . || rc=1; fi
         if [ "$rc" != 0 ]; then exit 1; fi
         echo "fmt:check clean."
 
@@ -141,11 +176,16 @@ tasks:
         set -eu
         if [ -f go.work ]; then
           for mod in $(go work edit -json | jq -r '.Use[].DiskPath'); do
-            echo "→ go vet ($mod)"; (cd "$mod" && go vet ./...)
+            echo "→ go vet ($mod)"; (cd "$mod" && go vet -p={{.GO_PARALLEL}} ./...)
           done
         fi
         if [ -f package.json ]; then echo '→ eslint'; npx --yes eslint .; fi
-        if [ -f pyproject.toml ]; then echo '→ ruff check'; uv run ruff check .; fi
+        if [ -f pyproject.toml ]; then
+          echo '→ ruff check'; uvx ruff@{{.RUFF_VER}} check .
+          # mypy --strict too: .claude/rules/backend-python.md demands typed + clean, and
+          # ee/content.py is a supply-chain gate — the last place to accept loose typing.
+          echo '→ mypy'; uvx --with pyyaml=={{.PYYAML_VER}} --with types-PyYAML --with pytest=={{.PYTEST_VER}} mypy@{{.MYPY_VER}} --strict ee/
+        fi
         echo "lint done."
 
   test:
@@ -157,12 +197,50 @@ tasks:
         ran=0
         if [ -f go.work ]; then
           for mod in $(go work edit -json | jq -r '.Use[].DiskPath'); do
-            echo "→ go test ($mod)"; (cd "$mod" && go test ./...)
+            echo "→ go test ($mod)"; (cd "$mod" && go test -p={{.GO_PARALLEL}} ./...)
           done
           ran=1
         fi
-        if [ -f pyproject.toml ]; then echo '→ pytest'; uv run pytest; ran=1; fi
+        if [ -f pyproject.toml ]; then
+          echo '→ pytest'
+          # Pinned deps, project-independent (UV_PROJECT may point elsewhere). These cover
+          # the EE content pin gate (ADR-0117 D3) — supply-chain logic, so it gets tests.
+          uv run --quiet --with pyyaml=={{.PYYAML_VER}} --with pytest=={{.PYTEST_VER}} pytest -q
+          ran=1
+        fi
         if [ "$ran" = 0 ]; then echo "No packages yet — nothing to test."; fi
+
+  plugins:standalone:
+    desc: Build every plugin module OUTSIDE the go workspace (GOWORK=off) — the way its container image builds it
+    silent: true
+    cmds:
+      - |
+        set -eu
+        # A plugin is a SEPARATE Go module and its image builds it with GOWORK=off
+        # (see ee/Dockerfile). Inside the workspace, go.work satisfies imports from
+        # sibling modules, so an INCOMPLETE go.sum stays invisible here and fails
+        # only at docker build — far from the change that caused it. This gate moves
+        # that failure left. It has bitten ansible, vcenter, awsec2 and (silently)
+        # ten more; plugins/script is baked into the EE image, so its breakage would
+        # have taken the execution environment down with it.
+        failed=""
+        for mod in $(find plugins -maxdepth 2 -name go.mod | sort); do
+          dir=$(dirname "$mod")
+          if (cd "$dir" && GOWORK=off go build -p={{.GO_PARALLEL}} ./... >/dev/null 2>&1); then
+            echo "  ✓ $dir"
+          else
+            echo "  ✗ $dir — does not build standalone:"
+            (cd "$dir" && GOWORK=off go build ./... 2>&1 | head -5 | sed 's/^/      /') || true
+            failed="$failed $dir"
+          fi
+        done
+        if [ -n "$failed" ]; then
+          echo ""
+          echo "✗ plugins:standalone — these modules build only inside the workspace:$failed"
+          echo "  Fix each with:  (cd <module> && GOWORK=off go mod tidy)"
+          exit 1
+        fi
+        echo "✓ plugins:standalone — every plugin module builds outside the workspace"
 
   e2e:cells:
     desc: Two-Cell end-to-end harness — federated read + fenced Source re-home over real HTTP (ADR-0044; needs `task dev:up`)
@@ -181,6 +259,8 @@ tasks:
       - task: migrate:lint
       - task: adr:index:check
       - task: test
+      - task: plugins:standalone
+      - task: ee:content:check
       - task: ui:ci
 
   dev:up:
@@ -353,7 +433,7 @@ tasks:
   image:build:
     desc: Build the strattd control-plane image (ADR-0013)
     cmds:
-      - docker build -f deploy/docker/strattd.Dockerfile -t stratt/strattd:dev .
+      - docker build --build-arg GO_PARALLEL={{.GO_PARALLEL}} -f deploy/docker/strattd.Dockerfile -t stratt/strattd:dev .
 
   image:kind-load:
     desc: Build the strattd image and load it into the dev kind cluster
@@ -364,13 +444,13 @@ tasks:
   image:agent:
     desc: Build the stratt-agent (Site satellite) image and load it into kind (ADR-0032)
     cmds:
-      - docker build -f deploy/docker/stratt-agent.Dockerfile -t stratt/stratt-agent:dev .
+      - docker build --build-arg GO_PARALLEL={{.GO_PARALLEL}} -f deploy/docker/stratt-agent.Dockerfile -t stratt/stratt-agent:dev .
       - go run sigs.k8s.io/kind@v{{.KIND_VER}} load docker-image stratt/stratt-agent:dev --name {{.KIND_CLUSTER}}
 
   image:forwarder:
     desc: Build the stratt-forwarder (audit→SIEM) image and load it into kind (ADR-0034)
     cmds:
-      - docker build -f deploy/docker/stratt-forwarder.Dockerfile -t stratt/stratt-forwarder:dev .
+      - docker build --build-arg GO_PARALLEL={{.GO_PARALLEL}} -f deploy/docker/stratt-forwarder.Dockerfile -t stratt/stratt-forwarder:dev .
       - go run sigs.k8s.io/kind@v{{.KIND_VER}} load docker-image stratt/stratt-forwarder:dev --name {{.KIND_CLUSTER}}
 
   dev:forwarder:demo:
@@ -490,45 +570,45 @@ tasks:
   image:vcenter-plugin:
     desc: Build the vcenter gRPC Syncer plugin image and load it into the kind cluster
     cmds:
-      - docker build -f plugins/vcenter/Dockerfile -t stratt-plugin-vcenter:dev .
+      - docker build --build-arg GO_PARALLEL={{.GO_PARALLEL}} -f plugins/vcenter/Dockerfile -t stratt-plugin-vcenter:dev .
       - go run sigs.k8s.io/kind@v{{.KIND_VER}} load docker-image stratt-plugin-vcenter:dev --name {{.KIND_CLUSTER}}
 
   image:declared-plugin:
     desc: Build the declared-estate gRPC Syncer plugin image and load it into the kind cluster
     cmds:
-      - docker build -f plugins/declared/Dockerfile -t stratt-plugin-declared:dev .
+      - docker build --build-arg GO_PARALLEL={{.GO_PARALLEL}} -f plugins/declared/Dockerfile -t stratt-plugin-declared:dev .
       - go run sigs.k8s.io/kind@v{{.KIND_VER}} load docker-image stratt-plugin-declared:dev --name {{.KIND_CLUSTER}}
 
   image:awsec2-plugin:
     desc: Build the awsec2 gRPC plugin image (create-vm build Action) and load it into the kind cluster
     cmds:
-      - docker build -f plugins/awsec2/Dockerfile -t stratt-plugin-awsec2:dev .
+      - docker build --build-arg GO_PARALLEL={{.GO_PARALLEL}} -f plugins/awsec2/Dockerfile -t stratt-plugin-awsec2:dev .
       - go run sigs.k8s.io/kind@v{{.KIND_VER}} load docker-image stratt-plugin-awsec2:dev --name {{.KIND_CLUSTER}}
 
   image:netbox-plugin:
     desc: Build the NetBox topology Syncer plugin image (ADR-0059) and load it into the kind cluster
     cmds:
-      - docker build -f plugins/netbox/Dockerfile -t stratt-plugin-netbox:dev .
+      - docker build --build-arg GO_PARALLEL={{.GO_PARALLEL}} -f plugins/netbox/Dockerfile -t stratt-plugin-netbox:dev .
       - go run sigs.k8s.io/kind@v{{.KIND_VER}} load docker-image stratt-plugin-netbox:dev --name {{.KIND_CLUSTER}}
 
   image:helm-plugin:
     desc: Build the helm Actuator plugin image and load it into the kind cluster (ADR-0092)
     cmds:
-      - docker build -f plugins/helm/Dockerfile -t stratt-plugin-helm:dev .
+      - docker build --build-arg GO_PARALLEL={{.GO_PARALLEL}} -f plugins/helm/Dockerfile -t stratt-plugin-helm:dev .
       - go run sigs.k8s.io/kind@v{{.KIND_VER}} load docker-image stratt-plugin-helm:dev --name {{.KIND_CLUSTER}}
 
   image:crossplane-plugin:
     desc: Build the Crossplane build-Actuator plugin image (ADR-0059) and load it into the kind cluster
     cmds:
-      - docker build -f plugins/crossplane/Dockerfile -t stratt-plugin-crossplane:dev .
+      - docker build --build-arg GO_PARALLEL={{.GO_PARALLEL}} -f plugins/crossplane/Dockerfile -t stratt-plugin-crossplane:dev .
       - go run sigs.k8s.io/kind@v{{.KIND_VER}} load docker-image stratt-plugin-crossplane:dev --name {{.KIND_CLUSTER}}
 
   images:control-plane:
     desc: Build the CONTROL-PLANE images (no push/load) — the CI regression gate. Plugins & the EE image build in their OWN units (each plugin is its own build/CI unit, ADR-0046) — core CI never builds per-plugin (it must scale to hundreds of plugins).
     cmds:
-      - docker build -f deploy/docker/strattd.Dockerfile -t stratt/strattd:ci .
-      - docker build -f deploy/docker/stratt-agent.Dockerfile -t stratt/stratt-agent:ci .
-      - docker build -f deploy/docker/stratt-forwarder.Dockerfile -t stratt/stratt-forwarder:ci .
+      - docker build --build-arg GO_PARALLEL={{.GO_PARALLEL}} -f deploy/docker/strattd.Dockerfile -t stratt/strattd:ci .
+      - docker build --build-arg GO_PARALLEL={{.GO_PARALLEL}} -f deploy/docker/stratt-agent.Dockerfile -t stratt/stratt-agent:ci .
+      - docker build --build-arg GO_PARALLEL={{.GO_PARALLEL}} -f deploy/docker/stratt-forwarder.Dockerfile -t stratt/stratt-forwarder:ci .
 
   dev:stage-estate:
     desc: Stage the reconciled /estate into the chart's inline-declarations path (Helm can't glob outside the chart)
@@ -649,6 +729,12 @@ tasks:
           -f {{.ROOT_DIR}}/deploy/charts/stratt/values-allinone.yaml \
           -f {{.ROOT_DIR}}/deploy/charts/stratt/values-selfdeploy.yaml \
           -f {{.ROOT_DIR}}/deploy/charts/stratt/values-genesis.yaml
+      # A rebuilt image with the SAME tag is invisible to Kubernetes: the pod spec does not
+      # change, so `helm upgrade` leaves the old pod running and `rollout status` happily
+      # reports it ready. With pullPolicy: Never that means a code change silently does not
+      # take effect — this cost a live demo run, which passed its floor checks against a
+      # strattd built hours earlier. Restart explicitly whenever the image was just rebuilt.
+      - "{{.KUBECTL}} --context {{.KIND_CONTEXT}} -n stratt rollout restart deploy/stratt"
       - "{{.KUBECTL}} --context {{.KIND_CONTEXT}} -n stratt rollout status deploy/stratt --timeout=240s"
 
   bootstrap:kind:
@@ -704,6 +790,12 @@ tasks:
           -f {{.ROOT_DIR}}/deploy/charts/stratt/values-allinone.yaml \
           -f {{.ROOT_DIR}}/deploy/charts/stratt/values-selfdeploy.yaml \
           -f {{.ROOT_DIR}}/deploy/charts/stratt/values-genesis.yaml
+      # A rebuilt image with the SAME tag is invisible to Kubernetes: the pod spec does not
+      # change, so `helm upgrade` leaves the old pod running and `rollout status` happily
+      # reports it ready. With pullPolicy: Never that means a code change silently does not
+      # take effect — this cost a live demo run, which passed its floor checks against a
+      # strattd built hours earlier. Restart explicitly whenever the image was just rebuilt.
+      - "{{.KUBECTL}} --context {{.KIND_CONTEXT}} -n stratt rollout restart deploy/stratt"
       - "{{.KUBECTL}} --context {{.KIND_CONTEXT}} -n stratt rollout status deploy/stratt --timeout=240s"
       # The gate-only CredentialRef points at this marker Secret (pointer, no material).
       - "{{.KUBECTL}} --context {{.KIND_CONTEXT}} -n stratt-authz create secret generic helm-deploy-authz --from-literal=marker=1 --dry-run=client -o yaml | {{.KUBECTL}} --context {{.KIND_CONTEXT}} apply -f -"
@@ -754,6 +846,12 @@ tasks:
           -f {{.ROOT_DIR}}/deploy/charts/stratt/values-allinone.yaml \
           -f {{.ROOT_DIR}}/deploy/charts/stratt/values-genesis.yaml \
           -f {{.ROOT_DIR}}/deploy/charts/stratt/values-demo-vsphere.yaml
+      # A rebuilt image with the SAME tag is invisible to Kubernetes: the pod spec does not
+      # change, so `helm upgrade` leaves the old pod running and `rollout status` happily
+      # reports it ready. With pullPolicy: Never that means a code change silently does not
+      # take effect — this cost a live demo run, which passed its floor checks against a
+      # strattd built hours earlier. Restart explicitly whenever the image was just rebuilt.
+      - "{{.KUBECTL}} --context {{.KIND_CONTEXT}} -n stratt rollout restart deploy/stratt"
       - "{{.KUBECTL}} --context {{.KIND_CONTEXT}} -n stratt rollout status deploy/stratt --timeout=240s"
       # The gate-only vsphere-dev CredentialRef points at this marker Secret (pointer, no material).
       - "{{.KUBECTL}} --context {{.KIND_CONTEXT}} -n stratt create secret generic vsphere-dev-authz --from-literal=marker=1 --dry-run=client -o yaml | {{.KUBECTL}} --context {{.KIND_CONTEXT}} apply -f -"
@@ -801,6 +899,12 @@ tasks:
           -f {{.ROOT_DIR}}/deploy/charts/stratt/values-allinone.yaml \
           -f {{.ROOT_DIR}}/deploy/charts/stratt/values-genesis.yaml \
           -f {{.ROOT_DIR}}/deploy/charts/stratt/values-demo-ec2.yaml
+      # A rebuilt image with the SAME tag is invisible to Kubernetes: the pod spec does not
+      # change, so `helm upgrade` leaves the old pod running and `rollout status` happily
+      # reports it ready. With pullPolicy: Never that means a code change silently does not
+      # take effect — this cost a live demo run, which passed its floor checks against a
+      # strattd built hours earlier. Restart explicitly whenever the image was just rebuilt.
+      - "{{.KUBECTL}} --context {{.KIND_CONTEXT}} -n stratt rollout restart deploy/stratt"
       - "{{.KUBECTL}} --context {{.KIND_CONTEXT}} -n stratt rollout status deploy/stratt --timeout=240s"
       # The gate-only aws-dev CredentialRef points at this marker Secret (pointer, no material).
       - "{{.KUBECTL}} --context {{.KIND_CONTEXT}} -n stratt create secret generic aws-dev-authz --from-literal=marker=1 --dry-run=client -o yaml | {{.KUBECTL}} --context {{.KIND_CONTEXT}} apply -f -"
@@ -814,6 +918,83 @@ tasks:
     cmds:
       - "{{.HELM}} uninstall stratt -n stratt --kube-context {{.KIND_CONTEXT}} --ignore-not-found 2>/dev/null || true"
       - docker compose -f {{.ROOT_DIR}}/deploy/dev/docker-compose.yml stop floci 2>/dev/null || true
+
+  demo:app-cert:stage:
+    # Stage the app-cert demo's SELF-CONTAINED estate (ADR-0116) into the inline-declarations path —
+    # its authz grants + the app-node-ssh machine CredentialRef + the app-nodes View + the declared
+    # Syncer + hosts/app-node.yaml + the ansible-crypto Actuator (the ADR-0117 D3a declaration that
+    # selects the crypto EE) + both Workflows. hosts/** is picked up by the declared plugin's
+    # estateHosts mount. Delivered as CaC — actuators/connectors/credential-refs are CaC-only.
+    desc: Stage the app-cert demo estate into the inline-declarations path
+    cmds:
+      - rm -rf {{.ROOT_DIR}}/deploy/charts/stratt/dev/declarations
+      - mkdir -p {{.ROOT_DIR}}/deploy/charts/stratt/dev/declarations
+      - cp -R {{.ROOT_DIR}}/demos/app-cert/estate/. {{.ROOT_DIR}}/deploy/charts/stratt/dev/declarations/
+
+  demo:app-cert:node:up:
+    # The demo's managed host: a real sshd + nginx node with root login DISABLED and
+    # py3-cryptography installed, so `become` is load-bearing and community.crypto's modules can
+    # run on the target. Separate from dev:managed-web:up so the two fixtures cannot perturb each
+    # other. Idempotent — a throwaway keypair is generated once and reused.
+    desc: Stand up the app-cert demo's managed node (sshd + nginx + sudo, non-root login)
+    deps: [tools:kubectl]
+    vars:
+      KEYDIR: "{{.ROOT_DIR}}/deploy/dev/app-cert"
+    cmds:
+      - go run sigs.k8s.io/kind@v{{.KIND_VER}} export kubeconfig --name {{.KIND_CLUSTER}}
+      # A throwaway ed25519 keypair: the PRIVATE half rides the app-node-ssh CredentialRef, the
+      # PUBLIC half becomes the node's authorized_keys. Material is git-ignored, never committed (§2.5).
+      - mkdir -p {{.KEYDIR}}
+      - test -f {{.KEYDIR}}/id_ed25519 || ssh-keygen -t ed25519 -N "" -C stratt-app-cert -f {{.KEYDIR}}/id_ed25519
+      - "{{.KUBECTL}} --context {{.KIND_CONTEXT}} -n stratt create secret generic app-node-creds --from-file=ssh-privatekey={{.KEYDIR}}/id_ed25519 --dry-run=client -o yaml | {{.KUBECTL}} --context {{.KIND_CONTEXT}} apply -f -"
+      - "{{.KUBECTL}} --context {{.KIND_CONTEXT}} -n stratt create secret generic app-node-authorized-keys --from-file=authorized_keys={{.KEYDIR}}/id_ed25519.pub --dry-run=client -o yaml | {{.KUBECTL}} --context {{.KIND_CONTEXT}} apply -f -"
+      - "{{.KUBECTL}} --context {{.KIND_CONTEXT}} apply -f {{.ROOT_DIR}}/demos/app-cert/node.yaml"
+      - "{{.KUBECTL}} --context {{.KIND_CONTEXT}} -n stratt rollout status deploy/app-node --timeout=180s"
+
+  demo:app-cert:run:
+    # The turnkey "app install with a certificate" demo (ADR-0116; the scenario ADR-0117 was written
+    # for). Stands up a Stratt floor whose desired state IS this demo's estate, plus the crypto EE
+    # image and a real managed node, then drives the gated Workflow end to end: approve, SSH in as an
+    # unprivileged user, escalate, mint a certificate with community.crypto, install the app on it,
+    # write the observed state back — and then prove that a play reaching no host FAILS.
+    # By-hand walk: demos/app-cert/README.md. Teardown: demo:app-cert:down.
+    desc: "Demo — install an app with a TLS certificate on a real host through a gated Workflow (demos/app-cert)"
+    deps: [tools:helm, tools:kubectl]
+    cmds:
+      - task: dev:kind:up
+      - task: image:kind-load
+      - task: image:declared-plugin # the Syncer that projects the demo's declared host
+      # The purpose-built EE: community.crypto installed and version-verified at BUILD time
+      # (ADR-0117 D3). Built and kind-loaded HERE because nothing else would catch a missing
+      # image — an EE-Job Actuator is reported healthy without any image check (ADR-0117 l).
+      - task: dev:ee-crypto:build
+      - task: demo:app-cert:stage
+      - |
+        set -eu
+        "{{.HELM}}" upgrade --install stratt {{.ROOT_DIR}}/deploy/charts/stratt \
+          --kube-context {{.KIND_CONTEXT}} -n stratt --create-namespace \
+          -f {{.ROOT_DIR}}/deploy/charts/stratt/values-allinone.yaml \
+          -f {{.ROOT_DIR}}/deploy/charts/stratt/values-genesis.yaml \
+          -f {{.ROOT_DIR}}/deploy/charts/stratt/values-demo-app-cert.yaml
+      # A rebuilt image with the SAME tag is invisible to Kubernetes: the pod spec does not
+      # change, so `helm upgrade` leaves the old pod running and `rollout status` happily
+      # reports it ready. With pullPolicy: Never that means a code change silently does not
+      # take effect — this cost a live demo run, which passed its floor checks against a
+      # strattd built hours earlier. Restart explicitly whenever the image was just rebuilt.
+      - "{{.KUBECTL}} --context {{.KIND_CONTEXT}} -n stratt rollout restart deploy/stratt"
+      - "{{.KUBECTL}} --context {{.KIND_CONTEXT}} -n stratt rollout status deploy/stratt --timeout=240s"
+      - task: demo:app-cert:node:up
+      - KUBECONTEXT={{.KIND_CONTEXT}} KUBECTL={{.KUBECTL}} bash {{.ROOT_DIR}}/demos/app-cert/run.sh
+
+  demo:app-cert:down:
+    # Tear down the app-cert demo: uninstall the stratt release and delete the managed node (and its
+    # Secrets — throwaway key material). kind cluster kept for a fast re-run; full nuke:
+    # `task dev:kind:down`. Idempotent.
+    desc: "Demo teardown — uninstall stratt + delete the managed node (full nuke: dev:kind:down)"
+    cmds:
+      - "{{.HELM}} uninstall stratt -n stratt --kube-context {{.KIND_CONTEXT}} --ignore-not-found 2>/dev/null || true"
+      - "{{.KUBECTL}} --context {{.KIND_CONTEXT}} delete -f {{.ROOT_DIR}}/demos/app-cert/node.yaml --ignore-not-found 2>/dev/null || true"
+      - "{{.KUBECTL}} --context {{.KIND_CONTEXT}} -n stratt delete secret app-node-creds app-node-authorized-keys --ignore-not-found 2>/dev/null || true"
 
   dev:promote:authz:
     # Genesis -> real-authz promotion, BACKEND axis (ADR-0102, docs/runbooks/genesis-to-authz.md):
@@ -856,6 +1037,12 @@ tasks:
           --kube-context {{.KIND_CONTEXT}} -n stratt --create-namespace \
           -f {{.ROOT_DIR}}/deploy/charts/stratt/values-allinone.yaml \
           -f {{.ROOT_DIR}}/deploy/charts/stratt/values-connector-e2e.yaml
+      # A rebuilt image with the SAME tag is invisible to Kubernetes: the pod spec does not
+      # change, so `helm upgrade` leaves the old pod running and `rollout status` happily
+      # reports it ready. With pullPolicy: Never that means a code change silently does not
+      # take effect — this cost a live demo run, which passed its floor checks against a
+      # strattd built hours earlier. Restart explicitly whenever the image was just rebuilt.
+      - "{{.KUBECTL}} --context {{.KIND_CONTEXT}} -n stratt rollout restart deploy/stratt"
       - "{{.KUBECTL}} --context {{.KIND_CONTEXT}} -n stratt rollout status deploy/stratt --timeout=240s"
 
   dev:stack:up:
@@ -927,15 +1114,92 @@ tasks:
     cmds:
       # Context is the repo root: the multi-stage build compiles the stratt-ansible
       # shim (ADR-0051) from plugins/ansible + sdk before baking the EE runtime.
-      - docker build -f ee/Dockerfile -t stratt-ee:dev .
+      - docker build --build-arg GO_PARALLEL={{.GO_PARALLEL}} -f ee/Dockerfile -t stratt-ee:dev .
       - go run sigs.k8s.io/kind@v{{.KIND_VER}} load docker-image stratt-ee:dev --name {{.KIND_CLUSTER}}
+
+  ee:content:check:
+    desc: Fail if any EE ansible-content declaration is unpinned or unlocked (ADR-0117 D3, follow-up i)
+    cmds:
+      # The SAME implementation the EE build runs (ee/content.py), so CI and the image
+      # cannot disagree about what "pinned" means. uv supplies pyyaml without adding a
+      # repo dependency (.claude/rules/backend-python.md — uv is the only sanctioned
+      # Python package manager, and this content is EE-side, never the control plane).
+      #
+      # This is the WEAKER of the two lock gates and says so: verifying a content hash means
+      # installing the artifact, which means the network, which a pin check must not need. So
+      # it asserts every declared artifact IS locked at the declared version (the mistake
+      # that actually happens — bump a version, forget to relock) and leaves the hashes to
+      # the build, which is where they can be computed from real bytes.
+      - uv run --quiet --with pyyaml=={{.PYYAML_VER}} python ee/content.py verify ee/content/*.requirements.yml
+
+  ee:content:lock:
+    desc: "(Re)generate an EE content lockfile from a real install — review the diff before committing (ADR-0117 i)"
+    vars:
+      CONTENT: '{{.CONTENT | default "crypto.requirements.yml"}}'
+    cmds:
+      # Writing a lockfile requires ACTUALLY INSTALLING the content, because the hash is over
+      # the bytes the registry served — there is no offline way to know them. So this runs the
+      # real EE build with EE_LOCK_MODE=write (which verifies nothing) and copies the result
+      # back out of the image.
+      #
+      # Regenerating is a DELIBERATE, reviewable act, never part of a build or of `task ci`:
+      # an automatic relock would launder exactly the event the lockfile exists to catch —
+      # the same version resolving to different bytes — into a silent no-op. Commit the diff
+      # only once you know why it changed.
+      - |
+        set -eu
+        content="{{.CONTENT}}"
+        lock="${content%.yml}.lock.json"
+        test -f "ee/content/${content}" || { echo "no such declaration: ee/content/${content}"; exit 1; }
+        docker build --build-arg GO_PARALLEL={{.GO_PARALLEL}} -f ee/Dockerfile \
+          --build-arg "EE_CONTENT=${content}" --build-arg EE_LOCK_MODE=write \
+          -t "stratt-ee-relock:tmp" .
+        docker run --rm "stratt-ee-relock:tmp" cat "/usr/share/stratt/ee-content/${lock}" > "ee/content/${lock}"
+        docker image rm "stratt-ee-relock:tmp" >/dev/null
+        echo "wrote ee/content/${lock} — REVIEW THE DIFF before committing:"
+        git --no-pager diff --stat -- "ee/content/${lock}" || true
+
+  ee:content:pull:
+    desc: "Download declared collections for an AIR-GAPPED EE build (ADR-0124 D2) — never relocks"
+    vars:
+      CONTENT: '{{.CONTENT | default "crypto.requirements.yml"}}'
+      OUT: '{{.OUT | default "artifacts"}}'
+    cmds:
+      # Run this on a CONNECTED machine, then copy ee/content/<OUT>/ to the air-gapped builder and
+      # build with EE_OFFLINE=<OUT>. Deliberately not a relock: it fetches the declared versions and
+      # stops, so the lockfile stays what git says and the offline install verifies against it
+      # exactly as an online one does. A pull that relocked would launder the very event the
+      # lockfile exists to catch (ADR-0117 i).
+      - uv run --quiet --with pyyaml=={{.PYYAML_VER}} python ee/content.py pull
+          --artifacts ee/content/{{.OUT}} ee/content/{{.CONTENT}}
+
+  ee:factory:requirements:
+    desc: "Read an ansible-builder execution-environment.yml and report what carries over (ADR-0124 D1)"
+    vars:
+      EE: '{{.EE}}'
+    cmds:
+      # The compatibility front door: an operator arriving from AAP has this file. This prints the
+      # Galaxy requirements it declares — feed them to the pinned pipeline — and names on stderr
+      # every section that does NOT carry over, rather than producing an image quietly missing it.
+      - 'test -n "{{.EE}}" || { echo "usage: task ee:factory:requirements EE=path/to/execution-environment.yml" >&2; exit 1; }' 
+      - uv run --quiet --with pyyaml=={{.PYYAML_VER}} python ee/content.py ee-requirements {{.EE}}
+
+  dev:ee-crypto:build:
+    desc: Build the crypto-content EE variant and load it into the kind cluster (ADR-0117 D3/D3a)
+    cmds:
+      # Same Dockerfile as the base EE — content is selected by build ARG, not by a fork
+      # of the image definition. The declared collections are installed at BUILD time, the
+      # resolved set is verified against the pins, and each artifact's SHA-256 is verified
+      # against ee/content/crypto.requirements.lock.json (ee/content.py).
+      - docker build --build-arg GO_PARALLEL={{.GO_PARALLEL}} --build-arg EE_CONTENT=crypto.requirements.yml -f ee/Dockerfile -t stratt-ee-crypto:dev .
+      - go run sigs.k8s.io/kind@v{{.KIND_VER}} load docker-image stratt-ee-crypto:dev --name {{.KIND_CLUSTER}}
 
   dev:ee-mcp:build:
     desc: Build the MCP EE image and load it into the kind cluster (ADR-0022)
     cmds:
       # Context is the repo root: the multi-stage build compiles the stratt-mcp shim
       # (ADR-0053) from plugins/mcp + sdk before baking the sandbox runtime.
-      - docker build -f ee/mcp.Dockerfile -t stratt-ee-mcp:dev .
+      - docker build --build-arg GO_PARALLEL={{.GO_PARALLEL}} -f ee/mcp.Dockerfile -t stratt-ee-mcp:dev .
       - go run sigs.k8s.io/kind@v{{.KIND_VER}} load docker-image stratt-ee-mcp:dev --name {{.KIND_CLUSTER}}
 
   generate:

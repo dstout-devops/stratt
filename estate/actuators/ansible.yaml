@@ -1,0 +1,48 @@
+# ansible — the flagship EE-Job Actuator (ADR-0051) as a CaC declaration (ADR-0103,
+# ADR-0117 follow-up k). Migrated off its boot block in strattd: nothing about this
+# Actuator was ever tool-specific to the spine, but its BOUNDED grant could not be
+# expressed in a declaration until ADR-0117 D3a added facetNamespaces/identitySchemes
+# to the Actuator Kind. That was the only reason it stayed hardcoded — so it moves now.
+#
+# Transport: no address. `jobCommand` IS the transport (§3 GPLv3 boundary) — the
+# dispatcher runs the stratt-ansible shim in an EE pod per Step; the Go control plane
+# never links ansible. No `image`, so this Actuator runs the floor's default EE
+# (dispatch cfg.EEImage). A Step that needs different CONTENT names a different
+# Actuator that declares its own image (see demos/app-cert — ansible-crypto), which is
+# how content selection stays a Git-reviewable property of the Actuator rather than a
+# params string a tool passes at run time (D3a).
+#
+# The grant is the MF3 ceiling on fact write-back, carried over verbatim from the boot
+# registration it replaces (ADR-0051): exactly the Facet namespaces the shim projects
+# via the stratt_facets convention, never a wildcard. A Step's own facetWriteScope is
+# INTERSECTED with this list (ADR-0054), so this is an upper bound, not a grant of
+# authority to any one Step. identitySchemes names how write-back correlates a target
+# to an Entity; host.name is the only key the EE-Job write-back path reads.
+name: ansible
+pluginIdentity: ansible
+tier: trusted
+dryRunnable: true
+jobCommand: [stratt-ansible]
+facetNamespaces:
+  - os.kernel
+  - os.hardening.sysctl
+  - os.hardening.sshd
+  - os.hardening.filesystem
+  - os.hardening.auditd
+  - os.hardening.services
+  - fileset.content
+  - access.grants
+  # app.config: the observed application config a remediation reports back
+  # (ADR-0084 fact-back), e.g. the effective listen port after a converge.
+  - app.config
+identitySchemes: [host.name]
+# elevatedInputs makes privilege escalation Control-GATEABLE (ADR-0122 D3), closing the gap
+# ADR-0117 D1 recorded honestly: typed `become` was declared and audited, but ChangeContext
+# carries no Step params, so no Control could see it — and teaching the PDP to read inside an
+# ansible field is the `if ansible{}` §1.4 forbids.
+#
+# Core walks this path in each Step's params and, when it is truthy, derives the
+# `stratt.change/privileged` change-context label. Core never learns the word `become`: it
+# reads a declared path and a boolean, exactly as facetNamespaces above lets it enforce a
+# write ceiling without knowing what a namespace means. A Control gates on the label.
+elevatedInputs: [become.enabled]

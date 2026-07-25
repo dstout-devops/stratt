@@ -14,8 +14,23 @@ kind: webhook
 principal: notify-svc
 credentialRef: ops-hook-cred
 config:
-  method: POST
   bodyTemplate: '{"text":"{{.subject}}"}'
+  params:
+    method: POST
+`)
+	// A second Sink on a kind core has never been taught (ADR-0125 D1): it parses,
+	// carrying an envelope core cannot interpret. This is the assertion that would
+	// fail if a closed kind list ever came back.
+	writeKind(t, root, "notify-sinks", "mail.yaml", `
+name: ops-mail
+kind: smtp
+principal: notify-svc
+credentialRef: ops-smtp-cred
+config:
+  params:
+    host: smtp.example.test
+    from: stratt@example.test
+    to: [ops@example.test]
 `)
 	writeKind(t, root, "subscriptions", "crit.yaml", `
 name: crit-drift
@@ -28,8 +43,20 @@ cooldownSeconds: 60
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(parsed.NotifySinks) != 1 || parsed.NotifySinks[0].CredentialRef != "ops-hook-cred" {
+	if len(parsed.NotifySinks) != 2 {
 		t.Fatalf("sinks: %+v", parsed.NotifySinks)
+	}
+	byName := map[string]int{}
+	for i, s := range parsed.NotifySinks {
+		byName[s.Name] = i
+	}
+	if got := parsed.NotifySinks[byName["ops-webhook"]]; got.CredentialRef != "ops-hook-cred" ||
+		got.Config.Params["method"] != "POST" {
+		t.Fatalf("webhook sink: %+v", got)
+	}
+	if got := parsed.NotifySinks[byName["ops-mail"]]; got.Kind != "smtp" ||
+		got.Config.Params["host"] != "smtp.example.test" {
+		t.Fatalf("an unknown-to-core kind must parse with its driver params intact: %+v", got)
 	}
 	if len(parsed.Subscriptions) != 1 || parsed.Subscriptions[0].Sink != "ops-webhook" {
 		t.Fatalf("subscriptions: %+v", parsed.Subscriptions)
@@ -55,6 +82,14 @@ func TestValidateNotifyRejects(t *testing.T) {
 	root = seed("notify-sinks", "nopr.yaml", "name: x\nkind: webhook\ncredentialRef: c\n")
 	if _, err := ParseDir(root, nil); err == nil || !strings.Contains(err.Error(), "principal") {
 		t.Fatalf("want principal error, got %v", err)
+	}
+
+	// A Sink with no kind is rejected: the kind names the delivery Action, so an
+	// empty one names nothing. This is the ONE thing core still checks about a
+	// notify kind — that there is one (ADR-0125 D1).
+	root = seed("notify-sinks", "nokind.yaml", "name: x\nprincipal: p\ncredentialRef: c\n")
+	if _, err := ParseDir(root, nil); err == nil || !strings.Contains(err.Error(), "kind is required") {
+		t.Fatalf("want kind error, got %v", err)
 	}
 
 	// An unknown notice kind is a declaration error, never a silent no-op.

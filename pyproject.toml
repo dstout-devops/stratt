@@ -1,0 +1,48 @@
+# Python tooling config — charter §3, .claude/rules/backend-python.md.
+#
+# Python is NOT the control plane (that is Go, ADR-0002). It lives in exactly two places:
+# inside execution-environment images (the GPLv3 subprocess boundary that runs Ansible)
+# and the plugin SDK. This file exists to make the repo's Python gates actually FIRE:
+# `task fmt`, `task fmt:check`, and `task lint` each branch on `-f pyproject.toml`, so
+# until now the first first-party Python file (ee/content.py, ADR-0117 D3) was shipped
+# unformatted, unlinted, and untypechecked while the rules demanded ruff + mypy clean.
+#
+# This is deliberately NOT a distributable package — it is repo tooling config. Nothing
+# imports it; the EE image copies ee/content.py in directly and runs it with the
+# interpreter already present for ansible-core.
+
+[project]
+name = "stratt-tooling"
+version = "0"
+description = "Repo-local Python tooling config (EE content gate). Not a distributed package."
+# Evergreen §1.7: N-1 on the supported line. The EE base image is python:3.14-slim.
+requires-python = ">=3.13"
+
+[dependency-groups]
+# Pinned with floors, upgraded on the quarterly evergreen train (§1.7) like every other
+# toolchain dep. `uv run` installs this group by default, which is what makes the bare
+# `uv run ruff …` / `uv run mypy …` invocations in the Taskfile resolve.
+dev = ["ruff>=0.14.0", "mypy>=1.18.0", "types-PyYAML>=6.0.12", "pyyaml>=6.0.3", "pytest>=9.0.0"]
+
+[tool.ruff]
+line-length = 110
+# node_modules is in ruff's default excludes; naming it is belt-and-braces, since the UI
+# tree carries vendored third-party .py files that are not ours to format.
+extend-exclude = ["node_modules", "ui"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM", "ANN"]
+
+[tool.mypy]
+files = ["ee"]
+python_version = "3.13"
+strict = true
+# The one concession: PyYAML's safe_load returns Any by design, so the boundary parsing in
+# ee/content.py legitimately handles Any and narrows it with explicit isinstance checks.
+disallow_any_explicit = false
+
+[tool.pytest.ini_options]
+# ee/ is not an installed package — the EE image copies content.py in directly — so the
+# test module imports it by path via pythonpath rather than via an install step.
+testpaths = ["ee"]
+pythonpath = ["ee"]

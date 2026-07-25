@@ -1,6 +1,11 @@
-# dmz-subnet — a second Intent/Subnet (ADR-0059), the re-placement move TARGET. Built
-# through the parameterized subnet-provision Workflow (launch {subnetName: dmz-subnet,
-# cidr: 10.40.0.0/24}) — one build Workflow for every subnet.
+# dmz-subnet — a second Intent/Subnet (ADR-0059), the re-placement move TARGET. Built through the
+# parameterized subnet-build Workflow, which crossplane advertises for Intent/Subnet — the SAME
+# Workflow that builds app-subnet, launched with this Intent's own name/params (ADR-0120 D2).
+#
+# This comment used to name `subnet-provision`, contradicting the `requires:` comment four lines down
+# in the same file. The header was aspirational and the inline comment was right: nothing ever routed
+# to subnet-provision, and subnet-build hardcoded app-subnet, so THIS Intent was unbuildable while two
+# comments disagreed about which Workflow would build it.
 name: dmz-subnet
 kind: Intent/Subnet
 spec:

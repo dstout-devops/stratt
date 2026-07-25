@@ -3,6 +3,7 @@ package desiredstate
 import (
 	"context"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/dstout-devops/stratt/types"
@@ -58,13 +59,36 @@ func TestWorkflowStepParamNamespaceScope(t *testing.T) {
 	if err := ValidateWorkflow(ok); err != nil {
 		t.Fatalf("event binding on a Step must be allowed: %v", err)
 	}
-	// A Step param may bind the launch namespace (operator-supplied launch params
-	// for a parameterized build/re-placement Workflow, ADR-0059).
-	okLaunch := types.Workflow{Name: "w", Steps: []types.Step{
+	// A Step param may bind the launch namespace (operator-supplied launch params for a
+	// parameterized build/re-placement Workflow, ADR-0059) — but only a field the Workflow
+	// DECLARES (ADR-0118 D2). This case used to pass with no `inputs` at all, which is the
+	// hole: a Workflow could bind a launch value nothing could ever supply.
+	launchInputs := []byte(`{"type":"object","additionalProperties":false,` +
+		`"properties":{"targetSubnet":{"type":"string"}}}`)
+	okLaunch := types.Workflow{Name: "w", Inputs: launchInputs, Steps: []types.Step{
 		{Name: "s", ViewName: "v", Actuator: "script", Params: map[string]any{"script": "echo {{.launch.targetSubnet}}"}},
 	}}
 	if err := ValidateWorkflow(okLaunch); err != nil {
-		t.Fatalf("launch binding on a Step must be allowed: %v", err)
+		t.Fatalf("launch binding on a DECLARED input must be allowed: %v", err)
+	}
+	// Undeclared: the namespace is legal, the field is not. Namespace-level checking cannot
+	// see this, which is why the field-wise check exists.
+	typo := types.Workflow{Name: "w", Inputs: launchInputs, Steps: []types.Step{
+		{Name: "s", ViewName: "v", Actuator: "script", Params: map[string]any{"script": "echo {{.launch.targetSubnett}}"}},
+	}}
+	err := ValidateWorkflow(typo)
+	if err == nil {
+		t.Fatal("a launch binding naming an UNDECLARED input must be rejected at declaration")
+	}
+	if !strings.Contains(err.Error(), "targetSubnett") || !strings.Contains(err.Error(), "targetSubnet") {
+		t.Errorf("the error must name both the typo and what IS declared; got: %v", err)
+	}
+	// No inputs at all: any launch binding is unsatisfiable.
+	none := types.Workflow{Name: "w", Steps: []types.Step{
+		{Name: "s", ViewName: "v", Actuator: "script", Params: map[string]any{"script": "echo {{.launch.x}}"}},
+	}}
+	if err := ValidateWorkflow(none); err == nil {
+		t.Fatal("a launch binding on a Workflow declaring no inputs must be rejected")
 	}
 	// spec/param are not available on a Step.
 	bad := types.Workflow{Name: "w", Steps: []types.Step{

@@ -165,3 +165,51 @@ hosts:
 		t.Fatalf("a host with no declared address must project no facet (unroutable, not silent-local)")
 	}
 }
+
+// TestEnumerateProjectsPort pins the SECOND field of the closed mgmt.address
+// coordinate: a declared port rides the same Facet, an undeclared one is simply
+// absent (the connection Actuator's own default applies), and a port with no
+// address is REJECTED rather than silently dropped — half a declaration that
+// reaches nothing is exactly the silent failure §1.8 forbids.
+func TestEnumerateProjectsPort(t *testing.T) {
+	dir := t.TempDir()
+	write(t, dir, "web.yaml", `
+hosts:
+  - fqdn: custom-port.stratt.test
+    address: web.svc.cluster.local
+    port: 2222
+  - fqdn: default-port.stratt.test
+    address: other.svc.cluster.local
+`)
+	ents, err := enumerate(dir)
+	if err != nil {
+		t.Fatalf("enumerate: %v", err)
+	}
+	byFQDN := map[string]*pluginv1.ObservedEntity{}
+	for _, e := range ents {
+		byFQDN[e.GetIdentityKeys()["dns.fqdn"]] = e
+	}
+	if got := string(byFQDN["custom-port.stratt.test"].GetFacets()["mgmt.address"]); got != `{"address":"web.svc.cluster.local","port":2222}` {
+		t.Fatalf("declared port must ride the mgmt.address Facet: %s", got)
+	}
+	// Absent port ⇒ absent field: the file states the coordinate, it never invents 22.
+	if got := string(byFQDN["default-port.stratt.test"].GetFacets()["mgmt.address"]); got != `{"address":"other.svc.cluster.local"}` {
+		t.Fatalf("undeclared port must be absent from the wire value: %s", got)
+	}
+
+	for name, content := range map[string]string{
+		"port without address": "hosts:\n  - fqdn: h.test\n    port: 2222\n",
+		"port out of range":    "hosts:\n  - fqdn: h.test\n    address: a.test\n    port: 70000\n",
+		// A control-node connection has no network port; accepting-and-ignoring it
+		// would recreate the "declarable, honored by nothing" defect port fixes.
+		"port with reserved local": "hosts:\n  - fqdn: h.test\n    address: local\n    port: 2222\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			bad := t.TempDir()
+			write(t, bad, "bad.yaml", content)
+			if _, err := enumerate(bad); err == nil {
+				t.Errorf("expected an error for %q, got nil", name)
+			}
+		})
+	}
+}

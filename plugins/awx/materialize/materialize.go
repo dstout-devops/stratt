@@ -78,18 +78,11 @@ func Bundle(snap *awx.Snapshot, opts Options) (*Emit, error) {
 		e.Files["credential-refs/"+slug(cr.Name)+".yaml"] = doc
 	}
 
-	// Surveys → input Contracts.
-	for _, jt := range snap.JobTemplates {
-		spec, ok := snap.Surveys[jt.ID]
-		if !ok {
-			continue
-		}
-		doc, err := mapSurvey(jt, spec, r)
-		if err != nil {
-			return nil, err
-		}
-		e.Files["contracts/"+slug(jt.Name)+".survey.schema.json"] = doc
-	}
+	// Surveys are no longer emitted here as detached contracts/*.survey.schema.json
+	// documents. They ride on the Workflow they belong to, as its declared `inputs`
+	// (ADR-0118 D2 / ADR-0025 follow-up (c)) — see mapJobTemplate. A detached copy would
+	// be a second authority for one fact (§1.2), and the copy nothing reads is the one
+	// that rots.
 
 	// Workflows share one namespace (both job templates and workflow job
 	// templates become Stratt Workflows); dedupe slugs so filenames and

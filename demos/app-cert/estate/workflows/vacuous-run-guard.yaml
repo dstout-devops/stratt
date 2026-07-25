@@ -1,0 +1,32 @@
+# vacuous-run-guard — a Workflow that is SUPPOSED TO FAIL, and the demo asserts that it does.
+#
+# It exists because of the failure mode ADR-0117 D5 closed. `ansible-playbook` exits 0 when
+# its `hosts:` pattern matches nothing at all: it prints "skipping: no hosts matched" and
+# reports success. Stratt used to fold that into a green Run — the worst possible outcome,
+# because a fleet-wide change that silently reached zero machines looks exactly like a
+# fleet-wide change that worked. Every AWX user has been bitten by it.
+#
+# So: a Run that actuated nothing is a failure, and the failure NAMES the cause rather than
+# leaving an operator to infer it from an empty log. That behaviour was verified by hand
+# against a real EE the day it shipped; a hand-verified proof rots, which is why it lives
+# here as an assertion instead (ADR-0117 h).
+#
+# The play below targets a group that cannot exist in a generated inventory. Nothing is
+# mutated, so there is no Gate: approving a no-op would teach the wrong lesson.
+name: vacuous-run-guard
+steps:
+  - name: reach-nothing
+    viewName: app-nodes
+    actuator: ansible-crypto
+    credentialRefs: [app-node-ssh]
+    params:
+      extraVars:
+        ansible_user: appops
+        ansible_ssh_private_key_file: /tmp/app-node-key
+      play: |
+        - name: A play whose pattern matches no host in the generated inventory
+          hosts: hosts-that-do-not-exist
+          gather_facts: false
+          tasks:
+            - name: Never runs — and ansible-playbook still exits 0
+              ansible.builtin.command: /bin/true

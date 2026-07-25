@@ -47,6 +47,26 @@ type Blueprint struct {
 	// e.g. a certificate revoke Workflow. A ref only: the operator launches it
 	// (§5 Flow 2), never auto-run. Empty ⇒ withdrawal is retain-only.
 	RemoveWorkflow string `json:"removeWorkflow,omitempty"`
+	// RemoveParams are the values passed to RemoveWorkflow, {{.spec.X}}-substituted from the
+	// resolved spec at compile and CARRIED ONTO THE COMPILED BASELINE — the withdrawal half of
+	// the parameter plane (ADR-0118 D3).
+	//
+	// Blueprint-level rather than per-route, because RemoveWorkflow is: withdrawal retires the
+	// Assignment's whole compiled set, not one route's expectation.
+	//
+	// WHY THE COMPILED VALUES MUST BE STORED, and not recomputed at withdrawal like
+	// RemoveWorkflow is: the resolved spec is Blueprint defaults + Intent spec + ASSIGNMENT
+	// VALUES, and withdrawal means the Assignment is gone from Git. Its values cannot be read
+	// back at the moment they are needed. So the ref — a property of the pinned Blueprint,
+	// still declared — is read then, and the params — a property of the compiled
+	// instantiation, unrecoverable — are stamped on the Baseline at compile. Storing the ref
+	// too would give one fact two authorities (§1.2); storing only what cannot be recovered is
+	// the line.
+	//
+	// Validated against RemoveWorkflow's declared input schema at compile, exactly as
+	// RemediationParams is: a withdrawal Workflow wired to params it does not fit must fail in
+	// front of the author, not in front of the operator holding an orphan Finding (§1.8).
+	RemoveParams map[string]any `json:"removeParams,omitempty"`
 }
 
 // BlueprintRoute is one capability route: a Facet-predicate match → an
@@ -66,6 +86,21 @@ type BlueprintRoute struct {
 	// route's Findings — a ref only, never auto-launched (§5 Flow 2). Same
 	// field name as Baseline.RemediationWorkflow (one frozen concept, §2).
 	RemediationWorkflow string `json:"remediationWorkflow,omitempty"`
+	// RemediationParams are the values this route passes to its RemediationWorkflow,
+	// {{.spec.X}}-substituted from the resolved spec at compile and carried onto the
+	// compiled Baseline (ADR-0118 D3).
+	//
+	// This field is the whole reason the parameter plane used to stop at the observation
+	// boundary. A route named the Workflow that converges the estate and passed it NOTHING,
+	// so every remediation Workflow had to re-declare by hand what its Intent already said —
+	// which is why `port: "443"` appeared three times in the app-cert demo.
+	//
+	// Validated against the named Workflow's declared input schema AT COMPILE: an unknown key
+	// or a missing required input fails the Assignment, so a route wired to a Workflow it
+	// does not fit breaks in front of the person editing the declaration rather than in front
+	// of the operator at 3am (§1.8). Same field name as Baseline.RemediationParams — one
+	// concept, one name (§2), the rule already applied to RemediationWorkflow above.
+	RemediationParams map[string]any `json:"remediationParams,omitempty"`
 }
 
 // FacetExpectation is one check the compiled facet-observation Baseline

@@ -1,11 +1,38 @@
 # vsphere-vm-teardown — the GATED teardown Workflow the decommission reach-path resolves to (ADR-0114
 # D4), the symmetric counterpart to vsphere-vm-build. When an Intent/Compute declared with
 # onRemove:remove drops its count, reconcileDecommission surfaces a `decommission/<intent>` Finding per
-# EXCESS built VM (ordinal-descending), carrying that VM's vcenter.uuid. An operator launches THIS
-# Workflow with launchParams {uuid: <that vcenter.uuid>} to tear the VM down — never an auto-destroy
-# (§5 Flow, destructive ⇒ gated). delete-vm is idempotent-on-absence (ADR-0114 D2), so a re-launch over
-# the tombstone sync-lag window is a safe no-op; the Syncer's next full-sync tombstones the Entity.
+# EXCESS built VM (ordinal-descending), and that Finding CARRIES the launch spec for this Workflow —
+# launchWorkflow + launchParams + launchKind: remove — so an operator launches it straight from the
+# Finding (GET/POST /findings/{id}/remediation) rather than by name with a retyped identity. Never an
+# auto-destroy (§5 Flow, destructive ⇒ gated): the approve Step below is on the path.
+# delete-vm is idempotent-on-absence (ADR-0114 D2), so a re-launch over the tombstone sync-lag window
+# is a safe no-op; the Syncer's next full-sync tombstones the Entity.
 name: vsphere-vm-teardown
+# The launch interface (ADR-0118 D2). This is the UNIFORM teardown shape the decommission reconcile
+# sends (provision.TeardownLaunchParams), and every param must be declared here because the schema is
+# closed: an input the reconcile sends and this file does not declare fails the launch, loudly.
+#
+# `identityValue` rather than a `uuid`: the identity of the thing being destroyed is
+# provider-shaped and core does not know its spelling (§1.5). Core sends the pair; THIS file renames it
+# into the Action's own param below, exactly as a build Workflow maps the uniform launch shape onto its
+# opaque provider params. It is deliberately not a nested `identity` object keyed by scheme — the
+# substituter splits a binding path on `.`, so `{{.launch.identity.vcenter.uuid}}` would resolve as
+# identity → vcenter → uuid and fail.
+#
+# The identity inputs are required with no defaults: defaulting a teardown target would be indefensible
+# for a destructive Workflow. No `pattern` on the value either — vSphere exposes more than one uuid
+# shape (instanceUuid vs the hardware uuid) and guessing one here would reject a legitimate target.
+inputs:
+  type: object
+  additionalProperties: false
+  required: [identityValue]
+  properties:
+    identityValue:
+      type: string
+      description: >
+        The target's identity under that scheme, read from the built Entity's own projection.
+        delete-vm is idempotent-on-absence, so a re-launch over the tombstone sync-lag window is a
+        safe no-op.
 steps:
   - name: approve
     gate:
@@ -17,5 +44,7 @@ steps:
     action: vcenter/delete-vm # vSphere's Compute teardown (swap point, §1.4/§1.5)
     credentialRefs: [vsphere-dev] # §2.5 — an Action's use-check is its only authz gate
     params:
-      # The target VM's vcenter.uuid, supplied at launch from the decommission Finding's identityKeys.
-      uuid: "{{.launch.uuid}}"
+      # The provider-shaped rename: core sent (identityScheme, identityValue); vcenter/delete-vm
+      # calls it `uuid`. Core never learns that word (§1.5), and this Workflow is the only place
+      # the mapping lives.
+      uuid: "{{.launch.identityValue}}"

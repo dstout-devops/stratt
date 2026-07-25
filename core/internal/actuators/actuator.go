@@ -27,6 +27,12 @@ type Target struct {
 	// the spine, §1.4) — a connection Actuator renders its own var FROM this.
 	// Empty ⇒ the target declared no reachability (unroutable, never silent-local).
 	Address string
+	// Port is the optional management port paired with Address, from the same
+	// mgmt.address Facet. Typed and first-class for the same reason Address is: the
+	// core resolves the coordinate, the connection Actuator renders the tool's own
+	// port var (ansible_port, …) FROM it. 0 ⇒ no declared port; the tool's default
+	// applies — the core never invents one.
+	Port int32
 	// Vars are genuinely tool-authored vars only — never a core-emitted connection
 	// key. The reachability coordinate is Address above, not a var (ADR-0084 §1.4).
 	Vars map[string]string

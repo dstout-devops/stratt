@@ -184,6 +184,25 @@ type RunOutcome struct {
 	Outputs json.RawMessage
 }
 
+// execActivityOptions widens a Run's activity options for the activities that
+// actually run a pod. The short default is right for the bookkeeping around them
+// (resolve, mark, project, finish) — a long ceiling there would turn a wedged
+// control-plane call into a silent stall — but it is wrong for execution itself:
+// dispatch puts dispatch.MaxStepRuntime on the Job, so an independent 10m
+// activity ceiling meant Temporal killed and retried any Step that legitimately
+// ran longer, and the only diagnosis was a Temporal timeout (§1.8). Deriving both
+// from one authority is the point; the margin covers pod spawn, log drain, and
+// cleanup either side of the Job's own deadline.
+func execActivityOptions(base workflow.ActivityOptions) workflow.ActivityOptions {
+	o := base
+	o.StartToCloseTimeout = dispatch.MaxStepRuntime + 15*time.Minute
+	// The real liveness check. dispatch beats every 20s for the whole execution,
+	// including while the tool is silent, so this needs no headroom for a long
+	// quiet task — only for a stalled worker.
+	o.HeartbeatTimeout = 2 * time.Minute
+	return o
+}
+
 // RunAgainstView is the Phase-0 Workflow. Every state transition is a
 // Temporal event — the descent ladder's Workflow → Run rungs (§1.8) fall out
 // of its history.
@@ -267,9 +286,10 @@ func RunAgainstView(ctx workflow.Context, in RunInput) (RunOutcome, error) {
 	// name unique (ADR-0032). Targets are disjoint, so results merge by union.
 	var futures []workflow.Future
 	gslice := 0
+	xctx := workflow.WithActivityOptions(ctx, execActivityOptions(opts))
 	for _, g := range routed.Groups {
 		for _, chunk := range splitTargets(g.Targets, in.Slices) {
-			futures = append(futures, workflow.ExecuteActivity(ctx, a.Execute, in, gslice, g.Site,
+			futures = append(futures, workflow.ExecuteActivity(xctx, a.Execute, in, gslice, g.Site,
 				ResolvedTargets{ViewVersion: routed.ViewVersion, Targets: chunk}, creds))
 			gslice++
 		}
@@ -597,11 +617,12 @@ func (a *Activities) EnsureRun(ctx context.Context, in RunInput, workflowID stri
 // (ansible_host, …). The core never authors a tool var: the Phase-0
 // ansible_connection:local stub is retired. A target with no mgmt.address carries an
 // empty Address (unroutable — the actuator fails loudly, never a silent local run, §1.8).
-func renderTarget(e types.Entity, address string) actuators.Target {
+func renderTarget(e types.Entity, address string, port int32) actuators.Target {
 	return actuators.Target{
 		EntityID: e.ID,
 		Name:     observedName(e),
 		Address:  address,
+		Port:     port,
 	}
 }
 
@@ -628,16 +649,21 @@ func observedName(e types.Entity) string {
 }
 
 // addressOf extracts the reachability coordinate from an mgmt.address Facet raw
-// (ADR-0084 schema {address, port?}). Empty ⇒ the Entity declared no reachability.
-func addressOf(raw json.RawMessage) string {
+// (ADR-0084 schema {address, port?}). Empty address ⇒ the Entity declared no
+// reachability; port 0 ⇒ it declared no port and the Actuator's tool default
+// applies. BOTH declared fields are read: the Facet schema is closed precisely so
+// this stays a two-field coordinate, and silently dropping `port` here would make
+// the schema advertise a knob no run could ever honor (§1.8).
+func addressOf(raw json.RawMessage) (string, int32) {
 	if len(raw) == 0 {
-		return ""
+		return "", 0
 	}
 	var a struct {
 		Address string `json:"address"`
+		Port    int32  `json:"port"`
 	}
 	_ = json.Unmarshal(raw, &a)
-	return a.Address
+	return a.Address, a.Port
 }
 
 // ResolveTargets resolves the View to its live Entity set and renders
@@ -660,7 +686,8 @@ func (a *Activities) ResolveTargets(ctx context.Context, in RunInput) (ResolvedT
 	}
 	out := ResolvedTargets{ViewVersion: v.Version}
 	for _, e := range ents {
-		out.Targets = append(out.Targets, renderTarget(e, addressOf(addrs[e.ID])))
+		addr, port := addressOf(addrs[e.ID])
+		out.Targets = append(out.Targets, renderTarget(e, addr, port))
 	}
 	return out, nil
 }
@@ -708,7 +735,8 @@ func (a *Activities) ResolveTargetsBySite(ctx context.Context, in RunInput) (Rou
 				site = loc.Site
 			}
 		}
-		bySite[site] = append(bySite[site], renderTarget(e, addressOf(addrs[e.ID])))
+		addr, port := addressOf(addrs[e.ID])
+		bySite[site] = append(bySite[site], renderTarget(e, addr, port))
 	}
 	names := make([]string, 0, len(bySite))
 	for s := range bySite {
@@ -1048,7 +1076,16 @@ func (a *Activities) surfaceRejections(ctx context.Context, runID, source, plugi
 			"kind": r.Kind, "detail": r.Detail, "reason": r.Reason,
 		}
 		if a.Bus != nil && runID != "" {
-			if err := a.Bus.Publish(ctx, types.RunEvent{RunID: runID, Kind: "governance-rejected", Payload: payload}); err != nil {
+			// Warn on the stream as well as in the log: a rejected emission is a
+			// plugin claim the spine refused, and the operator sees the stream.
+			if err := a.Bus.Publish(ctx, types.RunEvent{
+				RunID: runID, Kind: "governance-rejected",
+				Level: types.RunEventWarn,
+				// A refused emission is a fact about what this RUN's plugin tried to write,
+				// not about any one task's work — and there is no per-task attribution here
+				// to give it (ADR-0121 D4).
+				Scope: types.RunEventScopeRun, Payload: payload,
+			}); err != nil {
 				lg.Warn("publish governance-rejected RunEvent failed", "error", err)
 			}
 		}
@@ -1186,7 +1223,7 @@ func (a *Activities) executePlugin(ctx context.Context, in RunInput, site string
 	// path today; passing them to identity-rendering actuators is a follow-up.)
 	targets := make([]pluginhost.ApplyTarget, 0, len(resolved.Targets))
 	for _, t := range resolved.Targets {
-		targets = append(targets, pluginhost.ApplyTarget{Name: t.Name, Address: t.Address, Vars: t.Vars})
+		targets = append(targets, pluginhost.ApplyTarget{Name: t.Name, Address: t.Address, Port: t.Port, Vars: t.Vars})
 	}
 	// Plan-pinned Apply (ADR-0047 §8): a Step that names a Plan source MUST carry a
 	// Gate-approved digest. FAIL CLOSED on an empty digest — never a silent unpinned
@@ -1235,7 +1272,7 @@ func (a *Activities) executePlugin(ctx context.Context, in RunInput, site string
 	a.surfaceRejections(ctx, in.RunID, "apply", in.Actuator, raw.Rejections)
 	// Map the governed, UNPROJECTED result to dispatch.Result. CollectFacts →
 	// ProjectFacts perform the single batched projection with Run provenance (#2).
-	res := dispatch.Result{Succeeded: raw.Succeeded, PerTarget: raw.PerTarget, Drift: raw.Drift}
+	res := dispatch.Result{Succeeded: raw.Succeeded, Error: raw.Error, PerTarget: raw.PerTarget, Drift: raw.Drift}
 	for _, e := range raw.WriteBack {
 		res.Entities = append(res.Entities, actuators.EntityObservation{
 			Kind: e.Kind, IdentityKeys: e.IdentityKeys, Labels: e.Labels})
@@ -1286,8 +1323,8 @@ func (a *Activities) executeJobPlugin(ctx context.Context, in RunInput, slice in
 	ptargets := make([]*pluginv1.ApplyTarget, 0, len(resolved.Targets))
 	for _, t := range resolved.Targets {
 		ids := map[string]string{"host.name": t.Name}
-		targets = append(targets, pluginhost.ApplyTarget{Name: t.Name, Address: t.Address, Vars: t.Vars, IdentityKeys: ids})
-		ptargets = append(ptargets, &pluginv1.ApplyTarget{Name: t.Name, Address: t.Address, Vars: t.Vars, IdentityKeys: ids})
+		targets = append(targets, pluginhost.ApplyTarget{Name: t.Name, Address: t.Address, Port: t.Port, Vars: t.Vars, IdentityKeys: ids})
+		ptargets = append(ptargets, &pluginv1.ApplyTarget{Name: t.Name, Address: t.Address, Port: t.Port, Vars: t.Vars, IdentityKeys: ids})
 	}
 	// Only the use-checked, authorized names cross (§2.5); material stays on the
 	// kubelet secretKeyRef mounts (MF7 — one authz chokepoint, injection at the pod).
@@ -1310,6 +1347,14 @@ func (a *Activities) executeJobPlugin(ctx context.Context, in RunInput, slice in
 	spec := actuators.JobSpec{
 		Files:   map[string]string{"stratt/request.json": string(reqBytes)},
 		Command: pa.JobCommand,
+		// The Actuator's DECLARED image (ADR-0117 D3a). Per-Step EE selection is by
+		// declaration, never by reading inside a tool's params: a Step selects an
+		// Actuator, and the Actuator declaration carries the image — so two
+		// declarations differing only in their EE give per-Step content selection with
+		// ZERO ansible awareness in the spine (§1.4). Empty ⇒ the dispatcher's global
+		// default, unchanged. Omitting this line was the reason `params.eeImage` looked
+		// honored and was not (ADR-0117 D3a's correction); executeMCP always set it.
+		Image: pa.Image,
 	}
 
 	// Bridge: the dispatcher streams decoded ApplyResponses onto ch (folding nothing,
@@ -1373,7 +1418,7 @@ func (a *Activities) executeJobPlugin(ctx context.Context, in RunInput, slice in
 	// cleanup, shim serialize error) must read NOT-OK, restoring parity with the
 	// in-tree floor (dispatch.Run's res.Succeeded = the Job exit).
 	res := dispatch.Result{
-		Succeeded: raw.Succeeded && jobOK, PerTarget: raw.PerTarget, Drift: raw.Drift,
+		Succeeded: raw.Succeeded && jobOK, Error: raw.Error, PerTarget: raw.PerTarget, Drift: raw.Drift,
 		Facts: map[string]map[string]json.RawMessage{},
 	}
 	if remote {
@@ -1394,6 +1439,15 @@ func (a *Activities) executeJobPlugin(ctx context.Context, in RunInput, slice in
 		// against the resolved set), so do not remove it when refactoring CollectFacts.
 		name := e.IdentityKeys["host.name"]
 		if name == "" {
+			// host.name is the ONLY scheme this path consumes. A write-back keyed by any
+			// other granted scheme (dns.fqdn, say) would otherwise be dropped here in
+			// silence — governance having ADMITTED it — so the declaration would read as
+			// permitted and be honored by nothing (§1.8). Validation rejects that
+			// combination up front for an EE-Job Actuator; this is the runtime backstop,
+			// and it must say something rather than `continue` quietly.
+			a.Log.Warn("EE-Job write-back dropped: no host.name identity key",
+				"kind", e.Kind, "identitySchemes", sortedKeys(e.IdentityKeys),
+				"facets", sortedKeys(e.Facets))
 			continue
 		}
 		facets := make(map[string]json.RawMessage, len(e.Facets))
@@ -1403,6 +1457,17 @@ func (a *Activities) executeJobPlugin(ctx context.Context, in RunInput, slice in
 		res.Facts[name] = facets
 	}
 	return res, nil
+}
+
+// sortedKeys returns a map's keys in deterministic order — for diagnostics, where a
+// stable ordering is what makes two Runs' logs comparable during descent (§1.8).
+func sortedKeys[V any](m map[string]V) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // executeMCP dispatches an mcp Step over the EE-Job transport, keeping the §1.5/§2.2
@@ -1536,7 +1601,7 @@ func (a *Activities) executeMCP(ctx context.Context, in RunInput, slice int, pa 
 			return dispatch.Result{}, err
 		}
 	}
-	return dispatch.Result{Succeeded: raw.Succeeded && jobOK, PerTarget: raw.PerTarget}, nil
+	return dispatch.Result{Succeeded: raw.Succeeded && jobOK, Error: raw.Error, PerTarget: raw.PerTarget}, nil
 }
 
 // CleanupRun deletes a Run's K8s Jobs on cancellation (invoked from the
@@ -1599,6 +1664,15 @@ func mergeResults(slices []dispatch.Result) dispatch.Result {
 	}
 	for _, r := range slices {
 		out.Succeeded = out.Succeeded && r.Succeeded
+		// The FIRST slice's cause wins, and a cause must survive the merge at all: the
+		// fold carried Succeeded but dropped Error, so a Run that failed for a reason a
+		// slice had already reported landed on the API with status=failed and no cause —
+		// the descent said "failed" and stopped talking (§1.8). Found by the app-cert
+		// demo asserting that its vacuous-run guard NAMES why it failed, not just that
+		// it did.
+		if out.Error == "" && r.Error != "" {
+			out.Error = r.Error
+		}
 		for t, s := range r.PerTarget {
 			out.PerTarget[t] = s
 		}

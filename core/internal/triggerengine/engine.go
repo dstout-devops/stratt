@@ -128,6 +128,28 @@ func (e *Engine) program(t types.Trigger) (*rules.Program, error) {
 // launch fires the Trigger's declared target with a deterministic workflow
 // id — the dedup axis for at-least-once delivery. The firing event's payload
 // binds {{.event.x}} references in the launch params/viewParams (ADR-0024).
+// workflowDAGInput builds what a Workflow-target Trigger sends into the DAG: the firing payload
+// (which each Step resolves its own {{.event.x}} bindings from — ADR-0024 D2) AND the Trigger's
+// declared launch inputs, substituted against that same payload (ADR-0118 D5). Pure, so it is
+// testable without a Temporal client.
+func workflowDAGInput(t types.Trigger, payload map[string]any, environment string) (orchestrate.DAGInput, error) {
+	inputs, err := template.SubstituteParams(t.Inputs, template.Namespaces{"event": payload})
+	if err != nil {
+		return orchestrate.DAGInput{}, err
+	}
+	return orchestrate.DAGInput{
+		WorkflowName: t.WorkflowName,
+		Principal:    t.Principal,
+		Trigger:      t.Name,
+		Event:        payload,
+		LaunchParams: inputs,
+		// The floor's own environment (ADR-0122 D2). A Trigger declares no environment for the
+		// change context: its `environments:` list selects WHETHER it fires here, which is a
+		// different question from what environment the resulting Run is in (ADR-0057).
+		Environment: environment,
+	}, nil
+}
+
 func (e *Engine) launch(ctx context.Context, log *slog.Logger, t types.Trigger, ev types.EmitterEvent, eventHash string) error {
 	opts := client.StartWorkflowOptions{
 		TaskQueue: orchestrate.TaskQueue,
@@ -136,14 +158,30 @@ func (e *Engine) launch(ctx context.Context, log *slog.Logger, t types.Trigger, 
 	ns := template.Namespaces{"event": ev.Payload}
 	if t.WorkflowName != "" {
 		opts.ID = fmt.Sprintf("trigger-%s-%s", t.Name, short)
-		// The payload rides into the DAG; each Step resolves its own
-		// {{.event.x}} bindings (ResolveStepParams activity).
-		_, err := e.Temporal.ExecuteWorkflow(ctx, opts, orchestrate.RunDAG, orchestrate.DAGInput{
-			WorkflowName: t.WorkflowName,
-			Principal:    t.Principal,
-			Trigger:      t.Name,
-			Event:        ev.Payload,
-		})
+		// A Workflow-target Trigger's `inputs` fill the target Workflow's declared launch
+		// interface (ADR-0118 D5). Until that field existed a Trigger could not parameterize a
+		// Workflow AT ALL: `params` are Step fields and are correctly refused on a Workflow
+		// target ("the Workflow declares its own"), so the only Workflows a Trigger could launch
+		// were ones needing no inputs. Harmless while launches accepted anything; fatal once
+		// `required` inputs are enforced, which is what makes this part of the same change.
+		//
+		// This SHARPENS ADR-0024 D2 rather than merely fixing a bug. D2 deliberately routed the
+		// payload for Workflow targets through DAGInput.Event so each Step could resolve its own
+		// {{.event.x}} bindings, which is still exactly what happens; what D2 did not cover is a
+		// Trigger that also wants to bind the Workflow's declared inputs. Both now travel.
+		//
+		// Built by a pure helper so what a firing Trigger actually sends is testable without a
+		// Temporal client — this package had no tests at all, which is how the gap survived.
+		in, perr := workflowDAGInput(t, ev.Payload, e.Store.ActiveEnvironment())
+		if perr != nil {
+			// A binding that cannot resolve against THIS payload is a terminal data error: the
+			// same event will never bind, so it is dropped, never redelivered (ADR-0024 D6 — a
+			// poison message must not loop).
+			log.Error("trigger launch-input binding failed; event dropped (not redelivered)",
+				"trigger", t.Name, "workflow", t.WorkflowName, "error", perr)
+			return nil
+		}
+		_, err := e.Temporal.ExecuteWorkflow(ctx, opts, orchestrate.RunDAG, in)
 		if isAlreadyStarted(err) {
 			log.Info("trigger launch deduplicated", "trigger", t.Name, "id", opts.ID)
 			return nil
@@ -161,7 +199,7 @@ func (e *Engine) launch(ctx context.Context, log *slog.Logger, t types.Trigger, 
 	// message must not loop). Only infrastructure failures below redeliver.
 	// The trigger declaration's actuator — required for a View-actuation trigger
 	// (validated at declaration; no platform default, ADR-0046).
-	params, err := contract.ResolveActuatorParams(t.Actuator, t.Params, ns)
+	params, err := contract.ResolveActuatorParamsFor(t.Actuator, e.Store.PluginIdentityOf(ctx, t.Actuator), t.Params, ns)
 	if err != nil {
 		log.Error("trigger binding failed; event dropped (not redelivered)", "trigger", t.Name, "error", err)
 		return nil

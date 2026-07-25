@@ -136,7 +136,7 @@ func (r *Reconciler) Reconcile(ctx context.Context) error {
 // compile renders a Trigger declaration into the Temporal Schedule pieces:
 // the spec, the workflow action (carrying the declaration hash in its memo),
 // and the hash itself.
-func compile(t types.Trigger) (client.ScheduleSpec, *client.ScheduleWorkflowAction, string, error) {
+func compile(t types.Trigger, environment string) (client.ScheduleSpec, *client.ScheduleWorkflowAction, string, error) {
 	var params json.RawMessage
 	if t.Params != nil {
 		raw, err := json.Marshal(t.Params)
@@ -158,11 +158,21 @@ func compile(t types.Trigger) (client.ScheduleSpec, *client.ScheduleWorkflowActi
 	if t.WorkflowName != "" {
 		// Workflow-launching schedule (the ADR-0010 rider): RunDAG creates
 		// its own execution row via EnsureWorkflowRun.
+		//
+		// `inputs` fill the target Workflow's declared launch interface (ADR-0118 D5). A
+		// schedule has no firing event, so these are literal values — event templates are
+		// rejected at declaration (ADR-0024 D7) — which is why they are validated against the
+		// Workflow's declared inputs at DECLARATION, in Git review, rather than when the
+		// schedule first fires.
 		action.Workflow = orchestrate.RunDAG
 		action.Args = []any{orchestrate.DAGInput{
 			WorkflowName: t.WorkflowName,
 			Principal:    t.Principal,
 			Trigger:      t.Name,
+			LaunchParams: t.Inputs,
+			// The floor's own environment (ADR-0122 D2) — see the event-Trigger path for why a
+			// Trigger's own `environments:` list is a different question.
+			Environment: environment,
 		}}
 	} else {
 		action.Workflow = orchestrate.RunAgainstView
@@ -186,7 +196,7 @@ func compile(t types.Trigger) (client.ScheduleSpec, *client.ScheduleWorkflowActi
 }
 
 func (r *Reconciler) create(ctx context.Context, t types.Trigger) error {
-	spec, action, _, err := compile(t)
+	spec, action, _, err := compile(t, r.Store.ActiveEnvironment())
 	if err != nil {
 		return err
 	}
@@ -211,7 +221,7 @@ func (r *Reconciler) create(ctx context.Context, t types.Trigger) error {
 // Describe (the server compiles it to a structured calendar), so the hash on
 // the action memo is the drift signal.
 func (r *Reconciler) converge(ctx context.Context, log *slog.Logger, t types.Trigger) error {
-	spec, action, wantHash, err := compile(t)
+	spec, action, wantHash, err := compile(t, r.Store.ActiveEnvironment())
 	if err != nil {
 		return err
 	}

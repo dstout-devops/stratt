@@ -225,20 +225,23 @@ func computeConnectorPlan(ctx context.Context, store *graph.Store, decls []types
 // ── Actuator (runs tool content; no Source) ─────────────────────────────────
 
 type actuatorFile struct {
-	Name           string            `yaml:"name"`
-	Address        string            `yaml:"address"`
-	PluginIdentity string            `yaml:"pluginIdentity"`
-	Tier           string            `yaml:"tier"`
-	DryRunnable    bool              `yaml:"dryRunnable"`
-	ActionNames    []string          `yaml:"actionNames"`
-	JobCommand     []string          `yaml:"jobCommand"`
-	Image          string            `yaml:"image"`
-	MCP            bool              `yaml:"mcp"`
-	Provides       []string          `yaml:"provides"`
-	Requires       []string          `yaml:"requires"`
-	Provisions     map[string]string `yaml:"provisions"`
-	Decommissions  map[string]string `yaml:"decommissions"`
-	Environments   []string          `yaml:"environments"`
+	Name            string            `yaml:"name"`
+	Address         string            `yaml:"address"`
+	PluginIdentity  string            `yaml:"pluginIdentity"`
+	Tier            string            `yaml:"tier"`
+	DryRunnable     bool              `yaml:"dryRunnable"`
+	ActionNames     []string          `yaml:"actionNames"`
+	JobCommand      []string          `yaml:"jobCommand"`
+	Image           string            `yaml:"image"`
+	FacetNamespaces []string          `yaml:"facetNamespaces"`
+	IdentitySchemes []string          `yaml:"identitySchemes"`
+	ElevatedInputs  []string          `yaml:"elevatedInputs"`
+	MCP             bool              `yaml:"mcp"`
+	Provides        []string          `yaml:"provides"`
+	Requires        []string          `yaml:"requires"`
+	Provisions      map[string]string `yaml:"provisions"`
+	Decommissions   map[string]string `yaml:"decommissions"`
+	Environments    []string          `yaml:"environments"`
 }
 
 func parseActuatorFile(path string, raw []byte) (string, types.Actuator, error) {
@@ -251,7 +254,9 @@ func parseActuatorFile(path string, raw []byte) (string, types.Actuator, error) 
 	a := types.Actuator{
 		Name: f.Name, Address: f.Address, PluginIdentity: f.PluginIdentity, Tier: f.Tier,
 		DryRunnable: f.DryRunnable, ActionNames: f.ActionNames, JobCommand: f.JobCommand,
-		Image: f.Image, MCP: f.MCP, Provides: f.Provides, Requires: f.Requires,
+		Image: f.Image, FacetNamespaces: f.FacetNamespaces, IdentitySchemes: f.IdentitySchemes,
+		ElevatedInputs: f.ElevatedInputs,
+		MCP:            f.MCP, Provides: f.Provides, Requires: f.Requires,
 		Provisions: f.Provisions, Decommissions: f.Decommissions, Environments: f.Environments,
 	}
 	if err := ValidateActuator(a); err != nil {
@@ -274,6 +279,22 @@ func ValidateActuator(a types.Actuator) error {
 		return fmt.Errorf("actuator %q: one of address (gRPC) or jobCommand (EE-Job) is required", a.Name)
 	case a.Address != "" && len(a.JobCommand) > 0:
 		return fmt.Errorf("actuator %q: address and jobCommand are mutually exclusive transports", a.Name)
+	}
+	// A facet grant needs a scheme to correlate write-back BY, or the grant is honored by
+	// nothing: the hub cannot resolve which Entity the facet belongs to, so every write is
+	// refused while the declaration reads as if it were permitted. Rejected rather than
+	// accepted-and-ignored — the same half-declaration defect as a port with no address
+	// (ADR-0117 D5a), and the same §1.8 rule.
+	if len(a.FacetNamespaces) > 0 && len(a.IdentitySchemes) == 0 {
+		return fmt.Errorf("actuator %q: facetNamespaces requires identitySchemes — a facet grant with no scheme to correlate write-back by is honored by nothing", a.Name)
+	}
+	// Non-empty is not sufficient: the EE-Job write-back path correlates by `host.name`
+	// and NOTHING else, so a grant of (say) dns.fqdn passes governance and is then
+	// discarded at correlation time — admitted, dropped, and reported nowhere. That is the
+	// same half-declaration defect one level below the check above, so the scheme the
+	// runtime actually consumes is required rather than merely some scheme.
+	if len(a.JobCommand) > 0 && len(a.FacetNamespaces) > 0 && !slices.Contains(a.IdentitySchemes, "host.name") {
+		return fmt.Errorf("actuator %q: an EE-Job actuator writing facets must declare the host.name identity scheme (got %v) — the write-back path correlates by host.name only, so any other scheme would be admitted and then silently dropped", a.Name, a.IdentitySchemes)
 	}
 	if err := validateCapabilities(a.Name, a.Provides, a.Requires); err != nil {
 		return err

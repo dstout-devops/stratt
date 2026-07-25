@@ -2,12 +2,46 @@
 # host access (drop group membership / remove the sudoers rule / remove the
 # authorized_key). Surfaced on the orphan Finding when the Assignment is
 # withdrawn — a ref the operator launches, never auto-run (§5 Flow 2).
+#
+# Broken in the same way access-apply was: the play referenced
+# access_subject/access_scope/access_kind, which nothing defined. See access-apply.yaml for
+# the full account.
+#
+# HOW THIS ONE IS LAUNCHED. access-apply is a route's remediationWorkflow, so its params are
+# compiled onto the Baseline and passed by the remediation door (ADR-0118 D3). This is a
+# Blueprint's `removeWorkflow`, surfaced on the ORPHAN Finding when an Assignment is withdrawn.
+# That path used to carry the Workflow name as a string in a freeform detail blob with no param
+# channel at all, so these inputs had to be supplied by hand at launch.
+#
+# It now carries them: the access Blueprint declares `removeParams`, resolved from the effective
+# spec at compile and stamped on the Baseline. The earlier note here said the orphan branch
+# "does not currently have" the effective spec — true of the orphan branch, but the wrong place
+# to look. The COMPILE has it; withdrawal only has to read what the compile already knew, which
+# is why the params are stored rather than recomputed.
 name: access-revoke
+inputs:
+  type: object
+  additionalProperties: false
+  required: [subject, kind, scope]
+  properties:
+    subject:
+      type: string
+      description: The host-local account whose grant is being removed.
+    kind:
+      enum: [sudo, group, authorized_key, account]
+      description: The grant kind.
+    scope:
+      type: string
+      description: Kind-scoped detail — group name, sudo command spec, key fingerprint, or shell.
 steps:
   - name: revoke
     viewName: secure-hosts
     actuator: ansible
     params:
+      extraVars:
+        access_subject: "{{.launch.subject}}"
+        access_kind: "{{.launch.kind}}"
+        access_scope: "{{.launch.scope}}"
       play: |
         - name: Revoke host-access grant
           hosts: all

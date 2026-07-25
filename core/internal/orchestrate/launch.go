@@ -61,7 +61,11 @@ func LaunchRun(ctx context.Context, d LaunchDeps, p LaunchParams) (types.Run, er
 	if name == "" {
 		return types.Run{}, fmt.Errorf("a View actuation requires an explicit actuator (no platform default)")
 	}
-	if err := contract.ValidateActuatorParams(name, p.Params); err != nil {
+	// An input Contract belongs to the tool, not to the local name an estate gives one
+	// of its Actuators, so resolve the declaration's pluginIdentity first (ADR-0117
+	// D3a). Not-found is the normal case for a boot-registered Actuator — its name IS
+	// its identity — and leaves resolution exactly where it was.
+	if err := contract.ValidateActuatorParamsFor(name, d.Store.PluginIdentityOf(ctx, name), p.Params); err != nil {
 		return types.Run{}, err
 	}
 	v, err := d.Store.GetView(ctx, p.ViewName)

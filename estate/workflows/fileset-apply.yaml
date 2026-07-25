@@ -4,12 +4,47 @@
 # (temp+rename); backup: true preserves the prior bytes on change. `source` is
 # resolved from the object store by the operator's play; digest verification
 # happens on the next collector pass (content-addressed drift, §4.2).
+# BROKEN UNTIL ADR-0118. The play referenced `fileset_path` and `fileset_src` —
+# Ansible variables nothing supplied. Found by the unbound-play-variable guard, which also
+# reported three more that turned out to be FINE: mode/owner/group carry `| default(...)`, Jinja's
+# own idiom for "may be undefined". Two real defects out of five reports, which is why the guard
+# now understands `default()`.
+#
+# The values were in the Intent all along (estate/intents/nginx-conf.yaml declares path, source,
+# mode, owner, group). What was missing was a way for the Blueprint route to pass them (D3) and a
+# way for this Workflow to declare it needs them (D2).
 name: fileset-apply
+inputs:
+  type: object
+  additionalProperties: false
+  required: [path]
+  properties:
+    path:
+      type: string
+      description: Absolute destination path of the managed file on the host.
+    src:
+      type: string
+      description: Source path of the content to place (the Intent's `source`).
+    mode:
+      type: string
+      default: "0644"
+    owner:
+      type: string
+      default: root
+    group:
+      type: string
+      default: root
 steps:
   - name: apply
     viewName: web-hosts
     actuator: ansible
     params:
+      extraVars:
+        fileset_path: "{{.launch.path}}"
+        fileset_src: "{{.launch.src}}"
+        fileset_mode: "{{.launch.mode}}"
+        fileset_owner: "{{.launch.owner}}"
+        fileset_group: "{{.launch.group}}"
       play: |
         - name: Distribute managed file
           hosts: all

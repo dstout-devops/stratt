@@ -90,6 +90,61 @@ type ChangeContext struct {
 	HasRiskScore bool              `json:"-"` // true when RiskScore was supplied (fail-safe helper)
 }
 
+// Change-context vocabulary (ADR-0122). These are the keys a launcher may put in a Workflow
+// launch's `context`, and the ones it may not.
+const (
+	// ChangeContextClassKey is the asserted classification of the change. Validated against
+	// ChangeClasses — an unknown value is refused, not coerced.
+	ChangeContextClassKey = "changeClass"
+	// ChangeContextEnvironmentKey is REFUSED from a launcher: the environment is a property of
+	// the floor a Run executes on (ADR-0057), so core stamps it. Named here because refusing a
+	// key requires knowing its name.
+	ChangeContextEnvironmentKey = "environment"
+	// ChangeContextCommittersKey is the change's authors, the set SoD checks the actor against
+	// (ADR-0068). Asserted, because core cannot know who wrote a change it is asked to run.
+	ChangeContextCommittersKey = "committers"
+)
+
+// ChangeLabelPrefix is the core-owned ChangeContext label namespace (§2, ADR-0122 D3). Every key
+// under it is DERIVED from the declaration; a launcher-supplied one is refused, the same rule
+// `stratt.intent/` follows in Action params (ADR-0120). Without that, a Control gating on a derived
+// fact could be defeated by asserting the fact away.
+const ChangeLabelPrefix = "stratt.change/"
+
+// ChangeLabelPrivileged marks a Run whose declaration elevates privileges on a target — derived
+// from the Actuator's own `elevatedInputs` (ADR-0122 D3), which is what makes ADR-0117 D1's typed
+// `become` Control-gateable without core learning any tool's field names.
+const ChangeLabelPrivileged = ChangeLabelPrefix + "privileged"
+
+// ChangeClasses is the closed, core-owned set of change classifications (ADR-0122 D1).
+//
+// Closed for the reason launchKind is (ADR-0120 D1): these are spine acts, a plugin never adds one,
+// and a fourth must argue membership rather than appear. `emergency` is not new — ADR-0070's
+// break-glass has always activated on it (policy.go: `cc.ChangeClass == "emergency"`); this set is
+// that dependency written down and enforced.
+var ChangeClasses = []string{ChangeClassStandard, ChangeClassNormal, ChangeClassEmergency}
+
+const (
+	ChangeClassStandard  = "standard"
+	ChangeClassNormal    = "normal"
+	ChangeClassEmergency = "emergency"
+)
+
+// ValidChangeClass reports whether cls is a known change class. Empty is valid and means unstated:
+// a launcher that classifies nothing is not asserting a wrong classification, and Controls keyed on
+// a class simply do not match — the same absent-is-not-a-value rule RunEvent.Level follows (§1.8).
+func ValidChangeClass(cls string) bool {
+	if cls == "" {
+		return true
+	}
+	for _, c := range ChangeClasses {
+		if c == cls {
+			return true
+		}
+	}
+	return false
+}
+
 // Control is one governance predicate over the ChangeContext (ADR-0061 §4 /
 // ADR-0062). A control FIRES its Outcome + Obligations when its predicate holds.
 // A control is exactly one KIND (validated at load, ADR-0067): a raw CEL
