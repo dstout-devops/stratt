@@ -194,3 +194,33 @@ func TestVacuousRun_UnparsedEventsOutrankOtherCauses(t *testing.T) {
 		t.Fatalf("must not also assert the pattern cause: %q", got)
 	}
 }
+
+// TestParseEvent_RejectsTrailingData guards the regression the UseNumber switch itself
+// introduced. json.Unmarshal rejects trailing content; a json.Decoder does not — it stops
+// after the first value. So moving to a Decoder silently made a TORN or CONCATENATED line
+// parse as just its first event, dropping the rest with no ItemResult and no diagnostic:
+// the exact invisibility the decoder fix exists to abolish, reintroduced by the fix.
+func TestParseEvent_RejectsTrailingData(t *testing.T) {
+	ok1 := `{"event":"runner_on_ok","event_data":{"host":"h"}}`
+	ok2 := `{"event":"runner_on_failed","event_data":{"host":"h"}}`
+
+	if _, ok := parseEvent([]byte(ok1)); !ok {
+		t.Fatal("a single well-formed event must parse")
+	}
+	if _, ok := parseEvent([]byte(ok1 + "  \t\n")); !ok {
+		t.Error("trailing whitespace is not trailing DATA and must still parse")
+	}
+	// Two events on one line: taking the first and discarding the second would lose a
+	// FAILURE here — the worst possible thing to drop silently.
+	if _, ok := parseEvent([]byte(ok1 + ok2)); ok {
+		t.Error("a concatenated line must be REJECTED, not silently truncated to its first event")
+	}
+	if _, ok := parseEvent([]byte(ok1 + `garbage`)); ok {
+		t.Error("a line with trailing garbage must be rejected")
+	}
+	// Rejected, but still recognizably an EVENT — so it reaches the operator at WARN as
+	// kind=unparsed-event rather than blending into ordinary banner output.
+	if !eventShaped([]byte(ok1 + ok2)) {
+		t.Error("a concatenated event line must still classify as event-shaped so it surfaces as a defect")
+	}
+}

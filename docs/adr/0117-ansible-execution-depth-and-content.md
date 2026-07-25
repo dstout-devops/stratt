@@ -173,30 +173,44 @@ So v5 does **not** delete it:
 `diff` remains a _separate_ v5 field (D1) because diff-without-check is a legitimate apply-time request —
 "converge, and show me what changed" — distinct from "don't converge at all."
 
-### D3 — Content (collections **and roles**) is an EE **build-time** declaration, pinned and hash-verified; the image digest is the run's single truth
+### D3 — Content (collections **and roles**) is an EE **build-time** declaration, exactly pinned and verified against the resolved set; the image digest is the run's single truth
 
-Content is declared where it is _resolved_ — in the **Execution Environment build declaration** (the
-`ansible-builder`-compatible input the EE factory consumes), **not** as a field on the run-time
-`ansible.input` Contract:
+Content is declared where it is _resolved_ — in the **Execution Environment build**, **not** as a field on
+the run-time `ansible.input` Contract. The declaration is a **real Galaxy `requirements.yml`**, the same
+file `ansible-galaxy install -r` and `ansible-builder` consume — Stratt invents no content format (§1.1),
+and inventing one would break the charter §3 `ansible-builder` compatibility commitment:
 
 ```yaml
-# EE build declaration (consumed by the EE factory — parity P5), NOT ansible.input.v5
+# ee/content/<variant>.requirements.yml — plain Galaxy format, no Stratt dialect
 collections:
   - { name: community.crypto, version: "2.22.3" }
 roles:
-  - { name: geerlingguy.certbot, version: "5.2.0" }
-requirements: { scm: { ... }, path: requirements.yml } # both sections of a requirements file
+  - { name: geerlingguy.certbot, version: "5.2.0" } # both sections handled identically
 ```
 
-**Roles are in scope, and were an omission in the first revision of this ADR.** `requirements.yml` has
-two sections and Stratt currently handles neither: there is **no** `roles_path`, no `ANSIBLE_ROLES_PATH`,
-and no role installation anywhere in the runtime — so roles work only incidentally, when an SCM-cloned
-repo happens to contain `roles/` next to its play. An **inline `play` can never use a role at all**,
-because the shim writes only `play.yml` into `project/`. Since a certificate/app-install play is exactly
-the kind that reaches for a community role, roles get the same treatment as collections here: declared in
-the EE build, installed at build time, pinned and hash-verified, with the image digest as the single truth.
+**Roles are in scope, and were an omission in the first revision of this ADR.** `requirements.yml` has two
+sections and Stratt handled neither: no role installation existed anywhere in the runtime, so roles worked
+only incidentally, when an SCM-cloned repo happened to contain `roles/` next to its play. Since a
+certificate/app-install play is exactly the kind that reaches for a community role, roles get the same
+treatment as collections: declared in the EE build, installed at build time, exactly pinned.
 (`plugins/ansibleproject` already _projects_ `ansible.role` Entities read-only, but that is observation of
 a content root, not execution — a different seam, and dormant.)
+
+> **Correction (implementation, ADR still Proposed).** An earlier revision of this section asserted that
+> **`roles_path` plumbing was part of the work** ("there is no `roles_path`, no `ANSIBLE_ROLES_PATH` …").
+> Measured against the real EE image, **no such plumbing is needed and none was added**:
+> `/usr/share/ansible/{collections,roles}` is already on ansible's default search path, and
+> `ansible-runner` **prepends** its own `project/` dirs rather than replacing the defaults. The observed
+> resolution order is
+> `/runner/project/roles:/home/runner/.ansible/roles:/usr/share/ansible/roles:/etc/ansible/roles:/runner/project`.
+> Build-time content therefore resolves with **no** `ANSIBLE_ROLES_PATH`, no `ANSIBLE_COLLECTIONS_PATH`,
+> and no `ansible.cfg`.
+>
+> The same measurement falsified a second claim: that an **"inline `play` can never use a role at all"**.
+> That is true only of a _repo-local_ role, because the shim writes a single `play.yml` into `project/`. A
+> **build-time-installed** role resolves fine from an inline play — verified by running one through the
+> shim. So the inline-play limitation is narrower than stated, and build-time installation removes it
+> rather than working around it.
 
 **Why content stays out of the run-time Contract.** A `content:` field on `ansible.input.v5` would be a
 Contract field the runtime does not honor — the _identical_ defect D2 exists to correct, re-introduced two
@@ -220,18 +234,72 @@ The core does **not** learn to read `params.eeImage`. Instead, an EE is selected
 plugin image already is — **by declaration**: a Step selects an Actuator, and the Actuator declaration
 (ADR-0103, the same runtime-registered shape `helm`/`vcenter` use) carries the image. Two Actuator
 declarations — say `ansible` and `ansible-crypto` — differing only in their EE image give per-Step
-content selection with **zero** ansible awareness in core, and the image lands on `JobSpec.Image` from the
-registration struct exactly as the MCP path already does.
+content selection with **zero** ansible awareness in core. `opentofu-network` and `opentofu-s3` already
+share one plugin pod under two declarations, so this is a shipped pattern, not a new one.
+
+Two things had to be built for that to be true, and neither was a given:
+
+- **`JobSpec.Image` was dropped on the EE-Job path.** An earlier revision said the image "lands on
+  `JobSpec.Image` from the registration struct exactly as the MCP path already does". That was true **only
+  of `executeMCP`**. `executeJobPlugin` built `JobSpec{Files, Command}` with no `Image`, so a declared
+  image was carried all the way to `PluginActuator.Image` and then discarded, and every ansible Run got the
+  global `STRATT_EE_IMAGE` regardless. One line, but without it per-Step EE selection was **inert** — the
+  same shape of defect as D5c's inert first half.
+- **The CaC declaration could not express the govern grant.** `actuatorGrant` built a Grant from the
+  declaration with **no** `FacetNamespaces` and **no** `IdentitySchemes`, while the boot-registered
+  `ansible` inlines nine facet namespaces plus `host.name`. A declared ansible variant would therefore have
+  run and then had **every fact write-back refused** — a strictly weaker Actuator that looks identical, the
+  §1.8 failure mode this ADR keeps finding. Actuators now declare both fields, exactly as Connectors
+  already do (ADR-0103's CaC grant), and `facetNamespaces` without `identitySchemes` is **rejected**: a
+  facet grant with no scheme to correlate write-back by is honored by nothing, the same half-declaration
+  rule as D5a's port-without-address.
 
 `params.eeImage` is therefore **deprecated in v5 alongside `check`** (D2): retained so nothing breaks,
 documented as ignored, removal booked once no writer emits it. This keeps the rule uniform — _a Contract
 field the runtime ignores is a lying seam, and the fix is to delete the lie, not to teach the core a
 tool's vocabulary._
 
-**The default posture is therefore that the EE image is the content boundary**: collections are installed
-at build time with pinned versions and verified hashes, and the Run consumes that immutable, digest-pinned
-image. Run-time `ansible-galaxy install` is **opt-in and explicitly non-default**; when enabled it requires
-a declared source, a brokered credential, pinned versions, and hash verification — and, because it makes
+**The default posture is therefore that the EE image is the content boundary**: content is installed at
+build time with exactly-pinned versions, and the Run consumes that immutable, digest-pinned image. Three
+integrity properties are enforced, and it matters which is which:
+
+1. **Exact pinning, asserted positively, before the network is touched.** A version must match an exact
+   `x.y.z` (or, for a role from git, a full 40-character commit id); everything else is rejected, including
+   the unpinned `- ns.name` shorthand. The rule is an **allowlist on purpose**: the first implementation
+   denied a list of bad tokens, and `devel`, `HEAD`, `dev`, `stable-2.19`, `2.22` and `1.0` all sailed
+   through it as "exactly pinned" while naming a moving ref or an incomplete version. That mattered most for
+   **roles**, which install from git tarballs where a branch name is a legal `version:`.
+2. **Verify-don't-trust on the resolved set — for collections.** After install, installed versions are
+   asserted against the declaration and a mismatch fails the build; `ansible-galaxy` can satisfy a request
+   with a different version via dependency resolution or a redirected name. **This check is strong for
+   collections and weak for roles**, and the asymmetry is stated rather than glossed: a collection's version
+   is read from `MANIFEST.json`, which ships _inside_ the artifact, so a mismatch is detectable — whereas
+   `ansible-galaxy` writes a role's `meta/.galaxy_install_info` from the **request**, so for roles the check
+   compares the declaration against itself and cannot fail. The real protection for roles is rule 1.
+3. **The image is the content boundary, and each Run states what it had.** Every Run emits its EE's content
+   by name and version on its own event stream (`kind=ee-content`, transitive dependencies marked as such),
+   because an image reference no operator can read answers no question during descent (§1.8).
+
+> **Scope of the integrity claim — narrowed twice, and worth reading before citing it.** An earlier
+> revision said content is "**hash-verified**"; the first narrowing said `ansible-galaxy` "verifies each
+> artifact's checksum against the Galaxy API on download". Both overstated it.
+>
+> - **Collections:** the Galaxy API supplies a checksum and `ansible-galaxy` verifies the download against
+>   it. The **registry is the authority**, so a _republished_ version at the same version number would not
+>   be detected.
+> - **Roles:** there is **no checksum step at all** — a role installs from a bare git tarball
+>   (`https://github.com/…/archive/5.2.0.tar.gz`, observed). Only rule 1's pin constrains it.
+>
+> So an in-repo lockfile of per-artifact SHA-256 is not a nice-to-have; it is **load-bearing for the roles
+> half**, and it is booked as follow-up (i) rather than implied by a word.
+>
+> Likewise, this ADR says the image digest is the single truth about a Run's content. The **mechanism**
+> shipped selects by an image reference, which may be a mutable tag (`stratt-ee-crypto:dev` in dev).
+> Digest-pinning production image references is the operator's job under §7.3, not something this decision
+> enforces; the `kind=ee-content` event is what makes the actual content legible either way.
+
+Run-time `ansible-galaxy install` is **opt-in and explicitly non-default**; when enabled it requires
+a declared source, a brokered credential, and pinned versions — and, because it makes
 the image digest no longer the whole truth, the shim **must verify the installed set against the declared
 pins and fail the Run on mismatch** (§1.8 — no silent content drift).
 
@@ -375,6 +443,47 @@ RunEvent → API → UI is booked as follow-up (g).
   **View**; the sense used here is the Ansible-content sense, and it must not leak into a core noun, API
   route, or DB column.
 
+### D6 — A big integer in a module result must not void the whole event (found while implementing D3)
+
+Not a designed decision so much as a defect this work uncovered, recorded because it changes what D3 and
+D5c mean in practice and because it was found only by running the real thing.
+
+`RunnerEvent.EventData` is `map[string]any`, and `encoding/json` decodes every JSON number inside an `any`
+into **float64**. Real module results carry integers far outside float64's range — an RSA-2048 modulus from
+`community.crypto.openssl_privatekey` is **617 digits** — so `encoding/json` rejected the **entire event
+line**, and `parseEvent` returned "not an event". The line then fell through to the MF5 diagnostic channel,
+where it looked exactly like a runner banner. Everything typed about that event was lost: the per-host
+`ItemResult`, the facts write-back, the drift fragment. Measured against the EE image, a five-task
+certificate play emitted **1 `ItemResult` instead of 5**.
+
+Two consequences, and the second is the reason this blocked D3:
+
+- Before D5c this was **silently** wrong: zero per-target results still folded a green Run.
+- After D5c it is **loudly** wrong. The vacuous-run guard counts actuation from exactly these events, so a
+  one-task `openssl_privatekey` play produced `actuated=0` with `rc=0`, and the guard **failed a run that
+  had genuinely done its work** — blaming the play's `hosts:` pattern, a cause it never observed. D5c
+  converted a silent defect into a false failure, triggered by precisely the content D3 enables. Shipping
+  D3 without this fix would have made the certificate demo report failure on success.
+
+Decisions taken:
+
+- **Decode with `UseNumber`.** Numbers stay `json.Number` literals, so nothing overflows and facts
+  round-trip byte-exactly instead of through float64 (a big modulus was corrupted even when it _did_
+  parse). Safe by inspection: the package asserts only `string`, `bool`, and `map` on decoded data — it has
+  no `float64` assertion anywhere.
+- **A misparse is now visible as a misparse.** The reason this survived is that an undecodable event was
+  indistinguishable from ordinary output. A line that **is** an event but failed to decode now surfaces at
+  **WARN** under `kind=unparsed-event`, separate from the non-JSON banners and tracebacks MF5 legitimately
+  forwards.
+- **An undecodable event outranks every other vacuous-run cause.** When the shim could not decode events it
+  does not know whether hosts were actuated, so it still fails the Run — "I cannot tell what happened" is
+  not a success — but says _that_, rather than asserting a cause it has no evidence for (§1.8).
+
+The general lesson, and the third instance of it in this ADR's arc: **a plugin boundary that decodes an
+external tool's output is a typed seam, and the types must come from what the tool actually emits, not from
+what a reasonable schema would look like.** Nothing short of running `community.crypto` against a real
+`ansible-runner` would have surfaced this.
+
 ## Consequences
 
 - **Positive.** Unblocks the app-install-with-a-certificate demo (which needs `become` **and**
@@ -391,8 +500,12 @@ RunEvent → API → UI is booked as follow-up (g).
   urgent, not less**; until it exists, EE builds stay hand-rolled. Build-time resolution trades run-time
   flexibility for reproducibility (deliberate); teams wanting ad-hoc collections must opt into the
   non-default run-time path or rebuild an EE. **Air-gap seeding remains unsolved.**
-- **Follow-ups.** (a00) **Per-Step EE selection (D3a)** — declare a second ansible Actuator carrying its own
-  EE image (ADR-0103 shape); deprecate the unread `params.eeImage`. Prerequisite for D3's content story.
+- **Follow-ups.** ~~(a00) Per-Step EE selection (D3a)~~ — **mechanism done**: `executeJobPlugin` now carries
+  `JobSpec.Image`, and Actuators declare their own `facetNamespaces`/`identitySchemes` CaC grant (with
+  `host.name` required when an EE-Job Actuator writes facets). `params.eeImage` stays deprecated and unread.
+  The **estate declaration itself is deliberately not shipped yet** and lands with the certificate demo (f):
+  an `ansible-crypto` Actuator that no Workflow selects would be "declared and read by nothing", and worse,
+  see (l) — it would report _healthy_ while its image did not exist.
   (a0) **Redirect the AWX materializer** (`plugins/awx/materialize/workflows.go`) from
   `params["check"]` to `Step.DryRun` (D2) — the prerequisite for ever removing the deprecated field.
   (a) The `ansible-builder`-compatible EE factory (parity P5) — this ADR defines the
@@ -407,6 +520,27 @@ RunEvent → API → UI is booked as follow-up (g).
   a warning in the API/UI. Needs a `RunEvent.Level` + OpenAPI + UI slice.
   (h) **A live demo asserting the vacuous-run guard** — the rc=0 behaviour behind D5c was verified by hand
   against the EE image in the session that shipped it; that proof belongs in a demo so it cannot rot.
+  (i) **Per-artifact content hashes (a lockfile).** D3 pins exact versions and verifies the resolved set,
+  but the **registry remains the checksum authority**: a republished version at the same version number
+  would not be detected. Closing it means recording each artifact's SHA-256 in an in-repo lockfile and
+  failing the build on mismatch. Named explicitly because the earlier "hash-verified" wording implied this
+  already existed.
+  (j) **Surface `kind=ee-content` in the UI's Run descent.** Each Run now states its EE content on the event
+  stream (D3), but it reads as an ordinary event; the descent should show it as run metadata. Pairs with (g).
+  (l) **An unpullable EE image hangs a Run for up to 24 hours instead of failing (§1.8, platform-wide).**
+  Surfaced by the charter-guardian review of this slice, and **not specific to ansible or to content**: an
+  EE-Job Actuator is marked healthy without any image check (`enableActuatorLocked` skips the dial for a
+  `jobCommand` Actuator), and `dispatch.waitForPod` switches only on `Pod.Status.Phase`, so a pod stuck in
+  `ImagePullBackOff` stays `Pending` and heartbeats until the activity's 24h `StartToCloseTimeout`. Net: a
+  healthy-looking Actuator, a Run that hangs for a day, and a Temporal timeout as the only diagnosis — the
+  abstraction hiding a failure it can plainly see. Fix is `waitForPod` reading
+  `containerStatuses[].state.waiting.reason` and failing loudly; a cheap partial is a CI gate tying each
+  `estate/actuators/*.yaml` `image:` to a build task. This is the direct reason the `ansible-crypto`
+  declaration is held back from (a00) until the demo lands.
+  (k) **Migrate the boot-registered `ansible`/`script` Actuators to CaC** (ADR-0103's remaining
+  boot blocks). Now unblocked for `ansible`, since the declaration can finally express its bounded grant —
+  the reason it could not move before. Note the registry rejects a declaration colliding with a
+  boot-registered name, so the boot block must be removed in the same change.
 
 ## Alternatives considered
 

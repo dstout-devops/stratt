@@ -31,6 +31,13 @@ vars:
   HELM_SHA256_AMD64: "e9b88b4ee95b18c706839c28d3a0220e5bc470e9cd9262410c90793c45ff8b7c"
   HELM_SHA256_ARM64: "21abd9354d39b2cd79a8d76be6912cd137a983cbf997193503fb8a6a6e2f2785"
   KUBECTL_VER: "1.34.1" # within skew of the kind node (K8s N-2, §1.7)
+  # Python gate tools (ADR-0117 D3). Run via `uvx <tool>@<ver>` — project-independent,
+  # so they work regardless of UV_PROJECT — and PINNED: a gate whose whole thesis is
+  # "unpinned things resolve differently on different days" must not itself float.
+  RUFF_VER: "0.14.5"
+  MYPY_VER: "1.18.2"
+  PYYAML_VER: "6.0.3"
+  PYTEST_VER: "9.1.1"
   BIN: "{{.ROOT_DIR}}/.bin"
   HELM: "{{.ROOT_DIR}}/.bin/helm"
   KUBECTL: "{{.ROOT_DIR}}/.bin/kubectl"
@@ -112,7 +119,7 @@ tasks:
           [ -z "$files" ] || { echo '→ gofmt'; gofmt -w $files; }
         fi
         if [ -f package.json ]; then echo '→ prettier'; npx --yes prettier --write . >/dev/null; fi
-        if [ -f pyproject.toml ]; then echo '→ ruff format'; uv run ruff format .; fi
+        if [ -f pyproject.toml ]; then echo '→ ruff format'; uvx ruff@{{.RUFF_VER}} format .; fi
         echo "fmt done."
 
   fmt:check:
@@ -129,7 +136,7 @@ tasks:
           fi
         fi
         if [ -f package.json ]; then npx --yes prettier --check . || rc=1; fi
-        if [ -f pyproject.toml ]; then uv run ruff format --check . || rc=1; fi
+        if [ -f pyproject.toml ]; then uvx ruff@{{.RUFF_VER}} format --check . || rc=1; fi
         if [ "$rc" != 0 ]; then exit 1; fi
         echo "fmt:check clean."
 
@@ -145,7 +152,12 @@ tasks:
           done
         fi
         if [ -f package.json ]; then echo '→ eslint'; npx --yes eslint .; fi
-        if [ -f pyproject.toml ]; then echo '→ ruff check'; uv run ruff check .; fi
+        if [ -f pyproject.toml ]; then
+          echo '→ ruff check'; uvx ruff@{{.RUFF_VER}} check .
+          # mypy --strict too: .claude/rules/backend-python.md demands typed + clean, and
+          # ee/content.py is a supply-chain gate — the last place to accept loose typing.
+          echo '→ mypy'; uvx --with pyyaml=={{.PYYAML_VER}} --with types-PyYAML --with pytest=={{.PYTEST_VER}} mypy@{{.MYPY_VER}} --strict ee/
+        fi
         echo "lint done."
 
   test:
@@ -161,7 +173,13 @@ tasks:
           done
           ran=1
         fi
-        if [ -f pyproject.toml ]; then echo '→ pytest'; uv run pytest; ran=1; fi
+        if [ -f pyproject.toml ]; then
+          echo '→ pytest'
+          # Pinned deps, project-independent (UV_PROJECT may point elsewhere). These cover
+          # the EE content pin gate (ADR-0117 D3) — supply-chain logic, so it gets tests.
+          uv run --quiet --with pyyaml=={{.PYYAML_VER}} --with pytest=={{.PYTEST_VER}} pytest -q
+          ran=1
+        fi
         if [ "$ran" = 0 ]; then echo "No packages yet — nothing to test."; fi
 
   plugins:standalone:
@@ -214,6 +232,7 @@ tasks:
       - task: adr:index:check
       - task: test
       - task: plugins:standalone
+      - task: ee:content:check
       - task: ui:ci
 
   dev:up:
@@ -962,6 +981,24 @@ tasks:
       # shim (ADR-0051) from plugins/ansible + sdk before baking the EE runtime.
       - docker build -f ee/Dockerfile -t stratt-ee:dev .
       - go run sigs.k8s.io/kind@v{{.KIND_VER}} load docker-image stratt-ee:dev --name {{.KIND_CLUSTER}}
+
+  ee:content:check:
+    desc: Fail if any EE ansible-content declaration is not pinned to an exact version (ADR-0117 D3)
+    cmds:
+      # The SAME implementation the EE build runs (ee/content.py), so CI and the image
+      # cannot disagree about what "pinned" means. uv supplies pyyaml without adding a
+      # repo dependency (.claude/rules/backend-python.md — uv is the only sanctioned
+      # Python package manager, and this content is EE-side, never the control plane).
+      - uv run --quiet --with pyyaml=={{.PYYAML_VER}} python ee/content.py verify ee/content/*.requirements.yml
+
+  dev:ee-crypto:build:
+    desc: Build the crypto-content EE variant and load it into the kind cluster (ADR-0117 D3/D3a)
+    cmds:
+      # Same Dockerfile as the base EE — content is selected by build ARG, not by a fork
+      # of the image definition. The declared collections are installed at BUILD time and
+      # the resolved set is verified against the pins (ee/content.py).
+      - docker build -f ee/Dockerfile --build-arg EE_CONTENT=crypto.requirements.yml -t stratt-ee-crypto:dev .
+      - go run sigs.k8s.io/kind@v{{.KIND_VER}} load docker-image stratt-ee-crypto:dev --name {{.KIND_CLUSTER}}
 
   dev:ee-mcp:build:
     desc: Build the MCP EE image and load it into the kind cluster (ADR-0022)

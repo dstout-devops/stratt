@@ -306,6 +306,14 @@ func Run(ctx context.Context, w io.Writer, dir string, req Request, run commandR
 		}
 	}
 
+	// What content this EE actually carries (ADR-0117 D3), stated once per Run so the
+	// descent can answer "which collections/roles did this Run have?" without inspecting
+	// an image digest by hand (§1.8).
+	emit(&pluginv1.ApplyResponse{Event: &pluginv1.TaskEvent{
+		Level: pluginv1.TaskEvent_LEVEL_INFO, Message: contentSummary(os.ReadFile), At: timestamppb.Now(),
+		Fields: map[string]string{"kind": "ee-content"},
+	}})
+
 	// actuated records every host that produced a terminal per-host result. A run
 	// that actuates NOTHING is the vacuous-success hole (§1.8): ansible exits 0 when
 	// a play's `hosts:` pattern matches no inventory host, so the Run would fold

@@ -42,6 +42,42 @@ RUN uv pip install --system --no-cache \
     "ansible-core>=2.19,<2.20" \
     "ansible-runner>=2.4,<3"
 
+# ── Ansible content: collections + roles (ADR-0117 D3) ────────────────────────
+# Content is declared where it is RESOLVED — HERE, in the build — never as a field on
+# the run-time ansible.input Contract. A Step selects content by selecting an Actuator
+# whose declaration carries this image (D3a), so the image is the content boundary.
+# (Digest-PINNING an image reference in production is the operator's job under §7.3; this
+# dev tag is not a digest.) Build-time because a run
+# pod fetching content from the network has no provenance (§7.3), because Galaxy/private
+# Hub is an EXTERNAL system that must not be in the critical path of every converge
+# (PLG-1), and because air-gap is then a seeding problem rather than a runtime one.
+#
+# EE_CONTENT names a Galaxy requirements file under ee/content/ (the real format, which
+# ansible-builder also consumes — §3 compatibility). Empty ⇒ a base EE with no content;
+# the manifest is still written, so "no content" is stated rather than merely absent.
+#
+# Installs into /usr/share/ansible/{collections,roles}, which is on ansible's DEFAULT
+# search path — verified live: ansible-runner adds its own project dirs WITHOUT replacing
+# the defaults, so no ANSIBLE_ROLES_PATH / ANSIBLE_COLLECTIONS_PATH / ansible.cfg is
+# needed, and an INLINE play can use a build-time role. content.py asserts this at build
+# time rather than trusting it, since ansible-runner floats within its version band.
+#
+# content.py enforces exact pins BEFORE touching the network and then verifies the
+# RESOLVED set against the declaration (verify-don't-trust): an image whose contents
+# differ from what it declares makes its digest an unreliable claim about the Run.
+#
+# Note the deliberate asymmetry with the ansible-core/ansible-runner ranges above: the
+# TOOLCHAIN floats within a supported band because evergreen (§1.7) wants it current and
+# CI-gated at N-1, whereas CONTENT is pinned exactly because reproducibility of what a Run
+# executed is the property D3 buys. Different properties, different rules — not an
+# oversight.
+ARG EE_CONTENT=""
+COPY ee/content.py /usr/local/bin/stratt-ee-content
+COPY ee/content/ /usr/share/stratt/ee-content/
+RUN python /usr/local/bin/stratt-ee-content install \
+      ${EE_CONTENT:+/usr/share/stratt/ee-content/${EE_CONTENT}} \
+    && chmod -R a+rX /usr/share/ansible
+
 # The port-speaking shims (ADR-0051/0046): the EE-Job transport's pod commands. Each
 # reads /runner/stratt/request.json (the sovereign ApplyRequest) and emits typed
 # ApplyResponses. stratt-ansible runs ansible-runner; stratt-script runs user scripts.

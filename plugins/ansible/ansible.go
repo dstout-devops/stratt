@@ -9,6 +9,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"maps"
 	"slices"
 	"strings"
@@ -118,7 +119,77 @@ func parseEvent(line []byte) (RunnerEvent, bool) {
 	if err := dec.Decode(&ev); err != nil || ev.Event == "" {
 		return RunnerEvent{}, false
 	}
+	// Exhaustion check — NOT redundant. json.Unmarshal rejects trailing content; a
+	// json.Decoder stops at the end of the first value and ignores the rest. Moving to a
+	// Decoder for UseNumber therefore silently loosened this seam: a TORN or CONCATENATED
+	// line would parse as its first event and everything after it would vanish — no
+	// ItemResult, no diagnostic, no unparsed-event WARN. That is precisely the
+	// invisibility the UseNumber fix exists to remove, so the strictness is restored
+	// here. Trailing whitespace is fine (io.EOF); a second value or garbage is not, and
+	// such a line is still eventShaped, so it lands on the WARN channel as a defect.
+	if err := dec.Decode(new(json.RawMessage)); err != io.EOF {
+		return RunnerEvent{}, false
+	}
 	return ev, true
+}
+
+// eeContentManifestPath is where the EE build records the content it actually installed
+// (ee/content.py, ADR-0117 D3). It is a file contract WITHIN the image — the same image
+// that ships this shim — never a core-side seam.
+const eeContentManifestPath = "/etc/stratt/ee-content.json"
+
+// eeContent is the manifest's shape: what content this EE really contains, including
+// transitive dependencies (declared=false), not a restatement of what was requested.
+type eeContent struct {
+	Collections []eeContentEntry `json:"collections"`
+	Roles       []eeContentEntry `json:"roles"`
+}
+
+type eeContentEntry struct {
+	Name     string `json:"name"`
+	Version  string `json:"version"`
+	Declared bool   `json:"declared"`
+}
+
+// contentSummary renders a one-line statement of the EE's ansible content for the Run's
+// event stream. D3 makes the image digest the single truth about what content a Run had —
+// but a digest an operator cannot read answers no question during descent (§1.8), so the
+// Run records the content by name and version.
+//
+// It ALWAYS produces a line, including when the manifest is missing: absence is the
+// normal case for a drop-in ansible-builder-produced EE (a charter §3 commitment), and
+// "unknown" is a materially different answer from "none" when someone is working out why
+// a collection was not found. Injected reader so this is tested without a filesystem.
+func contentSummary(read func(string) ([]byte, error)) string {
+	raw, err := read(eeContentManifestPath)
+	if err != nil {
+		return fmt.Sprintf("ansible content: UNKNOWN — this EE ships no content manifest at %s (an ansible-builder-produced or hand-built image); what content the run had cannot be stated", eeContentManifestPath)
+	}
+	var c eeContent
+	if err := json.Unmarshal(raw, &c); err != nil {
+		return fmt.Sprintf("ansible content: UNREADABLE — %s did not decode (%v)", eeContentManifestPath, err)
+	}
+	render := func(kind string, entries []eeContentEntry) string {
+		parts := make([]string, 0, len(entries))
+		for _, e := range entries {
+			s := e.Name + "==" + e.Version
+			if !e.Declared {
+				s += " (dependency)" // pulled in transitively — nobody asked for it directly
+			}
+			parts = append(parts, s)
+		}
+		slices.Sort(parts)
+		return kind + ": " + strings.Join(parts, ", ")
+	}
+	switch {
+	case len(c.Collections) == 0 && len(c.Roles) == 0:
+		return "ansible content: none — this EE declares no collections or roles (ansible-core only)"
+	case len(c.Roles) == 0:
+		return "ansible content — " + render("collections", c.Collections)
+	case len(c.Collections) == 0:
+		return "ansible content — " + render("roles", c.Roles)
+	}
+	return "ansible content — " + render("collections", c.Collections) + "; " + render("roles", c.Roles)
 }
 
 // eventShaped reports that line IS a JSON object carrying a non-empty "event" field —
