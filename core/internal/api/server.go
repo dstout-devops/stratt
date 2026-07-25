@@ -1780,6 +1780,16 @@ func workflowToWire(w types.Workflow) Workflow {
 	for _, s := range w.Steps {
 		out.Steps = append(out.Steps, stepToWire(s))
 	}
+	// The launch interface (ADR-0118 D2). Published so every surface generates its own
+	// affordance from the same document — the UI a form, the CLI a flag set, MCP a tool
+	// signature (§1.6). An agent that cannot introspect a Workflow's inputs cannot launch
+	// it correctly, which is the §1.6 hole this closes.
+	if len(w.Inputs) > 0 {
+		var doc map[string]any
+		if err := json.Unmarshal(w.Inputs, &doc); err == nil {
+			out.Inputs = &doc
+		}
+	}
 	return out
 }
 
@@ -1837,6 +1847,17 @@ func approversToWire(a types.GateApprovers) GateApprovers {
 // reads from Git — the CLI plan/apply path sends the checkout verbatim.
 func workflowFromWire(in Workflow, opts ...desiredstate.ValidateOption) (types.Workflow, error) {
 	w := types.Workflow{Name: in.Name}
+	// The launch interface must survive the round trip, or admission would FALSELY REJECT a
+	// valid Workflow: ValidateWorkflow checks every {{.launch.x}} binding against the
+	// declared inputs, so dropping them here would make a correct declaration look like it
+	// binds an undeclared field (ADR-0118 D2).
+	if in.Inputs != nil {
+		raw, err := json.Marshal(*in.Inputs)
+		if err != nil {
+			return types.Workflow{}, fmt.Errorf("inputs: %w", err)
+		}
+		w.Inputs = raw
+	}
 	for _, s := range in.Steps {
 		step := types.Step{Name: s.Name}
 		if s.Needs != nil {

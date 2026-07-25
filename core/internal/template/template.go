@@ -165,3 +165,34 @@ func collectRefs(v any, out map[string]bool) {
 		}
 	}
 }
+
+// Paths returns the set of FULL dotted references any token in v makes —
+// "launch.commonName", "steps.build.outputs.id" — where References answers only the
+// coarser namespace question.
+//
+// It exists for field-wise declaration checks (ADR-0118 D2): knowing that a Step binds the
+// `launch` namespace is not enough to catch `{{.launch.comonName}}`, which is a typo that
+// would otherwise survive until the binding failed at dispatch. Namespace-level checking
+// cannot see it; path-level checking can.
+func Paths(v any) map[string]bool {
+	out := map[string]bool{}
+	collectPaths(v, out)
+	return out
+}
+
+func collectPaths(v any, out map[string]bool) {
+	switch t := v.(type) {
+	case string:
+		for _, m := range tokenRe.FindAllStringSubmatch(t, -1) {
+			out[m[1]] = true
+		}
+	case map[string]any:
+		for _, val := range t {
+			collectPaths(val, out)
+		}
+	case []any:
+		for _, val := range t {
+			collectPaths(val, out)
+		}
+	}
+}

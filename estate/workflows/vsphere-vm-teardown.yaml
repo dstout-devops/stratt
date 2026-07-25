@@ -6,6 +6,24 @@
 # (§5 Flow, destructive ⇒ gated). delete-vm is idempotent-on-absence (ADR-0114 D2), so a re-launch over
 # the tombstone sync-lag window is a safe no-op; the Syncer's next full-sync tombstones the Entity.
 name: vsphere-vm-teardown
+# The launch interface (ADR-0118 D2). The uuid comes from the decommission Finding's
+# identityKeys, so it is required with no default — defaulting a teardown target would be
+# indefensible for a destructive Workflow.
+#
+# No `pattern`: vSphere exposes more than one uuid shape (instanceUuid vs the hardware
+# uuid) and guessing one here would reject a legitimate target. The description says where
+# the value comes from instead, which is what an operator actually needs.
+inputs:
+  type: object
+  additionalProperties: false
+  required: [uuid]
+  properties:
+    uuid:
+      type: string
+      description: >
+        vcenter.uuid of the VM to tear down, taken from the decommission/<intent> Finding's
+        identityKeys. delete-vm is idempotent-on-absence, so a re-launch over the
+        tombstone sync-lag window is a safe no-op.
 steps:
   - name: approve
     gate:

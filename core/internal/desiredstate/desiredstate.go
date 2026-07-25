@@ -1867,6 +1867,43 @@ func validateActionParamsContract(action string, params map[string]any) error {
 	return contract.ValidateActionInput(action, raw)
 }
 
+// checkLaunchFields rejects a {{.launch.X}} binding whose X is not a declared input
+// (ADR-0118 D2) — the field-wise half of binding validation.
+//
+// checkTemplateNamespaces answers "may this context bind `launch` at all"; this answers
+// "does `launch.commonName` exist". Without it, a Workflow could publish a typed launch
+// interface and still reference a field nothing supplies, which is the same
+// declared-but-unsatisfiable shape ADR-0117 kept finding.
+//
+// Nested access binds its ROOT: {{.launch.tls.minVersion}} requires an input named `tls`
+// (an object-typed one). Whether the nested path exists inside it is the input schema's
+// business at launch, not this check's.
+func checkLaunchFields(what, workflow string, declared map[string]bool, vals ...any) error {
+	for path := range template.Paths(vals) {
+		root, rest, found := strings.Cut(path, ".")
+		if root != "launch" || !found {
+			continue
+		}
+		field, _, _ := strings.Cut(rest, ".")
+		if len(declared) == 0 {
+			return fmt.Errorf(
+				"%s: binds {{.launch.%s}} but workflow %s declares no `inputs` — declare the launch interface, "+
+					"or the value can never be supplied", what, rest, workflow)
+		}
+		if !declared[field] {
+			names := make([]string, 0, len(declared))
+			for n := range declared {
+				names = append(names, n)
+			}
+			sort.Strings(names)
+			return fmt.Errorf(
+				"%s: binds {{.launch.%s}}, but %q is not a declared input of workflow %s (declared: %v)",
+				what, rest, field, workflow, names)
+		}
+	}
+	return nil
+}
+
 // checkTemplateNamespaces rejects a declaration whose bindings reference a
 // namespace the context does not provide (ADR-0024): e.g. {{.event.x}} on a
 // schedule Trigger, or {{.spec.x}} anywhere outside the compiler.
@@ -1890,6 +1927,10 @@ func checkTemplateNamespaces(what string, allowed map[string]bool, vals ...any) 
 type workflowFile struct {
 	Name  string     `yaml:"name"`
 	Steps []stepYAML `yaml:"steps"`
+	// Inputs is the launch interface as a JSON Schema object (ADR-0118 D2). Declared in
+	// YAML, canonicalized to JSON for the validator — yaml.v3 ignores json tags, so it is
+	// read as a generic map and marshalled, exactly like a route's `equals`.
+	Inputs map[string]any `yaml:"inputs"`
 	// AdoptedFrom is the adopt lineage (ADR-0087) — present on Workflows materialized by
 	// `stratt adopt`, read by the standing cutover reconciler. yaml.v3 ignores json tags,
 	// so this mirrors types.AdoptedFrom with yaml tags.
@@ -2006,6 +2047,15 @@ func parseWorkflowFile(path string, raw []byte, opts ...ValidateOption) (string,
 		return "", types.Workflow{}, fmt.Errorf("desiredstate: %s: %w", path, err)
 	}
 	w := types.Workflow{Name: f.Name}
+	// The launch interface is authored in YAML and consumed as JSON Schema, so it is
+	// canonicalized here — the same YAML→JSON step a route's `equals` takes (ADR-0118 D2).
+	if f.Inputs != nil {
+		raw, err := json.Marshal(f.Inputs)
+		if err != nil {
+			return "", types.Workflow{}, fmt.Errorf("desiredstate: %s: inputs: %w", path, err)
+		}
+		w.Inputs = raw
+	}
 	if f.AdoptedFrom != nil {
 		w.AdoptedFrom = &types.AdoptedFrom{
 			Kind: f.AdoptedFrom.Kind, Identity: f.AdoptedFrom.Identity, Source: f.AdoptedFrom.Source,
@@ -2045,6 +2095,15 @@ func parseWorkflowFile(path string, raw []byte, opts ...ValidateOption) (string,
 func ValidateWorkflow(w types.Workflow, opts ...ValidateOption) error {
 	if w.Name == "" || len(w.Steps) == 0 {
 		return fmt.Errorf("workflow requires name and at least one step")
+	}
+	// The launch interface is compiled ONCE per Workflow (ADR-0118 D2): a malformed or
+	// non-closed input schema fails the declaration, not the first launch.
+	if _, err := contract.CompileInputSchema(w.Name, w.Inputs); err != nil {
+		return err
+	}
+	declaredInputs, err := contract.InputNames(w.Inputs)
+	if err != nil {
+		return fmt.Errorf("workflow %s: inputs: %w", w.Name, err)
 	}
 	byName := map[string]types.Step{}
 	for _, s := range w.Steps {
@@ -2098,11 +2157,18 @@ func ValidateWorkflow(w types.Workflow, opts ...ValidateOption) error {
 		}
 		// Params/CredentialRefs may bind the event namespace (firing Emitter,
 		// ADR-0024), the steps namespace (a prior Step's outputs, ADR-0031), and
-		// the launch namespace (operator-supplied launch params for a parameterized
-		// build/re-placement Workflow, ADR-0059) — all resolved at launch by
-		// ResolveStepParams. Launch values only fill declared placeholders in an
+		// the launch namespace (operator-supplied launch params, ADR-0059/0118) — all
+		// resolved at launch. Launch values only fill declared placeholders in an
 		// already-gated, Contract-bounded Step (§2.5); they cannot move the target.
 		bindable := map[string]bool{"event": true, "steps": true, "launch": true}
+		// And a {{.launch.X}} binding must name a DECLARED input (ADR-0118 D2). The
+		// namespace check above cannot see `{{.launch.comonName}}` — it only knows the
+		// namespace is legal — so the typo would survive to dispatch and fail there,
+		// far from the file that caused it (§1.8).
+		if err := checkLaunchFields(
+			fmt.Sprintf("workflow %s step %s", w.Name, s.Name), w.Name, declaredInputs, s.Params); err != nil {
+			return err
+		}
 		switch {
 		case isAction:
 			if err := validateActionParamsContract(s.Action, s.Params); err != nil {

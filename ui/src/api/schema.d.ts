@@ -1929,6 +1929,10 @@ export interface components {
         Workflow: {
             name: string;
             steps: components["schemas"]["Step"][];
+            /** @description This Workflow's launch interface as a JSON Schema OBJECT document — property types, descriptions, defaults and `required` (ADR-0118 D2). Closed (`additionalProperties: false`), so an unknown key at launch is rejected rather than ignored. Published here so the UI form, the CLI and an MCP tool signature are all generated from ONE document (§1.6; charter §3.1 "schemas, not React code"). A GIT-declared Contract, NOT a plugin Contract: no hash pin and no registry row, so it is not §1.5 drift-checked. Absent ⇒ takes no launch inputs. */
+            inputs?: {
+                [key: string]: unknown;
+            };
         };
         /** @description One DAG node — a Gate, a targetless Action (Action + params, ADR-0031), or an actuation (Actuator + params against a View, charter §2.3); exactly one shape is set. */
         Step: {

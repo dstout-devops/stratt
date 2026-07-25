@@ -2414,6 +2414,17 @@ components:
         steps:
           type: array
           items: { $ref: "#/components/schemas/Step" }
+        inputs:
+          type: object
+          additionalProperties: true
+          description: >
+            This Workflow's launch interface as a JSON Schema OBJECT document — property
+            types, descriptions, defaults and `required` (ADR-0118 D2). Closed
+            (`additionalProperties: false`), so an unknown key at launch is rejected rather
+            than ignored. Published here so the UI form, the CLI and an MCP tool signature
+            are all generated from ONE document (§1.6; charter §3.1 "schemas, not React
+            code"). A GIT-declared Contract, NOT a plugin Contract: no hash pin and no
+            registry row, so it is not §1.5 drift-checked. Absent ⇒ takes no launch inputs.
     Step:
       type: object
       description: >

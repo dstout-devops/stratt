@@ -7,6 +7,25 @@
 # primitive — a build projects its edges, not just its identity). The placement-drift
 # check then confirms declared (app-subnet) == observed (the placed-in edge).
 name: app-tier-build
+# The launch interface (ADR-0118 D2). This Workflow has always taken a launch param — the
+# comment on `relations` below has described it since ADR-0059 — but nothing declared it,
+# so `{{.launch.targetSubnet}}` was a binding no operator could discover and no reviewer
+# could check. It was found by the field-wise declaration check the moment that check
+# existed; before it, a launch omitting the param failed at dispatch instead.
+#
+# Required with no default deliberately: a placement target has no safe fallback, and
+# defaulting one would silently move a host to whichever subnet we guessed.
+inputs:
+  type: object
+  additionalProperties: false
+  required: [targetSubnet]
+  properties:
+    targetSubnet:
+      type: string
+      description: >
+        crossplane.claim name of the subnet this host is placed-in. Re-launching with a
+        different value MOVES the host (placed-in is singular), which is the gated
+        re-placement move — launch is the gate, this param is the target.
 steps:
   - name: approve
     gate:

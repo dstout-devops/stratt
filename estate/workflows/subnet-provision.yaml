@@ -5,6 +5,27 @@
 # per-instance parameterization the compute-build note flagged. The gate + the launching
 # Principal's authz remain the control; the params only fill what was declared and gated.
 name: subnet-provision
+# The launch interface (ADR-0118 D2). Until this existed, the header comment above was the
+# only statement of what this Workflow takes — prose an operator had to read and a reviewer
+# could not check. Now it is a schema the API publishes, the UI renders as a form, and MCP
+# exposes as a tool signature (§1.6, charter §3.1 "schemas, not React code").
+#
+# The `cidr` pattern is the point of using real JSON Schema rather than a name/type pair:
+# a malformed CIDR used to travel all the way to crossplane before failing. Deliberately
+# IPv4-only and loose (it does not check host bits) — enough to catch a typo at the door,
+# not an attempt to reimplement address validation here.
+inputs:
+  type: object
+  additionalProperties: false
+  required: [subnetName, cidr]
+  properties:
+    subnetName:
+      type: string
+      description: crossplane.claim name for the subnet; also forms its Intent/Subnet singleton key.
+    cidr:
+      type: string
+      pattern: '^([0-9]{1,3}\.){3}[0-9]{1,3}/[0-9]{1,2}$'
+      description: IPv4 CIDR for the subnet, e.g. 10.20.0.0/24.
 steps:
   - name: approve
     gate:

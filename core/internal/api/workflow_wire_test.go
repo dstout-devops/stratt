@@ -103,3 +103,51 @@ func TestCredentialRefWireGateOnly(t *testing.T) {
 }
 
 func ptr[T any](v T) *T { return &v }
+
+// TestWorkflowWireRoundTripInputs is the same bug class as the targetless-Action case
+// above, one field along: the launch interface must survive the wire.
+//
+// It is not merely cosmetic. ValidateWorkflow checks every {{.launch.x}} binding against
+// the DECLARED inputs (ADR-0118 D2), so if `inputs` were dropped in workflowFromWire the
+// server would reject a perfectly valid Workflow — reporting that it binds an undeclared
+// input while the Git/reconcile path accepts the identical document. A false rejection that
+// only appears on one surface is exactly the §1.6 asymmetry the precedent above was written
+// for.
+func TestWorkflowWireRoundTripInputs(t *testing.T) {
+	inputs := map[string]any{
+		"type":                 "object",
+		"additionalProperties": false,
+		"required":             []any{"targetSubnet"},
+		"properties": map[string]any{
+			"targetSubnet": map[string]any{"type": "string"},
+		},
+	}
+	in := Workflow{
+		Name:   "subnet-provision",
+		Inputs: &inputs,
+		Steps: []Step{
+			{Name: "approve", Gate: &GateSpec{Approvers: GateApprovers{Teams: ptr([]string{"platform-admins"})}}},
+			{
+				Name:   "build",
+				Needs:  ptr([]string{"approve"}),
+				Action: ptr("script"),
+				Params: &map[string]any{"script": "echo {{.launch.targetSubnet}}"},
+			},
+		},
+	}
+	got, err := workflowFromWire(in)
+	if err != nil {
+		t.Fatalf("a Workflow declaring inputs must survive the wire: %v", err)
+	}
+	if len(got.Inputs) == 0 {
+		t.Fatal("inputs were dropped — a {{.launch.x}} binding would then be falsely rejected")
+	}
+	// And the round trip is symmetric, so GET returns what was applied.
+	back := workflowToWire(got)
+	if back.Inputs == nil {
+		t.Fatal("workflowToWire must publish inputs; without it no surface can generate a launch form")
+	}
+	if (*back.Inputs)["additionalProperties"] != false {
+		t.Fatalf("the closed-world flag must round-trip intact, got %v", (*back.Inputs)["additionalProperties"])
+	}
+}
