@@ -25,9 +25,6 @@ inputs:
     instance:
       type: string
       description: The desired instance's correlation name (namePrefix + ordinal), e.g. app-01.
-    ordinal:
-      type: integer
-      description: Its 1-based position in the fleet.
     projectKind:
       type: string
       description: The Entity kind the built VM projects as.
@@ -37,16 +34,6 @@ inputs:
       description: >
         Labels the projection carries, INCLUDING stratt.intent/instance — the correlation label
         the next reconcile matches to decide this instance is built.
-    placement:
-      type: object
-      additionalProperties: true
-      description: >
-        Declared topology placement (subnet / dmz / availabilityZone), when the Intent declares
-        one. Fields stay distinct per topology kind (ADR-0059 D3) — there is no generic `zone`.
-    params:
-      type: object
-      additionalProperties: true
-      description: Opaque provider build params, typed by vcenter/create-vm's Contract, never here.
 steps:
   - name: approve
     gate:

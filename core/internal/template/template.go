@@ -140,6 +140,24 @@ func Has(v any) bool {
 	return false
 }
 
+// LaunchFields returns the FIRST path segment of every {{.launch.<field>...}} token in s — the
+// declared inputs a string consumes. Used at declaration to catch an input a Workflow declares and
+// no Step binds (ADR-0123 D3): accepted and silently dropped, which `additionalProperties: false`
+// makes structurally indistinguishable from consumed.
+//
+// First segment only, so `{{.launch.params.region}}` reports `params`: the Workflow does consume
+// `params`, and core has no business asserting which fields inside an opaque object are used (§1.5).
+func LaunchFields(s string) []string {
+	var out []string
+	for _, m := range tokenRe.FindAllStringSubmatch(s, -1) {
+		segs := strings.Split(m[1], ".")
+		if len(segs) >= 2 && segs[0] == "launch" {
+			out = append(out, segs[1])
+		}
+	}
+	return out
+}
+
 // References returns the set of namespace names any token in v refers to —
 // used at declaration time to scope which bindings a context allows (e.g.
 // `event` only on event-kind Triggers).

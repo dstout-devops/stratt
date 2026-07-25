@@ -845,7 +845,7 @@ func TestProvisioningBuildInputsCheckedAtDeclaration(t *testing.T) {
 	// a {{.launch.x}} binding — saw nothing wrong. A Workflow that binds nothing is exactly the one
 	// this check has to catch, and a fixture that bound something would be caught by the older check
 	// and prove nothing about this one.
-	setup := func(t *testing.T, wfInputs string) string {
+	setupWith := func(t *testing.T, wfInputs, script string) string {
 		t.Helper()
 		root := t.TempDir()
 		writeDecl(t, root, "v.yaml", "name: v\nselector: {kinds: [host]}\n")
@@ -856,16 +856,26 @@ func TestProvisioningBuildInputsCheckedAtDeclaration(t *testing.T) {
 			// refuses a builder without one. Not what these cases are about, so it is constant.
 			"name: compute-build\n"+wfInputs+
 				"steps:\n  - {name: approve, gate: {approvers: {teams: [platform-admins]}, timeoutSeconds: 3600}}\n"+
-				"  - {name: s, needs: [approve], viewName: v, actuator: script, params: {script: \"echo web-01\"}}\n")
+				"  - {name: s, needs: [approve], viewName: v, actuator: script, params: {script: \""+script+"\"}}\n")
 		return root
+	}
+	// The default step binds the full correlation-critical set.
+	setup := func(t *testing.T, wfInputs string) string {
+		t.Helper()
+		if wfInputs == "" {
+			// A Workflow with NO declared inputs cannot bind anything — a binding would trip the
+			// namespace check first and prove nothing about the missing interface.
+			return setupWith(t, "", "echo nothing")
+		}
+		return setupWith(t, wfInputs, "echo {{.launch.instance}} {{.launch.projectKind}} {{.launch.labels}}")
 	}
 
 	// The full generated set: parses.
+	// ADR-0123 D3: a builder declares only what it BINDS, and core sends only what it declares —
+	// so the "full generated set" is now the set this fixture's step actually consumes.
 	full := "inputs:\n  type: object\n  additionalProperties: false\n  required: [instance]\n  properties:\n" +
-		"    instance: {type: string}\n    ordinal: {type: integer}\n    projectKind: {type: string}\n" +
-		"    labels: {type: object, additionalProperties: true}\n" +
-		"    placement: {type: object, additionalProperties: true}\n" +
-		"    params: {type: object, additionalProperties: true}\n"
+		"    instance: {type: string}\n    projectKind: {type: string}\n" +
+		"    labels: {type: object, additionalProperties: true}\n"
 	if _, err := ParseDir(setup(t, full), nil); err != nil {
 		t.Fatalf("a build Workflow declaring the generated set must parse: %v", err)
 	}
@@ -884,18 +894,33 @@ func TestProvisioningBuildInputsCheckedAtDeclaration(t *testing.T) {
 		}
 	}
 
-	// Missing ONE key the reconcile supplies: an undeclared input makes the launch a 400, so the
-	// build could never run. Names the key and the declared set.
-	partial := "inputs:\n  type: object\n  additionalProperties: false\n  properties:\n" +
-		"    instance: {type: string}\n    ordinal: {type: integer}\n    projectKind: {type: string}\n" +
+	// A key it DECLARES but no Step binds: accepted and silently dropped (ADR-0123 D3). This
+	// replaces the old inverted case — "a supplied key it fails to declare" — which stopped being a
+	// defect once core sends only the declared set. `placement` is the example on purpose: declared
+	// by every builder and bound by none is exactly how a declared placement reached no provider.
+	dropped := "inputs:\n  type: object\n  additionalProperties: false\n  properties:\n" +
+		"    instance: {type: string}\n    projectKind: {type: string}\n" +
 		"    labels: {type: object, additionalProperties: true}\n" +
 		"    placement: {type: object, additionalProperties: true}\n"
-	err = ParseDir2Err(t, setup(t, partial))
+	err = ParseDir2Err(t, setup(t, dropped))
 	if err == nil {
-		t.Fatal("a build Workflow missing a supplied input must be refused")
+		t.Fatal("a build Workflow declaring an input no Step binds must be refused")
 	}
-	if !strings.Contains(err.Error(), `"params" is not a declared input`) {
-		t.Errorf("the refusal must name the missing key: %v", err)
+	if !strings.Contains(err.Error(), "placement") || !strings.Contains(err.Error(), "no Step binds") {
+		t.Errorf("the refusal must name the dropped input: %v", err)
+	}
+
+	// And the correlation-critical one: omitting `labels` is INVISIBLE — the build succeeds, the
+	// Entity appears, and the Finding never resolves because the correlation label was never
+	// projected (the ADR-0120 defect, reachable again now that declaring is optional).
+	noLabels := "inputs:\n  type: object\n  additionalProperties: false\n  properties:\n" +
+		"    instance: {type: string}\n    projectKind: {type: string}\n"
+	err = ParseDir2Err(t, setupWith(t, noLabels, "echo {{.launch.instance}} {{.launch.projectKind}}"))
+	if err == nil {
+		t.Fatal("a build Workflow that does not declare `labels` must be refused")
+	}
+	if !strings.Contains(err.Error(), "labels") {
+		t.Errorf("the refusal must name the correlation-critical input: %v", err)
 	}
 
 	// REQUIRING something the reconcile never sends: every build would be refused at launch. This is
@@ -903,16 +928,17 @@ func TestProvisioningBuildInputsCheckedAtDeclaration(t *testing.T) {
 	extra := full + "  required: [instance, targetSubnet]\n"
 	_ = extra // required is declared once above; build the variant explicitly instead
 	needsExtra := "inputs:\n  type: object\n  additionalProperties: false\n  required: [instance, targetSubnet]\n  properties:\n" +
-		"    instance: {type: string}\n    ordinal: {type: integer}\n    projectKind: {type: string}\n" +
-		"    labels: {type: object, additionalProperties: true}\n" +
-		"    placement: {type: object, additionalProperties: true}\n" +
-		"    params: {type: object, additionalProperties: true}\n    targetSubnet: {type: string}\n"
+		"    instance: {type: string}\n    projectKind: {type: string}\n" +
+		"    labels: {type: object, additionalProperties: true}\n    targetSubnet: {type: string}\n"
 	err = ParseDir2Err(t, setup(t, needsExtra))
 	if err == nil {
 		t.Fatal("a build Workflow requiring an input the reconcile never supplies must be refused")
 	}
-	if !strings.Contains(err.Error(), `requires input "targetSubnet"`) {
-		t.Errorf("the refusal must name the unsatisfiable requirement: %v", err)
+	// Caught by the declared-but-unsuppliable rule (ADR-0123 D3) rather than the required-set one:
+	// core now sends only declared inputs, so an input it cannot fill is refused whether or not the
+	// Workflow marks it required — strictly earlier, and the same defect.
+	if !strings.Contains(err.Error(), "targetSubnet") || !strings.Contains(err.Error(), "never supplies") {
+		t.Errorf("the refusal must name the unsatisfiable input: %v", err)
 	}
 }
 
@@ -939,10 +965,10 @@ func TestEveryAdvertisedBuilderIsChecked(t *testing.T) {
 		"    labels: {type: object, additionalProperties: true}\n"
 	writeKind(t, root, "workflows", "w1.yaml", "name: compute-build\n"+good+
 		"steps:\n  - {name: approve, gate: {approvers: {teams: [platform-admins]}, timeoutSeconds: 3600}}\n"+
-		"  - {name: s, needs: [approve], viewName: v, actuator: script, params: {script: \"echo web-01\"}}\n")
+		"  - {name: s, needs: [approve], viewName: v, actuator: script, params: {script: \"echo {{.launch.instance}} {{.launch.projectKind}} {{.launch.labels}}\"}}\n")
 	// The second builder is NOT parameterized — must still be caught.
 	writeKind(t, root, "workflows", "w2.yaml", "name: vsphere-vm-build\n"+
-		"steps:\n  - {name: s, viewName: v, actuator: script, params: {script: echo}}\n")
+		"steps:\n  - {name: s, viewName: v, actuator: script, params: {script: \"echo {{.launch.instance}} {{.launch.projectKind}} {{.launch.labels}}\"}}\n")
 
 	err := ParseDir2Err(t, root)
 	if err == nil {
@@ -967,6 +993,8 @@ func TestSingletonBuildInputsCheckedAtDeclaration(t *testing.T) {
 		"name: crossplane\naddress: stratt-crossplane:9090\npluginIdentity: crossplane\ntier: trusted\n"+
 			"provides: [provisioning]\nprovisions: {Subnet: subnet-build}\n")
 	writeKind(t, root, "workflows", "w.yaml",
+		// Binds nothing: a Workflow with no declared inputs cannot bind anything, and a binding
+		// would trip the namespace check first — proving nothing about the missing interface.
 		"name: subnet-build\nsteps:\n  - {name: s, viewName: v, actuator: script, params: {script: echo}}\n")
 
 	err := ParseDir2Err(t, root)
@@ -974,7 +1002,7 @@ func TestSingletonBuildInputsCheckedAtDeclaration(t *testing.T) {
 		t.Fatal("a singleton builder with no inputs must be refused")
 	}
 	// The SINGLETON set, not the fleet set: `singleton` and `name`, and NOT instance/ordinal.
-	for _, want := range []string{"app-subnet", "subnet-build", "singleton", "name"} {
+	for _, want := range []string{"app-subnet", "subnet-build", "name"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("want %q in: %v", want, err)
 		}
@@ -997,12 +1025,14 @@ func TestSingletonBuildInputsCheckedAtDeclaration(t *testing.T) {
 // depth the real literal hid at.
 func singletonBuilder(args string) string {
 	return "name: subnet-build\ninputs:\n  type: object\n  additionalProperties: false\n  properties:\n" +
-		"    singleton: {type: string}\n    name: {type: string}\n    intentKind: {type: string}\n" +
+		"    name: {type: string}\n" +
 		"    projectKind: {type: string}\n    labels: {type: object, additionalProperties: true}\n" +
-		"    placement: {type: object, additionalProperties: true}\n" +
 		"    params: {type: object, additionalProperties: true}\n" +
+		// The step BINDS every declared input (required since ADR-0123 D3) and carries the varied
+		// `args` alongside, so a planted literal is the only thing these cases change.
 		"steps:\n  - {name: approve, gate: {approvers: {teams: [platform-admins]}, timeoutSeconds: 3600}}\n" +
-		"  - {name: s, needs: [approve], viewName: v, actuator: mcp, params: {server: prov, arguments: " + args + "}}\n"
+		"  - {name: s, needs: [approve], viewName: v, actuator: mcp, params: {server: prov, arguments: " +
+		"{name: \"{{.launch.name}}\", kind: \"{{.launch.projectKind}}\", labels: \"{{.launch.labels}}\", opaque: \"{{.launch.params}}\", planted: " + args + "}}}\n"
 }
 
 func singletonEstate(t *testing.T, stepParams string) string {
@@ -1037,12 +1067,11 @@ func TestAdvertisedBuilderMustBeGated(t *testing.T) {
 	// here could not be explained by any other check.
 	writeKind(t, root, "workflows", "w.yaml",
 		"name: subnet-build\ninputs:\n  type: object\n  additionalProperties: false\n  properties:\n"+
-			"    singleton: {type: string}\n    name: {type: string}\n    intentKind: {type: string}\n"+
+			"    name: {type: string}\n"+
 			"    projectKind: {type: string}\n    labels: {type: object, additionalProperties: true}\n"+
-			"    placement: {type: object, additionalProperties: true}\n"+
-			"    params: {type: object, additionalProperties: true}\n"+
 			"steps:\n  - {name: s, viewName: v, actuator: mcp, params: {server: prov, "+
-			"arguments: {name: \"{{.launch.name}}\"}}}\n")
+			"arguments: {name: \"{{.launch.name}}\", kind: \"{{.launch.projectKind}}\", "+
+			"labels: \"{{.launch.labels}}\"}}}\n")
 
 	err := ParseDir2Err(t, root)
 	if err == nil {

@@ -28,9 +28,7 @@ func TestDanglingTeardownTargetIsRefused(t *testing.T) {
 		"name: awsec2\naddress: stratt-awsec2:9090\npluginIdentity: awsec2\ntier: trusted\n"+
 			"provides: [provisioning]\nprovisions: {Compute: compute-build}\n"+
 			"decommissions: {Compute: nowhere-teardown}\n")
-	writeKind(t, root, "workflows", "w.yaml", "name: compute-build\n"+goodBuildInputs()+
-		"steps:\n  - {name: approve, gate: {approvers: {teams: [platform-admins]}, timeoutSeconds: 3600}}\n"+
-		"  - {name: s, needs: [approve], viewName: v, actuator: script, params: {script: echo}}\n")
+	writeKind(t, root, "workflows", "w.yaml", "name: compute-build\n"+goodBuildInputs()+buildStep())
 
 	err := ParseDir2Err(t, root)
 	if err == nil {
@@ -45,17 +43,19 @@ func TestDanglingTeardownTargetIsRefused(t *testing.T) {
 
 // A teardown Workflow must accept what the decommission reconcile sends. The schema is closed, so an
 // undeclared input is a refused launch — discovered, before this check, at the moment of destruction.
-func TestTeardownWorkflowMustFitWhatTheReconcileSends(t *testing.T) {
+// The direction inverted with ADR-0123 D3: core now sends only what a builder declares, so the
+// failure worth catching is a Workflow asking for something the reconcile CANNOT supply — a typo, or
+// a launch that can never satisfy its own required set.
+func TestTeardownWorkflowMustNotDeclareAnInputCoreCannotSupply(t *testing.T) {
 	err := ParseDir2Err(t, teardownEstate(t,
-		"inputs:\n  type: object\n  additionalProperties: false\n  required: [identityValue]\n"+
-			"  properties:\n    identityValue: {type: string}\n"))
+		"inputs:\n  type: object\n  additionalProperties: false\n  required: [uuid]\n"+
+			"  properties:\n    uuid: {type: string}\n", "binds-uuid"))
 	if err == nil {
-		t.Fatal("a teardown Workflow that does not declare every supplied input must be refused")
+		t.Fatal("a teardown Workflow declaring an input the reconcile never sends must be refused")
 	}
-	// Reported in sorted order, so `identityScheme` is the first of the four undeclared keys.
-	for _, want := range []string{"identityScheme", "is not a declared input", "tears down"} {
+	for _, want := range []string{"uuid", "never supplies", "tear down"} {
 		if !strings.Contains(err.Error(), want) {
-			t.Errorf("the refusal must name the undeclared input and the act; want %q in: %v", want, err)
+			t.Errorf("the refusal must name the input and the act; want %q in: %v", want, err)
 		}
 	}
 }
@@ -130,17 +130,23 @@ func TestTeardownLaunchParamsKeySet(t *testing.T) {
 
 // --- fixtures ---
 
+// goodBuildInputs declares exactly what buildStep below binds — required since ADR-0123 D3, which
+// refuses a builder declaring an input no Step consumes.
 func goodBuildInputs() string {
 	return "inputs:\n  type: object\n  additionalProperties: false\n  properties:\n" +
-		"    instance: {type: string}\n    ordinal: {type: integer}\n    projectKind: {type: string}\n" +
+		"    instance: {type: string}\n    projectKind: {type: string}\n" +
 		"    labels: {type: object, additionalProperties: true}\n"
+}
+
+// buildStep binds every input goodBuildInputs declares.
+func buildStep() string {
+	return "steps:\n  - {name: approve, gate: {approvers: {teams: [platform-admins]}, timeoutSeconds: 3600}}\n" +
+		"  - {name: s, needs: [approve], viewName: v, actuator: script, params: {script: \"echo {{.launch.instance}} {{.launch.projectKind}} {{.launch.labels}}\"}}\n"
 }
 
 func goodTeardownInputs() string {
 	return "inputs:\n  type: object\n  additionalProperties: false\n  required: [identityValue]\n" +
-		"  properties:\n    instance: {type: string}\n    intent: {type: string}\n" +
-		"    ordinal: {type: integer}\n    identityScheme: {type: string}\n" +
-		"    identityValue: {type: string}\n"
+		"  properties:\n    identityValue: {type: string}\n"
 }
 
 // teardownEstate is a minimal estate whose sole provider advertises both a (well-formed) builder and
@@ -156,15 +162,19 @@ func teardownEstate(t *testing.T, teardownInputs string, opts ...string) string 
 		"name: awsec2\naddress: stratt-awsec2:9090\npluginIdentity: awsec2\ntier: trusted\n"+
 			"provides: [provisioning]\nprovisions: {Compute: compute-build}\n"+
 			"decommissions: {Compute: compute-teardown}\n")
-	writeKind(t, root, "workflows", "build.yaml", "name: compute-build\n"+goodBuildInputs()+
-		"steps:\n  - {name: approve, gate: {approvers: {teams: [platform-admins]}, timeoutSeconds: 3600}}\n"+
-		"  - {name: s, needs: [approve], viewName: v, actuator: script, params: {script: echo}}\n")
+	writeKind(t, root, "workflows", "build.yaml", "name: compute-build\n"+goodBuildInputs()+buildStep())
 
+	bind := "params: {script: \"echo {{.launch.identityValue}}\"}"
+	for _, o := range opts {
+		if o == "binds-uuid" {
+			bind = "params: {script: \"echo {{.launch.uuid}}\"}"
+		}
+	}
 	gate := "steps:\n  - {name: approve, gate: {approvers: {teams: [platform-admins]}, timeoutSeconds: 3600}}\n" +
-		"  - {name: s, needs: [approve], viewName: v, actuator: script, params: {script: echo}}\n"
+		"  - {name: s, needs: [approve], viewName: v, actuator: script, " + bind + "}\n"
 	for _, o := range opts {
 		if o == "ungated" {
-			gate = "steps:\n  - {name: s, viewName: v, actuator: script, params: {script: echo}}\n"
+			gate = "steps:\n  - {name: s, viewName: v, actuator: script, " + bind + "}\n"
 		}
 	}
 	writeKind(t, root, "workflows", "teardown.yaml", "name: compute-teardown\n"+teardownInputs+gate)

@@ -694,13 +694,52 @@ func checkAdvertisedWorkflow(what string, wf types.Workflow, in types.Intent, su
 		names = append(names, n)
 	}
 	sort.Strings(names)
-	for _, k := range sortedKeys(supplied) {
-		if !declared[k] {
+	// The direction here inverted with ADR-0123 D3, and the old direction is why `placement` was
+	// declared by every builder and bound by none.
+	//
+	// It used to require every SUPPLIED key be declared. Combined with
+	// `additionalProperties: false` that forced a builder to declare each param the reconcile
+	// might send whether or not it used one — so an input accepted and silently dropped was
+	// structurally indistinguishable from a consumed one, and nothing anywhere said so.
+	//
+	// Now core sends only what the builder DECLARES (provision.FilterToDeclared at the reconcile),
+	// so the rule is the other way round: a declared input must be one the reconcile can actually
+	// supply. A builder asking for something core never sends is a launch that can never satisfy
+	// its own required set.
+	for _, k := range names {
+		if _, ok := supplied[k]; !ok {
 			return fmt.Errorf(
-				"%s, but %q is not a declared input of that workflow (declared: %v). The reconcile "+
-					"supplies it, and a launch carrying an undeclared input is refused, so this "+
-					"%s could never run", what, k, names, act)
+				"%s, but it declares input %q, which the provisioning reconcile never supplies "+
+					"(it sends: %v). An input core cannot fill is either a typo or a launch this "+
+					"%s can never satisfy (ADR-0123 D3)", what, k, sortedKeys(supplied), act)
 		}
+	}
+	// The correlation-critical inputs must be declared, because omitting one is INVISIBLE: the
+	// build succeeds and the Entity appears, but without `labels` it carries no
+	// stratt.intent/instance and the Finding it was launched from never resolves — so the same
+	// gated act is surfaced forever (the ADR-0120 defect, reachable again the moment declaring
+	// them became optional).
+	// `labels` and `projectKind` only — NOT the unit key. The correlation key rides INSIDE labels
+	// (stratt.intent/instance, stratt.intent/singleton), so labels is the load-bearing one; the
+	// unit-name input is a convenience a builder may legitimately not use. Requiring it here
+	// contradicted the bound-check below for every singleton builder, which is how this rule was
+	// caught being wrong.
+	for _, k := range []string{"projectKind", "labels"} {
+		if _, sent := supplied[k]; sent && !declared[k] {
+			return fmt.Errorf(
+				"%s, but it does not declare %q. That one is not optional: without it the %s "+
+					"runs and appears to succeed while the Finding it came from never resolves, so "+
+					"the same act is surfaced forever (ADR-0120 D3, ADR-0123 D3)", what, k, act)
+		}
+	}
+	// And every declared input must be BOUND by some Step — the half that makes
+	// accepted-but-dropped unshippable rather than merely discouraged (ADR-0123 D3).
+	if unbound := unboundInputs(wf, names); len(unbound) > 0 {
+		return fmt.Errorf(
+			"%s, but it declares input(s) %v that no Step binds via {{.launch.*}}. A declared input "+
+				"nothing consumes is accepted and silently dropped, which is exactly how a declared "+
+				"`placement` reached no provider for as long as it did (ADR-0123 D3). Bind it, or "+
+				"stop declaring it", what, unbound)
 	}
 	if label, bad := hardcodedCorrelationLabel(wf); bad {
 		return fmt.Errorf(
@@ -745,6 +784,43 @@ func checkAdvertisedWorkflow(what string, wf types.Workflow, in types.Intent, su
 		}
 	}
 	return nil
+}
+
+// unboundInputs reports which declared inputs no Step binds via {{.launch.*}} (ADR-0123 D3).
+//
+// Sound because a binding can only be a literal token: ADR-0083 D5 rules out computed paths, so
+// scanning the Steps for `{{.launch.<name>` finds every possible consumer. A nested binding
+// (`{{.launch.params.region}}`) counts as consuming `params`, which is right — the Workflow does
+// use it.
+func unboundInputs(w types.Workflow, declared []string) []string {
+	bound := map[string]bool{}
+	var walk func(any)
+	walk = func(v any) {
+		switch t := v.(type) {
+		case string:
+			for _, ref := range template.LaunchFields(t) {
+				bound[ref] = true
+			}
+		case map[string]any:
+			for _, val := range t {
+				walk(val)
+			}
+		case []any:
+			for _, val := range t {
+				walk(val)
+			}
+		}
+	}
+	for _, st := range w.Steps {
+		walk(st.Params)
+	}
+	var out []string
+	for _, name := range declared {
+		if !bound[name] {
+			out = append(out, name)
+		}
+	}
+	return out
 }
 
 // hardcodedCorrelationLabel reports the first `stratt.intent/*` key a build Workflow writes BY HAND,

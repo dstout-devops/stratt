@@ -1,0 +1,122 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "stratt:contract:intents/compute:v4",
+  "title": "Intent/Compute spec",
+  "description": "Desired compute infrastructure declared in Git (ADR-0058/0110). NOT an Entity (\u00a71.2): the graph holds only what is BUILT; this declares what SHOULD exist. v3 (ADR-0110) closes the provider-coupling of the ADR-0058 `builder:` seam: the Intent names the `provisioning` capability CLASS via `requires`, never a provider (\u00a71.5). The reconcile resolves the bound provider + its per-kind build Workflow (an estate capability-binding, or the sole verified provider auto-binds) and surfaces a GATED build (\u00a75 Flow 1) \u2014 it never auto-launches. `params` stays opaque (the bound provider's own inputs, validated downstream, never typed here \u2014 \u00a71.1). Optional `placement` (ADR-0059 decision 5). v4 (ADR-0123) adds KEYED cardinality: `zones` x `perZone` expands to <namePrefix>-<zone>-<ordinal> with the ordinal scoped WITHIN its zone, so adding a zone adds instances and renumbers none \u2014 where `count`'s positional ordinal renumbers everything after an insertion and the reconcile reads that as destroy-and-recreate. `count` and `zones` are EXCLUSIVE: two spellings of cardinality, and picking a winner would be the implicit precedence \u00a72.4 forbids.",
+  "type": "object",
+  "properties": {
+    "count": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Cardinality (G2): how many instances SHOULD exist. A typed field expanded by the reconcile \u2014 never a config-language loop (\u00a71 non-goal)."
+    },
+    "namePrefix": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]*$",
+      "description": "Instance identities are namePrefix + ordinal (web -> web-01, web-02). Stable + idempotent: the reconcile correlates desired<->built by this name (stratt.intent/instance label). Exclusively claimed across Intents (\u00a72.4)."
+    },
+    "projectKind": {
+      "type": "string",
+      "description": "The Entity kind the built infra projects AS, so the fleet's Views select it (e.g. host). Carried on the build's Run-provenance projection or a relabel Normalizer \u2014 NEVER written by the reconcile (\u00a71.2, decision 6)."
+    },
+    "labels": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      },
+      "description": "Selection labels stamped on the built Entity's projection (per-key owned, ADR-0041), e.g. {os: linux, role: web}."
+    },
+    "requires": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "minItems": 1,
+      "contains": {
+        "const": "provisioning"
+      },
+      "description": "The capability CLASSES this Intent depends on to be built (ADR-0110 D1). Must include `provisioning` (the class, never a named provider \u2014 \u00a71.5); the reconcile resolves the concrete provider + its build Workflow via the verified-provider index + estate capability-bindings, fail-closed + observable (\u00a71.8) when none resolves."
+    },
+    "params": {
+      "type": "object",
+      "additionalProperties": true,
+      "description": "Opaque build params passed to the resolved provider, validated against ITS input Contract downstream (\u00a71.5). Provider-shaped by design (EC2's region/ami \u2260 GCE's zone/image); Intent/Compute never types these \u2014 no per-landscape fields here (\u00a71.1)."
+    },
+    "maxDelta": {
+      "type": "number",
+      "exclusiveMinimum": 0,
+      "maximum": 1,
+      "description": "Optional \u00a74.3 blast-radius fraction: if more than this fraction of `count` is missing in one reconcile, the batch PAUSES pending explicit approval instead of surfacing every build (never a silent fan-out). Defaults to the controller's absolute cap."
+    },
+    "placement": {
+      "type": "object",
+      "description": "Optional desired topology placement (ADR-0059 decision 5): the built unit's subnet + zone. A Relation cannot be declared in Git (\u00a71.2), so placement's CaC home is the Intent; the build projects the placed-in edge (Run-provenance). Divergence from a built unit's OBSERVED placement raises a placement-drift Finding (\u00a71.8) \u2014 never a silent reconcile edit.",
+      "properties": {
+        "subnet": {
+          "type": "string",
+          "description": "The subnet Entity name the unit is placed in (an Intent/Subnet name) \u2014 a placed-in edge."
+        },
+        "dmz": {
+          "type": "string",
+          "description": "The dmz Entity name the unit sits in (an in-dmz edge). Distinct from availabilityZone (decision 3: no generic zone)."
+        },
+        "availabilityZone": {
+          "type": "string",
+          "description": "The availability-zone Entity name the unit sits in (an in-az edge)."
+        }
+      },
+      "additionalProperties": false
+    },
+    "zones": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^[a-z0-9][a-z0-9-]*$"
+      },
+      "minItems": 1,
+      "description": "Availability zones to spread across (ADR-0123 D1). Each instance is KEYED to its zone, so the zone is part of its identity and a zone-list edit is additive. Exclusive with `count`; requires `perZone`. The zone also fills placement.availabilityZone for the build, so it reaches the provider without being declared twice."
+    },
+    "perZone": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "How many instances per zone (ADR-0123 D1). A typed field expanded by the reconcile \u2014 never a config-language loop (\u00a71 non-goal, ADR-0083 D5). Requires `zones`."
+    }
+  },
+  "required": [
+    "namePrefix",
+    "requires"
+  ],
+  "additionalProperties": false,
+  "oneOf": [
+    {
+      "required": [
+        "count"
+      ],
+      "not": {
+        "anyOf": [
+          {
+            "required": [
+              "zones"
+            ]
+          },
+          {
+            "required": [
+              "perZone"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "required": [
+        "zones",
+        "perZone"
+      ],
+      "not": {
+        "required": [
+          "count"
+        ]
+      }
+    }
+  ]
+}

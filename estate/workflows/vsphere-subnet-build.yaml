@@ -19,28 +19,16 @@ name: vsphere-subnet-build
 inputs:
   type: object
   additionalProperties: false
-  required: [singleton, name, projectKind, labels]
+  required: [name, projectKind, labels]
   properties:
-    singleton:
-      type: string
-      description: The (intentKind, name) correlation key, e.g. Intent/Subnet/dmz-subnet.
     name:
       type: string
       description: The declared Intent name — also the ipam idempotency key, so a re-run re-allocates nothing.
-    intentKind: { type: string }
     projectKind: { type: string }
     labels:
       type: object
       additionalProperties: { type: string }
       description: Labels the projection carries, INCLUDING stratt.intent/singleton.
-    placement:
-      type: object
-      additionalProperties: true
-      description: Declared topology placement, when declared.
-    params:
-      type: object
-      additionalProperties: true
-      description: Opaque provider build params (role, size, vlanGroup, …), typed downstream.
 steps:
   - name: approve
     gate:

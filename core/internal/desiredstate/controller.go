@@ -15,6 +15,7 @@ import (
 
 	"github.com/dstout-devops/stratt/core/internal/capability"
 	"github.com/dstout-devops/stratt/core/internal/compiler"
+	"github.com/dstout-devops/stratt/core/internal/contract"
 	"github.com/dstout-devops/stratt/core/internal/graph"
 	"github.com/dstout-devops/stratt/core/internal/policy"
 	"github.com/dstout-devops/stratt/core/internal/provision"
@@ -275,6 +276,25 @@ func (c *Controller) reconcileProvisioning(ctx context.Context, decls Declaratio
 		return r
 	}
 
+	// The builder's declared interface, so core sends only what it asked for (ADR-0123 D3).
+	// Looked up once per Workflow: the alternative is sending everything and forcing every
+	// builder to declare params it ignores, which is what made `placement` inert.
+	wfByName := make(map[string]types.Workflow, len(decls.Workflows))
+	for _, w := range decls.Workflows {
+		wfByName[w.Name] = w
+	}
+	declaredInputs := func(wfName string) map[string]bool {
+		wf, ok := wfByName[wfName]
+		if !ok {
+			return nil
+		}
+		names, err := contract.InputNames(wf.Inputs)
+		if err != nil {
+			return nil
+		}
+		return names
+	}
+
 	for _, inst := range res.ToBuild {
 		sp := specs[inst.Intent]
 		r := resolveKind("Compute")
@@ -290,7 +310,9 @@ func (c *Controller) reconcileProvisioning(ctx context.Context, decls Declaratio
 		pf := graph.ProvisionFinding{Baseline: b, Target: inst.Name, Severity: "warning", Detail: detail}
 		if r.Status == capability.StatusResolved {
 			pf.LaunchWorkflow = r.Workflow
-			pf.LaunchParams = provision.BuildLaunchParams(provision.Intent{Name: inst.Intent, Spec: sp}, inst)
+			pf.LaunchParams = provision.FilterToDeclared(
+				provision.BuildLaunchParams(provision.Intent{Name: inst.Intent, Spec: sp}, inst),
+				declaredInputs(r.Workflow))
 		}
 		if err := c.Store.WriteProvisionFinding(ctx, pf); err != nil {
 			log.Error("write provision finding failed", "instance", inst.Name, "error", err)
@@ -315,7 +337,7 @@ func (c *Controller) reconcileProvisioning(ctx context.Context, decls Declaratio
 		pf := graph.ProvisionFinding{Baseline: b, Target: inst.Name, Severity: "warning", Detail: detail}
 		if r := resolveKind(shortIntentKind(si.Kind)); r.Status == capability.StatusResolved {
 			pf.LaunchWorkflow = r.Workflow
-			pf.LaunchParams = provision.SingletonLaunchParams(si, inst)
+			pf.LaunchParams = provision.FilterToDeclared(provision.SingletonLaunchParams(si, inst), declaredInputs(r.Workflow))
 		}
 		if err := c.Store.WriteProvisionFinding(ctx, pf); err != nil {
 			log.Error("write singleton provision finding failed", "singleton", inst.Name, "error", err)

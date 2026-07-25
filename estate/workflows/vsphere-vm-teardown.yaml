@@ -12,7 +12,7 @@ name: vsphere-vm-teardown
 # sends (provision.TeardownLaunchParams), and every param must be declared here because the schema is
 # closed: an input the reconcile sends and this file does not declare fails the launch, loudly.
 #
-# `identityScheme` + `identityValue` rather than a `uuid`: the identity of the thing being destroyed is
+# `identityValue` rather than a `uuid`: the identity of the thing being destroyed is
 # provider-shaped and core does not know its spelling (§1.5). Core sends the pair; THIS file renames it
 # into the Action's own param below, exactly as a build Workflow maps the uniform launch shape onto its
 # opaque provider params. It is deliberately not a nested `identity` object keyed by scheme — the
@@ -25,22 +25,8 @@ name: vsphere-vm-teardown
 inputs:
   type: object
   additionalProperties: false
-  required: [instance, identityScheme, identityValue]
+  required: [identityValue]
   properties:
-    instance:
-      type: string
-      description: The correlated instance name being torn down, e.g. web-05.
-    intent:
-      type: string
-      description: The Intent/Compute declaration whose count-down made this unit excess.
-    ordinal:
-      type: integer
-      description: The instance's ordinal — highest first, the deterministic count-down order.
-    identityScheme:
-      type: string
-      description: >
-        The identity scheme naming the teardown target, e.g. vcenter.uuid. Sent alongside the value
-        so a destructive Workflow can assert what it was handed rather than assume it.
     identityValue:
       type: string
       description: >

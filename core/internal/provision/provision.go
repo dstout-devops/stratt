@@ -56,6 +56,26 @@ type ComputeSpec struct {
 	Params      map[string]any    `json:"params"`
 	MaxDelta    float64           `json:"maxDelta"`  // 0 => use the controller cap
 	Placement   *Placement        `json:"placement"` // optional desired topology placement
+	// Zones + PerZone are the KEYED cardinality (ADR-0123 D1), exclusive with Count: instance
+	// identity becomes <namePrefix>-<zone>-<ordinal> with the ordinal scoped WITHIN its zone,
+	// so adding a zone adds instances and renumbers none. Under Count's positional scheme a
+	// zone-list edit renumbers everything after the insertion point and the reconcile reads
+	// that as destroy-and-recreate — the fleet-wide churn ADR-0058 D4 flags.
+	Zones   []string `json:"zones"`
+	PerZone int      `json:"perZone"`
+}
+
+// Keyed reports whether this Intent spreads by zone rather than by a flat count.
+func (s ComputeSpec) Keyed() bool { return len(s.Zones) > 0 }
+
+// DesiredCount is the total number of instances an Intent wants, whichever cardinality it
+// declares. One function so the max-delta gate (§4.3) and the shortfall arithmetic cannot
+// disagree about what "the fleet" is.
+func (s ComputeSpec) DesiredCount() int {
+	if s.Keyed() {
+		return len(s.Zones) * s.PerZone
+	}
+	return s.Count
 }
 
 // Intent pairs a declaration name with its decoded compute spec.
@@ -84,6 +104,10 @@ type Instance struct {
 	Name    string
 	Intent  string
 	Ordinal int
+	// Zone is the availability zone this instance is keyed to, empty for a positional
+	// (count-based) fleet. It is part of the instance's IDENTITY, not a label on it — which is
+	// the whole point of keying (ADR-0123 D1).
+	Zone string
 }
 
 // Pause is an Intent whose missing-count exceeds the max-delta gate: the reconcile
@@ -114,8 +138,33 @@ func InstanceName(prefix string, ordinal, count int) string {
 	return fmt.Sprintf("%s-%0*d", prefix, width, ordinal)
 }
 
+// KeyedInstanceName renders a zone-keyed instance identity: <prefix>-<zone>-<ordinal>, with the
+// ordinal zero-padded against perZone and scoped WITHIN the zone. Keyed rather than positional so
+// a zone-list edit is additive: inserting a zone leaves every existing name untouched, where a
+// flat ordinal would renumber everything after it (ADR-0123 D1, the Terraform for_each-over-count
+// precedent).
+func KeyedInstanceName(prefix, zone string, ordinal, perZone int) string {
+	width := len(fmt.Sprintf("%d", perZone))
+	if width < 2 {
+		width = 2
+	}
+	return fmt.Sprintf("%s-%s-%0*d", prefix, zone, width, ordinal)
+}
+
 // desired enumerates an Intent's desired instances in deterministic order.
 func desired(in Intent) []Instance {
+	if in.Spec.Keyed() {
+		out := make([]Instance, 0, in.Spec.DesiredCount())
+		for _, z := range in.Spec.Zones {
+			for i := 1; i <= in.Spec.PerZone; i++ {
+				out = append(out, Instance{
+					Name:   KeyedInstanceName(in.Spec.NamePrefix, z, i, in.Spec.PerZone),
+					Intent: in.Name, Ordinal: i, Zone: z,
+				})
+			}
+		}
+		return out
+	}
 	out := make([]Instance, 0, in.Spec.Count)
 	for i := 1; i <= in.Spec.Count; i++ {
 		out = append(out, Instance{Name: InstanceName(in.Spec.NamePrefix, i, in.Spec.Count), Intent: in.Name, Ordinal: i})
@@ -153,6 +202,13 @@ func instanceOrdinal(prefix, name string) (int, bool) {
 	rest, ok := strings.CutPrefix(name, prefix+"-")
 	if !ok {
 		return 0, false
+	}
+	// A keyed name is <prefix>-<zone>-<ordinal> (ADR-0123 D1), so the ordinal is the LAST
+	// dash-separated segment. Parsing from the right handles both shapes without needing to know
+	// which cardinality the Intent declares — which matters because this runs over BUILT names,
+	// and a fleet mid-migration between the two has some of each.
+	if i := strings.LastIndex(rest, "-"); i >= 0 {
+		rest = rest[i+1:]
 	}
 	ord, err := strconv.Atoi(rest)
 	if err != nil || ord < 1 {
@@ -361,13 +417,13 @@ func Plan(intents []Intent, built map[string]bool, cap int) (Result, error) {
 		}
 		limit := cap
 		if in.Spec.MaxDelta > 0 {
-			if f := int(math.Ceil(in.Spec.MaxDelta * float64(in.Spec.Count))); f < limit {
+			if f := int(math.Ceil(in.Spec.MaxDelta * float64(in.Spec.DesiredCount()))); f < limit {
 				limit = f
 			}
 		}
 		if len(missing) > limit {
 			// §4.3: too large a delta to fan out unattended — pause for review.
-			r.Paused = append(r.Paused, Pause{Intent: in.Name, Missing: len(missing), Desired: in.Spec.Count, Limit: limit})
+			r.Paused = append(r.Paused, Pause{Intent: in.Name, Missing: len(missing), Desired: in.Spec.DesiredCount(), Limit: limit})
 			continue
 		}
 		r.ToBuild = append(r.ToBuild, missing...)
@@ -423,24 +479,32 @@ func BuildLaunchParams(in Intent, inst Instance) map[string]any {
 		"projectKind": in.Spec.ProjectKind,
 		"labels":      labels,
 	}
+	// Placement is emitted COMPLETE — all three fields, empty when undeclared (ADR-0123 D2).
+	//
+	// Fields stay DISTINCT per topology kind (ADR-0059 D3 rejected a generic `zone` string so a
+	// build never disambiguates the edge type by resolving its target's kind). What D2 WITHDRAWS
+	// is the other half of D3: emitting only declared fields, "so a build Workflow can tell 'no
+	// zone declared' from 'zone is empty'".
+	//
+	// That distinction is unusable by any consumer that exists. Template substitution has no
+	// conditionals (ADR-0083 D5), so a builder cannot branch on presence — it can only bind a
+	// field or not. What the omission actually bought was the opposite of its intent: it made
+	// {{.launch.placement.*}} unsafe in a SHARED builder, because the key vanishes for an
+	// unplaced Intent and the substituter fails closed on an unknown field. Which is exactly why
+	// `placement` was declared by all seven build Workflows and bound by none of them, and why
+	// app-tier's declared placement reached nothing.
+	place := map[string]any{"subnet": "", "dmz": "", "availabilityZone": ""}
 	if pl := in.Spec.Placement; pl != nil {
-		// Fields stay DISTINCT per topology kind (ADR-0059 D3 rejected a generic `zone` string so
-		// a build never disambiguates the edge type by resolving its target's kind). Only declared
-		// ones are emitted, so a build Workflow can tell "no zone declared" from "zone is empty".
-		place := map[string]any{}
-		if pl.Subnet != "" {
-			place["subnet"] = pl.Subnet
-		}
-		if pl.Dmz != "" {
-			place["dmz"] = pl.Dmz
-		}
-		if pl.AvailabilityZone != "" {
-			place["availabilityZone"] = pl.AvailabilityZone
-		}
-		if len(place) > 0 {
-			out["placement"] = place
-		}
+		place["subnet"] = pl.Subnet
+		place["dmz"] = pl.Dmz
+		place["availabilityZone"] = pl.AvailabilityZone
 	}
+	// A keyed instance carries its OWN zone: the zone is its identity (ADR-0123 D1), so it does
+	// not need declaring twice and must not be able to disagree with the name (§2.4).
+	if inst.Zone != "" {
+		place["availabilityZone"] = inst.Zone
+	}
+	out["placement"] = place
 	if len(in.Spec.Params) > 0 {
 		out["params"] = in.Spec.Params
 	}
@@ -476,6 +540,29 @@ func TeardownLaunchParams(intent string, inst Instance, identityScheme, identity
 	}
 }
 
+// FilterToDeclared drops launch params the target Workflow does not declare (ADR-0123 D3).
+//
+// This is what lets a builder declare exactly what it consumes. Before it, `additionalProperties:
+// false` plus "the reconcile supplies it" forced a builder to declare every param core might send,
+// so an input accepted and silently dropped looked identical to a consumed one — and that is how
+// `placement` came to be declared by seven build Workflows and bound by none.
+//
+// Core offers; the builder takes what it needs. The correlation-critical params are not optional in
+// practice, but that is enforced at DECLARATION (checkAdvertisedWorkflow) where the error can name
+// the file, rather than by silently sending something the launch would then reject.
+func FilterToDeclared(params map[string]any, declared map[string]bool) map[string]any {
+	if len(declared) == 0 {
+		return params // no declared interface to filter against; the declaration check owns that case
+	}
+	out := make(map[string]any, len(params))
+	for k, v := range params {
+		if declared[k] {
+			out[k] = v
+		}
+	}
+	return out
+}
+
 // SingletonLabel is the correlation label key a built named-singleton carries (ADR-0059 D4). It is
 // the ONLY key ProvisionedSingletons reads, so a build projecting any other spelling produces an
 // Entity that never resolves its own Finding — which is exactly what
@@ -507,21 +594,13 @@ func SingletonLaunchParams(si SingletonIntent, inst Instance) map[string]any {
 		"projectKind": si.Spec.ProjectKind,
 		"labels":      labels,
 	}
+	// Complete, like the fleet path — see BuildLaunchParams for why the omit-when-undeclared
+	// shape (ADR-0059 D3) is withdrawn (ADR-0123 D2).
+	place := map[string]any{"subnet": "", "dmz": "", "availabilityZone": ""}
 	if pl := si.Spec.Placement; pl != nil {
-		place := map[string]any{}
-		if pl.Subnet != "" {
-			place["subnet"] = pl.Subnet
-		}
-		if pl.Dmz != "" {
-			place["dmz"] = pl.Dmz
-		}
-		if pl.AvailabilityZone != "" {
-			place["availabilityZone"] = pl.AvailabilityZone
-		}
-		if len(place) > 0 {
-			out["placement"] = place
-		}
+		place["subnet"], place["dmz"], place["availabilityZone"] = pl.Subnet, pl.Dmz, pl.AvailabilityZone
 	}
+	out["placement"] = place
 	if len(si.Spec.Params) > 0 {
 		out["params"] = si.Spec.Params
 	}

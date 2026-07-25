@@ -101,16 +101,25 @@ func TestPlacementRidesThroughWithDistinctFields(t *testing.T) {
 	if place["subnet"] != "app-subnet" || place["availabilityZone"] != "us-east-1a" {
 		t.Fatalf("placement: %v", place)
 	}
-	if _, present := place["dmz"]; present {
-		t.Errorf("an undeclared placement field must be absent, not empty: %v", place)
+	// ADR-0123 D2 WITHDREW the omit-when-undeclared half of ADR-0059 D3: an undeclared field is
+	// present-and-empty, because omitting it made {{.launch.placement.*}} unsafe in a shared builder
+	// (the key vanishes, the substituter fails closed) — which is why placement was declared by
+	// seven build Workflows and bound by none. The distinction it protected was unusable anyway:
+	// there are no conditionals in the template language, so no builder could branch on presence.
+	if v, present := place["dmz"]; !present || v != "" {
+		t.Errorf("an undeclared placement field must be present and EMPTY: %v", place)
 	}
 	if _, generic := place["zone"]; generic {
-		t.Error("there is no generic `zone` — ADR-0059 D3 refused it deliberately")
+		t.Error("there is no generic `zone` — ADR-0059 D3 refused it, and ADR-0123 D2 keeps that half")
 	}
-	// No placement declared ⇒ the key is absent entirely.
+	// No placement declared ⇒ the key is still PRESENT, with every field empty. See above.
 	in.Spec.Placement = nil
-	if _, present := BuildLaunchParams(in, Instance{Name: "web-01"})["placement"]; present {
-		t.Error("no declared placement must mean no placement param")
+	bare, ok := BuildLaunchParams(in, Instance{Name: "web-01"})["placement"].(map[string]any)
+	if !ok {
+		t.Fatal("placement must always be sent, so a shared builder can bind it unconditionally")
+	}
+	if bare["subnet"] != "" || bare["dmz"] != "" || bare["availabilityZone"] != "" {
+		t.Errorf("an unplaced Intent's placement must be all-empty: %v", bare)
 	}
 }
 

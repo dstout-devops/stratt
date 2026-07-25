@@ -29,9 +29,6 @@ inputs:
     instance:
       type: string
       description: The desired instance's correlation name (namePrefix + ordinal), e.g. web-02.
-    ordinal:
-      type: integer
-      description: Its 1-based position in the fleet.
     projectKind:
       type: string
       description: The Entity kind the built instance projects as.
@@ -44,7 +41,13 @@ inputs:
     placement:
       type: object
       additionalProperties: true
-      description: Declared topology placement (subnet / dmz / availabilityZone), when the Intent declares one.
+      description: >
+        Declared topology placement, ALWAYS present with all three fields and empty where the
+        Intent declares nothing (ADR-0123 D2). Emitting it complete is what makes it bindable in a
+        SHARED builder: while undeclared fields were omitted, {{.launch.placement.subnet}} here
+        would have failed closed for every unplaced Intent, which is why placement was declared by
+        every builder and bound by none. For a zone-keyed fleet availabilityZone is the instance's
+        own zone key.
     params:
       type: object
       additionalProperties: true
@@ -73,3 +76,8 @@ steps:
       # single instance and builds whichever one its Finding is for.
       projectKind: "{{.launch.projectKind}}"
       projectLabels: "{{.launch.labels}}"
+      # Declared placement finally reaches the provider (ADR-0123 D2). Empty strings mean the
+      # Intent declared nothing for that axis; the provider's own Action Contract decides what it
+      # requires (§1.5) — core does not, and cannot, branch on it (no conditionals, ADR-0083 D5).
+      subnet: "{{.launch.placement.subnet}}"
+      availabilityZone: "{{.launch.placement.availabilityZone}}"
