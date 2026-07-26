@@ -113,6 +113,20 @@ Symmetric with `provisions` in shape, resolution, and failure modes — it reuse
 unchanged, including its fail-closed behaviour: zero providers → PENDING Finding, ≥2 with no binding →
 AMBIGUOUS compile error, never a silent tiebreak (§2.4).
 
+**Keyed by Intent kind, and that is a narrowing worth stating** — it is the one place this design
+could force rework, so it is argued rather than assumed. A Blueprint has MANY routes: co-management
+(ADR-0083 §3) fans out by _adding_ them — a cert route, a config route, a package route — and today
+each names its own Workflow. Under `remediates`, routes disambiguate by **capability**, not by facet:
+a `certissuer` route resolves through OpenBao's `remediates[Application]` while a `configmgmt` route
+resolves through Ansible's. That covers co-management exactly.
+
+What it does **not** cover is two routes on the same Intent kind needing the same capability but
+_different_ Workflows. Keying by facet namespace instead would, and it is rejected: a provider's
+`remediates` is a statement about what it can CONVERGE (an Intent kind), while a facet is what a route
+OBSERVES to detect drift — keying the provider's capability by the observer's concern would make every
+provider re-declare itself per Facet. The escape hatch is the answer: that route keeps
+`remediationWorkflow` (D3).
+
 ### D3 — A Blueprint route may name a **capability**, not a Workflow
 
 ```yaml
@@ -131,15 +145,56 @@ The two are mutually exclusive on a route, refused at compile.
 This is what makes an example Blueprint shippable: with the remediation leg capability-shaped, every
 field in a Blueprint is provider-agnostic, and the estate supplies the binding.
 
+**The motivating case is migration, not aesthetics.** This is the path the project actually walks, and
+it is the strongest argument for the indirection:
+
+1. A Blueprint routes remediation to `configmgmt`.
+2. The estate binds `configmgmt → awx`. Remediation runs as an AWX job template, **on AAP, where the
+   automation already lives** — nothing has moved yet.
+3. Content migrates into Stratt projects, one at a time (ADR-0134).
+4. The estate rebinds `configmgmt → ansible-platform-baseline`. **One binding changes. No Blueprint is
+   edited, no Intent, no Assignment.**
+
+A name-bound route makes step 4 a rewrite of every Blueprint that mentions the old Workflow. A
+capability-bound one makes it a one-line diff in a file whose whole job is to say which provider
+serves this environment. That is the same shape as the vSphere binding this repo already ships, and
+migration is precisely the moment an estate has two providers for one capability — the condition the
+class exists to express.
+
 ### D4 — `configmgmt` as a capability class, with its swappability stated honestly
 
 ADR-0104's rule is that a new class ships with its first provider. `ansible` is provider #1.
 
-**And that is the whole roster today.** `plugins/{puppet,chef,salt}` exist but are **Syncers only** —
-no `Apply`, no `jobCommand`; they observe and never converge. So this decision buys **structure now
-and swappability later**: the seam is right, and the day a second actuating provider lands it costs a
-binding rather than a redesign. Claiming more than that would be the "fluid and pluggable" story
-selling something the repo cannot currently do.
+**And provider #2 is already here — it just cannot be launched.** An earlier draft of this ADR wrote
+the gap as "`plugins/{puppet,chef,salt}` are Syncers only, so we need another config tool." That is
+true and it is the wrong gap. The obvious second `configmgmt` provider is **AWX/AAP**, which this repo
+already integrates deeply: `plugins/ansible-automation` mirrors nine `ansible.*` namespaces, its job
+templates, credentials and execution environments are Entities in the graph, and ADR-0026 ships a
+façade of its API. It is a config-management execution engine by definition.
+
+What it lacks is **one Action**. The plugin is strictly read-only: a Syncer plus `materialize/`, which
+runs the _migration_ direction (AWX job template → Stratt CaC). `grep` for a launch path finds only
+comments about AWX's own schedules. So the honest statement is not "there is no second provider" but:
+
+> The second provider is integrated, trusted, and already projected. `configmgmt` becomes a real
+> two-provider class the day AWX gains a launch Action — and that Action is small, because everything
+> it needs to address a job template is already in the graph.
+
+**Launching does not breach the mirror's boundary**, and the boundary's own wording is the argument:
+strattd states the rule as _"§1.2 — AAP stays SoR and keeps executing; the mirror never converts an
+already-observed object to Stratt-managed."_ Launching a job template **invokes** an object; it does
+not **convert** one. AAP remains the system of record, keeps executing, and keeps owning the
+definition — which is not merely permitted by that sentence but assumed by it. The rule that must
+survive is the no-conversion rule, and a launch Action does not touch it.
+
+**That Action is NOT decided here.** It needs its own argument — idempotency, how a launched job's
+events reach the Run stream, whether a Stratt-launched job is distinguishable in AWX's own audit —
+and folding it in would repeat the mistake the ownership study warns about. This ADR books it as
+`configmgmt`'s second provider and stops there.
+
+So the honest reading: this buys **structure now, with a named and reachable second provider** rather
+than a hypothetical one. Until that Action lands, D3's indirection resolves to a single answer, which
+is exactly why `remediationWorkflow` is kept.
 
 ### D5 — Two kinds of proof, and they are not the same artifact
 
@@ -169,11 +224,22 @@ plugin per scenario, none of them exercising the spine.
 - **Examples are copied, not installed**, so adopting a plugin costs a review. Deliberate: the copy is
   where authority is granted, and a one-click install would be the Argo `.spec.project` circumvention
   wearing a vendor badge.
-- **`configmgmt` has one actuating provider**, so D3's indirection resolves to a single answer today.
-  Real, and the reason `remediationWorkflow` is kept.
+- **Migration stops being a rewrite.** Binding `configmgmt → awx`, migrating content, then rebinding to
+  the native Actuator is a one-line diff instead of an edit to every Blueprint naming the old Workflow.
+  This is the consequence that pays for the whole decision.
+- **`configmgmt` has one LAUNCHABLE provider today**, so D3's indirection resolves to a single answer
+  until AWX gains a launch Action. Real, and the reason `remediationWorkflow` is kept.
+- **`remediates` is keyed by Intent kind, which is coarser than a route.** Co-management is covered
+  (routes disambiguate by capability), but two same-capability routes on one Intent kind collapse to
+  one Workflow. The escape hatch covers it; if that case turns out to be common, the keying is the
+  thing to revisit, and it is called out here so the revisit is a decision rather than a surprise.
 - **Abstraction explosion is the risk to watch** (the documented Crossplane tax). The mitigation is
   D3's "name the Workflow when the estate has decided" — an escape hatch that keeps the indirection
   optional rather than mandatory.
+- **D1 must not foreclose (B).** "Copied, not installed" is a statement about AUTHORITY, not about
+  transport. If the ownership study's publish gate later ships a signed, reviewed install path, it
+  satisfies D1 the moment the install is an act of the ADOPTING estate rather than of the publisher.
+  Nothing here should be read as ruling that out.
 - **This does not decide the publish gate.** Ownership-study item **(B)** owns the project unit, its
   verbs, and publication; examples here are files in a repo, copied by hand. Whichever lands second
   reuses the other's machinery — and (B) should not be pre-empted by a packaging decision made here.
@@ -190,6 +256,15 @@ plugin per scenario, none of them exercising the spine.
   single most important field an adopter must rewrite — an example that does not work.
 - **A `remediation` capability class per Intent kind** (`certremediation`, `configremediation`).
   Rejected as ontology creep (§9): the kind is already a key _inside_ `remediates`.
+- **Key `remediates` by Facet namespace instead of Intent kind.** It would let two same-capability
+  routes remediate differently (see Consequences). Rejected: a provider's `remediates` states what it
+  can CONVERGE; a Facet is what a route OBSERVES to detect drift. Keying the provider by the observer's
+  concern makes every provider re-declare itself per Facet, and breaks the symmetry with `provisions`
+  that lets `capability.Resolve` be reused unchanged.
+- **Decide AWX's launch Action here.** Tempting, since it is what makes `configmgmt` real. Rejected:
+  idempotency, event forwarding into the Run stream, and whether a Stratt-launched job is
+  distinguishable in AWX's own audit are each their own argument — exactly the folding the ownership
+  study warns against. Booked, not decided.
 - **Fold this into ownership-study (B).** Rejected on the study's own instruction — _"each needs its
   own argument; none should be folded into another."_ (B) decides publication; this decides what may be
   published at all.
@@ -217,5 +292,13 @@ In dependency order, and deliberately not begun: this is a decision to argue wit
 - **Do not let an example become a declaration by being in the wrong directory.** `ParseDir` walks
   named subdirectories; examples must live where it never looks (ADR-0134 proved this property for
   `estate/ansible/`).
-- **`configmgmt` has one actuating provider.** Do not write tests or docs implying a swap that cannot
-  currently be demonstrated.
+- **`configmgmt` has one LAUNCHABLE provider.** Do not write tests or docs implying a swap that cannot
+  currently be demonstrated. The second provider (AWX) is named and reachable, but until its launch
+  Action lands the indirection has one answer.
+- **A rebind must recompile.** Changing a capability-binding changes what a Finding offers as its
+  remediation. If the compile cadence does not notice a binding change, an estate rebinds and the
+  Baselines keep offering the old provider's Workflow — the silent-stale failure §1.8 exists to
+  prevent. Verify this before believing step 4 is done.
+- **`remediates` is a ceiling-free field, unlike its neighbours.** `facetNamespaces` bounds authority;
+  `remediates` only routes. Do not let review treat naming a Workflow here as granting anything — the
+  Workflow's own Steps carry their Actuator's ceiling, exactly as they do today.
