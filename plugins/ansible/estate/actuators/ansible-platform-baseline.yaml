@@ -39,16 +39,21 @@ contentDir: content/platform-baseline
 # asks the resolved tree whether it holds that key. It never learns the word `playbook`, which
 # is the `if ansible{}` §1.4 forbids. Existence only — core never opens the file (ADR-0117 D6).
 contentInputs: [playbook]
-# The configmgmt capability (ADR-0135 D2/D4) and the per-Intent-kind convergence Workflows this
-# provider offers for it. A Blueprint route naming `remediationCapability: configmgmt` resolves
-# HERE at compile — so the route stays provider-agnostic and this estate says which provider serves
-# it, exactly as capability-bindings/provisioning-vsphere.yaml does for Compute.
+# NOT a capability provider — and it cannot be one, which is the point worth recording here.
 #
-# `remediates` ROUTES, it does not GRANT: facetNamespaces above is the write ceiling, and naming a
-# Workflow here confers nothing — its Steps carry their own Actuator's ceiling as they always did.
-provides: [configmgmt]
-remediates:
-  Application: web-server-configure
+# This declared `provides: [configmgmt]` + `remediates: {Application: web-server-configure}`
+# (ADR-0135 D2/D4), so that a Blueprint route could name the CAPABILITY and resolve to this
+# Actuator at compile. That does not work for an EE-Job Actuator and never did:
+# capability resolution counts only VERIFIED providers, verification means fetching the
+# plugin's Manifest over its dial address, and an EE-Job Actuator has no dial address by
+# construction — ansible is subprocess-only because of the GPLv3 boundary (§3). The registry
+# logged `provider REJECTED … EE-Job providers are not yet manifest-verifiable (ADR-0104 D1)`
+# every ten seconds, and the three Assignments routing through it stopped compiling.
+#
+# Declaring it anyway would be a phantom provider: an advertisement nothing can honour, kept
+# alive only by the log line refusing it (§1.8). Removed until EE-Job providers become
+# verifiable — ADR-0104 D1's booked hardening. The Blueprint route names this Actuator's
+# Workflow directly in the meantime; see estate/blueprints/web-server.yaml.
 facetNamespaces:
   - os.kernel
   - os.hardening.sysctl

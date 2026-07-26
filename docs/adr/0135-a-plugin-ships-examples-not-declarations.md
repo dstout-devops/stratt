@@ -154,6 +154,24 @@ routes:
     remediationCapability: configmgmt # ← resolved per environment, not baked in
 ```
 
+> **LIMITATION found in implementation (2026-07-26): an EE-Job Actuator cannot be a capability
+> provider.** Capability resolution counts only **verified** providers, and verification means
+> fetching the plugin's Manifest over its **dial address**
+> (`connectorregistry.verifyProvider`). An EE-Job Actuator has no dial address by construction —
+> ansible is subprocess-only because of the GPLv3 boundary (§3) — so it is permanently
+> `provUnverifiable`, and a route naming its capability compiles to _"no verified provider builds
+> Intent/Application for capability `configmgmt`"_.
+>
+> This was shipped into `estate/blueprints/web-server.yaml` and broke three Assignments on every
+> real floor. **Every unit test still passed**, because they resolve through a fake resolver; it
+> surfaced only on booting `task dev:connector-e2e`. The estate is back to `remediationWorkflow`
+> and the ansible Actuator no longer declares `provides`, since a provider nothing can verify is
+> a phantom kept alive by the log line refusing it.
+>
+> So D3 stands **for gRPC-addressed providers** and is unusable by EE-Job ones until ADR-0104 D1's
+> booked hardening makes them verifiable. That gap is the real blocker for D3's own motivation —
+> the flagship configmgmt provider is exactly the kind of tool that runs as a subprocess.
+
 `remediationWorkflow` is **kept, not deprecated** — the same call ADR-0134 D4 made for `params.play`.
 A single-provider estate naming its Workflow directly is clearer than an indirection that resolves to
 one answer, and pretending otherwise trades one awkwardness for another. The rule: **name the

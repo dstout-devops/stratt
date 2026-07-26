@@ -26,9 +26,25 @@ routes:
       path: port
       equals: "{{.spec.port}}" # ← resolved from the Blueprint default OR the Intent override
     claim: exclusive
-    # The capability, not the Workflow (ADR-0135 D3). This is the worked example the convention
-    # will be copied from: every field of this Blueprint is now provider-agnostic, so it could be
-    # shipped as an example and consumed by an estate that binds configmgmt to a provider this repo
-    # never shipped. The compiled Baseline still carries a CONCRETE Workflow — resolution happens
-    # once, at compile, so descent shows one answer and a rebind recompiles (§1.8).
-    remediationCapability: configmgmt
+    # NAME-routed, deliberately — and this is worth reading before "improving" it to
+    # `remediationCapability: configmgmt` (ADR-0135 D3).
+    #
+    # It WAS capability-routed, briefly, and that broke this Blueprint on every real
+    # floor. A capability route resolves only through a VERIFIED provider, and
+    # verification means fetching the plugin's Manifest over its dial address
+    # (connectorregistry.verifyProvider). An EE-Job Actuator has no dial address by
+    # construction — ansible is subprocess-only because of the GPLv3 boundary (§3) —
+    # so it is permanently `provUnverifiable`, and this route compiled to:
+    #
+    #   assignment web-server: blueprint route 0 remediationCapability "configmgmt":
+    #   no verified provider builds Intent/Application for capability "configmgmt"
+    #
+    # Three Assignments stopped compiling and every unit test still passed, because
+    # they resolve through a fake. Caught by booting `task dev:connector-e2e`.
+    #
+    # So: capability-routed remediation works today for gRPC-addressed providers and
+    # NOT for EE-Job ones. Making EE-Job providers verifiable is ADR-0104 D1's booked
+    # hardening; until it lands, ansible cannot be a capability provider and this
+    # route names its Workflow directly. The mechanism itself is shipped and tested —
+    # this estate simply cannot be its worked example yet.
+    remediationWorkflow: web-server-configure
