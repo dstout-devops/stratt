@@ -1,6 +1,8 @@
 # ADR 0134 — A playbook is a playbook: tool content lives beside the estate, not inside a declaration
 
-- **Status:** **Proposed** (2026-07-26, steward). Charter review by hand (this session's rules bar the
+- **Status:** **Proposed** (2026-07-26, steward). **D1/D2 corrected the same day** — the first draft
+  proposed a flat playbook folder; the unit is a **project** (a content root), for reasons the repo already
+  documented. The error is kept on the record in D1 rather than edited away. Charter review by hand (this session's rules bar the
   subagent); §1.2/§1.4/§1.8/§2 answered inline. **No new dependency.**
 - **Date:** 2026-07-26
 - **Deciders:** steward
@@ -54,26 +56,81 @@ So this is a **layout** change, not a supply-chain change.
 
 ## Decision
 
-### D1 — Tool content lives at `estate/<tool>/`
+### D1 — Tool content lives at `estate/<tool>/`, and for Ansible the unit is a **project**
+
+**This section originally proposed a flat `estate/ansible/playbooks/`. That was wrong**, and the evidence
+against it was already in the repo — recorded here rather than quietly fixed, because the mistake is
+instructive: it designed a content layout in isolation from the projection that has to describe it.
+
+Ansible has three levels and the flat layout collapsed two of them:
+
+| Level       | What it is                                                        | Already in the repo as                                                                 |
+| ----------- | ----------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
+| **Ansible** | the binary; an EE image family                                    | the `ansible` Actuator, `ee/`                                                          |
+| **Project** | a content root — playbooks, `roles/`, `group_vars/`, requirements | `projectID`, `STRATT_ANSIBLE_AUTOMATION_ROOT`, an AWX Project (`scm_url`+`scm_branch`) |
+| **Org**     | a grouping of projects                                            | `ansible.org`, projected since ADR-0025                                                |
+
+Three things break under a flat tree:
+
+1. **Identity collides.** The content half qualifies every projected identity as `<projectID>/<relpath>`
+   for the stated reason that _"two content roots' identically named files never collide in one estate."_
+   Every Ansible repo has a `site.yml`.
+2. **The cross-source join has nothing to join on.** The `runs` edge is built as
+   `<project.name>/<playbook>`, and `controller/normalize.go` says what that means: _"the operator aligns
+   `STRATT_ANSIBLE_AUTOMATION_CONTENT_ID` with the AAP Project name — the statement **this AWX Project IS
+   this Git content root**."_ Flat content has no project name, so the edge ADR-0085's orphan Finding rests
+   on cannot be formed from in-tree content.
+3. **ADR-0127 D1 already settled the cardinality**: one plugin instance per Source, one content root per
+   instance. N projects was already N content roots; a single folder contradicts a decision this repo
+   shipped.
+
+So the unit is the **project**, and a project is a content root:
 
 ```
 estate/
-  workflows/access-apply.yaml        ← the declaration: what runs, where, with which inputs
-  ansible/playbooks/access-apply.yml ← the playbook: a playbook, lintable as one
+  workflows/access-apply.yaml            ← the declaration: what runs, where, with which inputs
+  ansible/projects/platform-baseline/    ← ONE content root == one AWX Project
+    site.yml                             ← a playbook, lintable as one
+    roles/
+    group_vars/
+    requirements.yml
+  ansible/projects/web-content/          ← another; `site.yml` here is a different file
+    site.yml
 ```
 
 Inside the estate tree because that is already the delivery path for everything that decides what runs, and
-because each demo already carries its own `estate/`, so `demos/app-cert/estate/ansible/playbooks/` needs no
+because each demo already carries its own `estate/`, so `demos/app-cert/estate/ansible/projects/…` needs no
 new convention. Scoped per tool so OpenTofu modules and Helm values get the same treatment later without a
 second argument.
 
 `ParseDir` ignores subtrees it does not own, so a tool directory is not a declaration and is never parsed
 as one.
 
-### D2 — An Actuator **declares** its content directory; the spine copies it blind
+**In-tree is one source of a project, not the definition of one.** An AWX Project is literally an SCM
+pointer, and `params.scm` (ADR-0025) already runs a named playbook from a cloned repo. A project can
+therefore arrive in-tree, from external Git, or — eventually — from a published registry, while the thing a
+Step selects stays the same. That convergence is not hypothetical: **`ansible.project` + `scm_revision` is
+already booked as `AWX-001`** (ADR-0127 D4), to bind catalogue to execution and repair ADR-0085's
+soundness. The self-service registry and AWX-001 are the same entity seen from two directions, and this ADR
+deliberately does not pre-empt it — it only ensures the content layout is shaped so AWX-001 can land
+without moving every file again.
 
-`estate/actuators/ansible.yaml` gains `contentDir: ansible/playbooks`. Everything under it is mounted into
-the Job's `project/` directory.
+### D2 — An Actuator **declares** its project; the spine copies it blind
+
+`estate/actuators/ansible.yaml` gains `contentDir: ansible/projects/platform-baseline`. Everything under it
+is mounted into the Job's `project/` directory.
+
+**One Actuator per project**, which is not a new rule — it is the one that declaration already states: _"A
+Step that needs different CONTENT names a different Actuator."_ Three things follow, and they are why this
+beats teaching the Step to name a project:
+
+- **Per-project grants.** `facetNamespaces` is a write ceiling, and it can now differ per project — a
+  project with no business writing hardening facets does not get to.
+- **Isolation.** Only the selected project's tree mounts, so a Run cannot reach another project's content.
+  A Step naming a project inside its params would have mounted everything and relied on the Step to pick.
+- **The review point for self-service.** A platform admin reviews the Actuator (its grant, its EE image);
+  the team owns the files inside their project directory. That is the same separation of duties ADR-0035
+  chose when it refused auto-teaming — the directory owner decides content, the platform decides authority.
 
 This is not a new idea — it is the **third** declared-path field on that same declaration, and the other
 two already state the principle:
@@ -108,7 +165,9 @@ Actuator, rather than dispatch reading a filesystem. Three reasons, in order of 
 
 **Bounded, and loudly:** the mounted tree becomes a ConfigMap, which Kubernetes caps at 1 MiB. The load
 refuses a `contentDir` that exceeds a conservative ceiling with a message naming the directory and the
-size, rather than producing a Job that fails to schedule for reasons nobody can see (§1.8).
+size, rather than producing a Job that fails to schedule for reasons nobody can see (§1.8). Per-project
+scoping (D1) makes that ceiling far more comfortable than the flat tree would have: a Run mounts **one**
+project, not every project in the estate.
 
 ### D4 — The Step names a playbook; `ansible.input.v7`
 
@@ -146,6 +205,10 @@ existence (a path) and never content.
 - **Positive — support stops requiring both languages at once**, which is the whole point. A playbook
   becomes lintable, syntax-checkable, highlightable and testable by the ecosystem's own tools, and a
   Workflow becomes a short declaration of what runs where.
+- **The layout now matches the projection.** A directory under `estate/ansible/projects/` is the same
+  thing the content half calls a content root and the same thing AWX calls a Project, so an in-tree project
+  can carry a `runs` edge from a mirrored job template exactly as an external one does. Under the flat
+  layout first proposed here, in-tree content could not have participated in that edge at all.
 - **Two files instead of one** for a given behaviour. Real, and the trade the ADR accepts: the coupling
   moves from "inside a string" to "a named reference", which is the coupling every other estate reference
   already has.
@@ -154,10 +217,22 @@ existence (a path) and never content.
   per-Step content restriction is ever wanted it is a separate decision, not something to imply here.
 - **The `contentDir` ceiling is a real limit** an estate can grow into. Named in D3 rather than discovered.
 - **Migration is mechanical but wide**: 10 files, and the demo estates and chart dev-declarations tree
-  carry copies that must move together or the demos break.
+  carry copies that must move together or the demos break. Each migrated play must also be **assigned to a
+  project**, which is a judgement rather than a move — the reference estate's plays are currently one
+  undifferentiated set because nothing ever made them choose.
+- **An Actuator per project is more declarations**, and for a large self-service estate that is a real
+  count. Accepted because each is small, each carries a grant worth reviewing individually, and the
+  alternative concentrates authority instead of distributing it.
 
 ## Alternatives considered
 
+- **A flat `estate/ansible/playbooks/` tree.** This ADR's own first proposal, corrected in D1 and left on
+  the record. It collides on `site.yml`, gives the cross-source `runs` edge no project name to join on, and
+  contradicts ADR-0127 D1's one-content-root-per-Source cardinality. The lesson generalises past Ansible:
+  a content layout has to be shaped by the projection that describes it, not designed beside it.
+- **Keep the tree flat but let the Step name a project** (`params.project`). Rejected with the same
+  reasoning as the `playbookRef` alternative below — it needs core to read a tool-specific param — and it
+  additionally mounts every project into every Run, so isolation depends on the Step behaving.
 - **Core resolves a `playbookRef` from Step params.** The obvious design, and rejected in D2: it puts
   ansible awareness in the tool-blind dispatch path.
 - **Keep plays inline; lean harder on the test.** The status quo. Rejected: the test exists because the
