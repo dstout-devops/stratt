@@ -277,7 +277,25 @@ Ordered so each step is provable before the next depends on it.
    Known temporary exception, listed in the gate so it stays visible: `contracts/**`, until D5/step 6
    relocates plugin Contracts.
 
-4. **Remaining plugins**, one at a time.
+4. ~~**Remaining plugins**, one at a time.~~ **Shipped.** All eleven migrated; `estate/actuators/`
+   and `estate/connectors/` are empty and `plugins.yaml` admits twelve. Step 4 began by re-examining
+   step 2 rather than piling onto it, and that paid twice:
+   - **`linux-onboard` had been moved wrongly.** It spans `awsec2` → `ansible`, so it is a
+     composition (D4/D7). The Traps section says this for demos — "do not move a demo into a plugin
+     because it MENTIONS that plugin" — and the same test applies to every declaration. Returned to
+     `estate/`, and `plugins:boundary` grew a third check (every `actuator:`/`action:` inside a plugin
+     estate must resolve to that plugin) written and confirmed to fail on the live defect first.
+   - **ADR-0135 D3 turned out to be unusable by the tool it was written for.** Capability resolution
+     counts only *verified* providers, verification needs a dial address, and an EE-Job Actuator has
+     none by construction (§3, GPLv3). See the LIMITATION block in ADR-0135 D3.
+
+   **Views did not move** despite D1 listing them: in this estate they are the groups Assignments bind
+   to, which makes them composition. A plugin shipping a View over the kinds its own Syncer projects
+   is a different case, left for when one exists.
+
+   **Demos cannot verify this**, which is worth knowing: each stages only its own estate and none
+   carries a `plugins.yaml`. `task dev:connector-e2e` stages the full estate and is the in-cluster
+   proof — it booted strattd in kind against all twelve vendored plugin estates and reconciled them.
 5. **`estate/` and `demos/` reduced** to compositions and cross-plugin scenarios (D7).
 6. **Contracts relocate, core pins at registration** (D5) — last, and with its own tests.
 
