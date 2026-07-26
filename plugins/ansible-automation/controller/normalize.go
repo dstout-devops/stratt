@@ -18,6 +18,10 @@ const (
 	KindSchedule = "ansible.schedule" // an AWX schedule (→ Trigger on cutover)
 	KindOrg      = "ansible.org"      // an AWX organization (tenancy)
 	KindTeam     = "ansible.team"     // an AWX RBAC team
+	// KindCredential mirrors an AWX credential NAME AND KIND ONLY (ADR-0128 D2). It exists
+	// so "which templates use this credential" is a graph traversal. NOT a CredentialRef —
+	// that is the frozen Named Kind an adopt produces; this is the read-only mirror.
+	KindCredential = "ansible.credential"
 
 	// schemePlaybook is the ansible-project Syncer's OWNED kind — referenced here only
 	// as a cross-source relation TARGET (the `runs` edge), never owned or written by AWX.
@@ -45,19 +49,45 @@ func (c *Client) Normalize(snap *Snapshot) ([]*pluginv1.ObservedEntity, error) {
 	}
 
 	for _, jt := range snap.JobTemplates {
+		// The three field groups ADR-0128 D1 projects, beside the original five. Every key
+		// here is in the PINNED closed schema; `extra_vars` is absent and stays absent (§2.5).
 		facet, err := json.Marshal(map[string]any{
 			"name": jt.Name, "jobType": jt.JobType, "playbook": jt.Playbook,
 			"surveyEnabled": jt.SurveyEnabled, "description": jt.Description,
+			// Run state — current, not history (§3).
+			"lastRunStatus": jt.Status, "lastRunFailed": jt.LastJobFail,
+			"lastRunAt": jt.LastJobRun, "nextRunAt": jt.NextJobRun,
+			// Run knobs — what it will actually do.
+			"forks": jt.Forks, "limit": jt.Limit, "jobTags": jt.JobTags,
+			"skipTags": jt.SkipTags, "timeout": jt.Timeout, "verbosity": jt.Verbosity,
+			"diffMode": jt.DiffMode, "becomeEnabled": jt.BecomeEnabled, "scmBranch": jt.ScmBranch,
 		})
 		if err != nil {
 			return nil, err
 		}
+		rels := append(orgRel(jt.SummaryFields.Organization.ID), runsRel(jt)...)
+		rels = append(rels, c.credentialRels(jt)...)
 		out = append(out, &pluginv1.ObservedEntity{
 			Kind:         KindTemplate,
 			IdentityKeys: map[string]string{KindTemplate: c.qualify(jt.ID)},
 			Labels:       labels(jt.Name, jt.SummaryFields.Organization.Name),
 			Facets:       map[string][]byte{KindTemplate: facet},
-			Relations:    append(orgRel(jt.SummaryFields.Organization.ID), runsRel(jt)...),
+			Relations:    rels,
+		})
+	}
+
+	for _, cr := range snap.Credentials {
+		// Name and kind. Never material (§2.5) — the closed schema is what makes that
+		// checkable rather than promised.
+		facet, err := json.Marshal(map[string]any{"name": cr.Name, "kind": cr.Kind})
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, &pluginv1.ObservedEntity{
+			Kind:         KindCredential,
+			IdentityKeys: map[string]string{KindCredential: c.qualify(cr.ID)},
+			Labels:       labels(cr.Name, ""),
+			Facets:       map[string][]byte{KindCredential: facet},
 		})
 	}
 
@@ -151,6 +181,23 @@ func runsRel(jt JobTemplate) []*pluginv1.ObservedRelation {
 		return nil
 	}
 	return []*pluginv1.ObservedRelation{{Type: "runs", ToScheme: schemePlaybook, ToValue: proj + "/" + pb}}
+}
+
+// credentialRels emits `ansible.template --uses-credential--> ansible.credential` per
+// credential the template uses (ADR-0128 D2). SAME-source, unlike the `runs` edge: both
+// ends are owned by the controller half, so the target always resolves and an absence
+// means AWX genuinely reported none — there is no orphan signal to read here.
+func (c *Client) credentialRels(jt JobTemplate) []*pluginv1.ObservedRelation {
+	var out []*pluginv1.ObservedRelation
+	for _, cr := range jt.SummaryFields.Credentials {
+		if cr.ID == 0 {
+			continue
+		}
+		out = append(out, &pluginv1.ObservedRelation{
+			Type: "uses-credential", ToScheme: KindCredential, ToValue: c.qualify(cr.ID),
+		})
+	}
+	return out
 }
 
 // labels renders the operator-selectable labels: the object name and (when known)

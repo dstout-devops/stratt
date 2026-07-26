@@ -16,12 +16,12 @@ graph TD
   authz_identity["authz-identity<br/><small>0009 0028 0035 0079 0101 0122</small>"]
   capability_framework["capability-framework<br/><small>0100 0104 0105 0106 0107 0110<br/>0111 0112 0113 0114</small>"]
   certificates_pki["certificates-pki<br/><small>0030 0043 0050 0098 0106</small>"]
-  connectors["connectors<br/><small>0007 0014 0025 0026 0037 0038<br/>0039 0045 0086 0087 0088 0089<br/>0095 0097 0099 0113 0114 0115<br/>0127</small>"]
+  connectors["connectors<br/><small>0007 0014 0025 0026 0037 0038<br/>0039 0045 0086 0087 0088 0089<br/>0095 0097 0099 0113 0114 0115<br/>0127 0128</small>"]
   credentials_secrets["credentials-secrets<br/><small>0009 0029 0052 0094 0098 0099<br/>0100 0106 0125 0126</small>"]
   estate_as_code["estate-as-code<br/><small>0055 0056 0057 0103 0113 0116<br/>0118 0119 0120 0122 0123</small>"]
-  findings_drift["findings-drift<br/><small>0019 0020 0033 0043 0080 0085</small>"]
+  findings_drift["findings-drift<br/><small>0019 0020 0033 0043 0080 0085<br/>0128</small>"]
   foundation["foundation<br/><small>0001 0002 0004 0005 0006 0008<br/>0108 0109 0116</small>"]
-  graph_model["graph-model<br/><small>0015 0017 0041 0042 0059 0060<br/>0079 0080 0081 0082 0084 0085<br/>0096 0114 0115 0119 0120 0123<br/>0126 0127</small>"]
+  graph_model["graph-model<br/><small>0015 0017 0041 0042 0059 0060<br/>0079 0080 0081 0082 0084 0085<br/>0096 0114 0115 0119 0120 0123<br/>0126 0127 0128</small>"]
   intent_compiler["intent-compiler<br/><small>0023 0030 0036 0055 0058 0083<br/>0085 0114 0118 0119 0123</small>"]
   orchestration["orchestration<br/><small>0010 0011 0018 0027 0031 0063<br/>0118 0122 0125</small>"]
   plugin_port["plugin-port<br/><small>0046 0047 0048 0049 0051 0053<br/>0054 0103 0117 0121 0124 0125<br/>0127</small>"]
@@ -184,6 +184,7 @@ Connectors & Syncers — SoR ingest breadth, the Syncer SDK, adopt/AWX-import.
 - [ADR-0114](0114-entity-lifecycle-and-decommission-reach-path.md) — Entity lifecycle Actions + the desired-state decommission reach-path
 - [ADR-0115](0115-vsphere-read-breadth.md) — vSphere read breadth: the inventory graph (region/AZ reuse, uncovered-Facet posture)
 - [ADR-0127](0127-one-ansible-automation-plugin-two-sources.md) — One `ansible-automation` plugin, two Sources
+- [ADR-0128](0128-ansible-template-projection-depth.md) — The `ansible.template` mirror answers governance questions, or it is decoration
 
 ### credentials-secrets
 
@@ -232,6 +233,7 @@ Findings & drift — Baselines, Findings, compliance packs, drift/GC.
 - [ADR-0043](0043-cert-renewal-finding-gc.md) — Cert-renewal Finding-GC (resolve Findings for tombstoned Entities)
 - [ADR-0080](0080-software-as-an-estate-dimension.md) — Software as an estate dimension: installed packages, open delivery-form, patch/advisory Findings
 - [ADR-0085](0085-relation-presence-baseline.md) — Relation-presence Baseline: desired state over graph topology, not just node facets
+- [ADR-0128](0128-ansible-template-projection-depth.md) — The `ansible.template` mirror answers governance questions, or it is decoration
 
 ### foundation
 
@@ -273,6 +275,7 @@ Graph model — Entity/Facet/Relation/Contract primitives, projection & liveness
 - [ADR-0123](0123-keyed-placement-aware-spread.md) — Keyed, placement-aware spread: identity survives a zone-list edit, and declared placement finally reaches the build
 - [ADR-0126](0126-managed-node-reachability-credential-host-key-and-jump.md) — Reaching a managed node: the connection credential, the host key, and the jump path
 - [ADR-0127](0127-one-ansible-automation-plugin-two-sources.md) — One `ansible-automation` plugin, two Sources
+- [ADR-0128](0128-ansible-template-projection-depth.md) — The `ansible.template` mirror answers governance questions, or it is decoration
 
 ### intent-compiler
 
@@ -550,3 +553,4 @@ UI — React shell, schema-driven rendering, Views, descent, the first-party cli
 | [0125](0125-notification-sinks-are-drivers-not-a-core-switch.md) | credentials-secrets, orchestration, plugin-port |
 | [0126](0126-managed-node-reachability-credential-host-key-and-jump.md) | actuators, credentials-secrets, graph-model |
 | [0127](0127-one-ansible-automation-plugin-two-sources.md) | connectors, graph-model, plugin-port |
+| [0128](0128-ansible-template-projection-depth.md) | connectors, findings-drift, graph-model |

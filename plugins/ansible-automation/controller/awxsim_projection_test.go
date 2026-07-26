@@ -13,6 +13,7 @@ package controller
 
 import (
 	"context"
+	"encoding/json"
 	"net/http/httptest"
 	"testing"
 
@@ -48,6 +49,7 @@ func TestProjectionAgainstAwxsim(t *testing.T) {
 		{"schedules", len(snap.Schedules), 3}, // 3 > pageSize: the `next` cursor is followed
 		{"organizations", len(snap.Organizations), 2},
 		{"teams", len(snap.Teams), 2},
+		{"credentials", len(snap.Credentials), 2},
 	} {
 		if tc.got != tc.want {
 			t.Errorf("%s enumerated = %d, want %d", tc.what, tc.got, tc.want)
@@ -58,8 +60,8 @@ func TestProjectionAgainstAwxsim(t *testing.T) {
 	if err != nil {
 		t.Fatalf("normalize: %v", err)
 	}
-	if len(ents) != 10 {
-		t.Fatalf("projected %d entities, want 10 (2 templates + 1 workflow + 3 schedules + 2 orgs + 2 teams)", len(ents))
+	if len(ents) != 12 {
+		t.Fatalf("projected %d entities, want 12 (2 templates + 1 workflow + 3 schedules + 2 orgs + 2 teams + 2 credentials)", len(ents))
 	}
 
 	byKind := map[string]int{}
@@ -67,7 +69,7 @@ func TestProjectionAgainstAwxsim(t *testing.T) {
 		byKind[e.GetKind()]++
 	}
 	for kind, want := range map[string]int{
-		KindTemplate: 2, KindWorkflow: 1, KindSchedule: 3, KindOrg: 2, KindTeam: 2,
+		KindTemplate: 2, KindWorkflow: 1, KindSchedule: 3, KindOrg: 2, KindTeam: 2, KindCredential: 2,
 	} {
 		if byKind[kind] != want {
 			t.Errorf("projected %d %s, want %d", byKind[kind], kind, want)
@@ -136,6 +138,85 @@ func TestProjectionEdgesAgainstAwxsim(t *testing.T) {
 	if !has("ctrl-a/31", edge{"schedules", KindWorkflow, "ctrl-a/20"}) {
 		t.Errorf("schedule 31 does not target WORKFLOW 20; got %v", edges["ctrl-a/31"])
 	}
+	// ADR-0128 D2: the edge that makes "which templates use this credential" a traversal.
+	// Same-source (both ends owned by this half), so it always resolves.
+	if !has("ctrl-a/10", edge{"uses-credential", KindCredential, "ctrl-a/1"}) {
+		t.Errorf("template 10 has no uses-credential edge onto prod-ssh; got %v", edges["ctrl-a/10"])
+	}
+}
+
+// §2.5 as a test, not a promise: the credential mirror carries NAME AND KIND and nothing
+// else. The closed schema refuses anything more at the write path; this refuses it at the
+// source, so a future field cannot arrive here and be silently dropped downstream.
+func TestCredentialProjectionCarriesNoMaterial(t *testing.T) {
+	c := simClient(t)
+	snap, err := c.Enumerate(context.Background())
+	if err != nil {
+		t.Fatalf("enumerate: %v", err)
+	}
+	ents, err := c.Normalize(snap)
+	if err != nil {
+		t.Fatalf("normalize: %v", err)
+	}
+	var seen int
+	for _, e := range ents {
+		if e.GetKind() != KindCredential {
+			continue
+		}
+		seen++
+		var facet map[string]any
+		if err := json.Unmarshal(e.GetFacets()[KindCredential], &facet); err != nil {
+			t.Fatalf("credential facet: %v", err)
+		}
+		for k := range facet {
+			if k != "name" && k != "kind" {
+				t.Errorf("credential facet carries %q — name and kind ONLY (§2.5); material must never be projected", k)
+			}
+		}
+		if facet["name"] == "" {
+			t.Error("credential projected with no name")
+		}
+	}
+	if seen != 2 {
+		t.Fatalf("projected %d credentials, want 2", seen)
+	}
+}
+
+// Run state reaches the graph (ADR-0128 D1/D3) — the fields the awx-template-failing
+// Baseline reads. awxsim's Deploy Web is seeded failed.
+func TestRunStateProjects(t *testing.T) {
+	c := simClient(t)
+	snap, err := c.Enumerate(context.Background())
+	if err != nil {
+		t.Fatalf("enumerate: %v", err)
+	}
+	ents, err := c.Normalize(snap)
+	if err != nil {
+		t.Fatalf("normalize: %v", err)
+	}
+	for _, e := range ents {
+		if e.GetIdentityKeys()[KindTemplate] != "ctrl-a/10" {
+			continue
+		}
+		var facet map[string]any
+		if err := json.Unmarshal(e.GetFacets()[KindTemplate], &facet); err != nil {
+			t.Fatalf("template facet: %v", err)
+		}
+		if facet["lastRunFailed"] != true {
+			t.Errorf("lastRunFailed = %v, want true — the field the failing-template Baseline reads", facet["lastRunFailed"])
+		}
+		if facet["lastRunStatus"] != "failed" {
+			t.Errorf("lastRunStatus = %v, want failed", facet["lastRunStatus"])
+		}
+		if facet["limit"] != "web*" {
+			t.Errorf("limit = %v, want web* — a run knob the mirror was blind to", facet["limit"])
+		}
+		if _, ok := facet["extraVars"]; ok {
+			t.Error("extraVars is projected — it may carry secret material and must never reach the graph (§2.5, ADR-0128 D4)")
+		}
+		return
+	}
+	t.Fatal("template ctrl-a/10 was not projected")
 }
 
 // The disabled schedule survives the projection as disabled — it is the dead-automation

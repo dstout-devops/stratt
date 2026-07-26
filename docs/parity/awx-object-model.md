@@ -25,9 +25,9 @@ from that single sample. Everything below is the rest of the sample.
 | Area                                       | Verdict                          | One-line                                                                                         |
 | ------------------------------------------ | -------------------------------- | ------------------------------------------------------------------------------------------------ |
 | **Object coverage** (which objects at all) | 🟡 5 projected, 7 more read-only | The projection covers the orchestration spine; people, RBAC, and run history are absent          |
-| **Field depth** on projected objects       | 🔴 **thin** — 3–5 fields each    | `ansible.template` projects 5 of ~50 job-template fields; no run state, no credentials, no knobs |
+| **Field depth** on projected objects       | 🟡 template deepened, rest thin  | `ansible.template` now carries run state, run knobs + a credential edge (**ADR-0128**); the other four are still 1–3 fields |
 | **Workflow topology**                      | 🔴 **name only**                 | `ansible.workflow` is a name + description; the node graph is read by adopt and never projected  |
-| **Facet schema coverage**                  | 🔴 **2 of 9**                    | Only `ansible.playbook` and `ansible.schedule` are pinned; 7 namespaces write unvalidated        |
+| **Facet schema coverage**                  | 🟡 **4 of 10**                   | +`ansible.template` +`ansible.credential` (ADR-0128); 6 namespaces still write unvalidated       |
 | **Read-path symmetry**                     | 🟡 divergent by accident         | Projection reads 5 endpoints, adopt reads 9; nothing states which asymmetries are deliberate     |
 | **`stratt adopt` transform**               | 🟢 deep and honest               | Reads what it needs, refuses what it must (secrets, password surveys), reports what it drops     |
 
@@ -35,8 +35,10 @@ from that single sample. Everything below is the rest of the sample.
 blocks rather than guesses. The **projection** half is a spine, not a mirror: it can answer "what
 automation exists and what runs what," and it cannot answer "which templates use this credential," "which
 are failing," "who is on this team," or "what does this workflow actually do." The single highest-value
-fix is field depth on `ansible.template` (**AWX-010**), because most governance questions an operator
-brings to an AWX mirror are field-level questions about job templates.
+fix was field depth on `ansible.template` (**AWX-010**) — most governance questions an operator brings to
+an AWX mirror are field-level questions about job templates — and that is **done**
+([ADR-0128](../adr/0128-ansible-template-projection-depth.md)). The next is workflow topology
+(**AWX-002**), then the authorization slice, which needs a decision before code.
 
 ---
 
@@ -57,7 +59,7 @@ which is which.
 
 | AWX object                       | Coverage        | Evidence / note                                                                                                                                             | ID          |
 | -------------------------------- | --------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------- |
-| `job_templates`                  | `projected` 🟢  | [types.go:91](../../plugins/ansible-automation/controller/types.go#L91) → `ansible.template`; field depth is **AWX-010**                                    |             |
+| `job_templates`                  | `projected` 🟢  | [types.go](../../plugins/ansible-automation/controller/types.go) → `ansible.template`; deepened by ADR-0128 (~~AWX-010~~)                                   |             |
 | `workflow_job_templates`         | `projected` 🟡  | [types.go:94](../../plugins/ansible-automation/controller/types.go#L94) → `ansible.workflow`, name + description only                                       |             |
 | `schedules`                      | `projected` 🟢  | [types.go:97](../../plugins/ansible-automation/controller/types.go#L97) → `ansible.schedule` + the `schedules` edge                                         |             |
 | `organizations`                  | `projected` 🟢  | [types.go:100](../../plugins/ansible-automation/controller/types.go#L100) → `ansible.org`                                                                   |             |
@@ -67,7 +69,7 @@ which is which.
 | `inventories`                    | `mapped` ⚪     | → **View** ([materialize/views.go](../../plugins/ansible-automation/controller/materialize/views.go)); smart inventories reduce their `host_filter`         |             |
 | `inventory_sources`              | `mapped` ⚪     | → points at the native Syncer for that cloud, never re-implemented as an AWX plugin                                                                         |             |
 | `hosts` (inventory members)      | `mapped` ⚪     | Deliberately never re-projected — that is the writable-CMDB anti-pattern (§1.2); hosts come from their own Syncers                                          |             |
-| `credentials`                    | `mapped` ⚪     | → **CredentialRef**, name + kind only, material never read ([credentials.go](../../plugins/ansible-automation/controller/materialize/credentials.go), §2.5) |             |
+| `credentials`                    | `projected` 🟢 + `mapped` ⚪ | **Both, and deliberately** (ADR-0128 D2): projected as `ansible.credential` (name+kind, never material, §2.5) so credential usage is a traversal, AND mapped → **CredentialRef** at adopt. Mirror vs Named Kind, the same pair as `ansible.template` ↔ Workflow |             |
 | `job_templates/{id}/survey_spec` | `mapped` ⚪     | → `Workflow.inputs` (ADR-0118 D2); a **password** question is refused, not imported                                                                         |             |
 | `users`                          | `none` 🔴       | The mirror has teams and orgs but **no people**; "who can launch this" is unanswerable                                                                      | **AWX-003** |
 | `roles` (RBAC grants)            | `none` 🔴       | No principal→object grant is read, so no AWX permission is visible or migratable                                                                            | **AWX-005** |
@@ -91,11 +93,16 @@ which is which.
 This is the section the audit was written for. Each table lists **what lands in the graph** against what
 AWX holds on that object.
 
-### `ansible.template` ← `job_templates` — 5 fields of ~50 · **AWX-010**
+### `ansible.template` ← `job_templates` — ~~5 fields of ~50~~ → 18 · ~~**AWX-010**~~ done (ADR-0128)
 
-Projected ([normalize.go:50-56](../../plugins/ansible-automation/controller/normalize.go#L50-L56)):
-`name`, `jobType`, `playbook`, `surveyEnabled`, `description` · labels `ansible.name`, `ansible.org` ·
-relations `owned-by` → org, `runs` → playbook.
+Projected: the original `name`, `jobType`, `playbook`, `surveyEnabled`, `description`, **plus** run state
+(`lastRunStatus`, `lastRunFailed`, `lastRunAt`, `nextRunAt`) and the run knobs (`forks`, `limit`,
+`jobTags`, `skipTags`, `timeout`, `verbosity`, `diffMode`, `becomeEnabled`, `scmBranch`) · labels
+`ansible.name`, `ansible.org` · relations `owned-by` → org, `runs` → playbook, **`uses-credential` →
+`ansible.credential`**. Validated against a pinned closed schema.
+
+The table below is kept as the record of what was missing and why each row mattered; ✅ marks what
+ADR-0128 closed.
 
 | AWX field group                                                                                                                    | Projected? | Why it matters                                                                                                              |
 | ---------------------------------------------------------------------------------------------------------------------------------- | ---------- | --------------------------------------------------------------------------------------------------------------------------- |
@@ -172,8 +179,9 @@ now it was not written down anywhere.
 | `ansible.collection` | 🔴 none                                                          | —                                                                                               |
 | `ansible.inventory`  | 🔴 none                                                          | —                                                                                               |
 
-Correctly-ordered consequence: closing **AWX-010** (template field depth) creates the demander that has
-been missing for `ansible.template`, so the schema should land _with_ the fields rather than ahead of them.
+**Done for `ansible.template` (ADR-0128)** — and the ordering held: the schema landed _with_ the fields and
+_with_ the Baseline that reads them. The remaining six are unchanged, and the same rule applies to each:
+the schema lands when something consumes the namespace, not before.
 
 ---
 
@@ -210,9 +218,12 @@ having been built first and never revisited when the transform grew deeper.
 
 **Tier 1 — the mirror cannot answer questions an operator will ask on day one:**
 
-- **AWX-010 · Job-template field depth.** Credentials, run status, and the run knobs. Highest value per
-  unit of work in this document, and it creates the missing demander for the `ansible.template` schema
-  (AWX-014).
+- ~~**AWX-010 · Job-template field depth.**~~ — **done, [ADR-0128](../adr/0128-ansible-template-projection-depth.md).**
+  Run state + run knobs on the facet, credential usage as an `uses-credential` edge onto a new
+  `ansible.credential` mirror, and the pinned closed schema the namespace never had — which also closed
+  `AWX-014` for it. Shipped **with** its §1.1 consumer (`awx-template-failing`), because the reason the
+  schema was missing is that nothing consumed the projection: thin projection → no consumer → no schema
+  was one loop, and deepening without shipping a consumer would have left it.
 - **AWX-002 · Workflow topology.** The data is already fetched and parsed for adopt; the projection just
   never emits it. Until then `ansible.workflow` is not a governable Entity.
 - **AWX-001 · `ansible.project` + `scm_revision`.** Already booked by ADR-0127 D4 and unchanged by this
@@ -232,7 +243,10 @@ having been built first and never revisited when the transform grew deeper.
 
 - **AWX-006** labels · **AWX-007** execution environments · **AWX-008** instance groups →
   Sites/Cells · **AWX-009** notification templates → Sinks (cheap since ADR-0125) ·
-  **AWX-012** custom credential types · **AWX-013** schedule `extra_data` + timezone.
+  **AWX-012** custom credential types · **AWX-013** schedule `extra_data` + timezone ·
+  **AWX-015** the ~15 `ask_*_on_launch` booleans (new — deferred out of ADR-0128 D4: they are
+  cutover fidelity rather than governance, so they matter when migrating a template, not when
+  auditing an estate).
 
 **Not gaps, recorded so they are not re-litigated:** inventories → View, hosts never re-projected,
 credentials name-and-kind-only, survey passwords refused, activity stream not mirrored, ad-hoc commands

@@ -23,9 +23,13 @@ func fakeAWX(t *testing.T) *httptest.Server {
 	mux.HandleFunc("/api/v2/job_templates/", func(w http.ResponseWriter, r *http.Request) {
 		w.Write(page([]map[string]any{{
 			"id": 10, "name": "Deploy Web", "job_type": "run", "playbook": "site.yml",
-			"survey_enabled": true, "summary_fields": map[string]any{
+			"survey_enabled": true,
+			"status":         "failed", "last_job_failed": true, "last_job_run": "2026-07-26T03:00:00Z",
+			"forks": 5, "limit": "web*", "job_tags": "deploy", "become_enabled": true,
+			"summary_fields": map[string]any{
 				"organization": map[string]any{"id": 1, "name": "Platform"},
 				"project":      map[string]any{"id": 5, "name": "web-content"},
+				"credentials":  []map[string]any{{"id": 50, "name": "prod-ssh", "kind": "ssh"}},
 			},
 		}}))
 	})
@@ -51,6 +55,9 @@ func fakeAWX(t *testing.T) *httptest.Server {
 			"summary_fields": map[string]any{"organization": map[string]any{"id": 1, "name": "Platform"}},
 		}}))
 	})
+	mux.HandleFunc("/api/v2/credentials/", func(w http.ResponseWriter, r *http.Request) {
+		w.Write(page([]map[string]any{{"id": 50, "name": "prod-ssh", "kind": "ssh"}}))
+	})
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 	return srv
@@ -65,7 +72,7 @@ func TestEnumerateAndNormalize(t *testing.T) {
 		t.Fatalf("enumerate: %v", err)
 	}
 	if len(snap.JobTemplates) != 1 || len(snap.Workflows) != 1 || len(snap.Schedules) != 1 ||
-		len(snap.Organizations) != 1 || len(snap.Teams) != 1 {
+		len(snap.Organizations) != 1 || len(snap.Teams) != 1 || len(snap.Credentials) != 1 {
 		t.Fatalf("snapshot counts wrong: %+v", snap)
 	}
 
@@ -77,7 +84,7 @@ func TestEnumerateAndNormalize(t *testing.T) {
 	for _, e := range ents {
 		byKind[e.GetKind()] = e
 	}
-	for _, k := range []string{KindTemplate, KindWorkflow, KindSchedule, KindOrg, KindTeam} {
+	for _, k := range []string{KindTemplate, KindWorkflow, KindSchedule, KindOrg, KindTeam, KindCredential} {
 		if byKind[k] == nil {
 			t.Fatalf("missing projected kind %q", k)
 		}

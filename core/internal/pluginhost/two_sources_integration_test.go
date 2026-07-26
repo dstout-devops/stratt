@@ -26,7 +26,7 @@ import (
 
 // The nine `ansible.*` namespaces, split exactly as the two halves own them.
 var (
-	controllerNS = []string{"ansible.template", "ansible.workflow", "ansible.schedule", "ansible.org", "ansible.team"}
+	controllerNS = []string{"ansible.template", "ansible.workflow", "ansible.schedule", "ansible.org", "ansible.team", "ansible.credential"}
 	contentNS    = []string{"ansible.playbook", "ansible.role", "ansible.collection", "ansible.inventory"}
 )
 

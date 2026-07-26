@@ -16,6 +16,16 @@ type fJobTemplate struct {
 	Project       int    `json:"project"`
 	Inventory     int    `json:"inventory"`
 	SurveyEnabled bool   `json:"survey_enabled"`
+	// Run state + knobs — read by the PROJECTION only (ADR-0128). The adopt decode struct
+	// models neither, and ignores them.
+	Status        string `json:"status,omitempty"`
+	LastJobRun    string `json:"last_job_run,omitempty"`
+	LastJobFailed bool   `json:"last_job_failed,omitempty"`
+	NextJobRun    string `json:"next_job_run,omitempty"`
+	Forks         int    `json:"forks,omitempty"`
+	Limit         string `json:"limit,omitempty"`
+	JobTags       string `json:"job_tags,omitempty"`
+	BecomeEnabled bool   `json:"become_enabled,omitempty"`
 	SummaryFields struct {
 		Credentials []fCredSummary `json:"credentials"`
 		// The PROJECTION half reads these two and the adopt half does not — awxsim
@@ -212,10 +222,15 @@ func seed() *estate {
 	jt10 := fJobTemplate{ID: 10, Name: "Deploy Web", JobType: "run", Playbook: "site.yml",
 		Project: 1, Inventory: 2, SurveyEnabled: true}
 	jt10.SummaryFields.Credentials = []fCredSummary{{ID: 1, Name: "prod-ssh", Kind: "ssh"}}
+	// Seeded FAILED: the awx-template-failing Baseline's positive case, and the state the
+	// mirror was blind to before ADR-0128.
+	jt10.Status, jt10.LastJobFailed, jt10.LastJobRun = "failed", true, "2026-07-26T03:00:00Z"
+	jt10.NextJobRun, jt10.Forks, jt10.Limit, jt10.JobTags, jt10.BecomeEnabled = "2026-07-27T03:00:00Z", 5, "web*", "deploy", true
 	jt10.SummaryFields.Organization = fNamed{ID: 1, Name: "Platform"}
 	jt10.SummaryFields.Project = fNamed{ID: 1, Name: "infra"}
 	jt11 := fJobTemplate{ID: 11, Name: "Gather Facts", JobType: "run", Playbook: "facts.yml",
 		Project: 2, Inventory: 1, SurveyEnabled: false}
+	jt11.Status, jt11.LastJobFailed = "successful", false
 	jt11.SummaryFields.Organization = fNamed{ID: 2, Name: "Legacy"}
 	jt11.SummaryFields.Project = fNamed{ID: 2, Name: "local-scripts"}
 	e.JobTemplates = []fJobTemplate{jt10, jt11}

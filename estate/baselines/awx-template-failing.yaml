@@ -1,0 +1,36 @@
+# awx-template-failing — the DEAD-AUTOMATION audit's other half (ADR-0128 D5; the
+# app-of-apps-over-AWX surface, ADR-0025 arc). A facet-observation Baseline (ADR-0033):
+# it READS the ansible.template Facet the ansible-automation Connector's controller half
+# projects (§1.2) and opens a Finding for any template whose LAST RUN FAILED.
+#
+# This is the §1.1 CONSUMER that demands the ansible.template Facet schema. That matters
+# more than it sounds: before ADR-0128 the namespace had NO pinned schema and wrote
+# unvalidated, and it had none precisely because nothing consumed it — the other Baseline
+# over templates (awx-template-covered, ADR-0085) asserts graph TOPOLOGY and reads no
+# facet content, so it demands no schema. Thin projection -> no consumer -> no schema was
+# one loop, and deepening the projection without shipping its consumer would have left it.
+#
+# Sibling of awx-schedule-enabled, which asks the same question from the other side: that
+# one finds automation that stopped being scheduled, this one finds automation that is
+# still scheduled and no longer works.
+#
+# §1.8 FALSE-POSITIVE MODE (documented, not hidden): `lastRunFailed` is AWX's own state at
+# the moment of the last poll, so a template that has ALREADY been fixed still reads failed
+# until AWX next runs it — the Finding trails reality by up to one job interval, which is a
+# property of mirroring a system that executes on its own cadence, not a defect. A template
+# that has never run reads false and correctly raises nothing.
+#
+# Pure read (§1.2, §2.4): opens Findings, no actuator, no write-back, no claim. AAP stays
+# authoritative and keeps executing.
+name: awx-template-failing
+viewName: awx-templates
+mode: facet-observation
+framework: ansible-governance
+severity: warning
+cron: "@every 5m"
+dampingObservations: 1
+environments: [dev]
+expected:
+  - namespace: ansible.template
+    path: lastRunFailed
+    equals: false
