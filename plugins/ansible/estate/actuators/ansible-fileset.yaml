@@ -11,7 +11,7 @@ pluginIdentity: ansible
 tier: trusted
 dryRunnable: true
 jobCommand: [stratt-ansible]
-contentDir: ansible/projects/fileset
+contentDir: content/fileset
 contentInputs: [playbook]
 facetNamespaces: [fileset.content]
 identitySchemes: [host.name]

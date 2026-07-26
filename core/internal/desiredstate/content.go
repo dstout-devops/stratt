@@ -76,17 +76,18 @@ func validateContentDir(actuator, dir string) error {
 // keyed by path relative to that directory. Called once per estate load, after the Actuator
 // declarations parse — parseKind hands its parser only (path, raw), so the estate ROOT is
 // available here and not there.
-func resolveActuatorContent(root string, actuators []types.Actuator) error {
-	for i := range actuators {
-		if actuators[i].ContentDir == "" {
-			continue
-		}
-		files, err := readContentDir(root, actuators[i].Name, actuators[i].ContentDir)
-		if err != nil {
-			return err
-		}
-		actuators[i].Content = files
+// resolveActuatorContent reads one Actuator's declared content root into its
+// Content map. `root` is the estate that SHIPPED this Actuator — its own plugin
+// estate when it came from one (ADR-0137 D1), the estate root otherwise.
+func resolveActuatorContent(root string, a *types.Actuator) error {
+	if a.ContentDir == "" {
+		return nil
 	}
+	files, err := readContentDir(root, a.Name, a.ContentDir)
+	if err != nil {
+		return err
+	}
+	a.Content = files
 	return nil
 }
 

@@ -17,7 +17,7 @@ pluginIdentity: ansible
 tier: trusted
 dryRunnable: true
 jobCommand: [stratt-ansible]
-contentDir: ansible/projects/access-control
+contentDir: content/access-control
 contentInputs: [playbook]
 facetNamespaces: [access.grants]
 identitySchemes: [host.name]

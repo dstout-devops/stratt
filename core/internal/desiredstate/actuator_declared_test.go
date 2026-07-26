@@ -31,7 +31,7 @@ var bootRegisteredActuators = map[string]string{
 // them" to "the estate declares them, or the floor does not have them." That is the intended
 // CaC posture, but it converts a deleted file into a RUNTIME failure a long way from the
 // deletion: eight Steps and Triggers in the reference estate name `ansible`, and without
-// estate/actuators/ansible.yaml each of them fails at dispatch with an unknown-actuator error
+// plugins/ansible/estate/actuators/ansible.yaml each of them fails at dispatch with an unknown-actuator error
 // on a live floor. Nothing in the build would have said a word.
 //
 // So: every per-target Actuator a Step/Trigger/Baseline names must either be declared in the

@@ -206,9 +206,40 @@ Ordered so each step is provable before the next depends on it.
      `cmd/stratt-ansible` and drives it through the harness with a stand-in `ansible-runner`, covering
      ADR-0134's read-only mount, the vacuous-run refusal, and the confused-deputy gate — with no
      cluster, no Postgres, no Temporal and no ansible installed.
-2. **`plugins/ansible/` takes ownership**: its `estate/` declarations, its conformance suite, its demo.
-   One plugin end to end, as the worked example the rest are copied from. (The conformance half of this
-   now exists; the `estate/` and demo halves do not.)
+2. ~~**`plugins/ansible/` takes ownership**: its `estate/` declarations, its conformance suite, its
+   demo. One plugin end to end, as the worked example the rest are copied from.~~ **Shipped.** Its 4
+   Actuators, 6 Workflows, 2 Triggers and 3 content projects now live in `plugins/ansible/estate/`. Two
+   things this step had to settle that the ADR left open:
+   - **How an estate admits a plugin.** `<root>/plugins.yaml` names the plugin estates this estate
+     admits; `ParseDir` treats their directories as ADDITIONAL search paths for the kinds it already
+     reads, so everything merges into one flat set validated in one pass. That keeps a cross-tree
+     reference — a Blueprint here routing to a Workflow the plugin ships — an ordinary reference and
+     not a special case, and it makes D3's authority rule mechanical rather than aspirational: an
+     unadmitted plugin estate sitting right beside the estate contributes nothing.
+   - **D2 and D3 are about different acts.** D2 says developing a plugin changes nothing outside
+     `plugins/<name>/`; D3 requires admission to be a reviewable diff. Both hold, because
+     **developing ≠ deploying**: the plugin builds, tests and conformance-checks with no estate at all,
+     and `plugins.yaml` is touched once, on purpose, by whoever deploys it.
+
+   Two details worth recording because they are easy to get wrong:
+   - **`contentDir` resolves against the estate that SHIPPED the Actuator**, not the one that admitted
+     it — otherwise the plugin's content tree is unreachable the moment it moves. Guarded by
+     `TestPluginContentResolvesAgainstItsOwnEstate`, which plants a decoy at the same relative path
+     under the admitting estate.
+   - **Duplicate names must stay a hard error across estates.** `parseKind`'s seen-set spans every
+     root, so two admitted plugins declaring the same Workflow name names both files rather than
+     picking a winner by load order (§2.4).
+
+   **`demos/app-cert` did NOT move**: it spans openbao + ansible + a managed node, so by D7 it is a
+   cross-plugin scenario and stays. Ansible has no single-plugin demo to relocate.
+
+   Deployment is `task dev:stage-estate`, which now VENDORS each admitted plugin estate into the staged
+   tree under `plugins/<name>/estate/` and rewrites `plugins.yaml` to local paths — the `install` half,
+   the same materialize-into-operator-Git move `stratt pack install` makes (ADR-0033). Vendored as a
+   subtree rather than flattened for two reasons: two plugins may each ship a `content/` root and
+   flattening would collide them silently, and the deployed tree still shows which declarations came
+   from which plugin (§1.8).
+
 3. **The D2 gate** — CI proves a plugin-only diff touches nothing outside `plugins/<name>/`, with the
    two documented exceptions.
 4. **Remaining plugins**, one at a time.

@@ -32,7 +32,7 @@ jobCommand: [stratt-ansible]
 # EE pod; a Step names a file within it via `params.playbook`. Core resolves this at estate-PARSE
 # time onto the Actuator (D3) — so the content travels with the JobSpec to a remote Site, and a
 # playbook edit shows up in `stratt plan` as the change to what-will-run that it is.
-contentDir: ansible/projects/platform-baseline
+contentDir: content/platform-baseline
 # WHICH Step param names a file in that tree — so the estate load can check the reference and a
 # Step naming a playbook that is not there fails the load rather than a 3 a.m. Run (§1.8). It is
 # DECLARED for the same reason elevatedInputs below is: core walks a path this file names and

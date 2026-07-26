@@ -19,6 +19,27 @@ world), and there are no loops/conditionals/expressions (§1 — no new config l
 | `triggers/` `emitters/`                 | Trigger · Emitter                   | event/schedule → launch                                                                                                                                           |
 | `hosts/`                                | (declared-estate Connector content) | **devices-as-code** — a file that a Syncer projects (not a writable CMDB); populated in the Estate-as-Code slice ([ADR-0056](../docs/adr/0056-estate-as-code.md)) |
 | `authz/tuples.yaml`                     | —                                   | grants (pointers only, §2.5)                                                                                                                                      |
+| `plugins.yaml`                          | —                                   | which **plugin estates** this estate admits ([ADR-0137](../docs/adr/0137-a-plugin-is-a-service-not-a-subdirectory.md))                                            |
+
+## What lives here, and what does not
+
+A plugin owns its own declarations — its Actuator, the Workflows that drive it, the Triggers that
+schedule them, and the tool content they run. Those live in **`plugins/<name>/estate/`**, shipped and
+versioned by the plugin's author ([ADR-0137](../docs/adr/0137-a-plugin-is-a-service-not-a-subdirectory.md)
+D1). `estate/` is the **composition**: the Views, Intents, Blueprints and Assignments that assemble
+plugins into outcomes, plus the capability bindings that say which plugin serves which capability.
+
+**Locality is not authority.** That a plugin ships a declaration does not mean this estate runs it — an
+Actuator declaration carries a `facetNamespaces` write ceiling, so self-installation would be a vendor
+granting itself authority. [`plugins.yaml`](plugins.yaml) is where this estate says yes, and the review
+is real because admitting one is a diff (D3).
+
+Everything merges into **one flat namespace** and is validated in one pass, so a Blueprint here routing
+to a Workflow a plugin ships is an ordinary reference. Two admitted plugins declaring the same name is a
+hard error naming both files — never a silent winner (§2.4).
+
+The ansible declarations moved out under this rule; they now live in
+[`plugins/ansible/estate/`](../plugins/ansible/estate/).
 
 ## The flagship: `linux-fleet` (the layered / CDK-style construct model)
 
@@ -31,8 +52,10 @@ declarative constructs (the useful half of AWS CDK — see ADR-0055):
   — the "template Z" (L2 construct with defaults) bound to the group; the compiler drift-checks every member.
   The flagship REUSES the one `fileset` Blueprint (a namespace has a single Blueprint owner, §2.1; additive keys
   union within it), so the fleet's `sshd-config` key and web-files' `nginx-conf` key coexist in `fileset.content`.
-- **`workflows/linux-onboard.yaml`** — the L3 onboarding lifecycle: `Gate → provision (Action) → configure
-(ansible)`. The provision Step's `action` is the **landscape binding** — `awsec2/create-vm` in dev, swappable
+- **[`plugins/ansible/estate/workflows/linux-onboard.yaml`](../plugins/ansible/estate/workflows/linux-onboard.yaml)**
+  — the L3 onboarding lifecycle: `Gate → provision (Action) → configure
+(ansible)`. It lives with the plugin that executes it (ADR-0137 D1) and reaches this estate through
+  [`plugins.yaml`](plugins.yaml). The provision Step's `action` is the **landscape binding** — `awsec2/create-vm` in dev, swappable
   for a `crossplane`/`opentofu`/`vsphere` Action without touching the rest of the estate. Provisioning is
   **gated** (§5 Flow 1 — never a silent auto-launch). Cert (cert-issuer) + app (helm) Steps are the next slice.
 

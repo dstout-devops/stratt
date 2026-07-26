@@ -1,0 +1,31 @@
+# Which plugins this estate ADMITS (ADR-0137 D1/D3).
+#
+# A plugin owns its declarations — its Actuator, the Workflows that drive it, the
+# Triggers that schedule them, and the tool content they run (ADR-0137 D1). They
+# live in `plugins/<name>/estate/`, versioned and shipped by the plugin's author.
+#
+# LOCALITY IS NOT AUTHORITY. That the plugin SHIPS a declaration does not mean
+# this estate RUNS it. An Actuator declaration carries `facetNamespaces` — a write
+# ceiling — so a plugin that installed itself would be a vendor granting itself
+# authority. The list below is where the adopting estate says yes, and the review
+# is real because admitting one is a diff (ADR-0137 D3, ADR-0135 D1). Helm's
+# chart-defaults / operator-overrides shape: the plugin proposes, the operator
+# admits.
+#
+# DEVELOPING A PLUGIN NEVER TOUCHES THIS FILE — that is ADR-0137 D2, and it holds:
+# a plugin is built, tested and conformance-checked entirely inside its own
+# directory (see plugins/ansible/conformance_test.go, which needs no estate at
+# all). DEPLOYING one touches this file, exactly once, on purpose.
+#
+# The declarations merge into a SINGLE namespace. Two admitted plugins declaring
+# the same Workflow name is a hard error naming both files — never a silent
+# winner, which would be the implicit precedence §2.4 forbids.
+#
+# `path` is relative to this estate root. In this repo the plugins sit beside the
+# estate, so the path reaches into the monorepo. A production estate does not look
+# like this: the operator installs a copy into their own Git (the same
+# materialize-into-operator-Git move `stratt pack install` makes, ADR-0033) and
+# the paths are local. Both shapes load through the same code.
+plugins:
+  - name: ansible
+    path: ../plugins/ansible/estate
