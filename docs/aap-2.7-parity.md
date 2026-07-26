@@ -188,7 +188,7 @@ as independently-shipped **plugin images**, each its own CI unit (ADR-0046). Wha
 The pieces exist **today** — this is wiring + a live harness, not new subsystems:
 
 1. **Import** a real AWX **24.6.1** export via `stratt import awx` (ADR-0025; the importer now lives in
-   [plugins/awx](../plugins/awx/) per ADR-0089, with the `/api/v2` compat façade staying in
+   [plugins/ansible-automation](../plugins/ansible-automation/) per ADR-0089/0127, with the `/api/v2` compat façade staying in
    [core/internal/awxfacade](../core/internal/awxfacade/)) → Step presets + Views + Workflows +
    CredentialRefs reconciled into the estate.
 2. **Launch** an imported job template via `POST /api/v2/job_templates/{id}/launch` (ADR-0026 façade).

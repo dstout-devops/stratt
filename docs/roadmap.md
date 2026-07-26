@@ -118,10 +118,10 @@ of existing capabilities, not new phase work — the deliverables above still st
 | EC2 as the `provisioning` provider — the last enterprise add                                                     | 🟡 provider verified        | [ADR-0107](adr/0107-ec2-provisioning-provider.md); awsec2 advertises `provisioning` (enablement-gate, no resolve Action). Reconciles with the already-shipped ADR-0058 `builder:` reach-path (provider-coupled — a named §1.5 gap the class-contract refactor closes). Non-goal boundary: machine-_coordinate_ provisioning, never OS imaging/PXE (bare-metal provisioner = a plugin Stratt drives). EC2 provider #1 — GCE/KubeVirt siblings. **All four enterprise adds now landed as capability participants**                                                                                                                                                                      |
 
 **Verified in-repo (structural):** `core/internal/connectors/` is empty; `internal/actuators`,
-`internal/actions`, `internal/emitters` hold only the seam interfaces, no tool logic; **20 plugin packages**
-live in `plugins/` (ansible, ansibleproject, awsec2, awx, certissuer, chef, crossplane, declared,
-kubecontainers, kubeservices, mcp, mesh, msgraph, netbox, notify, opentofu, puppet, salt, script, vcenter),
-each self-contained with its own `go.mod` + `cmd` + `Dockerfile`; the execution path routes by registry
+`internal/actions`, `internal/emitters` hold only the seam interfaces, no tool logic; **21 plugin packages**
+live in `plugins/` (ansible, ansible-automation, awsec2, awss3, chef, crossplane, declared, helm,
+kubecontainers, kubeservices, mcp, mesh, msgraph, netbox, notify, openbao, opentofu, puppet, salt, script,
+vcenter), each self-contained with its own `go.mod` + `cmd` + `Dockerfile`; the execution path routes by registry
 lookup, not a tool-name switch, with no platform-default actuator
 (ADR-0046). The residual tool-name strings in core are legitimate — opaque routing-key registration in the
 composition root (`cmd/strattd`), the AWX `/api/v2` compat façade, and the AWX one-shot migration tool.

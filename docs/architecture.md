@@ -146,7 +146,7 @@ Key properties of the port:
 The ~20 plugins today span config management (ansible, chef, puppet, salt), IaC (opentofu, crossplane),
 virtualization/cloud/identity Syncers (vcenter, awsec2, msgraph, netbox), Kubernetes (kubecontainers,
 kubeservices), certificates (certissuer), notifications (notify), the generic MCP transport (mcp), and
-the AWX migration tool (awx).
+the Ansible Automation Platform Connector (ansible-automation).
 
 ## Identity, authorization, audit — one model for everyone
 

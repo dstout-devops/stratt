@@ -11,10 +11,9 @@ use (
 	./core
 	./packs
 	./plugins/ansible
-	./plugins/ansibleproject
+	./plugins/ansible-automation
 	./plugins/awsec2
 	./plugins/awss3
-	./plugins/awx
 	./plugins/openbao
 	./plugins/chef
 	./plugins/crossplane

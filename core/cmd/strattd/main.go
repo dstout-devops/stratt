@@ -995,32 +995,35 @@ func run(ctx context.Context, log *slog.Logger) error {
 	// retired; the FILE stays authoritative (§1.2) and no tombstone scheme means a dropped
 	// host is never silently deleted (§5).
 
-	// ── AWX/AAP Connector: mirror the automation estate over the port (ADR-0025 arc) ──
-	// A read-only Syncer projecting an AWX Controller's job templates/workflows/schedules/
-	// orgs/teams as `ansible.*` ObservedEntities (§1.2 — AWX stays SoR and keeps executing;
-	// the mirror never materializes an executable Stratt Workflow — `stratt adopt` is the
-	// deliberate take-authority act, never an import: the projection is always-on, adopt
-	// flips an already-observed object to Stratt-managed). The grant owns the five ansible.* Facet + identity schemes
-	// (the schedule→template / team→org edges cross by those same owned schemes). Per §2.1
-	// the SOURCE NAME must be distinct per Controller so two Controllers never share a
-	// tombstone key — set STRATT_AWX_SOURCE_NAME per Controller (default carries the id).
-	if addr := os.Getenv("STRATT_AWX_PLUGIN_ADDR"); addr != "" {
-		ctrlID := env("STRATT_AWX_CONTROLLER_ID", "awx")
-		sourceName := env("STRATT_AWX_SOURCE_NAME", "awx-"+ctrlID)
-		interval, err := time.ParseDuration(env("STRATT_AWX_INTERVAL", "60s"))
+	// ── ansible-automation, CONTROLLER half: mirror the AAP estate (ADR-0025 arc, ADR-0127) ──
+	// One plugin, TWO Grants, TWO Sources (ADR-0127 D1) — this block is the first. A read-only
+	// Syncer projecting an AAP Controller's job templates/workflows/schedules/orgs/teams as
+	// `ansible.*` ObservedEntities (§1.2 — AAP stays SoR and keeps executing; the mirror never
+	// materializes an executable Stratt Workflow — `stratt adopt` is the deliberate
+	// take-authority act, never an import: the projection is always-on, adopt flips an
+	// already-observed object to Stratt-managed). The grant owns the five ansible.* Facet +
+	// identity schemes (the schedule→template / team→org edges cross by those same owned
+	// schemes). Per §2.1 the SOURCE NAME must be distinct per Controller so two Controllers
+	// never share a tombstone key — set STRATT_ANSIBLE_CONTROLLER_SOURCE_NAME per Controller
+	// (default carries the id). The plugin ADDRESS is per Controller too: endpoint/credential
+	// are instance config, so each Source is its own instance of the one image (ADR-0127 D1).
+	if addr := os.Getenv("STRATT_ANSIBLE_CONTROLLER_PLUGIN_ADDR"); addr != "" {
+		ctrlID := env("STRATT_ANSIBLE_CONTROLLER_ID", "controller")
+		sourceName := env("STRATT_ANSIBLE_CONTROLLER_SOURCE_NAME", "ansible-controller-"+ctrlID)
+		interval, err := time.ParseDuration(env("STRATT_ANSIBLE_CONTROLLER_INTERVAL", "60s"))
 		if err != nil {
-			return fmt.Errorf("awx interval: %w", err)
+			return fmt.Errorf("ansible-automation controller interval: %w", err)
 		}
 		conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
 		if err != nil {
-			return fmt.Errorf("awx plugin dial %s: %w", addr, err)
+			return fmt.Errorf("ansible-automation controller plugin dial %s: %w", addr, err)
 		}
 		defer conn.Close()
 		ansibleSchemes := []string{"ansible.template", "ansible.workflow", "ansible.schedule", "ansible.org", "ansible.team"}
 		grant := pluginhost.Grant{
-			PluginIdentity: env("STRATT_AWX_PLUGIN_ID", "awx"),
-			Tier:           pluginhost.Tier(env("STRATT_AWX_TIER", "trusted")),
-			Source:         types.Source{Kind: "awx", Name: sourceName, Endpoint: os.Getenv("STRATT_AWX_ENDPOINT")},
+			PluginIdentity: env("STRATT_ANSIBLE_CONTROLLER_PLUGIN_ID", "ansible-automation"),
+			Tier:           pluginhost.Tier(env("STRATT_ANSIBLE_CONTROLLER_TIER", "trusted")),
+			Source:         types.Source{Kind: "ansible.controller", Name: sourceName, Endpoint: os.Getenv("STRATT_ANSIBLE_CONTROLLER_ENDPOINT")},
 			LabelKeys:      []string{"ansible.name", "ansible.org"},
 			// The five ansible.* projection namespaces the Connector owns (its manifest
 			// advertises exactly these; registration fails on any mismatch). Each is also
@@ -1028,54 +1031,59 @@ func run(ctx context.Context, log *slog.Logger) error {
 			// owned-by / member-of) reference these same owned schemes.
 			FacetNamespaces: ansibleSchemes,
 			// IdentitySchemes ⊇ FacetNamespaces PLUS ansible.playbook — a POINTABLE-ONLY
-			// scheme: AWX emits the cross-source `runs` edge onto ansible.playbook (owned by
-			// the ansible-project Syncer) but never writes its facets (not in FacetNamespaces).
-			// An extra IdentityScheme beyond the manifest is legal — Register only requires
+			// scheme: the Controller half emits the cross-source `runs` edge onto
+			// ansible.playbook (owned by the CONTENT half's Source, never this one) but never
+			// writes its facets (not in FacetNamespaces). That cross-source character is the
+			// reason the two halves must not share a Source (ADR-0085/0127 D1). An extra
+			// IdentityScheme beyond the manifest is legal — Register only requires
 			// TombstoneSchemes ⊆ IdentitySchemes and Contracts ⊆ FacetNamespaces.
 			IdentitySchemes: append(append([]string{}, ansibleSchemes...), "ansible.playbook"),
 		}
-		awxClient := pluginv1.NewPluginServiceClient(conn)
-		host := pluginhost.New(store, awxClient, grant, log)
+		ctrlClient := pluginv1.NewPluginServiceClient(conn)
+		host := pluginhost.New(store, ctrlClient, grant, log)
 		controllers = append(controllers, homeSupervise(sourceName, host.Register, func(cctx context.Context) error {
 			return host.SyncLoop(cctx, interval)
 		}))
-		// The AWX Connector declares a cutover descriptor in its manifest — collect it for the
+		// The Controller half declares a cutover descriptor in its manifest — collect it for the
 		// standing cutover reconciler (ADR-0087; the reconciler reads the descriptor blindly).
-		cutoverClients = append(cutoverClients, awxClient)
-		// The SAME plugin also provides the adopt/materialize Action (ADR-0089): the AWX→CaC
-		// transform is tool breadth living in the plugin, dispatched by the tool-blind RunAction
-		// path over the port (the awsec2 dual-class shape). The plugin resolves the AWX
-		// CredentialRef via its own SecretBroker in-pod (§2.5); strattd carries no AWX transform.
+		cutoverClients = append(cutoverClients, ctrlClient)
+		// The SAME plugin instance also provides the adopt/materialize Action (ADR-0089): the
+		// AWX→CaC transform is tool breadth living in the plugin, dispatched by the tool-blind
+		// RunAction path over the port (the awsec2 dual-class shape). The plugin resolves the
+		// Controller CredentialRef via its own SecretBroker in-pod (§2.5); strattd carries no
+		// AWX transform. The content half brokers nothing and advertises no Action.
 		if err := registerPluginAction("adopt/materialize", host, false); err != nil {
 			return err
 		}
-		log.Info("adopt/materialize Action registered on the AWX Connector (ADR-0089)")
+		log.Info("adopt/materialize Action registered on the ansible-automation Controller half (ADR-0089)")
 	} else {
-		log.Info("no AWX Connector configured (STRATT_AWX_PLUGIN_ADDR empty); syncer idle")
+		log.Info("no ansible-automation Controller half configured (STRATT_ANSIBLE_CONTROLLER_PLUGIN_ADDR empty); syncer idle")
 	}
 
-	// ── ansible-project Connector: "Ansible without AWX" over the port (ADR-0025 arc) ──
-	// A read-only Syncer projecting a raw Ansible content root (a mounted Git checkout of
-	// playbooks/roles/requirements.yml/inventory) as `ansible.*` ObservedEntities — the
-	// PRIMITIVE half of the `ansible` domain the AWX Connector's orchestration half feeds
-	// (§1.2 — Git stays SoR; nothing is written back or executed; the mirror never
-	// materializes an executable Stratt Workflow — `stratt adopt` is the deliberate
-	// take-authority act, never an import: we are always connected and simply know).
-	// The grant owns EXACTLY the four ansible.* Facet+identity schemes the plugin populates
-	// (§1.1: own what you project) — DISJOINT from AWX's five, so the two Sources co-project
-	// `ansible.*` with no overlap and no cross-source tombstone (ADR-0042/0060). Per §2.1 the
-	// SOURCE NAME is distinct per content root — set STRATT_ANSIBLE_PROJECT_SOURCE_NAME per
-	// project (default carries the project id).
-	if addr := os.Getenv("STRATT_ANSIBLE_PROJECT_PLUGIN_ADDR"); addr != "" {
-		projectID := env("STRATT_ANSIBLE_PROJECT_ID", "ansible")
-		sourceName := env("STRATT_ANSIBLE_PROJECT_SOURCE_NAME", "ansible-project-"+projectID)
-		interval, err := time.ParseDuration(env("STRATT_ANSIBLE_PROJECT_INTERVAL", "60s"))
+	// ── ansible-automation, CONTENT half: "Ansible without AWX" (ADR-0025 arc, ADR-0127) ──
+	// The SECOND Grant of the same plugin (ADR-0127 D1) — a separate instance of the one image
+	// run with STRATT_ANSIBLE_AUTOMATION_ROLE=content. A read-only Syncer projecting a raw
+	// Ansible content root (a mounted Git checkout of playbooks/roles/requirements.yml/
+	// inventory) as `ansible.*` ObservedEntities — the PRIMITIVE half of the `ansible` domain
+	// the Controller half's orchestration feeds (§1.2 — Git stays SoR; nothing is written back
+	// or executed; the mirror never materializes an executable Stratt Workflow — `stratt adopt`
+	// is the deliberate take-authority act, never an import: we are always connected and simply
+	// know). The grant owns EXACTLY the four ansible.* Facet+identity schemes the plugin
+	// populates (§1.1: own what you project) — DISJOINT from the Controller half's five, so the
+	// two Sources co-project `ansible.*` with no overlap and no cross-source tombstone
+	// (ADR-0042/0060). A SHARED Source would blank half the mirror on every full sync; that is
+	// the whole reason one plugin still means two Sources. Per §2.1 the SOURCE NAME is distinct
+	// per content root — set STRATT_ANSIBLE_CONTENT_SOURCE_NAME per root (default carries the id).
+	if addr := os.Getenv("STRATT_ANSIBLE_CONTENT_PLUGIN_ADDR"); addr != "" {
+		contentID := env("STRATT_ANSIBLE_CONTENT_ID", "ansible")
+		sourceName := env("STRATT_ANSIBLE_CONTENT_SOURCE_NAME", "ansible-content-"+contentID)
+		interval, err := time.ParseDuration(env("STRATT_ANSIBLE_CONTENT_INTERVAL", "60s"))
 		if err != nil {
-			return fmt.Errorf("ansible-project interval: %w", err)
+			return fmt.Errorf("ansible-automation content interval: %w", err)
 		}
 		conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
 		if err != nil {
-			return fmt.Errorf("ansible-project plugin dial %s: %w", addr, err)
+			return fmt.Errorf("ansible-automation content plugin dial %s: %w", addr, err)
 		}
 		defer conn.Close()
 		// The four ansible.* projection namespaces this Connector owns (its manifest
@@ -1083,9 +1091,9 @@ func run(ctx context.Context, log *slog.Logger) error {
 		// artifact's identity scheme. No relation schemes this slice (flat projection).
 		primitiveSchemes := []string{"ansible.playbook", "ansible.role", "ansible.collection", "ansible.inventory"}
 		grant := pluginhost.Grant{
-			PluginIdentity:  env("STRATT_ANSIBLE_PROJECT_PLUGIN_ID", "ansibleproject"),
-			Tier:            pluginhost.Tier(env("STRATT_ANSIBLE_PROJECT_TIER", "trusted")),
-			Source:          types.Source{Kind: "ansible-project", Name: sourceName},
+			PluginIdentity:  env("STRATT_ANSIBLE_CONTENT_PLUGIN_ID", "ansible-automation"),
+			Tier:            pluginhost.Tier(env("STRATT_ANSIBLE_CONTENT_TIER", "trusted")),
+			Source:          types.Source{Kind: "ansible.content", Name: sourceName},
 			LabelKeys:       []string{"ansible.name", "ansible.project"},
 			FacetNamespaces: primitiveSchemes,
 			IdentitySchemes: primitiveSchemes,
@@ -1095,7 +1103,7 @@ func run(ctx context.Context, log *slog.Logger) error {
 			return host.SyncLoop(cctx, interval)
 		}))
 	} else {
-		log.Info("no ansible-project Connector configured (STRATT_ANSIBLE_PROJECT_PLUGIN_ADDR empty); syncer idle")
+		log.Info("no ansible-automation content half configured (STRATT_ANSIBLE_CONTENT_PLUGIN_ADDR empty); syncer idle")
 	}
 
 	// ── NetBox topology Syncer over the port (ADR-0059) ──────────────────────
