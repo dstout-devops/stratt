@@ -10,7 +10,7 @@ design must reconcile with. Chronological list: [README.md](README.md); phase vi
 
 ```mermaid
 graph TD
-  actuators["actuators<br/><small>0016 0022 0050 0053 0092 0117<br/>0124 0126 0133</small>"]
+  actuators["actuators<br/><small>0016 0022 0050 0053 0092 0117<br/>0124 0126 0133 0134</small>"]
   api_surface["api-surface<br/><small>0006 0021 0026 0076 0091 0121</small>"]
   audit_telemetry["audit-telemetry<br/><small>0034 0065 0077 0121</small>"]
   authz_identity["authz-identity<br/><small>0009 0028 0035 0079 0101 0122<br/>0130</small>"]
@@ -18,12 +18,12 @@ graph TD
   certificates_pki["certificates-pki<br/><small>0030 0043 0050 0098 0106</small>"]
   connectors["connectors<br/><small>0007 0014 0025 0026 0037 0038<br/>0039 0045 0086 0087 0088 0089<br/>0095 0097 0099 0113 0114 0115<br/>0127 0128 0129 0130 0131 0132<br/>0133</small>"]
   credentials_secrets["credentials-secrets<br/><small>0009 0029 0052 0094 0098 0099<br/>0100 0106 0125 0126</small>"]
-  estate_as_code["estate-as-code<br/><small>0055 0056 0057 0103 0113 0116<br/>0118 0119 0120 0122 0123 0132</small>"]
+  estate_as_code["estate-as-code<br/><small>0055 0056 0057 0103 0113 0116<br/>0118 0119 0120 0122 0123 0132<br/>0134</small>"]
   findings_drift["findings-drift<br/><small>0019 0020 0033 0043 0080 0085<br/>0128 0129 0130 0133</small>"]
   foundation["foundation<br/><small>0001 0002 0004 0005 0006 0008<br/>0108 0109 0116</small>"]
   graph_model["graph-model<br/><small>0015 0017 0041 0042 0059 0060<br/>0079 0080 0081 0082 0084 0085<br/>0096 0114 0115 0119 0120 0123<br/>0126 0127 0128 0129 0130 0132<br/>0133</small>"]
   intent_compiler["intent-compiler<br/><small>0023 0030 0036 0055 0058 0083<br/>0085 0114 0118 0119 0123</small>"]
-  orchestration["orchestration<br/><small>0010 0011 0018 0027 0031 0063<br/>0118 0122 0125</small>"]
+  orchestration["orchestration<br/><small>0010 0011 0018 0027 0031 0063<br/>0118 0122 0125 0134</small>"]
   plugin_port["plugin-port<br/><small>0046 0047 0048 0049 0051 0053<br/>0054 0103 0117 0121 0124 0125<br/>0127 0131</small>"]
   policy_governance["policy-governance<br/><small>0061 0062 0063 0064 0065 0066<br/>0067 0068 0069 0070 0071 0072<br/>0073 0074 0075 0076 0122</small>"]
   provisioning["provisioning<br/><small>0017 0058 0095 0096 0107 0110<br/>0111 0112 0113 0114 0115 0120<br/>0123</small>"]
@@ -93,6 +93,7 @@ Actuators — execution engines (opentofu, helm, mcp, cert-issuer reconcile).
 - [ADR-0124](0124-ee-content-supply-factory-and-offline-source.md) — EE content supply: an `execution-environment.yml` front door, and an offline source that is verified the same way
 - [ADR-0126](0126-managed-node-reachability-credential-host-key-and-jump.md) — Reaching a managed node: the connection credential, the host key, and the jump path
 - [ADR-0133](0133-execution-environments-and-instance-groups.md) — An AWX execution environment is a supply-chain fact; an instance group is a placement model we already have
+- [ADR-0134](0134-tool-content-lives-beside-the-estate.md) — A playbook is a playbook: tool content lives beside the estate, not inside a declaration
 
 ### api-surface
 
@@ -228,6 +229,7 @@ Estate-as-Code — CaC declarations, environments, composition, the estate CLI.
 - [ADR-0122](0122-change-context-is-typed-and-partly-derived.md) — The change context is typed, and the facts core can know are derived, not asserted
 - [ADR-0123](0123-keyed-placement-aware-spread.md) — Keyed, placement-aware spread: identity survives a zone-list edit, and declared placement finally reaches the build
 - [ADR-0132](0132-awx-labels-and-schedule-shape.md) — Two "mechanical" projection gaps that were not: AWX labels, and what a schedule actually runs
+- [ADR-0134](0134-tool-content-lives-beside-the-estate.md) — A playbook is a playbook: tool content lives beside the estate, not inside a declaration
 
 ### findings-drift
 
@@ -325,6 +327,7 @@ Orchestration — Triggers, Workflows/Gates, Steps, Runs, Actions, notifications
 - [ADR-0118](0118-parameter-plane.md) — The parameter plane: values reach the things that execute
 - [ADR-0122](0122-change-context-is-typed-and-partly-derived.md) — The change context is typed, and the facts core can know are derived, not asserted
 - [ADR-0125](0125-notification-sinks-are-drivers-not-a-core-switch.md) — Notification sinks are drivers behind a seam, not a switch in the daemon
+- [ADR-0134](0134-tool-content-lives-beside-the-estate.md) — A playbook is a playbook: tool content lives beside the estate, not inside a declaration
 
 ### plugin-port
 
@@ -576,3 +579,4 @@ UI — React shell, schema-driven rendering, Views, descent, the first-party cli
 | [0131](0131-controller-poll-cost-budget.md) | connectors, plugin-port, substrate-ops |
 | [0132](0132-awx-labels-and-schedule-shape.md) | connectors, estate-as-code, graph-model |
 | [0133](0133-execution-environments-and-instance-groups.md) | actuators, connectors, findings-drift, graph-model |
+| [0134](0134-tool-content-lives-beside-the-estate.md) | actuators, estate-as-code, orchestration |
