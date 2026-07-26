@@ -16,7 +16,9 @@ import (
 // fakeManifest is a ManifestFetcher backed by a static addr→advertised-capabilities map,
 // so provider verification (ADR-0104 D1) exercises without a live plugin.
 func fakeManifest(caps map[string][]string) ManifestFetcher {
-	return func(_ context.Context, addr string) ([]string, error) { return caps[addr], nil }
+	return func(_ context.Context, addr string) (PluginManifest, error) {
+		return PluginManifest{Capabilities: caps[addr]}, nil
+	}
 }
 
 // verificationRow fetches one provider's persisted verification outcome (test helper).
@@ -230,11 +232,11 @@ func TestVerificationTransientBlipPreservesVerdict(t *testing.T) {
 	r := New(s, plugins, homegate.Deps{}, nil, lazyDial, time.Second, discard())
 
 	blip := false
-	r.manifest = func(_ context.Context, _ string) ([]string, error) {
+	r.manifest = func(_ context.Context, _ string) (PluginManifest, error) {
 		if blip {
-			return nil, errors.New("dial blip")
+			return PluginManifest{}, errors.New("dial blip")
 		}
-		return []string{"keycustodian"}, nil
+		return PluginManifest{Capabilities: []string{"keycustodian"}}, nil
 	}
 
 	if err := s.UpsertConnector(ctx, types.Connector{Name: "t-blip", Class: types.ConnectorSyncer, Address: "localhost:9099", PluginIdentity: "b", Source: types.Source{Kind: "b", Name: "t-blip"}, Provides: []string{"keycustodian"}}); err != nil {

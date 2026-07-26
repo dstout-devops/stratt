@@ -123,6 +123,31 @@ func TestGetManifest_ActuatorPlanApplyNoDestroy(t *testing.T) {
 	}
 }
 
+// The INVOKE verb above says "this plugin serves a targetless Action"; it does not say WHICH.
+// For a long time this Manifest stopped there — the estate declared `actionNames: [helm/deploy]`
+// and core registered it without ever asking the plugin, because dispatch needs only the name.
+// The Action must be advertised with the Contracts it conformance-checks against, so core can
+// verify the declaration against the plugin's own account of what it ships (§1.5).
+func TestGetManifest_AdvertisesTheDeployAction(t *testing.T) {
+	m, _ := newServer(&fakeHelm{}).GetManifest(context.Background(), &pluginv1.GetManifestRequest{})
+	var got *pluginv1.ActionDecl
+	for _, a := range m.GetManifest().GetActions() {
+		if a.GetName() == actionDeploy {
+			got = a
+		}
+	}
+	if got == nil {
+		t.Fatalf("the INVOKE verb is advertised but %q is not — an Action core cannot verify against the "+
+			"Manifest is one the estate grants unchecked", actionDeploy)
+	}
+	if in := got.GetInput().GetSchemaId(); in != "actions/helm/deploy.input" {
+		t.Errorf("input contract = %q; it must name the document core validates a helm/deploy Step against", in)
+	}
+	if out := got.GetOutput().GetSchemaId(); out != "actions/helm/deploy.output" {
+		t.Errorf("output contract = %q", out)
+	}
+}
+
 type invokeCapture struct {
 	grpc.ServerStream
 	ctx  context.Context

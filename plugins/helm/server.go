@@ -79,6 +79,19 @@ func (s *Server) GetManifest(context.Context, *pluginv1.GetManifestRequest) (*pl
 		Verbs: []pluginv1.Verb{
 			pluginv1.Verb_VERB_PLAN, pluginv1.Verb_VERB_APPLY, pluginv1.Verb_VERB_INVOKE,
 		},
+		// The targetless Action the INVOKE verb above refers to. It was missing: the verb was
+		// advertised, `contracts/actions/helm/deploy.{input,output}` existed, and the estate
+		// declared `actionNames: [helm/deploy]` — but the Manifest named no Action, so core
+		// registered the dispatch entry on the estate's word alone. Dispatch worked (it needs
+		// only the name), which is exactly why nothing surfaced it.
+		Actions: []*pluginv1.ActionDecl{{
+			Name:   actionDeploy,
+			Input:  &pluginv1.ContractRef{SchemaId: "actions/helm/deploy.input"},
+			Output: &pluginv1.ContractRef{SchemaId: "actions/helm/deploy.output"},
+			// upgrade --install converges to the same release state on a re-run.
+			Idempotent:  true,
+			DryRunnable: true, // helm upgrade --dry-run=server
+		}},
 		Capabilities: []string{"apply.dry-run"}, // helm upgrade --dry-run=server
 		MinProtocol:  protocolVersion,
 		MaxProtocol:  protocolVersion,

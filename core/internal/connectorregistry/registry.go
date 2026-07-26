@@ -37,10 +37,33 @@ import (
 // Dialer opens a gRPC connection to a plugin endpoint (grpc.NewClient in production).
 type Dialer func(addr string) (*grpc.ClientConn, error)
 
-// ManifestFetcher returns the capability tokens a plugin at addr advertises in its Manifest
-// — the §1.5 VERIFICATION input for provider verification (ADR-0104 D1), distinct from the
-// operator's declared `provides`. Injectable so tests need no live plugin.
-type ManifestFetcher func(ctx context.Context, addr string) ([]string, error)
+// AdvertisedAction is one ActionDecl as core reads it: the dispatch-name selector plus the
+// Contract IDs the plugin says it conformance-checks that Action's args/outputs against.
+//
+// Core keeps the ids OPAQUE — it never reads the plugin's schema to interpret content (§1.5,
+// port invariant #5). It only checks that an id NAMES a document core also holds, because a
+// Contract core cannot resolve is one it cannot validate a Step against; the plugin would be
+// checking args against a document core has never seen.
+type AdvertisedAction struct {
+	Name           string
+	InputContract  string
+	OutputContract string
+}
+
+// PluginManifest is the core-side view of a plugin's Manifest — the §1.5 VERIFICATION input,
+// distinct from the operator's declaration. Injectable so tests need no live plugin.
+//
+// It carries only what core acts on. `Capabilities` verifies declared `provides` (ADR-0104 D1);
+// `Actions` verifies declared `actionNames` (below). Widening this struct is how a new
+// advertisement reaches core — the fetcher signature stops being the bottleneck it was when it
+// returned a bare []string and discarded everything else the plugin said.
+type PluginManifest struct {
+	Capabilities []string
+	Actions      []AdvertisedAction
+}
+
+// ManifestFetcher fetches a plugin's advertised Manifest from addr.
+type ManifestFetcher func(ctx context.Context, addr string) (PluginManifest, error)
 
 // Status is the per-declaration runtime enable state (ADR-0103 D6): observable so a declared
 // Connector/Actuator that silently isn't running shows WHY (dial error, §2.4 collision, …).
@@ -95,17 +118,26 @@ func New(store *graph.Store, plugins *orchestrate.PluginRegistry, homeDeps homeg
 
 // dialManifest is the production ManifestFetcher: a short-lived dial to the plugin's
 // sovereign-port endpoint that reads its advertised capabilities and closes the connection.
-func (r *Registry) dialManifest(ctx context.Context, addr string) ([]string, error) {
+func (r *Registry) dialManifest(ctx context.Context, addr string) (PluginManifest, error) {
 	conn, err := r.dial(addr)
 	if err != nil {
-		return nil, err
+		return PluginManifest{}, err
 	}
 	defer conn.Close()
 	resp, err := pluginv1.NewPluginServiceClient(conn).GetManifest(ctx, &pluginv1.GetManifestRequest{})
 	if err != nil {
-		return nil, err
+		return PluginManifest{}, err
 	}
-	return resp.GetManifest().GetCapabilities(), nil
+	m := resp.GetManifest()
+	out := PluginManifest{Capabilities: m.GetCapabilities()}
+	for _, a := range m.GetActions() {
+		out.Actions = append(out.Actions, AdvertisedAction{
+			Name:           a.GetName(),
+			InputContract:  a.GetInput().GetSchemaId(),
+			OutputContract: a.GetOutput().GetSchemaId(),
+		})
+	}
+	return out, nil
 }
 
 // ── status (D6) ─────────────────────────────────────────────────────────────
@@ -187,11 +219,11 @@ func (r *Registry) ReconcileActuators(ctx context.Context) {
 			}
 			r.disableActuatorLocked(name, e) // spec changed → re-enable fresh
 		}
-		r.enableActuatorLocked(a, spec, res)
+		r.enableActuatorLocked(ctx, a, spec, res)
 	}
 }
 
-func (r *Registry) enableActuatorLocked(a types.Actuator, spec string, res resolution) {
+func (r *Registry) enableActuatorLocked(ctx context.Context, a types.Actuator, spec string, res resolution) {
 	key := "actuator/" + a.Name
 	// Capability dependency gate (ADR-0104 D3): withhold the Actuator from the dispatch table
 	// while any required capability is unmet/ambiguous — surfaced as a PENDING D6 status, not a
@@ -214,6 +246,19 @@ func (r *Registry) enableActuatorLocked(a types.Actuator, spec string, res resol
 		}
 		conn = c
 		client = pluginv1.NewPluginServiceClient(c)
+		if err := r.verifyDeclaredActions(ctx, a.Address, a.ActionNames); err != nil {
+			conn.Close()
+			r.setStatus(key, false, err.Error())
+			r.log.Warn("connectorregistry: actuator actionNames rejected", "name", a.Name, "err", err)
+			return
+		}
+	} else if len(a.ActionNames) > 0 {
+		// An EE-Job Actuator has no dial address, so its advertisement cannot be fetched —
+		// the same dial-less verification gap ADR-0138 D5 books for `provides`. No shipped
+		// declaration is in this shape; when one is, it registers UNVERIFIED rather than
+		// silently appearing checked.
+		r.log.Warn("connector registry: actionNames not verifiable on an EE-Job Actuator (no dial address, ADR-0138 D5)",
+			"name", a.Name, "actions", a.ActionNames)
 	}
 	host := pluginhost.New(r.store, client, grant, r.log)
 	if r.plans != nil {
@@ -338,6 +383,12 @@ func (r *Registry) enableConnectorLocked(ctx context.Context, c types.Connector,
 	if err != nil {
 		r.setStatus(key, false, "dial "+c.Address+": "+err.Error())
 		r.log.Warn("connectorregistry: connector dial failed", "name", c.Name, "err", err)
+		return
+	}
+	if aerr := r.verifyDeclaredActions(ctx, c.Address, c.ActionNames); aerr != nil {
+		conn.Close()
+		r.setStatus(key, false, aerr.Error())
+		r.log.Warn("connectorregistry: connector actionNames rejected", "name", c.Name, "err", aerr)
 		return
 	}
 	host := pluginhost.New(r.store, pluginv1.NewPluginServiceClient(conn), connectorGrant(c), r.log)
@@ -643,12 +694,12 @@ func (r *Registry) verifyProvider(ctx context.Context, addr string, provides []s
 	if addr == "" {
 		return provUnverifiable, "provider has no dial address (EE-Job providers are not yet manifest-verifiable, ADR-0104 D1)"
 	}
-	caps, err := r.manifest(ctx, addr)
+	m, err := r.manifest(ctx, addr)
 	if err != nil {
 		return provUnreachable, "manifest fetch failed: " + err.Error()
 	}
-	advertised := make(map[string]bool, len(caps))
-	for _, c := range caps {
+	advertised := make(map[string]bool, len(m.Capabilities))
+	for _, c := range m.Capabilities {
 		advertised[c] = true
 	}
 	for _, tok := range provides {
