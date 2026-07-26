@@ -50,7 +50,15 @@ because it is the one that gets got wrong:
 | `workflows/change-review.yaml`                   | a Gate-only Workflow; names no plugin at all                                                                           |
 | `capability-bindings/`                           | the estate choosing WHICH plugin serves a capability — the choice is the estate's by definition                        |
 | `views/` `intents/` `blueprints/` `assignments/` | the composition layer: groups, and what is wanted for them                                                             |
-| `baselines/awx-*.yaml`                           | drift baselines over projected `awx.*` facets; the AWX Connector is boot-wired, so there is no declaration to own them |
+| `triggers/cert-reconcile.yaml`                   | targets the boot-registered `cert-issuer` Actuator; no declaration owns it yet                                          |
+
+
+A **View** follows the same rule as everything else: it stays here when it is a GROUP that Assignments
+bind to, and moves when it is a plugin's own projection. The nine `awx-*` Views and the six `awx-*`
+Baselines moved to [`plugins/ansible-automation/estate/`](../plugins/ansible-automation/estate/) on
+exactly that test — they select and assert over kinds only that plugin's Syncer projects
+(`ansible.template`, `ansible.schedule`, …), and no Assignment binds any of them. The salt Emitter and
+its Trigger moved to [`plugins/salt/estate/`](../plugins/salt/estate/) for the same reason.
 
 **The test is "does it span more than one plugin?", never "does it mention one."** A Workflow that
 names an ansible Actuator still belongs here if it also provisions through awsec2 — burying that

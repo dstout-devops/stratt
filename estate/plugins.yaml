@@ -29,6 +29,8 @@
 plugins:
   - name: ansible
     path: ../plugins/ansible/estate
+  - name: ansible-automation
+    path: ../plugins/ansible-automation/estate
   - name: awsec2
     path: ../plugins/awsec2/estate
   - name: awss3
@@ -47,6 +49,8 @@ plugins:
     path: ../plugins/openbao/estate
   - name: opentofu
     path: ../plugins/opentofu/estate
+  - name: salt
+    path: ../plugins/salt/estate
   - name: script
     path: ../plugins/script/estate
   - name: vcenter

@@ -132,7 +132,16 @@ compile time on a live floor (§1.8).
 
 - **A plugin can express what it needs.** Ansible requires `provisioning`; a cert plugin requires
   `certissuer`; an HSM-backed one requires `keycustodian` — none naming a provider.
-- **`linux-onboard` becomes movable** once D2 lands, and is a test of it.
+- **`linux-onboard` and `vsphere-subnet-build` become movable** once D2 lands, and are its tests. Until
+  then they stay in `estate/` because the mechanism is missing — never because a cross-capability
+  lifecycle belongs to core.
+- **Everything NOT blocked on D2 has moved.** A plugin's own projection Views and Baselines go with the
+  plugin: the nine `awx-*` Views and six `awx-*` Baselines to `plugins/ansible-automation/estate/`
+  (they select and assert over kinds only that Syncer projects, and no Assignment binds them), and the
+  salt Emitter + Trigger to `plugins/salt/estate/`. This is the case ADR-0137 step 4 explicitly left
+  open — "a plugin that ships a View of the kinds ITS Syncer projects is a different case" — and the
+  test is the same one as everywhere: a View that is a GROUP Assignments bind to stays; a View that is
+  a plugin's own projection moves.
 - **Two rules replace one wrong one:** capability dependency is encouraged; provider naming is refused.
   `plugins:boundary` check 3 already tests the right thing and now says the right thing.
 - **The `contracts/**` gate exception narrows permanently**, not temporarily: `facets/`, `intents/`,
@@ -161,8 +170,20 @@ compile time on a live floor (§1.8).
    `estate/README.md` rationale were corrected alongside this ADR.
 2. **D5's honesty half first** — refuse `remediationCapability` at DECLARATION time when no admissible
    provider shape exists, so §1.8 does not depend on reading a running floor's logs.
-3. **D2, the Step-level class** — the mechanism the rest waits on. Model it on ADR-0135 D3 exactly:
-   resolve at compile, compile a concrete Action, fail closed on PENDING/AMBIGUOUS.
+3. **D2, the Step-level class** — the mechanism the rest waits on, and **larger than this ADR first
+   assumed**. A provider's per-kind maps (`Provisions`/`Remediates`/`Decommissions`) resolve to a
+   **Workflow**, not an Action — `awsec2` advertises `Compute: compute-build`, and it is
+   `compute-build` that contains `action: awsec2/create-vm`. So a capability-typed Step must invoke a
+   **nested Workflow**, and `types.Step` has no such form: it offers `gate`, `policy`, `action`, or
+   actuation, and the orchestrator's dispatch switch has exactly those four arms. **D2 therefore
+   depends on a primitive that does not exist** — nested Workflow Steps, with their own child
+   lifecycle, output binding, failure propagation and descent. That is a substantial orchestration
+   feature and deserves its own ADR rather than being smuggled in under this one.
+
+   Shape, when it is built: the Step names a class plus the Intent kind to resolve through; an Activity
+   resolves it once before the child starts, so everything downstream — params validation, dispatch,
+   §1.8 descent — sees a concrete Workflow exactly as today; fail closed on PENDING/AMBIGUOUS, and
+   check params against EVERY candidate provider at declaration time, not just the winner.
 4. **D3/D4 relocation of the 22 self contracts**, with its own tests. `TestPinsAreStable`'s count moves
    for a structural reason — bump it because the mechanism changed, never to make a test pass.
 
