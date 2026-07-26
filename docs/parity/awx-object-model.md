@@ -8,6 +8,14 @@ AWX actually holds. The [platform audit](aap-2.7-platform.md) scores AAP by _com
 Controller 🟢 code-complete; this one goes a level down and asks whether the graph can answer questions
 about an AWX estate. Those are different questions and they have different answers.
 
+**Verification (2026-07-26).** Everything ADR-0128…0132 shipped is now proven end to end against a real
+graph store, not only at the plugin layer: `core/internal/pluginhost/awx_estate_integration_test.go`
+projects the full `ansible.*` estate through the real host path — grant gating included, because that is
+where a projection bug hides — and then resolves the **committed** estate declarations against it. It
+covers the topology-selecting `awx-prod-templates` View and asserts each boolean Baseline's facet
+predicate addresses a field that exists, since a path typo makes a Baseline silently never fire rather
+than error (§1.8). Both properties were mutation-checked.
+
 **Evidence base (2026-07-26).** Stratt column: read directly from
 [plugins/ansible-automation/](../../plugins/ansible-automation/) at commit time, every row linked. AWX
 column: the AWX 24.6.1 `/api/v2` surface from vendor documentation and the browsable API — **not** verified
