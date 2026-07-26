@@ -92,13 +92,28 @@ func list[T any](ctx context.Context, c *Client, path string) ([]T, error) {
 			return nil, fmt.Errorf("awx: decode %s: %w", path, err)
 		}
 		out = append(out, p.Results...)
-		// AWX `next` is a relative /api/v2/... path (or null at the end).
+		// AWX `next` is USUALLY a root-relative /api/v2/... path, and is null at the end
+		// — but it is not guaranteed: a Controller behind a proxy, and awxsim, both mint
+		// ABSOLUTE next links. Joining an absolute link onto our origin produced
+		// `http://host:portt://host:port/...` and an "invalid port" parse error that named
+		// neither the endpoint nor the cause (§1.8). Tolerate both, exactly as the awxapi
+		// deep-read client's resolve() already did — the two clients had drifted, and only
+		// one of them was defensive.
 		if p.Next == "" {
 			break
 		}
-		next = originOf(c.base) + p.Next
+		next = c.resolveNext(p.Next)
 	}
 	return out, nil
+}
+
+// resolveNext absolutizes a page cursor: an absolute link is taken as-is, a root-relative
+// one joins onto the endpoint origin.
+func (c *Client) resolveNext(next string) string {
+	if strings.HasPrefix(next, "http://") || strings.HasPrefix(next, "https://") {
+		return next
+	}
+	return originOf(c.base) + next
 }
 
 func truncate(b []byte) string {

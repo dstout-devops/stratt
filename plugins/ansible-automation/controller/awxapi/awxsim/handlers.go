@@ -13,6 +13,18 @@ func (s *Sim) workflowJTs(w http.ResponseWriter, r *http.Request) {
 	paged(s, w, r, "/api/v2/workflow_job_templates/", s.data.WorkflowJTs)
 }
 
+func (s *Sim) schedules(w http.ResponseWriter, r *http.Request) {
+	paged(s, w, r, "/api/v2/schedules/", s.data.Schedules)
+}
+
+func (s *Sim) organizations(w http.ResponseWriter, r *http.Request) {
+	paged(s, w, r, "/api/v2/organizations/", s.data.Organizations)
+}
+
+func (s *Sim) teams(w http.ResponseWriter, r *http.Request) {
+	paged(s, w, r, "/api/v2/teams/", s.data.Teams)
+}
+
 func (s *Sim) inventories(w http.ResponseWriter, r *http.Request) {
 	paged(s, w, r, "/api/v2/inventories/", s.data.Inventories)
 }

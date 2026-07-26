@@ -32,7 +32,10 @@ func New(base string) *Sim {
 // SetBase updates the link base (httptest servers learn their URL late).
 func (s *Sim) SetBase(base string) { s.base = strings.TrimRight(base, "/") }
 
-// Handler serves the subset of /api/v2 the importer reads.
+// Handler serves the subset of /api/v2 BOTH halves read: the adopt deep-read's
+// endpoints and — since ADR-0127's proof slice — the projection's schedules/
+// organizations/teams, which no sim served and which the Syncer's Enumerate needs (a
+// single 404 fails the whole Observe).
 func (s *Sim) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/v2/ping/", s.auth(s.ping))
@@ -42,6 +45,9 @@ func (s *Sim) Handler() http.Handler {
 	mux.HandleFunc("GET /api/v2/projects/{id}/", s.auth(s.project))
 	mux.HandleFunc("GET /api/v2/workflow_job_templates/", s.auth(s.workflowJTs))
 	mux.HandleFunc("GET /api/v2/workflow_job_templates/{id}/workflow_nodes/", s.auth(s.workflowNodes))
+	mux.HandleFunc("GET /api/v2/schedules/", s.auth(s.schedules))
+	mux.HandleFunc("GET /api/v2/organizations/", s.auth(s.organizations))
+	mux.HandleFunc("GET /api/v2/teams/", s.auth(s.teams))
 	mux.HandleFunc("GET /api/v2/inventories/", s.auth(s.inventories))
 	mux.HandleFunc("GET /api/v2/inventories/{id}/", s.auth(s.inventory))
 	mux.HandleFunc("GET /api/v2/inventories/{id}/inventory_sources/", s.auth(s.inventorySources))

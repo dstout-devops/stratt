@@ -186,6 +186,17 @@ Two paths read AWX, with different breadth, and nothing reconciles them:
 | **Projection** ([controller/types.go](../../plugins/ansible-automation/controller/types.go)) | `job_templates`, `workflow_job_templates`, `schedules`, `organizations`, `teams` — **5**                                |
 | **adopt deep-read** ([awxapi/](../../plugins/ansible-automation/controller/awxapi/))         | those + `projects`, `inventories`, `credentials`, `survey_spec`, `workflow_nodes`, `inventory_sources`, `hosts` — **9** |
 
+**Update (2026-07-26):** proving this seam found the asymmetry had also reached the **test harness**.
+`awxsim` — the shared dev/test stand-in — served only the adopt deep-read's endpoints, so the projection
+path could not run against it at all (`Enumerate` fails the whole Observe on any one collection's 404).
+The two halves of one module were exercised by two different simulators of different breadth. `awxsim` now
+serves `/schedules/`, `/organizations/`, `/teams/` and the `summary_fields.organization`/`.project` the
+projection reads, and `controller/awxsim_projection_test.go` runs the real projection against it. A third
+defect fell out: the projection client assumed `next` page links are root-relative, while the deep-read
+client tolerated absolute or relative — so an absolute link (a Controller behind a proxy, or the sim)
+produced `http://host:portt://host:port/...` and an "invalid port" error naming neither the endpoint nor
+the cause. Both clients are now defensive.
+
 Most of the difference is correct and intended: `inventories`/`credentials`/`hosts`/`survey_spec` are
 `mapped` — they become Views, CredentialRefs, and `Workflow.inputs` at adopt and were never meant to be
 mirrored as themselves. **Two are not explainable that way**: `projects` (**AWX-001**) and `workflow_nodes`

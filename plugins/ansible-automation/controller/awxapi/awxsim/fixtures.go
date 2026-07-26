@@ -18,7 +18,18 @@ type fJobTemplate struct {
 	SurveyEnabled bool   `json:"survey_enabled"`
 	SummaryFields struct {
 		Credentials []fCredSummary `json:"credentials"`
+		// The PROJECTION half reads these two and the adopt half does not — awxsim
+		// served neither until the Syncer got a sim it could run against. `project`
+		// is the join key for the cross-source `runs` edge (<project.name>/<playbook>).
+		Organization fNamed `json:"organization"`
+		Project      fNamed `json:"project"`
 	} `json:"summary_fields"`
+}
+
+// fNamed is AWX's summary_fields shape for a referenced object.
+type fNamed struct {
+	ID   int    `json:"id"`
+	Name string `json:"name"`
 }
 
 type fCredSummary struct {
@@ -36,8 +47,45 @@ type fProject struct {
 }
 
 type fWorkflowJT struct {
-	ID   int    `json:"id"`
-	Name string `json:"name"`
+	ID            int    `json:"id"`
+	Name          string `json:"name"`
+	Description   string `json:"description"`
+	SummaryFields struct {
+		Organization fNamed `json:"organization"`
+	} `json:"summary_fields"`
+}
+
+// The three objects ONLY the projection reads — awxsim served none of them, so the
+// Syncer half could not run against it at all (its Enumerate fails the whole Observe on
+// any 404). Recorded in docs/parity/awx-object-model.md as the read-path asymmetry.
+
+type fSchedule struct {
+	ID                 int    `json:"id"`
+	Name               string `json:"name"`
+	RRule              string `json:"rrule"`
+	Enabled            bool   `json:"enabled"`
+	UnifiedJobTemplate int    `json:"unified_job_template"`
+	SummaryFields      struct {
+		UnifiedJobTemplate struct {
+			ID             int    `json:"id"`
+			Name           string `json:"name"`
+			UnifiedJobType string `json:"unified_job_type"`
+		} `json:"unified_job_template"`
+	} `json:"summary_fields"`
+}
+
+type fOrganization struct {
+	ID          int    `json:"id"`
+	Name        string `json:"name"`
+	Description string `json:"description"`
+}
+
+type fTeam struct {
+	ID            int    `json:"id"`
+	Name          string `json:"name"`
+	SummaryFields struct {
+		Organization fNamed `json:"organization"`
+	} `json:"summary_fields"`
 }
 
 type fWorkflowNode struct {
@@ -112,6 +160,9 @@ type estate struct {
 	Hosts            map[int][]fHost
 	Credentials      []fCredential
 	Surveys          map[int]fSurveySpec
+	Schedules        []fSchedule
+	Organizations    []fOrganization
+	Teams            []fTeam
 }
 
 func iptr(n int) *int { return &n }
@@ -161,9 +212,40 @@ func seed() *estate {
 	jt10 := fJobTemplate{ID: 10, Name: "Deploy Web", JobType: "run", Playbook: "site.yml",
 		Project: 1, Inventory: 2, SurveyEnabled: true}
 	jt10.SummaryFields.Credentials = []fCredSummary{{ID: 1, Name: "prod-ssh", Kind: "ssh"}}
+	jt10.SummaryFields.Organization = fNamed{ID: 1, Name: "Platform"}
+	jt10.SummaryFields.Project = fNamed{ID: 1, Name: "infra"}
 	jt11 := fJobTemplate{ID: 11, Name: "Gather Facts", JobType: "run", Playbook: "facts.yml",
 		Project: 2, Inventory: 1, SurveyEnabled: false}
+	jt11.SummaryFields.Organization = fNamed{ID: 2, Name: "Legacy"}
+	jt11.SummaryFields.Project = fNamed{ID: 2, Name: "local-scripts"}
 	e.JobTemplates = []fJobTemplate{jt10, jt11}
+
+	// Orgs + teams: the tenancy/RBAC containers the projection mirrors.
+	e.Organizations = []fOrganization{
+		{ID: 1, Name: "Platform", Description: "platform engineering"},
+		{ID: 2, Name: "Legacy", Description: "inherited estate"},
+	}
+	e.Teams = []fTeam{{ID: 1, Name: "web-ops"}, {ID: 2, Name: "dba"}}
+	e.Teams[0].SummaryFields.Organization = fNamed{ID: 1, Name: "Platform"}
+	e.Teams[1].SummaryFields.Organization = fNamed{ID: 2, Name: "Legacy"}
+
+	// Schedules: THREE, so the collection spans pages (pageSize is 2) and the Syncer's
+	// paging is exercised on a projection-only endpoint. One targets a workflow rather
+	// than a job template (the schedule -> unified_job_template edge picks its target
+	// scheme from unified_job_type), and one is DISABLED — the dead-automation case the
+	// awx-schedule-enabled Baseline reads.
+	sched := func(id int, name, rrule string, enabled bool, ujt int, ujtName, ujtType string) fSchedule {
+		s := fSchedule{ID: id, Name: name, RRule: rrule, Enabled: enabled, UnifiedJobTemplate: ujt}
+		s.SummaryFields.UnifiedJobTemplate.ID = ujt
+		s.SummaryFields.UnifiedJobTemplate.Name = ujtName
+		s.SummaryFields.UnifiedJobTemplate.UnifiedJobType = ujtType
+		return s
+	}
+	e.Schedules = []fSchedule{
+		sched(30, "nightly-deploy", "DTSTART;FREQ=DAILY;INTERVAL=1", true, 10, "Deploy Web", "job_template"),
+		sched(31, "weekly-pipeline", "DTSTART;FREQ=WEEKLY;INTERVAL=1", true, 20, "prod-pipeline", "workflow_job_template"),
+		sched(32, "retired-sweep", "DTSTART;FREQ=DAILY;INTERVAL=1", false, 11, "Gather Facts", "job_template"),
+	}
 
 	// Survey for JT 10.
 	e.Surveys[10] = fSurveySpec{Name: "Deploy Web", Spec: []fSurveyQuestion{
@@ -174,7 +256,8 @@ func seed() *estate {
 	}}
 
 	// Workflow with an approval node and a success/failure fan-out.
-	e.WorkflowJTs = []fWorkflowJT{{ID: 20, Name: "prod-pipeline"}}
+	e.WorkflowJTs = []fWorkflowJT{{ID: 20, Name: "prod-pipeline", Description: "build, approve, deploy"}}
+	e.WorkflowJTs[0].SummaryFields.Organization = fNamed{ID: 1, Name: "Platform"}
 	node := func(id int, ident string, ujt int, ujtType string, ok, fail []int, timeout int) fWorkflowNode {
 		n := fWorkflowNode{ID: id, Identifier: ident, UnifiedJobTemplate: ujt,
 			SuccessNodes: ok, FailureNodes: fail, Timeout: timeout}
