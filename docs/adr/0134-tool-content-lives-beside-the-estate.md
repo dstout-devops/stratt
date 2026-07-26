@@ -126,8 +126,27 @@ beats teaching the Step to name a project:
 
 - **Per-project grants.** `facetNamespaces` is a write ceiling, and it can now differ per project — a
   project with no business writing hardening facets does not get to.
-- **Isolation.** Only the selected project's tree mounts, so a Run cannot reach another project's content.
-  A Step naming a project inside its params would have mounted everything and relied on the Step to pick.
+- **Isolation at run time.** Only the selected project's tree mounts, so a Run cannot reach another
+  project's content. A Step naming a project inside its params would have mounted everything and relied on
+  the Step to pick.
+
+  **CORRECTION (2026-07-26).** This originally read as an isolation claim without qualification, and that
+  was wrong. It holds at **run time** and not at **authoring** time: a tenant who can write a Workflow
+  declaration chooses which Actuator a Step selects, and therefore chooses whose content runs under whose
+  write ceiling. That is Argo CD's documented `.spec.project` circumvention — _"whoever can create or
+  modify Application resources … can effectively circumvent any restrictions that should be imposed by the
+  AppProject by choosing another value for the `.spec.project` field"_ — with a different field name.
+
+  Two things follow, and neither is optional:
+  1. **Actuator declarations must live in a platform-owned path**, never inside a tenant's project
+     directory. The general rule, from
+     [the ownership study](../research/multi-team-ownership.md): _a declaration may never widen the
+     authority of the team that owns it._ A write ceiling in a file its subject can edit is not a ceiling.
+  2. **Real isolation needs an authorization check on Actuator selection**, which does not exist today —
+     every launch check in the API is `runner` on `view:<name>`, and there is no authz object for an
+     Actuator or a Workflow. Until that lands, this boundary is enforced by repo review, and the study's
+     ADR (C) is this decision's dependency.
+
 - **The review point for self-service.** A platform admin reviews the Actuator (its grant, its EE image);
   the team owns the files inside their project directory. That is the same separation of duties ADR-0035
   chose when it refused auto-teaming — the directory owner decides content, the platform decides authority.
