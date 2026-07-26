@@ -6,8 +6,48 @@ import (
 	"testing"
 )
 
-// demosRoot is the demo library (/demos), relative to this package dir.
+// demosRoot is the CROSS-PLUGIN demo library (/demos), relative to this package dir.
+// Single-plugin demos do not live here — see demoEstates.
 const demosRoot = "../../../demos"
+
+// pluginsRoot is /plugins, where a single-plugin demo lives beside the plugin it
+// demonstrates (ADR-0137 D7).
+const pluginsRoot = "../../../plugins"
+
+// demoEstates finds EVERY demo estate, in both homes: the cross-plugin library
+// (demos/<name>/estate) and each plugin's own demo (plugins/<name>/demo/estate).
+//
+// Both, deliberately. ADR-0137 D7 split the demos by whether they span more than one
+// plugin, and the guards in this package must not have been quietly narrowed by that
+// move — a demo estate that stopped being checked because it changed directory is
+// worse than one that was never checked, because the census assertion still passes
+// and the coverage looks intact. Every caller asserts a non-empty result for the same
+// reason.
+func demoEstates(t *testing.T) []string {
+	t.Helper()
+	var out []string
+	for _, pat := range []string{
+		filepath.Join(demosRoot, "*", "estate"),
+		filepath.Join(pluginsRoot, "*", "demo", "estate"),
+	} {
+		dirs, err := filepath.Glob(pat)
+		if err != nil {
+			t.Fatal(err)
+		}
+		out = append(out, dirs...)
+	}
+	return out
+}
+
+// demoLabel names a demo estate for a subtest: the demo's own directory name, which
+// is <name> in demos/<name>/estate and in plugins/<plugin>/demo/estate is the plugin.
+func demoLabel(dir string) string {
+	parent := filepath.Dir(dir)
+	if filepath.Base(parent) == "demo" {
+		return filepath.Base(filepath.Dir(parent)) + "/demo"
+	}
+	return filepath.Base(parent)
+}
 
 // TestDemoEstatesParse is the standing guard that every demo in the library stays a
 // valid, reconcilable desired-state tree — the same ParseDir the daemon runs at boot.
@@ -26,15 +66,12 @@ func TestDemoEstatesParse(t *testing.T) {
 	if _, err := os.Stat(demosRoot); err != nil {
 		t.Skipf("demo library not found at %s (%v)", demosRoot, err)
 	}
-	dirs, err := filepath.Glob(filepath.Join(demosRoot, "*", "estate"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	dirs := demoEstates(t)
 	if len(dirs) == 0 {
 		t.Fatalf("no demo estates found under %s — this guard must not pass by finding nothing", demosRoot)
 	}
 	for _, dir := range dirs {
-		name := filepath.Base(filepath.Dir(dir))
+		name := demoLabel(dir)
 		t.Run(name, func(t *testing.T) {
 			decls, err := ParseDir(dir, nil)
 			if err != nil {

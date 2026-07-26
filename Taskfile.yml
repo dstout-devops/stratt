@@ -326,9 +326,16 @@ tasks:
           p=$(grep -m1 "pluginIdentity:" "$f" | sed 's/.*pluginIdentity:[[:space:]]*//' | tr -d '"')
           [ -n "$n" ] && [ -n "$p" ] && echo "$n=$p"
         done)
-        for d in plugins/*/estate; do
+        # Both a plugin's own estate AND its demo's estate: a SINGLE-plugin demo is what
+        # earns a demo the right to live inside a plugin (D7), so it is held to the same
+        # rule as the declarations beside it.
+        for d in plugins/*/estate plugins/*/demo/estate; do
           [ -d "$d" ] || continue
-          self=$(basename "$(dirname "$d")")
+          self=$(basename "$d")
+          case "$d" in
+            */demo/estate) self=$(basename "$(dirname "$(dirname "$d")")") ;;
+            *)             self=$(basename "$(dirname "$d")") ;;
+          esac
           for f in $(find "$d" -name '*.yaml' -o -name '*.yml' 2>/dev/null); do
             for ref in $(grep -oE "^[[:space:]]*(actuator|action):[[:space:]]*[A-Za-z0-9/_-]+" "$f" 2>/dev/null \
                          | sed 's/.*:[[:space:]]*//'); do
@@ -344,6 +351,28 @@ tasks:
               fi
             done
           done
+        done
+
+        # ── 4. demos/ holds CROSS-plugin scenarios only ──────────────────────────
+        # D7: a demo that exercises ONE plugin belongs beside that plugin; demos/ is
+        # for scenarios that span several, which is the only thing no single plugin
+        # can own. Without this the split silently re-scatters — a new single-plugin
+        # demo lands in demos/ because that is where demos "go", and the tree drifts
+        # back to where it started one file at a time.
+        #
+        # A demo's span is read the same way its estate declares it: pluginIdentity on
+        # its Actuators/Connectors, plus the `<plugin>/` prefix of any Action it calls.
+        for d in demos/*/; do
+          [ -d "${d}estate" ] || continue
+          spans=$({ grep -rhoE "pluginIdentity:[[:space:]]*[a-z0-9-]+" "$d" 2>/dev/null | sed 's/.*:[[:space:]]*//'
+                    grep -rhoE "^[[:space:]]+action:[[:space:]]*[a-z0-9-]+/" "$d" 2>/dev/null | sed 's|.*:[[:space:]]*||; s|/||'
+                  } | sort -u | tr '\n' ' ' | sed 's/ *$//')
+          n=$(echo "$spans" | wc -w)
+          if [ "$n" -eq 1 ]; then
+            echo "  ✗ demo '$(basename "$d")' exercises only '$spans' — a single-plugin demo belongs in"
+            echo "      plugins/$spans/demo/, not in demos/ (ADR-0137 D7)"
+            fail=1
+          fi
         done
 
         if [ "$fail" -ne 0 ]; then
@@ -983,7 +1012,7 @@ tasks:
     cmds:
       - rm -rf {{.ROOT_DIR}}/deploy/charts/stratt/dev/declarations
       - mkdir -p {{.ROOT_DIR}}/deploy/charts/stratt/dev/declarations
-      - cp -R {{.ROOT_DIR}}/demos/k8s-deploy/estate/. {{.ROOT_DIR}}/deploy/charts/stratt/dev/declarations/
+      - cp -R {{.ROOT_DIR}}/plugins/helm/demo/estate/. {{.ROOT_DIR}}/deploy/charts/stratt/dev/declarations/
 
   demo:k8s-deploy:run:
     # The turnkey "k8s: deploy an app" demo (ADR-0116, the first demos/ scenario). Stands up a Stratt
@@ -991,8 +1020,8 @@ tasks:
     # staged CaC), then drives its gated deploy-hello Workflow end to end — approve the platform-admins
     # gate as bootstrap-admin, converge the WorkflowRun, assert the real `hello` Deployment is Ready.
     # The hello-stratt chart rides the helm plugin image (image:plugin PLUGIN=helm). By-hand walk:
-    # demos/k8s-deploy/README.md. Teardown: demo:k8s-deploy:down (full nuke: dev:kind:down).
-    desc: "Demo — stand up a floor and deploy a real app through a gated Workflow (demos/k8s-deploy)"
+    # plugins/helm/demo/README.md. Teardown: demo:k8s-deploy:down (full nuke: dev:kind:down).
+    desc: "Demo — stand up a floor and deploy a real app through a gated Workflow (plugins/helm/demo)"
     deps: [tools:helm, tools:kubectl]
     cmds:
       - task: dev:kind:up
@@ -1016,7 +1045,7 @@ tasks:
       - "{{.KUBECTL}} --context {{.KIND_CONTEXT}} -n stratt rollout status deploy/stratt --timeout=240s"
       # The gate-only CredentialRef points at this marker Secret (pointer, no material).
       - "{{.KUBECTL}} --context {{.KIND_CONTEXT}} -n stratt-authz create secret generic helm-deploy-authz --from-literal=marker=1 --dry-run=client -o yaml | {{.KUBECTL}} --context {{.KIND_CONTEXT}} apply -f -"
-      - KUBECONTEXT={{.KIND_CONTEXT}} KUBECTL={{.KUBECTL}} bash {{.ROOT_DIR}}/demos/k8s-deploy/run.sh
+      - KUBECONTEXT={{.KIND_CONTEXT}} KUBECTL={{.KUBECTL}} bash {{.ROOT_DIR}}/plugins/helm/demo/run.sh
 
   demo:k8s-deploy:down:
     # Tear down JUST the demo's footprint — uninstall the `hello` release (Deployment +
@@ -1038,14 +1067,14 @@ tasks:
     cmds:
       - rm -rf {{.ROOT_DIR}}/deploy/charts/stratt/dev/declarations
       - mkdir -p {{.ROOT_DIR}}/deploy/charts/stratt/dev/declarations
-      - cp -R {{.ROOT_DIR}}/demos/vsphere-only/estate/. {{.ROOT_DIR}}/deploy/charts/stratt/dev/declarations/
+      - cp -R {{.ROOT_DIR}}/plugins/vcenter/demo/estate/. {{.ROOT_DIR}}/deploy/charts/stratt/dev/declarations/
 
   demo:vsphere-only:run:
     # The turnkey "vSphere: provision a VM + watch the graph come alive" demo (ADR-0116). Stands up a
     # vSphere-only Stratt floor — kind + spine + strattd + the vcenter plugin + an external vcsim (a real
     # vCenter API) seeded with an enterprise topology + the staged CaC estate — then drives BOTH halves:
     # the vcenter Syncer projects the vcsim topology into a live graph (Views come alive), and a gated
-    # Workflow provisions a new VM through vcenter/create-vm. By-hand walk: demos/vsphere-only/README.md.
+    # Workflow provisions a new VM through vcenter/create-vm. By-hand walk: plugins/vcenter/demo/README.md.
     desc: "Demo — stand up a vSphere floor, project the graph, and provision a VM through a gated Workflow"
     deps: [tools:helm, tools:kubectl]
     cmds:
@@ -1073,7 +1102,7 @@ tasks:
       - "{{.KUBECTL}} --context {{.KIND_CONTEXT}} -n stratt rollout status deploy/stratt --timeout=240s"
       # The gate-only vsphere-dev CredentialRef points at this marker Secret (pointer, no material).
       - "{{.KUBECTL}} --context {{.KIND_CONTEXT}} -n stratt create secret generic vsphere-dev-authz --from-literal=marker=1 --dry-run=client -o yaml | {{.KUBECTL}} --context {{.KIND_CONTEXT}} apply -f -"
-      - KUBECONTEXT={{.KIND_CONTEXT}} KUBECTL={{.KUBECTL}} bash {{.ROOT_DIR}}/demos/vsphere-only/run.sh
+      - KUBECONTEXT={{.KIND_CONTEXT}} KUBECTL={{.KUBECTL}} bash {{.ROOT_DIR}}/plugins/vcenter/demo/run.sh
 
   demo:vsphere-only:down:
     # Tear down the vsphere-only demo: uninstall the stratt release and stop the vcsim substrate
@@ -1092,14 +1121,14 @@ tasks:
     cmds:
       - rm -rf {{.ROOT_DIR}}/deploy/charts/stratt/dev/declarations
       - mkdir -p {{.ROOT_DIR}}/deploy/charts/stratt/dev/declarations
-      - cp -R {{.ROOT_DIR}}/demos/ec2-only/estate/. {{.ROOT_DIR}}/deploy/charts/stratt/dev/declarations/
+      - cp -R {{.ROOT_DIR}}/plugins/awsec2/demo/estate/. {{.ROOT_DIR}}/deploy/charts/stratt/dev/declarations/
 
   demo:ec2-only:run:
     # The turnkey "EC2: provision a real instance" demo (ADR-0116). Stands up an EC2-only Stratt floor —
     # kind + spine + strattd + the awsec2 plugin + an external floci (a real-host EC2 backend that runs
     # real SSH-able instance containers, ADR-0093) + the staged CaC estate — then drives a gated Workflow
     # that provisions a REAL instance via awsec2/create-vm; the awsec2 Syncer observes it into the graph.
-    # By-hand walk: demos/ec2-only/README.md.
+    # By-hand walk: plugins/awsec2/demo/README.md.
     desc: "Demo — stand up an EC2 floor (floci) and provision a real instance through a gated Workflow"
     deps: [tools:helm, tools:kubectl]
     cmds:
@@ -1127,7 +1156,7 @@ tasks:
       - "{{.KUBECTL}} --context {{.KIND_CONTEXT}} -n stratt rollout status deploy/stratt --timeout=240s"
       # The gate-only aws-dev CredentialRef points at this marker Secret (pointer, no material).
       - "{{.KUBECTL}} --context {{.KIND_CONTEXT}} -n stratt create secret generic aws-dev-authz --from-literal=marker=1 --dry-run=client -o yaml | {{.KUBECTL}} --context {{.KIND_CONTEXT}} apply -f -"
-      - KUBECONTEXT={{.KIND_CONTEXT}} KUBECTL={{.KUBECTL}} bash {{.ROOT_DIR}}/demos/ec2-only/run.sh
+      - KUBECONTEXT={{.KIND_CONTEXT}} KUBECTL={{.KUBECTL}} bash {{.ROOT_DIR}}/plugins/awsec2/demo/run.sh
 
   demo:ec2-only:down:
     # Tear down the ec2-only demo: uninstall the stratt release and stop the floci substrate (which

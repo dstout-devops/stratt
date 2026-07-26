@@ -95,8 +95,13 @@ Run repeatable work through the **Taskfile**; never assert success without the m
 - **Dev substrate:** `task dev:up` / `dev:down` (Postgres 18 · NATS · Temporal); e2e tests need it up.
 - **Demos** ([demos/](demos/README.md), ADR-0116): `task demo:<name>:run` stands up a floor and drives the
   scenario end-to-end, asserting the outcome (`demo:<name>:down` tears it back down). Live-verified on kind:
-  `k8s-deploy`, `vsphere-only`, `ec2-only`, `app-cert`. Treat a demo run as integration testing — they have repeatedly
+  `k8s-deploy`, `vsphere-only`, `ec2-only`, `app-cert`. A **single-plugin** demo lives with its plugin
+  (`plugins/helm/demo/`, `plugins/vcenter/demo/`, `plugins/awsec2/demo/`); [demos/](demos/README.md) keeps only
+  **cross-plugin** scenarios — `app-cert` spans ansible + openbao + declared (ADR-0137 D7, enforced by
+  `task plugins:boundary`). Treat a demo run as integration testing — they have repeatedly
   surfaced real defects; keep them green when touching orchestration, plugins, or the estate.
+- **A demo's estate does NOT exercise `estate/plugins.yaml`**: each stages only its own tree. The full-estate
+  in-cluster path (admission → vendoring → boot) is **`task dev:connector-e2e`**.
 
 ## Workflow
 

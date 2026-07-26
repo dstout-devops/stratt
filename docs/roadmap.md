@@ -168,9 +168,9 @@ self-contained, narrated, **turnkey** scenarios that teach Stratt by running it.
 
 | Demo                                                                        | Substrate         | Fidelity     | Proven live                                                                                       |
 | --------------------------------------------------------------------------- | ----------------- | ------------ | ------------------------------------------------------------------------------------------------- |
-| [k8s: deploy an app](../demos/k8s-deploy/README.md)                         | Kubernetes (kind) | `real`       | gated `helm/deploy` → a real Deployment 1/1 Ready serving its page                                |
-| [vSphere: provision a VM + the live graph](../demos/vsphere-only/README.md) | vSphere (vcsim)   | `build-real` | Syncer projects the topology; gated `vcenter/create-vm` → the built VM observed back (VMs 50→51)  |
-| [EC2: provision a real instance](../demos/ec2-only/README.md)               | EC2 (floci)       | `real`       | gated `awsec2/create-vm` → a real floci instance container running, observed into the graph (0→1) |
+| [k8s: deploy an app](../plugins/helm/demo/README.md)                         | Kubernetes (kind) | `real`       | gated `helm/deploy` → a real Deployment 1/1 Ready serving its page                                |
+| [vSphere: provision a VM + the live graph](../plugins/vcenter/demo/README.md) | vSphere (vcsim)   | `build-real` | Syncer projects the topology; gated `vcenter/create-vm` → the built VM observed back (VMs 50→51)  |
+| [EC2: provision a real instance](../plugins/awsec2/demo/README.md)               | EC2 (floci)       | `real`       | gated `awsec2/create-vm` → a real floci instance container running, observed into the graph (0→1) |
 | [app install with a certificate](../demos/app-cert/README.md)                | SSH (Linux host)  | `real`       | gated ansible converge: SSH as an unprivileged user → privilege escalation → a `community.crypto` X.509 cert → TLS read back off the wire, `app.config` projected with Run provenance, and a no-op Run refused |
 
 **This is the first real dent in the "live-cluster e2e" gap** named in the enterprise-readiness section

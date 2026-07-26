@@ -13,7 +13,6 @@
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ROOT_REPO="$(cd "${HERE}/../.." && pwd)"
 
 KUBECTL="${KUBECTL:-kubectl}"
 CTX="${KUBECONTEXT:-kind-stratt-dev}"

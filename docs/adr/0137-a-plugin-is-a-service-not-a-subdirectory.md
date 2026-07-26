@@ -296,7 +296,35 @@ Ordered so each step is provable before the next depends on it.
    **Demos cannot verify this**, which is worth knowing: each stages only its own estate and none
    carries a `plugins.yaml`. `task dev:connector-e2e` stages the full estate and is the in-cluster
    proof — it booted strattd in kind against all twelve vendored plugin estates and reconciled them.
-5. **`estate/` and `demos/` reduced** to compositions and cross-plugin scenarios (D7).
+5. ~~**`estate/` and `demos/` reduced** to compositions and cross-plugin scenarios (D7).~~ **Shipped.**
+   `estate/` needed nothing further — step 4 emptied `actuators/` and `connectors/`, leaving exactly the
+   worked composition D7 describes (Views, Intents, Blueprints, Assignments, capability-bindings, and
+   the three cross-plugin Workflows).
+
+   `demos/` split on the same test used everywhere else — **does it span more than one plugin?**
+   `k8s-deploy` → `plugins/helm/demo/`, `vsphere-only` → `plugins/vcenter/demo/`, `ec2-only` →
+   `plugins/awsec2/demo/`. Only `app-cert` stays, spanning ansible + openbao + declared. `plugins:boundary`
+   grew a fourth check so a single-plugin demo cannot land in `demos/` again — without it the split
+   re-scatters one file at a time, since `demos/` is where demos "go".
+
+   The move's real risk was **losing test coverage silently**: four guards in
+   `core/internal/desiredstate` globbed `demos/*/estate`, and a demo that stops being checked because it
+   changed directory is worse than one never checked — the census assertion still passes and the coverage
+   looks intact. They now share a `demoEstates` helper that finds both homes.
+
+   Two smaller things: `plugins/helm/demo/run.sh` computed a repo root by directory depth
+   (`${HERE}/../..`), which the move silently invalidated — it was dead code and was deleted rather than
+   re-derived. And the demo **task blocks stay in the root Taskfile**; see the gap below.
+
+   Verified by running the relocated `k8s-deploy` demo end to end on kind from its new home.
+
+   **REMAINING D2 GAP, booked not hidden:** each demo still has bespoke task blocks in the root
+   `Taskfile.yml` (13 of them), so adding a plugin with a demo still edits core. `demo.yaml` already
+   exists as a declared manifest and is the obvious place for a demo to declare its floor — which plugin
+   images, which values files, which extra services — so a generic `task demo:run DEMO=<path>` could
+   retire them. Not attempted here: the four floors differ substantially (vcsim, floci, a node container,
+   three different values stacks), and guessing that shape while migrating is how the scatter gets
+   recreated in a new tree.
 6. **Contracts relocate, core pins at registration** (D5) — last, and with its own tests.
 
 ### Traps

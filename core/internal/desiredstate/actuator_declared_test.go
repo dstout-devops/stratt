@@ -2,7 +2,6 @@ package desiredstate
 
 import (
 	"os"
-	"path/filepath"
 	"slices"
 	"testing"
 
@@ -41,12 +40,9 @@ var bootRegisteredActuators = map[string]string{
 // legitimately resolves outside the estate today.
 func TestEstateDeclaresTheActuatorsItNames(t *testing.T) {
 	trees := map[string]string{"reference": estateRoot}
-	dirs, err := filepath.Glob(filepath.Join(demosRoot, "*", "estate"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	dirs := demoEstates(t)
 	for _, dir := range dirs {
-		trees["demo/"+filepath.Base(filepath.Dir(dir))] = dir
+		trees["demo/"+demoLabel(dir)] = dir
 	}
 	if len(trees) < 2 {
 		t.Fatalf("found only the reference estate — this guard must not pass by finding nothing")
