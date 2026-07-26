@@ -240,8 +240,43 @@ Ordered so each step is provable before the next depends on it.
    flattening would collide them silently, and the deployed tree still shows which declarations came
    from which plugin (§1.8).
 
-3. **The D2 gate** — CI proves a plugin-only diff touches nothing outside `plugins/<name>/`, with the
-   two documented exceptions.
+3. ~~**The D2 gate** — CI proves a plugin-only diff touches nothing outside `plugins/<name>/`, with the
+   two documented exceptions.~~ **Shipped**, as **two** gates, because D2 has two halves and only one of
+   them is diff-shaped:
+   - **`task plugins:boundary`** — structural, and the primary. D2 asks to be "mechanically checkable
+     the way `plugins:standalone` is", and note what that gate actually does: it proves a property of
+     the TREE, not of a diff. So does this. The strongest mechanical statement of "developing a plugin
+     changes nothing outside it" is that there is nothing outside it to change. It checks the **import
+     direction** (no plugin module may depend on `core/`) and **estate ownership**.
+   - **`task plugins:boundary:diff`** — the literal diff rule, and it earns its place by catching what
+     the structural gate cannot: a change that edits a plugin AND teaches core about it, the
+     `if ansible {}` §1.4 forbids. That coupling leaves no trace in the plugin's module graph, so only
+     the shape of the change reveals it.
+
+   **The ownership check is a RATCHET, not a cliff.** It fails only for plugins that have already taken
+   ownership. A gate that went red for all 11 unmigrated plugins on day one would be switched off within
+   a week, and a switched-off gate is worse than none. What it buys: migration is one-way, and the
+   remaining debt is printed on every run rather than living in someone's head — so step 4's progress is
+   legible.
+
+   **The diff gate's escape hatch is a statement, not a switch.** A change that genuinely alters the
+   boundary — building the admission mechanism, moving a Contract — is legitimate and must be possible;
+   what must not be possible is doing it silently. A `Boundary-Change:` commit trailer satisfies the
+   gate and puts the reason in front of the reviewer. That is D3's logic applied to D2: the exception is
+   fine, the exception being invisible is not. (Commit `81f1789`, step 2, carries the first one.)
+
+   `plugins:standalone` was upgraded from `go build` to `go vet`: build ignores `_test.go`, so a
+   test-only dependency missing from `go.sum` was invisible to it — and "a plugin can be **tested**
+   alone" is the property D6 exists for, not merely "it compiles alone".
+
+   One violation was **removed rather than allowlisted**: six near-identical `image:<name>-plugin` tasks
+   meant adding a plugin required a core edit for pure boilerplate. They are now one
+   `task image:plugin PLUGIN=<name>`. Deleting the cause beats permanently excusing the symptom — and a
+   gate whose allowlist keeps growing is a gate on its way to being ignored.
+
+   Known temporary exception, listed in the gate so it stays visible: `contracts/**`, until D5/step 6
+   relocates plugin Contracts.
+
 4. **Remaining plugins**, one at a time.
 5. **`estate/` and `demos/` reduced** to compositions and cross-plugin scenarios (D7).
 6. **Contracts relocate, core pins at registration** (D5) — last, and with its own tests.
