@@ -52,10 +52,11 @@ declarative constructs (the useful half of AWS CDK — see ADR-0055):
   — the "template Z" (L2 construct with defaults) bound to the group; the compiler drift-checks every member.
   The flagship REUSES the one `fileset` Blueprint (a namespace has a single Blueprint owner, §2.1; additive keys
   union within it), so the fleet's `sshd-config` key and web-files' `nginx-conf` key coexist in `fileset.content`.
-- **[`plugins/ansible/estate/workflows/linux-onboard.yaml`](../plugins/ansible/estate/workflows/linux-onboard.yaml)**
-  — the L3 onboarding lifecycle: `Gate → provision (Action) → configure
-(ansible)`. It lives with the plugin that executes it (ADR-0137 D1) and reaches this estate through
-  [`plugins.yaml`](plugins.yaml). The provision Step's `action` is the **landscape binding** — `awsec2/create-vm` in dev, swappable
+- **[`workflows/linux-onboard.yaml`](workflows/linux-onboard.yaml)** — the L3 onboarding lifecycle:
+  `Gate → provision (Action) → configure
+(ansible)`. It stays HERE, in the estate, and not inside either plugin: it spans **two** of them
+  (`awsec2` provisions, `ansible` converges), which makes it a composition (ADR-0137 D4/D7). The
+  provision Step's `action` is the **landscape binding** — `awsec2/create-vm` in dev, swappable
   for a `crossplane`/`opentofu`/`vsphere` Action without touching the rest of the estate. Provisioning is
   **gated** (§5 Flow 1 — never a silent auto-launch). Cert (cert-issuer) + app (helm) Steps are the next slice.
 

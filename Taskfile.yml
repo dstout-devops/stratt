@@ -302,6 +302,50 @@ tasks:
           [ -d "$d" ] && migrated="$migrated $(basename "$(dirname "$d")")"
         done
 
+        # ── 3. A plugin's estate references only ITS OWN plugin ──────────────────
+        # D4/D7: a declaration that spans TWO plugins is a COMPOSITION, and
+        # compositions belong to the estate. Moving one inside a plugin looks
+        # harmless — it does mention that plugin — but it buries a hard dependency
+        # on a second plugin inside the first one's tree, which is the coupling this
+        # ADR exists to prevent.
+        #
+        # This check was written because that is exactly what step 2 did: it moved
+        # linux-onboard (awsec2/create-vm → ansible converge) into plugins/ansible
+        # because it named an ansible Actuator. The ADR's own Trap warns about this
+        # for DEMOS ("do not move a demo into a plugin because it MENTIONS that
+        # plugin") and the same test applies to every declaration: does it span more
+        # than one?
+        #
+        # Ownership comes from the declarations themselves — an `actuator:` resolves
+        # through its declaration's pluginIdentity, an `action: <plugin>/<verb>`
+        # through its prefix. A reference this cannot resolve (a boot-registered
+        # Actuator like cert-issuer or mcp) is SKIPPED rather than guessed at.
+        owners=$(for f in estate/actuators/*.yaml plugins/*/estate/actuators/*.yaml; do
+          [ -f "$f" ] || continue
+          n=$(grep -m1 "^name:" "$f" | sed 's/name:[[:space:]]*//' | tr -d '"')
+          p=$(grep -m1 "pluginIdentity:" "$f" | sed 's/.*pluginIdentity:[[:space:]]*//' | tr -d '"')
+          [ -n "$n" ] && [ -n "$p" ] && echo "$n=$p"
+        done)
+        for d in plugins/*/estate; do
+          [ -d "$d" ] || continue
+          self=$(basename "$(dirname "$d")")
+          for f in $(find "$d" -name '*.yaml' -o -name '*.yml' 2>/dev/null); do
+            for ref in $(grep -oE "^[[:space:]]*(actuator|action):[[:space:]]*[A-Za-z0-9/_-]+" "$f" 2>/dev/null \
+                         | sed 's/.*:[[:space:]]*//'); do
+              case "$ref" in
+                */*) owner=${ref%%/*} ;;                                     # action: <plugin>/<verb>
+                *)   owner=$(echo "$owners" | grep -m1 "^$ref=" | cut -d= -f2) ;;
+              esac
+              [ -n "$owner" ] || continue                                    # unresolvable ⇒ not ours to judge
+              if [ "$owner" != "$self" ]; then
+                echo "  ✗ $f references '$ref' (owned by '$owner') — a declaration spanning two plugins is a"
+                echo "      COMPOSITION and belongs in estate/, not inside plugins/$self (ADR-0137 D4/D7)"
+                fail=1
+              fi
+            done
+          done
+        done
+
         if [ "$fail" -ne 0 ]; then
           echo ""
           echo "✗ plugins:boundary — see above (ADR-0137 D2)"
