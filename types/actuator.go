@@ -38,6 +38,54 @@ type Actuator struct {
 	// ansible content is selected — two declarations differing only in their EE image,
 	// so the spine never reads a tool's params to pick an image).
 	Image string `json:"image,omitempty"`
+	// ContentDir is the TOOL-CONTENT root this Actuator runs, declared as a path relative to
+	// the estate root (ADR-0134 D2) — for ansible, one project: playbooks, roles/, group_vars/.
+	// The estate load resolves it into Content below; nothing at run time reads a filesystem.
+	//
+	// It is the THIRD declared-path field on this Kind and states the same principle as the
+	// other two: `Image` selects the EE by declaration, `ElevatedInputs` names a params path,
+	// and this names a content root — so the spine copies A DIRECTORY AN ACTUATOR DECLARED and
+	// learns nothing about Ansible (§1.4). The rejected alternative was a `playbookRef` resolved
+	// out of Step params, which would have put tool awareness into the tool-blind dispatch path.
+	//
+	// One Actuator per project, which is the rule the ansible declaration already stated: a Step
+	// that needs different CONTENT names a different Actuator. That is what lets FacetNamespaces
+	// be a PER-PROJECT write ceiling — an access project has no business writing hardening facets.
+	// The ceiling holds at RUN time only: whoever may author a Workflow chooses which Actuator a
+	// Step selects, so an Actuator declaration must live in a platform-owned path, never inside a
+	// tenant's project directory (ADR-0134 D2 correction — a write ceiling in a file its subject
+	// can edit is not a ceiling). Authorization on Actuator selection does not exist yet; until it
+	// does this boundary is enforced by repo review.
+	ContentDir string `json:"contentDir,omitempty"`
+	// Content is ContentDir resolved at estate-PARSE time: relative path → file content, mounted
+	// into the EE Job at project/<relpath> (ADR-0134 D3). Resolved here rather than read at
+	// dispatch for three reasons, in order of weight: JobSpec.Files is remote-safe (ADR-0032) so
+	// content travels to a Site, which a dispatch-time filesystem read could not; changing a
+	// playbook changes what will run and therefore SHOULD appear in `stratt plan`'s diff of
+	// desired state; and dispatch stays filesystem-free, which is what makes it testable.
+	//
+	// SERIALIZED, and both halves of that matter. The plan compares declarations by their JSON
+	// (declDocsEqual), so a `json:"-"` here would make editing a playbook a silent no-op — the
+	// exact opposite of D3's second reason. And the Actuator's stored spec is what the registry
+	// hands the dispatcher on every replica, so content that did not persist could not be mounted.
+	Content map[string]string `json:"content,omitempty"`
+	// ContentInputs are dotted paths into this Actuator's Step params whose value names a FILE
+	// within ContentDir — `playbook` for ansible (ADR-0134). The estate load checks each named
+	// path is in the resolved tree, so a Step naming a playbook that is not there fails the
+	// load instead of a 3 a.m. Run (§1.8).
+	//
+	// DECLARED rather than hardcoded, for the same reason ElevatedInputs is: the alternative is
+	// core reading `params["playbook"]` by name, which is the `if ansible{}` §1.4 forbids and
+	// precisely the trap this ADR warns implementers about. Core walks a declared path and asks
+	// a map whether it holds that key. It never learns the word `playbook` — and when OpenTofu
+	// modules get the same treatment, `contentInputs: [module]` needs no core change.
+	//
+	// EXISTENCE ONLY. Core reads the path, never the file: ADR-0117 D6 keeps play parsing out of
+	// the runtime, so variable-binding checks stay in tests, where tool awareness is allowed.
+	//
+	// Empty ⇒ no reference is checked, which is honest and visible in review rather than
+	// automatic — an Actuator that mounts content but declares no input path still mounts it.
+	ContentInputs []string `json:"contentInputs,omitempty"`
 	// FacetNamespaces are the Facet namespaces this Actuator's write-back may touch — the
 	// MF3 BOUNDED grant, declared as CaC exactly as a Connector declares its own (ADR-0103).
 	// An Actuator owns no Source and does not sync, but a tool-content Run can still report

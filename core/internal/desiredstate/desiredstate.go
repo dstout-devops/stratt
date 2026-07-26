@@ -258,6 +258,14 @@ func ParseDir(root string, decider policy.Decider) (Declarations, error) {
 	if err != nil {
 		return out, err
 	}
+	// Tool content is resolved HERE, at parse time, onto the Actuator that declared it
+	// (ADR-0134 D3) — parseKind hands its parser only (path, raw), so the estate root is
+	// available at this level and not inside parseActuatorFile. A tool directory is never
+	// parsed AS a declaration: parseKind walks only the named subdirectories above, so
+	// estate/ansible/ is invisible to it already and needs no exclusion.
+	if err := resolveActuatorContent(root, actuatorDecls); err != nil {
+		return out, err
+	}
 	out.Actuators = actuatorDecls
 	sort.Slice(out.Actuators, func(i, j int) bool { return out.Actuators[i].Name < out.Actuators[j].Name })
 
@@ -294,6 +302,13 @@ func ParseDir(root string, decider policy.Decider) (Declarations, error) {
 	}
 	out.Workflows = workflows
 	sort.Slice(out.Workflows, func(i, j int) bool { return out.Workflows[i].Name < out.Workflows[j].Name })
+
+	// A Step naming a playbook must name one its Actuator's tree holds (ADR-0134 D5). Runs
+	// here, once both sides exist, rather than inside either parser: the check is a JOIN
+	// between a Step's params and an Actuator's resolved content.
+	if err := validateContentRefs(out.Actuators, out.Workflows, out.Triggers); err != nil {
+		return out, err
+	}
 
 	emitters, err := parseKind(filepath.Join(root, "emitters"), true, parseEmitterFile)
 	if err != nil {

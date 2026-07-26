@@ -78,6 +78,30 @@ func TestActuatorStore(t *testing.T) {
 	if !got.DryRunnable {
 		t.Fatal("actuator dryRunnable must round-trip")
 	}
+	// Resolved tool content survives the spec column (ADR-0134 D3). Two things depend on
+	// it: the stored spec is what the registry hands the dispatcher on EVERY replica, so
+	// content that did not persist could not be mounted; and the plan compares
+	// declarations by their JSON, so a playbook edit that did not serialize would read as
+	// a no-op rather than as the change to what-will-run that it is.
+	withContent := types.Actuator{
+		Name: "ansible-project", PluginIdentity: "ansible", JobCommand: []string{"stratt-ansible"},
+		ContentDir: "ansible/projects/p",
+		Content:    map[string]string{"site.yml": "- hosts: all\n", "roles/c/tasks/main.yml": "- debug: {}\n"},
+	}
+	if err := s.UpsertActuator(ctx, withContent); err != nil {
+		t.Fatal(err)
+	}
+	back, err := s.GetActuator(ctx, "ansible-project")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if back.ContentDir != "ansible/projects/p" || back.Content["site.yml"] != "- hosts: all\n" ||
+		back.Content["roles/c/tasks/main.yml"] == "" {
+		t.Fatalf("contentDir/content must round-trip whole: %+v", back)
+	}
+	if err := s.DeleteActuator(ctx, "ansible-project"); err != nil {
+		t.Fatal(err)
+	}
 	if err := s.DeleteActuator(ctx, "helm"); err != nil {
 		t.Fatal(err)
 	}

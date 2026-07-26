@@ -1,0 +1,57 @@
+# ansible-platform-baseline — the ansible Actuator bound to the platform-baseline PROJECT
+# (ADR-0134 D1/D2): fleet onboarding and convergence.
+#
+# WHY AN ACTUATOR PER PROJECT. `contentDir` names a content root — one AWX Project, one Git
+# content root, one `roles/`+`group_vars/`+playbooks tree — and the whole tree is mounted at
+# project/ for a Run through this Actuator. That is not a new rule: estate/actuators/ansible.yaml
+# already stated it as "a Step that needs different CONTENT names a different Actuator", which is
+# also how per-Step EE selection works (ADR-0117 D3a). The alternative — one Actuator, and the
+# Step names a project in its params — was rejected because it puts ansible awareness in the
+# tool-blind dispatch path and mounts every project into every Run.
+#
+# WHAT THAT BUYS: facetNamespaces below is a PER-PROJECT write ceiling. This project converges
+# hosts and reports what it observed, so it may write os.* and app.config — and nothing else. The
+# access and fileset projects get their own, narrower ceilings, which is the point D2 is making:
+# the access project has no business writing hardening facets, and now it structurally cannot.
+#
+# THE HONEST LIMIT (ADR-0134 D2 correction). This ceiling holds at RUN time, not at AUTHORING
+# time: whoever may write a Workflow declaration chooses which Actuator a Step selects, and
+# therefore chooses whose content runs under whose ceiling — Argo CD's documented `.spec.project`
+# circumvention with a different field name. So this file lives in the PLATFORM-owned
+# estate/actuators/ path and never inside a tenant's project directory; a write ceiling in a file
+# its subject can edit is not a ceiling. Real isolation needs an authorization check on Actuator
+# selection, which does not exist today (every launch check is `runner` on `view:<name>`; there is
+# no authz object for an Actuator). Until that lands this boundary is enforced by repo review,
+# and it must not be described as isolation.
+name: ansible-platform-baseline
+pluginIdentity: ansible
+tier: trusted
+dryRunnable: true
+jobCommand: [stratt-ansible]
+# The content root, relative to the estate root. Everything under it mounts at project/ in the
+# EE pod; a Step names a file within it via `params.playbook`. Core resolves this at estate-PARSE
+# time onto the Actuator (D3) — so the content travels with the JobSpec to a remote Site, and a
+# playbook edit shows up in `stratt plan` as the change to what-will-run that it is.
+contentDir: ansible/projects/platform-baseline
+# WHICH Step param names a file in that tree — so the estate load can check the reference and a
+# Step naming a playbook that is not there fails the load rather than a 3 a.m. Run (§1.8). It is
+# DECLARED for the same reason elevatedInputs below is: core walks a path this file names and
+# asks the resolved tree whether it holds that key. It never learns the word `playbook`, which
+# is the `if ansible{}` §1.4 forbids. Existence only — core never opens the file (ADR-0117 D6).
+contentInputs: [playbook]
+facetNamespaces:
+  - os.kernel
+  - os.hardening.sysctl
+  - os.hardening.sshd
+  - os.hardening.filesystem
+  - os.hardening.auditd
+  - os.hardening.services
+  # app.config: the observed application config a remediation reports back
+  # (ADR-0084 fact-back), e.g. the effective listen port after a converge.
+  - app.config
+identitySchemes: [host.name]
+# Privilege escalation, Control-gateable (ADR-0122 D3): core walks this path in each Step's
+# params and derives the `stratt.change/privileged` change-context label from a truthy value. It
+# never learns the word `become` — it reads a declared path and a boolean, exactly as
+# facetNamespaces lets it enforce a ceiling without knowing what a namespace means.
+elevatedInputs: [become.enabled]

@@ -1,0 +1,20 @@
+---
+# Distribute a managed file to its desired content + POSIX attributes
+# (estate/workflows/fileset-apply.yaml). ansible copy is idempotent and atomic
+# (temp+rename); backup: true preserves the prior bytes on change.
+#
+# mode/owner/group carry `| default(...)` deliberately — Jinja's own idiom for "this may be
+# undefined". The unbound-play-variable guard understands that, and learned to because its
+# first run reported three such references as defects when only two of five were real.
+- name: Distribute managed file
+  hosts: all
+  become: true
+  tasks:
+    - name: Place file with content-addressed attributes
+      ansible.builtin.copy:
+        src: "{{ fileset_src }}"
+        dest: "{{ fileset_path }}"
+        mode: "{{ fileset_mode | default('0644') }}"
+        owner: "{{ fileset_owner | default('root') }}"
+        group: "{{ fileset_group | default('root') }}"
+        backup: true

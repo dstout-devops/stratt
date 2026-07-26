@@ -1,0 +1,16 @@
+---
+# Remove a distributed managed file, restoring the host's prior state
+# (estate/workflows/fileset-revert.yaml). `state: absent` is idempotent.
+#
+# fileset_path arrives compiled — from the fileset Blueprint's `removeParams` stamped on
+# the Baseline — rather than typed in at launch, which matters more here than for most
+# withdrawal plays: this removes a file by absolute path, and a hand-typed path is a
+# hand-typed deletion target.
+- name: Remove managed file
+  hosts: all
+  become: true
+  tasks:
+    - name: Ensure the managed file is absent
+      ansible.builtin.file:
+        path: "{{ fileset_path }}"
+        state: absent

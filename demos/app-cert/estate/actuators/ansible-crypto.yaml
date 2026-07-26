@@ -22,12 +22,25 @@
 # has no system of record to project FROM, and those namespaces belong to the cert-issuer
 # Connector's Syncer — one authority per fact (§1.2). What this Run legitimately observes
 # is the app's effective listen port, and that is all it writes.
+#
+# ADR-0134 adds the second half of "which content": `image` picks the ENVIRONMENT the play runs
+# in, `contentDir` picks the PROJECT the play comes from. Both are declared properties of this
+# Actuator, both are a reviewable Git diff, and neither is a params string a tool passes at run
+# time — which is the same argument twice, now covering the collection and the playbook.
+#
+# The demo names this Actuator from two Workflows and only one of them uses the project:
+# app-install-with-cert names `params.playbook`, while vacuous-run-guard keeps its seven-line
+# play inline (D4 — a guard play is clearer inline than as a file in a directory). Both work:
+# the mounted tree is simply unused by the second, and `play.yml` is a reserved name inside a
+# content root precisely so the inline path can never collide with a mounted file.
 name: ansible-crypto
 pluginIdentity: ansible
 tier: trusted
 dryRunnable: true
 jobCommand: [stratt-ansible]
 image: stratt-ee-crypto:dev
+contentDir: ansible/projects/app-cert
+contentInputs: [playbook]
 facetNamespaces: [app.config]
 identitySchemes: [host.name]
 # elevatedInputs makes privilege escalation Control-GATEABLE (ADR-0122 D3), closing the gap

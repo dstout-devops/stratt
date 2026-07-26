@@ -3,17 +3,52 @@ package contract
 import "testing"
 
 // TestAnsibleHighestVersionResolved locks that the highest-versioned sibling
-// wins the actuators/ansible.input lookup (path-sorted load) — currently v5
-// (the typed run knobs, ADR-0117 D1), which still carries the v3 scm
-// content-ref and the v4 extraVars: v5 is additive, since the registry keeps
-// exactly ONE live actuators/ansible.input and a Step cannot pin a version.
+// wins the actuators/ansible.input lookup (path-sorted load) — currently v7
+// (`playbook`, ADR-0134), which still carries v6's connection block, the v3 scm
+// content-ref and the v4 extraVars: every version has been additive, since the
+// registry keeps exactly ONE live actuators/ansible.input and a Step cannot pin
+// a version.
 func TestAnsibleHighestVersionResolved(t *testing.T) {
 	c, ok, err := Get("actuators/ansible.input")
 	if err != nil || !ok {
 		t.Fatalf("ansible.input contract: ok=%v err=%v", ok, err)
 	}
-	if c.Version != 6 {
-		t.Fatalf("resolved ansible.input version = %d, want 6 (the connection block, ADR-0126)", c.Version)
+	if c.Version != 7 {
+		t.Fatalf("resolved ansible.input version = %d, want 7 (the mounted-project playbook ref, ADR-0134)", c.Version)
+	}
+}
+
+// TestAnsibleV7PlaybookValidates pins the v7 seam (ADR-0134 D4). Two halves, and the
+// second is the one that matters: `playbook` is accepted alongside every other field, and
+// it is MUTUALLY EXCLUSIVE with the other two content sources — project/ has room for one
+// of inline, cloned and mounted, and a merge between them would need a winner.
+func TestAnsibleV7PlaybookValidates(t *testing.T) {
+	good := []string{
+		`{"playbook":"site.yml"}`,
+		`{"playbook":"playbooks/web/deploy.yml"}`,
+		`{"playbook":"site.yml","extraVars":{"x":"1"},"become":{"enabled":true}}`,
+	}
+	for _, p := range good {
+		if err := ValidateActuatorParams("ansible", []byte(p)); err != nil {
+			t.Errorf("valid v7 params rejected: %s: %v", p, err)
+		}
+	}
+	bad := map[string]string{
+		// The path is segment-bounded rather than lookahead-guarded, so traversal is
+		// unrepresentable rather than filtered.
+		"traversal":               `{"playbook":"../../etc/passwd"}`,
+		"absolute":                `{"playbook":"/etc/passwd"}`,
+		"leading dash":            `{"playbook":"-oProxyCommand=x"}`,
+		"empty":                   `{"playbook":""}`,
+		"playbook and play":       `{"playbook":"site.yml","play":"- hosts: all"}`,
+		"playbook and scm":        `{"playbook":"site.yml","scm":{"repo":"r","playbook":"p"}}`,
+		"play and scm still":      `{"play":"- hosts: all","scm":{"repo":"r","playbook":"p"}}`,
+		"segment starting with .": `{"playbook":".hidden/site.yml"}`,
+	}
+	for name, p := range bad {
+		if err := ValidateActuatorParams("ansible", []byte(p)); err == nil {
+			t.Errorf("%s: expected rejection, got nil", name)
+		}
 	}
 }
 

@@ -222,6 +222,10 @@ func (r *Registry) enableActuatorLocked(a types.Actuator, spec string, res resol
 	pa := orchestrate.PluginActuator{
 		Host: host, DryRunnable: a.DryRunnable, Grant: grant, PlanStore: r.plans,
 		JobCommand: a.JobCommand, Image: a.Image, MCP: a.MCP, Requires: a.Requires,
+		// The declared tool-content tree, already resolved at estate-parse time (ADR-0134
+		// D3) and carried through the stored spec — so it reaches every replica by the same
+		// route the rest of the declaration does, and dispatch never reads a filesystem.
+		Content: a.Content,
 	}
 	if err := r.plugins.RegisterActuator(a.Name, pa); err != nil {
 		// §2.4 collision → reject + surface (D4/D6), never crash the daemon.

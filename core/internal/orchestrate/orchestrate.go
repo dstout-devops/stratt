@@ -419,6 +419,15 @@ type PluginActuator struct {
 	// Image overrides the dispatcher's default EE image for this actuator's Jobs
 	// (ADR-0053: mcp needs the python-bearing EE-mcp image for the sandboxed server).
 	Image string
+	// Content is this Actuator's declared tool-content tree (ADR-0134), relative path →
+	// content, resolved at estate-parse time from the declaration's contentDir. It is
+	// merged into JobSpec.Files under project/ for an EE-Job Step.
+	//
+	// It arrives from the ACTUATOR DECLARATION and never from Step params, which is the
+	// whole point: the spine copies a directory somebody declared in Git and learns nothing
+	// about Ansible (§1.4). Resolving a tool-specific content ref out of params was the
+	// obvious first design and is exactly what ADR-0117 D3a exists to keep out of this path.
+	Content map[string]string
 	// MCP marks the mcp EE-Job transport (ADR-0053): the core resolves the MCPServer
 	// declaration + the rung-3 pin seam around the generic EE-Job dispatch — the
 	// protocol lives in the stratt-mcp shim; the pinning + graph resolution stay core.
@@ -1364,8 +1373,19 @@ func (a *Activities) executeJobPlugin(ctx context.Context, in RunInput, slice in
 	if err != nil {
 		return dispatch.Result{}, temporal.NewNonRetryableApplicationError(err.Error(), "InvalidStepParams", err)
 	}
+	files := map[string]string{"stratt/request.json": string(reqBytes)}
+	// The Actuator's DECLARED content root, mounted at project/ (ADR-0134 D2) — the same
+	// dir the params.scm path arrives at after its clone, so the shim reuses that branch.
+	// The spine copies a directory a DECLARATION named and learns nothing about what is in
+	// it: no `if ansible {}`, and in particular no reading of Step params to decide, which
+	// is the design ADR-0117 D3a exists to keep out of this path (§1.4). Empty ⇒ nothing
+	// mounts and the inline-play behaviour is exactly as it was, which is what makes this
+	// additive for every Actuator that declares no contentDir.
+	for rel, content := range pa.Content {
+		files["project/"+rel] = content
+	}
 	spec := actuators.JobSpec{
-		Files:   map[string]string{"stratt/request.json": string(reqBytes)},
+		Files:   files,
 		Command: pa.JobCommand,
 		// The Actuator's DECLARED image (ADR-0117 D3a). Per-Step EE selection is by
 		// declaration, never by reading inside a tool's params: a Step selects an

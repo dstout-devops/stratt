@@ -1,0 +1,34 @@
+---
+# Collect observed host-access grants, read-only (estate/triggers/access-collector.yaml).
+#
+# The set_fact name (stratt_access) and its array-of-{subject, kind, scope} shape are a
+# contract with the ansible Actuator's fact extraction and the pinned access.grants schema.
+# Public keys only — no private material (§2.5). v1 enumerates local group membership;
+# sudoers / authorized_key / account enumeration is the operator-tunable part.
+- name: Collect host-access grants (read-only)
+  hosts: all
+  gather_facts: true
+  become: true
+  vars:
+    watched_groups: [wheel, sudo]
+  tasks:
+    - name: Read watched group membership
+      ansible.builtin.getent:
+        database: group
+        key: "{{ item }}"
+      loop: "{{ watched_groups }}"
+      failed_when: false
+
+    - name: Start with an empty grant set
+      ansible.builtin.set_fact:
+        stratt_access: []
+
+    - name: Append one grant per (member, group) pair
+      ansible.builtin.set_fact:
+        stratt_access: "{{ stratt_access + [ { 'subject': item.0, 'kind': 'group', 'scope': item.1 } ] }}"
+      loop: "{{ q('subelements', access_members, 'members') }}"
+      vars:
+        # access_members: [{group: wheel, members: [alice, ...]}, ...] built
+        # by the operator from the getent results above (see ADR-0036 note).
+        access_members: []
+      when: access_members | length > 0

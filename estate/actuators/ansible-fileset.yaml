@@ -1,0 +1,18 @@
+# ansible-fileset — the ansible Actuator bound to the fileset PROJECT (ADR-0134 D1/D2):
+# managed-file distribution, revert and collection.
+#
+# One namespace, for the same reason as ansible-access-control: fileset.content is everything
+# this project's content legitimately observes, so it is everything this Actuator may write.
+#
+# Platform-owned path — see ansible-platform-baseline for the ADR-0134 D2 correction and the
+# honest limit on what a per-project ceiling does and does not enforce.
+name: ansible-fileset
+pluginIdentity: ansible
+tier: trusted
+dryRunnable: true
+jobCommand: [stratt-ansible]
+contentDir: ansible/projects/fileset
+contentInputs: [playbook]
+facetNamespaces: [fileset.content]
+identitySchemes: [host.name]
+elevatedInputs: [become.enabled]

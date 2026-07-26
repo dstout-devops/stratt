@@ -60,6 +60,11 @@ type params struct {
 	// SCM, when set, fetches the playbook from a git content-ref INSIDE the EE (the
 	// git/GPL tooling stays a subprocess on this side of the port, never the core).
 	SCM *scmParams `json:"scm,omitempty"`
+	// Playbook, when set, names a play file inside project/ — which the CORE has already
+	// mounted from the Actuator's declared contentDir (ADR-0134). The shim does not fetch
+	// it and does not know where it came from: project/ arrives populated instead of being
+	// cloned, so this reuses the branch SCM already has rather than adding a third one.
+	Playbook string `json:"playbook,omitempty"`
 
 	// ── The typed run knobs (ansible.input.v5, ADR-0117 D1) ──────────────────────
 	// Each is a TYPED field, never a free-form flag string: the Contract bounds every
@@ -210,6 +215,22 @@ func validateSCM(s *scmParams) error {
 	return nil
 }
 
+// validatePlaybookPath keeps a mounted-tree playbook reference inside project/. The
+// Contract already bounds the same value with a segment pattern, and this re-checks it
+// anyway: the shim's Contract is the OPAQUE desired payload (§1.5), so it never assumes a
+// validator ran upstream — the same reason validateSCM re-checks a path git would also
+// reject. The path reaches an ansible-runner argument, so "-" is refused too: a leading
+// dash is parsed as an option, which is the argument-injection shape validateSCM guards.
+func validatePlaybookPath(playbook string) error {
+	if strings.HasPrefix(playbook, "/") || strings.Contains(playbook, "..") {
+		return fmt.Errorf("params.playbook must be a relative path within the mounted project tree")
+	}
+	if strings.HasPrefix(playbook, "-") {
+		return fmt.Errorf("params.playbook must not begin with '-'")
+	}
+	return nil
+}
+
 // cloner fetches an SCM content-ref INTO projectDir — injectable so SCM handling is
 // unit-tested without git (which, like ansible-runner, is a subprocess in the EE,
 // never linked into the Apache core).
@@ -268,7 +289,13 @@ func Run(ctx context.Context, w io.Writer, dir string, req Request, run commandR
 	inventory := renderInventory(req.Targets, connVars)
 
 	playbook := "play.yml"
-	if p.SCM != nil {
+	switch {
+	case p.SCM != nil && p.Playbook != "":
+		// project/ has room for one content source, and a merge between two would need a
+		// winner. The Contract refuses this pair; say so here too rather than silently
+		// preferring one, because the shim is where an operator is reading logs (§1.8).
+		return emitFatal(w, "params.scm and params.playbook are mutually exclusive — scm clones project/, playbook runs a file the core mounted there")
+	case p.SCM != nil:
 		if err := validateSCM(p.SCM); err != nil {
 			return emitFatal(w, err.Error())
 		}
@@ -279,7 +306,26 @@ func Run(ctx context.Context, w io.Writer, dir string, req Request, run commandR
 			return emitFatal(w, "git clone: "+err.Error())
 		}
 		playbook = p.SCM.Playbook
-	} else {
+	case p.Playbook != "":
+		// project/ is ALREADY populated — the core mounted the Actuator's declared content
+		// root there (ADR-0134). So this lays out only the source-independent parts, exactly
+		// as the SCM branch does, and never writes project/play.yml over a mounted tree.
+		if err := validatePlaybookPath(p.Playbook); err != nil {
+			return emitFatal(w, err.Error())
+		}
+		if err := writeInventory(dir, inventory, p.ExtraVars); err != nil {
+			return emitFatal(w, err.Error())
+		}
+		// Existence is checked HERE as well as at estate load, because the two answer
+		// different questions: the load knows what the declaration said, this knows what
+		// the pod actually received. A mount that silently did not happen would otherwise
+		// surface as ansible-runner's own "playbook could not be found", which names
+		// neither the Actuator nor the fact that a mount is involved (§1.8).
+		if _, err := os.Stat(filepath.Join(dir, "project", filepath.FromSlash(p.Playbook))); err != nil {
+			return emitFatal(w, "params.playbook "+p.Playbook+" is not in the mounted project tree: "+err.Error())
+		}
+		playbook = p.Playbook
+	default:
 		play := p.Play
 		if play == "" {
 			play = GatherFactsPlay

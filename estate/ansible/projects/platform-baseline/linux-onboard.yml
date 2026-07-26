@@ -1,0 +1,15 @@
+---
+# Baseline a freshly-provisioned Linux server — the configure Step of the linux-onboard
+# lifecycle DAG (estate/workflows/linux-onboard.yaml).
+#
+# This file is a PLAYBOOK, and being one is the point (ADR-0134): ansible-lint,
+# `ansible-playbook --syntax-check`, molecule and an editor's syntax highlighting can all
+# read it, none of which could reach it while it was a string inside a Workflow.
+- name: Baseline a freshly-provisioned Linux server
+  hosts: all
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Record onboarding
+      ansible.builtin.debug:
+        msg: "onboarded into linux-fleet"
