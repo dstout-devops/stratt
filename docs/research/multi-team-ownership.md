@@ -270,9 +270,16 @@ In dependency order. Each needs its own argument; none should be folded into ano
 | C   | **Authority objects** — the two AWX verbs authz lacks, enforced at the API door             | A          |
 | D   | **Cell-scoped grants + fenced handover** — the sovereignty operation                        | A, C       |
 
-**Immediately, and independent of all four:** [ADR-0134](../adr/0134-tool-content-lives-beside-the-estate.md)
-should be amended to withdraw its isolation claim and name (C) as its dependency. It is currently the only
-document in the tree asserting a boundary that does not hold.
+**Immediately, and independent of all four:** ~~[ADR-0134](../adr/0134-tool-content-lives-beside-the-estate.md)
+should be amended to withdraw its isolation claim~~ — **done**; its D2 now states that the boundary holds at
+run time, not at authoring time, and names (C) as its dependency.
+
+**The unblocked work right now is implementing ADR-0134 itself**, which is Accepted-shaped but **design
+only** — its Implementation section carries the file-by-file plan, the traps (§1.4 tool-blindness,
+ADR-0117 D6, the deliberate tripwires), and the one judgement it leaves open (which projects the reference
+estate's plays belong to). It does not depend on A–D: the layout is safe to build now, and the authority
+work hardens a boundary that is repo-review-enforced in the meantime. Doing it first also gives A–D a real
+worked example to argue against rather than a hypothetical.
 
 ---
 
