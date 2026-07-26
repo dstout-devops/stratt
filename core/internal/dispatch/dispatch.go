@@ -170,6 +170,19 @@ func keepAlive(heartbeat func()) (beat func(), stop func()) {
 	return keepAliveEvery(heartbeat, heartbeatInterval)
 }
 
+// keepAliveEvery is the ticker behind keepAlive, with the interval injectable for tests.
+//
+// stop() is SYNCHRONOUS: it returns only once the ticker goroutine has exited and any
+// in-flight heartbeat has completed, so no beat can ever land after stop() returns. That
+// is the guarantee the caller actually needs — `defer stopBeat()` runs as the activity
+// returns, and a heartbeat recorded after that reports liveness for an execution that has
+// already finished, which is exactly what Temporal must not be told.
+//
+// It used to be fire-and-forget (`func() { close(done) }`), which left two windows open: a
+// tick selected just before the close still ran its beat afterwards, and `select` chooses
+// randomly when both channels are ready, so a beat could fire even after done was closed.
+// Waiting closes both. It surfaced as a flaky TestKeepAlive_StopsBeating on a loaded CI
+// runner — the test was right and the implementation was not.
 func keepAliveEvery(heartbeat func(), interval time.Duration) (beat func(), stop func()) {
 	if heartbeat == nil {
 		return nil, func() {}
@@ -181,19 +194,34 @@ func keepAliveEvery(heartbeat func(), interval time.Duration) (beat func(), stop
 		heartbeat()
 	}
 	done := make(chan struct{})
+	stopped := make(chan struct{})
 	go func() {
+		defer close(stopped)
 		t := time.NewTicker(interval)
 		defer t.Stop()
 		for {
 			select {
-			case <-t.C:
-				beat()
 			case <-done:
 				return
+			case <-t.C:
+				// Re-check done: select picks at random when both are ready, so a
+				// tick racing the stop would otherwise get one more beat in.
+				select {
+				case <-done:
+					return
+				default:
+				}
+				beat()
 			}
 		}
 	}()
-	return beat, func() { close(done) }
+	// sync.Once because stop is idempotent by contract — callers `defer stop()` and some
+	// also call it on an early return; closing a closed channel panics.
+	var once sync.Once
+	return beat, func() {
+		once.Do(func() { close(done) })
+		<-stopped
+	}
 }
 
 // driftCapBytes bounds the accumulated drift detail per target. Findings
