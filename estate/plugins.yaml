@@ -29,3 +29,25 @@
 plugins:
   - name: ansible
     path: ../plugins/ansible/estate
+  - name: awsec2
+    path: ../plugins/awsec2/estate
+  - name: awss3
+    path: ../plugins/awss3/estate
+  - name: crossplane
+    path: ../plugins/crossplane/estate
+  - name: declared
+    path: ../plugins/declared/estate
+  - name: helm
+    path: ../plugins/helm/estate
+  - name: netbox
+    path: ../plugins/netbox/estate
+  - name: notify
+    path: ../plugins/notify/estate
+  - name: openbao
+    path: ../plugins/openbao/estate
+  - name: opentofu
+    path: ../plugins/opentofu/estate
+  - name: script
+    path: ../plugins/script/estate
+  - name: vcenter
+    path: ../plugins/vcenter/estate

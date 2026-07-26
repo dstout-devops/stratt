@@ -38,8 +38,25 @@ Everything merges into **one flat namespace** and is validated in one pass, so a
 to a Workflow a plugin ships is an ordinary reference. Two admitted plugins declaring the same name is a
 hard error naming both files — never a silent winner (§2.4).
 
-The ansible declarations moved out under this rule; they now live in
-[`plugins/ansible/estate/`](../plugins/ansible/estate/).
+**All twelve in-tree plugins have moved out under this rule** — their Actuators, Connectors and
+single-plugin Workflows now live in `plugins/<name>/estate/`, and `estate/actuators/` and
+`estate/connectors/` are empty. What remains here is composition, and the boundary is worth stating
+because it is the one that gets got wrong:
+
+| stays here                                       | why                                                                                                                    |
+| ------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------- |
+| `workflows/linux-onboard.yaml`                   | spans **awsec2 → ansible**                                                                                             |
+| `workflows/vsphere-subnet-build.yaml`            | spans **netbox → vcenter**                                                                                             |
+| `workflows/change-review.yaml`                   | a Gate-only Workflow; names no plugin at all                                                                           |
+| `capability-bindings/`                           | the estate choosing WHICH plugin serves a capability — the choice is the estate's by definition                        |
+| `views/` `intents/` `blueprints/` `assignments/` | the composition layer: groups, and what is wanted for them                                                             |
+| `baselines/awx-*.yaml`                           | drift baselines over projected `awx.*` facets; the AWX Connector is boot-wired, so there is no declaration to own them |
+
+**The test is "does it span more than one plugin?", never "does it mention one."** A Workflow that
+names an ansible Actuator still belongs here if it also provisions through awsec2 — burying that
+`awsec2/create-vm` inside `plugins/ansible/` would put a hard dependency on a second plugin in the
+first one's tree. `task plugins:boundary` enforces this mechanically; it was written because step 2
+got `linux-onboard` wrong in exactly that way.
 
 ## The flagship: `linux-fleet` (the layered / CDK-style construct model)
 
