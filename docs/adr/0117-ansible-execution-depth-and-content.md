@@ -42,7 +42,7 @@ fully-featured Ansible plugin" turns out to be the wrong frame, and the prior-ar
 unambiguous about why: **Ansible is Stratt's most-decided domain.** Six ADRs, four pinned Contract
 versions, two Facet schemas, a live machine-credential, and **seven estate Workflows already executing
 real plays** — including a real SSH converge against a managed node ([ADR-0084](0084-managed-node-reachability-address-facet.md)).
-[`docs/aap-2.7-parity.md`](../aap-2.7-parity.md) scores Automation Controller **🟢 code-complete core**.
+[`docs/parity/aap-2.7-platform.md`](../parity/aap-2.7-platform.md) scores Automation Controller **🟢 code-complete core**.
 
 Three seams are settled and are **not** reopened here:
 
@@ -328,7 +328,7 @@ Rationale — three charter forces converge on build-time:
   (solvable) instead of a _runtime_ problem (not).
 
 This closes the **trust + pinning** half of the 🔴 Automation Hub gap honestly, and states plainly what it
-does not close: we ship no collection **registry** (a Tier-3 item in [`aap-2.7-parity.md`](../aap-2.7-parity.md)
+does not close: we ship no collection **registry** (a Tier-3 item in [`aap-2.7-platform.md`](../parity/aap-2.7-platform.md)
 — a revisable product-scope call, not a charter §1 non-goal), and **air-gap content seeding remains
 an open follow-up**.
 
@@ -547,7 +547,7 @@ what a reasonable schema would look like.** Nothing short of running `community.
   where the façade was discarding the Workflow it had just resolved. (d) `/api/v2` route breadth +
   notification sinks (P2/P3) — separate ADRs. **The notification half is done: ADR-0125**, which found the
   gap was not three missing drivers but three places where the spine named the one driver it had. `/api/v2`
-  route breadth remains open. ~~(e) Update [`aap-2.7-parity.md`](../aap-2.7-parity.md) when v5 + content land, and
+  route breadth remains open. ~~(e) Update [`aap-2.7-platform.md`](../parity/aap-2.7-platform.md) when v5 + content land, and
   **narrow or close PLG-1** in `enterprise-readiness.md`.~~ — **done.** Parity's Inventories, Execution
   Environments and Surveys rows now cite what actually shipped (D5a's `ansible_port`, D3/D3a's build-time
   content and per-Actuator EE, and `Workflow.inputs` for surveys). PLG-1 is **narrowed, not closed**: its

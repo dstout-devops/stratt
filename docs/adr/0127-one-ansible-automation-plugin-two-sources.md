@@ -222,7 +222,11 @@ Stated because a rename is exactly the change that quietly grows scope:
   is now `controller/awxapi`, and `plugins/awx/materialize` is `controller/materialize`.
 - **Follow-ups booked (not absorbed):** `ansible.project` + `scm_revision` binding catalogue to execution
   (and with it, ADR-0085's soundness); containment Relations; `roles/requirements.yml`; content signature
-  validation under SUP-1.
+  validation under SUP-1. **Now tracked with stable IDs** in the parity folder this ADR's research
+  prompted — [`AWX-001`](../parity/awx-object-model.md) and [`ANS-002`](../parity/ansible-tool.md)
+  respectively. That audit also found the sizing was set from a one-object sample: the same read-path
+  asymmetry that leaves `projects` unprojected leaves **workflow topology** unprojected too
+  (`AWX-002` — the node graph is fetched and parsed for adopt, and the mirror never sees it).
 
 ## Alternatives considered
 
