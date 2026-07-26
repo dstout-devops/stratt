@@ -2748,6 +2748,21 @@ func validateParamsContract(actuator string, params map[string]any, opts ...Vali
 // Action's input Contract (ADR-0031). Template-carrying params ({{.steps.x}} /
 // {{.event.x}}) are validated at LAUNCH against resolved values, skipped here.
 func validateActionParamsContract(action string, params map[string]any) error {
+	// The Contract must EXIST even when the values cannot be checked yet. Existence
+	// is a static fact about the estate; it does not depend on what a template
+	// resolves to, so deferring it with the values was over-broad. A Step naming an
+	// uncontracted Action used to pass the load and fail at LAUNCH with "no input
+	// contract for action" — the §1.8 shape this package refuses everywhere else:
+	// admitted here, fatal somewhere a human is not reading a diff.
+	//
+	// "An uncontracted operation must not exist" is already ValidateActionInput's
+	// own rule (§2.2/ADR-0031). This is that rule applied at the moment the
+	// reference is written rather than the moment it runs.
+	if _, ok, err := contract.Get("actions/" + action + ".input"); err != nil {
+		return err
+	} else if !ok {
+		return fmt.Errorf("action %q has no input contract — an uncontracted operation must not exist (§2.2, ADR-0031)", action)
+	}
 	if template.Has(params) {
 		return nil
 	}

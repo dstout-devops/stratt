@@ -128,10 +128,14 @@ func TestWorkflowWireRoundTripInputs(t *testing.T) {
 		Steps: []Step{
 			{Name: "approve", Gate: &GateSpec{Approvers: GateApprovers{Teams: ptr([]string{"platform-admins"})}}},
 			{
-				Name:   "build",
-				Needs:  ptr([]string{"approve"}),
-				Action: ptr("script"),
-				Params: &map[string]any{"script": "echo {{.launch.targetSubnet}}"},
+				Name:  "build",
+				Needs: ptr([]string{"approve"}),
+				// A real, contracted Action. This fixture used `script`, which is an
+				// ACTUATOR (contracts/actuators/script.input) with an actuator param
+				// shape — as an `action:` it has no input Contract at all and would have
+				// failed at launch. The load now refuses that, which is what caught it.
+				Action: ptr("crossplane/provision"),
+				Params: &map[string]any{"claimName": "{{.launch.targetSubnet}}"},
 			},
 		},
 	}
