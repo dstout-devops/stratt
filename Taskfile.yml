@@ -302,19 +302,28 @@ tasks:
           [ -d "$d" ] && migrated="$migrated $(basename "$(dirname "$d")")"
         done
 
-        # ── 3. A plugin's estate references only ITS OWN plugin ──────────────────
-        # D4/D7: a declaration that spans TWO plugins is a COMPOSITION, and
-        # compositions belong to the estate. Moving one inside a plugin looks
-        # harmless — it does mention that plugin — but it buries a hard dependency
-        # on a second plugin inside the first one's tree, which is the coupling this
-        # ADR exists to prevent.
+        # ── 3. A plugin's declarations NAME no other plugin ──────────────────────
+        # The rule is ADR-0104 D1, and it is about NAMES, not about dependency:
         #
-        # This check was written because that is exactly what step 2 did: it moved
-        # linux-onboard (awsec2/create-vm → ansible converge) into plugins/ansible
-        # because it named an ansible Actuator. The ADR's own Trap warns about this
-        # for DEMOS ("do not move a demo into a plugin because it MENTIONS that
-        # plugin") and the same test applies to every declaration: does it span more
-        # than one?
+        #     "A declaration requires `keycustodian`, NEVER `openbao-transit`. The
+        #      capability class is the sovereign contract; the plugin that fulfils it
+        #      is a swappable transport."
+        #
+        # A plugin DEPENDING on another capability is the intended design, not a
+        # violation — ansible cannot provision the hosts it converges, a cert plugin
+        # needs a CA, an HSM-backed one needs `keycustodian`. `requires: [provisioning]`
+        # is correct and this check deliberately says nothing about it. What is refused
+        # is naming a PROVIDER: `action: awsec2/create-vm` welds one plugin to another
+        # and is exactly what a capability class exists to avoid (§1.5, the anti-Jenkins
+        # move — coupling to a contract cannot version-rot the way a named provider can).
+        #
+        # It caught linux-onboard, which step 2 had moved into plugins/ansible. Note
+        # what the real defect was: not that the Workflow spans two plugins — that is
+        # ordinary and fine — but that it NAMES awsec2. The capability-typed form of it
+        # cannot be written today (a Workflow Step takes a concrete actuator:/action:,
+        # with no `requiresCapability:` equivalent to the one an Intent has), so it
+        # lives in estate/ for now BECAUSE THE MECHANISM IS MISSING, not because a
+        # cross-plugin lifecycle inherently belongs to core.
         #
         # Ownership comes from the declarations themselves — an `actuator:` resolves
         # through its declaration's pluginIdentity, an `action: <plugin>/<verb>`
@@ -345,8 +354,9 @@ tasks:
               esac
               [ -n "$owner" ] || continue                                    # unresolvable ⇒ not ours to judge
               if [ "$owner" != "$self" ]; then
-                echo "  ✗ $f references '$ref' (owned by '$owner') — a declaration spanning two plugins is a"
-                echo "      COMPOSITION and belongs in estate/, not inside plugins/$self (ADR-0137 D4/D7)"
+                echo "  ✗ $f NAMES another plugin's provider: '$ref' (owned by '$owner')."
+                echo "      Depend on a capability CLASS, never a provider name (ADR-0104 D1). Depending on"
+                echo "      another capability is fine — naming who fulfils it is not."
                 fail=1
               fi
             done

@@ -45,8 +45,8 @@ because it is the one that gets got wrong:
 
 | stays here                                       | why                                                                                                                    |
 | ------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------- |
-| `workflows/linux-onboard.yaml`                   | spans **awsec2 → ansible**                                                                                             |
-| `workflows/vsphere-subnet-build.yaml`            | spans **netbox → vcenter**                                                                                             |
+| `workflows/linux-onboard.yaml`                   | **names** `awsec2/create-vm`; the capability-typed form cannot be written yet (see below)                              |
+| `workflows/vsphere-subnet-build.yaml`            | **names** `netbox/ipam-resolve` + `vcenter/create-portgroup`; same reason                                              |
 | `workflows/change-review.yaml`                   | a Gate-only Workflow; names no plugin at all                                                                           |
 | `capability-bindings/`                           | the estate choosing WHICH plugin serves a capability — the choice is the estate's by definition                        |
 | `views/` `intents/` `blueprints/` `assignments/` | the composition layer: groups, and what is wanted for them                                                             |
@@ -71,10 +71,16 @@ declarative constructs (the useful half of AWS CDK — see ADR-0055):
   union within it), so the fleet's `sshd-config` key and web-files' `nginx-conf` key coexist in `fileset.content`.
 - **[`workflows/linux-onboard.yaml`](workflows/linux-onboard.yaml)** — the L3 onboarding lifecycle:
   `Gate → provision (Action) → configure
-(ansible)`. It stays HERE, in the estate, and not inside either plugin: it spans **two** of them
-  (`awsec2` provisions, `ansible` converges), which makes it a composition (ADR-0137 D4/D7). The
-  provision Step's `action` is the **landscape binding** — `awsec2/create-vm` in dev, swappable
-  for a `crossplane`/`opentofu`/`vsphere` Action without touching the rest of the estate. Provisioning is
+(ansible)`. It stays HERE for a reason worth stating precisely, because the obvious one is wrong:
+  **not** because it spans two plugins — a plugin depending on another capability is the intended
+  design ([ADR-0104](../docs/adr/0104-plugin-capability-dependencies.md) D1: ansible cannot provision
+  the hosts it converges) — but because its provision Step **names a provider**, `awsec2/create-vm`,
+  and the capability-typed form cannot be written today. An **Intent** may say
+  `requires: [provisioning]` and resolve to a concrete build Action; a **Workflow Step** has no
+  equivalent. Until it does, a Workflow whose legs cross capabilities has to name someone, and naming
+  belongs to the estate. The provision Step's `action` is the **landscape binding** —
+  `awsec2/create-vm` in dev, swappable for a `crossplane`/`opentofu`/`vsphere` Action without touching
+  the rest of the estate. Provisioning is
   **gated** (§5 Flow 1 — never a silent auto-launch). Cert (cert-issuer) + app (helm) Steps are the next slice.
 
 ## The defaulted unit: `web-server` (G6 defaults + the materialization seam)
