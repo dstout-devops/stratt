@@ -1,0 +1,38 @@
+# awx-superuser-review — who has god mode on the Controller (ADR-0130 D4). A
+# facet-observation Baseline (ADR-0033) that READS the ansible.user Facet the
+# ansible-automation Connector's controller half projects (§1.2) and opens a Finding for
+# every account with is_superuser.
+#
+# EVERY SUPERUSER FIRES, AND THAT IS THE POINT — not noise. "Who can do anything at all on
+# the automation platform" is an audit question with a small, enumerable answer, and the
+# control is that the list is reviewed periodically rather than discovered during an
+# incident. A Finding per superuser is the review queue.
+#
+# It reads isSuperuser and NOT isActive, deliberately: a disabled account is hygiene, not a
+# finding. A disabled SUPERUSER still fires, which is correct — an account that could be
+# re-enabled into god mode is exactly what a review should see.
+#
+# This is also the §1.1 CONSUMER that demands the ansible.user Facet schema — the stronger
+# of the two demander framings (a facet-reading consumer, not only the write path), per
+# ADR-0128 D5.
+#
+# §1.8 FIDELITY: /users/ is RBAC-filtered by the reading token, so this reviews the accounts
+# THAT CREDENTIAL CAN SEE. A non-superuser token projects a subset, and the Baseline is then
+# honestly reporting on a partial view of an external system we do not own (PLG-1) — worth
+# knowing before treating an empty result as an all-clear.
+#
+# Pure read (§1.2, §2.4): opens Findings, no actuator, no write-back, no claim. Remediation
+# is an action at AWX, never a graph edit (ADR-0079 INV-2). And nothing here is read by
+# authorization — INV-3 is structural.
+name: awx-superuser-review
+viewName: awx-users
+mode: facet-observation
+framework: ansible-governance
+severity: warning
+cron: "@every 24h"
+dampingObservations: 1
+environments: [dev]
+expected:
+  - namespace: ansible.user
+    path: isSuperuser
+    equals: false

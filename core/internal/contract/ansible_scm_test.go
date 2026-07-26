@@ -12,8 +12,8 @@ func TestAnsibleHighestVersionResolved(t *testing.T) {
 	if err != nil || !ok {
 		t.Fatalf("ansible.input contract: ok=%v err=%v", ok, err)
 	}
-	if c.Version != 5 {
-		t.Fatalf("resolved ansible.input version = %d, want 5 (the run-knob sibling)", c.Version)
+	if c.Version != 6 {
+		t.Fatalf("resolved ansible.input version = %d, want 6 (the connection block, ADR-0126)", c.Version)
 	}
 }
 

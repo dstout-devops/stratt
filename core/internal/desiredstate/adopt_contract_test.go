@@ -7,14 +7,15 @@ import (
 	"testing"
 )
 
-// goldenBundle is the awx plugin's committed emitter-generated adopt bundle (ADR-0089 §6). It
+// goldenBundle is the ansible-automation Controller half's committed emitter-generated adopt
+// bundle (ADR-0089 §6, ADR-0127). It
 // lives in the plugin (which owns the AWX→CaC transform); this core test reaches across the
 // module boundary by PATH (never an import — core must not depend on the plugin) to prove the
 // plugin↔core CaC contract: everything the plugin emits parses + validates through the core
 // desiredstate reader. Paired with the plugin's TestGoldenBundle (which fails on emit drift),
 // this is the §1.5 guarantee that plugin emission and core consumption never silently diverge.
-// Regenerate the fixture with: go test ./plugins/awx/materialize -run TestGoldenBundle -update
-const goldenBundle = "../../../plugins/awx/materialize/testdata/golden"
+// Regenerate the fixture with: go test ./plugins/ansible-automation/controller/materialize -run TestGoldenBundle -update
+const goldenBundle = "../../../plugins/ansible-automation/controller/materialize/testdata/golden"
 
 // TestAdoptGoldenBundleParses is the CaC contract test: the plugin-emitted golden bundle must
 // parse + validate through desiredstate.ParseDir (KnownFields(true) + Validate*), and yield the

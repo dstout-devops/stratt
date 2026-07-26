@@ -10,25 +10,25 @@ design must reconcile with. Chronological list: [README.md](README.md); phase vi
 
 ```mermaid
 graph TD
-  actuators["actuators<br/><small>0016 0022 0050 0053 0092 0117<br/>0124</small>"]
+  actuators["actuators<br/><small>0016 0022 0050 0053 0092 0117<br/>0124 0126 0133</small>"]
   api_surface["api-surface<br/><small>0006 0021 0026 0076 0091 0121</small>"]
   audit_telemetry["audit-telemetry<br/><small>0034 0065 0077 0121</small>"]
-  authz_identity["authz-identity<br/><small>0009 0028 0035 0079 0101 0122</small>"]
+  authz_identity["authz-identity<br/><small>0009 0028 0035 0079 0101 0122<br/>0130</small>"]
   capability_framework["capability-framework<br/><small>0100 0104 0105 0106 0107 0110<br/>0111 0112 0113 0114</small>"]
   certificates_pki["certificates-pki<br/><small>0030 0043 0050 0098 0106</small>"]
-  connectors["connectors<br/><small>0007 0014 0025 0026 0037 0038<br/>0039 0045 0086 0087 0088 0089<br/>0095 0097 0099 0113 0114 0115</small>"]
-  credentials_secrets["credentials-secrets<br/><small>0009 0029 0052 0094 0098 0099<br/>0100 0106 0125</small>"]
-  estate_as_code["estate-as-code<br/><small>0055 0056 0057 0103 0113 0116<br/>0118 0119 0120 0122 0123</small>"]
-  findings_drift["findings-drift<br/><small>0019 0020 0033 0043 0080 0085</small>"]
+  connectors["connectors<br/><small>0007 0014 0025 0026 0037 0038<br/>0039 0045 0086 0087 0088 0089<br/>0095 0097 0099 0113 0114 0115<br/>0127 0128 0129 0130 0131 0132<br/>0133</small>"]
+  credentials_secrets["credentials-secrets<br/><small>0009 0029 0052 0094 0098 0099<br/>0100 0106 0125 0126</small>"]
+  estate_as_code["estate-as-code<br/><small>0055 0056 0057 0103 0113 0116<br/>0118 0119 0120 0122 0123 0132</small>"]
+  findings_drift["findings-drift<br/><small>0019 0020 0033 0043 0080 0085<br/>0128 0129 0130 0133</small>"]
   foundation["foundation<br/><small>0001 0002 0004 0005 0006 0008<br/>0108 0109 0116</small>"]
-  graph_model["graph-model<br/><small>0015 0017 0041 0042 0059 0060<br/>0079 0080 0081 0082 0084 0085<br/>0096 0114 0115 0119 0120 0123</small>"]
+  graph_model["graph-model<br/><small>0015 0017 0041 0042 0059 0060<br/>0079 0080 0081 0082 0084 0085<br/>0096 0114 0115 0119 0120 0123<br/>0126 0127 0128 0129 0130 0132<br/>0133</small>"]
   intent_compiler["intent-compiler<br/><small>0023 0030 0036 0055 0058 0083<br/>0085 0114 0118 0119 0123</small>"]
   orchestration["orchestration<br/><small>0010 0011 0018 0027 0031 0063<br/>0118 0122 0125</small>"]
-  plugin_port["plugin-port<br/><small>0046 0047 0048 0049 0051 0053<br/>0054 0103 0117 0121 0124 0125</small>"]
+  plugin_port["plugin-port<br/><small>0046 0047 0048 0049 0051 0053<br/>0054 0103 0117 0121 0124 0125<br/>0127 0131</small>"]
   policy_governance["policy-governance<br/><small>0061 0062 0063 0064 0065 0066<br/>0067 0068 0069 0070 0071 0072<br/>0073 0074 0075 0076 0122</small>"]
   provisioning["provisioning<br/><small>0017 0058 0095 0096 0107 0110<br/>0111 0112 0113 0114 0115 0120<br/>0123</small>"]
   state_artifacts["state-artifacts<br/><small>0016 0029 0093 0097 0105 0112</small>"]
-  substrate_ops["substrate-ops<br/><small>0013 0032 0040 0044 0045 0049<br/>0077 0078 0093 0101 0102 0124</small>"]
+  substrate_ops["substrate-ops<br/><small>0013 0032 0040 0044 0045 0049<br/>0077 0078 0093 0101 0102 0124<br/>0131</small>"]
   ui["ui<br/><small>0003 0012 0020 0024 0090 0091<br/>0116 0121</small>"]
 
   actuators --> plugin_port
@@ -91,6 +91,8 @@ Actuators — execution engines (opentofu, helm, mcp, cert-issuer reconcile).
 - [ADR-0092](0092-helm-actuator.md) — Helm Actuator: chart → release behind Gates, over the sovereign port
 - [ADR-0117](0117-ansible-execution-depth-and-content.md) — Ansible execution depth + content: the run-knob Contract (v5) and collections as pinned, external-sourced content
 - [ADR-0124](0124-ee-content-supply-factory-and-offline-source.md) — EE content supply: an `execution-environment.yml` front door, and an offline source that is verified the same way
+- [ADR-0126](0126-managed-node-reachability-credential-host-key-and-jump.md) — Reaching a managed node: the connection credential, the host key, and the jump path
+- [ADR-0133](0133-execution-environments-and-instance-groups.md) — An AWX execution environment is a supply-chain fact; an instance group is a placement model we already have
 
 ### api-surface
 
@@ -128,6 +130,7 @@ Authorization & identity — OpenFGA, Principal, SCIM, workload identity.
 - [ADR-0079](0079-identity-as-a-cross-cutting-dimension.md) — Identity is a cross-cutting projection dimension, not a lowest-level type
 - [ADR-0101](0101-cluster-authz-activation-openbao-oidc-workload-identity.md) — Activate real cluster authz; OpenBao-OIDC workload identity; multi-issuer Principal resolution
 - [ADR-0122](0122-change-context-is-typed-and-partly-derived.md) — The change context is typed, and the facts core can know are derived, not asserted
+- [ADR-0130](0130-awx-local-accounts-and-team-membership.md) — AWX's local accounts are an estate fact, not an identity source and never an authz one
 
 ### capability-framework
 
@@ -182,6 +185,13 @@ Connectors & Syncers — SoR ingest breadth, the Syncer SDK, adopt/AWX-import.
 - [ADR-0113](0113-vsphere-provisioning-provider.md) — vSphere as a `provisioning` provider: the vcenter plugin gains a build verb (VM + DVPortgroup)
 - [ADR-0114](0114-entity-lifecycle-and-decommission-reach-path.md) — Entity lifecycle Actions + the desired-state decommission reach-path
 - [ADR-0115](0115-vsphere-read-breadth.md) — vSphere read breadth: the inventory graph (region/AZ reuse, uncovered-Facet posture)
+- [ADR-0127](0127-one-ansible-automation-plugin-two-sources.md) — One `ansible-automation` plugin, two Sources
+- [ADR-0128](0128-ansible-template-projection-depth.md) — The `ansible.template` mirror answers governance questions, or it is decoration
+- [ADR-0129](0129-workflow-topology-projection.md) — A mirrored workflow says what it invokes; it does not re-model AWX's node graph
+- [ADR-0130](0130-awx-local-accounts-and-team-membership.md) — AWX's local accounts are an estate fact, not an identity source and never an authz one
+- [ADR-0131](0131-controller-poll-cost-budget.md) — A poll-cost budget for the AAP Controller half: tiered cadence, and a partial read degrades instead of failing
+- [ADR-0132](0132-awx-labels-and-schedule-shape.md) — Two "mechanical" projection gaps that were not: AWX labels, and what a schedule actually runs
+- [ADR-0133](0133-execution-environments-and-instance-groups.md) — An AWX execution environment is a supply-chain fact; an instance group is a placement model we already have
 
 ### credentials-secrets
 
@@ -198,6 +208,7 @@ Credentials & secrets (§2.5) — brokering, the SecretBroker port, KV, KeyCusto
 - [ADR-0100](0100-keycustodian-kms-envelope-encryption.md) — The KeyCustodian capability: envelope encryption with a self-sufficient local floor and optional, transport-plural KMS providers
 - [ADR-0106](0106-openbao-multi-capability-provider.md) — OpenBao as a multi-capability provider; enablement-gate vs resolve-inject capabilities
 - [ADR-0125](0125-notification-sinks-are-drivers-not-a-core-switch.md) — Notification sinks are drivers behind a seam, not a switch in the daemon
+- [ADR-0126](0126-managed-node-reachability-credential-host-key-and-jump.md) — Reaching a managed node: the connection credential, the host key, and the jump path
 
 ### estate-as-code
 
@@ -216,6 +227,7 @@ Estate-as-Code — CaC declarations, environments, composition, the estate CLI.
 - [ADR-0120](0120-provisioning-joins-the-parameter-plane.md) — Provisioning joins the parameter plane: a Finding carries its own launch spec
 - [ADR-0122](0122-change-context-is-typed-and-partly-derived.md) — The change context is typed, and the facts core can know are derived, not asserted
 - [ADR-0123](0123-keyed-placement-aware-spread.md) — Keyed, placement-aware spread: identity survives a zone-list edit, and declared placement finally reaches the build
+- [ADR-0132](0132-awx-labels-and-schedule-shape.md) — Two "mechanical" projection gaps that were not: AWX labels, and what a schedule actually runs
 
 ### findings-drift
 
@@ -229,6 +241,10 @@ Findings & drift — Baselines, Findings, compliance packs, drift/GC.
 - [ADR-0043](0043-cert-renewal-finding-gc.md) — Cert-renewal Finding-GC (resolve Findings for tombstoned Entities)
 - [ADR-0080](0080-software-as-an-estate-dimension.md) — Software as an estate dimension: installed packages, open delivery-form, patch/advisory Findings
 - [ADR-0085](0085-relation-presence-baseline.md) — Relation-presence Baseline: desired state over graph topology, not just node facets
+- [ADR-0128](0128-ansible-template-projection-depth.md) — The `ansible.template` mirror answers governance questions, or it is decoration
+- [ADR-0129](0129-workflow-topology-projection.md) — A mirrored workflow says what it invokes; it does not re-model AWX's node graph
+- [ADR-0130](0130-awx-local-accounts-and-team-membership.md) — AWX's local accounts are an estate fact, not an identity source and never an authz one
+- [ADR-0133](0133-execution-environments-and-instance-groups.md) — An AWX execution environment is a supply-chain fact; an instance group is a placement model we already have
 
 ### foundation
 
@@ -268,6 +284,13 @@ Graph model — Entity/Facet/Relation/Contract primitives, projection & liveness
 - [ADR-0119](0119-versioned-configuration-and-promotion.md) — Versioned configuration and promotion: one estate, N rings, immutable once pinned
 - [ADR-0120](0120-provisioning-joins-the-parameter-plane.md) — Provisioning joins the parameter plane: a Finding carries its own launch spec
 - [ADR-0123](0123-keyed-placement-aware-spread.md) — Keyed, placement-aware spread: identity survives a zone-list edit, and declared placement finally reaches the build
+- [ADR-0126](0126-managed-node-reachability-credential-host-key-and-jump.md) — Reaching a managed node: the connection credential, the host key, and the jump path
+- [ADR-0127](0127-one-ansible-automation-plugin-two-sources.md) — One `ansible-automation` plugin, two Sources
+- [ADR-0128](0128-ansible-template-projection-depth.md) — The `ansible.template` mirror answers governance questions, or it is decoration
+- [ADR-0129](0129-workflow-topology-projection.md) — A mirrored workflow says what it invokes; it does not re-model AWX's node graph
+- [ADR-0130](0130-awx-local-accounts-and-team-membership.md) — AWX's local accounts are an estate fact, not an identity source and never an authz one
+- [ADR-0132](0132-awx-labels-and-schedule-shape.md) — Two "mechanical" projection gaps that were not: AWX labels, and what a schedule actually runs
+- [ADR-0133](0133-execution-environments-and-instance-groups.md) — An AWX execution environment is a supply-chain fact; an instance group is a placement model we already have
 
 ### intent-compiler
 
@@ -321,6 +344,8 @@ Sovereign plugin port — the dark-matter substrate, transports, runtime registr
 - [ADR-0121](0121-task-event-scope.md) — `TaskEvent.scope`: an event says whether it describes the Run or a task
 - [ADR-0124](0124-ee-content-supply-factory-and-offline-source.md) — EE content supply: an `execution-environment.yml` front door, and an offline source that is verified the same way
 - [ADR-0125](0125-notification-sinks-are-drivers-not-a-core-switch.md) — Notification sinks are drivers behind a seam, not a switch in the daemon
+- [ADR-0127](0127-one-ansible-automation-plugin-two-sources.md) — One `ansible-automation` plugin, two Sources
+- [ADR-0131](0131-controller-poll-cost-budget.md) — A poll-cost budget for the AAP Controller half: tiered cadence, and a partial read degrades instead of failing
 
 ### policy-governance
 
@@ -397,6 +422,7 @@ Substrate & ops — HA/DR, Cells/multi-region, Sites, deploy, bootstrap, upgrade
 - [ADR-0101](0101-cluster-authz-activation-openbao-oidc-workload-identity.md) — Activate real cluster authz; OpenBao-OIDC workload identity; multi-issuer Principal resolution
 - [ADR-0102](0102-tiered-genesis-bootstrap.md) — Tiered genesis bootstrap: a minimal self-retiring floor, then Stratt self-deploys the rest
 - [ADR-0124](0124-ee-content-supply-factory-and-offline-source.md) — EE content supply: an `execution-environment.yml` front door, and an offline source that is verified the same way
+- [ADR-0131](0131-controller-poll-cost-budget.md) — A poll-cost budget for the AAP Controller half: tiered cadence, and a partial read degrades instead of failing
 
 ### ui
 
@@ -542,3 +568,11 @@ UI — React shell, schema-driven rendering, Views, descent, the first-party cli
 | [0123](0123-keyed-placement-aware-spread.md) | estate-as-code, graph-model, intent-compiler, provisioning |
 | [0124](0124-ee-content-supply-factory-and-offline-source.md) | actuators, plugin-port, substrate-ops |
 | [0125](0125-notification-sinks-are-drivers-not-a-core-switch.md) | credentials-secrets, orchestration, plugin-port |
+| [0126](0126-managed-node-reachability-credential-host-key-and-jump.md) | actuators, credentials-secrets, graph-model |
+| [0127](0127-one-ansible-automation-plugin-two-sources.md) | connectors, graph-model, plugin-port |
+| [0128](0128-ansible-template-projection-depth.md) | connectors, findings-drift, graph-model |
+| [0129](0129-workflow-topology-projection.md) | connectors, findings-drift, graph-model |
+| [0130](0130-awx-local-accounts-and-team-membership.md) | authz-identity, connectors, findings-drift, graph-model |
+| [0131](0131-controller-poll-cost-budget.md) | connectors, plugin-port, substrate-ops |
+| [0132](0132-awx-labels-and-schedule-shape.md) | connectors, estate-as-code, graph-model |
+| [0133](0133-execution-environments-and-instance-groups.md) | actuators, connectors, findings-drift, graph-model |

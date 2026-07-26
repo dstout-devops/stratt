@@ -66,14 +66,19 @@ steps:
         enabled: true
         method: sudo
         user: root
+      # HOW to reach the targets (ADR-0126 D1). The key path is DERIVED from the
+      # credentialRef above — the one this Step is authorized to use — instead of being a
+      # literal that nothing kept in agreement with it (§2.4). ansible_host still comes from
+      # each target's mgmt.address; the shim renders both.
+      connection:
+        user: appops
+        credentialRef: app-node-ssh
+        # This demo's node is created fresh per run, so its host key is new every time and
+        # accept-new (the default) is exactly right: first contact is accepted, a CHANGED
+        # key is refused. It replaces `StrictHostKeyChecking=no` plus a /dev/null
+        # known-hosts, which together meant nothing was ever verified or remembered.
+        hostKeyChecking: accept-new
       extraVars:
-        # CONNECTION vars stay literal here: the play authors them and the core never does
-        # (§1.4). ansible_host comes from each target's mgmt.address, rendered by the shim, and
-        # the key path is a pod-local mount — neither is estate configuration, so neither is
-        # duplicated anywhere and neither belongs in the Intent.
-        ansible_user: appops
-        ansible_ssh_private_key_file: /tmp/app-node-key
-        ansible_ssh_common_args: "-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
         # APP CONFIG comes from the launch inputs, which the route filled from the Intent
         # (ADR-0118 D3). This mapping — Stratt input to Ansible variable name — is declared
         # explicitly because core never parses play content to infer what it needs (D6).
@@ -84,21 +89,12 @@ steps:
           hosts: all
           gather_facts: false
           tasks:
-            - name: Stage the SSH key at 0600 (the mount is group-readable; SSH refuses that)
-              # become:false is REQUIRED, not tidiness: the Step escalates, and without this
-              # override ansible would try to sudo on localhost — inside an EE pod that runs
-              # as an unprivileged user and ships no sudo. A task-level become wins over the
-              # play-wide flag.
-              become: false
-              delegate_to: localhost
-              connection: local
-              run_once: true
-              ansible.builtin.copy:
-                src: /runner/credentials/app-node-ssh/id_ed25519
-                dest: /tmp/app-node-key
-                mode: "0600"
-                remote_src: true
-
+            # The key-staging bootstrap task that used to sit here is GONE (ADR-0126 D1).
+            # It copied /runner/credentials/app-node-ssh/id_ed25519 to /tmp at 0600,
+            # because the mount is group-readable and SSH refuses such a key — a real
+            # constraint, but one every SSH-using play had to rediscover and re-solve by
+            # hand. The shim now stages it once, into the runner directory, from the
+            # credentialRef the Step is authorized to use.
             - name: Ensure the TLS material directories exist
               ansible.builtin.file:
                 path: "{{ item }}"

@@ -1,0 +1,42 @@
+# awx-workflow-covered — the ORPHAN-WORKFLOW audit, one level up from awx-template-covered
+# (ADR-0129 D4; ADR-0085's relation-presence mechanism). A facet-observation Baseline that
+# asserts graph TOPOLOGY, not node facet content: every ansible.workflow the
+# ansible-automation Connector's controller half projects must carry an outgoing `invokes`
+# edge to something it actually runs — a projected ansible.template, or a nested
+# ansible.workflow.
+#
+# A workflow with NO invokes edge is one of two things, and both are worth a look:
+#   - dead automation: a workflow whose nodes were emptied and never removed; or
+#   - a workflow whose targets AWX has since DELETED. An edge onto a template that no
+#     longer projects is DROPPED rather than vivified (ADR-0047 §1 / §1.2), so the absence
+#     IS the signal — the same mechanism awx-template-covered rests on.
+#
+# It can also mean a workflow built entirely out of node types Stratt does not project
+# (project syncs, inventory updates). That is a true negative rather than a false one: the
+# workflow genuinely invokes no automation the estate can see or govern.
+#
+# §1.8 / §4.3 FALSE-POSITIVE MODE (documented, not hidden): a workflow whose target
+# templates have not YET been enumerated this cycle has no resolvable edge and momentarily
+# looks uncovered. This is projection lag, not real drift — the same mode awx-template-covered
+# documents, and damped the same way (a Finding opens only after 2 consecutive observations).
+#
+# THE LAG IS LARGER AND CONFIGURABLE SINCE ADR-0131. Workflow nodes are the expensive DETAIL
+# tier and refresh on STRATT_ANSIBLE_AUTOMATION_DETAIL_INTERVAL (default 5m), not every poll,
+# so a NEWLY CREATED workflow carries no invokes edges until the next detail refresh and reads
+# as uncovered for up to that long. That is the poll-cost budget being paid in freshness
+# against a Controller we do not own — deliberate, bounded, and declared. Raise
+# dampingObservations, or lower the detail interval, if your estate creates workflows faster
+# than it can tolerate the lag.
+#
+# Pure read (§1.2, §2.4): opens Findings, no actuator, no write-back, no claim. The `invokes`
+# edge and both its endpoints are owned by the controller half — one writer, no second truth.
+name: awx-workflow-covered
+viewName: awx-workflows
+mode: facet-observation
+framework: ansible-governance
+severity: warning
+cron: "@every 5m"
+dampingObservations: 2
+environments: [dev]
+requiredRelations:
+  - invokes

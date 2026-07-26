@@ -1,0 +1,35 @@
+# awx-ee-digest-pinned — hold the MIRRORED estate to OUR supply-chain standard (ADR-0133 D3;
+# charter §7.3: pinned-digest images, never floating tags). A facet-observation Baseline
+# (ADR-0033) that reads the ansible.executionenvironment Facet and opens a Finding for every
+# execution environment whose image is a mutable tag rather than an immutable digest.
+#
+# This is the first governance surface in the AWX mirror that asks a STRATT question about
+# AWX rather than an AWX question about AWX. awx-schedule-enabled asks "is this schedule
+# dead" — AWX's own concern. This asks "is what you are running reproducible" — ours. AWX
+# will run :latest forever and never mention it; the mirror is what makes it visible.
+#
+# EXPECT IT TO FIRE LOUDLY ON FIRST RUN. Most AWX execution environments are
+# tag-referenced, so this can be a Finding per environment across a real estate. That is a
+# true finding rather than noise, but it is a large one, and it is a decision an operator
+# should make knowingly — hence warning severity and a daily cadence rather than @every 5m.
+#
+# HONESTY (and the reason this comment exists): SEC-5 in docs/enterprise-readiness.md is
+# still RED — Stratt's own charts default to floating tags. Shipping a Baseline that flags a
+# customer's unpinned images while ours are unpinned is defensible only because both facts
+# are written down. If SEC-5 stays red, this row is something to be embarrassed about rather
+# than proud of.
+#
+# Pure read (§1.2, §2.4): opens Findings, no actuator, no write-back, no claim. Remediation
+# is a change at AWX, never a graph edit.
+name: awx-ee-digest-pinned
+viewName: awx-execution-environments
+mode: facet-observation
+framework: ansible-governance
+severity: warning
+cron: "@every 24h"
+dampingObservations: 1
+environments: [dev]
+expected:
+  - namespace: ansible.executionenvironment
+    path: digestPinned
+    equals: true

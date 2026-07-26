@@ -24,7 +24,7 @@ import (
 func runAdopt(args []string) error {
 	fs := flag.NewFlagSet("adopt", flag.ExitOnError)
 	endpoint := fs.String("endpoint", "", "source system base URL for the targeted deep-read, e.g. https://awx.example.com")
-	credRef := fs.String("credential-ref", envOr("STRATT_AWX_CREDENTIAL_REF", ""), "CredentialRef name holding the AWX token (default $STRATT_AWX_CREDENTIAL_REF); resolved in-pod, never read by the caller (§2.5)")
+	credRef := fs.String("credential-ref", envOr("STRATT_ANSIBLE_CONTROLLER_CREDENTIAL_REF", ""), "CredentialRef name holding the AWX token (default $STRATT_ANSIBLE_CONTROLLER_CREDENTIAL_REF); resolved in-pod, never read by the caller (§2.5)")
 	server := fs.String("s", envOr("STRATT_SERVER", "http://localhost:8080"), "control-plane base URL")
 	out := fs.String("o", "", "output directory for the adopted declaration bundle (must be fresh)")
 	timeout := fs.Duration("timeout", 2*time.Minute, "how long to poll the adoption Run before giving up")

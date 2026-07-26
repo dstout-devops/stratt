@@ -2,12 +2,42 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "stratt:contract:facets/ansible.schedule:v1",
   "title": "ansible.schedule Facet",
-  "description": "The OBSERVED definition of an AWX/AAP schedule, projected read-only by the awx Connector (§1.2). An observed foreign object (→ a Stratt Trigger on cutover). Demanded by the AWX-estate governance Baseline awx-schedule-enabled (enabled==true, the disabled/dead-automation audit) and the cutover. rrule is AWX's iCal recurrence; enabled is whether it fires. Closed (§9).",
+  "description": "The OBSERVED definition of an AWX/AAP schedule, projected read-only by the ansible-automation Connector's controller half (§1.2). An observed foreign object (→ a Stratt Trigger on cutover). Demanded by the AWX-estate governance Baseline awx-schedule-enabled (enabled==true, the disabled/dead-automation audit) and the cutover. rrule is AWX's iCal recurrence; enabled is whether it fires. WIDENED IN PLACE by ADR-0132 D3/D4 rather than versioned as a sibling: this is a Facet on a rebuildable projection, not a wire Contract with external authors, so adding optional properties is backward-compatible widening — the mgmt.address precedent (ADR-0117 D5a widened ADR-0084's closed schema with port). extraDataKeys is the KEY NAMES of a schedule's extra_data and NEVER the values (§2.5): it distinguishes two schedules of one template and shows what a schedule parameterises, without carrying launch-variable content into the graph — the same line ADR-0128 D4 drew when it refused extra_vars on the template. A key like db_password is itself worth seeing: it says a schedule injects secret-shaped material as a launch variable, which should be a CredentialRef. Closed (§9).",
   "type": "object",
   "properties": {
     "name": { "type": "string" },
     "rrule": { "type": "string" },
-    "enabled": { "type": "boolean" }
+    "enabled": { "type": "boolean" },
+
+    "timezone": {
+      "type": "string",
+      "description": "the clock the rrule runs on — without it the recurrence is under-determined"
+    },
+    "nextRunAt": {
+      "type": "string",
+      "description": "RFC3339 UTC timestamp of the next fire, when scheduled"
+    },
+    "dtStart": { "type": "string", "description": "RFC3339 UTC first occurrence" },
+    "until": {
+      "type": "string",
+      "description": "RFC3339 UTC last occurrence, when the rule is bounded"
+    },
+
+    "extraDataKeys": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "the KEY NAMES of the schedule's extra_data. Values are never projected (§2.5)."
+    },
+
+    "jobType": { "type": "string", "description": "per-schedule override: run | check" },
+    "limit": { "type": "string" },
+    "jobTags": { "type": "string" },
+    "skipTags": { "type": "string" },
+    "verbosity": { "type": "integer", "minimum": 0 },
+    "diffMode": { "type": "boolean" },
+    "forks": { "type": "integer", "minimum": 0 },
+    "timeout": { "type": "integer" },
+    "scmBranch": { "type": "string" }
   },
   "required": ["name"],
   "additionalProperties": false

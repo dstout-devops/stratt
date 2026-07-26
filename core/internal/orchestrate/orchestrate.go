@@ -687,7 +687,17 @@ func (a *Activities) ResolveTargets(ctx context.Context, in RunInput) (ResolvedT
 	out := ResolvedTargets{ViewVersion: v.Version}
 	for _, e := range ents {
 		addr, port := addressOf(addrs[e.ID])
-		out.Targets = append(out.Targets, renderTarget(e, addr, port))
+		t := renderTarget(e, addr, port)
+		// The reached-via chain (ADR-0126 D3), resolved HERE beside the address
+		// because it is the same kind of fact: a coordinate the core resolves and the
+		// plugin renders. An error is returned rather than logged — a target declared
+		// to sit behind a bastion must never be reached directly instead (§1.8).
+		hops, jerr := resolveJumpChain(ctx, a.Store, e.ID)
+		if jerr != nil {
+			return ResolvedTargets{}, jerr
+		}
+		t.Jump = hops
+		out.Targets = append(out.Targets, t)
 	}
 	return out, nil
 }
@@ -736,7 +746,17 @@ func (a *Activities) ResolveTargetsBySite(ctx context.Context, in RunInput) (Rou
 			}
 		}
 		addr, port := addressOf(addrs[e.ID])
-		bySite[site] = append(bySite[site], renderTarget(e, addr, port))
+		t := renderTarget(e, addr, port)
+		// Both resolution paths carry the chain, or a Site-dispatched Step would
+		// silently lose its bastions — the asymmetry ADR-0125's sibling paths and
+		// ADR-0118's four launch doors both had to close. Sites and ProxyJump are
+		// complementary (D4): a Site-dispatched Step may itself jump.
+		hops, jerr := resolveJumpChain(ctx, a.Store, e.ID)
+		if jerr != nil {
+			return RoutedTargets{}, jerr
+		}
+		t.Jump = hops
+		bySite[site] = append(bySite[site], t)
 	}
 	names := make([]string, 0, len(bySite))
 	for s := range bySite {
@@ -1223,7 +1243,7 @@ func (a *Activities) executePlugin(ctx context.Context, in RunInput, site string
 	// path today; passing them to identity-rendering actuators is a follow-up.)
 	targets := make([]pluginhost.ApplyTarget, 0, len(resolved.Targets))
 	for _, t := range resolved.Targets {
-		targets = append(targets, pluginhost.ApplyTarget{Name: t.Name, Address: t.Address, Port: t.Port, Vars: t.Vars})
+		targets = append(targets, pluginhost.ApplyTarget{Name: t.Name, Address: t.Address, Port: t.Port, Vars: t.Vars, Jump: portHops(t.Jump)})
 	}
 	// Plan-pinned Apply (ADR-0047 §8): a Step that names a Plan source MUST carry a
 	// Gate-approved digest. FAIL CLOSED on an empty digest — never a silent unpinned
@@ -1323,8 +1343,8 @@ func (a *Activities) executeJobPlugin(ctx context.Context, in RunInput, slice in
 	ptargets := make([]*pluginv1.ApplyTarget, 0, len(resolved.Targets))
 	for _, t := range resolved.Targets {
 		ids := map[string]string{"host.name": t.Name}
-		targets = append(targets, pluginhost.ApplyTarget{Name: t.Name, Address: t.Address, Port: t.Port, Vars: t.Vars, IdentityKeys: ids})
-		ptargets = append(ptargets, &pluginv1.ApplyTarget{Name: t.Name, Address: t.Address, Port: t.Port, Vars: t.Vars, IdentityKeys: ids})
+		targets = append(targets, pluginhost.ApplyTarget{Name: t.Name, Address: t.Address, Port: t.Port, Vars: t.Vars, IdentityKeys: ids, Jump: portHops(t.Jump)})
+		ptargets = append(ptargets, &pluginv1.ApplyTarget{Name: t.Name, Address: t.Address, Port: t.Port, Vars: t.Vars, IdentityKeys: ids, Jump: protoHops(t.Jump)})
 	}
 	// Only the use-checked, authorized names cross (§2.5); material stays on the
 	// kubelet secretKeyRef mounts (MF7 — one authz chokepoint, injection at the pod).

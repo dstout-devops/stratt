@@ -676,6 +676,16 @@ type ApplyTarget struct {
 	Port         int32
 	IdentityKeys map[string]string
 	Vars         map[string]string
+	// Jump is the resolved reached-via chain, nearest hop first (ADR-0126 D3).
+	Jump []JumpHop
+}
+
+// JumpHop is one bastion's reachability coordinate. No credential: authenticating to a
+// hop is Step config, the same split ADR-0084 D4 drew for the target itself.
+type JumpHop struct {
+	Name    string
+	Address string
+	Port    int32
 }
 
 // ApplyInvoke is a governed Actuator Apply request. Params is the opaque tool
@@ -882,7 +892,11 @@ func (h *Host) ApplyRaw(ctx context.Context, req ApplyInvoke) (RawApplyResult, e
 	targets := make([]*pluginv1.ApplyTarget, 0, len(req.Targets))
 	for _, t := range req.Targets {
 		resolved[t.Name] = true
-		targets = append(targets, &pluginv1.ApplyTarget{Name: t.Name, Address: t.Address, Port: t.Port, IdentityKeys: t.IdentityKeys, Vars: t.Vars})
+		hops := make([]*pluginv1.JumpHop, 0, len(t.Jump))
+		for _, h := range t.Jump {
+			hops = append(hops, &pluginv1.JumpHop{Name: h.Name, Address: h.Address, Port: h.Port})
+		}
+		targets = append(targets, &pluginv1.ApplyTarget{Name: t.Name, Address: t.Address, Port: t.Port, IdentityKeys: t.IdentityKeys, Vars: t.Vars, Jump: hops})
 	}
 	creds := make([]*pluginv1.CredentialRef, 0, len(req.CredentialRefs))
 	for _, n := range req.CredentialRefs {

@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "stratt:contract:facets/ansible.workflow:v1",
+  "title": "ansible.workflow Facet",
+  "description": "The OBSERVED definition of an AWX/AAP workflow job template, projected read-only by the ansible-automation Connector's controller half (§1.2 — AAP stays the system of record and keeps executing). An observed foreign object (→ a multi-Step Stratt Workflow on adopt), never a Named Kind. Demanded by that Connector's workflow-facet projection Contract (its manifest ContractDecl): a writer demands the schema — the same §1.1 framing as ansible.playbook, and deliberately NOT attributed to the awx-workflow-covered Baseline, which is a relation-presence check and reads no facet content (ADR-0085/0129 D2). What the workflow INVOKES is a Relation, not a field here (ADR-0129 D1: a question about what runs what is a traversal). The node graph itself is NOT projected — ordering, success/failure branching and per-node timeouts are cutover fidelity, which belongs to the adopt path that reads AWX directly, never to the mirror (ADR-0129 D3). hasApprovalGate is the one node fact that is governance rather than fidelity: an approval node has no target, so it cannot be an edge. Closed (§9).",
+  "type": "object",
+  "properties": {
+    "name": { "type": "string" },
+    "description": { "type": "string" },
+    "nodeCount": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "how many nodes the workflow has, of every type — a size signal, not the graph"
+    },
+    "hasApprovalGate": {
+      "type": "boolean",
+      "description": "whether any node is a workflow_approval — a pause with no target, so it is a fact rather than an edge"
+    }
+  },
+  "required": ["name"],
+  "additionalProperties": false
+}

@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "stratt:contract:facets/ansible.template:v1",
+  "title": "ansible.template Facet",
+  "description": "The OBSERVED definition of an AWX/AAP job template, projected read-only by the ansible-automation Connector's controller half (§1.2 — AAP stays the system of record and keeps executing). An observed foreign object (→ a Stratt Workflow on adopt), never a Named Kind. Demanded by the awx-template-failing Baseline, which reads lastRunFailed — the §1.1 consumer that ADR-0128 shipped WITH this schema, because the namespace previously had none: the one governance surface over templates (ADR-0085's awx-template-covered) asserts graph TOPOLOGY and reads no facet content, so nothing demanded a schema and the namespace wrote unvalidated. Three field groups answer three operator questions: run state (what is failing), run knobs (what will it do), and — as a Relation rather than a field, so the question is a traversal — uses-credential onto ansible.credential (who uses this credential). extra_vars is deliberately NOT projected: it may carry secret material and a projection is exactly where §2.5 says that must not go. Run state is CURRENT state, four scalars, never a job-event table (§3). Closed (§9).",
+  "type": "object",
+  "properties": {
+    "name": { "type": "string" },
+    "description": { "type": "string" },
+    "jobType": { "type": "string", "description": "AWX job_type: run | check" },
+    "playbook": {
+      "type": "string",
+      "description": "the playbook path within its project's SCM repo"
+    },
+    "surveyEnabled": { "type": "boolean" },
+
+    "lastRunStatus": {
+      "type": "string",
+      "description": "AWX status of the most recent job (e.g. successful, failed, error, canceled, never updated). Current state, not history."
+    },
+    "lastRunFailed": {
+      "type": "boolean",
+      "description": "AWX last_job_failed — the one boolean the awx-template-failing Baseline reads."
+    },
+    "lastRunAt": {
+      "type": "string",
+      "description": "RFC3339 UTC timestamp of the most recent job run"
+    },
+    "nextRunAt": {
+      "type": "string",
+      "description": "RFC3339 UTC timestamp of the next scheduled run, when one is scheduled"
+    },
+
+    "forks": { "type": "integer", "minimum": 0 },
+    "limit": { "type": "string", "description": "the host pattern the template narrows to" },
+    "jobTags": { "type": "string", "description": "AWX job_tags, its own comma-joined rendering" },
+    "skipTags": { "type": "string" },
+    "timeout": { "type": "integer" },
+    "verbosity": { "type": "integer", "minimum": 0 },
+    "diffMode": { "type": "boolean" },
+    "becomeEnabled": { "type": "boolean" },
+    "scmBranch": {
+      "type": "string",
+      "description": "the ref this template runs, when it overrides its project's"
+    }
+  },
+  "required": ["name"],
+  "additionalProperties": false
+}

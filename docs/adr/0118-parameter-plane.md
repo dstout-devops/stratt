@@ -43,7 +43,7 @@ Four gaps compound it.
 inputs. `LaunchParams` is a free-form `map[string]any` decoded straight off the request body with **zero**
 validation (`core/internal/api/server.go:1965`). `{{.launch.x}}` works, but nothing declares what `x` is: an
 author cannot discover a Workflow's parameters, a reviewer cannot check them, and an agent cannot introspect
-them. This is open ADR-0117 follow-up **(c)**, and it is why `docs/aap-2.7-parity.md` scoring "Surveys 🟢"
+them. This is open ADR-0117 follow-up **(c)**, and it is why `docs/parity/aap-2.7-platform.md` scoring "Surveys 🟢"
 overstates the truth — the input Contract validates an **Actuator's** params, not a Workflow's inputs.
 
 **(2) There is nowhere to declare a value per environment.** `environments:` is, correctly, _"a selector,

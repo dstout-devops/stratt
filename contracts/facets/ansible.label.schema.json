@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "stratt:contract:facets/ansible.label:v1",
+  "title": "ansible.label Facet",
+  "description": "An OBSERVED AWX/AAP label — the operator's own grouping vocabulary (prod, critical, team-web), projected read-only by the ansible-automation Connector's controller half (ADR-0132 D1). An ENTITY rather than a graph label key, and that is structural rather than stylistic: a plugin's label keys are a STATIC allowlist on its grant (Grant.LabelKeys), registered per key at Register because ADR-0041 makes each key single-owner — so a key only discovered by reading the Controller is ungrantable. Membership is the `has-label` Relation from ansible.template / ansible.workflow, which makes 'every production job template' a View via ViewSelector.Relations (ADR-0059 decision 6) rather than a scan: an operator's AWX grouping vocabulary becomes Stratt Views before anything is cut over. Membership costs ZERO extra requests — it rides summary_fields.labels on objects already being read — so only the label objects themselves add one collection read, inside the ADR-0131 poll-cost budget. Demanded by that Connector's label-facet projection Contract (its manifest ContractDecl): a writer demands the schema, the same §1.1 framing as ansible.playbook. Closed (§9).",
+  "type": "object",
+  "properties": {
+    "name": { "type": "string", "description": "the label text as the operator wrote it" },
+    "org": {
+      "type": "string",
+      "description": "the owning AWX organization's name, when the Controller reports one"
+    }
+  },
+  "required": ["name"],
+  "additionalProperties": false
+}

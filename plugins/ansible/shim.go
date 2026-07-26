@@ -75,6 +75,11 @@ type params struct {
 	Timeout   int           `json:"timeout,omitempty"`
 	Vault     *vaultParams  `json:"vault,omitempty"`
 
+	// Connection is the authentication half of reachability (ansible.input.v6,
+	// ADR-0126 D1). Its absence is legitimate — a local-connection target needs no
+	// credential — so it is a pointer, and connectionVars tolerates nil.
+	Connection *connectionParams `json:"connection,omitempty"`
+
 	// NOTE: `check` and `eeImage` are deliberately ABSENT here even though the
 	// Contract still carries them (deprecated). Check-mode is the port's DryRun bit
 	// (ADR-0051 MF6 / ADR-0117 D2); per-Step EE selection is by Actuator declaration
@@ -112,22 +117,7 @@ const credentialsMount = "/runner/credentials"
 // ref injects exactly one file the name is inferred; otherwise the Step must name it
 // (params.vault.file) and the failure says so rather than guessing (§1.8).
 func vaultPasswordFile(v *vaultParams, readDir func(string) ([]string, error)) (string, error) {
-	dir := filepath.Join(credentialsMount, v.CredentialRef)
-	if v.File != "" {
-		return filepath.Join(dir, v.File), nil
-	}
-	names, err := readDir(dir)
-	if err != nil {
-		return "", fmt.Errorf("vault credentialRef %q is not mounted at %s — is it on the Step's credentialRefs? (%w)", v.CredentialRef, dir, err)
-	}
-	switch len(names) {
-	case 0:
-		return "", fmt.Errorf("vault credentialRef %q injects no files at %s", v.CredentialRef, dir)
-	case 1:
-		return filepath.Join(dir, names[0]), nil
-	default:
-		return "", fmt.Errorf("vault credentialRef %q injects %d files (%s) — set params.vault.file to choose one", v.CredentialRef, len(names), strings.Join(names, ", "))
-	}
+	return credentialFile("vault", v.CredentialRef, v.File, "params.vault.file", readDir)
 }
 
 // osReadDirNames lists the entry names of dir — the production vaultPasswordFile lister.
@@ -261,12 +251,28 @@ func Run(ctx context.Context, w io.Writer, dir string, req Request, run commandR
 	// Playbook source: an SCM content-ref is cloned in the EE and the play runs FROM
 	// the repo (playbook path validated within it); otherwise the inline play (or the
 	// default gather play) is written to project/play.yml.
+	// The connection's ansible_* vars, rendered HERE by the shim (§1.4) from the typed
+	// v6 block, replacing the hand-written extraVars every Workflow used to carry. The
+	// known-hosts file is per-Run and inside the runner dir: accept-new is worth
+	// nothing without somewhere to remember the key, which is exactly what the old
+	// `UserKnownHostsFile=/dev/null` guaranteed (ADR-0126 D2 — cross-Run memory is the
+	// booked follow-up, and is deliberately NOT claimed here).
+	chain, cherr := jumpChainOf(req.Targets)
+	if cherr != nil {
+		return emitFatal(w, cherr.Error())
+	}
+	connVars, cerr := connectionVars(p.Connection, chain, filepath.Join(dir, "known_hosts"), osReadDirNames, stageKeyIn(dir))
+	if cerr != nil {
+		return emitFatal(w, cerr.Error())
+	}
+	inventory := renderInventory(req.Targets, connVars)
+
 	playbook := "play.yml"
 	if p.SCM != nil {
 		if err := validateSCM(p.SCM); err != nil {
 			return emitFatal(w, err.Error())
 		}
-		if err := writeInventory(dir, buildInventory(req.Targets), p.ExtraVars); err != nil {
+		if err := writeInventory(dir, inventory, p.ExtraVars); err != nil {
 			return emitFatal(w, err.Error())
 		}
 		if err := clone(ctx, filepath.Join(dir, "project"), *p.SCM); err != nil {
@@ -278,7 +284,7 @@ func Run(ctx context.Context, w io.Writer, dir string, req Request, run commandR
 		if play == "" {
 			play = GatherFactsPlay
 		}
-		if err := writeContent(dir, play, buildInventory(req.Targets), p.ExtraVars); err != nil {
+		if err := writeContent(dir, play, inventory, p.ExtraVars); err != nil {
 			return emitFatal(w, err.Error())
 		}
 	}

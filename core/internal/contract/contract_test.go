@@ -231,8 +231,19 @@ func TestPinsAreStable(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(all) != 144 { // +notify/smtp.{input,output} (ADR-0125 D4)
-		t.Fatalf("expected 144 embedded documents, got %d", len(all))
+	// +ansible.template and +ansible.credential (ADR-0128): the template projection deepened
+	// and gained the pinned schema it never had, and the credential mirror that makes
+	// "which templates use this credential" a graph traversal.
+	// +ansible.workflow (ADR-0129): the workflow mirror gained nodeCount/hasApprovalGate
+	// and the pinned schema its write seam never had.
+	// +ansible.user (ADR-0130): AWX's local ACCOUNT table — deliberately not identity.subject,
+	// which has a single write-owner, and never read by authz (ADR-0079 INV-3).
+	// +ansible.label (ADR-0132): an AWX label is an Entity, because a plugin's label KEYS
+	// are a static grant allowlist and an AWX label name is only known at read time.
+	// +ansible.executionenvironment (ADR-0133): the image an AWX job template runs in, as a
+	// SUPPLY-CHAIN fact. AWX instance groups are deliberately not projected (D4).
+	if len(all) != 151 { // +ansible.input.v6 (ADR-0126 connection block)
+		t.Fatalf("expected 151 embedded documents, got %d", len(all))
 	}
 	versions := map[string]int{}
 	for _, c := range all {
@@ -243,10 +254,10 @@ func TestPinsAreStable(t *testing.T) {
 			versions[c.Name] = c.Version
 		}
 	}
-	// ansible.input v5 (typed run knobs, ADR-0117 D1) resolves as the current
-	// version; v1–v4 stay pinned alongside it (every version keeps its own pin
-	// row — only the LOOKUP collapses to the highest).
-	if versions["actuators/ansible.input"] != 5 {
+	// ansible.input v6 (the typed connection block, ADR-0126 D1) resolves as the
+	// current version; v1–v5 stay pinned alongside it (every version keeps its own
+	// pin row — only the LOOKUP collapses to the highest).
+	if versions["actuators/ansible.input"] != 6 {
 		t.Fatalf("ansible.input current version: %d", versions["actuators/ansible.input"])
 	}
 	// intents/application v2 types `port` (ADR-0118 follow-up). A sibling version rather than an

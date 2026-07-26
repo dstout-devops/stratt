@@ -34,6 +34,17 @@ type Target struct {
 	Port     int32             `json:"port,omitempty"`
 	Vars     map[string]string `json:"vars,omitempty"`
 	Identity map[string]string `json:"identity,omitempty"`
+	// Jump is the core-resolved reached-via chain, NEAREST HOP FIRST (ADR-0126 D3).
+	// Coordinates only — authenticating to a hop is params.connection.jump. The SHIM
+	// turns these into -o ProxyJump=…; the spine never authors an ssh flag (§1.4).
+	Jump []Hop `json:"jump,omitempty"`
+}
+
+// Hop is one bastion's coordinate in a reached-via chain.
+type Hop struct {
+	Name    string `json:"name,omitempty"`
+	Address string `json:"address"`
+	Port    int32  `json:"port,omitempty"`
 }
 
 // Request is what the shim reads from the Job content (params + the legible targets +

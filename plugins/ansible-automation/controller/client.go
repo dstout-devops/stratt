@@ -1,0 +1,162 @@
+package controller
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"net/url"
+	"strings"
+	"sync"
+	"time"
+)
+
+// Config locates the AWX/AAP Controller this Connector reads.
+type Config struct {
+	// Endpoint is the Controller base URL, e.g. https://awx.example.com (no /api/v2).
+	Endpoint string
+	// Token is an AWX OAuth2 application/personal token, sent as a bearer. Read-only
+	// scope is sufficient — this Connector never writes back to AWX (§1.2).
+	Token      string
+	HTTPClient *http.Client
+	// ControllerID qualifies every projected identity so two Controllers' identically
+	// numbered objects never collide in one estate (mirrors kubecontainers' cluster
+	// qualifier). "" ⇒ the Endpoint host.
+	ControllerID string
+	// DetailInterval is the cadence for the EXPENSIVE per-object sub-reads — workflow
+	// nodes and team members (ADR-0131 D1). The seven collection reads run every poll;
+	// detail runs at most this often and is served from cache in between, so poll cost
+	// stops being an emergent property of how many workflows an estate happens to have.
+	// 0 ⇒ 5m.
+	DetailInterval time.Duration
+}
+
+// Client is a minimal read-only AWX /api/v2 client. It is the plugin's own SoR
+// integration (module isolation, ADR-0046) — the core importer keeps its own client.
+type Client struct {
+	base   string
+	token  string
+	http   *http.Client
+	ctrlID string
+
+	// The detail tier's read cache (ADR-0131 D1). A cache of an external SoR held inside
+	// the plugin — NOT a second truth (§1.2): the plugin still writes nothing and still
+	// only proposes values the core governs. Guarded because Observe may overlap a slow
+	// previous cycle.
+	detailInterval time.Duration
+	detailMu       sync.Mutex
+	detailAt       time.Time
+	nodeCache      map[int][]WorkflowNode
+	memberCache    map[int][]User
+	// now is injectable so a test can advance the clock without sleeping.
+	now func() time.Time
+}
+
+// New builds a read client. The base is normalized to <endpoint>/api/v2.
+func New(cfg Config) *Client {
+	hc := cfg.HTTPClient
+	if hc == nil {
+		hc = &http.Client{Timeout: 30 * time.Second}
+	}
+	base := strings.TrimRight(cfg.Endpoint, "/") + "/api/v2"
+	ctrl := cfg.ControllerID
+	if ctrl == "" {
+		if u, err := url.Parse(cfg.Endpoint); err == nil && u.Host != "" {
+			ctrl = u.Host
+		} else {
+			ctrl = cfg.Endpoint
+		}
+	}
+	di := cfg.DetailInterval
+	if di == 0 {
+		di = 5 * time.Minute
+	}
+	return &Client{
+		base: base, token: cfg.Token, http: hc, ctrlID: ctrl,
+		detailInterval: di,
+		nodeCache:      map[int][]WorkflowNode{},
+		memberCache:    map[int][]User{},
+		now:            time.Now,
+	}
+}
+
+// ControllerID is the qualifier prefixed onto every projected identity.
+func (c *Client) ControllerID() string { return c.ctrlID }
+
+// page is the AWX paginated envelope: results + a next-page cursor.
+type page[T any] struct {
+	Next    string `json:"next"`
+	Results []T    `json:"results"`
+}
+
+// list walks every page of an AWX collection endpoint (path is relative to
+// /api/v2, e.g. "/job_templates/") and returns the flattened results.
+func list[T any](ctx context.Context, c *Client, path string) ([]T, error) {
+	var out []T
+	next := c.base + path
+	for next != "" {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, next, nil)
+		if err != nil {
+			return nil, err
+		}
+		if c.token != "" {
+			req.Header.Set("Authorization", "Bearer "+c.token)
+		}
+		req.Header.Set("Accept", "application/json")
+		resp, err := c.http.Do(req)
+		if err != nil {
+			return nil, fmt.Errorf("awx: GET %s: %w", path, err)
+		}
+		body, err := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if err != nil {
+			return nil, err
+		}
+		if resp.StatusCode != http.StatusOK {
+			return nil, fmt.Errorf("awx: GET %s: status %d: %s", path, resp.StatusCode, truncate(body))
+		}
+		var p page[T]
+		if err := json.Unmarshal(body, &p); err != nil {
+			return nil, fmt.Errorf("awx: decode %s: %w", path, err)
+		}
+		out = append(out, p.Results...)
+		// AWX `next` is USUALLY a root-relative /api/v2/... path, and is null at the end
+		// — but it is not guaranteed: a Controller behind a proxy, and awxsim, both mint
+		// ABSOLUTE next links. Joining an absolute link onto our origin produced
+		// `http://host:portt://host:port/...` and an "invalid port" parse error that named
+		// neither the endpoint nor the cause (§1.8). Tolerate both, exactly as the awxapi
+		// deep-read client's resolve() already did — the two clients had drifted, and only
+		// one of them was defensive.
+		if p.Next == "" {
+			break
+		}
+		next = c.resolveNext(p.Next)
+	}
+	return out, nil
+}
+
+// resolveNext absolutizes a page cursor: an absolute link is taken as-is, a root-relative
+// one joins onto the endpoint origin.
+func (c *Client) resolveNext(next string) string {
+	if strings.HasPrefix(next, "http://") || strings.HasPrefix(next, "https://") {
+		return next
+	}
+	return originOf(c.base) + next
+}
+
+func truncate(b []byte) string {
+	if len(b) > 200 {
+		return string(b[:200])
+	}
+	return string(b)
+}
+
+// originOf returns scheme://host for a base like https://host/api/v2, so a
+// relative `next` cursor can be re-absolutized.
+func originOf(base string) string {
+	if u, err := url.Parse(base); err == nil {
+		return u.Scheme + "://" + u.Host
+	}
+	return ""
+}
