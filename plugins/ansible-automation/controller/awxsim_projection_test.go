@@ -15,6 +15,8 @@ import (
 	"context"
 	"encoding/json"
 	"net/http/httptest"
+	"reflect"
+	"sort"
 	"testing"
 
 	"github.com/dstout-devops/stratt/plugins/ansible-automation/controller/awxapi/awxsim"
@@ -142,6 +144,90 @@ func TestProjectionEdgesAgainstAwxsim(t *testing.T) {
 	// Same-source (both ends owned by this half), so it always resolves.
 	if !has("ctrl-a/10", edge{"uses-credential", KindCredential, "ctrl-a/1"}) {
 		t.Errorf("template 10 has no uses-credential edge onto prod-ssh; got %v", edges["ctrl-a/10"])
+	}
+}
+
+// ADR-0129: the workflow says what it invokes. awxsim's prod-pipeline has five nodes —
+// build(jt11), approve(workflow_approval), deploy(jt10), notify-ok(jt11), rollback(jt11) —
+// so it must yield exactly TWO invokes edges (distinct targets, not five), and record the
+// approval gate as a fact rather than an edge.
+func TestWorkflowTopologyProjects(t *testing.T) {
+	c := simClient(t)
+	snap, err := c.Enumerate(context.Background())
+	if err != nil {
+		t.Fatalf("enumerate: %v", err)
+	}
+	if got := len(snap.WorkflowNodes[20]); got != 5 {
+		t.Fatalf("workflow 20 node count = %d, want 5 (the N+1 per-workflow read)", got)
+	}
+	ents, err := c.Normalize(snap)
+	if err != nil {
+		t.Fatalf("normalize: %v", err)
+	}
+	for _, e := range ents {
+		if e.GetIdentityKeys()[KindWorkflow] != "ctrl-a/20" {
+			continue
+		}
+		var invokes []string
+		for _, r := range e.GetRelations() {
+			if r.GetType() != "invokes" {
+				continue
+			}
+			if r.GetToScheme() != KindTemplate {
+				t.Errorf("invokes edge targets %q, want %q for a `job` node", r.GetToScheme(), KindTemplate)
+			}
+			invokes = append(invokes, r.GetToValue())
+		}
+		sort.Strings(invokes)
+		want := []string{"ctrl-a/10", "ctrl-a/11"}
+		if !reflect.DeepEqual(invokes, want) {
+			t.Errorf("invokes = %v, want %v — one edge per DISTINCT target (three nodes run jt11)", invokes, want)
+		}
+
+		var facet map[string]any
+		if err := json.Unmarshal(e.GetFacets()[KindWorkflow], &facet); err != nil {
+			t.Fatalf("workflow facet: %v", err)
+		}
+		if facet["hasApprovalGate"] != true {
+			t.Errorf("hasApprovalGate = %v, want true — an approval node is a pause with no target, so it is a fact not an edge", facet["hasApprovalGate"])
+		}
+		if facet["nodeCount"] != float64(5) {
+			t.Errorf("nodeCount = %v, want 5", facet["nodeCount"])
+		}
+		return
+	}
+	t.Fatal("workflow ctrl-a/20 was not projected")
+}
+
+// The §1.8 call in ADR-0129 D1: a node type we do not project draws NO edge rather than a
+// confidently wrong one. A workflow node can legitimately target a project sync or an
+// inventory update, and guessing would point at an identity that exists and means
+// something else.
+func TestUnknownWorkflowNodeTypeDrawsNoEdge(t *testing.T) {
+	c := New(Config{Endpoint: "https://aap.example.com", ControllerID: "ctrl-a"})
+	mk := func(ujt int, typ string) WorkflowNode {
+		var n WorkflowNode
+		n.UnifiedJobTemplate = ujt
+		n.SummaryFields.UnifiedJobTemplate.ID = ujt
+		n.SummaryFields.UnifiedJobTemplate.UnifiedJobType = typ
+		return n
+	}
+	rels, gate := c.workflowTopology([]WorkflowNode{
+		mk(7, "project_update"),
+		mk(8, "inventory_update"),
+		mk(9, "system_job"),
+		mk(10, "some_future_awx_type"),
+	})
+	if len(rels) != 0 {
+		t.Errorf("unprojected node types drew %d edges, want 0 — a wrong edge is worse than a missing one (§1.8)", len(rels))
+	}
+	if gate {
+		t.Error("no approval node present, yet hasApprovalGate is true")
+	}
+	// And the nested-workflow case does resolve, onto the workflow scheme.
+	rels, _ = c.workflowTopology([]WorkflowNode{mk(21, "workflow_job")})
+	if len(rels) != 1 || rels[0].GetToScheme() != KindWorkflow || rels[0].GetToValue() != "ctrl-a/21" {
+		t.Errorf("nested workflow node = %+v, want one invokes edge onto ansible.workflow ctrl-a/21", rels)
 	}
 }
 

@@ -92,7 +92,12 @@ func (c *Client) Normalize(snap *Snapshot) ([]*pluginv1.ObservedEntity, error) {
 	}
 
 	for _, wf := range snap.Workflows {
-		facet, err := json.Marshal(map[string]any{"name": wf.Name, "description": wf.Description})
+		nodes := snap.WorkflowNodes[wf.ID]
+		invokes, hasGate := c.workflowTopology(nodes)
+		facet, err := json.Marshal(map[string]any{
+			"name": wf.Name, "description": wf.Description,
+			"nodeCount": len(nodes), "hasApprovalGate": hasGate,
+		})
 		if err != nil {
 			return nil, err
 		}
@@ -101,7 +106,7 @@ func (c *Client) Normalize(snap *Snapshot) ([]*pluginv1.ObservedEntity, error) {
 			IdentityKeys: map[string]string{KindWorkflow: c.qualify(wf.ID)},
 			Labels:       labels(wf.Name, wf.SummaryFields.Organization.Name),
 			Facets:       map[string][]byte{KindWorkflow: facet},
-			Relations:    orgRel(wf.SummaryFields.Organization.ID),
+			Relations:    append(orgRel(wf.SummaryFields.Organization.ID), invokes...),
 		})
 	}
 
@@ -181,6 +186,50 @@ func runsRel(jt JobTemplate) []*pluginv1.ObservedRelation {
 		return nil
 	}
 	return []*pluginv1.ObservedRelation{{Type: "runs", ToScheme: schemePlaybook, ToValue: proj + "/" + pb}}
+}
+
+// workflowTopology derives, from a workflow's node graph, the only two things the MIRROR
+// needs (ADR-0129): what it invokes, and whether a human has to approve something on the
+// way through. The graph's SHAPE — ordering, success/failure/always branching, per-node
+// timeouts — is deliberately not derived: that is cutover fidelity, and the adopt path
+// reads it from AWX directly.
+//
+// One edge per DISTINCT target, so a workflow with three nodes running one template says
+// so once. The node type decides the target scheme on an EXPLICIT switch, and an unknown
+// type draws NO edge: a workflow node can legitimately target a project sync or an
+// inventory update — objects we do not project — and guessing would draw a confidently
+// wrong edge onto an identity that exists and means something else. A missing edge is
+// visible (awx-workflow-covered reads exactly that); a wrong one is not (§1.8).
+func (c *Client) workflowTopology(nodes []WorkflowNode) (rels []*pluginv1.ObservedRelation, hasApprovalGate bool) {
+	seen := map[string]bool{}
+	for _, n := range nodes {
+		switch n.SummaryFields.UnifiedJobTemplate.UnifiedJobType {
+		case "workflow_approval":
+			hasApprovalGate = true
+			continue // a pause has no target
+		case "job":
+			c.addInvokes(&rels, seen, KindTemplate, n.UnifiedJobTemplate)
+		case "workflow_job":
+			c.addInvokes(&rels, seen, KindWorkflow, n.UnifiedJobTemplate)
+		default:
+			// project_update / inventory_update / system_job / a future AWX type — nothing
+			// we project, so nothing to point at.
+		}
+	}
+	return rels, hasApprovalGate
+}
+
+func (c *Client) addInvokes(rels *[]*pluginv1.ObservedRelation, seen map[string]bool, scheme string, id int) {
+	if id == 0 {
+		return
+	}
+	val := c.qualify(id)
+	key := scheme + "\x00" + val
+	if seen[key] {
+		return
+	}
+	seen[key] = true
+	*rels = append(*rels, &pluginv1.ObservedRelation{Type: "invokes", ToScheme: scheme, ToValue: val})
 }
 
 // credentialRels emits `ansible.template --uses-credential--> ansible.credential` per

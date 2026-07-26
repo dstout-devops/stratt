@@ -234,8 +234,10 @@ func TestPinsAreStable(t *testing.T) {
 	// +ansible.template and +ansible.credential (ADR-0128): the template projection deepened
 	// and gained the pinned schema it never had, and the credential mirror that makes
 	// "which templates use this credential" a graph traversal.
-	if len(all) != 147 { // +ansible.input.v6 (ADR-0126 connection block)
-		t.Fatalf("expected 147 embedded documents, got %d", len(all))
+	// +ansible.workflow (ADR-0129): the workflow mirror gained nodeCount/hasApprovalGate
+	// and the pinned schema its write seam never had.
+	if len(all) != 148 { // +ansible.input.v6 (ADR-0126 connection block)
+		t.Fatalf("expected 148 embedded documents, got %d", len(all))
 	}
 	versions := map[string]int{}
 	for _, c := range all {

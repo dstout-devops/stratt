@@ -26,8 +26,8 @@ from that single sample. Everything below is the rest of the sample.
 | ------------------------------------------ | -------------------------------- | ------------------------------------------------------------------------------------------------ |
 | **Object coverage** (which objects at all) | 🟡 5 projected, 7 more read-only | The projection covers the orchestration spine; people, RBAC, and run history are absent          |
 | **Field depth** on projected objects       | 🟡 template deepened, rest thin  | `ansible.template` now carries run state, run knobs + a credential edge (**ADR-0128**); the other four are still 1–3 fields |
-| **Workflow topology**                      | 🔴 **name only**                 | `ansible.workflow` is a name + description; the node graph is read by adopt and never projected  |
-| **Facet schema coverage**                  | 🟡 **4 of 10**                   | +`ansible.template` +`ansible.credential` (ADR-0128); 6 namespaces still write unvalidated       |
+| **Workflow topology**                      | 🟢 invocations + approval gate   | `invokes` edges + `hasApprovalGate`/`nodeCount` (**ADR-0129**); the node graph stays adopt's job |
+| **Facet schema coverage**                  | 🟡 **5 of 10**                   | +`ansible.template` +`ansible.credential` (ADR-0128) +`ansible.workflow` (ADR-0129)              |
 | **Read-path symmetry**                     | 🟡 divergent by accident         | Projection reads 5 endpoints, adopt reads 9; nothing states which asymmetries are deliberate     |
 | **`stratt adopt` transform**               | 🟢 deep and honest               | Reads what it needs, refuses what it must (secrets, password surveys), reports what it drops     |
 
@@ -38,7 +38,8 @@ are failing," "who is on this team," or "what does this workflow actually do." T
 fix was field depth on `ansible.template` (**AWX-010**) — most governance questions an operator brings to
 an AWX mirror are field-level questions about job templates — and that is **done**
 ([ADR-0128](../adr/0128-ansible-template-projection-depth.md)). The next is workflow topology
-(**AWX-002**), then the authorization slice, which needs a decision before code.
+(**AWX-002**) — also **done** ([ADR-0129](../adr/0129-workflow-topology-projection.md)) — leaving the
+authorization slice, which needs a decision before code.
 
 ---
 
@@ -60,11 +61,11 @@ which is which.
 | AWX object                       | Coverage        | Evidence / note                                                                                                                                             | ID          |
 | -------------------------------- | --------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------- |
 | `job_templates`                  | `projected` 🟢  | [types.go](../../plugins/ansible-automation/controller/types.go) → `ansible.template`; deepened by ADR-0128 (~~AWX-010~~)                                   |             |
-| `workflow_job_templates`         | `projected` 🟡  | [types.go:94](../../plugins/ansible-automation/controller/types.go#L94) → `ansible.workflow`, name + description only                                       |             |
+| `workflow_job_templates`         | `projected` 🟢  | → `ansible.workflow` + `invokes` edges and the approval-gate fact (ADR-0129)                                                                                |             |
 | `schedules`                      | `projected` 🟢  | [types.go:97](../../plugins/ansible-automation/controller/types.go#L97) → `ansible.schedule` + the `schedules` edge                                         |             |
 | `organizations`                  | `projected` 🟢  | [types.go:100](../../plugins/ansible-automation/controller/types.go#L100) → `ansible.org`                                                                   |             |
 | `teams`                          | `projected` 🟡  | [types.go:103](../../plugins/ansible-automation/controller/types.go#L103) → `ansible.team`; **membership is not read**                                      | **AWX-004** |
-| `workflow_job_template_nodes`    | `adopt-only` 🔴 | [adopt_read.go:63](../../plugins/ansible-automation/controller/awxapi/adopt_read.go) builds the DAG for the transform; the projection never sees it         | **AWX-002** |
+| `workflow_job_template_nodes`    | `derived` 🟢 + `adopt-only` ⚪ | The projection now reads them and derives `invokes` + `hasApprovalGate` (~~AWX-002~~, ADR-0129); the DAG's SHAPE stays adopt's, because fidelity is the transform's job and not the mirror's. Nodes as entities booked as **AWX-016** |  |
 | `projects`                       | `adopt-only` 🔴 | ADR-0127 D4 already books `ansible.project` + `scm_revision`; this audit confirms the sizing                                                                | **AWX-001** |
 | `inventories`                    | `mapped` ⚪     | → **View** ([materialize/views.go](../../plugins/ansible-automation/controller/materialize/views.go)); smart inventories reduce their `host_filter`         |             |
 | `inventory_sources`              | `mapped` ⚪     | → points at the native Syncer for that cloud, never re-implemented as an AWX plugin                                                                         |             |
@@ -117,9 +118,13 @@ ADR-0128 closed.
 | `job_slice_count`, `allow_simultaneous`, `use_fact_cache`, `force_handlers`, `start_at_task`, `host_config_key`, `webhook_service` | ❌         | Lower value; listed for completeness                                                                                        |
 | `instance_groups`, `labels`                                                                                                        | ❌         | **AWX-008** / **AWX-006**                                                                                                   |
 
-### `ansible.workflow` ← `workflow_job_templates` — name + description · **AWX-002**
+### `ansible.workflow` ← `workflow_job_templates` — ~~name + description~~ · ~~**AWX-002**~~ done (ADR-0129)
 
-Projected: `name`, `description` · `owned-by` → org. **That is all of it.**
+Projected: `name`, `description`, `nodeCount`, `hasApprovalGate` · `owned-by` → org, **`invokes` →
+`ansible.template` / `ansible.workflow`** (one edge per distinct target). Validated against a pinned closed
+schema. Governed by `awx-workflow-covered`, the orphan-workflow analogue of `awx-template-covered`.
+
+The original finding is kept below as the record of what was wrong.
 
 The workflow's actual content — its nodes, its success/failure/always edges, its approval gates — is read
 by the adopt deep-read ([types.go `WorkflowNode`](../../plugins/ansible-automation/controller/awxapi/types.go))
@@ -224,8 +229,11 @@ having been built first and never revisited when the transform grew deeper.
   `AWX-014` for it. Shipped **with** its §1.1 consumer (`awx-template-failing`), because the reason the
   schema was missing is that nothing consumed the projection: thin projection → no consumer → no schema
   was one loop, and deepening without shipping a consumer would have left it.
-- **AWX-002 · Workflow topology.** The data is already fetched and parsed for adopt; the projection just
-  never emits it. Until then `ansible.workflow` is not a governable Entity.
+- ~~**AWX-002 · Workflow topology.**~~ — **done, [ADR-0129](../adr/0129-workflow-topology-projection.md).**
+  `invokes` edges (so blast radius is a reverse traversal, matching the credential question) plus the
+  approval-gate fact. The node graph's SHAPE is deliberately still not projected: that is cutover
+  fidelity, which adopt reads from AWX directly, and the mirror exists for governance. Costs an **N+1
+  read** — one request per workflow, every poll — recorded in the ADR's consequences rather than hidden.
 - **AWX-001 · `ansible.project` + `scm_revision`.** Already booked by ADR-0127 D4 and unchanged by this
   audit — it repairs ADR-0085's soundness, and it deserves its own ADR.
 
@@ -244,9 +252,10 @@ having been built first and never revisited when the transform grew deeper.
 - **AWX-006** labels · **AWX-007** execution environments · **AWX-008** instance groups →
   Sites/Cells · **AWX-009** notification templates → Sinks (cheap since ADR-0125) ·
   **AWX-012** custom credential types · **AWX-013** schedule `extra_data` + timezone ·
-  **AWX-015** the ~15 `ask_*_on_launch` booleans (new — deferred out of ADR-0128 D4: they are
-  cutover fidelity rather than governance, so they matter when migrating a template, not when
-  auditing an estate).
+  **AWX-015** the ~15 `ask_*_on_launch` booleans (deferred out of ADR-0128 D4: cutover fidelity rather
+  than governance) · **AWX-016** workflow nodes as entities (deferred out of ADR-0129 D3 — it earns a
+  namespace when a consumer needs the DAG, the obvious one being a UI rendering of a mirrored workflow
+  beside a Stratt Workflow).
 
 **Not gaps, recorded so they are not re-litigated:** inventories → View, hosts never re-projected,
 credentials name-and-kind-only, survey passwords refused, activity stream not mirrored, ad-hoc commands

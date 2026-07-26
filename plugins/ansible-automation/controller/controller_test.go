@@ -55,6 +55,15 @@ func fakeAWX(t *testing.T) *httptest.Server {
 			"summary_fields": map[string]any{"organization": map[string]any{"id": 1, "name": "Platform"}},
 		}}))
 	})
+	// EXPLICIT, and more specific than the collection pattern above — without it Go's mux
+	// prefix-matches this onto /api/v2/workflow_job_templates/ and the node fetch silently
+	// decodes a page of WORKFLOWS as nodes: no error, no edges, and a fake that lies.
+	mux.HandleFunc("/api/v2/workflow_job_templates/{id}/workflow_nodes/", func(w http.ResponseWriter, r *http.Request) {
+		w.Write(page([]map[string]any{{
+			"id": 100, "unified_job_template": 10,
+			"summary_fields": map[string]any{"unified_job_template": map[string]any{"id": 10, "name": "Deploy Web", "unified_job_type": "job"}},
+		}}))
+	})
 	mux.HandleFunc("/api/v2/credentials/", func(w http.ResponseWriter, r *http.Request) {
 		w.Write(page([]map[string]any{{"id": 50, "name": "prod-ssh", "kind": "ssh"}}))
 	})

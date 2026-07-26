@@ -1,6 +1,9 @@
 package controller
 
-import "context"
+import (
+	"context"
+	"fmt"
+)
 
 // The subset of each AWX object this Connector PROJECTS. Read-only: material is
 // never fetched (§2.5) and nothing is written back (§1.2). Fields mirror AWX's
@@ -64,6 +67,23 @@ type Credential struct {
 	Kind string `json:"kind"`
 }
 
+// WorkflowNode is one node of a workflow's graph. Only the fields the PROJECTION derives
+// from are modeled (ADR-0129): what the node targets, and what kind of thing that is. The
+// edge lists (success/failure/always), identifiers and timeouts are deliberately absent —
+// that is the DAG's shape, which is cutover fidelity and belongs to the adopt path.
+type WorkflowNode struct {
+	ID                 int `json:"id"`
+	UnifiedJobTemplate int `json:"unified_job_template"`
+	SummaryFields      struct {
+		UnifiedJobTemplate struct {
+			ID   int    `json:"id"`
+			Name string `json:"name"`
+			// job | workflow_job | workflow_approval | project_update | inventory_update | system_job
+			UnifiedJobType string `json:"unified_job_type"`
+		} `json:"unified_job_template"`
+	} `json:"summary_fields"`
+}
+
 type WorkflowJobTemplate struct {
 	ID            int    `json:"id"`
 	Name          string `json:"name"`
@@ -120,6 +140,9 @@ type Snapshot struct {
 	Organizations []Organization
 	Teams         []Team
 	Credentials   []Credential
+	// WorkflowNodes by workflow_job_template id (ADR-0129). AWX has no bulk endpoint, so
+	// this is an N+1 read: one request per workflow, every poll.
+	WorkflowNodes map[int][]WorkflowNode
 }
 
 // Enumerate performs one full read of every projected collection. A single failing
@@ -145,6 +168,19 @@ func (c *Client) Enumerate(ctx context.Context) (*Snapshot, error) {
 	}
 	if snap.Credentials, err = list[Credential](ctx, c, "/credentials/"); err != nil {
 		return nil, err
+	}
+	// The workflow node graph, one request per workflow — AWX exposes no bulk endpoint
+	// (ADR-0129). Consistent with every other collection here, a single failure fails the
+	// WHOLE Observe rather than yielding a workflow with silently missing edges: a
+	// half-read full sync would tombstone real edges and read as "this workflow invokes
+	// nothing", which is exactly the signal awx-workflow-covered treats as meaningful (§1.8).
+	snap.WorkflowNodes = make(map[int][]WorkflowNode, len(snap.Workflows))
+	for _, wf := range snap.Workflows {
+		nodes, nerr := list[WorkflowNode](ctx, c, fmt.Sprintf("/workflow_job_templates/%d/workflow_nodes/", wf.ID))
+		if nerr != nil {
+			return nil, nerr
+		}
+		snap.WorkflowNodes[wf.ID] = nodes
 	}
 	return &snap, nil
 }
