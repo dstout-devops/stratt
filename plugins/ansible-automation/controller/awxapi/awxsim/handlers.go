@@ -17,6 +17,10 @@ func (s *Sim) schedules(w http.ResponseWriter, r *http.Request) {
 	paged(s, w, r, "/api/v2/schedules/", s.data.Schedules)
 }
 
+func (s *Sim) execEnvs(w http.ResponseWriter, r *http.Request) {
+	paged(s, w, r, "/api/v2/execution_environments/", s.data.ExecutionEnvs)
+}
+
 func (s *Sim) labels(w http.ResponseWriter, r *http.Request) {
 	paged(s, w, r, "/api/v2/labels/", s.data.Labels)
 }

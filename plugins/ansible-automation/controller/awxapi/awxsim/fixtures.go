@@ -31,9 +31,10 @@ type fJobTemplate struct {
 		// The PROJECTION half reads these two and the adopt half does not — awxsim
 		// served neither until the Syncer got a sim it could run against. `project`
 		// is the join key for the cross-source `runs` edge (<project.name>/<playbook>).
-		Organization fNamed     `json:"organization"`
-		Project      fNamed     `json:"project"`
-		Labels       fLabelList `json:"labels"`
+		Organization         fNamed     `json:"organization"`
+		Project              fNamed     `json:"project"`
+		Labels               fLabelList `json:"labels"`
+		ExecutionEnvironment fNamed     `json:"execution_environment"`
 	} `json:"summary_fields"`
 }
 
@@ -91,6 +92,14 @@ type fSchedule struct {
 
 // fUser is an AWX local account (ADR-0130). Projection-only — the adopt path reads none
 // of this.
+// fExecEnv is an AWX execution environment (ADR-0133) — projection-only.
+type fExecEnv struct {
+	ID    int    `json:"id"`
+	Name  string `json:"name"`
+	Image string `json:"image"`
+	Pull  string `json:"pull,omitempty"`
+}
+
 // fLabel is an AWX label (ADR-0132) — projection-only.
 type fLabel struct {
 	ID            int    `json:"id"`
@@ -203,6 +212,7 @@ type estate struct {
 	Schedules        []fSchedule
 	Users            []fUser
 	Labels           []fLabel
+	ExecutionEnvs    []fExecEnv
 	TeamMembers      map[int][]fUser
 	Organizations    []fOrganization
 	Teams            []fTeam
@@ -263,12 +273,14 @@ func seed() *estate {
 	jt10.SummaryFields.Organization = fNamed{ID: 1, Name: "Platform"}
 	jt10.SummaryFields.Project = fNamed{ID: 1, Name: "infra"}
 	jt10.SummaryFields.Labels = fLabelList{Count: 2, Results: []fNamed{{ID: 70, Name: "prod"}, {ID: 71, Name: "critical"}}}
+	jt10.SummaryFields.ExecutionEnvironment = fNamed{ID: 80, Name: "pinned-ee"}
 	jt11 := fJobTemplate{ID: 11, Name: "Gather Facts", JobType: "run", Playbook: "facts.yml",
 		Project: 2, Inventory: 1, SurveyEnabled: false}
 	jt11.Status, jt11.LastJobFailed = "successful", false
 	jt11.SummaryFields.Organization = fNamed{ID: 2, Name: "Legacy"}
 	jt11.SummaryFields.Project = fNamed{ID: 2, Name: "local-scripts"}
 	jt11.SummaryFields.Labels = fLabelList{Count: 1, Results: []fNamed{{ID: 72, Name: "legacy"}}}
+	jt11.SummaryFields.ExecutionEnvironment = fNamed{ID: 81, Name: "floating-ee"}
 	e.JobTemplates = []fJobTemplate{jt10, jt11}
 
 	// Orgs + teams: the tenancy/RBAC containers the projection mirrors.
@@ -283,6 +295,12 @@ func seed() *estate {
 	// isActive.
 	// The operator's grouping vocabulary. `prod` is on jt10 only, which is what makes the
 	// has-label View pattern demonstrable.
+	// One digest-pinned EE and one on a floating tag — the awx-ee-digest-pinned Baseline's
+	// negative and positive cases in the same estate.
+	e.ExecutionEnvs = []fExecEnv{
+		{ID: 80, Name: "pinned-ee", Image: "quay.io/ansible/awx-ee@sha256:" + "abc123def4567890abc123def4567890abc123def4567890abc123def4567890", Pull: "missing"},
+		{ID: 81, Name: "floating-ee", Image: "quay.io/ansible/awx-ee:latest", Pull: "always"},
+	}
 	e.Labels = []fLabel{{ID: 70, Name: "prod"}, {ID: 71, Name: "critical"}, {ID: 72, Name: "legacy"}}
 	e.Labels[0].SummaryFields.Organization = fNamed{ID: 1, Name: "Platform"}
 	e.Labels[1].SummaryFields.Organization = fNamed{ID: 1, Name: "Platform"}

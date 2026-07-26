@@ -1,0 +1,16 @@
+# The AWX-estate audit View over the ansible.executionenvironment mirror the
+# ansible-automation Connector's controller half projects (§1.2 read-only, ADR-0133 D1) —
+# the container images an AWX estate actually runs its automation in.
+#
+# A SUPPLY-CHAIN surface, not a placement one. That distinction is why execution
+# environments are projected and AWX instance groups deliberately are not (ADR-0133 D4):
+# an instance group is AWX's answer to "where does this run", which Stratt answers with
+# Sites and Cells, and mirroring it would install a second placement model that looks
+# authoritative and never governs.
+#
+# NOT the Stratt execution environment: ours is a build artifact whose content is pinned at
+# build time (ADR-0117 D3 / ADR-0124) and selected by an Actuator declaration (D3a). This is
+# the mirror of AWX's, exactly as ansible.template mirrors a job template.
+name: awx-execution-environments
+selector:
+  kinds: [ansible.executionenvironment]

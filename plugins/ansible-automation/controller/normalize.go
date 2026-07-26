@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"strings"
 
 	pluginv1 "github.com/dstout-devops/stratt/sdk/stratt/plugin/v1"
 )
@@ -33,6 +34,11 @@ const (
 	// keys are a STATIC grant allowlist registered per key (ADR-0041 single-owner), so a
 	// key only discovered by reading the Controller is ungrantable.
 	KindLabel = "ansible.label"
+	// KindExecutionEnv mirrors an AWX execution environment — the container IMAGE a job
+	// template runs in (ADR-0133 D1). A supply-chain fact, which is why it earns a
+	// namespace where AWX instance groups deliberately do not: those are a placement
+	// model Stratt already answers with Sites and Cells (D4).
+	KindExecutionEnv = "ansible.executionenvironment"
 
 	// schemePlaybook is the ansible-project Syncer's OWNED kind — referenced here only
 	// as a cross-source relation TARGET (the `runs` edge), never owned or written by AWX.
@@ -79,6 +85,11 @@ func (c *Client) Normalize(snap *Snapshot) ([]*pluginv1.ObservedEntity, error) {
 		rels := append(orgRel(jt.SummaryFields.Organization.ID), runsRel(jt)...)
 		rels = append(rels, c.credentialRels(jt)...)
 		rels = append(rels, c.labelRels(jt.SummaryFields.Labels)...)
+		if ee := jt.SummaryFields.ExecutionEnvironment; ee.ID != 0 {
+			rels = append(rels, &pluginv1.ObservedRelation{
+				Type: "runs-in", ToScheme: KindExecutionEnv, ToValue: c.qualify(ee.ID),
+			})
+		}
 		out = append(out, &pluginv1.ObservedEntity{
 			Kind:         KindTemplate,
 			IdentityKeys: map[string]string{KindTemplate: c.qualify(jt.ID)},
@@ -184,6 +195,24 @@ func (c *Client) Normalize(snap *Snapshot) ([]*pluginv1.ObservedEntity, error) {
 			IdentityKeys: map[string]string{KindUser: c.qualify(u.ID)},
 			Labels:       labels(u.Username, ""),
 			Facets:       map[string][]byte{KindUser: facet},
+		})
+	}
+
+	for _, ee := range snap.ExecutionEnvs {
+		facet, err := json.Marshal(map[string]any{
+			"name": ee.Name, "image": ee.Image,
+			"digestPinned":          digestPinned(ee.Image),
+			"pullPolicy":            ee.Pull,
+			"hasRegistryCredential": ee.Credential != nil || ee.SummaryFields.Credential != nil,
+		})
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, &pluginv1.ObservedEntity{
+			Kind:         KindExecutionEnv,
+			IdentityKeys: map[string]string{KindExecutionEnv: c.qualify(ee.ID)},
+			Labels:       labels(ee.Name, ""),
+			Facets:       map[string][]byte{KindExecutionEnv: facet},
 		})
 	}
 
@@ -294,6 +323,22 @@ func (c *Client) addInvokes(rels *[]*pluginv1.ObservedRelation, seen map[string]
 	}
 	seen[key] = true
 	*rels = append(*rels, &pluginv1.ObservedRelation{Type: "invokes", ToScheme: scheme, ToValue: val})
+}
+
+// digestPinned reports whether an image reference names an IMMUTABLE digest rather than a
+// mutable tag (ADR-0133 D2) — charter §7.3's standard, made checkable across an estate AWX
+// itself will never mention. A structural parse of a reference string, not a
+// reinterpretation: the digest is the part after "@", and only a sha256 form counts.
+//
+// The "@" must come after the last "/" so a registry path containing one cannot be
+// mistaken for a digest, and a tag AND digest together ("img:1.2@sha256:…") is still
+// pinned — the digest wins in every container runtime.
+func digestPinned(image string) bool {
+	at := strings.LastIndex(image, "@")
+	if at < 0 || at < strings.LastIndex(image, "/") {
+		return false
+	}
+	return strings.HasPrefix(image[at+1:], "sha256:") && len(image[at+1:]) > len("sha256:")
 }
 
 // extraDataKeys returns a schedule's extra_data KEY NAMES, sorted for a stable facet.

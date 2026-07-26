@@ -55,6 +55,7 @@ func TestProjectionAgainstAwxsim(t *testing.T) {
 		{"credentials", len(snap.Credentials), 2},
 		{"users", len(snap.Users), 4},
 		{"labels", len(snap.Labels), 3},
+		{"execution environments", len(snap.ExecutionEnvs), 2},
 	} {
 		if tc.got != tc.want {
 			t.Errorf("%s enumerated = %d, want %d", tc.what, tc.got, tc.want)
@@ -65,8 +66,8 @@ func TestProjectionAgainstAwxsim(t *testing.T) {
 	if err != nil {
 		t.Fatalf("normalize: %v", err)
 	}
-	if len(ents) != 20 {
-		t.Fatalf("projected %d entities, want 20 (2 templates + 1 workflow + 4 schedules + 2 orgs + 2 teams + 2 credentials + 4 users + 3 labels)", len(ents))
+	if len(ents) != 22 {
+		t.Fatalf("projected %d entities, want 22 (2 templates + 1 workflow + 4 schedules + 2 orgs + 2 teams + 2 credentials + 4 users + 3 labels + 2 execution environments)", len(ents))
 	}
 
 	byKind := map[string]int{}
@@ -74,7 +75,7 @@ func TestProjectionAgainstAwxsim(t *testing.T) {
 		byKind[e.GetKind()]++
 	}
 	for kind, want := range map[string]int{
-		KindTemplate: 2, KindWorkflow: 1, KindSchedule: 4, KindOrg: 2, KindTeam: 2, KindCredential: 2, KindUser: 4, KindLabel: 3,
+		KindTemplate: 2, KindWorkflow: 1, KindSchedule: 4, KindOrg: 2, KindTeam: 2, KindCredential: 2, KindUser: 4, KindLabel: 3, KindExecutionEnv: 2,
 	} {
 		if byKind[kind] != want {
 			t.Errorf("projected %d %s, want %d", byKind[kind], kind, want)
@@ -428,6 +429,75 @@ func TestScheduleShapeDistinguishesAndCarriesNoValues(t *testing.T) {
 	for _, secret := range []string{"2.0-rc1", "gold", "1.0"} {
 		if strings.Contains(string(blob), secret) {
 			t.Errorf("a schedule extra_data VALUE (%q) reached the graph — §2.5 / ADR-0132 D3 project key names only", secret)
+		}
+	}
+}
+
+// ADR-0133 D1/D2: the EE projects as a supply-chain fact, the runs-in edge makes image
+// blast radius a traversal, and digestPinned is derived from the reference. awxsim seeds
+// one pinned EE and one on a floating tag — the Baseline's two cases in one estate.
+func TestExecutionEnvironmentProjectsWithDerivedPinning(t *testing.T) {
+	c := simClient(t)
+	snap, err := c.Enumerate(context.Background())
+	if err != nil {
+		t.Fatalf("enumerate: %v", err)
+	}
+	ents, err := c.Normalize(snap)
+	if err != nil {
+		t.Fatalf("normalize: %v", err)
+	}
+	pinned := map[string]bool{}
+	runsIn := map[string]string{}
+	for _, e := range ents {
+		switch e.GetKind() {
+		case KindExecutionEnv:
+			var f map[string]any
+			if err := json.Unmarshal(e.GetFacets()[KindExecutionEnv], &f); err != nil {
+				t.Fatalf("ee facet: %v", err)
+			}
+			name, _ := f["name"].(string)
+			ok, _ := f["digestPinned"].(bool)
+			pinned[name] = ok
+			if f["image"] == "" {
+				t.Errorf("EE %q projected digestPinned without the image — a Finding that cannot say WHAT is unpinned fails §1.8", name)
+			}
+		case KindTemplate:
+			for _, r := range e.GetRelations() {
+				if r.GetType() == "runs-in" {
+					if r.GetToScheme() != KindExecutionEnv {
+						t.Errorf("runs-in targets %q, want %q", r.GetToScheme(), KindExecutionEnv)
+					}
+					runsIn[e.GetIdentityKeys()[KindTemplate]] = r.GetToValue()
+				}
+			}
+		}
+	}
+	if got, ok := pinned["pinned-ee"]; !ok || !got {
+		t.Errorf("digest-referenced EE projected digestPinned=%v, want true", got)
+	}
+	if got, ok := pinned["floating-ee"]; !ok || got {
+		t.Errorf("tag-referenced EE projected digestPinned=%v, want false — this is the case §7.3 exists for", got)
+	}
+	if runsIn["ctrl-a/10"] != "ctrl-a/80" || runsIn["ctrl-a/11"] != "ctrl-a/81" {
+		t.Errorf("runs-in edges wrong: %v", runsIn)
+	}
+}
+
+// digestPinned is a parse, and the cases that matter are the ones that could be read
+// wrong: a registry path containing "@", and a reference carrying BOTH a tag and a digest.
+func TestDigestPinnedParse(t *testing.T) {
+	for image, want := range map[string]bool{
+		"quay.io/ansible/awx-ee@sha256:" + strings.Repeat("a", 64):     true,
+		"quay.io/ansible/awx-ee:1.2@sha256:" + strings.Repeat("b", 64): true, // digest wins over the tag
+		"quay.io/ansible/awx-ee:latest":                                false,
+		"quay.io/ansible/awx-ee":                                       false,
+		"registry@corp.io/ansible/awx-ee:1.0":                          false, // "@" in the REGISTRY, not a digest
+		"quay.io/ansible/awx-ee@sha256:":                               false, // empty digest
+		"quay.io/ansible/awx-ee@md5:abc":                               false,
+		"":                                                             false,
+	} {
+		if got := digestPinned(image); got != want {
+			t.Errorf("digestPinned(%q) = %v, want %v", image, got, want)
 		}
 	}
 }

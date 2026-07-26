@@ -32,10 +32,10 @@ from that single sample. Everything below is the rest of the sample.
 
 | Area                                       | Verdict                          | One-line                                                                                         |
 | ------------------------------------------ | -------------------------------- | ------------------------------------------------------------------------------------------------ |
-| **Object coverage** (which objects at all) | 🟡 9 projected                   | Orchestration spine + credentials + accounts + labels; **role grants** are the remaining absence |
+| **Object coverage** (which objects at all) | 🟡 10 projected                  | Spine + credentials + accounts + labels + EEs; **role grants** and **instance groups** remain, both declined with an argument |
 | **Field depth** on projected objects       | 🟡 template deepened, rest thin  | `ansible.template` now carries run state, run knobs + a credential edge (**ADR-0128**); the other four are still 1–3 fields |
 | **Workflow topology**                      | 🟢 invocations + approval gate   | `invokes` edges + `hasApprovalGate`/`nodeCount` (**ADR-0129**); the node graph stays adopt's job |
-| **Facet schema coverage**                  | 🟡 **7 of 12**                   | +template +credential (0128) +workflow (0129) +user (0130) +label (0132); schedule widened      |
+| **Facet schema coverage**                  | 🟡 **8 of 13**                   | +template +credential (0128) +workflow (0129) +user (0130) +label (0132) +EE (0133)             |
 | **Read-path symmetry**                     | 🟡 divergent by accident         | Projection reads 5 endpoints, adopt reads 9; nothing states which asymmetries are deliberate     |
 | **`stratt adopt` transform**               | 🟢 deep and honest               | Reads what it needs, refuses what it must (secrets, password surveys), reports what it drops     |
 
@@ -268,6 +268,9 @@ having been built first and never revisited when the transform grew deeper.
   grouping vocabulary becomes Stratt Views by topology selection — see `estate/views/awx-prod-templates.yaml` ·
   **AWX-007** execution environments · **AWX-008** instance groups →
   Sites/Cells · **AWX-009** notification templates → Sinks (cheap since ADR-0125) ·
+  ~~**AWX-007** execution environments~~ — **done, [ADR-0133](../adr/0133-execution-environments-and-instance-groups.md) D1** ·
+  ~~**AWX-008** instance groups~~ — **declined, D4**, and the declining is the decision: it stays 🔴/⚪ rather
+  than 🟠, because "nobody looked" and "we looked and said no" must never render the same ·
   **AWX-012** custom credential types · ~~**AWX-013** schedule `extra_data` + timezone~~ — **done,
   [ADR-0132](../adr/0132-awx-labels-and-schedule-shape.md) D3**: timezone/next-run/window plus the
   per-schedule launch overrides, and `extraDataKeys` — **key names, never values**, which distinguishes

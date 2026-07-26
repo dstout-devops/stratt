@@ -1019,14 +1019,16 @@ func run(ctx context.Context, log *slog.Logger) error {
 			return fmt.Errorf("ansible-automation controller plugin dial %s: %w", addr, err)
 		}
 		defer conn.Close()
-		// EIGHT owned namespaces: ADR-0128 added ansible.credential, ADR-0130 ansible.user,
+		// NINE owned namespaces (ADR-0133 added ansible.executionenvironment — a
+		// SUPPLY-CHAIN fact; AWX instance groups are deliberately NOT projected, because
+		// placement is Sites/Cells and a mirrored one would never govern): ADR-0128 added ansible.credential, ADR-0130 ansible.user,
 		// ADR-0132 ansible.label (an ENTITY, because a plugin's label KEYS are a static
 		// grant allowlist and an AWX label name is only known at read time).
 		// (AWX's LOCAL ACCOUNT table — never identity.subject, which has a single
 		// write-owner, and never read by authz: ADR-0079 INV-3).
 		// ansible.credential is name+kind only (§2.5) so "which templates use this
 		// credential" is a traversal rather than a scan.
-		ansibleSchemes := []string{"ansible.template", "ansible.workflow", "ansible.schedule", "ansible.org", "ansible.team", "ansible.credential", "ansible.user", "ansible.label"}
+		ansibleSchemes := []string{"ansible.template", "ansible.workflow", "ansible.schedule", "ansible.org", "ansible.team", "ansible.credential", "ansible.user", "ansible.label", "ansible.executionenvironment"}
 		grant := pluginhost.Grant{
 			PluginIdentity: env("STRATT_ANSIBLE_AUTOMATION_CONTROLLER_PLUGIN_ID", "ansible-automation"),
 			Tier:           pluginhost.Tier(env("STRATT_ANSIBLE_AUTOMATION_CONTROLLER_TIER", "trusted")),

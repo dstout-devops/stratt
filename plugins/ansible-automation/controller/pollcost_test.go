@@ -101,7 +101,7 @@ func clockClient(t *testing.T, url string, detail time.Duration, now *time.Time)
 // collectionReads is asserted as a literal on purpose. Four ADRs have now added reads to
 // this sync, and this number moving is the signal that a fifth did — ADR-0131's whole
 // point is that the total has an owner. Bump it deliberately, never to make a test pass.
-const collectionReads = 8 // job_templates, workflow_jts, schedules, orgs, teams, credentials, users, labels
+const collectionReads = 9 // job_templates, workflow_jts, schedules, orgs, teams, credentials, users, labels, execution_environments
 
 func TestDetailTierIsNotReadEveryPoll(t *testing.T) {
 	awx := &countingAWX{}

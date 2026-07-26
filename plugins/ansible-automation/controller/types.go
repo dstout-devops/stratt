@@ -59,12 +59,31 @@ type JobTemplate struct {
 		// Label associations ride the object we are ALREADY reading, so membership costs
 		// no extra request (ADR-0132 D1 / the ADR-0131 budget).
 		Labels labelList `json:"labels"`
+		// The EE association rides the object we are ALREADY reading — zero extra
+		// requests, the same shape as labels (ADR-0133 D5).
+		ExecutionEnvironment named `json:"execution_environment"`
 	} `json:"summary_fields"`
 }
 
 // labelList is AWX's summary_fields sub-collection envelope: {count, results}.
 type labelList struct {
 	Results []named `json:"results"`
+}
+
+// ExecutionEnvironment is an AWX execution environment — a named pointer to the container
+// image a job template runs in (ADR-0133 D1). Projected as a SUPPLY-CHAIN fact: the image
+// reference is the reason this earns a namespace, and digestPinned is derived from it.
+// The registry credential is read only to know WHETHER one is attached, never its material
+// (§2.5).
+type ExecutionEnvironment struct {
+	ID            int    `json:"id"`
+	Name          string `json:"name"`
+	Image         string `json:"image"`
+	Pull          string `json:"pull"`
+	Credential    *int   `json:"credential"`
+	SummaryFields struct {
+		Credential *named `json:"credential"`
+	} `json:"summary_fields"`
 }
 
 // Label is an AWX label — the operator's own grouping vocabulary (ADR-0132 D1).
@@ -196,6 +215,7 @@ type Snapshot struct {
 	Credentials   []Credential
 	Users         []User
 	Labels        []Label
+	ExecutionEnvs []ExecutionEnvironment
 	// WorkflowNodes by workflow_job_template id (ADR-0129). AWX has no bulk endpoint, so
 	// this is an N+1 read: one request per workflow, every poll.
 	WorkflowNodes map[int][]WorkflowNode
@@ -312,6 +332,9 @@ func (c *Client) Enumerate(ctx context.Context) (*Snapshot, error) {
 	// A COLLECTION read, not a detail one: O(1) per poll, not O(objects). The label
 	// ASSOCIATIONS cost nothing — they ride summary_fields on objects already read.
 	if snap.Labels, err = list[Label](ctx, c, "/labels/"); err != nil {
+		return nil, err
+	}
+	if snap.ExecutionEnvs, err = list[ExecutionEnvironment](ctx, c, "/execution_environments/"); err != nil {
 		return nil, err
 	}
 	// The DETAIL tier (ADR-0131 D1): the expensive per-object sub-reads, on their own

@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "stratt:contract:facets/ansible.executionenvironment:v1",
+  "title": "ansible.executionenvironment Facet",
+  "description": "An OBSERVED AWX/AAP execution environment — a named pointer to the CONTAINER IMAGE a job template runs in — projected read-only by the ansible-automation Connector's controller half (ADR-0133 D1). Demanded by the awx-ee-digest-pinned Baseline. Projected as a SUPPLY-CHAIN fact and not a placement one, which is the whole reason it earns a namespace where AWX instance groups do not (D4: those are a placement model Stratt already answers with Sites and Cells, and mirroring them would install a second one that never governs). digestPinned is DERIVED from the reference — whether it names an immutable digest rather than a floating tag — which makes charter §7.3's stated standard checkable across a mirrored estate that AWX itself will never mention. The raw image is kept beside it because a Finding that says 'not pinned' without saying WHAT is not pinned fails §1.8. NOT the Stratt execution environment: ours is a build artifact whose content is pinned at build time (ADR-0117 D3 / ADR-0124) and selected by an Actuator declaration (D3a); this is the mirror of AWX's, exactly as ansible.template is the mirror of a job template. No registry credential material is projected (§2.5) — only whether a credential is attached. Closed (§9).",
+  "type": "object",
+  "properties": {
+    "name": { "type": "string" },
+    "image": {
+      "type": "string",
+      "description": "the container image reference as AWX holds it, e.g. quay.io/ansible/awx-ee:latest"
+    },
+    "digestPinned": {
+      "type": "boolean",
+      "description": "DERIVED: the reference names an immutable digest (…@sha256:…) rather than a mutable tag. The field awx-ee-digest-pinned reads (§7.3)."
+    },
+    "pullPolicy": { "type": "string", "description": "AWX pull: always | missing | never" },
+    "hasRegistryCredential": {
+      "type": "boolean",
+      "description": "whether a registry credential is attached — the FACT, never the material (§2.5)"
+    }
+  },
+  "required": ["name"],
+  "additionalProperties": false
+}

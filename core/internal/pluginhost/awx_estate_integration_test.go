@@ -74,6 +74,10 @@ func awxEstate(t *testing.T) []*pluginv1.ObservedEntity {
 			map[string]any{"name": "prod", "org": "Platform"}),
 		ent("ansible.label", "ctrl-a/72", map[string]string{"ansible.name": "legacy"},
 			map[string]any{"name": "legacy"}),
+		ent("ansible.executionenvironment", "ctrl-a/80", map[string]string{"ansible.name": "pinned-ee"},
+			map[string]any{"name": "pinned-ee", "image": "quay.io/x@sha256:abc", "digestPinned": true}),
+		ent("ansible.executionenvironment", "ctrl-a/81", map[string]string{"ansible.name": "floating-ee"},
+			map[string]any{"name": "floating-ee", "image": "quay.io/x:latest", "digestPinned": false}),
 		ent("ansible.credential", "ctrl-a/50", map[string]string{"ansible.name": "prod-ssh"},
 			map[string]any{"name": "prod-ssh", "kind": "ssh"}),
 		ent("ansible.user", "ctrl-a/60", map[string]string{"ansible.name": "admin"},
@@ -89,11 +93,13 @@ func awxEstate(t *testing.T) []*pluginv1.ObservedEntity {
 			map[string]any{"name": "Deploy Web", "lastRunFailed": true, "lastRunStatus": "failed", "limit": "web*"},
 			rel("owned-by", "ansible.org", "ctrl-a/1"),
 			rel("has-label", "ansible.label", "ctrl-a/70"),
-			rel("uses-credential", "ansible.credential", "ctrl-a/50")),
+			rel("uses-credential", "ansible.credential", "ctrl-a/50"),
+			rel("runs-in", "ansible.executionenvironment", "ctrl-a/80")),
 		// The other one: legacy-labelled and green.
 		ent("ansible.template", "ctrl-a/11", map[string]string{"ansible.name": "Gather Facts"},
 			map[string]any{"name": "Gather Facts", "lastRunFailed": false, "lastRunStatus": "successful"},
-			rel("has-label", "ansible.label", "ctrl-a/72")),
+			rel("has-label", "ansible.label", "ctrl-a/72"),
+			rel("runs-in", "ansible.executionenvironment", "ctrl-a/81")),
 		ent("ansible.workflow", "ctrl-a/20", map[string]string{"ansible.name": "prod-pipeline"},
 			map[string]any{"name": "prod-pipeline", "nodeCount": 5, "hasApprovalGate": true},
 			rel("invokes", "ansible.template", "ctrl-a/10")),
@@ -161,7 +167,7 @@ func TestAWXProjectionLandsEveryKind(t *testing.T) {
 	for kind, want := range map[string]int{
 		"ansible.template": 2, "ansible.workflow": 1, "ansible.schedule": 1,
 		"ansible.org": 1, "ansible.team": 1, "ansible.credential": 1,
-		"ansible.user": 2, "ansible.label": 2,
+		"ansible.user": 2, "ansible.label": 2, "ansible.executionenvironment": 2,
 	} {
 		if got := kindCount(t, store, kind); got != want {
 			t.Errorf("%s projected %d, want %d", kind, got, want)
@@ -189,10 +195,11 @@ func TestShippedProdTemplatesViewSelectsByTopology(t *testing.T) {
 func TestShippedAWXViewsResolve(t *testing.T) {
 	store := projectAWX(t)
 	for name, want := range map[string][]string{
-		"awx-templates":   {"Deploy Web", "Gather Facts"},
-		"awx-users":       {"admin", "ops"},
-		"awx-credentials": {"prod-ssh"},
-		"awx-workflows":   {"prod-pipeline"},
+		"awx-templates":              {"Deploy Web", "Gather Facts"},
+		"awx-users":                  {"admin", "ops"},
+		"awx-credentials":            {"prod-ssh"},
+		"awx-execution-environments": {"floating-ee", "pinned-ee"},
+		"awx-workflows":              {"prod-pipeline"},
 	} {
 		got := resolvedNames(t, store, shippedView(t, name))
 		if len(got) != len(want) {
