@@ -1,6 +1,7 @@
 package dispatch
 
 import (
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -30,16 +31,45 @@ func TestKeepAlive_BeatsWhileTheToolIsSilent(t *testing.T) {
 
 // TestKeepAlive_StopsBeating: an execution that has finished must not keep
 // heartbeating — that would report liveness for an activity that has returned.
+//
+// The assertion is DETERMINISTIC, and getting there is what fixed a real defect. This
+// used to stop(), read the count, sleep, and re-read — which flaked on a loaded CI runner
+// because stop() was fire-and-forget: a beat already in flight landed after stop()
+// returned. The test was right and keepAliveEvery was wrong, so stop() is synchronous now
+// and the count simply cannot move once it returns. No sleep-and-hope, and no tolerance
+// window that would hide the bug it was written to catch.
 func TestKeepAlive_StopsBeating(t *testing.T) {
 	var beats atomic.Int64
-	_, stop := keepAliveEvery(func() { beats.Add(1) }, 5*time.Millisecond)
-	time.Sleep(30 * time.Millisecond)
+	// A ticker fast enough to be mid-beat when stop lands — the race this pins.
+	_, stop := keepAliveEvery(func() { beats.Add(1) }, time.Microsecond)
+	for beats.Load() == 0 { // wait for a real beat rather than guessing a duration
+		runtime.Gosched()
+	}
 	stop()
 	after := beats.Load()
-	time.Sleep(30 * time.Millisecond)
-	if beats.Load() != after {
-		t.Fatal("keepAlive kept beating after stop")
+	// stop() returned, so the ticker goroutine has exited and any in-flight heartbeat has
+	// completed. Any further beat is a defect, and busy-checking is enough to catch one
+	// that a fixed sleep would race past.
+	for range 1000 {
+		runtime.Gosched()
+		if got := beats.Load(); got != after {
+			t.Fatalf("keepAlive beat %d more time(s) after stop returned", got-after)
+		}
 	}
+}
+
+// TestKeepAlive_StopIsIdempotentAndConcurrencySafe: callers `defer stop()` and some also
+// stop on an early return, so a second call must be a no-op rather than a panic on a
+// closed channel. Run under -race, concurrent stops must also be safe.
+func TestKeepAlive_StopIsIdempotentAndConcurrencySafe(t *testing.T) {
+	_, stop := keepAliveEvery(func() {}, time.Millisecond)
+	var wg sync.WaitGroup
+	for range 8 {
+		wg.Add(1)
+		go func() { defer wg.Done(); stop() }()
+	}
+	wg.Wait()
+	stop() // and again, after they have all returned
 }
 
 // TestKeepAlive_SerializesWithTheFollowLoop: the returned beat func is called
