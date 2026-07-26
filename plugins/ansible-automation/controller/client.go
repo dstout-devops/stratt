@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -23,6 +24,12 @@ type Config struct {
 	// numbered objects never collide in one estate (mirrors kubecontainers' cluster
 	// qualifier). "" ⇒ the Endpoint host.
 	ControllerID string
+	// DetailInterval is the cadence for the EXPENSIVE per-object sub-reads — workflow
+	// nodes and team members (ADR-0131 D1). The seven collection reads run every poll;
+	// detail runs at most this often and is served from cache in between, so poll cost
+	// stops being an emergent property of how many workflows an estate happens to have.
+	// 0 ⇒ 5m.
+	DetailInterval time.Duration
 }
 
 // Client is a minimal read-only AWX /api/v2 client. It is the plugin's own SoR
@@ -32,6 +39,18 @@ type Client struct {
 	token  string
 	http   *http.Client
 	ctrlID string
+
+	// The detail tier's read cache (ADR-0131 D1). A cache of an external SoR held inside
+	// the plugin — NOT a second truth (§1.2): the plugin still writes nothing and still
+	// only proposes values the core governs. Guarded because Observe may overlap a slow
+	// previous cycle.
+	detailInterval time.Duration
+	detailMu       sync.Mutex
+	detailAt       time.Time
+	nodeCache      map[int][]WorkflowNode
+	memberCache    map[int][]User
+	// now is injectable so a test can advance the clock without sleeping.
+	now func() time.Time
 }
 
 // New builds a read client. The base is normalized to <endpoint>/api/v2.
@@ -49,7 +68,17 @@ func New(cfg Config) *Client {
 			ctrl = cfg.Endpoint
 		}
 	}
-	return &Client{base: base, token: cfg.Token, http: hc, ctrlID: ctrl}
+	di := cfg.DetailInterval
+	if di == 0 {
+		di = 5 * time.Minute
+	}
+	return &Client{
+		base: base, token: cfg.Token, http: hc, ctrlID: ctrl,
+		detailInterval: di,
+		nodeCache:      map[int][]WorkflowNode{},
+		memberCache:    map[int][]User{},
+		now:            time.Now,
+	}
 }
 
 // ControllerID is the qualifier prefixed onto every projected identity.

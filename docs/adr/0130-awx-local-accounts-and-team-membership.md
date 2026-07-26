@@ -124,8 +124,10 @@ path (the stronger of the two §1.1 framings, per ADR-0128 D5).
   node reads and the seven collection reads. Same trade, same reason (`Enumerate` fails the whole Observe on
   any one error, §1.8), and it is now three ADRs deep — **which is itself the finding**: the projection's
   per-poll cost against an external Controller is growing one decision at a time, and no ADR has owned it.
-  Booked as **AWX-018**: a poll-cost budget for the controller half (cadence separation for expensive
-  sub-reads, or a documented ceiling), before a fourth N+1 lands.
+  ~~Booked as **AWX-018**~~ — **settled immediately as [ADR-0131](0131-controller-poll-cost-budget.md)**,
+  before a fourth N+1 landed: expensive sub-reads move to their own cadence, and a failed one degrades the
+  sync (a declined full-sync boundary) instead of losing it. It also found that ADR-0129's "this needs a
+  spine change" was wrong — the port already had the primitive.
 - **A convincing-looking permission picture that is not one.** Someone will eventually ask why Stratt does
   not enforce with it. The answer is INV-3 and it is structural, but the question is now inevitable, and D3
   declines to make it worse.

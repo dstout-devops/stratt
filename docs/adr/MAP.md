@@ -16,7 +16,7 @@ graph TD
   authz_identity["authz-identity<br/><small>0009 0028 0035 0079 0101 0122<br/>0130</small>"]
   capability_framework["capability-framework<br/><small>0100 0104 0105 0106 0107 0110<br/>0111 0112 0113 0114</small>"]
   certificates_pki["certificates-pki<br/><small>0030 0043 0050 0098 0106</small>"]
-  connectors["connectors<br/><small>0007 0014 0025 0026 0037 0038<br/>0039 0045 0086 0087 0088 0089<br/>0095 0097 0099 0113 0114 0115<br/>0127 0128 0129 0130</small>"]
+  connectors["connectors<br/><small>0007 0014 0025 0026 0037 0038<br/>0039 0045 0086 0087 0088 0089<br/>0095 0097 0099 0113 0114 0115<br/>0127 0128 0129 0130 0131</small>"]
   credentials_secrets["credentials-secrets<br/><small>0009 0029 0052 0094 0098 0099<br/>0100 0106 0125 0126</small>"]
   estate_as_code["estate-as-code<br/><small>0055 0056 0057 0103 0113 0116<br/>0118 0119 0120 0122 0123</small>"]
   findings_drift["findings-drift<br/><small>0019 0020 0033 0043 0080 0085<br/>0128 0129 0130</small>"]
@@ -24,11 +24,11 @@ graph TD
   graph_model["graph-model<br/><small>0015 0017 0041 0042 0059 0060<br/>0079 0080 0081 0082 0084 0085<br/>0096 0114 0115 0119 0120 0123<br/>0126 0127 0128 0129 0130</small>"]
   intent_compiler["intent-compiler<br/><small>0023 0030 0036 0055 0058 0083<br/>0085 0114 0118 0119 0123</small>"]
   orchestration["orchestration<br/><small>0010 0011 0018 0027 0031 0063<br/>0118 0122 0125</small>"]
-  plugin_port["plugin-port<br/><small>0046 0047 0048 0049 0051 0053<br/>0054 0103 0117 0121 0124 0125<br/>0127</small>"]
+  plugin_port["plugin-port<br/><small>0046 0047 0048 0049 0051 0053<br/>0054 0103 0117 0121 0124 0125<br/>0127 0131</small>"]
   policy_governance["policy-governance<br/><small>0061 0062 0063 0064 0065 0066<br/>0067 0068 0069 0070 0071 0072<br/>0073 0074 0075 0076 0122</small>"]
   provisioning["provisioning<br/><small>0017 0058 0095 0096 0107 0110<br/>0111 0112 0113 0114 0115 0120<br/>0123</small>"]
   state_artifacts["state-artifacts<br/><small>0016 0029 0093 0097 0105 0112</small>"]
-  substrate_ops["substrate-ops<br/><small>0013 0032 0040 0044 0045 0049<br/>0077 0078 0093 0101 0102 0124</small>"]
+  substrate_ops["substrate-ops<br/><small>0013 0032 0040 0044 0045 0049<br/>0077 0078 0093 0101 0102 0124<br/>0131</small>"]
   ui["ui<br/><small>0003 0012 0020 0024 0090 0091<br/>0116 0121</small>"]
 
   actuators --> plugin_port
@@ -188,6 +188,7 @@ Connectors & Syncers — SoR ingest breadth, the Syncer SDK, adopt/AWX-import.
 - [ADR-0128](0128-ansible-template-projection-depth.md) — The `ansible.template` mirror answers governance questions, or it is decoration
 - [ADR-0129](0129-workflow-topology-projection.md) — A mirrored workflow says what it invokes; it does not re-model AWX's node graph
 - [ADR-0130](0130-awx-local-accounts-and-team-membership.md) — AWX's local accounts are an estate fact, not an identity source and never an authz one
+- [ADR-0131](0131-controller-poll-cost-budget.md) — A poll-cost budget for the AAP Controller half: tiered cadence, and a partial read degrades instead of failing
 
 ### credentials-secrets
 
@@ -337,6 +338,7 @@ Sovereign plugin port — the dark-matter substrate, transports, runtime registr
 - [ADR-0124](0124-ee-content-supply-factory-and-offline-source.md) — EE content supply: an `execution-environment.yml` front door, and an offline source that is verified the same way
 - [ADR-0125](0125-notification-sinks-are-drivers-not-a-core-switch.md) — Notification sinks are drivers behind a seam, not a switch in the daemon
 - [ADR-0127](0127-one-ansible-automation-plugin-two-sources.md) — One `ansible-automation` plugin, two Sources
+- [ADR-0131](0131-controller-poll-cost-budget.md) — A poll-cost budget for the AAP Controller half: tiered cadence, and a partial read degrades instead of failing
 
 ### policy-governance
 
@@ -413,6 +415,7 @@ Substrate & ops — HA/DR, Cells/multi-region, Sites, deploy, bootstrap, upgrade
 - [ADR-0101](0101-cluster-authz-activation-openbao-oidc-workload-identity.md) — Activate real cluster authz; OpenBao-OIDC workload identity; multi-issuer Principal resolution
 - [ADR-0102](0102-tiered-genesis-bootstrap.md) — Tiered genesis bootstrap: a minimal self-retiring floor, then Stratt self-deploys the rest
 - [ADR-0124](0124-ee-content-supply-factory-and-offline-source.md) — EE content supply: an `execution-environment.yml` front door, and an offline source that is verified the same way
+- [ADR-0131](0131-controller-poll-cost-budget.md) — A poll-cost budget for the AAP Controller half: tiered cadence, and a partial read degrades instead of failing
 
 ### ui
 
@@ -563,3 +566,4 @@ UI — React shell, schema-driven rendering, Views, descent, the first-party cli
 | [0128](0128-ansible-template-projection-depth.md) | connectors, findings-drift, graph-model |
 | [0129](0129-workflow-topology-projection.md) | connectors, findings-drift, graph-model |
 | [0130](0130-awx-local-accounts-and-team-membership.md) | authz-identity, connectors, findings-drift, graph-model |
+| [0131](0131-controller-poll-cost-budget.md) | connectors, plugin-port, substrate-ops |

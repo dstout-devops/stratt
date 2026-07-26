@@ -30,6 +30,7 @@ import (
 	"log/slog"
 	"net"
 	"os"
+	"time"
 
 	"google.golang.org/grpc"
 	"k8s.io/client-go/kubernetes"
@@ -91,10 +92,23 @@ func serveController(log *slog.Logger) *grpc.Server {
 		log.Error("STRATT_ANSIBLE_AUTOMATION_ENDPOINT is required for role=controller (the AAP Controller base URL, e.g. https://aap.example.com)")
 		os.Exit(1)
 	}
+	// The expensive per-object reads (workflow nodes, team members) run on THIS cadence
+	// rather than every poll (ADR-0131 D1) — the poll-cost budget against a Controller we
+	// do not own. "" ⇒ 5m.
+	var detail time.Duration
+	if v := os.Getenv("STRATT_ANSIBLE_AUTOMATION_DETAIL_INTERVAL"); v != "" {
+		d, err := time.ParseDuration(v)
+		if err != nil {
+			log.Error("STRATT_ANSIBLE_AUTOMATION_DETAIL_INTERVAL is not a duration", "value", v, "error", err)
+			os.Exit(1)
+		}
+		detail = d
+	}
 	client := controller.New(controller.Config{
-		Endpoint:     endpoint,
-		Token:        os.Getenv("STRATT_ANSIBLE_AUTOMATION_TOKEN"),
-		ControllerID: os.Getenv("STRATT_ANSIBLE_AUTOMATION_ID"), // "" ⇒ the endpoint host
+		Endpoint:       endpoint,
+		Token:          os.Getenv("STRATT_ANSIBLE_AUTOMATION_TOKEN"),
+		ControllerID:   os.Getenv("STRATT_ANSIBLE_AUTOMATION_ID"), // "" ⇒ the endpoint host
+		DetailInterval: detail,
 	})
 
 	// The SecretBroker backs the adopt/materialize Action ONLY (§2.5): it resolves the

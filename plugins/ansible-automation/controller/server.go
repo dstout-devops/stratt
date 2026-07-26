@@ -3,6 +3,7 @@ package controller
 import (
 	"context"
 	"log/slog"
+	"time"
 
 	"google.golang.org/grpc"
 
@@ -114,8 +115,30 @@ func (s *Server) Observe(_ *pluginv1.ObserveRequest, stream grpc.ServerStreaming
 		return stream.Send(&pluginv1.ObserveResponse{FullSyncComplete: false})
 	}
 
+	// ADR-0131 D2: a DETAIL sub-read that failed degrades this cycle rather than losing
+	// it. Entities still stream and still upsert; declining the boundary means the host
+	// runs no tombstone sweep and no per-source edge delete-and-replace, so nothing is
+	// retracted on the strength of a read that did not finish. The next clean cycle
+	// reconciles. Same mechanism as the empty-snapshot guardrail above.
+	if snap.Partial {
+		s.log.Warn("detail sub-read failed — streaming what was read and DECLINING the full-sync boundary "+
+			"(nothing is retracted; the next clean cycle reconciles)",
+			"controller", s.client.ControllerID(), "entities", len(entities))
+		return stream.Send(&pluginv1.ObserveResponse{Entities: entities, FullSyncComplete: false})
+	}
+
+	// D3: the poll-cost budget is only a budget if an operator can see it. requests is
+	// what this cycle cost the Controller — seven collections, plus the detail tier when
+	// it refreshed this cycle (detailAge 0 means it just did).
+	detailAge := s.client.DetailAge()
+	requests := 7
+	if detailAge == 0 {
+		requests += len(snap.Workflows) + len(snap.Teams)
+	}
 	s.log.Info("full sync", "controller", s.client.ControllerID(),
 		"templates", len(snap.JobTemplates), "workflows", len(snap.Workflows),
-		"schedules", len(snap.Schedules), "orgs", len(snap.Organizations), "teams", len(snap.Teams))
+		"schedules", len(snap.Schedules), "orgs", len(snap.Organizations), "teams", len(snap.Teams),
+		"credentials", len(snap.Credentials), "users", len(snap.Users),
+		"requests", requests, "detailAge", detailAge.Round(time.Second))
 	return stream.Send(&pluginv1.ObserveResponse{Entities: entities, FullSyncComplete: true})
 }

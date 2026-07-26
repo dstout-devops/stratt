@@ -20,6 +20,14 @@
 # looks uncovered. This is projection lag, not real drift — the same mode awx-template-covered
 # documents, and damped the same way (a Finding opens only after 2 consecutive observations).
 #
+# THE LAG IS LARGER AND CONFIGURABLE SINCE ADR-0131. Workflow nodes are the expensive DETAIL
+# tier and refresh on STRATT_ANSIBLE_AUTOMATION_DETAIL_INTERVAL (default 5m), not every poll,
+# so a NEWLY CREATED workflow carries no invokes edges until the next detail refresh and reads
+# as uncovered for up to that long. That is the poll-cost budget being paid in freshness
+# against a Controller we do not own — deliberate, bounded, and declared. Raise
+# dampingObservations, or lower the detail interval, if your estate creates workflows faster
+# than it can tolerate the lag.
+#
 # Pure read (§1.2, §2.4): opens Findings, no actuator, no write-back, no claim. The `invokes`
 # edge and both its endpoints are owned by the controller half — one writer, no second truth.
 name: awx-workflow-covered

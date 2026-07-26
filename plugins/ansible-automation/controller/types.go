@@ -3,6 +3,7 @@ package controller
 import (
 	"context"
 	"fmt"
+	"time"
 )
 
 // The subset of each AWX object this Connector PROJECTS. Read-only: material is
@@ -157,14 +158,92 @@ type Snapshot struct {
 	// WorkflowNodes by workflow_job_template id (ADR-0129). AWX has no bulk endpoint, so
 	// this is an N+1 read: one request per workflow, every poll.
 	WorkflowNodes map[int][]WorkflowNode
-	// TeamMembers by team id (ADR-0130 D2) — the THIRD N+1 read on this path. AWX-018
-	// books the poll-cost budget this is accumulating toward.
+	// TeamMembers by team id (ADR-0130 D2).
 	TeamMembers map[int][]User
+	// Partial is set when a DETAIL sub-read failed (ADR-0131 D2). The server streams a
+	// declined full-sync boundary for it, so the host upserts what WAS read and runs no
+	// tombstone sweep — nothing is retracted on the strength of a read that did not
+	// finish. Collection failures still fail the whole Observe and never reach here.
+	Partial bool
 }
 
-// Enumerate performs one full read of every projected collection. A single failing
-// collection fails the whole Observe (an empty projection is never presented as a
-// successful full-sync — the core's empty-snapshot guardrail then holds steady, §1.8).
+// fillDetail populates the expensive per-object tier, refreshing from AWX at most once
+// per DetailInterval and serving the cache in between (ADR-0131 D1). Reports whether the
+// tier is COMPLETE: false means at least one sub-read failed and the caller must decline
+// the full-sync boundary.
+//
+// The cache is pruned to the objects this cycle actually enumerated, so a deleted
+// workflow's nodes do not linger and get re-asserted forever.
+func (c *Client) fillDetail(ctx context.Context, snap *Snapshot) (complete bool) {
+	c.detailMu.Lock()
+	defer c.detailMu.Unlock()
+
+	complete = true
+	stale := c.detailAt.IsZero() || c.now().Sub(c.detailAt) >= c.detailInterval
+	if stale {
+		nodes := make(map[int][]WorkflowNode, len(snap.Workflows))
+		for _, wf := range snap.Workflows {
+			got, err := list[WorkflowNode](ctx, c, fmt.Sprintf("/workflow_job_templates/%d/workflow_nodes/", wf.ID))
+			if err != nil {
+				// Keep whatever this workflow had; the sync degrades rather than dies.
+				complete = false
+				if prev, ok := c.nodeCache[wf.ID]; ok {
+					nodes[wf.ID] = prev
+				}
+				continue
+			}
+			nodes[wf.ID] = got
+		}
+		members := make(map[int][]User, len(snap.Teams))
+		for _, tm := range snap.Teams {
+			got, err := list[User](ctx, c, fmt.Sprintf("/teams/%d/users/", tm.ID))
+			if err != nil {
+				complete = false
+				if prev, ok := c.memberCache[tm.ID]; ok {
+					members[tm.ID] = prev
+				}
+				continue
+			}
+			members[tm.ID] = got
+		}
+		c.nodeCache, c.memberCache = nodes, members
+		// Only a CLEAN pass resets the clock: a degraded one must retry on the next poll
+		// rather than sit on partial data for a whole interval.
+		if complete {
+			c.detailAt = c.now()
+		}
+	}
+
+	snap.WorkflowNodes = make(map[int][]WorkflowNode, len(snap.Workflows))
+	for _, wf := range snap.Workflows {
+		snap.WorkflowNodes[wf.ID] = c.nodeCache[wf.ID]
+	}
+	snap.TeamMembers = make(map[int][]User, len(snap.Teams))
+	for _, tm := range snap.Teams {
+		snap.TeamMembers[tm.ID] = c.memberCache[tm.ID]
+	}
+	return complete
+}
+
+// DetailAge reports how long ago the detail tier last refreshed cleanly — surfaced per
+// sync so the poll-cost budget is observable rather than notional (ADR-0131 D3).
+func (c *Client) DetailAge() time.Duration {
+	c.detailMu.Lock()
+	defer c.detailMu.Unlock()
+	if c.detailAt.IsZero() {
+		return 0
+	}
+	return c.now().Sub(c.detailAt)
+}
+
+// Enumerate reads the estate in TWO TIERS (ADR-0131 D1). The seven COLLECTIONS run every
+// poll: they carry the entities themselves, so a single failing one still fails the whole
+// Observe (an empty projection is never presented as a successful full sync — the core's
+// empty-snapshot guardrail then holds steady, §1.8). The expensive per-object DETAIL tier
+// runs on its own cadence and degrades rather than dies: a failed sub-read sets
+// Snapshot.Partial, the server declines the full-sync boundary, and the host upserts what
+// was read without sweeping. One 404 on the last sub-read no longer discards six good
+// collection reads with it.
 func (c *Client) Enumerate(ctx context.Context) (*Snapshot, error) {
 	var snap Snapshot
 	var err error
@@ -186,30 +265,12 @@ func (c *Client) Enumerate(ctx context.Context) (*Snapshot, error) {
 	if snap.Credentials, err = list[Credential](ctx, c, "/credentials/"); err != nil {
 		return nil, err
 	}
-	// The workflow node graph, one request per workflow — AWX exposes no bulk endpoint
-	// (ADR-0129). Consistent with every other collection here, a single failure fails the
-	// WHOLE Observe rather than yielding a workflow with silently missing edges: a
-	// half-read full sync would tombstone real edges and read as "this workflow invokes
-	// nothing", which is exactly the signal awx-workflow-covered treats as meaningful (§1.8).
 	if snap.Users, err = list[User](ctx, c, "/users/"); err != nil {
 		return nil, err
 	}
-	snap.WorkflowNodes = make(map[int][]WorkflowNode, len(snap.Workflows))
-	for _, wf := range snap.Workflows {
-		nodes, nerr := list[WorkflowNode](ctx, c, fmt.Sprintf("/workflow_job_templates/%d/workflow_nodes/", wf.ID))
-		if nerr != nil {
-			return nil, nerr
-		}
-		snap.WorkflowNodes[wf.ID] = nodes
-	}
-	// Team membership, one request per team (ADR-0130 D2).
-	snap.TeamMembers = make(map[int][]User, len(snap.Teams))
-	for _, tm := range snap.Teams {
-		members, merr := list[User](ctx, c, fmt.Sprintf("/teams/%d/users/", tm.ID))
-		if merr != nil {
-			return nil, merr
-		}
-		snap.TeamMembers[tm.ID] = members
-	}
+	// The DETAIL tier (ADR-0131 D1): the expensive per-object sub-reads, on their own
+	// cadence and served from cache in between. A failure here DEGRADES the sync — it
+	// does not fail it (D2).
+	snap.Partial = !c.fillDetail(ctx, &snap)
 	return &snap, nil
 }

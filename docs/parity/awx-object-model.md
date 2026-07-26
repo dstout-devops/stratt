@@ -262,10 +262,15 @@ having been built first and never revisited when the transform grew deeper.
   beside a Stratt Workflow) · **AWX-017** correlating `ansible.user` to the SCIM identity — the AWX
   analogue of ADR-0079 4a's leaver-credential Finding, where **a local AWX account matching no known
   identity** is the account nobody offboards; it needs a username-resolvable identity key on `user`
-  Entities, which is a decision about the identity plane · **AWX-018** a **poll-cost budget** for the
-  controller half. That one is a finding in its own right: three ADRs have now each added an N+1 read
-  (per-workflow nodes, per-team members) against a Controller we do not own, each individually justified,
-  and no decision has owned the total. It should be settled before a fourth lands.
+  Entities, which is a decision about the identity plane · ~~**AWX-018** a **poll-cost budget**~~ — **done,
+  [ADR-0131](../adr/0131-controller-poll-cost-budget.md)**, settled before a fourth N+1 landed. The
+  finding was that three ADRs had each added an N+1 read against a Controller we do not own, each
+  individually justified, with no decision owning the total — and the compounding half was worse than
+  the traffic: because one failed read lost the whole Observe, **the mirror got less reliable the richer
+  it got**. Expensive sub-reads now run on their own cadence (7 requests/poll steady-state instead of
+  7+N+M), and a failed sub-read declines the full-sync boundary rather than losing the cycle. It also
+  corrected ADR-0129, which had claimed partial-success needed a spine change: the port already had
+  `full_sync_complete`, and this plugin's own empty-snapshot guardrail was already using it.
 
 **Not gaps, recorded so they are not re-litigated:** inventories → View, hosts never re-projected,
 credentials name-and-kind-only, survey passwords refused, activity stream not mirrored, ad-hoc commands

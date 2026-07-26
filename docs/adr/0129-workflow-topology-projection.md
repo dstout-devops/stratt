@@ -107,16 +107,21 @@ not yet been enumerated this cycle looks uncovered, so it is damped.
   is a reverse traversal, matching the credential question ADR-0128 D2 opened. The read-path asymmetry the
   audit found is closed for its last Tier-1 case.
 - **Negative — an N+1 read, and this is the real cost.** AWX has no bulk endpoint for workflow nodes, so a
-  full sync now issues **one request per workflow** on top of the six collection reads. The adopt path
-  already does this, so the shape is not new, but the projection runs it **every poll interval** rather
-  than once per adopt. Against a Controller we do not own (PLG-1's external-first rule) that is more
-  surface to be slow, rate-limited, or RBAC-refused — and because `Enumerate` fails the whole Observe on
-  any one error by design (§1.8: an empty projection must never be presented as a successful full sync), a
-  single workflow's node fetch failing now costs the **entire** cycle, not just that workflow's edges.
-  Accepted as-is rather than special-cased: partial-success semantics for a full sync is a spine decision
-  that would have to hold for every Syncer, and inventing it inside one plugin is precisely the kind of
-  local exception §1.4 exists to prevent. It is called out here so the next person meets it as a documented
-  trade rather than a mystery.
+  full sync issues **one request per workflow** on top of the collection reads. The adopt path already does
+  this, so the shape is not new, but the projection ran it **every poll interval** rather than once per
+  adopt. Against a Controller we do not own (PLG-1's external-first rule) that is more surface to be slow,
+  rate-limited, or RBAC-refused.
+
+  **AMENDED (2026-07-26, [ADR-0131](0131-controller-poll-cost-budget.md)).** This section originally said
+  the cost was "accepted as-is rather than special-cased: partial-success semantics for a full sync is a
+  spine decision that would have to hold for every Syncer, and inventing it inside one plugin is precisely
+  the kind of local exception §1.4 exists to prevent." **The instinct was right and the conclusion was
+  wrong — the spine already has the primitive.** `ObserveResponse.full_sync_complete` is part of the port,
+  and `pluginhost.Sync` upserts every streamed entity *before* checking it; the flag gates only the
+  tombstone sweep and the per-source edge delete-and-replace. This plugin's own empty-snapshot guardrail
+  already used it. There was nothing to invent, and "one workflow's node fetch failing costs the entire
+  cycle" was a defect rather than a trade. ADR-0131 moves the per-workflow read to its own cadence and
+  degrades a failed sub-read instead of losing the cycle.
 - **Follow-up booked:** **AWX-016** — the full node graph as entities, if and when a consumer (a UI DAG for
   mirrored workflows) demands it.
 
