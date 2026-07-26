@@ -85,7 +85,28 @@ type BlueprintRoute struct {
 	// RemediationWorkflow names the declared Workflow that remediates this
 	// route's Findings — a ref only, never auto-launched (§5 Flow 2). Same
 	// field name as Baseline.RemediationWorkflow (one frozen concept, §2).
+	//
+	// KEPT, not deprecated (ADR-0135 D3): an estate that has decided which provider
+	// converges its hosts is clearer naming the Workflow than routing through an
+	// indirection that resolves to one answer. Mutually exclusive with
+	// RemediationCapability below — project/ has one remediation leg, and a merge
+	// between the two would need a winner (§2.4, no implicit precedence).
 	RemediationWorkflow string `json:"remediationWorkflow,omitempty"`
+	// RemediationCapability names a capability CLASS whose bound provider supplies this
+	// route's remediation Workflow (ADR-0135 D3) — `configmgmt` for host convergence.
+	// Resolved AT COMPILE through the same capability.Resolve that binds provisioning,
+	// against the verified in-environment providers and the estate's capability-bindings.
+	//
+	// This is the last name-bound edge of the intent layer. A route naming a Workflow
+	// names an Actuator names a content project, so a Blueprint carrying one cannot be
+	// shared — which is the whole reason a plugin cannot usefully ship examples
+	// (ADR-0135 D1). Naming the class instead leaves every field of a Blueprint
+	// provider-agnostic and lets the ESTATE supply the binding.
+	//
+	// The compiled Baseline still carries a CONCRETE Workflow: resolution happens once,
+	// at compile, so descent shows one answer and a rebind recompiles rather than
+	// silently changing what a Finding offers (§1.8).
+	RemediationCapability string `json:"remediationCapability,omitempty"`
 	// RemediationParams are the values this route passes to its RemediationWorkflow,
 	// {{.spec.X}}-substituted from the resolved spec at compile and carried onto the
 	// compiled Baseline (ADR-0118 D3).

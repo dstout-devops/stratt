@@ -26,4 +26,9 @@ routes:
       path: port
       equals: "{{.spec.port}}" # ← resolved from the Blueprint default OR the Intent override
     claim: exclusive
-    remediationWorkflow: web-server-configure
+    # The capability, not the Workflow (ADR-0135 D3). This is the worked example the convention
+    # will be copied from: every field of this Blueprint is now provider-agnostic, so it could be
+    # shipped as an example and consumed by an estate that binds configmgmt to a provider this repo
+    # never shipped. The compiled Baseline still carries a CONCRETE Workflow — resolution happens
+    # once, at compile, so descent shows one answer and a rebind recompiles (§1.8).
+    remediationCapability: configmgmt

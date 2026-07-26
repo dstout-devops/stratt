@@ -39,6 +39,16 @@ contentDir: ansible/projects/platform-baseline
 # asks the resolved tree whether it holds that key. It never learns the word `playbook`, which
 # is the `if ansible{}` §1.4 forbids. Existence only — core never opens the file (ADR-0117 D6).
 contentInputs: [playbook]
+# The configmgmt capability (ADR-0135 D2/D4) and the per-Intent-kind convergence Workflows this
+# provider offers for it. A Blueprint route naming `remediationCapability: configmgmt` resolves
+# HERE at compile — so the route stays provider-agnostic and this estate says which provider serves
+# it, exactly as capability-bindings/provisioning-vsphere.yaml does for Compute.
+#
+# `remediates` ROUTES, it does not GRANT: facetNamespaces above is the write ceiling, and naming a
+# Workflow here confers nothing — its Steps carry their own Actuator's ceiling as they always did.
+provides: [configmgmt]
+remediates:
+  Application: web-server-configure
 facetNamespaces:
   - os.kernel
   - os.hardening.sysctl

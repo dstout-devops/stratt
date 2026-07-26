@@ -102,13 +102,13 @@ func decommissionProviders(ctx context.Context, store *graph.Store, env string) 
 	for _, a := range acts {
 		if verified["actuator/"+a.Name] && types.InScope(a.ScopedEnvironments(), env) &&
 			slices.Contains(a.Provides, types.CapProvisioning) && len(a.Decommissions) > 0 {
-			out = append(out, capability.Provider{Name: a.Name, Provisions: a.Decommissions})
+			out = append(out, capability.Provider{Name: a.Name, Workflows: a.Decommissions})
 		}
 	}
 	for _, cn := range conns {
 		if verified["connector/"+cn.Name] && types.InScope(cn.ScopedEnvironments(), env) &&
 			slices.Contains(cn.Provides, types.CapProvisioning) && len(cn.Decommissions) > 0 {
-			out = append(out, capability.Provider{Name: cn.Name, Provisions: cn.Decommissions})
+			out = append(out, capability.Provider{Name: cn.Name, Workflows: cn.Decommissions})
 		}
 	}
 	return out, nil
@@ -123,13 +123,13 @@ func assembleProvisioningProviders(verified map[string]bool, acts []types.Actuat
 	for _, a := range acts {
 		if verified["actuator/"+a.Name] && types.InScope(a.ScopedEnvironments(), env) &&
 			slices.Contains(a.Provides, types.CapProvisioning) && len(a.Provisions) > 0 {
-			out = append(out, capability.Provider{Name: a.Name, Provisions: a.Provisions})
+			out = append(out, capability.Provider{Name: a.Name, Workflows: a.Provisions})
 		}
 	}
 	for _, cn := range conns {
 		if verified["connector/"+cn.Name] && types.InScope(cn.ScopedEnvironments(), env) &&
 			slices.Contains(cn.Provides, types.CapProvisioning) && len(cn.Provisions) > 0 {
-			out = append(out, capability.Provider{Name: cn.Name, Provisions: cn.Provisions})
+			out = append(out, capability.Provider{Name: cn.Name, Workflows: cn.Provisions})
 		}
 	}
 	return out
@@ -166,4 +166,71 @@ func provisionFindingDetail(r capability.Result, base map[string]any) map[string
 	base["unresolved"] = r.Reason
 	base["reason"] = "declared but not built, and provisioning is UNRESOLVED — " + r.Reason
 	return base
+}
+
+// ── Remediation resolution (ADR-0135 D2/D3) ─────────────────────────────────────────────
+
+// resolveRemediation binds a Blueprint route's `remediationCapability` to a concrete provider +
+// convergence Workflow, over the SAME verified-provider index and in-scope bindings provisioning
+// uses. intentKind is the bare kind (no "Intent/" prefix).
+//
+// It exists beside resolveProvisioning rather than inside the compiler because the verified index
+// and the environment filter are estate concerns, and duplicating them would give remediation a
+// second, drifting notion of which providers count.
+func (c *Controller) resolveRemediation(ctx context.Context, capClass, intentKind string) (capability.Result, error) {
+	env := c.Store.ActiveEnvironment()
+	providers, err := verifiedRemediationProviders(ctx, c.Store, env, capClass)
+	if err != nil {
+		return capability.Result{}, err
+	}
+	allBindings, err := c.Store.ListCapabilityBindings(ctx)
+	if err != nil {
+		return capability.Result{}, err
+	}
+	return capability.Resolve(capClass, intentKind, providers, inScopeBindings(allBindings, env)), nil
+}
+
+// verifiedRemediationProviders is the store-backed half; assembleRemediationProviders is the pure
+// selection, testable without a DB.
+func verifiedRemediationProviders(ctx context.Context, store *graph.Store, env, capClass string) ([]capability.Provider, error) {
+	verifs, err := store.ListProviderVerifications(ctx)
+	if err != nil {
+		return nil, err
+	}
+	verified := map[string]bool{}
+	for _, v := range verifs {
+		if v.Verified {
+			verified[v.Kind+"/"+v.Name] = true
+		}
+	}
+	acts, err := store.ListActuators(ctx)
+	if err != nil {
+		return nil, err
+	}
+	conns, err := store.ListConnectors(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return assembleRemediationProviders(verified, acts, conns, env, capClass), nil
+}
+
+// assembleRemediationProviders mirrors assembleProvisioningProviders exactly, one map along: a
+// provider counts only if it is VERIFIED, `provides` the class the route asked for, advertises a
+// remediation Workflow, and is in scope for env. Every exclusion is fail-closed — an unverified or
+// out-of-environment provider must never satisfy a route (§2.4).
+func assembleRemediationProviders(verified map[string]bool, acts []types.Actuator, conns []types.Connector, env, capClass string) []capability.Provider {
+	var out []capability.Provider
+	for _, a := range acts {
+		if verified["actuator/"+a.Name] && types.InScope(a.ScopedEnvironments(), env) &&
+			slices.Contains(a.Provides, capClass) && len(a.Remediates) > 0 {
+			out = append(out, capability.Provider{Name: a.Name, Workflows: a.Remediates})
+		}
+	}
+	for _, cn := range conns {
+		if verified["connector/"+cn.Name] && types.InScope(cn.ScopedEnvironments(), env) &&
+			slices.Contains(cn.Provides, capClass) && len(cn.Remediates) > 0 {
+			out = append(out, capability.Provider{Name: cn.Name, Workflows: cn.Remediates})
+		}
+	}
+	return out
 }

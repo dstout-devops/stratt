@@ -21,6 +21,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/dstout-devops/stratt/core/internal/capability"
 	"github.com/dstout-devops/stratt/core/internal/contract"
 	"github.com/dstout-devops/stratt/core/internal/graph"
 	"github.com/dstout-devops/stratt/core/internal/overlay"
@@ -135,8 +136,17 @@ type ownClaim struct {
 	assignment string
 }
 
+// RemediationResolver binds a route's `remediationCapability` + bare Intent kind to a provider and
+// its convergence Workflow (ADR-0135 D3). Supplied by the caller rather than reached through Store,
+// because WHICH providers count is an estate concern — the verified index and the environment
+// filter — and the compiler has no business re-deriving either.
+//
+// A nil resolver makes every capability-routed route fail closed with a diagnosis rather than
+// silently compiling a Baseline with no remediation (§1.8).
+type RemediationResolver func(ctx context.Context, capClass, intentKind string) (capability.Result, error)
+
 // Compile computes the plan for one reconcile pass — read-only.
-func Compile(ctx context.Context, s Store, maxDelta float64) (Plan, error) {
+func Compile(ctx context.Context, s Store, maxDelta float64, resolveRemediation RemediationResolver) (Plan, error) {
 	if maxDelta <= 0 {
 		maxDelta = DefaultMaxDelta
 	}
@@ -171,7 +181,7 @@ func Compile(ctx context.Context, s Store, maxDelta float64) (Plan, error) {
 		delta := AssignmentDelta{Assignment: a.Name}
 
 		// ── cross-reference validation (§2.1 cac-View guardian; existence) ──
-		bp, intent, verr := validateRefs(ctx, s, a)
+		bp, intent, verr := validateRefs(ctx, s, a, resolveRemediation)
 		if verr != "" {
 			skipped[a.Name] = true
 			plan.Errors = append(plan.Errors, verr)
@@ -452,7 +462,7 @@ func Compile(ctx context.Context, s Store, maxDelta float64) (Plan, error) {
 // must be cac-declared (§2.1 guardian), and the Intent, Blueprint@version,
 // and each route's remediation Workflow must exist. Returns the resolved
 // Blueprint + Intent, or a non-empty error string.
-func validateRefs(ctx context.Context, s Store, a types.Assignment) (types.Blueprint, types.Intent, string) {
+func validateRefs(ctx context.Context, s Store, a types.Assignment, resolveRemediation RemediationResolver) (types.Blueprint, types.Intent, string) {
 	view, err := s.GetView(ctx, a.View)
 	if err != nil {
 		return types.Blueprint{}, types.Intent{}, fmt.Sprintf("assignment %s: view %q not found", a.Name, a.View)
@@ -481,6 +491,34 @@ func validateRefs(ctx context.Context, s Store, a types.Assignment) (types.Bluep
 	if bp.For != intent.Kind {
 		return types.Blueprint{}, types.Intent{}, fmt.Sprintf("assignment %s: blueprint %s@%d is for %q, intent %q is %q",
 			a.Name, a.Blueprint, a.BlueprintVersion, bp.For, a.Intent, intent.Kind)
+	}
+	// Resolve capability-routed remediation to a CONCRETE Workflow before anything downstream
+	// reads the route (ADR-0135 D3). Everything after this point — the ownership claim, the params
+	// cross-check, the compiled Baseline — sees a plain RemediationWorkflow and needs no change,
+	// which is the point: the indirection ends here, at compile, so descent shows one answer.
+	for i := range bp.Routes {
+		r := &bp.Routes[i]
+		if r.RemediationCapability == "" {
+			continue
+		}
+		if resolveRemediation == nil {
+			return types.Blueprint{}, types.Intent{}, fmt.Sprintf(
+				"assignment %s: blueprint route %d names remediationCapability %q but this compile has no capability resolver — refusing to compile a Baseline whose remediation would be silently absent (ADR-0135 D3)",
+				a.Name, i, r.RemediationCapability)
+		}
+		res, err := resolveRemediation(ctx, r.RemediationCapability, shortIntentKind(intent.Kind))
+		if err != nil {
+			return types.Blueprint{}, types.Intent{}, fmt.Sprintf(
+				"assignment %s: blueprint route %d remediationCapability %q: %v", a.Name, i, r.RemediationCapability, err)
+		}
+		if res.Status != capability.StatusResolved {
+			// PENDING and AMBIGUOUS both carry the resolver's own reason, which names the fix
+			// (declare/verify a provider, or add a capability-binding) — §1.8, and identical to
+			// how provisioning reports it.
+			return types.Blueprint{}, types.Intent{}, fmt.Sprintf(
+				"assignment %s: blueprint route %d remediationCapability %q: %s", a.Name, i, r.RemediationCapability, res.Reason)
+		}
+		r.RemediationWorkflow = res.Workflow
 	}
 	for i, r := range bp.Routes {
 		if r.RemediationWorkflow != "" {
@@ -967,3 +1005,7 @@ func filterMemberships(ms []graph.AssignmentMembership, skipped map[string]bool)
 	}
 	return out
 }
+
+// shortIntentKind strips the "Intent/" prefix — capability maps and binding entries key by the bare
+// kind ("Application"), the same convention provisions/decommissions use.
+func shortIntentKind(kind string) string { return strings.TrimPrefix(kind, "Intent/") }

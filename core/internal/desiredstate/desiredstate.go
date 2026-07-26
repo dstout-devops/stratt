@@ -527,9 +527,54 @@ func checkBlueprintParamNames(decls Declarations) error {
 				r.RemediationWorkflow, r.RemediationParams); err != nil {
 				return err
 			}
+			// A capability-routed route (ADR-0135 D3) names no Workflow here — it resolves at
+			// compile. Checking only there would move this failure LATER for exactly the routes
+			// the ADR encourages, so every CANDIDATE provider's Workflow is checked instead.
+			//
+			// Same reasoning as checkProvisioningBuildInputs below, and the same words: which
+			// provider wins depends on the active environment and on which providers are
+			// VERIFIED — runtime state Git cannot see. A param set that fits only the provider
+			// bound in THIS environment breaks the other one on a binding change, which is
+			// precisely the moment nobody is looking at the remediation Workflow.
+			for _, wf := range remediationCandidates(decls, b.For, r.RemediationCapability) {
+				if err := check(fmt.Sprintf("blueprint %s@%d route %d remediationParams (candidate provider workflow)", b.Name, b.Version, i),
+					wf, r.RemediationParams); err != nil {
+					return err
+				}
+			}
 		}
 	}
 	return nil
+}
+
+// remediationCandidates lists every Workflow any declared provider advertises for (capability,
+// intent kind) — the set a capability-routed route could resolve to (ADR-0135 D3). Empty when the
+// route names no capability, so the common path costs nothing.
+//
+// Deliberately NOT filtered by verification or environment: this runs over a Git tree, where
+// neither is knowable, and a narrower set here would be a weaker check for no benefit.
+func remediationCandidates(decls Declarations, intentKind, capClass string) []string {
+	if capClass == "" {
+		return nil
+	}
+	kind := strings.TrimPrefix(intentKind, "Intent/")
+	var out []string
+	for _, a := range decls.Actuators {
+		if slices.Contains(a.Provides, capClass) {
+			if wf := a.Remediates[kind]; wf != "" && !slices.Contains(out, wf) {
+				out = append(out, wf)
+			}
+		}
+	}
+	for _, c := range decls.Connectors {
+		if slices.Contains(c.Provides, capClass) {
+			if wf := c.Remediates[kind]; wf != "" && !slices.Contains(out, wf) {
+				out = append(out, wf)
+			}
+		}
+	}
+	sort.Strings(out)
+	return out
 }
 
 // checkProvisioningBuildInputs validates that every Workflow a provider advertises as a gated
@@ -2468,11 +2513,12 @@ type blueprintFile struct {
 	RemoveParams        map[string]any   `yaml:"removeParams"`
 }
 type blueprintRoute struct {
-	Match               []declFacetPred `yaml:"match"`
-	Observe             declExpectation `yaml:"observe"`
-	Claim               string          `yaml:"claim"`
-	RemediationWorkflow string          `yaml:"remediationWorkflow"`
-	RemediationParams   map[string]any  `yaml:"remediationParams"`
+	Match                 []declFacetPred `yaml:"match"`
+	Observe               declExpectation `yaml:"observe"`
+	Claim                 string          `yaml:"claim"`
+	RemediationWorkflow   string          `yaml:"remediationWorkflow"`
+	RemediationCapability string          `yaml:"remediationCapability"`
+	RemediationParams     map[string]any  `yaml:"remediationParams"`
 }
 type declFacetPred struct {
 	Namespace string `yaml:"namespace"`
@@ -2524,7 +2570,8 @@ func parseBlueprintFile(path string, raw []byte) (string, types.Blueprint, error
 				Equals: eq, Contains: con, NotBefore: r.Observe.NotBefore,
 			},
 			Claim: r.Claim, RemediationWorkflow: r.RemediationWorkflow,
-			RemediationParams: r.RemediationParams,
+			RemediationCapability: r.RemediationCapability,
+			RemediationParams:     r.RemediationParams,
 		})
 	}
 	if err := ValidateBlueprint(b); err != nil {
@@ -2587,6 +2634,20 @@ func ValidateBlueprint(b types.Blueprint) error {
 		case types.ClaimExclusive, types.ClaimAdditive:
 		default:
 			return fmt.Errorf("blueprint %s@%d: route %d claim must be exclusive or additive", b.Name, b.Version, i)
+		}
+		// A route has ONE remediation leg (ADR-0135 D3). Both set would need a winner, and a
+		// silent winner between a named Workflow and a resolved one is the implicit precedence
+		// §2.4 forbids outright.
+		if r.RemediationWorkflow != "" && r.RemediationCapability != "" {
+			return fmt.Errorf("blueprint %s@%d: route %d sets both remediationWorkflow (%s) and remediationCapability (%s) — a route has one remediation leg; name the capability when more than one provider could serve, the Workflow when this estate has decided (ADR-0135 D3)",
+				b.Name, b.Version, i, r.RemediationWorkflow, r.RemediationCapability)
+		}
+		// The class must be one core owns (§1.5, ADR-0104): a plugin never mints a capability's
+		// meaning, and a typo here would otherwise fail closed at COMPILE as "no provider", which
+		// reads as a missing provider rather than a misspelling.
+		if r.RemediationCapability != "" && !types.ValidCapability(r.RemediationCapability) {
+			return fmt.Errorf("blueprint %s@%d: route %d remediationCapability %q is not a known capability class (core-owned vocabulary, ADR-0104 §1.5)",
+				b.Name, b.Version, i, r.RemediationCapability)
 		}
 	}
 	return nil

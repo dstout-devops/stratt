@@ -19,8 +19,12 @@ import (
 // in the verified-provider index (ADR-0104 slice 2) and `provides` the class — a phantom/unverified
 // provider must never be passed in (fail-closed is the caller's job to feed correctly).
 type Provider struct {
-	Name       string            // the provider declaration's name (an Actuator/Connector name)
-	Provisions map[string]string // Intent kind (no "Intent/" prefix) -> this provider's build Workflow
+	Name string // the provider declaration's name (an Actuator/Connector name)
+	// Workflows maps an Intent kind (no "Intent/" prefix) to the Workflow THIS provider offers for
+	// the class being resolved: its `provisions` for provisioning, its `decommissions` for teardown,
+	// its `remediates` for remediation (ADR-0135 D2). Named for the shape rather than for the first
+	// consumer, because a second one now populates it with a different map.
+	Workflows map[string]string
 }
 
 // Status is the outcome class of a resolution.
@@ -63,7 +67,7 @@ func Resolve(capability, intentKind string, providers []Provider, bindings []typ
 	canBuild := map[string]string{}
 	var builders []string
 	for _, p := range providers {
-		if wf := p.Provisions[intentKind]; wf != "" {
+		if wf := p.Workflows[intentKind]; wf != "" {
 			canBuild[p.Name] = wf
 			builders = append(builders, p.Name)
 		}

@@ -615,7 +615,10 @@ func (c *Controller) reconcilePlacementDrift(ctx context.Context, compute []prov
 // publishes the summary for GET /compile.
 func (c *Controller) compile(ctx context.Context, log *slog.Logger) {
 	log = log.With("component", "compiler")
-	plan, err := compiler.Compile(ctx, c.Store, c.MaxDelta)
+	// The capability resolver a route's `remediationCapability` binds through (ADR-0135 D3). It is
+	// this Controller's, not the compiler's, because it reads the verified-provider index and the
+	// active environment — the same snapshot provisioning resolves against.
+	plan, err := compiler.Compile(ctx, c.Store, c.MaxDelta, c.resolveRemediation)
 	if err != nil {
 		log.Error("compile failed", "error", err)
 		return
