@@ -18,12 +18,12 @@ graph TD
   certificates_pki["certificates-pki<br/><small>0030 0043 0050 0098 0106</small>"]
   connectors["connectors<br/><small>0007 0014 0025 0026 0037 0038<br/>0039 0045 0086 0087 0088 0089<br/>0095 0097 0099 0113 0114 0115<br/>0127 0128 0129 0130 0131 0132<br/>0133 0136</small>"]
   credentials_secrets["credentials-secrets<br/><small>0009 0029 0052 0094 0098 0099<br/>0100 0106 0125 0126</small>"]
-  estate_as_code["estate-as-code<br/><small>0055 0056 0057 0103 0113 0116<br/>0118 0119 0120 0122 0123 0132<br/>0134 0135 0136 0137 0138</small>"]
+  estate_as_code["estate-as-code<br/><small>0055 0056 0057 0103 0113 0116<br/>0118 0119 0120 0122 0123 0132<br/>0134 0135 0136 0137 0138 0139</small>"]
   findings_drift["findings-drift<br/><small>0019 0020 0033 0043 0080 0085<br/>0128 0129 0130 0133</small>"]
   foundation["foundation<br/><small>0001 0002 0004 0005 0006 0008<br/>0108 0109 0116 0137 0138</small>"]
   graph_model["graph-model<br/><small>0015 0017 0041 0042 0059 0060<br/>0079 0080 0081 0082 0084 0085<br/>0096 0114 0115 0119 0120 0123<br/>0126 0127 0128 0129 0130 0132<br/>0133</small>"]
   intent_compiler["intent-compiler<br/><small>0023 0030 0036 0055 0058 0083<br/>0085 0114 0118 0119 0123</small>"]
-  orchestration["orchestration<br/><small>0010 0011 0018 0027 0031 0063<br/>0118 0122 0125 0134</small>"]
+  orchestration["orchestration<br/><small>0010 0011 0018 0027 0031 0063<br/>0118 0122 0125 0134 0139</small>"]
   plugin_port["plugin-port<br/><small>0046 0047 0048 0049 0051 0053<br/>0054 0103 0117 0121 0124 0125<br/>0127 0131 0137 0138</small>"]
   policy_governance["policy-governance<br/><small>0061 0062 0063 0064 0065 0066<br/>0067 0068 0069 0070 0071 0072<br/>0073 0074 0075 0076 0122</small>"]
   provisioning["provisioning<br/><small>0017 0058 0095 0096 0107 0110<br/>0111 0112 0113 0114 0115 0120<br/>0123</small>"]
@@ -237,6 +237,7 @@ Estate-as-Code — CaC declarations, environments, composition, the estate CLI.
 - [ADR-0136](0136-superseded-versus-driven.md) — Superseded, not integrated: which external systems are terminal and which are forever
 - [ADR-0137](0137-a-plugin-is-a-service-not-a-subdirectory.md) — A plugin is a service, not a subdirectory: plane independence and the no-core-change rule
 - [ADR-0138](0138-capability-typed-dependencies-and-the-seam-self-split.md) — A module depends on capabilities: the seam/self split, and the Step-level gap
+- [ADR-0139](0139-nested-workflow-steps.md) — A Step may run a Workflow: nesting, and the one chokepoint
 
 ### findings-drift
 
@@ -337,6 +338,7 @@ Orchestration — Triggers, Workflows/Gates, Steps, Runs, Actions, notifications
 - [ADR-0122](0122-change-context-is-typed-and-partly-derived.md) — The change context is typed, and the facts core can know are derived, not asserted
 - [ADR-0125](0125-notification-sinks-are-drivers-not-a-core-switch.md) — Notification sinks are drivers behind a seam, not a switch in the daemon
 - [ADR-0134](0134-tool-content-lives-beside-the-estate.md) — A playbook is a playbook: tool content lives beside the estate, not inside a declaration
+- [ADR-0139](0139-nested-workflow-steps.md) — A Step may run a Workflow: nesting, and the one chokepoint
 
 ### plugin-port
 
@@ -595,3 +597,4 @@ UI — React shell, schema-driven rendering, Views, descent, the first-party cli
 | [0136](0136-superseded-versus-driven.md) | connectors, estate-as-code |
 | [0137](0137-a-plugin-is-a-service-not-a-subdirectory.md) | estate-as-code, foundation, plugin-port |
 | [0138](0138-capability-typed-dependencies-and-the-seam-self-split.md) | estate-as-code, foundation, plugin-port |
+| [0139](0139-nested-workflow-steps.md) | estate-as-code, orchestration |
