@@ -132,6 +132,19 @@ type named struct {
 	Name string `json:"name"`
 }
 
+// User is an AWX LOCAL ACCOUNT (ADR-0130 D1) — not an identity. The IdP is the identity
+// SoR and `identity.subject` has a single write-owner (the SCIM projector, §2.1); this is
+// AWX's own account table, a different system of record describing overlapping people.
+// No password hash, no token, no material (§2.5).
+type User struct {
+	ID              int    `json:"id"`
+	Username        string `json:"username"`
+	Email           string `json:"email"`
+	IsActive        bool   `json:"is_active"`
+	IsSuperuser     bool   `json:"is_superuser"`
+	IsSystemAuditor bool   `json:"is_system_auditor"`
+}
+
 // Snapshot is one full read of the Controller's automation estate.
 type Snapshot struct {
 	JobTemplates  []JobTemplate
@@ -140,9 +153,13 @@ type Snapshot struct {
 	Organizations []Organization
 	Teams         []Team
 	Credentials   []Credential
+	Users         []User
 	// WorkflowNodes by workflow_job_template id (ADR-0129). AWX has no bulk endpoint, so
 	// this is an N+1 read: one request per workflow, every poll.
 	WorkflowNodes map[int][]WorkflowNode
+	// TeamMembers by team id (ADR-0130 D2) — the THIRD N+1 read on this path. AWX-018
+	// books the poll-cost budget this is accumulating toward.
+	TeamMembers map[int][]User
 }
 
 // Enumerate performs one full read of every projected collection. A single failing
@@ -174,6 +191,9 @@ func (c *Client) Enumerate(ctx context.Context) (*Snapshot, error) {
 	// WHOLE Observe rather than yielding a workflow with silently missing edges: a
 	// half-read full sync would tombstone real edges and read as "this workflow invokes
 	// nothing", which is exactly the signal awx-workflow-covered treats as meaningful (§1.8).
+	if snap.Users, err = list[User](ctx, c, "/users/"); err != nil {
+		return nil, err
+	}
 	snap.WorkflowNodes = make(map[int][]WorkflowNode, len(snap.Workflows))
 	for _, wf := range snap.Workflows {
 		nodes, nerr := list[WorkflowNode](ctx, c, fmt.Sprintf("/workflow_job_templates/%d/workflow_nodes/", wf.ID))
@@ -181,6 +201,15 @@ func (c *Client) Enumerate(ctx context.Context) (*Snapshot, error) {
 			return nil, nerr
 		}
 		snap.WorkflowNodes[wf.ID] = nodes
+	}
+	// Team membership, one request per team (ADR-0130 D2).
+	snap.TeamMembers = make(map[int][]User, len(snap.Teams))
+	for _, tm := range snap.Teams {
+		members, merr := list[User](ctx, c, fmt.Sprintf("/teams/%d/users/", tm.ID))
+		if merr != nil {
+			return nil, merr
+		}
+		snap.TeamMembers[tm.ID] = members
 	}
 	return &snap, nil
 }

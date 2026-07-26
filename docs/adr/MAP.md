@@ -13,15 +13,15 @@ graph TD
   actuators["actuators<br/><small>0016 0022 0050 0053 0092 0117<br/>0124 0126</small>"]
   api_surface["api-surface<br/><small>0006 0021 0026 0076 0091 0121</small>"]
   audit_telemetry["audit-telemetry<br/><small>0034 0065 0077 0121</small>"]
-  authz_identity["authz-identity<br/><small>0009 0028 0035 0079 0101 0122</small>"]
+  authz_identity["authz-identity<br/><small>0009 0028 0035 0079 0101 0122<br/>0130</small>"]
   capability_framework["capability-framework<br/><small>0100 0104 0105 0106 0107 0110<br/>0111 0112 0113 0114</small>"]
   certificates_pki["certificates-pki<br/><small>0030 0043 0050 0098 0106</small>"]
-  connectors["connectors<br/><small>0007 0014 0025 0026 0037 0038<br/>0039 0045 0086 0087 0088 0089<br/>0095 0097 0099 0113 0114 0115<br/>0127 0128 0129</small>"]
+  connectors["connectors<br/><small>0007 0014 0025 0026 0037 0038<br/>0039 0045 0086 0087 0088 0089<br/>0095 0097 0099 0113 0114 0115<br/>0127 0128 0129 0130</small>"]
   credentials_secrets["credentials-secrets<br/><small>0009 0029 0052 0094 0098 0099<br/>0100 0106 0125 0126</small>"]
   estate_as_code["estate-as-code<br/><small>0055 0056 0057 0103 0113 0116<br/>0118 0119 0120 0122 0123</small>"]
-  findings_drift["findings-drift<br/><small>0019 0020 0033 0043 0080 0085<br/>0128 0129</small>"]
+  findings_drift["findings-drift<br/><small>0019 0020 0033 0043 0080 0085<br/>0128 0129 0130</small>"]
   foundation["foundation<br/><small>0001 0002 0004 0005 0006 0008<br/>0108 0109 0116</small>"]
-  graph_model["graph-model<br/><small>0015 0017 0041 0042 0059 0060<br/>0079 0080 0081 0082 0084 0085<br/>0096 0114 0115 0119 0120 0123<br/>0126 0127 0128 0129</small>"]
+  graph_model["graph-model<br/><small>0015 0017 0041 0042 0059 0060<br/>0079 0080 0081 0082 0084 0085<br/>0096 0114 0115 0119 0120 0123<br/>0126 0127 0128 0129 0130</small>"]
   intent_compiler["intent-compiler<br/><small>0023 0030 0036 0055 0058 0083<br/>0085 0114 0118 0119 0123</small>"]
   orchestration["orchestration<br/><small>0010 0011 0018 0027 0031 0063<br/>0118 0122 0125</small>"]
   plugin_port["plugin-port<br/><small>0046 0047 0048 0049 0051 0053<br/>0054 0103 0117 0121 0124 0125<br/>0127</small>"]
@@ -129,6 +129,7 @@ Authorization & identity — OpenFGA, Principal, SCIM, workload identity.
 - [ADR-0079](0079-identity-as-a-cross-cutting-dimension.md) — Identity is a cross-cutting projection dimension, not a lowest-level type
 - [ADR-0101](0101-cluster-authz-activation-openbao-oidc-workload-identity.md) — Activate real cluster authz; OpenBao-OIDC workload identity; multi-issuer Principal resolution
 - [ADR-0122](0122-change-context-is-typed-and-partly-derived.md) — The change context is typed, and the facts core can know are derived, not asserted
+- [ADR-0130](0130-awx-local-accounts-and-team-membership.md) — AWX's local accounts are an estate fact, not an identity source and never an authz one
 
 ### capability-framework
 
@@ -186,6 +187,7 @@ Connectors & Syncers — SoR ingest breadth, the Syncer SDK, adopt/AWX-import.
 - [ADR-0127](0127-one-ansible-automation-plugin-two-sources.md) — One `ansible-automation` plugin, two Sources
 - [ADR-0128](0128-ansible-template-projection-depth.md) — The `ansible.template` mirror answers governance questions, or it is decoration
 - [ADR-0129](0129-workflow-topology-projection.md) — A mirrored workflow says what it invokes; it does not re-model AWX's node graph
+- [ADR-0130](0130-awx-local-accounts-and-team-membership.md) — AWX's local accounts are an estate fact, not an identity source and never an authz one
 
 ### credentials-secrets
 
@@ -236,6 +238,7 @@ Findings & drift — Baselines, Findings, compliance packs, drift/GC.
 - [ADR-0085](0085-relation-presence-baseline.md) — Relation-presence Baseline: desired state over graph topology, not just node facets
 - [ADR-0128](0128-ansible-template-projection-depth.md) — The `ansible.template` mirror answers governance questions, or it is decoration
 - [ADR-0129](0129-workflow-topology-projection.md) — A mirrored workflow says what it invokes; it does not re-model AWX's node graph
+- [ADR-0130](0130-awx-local-accounts-and-team-membership.md) — AWX's local accounts are an estate fact, not an identity source and never an authz one
 
 ### foundation
 
@@ -279,6 +282,7 @@ Graph model — Entity/Facet/Relation/Contract primitives, projection & liveness
 - [ADR-0127](0127-one-ansible-automation-plugin-two-sources.md) — One `ansible-automation` plugin, two Sources
 - [ADR-0128](0128-ansible-template-projection-depth.md) — The `ansible.template` mirror answers governance questions, or it is decoration
 - [ADR-0129](0129-workflow-topology-projection.md) — A mirrored workflow says what it invokes; it does not re-model AWX's node graph
+- [ADR-0130](0130-awx-local-accounts-and-team-membership.md) — AWX's local accounts are an estate fact, not an identity source and never an authz one
 
 ### intent-compiler
 
@@ -558,3 +562,4 @@ UI — React shell, schema-driven rendering, Views, descent, the first-party cli
 | [0127](0127-one-ansible-automation-plugin-two-sources.md) | connectors, graph-model, plugin-port |
 | [0128](0128-ansible-template-projection-depth.md) | connectors, findings-drift, graph-model |
 | [0129](0129-workflow-topology-projection.md) | connectors, findings-drift, graph-model |
+| [0130](0130-awx-local-accounts-and-team-membership.md) | authz-identity, connectors, findings-drift, graph-model |

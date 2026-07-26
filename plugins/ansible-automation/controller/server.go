@@ -68,6 +68,7 @@ func (s *Server) GetManifest(context.Context, *pluginv1.GetManifestRequest) (*pl
 			{SchemaId: KindOrg},
 			{SchemaId: KindTeam},
 			{SchemaId: KindCredential},
+			{SchemaId: KindUser},
 		},
 		Actions: []*pluginv1.ActionDecl{{
 			Name:        actionMaterialize,
@@ -78,7 +79,7 @@ func (s *Server) GetManifest(context.Context, *pluginv1.GetManifestRequest) (*pl
 		}},
 		// A removed AWX object retracts on the full-sync boundary, per object-type scheme.
 		// Union liveness (ADR-0042) keeps an entity alive if another Source still asserts it.
-		TombstoneSchemes: []string{KindTemplate, KindWorkflow, KindSchedule, KindOrg, KindTeam, KindCredential},
+		TombstoneSchemes: []string{KindTemplate, KindWorkflow, KindSchedule, KindOrg, KindTeam, KindCredential, KindUser},
 		// Cutover descriptor (ADR-0087): tells the core cutover reconciler what "still
 		// executing at AWX" means for an adopted template — an enabled schedule that launches
 		// it — WITHOUT teaching the spine ansible. The reconciler reads these fields blindly.

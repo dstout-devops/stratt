@@ -48,6 +48,8 @@ func (s *Sim) Handler() http.Handler {
 	mux.HandleFunc("GET /api/v2/schedules/", s.auth(s.schedules))
 	mux.HandleFunc("GET /api/v2/organizations/", s.auth(s.organizations))
 	mux.HandleFunc("GET /api/v2/teams/", s.auth(s.teams))
+	mux.HandleFunc("GET /api/v2/teams/{id}/users/", s.auth(s.teamUsers))
+	mux.HandleFunc("GET /api/v2/users/", s.auth(s.users))
 	mux.HandleFunc("GET /api/v2/inventories/", s.auth(s.inventories))
 	mux.HandleFunc("GET /api/v2/inventories/{id}/", s.auth(s.inventory))
 	mux.HandleFunc("GET /api/v2/inventories/{id}/inventory_sources/", s.auth(s.inventorySources))

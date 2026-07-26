@@ -22,6 +22,11 @@ const (
 	// so "which templates use this credential" is a graph traversal. NOT a CredentialRef —
 	// that is the frozen Named Kind an adopt produces; this is the read-only mirror.
 	KindCredential = "ansible.credential"
+	// KindUser mirrors an AWX LOCAL ACCOUNT (ADR-0130 D1). Deliberately a different kind
+	// from the SCIM projector's `user`: an AWX account and an IdP identity are facts from
+	// two systems of record, and this claims neither identity.subject nor identity.name
+	// (§2.1 single write-owner). NEVER read by authorization (ADR-0079 INV-3).
+	KindUser = "ansible.user"
 
 	// schemePlaybook is the ansible-project Syncer's OWNED kind — referenced here only
 	// as a cross-source relation TARGET (the `runs` edge), never owned or written by AWX.
@@ -149,6 +154,22 @@ func (c *Client) Normalize(snap *Snapshot) ([]*pluginv1.ObservedEntity, error) {
 		})
 	}
 
+	for _, u := range snap.Users {
+		facet, err := json.Marshal(map[string]any{
+			"username": u.Username, "email": u.Email, "isActive": u.IsActive,
+			"isSuperuser": u.IsSuperuser, "isSystemAuditor": u.IsSystemAuditor,
+		})
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, &pluginv1.ObservedEntity{
+			Kind:         KindUser,
+			IdentityKeys: map[string]string{KindUser: c.qualify(u.ID)},
+			Labels:       labels(u.Username, ""),
+			Facets:       map[string][]byte{KindUser: facet},
+		})
+	}
+
 	for _, tm := range snap.Teams {
 		facet, err := json.Marshal(map[string]any{"name": tm.Name})
 		if err != nil {
@@ -157,6 +178,17 @@ func (c *Client) Normalize(snap *Snapshot) ([]*pluginv1.ObservedEntity, error) {
 		var rels []*pluginv1.ObservedRelation
 		if tm.SummaryFields.Organization.ID != 0 {
 			rels = []*pluginv1.ObservedRelation{{Type: "member-of", ToScheme: KindOrg, ToValue: c.qualify(tm.SummaryFields.Organization.ID)}}
+		}
+		// Membership: an ESTATE FACT, never an authorization one (ADR-0130 D2). Same-source,
+		// so it always resolves. Stratt authz stays Principals + OpenFGA tuples, and INV-3
+		// keeps the graph out of the decision path structurally.
+		for _, m := range snap.TeamMembers[tm.ID] {
+			if m.ID == 0 {
+				continue
+			}
+			rels = append(rels, &pluginv1.ObservedRelation{
+				Type: "has-member", ToScheme: KindUser, ToValue: c.qualify(m.ID),
+			})
 		}
 		out = append(out, &pluginv1.ObservedEntity{
 			Kind:         KindTeam,

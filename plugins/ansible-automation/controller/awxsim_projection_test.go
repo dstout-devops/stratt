@@ -52,6 +52,7 @@ func TestProjectionAgainstAwxsim(t *testing.T) {
 		{"organizations", len(snap.Organizations), 2},
 		{"teams", len(snap.Teams), 2},
 		{"credentials", len(snap.Credentials), 2},
+		{"users", len(snap.Users), 4},
 	} {
 		if tc.got != tc.want {
 			t.Errorf("%s enumerated = %d, want %d", tc.what, tc.got, tc.want)
@@ -62,8 +63,8 @@ func TestProjectionAgainstAwxsim(t *testing.T) {
 	if err != nil {
 		t.Fatalf("normalize: %v", err)
 	}
-	if len(ents) != 12 {
-		t.Fatalf("projected %d entities, want 12 (2 templates + 1 workflow + 3 schedules + 2 orgs + 2 teams + 2 credentials)", len(ents))
+	if len(ents) != 16 {
+		t.Fatalf("projected %d entities, want 16 (2 templates + 1 workflow + 3 schedules + 2 orgs + 2 teams + 2 credentials + 4 users)", len(ents))
 	}
 
 	byKind := map[string]int{}
@@ -71,7 +72,7 @@ func TestProjectionAgainstAwxsim(t *testing.T) {
 		byKind[e.GetKind()]++
 	}
 	for kind, want := range map[string]int{
-		KindTemplate: 2, KindWorkflow: 1, KindSchedule: 3, KindOrg: 2, KindTeam: 2, KindCredential: 2,
+		KindTemplate: 2, KindWorkflow: 1, KindSchedule: 3, KindOrg: 2, KindTeam: 2, KindCredential: 2, KindUser: 4,
 	} {
 		if byKind[kind] != want {
 			t.Errorf("projected %d %s, want %d", byKind[kind], kind, want)
@@ -228,6 +229,94 @@ func TestUnknownWorkflowNodeTypeDrawsNoEdge(t *testing.T) {
 	rels, _ = c.workflowTopology([]WorkflowNode{mk(21, "workflow_job")})
 	if len(rels) != 1 || rels[0].GetToScheme() != KindWorkflow || rels[0].GetToValue() != "ctrl-a/21" {
 		t.Errorf("nested workflow node = %+v, want one invokes edge onto ansible.workflow ctrl-a/21", rels)
+	}
+}
+
+// ADR-0130 D2: team membership is an edge, and it is an ESTATE fact. awxsim's web-ops has
+// two members, dba has one. Same-source, so it always resolves.
+func TestTeamMembershipProjects(t *testing.T) {
+	c := simClient(t)
+	snap, err := c.Enumerate(context.Background())
+	if err != nil {
+		t.Fatalf("enumerate: %v", err)
+	}
+	ents, err := c.Normalize(snap)
+	if err != nil {
+		t.Fatalf("normalize: %v", err)
+	}
+	members := map[string][]string{}
+	for _, e := range ents {
+		id := e.GetIdentityKeys()[KindTeam]
+		if e.GetKind() != KindTeam {
+			continue
+		}
+		for _, r := range e.GetRelations() {
+			if r.GetType() != "has-member" {
+				continue
+			}
+			if r.GetToScheme() != KindUser {
+				t.Errorf("has-member targets %q, want %q", r.GetToScheme(), KindUser)
+			}
+			members[id] = append(members[id], r.GetToValue())
+		}
+	}
+	for team, want := range map[string][]string{
+		"ctrl-a/1": {"ctrl-a/60", "ctrl-a/61"},
+		"ctrl-a/2": {"ctrl-a/62"},
+	} {
+		got := append([]string{}, members[team]...)
+		sort.Strings(got)
+		if !reflect.DeepEqual(got, want) {
+			t.Errorf("team %s members = %v, want %v", team, got, want)
+		}
+	}
+}
+
+// The field awx-superuser-review reads, and the §2.5 line beside it: an account mirror
+// carries no password hash, no token, no material of any kind.
+func TestUserProjectionIsAccountFactsOnly(t *testing.T) {
+	c := simClient(t)
+	snap, err := c.Enumerate(context.Background())
+	if err != nil {
+		t.Fatalf("enumerate: %v", err)
+	}
+	ents, err := c.Normalize(snap)
+	if err != nil {
+		t.Fatalf("normalize: %v", err)
+	}
+	allowed := map[string]bool{"username": true, "email": true, "isActive": true, "isSuperuser": true, "isSystemAuditor": true}
+	var supers, seen int
+	for _, e := range ents {
+		if e.GetKind() != KindUser {
+			continue
+		}
+		seen++
+		var facet map[string]any
+		if err := json.Unmarshal(e.GetFacets()[KindUser], &facet); err != nil {
+			t.Fatalf("user facet: %v", err)
+		}
+		for k := range facet {
+			if !allowed[k] {
+				t.Errorf("user facet carries %q — account facts only; no material, ever (§2.5)", k)
+			}
+		}
+		if facet["isSuperuser"] == true {
+			supers++
+		}
+		// It must NOT claim the identity plane: identity.subject has a single write-owner
+		// (§2.1 / ADR-0079 slice-3 gate) and this is a different system of record.
+		if _, claimed := e.GetFacets()["identity.subject"]; claimed {
+			t.Error("the AWX account mirror claims identity.subject — that namespace is solely the SCIM projector's (§2.1); an AWX local account is not an identity")
+		}
+		if _, claimed := e.GetLabels()["identity.name"]; claimed {
+			t.Error("the AWX account mirror claims the identity.name label key — solely the SCIM projector's (ADR-0041/§2.1)")
+		}
+	}
+	if seen != 4 {
+		t.Fatalf("projected %d users, want 4", seen)
+	}
+	if supers != 1 {
+		t.Errorf("superusers = %d, want 1 — the account awx-superuser-review exists to surface", supers)
 	}
 }
 

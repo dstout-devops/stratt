@@ -1019,9 +1019,12 @@ func run(ctx context.Context, log *slog.Logger) error {
 			return fmt.Errorf("ansible-automation controller plugin dial %s: %w", addr, err)
 		}
 		defer conn.Close()
-		// SIX owned namespaces since ADR-0128 added ansible.credential (name+kind only,
-		// never material, §2.5) so "which templates use this credential" is a traversal.
-		ansibleSchemes := []string{"ansible.template", "ansible.workflow", "ansible.schedule", "ansible.org", "ansible.team", "ansible.credential"}
+		// SEVEN owned namespaces: ADR-0128 added ansible.credential, ADR-0130 ansible.user
+		// (AWX's LOCAL ACCOUNT table — never identity.subject, which has a single
+		// write-owner, and never read by authz: ADR-0079 INV-3).
+		// ansible.credential is name+kind only (§2.5) so "which templates use this
+		// credential" is a traversal rather than a scan.
+		ansibleSchemes := []string{"ansible.template", "ansible.workflow", "ansible.schedule", "ansible.org", "ansible.team", "ansible.credential", "ansible.user"}
 		grant := pluginhost.Grant{
 			PluginIdentity: env("STRATT_ANSIBLE_AUTOMATION_CONTROLLER_PLUGIN_ID", "ansible-automation"),
 			Tier:           pluginhost.Tier(env("STRATT_ANSIBLE_AUTOMATION_CONTROLLER_TIER", "trusted")),

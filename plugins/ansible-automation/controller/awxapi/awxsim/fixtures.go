@@ -84,6 +84,17 @@ type fSchedule struct {
 	} `json:"summary_fields"`
 }
 
+// fUser is an AWX local account (ADR-0130). Projection-only — the adopt path reads none
+// of this.
+type fUser struct {
+	ID              int    `json:"id"`
+	Username        string `json:"username"`
+	Email           string `json:"email"`
+	IsActive        bool   `json:"is_active"`
+	IsSuperuser     bool   `json:"is_superuser"`
+	IsSystemAuditor bool   `json:"is_system_auditor"`
+}
+
 type fOrganization struct {
 	ID          int    `json:"id"`
 	Name        string `json:"name"`
@@ -171,6 +182,8 @@ type estate struct {
 	Credentials      []fCredential
 	Surveys          map[int]fSurveySpec
 	Schedules        []fSchedule
+	Users            []fUser
+	TeamMembers      map[int][]fUser
 	Organizations    []fOrganization
 	Teams            []fTeam
 }
@@ -188,6 +201,7 @@ func seed() *estate {
 		InventorySources: map[int][]fInventorySource{},
 		Hosts:            map[int][]fHost{},
 		Surveys:          map[int]fSurveySpec{},
+		TeamMembers:      map[int][]fUser{},
 	}
 
 	// Inventories: 1 static, 2 dynamic (aws_ec2), 3 smart.
@@ -241,6 +255,18 @@ func seed() *estate {
 		{ID: 2, Name: "Legacy", Description: "inherited estate"},
 	}
 	e.Teams = []fTeam{{ID: 1, Name: "web-ops"}, {ID: 2, Name: "dba"}}
+	// Accounts: one superuser (the awx-superuser-review Baseline's positive case), one
+	// ordinary operator, one system auditor, one DISABLED leaver — is_active false raises
+	// nothing on its own, which is the point of the Baseline reading isSuperuser and not
+	// isActive.
+	e.Users = []fUser{
+		{ID: 60, Username: "admin", Email: "admin@example.com", IsActive: true, IsSuperuser: true},
+		{ID: 61, Username: "ops", Email: "ops@example.com", IsActive: true},
+		{ID: 62, Username: "auditor", Email: "auditor@example.com", IsActive: true, IsSystemAuditor: true},
+		{ID: 63, Username: "leaver", Email: "leaver@example.com", IsActive: false},
+	}
+	e.TeamMembers[1] = []fUser{e.Users[1], e.Users[0]}
+	e.TeamMembers[2] = []fUser{e.Users[2]}
 	e.Teams[0].SummaryFields.Organization = fNamed{ID: 1, Name: "Platform"}
 	e.Teams[1].SummaryFields.Organization = fNamed{ID: 2, Name: "Legacy"}
 

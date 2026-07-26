@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "stratt:contract:facets/ansible.user:v1",
+  "title": "ansible.user Facet",
+  "description": "The OBSERVED local account of an AWX/AAP Controller, projected read-only by the ansible-automation Connector's controller half (ADR-0130 D1). Demanded by the awx-superuser-review Baseline, which reads isSuperuser. NOT an identity: `identity.subject` has a single write-owner (the SCIM identity projector, §2.1 / ADR-0041 / ADR-0079 slice-3 gate) and this deliberately does not claim it. An AWX local account and an IdP identity are facts from two different systems of record that happen to describe overlapping people; projecting the second AS the first would author a truth neither system asserts (§1.2). NEVER READ BY AUTHORIZATION: Stratt authz is Principals + OpenFGA tuples (ADR-0009/0028) and ADR-0079 INV-3 enforces it structurally — TestINV3_AuthzConsultsNoGraph fails the build if the authz package imports graph. Team membership is the `has-member` Relation from ansible.team, an estate fact and nothing more. NO CREDENTIAL MATERIAL, no password hash, no token (§2.5). FIDELITY (§1.8): /users/ is RBAC-filtered by the reading token, so this projects what that credential can see, not necessarily every account. Closed (§9).",
+  "type": "object",
+  "properties": {
+    "username": { "type": "string" },
+    "email": { "type": "string" },
+    "isActive": {
+      "type": "boolean",
+      "description": "AWX is_active — a disabled account is hygiene, not a Finding"
+    },
+    "isSuperuser": {
+      "type": "boolean",
+      "description": "AWX is_superuser — god mode on the Controller. The field awx-superuser-review reads; every true is a Finding, which is the point rather than noise."
+    },
+    "isSystemAuditor": {
+      "type": "boolean",
+      "description": "AWX is_system_auditor — read-everything, change-nothing"
+    }
+  },
+  "required": ["username"],
+  "additionalProperties": false
+}

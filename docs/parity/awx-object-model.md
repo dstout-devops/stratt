@@ -24,10 +24,10 @@ from that single sample. Everything below is the rest of the sample.
 
 | Area                                       | Verdict                          | One-line                                                                                         |
 | ------------------------------------------ | -------------------------------- | ------------------------------------------------------------------------------------------------ |
-| **Object coverage** (which objects at all) | 🟡 5 projected, 7 more read-only | The projection covers the orchestration spine; people, RBAC, and run history are absent          |
+| **Object coverage** (which objects at all) | 🟡 8 projected                   | Orchestration spine + credentials + local accounts; **role grants** are the remaining absence   |
 | **Field depth** on projected objects       | 🟡 template deepened, rest thin  | `ansible.template` now carries run state, run knobs + a credential edge (**ADR-0128**); the other four are still 1–3 fields |
 | **Workflow topology**                      | 🟢 invocations + approval gate   | `invokes` edges + `hasApprovalGate`/`nodeCount` (**ADR-0129**); the node graph stays adopt's job |
-| **Facet schema coverage**                  | 🟡 **5 of 10**                   | +`ansible.template` +`ansible.credential` (ADR-0128) +`ansible.workflow` (ADR-0129)              |
+| **Facet schema coverage**                  | 🟡 **6 of 11**                   | +template +credential (ADR-0128) +workflow (ADR-0129) +user (ADR-0130)                          |
 | **Read-path symmetry**                     | 🟡 divergent by accident         | Projection reads 5 endpoints, adopt reads 9; nothing states which asymmetries are deliberate     |
 | **`stratt adopt` transform**               | 🟢 deep and honest               | Reads what it needs, refuses what it must (secrets, password surveys), reports what it drops     |
 
@@ -64,7 +64,7 @@ which is which.
 | `workflow_job_templates`         | `projected` 🟢  | → `ansible.workflow` + `invokes` edges and the approval-gate fact (ADR-0129)                                                                                |             |
 | `schedules`                      | `projected` 🟢  | [types.go:97](../../plugins/ansible-automation/controller/types.go#L97) → `ansible.schedule` + the `schedules` edge                                         |             |
 | `organizations`                  | `projected` 🟢  | [types.go:100](../../plugins/ansible-automation/controller/types.go#L100) → `ansible.org`                                                                   |             |
-| `teams`                          | `projected` 🟡  | [types.go:103](../../plugins/ansible-automation/controller/types.go#L103) → `ansible.team`; **membership is not read**                                      | **AWX-004** |
+| `teams`                          | `projected` 🟢  | → `ansible.team` + `has-member` edges (~~AWX-004~~, ADR-0130 D2) — an estate fact, never an authz one                                                       |             |
 | `workflow_job_template_nodes`    | `derived` 🟢 + `adopt-only` ⚪ | The projection now reads them and derives `invokes` + `hasApprovalGate` (~~AWX-002~~, ADR-0129); the DAG's SHAPE stays adopt's, because fidelity is the transform's job and not the mirror's. Nodes as entities booked as **AWX-016** |  |
 | `projects`                       | `adopt-only` 🔴 | ADR-0127 D4 already books `ansible.project` + `scm_revision`; this audit confirms the sizing                                                                | **AWX-001** |
 | `inventories`                    | `mapped` ⚪     | → **View** ([materialize/views.go](../../plugins/ansible-automation/controller/materialize/views.go)); smart inventories reduce their `host_filter`         |             |
@@ -72,7 +72,7 @@ which is which.
 | `hosts` (inventory members)      | `mapped` ⚪     | Deliberately never re-projected — that is the writable-CMDB anti-pattern (§1.2); hosts come from their own Syncers                                          |             |
 | `credentials`                    | `projected` 🟢 + `mapped` ⚪ | **Both, and deliberately** (ADR-0128 D2): projected as `ansible.credential` (name+kind, never material, §2.5) so credential usage is a traversal, AND mapped → **CredentialRef** at adopt. Mirror vs Named Kind, the same pair as `ansible.template` ↔ Workflow |             |
 | `job_templates/{id}/survey_spec` | `mapped` ⚪     | → `Workflow.inputs` (ADR-0118 D2); a **password** question is refused, not imported                                                                         |             |
-| `users`                          | `none` 🔴       | The mirror has teams and orgs but **no people**; "who can launch this" is unanswerable                                                                      | **AWX-003** |
+| `users`                          | `projected` 🟢  | → `ansible.user` (~~AWX-003~~, ADR-0130 D1) — AWX's LOCAL ACCOUNT table, deliberately **not** `identity.subject`, which has a single write-owner (§2.1)     |             |
 | `roles` (RBAC grants)            | `none` 🔴       | No principal→object grant is read, so no AWX permission is visible or migratable                                                                            | **AWX-005** |
 | `jobs` / `job_events`            | `none` ⚪🟠     | Run **history** is deliberately not mirrored — §3 forbids replicating AWX's job-events-table pathology. But **current/last status is not history**          | **AWX-011** |
 | `labels`                         | `none` 🟠       | AWX labels are the operator's own grouping vocabulary; they would map to graph labels cleanly and nobody has looked                                         | **AWX-006** |
@@ -239,13 +239,17 @@ having been built first and never revisited when the transform grew deeper.
 
 **Tier 2 — the authorization picture:**
 
-- **AWX-003 / AWX-004 / AWX-005 · Users, team membership, role grants.** One coherent slice, not three.
-  Needs a decision first, not code: AWX RBAC facts are exactly the kind of thing that must **not** become
-  a second authorization truth beside OpenFGA (§1.2, §2.4). Project as observed foreign facts for
-  visibility and migration planning, or deliberately don't — but decide it in an ADR.
-- **AWX-011 · Last-run status.** Note the distinction the row makes: charter §3 forbids replicating AWX's
-  job-events table, and this is not that. `last_job_failed` on the template is one boolean and it answers
-  "what is broken."
+- ~~**AWX-003 / AWX-004 · Users and team membership.**~~ — **done,
+  [ADR-0130](../adr/0130-awx-local-accounts-and-team-membership.md).** It turned out **not** to be one
+  slice of three: reading the prior art converted the caution into hard constraints. `identity.subject`
+  has a **single write-owner** (the SCIM projector, §2.1 / ADR-0079 slice-3 gate), so AWX users could not
+  be projected as `user` Entities even in principle — and should not be, because an AWX local account and
+  an IdP identity are facts from two systems of record. They project as `ansible.user`, membership is a
+  `has-member` edge, and INV-3 keeps all of it structurally out of the authz path.
+- **AWX-005 · Role grants** stays open, now with a stated reason rather than an omission (ADR-0130 D3).
+- ~~**AWX-011 · Last-run status.**~~ — **done by [ADR-0128](../adr/0128-ansible-template-projection-depth.md) D3**,
+  which is where the distinction this row drew was cashed in: four scalars of current state on the template,
+  never an event table.
 
 **Tier 3 — mapping questions nobody has asked (🟠, and that is the finding):**
 
@@ -255,7 +259,13 @@ having been built first and never revisited when the transform grew deeper.
   **AWX-015** the ~15 `ask_*_on_launch` booleans (deferred out of ADR-0128 D4: cutover fidelity rather
   than governance) · **AWX-016** workflow nodes as entities (deferred out of ADR-0129 D3 — it earns a
   namespace when a consumer needs the DAG, the obvious one being a UI rendering of a mirrored workflow
-  beside a Stratt Workflow).
+  beside a Stratt Workflow) · **AWX-017** correlating `ansible.user` to the SCIM identity — the AWX
+  analogue of ADR-0079 4a's leaver-credential Finding, where **a local AWX account matching no known
+  identity** is the account nobody offboards; it needs a username-resolvable identity key on `user`
+  Entities, which is a decision about the identity plane · **AWX-018** a **poll-cost budget** for the
+  controller half. That one is a finding in its own right: three ADRs have now each added an N+1 read
+  (per-workflow nodes, per-team members) against a Controller we do not own, each individually justified,
+  and no decision has owned the total. It should be settled before a fourth lands.
 
 **Not gaps, recorded so they are not re-litigated:** inventories → View, hosts never re-projected,
 credentials name-and-kind-only, survey passwords refused, activity stream not mirrored, ad-hoc commands

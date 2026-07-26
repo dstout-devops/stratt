@@ -1,0 +1,18 @@
+# The AWX-estate audit View over the ansible.user mirror the ansible-automation Connector's
+# controller half projects (§1.2 read-only, ADR-0130 D1) — AWX's LOCAL ACCOUNT table.
+#
+# NOT an identity View, and the distinction is load-bearing. `identity.subject` has a single
+# write-owner (the SCIM identity projector, §2.1 / ADR-0079 slice-3 gate) and this namespace
+# deliberately does not claim it: an AWX local account and an IdP identity are facts from two
+# different systems of record that happen to describe overlapping people. Correlating the two
+# — the AWX analogue of ADR-0079 4a's leaver-credential Finding, where a local AWX account
+# matching no known identity is the account nobody offboards — is booked as AWX-017 and needs
+# a username-resolvable identity key on `user` Entities first.
+#
+# NEVER READ BY AUTHORIZATION. Stratt authz is Principals + OpenFGA tuples (ADR-0009/0028);
+# ADR-0079 INV-3 enforces it structurally (TestINV3_AuthzConsultsNoGraph fails the build if
+# the authz package imports graph). Team membership (`has-member`, from ansible.team) is an
+# estate fact about what someone could launch AT AWX today — never a Stratt permission.
+name: awx-users
+selector:
+  kinds: [ansible.user]

@@ -17,6 +17,15 @@ func (s *Sim) schedules(w http.ResponseWriter, r *http.Request) {
 	paged(s, w, r, "/api/v2/schedules/", s.data.Schedules)
 }
 
+func (s *Sim) users(w http.ResponseWriter, r *http.Request) {
+	paged(s, w, r, "/api/v2/users/", s.data.Users)
+}
+
+func (s *Sim) teamUsers(w http.ResponseWriter, r *http.Request) {
+	id := pathID(r)
+	paged(s, w, r, "/api/v2/teams/"+strconv.Itoa(id)+"/users/", s.data.TeamMembers[id])
+}
+
 func (s *Sim) organizations(w http.ResponseWriter, r *http.Request) {
 	paged(s, w, r, "/api/v2/organizations/", s.data.Organizations)
 }

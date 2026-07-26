@@ -73,13 +73,13 @@ func TestHalvesOwnDisjointNamespaces(t *testing.T) {
 			t.Errorf("namespace %q is advertised by BOTH halves — a shared owner means one half's full sync retracts the other's entities (ADR-0042/0127 D1)", ns)
 		}
 	}
-	if len(c) != 6 {
-		t.Errorf("controller advertises %d contracts, want 6 (template/workflow/schedule/org/team/credential)", len(c))
+	if len(c) != 7 {
+		t.Errorf("controller advertises %d contracts, want 7 (template/workflow/schedule/org/team/credential/user)", len(c))
 	}
 	if len(n) != 4 {
 		t.Errorf("content advertises %d contracts, want 4 (playbook/role/collection/inventory)", len(n))
 	}
-	for _, ns := range []string{"ansible.template", "ansible.workflow", "ansible.schedule", "ansible.org", "ansible.team", "ansible.credential"} {
+	for _, ns := range []string{"ansible.template", "ansible.workflow", "ansible.schedule", "ansible.org", "ansible.team", "ansible.credential", "ansible.user"} {
 		if !c[ns] {
 			t.Errorf("controller half does not advertise %q", ns)
 		}
@@ -104,6 +104,19 @@ func TestControllerPointsAtPlaybookButNeverOwnsIt(t *testing.T) {
 	for _, ts := range ctrl.GetTombstoneSchemes() {
 		if ts == "ansible.playbook" {
 			t.Fatal("controller half tombstones ansible.playbook — it would retract entities owned by the content half's Source")
+		}
+	}
+}
+
+// §2.1 / ADR-0079 slice-3 gate, asserted at the manifest: the controller half must never
+// advertise `identity.subject`. That namespace has a single write-owner (the SCIM identity
+// projector) and a second claimant is a registration error, not a merge — which is exactly
+// why ADR-0130 mirrors AWX accounts as `ansible.user` instead.
+func TestControllerNeverClaimsTheIdentityPlane(t *testing.T) {
+	ctrl, cont := manifests(t)
+	for name, m := range map[string]*pluginv1.Manifest{"controller": ctrl, "content": cont} {
+		if contractIDs(m)["identity.subject"] {
+			t.Errorf("%s half advertises identity.subject — solely the SCIM identity projector's (§2.1/ADR-0079); an AWX local account is not an identity", name)
 		}
 	}
 }

@@ -64,6 +64,14 @@ func fakeAWX(t *testing.T) *httptest.Server {
 			"summary_fields": map[string]any{"unified_job_template": map[string]any{"id": 10, "name": "Deploy Web", "unified_job_type": "job"}},
 		}}))
 	})
+	mux.HandleFunc("/api/v2/users/", func(w http.ResponseWriter, r *http.Request) {
+		w.Write(page([]map[string]any{{"id": 60, "username": "admin", "is_active": true, "is_superuser": true}}))
+	})
+	// Explicit and more specific than /api/v2/teams/, for the same reason the workflow-node
+	// route is: without it the mux prefix-matches and decodes a page of TEAMS as members.
+	mux.HandleFunc("/api/v2/teams/{id}/users/", func(w http.ResponseWriter, r *http.Request) {
+		w.Write(page([]map[string]any{{"id": 60, "username": "admin"}}))
+	})
 	mux.HandleFunc("/api/v2/credentials/", func(w http.ResponseWriter, r *http.Request) {
 		w.Write(page([]map[string]any{{"id": 50, "name": "prod-ssh", "kind": "ssh"}}))
 	})
@@ -81,7 +89,7 @@ func TestEnumerateAndNormalize(t *testing.T) {
 		t.Fatalf("enumerate: %v", err)
 	}
 	if len(snap.JobTemplates) != 1 || len(snap.Workflows) != 1 || len(snap.Schedules) != 1 ||
-		len(snap.Organizations) != 1 || len(snap.Teams) != 1 || len(snap.Credentials) != 1 {
+		len(snap.Organizations) != 1 || len(snap.Teams) != 1 || len(snap.Credentials) != 1 || len(snap.Users) != 1 {
 		t.Fatalf("snapshot counts wrong: %+v", snap)
 	}
 
@@ -93,7 +101,7 @@ func TestEnumerateAndNormalize(t *testing.T) {
 	for _, e := range ents {
 		byKind[e.GetKind()] = e
 	}
-	for _, k := range []string{KindTemplate, KindWorkflow, KindSchedule, KindOrg, KindTeam, KindCredential} {
+	for _, k := range []string{KindTemplate, KindWorkflow, KindSchedule, KindOrg, KindTeam, KindCredential, KindUser} {
 		if byKind[k] == nil {
 			t.Fatalf("missing projected kind %q", k)
 		}
@@ -131,10 +139,22 @@ func TestEnumerateAndNormalize(t *testing.T) {
 		t.Fatalf("schedule edge wrong: %+v", rel)
 	}
 
-	// The team → org edge (group management).
+	// The team → org edge (group management), and — since ADR-0130 — its membership edges
+	// beside it. A team now carries BOTH, so this asserts each rather than a total count.
 	tm := byKind[KindTeam]
-	if len(tm.GetRelations()) != 1 || tm.GetRelations()[0].GetToScheme() != KindOrg || tm.GetRelations()[0].GetToValue() != "ctrl-a/1" {
-		t.Fatalf("team→org edge wrong: %+v", tm.GetRelations())
+	var orgEdges, memberEdges int
+	for _, r := range tm.GetRelations() {
+		switch {
+		case r.GetType() == "member-of" && r.GetToScheme() == KindOrg && r.GetToValue() == "ctrl-a/1":
+			orgEdges++
+		case r.GetType() == "has-member" && r.GetToScheme() == KindUser && r.GetToValue() == "ctrl-a/60":
+			memberEdges++
+		default:
+			t.Errorf("unexpected team edge: %+v", r)
+		}
+	}
+	if orgEdges != 1 || memberEdges != 1 {
+		t.Fatalf("team edges wrong: %d org, %d member; got %+v", orgEdges, memberEdges, tm.GetRelations())
 	}
 
 	// The observed facet carries AWX's literal detail (the playbook it runs).

@@ -236,8 +236,10 @@ func TestPinsAreStable(t *testing.T) {
 	// "which templates use this credential" a graph traversal.
 	// +ansible.workflow (ADR-0129): the workflow mirror gained nodeCount/hasApprovalGate
 	// and the pinned schema its write seam never had.
-	if len(all) != 148 { // +ansible.input.v6 (ADR-0126 connection block)
-		t.Fatalf("expected 148 embedded documents, got %d", len(all))
+	// +ansible.user (ADR-0130): AWX's local ACCOUNT table — deliberately not identity.subject,
+	// which has a single write-owner, and never read by authz (ADR-0079 INV-3).
+	if len(all) != 149 { // +ansible.input.v6 (ADR-0126 connection block)
+		t.Fatalf("expected 149 embedded documents, got %d", len(all))
 	}
 	versions := map[string]int{}
 	for _, c := range all {
