@@ -76,19 +76,25 @@ func main() {
 	}
 }
 
+// Per-instance config carries NO role in its name: one instance IS one role and one
+// Source, so STRATT_ANSIBLE_AUTOMATION_{ENDPOINT,TOKEN,ID,ROOT} mean whichever half this
+// process is. Only strattd — which dials BOTH — needs the role-qualified
+// STRATT_ANSIBLE_AUTOMATION_{CONTROLLER,CONTENT}_* family, and those names are exactly what
+// the chart derives from a plugins[].name of ansible-automation-controller/-content.
+//
 // serveController builds the AAP Controller half: the /api/v2 projection plus the
 // adopt/materialize Action. Bound to exactly ONE Controller (endpoint + token) — which is
 // why the instance, not the process, is what maps to a Source.
 func serveController(log *slog.Logger) *grpc.Server {
-	endpoint := os.Getenv("STRATT_ANSIBLE_CONTROLLER_ENDPOINT")
+	endpoint := os.Getenv("STRATT_ANSIBLE_AUTOMATION_ENDPOINT")
 	if endpoint == "" {
-		log.Error("STRATT_ANSIBLE_CONTROLLER_ENDPOINT is required for role=controller (the AAP Controller base URL, e.g. https://aap.example.com)")
+		log.Error("STRATT_ANSIBLE_AUTOMATION_ENDPOINT is required for role=controller (the AAP Controller base URL, e.g. https://aap.example.com)")
 		os.Exit(1)
 	}
 	client := controller.New(controller.Config{
 		Endpoint:     endpoint,
-		Token:        os.Getenv("STRATT_ANSIBLE_CONTROLLER_TOKEN"),
-		ControllerID: os.Getenv("STRATT_ANSIBLE_CONTROLLER_ID"), // "" ⇒ the endpoint host
+		Token:        os.Getenv("STRATT_ANSIBLE_AUTOMATION_TOKEN"),
+		ControllerID: os.Getenv("STRATT_ANSIBLE_AUTOMATION_ID"), // "" ⇒ the endpoint host
 	})
 
 	// The SecretBroker backs the adopt/materialize Action ONLY (§2.5): it resolves the
@@ -111,7 +117,7 @@ func serveController(log *slog.Logger) *grpc.Server {
 
 	cfg := controller.ServerConfig{
 		PluginID:           env("STRATT_PLUGIN_ID", pluginID),
-		AllowEmptyFullSync: os.Getenv("STRATT_ANSIBLE_CONTROLLER_ALLOW_EMPTY_FULL_SYNC") == "true",
+		AllowEmptyFullSync: os.Getenv("STRATT_ANSIBLE_AUTOMATION_ALLOW_EMPTY_FULL_SYNC") == "true",
 	}
 	srv := grpc.NewServer()
 	pluginv1.RegisterPluginServiceServer(srv, controller.NewServer(cfg, client, broker, log))
@@ -122,18 +128,18 @@ func serveController(log *slog.Logger) *grpc.Server {
 // serveContent builds the content-root half. Bound to exactly ONE content root — again,
 // the instance is the Source. No credential, no network egress, no Secret access.
 func serveContent(log *slog.Logger) *grpc.Server {
-	root := os.Getenv("STRATT_ANSIBLE_CONTENT_ROOT")
+	root := os.Getenv("STRATT_ANSIBLE_AUTOMATION_ROOT")
 	if root == "" {
-		log.Error("STRATT_ANSIBLE_CONTENT_ROOT is required for role=content (the Ansible content root — a mounted Git checkout / directory)")
+		log.Error("STRATT_ANSIBLE_AUTOMATION_ROOT is required for role=content (the Ansible content root — a mounted Git checkout / directory)")
 		os.Exit(1)
 	}
 	client := content.New(content.Config{
 		Root:      root,
-		ProjectID: os.Getenv("STRATT_ANSIBLE_CONTENT_ID"), // "" ⇒ base name of the root
+		ProjectID: os.Getenv("STRATT_ANSIBLE_AUTOMATION_ID"), // "" ⇒ base name of the root
 	})
 	cfg := content.ServerConfig{
 		PluginID:           env("STRATT_PLUGIN_ID", pluginID),
-		AllowEmptyFullSync: os.Getenv("STRATT_ANSIBLE_CONTENT_ALLOW_EMPTY_FULL_SYNC") == "true",
+		AllowEmptyFullSync: os.Getenv("STRATT_ANSIBLE_AUTOMATION_ALLOW_EMPTY_FULL_SYNC") == "true",
 	}
 	srv := grpc.NewServer()
 	pluginv1.RegisterPluginServiceServer(srv, content.NewServer(cfg, client, log))

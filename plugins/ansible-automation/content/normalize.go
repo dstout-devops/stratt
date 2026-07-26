@@ -77,11 +77,18 @@ func (c *Client) Normalize(snap *Snapshot) ([]*pluginv1.ObservedEntity, error) {
 }
 
 // labels renders the operator-selectable labels: the artifact's base name and the
-// owning project, so a View can group ansible content by name or by project.
+// owning project, so a View can group ansible content by artifact or by project.
+//
+// `ansible.artifact` and NOT `ansible.name`, deliberately (ADR-0127, found by the
+// two-Sources integration test). A label key has exactly ONE owner (ADR-0041,
+// RegisterLabelOwner is ON CONFLICT (key) gated to the same owner_ref), so two Sources
+// claiming `ansible.name` means the second half to register FAILS — which is what both
+// halves did until this was fixed. The keys were never the same fact either: the
+// controller half's `ansible.name` is an AAP object's name; this is a file's base name.
 func (c *Client) labels(name string) map[string]string {
 	m := map[string]string{"ansible.project": c.projectID}
 	if name != "" {
-		m["ansible.name"] = name
+		m["ansible.artifact"] = name
 	}
 	return m
 }

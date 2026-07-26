@@ -1004,13 +1004,13 @@ func run(ctx context.Context, log *slog.Logger) error {
 	// already-observed object to Stratt-managed). The grant owns the five ansible.* Facet +
 	// identity schemes (the schedule→template / team→org edges cross by those same owned
 	// schemes). Per §2.1 the SOURCE NAME must be distinct per Controller so two Controllers
-	// never share a tombstone key — set STRATT_ANSIBLE_CONTROLLER_SOURCE_NAME per Controller
+	// never share a tombstone key — set STRATT_ANSIBLE_AUTOMATION_CONTROLLER_SOURCE_NAME per Controller
 	// (default carries the id). The plugin ADDRESS is per Controller too: endpoint/credential
 	// are instance config, so each Source is its own instance of the one image (ADR-0127 D1).
-	if addr := os.Getenv("STRATT_ANSIBLE_CONTROLLER_PLUGIN_ADDR"); addr != "" {
-		ctrlID := env("STRATT_ANSIBLE_CONTROLLER_ID", "controller")
-		sourceName := env("STRATT_ANSIBLE_CONTROLLER_SOURCE_NAME", "ansible-controller-"+ctrlID)
-		interval, err := time.ParseDuration(env("STRATT_ANSIBLE_CONTROLLER_INTERVAL", "60s"))
+	if addr := os.Getenv("STRATT_ANSIBLE_AUTOMATION_CONTROLLER_PLUGIN_ADDR"); addr != "" {
+		ctrlID := env("STRATT_ANSIBLE_AUTOMATION_CONTROLLER_ID", "controller")
+		sourceName := env("STRATT_ANSIBLE_AUTOMATION_CONTROLLER_SOURCE_NAME", "ansible-controller-"+ctrlID)
+		interval, err := time.ParseDuration(env("STRATT_ANSIBLE_AUTOMATION_CONTROLLER_INTERVAL", "60s"))
 		if err != nil {
 			return fmt.Errorf("ansible-automation controller interval: %w", err)
 		}
@@ -1021,9 +1021,9 @@ func run(ctx context.Context, log *slog.Logger) error {
 		defer conn.Close()
 		ansibleSchemes := []string{"ansible.template", "ansible.workflow", "ansible.schedule", "ansible.org", "ansible.team"}
 		grant := pluginhost.Grant{
-			PluginIdentity: env("STRATT_ANSIBLE_CONTROLLER_PLUGIN_ID", "ansible-automation"),
-			Tier:           pluginhost.Tier(env("STRATT_ANSIBLE_CONTROLLER_TIER", "trusted")),
-			Source:         types.Source{Kind: "ansible.controller", Name: sourceName, Endpoint: os.Getenv("STRATT_ANSIBLE_CONTROLLER_ENDPOINT")},
+			PluginIdentity: env("STRATT_ANSIBLE_AUTOMATION_CONTROLLER_PLUGIN_ID", "ansible-automation"),
+			Tier:           pluginhost.Tier(env("STRATT_ANSIBLE_AUTOMATION_CONTROLLER_TIER", "trusted")),
+			Source:         types.Source{Kind: "ansible.controller", Name: sourceName, Endpoint: os.Getenv("STRATT_ANSIBLE_AUTOMATION_CONTROLLER_ENDPOINT")},
 			LabelKeys:      []string{"ansible.name", "ansible.org"},
 			// The five ansible.* projection namespaces the Connector owns (its manifest
 			// advertises exactly these; registration fails on any mismatch). Each is also
@@ -1057,7 +1057,7 @@ func run(ctx context.Context, log *slog.Logger) error {
 		}
 		log.Info("adopt/materialize Action registered on the ansible-automation Controller half (ADR-0089)")
 	} else {
-		log.Info("no ansible-automation Controller half configured (STRATT_ANSIBLE_CONTROLLER_PLUGIN_ADDR empty); syncer idle")
+		log.Info("no ansible-automation Controller half configured (STRATT_ANSIBLE_AUTOMATION_CONTROLLER_PLUGIN_ADDR empty); syncer idle")
 	}
 
 	// ── ansible-automation, CONTENT half: "Ansible without AWX" (ADR-0025 arc, ADR-0127) ──
@@ -1073,11 +1073,11 @@ func run(ctx context.Context, log *slog.Logger) error {
 	// two Sources co-project `ansible.*` with no overlap and no cross-source tombstone
 	// (ADR-0042/0060). A SHARED Source would blank half the mirror on every full sync; that is
 	// the whole reason one plugin still means two Sources. Per §2.1 the SOURCE NAME is distinct
-	// per content root — set STRATT_ANSIBLE_CONTENT_SOURCE_NAME per root (default carries the id).
-	if addr := os.Getenv("STRATT_ANSIBLE_CONTENT_PLUGIN_ADDR"); addr != "" {
-		contentID := env("STRATT_ANSIBLE_CONTENT_ID", "ansible")
-		sourceName := env("STRATT_ANSIBLE_CONTENT_SOURCE_NAME", "ansible-content-"+contentID)
-		interval, err := time.ParseDuration(env("STRATT_ANSIBLE_CONTENT_INTERVAL", "60s"))
+	// per content root — set STRATT_ANSIBLE_AUTOMATION_CONTENT_SOURCE_NAME per root (default carries the id).
+	if addr := os.Getenv("STRATT_ANSIBLE_AUTOMATION_CONTENT_PLUGIN_ADDR"); addr != "" {
+		contentID := env("STRATT_ANSIBLE_AUTOMATION_CONTENT_ID", "ansible")
+		sourceName := env("STRATT_ANSIBLE_AUTOMATION_CONTENT_SOURCE_NAME", "ansible-content-"+contentID)
+		interval, err := time.ParseDuration(env("STRATT_ANSIBLE_AUTOMATION_CONTENT_INTERVAL", "60s"))
 		if err != nil {
 			return fmt.Errorf("ansible-automation content interval: %w", err)
 		}
@@ -1091,10 +1091,16 @@ func run(ctx context.Context, log *slog.Logger) error {
 		// artifact's identity scheme. No relation schemes this slice (flat projection).
 		primitiveSchemes := []string{"ansible.playbook", "ansible.role", "ansible.collection", "ansible.inventory"}
 		grant := pluginhost.Grant{
-			PluginIdentity:  env("STRATT_ANSIBLE_CONTENT_PLUGIN_ID", "ansible-automation"),
-			Tier:            pluginhost.Tier(env("STRATT_ANSIBLE_CONTENT_TIER", "trusted")),
-			Source:          types.Source{Kind: "ansible.content", Name: sourceName},
-			LabelKeys:       []string{"ansible.name", "ansible.project"},
+			PluginIdentity: env("STRATT_ANSIBLE_AUTOMATION_CONTENT_PLUGIN_ID", "ansible-automation"),
+			Tier:           pluginhost.Tier(env("STRATT_ANSIBLE_AUTOMATION_CONTENT_TIER", "trusted")),
+			Source:         types.Source{Kind: "ansible.content", Name: sourceName},
+			// DISJOINT from the Controller half's label keys, and that is load-bearing: a
+			// label key has exactly ONE owner (ADR-0041), so when both halves claimed
+			// `ansible.name` the second one to register failed outright. Found by the
+			// two-Sources integration test; it predates ADR-0127 (the old awx and
+			// ansibleproject grants collided identically) and was never caught because
+			// nothing had ever run both halves.
+			LabelKeys:       []string{"ansible.artifact", "ansible.project"},
 			FacetNamespaces: primitiveSchemes,
 			IdentitySchemes: primitiveSchemes,
 		}
@@ -1103,7 +1109,7 @@ func run(ctx context.Context, log *slog.Logger) error {
 			return host.SyncLoop(cctx, interval)
 		}))
 	} else {
-		log.Info("no ansible-automation content half configured (STRATT_ANSIBLE_CONTENT_PLUGIN_ADDR empty); syncer idle")
+		log.Info("no ansible-automation content half configured (STRATT_ANSIBLE_AUTOMATION_CONTENT_PLUGIN_ADDR empty); syncer idle")
 	}
 
 	// ── NetBox topology Syncer over the port (ADR-0059) ──────────────────────

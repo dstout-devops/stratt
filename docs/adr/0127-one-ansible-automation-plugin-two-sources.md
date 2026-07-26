@@ -149,10 +149,28 @@ lineage. Only a **`Source.Name`** change stamps a new Source.
 
 That makes the real trigger the renamed name defaults (`awx-<id>` → `ansible-controller-<id>`,
 `ansible-project-<id>` → `ansible-content-<id>`), and it means an operator who pins
-`STRATT_ANSIBLE_CONTROLLER_SOURCE_NAME` / `..._CONTENT_SOURCE_NAME` to their existing names migrates with
-**no** Source churn whatsoever — just an in-place kind update. For everyone else the sequence below is
-exactly right, and ADR-0042 makes it safe: **an Entity is live while ≥1 Source observes it.** So the
-sequence is additive, with no window in which anything is retracted:
+`STRATT_ANSIBLE_AUTOMATION_CONTROLLER_SOURCE_NAME` / `..._CONTENT_SOURCE_NAME` to their existing names
+migrates with **no** Source churn whatsoever — just an in-place kind update.
+
+**CORRECTION 2 (2026-07-26), found by running it.** Step 1 below said the new Sources "register and
+observe" while the old ones are still registered. That is true for **Facet namespaces**, which are
+multi-owner (ADR-0060), and **false for label keys**, which are single-owner: `RegisterLabelOwner` is
+`ON CONFLICT (key) DO UPDATE … WHERE owner_ref = excluded.owner_ref`, so a renamed Source — the same half
+under a new `WriterRef` — is refused its own label keys and **Register fails**. The sequence needs an
+explicit release step, and it stays boring because `Host.Deregister` releases the ownership claims while
+deliberately leaving the Source row and every presence row it wrote (lifecycle is the home-gate single
+writer's domain, §2.4). Liveness therefore never dips. The corrected sequence, asserted end to end in
+`TestSourceRenameMigrationIsAdditive`:
+
+1. **Deregister the old Source's ownership claims.** Its Source row and presence rows are untouched, so
+   every entity stays live and observed throughout.
+2. The new Sources register and observe. Every entity is now live under **both** the old presence rows and
+   the new ones — unchanged for every consumer.
+3. Once the new Sources have completed a full sync, the old Sources are removed. Presence rows drop with
+   them; the entities stay live on the new rows.
+
+ADR-0042 is what makes each step safe: **an Entity is live while ≥1 Source observes it.** The original
+three-step framing is kept below for the record; read step 1 as step 2 of the corrected list:
 
 1. The new Sources register and observe. Every entity now has presence rows under **both** the old and new
    Source — live under the union, unchanged for every consumer.
@@ -215,6 +233,18 @@ Stated because a rename is exactly the change that quietly grows scope:
   signal working as designed — "your Controller runs content Stratt cannot see" — but for a deliberate
   Controller-only deployment it reads as noise. True today with the two plugins; consolidation makes it
   more visible, and it is the same soundness thread the `ansible.project` + `scm_revision` follow-up owns.
+- **Proving it found two defects neither review caught, and one of them predates this ADR.** The boot
+  blocks that wire the two halves are env-gated and set **nowhere in the repo** — no chart values, no demo,
+  no dev compose — so until `core/internal/pluginhost/two_sources_integration_test.go` existed, nothing had
+  ever registered two grants under one identity. Standing it up against a real graph store immediately
+  found:
+  - **Both halves claimed the label key `ansible.name`**, and a label key has exactly ONE owner (ADR-0041).
+    So whichever half registered **second failed outright** — the plugin could never have run both halves
+    in one estate. This is **not** a consolidation bug: the old `awx` and `ansibleproject` grants collided
+    identically, and it survived because nothing ever ran them together. The keys were never the same fact
+    anyway (an AAP object's name vs a file's base name), so the content half now owns `ansible.artifact`
+    and the two halves' label keys are disjoint — which is the property that was being asserted in prose.
+  - **The migration in D3 could not execute** — see CORRECTION 2 above.
 - **Naming supersession.** ADR-0025, ADR-0088, ADR-0089, and ADR-0117 name `plugins/awx` and
   `plugins/ansibleproject` by path. Those ADRs are the record of what was decided when and are left
   untouched; read them as pointing at `plugins/ansible-automation/controller/…` and
