@@ -12,7 +12,7 @@ steps:
     # The dedicated real-node View (ADR-0084 fixture). ansible_host is rendered by the
     # shim from each target's mgmt.address — the core never authored it (§1.4).
     viewName: managed-web
-    actuator: ansible
+    actuator: ansible-platform-baseline
     # The machine credential (SSH key) — mounted at spawn, use-checked against the
     # launching Principal (§2.5). The AWX Machine-Credential half of the split.
     credentialRefs: [web-machine]
@@ -35,38 +35,10 @@ steps:
         # the target (alpine + python3) each resolve their own.
         # The desired listen port — the web-server onboarding default (8080).
         web_server_port: "8080"
-      play: |
-        - name: Converge the web server listen port
-          hosts: all
-          gather_facts: false
-          tasks:
-            # The key-staging bootstrap task is GONE (ADR-0126 D1): the shim stages the
-            # credentialRef's key at the mode SSH requires, so a play no longer opens with
-            # a copy task it had to know to write.
-            - name: Ensure the nginx conf.d directory exists
-              ansible.builtin.file:
-                path: /etc/nginx/conf.d
-                state: directory
-            - name: Set the desired nginx site (idempotent — changed once, ok on re-run)
-              ansible.builtin.copy:
-                dest: /etc/nginx/conf.d/stratt.conf
-                content: |
-                  server {
-                    listen {{ web_server_port }};
-                    server_name _;
-                    location / { return 200 'stratt managed-web listening on {{ web_server_port }}\n'; }
-                  }
-            - name: Reload nginx so the port takes effect (a real converge, not just a file)
-              ansible.builtin.command: nginx -s reload
-              register: reload
-              failed_when: false
-              changed_when: false
-            - name: OBSERVE the effective listen port back from the running config
-              ansible.builtin.shell: "grep -oE 'listen +[0-9]+' /etc/nginx/conf.d/stratt.conf | grep -oE '[0-9]+'"
-              register: observed_port
-              changed_when: false
-            - name: Report the observed app.config to Stratt (fact-back → Finding resolves)
-              ansible.builtin.set_fact:
-                stratt_facets:
-                  app.config:
-                    port: "{{ observed_port.stdout }}"
+      # The play is a PLAYBOOK now (ADR-0134), in the project this Step's Actuator declares:
+      # estate/ansible/projects/platform-baseline/web-server-configure.yml. What is left here
+      # is what this file was always for — WHAT runs, WHERE, and with WHICH inputs — and the
+      # two languages no longer share a file. The extraVars mapping above stays, because it is
+      # the declared translation from Stratt inputs to Ansible variable names; core never reads
+      # the play to infer it (ADR-0117 D6).
+      playbook: web-server-configure.yml

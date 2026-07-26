@@ -20,34 +20,11 @@ environments: [prod]
 cron: "*/15 * * * *"
 viewName: web-hosts
 principal: svc-collector
-actuator: ansible
+actuator: ansible-fileset
 # This gather Run PROJECTS the fileset.content Facet (ADR-0054 write-scope): the
 # effective write-back is the ansible grant ∩ this scope. Without it the tight
 # default would drop the projection at the one governor.
 facetWriteScope: [fileset.content]
 params:
-  play: |
-    - name: Collect managed-file state (read-only)
-      hosts: all
-      gather_facts: false
-      become: true
-      vars:
-        managed_files:
-          - { key: nginx-conf, path: /etc/nginx/nginx.conf }
-      tasks:
-        - name: Stat each managed file
-          ansible.builtin.stat:
-            path: "{{ item.path }}"
-            checksum_algorithm: sha256
-          loop: "{{ managed_files }}"
-          register: fileset_stat
-
-        - name: Project stratt fileset facet
-          ansible.builtin.set_fact:
-            stratt_fileset: "{{ stratt_fileset | default({}) | combine({ item.item.key: {
-              'present': item.stat.exists,
-              'digest': ('sha256:' ~ item.stat.checksum) if item.stat.exists else '',
-              'mode': item.stat.mode | default(''),
-              'owner': item.stat.pw_name | default(''),
-              'group': item.stat.gr_name | default('') } }) }}"
-          loop: "{{ fileset_stat.results }}"
+  # estate/ansible/projects/fileset/collect.yml (ADR-0134).
+  playbook: collect.yml

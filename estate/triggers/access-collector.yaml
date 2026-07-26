@@ -20,37 +20,13 @@ environments: [prod]
 cron: "*/15 * * * *"
 viewName: secure-hosts
 principal: svc-collector
-actuator: ansible
+actuator: ansible-access-control
 # This gather Run PROJECTS the access.grants Facet (ADR-0054 write-scope): the
 # effective write-back is the ansible grant ∩ this scope. Without it the tight
 # default would drop the projection at the one governor.
 facetWriteScope: [access.grants]
 params:
-  play: |
-    - name: Collect host-access grants (read-only)
-      hosts: all
-      gather_facts: true
-      become: true
-      vars:
-        watched_groups: [wheel, sudo]
-      tasks:
-        - name: Read watched group membership
-          ansible.builtin.getent:
-            database: group
-            key: "{{ item }}"
-          loop: "{{ watched_groups }}"
-          failed_when: false
-
-        - name: Start with an empty grant set
-          ansible.builtin.set_fact:
-            stratt_access: []
-
-        - name: Append one grant per (member, group) pair
-          ansible.builtin.set_fact:
-            stratt_access: "{{ stratt_access + [ { 'subject': item.0, 'kind': 'group', 'scope': item.1 } ] }}"
-          loop: "{{ q('subelements', access_members, 'members') }}"
-          vars:
-            # access_members: [{group: wheel, members: [alice, ...]}, ...] built
-            # by the operator from the getent results above (see ADR-0036 note).
-            access_members: []
-          when: access_members | length > 0
+  # estate/ansible/projects/access-control/collect.yml (ADR-0134). A Trigger reaches a
+  # playbook exactly as a Workflow Step does — the content root is a property of the
+  # Actuator named above, so nothing about the launch path is special-cased.
+  playbook: collect.yml

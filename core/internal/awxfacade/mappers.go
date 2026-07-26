@@ -78,9 +78,20 @@ func viewToInventory(view types.View, totalHosts int) map[string]any {
 func workflowToJobTemplate(wf types.Workflow, step types.Step) map[string]any {
 	id := awxID(wf.Name)
 	invID := awxID(step.ViewName)
-	playbook := scmField(step.Params, "playbook")
+	// Which file an AWX client sees as the job template's `playbook`, in the order the three
+	// content sources were added: a mounted-project ref (ADR-0134), an SCM clone (ADR-0025),
+	// or the inline play the shim writes to project/play.yml.
+	//
+	// Reading a tool's param key BY NAME is legitimate here and nowhere else in core: this
+	// package's entire job is to render Stratt as AWX, so it is already tool-specific by
+	// construction. The spine's mount path stays declaration-driven (contentInputs) — see
+	// desiredstate.validateContentRefs, which is the same question asked content-blind.
+	playbook, _ := step.Params["playbook"].(string)
 	if playbook == "" {
-		playbook = "play.yml" // inline-play Workflows have no SCM path
+		playbook = scmField(step.Params, "playbook")
+	}
+	if playbook == "" {
+		playbook = "play.yml" // inline-play Workflows have no content ref at all
 	}
 	return map[string]any{
 		"id":                      id,

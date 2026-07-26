@@ -1,0 +1,20 @@
+---
+# Converge a host-access grant (estate/workflows/access-apply.yaml).
+#
+# access_subject / access_kind / access_scope arrive as extraVars, mapped by that Workflow
+# from its declared launch inputs, which a Blueprint route fills from the Intent spec
+# (ADR-0118 D3). That chain is why this play's variables are no longer the defect they
+# once were: they were referenced here and defined nowhere, because an Ansible variable
+# reference and a Stratt binding are visually identical inside one YAML file and only one
+# of them was ever checked. Splitting the play out of the declaration is what makes the two
+# distinguishable at a glance — this file contains no Stratt tokens at all.
+- name: Converge host-access grant
+  hosts: all
+  become: true
+  tasks:
+    - name: Ensure group membership
+      ansible.builtin.user:
+        name: "{{ access_subject }}"
+        groups: "{{ access_scope }}"
+        append: true
+      when: access_kind == "group"

@@ -4,6 +4,23 @@
 # expressed in a declaration until ADR-0117 D3a added facetNamespaces/identitySchemes
 # to the Actuator Kind. That was the only reason it stayed hardcoded — so it moves now.
 #
+# WHAT THIS ONE IS, AFTER ADR-0134. It declares no `contentDir`, so it mounts no project and
+# runs only what a Step passes inline as `params.play`. Every Workflow in this estate has moved
+# to a project Actuator (ansible-platform-baseline / ansible-access-control / ansible-fileset);
+# what still names this one is short inline Ansible — a guard play, a dev assertion — for which
+# a file in a directory would be worse, not better. The rule D4 states: if it is Ansible anyone
+# would maintain, it is a file.
+#
+# ITS GRANT IS DELIBERATELY UNCHANGED, and that is worth reading as a limit rather than as an
+# endorsement. The per-project ceilings the three project Actuators carry are narrower than this
+# one, but they do not FENCE it: an author who names `ansible` with an inline play can still
+# write any namespace listed below. That is not a regression — it is exactly the pre-ADR-0134
+# position, and it is the same gap D2's correction records honestly: a ceiling chosen by whoever
+# selects the Actuator is a run-time bound enforced at authoring time by repo review. Closing it
+# needs authorization on Actuator selection, which does not exist yet. Narrowing this grant is a
+# separate decision with its own blast radius (stratt-dev-assert launches through this Actuator),
+# so it is left to be made deliberately rather than as a side effect.
+#
 # Transport: no address. `jobCommand` IS the transport (§3 GPLv3 boundary) — the
 # dispatcher runs the stratt-ansible shim in an EE pod per Step; the Go control plane
 # never links ansible. No `image`, so this Actuator runs the floor's default EE

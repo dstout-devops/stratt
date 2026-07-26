@@ -1,0 +1,18 @@
+---
+# Remove a granted host access (estate/workflows/access-revoke.yaml) — the onRemove:
+# revert|remove counterpart to apply.yml, surfaced on the orphan Finding when an
+# Assignment is withdrawn.
+#
+# Its variables arrive the same way apply.yml's do: extraVars on the Step, mapped from the
+# Workflow's launch inputs, which the access Blueprint's `removeParams` fills from the
+# effective spec at compile.
+- name: Revoke host-access grant
+  hosts: all
+  become: true
+  tasks:
+    - name: Remove group membership
+      ansible.builtin.command: "gpasswd -d {{ access_subject }} {{ access_scope }}"
+      register: gpasswd
+      changed_when: gpasswd.rc == 0
+      failed_when: false
+      when: access_kind == "group"

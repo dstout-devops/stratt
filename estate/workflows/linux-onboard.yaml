@@ -25,14 +25,9 @@ steps:
   - name: configure
     needs: [provision]
     viewName: linux-fleet
-    actuator: ansible
+    # The platform-baseline PROJECT's Actuator (ADR-0134 D2). Naming it is how this Step
+    # selects both the content root and the write ceiling that goes with it; the playbook
+    # below is a path INSIDE that root, and core checks at estate load that it exists.
+    actuator: ansible-platform-baseline
     params:
-      play: |
-        - name: Baseline a freshly-provisioned Linux server
-          hosts: all
-          become: true
-          gather_facts: false
-          tasks:
-            - name: Record onboarding
-              ansible.builtin.debug:
-                msg: "onboarded into linux-fleet"
+      playbook: linux-onboard.yml

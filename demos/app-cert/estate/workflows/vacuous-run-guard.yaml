@@ -13,6 +13,13 @@
 #
 # The play below targets a group that cannot exist in a generated inventory. Nothing is
 # mutated, so there is no Gate: approving a no-op would teach the wrong lesson.
+#
+# IT STAYS INLINE, and ADR-0134 D4 says why: `params.play` is kept, not deprecated, because a
+# seven-line guard play is clearer here than as a file in a project directory. The rule is "if
+# it is Ansible anyone would maintain, it is a file" — nobody maintains this; it exists to fail.
+# The Actuator it names does declare a contentDir, so this Run mounts that project and simply
+# does not use it: the two paths coexist, which is what makes D4's exception honest rather than
+# a loophole.
 name: vacuous-run-guard
 steps:
   - name: reach-nothing

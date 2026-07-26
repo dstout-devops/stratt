@@ -37,7 +37,9 @@ inputs:
 steps:
   - name: apply
     viewName: web-hosts
-    actuator: ansible
+    # The fileset PROJECT's Actuator (ADR-0134 D2): its write ceiling is fileset.content
+    # alone, which is everything this project's content legitimately observes.
+    actuator: ansible-fileset
     params:
       extraVars:
         fileset_path: "{{.launch.path}}"
@@ -45,16 +47,5 @@ steps:
         fileset_mode: "{{.launch.mode}}"
         fileset_owner: "{{.launch.owner}}"
         fileset_group: "{{.launch.group}}"
-      play: |
-        - name: Distribute managed file
-          hosts: all
-          become: true
-          tasks:
-            - name: Place file with content-addressed attributes
-              ansible.builtin.copy:
-                src: "{{ fileset_src }}"
-                dest: "{{ fileset_path }}"
-                mode: "{{ fileset_mode | default('0644') }}"
-                owner: "{{ fileset_owner | default('root') }}"
-                group: "{{ fileset_group | default('root') }}"
-                backup: true
+      # estate/ansible/projects/fileset/apply.yml (ADR-0134).
+      playbook: apply.yml

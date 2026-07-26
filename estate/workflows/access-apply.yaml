@@ -38,7 +38,11 @@ inputs:
 steps:
   - name: apply
     viewName: secure-hosts
-    actuator: ansible
+    # The access-control PROJECT's Actuator (ADR-0134 D2), whose write ceiling is
+    # access.grants and nothing else. That narrowing is the point: the single wide-grant
+    # `ansible` Actuator these Workflows used to share could also have written
+    # os.hardening.* from this play.
+    actuator: ansible-access-control
     params:
       # The launch inputs mapped onto the play's own variable names. This mapping is the
       # boundary D6 draws: core never parses play content to discover what it needs, so the
@@ -47,14 +51,9 @@ steps:
         access_subject: "{{.launch.subject}}"
         access_kind: "{{.launch.kind}}"
         access_scope: "{{.launch.scope}}"
-      play: |
-        - name: Converge host-access grant
-          hosts: all
-          become: true
-          tasks:
-            - name: Ensure group membership
-              ansible.builtin.user:
-                name: "{{ access_subject }}"
-                groups: "{{ access_scope }}"
-                append: true
-              when: access_kind == "group"
+      # ADR-0134: the play moved to estate/ansible/projects/access-control/apply.yml, where
+      # ansible-lint and --syntax-check can reach it. The bug this file's header describes —
+      # three variables referenced by the play and defined nowhere — was possible because
+      # `{{ var }}` and `{{.ns.field}}` are visually identical inside one YAML file. They no
+      # longer share one.
+      playbook: apply.yml

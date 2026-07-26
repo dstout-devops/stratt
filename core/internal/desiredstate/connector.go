@@ -233,6 +233,8 @@ type actuatorFile struct {
 	ActionNames     []string          `yaml:"actionNames"`
 	JobCommand      []string          `yaml:"jobCommand"`
 	Image           string            `yaml:"image"`
+	ContentDir      string            `yaml:"contentDir"`
+	ContentInputs   []string          `yaml:"contentInputs"`
 	FacetNamespaces []string          `yaml:"facetNamespaces"`
 	IdentitySchemes []string          `yaml:"identitySchemes"`
 	ElevatedInputs  []string          `yaml:"elevatedInputs"`
@@ -254,7 +256,8 @@ func parseActuatorFile(path string, raw []byte) (string, types.Actuator, error) 
 	a := types.Actuator{
 		Name: f.Name, Address: f.Address, PluginIdentity: f.PluginIdentity, Tier: f.Tier,
 		DryRunnable: f.DryRunnable, ActionNames: f.ActionNames, JobCommand: f.JobCommand,
-		Image: f.Image, FacetNamespaces: f.FacetNamespaces, IdentitySchemes: f.IdentitySchemes,
+		Image: f.Image, ContentDir: f.ContentDir, ContentInputs: f.ContentInputs,
+		FacetNamespaces: f.FacetNamespaces, IdentitySchemes: f.IdentitySchemes,
 		ElevatedInputs: f.ElevatedInputs,
 		MCP:            f.MCP, Provides: f.Provides, Requires: f.Requires,
 		Provisions: f.Provisions, Decommissions: f.Decommissions, Environments: f.Environments,
@@ -295,6 +298,22 @@ func ValidateActuator(a types.Actuator) error {
 	// runtime actually consumes is required rather than merely some scheme.
 	if len(a.JobCommand) > 0 && len(a.FacetNamespaces) > 0 && !slices.Contains(a.IdentitySchemes, "host.name") {
 		return fmt.Errorf("actuator %q: an EE-Job actuator writing facets must declare the host.name identity scheme (got %v) — the write-back path correlates by host.name only, so any other scheme would be admitted and then silently dropped", a.Name, a.IdentitySchemes)
+	}
+	// contentDir is mounted by the EE-Job path and by nothing else (ADR-0134 D2): a gRPC
+	// Actuator has no JobSpec, so declaring one there would be admitted, ignored, and
+	// reported nowhere — the same half-declaration defect as the two checks above, and
+	// refused for the same reason (§1.8).
+	if a.ContentDir != "" && len(a.JobCommand) == 0 {
+		return fmt.Errorf("actuator %q: contentDir requires jobCommand — only the EE-Job transport mounts content, so a gRPC Actuator declaring one would run without it", a.Name)
+	}
+	// contentInputs names a path whose value is resolved INSIDE contentDir, so declaring one
+	// without the other is a reference into a tree that does not exist — admitted, checked
+	// against nothing, and reported nowhere. Same half-declaration rule as above.
+	if len(a.ContentInputs) > 0 && a.ContentDir == "" {
+		return fmt.Errorf("actuator %q: contentInputs requires contentDir — those paths name a file inside a mounted content root, and this Actuator mounts none", a.Name)
+	}
+	if err := validateContentDir(a.Name, a.ContentDir); err != nil {
+		return err
 	}
 	if err := validateCapabilities(a.Name, a.Provides, a.Requires); err != nil {
 		return err

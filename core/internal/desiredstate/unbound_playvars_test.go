@@ -42,6 +42,13 @@ import (
 //     "this may be undefined", so flagging it would be wrong — and it was: the first run of this
 //     guard reported five unbound variables in the fileset Workflows, of which three were
 //     `| default()`-guarded and only two were real.
+//
+// ADR-0134 made this guard STRICTLY EASIER without changing what it asserts. Plays are files now,
+// so it reads a play out of the Actuator's resolved content rather than extracting a string from a
+// declaration — and it still reads `params.play` for the Steps that legitimately keep an inline
+// play (D4). The reference-integrity half it used to be asked to add is gone from here entirely:
+// ParseDir refuses a Step naming a playbook its Actuator's tree does not hold, so an estate that
+// parses has already proven that. TestPlaybookReferenceMustResolve pins that behaviour directly.
 
 // jinjaRef matches a bare Ansible variable reference: `{{ name }}` or `{{ name.field }}` /
 // `{{ name | filter }}`, capturing only the ROOT identifier. Stratt's own tokens start with a
@@ -90,9 +97,15 @@ func TestNoUnboundPlayVariables(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%s: %v", label, err)
 		}
+		// A play now usually lives in the Actuator's resolved content (ADR-0134), so the
+		// guard needs the Actuator a Step names to find the file it runs.
+		content := map[string]types.Actuator{}
+		for _, a := range decls.Actuators {
+			content[a.Name] = a
+		}
 		for _, wf := range decls.Workflows {
 			for _, st := range wf.Steps {
-				n, errs := unboundInStep(st)
+				n, errs := unboundInStep(content, st)
 				checked += n
 				for _, e := range errs {
 					t.Errorf("%s: workflow %q step %q: %s", label, wf.Name, st.Name, e)
@@ -100,7 +113,7 @@ func TestNoUnboundPlayVariables(t *testing.T) {
 			}
 		}
 		for _, tr := range decls.Triggers {
-			n, errs := unboundInParams(tr.Params)
+			n, errs := unboundInParams(content, tr.Actuator, tr.Params)
 			checked += n
 			for _, e := range errs {
 				t.Errorf("%s: trigger %q: %s", label, tr.Name, e)
@@ -114,12 +127,24 @@ func TestNoUnboundPlayVariables(t *testing.T) {
 	}
 }
 
-func unboundInStep(st types.Step) (int, []string) {
-	return unboundInParams(st.Params)
+func unboundInStep(content map[string]types.Actuator, st types.Step) (int, []string) {
+	return unboundInParams(content, st.Actuator, st.Params)
 }
 
-func unboundInParams(params map[string]any) (int, []string) {
+// playOf resolves the Ansible a Step actually runs. Two sources, and the guard has to cover
+// both or it silently stops guarding: `playbook` names a file in the Actuator's content root
+// (ADR-0134, the normal case), and `play` is still an inline string for the short guard plays
+// D4 deliberately kept.
+func playOf(content map[string]types.Actuator, actuator string, params map[string]any) string {
+	if playbook, _ := params["playbook"].(string); playbook != "" {
+		return content[actuator].Content[playbook]
+	}
 	play, _ := params["play"].(string)
+	return play
+}
+
+func unboundInParams(content map[string]types.Actuator, actuator string, params map[string]any) (int, []string) {
+	play := playOf(content, actuator, params)
 	if play == "" {
 		return 0, nil
 	}

@@ -242,8 +242,11 @@ func TestPinsAreStable(t *testing.T) {
 	// are a static grant allowlist and an AWX label name is only known at read time.
 	// +ansible.executionenvironment (ADR-0133): the image an AWX job template runs in, as a
 	// SUPPLY-CHAIN fact. AWX instance groups are deliberately not projected (D4).
-	if len(all) != 151 { // +ansible.input.v6 (ADR-0126 connection block)
-		t.Fatalf("expected 151 embedded documents, got %d", len(all))
+	// +ansible.input.v7 (ADR-0134): `playbook`, a path within the project tree the Step's
+	// Actuator declares via contentDir. A SIBLING of v6 rather than a widening of it —
+	// an Actuator input Contract is a wire promise to Step authors (ADR-0132 D4).
+	if len(all) != 152 { // +ansible.input.v7 (ADR-0134 mounted-project playbook ref)
+		t.Fatalf("expected 152 embedded documents, got %d", len(all))
 	}
 	versions := map[string]int{}
 	for _, c := range all {
@@ -254,10 +257,10 @@ func TestPinsAreStable(t *testing.T) {
 			versions[c.Name] = c.Version
 		}
 	}
-	// ansible.input v6 (the typed connection block, ADR-0126 D1) resolves as the
-	// current version; v1–v5 stay pinned alongside it (every version keeps its own
+	// ansible.input v7 (the mounted-project `playbook` ref, ADR-0134 D4) resolves as the
+	// current version; v1–v6 stay pinned alongside it (every version keeps its own
 	// pin row — only the LOOKUP collapses to the highest).
-	if versions["actuators/ansible.input"] != 6 {
+	if versions["actuators/ansible.input"] != 7 {
 		t.Fatalf("ansible.input current version: %d", versions["actuators/ansible.input"])
 	}
 	// intents/application v2 types `port` (ADR-0118 follow-up). A sibling version rather than an

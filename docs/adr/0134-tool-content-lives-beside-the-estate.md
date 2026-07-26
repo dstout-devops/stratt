@@ -1,7 +1,8 @@
 # ADR 0134 — A playbook is a playbook: tool content lives beside the estate, not inside a declaration
 
-- **Status:** **Proposed** (2026-07-26, steward) — **DESIGN ONLY, nothing implemented**; see the
-  Implementation section for the plan, the traps, and the one judgement call it leaves open. **D1/D2 corrected the same day** — the first draft
+- **Status:** **Accepted** (2026-07-26, steward) — **implemented**; see the Implementation section for
+  what shipped, the one field the plan did not anticipate, and the judgement call it left open (now made).
+  **D1/D2 corrected the same day** — the first draft
   proposed a flat playbook folder; the unit is a **project** (a content root), for reasons the repo already
   documented. The error is kept on the record in D1 rather than edited away. Charter review by hand (this session's rules bar the
   subagent); §1.2/§1.4/§1.8/§2 answered inline. **No new dependency.**
@@ -244,12 +245,96 @@ existence (a path) and never content.
 - **An Actuator per project is more declarations**, and for a large self-service estate that is a real
   count. Accepted because each is small, each carries a grant worth reviewing individually, and the
   alternative concentrates authority instead of distributing it.
+- **The binary must ship before the estate.** Declaration parsing is `KnownFields(true)`, so a strattd
+  that predates `contentDir` does not ignore the field — it fails the file, and `parseKind` fails the
+  whole load: _"declarations unreadable; skipping cycle"_. During a rolling upgrade every not-yet-replaced
+  replica therefore stops reconciling the ENTIRE estate, not just the Actuators that changed. Found by
+  running the demo against a stale cluster rather than by reasoning about it, which is the argument for
+  running it. This is a general property of adding any declaration field, not something this ADR
+  introduces — but this ADR is the first to require a coordinated estate+binary change large enough for
+  it to matter, so it is written down here rather than rediscovered.
 
-## Implementation — status and plan
+## Implementation — what shipped
 
-**Nothing here is built.** This ADR is design only: `grep -rn contentDir` over `core/`, `plugins/`,
-`estate/` and `contracts/` returns nothing. A reader arriving at the code first should not assume
-otherwise.
+**Built, `task ci` green, the DB-gated suite against a real Postgres, and the WHOLE demo library green
+on kind** — `app-cert`, `k8s-deploy`, `ec2-only`, `vsphere-only`. The plan below is kept as written;
+what follows records where the build agreed with it, where it did not, and why.
+
+All four matter, not just the ansible one: this change touches estate loading for **every** Actuator
+and `executeJobPlugin` for **every** EE-Job Step, so the three non-ansible demos are the regression
+evidence that an Actuator declaring no `contentDir` is completely unaffected — helm deployed a real
+app, and both provisioning demos closed their build→observe loop.
+
+The demo is the proof that matters (ADR-0116), because it exercises **both** content paths against
+**one** Actuator: `app-install-with-cert` ran `install-with-cert.yml` out of the mounted project tree —
+issuing a certificate with `community.crypto`, serving TLS, and projecting the observed `app.config`
+back — while `vacuous-run-guard` ran its kept-inline play from `project/play.yml` beside that same
+mount and failed correctly. D4's exception coexisting with a mount was a unit-test claim until this run.
+
+### The one field the plan did not anticipate: `contentInputs`
+
+The plan's step 8 put the "does this playbook exist?" check in a test. Doing it at **estate load**
+instead is strictly better — a downstream estate gets it too, and `stratt plan` fails instead of a Run —
+but the obvious implementation reads `params["playbook"]` in the loader, and that is the `if ansible {}`
+§1.4 forbids. It is the same mistake this ADR's own trap list warns about, one layer above dispatch.
+
+So an Actuator **declares which param path names a file in its tree**:
+
+```yaml
+contentDir: ansible/projects/access-control
+contentInputs: [playbook] # core walks a DECLARED path; it never learns the word `playbook`
+```
+
+That is not a new idea either — it is `elevatedInputs` exactly, and now the **fourth** declared-path
+field on the Kind. It generalises: OpenTofu modules will need `contentInputs: [module]` and no core
+change. The cost is honest and worth stating: an Actuator that declares no `contentInputs` gets **no**
+load-time reference check, because a content-blind loader cannot guess which key is a content ref. The
+shim still refuses it in-pod with a message naming the Actuator and the mount.
+
+### Where the build went further than the plan
+
+Three refusals the plan did not name, each because the layer that would otherwise fail cannot explain
+itself (§1.8) — all found by reading `createJob` and `writeContent`, not by hitting them:
+
+- **`play.yml` is reserved** at a content root's top level. The shim's inline path writes
+  `params.play` to exactly that path, so a mounted file of that name would collide — an `EACCES` on a
+  read-only mount, in a pod. Refused where the name is visible and renaming is free. This is what lets
+  D4's kept-inline exception coexist with a mount, which the app-cert demo now exercises both ways.
+- **A file-COUNT ceiling** (256) beside the byte ceiling. The dispatcher emits one `VolumeMount` per
+  `JobSpec.Files` entry, so a tree of thousands of small files produces a pod spec that fails while
+  every individual file is tiny — a different failure from the ConfigMap size cap, in a different place.
+- **Symlinks and illegal path segments are refused.** `os.ReadFile` follows a link, so a link inside a
+  reviewed estate could pull an unreviewed file into a ConfigMap mounted in an execution pod while a
+  reviewer sees a one-line file. Segments must begin with an alphanumeric or underscore, which makes
+  `..` unrepresentable structurally rather than filtered — the same rule the v7 `playbook` pattern
+  states, applied to the files as well as to the reference.
+
+One fix outside the plan: `awxfacade` rendered a job template's `playbook` from `scm.playbook` only, so
+every migrated Step would have reported `play.yml`. It reads the mounted ref first now. Reading a tool's
+key by name is legitimate **there** — that package's whole job is to render Stratt as AWX — and nowhere
+else in core.
+
+### The judgement call, made
+
+Three projects, grouped by remediation domain, with the per-project ceiling that is the point of D2:
+
+| Project             | Content                                     | `facetNamespaces`            |
+| ------------------- | ------------------------------------------- | ---------------------------- |
+| `platform-baseline` | `linux-onboard`, `web-server-configure`     | `os.*` + `app.config`        |
+| `access-control`    | `apply`, `revoke`, `collect`                | `access.grants` — **only**   |
+| `fileset`           | `apply`, `revert`, `collect`                | `fileset.content` — **only** |
+| `app-cert` (demo)   | `install-with-cert`; the guard stays inline | `app.config`                 |
+
+`TestReferenceEstateProjectsAreScoped` pins the two exact grants, so a future widening has to argue with
+a test rather than slip through a diff.
+
+**`estate/actuators/ansible.yaml` keeps its wide grant, deliberately.** Nothing in the estate names it
+any more — it is the inline/ad-hoc Actuator now (`stratt-dev-assert` launches through it) — but the
+per-project ceilings do not FENCE it: an author who names `ansible` with an inline play can still write
+any of its namespaces. That is not a regression, it is the pre-ADR position, and it is the same gap D2's
+correction records: a ceiling chosen by whoever selects the Actuator is enforced at authoring time by
+repo review. Narrowing it is a separate decision with its own blast radius, left to be made
+deliberately rather than as a side effect of this one.
 
 ### The work, in dependency order
 
@@ -284,11 +369,11 @@ otherwise.
 Demo staging needs no work: `task demo:<name>:stage` copies the whole estate tree, so `ansible/` rides
 along.
 
-### The judgement call this ADR does not make
+### The judgement call this ADR did not make — **made as proposed**; see "The judgement call, made" above
 
-Which projects. The reference estate's plays are currently undifferentiated, and this is the first worked
-example of the convention, so demos and downstream estates will copy whatever it does. A defensible
-starting split — **not a decision**:
+Which projects. The reference estate's plays were undifferentiated, and this is the first worked
+example of the convention, so demos and downstream estates will copy whatever it does. The split
+proposed here is the one that shipped:
 
 | Project             | Content                                                                                                                                              |
 | ------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -303,6 +388,11 @@ facets), which is the whole point of D2.
 
 ### Traps a fresh reader will otherwise hit
 
+- **§1.4 applies to the LOADER too, not just to dispatch.** The build hit this: the parse-time
+  existence check wants a param key, and hardcoding `playbook` there is the same defect one layer up.
+  It reads a path the Actuator declares (`contentInputs`) instead. Anyone tempted to "simplify" that
+  back to a literal key should read `TestContentRefIsCheckedByDeclarationNotByName`, which exists to
+  break when they do.
 - **§1.4 — the spine is tool-blind.** Content comes from the **Actuator declaration**, never from Step
   params. The first design here resolved a `playbookRef` out of params and was wrong for exactly this
   reason (D2).

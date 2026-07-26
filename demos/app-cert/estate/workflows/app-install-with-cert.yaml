@@ -15,6 +15,11 @@
 #   * ACTUATION ACCOUNTING (D5). A play that matched no host, or changed nothing, is a
 #     FAILURE — see the vacuous-run-guard Workflow beside this one, which proves it.
 #
+# ADR-0134 then moved the play itself out of this file and into the project the ansible-crypto
+# Actuator declares. What that Actuator selects is now both halves of "which content": the EE
+# image (the collection) and the content root (the playbook). This file kept everything that
+# was ever a DECLARATION and lost the 90 lines of Ansible that were only ever a string.
+#
 # The write-back reports the app's observed listen port and nothing else. The certificate's
 # own attributes are NOT projected: cert.identity/cert.expiry belong to the cert-issuer
 # Connector's Syncer, and a self-signed cert minted on the node has no system of record to
@@ -84,93 +89,8 @@ steps:
         # explicitly because core never parses play content to infer what it needs (D6).
         app_common_name: "{{.launch.commonName}}"
         app_tls_port: "{{.launch.tlsPort}}"
-      play: |
-        - name: Install the app and issue its certificate
-          hosts: all
-          gather_facts: false
-          tasks:
-            # The key-staging bootstrap task that used to sit here is GONE (ADR-0126 D1).
-            # It copied /runner/credentials/app-node-ssh/id_ed25519 to /tmp at 0600,
-            # because the mount is group-readable and SSH refuses such a key — a real
-            # constraint, but one every SSH-using play had to rediscover and re-solve by
-            # hand. The shim now stages it once, into the runner directory, from the
-            # credentialRef the Step is authorized to use.
-            - name: Ensure the TLS material directories exist
-              ansible.builtin.file:
-                path: "{{ item }}"
-                state: directory
-                mode: "0755"
-              loop:
-                - /etc/ssl/private
-                - /etc/nginx/conf.d
-
-            # ── community.crypto: the collection this demo's EE was built to carry ──
-            - name: Generate the app's private key
-              community.crypto.openssl_privatekey:
-                path: /etc/ssl/private/app.key
-                size: 2048
-                mode: "0600"
-
-            - name: Build a certificate signing request for the app's name
-              community.crypto.openssl_csr:
-                path: /etc/ssl/private/app.csr
-                privatekey_path: /etc/ssl/private/app.key
-                common_name: "{{ app_common_name }}"
-                subject_alt_name: "DNS:{{ app_common_name }}"
-
-            - name: Issue the certificate (self-signed — a real CA is a Connector, not a play)
-              community.crypto.x509_certificate:
-                path: /etc/ssl/certs/app.crt
-                csr_path: /etc/ssl/private/app.csr
-                privatekey_path: /etc/ssl/private/app.key
-                provider: selfsigned
-                selfsigned_not_after: "+365d"
-                mode: "0644"
-
-            # ── install the app on that certificate ──
-            - name: Install the app's TLS site
-              ansible.builtin.copy:
-                dest: /etc/nginx/conf.d/app-tls.conf
-                mode: "0644"
-                content: |
-                  server {
-                    listen {{ app_tls_port }} ssl;
-                    server_name {{ app_common_name }};
-                    ssl_certificate     /etc/ssl/certs/app.crt;
-                    ssl_certificate_key /etc/ssl/private/app.key;
-                    location / { return 200 'stratt app-cert demo: served over TLS\n'; }
-                  }
-
-            - name: Check the config before reloading (a broken reload leaves nginx serving the OLD config — a silent no-op)
-              ansible.builtin.command: nginx -t
-              changed_when: false
-
-            - name: Reload nginx so the certificate takes effect (a real converge, not just a file on disk)
-              ansible.builtin.command: nginx -s reload
-              changed_when: true
-
-            - name: Wait until the app is actually accepting TLS connections
-              ansible.builtin.wait_for:
-                port: "{{ app_tls_port | int }}"
-                host: 127.0.0.1
-                timeout: 30
-
-            - name: OBSERVE the effective TLS port from nginx's own loaded config
-              # The fact-back below must report what is TRUE, not what was requested, so
-              # the value comes from `nginx -T` — the configuration the RUNNING server
-              # has loaded — rather than from the variable that asked for it.
-              ansible.builtin.shell: >
-                nginx -T 2>/dev/null | grep -oE 'listen[[:space:]]+[0-9]+[[:space:]]+ssl' | grep -oE '[0-9]+' | head -1
-              register: observed_port
-              changed_when: false
-
-            - name: Report the observed app.config to Stratt (write-back under the Step's scope)
-              # A STRING, because contracts/facets/app.config.schema.json says so — the write-back
-              # is validated against that Facet Contract and an int is REFUSED (observed live:
-              # "/port: got number, want string"). The expectation compiled from the Intent is
-              # compared to this value, so all three agree on type by construction; nothing
-              # coerces between them (ADR-0118 D1).
-              ansible.builtin.set_fact:
-                stratt_facets:
-                  app.config:
-                    port: "{{ observed_port.stdout | trim }}"
+      # The play is a PLAYBOOK, in the project the ansible-crypto Actuator declares
+      # (ADR-0134 D2): demos/app-cert/estate/ansible/projects/app-cert/install-with-cert.yml.
+      # It is 90 lines of Ansible that ansible-lint and --syntax-check can now read, and
+      # this file is back to being a declaration of what runs where.
+      playbook: install-with-cert.yml
