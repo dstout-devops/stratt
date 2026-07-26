@@ -10,6 +10,8 @@
 - **Reconciles with:** ADR-0046 (the sovereign plugin port — **this is that decision's packaging
   half**), ADR-0022 (DB-pinned rung-2/3 Contracts — the mechanism D5 extends), ADR-0033 (`packs/`),
   ADR-0103 (Actuators as CaC), ADR-0104 (core-owned capability vocabulary), ADR-0116 (demos),
+  **ADR-0047 §4 (rung-1 is hand-written AND core-shipped — D5 was drafted without reconciling
+  against it; see the blocker in D5)**,
   **ADR-0135 D1/D5 (partly superseded — see D3)**, ADR-0136 (superseded vs driven)
 
 ## Context
@@ -122,6 +124,42 @@ So Contracts move into the plugin, and core verifies at registration rather than
 mechanism is not new: `contract.ValidateDocument` already evaluates _"a schema document that is not
 embedded — e.g. a DB-pinned rung-2/3 Contract (ADR-0022)"_. This extends that path to rung-1
 hand-written schemas.
+
+> **BLOCKED (2026-07-26) — D5 conflicts with ADR-0047 §4, and the conflict is not an implementation
+> detail.** ADR-0047 §4, which is where ADR-0046 finding #2 was reconciled, states: *"Rung-1 is sovereign
+> and immutable over the wire … A plugin can never introduce, mutate, satisfy, or shadow a **hand-written,
+> core-shipped**, `ContractRef`-pinned rung-1 Facet/**Contract**."* **`core-shipped` is part of what rung-1
+> means**, and `TestPinsAreStable` asserts all 152 documents are `rung: hand-written`. D5 proposes moving
+> exactly those. This ADR's original "Reconciles with" list did not include ADR-0047 — the prior-art scan
+> missed the decision that governs D5 most directly.
+>
+> **Scope is also much smaller than D5 implies.** Of 152 documents only **22** are a plugin's own wire
+> promises (`actuators/` 13 + `actions/` 9). The other 130 are not the plugin's to own under any reading:
+> `facets/` (38) is graph vocabulary that core compositions READ — a Blueprint route observes
+> `app.config` — `intents/` (16) is the payload shape of core Named Kinds, `capabilities/` (4) is the
+> closed core-owned class vocabulary (ADR-0104), plus `policy/` and `outputs/`.
+>
+> **All three mechanisms cost something real**, so this cannot be resolved by picking a better
+> implementation:
+>
+> 1. **Load from the admitted plugin tree, pin in the DB on registration** (what D5 describes, extending
+>    ADR-0022). Satisfies §1.5 — drift stays blocking — and satisfies D2 cleanly. But it makes rung-1
+>    **estate-resident instead of binary-resident**, which is the property ADR-0047 §4 names. It also
+>    rewrites a process-global singleton (23 exported functions, 14 core call sites) that the estate parse,
+>    compiler, orchestrator and API all depend on.
+> 2. **Generate the embed from plugin trees at build time.** Keeps the binary authoritative, but
+>    `//go:embed` cannot cross module boundaries, so it needs an assemble step before every build — and a
+>    plain `go build` would silently produce a binary missing plugin contracts. Silent partial integrity is
+>    worse than the problem.
+> 3. **Checked-in mirror + freshness gate** (the `generate:check` pattern). Keeps integrity and has no
+>    build-order trap, but adding a plugin still writes into a core-owned tree — so it does not actually
+>    satisfy D2, which is the entire point of the exercise.
+>
+> **Nothing is moved until this is decided.** What HAS shipped is the scoping, encoded where it acts:
+> `plugins:boundary:diff` narrowed its blanket `contracts/**` exception to `contracts/actuators/` and
+> `contracts/actions/`. A plugin change that touches a Facet or Intent schema now FAILS the gate, because
+> that is a §1.1/§2.1 event — a new Facet namespace, a changed Intent shape — and must be reviewed as one
+> rather than waved through as routine plugin work.
 
 **This is the riskiest step in the ADR and is sequenced last.** `contracts.FS` is embedded and
 `TestPinsAreStable` asserts an exact document count; moving 150+ documents out from under a load-bearing
@@ -325,7 +363,11 @@ Ordered so each step is provable before the next depends on it.
    retire them. Not attempted here: the four floors differ substantially (vcsim, floci, a node container,
    three different values stacks), and guessing that shape while migrating is how the scatter gets
    recreated in a new tree.
-6. **Contracts relocate, core pins at registration** (D5) — last, and with its own tests.
+6. **Contracts relocate, core pins at registration** (D5) — **BLOCKED, not started.** The blocker is a
+   conflict with ADR-0047 §4, not a difficulty: `core-shipped` is part of the definition of rung-1, and D5
+   moves rung-1 documents. See the block in D5 for the three mechanisms and what each costs. Shipped in
+   the meantime: the scoping (22 of 152 documents are candidates) and a narrowed D2 gate exception, so a
+   plugin change touching a Facet or Intent schema is no longer waved through.
 
 ### Traps
 

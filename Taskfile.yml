@@ -419,13 +419,25 @@ tasks:
         # leaves no trace in the plugin's module graph, so only the shape of the
         # change reveals it.
         #
-        # Each exception below is allowed for a STATED reason, not for convenience:
+        # Each exception below is allowed for a STATED reason, not for convenience.
+        #
+        # The contracts/ exceptions are NARROW on purpose. Only `actuators/` and
+        # `actions/` hold a plugin's own wire promises — 22 of the tree's 152
+        # documents. The other 130 are not the plugin's to own and never were:
+        # `facets/` is graph vocabulary that core compositions READ (a Blueprint route
+        # observes app.config), `intents/` is the payload shape of core Named Kinds,
+        # `capabilities/` is the closed core-owned class vocabulary (ADR-0104), plus
+        # policy/ and outputs/. A plugin change that touches one of those is a §1.1/§2.1
+        # event — a new Facet namespace, a changed Intent shape — and must be reviewed
+        # as one, not waved through as routine plugin work. A blanket `contracts/`
+        # exception did exactly that.
         outside=$(echo "$changed" | grep -v '^plugins/' \
           | grep -v '^proto/'                  `# the port itself — D2 exception 2` \
           | grep -v '^sdk/stratt/'             `# generated port bindings` \
           | grep -v '^types/capability'        `# the capability vocabulary — D2 exception 1` \
           | grep -v '^estate/plugins.yaml$'    `# ADMISSION: deploying, not developing (D3)` \
-          | grep -v '^contracts/'              `# TEMPORARY: until D5/step 6 moves Contracts` \
+          | grep -v '^contracts/actuators/'    `# TEMPORARY: a plugin's own input Contract (D5/step 6)` \
+          | grep -v '^contracts/actions/'      `# TEMPORARY: a plugin's own Action Contracts (D5/step 6)` \
           | grep -v '^docs/'                   `# never load-bearing` \
           | grep -v '\.md$'                    \
           || true)
