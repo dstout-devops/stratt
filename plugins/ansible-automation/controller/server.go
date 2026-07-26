@@ -70,6 +70,7 @@ func (s *Server) GetManifest(context.Context, *pluginv1.GetManifestRequest) (*pl
 			{SchemaId: KindTeam},
 			{SchemaId: KindCredential},
 			{SchemaId: KindUser},
+			{SchemaId: KindLabel},
 		},
 		Actions: []*pluginv1.ActionDecl{{
 			Name:        actionMaterialize,
@@ -80,7 +81,7 @@ func (s *Server) GetManifest(context.Context, *pluginv1.GetManifestRequest) (*pl
 		}},
 		// A removed AWX object retracts on the full-sync boundary, per object-type scheme.
 		// Union liveness (ADR-0042) keeps an entity alive if another Source still asserts it.
-		TombstoneSchemes: []string{KindTemplate, KindWorkflow, KindSchedule, KindOrg, KindTeam, KindCredential, KindUser},
+		TombstoneSchemes: []string{KindTemplate, KindWorkflow, KindSchedule, KindOrg, KindTeam, KindCredential, KindUser, KindLabel},
 		// Cutover descriptor (ADR-0087): tells the core cutover reconciler what "still
 		// executing at AWX" means for an adopted template — an enabled schedule that launches
 		// it — WITHOUT teaching the spine ansible. The reconciler reads these fields blindly.
@@ -131,7 +132,7 @@ func (s *Server) Observe(_ *pluginv1.ObserveRequest, stream grpc.ServerStreaming
 	// what this cycle cost the Controller — seven collections, plus the detail tier when
 	// it refreshed this cycle (detailAge 0 means it just did).
 	detailAge := s.client.DetailAge()
-	requests := 7
+	requests := 8
 	if detailAge == 0 {
 		requests += len(snap.Workflows) + len(snap.Teams)
 	}

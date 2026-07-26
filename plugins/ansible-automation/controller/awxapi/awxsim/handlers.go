@@ -17,6 +17,10 @@ func (s *Sim) schedules(w http.ResponseWriter, r *http.Request) {
 	paged(s, w, r, "/api/v2/schedules/", s.data.Schedules)
 }
 
+func (s *Sim) labels(w http.ResponseWriter, r *http.Request) {
+	paged(s, w, r, "/api/v2/labels/", s.data.Labels)
+}
+
 func (s *Sim) users(w http.ResponseWriter, r *http.Request) {
 	paged(s, w, r, "/api/v2/users/", s.data.Users)
 }

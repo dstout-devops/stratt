@@ -17,6 +17,7 @@ import (
 	"net/http/httptest"
 	"reflect"
 	"sort"
+	"strings"
 	"testing"
 
 	"github.com/dstout-devops/stratt/plugins/ansible-automation/controller/awxapi/awxsim"
@@ -48,11 +49,12 @@ func TestProjectionAgainstAwxsim(t *testing.T) {
 	}{
 		{"job templates", len(snap.JobTemplates), 2},
 		{"workflows", len(snap.Workflows), 1},
-		{"schedules", len(snap.Schedules), 3}, // 3 > pageSize: the `next` cursor is followed
+		{"schedules", len(snap.Schedules), 4}, // > pageSize: the `next` cursor is followed
 		{"organizations", len(snap.Organizations), 2},
 		{"teams", len(snap.Teams), 2},
 		{"credentials", len(snap.Credentials), 2},
 		{"users", len(snap.Users), 4},
+		{"labels", len(snap.Labels), 3},
 	} {
 		if tc.got != tc.want {
 			t.Errorf("%s enumerated = %d, want %d", tc.what, tc.got, tc.want)
@@ -63,8 +65,8 @@ func TestProjectionAgainstAwxsim(t *testing.T) {
 	if err != nil {
 		t.Fatalf("normalize: %v", err)
 	}
-	if len(ents) != 16 {
-		t.Fatalf("projected %d entities, want 16 (2 templates + 1 workflow + 3 schedules + 2 orgs + 2 teams + 2 credentials + 4 users)", len(ents))
+	if len(ents) != 20 {
+		t.Fatalf("projected %d entities, want 20 (2 templates + 1 workflow + 4 schedules + 2 orgs + 2 teams + 2 credentials + 4 users + 3 labels)", len(ents))
 	}
 
 	byKind := map[string]int{}
@@ -72,7 +74,7 @@ func TestProjectionAgainstAwxsim(t *testing.T) {
 		byKind[e.GetKind()]++
 	}
 	for kind, want := range map[string]int{
-		KindTemplate: 2, KindWorkflow: 1, KindSchedule: 3, KindOrg: 2, KindTeam: 2, KindCredential: 2, KindUser: 4,
+		KindTemplate: 2, KindWorkflow: 1, KindSchedule: 4, KindOrg: 2, KindTeam: 2, KindCredential: 2, KindUser: 4, KindLabel: 3,
 	} {
 		if byKind[kind] != want {
 			t.Errorf("projected %d %s, want %d", byKind[kind], kind, want)
@@ -317,6 +319,116 @@ func TestUserProjectionIsAccountFactsOnly(t *testing.T) {
 	}
 	if supers != 1 {
 		t.Errorf("superusers = %d, want 1 — the account awx-superuser-review exists to surface", supers)
+	}
+}
+
+// ADR-0132 D1: an AWX label is an ENTITY and membership is an edge, so "every production
+// job template" is a View over topology rather than a scan. awxsim puts `prod` and
+// `critical` on jt10 and `legacy` on jt11.
+func TestLabelsProjectAsEntitiesWithEdges(t *testing.T) {
+	c := simClient(t)
+	snap, err := c.Enumerate(context.Background())
+	if err != nil {
+		t.Fatalf("enumerate: %v", err)
+	}
+	ents, err := c.Normalize(snap)
+	if err != nil {
+		t.Fatalf("normalize: %v", err)
+	}
+	byLabelEdge := map[string][]string{}
+	var labelEnts int
+	for _, e := range ents {
+		if e.GetKind() == KindLabel {
+			labelEnts++
+			continue
+		}
+		id := e.GetIdentityKeys()[e.GetKind()]
+		for _, r := range e.GetRelations() {
+			if r.GetType() != "has-label" {
+				continue
+			}
+			if r.GetToScheme() != KindLabel {
+				t.Errorf("has-label targets %q, want %q", r.GetToScheme(), KindLabel)
+			}
+			byLabelEdge[id] = append(byLabelEdge[id], r.GetToValue())
+		}
+	}
+	if labelEnts != 3 {
+		t.Errorf("projected %d label entities, want 3", labelEnts)
+	}
+	for tmpl, want := range map[string][]string{
+		"ctrl-a/10": {"ctrl-a/70", "ctrl-a/71"},
+		"ctrl-a/11": {"ctrl-a/72"},
+	} {
+		got := append([]string{}, byLabelEdge[tmpl]...)
+		sort.Strings(got)
+		if !reflect.DeepEqual(got, want) {
+			t.Errorf("template %s has-label = %v, want %v", tmpl, got, want)
+		}
+	}
+	// The label is an entity carrying its own facet, which is what makes it selectable as
+	// a View target (ViewSelector.Relations targetLabels).
+	for _, e := range ents {
+		if e.GetKind() == KindLabel && e.GetIdentityKeys()[KindLabel] == "ctrl-a/70" {
+			if got := e.GetLabels()["ansible.name"]; got != "prod" {
+				t.Errorf("label entity ansible.name = %q, want prod — the key a View selects the target by", got)
+			}
+			return
+		}
+	}
+	t.Fatal("label ctrl-a/70 was not projected")
+}
+
+// ADR-0132 D3: two schedules of ONE template, distinguishable — and the §2.5 line held.
+// awxsim's nightly-deploy and canary-deploy both launch jt10 and differ only in their
+// extra_data and limit, which is precisely the case AWX-013 said the mirror could not
+// tell apart.
+func TestScheduleShapeDistinguishesAndCarriesNoValues(t *testing.T) {
+	c := simClient(t)
+	snap, err := c.Enumerate(context.Background())
+	if err != nil {
+		t.Fatalf("enumerate: %v", err)
+	}
+	ents, err := c.Normalize(snap)
+	if err != nil {
+		t.Fatalf("normalize: %v", err)
+	}
+	facets := map[string]map[string]any{}
+	for _, e := range ents {
+		if e.GetKind() != KindSchedule {
+			continue
+		}
+		var f map[string]any
+		if err := json.Unmarshal(e.GetFacets()[KindSchedule], &f); err != nil {
+			t.Fatalf("schedule facet: %v", err)
+		}
+		facets[e.GetIdentityKeys()[KindSchedule]] = f
+	}
+	nightly, canary := facets["ctrl-a/30"], facets["ctrl-a/33"]
+	if nightly == nil || canary == nil {
+		t.Fatalf("both schedules of jt10 must project; got %v", len(facets))
+	}
+	if reflect.DeepEqual(nightly, canary) {
+		t.Fatal("two schedules of one template are still indistinguishable — the whole of AWX-013")
+	}
+	if got := nightly["timezone"]; got != "Europe/London" {
+		t.Errorf("timezone = %v — an rrule with no timezone is under-determined", got)
+	}
+	if got := nightly["limit"]; got != "web*" {
+		t.Errorf("per-schedule limit override = %v, want web*", got)
+	}
+
+	// KEY NAMES only. A value reaching the graph here would walk around ADR-0128 D4
+	// through a side door.
+	wantKeys := []any{"app_version", "canary"}
+	if !reflect.DeepEqual(canary["extraDataKeys"], wantKeys) {
+		t.Errorf("extraDataKeys = %v, want %v (sorted key names)", canary["extraDataKeys"], wantKeys)
+	}
+	blob, _ := json.Marshal(canary)
+	for _, secret := range []string{"2.0-rc1", "gold", "1.0"} {
+		if strings.Contains(string(blob), secret) {
+			t.Errorf("a schedule extra_data VALUE (%q) reached the graph — §2.5 / ADR-0132 D3 project key names only", secret)
+		}
 	}
 }
 

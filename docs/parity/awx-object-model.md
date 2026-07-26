@@ -24,10 +24,10 @@ from that single sample. Everything below is the rest of the sample.
 
 | Area                                       | Verdict                          | One-line                                                                                         |
 | ------------------------------------------ | -------------------------------- | ------------------------------------------------------------------------------------------------ |
-| **Object coverage** (which objects at all) | 🟡 8 projected                   | Orchestration spine + credentials + local accounts; **role grants** are the remaining absence   |
+| **Object coverage** (which objects at all) | 🟡 9 projected                   | Orchestration spine + credentials + accounts + labels; **role grants** are the remaining absence |
 | **Field depth** on projected objects       | 🟡 template deepened, rest thin  | `ansible.template` now carries run state, run knobs + a credential edge (**ADR-0128**); the other four are still 1–3 fields |
 | **Workflow topology**                      | 🟢 invocations + approval gate   | `invokes` edges + `hasApprovalGate`/`nodeCount` (**ADR-0129**); the node graph stays adopt's job |
-| **Facet schema coverage**                  | 🟡 **6 of 11**                   | +template +credential (ADR-0128) +workflow (ADR-0129) +user (ADR-0130)                          |
+| **Facet schema coverage**                  | 🟡 **7 of 12**                   | +template +credential (0128) +workflow (0129) +user (0130) +label (0132); schedule widened      |
 | **Read-path symmetry**                     | 🟡 divergent by accident         | Projection reads 5 endpoints, adopt reads 9; nothing states which asymmetries are deliberate     |
 | **`stratt adopt` transform**               | 🟢 deep and honest               | Reads what it needs, refuses what it must (secrets, password surveys), reports what it drops     |
 
@@ -253,9 +253,17 @@ having been built first and never revisited when the transform grew deeper.
 
 **Tier 3 — mapping questions nobody has asked (🟠, and that is the finding):**
 
-- **AWX-006** labels · **AWX-007** execution environments · **AWX-008** instance groups →
+- ~~**AWX-006** labels~~ — **done, [ADR-0132](../adr/0132-awx-labels-and-schedule-shape.md) D1**, and it
+  was not the mechanical copy this row assumed: an AWX label **cannot** be a graph label key, because a
+  plugin's label keys are a static grant allowlist registered per key (ADR-0041 single-owner) and a key
+  discovered at read time is ungrantable. Labels are Entities with `has-label` edges, so an operator's AWX
+  grouping vocabulary becomes Stratt Views by topology selection — see `estate/views/awx-prod-templates.yaml` ·
+  **AWX-007** execution environments · **AWX-008** instance groups →
   Sites/Cells · **AWX-009** notification templates → Sinks (cheap since ADR-0125) ·
-  **AWX-012** custom credential types · **AWX-013** schedule `extra_data` + timezone ·
+  **AWX-012** custom credential types · ~~**AWX-013** schedule `extra_data` + timezone~~ — **done,
+  [ADR-0132](../adr/0132-awx-labels-and-schedule-shape.md) D3**: timezone/next-run/window plus the
+  per-schedule launch overrides, and `extraDataKeys` — **key names, never values**, which distinguishes
+  two schedules of one template while holding the §2.5 line ADR-0128 D4 drew for `extra_vars` ·
   **AWX-015** the ~15 `ask_*_on_launch` booleans (deferred out of ADR-0128 D4: cutover fidelity rather
   than governance) · **AWX-016** workflow nodes as entities (deferred out of ADR-0129 D3 — it earns a
   namespace when a consumer needs the DAG, the obvious one being a UI rendering of a mirrored workflow

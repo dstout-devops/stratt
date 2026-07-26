@@ -64,6 +64,9 @@ func fakeAWX(t *testing.T) *httptest.Server {
 			"summary_fields": map[string]any{"unified_job_template": map[string]any{"id": 10, "name": "Deploy Web", "unified_job_type": "job"}},
 		}}))
 	})
+	mux.HandleFunc("/api/v2/labels/", func(w http.ResponseWriter, r *http.Request) {
+		w.Write(page([]map[string]any{{"id": 70, "name": "prod"}}))
+	})
 	mux.HandleFunc("/api/v2/users/", func(w http.ResponseWriter, r *http.Request) {
 		w.Write(page([]map[string]any{{"id": 60, "username": "admin", "is_active": true, "is_superuser": true}}))
 	})
@@ -89,7 +92,7 @@ func TestEnumerateAndNormalize(t *testing.T) {
 		t.Fatalf("enumerate: %v", err)
 	}
 	if len(snap.JobTemplates) != 1 || len(snap.Workflows) != 1 || len(snap.Schedules) != 1 ||
-		len(snap.Organizations) != 1 || len(snap.Teams) != 1 || len(snap.Credentials) != 1 || len(snap.Users) != 1 {
+		len(snap.Organizations) != 1 || len(snap.Teams) != 1 || len(snap.Credentials) != 1 || len(snap.Users) != 1 || len(snap.Labels) != 1 {
 		t.Fatalf("snapshot counts wrong: %+v", snap)
 	}
 
@@ -101,7 +104,7 @@ func TestEnumerateAndNormalize(t *testing.T) {
 	for _, e := range ents {
 		byKind[e.GetKind()] = e
 	}
-	for _, k := range []string{KindTemplate, KindWorkflow, KindSchedule, KindOrg, KindTeam, KindCredential, KindUser} {
+	for _, k := range []string{KindTemplate, KindWorkflow, KindSchedule, KindOrg, KindTeam, KindCredential, KindUser, KindLabel} {
 		if byKind[k] == nil {
 			t.Fatalf("missing projected kind %q", k)
 		}

@@ -187,6 +187,17 @@ type declSelector struct {
 	Kinds  []string          `yaml:"kinds"`
 	Labels map[string]string `yaml:"labels"`
 	Facets []declFacet       `yaml:"facets"`
+	// Relations selects by TOPOLOGY (ADR-0059 decision 6) — "the hosts in the DMZ", "the
+	// job templates labelled prod". types.ViewSelector has carried this since ADR-0059
+	// and the CaC decoder did not expose it, so a declared View could select by kind,
+	// label and facet but never by an edge; found by ADR-0132, whose whole point is that
+	// an operator's AWX label vocabulary becomes a View this way.
+	Relations []declRelation `yaml:"relations"`
+}
+type declRelation struct {
+	Type         string            `yaml:"type"`
+	TargetKind   string            `yaml:"targetKind"`
+	TargetLabels map[string]string `yaml:"targetLabels"`
 }
 type declFacet struct {
 	Namespace string `yaml:"namespace"`
@@ -3086,6 +3097,14 @@ func (ds declSelector) toSelector() (types.ViewSelector, error) {
 		}
 		sel.Facets = append(sel.Facets, types.FacetPredicate{
 			Namespace: f.Namespace, Path: f.Path, Equals: json.RawMessage(eq),
+		})
+	}
+	for _, r := range ds.Relations {
+		if r.Type == "" {
+			return sel, fmt.Errorf("relation predicate requires a type")
+		}
+		sel.Relations = append(sel.Relations, types.RelationPredicate{
+			Type: r.Type, TargetKind: r.TargetKind, TargetLabels: r.TargetLabels,
 		})
 	}
 	return sel, nil

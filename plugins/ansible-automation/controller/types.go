@@ -2,6 +2,7 @@ package controller
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"time"
 )
@@ -55,6 +56,23 @@ type JobTemplate struct {
 		// never as an array of names on the facet (ADR-0128 D2) — "which templates use
 		// this credential" is a graph traversal.
 		Credentials []named `json:"credentials"`
+		// Label associations ride the object we are ALREADY reading, so membership costs
+		// no extra request (ADR-0132 D1 / the ADR-0131 budget).
+		Labels labelList `json:"labels"`
+	} `json:"summary_fields"`
+}
+
+// labelList is AWX's summary_fields sub-collection envelope: {count, results}.
+type labelList struct {
+	Results []named `json:"results"`
+}
+
+// Label is an AWX label — the operator's own grouping vocabulary (ADR-0132 D1).
+type Label struct {
+	ID            int    `json:"id"`
+	Name          string `json:"name"`
+	SummaryFields struct {
+		Organization named `json:"organization"`
 	} `json:"summary_fields"`
 }
 
@@ -90,7 +108,8 @@ type WorkflowJobTemplate struct {
 	Name          string `json:"name"`
 	Description   string `json:"description"`
 	SummaryFields struct {
-		Organization named `json:"organization"`
+		Organization named     `json:"organization"`
+		Labels       labelList `json:"labels"`
 	} `json:"summary_fields"`
 }
 
@@ -102,7 +121,28 @@ type Schedule struct {
 	RRule              string `json:"rrule"`
 	Enabled            bool   `json:"enabled"`
 	UnifiedJobTemplate int    `json:"unified_job_template"`
-	SummaryFields      struct {
+
+	// When it actually runs (ADR-0132 D3) — an rrule with no timezone is
+	// under-determined, which is what the mirror recorded until now.
+	Timezone string `json:"timezone"`
+	NextRun  string `json:"next_run"`
+	DTStart  string `json:"dtstart"`
+	Until    string `json:"until"`
+	// ExtraData is decoded ONLY to take its KEY NAMES. Values never reach the graph
+	// (§2.5) — the same line ADR-0128 D4 drew when it refused extra_vars.
+	ExtraData map[string]json.RawMessage `json:"extra_data"`
+
+	// Per-schedule launch overrides: two schedules of one template are different things.
+	JobType       string `json:"job_type"`
+	Limit         string `json:"limit"`
+	JobTags       string `json:"job_tags"`
+	SkipTags      string `json:"skip_tags"`
+	Verbosity     int    `json:"verbosity"`
+	DiffMode      bool   `json:"diff_mode"`
+	Forks         int    `json:"forks"`
+	Timeout       int    `json:"timeout"`
+	ScmBranch     string `json:"scm_branch"`
+	SummaryFields struct {
 		UnifiedJobTemplate struct {
 			ID             int    `json:"id"`
 			Name           string `json:"name"`
@@ -155,6 +195,7 @@ type Snapshot struct {
 	Teams         []Team
 	Credentials   []Credential
 	Users         []User
+	Labels        []Label
 	// WorkflowNodes by workflow_job_template id (ADR-0129). AWX has no bulk endpoint, so
 	// this is an N+1 read: one request per workflow, every poll.
 	WorkflowNodes map[int][]WorkflowNode
@@ -266,6 +307,11 @@ func (c *Client) Enumerate(ctx context.Context) (*Snapshot, error) {
 		return nil, err
 	}
 	if snap.Users, err = list[User](ctx, c, "/users/"); err != nil {
+		return nil, err
+	}
+	// A COLLECTION read, not a detail one: O(1) per poll, not O(objects). The label
+	// ASSOCIATIONS cost nothing — they ride summary_fields on objects already read.
+	if snap.Labels, err = list[Label](ctx, c, "/labels/"); err != nil {
 		return nil, err
 	}
 	// The DETAIL tier (ADR-0131 D1): the expensive per-object sub-reads, on their own

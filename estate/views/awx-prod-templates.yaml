@@ -1,0 +1,27 @@
+# awx-prod-templates — the payoff of ADR-0132 D1, and the reason an AWX label is an Entity
+# rather than a graph label key.
+#
+# Selection by TOPOLOGY (ViewSelector.Relations, ADR-0059 decision 6): every ansible.template
+# carrying a `has-label` edge to the ansible.label named `prod`. The operator's own AWX
+# grouping vocabulary becomes a Stratt View — the same grouping, expressed in the target
+# system's primitive, BEFORE anything has been cut over. That is the migration story in
+# miniature.
+#
+# Why it could not be a label key: a plugin's label keys are a STATIC allowlist on its grant
+# (Grant.LabelKeys), registered per key at Register because ADR-0041 makes each key
+# single-owner. A key only discovered by reading the Controller is ungrantable, so
+# `ansible.label.prod = "true"` is not merely inelegant — it cannot be granted.
+#
+# Membership costs nothing to read: label associations ride summary_fields on objects the
+# sync already fetches (ADR-0132 D1), so this View is free of the ADR-0131 poll-cost budget.
+#
+# Read-only (§1.2): a View over a mirror the ansible-automation Connector projects. AAP stays
+# the system of record and keeps executing.
+name: awx-prod-templates
+selector:
+  kinds: [ansible.template]
+  relations:
+    - type: has-label
+      targetKind: ansible.label
+      targetLabels:
+        ansible.name: prod

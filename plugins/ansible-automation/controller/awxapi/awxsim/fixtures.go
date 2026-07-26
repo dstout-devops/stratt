@@ -31,8 +31,9 @@ type fJobTemplate struct {
 		// The PROJECTION half reads these two and the adopt half does not — awxsim
 		// served neither until the Syncer got a sim it could run against. `project`
 		// is the join key for the cross-source `runs` edge (<project.name>/<playbook>).
-		Organization fNamed `json:"organization"`
-		Project      fNamed `json:"project"`
+		Organization fNamed     `json:"organization"`
+		Project      fNamed     `json:"project"`
+		Labels       fLabelList `json:"labels"`
 	} `json:"summary_fields"`
 }
 
@@ -70,11 +71,15 @@ type fWorkflowJT struct {
 // any 404). Recorded in docs/parity/awx-object-model.md as the read-path asymmetry.
 
 type fSchedule struct {
-	ID                 int    `json:"id"`
-	Name               string `json:"name"`
-	RRule              string `json:"rrule"`
-	Enabled            bool   `json:"enabled"`
-	UnifiedJobTemplate int    `json:"unified_job_template"`
+	ID                 int               `json:"id"`
+	Name               string            `json:"name"`
+	RRule              string            `json:"rrule"`
+	Enabled            bool              `json:"enabled"`
+	UnifiedJobTemplate int               `json:"unified_job_template"`
+	Timezone           string            `json:"timezone,omitempty"`
+	NextRun            string            `json:"next_run,omitempty"`
+	ExtraData          map[string]string `json:"extra_data,omitempty"`
+	Limit              string            `json:"limit,omitempty"`
 	SummaryFields      struct {
 		UnifiedJobTemplate struct {
 			ID             int    `json:"id"`
@@ -86,6 +91,20 @@ type fSchedule struct {
 
 // fUser is an AWX local account (ADR-0130). Projection-only — the adopt path reads none
 // of this.
+// fLabel is an AWX label (ADR-0132) — projection-only.
+type fLabel struct {
+	ID            int    `json:"id"`
+	Name          string `json:"name"`
+	SummaryFields struct {
+		Organization fNamed `json:"organization"`
+	} `json:"summary_fields"`
+}
+
+type fLabelList struct {
+	Count   int      `json:"count"`
+	Results []fNamed `json:"results"`
+}
+
 type fUser struct {
 	ID              int    `json:"id"`
 	Username        string `json:"username"`
@@ -183,6 +202,7 @@ type estate struct {
 	Surveys          map[int]fSurveySpec
 	Schedules        []fSchedule
 	Users            []fUser
+	Labels           []fLabel
 	TeamMembers      map[int][]fUser
 	Organizations    []fOrganization
 	Teams            []fTeam
@@ -242,11 +262,13 @@ func seed() *estate {
 	jt10.NextJobRun, jt10.Forks, jt10.Limit, jt10.JobTags, jt10.BecomeEnabled = "2026-07-27T03:00:00Z", 5, "web*", "deploy", true
 	jt10.SummaryFields.Organization = fNamed{ID: 1, Name: "Platform"}
 	jt10.SummaryFields.Project = fNamed{ID: 1, Name: "infra"}
+	jt10.SummaryFields.Labels = fLabelList{Count: 2, Results: []fNamed{{ID: 70, Name: "prod"}, {ID: 71, Name: "critical"}}}
 	jt11 := fJobTemplate{ID: 11, Name: "Gather Facts", JobType: "run", Playbook: "facts.yml",
 		Project: 2, Inventory: 1, SurveyEnabled: false}
 	jt11.Status, jt11.LastJobFailed = "successful", false
 	jt11.SummaryFields.Organization = fNamed{ID: 2, Name: "Legacy"}
 	jt11.SummaryFields.Project = fNamed{ID: 2, Name: "local-scripts"}
+	jt11.SummaryFields.Labels = fLabelList{Count: 1, Results: []fNamed{{ID: 72, Name: "legacy"}}}
 	e.JobTemplates = []fJobTemplate{jt10, jt11}
 
 	// Orgs + teams: the tenancy/RBAC containers the projection mirrors.
@@ -259,6 +281,11 @@ func seed() *estate {
 	// ordinary operator, one system auditor, one DISABLED leaver — is_active false raises
 	// nothing on its own, which is the point of the Baseline reading isSuperuser and not
 	// isActive.
+	// The operator's grouping vocabulary. `prod` is on jt10 only, which is what makes the
+	// has-label View pattern demonstrable.
+	e.Labels = []fLabel{{ID: 70, Name: "prod"}, {ID: 71, Name: "critical"}, {ID: 72, Name: "legacy"}}
+	e.Labels[0].SummaryFields.Organization = fNamed{ID: 1, Name: "Platform"}
+	e.Labels[1].SummaryFields.Organization = fNamed{ID: 1, Name: "Platform"}
 	e.Users = []fUser{
 		{ID: 60, Username: "admin", Email: "admin@example.com", IsActive: true, IsSuperuser: true},
 		{ID: 61, Username: "ops", Email: "ops@example.com", IsActive: true},
@@ -276,7 +303,16 @@ func seed() *estate {
 	// scheme from unified_job_type), and one is DISABLED — the dead-automation case the
 	// awx-schedule-enabled Baseline reads.
 	sched := func(id int, name, rrule string, enabled bool, ujt int, ujtName, ujtType string) fSchedule {
-		s := fSchedule{ID: id, Name: name, RRule: rrule, Enabled: enabled, UnifiedJobTemplate: ujt}
+		s := fSchedule{ID: id, Name: name, RRule: rrule, Enabled: enabled, UnifiedJobTemplate: ujt,
+			Timezone: "Europe/London", NextRun: "2026-07-27T03:00:00Z"}
+		if id == 30 {
+			s.ExtraData = map[string]string{"app_version": "1.0", "tier": "gold"}
+			s.Limit = "web*"
+		}
+		if id == 33 {
+			s.ExtraData = map[string]string{"app_version": "2.0-rc1", "canary": "true"}
+			s.Limit = "canary*"
+		}
 		s.SummaryFields.UnifiedJobTemplate.ID = ujt
 		s.SummaryFields.UnifiedJobTemplate.Name = ujtName
 		s.SummaryFields.UnifiedJobTemplate.UnifiedJobType = ujtType
@@ -284,6 +320,9 @@ func seed() *estate {
 	}
 	e.Schedules = []fSchedule{
 		sched(30, "nightly-deploy", "DTSTART;FREQ=DAILY;INTERVAL=1", true, 10, "Deploy Web", "job_template"),
+		// Two schedules of ONE template, distinguished only by their extra_data KEYS and
+		// their limit — the case AWX-013 said the mirror could not tell apart.
+		sched(33, "canary-deploy", "DTSTART;FREQ=DAILY;INTERVAL=1", true, 10, "Deploy Web", "job_template"),
 		sched(31, "weekly-pipeline", "DTSTART;FREQ=WEEKLY;INTERVAL=1", true, 20, "prod-pipeline", "workflow_job_template"),
 		sched(32, "retired-sweep", "DTSTART;FREQ=DAILY;INTERVAL=1", false, 11, "Gather Facts", "job_template"),
 	}

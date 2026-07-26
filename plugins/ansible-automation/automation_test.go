@@ -73,13 +73,13 @@ func TestHalvesOwnDisjointNamespaces(t *testing.T) {
 			t.Errorf("namespace %q is advertised by BOTH halves — a shared owner means one half's full sync retracts the other's entities (ADR-0042/0127 D1)", ns)
 		}
 	}
-	if len(c) != 7 {
-		t.Errorf("controller advertises %d contracts, want 7 (template/workflow/schedule/org/team/credential/user)", len(c))
+	if len(c) != 8 {
+		t.Errorf("controller advertises %d contracts, want 8 (template/workflow/schedule/org/team/credential/user/label)", len(c))
 	}
 	if len(n) != 4 {
 		t.Errorf("content advertises %d contracts, want 4 (playbook/role/collection/inventory)", len(n))
 	}
-	for _, ns := range []string{"ansible.template", "ansible.workflow", "ansible.schedule", "ansible.org", "ansible.team", "ansible.credential", "ansible.user"} {
+	for _, ns := range []string{"ansible.template", "ansible.workflow", "ansible.schedule", "ansible.org", "ansible.team", "ansible.credential", "ansible.user", "ansible.label"} {
 		if !c[ns] {
 			t.Errorf("controller half does not advertise %q", ns)
 		}

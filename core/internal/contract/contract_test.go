@@ -238,8 +238,10 @@ func TestPinsAreStable(t *testing.T) {
 	// and the pinned schema its write seam never had.
 	// +ansible.user (ADR-0130): AWX's local ACCOUNT table — deliberately not identity.subject,
 	// which has a single write-owner, and never read by authz (ADR-0079 INV-3).
-	if len(all) != 149 { // +ansible.input.v6 (ADR-0126 connection block)
-		t.Fatalf("expected 149 embedded documents, got %d", len(all))
+	// +ansible.label (ADR-0132): an AWX label is an Entity, because a plugin's label KEYS
+	// are a static grant allowlist and an AWX label name is only known at read time.
+	if len(all) != 150 { // +ansible.input.v6 (ADR-0126 connection block)
+		t.Fatalf("expected 150 embedded documents, got %d", len(all))
 	}
 	versions := map[string]int{}
 	for _, c := range all {

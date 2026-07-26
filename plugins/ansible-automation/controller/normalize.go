@@ -3,6 +3,7 @@ package controller
 import (
 	"encoding/json"
 	"fmt"
+	"sort"
 
 	pluginv1 "github.com/dstout-devops/stratt/sdk/stratt/plugin/v1"
 )
@@ -27,6 +28,11 @@ const (
 	// two systems of record, and this claims neither identity.subject nor identity.name
 	// (§2.1 single write-owner). NEVER read by authorization (ADR-0079 INV-3).
 	KindUser = "ansible.user"
+	// KindLabel is an AWX label — the operator's grouping vocabulary, as an ENTITY rather
+	// than a graph label key (ADR-0132 D1). Structural, not stylistic: a plugin's label
+	// keys are a STATIC grant allowlist registered per key (ADR-0041 single-owner), so a
+	// key only discovered by reading the Controller is ungrantable.
+	KindLabel = "ansible.label"
 
 	// schemePlaybook is the ansible-project Syncer's OWNED kind — referenced here only
 	// as a cross-source relation TARGET (the `runs` edge), never owned or written by AWX.
@@ -72,6 +78,7 @@ func (c *Client) Normalize(snap *Snapshot) ([]*pluginv1.ObservedEntity, error) {
 		}
 		rels := append(orgRel(jt.SummaryFields.Organization.ID), runsRel(jt)...)
 		rels = append(rels, c.credentialRels(jt)...)
+		rels = append(rels, c.labelRels(jt.SummaryFields.Labels)...)
 		out = append(out, &pluginv1.ObservedEntity{
 			Kind:         KindTemplate,
 			IdentityKeys: map[string]string{KindTemplate: c.qualify(jt.ID)},
@@ -111,13 +118,23 @@ func (c *Client) Normalize(snap *Snapshot) ([]*pluginv1.ObservedEntity, error) {
 			IdentityKeys: map[string]string{KindWorkflow: c.qualify(wf.ID)},
 			Labels:       labels(wf.Name, wf.SummaryFields.Organization.Name),
 			Facets:       map[string][]byte{KindWorkflow: facet},
-			Relations:    append(orgRel(wf.SummaryFields.Organization.ID), invokes...),
+			Relations: append(append(orgRel(wf.SummaryFields.Organization.ID), invokes...),
+				c.labelRels(wf.SummaryFields.Labels)...),
 		})
 	}
 
 	for _, sc := range snap.Schedules {
 		facet, err := json.Marshal(map[string]any{
 			"name": sc.Name, "rrule": sc.RRule, "enabled": sc.Enabled,
+			// When it runs. An rrule with no timezone is under-determined (ADR-0132 D3).
+			"timezone": sc.Timezone, "nextRunAt": sc.NextRun,
+			"dtStart": sc.DTStart, "until": sc.Until,
+			// KEY NAMES only — values never reach the graph (§2.5).
+			"extraDataKeys": extraDataKeys(sc.ExtraData),
+			// Per-schedule overrides: two schedules of one template are different things.
+			"jobType": sc.JobType, "limit": sc.Limit, "jobTags": sc.JobTags,
+			"skipTags": sc.SkipTags, "verbosity": sc.Verbosity, "diffMode": sc.DiffMode,
+			"forks": sc.Forks, "timeout": sc.Timeout, "scmBranch": sc.ScmBranch,
 		})
 		if err != nil {
 			return nil, err
@@ -167,6 +184,21 @@ func (c *Client) Normalize(snap *Snapshot) ([]*pluginv1.ObservedEntity, error) {
 			IdentityKeys: map[string]string{KindUser: c.qualify(u.ID)},
 			Labels:       labels(u.Username, ""),
 			Facets:       map[string][]byte{KindUser: facet},
+		})
+	}
+
+	for _, lb := range snap.Labels {
+		facet, err := json.Marshal(map[string]any{
+			"name": lb.Name, "org": lb.SummaryFields.Organization.Name,
+		})
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, &pluginv1.ObservedEntity{
+			Kind:         KindLabel,
+			IdentityKeys: map[string]string{KindLabel: c.qualify(lb.ID)},
+			Labels:       labels(lb.Name, lb.SummaryFields.Organization.Name),
+			Facets:       map[string][]byte{KindLabel: facet},
 		})
 	}
 
@@ -262,6 +294,40 @@ func (c *Client) addInvokes(rels *[]*pluginv1.ObservedRelation, seen map[string]
 	}
 	seen[key] = true
 	*rels = append(*rels, &pluginv1.ObservedRelation{Type: "invokes", ToScheme: scheme, ToValue: val})
+}
+
+// extraDataKeys returns a schedule's extra_data KEY NAMES, sorted for a stable facet.
+// The values are deliberately never touched (§2.5, ADR-0132 D3): this distinguishes two
+// schedules of one template and shows what a schedule parameterises, while carrying no
+// launch-variable content into the graph. A key like `db_password` is itself the signal —
+// secret-shaped material passed as a launch var should be a CredentialRef.
+func extraDataKeys(m map[string]json.RawMessage) []string {
+	if len(m) == 0 {
+		return []string{}
+	}
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// labelRels emits `--has-label-->` per associated label (ADR-0132 D1). The associations
+// ride summary_fields on an object already being read, so this costs no request. An edge
+// whose label the Controller did not also report as an object is dropped by the host (no
+// vivify) — the honest outcome rather than a stub.
+func (c *Client) labelRels(l labelList) []*pluginv1.ObservedRelation {
+	var out []*pluginv1.ObservedRelation
+	for _, lb := range l.Results {
+		if lb.ID == 0 {
+			continue
+		}
+		out = append(out, &pluginv1.ObservedRelation{
+			Type: "has-label", ToScheme: KindLabel, ToValue: c.qualify(lb.ID),
+		})
+	}
+	return out
 }
 
 // credentialRels emits `ansible.template --uses-credential--> ansible.credential` per

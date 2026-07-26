@@ -95,8 +95,14 @@ func clockClient(t *testing.T, url string, detail time.Duration, now *time.Time)
 	return c
 }
 
-// D1: the seven collections run every poll; the expensive per-object tier does not. The
-// second poll inside the detail interval must cost SEVEN requests and no more.
+// D1: the COLLECTIONS run every poll; the expensive per-object tier does not. The second
+// poll inside the detail interval must cost exactly the collection count and no more.
+//
+// collectionReads is asserted as a literal on purpose. Four ADRs have now added reads to
+// this sync, and this number moving is the signal that a fifth did — ADR-0131's whole
+// point is that the total has an owner. Bump it deliberately, never to make a test pass.
+const collectionReads = 8 // job_templates, workflow_jts, schedules, orgs, teams, credentials, users, labels
+
 func TestDetailTierIsNotReadEveryPoll(t *testing.T) {
 	awx := &countingAWX{}
 	srv := awx.server(t)
@@ -108,8 +114,8 @@ func TestDetailTierIsNotReadEveryPoll(t *testing.T) {
 	}
 	// First sync always reads detail — an empty cache is a miss, not a reason to project
 	// a workflow with no edges. 7 collections + 1 workflow + 1 team.
-	if got, want := awx.total(), 9; got != want {
-		t.Fatalf("first poll issued %d requests, want %d (7 collections + detail)", got, want)
+	if got, want := awx.total(), collectionReads+2; got != want {
+		t.Fatalf("first poll issued %d requests, want %d (%d collections + 1 workflow + 1 team of detail)", got, want, collectionReads)
 	}
 
 	awx.reset()
@@ -118,8 +124,8 @@ func TestDetailTierIsNotReadEveryPoll(t *testing.T) {
 	if err != nil {
 		t.Fatalf("second enumerate: %v", err)
 	}
-	if got := awx.total(); got != 7 {
-		t.Errorf("second poll issued %d requests, want 7 — the detail tier must be served from cache (ADR-0131 D1)", got)
+	if got := awx.total(); got != collectionReads {
+		t.Errorf("second poll issued %d requests, want %d — the detail tier must be served from cache (ADR-0131 D1)", got, collectionReads)
 	}
 	if awx.hits("workflow_nodes") != 0 {
 		t.Error("workflow nodes were re-read inside the detail interval")
