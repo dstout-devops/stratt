@@ -62,6 +62,24 @@ Facet predicates, `observe:` is a Facet namespace and path. Every one of those i
 The error is recorded rather than edited away, because it is the reason the decision below is about a
 missing seam rather than about packaging.
 
+### A premise this ADR drifted from, written down so the next reader does not
+
+**The AWX arc is a migration surface, not an integration.** Nine ADRs of `ansible.*` mirroring
+(ADR-0086, ADR-0127–0133) make AWX the most deeply modelled external system in the repo, and that
+depth reads like a partnership. It is not one. The charter is explicit: Stratt is _"the successor to
+AWX/AAP"_; the exodus is _"importer maps templates→Step presets … `/api/v2` façade keeps existing
+tooling alive **during cutover**,"_ with the import target _"frozen at 24.6.1 forever"_ (§6). AWX is
+frozen upstream — no releases since 24.6.1 (July 2024) — which is the market condition the whole
+thesis rests on.
+
+The endgame is that **the ansible plugin does everything AWX did and AWX is switched off.** The two
+existing surfaces serve that: the Syncer reads the estate in so it can be seen, `materialize/` imports
+it out into Stratt CaC. Neither makes AWX a dependency.
+
+This is written into an ADR about _plugin delivery_ because the drift is easy and this session made
+it: the moment you go looking for a second provider of a capability, AWX is sitting right there,
+already modelled, one Action from bindable. D4 is where that goes wrong, so it is answered there.
+
 ### Prior art
 
 - **Crossplane Configuration packages** are the closest analogue: an OCI package of Compositions +
@@ -145,56 +163,57 @@ The two are mutually exclusive on a route, refused at compile.
 This is what makes an example Blueprint shippable: with the remediation leg capability-shaped, every
 field in a Blueprint is provider-agnostic, and the estate supplies the binding.
 
-**The motivating case is migration, not aesthetics.** This is the path the project actually walks, and
-it is the strongest argument for the indirection:
+**A REJECTED motivating case, recorded because it was drafted and is wrong.** An earlier version of
+this section argued the payoff was an AWX bridge: bind `configmgmt → awx`, run remediation on AAP,
+migrate content, then rebind to the native Actuator. It reads well and it contradicts the charter.
+See D4 — Stratt is AWX's **successor**, and its exodus is _import + façade_, not proxy-execution.
 
-1. A Blueprint routes remediation to `configmgmt`.
-2. The estate binds `configmgmt → awx`. Remediation runs as an AWX job template, **on AAP, where the
-   automation already lives** — nothing has moved yet.
-3. Content migrates into Stratt projects, one at a time (ADR-0134).
-4. The estate rebinds `configmgmt → ansible-platform-baseline`. **One binding changes. No Blueprint is
-   edited, no Intent, no Assignment.**
+The real justification does not need AWX at all, and is stronger for it: a Blueprint whose remediation
+leg names a provider **cannot be shared**, which is D1's entire purpose. The indirection exists so an
+estate this project never sees can bring a provider this project never shipped, and consume the same
+Blueprint. That is the "pluggable everything" of §1.4 applied to the one edge of the intent layer that
+still hard-codes a name.
 
-A name-bound route makes step 4 a rewrite of every Blueprint that mentions the old Workflow. A
-capability-bound one makes it a one-line diff in a file whose whole job is to say which provider
-serves this environment. That is the same shape as the vSphere binding this repo already ships, and
-migration is precisely the moment an estate has two providers for one capability — the condition the
-class exists to express.
+### D4 — `configmgmt` as a capability class — and **AWX is not a provider of it**
 
-### D4 — `configmgmt` as a capability class, with its swappability stated honestly
+ADR-0104's rule is that a new class ships with its first provider. `ansible` is provider #1, and for
+now the only one: `plugins/{puppet,chef,salt}` are **Syncers** — no `Apply`, no `jobCommand`; they
+observe and never converge.
 
-ADR-0104's rule is that a new class ships with its first provider. `ansible` is provider #1.
+**The tempting mistake, named so nobody repeats it.** AWX/AAP looks like the obvious provider #2: this
+repo mirrors nine `ansible.*` namespaces, its job templates and credentials are Entities, ADR-0026
+ships a façade of its API. It is a config-management execution engine by definition, and it is one
+small Action — a launch — away from being bindable. An earlier draft of this ADR proposed exactly
+that, and built a migration story on top of it.
 
-**And provider #2 is already here — it just cannot be launched.** An earlier draft of this ADR wrote
-the gap as "`plugins/{puppet,chef,salt}` are Syncers only, so we need another config tool." That is
-true and it is the wrong gap. The obvious second `configmgmt` provider is **AWX/AAP**, which this repo
-already integrates deeply: `plugins/ansible-automation` mirrors nine `ansible.*` namespaces, its job
-templates, credentials and execution environments are Entities in the graph, and ADR-0026 ships a
-façade of its API. It is a config-management execution engine by definition.
+**It is wrong, and the charter says why.** Stratt is _"the successor to AWX/AAP"_ (§ Positioning), and
+the migration path is named: _"**AWX exodus:** importer maps templates→Step presets, inventories→Views,
+workflows→Workflows; `/api/v2` façade keeps existing tooling alive **during cutover**. The import
+target is **frozen at 24.6.1 forever**"_ (§6). Read that carefully — the exodus is **import + façade**:
+existing tooling keeps making AWX-shaped calls, but **Stratt executes**. A launch Action inverts it,
+leaving **AWX executing** with Stratt as a caller. That is not a bridge out; it is a supported
+integration with the product being replaced, and every estate that binds to it acquires a dependency
+this project intends to delete.
 
-What it lacks is **one Action**. The plugin is strictly read-only: a Syncer plus `materialize/`, which
-runs the _migration_ direction (AWX job template → Stratt CaC). `grep` for a launch path finds only
-comments about AWX's own schedules. So the honest statement is not "there is no second provider" but:
+AWX is already integrated in exactly the two directions replacement needs, and neither is a provider:
 
-> The second provider is integrated, trusted, and already projected. `configmgmt` becomes a real
-> two-provider class the day AWX gains a launch Action — and that Action is small, because everything
-> it needs to address a job template is already in the graph.
+- **Read in** — the Syncer mirrors the automation estate so it can be seen, audited, and reasoned about.
+- **Import** — `materialize/` converts a job template into Stratt CaC. That is the exodus direction.
 
-**Launching does not breach the mirror's boundary**, and the boundary's own wording is the argument:
-strattd states the rule as _"§1.2 — AAP stays SoR and keeps executing; the mirror never converts an
-already-observed object to Stratt-managed."_ Launching a job template **invokes** an object; it does
-not **convert** one. AAP remains the system of record, keeps executing, and keeps owning the
-definition — which is not merely permitted by that sentence but assumed by it. The rule that must
-survive is the no-conversion rule, and a launch Action does not touch it.
+The endgame is that **the ansible plugin does everything AWX did**, and AWX is switched off. Nothing in
+this ADR should make that harder, so the launch Action is **withdrawn, not booked**. The `configmgmt`
+seam does not depend on it.
 
-**That Action is NOT decided here.** It needs its own argument — idempotency, how a launched job's
-events reach the Run stream, whether a Stratt-launched job is distinguishable in AWX's own audit —
-and folding it in would repeat the mistake the ownership study warns about. This ADR books it as
-`configmgmt`'s second provider and stops there.
+**Which leaves `configmgmt` justified on its own terms, and it is:**
 
-So the honest reading: this buys **structure now, with a named and reachable second provider** rather
-than a hypothetical one. Until that Action lands, D3's indirection resolves to a single answer, which
-is exactly why `remediationWorkflow` is kept.
+1. **Blueprint shareability (D1's whole purpose).** A remediation leg that names a Workflow names an
+   Actuator names a project — an example whose most important field every adopter must rewrite.
+2. **Downstream pluggability.** The charter's thesis is that every tool is a plugin. An estate this
+   project never sees may bring a puppet or chef Actuator; the class is what lets it consume a
+   Blueprint unchanged. The class exists so **others can plug in**, not so we can swap.
+
+Neither reason requires a second provider to exist in this repo, which is the honest position: the
+indirection resolves to one answer today, and that is precisely why `remediationWorkflow` is kept (D3).
 
 ### D5 — Two kinds of proof, and they are not the same artifact
 
@@ -224,11 +243,13 @@ plugin per scenario, none of them exercising the spine.
 - **Examples are copied, not installed**, so adopting a plugin costs a review. Deliberate: the copy is
   where authority is granted, and a one-click install would be the Argo `.spec.project` circumvention
   wearing a vendor badge.
-- **Migration stops being a rewrite.** Binding `configmgmt → awx`, migrating content, then rebinding to
-  the native Actuator is a one-line diff instead of an edit to every Blueprint naming the old Workflow.
-  This is the consequence that pays for the whole decision.
-- **`configmgmt` has one LAUNCHABLE provider today**, so D3's indirection resolves to a single answer
-  until AWX gains a launch Action. Real, and the reason `remediationWorkflow` is kept.
+- **`configmgmt` has exactly one provider, and no second is planned in this repo.** D3's indirection
+  therefore resolves to a single answer today — real, and the reason `remediationWorkflow` is kept. The
+  class earns its place from shareability and downstream pluggability (D4), not from a swap we intend
+  to perform.
+- **AWX gains nothing here, deliberately.** No launch Action, no binding, no dependency an estate could
+  acquire on a product this project is the successor to. The AWX surfaces stay what the charter's
+  exodus makes them: read-in and import.
 - **`remediates` is keyed by Intent kind, which is coarser than a route.** Co-management is covered
   (routes disambiguate by capability), but two same-capability routes on one Intent kind collapse to
   one Workflow. The escape hatch covers it; if that case turns out to be common, the keying is the
@@ -261,10 +282,12 @@ plugin per scenario, none of them exercising the spine.
   can CONVERGE; a Facet is what a route OBSERVES to detect drift. Keying the provider by the observer's
   concern makes every provider re-declare itself per Facet, and breaks the symmetry with `provisions`
   that lets `capability.Resolve` be reused unchanged.
-- **Decide AWX's launch Action here.** Tempting, since it is what makes `configmgmt` real. Rejected:
-  idempotency, event forwarding into the Run stream, and whether a Stratt-launched job is
-  distinguishable in AWX's own audit are each their own argument — exactly the folding the ownership
-  study warns against. Booked, not decided.
+- **Make AWX `configmgmt` provider #2 via a launch Action.** Drafted in an earlier version of this ADR
+  and **withdrawn**, which is why it is recorded here rather than deleted. It is one small Action away,
+  it would make the class demonstrably multi-provider, and it is the wrong direction: the charter's
+  exodus is import + façade — _Stratt executes_ — while a launch Action leaves _AWX executing_ with
+  Stratt as its caller. Every estate that bound to it would acquire a dependency on the product this
+  project exists to succeed. The seam does not need it, so it is not built.
 - **Fold this into ownership-study (B).** Rejected on the study's own instruction — _"each needs its
   own argument; none should be folded into another."_ (B) decides publication; this decides what may be
   published at all.
@@ -292,9 +315,9 @@ In dependency order, and deliberately not begun: this is a decision to argue wit
 - **Do not let an example become a declaration by being in the wrong directory.** `ParseDir` walks
   named subdirectories; examples must live where it never looks (ADR-0134 proved this property for
   `estate/ansible/`).
-- **`configmgmt` has one LAUNCHABLE provider.** Do not write tests or docs implying a swap that cannot
-  currently be demonstrated. The second provider (AWX) is named and reachable, but until its launch
-  Action lands the indirection has one answer.
+- **`configmgmt` has one provider.** Do not write tests or docs implying a swap that cannot currently
+  be demonstrated, and do not reach for AWX to manufacture one — see D4. The indirection has one answer
+  today and that is fine; it is there so an estate outside this repo can supply the second.
 - **A rebind must recompile.** Changing a capability-binding changes what a Finding offers as its
   remediation. If the compile cadence does not notice a binding change, an estate rebinds and the
   Baselines keep offering the old provider's Workflow — the silent-stale failure §1.8 exists to
