@@ -16,9 +16,9 @@ graph TD
   authz_identity["authz-identity<br/><small>0009 0028 0035 0079 0101 0122<br/>0130</small>"]
   capability_framework["capability-framework<br/><small>0100 0104 0105 0106 0107 0110<br/>0111 0112 0113 0114 0135</small>"]
   certificates_pki["certificates-pki<br/><small>0030 0043 0050 0098 0106</small>"]
-  connectors["connectors<br/><small>0007 0014 0025 0026 0037 0038<br/>0039 0045 0086 0087 0088 0089<br/>0095 0097 0099 0113 0114 0115<br/>0127 0128 0129 0130 0131 0132<br/>0133</small>"]
+  connectors["connectors<br/><small>0007 0014 0025 0026 0037 0038<br/>0039 0045 0086 0087 0088 0089<br/>0095 0097 0099 0113 0114 0115<br/>0127 0128 0129 0130 0131 0132<br/>0133 0136</small>"]
   credentials_secrets["credentials-secrets<br/><small>0009 0029 0052 0094 0098 0099<br/>0100 0106 0125 0126</small>"]
-  estate_as_code["estate-as-code<br/><small>0055 0056 0057 0103 0113 0116<br/>0118 0119 0120 0122 0123 0132<br/>0134 0135</small>"]
+  estate_as_code["estate-as-code<br/><small>0055 0056 0057 0103 0113 0116<br/>0118 0119 0120 0122 0123 0132<br/>0134 0135 0136</small>"]
   findings_drift["findings-drift<br/><small>0019 0020 0033 0043 0080 0085<br/>0128 0129 0130 0133</small>"]
   foundation["foundation<br/><small>0001 0002 0004 0005 0006 0008<br/>0108 0109 0116</small>"]
   graph_model["graph-model<br/><small>0015 0017 0041 0042 0059 0060<br/>0079 0080 0081 0082 0084 0085<br/>0096 0114 0115 0119 0120 0123<br/>0126 0127 0128 0129 0130 0132<br/>0133</small>"]
@@ -195,6 +195,7 @@ Connectors & Syncers — SoR ingest breadth, the Syncer SDK, adopt/AWX-import.
 - [ADR-0131](0131-controller-poll-cost-budget.md) — A poll-cost budget for the AAP Controller half: tiered cadence, and a partial read degrades instead of failing
 - [ADR-0132](0132-awx-labels-and-schedule-shape.md) — Two "mechanical" projection gaps that were not: AWX labels, and what a schedule actually runs
 - [ADR-0133](0133-execution-environments-and-instance-groups.md) — An AWX execution environment is a supply-chain fact; an instance group is a placement model we already have
+- [ADR-0136](0136-superseded-versus-driven.md) — Superseded, not integrated: which external systems are terminal and which are forever
 
 ### credentials-secrets
 
@@ -233,6 +234,7 @@ Estate-as-Code — CaC declarations, environments, composition, the estate CLI.
 - [ADR-0132](0132-awx-labels-and-schedule-shape.md) — Two "mechanical" projection gaps that were not: AWX labels, and what a schedule actually runs
 - [ADR-0134](0134-tool-content-lives-beside-the-estate.md) — A playbook is a playbook: tool content lives beside the estate, not inside a declaration
 - [ADR-0135](0135-a-plugin-ships-examples-not-declarations.md) — A plugin ships examples and conformance, never declarations; and remediation binds to a capability, not a name
+- [ADR-0136](0136-superseded-versus-driven.md) — Superseded, not integrated: which external systems are terminal and which are forever
 
 ### findings-drift
 
@@ -584,3 +586,4 @@ UI — React shell, schema-driven rendering, Views, descent, the first-party cli
 | [0133](0133-execution-environments-and-instance-groups.md) | actuators, connectors, findings-drift, graph-model |
 | [0134](0134-tool-content-lives-beside-the-estate.md) | actuators, estate-as-code, orchestration |
 | [0135](0135-a-plugin-ships-examples-not-declarations.md) | actuators, capability-framework, estate-as-code |
+| [0136](0136-superseded-versus-driven.md) | connectors, estate-as-code |
