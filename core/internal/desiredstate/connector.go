@@ -350,6 +350,30 @@ func ValidateActuator(a types.Actuator) error {
 	if err := validateContentDir(a.Name, a.ContentDir); err != nil {
 		return err
 	}
+	// A capability PROVIDER must be dial-addressed, because verification fetches its
+	// Manifest over that address (connectorregistry.verifyProvider) and capability
+	// resolution counts only VERIFIED providers. An EE-Job Actuator has no address by
+	// construction — ansible is subprocess-only because of the GPLv3 boundary (§3) — so
+	// its `provides` is permanently unverifiable: advertised, never counted, and reported
+	// nowhere except a WARN every ten seconds. The same half-declaration defect the three
+	// checks above refuse, and refused here for the same reason.
+	//
+	// This is not hypothetical. ADR-0135 D2/D3 shipped exactly this on the ansible
+	// Actuator, and three Assignments stopped compiling on every real floor while every
+	// unit test passed — the tests resolve through a fake, so nothing could see that no
+	// provider is ever verified. It took booting a cluster to find. Refusing it HERE moves
+	// that discovery from a live floor's logs to the diff that causes it (§1.8).
+	//
+	// The limitation is real and booked, not permanent: making dial-less providers
+	// verifiable is ADR-0104 D1's hardening (ADR-0138 D5). When it lands, this check is
+	// what must change — do not weaken it to make a declaration pass.
+	if len(a.Provides) > 0 && a.Address == "" {
+		return fmt.Errorf("actuator %q: declares provides %v but has no address — a capability provider is "+
+			"verified by fetching its Manifest over its dial address, so an EE-Job (jobCommand) Actuator can "+
+			"never be counted as a provider and every route naming one of these classes would fail to resolve "+
+			"at compile time on a live floor (ADR-0138 D5; making dial-less providers verifiable is ADR-0104 D1's "+
+			"booked hardening)", a.Name, a.Provides)
+	}
 	if err := validateCapabilities(a.Name, a.Provides, a.Requires); err != nil {
 		return err
 	}

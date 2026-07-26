@@ -12,11 +12,18 @@ import (
 
 // capEstate writes an estate whose Blueprint route remediates via a capability, with `provider`
 // declaring `provides` + `remediates` as given. Empty strings omit the field.
+//
+// The provider is DIAL-ADDRESSED, not EE-Job, and that is load-bearing rather than
+// incidental: a capability provider is verified by fetching its Manifest over its address,
+// so an EE-Job Actuator can never be counted as one (ADR-0138 D5) and these fixtures used to
+// declare exactly that impossible shape. They passed anyway, because they resolve through a
+// fake resolver — which is how the defect reached a live floor. Do not "simplify" this back
+// to jobCommand: the declaration check now refuses it, correctly.
 func capEstate(t *testing.T, routeExtra, provides, remediates string) string {
 	t.Helper()
 	root := t.TempDir()
 	writeDecl(t, root, "v.yaml", "name: hosts\nselector: {kinds: [host]}\n")
-	act := "name: cm\npluginIdentity: ansible\njobCommand: [stratt-ansible]\n"
+	act := "name: cm\npluginIdentity: ansible\naddress: stratt-ansible:9090\n"
 	if provides != "" {
 		act += "provides: [" + provides + "]\n"
 	}
@@ -92,9 +99,9 @@ func TestCapabilityRoutedParamsCheckedAgainstEveryCandidate(t *testing.T) {
 	writeDecl(t, root, "v.yaml", "name: hosts\nselector: {kinds: [host]}\n")
 	// Two providers of the same class for the same kind; only ONE declares the input.
 	writeKind(t, root, "actuators", "a1.yaml",
-		"name: cm-a\npluginIdentity: ansible\njobCommand: [stratt-ansible]\nprovides: [configmgmt]\nremediates:\n  Application: converge-a\n")
+		"name: cm-a\npluginIdentity: ansible\naddress: stratt-a:9090\nprovides: [configmgmt]\nremediates:\n  Application: converge-a\n")
 	writeKind(t, root, "actuators", "a2.yaml",
-		"name: cm-b\npluginIdentity: ansible\njobCommand: [stratt-ansible]\nprovides: [configmgmt]\nremediates:\n  Application: converge-b\n")
+		"name: cm-b\npluginIdentity: ansible\naddress: stratt-b:9090\nprovides: [configmgmt]\nremediates:\n  Application: converge-b\n")
 	writeKind(t, root, "workflows", "converge-a.yaml",
 		"name: converge-a\ninputs:\n  type: object\n  additionalProperties: false\n  properties:\n    port: {type: string}\nsteps:\n  - name: go\n    viewName: hosts\n    actuator: cm-a\n    params: {}\n")
 	// converge-b does NOT declare `port`.
