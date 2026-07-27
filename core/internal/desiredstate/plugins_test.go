@@ -187,9 +187,25 @@ func TestStagedEstateParses(t *testing.T) {
 	if err != nil {
 		t.Fatalf("the STAGED estate must parse exactly as the daemon reads it: %v", err)
 	}
-	// And the vendored plugin actually arrived — a staging step that copied
-	// plugins.yaml but not the estates would parse only if it also failed, so
-	// assert presence rather than trusting the absence of an error.
+	// And the vendored plugin actually arrived — a staging step that copied plugins.yaml but not
+	// the estates would parse only if it also failed, so assert presence rather than trusting the
+	// absence of an error.
+	//
+	// ONLY for a FULL-estate staging, though. `dev:stage-estate` and every `demo:<name>:stage`
+	// write to the same git-ignored path, so whichever ran last is what sits there — and a demo
+	// estate legitimately has no ansible-platform-baseline. Asserting it unconditionally made this
+	// test fail for anyone whose last command was `task demo:app-cert:run`, with a diagnostic
+	// pointing at vendoring rather than at the leftover staging that actually caused it. A gate
+	// that goes red for a reason unrelated to your change is a gate people learn to ignore.
+	//
+	// The PARSE assertion above still applies to EVERY staged tree, which is where the value is:
+	// it is what caught a demo staging that never vendored its contractsOnly admission, while
+	// `task ci` was otherwise green and the daemon CrashLooped in-cluster.
+	if !stagedIsFullEstate(t, staged) {
+		t.Log("staged tree is a demo estate, not the full one — parse asserted, vendored-content " +
+			"assertion skipped (run `task dev:stage-estate` to cover it)")
+		return
+	}
 	var found bool
 	for _, a := range decls.Actuators {
 		if a.Name == "ansible-platform-baseline" && len(a.Content) > 0 {
@@ -199,4 +215,36 @@ func TestStagedEstateParses(t *testing.T) {
 	if !found {
 		t.Error("the staged tree must carry the vendored plugin estate, content and all")
 	}
+}
+
+// stagedIsFullEstate reports whether the staged tree came from `dev:stage-estate` rather than a
+// demo's own staging, by comparing its admitted plugin set against the reference estate's.
+//
+// Compared rather than pattern-matched on a marker file: the admission list IS what distinguishes
+// them, so a new demo needs no update here, and a demo that grew to admit everything would be
+// treated as full staging — which for this assertion's purpose it is.
+func stagedIsFullEstate(t *testing.T, staged string) bool {
+	t.Helper()
+	admitted := func(root string) map[string]bool {
+		out := map[string]bool{}
+		dirs, err := admittedPluginDirs(root)
+		if err != nil {
+			return out
+		}
+		for _, d := range dirs {
+			out[d.name] = true
+		}
+		return out
+	}
+	ref := admitted(filepath.Join("..", "..", "..", "estate"))
+	if len(ref) == 0 {
+		return false // no reference to compare against; treat as not-full and skip
+	}
+	got := admitted(staged)
+	for name := range ref {
+		if !got[name] {
+			return false
+		}
+	}
+	return true
 }
