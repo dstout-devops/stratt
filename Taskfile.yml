@@ -623,6 +623,23 @@ tasks:
     cmds:
       - deploy/dev/netbox-bootstrap.sh
 
+  dev:vspheresim:guest-image:
+    # The guest OS. vspheresim gives every VM a real container, which makes a
+    # provisioned VM REACHABLE — but a base image answers no port, so the coordinate
+    # led to a host that could be named and never logged into. This image is sshd plus
+    # python3: the reach path, and what a configuration tool needs on the far side.
+    #
+    # Built rather than pulled because the authorized key is the harness's, and
+    # because an image assembled at boot (apk add in an entrypoint) would make every
+    # guest's readiness depend on network egress from inside the guest.
+    desc: "Build the vspheresim guest image — sshd + python3, keyed to the dev machine credential"
+    deps: [dev:machine-key]
+    vars:
+      GUEST_IMAGE: '{{.GUEST_IMAGE | default "stratt/vspheresim-guest:dev"}}'
+      KEYDIR: "{{.ROOT_DIR}}/deploy/dev/managed-web"
+    cmds:
+      - docker build -q --build-arg AUTHORIZED_KEY="$(cat {{.KEYDIR}}/id_ed25519.pub)" -t {{.GUEST_IMAGE}} {{.ROOT_DIR}}/plugins/vcenter/cmd/vspheresim/guestimage
+
   dev:vspheresim:up:
     # vspheresim (plugins/vcenter/cmd/vspheresim) — a vCenter API whose VMs have REAL
     # container guests, so provision→configure can be exercised on vSphere at all.
@@ -634,28 +651,48 @@ tasks:
     # NAME rather than an address — the branch ADR-0143 D1 prefers, and one that would
     # otherwise never be exercised because docker defaults a container's hostname to
     # its own id.
+    #
+    # A USER-DEFINED docker network is load-bearing, not tidiness. Docker's embedded
+    # DNS serves only user-defined networks, and it is what resolves that name; on the
+    # default bridge the guests would be reachable by address and the published
+    # coordinate would resolve nowhere. That is the harness standing in for the DNS a
+    # real estate has, and it is why the reach proof runs from a peer ON the network.
     desc: "Run vspheresim on :8989 — a vCenter API with real container-backed guests"
+    deps: [dev:vspheresim:guest-image]
     vars:
-      GUEST_IMAGE: '{{.GUEST_IMAGE | default "public.ecr.aws/docker/library/alpine:latest"}}'
+      GUEST_IMAGE: '{{.GUEST_IMAGE | default "stratt/vspheresim-guest:dev"}}'
+      GUEST_NETWORK: '{{.GUEST_NETWORK | default "vspheresim"}}'
       DOMAIN: '{{.DOMAIN | default "dev.stratt.test"}}'
       LISTEN: '{{.LISTEN | default "127.0.0.1:8989"}}'
     cmds:
+      - docker network inspect {{.GUEST_NETWORK}} >/dev/null 2>&1 || docker network create {{.GUEST_NETWORK}}
       - |
         set -eu
         cd {{.ROOT_DIR}}/plugins/vcenter
+        # -guest-args is emptied deliberately: its default keeps a bare base image
+        # alive, and this image's own entrypoint IS the guest's init.
         go run ./cmd/vspheresim \
           -listen {{.LISTEN}} \
           -guest-image {{.GUEST_IMAGE}} \
+          -guest-network {{.GUEST_NETWORK}} \
+          -guest-args "" \
           -guest-domain {{.DOMAIN}}
 
   dev:vspheresim:proof:
-    # The provision→observe→reach chain end to end: create a VM through the real
-    # vcenter/create-vm Action with ordinary vSphere params, then poll Observe until
-    # mgmt.address appears — and assert it is a NAME. Needs dev:vspheresim:up running.
-    desc: "Prove provision→reach against vspheresim (needs dev:vspheresim:up)"
+    # The whole chain end to end: create a VM through the real vcenter/create-vm Action
+    # with ordinary vSphere params, poll Observe until mgmt.address appears, assert it
+    # is a NAME — and then USE it: reach the guest at that coordinate and execute.
+    # Needs dev:vspheresim:up running.
+    desc: "Prove provision→reach→execute against vspheresim (needs dev:vspheresim:up)"
     dir: plugins/vcenter
     env:
       VSPHERESIM_URL: '{{.VSPHERESIM_URL | default "http://127.0.0.1:8989/sdk"}}'
+      # Set together with the URL so the converge half is never quietly skipped: a
+      # reach proof that passes while nothing was executed is the failure mode this
+      # target exists to close.
+      VSPHERESIM_GUEST_NETWORK: '{{.GUEST_NETWORK | default "vspheresim"}}'
+      VSPHERESIM_GUEST_IMAGE: '{{.GUEST_IMAGE | default "stratt/vspheresim-guest:dev"}}'
+      VSPHERESIM_GUEST_KEY: "{{.ROOT_DIR}}/deploy/dev/managed-web/id_ed25519"
     cmds:
       - go test ./ -run LiveVsphereSim -v -count=1
 
@@ -983,18 +1020,33 @@ tasks:
       - mkdir -p {{.ROOT_DIR}}/deploy/charts/stratt/dev/declarations
       - cp -R {{.ROOT_DIR}}/deploy/dev/genesis-estate/. {{.ROOT_DIR}}/deploy/charts/stratt/dev/declarations/
 
+  dev:machine-key:
+    # The ONE dev machine credential, generated once and shared by every managed node
+    # in the harness — the in-cluster managed-web deployment and vspheresim's guests
+    # alike. Deliberately one keypair and not two: the same CredentialRef then reaches
+    # a DECLARED host and a PROVISIONED VM on a different substrate, which is the
+    # property worth having, and a second keypair would let those two paths drift into
+    # working for different reasons.
+    #
+    # A throwaway ed25519 pair: the PRIVATE half rides the web-machine CredentialRef
+    # (Secret web-machine-creds); the PUBLIC half becomes each node's authorized_keys.
+    # Material is git-ignored and never committed (§2.5).
+    desc: Generate the shared dev SSH machine keypair (idempotent, git-ignored)
+    vars:
+      KEYDIR: "{{.ROOT_DIR}}/deploy/dev/managed-web"
+    status:
+      - test -f {{.KEYDIR}}/id_ed25519
+    cmds:
+      - mkdir -p {{.KEYDIR}}
+      - ssh-keygen -t ed25519 -N "" -C stratt-web-machine -f {{.KEYDIR}}/id_ed25519
+
   dev:managed-web:up:
     desc: Deploy the REAL sshd/nginx managed node for the ADR-0084 convergence demo (keypair + machine-credential Secret + node, idempotent)
-    deps: [tools:kubectl]
+    deps: [tools:kubectl, dev:machine-key]
     vars:
       KEYDIR: "{{.ROOT_DIR}}/deploy/dev/managed-web"
     cmds:
       - go run sigs.k8s.io/kind@v{{.KIND_VER}} export kubeconfig --name {{.KIND_CLUSTER}}
-      # A throwaway ed25519 keypair (idempotent): the PRIVATE half rides the
-      # web-machine CredentialRef (Secret web-machine-creds); the PUBLIC half is the
-      # node's authorized_keys. Material is git-ignored, never committed (§2.5).
-      - mkdir -p {{.KEYDIR}}
-      - test -f {{.KEYDIR}}/id_ed25519 || ssh-keygen -t ed25519 -N "" -C stratt-web-machine -f {{.KEYDIR}}/id_ed25519
       # The machine credential the remediation Step use-checks + mounts (§2.5).
       - "{{.KUBECTL}} --context {{.KIND_CONTEXT}} -n stratt create secret generic web-machine-creds --from-file=ssh-privatekey={{.KEYDIR}}/id_ed25519 --dry-run=client -o yaml | {{.KUBECTL}} --context {{.KIND_CONTEXT}} apply -f -"
       # The node's authorized_keys (the public half).
