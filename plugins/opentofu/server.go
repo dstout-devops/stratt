@@ -23,6 +23,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
+	"github.com/dstout-devops/stratt/sdk/pluginserve"
 	pluginv1 "github.com/dstout-devops/stratt/sdk/stratt/plugin/v1"
 )
 
@@ -172,7 +173,7 @@ func (s *Server) Apply(req *pluginv1.ApplyRequest, stream grpc.ServerStreamingSe
 	ipam := req.GetResolvedCapabilities()["ipam"]               // ADR-0111/0112: nil ⇒ no injected CIDR
 	p, dir, env, varFile, err := s.prepare(req.GetDesired().GetBytes(), stateBackend, ipam)
 	if err != nil {
-		return sendApplyTerminal(stream, false, pluginv1.ItemResult_STATUS_FAILED, err.Error(), 1)
+		return pluginserve.ApplyTerminal(stream, false, pluginv1.ItemResult_STATUS_FAILED, err.Error())
 	}
 	if varFile != "" {
 		defer os.Remove(varFile)
@@ -185,9 +186,9 @@ func (s *Server) Apply(req *pluginv1.ApplyRequest, stream grpc.ServerStreamingSe
 
 	// tofu init.
 	if _, rc, ierr := s.run.run(ctx, dir, env, s.initArgs(p.Workspace, stateBackend), stream0); ierr != nil {
-		return sendApplyTerminal(stream, false, pluginv1.ItemResult_STATUS_FAILED, "init: "+ierr.Error(), next())
+		return pluginserve.ApplyTerminal(stream, false, pluginv1.ItemResult_STATUS_FAILED, "init: "+ierr.Error())
 	} else if rc != 0 {
-		return sendApplyTerminal(stream, false, pluginv1.ItemResult_STATUS_FAILED, "tofu init failed", next())
+		return pluginserve.ApplyTerminal(stream, false, pluginv1.ItemResult_STATUS_FAILED, "tofu init failed")
 	}
 
 	// tofu apply (or plan, for a streaming dry-run).
@@ -214,12 +215,12 @@ func (s *Server) Apply(req *pluginv1.ApplyRequest, stream grpc.ServerStreamingSe
 		if ref := req.GetPlanRef().GetSha256(); ref != "" {
 			sum := sha256.Sum256(req.GetPinnedPlan())
 			if hex.EncodeToString(sum[:]) != ref {
-				return sendApplyTerminal(stream, false, pluginv1.ItemResult_STATUS_FAILED, "pinned plan bytes do not match plan_ref sha256", next())
+				return pluginserve.ApplyTerminal(stream, false, pluginv1.ItemResult_STATUS_FAILED, "pinned plan bytes do not match plan_ref sha256")
 			}
 		}
 		planPath := filepath.Join(dir, ".terraform", "stratt-pinned.tfplan")
 		if werr := os.WriteFile(planPath, req.GetPinnedPlan(), 0o600); werr != nil {
-			return sendApplyTerminal(stream, false, pluginv1.ItemResult_STATUS_FAILED, "write pinned plan: "+werr.Error(), next())
+			return pluginserve.ApplyTerminal(stream, false, pluginv1.ItemResult_STATUS_FAILED, "write pinned plan: "+werr.Error())
 		}
 		defer os.Remove(planPath)
 		args = []string{"apply", "-input=false", "-no-color", "-json", planPath}
@@ -228,7 +229,7 @@ func (s *Server) Apply(req *pluginv1.ApplyRequest, stream grpc.ServerStreamingSe
 	}
 	_, rc, rerr := s.run.run(ctx, dir, env, args, onLine)
 	if rerr != nil {
-		return sendApplyTerminal(stream, false, pluginv1.ItemResult_STATUS_FAILED, rerr.Error(), next())
+		return pluginserve.ApplyTerminal(stream, false, pluginv1.ItemResult_STATUS_FAILED, rerr.Error())
 	}
 
 	// A successful real apply: lift outputs → write-back + rung-2 DerivedContract.
@@ -238,7 +239,7 @@ func (s *Server) Apply(req *pluginv1.ApplyRequest, stream grpc.ServerStreamingSe
 			ents, schema, perr := outputsToWire(outRaw)
 			if perr != nil {
 				// A malformed reserved output fails the Run visibly (§1.8).
-				return sendApplyTerminal(stream, false, pluginv1.ItemResult_STATUS_FAILED, perr.Error(), next())
+				return pluginserve.ApplyTerminal(stream, false, pluginv1.ItemResult_STATUS_FAILED, perr.Error())
 			}
 			resp := &pluginv1.ApplyResponse{
 				Event:     &pluginv1.TaskEvent{Level: pluginv1.TaskEvent_LEVEL_INFO, Message: "outputs", At: timestamppb.Now(), Fields: map[string]string{"kind": "outputs"}},
@@ -267,7 +268,7 @@ func (s *Server) Apply(req *pluginv1.ApplyRequest, stream grpc.ServerStreamingSe
 	case changed:
 		status = pluginv1.ItemResult_STATUS_CHANGED
 	}
-	return sendApplyTerminal(stream, rc == 0, status, fmt.Sprintf("tofu finished rc=%d", rc), next())
+	return pluginserve.ApplyTerminal(stream, rc == 0, status, fmt.Sprintf("tofu finished rc=%d", rc))
 }
 
 // Plan is the canonical producer of the hash-pinned saved plan (ADR-0047 §7/§8):
@@ -342,16 +343,6 @@ func varFileArg(varFile string) []string {
 		return nil
 	}
 	return []string{"-var-file=" + varFile}
-}
-
-// sendApplyTerminal emits the single terminal ApplyResponse (event.terminal + the
-// workspace-root ItemResult). ok is advisory — the host folds Succeeded core-side
-// from the ItemResult status (ADR-0047 §6, guardian fix #3).
-func sendApplyTerminal(stream grpc.ServerStreamingServer[pluginv1.ApplyResponse], ok bool, status pluginv1.ItemResult_Status, msg string, seq int64) error {
-	return stream.Send(&pluginv1.ApplyResponse{
-		Event:  &pluginv1.TaskEvent{Terminal: true, Ok: ok, At: timestamppb.Now(), Message: msg, Fields: map[string]string{"kind": "finished"}},
-		Result: &pluginv1.ItemResult{ItemKey: "", Status: status},
-	})
 }
 
 // planHasChanges reports whether a `tofu show -json` plan has any resource change

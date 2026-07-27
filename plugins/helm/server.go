@@ -26,6 +26,7 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
+	"github.com/dstout-devops/stratt/sdk/pluginserve"
 	pluginv1 "github.com/dstout-devops/stratt/sdk/stratt/plugin/v1"
 )
 
@@ -207,7 +208,7 @@ func (s *Server) Apply(req *pluginv1.ApplyRequest, stream grpc.ServerStreamingSe
 	ctx := stream.Context()
 	p, tail, env, valuesFile, err := s.prepare(req.GetDesired().GetBytes())
 	if err != nil {
-		return sendApplyTerminal(stream, false, pluginv1.ItemResult_STATUS_FAILED, err.Error(), 1)
+		return pluginserve.ApplyTerminal(stream, false, pluginv1.ItemResult_STATUS_FAILED, err.Error())
 	}
 	if valuesFile != "" {
 		defer os.Remove(valuesFile)
@@ -222,7 +223,7 @@ func (s *Server) Apply(req *pluginv1.ApplyRequest, stream grpc.ServerStreamingSe
 
 	_, rc, rerr := s.run.run(ctx, "", env, upgradeArgs(tail, p.CreateNamespace, req.GetDryRun()), onLine)
 	if rerr != nil {
-		return sendApplyTerminal(stream, false, pluginv1.ItemResult_STATUS_FAILED, rerr.Error(), next())
+		return pluginserve.ApplyTerminal(stream, false, pluginv1.ItemResult_STATUS_FAILED, rerr.Error())
 	}
 
 	// Terminal fold (statuses only escalate — §1.8): rc≠0 → failed; a real apply that
@@ -238,17 +239,7 @@ func (s *Server) Apply(req *pluginv1.ApplyRequest, stream grpc.ServerStreamingSe
 	if req.GetDryRun() {
 		verb = "dry-run"
 	}
-	return sendApplyTerminal(stream, rc == 0, status, fmt.Sprintf("helm %s finished rc=%d", verb, rc), next())
-}
-
-// sendApplyTerminal emits the single terminal ApplyResponse (event.terminal + the
-// release-root ItemResult). ok is advisory — the host folds Succeeded core-side from
-// the ItemResult status (ADR-0047 §6).
-func sendApplyTerminal(stream grpc.ServerStreamingServer[pluginv1.ApplyResponse], ok bool, status pluginv1.ItemResult_Status, msg string, seq int64) error {
-	return stream.Send(&pluginv1.ApplyResponse{
-		Event:  &pluginv1.TaskEvent{Terminal: true, Ok: ok, At: timestamppb.Now(), Message: msg, Fields: map[string]string{"kind": "finished"}},
-		Result: &pluginv1.ItemResult{ItemKey: "", Status: status},
-	})
+	return pluginserve.ApplyTerminal(stream, rc == 0, status, fmt.Sprintf("helm %s finished rc=%d", verb, rc))
 }
 
 // upgradeArgs builds the `helm upgrade --install` argument list shared by the Apply

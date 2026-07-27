@@ -6,42 +6,21 @@
 package main
 
 import (
-	"log/slog"
-	"net"
 	"os"
 
-	"google.golang.org/grpc"
-
 	"github.com/dstout-devops/stratt/plugins/helm"
-	pluginv1 "github.com/dstout-devops/stratt/sdk/stratt/plugin/v1"
+	"github.com/dstout-devops/stratt/sdk/pluginserve"
 )
 
 func main() {
-	log := slog.New(slog.NewTextHandler(os.Stderr, nil))
 	cfg := helm.Config{
-		PluginID:  env("STRATT_PLUGIN_ID", "helm"),
-		HelmBin:   env("STRATT_HELM_BIN", "helm"),
+		PluginID:  pluginserve.Env("STRATT_PLUGIN_ID", "helm"),
+		HelmBin:   pluginserve.Env("STRATT_HELM_BIN", "helm"),
 		ChartRoot: os.Getenv("STRATT_HELM_CHART_ROOT"),
 	}
-	addr := env("STRATT_PLUGIN_LISTEN", ":9090")
-
-	lis, err := net.Listen("tcp", addr)
-	if err != nil {
-		log.Error("listen", "addr", addr, "error", err)
-		os.Exit(1)
-	}
-	srv := grpc.NewServer()
-	pluginv1.RegisterPluginServiceServer(srv, helm.NewServer(cfg, log))
-	log.Info("helm plugin serving", "addr", addr, "plugin_id", cfg.PluginID, "chart_root", cfg.ChartRoot)
-	if err := srv.Serve(lis); err != nil {
-		log.Error("serve", "error", err)
-		os.Exit(1)
-	}
-}
-
-func env(k, d string) string {
-	if v := os.Getenv(k); v != "" {
-		return v
-	}
-	return d
+	pluginserve.Main(pluginserve.Config{
+		Name:   "helm",
+		Server: helm.NewServer(cfg, pluginserve.Logger()),
+		Fields: []any{"plugin_id", cfg.PluginID, "chart_root", cfg.ChartRoot},
+	})
 }

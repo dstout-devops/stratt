@@ -20,11 +20,11 @@ graph TD
   credentials_secrets["credentials-secrets<br/><small>0009 0029 0052 0094 0098 0099<br/>0100 0106 0125 0126</small>"]
   estate_as_code["estate-as-code<br/><small>0055 0056 0057 0103 0113 0116<br/>0118 0119 0120 0122 0123 0132<br/>0134 0135 0136 0137 0138 0139</small>"]
   findings_drift["findings-drift<br/><small>0019 0020 0033 0043 0080 0085<br/>0128 0129 0130 0133</small>"]
-  foundation["foundation<br/><small>0001 0002 0004 0005 0006 0008<br/>0108 0109 0116 0137 0138</small>"]
+  foundation["foundation<br/><small>0001 0002 0004 0005 0006 0008<br/>0108 0109 0116 0137 0138 0141</small>"]
   graph_model["graph-model<br/><small>0015 0017 0041 0042 0059 0060<br/>0079 0080 0081 0082 0084 0085<br/>0096 0114 0115 0119 0120 0123<br/>0126 0127 0128 0129 0130 0132<br/>0133</small>"]
   intent_compiler["intent-compiler<br/><small>0023 0030 0036 0055 0058 0083<br/>0085 0114 0118 0119 0123</small>"]
   orchestration["orchestration<br/><small>0010 0011 0018 0027 0031 0063<br/>0118 0122 0125 0134 0139 0140</small>"]
-  plugin_port["plugin-port<br/><small>0046 0047 0048 0049 0051 0053<br/>0054 0103 0117 0121 0124 0125<br/>0127 0131 0137 0138 0140</small>"]
+  plugin_port["plugin-port<br/><small>0046 0047 0048 0049 0051 0053<br/>0054 0103 0117 0121 0124 0125<br/>0127 0131 0137 0138 0140 0141</small>"]
   policy_governance["policy-governance<br/><small>0061 0062 0063 0064 0065 0066<br/>0067 0068 0069 0070 0071 0072<br/>0073 0074 0075 0076 0122</small>"]
   provisioning["provisioning<br/><small>0017 0058 0095 0096 0107 0110<br/>0111 0112 0113 0114 0115 0120<br/>0123</small>"]
   state_artifacts["state-artifacts<br/><small>0016 0029 0093 0097 0105 0112</small>"]
@@ -271,6 +271,7 @@ Foundation — charter authority, control plane, language/tooling, monorepo, met
 - [ADR-0116](0116-demo-library.md) — The demo library: reproducible, narrated, turnkey teaching scenarios
 - [ADR-0137](0137-a-plugin-is-a-service-not-a-subdirectory.md) — A plugin is a service, not a subdirectory: plane independence and the no-core-change rule
 - [ADR-0138](0138-capability-typed-dependencies-and-the-seam-self-split.md) — A module depends on capabilities: the seam/self split, and the Step-level gap
+- [ADR-0141](0141-the-plugin-sdk-is-go-the-port-is-the-contract.md) — The plugin SDK is Go; the PORT is the contract, not a language
 
 ### graph-model
 
@@ -364,6 +365,7 @@ Sovereign plugin port — the dark-matter substrate, transports, runtime registr
 - [ADR-0137](0137-a-plugin-is-a-service-not-a-subdirectory.md) — A plugin is a service, not a subdirectory: plane independence and the no-core-change rule
 - [ADR-0138](0138-capability-typed-dependencies-and-the-seam-self-split.md) — A module depends on capabilities: the seam/self split, and the Step-level gap
 - [ADR-0140](0140-a-capability-is-invoked-not-named.md) — A capability is invoked, not named: the mapping is declared, never minted
+- [ADR-0141](0141-the-plugin-sdk-is-go-the-port-is-the-contract.md) — The plugin SDK is Go; the PORT is the contract, not a language
 
 ### policy-governance
 
@@ -601,3 +603,4 @@ UI — React shell, schema-driven rendering, Views, descent, the first-party cli
 | [0138](0138-capability-typed-dependencies-and-the-seam-self-split.md) | estate-as-code, foundation, plugin-port |
 | [0139](0139-nested-workflow-steps.md) | estate-as-code, orchestration |
 | [0140](0140-a-capability-is-invoked-not-named.md) | orchestration, plugin-port |
+| [0141](0141-the-plugin-sdk-is-go-the-port-is-the-contract.md) | foundation, plugin-port |
