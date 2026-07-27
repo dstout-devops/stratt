@@ -633,28 +633,18 @@ func run(ctx context.Context, log *slog.Logger) error {
 	// in the STRATT_AWX_PLUGIN_ADDR block below — the AWX→CaC transform is tool breadth that
 	// lives in the plugin, not a core-owned image. strattd links zero AWX transform code.
 
-	// mcp EE-Job transport (ADR-0053): MCP is a generic transport (charter §1.5), not
-	// an in-core protocol. The stratt-mcp shim (baked into the EE-mcp image) speaks
-	// JSON-RPC to the sandboxed server; the CORE keeps the seam — it resolves the
-	// MCPServer declaration + rev, validates call-args against the pin, and pins each
-	// rung-3 derived_contract (executeMCP). The grant Source.Name is "mcp" so a
-	// derived tool schema (mcp/<server>/<tool>.input) is namespace-confined to it.
-	{
-		grant := pluginhost.Grant{
-			PluginIdentity: env("STRATT_MCP_PLUGIN_ID", "mcp"),
-			Tier:           pluginhost.TierTrusted,
-			Source:         types.Source{Kind: "mcp", Name: "mcp"},
-		}
-		host := pluginhost.New(store, nil, grant, log)
-		if err := plugins.RegisterActuator("mcp", orchestrate.PluginActuator{
-			Host: host, DryRunnable: false, Grant: grant, MCP: true,
-			JobCommand: []string{env("STRATT_MCP_SHIM", "stratt-mcp")},
-			Image:      env("STRATT_EE_MCP_IMAGE", "stratt-ee-mcp:dev"),
-		}); err != nil {
-			return err
-		}
-		log.Info("mcp EE-Job actuator registered (ADR-0053 generic MCP transport)", "eeImage", env("STRATT_EE_MCP_IMAGE", "stratt-ee-mcp:dev"))
-	}
+	// ── mcp EE-Job transport (ADR-0053) — MIGRATED to the runtime registry (ADR-0103) ──
+	// MCP is a generic transport (§1.5), not an in-core protocol: the stratt-mcp shim baked into
+	// the EE-mcp image speaks JSON-RPC to the sandboxed server, while the CORE keeps the seam —
+	// it resolves the MCPServer declaration + rev, validates call-args against the pin, and pins
+	// each rung-3 derived_contract (executeMCP). None of that moved; only the registration did,
+	// to plugins/mcp/estate/actuators/mcp.yaml.
+	//
+	// This block registered `mcp` UNCONDITIONALLY, so every floor had the Actuator whether or not
+	// anything used it. Declaring it means a floor that does not admit the plugin estate has no
+	// `mcp` — the intended CaC posture and the same trade ansible/script made. Deleted rather than
+	// kept as a fallback: two registration paths for one name collide at §2.4 and make "which
+	// grant is live?" unanswerable from Git.
 
 	// OpenTofu (ADR-0016): requires the encrypted state backend — without a
 	// state key the actuator is not registered and the backend not mounted;

@@ -41,6 +41,8 @@ plugins:
     path: ../plugins/declared/estate
   - name: helm
     path: ../plugins/helm/estate
+  - name: mcp
+    path: ../plugins/mcp/estate
   - name: netbox
     path: ../plugins/netbox/estate
   - name: notify

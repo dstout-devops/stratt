@@ -14,13 +14,27 @@ import (
 // conjures it — which is exactly the property ADR-0103 is retiring.
 //
 // This map is the migration tracker, and it is deliberately a test fixture rather than a
-// comment: shrinking it is how a migration is proven, and forgetting to shrink it fails
-// the census assertion below. ADR-0117 follow-up (k) removed `ansible` and `script` from
-// it (they are now estate/actuators/{ansible,script}.yaml); `mcp` and the openbao-provided
-// `cert-issuer` are what remain.
+// comment: shrinking it is how a migration is proven. It is now CHECKED, in both directions,
+// by TestBootRegisteredActuatorsCensusIsAccurate — which it was not before, despite this
+// comment having claimed so. It had rotted both ways: `cert-issuer` stayed listed after it
+// became a declaration, and `opentofu` was boot-registered without ever being listed.
+//
+// Migrated off their boot blocks so far: ansible, script (ADR-0117 k), cert-issuer, crossplane,
+// mcp. What remains is below.
 var bootRegisteredActuators = map[string]string{
-	"mcp":         "in-tree MCP Actuator, pending its own extraction slice (ADR-0046)",
-	"cert-issuer": "registered by the openbao plugin block on STRATT_OPENBAO_PLUGIN_ADDR (ADR-0050)",
+	// The ONE that is not a simple lift. Its registration is nested inside
+	// `if STRATT_STATE_KEY != ""`, and the comment there states the safety property plainly:
+	// without a state key the actuator is not registered and the backend not mounted, so tofu
+	// Steps fail loudly at Prepare rather than running against PLAINTEXT LOCAL STATE. A
+	// declaration cannot express "only when the daemon holds a state key", so migrating this one
+	// naively would drop a real precondition rather than move it.
+	//
+	// The CaC-expressible form of the same guarantee already exists and is what the estate uses:
+	// opentofu-network and opentofu-s3 declare `requires: [statestore]`, so they stay PENDING
+	// until a verified state provider exists (ADR-0104 D3). Nothing in any estate names the bare
+	// `opentofu` Actuator. Retiring it is therefore a question of whether that capability gate
+	// fully replaces the boot precondition — a decision, not a mechanical move.
+	"opentofu": "registered under STRATT_STATE_KEY + STRATT_OPENTOFU_PLUGIN_ADDR; the state-key precondition is not CaC-expressible (ADR-0016/0047)",
 }
 
 // TestEstateDeclaresTheActuatorsItNames is the guard that ADR-0117 follow-up (k) needs and

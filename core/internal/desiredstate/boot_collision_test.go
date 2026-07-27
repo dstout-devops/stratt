@@ -21,7 +21,11 @@ import (
 
 var bootActuatorRe = regexp.MustCompile(`(?:registerPluginActuator|plugins\.RegisterActuator)\(\s*"([a-z0-9-]+)"`)
 
-func TestNoDeclaredActuatorIsAlsoBootRegistered(t *testing.T) {
+// bootRegisteredInGo reads the Actuator names strattd still registers in Go. Parsing the source
+// beats maintaining a second list: a hand-kept list is a claim about main.go that nothing checks,
+// which is precisely how bootRegisteredActuators rotted.
+func bootRegisteredInGo(t *testing.T) map[string]bool {
+	t.Helper()
 	src, err := os.ReadFile("../../cmd/strattd/main.go")
 	if err != nil {
 		t.Fatalf("read main.go: %v", err)
@@ -30,6 +34,37 @@ func TestNoDeclaredActuatorIsAlsoBootRegistered(t *testing.T) {
 	for _, m := range bootActuatorRe.FindAllStringSubmatch(string(src), -1) {
 		boot[m[1]] = true
 	}
+	return boot
+}
+
+// TestBootRegisteredActuatorsCensusIsAccurate closes a hole in the migration tracker itself.
+//
+// bootRegisteredActuators documents itself as self-policing — "forgetting to shrink it fails the
+// census assertion below" — and there was no census assertion. The map is only ever CONSULTED when
+// a Step names an Actuator the estate does not declare, so once a name is migrated the lookup
+// short-circuits on `declared[...]` and the stale entry is never touched again. It rotted in both
+// directions before this landed: `cert-issuer` stayed listed after becoming a declaration, and
+// `opentofu` was boot-registered without ever being listed.
+//
+// A tracker nobody checks is a comment with a map literal around it.
+func TestBootRegisteredActuatorsCensusIsAccurate(t *testing.T) {
+	boot := bootRegisteredInGo(t)
+	for name := range bootRegisteredActuators {
+		if !boot[name] {
+			t.Errorf("bootRegisteredActuators lists %q, which main.go no longer registers — the entry is "+
+				"stale. Removing it is how a migration is proven finished (ADR-0103)", name)
+		}
+	}
+	for name := range boot {
+		if _, ok := bootRegisteredActuators[name]; !ok {
+			t.Errorf("main.go boot-registers %q, which bootRegisteredActuators does not list — an untracked "+
+				"boot block is one the migration cannot see it still owes", name)
+		}
+	}
+}
+
+func TestNoDeclaredActuatorIsAlsoBootRegistered(t *testing.T) {
+	boot := bootRegisteredInGo(t)
 	if len(boot) == 0 {
 		// Not a pass. If the boot registrations are all gone this test has no subject, but a
 		// regex that silently matches nothing is how a ratchet quietly stops ratcheting.
