@@ -15,7 +15,8 @@
   user of), ADR-0017 (provision→configure — the flow this unblocks), ADR-0113 (vSphere as a
   `provisioning` provider), ADR-0126 (machine credential + jump — the other half of reaching a node),
   ADR-0115 (vcenter read breadth). **Addresses ADDR-1** in
-  [enterprise-readiness.md](../enterprise-readiness.md), producer #2 of three.
+  [enterprise-readiness.md](../enterprise-readiness.md) — the **observed** producer, 1 of the 2 that
+  survive (ADR-0142 D4 struck the third; see D4 below).
 
 ## Context
 
@@ -92,13 +93,20 @@ Where they genuinely correlate onto one Entity — a CaC host that is also a vSp
 shared `dns.fqdn` scheme — the fail-safe read **omits** the value and raises an ownership-contention
 Finding rather than picking one. That is the correct outcome, so there is nothing to declare.
 
-### D4 — Out of scope: the other two producers
+### D4 — The other producers: one struck, one deferred
 
-ADDR-1 names three producers. This ADR builds the **observed** one. The **derived** producer (a name
-composed from the estate's own naming plus an environment's DNS zone) waits on
-[ADR-0142](0142-environments-are-declared-not-just-referenced.md) D4, which is a live §2.4 question. The
-**registered** producer (`Intent/DnsRecord`, which ships as a kind with a schema and reconcile support
-and no provider) is its own slice.
+ADDR-1 named three producers. This ADR builds the **observed** one.
+
+The **derived** producer (a name composed from the estate's own naming plus an environment's DNS zone)
+has since been **struck** — [ADR-0142](0142-environments-are-declared-not-just-referenced.md) D4
+resolved against it, on this ADR's own argument generalised: a reach coordinate must be observed or
+caused, never computed. Deriving `<instance>.<zone>` asserts DNS facts Stratt neither owns nor
+observes, and connects to the wrong host when DNS disagrees (§1.2). That is D1's refusal of a bare
+hostname, one level up.
+
+The **registered** producer (`Intent/DnsRecord` — declare the name, a provider creates it, and it is
+then a fact Stratt CAUSED rather than assumed) remains, and is its own slice. It ships today as a kind
+with a schema and reconcile support and no provider.
 
 ## Charter alignment
 

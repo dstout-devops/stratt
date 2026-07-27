@@ -1,8 +1,9 @@
 # ADR 0142 — An environment is declared, not just referenced; and it is not a Cell, a Site, or a coordinate
 
 - **Status:** **Proposed** (2026-07-27, steward). Charter review by hand (this session's rules bar the
-  subagent); §1.8/§2.4/§9 answered inline, and **D4 is deferred precisely because it is the part that
-  needs the subagent**. **No new dependency. No new Named Kind** — `environments` is an existing field
+  subagent); §1.8/§2.4/§9 answered inline. **D4 was deferred as the part needing the subagent bar, and
+  is now RESOLVED (2026-07-27) — on a §1.2 argument stronger than the §2.4 one it was deferred for: a
+  reach coordinate must be observed or caused, never computed.** **No new dependency. No new Named Kind** — `environments` is an existing field
   on existing declarations; this ADR gives it a referent.
 - **Date:** 2026-07-27
 - **Deciders:** steward
@@ -39,21 +40,23 @@ with no provider, `dns.fqdn` with no consumer, `opentofu-subnet-build` advertise
 enough that it came up unprompted while planning this work. `types.Cell` even carries a `Region` field,
 which makes "is a region a Cell?" a reasonable question with a non-obvious answer.
 
-### What is deliberately NOT in scope, and why
+### The question this ADR deliberately did not answer first
 
 The obvious next step — let an Environment carry a region coordinate and a DNS zone that scoped
-declarations **inherit** — is **not decided here**, because the charter already has a rule pointed
-straight at it. `rejectEnvKeyedValues` ([desiredstate.go:2553](../../core/internal/desiredstate/desiredstate.go#L2553))
+declarations **inherit** — was held back, because the charter already has a rule pointed straight at
+it. `rejectEnvKeyedValues` ([desiredstate.go:2553](../../core/internal/desiredstate/desiredstate.go#L2553))
 refuses `values: {prod: {...}}` inside one Assignment, and states the principle:
 
 > environments is a boolean MEMBERSHIP filter, "never a source of env-conditional values". The
 > compliant shape is one Assignment per environment, each carrying flat values.
 
 Inheritance is that same forbidden shape with the indirection moved into another file: the identical
-Intent document would mean different things depending on the active environment. Whether _facts about
-the environment itself_ (its region, its DNS zone — the same category as `Cell.Region`) are
-distinguishable from _env-conditional values for consumers_ is a genuine §2.4 judgement call, not
-something to assume while implementing something else. It is D4 below, deferred with the tension stated.
+Intent document would mean different things depending on the active environment.
+
+**D4 below now answers it — No — and the deferral earned its keep.** Working the question properly
+found that §2.4 was not even the decisive objection: the decisive one is §1.2, and it is stronger.
+Had this ADR assumed an answer while implementing a referential-integrity fix, it would have shipped
+a zone field on the Environment and a correctness hazard with it.
 
 ## Decision
 
@@ -95,15 +98,49 @@ The trap worth naming: **a Cell is not the estate's region.** One control plane 
 substrate regions. Treating them as the same thing would mean standing up a new
 Postgres/NATS/Temporal/OpenFGA to manage a new cloud region — false and expensive.
 
-### D4 — DEFERRED: whether an Environment carries inheritable facts
+### D4 — RESOLVED (2026-07-27): **No.** An Environment carries no inheritable facts
 
-Not decided. The candidates are a provider coordinate (region) and a DNS zone — the latter wanted by the
-reach-coordinate work (ADDR-1), whose cheapest producer derives a host's name from the estate's own
-naming plus a zone. Both are _facts about the environment_, structurally like `Cell.Region`. Both would
-also make one Intent document resolve differently per environment, which is what ADR-0118 D1 forbids.
+Deferred when this ADR landed, on the expectation that the blocking question was §2.4 —
+`rejectEnvKeyedValues`' "environments is a membership filter, not a value selector", which
+inheritance satisfies only by moving the indirection into another file. Working it through found a
+**stronger and different objection**, and it settles the question without needing the §2.4 argument
+at all.
 
-This needs the **charter-guardian** bar (§2.4), not an inline judgement. Until it is decided, the
-compliant shape stands: **one declaration per environment, each carrying flat values.**
+**The rule: a reach coordinate must be OBSERVED or CAUSED — never COMPUTED.**
+
+The candidate use was a DNS zone on the Environment, so a host's reach name could be derived as
+`<instance>.<zone>`. That derivation asserts three facts Stratt does not own and does not observe:
+
+1. the machine's hostname was actually set to `<instance>`;
+2. a DNS record for `<instance>.<zone>` actually exists;
+3. it actually points at **this** machine.
+
+§1.2 is explicit that external systems of record stay authoritative and the graph is a projection. A
+computed coordinate is Stratt **inventing a fact about DNS**. And the failure is not cosmetic: if DNS
+disagrees, Stratt connects to the **wrong host** — a correctness hazard, not an inelegance.
+
+This is the same argument [ADR-0143](0143-the-observed-reach-coordinate.md) D1 already makes one level
+down, when it refuses a **bare** hostname because "whether `web-01` resolves depends on search domains
+we neither control nor observe." Deriving a name from a zone is that same guess with more syllables.
+Two independent lines of reasoning reaching the same refusal is the tell that the refusal is right.
+
+**The strongest counterexample resolves the same way.** Kubernetes service DNS
+(`service.namespace.svc.cluster.local`) genuinely IS deterministic — but that determinism is the
+**provider's** knowledge, not the estate's. A K8s Compute provider projects the name it _caused_,
+which is the observed producer again. It needs no environment-level zone. So even the case that most
+looks like it wants derivation does not want it.
+
+**Consequences for ADDR-1:** its three producers reduce to **two** — observed/caused (ADR-0143), and
+registered (`Intent/DnsRecord`: declare the name, a provider creates it, and it is then a fact Stratt
+caused rather than assumed). The "derived" producer is struck.
+
+**Consequences for the region coordinate:** it dissolves too. A flat `params.region` in each
+environment-scoped Intent is already the compliant shape ADR-0118 D1 prescribes, and already what the
+estate does. Repetitive, explicit, correct — and "define a region from code" is satisfied by the
+composition this ADR completes: an `environments/` declaration, environment-scoped
+capability-bindings, and flat params.
+
+So an Environment stays `{name, description}`. The deferral removed work rather than adding it.
 
 ## Charter alignment
 
@@ -123,7 +160,7 @@ compliant shape stands: **one declaration per environment, each carrying flat va
 - **Negative / trade-offs:** one more declaration kind to keep in step. The D2 compatibility rule is a
   conditional gate, which is slightly less clean than unconditional enforcement — stated openly above
   rather than discovered later.
-- **Follow-ups:** D4 (inheritable facts) under charter-guardian · `ScopeToEnvironment` filters only
+- **Follow-ups:** ~~D4 (inheritable facts)~~ — **resolved: no** · `ScopeToEnvironment` filters only
   Assignments/Triggers/Baselines while Connectors and CapabilityBindings carry `Environments` and are
   filtered at their own consumption points; that asymmetry is undocumented and its doc-comment is
   already stale (ADR-0113 F2) — worth one pass · surfacing declared environments on the API/UI so an
@@ -135,7 +172,7 @@ compliant shape stands: **one declaration per environment, each carrying flat va
   as soon as it appears twice, and gives the estate no place to state intent.
 - **Make `environments` a Named Kind** — rejected: §2 is frozen, and this is a scope label on existing
   declarations, not a new estate concept.
-- **Let the Environment carry region + zone now** — rejected _for this slice_ (D4): defensible, but it
-  runs directly at ADR-0118 D1 and deserves the review bar rather than being smuggled in beneath a
-  referential-integrity fix.
+- **Let the Environment carry region + zone** — rejected outright once D4 was worked through, and on
+  better grounds than the §2.4 rule it was first deferred for: a derived reach coordinate asserts DNS
+  facts Stratt neither owns nor observes, and gets the wrong host when DNS disagrees (§1.2).
 - **Reuse Cell** — rejected: conflates the control-plane shard with the reconcile scope; see D3.
