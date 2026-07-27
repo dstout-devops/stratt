@@ -591,3 +591,118 @@ func TestResolveCapabilityActuatorIgnoresConnectors(t *testing.T) {
 		t.Fatal("but it must NOT satisfy an ACTUATION — a Connector is not dispatchable")
 	}
 }
+
+// ── Connector Actions reach the dispatch table (ADR-0031/0103) ────────────────
+//
+// `actionNames` on a Connector was verified against the Manifest and then registered NOWHERE:
+// admitted, checked, and silently unusable, so a Step naming one failed at dispatch with "no
+// action registered". The Actuator path always did this; the Connector path had the verification
+// without the registration.
+
+func TestSyncerConnectorRegistersItsActions(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	plugins := orchestrate.NewPluginRegistry(nil, nil)
+	// A real Resolver: this is the first test to reach the syncer enable path, which starts a
+	// home-gated Supervise goroutine. homegate.Deps{} leaves a nil *Resolver and Supervise
+	// dereferences it — the existing Connector tests never got this far.
+	r := New(s, plugins, homegate.Deps{Resolver: &homegate.Resolver{Cell: types.LocalCell, Store: s}}, nil, lazyDial, time.Second, discard())
+	r.manifest = fakeActions(map[string][]AdvertisedAction{
+		"localhost:9200": {{Name: "t-conn/materialize", InputContract: "actions/adopt/materialize.input"}},
+	})
+
+	if err := s.UpsertConnector(ctx, types.Connector{
+		Name: "t-conn", Class: types.ConnectorSyncer, Address: "localhost:9200", PluginIdentity: "p",
+		Source: types.Source{Kind: "p", Name: "t-conn"}, ActionNames: []string{"t-conn/materialize"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	defer s.DeleteConnector(ctx, "t-conn")
+
+	r.ReconcileConnectors(ctx)
+	if _, ok := plugins.Action("t-conn/materialize"); !ok {
+		t.Fatal("a Connector's declared Action must be dispatchable — verifying it against the Manifest " +
+			"and registering it nowhere is the half-declaration this package refuses elsewhere")
+	}
+
+	// Teardown must take the dispatch entry with it: a name left registered against a torn-down
+	// host dispatches to a closed connection instead of failing to resolve.
+	if err := s.DeleteConnector(ctx, "t-conn"); err != nil {
+		t.Fatal(err)
+	}
+	r.ReconcileConnectors(ctx)
+	if _, ok := plugins.Action("t-conn/materialize"); ok {
+		t.Fatal("a removed Connector's Action must be deregistered")
+	}
+}
+
+// An `action`-class Connector was refused outright ("not yet wired"), so a Connector whose whole
+// job is Actions could not exist. It now enables — and must NOT run Syncer machinery: it observes
+// nothing, so it claims no Source and is not home-gated. The home gate keeps ONE writer per
+// Source; a Connector that writes nothing has no Source to contend for.
+func TestActionClassConnectorEnablesWithoutSyncerMachinery(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	plugins := orchestrate.NewPluginRegistry(nil, nil)
+	r := New(s, plugins, homegate.Deps{}, nil, lazyDial, time.Second, discard())
+	r.manifest = fakeActions(map[string][]AdvertisedAction{
+		"localhost:9201": {{Name: "t-act/do", InputContract: "actions/adopt/materialize.input"}},
+	})
+
+	if err := s.UpsertConnector(ctx, types.Connector{
+		Name: "t-act", Class: types.ConnectorAction, Address: "localhost:9201", PluginIdentity: "p",
+		Source: types.Source{Kind: "p", Name: "t-act"}, ActionNames: []string{"t-act/do"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	defer s.DeleteConnector(ctx, "t-act")
+
+	r.ReconcileConnectors(ctx)
+	st, ok := r.Status("connector", "t-act")
+	if !ok || !st.Enabled {
+		t.Fatalf("an action-class Connector must enable, not be refused as unwired: %+v ok=%v", st, ok)
+	}
+	if _, ok := plugins.Action("t-act/do"); !ok {
+		t.Fatal("its Action must be dispatchable — that is the entire point of the class")
+	}
+	r.mu.Lock()
+	e := r.connEntries["t-act"]
+	r.mu.Unlock()
+	if e == nil || e.cancel != nil {
+		t.Fatal("an action-class Connector must run NO supervise/SyncLoop goroutine — it observes " +
+			"nothing, so home-gating it would register a projection owner that never projects")
+	}
+}
+
+// A §2.4 name collision is rejected and surfaced, and the partial registration is ROLLED BACK: a
+// half-registered dispatch surface surviving a failed enable is worse than none.
+func TestConnectorActionCollisionRollsBack(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	// "t-taken/a" is claimed by an in-tree Action, so the second name collides.
+	plugins := orchestrate.NewPluginRegistry(nil, func(n string) bool { return n == "t-coll/b" })
+	r := New(s, plugins, homegate.Deps{}, nil, lazyDial, time.Second, discard())
+	r.manifest = fakeActions(map[string][]AdvertisedAction{
+		"localhost:9202": {
+			{Name: "t-coll/a", InputContract: "actions/adopt/materialize.input"},
+			{Name: "t-coll/b", InputContract: "actions/adopt/materialize.input"},
+		},
+	})
+
+	if err := s.UpsertConnector(ctx, types.Connector{
+		Name: "t-coll", Class: types.ConnectorAction, Address: "localhost:9202", PluginIdentity: "p",
+		Source: types.Source{Kind: "p", Name: "t-coll"}, ActionNames: []string{"t-coll/a", "t-coll/b"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	defer s.DeleteConnector(ctx, "t-coll")
+
+	r.ReconcileConnectors(ctx)
+	if st, _ := r.Status("connector", "t-coll"); st.Enabled || st.Error == "" {
+		t.Fatalf("a colliding Action must reject the enable and surface why (D6): %+v", st)
+	}
+	if _, ok := plugins.Action("t-coll/a"); ok {
+		t.Fatal("the FIRST Action registered before the collision must be rolled back — a partial " +
+			"dispatch surface must not survive a failed enable")
+	}
+}

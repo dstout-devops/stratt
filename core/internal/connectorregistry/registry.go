@@ -359,8 +359,11 @@ func (r *Registry) ReconcileConnectors(ctx context.Context) {
 	}
 	declared := make(map[string]types.Connector, len(decls))
 	for _, c := range decls {
-		if c.Class != types.ConnectorSyncer {
-			r.setStatus("connector/"+c.Name, false, "class "+c.Class+" not yet wired (ADR-0103 slice-1 is syncer-only)")
+		// `syncer` and `action` are both wired now. An EMITTER is still reserved (ADR-0103): it
+		// pushes events rather than being pulled or invoked, so it needs an ingest path this
+		// registry does not have — refusing it is honest, and it says so.
+		if c.Class != types.ConnectorSyncer && c.Class != types.ConnectorAction {
+			r.setStatus("connector/"+c.Name, false, "class "+c.Class+" not yet wired (ADR-0103: syncer + action)")
 			continue
 		}
 		declared[c.Name] = c
@@ -406,25 +409,65 @@ func (r *Registry) enableConnectorLocked(ctx context.Context, c types.Connector,
 		return
 	}
 	host := pluginhost.New(r.store, pluginv1.NewPluginServiceClient(conn), connectorGrant(c), r.log)
-	interval := time.Duration(c.IntervalSeconds) * time.Second
-	if interval <= 0 {
-		interval = 30 * time.Second
+	e := &entry{conn: conn, host: host, specJSON: spec}
+
+	// A Connector's Actions reach the DISPATCH TABLE (§2.2, ADR-0031). Until now they were
+	// verified against the Manifest and then registered nowhere: `actionNames` on a Connector
+	// was admitted, checked, and silently unusable — a Step naming one failed at dispatch with
+	// "no action registered", which is the half-declaration defect this package refuses
+	// everywhere else. The Actuator path has always done this; the Connector path had the
+	// verification without the registration.
+	for _, an := range c.ActionNames {
+		if err := r.plugins.RegisterAction(an, orchestrate.PluginAction{Host: host}); err != nil {
+			// §2.4 collision → reject + surface, never a crash (D4/D6). Roll back what this
+			// enable already registered so a partial dispatch surface never survives the failure.
+			for _, done := range e.actionNames {
+				r.plugins.DeregisterAction(done)
+			}
+			conn.Close()
+			r.setStatus(key, false, "action "+an+": "+err.Error())
+			r.log.Warn("connectorregistry: connector action register rejected", "name", c.Name, "action", an, "err", err)
+			return
+		}
+		e.actionNames = append(e.actionNames, an)
 	}
-	// Home-gated supervised Syncer under a per-connector child context (single-writer,
-	// ADR-0044/0045). Register claims the Source + ownership; SyncLoop is the Observe loop.
-	cctx, cancel := context.WithCancel(ctx)
-	go homegate.Supervise(cctx, r.homeDeps, c.Source.Name, host.Register, func(sctx context.Context) error {
-		return host.SyncLoop(sctx, interval)
-	})
-	r.connEntries[c.Name] = &entry{conn: conn, cancel: cancel, host: host, specJSON: spec}
+
+	// The SYNCER half is syncer-class only. An `action` Connector observes nothing: it must not
+	// claim a Source, must not run an Observe loop, and must not be home-gated — the home gate
+	// exists to keep ONE writer per Source, and a Connector that writes nothing has no Source to
+	// contend for. Running it anyway would register a projection owner that never projects.
+	if c.Class == types.ConnectorSyncer {
+		interval := time.Duration(c.IntervalSeconds) * time.Second
+		if interval <= 0 {
+			interval = 30 * time.Second
+		}
+		// Home-gated supervised Syncer under a per-connector child context (single-writer,
+		// ADR-0044/0045). Register claims the Source + ownership; SyncLoop is the Observe loop.
+		cctx, cancel := context.WithCancel(ctx)
+		e.cancel = cancel
+		go homegate.Supervise(cctx, r.homeDeps, c.Source.Name, host.Register, func(sctx context.Context) error {
+			return host.SyncLoop(sctx, interval)
+		})
+		r.log.Info("connector registry: connector enabled", "name", c.Name, "class", c.Class,
+			"source", c.Source.Name, "interval", interval, "actions", e.actionNames)
+	} else {
+		r.log.Info("connector registry: connector enabled", "name", c.Name, "class", c.Class, "actions", e.actionNames)
+	}
+	r.connEntries[c.Name] = e
 	r.setStatus(key, true, "")
-	r.log.Info("connector registry: connector enabled", "name", c.Name, "source", c.Source.Name, "interval", interval)
 }
 
 func (r *Registry) disableConnectorLocked(ctx context.Context, name string, e *entry) {
 	if e.cancel != nil {
-		e.cancel() // stop the supervise/SyncLoop goroutine
+		e.cancel() // stop the supervise/SyncLoop goroutine (syncer class only)
 	}
+	// The dispatch entries go with it. A name left registered against a torn-down host is worse
+	// than an absent one: it dispatches to a closed connection instead of failing to resolve.
+	for _, an := range e.actionNames {
+		r.plugins.DeregisterAction(an)
+	}
+	// Deregister releases the Source claim — meaningless for an action-class Connector, which
+	// never claimed one, and harmless (the host has no registration to release).
 	if err := e.host.Deregister(ctx); err != nil {
 		r.log.Warn("connectorregistry: connector deregister", "name", name, "err", err)
 	}
