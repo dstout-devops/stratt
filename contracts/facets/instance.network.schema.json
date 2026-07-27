@@ -6,6 +6,10 @@
   "type": "object",
   "properties": {
     "privateIp": { "type": "string", "description": "primary private IPv4 address" },
+    "privateDnsName": {
+      "type": "string",
+      "description": "The instance's private DNS name (ip-10-0-1-7.ec2.internal). WIDENED IN PLACE by ADR-0143 rather than versioned as a sibling — a Facet on a rebuildable projection is not a wire Contract with external authors, so an optional property is backward-compatible widening (the precedent ADR-0132 D3 cites, itself citing ADR-0117 D5a widening the closed mgmt.address schema with port). It earns its place under §1.1 by being what makes the reach coordinate AUDITABLE: mgmt.address for an instance resolves to this name, and without it projected the operator would see a coordinate appearing nowhere else in the graph and could not tell where it came from (§1.8)."
+    },
     "publicIp": { "type": "string", "description": "public IPv4 address, when assigned" },
     "vpcId": { "type": "string", "description": "the VPC the instance is placed in" },
     "subnetId": { "type": "string", "description": "the subnet the instance is placed in" },

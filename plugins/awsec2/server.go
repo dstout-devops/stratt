@@ -63,6 +63,16 @@ var facetNamespaces = []string{
 	"net.subnet",
 	"net.securitygroup",
 	"storage.volume",
+	// mgmt.address — the OBSERVED reach coordinate (ADR-0143), the second substrate to
+	// produce one. Until a provisioning provider projects this, a machine it BUILDS has
+	// no coordinate and cannot be targeted at all: the only working producer was a
+	// hand-written address in Git, which by definition cannot exist for a machine that
+	// does not exist yet.
+	//
+	// This list feeds BOTH the Manifest's contracts and nothing else, so advertisement
+	// and emission cannot drift here the way they did in vcenter (which hand-writes the
+	// two separately — see ADR-0143's own slip). Worth copying, not just noting.
+	"mgmt.address",
 }
 
 // tombstoneSchemes are the identity schemes this Syncer fully enumerates — one per

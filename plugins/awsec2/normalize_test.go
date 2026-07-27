@@ -25,20 +25,32 @@ func TestNormalizedFacetsMatchContracts(t *testing.T) {
 		Architecture:     ec2types.ArchitectureValuesX8664,
 		ImageId:          aws.String("ami-1"),
 		PrivateIpAddress: aws.String("10.0.0.5"),
-		PublicIpAddress:  aws.String("54.1.2.3"),
-		VpcId:            aws.String("vpc-1"),
-		SubnetId:         aws.String("subnet-1"),
-		Placement:        &ec2types.Placement{AvailabilityZone: aws.String("us-east-1a")},
-		State:            &ec2types.InstanceState{Name: ec2types.InstanceStateNameRunning},
-		LaunchTime:       &launch,
-		Tags:             []ec2types.Tag{{Key: aws.String("Name"), Value: aws.String("web-01")}},
+		// MAXIMALLY POPULATED is the contract of this fixture, so a field added to
+		// normalizeInstance must be added here too. Omitting privateDnsName would leave
+		// ADR-0143's schema widening unexercised while the test still read as green —
+		// the fixture would silently stop being maximal.
+		PrivateDnsName:  aws.String("ip-10-0-0-5.ec2.internal"),
+		PublicIpAddress: aws.String("54.1.2.3"),
+		VpcId:           aws.String("vpc-1"),
+		SubnetId:        aws.String("subnet-1"),
+		Placement:       &ec2types.Placement{AvailabilityZone: aws.String("us-east-1a")},
+		State:           &ec2types.InstanceState{Name: ec2types.InstanceStateNameRunning},
+		LaunchTime:      &launch,
+		Tags:            []ec2types.Tag{{Key: aws.String("Name"), Value: aws.String("web-01")}},
 	}
 	e, err := normalizeInstance("us-east-1", full)
 	if err != nil {
 		t.Fatalf("normalize: %v", err)
 	}
-	if len(e.GetFacets()) != 3 {
-		t.Fatalf("a fully-populated instance must emit all 3 facets, got %v", facetKeys(e.GetFacets()))
+	// Membership, not a count. A magic number fails on every legitimate addition while
+	// naming neither the namespace that appeared nor the one that vanished — it reported
+	// "must emit all 3 facets" when ADR-0143 added a fourth, which is true and useless.
+	// What this test is actually for is the loop below: every emitted key must exist in
+	// the pinned CLOSED schema, or the live Syncer's write is rejected.
+	for _, want := range []string{"instance.compute", "instance.network", "instance.state", "mgmt.address"} {
+		if len(e.GetFacets()[want]) == 0 {
+			t.Fatalf("a fully-populated instance must emit %s, got %v", want, facetKeys(e.GetFacets()))
+		}
 	}
 	for ns, raw := range e.GetFacets() {
 		allowed := schemaProperties(t, ns)

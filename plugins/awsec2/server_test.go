@@ -403,9 +403,24 @@ func TestGetManifest(t *testing.T) {
 	if !verbs[pluginv1.Verb_VERB_OBSERVE] || !verbs[pluginv1.Verb_VERB_INVOKE] {
 		t.Errorf("verbs = %v, want OBSERVE+INVOKE", m.GetVerbs())
 	}
-	// instance.{compute,network,state} + net.{vpc,subnet,securitygroup} + storage.volume.
-	if len(m.GetContracts()) != 7 {
-		t.Errorf("expected 7 facet contracts, got %d", len(m.GetContracts()))
+	// The advertisement must CONTAIN each namespace this Syncer projects. Asserted by
+	// membership rather than by a count: a magic number fails on every legitimate
+	// addition while saying nothing about which namespace is missing, and it caught
+	// ADR-0143's second-substrate work by reporting "expected 7, got 8" — true, useless.
+	// What actually matters is that nothing a plugin emits goes unadvertised, and
+	// mockstratt's `declares-what-it-emits` check owns that property directly.
+	advertised := map[string]bool{}
+	for _, c := range m.GetContracts() {
+		advertised[c.GetSchemaId()] = true
+	}
+	for _, want := range []string{
+		"instance.compute", "instance.network", "instance.state",
+		"net.vpc", "net.subnet", "net.securitygroup", "storage.volume",
+		"mgmt.address", // the observed reach coordinate (ADR-0143)
+	} {
+		if !advertised[want] {
+			t.Errorf("manifest must advertise facet contract %q; got %v", want, advertised)
+		}
 	}
 	// provisioning capability (ADR-0107) — advertised so provider verification (ADR-0104 D1) can bind it.
 	var provisions bool

@@ -9,6 +9,7 @@ package awsec2
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
 
@@ -46,6 +47,13 @@ func normalizeInstance(region string, in ec2types.Instance) (*pluginv1.ObservedE
 	if in.PrivateIpAddress != nil && *in.PrivateIpAddress != "" {
 		network["privateIp"] = *in.PrivateIpAddress
 	}
+	// The private DNS name is projected as a FACT so that the reach coordinate below is
+	// auditable. Without it, mgmt.address would be a name appearing nowhere else in the
+	// graph and an operator could not see where it came from (§1.8) — the same reason
+	// vcenter carries guest.hostName on net.guest beside its own coordinate.
+	if in.PrivateDnsName != nil && *in.PrivateDnsName != "" {
+		network["privateDnsName"] = *in.PrivateDnsName
+	}
 	if in.PublicIpAddress != nil && *in.PublicIpAddress != "" {
 		network["publicIp"] = *in.PublicIpAddress
 	}
@@ -82,10 +90,48 @@ func normalizeInstance(region string, in ec2types.Instance) (*pluginv1.ObservedE
 		facets[ns] = raw
 	}
 
+	// mgmt.address — the OBSERVED reach coordinate (ADR-0143), applying the same rule on
+	// a second substrate: a NAME first, an address only as fallback, and nothing at all
+	// when neither is known.
+	if addr := reachCoordinate(in); addr != "" {
+		raw, err := json.Marshal(map[string]any{"address": addr})
+		if err != nil {
+			return nil, fmt.Errorf("awsec2: marshal facet mgmt.address: %w", err)
+		}
+		facets["mgmt.address"] = raw
+	}
+
 	return &pluginv1.ObservedEntity{
 		Kind:         "instance",
 		IdentityKeys: identity,
 		Labels:       labels,
 		Facets:       facets,
 	}, nil
+}
+
+// reachCoordinate picks the mgmt.address value from what EC2 reported: the PRIVATE DNS
+// name, else the PRIVATE IP, else nothing (ADR-0143 D1 applied to EC2).
+//
+// PUBLIC ADDRESSING IS DELIBERATELY NOT A FALLBACK, and this is the substrate-specific
+// judgement worth stating. EC2 also reports PublicDnsName and PublicIpAddress, and falling
+// back to them would mean that an instance which merely happens to have a public interface
+// gets managed OVER THE INTERNET by default — a security posture nobody chose, arrived at
+// because a private name was momentarily absent. In most enterprise VPCs the public name
+// does not resolve internally anyway. Reaching a host publicly is a deliberate decision and
+// must be declared, never defaulted into.
+//
+// The name is preferred for the reason ADR-0143 gives: a DNS name survives the address
+// changing underneath it, and `ansible_host` takes a hostname perfectly well. EC2's
+// private DNS name is dotted by construction (ip-10-0-1-7.ec2.internal), so unlike the
+// vSphere case there is no bare-hostname branch to refuse.
+func reachCoordinate(in ec2types.Instance) string {
+	if in.PrivateDnsName != nil {
+		if n := strings.TrimSpace(*in.PrivateDnsName); n != "" {
+			return strings.ToLower(n)
+		}
+	}
+	if in.PrivateIpAddress != nil {
+		return strings.TrimSpace(*in.PrivateIpAddress)
+	}
+	return ""
 }

@@ -554,6 +554,12 @@ func run(ctx context.Context, log *slog.Logger) error {
 			FacetNamespaces: []string{
 				"instance.compute", "instance.network", "instance.state",
 				"net.vpc", "net.subnet", "net.securitygroup", "storage.volume",
+				// mgmt.address — the OBSERVED reach coordinate (ADR-0143), second substrate.
+				// Multi-source alongside `declared` and `vcenter` (ADR-0060); NOT authoritative,
+				// for the same reason: these write disjoint Entities, and where they correlate
+				// onto one the fail-safe read omits the value and raises a contention Finding
+				// rather than picking a winner (§2.4).
+				"mgmt.address",
 			},
 			LabelKeys: []string{"aws.region", "aws.name", "stratt.managed"},
 			IdentitySchemes: []string{
