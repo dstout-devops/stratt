@@ -11,31 +11,16 @@ import (
 	"fmt"
 	"os"
 
-	"google.golang.org/protobuf/encoding/protojson"
-
 	"github.com/dstout-devops/stratt/plugins/mcp"
-	pluginv1 "github.com/dstout-devops/stratt/sdk/stratt/plugin/v1"
+	"github.com/dstout-devops/stratt/sdk/pluginserve"
 )
 
-func main() {
-	if err := run(); err != nil {
-		fmt.Fprintln(os.Stderr, "stratt-mcp:", err)
-		os.Exit(1)
-	}
-}
+func main() { pluginserve.JobMain("stratt-mcp", run) }
 
 func run() error {
-	reqPath := os.Getenv("STRATT_REQUEST")
-	if reqPath == "" {
-		reqPath = "/runner/stratt/request.json"
-	}
-	raw, err := os.ReadFile(reqPath)
+	applyReq, err := pluginserve.ReadRequest()
 	if err != nil {
-		return fmt.Errorf("read request %s: %w", reqPath, err)
-	}
-	var applyReq pluginv1.ApplyRequest
-	if err := protojson.Unmarshal(raw, &applyReq); err != nil {
-		return fmt.Errorf("decode ApplyRequest: %w", err)
+		return err
 	}
 	var step mcp.Step
 	if d := applyReq.GetDesired(); d != nil && len(d.GetBytes()) > 0 {
@@ -43,10 +28,7 @@ func run() error {
 			return fmt.Errorf("decode mcp step: %w", err)
 		}
 	}
-	dir := os.Getenv("STRATT_RUNNER_DIR")
-	if dir == "" {
-		dir = "/runner/project"
-	}
+	dir := pluginserve.RunnerDir("/runner/project")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
