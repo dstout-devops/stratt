@@ -94,16 +94,25 @@ func (s *Store) DeleteWorkflow(ctx context.Context, name string) error {
 // CreateWorkflowRun records the start of one Workflow execution.
 // triggeredBy names the Trigger that fired it ("" = API launch, §1.8).
 func (s *Store) CreateWorkflowRun(ctx context.Context, workflowName, temporalID, principal, triggeredBy string) (types.WorkflowRun, error) {
+	return s.CreateNestedWorkflowRun(ctx, workflowName, temporalID, principal, triggeredBy, "", "")
+}
+
+// CreateNestedWorkflowRun is CreateWorkflowRun with the ADR-0139 D2 parent link. Both parent
+// fields are set together or neither is — the data layer enforces it, because a half-written link
+// reads as navigable and is not.
+func (s *Store) CreateNestedWorkflowRun(ctx context.Context, workflowName, temporalID, principal, triggeredBy, parentRunID, parentStep string) (types.WorkflowRun, error) {
 	wr := types.WorkflowRun{
 		WorkflowName: workflowName, TemporalID: temporalID,
 		Status: types.RunPending, Principal: principal, TriggeredBy: triggeredBy,
-		Cell: s.projCell(), // homes to the creating daemon's Cell (ADR-0044 slice 5)
+		Cell:                s.projCell(), // homes to the creating daemon's Cell (ADR-0044 slice 5)
+		ParentWorkflowRunID: parentRunID, ParentStepName: parentStep,
 	}
 	err := s.pool.QueryRow(ctx, `
-		INSERT INTO graph.workflow_run (workflow_name, temporal_id, principal, triggered_by, cell)
-		VALUES ($1, $2, $3, nullif($4, ''), $5)
+		INSERT INTO graph.workflow_run (workflow_name, temporal_id, principal, triggered_by, cell,
+		                                parent_workflow_run_id, parent_step_name)
+		VALUES ($1, $2, $3, nullif($4, ''), $5, nullif($6, '')::uuid, nullif($7, ''))
 		RETURNING id, started_at`,
-		workflowName, temporalID, principal, triggeredBy, wr.Cell,
+		workflowName, temporalID, principal, triggeredBy, wr.Cell, parentRunID, parentStep,
 	).Scan(&wr.ID, &wr.StartedAt)
 	if err != nil {
 		return wr, fmt.Errorf("graph: create workflow run: %w", err)
@@ -158,9 +167,11 @@ func (s *Store) GetWorkflowRun(ctx context.Context, id string) (types.WorkflowRu
 	var summary []byte
 	var triggeredBy *string
 	err := s.pool.QueryRow(ctx, `
-		SELECT id, workflow_name, temporal_id, status, principal, triggered_by, summary, started_at, finished_at, cell
+		SELECT id, workflow_name, temporal_id, status, principal, triggered_by, summary, started_at, finished_at, cell,
+		       coalesce(parent_workflow_run_id::text, ''), coalesce(parent_step_name, '')
 		FROM graph.workflow_run WHERE id = $1`, id,
-	).Scan(&wr.ID, &wr.WorkflowName, &wr.TemporalID, &status, &wr.Principal, &triggeredBy, &summary, &wr.StartedAt, &wr.FinishedAt, &wr.Cell)
+	).Scan(&wr.ID, &wr.WorkflowName, &wr.TemporalID, &status, &wr.Principal, &triggeredBy, &summary, &wr.StartedAt, &wr.FinishedAt, &wr.Cell,
+		&wr.ParentWorkflowRunID, &wr.ParentStepName)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return wr, nil, fmt.Errorf("%w: workflow run %s", ErrNotFound, id)
 	}

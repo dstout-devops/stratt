@@ -68,9 +68,12 @@ and AWX→Stratt migration mapping: invoke the **`/vocabulary`** skill.
   SDKs for NATS / Temporal / OpenFGA. One language, shared with the pull agent. **API is
   OpenAPI-first** (huma / oapi-codegen). **Contracts & Facet schemas are data** — pinned,
   hash-verified JSON Schema, validated by a standard validator, **never language classes**.
-- **Python lives only in execution pods** (the `ansible-runner` shim in the EE image) **and the
-  plugin SDK** (one supported language for Connector/Actuator authors). Use `uv` there. Python is
-  **not** the control plane.
+- **Python lives only in execution pods** (the `ansible-runner` shim in the EE image) — the GPLv3
+  subprocess boundary. Use `uv` there. Python is **not** the control plane and **not** the plugin SDK.
+- **The plugin SDK is Go** (`sdk/` — the generated port, `pluginserve`, `mockstratt`,
+  `secretbroker`). But the **PORT is the contract**, not a language: a plugin is conformant because
+  it speaks the gRPC/protobuf port (or the EE-Job subprocess transport), never because it imports an
+  SDK — so any language with a protobuf toolchain is first-class (§1.5, ADR-0141).
 - **Frontend:** React + TypeScript + Vite · TanStack Router/Query · vendored Radix/shadcn components
   owned in-repo · Tailwind (build-time only). Node current-or-previous LTS (this container: 24).
 - **Agent / Sites:** Go (`stratt-agent` pull agent, NATS-leaf dispatcher) — shares types with the
@@ -95,8 +98,13 @@ Run repeatable work through the **Taskfile**; never assert success without the m
 - **Dev substrate:** `task dev:up` / `dev:down` (Postgres 18 · NATS · Temporal); e2e tests need it up.
 - **Demos** ([demos/](demos/README.md), ADR-0116): `task demo:<name>:run` stands up a floor and drives the
   scenario end-to-end, asserting the outcome (`demo:<name>:down` tears it back down). Live-verified on kind:
-  `k8s-deploy`, `vsphere-only`, `ec2-only`, `app-cert`. Treat a demo run as integration testing — they have repeatedly
+  `k8s-deploy`, `vsphere-only`, `ec2-only`, `app-cert`. A **single-plugin** demo lives with its plugin
+  (`plugins/helm/demo/`, `plugins/vcenter/demo/`, `plugins/awsec2/demo/`); [demos/](demos/README.md) keeps only
+  **cross-plugin** scenarios — `app-cert` spans ansible + openbao + declared (ADR-0137 D7, enforced by
+  `task plugins:boundary`). Treat a demo run as integration testing — they have repeatedly
   surfaced real defects; keep them green when touching orchestration, plugins, or the estate.
+- **A demo's estate does NOT exercise `estate/plugins.yaml`**: each stages only its own tree. The full-estate
+  in-cluster path (admission → vendoring → boot) is **`task dev:connector-e2e`**.
 
 ## Workflow
 

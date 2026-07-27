@@ -142,6 +142,29 @@ type Actuator struct {
 	// gated teardown; the provider owns its mechanism (§1.5). Meaningful only when this Actuator
 	// `provides` provisioning.
 	Decommissions map[string]string `json:"decommissions,omitempty"`
+	// Remediates maps an Intent kind (no "Intent/" prefix) to THIS provider's CONVERGENCE
+	// Workflow for it (ADR-0135 D2) — the third member of the Provisions/Decommissions family,
+	// and the one that lets a Blueprint route depend on a capability instead of naming a Workflow.
+	// Meaningful only when this Actuator `provides` the class the route asks for (configmgmt for
+	// ansible); ValidateActuator refuses `remediates` without the matching `provides`.
+	//
+	// KEYED BY INTENT KIND, symmetric with the two above, which is what lets capability.Resolve be
+	// reused unchanged. Routes disambiguate by CAPABILITY, not by Facet: a certissuer route
+	// resolves through OpenBao's map while a configmgmt route resolves through Ansible's. Two
+	// same-capability routes on one Intent kind therefore collapse to one Workflow — the case
+	// `remediationWorkflow` stays for (ADR-0135 D3).
+	//
+	// It ROUTES, it does not GRANT. Unlike FacetNamespaces above, naming a Workflow here confers no
+	// authority: the Workflow's own Steps carry their Actuator's ceiling exactly as they always did.
+	Remediates map[string]string `json:"remediates,omitempty"`
+	// LabelKeys are the Entity label keys this Actuator may write back (ADR-0047 §4,
+	// enforced by Grant.allowsLabel). It is a GRANT, not documentation: a key absent here
+	// is dropped at the governor, so an Actuator migrating off a boot block that had one
+	// silently loses label write-back without it.
+	//
+	// The Connector Kind has carried this since ADR-0047; the Actuator Kind did not, which
+	// is why crossplane could not be declared without narrowing its authority (ADR-0103).
+	LabelKeys []string `json:"labelKeys,omitempty"`
 	// Environments scopes this Actuator (ADR-0057); empty ⇒ every environment.
 	Environments []string `json:"environments,omitempty"`
 }

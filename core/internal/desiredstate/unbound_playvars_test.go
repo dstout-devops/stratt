@@ -2,7 +2,6 @@ package desiredstate
 
 import (
 	"os"
-	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
@@ -81,12 +80,9 @@ var playLocal = map[string]bool{
 // registered/set by an earlier task in the same play.
 func TestNoUnboundPlayVariables(t *testing.T) {
 	trees := map[string]string{"reference": estateRoot}
-	dirs, err := filepath.Glob(filepath.Join(demosRoot, "*", "estate"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	dirs := demoEstates(t)
 	for _, dir := range dirs {
-		trees["demo/"+filepath.Base(filepath.Dir(dir))] = dir
+		trees["demo/"+demoLabel(dir)] = dir
 	}
 	checked := 0
 	for label, dir := range trees {

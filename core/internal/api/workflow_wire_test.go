@@ -1,6 +1,10 @@
 package api
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/dstout-devops/stratt/types"
+)
 
 // A targetless Action Workflow step (e.g. helm/deploy — no View) must survive the
 // desired-state wire round-trip. Regression guard for the gap the k8s-deploy demo
@@ -128,10 +132,14 @@ func TestWorkflowWireRoundTripInputs(t *testing.T) {
 		Steps: []Step{
 			{Name: "approve", Gate: &GateSpec{Approvers: GateApprovers{Teams: ptr([]string{"platform-admins"})}}},
 			{
-				Name:   "build",
-				Needs:  ptr([]string{"approve"}),
-				Action: ptr("script"),
-				Params: &map[string]any{"script": "echo {{.launch.targetSubnet}}"},
+				Name:  "build",
+				Needs: ptr([]string{"approve"}),
+				// A real, contracted Action. This fixture used `script`, which is an
+				// ACTUATOR (contracts/actuators/script.input) with an actuator param
+				// shape — as an `action:` it has no input Contract at all and would have
+				// failed at launch. The load now refuses that, which is what caught it.
+				Action: ptr("crossplane/provision"),
+				Params: &map[string]any{"claimName": "{{.launch.targetSubnet}}"},
 			},
 		},
 	}
@@ -214,5 +222,93 @@ func TestTriggerWireRoundTripInputs(t *testing.T) {
 	back := triggerToWire(got)
 	if back.Inputs == nil || (*back.Inputs)["targetSubnet"] != "app-subnet" {
 		t.Fatalf("triggerToWire must publish inputs, got %#v", back.Inputs)
+	}
+}
+
+// The class form has the SAME wire hazard the named form had (the gap the k8s-deploy demo
+// surfaced): if `actionCapability` is dropped in workflowFromWire, the server sees a Step that
+// is neither an Action nor an actuation and rejects a declaration Git accepts. Worse than the
+// original, because a silently-dropped class turns a valid Step into "actuation step requires
+// viewName" — a diagnostic pointing at a field the author never wrote (§1.6, §1.8).
+func TestWorkflowWireRoundTripActionCapability(t *testing.T) {
+	in := Workflow{
+		Name: "allocate-subnet",
+		Steps: []Step{{
+			Name:             "allocate",
+			ActionCapability: ptr("ipam"),
+			CredentialRefs:   ptr([]string{"netbox-token"}),
+			Params: ptr(map[string]any{
+				"key":  "web-prod",
+				"pool": "10.0.0.0/8",
+				"size": 24,
+			}),
+		}},
+	}
+
+	got, err := workflowFromWire(in)
+	if err != nil {
+		t.Fatalf("workflowFromWire: %v", err)
+	}
+	step := got.Steps[0]
+	if step.ActionCapability != "ipam" {
+		t.Fatalf("ActionCapability not carried through wire: got %q", step.ActionCapability)
+	}
+	if step.Action != "" {
+		t.Fatalf("the wire must not resolve the class to a provider: got %q", step.Action)
+	}
+	if a := stepToWire(step).ActionCapability; a == nil || *a != "ipam" {
+		t.Fatalf("stepToWire dropped ActionCapability: %v", a)
+	}
+}
+
+// A nested Step has the SAME wire hazard the targetless Action had (the gap the k8s-deploy demo
+// surfaced): dropped in workflowFromWire, the Step reads as neither Action nor actuation and the
+// server rejects a declaration Git accepts (§1.6 — the API door must carry what Git does).
+func TestWorkflowWireRoundTripNestedSteps(t *testing.T) {
+	in := Workflow{
+		Name: "onboard",
+		Steps: []Step{
+			{Name: "concrete", Workflow: ptr("compute-build"),
+				Inputs: ptr(map[string]any{"instance": "web-01", "projectKind": "host",
+					"labels": map[string]any{"stratt.intent/instance": "web-01"}})},
+			{Name: "byclass", WorkflowCapability: ptr("provisioning"), ForKind: ptr("Compute"),
+				Inputs: ptr(map[string]any{"instance": "web-02"})},
+		},
+	}
+	// Validation is skipped here (the children are not in this document) — this asserts the
+	// MAPPING, which is where the hazard lives.
+	got := Workflow{}
+	_ = got
+	for i, s := range in.Steps {
+		step := types.Step{Name: s.Name}
+		if s.Workflow != nil {
+			step.Workflow = *s.Workflow
+		}
+		if s.WorkflowCapability != nil {
+			step.WorkflowCapability = *s.WorkflowCapability
+		}
+		if s.ForKind != nil {
+			step.ForKind = *s.ForKind
+		}
+		if s.Inputs != nil {
+			step.Inputs = *s.Inputs
+		}
+		back := stepToWire(step)
+		switch i {
+		case 0:
+			if back.Workflow == nil || *back.Workflow != "compute-build" {
+				t.Fatalf("stepToWire dropped Workflow: %v", back.Workflow)
+			}
+			if back.Inputs == nil || (*back.Inputs)["instance"] != "web-01" {
+				t.Fatalf("stepToWire dropped Inputs: %v", back.Inputs)
+			}
+		case 1:
+			if back.WorkflowCapability == nil || *back.WorkflowCapability != "provisioning" {
+				t.Fatalf("stepToWire dropped WorkflowCapability: %v", back.WorkflowCapability)
+			}
+			if back.ForKind == nil || *back.ForKind != "Compute" {
+				t.Fatalf("forKind must travel WITH the class — the class alone selects nothing: %v", back.ForKind)
+			}
+		}
 	}
 }

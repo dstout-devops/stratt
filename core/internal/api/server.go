@@ -1915,6 +1915,22 @@ func stepToWire(s types.Step) Step {
 	if s.Action != "" {
 		out.Action = &s.Action
 	}
+	if s.ActionCapability != "" {
+		out.ActionCapability = &s.ActionCapability
+	}
+	// The nested forms (ADR-0139). Dropped here, a nested Step reads as neither Action nor
+	// actuation and the server rejects a declaration Git accepts — the same wire hazard the
+	// targetless Action had.
+	if s.Workflow != "" {
+		out.Workflow = &s.Workflow
+	}
+	if s.WorkflowCapability != "" {
+		out.WorkflowCapability = &s.WorkflowCapability
+		out.ForKind = &s.ForKind
+	}
+	if len(s.Inputs) > 0 {
+		out.Inputs = &s.Inputs
+	}
 	if s.ViewName != "" {
 		out.ViewName = &s.ViewName
 	}
@@ -1984,6 +2000,21 @@ func workflowFromWire(in Workflow, opts ...desiredstate.ValidateOption) (types.W
 		if s.Action != nil {
 			step.Action = *s.Action
 		}
+		if s.ActionCapability != nil {
+			step.ActionCapability = *s.ActionCapability
+		}
+		if s.Workflow != nil {
+			step.Workflow = *s.Workflow
+		}
+		if s.WorkflowCapability != nil {
+			step.WorkflowCapability = *s.WorkflowCapability
+		}
+		if s.ForKind != nil {
+			step.ForKind = *s.ForKind
+		}
+		if s.Inputs != nil {
+			step.Inputs = *s.Inputs
+		}
 		if s.ViewName != nil {
 			step.ViewName = *s.ViewName
 		}
@@ -2021,6 +2052,11 @@ func workflowRunToWire(wr types.WorkflowRun) WorkflowRun {
 	}
 	if wr.Principal != "" {
 		out.Principal = &wr.Principal
+	}
+	// The nesting link (ADR-0139 D2). Both or neither, mirroring the data layer's own rule.
+	if wr.ParentWorkflowRunID != "" {
+		out.ParentWorkflowRunId = &wr.ParentWorkflowRunID
+		out.ParentStepName = &wr.ParentStepName
 	}
 	return out
 }

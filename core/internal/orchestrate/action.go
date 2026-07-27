@@ -165,12 +165,15 @@ func (a *Activities) ExecuteAction(ctx context.Context, in RunInput, creds []dis
 			})
 		}
 		raw, err := pa.Host.InvokeRaw(ctx, pluginhost.ActionInvoke{
-			Principal:            in.Principal,
-			Action:               in.Action,
-			Args:                 in.Params,
-			DryRun:               in.DryRun,
-			Credentials:          portCreds,
-			ExpectOutputContract: "actions/" + in.Action + ".output",
+			Principal:   in.Principal,
+			Action:      in.Action,
+			Args:        in.Params,
+			DryRun:      in.DryRun,
+			Credentials: portCreds,
+			// A class-named Step is governed by the CLASS Contract, not the resolved
+			// provider's own (ADR-0112 D2 / ADR-0140 D3 row 2) — the same shape every
+			// provider of the class fills, so a rebind changes no consumer's expectation.
+			ExpectOutputContract: actionOutputContract(in),
 		})
 		if err != nil {
 			return dispatch.Result{}, err
@@ -218,10 +221,23 @@ func (a *Activities) ExecuteAction(ctx context.Context, in RunInput, creds []dis
 // Contract (§2.2). A mismatch fails the Run terminally — an Action that lies
 // about its outputs is a §1.8 failure, never silently accepted.
 func (a *Activities) ValidateActionOutputs(ctx context.Context, in RunInput, outputs json.RawMessage) error {
-	if err := contract.ValidateActionOutput(in.Action, outputs); err != nil {
+	if err := contract.ValidateNamed(actionOutputContract(in), outputs); err != nil {
 		return temporal.NewNonRetryableApplicationError(err.Error(), "ActionOutputInvalid", err)
 	}
 	return nil
+}
+
+// actionOutputContract names the Contract an Action Run's outputs must satisfy: the CLASS
+// Contract when the Step named a capability, the Action's own otherwise (ADR-0112 D2 /
+// ADR-0140 D3 row 2).
+//
+// One spelling for both the pre-flight expectation sent to the plugin and the post-hoc
+// validation, because two call sites deriving the same name independently is how they drift.
+func actionOutputContract(in RunInput) string {
+	if in.ActionCapability != "" {
+		return contract.CapabilityOutput(in.ActionCapability)
+	}
+	return "actions/" + in.Action + ".output"
 }
 
 // RecordActionResult captures the Action's typed outputs on the Run and

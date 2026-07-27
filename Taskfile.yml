@@ -223,14 +223,20 @@ tasks:
         # that failure left. It has bitten ansible, vcenter, awsec2 and (silently)
         # ten more; plugins/script is baked into the EE image, so its breakage would
         # have taken the execution environment down with it.
+        #
+        # `go vet`, not `go build`: build ignores _test.go, so a TEST-only dependency
+        # missing from go.sum stayed invisible to this gate — and "a plugin can be
+        # TESTED alone" is the property ADR-0137 D6 exists for, not just "it compiles
+        # alone". vet type-checks the test files too, which closes that hole without
+        # paying to run every suite twice (`task test` already runs them).
         failed=""
         for mod in $(find plugins -maxdepth 2 -name go.mod | sort); do
           dir=$(dirname "$mod")
-          if (cd "$dir" && GOWORK=off go build -p={{.GO_PARALLEL}} ./... >/dev/null 2>&1); then
+          if (cd "$dir" && GOWORK=off go vet ./... >/dev/null 2>&1); then
             echo "  ✓ $dir"
           else
-            echo "  ✗ $dir — does not build standalone:"
-            (cd "$dir" && GOWORK=off go build ./... 2>&1 | head -5 | sed 's/^/      /') || true
+            echo "  ✗ $dir — does not build/vet standalone:"
+            (cd "$dir" && GOWORK=off go vet ./... 2>&1 | head -5 | sed 's/^/      /') || true
             failed="$failed $dir"
           fi
         done
@@ -240,7 +246,272 @@ tasks:
           echo "  Fix each with:  (cd <module> && GOWORK=off go mod tidy)"
           exit 1
         fi
-        echo "✓ plugins:standalone — every plugin module builds outside the workspace"
+        echo "✓ plugins:standalone — every plugin module builds and vets outside the workspace"
+
+  plugins:boundary:
+    desc: "ADR-0137 D2's acid test — prove each plugin is self-contained (import direction + estate ownership)"
+    silent: true
+    cmds:
+      - |
+        set -eu
+        # D2: "Developing a plugin changes nothing outside plugins/<name>/."
+        #
+        # The ADR asks for this to be "mechanically checkable the way
+        # plugins:standalone is" — and note what that gate actually does: it proves a
+        # PROPERTY OF THE TREE, not a property of a diff. So does this. The strongest
+        # mechanical statement of "developing a plugin changes nothing outside it" is
+        # that there IS nothing outside it: a self-contained plugin has nowhere else
+        # to reach. (The diff-shaped half — a change that edits a plugin AND
+        # special-cases it in core — is plugins:boundary:diff, which needs a base ref.)
+        fail=0
+
+        # ── 1. The import direction ──────────────────────────────────────────────
+        # core may depend on sdk; a plugin may depend on sdk; a plugin may NEVER
+        # depend on core. This is the whole claim in one line — a plugin that
+        # imported the control plane would disprove every other guarantee here, and
+        # would make `mock-stratt` pointless (a plugin testing itself would pull in
+        # the thing it is supposed to be independent of).
+        for mod in $(find plugins -maxdepth 2 -name go.mod | sort); do
+          if grep -q "dstout-devops/stratt/core" "$mod"; then
+            echo "  ✗ $(dirname "$mod") depends on core/ — a plugin must never import the control plane"
+            fail=1
+          fi
+        done
+
+        # ── 2. A migrated plugin owns ALL of its declarations ────────────────────
+        # A RATCHET, deliberately, not a cliff: it fails only for plugins that have
+        # already taken ownership (they have plugins/<name>/estate/). A gate that
+        # went red for all 12 unmigrated plugins on day one would be switched off
+        # within a week, and a switched-off gate is worse than none. What it buys is
+        # that migration is one-way — nothing drifts back into estate/ — and the
+        # remaining debt is PRINTED rather than living in someone's head.
+        migrated=""; pending=""
+        for id in $(grep -h "pluginIdentity:" estate/actuators/*.yaml estate/connectors/*.yaml 2>/dev/null \
+                    | sed 's/.*pluginIdentity:[[:space:]]*//' | tr -d '"' | sort -u); do
+          [ -d "plugins/$id" ] || continue
+          if [ -d "plugins/$id/estate" ]; then
+            echo "  ✗ plugin '$id' owns plugins/$id/estate but still has declarations in estate/:"
+            grep -ln "pluginIdentity:[[:space:]]*\"\?$id\"\?$" estate/actuators/*.yaml estate/connectors/*.yaml 2>/dev/null \
+              | sed 's/^/        /'
+            fail=1
+          else
+            pending="$pending $id"
+          fi
+        done
+        for d in plugins/*/estate; do
+          [ -d "$d" ] && migrated="$migrated $(basename "$(dirname "$d")")"
+        done
+
+        # ── 3. A plugin's declarations NAME no other plugin ──────────────────────
+        # The rule is ADR-0104 D1, and it is about NAMES, not about dependency:
+        #
+        #     "A declaration requires `keycustodian`, NEVER `openbao-transit`. The
+        #      capability class is the sovereign contract; the plugin that fulfils it
+        #      is a swappable transport."
+        #
+        # A plugin DEPENDING on another capability is the intended design, not a
+        # violation — ansible cannot provision the hosts it converges, a cert plugin
+        # needs a CA, an HSM-backed one needs `keycustodian`. `requires: [provisioning]`
+        # is correct and this check deliberately says nothing about it. What is refused
+        # is naming a PROVIDER: `action: awsec2/create-vm` welds one plugin to another
+        # and is exactly what a capability class exists to avoid (§1.5, the anti-Jenkins
+        # move — coupling to a contract cannot version-rot the way a named provider can).
+        #
+        # It caught linux-onboard, which step 2 had moved into plugins/ansible. Note
+        # what the real defect was: not that the Workflow spans two plugins — that is
+        # ordinary and fine — but that it NAMES awsec2. The capability-typed form of it
+        # cannot be written today (a Workflow Step takes a concrete actuator:/action:,
+        # with no `requiresCapability:` equivalent to the one an Intent has), so it
+        # lives in estate/ for now BECAUSE THE MECHANISM IS MISSING, not because a
+        # cross-plugin lifecycle inherently belongs to core.
+        #
+        # Ownership comes from the declarations themselves — an `actuator:` resolves
+        # through its declaration's pluginIdentity, an `action: <plugin>/<verb>`
+        # through its prefix. A reference this cannot resolve (a boot-registered
+        # Actuator like cert-issuer or mcp) is SKIPPED rather than guessed at.
+        owners=$(for f in estate/actuators/*.yaml plugins/*/estate/actuators/*.yaml; do
+          [ -f "$f" ] || continue
+          n=$(grep -m1 "^name:" "$f" | sed 's/name:[[:space:]]*//' | tr -d '"')
+          p=$(grep -m1 "pluginIdentity:" "$f" | sed 's/.*pluginIdentity:[[:space:]]*//' | tr -d '"')
+          [ -n "$n" ] && [ -n "$p" ] && echo "$n=$p"
+        done)
+        # Both a plugin's own estate AND its demo's estate: a SINGLE-plugin demo is what
+        # earns a demo the right to live inside a plugin (D7), so it is held to the same
+        # rule as the declarations beside it.
+        for d in plugins/*/estate plugins/*/demo/estate; do
+          [ -d "$d" ] || continue
+          self=$(basename "$d")
+          case "$d" in
+            */demo/estate) self=$(basename "$(dirname "$(dirname "$d")")") ;;
+            *)             self=$(basename "$(dirname "$d")") ;;
+          esac
+          for f in $(find "$d" -name '*.yaml' -o -name '*.yml' 2>/dev/null); do
+            for ref in $(grep -oE "^[[:space:]]*(actuator|action):[[:space:]]*[A-Za-z0-9/_-]+" "$f" 2>/dev/null \
+                         | sed 's/.*:[[:space:]]*//'); do
+              case "$ref" in
+                */*) owner=${ref%%/*} ;;                                     # action: <plugin>/<verb>
+                *)   owner=$(echo "$owners" | grep -m1 "^$ref=" | cut -d= -f2) ;;
+              esac
+              [ -n "$owner" ] || continue                                    # unresolvable ⇒ not ours to judge
+              if [ "$owner" != "$self" ]; then
+                echo "  ✗ $f NAMES another plugin's provider: '$ref' (owned by '$owner')."
+                echo "      Depend on a capability CLASS, never a provider name (ADR-0104 D1). Depending on"
+                echo "      another capability is fine — naming who fulfils it is not."
+                fail=1
+              fi
+            done
+          done
+        done
+
+        # ── 5. A provider's ADVERTISED Workflows live in its OWN tree ───────────
+        # Check 3 reads `actuator:`/`action:` references. It does NOT read the per-kind
+        # maps — `provisions`/`remediates`/`decommissions` — and that gap was real: ADR-0137
+        # step 4 moved vsphere-vm-build and vsphere-vm-teardown into plugins/vcenter/ and left
+        # vsphere-subnet-build in estate/, so vcenter's `provisions` map pointed into two
+        # different trees and nothing noticed. A provider whose advertised mechanisms are
+        # scattered is a plugin that does not actually own its own declarations (D2), and the
+        # ratchet is only a ratchet if it covers every way one can advertise a mechanism.
+        #
+        # Same ownership test as check 3, applied to the maps rather than to Step references.
+        # Scoped to plugin trees: a provider declared in estate/ is core-owned and may name any
+        # Workflow the floor declares.
+        for d in plugins/*/estate; do
+          [ -d "$d" ] || continue
+          self=$(basename "$(dirname "$d")")
+          own=$(for w in "$d"/workflows/*.yaml plugins/"$self"/demo/estate/workflows/*.yaml; do
+            [ -f "$w" ] || continue
+            grep -m1 "^name:" "$w" | sed 's/name:[[:space:]]*//' | tr -d '"'
+          done)
+          for f in $(find "$d" -name '*.yaml' -o -name '*.yml' 2>/dev/null); do
+            for wf in $(awk '
+              /^(provisions|remediates|decommissions):[[:space:]]*$/ { inmap=1; next }
+              /^[^[:space:]#]/ { inmap=0 }
+              inmap && /^[[:space:]]+[A-Za-z][A-Za-z0-9_.-]*:[[:space:]]*[A-Za-z0-9][A-Za-z0-9_-]*[[:space:]]*$/ {
+                sub(/^[^:]*:[[:space:]]*/, ""); gsub(/[[:space:]]/, ""); print
+              }' "$f" 2>/dev/null); do
+              if ! echo "$own" | grep -qx "$wf"; then
+                echo "  ✗ $f ADVERTISES workflow '$wf', which is not declared in plugins/$self/."
+                echo "      A provider's provisions/remediates/decommissions map names ITS OWN mechanisms"
+                echo "      (ADR-0140 D2). One pointing outside its tree means the plugin does not own the"
+                echo "      thing it advertises \u2014 move the Workflow, or drop the entry."
+                fail=1
+              fi
+            done
+          done
+        done
+
+        # ── 4. demos/ holds CROSS-plugin scenarios only ──────────────────────────
+        # D7: a demo that exercises ONE plugin belongs beside that plugin; demos/ is
+        # for scenarios that span several, which is the only thing no single plugin
+        # can own. Without this the split silently re-scatters — a new single-plugin
+        # demo lands in demos/ because that is where demos "go", and the tree drifts
+        # back to where it started one file at a time.
+        #
+        # A demo's span is read the same way its estate declares it: pluginIdentity on
+        # its Actuators/Connectors, plus the `<plugin>/` prefix of any Action it calls.
+        for d in demos/*/; do
+          [ -d "${d}estate" ] || continue
+          spans=$({ grep -rhoE "pluginIdentity:[[:space:]]*[a-z0-9-]+" "$d" 2>/dev/null | sed 's/.*:[[:space:]]*//'
+                    grep -rhoE "^[[:space:]]+action:[[:space:]]*[a-z0-9-]+/" "$d" 2>/dev/null | sed 's|.*:[[:space:]]*||; s|/||'
+                  } | sort -u | tr '\n' ' ' | sed 's/ *$//')
+          n=$(echo "$spans" | wc -w)
+          if [ "$n" -eq 1 ]; then
+            echo "  ✗ demo '$(basename "$d")' exercises only '$spans' — a single-plugin demo belongs in"
+            echo "      plugins/$spans/demo/, not in demos/ (ADR-0137 D7)"
+            fail=1
+          fi
+        done
+
+        if [ "$fail" -ne 0 ]; then
+          echo ""
+          echo "✗ plugins:boundary — see above (ADR-0137 D2)"
+          exit 1
+        fi
+        echo "✓ plugins:boundary — no plugin depends on core; every migrated plugin owns its declarations"
+        echo "  migrated:$migrated"
+        [ -n "$pending" ] && echo "  still owned by estate/ (ADR-0137 step 4):$pending" || true
+
+  plugins:boundary:diff:
+    desc: "ADR-0137 D2 on a DIFF — a plugin change must not reach into core (BASE=origin/main)"
+    silent: true
+    vars:
+      BASE: '{{.BASE | default ""}}'
+    cmds:
+      - |
+        set -eu
+        base="{{.BASE}}"
+        if [ -z "$base" ]; then
+          echo "· plugins:boundary:diff — skipped (no BASE; run as: BASE=origin/main task plugins:boundary:diff)"
+          exit 0
+        fi
+        # An UNSET base skips (above); a SET but unresolvable one FAILS. The
+        # difference is the same one estate/plugins.yaml draws between "declared
+        # nothing" and "declared something unreadable": CI sets BASE deliberately, so
+        # a base it cannot resolve means the gate is silently a no-op — admitted,
+        # never consulted, reported nowhere. That is the failure shape this whole ADR
+        # keeps refusing, and a gate is the last place to permit it.
+        if ! git rev-parse --verify --quiet "$base" >/dev/null; then
+          echo "✗ plugins:boundary:diff — BASE=$base does not resolve here, so this gate would check NOTHING."
+          echo "  Fetch it first (CI does this for buf):  git fetch --no-tags origin +refs/heads/main:refs/heads/main"
+          exit 1
+        fi
+        changed=$(git diff --name-only "$base"...HEAD)
+        [ -n "$changed" ] || { echo "✓ plugins:boundary:diff — no changes"; exit 0; }
+
+        touched_plugins=$(echo "$changed" | grep '^plugins/' | cut -d/ -f2 | sort -u || true)
+        [ -n "$touched_plugins" ] || { echo "✓ plugins:boundary:diff — no plugin touched"; exit 0; }
+
+        # This is the half the structural gate CANNOT see: a change that edits a
+        # plugin AND teaches core about it — the `if ansible {}` §1.4 forbids. It
+        # leaves no trace in the plugin's module graph, so only the shape of the
+        # change reveals it.
+        #
+        # Each exception below is allowed for a STATED reason, not for convenience.
+        #
+        # The contracts/ exceptions are NARROW on purpose. Only `actuators/` and
+        # `actions/` hold a plugin's own wire promises — 22 of the tree's 152
+        # documents. The other 130 are not the plugin's to own and never were:
+        # `facets/` is graph vocabulary that core compositions READ (a Blueprint route
+        # observes app.config), `intents/` is the payload shape of core Named Kinds,
+        # `capabilities/` is the closed core-owned class vocabulary (ADR-0104), plus
+        # policy/ and outputs/. A plugin change that touches one of those is a §1.1/§2.1
+        # event — a new Facet namespace, a changed Intent shape — and must be reviewed
+        # as one, not waved through as routine plugin work. A blanket `contracts/`
+        # exception did exactly that.
+        outside=$(echo "$changed" | grep -v '^plugins/' \
+          | grep -v '^proto/'                  `# the port itself — D2 exception 2` \
+          | grep -v '^sdk/stratt/'             `# generated port bindings` \
+          | grep -v '^types/capability'        `# the capability vocabulary — D2 exception 1` \
+          | grep -v '^estate/plugins.yaml$'    `# ADMISSION: deploying, not developing (D3)` \
+          | grep -v '^contracts/actuators/'    `# TEMPORARY: a plugin's own input Contract (D5/step 6)` \
+          | grep -v '^contracts/actions/'      `# TEMPORARY: a plugin's own Action Contracts (D5/step 6)` \
+          | grep -v '^docs/'                   `# never load-bearing` \
+          | grep -v '\.md$'                    \
+          || true)
+        [ -n "$outside" ] || { echo "✓ plugins:boundary:diff — plugin change stayed inside its plugin"; exit 0; }
+
+        # The escape hatch is a STATEMENT, not a switch. A change that genuinely
+        # alters the boundary itself — building the plugin-estate mechanism, moving a
+        # Contract — is legitimate and must be possible; what must not be possible is
+        # doing it silently. Saying so in the commit message puts it in front of the
+        # reviewer, which is the same logic D3 applies to admission: the exception is
+        # fine, the exception being invisible is not.
+        if git log --format=%B "$base"..HEAD | grep -q '^Boundary-Change:'; then
+          echo "✓ plugins:boundary:diff — core paths touched, declared via Boundary-Change:"
+          echo "$outside" | sed 's/^/    /'
+          exit 0
+        fi
+        echo "✗ plugins:boundary:diff — this change touches$(echo " $touched_plugins" | tr '\n' ' ')and also reaches outside:"
+        echo "$outside" | sed 's/^/    /'
+        echo ""
+        echo "  ADR-0137 D2: developing a plugin changes nothing outside plugins/<name>/."
+        echo "  If this IS a deliberate change to the boundary (a new capability class, a"
+        echo "  port change, moving a Contract), say so — add a trailer to the commit:"
+        echo ""
+        echo "      Boundary-Change: <why this must touch core>"
+        echo ""
+        echo "  If it is not, the coupling belongs inside the plugin."
+        exit 1
 
   e2e:cells:
     desc: Two-Cell end-to-end harness — federated read + fenced Source re-home over real HTTP (ADR-0044; needs `task dev:up`)
@@ -260,6 +531,12 @@ tasks:
       - task: adr:index:check
       - task: test
       - task: plugins:standalone
+      - task: plugins:boundary
+      # D2's diff half. Needs a base ref, so it SKIPS locally and runs in CI, where
+      # the workflow fetches main. Skipping without a base is deliberate: the check
+      # is about the shape of a change, and there is no change to shape when you are
+      # just running the gate on a checkout.
+      - task: plugins:boundary:diff
       - task: ee:content:check
       - task: ui:ci
 
@@ -567,41 +844,23 @@ tasks:
         gw=$(docker network inspect kind 2>/dev/null | grep -m1 '"Gateway"' | sed 's/.*: *"//; s/".*//')
         echo "${gw:-192.168.102.1}"
 
-  image:vcenter-plugin:
-    desc: Build the vcenter gRPC Syncer plugin image and load it into the kind cluster
+  image:plugin:
+    # ONE task for EVERY plugin image (ADR-0137 D2). This used to be six tasks —
+    # image:vcenter-plugin, image:helm-plugin, … — identical but for a name, which
+    # meant adding a plugin required a core edit for no design reason whatsoever.
+    # That is precisely the boundary defect D2 names, arriving as boilerplate
+    # rather than as a decision, and `task plugins:boundary` would have to
+    # allowlist it forever. Deleting the cause beats allowlisting the symptom.
+    #
+    # The convention is the contract: plugins/<name>/Dockerfile builds an image
+    # tagged stratt-plugin-<name>:dev. A plugin needing something else needs a
+    # different Dockerfile, not a different task.
+    desc: 'Build a plugin image and load it into kind — `task image:plugin PLUGIN=vcenter`'
+    requires:
+      vars: [PLUGIN]
     cmds:
-      - docker build --build-arg GO_PARALLEL={{.GO_PARALLEL}} -f plugins/vcenter/Dockerfile -t stratt-plugin-vcenter:dev .
-      - go run sigs.k8s.io/kind@v{{.KIND_VER}} load docker-image stratt-plugin-vcenter:dev --name {{.KIND_CLUSTER}}
-
-  image:declared-plugin:
-    desc: Build the declared-estate gRPC Syncer plugin image and load it into the kind cluster
-    cmds:
-      - docker build --build-arg GO_PARALLEL={{.GO_PARALLEL}} -f plugins/declared/Dockerfile -t stratt-plugin-declared:dev .
-      - go run sigs.k8s.io/kind@v{{.KIND_VER}} load docker-image stratt-plugin-declared:dev --name {{.KIND_CLUSTER}}
-
-  image:awsec2-plugin:
-    desc: Build the awsec2 gRPC plugin image (create-vm build Action) and load it into the kind cluster
-    cmds:
-      - docker build --build-arg GO_PARALLEL={{.GO_PARALLEL}} -f plugins/awsec2/Dockerfile -t stratt-plugin-awsec2:dev .
-      - go run sigs.k8s.io/kind@v{{.KIND_VER}} load docker-image stratt-plugin-awsec2:dev --name {{.KIND_CLUSTER}}
-
-  image:netbox-plugin:
-    desc: Build the NetBox topology Syncer plugin image (ADR-0059) and load it into the kind cluster
-    cmds:
-      - docker build --build-arg GO_PARALLEL={{.GO_PARALLEL}} -f plugins/netbox/Dockerfile -t stratt-plugin-netbox:dev .
-      - go run sigs.k8s.io/kind@v{{.KIND_VER}} load docker-image stratt-plugin-netbox:dev --name {{.KIND_CLUSTER}}
-
-  image:helm-plugin:
-    desc: Build the helm Actuator plugin image and load it into the kind cluster (ADR-0092)
-    cmds:
-      - docker build --build-arg GO_PARALLEL={{.GO_PARALLEL}} -f plugins/helm/Dockerfile -t stratt-plugin-helm:dev .
-      - go run sigs.k8s.io/kind@v{{.KIND_VER}} load docker-image stratt-plugin-helm:dev --name {{.KIND_CLUSTER}}
-
-  image:crossplane-plugin:
-    desc: Build the Crossplane build-Actuator plugin image (ADR-0059) and load it into the kind cluster
-    cmds:
-      - docker build --build-arg GO_PARALLEL={{.GO_PARALLEL}} -f plugins/crossplane/Dockerfile -t stratt-plugin-crossplane:dev .
-      - go run sigs.k8s.io/kind@v{{.KIND_VER}} load docker-image stratt-plugin-crossplane:dev --name {{.KIND_CLUSTER}}
+      - docker build --build-arg GO_PARALLEL={{.GO_PARALLEL}} -f plugins/{{.PLUGIN}}/Dockerfile -t stratt-plugin-{{.PLUGIN}}:dev .
+      - go run sigs.k8s.io/kind@v{{.KIND_VER}} load docker-image stratt-plugin-{{.PLUGIN}}:dev --name {{.KIND_CLUSTER}}
 
   images:control-plane:
     desc: Build the CONTROL-PLANE images (no push/load) — the CI regression gate. Plugins & the EE image build in their OWN units (each plugin is its own build/CI unit, ADR-0046) — core CI never builds per-plugin (it must scale to hundreds of plugins).
@@ -611,7 +870,8 @@ tasks:
       - docker build --build-arg GO_PARALLEL={{.GO_PARALLEL}} -f deploy/docker/stratt-forwarder.Dockerfile -t stratt/stratt-forwarder:ci .
 
   dev:stage-estate:
-    desc: Stage the reconciled /estate into the chart's inline-declarations path (Helm can't glob outside the chart)
+    desc: Stage the reconciled /estate — plus every plugin estate it admits — into the chart's inline-declarations path
+    silent: true
     cmds:
       # /estate is the single source of truth; this git-ignored copy is what the
       # inline-declarations ConfigMap globs. Mirror exactly (delete-extraneous) so
@@ -619,6 +879,62 @@ tasks:
       - rm -rf {{.ROOT_DIR}}/deploy/charts/stratt/dev/declarations
       - mkdir -p {{.ROOT_DIR}}/deploy/charts/stratt/dev/declarations
       - cp -R {{.ROOT_DIR}}/estate/. {{.ROOT_DIR}}/deploy/charts/stratt/dev/declarations/
+      # VENDOR the admitted plugin estates (ADR-0137 D1/D3). This is the `install`
+      # half: in the repo a plugin estate lives beside the estate and plugins.yaml
+      # reaches out to it, but a DEPLOYED estate is self-contained — the operator's
+      # Git holds a copy, exactly as `stratt pack install` materializes a pack
+      # (ADR-0033, §1.2 stays operator-owned).
+      #
+      # Vendored into plugins/<name>/estate rather than flattened INTO the estate's
+      # own directories, for two reasons: two plugins may each ship a `content/`
+      # root and flattening would collide them silently, and keeping the subtree
+      # means the deployed tree still shows which declarations came from which
+      # plugin (§1.8 — where a declaration came from stays visible).
+      #
+      # The ConfigMap keys on a flattened path (`/`→`__`) and deployment.yaml
+      # restores it via items[].path, so the extra depth costs nothing.
+      - |
+        set -eu
+        src="{{.ROOT_DIR}}/estate/plugins.yaml"
+        dst="{{.ROOT_DIR}}/deploy/charts/stratt/dev/declarations"
+        [ -f "$src" ] || exit 0
+        # name/path pairs out of the admission list. Deliberately strict: anything
+        # this cannot read is a hard failure, never a silently unstaged plugin —
+        # which would boot a daemon running none of that plugin's Workflows.
+        names=$(awk '/^[[:space:]]*-[[:space:]]*name:/{gsub(/.*name:[[:space:]]*/,"");print}' "$src")
+        paths=$(awk '/^[[:space:]]*path:/{gsub(/.*path:[[:space:]]*/,"");print}' "$src")
+        [ "$(echo "$names" | grep -c .)" = "$(echo "$paths" | grep -c .)" ] || {
+          echo "✗ estate/plugins.yaml: every admitted plugin needs exactly one path" >&2; exit 1; }
+        : > "$dst/plugins.yaml"
+        echo "# GENERATED by 'task dev:stage-estate' — edit estate/plugins.yaml instead." >> "$dst/plugins.yaml"
+        echo "# The admitted plugin estates are VENDORED beside this file (ADR-0137 D3)." >> "$dst/plugins.yaml"
+        echo "plugins:" >> "$dst/plugins.yaml"
+        i=1
+        while [ "$i" -le "$(echo "$names" | grep -c .)" ]; do
+          n=$(echo "$names" | sed -n "${i}p")
+          p=$(echo "$paths" | sed -n "${i}p")
+          from="{{.ROOT_DIR}}/estate/$p"
+          [ -d "$from" ] || { echo "✗ admitted plugin '$n': no estate at $p" >&2; exit 1; }
+          mkdir -p "$dst/plugins/$n/estate"
+          cp -R "$from/." "$dst/plugins/$n/estate/"
+          # The plugin's own SELF CONTRACTS (ADR-0138 D3/D4), vendored as the SIBLING of its
+          # estate because that is where the loader looks: plugins/<n>/{estate,contracts}.
+          #
+          # Not optional decoration. Since the relocation these documents are the ONLY copy —
+          # `actions/helm/deploy.input` and `actuators/ansible.input` left the binary — so a
+          # staged tree without them boots a daemon whose estate parse fails on the first Step
+          # naming a plugin Action. That is exactly how this was found: task ci was green and
+          # the pod CrashLooped with "no input contract for actuator ansible-access-control".
+          cfrom="$(dirname "$from")/contracts"
+          if [ -d "$cfrom" ]; then
+            mkdir -p "$dst/plugins/$n/contracts"
+            cp -R "$cfrom/." "$dst/plugins/$n/contracts/"
+          fi
+          echo "  - name: $n" >> "$dst/plugins.yaml"
+          echo "    path: plugins/$n/estate" >> "$dst/plugins.yaml"
+          echo "  ✓ vendored plugin estate: $n"
+          i=$((i + 1))
+        done
 
   dev:stage-genesis:
     # The LEAN genesis slice (ADR-0102): stage ONLY deploy/dev/genesis-estate into the
@@ -720,7 +1036,8 @@ tasks:
     cmds:
       - task: dev:kind:up
       - task: image:kind-load
-      - task: image:helm-plugin # the self-deploy Actuator Stratt uses to deploy the rest
+      - task: image:plugin # the self-deploy Actuator Stratt uses to deploy the rest
+        vars: {PLUGIN: helm}
       - task: dev:stage-genesis
       - |
         set -eu
@@ -767,21 +1084,22 @@ tasks:
     cmds:
       - rm -rf {{.ROOT_DIR}}/deploy/charts/stratt/dev/declarations
       - mkdir -p {{.ROOT_DIR}}/deploy/charts/stratt/dev/declarations
-      - cp -R {{.ROOT_DIR}}/demos/k8s-deploy/estate/. {{.ROOT_DIR}}/deploy/charts/stratt/dev/declarations/
+      - cp -R {{.ROOT_DIR}}/plugins/helm/demo/estate/. {{.ROOT_DIR}}/deploy/charts/stratt/dev/declarations/
 
   demo:k8s-deploy:run:
     # The turnkey "k8s: deploy an app" demo (ADR-0116, the first demos/ scenario). Stands up a Stratt
     # floor whose desired state IS the demo estate (kind + spine + strattd + the helm plugin + the
     # staged CaC), then drives its gated deploy-hello Workflow end to end — approve the platform-admins
     # gate as bootstrap-admin, converge the WorkflowRun, assert the real `hello` Deployment is Ready.
-    # The hello-stratt chart rides the helm plugin image (image:helm-plugin). By-hand walk:
-    # demos/k8s-deploy/README.md. Teardown: demo:k8s-deploy:down (full nuke: dev:kind:down).
-    desc: "Demo — stand up a floor and deploy a real app through a gated Workflow (demos/k8s-deploy)"
+    # The hello-stratt chart rides the helm plugin image (image:plugin PLUGIN=helm). By-hand walk:
+    # plugins/helm/demo/README.md. Teardown: demo:k8s-deploy:down (full nuke: dev:kind:down).
+    desc: "Demo — stand up a floor and deploy a real app through a gated Workflow (plugins/helm/demo)"
     deps: [tools:helm, tools:kubectl]
     cmds:
       - task: dev:kind:up
       - task: image:kind-load
-      - task: image:helm-plugin # the helm Actuator + the baked hello-stratt chart
+      - task: image:plugin # the helm Actuator + the baked hello-stratt chart
+        vars: {PLUGIN: helm}
       - task: demo:k8s-deploy:stage
       - |
         set -eu
@@ -799,7 +1117,7 @@ tasks:
       - "{{.KUBECTL}} --context {{.KIND_CONTEXT}} -n stratt rollout status deploy/stratt --timeout=240s"
       # The gate-only CredentialRef points at this marker Secret (pointer, no material).
       - "{{.KUBECTL}} --context {{.KIND_CONTEXT}} -n stratt-authz create secret generic helm-deploy-authz --from-literal=marker=1 --dry-run=client -o yaml | {{.KUBECTL}} --context {{.KIND_CONTEXT}} apply -f -"
-      - KUBECONTEXT={{.KIND_CONTEXT}} KUBECTL={{.KUBECTL}} bash {{.ROOT_DIR}}/demos/k8s-deploy/run.sh
+      - KUBECONTEXT={{.KIND_CONTEXT}} KUBECTL={{.KUBECTL}} bash {{.ROOT_DIR}}/plugins/helm/demo/run.sh
 
   demo:k8s-deploy:down:
     # Tear down JUST the demo's footprint — uninstall the `hello` release (Deployment +
@@ -821,14 +1139,14 @@ tasks:
     cmds:
       - rm -rf {{.ROOT_DIR}}/deploy/charts/stratt/dev/declarations
       - mkdir -p {{.ROOT_DIR}}/deploy/charts/stratt/dev/declarations
-      - cp -R {{.ROOT_DIR}}/demos/vsphere-only/estate/. {{.ROOT_DIR}}/deploy/charts/stratt/dev/declarations/
+      - cp -R {{.ROOT_DIR}}/plugins/vcenter/demo/estate/. {{.ROOT_DIR}}/deploy/charts/stratt/dev/declarations/
 
   demo:vsphere-only:run:
     # The turnkey "vSphere: provision a VM + watch the graph come alive" demo (ADR-0116). Stands up a
     # vSphere-only Stratt floor — kind + spine + strattd + the vcenter plugin + an external vcsim (a real
     # vCenter API) seeded with an enterprise topology + the staged CaC estate — then drives BOTH halves:
     # the vcenter Syncer projects the vcsim topology into a live graph (Views come alive), and a gated
-    # Workflow provisions a new VM through vcenter/create-vm. By-hand walk: demos/vsphere-only/README.md.
+    # Workflow provisions a new VM through vcenter/create-vm. By-hand walk: plugins/vcenter/demo/README.md.
     desc: "Demo — stand up a vSphere floor, project the graph, and provision a VM through a gated Workflow"
     deps: [tools:helm, tools:kubectl]
     cmds:
@@ -837,7 +1155,8 @@ tasks:
       # force-recreate so every run starts from vcsim's clean default topology (no leftover web-01).
       - docker compose -f {{.ROOT_DIR}}/deploy/dev/docker-compose.yml up -d --force-recreate --wait vcsim
       - task: image:kind-load
-      - task: image:vcenter-plugin # the vcenter Syncer + the boot-wired create-vm Action
+      - task: image:plugin # the vcenter Syncer + the boot-wired create-vm Action
+        vars: {PLUGIN: vcenter}
       - task: demo:vsphere-only:stage
       - |
         set -eu
@@ -855,7 +1174,7 @@ tasks:
       - "{{.KUBECTL}} --context {{.KIND_CONTEXT}} -n stratt rollout status deploy/stratt --timeout=240s"
       # The gate-only vsphere-dev CredentialRef points at this marker Secret (pointer, no material).
       - "{{.KUBECTL}} --context {{.KIND_CONTEXT}} -n stratt create secret generic vsphere-dev-authz --from-literal=marker=1 --dry-run=client -o yaml | {{.KUBECTL}} --context {{.KIND_CONTEXT}} apply -f -"
-      - KUBECONTEXT={{.KIND_CONTEXT}} KUBECTL={{.KUBECTL}} bash {{.ROOT_DIR}}/demos/vsphere-only/run.sh
+      - KUBECONTEXT={{.KIND_CONTEXT}} KUBECTL={{.KUBECTL}} bash {{.ROOT_DIR}}/plugins/vcenter/demo/run.sh
 
   demo:vsphere-only:down:
     # Tear down the vsphere-only demo: uninstall the stratt release and stop the vcsim substrate
@@ -874,14 +1193,14 @@ tasks:
     cmds:
       - rm -rf {{.ROOT_DIR}}/deploy/charts/stratt/dev/declarations
       - mkdir -p {{.ROOT_DIR}}/deploy/charts/stratt/dev/declarations
-      - cp -R {{.ROOT_DIR}}/demos/ec2-only/estate/. {{.ROOT_DIR}}/deploy/charts/stratt/dev/declarations/
+      - cp -R {{.ROOT_DIR}}/plugins/awsec2/demo/estate/. {{.ROOT_DIR}}/deploy/charts/stratt/dev/declarations/
 
   demo:ec2-only:run:
     # The turnkey "EC2: provision a real instance" demo (ADR-0116). Stands up an EC2-only Stratt floor —
     # kind + spine + strattd + the awsec2 plugin + an external floci (a real-host EC2 backend that runs
     # real SSH-able instance containers, ADR-0093) + the staged CaC estate — then drives a gated Workflow
     # that provisions a REAL instance via awsec2/create-vm; the awsec2 Syncer observes it into the graph.
-    # By-hand walk: demos/ec2-only/README.md.
+    # By-hand walk: plugins/awsec2/demo/README.md.
     desc: "Demo — stand up an EC2 floor (floci) and provision a real instance through a gated Workflow"
     deps: [tools:helm, tools:kubectl]
     cmds:
@@ -890,7 +1209,8 @@ tasks:
       # host-gateway. force-recreate so every run starts clean (no leftover instances).
       - docker compose -f {{.ROOT_DIR}}/deploy/dev/docker-compose.yml up -d --force-recreate --wait floci
       - task: image:kind-load
-      - task: image:awsec2-plugin # the awsec2 create-vm Action + the instance Syncer
+      - task: image:plugin # the awsec2 create-vm Action + the instance Syncer
+        vars: {PLUGIN: awsec2}
       - task: demo:ec2-only:stage
       - |
         set -eu
@@ -908,7 +1228,7 @@ tasks:
       - "{{.KUBECTL}} --context {{.KIND_CONTEXT}} -n stratt rollout status deploy/stratt --timeout=240s"
       # The gate-only aws-dev CredentialRef points at this marker Secret (pointer, no material).
       - "{{.KUBECTL}} --context {{.KIND_CONTEXT}} -n stratt create secret generic aws-dev-authz --from-literal=marker=1 --dry-run=client -o yaml | {{.KUBECTL}} --context {{.KIND_CONTEXT}} apply -f -"
-      - KUBECONTEXT={{.KIND_CONTEXT}} KUBECTL={{.KUBECTL}} bash {{.ROOT_DIR}}/demos/ec2-only/run.sh
+      - KUBECONTEXT={{.KIND_CONTEXT}} KUBECTL={{.KUBECTL}} bash {{.ROOT_DIR}}/plugins/awsec2/demo/run.sh
 
   demo:ec2-only:down:
     # Tear down the ec2-only demo: uninstall the stratt release and stop the floci substrate (which
@@ -930,6 +1250,35 @@ tasks:
       - rm -rf {{.ROOT_DIR}}/deploy/charts/stratt/dev/declarations
       - mkdir -p {{.ROOT_DIR}}/deploy/charts/stratt/dev/declarations
       - cp -R {{.ROOT_DIR}}/demos/app-cert/estate/. {{.ROOT_DIR}}/deploy/charts/stratt/dev/declarations/
+      # VENDOR the contractsOnly admissions (ADR-0138 D3/D4). The demo declares its own
+      # `ansible-crypto` Actuator with pluginIdentity: ansible, and since the relocation that
+      # Actuator's input Contract lives in the ansible PLUGIN's tree — so the demo admits ansible
+      # contractsOnly. In the repo that admission is a relative path out of the demo directory; a
+      # DEPLOYED estate is self-contained, so the tree has to travel with it and the path has to be
+      # rewritten, exactly as dev:stage-estate vendors the full admissions.
+      #
+      # Without this the demo stages cleanly, `task ci` stays green (it parses from the repo, where
+      # the relative path resolves), and the daemon CrashLoops in-cluster on "no input contract for
+      # actuator ansible-crypto". Only running the demo catches it.
+      - |
+        set -eu
+        src="{{.ROOT_DIR}}/demos/app-cert/estate/plugins.yaml"
+        dst="{{.ROOT_DIR}}/deploy/charts/stratt/dev/declarations"
+        [ -f "$src" ] || exit 0
+        names=$(awk '/^[[:space:]]*-[[:space:]]*name:/{gsub(/.*name:[[:space:]]*/,"");print}' "$src")
+        : > "$dst/plugins.yaml"
+        echo "# GENERATED by 'task demo:app-cert:stage' — edit demos/app-cert/estate/plugins.yaml." >> "$dst/plugins.yaml"
+        echo "plugins:" >> "$dst/plugins.yaml"
+        for n in $names; do
+          [ -d "{{.ROOT_DIR}}/plugins/$n/contracts" ] || {
+            echo "✗ app-cert admits plugin '$n' but plugins/$n/contracts does not exist" >&2; exit 1; }
+          mkdir -p "$dst/plugins/$n/contracts"
+          cp -R "{{.ROOT_DIR}}/plugins/$n/contracts/." "$dst/plugins/$n/contracts/"
+          echo "  - name: $n" >> "$dst/plugins.yaml"
+          echo "    path: plugins/$n/estate" >> "$dst/plugins.yaml"
+          echo "    contractsOnly: true" >> "$dst/plugins.yaml"
+          echo "  ✓ vendored plugin contracts: $n"
+        done
 
   demo:app-cert:node:up:
     # The demo's managed host: a real sshd + nginx node with root login DISABLED and
@@ -963,7 +1312,8 @@ tasks:
     cmds:
       - task: dev:kind:up
       - task: image:kind-load
-      - task: image:declared-plugin # the Syncer that projects the demo's declared host
+      - task: image:plugin # the Syncer that projects the demo's declared host
+        vars: {PLUGIN: declared}
       # The purpose-built EE: community.crypto installed and version-verified at BUILD time
       # (ADR-0117 D3). Built and kind-loaded HERE because nothing else would catch a missing
       # image — an EE-Job Actuator is reported healthy without any image check (ADR-0117 l).
@@ -1028,8 +1378,10 @@ tasks:
     cmds:
       - task: dev:kind:up
       - task: image:kind-load # strattd
-      - task: image:helm-plugin
-      - task: image:declared-plugin
+      - task: image:plugin
+        vars: {PLUGIN: helm}
+      - task: image:plugin
+        vars: {PLUGIN: declared}
       - task: dev:stage-estate # full estate incl. connectors/actuators
       - |
         set -eu
@@ -1056,9 +1408,12 @@ tasks:
       - docker compose -f deploy/dev/docker-compose.yml up -d --wait postgres nats temporal vcsim floci openbao
       - task: image:kind-load
       - task: dev:ee:build
-      - task: image:vcenter-plugin
-      - task: image:declared-plugin
-      - task: image:awsec2-plugin
+      - task: image:plugin
+        vars: {PLUGIN: vcenter}
+      - task: image:plugin
+        vars: {PLUGIN: declared}
+      - task: image:plugin
+        vars: {PLUGIN: awsec2}
       - task: dev:install
 
   dev:stack:down:

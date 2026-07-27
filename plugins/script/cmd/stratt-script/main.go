@@ -9,34 +9,18 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"os"
 
-	"google.golang.org/protobuf/encoding/protojson"
-
 	"github.com/dstout-devops/stratt/plugins/script"
-	pluginv1 "github.com/dstout-devops/stratt/sdk/stratt/plugin/v1"
+	"github.com/dstout-devops/stratt/sdk/pluginserve"
 )
 
-func main() {
-	if err := run(); err != nil {
-		fmt.Fprintln(os.Stderr, "stratt-script:", err)
-		os.Exit(1)
-	}
-}
+func main() { pluginserve.JobMain("stratt-script", run) }
 
 func run() error {
-	reqPath := os.Getenv("STRATT_REQUEST")
-	if reqPath == "" {
-		reqPath = "/runner/stratt/request.json"
-	}
-	raw, err := os.ReadFile(reqPath)
+	applyReq, err := pluginserve.ReadRequest()
 	if err != nil {
-		return fmt.Errorf("read request %s: %w", reqPath, err)
-	}
-	var applyReq pluginv1.ApplyRequest
-	if err := protojson.Unmarshal(raw, &applyReq); err != nil {
-		return fmt.Errorf("decode ApplyRequest: %w", err)
+		return err
 	}
 	req := script.Request{}
 	if d := applyReq.GetDesired(); d != nil {
@@ -45,9 +29,6 @@ func run() error {
 	for _, t := range applyReq.GetTargets() {
 		req.Targets = append(req.Targets, script.Target{Name: t.GetName(), Vars: t.GetVars()})
 	}
-	dir := os.Getenv("STRATT_RUNNER_DIR")
-	if dir == "" {
-		dir = "/runner/project"
-	}
+	dir := pluginserve.RunnerDir("/runner/project")
 	return script.Execute(context.Background(), os.Stdout, dir, req)
 }

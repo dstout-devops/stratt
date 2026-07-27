@@ -2,7 +2,6 @@ package desiredstate
 
 import (
 	"os"
-	"path/filepath"
 	"regexp"
 	"slices"
 	"sort"
@@ -55,12 +54,9 @@ func TestEveryDeclaredActuatorImageIsBuiltByATask(t *testing.T) {
 	}
 
 	trees := map[string]string{"reference": estateRoot}
-	dirs, err := filepath.Glob(filepath.Join(demosRoot, "*", "estate"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	dirs := demoEstates(t)
 	for _, dir := range dirs {
-		trees["demo/"+filepath.Base(filepath.Dir(dir))] = dir
+		trees["demo/"+demoLabel(dir)] = dir
 	}
 
 	checked := 0

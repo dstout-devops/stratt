@@ -43,6 +43,13 @@ rewrite.
 2. **Python is confined to (a) execution pods** — the `ansible-runner` shim and tool glue in EE
    images — **and (b) one supported plugin-SDK language**, so Ansible-community contributors are not
    excluded.
+
+   > **Clause (b) is SUPERSEDED by [ADR-0141](0141-the-plugin-sdk-is-go-the-port-is-the-contract.md)
+   > (2026-07-27).** It was never built: `sdk/` is Go, twenty-one plugins depend on it, and the repo
+   > holds two first-party `.py` files, both in the EE image. The SDK is Go, and the PORT is the
+   > contract — a plugin is conformant because it speaks it, in any language. **Clause (a) and the
+   > rest of this ADR stand**: the control plane is Go, Python is confined to execution pods, and
+   > object storage is S3-generic.
 3. **Object storage is any S3-compatible store**, never a named vendor. Reference implementations:
    Garage, SeaweedFS, cloud S3. MinIO is removed from the charter by name.
 4. **Kept as-is** (still fit, arguably better): Postgres, Temporal, NATS, OpenFGA, the React/TS

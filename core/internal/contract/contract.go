@@ -176,7 +176,7 @@ func Get(name string) (types.Contract, bool, error) {
 	if err := ensure(); err != nil {
 		return types.Contract{}, false, err
 	}
-	c, ok := byName[name]
+	c, ok := lookup(name)
 	if !ok {
 		return types.Contract{}, false, nil
 	}
@@ -250,9 +250,9 @@ func ValidateActuatorParamsFor(actuator, pluginIdentity string, params json.RawM
 	if err := ensure(); err != nil {
 		return err
 	}
-	c, ok := byName["actuators/"+actuator+".input"]
+	c, ok := lookup("actuators/" + actuator + ".input")
 	if !ok && pluginIdentity != "" && pluginIdentity != actuator {
-		c, ok = byName["actuators/"+pluginIdentity+".input"]
+		c, ok = lookup("actuators/" + pluginIdentity + ".input")
 	}
 	if !ok {
 		if pluginIdentity != "" && pluginIdentity != actuator {
@@ -274,7 +274,7 @@ func ValidateActionInput(action string, params json.RawMessage) error {
 	if err := ensure(); err != nil {
 		return err
 	}
-	c, ok := byName["actions/"+action+".input"]
+	c, ok := lookup("actions/" + action + ".input")
 	if !ok {
 		return fmt.Errorf("contract: no input contract for action %q", action)
 	}
@@ -293,7 +293,7 @@ func ValidateActionOutput(action string, outputs json.RawMessage) error {
 	if err := ensure(); err != nil {
 		return err
 	}
-	c, ok := byName["actions/"+action+".output"]
+	c, ok := lookup("actions/" + action + ".output")
 	if !ok {
 		return fmt.Errorf("contract: no output contract for action %q", action)
 	}
@@ -312,7 +312,7 @@ func ValidateNamed(name string, doc json.RawMessage) error {
 	if err := ensure(); err != nil {
 		return err
 	}
-	c, ok := byName[name]
+	c, ok := lookup(name)
 	if !ok {
 		return fmt.Errorf("contract: no pinned contract %q", name)
 	}
@@ -326,6 +326,31 @@ func ValidateNamed(name string, doc json.RawMessage) error {
 // (ADR-0024/0031 cross-Step binding) then re-validates against the Action's
 // input Contract — the Action counterpart of ResolveActuatorParams.
 func ResolveActionParams(action string, params map[string]any, ns template.Namespaces) (json.RawMessage, error) {
+	return resolveParamsAgainst(params, ns, func(raw json.RawMessage) error {
+		return ValidateActionInput(action, raw)
+	})
+}
+
+// ResolveCapabilityParams is ResolveActionParams for a Step that names a capability CLASS
+// rather than an Action (ADR-0140 D3 row 2). The params are validated against the CLASS
+// Contract — `capabilities/<class>.input` — never the resolved provider's own Action Contract.
+//
+// That is the whole point of writing the Step against a class: the author wrote
+// provider-agnostic params, and validating them against whichever provider happens to be bound
+// would make the Step's validity depend on the binding. It is also what ADR-0112 D2 already does
+// on the `requires:` path, where the class Contract governs a capability call's output.
+func ResolveCapabilityParams(class string, params map[string]any, ns template.Namespaces) (json.RawMessage, error) {
+	return resolveParamsAgainst(params, ns, func(raw json.RawMessage) error {
+		return ValidateNamed(CapabilityInput(class), raw)
+	})
+}
+
+// CapabilityInput/CapabilityOutput name a capability class's Contracts. One spelling, so the
+// convention lives in one place rather than being re-concatenated at each call site.
+func CapabilityInput(class string) string  { return "capabilities/" + class + ".input" }
+func CapabilityOutput(class string) string { return "capabilities/" + class + ".output" }
+
+func resolveParamsAgainst(params map[string]any, ns template.Namespaces, validate func(json.RawMessage) error) (json.RawMessage, error) {
 	resolved, err := template.SubstituteParams(params, ns)
 	if err != nil {
 		return nil, err
@@ -336,7 +361,7 @@ func ResolveActionParams(action string, params map[string]any, ns template.Names
 			return nil, err
 		}
 	}
-	if err := ValidateActionInput(action, raw); err != nil {
+	if err := validate(raw); err != nil {
 		return nil, err
 	}
 	return raw, nil
@@ -478,4 +503,185 @@ func stripTopRequired(schema json.RawMessage) (json.RawMessage, error) {
 	}
 	delete(doc, "required")
 	return json.Marshal(doc)
+}
+
+// ── estate-resident self contracts (ADR-0138 D3/D4) ──────────────────────────
+//
+// A SELF contract describes only its own plugin — `actuators/<plugin>.input.vN`,
+// `actions/<plugin>/<verb>.input|output`. Nothing else reads it; it constrains one Actuator's
+// Steps. Such a plugin cannot shadow another's contract and cannot satisfy one, so ADR-0047 §4's
+// threat model is not engaged and residence may follow ownership.
+//
+// A SEAM contract — `capabilities/`, `facets/`, `intents/`, `policy/`, `outputs/` — describes what
+// one module may rely on another to MEAN. Those stay core-shipped permanently, not as migration
+// debt but as the definition of a seam (§1.5; ADR-0104 D1's "a plugin never mints a capability's
+// meaning", pointed the other way). RegisterEstate refuses one outright.
+//
+// WHERE THIS IS CALLED FROM IS LOAD-BEARING. Registration happens in strattd's BOOT-TIME estate
+// parse, which runs on EVERY replica and before the API handler is built. Both matter:
+//
+//   - The desired-state controller is LEADER-ONLY, so registering during its reconcile would give
+//     the leader a contract set its followers lack — and the Temporal worker runs on every
+//     replica, validating action params at dispatch. That is the ADR-0103 D3 routing hazard,
+//     reproduced in the validation layer.
+//   - Fingerprint() is captured ONCE in api.Server.Handler() as the cross-Cell federation
+//     RegistryVersion, so a later registration would ship peers a stale value.
+//
+// Fingerprint() and All() deliberately keep covering the SHIPPED set only. Federation compares
+// whether two Cells present one logical estate, which is a question about SEAMS — a peer that does
+// not run helm must not be rejected over helm's param schema. D3's own distinction answers it.
+
+var (
+	estateMu  sync.RWMutex
+	estateSet = map[string]*compiled{}
+)
+
+// seamPrefixes are the contract families a plugin may never ship. Everything else is self.
+var seamPrefixes = []string{"capabilities/", "facets/", "intents/", "policy/", "outputs/"}
+
+// RegisterEstate adds a plugin's own self contracts, keyed by contract name (no `.schema.json`).
+// owner is the plugin whose estate shipped them, used to enforce that a plugin ships only its OWN.
+//
+// Idempotent by content: re-registering identical bytes is a no-op, so repeated parses are safe.
+// The SAME name with DIFFERENT bytes is refused — that is drift, and §1.5 says drift is blocking,
+// never silently absorbed.
+func RegisterEstate(owner string, docs map[string][]byte) error {
+	if err := ensure(); err != nil {
+		return err
+	}
+	names := make([]string, 0, len(docs))
+	for n := range docs {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+
+	estateMu.Lock()
+	defer estateMu.Unlock()
+	for _, name := range names {
+		raw := docs[name]
+		if err := checkSelfContract(owner, name); err != nil {
+			return err
+		}
+		// A plugin must not shadow a core-shipped document. This is §4's actual threat, and it is
+		// the one check that must not be relaxed for convenience.
+		if _, shipped := byName[name]; shipped {
+			return fmt.Errorf("contract: plugin %q ships %q, which is core-shipped — a plugin may own its "+
+				"own self contracts, never shadow a shipped one (ADR-0047 §4, ADR-0138 D3)", owner, name)
+		}
+		sum := sha256.Sum256(raw)
+		hash := hex.EncodeToString(sum[:])
+		// VERSION SIBLINGS are legitimate and must behave exactly as the shipped loader does:
+		// `ansible.input.v7` is version 7 of `actuators/ansible.input`, a sibling FILE under the
+		// same name, and the highest version is the live one. Names are walked in sorted order so
+		// the highest lands last — mirroring load()'s own overwrite rather than inventing a second
+		// rule for estate-resident documents.
+		base, version := name, 1
+		if i := strings.LastIndex(base, ".v"); i > 0 {
+			if n, err := strconv.Atoi(base[i+2:]); err == nil && n > 0 {
+				base, version = base[:i], n
+			}
+		}
+		if prior, ok := estateSet[base]; ok {
+			switch {
+			case prior.contract.Version == version && prior.contract.Hash == hash:
+				continue // identical bytes at the same version; a repeated parse is a no-op
+			case prior.contract.Version == version:
+				return fmt.Errorf("contract: %q v%d registered twice with different content (%s vs %s) — schema "+
+					"drift is blocking, never silently absorbed (§1.5)", base, version, prior.contract.Hash[:12], hash[:12])
+			case prior.contract.Version > version:
+				continue // a higher version already won
+			}
+		}
+		doc, err := jsonschema.UnmarshalJSON(bytes.NewReader(raw))
+		if err != nil {
+			return fmt.Errorf("contract: parse %s (plugin %s): %w", name, owner, err)
+		}
+		compiler := jsonschema.NewCompiler()
+		res := name + ".schema.json"
+		if err := compiler.AddResource(res, doc); err != nil {
+			return fmt.Errorf("contract: add %s: %w", name, err)
+		}
+		sch, err := compiler.Compile(res)
+		if err != nil {
+			return fmt.Errorf("contract: compile %s (plugin %s): %w", name, owner, err)
+		}
+		estateSet[base] = &compiled{
+			contract: types.Contract{
+				Name: base, Version: version, Rung: types.RungHandWritten,
+				Hash: hash, Schema: raw,
+			},
+			schema: sch,
+		}
+	}
+	return nil
+}
+
+// checkSelfContract enforces D3's boundary: a plugin ships only contracts about ITSELF.
+func checkSelfContract(owner, name string) error {
+	for _, p := range seamPrefixes {
+		if strings.HasPrefix(name, p) {
+			return fmt.Errorf("contract: plugin %q ships %q, which is a SEAM contract — %s documents describe "+
+				"what one module may rely on another to MEAN, so they are core's permanently. A plugin may own "+
+				"only its own actuators/ and actions/ documents (ADR-0138 D3)", owner, name, p)
+		}
+	}
+	switch {
+	case strings.HasPrefix(name, "actions/"):
+		// actions/<plugin>/<verb>.input — the plugin segment must be the owner's.
+		rest := strings.TrimPrefix(name, "actions/")
+		seg, _, ok := strings.Cut(rest, "/")
+		if !ok {
+			return fmt.Errorf("contract: %q is not a well-formed action contract (want actions/<plugin>/<verb>.input)", name)
+		}
+		if seg != owner {
+			return fmt.Errorf("contract: plugin %q ships %q, which belongs to %q — a plugin owns its OWN self "+
+				"contracts and no one else's (ADR-0138 D3)", owner, name, seg)
+		}
+	case strings.HasPrefix(name, "actuators/"):
+		// actuators/<tool>.input[.vN] — the tool must be the owner's.
+		base := strings.TrimPrefix(name, "actuators/")
+		tool, _, _ := strings.Cut(base, ".")
+		if tool != owner {
+			return fmt.Errorf("contract: plugin %q ships %q, which belongs to %q — a plugin owns its OWN self "+
+				"contracts and no one else's (ADR-0138 D3)", owner, name, tool)
+		}
+	default:
+		return fmt.Errorf("contract: plugin %q ships %q, which is neither an actuators/ nor an actions/ "+
+			"document — only those are self contracts (ADR-0138 D3)", owner, name)
+	}
+	return nil
+}
+
+// lookup resolves a contract by name across the shipped set and the estate-resident one. Shipped
+// wins, though RegisterEstate refuses a shadow so the two can never actually overlap.
+func lookup(name string) (*compiled, bool) {
+	if c, ok := byName[name]; ok {
+		return c, true
+	}
+	estateMu.RLock()
+	defer estateMu.RUnlock()
+	c, ok := estateSet[name]
+	return c, ok
+}
+
+// EstateContracts returns the registered estate-resident documents, for pinning into the graph
+// with blocking drift (D4 — "core stops embedding and instead pins at registration").
+func EstateContracts() []types.Contract {
+	estateMu.RLock()
+	defer estateMu.RUnlock()
+	out := make([]types.Contract, 0, len(estateSet))
+	for _, c := range estateSet {
+		out = append(out, c.contract)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out
+}
+
+// ResetEstateForTest clears the estate-resident set. Tests parse many different trees through one
+// process, and a registry that accumulated across them would make one test's estate visible to
+// another — passing or failing for reasons neither test states.
+func ResetEstateForTest() {
+	estateMu.Lock()
+	defer estateMu.Unlock()
+	estateSet = map[string]*compiled{}
 }

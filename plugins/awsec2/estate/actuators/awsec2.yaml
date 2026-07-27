@@ -1,0 +1,53 @@
+# awsec2 — the EC2 `provisioning` capability PROVIDER (ADR-0107), registered as an Actuator Kind
+# (ADR-0103) declaring provides:[provisioning]. It dials the awsec2 plugin pod (whose VM/network
+# Actions + resource Syncer stay boot-env for now); provider verification (ADR-0104 D1) confirms the
+# pod's Manifest advertises provisioning before any consumer binds.
+#
+# provisioning is ENABLEMENT-GATE (ADR-0106 D1 / ADR-0107 D1), not resolve-inject — so there is NO
+# resolve Action here: provisioning is a target-scoped Apply/Action (create the machine, then
+# provision→configure it, ADR-0017). `requires:[provisioning]` only gates that a verified provisioner
+# EXISTS; the reach-path (how a consumer reaches it) is the provisioning CLASS contract, bound by the
+# ADR-0106 D1 guardrail — never awsec2's specific create-vm.
+#
+# EC2 is provider #1 (§1.5) — GCE / KubeVirt / Cobbler / bare-metal are siblings behind the same
+# contract.
+name: awsec2
+address: stratt-awsec2:9090
+pluginIdentity: awsec2
+tier: trusted
+# Plan-capable: every Action below was registered dryRunnable, several via the EC2 API's own
+# dry-run. Omitting this would REFUSE a dry-run Step against all of them.
+dryRunnable: true
+provides: [provisioning]
+# ── The 11 INVOKE Actions, MOVED here from main.go (ADR-0103) ────────────────────────────────
+# Registered in Go behind STRATT_AWS_PLUGIN_ADDR, so the dispatch surface was unreviewable from
+# Git and unchecked against the plugin's own Manifest. Declared, they are verified at enable.
+actionNames:
+  - awsec2/create-vm
+  - awsec2/start
+  - awsec2/stop
+  - awsec2/reboot
+  - awsec2/terminate
+  - awsec2/tag
+  - awsec2/create-security-group
+  - awsec2/import-key-pair
+  - awsec2/create-volume
+  - awsec2/create-vpc
+  - awsec2/create-subnet
+# The Action grant, and it is deliberately NARROWER than the boot grant it replaces — which was
+# the SYNCER's, because one Go value served both roles.
+#
+# An Action's write-back is ENTITY-ONLY: RecordActionResult projects Kind + IdentityKeys + Labels
+# + Relations and no Facet at all (actuators.EntityObservation has no facet field). So identity
+# schemes and label keys are exactly what these Actions need, and facetNamespaces would be
+# authority granted for a path that does not exist. The awsec2 SYNCER keeps its own boot grant,
+# including the seven observed Facet namespaces, and remains the authority for them.
+identitySchemes: [aws.instanceId, aws.vpcId, aws.subnetId, aws.securityGroupId, aws.volumeId]
+labelKeys: [aws.region, aws.name, stratt.managed]
+# provisions advertises awsec2's per-kind build WORKFLOWS (ADR-0110 D3). It is the sole Compute
+# provider, so Intent/Compute auto-binds here with no explicit capability-binding. (awsec2 also has
+# create-vpc/subnet/security-group Actions, but wiring those as network build Workflows — with a VPC
+# to place subnets in — is Slice 1, the real-AWS network path; it is deliberately NOT advertised for
+# Subnet here, so Subnet stays on Crossplane until then, ADR-0110 D5.)
+provisions:
+  Compute: compute-build

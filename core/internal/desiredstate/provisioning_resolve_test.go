@@ -28,13 +28,13 @@ func TestAssembleProvisioningProviders_EnvScoped(t *testing.T) {
 
 	// vsphere-dc: both awsec2 (unscoped) and vcenter (scoped here) are in scope → 2 Compute builders
 	// (ambiguity a binding must resolve — asserted separately in capability.Resolve).
-	got := names(assembleProvisioningProviders(verified, acts, nil, "vsphere-dc"))
+	got := names(assembleProvisioningProviders(verified, acts, nil, "vsphere-dc", types.CapProvisioning))
 	if !got["awsec2"] || !got["vcenter"] {
 		t.Errorf("vsphere-dc: want both awsec2+vcenter in scope, got %v", got)
 	}
 
 	// aws: vcenter is scoped OUT; awsec2 (unscoped) remains → sole Compute builder, auto-binds.
-	got = names(assembleProvisioningProviders(verified, acts, nil, "aws"))
+	got = names(assembleProvisioningProviders(verified, acts, nil, "aws", types.CapProvisioning))
 	if got["vcenter"] {
 		t.Errorf("aws: vcenter (scoped vsphere-dc) must be out of scope, got %v", got)
 	}
@@ -43,7 +43,7 @@ func TestAssembleProvisioningProviders_EnvScoped(t *testing.T) {
 	}
 
 	// unscoped daemon (env==""): sees everything (InScope short-circuits true).
-	got = names(assembleProvisioningProviders(verified, acts, nil, ""))
+	got = names(assembleProvisioningProviders(verified, acts, nil, "", types.CapProvisioning))
 	if !got["awsec2"] || !got["vcenter"] {
 		t.Errorf("unscoped: want everything, got %v", got)
 	}
@@ -57,7 +57,7 @@ func TestAssembleProvisioningProviders_FailClosed(t *testing.T) {
 		{Name: "nobuild", Provides: []string{types.CapProvisioning}},                                                // verified but no provisions
 	}
 	verified := map[string]bool{"actuator/nobuild": true}
-	got := assembleProvisioningProviders(verified, acts, nil, "")
+	got := assembleProvisioningProviders(verified, acts, nil, "", types.CapProvisioning)
 	if len(got) != 0 {
 		t.Errorf("want no providers (phantom unverified, nobuild has no provisions), got %v", got)
 	}

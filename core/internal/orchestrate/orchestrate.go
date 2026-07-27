@@ -66,6 +66,15 @@ type RunInput struct {
 	// ADR-0031). Mutually exclusive with Actuator/ViewName — set means this Run
 	// executes via RunAction, not RunAgainstView.
 	Action string
+	// ActionCapability is the capability CLASS the Step asked for, when Action was
+	// RESOLVED from one rather than named (ADR-0140 D3 row 2). Both are carried: the
+	// class is what the author wrote, the Action is what served it, and §1.8's descent
+	// needs both — recording only the resolved name would make this Run indistinguishable
+	// from one that named the provider directly, which is the coupling the class removes.
+	//
+	// It also selects which Contracts govern the invocation: set means the CLASS
+	// Contracts (capabilities/<class>.{input,output}), per ADR-0112 D2.
+	ActionCapability string
 	// DryRun asks a DryRunnable Action to plan without side effects (§2.2).
 	DryRun bool
 	Params json.RawMessage
@@ -598,6 +607,16 @@ type Activities struct {
 	// it). Nil ⇒ capability requirements can't be met, so an Actuator that `requires` one fails
 	// visibly (§1.8), never silently runs without the resolved handle.
 	ResolveCapability func(ctx context.Context, capability string) (actionName string, err error)
+	// ResolveActuator maps a capability class to the ACTUATOR name of its single VERIFIED
+	// provider (ADR-0140 D4). Separate from ResolveCapability because the two resolve to
+	// different kinds of thing — an Action selector vs a dispatch-table Actuator — and one
+	// function returning either depending on the caller is the ambiguity §2.4 refuses.
+	ResolveActuator func(ctx context.Context, capability string) (actuatorName string, err error)
+	// ResolveBuildWorkflow maps (capability class, Intent kind) to the bound provider's build
+	// Workflow for a nested capability Step (ADR-0139 D3). It is the SAME resolution the
+	// compiler performs — exported from desiredstate rather than reimplemented, because two
+	// resolvers that can disagree is the ambiguity §2.4 refuses.
+	ResolveBuildWorkflow func(ctx context.Context, capability, intentKind string) (provider, workflowName string, err error)
 }
 
 // EnsureRun creates the Run summary row for a Trigger-started execution
@@ -1879,6 +1898,12 @@ func (a *Activities) FinishRun(ctx context.Context, in RunInput, status types.Ru
 		// Action (and dry-run posture) instead of a misleading actuator default.
 		delete(summary, "actuator")
 		summary["action"] = in.Action
+		if in.ActionCapability != "" {
+			// What was ASKED FOR, alongside what served it (§1.8). Without the class, a
+			// capability-routed Run reads exactly like one that named the provider directly,
+			// and "why did this Run reach netbox?" becomes unanswerable from the Run.
+			summary["actionCapability"] = in.ActionCapability
+		}
 		if in.DryRun {
 			summary["dryRun"] = true
 		}

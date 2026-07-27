@@ -1687,6 +1687,8 @@ export interface components {
             viewName: string;
             /** @description Names the Actuator as an OPAQUE routing key (ADR-0046). A baseline is read-only by platform invariant, so the named Actuator must be read-only-capable (a DryRunnable plugin) — an Actuator that cannot run read-only is rejected terminally at launch, not by a closed enum here. */
             actuator?: string;
+            /** @description A capability CLASS (e.g. certissuer) instead of an Actuator name (ADR-0140 D4): the declaration says WHAT must converge and the bound provider is resolved at launch, so a provider swap edits no declaration. Mutually exclusive with `actuator`. Because the provider is resolved rather than named, `facetWriteScope` is validated at load against EVERY candidate provider's grant — the effective write-back is grant ∩ scope (ADR-0054), so a scope that fits one provider and exceeds another is a write that silently stops happening on a rebind, and a dropped write-back reports as nothing at all. */
+            actuatorCapability?: string;
             params?: Record<string, never>;
             /** Format: int64 */
             slices?: number;
@@ -1903,6 +1905,8 @@ export interface components {
             /** @description Binds a parametrized View's {{.param.x}} placeholders; values may reference the firing event ({{.event.x}}) — ADR-0024. */
             viewParams?: Record<string, never>;
             actuator?: string;
+            /** @description A capability CLASS (e.g. certissuer) instead of an Actuator name (ADR-0140 D4): the declaration says WHAT must converge and the bound provider is resolved at launch, so a provider swap edits no declaration. Mutually exclusive with `actuator`. Because the provider is resolved rather than named, `facetWriteScope` is validated at load against EVERY candidate provider's grant — the effective write-back is grant ∩ scope (ADR-0054), so a scope that fits one provider and exceeds another is a write that silently stops happening on a rebind, and a dropped write-back reports as nothing at all. */
+            actuatorCapability?: string;
             params?: Record<string, never>;
             /** Format: int64 */
             slices?: number;
@@ -1982,6 +1986,15 @@ export interface components {
             verified: boolean;
             /** @description The phantom/pending reason when verified=false; empty when verified. */
             reason?: string;
+            /**
+             * @description HOW the verdict was reached (ADR-0138 D5). `manifest` means the plugin's RUNNING binary was dialed and its own advertisement checked against the operator's `provides` — two independent artifacts agreeing. `declaration` means the provider is dial-less (an EE-Job Actuator has no address by construction, §3 GPLv3 boundary), so there is no Manifest to fetch and the claim was corroborated against the DECLARED mechanisms instead: the per-kind Workflow maps and dispatchable Actions, which the estate loader already validates. Empty when not verified. The two are NOT equally strong, and a surface that renders both as a plain "verified" hides which is which (§1.8).
+             * @enum {string}
+             */
+            basis?: "" | "manifest" | "declaration";
+            /** @description The capability class → Action name mappings this provider's Manifest ADVERTISES, for the classes it was granted (ADR-0140 D1). This is what capability resolution reads; core no longer derives the name. Absent/empty is normal — only classes reached through a resolve Action appear here, never one routed through a per-kind Workflow map. It is the descent surface (§1.8) for "why did this capability route to that Action?", which was previously answerable only from a naming convention held in core's head. */
+            implements?: {
+                [key: string]: string;
+            };
         };
         /** @description Selects which verified provider fulfils a capability class for a given Intent kind (ADR-0110 D3), so an Intent's `requires: [provisioning]` resolves to a concrete provider + build Workflow. A CaC declaration FORM the capability registry reconciles — NOT a Named Kind (§2 frozen); the binding selects only the provider (the provider owns its per-kind build Workflow via its `provisions` map). */
         CapabilityBinding: {
@@ -2051,6 +2064,16 @@ export interface components {
             gate?: components["schemas"]["GateSpec"];
             /** @description A namespaced targetless Connector Action (e.g. helm/deploy). Set this OR viewName+actuator, never both — an Action carries no View (ADR-0031). */
             action?: string;
+            /** @description Runs another declared Workflow as a NESTED child (charter §2.3 "…convergence, nesting"; ADR-0011 deferred it, ADR-0139 resumes it). The child is a first-class WorkflowRun linked back to this Step, not an inlining of its Steps — so descent, Gates and audit keep working. Exclusive with every other Step shape. */
+            workflow?: string;
+            /** @description The CLASS form of a nested Step (ADR-0139 D3): with `forKind`, resolves to the bound provider's advertised build Workflow at launch, recorded on the child's run alongside the class. Exclusive with `workflow`. Resolves through the provider's `provisions` map only — `remediates`/`decommissions` would need a verb this form does not carry, since a provider may map one kind in several (vcenter maps Compute in both provisions and decommissions), and choosing between build and tear-down is not a tiebreak core may make. */
+            workflowCapability?: string;
+            /** @description The Intent kind a `workflowCapability` Step builds (e.g. Compute). Required with it — a provider's build Workflows are keyed by kind, so the class alone selects nothing. */
+            forKind?: string;
+            /** @description Launch inputs for a nested `workflow:` Step, validated at declaration against the child's declared `inputs` schema — and for the class form, against EVERY candidate provider's Workflow, because which one wins depends on runtime state Git cannot see. A separate field from `params` on purpose: params are a Step's Actuator/Action arguments, inputs are a Workflow's own interface. */
+            inputs?: Record<string, never>;
+            /** @description A capability CLASS (e.g. ipam) instead of a provider's Action name (ADR-0140 D3 row 2). The Step declares WHAT it needs; the bound provider's advertised implementation is resolved at launch and recorded on the Run alongside the class. Mutually exclusive with `action` — naming both would give the Step two answers to "what runs here", and a rule to choose between them is implicit precedence (§2.4). Params are validated against the CLASS Contract (capabilities/<class>.input), so the Step stays valid across a provider swap. */
+            actionCapability?: string;
             viewName?: string;
             actuator?: string;
             params?: Record<string, never>;
@@ -2098,6 +2121,10 @@ export interface components {
             /** @enum {string} */
             status: "pending" | "running" | "succeeded" | "failed" | "canceled" | "partial";
             principal?: string;
+            /** @description The WorkflowRun that launched this one as a nested Step (ADR-0139 D2), absent for a top-level run. With parentStepName it is the §1.8 descent rung a nested execution would otherwise lack — without it a nested run is an orphan whose existence is only inferable from timing. Exposed on the API in the same slice as the column, not in the UI later: every capability is identical across UI, CLI, CI and agents (§1.6), so a tree a human can descend and an agent Principal cannot is a broken promise. */
+            parentWorkflowRunId?: string;
+            /** @description The parent Step that launched this run (ADR-0139 D2). Set together with parentWorkflowRunId or not at all — the data layer enforces it, because a half-written link reads as navigable and is not. */
+            parentStepName?: string;
             /** Format: date-time */
             startedAt: string;
             /** Format: date-time */

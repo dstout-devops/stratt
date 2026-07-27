@@ -32,7 +32,7 @@ Start with **[docs/README.md](docs/README.md)** — it maps every doc in the rep
 
 Toolchain floors (evergreen contract, charter §1.7 — CI fails below these):
 
-- Go **1.24+**, Node **22+** (current LTS is 24), Python **3.13+** (execution pods / plugin SDK
+- Go **1.24+**, Node **22+** (current LTS is 24), Python **3.13+** (execution-pod images only
   only — Python is never the control plane), [Task](https://taskfile.dev) **3.0+**.
 
 ```sh

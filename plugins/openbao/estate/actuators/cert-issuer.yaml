@@ -1,0 +1,52 @@
+# cert-issuer — the certificate-lifecycle reconcile Actuator (ADR-0050/0098), migrated off its
+# boot-env block to a CaC declaration (ADR-0103), following ansible and script.
+#
+# The name is deliberately NEUTRAL, not `openbao` (§1.5): a step-ca or ACME plugin could serve the
+# same Actuator, and the estate's cert-reconcile Trigger should not have to be edited when the
+# backend changes. `pluginIdentity` carries the tool; the Actuator carries the role.
+#
+# WHY THIS MOVED, and it is not tidiness. ADR-0140 D4 wants the cert reconcile to name a CAPABILITY
+# (`actuatorCapability: certissuer`) instead of an Actuator, so a provider swap changes no Trigger.
+# That could not be built, because the declared certissuer PROVIDER and the dispatchable Actuator
+# were two different objects pointing at the same pod:
+#
+#   * `openbao` (declared)      — provides: [certissuer], and NO facetNamespaces at all.
+#   * `cert-issuer` (in Go)     — the Actuator the reconcile actually dispatched to, with a grant
+#                                 hardcoded in main.go and shared with the cert Syncer.
+#
+# So resolving the class would have landed on `openbao`, whose grant is empty, and the Trigger's
+# `facetWriteScope: [cert.identity, cert.expiry]` would have fallen entirely outside it — the
+# reconcile converges OpenBao and the graph never updates. That is ADR-0140 D4's own trap
+# ("facetWriteScope is authority, not configuration") reached not by a later rebind but by the very
+# first bind. Making the provider BE the mechanism is the fix, and it is ADR-0140 D2's rule applied
+# to the Actuator-shaped row.
+#
+# A second reason, independent of capabilities: two registration paths for one name collide at §2.4,
+# and a grant that lives in Go is unanswerable from Git. The boot block is DELETED rather than kept
+# as a fallback, for the reason the ansible/script migration records — a floor that declares neither
+# Actuator has neither, and that is the intended CaC posture (§2.2/§2.3).
+name: cert-issuer
+address: stratt-openbao:9090
+pluginIdentity: openbao
+tier: trusted
+# Plan (what would change) + Apply (converge) — the cert reconcile is a dry-runnable Actuator.
+dryRunnable: true
+# The capability this Actuator IS (ADR-0104/0106 D1). MOVED here from the `openbao` declaration,
+# which now provides only `keycustodian`: two declarations advertising `certissuer` would be two
+# verified providers and resolution would fail closed as ambiguous (§2.4), correctly — they are the
+# same pod, but core has no way to know that and must not guess.
+#
+# Enablement-gate, not resolve-inject: there is no `implements` here because certissuer is consumed
+# by DISPATCHING this Actuator, not by invoking a resolve Action (ADR-0140 D3 row 3). The Manifest
+# advertises `certissuer` only where a PKI mount is configured, so verification stays honest.
+provides: [certissuer]
+# The MF3 write ceiling (ADR-0054): the effective write-back is this grant ∩ the Step/Trigger's
+# facetWriteScope. Deliberately NARROWER than the boot grant it replaces, which carried the cert
+# SYNCER's five namespaces because one Go grant served both roles. The Actuator's Apply projects the
+# issued cert's identity and expiry and nothing else; the Syncer keeps its own boot grant untouched.
+# Least authority is the point of splitting them.
+facetNamespaces: [cert.identity, cert.expiry]
+identitySchemes: [cert.serial]
+# Administrative PKI Actions (ADR-0098 E2) — CA admin, NOT the per-cert lifecycle, which is the
+# reconcile Actuator above. Verified against the plugin's own Manifest at enable.
+actionNames: [cert-issuer/create-intermediate, cert-issuer/rotate-crl]

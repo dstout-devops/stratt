@@ -9,21 +9,18 @@
 package main
 
 import (
-	"log/slog"
-	"net"
 	"os"
 
-	"google.golang.org/grpc"
+	"github.com/dstout-devops/stratt/sdk/pluginserve"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 
 	"github.com/dstout-devops/stratt/plugins/kubecontainers"
-	pluginv1 "github.com/dstout-devops/stratt/sdk/stratt/plugin/v1"
 )
 
 func main() {
-	log := slog.New(slog.NewTextHandler(os.Stderr, nil))
+	log := pluginserve.Logger()
 
 	client, err := newClient()
 	if err != nil {
@@ -31,7 +28,7 @@ func main() {
 		os.Exit(1)
 	}
 	cfg := kubecontainers.ServerConfig{
-		PluginID:  env("STRATT_PLUGIN_ID", "kubecontainers"),
+		PluginID:  pluginserve.Env("STRATT_PLUGIN_ID", "kubecontainers"),
 		Namespace: os.Getenv("STRATT_KUBECONTAINERS_NAMESPACE"), // "" = all namespaces
 		Config: kubecontainers.Config{
 			// Cluster qualifier for the globally-unique node identity; "" ⇒ auto-resolve
@@ -45,20 +42,11 @@ func main() {
 		// pod snapshot is treated as a likely degraded read and holds steady.
 		AllowEmptyFullSync: os.Getenv("STRATT_KUBECONTAINERS_ALLOW_EMPTY_FULL_SYNC") == "true",
 	}
-	addr := env("STRATT_PLUGIN_LISTEN", ":9090")
-
-	lis, err := net.Listen("tcp", addr)
-	if err != nil {
-		log.Error("listen", "addr", addr, "error", err)
-		os.Exit(1)
-	}
-	srv := grpc.NewServer()
-	pluginv1.RegisterPluginServiceServer(srv, kubecontainers.NewServer(cfg, client, log))
-	log.Info("kubecontainers plugin serving", "addr", addr, "namespace", cfg.Namespace, "plugin_id", cfg.PluginID)
-	if err := srv.Serve(lis); err != nil {
-		log.Error("serve", "error", err)
-		os.Exit(1)
-	}
+	pluginserve.Main(pluginserve.Config{
+		Name:   "kubecontainers",
+		Server: kubecontainers.NewServer(cfg, client, log),
+		Fields: []any{"namespace", cfg.Namespace, "plugin_id", cfg.PluginID},
+	})
 }
 
 // newClient resolves the Kubernetes client: in-cluster first (the deployed
@@ -73,11 +61,4 @@ func newClient() (kubernetes.Interface, error) {
 		}
 	}
 	return kubernetes.NewForConfig(cfg)
-}
-
-func env(k, d string) string {
-	if v := os.Getenv(k); v != "" {
-		return v
-	}
-	return d
 }

@@ -31,14 +31,24 @@ Demos are teaching scenarios in their own tree; the single embedded `managed-web
 `estate/` (ADR-0084) remains the reference estate's in-place example. Demos _use_ the reference-estate
 patterns — they don't fork them.
 
+## Where a demo lives
+
+A demo that exercises **one** plugin lives **with that plugin**, in `plugins/<name>/demo/`
+([ADR-0137](../docs/adr/0137-a-plugin-is-a-service-not-a-subdirectory.md) D7). This directory keeps the
+scenarios that span **several** — the only ones no single plugin can own.
+
+The test is "does it span more than one plugin?", never "does it mention one." `task plugins:boundary`
+enforces it, so a new single-plugin demo cannot quietly land here and re-scatter the tree one file at a
+time. Every demo runs the same way wherever it lives: `task demo:<name>:run`.
+
 ## The library
 
-| Demo                                                                   | Substrate         | Fidelity     | Teaches                                                                                                                                                                                                                                                                                                    |
-| ---------------------------------------------------------------------- | ----------------- | ------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **[k8s: deploy an app](k8s-deploy/README.md)**                         | Kubernetes (kind) | `real`       | The **write** half: CaC → gated Workflow → `helm/deploy` over the plugin port → the Intent→Run descent, ending in a real Deployment. **Start here.**                                                                                                                                                       |
-| **[vSphere: provision a VM + the live graph](vsphere-only/README.md)** | vSphere (vcsim)   | `build-real` | The **read** half joined to write: a Syncer projects the whole topology into a live graph (Views, Facets, Relations), and the _same_ dual-verb plugin provisions a VM into it — the write reflected back in the read-model.                                                                                |
-| **[EC2: provision a real instance](ec2-only/README.md)**               | EC2 (floci)       | `real`       | Real provisioning: a gated Workflow runs a genuine `RunInstances` against floci (real SSH-able instance containers, not a mock), and the Syncer observes the new instance appear — the graph coming alive _with_ what you build.                                                                           |
-| **[app install with a certificate](app-cert/README.md)**               | SSH (Linux host)  | `real`       | **Configuration management** taken seriously: a real SSH converge with declared privilege escalation, a certificate minted by a collection **pinned into the execution environment at build time**, write-back bounded by declaration — and a Run that reached nothing failing instead of reporting green. |
+| Demo                                                                              | Home                                    | Substrate         | Fidelity     | Teaches                                                                                                                                                                                                                                                                                                    |
+| --------------------------------------------------------------------------------- | --------------------------------------- | ----------------- | ------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **[k8s: deploy an app](../plugins/helm/demo/README.md)**                          | `plugins/helm/`                         | Kubernetes (kind) | `real`       | The **write** half: CaC → gated Workflow → `helm/deploy` over the plugin port → the Intent→Run descent, ending in a real Deployment. **Start here.**                                                                                                                                                       |
+| **[vSphere: provision a VM + the live graph](../plugins/vcenter/demo/README.md)** | `plugins/vcenter/`                      | vSphere (vcsim)   | `build-real` | The **read** half joined to write: a Syncer projects the whole topology into a live graph (Views, Facets, Relations), and the _same_ dual-verb plugin provisions a VM into it — the write reflected back in the read-model.                                                                                |
+| **[EC2: provision a real instance](../plugins/awsec2/demo/README.md)**            | `plugins/awsec2/`                       | EC2 (floci)       | `real`       | Real provisioning: a gated Workflow runs a genuine `RunInstances` against floci (real SSH-able instance containers, not a mock), and the Syncer observes the new instance appear — the graph coming alive _with_ what you build.                                                                           |
+| **[app install with a certificate](app-cert/README.md)**                          | **here** (ansible + openbao + declared) | SSH (Linux host)  | `real`       | **Configuration management** taken seriously: a real SSH converge with declared privilege escalation, a certificate minted by a collection **pinned into the execution environment at build time**, write-back bounded by declaration — and a Run that reached nothing failing instead of reporting green. |
 
 ## Roadmap (planned demos)
 

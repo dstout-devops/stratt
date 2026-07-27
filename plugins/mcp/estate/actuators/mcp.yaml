@@ -1,0 +1,34 @@
+# mcp — the generic MCP transport Actuator (ADR-0053), migrated off its boot block to a CaC
+# declaration (ADR-0103), after ansible, script, cert-issuer and crossplane.
+#
+# MCP is a TRANSPORT, not an in-core protocol (§1.5). The `stratt-mcp` shim baked into the EE-mcp
+# image speaks JSON-RPC to the sandboxed server; the CORE keeps the seam — it resolves the
+# MCPServer declaration + rev, validates call-args against the pin, and pins each rung-3
+# derived_contract. None of that moves; only the registration does.
+#
+# WHAT CHANGES BY DECLARING IT. The boot block registered `mcp` UNCONDITIONALLY — every floor had
+# it whether or not anything used it. Now a floor that does not admit this plugin estate has no
+# `mcp` Actuator, which is the intended CaC posture (§2.2/§2.3: Git review authorizes plugin
+# registration) and the same trade ansible and script made. It is a real behaviour change, not a
+# lift: the guard is TestEstateDeclaresTheActuatorsItNames, which fails any Step naming an Actuator
+# its estate does not declare.
+#
+# The grant is EMPTY and deliberately so — the boot block's was too. An MCP Actuator writes no
+# Facet, claims no identity scheme and sets no label; its outputs are rung-3 derived contracts,
+# pinned by the core through a different path entirely. Nothing is being narrowed here.
+name: mcp
+pluginIdentity: mcp
+tier: trusted
+# NOT dry-runnable. An MCP tool call has no side-effect-free plan verb, and claiming otherwise
+# would let a dry-run Step EXECUTE a real call and report it as a preview — the same safety
+# property `script`'s declaration pins.
+dryRunnable: false
+# The MCP dispatch mode (ADR-0053): the core builds an MCP call rather than a generic EE-Job.
+mcp: true
+# Transport: `jobCommand`, no address — the transport IS the K8s Job running the shim in a
+# sandboxed EE image, the same shape ansible and script use.
+jobCommand: [stratt-mcp]
+# The EE image carrying the shim. Declared rather than inherited so the floor's default EE image
+# (a chart value) is not silently used for a Job that needs the MCP shim specifically; built by
+# `task dev:ee-mcp:build`, which the image gate checks.
+image: stratt-ee-mcp:dev

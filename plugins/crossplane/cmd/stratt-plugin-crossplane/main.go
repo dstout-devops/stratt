@@ -6,20 +6,17 @@ package main
 
 import (
 	"encoding/json"
-	"log/slog"
-	"net"
 	"os"
 
-	"google.golang.org/grpc"
+	"github.com/dstout-devops/stratt/sdk/pluginserve"
 
 	"github.com/dstout-devops/stratt/plugins/crossplane"
-	pluginv1 "github.com/dstout-devops/stratt/sdk/stratt/plugin/v1"
 )
 
 func main() {
-	log := slog.New(slog.NewTextHandler(os.Stderr, nil))
+	log := pluginserve.Logger()
 	cfg := crossplane.Config{
-		PluginID:   env("STRATT_PLUGIN_ID", "crossplane"),
+		PluginID:   pluginserve.Env("STRATT_PLUGIN_ID", "crossplane"),
 		Kubeconfig: os.Getenv("STRATT_CROSSPLANE_KUBECONFIG"), // "" ⇒ in-cluster
 	}
 	// STRATT_CROSSPLANE_OBSERVE is a JSON array of Claim kinds to observe back as a
@@ -30,25 +27,9 @@ func main() {
 			os.Exit(1)
 		}
 	}
-	addr := env("STRATT_PLUGIN_LISTEN", ":9090")
-
-	lis, err := net.Listen("tcp", addr)
-	if err != nil {
-		log.Error("listen", "addr", addr, "error", err)
-		os.Exit(1)
-	}
-	srv := grpc.NewServer()
-	pluginv1.RegisterPluginServiceServer(srv, crossplane.NewServer(cfg, log))
-	log.Info("crossplane plugin serving", "addr", addr, "plugin_id", cfg.PluginID)
-	if err := srv.Serve(lis); err != nil {
-		log.Error("serve", "error", err)
-		os.Exit(1)
-	}
-}
-
-func env(k, d string) string {
-	if v := os.Getenv(k); v != "" {
-		return v
-	}
-	return d
+	pluginserve.Main(pluginserve.Config{
+		Name:   "crossplane",
+		Server: crossplane.NewServer(cfg, log),
+		Fields: []any{"plugin_id", cfg.PluginID},
+	})
 }

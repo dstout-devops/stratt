@@ -138,7 +138,13 @@ func appStore(intentSpec, assignmentValues map[string]any, defaults map[string]a
 
 func compileOne(t *testing.T, s Store) Plan {
 	t.Helper()
-	plan, err := Compile(context.Background(), s, DefaultMaxDelta)
+	return compileWith(t, s, nil)
+}
+
+// compileWith is compileOne with an explicit capability resolver (ADR-0135 D3).
+func compileWith(t *testing.T, s Store, resolve RemediationResolver) Plan {
+	t.Helper()
+	plan, err := Compile(context.Background(), s, DefaultMaxDelta, resolve)
 	if err != nil {
 		t.Fatalf("Compile: %v", err)
 	}

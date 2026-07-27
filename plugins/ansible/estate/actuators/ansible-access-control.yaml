@@ -1,0 +1,24 @@
+# ansible-access-control — the ansible Actuator bound to the access-control PROJECT
+# (ADR-0134 D1/D2): host-access grants, applied, revoked and collected.
+#
+# The grant is ONE namespace. That is the demonstration D2 exists for: this project's content
+# converges and observes host access, so access.grants is the entire ceiling on what a Run
+# through it may write back — no matter what a play claims, and no matter what a Step's own
+# facetWriteScope asks for (the two are intersected, ADR-0054). Under the single wide-grant
+# Actuator this estate used to share, the same plays could have written os.hardening.* and
+# fileset.content; grouping projects by REMEDIATION DOMAIN rather than by tool is what makes a
+# per-project ceiling mean something.
+#
+# Platform-owned path, and deliberately so — see the ansible-platform-baseline declaration
+# beside this one for the ADR-0134 D2 correction it is honoring, and for the honest limit: this
+# is a run-time ceiling enforced by repo review at authoring time, not isolation.
+name: ansible-access-control
+pluginIdentity: ansible
+tier: trusted
+dryRunnable: true
+jobCommand: [stratt-ansible]
+contentDir: content/access-control
+contentInputs: [playbook]
+facetNamespaces: [access.grants]
+identitySchemes: [host.name]
+elevatedInputs: [become.enabled]

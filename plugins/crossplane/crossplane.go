@@ -12,6 +12,7 @@ package crossplane
 
 import (
 	"context"
+	"embed"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -29,8 +30,19 @@ import (
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 
+	"github.com/dstout-devops/stratt/sdk/pluginserve"
 	pluginv1 "github.com/dstout-devops/stratt/sdk/stratt/plugin/v1"
 )
+
+// The plugin's OWN contract documents (ADR-0138 D3/D4), embedded so their digests can be
+// advertised on every ContractRef — port invariant #5, which had nothing to check while these
+// documents lived in the core binary and `sha256` went out empty.
+//
+//go:embed contracts
+var contractFS embed.FS
+
+// contracts hashes those documents on demand; Ref(id) yields the pinned ContractRef.
+var contracts = pluginserve.Contracts(contractFS)
 
 const protocolVersion = "v1"
 
@@ -100,8 +112,8 @@ func (s *Server) GetManifest(context.Context, *pluginv1.GetManifestRequest) (*pl
 		TombstoneSchemes: []string{"crossplane.claim"},
 		Actions: []*pluginv1.ActionDecl{{
 			Name:        actionProvision,
-			Input:       &pluginv1.ContractRef{SchemaId: "actions/crossplane/provision.input"},
-			Output:      &pluginv1.ContractRef{SchemaId: "actions/crossplane/provision.output"},
+			Input:       contracts.Ref("actions/crossplane/provision.input"),
+			Output:      contracts.Ref("actions/crossplane/provision.output"),
 			Idempotent:  true, // server-side-apply of the named resource is idempotent
 			DryRunnable: true,
 		}},
@@ -159,10 +171,10 @@ func (s *Server) Apply(req *pluginv1.ApplyRequest, stream grpc.ServerStreamingSe
 	ctx := stream.Context()
 	var p claimParams
 	if err := json.Unmarshal(req.GetDesired().GetBytes(), &p); err != nil {
-		return terminal(stream, false, pluginv1.ItemResult_STATUS_FAILED, "invalid params: "+err.Error())
+		return pluginserve.ApplyTerminal(stream, false, pluginv1.ItemResult_STATUS_FAILED, "invalid params: "+err.Error())
 	}
 	if p.Group == "" || p.Version == "" || p.Resource == "" || p.Kind == "" || p.Name == "" {
-		return terminal(stream, false, pluginv1.ItemResult_STATUS_FAILED, "group, version, resource, kind, name are required")
+		return pluginserve.ApplyTerminal(stream, false, pluginv1.ItemResult_STATUS_FAILED, "group, version, resource, kind, name are required")
 	}
 	_ = stream.Send(&pluginv1.ApplyResponse{Event: &pluginv1.TaskEvent{
 		Level: pluginv1.TaskEvent_LEVEL_INFO, At: timestamppb.Now(),
@@ -172,14 +184,14 @@ func (s *Server) Apply(req *pluginv1.ApplyRequest, stream grpc.ServerStreamingSe
 
 	if req.GetDryRun() {
 		if _, err := s.provision(ctx, p, true); err != nil {
-			return terminal(stream, false, pluginv1.ItemResult_STATUS_FAILED, "dry-run apply: "+err.Error())
+			return pluginserve.ApplyTerminal(stream, false, pluginv1.ItemResult_STATUS_FAILED, "dry-run apply: "+err.Error())
 		}
-		return terminal(stream, true, pluginv1.ItemResult_STATUS_CHANGED, "dry-run: claim would apply")
+		return pluginserve.ApplyTerminal(stream, true, pluginv1.ItemResult_STATUS_CHANGED, "dry-run: claim would apply")
 	}
 
 	got, err := s.provision(ctx, p, false)
 	if err != nil {
-		return terminal(stream, false, pluginv1.ItemResult_STATUS_FAILED, err.Error())
+		return pluginserve.ApplyTerminal(stream, false, pluginv1.ItemResult_STATUS_FAILED, err.Error())
 	}
 
 	ent := project(p, got)
@@ -188,7 +200,7 @@ func (s *Server) Apply(req *pluginv1.ApplyRequest, stream grpc.ServerStreamingSe
 		Event:     &pluginv1.TaskEvent{Level: pluginv1.TaskEvent_LEVEL_INFO, At: timestamppb.Now(), Message: "provisioned", Fields: map[string]string{"kind": "writeback"}},
 		WriteBack: []*pluginv1.ObservedEntity{ent},
 	})
-	return terminal(stream, true, pluginv1.ItemResult_STATUS_CHANGED, "claim Ready: "+p.Name)
+	return pluginserve.ApplyTerminal(stream, true, pluginv1.ItemResult_STATUS_CHANGED, "claim Ready: "+p.Name)
 }
 
 // provision applies the Crossplane resource (server-side-apply) and waits for it to
@@ -258,7 +270,7 @@ func (s *Server) Invoke(req *pluginv1.InvokeRequest, stream grpc.ServerStreaming
 	if req.GetDryRun() {
 		return stream.Send(&pluginv1.InvokeResponse{
 			Event:  &pluginv1.TaskEvent{Level: pluginv1.TaskEvent_LEVEL_INFO, At: timestamppb.Now(), CorrelationId: cid, Terminal: true, Ok: true, Message: "dry-run ok: subnet would provision"},
-			Result: &pluginv1.InvokeResult{OutputContract: &pluginv1.ContractRef{SchemaId: "actions/crossplane/provision.output"}},
+			Result: &pluginv1.InvokeResult{OutputContract: contracts.Ref("actions/crossplane/provision.output")},
 		})
 	}
 
@@ -270,7 +282,7 @@ func (s *Server) Invoke(req *pluginv1.InvokeRequest, stream grpc.ServerStreaming
 		Event: &pluginv1.TaskEvent{Level: pluginv1.TaskEvent_LEVEL_INFO, At: timestamppb.Now(), CorrelationId: cid, Terminal: true, Ok: true, Message: "provisioned " + p.Name, Fields: map[string]string{"name": p.Name, "cidr": p.Cidr}},
 		Result: &pluginv1.InvokeResult{
 			Outputs:        &pluginv1.Payload{Bytes: outputs},
-			OutputContract: &pluginv1.ContractRef{SchemaId: "actions/crossplane/provision.output"},
+			OutputContract: contracts.Ref("actions/crossplane/provision.output"),
 			Entities:       []*pluginv1.ObservedEntity{ent},
 		},
 	})
@@ -504,13 +516,6 @@ func resourceClient(dyn dynamic.Interface, gvr schema.GroupVersionResource, ns s
 		return dyn.Resource(gvr)
 	}
 	return dyn.Resource(gvr).Namespace(ns)
-}
-
-func terminal(stream grpc.ServerStreamingServer[pluginv1.ApplyResponse], ok bool, status pluginv1.ItemResult_Status, msg string) error {
-	return stream.Send(&pluginv1.ApplyResponse{
-		Event:  &pluginv1.TaskEvent{Terminal: true, Ok: ok, At: timestamppb.Now(), Message: msg, Fields: map[string]string{"kind": "finished"}},
-		Result: &pluginv1.ItemResult{ItemKey: "", Status: status},
-	})
 }
 
 func budget(sec int) time.Duration {

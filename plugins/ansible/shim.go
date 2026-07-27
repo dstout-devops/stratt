@@ -13,9 +13,9 @@ import (
 	"strconv"
 	"strings"
 
-	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
+	"github.com/dstout-devops/stratt/sdk/pluginserve"
 	pluginv1 "github.com/dstout-devops/stratt/sdk/stratt/plugin/v1"
 )
 
@@ -351,12 +351,7 @@ func Run(ctx context.Context, w io.Writer, dir string, req Request, run commandR
 	for _, t := range req.Targets {
 		byHost[t.Name] = t
 	}
-	emit := func(r *pluginv1.ApplyResponse) {
-		if b, err := protojson.Marshal(r); err == nil {
-			_, _ = w.Write(b)
-			_, _ = w.Write([]byte("\n"))
-		}
-	}
+	emit := pluginserve.NewEmitter(w).Send
 
 	// What content this EE actually carries (ADR-0117 D3), stated once per Run so the
 	// descent can answer "which collections/roles did this Run have?" without inspecting
@@ -528,16 +523,7 @@ func vacuousRun(rc int, targets []Target, actuated int, limit string, noHostsMat
 
 // emitFatal writes a terminal not-ok diagnostic and returns nil (a domain failure
 // rides the typed channel, §1.8, not a transport error).
-func emitFatal(w io.Writer, msg string) error {
-	r := &pluginv1.ApplyResponse{Event: &pluginv1.TaskEvent{
-		Level: pluginv1.TaskEvent_LEVEL_ERROR, Message: msg, Terminal: true, Ok: false, At: timestamppb.Now(),
-	}}
-	if b, err := protojson.Marshal(r); err == nil {
-		_, _ = w.Write(b)
-		_, _ = w.Write([]byte("\n"))
-	}
-	return nil
-}
+func emitFatal(w io.Writer, msg string) error { return pluginserve.NewEmitter(w).Fatal(msg) }
 
 // writeInventory lays out the parts of the ansible-runner private-data-dir that are
 // independent of the playbook source: inventory/hosts and optional env/extravars

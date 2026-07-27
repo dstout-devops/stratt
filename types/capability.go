@@ -26,6 +26,17 @@ const (
 	CapEventBus      = "eventbus"      // an estate-facing alternate event backend (reserved, ADR-0046)
 	CapProvisioning  = "provisioning"  // provision machines other plugins target (e.g. EC2)
 	CapIPAM          = "ipam"          // allocate a prefix/VLAN from a global IPAM (provider #1: NetBox, ADR-0111)
+	// CapConfigMgmt: converge a host's configuration to a desired state (provider #1: the ansible
+	// EE-Job Actuator, ADR-0135). It is what a Blueprint route depends on instead of naming a
+	// remediation Workflow — the last name-bound edge of the intent layer (ADR-0135 D3).
+	//
+	// ONE PROVIDER TODAY, and the class does not exist in anticipation of a second one we plan to
+	// ship: puppet/chef/salt are Syncers here, and AWX is deliberately NOT a provider (ADR-0136 —
+	// it is a superseded control plane, and binding to it would create the dependency an exodus
+	// exists to remove). The class earns its place from what it lets OTHERS do: a Blueprint whose
+	// remediation names a Workflow cannot be shared, and an estate this project never sees may
+	// bring a provider it never shipped.
+	CapConfigMgmt = "configmgmt"
 )
 
 // capabilityClasses is the closed set the validator admits. Extending it is a core decision
@@ -39,6 +50,7 @@ var capabilityClasses = map[string]bool{
 	CapEventBus:      true,
 	CapProvisioning:  true,
 	CapIPAM:          true,
+	CapConfigMgmt:    true,
 }
 
 // ValidCapability reports whether tok is a known capability class (§1.5 — a plugin never mints a

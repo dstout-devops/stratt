@@ -1,0 +1,19 @@
+# Admitted plugin estates for the app-cert demo (ADR-0137 D1/D3).
+#
+# app-cert is a CROSS-PLUGIN demo and declares its OWN `ansible-crypto` Actuator with
+# `pluginIdentity: ansible`. Since ADR-0138 D3/D4 that Actuator's input Contract
+# (`actuators/ansible.input`) lives in the ansible plugin's own tree, so the demo must admit
+# ansible to reference it.
+#
+# CONTRACTS ONLY, and the distinction is the point: the demo needs ansible's SEAM, not ansible's
+# ESTATE. Admitting the estate imports ansible's own Workflows, which target Views this demo does
+# not declare — so a full admission fails to parse for a reason that has nothing to do with what
+# the demo is demonstrating.
+#
+# Before this file existed the demo parsed only when some earlier estate had already registered
+# ansible's contracts into the process-wide registry — an accident that made the outcome depend on
+# test ordering rather than on anything the demo declares.
+plugins:
+  - name: ansible
+    path: ../../../plugins/ansible/estate
+    contractsOnly: true

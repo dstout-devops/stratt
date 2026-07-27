@@ -128,6 +128,12 @@ jobs:
           # helpers default to this URL, but set it explicitly so the intent is
           # visible and a service-name change can't silently re-skip the suite.
           STRATT_TEST_DATABASE_URL: postgres://stratt:stratt-dev@localhost:5432/stratt
+          # ADR-0137 D2's diff half (plugins:boundary:diff): does a change that edits
+          # a plugin ALSO reach into core? `main` is already materialized above for
+          # buf breaking, so this costs nothing extra. On the push-to-main run the
+          # range is empty and the check is a no-op, which is correct — a merged
+          # change was already gated on the PR.
+          BASE: main
         run: task ci
 
   images:

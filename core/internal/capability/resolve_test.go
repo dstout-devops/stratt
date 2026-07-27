@@ -11,13 +11,13 @@ const prov = "provisioning"
 
 // Provisions values are the providers' per-kind build WORKFLOW names (ADR-0110 D3).
 func awsec2() Provider {
-	return Provider{Name: "awsec2", Provisions: map[string]string{"Compute": "compute-build", "Subnet": "awsec2-subnet-build"}}
+	return Provider{Name: "awsec2", Workflows: map[string]string{"Compute": "compute-build", "Subnet": "awsec2-subnet-build"}}
 }
 func crossplane() Provider {
-	return Provider{Name: "crossplane", Provisions: map[string]string{"Subnet": "subnet-build", "Vlan": "vlan-build"}}
+	return Provider{Name: "crossplane", Workflows: map[string]string{"Subnet": "subnet-build", "Vlan": "vlan-build"}}
 }
 func opentofuNetwork() Provider {
-	return Provider{Name: "opentofu-network", Provisions: map[string]string{"Subnet": "opentofu-subnet-build"}}
+	return Provider{Name: "opentofu-network", Workflows: map[string]string{"Subnet": "opentofu-subnet-build"}}
 }
 
 func binding(name string, entries ...types.BindingEntry) types.CapabilityBinding {
@@ -151,7 +151,7 @@ func TestResolveConcurrentReadOnly(t *testing.T) {
 	}
 	wg.Wait()
 	// Inputs untouched.
-	if _, ok := providers[0].Provisions["Vlan"]; ok {
+	if _, ok := providers[0].Workflows["Vlan"]; ok {
 		t.Fatal("Resolve mutated a provider's Provisions map")
 	}
 }

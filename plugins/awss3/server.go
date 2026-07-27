@@ -7,6 +7,7 @@ package awss3
 
 import (
 	"context"
+	"embed"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -20,8 +21,19 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
+	"github.com/dstout-devops/stratt/sdk/pluginserve"
 	pluginv1 "github.com/dstout-devops/stratt/sdk/stratt/plugin/v1"
 )
+
+// The plugin's OWN contract documents (ADR-0138 D3/D4), embedded so their digests can be
+// advertised on every ContractRef — port invariant #5, which had nothing to check while these
+// documents lived in the core binary and `sha256` went out empty.
+//
+//go:embed contracts
+var contractFS embed.FS
+
+// contracts hashes those documents on demand; Ref(id) yields the pinned ContractRef.
+var contracts = pluginserve.Contracts(contractFS)
 
 // nowpb is the current time as a proto timestamp (plugin code — time.Now is fine here).
 func nowpb() *timestamppb.Timestamp { return timestamppb.Now() }
@@ -121,16 +133,16 @@ func (s *Server) Health(context.Context, *pluginv1.HealthRequest) (*pluginv1.Hea
 }
 
 func (s *Server) GetManifest(context.Context, *pluginv1.GetManifestRequest) (*pluginv1.GetManifestResponse, error) {
-	contracts := make([]*pluginv1.ContractDecl, 0, len(facetNamespaces))
+	contractDecls := make([]*pluginv1.ContractDecl, 0, len(facetNamespaces))
 	for _, ns := range facetNamespaces {
-		contracts = append(contracts, &pluginv1.ContractDecl{SchemaId: ns})
+		contractDecls = append(contractDecls, &pluginv1.ContractDecl{SchemaId: ns})
 	}
 	decl := func(name string, idempotent bool) *pluginv1.ActionDecl {
 		op := name[len("awss3/"):]
 		return &pluginv1.ActionDecl{
 			Name:   name,
-			Input:  &pluginv1.ContractRef{SchemaId: "actions/awss3/" + op + ".input"},
-			Output: &pluginv1.ContractRef{SchemaId: "actions/awss3/" + op + ".output"},
+			Input:  contracts.Ref("actions/awss3/" + op + ".input"),
+			Output: contracts.Ref("actions/awss3/" + op + ".output"),
 			// create/delete are not idempotent (exists/absent errors); versioning +
 			// policy are idempotent (set-to-a-value). All non-DryRunnable (S3 has no
 			// dry-run operation).
@@ -155,6 +167,10 @@ func (s *Server) GetManifest(context.Context, *pluginv1.GetManifestRequest) (*pl
 			Input:      &pluginv1.ContractRef{SchemaId: "capabilities/statestore.input"},
 			Output:     &pluginv1.ContractRef{SchemaId: "capabilities/statestore.output"},
 			Idempotent: true, // resolution is a pure read of config — no side effects
+			// THIS Action is the `statestore` class (ADR-0140 D1) — declared, not derived from
+			// the plugin id. Advertised under the same condition as the capability itself, so a
+			// plugin with no state bucket advertises neither the class nor an implementation of it.
+			Implements: "statestore",
 		})
 	}
 	return &pluginv1.GetManifestResponse{Manifest: &pluginv1.Manifest{
@@ -162,7 +178,7 @@ func (s *Server) GetManifest(context.Context, *pluginv1.GetManifestRequest) (*pl
 		ProtocolVersion:  "v1",
 		Class:            pluginv1.PluginClass_PLUGIN_CLASS_SYNCER,
 		Verbs:            []pluginv1.Verb{pluginv1.Verb_VERB_OBSERVE, pluginv1.Verb_VERB_INVOKE},
-		Contracts:        contracts,
+		Contracts:        contractDecls,
 		TombstoneSchemes: []string{"aws.bucketArn"},
 		Capabilities:     capabilities,
 		Actions:          actions,
@@ -399,7 +415,7 @@ func (s *Server) sendTerminalResult(stream grpc.ServerStreamingServer[pluginv1.I
 		},
 		Result: &pluginv1.InvokeResult{
 			Outputs:        &pluginv1.Payload{Bytes: raw},
-			OutputContract: &pluginv1.ContractRef{SchemaId: contractID},
+			OutputContract: contracts.Ref(contractID),
 		},
 	})
 }

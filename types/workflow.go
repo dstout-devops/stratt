@@ -71,17 +71,56 @@ type Step struct {
 	// exclusive with Gate/Action/actuation.
 	Policy *PolicySpec `json:"policy,omitempty"`
 
+	// Workflow makes this Step run another declared Workflow as a nested child
+	// (charter §2.3 "…convergence, nesting"; ADR-0011 deferred it, ADR-0139 D1/D3
+	// resumes it). The child is a first-class WorkflowRun linked back to this Step,
+	// not an inlining of its Steps — so descent, Gates and audit keep working.
+	//
+	// Mutually exclusive with every other Step shape. Inputs (below) are this
+	// Step's arguments to the child's declared `inputs` schema, validated at
+	// declaration against that schema — never at launch, which is too late.
+	Workflow string `json:"workflow,omitempty"`
+	// WorkflowCapability + ForKind are the CLASS form of the same Step (ADR-0139 D3): the
+	// Step names a capability and an Intent kind, and the bound provider's advertised
+	// build Workflow is resolved at launch. Mutually exclusive with Workflow.
+	//
+	// It resolves through the provider's `provisions` map ONLY. The other two per-kind maps
+	// (`remediates`, `decommissions`) are deliberately NOT searched, and cannot be without a
+	// verb selector this form does not have: vcenter maps `Compute` in BOTH provisions
+	// (vsphere-vm-build) and decommissions (vsphere-vm-teardown), so a search across maps
+	// would be ambiguous for the most ordinary provider in the estate — and "build" vs "tear
+	// down" is not a tiebreak core may make (§2.4). Extending to the other verbs is a
+	// separate decision, not an omission.
+	WorkflowCapability string `json:"workflowCapability,omitempty"`
+	ForKind            string `json:"forKind,omitempty"`
+	// Inputs are the launch inputs handed to a nested Workflow. A SEPARATE field
+	// from Params on purpose (the same split ADR-0118 D4 made): Params are a
+	// Step's Actuator/Action arguments, Inputs are a Workflow's own declared
+	// interface, and one field meaning both depending on the Step shape is the
+	// overloading that made LaunchParams carry two concepts.
+	Inputs map[string]any `json:"inputs,omitempty"`
+
 	// Actuation fields (mirror StartRun / Trigger launch parameters).
 	ViewName string `json:"viewName,omitempty"`
 	Actuator string `json:"actuator,omitempty"`
 	// Action names a Connector Action for a targetless typed operation (§2.2,
 	// ADR-0031); mutually exclusive with ViewName/Actuator. DryRun asks for a
 	// side-effect-free plan.
-	Action         string         `json:"action,omitempty"`
-	DryRun         bool           `json:"dryRun,omitempty"`
-	Params         map[string]any `json:"params,omitempty"`
-	Slices         int            `json:"slices,omitempty"`
-	CredentialRefs []string       `json:"credentialRefs,omitempty"`
+	Action string `json:"action,omitempty"`
+	// ActionCapability names a capability CLASS instead of a provider's Action
+	// (ADR-0140 D3 row 2): the Step says WHAT it needs, and the bound provider's
+	// advertised implementation is resolved at launch. Mutually exclusive with
+	// Action — a Step that names both would have two answers to "what runs here"
+	// and a rule to pick between them is the implicit precedence §2.4 refuses.
+	//
+	// Params are validated against the CLASS Contract (capabilities/<class>.input),
+	// so the Step stays valid across a provider swap — which is the reason to write
+	// one this way rather than naming `netbox/ipam-resolve` directly.
+	ActionCapability string         `json:"actionCapability,omitempty"`
+	DryRun           bool           `json:"dryRun,omitempty"`
+	Params           map[string]any `json:"params,omitempty"`
+	Slices           int            `json:"slices,omitempty"`
+	CredentialRefs   []string       `json:"credentialRefs,omitempty"`
 	// FacetWriteScope is the Facet namespaces an actuation Step may write back
 	// (ADR-0054): the actuator's grant ∩ this scope. Empty admits no facet write-back.
 	FacetWriteScope []string `json:"facetWriteScope,omitempty"`
@@ -175,4 +214,16 @@ type WorkflowRun struct {
 	// slice 5) — set once at creation. A Gate decision or cancel routes here.
 	// Empty ⇒ the built-in LocalCell.
 	Cell string `json:"cell,omitempty"`
+	// ParentWorkflowRunID / ParentStepName are the NESTING link (ADR-0139 D2): which
+	// WorkflowRun launched this one, and from which Step. Empty for a top-level run.
+	//
+	// A nested execution is a first-class WorkflowRun, not an inlining of the child's
+	// Steps into the parent DAG — descent (§1.8), Gates and audit all already work per
+	// WorkflowRun, and inlining would rebuild all three while erasing the child's own
+	// Inputs contract. Without this link a nested run is an orphan whose existence is
+	// only inferable from timing.
+	//
+	// Set together or not at all; the data layer enforces it.
+	ParentWorkflowRunID string `json:"parentWorkflowRunId,omitempty"`
+	ParentStepName      string `json:"parentStepName,omitempty"`
 }

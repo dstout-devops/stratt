@@ -109,4 +109,17 @@ func TestManifest(t *testing.T) {
 	if len(man.GetTombstoneSchemes()) != 2 {
 		t.Errorf("expected netbox.prefix.id + netbox.vlan.id tombstone schemes, got %v", man.GetTombstoneSchemes())
 	}
+	// The plugin must say WHICH of its Actions IS the `ipam` class (ADR-0140 D1). Core used to
+	// compute the answer from the plugin id; it now reads this, and a provider that stops
+	// advertising it stops resolving — so the assertion belongs here, not only in core.
+	var impl string
+	for _, a := range man.GetActions() {
+		if a.GetImplements() == "ipam" {
+			impl = a.GetName()
+		}
+	}
+	if impl != actionIPAMResolve {
+		t.Errorf("the ipam implementation must be advertised as %q, got %q — declaring provides:[ipam] "+
+			"without naming the Action that IS it leaves the class unresolvable", actionIPAMResolve, impl)
+	}
 }

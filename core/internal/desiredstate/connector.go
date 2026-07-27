@@ -50,6 +50,7 @@ type connectorFile struct {
 	Requires                     []string          `yaml:"requires"`
 	Provisions                   map[string]string `yaml:"provisions"`
 	Decommissions                map[string]string `yaml:"decommissions"`
+	Remediates                   map[string]string `yaml:"remediates"`
 	Environments                 []string          `yaml:"environments"`
 }
 
@@ -70,7 +71,7 @@ func parseConnectorFile(path string, raw []byte) (string, types.Connector, error
 		LabelKeys: f.LabelKeys, IdentitySchemes: f.IdentitySchemes, TombstoneSchemes: f.TombstoneSchemes,
 		EmitterName: f.EmitterName, ActionNames: f.ActionNames, IntervalSeconds: f.IntervalSeconds,
 		Provides: f.Provides, Requires: f.Requires, Provisions: f.Provisions,
-		Decommissions: f.Decommissions, Environments: f.Environments,
+		Decommissions: f.Decommissions, Remediates: f.Remediates, Environments: f.Environments,
 	}
 	if err := ValidateConnector(c); err != nil {
 		return "", types.Connector{}, fmt.Errorf("desiredstate: %s: %w", path, err)
@@ -119,6 +120,9 @@ func ValidateConnector(c types.Connector) error {
 		return err
 	}
 	if err := validateDecommissions(c.Name, c.Provides, c.Decommissions); err != nil {
+		return err
+	}
+	if err := validateRemediates(c.Name, c.Provides, c.Remediates); err != nil {
 		return err
 	}
 	return nil
@@ -189,6 +193,35 @@ func validateDecommissions(name string, provides []string, decommissions map[str
 	return nil
 }
 
+// validateRemediates is the ADR-0135 D2 member of the same family: a per-Intent-kind CONVERGENCE
+// Workflow map, meaningful only on a provider that advertises the class a route can ask for. The
+// `provides` gate is the half-declaration rule the other two enforce — a map nothing can resolve
+// through is admitted, never consulted, and reported nowhere (§1.8).
+func validateRemediates(name string, provides []string, remediates map[string]string) error {
+	if len(remediates) == 0 {
+		return nil
+	}
+	// Unlike provisions/decommissions, remediation is not tied to ONE class: configmgmt is the
+	// first, and a future certissuer-shaped remediation provider would be as legitimate. So the
+	// check is "advertises some capability", not "advertises configmgmt" — narrowing it would
+	// bake today's only provider into the validator.
+	if len(provides) == 0 {
+		return fmt.Errorf("%q: remediates is set but provides is empty — a route resolves remediation through a CAPABILITY, so a provider advertising none can never be selected (ADR-0135 D2)", name)
+	}
+	for kind, wf := range remediates {
+		if kind == "" {
+			return fmt.Errorf("%q: remediates has an empty Intent kind", name)
+		}
+		if short, ok := strings.CutPrefix(kind, "Intent/"); ok {
+			return fmt.Errorf("%q: remediates kind %q must omit the Intent/ prefix (write %q)", name, kind, short)
+		}
+		if wf == "" {
+			return fmt.Errorf("%q: remediates[%q] has an empty remediation Workflow", name, kind)
+		}
+	}
+	return nil
+}
+
 func computeConnectorPlan(ctx context.Context, store *graph.Store, decls []types.Connector) (Plan, error) {
 	current, err := store.ListConnectors(ctx)
 	if err != nil {
@@ -237,12 +270,14 @@ type actuatorFile struct {
 	ContentInputs   []string          `yaml:"contentInputs"`
 	FacetNamespaces []string          `yaml:"facetNamespaces"`
 	IdentitySchemes []string          `yaml:"identitySchemes"`
+	LabelKeys       []string          `yaml:"labelKeys"`
 	ElevatedInputs  []string          `yaml:"elevatedInputs"`
 	MCP             bool              `yaml:"mcp"`
 	Provides        []string          `yaml:"provides"`
 	Requires        []string          `yaml:"requires"`
 	Provisions      map[string]string `yaml:"provisions"`
 	Decommissions   map[string]string `yaml:"decommissions"`
+	Remediates      map[string]string `yaml:"remediates"`
 	Environments    []string          `yaml:"environments"`
 }
 
@@ -257,10 +292,11 @@ func parseActuatorFile(path string, raw []byte) (string, types.Actuator, error) 
 		Name: f.Name, Address: f.Address, PluginIdentity: f.PluginIdentity, Tier: f.Tier,
 		DryRunnable: f.DryRunnable, ActionNames: f.ActionNames, JobCommand: f.JobCommand,
 		Image: f.Image, ContentDir: f.ContentDir, ContentInputs: f.ContentInputs,
-		FacetNamespaces: f.FacetNamespaces, IdentitySchemes: f.IdentitySchemes,
+		FacetNamespaces: f.FacetNamespaces, IdentitySchemes: f.IdentitySchemes, LabelKeys: f.LabelKeys,
 		ElevatedInputs: f.ElevatedInputs,
 		MCP:            f.MCP, Provides: f.Provides, Requires: f.Requires,
-		Provisions: f.Provisions, Decommissions: f.Decommissions, Environments: f.Environments,
+		Provisions: f.Provisions, Decommissions: f.Decommissions, Remediates: f.Remediates,
+		Environments: f.Environments,
 	}
 	if err := ValidateActuator(a); err != nil {
 		return "", types.Actuator{}, fmt.Errorf("desiredstate: %s: %w", path, err)
@@ -315,6 +351,32 @@ func ValidateActuator(a types.Actuator) error {
 	if err := validateContentDir(a.Name, a.ContentDir); err != nil {
 		return err
 	}
+	// A dial-less capability PROVIDER must declare a MECHANISM (ADR-0138 D5).
+	//
+	// This check used to demand a dial ADDRESS, because verification meant fetching a Manifest
+	// over one and resolution counts only VERIFIED providers — so an EE-Job Actuator's `provides`
+	// was permanently unverifiable: advertised, never counted, reported nowhere except a WARN
+	// every ten seconds. That is not hypothetical. ADR-0135 D2/D3 shipped exactly that on the
+	// ansible Actuator, three Assignments stopped compiling on every real floor, and every unit
+	// test passed because they resolve through a fake. It took booting a cluster to find.
+	//
+	// ADR-0138 D5 removed the reason for the address demand rather than the check itself: a
+	// dial-less provider is now verified against its DECLARED mechanisms, since it has no Manifest
+	// to fetch and never will (ansible is subprocess-only, §3 GPLv3 boundary). So the rule becomes
+	// what it was always really enforcing — a capability claim must have something behind it.
+	// The mechanism must be declared HERE, in the diff, not discovered as an empty resolution on a
+	// live floor (§1.8): that relocation was the whole point of the original check and it survives.
+	//
+	// A dial-ADDRESSED provider is exempt because its plugin speaks for itself: the Manifest is
+	// fetched and checked, and the mechanism for an Action-shaped class is advertised there rather
+	// than declared here (ADR-0140 D1).
+	if len(a.Provides) > 0 && a.Address == "" &&
+		len(a.Provisions)+len(a.Remediates)+len(a.Decommissions)+len(a.ActionNames) == 0 {
+		return fmt.Errorf("actuator %q: declares provides %v with no dial address and no mechanism — a dial-less "+
+			"provider is verified against what it DECLARES it can do (provisions/remediates/decommissions or "+
+			"actionNames), because there is no Manifest to fetch, and a class claim with nothing behind it would "+
+			"be advertised, never resolvable, and reported nowhere (ADR-0138 D5)", a.Name, a.Provides)
+	}
 	if err := validateCapabilities(a.Name, a.Provides, a.Requires); err != nil {
 		return err
 	}
@@ -322,6 +384,9 @@ func ValidateActuator(a types.Actuator) error {
 		return err
 	}
 	if err := validateDecommissions(a.Name, a.Provides, a.Decommissions); err != nil {
+		return err
+	}
+	if err := validateRemediates(a.Name, a.Provides, a.Remediates); err != nil {
 		return err
 	}
 	return nil

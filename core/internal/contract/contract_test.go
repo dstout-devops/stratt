@@ -245,8 +245,19 @@ func TestPinsAreStable(t *testing.T) {
 	// +ansible.input.v7 (ADR-0134): `playbook`, a path within the project tree the Step's
 	// Actuator declares via contentDir. A SIBLING of v6 rather than a widening of it —
 	// an Actuator input Contract is a wire promise to Step authors (ADR-0132 D4).
-	if len(all) != 152 { // +ansible.input.v7 (ADR-0134 mounted-project playbook ref)
-		t.Fatalf("expected 152 embedded documents, got %d", len(all))
+	// 152 → 69: ADR-0138 D3/D4 moved 83 SELF-contract files out of the binary and into the
+	// plugin trees that own them. What remains embedded is the SEAM set — capabilities/, facets/,
+	// intents/, outputs/, policy/ — plus the self contracts of NEUTRALLY-NAMED surfaces that no
+	// single vendor owns: `cert-issuer` (§1.5 says explicitly that a step-ca plugin could
+	// implement it), `adopt`, and the retired `webhook`. A neutral name means more than one plugin
+	// may implement it, which makes the document a seam by D3's own definition.
+	//
+	// Worth recording because the ADR's census was wrong: it read "22 of 152" by counting 13
+	// actuator FILES plus 9 action DIRECTORIES, but those directories hold 78 files. The real
+	// self-contract set was 91 documents, ~4× what the decision was sized against.
+	if len(all) != 69 {
+		t.Fatalf("expected 69 embedded documents, got %d — the shipped set is the SEAM set now "+
+			"(ADR-0138 D3/D4); a plugin's own contracts live in plugins/<n>/contracts/", len(all))
 	}
 	versions := map[string]int{}
 	for _, c := range all {
@@ -257,11 +268,20 @@ func TestPinsAreStable(t *testing.T) {
 			versions[c.Name] = c.Version
 		}
 	}
-	// ansible.input v7 (the mounted-project `playbook` ref, ADR-0134 D4) resolves as the
-	// current version; v1–v6 stay pinned alongside it (every version keeps its own
-	// pin row — only the LOOKUP collapses to the highest).
-	if versions["actuators/ansible.input"] != 7 {
-		t.Fatalf("ansible.input current version: %d", versions["actuators/ansible.input"])
+	// ansible.input v7 (the mounted-project `playbook` ref, ADR-0134 D4) resolves as the current
+	// version; v1–v6 stay pinned alongside it (every version keeps its own pin row — only the
+	// LOOKUP collapses to the highest). It is now ESTATE-resident (ADR-0138 D3/D4), so the
+	// version-sibling rule is asserted where the document actually lives — and asserting it there
+	// is what proves RegisterEstate reproduces load()'s semantics rather than inventing its own.
+	estateVersions := map[string]int{}
+	for _, c := range EstateContracts() {
+		if c.Version > estateVersions[c.Name] {
+			estateVersions[c.Name] = c.Version
+		}
+	}
+	if estateVersions["actuators/ansible.input"] != 7 {
+		t.Fatalf("ansible.input current version: %d (estate-resident since ADR-0138 D4)",
+			estateVersions["actuators/ansible.input"])
 	}
 	// intents/application v2 types `port` (ADR-0118 follow-up). A sibling version rather than an
 	// edit to v1, because tightening a type is BREAKING: `port: 443` parsed under v1 and does not

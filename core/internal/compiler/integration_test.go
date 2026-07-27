@@ -104,7 +104,9 @@ func appBlueprint(name string, version int, claim string) types.Blueprint {
 
 func compileApply(t *testing.T, s *graph.Store, maxDelta float64) Plan {
 	t.Helper()
-	plan, err := Compile(context.Background(), s, maxDelta)
+	// nil resolver: these fixtures route remediation by NAME. A capability-routed route would
+	// fail closed here with a diagnosis, which TestRemediationCapability covers explicitly.
+	plan, err := Compile(context.Background(), s, maxDelta, nil)
 	if err != nil {
 		t.Fatalf("compile: %v", err)
 	}

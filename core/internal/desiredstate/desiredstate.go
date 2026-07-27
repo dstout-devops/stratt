@@ -218,9 +218,26 @@ type declFacet struct {
 func ParseDir(root string, decider policy.Decider) (Declarations, error) {
 	var out Declarations
 
+	// The estate's own root, then every plugin estate it ADMITS (ADR-0137 D1/D3).
+	// From here down the roots are just additional search paths: one merged set,
+	// one validation pass, so a Blueprint here routing to a Workflow a plugin ships
+	// is an ordinary reference and not a special case.
+	roots, err := estateRoots(root)
+	if err != nil {
+		return out, err
+	}
+
+	// A plugin's OWN self contracts, registered before any kind is parsed (ADR-0138 D3/D4). The
+	// order is load-bearing: this same pass validates Steps against those documents, so a Step
+	// naming `actions/helm/deploy.input` would be refused for referencing a contract that "does
+	// not exist" if the plugin's tree had not been read first.
+	if err := loadPluginContracts(root); err != nil {
+		return out, err
+	}
+
 	// Admission policy first: it governs every other declaration (§3
 	// Kyverno-for-config). Controls are validated at load (CEL-only, allow/deny).
-	admissionDecls, err := parseKind(filepath.Join(root, "admission"), true, parseAdmissionFile)
+	admissionDecls, err := parseKind(kindDirs(roots, "admission"), true, parseAdmissionFile)
 	if err != nil {
 		return out, err
 	}
@@ -233,37 +250,46 @@ func ParseDir(root string, decider policy.Decider) (Declarations, error) {
 		}
 	}
 
-	views, err := parseKind(filepath.Join(root, "views"), false, parseViewFile)
+	views, err := parseKind(kindDirs(roots, "views"), false, parseViewFile)
 	if err != nil {
 		return out, err
 	}
 	out.Views = views
 	sort.Slice(out.Views, func(i, j int) bool { return out.Views[i].Name < out.Views[j].Name })
 
-	refs, err := parseKind(filepath.Join(root, "credential-refs"), true, parseCredentialRefFile)
+	refs, err := parseKind(kindDirs(roots, "credential-refs"), true, parseCredentialRefFile)
 	if err != nil {
 		return out, err
 	}
 	out.CredentialRefs = refs
 	sort.Slice(out.CredentialRefs, func(i, j int) bool { return out.CredentialRefs[i].Name < out.CredentialRefs[j].Name })
 
-	connectors, err := parseKind(filepath.Join(root, "connectors"), true, parseConnectorFile)
+	connectors, err := parseKind(kindDirs(roots, "connectors"), true, parseConnectorFile)
 	if err != nil {
 		return out, err
 	}
 	out.Connectors = connectors
 	sort.Slice(out.Connectors, func(i, j int) bool { return out.Connectors[i].Name < out.Connectors[j].Name })
 
-	actuatorDecls, err := parseKind(filepath.Join(root, "actuators"), true, parseActuatorFile)
-	if err != nil {
-		return out, err
-	}
 	// Tool content is resolved HERE, at parse time, onto the Actuator that declared it
-	// (ADR-0134 D3) — parseKind hands its parser only (path, raw), so the estate root is
-	// available at this level and not inside parseActuatorFile. A tool directory is never
-	// parsed AS a declaration: parseKind walks only the named subdirectories above, so
-	// estate/ansible/ is invisible to it already and needs no exclusion.
-	if err := resolveActuatorContent(root, actuatorDecls); err != nil {
+	// (ADR-0134 D3). A tool directory is never parsed AS a declaration: parseKind walks
+	// only the named subdirectories above, so a content root is invisible to it already
+	// and needs no exclusion.
+	//
+	// The root a `contentDir` resolves against is the estate that SHIPPED this Actuator,
+	// recovered from the declaration's own path — NOT the estate that admitted it
+	// (ADR-0137 D1: content travels with the plugin). Resolving against the admitting
+	// root instead would send `contentDir: content/platform-baseline` hunting under
+	// estate/, and the plugin's own tree would be unreachable from the moment it moved.
+	actuatorDecls, err := parseKind(kindDirs(roots, "actuators"), true,
+		func(path string, raw []byte) (string, types.Actuator, error) {
+			name, a, perr := parseActuatorFile(path, raw)
+			if perr != nil {
+				return name, a, perr
+			}
+			return name, a, resolveActuatorContent(estateRootOf(path), &a)
+		})
+	if err != nil {
 		return out, err
 	}
 	out.Actuators = actuatorDecls
@@ -276,14 +302,14 @@ func ParseDir(root string, decider policy.Decider) (Declarations, error) {
 	// reference them, which is what makes this available here.
 	actuatorIDs := WithActuatorIdentities(actuatorIdentities(actuatorDecls))
 
-	capBindings, err := parseKind(filepath.Join(root, "capability-bindings"), true, parseCapabilityBindingFile)
+	capBindings, err := parseKind(kindDirs(roots, "capability-bindings"), true, parseCapabilityBindingFile)
 	if err != nil {
 		return out, err
 	}
 	out.CapabilityBindings = capBindings
 	sort.Slice(out.CapabilityBindings, func(i, j int) bool { return out.CapabilityBindings[i].Name < out.CapabilityBindings[j].Name })
 
-	triggers, err := parseKind(filepath.Join(root, "triggers"), true,
+	triggers, err := parseKind(kindDirs(roots, "triggers"), true,
 		func(path string, raw []byte) (string, types.Trigger, error) {
 			return parseTriggerFile(path, raw, actuatorIDs)
 		})
@@ -293,7 +319,7 @@ func ParseDir(root string, decider policy.Decider) (Declarations, error) {
 	out.Triggers = triggers
 	sort.Slice(out.Triggers, func(i, j int) bool { return out.Triggers[i].Name < out.Triggers[j].Name })
 
-	workflows, err := parseKind(filepath.Join(root, "workflows"), true,
+	workflows, err := parseKind(kindDirs(roots, "workflows"), true,
 		func(path string, raw []byte) (string, types.Workflow, error) {
 			return parseWorkflowFile(path, raw, actuatorIDs)
 		})
@@ -310,21 +336,21 @@ func ParseDir(root string, decider policy.Decider) (Declarations, error) {
 		return out, err
 	}
 
-	emitters, err := parseKind(filepath.Join(root, "emitters"), true, parseEmitterFile)
+	emitters, err := parseKind(kindDirs(roots, "emitters"), true, parseEmitterFile)
 	if err != nil {
 		return out, err
 	}
 	out.Emitters = emitters
 	sort.Slice(out.Emitters, func(i, j int) bool { return out.Emitters[i].Name < out.Emitters[j].Name })
 
-	sites, err := parseKind(filepath.Join(root, "sites"), true, parseSiteFile)
+	sites, err := parseKind(kindDirs(roots, "sites"), true, parseSiteFile)
 	if err != nil {
 		return out, err
 	}
 	out.Sites = sites
 	sort.Slice(out.Sites, func(i, j int) bool { return out.Sites[i].Name < out.Sites[j].Name })
 
-	cells, err := parseKind(filepath.Join(root, "cells"), true, parseCellFile)
+	cells, err := parseKind(kindDirs(roots, "cells"), true, parseCellFile)
 	if err != nil {
 		return out, err
 	}
@@ -334,28 +360,28 @@ func ParseDir(root string, decider policy.Decider) (Declarations, error) {
 		return out, err
 	}
 
-	scimIdps, err := parseKind(filepath.Join(root, "scim"), true, parseScimFile)
+	scimIdps, err := parseKind(kindDirs(roots, "scim"), true, parseScimFile)
 	if err != nil {
 		return out, err
 	}
 	out.SCIMIdPs = scimIdps
 	sort.Slice(out.SCIMIdPs, func(i, j int) bool { return out.SCIMIdPs[i].Name < out.SCIMIdPs[j].Name })
 
-	notifySinks, err := parseKind(filepath.Join(root, "notify-sinks"), true, parseNotifySinkFile)
+	notifySinks, err := parseKind(kindDirs(roots, "notify-sinks"), true, parseNotifySinkFile)
 	if err != nil {
 		return out, err
 	}
 	out.NotifySinks = notifySinks
 	sort.Slice(out.NotifySinks, func(i, j int) bool { return out.NotifySinks[i].Name < out.NotifySinks[j].Name })
 
-	subscriptions, err := parseKind(filepath.Join(root, "subscriptions"), true, parseSubscriptionFile)
+	subscriptions, err := parseKind(kindDirs(roots, "subscriptions"), true, parseSubscriptionFile)
 	if err != nil {
 		return out, err
 	}
 	out.Subscriptions = subscriptions
 	sort.Slice(out.Subscriptions, func(i, j int) bool { return out.Subscriptions[i].Name < out.Subscriptions[j].Name })
 
-	baselines, err := parseKind(filepath.Join(root, "baselines"), true,
+	baselines, err := parseKind(kindDirs(roots, "baselines"), true,
 		func(path string, raw []byte) (string, types.Baseline, error) {
 			return parseBaselineFile(path, raw, actuatorIDs)
 		})
@@ -365,14 +391,14 @@ func ParseDir(root string, decider policy.Decider) (Declarations, error) {
 	out.Baselines = baselines
 	sort.Slice(out.Baselines, func(i, j int) bool { return out.Baselines[i].Name < out.Baselines[j].Name })
 
-	mcpServers, err := parseKind(filepath.Join(root, "mcp-servers"), true, parseMCPServerFile)
+	mcpServers, err := parseKind(kindDirs(roots, "mcp-servers"), true, parseMCPServerFile)
 	if err != nil {
 		return out, err
 	}
 	out.MCPServers = mcpServers
 	sort.Slice(out.MCPServers, func(i, j int) bool { return out.MCPServers[i].Name < out.MCPServers[j].Name })
 
-	intents, err := parseKind(filepath.Join(root, "intents"), true, parseIntentFile)
+	intents, err := parseKind(kindDirs(roots, "intents"), true, parseIntentFile)
 	if err != nil {
 		return out, err
 	}
@@ -387,14 +413,14 @@ func ParseDir(root string, decider policy.Decider) (Declarations, error) {
 		return out, err
 	}
 
-	assignments, err := parseKind(filepath.Join(root, "assignments"), true, parseAssignmentFile)
+	assignments, err := parseKind(kindDirs(roots, "assignments"), true, parseAssignmentFile)
 	if err != nil {
 		return out, err
 	}
 	out.Assignments = assignments
 	sort.Slice(out.Assignments, func(i, j int) bool { return out.Assignments[i].Name < out.Assignments[j].Name })
 
-	blueprints, err := parseKind(filepath.Join(root, "blueprints"), true, parseBlueprintFile)
+	blueprints, err := parseKind(kindDirs(roots, "blueprints"), true, parseBlueprintFile)
 	if err != nil {
 		return out, err
 	}
@@ -409,6 +435,12 @@ func ParseDir(root string, decider policy.Decider) (Declarations, error) {
 		return out, err
 	}
 	if err := checkBlueprintParamNames(out); err != nil {
+		return out, err
+	}
+	if err := checkNestedWorkflows(out); err != nil {
+		return out, err
+	}
+	if err := checkActuatorCapability(out); err != nil {
 		return out, err
 	}
 	if err := checkProvisioningBuildInputs(out); err != nil {
@@ -527,9 +559,54 @@ func checkBlueprintParamNames(decls Declarations) error {
 				r.RemediationWorkflow, r.RemediationParams); err != nil {
 				return err
 			}
+			// A capability-routed route (ADR-0135 D3) names no Workflow here — it resolves at
+			// compile. Checking only there would move this failure LATER for exactly the routes
+			// the ADR encourages, so every CANDIDATE provider's Workflow is checked instead.
+			//
+			// Same reasoning as checkProvisioningBuildInputs below, and the same words: which
+			// provider wins depends on the active environment and on which providers are
+			// VERIFIED — runtime state Git cannot see. A param set that fits only the provider
+			// bound in THIS environment breaks the other one on a binding change, which is
+			// precisely the moment nobody is looking at the remediation Workflow.
+			for _, wf := range remediationCandidates(decls, b.For, r.RemediationCapability) {
+				if err := check(fmt.Sprintf("blueprint %s@%d route %d remediationParams (candidate provider workflow)", b.Name, b.Version, i),
+					wf, r.RemediationParams); err != nil {
+					return err
+				}
+			}
 		}
 	}
 	return nil
+}
+
+// remediationCandidates lists every Workflow any declared provider advertises for (capability,
+// intent kind) — the set a capability-routed route could resolve to (ADR-0135 D3). Empty when the
+// route names no capability, so the common path costs nothing.
+//
+// Deliberately NOT filtered by verification or environment: this runs over a Git tree, where
+// neither is knowable, and a narrower set here would be a weaker check for no benefit.
+func remediationCandidates(decls Declarations, intentKind, capClass string) []string {
+	if capClass == "" {
+		return nil
+	}
+	kind := strings.TrimPrefix(intentKind, "Intent/")
+	var out []string
+	for _, a := range decls.Actuators {
+		if slices.Contains(a.Provides, capClass) {
+			if wf := a.Remediates[kind]; wf != "" && !slices.Contains(out, wf) {
+				out = append(out, wf)
+			}
+		}
+	}
+	for _, c := range decls.Connectors {
+		if slices.Contains(c.Provides, capClass) {
+			if wf := c.Remediates[kind]; wf != "" && !slices.Contains(out, wf) {
+				out = append(out, wf)
+			}
+		}
+	}
+	sort.Strings(out)
+	return out
 }
 
 // checkProvisioningBuildInputs validates that every Workflow a provider advertises as a gated
@@ -1223,38 +1300,54 @@ func admissionReasons(d types.Decision) string {
 }
 
 // parseKind reads one declaration directory; optional dirs may be absent.
-func parseKind[T any](dir string, optional bool, parse func(path string, raw []byte) (string, T, error)) ([]T, error) {
-	entries, err := os.ReadDir(dir)
-	if os.IsNotExist(err) && optional {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, fmt.Errorf("desiredstate: read declarations: %w", err)
-	}
+// parseKind reads one Kind's declarations from EVERY estate root — the estate's
+// own, then each plugin estate it admits (ADR-0137 D1/D3).
+//
+// The `seen` map spans all the directories, which is the load-bearing part: two
+// admitted plugins declaring the same Workflow name is a hard error naming both
+// files, never a silent winner. A merge order that let one shadow the other would
+// be implicit precedence, and §2.4 forbids it — the same rule that makes a
+// double-claimed Assignment a compile error rather than a tiebreak.
+//
+// `optional` governs the ESTATE'S OWN directory (dirs[0]) only; every plugin
+// estate's is always optional. A required Kind is required of the estate — views/
+// missing there is a mistyped path masquerading as an empty set, which is why it
+// is an error — but a plugin shipping only workflows/ is perfectly normal and must
+// not be made to mirror the estate's directory set.
+func parseKind[T any](dirs []string, optional bool, parse func(path string, raw []byte) (string, T, error)) ([]T, error) {
 	seen := map[string]string{} // declared name → file
 	var out []T
-	for _, e := range entries {
-		if e.IsDir() {
+	for i, dir := range dirs {
+		entries, err := os.ReadDir(dir)
+		if os.IsNotExist(err) && (optional || i > 0) {
 			continue
 		}
-		ext := strings.ToLower(filepath.Ext(e.Name()))
-		if ext != ".yaml" && ext != ".yml" {
-			continue
-		}
-		path := filepath.Join(dir, e.Name())
-		raw, err := os.ReadFile(path)
 		if err != nil {
-			return nil, fmt.Errorf("desiredstate: %s: %w", path, err)
+			return nil, fmt.Errorf("desiredstate: read declarations: %w", err)
 		}
-		name, decl, err := parse(path, raw)
-		if err != nil {
-			return nil, err
+		for _, e := range entries {
+			if e.IsDir() {
+				continue
+			}
+			ext := strings.ToLower(filepath.Ext(e.Name()))
+			if ext != ".yaml" && ext != ".yml" {
+				continue
+			}
+			path := filepath.Join(dir, e.Name())
+			raw, err := os.ReadFile(path)
+			if err != nil {
+				return nil, fmt.Errorf("desiredstate: %s: %w", path, err)
+			}
+			name, decl, err := parse(path, raw)
+			if err != nil {
+				return nil, err
+			}
+			if prev, dup := seen[name]; dup {
+				return nil, fmt.Errorf("desiredstate: %q declared in both %s and %s", name, prev, path)
+			}
+			seen[name] = path
+			out = append(out, decl)
 		}
-		if prev, dup := seen[name]; dup {
-			return nil, fmt.Errorf("desiredstate: %q declared in both %s and %s", name, prev, path)
-		}
-		seen[name] = path
-		out = append(out, decl)
 	}
 	return out, nil
 }
@@ -1390,14 +1483,16 @@ type triggerFile struct {
 	ViewName        string         `yaml:"viewName"`
 	ViewParams      map[string]any `yaml:"viewParams"`
 	Actuator        string         `yaml:"actuator"`
-	Params          map[string]any `yaml:"params"`
-	Inputs          map[string]any `yaml:"inputs"`
-	Slices          int            `yaml:"slices"`
-	CredentialRefs  []string       `yaml:"credentialRefs"`
-	Principal       string         `yaml:"principal"`
-	WorkflowName    string         `yaml:"workflowName"`
-	FacetWriteScope []string       `yaml:"facetWriteScope"`
-	Environments    []string       `yaml:"environments"`
+	// The capability CLASS form (ADR-0140 D4) — exclusive with actuator.
+	ActuatorCapability string         `yaml:"actuatorCapability"`
+	Params             map[string]any `yaml:"params"`
+	Inputs             map[string]any `yaml:"inputs"`
+	Slices             int            `yaml:"slices"`
+	CredentialRefs     []string       `yaml:"credentialRefs"`
+	Principal          string         `yaml:"principal"`
+	WorkflowName       string         `yaml:"workflowName"`
+	FacetWriteScope    []string       `yaml:"facetWriteScope"`
+	Environments       []string       `yaml:"environments"`
 }
 
 func parseTriggerFile(path string, raw []byte, opts ...ValidateOption) (string, types.Trigger, error) {
@@ -1417,7 +1512,8 @@ func parseTriggerFile(path string, raw []byte, opts ...ValidateOption) (string, 
 		Actuator: f.Actuator, Params: f.Params,
 		Slices: f.Slices, CredentialRefs: f.CredentialRefs, Principal: f.Principal,
 		WorkflowName: f.WorkflowName, Inputs: f.Inputs, FacetWriteScope: f.FacetWriteScope,
-		Environments: f.Environments,
+		ActuatorCapability: f.ActuatorCapability,
+		Environments:       f.Environments,
 	}
 	if err := ValidateTrigger(t, opts...); err != nil {
 		return "", types.Trigger{}, fmt.Errorf("desiredstate: %s: %w", path, err)
@@ -1492,7 +1588,13 @@ func ValidateTrigger(t types.Trigger, opts ...ValidateOption) error {
 	if len(t.CredentialRefs) > 0 && t.Principal == "" {
 		return fmt.Errorf("trigger %s: credentialRefs require a principal", t.Name)
 	}
-	if runLaunch {
+	if err := validateActuationTarget("trigger "+t.Name, t.Actuator, t.ActuatorCapability); err != nil {
+		return err
+	}
+	if runLaunch && t.ActuatorCapability == "" {
+		// The class form's params are checked against EVERY candidate provider instead, in the
+		// whole-tree pass (checkActuatorCapability) — this per-declaration validator cannot see
+		// the other declarations, and one candidate is not the check D4 needs.
 		if err := validateParamsContract(t.Actuator, t.Params, opts...); err != nil {
 			return fmt.Errorf("trigger %s: %w", t.Name, err)
 		}
@@ -1871,9 +1973,11 @@ func ValidateSubscription(sub types.Subscription) error {
 // cadence + remediation ref. Like Triggers, the declaration is an
 // impersonation grant (principal) — Git review authorizes it; CaC-only.
 type baselineFile struct {
-	Name                string         `yaml:"name"`
-	ViewName            string         `yaml:"viewName"`
-	Actuator            string         `yaml:"actuator"`
+	Name     string `yaml:"name"`
+	ViewName string `yaml:"viewName"`
+	Actuator string `yaml:"actuator"`
+	// The capability CLASS form (ADR-0140 D4) — exclusive with actuator.
+	ActuatorCapability  string         `yaml:"actuatorCapability"`
 	Params              map[string]any `yaml:"params"`
 	Slices              int            `yaml:"slices"`
 	CredentialRefs      []string       `yaml:"credentialRefs"`
@@ -1953,7 +2057,8 @@ func parseBaselineFile(path string, raw []byte, opts ...ValidateOption) (string,
 		RemediationWorkflow: f.RemediationWorkflow, RemediationParams: f.RemediationParams,
 		Framework: f.Framework,
 		Mode:      f.Mode, FacetWriteScope: f.FacetWriteScope, Environments: f.Environments,
-		RequiredRelations: f.RequiredRelations,
+		ActuatorCapability: f.ActuatorCapability,
+		RequiredRelations:  f.RequiredRelations,
 	}
 	for _, ef := range f.Expected {
 		exp, err := ef.toExpectation()
@@ -2049,8 +2154,15 @@ func ValidateBaseline(b types.Baseline, opts ...ValidateOption) error {
 	if len(b.CredentialRefs) > 0 && b.Principal == "" {
 		return fmt.Errorf("baseline %s: credentialRefs require a principal", b.Name)
 	}
-	if err := validateParamsContract(b.Actuator, b.Params, opts...); err != nil {
-		return fmt.Errorf("baseline %s: %w", b.Name, err)
+	if err := validateActuationTarget("baseline "+b.Name, b.Actuator, b.ActuatorCapability); err != nil {
+		return err
+	}
+	if b.ActuatorCapability == "" {
+		// See the trigger branch: the class form is checked against every candidate in the
+		// whole-tree pass, where the candidate set is visible.
+		if err := validateParamsContract(b.Actuator, b.Params, opts...); err != nil {
+			return fmt.Errorf("baseline %s: %w", b.Name, err)
+		}
 	}
 	return nil
 }
@@ -2468,11 +2580,12 @@ type blueprintFile struct {
 	RemoveParams        map[string]any   `yaml:"removeParams"`
 }
 type blueprintRoute struct {
-	Match               []declFacetPred `yaml:"match"`
-	Observe             declExpectation `yaml:"observe"`
-	Claim               string          `yaml:"claim"`
-	RemediationWorkflow string          `yaml:"remediationWorkflow"`
-	RemediationParams   map[string]any  `yaml:"remediationParams"`
+	Match                 []declFacetPred `yaml:"match"`
+	Observe               declExpectation `yaml:"observe"`
+	Claim                 string          `yaml:"claim"`
+	RemediationWorkflow   string          `yaml:"remediationWorkflow"`
+	RemediationCapability string          `yaml:"remediationCapability"`
+	RemediationParams     map[string]any  `yaml:"remediationParams"`
 }
 type declFacetPred struct {
 	Namespace string `yaml:"namespace"`
@@ -2524,7 +2637,8 @@ func parseBlueprintFile(path string, raw []byte) (string, types.Blueprint, error
 				Equals: eq, Contains: con, NotBefore: r.Observe.NotBefore,
 			},
 			Claim: r.Claim, RemediationWorkflow: r.RemediationWorkflow,
-			RemediationParams: r.RemediationParams,
+			RemediationCapability: r.RemediationCapability,
+			RemediationParams:     r.RemediationParams,
 		})
 	}
 	if err := ValidateBlueprint(b); err != nil {
@@ -2587,6 +2701,20 @@ func ValidateBlueprint(b types.Blueprint) error {
 		case types.ClaimExclusive, types.ClaimAdditive:
 		default:
 			return fmt.Errorf("blueprint %s@%d: route %d claim must be exclusive or additive", b.Name, b.Version, i)
+		}
+		// A route has ONE remediation leg (ADR-0135 D3). Both set would need a winner, and a
+		// silent winner between a named Workflow and a resolved one is the implicit precedence
+		// §2.4 forbids outright.
+		if r.RemediationWorkflow != "" && r.RemediationCapability != "" {
+			return fmt.Errorf("blueprint %s@%d: route %d sets both remediationWorkflow (%s) and remediationCapability (%s) — a route has one remediation leg; name the capability when more than one provider could serve, the Workflow when this estate has decided (ADR-0135 D3)",
+				b.Name, b.Version, i, r.RemediationWorkflow, r.RemediationCapability)
+		}
+		// The class must be one core owns (§1.5, ADR-0104): a plugin never mints a capability's
+		// meaning, and a typo here would otherwise fail closed at COMPILE as "no provider", which
+		// reads as a missing provider rather than a misspelling.
+		if r.RemediationCapability != "" && !types.ValidCapability(r.RemediationCapability) {
+			return fmt.Errorf("blueprint %s@%d: route %d remediationCapability %q is not a known capability class (core-owned vocabulary, ADR-0104 §1.5)",
+				b.Name, b.Version, i, r.RemediationCapability)
 		}
 	}
 	return nil
@@ -2653,6 +2781,21 @@ func validateParamsContract(actuator string, params map[string]any, opts ...Vali
 // Action's input Contract (ADR-0031). Template-carrying params ({{.steps.x}} /
 // {{.event.x}}) are validated at LAUNCH against resolved values, skipped here.
 func validateActionParamsContract(action string, params map[string]any) error {
+	// The Contract must EXIST even when the values cannot be checked yet. Existence
+	// is a static fact about the estate; it does not depend on what a template
+	// resolves to, so deferring it with the values was over-broad. A Step naming an
+	// uncontracted Action used to pass the load and fail at LAUNCH with "no input
+	// contract for action" — the §1.8 shape this package refuses everywhere else:
+	// admitted here, fatal somewhere a human is not reading a diff.
+	//
+	// "An uncontracted operation must not exist" is already ValidateActionInput's
+	// own rule (§2.2/ADR-0031). This is that rule applied at the moment the
+	// reference is written rather than the moment it runs.
+	if _, ok, err := contract.Get("actions/" + action + ".input"); err != nil {
+		return err
+	} else if !ok {
+		return fmt.Errorf("action %q has no input contract — an uncontracted operation must not exist (§2.2, ADR-0031)", action)
+	}
 	if template.Has(params) {
 		return nil
 	}
@@ -2665,6 +2808,39 @@ func validateActionParamsContract(action string, params map[string]any) error {
 		raw = b
 	}
 	return contract.ValidateActionInput(action, raw)
+}
+
+// validateActionCapabilityParamsContract is validateActionParamsContract for a Step that names
+// a capability CLASS (ADR-0140 D3 row 2). The params are checked against the CLASS Contract,
+// never a provider's — the Step must be valid independent of which provider is bound, or the
+// class has bought nothing.
+//
+// The class Contract must EXIST at load for the same reason an Action's must: whether
+// `capabilities/<class>.input` is present is a static fact about the estate, so a Step naming a
+// class nothing contracts is refused here rather than at launch. This is also the check that
+// keeps a class-named Step honest — `actionCapability: provisioning` loads today only if someone
+// writes the class Contracts, and `provisioning` deliberately has none because it is not
+// Action-shaped (ADR-0140 D3 row 1).
+func validateActionCapabilityParamsContract(class string, params map[string]any) error {
+	name := contract.CapabilityInput(class)
+	if _, ok, err := contract.Get(name); err != nil {
+		return err
+	} else if !ok {
+		return fmt.Errorf("capability %q has no input contract %q — a Step may name a class only where the class "+
+			"is Action-shaped and contracted (§2.2, ADR-0111/ADR-0140 D3)", class, name)
+	}
+	if template.Has(params) {
+		return nil
+	}
+	raw := json.RawMessage(`{}`)
+	if params != nil {
+		b, err := json.Marshal(params)
+		if err != nil {
+			return fmt.Errorf("params: %w", err)
+		}
+		raw = b
+	}
+	return contract.ValidateNamed(name, raw)
 }
 
 // checkLaunchFields rejects a {{.launch.X}} binding whose X is not a declared input
@@ -2742,19 +2918,30 @@ type adoptedFromYAML struct {
 	Source   string `yaml:"source"`
 }
 type stepYAML struct {
-	Name            string         `yaml:"name"`
-	Needs           []string       `yaml:"needs"`
-	When            string         `yaml:"when"`
-	Gate            *gateYAML      `yaml:"gate"`
-	Policy          *policyYAML    `yaml:"policy"`
-	ViewName        string         `yaml:"viewName"`
-	Actuator        string         `yaml:"actuator"`
-	Action          string         `yaml:"action"`
-	DryRun          bool           `yaml:"dryRun"`
-	Params          map[string]any `yaml:"params"`
-	Slices          int            `yaml:"slices"`
-	CredentialRefs  []string       `yaml:"credentialRefs"`
-	FacetWriteScope []string       `yaml:"facetWriteScope"`
+	Name     string      `yaml:"name"`
+	Needs    []string    `yaml:"needs"`
+	When     string      `yaml:"when"`
+	Gate     *gateYAML   `yaml:"gate"`
+	Policy   *policyYAML `yaml:"policy"`
+	ViewName string      `yaml:"viewName"`
+	Actuator string      `yaml:"actuator"`
+	// Workflow runs another declared Workflow as a nested child (ADR-0139 D1/D3);
+	// Inputs are this Step's arguments to that child's declared `inputs` schema.
+	Workflow string `yaml:"workflow"`
+	// The CLASS form of a nested Step (ADR-0139 D3): a capability + an Intent kind,
+	// resolved to the bound provider's build Workflow at launch.
+	WorkflowCapability string         `yaml:"workflowCapability"`
+	ForKind            string         `yaml:"forKind"`
+	Inputs             map[string]any `yaml:"inputs"`
+	Action             string         `yaml:"action"`
+	// ActionCapability names a capability CLASS instead of a provider's Action
+	// (ADR-0140 D3 row 2) — the estate-facing half of the Action-shaped seam.
+	ActionCapability string         `yaml:"actionCapability"`
+	DryRun           bool           `yaml:"dryRun"`
+	Params           map[string]any `yaml:"params"`
+	Slices           int            `yaml:"slices"`
+	CredentialRefs   []string       `yaml:"credentialRefs"`
+	FacetWriteScope  []string       `yaml:"facetWriteScope"`
 }
 type gateYAML struct {
 	Approvers struct {
@@ -2865,7 +3052,10 @@ func parseWorkflowFile(path string, raw []byte, opts ...ValidateOption) (string,
 		step := types.Step{
 			Name: s.Name, Needs: s.Needs, When: s.When,
 			ViewName: s.ViewName, Actuator: s.Actuator,
-			Action: s.Action, DryRun: s.DryRun, Params: s.Params,
+			Workflow: s.Workflow, WorkflowCapability: s.WorkflowCapability, ForKind: s.ForKind,
+			Inputs: s.Inputs,
+			Action: s.Action, ActionCapability: s.ActionCapability,
+			DryRun: s.DryRun, Params: s.Params,
 			Slices: s.Slices, CredentialRefs: s.CredentialRefs,
 			FacetWriteScope: s.FacetWriteScope,
 		}
@@ -2927,15 +3117,42 @@ func ValidateWorkflow(w types.Workflow, opts ...ValidateOption) error {
 		// Actuation (Actuator+View).
 		isGate := s.Gate != nil
 		isPolicy := s.Policy != nil
-		isAction := s.Action != ""
+		isAction := s.Action != "" || s.ActionCapability != ""
 		isActuation := s.ViewName != "" || s.Actuator != "" || s.Slices != 0
+		isNested := s.Workflow != "" || s.WorkflowCapability != ""
 		switch {
+		case s.Workflow != "" && s.WorkflowCapability != "":
+			return fmt.Errorf("workflow %s: step %s: names a workflow and a workflowCapability — one or the "+
+				"other, never both (§2.4)", w.Name, s.Name)
+		case s.WorkflowCapability != "" && s.ForKind == "":
+			// A class with no kind resolves through nothing: the provider's map is KEYED by
+			// Intent kind, so "which Workflow" has no answer without it.
+			return fmt.Errorf("workflow %s: step %s: workflowCapability requires forKind — a provider's "+
+				"build Workflows are keyed by Intent kind, so the class alone selects nothing", w.Name, s.Name)
+		case s.ForKind != "" && s.WorkflowCapability == "":
+			return fmt.Errorf("workflow %s: step %s: forKind is only meaningful with workflowCapability", w.Name, s.Name)
+		case isNested && (isGate || isPolicy || isAction || isActuation):
+			// A nested Step is a fifth SHAPE, not a modifier on the others. Combining it would
+			// give the Step two things to run and no rule to choose (§2.4).
+			return fmt.Errorf("workflow %s: step %s: a step that runs a nested workflow is not also a gate, "+
+				"policy, action or actuation", w.Name, s.Name)
+		case !isNested && len(s.Inputs) > 0:
+			// `inputs` is the nested form's argument channel. On any other shape it is a field
+			// nothing reads — admitted, checked against nothing, reported nowhere, which is the
+			// half-declaration defect this package refuses everywhere else.
+			return fmt.Errorf("workflow %s: step %s: inputs is only meaningful on a nested `workflow:` step "+
+				"(a Step's own arguments are `params`)", w.Name, s.Name)
+		case s.Action != "" && s.ActionCapability != "":
+			// Two answers to "what runs here", and a rule to choose between them is the
+			// implicit precedence §2.4 exists to refuse. Naming the class is the whole
+			// point; naming both would let the concrete name silently win.
+			return fmt.Errorf("workflow %s: step %s: a step names an action or an actionCapability, not both (§2.4)", w.Name, s.Name)
 		case isPolicy && (isGate || isAction || isActuation),
 			isGate && (isAction || isActuation):
 			return fmt.Errorf("workflow %s: step %s: a step is a gate, a policy, an action, or an actuation — not multiple", w.Name, s.Name)
 		case isAction && isActuation:
 			return fmt.Errorf("workflow %s: step %s: a step is an action or an actuation, not both (actions are targetless — no viewName/actuator/slices)", w.Name, s.Name)
-		case !isGate && !isPolicy && !isAction && s.ViewName == "":
+		case !isGate && !isPolicy && !isAction && !isNested && s.ViewName == "":
 			return fmt.Errorf("workflow %s: step %s: actuation step requires viewName", w.Name, s.Name)
 		case isGate && len(s.Gate.Approvers.Principals) == 0 && len(s.Gate.Approvers.Teams) == 0:
 			return fmt.Errorf("workflow %s: step %s: gate requires approvers (principals and/or teams)", w.Name, s.Name)
@@ -2945,7 +3162,7 @@ func ValidateWorkflow(w types.Workflow, opts ...ValidateOption) error {
 			return fmt.Errorf("workflow %s: step %s: gate threshold must be >= 0", w.Name, s.Name)
 		case isPolicy && len(s.Policy.Controls) == 0:
 			return fmt.Errorf("workflow %s: step %s: policy step requires controls", w.Name, s.Name)
-		case !isGate && !isPolicy && s.Slices < 0:
+		case !isGate && !isPolicy && !isNested && s.Slices < 0:
 			return fmt.Errorf("workflow %s: step %s: slices must be >= 0", w.Name, s.Name)
 		}
 		// A policy Step's control predicates are CEL-compiled at load — fail the
@@ -2971,13 +3188,20 @@ func ValidateWorkflow(w types.Workflow, opts ...ValidateOption) error {
 		}
 		switch {
 		case isAction:
-			if err := validateActionParamsContract(s.Action, s.Params); err != nil {
+			if s.ActionCapability != "" {
+				if err := validateActionCapabilityParamsContract(s.ActionCapability, s.Params); err != nil {
+					return fmt.Errorf("workflow %s: step %s: %w", w.Name, s.Name, err)
+				}
+			} else if err := validateActionParamsContract(s.Action, s.Params); err != nil {
 				return fmt.Errorf("workflow %s: step %s: %w", w.Name, s.Name, err)
 			}
 			if err := checkTemplateNamespaces(
 				fmt.Sprintf("workflow %s step %s", w.Name, s.Name), bindable, s.Params); err != nil {
 				return err
 			}
+		case isNested:
+			// The child's interface is checked whole-tree (checkNestedWorkflows) — this
+			// per-Workflow validator cannot see the other declarations.
 		case !isGate && !isPolicy:
 			if err := validateParamsContract(s.Actuator, s.Params, opts...); err != nil {
 				return fmt.Errorf("workflow %s: step %s: %w", w.Name, s.Name, err)

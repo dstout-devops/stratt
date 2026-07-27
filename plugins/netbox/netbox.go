@@ -14,6 +14,7 @@ package netbox
 
 import (
 	"context"
+	"embed"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -26,8 +27,19 @@ import (
 
 	"google.golang.org/grpc"
 
+	"github.com/dstout-devops/stratt/sdk/pluginserve"
 	pluginv1 "github.com/dstout-devops/stratt/sdk/stratt/plugin/v1"
 )
+
+// The plugin's OWN contract documents (ADR-0138 D3/D4), embedded so their digests can be
+// advertised on every ContractRef — port invariant #5, which had nothing to check while these
+// documents lived in the core binary and `sha256` went out empty.
+//
+//go:embed contracts
+var contractFS embed.FS
+
+// contracts hashes those documents on demand; Ref(id) yields the pinned ContractRef.
+var contracts = pluginserve.Contracts(contractFS)
 
 // Config locates the NetBox Source. The token is resolved from the plugin's own
 // broker at spawn (§2.5); material never crosses the core.
@@ -82,6 +94,12 @@ func (s *Server) GetManifest(context.Context, *pluginv1.GetManifestRequest) (*pl
 			Input:      &pluginv1.ContractRef{SchemaId: "capabilities/ipam.input"},
 			Output:     &pluginv1.ContractRef{SchemaId: "capabilities/ipam.output"},
 			Idempotent: true, // allocate-or-return-existing, anchored in NetBox (D4/F1)
+			// THIS Action is the `ipam` class (ADR-0140 D1). Core used to compute the name —
+			// `netbox` + "/" + `ipam` + "-resolve" — which meant the Action could not have been
+			// called anything else. The name below happens to match what the convention produced,
+			// deliberately: the mapping changes from derived to declared without renaming a
+			// shipped Action. A future provider may call its implementation whatever it likes.
+			Implements: "ipam",
 		}},
 	}}, nil
 }

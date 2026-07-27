@@ -31,6 +31,7 @@ import (
 	"github.com/dstout-devops/stratt/core/internal/audit"
 	"github.com/dstout-devops/stratt/core/internal/authz"
 	"github.com/dstout-devops/stratt/core/internal/baselines"
+	"github.com/dstout-devops/stratt/core/internal/capability"
 	"github.com/dstout-devops/stratt/core/internal/cellrouter"
 	"github.com/dstout-devops/stratt/core/internal/compiler"
 	"github.com/dstout-devops/stratt/core/internal/connectorregistry"
@@ -507,11 +508,15 @@ func run(ctx context.Context, log *slog.Logger) error {
 	registerPluginAction := func(name string, host *pluginhost.Host, dryRunnable bool) error {
 		return plugins.RegisterAction(name, orchestrate.PluginAction{Host: host, DryRunnable: dryRunnable})
 	}
-	// grant + plans travel with the actuator so Execute can build a Site-backed host
-	// with identical governance (the grant never leaves the hub, ADR-0049 V1).
-	registerPluginActuator := func(name string, host *pluginhost.Host, dryRunnable bool, grant pluginhost.Grant, plans *planstore.Store) error {
-		return plugins.RegisterActuator(name, orchestrate.PluginActuator{Host: host, DryRunnable: dryRunnable, Grant: grant, PlanStore: plans})
-	}
+	// registerPluginActuator is GONE, and its absence is the ADR-0103 migration's completion
+	// receipt: NO Actuator is registered in Go any more. ansible and script went first (ADR-0117
+	// k), then cert-issuer, crossplane, mcp, and finally opentofu — whose block was retired rather
+	// than migrated, because the estate already declares two opentofu Actuators using the CaC form
+	// of its safety property. Every Actuator's grant is now reviewable in Git, which is the whole
+	// point: a grant that lives in Go cannot answer "which grant is live?".
+	//
+	// Actions are NOT yet done — adopt/materialize still registers below, and registerPluginAction
+	// survives for it alone.
 
 	// The `ansible` (ADR-0051) and `script` (ADR-0046 Category A) EE-Job Actuators used to
 	// be registered here, inline, with their grants hardcoded in Go. They are now CaC
@@ -559,33 +564,12 @@ func run(ctx context.Context, log *slog.Logger) error {
 			},
 		}
 		awsHost = pluginhost.New(store, pluginv1.NewPluginServiceClient(conn), grant, log)
-		// create-vm + the instance lifecycle & tag Actions (ADR-0095), all on the one
-		// host/grant. reboot has no stable end-state ⇒ effectful, not DryRun-planned as
-		// idempotent, but still DryRunnable via the EC2 API's own dry-run.
-		awsActions := []struct {
-			name        string
-			dryRunnable bool
-		}{
-			{"awsec2/create-vm", true},
-			{"awsec2/start", true},
-			{"awsec2/stop", true},
-			{"awsec2/reboot", true},
-			{"awsec2/terminate", true},
-			{"awsec2/tag", true},
-			// Resource-provisioning Actions (ADR-0095 C2), each DryRunnable via the
-			// EC2 API's own dry-run; fire-and-return (no Entity until C3).
-			{"awsec2/create-security-group", true},
-			{"awsec2/import-key-pair", true},
-			{"awsec2/create-volume", true},
-			{"awsec2/create-vpc", true},
-			{"awsec2/create-subnet", true},
-		}
-		for _, a := range awsActions {
-			if err := registerPluginAction(a.name, awsHost, a.dryRunnable); err != nil {
-				return err
-			}
-		}
-		log.Info("awsec2 plugin actions registered", "addr", awsPluginAddr, "actions", len(awsActions))
+		// The 11 INVOKE Actions (ADR-0095) used to be registered HERE, on the Syncer's host and
+		// therefore with the SYNCER's grant. They are now declared:
+		// plugins/awsec2/estate/actuators/awsec2.yaml carries them as `actionNames` with an
+		// ENTITY-ONLY grant (ADR-0103) — RecordActionResult projects identity + labels and no
+		// Facet, so the Syncer's seven Facet namespaces were authority for a path that does not
+		// exist. The Syncer half below keeps this grant and stays authoritative for them.
 	}
 
 	// awss3 plugin (ADR-0097): bucket lifecycle Actions + a metadata-only bucket
@@ -608,11 +592,9 @@ func run(ctx context.Context, log *slog.Logger) error {
 		}
 		s3Host = pluginhost.New(store, pluginv1.NewPluginServiceClient(conn), grant, log)
 		// S3 has no dry-run operation ⇒ every Action is non-DryRunnable.
-		for _, name := range []string{"awss3/create-bucket", "awss3/delete-bucket", "awss3/enable-versioning", "awss3/put-bucket-policy"} {
-			if err := registerPluginAction(name, s3Host, false); err != nil {
-				return err
-			}
-		}
+		// The four bucket-lifecycle Actions are now declared beside the statestore resolve Action
+		// (plugins/awss3/estate/actuators/s3-statestore.yaml, ADR-0103), with an entity-only grant.
+		// The bucket Syncer below keeps this grant and stays authoritative for bucket.config.
 		log.Info("awss3 plugin actions registered", "addr", s3Addr)
 	}
 
@@ -633,33 +615,32 @@ func run(ctx context.Context, log *slog.Logger) error {
 	// in the STRATT_AWX_PLUGIN_ADDR block below — the AWX→CaC transform is tool breadth that
 	// lives in the plugin, not a core-owned image. strattd links zero AWX transform code.
 
-	// mcp EE-Job transport (ADR-0053): MCP is a generic transport (charter §1.5), not
-	// an in-core protocol. The stratt-mcp shim (baked into the EE-mcp image) speaks
-	// JSON-RPC to the sandboxed server; the CORE keeps the seam — it resolves the
-	// MCPServer declaration + rev, validates call-args against the pin, and pins each
-	// rung-3 derived_contract (executeMCP). The grant Source.Name is "mcp" so a
-	// derived tool schema (mcp/<server>/<tool>.input) is namespace-confined to it.
-	{
-		grant := pluginhost.Grant{
-			PluginIdentity: env("STRATT_MCP_PLUGIN_ID", "mcp"),
-			Tier:           pluginhost.TierTrusted,
-			Source:         types.Source{Kind: "mcp", Name: "mcp"},
-		}
-		host := pluginhost.New(store, nil, grant, log)
-		if err := plugins.RegisterActuator("mcp", orchestrate.PluginActuator{
-			Host: host, DryRunnable: false, Grant: grant, MCP: true,
-			JobCommand: []string{env("STRATT_MCP_SHIM", "stratt-mcp")},
-			Image:      env("STRATT_EE_MCP_IMAGE", "stratt-ee-mcp:dev"),
-		}); err != nil {
-			return err
-		}
-		log.Info("mcp EE-Job actuator registered (ADR-0053 generic MCP transport)", "eeImage", env("STRATT_EE_MCP_IMAGE", "stratt-ee-mcp:dev"))
-	}
+	// ── mcp EE-Job transport (ADR-0053) — MIGRATED to the runtime registry (ADR-0103) ──
+	// MCP is a generic transport (§1.5), not an in-core protocol: the stratt-mcp shim baked into
+	// the EE-mcp image speaks JSON-RPC to the sandboxed server, while the CORE keeps the seam —
+	// it resolves the MCPServer declaration + rev, validates call-args against the pin, and pins
+	// each rung-3 derived_contract (executeMCP). None of that moved; only the registration did,
+	// to plugins/mcp/estate/actuators/mcp.yaml.
+	//
+	// This block registered `mcp` UNCONDITIONALLY, so every floor had the Actuator whether or not
+	// anything used it. Declaring it means a floor that does not admit the plugin estate has no
+	// `mcp` — the intended CaC posture and the same trade ansible/script made. Deleted rather than
+	// kept as a fallback: two registration paths for one name collide at §2.4 and make "which
+	// grant is live?" unanswerable from Git.
 
 	// OpenTofu (ADR-0016): requires the encrypted state backend — without a
-	// state key the actuator is not registered and the backend not mounted;
-	// tofu Steps then fail loudly at Prepare, never plaintext local state.
+	// state key the backend is not mounted and NO plan store exists; a plan-pinned Apply
+	// then fails closed at launch rather than degrading to an unpinned one (ADR-0047 §8).
 	var stateHandler http.Handler
+	// planStore is HOISTED out of the opentofu block so the runtime registry can hand it to any
+	// DECLARED plan-capable Actuator (ADR-0103). It used to be built three scopes in, reachable
+	// only by the boot block, and connectorregistry.New was passed a literal nil — so a declared
+	// Actuator silently had no plan store. For opentofu, the canonical plan-as-artifact Actuator
+	// (ADR-0047 §8), that is not a missing nicety: a plan-pinned Apply needs the store the Gate's
+	// approved digest lives in, so declaring opentofu while the registry held nil would have
+	// dropped plan pinning without a word. Nil stays lawful and means exactly what it meant
+	// before — no state key, no plan store, and §8's fail-closed path handles it.
+	var planStore *planstore.Store
 	if stateKey := os.Getenv("STRATT_STATE_KEY"); stateKey != "" {
 		sb, err := statebackend.New(stateKey, store, log)
 		if err != nil {
@@ -675,48 +656,36 @@ func run(ctx context.Context, log *slog.Logger) error {
 			return err
 		}
 		sb.UseCustodian(custodian)
-		if tofuPluginAddr := os.Getenv("STRATT_OPENTOFU_PLUGIN_ADDR"); tofuPluginAddr != "" {
-			// Cutover (ADR-0046/0047): the opentofu Actuator runs over the sovereign
-			// port — Plan/Apply/Destroy, plan-as-artifact (§8). The in-tree Actuator
-			// is NOT registered (§2.4 exclusive). The plan store shares the state key
-			// (the plan is content-addressed + encrypted, ADR-0047 §8); the plugin
-			// derives its own TF_HTTP_PASSWORD from its own STRATT_STATE_KEY config.
-			plans, err := planstore.New(stateKey, store)
-			if err != nil {
-				return err
-			}
-			plans.UseCustodian(custodian)
-			conn, err := grpc.NewClient(tofuPluginAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
-			if err != nil {
-				return fmt.Errorf("opentofu plugin dial %s: %w", tofuPluginAddr, err)
-			}
-			defer conn.Close()
-			grant := pluginhost.Grant{
-				PluginIdentity: env("STRATT_OPENTOFU_PLUGIN_ID", "opentofu"),
-				Tier:           pluginhost.Tier(env("STRATT_OPENTOFU_TIER", "trusted")),
-				Source:         types.Source{Kind: "opentofu", Name: env("STRATT_OPENTOFU_SOURCE_NAME", "opentofu"), Endpoint: os.Getenv("STRATT_STATE_BACKEND_URL")},
-				// stratt_entities write-back grants (operator-declared, §2.1): the
-				// identity schemes / label keys / facet namespaces tofu outputs may
-				// project. Empty by default — an ungranted emission is rejected, not
-				// silently written (defence-in-depth, ADR-0047 §1).
-				IdentitySchemes: splitNonEmpty(os.Getenv("STRATT_OPENTOFU_IDENTITY_SCHEMES")),
-				LabelKeys:       splitNonEmpty(os.Getenv("STRATT_OPENTOFU_LABEL_KEYS")),
-				FacetNamespaces: splitNonEmpty(os.Getenv("STRATT_OPENTOFU_FACET_NAMESPACES")),
-			}
-			host := pluginhost.New(store, pluginv1.NewPluginServiceClient(conn), grant, log).UsePlanStore(plans)
-			if err := registerPluginActuator("opentofu", host, true, grant, plans); err != nil {
-				return err
-			}
-			log.Info("opentofu plugin actuator registered", "addr", tofuPluginAddr, "backend", os.Getenv("STRATT_STATE_BACKEND_URL"))
-		} else {
-			// opentofu is a plugin-only Actuator now (the in-tree pod actuator was
-			// retired, ADR-0046/0047): the state backend is still served for a peer
-			// Cell's plugin, but no actuator is registered here without its address.
-			log.Info("opentofu plugin not configured (STRATT_OPENTOFU_PLUGIN_ADDR empty); actuator disabled, state backend still served")
+		// The plan store shares the state key — a plan is content-addressed + encrypted
+		// (ADR-0047 §8) — and the same custodian as the state backend.
+		planStore, err = planstore.New(stateKey, store)
+		if err != nil {
+			return err
 		}
+		planStore.UseCustodian(custodian)
+		log.Info("state backend + plan store ready (encrypted, ADR-0047 §8)")
 	} else {
-		log.Info("opentofu actuator disabled (STRATT_STATE_KEY empty)")
+		log.Info("no state key (STRATT_STATE_KEY empty); state backend not served and no plan store — " +
+			"a plan-pinned Apply fails closed rather than running unpinned (ADR-0047 §8)")
 	}
+
+	// ── opentofu Actuator (ADR-0046/0047) — RETIRED from boot, not migrated ──────────────
+	// The boot block registered an `opentofu` Actuator behind STRATT_OPENTOFU_PLUGIN_ADDR, wired
+	// to the CORE-HOSTED encrypted HTTP state backend via STRATT_STATE_BACKEND_URL.
+	//
+	// It is deleted rather than turned into a declaration, and the distinction matters. The estate
+	// already declares two opentofu Actuators — opentofu-network and opentofu-s3 — and both use
+	// the CaC form of the same safety property: `requires: [statestore]` holds them PENDING until a
+	// verified state provider exists (ADR-0104 D3), so tofu never runs against local plaintext
+	// state. Nothing in any estate names the bare `opentofu`, so re-declaring it would mint a
+	// dispatch entry with no consumer and a second, differently-backed opentofu surface.
+	//
+	// What the block guarded is NOT lost. The core-hosted state backend is still served above and
+	// still mounted on the API (StateBackend: stateHandler), so a floor that wants that backend
+	// points its own declared opentofu Actuator at it through the plugin's TF_HTTP_* config — the
+	// plugin's own concern, which is where it always belonged. And the boot precondition's real
+	// teeth, "no state key ⇒ no plan store", now live on planStore above and reach every declared
+	// Actuator through the registry.
 
 	// ── Crossplane build Actuator over the port (ADR-0059) ───────────────
 	// The `builder:` a network Intent names: it applies a Crossplane Claim and
@@ -725,39 +694,21 @@ func run(ctx context.Context, log *slog.Logger) error {
 	// that is resolved by multi-source Facet ownership (ADR-0060), never by stripping
 	// this grant. NetBox and Crossplane now co-own net.subnet (ADR-0060 multi-source):
 	// both project it, each its own row, NetBox declared authoritative.
-	if addr := os.Getenv("STRATT_CROSSPLANE_PLUGIN_ADDR"); addr != "" {
-		conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
-		if err != nil {
-			return fmt.Errorf("crossplane plugin dial %s: %w", addr, err)
-		}
-		defer conn.Close()
-		// The Actuator grant: Crossplane BUILDS Claims (Apply/Destroy). Its write-backs
-		// are Run-provenance ('' source) — an Actuator is not a Source (ADR-0060). The
-		// SYNCER half (Crossplane observing its Claims' as-built state as a registered
-		// Source) is wired below in the Syncer section (full-featured dual-verb plugin).
-		grant := pluginhost.Grant{
-			PluginIdentity:  env("STRATT_CROSSPLANE_PLUGIN_ID", "crossplane"),
-			Tier:            pluginhost.Tier(env("STRATT_CROSSPLANE_TIER", "trusted")),
-			Source:          types.Source{Kind: "crossplane", Name: env("STRATT_CROSSPLANE_SOURCE_NAME", "crossplane")},
-			IdentitySchemes: []string{"crossplane.claim"},
-			LabelKeys:       []string{"source", "fleet", "role", "tier"},
-			FacetNamespaces: []string{"net.subnet"},
-		}
-		host := pluginhost.New(store, pluginv1.NewPluginServiceClient(conn), grant, log)
-		if err := registerPluginActuator("crossplane", host, true, grant, nil); err != nil {
-			return err
-		}
-		// crossplane/provision Action (ADR-0059): the targetless builder an
-		// Intent/Subnet launches. Reuses the host/grant; the build projects the subnet
-		// Entity + correlation label (entity-only, like awsec2/create-vm), and the
-		// Syncer below supplies net.subnet.
-		if err := registerPluginAction("crossplane/provision", host, true); err != nil {
-			return err
-		}
-		log.Info("crossplane plugin actuator registered", "addr", addr)
-	} else {
-		log.Info("no Crossplane plugin configured (STRATT_CROSSPLANE_PLUGIN_ADDR empty); actuator disabled")
-	}
+	// ── Crossplane Actuator (ADR-0059/0060) — MIGRATED to the runtime registry (ADR-0103) ──
+	// The `crossplane` Actuator and its targetless crossplane/provision Action are now declared
+	// (plugins/crossplane/estate/actuators/crossplane.yaml) and dialed + registered at runtime, so
+	// they enable/disable with NO strattd restart. The Crossplane SYNCER half stays boot-env below.
+	//
+	// Removing the block was a FIX, not tidiness. The estate ALREADY declared an Actuator named
+	// `crossplane`, so on any floor with STRATT_CROSSPLANE_PLUGIN_ADDR set the two registrations
+	// collided at §2.4 — boot ran first and won, so the declaration everyone could read in Git was
+	// the one being rejected. "Which grant is live?" was unanswerable, and answered wrongly by
+	// anyone who looked at the estate.
+	//
+	// The declaration carries the FULL grant this block had, including labelKeys, which the Actuator
+	// Kind gained for this migration (only the Connector Kind had it, since ADR-0047 §4). Dropping
+	// it would have narrowed authority INVISIBLY: an ungranted label key is dropped at the governor,
+	// never refused, so the build would have stopped labelling projected subnets in silence.
 
 	// ── Helm Actuator (ADR-0092) — MIGRATED to the runtime registry (ADR-0103) ──
 	// helm is now declared as an `Actuator` Kind (estate/actuators/helm.yaml) and dialed +
@@ -851,6 +802,31 @@ func run(ctx context.Context, log *slog.Logger) error {
 			return "", fmt.Errorf("capability resolver not ready (runtime registry disabled)")
 		}
 		return connReg.ResolveCapabilityAction(ctx, capClass)
+	}
+	// ResolveActuator (ADR-0140 D4): the Actuator-shaped sibling, for a Baseline or Trigger that
+	// names a capability class. Same lazy read of connReg, same visible failure when it is absent —
+	// a capability-typed reconcile must never fall back to launching against an empty actuator.
+	acts.ResolveActuator = func(ctx context.Context, capClass string) (string, error) {
+		if connReg == nil {
+			return "", fmt.Errorf("capability resolver not ready (runtime registry disabled)")
+		}
+		return connReg.ResolveCapabilityActuator(ctx, capClass)
+	}
+	// ResolveBuildWorkflow (ADR-0139 D3): a nested capability Step resolves through the SAME
+	// store-backed assembly + pure resolver the compiler uses, exported from desiredstate rather
+	// than reimplemented. Two resolvers that can disagree would make the estate mean different
+	// things depending on who is asking (§2.4).
+	acts.ResolveBuildWorkflow = func(ctx context.Context, capClass, intentKind string) (string, string, error) {
+		res, err := desiredstate.ResolveBuildWorkflow(ctx, store, capClass, intentKind)
+		if err != nil {
+			return "", "", err
+		}
+		if res.Status != capability.StatusResolved {
+			// Fail closed, carrying the resolver's OWN reason: "no verified provider" and "two
+			// providers, add a binding" send the reader to different places (§1.8).
+			return "", "", fmt.Errorf("%s", res.Reason)
+		}
+		return res.Provider, res.Workflow, nil
 	}
 	w.RegisterActivity(acts)
 	if err := w.Start(); err != nil {
@@ -953,33 +929,18 @@ func run(ctx context.Context, log *slog.Logger) error {
 			},
 		}
 		host := pluginhost.New(store, pluginv1.NewPluginServiceClient(conn), grant, log)
-		// The dual-verb INVOKE surface (ADR-0113): the vcenter/create-vm provisioning build Action,
-		// on the SAME host as the OBSERVE Syncer below — so the build output's vcenter.uuid identity
-		// correlates structurally with what the Syncer observes (ADR-0113 D1/D3). dry-runnable.
-		if err := registerPluginAction("vcenter/create-vm", host, true); err != nil {
-			return err
-		}
-		// vcenter/create-portgroup (ADR-0113 D4): the Subnet builder — a VLAN-tagged DVS portgroup.
-		// The VLAN is composed via an explicit netbox/ipam-resolve Step in vsphere-subnet-build, not
-		// resolve-inject; this Action just takes the resolved vlanId as a param. dry-runnable.
-		if err := registerPluginAction("vcenter/create-portgroup", host, true); err != nil {
-			return err
-		}
-		// vcenter lifecycle Actions (ADR-0114): power/reconfigure/delete on an existing VM by uuid, on
-		// the same host as the OBSERVE Syncer. All dry-runnable; delete-vm relies on the Syncer's next
-		// full-sync to tombstone (ADR-0042) and is idempotent-on-absence (D2).
-		for _, op := range []string{
-			"vcenter/power-off", "vcenter/power-on", "vcenter/reset", "vcenter/suspend",
-			"vcenter/shutdown-guest", "vcenter/reconfigure", "vcenter/delete-vm",
-			// snapshot + mobility + portgroup lifecycle (ADR-0114 slice 2)
-			"vcenter/snapshot-create", "vcenter/snapshot-revert", "vcenter/snapshot-remove",
-			"vcenter/migrate", "vcenter/clone",
-			"vcenter/reconfigure-portgroup", "vcenter/delete-portgroup",
-		} {
-			if err := registerPluginAction(op, host, true); err != nil {
-				return err
-			}
-		}
+		// The 15 INVOKE Actions (ADR-0113 create-vm/create-portgroup + the ADR-0114 lifecycle set)
+		// used to be registered HERE, on the Syncer's host and therefore with the SYNCER's grant.
+		// They are now declared: plugins/vcenter/estate/actuators/vcenter.yaml carries them as
+		// `actionNames` with the Actuator's OWN, narrower grant (ADR-0103).
+		//
+		// Two things this buys beyond reviewability. The dispatch surface is verified against the
+		// plugin's own Manifest at enable, so a name vcenter does not advertise holds the Actuator
+		// back with a diagnostic instead of registering an entry that fails at Invoke. And the
+		// Actions stop borrowing the Syncer's write ceiling — an Action's write-back is
+		// Run-provenance and entity-shaped, not the Syncer's seven observed Facet namespaces.
+		//
+		// The Syncer half below keeps this grant and remains the authority for what it observes.
 		controllers = append(controllers, homeSupervise(sourceName, host.Register, func(cctx context.Context) error {
 			return host.SyncLoop(cctx, interval)
 		}))
@@ -1290,20 +1251,25 @@ func run(ctx context.Context, log *slog.Logger) error {
 		controllers = append(controllers, homeSupervise(sourceName, host.Register, func(cctx context.Context) error {
 			return host.SyncLoop(cctx, interval)
 		}))
-		// Same host, NEUTRAL cert-issuer reconcile Actuator (ADR-0050): Plan/Apply/
-		// Destroy the cert lifecycle. Model Y (no plan-artifact) → no plan store.
-		if err := registerPluginActuator("cert-issuer", host, true, grant, nil); err != nil {
-			return err
-		}
-		// Administrative PKI Actions (ADR-0098 E2): CA admin, NOT the retired per-cert
-		// lifecycle (that stays the reconcile Actuator above). Not DryRunnable (thin
-		// OpenBao /pki calls; create-intermediate fails closed on an existing CA).
-		for _, name := range []string{"cert-issuer/create-intermediate", "cert-issuer/rotate-crl"} {
-			if err := registerPluginAction(name, host, false); err != nil {
-				return err
-			}
-		}
-		log.Info("openbao plugin ready (cert-issuer Syncer + reconcile Actuator + PKI admin Actions)", "addr", addr)
+		// The cert-issuer reconcile Actuator (ADR-0050) and the administrative PKI Actions
+		// (ADR-0098 E2) used to be registered HERE, with the grant above — the same grant the
+		// Syncer uses, because one Go value served both roles. They are now a CaC declaration:
+		// plugins/openbao/estate/actuators/cert-issuer.yaml, reconciled into the dispatch table
+		// by the connectorregistry on every replica with no strattd restart (ADR-0103).
+		//
+		// The blocker was never the transport. It was that ADR-0140 D4 cannot capability-type the
+		// cert reconcile while the declared `certissuer` provider (`openbao`) and the Actuator
+		// actually serving it (`cert-issuer`) are different objects — resolution lands on a
+		// declaration with an empty facet grant and the reconcile's write-back silently vanishes.
+		// The declaration is also strictly more capable than this block was: it carries its own
+		// NARROWER grant (cert.identity + cert.expiry, not the Syncer's five), which is the least
+		// authority the Actuator actually needs.
+		//
+		// Deleted rather than kept as a fallback, for the reason the ansible/script migration
+		// records: two registration paths for one name collide at §2.4 and make "which grant is
+		// live?" unanswerable from Git. A floor that declares no cert-issuer has none — the
+		// intended CaC posture, and why the reference estate declares it.
+		log.Info("openbao plugin ready (cert Syncer; cert-issuer Actuator + PKI Actions are CaC)", "addr", addr)
 	} else {
 		log.Info("no openbao plugin configured (STRATT_OPENBAO_PLUGIN_ADDR empty); cert syncer idle")
 	}
@@ -1472,7 +1438,9 @@ func run(ctx context.Context, log *slog.Logger) error {
 		// dispatch-map membership must be visible to any worker — D3); Connector Syncers
 		// reconcile LEADER-ONLY (graph writers, home-gated). helm's planstore is nil (as its
 		// boot-env block was); an Actuator that needs one is a later-slice concern.
-		connReg = connectorregistry.New(store, plugins, homeDeps, nil,
+		// planStore (nil when the floor has no state key) reaches every declared Actuator here —
+		// the "later-slice concern" the previous nil booked (ADR-0047 §8).
+		connReg = connectorregistry.New(store, plugins, homeDeps, planStore,
 			func(addr string) (*grpc.ClientConn, error) {
 				return grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
 			},
@@ -1487,6 +1455,24 @@ func run(ctx context.Context, log *slog.Logger) error {
 		authzDecls, err := desiredstate.ParseDir(path, nil)
 		if err != nil {
 			return fmt.Errorf("desired-state parse (authz-home): %w", err)
+		}
+		// That parse also registered every admitted plugin's SELF contracts (ADR-0138 D3/D4). Pin
+		// them exactly as the shipped ones were pinned above, so drift against a registered pin
+		// stays blocking — D4's "core stops embedding and instead pins at registration".
+		//
+		// This runs on EVERY replica and BEFORE the API handler is built, and both matter. The
+		// desired-state controller is leader-only, so registering there would give the leader a
+		// contract set its followers lack while the Temporal worker validates action params on
+		// every replica — the ADR-0103 D3 routing hazard in the validation layer. And
+		// contract.Fingerprint() is captured once inside api.Server.Handler(), so a later
+		// registration would ship peers a stale federation stamp.
+		if estateContracts := contract.EstateContracts(); len(estateContracts) > 0 {
+			for _, c := range estateContracts {
+				if err := store.RegisterContract(ctx, c); err != nil {
+					return err
+				}
+			}
+			log.Info("plugin self contracts pinned (ADR-0138 D4)", "count", len(estateContracts))
 		}
 		// Snapshot the estate's admission policy for the API's imperative door
 		// (GOV-2). Parsed with a nil decider above (this load only reads Cells +
@@ -1623,7 +1609,12 @@ func run(ctx context.Context, log *slog.Logger) error {
 	}
 
 	// ── trigger engine (ADR-0018: Emitter events × CEL → launches) ───────
-	engine := &triggerengine.Engine{Store: store, Bus: bus, Temporal: temporalClient, Log: log}
+	engine := &triggerengine.Engine{
+		Store: store, Bus: bus, Temporal: temporalClient, Log: log,
+		// A schedule/event Trigger naming a capability resolves through the same registry the
+		// Baseline path uses (ADR-0140 D4) — one resolution, one binding, one audit (§1.6).
+		ResolveActuator: acts.ResolveActuator,
+	}
 	controllers = append(controllers, func(cctx context.Context) {
 		if err := engine.Run(cctx); err != nil && !errors.Is(err, context.Canceled) {
 			log.Error("trigger engine stopped", "error", err)

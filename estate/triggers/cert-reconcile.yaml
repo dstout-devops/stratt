@@ -26,12 +26,26 @@ environments: [prod]
 cron: "0 */6 * * *" # every 6h — converge well inside renewBefore
 viewName: managed-certs
 principal: svc-cert-reconcile
-actuator: cert-issuer
+# The CLASS, not the Actuator (ADR-0140 D4). Reconcile is the loop this platform never stops
+# running and it was the least capability-typed path in the estate: the provider declared
+# `certissuer`, this Trigger named a provider, and nothing connected the two.
+#
+# Resolution binds the single VERIFIED Actuator advertising the class, at fire time, recorded on
+# the Run. Swapping OpenBao for step-ca or an ACME issuer now edits a declaration, not this file.
+#
+# The facetWriteScope below is checked at LOAD against EVERY candidate provider's grant, not just
+# the one bound today — see the note there.
+actuatorCapability: certissuer
 credentialRefs: [cert-issuer]
-# cert-issuer's Apply projects the issued cert's cert.identity/cert.expiry Facets
-# back (ADR-0054 write-scope): the effective write-back is the cert-issuer grant ∩
-# this scope. Without it the tight default would drop the projection at the one
-# governor and the reconcile would converge OpenBao but never update the graph.
+# The issuer's Apply projects the issued cert's cert.identity/cert.expiry Facets back
+# (ADR-0054 write-scope): the effective write-back is the RESOLVED provider's grant ∩ this
+# scope. Without it the tight default would drop the projection at the one governor and the
+# reconcile would converge OpenBao but never update the graph.
+#
+# Because the provider is now resolved rather than named, this scope is validated at load against
+# EVERY declared Actuator advertising `certissuer` — not the one bound today. A scope that fits
+# one provider and exceeds another is a write that silently stops happening on a rebind, and a
+# dropped write-back reports as nothing at all rather than as an error (ADR-0140 D4).
 facetWriteScope: [cert.identity, cert.expiry]
 params:
   commonName: web.stratt.test

@@ -66,6 +66,10 @@ type Connector struct {
 	// Decommissions maps an Intent kind to THIS provider's gated TEARDOWN Workflow for it (ADR-0114
 	// D4), symmetric to Provisions — the per-kind teardown a withdrawn/counted-down Intent resolves to.
 	Decommissions map[string]string `json:"decommissions,omitempty"`
+	// Remediates maps an Intent kind to THIS provider's CONVERGENCE Workflow for it (ADR-0135 D2),
+	// the third of the family: a Blueprint route naming a capability resolves through this map
+	// instead of naming a Workflow. Meaningful only alongside a matching `provides`.
+	Remediates map[string]string `json:"remediates,omitempty"`
 	// Environments scopes this Connector to a subset of dev/staging/prod (ADR-0057); empty ⇒
 	// every environment.
 	Environments []string `json:"environments,omitempty"`

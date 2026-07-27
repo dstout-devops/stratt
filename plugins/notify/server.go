@@ -7,6 +7,7 @@ package notify
 
 import (
 	"context"
+	"embed"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -19,9 +20,20 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
+	"github.com/dstout-devops/stratt/sdk/pluginserve"
 	"github.com/dstout-devops/stratt/sdk/secretbroker"
 	pluginv1 "github.com/dstout-devops/stratt/sdk/stratt/plugin/v1"
 )
+
+// The plugin's OWN contract documents (ADR-0138 D3/D4), embedded so their digests can be
+// advertised on every ContractRef — port invariant #5, which had nothing to check while these
+// documents lived in the core binary and `sha256` went out empty.
+//
+//go:embed contracts
+var contractFS embed.FS
+
+// contracts hashes those documents on demand; Ref(id) yields the pinned ContractRef.
+var contracts = pluginserve.Contracts(contractFS)
 
 // The delivery Actions this plugin provides. A Sink's `kind` names one of these
 // through types.NotifyActionFor (ADR-0125 D1) — `kind: smtp` → `notify/smtp` —
@@ -57,14 +69,14 @@ func (s *Server) GetManifest(context.Context, *pluginv1.GetManifestRequest) (*pl
 		Verbs:           []pluginv1.Verb{pluginv1.Verb_VERB_INVOKE},
 		Actions: []*pluginv1.ActionDecl{{
 			Name:        actionWebhook,
-			Input:       &pluginv1.ContractRef{SchemaId: "actions/notify/webhook.input"},
-			Output:      &pluginv1.ContractRef{SchemaId: "actions/notify/webhook.output"},
+			Input:       contracts.Ref("actions/notify/webhook.input"),
+			Output:      contracts.Ref("actions/notify/webhook.output"),
 			Idempotent:  false, // a POST is not a no-op; dedup rests on the workflow id
 			DryRunnable: false, // a webhook POST has no side-effect-free plan
 		}, {
 			Name:        actionSMTP,
-			Input:       &pluginv1.ContractRef{SchemaId: "actions/notify/smtp.input"},
-			Output:      &pluginv1.ContractRef{SchemaId: "actions/notify/smtp.output"},
+			Input:       contracts.Ref("actions/notify/smtp.input"),
+			Output:      contracts.Ref("actions/notify/smtp.output"),
 			Idempotent:  false, // a sent mail is not a no-op either
 			DryRunnable: false, // and it has no read-only plan
 		}},
@@ -246,7 +258,7 @@ func (s *Server) terminalFor(stream grpc.ServerStreamingServer[pluginv1.InvokeRe
 	}
 	return stream.Send(&pluginv1.InvokeResponse{
 		Event:  ev,
-		Result: &pluginv1.InvokeResult{OutputContract: &pluginv1.ContractRef{SchemaId: outputContract}},
+		Result: &pluginv1.InvokeResult{OutputContract: contracts.Ref(outputContract)},
 	})
 }
 

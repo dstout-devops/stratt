@@ -2,7 +2,6 @@ package desiredstate
 
 import (
 	"os"
-	"path/filepath"
 	"slices"
 	"testing"
 
@@ -15,13 +14,34 @@ import (
 // conjures it — which is exactly the property ADR-0103 is retiring.
 //
 // This map is the migration tracker, and it is deliberately a test fixture rather than a
-// comment: shrinking it is how a migration is proven, and forgetting to shrink it fails
-// the census assertion below. ADR-0117 follow-up (k) removed `ansible` and `script` from
-// it (they are now estate/actuators/{ansible,script}.yaml); `mcp` and the openbao-provided
-// `cert-issuer` are what remain.
+// comment: shrinking it is how a migration is proven. It is now CHECKED, in both directions,
+// by TestBootRegisteredActuatorsCensusIsAccurate — which it was not before, despite this
+// comment having claimed so. It had rotted both ways: `cert-issuer` stayed listed after it
+// became a declaration, and `opentofu` was boot-registered without ever being listed.
+//
+// Migrated off their boot blocks so far: ansible, script (ADR-0117 k), cert-issuer, crossplane,
+// mcp — plus vcenter's 16 INVOKE Actions, which were never Actuators and so never appeared here.
+// What remains is below.
+//
+// Still boot-registered as an ACTION (not tracked by this map, which is Actuator-shaped):
+// `adopt/materialize` alone. It has no declaration to attach to — ansible-automation ships no
+// Actuator, only Connector halves — so migrating it needs a declaration to exist first, which is
+// a decision rather than a transcription. The vcenter (16), awsec2 (11) and awss3 (4) sets are
+// done.
 var bootRegisteredActuators = map[string]string{
-	"mcp":         "in-tree MCP Actuator, pending its own extraction slice (ADR-0046)",
-	"cert-issuer": "registered by the openbao plugin block on STRATT_OPENBAO_PLUGIN_ADDR (ADR-0050)",
+	// EMPTY, and that is the ADR-0103 migration's completion receipt for Actuators: strattd
+	// registers none in Go any more. ansible and script went first (ADR-0117 k), then cert-issuer,
+	// crossplane, mcp, and finally opentofu — retired rather than migrated, because the estate
+	// already declares opentofu-network and opentofu-s3 using the CaC form of its safety property
+	// (`requires: [statestore]` holds them pending until a verified state provider exists), and
+	// nothing named the bare `opentofu`.
+	//
+	// Keeping the map rather than deleting it is deliberate. It is now an ASSERTION that the set
+	// is empty — TestBootRegisteredActuatorsCensusIsAccurate fails the moment main.go registers an
+	// Actuator that is not listed here, so reintroducing one silently is no longer possible.
+	//
+	// Actions are a separate, unfinished story: adopt/materialize is still registered in Go. This
+	// map is Actuator-shaped and does not track it.
 }
 
 // TestEstateDeclaresTheActuatorsItNames is the guard that ADR-0117 follow-up (k) needs and
@@ -31,7 +51,7 @@ var bootRegisteredActuators = map[string]string{
 // them" to "the estate declares them, or the floor does not have them." That is the intended
 // CaC posture, but it converts a deleted file into a RUNTIME failure a long way from the
 // deletion: eight Steps and Triggers in the reference estate name `ansible`, and without
-// estate/actuators/ansible.yaml each of them fails at dispatch with an unknown-actuator error
+// plugins/ansible/estate/actuators/ansible.yaml each of them fails at dispatch with an unknown-actuator error
 // on a live floor. Nothing in the build would have said a word.
 //
 // So: every per-target Actuator a Step/Trigger/Baseline names must either be declared in the
@@ -41,12 +61,9 @@ var bootRegisteredActuators = map[string]string{
 // legitimately resolves outside the estate today.
 func TestEstateDeclaresTheActuatorsItNames(t *testing.T) {
 	trees := map[string]string{"reference": estateRoot}
-	dirs, err := filepath.Glob(filepath.Join(demosRoot, "*", "estate"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	dirs := demoEstates(t)
 	for _, dir := range dirs {
-		trees["demo/"+filepath.Base(filepath.Dir(dir))] = dir
+		trees["demo/"+demoLabel(dir)] = dir
 	}
 	if len(trees) < 2 {
 		t.Fatalf("found only the reference estate — this guard must not pass by finding nothing")

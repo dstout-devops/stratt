@@ -12,6 +12,7 @@ package helm
 import (
 	"context"
 	"crypto/sha256"
+	"embed"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -26,8 +27,19 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
+	"github.com/dstout-devops/stratt/sdk/pluginserve"
 	pluginv1 "github.com/dstout-devops/stratt/sdk/stratt/plugin/v1"
 )
+
+// The plugin's OWN contract documents (ADR-0138 D3/D4), embedded so their digests can be
+// advertised on every ContractRef — port invariant #5, which had nothing to check while these
+// documents lived in the core binary and `sha256` went out empty.
+//
+//go:embed contracts
+var contractFS embed.FS
+
+// contracts hashes those documents on demand; Ref(id) yields the pinned ContractRef.
+var contracts = pluginserve.Contracts(contractFS)
 
 const protocolVersion = "v1"
 
@@ -79,6 +91,19 @@ func (s *Server) GetManifest(context.Context, *pluginv1.GetManifestRequest) (*pl
 		Verbs: []pluginv1.Verb{
 			pluginv1.Verb_VERB_PLAN, pluginv1.Verb_VERB_APPLY, pluginv1.Verb_VERB_INVOKE,
 		},
+		// The targetless Action the INVOKE verb above refers to. It was missing: the verb was
+		// advertised, `contracts/actions/helm/deploy.{input,output}` existed, and the estate
+		// declared `actionNames: [helm/deploy]` — but the Manifest named no Action, so core
+		// registered the dispatch entry on the estate's word alone. Dispatch worked (it needs
+		// only the name), which is exactly why nothing surfaced it.
+		Actions: []*pluginv1.ActionDecl{{
+			Name:   actionDeploy,
+			Input:  contracts.Ref("actions/helm/deploy.input"),
+			Output: contracts.Ref("actions/helm/deploy.output"),
+			// upgrade --install converges to the same release state on a re-run.
+			Idempotent:  true,
+			DryRunnable: true, // helm upgrade --dry-run=server
+		}},
 		Capabilities: []string{"apply.dry-run"}, // helm upgrade --dry-run=server
 		MinProtocol:  protocolVersion,
 		MaxProtocol:  protocolVersion,
@@ -194,7 +219,7 @@ func (s *Server) Apply(req *pluginv1.ApplyRequest, stream grpc.ServerStreamingSe
 	ctx := stream.Context()
 	p, tail, env, valuesFile, err := s.prepare(req.GetDesired().GetBytes())
 	if err != nil {
-		return sendApplyTerminal(stream, false, pluginv1.ItemResult_STATUS_FAILED, err.Error(), 1)
+		return pluginserve.ApplyTerminal(stream, false, pluginv1.ItemResult_STATUS_FAILED, err.Error())
 	}
 	if valuesFile != "" {
 		defer os.Remove(valuesFile)
@@ -209,7 +234,7 @@ func (s *Server) Apply(req *pluginv1.ApplyRequest, stream grpc.ServerStreamingSe
 
 	_, rc, rerr := s.run.run(ctx, "", env, upgradeArgs(tail, p.CreateNamespace, req.GetDryRun()), onLine)
 	if rerr != nil {
-		return sendApplyTerminal(stream, false, pluginv1.ItemResult_STATUS_FAILED, rerr.Error(), next())
+		return pluginserve.ApplyTerminal(stream, false, pluginv1.ItemResult_STATUS_FAILED, rerr.Error())
 	}
 
 	// Terminal fold (statuses only escalate — §1.8): rc≠0 → failed; a real apply that
@@ -225,17 +250,7 @@ func (s *Server) Apply(req *pluginv1.ApplyRequest, stream grpc.ServerStreamingSe
 	if req.GetDryRun() {
 		verb = "dry-run"
 	}
-	return sendApplyTerminal(stream, rc == 0, status, fmt.Sprintf("helm %s finished rc=%d", verb, rc), next())
-}
-
-// sendApplyTerminal emits the single terminal ApplyResponse (event.terminal + the
-// release-root ItemResult). ok is advisory — the host folds Succeeded core-side from
-// the ItemResult status (ADR-0047 §6).
-func sendApplyTerminal(stream grpc.ServerStreamingServer[pluginv1.ApplyResponse], ok bool, status pluginv1.ItemResult_Status, msg string, seq int64) error {
-	return stream.Send(&pluginv1.ApplyResponse{
-		Event:  &pluginv1.TaskEvent{Terminal: true, Ok: ok, At: timestamppb.Now(), Message: msg, Fields: map[string]string{"kind": "finished"}},
-		Result: &pluginv1.ItemResult{ItemKey: "", Status: status},
-	})
+	return pluginserve.ApplyTerminal(stream, rc == 0, status, fmt.Sprintf("helm %s finished rc=%d", verb, rc))
 }
 
 // upgradeArgs builds the `helm upgrade --install` argument list shared by the Apply
@@ -306,7 +321,7 @@ func (s *Server) Invoke(req *pluginv1.InvokeRequest, stream grpc.ServerStreaming
 		},
 		Result: &pluginv1.InvokeResult{
 			Outputs:        &pluginv1.Payload{Bytes: outputs},
-			OutputContract: &pluginv1.ContractRef{SchemaId: "actions/helm/deploy.output"},
+			OutputContract: contracts.Ref("actions/helm/deploy.output"),
 		},
 	})
 }

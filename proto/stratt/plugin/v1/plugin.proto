@@ -264,6 +264,26 @@ message ActionDecl {
   ContractRef output = 3; // pinned output schema (empty if the Action returns no typed outputs)
   bool idempotent = 4;
   bool dry_runnable = 5;
+  // The capability CLASS this Action implements, if any (ADR-0140 D1) — e.g. "ipam".
+  // Empty for an ordinary Action, which is most of them.
+  //
+  // AUTHORITY vs IMPLEMENTATION. Whether a provider MAY serve a class is the operator's
+  // (`provides:` in CaC, §1.5 — the Manifest advertises, the grant is truth). WHICH Action
+  // IS the class is the plugin's, and only the plugin knows it. Core used to compute the
+  // answer — `<plugin_id>/<class>-resolve`, string-concatenated — which meant the spine
+  // dictated names inside a namespace it does not own: a NetBox plugin whose Action is
+  // `netbox/allocate-prefix` could not provide `ipam` whatever its Manifest said. The class
+  // exists to make the provider swappable; deriving the name constrained its internals.
+  //
+  // Core carries this token OPAQUELY, exactly as it already carries the `provisions`/
+  // `remediates`/`decommissions` per-kind Workflow names. It is advertisement: an
+  // implementation for a class the operator did not grant is ignored, never honored.
+  //
+  // OPTIONAL, and NOT every class is reached this way. A class whose consumers route through
+  // a per-kind map (`provisioning` → `provisions: {Compute: …}`) has no resolve Action at all,
+  // so its providers advertise nothing here and that is correct — the three Step shapes have
+  // three resolutions (ADR-0140 D3).
+  string implements = 6;
 }
 
 message Manifest {

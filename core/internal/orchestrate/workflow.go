@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	enumspb "go.temporal.io/api/enums/v1"
 	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/workflow"
 
@@ -59,6 +60,16 @@ type DAGInput struct {
 	// Never bound by {{.launch.x}}: a Step reads the Workflow's parameters, not the
 	// change's context.
 	Context map[string]any
+	// ParentWorkflowRunID / ParentStepName link a NESTED execution back to the Step that
+	// started it (ADR-0139 D2). Empty for a top-level launch. Carried on DAGInput because
+	// RunDAG mints its own row via EnsureWorkflowRun — the trigger engine's pattern — so
+	// the link has to arrive with the input rather than be stamped afterwards.
+	ParentWorkflowRunID string
+	ParentStepName      string
+	// ResolvedCapability is set when this run was reached through a nested capability Step
+	// (ADR-0139 D3) — recorded on the row so the binding that decided it is readable after
+	// the fact, not only in an activity's history.
+	ResolvedCapability ResolvedCapability
 }
 
 // GateDecision is the signal payload an authorized Principal sends to a
@@ -177,6 +188,8 @@ func RunDAG(ctx workflow.Context, in DAGInput) error {
 				status = runGateStep(gctx, a, in, step, boundOutputs)
 			case step.Policy != nil:
 				status = runPolicyStep(gctx, a, in, step)
+			case step.Workflow != "":
+				status = runNestedWorkflowStep(gctx, in, step, boundOutputs)
 			case step.Action != "":
 				status, outputs = runActionStep(gctx, in, step, boundOutputs)
 			default:
@@ -346,9 +359,29 @@ func digestFromStep(steps map[string]json.RawMessage, planStep string) string {
 // runActionStep executes one Step as a child RunAction workflow (§2.2,
 // ADR-0031) and returns its typed outputs for downstream binding.
 func runActionStep(ctx workflow.Context, in DAGInput, step types.Step, steps map[string]json.RawMessage) (string, json.RawMessage) {
-	var params json.RawMessage
 	var a *Activities
-	if err := workflow.ExecuteActivity(ctx, a.ResolveActionStepParams, step.Action, step.Params, in.Event, steps, in.LaunchParams).Get(ctx, &params); err != nil {
+
+	// A class-named Step resolves to the bound provider's ADVERTISED implementation before
+	// anything else (ADR-0140 D3 row 2). It is an ACTIVITY, not workflow-side code: resolution
+	// reads the store, and a Temporal workflow function must stay deterministic — a rebind
+	// between the original run and a replay would otherwise rewrite history.
+	//
+	// The resolved name is carried on the child RunInput ALONGSIDE the class, never instead of
+	// it: the class is what the author asked for and the Action is what served it, and §1.8's
+	// one-click descent needs both. Recording only the resolved name would make a Run indis-
+	// tinguishable from one that named the provider directly, which is the coupling this removes.
+	action := step.Action
+	if step.ActionCapability != "" {
+		if err := workflow.ExecuteActivity(ctx, a.ResolveActionCapability, step.ActionCapability).Get(ctx, &action); err != nil {
+			return stepFailed, nil
+		}
+	}
+
+	var params json.RawMessage
+	// Params are validated against the CLASS Contract for a class-named Step and against the
+	// Action's own for a named one — the Step must be valid independent of the binding.
+	if err := workflow.ExecuteActivity(ctx, a.ResolveActionStepParams,
+		action, step.ActionCapability, step.Params, in.Event, steps, in.LaunchParams).Get(ctx, &params); err != nil {
 		return stepFailed, nil
 	}
 	cctx := workflow.WithChildOptions(ctx, workflow.ChildWorkflowOptions{
@@ -356,18 +389,148 @@ func runActionStep(ctx workflow.Context, in DAGInput, step types.Step, steps map
 	})
 	var outcome RunOutcome
 	err := workflow.ExecuteChildWorkflow(cctx, RunAction, RunInput{
-		Action:         step.Action,
-		DryRun:         step.DryRun,
-		Params:         params,
-		CredentialRefs: step.CredentialRefs,
-		Principal:      in.Principal,
-		WorkflowRunID:  in.WorkflowRunID,
-		StepName:       step.Name,
+		Action:           action,
+		ActionCapability: step.ActionCapability,
+		DryRun:           step.DryRun,
+		Params:           params,
+		CredentialRefs:   step.CredentialRefs,
+		Principal:        in.Principal,
+		WorkflowRunID:    in.WorkflowRunID,
+		StepName:         step.Name,
 	}).Get(cctx, &outcome)
 	if err != nil {
 		return stepFailed, nil
 	}
 	return stepSucceeded, outcome.Outputs
+}
+
+// runNestedWorkflowStep runs another declared Workflow as a child of this one (ADR-0139 D1).
+//
+// It starts RunDAG — the SAME chokepoint every other launcher uses — with WorkflowRunID empty, so
+// the child mints its own row via EnsureWorkflowRun and resolves its own launch inputs. That is
+// the trigger engine's pattern verbatim, and choosing it over "extract the HTTP door's body" is
+// the difference between reusing the guarantee and re-implementing it: a nested Step CANNOT skip
+// input resolution, because the thing it starts is the thing that resolves (§1.6).
+//
+// Principal, environment, change context and Cell are INHERITED, never re-asserted (D6). That is a
+// privilege decision, not a convenience: a child that could re-assert any of them would be a
+// confused-deputy channel wearing a Workflow's clothes.
+func runNestedWorkflowStep(ctx workflow.Context, in DAGInput, step types.Step, steps map[string]json.RawMessage) string {
+	var a *Activities
+
+	// The CLASS form resolves to a concrete Workflow FIRST (ADR-0139 D3), in an activity, so the
+	// workflow stays deterministic and everything downstream — input validation, dispatch, descent
+	// — sees a concrete name. `resolved` also travels onto the child's record: launch-time
+	// resolution forfeits the readable record compile time gives, so without it the answer to
+	// "why did this run compute-build?" would exist only in an activity's history.
+	name := step.Workflow
+	var resolved ResolvedCapability
+	if step.WorkflowCapability != "" {
+		if err := workflow.ExecuteActivity(ctx, a.ResolveWorkflowCapability, step.WorkflowCapability, step.ForKind).
+			Get(ctx, &resolved); err != nil {
+			return stepFailed
+		}
+		name = resolved.Workflow
+	}
+
+	// The child's inputs may bind {{.steps.x}} / {{.launch.x}} / {{.event.x}} like any other
+	// Step's arguments. Resolved in an activity for the same reason Step params are.
+	var inputs map[string]any
+	if err := workflow.ExecuteActivity(ctx, a.ResolveNestedInputs, step.Inputs, in.Event, steps, in.LaunchParams).
+		Get(ctx, &inputs); err != nil {
+		return stepFailed
+	}
+
+	cctx := workflow.WithChildOptions(ctx, workflow.ChildWorkflowOptions{
+		WorkflowID: ChildWorkflowRunID(in.WorkflowRunID, step.Name),
+		// THE default is wrong here and it is one line (ADR-0139 D2). Temporal TERMINATES
+		// children when the parent closes; a terminated RunDAG never reaches finishWorkflowRun,
+		// so its WorkflowRun row reads `running` FOREVER and its K8s Jobs go unreaped — a record
+		// that lies about a run's state, which is the §1.8 failure mode in its purest form.
+		// REQUEST_CANCEL lets the child write its own terminal status, keeping the single-writer
+		// rule that already governs Run status. Invisible until a parent is cancelled in anger.
+		ParentClosePolicy: enumspb.PARENT_CLOSE_POLICY_REQUEST_CANCEL,
+	})
+	err := workflow.ExecuteChildWorkflow(cctx, RunDAG, DAGInput{
+		WorkflowName: name,
+		// What the Step ASKED FOR, alongside what served it (§1.8) — recorded on the child's
+		// row so a capability-routed nested run is distinguishable from one that named the
+		// Workflow directly.
+		ResolvedCapability: resolved,
+		// Inherited, never re-asserted (D6).
+		Principal:    in.Principal,
+		Environment:  in.Environment,
+		Context:      in.Context,
+		LaunchParams: inputs,
+		// The nesting link (D2). Without it the child is an orphan whose existence is only
+		// inferable from timing, and §1.8's descent ladder loses a rung.
+		ParentWorkflowRunID: in.WorkflowRunID,
+		ParentStepName:      step.Name,
+	}).Get(cctx, nil)
+	if err != nil {
+		// D6b: the child's terminal status IS this Step's status. failed, denied and expired all
+		// make the parent Step fail, so `needs:` + `when: success|failure|always` keep meaning
+		// over a nested Step exactly as over any other. Left unstated, those edges would be
+		// undefined the moment a Step is a subtree.
+		return stepFailed
+	}
+	return stepSucceeded
+}
+
+// ResolvedCapability records how a nested capability Step reached its Workflow (ADR-0139 D3):
+// the class asked for, the kind, the provider that won, and the Workflow it advertised. Carried
+// onto the child's WorkflowRun because launch-time resolution has no compiled artifact to read
+// afterwards, and "resolved at run time with no declaration anyone can read" is the worse boundary
+// this repo already argues against.
+type ResolvedCapability struct {
+	Capability string
+	ForKind    string
+	Provider   string
+	Workflow   string
+}
+
+// ResolveWorkflowCapability maps (class, Intent kind) to the bound provider's build Workflow. An
+// activity because it reads the store, and because a rebind between the original run and a replay
+// must not rewrite history.
+//
+// Fails NON-RETRYABLY, carrying the resolver's own reason: "no verified provider" and "two
+// providers, add a capability-binding" send the reader to different places (§1.8), and neither is
+// fixed by trying again.
+func (a *Activities) ResolveWorkflowCapability(ctx context.Context, capClass, forKind string) (ResolvedCapability, error) {
+	if a.ResolveBuildWorkflow == nil {
+		return ResolvedCapability{}, temporal.NewNonRetryableApplicationError(
+			fmt.Sprintf("step names capability %q but no build resolver is configured", capClass),
+			"CapabilityResolverUnavailable", nil)
+	}
+	provider, wf, err := a.ResolveBuildWorkflow(ctx, capClass, forKind)
+	if err != nil {
+		return ResolvedCapability{}, temporal.NewNonRetryableApplicationError(
+			fmt.Sprintf("resolve capability %q for Intent/%s: %v", capClass, forKind, err),
+			"CapabilityUnresolvable", err)
+	}
+	return ResolvedCapability{Capability: capClass, ForKind: forKind, Provider: provider, Workflow: wf}, nil
+}
+
+// ChildWorkflowRunID is the deterministic Temporal id of a nested WorkflowRun — the parent's
+// descent rung is navigable by construction (§1.8), the same property ChildRunID gives a Step's
+// Run. Distinct prefix so a nested Workflow and a Step's Run can never collide on one id.
+func ChildWorkflowRunID(parentWorkflowRunID, step string) string {
+	return "wfnest-" + parentWorkflowRunID + "-" + step
+}
+
+// ResolveNestedInputs binds a nested Step's inputs against the DAG's namespaces. The child's own
+// `inputs` SCHEMA is then applied inside RunDAG by ResolveLaunchInputs — deliberately not here, so
+// there is exactly one place launch inputs are validated (ADR-0118 D4).
+func (a *Activities) ResolveNestedInputs(ctx context.Context, inputs map[string]any, event map[string]any, steps map[string]json.RawMessage, launch map[string]any) (map[string]any, error) {
+	if len(inputs) == 0 {
+		return nil, nil
+	}
+	ns := template.Namespaces{"event": event, "steps": stepsNamespace(steps), "launch": launch}
+	out, err := template.SubstituteParams(inputs, ns)
+	if err != nil {
+		return nil, temporal.NewNonRetryableApplicationError(err.Error(), "InvalidNestedInputs", err)
+	}
+	return out, nil
 }
 
 // runGateStep opens a Gate row and waits for an authorized decision signal
@@ -462,9 +625,23 @@ func (a *Activities) EnsureWorkflowRun(ctx context.Context, in DAGInput, tempora
 	if _, err := a.Store.GetWorkflow(ctx, in.WorkflowName); err != nil {
 		return "", temporal.NewNonRetryableApplicationError(err.Error(), "WorkflowNotFound", err)
 	}
-	wr, err := a.Store.CreateWorkflowRun(ctx, in.WorkflowName, temporalID, in.Principal, in.Trigger)
+	wr, err := a.Store.CreateNestedWorkflowRun(ctx, in.WorkflowName, temporalID, in.Principal, in.Trigger,
+		in.ParentWorkflowRunID, in.ParentStepName)
 	if err != nil {
 		return "", err
+	}
+	// The binding that decided this run (ADR-0139 D3). Launch-time resolution has no compiled
+	// artifact to read afterwards, so without this the answer to "why did this run compute-build?"
+	// lives only in an activity's history — the "resolved at run time with no declaration anyone
+	// can read" boundary this repo already argues against.
+	if r := in.ResolvedCapability; r.Capability != "" {
+		if err := a.Store.SetWorkflowRunStatus(ctx, wr.ID, types.RunPending, map[string]any{
+			"resolvedCapability": r.Capability,
+			"resolvedForKind":    r.ForKind,
+			"resolvedProvider":   r.Provider,
+		}); err != nil {
+			return "", err
+		}
 	}
 	return wr.ID, nil
 }
@@ -572,13 +749,59 @@ func (a *Activities) ResolveStepParams(ctx context.Context, actuator string, par
 
 // ResolveActionStepParams is the Action counterpart: substitute event/steps
 // bindings and re-validate against the Action's input Contract (§2.2, ADR-0031).
-func (a *Activities) ResolveActionStepParams(ctx context.Context, action string, params map[string]any, event map[string]any, steps map[string]json.RawMessage, launch map[string]any) (json.RawMessage, error) {
+func (a *Activities) ResolveActionStepParams(ctx context.Context, action, capClass string, params map[string]any, event map[string]any, steps map[string]json.RawMessage, launch map[string]any) (json.RawMessage, error) {
 	ns := template.Namespaces{"event": event, "steps": stepsNamespace(steps), "launch": launch}
-	raw, err := contract.ResolveActionParams(action, params, ns)
+	resolve := func() (json.RawMessage, error) { return contract.ResolveActionParams(action, params, ns) }
+	if capClass != "" {
+		// The CLASS Contract governs a class-named Step, not the resolved provider's own
+		// (ADR-0112 D2, applied to the Step form): the author wrote provider-agnostic params,
+		// and checking them against whichever provider is bound would make the Step's validity
+		// depend on the binding — which is exactly what naming a class is meant to avoid.
+		resolve = func() (json.RawMessage, error) { return contract.ResolveCapabilityParams(capClass, params, ns) }
+	}
+	raw, err := resolve()
 	if err != nil {
 		return nil, temporal.NewNonRetryableApplicationError(err.Error(), "InvalidStepParams", err)
 	}
 	return raw, nil
+}
+
+// ResolveActuatorCapability maps a capability CLASS to the bound provider's ACTUATOR name
+// (ADR-0140 D4) — the Actuator-shaped sibling of ResolveActionCapability, for a Baseline that
+// names a class. An activity for the same two reasons: it reads the store, and a workflow function
+// must stay deterministic across replay.
+func (a *Activities) ResolveActuatorCapability(ctx context.Context, capClass string) (string, error) {
+	if a.ResolveActuator == nil {
+		return "", temporal.NewNonRetryableApplicationError(
+			fmt.Sprintf("declaration names capability %q but no capability resolver is configured", capClass),
+			"CapabilityResolverUnavailable", nil)
+	}
+	name, err := a.ResolveActuator(ctx, capClass)
+	if err != nil {
+		return "", temporal.NewNonRetryableApplicationError(
+			fmt.Sprintf("resolve actuator capability %q: %v", capClass, err), "CapabilityUnresolvable", err)
+	}
+	return name, nil
+}
+
+// ResolveActionCapability maps a capability CLASS to the bound provider's advertised
+// implementation (ADR-0140 D1/D3 row 2). An activity because it reads the store, and because a
+// workflow function must not — a rebind between run and replay would rewrite history.
+//
+// Fails NON-RETRYABLY and visibly: unresolvable means no verified provider, an ambiguous pair, or
+// a provider that advertised no implementation, and none of those is fixed by trying again (§1.8).
+func (a *Activities) ResolveActionCapability(ctx context.Context, capClass string) (string, error) {
+	if a.ResolveCapability == nil {
+		return "", temporal.NewNonRetryableApplicationError(
+			fmt.Sprintf("step names capability %q but no capability resolver is configured", capClass),
+			"CapabilityResolverUnavailable", nil)
+	}
+	action, err := a.ResolveCapability(ctx, capClass)
+	if err != nil {
+		return "", temporal.NewNonRetryableApplicationError(
+			fmt.Sprintf("resolve capability %q: %v", capClass, err), "CapabilityUnresolvable", err)
+	}
+	return action, nil
 }
 
 // LoadWorkflow reads the declared Workflow spec.

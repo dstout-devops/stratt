@@ -19,6 +19,52 @@ world), and there are no loops/conditionals/expressions (§1 — no new config l
 | `triggers/` `emitters/`                 | Trigger · Emitter                   | event/schedule → launch                                                                                                                                           |
 | `hosts/`                                | (declared-estate Connector content) | **devices-as-code** — a file that a Syncer projects (not a writable CMDB); populated in the Estate-as-Code slice ([ADR-0056](../docs/adr/0056-estate-as-code.md)) |
 | `authz/tuples.yaml`                     | —                                   | grants (pointers only, §2.5)                                                                                                                                      |
+| `plugins.yaml`                          | —                                   | which **plugin estates** this estate admits ([ADR-0137](../docs/adr/0137-a-plugin-is-a-service-not-a-subdirectory.md))                                            |
+
+## What lives here, and what does not
+
+A plugin owns its own declarations — its Actuator, the Workflows that drive it, the Triggers that
+schedule them, and the tool content they run. Those live in **`plugins/<name>/estate/`**, shipped and
+versioned by the plugin's author ([ADR-0137](../docs/adr/0137-a-plugin-is-a-service-not-a-subdirectory.md)
+D1). `estate/` is the **composition**: the Views, Intents, Blueprints and Assignments that assemble
+plugins into outcomes, plus the capability bindings that say which plugin serves which capability.
+
+**Locality is not authority.** That a plugin ships a declaration does not mean this estate runs it — an
+Actuator declaration carries a `facetNamespaces` write ceiling, so self-installation would be a vendor
+granting itself authority. [`plugins.yaml`](plugins.yaml) is where this estate says yes, and the review
+is real because admitting one is a diff (D3).
+
+Everything merges into **one flat namespace** and is validated in one pass, so a Blueprint here routing
+to a Workflow a plugin ships is an ordinary reference. Two admitted plugins declaring the same name is a
+hard error naming both files — never a silent winner (§2.4).
+
+**All twelve in-tree plugins have moved out under this rule** — their Actuators, Connectors and
+single-plugin Workflows now live in `plugins/<name>/estate/`, and `estate/actuators/` and
+`estate/connectors/` are empty. What remains here is composition, and the boundary is worth stating
+because it is the one that gets got wrong:
+
+| stays here                                       | why                                                                                                                    |
+| ------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------- |
+| `workflows/linux-onboard.yaml`                   | **names** `awsec2/create-vm`; the capability-typed form cannot be written yet (see below)                              |
+| `workflows/vsphere-subnet-build.yaml`            | **names** `netbox/ipam-resolve` + `vcenter/create-portgroup`; same reason                                              |
+| `workflows/change-review.yaml`                   | a Gate-only Workflow; names no plugin at all                                                                           |
+| `capability-bindings/`                           | the estate choosing WHICH plugin serves a capability — the choice is the estate's by definition                        |
+| `views/` `intents/` `blueprints/` `assignments/` | the composition layer: groups, and what is wanted for them                                                             |
+| `triggers/cert-reconcile.yaml`                   | targets the boot-registered `cert-issuer` Actuator; no declaration owns it yet                                          |
+
+
+A **View** follows the same rule as everything else: it stays here when it is a GROUP that Assignments
+bind to, and moves when it is a plugin's own projection. The nine `awx-*` Views and the six `awx-*`
+Baselines moved to [`plugins/ansible-automation/estate/`](../plugins/ansible-automation/estate/) on
+exactly that test — they select and assert over kinds only that plugin's Syncer projects
+(`ansible.template`, `ansible.schedule`, …), and no Assignment binds any of them. The salt Emitter and
+its Trigger moved to [`plugins/salt/estate/`](../plugins/salt/estate/) for the same reason.
+
+**The test is "does it span more than one plugin?", never "does it mention one."** A Workflow that
+names an ansible Actuator still belongs here if it also provisions through awsec2 — burying that
+`awsec2/create-vm` inside `plugins/ansible/` would put a hard dependency on a second plugin in the
+first one's tree. `task plugins:boundary` enforces this mechanically; it was written because step 2
+got `linux-onboard` wrong in exactly that way.
 
 ## The flagship: `linux-fleet` (the layered / CDK-style construct model)
 
@@ -31,9 +77,18 @@ declarative constructs (the useful half of AWS CDK — see ADR-0055):
   — the "template Z" (L2 construct with defaults) bound to the group; the compiler drift-checks every member.
   The flagship REUSES the one `fileset` Blueprint (a namespace has a single Blueprint owner, §2.1; additive keys
   union within it), so the fleet's `sshd-config` key and web-files' `nginx-conf` key coexist in `fileset.content`.
-- **`workflows/linux-onboard.yaml`** — the L3 onboarding lifecycle: `Gate → provision (Action) → configure
-(ansible)`. The provision Step's `action` is the **landscape binding** — `awsec2/create-vm` in dev, swappable
-  for a `crossplane`/`opentofu`/`vsphere` Action without touching the rest of the estate. Provisioning is
+- **[`workflows/linux-onboard.yaml`](workflows/linux-onboard.yaml)** — the L3 onboarding lifecycle:
+  `Gate → provision (Action) → configure
+(ansible)`. It stays HERE for a reason worth stating precisely, because the obvious one is wrong:
+  **not** because it spans two plugins — a plugin depending on another capability is the intended
+  design ([ADR-0104](../docs/adr/0104-plugin-capability-dependencies.md) D1: ansible cannot provision
+  the hosts it converges) — but because its provision Step **names a provider**, `awsec2/create-vm`,
+  and the capability-typed form cannot be written today. An **Intent** may say
+  `requires: [provisioning]` and resolve to a concrete build Action; a **Workflow Step** has no
+  equivalent. Until it does, a Workflow whose legs cross capabilities has to name someone, and naming
+  belongs to the estate. The provision Step's `action` is the **landscape binding** —
+  `awsec2/create-vm` in dev, swappable for a `crossplane`/`opentofu`/`vsphere` Action without touching
+  the rest of the estate. Provisioning is
   **gated** (§5 Flow 1 — never a silent auto-launch). Cert (cert-issuer) + app (helm) Steps are the next slice.
 
 ## The defaulted unit: `web-server` (G6 defaults + the materialization seam)

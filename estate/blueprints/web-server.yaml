@@ -26,4 +26,27 @@ routes:
       path: port
       equals: "{{.spec.port}}" # ← resolved from the Blueprint default OR the Intent override
     claim: exclusive
-    remediationWorkflow: web-server-configure
+    # CAPABILITY-routed (ADR-0135 D3), which this Blueprint could not be until ADR-0138 D5.
+    #
+    # The history is worth keeping, because the failure mode is subtle and repeatable. This
+    # WAS capability-routed once and broke every real floor: a capability route resolves only
+    # through a VERIFIED provider, verification meant fetching a Manifest over a dial address,
+    # and an EE-Job Actuator has none by construction (ansible is subprocess-only, §3). So it
+    # was permanently unverifiable and the route compiled to:
+    #
+    #   assignment web-server: blueprint route 0 remediationCapability "configmgmt":
+    #   no verified provider builds Intent/Application for capability "configmgmt"
+    #
+    # Three Assignments stopped compiling. Every unit test still passed, because they resolve
+    # through a fake — `task dev:connector-e2e` was the only thing that caught it, and it is
+    # still the gate that matters for a change to this line.
+    #
+    # ADR-0138 D5 made a dial-less provider verifiable from its DECLARED mechanisms instead of
+    # a Manifest it cannot have, so ansible-platform-baseline now genuinely provides the class
+    # and this route resolves to it. Every field in this Blueprint is provider-agnostic again,
+    # which is what made a capability-shaped remediation leg worth having.
+    #
+    # `remediationWorkflow` is kept, not deprecated (ADR-0135): name the capability when more
+    # than one provider could serve, name the Workflow when the estate has decided. The two are
+    # mutually exclusive on a route, refused at compile.
+    remediationCapability: configmgmt
