@@ -14,15 +14,16 @@ import (
 	"os"
 
 	"github.com/dstout-devops/stratt/plugins/vcenter"
+	"github.com/dstout-devops/stratt/sdk/pluginserve"
 )
 
 func main() {
 	log := slog.New(slog.NewTextHandler(os.Stderr, nil))
 	cfg := vcenter.Config{
 		PluginID: "vsphere-seed",
-		Endpoint: env("STRATT_VCENTER_URL", "https://localhost:8989/sdk"),
-		Username: env("STRATT_VCENTER_USERNAME", "user"),
-		Password: env("STRATT_VCENTER_PASSWORD", "pass"),
+		Endpoint: pluginserve.Env("STRATT_VCENTER_URL", "https://localhost:8989/sdk"),
+		Username: pluginserve.Env("STRATT_VCENTER_USERNAME", "user"),
+		Password: pluginserve.Env("STRATT_VCENTER_PASSWORD", "pass"),
 		Insecure: os.Getenv("STRATT_VCENTER_INSECURE") != "false", // dev/vcsim: insecure by default
 	}
 
@@ -44,11 +45,4 @@ func main() {
 	} else {
 		log.Info("seeded vsphere enterprise topology", "endpoint", cfg.Endpoint, "objects_created", created)
 	}
-}
-
-func env(k, d string) string {
-	if v := os.Getenv(k); v != "" {
-		return v
-	}
-	return d
 }

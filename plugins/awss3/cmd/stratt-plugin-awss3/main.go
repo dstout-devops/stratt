@@ -4,24 +4,20 @@
 package main
 
 import (
-	"log/slog"
-	"net"
 	"os"
 	"strings"
 
-	"google.golang.org/grpc"
+	"github.com/dstout-devops/stratt/sdk/pluginserve"
 
 	"github.com/dstout-devops/stratt/plugins/awss3"
-	pluginv1 "github.com/dstout-devops/stratt/sdk/stratt/plugin/v1"
 )
 
 func main() {
-	log := slog.New(slog.NewTextHandler(os.Stderr, nil))
 	cfg := awss3.Config{
-		PluginID:  env("STRATT_PLUGIN_ID", "awss3"),
+		PluginID:  pluginserve.Env("STRATT_PLUGIN_ID", "awss3"),
 		Endpoint:  os.Getenv("STRATT_AWSS3_ENDPOINT"),
-		Region:    env("STRATT_AWSS3_REGION", "us-east-1"),
-		PathStyle: env("STRATT_AWSS3_PATH_STYLE", "true") == "true", // SeaweedFS + most S3-compatibles need path-style
+		Region:    pluginserve.Env("STRATT_AWSS3_REGION", "us-east-1"),
+		PathStyle: pluginserve.Env("STRATT_AWSS3_PATH_STYLE", "true") == "true", // SeaweedFS + most S3-compatibles need path-style
 		// Destructive Actions refuse these (ADR-0097): an operator list PLUS the
 		// Evidence WORM bucket (ADR-0029), so awss3 can't be the hole in write-once.
 		ProtectedBuckets: protectedBuckets(),
@@ -30,20 +26,11 @@ func main() {
 		StateBucket:        os.Getenv("STRATT_AWSS3_STATE_BUCKET"),
 		StateCredentialRef: os.Getenv("STRATT_AWSS3_STATE_CREDENTIAL_REF"),
 	}
-	addr := env("STRATT_PLUGIN_LISTEN", ":9090")
-
-	lis, err := net.Listen("tcp", addr)
-	if err != nil {
-		log.Error("listen", "addr", addr, "error", err)
-		os.Exit(1)
-	}
-	srv := grpc.NewServer()
-	pluginv1.RegisterPluginServiceServer(srv, awss3.NewServer(cfg, log))
-	log.Info("awss3 plugin serving", "addr", addr, "region", cfg.Region, "plugin_id", cfg.PluginID, "protected", len(cfg.ProtectedBuckets))
-	if err := srv.Serve(lis); err != nil {
-		log.Error("serve", "error", err)
-		os.Exit(1)
-	}
+	pluginserve.Main(pluginserve.Config{
+		Name:   "awss3",
+		Server: awss3.NewServer(cfg, pluginserve.Logger()),
+		Fields: []any{"region", cfg.Region, "plugin_id", cfg.PluginID, "protected", len(cfg.ProtectedBuckets)},
+	})
 }
 
 // protectedBuckets is STRATT_AWSS3_PROTECTED_BUCKETS (comma-separated) plus the Evidence
@@ -63,11 +50,4 @@ func protectedBuckets() []string {
 	}
 	add(os.Getenv("STRATT_EVIDENCE_BUCKET"))
 	return out
-}
-
-func env(k, d string) string {
-	if v := os.Getenv(k); v != "" {
-		return v
-	}
-	return d
 }

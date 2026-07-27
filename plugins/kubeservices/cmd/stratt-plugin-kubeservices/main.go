@@ -9,21 +9,18 @@
 package main
 
 import (
-	"log/slog"
-	"net"
 	"os"
 
-	"google.golang.org/grpc"
+	"github.com/dstout-devops/stratt/sdk/pluginserve"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 
 	"github.com/dstout-devops/stratt/plugins/kubeservices"
-	pluginv1 "github.com/dstout-devops/stratt/sdk/stratt/plugin/v1"
 )
 
 func main() {
-	log := slog.New(slog.NewTextHandler(os.Stderr, nil))
+	log := pluginserve.Logger()
 
 	client, err := newClient()
 	if err != nil {
@@ -31,24 +28,15 @@ func main() {
 		os.Exit(1)
 	}
 	cfg := kubeservices.Config{
-		PluginID:      env("STRATT_PLUGIN_ID", "kubeservices"),
+		PluginID:      pluginserve.Env("STRATT_PLUGIN_ID", "kubeservices"),
 		Namespace:     os.Getenv("STRATT_KUBESERVICES_NAMESPACE"), // "" = all namespaces
 		ClusterDomain: os.Getenv("STRATT_KUBESERVICES_CLUSTER_DOMAIN"),
 	}
-	addr := env("STRATT_PLUGIN_LISTEN", ":9090")
-
-	lis, err := net.Listen("tcp", addr)
-	if err != nil {
-		log.Error("listen", "addr", addr, "error", err)
-		os.Exit(1)
-	}
-	srv := grpc.NewServer()
-	pluginv1.RegisterPluginServiceServer(srv, kubeservices.NewServer(cfg, client, log))
-	log.Info("kubeservices plugin serving", "addr", addr, "namespace", cfg.Namespace, "plugin_id", cfg.PluginID)
-	if err := srv.Serve(lis); err != nil {
-		log.Error("serve", "error", err)
-		os.Exit(1)
-	}
+	pluginserve.Main(pluginserve.Config{
+		Name:   "kubeservices",
+		Server: kubeservices.NewServer(cfg, client, log),
+		Fields: []any{"namespace", cfg.Namespace, "plugin_id", cfg.PluginID},
+	})
 }
 
 // newClient resolves the Kubernetes client: in-cluster first (the deployed
@@ -63,11 +51,4 @@ func newClient() (kubernetes.Interface, error) {
 		}
 	}
 	return kubernetes.NewForConfig(cfg)
-}
-
-func env(k, d string) string {
-	if v := os.Getenv(k); v != "" {
-		return v
-	}
-	return d
 }

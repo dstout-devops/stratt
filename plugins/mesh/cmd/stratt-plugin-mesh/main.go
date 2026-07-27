@@ -8,18 +8,15 @@
 package main
 
 import (
-	"log/slog"
-	"net"
 	"os"
 
-	"google.golang.org/grpc"
+	"github.com/dstout-devops/stratt/sdk/pluginserve"
 
 	"github.com/dstout-devops/stratt/plugins/mesh"
-	pluginv1 "github.com/dstout-devops/stratt/sdk/stratt/plugin/v1"
 )
 
 func main() {
-	log := slog.New(slog.NewTextHandler(os.Stderr, nil))
+	log := pluginserve.Logger()
 
 	promEndpoint := os.Getenv("STRATT_MESH_PROMETHEUS_URL")
 	if promEndpoint == "" {
@@ -34,30 +31,14 @@ func main() {
 	}, nil)
 
 	cfg := mesh.Config{
-		PluginID: env("STRATT_PLUGIN_ID", "mesh"),
+		PluginID: pluginserve.Env("STRATT_PLUGIN_ID", "mesh"),
 		// Opt in only for a mesh legitimately expected to reach zero edges; by default
 		// an empty snapshot is treated as a likely misconfiguration and holds steady.
 		AllowEmptyFullSync: os.Getenv("STRATT_MESH_ALLOW_EMPTY_FULL_SYNC") == "true",
 	}
-	addr := env("STRATT_PLUGIN_LISTEN", ":9090")
-
-	lis, err := net.Listen("tcp", addr)
-	if err != nil {
-		log.Error("listen", "addr", addr, "error", err)
-		os.Exit(1)
-	}
-	srv := grpc.NewServer()
-	pluginv1.RegisterPluginServiceServer(srv, mesh.NewServer(cfg, src, log))
-	log.Info("mesh plugin serving", "addr", addr, "plugin_id", cfg.PluginID, "prometheus", promEndpoint)
-	if err := srv.Serve(lis); err != nil {
-		log.Error("serve", "error", err)
-		os.Exit(1)
-	}
-}
-
-func env(k, d string) string {
-	if v := os.Getenv(k); v != "" {
-		return v
-	}
-	return d
+	pluginserve.Main(pluginserve.Config{
+		Name:   "mesh",
+		Server: mesh.NewServer(cfg, src, log),
+		Fields: []any{"plugin_id", cfg.PluginID, "prometheus", promEndpoint},
+	})
 }

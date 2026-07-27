@@ -77,6 +77,27 @@ func Main(cfg Config) {
 	}
 }
 
+// ServeGRPC runs an ALREADY-BUILT *grpc.Server on the conventional address.
+//
+// For a plugin whose binary chooses between several server shapes before serving — the
+// ansible-automation Connector picks a `controller` or `content` half per instance, so the
+// registration differs but the listen does not. Config.Server cannot express that; this can,
+// without asking such a plugin to hand-roll the listen loop it shares with everyone else.
+func ServeGRPC(srv *grpc.Server, listen string, log *slog.Logger, fields ...any) error {
+	if log == nil {
+		log = Logger()
+	}
+	if listen == "" {
+		listen = Env("STRATT_PLUGIN_LISTEN", ":9090")
+	}
+	lis, err := net.Listen("tcp", listen)
+	if err != nil {
+		return err
+	}
+	log.Info("plugin serving", append([]any{"addr", listen}, fields...)...)
+	return srv.Serve(lis)
+}
+
 // Serve is Main with the error returned instead of exited on.
 func Serve(cfg Config, log *slog.Logger) error {
 	if log == nil {

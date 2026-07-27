@@ -5,51 +5,31 @@
 package main
 
 import (
-	"log/slog"
-	"net"
 	"os"
 	"strings"
 
-	"google.golang.org/grpc"
+	"github.com/dstout-devops/stratt/sdk/pluginserve"
 
 	"github.com/dstout-devops/stratt/plugins/salt"
-	pluginv1 "github.com/dstout-devops/stratt/sdk/stratt/plugin/v1"
 )
 
 func main() {
-	log := slog.New(slog.NewTextHandler(os.Stderr, nil))
 	cfg := salt.Config{
-		PluginID:  env("STRATT_PLUGIN_ID", "salt"),
+		PluginID:  pluginserve.Env("STRATT_PLUGIN_ID", "salt"),
 		APIURL:    os.Getenv("STRATT_SALT_API_URL"),
-		Username:  env("STRATT_SALT_USERNAME", "stratt"),
+		Username:  pluginserve.Env("STRATT_SALT_USERNAME", "stratt"),
 		Password:  os.Getenv("STRATT_SALT_PASSWORD"),
-		Eauth:     env("STRATT_SALT_EAUTH", "pam"),
+		Eauth:     pluginserve.Env("STRATT_SALT_EAUTH", "pam"),
 		EventTags: splitTags(os.Getenv("STRATT_SALT_EVENT_TAGS")),
 		// ADR-0080 slice 2b: opt into the OS-package inventory collector (a live
 		// pkg.list_pkgs round-trip; off by default to keep the cache-only default).
 		CollectPackages: os.Getenv("STRATT_SALT_COLLECT_PACKAGES") == "true",
 	}
-	addr := env("STRATT_PLUGIN_LISTEN", ":9090")
-
-	lis, err := net.Listen("tcp", addr)
-	if err != nil {
-		log.Error("listen", "addr", addr, "error", err)
-		os.Exit(1)
-	}
-	srv := grpc.NewServer()
-	pluginv1.RegisterPluginServiceServer(srv, salt.NewServer(cfg, log))
-	log.Info("salt plugin serving", "addr", addr, "endpoint", cfg.APIURL, "plugin_id", cfg.PluginID)
-	if err := srv.Serve(lis); err != nil {
-		log.Error("serve", "error", err)
-		os.Exit(1)
-	}
-}
-
-func env(k, d string) string {
-	if v := os.Getenv(k); v != "" {
-		return v
-	}
-	return d
+	pluginserve.Main(pluginserve.Config{
+		Name:   "salt",
+		Server: salt.NewServer(cfg, pluginserve.Logger()),
+		Fields: []any{"endpoint", cfg.APIURL, "plugin_id", cfg.PluginID},
+	})
 }
 
 // splitTags parses a comma-separated tag-prefix allowlist (empty = forward all).

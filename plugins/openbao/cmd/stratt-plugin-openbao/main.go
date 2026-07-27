@@ -8,45 +8,25 @@
 package main
 
 import (
-	"log/slog"
-	"net"
 	"os"
 
-	"google.golang.org/grpc"
+	"github.com/dstout-devops/stratt/sdk/pluginserve"
 
 	"github.com/dstout-devops/stratt/plugins/openbao"
-	pluginv1 "github.com/dstout-devops/stratt/sdk/stratt/plugin/v1"
 )
 
 func main() {
-	log := slog.New(slog.NewTextHandler(os.Stderr, nil))
 	cfg := openbao.Config{
-		PluginID: env("STRATT_PLUGIN_ID", "openbao"),
-		Addr:     env("STRATT_OPENBAO_ADDR", "http://localhost:8200"),
+		PluginID: pluginserve.Env("STRATT_PLUGIN_ID", "openbao"),
+		Addr:     pluginserve.Env("STRATT_OPENBAO_ADDR", "http://localhost:8200"),
 		Token:    os.Getenv("STRATT_OPENBAO_TOKEN"),
-		Mount:    env("STRATT_OPENBAO_MOUNT", "pki"),
-		IntMount: env("STRATT_OPENBAO_INT_MOUNT", "pki_int"),
+		Mount:    pluginserve.Env("STRATT_OPENBAO_MOUNT", "pki"),
+		IntMount: pluginserve.Env("STRATT_OPENBAO_INT_MOUNT", "pki_int"),
 		KVMount:  os.Getenv("STRATT_OPENBAO_KV_MOUNT"), // empty ⇒ KV Syncer off (ADR-0099)
 	}
-	addr := env("STRATT_PLUGIN_LISTEN", ":9090")
-
-	lis, err := net.Listen("tcp", addr)
-	if err != nil {
-		log.Error("listen", "addr", addr, "error", err)
-		os.Exit(1)
-	}
-	srv := grpc.NewServer()
-	pluginv1.RegisterPluginServiceServer(srv, openbao.NewServer(cfg, log))
-	log.Info("openbao plugin serving", "addr", addr, "openbao_addr", cfg.Addr, "plugin_id", cfg.PluginID)
-	if err := srv.Serve(lis); err != nil {
-		log.Error("serve", "error", err)
-		os.Exit(1)
-	}
-}
-
-func env(k, d string) string {
-	if v := os.Getenv(k); v != "" {
-		return v
-	}
-	return d
+	pluginserve.Main(pluginserve.Config{
+		Name:   "openbao",
+		Server: openbao.NewServer(cfg, pluginserve.Logger()),
+		Fields: []any{"openbao_addr", cfg.Addr, "plugin_id", cfg.PluginID},
+	})
 }

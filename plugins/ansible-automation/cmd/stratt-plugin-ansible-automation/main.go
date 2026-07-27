@@ -28,10 +28,10 @@ package main
 
 import (
 	"log/slog"
-	"net"
 	"os"
 	"time"
 
+	"github.com/dstout-devops/stratt/sdk/pluginserve"
 	"google.golang.org/grpc"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
@@ -64,14 +64,8 @@ func main() {
 		os.Exit(1)
 	}
 
-	addr := env("STRATT_PLUGIN_LISTEN", ":9090")
-	lis, err := net.Listen("tcp", addr)
-	if err != nil {
-		log.Error("listen", "addr", addr, "error", err)
-		os.Exit(1)
-	}
-	log.Info("ansible-automation Connector serving", "addr", addr, "role", role, "plugin_id", pluginID)
-	if err := srv.Serve(lis); err != nil {
+	// The role picks the server; the listen loop is everyone's, so it comes from the SDK.
+	if err := pluginserve.ServeGRPC(srv, "", log, "plugin", "ansible-automation", "role", role, "plugin_id", pluginID); err != nil {
 		log.Error("serve", "error", err)
 		os.Exit(1)
 	}
@@ -119,7 +113,7 @@ func serveController(log *slog.Logger) *grpc.Server {
 	var broker *secretbroker.Resolver
 	if rc, err := rest.InClusterConfig(); err == nil {
 		if cs, cerr := kubernetes.NewForConfig(rc); cerr == nil {
-			ns := env("STRATT_SECRET_NAMESPACE", os.Getenv("POD_NAMESPACE"))
+			ns := pluginserve.Env("STRATT_SECRET_NAMESPACE", os.Getenv("POD_NAMESPACE"))
 			broker = secretbroker.New(cs, ns)
 			log.Info("adopt SecretBroker ready", "secretNamespace", ns)
 		} else {
@@ -130,7 +124,7 @@ func serveController(log *slog.Logger) *grpc.Server {
 	}
 
 	cfg := controller.ServerConfig{
-		PluginID:           env("STRATT_PLUGIN_ID", pluginID),
+		PluginID:           pluginserve.Env("STRATT_PLUGIN_ID", pluginID),
 		AllowEmptyFullSync: os.Getenv("STRATT_ANSIBLE_AUTOMATION_ALLOW_EMPTY_FULL_SYNC") == "true",
 	}
 	srv := grpc.NewServer()
@@ -152,18 +146,11 @@ func serveContent(log *slog.Logger) *grpc.Server {
 		ProjectID: os.Getenv("STRATT_ANSIBLE_AUTOMATION_ID"), // "" ⇒ base name of the root
 	})
 	cfg := content.ServerConfig{
-		PluginID:           env("STRATT_PLUGIN_ID", pluginID),
+		PluginID:           pluginserve.Env("STRATT_PLUGIN_ID", pluginID),
 		AllowEmptyFullSync: os.Getenv("STRATT_ANSIBLE_AUTOMATION_ALLOW_EMPTY_FULL_SYNC") == "true",
 	}
 	srv := grpc.NewServer()
 	pluginv1.RegisterPluginServiceServer(srv, content.NewServer(cfg, client, log))
 	log.Info("role=content", "root", root)
 	return srv
-}
-
-func env(k, def string) string {
-	if v := os.Getenv(k); v != "" {
-		return v
-	}
-	return def
 }
