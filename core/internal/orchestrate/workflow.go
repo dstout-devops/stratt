@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	enumspb "go.temporal.io/api/enums/v1"
 	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/workflow"
 
@@ -59,6 +60,12 @@ type DAGInput struct {
 	// Never bound by {{.launch.x}}: a Step reads the Workflow's parameters, not the
 	// change's context.
 	Context map[string]any
+	// ParentWorkflowRunID / ParentStepName link a NESTED execution back to the Step that
+	// started it (ADR-0139 D2). Empty for a top-level launch. Carried on DAGInput because
+	// RunDAG mints its own row via EnsureWorkflowRun — the trigger engine's pattern — so
+	// the link has to arrive with the input rather than be stamped afterwards.
+	ParentWorkflowRunID string
+	ParentStepName      string
 }
 
 // GateDecision is the signal payload an authorized Principal sends to a
@@ -177,6 +184,8 @@ func RunDAG(ctx workflow.Context, in DAGInput) error {
 				status = runGateStep(gctx, a, in, step, boundOutputs)
 			case step.Policy != nil:
 				status = runPolicyStep(gctx, a, in, step)
+			case step.Workflow != "":
+				status = runNestedWorkflowStep(gctx, in, step, boundOutputs)
 			case step.Action != "":
 				status, outputs = runActionStep(gctx, in, step, boundOutputs)
 			default:
@@ -391,6 +400,82 @@ func runActionStep(ctx workflow.Context, in DAGInput, step types.Step, steps map
 	return stepSucceeded, outcome.Outputs
 }
 
+// runNestedWorkflowStep runs another declared Workflow as a child of this one (ADR-0139 D1).
+//
+// It starts RunDAG — the SAME chokepoint every other launcher uses — with WorkflowRunID empty, so
+// the child mints its own row via EnsureWorkflowRun and resolves its own launch inputs. That is
+// the trigger engine's pattern verbatim, and choosing it over "extract the HTTP door's body" is
+// the difference between reusing the guarantee and re-implementing it: a nested Step CANNOT skip
+// input resolution, because the thing it starts is the thing that resolves (§1.6).
+//
+// Principal, environment, change context and Cell are INHERITED, never re-asserted (D6). That is a
+// privilege decision, not a convenience: a child that could re-assert any of them would be a
+// confused-deputy channel wearing a Workflow's clothes.
+func runNestedWorkflowStep(ctx workflow.Context, in DAGInput, step types.Step, steps map[string]json.RawMessage) string {
+	var a *Activities
+
+	// The child's inputs may bind {{.steps.x}} / {{.launch.x}} / {{.event.x}} like any other
+	// Step's arguments. Resolved in an activity for the same reason Step params are.
+	var inputs map[string]any
+	if err := workflow.ExecuteActivity(ctx, a.ResolveNestedInputs, step.Inputs, in.Event, steps, in.LaunchParams).
+		Get(ctx, &inputs); err != nil {
+		return stepFailed
+	}
+
+	cctx := workflow.WithChildOptions(ctx, workflow.ChildWorkflowOptions{
+		WorkflowID: ChildWorkflowRunID(in.WorkflowRunID, step.Name),
+		// THE default is wrong here and it is one line (ADR-0139 D2). Temporal TERMINATES
+		// children when the parent closes; a terminated RunDAG never reaches finishWorkflowRun,
+		// so its WorkflowRun row reads `running` FOREVER and its K8s Jobs go unreaped — a record
+		// that lies about a run's state, which is the §1.8 failure mode in its purest form.
+		// REQUEST_CANCEL lets the child write its own terminal status, keeping the single-writer
+		// rule that already governs Run status. Invisible until a parent is cancelled in anger.
+		ParentClosePolicy: enumspb.PARENT_CLOSE_POLICY_REQUEST_CANCEL,
+	})
+	err := workflow.ExecuteChildWorkflow(cctx, RunDAG, DAGInput{
+		WorkflowName: step.Workflow,
+		// Inherited, never re-asserted (D6).
+		Principal:    in.Principal,
+		Environment:  in.Environment,
+		Context:      in.Context,
+		LaunchParams: inputs,
+		// The nesting link (D2). Without it the child is an orphan whose existence is only
+		// inferable from timing, and §1.8's descent ladder loses a rung.
+		ParentWorkflowRunID: in.WorkflowRunID,
+		ParentStepName:      step.Name,
+	}).Get(cctx, nil)
+	if err != nil {
+		// D6b: the child's terminal status IS this Step's status. failed, denied and expired all
+		// make the parent Step fail, so `needs:` + `when: success|failure|always` keep meaning
+		// over a nested Step exactly as over any other. Left unstated, those edges would be
+		// undefined the moment a Step is a subtree.
+		return stepFailed
+	}
+	return stepSucceeded
+}
+
+// ChildWorkflowRunID is the deterministic Temporal id of a nested WorkflowRun — the parent's
+// descent rung is navigable by construction (§1.8), the same property ChildRunID gives a Step's
+// Run. Distinct prefix so a nested Workflow and a Step's Run can never collide on one id.
+func ChildWorkflowRunID(parentWorkflowRunID, step string) string {
+	return "wfnest-" + parentWorkflowRunID + "-" + step
+}
+
+// ResolveNestedInputs binds a nested Step's inputs against the DAG's namespaces. The child's own
+// `inputs` SCHEMA is then applied inside RunDAG by ResolveLaunchInputs — deliberately not here, so
+// there is exactly one place launch inputs are validated (ADR-0118 D4).
+func (a *Activities) ResolveNestedInputs(ctx context.Context, inputs map[string]any, event map[string]any, steps map[string]json.RawMessage, launch map[string]any) (map[string]any, error) {
+	if len(inputs) == 0 {
+		return nil, nil
+	}
+	ns := template.Namespaces{"event": event, "steps": stepsNamespace(steps), "launch": launch}
+	out, err := template.SubstituteParams(inputs, ns)
+	if err != nil {
+		return nil, temporal.NewNonRetryableApplicationError(err.Error(), "InvalidNestedInputs", err)
+	}
+	return out, nil
+}
+
 // runGateStep opens a Gate row and waits for an authorized decision signal
 // (or the declared timeout). The workflow is the row's single writer after
 // creation, so the §1.8 history shows every transition.
@@ -483,7 +568,8 @@ func (a *Activities) EnsureWorkflowRun(ctx context.Context, in DAGInput, tempora
 	if _, err := a.Store.GetWorkflow(ctx, in.WorkflowName); err != nil {
 		return "", temporal.NewNonRetryableApplicationError(err.Error(), "WorkflowNotFound", err)
 	}
-	wr, err := a.Store.CreateWorkflowRun(ctx, in.WorkflowName, temporalID, in.Principal, in.Trigger)
+	wr, err := a.Store.CreateNestedWorkflowRun(ctx, in.WorkflowName, temporalID, in.Principal, in.Trigger,
+		in.ParentWorkflowRunID, in.ParentStepName)
 	if err != nil {
 		return "", err
 	}

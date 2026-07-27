@@ -1,6 +1,7 @@
 # ADR 0139 — A Step may run a Workflow: nesting, and the one chokepoint
 
-- **Status:** **Proposed** (2026-07-26, steward) — **SCOPE ONLY, nothing implemented.** Charter review by
+- **Status:** **Partially accepted** — steps 1–2 implemented 2026-07-27 (parent link + the concrete
+  form, end to end); the CLASS form (D3/D4) and the `linux-onboard` conversion are outstanding. Charter review by
   hand; §1.6/§1.8/§2.4/§2.5 answered inline. **No new dependency, no new Named Kind.**
 - **Date:** 2026-07-26
 - **Deciders:** steward
@@ -265,13 +266,24 @@ Gates, or a route's approval requirements are only knowable after it launches.
   parse-time answer is stale by construction. Resolve at launch, exactly as the compiler resolves at
   compile.
 
-## Implementation — not started
+## Implementation — steps 1–2 done; 3–5 outstanding
 
-1. **`WorkflowRun` parent link** (D2) — schema, wire, `DAGInput` fields, and `EnsureWorkflowRun`
-   recording them, plus the descent read that renders a tree. Nothing else is verifiable until a nested
-   run is findable.
-2. **The concrete form** — `step.workflow` + `inputs`, declaration-time validation against the child's
-   `Inputs`, cycle + depth refusal (D5). Nesting works end to end before capabilities enter.
+1. ~~**`WorkflowRun` parent link** (D2).~~ **DONE (2026-07-27).** Migration 00045 adds
+   `parent_workflow_run_id` + `parent_step_name`, with a CHECK enforcing **both or neither** (a
+   half-written link reads as navigable and is not) and no foreign key (retention may prune the
+   parent while the child's record is still the audit trail — a dangling id is a dead end, a cascade
+   is evidence destroyed). Exposed on the API in the SAME slice, per the Consequences: a tree a human
+   can descend and an agent Principal cannot is a broken promise, not a backlog item.
+2. ~~**The concrete form.**~~ **DONE.** `step.workflow` + `inputs`, a fifth Step shape exclusive with
+   the other four. Cycle refusal names the **ring**, not just the fact; depth capped at a named
+   constant (5). Input NAMES and `required` are checked always — static facts about two declarations —
+   while VALUES defer when templated, the same split every params validator here makes.
+
+   The runtime test runs the child **for real** rather than through `OnWorkflow`, and it had to: the
+   child IS `RunDAG`, so mocking that type intercepts the parent too. That turned out to be the
+   stronger test — it caught the fixture passing an input the child did not declare, refused by the
+   child's own `ResolveLaunchInputs`. **The nested Step gets no exemption from the chokepoint**, which
+   is D1's whole claim, demonstrated rather than asserted.
 3. **The class form** (D3/D4) — `workflowCapability` + `forKind`, resolve in an Activity, inputs checked
    against every candidate.
 4. **Convert `linux-onboard`'s PROVISION leg** to `workflowCapability: provisioning` — the one leg this

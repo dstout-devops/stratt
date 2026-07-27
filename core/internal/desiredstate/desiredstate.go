@@ -429,6 +429,9 @@ func ParseDir(root string, decider policy.Decider) (Declarations, error) {
 	if err := checkBlueprintParamNames(out); err != nil {
 		return out, err
 	}
+	if err := checkNestedWorkflows(out); err != nil {
+		return out, err
+	}
 	if err := checkActuatorCapability(out); err != nil {
 		return out, err
 	}
@@ -2914,7 +2917,11 @@ type stepYAML struct {
 	Policy   *policyYAML `yaml:"policy"`
 	ViewName string      `yaml:"viewName"`
 	Actuator string      `yaml:"actuator"`
-	Action   string      `yaml:"action"`
+	// Workflow runs another declared Workflow as a nested child (ADR-0139 D1/D3);
+	// Inputs are this Step's arguments to that child's declared `inputs` schema.
+	Workflow string         `yaml:"workflow"`
+	Inputs   map[string]any `yaml:"inputs"`
+	Action   string         `yaml:"action"`
 	// ActionCapability names a capability CLASS instead of a provider's Action
 	// (ADR-0140 D3 row 2) — the estate-facing half of the Action-shaped seam.
 	ActionCapability string         `yaml:"actionCapability"`
@@ -3033,6 +3040,7 @@ func parseWorkflowFile(path string, raw []byte, opts ...ValidateOption) (string,
 		step := types.Step{
 			Name: s.Name, Needs: s.Needs, When: s.When,
 			ViewName: s.ViewName, Actuator: s.Actuator,
+			Workflow: s.Workflow, Inputs: s.Inputs,
 			Action: s.Action, ActionCapability: s.ActionCapability,
 			DryRun: s.DryRun, Params: s.Params,
 			Slices: s.Slices, CredentialRefs: s.CredentialRefs,
@@ -3098,7 +3106,19 @@ func ValidateWorkflow(w types.Workflow, opts ...ValidateOption) error {
 		isPolicy := s.Policy != nil
 		isAction := s.Action != "" || s.ActionCapability != ""
 		isActuation := s.ViewName != "" || s.Actuator != "" || s.Slices != 0
+		isNested := s.Workflow != ""
 		switch {
+		case isNested && (isGate || isPolicy || isAction || isActuation):
+			// A nested Step is a fifth SHAPE, not a modifier on the others. Combining it would
+			// give the Step two things to run and no rule to choose (§2.4).
+			return fmt.Errorf("workflow %s: step %s: a step that runs a nested workflow is not also a gate, "+
+				"policy, action or actuation", w.Name, s.Name)
+		case !isNested && len(s.Inputs) > 0:
+			// `inputs` is the nested form's argument channel. On any other shape it is a field
+			// nothing reads — admitted, checked against nothing, reported nowhere, which is the
+			// half-declaration defect this package refuses everywhere else.
+			return fmt.Errorf("workflow %s: step %s: inputs is only meaningful on a nested `workflow:` step "+
+				"(a Step's own arguments are `params`)", w.Name, s.Name)
 		case s.Action != "" && s.ActionCapability != "":
 			// Two answers to "what runs here", and a rule to choose between them is the
 			// implicit precedence §2.4 exists to refuse. Naming the class is the whole
@@ -3109,7 +3129,7 @@ func ValidateWorkflow(w types.Workflow, opts ...ValidateOption) error {
 			return fmt.Errorf("workflow %s: step %s: a step is a gate, a policy, an action, or an actuation — not multiple", w.Name, s.Name)
 		case isAction && isActuation:
 			return fmt.Errorf("workflow %s: step %s: a step is an action or an actuation, not both (actions are targetless — no viewName/actuator/slices)", w.Name, s.Name)
-		case !isGate && !isPolicy && !isAction && s.ViewName == "":
+		case !isGate && !isPolicy && !isAction && !isNested && s.ViewName == "":
 			return fmt.Errorf("workflow %s: step %s: actuation step requires viewName", w.Name, s.Name)
 		case isGate && len(s.Gate.Approvers.Principals) == 0 && len(s.Gate.Approvers.Teams) == 0:
 			return fmt.Errorf("workflow %s: step %s: gate requires approvers (principals and/or teams)", w.Name, s.Name)
@@ -3119,7 +3139,7 @@ func ValidateWorkflow(w types.Workflow, opts ...ValidateOption) error {
 			return fmt.Errorf("workflow %s: step %s: gate threshold must be >= 0", w.Name, s.Name)
 		case isPolicy && len(s.Policy.Controls) == 0:
 			return fmt.Errorf("workflow %s: step %s: policy step requires controls", w.Name, s.Name)
-		case !isGate && !isPolicy && s.Slices < 0:
+		case !isGate && !isPolicy && !isNested && s.Slices < 0:
 			return fmt.Errorf("workflow %s: step %s: slices must be >= 0", w.Name, s.Name)
 		}
 		// A policy Step's control predicates are CEL-compiled at load — fail the
@@ -3156,6 +3176,9 @@ func ValidateWorkflow(w types.Workflow, opts ...ValidateOption) error {
 				fmt.Sprintf("workflow %s step %s", w.Name, s.Name), bindable, s.Params); err != nil {
 				return err
 			}
+		case isNested:
+			// The child's interface is checked whole-tree (checkNestedWorkflows) — this
+			// per-Workflow validator cannot see the other declarations.
 		case !isGate && !isPolicy:
 			if err := validateParamsContract(s.Actuator, s.Params, opts...); err != nil {
 				return fmt.Errorf("workflow %s: step %s: %w", w.Name, s.Name, err)

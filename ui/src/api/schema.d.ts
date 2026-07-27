@@ -2113,6 +2113,10 @@ export interface components {
             /** @enum {string} */
             status: "pending" | "running" | "succeeded" | "failed" | "canceled" | "partial";
             principal?: string;
+            /** @description The WorkflowRun that launched this one as a nested Step (ADR-0139 D2), absent for a top-level run. With parentStepName it is the §1.8 descent rung a nested execution would otherwise lack — without it a nested run is an orphan whose existence is only inferable from timing. Exposed on the API in the same slice as the column, not in the UI later: every capability is identical across UI, CLI, CI and agents (§1.6), so a tree a human can descend and an agent Principal cannot is a broken promise. */
+            parentWorkflowRunId?: string;
+            /** @description The parent Step that launched this run (ADR-0139 D2). Set together with parentWorkflowRunId or not at all — the data layer enforces it, because a half-written link reads as navigable and is not. */
+            parentStepName?: string;
             /** Format: date-time */
             startedAt: string;
             /** Format: date-time */

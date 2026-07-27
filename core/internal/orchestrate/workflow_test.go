@@ -4,13 +4,16 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
 	"reflect"
 	"sort"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/mock"
+	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/testsuite"
 	"go.temporal.io/sdk/workflow"
 
@@ -526,5 +529,115 @@ func TestRunDAGAcceptsAnOrdinaryChangeContext(t *testing.T) {
 	}
 	if *status != types.RunSucceeded {
 		t.Fatalf("run status: %q", *status)
+	}
+}
+
+// ── nested Workflow Steps (ADR-0139) ─────────────────────────────────────────
+
+// A nested Step starts a CHILD RunDAG — the same chokepoint every other launcher uses — with
+// WorkflowRunID empty, so the child mints its own row and resolves its own launch inputs. §1.6 is
+// satisfied structurally rather than by discipline: a nested Step cannot skip input resolution,
+// because the thing it starts is the thing that resolves.
+//
+// The child runs FOR REAL here rather than through OnWorkflow. It has to: the child IS RunDAG, so
+// mocking that type would intercept the parent as well — and running it for real is the stronger
+// test anyway, because the parent link is asserted where production sets it, on the DAGInput
+// EnsureWorkflowRun receives.
+func TestRunDAGNestedStepStartsAChildDAG(t *testing.T) {
+	spec := types.Workflow{Name: "onboard", Steps: []types.Step{
+		{Name: "provision", Workflow: "build", Inputs: map[string]any{"name": "web-01"}},
+	}}
+	env, final, status := dagTestEnv(t, spec, nil)
+
+	var a *Activities
+	env.RegisterActivity(a.ResolveNestedInputs)
+	// The child declares the input the parent Step passes. Without this the child's own
+	// ResolveLaunchInputs REFUSES the unknown key — which is the chokepoint doing its job, and
+	// worth stating: the nested Step gets no exemption from the rule every launcher obeys.
+	child := types.Workflow{Name: "build", Inputs: json.RawMessage(
+		`{"type":"object","additionalProperties":false,"properties":{"name":{"type":"string"}}}`)}
+	env.OnActivity(a.LoadWorkflow, mock.Anything, "build").Return(child, nil)
+	var childIn DAGInput
+	env.OnActivity(a.EnsureWorkflowRun, mock.Anything, mock.Anything, mock.Anything).Return(
+		func(_ context.Context, in DAGInput, _ string) (string, error) { childIn = in; return "wr-2", nil })
+	env.OnActivity(a.MarkWorkflowRunRunning, mock.Anything, "wr-2").Return(nil)
+	env.OnActivity(a.FinishWorkflowRun, mock.Anything, "wr-2", mock.Anything, mock.Anything).Return(nil)
+
+	env.ExecuteWorkflow(RunDAG, DAGInput{
+		WorkflowRunID: "wr-1", WorkflowName: "onboard", Principal: "alice", Environment: "prod",
+	})
+	if !env.IsWorkflowCompleted() || env.GetWorkflowError() != nil {
+		t.Fatalf("nested run must complete: %v", env.GetWorkflowError())
+	}
+	if (*final)["provision"] != stepSucceeded || *status != types.RunSucceeded {
+		t.Fatalf("a succeeding child makes the parent Step succeed: %v %v", *final, *status)
+	}
+	if childIn.WorkflowName != "build" {
+		t.Errorf("the child must run the named Workflow, got %q", childIn.WorkflowName)
+	}
+	if childIn.WorkflowRunID != "" {
+		t.Errorf("WorkflowRunID must be EMPTY so the child mints its own row through "+
+			"EnsureWorkflowRun — pre-creating it would be a second launch path (§1.6): got %q", childIn.WorkflowRunID)
+	}
+	if childIn.ParentWorkflowRunID != "wr-1" || childIn.ParentStepName != "provision" {
+		t.Errorf("the child must carry the parent link, or it is an orphan whose existence is only "+
+			"inferable from timing (§1.8): got %q/%q", childIn.ParentWorkflowRunID, childIn.ParentStepName)
+	}
+	if childIn.Principal != "alice" || childIn.Environment != "prod" {
+		t.Errorf("Principal and environment are INHERITED (§2.5/ADR-0122 D2): got %q/%q",
+			childIn.Principal, childIn.Environment)
+	}
+	if childIn.LaunchParams["name"] != "web-01" {
+		t.Errorf("the Step's inputs become the child's launch params: %v", childIn.LaunchParams)
+	}
+}
+
+// D6b: a nested run's terminal status IS the parent Step's status, so `needs:` +
+// `when: success|failure|always` keep meaning over a nested Step exactly as over any other. Left
+// unstated, those edges are undefined the moment a Step is a subtree.
+func TestRunDAGNestedChildFailureFailsTheParentStep(t *testing.T) {
+	spec := types.Workflow{Name: "onboard", Steps: []types.Step{
+		{Name: "provision", Workflow: "build", Inputs: map[string]any{"name": "web-01"}},
+		{Name: "cleanup", Needs: []string{"provision"}, When: types.WhenFailure,
+			ViewName: "v", Actuator: "script"},
+	}}
+	env, final, status := dagTestEnv(t, spec, nil)
+
+	var a *Activities
+	env.RegisterActivity(a.ResolveNestedInputs)
+	env.OnActivity(a.LoadWorkflow, mock.Anything, "build").Return(
+		types.Workflow{}, temporal.NewNonRetryableApplicationError("no such workflow", "WorkflowNotFound", nil))
+
+	env.ExecuteWorkflow(RunDAG, DAGInput{WorkflowRunID: "wr-1", WorkflowName: "onboard", Principal: "alice"})
+	if !env.IsWorkflowCompleted() {
+		t.Fatal("the parent must still complete")
+	}
+	if (*final)["provision"] != stepFailed {
+		t.Fatalf("a failed child fails the parent Step: %v", *final)
+	}
+	if (*final)["cleanup"] != stepSucceeded {
+		t.Fatalf("`when: failure` must still fire over a nested Step — a DAG whose conditions are "+
+			"undefined for one node shape is a DAG nobody can reason about: %v", *final)
+	}
+	if *status != types.RunPartial && *status != types.RunFailed {
+		t.Fatalf("the parent run is not a success: %v", *status)
+	}
+}
+
+// THE trap (ADR-0139 D2), and it is one line that is invisible until a parent is cancelled in
+// anger. Temporal's default TERMINATES children when the parent closes; a terminated RunDAG never
+// reaches finishWorkflowRun, so its WorkflowRun row reads `running` FOREVER and its K8s Jobs go
+// unreaped — a record that lies about a run's state.
+func TestNestedChildUsesRequestCancelClosePolicy(t *testing.T) {
+	src, err := os.ReadFile("workflow.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(src), "PARENT_CLOSE_POLICY_REQUEST_CANCEL") {
+		t.Fatal("a nested child must start with ParentClosePolicy REQUEST_CANCEL, never the TERMINATE " +
+			"default: a terminated child never writes its terminal status, so the row reads `running` forever")
+	}
+	if strings.Contains(string(src), "PARENT_CLOSE_POLICY_TERMINATE") {
+		t.Error("TERMINATE must not appear — the whole point is that the default is wrong here")
 	}
 }

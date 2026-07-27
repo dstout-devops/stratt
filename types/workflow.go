@@ -71,6 +71,22 @@ type Step struct {
 	// exclusive with Gate/Action/actuation.
 	Policy *PolicySpec `json:"policy,omitempty"`
 
+	// Workflow makes this Step run another declared Workflow as a nested child
+	// (charter §2.3 "…convergence, nesting"; ADR-0011 deferred it, ADR-0139 D1/D3
+	// resumes it). The child is a first-class WorkflowRun linked back to this Step,
+	// not an inlining of its Steps — so descent, Gates and audit keep working.
+	//
+	// Mutually exclusive with every other Step shape. Inputs (below) are this
+	// Step's arguments to the child's declared `inputs` schema, validated at
+	// declaration against that schema — never at launch, which is too late.
+	Workflow string `json:"workflow,omitempty"`
+	// Inputs are the launch inputs handed to a nested Workflow. A SEPARATE field
+	// from Params on purpose (the same split ADR-0118 D4 made): Params are a
+	// Step's Actuator/Action arguments, Inputs are a Workflow's own declared
+	// interface, and one field meaning both depending on the Step shape is the
+	// overloading that made LaunchParams carry two concepts.
+	Inputs map[string]any `json:"inputs,omitempty"`
+
 	// Actuation fields (mirror StartRun / Trigger launch parameters).
 	ViewName string `json:"viewName,omitempty"`
 	Actuator string `json:"actuator,omitempty"`
@@ -185,4 +201,16 @@ type WorkflowRun struct {
 	// slice 5) — set once at creation. A Gate decision or cancel routes here.
 	// Empty ⇒ the built-in LocalCell.
 	Cell string `json:"cell,omitempty"`
+	// ParentWorkflowRunID / ParentStepName are the NESTING link (ADR-0139 D2): which
+	// WorkflowRun launched this one, and from which Step. Empty for a top-level run.
+	//
+	// A nested execution is a first-class WorkflowRun, not an inlining of the child's
+	// Steps into the parent DAG — descent (§1.8), Gates and audit all already work per
+	// WorkflowRun, and inlining would rebuild all three while erasing the child's own
+	// Inputs contract. Without this link a nested run is an orphan whose existence is
+	// only inferable from timing.
+	//
+	// Set together or not at all; the data layer enforces it.
+	ParentWorkflowRunID string `json:"parentWorkflowRunId,omitempty"`
+	ParentStepName      string `json:"parentStepName,omitempty"`
 }

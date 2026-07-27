@@ -2028,6 +2028,11 @@ func workflowRunToWire(wr types.WorkflowRun) WorkflowRun {
 	if wr.Principal != "" {
 		out.Principal = &wr.Principal
 	}
+	// The nesting link (ADR-0139 D2). Both or neither, mirroring the data layer's own rule.
+	if wr.ParentWorkflowRunID != "" {
+		out.ParentWorkflowRunId = &wr.ParentWorkflowRunID
+		out.ParentStepName = &wr.ParentStepName
+	}
 	return out
 }
 
