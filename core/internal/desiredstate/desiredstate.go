@@ -56,19 +56,22 @@ type Declarations struct {
 	// CapabilityBindings select which verified provider fulfils a capability class for a given
 	// Intent kind (ADR-0110 D3) — a CaC declaration form, not a Named Kind (§2 frozen).
 	CapabilityBindings []types.CapabilityBinding `json:"capabilityBindings"`
-	Triggers           []types.Trigger           `json:"triggers"`
-	Workflows          []types.Workflow          `json:"workflows"`
-	Emitters           []types.Emitter           `json:"emitters"`
-	Baselines          []types.Baseline          `json:"baselines"`
-	MCPServers         []types.MCPServer         `json:"mcpServers"`
-	Intents            []types.Intent            `json:"intents"`
-	Assignments        []types.Assignment        `json:"assignments"`
-	Blueprints         []types.Blueprint         `json:"blueprints"`
-	NotifySinks        []types.Sink              `json:"notifySinks"`
-	Subscriptions      []types.Subscription      `json:"subscriptions"`
-	Sites              []types.Site              `json:"sites"`
-	Cells              []types.Cell              `json:"cells"`
-	SCIMIdPs           []types.SCIMIdP           `json:"scimIdps"`
+	// Environments are the declared reconcile scopes (ADR-0142) — the referent for the
+	// `environments` membership filter every kind below carries. Not a Named Kind (§2 frozen).
+	Environments  []types.Environment  `json:"environments"`
+	Triggers      []types.Trigger      `json:"triggers"`
+	Workflows     []types.Workflow     `json:"workflows"`
+	Emitters      []types.Emitter      `json:"emitters"`
+	Baselines     []types.Baseline     `json:"baselines"`
+	MCPServers    []types.MCPServer    `json:"mcpServers"`
+	Intents       []types.Intent       `json:"intents"`
+	Assignments   []types.Assignment   `json:"assignments"`
+	Blueprints    []types.Blueprint    `json:"blueprints"`
+	NotifySinks   []types.Sink         `json:"notifySinks"`
+	Subscriptions []types.Subscription `json:"subscriptions"`
+	Sites         []types.Site         `json:"sites"`
+	Cells         []types.Cell         `json:"cells"`
+	SCIMIdPs      []types.SCIMIdP      `json:"scimIdps"`
 	// AdmissionControls are the estate's admission policy (ADR-0073 §7.4b): CEL
 	// predicates over each declaration's manifest, evaluated at load through the
 	// PDP port. A deny rejects the declaration (§7.4c).
@@ -309,6 +312,13 @@ func ParseDir(root string, decider policy.Decider) (Declarations, error) {
 	out.CapabilityBindings = capBindings
 	sort.Slice(out.CapabilityBindings, func(i, j int) bool { return out.CapabilityBindings[i].Name < out.CapabilityBindings[j].Name })
 
+	environments, err := parseKind(kindDirs(roots, "environments"), true, parseEnvironmentFile)
+	if err != nil {
+		return out, err
+	}
+	out.Environments = environments
+	sort.Slice(out.Environments, func(i, j int) bool { return out.Environments[i].Name < out.Environments[j].Name })
+
 	triggers, err := parseKind(kindDirs(roots, "triggers"), true,
 		func(path string, raw []byte) (string, types.Trigger, error) {
 			return parseTriggerFile(path, raw, actuatorIDs)
@@ -444,6 +454,12 @@ func ParseDir(root string, decider policy.Decider) (Declarations, error) {
 		return out, err
 	}
 	if err := checkProvisioningBuildInputs(out); err != nil {
+		return out, err
+	}
+	// Last, because it is whole-estate referential integrity: every kind's `environments`
+	// filter must name a declared scope (ADR-0142 D2). Runs after all kinds are parsed
+	// because the declared set and the referencing set are both estate-wide.
+	if err := validateEnvironmentRefs(out); err != nil {
 		return out, err
 	}
 	return out, nil

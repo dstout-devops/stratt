@@ -1,0 +1,14 @@
+# dev — the default development reconcile scope (ADR-0142 D1, ADR-0057).
+#
+# An `environments:` filter is matched against THIS name; STRATT_ENVIRONMENT=dev selects it.
+# Declaring it is what makes a typo (`environments: [dev1]`) a load error instead of a
+# declaration that silently reconciles in no environment at all (§1.8).
+#
+# It carries no region and no DNS zone ON PURPOSE (ADR-0142 D4): a consumer inheriting
+# those would make one Intent document mean different things per environment, which is the
+# env-conditional-values shape ADR-0118 D1 forbids. Until that is reviewed properly, the
+# compliant shape is one declaration per environment carrying flat values.
+name: dev
+description: >
+  Local/dev reconcile scope — the turnkey stack (kind + compose spine) and the reference
+  estate's Assignments, Baselines and the awx-mirror governance Baselines.
