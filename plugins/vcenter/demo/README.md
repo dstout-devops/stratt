@@ -60,9 +60,10 @@ coordinate. It prints the declared **fidelity** and the live graph counts up fro
 The turnkey runner does these for you; do them yourself to _feel_ both halves.
 
 1. **Stand up the floor.** `task demo:vsphere-only:run` stages [estate/](estate/) into the declarations
-   mount and brings up kind + the spine + strattd + the vCenter plugin + vspheresim. The vCenter Actuator +
-   Actions are **boot-wired** (the chart derives `STRATT_VCENTER_PLUGIN_ADDR` from the plugin, so
-   strattd registers the Syncer _and_ `vcenter/create-vm` at boot — ADR-0113).
+   mount and brings up kind + the spine + strattd + the vCenter plugin + vspheresim. The **Syncer** is
+   boot-wired (the chart derives `STRATT_VCENTER_PLUGIN_ADDR` from the plugin — ADR-0113). The
+   **Actions** are not: ADR-0103 moved all fifteen into an Actuator declaration, which this estate
+   carries — dispatch is reviewable in Git, and verified against the plugin's own Manifest at enable.
 2. **Watch the graph come alive.** The Syncer's OBSERVE loop enumerates vspheresim and projects the
    topology. Open the UI (`cd ui && npm run dev`) → **Views** → `dev-vms`, `availability-zones`, and
    `datastores`. Or `GET /api/v1/views/dev-vms/entities`. This is the read-model — rebuildable, not a

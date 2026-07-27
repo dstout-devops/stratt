@@ -1257,7 +1257,7 @@ tasks:
       # force-recreate so every run starts from a clean default topology (no leftover web-01).
       - docker compose -f {{.ROOT_DIR}}/deploy/dev/docker-compose.yml up -d --force-recreate --wait vspheresim
       - task: image:kind-load
-      - task: image:plugin # the vcenter Syncer + the boot-wired create-vm Action
+      - task: image:plugin # the vcenter Syncer; create-vm is registered by the demo's Actuator
         vars: {PLUGIN: vcenter}
       - task: demo:vsphere-only:stage
       - |
@@ -1289,8 +1289,9 @@ tasks:
   demo:ec2-only:stage:
     # Stage the ec2-only demo's SELF-CONTAINED estate (ADR-0116) into the inline-declarations path —
     # its authz grant + gate-only aws-dev CredentialRef + compute-build Workflow + the ec2-instances
-    # View. The awsec2 Actuator/Actions + instance Syncer are boot-wired via the plugin's hostEnv
-    # (values-demo-ec2), NOT a CaC actuator, so the estate carries no actuator file. Delivered as CaC.
+    # View. The instance SYNCER is boot-wired via the plugin's hostEnv (values-demo-ec2); the Actions
+    # are not — ADR-0103 moved them into an Actuator declaration, so the estate carries one. Saying
+    # otherwise here is what left this demo dispatching an Action nothing registered. Delivered as CaC.
     desc: Stage the ec2-only demo estate into the inline-declarations path
     cmds:
       - rm -rf {{.ROOT_DIR}}/deploy/charts/stratt/dev/declarations

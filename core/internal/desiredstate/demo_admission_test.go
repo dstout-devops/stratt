@@ -50,6 +50,58 @@ func TestDemoEstatesAdmitThePluginsTheyUse(t *testing.T) {
 	}
 }
 
+// TestDemoEstatesDeclareTheActionsTheyDispatch refuses a demo estate whose Workflow
+// dispatches an Action that no Actuator in that same estate registers.
+//
+// The sibling of the admission guard above, and the other half of the same breakage.
+// ADR-0103 moved every plugin's INVOKE Actions out of main.go and into the plugin's
+// Actuator declaration; a demo estate is a separate tree (ADR-0116 D1), so a demo that
+// was written when the Actions were boot-wired kept dispatching a name that nothing
+// declares. Both the vsphere and ec2 demos did, and both of their manifests still said
+// "boot-wired via hostEnv, so the estate carries no actuator file".
+//
+// The failure lands AFTER the gate — `no action registered as "awsec2/create-vm"` —
+// which is the worst place for it: an operator has approved a build that then cannot
+// run. Cheap to check statically, so it is checked statically.
+func TestDemoEstatesDeclareTheActionsTheyDispatch(t *testing.T) {
+	roots := demoEstates(t)
+	if len(roots) == 0 {
+		t.Fatal("no demo estates found — the layout changed and this guard is checking nothing")
+	}
+	for _, root := range roots {
+		t.Run(demoLabel(root), func(t *testing.T) {
+			declared := map[string]bool{}
+			for _, f := range yamlsIn(t, filepath.Join(root, "actuators")) {
+				var act struct {
+					ActionNames []string `yaml:"actionNames"`
+				}
+				decodeYAML(t, f, &act)
+				for _, n := range act.ActionNames {
+					declared[n] = true
+				}
+			}
+			for _, f := range yamlsIn(t, filepath.Join(root, "workflows")) {
+				var wf struct {
+					Steps []struct {
+						Name   string `yaml:"name"`
+						Action string `yaml:"action"`
+					} `yaml:"steps"`
+				}
+				decodeYAML(t, f, &wf)
+				for _, s := range wf.Steps {
+					if !strings.Contains(s.Action, "/") || declared[s.Action] {
+						continue
+					}
+					t.Errorf("%s: step %q dispatches %q, which no Actuator in this demo estate declares in "+
+						"actionNames — since ADR-0103 an Action is registered by a DECLARATION, not by the "+
+						"plugin's boot env, so the Run fails after the gate with \"no action registered\"",
+						f, s.Name, s.Action)
+				}
+			}
+		})
+	}
+}
+
 // pluginContractsUsedBy returns plugin name → the reference that needs it.
 func pluginContractsUsedBy(t *testing.T, repo, root string) map[string]string {
 	t.Helper()

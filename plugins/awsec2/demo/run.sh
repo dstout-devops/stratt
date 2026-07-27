@@ -52,6 +52,22 @@ done
 
 echo "demo: EC2 is empty to start — ec2-instances View: $(count ec2-instances) instances"
 
+# ── Wait for the awsec2 Actuator to be DISPATCHABLE (status.enabled), not merely declared ─────────
+# The reconcile controller declares the Actuator from the staged estate, then RunActuators dials
+# stratt-awsec2 and registers its Actions on its own cadence (ADR-0103, no restart). The Workflow
+# reconciling is NOT the same fact: this demo launched as soon as the Workflow existed and failed
+# with `no action registered as "awsec2/create-vm"` — after the gate, which is the worst place for
+# a race to surface. /actuators/{name} reports the live registry status (§1.8), so gate on it.
+echo "demo: awaiting awsec2 Actuator registration (status.enabled)…"
+enabled=""
+for _ in $(seq 1 45); do
+    enabled=$(api GET "/actuators/awsec2" 2>/dev/null | jq -r '.status.enabled // false')
+    [ "$enabled" = "true" ] && break
+    sleep 2
+done
+[ "$enabled" = "true" ] || { echo "FAIL: awsec2 Actuator never reached status.enabled=true"; exit 1; }
+echo "  awsec2 Actuator registered (awsec2/create-vm dispatchable)"
+
 # The instance identity is SUPPLIED AT LAUNCH, not baked into the Workflow (ADR-0120 D2). This
 # demo has no Intent/Compute — it drives the build Workflow directly — so it plays the part the
 # provisioning reconcile plays in the reference estate: it names which instance to build and the
@@ -66,7 +82,16 @@ launch_body=$(jq -nc --arg i "$INSTANCE" '{
     ordinal: 1,
     projectKind: "host",
     labels: { fleet: "web", "stratt.intent/instance": $i },
-    params: { region: "us-east-1", instanceType: "t3.micro", ami: "ami-0linuxbaseline000" }
+    params: { region: "us-east-1", instanceType: "t3.micro", ami: "ami-0linuxbaseline000" },
+    # Placement, EXPLICITLY EMPTY rather than omitted. The Workflow forwards
+    # {{.launch.placement.subnet}} — identical to the shipped compute-build, which is the
+    # point of converging them — and the substituter refuses an unknown field outright
+    # (ADR-0083 D5): it does not treat an absent parent as an empty leaf. So omitting
+    # placement fails the Run at ResolveActionStepParams with "template references unknown
+    # field", which is exactly what it did once the two copies were converged and nobody
+    # re-ran this demo. Empty strings are what an UNPLACED instance means, and the Action
+    # skips the axis for each (ADR-0123 D2).
+    placement: { subnet: "", availabilityZone: "" }
   }
 }')
 run_id=$(api POST "/workflows/${WORKFLOW}/runs" -d "$launch_body" | jq -r '.id')

@@ -60,9 +60,11 @@ declared **fidelity** up front.
 ## Walk it by hand (the narrated path)
 
 1. **Stand up the floor.** `task demo:ec2-only:run` stages [estate/](estate/) into the declarations
-   mount and brings up kind + the spine + strattd + the awsec2 plugin + floci. The awsec2 Actions +
-   instance Syncer are **boot-wired** (the chart derives `STRATT_AWS_PLUGIN_ADDR` from the plugin, and
-   `STRATT_AWS_INTERVAL` enables the Syncer — ADR-0095).
+   mount and brings up kind + the spine + strattd + the awsec2 plugin + floci. The instance **Syncer**
+   is boot-wired (the chart derives `STRATT_AWS_PLUGIN_ADDR` from the plugin, and `STRATT_AWS_INTERVAL`
+   enables it — ADR-0095). The **Actions** are not: ADR-0103 moved all eleven into an Actuator
+   declaration, which this estate carries — dispatch is reviewable in Git, and verified against the
+   plugin's own Manifest at enable.
 2. **Launch the build Workflow.** In the UI (`cd ui && npm run dev`) → **Workflows → compute-build → Run**
    (or `POST /api/v1/workflows/compute-build/runs`). It parks on the gate.
 3. **Approve the gate** as a `platform-admins` member. The `build` Step runs `awsec2/create-vm` — a real
