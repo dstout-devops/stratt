@@ -910,6 +910,20 @@ func run(ctx context.Context, log *slog.Logger) error {
 			FacetNamespaces: []string{
 				"vm.config", "vm.runtime", "net.guest", "net.subnet",
 				"storage.datastore", "compute.pool", "net.dvswitch",
+				// mgmt.address — the OBSERVED reach coordinate (ADR-0143). The
+				// mgmt.address schema has named this writer since ADR-0084 and the grant
+				// never carried it, so the projection could not have been written even if
+				// the plugin had emitted one: a vSphere VM had no reach coordinate and
+				// provision→configure was structurally open.
+				//
+				// This makes mgmt.address MULTI-SOURCE (declared + vcenter), which
+				// ADR-0060 explicitly permits — it dropped the per-namespace lock naming
+				// "vSphere and a cloud Syncer would too". NOT declared authoritative:
+				// the two write disjoint Entities in practice, and where they DO correlate
+				// onto one (a CaC host that is also a vSphere VM), the fail-safe read omits
+				// the value and raises a contention Finding rather than picking one (§2.4).
+				// That is the correct outcome, so there is nothing to declare here.
+				"mgmt.address",
 			},
 			LabelKeys: []string{"vcenter.name", "source"},
 			// dns.fqdn is a shared cross-source scheme: only honored because the

@@ -21,12 +21,12 @@ graph TD
   estate_as_code["estate-as-code<br/><small>0055 0056 0057 0103 0113 0116<br/>0118 0119 0120 0122 0123 0132<br/>0134 0135 0136 0137 0138 0139<br/>0142</small>"]
   findings_drift["findings-drift<br/><small>0019 0020 0033 0043 0080 0085<br/>0128 0129 0130 0133</small>"]
   foundation["foundation<br/><small>0001 0002 0004 0005 0006 0008<br/>0108 0109 0116 0137 0138 0141</small>"]
-  graph_model["graph-model<br/><small>0015 0017 0041 0042 0059 0060<br/>0079 0080 0081 0082 0084 0085<br/>0096 0114 0115 0119 0120 0123<br/>0126 0127 0128 0129 0130 0132<br/>0133</small>"]
+  graph_model["graph-model<br/><small>0015 0017 0041 0042 0059 0060<br/>0079 0080 0081 0082 0084 0085<br/>0096 0114 0115 0119 0120 0123<br/>0126 0127 0128 0129 0130 0132<br/>0133 0143</small>"]
   intent_compiler["intent-compiler<br/><small>0023 0030 0036 0055 0058 0083<br/>0085 0114 0118 0119 0123</small>"]
   orchestration["orchestration<br/><small>0010 0011 0018 0027 0031 0063<br/>0118 0122 0125 0134 0139 0140</small>"]
   plugin_port["plugin-port<br/><small>0046 0047 0048 0049 0051 0053<br/>0054 0103 0117 0121 0124 0125<br/>0127 0131 0137 0138 0140 0141</small>"]
   policy_governance["policy-governance<br/><small>0061 0062 0063 0064 0065 0066<br/>0067 0068 0069 0070 0071 0072<br/>0073 0074 0075 0076 0122</small>"]
-  provisioning["provisioning<br/><small>0017 0058 0095 0096 0107 0110<br/>0111 0112 0113 0114 0115 0120<br/>0123</small>"]
+  provisioning["provisioning<br/><small>0017 0058 0095 0096 0107 0110<br/>0111 0112 0113 0114 0115 0120<br/>0123 0143</small>"]
   state_artifacts["state-artifacts<br/><small>0016 0029 0093 0097 0105 0112</small>"]
   substrate_ops["substrate-ops<br/><small>0013 0032 0040 0044 0045 0049<br/>0077 0078 0093 0101 0102 0124<br/>0131 0142</small>"]
   ui["ui<br/><small>0003 0012 0020 0024 0090 0091<br/>0116 0121</small>"]
@@ -305,6 +305,7 @@ Graph model — Entity/Facet/Relation/Contract primitives, projection & liveness
 - [ADR-0130](0130-awx-local-accounts-and-team-membership.md) — AWX's local accounts are an estate fact, not an identity source and never an authz one
 - [ADR-0132](0132-awx-labels-and-schedule-shape.md) — Two "mechanical" projection gaps that were not: AWX labels, and what a schedule actually runs
 - [ADR-0133](0133-execution-environments-and-instance-groups.md) — An AWX execution environment is a supply-chain fact; an instance group is a placement model we already have
+- [ADR-0143](0143-the-observed-reach-coordinate.md) — The reach coordinate is observed, and it is a name: the vcenter Syncer projects `mgmt.address`
 
 ### intent-compiler
 
@@ -411,6 +412,7 @@ Provisioning — declare & build infra (Intent -> builder -> machines), provisio
 - [ADR-0115](0115-vsphere-read-breadth.md) — vSphere read breadth: the inventory graph (region/AZ reuse, uncovered-Facet posture)
 - [ADR-0120](0120-provisioning-joins-the-parameter-plane.md) — Provisioning joins the parameter plane: a Finding carries its own launch spec
 - [ADR-0123](0123-keyed-placement-aware-spread.md) — Keyed, placement-aware spread: identity survives a zone-list edit, and declared placement finally reaches the build
+- [ADR-0143](0143-the-observed-reach-coordinate.md) — The reach coordinate is observed, and it is a name: the vcenter Syncer projects `mgmt.address`
 
 ### state-artifacts
 
@@ -607,3 +609,4 @@ UI — React shell, schema-driven rendering, Views, descent, the first-party cli
 | [0140](0140-a-capability-is-invoked-not-named.md) | orchestration, plugin-port |
 | [0141](0141-the-plugin-sdk-is-go-the-port-is-the-contract.md) | foundation, plugin-port |
 | [0142](0142-environments-are-declared-not-just-referenced.md) | estate-as-code, substrate-ops |
+| [0143](0143-the-observed-reach-coordinate.md) | graph-model, provisioning |

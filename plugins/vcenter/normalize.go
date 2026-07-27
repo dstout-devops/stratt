@@ -88,6 +88,24 @@ func normalizeNetwork(n mo.Network) (*pluginv1.ObservedEntity, error) {
 	}, nil
 }
 
+// reachCoordinate picks the value of the mgmt.address Facet from what vCenter observed:
+// the guest's FQDN when it reports a dotted name, else its IP, else nothing.
+//
+// "Else nothing" is a real outcome and the honest one. A VM with no tools, or one that has
+// not finished booting, genuinely has no known reach coordinate yet — projecting a guess
+// would make an unreachable host look reachable, and the next Run would fail somewhere far
+// from the cause (§1.8). Absence is observable: the Entity is in the graph with net.guest
+// and without mgmt.address, which is exactly "built, not yet reachable".
+func reachCoordinate(vm mo.VirtualMachine) string {
+	if vm.Guest == nil {
+		return ""
+	}
+	if h := strings.TrimSpace(vm.Guest.HostName); strings.Contains(h, ".") {
+		return strings.ToLower(h)
+	}
+	return strings.TrimSpace(vm.Guest.IpAddress)
+}
+
 // normalizeVM maps one VirtualMachine to an ObservedEntity. The plugin emits
 // dns.fqdn when the guest reports a dotted name — it is the content-expert. The
 // core-side host decides whether this plugin (by tier + grant) may WRITE that
@@ -138,6 +156,37 @@ func normalizeVM(vm mo.VirtualMachine) (*pluginv1.ObservedEntity, error) {
 			return nil, fmt.Errorf("vcenter: marshal facet net.guest: %w", err)
 		}
 		facets["net.guest"] = raw
+	}
+
+	// mgmt.address — the OBSERVED reach coordinate (ADR-0143, ADDR-1).
+	//
+	// The mgmt.address schema has specified this writer since ADR-0084 ("the vcenter
+	// Syncer from the VM IP") and nothing ever implemented it, so a vSphere-provisioned
+	// VM had no reach coordinate and could not be targeted at all — provision→configure
+	// (ADR-0017) was structurally open on every substrate. This closes the vSphere half.
+	//
+	// It is a NAME first, and that ordering is the decision. A reach coordinate is
+	// whatever the connection mechanism resolves — ansible renders it as `ansible_host`,
+	// which takes a hostname perfectly well — and a DNS name survives the address changing
+	// underneath it, which is the entire reason estates stopped hard-coding addresses. The
+	// IP is a fact we already project on net.guest for diagnosis; it is the fallback, not
+	// the intent.
+	//
+	// A BARE hostname is deliberately NOT used: whether `web-01` resolves depends on search
+	// domains we neither control nor observe, so promising it as a reach coordinate would be
+	// guessing. Dotted ⇒ usable; undotted ⇒ we prefer the address we know routes.
+	//
+	// This is field precedence WITHIN one source over its own observations — not precedence
+	// between sources, which is what §2.4 forbids. Cross-source resolution stays the declared
+	// -authority mechanism (ADR-0060): two sources projecting mgmt.address for one Entity
+	// resolve to the declared authority, or the read is OMITTED and a contention Finding
+	// surfaces it. Nothing here silently outranks another source.
+	if addr := reachCoordinate(vm); addr != "" {
+		raw, err := json.Marshal(map[string]any{"address": addr})
+		if err != nil {
+			return nil, fmt.Errorf("vcenter: marshal facet mgmt.address: %w", err)
+		}
+		facets["mgmt.address"] = raw
 	}
 
 	return &pluginv1.ObservedEntity{Kind: "vm", IdentityKeys: ids, Labels: labels, Facets: facets}, nil
