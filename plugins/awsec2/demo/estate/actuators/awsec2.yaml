@@ -39,6 +39,13 @@ actionNames:
 # schemes and label keys are exactly what these Actions need. The awsec2 SYNCER keeps its own boot
 # grant and stays the authority for the Facets the demo then observes.
 identitySchemes: [aws.instanceId, aws.vpcId, aws.subnetId, aws.securityGroupId, aws.volumeId]
-labelKeys: [aws.region, aws.name, stratt.managed]
+# The CORRELATION LABEL is granted explicitly, and it is not optional garnish: the provisioning
+# loop closes on it. A build projects the Entity it made carrying stratt.intent/instance, and the next
+# reconcile reads ONLY that key back to see the desired unit as built. It was missing here, and
+# the failure mode is why it stayed missing: Host.toUpsert DROPS an ungranted label key rather
+# than refusing the projection, so the Entity still lands, the Run still goes green, and the sole
+# symptom is a build offered again on the next pass. TestProvisioningActuatorsGrantTheirCorrelationLabel
+# now refuses a `provisions` advertisement without it.
+labelKeys: [aws.region, aws.name, stratt.managed, stratt.intent/instance]
 provisions:
   Compute: compute-build
