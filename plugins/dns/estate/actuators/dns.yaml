@@ -1,0 +1,41 @@
+# dns — a `provisioning` capability PROVIDER (ADR-0110 D3 / ADR-0144), and the provider
+# `Intent/DnsRecord` never had. It has been a kind, a schema and reconcile support with
+# nothing behind it since ADR-0059; declaring this Actuator is what makes the kind
+# buildable (together with dnsrecord.v2, which is what made it DECLARABLE — v1 still
+# required the builder/buildWorkflow seam ADR-0110 removed).
+#
+# TWO SURFACES, ONE PLUGIN, and the split is forced by the shipped seams rather than
+# chosen (ADR-0144 D5):
+#
+#   - The ACTIONS below are the SINGLETON path. An Intent/DnsRecord declares a record
+#     whose data the estate states — a service alias, a delegation, a name for something
+#     Stratt does not manage — and its gated build Workflow launches dns/register.
+#   - The ACTUATOR (Apply, contracts/actuators/dns.input) is the FLEET path: one record
+#     per target in a View, whose data is that target's OWN observed coordinate. An
+#     actuation Step requires a viewName (refused at load without one) and an Action is
+#     targetless, so these genuinely are two shapes and not one with a flag.
+name: dns
+address: stratt-dns:9090
+pluginIdentity: dns
+tier: trusted
+dryRunnable: true
+provides: [provisioning]
+actionNames:
+  - dns/register
+  - dns/deregister
+# The Action grant, entity-only: RecordActionResult projects Kind + IdentityKeys + Labels
+# + Relations and NO Facet, so facetNamespaces here would be authority for a path that
+# does not exist. mgmt.address belongs to the SYNCER half (connectors/dns.yaml), which is
+# authoritative for it — a build never writes the coordinate it merely intended.
+identitySchemes: [dns.fqdn]
+# stratt.intent/singleton is the correlation label the build's project-back carries and
+# the ONLY key ProvisionedSingletons reads back. Granted explicitly because an ungranted
+# label key is DROPPED at the governor rather than refused: the Entity would still land,
+# the Run would still go green, and the record's own Finding would be offered forever.
+labelKeys: [stratt.intent/singleton, stratt.managed]
+# The per-kind build Workflow (ADR-0110 D3). Sole DnsRecord provider today, so
+# Intent/DnsRecord auto-binds here with no explicit capability-binding; a cloud-API DNS
+# provider is the sibling that would make an explicit binding necessary — which is the
+# honest test of whether RFC 2136 is a transport or a contract (§1.5).
+provisions:
+  DnsRecord: dns-record-build

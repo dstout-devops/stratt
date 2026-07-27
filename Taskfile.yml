@@ -1046,6 +1046,92 @@ tasks:
       - mkdir -p {{.KEYDIR}}
       - ssh-keygen -t ed25519 -N "" -C stratt-web-machine -f {{.KEYDIR}}/id_ed25519
 
+  dev:dns:key:
+    # The dev estate's TSIG key — the ONE secret the dns plugin signs every UPDATE and
+    # AXFR with, and the same one BIND is configured to accept. Generated once, never
+    # committed (§2.5), rendered into the server's config at container start rather than
+    # baked into the image layer.
+    #
+    # 32 random bytes, base64 — the shape `tsig-keygen` emits for hmac-sha256. Written as
+    # a KEY=VALUE env file so compose can carry it without the secret ever appearing on a
+    # command line, where it would land in a shell history and a process table.
+    desc: Generate the dev DNS TSIG key (idempotent, git-ignored)
+    vars:
+      KEYDIR: "{{.ROOT_DIR}}/deploy/dev/dns"
+    status:
+      - test -f {{.KEYDIR}}/tsig.env
+    cmds:
+      - mkdir -p {{.KEYDIR}}
+      - |
+        set -eu
+        printf 'STRATT_DNS_TSIG_SECRET=%s\n' "$(head -c 32 /dev/urandom | base64)" >{{.KEYDIR}}/tsig.env
+        chmod 600 {{.KEYDIR}}/tsig.env
+
+  dev:dns:image:
+    # REAL BIND 9, not a simulator (see deploy/dev/dns/Dockerfile for why that
+    # distinction is load-bearing here and not elsewhere in this harness).
+    desc: "Build the dev authoritative DNS server image (real BIND 9, TSIG-gated)"
+    vars:
+      DNS_IMAGE: '{{.DNS_IMAGE | default "stratt/dev-dns:dev"}}'
+    cmds:
+      - docker build -q -t {{.DNS_IMAGE}} {{.ROOT_DIR}}/deploy/dev/dns
+
+  dev:dns:up:
+    # A standalone authoritative server on the vspheresim network, so the SAME network
+    # holds the guests and the resolver — which is what lets the proof reach a machine
+    # BY THE NAME STRATT REGISTERED rather than by docker's embedded DNS.
+    desc: "Run the dev authoritative DNS server (needs dev:dns:key)"
+    deps: [dev:dns:key, dev:dns:image]
+    vars:
+      DNS_IMAGE: '{{.DNS_IMAGE | default "stratt/dev-dns:dev"}}'
+      DNS_NETWORK: '{{.GUEST_NETWORK | default "vspheresim"}}'
+      DNS_ZONE: '{{.DNS_ZONE | default "estate.stratt.test"}}'
+      DNS_PORT: '{{.DNS_PORT | default "15353"}}'
+    cmds:
+      - docker network inspect {{.DNS_NETWORK}} >/dev/null 2>&1 || docker network create {{.DNS_NETWORK}}
+      - docker rm -f stratt-dev-dns >/dev/null 2>&1 || true
+      - |
+        set -eu
+        docker run -d --name stratt-dev-dns \
+          --network {{.DNS_NETWORK}} \
+          --env-file {{.ROOT_DIR}}/deploy/dev/dns/tsig.env \
+          -e STRATT_DNS_ZONE={{.DNS_ZONE}} \
+          -p 127.0.0.1:{{.DNS_PORT}}:53/tcp -p 127.0.0.1:{{.DNS_PORT}}:53/udp \
+          {{.DNS_IMAGE}} >/dev/null
+        echo "dev-dns: {{.DNS_ZONE}} on 127.0.0.1:{{.DNS_PORT}} (container stratt-dev-dns on network {{.DNS_NETWORK}})"
+
+  dev:dns:down:
+    desc: Stop the dev authoritative DNS server
+    cmds:
+      - docker rm -f stratt-dev-dns >/dev/null 2>&1 || true
+
+  dev:dns:proof:
+    # The chain ADDR-1 exists for: declare a name -> the plugin writes a REAL record into
+    # a REAL authoritative server -> the Syncer reads it back as a reach coordinate ->
+    # and then USE it, reaching a vspheresim guest at the name Stratt registered, with
+    # that server as the only resolver that knows it.
+    #
+    # Needs dev:dns:up. It runs its own guest container (the vspheresim guest image — the
+    # one machine image this harness has that answers a port) rather than depending on
+    # vspheresim itself: what is under test here is the NAME, not the substrate.
+    desc: "Prove register -> observe -> REACH -> falsify against real BIND 9 (needs dev:dns:up)"
+    deps: [dev:vspheresim:guest-image]
+    dir: plugins/dns
+    env:
+      STRATT_DNS_SERVER: '{{.STRATT_DNS_SERVER | default "127.0.0.1:15353"}}'
+      STRATT_DNS_ZONE: '{{.DNS_ZONE | default "estate.stratt.test"}}'
+      STRATT_DNS_TSIG_NAME: '{{.DNS_TSIG_NAME | default "stratt-dev"}}'
+      # Read from the generated env file rather than passed on a command line (§2.5).
+      STRATT_DNS_TSIG_ENV: "{{.ROOT_DIR}}/deploy/dev/dns/tsig.env"
+      # Set together with the server so the REACH half is never quietly skipped: a
+      # registration proof that passes while nothing was reached is the failure mode
+      # this target exists to close.
+      STRATT_DNS_GUEST_NETWORK: '{{.GUEST_NETWORK | default "vspheresim"}}'
+      STRATT_DNS_GUEST_IMAGE: '{{.GUEST_IMAGE | default "stratt/vspheresim-guest:dev"}}'
+      STRATT_DNS_GUEST_KEY: "{{.ROOT_DIR}}/deploy/dev/managed-web/id_ed25519"
+    cmds:
+      - go test ./ -run LiveDns -v -count=1
+
   dev:managed-web:up:
     desc: Deploy the REAL sshd/nginx managed node for the ADR-0084 convergence demo (keypair + machine-credential Secret + node, idempotent)
     deps: [tools:kubectl, dev:machine-key]

@@ -1,0 +1,15 @@
+; The dev zone's INITIAL state — deliberately almost empty.
+;
+; Nothing here names a host. Every A/AAAA/CNAME this zone ends up holding was written by
+; Stratt through RFC 2136, which is what makes the live proof falsifiable: if the record
+; is there, the plugin put it there, because it started with an SOA and an NS and nothing
+; else. A seeded record would make "the name resolves" pass for the wrong reason.
+$TTL 300
+@   IN  SOA ns.__ZONE__. hostmaster.__ZONE__. (
+        1          ; serial — named bumps it on every dynamic update
+        3600       ; refresh
+        600        ; retry
+        604800     ; expire
+        300 )      ; negative TTL
+@   IN  NS  ns.__ZONE__.
+ns  IN  A   127.0.0.1

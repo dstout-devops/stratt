@@ -1,0 +1,47 @@
+# dns — the zone Syncer (ADR-0144), and the SOLE producer of a REGISTERED reach
+# coordinate. It AXFRs the declared zones and projects what is actually there: an A/AAAA
+# record names its own Entity; a CNAME names its canonical target and gives it the alias
+# as a coordinate. DNS stays the system of record for names (§1.2) — the graph is a
+# projection of the zone, rebuildable by re-reading it.
+#
+# WHY A SYNCER AND NOT THE BUILD. The Actions in this plugin's Actuator CREATE records;
+# nothing there writes mgmt.address. A build asserts what it INTENDED, a zone read
+# reports what is TRUE, and only the second is a projection. So the loop is: cause it,
+# then observe it (ADR-0144 D5).
+name: dns
+class: syncer
+address: stratt-dns:9090
+pluginIdentity: dns
+tier: trusted
+source:
+  kind: dns
+  name: dns-dev
+  # The authoritative server, as a coordinate rather than a credential: the TSIG key is
+  # never here (§2.5). One server for UPDATE and AXFR alike — a provider that wrote to
+  # one and read from another could report a record it did not create.
+  endpoint: dns://stratt-dnssim:53/estate.stratt.test
+facetNamespaces: [mgmt.address]
+# ── The DECLARED AUTHORITY (ADR-0060), and the first one in this estate ────────────────
+#
+# `dns` is now the third writer of mgmt.address, alongside `declared` (a CaC literal) and
+# `vcenter` (the observed guest name, ADR-0143). Three writers with NO declared authority
+# is not a tie — FacetValuesByEntities OMITS the value entirely when several sources write
+# one namespace and none is authoritative, fail-safe. So registering a name for a machine
+# would make that machine UNREACHABLE, at dispatch, far from the change. ADR-0143 D3 said
+# there was "nothing to declare" because its two writers touched disjoint Entities; this
+# writer deliberately overlaps, which ends that.
+#
+# The semantics are the ones we want anyway: WHEN THE ESTATE HAS REGISTERED A NAME FOR A
+# MACHINE, THAT NAME IS HOW THE MACHINE IS REACHED — it outranks whatever the substrate
+# incidentally calls the box, which stays fully visible on net.guest/instance.* for
+# diagnosis. Explicit, in Git, and at-most-one per namespace, enforced by the store (§2.4).
+authoritativeFacetNamespaces: [mgmt.address]
+# dns.fqdn ONLY, and it is a SHARED cross-source scheme — which is the entire mechanism:
+# correlating onto the Entity `declared` or `vcenter` already projects is how a machine
+# gets the estate's name. Shared schemes require the trusted tier (ADR-0046 finding #4).
+identitySchemes: [dns.fqdn]
+# NO tombstoneSchemes, deliberately. dns.fqdn is shared, so tombstoning on it would let a
+# zone that stopped mentioning a name delete the vCenter VM behind it. The cost is real
+# and stated in ADR-0144: core has no facet-retraction path, so a record removed outside
+# Stratt leaves its coordinate standing. That is a graph write-path gap, not a DNS one.
+intervalSeconds: 30

@@ -1,0 +1,31 @@
+// The dev estate's authoritative server config, rendered at container start
+// (entrypoint.sh substitutes __ZONE__ / __TSIG_NAME__ / __TSIG_SECRET__).
+//
+// The two `key`-scoped clauses at the bottom are the whole point of the harness: the
+// zone accepts an update and answers a transfer ONLY for a TSIG-signed request. An
+// estate whose DNS accepted unsigned updates would let this plugin appear to work while
+// proving nothing about §2.5, and the failure would surface in production as a REFUSED
+// nobody can read.
+options {
+    directory "/var/bind";
+    listen-on { any; };
+    listen-on-v6 { none; };
+    allow-query { any; };
+    // Authoritative only. A resolver here would let a query for a name we never wrote
+    // succeed by recursion, which is precisely the false pass this harness must not give.
+    recursion no;
+    dnssec-validation no;
+    pid-file "/var/run/named/named.pid";
+};
+
+key "__TSIG_NAME__" {
+    algorithm hmac-sha256;
+    secret "__TSIG_SECRET__";
+};
+
+zone "__ZONE__" IN {
+    type master;
+    file "/var/bind/__ZONE__.zone";
+    allow-update { key "__TSIG_NAME__"; };
+    allow-transfer { key "__TSIG_NAME__"; };
+};

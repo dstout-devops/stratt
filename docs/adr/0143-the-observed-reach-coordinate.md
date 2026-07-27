@@ -83,6 +83,13 @@ in a design is worth a second look, and this one is inside a single writer's own
 
 ### D3 — `mgmt.address` becomes multi-source; NO authority is declared, deliberately
 
+> **AMENDED by [ADR-0144](0144-the-registered-reach-coordinate.md) D4 (2026-07-27).** This decision
+> rested on the two writers touching disjoint Entities in practice, so there was "nothing to
+> declare". ADR-0144 adds a THIRD writer — the `dns` Syncer — that deliberately overlaps, and with
+> three non-authoritative owners `FacetValuesByEntities` omits the value entirely (fail-safe), which
+> would make a registered machine unreachable. `dns` is therefore the declared authority for
+> `mgmt.address`, in CaC. Everything below still holds for the two writers it describes.
+
 The grant addition makes `declared` and `vcenter` both registered owners. ADR-0060 explicitly permits
 this — it dropped the per-namespace lock naming _"vSphere and a cloud Syncer would too"_ — and the store
 has supported it since migration `00035`.
@@ -107,6 +114,12 @@ hostname, one level up.
 The **registered** producer (`Intent/DnsRecord` — declare the name, a provider creates it, and it is
 then a fact Stratt CAUSED rather than assumed) remains, and is its own slice. It ships today as a kind
 with a schema and reconcile support and no provider.
+
+> **SHIPPED in [ADR-0144](0144-the-registered-reach-coordinate.md).** Building it found that the two
+> producers are not alternatives but a COMPOSITION: registration binds the estate's own stable name to
+> a coordinate observation already produced, and cannot conjure reachability where none is observed.
+> It also found that the kind was undeclarable rather than merely provider-less — `dnsrecord` never
+> received the ADR-0110 v2 that every other named singleton did.
 
 ## Charter alignment
 

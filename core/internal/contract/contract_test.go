@@ -255,8 +255,14 @@ func TestPinsAreStable(t *testing.T) {
 	// Worth recording because the ADR's census was wrong: it read "22 of 152" by counting 13
 	// actuator FILES plus 9 action DIRECTORIES, but those directories hold 78 files. The real
 	// self-contract set was 91 documents, ~4× what the decision was sized against.
-	if len(all) != 69 {
-		t.Fatalf("expected 69 embedded documents, got %d — the shipped set is the SEAM set now "+
+	// 69 → 70: +intents/dnsrecord.v2 (ADR-0144 D6). The ADR-0110 straggler — every other
+	// named singleton got a v2 carrying `requires: [provisioning]` and dnsrecord did not,
+	// which left the kind not merely unused but UNDECLARABLE (v1 REQUIRES the removed
+	// builder/buildWorkflow seam and closes with additionalProperties: false). An Intent
+	// SPEC schema is a seam by D3's definition, so it stays embedded here rather than
+	// moving into the dns plugin's tree: the kind belongs to the estate, not the provider.
+	if len(all) != 70 {
+		t.Fatalf("expected 70 embedded documents, got %d — the shipped set is the SEAM set now "+
 			"(ADR-0138 D3/D4); a plugin's own contracts live in plugins/<n>/contracts/", len(all))
 	}
 	versions := map[string]int{}

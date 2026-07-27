@@ -3,7 +3,20 @@
   "subsystems": {
     "foundation": {
       "title": "Foundation — charter authority, control plane, language/tooling, monorepo, meta-process",
-      "adrs": [1, 2, 4, 5, 6, 8, 108, 109, 116, 137, 138, 141],
+      "adrs": [
+        1,
+        2,
+        4,
+        5,
+        6,
+        8,
+        108,
+        109,
+        116,
+        137,
+        138,
+        141
+      ],
       "depends_on": []
     },
     "graph-model": {
@@ -34,7 +47,8 @@
         130,
         132,
         133,
-        143
+        143,
+        144
       ],
       "depends_on": [
         "foundation"
@@ -42,7 +56,26 @@
     },
     "plugin-port": {
       "title": "Sovereign plugin port — the dark-matter substrate, transports, runtime registry",
-      "adrs": [46, 47, 48, 49, 51, 53, 54, 103, 117, 121, 124, 125, 127, 131, 137, 138, 140, 141],
+      "adrs": [
+        46,
+        47,
+        48,
+        49,
+        51,
+        53,
+        54,
+        103,
+        117,
+        121,
+        124,
+        125,
+        127,
+        131,
+        137,
+        138,
+        140,
+        141
+      ],
       "depends_on": [
         "foundation"
       ]
@@ -75,7 +108,8 @@
         131,
         132,
         133,
-        136
+        136,
+        144
       ],
       "depends_on": [
         "plugin-port",
@@ -187,7 +221,8 @@
         115,
         120,
         123,
-        143
+        143,
+        144
       ],
       "depends_on": [
         "intent-compiler",

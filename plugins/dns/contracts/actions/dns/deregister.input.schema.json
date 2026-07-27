@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "stratt:contract:actions/dns/deregister.input:v1",
+  "title": "dns/deregister input",
+  "description": "Input Contract for the dns/deregister Action (ADR-0144): remove an RRset from a zone. By (name, type) and NEVER by value — removing \"the A record whose data is X\" silently does nothing once the data has drifted, which is exactly when a removal matters. Idempotent: removing an absent RRset is a no-op success. Note the honest limit this Action exists inside — core has no facet-retraction path, so removing the record does not by itself retract the mgmt.address the Syncer already projected; it stops the zone from re-asserting it, and the removal is at least a deliberate act with a Run behind it (ADR-0144 D5).",
+  "type": "object",
+  "required": ["zone", "name", "type"],
+  "properties": {
+    "zone": { "type": "string", "minLength": 1, "description": "The zone to update." },
+    "name": { "type": "string", "minLength": 1, "description": "The record's owner name, bare or qualified within the zone." },
+    "type": { "enum": ["A", "AAAA", "CNAME"], "description": "Which RRset to remove." }
+  },
+  "additionalProperties": false
+}

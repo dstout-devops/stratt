@@ -1,0 +1,46 @@
+# dns-fleet-register — the FLEET half of ADR-0144 D5: "every machine in this View has a
+# name in this zone". One actuation Step over a View, one record per target.
+#
+# THE POINT IS WHAT IS ABSENT. There is no address anywhere in this file, and none in the
+# View it targets. The record's owner name is the TARGET's name and its data is that
+# target's OWN reach coordinate, which the core resolved from the graph and handed across
+# as ApplyTarget.address — an address ⇒ an A, a name ⇒ a CNAME to it. A hand-written
+# address is exactly the thing ADDR-1 calls wrong, and this is the shape that removes it.
+#
+# A target with no coordinate is reported and SKIPPED, never guessed at: registration
+# binds a name to a coordinate the substrate already produced (ADR-0143's observed
+# producer), it cannot conjure reachability. "Built, not yet reachable" stays visibly
+# that, rather than acquiring a name that resolves nowhere (§1.8).
+#
+# Gated, because this changes how the estate is reached — the same reason
+# dns-record-build is. A Trigger may launch it on a cadence; the Gate still applies.
+name: dns-fleet-register
+inputs:
+  type: object
+  additionalProperties: false
+  required: [zone]
+  properties:
+    zone:
+      type: string
+      description: The zone every target is registered into. One zone per Run — a zone is a naming domain, and which machine belongs in which is the View's business, not a rule hidden here.
+    ttl:
+      type: integer
+      description: Record TTL in seconds (default 300 — short, because these names track machines that get rebuilt).
+steps:
+  - name: approve
+    gate:
+      approvers:
+        teams: [platform-admins]
+      timeoutSeconds: 86400
+  - name: register
+    needs: [approve]
+    # The View is the target set; the Actuator reads each target's coordinate from it.
+    viewName: registered-hosts
+    actuator: dns
+    params:
+      zone: "{{.launch.zone}}"
+    # NO facetWriteScope: this Step writes no Facet at all. mgmt.address is the Syncer's,
+    # and an as-applied write-back here would be the build asserting a coordinate it only
+    # intended — and would carry Run provenance, which never matches the declared
+    # authoritative syncer-owner, so it would land as a contending row rather than the
+    # answer (ADR-0144 D5).

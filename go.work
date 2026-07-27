@@ -18,6 +18,7 @@ use (
 	./plugins/chef
 	./plugins/crossplane
 	./plugins/declared
+	./plugins/dns
 	./plugins/helm
 	./plugins/kubecontainers
 	./plugins/kubeservices

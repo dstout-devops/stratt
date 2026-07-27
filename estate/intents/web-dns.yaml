@@ -1,0 +1,34 @@
+# web-dns — Intent/DnsRecord (ADR-0059/0144): declare a NAME, and let the estate's own
+# name become the coordinate everything dials.
+#
+# This is the first Intent/DnsRecord in this repo, and the kind waited two ADRs for it:
+# it has been a kind, a schema and reconcile support with no provider since ADR-0059, and
+# — quieter but worse — it was UNDECLARABLE, because dnsrecord's schema still required
+# the builder/buildWorkflow seam ADR-0110 removed from every other singleton. dnsrecord.v2
+# fixed that; the `dns` plugin's Actuator supplies the provider (ADR-0144).
+#
+# WHAT IT TEACHES, which is the reason it is a CNAME and not an A record. `params.data`
+# is a NAME, not an address — the platform's own coordinate for the pod. ADDR-1's
+# complaint is that a machine's reach coordinate ends up hand-written in Git; a record
+# whose data was `10.x.y.z` would move that literal one file over rather than remove it.
+# An alias says the true thing instead: this estate's stable name for the web tier is
+# `web.estate.stratt.test`, and it points at whatever the platform currently calls that
+# workload. Rebuild the workload behind it and the estate's name does not move.
+#
+# `requires: [provisioning]` names the capability CLASS, never a provider (§1.5). `dns`
+# is the sole DnsRecord provider today, so it auto-binds with no capability-binding; a
+# cloud-API DNS provider would make an explicit binding necessary, which is the honest
+# test of whether RFC 2136 is a transport or the contract.
+#
+# The reconcile surfaces a GATED build (a provision/web-dns Finding); nothing here
+# auto-launches, because registering a name changes how the estate is reached (§5 Flow 1).
+name: web-dns
+kind: Intent/DnsRecord
+spec:
+  projectKind: dns-record
+  requires: [provisioning]
+  params: # OPAQUE — typed by dns/register's own input Contract downstream (§1.5)
+    zone: estate.stratt.test
+    name: web
+    type: CNAME
+    data: managed-web.stratt.svc.cluster.local

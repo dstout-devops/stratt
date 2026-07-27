@@ -1,0 +1,66 @@
+# dns-record-build — the GATED build Workflow an Intent/DnsRecord launches (ADR-0059 §5
+# Flow 1, ADR-0144). The provisioning reconcile surfaces a provision/<intent> Finding;
+# an operator launches THIS Workflow to write the record. The dns/register Action makes
+# the RFC 2136 update and projects the record back with Run provenance, carrying the
+# stratt.intent/singleton correlation label so the next reconcile sees it built and the
+# Finding resolves.
+#
+# Registering a name MUTATES how an estate is reached — the name a Run will dial
+# tomorrow — so this sits behind an approval Gate like every other build. The launch IS
+# the gate (§5 Flow 1) and the approve Step adds a platform-admin decision on top.
+#
+# WHAT WRITES THE COORDINATE: not this. mgmt.address comes from the dns SYNCER reading
+# the zone back (ADR-0144 D5). A build asserts what it intended; only a read reports what
+# is true, and only the second is a projection (§1.2).
+name: dns-record-build
+# The per-singleton launch interface (ADR-0120 D2, ADR-0059 D4 path). It declares EXACTLY
+# what the Steps below bind and nothing more — the load-time rule from ADR-0123 D3, which
+# refuses a declared input no Step consumes because such an input is accepted at launch and
+# then silently dropped. SingletonLaunchParams supplies more than this (singleton,
+# intentKind, name, placement); FilterToDeclared drops the rest, and dropping them here is
+# the honest outcome: a DNS record sits in a zone, not in a subnet, and its owner name is
+# the record's (params.name), not the Intent's — an Intent name is estate-scoped and a
+# record name is zone-scoped, and forcing them equal would be a constraint with no reason.
+inputs:
+  type: object
+  additionalProperties: false
+  required: [projectKind, labels, params]
+  properties:
+    projectKind:
+      type: string
+      description: The Entity kind the built record projects as (dns-record).
+    labels:
+      type: object
+      additionalProperties: { type: string }
+      description: >
+        Labels the projection carries, INCLUDING stratt.intent/singleton — the ONLY key
+        ProvisionedSingletons reads, so any other spelling builds an Entity that never
+        resolves its own Finding.
+    params:
+      type: object
+      additionalProperties: true
+      description: Opaque provider build params, typed by dns/register's own input Contract, never here (§1.5).
+
+steps:
+  - name: approve
+    gate:
+      approvers:
+        teams: [platform-admins]
+      timeoutSeconds: 86400 # 24h to approve
+  - name: register
+    needs: [approve]
+    action: dns/register
+    params:
+      # Every value comes from the LAUNCH, and there is not one literal record detail in
+      # this file. That is the rule ADR-0059 D3's builder check enforces: a builder may
+      # not contain any literal belonging to a declaration of the kind it builds. Both
+      # Intent/DnsRecord declarations in an estate resolve to this one Workflow, so a
+      # hardcoded zone or name here would have one record silently overwrite another.
+      zone: "{{.launch.params.zone}}"
+      name: "{{.launch.params.name}}"
+      type: "{{.launch.params.type}}"
+      data: "{{.launch.params.data}}"
+      projectKind: "{{.launch.projectKind}}"
+      # labels already carries stratt.intent/singleton, so this builds whichever record
+      # its Finding is for rather than only the first one anyone declared.
+      labels: "{{.launch.labels}}"

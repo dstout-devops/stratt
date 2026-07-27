@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "stratt:contract:actuators/dns.input:v1",
+  "title": "dns Step params",
+  "description": "Input Contract for the dns Actuator (ADR-0144 D5, the FLEET half): register every machine in a View under the estate's own name in one zone. Hand-written — derivation ladder rung 1 (§2.2).\n\nNOTE WHAT IS ABSENT. There is no `name` and no `data`, and that is the design rather than an omission: the record's owner name is the TARGET's name and its data is the TARGET's own reach coordinate, which the core resolved from the graph and handed across as ApplyTarget.address. A `data` here would be one value for a whole View, and a declared address is the thing this producer exists to stop (ADDR-1). A target with no coordinate is reported and SKIPPED — registration binds a name to a coordinate the substrate already produced; it cannot conjure reachability, and a name that resolves nowhere is worse than an absent one (§1.8).\n\nRegistering names MUTATES how an estate is reached, so a Workflow that dispatches this belongs behind a Gate.",
+  "type": "object",
+  "required": ["zone"],
+  "properties": {
+    "zone": {
+      "type": "string",
+      "minLength": 1,
+      "description": "The zone every target is registered into, e.g. `estate.example`. One zone per Step: a zone is a naming domain, and a Step that wrote several would need a rule for which target goes where — a rule that belongs in the View, not here."
+    },
+    "ttl": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 604800,
+      "description": "Record TTL in seconds (default 300). Short by default: these names track machines that get rebuilt."
+    }
+  },
+  "additionalProperties": false
+}
