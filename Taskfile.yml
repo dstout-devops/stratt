@@ -623,6 +623,42 @@ tasks:
     cmds:
       - deploy/dev/netbox-bootstrap.sh
 
+  dev:vspheresim:up:
+    # vspheresim (plugins/vcenter/cmd/vspheresim) — a vCenter API whose VMs have REAL
+    # container guests, so provision→configure can be exercised on vSphere at all.
+    # The stock vcsim image stops at the API: create-vm executes and the inventory is
+    # real, but no guest boots, so a provisioned VM never gets a reachability
+    # coordinate (ADR-0143) and nothing can be converged onto it.
+    #
+    # Guests get `<vm>.${DOMAIN}` as their hostname so the coordinate resolves to a
+    # NAME rather than an address — the branch ADR-0143 D1 prefers, and one that would
+    # otherwise never be exercised because docker defaults a container's hostname to
+    # its own id.
+    desc: "Run vspheresim on :8989 — a vCenter API with real container-backed guests"
+    vars:
+      GUEST_IMAGE: '{{.GUEST_IMAGE | default "public.ecr.aws/docker/library/alpine:latest"}}'
+      DOMAIN: '{{.DOMAIN | default "dev.stratt.test"}}'
+      LISTEN: '{{.LISTEN | default "127.0.0.1:8989"}}'
+    cmds:
+      - |
+        set -eu
+        cd {{.ROOT_DIR}}/plugins/vcenter
+        go run ./cmd/vspheresim \
+          -listen {{.LISTEN}} \
+          -guest-image {{.GUEST_IMAGE}} \
+          -guest-domain {{.DOMAIN}}
+
+  dev:vspheresim:proof:
+    # The provision→observe→reach chain end to end: create a VM through the real
+    # vcenter/create-vm Action with ordinary vSphere params, then poll Observe until
+    # mgmt.address appears — and assert it is a NAME. Needs dev:vspheresim:up running.
+    desc: "Prove provision→reach against vspheresim (needs dev:vspheresim:up)"
+    dir: plugins/vcenter
+    env:
+      VSPHERESIM_URL: '{{.VSPHERESIM_URL | default "http://127.0.0.1:8989/sdk"}}'
+    cmds:
+      - go test ./ -run LiveVsphereSim -v -count=1
+
   dev:vsphere:bootstrap:
     desc: Seed the dev vcsim with an enterprise topology — regions (datacenters), AZs (clusters), sovereignty (tenant folders), VLAN portgroups (ADR-0113)
     dir: plugins/vcenter
