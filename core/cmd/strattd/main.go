@@ -1290,20 +1290,25 @@ func run(ctx context.Context, log *slog.Logger) error {
 		controllers = append(controllers, homeSupervise(sourceName, host.Register, func(cctx context.Context) error {
 			return host.SyncLoop(cctx, interval)
 		}))
-		// Same host, NEUTRAL cert-issuer reconcile Actuator (ADR-0050): Plan/Apply/
-		// Destroy the cert lifecycle. Model Y (no plan-artifact) → no plan store.
-		if err := registerPluginActuator("cert-issuer", host, true, grant, nil); err != nil {
-			return err
-		}
-		// Administrative PKI Actions (ADR-0098 E2): CA admin, NOT the retired per-cert
-		// lifecycle (that stays the reconcile Actuator above). Not DryRunnable (thin
-		// OpenBao /pki calls; create-intermediate fails closed on an existing CA).
-		for _, name := range []string{"cert-issuer/create-intermediate", "cert-issuer/rotate-crl"} {
-			if err := registerPluginAction(name, host, false); err != nil {
-				return err
-			}
-		}
-		log.Info("openbao plugin ready (cert-issuer Syncer + reconcile Actuator + PKI admin Actions)", "addr", addr)
+		// The cert-issuer reconcile Actuator (ADR-0050) and the administrative PKI Actions
+		// (ADR-0098 E2) used to be registered HERE, with the grant above — the same grant the
+		// Syncer uses, because one Go value served both roles. They are now a CaC declaration:
+		// plugins/openbao/estate/actuators/cert-issuer.yaml, reconciled into the dispatch table
+		// by the connectorregistry on every replica with no strattd restart (ADR-0103).
+		//
+		// The blocker was never the transport. It was that ADR-0140 D4 cannot capability-type the
+		// cert reconcile while the declared `certissuer` provider (`openbao`) and the Actuator
+		// actually serving it (`cert-issuer`) are different objects — resolution lands on a
+		// declaration with an empty facet grant and the reconcile's write-back silently vanishes.
+		// The declaration is also strictly more capable than this block was: it carries its own
+		// NARROWER grant (cert.identity + cert.expiry, not the Syncer's five), which is the least
+		// authority the Actuator actually needs.
+		//
+		// Deleted rather than kept as a fallback, for the reason the ansible/script migration
+		// records: two registration paths for one name collide at §2.4 and make "which grant is
+		// live?" unanswerable from Git. A floor that declares no cert-issuer has none — the
+		// intended CaC posture, and why the reference estate declares it.
+		log.Info("openbao plugin ready (cert Syncer; cert-issuer Actuator + PKI Actions are CaC)", "addr", addr)
 	} else {
 		log.Info("no openbao plugin configured (STRATT_OPENBAO_PLUGIN_ADDR empty); cert syncer idle")
 	}

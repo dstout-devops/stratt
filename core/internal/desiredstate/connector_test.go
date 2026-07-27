@@ -1,6 +1,7 @@
 package desiredstate
 
 import (
+	"slices"
 	"strings"
 	"testing"
 
@@ -243,16 +244,46 @@ func TestParseRealEstate(t *testing.T) {
 	if !haveProvider {
 		t.Fatalf("estate/actuators/s3-statestore.yaml must parse into a statestore provider; got %+v", d.Actuators)
 	}
-	// openbao is the ADR-0106 multi-capability provider (provides:[keycustodian, certissuer]).
+	// openbao provides keycustodian ONLY (ADR-0106): an enablement-gate class with no resolve Action.
 	var haveOpenBao bool
 	for _, a := range d.Actuators {
-		if a.Name == "openbao" && len(a.Provides) == 2 &&
-			a.Provides[0] == "keycustodian" && a.Provides[1] == "certissuer" && len(a.ActionNames) == 0 {
+		if a.Name == "openbao" && len(a.Provides) == 1 &&
+			a.Provides[0] == "keycustodian" && len(a.ActionNames) == 0 {
 			haveOpenBao = true
 		}
 	}
 	if !haveOpenBao {
-		t.Fatalf("estate/actuators/openbao.yaml must parse into a keycustodian+certissuer provider (no resolve Action); got %+v", d.Actuators)
+		t.Fatalf("openbao must parse into a keycustodian provider (no resolve Action); got %+v", d.Actuators)
+	}
+	// certissuer MOVED off `openbao` onto the cert-issuer Actuator that actually serves it, and the
+	// grant is why: a capability-typed reconcile resolves to the PROVIDER declaration, and `openbao`
+	// carries no facetNamespaces — so cert-reconcile's facetWriteScope would fall wholly outside the
+	// grant and the write-back would vanish. The provider must BE the mechanism (ADR-0140 D2).
+	//
+	// Both declarations advertising it would be TWO providers of one class — resolution fails closed
+	// as ambiguous (§2.4). They are the same pod, but core cannot know that and must not guess.
+	for _, a := range d.Actuators {
+		if a.Name == "openbao" && slices.Contains(a.Provides, "certissuer") {
+			t.Errorf("openbao must NOT still advertise certissuer — two declarations of one class are two providers")
+		}
+	}
+	var haveCertIssuer bool
+	for _, a := range d.Actuators {
+		if a.Name == "cert-issuer" && slices.Contains(a.Provides, "certissuer") {
+			haveCertIssuer = true
+			// The grant that made this migration necessary. Narrower than the boot grant it
+			// replaced (which carried the cert Syncer's five namespaces because one Go value
+			// served both roles) and sufficient for cert-reconcile's facetWriteScope.
+			for _, ns := range []string{"cert.identity", "cert.expiry"} {
+				if !slices.Contains(a.FacetNamespaces, ns) {
+					t.Errorf("cert-issuer must grant %q — cert-reconcile's facetWriteScope names it, and the "+
+						"effective write-back is grant ∩ scope (ADR-0054): got %v", ns, a.FacetNamespaces)
+				}
+			}
+		}
+	}
+	if !haveCertIssuer {
+		t.Fatalf("cert-issuer must be a DECLARED certissuer provider, not a boot-registered Actuator; got %+v", d.Actuators)
 	}
 	// opentofu-s3 is the first real `requires:` CONSUMER (ADR-0105 D4): requires:[statestore].
 	var haveConsumer bool

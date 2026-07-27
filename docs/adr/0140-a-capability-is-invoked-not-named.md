@@ -273,6 +273,31 @@ them to the plugin — a third failure that today is silently a missing string.
 
 4. **`actuator:` form + reconcile** (D4) — `actuatorCapability:` on Trigger/Baseline, with
    `facetWriteScope` checked against every candidate's grant at declaration.
+
+   > **PREREQUISITE CORRECTED (2026-07-27), and it was not the one this ADR named.** Consequences
+   > below says D4 is gated on ADR-0138 D5 because `certissuer`'s provider is "boot-registered
+   > today". D5 shipped; D4 was still unbuildable, for a different and more basic reason: **the
+   > declared `certissuer` provider and the Actuator serving it were two different objects pointing
+   > at the same pod.** `openbao` declared `provides: [certissuer]` and carried **no
+   > `facetNamespaces` at all**; `cert-issuer` — the Actuator `cert-reconcile` actually dispatches
+   > to — was registered in `main.go` with a grant hardcoded in Go.
+   >
+   > So capability-typing the reconcile would have resolved to `openbao` and put
+   > `facetWriteScope: [cert.identity, cert.expiry]` **wholly outside** the bound grant: the
+   > reconcile converges OpenBao and the graph is never updated. That is this ADR's own D4 trap —
+   > _"`facetWriteScope` is authority, not configuration"_ — reached not by a later rebind but by
+   > the **first** bind, which is worse than the case the trap describes.
+   >
+   > **`cert-issuer` is now a CaC Actuator declaration** (ADR-0103, following ansible/script), and
+   > `certissuer` moved onto it: the provider IS the mechanism, which is D2's rule applied to the
+   > Actuator-shaped row. Both declarations advertising the class would be two providers of one
+   > class and resolution would fail closed as ambiguous (§2.4) — they are the same pod, but core
+   > cannot know that and must not guess. The boot block is deleted, not kept as a fallback: two
+   > registration paths for one name collide at §2.4 and make "which grant is live?" unanswerable
+   > from Git. The declaration is also strictly **narrower** than the block it replaces — the boot
+   > grant carried the cert Syncer's five namespaces because one Go value served both roles.
+   >
+   > D4 itself is now buildable and remains outstanding.
 5. **`vsphere-subnet-build` moves** to the vcenter plugin — the test that the Action-shaped half closed,
    and the fix for a `provisions` map currently split across two trees.
 6. **Extend `plugins:boundary` check 3 to the per-kind maps** (`provisions`/`remediates`/
