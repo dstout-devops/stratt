@@ -1687,6 +1687,8 @@ export interface components {
             viewName: string;
             /** @description Names the Actuator as an OPAQUE routing key (ADR-0046). A baseline is read-only by platform invariant, so the named Actuator must be read-only-capable (a DryRunnable plugin) — an Actuator that cannot run read-only is rejected terminally at launch, not by a closed enum here. */
             actuator?: string;
+            /** @description A capability CLASS (e.g. certissuer) instead of an Actuator name (ADR-0140 D4): the declaration says WHAT must converge and the bound provider is resolved at launch, so a provider swap edits no declaration. Mutually exclusive with `actuator`. Because the provider is resolved rather than named, `facetWriteScope` is validated at load against EVERY candidate provider's grant — the effective write-back is grant ∩ scope (ADR-0054), so a scope that fits one provider and exceeds another is a write that silently stops happening on a rebind, and a dropped write-back reports as nothing at all. */
+            actuatorCapability?: string;
             params?: Record<string, never>;
             /** Format: int64 */
             slices?: number;
@@ -1903,6 +1905,8 @@ export interface components {
             /** @description Binds a parametrized View's {{.param.x}} placeholders; values may reference the firing event ({{.event.x}}) — ADR-0024. */
             viewParams?: Record<string, never>;
             actuator?: string;
+            /** @description A capability CLASS (e.g. certissuer) instead of an Actuator name (ADR-0140 D4): the declaration says WHAT must converge and the bound provider is resolved at launch, so a provider swap edits no declaration. Mutually exclusive with `actuator`. Because the provider is resolved rather than named, `facetWriteScope` is validated at load against EVERY candidate provider's grant — the effective write-back is grant ∩ scope (ADR-0054), so a scope that fits one provider and exceeds another is a write that silently stops happening on a rebind, and a dropped write-back reports as nothing at all. */
+            actuatorCapability?: string;
             params?: Record<string, never>;
             /** Format: int64 */
             slices?: number;

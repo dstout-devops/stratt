@@ -610,6 +610,24 @@ func (a *Activities) ResolveActionStepParams(ctx context.Context, action, capCla
 	return raw, nil
 }
 
+// ResolveActuatorCapability maps a capability CLASS to the bound provider's ACTUATOR name
+// (ADR-0140 D4) — the Actuator-shaped sibling of ResolveActionCapability, for a Baseline that
+// names a class. An activity for the same two reasons: it reads the store, and a workflow function
+// must stay deterministic across replay.
+func (a *Activities) ResolveActuatorCapability(ctx context.Context, capClass string) (string, error) {
+	if a.ResolveActuator == nil {
+		return "", temporal.NewNonRetryableApplicationError(
+			fmt.Sprintf("declaration names capability %q but no capability resolver is configured", capClass),
+			"CapabilityResolverUnavailable", nil)
+	}
+	name, err := a.ResolveActuator(ctx, capClass)
+	if err != nil {
+		return "", temporal.NewNonRetryableApplicationError(
+			fmt.Sprintf("resolve actuator capability %q: %v", capClass, err), "CapabilityUnresolvable", err)
+	}
+	return name, nil
+}
+
 // ResolveActionCapability maps a capability CLASS to the bound provider's advertised
 // implementation (ADR-0140 D1/D3 row 2). An activity because it reads the store, and because a
 // workflow function must not — a rebind between run and replay would rewrite history.

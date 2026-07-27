@@ -852,6 +852,15 @@ func run(ctx context.Context, log *slog.Logger) error {
 		}
 		return connReg.ResolveCapabilityAction(ctx, capClass)
 	}
+	// ResolveActuator (ADR-0140 D4): the Actuator-shaped sibling, for a Baseline or Trigger that
+	// names a capability class. Same lazy read of connReg, same visible failure when it is absent —
+	// a capability-typed reconcile must never fall back to launching against an empty actuator.
+	acts.ResolveActuator = func(ctx context.Context, capClass string) (string, error) {
+		if connReg == nil {
+			return "", fmt.Errorf("capability resolver not ready (runtime registry disabled)")
+		}
+		return connReg.ResolveCapabilityActuator(ctx, capClass)
+	}
 	w.RegisterActivity(acts)
 	if err := w.Start(); err != nil {
 		return fmt.Errorf("temporal worker: %w", err)
@@ -1628,7 +1637,12 @@ func run(ctx context.Context, log *slog.Logger) error {
 	}
 
 	// ── trigger engine (ADR-0018: Emitter events × CEL → launches) ───────
-	engine := &triggerengine.Engine{Store: store, Bus: bus, Temporal: temporalClient, Log: log}
+	engine := &triggerengine.Engine{
+		Store: store, Bus: bus, Temporal: temporalClient, Log: log,
+		// A schedule/event Trigger naming a capability resolves through the same registry the
+		// Baseline path uses (ADR-0140 D4) — one resolution, one binding, one audit (§1.6).
+		ResolveActuator: acts.ResolveActuator,
+	}
 	controllers = append(controllers, func(cctx context.Context) {
 		if err := engine.Run(cctx); err != nil && !errors.Is(err, context.Canceled) {
 			log.Error("trigger engine stopped", "error", err)

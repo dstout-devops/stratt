@@ -16,7 +16,7 @@ func TestCheckRunInputReadOnly(t *testing.T) {
 	// A baseline is read-only by platform INVARIANT: DryRun is forced for ANY
 	// actuator, and the spine no longer switches on tool name nor writes a
 	// tool-specific params.check (ADR-0046 — content-blind).
-	in, err := checkRunInput(types.Baseline{Name: "b", Actuator: "ansible", ViewName: "v", Cron: "@hourly", Severity: "info"})
+	in, err := checkRunInput(types.Baseline{Name: "b", Actuator: "ansible", ViewName: "v", Cron: "@hourly", Severity: "info"}, "ansible")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -24,7 +24,7 @@ func TestCheckRunInputReadOnly(t *testing.T) {
 		t.Fatalf("baseline must force DryRun read-only via the port bit: %+v", in)
 	}
 	// A baseline with NO actuator is rejected — no platform default (ADR-0046).
-	if _, err := checkRunInput(types.Baseline{Name: "b", ViewName: "v", Cron: "@hourly", Severity: "info"}); err == nil {
+	if _, err := checkRunInput(types.Baseline{Name: "b", ViewName: "v", Cron: "@hourly", Severity: "info"}, ""); err == nil {
 		t.Fatal("a baseline with no actuator must be rejected (no platform default)")
 	}
 	var p map[string]any
@@ -37,14 +37,14 @@ func TestCheckRunInputReadOnly(t *testing.T) {
 
 	// opentofu: same forced read-only, even when the declaration asks to apply.
 	tf, err := checkRunInput(types.Baseline{Name: "b", Actuator: "opentofu",
-		Params: map[string]any{"mode": "apply", "module": "m", "workspace": "w"}})
+		Params: map[string]any{"mode": "apply", "module": "m", "workspace": "w"}}, "opentofu")
 	if err != nil || !tf.DryRun {
 		t.Fatalf("a tofu baseline is always forced to a read-only plan: dryRun=%v err=%v", tf.DryRun, err)
 	}
 
 	// An actuator that can't run read-only is NO LONGER refused here (no name switch):
 	// checkRunInput forces DryRun; the DryRunnable capability gate at LAUNCH rejects it.
-	sc, err := checkRunInput(types.Baseline{Name: "b", Actuator: "script"})
+	sc, err := checkRunInput(types.Baseline{Name: "b", Actuator: "script"}, "script")
 	if err != nil || !sc.DryRun {
 		t.Fatalf("checkRunInput is content-blind — forces DryRun, defers the capability check to launch: %+v %v", sc, err)
 	}

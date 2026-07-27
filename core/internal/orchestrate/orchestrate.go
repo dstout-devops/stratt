@@ -607,6 +607,11 @@ type Activities struct {
 	// it). Nil ⇒ capability requirements can't be met, so an Actuator that `requires` one fails
 	// visibly (§1.8), never silently runs without the resolved handle.
 	ResolveCapability func(ctx context.Context, capability string) (actionName string, err error)
+	// ResolveActuator maps a capability class to the ACTUATOR name of its single VERIFIED
+	// provider (ADR-0140 D4). Separate from ResolveCapability because the two resolve to
+	// different kinds of thing — an Action selector vs a dispatch-table Actuator — and one
+	// function returning either depending on the caller is the ambiguity §2.4 refuses.
+	ResolveActuator func(ctx context.Context, capability string) (actuatorName string, err error)
 }
 
 // EnsureRun creates the Run summary row for a Trigger-started execution

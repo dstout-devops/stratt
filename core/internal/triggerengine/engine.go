@@ -33,6 +33,10 @@ type Engine struct {
 	Bus      *events.Bus
 	Temporal client.Client
 	Log      *slog.Logger
+	// ResolveActuator maps a capability class to the bound provider's ACTUATOR name for a
+	// Trigger that names a class rather than an Actuator (ADR-0140 D4). Nil ⇒ such a Trigger
+	// fails visibly at fire time (§1.8) rather than launching against an empty actuator.
+	ResolveActuator func(ctx context.Context, capability string) (string, error)
 
 	mu       sync.Mutex
 	programs map[string]*rules.Program // trigger name → compiled rule
@@ -197,9 +201,26 @@ func (e *Engine) launch(ctx context.Context, log *slog.Logger, t types.Trigger, 
 	// violation is a TERMINAL data problem (this payload will never bind) —
 	// logged and dropped, never launched and never redelivered (a poison
 	// message must not loop). Only infrastructure failures below redeliver.
-	// The trigger declaration's actuator — required for a View-actuation trigger
-	// (validated at declaration; no platform default, ADR-0046).
-	params, err := contract.ResolveActuatorParamsFor(t.Actuator, e.Store.PluginIdentityOf(ctx, t.Actuator), t.Params, ns)
+	// The trigger declaration's actuator — required for a View-actuation trigger (validated at
+	// declaration; no platform default, ADR-0046) — or the bound provider of the capability it
+	// names (ADR-0140 D4). Resolution happens BEFORE param binding, because which Contract the
+	// params are validated against belongs to the resolved Actuator.
+	actuator := t.Actuator
+	if t.ActuatorCapability != "" {
+		if e.ResolveActuator == nil {
+			log.Error("trigger names a capability but no resolver is configured; event dropped",
+				"trigger", t.Name, "capability", t.ActuatorCapability)
+			return nil
+		}
+		resolved, rerr := e.ResolveActuator(ctx, t.ActuatorCapability)
+		if rerr != nil {
+			log.Error("trigger capability did not resolve; event dropped (not redelivered)",
+				"trigger", t.Name, "capability", t.ActuatorCapability, "error", rerr)
+			return nil
+		}
+		actuator = resolved
+	}
+	params, err := contract.ResolveActuatorParamsFor(actuator, e.Store.PluginIdentityOf(ctx, actuator), t.Params, ns)
 	if err != nil {
 		log.Error("trigger binding failed; event dropped (not redelivered)", "trigger", t.Name, "error", err)
 		return nil
@@ -213,7 +234,7 @@ func (e *Engine) launch(ctx context.Context, log *slog.Logger, t types.Trigger, 
 	_, err = e.Temporal.ExecuteWorkflow(ctx, opts, orchestrate.RunAgainstView, orchestrate.RunInput{
 		ViewName:        t.ViewName,
 		ViewParams:      viewParams,
-		Actuator:        t.Actuator,
+		Actuator:        actuator,
 		FacetWriteScope: t.FacetWriteScope,
 		Params:          params,
 		Slices:          t.Slices,

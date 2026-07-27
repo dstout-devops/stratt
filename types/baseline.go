@@ -21,12 +21,23 @@ const (
 type Baseline struct {
 	Name string `json:"name"`
 	// Check Step: which View to check, with which Actuator and params.
-	ViewName       string         `json:"viewName"`
-	Actuator       string         `json:"actuator"`
-	Params         map[string]any `json:"params,omitempty"`
-	Slices         int            `json:"slices,omitempty"`
-	CredentialRefs []string       `json:"credentialRefs,omitempty"`
-	Principal      string         `json:"principal,omitempty"`
+	ViewName string `json:"viewName"`
+	Actuator string `json:"actuator"`
+	// ActuatorCapability names a capability CLASS instead of an Actuator (ADR-0140 D4):
+	// the declaration says WHAT must converge and the bound provider is resolved at
+	// launch, so a provider swap edits no Trigger. Mutually exclusive with Actuator.
+	//
+	// FacetWriteScope below is the declaration's half of the write ceiling (ADR-0054,
+	// grant â© scope) and the grant belongs to the RESOLVED Actuator. So a
+	// capability-named actuation is checked at load against EVERY candidate provider's
+	// grant, not the one bound today: a scope that fits one provider and exceeds another
+	// is a write that silently stops happening on a rebind, and a dropped write-back
+	// reports as nothing at all rather than as an error.
+	ActuatorCapability string         `json:"actuatorCapability,omitempty"`
+	Params             map[string]any `json:"params,omitempty"`
+	Slices             int            `json:"slices,omitempty"`
+	CredentialRefs     []string       `json:"credentialRefs,omitempty"`
+	Principal          string         `json:"principal,omitempty"`
 	// FacetWriteScope is the Facet namespaces this check may write back (ADR-0054):
 	// the effective write-back allowlist is the actuator's grant ∩ this scope. Empty
 	// admits NO facet write-back (TIGHT least-authority default).

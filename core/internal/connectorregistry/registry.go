@@ -20,6 +20,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"sort"
 	"sync"
 	"time"
 
@@ -589,6 +590,54 @@ func (r *Registry) ResolveCapabilityAction(ctx context.Context, capClass string)
 		return action, nil
 	default:
 		return "", fmt.Errorf("ambiguous: %d verified providers for capability %q; add an estate binding (ADR-0105 D5)", len(providers), capClass)
+	}
+}
+
+// ResolveCapabilityActuator returns the ACTUATOR name of the single VERIFIED provider of a
+// capability class (ADR-0140 D4) — the Actuator-shaped sibling of ResolveCapabilityAction, used by
+// a Trigger or Baseline that names a class instead of an Actuator.
+//
+// No advertisement is read here, and that asymmetry is the design rather than an omission. An
+// Action-shaped class needs `implements` because the plugin owns the Action's NAME inside its own
+// namespace; an Actuator-shaped class does not, because the provider DECLARATION IS the Actuator —
+// its name is the operator's, granted in CaC, and core is not deriving anything. That is also why a
+// dial-less provider can serve this form (ADR-0138 D5) while it cannot serve the Action-shaped one.
+//
+// ACTUATORS ONLY. A Connector may advertise a class, but this form resolves to something
+// DISPATCHABLE and a Connector is not — so it must not be a candidate here. The estate loader
+// refuses the same shape at declaration; this is the runtime half.
+//
+// Fails CLOSED: 0 verified providers → error; ≥2 → ambiguous, never a silent tiebreak (§2.4).
+func (r *Registry) ResolveCapabilityActuator(ctx context.Context, capClass string) (string, error) {
+	verifs, err := r.store.ListProviderVerifications(ctx)
+	if err != nil {
+		return "", err
+	}
+	verified := make(map[string]bool, len(verifs))
+	for _, v := range verifs {
+		if v.Verified {
+			verified[v.Kind+"/"+v.Name] = true
+		}
+	}
+	acts, err := r.store.ListActuators(ctx)
+	if err != nil {
+		return "", err
+	}
+	var names []string
+	for _, a := range acts {
+		if verified["actuator/"+a.Name] && contains(a.Provides, capClass) {
+			names = append(names, a.Name)
+		}
+	}
+	switch len(names) {
+	case 0:
+		return "", fmt.Errorf("no verified Actuator provides capability %q", capClass)
+	case 1:
+		return names[0], nil
+	default:
+		sort.Strings(names)
+		return "", fmt.Errorf("ambiguous: %d verified Actuators provide capability %q (%v); add an estate binding "+
+			"(ADR-0105 D5)", len(names), capClass, names)
 	}
 }
 

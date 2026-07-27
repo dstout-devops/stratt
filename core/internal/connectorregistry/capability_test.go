@@ -524,3 +524,70 @@ func TestAttestedProviderCannotServeAnActionShapedClass(t *testing.T) {
 		t.Fatalf("the diagnostic must point at the missing advertisement: %v", err)
 	}
 }
+
+// ResolveCapabilityActuator is the Actuator-shaped resolution a capability-typed reconcile uses
+// (ADR-0140 D4). It reads NO advertisement, and that asymmetry is the design: an Action-shaped
+// class needs `implements` because the plugin owns the Action's name inside its own namespace,
+// while here the provider DECLARATION IS the Actuator — its name is the operator's, granted in
+// CaC, and core derives nothing.
+func TestResolveCapabilityActuator(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	plugins := orchestrate.NewPluginRegistry(nil, nil)
+	r := New(s, plugins, homegate.Deps{}, nil, lazyDial, time.Second, discard())
+	r.manifest = fakeManifest(map[string][]string{"localhost:9096": {"certissuer"}})
+
+	if _, err := r.ResolveCapabilityActuator(ctx, "certissuer"); err == nil {
+		t.Fatal("no provider must fail closed")
+	}
+
+	if err := s.UpsertActuator(ctx, types.Actuator{
+		Name: "t-cert-issuer", Address: "localhost:9096", PluginIdentity: "openbao",
+		Provides: []string{"certissuer"}, FacetNamespaces: []string{"cert.identity", "cert.expiry"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	defer s.DeleteActuator(ctx, "t-cert-issuer")
+	defer s.DeleteProviderVerification(ctx, "actuator", "t-cert-issuer")
+
+	// Declared but unverified must not bind.
+	if _, err := r.ResolveCapabilityActuator(ctx, "certissuer"); err == nil {
+		t.Fatal("a declared-but-unverified provider must not resolve")
+	}
+	r.ReconcileProviderVerification(ctx)
+	got, err := r.ResolveCapabilityActuator(ctx, "certissuer")
+	if err != nil {
+		t.Fatalf("a verified Actuator provider must resolve: %v", err)
+	}
+	if got != "t-cert-issuer" {
+		t.Fatalf("resolution returns the declaration name, which IS the dispatch-table Actuator: %q", got)
+	}
+}
+
+// A Connector may advertise a class, but this form resolves to something DISPATCHABLE and a
+// Connector is not. Binding one would hand the reconcile an Actuator name that is not in the
+// dispatch table — a failure at fire time, six hours later.
+func TestResolveCapabilityActuatorIgnoresConnectors(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	plugins := orchestrate.NewPluginRegistry(nil, nil)
+	r := New(s, plugins, homegate.Deps{}, nil, lazyDial, time.Second, discard())
+	r.manifest = fakeManifest(map[string][]string{"localhost:9097": {"certissuer"}})
+
+	if err := s.UpsertConnector(ctx, types.Connector{
+		Name: "t-cert-conn", Class: types.ConnectorSyncer, Address: "localhost:9097", PluginIdentity: "cc",
+		Source: types.Source{Kind: "cc", Name: "t-cert-conn"}, Provides: []string{"certissuer"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	defer s.DeleteConnector(ctx, "t-cert-conn")
+	defer s.DeleteProviderVerification(ctx, "connector", "t-cert-conn")
+
+	r.ReconcileProviderVerification(ctx)
+	if v, ok := verificationRow(t, s, "connector", "t-cert-conn"); !ok || !v.Verified {
+		t.Fatalf("the Connector verifies as a provider of the class: %+v ok=%v", v, ok)
+	}
+	if _, err := r.ResolveCapabilityActuator(ctx, "certissuer"); err == nil {
+		t.Fatal("but it must NOT satisfy an ACTUATION — a Connector is not dispatchable")
+	}
+}

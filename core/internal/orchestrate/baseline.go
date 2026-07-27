@@ -58,7 +58,17 @@ func RunBaselineCheck(ctx workflow.Context, in BaselineInput) error {
 		return workflow.ExecuteActivity(ctx, a.SealEvidence, b.Name).Get(ctx, nil)
 	}
 
-	runIn, err := checkRunInput(b)
+	// A class-named Baseline resolves to the bound provider's Actuator first (ADR-0140 D4).
+	// An activity, not workflow-side code: it reads the store, and a rebind between the original
+	// run and a replay would otherwise rewrite history.
+	actuator := b.Actuator
+	if b.ActuatorCapability != "" {
+		if err := workflow.ExecuteActivity(ctx, a.ResolveActuatorCapability, b.ActuatorCapability).
+			Get(ctx, &actuator); err != nil {
+			return err
+		}
+	}
+	runIn, err := checkRunInput(b, actuator)
 	if err != nil {
 		return err
 	}
@@ -84,14 +94,14 @@ func RunBaselineCheck(ctx workflow.Context, in BaselineInput) error {
 // structurally, not by convention — that the check cannot mutate: ansible
 // runs with check forced on; opentofu only ever in plan mode. Declaration
 // validation rejects the same upstream; this is the launch-time guarantee.
-func checkRunInput(b types.Baseline) (RunInput, error) {
+func checkRunInput(b types.Baseline, actuator string) (RunInput, error) {
 	params := map[string]any{}
 	for k, v := range b.Params {
 		params[k] = v
 	}
-	// A Baseline names its Actuator explicitly (no platform default, ADR-0046);
-	// required at declaration (ValidateBaseline), so empty here is a bug.
-	actuator := b.Actuator
+	// A Baseline names its Actuator explicitly, or a capability the caller has already
+	// resolved (no platform default, ADR-0046); one of the two is required at declaration
+	// (ValidateBaseline), so empty here is a bug.
 	if actuator == "" {
 		return RunInput{}, temporal.NewNonRetryableApplicationError(
 			"baseline requires an explicit actuator (no platform default)", "ActuatorRequired", nil)

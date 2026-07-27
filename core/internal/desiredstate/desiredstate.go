@@ -429,6 +429,9 @@ func ParseDir(root string, decider policy.Decider) (Declarations, error) {
 	if err := checkBlueprintParamNames(out); err != nil {
 		return out, err
 	}
+	if err := checkActuatorCapability(out); err != nil {
+		return out, err
+	}
 	if err := checkProvisioningBuildInputs(out); err != nil {
 		return out, err
 	}
@@ -1469,14 +1472,16 @@ type triggerFile struct {
 	ViewName        string         `yaml:"viewName"`
 	ViewParams      map[string]any `yaml:"viewParams"`
 	Actuator        string         `yaml:"actuator"`
-	Params          map[string]any `yaml:"params"`
-	Inputs          map[string]any `yaml:"inputs"`
-	Slices          int            `yaml:"slices"`
-	CredentialRefs  []string       `yaml:"credentialRefs"`
-	Principal       string         `yaml:"principal"`
-	WorkflowName    string         `yaml:"workflowName"`
-	FacetWriteScope []string       `yaml:"facetWriteScope"`
-	Environments    []string       `yaml:"environments"`
+	// The capability CLASS form (ADR-0140 D4) — exclusive with actuator.
+	ActuatorCapability string         `yaml:"actuatorCapability"`
+	Params             map[string]any `yaml:"params"`
+	Inputs             map[string]any `yaml:"inputs"`
+	Slices             int            `yaml:"slices"`
+	CredentialRefs     []string       `yaml:"credentialRefs"`
+	Principal          string         `yaml:"principal"`
+	WorkflowName       string         `yaml:"workflowName"`
+	FacetWriteScope    []string       `yaml:"facetWriteScope"`
+	Environments       []string       `yaml:"environments"`
 }
 
 func parseTriggerFile(path string, raw []byte, opts ...ValidateOption) (string, types.Trigger, error) {
@@ -1496,7 +1501,8 @@ func parseTriggerFile(path string, raw []byte, opts ...ValidateOption) (string, 
 		Actuator: f.Actuator, Params: f.Params,
 		Slices: f.Slices, CredentialRefs: f.CredentialRefs, Principal: f.Principal,
 		WorkflowName: f.WorkflowName, Inputs: f.Inputs, FacetWriteScope: f.FacetWriteScope,
-		Environments: f.Environments,
+		ActuatorCapability: f.ActuatorCapability,
+		Environments:       f.Environments,
 	}
 	if err := ValidateTrigger(t, opts...); err != nil {
 		return "", types.Trigger{}, fmt.Errorf("desiredstate: %s: %w", path, err)
@@ -1571,7 +1577,13 @@ func ValidateTrigger(t types.Trigger, opts ...ValidateOption) error {
 	if len(t.CredentialRefs) > 0 && t.Principal == "" {
 		return fmt.Errorf("trigger %s: credentialRefs require a principal", t.Name)
 	}
-	if runLaunch {
+	if err := validateActuationTarget("trigger "+t.Name, t.Actuator, t.ActuatorCapability); err != nil {
+		return err
+	}
+	if runLaunch && t.ActuatorCapability == "" {
+		// The class form's params are checked against EVERY candidate provider instead, in the
+		// whole-tree pass (checkActuatorCapability) — this per-declaration validator cannot see
+		// the other declarations, and one candidate is not the check D4 needs.
 		if err := validateParamsContract(t.Actuator, t.Params, opts...); err != nil {
 			return fmt.Errorf("trigger %s: %w", t.Name, err)
 		}
@@ -1950,9 +1962,11 @@ func ValidateSubscription(sub types.Subscription) error {
 // cadence + remediation ref. Like Triggers, the declaration is an
 // impersonation grant (principal) — Git review authorizes it; CaC-only.
 type baselineFile struct {
-	Name                string         `yaml:"name"`
-	ViewName            string         `yaml:"viewName"`
-	Actuator            string         `yaml:"actuator"`
+	Name     string `yaml:"name"`
+	ViewName string `yaml:"viewName"`
+	Actuator string `yaml:"actuator"`
+	// The capability CLASS form (ADR-0140 D4) — exclusive with actuator.
+	ActuatorCapability  string         `yaml:"actuatorCapability"`
 	Params              map[string]any `yaml:"params"`
 	Slices              int            `yaml:"slices"`
 	CredentialRefs      []string       `yaml:"credentialRefs"`
@@ -2032,7 +2046,8 @@ func parseBaselineFile(path string, raw []byte, opts ...ValidateOption) (string,
 		RemediationWorkflow: f.RemediationWorkflow, RemediationParams: f.RemediationParams,
 		Framework: f.Framework,
 		Mode:      f.Mode, FacetWriteScope: f.FacetWriteScope, Environments: f.Environments,
-		RequiredRelations: f.RequiredRelations,
+		ActuatorCapability: f.ActuatorCapability,
+		RequiredRelations:  f.RequiredRelations,
 	}
 	for _, ef := range f.Expected {
 		exp, err := ef.toExpectation()
@@ -2128,8 +2143,15 @@ func ValidateBaseline(b types.Baseline, opts ...ValidateOption) error {
 	if len(b.CredentialRefs) > 0 && b.Principal == "" {
 		return fmt.Errorf("baseline %s: credentialRefs require a principal", b.Name)
 	}
-	if err := validateParamsContract(b.Actuator, b.Params, opts...); err != nil {
-		return fmt.Errorf("baseline %s: %w", b.Name, err)
+	if err := validateActuationTarget("baseline "+b.Name, b.Actuator, b.ActuatorCapability); err != nil {
+		return err
+	}
+	if b.ActuatorCapability == "" {
+		// See the trigger branch: the class form is checked against every candidate in the
+		// whole-tree pass, where the candidate set is visible.
+		if err := validateParamsContract(b.Actuator, b.Params, opts...); err != nil {
+			return fmt.Errorf("baseline %s: %w", b.Name, err)
+		}
 	}
 	return nil
 }

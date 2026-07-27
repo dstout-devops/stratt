@@ -1,6 +1,6 @@
 # ADR 0140 — A capability is invoked, not named: the mapping is declared, never minted
 
-- **Status:** **Partially accepted** (D1/D2/D3-row-2 implemented 2026-07-27; D4 + the estate move outstanding). Charter review by
+- **Status:** **Accepted** (D1/D2/D3/D4 implemented 2026-07-27; the estate move + boundary ratchet outstanding). Charter review by
   hand; §1.5/§1.8/§2.4 answered inline. **No new dependency, no new Named Kind.**
 - **Date:** 2026-07-26
 - **Deciders:** steward
@@ -297,7 +297,32 @@ them to the plugin — a third failure that today is silently a missing string.
    > from Git. The declaration is also strictly **narrower** than the block it replaces — the boot
    > grant carried the cert Syncer's five namespaces because one Go value served both roles.
    >
-   > D4 itself is now buildable and remains outstanding.
+   > **DONE (2026-07-27), once that was cleared.** `actuatorCapability:` on Trigger and Baseline,
+   > mutually exclusive with `actuator:`. Resolution is `ResolveCapabilityActuator` — **Actuators
+   > only**, since this form binds something DISPATCHABLE and a Connector is not, and it reads **no
+   > advertisement**. That asymmetry with D1 is the design, not an omission: an Action-shaped class
+   > needs `implements` because the plugin owns the Action's name inside its own namespace, whereas
+   > here the provider **declaration IS the Actuator** — its name is the operator's, granted in CaC,
+   > and core derives nothing. It is also why a dial-less provider (ADR-0138 D5) can serve this form
+   > and not the Action-shaped one.
+   >
+   > **The `facetWriteScope` rule is enforced at LOAD against every candidate**, per this ADR's trap.
+   > It has to be: a namespace outside the resolved provider's grant is not an error at run time —
+   > grant ∩ scope simply drops it at the one governor, so the reconcile converges the backend and
+   > the graph quietly stops being updated. That reports as **nothing at all**.
+   >
+   > **Params too, and for a reason worth recording.** An Actuator-shaped class has no class-level
+   > Contract the way an Action-shaped one does (ADR-0111/0112), and inventing one no shipping
+   > Contract demands would violate §1.1. So params are validated against **every candidate's own**
+   > input Contract — same guarantee (valid whichever provider binds), no invented schema. If a
+   > second, differently-shaped provider ever appears, that failure is the signal the class needs a
+   > real class-level Contract.
+   >
+   > `cert-reconcile-web` now reads `actuatorCapability: certissuer`. **Verification is partial and
+   > says so:** the load-time half is proven on a live floor (`dev:connector-e2e` boots the full
+   > reference estate, so the candidate check runs against the real `cert-issuer` declaration), but
+   > the **fire-time resolution is unit-tested only** — that Trigger is `environments: [prod]` and no
+   > floor in this repo runs the prod slice with an OpenBao pod.
 5. **`vsphere-subnet-build` moves** to the vcenter plugin — the test that the Action-shaped half closed,
    and the fix for a `provisions` map currently split across two trees.
 6. **Extend `plugins:boundary` check 3 to the per-kind maps** (`provisions`/`remediates`/
