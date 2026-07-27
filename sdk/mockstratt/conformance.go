@@ -127,16 +127,9 @@ func (c Conformance) Check() []Violation {
 	// Each of these was DROPPED. In production the drop is silent to the plugin,
 	// so a Syncer whose facets all fall outside its grant looks healthy while
 	// writing nothing at all.
-	for _, r := range c.Result.Rejections {
-		switch r.Kind {
-		case "facet", "label", "identity-scheme", "entity":
-			add("emits-within-grant", SeverityError, r.Kind+" "+r.Detail,
-				"the core dropped this silently — the plugin appears healthy while writing nothing ("+r.Reason+")")
-		case "derived-contract":
-			add("derived-contract-namespace", SeverityError, r.Detail,
-				"a schema_id outside the plugin's own Source namespace is refused (ADR-0047 §4)")
-		}
-	}
+	// Shared with the Observe suite: what the governor drops does not depend on which
+	// verb proposed it, so the two must not drift on what they report.
+	vs = append(vs, checkGovernanceRejections(c.Result.Rejections)...)
 
 	// ── Write-back correlates to something that was asked for ────────────────
 	// A plugin proposing entities unrelated to its targets is either guessing or
@@ -193,6 +186,33 @@ func (c Conformance) Check() []Violation {
 					"§1.5 requires plugin schemas pinned and hash-verified; an unpinned contract makes schema drift silent")
 			}
 		}
+
+		// ── It projects only what it advertised ──────────────────────────────
+		//
+		// `contracts` is the plugin's ADVERTISEMENT — the proto calls it "facet
+		// namespaces it REQUESTS to own (advertisement, not grant)". It is what an
+		// operator READS in order to write the grant. So a namespace the plugin
+		// emits but never advertised has exactly two outcomes, and both are bad:
+		// the grant omits it and the write is silently dropped (the sibling
+		// `emits-within-grant` check catches that one, but only once someone runs
+		// it against a realistic grant), or the grant happens to be wider and the
+		// write LANDS under authority the operator granted without being told it
+		// was being asked for (§2.5, §1.8).
+		//
+		// This is the gap that let ADR-0143's defect exist and then, immediately,
+		// caught its fix: `mgmt.address` had been named as a vcenter-written
+		// namespace in the Facet schema since ADR-0084 and was in neither the
+		// grant nor the Manifest, and the first change to emit it updated the
+		// grant and left the advertisement stale. Three sets — advertised,
+		// granted, emitted — and until now only two of the three pairings were
+		// checked anywhere.
+		//
+		// Deliberately compared against `contracts` only, never against a
+		// hardcoded list: this file is tool-blind by construction and must stay
+		// that way (§1.4).
+		for _, v := range checkDeclaresWhatItEmits(m, c.Result.WriteBack) {
+			vs = append(vs, v)
+		}
 		for _, a := range m.GetActions() {
 			if a.GetName() == "" {
 				add("action-named", SeverityError, "an ActionDecl has an empty name",
@@ -212,9 +232,13 @@ func (c Conformance) Check() []Violation {
 }
 
 // Errors returns only the violations a CI gate should fail on.
-func (c Conformance) Errors() []Violation {
+func (c Conformance) Errors() []Violation { return errorsOnly(c.Check()) }
+
+// errorsOnly is shared with ObserveConformance — both verbs answer the same
+// question of a CI gate, so they must not drift on what counts as failing.
+func errorsOnly(vs []Violation) []Violation {
 	var out []Violation
-	for _, v := range c.Check() {
+	for _, v := range vs {
 		if v.Severity == SeverityError {
 			out = append(out, v)
 		}
@@ -225,13 +249,16 @@ func (c Conformance) Errors() []Violation {
 // Report renders the full verdict for a test failure message or a CLI. It lists
 // warnings as well as errors — a suite that prints only what it failed on teaches
 // authors that warnings do not exist.
-func (c Conformance) Report() string {
-	vs := c.Check()
+func (c Conformance) Report() string { return report("conformance", c.Check()) }
+
+// report renders a verdict under a label, shared so the Apply and Observe suites
+// read identically in a failure message.
+func report(label string, vs []Violation) string {
 	if len(vs) == 0 {
-		return "conformance: OK"
+		return label + ": OK"
 	}
 	var b strings.Builder
-	fmt.Fprintf(&b, "conformance: %d violation(s)\n", len(vs))
+	fmt.Fprintf(&b, "%s: %d violation(s)\n", label, len(vs))
 	for _, v := range vs {
 		fmt.Fprintf(&b, "  %s\n", v)
 	}

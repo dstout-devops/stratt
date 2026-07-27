@@ -70,6 +70,13 @@ func (s *Server) GetManifest(context.Context, *pluginv1.GetManifestRequest) (*pl
 			{SchemaId: "storage.datastore"}, // datastore capacity/free/type (ADR-0115, pinned)
 			{SchemaId: "compute.pool"},      // compute-pool cpu/mem allocation (ADR-0115, uncovered)
 			{SchemaId: "net.dvswitch"},      // DVS name/uuid/ports (ADR-0115, uncovered)
+			// mgmt.address — the OBSERVED reach coordinate (ADR-0143). Advertised as well
+			// as granted and emitted, because `contracts` is the ADVERTISEMENT an operator
+			// reads to write the grant: a namespace projected but never advertised either
+			// gets dropped or lands under authority nobody was asked for. ADR-0143 updated
+			// the grant and the projection and left this stale, which is precisely the gap
+			// mockstratt's `declares-what-it-emits` check now closes.
+			{SchemaId: "mgmt.address"},
 		},
 		// Tombstone schemes per kind (ADR-0096 observe-all + full-sync tombstone). Read breadth
 		// (ADR-0115) adds region (datacenter) + availability-zone (cluster) — shared kinds — plus
