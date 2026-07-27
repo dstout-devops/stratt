@@ -66,9 +66,13 @@ func TestBootRegisteredActuatorsCensusIsAccurate(t *testing.T) {
 func TestNoDeclaredActuatorIsAlsoBootRegistered(t *testing.T) {
 	boot := bootRegisteredInGo(t)
 	if len(boot) == 0 {
-		// Not a pass. If the boot registrations are all gone this test has no subject, but a
-		// regex that silently matches nothing is how a ratchet quietly stops ratcheting.
-		t.Skip("no boot-registered Actuators remain — delete this test with the last one")
+		// The migration is finished, so this check has no subject — and that is the intended end
+		// state, not a gap. The ratchet against REINTRODUCING one lives in
+		// TestBootRegisteredActuatorsCensusIsAccurate, which fails on any boot registration the
+		// tracker does not list, and the tracker is now empty. Skipping here would hide that this
+		// test is dormant rather than passing.
+		t.Skip("no Actuator is boot-registered any more (ADR-0103 complete for Actuators); the " +
+			"census test is the live ratchet against reintroduction")
 	}
 
 	decls, err := ParseDir("../../../estate", nil)

@@ -508,11 +508,15 @@ func run(ctx context.Context, log *slog.Logger) error {
 	registerPluginAction := func(name string, host *pluginhost.Host, dryRunnable bool) error {
 		return plugins.RegisterAction(name, orchestrate.PluginAction{Host: host, DryRunnable: dryRunnable})
 	}
-	// grant + plans travel with the actuator so Execute can build a Site-backed host
-	// with identical governance (the grant never leaves the hub, ADR-0049 V1).
-	registerPluginActuator := func(name string, host *pluginhost.Host, dryRunnable bool, grant pluginhost.Grant, plans *planstore.Store) error {
-		return plugins.RegisterActuator(name, orchestrate.PluginActuator{Host: host, DryRunnable: dryRunnable, Grant: grant, PlanStore: plans})
-	}
+	// registerPluginActuator is GONE, and its absence is the ADR-0103 migration's completion
+	// receipt: NO Actuator is registered in Go any more. ansible and script went first (ADR-0117
+	// k), then cert-issuer, crossplane, mcp, and finally opentofu — whose block was retired rather
+	// than migrated, because the estate already declares two opentofu Actuators using the CaC form
+	// of its safety property. Every Actuator's grant is now reviewable in Git, which is the whole
+	// point: a grant that lives in Go cannot answer "which grant is live?".
+	//
+	// Actions are NOT yet done — adopt/materialize still registers below, and registerPluginAction
+	// survives for it alone.
 
 	// The `ansible` (ADR-0051) and `script` (ADR-0046 Category A) EE-Job Actuators used to
 	// be registered here, inline, with their grants hardcoded in Go. They are now CaC
@@ -625,9 +629,18 @@ func run(ctx context.Context, log *slog.Logger) error {
 	// grant is live?" unanswerable from Git.
 
 	// OpenTofu (ADR-0016): requires the encrypted state backend — without a
-	// state key the actuator is not registered and the backend not mounted;
-	// tofu Steps then fail loudly at Prepare, never plaintext local state.
+	// state key the backend is not mounted and NO plan store exists; a plan-pinned Apply
+	// then fails closed at launch rather than degrading to an unpinned one (ADR-0047 §8).
 	var stateHandler http.Handler
+	// planStore is HOISTED out of the opentofu block so the runtime registry can hand it to any
+	// DECLARED plan-capable Actuator (ADR-0103). It used to be built three scopes in, reachable
+	// only by the boot block, and connectorregistry.New was passed a literal nil — so a declared
+	// Actuator silently had no plan store. For opentofu, the canonical plan-as-artifact Actuator
+	// (ADR-0047 §8), that is not a missing nicety: a plan-pinned Apply needs the store the Gate's
+	// approved digest lives in, so declaring opentofu while the registry held nil would have
+	// dropped plan pinning without a word. Nil stays lawful and means exactly what it meant
+	// before — no state key, no plan store, and §8's fail-closed path handles it.
+	var planStore *planstore.Store
 	if stateKey := os.Getenv("STRATT_STATE_KEY"); stateKey != "" {
 		sb, err := statebackend.New(stateKey, store, log)
 		if err != nil {
@@ -643,48 +656,36 @@ func run(ctx context.Context, log *slog.Logger) error {
 			return err
 		}
 		sb.UseCustodian(custodian)
-		if tofuPluginAddr := os.Getenv("STRATT_OPENTOFU_PLUGIN_ADDR"); tofuPluginAddr != "" {
-			// Cutover (ADR-0046/0047): the opentofu Actuator runs over the sovereign
-			// port — Plan/Apply/Destroy, plan-as-artifact (§8). The in-tree Actuator
-			// is NOT registered (§2.4 exclusive). The plan store shares the state key
-			// (the plan is content-addressed + encrypted, ADR-0047 §8); the plugin
-			// derives its own TF_HTTP_PASSWORD from its own STRATT_STATE_KEY config.
-			plans, err := planstore.New(stateKey, store)
-			if err != nil {
-				return err
-			}
-			plans.UseCustodian(custodian)
-			conn, err := grpc.NewClient(tofuPluginAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
-			if err != nil {
-				return fmt.Errorf("opentofu plugin dial %s: %w", tofuPluginAddr, err)
-			}
-			defer conn.Close()
-			grant := pluginhost.Grant{
-				PluginIdentity: env("STRATT_OPENTOFU_PLUGIN_ID", "opentofu"),
-				Tier:           pluginhost.Tier(env("STRATT_OPENTOFU_TIER", "trusted")),
-				Source:         types.Source{Kind: "opentofu", Name: env("STRATT_OPENTOFU_SOURCE_NAME", "opentofu"), Endpoint: os.Getenv("STRATT_STATE_BACKEND_URL")},
-				// stratt_entities write-back grants (operator-declared, §2.1): the
-				// identity schemes / label keys / facet namespaces tofu outputs may
-				// project. Empty by default — an ungranted emission is rejected, not
-				// silently written (defence-in-depth, ADR-0047 §1).
-				IdentitySchemes: splitNonEmpty(os.Getenv("STRATT_OPENTOFU_IDENTITY_SCHEMES")),
-				LabelKeys:       splitNonEmpty(os.Getenv("STRATT_OPENTOFU_LABEL_KEYS")),
-				FacetNamespaces: splitNonEmpty(os.Getenv("STRATT_OPENTOFU_FACET_NAMESPACES")),
-			}
-			host := pluginhost.New(store, pluginv1.NewPluginServiceClient(conn), grant, log).UsePlanStore(plans)
-			if err := registerPluginActuator("opentofu", host, true, grant, plans); err != nil {
-				return err
-			}
-			log.Info("opentofu plugin actuator registered", "addr", tofuPluginAddr, "backend", os.Getenv("STRATT_STATE_BACKEND_URL"))
-		} else {
-			// opentofu is a plugin-only Actuator now (the in-tree pod actuator was
-			// retired, ADR-0046/0047): the state backend is still served for a peer
-			// Cell's plugin, but no actuator is registered here without its address.
-			log.Info("opentofu plugin not configured (STRATT_OPENTOFU_PLUGIN_ADDR empty); actuator disabled, state backend still served")
+		// The plan store shares the state key — a plan is content-addressed + encrypted
+		// (ADR-0047 §8) — and the same custodian as the state backend.
+		planStore, err = planstore.New(stateKey, store)
+		if err != nil {
+			return err
 		}
+		planStore.UseCustodian(custodian)
+		log.Info("state backend + plan store ready (encrypted, ADR-0047 §8)")
 	} else {
-		log.Info("opentofu actuator disabled (STRATT_STATE_KEY empty)")
+		log.Info("no state key (STRATT_STATE_KEY empty); state backend not served and no plan store — " +
+			"a plan-pinned Apply fails closed rather than running unpinned (ADR-0047 §8)")
 	}
+
+	// ── opentofu Actuator (ADR-0046/0047) — RETIRED from boot, not migrated ──────────────
+	// The boot block registered an `opentofu` Actuator behind STRATT_OPENTOFU_PLUGIN_ADDR, wired
+	// to the CORE-HOSTED encrypted HTTP state backend via STRATT_STATE_BACKEND_URL.
+	//
+	// It is deleted rather than turned into a declaration, and the distinction matters. The estate
+	// already declares two opentofu Actuators — opentofu-network and opentofu-s3 — and both use
+	// the CaC form of the same safety property: `requires: [statestore]` holds them PENDING until a
+	// verified state provider exists (ADR-0104 D3), so tofu never runs against local plaintext
+	// state. Nothing in any estate names the bare `opentofu`, so re-declaring it would mint a
+	// dispatch entry with no consumer and a second, differently-backed opentofu surface.
+	//
+	// What the block guarded is NOT lost. The core-hosted state backend is still served above and
+	// still mounted on the API (StateBackend: stateHandler), so a floor that wants that backend
+	// points its own declared opentofu Actuator at it through the plugin's TF_HTTP_* config — the
+	// plugin's own concern, which is where it always belonged. And the boot precondition's real
+	// teeth, "no state key ⇒ no plan store", now live on planStore above and reach every declared
+	// Actuator through the registry.
 
 	// ── Crossplane build Actuator over the port (ADR-0059) ───────────────
 	// The `builder:` a network Intent names: it applies a Crossplane Claim and
@@ -1437,7 +1438,9 @@ func run(ctx context.Context, log *slog.Logger) error {
 		// dispatch-map membership must be visible to any worker — D3); Connector Syncers
 		// reconcile LEADER-ONLY (graph writers, home-gated). helm's planstore is nil (as its
 		// boot-env block was); an Actuator that needs one is a later-slice concern.
-		connReg = connectorregistry.New(store, plugins, homeDeps, nil,
+		// planStore (nil when the floor has no state key) reaches every declared Actuator here —
+		// the "later-slice concern" the previous nil booked (ADR-0047 §8).
+		connReg = connectorregistry.New(store, plugins, homeDeps, planStore,
 			func(addr string) (*grpc.ClientConn, error) {
 				return grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
 			},

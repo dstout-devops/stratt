@@ -29,19 +29,19 @@ import (
 // a decision rather than a transcription. The vcenter (16), awsec2 (11) and awss3 (4) sets are
 // done.
 var bootRegisteredActuators = map[string]string{
-	// The ONE that is not a simple lift. Its registration is nested inside
-	// `if STRATT_STATE_KEY != ""`, and the comment there states the safety property plainly:
-	// without a state key the actuator is not registered and the backend not mounted, so tofu
-	// Steps fail loudly at Prepare rather than running against PLAINTEXT LOCAL STATE. A
-	// declaration cannot express "only when the daemon holds a state key", so migrating this one
-	// naively would drop a real precondition rather than move it.
+	// EMPTY, and that is the ADR-0103 migration's completion receipt for Actuators: strattd
+	// registers none in Go any more. ansible and script went first (ADR-0117 k), then cert-issuer,
+	// crossplane, mcp, and finally opentofu — retired rather than migrated, because the estate
+	// already declares opentofu-network and opentofu-s3 using the CaC form of its safety property
+	// (`requires: [statestore]` holds them pending until a verified state provider exists), and
+	// nothing named the bare `opentofu`.
 	//
-	// The CaC-expressible form of the same guarantee already exists and is what the estate uses:
-	// opentofu-network and opentofu-s3 declare `requires: [statestore]`, so they stay PENDING
-	// until a verified state provider exists (ADR-0104 D3). Nothing in any estate names the bare
-	// `opentofu` Actuator. Retiring it is therefore a question of whether that capability gate
-	// fully replaces the boot precondition — a decision, not a mechanical move.
-	"opentofu": "registered under STRATT_STATE_KEY + STRATT_OPENTOFU_PLUGIN_ADDR; the state-key precondition is not CaC-expressible (ADR-0016/0047)",
+	// Keeping the map rather than deleting it is deliberate. It is now an ASSERTION that the set
+	// is empty — TestBootRegisteredActuatorsCensusIsAccurate fails the moment main.go registers an
+	// Actuator that is not listed here, so reintroducing one silently is no longer possible.
+	//
+	// Actions are a separate, unfinished story: adopt/materialize is still registered in Go. This
+	// map is Actuator-shaped and does not track it.
 }
 
 // TestEstateDeclaresTheActuatorsItNames is the guard that ADR-0117 follow-up (k) needs and
