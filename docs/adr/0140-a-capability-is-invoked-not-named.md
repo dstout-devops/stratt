@@ -1,6 +1,6 @@
 # ADR 0140 — A capability is invoked, not named: the mapping is declared, never minted
 
-- **Status:** **Accepted** (D1/D2/D3/D4 implemented 2026-07-27; the estate move + boundary ratchet outstanding). Charter review by
+- **Status:** **Accepted** (D1–D4 and all six implementation items shipped 2026-07-27). Charter review by
   hand; §1.5/§1.8/§2.4 answered inline. **No new dependency, no new Named Kind.**
 - **Date:** 2026-07-26
 - **Deciders:** steward
@@ -195,9 +195,12 @@ them to the plugin — a third failure that today is silently a missing string.
   are split across trees is a gap in the ratchet, and closing it is cheap: the same ownership test,
   applied to the per-kind maps.
 
-- **`linux-onboard` still needs ADR-0138 D5** for its ansible leg — capability routing to an EE-Job
-  provider remains impossible until dial-less verification lands. **That is the hard prerequisite for
-  reconcile too**, since `configmgmt`'s first provider is a subprocess by charter.
+- ~~**`linux-onboard` still needs ADR-0138 D5** for its ansible leg.~~ **RESOLVED (2026-07-27):** D5
+  shipped, so a dial-less provider is verifiable from its declared mechanisms and `configmgmt` is
+  routable — `ansible-platform-baseline` declares `provides: [configmgmt]` again and
+  `estate/blueprints/web-server.yaml` is capability-routed again. `linux-onboard`'s PROVISION leg is
+  converted (ADR-0139 step 4); its CONVERGE leg is Actuator-shaped, so it is D4's form and its own
+  decision rather than a blocked one.
 - **A Manifest field is a port change**, so this is one of ADR-0137 D2's two sanctioned reasons to touch
   core while changing a plugin.
 

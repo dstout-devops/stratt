@@ -226,6 +226,10 @@ the whole platform has been **re-centered onto the sovereign plugin port (dark-m
 core spine is content-blind and every tool is a plugin, now proven not only structurally + by unit/integration
 tests but by a **first live in-cluster e2e** (ADR-0102 self-deploy + ADR-0103 no-restart connector lifecycle,
 fully in-kind, no compose); broader live coverage (fleet scale, all plugins, non-kind targets) is the road
-ahead. **No phase's promote/OSS exit gate is met** — every one
+ahead. That arc has since been **finished at the boundary** (ADR-0137→0141): a plugin is a service rather
+than a subdirectory — it owns its declarations AND its self contracts, pins them by digest so schema drift
+between plugin and core is blocking (port invariant #5), and reaches core through a Go SDK covering BOTH
+transports; capability routing is declared rather than derived at every layer (Step, Action, Actuator,
+nested Workflow); and NO Actuator is registered in Go any more. **No phase's promote/OSS exit gate is met** — every one
 ultimately waits on the charter §7.4 going-public step (OSPO/IP clearance) plus real operational evidence
 (SLO, security review, adoption), none of which is a coding task.

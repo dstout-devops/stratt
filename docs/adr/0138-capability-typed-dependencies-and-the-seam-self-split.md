@@ -1,6 +1,6 @@
 # ADR 0138 — A module depends on capabilities: the seam/self split, and the Step-level gap
 
-- **Status:** **Proposed** (2026-07-26, steward) — **DESIGN ONLY, nothing implemented.** Charter review
+- **Status:** **Accepted** — D1–D5 implemented (2026-07-27). Charter review
   by hand; §1.1/§1.5/§2.4 answered inline. **No new dependency, no new Named Kind.**
 - **Date:** 2026-07-26
 - **Deciders:** steward
@@ -207,14 +207,20 @@ compile time on a live floor (§1.8).
 - **Give EE-Job providers a synthetic dial address.** Rejected: verification would then be checking a
   fiction, which is worse than declining to verify and saying so.
 
-## Implementation — not started
+## Implementation — complete
 
 1. **D1's rule** — already enforced correctly by `plugins:boundary` check 3; its message and the
    `estate/README.md` rationale were corrected alongside this ADR.
 2. **D5's honesty half first** — refuse `remediationCapability` at DECLARATION time when no admissible
    provider shape exists, so §1.8 does not depend on reading a running floor's logs.
-3. **D2, the Step-level class** — the mechanism the rest waits on, and **larger than this ADR first
-   assumed**. A provider's per-kind maps (`Provisions`/`Remediates`/`Decommissions`) resolve to a
+3. ~~**D2, the Step-level class**~~ — **Shipped, and it needed TWO ADRs**, exactly as this item
+   predicted. The nested-Workflow primitive became **ADR-0139** (steps 1–4: parent link, concrete
+   form, class form, `linux-onboard` converted) and the Action- and Actuator-shaped halves became
+   **ADR-0140** (D1–D4). The shape below is what was built, essentially unaltered — resolve in an
+   Activity, fail closed on PENDING/AMBIGUOUS, check params against EVERY candidate. The original
+   analysis:
+
+   **larger than this ADR first assumed**. A provider's per-kind maps (`Provisions`/`Remediates`/`Decommissions`) resolve to a
    **Workflow**, not an Action — `awsec2` advertises `Compute: compute-build`, and it is
    `compute-build` that contains `action: awsec2/create-vm`. So a capability-typed Step must invoke a
    **nested Workflow**, and `types.Step` has no such form: it offers `gate`, `policy`, `action`, or
@@ -227,8 +233,15 @@ compile time on a live floor (§1.8).
    resolves it once before the child starts, so everything downstream — params validation, dispatch,
    §1.8 descent — sees a concrete Workflow exactly as today; fail closed on PENDING/AMBIGUOUS, and
    check params against EVERY candidate provider at declaration time, not just the winner.
-4. **D3/D4 relocation of the 22 self contracts**, with its own tests. `TestPinsAreStable`'s count moves
-   for a structural reason — bump it because the mechanism changed, never to make a test pass.
+4. ~~**D3/D4 relocation of the self contracts**~~ — **Shipped.** 83 documents moved into the plugin
+   trees that own them; the shipped set went 152 → 69, and `TestPinsAreStable`'s count moved for the
+   structural reason this item names. See the correction block under D3: the census was wrong by ~4×,
+   and three neutrally-named families are seams rather than self contracts.
+
+   It also unlocked what it was always for: **port invariant #5 now has something to check.** A plugin
+   embeds the documents it ships and pins each ContractRef to their digest, and core refuses a
+   provider whose pin disagrees with the document core validates Steps against. That was impossible
+   while the documents lived in the core binary — a plugin cannot hash what it does not have.
 
 ### Traps
 

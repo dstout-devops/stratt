@@ -1,6 +1,6 @@
 # ADR 0137 — A plugin is a service, not a subdirectory: plane independence and the no-core-change rule
 
-- **Status:** **Proposed** (2026-07-26, steward) — **DESIGN ONLY, nothing implemented.** Charter review
+- **Status:** **Accepted** — all six implementation steps shipped (2026-07-26 … 2026-07-27). Charter review
   by hand; §1.4/§1.5/§2.2 answered inline. **No new dependency.**
 - **Date:** 2026-07-26
 - **Deciders:** steward
@@ -363,11 +363,18 @@ Ordered so each step is provable before the next depends on it.
    retire them. Not attempted here: the four floors differ substantially (vcsim, floci, a node container,
    three different values stacks), and guessing that shape while migrating is how the scatter gets
    recreated in a new tree.
-6. **Contracts relocate, core pins at registration** (D5) — **BLOCKED, not started.** The blocker is a
-   conflict with ADR-0047 §4, not a difficulty: `core-shipped` is part of the definition of rung-1, and D5
-   moves rung-1 documents. See the block in D5 for the three mechanisms and what each costs. Shipped in
-   the meantime: the scoping (22 of 152 documents are candidates) and a narrowed D2 gate exception, so a
-   plugin change touching a Facet or Intent schema is no longer waved through.
+6. ~~**Contracts relocate, core pins at registration** (D5).~~ **Shipped 2026-07-27**, after the block
+   was resolved rather than worked around. The conflict was real — ADR-0047 §4 makes `core-shipped`
+   part of the definition of rung-1 — and **ADR-0138 D3 resolved it by splitting the noun**: a SEAM
+   contract (`capabilities/`, `facets/`, `intents/`, `policy/`, `outputs/`) describes what one module
+   may rely on another to MEAN and stays core's permanently; a SELF contract describes only its own
+   plugin's params and may travel with it. §4's threat model is engaged by the first and not the second.
+
+   83 documents moved; the shipped set went 152 → 69. Two corrections to this ADR's own scoping came
+   out of building it: the "22 of 152" census counted 13 actuator FILES plus 9 action DIRECTORIES, but
+   those directories hold 78 files (the real set was 91); and NEUTRALLY-NAMED contracts —
+   `cert-issuer`, `adopt`, the retired `webhook` — are seams by D3's definition, because a neutral name
+   means more than one vendor may implement the surface. Those 8 stayed core-shipped.
 
 ### Traps
 
