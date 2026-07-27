@@ -82,6 +82,12 @@ func (s *Server) GetManifest(context.Context, *pluginv1.GetManifestRequest) (*pl
 			Input:      &pluginv1.ContractRef{SchemaId: "capabilities/ipam.input"},
 			Output:     &pluginv1.ContractRef{SchemaId: "capabilities/ipam.output"},
 			Idempotent: true, // allocate-or-return-existing, anchored in NetBox (D4/F1)
+			// THIS Action is the `ipam` class (ADR-0140 D1). Core used to compute the name —
+			// `netbox` + "/" + `ipam` + "-resolve" — which meant the Action could not have been
+			// called anything else. The name below happens to match what the convention produced,
+			// deliberately: the mapping changes from derived to declared without renaming a
+			// shipped Action. A future provider may call its implementation whatever it likes.
+			Implements: "ipam",
 		}},
 	}}, nil
 }

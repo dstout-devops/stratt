@@ -1441,12 +1441,32 @@ func (x *CutoverDescriptor) GetLivenessValue() string {
 // certissuer = issue/renew/revoke). Content-blind discovery (invariant #2); the
 // InvokeRequest.action selector picks one. input/output are pinned Contract refs.
 type ActionDecl struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`     // the InvokeRequest.action selector, e.g. "awsec2/create-vm"
-	Input         *ContractRef           `protobuf:"bytes,2,opt,name=input,proto3" json:"input,omitempty"`   // pinned input schema (conformance-checked on args)
-	Output        *ContractRef           `protobuf:"bytes,3,opt,name=output,proto3" json:"output,omitempty"` // pinned output schema (empty if the Action returns no typed outputs)
-	Idempotent    bool                   `protobuf:"varint,4,opt,name=idempotent,proto3" json:"idempotent,omitempty"`
-	DryRunnable   bool                   `protobuf:"varint,5,opt,name=dry_runnable,json=dryRunnable,proto3" json:"dry_runnable,omitempty"`
+	state       protoimpl.MessageState `protogen:"open.v1"`
+	Name        string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`     // the InvokeRequest.action selector, e.g. "awsec2/create-vm"
+	Input       *ContractRef           `protobuf:"bytes,2,opt,name=input,proto3" json:"input,omitempty"`   // pinned input schema (conformance-checked on args)
+	Output      *ContractRef           `protobuf:"bytes,3,opt,name=output,proto3" json:"output,omitempty"` // pinned output schema (empty if the Action returns no typed outputs)
+	Idempotent  bool                   `protobuf:"varint,4,opt,name=idempotent,proto3" json:"idempotent,omitempty"`
+	DryRunnable bool                   `protobuf:"varint,5,opt,name=dry_runnable,json=dryRunnable,proto3" json:"dry_runnable,omitempty"`
+	// The capability CLASS this Action implements, if any (ADR-0140 D1) — e.g. "ipam".
+	// Empty for an ordinary Action, which is most of them.
+	//
+	// AUTHORITY vs IMPLEMENTATION. Whether a provider MAY serve a class is the operator's
+	// (`provides:` in CaC, §1.5 — the Manifest advertises, the grant is truth). WHICH Action
+	// IS the class is the plugin's, and only the plugin knows it. Core used to compute the
+	// answer — `<plugin_id>/<class>-resolve`, string-concatenated — which meant the spine
+	// dictated names inside a namespace it does not own: a NetBox plugin whose Action is
+	// `netbox/allocate-prefix` could not provide `ipam` whatever its Manifest said. The class
+	// exists to make the provider swappable; deriving the name constrained its internals.
+	//
+	// Core carries this token OPAQUELY, exactly as it already carries the `provisions`/
+	// `remediates`/`decommissions` per-kind Workflow names. It is advertisement: an
+	// implementation for a class the operator did not grant is ignored, never honored.
+	//
+	// OPTIONAL, and NOT every class is reached this way. A class whose consumers route through
+	// a per-kind map (`provisioning` → `provisions: {Compute: …}`) has no resolve Action at all,
+	// so its providers advertise nothing here and that is correct — the three Step shapes have
+	// three resolutions (ADR-0140 D3).
+	Implements    string `protobuf:"bytes,6,opt,name=implements,proto3" json:"implements,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1514,6 +1534,13 @@ func (x *ActionDecl) GetDryRunnable() bool {
 		return x.DryRunnable
 	}
 	return false
+}
+
+func (x *ActionDecl) GetImplements() string {
+	if x != nil {
+		return x.Implements
+	}
+	return ""
 }
 
 type Manifest struct {
@@ -3918,7 +3945,7 @@ const file_stratt_plugin_v1_plugin_proto_rawDesc = "" +
 	"\brelation\x18\x02 \x01(\tR\brelation\x12-\n" +
 	"\x12liveness_namespace\x18\x03 \x01(\tR\x11livenessNamespace\x12#\n" +
 	"\rliveness_path\x18\x04 \x01(\tR\flivenessPath\x12%\n" +
-	"\x0eliveness_value\x18\x05 \x01(\tR\rlivenessValue\"\xcf\x01\n" +
+	"\x0eliveness_value\x18\x05 \x01(\tR\rlivenessValue\"\xef\x01\n" +
 	"\n" +
 	"ActionDecl\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x123\n" +
@@ -3927,7 +3954,10 @@ const file_stratt_plugin_v1_plugin_proto_rawDesc = "" +
 	"\n" +
 	"idempotent\x18\x04 \x01(\bR\n" +
 	"idempotent\x12!\n" +
-	"\fdry_runnable\x18\x05 \x01(\bR\vdryRunnable\"\xa9\x05\n" +
+	"\fdry_runnable\x18\x05 \x01(\bR\vdryRunnable\x12\x1e\n" +
+	"\n" +
+	"implements\x18\x06 \x01(\tR\n" +
+	"implements\"\xa9\x05\n" +
 	"\bManifest\x12\x1b\n" +
 	"\tplugin_id\x18\x01 \x01(\tR\bpluginId\x12)\n" +
 	"\x10protocol_version\x18\x02 \x01(\tR\x0fprotocolVersion\x123\n" +

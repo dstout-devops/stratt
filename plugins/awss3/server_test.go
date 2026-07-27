@@ -255,10 +255,25 @@ func TestStatestoreProvider(t *testing.T) {
 				if a.GetOutput().GetSchemaId() != "capabilities/statestore.output" {
 					t.Fatalf("resolve Action must reference the CLASS-level Contract, got %q", a.GetOutput().GetSchemaId())
 				}
+				// The Action must also say it IS the class (ADR-0140 D1). Advertising the
+				// capability and the Action without the link between them leaves core with
+				// nothing to resolve — which is the state this plugin shipped in until now.
+				if a.GetImplements() != "statestore" {
+					t.Fatalf("resolve Action must advertise implements=statestore, got %q", a.GetImplements())
+				}
 			}
 		}
 		if !haveAction {
 			t.Fatal("statestore provider must expose awss3/statestore-resolve")
+		}
+		// The unconfigured plugin advertises neither the class nor an implementation of it —
+		// the two must move together or verification records a mapping for a class the plugin
+		// does not back.
+		bm, _ := bare.GetManifest(context.Background(), &pluginv1.GetManifestRequest{})
+		for _, a := range bm.GetManifest().GetActions() {
+			if a.GetImplements() != "" {
+				t.Fatalf("no state bucket ⇒ no advertised implementation, got %q on %q", a.GetImplements(), a.GetName())
+			}
 		}
 	})
 

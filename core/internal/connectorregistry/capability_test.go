@@ -21,6 +21,20 @@ func fakeManifest(caps map[string][]string) ManifestFetcher {
 	}
 }
 
+// fakeProvider is fakeManifest plus the class→Action implementations a provider advertises
+// (ADR-0140 D1) — what resolution now READS instead of deriving.
+func fakeProvider(m map[string]PluginManifest) ManifestFetcher {
+	return func(_ context.Context, addr string) (PluginManifest, error) { return m[addr], nil }
+}
+
+// implementing builds a Manifest advertising one class and the Action that IS it.
+func implementing(class, action string) PluginManifest {
+	return PluginManifest{
+		Capabilities: []string{class},
+		Actions:      []AdvertisedAction{{Name: action, InputContract: "capabilities/" + class + ".input", Implements: class}},
+	}
+}
+
 // verificationRow fetches one provider's persisted verification outcome (test helper).
 func verificationRow(t *testing.T, s *graph.Store, kind, name string) (graph.ProviderVerification, bool) {
 	t.Helper()
@@ -163,14 +177,16 @@ func TestPhantomProviderRejected(t *testing.T) {
 }
 
 // TestResolveCapabilityAction proves the ADR-0105 dispatch-time resolution: a required capability
-// maps to the single VERIFIED provider's resolve Action (<pluginIdentity>/<class>-resolve), and
-// fails closed on none/ambiguous/undeclared.
+// maps to the single VERIFIED provider's ADVERTISED implementation (ADR-0140 D1), and fails closed
+// on none/ambiguous/unadvertised.
 func TestResolveCapabilityAction(t *testing.T) {
 	s := testStore(t)
 	ctx := context.Background()
 	plugins := orchestrate.NewPluginRegistry(nil, nil)
 	r := New(s, plugins, homegate.Deps{}, nil, lazyDial, time.Second, discard())
-	r.manifest = fakeManifest(map[string][]string{"localhost:9090": {"statestore"}})
+	r.manifest = fakeProvider(map[string]PluginManifest{
+		"localhost:9090": implementing("statestore", "awss3/statestore-resolve"),
+	})
 
 	// No provider declared yet → resolution fails closed.
 	if _, err := r.ResolveCapabilityAction(ctx, "statestore"); err == nil {
@@ -194,19 +210,28 @@ func TestResolveCapabilityAction(t *testing.T) {
 		t.Fatalf("a verified provider must resolve: %v", err)
 	}
 	if action != "awss3/statestore-resolve" {
-		t.Fatalf("resolve Action = <pluginIdentity>/<class>-resolve, got %q", action)
+		t.Fatalf("resolution must return the ADVERTISED implementation, got %q", action)
 	}
 
-	// A verified provider that advertises the capability but does NOT declare the resolve Action → error.
+	// A verified provider advertising the capability but NO implementation of it → the third
+	// failure (ADR-0140 D5). It used to surface as "does not declare its resolve Action
+	// <computed name>", which pointed the reader at a name core invented.
 	if err := s.UpsertActuator(ctx, types.Actuator{Name: "t-bad-state", Address: "localhost:9091", PluginIdentity: "bad", Provides: []string{"artifactstore"}}); err != nil {
 		t.Fatal(err)
 	}
 	defer s.DeleteActuator(ctx, "t-bad-state")
 	defer s.DeleteProviderVerification(ctx, "actuator", "t-bad-state")
-	r.manifest = fakeManifest(map[string][]string{"localhost:9090": {"statestore"}, "localhost:9091": {"artifactstore"}})
+	r.manifest = fakeProvider(map[string]PluginManifest{
+		"localhost:9090": implementing("statestore", "awss3/statestore-resolve"),
+		"localhost:9091": {Capabilities: []string{"artifactstore"}}, // class advertised, no implementation
+	})
 	r.ReconcileProviderVerification(ctx)
-	if _, err := r.ResolveCapabilityAction(ctx, "artifactstore"); err == nil {
-		t.Fatal("a provider that doesn't declare its resolve Action must fail closed")
+	_, err = r.ResolveCapabilityAction(ctx, "artifactstore")
+	if err == nil {
+		t.Fatal("a provider advertising no implementation must fail closed")
+	}
+	if !strings.Contains(err.Error(), "advertises no Action implementing the class") {
+		t.Fatalf("the diagnostic must point at the plugin, not at a name core invented: %v", err)
 	}
 
 	// Two verified statestore providers → ambiguous (needs an estate binding, §2.4).
@@ -218,6 +243,111 @@ func TestResolveCapabilityAction(t *testing.T) {
 	r.ReconcileProviderVerification(ctx)
 	if _, err := r.ResolveCapabilityAction(ctx, "statestore"); err == nil || !strings.Contains(err.Error(), "ambiguous") {
 		t.Fatalf("≥2 providers must be ambiguous (no silent tiebreak, §2.4): %v", err)
+	}
+}
+
+// TestResolveCapabilityActionHonorsANonConventionalName is the point of ADR-0140 D1, and the one
+// case the old mechanism could not express. Core used to compute `<pluginIdentity>/<class>-resolve`
+// and demand the provider have declared exactly that, so a NetBox plugin whose Action is called
+// `netbox/allocate-prefix` could not provide `ipam` whatever its Manifest said — the class exists to
+// make the provider swappable, and deriving the name constrained the provider's internals instead.
+// The name below is one the convention could never have produced.
+func TestResolveCapabilityActionHonorsANonConventionalName(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	plugins := orchestrate.NewPluginRegistry(nil, nil)
+	r := New(s, plugins, homegate.Deps{}, nil, lazyDial, time.Second, discard())
+	r.manifest = fakeProvider(map[string]PluginManifest{
+		"localhost:9093": implementing("ipam", "netbox/allocate-prefix"),
+	})
+
+	if err := s.UpsertActuator(ctx, types.Actuator{Name: "t-nb-ipam", Address: "localhost:9093", PluginIdentity: "netbox", ActionNames: []string{"netbox/allocate-prefix"}, Provides: []string{"ipam"}}); err != nil {
+		t.Fatal(err)
+	}
+	defer s.DeleteActuator(ctx, "t-nb-ipam")
+	defer s.DeleteProviderVerification(ctx, "actuator", "t-nb-ipam")
+
+	r.ReconcileProviderVerification(ctx)
+	action, err := r.ResolveCapabilityAction(ctx, "ipam")
+	if err != nil {
+		t.Fatalf("a provider naming its own implementation must resolve — core does not own the plugin's namespace: %v", err)
+	}
+	if action != "netbox/allocate-prefix" {
+		t.Fatalf("resolution must carry the advertised token opaquely, got %q", action)
+	}
+}
+
+// A class the operator did NOT grant cannot be self-admitted by advertising an implementation of
+// it: the Manifest advertises, the grant is truth (§1.5). Without this a plugin could route a
+// consumer's capability requirement to itself by claiming a class nobody granted it.
+func TestAdvertisedImplementationForAnUngrantedClassIsIgnored(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	plugins := orchestrate.NewPluginRegistry(nil, nil)
+	r := New(s, plugins, homegate.Deps{}, nil, lazyDial, time.Second, discard())
+	// The plugin claims BOTH classes; the estate grants only statestore.
+	r.manifest = fakeProvider(map[string]PluginManifest{
+		"localhost:9094": {
+			Capabilities: []string{"statestore", "keycustodian"},
+			Actions: []AdvertisedAction{
+				{Name: "awss3/statestore-resolve", InputContract: "capabilities/statestore.input", Implements: "statestore"},
+				{Name: "awss3/keys-resolve", InputContract: "capabilities/statestore.input", Implements: "keycustodian"},
+			},
+		},
+	})
+
+	if err := s.UpsertActuator(ctx, types.Actuator{Name: "t-s3-grant", Address: "localhost:9094", PluginIdentity: "awss3", ActionNames: []string{"awss3/statestore-resolve", "awss3/keys-resolve"}, Provides: []string{"statestore"}}); err != nil {
+		t.Fatal(err)
+	}
+	defer s.DeleteActuator(ctx, "t-s3-grant")
+	defer s.DeleteProviderVerification(ctx, "actuator", "t-s3-grant")
+
+	r.ReconcileProviderVerification(ctx)
+	row, ok := verificationRow(t, s, "actuator", "t-s3-grant")
+	if !ok || !row.Verified {
+		t.Fatalf("the provider is verified for what it WAS granted: %+v ok=%v", row, ok)
+	}
+	if got := row.Implements["statestore"]; got != "awss3/statestore-resolve" {
+		t.Fatalf("the granted class's implementation must be recorded, got %q", got)
+	}
+	if got, present := row.Implements["keycustodian"]; present {
+		t.Fatalf("an implementation for an ungranted class must not be recorded, got %q", got)
+	}
+}
+
+// Two Actions claiming to BE the same class is unresolvable without a tiebreak, and picking one
+// is the implicit precedence §2.4 exists to refuse.
+func TestTwoImplementationsOfOneClassIsAPhantom(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	plugins := orchestrate.NewPluginRegistry(nil, nil)
+	r := New(s, plugins, homegate.Deps{}, nil, lazyDial, time.Second, discard())
+	r.manifest = fakeProvider(map[string]PluginManifest{
+		"localhost:9095": {
+			Capabilities: []string{"ipam"},
+			Actions: []AdvertisedAction{
+				{Name: "netbox/ipam-resolve", InputContract: "capabilities/ipam.input", Implements: "ipam"},
+				{Name: "netbox/allocate-prefix", InputContract: "capabilities/ipam.input", Implements: "ipam"},
+			},
+		},
+	})
+
+	if err := s.UpsertActuator(ctx, types.Actuator{Name: "t-nb-dup", Address: "localhost:9095", PluginIdentity: "netbox", ActionNames: []string{"netbox/ipam-resolve"}, Provides: []string{"ipam"}}); err != nil {
+		t.Fatal(err)
+	}
+	defer s.DeleteActuator(ctx, "t-nb-dup")
+	defer s.DeleteProviderVerification(ctx, "actuator", "t-nb-dup")
+
+	r.ReconcileProviderVerification(ctx)
+	row, ok := verificationRow(t, s, "actuator", "t-nb-dup")
+	if !ok || row.Verified {
+		t.Fatalf("a provider advertising two implementations of one class must not verify: %+v ok=%v", row, ok)
+	}
+	if !strings.Contains(row.Reason, "two implementations") {
+		t.Fatalf("the reason must name the ambiguity (§1.8): %q", row.Reason)
+	}
+	if _, err := r.ResolveCapabilityAction(ctx, "ipam"); err == nil {
+		t.Fatal("and it must not resolve")
 	}
 }
 

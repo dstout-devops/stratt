@@ -155,6 +155,10 @@ func (s *Server) GetManifest(context.Context, *pluginv1.GetManifestRequest) (*pl
 			Input:      &pluginv1.ContractRef{SchemaId: "capabilities/statestore.input"},
 			Output:     &pluginv1.ContractRef{SchemaId: "capabilities/statestore.output"},
 			Idempotent: true, // resolution is a pure read of config — no side effects
+			// THIS Action is the `statestore` class (ADR-0140 D1) — declared, not derived from
+			// the plugin id. Advertised under the same condition as the capability itself, so a
+			// plugin with no state bucket advertises neither the class nor an implementation of it.
+			Implements: "statestore",
 		})
 	}
 	return &pluginv1.GetManifestResponse{Manifest: &pluginv1.Manifest{

@@ -1982,6 +1982,10 @@ export interface components {
             verified: boolean;
             /** @description The phantom/pending reason when verified=false; empty when verified. */
             reason?: string;
+            /** @description The capability class → Action name mappings this provider's Manifest ADVERTISES, for the classes it was granted (ADR-0140 D1). This is what capability resolution reads; core no longer derives the name. Absent/empty is normal — only classes reached through a resolve Action appear here, never one routed through a per-kind Workflow map. It is the descent surface (§1.8) for "why did this capability route to that Action?", which was previously answerable only from a naming convention held in core's head. */
+            implements?: {
+                [key: string]: string;
+            };
         };
         /** @description Selects which verified provider fulfils a capability class for a given Intent kind (ADR-0110 D3), so an Intent's `requires: [provisioning]` resolves to a concrete provider + build Workflow. A CaC declaration FORM the capability registry reconciles — NOT a Named Kind (§2 frozen); the binding selects only the provider (the provider owns its per-kind build Workflow via its `provisions` map). */
         CapabilityBinding: {

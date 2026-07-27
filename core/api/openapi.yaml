@@ -2531,6 +2531,16 @@ components:
         reason:
           type: string
           description: The phantom/pending reason when verified=false; empty when verified.
+        implements:
+          type: object
+          additionalProperties: { type: string }
+          description: >
+            The capability class → Action name mappings this provider's Manifest ADVERTISES, for
+            the classes it was granted (ADR-0140 D1). This is what capability resolution reads;
+            core no longer derives the name. Absent/empty is normal — only classes reached through
+            a resolve Action appear here, never one routed through a per-kind Workflow map. It is
+            the descent surface (§1.8) for "why did this capability route to that Action?", which
+            was previously answerable only from a naming convention held in core's head.
     CapabilityBinding:
       type: object
       description: >

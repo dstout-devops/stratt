@@ -1,6 +1,6 @@
 # ADR 0140 — A capability is invoked, not named: the mapping is declared, never minted
 
-- **Status:** **Proposed** (2026-07-26, steward) — **SCOPE ONLY, nothing implemented.** Charter review by
+- **Status:** **Partially accepted** (D1/D2 implemented 2026-07-27; D3 row 2, D4, D5 Step forms outstanding). Charter review by
   hand; §1.5/§1.8/§2.4 answered inline. **No new dependency, no new Named Kind.**
 - **Date:** 2026-07-26
 - **Deciders:** steward
@@ -88,9 +88,24 @@ it. It is advertised, verified, and carried opaquely:
   is truth" holds exactly as it does today.
 - **Implementation** — _which_ Action implements it? Advertised in the **Manifest**
   (`ActionDecl.implements: <class>`) and checked at registration against the grant, the same way
-  `Manifest.capabilities` is already checked against `provides`. A provider whose Manifest advertises
-  no implementation for a class it claims is a **phantom** and does not count (§1.5) — the existing
-  verdict, applied to a fact that is currently guessed instead of checked.
+  `Manifest.capabilities` is already checked against `provides`.
+
+  > **CORRECTED IN IMPLEMENTATION (2026-07-27).** This bullet originally continued: _"A provider whose
+  > Manifest advertises no implementation for a class it claims is a **phantom** and does not count."_
+  > That rule contradicts **D3 of this same ADR** and could not be built. D3 says the three Step
+  > shapes have three resolutions — and a class reached through a per-kind Workflow map has **no
+  > resolve Action at all**. `provisioning` is exactly that shape, so the phantom rule would have
+  > rejected every provisioning provider in the estate (awsec2, crossplane, opentofu, vcenter) and
+  > taken the whole build path down with them. The drafting error was assuming every class is
+  > resolve-Action-shaped, which D3 itself refutes two sections later.
+  >
+  > **What shipped instead:** a missing implementation is refused where it is **used** —
+  > `ResolveCapabilityAction`'s third failure (D5) — never where it is merely absent. Verification
+  > records the advertised implementations for the **granted** classes and stays silent about
+  > classes routed some other way. An advertisement for an **ungranted** class is dropped, not
+  > honored (§1.5): a plugin must not be able to admit itself to a class by claiming to implement
+  > it. Two Actions claiming the same class **does** fail verification — that one is unresolvable
+  > without a tiebreak, and a tiebreak is what §2.4 forbids.
 
 Core then carries whatever token the plugin advertised, opaquely — exactly as it already carries
 `compute-build` without knowing what is inside it. **The `<plugin>/<class>-resolve` convention is
@@ -179,6 +194,7 @@ them to the plugin — a third failure that today is silently a missing string.
   `actuator:`/`action:` references, not `provisions:` values. A provider whose advertised mechanisms
   are split across trees is a gap in the ratchet, and closing it is cheap: the same ownership test,
   applied to the per-kind maps.
+
 - **`linux-onboard` still needs ADR-0138 D5** for its ansible leg — capability routing to an EE-Job
   provider remains impossible until dial-less verification lands. **That is the hard prerequisite for
   reconcile too**, since `configmgmt`'s first provider is a subprocess by charter.
@@ -200,12 +216,27 @@ them to the plugin — a third failure that today is silently a missing string.
 - **Do reconcile first, Actions later.** Rejected: reconcile's legs are Actuator-shaped AND
   Action-shaped, so the reconcile case needs both. Splitting them would ship half a reconcile.
 
-## Implementation — not started
+## Implementation — D1/D2 shipped; D3 row 2, D4, D5's Step forms outstanding
 
-1. **`ActionDecl.implements`** in the port + SDK, advertised by one provider (netbox/`ipam` — its class
-   contracts already exist) and verified at registration.
-2. **`ResolveCapabilityAction` reads the advertisement** instead of concatenating, with the third
-   failure mode from D5. The convention is deleted in the same change, not deprecated alongside it.
+1. ~~**`ActionDecl.implements`** in the port + SDK, advertised by one provider and verified at
+   registration.~~ **DONE (2026-07-27).** Field 6 on `ActionDecl`; advertised by **two** providers,
+   netbox/`ipam` and awss3/`statestore` — both of the classes that are actually resolve-Action-shaped
+   today, so the derived path has no remaining users. The granted class→Action map is persisted on
+   `graph.capability_provider` (migration 00043) by the leader-only verification pass, **not dialed for
+   at resolve time**: routing a Run by whether this replica could reach the plugin in this instant is
+   precedence-by-liveness (§2.4), the same hazard `verified` was introduced to remove.
+2. ~~**`ResolveCapabilityAction` reads the advertisement** instead of concatenating.~~ **DONE.** The
+   `<pluginIdentity>/<class>-resolve` concatenation is **deleted**, with no fallback (see Traps). Three
+   distinct failures, because their fixes are: no verified provider → the provider; ≥2 with no binding →
+   the estate; verified but advertising no implementation → the plugin. A fourth was found while
+   building and kept separate: **advertised but not in `actionNames`** — the plugin named its
+   implementation and the estate never admitted it as dispatchable, so there is no dispatch-table entry
+   to route to. That is a grant gap, not a plugin gap, and it says so.
+
+   Proven by a test the old mechanism could not have passed: a provider whose implementation is
+   `netbox/allocate-prefix` resolves `ipam`. Under the convention that name was unreachable by
+   construction — which was the whole complaint.
+
 3. **`action:` Step form** (D3 row 2) — `actionCapability:`, resolved at launch, recorded on the Run.
 4. **`actuator:` form + reconcile** (D4) — `actuatorCapability:` on Trigger/Baseline, with
    `facetWriteScope` checked against every candidate's grant at declaration.

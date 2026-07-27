@@ -48,6 +48,9 @@ type AdvertisedAction struct {
 	Name           string
 	InputContract  string
 	OutputContract string
+	// Implements is the capability class this Action IS, or "" for an ordinary Action
+	// (ADR-0140 D1). Carried opaquely — core never derives it and never parses the name.
+	Implements string
 }
 
 // PluginManifest is the core-side view of a plugin's Manifest — the §1.5 VERIFICATION input,
@@ -135,6 +138,7 @@ func (r *Registry) dialManifest(ctx context.Context, addr string) (PluginManifes
 			Name:           a.GetName(),
 			InputContract:  a.GetInput().GetSchemaId(),
 			OutputContract: a.GetOutput().GetSchemaId(),
+			Implements:     a.GetImplements(),
 		})
 	}
 	return out, nil
@@ -509,24 +513,35 @@ func classifyRequires(requires []string, res resolution) (ok bool, reason string
 }
 
 // ResolveCapabilityAction returns the resolve-Action name of the single VERIFIED provider of a
-// capability class (ADR-0105) — the mapping the orchestration invokes at dispatch. Fails CLOSED:
-// 0 verified providers → error; ≥2 → ambiguous (an estate binding must name one, ADR-0105 D5), never
-// a silent tiebreak (§2.4). The resolve Action is the provider's `<pluginIdentity>/<class>-resolve`
-// (the frozen <plugin>/<op> convention), and it must be one of the provider's declared ActionNames.
+// capability class (ADR-0105) — the mapping the orchestration invokes at dispatch.
+//
+// The name is READ from the provider's advertisement (ActionDecl.implements, ADR-0140 D1), never
+// derived. It used to be `<pluginIdentity>/<class>-resolve`, string-concatenated here and then
+// required to exist: core dictating names inside a namespace it does not own, so a provider whose
+// Action was called anything else could not serve the class no matter what its Manifest said. The
+// convention is DELETED, not kept as a fallback — "use the advertisement, else the old name" is a
+// silent precedence rule (§2.4) that would keep unmigrated providers invisibly working until the
+// day one of them did not.
+//
+// Fails CLOSED, with the three failures kept distinct because their fixes are (§1.8, ADR-0140 D5):
+// no verified provider → look at the provider; ≥2 with no binding → look at the estate; verified
+// but advertising no implementation → look at the plugin.
 func (r *Registry) ResolveCapabilityAction(ctx context.Context, capClass string) (string, error) {
 	verifs, err := r.store.ListProviderVerifications(ctx)
 	if err != nil {
 		return "", err
 	}
-	verified := make(map[string]bool, len(verifs))
+	// The advertised implementations of each VERIFIED provider, keyed like the verification rows.
+	implements := make(map[string]map[string]string, len(verifs))
 	for _, v := range verifs {
 		if v.Verified {
-			verified[v.Kind+"/"+v.Name] = true
+			implements[v.Kind+"/"+v.Name] = v.Implements
 		}
 	}
 	type provider struct {
-		pluginIdentity string
-		actionNames    []string
+		name        string // the declaration name — what an estate binding would name
+		actionNames []string
+		implements  map[string]string
 	}
 	var providers []provider
 	conns, err := r.store.ListConnectors(ctx)
@@ -534,8 +549,8 @@ func (r *Registry) ResolveCapabilityAction(ctx context.Context, capClass string)
 		return "", err
 	}
 	for _, c := range conns {
-		if verified["connector/"+c.Name] && contains(c.Provides, capClass) {
-			providers = append(providers, provider{c.PluginIdentity, c.ActionNames})
+		if impl, ok := implements["connector/"+c.Name]; ok && contains(c.Provides, capClass) {
+			providers = append(providers, provider{c.Name, c.ActionNames, impl})
 		}
 	}
 	acts, err := r.store.ListActuators(ctx)
@@ -543,19 +558,35 @@ func (r *Registry) ResolveCapabilityAction(ctx context.Context, capClass string)
 		return "", err
 	}
 	for _, a := range acts {
-		if verified["actuator/"+a.Name] && contains(a.Provides, capClass) {
-			providers = append(providers, provider{a.PluginIdentity, a.ActionNames})
+		if impl, ok := implements["actuator/"+a.Name]; ok && contains(a.Provides, capClass) {
+			providers = append(providers, provider{a.Name, a.ActionNames, impl})
 		}
 	}
 	switch len(providers) {
 	case 0:
 		return "", fmt.Errorf("no verified provider for capability %q", capClass)
 	case 1:
-		want := providers[0].pluginIdentity + "/" + capClass + "-resolve"
-		if !contains(providers[0].actionNames, want) {
-			return "", fmt.Errorf("capability %q provider %q does not declare its resolve Action %q", capClass, providers[0].pluginIdentity, want)
+		p := providers[0]
+		action := p.implements[capClass]
+		if action == "" {
+			// The third failure (ADR-0140 D5). Today this is the shape a provider is in when it
+			// fulfils the class some other way — through a per-kind Workflow map, which is not
+			// invocable as an Action — or when it has not advertised `implements` at all. Both
+			// are "ask the plugin", and both used to surface as a name that did not match, which
+			// pointed at the wrong thing entirely.
+			return "", fmt.Errorf("capability %q provider %q is verified but its Manifest advertises no Action "+
+				"implementing the class (ActionDecl.implements) — the operator grants the class; the plugin "+
+				"declares which of its Actions IS the class (ADR-0140 D1)", capClass, p.name)
 		}
-		return want, nil
+		if !contains(p.actionNames, action) {
+			// Advertised but not admitted: the plugin says this Action implements the class, and
+			// the estate did not register it as dispatchable, so there is no dispatch-table entry
+			// to route to. A grant gap, not a plugin gap — say so.
+			return "", fmt.Errorf("capability %q provider %q advertises %q as its implementation, but that Action "+
+				"is not in the declaration's actionNames, so it is not dispatchable — add it (§1.5: the Manifest "+
+				"advertises, the grant is truth)", capClass, p.name, action)
+		}
+		return action, nil
 	default:
 		return "", fmt.Errorf("ambiguous: %d verified providers for capability %q; add an estate binding (ADR-0105 D5)", len(providers), capClass)
 	}
@@ -662,52 +693,92 @@ func (r *Registry) ReconcileProviderVerification(ctx context.Context) {
 
 	for _, p := range provs {
 		key := p.kind + "/" + p.name
-		res, reason := r.verifyProvider(ctx, p.addr, p.provides)
+		res, reason, impl := r.verifyProvider(ctx, p.addr, p.provides)
 		switch res {
 		case provVerified:
-			r.recordVerification(ctx, p.kind, p.name, true, "")
-			r.log.Info("connector registry: provider verified", "provider", key, "provides", p.provides)
+			r.recordVerification(ctx, p.kind, p.name, true, "", impl)
+			r.log.Info("connector registry: provider verified", "provider", key, "provides", p.provides, "implements", impl)
 		case provPhantom, provUnverifiable:
-			r.recordVerification(ctx, p.kind, p.name, false, reason)
+			r.recordVerification(ctx, p.kind, p.name, false, reason, nil)
 			r.log.Warn("connector registry: provider REJECTED (not counted)", "provider", key, "reason", reason)
 		case provUnreachable:
 			if existing[key] {
 				// Preserve the last-CONFIRMED verdict — a transient blip must not drop an
 				// established provider from the count (health-independence, §2.4/D3/Finding-1).
+				// The advertised implementations are preserved with it, and for the same reason:
+				// re-resolving a capability must not depend on whether this pass could dial.
 				r.log.Warn("connector registry: provider verification unreachable; preserving last-known verdict", "provider", key, "reason", reason)
 			} else {
 				// Never verified → fail closed, labeled pending (NOT a structural phantom).
-				r.recordVerification(ctx, p.kind, p.name, false, "verification pending (unreachable): "+reason)
+				r.recordVerification(ctx, p.kind, p.name, false, "verification pending (unreachable): "+reason, nil)
 			}
 		}
 	}
 }
 
-func (r *Registry) recordVerification(ctx context.Context, kind, name string, verified bool, reason string) {
-	if err := r.store.UpsertProviderVerification(ctx, kind, name, verified, reason); err != nil {
+func (r *Registry) recordVerification(ctx context.Context, kind, name string, verified bool, reason string, implements map[string]string) {
+	if err := r.store.UpsertProviderVerification(ctx, kind, name, verified, reason, implements); err != nil {
 		r.log.Warn("connectorregistry: verify: upsert", "provider", kind+"/"+name, "err", err)
 	}
 }
 
 // verifyProvider fetches the plugin's Manifest and classifies the outcome (see verifyResult).
-func (r *Registry) verifyProvider(ctx context.Context, addr string, provides []string) (verifyResult, string) {
+// On success it also returns the class→Action implementations the Manifest advertised, RESTRICTED
+// to the classes the operator granted (ADR-0140 D1).
+func (r *Registry) verifyProvider(ctx context.Context, addr string, provides []string) (verifyResult, string, map[string]string) {
 	if addr == "" {
-		return provUnverifiable, "provider has no dial address (EE-Job providers are not yet manifest-verifiable, ADR-0104 D1)"
+		return provUnverifiable, "provider has no dial address (EE-Job providers are not yet manifest-verifiable, ADR-0104 D1)", nil
 	}
 	m, err := r.manifest(ctx, addr)
 	if err != nil {
-		return provUnreachable, "manifest fetch failed: " + err.Error()
+		return provUnreachable, "manifest fetch failed: " + err.Error(), nil
 	}
 	advertised := make(map[string]bool, len(m.Capabilities))
 	for _, c := range m.Capabilities {
 		advertised[c] = true
 	}
+	granted := make(map[string]bool, len(provides))
 	for _, tok := range provides {
 		if !advertised[tok] {
-			return provPhantom, fmt.Sprintf("phantom provider: declares provides %q but its Manifest does not advertise it (§1.5)", tok)
+			return provPhantom, fmt.Sprintf("phantom provider: declares provides %q but its Manifest does not advertise it (§1.5)", tok), nil
 		}
+		granted[tok] = true
 	}
-	return provVerified, ""
+
+	// The class→Action implementations, filtered by the grant. An advertisement for a class the
+	// operator did NOT grant is dropped, not honored: the Manifest advertises, the grant is truth
+	// (§1.5) — a plugin cannot admit itself to a class by claiming an implementation for it.
+	//
+	// Deliberately NOT a phantom check. ADR-0140 D1 proposed treating a provider that advertises
+	// no implementation for a class it claims as a phantom, but that was written before its own D3
+	// separated the three Step shapes: `provisioning` is fulfilled through a per-kind `provisions:`
+	// Workflow map and has no resolve Action at all, so the rule as drafted would phantom every
+	// provisioning provider in the estate (awsec2, crossplane, opentofu, vcenter) and take the
+	// whole build path down. A missing implementation is refused where it is USED —
+	// ResolveCapabilityAction's third failure — not where it is merely absent.
+	var impl map[string]string
+	for _, a := range m.Actions {
+		class := a.Implements
+		if class == "" {
+			continue
+		}
+		if !granted[class] {
+			r.log.Info("connector registry: ignoring advertised implementation for an ungranted capability class",
+				"action", a.Name, "class", class, "granted", provides)
+			continue
+		}
+		if impl == nil {
+			impl = map[string]string{}
+		}
+		if prior, dup := impl[class]; dup {
+			// Two Actions claiming to BE the same class is unresolvable without a tiebreak, and
+			// a tiebreak is what §2.4 forbids. Fail the whole verification rather than pick.
+			return provPhantom, fmt.Sprintf("provider advertises two implementations of capability %q (%q and %q); "+
+				"a class has one implementation per provider and core must not choose (§2.4)", class, prior, a.Name), nil
+		}
+		impl[class] = a.Name
+	}
+	return provVerified, "", impl
 }
 
 // ── grant construction ──────────────────────────────────────────────────────
