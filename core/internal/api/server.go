@@ -1915,6 +1915,9 @@ func stepToWire(s types.Step) Step {
 	if s.Action != "" {
 		out.Action = &s.Action
 	}
+	if s.ActionCapability != "" {
+		out.ActionCapability = &s.ActionCapability
+	}
 	if s.ViewName != "" {
 		out.ViewName = &s.ViewName
 	}
@@ -1983,6 +1986,9 @@ func workflowFromWire(in Workflow, opts ...desiredstate.ValidateOption) (types.W
 		}
 		if s.Action != nil {
 			step.Action = *s.Action
+		}
+		if s.ActionCapability != nil {
+			step.ActionCapability = *s.ActionCapability
 		}
 		if s.ViewName != nil {
 			step.ViewName = *s.ViewName

@@ -220,3 +220,39 @@ func TestTriggerWireRoundTripInputs(t *testing.T) {
 		t.Fatalf("triggerToWire must publish inputs, got %#v", back.Inputs)
 	}
 }
+
+// The class form has the SAME wire hazard the named form had (the gap the k8s-deploy demo
+// surfaced): if `actionCapability` is dropped in workflowFromWire, the server sees a Step that
+// is neither an Action nor an actuation and rejects a declaration Git accepts. Worse than the
+// original, because a silently-dropped class turns a valid Step into "actuation step requires
+// viewName" — a diagnostic pointing at a field the author never wrote (§1.6, §1.8).
+func TestWorkflowWireRoundTripActionCapability(t *testing.T) {
+	in := Workflow{
+		Name: "allocate-subnet",
+		Steps: []Step{{
+			Name:             "allocate",
+			ActionCapability: ptr("ipam"),
+			CredentialRefs:   ptr([]string{"netbox-token"}),
+			Params: ptr(map[string]any{
+				"key":  "web-prod",
+				"pool": "10.0.0.0/8",
+				"size": 24,
+			}),
+		}},
+	}
+
+	got, err := workflowFromWire(in)
+	if err != nil {
+		t.Fatalf("workflowFromWire: %v", err)
+	}
+	step := got.Steps[0]
+	if step.ActionCapability != "ipam" {
+		t.Fatalf("ActionCapability not carried through wire: got %q", step.ActionCapability)
+	}
+	if step.Action != "" {
+		t.Fatalf("the wire must not resolve the class to a provider: got %q", step.Action)
+	}
+	if a := stepToWire(step).ActionCapability; a == nil || *a != "ipam" {
+		t.Fatalf("stepToWire dropped ActionCapability: %v", a)
+	}
+}

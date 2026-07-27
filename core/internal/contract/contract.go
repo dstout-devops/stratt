@@ -326,6 +326,31 @@ func ValidateNamed(name string, doc json.RawMessage) error {
 // (ADR-0024/0031 cross-Step binding) then re-validates against the Action's
 // input Contract — the Action counterpart of ResolveActuatorParams.
 func ResolveActionParams(action string, params map[string]any, ns template.Namespaces) (json.RawMessage, error) {
+	return resolveParamsAgainst(params, ns, func(raw json.RawMessage) error {
+		return ValidateActionInput(action, raw)
+	})
+}
+
+// ResolveCapabilityParams is ResolveActionParams for a Step that names a capability CLASS
+// rather than an Action (ADR-0140 D3 row 2). The params are validated against the CLASS
+// Contract — `capabilities/<class>.input` — never the resolved provider's own Action Contract.
+//
+// That is the whole point of writing the Step against a class: the author wrote
+// provider-agnostic params, and validating them against whichever provider happens to be bound
+// would make the Step's validity depend on the binding. It is also what ADR-0112 D2 already does
+// on the `requires:` path, where the class Contract governs a capability call's output.
+func ResolveCapabilityParams(class string, params map[string]any, ns template.Namespaces) (json.RawMessage, error) {
+	return resolveParamsAgainst(params, ns, func(raw json.RawMessage) error {
+		return ValidateNamed(CapabilityInput(class), raw)
+	})
+}
+
+// CapabilityInput/CapabilityOutput name a capability class's Contracts. One spelling, so the
+// convention lives in one place rather than being re-concatenated at each call site.
+func CapabilityInput(class string) string  { return "capabilities/" + class + ".input" }
+func CapabilityOutput(class string) string { return "capabilities/" + class + ".output" }
+
+func resolveParamsAgainst(params map[string]any, ns template.Namespaces, validate func(json.RawMessage) error) (json.RawMessage, error) {
 	resolved, err := template.SubstituteParams(params, ns)
 	if err != nil {
 		return nil, err
@@ -336,7 +361,7 @@ func ResolveActionParams(action string, params map[string]any, ns template.Names
 			return nil, err
 		}
 	}
-	if err := ValidateActionInput(action, raw); err != nil {
+	if err := validate(raw); err != nil {
 		return nil, err
 	}
 	return raw, nil

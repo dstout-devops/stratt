@@ -77,11 +77,21 @@ type Step struct {
 	// Action names a Connector Action for a targetless typed operation (§2.2,
 	// ADR-0031); mutually exclusive with ViewName/Actuator. DryRun asks for a
 	// side-effect-free plan.
-	Action         string         `json:"action,omitempty"`
-	DryRun         bool           `json:"dryRun,omitempty"`
-	Params         map[string]any `json:"params,omitempty"`
-	Slices         int            `json:"slices,omitempty"`
-	CredentialRefs []string       `json:"credentialRefs,omitempty"`
+	Action string `json:"action,omitempty"`
+	// ActionCapability names a capability CLASS instead of a provider's Action
+	// (ADR-0140 D3 row 2): the Step says WHAT it needs, and the bound provider's
+	// advertised implementation is resolved at launch. Mutually exclusive with
+	// Action — a Step that names both would have two answers to "what runs here"
+	// and a rule to pick between them is the implicit precedence §2.4 refuses.
+	//
+	// Params are validated against the CLASS Contract (capabilities/<class>.input),
+	// so the Step stays valid across a provider swap — which is the reason to write
+	// one this way rather than naming `netbox/ipam-resolve` directly.
+	ActionCapability string         `json:"actionCapability,omitempty"`
+	DryRun           bool           `json:"dryRun,omitempty"`
+	Params           map[string]any `json:"params,omitempty"`
+	Slices           int            `json:"slices,omitempty"`
+	CredentialRefs   []string       `json:"credentialRefs,omitempty"`
 	// FacetWriteScope is the Facet namespaces an actuation Step may write back
 	// (ADR-0054): the actuator's grant ∩ this scope. Empty admits no facet write-back.
 	FacetWriteScope []string `json:"facetWriteScope,omitempty"`

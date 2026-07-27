@@ -2055,6 +2055,8 @@ export interface components {
             gate?: components["schemas"]["GateSpec"];
             /** @description A namespaced targetless Connector Action (e.g. helm/deploy). Set this OR viewName+actuator, never both — an Action carries no View (ADR-0031). */
             action?: string;
+            /** @description A capability CLASS (e.g. ipam) instead of a provider's Action name (ADR-0140 D3 row 2). The Step declares WHAT it needs; the bound provider's advertised implementation is resolved at launch and recorded on the Run alongside the class. Mutually exclusive with `action` — naming both would give the Step two answers to "what runs here", and a rule to choose between them is implicit precedence (§2.4). Params are validated against the CLASS Contract (capabilities/<class>.input), so the Step stays valid across a provider swap. */
+            actionCapability?: string;
             viewName?: string;
             actuator?: string;
             params?: Record<string, never>;

@@ -1,6 +1,6 @@
 # ADR 0140 — A capability is invoked, not named: the mapping is declared, never minted
 
-- **Status:** **Partially accepted** (D1/D2 implemented 2026-07-27; D3 row 2, D4, D5 Step forms outstanding). Charter review by
+- **Status:** **Partially accepted** (D1/D2/D3-row-2 implemented 2026-07-27; D4 + the estate move outstanding). Charter review by
   hand; §1.5/§1.8/§2.4 answered inline. **No new dependency, no new Named Kind.**
 - **Date:** 2026-07-26
 - **Deciders:** steward
@@ -237,7 +237,40 @@ them to the plugin — a third failure that today is silently a missing string.
    `netbox/allocate-prefix` resolves `ipam`. Under the convention that name was unreachable by
    construction — which was the whole complaint.
 
-3. **`action:` Step form** (D3 row 2) — `actionCapability:`, resolved at launch, recorded on the Run.
+3. ~~**`action:` Step form** (D3 row 2) — `actionCapability:`, resolved at launch, recorded on the
+   Run.~~ **DONE (2026-07-27).** `Step.actionCapability`, mutually exclusive with `action:` (naming
+   both would give the Step two answers and a rule to pick is §2.4's implicit precedence). Resolution
+   is an **activity**, not workflow-side code — a Temporal workflow function must stay deterministic,
+   and a rebind between run and replay would otherwise rewrite history. The Run records the class
+   **alongside** the resolved Action: recording only the resolved name would make a capability-routed
+   Run indistinguishable from one that named the provider directly, which is the coupling this
+   removes.
+
+   Params are validated against the **class** Contract at load and at launch, never the bound
+   provider's — check them against the provider and the declaration's validity changes when the
+   binding does, which is the opposite of the point.
+
+   `vsphere-subnet-build`'s allocate leg is converted and is the mechanism's first live user. Its
+   old comment — _"the ipam capability's allocate Action"_ — was the tell: the author was thinking
+   in capabilities and the mechanism could only express a provider. **Its params needed no change**,
+   because they were already class-shaped; `actions/netbox/ipam-resolve.input` exists only to mirror
+   `capabilities/ipam.input` and is bound to it by a co-fidelity test, so the mirror stops being
+   load-bearing on this path.
+
+   **A residue this exposed, and the reason item 5 has NOT been done.** An Action Step must carry a
+   `CredentialRef` — it is the Action's only authz gate until the run-grant lands — and a credential
+   is provider-specific by nature. So the Step no longer names NetBox's _Action_ but still names
+   NetBox's _credential_, and a swap to Nautobot would still edit this declaration. Moving the
+   Workflow into `plugins/vcenter/` now would put a netbox reference inside vcenter's tree — the
+   exact coupling `plugins:boundary` exists to catch, in a field check 3 does not read. The move is
+   gated on that, not on the Action-shaped half, which is closed.
+
+   Note the `requires:`-path asymmetry: `resolveCapabilities` invokes a resolve Action with **no**
+   credentials at all (the plugin uses its own configured auth), so capability-typed credentials are
+   a Step-form problem specifically. Whether a class should be able to declare its credential
+   requirement — or whether a capability Step should inherit the provider's own auth the way the
+   `requires:` path does — is an open question this ADR does not answer.
+
 4. **`actuator:` form + reconcile** (D4) — `actuatorCapability:` on Trigger/Baseline, with
    `facetWriteScope` checked against every candidate's grant at declaration.
 5. **`vsphere-subnet-build` moves** to the vcenter plugin — the test that the Action-shaped half closed,

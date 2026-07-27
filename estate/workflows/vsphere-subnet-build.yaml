@@ -37,7 +37,25 @@ steps:
       timeoutSeconds: 86400 # 24h to approve the build
   - name: allocate-vlan
     needs: [approve]
-    action: netbox/ipam-resolve # the ipam capability's allocate Action, composed as an explicit Step
+    # The CLASS, not a provider (ADR-0140 D3 row 2). This Step used to read
+    # `action: netbox/ipam-resolve`, with a comment calling it "the ipam capability's allocate
+    # Action" — which is the tell: the author was thinking in capabilities and the mechanism could
+    # only express a provider. ADR-0104 D1 forbids a consumer naming a provider, and this was the
+    # estate's most visible violation of it. The bound provider's advertised implementation is
+    # resolved at launch and recorded on the Run beside the class (§1.8).
+    #
+    # Params are unchanged because they were ALREADY class-shaped — they validated against
+    # actions/netbox/ipam-resolve.input, a document that exists only to mirror
+    # capabilities/ipam.input and is bound to it by a co-fidelity test. They now validate against
+    # the class directly, and the mirror stops being load-bearing here.
+    actionCapability: ipam
+    # STILL PROVIDER-NAMED, and deliberately left visible: an Action Step must carry a
+    # CredentialRef (it is the Action's only authz gate until the run-grant lands), and a
+    # credential is provider-specific by nature. So the Step no longer names NetBox's ACTION but
+    # still names NetBox's CREDENTIAL — a swap to Nautobot would change this line. That is the
+    # remaining coupling, and it is why this Workflow has NOT moved into plugins/vcenter/ yet
+    # (ADR-0140 item 5): moving it would put a netbox reference inside vcenter's tree, which is
+    # the coupling `plugins:boundary` exists to catch, in a field check 3 does not read.
     credentialRefs: [netbox-dev] # §2.5 — an Action's use-check is its only authz gate
     params:
       # The Intent's own name is the idempotency key — a re-run returns the SAME prefix + VLAN

@@ -2777,6 +2777,39 @@ func validateActionParamsContract(action string, params map[string]any) error {
 	return contract.ValidateActionInput(action, raw)
 }
 
+// validateActionCapabilityParamsContract is validateActionParamsContract for a Step that names
+// a capability CLASS (ADR-0140 D3 row 2). The params are checked against the CLASS Contract,
+// never a provider's — the Step must be valid independent of which provider is bound, or the
+// class has bought nothing.
+//
+// The class Contract must EXIST at load for the same reason an Action's must: whether
+// `capabilities/<class>.input` is present is a static fact about the estate, so a Step naming a
+// class nothing contracts is refused here rather than at launch. This is also the check that
+// keeps a class-named Step honest — `actionCapability: provisioning` loads today only if someone
+// writes the class Contracts, and `provisioning` deliberately has none because it is not
+// Action-shaped (ADR-0140 D3 row 1).
+func validateActionCapabilityParamsContract(class string, params map[string]any) error {
+	name := contract.CapabilityInput(class)
+	if _, ok, err := contract.Get(name); err != nil {
+		return err
+	} else if !ok {
+		return fmt.Errorf("capability %q has no input contract %q — a Step may name a class only where the class "+
+			"is Action-shaped and contracted (§2.2, ADR-0111/ADR-0140 D3)", class, name)
+	}
+	if template.Has(params) {
+		return nil
+	}
+	raw := json.RawMessage(`{}`)
+	if params != nil {
+		b, err := json.Marshal(params)
+		if err != nil {
+			return fmt.Errorf("params: %w", err)
+		}
+		raw = b
+	}
+	return contract.ValidateNamed(name, raw)
+}
+
 // checkLaunchFields rejects a {{.launch.X}} binding whose X is not a declared input
 // (ADR-0118 D2) — the field-wise half of binding validation.
 //
@@ -2852,19 +2885,22 @@ type adoptedFromYAML struct {
 	Source   string `yaml:"source"`
 }
 type stepYAML struct {
-	Name            string         `yaml:"name"`
-	Needs           []string       `yaml:"needs"`
-	When            string         `yaml:"when"`
-	Gate            *gateYAML      `yaml:"gate"`
-	Policy          *policyYAML    `yaml:"policy"`
-	ViewName        string         `yaml:"viewName"`
-	Actuator        string         `yaml:"actuator"`
-	Action          string         `yaml:"action"`
-	DryRun          bool           `yaml:"dryRun"`
-	Params          map[string]any `yaml:"params"`
-	Slices          int            `yaml:"slices"`
-	CredentialRefs  []string       `yaml:"credentialRefs"`
-	FacetWriteScope []string       `yaml:"facetWriteScope"`
+	Name     string      `yaml:"name"`
+	Needs    []string    `yaml:"needs"`
+	When     string      `yaml:"when"`
+	Gate     *gateYAML   `yaml:"gate"`
+	Policy   *policyYAML `yaml:"policy"`
+	ViewName string      `yaml:"viewName"`
+	Actuator string      `yaml:"actuator"`
+	Action   string      `yaml:"action"`
+	// ActionCapability names a capability CLASS instead of a provider's Action
+	// (ADR-0140 D3 row 2) — the estate-facing half of the Action-shaped seam.
+	ActionCapability string         `yaml:"actionCapability"`
+	DryRun           bool           `yaml:"dryRun"`
+	Params           map[string]any `yaml:"params"`
+	Slices           int            `yaml:"slices"`
+	CredentialRefs   []string       `yaml:"credentialRefs"`
+	FacetWriteScope  []string       `yaml:"facetWriteScope"`
 }
 type gateYAML struct {
 	Approvers struct {
@@ -2975,7 +3011,8 @@ func parseWorkflowFile(path string, raw []byte, opts ...ValidateOption) (string,
 		step := types.Step{
 			Name: s.Name, Needs: s.Needs, When: s.When,
 			ViewName: s.ViewName, Actuator: s.Actuator,
-			Action: s.Action, DryRun: s.DryRun, Params: s.Params,
+			Action: s.Action, ActionCapability: s.ActionCapability,
+			DryRun: s.DryRun, Params: s.Params,
 			Slices: s.Slices, CredentialRefs: s.CredentialRefs,
 			FacetWriteScope: s.FacetWriteScope,
 		}
@@ -3037,9 +3074,14 @@ func ValidateWorkflow(w types.Workflow, opts ...ValidateOption) error {
 		// Actuation (Actuator+View).
 		isGate := s.Gate != nil
 		isPolicy := s.Policy != nil
-		isAction := s.Action != ""
+		isAction := s.Action != "" || s.ActionCapability != ""
 		isActuation := s.ViewName != "" || s.Actuator != "" || s.Slices != 0
 		switch {
+		case s.Action != "" && s.ActionCapability != "":
+			// Two answers to "what runs here", and a rule to choose between them is the
+			// implicit precedence §2.4 exists to refuse. Naming the class is the whole
+			// point; naming both would let the concrete name silently win.
+			return fmt.Errorf("workflow %s: step %s: a step names an action or an actionCapability, not both (§2.4)", w.Name, s.Name)
 		case isPolicy && (isGate || isAction || isActuation),
 			isGate && (isAction || isActuation):
 			return fmt.Errorf("workflow %s: step %s: a step is a gate, a policy, an action, or an actuation — not multiple", w.Name, s.Name)
@@ -3081,7 +3123,11 @@ func ValidateWorkflow(w types.Workflow, opts ...ValidateOption) error {
 		}
 		switch {
 		case isAction:
-			if err := validateActionParamsContract(s.Action, s.Params); err != nil {
+			if s.ActionCapability != "" {
+				if err := validateActionCapabilityParamsContract(s.ActionCapability, s.Params); err != nil {
+					return fmt.Errorf("workflow %s: step %s: %w", w.Name, s.Name, err)
+				}
+			} else if err := validateActionParamsContract(s.Action, s.Params); err != nil {
 				return fmt.Errorf("workflow %s: step %s: %w", w.Name, s.Name, err)
 			}
 			if err := checkTemplateNamespaces(

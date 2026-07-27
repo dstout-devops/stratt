@@ -346,9 +346,29 @@ func digestFromStep(steps map[string]json.RawMessage, planStep string) string {
 // runActionStep executes one Step as a child RunAction workflow (§2.2,
 // ADR-0031) and returns its typed outputs for downstream binding.
 func runActionStep(ctx workflow.Context, in DAGInput, step types.Step, steps map[string]json.RawMessage) (string, json.RawMessage) {
-	var params json.RawMessage
 	var a *Activities
-	if err := workflow.ExecuteActivity(ctx, a.ResolveActionStepParams, step.Action, step.Params, in.Event, steps, in.LaunchParams).Get(ctx, &params); err != nil {
+
+	// A class-named Step resolves to the bound provider's ADVERTISED implementation before
+	// anything else (ADR-0140 D3 row 2). It is an ACTIVITY, not workflow-side code: resolution
+	// reads the store, and a Temporal workflow function must stay deterministic — a rebind
+	// between the original run and a replay would otherwise rewrite history.
+	//
+	// The resolved name is carried on the child RunInput ALONGSIDE the class, never instead of
+	// it: the class is what the author asked for and the Action is what served it, and §1.8's
+	// one-click descent needs both. Recording only the resolved name would make a Run indis-
+	// tinguishable from one that named the provider directly, which is the coupling this removes.
+	action := step.Action
+	if step.ActionCapability != "" {
+		if err := workflow.ExecuteActivity(ctx, a.ResolveActionCapability, step.ActionCapability).Get(ctx, &action); err != nil {
+			return stepFailed, nil
+		}
+	}
+
+	var params json.RawMessage
+	// Params are validated against the CLASS Contract for a class-named Step and against the
+	// Action's own for a named one — the Step must be valid independent of the binding.
+	if err := workflow.ExecuteActivity(ctx, a.ResolveActionStepParams,
+		action, step.ActionCapability, step.Params, in.Event, steps, in.LaunchParams).Get(ctx, &params); err != nil {
 		return stepFailed, nil
 	}
 	cctx := workflow.WithChildOptions(ctx, workflow.ChildWorkflowOptions{
@@ -356,13 +376,14 @@ func runActionStep(ctx workflow.Context, in DAGInput, step types.Step, steps map
 	})
 	var outcome RunOutcome
 	err := workflow.ExecuteChildWorkflow(cctx, RunAction, RunInput{
-		Action:         step.Action,
-		DryRun:         step.DryRun,
-		Params:         params,
-		CredentialRefs: step.CredentialRefs,
-		Principal:      in.Principal,
-		WorkflowRunID:  in.WorkflowRunID,
-		StepName:       step.Name,
+		Action:           action,
+		ActionCapability: step.ActionCapability,
+		DryRun:           step.DryRun,
+		Params:           params,
+		CredentialRefs:   step.CredentialRefs,
+		Principal:        in.Principal,
+		WorkflowRunID:    in.WorkflowRunID,
+		StepName:         step.Name,
 	}).Get(cctx, &outcome)
 	if err != nil {
 		return stepFailed, nil
@@ -572,13 +593,41 @@ func (a *Activities) ResolveStepParams(ctx context.Context, actuator string, par
 
 // ResolveActionStepParams is the Action counterpart: substitute event/steps
 // bindings and re-validate against the Action's input Contract (§2.2, ADR-0031).
-func (a *Activities) ResolveActionStepParams(ctx context.Context, action string, params map[string]any, event map[string]any, steps map[string]json.RawMessage, launch map[string]any) (json.RawMessage, error) {
+func (a *Activities) ResolveActionStepParams(ctx context.Context, action, capClass string, params map[string]any, event map[string]any, steps map[string]json.RawMessage, launch map[string]any) (json.RawMessage, error) {
 	ns := template.Namespaces{"event": event, "steps": stepsNamespace(steps), "launch": launch}
-	raw, err := contract.ResolveActionParams(action, params, ns)
+	resolve := func() (json.RawMessage, error) { return contract.ResolveActionParams(action, params, ns) }
+	if capClass != "" {
+		// The CLASS Contract governs a class-named Step, not the resolved provider's own
+		// (ADR-0112 D2, applied to the Step form): the author wrote provider-agnostic params,
+		// and checking them against whichever provider is bound would make the Step's validity
+		// depend on the binding — which is exactly what naming a class is meant to avoid.
+		resolve = func() (json.RawMessage, error) { return contract.ResolveCapabilityParams(capClass, params, ns) }
+	}
+	raw, err := resolve()
 	if err != nil {
 		return nil, temporal.NewNonRetryableApplicationError(err.Error(), "InvalidStepParams", err)
 	}
 	return raw, nil
+}
+
+// ResolveActionCapability maps a capability CLASS to the bound provider's advertised
+// implementation (ADR-0140 D1/D3 row 2). An activity because it reads the store, and because a
+// workflow function must not — a rebind between run and replay would rewrite history.
+//
+// Fails NON-RETRYABLY and visibly: unresolvable means no verified provider, an ambiguous pair, or
+// a provider that advertised no implementation, and none of those is fixed by trying again (§1.8).
+func (a *Activities) ResolveActionCapability(ctx context.Context, capClass string) (string, error) {
+	if a.ResolveCapability == nil {
+		return "", temporal.NewNonRetryableApplicationError(
+			fmt.Sprintf("step names capability %q but no capability resolver is configured", capClass),
+			"CapabilityResolverUnavailable", nil)
+	}
+	action, err := a.ResolveCapability(ctx, capClass)
+	if err != nil {
+		return "", temporal.NewNonRetryableApplicationError(
+			fmt.Sprintf("resolve capability %q: %v", capClass, err), "CapabilityUnresolvable", err)
+	}
+	return action, nil
 }
 
 // LoadWorkflow reads the declared Workflow spec.
