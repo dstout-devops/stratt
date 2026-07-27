@@ -1,6 +1,12 @@
 # vsphere-subnet-build — the GATED build Workflow an Intent/Subnet launches when it resolves to the
 # vcenter provisioning provider in the vsphere-dc environment (ADR-0113 D4 / ADR-0110 D3).
 #
+# It LIVES HERE because it is vcenter's own advertised Subnet builder: vcenter.yaml declares
+# `provisions: {Compute: vsphere-vm-build, Subnet: vsphere-subnet-build}`. It sat in estate/ until
+# its ipam leg stopped naming NetBox (ADR-0140 D3 row 2) — a Workflow that names another plugin's
+# provider cannot live in this tree (plugins:boundary check 3), and a provider whose advertised
+# mechanisms are split across trees is the gap check 5 now closes.
+#
 # It composes the `ipam` capability EXPLICITLY (ADR-0113 D4, the corrected mechanism): step 1
 # netbox/ipam-resolve ALLOCATES the prefix + VLAN (anchored in NetBox, idempotent on `key`, §1.2 — no
 # allocation record in Stratt); step 2 vcenter/create-portgroup reads the allocated vlanId + cidr via
@@ -49,13 +55,22 @@ steps:
     # capabilities/ipam.input and is bound to it by a co-fidelity test. They now validate against
     # the class directly, and the mirror stops being load-bearing here.
     actionCapability: ipam
-    # STILL PROVIDER-NAMED, and deliberately left visible: an Action Step must carry a
-    # CredentialRef (it is the Action's only authz gate until the run-grant lands), and a
-    # credential is provider-specific by nature. So the Step no longer names NetBox's ACTION but
-    # still names NetBox's CREDENTIAL — a swap to Nautobot would change this line. That is the
-    # remaining coupling, and it is why this Workflow has NOT moved into plugins/vcenter/ yet
-    # (ADR-0140 item 5): moving it would put a netbox reference inside vcenter's tree, which is
-    # the coupling `plugins:boundary` exists to catch, in a field check 3 does not read.
+    # STILL PROVIDER-NAMED, and deliberately left visible. An Action Step must carry a
+    # CredentialRef — it is the Action's only authz gate until the run-grant lands — and a
+    # credential is provider-specific by nature. So this Step no longer names NetBox's ACTION but
+    # still names NetBox's CREDENTIAL, and a swap to Nautobot would edit this line.
+    #
+    # It did NOT block the move here, on reflection. A CredentialRef is a NAME the operator
+    # supplies and the floor resolves, like the `address:` fields already in every plugin
+    # declaration — not a plugin-to-plugin reference. And the alternative was worse: leaving this
+    # Workflow in estate/ left vcenter's `provisions` map pointing into two trees, which
+    # plugins:boundary check 5 now refuses outright.
+    #
+    # The real asymmetry is that the `requires:` path invokes a resolve Action with NO credentials
+    # at all — the plugin uses its own configured auth — so this is a Step-form problem
+    # specifically. Whether a capability Step should inherit the provider's auth the same way is
+    # an open question ADR-0140 records and does not answer; it touches the Action authz gate, so
+    # it needs its own review rather than a quiet change here.
     credentialRefs: [netbox-dev] # §2.5 — an Action's use-check is its only authz gate
     params:
       # The Intent's own name is the idempotency key — a re-run returns the SAME prefix + VLAN

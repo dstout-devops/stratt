@@ -363,6 +363,43 @@ tasks:
           done
         done
 
+        # ── 5. A provider's ADVERTISED Workflows live in its OWN tree ───────────
+        # Check 3 reads `actuator:`/`action:` references. It does NOT read the per-kind
+        # maps — `provisions`/`remediates`/`decommissions` — and that gap was real: ADR-0137
+        # step 4 moved vsphere-vm-build and vsphere-vm-teardown into plugins/vcenter/ and left
+        # vsphere-subnet-build in estate/, so vcenter's `provisions` map pointed into two
+        # different trees and nothing noticed. A provider whose advertised mechanisms are
+        # scattered is a plugin that does not actually own its own declarations (D2), and the
+        # ratchet is only a ratchet if it covers every way one can advertise a mechanism.
+        #
+        # Same ownership test as check 3, applied to the maps rather than to Step references.
+        # Scoped to plugin trees: a provider declared in estate/ is core-owned and may name any
+        # Workflow the floor declares.
+        for d in plugins/*/estate; do
+          [ -d "$d" ] || continue
+          self=$(basename "$(dirname "$d")")
+          own=$(for w in "$d"/workflows/*.yaml plugins/"$self"/demo/estate/workflows/*.yaml; do
+            [ -f "$w" ] || continue
+            grep -m1 "^name:" "$w" | sed 's/name:[[:space:]]*//' | tr -d '"'
+          done)
+          for f in $(find "$d" -name '*.yaml' -o -name '*.yml' 2>/dev/null); do
+            for wf in $(awk '
+              /^(provisions|remediates|decommissions):[[:space:]]*$/ { inmap=1; next }
+              /^[^[:space:]#]/ { inmap=0 }
+              inmap && /^[[:space:]]+[A-Za-z][A-Za-z0-9_.-]*:[[:space:]]*[A-Za-z0-9][A-Za-z0-9_-]*[[:space:]]*$/ {
+                sub(/^[^:]*:[[:space:]]*/, ""); gsub(/[[:space:]]/, ""); print
+              }' "$f" 2>/dev/null); do
+              if ! echo "$own" | grep -qx "$wf"; then
+                echo "  ✗ $f ADVERTISES workflow '$wf', which is not declared in plugins/$self/."
+                echo "      A provider's provisions/remediates/decommissions map names ITS OWN mechanisms"
+                echo "      (ADR-0140 D2). One pointing outside its tree means the plugin does not own the"
+                echo "      thing it advertises \u2014 move the Workflow, or drop the entry."
+                fail=1
+              fi
+            done
+          done
+        done
+
         # ── 4. demos/ holds CROSS-plugin scenarios only ──────────────────────────
         # D7: a demo that exercises ONE plugin belongs beside that plugin; demos/ is
         # for scenarios that span several, which is the only thing no single plugin

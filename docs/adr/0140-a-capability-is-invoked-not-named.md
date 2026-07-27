@@ -323,11 +323,18 @@ them to the plugin — a third failure that today is silently a missing string.
    > reference estate, so the candidate check runs against the real `cert-issuer` declaration), but
    > the **fire-time resolution is unit-tested only** — that Trigger is `environments: [prod]` and no
    > floor in this repo runs the prod slice with an OpenBao pod.
-5. **`vsphere-subnet-build` moves** to the vcenter plugin — the test that the Action-shaped half closed,
-   and the fix for a `provisions` map currently split across two trees.
-6. **Extend `plugins:boundary` check 3 to the per-kind maps** (`provisions`/`remediates`/
-   `decommissions`), so a provider advertising a Workflow that lives outside its own tree is caught the
-   way a cross-plugin `action:` already is.
+5. ~~**`vsphere-subnet-build` moves** to the vcenter plugin.~~ **DONE (2026-07-27).** Its allocate leg
+   is `actionCapability: ipam`, so it no longer names another plugin's provider and may live in
+   vcenter's tree; its build leg names `vcenter/create-portgroup`, which is a plugin naming its own
+   provider and always was permitted. The `credentialRefs: [netbox-dev]` residue did NOT block it, on
+   reflection: a CredentialRef is a NAME the operator supplies and the floor resolves — like the
+   `address:` already in every plugin declaration — not a plugin-to-plugin reference. Leaving the
+   Workflow in `estate/` was strictly worse, because it left vcenter's `provisions` map pointing into
+   two trees. The Step-form credential asymmetry stays an open question (see D3 row 2).
+6. ~~**Extend `plugins:boundary` to the per-kind maps.**~~ **DONE (2026-07-27)** as check 5. Written
+   BEFORE the move and confirmed to fail on the live defect — vcenter advertising a Subnet builder
+   that lived in `estate/` — then made green by item 5. A gate added after the fix would only have
+   proven it compiles.
 
 ### Traps
 
