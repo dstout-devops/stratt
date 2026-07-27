@@ -2919,9 +2919,13 @@ type stepYAML struct {
 	Actuator string      `yaml:"actuator"`
 	// Workflow runs another declared Workflow as a nested child (ADR-0139 D1/D3);
 	// Inputs are this Step's arguments to that child's declared `inputs` schema.
-	Workflow string         `yaml:"workflow"`
-	Inputs   map[string]any `yaml:"inputs"`
-	Action   string         `yaml:"action"`
+	Workflow string `yaml:"workflow"`
+	// The CLASS form of a nested Step (ADR-0139 D3): a capability + an Intent kind,
+	// resolved to the bound provider's build Workflow at launch.
+	WorkflowCapability string         `yaml:"workflowCapability"`
+	ForKind            string         `yaml:"forKind"`
+	Inputs             map[string]any `yaml:"inputs"`
+	Action             string         `yaml:"action"`
 	// ActionCapability names a capability CLASS instead of a provider's Action
 	// (ADR-0140 D3 row 2) — the estate-facing half of the Action-shaped seam.
 	ActionCapability string         `yaml:"actionCapability"`
@@ -3040,7 +3044,8 @@ func parseWorkflowFile(path string, raw []byte, opts ...ValidateOption) (string,
 		step := types.Step{
 			Name: s.Name, Needs: s.Needs, When: s.When,
 			ViewName: s.ViewName, Actuator: s.Actuator,
-			Workflow: s.Workflow, Inputs: s.Inputs,
+			Workflow: s.Workflow, WorkflowCapability: s.WorkflowCapability, ForKind: s.ForKind,
+			Inputs: s.Inputs,
 			Action: s.Action, ActionCapability: s.ActionCapability,
 			DryRun: s.DryRun, Params: s.Params,
 			Slices: s.Slices, CredentialRefs: s.CredentialRefs,
@@ -3106,8 +3111,18 @@ func ValidateWorkflow(w types.Workflow, opts ...ValidateOption) error {
 		isPolicy := s.Policy != nil
 		isAction := s.Action != "" || s.ActionCapability != ""
 		isActuation := s.ViewName != "" || s.Actuator != "" || s.Slices != 0
-		isNested := s.Workflow != ""
+		isNested := s.Workflow != "" || s.WorkflowCapability != ""
 		switch {
+		case s.Workflow != "" && s.WorkflowCapability != "":
+			return fmt.Errorf("workflow %s: step %s: names a workflow and a workflowCapability — one or the "+
+				"other, never both (§2.4)", w.Name, s.Name)
+		case s.WorkflowCapability != "" && s.ForKind == "":
+			// A class with no kind resolves through nothing: the provider's map is KEYED by
+			// Intent kind, so "which Workflow" has no answer without it.
+			return fmt.Errorf("workflow %s: step %s: workflowCapability requires forKind — a provider's "+
+				"build Workflows are keyed by Intent kind, so the class alone selects nothing", w.Name, s.Name)
+		case s.ForKind != "" && s.WorkflowCapability == "":
+			return fmt.Errorf("workflow %s: step %s: forKind is only meaningful with workflowCapability", w.Name, s.Name)
 		case isNested && (isGate || isPolicy || isAction || isActuation):
 			// A nested Step is a fifth SHAPE, not a modifier on the others. Combining it would
 			// give the Step two things to run and no rule to choose (§2.4).

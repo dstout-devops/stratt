@@ -1,7 +1,7 @@
 # ADR 0139 — A Step may run a Workflow: nesting, and the one chokepoint
 
-- **Status:** **Partially accepted** — steps 1–2 implemented 2026-07-27 (parent link + the concrete
-  form, end to end); the CLASS form (D3/D4) and the `linux-onboard` conversion are outstanding. Charter review by
+- **Status:** **Accepted** — steps 1–4 implemented 2026-07-27. Step 5 (vocabulary-linter over the new
+  identifiers) is a review action, not code. Charter review by
   hand; §1.6/§1.8/§2.4/§2.5 answered inline. **No new dependency, no new Named Kind.**
 - **Date:** 2026-07-26
 - **Deciders:** steward
@@ -284,11 +284,37 @@ Gates, or a route's approval requirements are only knowable after it launches.
    stronger test — it caught the fixture passing an input the child did not declare, refused by the
    child's own `ResolveLaunchInputs`. **The nested Step gets no exemption from the chokepoint**, which
    is D1's whole claim, demonstrated rather than asserted.
-3. **The class form** (D3/D4) — `workflowCapability` + `forKind`, resolve in an Activity, inputs checked
-   against every candidate.
-4. **Convert `linux-onboard`'s PROVISION leg** to `workflowCapability: provisioning` — the one leg this
-   ADR closes, and the test that it closed. The Workflow does not move yet: its converge leg is
-   Actuator-shaped and blocked on ADR-0138 D5.
+3. ~~**The class form** (D3/D4).~~ **DONE (2026-07-27).** `workflowCapability` + `forKind`, resolved in
+   an Activity, inputs checked against every candidate, cycles walked over the full candidate set.
+   Resolution reuses the compiler's own `capability.Resolve` assembly, **exported rather than
+   duplicated** — two resolvers that can disagree would make the estate mean different things
+   depending on who is asking (§2.4).
+
+   **A latent trap was found and fixed doing this**: `assembleProvisioningProviders` hardcoded
+   `types.CapProvisioning` while taking a class-shaped question. Exporting it unchanged would have
+   returned provisioning providers for *every* class asked about — resolving to a real, wrong
+   Workflow rather than failing closed, which is the worst available outcome. The class is now a
+   parameter.
+
+   **Scope, stated rather than glossed:** the class form resolves through `provisions` ONLY. It
+   cannot search the other per-kind maps without a verb it does not carry — **vcenter maps `Compute`
+   in both `provisions` (vsphere-vm-build) and `decommissions` (vsphere-vm-teardown)**, so a search
+   across maps is ambiguous for the most ordinary provider in the estate, and choosing between build
+   and tear-down is not a tiebreak core may make. Extending to the other verbs is a separate
+   decision.
+4. ~~**Convert `linux-onboard`'s PROVISION leg.**~~ **DONE.** It now reads
+   `workflowCapability: provisioning` + `forKind: Compute`. Two things this proved rather than
+   assumed: the D4 check really ran against **both** shipped Compute builders (awsec2's
+   `compute-build` and vcenter's `vsphere-vm-build`), and it passed because they already declare the
+   **same** required interface — which is the convergence that makes a class form viable here at all.
+
+   Also note the old Step did not merely name a provider: `action: awsec2/create-vm` **bypassed
+   `compute-build` entirely**, and with it the projection + correlation-label work that makes a build
+   resolvable by the next reconcile.
+
+   **The ADR's own caveat about the converge leg is now STALE**: it says that leg is blocked on
+   ADR-0138 D5, which has since shipped — ansible is attestable, so the block is gone and that leg is
+   re-openable on its own merits (it is Actuator-shaped, so ADR-0140 D4's form, not this one).
 5. **Run `vocabulary-linter`** over `workflowCapability`, `forKind`, `parentWorkflowRunId`,
    `parentStepName` before merge (CLAUDE.md's rule for new core-model identifiers). None is a §2-banned
    term, but the check is the rule.

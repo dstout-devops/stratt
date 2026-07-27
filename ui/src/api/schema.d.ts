@@ -2064,6 +2064,14 @@ export interface components {
             gate?: components["schemas"]["GateSpec"];
             /** @description A namespaced targetless Connector Action (e.g. helm/deploy). Set this OR viewName+actuator, never both — an Action carries no View (ADR-0031). */
             action?: string;
+            /** @description Runs another declared Workflow as a NESTED child (charter §2.3 "…convergence, nesting"; ADR-0011 deferred it, ADR-0139 resumes it). The child is a first-class WorkflowRun linked back to this Step, not an inlining of its Steps — so descent, Gates and audit keep working. Exclusive with every other Step shape. */
+            workflow?: string;
+            /** @description The CLASS form of a nested Step (ADR-0139 D3): with `forKind`, resolves to the bound provider's advertised build Workflow at launch, recorded on the child's run alongside the class. Exclusive with `workflow`. Resolves through the provider's `provisions` map only — `remediates`/`decommissions` would need a verb this form does not carry, since a provider may map one kind in several (vcenter maps Compute in both provisions and decommissions), and choosing between build and tear-down is not a tiebreak core may make. */
+            workflowCapability?: string;
+            /** @description The Intent kind a `workflowCapability` Step builds (e.g. Compute). Required with it — a provider's build Workflows are keyed by kind, so the class alone selects nothing. */
+            forKind?: string;
+            /** @description Launch inputs for a nested `workflow:` Step, validated at declaration against the child's declared `inputs` schema — and for the class form, against EVERY candidate provider's Workflow, because which one wins depends on runtime state Git cannot see. A separate field from `params` on purpose: params are a Step's Actuator/Action arguments, inputs are a Workflow's own interface. */
+            inputs?: Record<string, never>;
             /** @description A capability CLASS (e.g. ipam) instead of a provider's Action name (ADR-0140 D3 row 2). The Step declares WHAT it needs; the bound provider's advertised implementation is resolved at launch and recorded on the Run alongside the class. Mutually exclusive with `action` — naming both would give the Step two answers to "what runs here", and a rule to choose between them is implicit precedence (§2.4). Params are validated against the CLASS Contract (capabilities/<class>.input), so the Step stays valid across a provider swap. */
             actionCapability?: string;
             viewName?: string;

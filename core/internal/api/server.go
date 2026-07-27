@@ -1918,6 +1918,19 @@ func stepToWire(s types.Step) Step {
 	if s.ActionCapability != "" {
 		out.ActionCapability = &s.ActionCapability
 	}
+	// The nested forms (ADR-0139). Dropped here, a nested Step reads as neither Action nor
+	// actuation and the server rejects a declaration Git accepts — the same wire hazard the
+	// targetless Action had.
+	if s.Workflow != "" {
+		out.Workflow = &s.Workflow
+	}
+	if s.WorkflowCapability != "" {
+		out.WorkflowCapability = &s.WorkflowCapability
+		out.ForKind = &s.ForKind
+	}
+	if len(s.Inputs) > 0 {
+		out.Inputs = &s.Inputs
+	}
 	if s.ViewName != "" {
 		out.ViewName = &s.ViewName
 	}
@@ -1989,6 +2002,18 @@ func workflowFromWire(in Workflow, opts ...desiredstate.ValidateOption) (types.W
 		}
 		if s.ActionCapability != nil {
 			step.ActionCapability = *s.ActionCapability
+		}
+		if s.Workflow != nil {
+			step.Workflow = *s.Workflow
+		}
+		if s.WorkflowCapability != nil {
+			step.WorkflowCapability = *s.WorkflowCapability
+		}
+		if s.ForKind != nil {
+			step.ForKind = *s.ForKind
+		}
+		if s.Inputs != nil {
+			step.Inputs = *s.Inputs
 		}
 		if s.ViewName != nil {
 			step.ViewName = *s.ViewName

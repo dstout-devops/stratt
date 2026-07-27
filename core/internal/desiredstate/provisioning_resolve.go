@@ -22,7 +22,7 @@ import (
 // closed in capability.Resolve.
 func (c *Controller) resolveProvisioning(ctx context.Context, intentKind string) (capability.Result, error) {
 	env := c.Store.ActiveEnvironment()
-	providers, err := verifiedProvisioningProviders(ctx, c.Store, env)
+	providers, err := verifiedProvisioningProviders(ctx, c.Store, env, types.CapProvisioning)
 	if err != nil {
 		return capability.Result{}, err
 	}
@@ -36,7 +36,7 @@ func (c *Controller) resolveProvisioning(ctx context.Context, intentKind string)
 // verifiedProvisioningProviders assembles the VERIFIED, in-environment providers that `provides`
 // provisioning and advertise per-kind build Workflows. Store I/O only; the selection is the pure
 // assembleProvisioningProviders (testable without a DB).
-func verifiedProvisioningProviders(ctx context.Context, store *graph.Store, env string) ([]capability.Provider, error) {
+func verifiedProvisioningProviders(ctx context.Context, store *graph.Store, env, capClass string) ([]capability.Provider, error) {
 	verifs, err := store.ListProviderVerifications(ctx)
 	if err != nil {
 		return nil, err
@@ -55,7 +55,7 @@ func verifiedProvisioningProviders(ctx context.Context, store *graph.Store, env 
 	if err != nil {
 		return nil, err
 	}
-	return assembleProvisioningProviders(verified, acts, conns, env), nil
+	return assembleProvisioningProviders(verified, acts, conns, env, capClass), nil
 }
 
 // resolveDecommission binds an Intent kind to a concrete teardown Workflow (ADR-0114 D4), the symmetric
@@ -118,17 +118,21 @@ func decommissionProviders(ctx context.Context, store *graph.Store, env string) 
 // included only if it is verified, `provides` provisioning, advertises ≥1 build Workflow, AND is in
 // scope for env (types.InScope membership). A phantom/unverified provider, a provider without a
 // `provisions` map, or one scoped to a different environment is excluded — all fail-closed.
-func assembleProvisioningProviders(verified map[string]bool, acts []types.Actuator, conns []types.Connector, env string) []capability.Provider {
+// capClass is a PARAMETER rather than the hardcoded provisioning constant it used to be. A nested
+// capability Step (ADR-0139 D3) may name a class that is not `provisioning`, and an assembler that
+// silently ignored it would return provisioning providers for every question asked — resolving to a
+// real, wrong Workflow rather than failing closed, which is the worst available outcome.
+func assembleProvisioningProviders(verified map[string]bool, acts []types.Actuator, conns []types.Connector, env, capClass string) []capability.Provider {
 	var out []capability.Provider
 	for _, a := range acts {
 		if verified["actuator/"+a.Name] && types.InScope(a.ScopedEnvironments(), env) &&
-			slices.Contains(a.Provides, types.CapProvisioning) && len(a.Provisions) > 0 {
+			slices.Contains(a.Provides, capClass) && len(a.Provisions) > 0 {
 			out = append(out, capability.Provider{Name: a.Name, Workflows: a.Provisions})
 		}
 	}
 	for _, cn := range conns {
 		if verified["connector/"+cn.Name] && types.InScope(cn.ScopedEnvironments(), env) &&
-			slices.Contains(cn.Provides, types.CapProvisioning) && len(cn.Provisions) > 0 {
+			slices.Contains(cn.Provides, capClass) && len(cn.Provisions) > 0 {
 			out = append(out, capability.Provider{Name: cn.Name, Workflows: cn.Provisions})
 		}
 	}
@@ -233,4 +237,29 @@ func assembleRemediationProviders(verified map[string]bool, acts []types.Actuato
 		}
 	}
 	return out
+}
+
+// ResolveBuildWorkflow is the launch-time resolution a nested capability Step needs (ADR-0139 D3):
+// (capability class, Intent kind) → the bound provider's build Workflow.
+//
+// It is the SAME store-backed assembly + pure capability.Resolve the compiler uses, exported rather
+// than duplicated. A second resolver would be a second answer to "which provider builds this", and
+// two resolvers that can disagree is the ambiguity §2.4 exists to refuse — the compiler and a
+// nested Step must reach the same provider or the estate means two different things depending on
+// who is asking.
+//
+// Environment-scoped and fail-closed exactly as the compiler's path is: PENDING and AMBIGUOUS carry
+// the resolver's own reason, because "no verified provider" and "two providers, add a binding" send
+// the reader to different places (§1.8).
+func ResolveBuildWorkflow(ctx context.Context, store *graph.Store, capClass, intentKind string) (capability.Result, error) {
+	env := store.ActiveEnvironment()
+	providers, err := verifiedProvisioningProviders(ctx, store, env, capClass)
+	if err != nil {
+		return capability.Result{}, err
+	}
+	allBindings, err := store.ListCapabilityBindings(ctx)
+	if err != nil {
+		return capability.Result{}, err
+	}
+	return capability.Resolve(capClass, intentKind, providers, inScopeBindings(allBindings, env)), nil
 }

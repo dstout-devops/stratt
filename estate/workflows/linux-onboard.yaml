@@ -1,10 +1,12 @@
 # linux-onboard — the L3 onboarding construct (ADR-0055): a gated lifecycle DAG that
-# composes plugin Actuators across landscapes. Provision is a Gate → Action seam
-# (§5 Flow 1 "gate before build" — NEVER a silent auto-launch), then configure over
-# the port. The provision Step's `action` is the LANDSCAPE BINDING: awsec2/create-vm
-# here (moto in dev), swappable for a crossplane/opentofu/vsphere Action without
-# touching the rest of the estate (§1.4/§5). Cross-Step output binding
-# ({{.steps.provision.outputs.*}}) threads the built instance downstream (ADR-0031).
+# composes plugin Actuators across landscapes. Provision is a Gate → nested-build seam
+# (§5 Flow 1 "gate before build" — NEVER a silent auto-launch), then configure over the port.
+#
+# The provision Step names a CAPABILITY (ADR-0139 D3): the landscape binding is now the estate's
+# verified provisioning provider, swappable between awsec2/crossplane/opentofu/vsphere without
+# touching this file at all — which is what the old comment claimed and the old `action:` could
+# not deliver. The converge Step still names its Actuator directly; that leg is Actuator-shaped
+# and its own decision.
 # NOTE: cert (cert-issuer) + app (helm) Steps are the next lifecycle slice.
 name: linux-onboard
 steps:
@@ -15,13 +17,29 @@ steps:
       timeoutSeconds: 86400 # 24h to approve the build
   - name: provision
     needs: [approve]
-    action: awsec2/create-vm # landscape binding — swap for crossplane/opentofu/vsphere
-    params:
-      region: us-east-1
-      endpoint: http://floci:4566 # floci real-host EC2 dev backend (ADR-0093); prod omits (real AWS)
-      instanceType: t3.micro
-      ami: ami-0linuxbaseline000
-      name: linux-fleet-node
+    # The CAPABILITY, not a provider (ADR-0139 D3/D4). This Step used to read
+    # `action: awsec2/create-vm` with a comment calling it "the landscape binding — swap for
+    # crossplane/opentofu/vsphere", which is the tell: the author was describing a capability and
+    # the model could only express a provider. ADR-0104 D1 forbids a consumer naming a provider,
+    # and this was the last such leg in a core-owned Workflow.
+    #
+    # It also skipped whatever the provider's build Workflow does AROUND the Action. `compute-build`
+    # is what awsec2 advertises as its Compute builder — calling create-vm directly bypassed the
+    # projection + correlation-label work that makes a build resolvable by the next reconcile.
+    #
+    # Resolution binds the single VERIFIED provisioning provider that builds Compute, at launch,
+    # recorded on the nested run alongside the class (§1.8). The nested run is a first-class
+    # WorkflowRun linked back to this Step, so descent, Gates and audit all keep working.
+    workflowCapability: provisioning
+    forKind: Compute
+    # The child's declared interface, checked at LOAD against every candidate provider's build
+    # Workflow — not just the one bound today. Which provider wins depends on runtime state Git
+    # cannot see, so inputs that fit only one break the other on a binding change (ADR-0139 D4).
+    inputs:
+      instance: linux-fleet-node
+      projectKind: host
+      labels:
+        stratt.intent/instance: linux-fleet-node
   - name: configure
     needs: [provision]
     viewName: linux-fleet

@@ -612,6 +612,11 @@ type Activities struct {
 	// different kinds of thing — an Action selector vs a dispatch-table Actuator — and one
 	// function returning either depending on the caller is the ambiguity §2.4 refuses.
 	ResolveActuator func(ctx context.Context, capability string) (actuatorName string, err error)
+	// ResolveBuildWorkflow maps (capability class, Intent kind) to the bound provider's build
+	// Workflow for a nested capability Step (ADR-0139 D3). It is the SAME resolution the
+	// compiler performs — exported from desiredstate rather than reimplemented, because two
+	// resolvers that can disagree is the ambiguity §2.4 refuses.
+	ResolveBuildWorkflow func(ctx context.Context, capability, intentKind string) (provider, workflowName string, err error)
 }
 
 // EnsureRun creates the Run summary row for a Trigger-started execution

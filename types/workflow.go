@@ -80,6 +80,19 @@ type Step struct {
 	// Step's arguments to the child's declared `inputs` schema, validated at
 	// declaration against that schema — never at launch, which is too late.
 	Workflow string `json:"workflow,omitempty"`
+	// WorkflowCapability + ForKind are the CLASS form of the same Step (ADR-0139 D3): the
+	// Step names a capability and an Intent kind, and the bound provider's advertised
+	// build Workflow is resolved at launch. Mutually exclusive with Workflow.
+	//
+	// It resolves through the provider's `provisions` map ONLY. The other two per-kind maps
+	// (`remediates`, `decommissions`) are deliberately NOT searched, and cannot be without a
+	// verb selector this form does not have: vcenter maps `Compute` in BOTH provisions
+	// (vsphere-vm-build) and decommissions (vsphere-vm-teardown), so a search across maps
+	// would be ambiguous for the most ordinary provider in the estate — and "build" vs "tear
+	// down" is not a tiebreak core may make (§2.4). Extending to the other verbs is a
+	// separate decision, not an omission.
+	WorkflowCapability string `json:"workflowCapability,omitempty"`
+	ForKind            string `json:"forKind,omitempty"`
 	// Inputs are the launch inputs handed to a nested Workflow. A SEPARATE field
 	// from Params on purpose (the same split ADR-0118 D4 made): Params are a
 	// Step's Actuator/Action arguments, Inputs are a Workflow's own declared

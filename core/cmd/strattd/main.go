@@ -31,6 +31,7 @@ import (
 	"github.com/dstout-devops/stratt/core/internal/audit"
 	"github.com/dstout-devops/stratt/core/internal/authz"
 	"github.com/dstout-devops/stratt/core/internal/baselines"
+	"github.com/dstout-devops/stratt/core/internal/capability"
 	"github.com/dstout-devops/stratt/core/internal/cellrouter"
 	"github.com/dstout-devops/stratt/core/internal/compiler"
 	"github.com/dstout-devops/stratt/core/internal/connectorregistry"
@@ -832,6 +833,22 @@ func run(ctx context.Context, log *slog.Logger) error {
 			return "", fmt.Errorf("capability resolver not ready (runtime registry disabled)")
 		}
 		return connReg.ResolveCapabilityActuator(ctx, capClass)
+	}
+	// ResolveBuildWorkflow (ADR-0139 D3): a nested capability Step resolves through the SAME
+	// store-backed assembly + pure resolver the compiler uses, exported from desiredstate rather
+	// than reimplemented. Two resolvers that can disagree would make the estate mean different
+	// things depending on who is asking (§2.4).
+	acts.ResolveBuildWorkflow = func(ctx context.Context, capClass, intentKind string) (string, string, error) {
+		res, err := desiredstate.ResolveBuildWorkflow(ctx, store, capClass, intentKind)
+		if err != nil {
+			return "", "", err
+		}
+		if res.Status != capability.StatusResolved {
+			// Fail closed, carrying the resolver's OWN reason: "no verified provider" and "two
+			// providers, add a binding" send the reader to different places (§1.8).
+			return "", "", fmt.Errorf("%s", res.Reason)
+		}
+		return res.Provider, res.Workflow, nil
 	}
 	w.RegisterActivity(acts)
 	if err := w.Start(); err != nil {

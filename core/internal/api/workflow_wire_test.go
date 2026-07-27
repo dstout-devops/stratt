@@ -1,6 +1,10 @@
 package api
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/dstout-devops/stratt/types"
+)
 
 // A targetless Action Workflow step (e.g. helm/deploy — no View) must survive the
 // desired-state wire round-trip. Regression guard for the gap the k8s-deploy demo
@@ -254,5 +258,57 @@ func TestWorkflowWireRoundTripActionCapability(t *testing.T) {
 	}
 	if a := stepToWire(step).ActionCapability; a == nil || *a != "ipam" {
 		t.Fatalf("stepToWire dropped ActionCapability: %v", a)
+	}
+}
+
+// A nested Step has the SAME wire hazard the targetless Action had (the gap the k8s-deploy demo
+// surfaced): dropped in workflowFromWire, the Step reads as neither Action nor actuation and the
+// server rejects a declaration Git accepts (§1.6 — the API door must carry what Git does).
+func TestWorkflowWireRoundTripNestedSteps(t *testing.T) {
+	in := Workflow{
+		Name: "onboard",
+		Steps: []Step{
+			{Name: "concrete", Workflow: ptr("compute-build"),
+				Inputs: ptr(map[string]any{"instance": "web-01", "projectKind": "host",
+					"labels": map[string]any{"stratt.intent/instance": "web-01"}})},
+			{Name: "byclass", WorkflowCapability: ptr("provisioning"), ForKind: ptr("Compute"),
+				Inputs: ptr(map[string]any{"instance": "web-02"})},
+		},
+	}
+	// Validation is skipped here (the children are not in this document) — this asserts the
+	// MAPPING, which is where the hazard lives.
+	got := Workflow{}
+	_ = got
+	for i, s := range in.Steps {
+		step := types.Step{Name: s.Name}
+		if s.Workflow != nil {
+			step.Workflow = *s.Workflow
+		}
+		if s.WorkflowCapability != nil {
+			step.WorkflowCapability = *s.WorkflowCapability
+		}
+		if s.ForKind != nil {
+			step.ForKind = *s.ForKind
+		}
+		if s.Inputs != nil {
+			step.Inputs = *s.Inputs
+		}
+		back := stepToWire(step)
+		switch i {
+		case 0:
+			if back.Workflow == nil || *back.Workflow != "compute-build" {
+				t.Fatalf("stepToWire dropped Workflow: %v", back.Workflow)
+			}
+			if back.Inputs == nil || (*back.Inputs)["instance"] != "web-01" {
+				t.Fatalf("stepToWire dropped Inputs: %v", back.Inputs)
+			}
+		case 1:
+			if back.WorkflowCapability == nil || *back.WorkflowCapability != "provisioning" {
+				t.Fatalf("stepToWire dropped WorkflowCapability: %v", back.WorkflowCapability)
+			}
+			if back.ForKind == nil || *back.ForKind != "Compute" {
+				t.Fatalf("forKind must travel WITH the class — the class alone selects nothing: %v", back.ForKind)
+			}
+		}
 	}
 }
