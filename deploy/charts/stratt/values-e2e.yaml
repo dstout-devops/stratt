@@ -1,13 +1,13 @@
 # Plugin-e2e values — layered AFTER values-dev-kind.yaml (task dev:install).
 # Proves BOTH plugin transports in-cluster: the vcenter gRPC Syncer plugin (a
-# `plugins:` entry) projecting real vcsim Entities, and the script/ansible EE-Job
+# `plugins:` entry) projecting real vspheresim Entities, and the script/ansible EE-Job
 # Actuators (dispatched as K8s Jobs). Everything dev-shaped; never derive prod
 # values from this file.
 #
 # The host-gateway (192.168.102.1 default from deploy/dev/kind.yaml's pinned
 # subnet) is re-asserted at install by `task dev:install` via --set-string with
 # the value computed from `docker network inspect kind`, so a foreign subnet
-# can't silently break the substrate/vcsim DSNs.
+# can't silently break the substrate/vspheresim DSNs.
 
 # In-proc tuple evaluator (no OpenFGA server / DSN secret) — the authz for the
 # e2e is delivered by the inline declarations below.
@@ -60,7 +60,7 @@ plugins:
       tag: dev
       digest: ""
       pullPolicy: Never # kind-loaded (task image:vcenter-plugin)
-    # env for the PLUGIN pod — it connects to vcsim on the host gateway.
+    # env for the PLUGIN pod — it connects to vspheresim on the host gateway.
     env:
       STRATT_VCENTER_URL: "https://192.168.102.1:8989/sdk"
       STRATT_VCENTER_INSECURE: "true"

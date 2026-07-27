@@ -5,9 +5,16 @@ so a client can create a VM through ordinary vSphere calls and then actually **r
 guest.
 
 ```sh
-task dev:vspheresim:up        # serves :8989
+task dev:vspheresim:up        # serves :8989 (TLS, self-signed — dial insecure)
 task dev:vspheresim:proof     # create a VM, observe it become reachable, then execute on it
 ```
+
+It is also the dev substrate's vCenter: `task dev:up` runs it as the `vspheresim` compose
+service, where it **replaced the stock `vmware/vcsim` image**. Same govmomi simulator at the
+same pinned version, same TLS endpoint, so every existing `https://…:8989/sdk` kept working
+— plus the guests. Note the runtime image is deliberately not distroless: govmomi's
+container backing builds a `docker` command line and hands it to `bash -c`, so it needs a
+client and a shell, and it reaches the daemon over a mounted socket.
 
 ## Why it exists
 
@@ -52,13 +59,27 @@ this simulator it genuinely does.
 
 | Flag               | Env                          | Default                      | Notes                                                                                                                                                                                             |
 | ------------------ | ---------------------------- | ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `-listen`          | `VSPHERESIM_LISTEN`          | `0.0.0.0:8989`               | Plaintext. A dev simulator; a TLS endpoint here would only teach trust in a meaningless cert.                                                                                                     |
+| `-listen`          | `VSPHERESIM_LISTEN`          | `0.0.0.0:8989`               | Listen address for the vCenter API.                                                                                                                                                               |
+| `-tls`             | `VSPHERESIM_TLS`             | `true`                       | HTTPS with a self-signed cert, as vCenter and the stock vcsim image serve. Clients dial insecure. `-tls=false` for plaintext.                                                                     |
 | `-guest-image`     | `VSPHERESIM_GUEST_IMAGE`     | _(empty — backing disabled)_ | **Must run something long-lived.** A bare `alpine` starts, finds nothing to do, exits 0, and the VM then has a backing and no guest. [`guestimage/`](guestimage/) is the one built for this.      |
 | `-guest-args`      | `VSPHERESIM_GUEST_ARGS`      | `sleep infinity`             | The guest's command, appended after the image.                                                                                                                                                    |
 | `-guest-domain`    | `VSPHERESIM_GUEST_DOMAIN`    | _(empty)_                    | Gives guests `<vm>.<domain>` as hostname, so the guest reports a **dotted FQDN**.                                                                                                                 |
 | `-guest-network`   | `VSPHERESIM_GUEST_NETWORK`   | _(empty)_                    | Docker network to attach guests to — how a guest is made reachable from wherever the client runs.                                                                                                 |
+| `-guest-all`       | `VSPHERESIM_GUEST_ALL`       | `false`                      | Also back the VMs the model pre-creates. Off by default: `-vms 25` across three resource pools is **75** VMs, so this is 75 containers at startup.                                                |
 | `-guest-mount-dmi` | `VSPHERESIM_GUEST_MOUNT_DMI` | `false`                      | Mounts a synthetic SMBIOS table at `/sys/class/dmi/id`. Off by default: `/sys` is read-only in most container runtimes, and the failure is a container that is created and then refuses to start. |
 | `-guest-interval`  | `VSPHERESIM_GUEST_INTERVAL`  | `2s`                         | How often to look for VMs needing a guest.                                                                                                                                                        |
+
+### Which VMs get a guest
+
+By default, the ones a client **provisioned** — every VM that appears after startup — and
+not the ones the model pre-creates.
+
+That is a cost decision with a sharp edge. `-vms 25` reads like 25 VMs; it is 25 _per
+resource pool_, which for the default model is **75**, and backing them would launch 75
+containers to stand in for machines nobody is going to touch. The line drawn instead is
+predictable — what you build has a guest, the seeded furniture does not — where a cap
+would have picked arbitrary winners. `-guest-all` backs everything, with the container
+budget that implies.
 
 ### `-guest-domain` is more load-bearing than it looks
 

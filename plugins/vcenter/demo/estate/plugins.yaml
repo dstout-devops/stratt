@@ -1,0 +1,22 @@
+# Admitted plugin estates for the vsphere-only demo (ADR-0137 D1/D3).
+#
+# The demo dispatches `vcenter/create-vm` through its own Actuator declaration, and since ADR-0138
+# D3/D4 that Action's input Contract lives in the vcenter PLUGIN's tree rather than in core. Core
+# holds only what the estate admits — and it cannot learn the document from the plugin at runtime,
+# because the Manifest carries a schema ID and a hash, never the schema itself (§1.5: a plugin never
+# mints contract meaning). So the demo has to admit vcenter, or the build Step fails with "no input
+# contract for action" the moment an operator approves the gate.
+#
+# CONTRACTS ONLY, and the distinction is the point: the demo needs vcenter's SEAM, not vcenter's
+# ESTATE. Admitting the estate brings the shipped Actuator, which advertises
+# `provisions: {Subnet: vsphere-subnet-build}` — and that Workflow composes the `ipam` capability
+# against a NetBox this floor does not run. This demo is deliberately Compute-only; the estate it
+# would be importing describes a full vsphere-dc environment.
+#
+# THIS FILE WAS MISSING, and everything above is why that was invisible. `task ci` parses from the
+# repo, where the plugin tree is on disk and complete, so it stayed green while the in-cluster floor
+# could not boot — from ADR-0103 moving the Actions into a declaration until the next demo run.
+plugins:
+  - name: vcenter
+    path: ../../estate
+    contractsOnly: true

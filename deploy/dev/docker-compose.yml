@@ -9,7 +9,8 @@
 #   postgres  — the graph plane (charter §3: Postgres 18, JSONB, GIN)
 #   nats      — JetStream: run event streaming, Emitter ingestion (§3)
 #   temporal  — orchestration plane, auto-setup against the same Postgres (§3)
-#   vcsim     — govmomi's vCenter simulator: the Phase-0 Syncer's dev target (§8)
+#   vspheresim — our vCenter simulator (plugins/vcenter/cmd/vspheresim): the Syncer's
+#               dev target (§8), and a substrate whose VMs have real guests
 #   openfga   — authorization plane (§2.5, ADR-0009): memory engine in dev —
 #               tuples are CaC and re-synced every reconcile, so the server is
 #               a rebuildable projection of Git (production: postgres engine +
@@ -124,18 +125,36 @@ services:
       timeout: 5s
       retries: 30
 
-  vcsim:
-    image: vmware/vcsim:v0.55.1 # version-locked to the pinned govmomi module (ADR: dependency-scout 2026-07-11)
-    # Args only — the image ENTRYPOINT is already /vcsim, and a repeated
-    # binary name becomes a positional arg that stops Go flag parsing (all
-    # flags silently ignored, default loopback bind). 0.0.0.0 so the mapped
-    # port reaches it; 25 VMs per RP: a small estate to project.
-    command: ["-l", "0.0.0.0:8989", "-vm", "25"]
+  vspheresim:
+    # OUR vCenter API simulator (plugins/vcenter/cmd/vspheresim), which replaced the
+    # stock vmware/vcsim image. Same govmomi simulator underneath, same pinned
+    # version, so everything that read from vcsim reads from this unchanged — plus
+    # the one thing the stock image cannot do: a VM created through it gets a REAL
+    # container guest, boots, and reports a reachability coordinate (ADR-0143). No
+    # guest meant provision→configure could not be exercised on vSphere at all.
+    build:
+      context: ../..
+      dockerfile: plugins/vcenter/cmd/vspheresim/Dockerfile
+    command:
+      - "-listen=0.0.0.0:8989" # 0.0.0.0 so the mapped port reaches it
+      - "-vms=25" # a small estate to project, as vcsim was configured
+      - "-guest-image=stratt/vspheresim-guest:dev"
+      - "-guest-args=" # that image's own entrypoint is the guest's init
+      - "-guest-domain=dev.stratt.test" # so the coordinate is a NAME, not an address
+      # Guests join the substrate's own network, which is what resolves that name:
+      # docker's embedded DNS serves user-defined networks only. Named explicitly
+      # because the guests are SIBLINGS created through the socket below, so they need
+      # the network's real name and not compose's service-scoped alias.
+      - "-guest-network=stratt-dev_default"
     ports:
       - "8989:8989"
-    # No healthcheck: the vcsim image is distroless (no shell/wget to probe
-    # with). The Syncer's own connect/retry loop is the effective readiness
-    # signal in dev.
+    volumes:
+      # Guests are sibling containers on the host daemon, the same arrangement floci
+      # uses and for the same reason. The image carries a docker client because
+      # govmomi's backing shells out rather than using the API.
+      - /var/run/docker.sock:/var/run/docker.sock
+    # No healthcheck: the Syncer's own connect/retry loop is the effective readiness
+    # signal in dev, as it was for vcsim.
 
   floci:
     # REAL-host EC2 dev backend (ADR-0093), replacing the moto MOCK. Floci runs real

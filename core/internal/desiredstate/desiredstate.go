@@ -2812,30 +2812,43 @@ func validateParamsContract(actuator string, params map[string]any, opts ...Vali
 // Action's input Contract (ADR-0031). Template-carrying params ({{.steps.x}} /
 // {{.event.x}}) are validated at LAUNCH against resolved values, skipped here.
 func validateActionParamsContract(action string, params map[string]any) error {
-	// The Contract must EXIST even when the values cannot be checked yet. Existence
-	// is a static fact about the estate; it does not depend on what a template
-	// resolves to, so deferring it with the values was over-broad. A Step naming an
-	// uncontracted Action used to pass the load and fail at LAUNCH with "no input
-	// contract for action" — the §1.8 shape this package refuses everywhere else:
-	// admitted here, fatal somewhere a human is not reading a diff.
+	// EXISTENCE IS NOT CHECKED HERE, and the reason is architectural rather than a
+	// concession. This function briefly did check it — a Step naming an uncontracted
+	// Action passing the load and failing at LAUNCH is exactly the §1.8 shape this
+	// package refuses everywhere else — and the check was wrong at this layer:
 	//
-	// "An uncontracted operation must not exist" is already ValidateActionInput's
-	// own rule (§2.2/ADR-0031). This is that rule applied at the moment the
-	// reference is written rather than the moment it runs.
-	if _, ok, err := contract.Get("actions/" + action + ".input"); err != nil {
-		return err
-	} else if !ok {
-		return fmt.Errorf("action %q has no input contract — an uncontracted operation must not exist (§2.2, ADR-0031)", action)
-	}
+	// A running daemon's contract set is NOT complete when declarations are parsed.
+	// A plugin's self contracts (ADR-0138 D3/D4) are registered from its own tree
+	// only for the OWNING or an ADMITTED plugin, and a plugin wired by environment
+	// instead (the boot-wired path every plugin demo uses) contributes its contracts
+	// later still, from its Manifest when its Actuator is enabled. So at parse time
+	// "no contract" legitimately means "not yet", and enforcing it made strattd
+	// refuse to BOOT against a valid estate — a worse failure than the one it set out
+	// to prevent, and one `task ci` could not see because in-repo every plugin tree is
+	// on disk and complete.
+	//
+	// The rule itself is not abandoned: it moved to where the contract set genuinely
+	// is complete. TestEveryStepActionIsContracted checks it against the repo, which
+	// is where a typo'd Action name is written and where a reviewer can act on it, and
+	// ValidateActionInput still refuses an uncontracted Invoke at runtime (§2.2,
+	// ADR-0031). What stays HERE is the half that only makes sense with the document
+	// in hand.
 	if template.Has(params) {
 		// The VALUES wait for launch; the KEY SET does not. Which params a Step sends is
-		// written in Git and cannot change at runtime, so checking the shape here is the
-		// same rule the existence check above applies — verify at the diff, not at the
-		// gate (§1.8). Deferring shape along with values is how PRV-1 shipped: this very
-		// Workflow family sent `subnet`/`availabilityZone` into an additionalProperties:false
-		// Contract and failed only when an operator approved the build.
+		// written in Git and cannot change at runtime, so its shape can be checked at the
+		// diff rather than at the gate (§1.8) — and ValidateParamKeys holds no opinion
+		// when the document is absent, which is what lets it survive the incomplete
+		// contract set described above. Deferring shape along with values is how PRV-1
+		// shipped: this very Workflow family sent `subnet`/`availabilityZone` into an
+		// additionalProperties:false Contract and failed only when an operator approved
+		// the build.
 		return contract.ValidateParamKeys("actions/"+action+".input", params)
 	}
+	// NOTE, not a fix: the branch below still refuses an absent contract, because
+	// ValidateActionInput does. A Step with wholly literal params against an
+	// environment-wired plugin would therefore fail the load for "not yet" — the same
+	// trap, in a branch nothing in the estate currently reaches. Left alone rather
+	// than widened silently; it wants the same treatment when something hits it.
 	raw := json.RawMessage(`{}`)
 	if params != nil {
 		b, err := json.Marshal(params)

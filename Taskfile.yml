@@ -541,7 +541,11 @@ tasks:
       - task: ui:ci
 
   dev:up:
-    desc: "EXTRAS (opt-in; genesis needs none of this): full compose dev substrate (Postgres 18, NATS, Temporal, vcsim, …)"
+    desc: "EXTRAS (opt-in; genesis needs none of this): full compose dev substrate (Postgres 18, NATS, Temporal, vspheresim, …)"
+    # The guest image first: vspheresim gives every VM it provisions a container
+    # guest, and a missing image degrades into a per-VM "guest backing failed" rather
+    # than a failure anyone would read as the cause.
+    deps: [dev:vspheresim:guest-image]
     cmds:
       - docker compose -f deploy/dev/docker-compose.yml up -d --wait
 
@@ -686,7 +690,9 @@ tasks:
     desc: "Prove provision→reach→execute against vspheresim (needs dev:vspheresim:up)"
     dir: plugins/vcenter
     env:
-      VSPHERESIM_URL: '{{.VSPHERESIM_URL | default "http://127.0.0.1:8989/sdk"}}'
+      # https, because vspheresim serves TLS by default exactly as vCenter and the stock
+      # vcsim image do; the certificate is self-signed and clients dial insecure.
+      VSPHERESIM_URL: '{{.VSPHERESIM_URL | default "https://127.0.0.1:8989/sdk"}}'
       # Set together with the URL so the converge half is never quietly skipped: a
       # reach proof that passes while nothing was executed is the failure mode this
       # target exists to close.
@@ -697,7 +703,7 @@ tasks:
       - go test ./ -run LiveVsphereSim -v -count=1
 
   dev:vsphere:bootstrap:
-    desc: Seed the dev vcsim with an enterprise topology — regions (datacenters), AZs (clusters), sovereignty (tenant folders), VLAN portgroups (ADR-0113)
+    desc: Seed the dev vspheresim with an enterprise topology — regions (datacenters), AZs (clusters), sovereignty (tenant folders), VLAN portgroups (ADR-0113)
     dir: plugins/vcenter
     cmds:
       - STRATT_VCENTER_URL={{.STRATT_VCENTER_URL | default "https://localhost:8989/sdk"}} go run ./cmd/vsphere-seed
@@ -1173,6 +1179,8 @@ tasks:
       - rm -rf {{.ROOT_DIR}}/deploy/charts/stratt/dev/declarations
       - mkdir -p {{.ROOT_DIR}}/deploy/charts/stratt/dev/declarations
       - cp -R {{.ROOT_DIR}}/plugins/helm/demo/estate/. {{.ROOT_DIR}}/deploy/charts/stratt/dev/declarations/
+      - task: demo:vendor-contracts
+        vars: { DEMO: k8s-deploy, ESTATE: "{{.ROOT_DIR}}/plugins/helm/demo/estate" }
 
   demo:k8s-deploy:run:
     # The turnkey "k8s: deploy an app" demo (ADR-0116, the first demos/ scenario). Stands up a Stratt
@@ -1220,28 +1228,34 @@ tasks:
   demo:vsphere-only:stage:
     # Stage the vsphere-only demo's SELF-CONTAINED estate (ADR-0116) into the inline-declarations
     # path — its authz grant + gate-only vsphere-dev CredentialRef + vsphere-vm-build Workflow +
-    # the dev-vms/availability-zones/datastores Views. The vcenter Actuator/Actions are boot-wired
-    # via the plugin's hostEnv (values-demo-vsphere), NOT a CaC actuator, so the estate carries no
-    # actuator file. Delivered as CaC through the declarations mount the reconcile controller enforces.
+    # the dev-vms/availability-zones/datastores Views. Delivered as CaC through the declarations
+    # mount the reconcile controller enforces.
+    #
+    # The estate now carries its OWN vcenter Actuator, and must. The comment here used to say the
+    # Actuator/Actions were boot-wired via hostEnv so no actuator file was needed — ADR-0103 moved
+    # them to a declaration, and this demo, whose estate is a separate tree, was left naming an
+    # Action nothing declared. The floor could not boot.
     desc: Stage the vsphere-only demo estate into the inline-declarations path
     cmds:
       - rm -rf {{.ROOT_DIR}}/deploy/charts/stratt/dev/declarations
       - mkdir -p {{.ROOT_DIR}}/deploy/charts/stratt/dev/declarations
       - cp -R {{.ROOT_DIR}}/plugins/vcenter/demo/estate/. {{.ROOT_DIR}}/deploy/charts/stratt/dev/declarations/
+      - task: demo:vendor-contracts
+        vars: { DEMO: vsphere-only, ESTATE: "{{.ROOT_DIR}}/plugins/vcenter/demo/estate" }
 
   demo:vsphere-only:run:
     # The turnkey "vSphere: provision a VM + watch the graph come alive" demo (ADR-0116). Stands up a
-    # vSphere-only Stratt floor — kind + spine + strattd + the vcenter plugin + an external vcsim (a real
+    # vSphere-only Stratt floor — kind + spine + strattd + the vcenter plugin + an external vspheresim (a real
     # vCenter API) seeded with an enterprise topology + the staged CaC estate — then drives BOTH halves:
-    # the vcenter Syncer projects the vcsim topology into a live graph (Views come alive), and a gated
+    # the vcenter Syncer projects the vspheresim topology into a live graph (Views come alive), and a gated
     # Workflow provisions a new VM through vcenter/create-vm. By-hand walk: plugins/vcenter/demo/README.md.
     desc: "Demo — stand up a vSphere floor, project the graph, and provision a VM through a gated Workflow"
-    deps: [tools:helm, tools:kubectl]
+    deps: [tools:helm, tools:kubectl, dev:vspheresim:guest-image]
     cmds:
       - task: dev:kind:up
-      # vcsim runs as a compose service on the host; the plugin reaches it on the kind host-gateway.
-      # force-recreate so every run starts from vcsim's clean default topology (no leftover web-01).
-      - docker compose -f {{.ROOT_DIR}}/deploy/dev/docker-compose.yml up -d --force-recreate --wait vcsim
+      # vspheresim runs as a compose service on the host; the plugin reaches it on the kind host-gateway.
+      # force-recreate so every run starts from a clean default topology (no leftover web-01).
+      - docker compose -f {{.ROOT_DIR}}/deploy/dev/docker-compose.yml up -d --force-recreate --wait vspheresim
       - task: image:kind-load
       - task: image:plugin # the vcenter Syncer + the boot-wired create-vm Action
         vars: {PLUGIN: vcenter}
@@ -1265,12 +1279,12 @@ tasks:
       - KUBECONTEXT={{.KIND_CONTEXT}} KUBECTL={{.KUBECTL}} bash {{.ROOT_DIR}}/plugins/vcenter/demo/run.sh
 
   demo:vsphere-only:down:
-    # Tear down the vsphere-only demo: uninstall the stratt release and stop the vcsim substrate
+    # Tear down the vsphere-only demo: uninstall the stratt release and stop the vspheresim substrate
     # (kind cluster kept for a fast re-run; full nuke: `task dev:kind:down`). Idempotent.
-    desc: "Demo teardown — uninstall stratt + stop vcsim (full nuke: dev:kind:down)"
+    desc: "Demo teardown — uninstall stratt + stop vspheresim (full nuke: dev:kind:down)"
     cmds:
       - "{{.HELM}} uninstall stratt -n stratt --kube-context {{.KIND_CONTEXT}} --ignore-not-found 2>/dev/null || true"
-      - docker compose -f {{.ROOT_DIR}}/deploy/dev/docker-compose.yml stop vcsim 2>/dev/null || true
+      - docker compose -f {{.ROOT_DIR}}/deploy/dev/docker-compose.yml stop vspheresim 2>/dev/null || true
 
   demo:ec2-only:stage:
     # Stage the ec2-only demo's SELF-CONTAINED estate (ADR-0116) into the inline-declarations path —
@@ -1282,6 +1296,8 @@ tasks:
       - rm -rf {{.ROOT_DIR}}/deploy/charts/stratt/dev/declarations
       - mkdir -p {{.ROOT_DIR}}/deploy/charts/stratt/dev/declarations
       - cp -R {{.ROOT_DIR}}/plugins/awsec2/demo/estate/. {{.ROOT_DIR}}/deploy/charts/stratt/dev/declarations/
+      - task: demo:vendor-contracts
+        vars: { DEMO: ec2-only, ESTATE: "{{.ROOT_DIR}}/plugins/awsec2/demo/estate" }
 
   demo:ec2-only:run:
     # The turnkey "EC2: provision a real instance" demo (ADR-0116). Stands up an EC2-only Stratt floor —
@@ -1328,6 +1344,49 @@ tasks:
       - "{{.HELM}} uninstall stratt -n stratt --kube-context {{.KIND_CONTEXT}} --ignore-not-found 2>/dev/null || true"
       - docker compose -f {{.ROOT_DIR}}/deploy/dev/docker-compose.yml stop floci 2>/dev/null || true
 
+  demo:vendor-contracts:
+    # Vendor a demo's contractsOnly plugin admissions into the staged declarations (ADR-0138 D3/D4).
+    #
+    # Since the relocation, a plugin's Action/Actuator Contracts live in the PLUGIN's tree, and core
+    # holds only what the estate admits — a plugin wired by environment never contributes its
+    # documents, because the Manifest carries a schema ID and hash, never the schema (§1.5: a plugin
+    # does not mint contract meaning). So a demo that dispatches a plugin-owned Action must ADMIT the
+    # plugin, and the tree has to travel with the staged estate: in the repo the admission is a
+    # relative path out of the demo directory, and a deployed estate is self-contained.
+    #
+    # Without this the demo stages cleanly, `task ci` stays green (it parses from the repo, where the
+    # relative path resolves), and the daemon fails in-cluster on "no input contract". ONLY RUNNING
+    # THE DEMO CATCHES IT — which is how the vsphere demo sat broken from ADR-0103 moving vcenter's
+    # Actions into a declaration until the next time anyone ran it.
+    #
+    # One implementation, called by every demo that needs it. It was app-cert's inline shell block,
+    # and a second copy for vsphere would have been the divergent-copy defect this repo keeps paying
+    # for — with the twist that the copies would drift in the one dimension that decides whether a
+    # floor boots.
+    internal: true
+    requires:
+      vars: [DEMO, ESTATE]
+    cmds:
+      - |
+        set -eu
+        src="{{.ESTATE}}/plugins.yaml"
+        dst="{{.ROOT_DIR}}/deploy/charts/stratt/dev/declarations"
+        [ -f "$src" ] || exit 0
+        names=$(awk '/^[[:space:]]*-[[:space:]]*name:/{gsub(/.*name:[[:space:]]*/,"");print}' "$src")
+        : > "$dst/plugins.yaml"
+        echo "# GENERATED by 'task demo:{{.DEMO}}:stage' — edit {{.ESTATE}}/plugins.yaml." >> "$dst/plugins.yaml"
+        echo "plugins:" >> "$dst/plugins.yaml"
+        for n in $names; do
+          [ -d "{{.ROOT_DIR}}/plugins/$n/contracts" ] || {
+            echo "✗ {{.DEMO}} admits plugin '$n' but plugins/$n/contracts does not exist" >&2; exit 1; }
+          mkdir -p "$dst/plugins/$n/contracts"
+          cp -R "{{.ROOT_DIR}}/plugins/$n/contracts/." "$dst/plugins/$n/contracts/"
+          echo "  - name: $n" >> "$dst/plugins.yaml"
+          echo "    path: plugins/$n/estate" >> "$dst/plugins.yaml"
+          echo "    contractsOnly: true" >> "$dst/plugins.yaml"
+          echo "  ✓ vendored plugin contracts: $n"
+        done
+
   demo:app-cert:stage:
     # Stage the app-cert demo's SELF-CONTAINED estate (ADR-0116) into the inline-declarations path —
     # its authz grants + the app-node-ssh machine CredentialRef + the app-nodes View + the declared
@@ -1349,25 +1408,8 @@ tasks:
       # Without this the demo stages cleanly, `task ci` stays green (it parses from the repo, where
       # the relative path resolves), and the daemon CrashLoops in-cluster on "no input contract for
       # actuator ansible-crypto". Only running the demo catches it.
-      - |
-        set -eu
-        src="{{.ROOT_DIR}}/demos/app-cert/estate/plugins.yaml"
-        dst="{{.ROOT_DIR}}/deploy/charts/stratt/dev/declarations"
-        [ -f "$src" ] || exit 0
-        names=$(awk '/^[[:space:]]*-[[:space:]]*name:/{gsub(/.*name:[[:space:]]*/,"");print}' "$src")
-        : > "$dst/plugins.yaml"
-        echo "# GENERATED by 'task demo:app-cert:stage' — edit demos/app-cert/estate/plugins.yaml." >> "$dst/plugins.yaml"
-        echo "plugins:" >> "$dst/plugins.yaml"
-        for n in $names; do
-          [ -d "{{.ROOT_DIR}}/plugins/$n/contracts" ] || {
-            echo "✗ app-cert admits plugin '$n' but plugins/$n/contracts does not exist" >&2; exit 1; }
-          mkdir -p "$dst/plugins/$n/contracts"
-          cp -R "{{.ROOT_DIR}}/plugins/$n/contracts/." "$dst/plugins/$n/contracts/"
-          echo "  - name: $n" >> "$dst/plugins.yaml"
-          echo "    path: plugins/$n/estate" >> "$dst/plugins.yaml"
-          echo "    contractsOnly: true" >> "$dst/plugins.yaml"
-          echo "  ✓ vendored plugin contracts: $n"
-        done
+      - task: demo:vendor-contracts
+        vars: { DEMO: app-cert, ESTATE: "{{.ROOT_DIR}}/demos/app-cert/estate" }
 
   demo:app-cert:node:up:
     # The demo's managed host: a real sshd + nginx node with root login DISABLED and
@@ -1488,13 +1530,13 @@ tasks:
 
   dev:stack:up:
     desc: "EXTRAS (turnkey plugin-e2e stack): compose substrate + kind + all plugin images + helm-install (opt-in; genesis is the minimal default)"
-    deps: [dev:kind:up]
+    deps: [dev:kind:up, dev:vspheresim:guest-image]
     cmds:
       # Only the substrate the plugin e2e actually needs — Postgres (graph),
-      # NATS (bus), Temporal (orchestration), vcsim (the vcenter Syncer's SoR).
+      # NATS (bus), Temporal (orchestration), vspheresim (the vcenter Syncer's SoR).
       # Scoping this away from the full `dev:up` keeps the turnkey path off the
       # kitchen-sink extras (zot registry, zitadel, …) a plugin run never touches.
-      - docker compose -f deploy/dev/docker-compose.yml up -d --wait postgres nats temporal vcsim floci openbao
+      - docker compose -f deploy/dev/docker-compose.yml up -d --wait postgres nats temporal vspheresim floci openbao
       - task: image:kind-load
       - task: dev:ee:build
       - task: image:plugin
@@ -1535,7 +1577,7 @@ tasks:
       - go run ./cmd/stratt-dev-assert -mode=actuator -context={{.KIND_CONTEXT}}
 
   e2e:plugin:syncer:
-    desc: Prove the vcenter gRPC Syncer plugin projects vcsim Entities + actuator on real targets (needs dev:stack:up)
+    desc: Prove the vcenter gRPC Syncer plugin projects vspheresim Entities + actuator on real targets (needs dev:stack:up)
     dir: core
     cmds:
       - go run ./cmd/stratt-dev-assert -mode=syncer -context={{.KIND_CONTEXT}}

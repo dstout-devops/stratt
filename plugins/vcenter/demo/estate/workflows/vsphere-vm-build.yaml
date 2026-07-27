@@ -52,7 +52,7 @@ steps:
     credentialRefs: [vsphere-dev]
     params:
       name: "{{.launch.instance}}"
-      # No datacenter specified — the demo floor runs a single vSphere datacenter (the default vcsim
+      # No datacenter specified — the demo floor runs a single vSphere datacenter (the default simulated
       # topology), so create-vm places into it (govmomi DefaultDatacenter). In a multi-datacenter estate
       # you would name the target datacenter here (create-vm accepts a `datacenter` param); provisioning
       # into a specific named region across many is the enterprise-capstone story.

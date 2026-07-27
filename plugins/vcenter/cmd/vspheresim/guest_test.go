@@ -4,6 +4,9 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+
+	"github.com/vmware/govmomi/simulator"
+	"github.com/vmware/govmomi/vim25/types"
 )
 
 // hostnameSafe guards a shell boundary, so it gets the attention a shell boundary
@@ -84,6 +87,44 @@ func TestBackingArgv(t *testing.T) {
 			t.Errorf("args[0] = %q, want the bare image", got[0])
 		}
 	})
+}
+
+// Which VMs get a guest. The rule has to be exactly right in BOTH directions: back
+// too little and a provisioned VM silently has no coordinate, back too much and a
+// model sized like a small estate launches a hundred containers at startup.
+func TestNeedsGuest(t *testing.T) {
+	vm := func(id string) *simulator.VirtualMachine {
+		v := &simulator.VirtualMachine{}
+		v.Self = types.ManagedObjectReference{Type: "VirtualMachine", Value: id}
+		v.Config = &types.VirtualMachineConfigInfo{}
+		return v
+	}
+	seeded, built := vm("vm-1"), vm("vm-2")
+	g := GuestBacking{preexisting: map[types.ManagedObjectReference]bool{seeded.Self: true}}
+
+	if g.needsGuest(seeded) {
+		t.Error("a VM the model pre-created must NOT be backed by default — -vms 25 would launch a container per seeded VM")
+	}
+	if !g.needsGuest(built) {
+		t.Error("a VM that appeared after startup is one a client provisioned, and must get a guest")
+	}
+	if !(GuestBacking{All: true, preexisting: map[types.ManagedObjectReference]bool{}}).needsGuest(seeded) {
+		t.Error("-guest-all must back the seeded inventory too")
+	}
+
+	// Idempotence: reconcile runs every couple of seconds, and backing a VM twice
+	// would create a second container for a machine that already has one.
+	built.Config.ExtraConfig = []types.BaseOptionValue{&types.OptionValue{Key: containerBackingKey, Value: "[]"}}
+	if g.needsGuest(built) {
+		t.Error("a VM already carrying the backing key must be skipped")
+	}
+
+	// A VM mid-creation has no Config to reconfigure.
+	unconfigured := vm("vm-3")
+	unconfigured.Config = nil
+	if g.needsGuest(unconfigured) {
+		t.Error("a VM with no Config must be skipped rather than reconfigured")
+	}
 }
 
 func decode(t *testing.T, optsAndImage string, args []string) []string {

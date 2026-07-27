@@ -127,7 +127,7 @@ boolean membership filter, never precedence (§2.4); Views/Workflows are reached
 are never filtered. `task dev:stage-estate` stages this tree into the inline-declarations ConfigMap.
 
 > `views/dev-hosts.yaml` + `views/dev-vms.yaml` and their `dev-runner` grants are the **plugin-e2e** target
-> Views (the seeded synthetic host; the vcenter Syncer's vcsim VMs). Untagged ⇒ present in every slice.
+> Views (the seeded synthetic host; the vcenter Syncer's vspheresim VMs). Untagged ⇒ present in every slice.
 
 ## Rings and promotion ([ADR-0119](../docs/adr/0119-versioned-configuration-and-promotion.md))
 

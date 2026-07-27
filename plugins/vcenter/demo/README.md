@@ -5,9 +5,14 @@ into a live, queryable graph — regions, availability zones, datastores, VMs �
 and Stratt provisions a new VM through the vCenter plugin, and watches it appear back in that same graph.
 About ten minutes, one command, both halves of the estate model on one substrate.
 
-**Fidelity: build-real.** The substrate is [vcsim](https://github.com/vmware/govmomi/tree/main/vcsim) —
-a _real_ vCenter API (govmomi). `create-vm`, power, snapshot, migrate all execute against a real
-inventory; there is no guest OS booting. The projection and orchestration are 100% real.
+**Fidelity: build-real.** The substrate is
+[vspheresim](../cmd/vspheresim/README.md) — a _real_ vCenter API (govmomi), which replaced the stock
+`vmware/vcsim` image. `create-vm`, power, snapshot and migrate all execute against a real inventory,
+and the VM you provision **boots a real guest**: a container running sshd and python3, whose reported
+hostname the Syncer projects as `mgmt.address` (ADR-0143). So what you build is a machine something
+could be configured on, not an inventory record. What stays simulated is the **hypervisor** — there is
+no ESXi, and a "VM" is a container. That is the whole of the gap between this and `real`; the
+projection and orchestration are 100% real.
 
 ---
 
@@ -45,21 +50,21 @@ task demo:vsphere-only:run
 ```
 
 That will (from nothing): bring up kind + a vSphere-only Stratt whose desired state IS this demo's
-estate (staged as CaC), start a **vcsim** vCenter simulator, wait for the Syncer's first OBSERVE (the
-graph coming alive), then launch the gated `vsphere-vm-build`
-Workflow, **auto-approve** its gate, provision `web-01`, and watch the Syncer observe it. It prints the
-declared **fidelity** and the live graph counts up front.
+estate (staged as CaC), start the **vspheresim** vCenter simulator, wait for the Syncer's first OBSERVE
+(the graph coming alive), then launch the gated `vsphere-vm-build` Workflow, **auto-approve** its gate,
+provision `web-01`, watch the Syncer observe it, and wait for its guest to report a reachability
+coordinate. It prints the declared **fidelity** and the live graph counts up front.
 
 ## Walk it by hand (the narrated path)
 
 The turnkey runner does these for you; do them yourself to _feel_ both halves.
 
 1. **Stand up the floor.** `task demo:vsphere-only:run` stages [estate/](estate/) into the declarations
-   mount and brings up kind + the spine + strattd + the vCenter plugin + vcsim. The vCenter Actuator +
+   mount and brings up kind + the spine + strattd + the vCenter plugin + vspheresim. The vCenter Actuator +
    Actions are **boot-wired** (the chart derives `STRATT_VCENTER_PLUGIN_ADDR` from the plugin, so
    strattd registers the Syncer _and_ `vcenter/create-vm` at boot — ADR-0113).
-2. **Watch the graph come alive.** The Syncer's OBSERVE loop enumerates vcsim and projects the topology.
-   Open the UI (`cd ui && npm run dev`) → **Views** → `dev-vms` (the ~25 VMs), `availability-zones`, and
+2. **Watch the graph come alive.** The Syncer's OBSERVE loop enumerates vspheresim and projects the
+   topology. Open the UI (`cd ui && npm run dev`) → **Views** → `dev-vms`, `availability-zones`, and
    `datastores`. Or `GET /api/v1/views/dev-vms/entities`. This is the read-model — rebuildable, not a
    second truth.
 3. **Launch the build Workflow.** **Workflows → vsphere-vm-build → Run** (or
@@ -69,6 +74,10 @@ The turnkey runner does these for you; do them yourself to _feel_ both halves.
 5. **Watch the descent + the closure.** Descend the **Run** in the UI (Workflow → Run → the
    `vcenter/create-vm` task event). Then re-open `dev-vms` — the Syncer's next OBSERVE picks up `web-01`,
    so your _write_ is now visible in the _read-model_. The loop is closed.
+6. **Watch it become reachable.** `GET /api/v1/entities/{id}` for `web-01`: a moment after it is
+   observed, a `mgmt.address` Facet appears carrying the name its guest reports. Nothing computed it —
+   the machine booted and said so, and that is the difference between a VM you have built and a VM you
+   can converge (ADR-0143).
 
 ## What you just learned
 
@@ -80,9 +89,9 @@ one graph — is _more of this shape_.
 ## Clean up
 
 ```bash
-task demo:vsphere-only:down   # uninstall stratt + stop vcsim (kind kept for a fast re-run)
+task demo:vsphere-only:down   # uninstall stratt + stop vspheresim (kind kept for a fast re-run)
 task dev:kind:down            # full teardown — delete the kind cluster
-task dev:down                 # stop the whole compose substrate (incl. vcsim)
+task dev:down                 # stop the whole compose substrate (incl. vspheresim)
 ```
 
 ## What's next in the series

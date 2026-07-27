@@ -71,3 +71,6 @@ deploy/dev/managed-web/
 
 # app-cert demo SSH keypair (machine credential material — never commit, §2.5)
 deploy/dev/app-cert/
+
+# vspheresim dev binary (task dev:vspheresim:up runs it with `go run`)
+plugins/vcenter/vspheresim

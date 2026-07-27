@@ -1,5 +1,5 @@
-# dev-vms — a View selecting the vcenter Syncer's projected VM Entities (from vcsim). This is where the
-# read story comes alive: once the Syncer's OBSERVE loop runs, the ~25 vcsim VMs (plus the web-01 this
+# dev-vms — a View selecting the vcenter Syncer's projected VM Entities (from vspheresim). This is where the
+# read story comes alive: once the Syncer's OBSERVE loop runs, the seeded VMs (plus the web-01 this
 # demo builds) populate here as `vm` Entities with their config/runtime Facets — a live, queryable
 # read-model of the vSphere estate, rebuildable from the source of record (charter §1.2).
 name: dev-vms

@@ -95,11 +95,28 @@ type GuestBacking struct {
 	// the wrong place. Defaulting it off means the simulator works out of the box and
 	// the fidelity is opt-in where the host supports it.
 	MountDMI bool
+	// All backs EVERY VM, including the ones the model pre-creates at startup.
+	//
+	// Off by default, and the reason is cost with a sharp edge: a model sized like a
+	// small estate (-vms 25 across a few resource pools) would launch a hundred
+	// containers the moment the simulator boots, most of them standing in for an
+	// inventory nobody is going to touch. The default instead gives a guest to every
+	// VM CREATED AFTER STARTUP — which is exactly the set a client provisioned, so
+	// anything you build is reachable and the seeded furniture is not.
+	//
+	// The limitation that buys is worth stating: a pre-seeded VM has no coordinate, so
+	// converging onto the simulated existing estate needs -guest-all and the container
+	// budget that implies. It is a predictable line ("what you provisioned has a
+	// guest") rather than an arbitrary one, which a cap would have been.
+	All      bool
 	Interval time.Duration
 	Log      *slog.Logger
 	// warned de-duplicates the dead-guest warning so a 2s reconcile does not produce a
 	// wall of identical lines, which is its own way of hiding a signal.
 	warned map[string]bool
+	// preexisting are the VMs the model created before the first reconcile; skipped
+	// unless All.
+	preexisting map[types.ManagedObjectReference]bool
 }
 
 // Run reconciles until ctx is cancelled.
@@ -108,6 +125,15 @@ func (g GuestBacking) Run(ctx context.Context, m *simulator.Model) {
 	if g.Image == "" {
 		g.Log.Info("guest backing disabled (no image configured); VMs will have no guest OS")
 		return
+	}
+	g.preexisting = map[types.ManagedObjectReference]bool{}
+	if !g.All {
+		// Snapshot BEFORE the first tick: anything present now is the model's seeded
+		// inventory, and everything after it is something a client built.
+		for _, e := range m.Map().All("VirtualMachine") {
+			g.preexisting[e.Reference()] = true
+		}
+		g.Log.Info("guest backing scoped to provisioned VMs", "preexisting", len(g.preexisting), "hint", "-guest-all backs the seeded inventory too")
 	}
 	t := time.NewTicker(g.Interval)
 	defer t.Stop()
@@ -128,7 +154,7 @@ func (g GuestBacking) Run(ctx context.Context, m *simulator.Model) {
 func (g GuestBacking) reconcileOnce(m *simulator.Model) {
 	for _, e := range m.Map().All("VirtualMachine") {
 		vm, ok := e.(*simulator.VirtualMachine)
-		if !ok || vm.Config == nil || hasBacking(vm) {
+		if !ok || !g.needsGuest(vm) {
 			continue
 		}
 		if err := g.attach(m, vm); err != nil {
@@ -170,6 +196,15 @@ func (g GuestBacking) warnDeadGuests(m *simulator.Model) {
 			"a guest image must run a long-lived process (check: docker ps -a --filter name=vcsim-)",
 			"vm", vm.Name, "image", g.Image)
 	}
+}
+
+// needsGuest decides whether one VM should be given a guest. Split out of the
+// reconcile so the rule is testable without a docker daemon: everything else in
+// this file's write path ends in a real container.
+func (g GuestBacking) needsGuest(vm *simulator.VirtualMachine) bool {
+	// Idempotence lives here: a VM already carrying the backing key is skipped, so a
+	// VM is reconfigured exactly once however often the reconcile runs.
+	return vm.Config != nil && !hasBacking(vm) && !g.preexisting[vm.Self]
 }
 
 func hasBacking(vm *simulator.VirtualMachine) bool {

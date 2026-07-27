@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"flag"
 	"log/slog"
 	"net/url"
@@ -28,11 +29,13 @@ import (
 func main() {
 	var (
 		listen   = flag.String("listen", envOr("VSPHERESIM_LISTEN", "0.0.0.0:8989"), "listen address for the vCenter API")
+		useTLS   = flag.Bool("tls", os.Getenv("VSPHERESIM_TLS") != "false", "serve HTTPS with a self-signed certificate, as vCenter does; -tls=false for plaintext")
 		image    = flag.String("guest-image", os.Getenv("VSPHERESIM_GUEST_IMAGE"), "container image backing each VM's guest; empty disables guest backing")
 		network  = flag.String("guest-network", os.Getenv("VSPHERESIM_GUEST_NETWORK"), "docker network to attach guests to")
 		gargs    = flag.String("guest-args", envOr("VSPHERESIM_GUEST_ARGS", "sleep infinity"), "command run inside each guest; must be long-lived or the guest exits and the VM has no address")
 		domain   = flag.String("guest-domain", os.Getenv("VSPHERESIM_GUEST_DOMAIN"), "DNS domain for guest hostnames (<vm>.<domain>); without it guests report docker's undotted container id")
 		mountDMI = flag.Bool("guest-mount-dmi", os.Getenv("VSPHERESIM_GUEST_MOUNT_DMI") == "true", "bind-mount a synthetic SMBIOS table into each guest; needs a writable /sys, so off by default")
+		guestAll = flag.Bool("guest-all", os.Getenv("VSPHERESIM_GUEST_ALL") == "true", "also back the VMs the model pre-creates; off by default because -vms 25 would launch a container per seeded VM")
 		interval = flag.Duration("guest-interval", envDur("VSPHERESIM_GUEST_INTERVAL", 2*time.Second), "how often to look for VMs needing a guest")
 		dcs      = flag.Int("datacenters", envInt("VSPHERESIM_DATACENTERS", 1), "datacenters to model")
 		clusters = flag.Int("clusters", envInt("VSPHERESIM_CLUSTERS", 1), "clusters per datacenter")
@@ -53,17 +56,31 @@ func main() {
 	}
 	defer m.Remove()
 
-	// Only .Host is read by NewServer; plaintext by leaving TLS nil, because this is
-	// a development simulator and a TLS endpoint here would only teach an operator to
-	// trust a certificate that means nothing.
+	// Only .Host is read by NewServer.
+	//
+	// TLS ON BY DEFAULT, with the simulator's self-signed certificate. Two reasons,
+	// and the first is the one that matters: real vCenter is HTTPS, so a plaintext
+	// default would make every client's endpoint differ between this simulator and the
+	// thing it stands in for — which is the same mistake as letting a client ask for a
+	// container-backed VM. The second is drop-in compatibility: this replaced the
+	// stock vcsim image, which serves TLS, and every existing `https://…:8989/sdk`
+	// keeps working unchanged.
+	//
+	// The certificate means nothing (it is httptest's localhost cert) and clients must
+	// dial insecure. That is a true statement about a dev simulator rather than an
+	// argument for plaintext: an endpoint that differs in SCHEME from production
+	// hides a whole class of client misconfiguration.
 	m.Service.Listen = &url.URL{Host: *listen}
+	if *useTLS {
+		m.Service.TLS = new(tls.Config)
+	}
 	srv := m.Service.NewServer()
 	defer srv.Close()
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	go GuestBacking{Image: *image, Args: strings.Fields(*gargs), Network: *network, Domain: *domain, MountDMI: *mountDMI, Interval: *interval, Log: log}.Run(ctx, m)
+	go GuestBacking{Image: *image, Args: strings.Fields(*gargs), Network: *network, Domain: *domain, MountDMI: *mountDMI, All: *guestAll, Interval: *interval, Log: log}.Run(ctx, m)
 
 	log.Info("vspheresim serving", "url", srv.URL.String(),
 		"datacenters", *dcs, "clusters", *clusters, "hosts", *hosts)

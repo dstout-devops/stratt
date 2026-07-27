@@ -3,20 +3,28 @@
 name: vsphere-only
 title: "vSphere: provision a VM + watch the graph come alive"
 summary: >
-  Point Stratt at a vSphere (vcsim) datacenter: its Syncer projects the topology into a live, queryable
+  Point Stratt at a vSphere datacenter: its Syncer projects the topology into a live, queryable
   graph (region, availability-zone, datastore, VM Entities with Facets + Relations), then a gated
-  Workflow provisions a new VM through the vcenter plugin — and the Syncer observes it back. The read +
-  write halves of the estate model on one substrate.
+  Workflow provisions a new VM through the vcenter plugin — and the Syncer observes it back, boots a
+  real guest, and publishes the address that guest reports. The read + write halves of the estate
+  model on one substrate, ending in a machine something could be configured on.
 
 # fidelity (D3): how real is what you're watching?
 #   real       — real workloads on real substrate.
-#   build-real — provisioning/lifecycle APIs are real, guest-OS/runtime simulated.
+#   build-real — the substrate's control API and lifecycle are real; the substrate itself is a simulator.
 #   simulated  — the substrate itself is faked end to end.
 fidelity: build-real
 fidelityNote: >
-  vcsim is a real vCenter API (govmomi) — create-vm/portgroup, power, snapshot, migrate all execute
-  and the inventory is real; there is no guest OS booting. The projection + orchestration are 100% real.
+  The substrate is vspheresim (plugins/vcenter/cmd/vspheresim), which replaced the stock vmware/vcsim
+  image. The vCenter API is real govmomi — create-vm/portgroup, power, snapshot and migrate all
+  execute, and the inventory is real. The GUEST is now real too: a provisioned VM boots a container
+  running sshd and python3, reports its hostname, and the Syncer projects that as mgmt.address
+  (ADR-0143) — so the built machine is one something could be configured on, proven by
+  TestLiveVsphereSimConverge. What stays simulated is the HYPERVISOR: there is no ESXi, and a "VM" is
+  a container. That is why this is build-real and not real; the projection and orchestration are 100%
+  real. The seeded inventory (75 VMs) is deliberately left without guests — backing it would launch a
+  container per VM to stand in for machines nobody touches.
 
 # What the runner drives (mirrors the estate).
 workflow: vsphere-vm-build
-substrate: vsphere-vcsim
+substrate: vsphere-vspheresim

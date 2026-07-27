@@ -11,7 +11,7 @@ summary: >
 
 # fidelity (D3): how real is what you're watching? The turnkey runner prints this up front.
 #   real       — real workloads on real substrate.
-#   build-real — provisioning/lifecycle APIs are real, guest-OS/runtime simulated (e.g. vcsim).
+#   build-real — the substrate's control API and lifecycle are real; the substrate itself is a simulator.
 #   simulated  — the substrate itself is faked end to end.
 fidelity: real
 fidelityNote: >
