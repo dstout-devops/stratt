@@ -11,5 +11,17 @@ name: s3-statestore
 address: stratt-awss3:9090
 pluginIdentity: awss3
 tier: trusted
-actionNames: [awss3/statestore-resolve]
+# statestore-resolve is the capability implementation (ADR-0105); the four bucket-lifecycle
+# Actions MOVED here from main.go (ADR-0103), where they were registered in Go behind
+# STRATT_AWSS3_PLUGIN_ADDR. All are verified against the plugin's Manifest at enable.
+actionNames:
+  - awss3/statestore-resolve
+  - awss3/create-bucket
+  - awss3/delete-bucket
+  - awss3/enable-versioning
+  - awss3/put-bucket-policy
+# Entity-only, like every Action grant: RecordActionResult projects identity + labels and no
+# Facet. The awss3 SYNCER keeps its own boot grant (bucket.config) and stays authoritative for it.
+identitySchemes: [aws.bucketArn]
+labelKeys: [aws.region, stratt.managed]
 provides: [statestore]

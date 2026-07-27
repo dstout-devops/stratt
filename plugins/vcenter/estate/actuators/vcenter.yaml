@@ -52,7 +52,11 @@ actionNames:
 # the SYNCER's — one Go value served both roles there. An Action's write-back is Run-provenance and
 # entity-shaped: create-vm projects the built VM by identity, create-portgroup the portgroup. The
 # Syncer keeps its own boot grant untouched and remains the authority for the observed Facets.
-facetNamespaces: [vm.config, vm.runtime, net.subnet]
+# NARROWED again after checking what an Action actually writes. RecordActionResult projects
+# Kind + IdentityKeys + Labels + Relations and NO Facet — actuators.EntityObservation has no facet
+# field — so the facetNamespaces this carried were authority granted for a path that does not
+# exist. The vcenter SYNCER keeps its own boot grant and stays authoritative for the seven Facet
+# namespaces it observes.
 identitySchemes: [vcenter.uuid, vcenter.network.moref]
 labelKeys: [vcenter.name, source]
 # provisions advertises vcenter's per-kind build Workflows (ADR-0110 D3). In the vsphere-dc environment

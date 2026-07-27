@@ -236,8 +236,10 @@ func TestParseRealEstate(t *testing.T) {
 			haveAct = true
 		}
 		// s3-statestore is the ADR-0105 statestore capability provider (provides:[statestore]).
+		// It now also carries the four bucket-lifecycle Actions, migrated off their boot block
+		// (ADR-0103), so the assertion checks the resolve Action is PRESENT rather than sole.
 		if a.Name == "s3-statestore" && len(a.Provides) == 1 && a.Provides[0] == "statestore" &&
-			len(a.ActionNames) == 1 && a.ActionNames[0] == "awss3/statestore-resolve" {
+			slices.Contains(a.ActionNames, "awss3/statestore-resolve") {
 			haveProvider = true
 		}
 	}
@@ -298,7 +300,11 @@ func TestParseRealEstate(t *testing.T) {
 	// awsec2 is the ADR-0107 provisioning provider (provides:[provisioning], enablement-gate).
 	var haveEC2 bool
 	for _, a := range d.Actuators {
-		if a.Name == "awsec2" && len(a.Provides) == 1 && a.Provides[0] == "provisioning" && len(a.ActionNames) == 0 {
+		// It now carries its 11 INVOKE Actions too, migrated off their boot block (ADR-0103) —
+		// the `len(ActionNames) == 0` this used to assert was a fact about where they were
+		// REGISTERED, not about the provider.
+		if a.Name == "awsec2" && len(a.Provides) == 1 && a.Provides[0] == "provisioning" &&
+			slices.Contains(a.ActionNames, "awsec2/create-vm") {
 			haveEC2 = true
 		}
 	}

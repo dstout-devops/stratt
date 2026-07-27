@@ -36,6 +36,17 @@ type pluginsFile struct {
 type admittedPlugin struct {
 	Name string `yaml:"name"`
 	Path string `yaml:"path"`
+	// ContractsOnly admits the plugin's SELF CONTRACTS without its declarations.
+	//
+	// The case is real and the relocation exposed it. demos/app-cert declares its OWN
+	// `ansible-crypto` Actuator with `pluginIdentity: ansible`; since ADR-0138 D3/D4 that
+	// Actuator's input Contract lives in the ansible plugin's tree, so the demo must admit
+	// ansible to reference it — but admitting the ESTATE too imports ansible's Workflows, which
+	// target Views the demo does not declare. It needs the tool's seam, not the tool's estate.
+	//
+	// Kept explicit rather than inferred from `pluginIdentity`, because admission is the
+	// AUTHORITY half of ADR-0137 D1: an estate says what it uses, it is not deduced for it.
+	ContractsOnly bool `yaml:"contractsOnly"`
 }
 
 // estateRoots returns the roots ParseDir should read, the estate's own first.
@@ -76,6 +87,12 @@ func estateRoots(root string) ([]string, error) {
 			return nil, fmt.Errorf("desiredstate: %s: plugin %q is admitted twice", path, p.Name)
 		}
 		seen[p.Name] = true
+
+		if p.ContractsOnly {
+			// Contracts without declarations: loadPluginContracts reads it, this pass must not.
+			// Adding its estate here would import exactly the Workflows the entry exists to avoid.
+			continue
+		}
 
 		dir := filepath.Join(root, filepath.FromSlash(p.Path))
 		// A path that does not exist fails the LOAD. The alternative — skipping it —
@@ -198,7 +215,10 @@ func readContractDir(dir string) (map[string][]byte, error) {
 // admittedPluginDirs returns the admitted plugins' names + estate dirs, so a caller can reach a
 // sibling of the estate (the contracts tree) without re-parsing plugins.yaml.
 type admittedDir struct {
-	name      string
+	name string
+	// estateDir is the admitted estate path. For a contractsOnly entry it still points at the
+	// plugin's estate directory, because that is how the contracts sibling is located — the
+	// entry changes what is LOADED, not where the plugin lives.
 	estateDir string
 }
 

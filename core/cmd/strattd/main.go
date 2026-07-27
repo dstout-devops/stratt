@@ -560,33 +560,12 @@ func run(ctx context.Context, log *slog.Logger) error {
 			},
 		}
 		awsHost = pluginhost.New(store, pluginv1.NewPluginServiceClient(conn), grant, log)
-		// create-vm + the instance lifecycle & tag Actions (ADR-0095), all on the one
-		// host/grant. reboot has no stable end-state ⇒ effectful, not DryRun-planned as
-		// idempotent, but still DryRunnable via the EC2 API's own dry-run.
-		awsActions := []struct {
-			name        string
-			dryRunnable bool
-		}{
-			{"awsec2/create-vm", true},
-			{"awsec2/start", true},
-			{"awsec2/stop", true},
-			{"awsec2/reboot", true},
-			{"awsec2/terminate", true},
-			{"awsec2/tag", true},
-			// Resource-provisioning Actions (ADR-0095 C2), each DryRunnable via the
-			// EC2 API's own dry-run; fire-and-return (no Entity until C3).
-			{"awsec2/create-security-group", true},
-			{"awsec2/import-key-pair", true},
-			{"awsec2/create-volume", true},
-			{"awsec2/create-vpc", true},
-			{"awsec2/create-subnet", true},
-		}
-		for _, a := range awsActions {
-			if err := registerPluginAction(a.name, awsHost, a.dryRunnable); err != nil {
-				return err
-			}
-		}
-		log.Info("awsec2 plugin actions registered", "addr", awsPluginAddr, "actions", len(awsActions))
+		// The 11 INVOKE Actions (ADR-0095) used to be registered HERE, on the Syncer's host and
+		// therefore with the SYNCER's grant. They are now declared:
+		// plugins/awsec2/estate/actuators/awsec2.yaml carries them as `actionNames` with an
+		// ENTITY-ONLY grant (ADR-0103) — RecordActionResult projects identity + labels and no
+		// Facet, so the Syncer's seven Facet namespaces were authority for a path that does not
+		// exist. The Syncer half below keeps this grant and stays authoritative for them.
 	}
 
 	// awss3 plugin (ADR-0097): bucket lifecycle Actions + a metadata-only bucket
@@ -609,11 +588,9 @@ func run(ctx context.Context, log *slog.Logger) error {
 		}
 		s3Host = pluginhost.New(store, pluginv1.NewPluginServiceClient(conn), grant, log)
 		// S3 has no dry-run operation ⇒ every Action is non-DryRunnable.
-		for _, name := range []string{"awss3/create-bucket", "awss3/delete-bucket", "awss3/enable-versioning", "awss3/put-bucket-policy"} {
-			if err := registerPluginAction(name, s3Host, false); err != nil {
-				return err
-			}
-		}
+		// The four bucket-lifecycle Actions are now declared beside the statestore resolve Action
+		// (plugins/awss3/estate/actuators/s3-statestore.yaml, ADR-0103), with an entity-only grant.
+		// The bucket Syncer below keeps this grant and stays authoritative for bucket.config.
 		log.Info("awss3 plugin actions registered", "addr", s3Addr)
 	}
 

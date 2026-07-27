@@ -23,9 +23,11 @@ import (
 // mcp — plus vcenter's 16 INVOKE Actions, which were never Actuators and so never appeared here.
 // What remains is below.
 //
-// Still boot-registered as ACTIONS (not tracked by this map, which is Actuator-shaped): the awsec2
-// and awss3 sets, and adopt/materialize. Each needs its grant transcribed onto the owning
-// declaration first — the crossplane migration showed a naive move narrows authority in silence.
+// Still boot-registered as an ACTION (not tracked by this map, which is Actuator-shaped):
+// `adopt/materialize` alone. It has no declaration to attach to — ansible-automation ships no
+// Actuator, only Connector halves — so migrating it needs a declaration to exist first, which is
+// a decision rather than a transcription. The vcenter (16), awsec2 (11) and awss3 (4) sets are
+// done.
 var bootRegisteredActuators = map[string]string{
 	// The ONE that is not a simple lift. Its registration is nested inside
 	// `if STRATT_STATE_KEY != ""`, and the comment there states the safety property plainly:
