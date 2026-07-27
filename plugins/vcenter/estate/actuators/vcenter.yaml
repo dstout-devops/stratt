@@ -16,7 +16,45 @@ address: stratt-vcenter:9090
 pluginIdentity: vcenter
 tier: trusted
 environments: [vsphere-dc]
+# Every vcenter Action the boot block registered was dry-runnable, and this is the declaration's
+# only place to say so. Omitting it would REFUSE a dry-run Step against any of them — a silent
+# capability loss the migration must not introduce, and the mirror of `script`'s dryRunnable: false
+# being a safety property in the other direction.
+dryRunnable: true
 provides: [provisioning]
+# ── The 15 INVOKE Actions, MOVED here from main.go (ADR-0103) ────────────────────────────────
+# They were registered in Go behind STRATT_VCENTER_PLUGIN_ADDR — a dispatch surface unreviewable
+# from Git, and one nothing checked against the plugin's own Manifest. Declared, they are verified
+# at enable: a name this plugin does not advertise now holds the Actuator back with a diagnostic
+# instead of registering a dispatch entry that fails at Invoke.
+#
+# create-vm is the Compute builder and create-portgroup the Subnet builder (ADR-0113); the rest are
+# the ADR-0114 lifecycle + snapshot/mobility set. All dry-runnable, which the declaration's
+# `dryRunnable` above already says once for the whole plugin.
+actionNames:
+  - vcenter/create-vm
+  - vcenter/create-portgroup
+  - vcenter/power-off
+  - vcenter/power-on
+  - vcenter/reset
+  - vcenter/suspend
+  - vcenter/shutdown-guest
+  - vcenter/reconfigure
+  - vcenter/delete-vm
+  - vcenter/snapshot-create
+  - vcenter/snapshot-revert
+  - vcenter/snapshot-remove
+  - vcenter/migrate
+  - vcenter/clone
+  - vcenter/reconfigure-portgroup
+  - vcenter/delete-portgroup
+# The Actuator's own write ceiling (ADR-0054). NARROWER than the boot grant it replaces, which was
+# the SYNCER's — one Go value served both roles there. An Action's write-back is Run-provenance and
+# entity-shaped: create-vm projects the built VM by identity, create-portgroup the portgroup. The
+# Syncer keeps its own boot grant untouched and remains the authority for the observed Facets.
+facetNamespaces: [vm.config, vm.runtime, net.subnet]
+identitySchemes: [vcenter.uuid, vcenter.network.moref]
+labelKeys: [vcenter.name, source]
 # provisions advertises vcenter's per-kind build Workflows (ADR-0110 D3). In the vsphere-dc environment
 # BOTH Compute (awsec2 unscoped + vcenter) and Subnet (crossplane/opentofu unscoped + vcenter) have >1
 # provider → per-(class,kind) resolution fails closed on the ambiguity (§2.4); the

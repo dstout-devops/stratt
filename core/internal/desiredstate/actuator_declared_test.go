@@ -20,7 +20,12 @@ import (
 // became a declaration, and `opentofu` was boot-registered without ever being listed.
 //
 // Migrated off their boot blocks so far: ansible, script (ADR-0117 k), cert-issuer, crossplane,
-// mcp. What remains is below.
+// mcp — plus vcenter's 16 INVOKE Actions, which were never Actuators and so never appeared here.
+// What remains is below.
+//
+// Still boot-registered as ACTIONS (not tracked by this map, which is Actuator-shaped): the awsec2
+// and awss3 sets, and adopt/materialize. Each needs its grant transcribed onto the owning
+// declaration first — the crossplane migration showed a naive move narrows authority in silence.
 var bootRegisteredActuators = map[string]string{
 	// The ONE that is not a simple lift. Its registration is nested inside
 	// `if STRATT_STATE_KEY != ""`, and the comment there states the safety property plainly:

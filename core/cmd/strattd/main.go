@@ -951,33 +951,18 @@ func run(ctx context.Context, log *slog.Logger) error {
 			},
 		}
 		host := pluginhost.New(store, pluginv1.NewPluginServiceClient(conn), grant, log)
-		// The dual-verb INVOKE surface (ADR-0113): the vcenter/create-vm provisioning build Action,
-		// on the SAME host as the OBSERVE Syncer below — so the build output's vcenter.uuid identity
-		// correlates structurally with what the Syncer observes (ADR-0113 D1/D3). dry-runnable.
-		if err := registerPluginAction("vcenter/create-vm", host, true); err != nil {
-			return err
-		}
-		// vcenter/create-portgroup (ADR-0113 D4): the Subnet builder — a VLAN-tagged DVS portgroup.
-		// The VLAN is composed via an explicit netbox/ipam-resolve Step in vsphere-subnet-build, not
-		// resolve-inject; this Action just takes the resolved vlanId as a param. dry-runnable.
-		if err := registerPluginAction("vcenter/create-portgroup", host, true); err != nil {
-			return err
-		}
-		// vcenter lifecycle Actions (ADR-0114): power/reconfigure/delete on an existing VM by uuid, on
-		// the same host as the OBSERVE Syncer. All dry-runnable; delete-vm relies on the Syncer's next
-		// full-sync to tombstone (ADR-0042) and is idempotent-on-absence (D2).
-		for _, op := range []string{
-			"vcenter/power-off", "vcenter/power-on", "vcenter/reset", "vcenter/suspend",
-			"vcenter/shutdown-guest", "vcenter/reconfigure", "vcenter/delete-vm",
-			// snapshot + mobility + portgroup lifecycle (ADR-0114 slice 2)
-			"vcenter/snapshot-create", "vcenter/snapshot-revert", "vcenter/snapshot-remove",
-			"vcenter/migrate", "vcenter/clone",
-			"vcenter/reconfigure-portgroup", "vcenter/delete-portgroup",
-		} {
-			if err := registerPluginAction(op, host, true); err != nil {
-				return err
-			}
-		}
+		// The 15 INVOKE Actions (ADR-0113 create-vm/create-portgroup + the ADR-0114 lifecycle set)
+		// used to be registered HERE, on the Syncer's host and therefore with the SYNCER's grant.
+		// They are now declared: plugins/vcenter/estate/actuators/vcenter.yaml carries them as
+		// `actionNames` with the Actuator's OWN, narrower grant (ADR-0103).
+		//
+		// Two things this buys beyond reviewability. The dispatch surface is verified against the
+		// plugin's own Manifest at enable, so a name vcenter does not advertise holds the Actuator
+		// back with a diagnostic instead of registering an entry that fails at Invoke. And the
+		// Actions stop borrowing the Syncer's write ceiling — an Action's write-back is
+		// Run-provenance and entity-shaped, not the Syncer's seven observed Facet namespaces.
+		//
+		// The Syncer half below keeps this grant and remains the authority for what it observes.
 		controllers = append(controllers, homeSupervise(sourceName, host.Register, func(cctx context.Context) error {
 			return host.SyncLoop(cctx, interval)
 		}))
