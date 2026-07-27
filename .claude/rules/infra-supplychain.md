@@ -19,7 +19,7 @@ paths:
 - **Evergreen contract is CI-enforced (§1.7), not aspirational.** Add policy gates that **fail the
   build** when a runtime/toolchain/substrate dep falls below N-1 on its major/LTS line. Applies
   bidirectionally: what Stratt runs on (Go, Node LTS, Postgres, Temporal, NATS — plus Python in
-  execution pods / plugin SDK) and what Stratt supports (K8s upstream N-2 skew, Postgres N-1,
+  execution pods) and what Stratt supports (K8s upstream N-2 skew, Postgres N-1,
   actuator tool versions). Quarterly upgrade train is
   a release-blocking checklist item.
 - **Secrets are brokered, never baked (§2.5):** no secret material in images, layers, or manifests;

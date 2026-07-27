@@ -194,7 +194,8 @@ ui/              React + TS + Vite — a first-party, pure /api/v1 client
 types/           Shared Go types for the Named Kinds (Entity, Run, Finding, Cell…)
 contracts/       Pinned JSON-Schema Contracts (Action/Actuator inputs & outputs)
 plugins/         ~20 self-contained tool plugins (each own go.mod + cmd + Dockerfile)
-sdk/             The plugin SDK (plugin/v1, secretbroker) — Connector/Actuator authors
+sdk/             The plugin SDK, in Go (plugin/v1, pluginserve, mockstratt, secretbroker).
+                 The PORT is the contract, so any language may implement one (ADR-0141)
 proto/           Wire definitions for the typed Site stream
 packs/           Compliance-as-data packs (e.g. CIS)
 deploy/          Helm chart (deploy/charts/stratt) + dev substrate config

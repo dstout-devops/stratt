@@ -68,9 +68,12 @@ and AWX→Stratt migration mapping: invoke the **`/vocabulary`** skill.
   SDKs for NATS / Temporal / OpenFGA. One language, shared with the pull agent. **API is
   OpenAPI-first** (huma / oapi-codegen). **Contracts & Facet schemas are data** — pinned,
   hash-verified JSON Schema, validated by a standard validator, **never language classes**.
-- **Python lives only in execution pods** (the `ansible-runner` shim in the EE image) **and the
-  plugin SDK** (one supported language for Connector/Actuator authors). Use `uv` there. Python is
-  **not** the control plane.
+- **Python lives only in execution pods** (the `ansible-runner` shim in the EE image) — the GPLv3
+  subprocess boundary. Use `uv` there. Python is **not** the control plane and **not** the plugin SDK.
+- **The plugin SDK is Go** (`sdk/` — the generated port, `pluginserve`, `mockstratt`,
+  `secretbroker`). But the **PORT is the contract**, not a language: a plugin is conformant because
+  it speaks the gRPC/protobuf port (or the EE-Job subprocess transport), never because it imports an
+  SDK — so any language with a protobuf toolchain is first-class (§1.5, ADR-0141).
 - **Frontend:** React + TypeScript + Vite · TanStack Router/Query · vendored Radix/shadcn components
   owned in-repo · Tailwind (build-time only). Node current-or-previous LTS (this container: 24).
 - **Agent / Sites:** Go (`stratt-agent` pull agent, NATS-leaf dispatcher) — shares types with the

@@ -4,17 +4,25 @@ paths:
   - "**/pyproject.toml"
 ---
 
-# Python rules — execution pods & plugin SDK only — charter §3
+# Python rules — execution pods only — charter §3
 
-**Python is not the control plane** (that is Go — ADR-0002, `.claude/rules/backend-go.md`). In Stratt
-Python lives in exactly two places; if you're writing Python for anything else, stop and reconsider —
-it probably belongs in the Go control plane.
+**Python is not the control plane** (that is Go — ADR-0002, `.claude/rules/backend-go.md`) and it is
+**not the plugin SDK** (that is Go too — ADR-0141). In Stratt, Python lives in exactly ONE place; if
+you are writing Python for anything else, stop and reconsider — it belongs in Go.
 
 1. **Inside execution pods (EE images):** the `ansible-runner` shim and tool-content glue that runs
    in ephemeral K8s Job pods. This is the GPLv3 subprocess boundary (§3) — it runs Ansible; it is a
    *separate process in a separate image* from the control plane, never linked into it.
-2. **The plugin SDK:** one supported language for community Connector/Actuator authors, so the
-   Ansible-community ecosystem is not excluded. Keep this SDK's surface small and typed.
+
+That is the whole list. The second entry used to be "the plugin SDK: one supported language for
+community Connector/Actuator authors" — a commitment made when the backend itself was Python
+(FastAPI/Django), carried forward unexamined when ADR-0002 moved the control plane to Go, and never
+built. ADR-0141 retired it: the SDK is Go, and the PORT is the contract, so a plugin author is free
+in any language with a protobuf toolchain rather than confined to one Stratt chose for them.
+
+An Ansible contributor is still not excluded, which is what the old clause was protecting — their
+contribution is tool CONTENT (playbooks, roles, collections) in the ansible plugin's `contentDir`
+tree, never a Connector implementation.
 
 Rules for that Python:
 - **Env & deps:** `uv` only (`uv add`, `uv sync`, `uv run`). Pin versions; evergreen ≥ N-1 (§1.7).

@@ -125,8 +125,10 @@ One boring, huge-community dependency set (charter §3):
 | Observability | **Loki** + **OTel** |
 | Supply chain | **cosign / SLSA / SBOM** |
 
-Python lives **only** in execution pods (the `ansible-runner` shim) and the plugin SDK — never in the
-control plane. Ansible is subprocess-only (a GPL boundary the Go core never links). OpenTofu, not
+Python lives **only** in execution pods (the `ansible-runner` shim) — never in the control plane and
+never in the plugin SDK, which is Go. The PORT is the contract, not a language: a plugin is
+conformant because it speaks the gRPC/protobuf port, so any language with a protobuf toolchain is
+first-class (ADR-0141). Ansible is subprocess-only (a GPL boundary the Go core never links). OpenTofu, not
 Terraform.
 
 ## Status, honestly
