@@ -22,8 +22,15 @@ route-table + IGW, from a **NetBox-allocated CIDR** (ipam, ADR-0111) with **S3 t
    committed, this module is not release-ready.**
 2. **`tofu validate`** — this module has not been validated in-repo (no tofu binary here); confirm it
    at bring-up.
-3. **The live floci run** — `tofu apply` landing a real VPC/subnet on floci, and a VM SSH-able in it
-   (the DeepWiki-vs-docs conflict on floci's instance realness is settled here — ADR-0112 D7).
+3. **The live floci run** — `tofu apply` landing a real VPC/subnet on floci.
+   **The DeepWiki-vs-docs conflict on floci's instance realness is now SETTLED, and DeepWiki was
+   right** (measured 2026-07-27 against floci 1.5.33 — HAR-1 in
+   [enterprise-readiness.md](../../../docs/enterprise-readiness.md), guarded by
+   `plugins/awsec2/floci_fidelity_live_test.go`): the **network** surface this module depends on is
+   entirely real — VPC, subnet, security group, route table, IGW, routes, associations, tags and the
+   `Modify*Attribute` calls all execute, and subnet CIDR IPAM is genuine. The **instance** half is not:
+   no AMI carries sshd, user-data is never run, so **"a VM SSH-able in it" is not achievable** and is
+   struck from this checklist. That does not affect this module, which builds network only.
 
 ## Open mechanism (the build Workflow — ADR-0112 follow-up)
 

@@ -2764,7 +2764,22 @@ func validateParamsContract(actuator string, params map[string]any, opts ...Vali
 		return fmt.Errorf("a View actuation requires an explicit actuator (no platform default)")
 	}
 	if template.Has(params) {
-		return nil
+		// Shape now, values at launch — see validateActionParamsContract. The Actuator
+		// path has the same hole for the same reason, so it gets the same gate rather
+		// than waiting for this defect class to arrive here too.
+		// Mirror ValidateActuatorParamsFor's lookup EXACTLY: the plugin-identity contract
+		// is a FALLBACK used only when the Actuator's own name has none. Checking both
+		// when both exist would be stricter than the validator this defers to, and a
+		// stricter shape gate refuses estates the launch path would accept.
+		name := "actuators/" + actuator + ".input"
+		if _, ok, err := contract.Get(name); err != nil {
+			return err
+		} else if !ok {
+			if id := apply(opts).identities[actuator]; id != "" && id != actuator {
+				name = "actuators/" + id + ".input"
+			}
+		}
+		return contract.ValidateParamKeys(name, params)
 	}
 	raw := json.RawMessage(`{}`)
 	if params != nil {
@@ -2797,7 +2812,13 @@ func validateActionParamsContract(action string, params map[string]any) error {
 		return fmt.Errorf("action %q has no input contract — an uncontracted operation must not exist (§2.2, ADR-0031)", action)
 	}
 	if template.Has(params) {
-		return nil
+		// The VALUES wait for launch; the KEY SET does not. Which params a Step sends is
+		// written in Git and cannot change at runtime, so checking the shape here is the
+		// same rule the existence check above applies — verify at the diff, not at the
+		// gate (§1.8). Deferring shape along with values is how PRV-1 shipped: this very
+		// Workflow family sent `subnet`/`availabilityZone` into an additionalProperties:false
+		// Contract and failed only when an operator approved the build.
+		return contract.ValidateParamKeys("actions/"+action+".input", params)
 	}
 	raw := json.RawMessage(`{}`)
 	if params != nil {

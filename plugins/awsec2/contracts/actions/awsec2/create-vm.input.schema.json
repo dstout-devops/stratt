@@ -6,15 +6,38 @@
   "type": "object",
   "properties": {
     "region": { "type": "string" },
-    "endpoint": { "type": "string", "description": "override API endpoint (dev: the moto stand-in)" },
+    "endpoint": {
+      "type": "string",
+      "description": "override API endpoint (dev: the moto stand-in)"
+    },
     "instanceType": { "type": "string" },
     "ami": { "type": "string" },
     "name": { "type": "string" },
-    "projectKind": { "type": "string", "description": "estate overlay (ADR-0058 §6): the Entity kind the built instance projects AS (e.g. host), so a fleet View selects it. Empty keeps the native 'instance'." },
+    "projectKind": {
+      "type": "string",
+      "description": "estate overlay (ADR-0058 §6): the Entity kind the built instance projects AS (e.g. host), so a fleet View selects it. Empty keeps the native 'instance'."
+    },
     "projectLabels": {
       "type": "object",
       "additionalProperties": { "type": "string" },
       "description": "estate overlay labels carried on the built instance's Run-provenance projection — the stratt.intent/instance correlation key + fleet labels the Run may own (§2.1 per-key ownership)."
+    },
+    "subnetId": {
+      "type": "string",
+      "description": "Declared placement (ADR-0058/0059 D5, ADR-0123 D2): the subnet to launch into. EMPTY MEANS UNPLACED and is normal — placement is emitted complete with empty axes where the Intent declares nothing, so a shared builder can bind it without a conditional. Added by PRV-1: the provisioning seam already rendered this into the Action's params and the closed Contract rejected it, so every Intent/Compute build failed at launch."
+    },
+    "availabilityZone": {
+      "type": "string",
+      "description": "Declared placement: the AZ to launch into. Empty means unplaced (see subnetId)."
+    },
+    "securityGroupIds": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Security groups to attach. Absent/empty leaves the VPC default."
+    },
+    "keyName": {
+      "type": "string",
+      "description": "Name of an ALREADY-IMPORTED key pair (awsec2/import-key-pair) whose public key the instance should authorize. Only the NAME crosses here — no key material, ever (§2.5)."
     }
   },
   "required": ["region", "ami"],

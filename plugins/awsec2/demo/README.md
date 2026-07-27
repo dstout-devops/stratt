@@ -4,9 +4,18 @@
 a **real** instance — then its Syncer observes the new instance appear in the graph. About ten minutes,
 one command, a real EC2 instance at the end.
 
-**Fidelity: real.** The substrate is [floci](https://github.com/floci-io/floci) (ADR-0093) — a real-host
-EC2 dev backend that launches _actual_ Docker containers as EC2 instances (SSH-able, real lifecycle,
-real EC2 API). It is **not** a mock (it replaced moto). `RunInstances` really launches a Linux instance.
+**Fidelity: build-real.** The substrate is [floci](https://github.com/floci-io/floci) (ADR-0093) — a
+real-host EC2 dev backend that launches _actual_ Docker containers as EC2 instances, with a real
+lifecycle, a real EC2 API and a real network model (VPC/subnet/security-group/route-table/IGW, and
+genuine subnet CIDR IPAM). It is **not** a mock (it replaced moto). `RunInstances` really launches a
+Linux container.
+
+**What is not real: the guest.** No floci AMI ships an `sshd` binary and user-data is never executed,
+so the instance is a real machine record with **nothing listening** — you cannot converge onto it.
+This page claimed fidelity `real` and "SSH-able" until it was measured (2026-07-27, floci 1.5.33);
+see **HAR-1** in [enterprise-readiness.md](../../../docs/enterprise-readiness.md), now guarded by
+`plugins/awsec2/floci_fidelity_live_test.go` so it cannot rot back. `build-real` is precisely the
+term this demo library already defined for this case.
 
 ---
 
@@ -14,9 +23,10 @@ real EC2 API). It is **not** a mock (it replaced moto). `RunInstances` really la
 
 Stratt is an estate-automation platform: a typed graph of everything you run, plus a durable
 orchestration engine, where every tool is a **plugin** behind one sovereign plugin port. The
-[vSphere demo](../vsphere-only/README.md) showed provisioning against a real _API_ (vcsim) with no guest
-OS. This demo goes all the way to **real fidelity**: a real EC2 API _and_ a real running instance — and
-starts from an empty cloud, so you watch the graph come alive _with_ the instance you build.
+[vSphere demo](../../vcenter/demo/README.md) showed provisioning against a real _API_ (vcsim) with no
+guest OS. This demo goes further: a real EC2 API _and_ a real running instance container — and starts
+from an empty cloud, so you watch the graph come alive _with_ the instance you build. It stops short of
+a guest OS, which is why it is `build-real` rather than `real`.
 
 ## What this demo teaches
 

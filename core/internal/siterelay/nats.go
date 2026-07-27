@@ -140,10 +140,30 @@ func NewNATSAcceptor(nc *nats.Conn, site, plugin string) *NATSAcceptor {
 	return &NATSAcceptor{nc: nc, site: site, plugin: plugin}
 }
 
+// Subscribe establishes this acceptor's call subscription EAGERLY and blocks until
+// the server has registered the interest. Idempotent; Accept calls it too, so an
+// existing caller keeps working unchanged.
+//
+// It exists because subscribing lazily on the first Accept leaves a startup window
+// in which the agent is running, has logged itself ready, and yet a hub call is
+// SILENTLY DROPPED — core NATS does not queue for an absent subscriber. The hub's
+// call then blocks until its per-call context expires, with no message naming the
+// cause, which is exactly the invisible failure §1.8 forbids. The flush is the
+// load-bearing half: SubscribeSync returning is not the same as the server having
+// the interest, so without it the window narrows rather than closes.
+func (a *NATSAcceptor) Subscribe() error {
+	a.once.Do(func() {
+		a.sub, a.err = a.nc.SubscribeSync(CallSubject(a.site, a.plugin))
+		if a.err == nil {
+			a.err = a.nc.Flush()
+		}
+	})
+	return a.err
+}
+
 func (a *NATSAcceptor) Accept(ctx context.Context) (CallStream, error) {
-	a.once.Do(func() { a.sub, a.err = a.nc.SubscribeSync(CallSubject(a.site, a.plugin)) })
-	if a.err != nil {
-		return nil, a.err
+	if err := a.Subscribe(); err != nil {
+		return nil, err
 	}
 	msg, err := a.sub.NextMsgWithContext(ctx)
 	if err != nil {

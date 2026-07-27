@@ -1198,7 +1198,8 @@ tasks:
   demo:ec2-only:run:
     # The turnkey "EC2: provision a real instance" demo (ADR-0116). Stands up an EC2-only Stratt floor —
     # kind + spine + strattd + the awsec2 plugin + an external floci (a real-host EC2 backend that runs
-    # real SSH-able instance containers, ADR-0093) + the staged CaC estate — then drives a gated Workflow
+    # real instance containers with a real network model; NOT SSH-able — ADR-0093, HAR-1) + the staged
+    # CaC estate — then drives a gated Workflow
     # that provisions a REAL instance via awsec2/create-vm; the awsec2 Syncer observes it into the graph.
     # By-hand walk: plugins/awsec2/demo/README.md.
     desc: "Demo — stand up an EC2 floor (floci) and provision a real instance through a gated Workflow"

@@ -69,3 +69,14 @@ steps:
       # its Finding is for rather than always web-01 (ADR-0120 D2).
       projectKind: "{{.launch.projectKind}}"
       projectLabels: "{{.launch.labels}}"
+      # Placement, carried EXACTLY as the plugin's shipped compute-build carries it, even
+      # though this demo declares no subnet — an unplaced Intent resolves both to "" and the
+      # Action skips the axis (ADR-0123 D2).
+      #
+      # Keeping them identical is the point. This file used to OMIT these two params while the
+      # shipped Workflow sent them, so the live-verified demo proved a Workflow the reference
+      # estate does not use — and it hid PRV-1, where the shipped one failed at launch for
+      # every Intent/Compute. A demo that exercises a different shape than the thing it
+      # demonstrates is worse than no demo. Guarded by TestPluginDemoWorkflowsMatchShipped.
+      subnetId: "{{.launch.placement.subnet}}"
+      availabilityZone: "{{.launch.placement.availabilityZone}}"

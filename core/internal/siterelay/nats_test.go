@@ -34,6 +34,15 @@ func TestRelay_NATSRoundTrip(t *testing.T) {
 
 	site := "edge-" + time.Now().Format("150405.000")
 	acceptor := siterelay.NewNATSAcceptor(nc, site, "vcenter-dev")
+	// Subscribe SYNCHRONOUSLY before publishing anything. This test used to start
+	// Serve in a goroutine and dial immediately, racing the lazy subscribe inside
+	// Accept — on a loaded box the goroutine was scheduled after the publish, NATS
+	// dropped the call with no subscriber, and the test hung to its deadline. That
+	// was never a timing artifact to sleep around: it was the production startup
+	// window Subscribe now closes.
+	if err := acceptor.Subscribe(); err != nil {
+		t.Fatalf("acceptor subscribe: %v", err)
+	}
 	go func() { _ = siterelay.Serve(ctx, acceptor, siteLocalClient(t)) }()
 
 	grant := pluginhost.Grant{

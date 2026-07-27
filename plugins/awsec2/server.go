@@ -282,6 +282,24 @@ type createVMParams struct {
 	// stratt.intent/instance correlation key + fleet keys, not another Source's.
 	ProjectKind   string            `json:"projectKind"`
 	ProjectLabels map[string]string `json:"projectLabels"`
+	// Declared PLACEMENT (ADR-0058/0059 D5, ADR-0123 D2). Until this existed the
+	// provisioning seam rendered placement into this Action's params and the Action had
+	// nowhere to put it: the input Contract is additionalProperties:false, so every
+	// Intent/Compute build through compute-build failed at LAUNCH, and ADR-0123 D2's
+	// "declared placement finally reaches the provider" was not true (PRV-1).
+	//
+	// EMPTY IS MEANINGFUL AND NORMAL. ADR-0123 D2 requires placement be emitted complete —
+	// every axis present, empty where the Intent declares nothing — precisely so a shared
+	// builder can bind it without a conditional. So an empty string means "unplaced", and
+	// each field is applied to RunInstances only when set; core does not, and cannot,
+	// branch on it (ADR-0083 D5).
+	SubnetID         string   `json:"subnetId"`
+	AvailabilityZone string   `json:"availabilityZone"`
+	SecurityGroupIDs []string `json:"securityGroupIds"`
+	// KeyName names an ALREADY-IMPORTED key pair (awsec2/import-key-pair). The public key
+	// is imported; no private key ever crosses the core (§2.5) — this is only the name of
+	// the key pair the instance should authorize.
+	KeyName string `json:"keyName"`
 }
 
 // Invoke runs the create-vm Action: provision one EC2 instance as a single typed
@@ -349,6 +367,19 @@ func (s *Server) invokeCreateVM(ctx context.Context, req *pluginv1.InvokeRequest
 			ResourceType: ec2types.ResourceTypeInstance,
 			Tags:         []ec2types.Tag{{Key: aws.String("Name"), Value: aws.String(p.Name)}},
 		}}
+	}
+	// Placement: applied per-axis only when declared (empty ⇒ unplaced, ADR-0123 D2).
+	if p.SubnetID != "" {
+		input.SubnetId = aws.String(p.SubnetID)
+	}
+	if p.AvailabilityZone != "" {
+		input.Placement = &ec2types.Placement{AvailabilityZone: aws.String(p.AvailabilityZone)}
+	}
+	if len(p.SecurityGroupIDs) > 0 {
+		input.SecurityGroupIds = p.SecurityGroupIDs
+	}
+	if p.KeyName != "" {
+		input.KeyName = aws.String(p.KeyName)
 	}
 
 	out, err := api.RunInstances(ctx, input)

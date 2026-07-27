@@ -76,8 +76,15 @@ steps:
       # single instance and builds whichever one its Finding is for.
       projectKind: "{{.launch.projectKind}}"
       projectLabels: "{{.launch.labels}}"
-      # Declared placement finally reaches the provider (ADR-0123 D2). Empty strings mean the
-      # Intent declared nothing for that axis; the provider's own Action Contract decides what it
+      # Declared placement reaches the provider (ADR-0123 D2). Empty strings mean the Intent
+      # declared nothing for that axis; the provider's own Action Contract decides what it
       # requires (§1.5) — core does not, and cannot, branch on it (no conditionals, ADR-0083 D5).
-      subnet: "{{.launch.placement.subnet}}"
+      #
+      # NOTE THE NAMES. The launch interface is provider-AGNOSTIC (`placement.subnet` — every
+      # substrate has some notion of a subnet); the Action's params are provider-NATIVE
+      # (`subnetId` — an AWS subnet id). This Workflow is where the two meet, which is exactly
+      # what a per-provider build Workflow is for (§1.5). It previously sent `subnet`, a name
+      # the Action's Contract does not declare, so every build of this fleet failed at LAUNCH
+      # (PRV-1) — now caught at estate load by the param-key gate.
+      subnetId: "{{.launch.placement.subnet}}"
       availabilityZone: "{{.launch.placement.availabilityZone}}"

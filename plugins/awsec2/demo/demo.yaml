@@ -11,10 +11,17 @@ summary: >
 #   real       — real workloads on real substrate.
 #   build-real — provisioning/lifecycle APIs are real, guest-OS/runtime simulated.
 #   simulated  — the substrate itself is faked end to end.
-fidelity: real
+fidelity: build-real
 fidelityNote: >
-  floci (ADR-0093) runs REAL Docker containers as EC2 instances — SSH-able, real lifecycle, real EC2
-  API. Not a mock (it replaced moto). RunInstances actually launches a Linux instance.
+  floci (ADR-0093) runs REAL Docker containers as EC2 instances against a real EC2 API — RunInstances
+  actually launches a Linux container, the lifecycle is real, and the network model (VPC/subnet/SG/
+  route-table/IGW, genuine subnet CIDR IPAM) is real. Not a mock; it replaced moto. What is NOT real
+  is the GUEST: no floci AMI ships an sshd binary and user-data is never executed, so the instance is
+  a real machine record with nothing listening and cannot be converged onto. This note said "SSH-able"
+  and the demo claimed fidelity `real` until it was measured (2026-07-27, floci 1.5.33) — HAR-1 in
+  docs/enterprise-readiness.md, guarded by plugins/awsec2/floci_fidelity_live_test.go. build-real is
+  exactly the vocabulary this library already defined for it: provisioning/lifecycle APIs real,
+  guest-OS/runtime simulated.
 
 # What the runner drives (mirrors the estate).
 workflow: compute-build

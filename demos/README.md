@@ -47,7 +47,7 @@ time. Every demo runs the same way wherever it lives: `task demo:<name>:run`.
 | --------------------------------------------------------------------------------- | --------------------------------------- | ----------------- | ------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **[k8s: deploy an app](../plugins/helm/demo/README.md)**                          | `plugins/helm/`                         | Kubernetes (kind) | `real`       | The **write** half: CaC → gated Workflow → `helm/deploy` over the plugin port → the Intent→Run descent, ending in a real Deployment. **Start here.**                                                                                                                                                       |
 | **[vSphere: provision a VM + the live graph](../plugins/vcenter/demo/README.md)** | `plugins/vcenter/`                      | vSphere (vcsim)   | `build-real` | The **read** half joined to write: a Syncer projects the whole topology into a live graph (Views, Facets, Relations), and the _same_ dual-verb plugin provisions a VM into it — the write reflected back in the read-model.                                                                                |
-| **[EC2: provision a real instance](../plugins/awsec2/demo/README.md)**            | `plugins/awsec2/`                       | EC2 (floci)       | `real`       | Real provisioning: a gated Workflow runs a genuine `RunInstances` against floci (real SSH-able instance containers, not a mock), and the Syncer observes the new instance appear — the graph coming alive _with_ what you build.                                                                           |
+| **[EC2: provision a real instance](../plugins/awsec2/demo/README.md)**            | `plugins/awsec2/`                       | EC2 (floci)       | `real`       | Real provisioning: a gated Workflow runs a genuine `RunInstances` against floci (real instance _containers_, not a mock), and the Syncer observes the new instance appear — the graph coming alive _with_ what you build. **Not SSH-able** — see the fidelity note below.                                  |
 | **[app install with a certificate](app-cert/README.md)**                          | **here** (ansible + openbao + declared) | SSH (Linux host)  | `real`       | **Configuration management** taken seriously: a real SSH converge with declared privilege escalation, a certificate minted by a collection **pinned into the execution environment at build time**, write-back bounded by declaration — and a Run that reached nothing failing instead of reporting green. |
 
 ## Roadmap (planned demos)
@@ -65,9 +65,16 @@ Each future demo teaches _and closes one gap_ toward the full multi-substrate ca
 - **enterprise estate (capstone)** — networks/VLANs across regions + shared services across
   Kubernetes, vSphere, and EC2 in one Intent. The app-install rung above is now in place; still needs
   per-instance fan-out (ADR-0058), a K8s Compute provider, and multi-substrate simultaneous reconcile.
-- **real SSH converge** (follow-on to ec2-only) — provision _then configure_ over SSH into a floci
-  instance (the ADR-0084 pattern). floci gives real SSH-able instances; the open problem is the EE Job (in
-  kind) reaching them across the host/kind network boundary.
+- ~~**real SSH converge** (follow-on to ec2-only) — provision _then configure_ over SSH into a floci
+  instance.~~ **Withdrawn: it cannot be built, and the reason this entry existed was a false premise.**
+  This said "floci gives real SSH-able instances; the open problem is the EE Job (in kind) reaching them
+  across the host/kind network boundary." Measured 2026-07-27 (HAR-1 in
+  [enterprise-readiness.md](../docs/enterprise-readiness.md)): **floci instances are not SSH-able at all.**
+  No AMI ships an sshd binary, user-data is never executed, and `RegisterImage` accepts a custom image
+  then ignores it — so the network boundary was never the blocker; there is nothing listening to reach.
+  The network half of floci _is_ fully real and stays the substrate for the provisioning leg. A
+  provision→configure demo therefore needs a Compute provider whose machines boot, which is what the
+  capstone below now carries. Guarded by `TestFociFidelityBoundary` so the claim cannot rot back.
 
 ## A note on what actually runs these
 

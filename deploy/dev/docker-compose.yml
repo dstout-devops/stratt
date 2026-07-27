@@ -139,8 +139,17 @@ services:
 
   floci:
     # REAL-host EC2 dev backend (ADR-0093), replacing the moto MOCK. Floci runs real
-    # Docker containers as EC2 instances (SSH-able, cloud-init/IMDS, real lifecycle),
-    # serving the AWS API on :4566. floci-io/floci, MIT (dependency-scout 2026-07-22;
+    # Docker containers as EC2 instances with real lifecycle and a real network model
+    # (VPC/subnet/SG/route-table/IGW, genuine subnet CIDR IPAM), serving the AWS API
+    # on :4566.
+    #
+    # NOT SSH-able, and NO cloud-init/user-data — measured 2026-07-27, floci 1.5.33
+    # (HAR-1 in docs/enterprise-readiness.md; guarded by
+    # plugins/awsec2/floci_fidelity_live_test.go). This comment claimed both for six
+    # months and was wrong; an instance is a real container with nothing listening, so
+    # nothing can be CONVERGED onto it. ImportKeyPair does genuinely write
+    # authorized_keys — there is simply no sshd to read them.
+    # floci-io/floci, MIT (dependency-scout 2026-07-22;
     # LocalStack rug-pulled its free tier, moto is a mock — neither gives real hosts).
     # It needs the Docker socket to launch instance containers (dind siblings). Pin;
     # pin by DIGEST in CI (§1.7). moto retired (may return for mock-OK non-EC2 svcs).

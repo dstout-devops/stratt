@@ -138,8 +138,21 @@ func TestWorkflowWireRoundTripInputs(t *testing.T) {
 				// ACTUATOR (contracts/actuators/script.input) with an actuator param
 				// shape — as an `action:` it has no input Contract at all and would have
 				// failed at launch. The load now refuses that, which is what caught it.
+				//
+				// And then the params were STILL wrong: `claimName` is not a key
+				// crossplane/provision declares, and its Contract is
+				// additionalProperties:false, so this fixture would have failed at launch
+				// too. The param-key shape gate caught that second layer. Two tightenings
+				// of the same rule, each finding the next thing wrong with one fixture —
+				// which is the argument for checking shape at the diff rather than the gate.
 				Action: ptr("crossplane/provision"),
-				Params: &map[string]any{"claimName": "{{.launch.targetSubnet}}"},
+				Params: &map[string]any{
+					"group":    "ec2.aws.upbound.io",
+					"version":  "v1beta1",
+					"resource": "subnets",
+					"kind":     "Subnet",
+					"name":     "{{.launch.targetSubnet}}",
+				},
 			},
 		},
 	}

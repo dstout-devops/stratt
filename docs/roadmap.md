@@ -166,12 +166,12 @@ exit gate still requires its own operational evidence (SLO, security review, ado
 self-contained, narrated, **turnkey** scenarios that teach Stratt by running it. Four ship, each
 **live-verified end to end on kind** (build-up → gated Workflow → asserted real outcome → teardown):
 
-| Demo                                                                        | Substrate         | Fidelity     | Proven live                                                                                       |
-| --------------------------------------------------------------------------- | ----------------- | ------------ | ------------------------------------------------------------------------------------------------- |
-| [k8s: deploy an app](../plugins/helm/demo/README.md)                         | Kubernetes (kind) | `real`       | gated `helm/deploy` → a real Deployment 1/1 Ready serving its page                                |
-| [vSphere: provision a VM + the live graph](../plugins/vcenter/demo/README.md) | vSphere (vcsim)   | `build-real` | Syncer projects the topology; gated `vcenter/create-vm` → the built VM observed back (VMs 50→51)  |
-| [EC2: provision a real instance](../plugins/awsec2/demo/README.md)               | EC2 (floci)       | `real`       | gated `awsec2/create-vm` → a real floci instance container running, observed into the graph (0→1) |
-| [app install with a certificate](../demos/app-cert/README.md)                | SSH (Linux host)  | `real`       | gated ansible converge: SSH as an unprivileged user → privilege escalation → a `community.crypto` X.509 cert → TLS read back off the wire, `app.config` projected with Run provenance, and a no-op Run refused |
+| Demo                                                                          | Substrate         | Fidelity     | Proven live                                                                                                                                                                                                                                                            |
+| ----------------------------------------------------------------------------- | ----------------- | ------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [k8s: deploy an app](../plugins/helm/demo/README.md)                          | Kubernetes (kind) | `real`       | gated `helm/deploy` → a real Deployment 1/1 Ready serving its page                                                                                                                                                                                                     |
+| [vSphere: provision a VM + the live graph](../plugins/vcenter/demo/README.md) | vSphere (vcsim)   | `build-real` | Syncer projects the topology; gated `vcenter/create-vm` → the built VM observed back (VMs 50→51)                                                                                                                                                                       |
+| [EC2: provision a real instance](../plugins/awsec2/demo/README.md)            | EC2 (floci)       | `build-real` | gated `awsec2/create-vm` → a real floci instance container running, observed into the graph (0→1). **Re-graded from `real` 2026-07-27**: floci's network model is fully real, but no AMI ships sshd and user-data never runs, so there is no guest to converge (HAR-1) |
+| [app install with a certificate](../demos/app-cert/README.md)                 | SSH (Linux host)  | `real`       | gated ansible converge: SSH as an unprivileged user → privilege escalation → a `community.crypto` X.509 cert → TLS read back off the wire, `app.config` projected with Run provenance, and a no-op Run refused                                                         |
 
 **This is the first real dent in the "live-cluster e2e" gap** named in the enterprise-readiness section
 below: the platform is now proven not only structurally and by unit/integration tests, but by
@@ -204,13 +204,24 @@ for their standalone image builds; and floci's healthcheck probed with a `wget` 
 
 ## Dev follow-ups / test hygiene
 
-- **Two timing-sensitive tests flake under concurrent `task ci` load** (each passes clean in isolation
-  and on re-run; neither is a correctness bug): `core/internal/triggers/reconcile_test.go` (a
-  `time.Sleep(500ms)` around a reconcile cadence) and `core/internal/siterelay` (relay timing). On a
-  heavily-loaded box (kind + Crossplane + the full parallel suite) they occasionally miss their fixed
-  sleep window and fail with a bare `FAIL` / exit 201. **Fix:** replace the fixed `time.Sleep` with a
-  poll-until-condition-with-deadline (e.g. `require.Eventually`-style) so the gate is deterministic
-  regardless of host load. Low-risk, isolated to test files; do before wiring CI on a shared runner.
+- ~~**Two timing-sensitive tests flake under concurrent `task ci` load**~~ — **fixed**, and the
+  standing note that "neither is a correctness bug" was **half wrong**, which is the finding worth
+  keeping.
+  - `core/internal/triggers/reconcile_test.go` **was** the assumed shape: a fixed `20 × 500ms`
+    window waiting on Temporal's visibility store, which gives up after ~10s of wall clock however
+    loaded the host is. Now bounded by a **deadline** instead of an iteration count.
+  - `core/internal/siterelay` **was not a test-timing problem at all.** There was no `time.Sleep`
+    to remove. `NATSAcceptor.Accept` subscribed **lazily**, inside the goroutine running `Serve`,
+    so a call published before that goroutine was scheduled hit a subject with **no subscriber** —
+    and core NATS drops it silently, leaving the hub blocked until its per-call context expired
+    with no message naming the cause (§1.8). The test raced that window; **`stratt-agent` shipped
+    it too**, logging `plugin-port relay serving` before the subscription existed. Fixed at the
+    source: `NATSAcceptor.Subscribe()` establishes the interest eagerly **and flushes** (the flush
+    is the load-bearing half — `SubscribeSync` returning is not the server having registered), the
+    agent calls it before it claims to be serving, and the test calls it before it publishes.
+    Verified `-race -count=30` clean.
+    **Honest bound on the claim:** the production defect is certain from the code path; that this
+    exact window caused every observed CI flake is inferred, not reproduced.
 
 > **Note on scope.** The phase tables above cite ADRs through ~0054 (the phase + dark-matter work). Later
 > ADRs (0055–0091) extend the platform beyond the original phase plan — observability/OTel, API admission
