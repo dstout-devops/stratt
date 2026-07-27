@@ -270,6 +270,7 @@ type actuatorFile struct {
 	ContentInputs   []string          `yaml:"contentInputs"`
 	FacetNamespaces []string          `yaml:"facetNamespaces"`
 	IdentitySchemes []string          `yaml:"identitySchemes"`
+	LabelKeys       []string          `yaml:"labelKeys"`
 	ElevatedInputs  []string          `yaml:"elevatedInputs"`
 	MCP             bool              `yaml:"mcp"`
 	Provides        []string          `yaml:"provides"`
@@ -291,7 +292,7 @@ func parseActuatorFile(path string, raw []byte) (string, types.Actuator, error) 
 		Name: f.Name, Address: f.Address, PluginIdentity: f.PluginIdentity, Tier: f.Tier,
 		DryRunnable: f.DryRunnable, ActionNames: f.ActionNames, JobCommand: f.JobCommand,
 		Image: f.Image, ContentDir: f.ContentDir, ContentInputs: f.ContentInputs,
-		FacetNamespaces: f.FacetNamespaces, IdentitySchemes: f.IdentitySchemes,
+		FacetNamespaces: f.FacetNamespaces, IdentitySchemes: f.IdentitySchemes, LabelKeys: f.LabelKeys,
 		ElevatedInputs: f.ElevatedInputs,
 		MCP:            f.MCP, Provides: f.Provides, Requires: f.Requires,
 		Provisions: f.Provisions, Decommissions: f.Decommissions, Remediates: f.Remediates,

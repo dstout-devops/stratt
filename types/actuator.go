@@ -157,6 +157,14 @@ type Actuator struct {
 	// It ROUTES, it does not GRANT. Unlike FacetNamespaces above, naming a Workflow here confers no
 	// authority: the Workflow's own Steps carry their Actuator's ceiling exactly as they always did.
 	Remediates map[string]string `json:"remediates,omitempty"`
+	// LabelKeys are the Entity label keys this Actuator may write back (ADR-0047 §4,
+	// enforced by Grant.allowsLabel). It is a GRANT, not documentation: a key absent here
+	// is dropped at the governor, so an Actuator migrating off a boot block that had one
+	// silently loses label write-back without it.
+	//
+	// The Connector Kind has carried this since ADR-0047; the Actuator Kind did not, which
+	// is why crossplane could not be declared without narrowing its authority (ADR-0103).
+	LabelKeys []string `json:"labelKeys,omitempty"`
 	// Environments scopes this Actuator (ADR-0057); empty ⇒ every environment.
 	Environments []string `json:"environments,omitempty"`
 }

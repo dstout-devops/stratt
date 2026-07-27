@@ -912,6 +912,10 @@ func actuatorGrant(a types.Actuator) pluginhost.Grant {
 		// being a weaker Actuator whose fact write-back is refused.
 		FacetNamespaces: a.FacetNamespaces,
 		IdentitySchemes: a.IdentitySchemes,
+		// The label write-back grant (ADR-0047 §4). Without it a declared Actuator is strictly
+		// weaker than the boot block it replaces, and the narrowing is INVISIBLE — an ungranted
+		// label key is dropped at the governor, never refused.
+		LabelKeys: a.LabelKeys,
 	}
 }
 

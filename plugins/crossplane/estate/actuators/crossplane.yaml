@@ -16,7 +16,27 @@ name: crossplane
 address: stratt-crossplane:9090
 pluginIdentity: crossplane
 tier: trusted
+# The Actuator's Plan/Apply verbs — the same posture the boot block registered it with.
+dryRunnable: true
 provides: [provisioning]
+# ── The grant, MOVED here from main.go (ADR-0103) ────────────────────────────────────────────
+# This declaration and a boot block both registered the name `crossplane`, which is a §2.4
+# collision: whichever ran first won and the other was rejected, so "which grant is live?" was
+# unanswerable from Git. Boot ran first, so THIS declaration was the one being rejected — it
+# looked declared and was not the thing executing.
+#
+# The grant could not simply be dropped, either. The boot block carried facetNamespaces,
+# identitySchemes AND labelKeys, and the Actuator Kind had no `labelKeys` field at all (only the
+# Connector Kind did, since ADR-0047 §4). Declaring crossplane without it would have silently
+# NARROWED its authority: an ungranted label key is dropped at the governor, never refused, so the
+# build would stop labelling projected subnets and nothing would say so. The field was added to the
+# Kind for this migration rather than the narrowing being accepted.
+facetNamespaces: [net.subnet]
+identitySchemes: [crossplane.claim]
+labelKeys: [source, fleet, role, tier]
+# The targetless builder an Intent/Subnet launches (ADR-0059) — the same Action the boot block
+# registered, now verified against the plugin's own Manifest at enable.
+actionNames: [crossplane/provision]
 provisions:
   Subnet: subnet-build
   Vlan: vlan-build

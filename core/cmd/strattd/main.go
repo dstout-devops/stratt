@@ -725,39 +725,21 @@ func run(ctx context.Context, log *slog.Logger) error {
 	// that is resolved by multi-source Facet ownership (ADR-0060), never by stripping
 	// this grant. NetBox and Crossplane now co-own net.subnet (ADR-0060 multi-source):
 	// both project it, each its own row, NetBox declared authoritative.
-	if addr := os.Getenv("STRATT_CROSSPLANE_PLUGIN_ADDR"); addr != "" {
-		conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
-		if err != nil {
-			return fmt.Errorf("crossplane plugin dial %s: %w", addr, err)
-		}
-		defer conn.Close()
-		// The Actuator grant: Crossplane BUILDS Claims (Apply/Destroy). Its write-backs
-		// are Run-provenance ('' source) — an Actuator is not a Source (ADR-0060). The
-		// SYNCER half (Crossplane observing its Claims' as-built state as a registered
-		// Source) is wired below in the Syncer section (full-featured dual-verb plugin).
-		grant := pluginhost.Grant{
-			PluginIdentity:  env("STRATT_CROSSPLANE_PLUGIN_ID", "crossplane"),
-			Tier:            pluginhost.Tier(env("STRATT_CROSSPLANE_TIER", "trusted")),
-			Source:          types.Source{Kind: "crossplane", Name: env("STRATT_CROSSPLANE_SOURCE_NAME", "crossplane")},
-			IdentitySchemes: []string{"crossplane.claim"},
-			LabelKeys:       []string{"source", "fleet", "role", "tier"},
-			FacetNamespaces: []string{"net.subnet"},
-		}
-		host := pluginhost.New(store, pluginv1.NewPluginServiceClient(conn), grant, log)
-		if err := registerPluginActuator("crossplane", host, true, grant, nil); err != nil {
-			return err
-		}
-		// crossplane/provision Action (ADR-0059): the targetless builder an
-		// Intent/Subnet launches. Reuses the host/grant; the build projects the subnet
-		// Entity + correlation label (entity-only, like awsec2/create-vm), and the
-		// Syncer below supplies net.subnet.
-		if err := registerPluginAction("crossplane/provision", host, true); err != nil {
-			return err
-		}
-		log.Info("crossplane plugin actuator registered", "addr", addr)
-	} else {
-		log.Info("no Crossplane plugin configured (STRATT_CROSSPLANE_PLUGIN_ADDR empty); actuator disabled")
-	}
+	// ── Crossplane Actuator (ADR-0059/0060) — MIGRATED to the runtime registry (ADR-0103) ──
+	// The `crossplane` Actuator and its targetless crossplane/provision Action are now declared
+	// (plugins/crossplane/estate/actuators/crossplane.yaml) and dialed + registered at runtime, so
+	// they enable/disable with NO strattd restart. The Crossplane SYNCER half stays boot-env below.
+	//
+	// Removing the block was a FIX, not tidiness. The estate ALREADY declared an Actuator named
+	// `crossplane`, so on any floor with STRATT_CROSSPLANE_PLUGIN_ADDR set the two registrations
+	// collided at §2.4 — boot ran first and won, so the declaration everyone could read in Git was
+	// the one being rejected. "Which grant is live?" was unanswerable, and answered wrongly by
+	// anyone who looked at the estate.
+	//
+	// The declaration carries the FULL grant this block had, including labelKeys, which the Actuator
+	// Kind gained for this migration (only the Connector Kind had it, since ADR-0047 §4). Dropping
+	// it would have narrowed authority INVISIBLY: an ungranted label key is dropped at the governor,
+	// never refused, so the build would have stopped labelling projected subnets in silence.
 
 	// ── Helm Actuator (ADR-0092) — MIGRATED to the runtime registry (ADR-0103) ──
 	// helm is now declared as an `Actuator` Kind (estate/actuators/helm.yaml) and dialed +
