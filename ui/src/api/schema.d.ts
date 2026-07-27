@@ -1982,6 +1982,11 @@ export interface components {
             verified: boolean;
             /** @description The phantom/pending reason when verified=false; empty when verified. */
             reason?: string;
+            /**
+             * @description HOW the verdict was reached (ADR-0138 D5). `manifest` means the plugin's RUNNING binary was dialed and its own advertisement checked against the operator's `provides` — two independent artifacts agreeing. `declaration` means the provider is dial-less (an EE-Job Actuator has no address by construction, §3 GPLv3 boundary), so there is no Manifest to fetch and the claim was corroborated against the DECLARED mechanisms instead: the per-kind Workflow maps and dispatchable Actions, which the estate loader already validates. Empty when not verified. The two are NOT equally strong, and a surface that renders both as a plain "verified" hides which is which (§1.8).
+             * @enum {string}
+             */
+            basis?: "" | "manifest" | "declaration";
             /** @description The capability class → Action name mappings this provider's Manifest ADVERTISES, for the classes it was granted (ADR-0140 D1). This is what capability resolution reads; core no longer derives the name. Absent/empty is normal — only classes reached through a resolve Action appear here, never one routed through a per-kind Workflow map. It is the descent surface (§1.8) for "why did this capability route to that Action?", which was previously answerable only from a naming convention held in core's head. */
             implements?: {
                 [key: string]: string;

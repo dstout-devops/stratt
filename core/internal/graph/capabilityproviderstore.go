@@ -26,11 +26,17 @@ type ProviderVerification struct {
 	// classes reached through a resolve Action appear; a class routed through a per-kind
 	// Workflow map has none. Core never parses these names, only carries them.
 	Implements map[string]string
+	// Basis is HOW the verdict was reached (ADR-0138 D5): "manifest" (the running plugin was
+	// dialed and its own advertisement checked) or "declaration" (dial-less — corroborated
+	// against the declared mechanisms because no Manifest exists to fetch). Empty when not
+	// verified. Recorded because two verdicts that both read verified=true are not equally
+	// strong, and a surface that hides which is which hides diagnosis (§1.8).
+	Basis string
 }
 
 // UpsertProviderVerification records (idempotently) a provider's verification outcome and the
 // class→Action implementations its Manifest advertised for the classes it was granted.
-func (s *Store) UpsertProviderVerification(ctx context.Context, kind, name string, verified bool, reason string, implements map[string]string) error {
+func (s *Store) UpsertProviderVerification(ctx context.Context, kind, name string, verified bool, reason string, implements map[string]string, basis string) error {
 	if implements == nil {
 		implements = map[string]string{}
 	}
@@ -39,12 +45,12 @@ func (s *Store) UpsertProviderVerification(ctx context.Context, kind, name strin
 		return fmt.Errorf("graph: marshal capability implements %s/%s: %w", kind, name, err)
 	}
 	_, err = s.pool.Exec(ctx, `
-		INSERT INTO graph.capability_provider (provider_kind, provider_name, verified, reason, implements, checked_at)
-		VALUES ($1, $2, $3, $4, $5, now())
+		INSERT INTO graph.capability_provider (provider_kind, provider_name, verified, reason, implements, basis, checked_at)
+		VALUES ($1, $2, $3, $4, $5, $6, now())
 		ON CONFLICT (provider_kind, provider_name)
 		DO UPDATE SET verified = excluded.verified, reason = excluded.reason,
-		              implements = excluded.implements, checked_at = now()`,
-		kind, name, verified, reason, raw)
+		              implements = excluded.implements, basis = excluded.basis, checked_at = now()`,
+		kind, name, verified, reason, raw, basis)
 	if err != nil {
 		return fmt.Errorf("graph: upsert capability provider %s/%s: %w", kind, name, err)
 	}
@@ -54,7 +60,7 @@ func (s *Store) UpsertProviderVerification(ctx context.Context, kind, name strin
 // ListProviderVerifications returns every recorded provider verification.
 func (s *Store) ListProviderVerifications(ctx context.Context) ([]ProviderVerification, error) {
 	rows, err := s.pool.Query(ctx,
-		`SELECT provider_kind, provider_name, verified, reason, implements
+		`SELECT provider_kind, provider_name, verified, reason, implements, basis
 		 FROM graph.capability_provider ORDER BY provider_kind, provider_name`)
 	if err != nil {
 		return nil, fmt.Errorf("graph: list capability providers: %w", err)
@@ -64,7 +70,7 @@ func (s *Store) ListProviderVerifications(ctx context.Context) ([]ProviderVerifi
 	for rows.Next() {
 		var p ProviderVerification
 		var raw []byte
-		if err := rows.Scan(&p.Kind, &p.Name, &p.Verified, &p.Reason, &raw); err != nil {
+		if err := rows.Scan(&p.Kind, &p.Name, &p.Verified, &p.Reason, &raw, &p.Basis); err != nil {
 			return nil, fmt.Errorf("graph: scan capability provider: %w", err)
 		}
 		if err := json.Unmarshal(raw, &p.Implements); err != nil {
@@ -81,8 +87,8 @@ func (s *Store) GetProviderVerification(ctx context.Context, kind, name string) 
 	p := ProviderVerification{Kind: kind, Name: name}
 	var raw []byte
 	err := s.pool.QueryRow(ctx,
-		`SELECT verified, reason, implements FROM graph.capability_provider WHERE provider_kind = $1 AND provider_name = $2`,
-		kind, name).Scan(&p.Verified, &p.Reason, &raw)
+		`SELECT verified, reason, implements, basis FROM graph.capability_provider WHERE provider_kind = $1 AND provider_name = $2`,
+		kind, name).Scan(&p.Verified, &p.Reason, &raw, &p.Basis)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ProviderVerification{}, false, nil
 	}

@@ -420,3 +420,107 @@ func TestActuatorDependencyAmbiguous(t *testing.T) {
 		t.Fatalf("≥2 verified providers must surface an 'ambiguous' pending reason: %+v", st)
 	}
 }
+
+// ── dial-less providers (ADR-0138 D5) ────────────────────────────────────────
+
+// The verdict a subprocess provider could never reach. Verification meant fetching a Manifest
+// over a dial address, and an EE-Job Actuator has none by construction — so `configmgmt`, whose
+// first provider is a subprocess BY CHARTER (§3, GPLv3), was structurally unroutable. The claim
+// is now corroborated against the DECLARED mechanisms, and labelled as the weaker thing it is.
+func TestDialLessProviderIsAttestedFromItsDeclaration(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	plugins := orchestrate.NewPluginRegistry(nil, nil)
+	r := New(s, plugins, homegate.Deps{}, nil, lazyDial, time.Second, discard())
+	r.manifest = func(context.Context, string) (PluginManifest, error) {
+		t.Fatal("a dial-less provider must not be dialed — there is no Manifest to fetch")
+		return PluginManifest{}, nil
+	}
+
+	if err := s.UpsertActuator(ctx, types.Actuator{
+		Name: "t-ansible-cm", PluginIdentity: "ansible", JobCommand: []string{"stratt-ansible"},
+		Provides: []string{"configmgmt"}, Remediates: map[string]string{"Application": "web-server-configure"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	defer s.DeleteActuator(ctx, "t-ansible-cm")
+	defer s.DeleteProviderVerification(ctx, "actuator", "t-ansible-cm")
+
+	r.ReconcileProviderVerification(ctx)
+	row, ok := verificationRow(t, s, "actuator", "t-ansible-cm")
+	if !ok || !row.Verified {
+		t.Fatalf("a dial-less provider that declares a mechanism must count: %+v ok=%v", row, ok)
+	}
+	if row.Basis != basisDeclaration {
+		t.Fatalf("basis must record that a DECLARATION was read, not a running binary — two verdicts "+
+			"that both read verified=true are not equally strong (§1.8): got %q", row.Basis)
+	}
+	// And it satisfies a consumer's requirement, which is the entire point.
+	res, err := r.buildProviderIndex(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ok, reason := classifyRequires([]string{"configmgmt"}, res); !ok {
+		t.Fatalf("an attested provider must satisfy a requirement: %s", reason)
+	}
+}
+
+// The refusal that survives D5: a class claim with nothing behind it. Without this, "dial-less is
+// verifiable" would degrade to "dial-less is self-certifying".
+func TestDialLessProviderWithNoMechanismStaysRefused(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	plugins := orchestrate.NewPluginRegistry(nil, nil)
+	r := New(s, plugins, homegate.Deps{}, nil, lazyDial, time.Second, discard())
+
+	if err := s.UpsertActuator(ctx, types.Actuator{
+		Name: "t-bare-cm", PluginIdentity: "ansible", JobCommand: []string{"stratt-ansible"},
+		Provides: []string{"configmgmt"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	defer s.DeleteActuator(ctx, "t-bare-cm")
+	defer s.DeleteProviderVerification(ctx, "actuator", "t-bare-cm")
+
+	r.ReconcileProviderVerification(ctx)
+	row, ok := verificationRow(t, s, "actuator", "t-bare-cm")
+	if !ok || row.Verified {
+		t.Fatalf("a bare class claim must not count: %+v ok=%v", row, ok)
+	}
+	if !strings.Contains(row.Reason, "no mechanism") {
+		t.Fatalf("the reason must say what is missing (§1.8): %q", row.Reason)
+	}
+}
+
+// An attested provider CANNOT serve an Action-shaped class, and must fail closed saying so. The
+// implementation mapping lives in the Manifest (ADR-0140 D1) and a subprocess has no way to supply
+// one — so attestation admits the Workflow-shaped classes and stops honestly at the others. A
+// design that let this resolve would have invented a name, which is what ADR-0140 deleted.
+func TestAttestedProviderCannotServeAnActionShapedClass(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	plugins := orchestrate.NewPluginRegistry(nil, nil)
+	r := New(s, plugins, homegate.Deps{}, nil, lazyDial, time.Second, discard())
+
+	if err := s.UpsertActuator(ctx, types.Actuator{
+		Name: "t-sub-ipam", PluginIdentity: "subproc", JobCommand: []string{"stratt-thing"},
+		Provides: []string{"ipam"}, ActionNames: []string{"subproc/ipam-resolve"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	defer s.DeleteActuator(ctx, "t-sub-ipam")
+	defer s.DeleteProviderVerification(ctx, "actuator", "t-sub-ipam")
+
+	r.ReconcileProviderVerification(ctx)
+	if row, ok := verificationRow(t, s, "actuator", "t-sub-ipam"); !ok || !row.Verified {
+		t.Fatalf("it attests (it declares a mechanism): %+v ok=%v", row, ok)
+	}
+	_, err := r.ResolveCapabilityAction(ctx, "ipam")
+	if err == nil {
+		t.Fatal("but an Action-shaped class must NOT resolve — the implementation mapping lives in a " +
+			"Manifest the provider has no way to advertise")
+	}
+	if !strings.Contains(err.Error(), "advertises no Action implementing the class") {
+		t.Fatalf("the diagnostic must point at the missing advertisement: %v", err)
+	}
+}

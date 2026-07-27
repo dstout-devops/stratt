@@ -2531,6 +2531,18 @@ components:
         reason:
           type: string
           description: The phantom/pending reason when verified=false; empty when verified.
+        basis:
+          type: string
+          enum: ["", manifest, declaration]
+          description: >
+            HOW the verdict was reached (ADR-0138 D5). `manifest` means the plugin's RUNNING binary
+            was dialed and its own advertisement checked against the operator's `provides` — two
+            independent artifacts agreeing. `declaration` means the provider is dial-less (an EE-Job
+            Actuator has no address by construction, §3 GPLv3 boundary), so there is no Manifest to
+            fetch and the claim was corroborated against the DECLARED mechanisms instead: the
+            per-kind Workflow maps and dispatchable Actions, which the estate loader already
+            validates. Empty when not verified. The two are NOT equally strong, and a surface that
+            renders both as a plain "verified" hides which is which (§1.8).
         implements:
           type: object
           additionalProperties: { type: string }

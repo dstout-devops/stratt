@@ -118,6 +118,31 @@ second admissible form for dial-less providers (ADR-0104 D1's booked hardening),
 remains available only to gRPC plugins and must say so loudly at declaration time rather than at
 compile time on a live floor (§1.8).
 
+> **IMPLEMENTED (2026-07-27) — the second admissible form.** A dial-less provider is verified against
+> its **declared mechanisms** instead of a Manifest it cannot have. There is nothing to fetch and there
+> never will be, so the question becomes whether the claim is backed by anything: a declaration
+> carrying a `provisions`/`remediates`/`decommissions` entry or an `actionNames` list has committed to
+> something, and a bare `provides:` with nothing behind it stays refused — at load, in the diff.
+>
+> **It is not self-certifying.** The mechanism it checks lives in a different part of the tree from
+> the claim, and the estate loader independently requires a named Workflow to EXIST. It is
+> nonetheless weaker than asking a running binary, so the verdict records its **basis**
+> (`manifest` | `declaration`) and the API exposes it — two verdicts that both read `verified=true`
+> are not equally strong, and a surface that blurs them hides diagnosis (§1.8).
+>
+> **It is honestly weaker in a second way**, and this bounds the decision: an **Action-shaped** class
+> needs a Manifest-advertised `implements` (ADR-0140 D1), which a subprocess has no way to supply. An
+> attested provider of such a class verifies and then fails **closed** at resolution, naming the
+> missing advertisement. So attestation admits the **Workflow-shaped** classes — which is exactly what
+> `configmgmt` and `provisioning` are, and exactly the set the old rule locked out.
+>
+> The earlier load-time gate that demanded a dial ADDRESS is replaced, not weakened: it now demands a
+> MECHANISM, which is what it was really enforcing. `ansible-platform-baseline` declares
+> `provides: [configmgmt]` again and `estate/blueprints/web-server.yaml` is capability-routed again.
+> **Verified on a live floor** (`task dev:connector-e2e`), which is the only thing that caught the
+> original defect: the registry logs `provider attested from its declaration (dial-less)` and all four
+> Assignments compile with `unrouted=0`.
+
 ## Charter alignment
 
 - **§1.5.** This is the discipline stated once and applied everywhere: depend on the contract, never the

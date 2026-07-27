@@ -111,6 +111,10 @@ type capabilityVerification struct {
 	// surface for "why did this capability route to that Action?", which used to be answerable
 	// only from a naming convention held in core.
 	Implements map[string]string `json:"implements,omitempty"`
+	// Basis is HOW the verdict was reached — "manifest" (the running plugin was asked) vs
+	// "declaration" (dial-less, corroborated from the declared mechanisms; ADR-0138 D5).
+	// Rendering both as a plain "verified" would hide which is which (§1.8).
+	Basis string `json:"basis,omitempty"`
 }
 
 func (s *Server) capabilityVerification(r *http.Request, kind, name string) *capabilityVerification {
@@ -118,7 +122,7 @@ func (s *Server) capabilityVerification(r *http.Request, kind, name string) *cap
 	if err != nil || !ok {
 		return nil
 	}
-	cv := &capabilityVerification{Verified: v.Verified, Reason: v.Reason}
+	cv := &capabilityVerification{Verified: v.Verified, Reason: v.Reason, Basis: v.Basis}
 	if len(v.Implements) > 0 {
 		cv.Implements = v.Implements
 	}

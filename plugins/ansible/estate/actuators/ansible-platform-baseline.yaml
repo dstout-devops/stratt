@@ -39,21 +39,33 @@ contentDir: content/platform-baseline
 # asks the resolved tree whether it holds that key. It never learns the word `playbook`, which
 # is the `if ansible{}` §1.4 forbids. Existence only — core never opens the file (ADR-0117 D6).
 contentInputs: [playbook]
-# NOT a capability provider — and it cannot be one, which is the point worth recording here.
+# The `configmgmt` capability provider — RESTORED by ADR-0138 D5, having been removed once.
 #
-# This declared `provides: [configmgmt]` + `remediates: {Application: web-server-configure}`
-# (ADR-0135 D2/D4), so that a Blueprint route could name the CAPABILITY and resolve to this
-# Actuator at compile. That does not work for an EE-Job Actuator and never did:
-# capability resolution counts only VERIFIED providers, verification means fetching the
-# plugin's Manifest over its dial address, and an EE-Job Actuator has no dial address by
-# construction — ansible is subprocess-only because of the GPLv3 boundary (§3). The registry
-# logged `provider REJECTED … EE-Job providers are not yet manifest-verifiable (ADR-0104 D1)`
-# every ten seconds, and the three Assignments routing through it stopped compiling.
+# The first attempt (ADR-0135 D2/D4) declared exactly these two fields so a Blueprint route could
+# name the CAPABILITY and resolve to this Actuator at compile. It broke every real floor: capability
+# resolution counts only VERIFIED providers, verification meant fetching a Manifest over a dial
+# address, and an EE-Job Actuator has none by construction — ansible is subprocess-only because of
+# the GPLv3 boundary (§3). The registry logged `provider REJECTED … not manifest-verifiable` every
+# ten seconds and three Assignments stopped compiling, while every unit test passed, because they
+# resolve through a fake. It was caught by booting `task dev:connector-e2e` and nothing else.
 #
-# Declaring it anyway would be a phantom provider: an advertisement nothing can honour, kept
-# alive only by the log line refusing it (§1.8). Removed until EE-Job providers become
-# verifiable — ADR-0104 D1's booked hardening. The Blueprint route names this Actuator's
-# Workflow directly in the meantime; see estate/blueprints/web-server.yaml.
+# ADR-0138 D5 gives verification a second admissible form rather than asking this declaration to
+# pretend it has an address. There is no Manifest to fetch, so the claim is corroborated against
+# what this file actually COMMITS TO: the `remediates` map below names a Workflow the estate loader
+# independently requires to exist. The verdict is recorded with basis=declaration, so the API says
+# plainly that a declaration was read and not a running binary — weaker than a Manifest check, and
+# labelled rather than blurred (§1.8).
+#
+# What this still CANNOT do, correctly: serve an ACTION-shaped capability class. That needs a
+# Manifest-advertised `implements` (ADR-0140 D1), which a subprocess has no way to supply, so such a
+# route fails closed at resolution with a diagnostic naming the missing advertisement. configmgmt is
+# Workflow-shaped, which is why it works — and why it was the class most damaged by the old rule.
+provides: [configmgmt]
+# WHICH Workflow converges an Intent/Application on this Actuator (ADR-0135 D2). This is the
+# mechanism the attestation above is checked against — declaring the class with no mechanism behind
+# it stays refused as an assertion with nothing under it.
+remediates:
+  Application: web-server-configure
 facetNamespaces:
   - os.kernel
   - os.hardening.sysctl

@@ -2,6 +2,7 @@ package connectorregistry
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 )
@@ -106,5 +107,40 @@ func TestNoDeclaredActionsSkipsTheManifestFetch(t *testing.T) {
 	}
 	if err := r.verifyDeclaredActions(context.Background(), "localhost:9090", nil); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// Enabling now requires the plugin to ANSWER, which is a real behavior change: a lazy gRPC dial
+// succeeds against a service that does not exist, so before the actionNames check an Actuator whose
+// pod was absent registered into the dispatch table and reported `enabled: true` while being
+// completely unusable. On the connector-e2e floor three of them did exactly that.
+//
+// The honest version must be LEVEL-TRIGGERED, not latching. An Actuator held back because its
+// plugin was not up yet has to enable on its own once the plugin answers — no restart, no manual
+// step — or the check trades a §1.8 lie for an operational trap.
+func TestActuatorHeldBackByAnUnreachablePluginEnablesWhenItAnswers(t *testing.T) {
+	up := false
+	r := &Registry{}
+	r.manifest = func(context.Context, string) (PluginManifest, error) {
+		if !up {
+			return PluginManifest{}, errors.New("produced zero addresses")
+		}
+		return PluginManifest{Actions: []AdvertisedAction{
+			{Name: "helm/deploy", InputContract: "actions/helm/deploy.input"},
+		}}, nil
+	}
+
+	err := r.verifyDeclaredActions(context.Background(), "stratt-helm:9090", []string{"helm/deploy"})
+	if err == nil {
+		t.Fatal("an unreachable plugin must hold its Actuator back rather than register a name nothing serves")
+	}
+	if !strings.Contains(err.Error(), "manifest fetch") {
+		t.Fatalf("the status must say the plugin could not be asked, not that the Action is wrong: %v", err)
+	}
+
+	up = true // the pod rolls out
+	if err := r.verifyDeclaredActions(context.Background(), "stratt-helm:9090", []string{"helm/deploy"}); err != nil {
+		t.Fatalf("the next reconcile must enable it with no restart — enable is retried while the entry "+
+			"is absent, the same level-triggered convergence the dependency gate uses: %v", err)
 	}
 }

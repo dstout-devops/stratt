@@ -612,9 +612,18 @@ type verifyResult int
 
 const (
 	provVerified     verifyResult = iota // manifest fetched; advertises every declared capability
+	provAttested                         // dial-less; corroborated by DECLARED mechanisms (ADR-0138 D5)
 	provPhantom                          // STRUCTURAL: manifest fetched; a declared capability absent
-	provUnverifiable                     // STABLE: no dial address (EE-Job) — not manifest-verifiable
+	provUnverifiable                     // STABLE: dial-less AND no declared mechanism — an unbacked claim
 	provUnreachable                      // TRANSIENT: dial/fetch failed — must not drop a prior verdict
+)
+
+// Verification BASIS — how a verdict was reached, recorded so §1.8 can distinguish a provider whose
+// running binary was asked from one whose declaration was read. They are not equally strong and the
+// surface must not pretend otherwise.
+const (
+	basisManifest    = "manifest"    // the plugin's own runtime advertisement was fetched and checked
+	basisDeclaration = "declaration" // dial-less: no Manifest exists to fetch (ADR-0138 D5)
 )
 
 // RunProviderVerification is the leader-only loop verifying every declared provider's Manifest
@@ -658,16 +667,23 @@ func (r *Registry) ReconcileProviderVerification(ctx context.Context) {
 	type prov struct {
 		kind, name, addr string
 		provides         []string
+		// mechanisms counts the concrete things the declaration says it can DO — the per-kind
+		// Workflow maps and its dispatchable Actions. It is the corroboration a dial-less
+		// provider is verified against (ADR-0138 D5); ignored entirely when a Manifest can be
+		// fetched, because then the plugin speaks for itself.
+		mechanisms int
 	}
 	var provs []prov
 	for _, c := range conns {
 		if len(c.Provides) > 0 {
-			provs = append(provs, prov{"connector", c.Name, c.Address, c.Provides})
+			provs = append(provs, prov{"connector", c.Name, c.Address, c.Provides,
+				len(c.Provisions) + len(c.Remediates) + len(c.Decommissions) + len(c.ActionNames)})
 		}
 	}
 	for _, a := range acts {
 		if len(a.Provides) > 0 {
-			provs = append(provs, prov{"actuator", a.Name, a.Address, a.Provides})
+			provs = append(provs, prov{"actuator", a.Name, a.Address, a.Provides,
+				len(a.Provisions) + len(a.Remediates) + len(a.Decommissions) + len(a.ActionNames)})
 		}
 	}
 
@@ -693,13 +709,20 @@ func (r *Registry) ReconcileProviderVerification(ctx context.Context) {
 
 	for _, p := range provs {
 		key := p.kind + "/" + p.name
-		res, reason, impl := r.verifyProvider(ctx, p.addr, p.provides)
+		res, reason, impl := r.verifyProvider(ctx, p.addr, p.provides, p.mechanisms)
 		switch res {
 		case provVerified:
-			r.recordVerification(ctx, p.kind, p.name, true, "", impl)
+			r.recordVerification(ctx, p.kind, p.name, true, "", impl, basisManifest)
 			r.log.Info("connector registry: provider verified", "provider", key, "provides", p.provides, "implements", impl)
+		case provAttested:
+			// Counts, on a weaker and RECORDED basis (ADR-0138 D5). No implements map: a
+			// dial-less provider advertises no Manifest, so it has no Action-shaped
+			// implementation to record and an Action-shaped class fails closed at resolve.
+			r.recordVerification(ctx, p.kind, p.name, true, "", nil, basisDeclaration)
+			r.log.Info("connector registry: provider attested from its declaration (dial-less)",
+				"provider", key, "provides", p.provides, "mechanisms", p.mechanisms)
 		case provPhantom, provUnverifiable:
-			r.recordVerification(ctx, p.kind, p.name, false, reason, nil)
+			r.recordVerification(ctx, p.kind, p.name, false, reason, nil, "")
 			r.log.Warn("connector registry: provider REJECTED (not counted)", "provider", key, "reason", reason)
 		case provUnreachable:
 			if existing[key] {
@@ -710,14 +733,14 @@ func (r *Registry) ReconcileProviderVerification(ctx context.Context) {
 				r.log.Warn("connector registry: provider verification unreachable; preserving last-known verdict", "provider", key, "reason", reason)
 			} else {
 				// Never verified → fail closed, labeled pending (NOT a structural phantom).
-				r.recordVerification(ctx, p.kind, p.name, false, "verification pending (unreachable): "+reason, nil)
+				r.recordVerification(ctx, p.kind, p.name, false, "verification pending (unreachable): "+reason, nil, "")
 			}
 		}
 	}
 }
 
-func (r *Registry) recordVerification(ctx context.Context, kind, name string, verified bool, reason string, implements map[string]string) {
-	if err := r.store.UpsertProviderVerification(ctx, kind, name, verified, reason, implements); err != nil {
+func (r *Registry) recordVerification(ctx context.Context, kind, name string, verified bool, reason string, implements map[string]string, basis string) {
+	if err := r.store.UpsertProviderVerification(ctx, kind, name, verified, reason, implements, basis); err != nil {
 		r.log.Warn("connectorregistry: verify: upsert", "provider", kind+"/"+name, "err", err)
 	}
 }
@@ -725,9 +748,38 @@ func (r *Registry) recordVerification(ctx context.Context, kind, name string, ve
 // verifyProvider fetches the plugin's Manifest and classifies the outcome (see verifyResult).
 // On success it also returns the class→Action implementations the Manifest advertised, RESTRICTED
 // to the classes the operator granted (ADR-0140 D1).
-func (r *Registry) verifyProvider(ctx context.Context, addr string, provides []string) (verifyResult, string, map[string]string) {
+func (r *Registry) verifyProvider(ctx context.Context, addr string, provides []string, mechanisms int) (verifyResult, string, map[string]string) {
 	if addr == "" {
-		return provUnverifiable, "provider has no dial address (EE-Job providers are not yet manifest-verifiable, ADR-0104 D1)", nil
+		// ── The dial-less form (ADR-0138 D5) ─────────────────────────────────────────────
+		// An EE-Job Actuator has no dial address BY CONSTRUCTION — ansible is subprocess-only
+		// because of the GPLv3 boundary (§3) — so there is no Manifest to fetch, and treating
+		// that as a failed verification made capability routing structurally unavailable to
+		// exactly the tools `configmgmt` exists for. ADR-0135 D3 shipped a route its own
+		// flagship provider could never satisfy; every unit test passed because they resolve
+		// through a fake.
+		//
+		// What CAN be corroborated is whether the claim is backed by anything. A declaration
+		// that advertises a class and declares no mechanism at all is a bare assertion, and it
+		// stays refused. One that names a per-kind Workflow or a dispatchable Action has
+		// committed to something the estate loader already validated — a `provisions`/
+		// `decommissions` entry must name a Workflow that EXISTS, and `remediates` must sit on
+		// a provider that advertises a class. So the attestation is not self-certifying: it is
+		// checked against a different part of the tree than the one making the claim.
+		//
+		// It is deliberately WEAKER than a Manifest check and is recorded as such (basis), so
+		// the surface never implies a running binary was asked when it was not (§1.8). It is
+		// also weaker in a second, load-bearing way: an ACTION-shaped class needs a
+		// Manifest-advertised `implements` (ADR-0140 D1), which a dial-less provider cannot
+		// supply. Such a provider therefore attests fine and then fails CLOSED at
+		// ResolveCapabilityAction with "advertises no Action implementing the class" — the
+		// honest outcome, since a subprocess genuinely cannot serve an Action-shaped class.
+		// In practice attestation admits the Workflow-shaped classes, which is the point.
+		if mechanisms == 0 {
+			return provUnverifiable, "provider has no dial address and declares no mechanism — a capability claim " +
+				"backed by no provisions/remediates/decommissions map and no actionNames is an assertion with " +
+				"nothing behind it (ADR-0138 D5)", nil
+		}
+		return provAttested, "", nil
 	}
 	m, err := r.manifest(ctx, addr)
 	if err != nil {

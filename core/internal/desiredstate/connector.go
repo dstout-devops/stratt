@@ -350,29 +350,31 @@ func ValidateActuator(a types.Actuator) error {
 	if err := validateContentDir(a.Name, a.ContentDir); err != nil {
 		return err
 	}
-	// A capability PROVIDER must be dial-addressed, because verification fetches its
-	// Manifest over that address (connectorregistry.verifyProvider) and capability
-	// resolution counts only VERIFIED providers. An EE-Job Actuator has no address by
-	// construction — ansible is subprocess-only because of the GPLv3 boundary (§3) — so
-	// its `provides` is permanently unverifiable: advertised, never counted, and reported
-	// nowhere except a WARN every ten seconds. The same half-declaration defect the three
-	// checks above refuse, and refused here for the same reason.
+	// A dial-less capability PROVIDER must declare a MECHANISM (ADR-0138 D5).
 	//
-	// This is not hypothetical. ADR-0135 D2/D3 shipped exactly this on the ansible
-	// Actuator, and three Assignments stopped compiling on every real floor while every
-	// unit test passed — the tests resolve through a fake, so nothing could see that no
-	// provider is ever verified. It took booting a cluster to find. Refusing it HERE moves
-	// that discovery from a live floor's logs to the diff that causes it (§1.8).
+	// This check used to demand a dial ADDRESS, because verification meant fetching a Manifest
+	// over one and resolution counts only VERIFIED providers — so an EE-Job Actuator's `provides`
+	// was permanently unverifiable: advertised, never counted, reported nowhere except a WARN
+	// every ten seconds. That is not hypothetical. ADR-0135 D2/D3 shipped exactly that on the
+	// ansible Actuator, three Assignments stopped compiling on every real floor, and every unit
+	// test passed because they resolve through a fake. It took booting a cluster to find.
 	//
-	// The limitation is real and booked, not permanent: making dial-less providers
-	// verifiable is ADR-0104 D1's hardening (ADR-0138 D5). When it lands, this check is
-	// what must change — do not weaken it to make a declaration pass.
-	if len(a.Provides) > 0 && a.Address == "" {
-		return fmt.Errorf("actuator %q: declares provides %v but has no address — a capability provider is "+
-			"verified by fetching its Manifest over its dial address, so an EE-Job (jobCommand) Actuator can "+
-			"never be counted as a provider and every route naming one of these classes would fail to resolve "+
-			"at compile time on a live floor (ADR-0138 D5; making dial-less providers verifiable is ADR-0104 D1's "+
-			"booked hardening)", a.Name, a.Provides)
+	// ADR-0138 D5 removed the reason for the address demand rather than the check itself: a
+	// dial-less provider is now verified against its DECLARED mechanisms, since it has no Manifest
+	// to fetch and never will (ansible is subprocess-only, §3 GPLv3 boundary). So the rule becomes
+	// what it was always really enforcing — a capability claim must have something behind it.
+	// The mechanism must be declared HERE, in the diff, not discovered as an empty resolution on a
+	// live floor (§1.8): that relocation was the whole point of the original check and it survives.
+	//
+	// A dial-ADDRESSED provider is exempt because its plugin speaks for itself: the Manifest is
+	// fetched and checked, and the mechanism for an Action-shaped class is advertised there rather
+	// than declared here (ADR-0140 D1).
+	if len(a.Provides) > 0 && a.Address == "" &&
+		len(a.Provisions)+len(a.Remediates)+len(a.Decommissions)+len(a.ActionNames) == 0 {
+		return fmt.Errorf("actuator %q: declares provides %v with no dial address and no mechanism — a dial-less "+
+			"provider is verified against what it DECLARES it can do (provisions/remediates/decommissions or "+
+			"actionNames), because there is no Manifest to fetch, and a class claim with nothing behind it would "+
+			"be advertised, never resolvable, and reported nowhere (ADR-0138 D5)", a.Name, a.Provides)
 	}
 	if err := validateCapabilities(a.Name, a.Provides, a.Requires); err != nil {
 		return err
