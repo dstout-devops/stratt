@@ -1476,6 +1476,24 @@ func run(ctx context.Context, log *slog.Logger) error {
 		if err != nil {
 			return fmt.Errorf("desired-state parse (authz-home): %w", err)
 		}
+		// That parse also registered every admitted plugin's SELF contracts (ADR-0138 D3/D4). Pin
+		// them exactly as the shipped ones were pinned above, so drift against a registered pin
+		// stays blocking — D4's "core stops embedding and instead pins at registration".
+		//
+		// This runs on EVERY replica and BEFORE the API handler is built, and both matter. The
+		// desired-state controller is leader-only, so registering there would give the leader a
+		// contract set its followers lack while the Temporal worker validates action params on
+		// every replica — the ADR-0103 D3 routing hazard in the validation layer. And
+		// contract.Fingerprint() is captured once inside api.Server.Handler(), so a later
+		// registration would ship peers a stale federation stamp.
+		if estateContracts := contract.EstateContracts(); len(estateContracts) > 0 {
+			for _, c := range estateContracts {
+				if err := store.RegisterContract(ctx, c); err != nil {
+					return err
+				}
+			}
+			log.Info("plugin self contracts pinned (ADR-0138 D4)", "count", len(estateContracts))
+		}
 		// Snapshot the estate's admission policy for the API's imperative door
 		// (GOV-2). Parsed with a nil decider above (this load only reads Cells +
 		// admission controls; the reconcile controller admits live).

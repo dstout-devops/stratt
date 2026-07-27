@@ -7,6 +7,8 @@ import (
 	"strings"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/dstout-devops/stratt/core/internal/contract"
 )
 
 // Admitted plugin estates (ADR-0137 D1/D3).
@@ -111,4 +113,141 @@ func kindDirs(roots []string, kind string) []string {
 // plugin).
 func estateRootOf(declPath string) string {
 	return filepath.Dir(filepath.Dir(declPath))
+}
+
+// ── plugin-owned self contracts (ADR-0138 D3/D4) ─────────────────────────────
+
+// loadPluginContracts registers every ADMITTED plugin's self contracts, read from
+// `plugins/<name>/contracts/**/*.schema.json` — a sibling of its `estate/`, because a contract is
+// the plugin's own document rather than a declaration the estate admits piecemeal.
+//
+// It runs BEFORE the kinds are parsed, and it has to: the same pass that discovers these documents
+// is the one that validates Steps against them. A Step naming `actions/helm/deploy.input` is
+// checked at load, so the document must be registered first or the check would refuse the very
+// thing the plugin ships.
+//
+// Admission is the gate. A plugin tree that `plugins.yaml` does not admit contributes nothing —
+// its contracts are as unread as its declarations, which is the whole point of the split: locality
+// is the plugin's, AUTHORITY is the estate's (ADR-0137 D1).
+func loadPluginContracts(root string) error {
+	// A plugin's OWN tree carries its own contracts, admission or not. `plugins/<n>/estate` and
+	// `plugins/<n>/demo/estate` are both inside <n>'s authority boundary — the demo is the plugin's
+	// own harness, not a third party admitting it — so requiring a plugins.yaml there would make a
+	// plugin unable to reference its own Actions in its own demo.
+	if owner, dir, ok := owningPluginContracts(root); ok {
+		docs, err := readContractDir(dir)
+		if err != nil {
+			return fmt.Errorf("desiredstate: plugin %s contracts: %w", owner, err)
+		}
+		if len(docs) > 0 {
+			if err := contract.RegisterEstate(owner, docs); err != nil {
+				return fmt.Errorf("desiredstate: plugin %s: %w", owner, err)
+			}
+		}
+	}
+	admitted, err := admittedPluginDirs(root)
+	if err != nil {
+		return err
+	}
+	for _, p := range admitted {
+		dir := filepath.Join(filepath.Dir(p.estateDir), "contracts")
+		docs, err := readContractDir(dir)
+		if err != nil {
+			return fmt.Errorf("desiredstate: plugin %s contracts: %w", p.name, err)
+		}
+		if len(docs) == 0 {
+			continue
+		}
+		if err := contract.RegisterEstate(p.name, docs); err != nil {
+			return fmt.Errorf("desiredstate: plugin %s: %w", p.name, err)
+		}
+	}
+	return nil
+}
+
+// readContractDir reads a plugin's contracts tree into name → bytes, where the NAME is the path
+// relative to the tree with `.schema.json` stripped — i.e. exactly the id core validates against
+// (`actions/helm/deploy.input`). Keeping the layout identical to the shipped tree is deliberate:
+// residence moved, the naming did not, so nothing downstream has to know where a document lives.
+func readContractDir(dir string) (map[string][]byte, error) {
+	if _, err := os.Stat(dir); os.IsNotExist(err) {
+		return nil, nil
+	}
+	docs := map[string][]byte{}
+	err := filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() || !strings.HasSuffix(path, ".schema.json") {
+			return nil
+		}
+		rel, rerr := filepath.Rel(dir, path)
+		if rerr != nil {
+			return rerr
+		}
+		raw, rerr := os.ReadFile(path)
+		if rerr != nil {
+			return rerr
+		}
+		docs[strings.TrimSuffix(filepath.ToSlash(rel), ".schema.json")] = raw
+		return nil
+	})
+	return docs, err
+}
+
+// admittedPluginDirs returns the admitted plugins' names + estate dirs, so a caller can reach a
+// sibling of the estate (the contracts tree) without re-parsing plugins.yaml.
+type admittedDir struct {
+	name      string
+	estateDir string
+}
+
+func admittedPluginDirs(root string) ([]admittedDir, error) {
+	path := filepath.Join(root, "plugins.yaml")
+	raw, err := os.ReadFile(path)
+	if os.IsNotExist(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("desiredstate: %s: %w", path, err)
+	}
+	var f pluginsFile
+	dec := yaml.NewDecoder(strings.NewReader(string(raw)))
+	dec.KnownFields(true)
+	if err := dec.Decode(&f); err != nil {
+		return nil, fmt.Errorf("desiredstate: %s: %w", path, err)
+	}
+	out := make([]admittedDir, 0, len(f.Plugins))
+	for _, p := range f.Plugins {
+		if p.Name == "" || p.Path == "" {
+			continue // estateRoots reports these properly; this pass must not duplicate its errors
+		}
+		dir := p.Path
+		if !filepath.IsAbs(dir) {
+			dir = filepath.Join(root, dir)
+		}
+		out = append(out, admittedDir{name: p.Name, estateDir: filepath.Clean(dir)})
+	}
+	return out, nil
+}
+
+// owningPluginContracts reports the plugin whose tree `root` sits inside, and where its contracts
+// live. Recognised by structure — a directory whose PARENT is named `plugins` — rather than by a
+// hardcoded depth, so `plugins/<n>/estate` and `plugins/<n>/demo/estate` are both found without
+// enumerating the shapes a plugin tree may take.
+func owningPluginContracts(root string) (owner, dir string, ok bool) {
+	abs, err := filepath.Abs(root)
+	if err != nil {
+		return "", "", false
+	}
+	for p := abs; ; {
+		parent := filepath.Dir(p)
+		if parent == p {
+			return "", "", false
+		}
+		if filepath.Base(parent) == "plugins" {
+			return filepath.Base(p), filepath.Join(p, "contracts"), true
+		}
+		p = parent
+	}
 }

@@ -51,7 +51,7 @@ func TestActuatorReconcile(t *testing.T) {
 	// A declared actionName is now checked against the plugin's own advertisement, so a
 	// dispatch-table test needs a plugin that advertises it (there is no live one here).
 	r.manifest = fakeActions(map[string][]AdvertisedAction{
-		"localhost:9090": {{Name: "t-helm/deploy", InputContract: "actions/helm/deploy.input"}},
+		"localhost:9090": {{Name: "t-helm/deploy", InputContract: "actions/cert-issuer/create-intermediate.input"}},
 	})
 
 	if err := s.UpsertActuator(ctx, types.Actuator{Name: "t-helm", Address: "localhost:9090", PluginIdentity: "helm", DryRunnable: true, ActionNames: []string{"t-helm/deploy"}}); err != nil {

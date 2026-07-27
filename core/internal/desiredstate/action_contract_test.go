@@ -59,7 +59,12 @@ func TestUncontractedActionIsRefusedWithConcreteParams(t *testing.T) {
 func TestContractedActionWithTemplatedParamsStillLoads(t *testing.T) {
 	// netbox/ipam-resolve ships input+output contracts and is invoked with templated
 	// params by the shipped vsphere-subnet-build Workflow.
-	root := actionStepEstate(t, "netbox/ipam-resolve", "      key: \"{{.launch.name}}\"\n      pool: \"10.0.0.0/8\"\n      size: 24\n")
+	// cert-issuer/create-intermediate is CORE-SHIPPED and stays so: `cert-issuer` is a NEUTRAL
+	// Actuator name (§1.5 — a step-ca plugin could implement it), which makes its contracts a
+	// SEAM rather than one vendor's self contract (ADR-0138 D3). netbox's used to serve here and
+	// no longer can: since the relocation, an estate that admits no plugins holds no plugin
+	// contracts — the authority model working, not a regression.
+	root := actionStepEstate(t, "cert-issuer/create-intermediate", "      commonName: \"{{.launch.name}}\"\n")
 	if _, err := ParseDir(root, nil); err != nil {
 		t.Fatalf("a contracted Action with templated params must still load — its VALUES are checked at launch: %v", err)
 	}

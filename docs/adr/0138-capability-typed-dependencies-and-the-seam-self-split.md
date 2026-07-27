@@ -94,6 +94,24 @@ The census is not a coincidence: **22 of 152** documents are self contracts (`ac
 `actions/` 9); the other 130 are seams. ADR-0137 D5 is therefore **narrowed, not withdrawn**: a plugin
 may own its **self** contracts; seam contracts are core's and always were.
 
+> **TWO CORRECTIONS FROM IMPLEMENTATION (2026-07-27).**
+>
+> **The census above is wrong by ~4×.** "22" counts 13 actuator FILES plus 9 action DIRECTORIES —
+> but those directories hold 78 files. The real self-contract set is **91 documents**, not 22. The
+> decision stands; it was simply sized against a number that mixed files and folders.
+>
+> **Not every self-shaped contract is a self contract.** Three families are named NEUTRALLY, and a
+> neutral name means more than one plugin may implement the surface — which makes the document a
+> seam by D3's own definition. `cert-issuer` is the clearest: `main.go` says outright that the
+> Actuator name is neutral "so a step-ca plugin could implement it", so `actuators/cert-issuer.input`
+> and `actions/cert-issuer/*` describe a swap point, not one vendor's params. Moving them into
+> `plugins/openbao/` would weld a neutral contract to a single vendor — precisely backwards. The
+> same holds for `actions/adopt/*` and the retired `actuators/webhook.input`.
+>
+> **83 documents moved; 8 stayed.** The shipped set went 152 → 69 (seams + the three neutral
+> families); 77 pinned entries are now estate-resident (83 files, with ansible's seven version
+> siblings collapsing to one name).
+
 ### D4 — Residence follows ownership; verification does not move
 
 For self contracts, core stops embedding and instead pins at registration with blocking drift — the

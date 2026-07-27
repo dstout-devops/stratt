@@ -34,8 +34,8 @@ func TestUnadvertisedActionNameIsRefused(t *testing.T) {
 
 func TestUnadvertisedActionNameNamesTheAlternatives(t *testing.T) {
 	m := PluginManifest{Actions: []AdvertisedAction{
-		{Name: "notify/smtp", InputContract: "actions/notify/smtp.input"},
-		{Name: "notify/webhook", InputContract: "actions/notify/webhook.input"},
+		{Name: "notify/smtp", InputContract: "actions/cert-issuer/rotate-crl.input"},
+		{Name: "notify/webhook", InputContract: "actions/adopt/materialize.input"},
 	}}
 	err := checkAdvertisedActions([]string{"notify/websocket"}, m)
 	if err == nil {
@@ -52,7 +52,7 @@ func TestUnadvertisedActionNameNamesTheAlternatives(t *testing.T) {
 // document core cannot resolve is not possible.
 func TestAdvertisedContractCoreDoesNotHoldIsRefused(t *testing.T) {
 	m := PluginManifest{Actions: []AdvertisedAction{
-		{Name: "helm/deploy", InputContract: "actions/helm/nosuch.input"},
+		{Name: "helm/deploy", InputContract: "actions/cert-issuer/nosuch.input"},
 	}}
 	err := checkAdvertisedActions([]string{"helm/deploy"}, m)
 	if err == nil {
@@ -75,8 +75,8 @@ func TestAdvertisedActionWithNoInputContractIsRefused(t *testing.T) {
 // mistaken for a missing document.
 func TestAdvertisedActionsThatResolveAreAccepted(t *testing.T) {
 	m := PluginManifest{Actions: []AdvertisedAction{
-		{Name: "helm/deploy", InputContract: "actions/helm/deploy.input", OutputContract: "actions/helm/deploy.output"},
-		{Name: "notify/smtp", InputContract: "actions/notify/smtp.input"}, // no typed outputs
+		{Name: "helm/deploy", InputContract: "actions/cert-issuer/create-intermediate.input", OutputContract: "actions/cert-issuer/create-intermediate.output"},
+		{Name: "notify/smtp", InputContract: "actions/cert-issuer/rotate-crl.input"}, // no typed outputs
 	}}
 	if err := checkAdvertisedActions([]string{"helm/deploy", "notify/smtp"}, m); err != nil {
 		t.Fatalf("declared actionNames the plugin advertises against Contracts core holds must be accepted: %v", err)
@@ -126,7 +126,7 @@ func TestActuatorHeldBackByAnUnreachablePluginEnablesWhenItAnswers(t *testing.T)
 			return PluginManifest{}, errors.New("produced zero addresses")
 		}
 		return PluginManifest{Actions: []AdvertisedAction{
-			{Name: "helm/deploy", InputContract: "actions/helm/deploy.input"},
+			{Name: "helm/deploy", InputContract: "actions/cert-issuer/create-intermediate.input"},
 		}}, nil
 	}
 

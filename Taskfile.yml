@@ -917,6 +917,19 @@ tasks:
           [ -d "$from" ] || { echo "✗ admitted plugin '$n': no estate at $p" >&2; exit 1; }
           mkdir -p "$dst/plugins/$n/estate"
           cp -R "$from/." "$dst/plugins/$n/estate/"
+          # The plugin's own SELF CONTRACTS (ADR-0138 D3/D4), vendored as the SIBLING of its
+          # estate because that is where the loader looks: plugins/<n>/{estate,contracts}.
+          #
+          # Not optional decoration. Since the relocation these documents are the ONLY copy —
+          # `actions/helm/deploy.input` and `actuators/ansible.input` left the binary — so a
+          # staged tree without them boots a daemon whose estate parse fails on the first Step
+          # naming a plugin Action. That is exactly how this was found: task ci was green and
+          # the pod CrashLooped with "no input contract for actuator ansible-access-control".
+          cfrom="$(dirname "$from")/contracts"
+          if [ -d "$cfrom" ]; then
+            mkdir -p "$dst/plugins/$n/contracts"
+            cp -R "$cfrom/." "$dst/plugins/$n/contracts/"
+          fi
           echo "  - name: $n" >> "$dst/plugins.yaml"
           echo "    path: plugins/$n/estate" >> "$dst/plugins.yaml"
           echo "  ✓ vendored plugin estate: $n"

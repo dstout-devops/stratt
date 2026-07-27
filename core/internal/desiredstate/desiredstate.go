@@ -227,6 +227,14 @@ func ParseDir(root string, decider policy.Decider) (Declarations, error) {
 		return out, err
 	}
 
+	// A plugin's OWN self contracts, registered before any kind is parsed (ADR-0138 D3/D4). The
+	// order is load-bearing: this same pass validates Steps against those documents, so a Step
+	// naming `actions/helm/deploy.input` would be refused for referencing a contract that "does
+	// not exist" if the plugin's tree had not been read first.
+	if err := loadPluginContracts(root); err != nil {
+		return out, err
+	}
+
 	// Admission policy first: it governs every other declaration (§3
 	// Kyverno-for-config). Controls are validated at load (CEL-only, allow/deny).
 	admissionDecls, err := parseKind(kindDirs(roots, "admission"), true, parseAdmissionFile)
