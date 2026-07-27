@@ -5,6 +5,8 @@ import (
 	"errors"
 	"strings"
 	"testing"
+
+	"github.com/dstout-devops/stratt/core/internal/contract"
 )
 
 // fakeActions is a ManifestFetcher backed by a static addr→advertised-Actions map — the
@@ -142,5 +144,78 @@ func TestActuatorHeldBackByAnUnreachablePluginEnablesWhenItAnswers(t *testing.T)
 	if err := r.verifyDeclaredActions(context.Background(), "stratt-helm:9090", []string{"helm/deploy"}); err != nil {
 		t.Fatalf("the next reconcile must enable it with no restart — enable is retried while the entry "+
 			"is absent, the same level-triggered convergence the dependency gate uses: %v", err)
+	}
+}
+
+// ── hash equality (port invariant #5) ────────────────────────────────────────
+//
+// The loop this whole arc was opening. A plugin conformance-checks args against ITS copy of a
+// schema; core validates the Step against ITS copy. Nothing compared them, and nothing could
+// while the document lived in the core binary — the plugin had nothing to hash. Since ADR-0138
+// D4 it ships with the plugin, so the plugin can pin the bytes it will enforce.
+
+// heldHash is the digest core holds for a contract — the value a plugin must agree with.
+func heldHash(t *testing.T, id string) string {
+	t.Helper()
+	c, ok, err := contract.Get(id)
+	if err != nil || !ok {
+		t.Fatalf("core must hold %q for this test to mean anything: ok=%v err=%v", id, ok, err)
+	}
+	return c.Hash
+}
+
+func TestMatchingPinIsAccepted(t *testing.T) {
+	id := "actions/cert-issuer/create-intermediate.input"
+	m := PluginManifest{Actions: []AdvertisedAction{
+		{Name: "cert-issuer/create-intermediate", InputContract: id, InputSha: heldHash(t, id)},
+	}}
+	if err := checkAdvertisedActions([]string{"cert-issuer/create-intermediate"}, m); err != nil {
+		t.Fatalf("a plugin pinning the same bytes core holds must be accepted: %v", err)
+	}
+}
+
+// THE check. A plugin enforcing different bytes than core validates against means a Step can pass
+// the load and fail at the plugin — or worse, pass both against divergent rules.
+func TestDivergentPinIsRefused(t *testing.T) {
+	id := "actions/cert-issuer/create-intermediate.input"
+	m := PluginManifest{Actions: []AdvertisedAction{
+		{Name: "cert-issuer/create-intermediate", InputContract: id,
+			InputSha: "0000000000000000000000000000000000000000000000000000000000000000"},
+	}}
+	err := checkAdvertisedActions([]string{"cert-issuer/create-intermediate"}, m)
+	if err == nil {
+		t.Fatal("a pin that disagrees with core's copy is schema drift and must be refused")
+	}
+	for _, want := range []string{"DIFFERENT BYTES", "000000000000", heldHash(t, id)[:12]} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the diagnostic must show both digests so the reader can tell WHICH side moved: missing %q in %v", want, err)
+		}
+	}
+}
+
+// Unpinned means "no claim", and it is the lawful state for a SEAM the plugin does not own — a
+// capability class contract, or a neutrally-named one core keeps because several vendors may
+// implement it. Refusing these would make every capability-implementing Action unregisterable.
+func TestUnpinnedSeamRefIsAccepted(t *testing.T) {
+	m := PluginManifest{Actions: []AdvertisedAction{
+		{Name: "netbox/ipam-resolve", InputContract: "capabilities/ipam.input",
+			OutputContract: "capabilities/ipam.output"}, // no sha: netbox does not own the class contract
+	}}
+	if err := checkAdvertisedActions([]string{"netbox/ipam-resolve"}, m); err != nil {
+		t.Fatalf("a plugin cannot hash a seam it does not ship; unpinned must stay lawful: %v", err)
+	}
+}
+
+// A pin is checked on the OUTPUT ref too — an Action that lies about the shape it returns is the
+// direction that corrupts a downstream Step's {{.steps.x.outputs.y}} binding.
+func TestDivergentOutputPinIsRefused(t *testing.T) {
+	in := "actions/cert-issuer/create-intermediate.input"
+	out := "actions/cert-issuer/create-intermediate.output"
+	m := PluginManifest{Actions: []AdvertisedAction{
+		{Name: "cert-issuer/create-intermediate", InputContract: in, InputSha: heldHash(t, in),
+			OutputContract: out, OutputSha: "deadbeef"},
+	}}
+	if err := checkAdvertisedActions([]string{"cert-issuer/create-intermediate"}, m); err == nil {
+		t.Fatal("a divergent OUTPUT pin must be refused too")
 	}
 }

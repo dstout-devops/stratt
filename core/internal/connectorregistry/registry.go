@@ -52,6 +52,13 @@ type AdvertisedAction struct {
 	// Implements is the capability class this Action IS, or "" for an ordinary Action
 	// (ADR-0140 D1). Carried opaquely — core never derives it and never parses the name.
 	Implements string
+	// InputSha / OutputSha are the CONTENT HASHES the plugin pins its refs to (port invariant
+	// #5). Empty means unpinned — which is lawful for a SEAM the plugin does not own (a
+	// capability class contract, or a neutrally-named one like cert-issuer's), because a plugin
+	// cannot hash a document it does not ship. A pinned ref that DISAGREES with core's copy is
+	// drift, and drift is blocking.
+	InputSha  string
+	OutputSha string
 }
 
 // PluginManifest is the core-side view of a plugin's Manifest — the §1.5 VERIFICATION input,
@@ -139,6 +146,8 @@ func (r *Registry) dialManifest(ctx context.Context, addr string) (PluginManifes
 			Name:           a.GetName(),
 			InputContract:  a.GetInput().GetSchemaId(),
 			OutputContract: a.GetOutput().GetSchemaId(),
+			InputSha:       a.GetInput().GetSha256(),
+			OutputSha:      a.GetOutput().GetSha256(),
 			Implements:     a.GetImplements(),
 		})
 	}

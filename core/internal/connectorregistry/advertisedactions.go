@@ -29,17 +29,16 @@ import (
 // Contract is real drift, but not a seam this floor can hit — flagging it would refuse to enable
 // a working Actuator over an Action nobody invokes.
 //
-// NOT YET CHECKED — the ids are cross-checked for EXISTENCE, not for AGREEMENT. Core validates a
-// generic `action: X` Step against `actions/X.input` (its own convention); the plugin advertises
-// whichever id it conformance-checks against. For most Actions those coincide. For a
-// capability-implementing Action they deliberately DIVERGE: netbox/ipam-resolve advertises
-// `capabilities/ipam.input` because the class contract is what a capability call is validated
-// against (ADR-0112 D2), while `actions/netbox/ipam-resolve.input` also exists for the explicit-Step
-// path, the two bound only by a hand-written per-plugin co-fidelity test. Core cannot today tell a
-// capability implementation from a generic Action, so it cannot know which divergences are lawful —
-// that is precisely the fact ADR-0140 D1 makes DECLARED (`ActionDecl.implements`). Hash-equality
-// (port invariant #5) needs the document to ship with the plugin, which is ADR-0138 D4's relocation.
-// Both are gated on work this check is the precondition for.
+// AGREEMENT is checked too, now that it can be. A ref carries an id AND a content hash, and port
+// invariant #5 says schema drift is blocking — but until ADR-0138 D4 every plugin left `sha256`
+// empty, because a plugin cannot hash a document that lives in the core binary. With self
+// contracts shipping WITH the plugin, a pinned ref is a claim about the exact bytes the plugin will
+// enforce, and core holds it against the bytes it validates Steps with.
+//
+// A plugin pins exactly what it OWNS. It cannot pin a seam — `capabilities/*`, or a neutrally-named
+// contract like cert-issuer's that core keeps because more than one vendor may implement it — so
+// those refs go out unpinned, meaning "no claim", and there is nothing to contradict. That falls
+// straight out of the seam/self split rather than being a special case bolted onto it.
 
 // verifyDeclaredActions fetches addr's Manifest and checks the declared actionNames against it.
 // A no-op when nothing is declared — most Actuators expose no targetless Action, and they must
@@ -83,23 +82,50 @@ func checkAdvertisedActions(declared []string, m PluginManifest) error {
 		if a.InputContract == "" {
 			return fmt.Errorf("action %q advertises no input Contract — an uncontracted operation must not exist (§2.2, ADR-0031)", name)
 		}
-		for _, ref := range []struct{ role, id string }{
-			{"input", a.InputContract},
-			{"output", a.OutputContract}, // "" is lawful: an Action may return no typed outputs
+		for _, ref := range []struct{ role, id, sha string }{
+			{"input", a.InputContract, a.InputSha},
+			{"output", a.OutputContract, a.OutputSha}, // "" is lawful: an Action may return no typed outputs
 		} {
 			if ref.id == "" {
 				continue
 			}
-			if _, ok, err := contract.Get(ref.id); err != nil {
+			held, ok, err := contract.Get(ref.id)
+			if err != nil {
 				return fmt.Errorf("action %q: resolving advertised %s Contract %q: %w", name, ref.role, ref.id, err)
-			} else if !ok {
+			}
+			if !ok {
 				return fmt.Errorf("action %q advertises %s Contract %q, which core does not hold — the plugin would be "+
 					"checking args against a document core has never seen, so the two ends of the seam cannot be shown to "+
 					"agree (§1.5: schema drift is blocking, never silently absorbed)", name, ref.role, ref.id)
 			}
+			// THE HASH CHECK (port invariant #5), and the loop this whole arc was opening. Until
+			// ADR-0138 D4 a plugin could not pin a self contract at all — the document lived in the
+			// core binary, so `sha256` went out empty and there was nothing to compare. Now the
+			// document ships WITH the plugin, so a pinned ref is a claim about the exact bytes the
+			// plugin will enforce, and core can hold it against the bytes it validates Steps with.
+			//
+			// UNPINNED IS LAWFUL and means "no claim": a plugin cannot hash a SEAM it does not own
+			// (capabilities/*, or a neutrally-named contract like cert-issuer's, which core keeps
+			// precisely because more than one vendor may implement it). Absent a claim there is
+			// nothing to contradict. A claim that DISAGREES is drift, and drift is blocking.
+			if ref.sha != "" && !strings.EqualFold(ref.sha, held.Hash) {
+				return fmt.Errorf("action %q pins %s Contract %q to %s but core holds %s — the plugin would "+
+					"conformance-check args against DIFFERENT BYTES than core validates the Step against, so a Step "+
+					"could pass the load and fail at the plugin (or worse, pass both against divergent rules). "+
+					"Schema drift is blocking, never silently absorbed (§1.5, port invariant #5)",
+					name, ref.role, ref.id, short(ref.sha), short(held.Hash))
+			}
 		}
 	}
 	return nil
+}
+
+// short trims a hex digest for a diagnostic — the full 64 chars bury the message they are in.
+func short(h string) string {
+	if len(h) > 12 {
+		return h[:12]
+	}
+	return h
 }
 
 // advertisedList renders the advertised Action names for a diagnostic — the descent pointer

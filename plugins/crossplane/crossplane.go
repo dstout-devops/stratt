@@ -12,6 +12,7 @@ package crossplane
 
 import (
 	"context"
+	"embed"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -32,6 +33,16 @@ import (
 	"github.com/dstout-devops/stratt/sdk/pluginserve"
 	pluginv1 "github.com/dstout-devops/stratt/sdk/stratt/plugin/v1"
 )
+
+// The plugin's OWN contract documents (ADR-0138 D3/D4), embedded so their digests can be
+// advertised on every ContractRef — port invariant #5, which had nothing to check while these
+// documents lived in the core binary and `sha256` went out empty.
+//
+//go:embed contracts
+var contractFS embed.FS
+
+// contracts hashes those documents on demand; Ref(id) yields the pinned ContractRef.
+var contracts = pluginserve.Contracts(contractFS)
 
 const protocolVersion = "v1"
 
@@ -101,8 +112,8 @@ func (s *Server) GetManifest(context.Context, *pluginv1.GetManifestRequest) (*pl
 		TombstoneSchemes: []string{"crossplane.claim"},
 		Actions: []*pluginv1.ActionDecl{{
 			Name:        actionProvision,
-			Input:       &pluginv1.ContractRef{SchemaId: "actions/crossplane/provision.input"},
-			Output:      &pluginv1.ContractRef{SchemaId: "actions/crossplane/provision.output"},
+			Input:       contracts.Ref("actions/crossplane/provision.input"),
+			Output:      contracts.Ref("actions/crossplane/provision.output"),
 			Idempotent:  true, // server-side-apply of the named resource is idempotent
 			DryRunnable: true,
 		}},
@@ -259,7 +270,7 @@ func (s *Server) Invoke(req *pluginv1.InvokeRequest, stream grpc.ServerStreaming
 	if req.GetDryRun() {
 		return stream.Send(&pluginv1.InvokeResponse{
 			Event:  &pluginv1.TaskEvent{Level: pluginv1.TaskEvent_LEVEL_INFO, At: timestamppb.Now(), CorrelationId: cid, Terminal: true, Ok: true, Message: "dry-run ok: subnet would provision"},
-			Result: &pluginv1.InvokeResult{OutputContract: &pluginv1.ContractRef{SchemaId: "actions/crossplane/provision.output"}},
+			Result: &pluginv1.InvokeResult{OutputContract: contracts.Ref("actions/crossplane/provision.output")},
 		})
 	}
 
@@ -271,7 +282,7 @@ func (s *Server) Invoke(req *pluginv1.InvokeRequest, stream grpc.ServerStreaming
 		Event: &pluginv1.TaskEvent{Level: pluginv1.TaskEvent_LEVEL_INFO, At: timestamppb.Now(), CorrelationId: cid, Terminal: true, Ok: true, Message: "provisioned " + p.Name, Fields: map[string]string{"name": p.Name, "cidr": p.Cidr}},
 		Result: &pluginv1.InvokeResult{
 			Outputs:        &pluginv1.Payload{Bytes: outputs},
-			OutputContract: &pluginv1.ContractRef{SchemaId: "actions/crossplane/provision.output"},
+			OutputContract: contracts.Ref("actions/crossplane/provision.output"),
 			Entities:       []*pluginv1.ObservedEntity{ent},
 		},
 	})

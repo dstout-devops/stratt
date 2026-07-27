@@ -2,6 +2,7 @@ package awsec2
 
 import (
 	"context"
+	"embed"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -17,8 +18,19 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
+	"github.com/dstout-devops/stratt/sdk/pluginserve"
 	pluginv1 "github.com/dstout-devops/stratt/sdk/stratt/plugin/v1"
 )
+
+// The plugin's OWN contract documents (ADR-0138 D3/D4), embedded so their digests can be
+// advertised on every ContractRef — port invariant #5, which had nothing to check while these
+// documents lived in the core binary and `sha256` went out empty.
+//
+//go:embed contracts
+var contractFS embed.FS
+
+// contracts hashes those documents on demand; Ref(id) yields the pinned ContractRef.
+var contracts = pluginserve.Contracts(contractFS)
 
 // Action names this plugin advertises (ActionDecl.name); the InvokeRequest.action
 // selector picks one. "" is accepted as the create-vm default (back-compat).
@@ -134,9 +146,9 @@ func (s *Server) buildClient(ctx context.Context) (EC2API, error) {
 }
 
 func (s *Server) GetManifest(context.Context, *pluginv1.GetManifestRequest) (*pluginv1.GetManifestResponse, error) {
-	contracts := make([]*pluginv1.ContractDecl, 0, len(facetNamespaces))
+	contractDecls := make([]*pluginv1.ContractDecl, 0, len(facetNamespaces))
 	for _, ns := range facetNamespaces {
-		contracts = append(contracts, &pluginv1.ContractDecl{SchemaId: ns})
+		contractDecls = append(contractDecls, &pluginv1.ContractDecl{SchemaId: ns})
 	}
 	return &pluginv1.GetManifestResponse{Manifest: &pluginv1.Manifest{
 		PluginId:        s.cfg.PluginID,
@@ -147,13 +159,13 @@ func (s *Server) GetManifest(context.Context, *pluginv1.GetManifestRequest) (*pl
 		// Advertised unconditionally: provisioning is the plugin's core function, needing only the
 		// Region + AWS creds a running plugin already has (like keycustodian, ADR-0106 D2).
 		Capabilities:     []string{"provisioning"},
-		Contracts:        contracts,
+		Contracts:        contractDecls,
 		TombstoneSchemes: tombstoneSchemes,
 		Actions: []*pluginv1.ActionDecl{
 			{
 				Name:        actionCreateVM,
-				Input:       &pluginv1.ContractRef{SchemaId: "actions/awsec2/create-vm.input"},
-				Output:      &pluginv1.ContractRef{SchemaId: "actions/awsec2/create-vm.output"},
+				Input:       contracts.Ref("actions/awsec2/create-vm.input"),
+				Output:      contracts.Ref("actions/awsec2/create-vm.output"),
 				Idempotent:  false, // each call provisions a new instance
 				DryRunnable: true,  // RunInstances supports DryRun
 			},
@@ -182,8 +194,8 @@ func lifecycleDecl(name string, idempotent bool) *pluginv1.ActionDecl {
 	op := name[len("awsec2/"):]
 	return &pluginv1.ActionDecl{
 		Name:        name,
-		Input:       &pluginv1.ContractRef{SchemaId: "actions/awsec2/" + op + ".input"},
-		Output:      &pluginv1.ContractRef{SchemaId: "actions/awsec2/" + op + ".output"},
+		Input:       contracts.Ref("actions/awsec2/" + op + ".input"),
+		Output:      contracts.Ref("actions/awsec2/" + op + ".output"),
 		Idempotent:  idempotent,
 		DryRunnable: true,
 	}
@@ -355,7 +367,7 @@ func (s *Server) invokeCreateVM(ctx context.Context, req *pluginv1.InvokeRequest
 					Ok:            true,
 				},
 				Result: &pluginv1.InvokeResult{
-					OutputContract: &pluginv1.ContractRef{SchemaId: "actions/awsec2/create-vm.output"},
+					OutputContract: contracts.Ref("actions/awsec2/create-vm.output"),
 				},
 			})
 		}
@@ -410,7 +422,7 @@ func (s *Server) invokeCreateVM(ctx context.Context, req *pluginv1.InvokeRequest
 		},
 		Result: &pluginv1.InvokeResult{
 			Outputs:        &pluginv1.Payload{Bytes: outputs},
-			OutputContract: &pluginv1.ContractRef{SchemaId: "actions/awsec2/create-vm.output"},
+			OutputContract: contracts.Ref("actions/awsec2/create-vm.output"),
 			Entities:       []*pluginv1.ObservedEntity{entity},
 		},
 	})
@@ -517,7 +529,7 @@ func (s *Server) invokeLifecycle(ctx context.Context, req *pluginv1.InvokeReques
 		},
 		Result: &pluginv1.InvokeResult{
 			Outputs:        &pluginv1.Payload{Bytes: outputs},
-			OutputContract: &pluginv1.ContractRef{SchemaId: "actions/awsec2/" + op + ".output"},
+			OutputContract: contracts.Ref("actions/awsec2/" + op + ".output"),
 			Entities:       entities,
 		},
 	})
@@ -578,7 +590,7 @@ func (s *Server) invokeTag(ctx context.Context, req *pluginv1.InvokeRequest, str
 		},
 		Result: &pluginv1.InvokeResult{
 			Outputs:        &pluginv1.Payload{Bytes: outputs},
-			OutputContract: &pluginv1.ContractRef{SchemaId: "actions/awsec2/tag.output"},
+			OutputContract: contracts.Ref("actions/awsec2/tag.output"),
 		},
 	})
 }
@@ -596,7 +608,7 @@ func (s *Server) terminalDryRun(stream grpc.ServerStreamingServer[pluginv1.Invok
 			Terminal:      true,
 			Ok:            true,
 		},
-		Result: &pluginv1.InvokeResult{OutputContract: &pluginv1.ContractRef{SchemaId: outputContract}},
+		Result: &pluginv1.InvokeResult{OutputContract: contracts.Ref(outputContract)},
 	})
 }
 

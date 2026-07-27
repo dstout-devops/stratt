@@ -12,6 +12,7 @@ package helm
 import (
 	"context"
 	"crypto/sha256"
+	"embed"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -29,6 +30,16 @@ import (
 	"github.com/dstout-devops/stratt/sdk/pluginserve"
 	pluginv1 "github.com/dstout-devops/stratt/sdk/stratt/plugin/v1"
 )
+
+// The plugin's OWN contract documents (ADR-0138 D3/D4), embedded so their digests can be
+// advertised on every ContractRef — port invariant #5, which had nothing to check while these
+// documents lived in the core binary and `sha256` went out empty.
+//
+//go:embed contracts
+var contractFS embed.FS
+
+// contracts hashes those documents on demand; Ref(id) yields the pinned ContractRef.
+var contracts = pluginserve.Contracts(contractFS)
 
 const protocolVersion = "v1"
 
@@ -87,8 +98,8 @@ func (s *Server) GetManifest(context.Context, *pluginv1.GetManifestRequest) (*pl
 		// only the name), which is exactly why nothing surfaced it.
 		Actions: []*pluginv1.ActionDecl{{
 			Name:   actionDeploy,
-			Input:  &pluginv1.ContractRef{SchemaId: "actions/helm/deploy.input"},
-			Output: &pluginv1.ContractRef{SchemaId: "actions/helm/deploy.output"},
+			Input:  contracts.Ref("actions/helm/deploy.input"),
+			Output: contracts.Ref("actions/helm/deploy.output"),
 			// upgrade --install converges to the same release state on a re-run.
 			Idempotent:  true,
 			DryRunnable: true, // helm upgrade --dry-run=server
@@ -310,7 +321,7 @@ func (s *Server) Invoke(req *pluginv1.InvokeRequest, stream grpc.ServerStreaming
 		},
 		Result: &pluginv1.InvokeResult{
 			Outputs:        &pluginv1.Payload{Bytes: outputs},
-			OutputContract: &pluginv1.ContractRef{SchemaId: "actions/helm/deploy.output"},
+			OutputContract: contracts.Ref("actions/helm/deploy.output"),
 		},
 	})
 }

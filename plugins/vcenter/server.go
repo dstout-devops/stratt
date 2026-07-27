@@ -2,6 +2,7 @@ package vcenter
 
 import (
 	"context"
+	"embed"
 	"fmt"
 	"log/slog"
 	"net/url"
@@ -14,8 +15,19 @@ import (
 	vimtypes "github.com/vmware/govmomi/vim25/types"
 	"google.golang.org/grpc"
 
+	"github.com/dstout-devops/stratt/sdk/pluginserve"
 	pluginv1 "github.com/dstout-devops/stratt/sdk/stratt/plugin/v1"
 )
+
+// The plugin's OWN contract documents (ADR-0138 D3/D4), embedded so their digests can be
+// advertised on every ContractRef — port invariant #5, which had nothing to check while these
+// documents lived in the core binary and `sha256` went out empty.
+//
+//go:embed contracts
+var contractFS embed.FS
+
+// contracts hashes those documents on demand; Ref(id) yields the pinned ContractRef.
+var contracts = pluginserve.Contracts(contractFS)
 
 // Config locates the vCenter Source. Credentials arrive resolved from the
 // plugin's OWN broker at spawn (§2.5); material never crosses the core.
@@ -73,15 +85,15 @@ func (s *Server) GetManifest(context.Context, *pluginv1.GetManifestRequest) (*pl
 		Actions: []*pluginv1.ActionDecl{
 			{
 				Name:        actionCreateVM,
-				Input:       &pluginv1.ContractRef{SchemaId: "actions/vcenter/create-vm.input"},
-				Output:      &pluginv1.ContractRef{SchemaId: "actions/vcenter/create-vm.output"},
+				Input:       contracts.Ref("actions/vcenter/create-vm.input"),
+				Output:      contracts.Ref("actions/vcenter/create-vm.output"),
 				Idempotent:  false,
 				DryRunnable: true,
 			},
 			{
 				Name:        actionCreatePortgroup,
-				Input:       &pluginv1.ContractRef{SchemaId: "actions/vcenter/create-portgroup.input"},
-				Output:      &pluginv1.ContractRef{SchemaId: "actions/vcenter/create-portgroup.output"},
+				Input:       contracts.Ref("actions/vcenter/create-portgroup.input"),
+				Output:      contracts.Ref("actions/vcenter/create-portgroup.output"),
 				Idempotent:  false,
 				DryRunnable: true,
 			},
@@ -112,8 +124,8 @@ func (s *Server) GetManifest(context.Context, *pluginv1.GetManifestRequest) (*pl
 func lifecycleDecl(name string, idempotent bool) *pluginv1.ActionDecl {
 	return &pluginv1.ActionDecl{
 		Name:        name,
-		Input:       &pluginv1.ContractRef{SchemaId: "actions/" + name + ".input"},
-		Output:      &pluginv1.ContractRef{SchemaId: "actions/" + name + ".output"},
+		Input:       contracts.Ref("actions/" + name + ".input"),
+		Output:      contracts.Ref("actions/" + name + ".output"),
 		Idempotent:  idempotent,
 		DryRunnable: true,
 	}
