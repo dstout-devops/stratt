@@ -60,7 +60,16 @@ type Config struct {
 	TofuBin string
 	// ModuleRoot is the base directory holding module subdirs (params.Module is a
 	// subdir under it). The plugin runs tofu there.
+	//
+	// It is READ-ONLY as far as this plugin is concerned: the modules are bundled content
+	// pinned by the image digest plus their own committed .terraform.lock.hcl, and a build
+	// that wrote into them would mean the module that ran is not the module that shipped.
+	// Working state goes to DataRoot instead.
 	ModuleRoot string
+	// DataRoot holds tofu's per-workspace working state (TF_DATA_DIR) and the shared provider
+	// cache. Defaults to <os.TempDir()>/stratt-tofu. Mount it on a volume in any deployment
+	// where re-downloading providers on every pod restart is not acceptable.
+	DataRoot string
 	// BackendURL is the core's encrypted HTTP state backend (STRATT_STATE_BACKEND_URL);
 	// tofu points at it via TF_HTTP_ADDRESS. Empty runs against local state (dev only).
 	BackendURL string

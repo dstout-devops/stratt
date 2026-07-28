@@ -14,7 +14,7 @@ graph TD
   api_surface["api-surface<br/><small>0006 0021 0026 0076 0091 0121</small>"]
   audit_telemetry["audit-telemetry<br/><small>0034 0065 0077 0121</small>"]
   authz_identity["authz-identity<br/><small>0009 0028 0035 0079 0101 0122<br/>0130</small>"]
-  capability_framework["capability-framework<br/><small>0100 0104 0105 0106 0107 0110<br/>0111 0112 0113 0114 0135</small>"]
+  capability_framework["capability-framework<br/><small>0100 0104 0105 0106 0107 0110<br/>0111 0112 0113 0114 0135 0145</small>"]
   certificates_pki["certificates-pki<br/><small>0030 0043 0050 0098 0106</small>"]
   connectors["connectors<br/><small>0007 0014 0025 0026 0037 0038<br/>0039 0045 0086 0087 0088 0089<br/>0095 0097 0099 0113 0114 0115<br/>0127 0128 0129 0130 0131 0132<br/>0133 0136 0144</small>"]
   credentials_secrets["credentials-secrets<br/><small>0009 0029 0052 0094 0098 0099<br/>0100 0106 0125 0126</small>"]
@@ -24,10 +24,10 @@ graph TD
   graph_model["graph-model<br/><small>0015 0017 0041 0042 0059 0060<br/>0079 0080 0081 0082 0084 0085<br/>0096 0114 0115 0119 0120 0123<br/>0126 0127 0128 0129 0130 0132<br/>0133 0143 0144</small>"]
   intent_compiler["intent-compiler<br/><small>0023 0030 0036 0055 0058 0083<br/>0085 0114 0118 0119 0123</small>"]
   orchestration["orchestration<br/><small>0010 0011 0018 0027 0031 0063<br/>0118 0122 0125 0134 0139 0140</small>"]
-  plugin_port["plugin-port<br/><small>0046 0047 0048 0049 0051 0053<br/>0054 0103 0117 0121 0124 0125<br/>0127 0131 0137 0138 0140 0141</small>"]
+  plugin_port["plugin-port<br/><small>0046 0047 0048 0049 0051 0053<br/>0054 0103 0117 0121 0124 0125<br/>0127 0131 0137 0138 0140 0141<br/>0145</small>"]
   policy_governance["policy-governance<br/><small>0061 0062 0063 0064 0065 0066<br/>0067 0068 0069 0070 0071 0072<br/>0073 0074 0075 0076 0122</small>"]
-  provisioning["provisioning<br/><small>0017 0058 0095 0096 0107 0110<br/>0111 0112 0113 0114 0115 0120<br/>0123 0143 0144</small>"]
-  state_artifacts["state-artifacts<br/><small>0016 0029 0093 0097 0105 0112</small>"]
+  provisioning["provisioning<br/><small>0017 0058 0095 0096 0107 0110<br/>0111 0112 0113 0114 0115 0120<br/>0123 0143 0144 0145</small>"]
+  state_artifacts["state-artifacts<br/><small>0016 0029 0093 0097 0105 0112<br/>0145</small>"]
   substrate_ops["substrate-ops<br/><small>0013 0032 0040 0044 0045 0049<br/>0077 0078 0093 0101 0102 0124<br/>0131 0142</small>"]
   ui["ui<br/><small>0003 0012 0020 0024 0090 0091<br/>0116 0121</small>"]
 
@@ -151,6 +151,7 @@ Capability framework — provides/requires, verification, resolve-inject vs enab
 - [ADR-0113](0113-vsphere-provisioning-provider.md) — vSphere as a `provisioning` provider: the vcenter plugin gains a build verb (VM + DVPortgroup)
 - [ADR-0114](0114-entity-lifecycle-and-decommission-reach-path.md) — Entity lifecycle Actions + the desired-state decommission reach-path
 - [ADR-0135](0135-a-plugin-ships-examples-not-declarations.md) — A plugin ships examples and conformance, never declarations; and remediation binds to a capability, not a name
+- [ADR-0145](0145-the-actuator-builder-step-form.md) — The build-Step form for a workspace-scoped Actuator: capability injection reaches the Action seam, and the network leg goes live
 
 ### certificates-pki
 
@@ -370,6 +371,7 @@ Sovereign plugin port — the dark-matter substrate, transports, runtime registr
 - [ADR-0138](0138-capability-typed-dependencies-and-the-seam-self-split.md) — A module depends on capabilities: the seam/self split, and the Step-level gap
 - [ADR-0140](0140-a-capability-is-invoked-not-named.md) — A capability is invoked, not named: the mapping is declared, never minted
 - [ADR-0141](0141-the-plugin-sdk-is-go-the-port-is-the-contract.md) — The plugin SDK is Go; the PORT is the contract, not a language
+- [ADR-0145](0145-the-actuator-builder-step-form.md) — The build-Step form for a workspace-scoped Actuator: capability injection reaches the Action seam, and the network leg goes live
 
 ### policy-governance
 
@@ -416,6 +418,7 @@ Provisioning — declare & build infra (Intent -> builder -> machines), provisio
 - [ADR-0123](0123-keyed-placement-aware-spread.md) — Keyed, placement-aware spread: identity survives a zone-list edit, and declared placement finally reaches the build
 - [ADR-0143](0143-the-observed-reach-coordinate.md) — The reach coordinate is observed, and it is a name: the vcenter Syncer projects `mgmt.address`
 - [ADR-0144](0144-the-registered-reach-coordinate.md) — The reach coordinate can be REGISTERED: `Intent/DnsRecord` gets a provider, and a declared name becomes a caused fact
+- [ADR-0145](0145-the-actuator-builder-step-form.md) — The build-Step form for a workspace-scoped Actuator: capability injection reaches the Action seam, and the network leg goes live
 
 ### state-artifacts
 
@@ -429,6 +432,7 @@ Tool state & artifacts — state backend, evidence store, object storage, states
 - [ADR-0097](0097-awss3-connector.md) — The awss3 Connector: bucket lifecycle Actions + metadata-only bucket Syncer
 - [ADR-0105](0105-s3-capability-provider-agnostic.md) — Capability providers are provider-agnostic: S3 is provider #1 of statestore/artifactstore, never "the provider"
 - [ADR-0112](0112-opentofu-network-provider-capability-composition.md) — OpenTofu as the AWS network `provisioning` provider, composing statestore + ipam
+- [ADR-0145](0145-the-actuator-builder-step-form.md) — The build-Step form for a workspace-scoped Actuator: capability injection reaches the Action seam, and the network leg goes live
 
 ### substrate-ops
 
@@ -614,3 +618,4 @@ UI — React shell, schema-driven rendering, Views, descent, the first-party cli
 | [0142](0142-environments-are-declared-not-just-referenced.md) | estate-as-code, substrate-ops |
 | [0143](0143-the-observed-reach-coordinate.md) | graph-model, provisioning |
 | [0144](0144-the-registered-reach-coordinate.md) | connectors, graph-model, provisioning |
+| [0145](0145-the-actuator-builder-step-form.md) | capability-framework, plugin-port, provisioning, state-artifacts |

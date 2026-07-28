@@ -20,21 +20,36 @@ tier: trusted
 dryRunnable: true
 provides: [provisioning]
 requires: [statestore, ipam]
-# NO `provisions` ENTRY, DELIBERATELY, AND THIS IS A CORRECTION (ADR-0120 D3).
+# The build's ENTRY POINT is a targetless Action, not this Actuator's Apply verb (ADR-0145 D1).
+# A `tofu apply` converges a WORKSPACE: it reads no target set and folds its result under the
+# workspace-root item_key "", so there is no View to actuate against — and the label a build's
+# projection must carry (stratt.intent/singleton, below) can only arrive through an Action's
+# estate overlay, because the plugin refuses any stratt.*-prefixed label coming out of a module.
 #
-# This Actuator advertised `Subnet: opentofu-subnet-build` and that Workflow WAS NEVER WRITTEN.
-# Nothing caught it: validateProvisions only checks the entry is non-empty, and the reconcile copies
-# the name onto the build Finding, so a declared Intent/Subnet produced a Finding offering a Workflow
-# nobody could launch — discovered by an operator at the gate. With estate/capability-bindings
-# selecting THIS provider for Subnet, that meant Subnet provisioning in the reference estate was dead:
-# app-subnet and dmz-subnet could not be built, and app-tier's placement depends on app-subnet.
-#
-# ADR-0110 D5's demotion of Crossplane's opaque-Claim subnet build in favour of OpenTofu — the
-# charter-canonical network builder (§5.1/§5.2/§3) — was therefore DECLARED BUT NEVER DELIVERED. It is
-# deferred rather than reversed: re-add this entry, and the binding beside it, the moment
-# opentofu-subnet-build exists. Advertising it meanwhile is a promise the estate cannot keep, and
-# checkProvisioningBuildInputs now refuses it at declaration.
-#
-# `provides: [provisioning]` stays: OpenTofu genuinely provides the class for consumers that only
-# need a verified provisioner to EXIST (the enablement gate above). What it lacks is a per-kind build
-# Workflow, and a provider with no builder must not be a build candidate.
+# `requires:` now reaches BOTH surfaces. It always described this declaration, but capability
+# injection existed only on the Actuator verbs, so an Action served here would have run tofu with
+# no S3 backend and no NetBox-allocated CIDR while reporting success. ADR-0145 D2 carried the
+# handles to the Invoke seam; the Action gets the same statestore + ipam the Apply verb does.
+actionNames:
+  - opentofu/apply
+# Identity: the module emits the built subnet under `aws.subnetId` — the SAME scheme the awsec2
+# Syncer uses (ADR-0112 D5), so this build's identity-only Entity and the Syncer's net.subnet
+# Facet co-own ONE subnet rather than splitting into two.
+identitySchemes: [aws.subnetId]
+# The CORRELATION LABEL is granted explicitly. The provisioning loop closes on exactly this key:
+# the build projects the subnet carrying stratt.intent/singleton, and the next reconcile reads
+# only that key back to see the desired singleton as built. Ungranted, Host.toUpsert DROPS it
+# instead of refusing — the Entity lands, the Run goes green, and the only symptom is the same
+# build offered again next pass. `source` is the module's own descriptive label.
+labelKeys: [source, stratt.intent/singleton]
+# provisions advertises the per-kind build Workflow (ADR-0110 D3) — RESTORED. It was withdrawn
+# because `opentofu-subnet-build` had never been written: validateProvisions only checked the
+# entry was non-empty, so a declared Intent/Subnet produced a build Finding offering a Workflow
+# nobody could launch, discovered by an operator at the gate. That left Subnet provisioning dead
+# in the reference estate — app-subnet and dmz-subnet unbuildable, and app-tier's placement
+# depends on app-subnet — which made ADR-0110 D5's demotion of the Crossplane subnet builder in
+# favour of OpenTofu (the charter-canonical network builder, §5.1/§5.2/§3) declared but never
+# delivered. The Workflow now exists, and checkProvisioningBuildInputs verifies at load that it
+# resolves, so this entry cannot go stale the same way twice.
+provisions:
+  Subnet: opentofu-subnet-build

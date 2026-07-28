@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "stratt:contract:actions/opentofu/apply:v1",
+  "title": "opentofu/apply Action input",
+  "description": "Input Contract for the targetless opentofu/apply Action (ADR-0145 D1): the build-Step form for a WORKSPACE-SCOPED Actuator builder. A `tofu apply` acts on a workspace, not on a set of graph Entities, so it has no View to actuate against and no per-target result to fold — the honest Step shape is a targetless Action, and this is its typed seam. The state backend (statestore) and the allocated CIDR (ipam) are NOT here: they are core-resolved capability handles injected at dispatch from the declaration's `requires:` (ADR-0105, carried to this seam by ADR-0145 D2), so no consumer ever writes a bucket or a CIDR into a Step.",
+  "type": "object",
+  "required": ["module", "workspace", "projectKind"],
+  "properties": {
+    "module": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^[a-z0-9]([a-z0-9-]*[a-z0-9])?$",
+      "description": "The bundled module DIRECTORY name under the plugin's module root (e.g. aws-network) — never HCL text. Modules are first-party bundled assets pinned by the plugin image digest plus the module's own committed .terraform.lock.hcl (ADR-0112 D4)."
+    },
+    "workspace": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^[a-z0-9]([a-z0-9-]*[a-z0-9])?$",
+      "description": "State identity. It is ALSO the key the core sends to the statestore resolver, so two builds of different singletons must not share one — a shared workspace makes the second build destroy the first's infrastructure to converge on its own vars."
+    },
+    "vars": {
+      "type": "object",
+      "additionalProperties": true,
+      "description": "Module input variables (rendered to a -var-file). Core-injected capability vars (stratt_ipam_cidr, stratt_ipam_vlan_id, stratt_ipam_gateway) are merged in by the plugin and must not be set here."
+    },
+    "projectKind": {
+      "type": "string",
+      "minLength": 1,
+      "description": "The Entity kind the built infrastructure projects AS — the estate's overlay on the module's reserved stratt_entities output (ADR-0059 §6). Required: a build whose projection has no kind cannot be selected by any View, and the reconcile that opened the build Finding would never see it close."
+    },
+    "projectLabels": {
+      "type": "object",
+      "additionalProperties": { "type": "string" },
+      "description": "Labels the projection carries, INCLUDING the stratt.intent/singleton correlation label. This is the ONLY channel by which it can arrive: the plugin refuses any stratt.*-prefixed label coming out of a module's stratt_entities output (the reserved-prefix rule), so an estate correlation key structurally cannot ride the HCL. It rides the launch instead — which is also what keeps one module reusable across every singleton that builds from it."
+    }
+  },
+  "additionalProperties": false
+}

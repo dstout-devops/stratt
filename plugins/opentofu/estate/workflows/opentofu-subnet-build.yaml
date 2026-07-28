@@ -1,0 +1,89 @@
+# opentofu-subnet-build — the GATED build Workflow an Intent/Subnet launches (ADR-0059 §5 Flow 1,
+# ADR-0110 D3, ADR-0145). The provisioning reconcile surfaces a provision/<intent> Finding; an
+# operator launches THIS Workflow; the opentofu/apply Action runs the bundled aws-network module
+# and projects the built subnet back with Run provenance, carrying the stratt.intent/singleton
+# correlation label so the next reconcile sees it built and the Finding resolves.
+#
+# THIS WORKFLOW IS THE THING THAT DID NOT EXIST. `provisions: {Subnet: opentofu-subnet-build}` was
+# advertised against it for two ADRs, and because validateProvisions only checked the entry was
+# non-empty, the estate's whole network leg was dead: a build Finding named a Workflow nobody could
+# launch. Its absence is now refused at load (checkProvisioningBuildInputs).
+#
+# WHY THE BUILD STEP IS AN `action:` AND NOT `viewName + actuator` (ADR-0145 D1). A `tofu apply`
+# converges a workspace, not a set of graph Entities: it reads no targets and folds its result under
+# the workspace root. Putting it behind a View would mean inventing an anchor View the build ignores,
+# and an anchor View that selected nothing would make this a silent no-op — the one outcome a build
+# must never have. The narrower reason is the correlation label: only the Action seam carries an
+# estate overlay, and the label structurally cannot travel out through the module (the plugin refuses
+# any stratt.*-prefixed label from stratt_entities).
+#
+# WHAT IS NOT HERE: a plan pin. ADR-0047's approve-what-you-see — plan → digest → Gate binds the
+# digest → apply exactly that plan — lives on the Actuator seam, and `plan: true` is an actuation
+# field, so a workspace-scoped build cannot produce one today. The Gate below is therefore
+# approve-THAT-it-happens, not approve-what-you-see. That is a real gap, stated rather than papered
+# over, and booked as ADR-0145's follow-up.
+name: opentofu-subnet-build
+# The per-singleton launch interface (ADR-0120 D2, ADR-0059 D4 path). It declares EXACTLY what the
+# Steps below bind and nothing more — the ADR-0123 D3 load-time rule, which refuses a declared input
+# no Step consumes, because such an input is accepted at launch and then silently dropped.
+# SingletonLaunchParams supplies more (singleton, intentKind, placement); FilterToDeclared drops the
+# rest. `name` IS bound here, unlike the dns builder: it keys the tofu state workspace, and two
+# singletons sharing one workspace would make the second build destroy the first's infrastructure to
+# converge on its own vars.
+inputs:
+  type: object
+  additionalProperties: false
+#
+# `params` IS NOT DECLARED, and that is the substantive difference from crossplane's subnet-build,
+# which binds {{.launch.params.cidr}}. This builder takes its CIDR from the ipam capability — NetBox
+# allocates it and the core injects it as var.stratt_ipam_cidr — so an Intent's declared `cidr` has
+# nowhere to go here, and declaring an input no Step binds is refused at load anyway (ADR-0123 D3).
+# The consequence is deliberate and worth saying out loud: under this provider an Intent/Subnet's
+# `params.cidr` is a CLAIM that a range is wanted, not an assignment of which one — the allocator
+# decides, and the built subnet's net.cidr label reports what it actually got (§1.2).
+  required: [name, projectKind, labels]
+  properties:
+    name:
+      type: string
+      description: The declared Intent name — the tofu state workspace and the subnet's Name tag.
+    projectKind:
+      type: string
+      description: The Entity kind the built subnet projects as (subnet).
+    labels:
+      type: object
+      additionalProperties: { type: string }
+      description: >
+        Labels the projection carries, INCLUDING stratt.intent/singleton — the ONLY key
+        ProvisionedSingletons reads, so any other spelling builds an Entity that never
+        resolves its own Finding.
+
+steps:
+  - name: approve
+    gate:
+      approvers:
+        teams: [platform-admins]
+      timeoutSeconds: 86400 # 24h to approve the build
+  - name: build
+    needs: [approve]
+    action: opentofu/apply
+    # §2.5 — an Action's CredentialRef use-check is its only authz gate. These are the AWS API
+    # credentials tofu authenticates with; the module never carries material (its dev access_key is
+    # the floci/localstack convention, where any credential passes).
+    credentialRefs: [aws-dev]
+    params:
+      # Not one literal belonging to a Subnet declaration appears below — the rule ADR-0059 D3's
+      # builder check enforces. app-subnet and dmz-subnet both resolve to this ONE Workflow, so a
+      # hardcoded workspace or CIDR would have one build silently destroy the other's subnet to
+      # converge on its own state. That is exactly the collision found in crossplane's subnet-build.
+      module: aws-network
+      workspace: "{{.launch.name}}"
+      vars:
+        subnet_name: "{{.launch.name}}"
+      # The CIDR is deliberately absent. It arrives as var.stratt_ipam_cidr, injected by the core
+      # from the resolved `ipam` handle (ADR-0111/0112 D3) — NetBox allocates it. An Intent that
+      # wrote its own CIDR here would be hand-assigning addresses, which is the thing the ipam
+      # capability exists to stop; `params.cidr` on the Intent stays a claim, not an assignment.
+      projectKind: "{{.launch.projectKind}}"
+      # labels already carries stratt.intent/singleton, so this builds whichever Subnet its Finding
+      # is for rather than only the first one anyone declared.
+      projectLabels: "{{.launch.labels}}"

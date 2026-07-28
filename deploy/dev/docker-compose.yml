@@ -223,7 +223,15 @@ services:
       - seaweeddata:/data
       - ./seaweedfs-s3.json:/etc/seaweedfs/s3.json:ro
     healthcheck:
-      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:8333/ || exit 1"]
+      # /healthz, NOT /. The `-s3.config` identity above makes anonymous S3 requests
+      # 403, and `GET /` is one — so this probe returned "unhealthy" for a service that
+      # was serving correctly, and `docker compose up --wait` (which `task dev:up` uses)
+      # could never come up. A 403 is proof the server is answering; the probe was
+      # reading it as proof it was not. /healthz answers 200 without a signature.
+      #
+      # Same failure family as the floci probe below: a health check written against an
+      # earlier configuration of the thing it checks, never re-run after the change.
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:8333/healthz || exit 1"]
       interval: 3s
       timeout: 3s
       retries: 20

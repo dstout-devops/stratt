@@ -1,0 +1,22 @@
+# provisioning-subnet — selects OpenTofu as the Subnet provisioning provider outside vSphere
+# (ADR-0110 D5's demotion, ADR-0112 D6, delivered by ADR-0145).
+#
+# THIS IS WHY THE BINDING IS NEEDED. With opentofu-network's `provisions: {Subnet: …}` restored,
+# Subnet has TWO verified unscoped providers — crossplane and opentofu-network — so per-(class,kind)
+# resolution fails closed on the ambiguity (§2.4: the core never breaks a tie it was not told how to
+# break). Without this document, app-subnet and dmz-subnet surface an AMBIGUOUS build Finding with
+# no Workflow to launch: observable, but still unbuildable. This is the disambiguation, and it lands
+# ADR-0110 D5's opentofu recommended-default end state — the charter-canonical network builder
+# (§5.1/§5.2/§3) rather than an opaque Crossplane Claim.
+#
+# IT IS SCOPED, and deliberately not global. estate/capability-bindings/provisioning-vsphere.yaml
+# already binds Subnet → vcenter in the vsphere-dc scope; an UNSCOPED document here would be in
+# scope there too, and two documents claiming (provisioning, Subnet) in one scope is precisely the
+# cross-document collision §2.4 refuses. Naming the environments states where OpenTofu is the
+# substrate instead of relying on a precedence rule that does not and must not exist.
+name: provisioning-subnet
+environments: [dev, prod]
+entries:
+  - capability: provisioning
+    provider: opentofu-network
+    intentKind: Subnet
