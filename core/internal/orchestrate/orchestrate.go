@@ -398,6 +398,18 @@ func sitesTouched(result dispatch.Result) []string {
 type PluginAction struct {
 	Host        *pluginhost.Host
 	DryRunnable bool
+	// Requires are the capability CLASSES the DECLARATION that registered this Action
+	// asks the core to resolve and inject (ADR-0105, extended to the Action seam by
+	// ADR-0145 D2). It comes from the same `requires:` the sibling Actuator gets — one
+	// declaration, one promise — and is resolved per-invocation in ExecuteAction,
+	// failing closed exactly as the Apply path does.
+	//
+	// Before this it did not exist, and the effect was silent: an Actuator declaring
+	// `requires: [statestore, ipam]` and serving a build via `actionNames` had its
+	// handles injected on Apply and dropped on Invoke. The Action ran with no state
+	// backend and no allocated CIDR and reported success, because nothing on that path
+	// ever asked what the declaration required.
+	Requires []string
 }
 
 // PluginActuator is an Actuator provided by a plugin over the port
@@ -1149,16 +1161,33 @@ func (a *Activities) surfaceRejections(ctx context.Context, runID, source, plugi
 	}
 }
 
-// resolveCapabilities resolves each capability the Actuator `requires` (ADR-0105) into a handle to
-// inject onto the Apply: it finds the bound provider's resolve Action (via ResolveCapability),
-// invokes it (reusing Action governance + the class-level output-Contract reconcile), validates the
-// output against the CLASS-level Contract, and returns the handles keyed by class. Fails closed +
-// visibly (§1.8) — a required capability that can't be resolved aborts the Run, never a silent
-// apply without its resolved handle (e.g. tofu running against no state backend).
+// capabilitySubject names the Step in capability-resolve diagnostics. The Actuator verbs have
+// in.Actuator; an Action Step (ADR-0145 D2) has in.Action and an EMPTY Actuator, and reporting
+// `actuator ""` for one would send the reader hunting an Actuator that does not exist — a
+// diagnostic that misnames its subject hides the failure it is reporting (§1.8).
+func capabilitySubject(in RunInput) string {
+	if in.Actuator != "" {
+		return fmt.Sprintf("actuator %q", in.Actuator)
+	}
+	return fmt.Sprintf("action %q", in.Action)
+}
+
+// resolveCapabilities resolves each capability a declaration `requires` (ADR-0105) into a handle to
+// inject: it finds the bound provider's resolve Action (via ResolveCapability), invokes it (reusing
+// Action governance + the class-level output-Contract reconcile), validates the output against the
+// CLASS-level Contract, and returns the handles keyed by class. Fails closed + visibly (§1.8) — a
+// required capability that can't be resolved aborts the Run, never a silent apply without its
+// resolved handle (e.g. tofu running against no state backend).
+//
+// It serves all three consuming seams — Apply, Plan, and (ADR-0145 D2) Invoke. The resolve Action
+// it calls here is deliberately invoked with NO handles of its own: a resolver is the bottom of
+// this chain, and letting one require a capability would make capability resolution recursive with
+// no cycle rule. A resolver that needs configuration takes it as a CredentialRef, like any Action.
 func (a *Activities) resolveCapabilities(ctx context.Context, in RunInput, requires []string) (map[string]pluginhost.CapabilityHandle, error) {
 	if len(requires) == 0 {
 		return nil, nil
 	}
+	subject := capabilitySubject(in)
 	// The workspace the provider keys state by — read from the opaque desired, as the facts path
 	// does (a read of a core-owned selection label, not a projection write, §1.2). A malformed
 	// desired fails closed HERE with a clear diagnostic (§1.8), never a silent empty workspace.
@@ -1167,42 +1196,42 @@ func (a *Activities) resolveCapabilities(ctx context.Context, in RunInput, requi
 	}
 	if len(in.Params) > 0 {
 		if err := json.Unmarshal(in.Params, &wsp); err != nil {
-			return nil, fmt.Errorf("actuator %q: read workspace from params: %w", in.Actuator, err)
+			return nil, fmt.Errorf("%s: read workspace from params: %w", subject, err)
 		}
 	}
 	handles := make(map[string]pluginhost.CapabilityHandle, len(requires))
 	for _, capClass := range requires {
 		if a.ResolveCapability == nil {
-			return nil, fmt.Errorf("actuator %q requires %q but no capability resolver is configured", in.Actuator, capClass)
+			return nil, fmt.Errorf("%s requires %q but no capability resolver is configured", subject, capClass)
 		}
 		actionName, err := a.ResolveCapability(ctx, capClass)
 		if err != nil {
-			return nil, fmt.Errorf("actuator %q: resolve capability %q: %w", in.Actuator, capClass, err)
+			return nil, fmt.Errorf("%s: resolve capability %q: %w", subject, capClass, err)
 		}
 		pa, ok := a.Plugins.Action(actionName)
 		if !ok {
-			return nil, fmt.Errorf("actuator %q: capability %q resolve Action %q is not registered", in.Actuator, capClass, actionName)
+			return nil, fmt.Errorf("%s: capability %q resolve Action %q is not registered", subject, capClass, actionName)
 		}
 		args, _ := json.Marshal(map[string]string{"workspace": wsp.Workspace})
 		// Validate the resolve INPUT against the class Contract too (symmetric with the output) —
 		// so an empty/malformed workspace fails closed in the core, not deferred to the provider.
 		inContract := "capabilities/" + capClass + ".input"
 		if err := contract.ValidateNamed(inContract, args); err != nil {
-			return nil, fmt.Errorf("actuator %q: capability %q resolve input failed its Contract: %w", in.Actuator, capClass, err)
+			return nil, fmt.Errorf("%s: capability %q resolve input failed its Contract: %w", subject, capClass, err)
 		}
 		outContract := "capabilities/" + capClass + ".output"
 		raw, err := pa.Host.InvokeRaw(ctx, pluginhost.ActionInvoke{
 			Principal: in.Principal, Action: actionName, Args: args, ExpectOutputContract: outContract,
 		})
 		if err != nil {
-			return nil, fmt.Errorf("actuator %q: invoke resolve %q: %w", in.Actuator, actionName, err)
+			return nil, fmt.Errorf("%s: invoke resolve %q: %w", subject, actionName, err)
 		}
 		if !raw.OK {
-			return nil, fmt.Errorf("actuator %q: capability resolve %q did not succeed", in.Actuator, actionName)
+			return nil, fmt.Errorf("%s: capability resolve %q did not succeed", subject, actionName)
 		}
 		// The output must satisfy the CLASS-level Contract (§1.5) — the same shape every provider fills.
 		if err := contract.ValidateNamed(outContract, raw.Outputs); err != nil {
-			return nil, fmt.Errorf("actuator %q: capability %q resolve output failed its Contract: %w", in.Actuator, capClass, err)
+			return nil, fmt.Errorf("%s: capability %q resolve output failed its Contract: %w", subject, capClass, err)
 		}
 		// statestore back-compat: populate the typed backend/config/credentialRef fields (the
 		// statestore consumer reads Kind/Config). A differently-shaped output (e.g. ipam's
@@ -1213,7 +1242,7 @@ func (a *Activities) resolveCapabilities(ctx context.Context, in RunInput, requi
 			CredentialRef string            `json:"credentialRef"`
 		}
 		if err := json.Unmarshal(raw.Outputs, &h); err != nil {
-			return nil, fmt.Errorf("actuator %q: decode capability %q handle: %w", in.Actuator, capClass, err)
+			return nil, fmt.Errorf("%s: decode capability %q handle: %w", subject, capClass, err)
 		}
 		// Output carries the contract-validated bytes verbatim (ADR-0112 D2), so ANY capability's
 		// handle reaches its consumer — the generalization that unblocks non-statestore classes.

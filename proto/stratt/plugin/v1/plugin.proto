@@ -560,6 +560,11 @@ message DestroyRequest {
   Envelope envelope = 1;
   repeated ApplyTarget targets = 2; // symmetry with Apply — the legible teardown set
   Payload desired = 3;              // opaque desired-state the plugin tears down (e.g. the cert commonName, ADR-0050)
+  // Core-resolved capability handles (ADR-0105/0145 D2) — the SAME channel Apply/Plan/Invoke use.
+  // A teardown needs them at least as much as a build does: without the statestore handle, tofu
+  // cannot read the state that says WHAT to destroy, and a destroy against empty state exits zero.
+  // That is how a teardown reports success having touched nothing.
+  map<string, CapabilityHandle> resolved_capabilities = 4;
 }
 
 // InvokeRequest — a targetless Action (RunAction). Args are opaque.
@@ -569,6 +574,18 @@ message InvokeRequest {
   string action = 3; // which advertised Action (ActionDecl.name); "" == the sole Action.
                      // Keeps Envelope.contract purely conformance, never a routing key.
   bool dry_run = 4;  // side-effect-free plan, only where the ActionDecl is dry_runnable
+  // Core-resolved capability handles (ADR-0105), keyed by capability class — the SAME legible
+  // channel as ApplyRequest/PlanRequest.resolved_capabilities, resolved from the DECLARATION's
+  // `requires:` and failing closed when one cannot be resolved (ADR-0145 D2).
+  //
+  // It was absent, and that absence was an accident of sequencing, not a decision: ADR-0105
+  // landed capability injection on the Actuator seam and nothing carried it to the Action seam.
+  // The consequence is that `requires: [statestore, ipam]` on a declaration was a promise only
+  // half its dispatch surface kept — a targetless Action served by the same plugin, under the
+  // same declaration, silently received no handle at all. That made a whole class of builder
+  // (a workspace-scoped `provisioning` provider, whose only correct Step form is a targetless
+  // Action — ADR-0145 D1) unable to compose the capabilities it declares.
+  map<string, CapabilityHandle> resolved_capabilities = 5;
 }
 
 // SubscribeRequest — an Emitter opens a long-lived push stream (invariant #4).

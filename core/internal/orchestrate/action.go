@@ -164,12 +164,23 @@ func (a *Activities) ExecuteAction(ctx context.Context, in RunInput, creds []dis
 				Keys:  keys,
 			})
 		}
+		// Resolve whatever the DECLARATION requires and inject the handles legibly — the
+		// same call, in the same shape, that executePlugin and PlanStep make for the
+		// Actuator verbs (ADR-0105, carried to this seam by ADR-0145 D2). Fails closed:
+		// an unresolvable required capability aborts the Run rather than running the
+		// build with no state backend and no allocated network, which is the shape a
+		// silent no-handle Invoke had.
+		resolvedCaps, err := a.resolveCapabilities(ctx, in, pa.Requires)
+		if err != nil {
+			return dispatch.Result{}, temporal.NewNonRetryableApplicationError(err.Error(), "CapabilityResolveFailed", err)
+		}
 		raw, err := pa.Host.InvokeRaw(ctx, pluginhost.ActionInvoke{
-			Principal:   in.Principal,
-			Action:      in.Action,
-			Args:        in.Params,
-			DryRun:      in.DryRun,
-			Credentials: portCreds,
+			Principal:            in.Principal,
+			Action:               in.Action,
+			Args:                 in.Params,
+			DryRun:               in.DryRun,
+			Credentials:          portCreds,
+			ResolvedCapabilities: resolvedCaps,
 			// A class-named Step is governed by the CLASS Contract, not the resolved
 			// provider's own (ADR-0112 D2 / ADR-0140 D3 row 2) — the same shape every
 			// provider of the class fills, so a rebind changes no consumer's expectation.

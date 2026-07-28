@@ -477,6 +477,12 @@ type ActionInvoke struct {
 	// the Envelope on the local path (MF-C). The plugin resolves material itself.
 	Credentials          []Credential
 	ExpectOutputContract string // core-pinned output-contract id; "" skips the reconcile
+	// ResolvedCapabilities are the core-resolved handles (ADR-0105) the declaration's
+	// `requires:` asked for — the SAME legible channel the Apply and Plan paths use, and
+	// carried here for the same reason (ADR-0145 D2): a targetless Action that builds
+	// infrastructure needs its state backend and its allocated network exactly as the
+	// Actuator verb does. Nil when the declaration requires nothing.
+	ResolvedCapabilities map[string]CapabilityHandle
 }
 
 // ActionEntity is a GOVERNED, UNPROJECTED provision→configure observation —
@@ -537,9 +543,10 @@ func (h *Host) InvokeRaw(ctx context.Context, req ActionInvoke) (RawInvokeResult
 			Principal: &pluginv1.Principal{Id: req.Principal, Kind: "user"},
 			Creds:     creds,
 		},
-		Args:   &pluginv1.Payload{Bytes: req.Args},
-		Action: req.Action,
-		DryRun: req.DryRun,
+		Args:                 &pluginv1.Payload{Bytes: req.Args},
+		Action:               req.Action,
+		DryRun:               req.DryRun,
+		ResolvedCapabilities: wireCapabilities(req.ResolvedCapabilities),
 	})
 	if err != nil {
 		return out, fmt.Errorf("pluginhost: invoke %q: %w", req.Action, err)
