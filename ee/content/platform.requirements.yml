@@ -1,0 +1,59 @@
+# The PLATFORM FLOOR — the Ansible content every Stratt EE ships (ADR-0117 D3, ANS-012).
+#
+# WHY THIS FILE EXISTS. Until it did, the default EE was built with `EE_CONTENT=""` and shipped
+# ZERO collections — and that was never a decision. It was a build-arg default, so the platform's
+# own content set was an empty string in a Dockerfile rather than something a reader could review,
+# a pin could bound, or a lockfile could hash. Nobody chose zero; zero was what happened.
+#
+# What it cost: `ansible.builtin.package` is a DISPATCHER, not an implementation. apt and yum are
+# in ansible-core; apk, zypper, pacman, pkgng and portage are NOT — they live in community.general.
+# So the shipped apache play installed fine on Debian and failed on Alpine with
+#
+#   Error loading plugin 'community.general.apk': No module named 'ansible_collections.community'
+#   Could not find a matching action for the "apk" package manager
+#
+# naming a collection the play never mentions. Found by RUNNING the content (`task dev:content:proof`),
+# which is the only way it could have been found: every shipped content root under
+# plugins/*/estate/content/ uses `ansible.builtin.*` exclusively, so a static scan for collection
+# FQCNs finds nothing to require and would have pronounced the empty EE adequate. The dependency is
+# created by ansible's own runtime dispatch on the target's distro, and is invisible in the source.
+#
+# THE RULE THIS FILE SETS. The floor carries exactly what the PLATFORM'S OWN shipped content
+# requires — not what an adopter might want. That keeps the promise bounded and checkable against
+# plugins/*/estate/content/ rather than open-ended, and it leaves "content my estate needs" where
+# ADR-0117 D3 already put it: an EE variant selected by an Actuator.
+#
+# EVERY VARIANT IS A SUPERSET OF THIS FILE, enforced by `ee/content.py verify` (so `task ci`) at the
+# same name AND the same version. A variant exists to ADD capability; one that silently subtracted
+# it would be the strictly-weaker-Actuator-that-looks-identical failure ADR-0117 D3a already hit
+# once — a Step selecting the crypto EE for its openssl modules must not thereby lose apk. The
+# duplication that costs is deliberate: `install` refuses two requirements files per image on
+# purpose, because a lockfile records the installed CLOSURE and a closure cannot be attributed to
+# one of several declarations. One image, one declaration, one lockfile — so the floor is repeated
+# rather than composed, and the check is what keeps the copies honest.
+#
+# GPL: community.general is GPL-3.0-or-later, which is the SAME boundary ansible-core already sits
+# on (§3). It ships in the EE image — an ephemeral execution pod that the Go control plane shells
+# out to and never links. No new licensing posture; the existing one, applied to more content.
+#
+# EDITING THIS FILE MEANS RELOCKING IT — and relocking every variant too, since each carries these
+# same entries in its own closure:
+#     task ee:content:lock CONTENT=platform.requirements.yml
+#     task ee:content:lock CONTENT=crypto.requirements.yml
+
+collections:
+  # community.general — the other half of `ansible.builtin.package` and
+  # `ansible.builtin.package_facts`. Both dispatch on the target's package manager, and both fall
+  # outside ansible-core the moment the target is not apt- or yum-based. Without this the platform
+  # cannot install a package on Alpine, SUSE, Arch or FreeBSD at all, which makes "install the
+  # application" a claim that holds only on the distros nobody checked.
+  #
+  # Pinned at the current release (2026-07-13), which requires ansible-core >= 2.18 against the
+  # image's >= 2.19 band (ee/Dockerfile) — evergreen §1.7 wants the current line, and content is
+  # pinned exactly because reproducibility of what a Run executed is what ADR-0117 D3 buys.
+  - name: community.general
+    version: "13.2.0"
+
+# roles: — installed identically and deliberately EMPTY, for the same reason crypto's is: pinning
+# content no shipping Contract demands is inventory to maintain for no consumer.
+roles: []

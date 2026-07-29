@@ -59,8 +59,18 @@ RUN uv pip install --system --no-cache \
 # (PLG-1), and because air-gap is then a seeding problem rather than a runtime one.
 #
 # EE_CONTENT names a Galaxy requirements file under ee/content/ (the real format, which
-# ansible-builder also consumes — §3 compatibility). Empty ⇒ a base EE with no content;
-# the manifest is still written, so "no content" is stated rather than merely absent.
+# ansible-builder also consumes — §3 compatibility). It DEFAULTS to the platform floor
+# (platform.requirements.yml) rather than to the empty string, and that is the ANS-012 fix:
+# an empty default meant the platform's own content set was an unreviewable build arg nobody
+# had chosen, and `ansible.builtin.package` — a dispatcher, not an implementation — could not
+# install anything on a target whose package manager lives outside ansible-core. Empty is still
+# expressible (`--build-arg EE_CONTENT=`) and still writes a manifest, so a contentless image
+# remains available as a DELIBERATE choice rather than as what you get by not deciding.
+#
+# Exactly one file per image: a lockfile records the installed CLOSURE, which cannot be
+# attributed to one of several declarations. So a variant REPEATS the floor instead of
+# composing it, and `ee/content.py verify` fails `task ci` if a variant drops or re-pins a
+# floor entry — a variant adds capability and never subtracts it.
 #
 # Installs into /usr/share/ansible/{collections,roles}, which is on ansible's DEFAULT
 # search path — verified live: ansible-runner adds its own project dirs WITHOUT replacing
@@ -86,7 +96,7 @@ RUN uv pip install --system --no-cache \
 # CI-gated at N-1, whereas CONTENT is pinned exactly because reproducibility of what a Run
 # executed is the property D3 buys. Different properties, different rules — not an
 # oversight.
-ARG EE_CONTENT=""
+ARG EE_CONTENT="platform.requirements.yml"
 ARG EE_LOCK_MODE="verify"
 # EE_OFFLINE (ADR-0124 D2): a subdirectory of ee/content/ holding pre-downloaded collection
 # tarballs. Set it and the install reaches NO registry — the pin check and the lockfile check are

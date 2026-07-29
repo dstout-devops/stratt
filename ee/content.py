@@ -248,6 +248,71 @@ def verify(paths: list[Path]) -> dict[str, list[dict[str, Any]]]:
     return merged
 
 
+# The declaration every Stratt EE ships (ANS-012). See the file's own header for why it exists;
+# the rule it sets is enforced below.
+PLATFORM_FLOOR = "platform.requirements.yml"
+
+
+def verify_platform_floor(paths: list[Path]) -> int:
+    """Assert every EE variant declares at least the platform floor, at the same versions.
+
+    `install` refuses more than one requirements file per image, deliberately: a lockfile records
+    the installed CLOSURE, and a closure cannot be attributed to one of several declarations. So a
+    variant cannot COMPOSE the floor — it must repeat it, and something has to keep the copies
+    honest or the repetition rots into divergence.
+
+    The property being defended is that a variant ADDS capability and never subtracts it. An EE
+    variant exists because a Step needs content the floor lacks; if selecting it also dropped
+    content the floor HAS, the Step would get a strictly weaker environment that looks identical
+    from the estate — the exact failure ADR-0117 D3a already hit once, where a declared ansible
+    variant ran and then had every fact write-back refused because its grant was silently narrower.
+
+    Versions must MATCH, not merely be present. A variant pinning a different community.general
+    makes the floor's guarantee depend on which EE a Step happened to select, which is a fleet with
+    two answers to "can this platform install a package on Alpine" — §2.4's implicit-precedence
+    hazard wearing a supply-chain hat.
+
+    Returns the number of variants checked.
+    """
+    decls = [p for p in paths if p.name.endswith(".requirements.yml")]
+    if not decls:
+        return 0
+    floor_path = decls[0].parent / PLATFORM_FLOOR
+    if not floor_path.exists():
+        raise PinError(
+            f"no platform floor at {floor_path}. Every Stratt EE ships a declared content set; "
+            f"an EE whose content is an empty build arg is the ANS-012 defect — unreviewable, "
+            f"unlockable, and chosen by nobody"
+        )
+    floor = {
+        section: {e["name"]: e["version"] for e in _entries(_load(floor_path), section, floor_path)}
+        for section in ("collections", "roles")
+    }
+    checked = 0
+    for path in decls:
+        if path.resolve() == floor_path.resolve():
+            continue
+        for section, want in floor.items():
+            got = {e["name"]: e["version"] for e in _entries(_load(path), section, path)}
+            for name, version in sorted(want.items()):
+                if name not in got:
+                    raise PinError(
+                        f"{path.name}: {section[:-1]} {name!r} is in the platform floor "
+                        f"({PLATFORM_FLOOR}) but not here. Every EE variant is a SUPERSET of the "
+                        f"floor — a Step that selects this image for what it ADDS must not thereby "
+                        f"lose what every EE guarantees. Add it at version {version!r} and relock"
+                    )
+                if got[name] != version:
+                    raise PinError(
+                        f"{path.name}: {section[:-1]} {name!r} is pinned at {got[name]!r} but the "
+                        f"platform floor ({PLATFORM_FLOOR}) pins {version!r}. The floor is a "
+                        f"guarantee about every EE, so it cannot resolve to different content "
+                        f"depending on which image a Step selected"
+                    )
+        checked += 1
+    return checked
+
+
 def _tree_digest(root: Path) -> str:
     """A deterministic SHA-256 over the CONTENT installed at `root`.
 
@@ -775,9 +840,11 @@ def main() -> int:
             merged = verify(args.files)
             n = len(merged["collections"]), len(merged["roles"])
             locked = check_locks(args.files)
+            variants = verify_platform_floor(args.files)
             print(
                 f"stratt-ee-content: {n[0]} collection(s), {n[1]} role(s) exactly pinned; "
-                f"{locked} locked (hashes are verified by the BUILD, not here)"
+                f"{locked} locked (hashes are verified by the BUILD, not here); "
+                f"{variants} variant(s) carry the platform floor"
             )
         elif args.cmd == "pull":
             return pull(args.files, args.artifacts)

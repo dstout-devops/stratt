@@ -705,6 +705,22 @@ what a reasonable schema would look like.** Nothing short of running `community.
   refuse fact write-back at run time (the D5c failure mode), and because `script`'s `dryRunnable: false` is a
   safety property: flipped, a dry-run Step against an arbitrary script would be _executed_ and reported as a
   preview.
+  ~~(n) **D3 never said what the DEFAULT EE contains, and the answer was "nothing".**~~ — **done, in its
+  own decision: [ADR-0149](0149-the-execution-environment-content-floor.md).** D3 settled how content is
+  declared, pinned, locked and selected, and left the base case unstated — so `EE_CONTENT` defaulted to the
+  empty string and the platform EE shipped zero collections. That is not a small omission:
+  `ansible.builtin.package` is a **dispatcher**, and apk/zypper/pacman/portage live in `community.general`,
+  so the platform could not install a package on Alpine at all. Two things about the finding are worth
+  keeping here rather than only there. First, **no static check could have caught it** — every shipped
+  content root uses `ansible.builtin.*` exclusively, so there is no collection reference to scan for; the
+  dependency is created by ansible's run-time dispatch on the _target's_ distro. It was found by executing
+  content (`task dev:content:proof`), and this ADR's own claim that "the image is the content boundary"
+  hid it, because the boundary was drawn correctly around an empty set. Second, it exposed the corollary
+  D3a's grant bug already taught in another dimension: because a lockfile records the installed **closure**
+  and `install` therefore accepts exactly one declaration per image, a variant cannot _compose_ a base set
+  — so without a rule, selecting `stratt-ee-crypto` for its openssl modules would have silently meant
+  selecting an EE that can no longer install a package on Alpine. ADR-0149 makes the floor a declared,
+  pinned, locked file that `EE_CONTENT` defaults to, and makes every variant a checked superset of it.
 
 ## Alternatives considered
 

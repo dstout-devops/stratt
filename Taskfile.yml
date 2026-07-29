@@ -973,10 +973,13 @@ tasks:
     # (ADR-0148). The falsification is the point: each node is asserted to start WITHOUT its
     # package, so a green run means the remediation installed it rather than the image having.
     #
-    # IT CURRENTLY FAILS ON APACHE, and that is a finding rather than a broken test: the default
-    # stratt-ee image is built with no EE_CONTENT, so it ships ZERO collections —
-    # `ansible.builtin.package` dispatches to community.general.apk on Alpine and finds nothing.
-    # See ANS-012 in docs/enterprise-readiness.md.
+    # Its first run found ANS-012 (now closed): the default EE shipped ZERO collections, so
+    # `ansible.builtin.package` dispatched to community.general.apk on Alpine and found nothing.
+    # The floor that fixed it is ee/content/platform.requirements.yml. Point this at another EE
+    # with STRATT_LIVE_EE_IMAGE — rebuilding with `--build-arg EE_CONTENT=` reproduces the
+    # original failure exactly, which is how the fix was falsified.
+    #
+    # Needs `task dev:ee:build` first (or any current stratt-ee:dev).
     desc: Live-prove the apache/tomcat content against real bare nodes (ADR-0148)
     dir: plugins/ansible
     env:
@@ -1852,7 +1855,7 @@ tasks:
       - go run sigs.k8s.io/kind@v{{.KIND_VER}} load docker-image stratt-ee:dev --name {{.KIND_CLUSTER}}
 
   ee:content:check:
-    desc: Fail if any EE ansible-content declaration is unpinned or unlocked (ADR-0117 D3, follow-up i)
+    desc: Fail if any EE content declaration is unpinned, unlocked, or drops the platform floor (ADR-0117 D3/i, ANS-012)
     cmds:
       # The SAME implementation the EE build runs (ee/content.py), so CI and the image
       # cannot disagree about what "pinned" means. uv supplies pyyaml without adding a

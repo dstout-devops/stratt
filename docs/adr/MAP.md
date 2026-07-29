@@ -10,7 +10,7 @@ design must reconcile with. Chronological list: [README.md](README.md); phase vi
 
 ```mermaid
 graph TD
-  actuators["actuators<br/><small>0016 0022 0050 0053 0092 0117<br/>0124 0126 0133 0134 0135</small>"]
+  actuators["actuators<br/><small>0016 0022 0050 0053 0092 0117<br/>0124 0126 0133 0134 0135 0149</small>"]
   api_surface["api-surface<br/><small>0006 0021 0026 0076 0091 0121</small>"]
   audit_telemetry["audit-telemetry<br/><small>0034 0065 0077 0121</small>"]
   authz_identity["authz-identity<br/><small>0009 0028 0035 0079 0101 0122<br/>0130</small>"]
@@ -24,11 +24,11 @@ graph TD
   graph_model["graph-model<br/><small>0015 0017 0041 0042 0059 0060<br/>0079 0080 0081 0082 0084 0085<br/>0096 0114 0115 0119 0120 0123<br/>0126 0127 0128 0129 0130 0132<br/>0133 0143 0144 0147</small>"]
   intent_compiler["intent-compiler<br/><small>0023 0030 0036 0055 0058 0083<br/>0085 0114 0118 0119 0123</small>"]
   orchestration["orchestration<br/><small>0010 0011 0018 0027 0031 0063<br/>0118 0122 0125 0134 0139 0140</small>"]
-  plugin_port["plugin-port<br/><small>0046 0047 0048 0049 0051 0053<br/>0054 0103 0117 0121 0124 0125<br/>0127 0131 0137 0138 0140 0141<br/>0145</small>"]
+  plugin_port["plugin-port<br/><small>0046 0047 0048 0049 0051 0053<br/>0054 0103 0117 0121 0124 0125<br/>0127 0131 0137 0138 0140 0141<br/>0145 0149</small>"]
   policy_governance["policy-governance<br/><small>0061 0062 0063 0064 0065 0066<br/>0067 0068 0069 0070 0071 0072<br/>0073 0074 0075 0076 0122</small>"]
   provisioning["provisioning<br/><small>0017 0058 0095 0096 0107 0110<br/>0111 0112 0113 0114 0115 0120<br/>0123 0143 0144 0145 0146 0147</small>"]
   state_artifacts["state-artifacts<br/><small>0016 0029 0093 0097 0105 0112<br/>0145</small>"]
-  substrate_ops["substrate-ops<br/><small>0013 0032 0040 0044 0045 0049<br/>0077 0078 0093 0101 0102 0124<br/>0131 0142</small>"]
+  substrate_ops["substrate-ops<br/><small>0013 0032 0040 0044 0045 0049<br/>0077 0078 0093 0101 0102 0124<br/>0131 0142 0149</small>"]
   ui["ui<br/><small>0003 0012 0020 0024 0090 0091<br/>0116 0121</small>"]
 
   actuators --> plugin_port
@@ -95,6 +95,7 @@ Actuators — execution engines (opentofu, helm, mcp, cert-issuer reconcile).
 - [ADR-0133](0133-execution-environments-and-instance-groups.md) — An AWX execution environment is a supply-chain fact; an instance group is a placement model we already have
 - [ADR-0134](0134-tool-content-lives-beside-the-estate.md) — A playbook is a playbook: tool content lives beside the estate, not inside a declaration
 - [ADR-0135](0135-a-plugin-ships-examples-not-declarations.md) — A plugin ships examples and conformance, never declarations; and remediation binds to a capability, not a name
+- [ADR-0149](0149-the-execution-environment-content-floor.md) — The execution environment carries a content floor, and every variant is a superset
 
 ### api-surface
 
@@ -377,6 +378,7 @@ Sovereign plugin port — the dark-matter substrate, transports, runtime registr
 - [ADR-0140](0140-a-capability-is-invoked-not-named.md) — A capability is invoked, not named: the mapping is declared, never minted
 - [ADR-0141](0141-the-plugin-sdk-is-go-the-port-is-the-contract.md) — The plugin SDK is Go; the PORT is the contract, not a language
 - [ADR-0145](0145-the-actuator-builder-step-form.md) — The build-Step form for a workspace-scoped Actuator: capability injection reaches the Action seam, and the network leg goes live
+- [ADR-0149](0149-the-execution-environment-content-floor.md) — The execution environment carries a content floor, and every variant is a superset
 
 ### policy-governance
 
@@ -461,6 +463,7 @@ Substrate & ops — HA/DR, Cells/multi-region, Sites, deploy, bootstrap, upgrade
 - [ADR-0124](0124-ee-content-supply-factory-and-offline-source.md) — EE content supply: an `execution-environment.yml` front door, and an offline source that is verified the same way
 - [ADR-0131](0131-controller-poll-cost-budget.md) — A poll-cost budget for the AAP Controller half: tiered cadence, and a partial read degrades instead of failing
 - [ADR-0142](0142-environments-are-declared-not-just-referenced.md) — An environment is declared, not just referenced; and it is not a Cell, a Site, or a coordinate
+- [ADR-0149](0149-the-execution-environment-content-floor.md) — The execution environment carries a content floor, and every variant is a superset
 
 ### ui
 
@@ -628,3 +631,4 @@ UI — React shell, schema-driven rendering, Views, descent, the first-party cli
 | [0145](0145-the-actuator-builder-step-form.md) | capability-framework, plugin-port, provisioning, state-artifacts |
 | [0146](0146-the-coordinate-is-load-bearing-or-refused.md) | capability-framework, connectors, estate-as-code, provisioning |
 | [0147](0147-placement-resolves-to-a-provider-native-identity.md) | estate-as-code, graph-model, provisioning |
+| [0149](0149-the-execution-environment-content-floor.md) | actuators, plugin-port, substrate-ops |

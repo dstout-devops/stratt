@@ -47,6 +47,8 @@ func TestLiveContentInstallsAndObservesBack(t *testing.T) {
 	_ = exec.Command("docker", "network", "create", net).Run()
 	t.Cleanup(func() { _ = exec.Command("docker", "network", "rm", net).Run() })
 
+	key := stageKey(t, filepath.Join(keyDir, "id_ed25519"))
+
 	for _, tc := range []struct {
 		app       string        // the estate's package name — what the Intent says
 		image     string        // the bare node, deliberately WITHOUT the package
@@ -107,7 +109,7 @@ func TestLiveContentInstallsAndObservesBack(t *testing.T) {
 			t.Logf("baseline: %s is absent on %s", tc.pkg, tc.image)
 
 			// ── THE SHIPPED PLAY, RUN VERBATIM ──────────────────────────────────────────
-			out := runPlay(t, repo, keyDir, net, node, tc.playbook, tc.extra)
+			out := runPlay(t, repo, key, net, node, tc.playbook, tc.extra)
 
 			// ── The package is now there, because the play put it there ─────────────────
 			if !installed(t, node, tc.pkg) {
@@ -168,18 +170,50 @@ func installed(t *testing.T, node, pkg string) bool {
 	return err == nil
 }
 
+func eeImage() string {
+	if img := os.Getenv("STRATT_LIVE_EE_IMAGE"); img != "" {
+		return img
+	}
+	return "stratt-ee:dev"
+}
+
+// stageKey copies the dev private key somewhere it can hold 0600.
+//
+// The repo lives on a mount that reports 0777 for every file and cannot be chmod-ed, and OpenSSH
+// refuses a world-readable private key outright ("Permissions 0777 for '/key' are too open ... This
+// private key will be ignored"), which then surfaces as `Permission denied (publickey)` — an
+// authentication error for what is really a file-mode problem. Staging it into a normal filesystem
+// keeps the proof about the CONTENT rather than about where the checkout happens to sit.
+func stageKey(t *testing.T, src string) string {
+	t.Helper()
+	raw, err := os.ReadFile(src)
+	if err != nil {
+		t.Fatalf("reading the dev key: %v", err)
+	}
+	// The EE runs as uid 1000 and so does this test's user, so 0600 is readable in the container.
+	dst := filepath.Join(t.TempDir(), "id_ed25519")
+	if err := os.WriteFile(dst, raw, 0o600); err != nil {
+		t.Fatalf("staging the dev key: %v", err)
+	}
+	return dst
+}
+
 // runPlay executes the shipped playbook out of the repo's content root, through the real EE image,
 // against the node container — the same play, the same variables the Workflow declares, no fixture.
-func runPlay(t *testing.T, repo, keyDir, net, node, playbook string, extra []string) string {
+func runPlay(t *testing.T, repo, key, net, node, playbook string, extra []string) string {
 	t.Helper()
 	args := []string{
 		"run", "--rm", "--network", net,
 		"-v", filepath.Join(repo, "plugins", "ansible", "estate") + ":/project:ro",
-		"-v", filepath.Join(keyDir, "id_ed25519") + ":/key:ro",
+		"-v", key + ":/key:ro",
 		"-e", "ANSIBLE_HOST_KEY_CHECKING=False",
 		"-e", "ANSIBLE_STDOUT_CALLBACK=default",
 		"--entrypoint", "ansible-playbook",
-		"stratt-ee:dev",
+		// Overridable so the SAME proof can be pointed at another EE — which is how the platform
+		// floor was falsified: rebuilt with `--build-arg EE_CONTENT=` and re-run, apache fails on
+		// Alpine again with the community.general.apk dispatch error, so the floor is demonstrably
+		// what fixed it. It is also the honest way for an operator to check their own variant.
+		eeImage(),
 		"-i", node + ",",
 		"-u", "root", "--private-key", "/key",
 		"/project/" + playbook,
