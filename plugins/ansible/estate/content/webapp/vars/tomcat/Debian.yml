@@ -18,3 +18,10 @@ svc_pkg: tomcat10
 tomcat_home: /usr/share/tomcat10
 tomcat_base: /var/lib/tomcat10
 tomcat_conf_dir: /etc/tomcat10
+# THE START COMMAND IS A PER-FAMILY FACT TOO, not just the paths — which is what executing RedHat
+# proved. Debian ships upstream's catalina.sh and takes CATALINA_HOME/BASE from the environment;
+# RHEL ships no catalina.sh at all. A play that hard-codes `catalina.sh` is not a play whose paths
+# happen to be Debian's, it is a play that only works on Debian.
+tomcat_start: >-
+  CATALINA_HOME={{ tomcat_home }} CATALINA_BASE={{ tomcat_base }}
+  {{ tomcat_home }}/bin/catalina.sh start

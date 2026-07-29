@@ -130,6 +130,21 @@ func TestLiveContentInstallsAndObservesBack(t *testing.T) {
 			port:  "8080",
 			wait:  180 * time.Second,
 		},
+		{
+			// The last unexecuted layout in the matrix. It closes the gap vars/tomcat/RedHat.yml
+			// declared about itself, and it is a genuinely different distribution rather than a
+			// second copy of Debian's: RHEL's `tomcat` is Tomcat 9 where Debian's `tomcat10` is
+			// Tomcat 10, and it keeps CATALINA_HOME and CATALINA_BASE as ONE directory where Debian
+			// splits them. The Intent says `package: tomcat` for both and knows neither.
+			name:      "tomcat/RedHat",
+			image:     "rockylinux/rockylinux:9",
+			bootstrap: bootRocky,
+			pkg:       "tomcat",
+			playbook:  "content/webapp/tomcat-configure.yml",
+			extra:     []string{"tomcat_port=8080"},
+			port:      "8080",
+			wait:      180 * time.Second,
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			node := "stratt-proof-" + strings.NewReplacer("/", "-").Replace(tc.name)

@@ -2,14 +2,25 @@
 # Tomcat's layout on RHEL/Rocky/Fedora (ansible_os_family == "RedHat"). Loaded by
 # tomcat-configure.yml via the stratt_web_service role's prepare tasks.
 #
-# UNEXECUTED, and labelled as such. `task dev:content:proof` runs tomcat on Debian only, so this is
-# the layout RHEL's `tomcat` package documents rather than one that has been observed converging.
-# Apache's three families are all executed; this is the one gap left in the matrix, and it is one
-# vars file plus one node away from closing. Adding the node is the fix, not deleting this comment.
+# EXECUTED against rockylinux:9 by `task dev:content:proof`. This file previously said it was
+# UNEXECUTED and documented-only, and running it proved the documentation wrong in the way that
+# matters most: RHEL's `tomcat` package ships NO catalina.sh. /usr/share/tomcat/bin holds three jars
+# and nothing else; the service is started by /usr/libexec/tomcat/server, a shell wrapper RHEL's
+# systemd unit calls. So the tomcat play was not "Debian's paths with a RedHat variant" — its whole
+# START MECHANISM was Debian's, and no amount of path-fixing would have made this family work. The
+# only thing that could find that was executing it, which is why the matrix entry is the fix and the
+# comment claiming this was fine never could have been.
+#
+# It is also a different Tomcat: RHEL's `tomcat` is Tomcat 9 where Debian's `tomcat10` is Tomcat 10.
+# The Intent says `package: tomcat` for both and knows neither.
 #
 # RHEL keeps HOME and BASE as ONE directory (with conf/ symlinked to /etc/tomcat), unlike Debian's
-# split — which is precisely why the play reads both from here rather than deriving one from the other.
+# split — which is why the play reads both from here rather than deriving one from the other.
 svc_pkg: tomcat
 tomcat_home: /usr/share/tomcat
 tomcat_base: /usr/share/tomcat
 tomcat_conf_dir: /etc/tomcat
+# It also runs in the FOREGROUND, because RHEL's systemd unit is Type=simple — where Debian's
+# catalina.sh daemonizes and returns. The play detaches the command for that reason; measured, after
+# a run that hung for the full 12-minute test timeout on `nohup … start` with no `&`.
+tomcat_start: /usr/libexec/tomcat/server start
