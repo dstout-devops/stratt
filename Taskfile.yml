@@ -968,6 +968,23 @@ tasks:
       - docker compose -f {{.ROOT_DIR}}/deploy/dev/docker-compose.yml up -d --wait floci
       - go test ./ -run LivePlacement -v -count=1 -timeout 5m
 
+  dev:content:proof:
+    # Runs the SHIPPED apache/tomcat plays against REAL bare nodes through the REAL EE image
+    # (ADR-0148). The falsification is the point: each node is asserted to start WITHOUT its
+    # package, so a green run means the remediation installed it rather than the image having.
+    #
+    # IT CURRENTLY FAILS ON APACHE, and that is a finding rather than a broken test: the default
+    # stratt-ee image is built with no EE_CONTENT, so it ships ZERO collections —
+    # `ansible.builtin.package` dispatches to community.general.apk on Alpine and finds nothing.
+    # See ANS-012 in docs/enterprise-readiness.md.
+    desc: Live-prove the apache/tomcat content against real bare nodes (ADR-0148)
+    dir: plugins/ansible
+    env:
+      STRATT_LIVE_CONTENT: "1"
+      STRATT_LIVE_KEYDIR: "{{.ROOT_DIR}}/deploy/dev/managed-web"
+    cmds:
+      - go test ./ -run LiveContent -v -count=1 -timeout 15m
+
   dev:tofu:proof:
     # The live proof the network leg never had (ADR-0145): a REAL tofu applying the SHIPPED
     # aws-network module against the REAL floci EC2 API with REAL S3 state, through the
