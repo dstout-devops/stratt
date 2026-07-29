@@ -1,0 +1,74 @@
+---
+# Converge Tomcat on a host: INSTALL it, set the connector port, start it, read both facts back.
+#
+# The remediation half of the drift loop for the `tomcat` Blueprint (ADR-0148). Deliberately the
+# SAME SHAPE as apache-configure.yml — install → configure → start → observe back — because that
+# repetition is the evidence for the shared-role factoring, not an argument against it. Two
+# instances show which parts are genuinely common; one instance plus an intuition produces an
+# abstraction fitted to a single case.
+#
+# WHAT IS NOT SHARED, and why a merged play would have been wrong: Tomcat is a JVM service with an
+# XML connector, a package named tomcat10 on Debian and tomcat on RHEL, and a service unit rather
+# than an `httpd -k start`. Apache is none of those. The install/observe SKELETON is common; the
+# middle is not.
+- name: Converge tomcat
+  hosts: all
+  gather_facts: true
+  tasks:
+    # Distro-resolved by ansible, never by Stratt: tomcat10 on Debian, tomcat on RHEL. The Intent
+    # says `package: tomcat` and nothing else — a per-distro map there would make core learn distro
+    # packaging (§1.1/§9) and is the env-keyed-values shape ADR-0118 D1 refuses, one axis over.
+    - name: Install the servlet container (distro-resolved)
+      ansible.builtin.package:
+        name: "{{ 'tomcat' if ansible_os_family == 'RedHat' else 'tomcat10' }}"
+        state: present
+      vars:
+        ansible_python_interpreter: /usr/bin/python3
+
+    - name: Set the desired connector port (idempotent — changed once, ok on re-run)
+      ansible.builtin.replace:
+        path: "{{ tomcat_conf_dir }}/server.xml"
+        regexp: '(<Connector\s+port=")\d+(")'
+        replace: '\g<1>{{ tomcat_port }}\g<2>'
+
+    # A real converge, not just a file. Tomcat is started directly rather than through systemd:
+    # this node is a container with no init, which is the ordinary shape of a dev fixture and
+    # exactly why the play must not assume one.
+    - name: Start tomcat so the port takes effect
+      ansible.builtin.shell: |
+        pkill -f org.apache.catalina.startup.Bootstrap 2>/dev/null || true
+        CATALINA_HOME={{ tomcat_home }} CATALINA_BASE={{ tomcat_home }} \
+          nohup {{ tomcat_home }}/bin/catalina.sh start >/dev/null 2>&1 || true
+      register: started
+      changed_when: false
+      failed_when: false
+
+    # ── OBSERVE BACK ────────────────────────────────────────────────────────────────────────
+    # The converge is finished when the desired state is READ BACK, not when the file is written.
+    # Without this the drift Finding could never resolve, and a play that wrote the right XML to a
+    # dead service would report success (§1.8).
+    - name: OBSERVE the effective connector port from the running config
+      ansible.builtin.shell: "grep -oE '<Connector +port=\"[0-9]+\"' {{ tomcat_conf_dir }}/server.xml | grep -oE '[0-9]+' | head -1"
+      register: observed_port
+      changed_when: false
+
+    - name: OBSERVE the installed package + version
+      ansible.builtin.package_facts:
+        manager: auto
+
+    - name: Report the observed facts to Stratt (fact-back → the Finding resolves)
+      vars:
+        pkg: "{{ 'tomcat' if ansible_os_family == 'RedHat' else 'tomcat10' }}"
+      ansible.builtin.set_fact:
+        stratt_facets:
+          app.config:
+            port: "{{ observed_port.stdout }}"
+          # The same {name, version, origin, deliveryForm} component shape apache reports and that
+          # software.container / software.chart carry (ADR-0080) — so ONE form-agnostic advisory
+          # pass covers a Tomcat installed here exactly as it covers a chart.
+          software.package:
+            packages:
+              - name: "{{ pkg }}"
+                version: "{{ ansible_facts.packages[pkg][0].version | default('unknown') }}"
+                origin: distro
+                deliveryForm: package

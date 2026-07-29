@@ -1276,6 +1276,20 @@ tasks:
       - "{{.KUBECTL}} --context {{.KIND_CONTEXT}} apply -f {{.ROOT_DIR}}/deploy/dev/managed-app.yaml"
       - "{{.KUBECTL}} --context {{.KIND_CONTEXT}} -n stratt rollout status deploy/managed-app --timeout=120s"
 
+  dev:managed-tomcat:up:
+    # The bare DEBIAN node the tomcat Blueprint converges (ADR-0148). Debian rather than alpine on
+    # purpose: with managed-app on apk and this on apt, the claim that distro naming belongs to
+    # content is exercised against two package managers instead of asserted against one.
+    desc: Deploy the BARE debian node the tomcat Blueprint installs onto (ADR-0148, idempotent)
+    deps: [tools:kubectl, dev:machine-key]
+    vars:
+      KEYDIR: "{{.ROOT_DIR}}/deploy/dev/managed-web"
+    cmds:
+      - go run sigs.k8s.io/kind@v{{.KIND_VER}} export kubeconfig --name {{.KIND_CLUSTER}}
+      - "{{.KUBECTL}} --context {{.KIND_CONTEXT}} -n stratt create secret generic managed-web-authorized-keys --from-file=authorized_keys={{.KEYDIR}}/id_ed25519.pub --dry-run=client -o yaml | {{.KUBECTL}} --context {{.KIND_CONTEXT}} apply -f -"
+      - "{{.KUBECTL}} --context {{.KIND_CONTEXT}} apply -f {{.ROOT_DIR}}/deploy/dev/managed-tomcat.yaml"
+      - "{{.KUBECTL}} --context {{.KIND_CONTEXT}} -n stratt rollout status deploy/managed-tomcat --timeout=180s"
+
   dev:crossplane:
     desc: Install REAL Crossplane + provider-kubernetes into kind for the topology build loop (ADR-0059, idempotent)
     deps: [tools:helm, tools:kubectl]

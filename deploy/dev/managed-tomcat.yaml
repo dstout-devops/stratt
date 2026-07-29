@@ -1,0 +1,63 @@
+# managed-tomcat — a REAL sshd node for the Tomcat convergence proof (ADR-0148).
+#
+# DEBIAN, not Alpine, and that is the proof rather than a preference. managed-app is alpine/apk;
+# this is debian/apt. The same Intent shape converges both, and the ONLY thing that knows the
+# difference is the play's `ansible.builtin.package` plus ansible's own facts — never the Intent,
+# never core. A claim that "the distro difference belongs to content" is worth exactly as much as
+# the number of distros it has actually been run against, which until now was one.
+#
+# Bare on purpose, like managed-app: openssh and python3, no Tomcat. The package is absent until a
+# remediation installs it.
+#
+# ONE APPLICATION PER NODE, and this is a real modelling limit rather than tidiness: app.config is
+# a CLOSED {port} facet with no application dimension, and a route's claim is per-NAMESPACE, so two
+# Blueprints converging one host's app.config is the §2.4 double-claim. Apache-in-front-of-Tomcat on
+# one box — the canonical Java stack — is therefore not expressible today. See ADR-0148's follow-up.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: managed-tomcat
+  namespace: stratt
+  labels: { app: managed-tomcat }
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: managed-tomcat }
+  template:
+    metadata:
+      labels: { app: managed-tomcat }
+    spec:
+      containers:
+        - name: node
+          image: debian:12-slim
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -e
+              export DEBIAN_FRONTEND=noninteractive
+              apt-get update -qq >/dev/null 2>&1
+              apt-get install -y -qq openssh-server python3 >/dev/null 2>&1
+              mkdir -p /run/sshd /root/.ssh
+              cp /authorized_keys/authorized_keys /root/.ssh/authorized_keys
+              chmod 700 /root/.ssh && chmod 600 /root/.ssh/authorized_keys
+              sed -i 's/^#*PermitRootLogin.*/PermitRootLogin prohibit-password/' /etc/ssh/sshd_config
+              exec /usr/sbin/sshd -D -e
+          ports:
+            - { containerPort: 22, name: ssh }
+            - { containerPort: 8080, name: http }
+          volumeMounts:
+            - { name: authkeys, mountPath: /authorized_keys, readOnly: true }
+      volumes:
+        - name: authkeys
+          secret: { secretName: managed-web-authorized-keys }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: managed-tomcat
+  namespace: stratt
+spec:
+  selector: { app: managed-tomcat }
+  ports:
+    - { name: ssh, port: 22, targetPort: 22 }
+    - { name: http, port: 8080, targetPort: 8080 }

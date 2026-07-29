@@ -1,0 +1,7 @@
+# managed-tomcat — the View the tomcat Blueprint converges. Its own, because app.config is claimed
+# EXCLUSIVELY and two Blueprints over one Entity's app.config is the §2.4 double-claim.
+name: managed-tomcat
+selector:
+  kinds: [host]
+  labels:
+    demo: managed-tomcat

@@ -1,0 +1,24 @@
+# ansible-tomcat — the Actuator that converges Tomcat on a host (ADR-0148).
+#
+# A CONTENT actuator with no `provides:`, the same shape as ansible-apache and ansible-fileset.
+# Declaring `configmgmt` would give Intent/Application a THIRD provider of that class and make every
+# capability-routed remediation ambiguous and fail closed (§2.4). The Blueprint names its Workflow
+# directly, which is the documented answer when the estate has decided — and per application it has.
+#
+# ITS OWN CONTENT ROOT, beside apache's rather than merged with it. The per-project facetNamespaces
+# ceiling IS the least-authority property (ADR-0054/0117 D3a): merging two applications into one
+# root merges their write ceilings. When the shared install/observe skeleton is factored out it
+# should become a ROLE these roots each include — sharing the tasks while keeping the ceilings
+# separate. The cleaner-looking option (one root) is the weaker one.
+name: ansible-tomcat
+pluginIdentity: ansible
+tier: trusted
+dryRunnable: true
+jobCommand: [stratt-ansible]
+contentDir: content/tomcat
+contentInputs: [playbook]
+facetNamespaces:
+  - app.config
+  - software.package
+identitySchemes: [host.name]
+elevatedInputs: [become.enabled]

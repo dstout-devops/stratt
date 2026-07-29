@@ -1,0 +1,11 @@
+# tomcat-tier — Intent/Application (ADR-0055 "5-line simplest form"). The SECOND application, and
+# the point of it: this document is the same shape as apache-tier.yaml, differing only in the value
+# an operator actually cares about.
+#
+# It names no package manager, no CATALINA_HOME, no service unit and no distro. `package: tomcat`
+# is the whole statement of what is wanted; the Blueprint supplies the defaults and the content
+# resolves tomcat10-on-Debian vs tomcat-on-RHEL from ansible's own facts.
+name: tomcat-tier
+kind: Intent/Application
+spec:
+  package: tomcat

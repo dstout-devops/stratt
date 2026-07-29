@@ -1,0 +1,15 @@
+# managed-tomcat — the REAL managed node the tomcat Blueprint converges (ADR-0148).
+#
+# A DEBIAN sibling of the alpine managed-app, deliberately: the two together are what make the
+# "distro naming belongs to content" claim mean something. apache2 comes from apk on one and
+# tomcat10 from apt on the other, and neither Intent mentions a package manager.
+#
+# Its own label, its own View — one application per node, because app.config is a closed {port}
+# facet with no application dimension and a claim is per-namespace (ADR-0148 follow-up).
+#
+# The literal `address:` is the same documented exception managed-web and managed-app record: a
+# Kubernetes Service name the cluster's own DNS owns (ADDR-1, ADR-0144).
+hosts:
+  - fqdn: managed-tomcat-1.stratt.test
+    labels: { os: linux, demo: managed-tomcat }
+    address: managed-tomcat.stratt.svc.cluster.local
