@@ -1,4 +1,4 @@
-# web-server-configure — the web-server materialization/remediation Workflow. Surfaced
+# nginx-configure — the web-server Blueprint's materialization/remediation Workflow. Surfaced
 # as a ref on the drift Finding, never auto-launched (§5 Flow 2). The PLUGIN (ansible)
 # materializes the state; the Blueprint route NAMED it, core did not (ADR-0083). This is
 # the ADR-0084 CONVERGENCE path: a REAL ansible run over SSH to the managed-web node —
@@ -6,7 +6,7 @@
 # a real connection), not a local no-op. It converges the listen port, READS IT BACK,
 # and reports the observed app.config via the stratt_facets fact-back so the drift
 # Finding RESOLVES once observed == desired.
-name: web-server-configure
+name: nginx-configure
 # THE DESIRED PORT ARRIVES FROM THE ROUTE, and until now it did not (ADR-0148 D1).
 #
 # It was the literal "8080" below — the Blueprint's default, restated here. The expectation is
@@ -27,9 +27,9 @@ name: web-server-configure
 inputs:
   type: object
   additionalProperties: false
-  required: [web_server_port]
+  required: [nginx_port]
   properties:
-    web_server_port:
+    nginx_port:
       type: string
       minLength: 1
       description: >
@@ -42,12 +42,13 @@ steps:
     # The dedicated real-node View (ADR-0084 fixture). ansible_host is rendered by the
     # shim from each target's mgmt.address — the core never authored it (§1.4).
     viewName: managed-web
-    actuator: ansible-platform-baseline
+    actuator: ansible-nginx
     # The machine credential (SSH key) — mounted at spawn, use-checked against the
     # launching Principal (§2.5). The AWX Machine-Credential half of the split.
     credentialRefs: [web-machine]
-    # The remediation may write back ONLY app.config (ADR-0054) — the observed port.
-    facetWriteScope: [app.config]
+    # The remediation may write back only what it OBSERVES (ADR-0054): the effective port and
+    # the installed package. Intersected with the Actuator's own ceiling.
+    facetWriteScope: [app.config, software.package]
     params:
       # HOW to reach the targets (ADR-0126 D1). This is the REFERENCE estate, so it is
       # what an operator copies — which is exactly why it no longer teaches
@@ -65,11 +66,11 @@ steps:
         # the target (alpine + python3) each resolve their own.
         # The desired listen port, from the LAUNCH — never a literal. Restating the Blueprint's
         # default here is what made an overriding fleet detect one value and converge another.
-        web_server_port: "{{.launch.web_server_port}}"
+        nginx_port: "{{.launch.nginx_port}}"
       # The play is a PLAYBOOK now (ADR-0134), in the project this Step's Actuator declares:
       # estate/ansible/projects/platform-baseline/web-server-configure.yml. What is left here
       # is what this file was always for — WHAT runs, WHERE, and with WHICH inputs — and the
       # two languages no longer share a file. The extraVars mapping above stays, because it is
       # the declared translation from Stratt inputs to Ansible variable names; core never reads
       # the play to infer it (ADR-0117 D6).
-      playbook: web-server-configure.yml
+      playbook: nginx-configure.yml

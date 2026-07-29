@@ -77,4 +77,4 @@ routes:
     # cross-check runs, so everything downstream sees a plain remediationWorkflow. Naming a class
     # and parameterizing the converge are not alternatives.
     remediationParams:
-      web_server_port: "{{.spec.port}}"
+      nginx_port: "{{.spec.port}}"

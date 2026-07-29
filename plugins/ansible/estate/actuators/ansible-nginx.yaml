@@ -1,0 +1,36 @@
+# ansible-nginx — the Actuator that converges nginx on a host.
+#
+# It carries `provides: [configmgmt]` where ansible-apache and ansible-tomcat do not, and the
+# asymmetry is deliberate rather than an oversight — it is the estate keeping ONE live consumer of
+# the capability-routed remediation path (ADR-0135 D3 / ADR-0138 D5). That path broke every real
+# floor once and was fixed; the only thing that catches a regression in it is an estate that
+# actually uses it, and `task dev:connector-e2e` is the gate that does. Moving all three apps to
+# named Workflows would have left the mechanism correct, tested by fakes, and unexercised.
+#
+# EXACTLY ONE configmgmt provider for Intent/Application, which is what keeps the route resolvable:
+# ansible-platform-baseline gave up its `remediates: {Application: …}` (and with it its `provides`,
+# since a class with no mechanism behind it is refused as an assertion with nothing under it) when
+# this project took the app-config concern. A second provider would make every capability route for
+# the kind AMBIGUOUS and fail closed (§2.4).
+#
+# THE TENSION, STATED: `configmgmt for Intent/Application` resolving to a provider means the CLASS
+# answers "how do I converge an application", and it cannot — each project converges exactly one
+# app, so the answer is really "nginx's". That was fine when nginx was the only app. What makes it
+# safe now is the `delivers:` agreement check (ADR-0148 D2): binding a tomcat Intent to the
+# nginx-delivering Blueprint is refused at load. See ADR-0148 for why the capability form still
+# earns its place here and where its limit is.
+name: ansible-nginx
+pluginIdentity: ansible
+tier: trusted
+dryRunnable: true
+jobCommand: [stratt-ansible]
+contentDir: content/nginx
+contentInputs: [playbook]
+provides: [configmgmt]
+remediates:
+  Application: nginx-configure
+facetNamespaces:
+  - app.config
+  - software.package
+identitySchemes: [host.name]
+elevatedInputs: [become.enabled]
