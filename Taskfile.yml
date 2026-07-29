@@ -980,7 +980,11 @@ tasks:
     # original failure exactly, which is how the fix was falsified.
     #
     # Needs `task dev:ee:build` first (or any current stratt-ee:dev).
-    desc: Live-prove the apache/tomcat content against real bare nodes (ADR-0148)
+    # Four nodes: apache on Alpine/Debian/RedHat and tomcat on Debian, each asserted bare first and
+    # each probed OUT-OF-BAND from a third container after the converge (ANS-014). Reading only the
+    # play's own report would be taking its word for it, which is how a Tomcat that never started
+    # once reported a converged port.
+    desc: Live-prove the apache/tomcat content against real bare nodes, three distro families (ADR-0148)
     dir: plugins/ansible
     env:
       STRATT_LIVE_CONTENT: "1"

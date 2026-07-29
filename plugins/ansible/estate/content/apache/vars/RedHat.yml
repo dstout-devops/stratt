@@ -1,0 +1,11 @@
+---
+# Apache's layout on RHEL/Rocky/Fedora (ansible_os_family == "RedHat"). Loaded by apache-configure.yml.
+#
+# The third layout, and the branch that had NEVER been executed: `'httpd' if RedHat else 'apache2'`
+# shipped for two ADRs against Alpine only. Here the package, the binary and the tree all differ —
+# /etc/httpd rather than /etc/apache2, with the stock `Listen 80` in conf/httpd.conf.
+apache_pkg: httpd
+apache_ctl: httpd
+apache_conf_dir: /etc/httpd/conf.d
+apache_listen_conf: /etc/httpd/conf/httpd.conf
+apache_docroot: /var/www/html

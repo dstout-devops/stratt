@@ -26,8 +26,17 @@ import (
 // got bare nodes.
 //
 // It also covers the claim that carries the most weight and had been run against exactly one
-// distro: that `httpd`-vs-`apache2`-vs-`tomcat10` belongs to CONTENT and never to the Intent.
-// apache goes onto alpine/apk, tomcat onto debian/apt, from Intents that name no package manager.
+// distro: that `httpd`-vs-`apache2`-vs-`tomcat10`, and every path those packages live at, belongs to
+// CONTENT and never to the Intent. apache now runs against all THREE families it claims — Alpine,
+// Debian and RedHat — from one Intent that names no package manager and no path. One family was not
+// a matrix; it could not distinguish a distro-agnostic play from a distro-specific one, and the two
+// families that had never run were both broken (ANS-014).
+//
+// AND IT PROBES FROM OUTSIDE THE PLAY. `servesHTTP` connects from a third container that shares no
+// code, no filesystem and no variables with the converge. Reading only the play's own report would
+// still be taking its word for it — which is how a Tomcat that never started once reported a
+// converged port, and how apache reported success on two families where it was writing config into
+// directories nothing reads.
 //
 // Run: `task dev:content:proof`.
 func TestLiveContentInstallsAndObservesBack(t *testing.T) {
@@ -49,48 +58,81 @@ func TestLiveContentInstallsAndObservesBack(t *testing.T) {
 
 	key := stageKey(t, filepath.Join(keyDir, "id_ed25519"))
 
+	// Bootstraps install sshd and python3 and NOTHING ELSE — never the application under test.
+	const (
+		sshCommon = "mkdir -p /run/sshd /root/.ssh && cp /authorized_keys /root/.ssh/authorized_keys && " +
+			"chmod 700 /root/.ssh && chmod 600 /root/.ssh/authorized_keys && " +
+			"sed -i 's/^#*PermitRootLogin.*/PermitRootLogin prohibit-password/' /etc/ssh/sshd_config && " +
+			"exec /usr/sbin/sshd -D -e"
+		bootAlpine = "apk add --no-cache openssh python3 >/dev/null 2>&1 && ssh-keygen -A && " + sshCommon
+		bootDebian = "export DEBIAN_FRONTEND=noninteractive && apt-get update -qq >/dev/null 2>&1 && " +
+			"apt-get install -y -qq openssh-server python3 >/dev/null 2>&1 && " + sshCommon
+		bootRocky = "dnf install -y -q openssh-server python3 >/dev/null 2>&1 && ssh-keygen -A && " + sshCommon
+	)
+
 	for _, tc := range []struct {
-		app       string        // the estate's package name — what the Intent says
+		name      string        // subtest name — app plus the distro FAMILY it exercises
 		image     string        // the bare node, deliberately WITHOUT the package
 		bootstrap string        // sshd + python only; never the application
 		pkg       string        // what the distro actually calls it
 		playbook  string        // the SHIPPED play, run verbatim
 		extra     []string      // the Workflow's declared extraVars
 		port      string        // the resolved desired port
-		wait      time.Duration // apt is slower than apk
+		wait      time.Duration // apt and dnf are slower than apk
 	}{
+		// THREE FAMILIES FOR APACHE, from one Intent that names no package manager and no path.
+		// Two of these three had never run: the play resolved `httpd` vs `apache2` from
+		// ansible_os_family and then hard-coded ALPINE's paths for everyone, so on Debian it
+		// created a conf.d apache never reads, failed to find httpd.conf and the httpd binary, and
+		// reported success anyway because every guard was `failed_when: false` and the observation
+		// greped the file the play itself had written (ANS-014). A matrix that runs one family
+		// cannot tell a distro-agnostic play from a distro-specific one.
 		{
-			app:   "apache",
-			image: "alpine:3.22",
-			bootstrap: "apk add --no-cache openssh python3 >/dev/null 2>&1 && ssh-keygen -A && " +
-				"mkdir -p /root/.ssh && cp /authorized_keys /root/.ssh/authorized_keys && " +
-				"chmod 700 /root/.ssh && chmod 600 /root/.ssh/authorized_keys && " +
-				"sed -i 's/^#*PermitRootLogin.*/PermitRootLogin prohibit-password/' /etc/ssh/sshd_config && " +
-				"exec /usr/sbin/sshd -D -e",
-			pkg:      "apache2",
-			playbook: "content/apache/apache-configure.yml",
-			extra:    []string{"apache_port=8080"},
-			port:     "8080",
-			wait:     60 * time.Second,
+			name:      "apache/Alpine",
+			image:     "alpine:3.22",
+			bootstrap: bootAlpine,
+			pkg:       "apache2",
+			playbook:  "content/apache/apache-configure.yml",
+			extra:     []string{"apache_port=8080"},
+			port:      "8080",
+			wait:      60 * time.Second,
 		},
 		{
-			app:   "tomcat",
-			image: "debian:12-slim",
-			bootstrap: "export DEBIAN_FRONTEND=noninteractive && apt-get update -qq >/dev/null 2>&1 && " +
-				"apt-get install -y -qq openssh-server python3 >/dev/null 2>&1 && " +
-				"mkdir -p /run/sshd /root/.ssh && cp /authorized_keys /root/.ssh/authorized_keys && " +
-				"chmod 700 /root/.ssh && chmod 600 /root/.ssh/authorized_keys && " +
-				"sed -i 's/^#*PermitRootLogin.*/PermitRootLogin prohibit-password/' /etc/ssh/sshd_config && " +
-				"exec /usr/sbin/sshd -D -e",
-			pkg:      "tomcat10",
-			playbook: "content/tomcat/tomcat-configure.yml",
-			extra:    []string{"tomcat_port=8080", "tomcat_home=/usr/share/tomcat10", "tomcat_conf_dir=/etc/tomcat10"},
-			port:     "8080",
-			wait:     180 * time.Second,
+			name:      "apache/Debian",
+			image:     "debian:12-slim",
+			bootstrap: bootDebian,
+			pkg:       "apache2", // same package NAME as Alpine, entirely different layout
+			playbook:  "content/apache/apache-configure.yml",
+			extra:     []string{"apache_port=8080"},
+			port:      "8080",
+			wait:      180 * time.Second,
+		},
+		{
+			name:      "apache/RedHat",
+			image:     "rockylinux/rockylinux:9",
+			bootstrap: bootRocky,
+			pkg:       "httpd", // the branch that shipped for two ADRs without ever executing
+			playbook:  "content/apache/apache-configure.yml",
+			extra:     []string{"apache_port=8080"},
+			port:      "8080",
+			wait:      180 * time.Second,
+		},
+		{
+			name:      "tomcat/Debian",
+			image:     "debian:12-slim",
+			bootstrap: bootDebian,
+			pkg:       "tomcat10",
+			playbook:  "content/tomcat/tomcat-configure.yml",
+			// tomcat_home / tomcat_conf_dir are GONE from the launch interface (ANS-014): the
+			// layout is the target's fact, read by content/tomcat/vars/<family>.yml. If they came
+			// back as extraVars this would silently pass on Debian and lie about RHEL again.
+			extra: []string{"tomcat_port=8080"},
+			port:  "8080",
+			wait:  180 * time.Second,
 		},
 	} {
-		t.Run(tc.app, func(t *testing.T) {
-			node := fmt.Sprintf("stratt-proof-%s", tc.app)
+		t.Run(tc.name, func(t *testing.T) {
+			node := "stratt-proof-" + strings.NewReplacer("/", "-").Replace(tc.name)
 			_ = exec.Command("docker", "rm", "-f", node).Run()
 			run(t, "docker", "run", "-d", "--name", node, "--network", net,
 				"-v", filepath.Join(keyDir, "id_ed25519.pub")+":/authorized_keys:ro",
@@ -116,6 +158,17 @@ func TestLiveContentInstallsAndObservesBack(t *testing.T) {
 				t.Fatalf("%s is still not installed after the converge.\n--- play output ---\n%s", tc.pkg, out)
 			}
 			t.Logf("INSTALLED: %s is present on %s — the play put it there", tc.pkg, tc.image)
+
+			// ── THE SERVICE IS ACTUALLY SERVING — checked from OUTSIDE the play ──────────
+			// This is ANS-014's lesson made structural. The play now observes the running
+			// service rather than greping its own output, but a test that only reads the
+			// play's report is still taking the play's word for it. So the probe runs from a
+			// third container over the network: it shares no code, no filesystem and no
+			// assumptions with the converge, and it fails for a converge that wrote perfect
+			// configuration to a service that never came up — which is exactly what the
+			// Debian and RedHat paths did while reporting success.
+			head := servesHTTP(t, net, node, tc.port)
+			t.Logf("SERVING: %s answers on %s — %s", node, tc.port, head)
 
 			// ── The observe-back half: the Finding can only resolve on what is REPORTED ──
 			// A play that converged correctly and reported nothing would leave the drift
@@ -165,9 +218,43 @@ func awaitSSHD(t *testing.T, node string, limit time.Duration) {
 
 func installed(t *testing.T, node, pkg string) bool {
 	t.Helper()
+	// Three package databases, because the matrix now covers three families. Asking only apk and
+	// dpkg would report "not installed" on RedHat for a package that is there — a baseline check
+	// that cannot see the package it is checking for is worse than none, since it would fail the
+	// run at the ABSENT assertion and never reach the converge.
 	err := exec.Command("docker", "exec", node, "sh", "-c",
-		fmt.Sprintf("apk info -e %s 2>/dev/null | grep -q . || dpkg -s %s >/dev/null 2>&1", pkg, pkg)).Run()
+		fmt.Sprintf("apk info -e %s 2>/dev/null | grep -q . || dpkg -s %s >/dev/null 2>&1 || rpm -q %s >/dev/null 2>&1",
+			pkg, pkg, pkg)).Run()
 	return err == nil
+}
+
+// servesHTTP connects to the converged node from a THIRD container and returns the HTTP status
+// line plus the Server header.
+//
+// Deliberately out-of-band. The play's own observation and this probe can only agree if the service
+// is genuinely up: they share no filesystem, no variables and no code. `wget --spider -S` prints
+// the response headers to stderr for any status, so a 403 from a docroot with no index — a normal
+// answer from a healthy apache — reads as success here rather than as a failure to serve.
+func servesHTTP(t *testing.T, net, node, port string) string {
+	t.Helper()
+	out, err := exec.Command("docker", "run", "--rm", "--network", net, "busybox:1.37",
+		"wget", "--spider", "-S", "-T", "10", fmt.Sprintf("http://%s:%s/", node, port)).CombinedOutput()
+	var status, server string
+	for _, line := range strings.Split(string(out), "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "HTTP/") {
+			status = line
+		}
+		if strings.HasPrefix(line, "Server:") {
+			server = line
+		}
+	}
+	if status == "" {
+		t.Fatalf("%s:%s served no HTTP response at all (wget err=%v). The converge reported success, "+
+			"so either the service never came up or the play observed its own output rather than the "+
+			"running system — the ANS-014 failure\n%s", node, port, err, out)
+	}
+	return status + " · " + server
 }
 
 func eeImage() string {

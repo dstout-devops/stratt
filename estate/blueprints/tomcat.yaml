@@ -21,8 +21,6 @@ dampingObservations: 1
 defaults:
   channel: stable
   port: "8080"
-  tomcatHome: /usr/share/tomcat10
-  tomcatConfDir: /etc/tomcat10
 routes:
   - observe:
       namespace: app.config
@@ -33,5 +31,3 @@ routes:
     # The converge gets the SAME resolved values the expectation does (ADR-0118 D3, ADR-0148 D1).
     remediationParams:
       tomcat_port: "{{.spec.port}}"
-      tomcat_home: "{{.spec.tomcatHome}}"
-      tomcat_conf_dir: "{{.spec.tomcatConfDir}}"

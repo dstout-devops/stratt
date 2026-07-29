@@ -45,10 +45,38 @@
       failed_when: false
       changed_when: false
 
-    - name: OBSERVE the effective listen port back from the running config
-      ansible.builtin.shell: "grep -oE 'listen +[0-9]+' /etc/nginx/conf.d/stratt.conf | grep -oE '[0-9]+'"
-      register: observed_port
-      changed_when: false
+    # ── OBSERVE BACK — from the RUNNING SERVICE ─────────────────────────────────────────────
+    # This used to grep the file the play had just written and call it "the effective listen port
+    # back from the running config". It was an echo — it could only ever return the desired value,
+    # including on a host where nginx had failed to reload — and the drift Finding resolved on it
+    # (ANS-014). An observation that cannot come back wrong is not one. These can, and they fail
+    # the Run rather than reporting, because a converge that did not converge is a failure and not
+    # a fact (§1.8).
+    #
+    # nginx's paths need no per-family vars the way apache's do: conf.d/ and `nginx -s reload` are
+    # the same on Alpine, Debian and RHEL. That is a property of nginx's packaging, not a shortcut
+    # taken here — apache genuinely has three layouts and gets three vars files.
+    - name: OBSERVE — the declared port genuinely accepts connections
+      ansible.builtin.wait_for:
+        host: 127.0.0.1
+        port: "{{ nginx_port | int }}"
+        timeout: 30
+        msg: >-
+          nothing is listening on {{ nginx_port }} after the converge. Reload output was:
+          {{ reload.stdout | default('') }} {{ reload.stderr | default('') }}
+
+    - name: OBSERVE — and that what answers there is really nginx
+      ansible.builtin.uri:
+        url: "http://127.0.0.1:{{ nginx_port }}/"
+        status_code: [200, 403, 404]
+      register: served
+
+    - name: OBSERVE — the running server identifies as nginx, not merely as something on that port
+      ansible.builtin.assert:
+        that: "'nginx' in (served.server | default('') | lower)"
+        fail_msg: >-
+          port {{ nginx_port }} answered but Server: {{ served.server | default('(none)') }} —
+          something other than nginx holds the port this Blueprint claims
 
     - name: OBSERVE the installed package + version
       ansible.builtin.package_facts:
@@ -58,7 +86,9 @@
       ansible.builtin.set_fact:
         stratt_facets:
           app.config:
-            port: "{{ observed_port.stdout }}"
+            # Reported only because the running service answered on it and identified as nginx —
+            # the tasks above fail the Run otherwise.
+            port: "{{ nginx_port }}"
           # The same {name, version, origin, deliveryForm} component shape apache and tomcat report
           # (ADR-0080), so the ONE form-agnostic advisory pass covers all three identically. This is
           # the half that makes "which of my web tiers is running a vulnerable version?" a graph

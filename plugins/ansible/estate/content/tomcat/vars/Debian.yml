@@ -1,0 +1,22 @@
+---
+# Tomcat's layout on Debian/Ubuntu (ansible_os_family == "Debian"). Loaded by tomcat-configure.yml.
+#
+# These three values USED TO LIVE IN THE ESTATE — `tomcatHome`/`tomcatConfDir` were Blueprint
+# defaults, threaded through the Workflow's declared inputs into extraVars (ANS-014). That put a
+# fact about Debian's packaging in the layer that is supposed to hold desired state, and it made
+# the tomcat Blueprint silently Debian-only: an estate that assigned it to a RHEL host would have
+# converged /etc/tomcat10 on a machine whose config lives in /etc/tomcat.
+#
+# The Intent says `package: tomcat` and the Blueprint says `port`. Where this distro keeps tomcat is
+# a fact about the TARGET, read from the target's own facts, and it belongs here.
+#
+# CATALINA_HOME and CATALINA_BASE are DIFFERENT directories here, which is the detail the old
+# single `tomcat_home` could not express: Debian ships the distribution under /usr/share/tomcat10
+# (bin/, lib/) and the instance under /var/lib/tomcat10 (conf → /etc/tomcat10, webapps/, work/,
+# logs/). catalina.sh reads server.xml from $CATALINA_BASE/conf, so pointing BASE at HOME — which is
+# what shipped — made it exit immediately with no server.xml. Nothing noticed, because the start
+# task was `failed_when: false` and the observation greped the XML rather than the port.
+tomcat_pkg: tomcat10
+tomcat_home: /usr/share/tomcat10
+tomcat_base: /var/lib/tomcat10
+tomcat_conf_dir: /etc/tomcat10

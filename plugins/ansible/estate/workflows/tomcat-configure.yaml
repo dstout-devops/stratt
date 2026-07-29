@@ -11,7 +11,7 @@ name: tomcat-configure
 inputs:
   type: object
   additionalProperties: false
-  required: [tomcat_port, tomcat_home, tomcat_conf_dir]
+  required: [tomcat_port]
   properties:
     tomcat_port:
       type: string
@@ -20,14 +20,11 @@ inputs:
         The desired connector port, resolved per-Assignment from the Blueprint default OR the
         Intent's override. A STRING, matching contracts/facets/app.config's observed port —
         nothing coerces between types (ADR-0118 D1).
-    tomcat_home:
-      type: string
-      minLength: 1
-      description: CATALINA_HOME on the target (Debian tomcat10 → /usr/share/tomcat10).
-    tomcat_conf_dir:
-      type: string
-      minLength: 1
-      description: The directory holding server.xml (Debian tomcat10 → /etc/tomcat10).
+# tomcat_home / tomcat_conf_dir USED TO BE INPUTS HERE, defaulted by the Blueprint to Debian's
+# /usr/share/tomcat10 and /etc/tomcat10 (ANS-014). They are gone: where a distro keeps tomcat is a
+# fact about the TARGET, read from the target's own facts by content/tomcat/vars/<family>.yml —
+# not desired state an Intent could sensibly declare. Threading them through the launch interface
+# made this Blueprint silently Debian-only while looking substrate-agnostic.
 steps:
   - name: configure
     viewName: managed-tomcat
@@ -41,6 +38,4 @@ steps:
         hostKeyChecking: accept-new
       extraVars:
         tomcat_port: "{{.launch.tomcat_port}}"
-        tomcat_home: "{{.launch.tomcat_home}}"
-        tomcat_conf_dir: "{{.launch.tomcat_conf_dir}}"
       playbook: tomcat-configure.yml

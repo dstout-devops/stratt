@@ -1,26 +1,42 @@
 ---
-# Converge Tomcat on a host: INSTALL it, set the connector port, start it, read both facts back.
+# Converge Tomcat on a host: INSTALL it, set the connector port, start it, then observe the RUNNING
+# service — not the XML this play just wrote.
 #
 # The remediation half of the drift loop for the `tomcat` Blueprint (ADR-0148). Deliberately the
-# SAME SHAPE as apache-configure.yml — install → configure → start → observe back — because that
-# repetition is the evidence for the shared-role factoring, not an argument against it. Two
-# instances show which parts are genuinely common; one instance plus an intuition produces an
-# abstraction fitted to a single case.
+# SAME SHAPE as apache-configure.yml — refuse-unknown-family → load layout → install → configure →
+# start → observe back — because that repetition is the evidence for the shared-role factoring, not
+# an argument against it. Two instances show which parts are genuinely common; one instance plus an
+# intuition produces an abstraction fitted to a single case.
 #
 # WHAT IS NOT SHARED, and why a merged play would have been wrong: Tomcat is a JVM service with an
-# XML connector, a package named tomcat10 on Debian and tomcat on RHEL, and a service unit rather
-# than an `httpd -k start`. Apache is none of those. The install/observe SKELETON is common; the
-# middle is not.
+# XML connector and a catalina.sh rather than an `httpd -k start`. Apache is none of those. The
+# skeleton is common; the middle is not.
+#
+# THE LAYOUT MOVED IN HERE (ANS-014). tomcat_home and tomcat_conf_dir used to be Blueprint defaults
+# threaded through the Workflow's inputs, which put Debian's packaging in the layer that holds
+# desired state and made the Blueprint silently Debian-only. They are now read from the target's own
+# facts, exactly as the package name already was.
 - name: Converge tomcat
   hosts: all
   gather_facts: true
   tasks:
+    - name: Refuse a distro family this content has no layout for
+      ansible.builtin.assert:
+        that: ansible_facts.os_family in ['Debian', 'RedHat']
+        fail_msg: >-
+          tomcat content has no layout for os_family={{ ansible_facts.os_family }}. Add
+          content/tomcat/vars/{{ ansible_facts.os_family }}.yml and add a node for it to
+          `task dev:content:proof` — a layout that has never been executed is not support.
+
+    - name: Load this distro's tomcat layout
+      ansible.builtin.include_vars: "vars/{{ ansible_facts.os_family }}.yml"
+
     # Distro-resolved by ansible, never by Stratt: tomcat10 on Debian, tomcat on RHEL. The Intent
     # says `package: tomcat` and nothing else — a per-distro map there would make core learn distro
     # packaging (§1.1/§9) and is the env-keyed-values shape ADR-0118 D1 refuses, one axis over.
     - name: Install the servlet container (distro-resolved)
       ansible.builtin.package:
-        name: "{{ 'tomcat' if ansible_os_family == 'RedHat' else 'tomcat10' }}"
+        name: "{{ tomcat_pkg }}"
         state: present
       vars:
         ansible_python_interpreter: /usr/bin/python3
@@ -34,41 +50,64 @@
     # A real converge, not just a file. Tomcat is started directly rather than through systemd:
     # this node is a container with no init, which is the ordinary shape of a dev fixture and
     # exactly why the play must not assume one.
+    # The bracketed first character is not decoration: `pkill -f org.apache…` matches THIS shell's
+    # own command line, which contains that string, so it signalled itself and the task exited
+    # rc=-15. The bracket makes the pattern not match its own literal text. It went unnoticed for as
+    # long as the task carried `failed_when: false` — the kill happened, the restart never ran, and
+    # the observation greped a file rather than the port, so a Tomcat that was never started
+    # reported a converged one (ANS-014).
     - name: Start tomcat so the port takes effect
       ansible.builtin.shell: |
-        pkill -f org.apache.catalina.startup.Bootstrap 2>/dev/null || true
-        CATALINA_HOME={{ tomcat_home }} CATALINA_BASE={{ tomcat_home }} \
+        pkill -f '[o]rg.apache.catalina.startup.Bootstrap' 2>/dev/null || true
+        CATALINA_HOME={{ tomcat_home }} CATALINA_BASE={{ tomcat_base }} \
           nohup {{ tomcat_home }}/bin/catalina.sh start >/dev/null 2>&1 || true
       register: started
       changed_when: false
-      failed_when: false
 
-    # ── OBSERVE BACK ────────────────────────────────────────────────────────────────────────
-    # The converge is finished when the desired state is READ BACK, not when the file is written.
-    # Without this the drift Finding could never resolve, and a play that wrote the right XML to a
-    # dead service would report success (§1.8).
-    - name: OBSERVE the effective connector port from the running config
-      ansible.builtin.shell: "grep -oE '<Connector +port=\"[0-9]+\"' {{ tomcat_conf_dir }}/server.xml | grep -oE '[0-9]+' | head -1"
-      register: observed_port
-      changed_when: false
+    # ── OBSERVE BACK — from the RUNNING SERVICE ─────────────────────────────────────────────
+    # This section used to grep the server.xml the play had just edited and call it "the effective
+    # connector port from the running config". It was an echo: a JVM that never came up reported a
+    # converged port, and the drift Finding resolved on it. The observation now has to be able to
+    # come back wrong — the port must genuinely accept a connection and genuinely speak HTTP — and
+    # it fails the Run rather than reporting when it does not (§1.8).
+    #
+    # Tomcat gets no Server-header identity check of the kind apache gets: Tomcat 10 sends no
+    # Server header by default, so there is nothing to assert on. Stated rather than quietly
+    # omitted — this observation is one notch weaker than apache's, and that is a fact about
+    # Tomcat, not a shortcut.
+    - name: OBSERVE — the declared port genuinely accepts connections
+      ansible.builtin.wait_for:
+        host: 127.0.0.1
+        port: "{{ tomcat_port | int }}"
+        # A JVM is not an httpd: catalina takes seconds to bind, so the ceiling is higher than
+        # apache's and is a startup budget rather than a guess.
+        timeout: 120
+        msg: >-
+          nothing is listening on {{ tomcat_port }} after the converge — catalina did not come up
+
+    - name: OBSERVE — and that what answers there speaks HTTP
+      ansible.builtin.uri:
+        url: "http://127.0.0.1:{{ tomcat_port }}/"
+        # A stock Tomcat with no deployed ROOT webapp answers 404; with one, 200.
+        status_code: [200, 404]
 
     - name: OBSERVE the installed package + version
       ansible.builtin.package_facts:
         manager: auto
 
     - name: Report the observed facts to Stratt (fact-back → the Finding resolves)
-      vars:
-        pkg: "{{ 'tomcat' if ansible_os_family == 'RedHat' else 'tomcat10' }}"
       ansible.builtin.set_fact:
         stratt_facets:
           app.config:
-            port: "{{ observed_port.stdout }}"
+            # Reported only because the running service answered on it — the tasks above fail the
+            # Run otherwise, so this line is unreachable for a host that is not serving there.
+            port: "{{ tomcat_port }}"
           # The same {name, version, origin, deliveryForm} component shape apache reports and that
           # software.container / software.chart carry (ADR-0080) — so ONE form-agnostic advisory
           # pass covers a Tomcat installed here exactly as it covers a chart.
           software.package:
             packages:
-              - name: "{{ pkg }}"
-                version: "{{ ansible_facts.packages[pkg][0].version | default('unknown') }}"
+              - name: "{{ tomcat_pkg }}"
+                version: "{{ ansible_facts.packages[tomcat_pkg][0].version | default('unknown') }}"
                 origin: distro
                 deliveryForm: package
