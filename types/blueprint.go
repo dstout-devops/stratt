@@ -26,6 +26,22 @@ type Blueprint struct {
 	// For names the Intent kind this Blueprint composes (v1:
 	// Intent/Application).
 	For string `json:"for"`
+	// Delivers names WHICH application this Blueprint knows how to install and converge —
+	// `nginx`, `apache`, `tomcat` (ADR-0148 D2). Optional: a Blueprint that composes something
+	// other than an application (access, fileset) delivers no app and leaves it empty.
+	//
+	// It exists because the tech CASCADES and therefore appears twice. Content selection cannot
+	// be data — a templated content ref is refused at estate load, deliberately, since templating
+	// your way into arbitrary content is a supply-chain hole — so one playbook per Step means one
+	// application per Workflow, per route, per Blueprint. The Intent still names what it wants
+	// (`spec.package`), because that is the operator's statement of WHAT and must be readable
+	// without chasing the Assignment to its Blueprint.
+	//
+	// Two statements of one fact is the §2.4 hazard, so this is the half that makes them
+	// checkable: an Assignment binding `package: tomcat` to a Blueprint that delivers apache is
+	// REFUSED at load. Without it the estate compiles, the drift loop runs, and the remediation
+	// installs the wrong application on a fleet that asked for another.
+	Delivers string `json:"delivers,omitempty"`
 	// Defaults are the base Intent-spec values for the composed kind (G6, ADR-0083
 	// §5, ADR-0055 guardrail 6): the "sane defaults" an Assignment's Intent overrides.
 	// Layered UNDER the Intent's own spec via explicit overlay merge

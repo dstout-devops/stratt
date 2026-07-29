@@ -12,6 +12,20 @@
 name: web-server
 version: 1
 for: Intent/Application
+# WHICH application this Blueprint installs (ADR-0148 D2). `for:` says which Intent KIND it
+# composes; this says which app it actually knows how to converge — and they are different
+# questions, because Intent/Application composes every app while a Blueprint composes one.
+#
+# It is one Blueprint per app because the tech CASCADES: content selection cannot be data (a
+# templated content ref is refused at load — templating into arbitrary content is a supply-chain
+# hole), so one playbook per Step means one app per Workflow, per route, per Blueprint. Apache and
+# Tomcat differ by far more than a package name anyway — JVM, service unit, webapps dir, a PKCS12
+# keystore rather than PEM.
+#
+# Stating it here is what makes the Intent's own `package:` checkable: an Assignment binding an
+# Intent that asks for tomcat to this Blueprint is refused at load, rather than compiling, running
+# the drift loop, and installing nginx on a fleet that asked for something else.
+delivers: nginx
 severity: warning
 dampingObservations: 1
 # Sane defaults for the composed Intent/Application spec — the BASE overlay layer that an

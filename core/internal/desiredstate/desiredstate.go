@@ -456,6 +456,9 @@ func ParseDir(root string, decider policy.Decider) (Declarations, error) {
 	if err := checkPlacementTargets(out); err != nil {
 		return out, err
 	}
+	if err := checkBlueprintDelivers(out); err != nil {
+		return out, err
+	}
 	if err := checkProvisioningBuildInputs(out); err != nil {
 		return out, err
 	}
@@ -647,6 +650,56 @@ func remediationCandidates(decls Declarations, intentKind, capClass string) []st
 //
 // The expected param set is taken from provision.BuildLaunchParams itself rather than a list
 // duplicated here, so the check cannot drift from what the reconcile actually sends.
+// checkBlueprintDelivers refuses an Assignment that binds an Intent asking for one application to
+// a Blueprint that installs another (ADR-0148 D2).
+//
+// The tech is stated twice because it has to be. Content selection cannot be data — a templated
+// content ref is refused at estate load, deliberately, since templating your way into arbitrary
+// content is a supply-chain hole — so one playbook per Step cascades into one application per
+// Workflow, per route, per Blueprint. Meanwhile the Intent must still say what it wants, or a
+// reader has to chase the Assignment to its Blueprint to learn what the fleet is running.
+//
+// Two statements of one fact is the §2.4 hazard this repo keeps finding, so they are made to agree
+// rather than trusted to. Without this the estate compiles cleanly, the drift loop runs, the
+// operator approves a remediation, and the WRONG APPLICATION is installed on the fleet — with the
+// Finding then never resolving, because the expectation was written for the other one.
+//
+// PERMISSIVE IN BOTH DIRECTIONS BY OMISSION, and deliberately: a Blueprint that composes something
+// other than an application (access, fileset) declares no `delivers` and constrains nothing, and an
+// Intent that omits `package` is taking the Blueprint's word for it, which is the shape someone may
+// legitimately prefer. Only an explicit DISAGREEMENT is an error.
+func checkBlueprintDelivers(decls Declarations) error {
+	intents := make(map[string]types.Intent, len(decls.Intents))
+	for _, in := range decls.Intents {
+		intents[in.Name] = in
+	}
+	blueprints := map[string]types.Blueprint{}
+	for _, b := range decls.Blueprints {
+		blueprints[fmt.Sprintf("%s@%d", b.Name, b.Version)] = b
+	}
+	for _, a := range decls.Assignments {
+		bp, ok := blueprints[fmt.Sprintf("%s@%d", a.Blueprint, a.BlueprintVersion)]
+		if !ok || bp.Delivers == "" {
+			continue
+		}
+		in, ok := intents[a.Intent]
+		if !ok {
+			continue // a dangling Intent ref is another check's error, with a better message
+		}
+		pkg, _ := in.Spec["package"].(string)
+		if pkg == "" || pkg == bp.Delivers {
+			continue
+		}
+		return fmt.Errorf(
+			"assignment %s binds intent %s, which asks for package %q, to blueprint %s@%d, which "+
+				"delivers %q. A Blueprint installs ONE application — content cannot be selected by "+
+				"data (a templated content ref is refused at load), so the mismatch would compile, "+
+				"drift-check %q's configuration, and install %q on the fleet (ADR-0148 D2)",
+			a.Name, a.Intent, pkg, a.Blueprint, a.BlueprintVersion, bp.Delivers, pkg, bp.Delivers)
+	}
+	return nil
+}
+
 // checkPlacementTargets refuses a declared placement whose target no Intent/Subnet declares
 // (ADR-0147 D4).
 //
@@ -2713,6 +2766,7 @@ type blueprintFile struct {
 	Name                string           `yaml:"name"`
 	Version             int              `yaml:"version"`
 	For                 string           `yaml:"for"`
+	Delivers            string           `yaml:"delivers"`
 	Defaults            map[string]any   `yaml:"defaults"`
 	Routes              []blueprintRoute `yaml:"routes"`
 	Severity            string           `yaml:"severity"`
@@ -2749,7 +2803,7 @@ func parseBlueprintFile(path string, raw []byte) (string, types.Blueprint, error
 		return "", types.Blueprint{}, fmt.Errorf("desiredstate: %s: %w", path, err)
 	}
 	b := types.Blueprint{
-		Name: f.Name, Version: f.Version, For: f.For,
+		Name: f.Name, Version: f.Version, For: f.For, Delivers: f.Delivers,
 		Defaults: f.Defaults,
 		Severity: f.Severity, DampingObservations: f.DampingObservations,
 		RemoveWorkflow: f.RemoveWorkflow, RemoveParams: f.RemoveParams,

@@ -171,3 +171,65 @@ func writeFile(t *testing.T, dir, rel, body string) {
 		t.Fatal(err)
 	}
 }
+
+// TestBlueprintDeliversMustAgreeWithTheIntentsPackage: the tech is stated twice because it has to
+// be — the Intent says what it wants, and the Blueprint says what it can install, because content
+// selection cannot be data (a templated content ref is refused at load, so one playbook per Step
+// cascades into one app per Blueprint). Two statements of one fact are made to AGREE rather than
+// trusted to (§2.4, ADR-0148 D2).
+//
+// The failure without it is not a compile error but a wrong install: the estate compiles, the drift
+// loop runs against one app's expectation, an operator approves the remediation, and the other app
+// lands on the fleet.
+func TestBlueprintDeliversMustAgreeWithTheIntentsPackage(t *testing.T) {
+	for _, tc := range []struct {
+		name, delivers, pkg string
+		wantErr             bool
+	}{
+		{name: "agree", delivers: "tomcat", pkg: "tomcat"},
+		{name: "disagree", delivers: "apache", pkg: "tomcat", wantErr: true},
+		// Permissive by omission, in both directions and deliberately: a Blueprint composing
+		// something other than an application constrains nothing, and an Intent that omits
+		// `package` is taking the Blueprint's word for it.
+		{name: "blueprint delivers nothing", delivers: "", pkg: "tomcat"},
+		{name: "intent names nothing", delivers: "apache", pkg: ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			if err := os.MkdirAll(filepath.Join(dir, "views"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			spec := "spec:\n  port: \"8080\"\n"
+			if tc.pkg != "" {
+				spec = "spec:\n  package: " + tc.pkg + "\n  port: \"8080\"\n"
+			}
+			writeFile(t, dir, "intents/app.yaml", "name: app\nkind: Intent/Application\n"+spec)
+			bp := "name: bp\nversion: 1\nfor: Intent/Application\nseverity: warning\n"
+			if tc.delivers != "" {
+				bp += "delivers: " + tc.delivers + "\n"
+			}
+			bp += "routes:\n  - observe:\n      namespace: app.config\n      path: port\n      equals: \"8080\"\n    claim: exclusive\n"
+			writeFile(t, dir, "blueprints/bp.yaml", bp)
+			writeFile(t, dir, "views/hosts.yaml", "name: hosts\nselector:\n  kinds: [host]\n")
+			writeFile(t, dir, "assignments/a.yaml",
+				"name: a\nintent: app@1\nview: hosts\nblueprint: bp@1\n")
+
+			_, err := ParseDir(dir, nil)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatal("an Intent asking for one application bound to a Blueprint that installs " +
+						"another must be refused at load — otherwise the remediation installs the wrong app")
+				}
+				for _, want := range []string{"tomcat", "apache", "ADR-0148"} {
+					if !strings.Contains(err.Error(), want) {
+						t.Errorf("the diagnostic should mention %q; got %v", want, err)
+					}
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("expected the estate to load, got: %v", err)
+			}
+		})
+	}
+}
