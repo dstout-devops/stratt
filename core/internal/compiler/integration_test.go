@@ -585,7 +585,7 @@ func indexOf(s, sub string) int {
 
 // TestRemediationParamsCarryEachAssignmentsResolvedSpec proves the half of "synthesize the right
 // configuration for the right target" that was missing: the CONVERGE gets the same per-Assignment
-// value the EXPECTATION does (ADR-0148 D1).
+// value the EXPECTATION does (ADR-0148 D3).
 //
 // The reference estate had the expectation resolved from {{.spec.port}} and the remediation
 // carrying a literal, so an Intent overriding the Blueprint default drift-checked its own value and

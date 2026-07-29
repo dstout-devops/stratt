@@ -10,7 +10,7 @@ design must reconcile with. Chronological list: [README.md](README.md); phase vi
 
 ```mermaid
 graph TD
-  actuators["actuators<br/><small>0016 0022 0050 0053 0092 0117<br/>0124 0126 0133 0134 0135 0149</small>"]
+  actuators["actuators<br/><small>0016 0022 0050 0053 0092 0117<br/>0124 0126 0133 0134 0135 0148<br/>0149</small>"]
   api_surface["api-surface<br/><small>0006 0021 0026 0076 0091 0121</small>"]
   audit_telemetry["audit-telemetry<br/><small>0034 0065 0077 0121</small>"]
   authz_identity["authz-identity<br/><small>0009 0028 0035 0079 0101 0122<br/>0130</small>"]
@@ -18,11 +18,11 @@ graph TD
   certificates_pki["certificates-pki<br/><small>0030 0043 0050 0098 0106</small>"]
   connectors["connectors<br/><small>0007 0014 0025 0026 0037 0038<br/>0039 0045 0086 0087 0088 0089<br/>0095 0097 0099 0113 0114 0115<br/>0127 0128 0129 0130 0131 0132<br/>0133 0136 0144 0146</small>"]
   credentials_secrets["credentials-secrets<br/><small>0009 0029 0052 0094 0098 0099<br/>0100 0106 0125 0126</small>"]
-  estate_as_code["estate-as-code<br/><small>0055 0056 0057 0103 0113 0116<br/>0118 0119 0120 0122 0123 0132<br/>0134 0135 0136 0137 0138 0139<br/>0142 0146 0147</small>"]
-  findings_drift["findings-drift<br/><small>0019 0020 0033 0043 0080 0085<br/>0128 0129 0130 0133</small>"]
+  estate_as_code["estate-as-code<br/><small>0055 0056 0057 0103 0113 0116<br/>0118 0119 0120 0122 0123 0132<br/>0134 0135 0136 0137 0138 0139<br/>0142 0146 0147 0148</small>"]
+  findings_drift["findings-drift<br/><small>0019 0020 0033 0043 0080 0085<br/>0128 0129 0130 0133 0148</small>"]
   foundation["foundation<br/><small>0001 0002 0004 0005 0006 0008<br/>0108 0109 0116 0137 0138 0141</small>"]
   graph_model["graph-model<br/><small>0015 0017 0041 0042 0059 0060<br/>0079 0080 0081 0082 0084 0085<br/>0096 0114 0115 0119 0120 0123<br/>0126 0127 0128 0129 0130 0132<br/>0133 0143 0144 0147</small>"]
-  intent_compiler["intent-compiler<br/><small>0023 0030 0036 0055 0058 0083<br/>0085 0114 0118 0119 0123</small>"]
+  intent_compiler["intent-compiler<br/><small>0023 0030 0036 0055 0058 0083<br/>0085 0114 0118 0119 0123 0148</small>"]
   orchestration["orchestration<br/><small>0010 0011 0018 0027 0031 0063<br/>0118 0122 0125 0134 0139 0140</small>"]
   plugin_port["plugin-port<br/><small>0046 0047 0048 0049 0051 0053<br/>0054 0103 0117 0121 0124 0125<br/>0127 0131 0137 0138 0140 0141<br/>0145 0149</small>"]
   policy_governance["policy-governance<br/><small>0061 0062 0063 0064 0065 0066<br/>0067 0068 0069 0070 0071 0072<br/>0073 0074 0075 0076 0122</small>"]
@@ -95,6 +95,7 @@ Actuators — execution engines (opentofu, helm, mcp, cert-issuer reconcile).
 - [ADR-0133](0133-execution-environments-and-instance-groups.md) — An AWX execution environment is a supply-chain fact; an instance group is a placement model we already have
 - [ADR-0134](0134-tool-content-lives-beside-the-estate.md) — A playbook is a playbook: tool content lives beside the estate, not inside a declaration
 - [ADR-0135](0135-a-plugin-ships-examples-not-declarations.md) — A plugin ships examples and conformance, never declarations; and remediation binds to a capability, not a name
+- [ADR-0148](0148-one-blueprint-per-application-and-an-honest-observation.md) — One Blueprint per application, and an observation that can come back wrong
 - [ADR-0149](0149-the-execution-environment-content-floor.md) — The execution environment carries a content floor, and every variant is a superset
 
 ### api-surface
@@ -246,6 +247,7 @@ Estate-as-Code — CaC declarations, environments, composition, the estate CLI.
 - [ADR-0142](0142-environments-are-declared-not-just-referenced.md) — An environment is declared, not just referenced; and it is not a Cell, a Site, or a coordinate
 - [ADR-0146](0146-the-coordinate-is-load-bearing-or-refused.md) — A provider coordinate is load-bearing or refused: the region leg, without re-deciding where a region lives
 - [ADR-0147](0147-placement-resolves-to-a-provider-native-identity.md) — A declared placement resolves to a provider-native identity, or the build is not offered
+- [ADR-0148](0148-one-blueprint-per-application-and-an-honest-observation.md) — One Blueprint per application, and an observation that can come back wrong
 
 ### findings-drift
 
@@ -263,6 +265,7 @@ Findings & drift — Baselines, Findings, compliance packs, drift/GC.
 - [ADR-0129](0129-workflow-topology-projection.md) — A mirrored workflow says what it invokes; it does not re-model AWX's node graph
 - [ADR-0130](0130-awx-local-accounts-and-team-membership.md) — AWX's local accounts are an estate fact, not an identity source and never an authz one
 - [ADR-0133](0133-execution-environments-and-instance-groups.md) — An AWX execution environment is a supply-chain fact; an instance group is a placement model we already have
+- [ADR-0148](0148-one-blueprint-per-application-and-an-honest-observation.md) — One Blueprint per application, and an observation that can come back wrong
 
 ### foundation
 
@@ -333,6 +336,7 @@ Intent compiler — Intent/Assignment/Blueprint/Baseline compile to Runs.
 - [ADR-0118](0118-parameter-plane.md) — The parameter plane: values reach the things that execute
 - [ADR-0119](0119-versioned-configuration-and-promotion.md) — Versioned configuration and promotion: one estate, N rings, immutable once pinned
 - [ADR-0123](0123-keyed-placement-aware-spread.md) — Keyed, placement-aware spread: identity survives a zone-list edit, and declared placement finally reaches the build
+- [ADR-0148](0148-one-blueprint-per-application-and-an-honest-observation.md) — One Blueprint per application, and an observation that can come back wrong
 
 ### orchestration
 
@@ -631,4 +635,5 @@ UI — React shell, schema-driven rendering, Views, descent, the first-party cli
 | [0145](0145-the-actuator-builder-step-form.md) | capability-framework, plugin-port, provisioning, state-artifacts |
 | [0146](0146-the-coordinate-is-load-bearing-or-refused.md) | capability-framework, connectors, estate-as-code, provisioning |
 | [0147](0147-placement-resolves-to-a-provider-native-identity.md) | estate-as-code, graph-model, provisioning |
+| [0148](0148-one-blueprint-per-application-and-an-honest-observation.md) | actuators, estate-as-code, findings-drift, intent-compiler |
 | [0149](0149-the-execution-environment-content-floor.md) | actuators, plugin-port, substrate-ops |
