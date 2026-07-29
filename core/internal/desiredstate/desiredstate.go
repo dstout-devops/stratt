@@ -453,6 +453,9 @@ func ParseDir(root string, decider policy.Decider) (Declarations, error) {
 	if err := checkActuatorCapability(out); err != nil {
 		return out, err
 	}
+	if err := checkPlacementTargets(out); err != nil {
+		return out, err
+	}
 	if err := checkProvisioningBuildInputs(out); err != nil {
 		return out, err
 	}
@@ -644,6 +647,53 @@ func remediationCandidates(decls Declarations, intentKind, capClass string) []st
 //
 // The expected param set is taken from provision.BuildLaunchParams itself rather than a list
 // duplicated here, so the check cannot drift from what the reconcile actually sends.
+// checkPlacementTargets refuses a declared placement whose target no Intent/Subnet declares
+// (ADR-0147 D4).
+//
+// It became checkable only once D1 settled what the field REFERS to. `placement.subnet` is
+// resolved through the singleton correlation key `Intent/Subnet/<name>`, so its referent is an
+// Intent/Subnet name — and a name nothing declares can never resolve, in any environment, forever.
+// Before D1 the referent was ambiguous (an Intent name? an Entity name?) and a check here would
+// have baked in a guess; the schema description said both.
+//
+// The failure it closes is the ordinary typo. `placement.subnet: ap-subnet` is a perfectly valid
+// string that reaches the reconcile, fails to resolve, and surfaces as "declared but not built —
+// build it first" — advice that can never be taken, pointing at a subnet that does not exist. Same
+// §1.8 rule as an unknown environment or an undeclared Actuator: refuse at the diff.
+//
+// PLACEMENT INTO PRE-EXISTING ESTATE (a subnet nobody provisioned, observed by a Syncer) is
+// therefore NOT expressible, and that is a real limitation rather than an oversight — supporting it
+// means a second referent for one field, resolved by a different mechanism, which is the kind of
+// ambiguity §2.4 refuses. Booked in ADR-0147.
+func checkPlacementTargets(decls Declarations) error {
+	subnets := map[string]bool{}
+	var declared []string
+	for _, in := range decls.Intents {
+		if in.Kind == types.IntentSubnet {
+			subnets[in.Name] = true
+			declared = append(declared, in.Name)
+		}
+	}
+	sort.Strings(declared)
+	for _, in := range decls.Intents {
+		pl, ok := in.Spec["placement"].(map[string]any)
+		if !ok {
+			continue
+		}
+		target, _ := pl["subnet"].(string)
+		if target == "" || subnets[target] {
+			continue
+		}
+		return fmt.Errorf(
+			"intent %s declares placement.subnet %q, which no Intent/Subnet declares (declared: %v). "+
+				"The reconcile resolves a placement target through the Intent/Subnet correlation key "+
+				"(ADR-0147 D1), so a name nothing declares can never resolve — the build would surface "+
+				"forever as \"build %s first\", advice nobody can take",
+			in.Name, target, declared, target)
+	}
+	return nil
+}
+
 func checkProvisioningBuildInputs(decls Declarations) error {
 	byName := make(map[string]types.Workflow, len(decls.Workflows))
 	for _, w := range decls.Workflows {

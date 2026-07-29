@@ -27,9 +27,6 @@ inputs:
     instance:
       type: string
       description: The desired instance's correlation name (namePrefix + ordinal), e.g. web-02.
-    ordinal:
-      type: integer
-      description: Its 1-based position in the fleet.
     projectKind:
       type: string
       description: The Entity kind the built instance projects as.
@@ -42,7 +39,10 @@ inputs:
     placement:
       type: object
       additionalProperties: true
-      description: Declared topology placement (subnet / dmz / availabilityZone), when the Intent declares one.
+      description: >
+        Declared topology placement, ALWAYS present with all fields and empty where nothing is
+        declared (ADR-0123 D2), INCLUDING subnetRef — the provider-native id the reconcile
+        resolves from the declared subnet NAME (ADR-0147 D1).
     params:
       type: object
       additionalProperties: true
@@ -78,5 +78,9 @@ steps:
       # estate does not use — and it hid PRV-1, where the shipped one failed at launch for
       # every Intent/Compute. A demo that exercises a different shape than the thing it
       # demonstrates is worse than no demo. Guarded by TestPluginDemoWorkflowsMatchShipped.
-      subnetId: "{{.launch.placement.subnet}}"
+      # subnetRef, not subnet — see the shipped compute-build. This copy is kept BINDING-FOR-
+      # BINDING identical to it on purpose: the divergence between the two is what hid PRV-1
+      # (the demo ran a Workflow the estate did not), and TestDemoWorkflowsDoNotShadowWithDifferentParams
+      # now refuses a re-divergence rather than trusting anyone to remember.
+      subnetId: "{{.launch.placement.subnetRef}}"
       availabilityZone: "{{.launch.placement.availabilityZone}}"

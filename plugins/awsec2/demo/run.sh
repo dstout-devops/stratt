@@ -91,7 +91,7 @@ launch_body=$(jq -nc --arg i "$INSTANCE" '{
     # field", which is exactly what it did once the two copies were converged and nobody
     # re-ran this demo. Empty strings are what an UNPLACED instance means, and the Action
     # skips the axis for each (ADR-0123 D2).
-    placement: { subnet: "", availabilityZone: "" }
+    placement: { subnet: "", subnetRef: "", availabilityZone: "" }
   }
 }')
 run_id=$(api POST "/workflows/${WORKFLOW}/runs" -d "$launch_body" | jq -r '.id')

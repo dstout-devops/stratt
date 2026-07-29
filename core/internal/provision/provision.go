@@ -10,6 +10,7 @@ package provision
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"sort"
@@ -108,6 +109,14 @@ type Instance struct {
 	// (count-based) fleet. It is part of the instance's IDENTITY, not a label on it — which is
 	// the whole point of keying (ADR-0123 D1).
 	Zone string
+	// SubnetRef is the PROVIDER-NATIVE identity of the placement target, resolved by the
+	// reconcile from the declared Intent/Subnet name (ADR-0147 D1) via ResolveSubnetRef.
+	//
+	// It rides on Instance rather than being computed inside BuildLaunchParams because that
+	// function is PURE by design — the whole per-instance decision with no substrate — and
+	// resolving this needs a graph read. Keeping the read in the controller and the decision
+	// here preserves that split; it is the same reason Zone lives here.
+	SubnetRef string
 }
 
 // Pause is an Intent whose missing-count exceeds the max-delta gate: the reconcile
@@ -493,12 +502,21 @@ func BuildLaunchParams(in Intent, inst Instance) map[string]any {
 	// unplaced Intent and the substituter fails closed on an unknown field. Which is exactly why
 	// `placement` was declared by all seven build Workflows and bound by none of them, and why
 	// app-tier's declared placement reached nothing.
-	place := map[string]any{"subnet": "", "dmz": "", "availabilityZone": ""}
+	place := map[string]any{"subnet": "", "subnetRef": "", "dmz": "", "availabilityZone": ""}
 	if pl := in.Spec.Placement; pl != nil {
 		place["subnet"] = pl.Subnet
 		place["dmz"] = pl.Dmz
 		place["availabilityZone"] = pl.AvailabilityZone
 	}
+	// The PROVIDER-NATIVE id beside the declared NAME, never instead of it (ADR-0147 D1). Both
+	// are needed and they are different things: `subnet` is what Git declares and what placement
+	// drift compares, `subnetRef` is what a provider's Action can actually address. A builder
+	// binds the ref; nothing else should.
+	//
+	// Present-and-empty, like the fields above and for the same reason (ADR-0123 D2): template
+	// substitution has no conditionals, so a key that vanished for an unplaced Intent would make
+	// {{.launch.placement.subnetRef}} unsafe in a builder shared by placed and unplaced Intents.
+	place["subnetRef"] = inst.SubnetRef
 	// A keyed instance carries its OWN zone: the zone is its identity (ADR-0123 D1), so it does
 	// not need declaring twice and must not be able to disagree with the name (§2.4).
 	if inst.Zone != "" {
@@ -596,13 +614,79 @@ func SingletonLaunchParams(si SingletonIntent, inst Instance) map[string]any {
 	}
 	// Complete, like the fleet path — see BuildLaunchParams for why the omit-when-undeclared
 	// shape (ADR-0059 D3) is withdrawn (ADR-0123 D2).
-	place := map[string]any{"subnet": "", "dmz": "", "availabilityZone": ""}
+	place := map[string]any{"subnet": "", "subnetRef": "", "dmz": "", "availabilityZone": ""}
 	if pl := si.Spec.Placement; pl != nil {
 		place["subnet"], place["dmz"], place["availabilityZone"] = pl.Subnet, pl.Dmz, pl.AvailabilityZone
 	}
+	place["subnetRef"] = inst.SubnetRef // ADR-0147 D1 — see BuildLaunchParams
 	out["placement"] = place
 	if len(si.Spec.Params) > 0 {
 		out["params"] = si.Spec.Params
 	}
+	return out
+}
+
+// ── Placement resolution (ADR-0147) ─────────────────────────────────────────────────────
+
+// SubnetRefUnbuilt is returned when the declared placement target exists as an Intent but has not
+// been built yet. It is a distinct outcome from an error: nothing is wrong with the declaration,
+// the estate is simply not there yet, and the caller turns it into an OBSERVABLE Finding with no
+// launch spec rather than a failure (ADR-0147 D3).
+var SubnetRefUnbuilt = errors.New("placement target is declared but not built yet")
+
+// ResolveSubnetRef translates a DECLARED placement target — an Intent/Subnet name, the only thing
+// Git can hold — into the PROVIDER-NATIVE identity the resolved builder's Action requires.
+//
+// This is the translation whose absence made `placement.subnet` unusable: it reached the provider
+// (ADR-0123 D2) carrying an Intent name, and `compute-build` bound it straight into `subnetId`, so
+// RunInstances was called with "app-subnet" and the substrate answered InvalidSubnetID.NotFound.
+//
+// CORE STAYS CONTENT-BLIND. It never learns what `aws.subnetId` means. It intersects the identity
+// schemes the built subnet actually carries with the ones the RESOLVED PROVIDER DECLARES
+// (`identitySchemes` on its Actuator/Connector declaration — already the provider's declared
+// identity vocabulary, ADR-0047 §1), and:
+//
+//   - exactly one   → that value is the ref;
+//   - none          → an error naming both sides, because a provider that cannot address the
+//     subnet it is being asked to build into cannot be made to by guessing;
+//   - more than one → REFUSED, never a tiebreak. Two addressable identities for one placement is
+//     two answers to "which id", and a rule for choosing is the implicit
+//     precedence §2.4 exists to forbid.
+//
+// identities is the built subnet's scheme→value map (empty/nil ⇒ SubnetRefUnbuilt).
+func ResolveSubnetRef(target string, identities map[string]string, providerSchemes []string) (string, error) {
+	if len(identities) == 0 {
+		return "", fmt.Errorf("%w: %s", SubnetRefUnbuilt, target)
+	}
+	var hits []string
+	for _, scheme := range providerSchemes {
+		if v, ok := identities[scheme]; ok {
+			hits = append(hits, scheme+"="+v)
+		}
+	}
+	sort.Strings(hits) // deterministic diagnostics; a map-range message is a coin flip
+	switch len(hits) {
+	case 1:
+		return strings.SplitN(hits[0], "=", 2)[1], nil
+	case 0:
+		return "", fmt.Errorf(
+			"placement target %s is built, but it carries none of the identity schemes the resolved "+
+				"provider declares (it carries %v; the provider declares %v). The provider cannot "+
+				"address the subnet it is being asked to build into",
+			target, sortedSchemes(identities), providerSchemes)
+	default:
+		return "", fmt.Errorf(
+			"placement target %s is addressable by more than one of the resolved provider's identity "+
+				"schemes (%v) — refused rather than picked, because choosing between two ids for one "+
+				"placement is a rule nobody wrote down (§2.4)", target, hits)
+	}
+}
+
+func sortedSchemes(identities map[string]string) []string {
+	out := make([]string, 0, len(identities))
+	for k := range identities {
+		out = append(out, k)
+	}
+	sort.Strings(out)
 	return out
 }

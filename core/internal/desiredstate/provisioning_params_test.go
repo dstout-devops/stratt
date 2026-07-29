@@ -111,3 +111,63 @@ func writeParamsEstate(t *testing.T, dir, params string) {
 			"  count: 1\n  namePrefix: probe\n  projectKind: host\n"+
 			"  requires: [provisioning]\n  params:\n"+params)
 }
+
+// TestPlacementTargetMustBeADeclaredSubnet: a placement naming a subnet nothing declares can never
+// resolve — in any environment, forever — and surfaces as "build <name> first", advice nobody can
+// take (ADR-0147 D4). Refused at the diff, like an unknown environment or an undeclared Actuator.
+func TestPlacementTargetMustBeADeclaredSubnet(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		target  string
+		subnets bool
+		wantErr bool
+	}{
+		{name: "typo'd target with the real subnet declared", target: "ap-subnet", subnets: true, wantErr: true},
+		{name: "target declared", target: "app-subnet", subnets: true},
+		{name: "no placement at all", target: ""},
+		{name: "target named but no Intent/Subnet anywhere", target: "app-subnet", wantErr: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			writeParamsEstate(t, dir, "    tier: app\n    region: us-east-1\n")
+			if tc.target != "" {
+				// Re-write the Intent with placement; the builder is unchanged.
+				writeFile(t, dir, "intents/probe-fleet.yaml",
+					"name: probe-fleet\nkind: Intent/Compute\nspec:\n"+
+						"  count: 1\n  namePrefix: probe\n  projectKind: host\n"+
+						"  requires: [provisioning]\n"+
+						"  placement:\n    subnet: "+tc.target+"\n"+
+						"  params:\n    region: us-east-1\n")
+			}
+			if tc.subnets {
+				writeFile(t, dir, "intents/app-subnet.yaml",
+					"name: app-subnet\nkind: Intent/Subnet\nspec:\n"+
+						"  projectKind: subnet\n  requires: [provisioning]\n  params:\n    cidr: 10.0.0.0/24\n")
+			}
+			_, err := ParseDir(dir, nil)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatal("a placement target no Intent/Subnet declares must be refused at load")
+				}
+				if !strings.Contains(err.Error(), tc.target) {
+					t.Errorf("the diagnostic must name the unresolvable target; got %v", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("expected the estate to load, got: %v", err)
+			}
+		})
+	}
+}
+
+func writeFile(t *testing.T, dir, rel, body string) {
+	t.Helper()
+	p := filepath.Join(dir, rel)
+	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}

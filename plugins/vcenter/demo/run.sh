@@ -62,7 +62,6 @@ INSTANCE="${STRATT_DEMO_INSTANCE:-web-01}"
 launch_body=$(jq -nc --arg i "$INSTANCE" '{
   inputs: {
     instance: $i,
-    ordinal: 1,
     projectKind: "host",
     labels: { fleet: "web", "stratt.intent/instance": $i }
   }

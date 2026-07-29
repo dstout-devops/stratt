@@ -62,6 +62,44 @@ func (s *Store) ProvisionedSingletons(ctx context.Context) (map[string]bool, err
 	return out, rows.Err()
 }
 
+// SingletonIdentities returns, for every built named singleton, its correlation key
+// (stratt.intent/singleton) mapped to the identity keys the Entity actually carries —
+// scheme → value.
+//
+// It exists so the provisioning reconcile can translate a DECLARED placement target (an
+// Intent/Subnet NAME, the only thing Git can hold) into the PROVIDER-NATIVE id a builder's
+// Action requires (ADR-0147 D1). Nothing could do that before, so `placement.subnet: app-subnet`
+// travelled all the way to `RunInstances(SubnetId: "app-subnet")` and the substrate rejected it.
+//
+// It reads projections only — the graph never holds the unbuilt (§1.2) — so a singleton that has
+// not been built is simply absent, which is exactly the signal the ordering rule needs (D3).
+func (s *Store) SingletonIdentities(ctx context.Context) (map[string]map[string]string, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT e.labels->>'stratt.intent/singleton', i.scheme, i.value
+		FROM graph.entity e
+		JOIN graph.entity_identity i ON i.entity_id = e.id
+		WHERE e.labels ? 'stratt.intent/singleton' AND e.deleted_at IS NULL`)
+	if err != nil {
+		return nil, fmt.Errorf("graph: singleton identities: %w", err)
+	}
+	defer rows.Close()
+	out := map[string]map[string]string{}
+	for rows.Next() {
+		var key, scheme, value string
+		if err := rows.Scan(&key, &scheme, &value); err != nil {
+			return nil, fmt.Errorf("graph: scan singleton identity: %w", err)
+		}
+		if key == "" || scheme == "" || value == "" {
+			continue
+		}
+		if out[key] == nil {
+			out[key] = map[string]string{}
+		}
+		out[key][scheme] = value
+	}
+	return out, rows.Err()
+}
+
 // ProvisionFinding is one gated build to surface (ADR-0058, ADR-0120 D2): the desired-but-unbuilt
 // unit, plus the launch spec that builds it.
 type ProvisionFinding struct {

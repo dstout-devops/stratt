@@ -955,6 +955,19 @@ tasks:
         install -m 0755 "$tmp/tofu" "{{.TOFU}}"
         rm -rf "$tmp"
 
+  dev:placement:proof:
+    # PRV-2's live proof (ADR-0147): an instance built INTO a real subnet, against the real EC2
+    # API, plus the falsification — the raw Intent NAME the estate used to send is REJECTED by
+    # the substrate. Without that second half the first would pass equally against a backend
+    # that ignored placement entirely.
+    desc: Live-prove the network→host join against floci (ADR-0147)
+    dir: plugins/awsec2
+    env:
+      STRATT_LIVE_EC2_ENDPOINT: http://localhost:4566
+    cmds:
+      - docker compose -f {{.ROOT_DIR}}/deploy/dev/docker-compose.yml up -d --wait floci
+      - go test ./ -run LivePlacement -v -count=1 -timeout 5m
+
   dev:tofu:proof:
     # The live proof the network leg never had (ADR-0145): a REAL tofu applying the SHIPPED
     # aws-network module against the REAL floci EC2 API with REAL S3 state, through the
