@@ -37,3 +37,22 @@ plugins:
       digest: ""
       pullPolicy: Never # kind-loaded (task image:helm-plugin)
     tmpDir: true # writable /tmp for helm's cache (read-only rootfs)
+  # kubeservices — the OBSERVE half of the chart delivery form (ADR-0148 follow-up b). It has to be
+  # here because estate/plugins.yaml now admits it: a Connector the estate declares with no pod
+  # behind it registers as unverifiable, which reads as "the backend is down" rather than "no floor
+  # deploys this". It is also backend-free in the same sense declared and helm are — the cluster IS
+  # the system of record, and it is the one this pod already runs in.
+  #
+  # A cluster-wide READ-ONLY grant over Services and nothing else. The chart renders that as a
+  # ClusterRole (the `kubeAccess` branch, whose own comment names a Syncer spanning namespaces as
+  # the case), so there is no kubeconfig to bake and no secrets reach (§2.5).
+  - name: kubeservices
+    image:
+      repository: stratt-plugin-kubeservices
+      tag: dev
+      digest: ""
+      pullPolicy: Never # kind-loaded (task image:plugin PLUGIN=kubeservices)
+    kubeAccess:
+      apiGroups: [""]
+      resources: ["services"]
+      verbs: ["get", "list", "watch"]

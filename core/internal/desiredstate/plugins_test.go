@@ -1,6 +1,7 @@
 package desiredstate
 
 import (
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -247,4 +248,82 @@ func stagedIsFullEstate(t *testing.T, staged string) bool {
 		}
 	}
 	return true
+}
+
+// TestADeclaredDialAddressHasAnImage: a plugin a shipped estate declares with a dial address, and
+// which ships its own `cmd/stratt-plugin-<name>` main, must have a Dockerfile.
+//
+// FOUND THREE (2026-07-29), which is why this exists rather than being obvious. kubeservices,
+// openbao and opentofu each ship a server, a main, contracts and an estate declaration carrying
+// `address: stratt-<name>:9090` — and no Dockerfile, so nothing could ever build them and nothing
+// could ever run them. openbao is the certificate leg's `certissuer` provider; opentofu is the
+// network builder. Both had been reasoned about, reviewed and cited in ADRs as shipping.
+//
+// It is the mirror of the defect this arc kept finding, one layer further out. A
+// declared-but-unexecuted path fails when someone runs it. An undeployable plugin cannot fail,
+// because nothing reaches it — the registry simply reports a Connector that will not verify, which
+// reads as "the backend is down" rather than "this was never buildable".
+//
+// The convention is the contract (ADR-0137 D2): plugins/<name>/Dockerfile builds
+// stratt-plugin-<name>:dev, and `task image:plugin PLUGIN=<name>` needs nothing else. So the check
+// is exactly: does that file exist. A plugin with no `cmd/` main is deliberately out of scope —
+// `ansible`, `script` and `mcp` are EE-Job shims baked into ee/Dockerfile and correctly have no
+// image of their own.
+func TestADeclaredDialAddressHasAnImage(t *testing.T) {
+	root := filepath.Join("..", "..", "..", "plugins")
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	checked := 0
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		name := e.Name()
+		// Only plugins that BOTH declare a dial address in their own shipped estate and ship a
+		// standalone main. Either alone is legitimate: an EE-Job Actuator has no address, and a
+		// main with no declaration is not yet claimed to run anywhere.
+		if !declaresDialAddress(t, filepath.Join(root, name, "estate")) {
+			continue
+		}
+		if _, err := os.Stat(filepath.Join(root, name, "cmd", "stratt-plugin-"+name)); err != nil {
+			continue
+		}
+		checked++
+		if _, err := os.Stat(filepath.Join(root, name, "Dockerfile")); err != nil {
+			t.Errorf("plugin %q declares a dial address and ships cmd/stratt-plugin-%s, but has no "+
+				"Dockerfile — so `task image:plugin PLUGIN=%s` cannot build it and no floor can run "+
+				"it. The estate says it is there; nothing can make it be there (ADR-0137 D2: "+
+				"plugins/<name>/Dockerfile is the convention, and it is the whole contract)", name, name, name)
+		}
+	}
+	// A guard that inspects nothing reports a safety it never established.
+	if checked < 3 {
+		t.Fatalf("only %d dial-addressed plugins were checked — the guard is not reaching the "+
+			"declarations it claims to cover", checked)
+	}
+}
+
+// declaresDialAddress reports whether any YAML under a plugin's own estate declares `address:`,
+// which is what makes the control plane dial it as a long-lived gRPC service.
+func declaresDialAddress(t *testing.T, estateDir string) bool {
+	t.Helper()
+	found := false
+	_ = filepath.WalkDir(estateDir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() || filepath.Ext(path) != ".yaml" {
+			return nil //nolint:nilerr // an absent estate dir simply means no declaration
+		}
+		b, rerr := os.ReadFile(path)
+		if rerr != nil {
+			return nil
+		}
+		for _, line := range strings.Split(string(b), "\n") {
+			if strings.HasPrefix(line, "address:") {
+				found = true
+			}
+		}
+		return nil
+	})
+	return found
 }

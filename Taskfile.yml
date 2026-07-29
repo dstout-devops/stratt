@@ -1768,6 +1768,10 @@ tasks:
         vars: {PLUGIN: helm}
       - task: image:plugin
         vars: {PLUGIN: declared}
+      # kubeservices is admitted by estate/plugins.yaml now (ADR-0148 follow-up b), so the floor
+      # has to carry its pod or the registry reports a Connector that will not verify.
+      - task: image:plugin
+        vars: {PLUGIN: kubeservices}
       - task: dev:stage-estate # full estate incl. connectors/actuators
       - |
         set -eu
