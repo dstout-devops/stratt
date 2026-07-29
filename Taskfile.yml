@@ -1258,6 +1258,24 @@ tasks:
       - "{{.KUBECTL}} --context {{.KIND_CONTEXT}} apply -f {{.ROOT_DIR}}/deploy/dev/managed-web.yaml"
       - "{{.KUBECTL}} --context {{.KIND_CONTEXT}} -n stratt rollout status deploy/managed-web --timeout=120s"
 
+  dev:managed-app:up:
+    # The BARE node the apache Blueprint converges (ADR-0148). It reuses managed-web's keypair and
+    # authorized-keys Secret on purpose — one throwaway dev key for both fixture nodes — so this
+    # depends on dev:managed-web:up having created them rather than minting a second.
+    #
+    # Bare is the point: alpine with sshd and no web server, so "apache is installed" is a fact the
+    # remediation CAUSES. managed-web ships nginx already, so its converge can only adjust a port on
+    # something the image supplied — which cannot tell those two apart.
+    desc: Deploy the BARE sshd node the apache Blueprint installs onto (ADR-0148, idempotent)
+    deps: [tools:kubectl, dev:machine-key]
+    vars:
+      KEYDIR: "{{.ROOT_DIR}}/deploy/dev/managed-web"
+    cmds:
+      - go run sigs.k8s.io/kind@v{{.KIND_VER}} export kubeconfig --name {{.KIND_CLUSTER}}
+      - "{{.KUBECTL}} --context {{.KIND_CONTEXT}} -n stratt create secret generic managed-web-authorized-keys --from-file=authorized_keys={{.KEYDIR}}/id_ed25519.pub --dry-run=client -o yaml | {{.KUBECTL}} --context {{.KIND_CONTEXT}} apply -f -"
+      - "{{.KUBECTL}} --context {{.KIND_CONTEXT}} apply -f {{.ROOT_DIR}}/deploy/dev/managed-app.yaml"
+      - "{{.KUBECTL}} --context {{.KIND_CONTEXT}} -n stratt rollout status deploy/managed-app --timeout=120s"
+
   dev:crossplane:
     desc: Install REAL Crossplane + provider-kubernetes into kind for the topology build loop (ADR-0059, idempotent)
     deps: [tools:helm, tools:kubectl]

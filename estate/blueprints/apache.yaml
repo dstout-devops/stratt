@@ -1,0 +1,35 @@
+# apache — the L2 onboarding Blueprint for Apache on a host (ADR-0055, ADR-0083, ADR-0148).
+#
+# `for:` says which Intent KIND it composes; `delivers:` says which APPLICATION it installs. Two
+# different questions — Intent/Application composes every app, a Blueprint composes one — and the
+# second is what makes the Intent's own `package:` checkable rather than decorative.
+#
+# ONE BLUEPRINT PER APPLICATION, measured rather than preferred: content selection cannot be data (a
+# Step whose playbook is a template is refused at estate load, since templating into arbitrary
+# content is a supply-chain hole), so one playbook per Step cascades into one app per Workflow, per
+# route, per Blueprint. Apache and Tomcat differ by far more than a package name anyway.
+#
+# The route names its Workflow DIRECTLY rather than the configmgmt capability: `configmgmt` for
+# Intent/Application already resolves to ansible-platform-baseline, and a second provider would make
+# both routes ambiguous and fail closed (§2.4). Naming the Workflow is the documented answer when
+# the estate has decided — and per delivery form it has.
+name: apache
+version: 1
+for: Intent/Application
+delivers: apache
+severity: warning
+dampingObservations: 1
+defaults:
+  channel: stable
+  port: "8080"
+routes:
+  - observe:
+      namespace: app.config
+      path: port
+      equals: "{{.spec.port}}"
+    claim: exclusive
+    remediationWorkflow: apache-configure
+    # The converge gets the SAME resolved value the expectation does (ADR-0118 D3, ADR-0148 D1) —
+    # so a fleet overriding the default is converged to ITS port, not to the Blueprint's.
+    remediationParams:
+      apache_port: "{{.spec.port}}"

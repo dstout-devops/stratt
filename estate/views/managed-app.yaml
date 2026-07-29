@@ -1,0 +1,8 @@
+# managed-app — the View the apache Blueprint converges. Its OWN View, not managed-web's, because
+# the app.config claim is EXCLUSIVE: two Blueprints converging one Entity's app.config is the §2.4
+# double-claim and would (correctly) be a compile error.
+name: managed-app
+selector:
+  kinds: [host]
+  labels:
+    demo: managed-app

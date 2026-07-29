@@ -1,0 +1,34 @@
+# ansible-apache — the Actuator that converges Apache on a host (ADR-0148).
+#
+# A CONTENT actuator, like ansible-fileset and ansible-access-control: it mounts its own project and
+# declares NO `provides:`. That is deliberate. `configmgmt` for Intent/Application already resolves
+# to ansible-platform-baseline, and a second provider of the same class for the same kind would make
+# every capability-routed remediation AMBIGUOUS and fail closed (§2.4) — breaking the web-server
+# Blueprint to add an unrelated one. The apache Blueprint names its Workflow directly instead, which
+# is the documented rule: name the capability when more than one provider could serve, name the
+# Workflow when the estate has decided. Per delivery form, the estate has decided.
+#
+# ONE PROJECT PER APPLICATION, and not by preference: content selection cannot be data (a templated
+# content ref is refused at estate load), so one playbook per Step cascades into one application per
+# Workflow, per route, per Blueprint. Tomcat gets its own project beside this one.
+name: ansible-apache
+pluginIdentity: ansible
+tier: trusted
+dryRunnable: true
+jobCommand: [stratt-ansible]
+contentDir: content/apache
+contentInputs: [playbook]
+# The PER-PROJECT write ceiling (ADR-0054/0117 D3a): this project may write these namespaces and
+# nothing else, whatever a Step's own facetWriteScope asks for — the two are intersected.
+#
+# software.package is the HOST form of the deliverable-software dimension (ADR-0080). Co-ownership
+# is legal (graph.facet_owner takes many owners, at most one authoritative), so declaring it here
+# does not collide with the salt collector that also writes it — and salt declares no Connector in
+# this estate, so there is exactly one live writer today. If salt is later wired, the contention
+# surfaces as a Finding (WriteFacetContentionFindings) and an authority is declared THEN, with the
+# conflict visible. Declaring an authority now would be guessing at a collision that does not exist.
+facetNamespaces:
+  - app.config
+  - software.package
+identitySchemes: [host.name]
+elevatedInputs: [become.enabled]

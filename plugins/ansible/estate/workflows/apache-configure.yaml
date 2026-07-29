@@ -1,0 +1,40 @@
+# apache-configure — the Apache materialization/remediation Workflow (ADR-0148). Surfaced as a ref
+# on the drift Finding, never auto-launched (§5 Flow 2). The PLUGIN materializes the state; the
+# Blueprint route NAMED it, core did not (ADR-0083).
+#
+# It INSTALLS as well as configures, which is the difference from web-server-configure: managed-app
+# ships bare, so "apache is present" is a fact this Run causes rather than one the image supplied.
+name: apache-configure
+# The desired port arrives from the ROUTE, never as a literal here. Restating a Blueprint default in
+# the Workflow is what made an overriding fleet detect one value and converge another; the route's
+# remediationParams are substituted from the SAME spec the expectation is and cross-checked against
+# these inputs at compile (ADR-0118 D3).
+inputs:
+  type: object
+  additionalProperties: false
+  required: [apache_port]
+  properties:
+    apache_port:
+      type: string
+      minLength: 1
+      description: >
+        The desired listen port, resolved per-Assignment from the Blueprint default OR the Intent's
+        override. A STRING, matching contracts/facets/app.config's observed port — nothing coerces
+        between types (ADR-0118 D1), so an expectation and its converge must agree or they are
+        never comparable.
+steps:
+  - name: configure
+    viewName: managed-app
+    actuator: ansible-apache
+    credentialRefs: [web-machine]
+    # The remediation may write back only what it OBSERVES (ADR-0054): the effective port and the
+    # installed package. Intersected with the Actuator's own ceiling above.
+    facetWriteScope: [app.config, software.package]
+    params:
+      connection:
+        user: root
+        credentialRef: web-machine
+        hostKeyChecking: accept-new
+      extraVars:
+        apache_port: "{{.launch.apache_port}}"
+      playbook: apache-configure.yml

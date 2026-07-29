@@ -1,0 +1,19 @@
+# managed-app — the REAL managed node the apache Blueprint converges (ADR-0148).
+#
+# A sibling of managed-web, and bare on purpose: the pod ships alpine with sshd and nothing else,
+# so `apache is installed` is a fact the remediation CAUSES rather than one the image supplied.
+# managed-web's converge can only ever adjust a port on a pre-installed nginx, which cannot
+# distinguish those two.
+#
+# Labelled `demo: managed-app` (NOT role: web, NOT demo: managed-web) so it lands in its own View.
+# That separation is load-bearing rather than tidy: the web-server Blueprint claims app.config
+# EXCLUSIVELY, so an apache Assignment over managed-web's View would be a compile error — correctly,
+# since two Blueprints converging one Entity's app.config is precisely the §2.4 double-claim.
+#
+# THE LITERAL `address:` IS THE SAME DOCUMENTED EXCEPTION managed-web records (ADDR-1, ADR-0144):
+# the coordinate is a Kubernetes Service name the CLUSTER's own DNS owns, and Stratt has no business
+# registering a second name for it. Where the estate owns the naming, declare an Intent/DnsRecord.
+hosts:
+  - fqdn: managed-app-1.stratt.test
+    labels: { os: linux, demo: managed-app }
+    address: managed-app.stratt.svc.cluster.local

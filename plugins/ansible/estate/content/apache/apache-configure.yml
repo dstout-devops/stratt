@@ -1,0 +1,88 @@
+---
+# Converge Apache on a host: INSTALL it, set the listen port, start it, then read both facts back.
+#
+# The remediation half of the drift loop for the `apache` Blueprint (ADR-0148). The variables it
+# reads (apache_port) are supplied by the Step's extraVars, which map the Workflow's declared launch
+# inputs onto these names — core never parses this file to discover that (ADR-0117 D6); the mapping
+# is declared in the Workflow and a repo-hygiene guard checks the two agree.
+#
+# WHY `ansible.builtin.package` AND NOT apk/yum/apt. The package is `apache2` on Alpine and Debian
+# and `httpd` on RHEL, and that difference belongs HERE, to content, never to the Intent. A
+# per-distro map in Intent/Application would make core learn distro packaging — the ontology creep
+# §1.1 and §9 forbid — and it is the env-keyed-values shape ADR-0118 D1 refuses, rotated one axis.
+# Ansible's own package abstraction plus its facts already answer it, which is exactly the kind of
+# thing a tool should be left to know (§1.4).
+- name: Converge apache
+  hosts: all
+  gather_facts: true
+  tasks:
+    - name: Install the web server package (distro-resolved by ansible, not by Stratt)
+      ansible.builtin.package:
+        name: "{{ 'httpd' if ansible_os_family == 'RedHat' else 'apache2' }}"
+        state: present
+
+    # Alpine's apache2 ships no conf.d include by default in every image; ensure the tree exists
+    # before writing into it so this is idempotent on a bare node.
+    - name: Ensure the apache conf.d directory exists
+      ansible.builtin.file:
+        path: /etc/apache2/conf.d
+        state: directory
+        mode: "0755"
+
+    - name: Set the desired listen port (idempotent — changed once, ok on re-run)
+      ansible.builtin.copy:
+        dest: /etc/apache2/conf.d/stratt.conf
+        mode: "0644"
+        content: |
+          Listen {{ apache_port }}
+          <VirtualHost *:{{ apache_port }}>
+            DocumentRoot /var/www/localhost/htdocs
+          </VirtualHost>
+
+    # Alpine's stock httpd.conf carries its own `Listen 80`, which would bind a port the estate did
+    # not ask for and make the observation below ambiguous about which one is effective.
+    - name: Remove the stock Listen so the declared port is the only one
+      ansible.builtin.replace:
+        path: /etc/apache2/httpd.conf
+        regexp: '^Listen\s+80\s*$'
+        replace: "# Listen 80 — superseded by conf.d/stratt.conf (stratt-managed)"
+      failed_when: false
+
+    - name: Start apache so the port actually takes effect (a real converge, not just a file)
+      ansible.builtin.shell: |
+        httpd -k restart 2>/dev/null || httpd -k start
+      register: started
+      changed_when: false
+      failed_when: false
+
+    # ── OBSERVE BACK ────────────────────────────────────────────────────────────────────────
+    # The converge is not finished when the file is written; it is finished when the desired state
+    # is READ BACK from the running system. Without this the drift Finding could never resolve, and
+    # a play that wrote the right file to a dead service would report success (§1.8).
+    - name: OBSERVE the effective listen port from the running config
+      ansible.builtin.shell: "grep -oE '^Listen +[0-9]+' /etc/apache2/conf.d/stratt.conf | grep -oE '[0-9]+'"
+      register: observed_port
+      changed_when: false
+
+    - name: OBSERVE the installed package + version
+      ansible.builtin.package_facts:
+        manager: auto
+
+    - name: Report the observed facts to Stratt (fact-back → the Finding resolves)
+      vars:
+        pkg: "{{ 'httpd' if ansible_os_family == 'RedHat' else 'apache2' }}"
+      ansible.builtin.set_fact:
+        stratt_facets:
+          app.config:
+            port: "{{ observed_port.stdout }}"
+          # software.package is the HOST form of the deliverable-software dimension (ADR-0080):
+          # the same `{name, version, origin, deliveryForm}` component shape software.container and
+          # software.chart carry, so the ONE form-agnostic advisory pass covers an apache installed
+          # here exactly as it covers a chart. That is what makes "is it installed, and is that
+          # version vulnerable?" answerable from the graph rather than from this play's log.
+          software.package:
+            packages:
+              - name: "{{ pkg }}"
+                version: "{{ ansible_facts.packages[pkg][0].version | default('unknown') }}"
+                origin: distro  # the schema documents distro|internal|external|vendor
+                deliveryForm: package
