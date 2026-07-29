@@ -297,10 +297,32 @@ when the estate has decided.** Per delivery form, the estate has decided.
   node that already ships nginx — so its `svc_install: false` path is the only one exercised, and two
   of the three families it declares have never run. It is also the D7 capability consumer, which
   makes it the leg with the most claimed and the least executed. A bare node plus two matrix entries.
-- **(b) The CHART delivery form.** ADR-0080 gives `software.package` / `software.container` /
-  `software.chart` one component shape and one advisory pass. Only the package form has a
-  write-owner here; a Blueprint routing an `Intent/Application` to `helm/deploy` is what shows D1–D4
-  are about delivery forms rather than about Ansible.
+- ~~**(b) The CHART delivery form.**~~ — **done, and it changed one thing about this ADR.** The
+  chart form ships: `estate/blueprints/podinfo.yaml` routes an `Intent/Application` to a now-
+  parameterized `helm-deploy`, and `kubeservices` is **declared at last** — it had projected
+  `software.chart` in code for a long time while appearing nowhere in the estate, so that facet had
+  **zero live write-owners** and the form-agnostic advisory pass covered charts only in a test.
+  D1–D4 hold unchanged across the form: one Blueprint per delivered application, the same
+  `delivers:` agreement, desired state in the estate and target facts elsewhere.
+  **What differs is WHO OBSERVES.** The package form's play converges *and* observes itself; the
+  chart form's `helm/deploy` converges and a **Syncer** observes. That is why `helm/deploy`'s output
+  Contract is thin (`{release, namespace}`) and why that is correct rather than a gap — a build
+  asserts what it INTENDED, a cluster read reports what is TRUE, and only the second is a projection
+  (§1.2, ADR-0144 D5's division). It also gives the chart form §2.1 write-ownership for free where
+  the package form leans on an Actuator ceiling.
+  **And it needed a new Facet**, `app.deliverable`: the software.\* facets are component LISTS so the
+  one advisory pass can walk them, and an expectation cannot read a list — `facetAtPath` walks maps
+  only, and `contains` is whole-element `DeepEqual`, so the sole expressible form would make the
+  estate declare `appVersion`, a fact about the chart rather than desired state (D3). Widening the
+  expectation language is the grammar ADR-0085 refuses by name (§9), so the chart form gets the split
+  the package form always had — a scalar facet for the drift question, a list for the advisory one,
+  both written by the same observation so they cannot disagree.
+  `TestChartDriftNeedsAScalarFacet` pins the measurement in both directions.
+  **Residual, stated:** the chart Blueprint converges VERSION DRIFT of a release that exists. It does
+  not cause the FIRST deploy — that is provisioning-shaped (ADR-0058's `requires: [provisioning]` +
+  a `provisions:` entry) and the helm Actuator declares neither. And nothing here has been executed
+  against a live cluster yet, which by this arc's own record is the state in which defects are
+  found, not the state in which they are absent.
 - **(c) Co-hosting (D6).** Needs a per-application key in the `app.config` claim, which is a
   claim-model change and owes its own ADR.
 - **(d) A collection-shaped content root (ANS-007).** The role landed as a project-relative `roles/`

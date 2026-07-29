@@ -11,6 +11,12 @@
     "channel": {
       "type": "string"
     },
+    "chartVersion": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Desired version of the deliverable for a CHART-delivered application, as a STRING — the same load-bearing type argument `port` records below: contracts/facets/app.deliverable declares the OBSERVED version as a string and nothing coerces between types (ADR-0118 D1). Typed here rather than left to additionalProperties because a shipping Blueprint route reads it (estate/blueprints/podinfo.yaml) and because the `port` field records what leaving it untyped costs — a number parses cleanly and fails at facet comparison, which is a full round-trip away. Adding it is not the tightening this file's own header warns about: no declaration in the repo used this key before the one added alongside it, so nothing that parsed stops parsing.",
+      "examples": ["6.9.2"]
+    },
     "port": {
       "type": "string",
       "minLength": 1,

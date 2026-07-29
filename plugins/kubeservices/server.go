@@ -48,6 +48,10 @@ func (s *Server) GetManifest(context.Context, *pluginv1.GetManifestRequest) (*pl
 		Contracts: []*pluginv1.ContractDecl{
 			{SchemaId: "service.endpoint"},
 			{SchemaId: "software.chart"},
+			// The scalar sibling a Blueprint route's observe expectation reads. Declared
+			// separately because it is a separate Contract, and because a collector that wrote a
+			// facet it never declared would be writing outside its own manifest.
+			{SchemaId: "app.deliverable"},
 		},
 		// Tombstone on the plugin's OWN identity schemes: a Service/release the K8s
 		// API no longer reports is a kubeservices-scoped removal (its `provides` edges

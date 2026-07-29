@@ -43,6 +43,12 @@ plugins:
     path: ../plugins/dns/estate
   - name: helm
     path: ../plugins/helm/estate
+  # kubeservices is the OBSERVE half of the chart delivery form: helm/deploy causes a release,
+  # this collector reports what is actually running. Cause it, then observe it — the same
+  # division ADR-0144 D5 drew for DNS, and the reason software.chart is a projection (§1.2)
+  # rather than something the deploy Action asserts about itself.
+  - name: kubeservices
+    path: ../plugins/kubeservices/estate
   - name: mcp
     path: ../plugins/mcp/estate
   - name: netbox

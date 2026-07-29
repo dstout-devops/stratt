@@ -1,0 +1,57 @@
+# podinfo — the CHART delivery form of Intent/Application (ADR-0148 follow-up b).
+#
+# WHAT THIS PROVES, and why it needed a second delivery form to prove it: ADR-0148's D1–D4 are
+# stated as rules about DELIVERY FORMS, and every instance of them so far was Ansible. This route
+# converges an application nobody SSHes into, with no play, no distro and no package manager — and
+# the estate around it is the same shape apache's is. One Blueprint per delivered application (D1),
+# the Intent-and-Blueprint agreement (D2), desired state in the estate and target facts elsewhere
+# (D3), and an observation that reads the running system (D4).
+#
+# THE OBSERVE HALF IS A SYNCER, NOT THE CONVERGE'S FACT-BACK — the one structural difference, and
+# it is a difference in WHO OBSERVES rather than in the rules:
+#
+#   package form:  the play converges AND observes itself     (Run provenance writes app.config)
+#   chart form:    helm/deploy converges; kubeservices observes (Syncer projects app.deliverable)
+#
+# That is why helm/deploy's output Contract is thin ({release, namespace}) and why that is CORRECT
+# rather than a gap: a build asserts what it INTENDED, a cluster read reports what is TRUE, and only
+# the second is a projection (§1.2, the division ADR-0144 D5 drew for DNS). It also means the chart
+# form gets §2.1 write-ownership for free — one Syncer owns the namespace, where the package form
+# relies on the Actuator's facetNamespaces ceiling.
+#
+# WHY app.deliverable AND NOT software.chart. software.chart is a `charts` component LIST, because
+# the one form-agnostic advisory pass has to walk it (ADR-0080). An observe expectation cannot:
+# facetAtPath walks maps only, so `charts.version` resolves to nothing, and `contains` matches a
+# whole element by DeepEqual — which would force this Blueprint to declare `appVersion`, a fact
+# about the chart rather than desired state (D3). So the chart form gets the split the package form
+# already had: a scalar facet for the drift question, a list for the advisory question, both written
+# by the same observation so they cannot disagree.
+name: podinfo
+version: 1
+for: Intent/Application
+# The same `delivers:`/`package:` agreement rule apache and tomcat use (ADR-0148 D2) — it is not an
+# Ansible-shaped check. Binding an Intent that asks for a different chart is refused at load.
+delivers: podinfo
+severity: warning
+dampingObservations: 1
+defaults:
+  # No `port`: a chart's service port is the chart's own concern, expressed in its values, and
+  # claiming it here would make the estate an owner of something Helm already owns (§1.1).
+  chartVersion: "6.9.2"
+  namespace: stratt-apps
+routes:
+  - observe:
+      namespace: app.deliverable
+      path: version
+      equals: "{{.spec.chartVersion}}"
+    # EXCLUSIVE for the same reason the package form is: two Assignments converging one
+    # application's deployed version is the §2.4 double-claim, refused at compile rather than
+    # tie-broken. For a chart that is if anything sharper — two Blueprints would fight over one
+    # Helm release.
+    claim: exclusive
+    remediationWorkflow: helm-deploy
+    remediationParams:
+      chart: "{{.spec.package}}"
+      chartVersion: "{{.spec.chartVersion}}"
+      release: "{{.spec.package}}"
+      namespace: "{{.spec.namespace}}"

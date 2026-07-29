@@ -261,8 +261,18 @@ func TestPinsAreStable(t *testing.T) {
 	// builder/buildWorkflow seam and closes with additionalProperties: false). An Intent
 	// SPEC schema is a seam by D3's definition, so it stays embedded here rather than
 	// moving into the dns plugin's tree: the kind belongs to the estate, not the provider.
-	if len(all) != 70 {
-		t.Fatalf("expected 70 embedded documents, got %d — the shipped set is the SEAM set now "+
+	// 70 → 71: +facets/app.deliverable (ADR-0148 follow-up b). The CHART delivery form needed a
+	// facet an observe expectation could actually READ, and the software.* facets cannot be one:
+	// software.chart is a `charts` component LIST so the form-agnostic advisory pass can walk it
+	// (ADR-0080), while facetAtPath walks maps only and `contains` matches a whole element by
+	// DeepEqual — so asking "is the deployed chart at version X" would have meant enumerating
+	// every field the Normalizer happened to set, including appVersion, a fact about the chart
+	// rather than desired state (ADR-0148 D3). It is the split the PACKAGE form already shipped
+	// (app.config scalar + software.package list), arrived at from the other side. A SEAM by
+	// ADR-0138 D3's definition: a Facet schema belongs to the estate, not to the collector that
+	// happens to write it today.
+	if len(all) != 71 {
+		t.Fatalf("expected 71 embedded documents, got %d — the shipped set is the SEAM set now "+
 			"(ADR-0138 D3/D4); a plugin's own contracts live in plugins/<n>/contracts/", len(all))
 	}
 	versions := map[string]int{}

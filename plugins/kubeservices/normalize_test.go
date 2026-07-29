@@ -56,6 +56,19 @@ func TestNormalize_ServiceApplicationProvides(t *testing.T) {
 		t.Fatalf("software.chart shape wrong: %+v", chart.Charts)
 	}
 
+	// app.deliverable is the SCALAR sibling, and it must agree with the list above because both
+	// come from the same observation. A Blueprint route's observe expectation can only read this
+	// one: facetAtPath walks maps, so `charts.version` resolves to nothing, and `contains` matches
+	// a whole element by DeepEqual — which would force the estate to declare appVersion, a fact
+	// about the chart rather than desired state (ADR-0148 D3).
+	var deliverable struct{ Name, Version string }
+	if err := json.Unmarshal(app.GetFacets()["app.deliverable"], &deliverable); err != nil {
+		t.Fatalf("app.deliverable: %v", err)
+	}
+	if deliverable.Name != "web-stack" || deliverable.Version != "1.4.2" {
+		t.Fatalf("app.deliverable must agree with software.chart, got %+v", deliverable)
+	}
+
 	// provides → BOTH Helm services (the M:N), not the non-Helm one.
 	provided := map[string]bool{}
 	for _, r := range app.GetRelations() {
