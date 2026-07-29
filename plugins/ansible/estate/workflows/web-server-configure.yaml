@@ -7,6 +7,36 @@
 # and reports the observed app.config via the stratt_facets fact-back so the drift
 # Finding RESOLVES once observed == desired.
 name: web-server-configure
+# THE DESIRED PORT ARRIVES FROM THE ROUTE, and until now it did not (ADR-0148 D1).
+#
+# It was the literal "8080" below — the Blueprint's default, restated here. The expectation is
+# synthesized per-Assignment from the resolved spec ({{.spec.port}} in the route's `observe`), so
+# `web-server-secure`, which overrides the port to 443, DRIFT-CHECKS 443 and would have been
+# remediated to 8080. Not a no-op: the converge sets the wrong value, the Finding never resolves,
+# and the same remediation is offered forever.
+#
+# It has been latent rather than live only because no host carries `tier: secure`, so the View that
+# Assignment compiles over is empty. It goes live the first time an adopter labels one — which is
+# the ordinary way anyone would adopt the second fleet.
+#
+# The mechanism already existed: a route's `remediationParams` is substituted from the SAME spec
+# the expectation is and cross-checked against these inputs at COMPILE (ADR-0118 D3), so a route
+# wired to a Workflow it does not fit fails the compile rather than an operator's launch. Nothing
+# had to be built — only declared. That is worth recording, because "the seam exists and nobody
+# connected it" is now the most common defect shape in this repo.
+inputs:
+  type: object
+  additionalProperties: false
+  required: [web_server_port]
+  properties:
+    web_server_port:
+      type: string
+      minLength: 1
+      description: >
+        The desired listen port, resolved per-Assignment from the Blueprint default OR the
+        Intent's override. A STRING, matching contracts/facets/app.config's observed port —
+        nothing coerces between types (ADR-0118 D1), so an expectation and its converge must
+        agree or they are never comparable.
 steps:
   - name: configure
     # The dedicated real-node View (ADR-0084 fixture). ansible_host is rendered by the
@@ -33,8 +63,9 @@ steps:
       extraVars:
         # ansible_python_interpreter is left to auto-discovery so localhost (the EE) and
         # the target (alpine + python3) each resolve their own.
-        # The desired listen port — the web-server onboarding default (8080).
-        web_server_port: "8080"
+        # The desired listen port, from the LAUNCH — never a literal. Restating the Blueprint's
+        # default here is what made an overriding fleet detect one value and converge another.
+        web_server_port: "{{.launch.web_server_port}}"
       # The play is a PLAYBOOK now (ADR-0134), in the project this Step's Actuator declares:
       # estate/ansible/projects/platform-baseline/web-server-configure.yml. What is left here
       # is what this file was always for — WHAT runs, WHERE, and with WHICH inputs — and the

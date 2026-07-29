@@ -582,3 +582,70 @@ func indexOf(s, sub string) int {
 	}
 	return -1
 }
+
+// TestRemediationParamsCarryEachAssignmentsResolvedSpec proves the half of "synthesize the right
+// configuration for the right target" that was missing: the CONVERGE gets the same per-Assignment
+// value the EXPECTATION does (ADR-0148 D1).
+//
+// The reference estate had the expectation resolved from {{.spec.port}} and the remediation
+// carrying a literal, so an Intent overriding the Blueprint default drift-checked its own value and
+// would have been converged to the default's. Not a no-op — the converge sets the wrong value, so
+// the Finding can never resolve and the same remediation is offered forever. It stayed latent only
+// because the overriding fleet's View had no members.
+//
+// Two Assignments of ONE Blueprint, one Intent overriding, is the minimum that can tell a
+// correctly-parameterized route from a coincidentally-correct one: a single Assignment whose
+// override happens to equal the default passes either way.
+func TestRemediationParamsCarryEachAssignmentsResolvedSpec(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	seedEntity(t, s, "u1", "x86_64")
+	seedView(t, s, "dev-vms")
+	seedView(t, s, "secure-vms")
+
+	must(t, s.UpsertWorkflow(ctx, types.Workflow{
+		Name: "app-configure",
+		Inputs: json.RawMessage(`{"type":"object","additionalProperties":false,
+			"required":["listen_port"],"properties":{"listen_port":{"type":"string"}}}`),
+		Steps: []types.Step{{Name: "converge", ViewName: "dev-vms", Actuator: "ansible",
+			Params: map[string]any{"extraVars": map[string]any{"port": "{{.launch.listen_port}}"}}}},
+	}))
+
+	// ADDITIVE: both Views select the seeded entity, and an exclusive claim would (correctly)
+	// collide before the assertion is reached. The claim rule is not what is under test here.
+	bp := appBlueprint("web", 1, types.ClaimAdditive)
+	bp.Defaults = map[string]any{"port": "8080"}
+	bp.Routes[0].RemediationWorkflow = "app-configure"
+	bp.Routes[0].RemediationParams = map[string]any{"listen_port": "{{.spec.port}}"}
+	must(t, s.UpsertBlueprint(ctx, bp))
+
+	// The base Intent takes the Blueprint default; the second OVERRIDES it.
+	must(t, s.UpsertIntent(ctx, types.Intent{Name: "web", Kind: types.IntentApplication, OnRemove: types.OnRemoveRetain}))
+	must(t, s.UpsertIntent(ctx, types.Intent{Name: "web-secure", Kind: types.IntentApplication,
+		Spec: map[string]any{"port": "443"}, OnRemove: types.OnRemoveRetain}))
+	must(t, s.UpsertAssignment(ctx, types.Assignment{
+		Name: "plain", Intent: "web", View: "dev-vms", Blueprint: "web", BlueprintVersion: 1}))
+	must(t, s.UpsertAssignment(ctx, types.Assignment{
+		Name: "secure", Intent: "web-secure", View: "secure-vms", Blueprint: "web", BlueprintVersion: 1}))
+
+	plan := compileApply(t, s, 0)
+	if len(plan.Errors) != 0 {
+		t.Fatalf("unexpected compile errors: %v", plan.Errors)
+	}
+	for _, tc := range []struct{ assignment, want string }{
+		{"plain", "8080"}, // the Blueprint default
+		{"secure", "443"}, // the Intent's override
+	} {
+		b, err := s.GetBaseline(ctx, CompiledName(tc.assignment, "web", 1, 0))
+		if err != nil {
+			t.Fatalf("%s: compiled baseline missing: %v", tc.assignment, err)
+		}
+		got, _ := b.RemediationParams["listen_port"].(string)
+		if got != tc.want {
+			t.Errorf("assignment %s: remediation would converge listen_port=%q, want %q.\n"+
+				"The expectation and the converge must resolve from the SAME spec — otherwise this "+
+				"fleet detects one value, is remediated to another, and its Finding never resolves",
+				tc.assignment, got, tc.want)
+		}
+	}
+}
