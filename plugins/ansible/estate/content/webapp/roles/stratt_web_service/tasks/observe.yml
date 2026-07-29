@@ -1,0 +1,88 @@
+---
+# stratt_web_service : observe — the BACK half of the skeleton, and the half that had the defect.
+#
+# Called as: include_role: {name: stratt_web_service, tasks_from: observe}
+#
+# THIS IS THE FILE ANS-014 EXISTS FOR. Every one of the three plays used to end with
+#
+#     shell: "grep -oE '^Listen +[0-9]+' /etc/apache2/conf.d/stratt.conf | ..."
+#
+# — a grep of the file the play had written two tasks earlier — under a comment claiming it read
+# "the effective listen port from the running config". It was an ECHO. It could only ever return the
+# desired value, so it returned it for hosts where apache had never started and for a Tomcat whose
+# JVM had exited immediately, the drift Finding RESOLVED on it, and the estate believed a dead
+# service was converged. An observation that cannot come back WRONG is not an observation.
+#
+# What replaces it can come back wrong three ways, and each FAILS THE RUN rather than reporting: the
+# port must accept a connection, what answers must speak HTTP, and it must identify as the service
+# this content claims to converge. A converge that did not converge is a failure, not a fact (§1.8).
+#
+# The caller declares:
+#   svc_port          (required) — the desired port; reported only if the checks below pass
+#   svc_server_token  (REQUIRED, may be "") — a string expected in the Server header
+#   svc_pkg           — the distro's package name, for the software.package report
+#   svc_ready_timeout (optional, default 30) — seconds to allow for the service to bind
+#   svc_ok_status     (optional) — acceptable HTTP status codes
+
+# svc_server_token must be DECLARED, even when it is empty. Tomcat 10 sends no Server header, so
+# there is genuinely nothing to assert on for that app — but "no header to check" and "nobody
+# thought about it" must not look the same to the next author. An undefined token fails here; an
+# explicit "" is how a play says the check does not apply, and it says it where a reviewer reads it.
+- name: The caller must state whether this service can be identified by its Server header
+  ansible.builtin.assert:
+    that: svc_server_token is defined
+    fail_msg: >-
+      svc_server_token is not defined. Set it to a string expected in the Server header (e.g.
+      "Apache", "nginx"), or to "" to state explicitly that this service sends no Server header —
+      which is true of Tomcat. It is required so that a missing identity check is a decision rather
+      than an omission.
+
+- name: OBSERVE — the declared port genuinely accepts connections
+  ansible.builtin.wait_for:
+    host: 127.0.0.1
+    port: "{{ svc_port | int }}"
+    timeout: "{{ svc_ready_timeout | default(30) }}"
+    msg: >-
+      nothing is listening on {{ svc_port }} after the converge — the service did not come up
+
+- name: OBSERVE — and that what answers there speaks HTTP
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ svc_port }}/"
+    # A healthy web server with no index answers 403 or 404 as readily as 200. All three prove
+    # something served; only a connection error or a 5xx does not.
+    status_code: "{{ svc_ok_status | default([200, 403, 404]) }}"
+  register: svc_served
+
+- name: OBSERVE — the running server identifies as the service this content converges
+  ansible.builtin.assert:
+    that: "svc_server_token | lower in (svc_served.server | default('') | lower)"
+    fail_msg: >-
+      port {{ svc_port }} answered but Server: {{ svc_served.server | default('(none)') }} —
+      something other than {{ svc_server_token }} holds the port this Blueprint claims
+  when: svc_server_token | length > 0
+
+- name: OBSERVE the installed package + version
+  ansible.builtin.package_facts:
+    manager: auto
+
+- name: Report the observed facts to Stratt (fact-back → the Finding resolves)
+  ansible.builtin.set_fact:
+    stratt_facets:
+      app.config:
+        # The desired value, reported ONLY because the running service answered on it: the tasks
+        # above fail the Run otherwise, so this line is unreachable for a host that is not serving
+        # there. That is a different claim from greping our own file, and it is the one
+        # contracts/facets/app.config documents — "the effective listen port the configure Run read
+        # back from the target after converging it".
+        port: "{{ svc_port }}"
+      # software.package is the HOST form of the deliverable-software dimension (ADR-0080): the same
+      # {name, version, origin, deliveryForm} component shape software.container and software.chart
+      # carry, so the ONE form-agnostic advisory pass covers a package installed here exactly as it
+      # covers a chart. Being in the shared role is what makes that shape identical across apps by
+      # construction rather than by three authors remembering it.
+      software.package:
+        packages:
+          - name: "{{ svc_pkg }}"
+            version: "{{ ansible_facts.packages[svc_pkg][0].version | default('unknown') }}"
+            origin: distro # the schema documents distro|internal|external|vendor
+            deliveryForm: package

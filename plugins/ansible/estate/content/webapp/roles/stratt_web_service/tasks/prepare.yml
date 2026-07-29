@@ -1,0 +1,67 @@
+---
+# stratt_web_service : prepare — the FRONT half of the converge skeleton every web app repeats.
+#
+# WHY A ROLE, AND WHY ONLY THE ENDS. Three plays (apache, tomcat, nginx) across three distro
+# families showed which parts are genuinely common, and the answer is not a wrapper: it is a PREFIX
+# and a SUFFIX. The variability is in the MIDDLE — apache writes a conf.d file and runs
+# `httpd -k restart`, tomcat rewrites an XML Connector and runs catalina.sh, nginx writes a server
+# block and reloads. A role that tried to own the middle would need a hook, and a hook is how a
+# shared role becomes less readable than the duplication it replaced. So the ends are factored and
+# the middle stays in the play, where an author reads it.
+#
+# THE REASON IT IS FACTORED IS CORRECTNESS, NOT BREVITY. ANS-014 was ONE defect in THREE places:
+# every play "observed" the port by greping the file it had just written, so a service that never
+# started reported a converged one and the drift Finding resolved. It had to be fixed three times.
+# The next app added will copy whichever play its author finds first — and if the ends live here,
+# what it copies is the fixed version, by construction.
+#
+# Called as: include_role: {name: stratt_web_service, tasks_from: prepare}
+#
+# The caller declares:
+#   svc_families    (required) — the os_family values this content has a layout for AND has run against
+#   svc_layout_dir  (REQUIRED, may be "") — a directory of <os_family>.yml layout files to load
+#   svc_install     (optional, default true) — whether this content installs the package at all
+#   svc_pkg         — the distro's package name; normally supplied BY the layout file
+# svc_layout_dir must be DECLARED, even when empty, for the same reason svc_server_token is: nginx
+# genuinely has no per-family layout (conf.d/ and `nginx -s reload` are identical on Alpine, Debian
+# and RHEL), but "there is nothing to load" and "nobody thought about the distro" must not look the
+# same to the next author — or to the repo-hygiene guard, which cannot tell a `when:`-skipped
+# template from an unbound variable.
+- name: The caller must state whether this service has a per-distro layout
+  ansible.builtin.assert:
+    that: svc_layout_dir is defined
+    fail_msg: >-
+      svc_layout_dir is not defined. Set it to a directory of <os_family>.yml layout files, or to ""
+      to state explicitly that this service's paths do not vary by distro — which is true of nginx.
+      It is required so that a missing layout is a decision rather than an omission.
+
+- name: Refuse a distro family this content has no layout for
+  ansible.builtin.assert:
+    that: ansible_facts.os_family in svc_families
+    fail_msg: >-
+      this content has no layout for os_family={{ ansible_facts.os_family }} (it declares
+      {{ svc_families | join(', ') }}). Add a layout file for it and add a node for it to
+      `task dev:content:proof` — a layout that has never been executed is not support.
+    success_msg: "os_family={{ ansible_facts.os_family }} is a declared and executed target"
+
+# Refusing an unknown family rather than defaulting to one is the whole lesson of ANS-014. The
+# apache play used to resolve the PACKAGE name per family and then fall through to Alpine's paths
+# for everyone, which meant Debian and RedHat converged directories nothing reads — and said
+# nothing, because a silently-wrong path is indistinguishable from a correct one until someone
+# connects to the port.
+- name: Load this distro's layout for the service
+  ansible.builtin.include_vars: "{{ svc_layout_dir }}/{{ ansible_facts.os_family }}.yml"
+  when: svc_layout_dir | length > 0
+
+- name: Install the service package (distro-resolved by ansible, not by Stratt)
+  ansible.builtin.package:
+    name: "{{ svc_pkg }}"
+    state: present
+  # nginx's fixture node ships nginx already, so that play converges configuration only. The
+  # install is CONDITIONAL ON THE ESTATE, not on the application: the same apache content installs
+  # onto a bare node and adjusts a pre-built image, and which one it is is not apache's business.
+  when: svc_install | default(true) | bool
+  vars:
+    # Some minimal images resolve a different interpreter for the package module than the one
+    # gather_facts picked; pinning it here keeps a JVM package install from failing on that alone.
+    ansible_python_interpreter: /usr/bin/python3

@@ -1,0 +1,76 @@
+---
+# Converge Apache on a host: INSTALL it, set the listen port, start it, then observe the RUNNING
+# service. The remediation half of the drift loop for the `apache` Blueprint (ADR-0148).
+#
+# WHAT IS LEFT IN THIS FILE IS WHAT IS ACTUALLY APACHE. The family guard, the layout load, the
+# install and the whole observe/fact-back tail now live in roles/stratt_web_service, because three
+# plays across three distro families showed those ends are identical and the middle never is
+# (ANS-002/ANS-007). The middle — a conf.d drop-in, a stock `Listen 80` to displace, and
+# `httpd -k restart` — is apache's own and stays here where an author reads it.
+#
+# The variables it reads (apache_port) are supplied by the Step's extraVars, which map the
+# Workflow's declared launch inputs onto these names — core never parses this file to discover that
+# (ADR-0117 D6); the mapping is declared in the Workflow and a repo-hygiene guard checks they agree.
+#
+# WHAT THE DISTRO OWNS AND WHAT THE ESTATE OWNS. The Intent declares DESIRED STATE — a port — and
+# nothing else. Everything about *where this distro keeps apache* is a fact about the target, so it
+# is content's: vars/apache/{Alpine,Debian,RedHat}.yml, loaded from the target's own facts. A
+# per-distro map in Intent/Application would be the other wrong answer — it makes core learn distro
+# packaging (§1.1/§9 ontology creep) and is the env-keyed-values shape ADR-0118 D1 refuses, rotated
+# one axis.
+- name: Converge apache
+  hosts: all
+  gather_facts: true
+  vars:
+    # All three are EXECUTED, not merely declared: `task dev:content:proof` runs this play against
+    # alpine:3.22, debian:12-slim and rockylinux:9. Adding a family means a vars file AND a node.
+    svc_families: [Alpine, Debian, RedHat]
+    svc_layout_dir: vars/apache
+    svc_port: "{{ apache_port }}"
+    svc_server_token: Apache
+  tasks:
+    - name: Guard the family, load the layout, install apache
+      ansible.builtin.include_role:
+        name: stratt_web_service
+        tasks_from: prepare
+
+    # ── APACHE'S OWN MIDDLE ─────────────────────────────────────────────────────────────────
+    - name: Ensure the include directory exists
+      ansible.builtin.file:
+        path: "{{ apache_conf_dir }}"
+        state: directory
+        mode: "0755"
+
+    - name: Set the desired listen port (idempotent — changed once, ok on re-run)
+      ansible.builtin.copy:
+        dest: "{{ apache_conf_dir }}/stratt.conf"
+        mode: "0644"
+        content: |
+          Listen {{ apache_port }}
+          <VirtualHost *:{{ apache_port }}>
+            DocumentRoot {{ apache_docroot }}
+          </VirtualHost>
+
+    # Every family ships its own `Listen 80` — in httpd.conf on Alpine and RHEL, in ports.conf on
+    # Debian — which would bind a port the estate never asked for and make the observation ambiguous
+    # about which one is effective.
+    #
+    # NOT `failed_when: false`. It was, and that is what let the Debian path fail in silence: the
+    # file simply did not exist there. These are distro-owned files, present by definition, so a
+    # failure here means the layout is wrong for this target and the Run must say so.
+    - name: Remove the stock Listen so the declared port is the only one
+      ansible.builtin.replace:
+        path: "{{ apache_listen_conf }}"
+        regexp: '^Listen\s+80\s*$'
+        replace: "# Listen 80 — superseded by stratt.conf (stratt-managed)"
+
+    - name: Start apache so the port actually takes effect (a real converge, not just a file)
+      ansible.builtin.shell: "{{ apache_ctl }} -k restart 2>/dev/null || {{ apache_ctl }} -k start"
+      register: started
+      changed_when: false
+
+    # ── OBSERVE BACK — from the RUNNING SERVICE, in the shared role ──────────────────────────
+    - name: Observe the running service and report the facts Stratt reads
+      ansible.builtin.include_role:
+        name: stratt_web_service
+        tasks_from: observe

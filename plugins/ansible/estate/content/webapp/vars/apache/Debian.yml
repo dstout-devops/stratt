@@ -1,0 +1,13 @@
+---
+# Apache's layout on Debian/Ubuntu (ansible_os_family == "Debian"). Loaded by apache-configure.yml
+# via the stratt_web_service role's prepare tasks.
+#
+# Debian's `apache2` shares only the package NAME with Alpine's. Measured on debian:12-slim: there
+# is no conf.d/ (it is conf-enabled/, pulled in by `IncludeOptional conf-enabled/*.conf`), there is
+# no httpd.conf (the stock `Listen 80` lives in ports.conf), and there is no `httpd` binary at all —
+# it is `apache2ctl`, which sources /etc/apache2/envvars before dispatching.
+svc_pkg: apache2
+apache_ctl: apache2ctl
+apache_conf_dir: /etc/apache2/conf-enabled
+apache_listen_conf: /etc/apache2/ports.conf
+apache_docroot: /var/www/html

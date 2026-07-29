@@ -1,0 +1,15 @@
+---
+# Tomcat's layout on RHEL/Rocky/Fedora (ansible_os_family == "RedHat"). Loaded by
+# tomcat-configure.yml via the stratt_web_service role's prepare tasks.
+#
+# UNEXECUTED, and labelled as such. `task dev:content:proof` runs tomcat on Debian only, so this is
+# the layout RHEL's `tomcat` package documents rather than one that has been observed converging.
+# Apache's three families are all executed; this is the one gap left in the matrix, and it is one
+# vars file plus one node away from closing. Adding the node is the fix, not deleting this comment.
+#
+# RHEL keeps HOME and BASE as ONE directory (with conf/ symlinked to /etc/tomcat), unlike Debian's
+# split — which is precisely why the play reads both from here rather than deriving one from the other.
+svc_pkg: tomcat
+tomcat_home: /usr/share/tomcat
+tomcat_base: /usr/share/tomcat
+tomcat_conf_dir: /etc/tomcat

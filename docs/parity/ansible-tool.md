@@ -29,7 +29,7 @@ restates it.
 | Area                     | Verdict                   | One-line                                                                                                                  |
 | ------------------------ | ------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
 | **Playbook discovery**   | 🟢 sound                  | Play-shape detection, not path convention — a role task file and a `requirements.yml` both correctly fail it              |
-| **Content-root breadth** | 🟡 four artifact kinds    | Roles, collections, playbooks, inventory files. Role **dependencies** and the roles half of `requirements.yml` are unread |
+| **Content-root breadth** | 🟡 four artifact kinds    | Roles, collections, playbooks, inventory files. A shipped content root now **uses** a role (`content/webapp/roles/stratt_web_service`, included by all three web plays) and nested `vars/<app>/<os_family>.yml` — verified through the real ConfigMap path, not just a bind mount. Role **dependencies** (`meta/main.yml`) and the roles half of `requirements.yml` are still unread |
 | **Variable layout**      | 🔴 invisible              | `group_vars/`, `host_vars/`, vars files — none observed; the estate cannot see where a value comes from                   |
 | **Custom content**       | 🔴 invisible              | `library/`, `module_utils/`, filter/callback plugins — a repo's own modules are unprojected                               |
 | **Run knobs**            | 🟢 typed and bounded      | 12 typed fields in `ansible.input.v6`, each rendered as its own token — an argument surface, not an injection one         |

@@ -8,18 +8,35 @@
 # is the documented rule: name the capability when more than one provider could serve, name the
 # Workflow when the estate has decided. Per delivery form, the estate has decided.
 #
-# ONE PROJECT PER APPLICATION, and not by preference: content selection cannot be data (a templated
+# ONE ACTUATOR PER APPLICATION, and not by preference: content selection cannot be data (a templated
 # content ref is refused at estate load), so one playbook per Step cascades into one application per
-# Workflow, per route, per Blueprint. Tomcat gets its own project beside this one.
+# Workflow, per route, per Blueprint.
+#
+# ONE CONTENT ROOT FOR THE THREE OF THEM, which is a CORRECTION of what this file used to say. The
+# earlier comment claimed the per-project ceiling was carried by the DIRECTORY, so that merging two
+# applications' roots would merge their write ceilings. It is not: `facetNamespaces` is a field on
+# the ACTUATOR declaration and is intersected with the Step's facetWriteScope per Actuator
+# (desiredstate/actuator_capability.go). Three Actuators over one root keep three distinct ceilings.
+#
+# What the split actually bought was FILE-level least authority — an apache pod mounted only
+# apache's code — and that is real but weaker, and it is what pays for the shared
+# stratt_web_service role. The role is why the trade is worth making: ANS-014 was one defect in
+# three copies of the observe tail, and the next app to be added will copy whatever it finds. The
+# residual is stated rather than glossed: an apache Run now mounts tomcat's and nginx's plays too,
+# and this Actuator would accept `playbook: tomcat-configure.yml`. That widens the surface without
+# escalating authority — the ceiling below still bounds every write — and it is the ordinary AWX
+# shape, where many job templates share one project.
 name: ansible-apache
 pluginIdentity: ansible
 tier: trusted
 dryRunnable: true
 jobCommand: [stratt-ansible]
-contentDir: content/apache
+contentDir: content/webapp
 contentInputs: [playbook]
-# The PER-PROJECT write ceiling (ADR-0054/0117 D3a): this project may write these namespaces and
-# nothing else, whatever a Step's own facetWriteScope asks for — the two are intersected.
+# The PER-ACTUATOR write ceiling (ADR-0054/0117 D3a): this Actuator may write these namespaces and
+# nothing else, whatever a Step's own facetWriteScope asks for — the two are intersected. It is
+# keyed on the Actuator, not on contentDir, which is what lets the three web Actuators share a
+# content root without sharing authority.
 #
 # software.package is the HOST form of the deliverable-software dimension (ADR-0080). Co-ownership
 # is legal (graph.facet_owner takes many owners, at most one authoritative), so declaring it here

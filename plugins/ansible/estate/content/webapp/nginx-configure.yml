@@ -1,0 +1,74 @@
+---
+# Converge nginx's listen port on a host, then observe the RUNNING service.
+# The remediation half of the drift loop for the `web-server` Blueprint.
+#
+# THE THIRD INSTANCE, AND THE ONE THAT SHAPED THE ROLE'S CONDITIONAL. managed-web ships
+# `nginx:alpine`, so nginx is already installed and this play converges configuration only. That is
+# why `svc_install: false` exists on the role rather than an "nginx never installs" assumption: the
+# install is conditional on THE ESTATE, not on the application. The same apache content installs
+# onto a bare node and would adjust a pre-built image; which one it faces is not apache's business
+# either. A shared role has to accommodate that variation rather than assume it away.
+#
+# It also carries no per-family layout, and that is a fact about nginx's packaging rather than a
+# shortcut: conf.d/ and `nginx -s reload` are the same on Alpine, Debian and RHEL. apache genuinely
+# has three layouts and gets three vars files.
+#
+# The variables this play reads (nginx_port) are supplied by the Step's extraVars, which map the
+# Workflow's declared launch inputs onto these names. Core never parses this file to discover that
+# (ADR-0117 D6); the mapping is declared in the Workflow, and the repo-hygiene guard in
+# core/internal/desiredstate/unbound_playvars_test.go checks the two agree.
+- name: Converge the nginx listen port
+  hosts: all
+  gather_facts: true
+  vars:
+    # ONLY Alpine is executed (managed-web is nginx:alpine). Debian and RedHat are listed because
+    # there is no per-family layout that could be wrong for them — the paths and the reload command
+    # are identical — but that is an argument from nginx's packaging, not evidence. Neither has been
+    # run, and the honest place to fix that is a node in `task dev:content:proof`.
+    svc_families: [Alpine, Debian, RedHat]
+    # No per-distro layout exists to load: nginx's conf.d/ and `nginx -s reload` are identical
+    # across families. Declared empty rather than omitted, so the role can tell that apart from
+    # an author who did not consider the distro.
+    svc_layout_dir: ""
+    svc_install: false
+    svc_pkg: nginx
+    svc_port: "{{ nginx_port }}"
+    svc_server_token: nginx
+  tasks:
+    # gather_facts is now TRUE where it used to be false: the role's family guard reads
+    # ansible_facts.os_family, and a guard that silently had nothing to read would pass everything.
+    - name: Guard the family (nginx is already installed here — svc_install is false)
+      ansible.builtin.include_role:
+        name: stratt_web_service
+        tasks_from: prepare
+
+    # ── NGINX'S OWN MIDDLE ──────────────────────────────────────────────────────────────────
+    # The key-staging bootstrap task is GONE (ADR-0126 D1): the shim stages the credentialRef's key
+    # at the mode SSH requires, so a play no longer opens with a copy task it had to know to write.
+    - name: Ensure the nginx conf.d directory exists
+      ansible.builtin.file:
+        path: /etc/nginx/conf.d
+        state: directory
+        mode: "0755"
+
+    - name: Set the desired nginx site (idempotent — changed once, ok on re-run)
+      ansible.builtin.copy:
+        dest: /etc/nginx/conf.d/stratt.conf
+        mode: "0644"
+        content: |
+          server {
+            listen {{ nginx_port }};
+            server_name _;
+            location / { return 200 'stratt managed-web listening on {{ nginx_port }}\n'; }
+          }
+
+    - name: Reload nginx so the port takes effect (a real converge, not just a file)
+      ansible.builtin.command: nginx -s reload
+      register: reload
+      changed_when: false
+
+    # ── OBSERVE BACK — from the RUNNING SERVICE, in the shared role ──────────────────────────
+    - name: Observe the running service and report the facts Stratt reads
+      ansible.builtin.include_role:
+        name: stratt_web_service
+        tasks_from: observe

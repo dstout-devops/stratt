@@ -22,7 +22,7 @@ inputs:
         nothing coerces between types (ADR-0118 D1).
 # tomcat_home / tomcat_conf_dir USED TO BE INPUTS HERE, defaulted by the Blueprint to Debian's
 # /usr/share/tomcat10 and /etc/tomcat10 (ANS-014). They are gone: where a distro keeps tomcat is a
-# fact about the TARGET, read from the target's own facts by content/tomcat/vars/<family>.yml —
+# fact about the TARGET, read from its own facts by content/webapp/vars/tomcat/<family>.yml —
 # not desired state an Intent could sensibly declare. Threading them through the launch interface
 # made this Blueprint silently Debian-only while looking substrate-agnostic.
 steps:

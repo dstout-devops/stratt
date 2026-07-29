@@ -24,7 +24,7 @@ pluginIdentity: ansible
 tier: trusted
 dryRunnable: true
 jobCommand: [stratt-ansible]
-contentDir: content/nginx
+contentDir: content/webapp
 contentInputs: [playbook]
 provides: [configmgmt]
 remediates:

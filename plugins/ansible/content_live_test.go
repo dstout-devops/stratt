@@ -92,7 +92,7 @@ func TestLiveContentInstallsAndObservesBack(t *testing.T) {
 			image:     "alpine:3.22",
 			bootstrap: bootAlpine,
 			pkg:       "apache2",
-			playbook:  "content/apache/apache-configure.yml",
+			playbook:  "content/webapp/apache-configure.yml",
 			extra:     []string{"apache_port=8080"},
 			port:      "8080",
 			wait:      60 * time.Second,
@@ -102,7 +102,7 @@ func TestLiveContentInstallsAndObservesBack(t *testing.T) {
 			image:     "debian:12-slim",
 			bootstrap: bootDebian,
 			pkg:       "apache2", // same package NAME as Alpine, entirely different layout
-			playbook:  "content/apache/apache-configure.yml",
+			playbook:  "content/webapp/apache-configure.yml",
 			extra:     []string{"apache_port=8080"},
 			port:      "8080",
 			wait:      180 * time.Second,
@@ -112,7 +112,7 @@ func TestLiveContentInstallsAndObservesBack(t *testing.T) {
 			image:     "rockylinux/rockylinux:9",
 			bootstrap: bootRocky,
 			pkg:       "httpd", // the branch that shipped for two ADRs without ever executing
-			playbook:  "content/apache/apache-configure.yml",
+			playbook:  "content/webapp/apache-configure.yml",
 			extra:     []string{"apache_port=8080"},
 			port:      "8080",
 			wait:      180 * time.Second,
@@ -122,9 +122,9 @@ func TestLiveContentInstallsAndObservesBack(t *testing.T) {
 			image:     "debian:12-slim",
 			bootstrap: bootDebian,
 			pkg:       "tomcat10",
-			playbook:  "content/tomcat/tomcat-configure.yml",
+			playbook:  "content/webapp/tomcat-configure.yml",
 			// tomcat_home / tomcat_conf_dir are GONE from the launch interface (ANS-014): the
-			// layout is the target's fact, read by content/tomcat/vars/<family>.yml. If they came
+			// layout is the target's fact, read by content/webapp/vars/tomcat/<family>.yml. If it
 			// back as extraVars this would silently pass on Debian and lie about RHEL again.
 			extra: []string{"tomcat_port=8080"},
 			port:  "8080",
