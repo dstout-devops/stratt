@@ -350,6 +350,33 @@ func (s *Server) invokeCreateVM(ctx context.Context, req *pluginv1.InvokeRequest
 	if p.Region == "" || p.AMI == "" {
 		return status.Errorf(codes.InvalidArgument, "awsec2/create-vm requires region and ami")
 	}
+	// THE DECLARED REGION MUST MATCH THE ONE THIS PROVIDER SERVES, or the build is refused.
+	//
+	// `region` was a required param that selected nothing. The EC2 client is built once from
+	// s.cfg.Region (the pod's own configuration) and this value never reached it — it only
+	// travelled on to become the `aws.region` LABEL on the projection (below). So an Intent
+	// declaring us-east-1 against a provider serving eu-west-1 created the instance in
+	// eu-west-1 and told the graph it was in us-east-1: a projected label asserting a fact
+	// nobody observed, and a false one (§1.2).
+	//
+	// Refused rather than honoured by building a per-region client, which looks like the more
+	// capable fix and is the worse one: the Syncer enumerates s.cfg.Region and nothing else, so
+	// an instance built outside it is created, projected once by the build, and then never seen
+	// again by the source that owns its Facets. Building where you cannot observe is a bigger
+	// hole than the label it would close.
+	//
+	// Multi-region is expressed by COMPOSITION instead, which is the shape ADR-0142 D4 settled:
+	// one provider declaration per region, each scoped to an environment, each dialing a pod
+	// configured for that region. The coordinate stays flat in the Intent's params (ADR-0118 D1
+	// — no inheritance, no env-keyed values), and this check is what makes it load-bearing.
+	if p.Region != s.cfg.Region {
+		return status.Errorf(codes.FailedPrecondition,
+			"awsec2/create-vm: this provider serves region %q, but the build declared %q. It is refused "+
+				"rather than built in %q and labelled %q — and rather than built in %q, where this "+
+				"plugin's Syncer does not look. Bind an Intent declaring %q to a provider declaration "+
+				"scoped to an environment whose awsec2 pod serves it (ADR-0146 D2)",
+			s.cfg.Region, p.Region, s.cfg.Region, p.Region, p.Region, p.Region)
+	}
 	if p.InstanceType == "" {
 		p.InstanceType = "t3.micro"
 	}

@@ -19,6 +19,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync/atomic"
 
 	"google.golang.org/grpc"
@@ -124,6 +125,19 @@ func (s *Server) prepare(raw []byte, stateBackend, ipam *pluginv1.CapabilityHand
 	}
 	if p.Module == "" || p.Workspace == "" {
 		return p, "", nil, "", fmt.Errorf("module and workspace are required")
+	}
+	// A declared var must never collide with one the CORE injects. The ipam merge below writes
+	// stratt_ipam_cidr straight over whatever the declaration set, so an Intent that declared it
+	// was silently overruled — two answers to "which range", resolved by a rule nobody wrote
+	// down, which is the implicit precedence §2.4 exists to forbid. The reserved prefix is
+	// refused instead, and the diagnostic says where the value actually comes from.
+	for k := range p.Vars {
+		if strings.HasPrefix(k, "stratt_") {
+			return p, "", nil, "", fmt.Errorf(
+				"var %q uses the reserved stratt_ prefix: these are injected by the core from the "+
+					"capability handles the declaration `requires` (ADR-0111/0112 D3), so a declared "+
+					"value here would be silently overwritten. Remove it — the allocator decides", k)
+		}
 	}
 	dir = filepath.Join(s.cfg.ModuleRoot, p.Module)
 	// PER-WORKSPACE data dir, and OUTSIDE the module tree. It used to be

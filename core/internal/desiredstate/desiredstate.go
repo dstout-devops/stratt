@@ -860,6 +860,32 @@ func checkAdvertisedWorkflow(what string, wf types.Workflow, in types.Intent, su
 				"`placement` reached no provider for as long as it did (ADR-0123 D3). Bind it, or "+
 				"stop declaring it", what, unbound)
 	}
+	// And every key the builder binds from INSIDE the opaque `params` must exist in this Intent.
+	//
+	// This is the one part of a build launch nothing validated, and the gap is structural rather
+	// than accidental: `params` is provider-shaped and opaque to core (§1.5), so no Contract covers
+	// it here, while template.Substitute fails CLOSED on a missing field — at launch, which is
+	// AFTER an operator approved the gate. The check above proves the reconcile can fill the
+	// builder's declared inputs; this one proves the INTENT can fill what the builder reads out of
+	// them. Both halves are needed for "this Intent can actually be built" to be a load-time fact.
+	//
+	// It found `app-tier` unbuildable: it declares only `params.tier`, while compute-build binds
+	// region, instanceType and ami. Same shape as the two defects before it (a declared placement
+	// reaching no provider, an advertised builder that did not exist) — a launch nobody could
+	// complete, discovered at the gate.
+	//
+	// EVERY candidate builder is checked, not the bound one, for the reason stated above: which
+	// provider wins is runtime state Git cannot see. A builder that binds nothing from params —
+	// vcenter's, which keeps provider-shaped values literal precisely to stay compatible with
+	// Intents shaped for another substrate — constrains nothing here.
+	if missing := unsuppliedParams(wf, in); len(missing) > 0 {
+		return fmt.Errorf(
+			"%s, but that workflow binds {{.launch.params.%s}} and intent %s declares no such param "+
+				"(it declares: %v). `params` is opaque to core (§1.5) so nothing types it, and the "+
+				"substituter refuses an unknown field — so this launch fails AFTER an operator "+
+				"approves the gate. Declare the param, or stop binding it (ADR-0146 D4)",
+			what, strings.Join(missing, "}}, {{.launch.params."), in.Name, sortedSpecParams(in))
+	}
 	if label, bad := hardcodedCorrelationLabel(wf); bad {
 		return fmt.Errorf(
 			"%s, but that workflow hardcodes the correlation label %q in a step. It must forward "+
@@ -911,6 +937,55 @@ func checkAdvertisedWorkflow(what string, wf types.Workflow, in types.Intent, su
 // scanning the Steps for `{{.launch.<name>` finds every possible consumer. A nested binding
 // (`{{.launch.params.region}}`) counts as consuming `params`, which is right — the Workflow does
 // use it.
+// unsuppliedParams returns the keys w binds from {{.launch.params.*}} that the Intent's spec
+// does not declare, sorted. Empty when the Intent can satisfy the builder.
+func unsuppliedParams(w types.Workflow, in types.Intent) []string {
+	have := map[string]bool{}
+	if p, ok := in.Spec["params"].(map[string]any); ok {
+		for k := range p {
+			have[k] = true
+		}
+	}
+	need := map[string]bool{}
+	var walk func(any)
+	walk = func(v any) {
+		switch t := v.(type) {
+		case string:
+			for _, ref := range template.LaunchParamFields(t) {
+				need[ref] = true
+			}
+		case map[string]any:
+			for _, val := range t {
+				walk(val)
+			}
+		case []any:
+			for _, val := range t {
+				walk(val)
+			}
+		}
+	}
+	for _, st := range w.Steps {
+		walk(st.Params)
+	}
+	var out []string
+	for k := range need {
+		if !have[k] {
+			out = append(out, k)
+		}
+	}
+	sort.Strings(out) // deterministic diagnostics — a map-range error message is a coin flip
+	return out
+}
+
+// sortedSpecParams lists the param keys an Intent actually declares, for the diagnostic above.
+func sortedSpecParams(in types.Intent) []string {
+	p, ok := in.Spec["params"].(map[string]any)
+	if !ok {
+		return nil
+	}
+	return sortedKeys(p)
+}
+
 func unboundInputs(w types.Workflow, declared []string) []string {
 	bound := map[string]bool{}
 	var walk func(any)

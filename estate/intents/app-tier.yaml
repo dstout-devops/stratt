@@ -6,8 +6,12 @@
 # that subnet (a placed-in edge, Run-provenance). When declared placement diverges from a
 # host's OBSERVED placement, the reconcile raises a placement-drift Finding (§1.8).
 #
-# Same builder as the subnet (crossplane/provision) — one full-featured builder for the
-# whole topology; the landscape swap point stays a params change (§1.4/§1.5).
+# THIS INTENT COULD NOT BE BUILT, and had not been able to for as long as it has existed
+# (ADR-0146 D4). It declared `params: {tier: app}` while compute-build binds
+# {{.launch.params.region}}, {{.launch.params.instanceType}} and {{.launch.params.ami}} — and
+# `params` is opaque to core (§1.5), so nothing typed it and nothing checked it. The substituter
+# refuses an unknown field, so the failure landed at launch, AFTER an operator approved the gate.
+# It is now refused at load, and the missing params are declared below.
 name: app-tier
 kind: Intent/Compute
 spec:
@@ -15,8 +19,16 @@ spec:
   namePrefix: app
   projectKind: host
   labels: { fleet: app }
-  requires: [provisioning] # the capability CLASS (ADR-0110); Compute resolves to awsec2 → compute-build
+  requires: [provisioning] # the capability CLASS (ADR-0110), never a provider name (§1.5)
   placement:
-    subnet: app-subnet # placed-in the Crossplane-built subnet (decision 5)
+    subnet: app-subnet # placed-in the built subnet (ADR-0059 decision 5)
   params:
+    # The REGION MUST MATCH app-subnet's (ADR-0146). A host is placed in a subnet, and a subnet
+    # lives in exactly one region — declaring `us-west-2` here while app-subnet is built in
+    # us-east-1 asks for a host in a network that does not exist where it is looking. Flat and
+    # repeated rather than inherited from the environment (ADR-0142 D4 / ADR-0118 D1: one
+    # document must not mean different things in different scopes).
+    region: us-east-1
+    instanceType: t3.micro
+    ami: ami-0linuxbaseline000
     tier: app

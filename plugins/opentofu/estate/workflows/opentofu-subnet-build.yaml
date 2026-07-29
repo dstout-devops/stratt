@@ -34,14 +34,19 @@ inputs:
   type: object
   additionalProperties: false
 #
-# `params` IS NOT DECLARED, and that is the substantive difference from crossplane's subnet-build,
-# which binds {{.launch.params.cidr}}. This builder takes its CIDR from the ipam capability — NetBox
-# allocates it and the core injects it as var.stratt_ipam_cidr — so an Intent's declared `cidr` has
-# nowhere to go here, and declaring an input no Step binds is refused at load anyway (ADR-0123 D3).
-# The consequence is deliberate and worth saying out loud: under this provider an Intent/Subnet's
-# `params.cidr` is a CLAIM that a range is wanted, not an assignment of which one — the allocator
-# decides, and the built subnet's net.cidr label reports what it actually got (§1.2).
-  required: [name, projectKind, labels]
+# `params` carries exactly ONE thing through to the module: the REGION (ADR-0146 D3). It is the
+# substrate's own name for a place — a provider coordinate (ADR-0142 D3), opaque to core, flat in
+# the Intent rather than inherited from an environment (ADR-0142 D4 / ADR-0118 D1). Without it a
+# subnet was built in whatever region the module happened to default to while the Compute Intents
+# that place hosts in it named a different one, and nothing anywhere compared the two.
+#
+# `params.cidr` is deliberately NOT forwarded, which is the substantive difference from crossplane's
+# subnet-build (it binds {{.launch.params.cidr}}). This builder takes its CIDR from the ipam
+# capability — NetBox allocates it and the core injects it as var.stratt_ipam_cidr — so a declared
+# `cidr` has nowhere to go here. Under this provider it is a CLAIM that a range is wanted, not an
+# assignment of which one; the built subnet's net.cidr label reports what it actually got (§1.2).
+# Declaring var.stratt_ipam_cidr directly is refused by the plugin rather than silently overwritten.
+  required: [name, projectKind, labels, params]
   properties:
     name:
       type: string
@@ -56,6 +61,15 @@ inputs:
         Labels the projection carries, INCLUDING stratt.intent/singleton — the ONLY key
         ProvisionedSingletons reads, so any other spelling builds an Entity that never
         resolves its own Finding.
+    params:
+      type: object
+      additionalProperties: true
+      description: >
+        Opaque provider build params, typed by opentofu/apply's own input Contract, never here
+        (§1.5). This builder binds params.region and nothing else; every Intent/Subnet resolving
+        here must declare it, and template substitution fails CLOSED if one does not — which is
+        the intended outcome, not a rough edge (an unstated region is a subnet nobody can say the
+        location of).
 
 steps:
   - name: approve
@@ -79,6 +93,11 @@ steps:
       workspace: "{{.launch.name}}"
       vars:
         subnet_name: "{{.launch.name}}"
+        # The region the subnet is built IN. Flat in the Intent, forwarded here, never inherited
+        # from the environment — ADR-0142 D4 settled that an Environment carries no inheritable
+        # facts, and ADR-0118 D1 forbids env-conditional values. What makes the coordinate real is
+        # that it now reaches the substrate: before this line the module used its own default.
+        region: "{{.launch.params.region}}"
       # The CIDR is deliberately absent. It arrives as var.stratt_ipam_cidr, injected by the core
       # from the resolved `ipam` handle (ADR-0111/0112 D3) — NetBox allocates it. An Intent that
       # wrote its own CIDR here would be hand-assigning addresses, which is the thing the ipam

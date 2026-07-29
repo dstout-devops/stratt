@@ -158,6 +158,25 @@ func LaunchFields(s string) []string {
 	return out
 }
 
+// LaunchParamFields returns the keys a string binds from INSIDE the launch's opaque `params`
+// — the second segment of `{{.launch.params.<key>}}`. LaunchFields above stops one level up
+// and reports only "params", which is enough to know an input is bound and not enough to know
+// WHICH provider-shaped values a builder actually requires of an Intent.
+//
+// That distinction is the difference between a declaration error caught at load and one caught
+// by an operator at an approval gate: `params` is opaque to core (§1.5), so nothing validates
+// its contents, and Substitute fails CLOSED on a missing field — at launch, after the approval.
+func LaunchParamFields(s string) []string {
+	var out []string
+	for _, m := range tokenRe.FindAllStringSubmatch(s, -1) {
+		segs := strings.Split(m[1], ".")
+		if len(segs) >= 3 && segs[0] == "launch" && segs[1] == "params" {
+			out = append(out, segs[2])
+		}
+	}
+	return out
+}
+
 // References returns the set of namespace names any token in v refers to —
 // used at declaration time to scope which bindings a context allows (e.g.
 // `event` only on event-kind Triggers).

@@ -113,6 +113,24 @@ func validateEnvironmentRefs(d Declarations) error {
 			envs []string
 		}{"connector", c.Name, c.Environments})
 	}
+	// Actuator was MISSING from this list, and it is the one kind where the omission bites
+	// hardest: assembleProvisioningProviders filters build providers by
+	// `types.InScope(a.ScopedEnvironments(), env)` (provisioning_resolve.go), so an Actuator
+	// with a typo'd environment provides nothing, in every environment, and the only symptom
+	// is an Intent whose build Finding resolves to no provider — reported as "no verified
+	// provider", which sends the reader to the registry rather than to the typo.
+	//
+	// The comment above says an explicit list makes a forgotten kind "a visible omission in
+	// review". It was not visible; it was missed in the ADR that wrote the sentence. The list
+	// stays explicit, but a test now derives the expected set by reflection over Declarations,
+	// so the next kind carrying `environments` cannot be forgotten quietly.
+	for _, a := range d.Actuators {
+		refs = append(refs, struct {
+			kind string
+			name string
+			envs []string
+		}{"actuator", a.Name, a.Environments})
+	}
 	for _, b := range d.CapabilityBindings {
 		refs = append(refs, struct {
 			kind string

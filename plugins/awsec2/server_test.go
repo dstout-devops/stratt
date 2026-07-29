@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"io"
 	"log/slog"
+	"strings"
 	"testing"
 	"time"
 
@@ -589,4 +590,40 @@ func facetKeys(m map[string][]byte) []string {
 		out = append(out, k)
 	}
 	return out
+}
+
+// TestCreateVMRefusesARegionItCannotServe: the `region` param was REQUIRED and selected
+// nothing. The EC2 client is built once from the pod's own Config.Region and this value never
+// reached it — it travelled on to become the `aws.region` label. So a build declaring a region
+// the provider does not serve created the instance where the provider IS and told the graph it
+// was somewhere else: a projected label asserting an unobserved, false fact (§1.2).
+//
+// Refused rather than honoured with a per-region client, deliberately. This plugin's Syncer
+// enumerates Config.Region and nothing else, so an instance built outside it would be created,
+// projected once by the build, and then never seen again by the source that owns its Facets —
+// a bigger hole than the wrong label. Multi-region is composition: one provider declaration per
+// region, environment-scoped (ADR-0146 D2).
+func TestCreateVMRefusesARegionItCannotServe(t *testing.T) {
+	api := &fakeEC2{runOut: &ec2.RunInstancesOutput{Instances: []ec2types.Instance{{
+		InstanceId: aws.String("i-should-not-exist"),
+	}}}}
+	args, _ := json.Marshal(createVMParams{Region: "eu-west-1", AMI: "ami-1", Name: "app-01"})
+	stream := &captureStream[pluginv1.InvokeResponse]{ctx: context.Background()}
+
+	// newServer's Config.Region is us-east-1; the build asks for eu-west-1.
+	err := newServer(t, api).Invoke(&pluginv1.InvokeRequest{
+		Action: "awsec2/create-vm",
+		Args:   &pluginv1.Payload{Bytes: args},
+	}, stream)
+	if err == nil {
+		t.Fatal("a build declaring a region this provider does not serve must be refused")
+	}
+	if !strings.Contains(err.Error(), "eu-west-1") || !strings.Contains(err.Error(), "us-east-1") {
+		t.Errorf("the diagnostic must name BOTH regions so the reader can see which is which; got %q", err)
+	}
+	// And nothing was built. A refusal that still called RunInstances would be worse than no
+	// check at all: an instance would exist that no Run claims and no Syncer enumerates.
+	if api.lastRun != nil {
+		t.Error("the refusal must happen BEFORE RunInstances — an orphan instance is worse than a wrong label")
+	}
 }
