@@ -1,17 +1,20 @@
-# provisioning-kube — Intent/Compute binds to kubecompute in the dev environment (ADR-0151).
+# dev builds on Kubernetes — ONE line, every kind (ADR-0151 D2).
 #
-# THIS is what makes the capstone chain executable end to end. `provisioning` for Compute already
-# had two providers and neither yields a host anything can converge: floci instances have no sshd
-# and vcenter/vcsim is `build-real`. Binding the class to kubecompute in dev means the SAME
-# Intent/Compute that builds an EC2 instance in one environment builds a converge-able host here —
-# which is the substrate-independence claim, exercised rather than asserted (§1.5, ADR-0110).
+# This file used to enumerate `provider: kubecompute, intentKind: Compute`, which is the shape that
+# made the estate accumulate one entry per kind and made a substrate migration an N-line edit. It
+# now selects by a property the PROVIDERS DECLARE, so the entry says what an operator actually
+# means — "this environment is Kubernetes" — and nothing above it names a substrate at all.
 #
-# Environment-scoped, not global: vsphere-dc keeps its vcenter binding (provisioning-vsphere.yaml),
-# and Subnet stays with opentofu-network. One class, one provider, per environment per kind — the
-# ADR-0112 D6 disambiguation, declared rather than guessed.
+# CHANGE `kubernetes` TO `aws` AND THE TOPOLOGY MIGRATES: every provisioning Intent in dev resolves
+# to the aws-substrate builders instead, together. That is the property this exists for, and the
+# honest limit is recorded in ADR-0151 D4 — the line moves the BUILDER, not provider-shaped
+# `params` an Intent may be carrying.
+#
+# Environment-scoped, because `environments:` is a MEMBERSHIP FILTER and not a value selector
+# (ADR-0118 D1): it chooses which binding is in force, never what an Intent means. vsphere-dc keeps
+# its own binding, and the two never meet.
 name: provisioning-kube
 environments: [dev]
 entries:
   - capability: provisioning
-    provider: kubecompute
-    intentKind: Compute
+    substrate: kubernetes

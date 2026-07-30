@@ -18,6 +18,9 @@ tier: trusted
 # Plan-capable: every Action below was registered dryRunnable, several via the EC2 API's own
 # dry-run. Omitting this would REFUSE a dry-run Step against all of them.
 dryRunnable: true
+# The landscape this provider builds in (ADR-0151 D1). `aws` is the API SURFACE, not the vendor:
+# it covers EC2 and floci alike, because hiding that difference is the provider's job (§1.5).
+substrate: aws
 provides: [provisioning]
 # ── The 11 INVOKE Actions, MOVED here from main.go (ADR-0103) ────────────────────────────────
 # Registered in Go behind STRATT_AWS_PLUGIN_ADDR, so the dispatch surface was unreviewable from

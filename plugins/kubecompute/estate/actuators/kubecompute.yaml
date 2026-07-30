@@ -23,6 +23,9 @@ address: stratt-kubecompute:9090
 pluginIdentity: kubecompute
 tier: trusted
 dryRunnable: false
+# The landscape this provider builds in (ADR-0151 D1). Declaring it is what lets a binding select
+# this provider WITHOUT naming it — one line moves a whole topology (D2).
+substrate: kubernetes
 provides: [provisioning]
 actionNames: [kubecompute/create-host]
 identitySchemes: [kube.host]

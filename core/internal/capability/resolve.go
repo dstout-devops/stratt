@@ -25,6 +25,11 @@ type Provider struct {
 	// its `remediates` for remediation (ADR-0135 D2). Named for the shape rather than for the first
 	// consumer, because a second one now populates it with a different map.
 	Workflows map[string]string
+	// Substrate is the landscape this provider builds in (ADR-0151 D1) — "aws", "kubernetes",
+	// "vsphere", "vm". Empty for a provider that has not declared one, which is every provider
+	// shipped before ADR-0151: such a provider is simply never selected BY substrate, and its
+	// per-kind `provider:` bindings keep working unchanged.
+	Substrate string
 }
 
 // Status is the outcome class of a resolution.
@@ -74,12 +79,83 @@ func Resolve(capability, intentKind string, providers []Provider, bindings []typ
 	}
 	sort.Strings(builders)
 
-	// Explicit provider selection(s) for (capability, intentKind) across in-scope bindings.
+	// Explicit PROVIDER selection(s) for (capability, intentKind) across in-scope bindings.
 	selected := map[string]bool{}
+	// SUBSTRATE selection(s) (ADR-0151 D2): an entry with no intentKind covers every kind, and one
+	// naming this kind covers just it.
+	substrates := map[string]bool{}
 	for _, b := range bindings {
 		for _, e := range b.Entries {
-			if e.Capability == capability && e.IntentKind == intentKind {
+			if e.Capability != capability {
+				continue
+			}
+			switch {
+			case e.Substrate != "" && (e.IntentKind == "" || e.IntentKind == intentKind):
+				substrates[e.Substrate] = true
+			case e.Provider != "" && e.IntentKind == intentKind:
 				selected[e.Provider] = true
+			}
+		}
+	}
+
+	// A PER-KIND PROVIDER ENTRY WINS OVER A SUBSTRATE ENTRY, and this is the one precedence rule in
+	// the resolver — declared, documented, and between two DIFFERENT selector forms rather than
+	// between two values of one field. It is what makes ADR-0151 D2's tie-break work: when a
+	// substrate legitimately offers two builders for a kind, the author names one for that kind and
+	// leaves the substrate default in force for every other. Without it, adding the tie-break would
+	// itself be a second candidate and the estate could never converge.
+	//
+	// It is NOT the implicit precedence §2.4 refuses — nothing is ranked by priority, recency or
+	// declaration order, and two entries of the SAME form still conflict rather than pick a winner.
+	// It is, however, the part of this design most in need of the charter-guardian review ADR-0151
+	// records as owed; if the ruling goes the other way, the fix is to refuse the overlap and make
+	// authors scope the substrate entry by kind.
+	if len(selected) == 0 && len(substrates) > 0 {
+		var wanted []string
+		for sub := range substrates {
+			wanted = append(wanted, sub)
+		}
+		sort.Strings(wanted)
+		if len(substrates) > 1 {
+			return Result{
+				Status: StatusAmbiguous,
+				Reason: fmt.Sprintf("conflicting capability-bindings select %d different substrates (%v) for Intent/%s (%s) — an environment builds on ONE substrate; resolve to one (§2.4, ADR-0151 D2)", len(wanted), wanted, intentKind, capability),
+			}
+		}
+		var matched []string
+		for _, p := range providers {
+			if p.Substrate == wanted[0] && canBuild[p.Name] != "" {
+				matched = append(matched, p.Name)
+			}
+		}
+		sort.Strings(matched)
+		switch len(matched) {
+		case 1:
+			return Result{Status: StatusResolved, Provider: matched[0], Workflow: canBuild[matched[0]]}
+		case 0:
+			// NAME WHAT WAS AVAILABLE, not merely that nothing matched (§1.8). "No provider builds
+			// this kind" and "no provider OF THIS SUBSTRATE builds this kind" are different
+			// problems with different fixes, and an operator who cannot tell them apart goes
+			// looking in the wrong place.
+			have := map[string]bool{}
+			for _, p := range providers {
+				if canBuild[p.Name] != "" && p.Substrate != "" {
+					have[p.Substrate] = true
+				}
+			}
+			var avail []string
+			for sub := range have {
+				avail = append(avail, sub)
+			}
+			sort.Strings(avail)
+			return Result{
+				Status: StatusPending,
+				Reason: fmt.Sprintf("capability-binding selects substrate %q for Intent/%s (%s), but no verified provider of that substrate builds this kind (substrates that do: %v; builders: %v) — declare a provider with substrate: %s, or bind a provider by name for this kind (ADR-0151 D2)", wanted[0], intentKind, capability, avail, builders, wanted[0]),
+			}
+		default:
+			return Result{
+				Status: StatusAmbiguous,
+				Reason: fmt.Sprintf("%d verified providers of substrate %q build Intent/%s (%v) — name one for this kind with a provider entry; picking for you would be the precedence §2.4 refuses (ADR-0151 D2)", len(matched), wanted[0], intentKind, matched),
 			}
 		}
 	}

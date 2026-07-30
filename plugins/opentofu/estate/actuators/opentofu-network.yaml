@@ -18,6 +18,10 @@ address: stratt-opentofu:9090
 pluginIdentity: opentofu
 tier: trusted
 dryRunnable: true
+# The landscape this provider builds in (ADR-0151 D1). The MODULE targets AWS, so this builder
+# does too — a Subnet it builds carries aws.subnetId, and a host placed in one must come from a
+# provider of the same substrate or the placement cannot resolve (ADR-0147 D3, ADR-0151 D3).
+substrate: aws
 provides: [provisioning]
 requires: [statestore, ipam]
 # The build's ENTRY POINT is a targetless Action, not this Actuator's Apply verb (ADR-0145 D1).

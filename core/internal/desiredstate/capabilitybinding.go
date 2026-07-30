@@ -22,6 +22,8 @@ type bindingEntryFile struct {
 	Capability string `yaml:"capability"`
 	Provider   string `yaml:"provider"`
 	IntentKind string `yaml:"intentKind"`
+	// Substrate selects by a declared provider property instead of by name (ADR-0151 D2).
+	Substrate string `yaml:"substrate"`
 }
 
 type capabilityBindingFile struct {
@@ -41,6 +43,7 @@ func parseCapabilityBindingFile(path string, raw []byte) (string, types.Capabili
 	for _, e := range f.Entries {
 		b.Entries = append(b.Entries, types.BindingEntry{
 			Capability: e.Capability, Provider: e.Provider, IntentKind: e.IntentKind,
+			Substrate: e.Substrate,
 		})
 	}
 	if err := ValidateCapabilityBinding(b); err != nil {
@@ -66,18 +69,31 @@ func ValidateCapabilityBinding(b types.CapabilityBinding) error {
 		if !types.ValidCapability(e.Capability) {
 			return fmt.Errorf("capability-binding %q: entry %d: unknown capability %q (core-owned vocabulary, ADR-0104 §1.5)", b.Name, i, e.Capability)
 		}
-		if e.Provider == "" {
-			return fmt.Errorf("capability-binding %q: entry %d: provider is required (the verified provider's name)", b.Name, i)
+		// EXACTLY ONE selector (ADR-0151 D2). Both is refused rather than ranked: an entry naming
+		// a provider AND a substrate answers "which provider" twice, and nothing good happens when
+		// the two answers differ. Neither is refused because an entry that selects nothing is not
+		// a binding.
+		switch {
+		case e.Provider == "" && e.Substrate == "":
+			return fmt.Errorf("capability-binding %q: entry %d: one of provider or substrate is required — provider names a verified provider, substrate (ADR-0151 D2) selects by a property the providers declare", b.Name, i)
+		case e.Provider != "" && e.Substrate != "":
+			return fmt.Errorf("capability-binding %q: entry %d: provider %q and substrate %q are mutually exclusive — an entry selects a provider ONE way, or the two selectors can disagree (ADR-0151 D2)", b.Name, i, e.Provider, e.Substrate)
+		case e.Substrate != "" && !types.ValidSubstrate(e.Substrate):
+			return fmt.Errorf("capability-binding %q: entry %d: unknown substrate %q — the closed set is %v (ADR-0151 D1)", b.Name, i, e.Substrate, types.Substrates())
 		}
-		if e.IntentKind == "" {
-			return fmt.Errorf("capability-binding %q: entry %d: intentKind is required (e.g. Compute, Subnet — no Intent/ prefix)", b.Name, i)
+		// intentKind is REQUIRED for a provider entry (the reach path is per kind) and OPTIONAL for
+		// a substrate entry, whose whole point is to cover every kind at once.
+		if e.Provider != "" && e.IntentKind == "" {
+			return fmt.Errorf("capability-binding %q: entry %d: intentKind is required with provider (e.g. Compute, Subnet — no Intent/ prefix)", b.Name, i)
 		}
 		if short, ok := strings.CutPrefix(e.IntentKind, "Intent/"); ok {
 			return fmt.Errorf("capability-binding %q: entry %d: intentKind %q must omit the Intent/ prefix (write %q)", b.Name, i, e.IntentKind, short)
 		}
-		key := e.Capability + "\x00" + e.IntentKind
+		// A substrate entry and a provider entry for the same kind are DIFFERENT keys, so both may
+		// appear in one document — that is the deliberate override, not a collision.
+		key := e.Capability + "\x00" + e.IntentKind + "\x00" + e.Substrate
 		if seen[key] {
-			return fmt.Errorf("capability-binding %q: entry %d: duplicate (capability %q, intentKind %q) in one document — a within-document collision (§2.4)", b.Name, i, e.Capability, e.IntentKind)
+			return fmt.Errorf("capability-binding %q: entry %d: duplicate (capability %q, intentKind %q, substrate %q) in one document — a within-document collision (§2.4)", b.Name, i, e.Capability, e.IntentKind, e.Substrate)
 		}
 		seen[key] = true
 	}

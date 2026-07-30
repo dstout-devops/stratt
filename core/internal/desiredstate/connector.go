@@ -49,6 +49,7 @@ type connectorFile struct {
 	Provides                     []string          `yaml:"provides"`
 	Requires                     []string          `yaml:"requires"`
 	Provisions                   map[string]string `yaml:"provisions"`
+	Substrate                    string            `yaml:"substrate"`
 	Decommissions                map[string]string `yaml:"decommissions"`
 	Remediates                   map[string]string `yaml:"remediates"`
 	Environments                 []string          `yaml:"environments"`
@@ -72,6 +73,7 @@ func parseConnectorFile(path string, raw []byte) (string, types.Connector, error
 		EmitterName: f.EmitterName, ActionNames: f.ActionNames, IntervalSeconds: f.IntervalSeconds,
 		Provides: f.Provides, Requires: f.Requires, Provisions: f.Provisions,
 		Decommissions: f.Decommissions, Remediates: f.Remediates, Environments: f.Environments,
+		Substrate: f.Substrate,
 	}
 	if err := ValidateConnector(c); err != nil {
 		return "", types.Connector{}, fmt.Errorf("desiredstate: %s: %w", path, err)
@@ -85,6 +87,10 @@ func parseConnectorFile(path string, raw []byte) (string, types.Connector, error
 func ValidateConnector(c types.Connector) error {
 	if c.Name == "" {
 		return fmt.Errorf("connector: name is required")
+	}
+	// Same closed set, same reason as ValidateActuator (ADR-0151 D1).
+	if c.Substrate != "" && !types.ValidSubstrate(c.Substrate) {
+		return fmt.Errorf("connector %q: unknown substrate %q — the closed set is %v (ADR-0151 D1)", c.Name, c.Substrate, types.Substrates())
 	}
 	if c.Address == "" {
 		return fmt.Errorf("connector %q: address is required (the plugin's sovereign-port endpoint)", c.Name)
@@ -281,6 +287,7 @@ type actuatorFile struct {
 	Provides        []string          `yaml:"provides"`
 	Requires        []string          `yaml:"requires"`
 	Provisions      map[string]string `yaml:"provisions"`
+	Substrate       string            `yaml:"substrate"`
 	Decommissions   map[string]string `yaml:"decommissions"`
 	Remediates      map[string]string `yaml:"remediates"`
 	Environments    []string          `yaml:"environments"`
@@ -301,7 +308,7 @@ func parseActuatorFile(path string, raw []byte) (string, types.Actuator, error) 
 		ElevatedInputs: f.ElevatedInputs,
 		MCP:            f.MCP, Provides: f.Provides, Requires: f.Requires,
 		Provisions: f.Provisions, Decommissions: f.Decommissions, Remediates: f.Remediates,
-		Environments: f.Environments,
+		Environments: f.Environments, Substrate: f.Substrate,
 	}
 	if err := ValidateActuator(a); err != nil {
 		return "", types.Actuator{}, fmt.Errorf("desiredstate: %s: %w", path, err)
@@ -315,6 +322,14 @@ func ValidateActuator(a types.Actuator) error {
 	if a.Name == "" {
 		return fmt.Errorf("actuator: name is required")
 	}
+	// A substrate is a CLOSED set (ADR-0151 D1): a provider does not get to mint a landscape and
+	// have the estate mean something by it. Refused at load, naming what IS admitted, because a
+	// typo'd substrate would otherwise make every binding that selects it resolve to nothing —
+	// a silence that reads exactly like "no provider built this yet" (§1.8).
+	if a.Substrate != "" && !types.ValidSubstrate(a.Substrate) {
+		return fmt.Errorf("actuator %q: unknown substrate %q — the closed set is %v (ADR-0151 D1)", a.Name, a.Substrate, types.Substrates())
+	}
+
 	if a.PluginIdentity == "" {
 		return fmt.Errorf("actuator %q: pluginIdentity is required (anti-spoof)", a.Name)
 	}

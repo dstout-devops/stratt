@@ -21,6 +21,8 @@ environments: [vsphere-dc]
 # capability loss the migration must not introduce, and the mirror of `script`'s dryRunnable: false
 # being a safety property in the other direction.
 dryRunnable: true
+# The landscape this provider builds in (ADR-0151 D1) — vCenter proper and vcsim alike.
+substrate: vsphere
 provides: [provisioning]
 # ── The 15 INVOKE Actions, MOVED here from main.go (ADR-0103) ────────────────────────────────
 # They were registered in Go behind STRATT_VCENTER_PLUGIN_ADDR — a dispatch surface unreviewable
