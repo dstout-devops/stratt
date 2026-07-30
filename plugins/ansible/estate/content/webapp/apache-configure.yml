@@ -95,9 +95,16 @@
           when: apache_ssl_enable_cmd | length > 0
           changed_when: false
 
-        - name: Write the TLS vhost
+        # 000- SO IT LOADS FIRST, and that prefix is load-bearing rather than cosmetic. Apache
+        # treats the FIRST vhost defined on a port as that port's default, and every family's ssl
+        # package ships its own `<VirtualHost _default_:443>` with a self-signed snakeoil
+        # certificate. conf.d loads alphabetically, so `stratt-tls.conf` sorted AFTER `ssl.conf` and
+        # the stock vhost won: 443 listened, the converge went green, and the certificate presented
+        # on the wire was the package's throwaway rather than the CA-issued one this estate had just
+        # delivered. Measured with a handshake, not inferred from the config.
+        - name: Write the TLS vhost (first on :443, so it is the default rather than the stock one)
           ansible.builtin.copy:
-            dest: "{{ apache_conf_dir }}/stratt-tls.conf"
+            dest: "{{ apache_conf_dir }}/000-stratt-tls.conf"
             mode: "0644"
             # ONLY the VirtualHost. Every family's ssl package/module already provides the
             # LoadModule and `Listen 443`; emitting our own made apache refuse to start with
@@ -121,7 +128,7 @@
     # fails the RESTART below and takes the whole service down with it.
     - name: Stop serving TLS when no certificate is delivered
       ansible.builtin.file:
-        path: "{{ apache_conf_dir }}/stratt-tls.conf"
+        path: "{{ apache_conf_dir }}/000-stratt-tls.conf"
         state: absent
       when: delivered_certs.files | length != 1
 
