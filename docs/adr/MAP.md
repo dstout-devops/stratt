@@ -14,11 +14,11 @@ graph TD
   api_surface["api-surface<br/><small>0006 0021 0026 0076 0091 0121</small>"]
   audit_telemetry["audit-telemetry<br/><small>0034 0065 0077 0121</small>"]
   authz_identity["authz-identity<br/><small>0009 0028 0035 0079 0101 0122<br/>0130</small>"]
-  capability_framework["capability-framework<br/><small>0100 0104 0105 0106 0107 0110<br/>0111 0112 0113 0114 0135 0145<br/>0146</small>"]
+  capability_framework["capability-framework<br/><small>0100 0104 0105 0106 0107 0110<br/>0111 0112 0113 0114 0135 0145<br/>0146 0151</small>"]
   certificates_pki["certificates-pki<br/><small>0030 0043 0050 0098 0106 0150</small>"]
   connectors["connectors<br/><small>0007 0014 0025 0026 0037 0038<br/>0039 0045 0086 0087 0088 0089<br/>0095 0097 0099 0113 0114 0115<br/>0127 0128 0129 0130 0131 0132<br/>0133 0136 0144 0146</small>"]
   credentials_secrets["credentials-secrets<br/><small>0009 0029 0052 0094 0098 0099<br/>0100 0106 0125 0126</small>"]
-  estate_as_code["estate-as-code<br/><small>0055 0056 0057 0103 0113 0116<br/>0118 0119 0120 0122 0123 0132<br/>0134 0135 0136 0137 0138 0139<br/>0142 0146 0147 0148</small>"]
+  estate_as_code["estate-as-code<br/><small>0055 0056 0057 0103 0113 0116<br/>0118 0119 0120 0122 0123 0132<br/>0134 0135 0136 0137 0138 0139<br/>0142 0146 0147 0148 0151</small>"]
   findings_drift["findings-drift<br/><small>0019 0020 0033 0043 0080 0085<br/>0128 0129 0130 0133 0148 0150</small>"]
   foundation["foundation<br/><small>0001 0002 0004 0005 0006 0008<br/>0108 0109 0116 0137 0138 0141</small>"]
   graph_model["graph-model<br/><small>0015 0017 0041 0042 0059 0060<br/>0079 0080 0081 0082 0084 0085<br/>0096 0114 0115 0119 0120 0123<br/>0126 0127 0128 0129 0130 0132<br/>0133 0143 0144 0147</small>"]
@@ -26,7 +26,7 @@ graph TD
   orchestration["orchestration<br/><small>0010 0011 0018 0027 0031 0063<br/>0118 0122 0125 0134 0139 0140</small>"]
   plugin_port["plugin-port<br/><small>0046 0047 0048 0049 0051 0053<br/>0054 0103 0117 0121 0124 0125<br/>0127 0131 0137 0138 0140 0141<br/>0145 0149</small>"]
   policy_governance["policy-governance<br/><small>0061 0062 0063 0064 0065 0066<br/>0067 0068 0069 0070 0071 0072<br/>0073 0074 0075 0076 0122</small>"]
-  provisioning["provisioning<br/><small>0017 0058 0095 0096 0107 0110<br/>0111 0112 0113 0114 0115 0120<br/>0123 0143 0144 0145 0146 0147</small>"]
+  provisioning["provisioning<br/><small>0017 0058 0095 0096 0107 0110<br/>0111 0112 0113 0114 0115 0120<br/>0123 0143 0144 0145 0146 0147<br/>0151</small>"]
   state_artifacts["state-artifacts<br/><small>0016 0029 0093 0097 0105 0112<br/>0145</small>"]
   substrate_ops["substrate-ops<br/><small>0013 0032 0040 0044 0045 0049<br/>0077 0078 0093 0101 0102 0124<br/>0131 0142 0149</small>"]
   ui["ui<br/><small>0003 0012 0020 0024 0090 0091<br/>0116 0121</small>"]
@@ -155,6 +155,7 @@ Capability framework — provides/requires, verification, resolve-inject vs enab
 - [ADR-0135](0135-a-plugin-ships-examples-not-declarations.md) — A plugin ships examples and conformance, never declarations; and remediation binds to a capability, not a name
 - [ADR-0145](0145-the-actuator-builder-step-form.md) — The build-Step form for a workspace-scoped Actuator: capability injection reaches the Action seam, and the network leg goes live
 - [ADR-0146](0146-the-coordinate-is-load-bearing-or-refused.md) — A provider coordinate is load-bearing or refused: the region leg, without re-deciding where a region lives
+- [ADR-0151](0151-substrate-is-a-property-of-the-provider.md) — Substrate is a property of the PROVIDER, selected by composition; no declaration above it ever names one
 
 ### certificates-pki
 
@@ -249,6 +250,7 @@ Estate-as-Code — CaC declarations, environments, composition, the estate CLI.
 - [ADR-0146](0146-the-coordinate-is-load-bearing-or-refused.md) — A provider coordinate is load-bearing or refused: the region leg, without re-deciding where a region lives
 - [ADR-0147](0147-placement-resolves-to-a-provider-native-identity.md) — A declared placement resolves to a provider-native identity, or the build is not offered
 - [ADR-0148](0148-one-blueprint-per-application-and-an-honest-observation.md) — One Blueprint per application, and an observation that can come back wrong
+- [ADR-0151](0151-substrate-is-a-property-of-the-provider.md) — Substrate is a property of the PROVIDER, selected by composition; no declaration above it ever names one
 
 ### findings-drift
 
@@ -435,6 +437,7 @@ Provisioning — declare & build infra (Intent -> builder -> machines), provisio
 - [ADR-0145](0145-the-actuator-builder-step-form.md) — The build-Step form for a workspace-scoped Actuator: capability injection reaches the Action seam, and the network leg goes live
 - [ADR-0146](0146-the-coordinate-is-load-bearing-or-refused.md) — A provider coordinate is load-bearing or refused: the region leg, without re-deciding where a region lives
 - [ADR-0147](0147-placement-resolves-to-a-provider-native-identity.md) — A declared placement resolves to a provider-native identity, or the build is not offered
+- [ADR-0151](0151-substrate-is-a-property-of-the-provider.md) — Substrate is a property of the PROVIDER, selected by composition; no declaration above it ever names one
 
 ### state-artifacts
 
@@ -641,3 +644,4 @@ UI — React shell, schema-driven rendering, Views, descent, the first-party cli
 | [0148](0148-one-blueprint-per-application-and-an-honest-observation.md) | actuators, estate-as-code, findings-drift, intent-compiler |
 | [0149](0149-the-execution-environment-content-floor.md) | actuators, plugin-port, substrate-ops |
 | [0150](0150-a-certificate-is-derived-from-its-host.md) | certificates-pki, findings-drift, intent-compiler |
+| [0151](0151-substrate-is-a-property-of-the-provider.md) | capability-framework, estate-as-code, provisioning |
