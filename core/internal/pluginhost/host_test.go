@@ -1221,3 +1221,64 @@ func TestHost_GovernStream_RedTerminalIsBelieved(t *testing.T) {
 		t.Fatal("a green terminal with no in-set failure must still fold Succeeded")
 	}
 }
+
+// TestHost_InvokeRawStreamsEveryEvent proves the Action path surfaces the plugin's DIAGNOSTICS,
+// not only its terminal cause.
+//
+// This is DESC-5's actual content, and it was not what DESC-5 said. `GET /runs/{id}/events` has
+// existed all along (an SSE replay+follow endpoint) — what did not exist was anything to put in it
+// from an Action. This loop `continue`d past every non-terminal TaskEvent with the comment
+// "diagnostic message; the result rides the terminal one", so an Action's whole stream reached
+// nothing.
+//
+// Measured, on a real failure: a Run whose error read "helm upgrade failed (rc=1): see the streamed
+// diagnostics", whose live event tail returned stream-end and nothing else, and whose IDENTICAL
+// command succeeded when run by hand under the same ServiceAccount. The difference between the two
+// was unreachable through any supported path — which is §1.8 failing at the one moment it exists
+// for, not a missing convenience.
+//
+// The terminal event reaches OnEvent too: a consumer tailing the stream should see the cause in
+// place, in order, rather than having to join it back from the Run summary.
+func TestHost_InvokeRawStreamsEveryEvent(t *testing.T) {
+	const cause = "helm upgrade failed (rc=1): see the streamed diagnostics"
+	grant := vcenterGrant(pluginhost.TierTrusted, []string{"vcenter.uuid"})
+	client := serve(t, &fakePlugin{pluginID: "vcenter-dev", invokeFailMsg: cause})
+	h := pluginhost.New(nil, client, grant, discardLog())
+
+	var seen []string
+	raw, err := h.InvokeRaw(context.Background(), pluginhost.ActionInvoke{
+		Principal: "alice", Action: "vcenter/create-vm",
+		OnEvent: func(ev *pluginv1.TaskEvent) { seen = append(seen, ev.GetMessage()) },
+	})
+	if err != nil {
+		t.Fatalf("invokeRaw: %v", err)
+	}
+	// The non-terminal diagnostic is the whole point: without it the operator has a verdict and no
+	// evidence, which is exactly the state a real failure left this session in.
+	if len(seen) != 2 || seen[0] != "working" {
+		t.Fatalf("every streamed TaskEvent must reach OnEvent, terminal and non-terminal alike — "+
+			"dropping the non-terminal ones is what left `see the streamed diagnostics` with nothing "+
+			"to see (DESC-5). got %q", seen)
+	}
+	if seen[1] != cause {
+		t.Fatalf("the terminal cause must arrive on the stream in order too, got %q", seen[1])
+	}
+	// And the existing contract is unchanged: the cause still rides out.Error.
+	if raw.OK || raw.Error != cause {
+		t.Fatalf("terminal capture regressed: ok=%v err=%q", raw.OK, raw.Error)
+	}
+}
+
+// TestHost_InvokeRawNilOnEventIsLegal: OnEvent is optional, so every existing caller and test that
+// wants no events keeps working. A hook that panicked when unset would make the diagnostic path a
+// liability rather than an improvement.
+func TestHost_InvokeRawNilOnEventIsLegal(t *testing.T) {
+	grant := vcenterGrant(pluginhost.TierTrusted, []string{"vcenter.uuid"})
+	client := serve(t, &fakePlugin{pluginID: "vcenter-dev"})
+	h := pluginhost.New(nil, client, grant, discardLog())
+	if _, err := h.InvokeRaw(context.Background(), pluginhost.ActionInvoke{
+		Principal: "alice", Action: "vcenter/create-vm",
+	}); err != nil {
+		t.Fatalf("a nil OnEvent must be legal: %v", err)
+	}
+}

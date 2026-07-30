@@ -483,6 +483,22 @@ type ActionInvoke struct {
 	// infrastructure needs its state backend and its allocated network exactly as the
 	// Actuator verb does. Nil when the declaration requires nothing.
 	ResolvedCapabilities map[string]CapabilityHandle
+	// OnEvent receives every TaskEvent the plugin streams during the Invoke, terminal and
+	// non-terminal alike, as it arrives.
+	//
+	// It exists because this loop used to DROP them (DESC-5). The non-terminal events were
+	// `continue`d past with the comment "diagnostic message; the result rides the terminal one",
+	// so an Action's entire diagnostic stream reached nothing: the Run's error read
+	// "helm upgrade failed (rc=1): see the streamed diagnostics" and a live tail of
+	// GET /runs/{id}/events returned stream-end and nothing else. Measured on a real failure whose
+	// identical command succeeded by hand — the difference was unreachable through any supported
+	// path, which is §1.8's failure rather than a missing convenience.
+	//
+	// Streamed rather than accumulated and returned, because a diagnostic that only appears after
+	// the Run finishes cannot help anyone watching one that is stuck.
+	//
+	// Nil is legal and means the caller wants no events (every existing test).
+	OnEvent func(*pluginv1.TaskEvent)
 }
 
 // ActionEntity is a GOVERNED, UNPROJECTED provision→configure observation —
@@ -562,15 +578,24 @@ func (h *Host) InvokeRaw(ctx context.Context, req ActionInvoke) (RawInvokeResult
 			}
 			return out, fmt.Errorf("pluginhost: invoke recv: %w", err)
 		}
-		if ev := resp.GetEvent(); ev != nil && ev.GetTerminal() {
-			out.OK = ev.GetOk()
-			if !ev.GetOk() {
-				out.Error = ev.GetMessage() // the real failure cause (§1.8) — the terminal message rides here, no Result
+		if ev := resp.GetEvent(); ev != nil {
+			// EVERY event reaches the caller, not just the terminal one. The terminal message is
+			// the CAUSE; the stream before it is the EVIDENCE, and an Action that reported only
+			// the former left an operator with "see the streamed diagnostics" and nowhere to see
+			// them (DESC-5).
+			if req.OnEvent != nil {
+				req.OnEvent(ev)
+			}
+			if ev.GetTerminal() {
+				out.OK = ev.GetOk()
+				if !ev.GetOk() {
+					out.Error = ev.GetMessage() // the real failure cause (§1.8) — the terminal message rides here, no Result
+				}
 			}
 		}
 		res := resp.GetResult()
 		if res == nil {
-			continue // diagnostic message; the result rides the terminal one
+			continue // a diagnostic-only message; the result rides the terminal one
 		}
 		out.Outputs = res.GetOutputs().GetBytes()
 		// §1.5: the plugin's asserted output contract must match the core-pinned id.

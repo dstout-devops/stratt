@@ -169,7 +169,7 @@ func TestTypedEventScopeMapping(t *testing.T) {
 // rest.
 func TestRunEventFromTaskEvent_CarriesEveryPortField(t *testing.T) {
 	at := time.Date(2026, 7, 25, 12, 0, 0, 0, time.UTC)
-	re := runEventFromTaskEvent(&pluginv1.TaskEvent{
+	re := RunEventFromTaskEvent(&pluginv1.TaskEvent{
 		Level:   pluginv1.TaskEvent_LEVEL_WARN,
 		Scope:   pluginv1.TaskEvent_SCOPE_RUN,
 		Message: "community.crypto 2.22.3",
@@ -201,7 +201,7 @@ func TestRunEventFromTaskEvent_CarriesEveryPortField(t *testing.T) {
 // string for either would make "the producer did not say" indistinguishable from a stated value
 // downstream, and the wire layer relies on empty to omit the field entirely (§1.8).
 func TestRunEventFromTaskEvent_StatesNothingItWasNotTold(t *testing.T) {
-	re := runEventFromTaskEvent(&pluginv1.TaskEvent{Message: "line"}, "run-1", 0, 1, "")
+	re := RunEventFromTaskEvent(&pluginv1.TaskEvent{Message: "line"}, "run-1", 0, 1, "")
 	if re.Level != "" || re.Scope != "" || re.Target != "" {
 		t.Errorf("unstated fields must stay empty: level=%q scope=%q target=%q", re.Level, re.Scope, re.Target)
 	}

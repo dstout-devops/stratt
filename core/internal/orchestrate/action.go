@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sync/atomic"
 	"time"
 
 	"go.temporal.io/sdk/activity"
@@ -20,6 +21,7 @@ import (
 	"github.com/dstout-devops/stratt/core/internal/contract"
 	"github.com/dstout-devops/stratt/core/internal/dispatch"
 	"github.com/dstout-devops/stratt/core/internal/pluginhost"
+	pluginv1 "github.com/dstout-devops/stratt/sdk/stratt/plugin/v1"
 	"github.com/dstout-devops/stratt/types"
 )
 
@@ -174,7 +176,26 @@ func (a *Activities) ExecuteAction(ctx context.Context, in RunInput, creds []dis
 		if err != nil {
 			return dispatch.Result{}, temporal.NewNonRetryableApplicationError(err.Error(), "CapabilityResolveFailed", err)
 		}
+		// The Action's diagnostics reach the Run's own event stream as they arrive, so
+		// GET /runs/{id}/events shows an Action failing for the same reason it shows an Actuator
+		// failing. Before this, the Action path dropped every non-terminal TaskEvent and a Run
+		// whose error said "see the streamed diagnostics" had none to see (DESC-5, §1.8).
+		//
+		// Best-effort by design: a bus that is down must not turn a working Action into a failed
+		// one — losing the trace is bad, losing the CONVERGE because the trace could not be
+		// written is worse. The terminal cause still rides out.Error either way.
+		var seq atomic.Int64
+		onEvent := func(ev *pluginv1.TaskEvent) {
+			if a.Bus == nil {
+				return
+			}
+			re := dispatch.RunEventFromTaskEvent(ev, in.RunID, 0, seq.Add(1), "")
+			if err := a.Bus.Publish(ctx, re); err != nil {
+				a.Log.Warn("action event not published", "run", in.RunID, "action", in.Action, "err", err)
+			}
+		}
 		raw, err := pa.Host.InvokeRaw(ctx, pluginhost.ActionInvoke{
+			OnEvent:              onEvent,
 			Principal:            in.Principal,
 			Action:               in.Action,
 			Args:                 in.Params,

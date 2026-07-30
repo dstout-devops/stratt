@@ -84,6 +84,30 @@ plugins:
     env:
       STRATT_OPENBAO_ADDR: http://openbao:8200
       STRATT_OPENBAO_TOKEN: stratt-dev-root
+  # opentofu — the network leg's builder (ADR-0145). It had an image after PLG-2 and was deployed by
+  # NO floor, so `opentofu-network` sat permanently unverified and its capability route stayed
+  # pending: the floor log reads `actuator pending on dependency … no verified provider for
+  # 'statestore'`. ADR-0145's live proof ran this plugin IN-PROCESS via a Go test, never as a pod —
+  # so the transport it actually ships on had never carried a build.
+  #
+  # tmpDir gives it the writable root its Dockerfile's STRATT_OPENTOFU_DATA_ROOT points at: tofu
+  # writes a per-workspace data dir and a shared provider cache, and the pod rootfs is read-only.
+  - name: opentofu
+    image:
+      repository: stratt-plugin-opentofu
+      tag: dev
+      digest: ""
+      pullPolicy: Never # kind-loaded (task image:plugin PLUGIN=opentofu)
+    tmpDir: true
+  # awss3 — opentofu's `statestore` capability provider. Declaring the builder without it leaves the
+  # route pending on a dependency rather than resolved, which is the fail-closed behaviour working
+  # (§1.8) and not a floor anybody can build a subnet on.
+  - name: awss3
+    image:
+      repository: stratt-plugin-awss3
+      tag: dev
+      digest: ""
+      pullPolicy: Never # kind-loaded (task image:plugin PLUGIN=awss3)
   - name: kubeservices
     image:
       repository: stratt-plugin-kubeservices

@@ -409,7 +409,7 @@ func (d *Dispatcher) followTyped(ctx context.Context, runID string, slice int, p
 		seq++
 		unclaimed.maxSeq = seq
 		if ev := resp.GetEvent(); ev != nil {
-			if err := d.bus.Publish(ctx, runEventFromTaskEvent(ev, runID, slice, seq, d.site())); err != nil {
+			if err := d.bus.Publish(ctx, RunEventFromTaskEvent(ev, runID, slice, seq, d.site())); err != nil {
 				return unclaimed, interpreted, err
 			}
 		}
@@ -448,14 +448,19 @@ func typedEventLevel(l pluginv1.TaskEvent_Level) string {
 	}
 }
 
-// runEventFromTaskEvent is the ONE place a port TaskEvent becomes a Run's event, and it exists
+// RunEventFromTaskEvent is the ONE place a port TaskEvent becomes a Run's event, and it exists
 // as a named function rather than a struct literal inside the follow loop for a reason worth
 // stating: every field below is a mapping that has been silently absent at some point.
 // TaskEvent.Level was decoded and dropped (ADR-0117 g); TaskEvent.Scope did not exist
 // (ADR-0121). Both mappers had unit tests while the CALL had none, so deleting the call changed
 // nothing observable — the inert-mechanism shape this repo keeps finding. With the conversion in
 // one function, one test covers what actually reaches the operator.
-func runEventFromTaskEvent(ev *pluginv1.TaskEvent, runID string, slice int, seq int64, site string) types.RunEvent {
+// RunEventFromTaskEvent is EXPORTED because the Action path needs the identical mapping. It was
+// unexported while only the pod path used it, and the Action path consequently had no mapping at
+// all — it dropped every non-terminal TaskEvent on the floor with the comment "diagnostic message;
+// the result rides the terminal one". One mapping, both paths: a plugin's diagnostics must not mean
+// different things depending on which transport carried them (DESC-5).
+func RunEventFromTaskEvent(ev *pluginv1.TaskEvent, runID string, slice int, seq int64, site string) types.RunEvent {
 	re := types.RunEvent{
 		RunID: runID, Slice: slice, Seq: seq, Site: site,
 		Kind:    typedEventKind(ev),
@@ -867,7 +872,7 @@ func (d *Dispatcher) podStartGrace() time.Duration {
 // preStartRunEvent builds the pod-start diagnosis event. Split out of publishPreStart because the
 // dispatcher's bus is a concrete *events.Bus and every pod-start test constructs a dispatcher
 // WITHOUT one — so an assertion about the event's contents had nowhere to live, and the Scope
-// stamping below would have been unverifiable (the same untested-call gap runEventFromTaskEvent
+// stamping below would have been unverifiable (the same untested-call gap RunEventFromTaskEvent
 // exists to close).
 func preStartRunEvent(runID string, slice int, seq int64, kind, level, site string, b podBlock) types.RunEvent {
 	return types.RunEvent{

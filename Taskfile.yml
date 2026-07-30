@@ -1797,6 +1797,15 @@ tasks:
       # has to carry its pod or the registry reports a Connector that will not verify.
       - task: image:plugin
         vars: {PLUGIN: kubeservices}
+      # The certificate leg's provider (CERT-1) and the network leg's builder plus its statestore
+      # dependency (ADR-0145). Each was declared in the estate with a dial address and deployed by
+      # no floor, so each sat permanently unverified — which reads as "the backend is down".
+      - task: image:plugin
+        vars: {PLUGIN: openbao}
+      - task: image:plugin
+        vars: {PLUGIN: opentofu}
+      - task: image:plugin
+        vars: {PLUGIN: awss3}
       - task: dev:stage-estate # full estate incl. connectors/actuators
       - |
         set -eu
