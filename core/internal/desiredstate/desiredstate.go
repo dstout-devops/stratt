@@ -248,7 +248,7 @@ func ParseDir(root string, decider policy.Decider) (Declarations, error) {
 		out.AdmissionControls = append(out.AdmissionControls, a.Controls...)
 	}
 	if len(out.AdmissionControls) > 0 && decider != nil {
-		if err := admitEstate(root, out.AdmissionControls, decider); err != nil {
+		if err := admitEstate(roots, out.AdmissionControls, decider); err != nil {
 			return out, err
 		}
 	}
@@ -1336,19 +1336,31 @@ func parseAdmissionFile(path string, raw []byte) (string, admissionDecl, error) 
 	return f.Name, admissionDecl{Name: f.Name, Controls: ctrls}, nil
 }
 
-// admissionDirs are the declaration directories admission judges. NOT every estate
-// kind: admission/ itself is excluded by design (a policy does not admit itself), but
-// capability-bindings/, environments/, authz/, advisories/, hosts/ and the plugin-side
-// actuators/ + connectors/ declarations are NOT judged either — and that is a gap, not a
-// design. capability-bindings/ is the one place a provider or substrate may be named
-// (ADR-0151), so the line whose edit migrates a whole topology is currently unreviewed by
-// policy, as is the L0 grant surface. Tracked in docs/declaration-map.md §7 item 2.
-// Say what is true here (§1.8): a reader who believes admission covers everything will
-// write a control that silently never fires.
+// admissionDirs are the declaration directories admission judges: EVERY directory the
+// estate can carry except admission/ itself, which is excluded by design — a policy does
+// not admit itself.
+//
+// It used to stop at the fifteen kinds above the blank line, and the three things missing
+// were the three that mattered most (docs/declaration-map.md §7 item 2):
+//
+//   - capability-bindings/ is the ONE place a provider or a substrate may be named
+//     (ADR-0151). It is the line whose edit migrates a whole topology from Kubernetes to
+//     AWS, and it was the only declaration in the estate that no control could reach.
+//   - actuators/ + connectors/ are the L0 GRANT surface — what a plugin is allowed to do.
+//     An org control over which providers may be admitted had nothing to match on.
+//   - authz/, advisories/, hosts/ and environments/ are list- or scope-shaped documents
+//     that still carry consequence: a tuple grants, an advisory decides what "vulnerable"
+//     means, a host declaration asserts a reach coordinate.
+//
+// A control that never fires reads exactly like a control that always passes (§1.8), so the
+// coverage is asserted by TestAdmissionJudgesEveryDeclarationDirectory rather than by this
+// list staying correct on its own.
 var admissionDirs = []string{
 	"views", "credential-refs", "triggers", "workflows", "emitters", "sites",
 	"cells", "scim", "notify-sinks", "subscriptions", "baselines", "mcp-servers",
 	"intents", "assignments", "blueprints",
+	"capability-bindings", "environments", "actuators", "connectors",
+	"authz", "advisories", "hosts",
 }
 
 // admitEstate runs the admission PEP over every declaration manifest through the
@@ -1356,35 +1368,53 @@ var admissionDirs = []string{
 // record (§1.8). The manifest is admitted as a generic object with a guaranteed
 // `kind` (the manifest's own, or the directory's), so admission controls can
 // match reliably (e.g. object.kind == 'Workflow').
-func admitEstate(root string, controls []types.Control, decider policy.Decider) error {
-	for _, sub := range admissionDirs {
-		entries, err := os.ReadDir(filepath.Join(root, sub))
-		if os.IsNotExist(err) {
-			continue
-		}
-		if err != nil {
-			return fmt.Errorf("desiredstate: admission read %s: %w", sub, err)
-		}
-		for _, e := range entries {
-			if e.IsDir() {
+//
+// IT TAKES EVERY ESTATE ROOT, NOT JUST THE PRIMARY ONE, and the singular signature it
+// replaced is the sharpest form of the same gap admissionDirs had. `estateRoots` returns the
+// estate plus one root per plugin admitted in plugins.yaml (ADR-0137), and every kind below
+// is parsed across all of them — but admission walked only the first. So a plugin's
+// Workflows, Actuators, Connectors and Blueprints were admitted by NOTHING, even for the
+// kinds already on the list.
+//
+// That is the inverse of what admission is for. Third-party declarations are precisely the
+// ones an org wants judged; the estate's own are the ones its authors already control. A
+// deployment could carry a fully-specified admission policy, pass its own manifests through
+// it, and admit an arbitrary plugin's Actuator grants unexamined.
+func admitEstate(roots []string, controls []types.Control, decider policy.Decider) error {
+	for _, root := range roots {
+		for _, sub := range admissionDirs {
+			entries, err := os.ReadDir(filepath.Join(root, sub))
+			if os.IsNotExist(err) {
 				continue
 			}
-			ext := strings.ToLower(filepath.Ext(e.Name()))
-			if ext != ".yaml" && ext != ".yml" {
-				continue
-			}
-			path := filepath.Join(sub, e.Name())
-			raw, err := os.ReadFile(filepath.Join(root, path))
 			if err != nil {
-				return fmt.Errorf("desiredstate: %s: %w", path, err)
+				return fmt.Errorf("desiredstate: admission read %s: %w", sub, err)
 			}
-			obj, err := manifestObject(raw, sub)
-			if err != nil {
-				return fmt.Errorf("desiredstate: admission parse %s: %w", path, err)
-			}
-			d := decider.Admit(context.Background(), policy.AdmissionRequest{Object: obj, Controls: controls})
-			if d.Outcome == types.OutcomeDeny {
-				return fmt.Errorf("desiredstate: %s: admission denied — %s", path, admissionReasons(d))
+			for _, e := range entries {
+				if e.IsDir() {
+					continue
+				}
+				ext := strings.ToLower(filepath.Ext(e.Name()))
+				if ext != ".yaml" && ext != ".yml" {
+					continue
+				}
+				path := filepath.Join(sub, e.Name())
+				raw, err := os.ReadFile(filepath.Join(root, path))
+				if err != nil {
+					return fmt.Errorf("desiredstate: %s: %w", path, err)
+				}
+				obj, err := manifestObject(raw, sub)
+				if err != nil {
+					return fmt.Errorf("desiredstate: admission parse %s: %w", path, err)
+				}
+				d := decider.Admit(context.Background(), policy.AdmissionRequest{Object: obj, Controls: controls})
+				if d.Outcome == types.OutcomeDeny {
+					// The ROOT is named as well as the path: `workflows/deploy.yaml` denied is a
+					// different problem depending on whether it is the estate's own or one a
+					// plugin shipped, and the operator's next move differs (§1.8).
+					return fmt.Errorf("desiredstate: %s: admission denied — %s",
+						filepath.Join(root, path), admissionReasons(d))
+				}
 			}
 		}
 	}
@@ -1407,27 +1437,53 @@ func manifestObject(raw []byte, sub string) (map[string]any, error) {
 	return m, nil
 }
 
+// dirKindByDir is the `object.kind` an admission control matches on, per declaration
+// directory — the fallback used when the manifest does not carry its own `kind` (an Intent
+// does; a View does not).
+//
+// IT IS EXHAUSTIVE OVER admissionDirs ON PURPOSE, and it did not used to be. Eight entries
+// were listed and the rest fell through to a `default: return sub`, so the Git door admitted
+// a Cell as kind "cells" while the imperative door (AdmitDeclarations) admitted the same
+// declaration as "Cell". A control written `object.kind == 'Cell'` therefore fired on an API
+// POST and silently never fired on the Git reconcile — the primary path. One token per kind,
+// both doors, asserted by TestBothAdmissionDoorsAgreeOnKind.
+//
+// Three directories keep their plural directory name deliberately, because their manifest is
+// a LIST document with no single subject: authz/tuples.yaml is `tuples:`, advisories/*.yaml
+// is `advisories:`, hosts/*.yaml is `hosts:`. Admitting the file as one object named for its
+// directory is honest; singularizing it would imply a per-item decision that is not what
+// happens. `hosts` in particular must NOT become a `Host` kind — a host is an Entity kind
+// VALUE, and minting a declaration kind for it is the ontology creep §9 refuses.
+var dirKindByDir = map[string]string{
+	"views":               "View",
+	"workflows":           "Workflow",
+	"assignments":         "Assignment",
+	"blueprints":          "Blueprint",
+	"baselines":           "Baseline",
+	"triggers":            "Trigger",
+	"emitters":            "Emitter",
+	"sites":               "Site",
+	"cells":               "Cell",
+	"intents":             "Intent",
+	"credential-refs":     "CredentialRef",
+	"notify-sinks":        "Sink",
+	"subscriptions":       "Subscription",
+	"mcp-servers":         "MCPServer",
+	"scim":                "SCIMIdP",
+	"actuators":           "Actuator",
+	"connectors":          "Connector",
+	"capability-bindings": "CapabilityBinding",
+	"environments":        "Environment",
+	"authz":               "authz",
+	"advisories":          "advisories",
+	"hosts":               "hosts",
+}
+
 func dirKind(sub string) string {
-	switch sub {
-	case "views":
-		return "View"
-	case "workflows":
-		return "Workflow"
-	case "assignments":
-		return "Assignment"
-	case "blueprints":
-		return "Blueprint"
-	case "baselines":
-		return "Baseline"
-	case "triggers":
-		return "Trigger"
-	case "emitters":
-		return "Emitter"
-	case "sites":
-		return "Site"
-	default:
-		return sub
+	if k, ok := dirKindByDir[sub]; ok {
+		return k
 	}
+	return sub
 }
 
 // AdmitDeclarations runs the admission PEP (ADR-0073) over already-parsed
@@ -1487,6 +1543,33 @@ func AdmitDeclarations(ctx context.Context, decls Declarations, controls []types
 	}
 	for i := range decls.Subscriptions {
 		all = append(all, obj{"Subscription", decls.Subscriptions[i].Name, decls.Subscriptions[i]})
+	}
+	// THE SIX BELOW WERE MISSING, and their absence made this door strictly WEAKER than the
+	// Git one — the opposite of the GOV-2 bypass this function exists to close. credential-refs/
+	// and scim/ were already on admissionDirs, so a control over them held on the reconcile and
+	// not on an API POST; actuators/, connectors/, capability-bindings/ and environments/ were
+	// judged by neither until this change.
+	//
+	// A door that admits a SUBSET is worse than one that admits nothing, because the policy
+	// looks enforced. The two lists are now asserted to agree (TestBothAdmissionDoorsAgreeOnKind)
+	// rather than left to whoever adds the next kind.
+	for i := range decls.CredentialRefs {
+		all = append(all, obj{"CredentialRef", decls.CredentialRefs[i].Name, decls.CredentialRefs[i]})
+	}
+	for i := range decls.SCIMIdPs {
+		all = append(all, obj{"SCIMIdP", decls.SCIMIdPs[i].Name, decls.SCIMIdPs[i]})
+	}
+	for i := range decls.Actuators {
+		all = append(all, obj{"Actuator", decls.Actuators[i].Name, decls.Actuators[i]})
+	}
+	for i := range decls.Connectors {
+		all = append(all, obj{"Connector", decls.Connectors[i].Name, decls.Connectors[i]})
+	}
+	for i := range decls.CapabilityBindings {
+		all = append(all, obj{"CapabilityBinding", decls.CapabilityBindings[i].Name, decls.CapabilityBindings[i]})
+	}
+	for i := range decls.Environments {
+		all = append(all, obj{"Environment", decls.Environments[i].Name, decls.Environments[i]})
 	}
 	for _, o := range all {
 		m, err := declarationObject(o.kind, o.v)
@@ -3415,12 +3498,33 @@ func ValidateWorkflow(w types.Workflow, opts ...ValidateOption) error {
 		// A Step is exactly one of four shapes (§2.3, ADR-0031, ADR-0063): a Gate,
 		// a Policy checkpoint, an Action (targetless typed operation), or an
 		// Actuation (Actuator+View).
+		//
+		// THIS `isActuation` IS POSITIVE; types.Step.IsActuation() IS RESIDUAL — it answers
+		// "not any of the other shapes", so the DAG and the authz door fail CLOSED on a Step
+		// they cannot classify (a Step that looked like a Gate to authorizeLaunch was once an
+		// omitted field away from a bypassed §2.5 check). Both postures are right where they
+		// are, but they DISAGREED on exactly one input: a Step declaring no shape at all.
+		//
+		//	steps:
+		//	  - name: converge          # and nothing else
+		//
+		// loaded clean here — isGate/isPolicy/isAction/isActuation/isNested all false, and no
+		// case below matched "none of them" — and then IsActuation() called it an actuation and
+		// dispatched it with an empty Actuator. The refusal is added below rather than by
+		// changing the runtime predicate: fail-closed is the correct posture at dispatch, and
+		// once nothing shapeless can LOAD, the two definitions agree on every Step that exists.
 		isGate := s.Gate != nil
 		isPolicy := s.Policy != nil
 		isAction := s.Action != "" || s.ActionCapability != ""
 		isActuation := s.ViewName != "" || s.Actuator != "" || s.Slices != 0
 		isNested := s.Workflow != "" || s.WorkflowCapability != ""
 		switch {
+		case !isGate && !isPolicy && !isAction && !isActuation && !isNested:
+			return fmt.Errorf(
+				"workflow %s: step %s declares no shape — a step is a gate, a policy checkpoint, "+
+					"a nested workflow, an action (`action`/`actionCapability`) or an actuation "+
+					"(`actuator`, optionally with `viewName`), and this one is none of them. It "+
+					"would dispatch as an actuation against an empty Actuator (§2.3)", w.Name, s.Name)
 		case s.Workflow != "" && s.WorkflowCapability != "":
 			return fmt.Errorf("workflow %s: step %s: names a workflow and a workflowCapability — one or the "+
 				"other, never both (§2.4)", w.Name, s.Name)

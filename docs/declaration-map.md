@@ -387,20 +387,95 @@ delete them is the ADR's call, not this document's.
 
 ## 7. Register of open seams
 
-| #   | Seam                                                                                                                                                                                                                                                                                                                                                                                                                             | Layer        |
-| --- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------ |
-| 1   | Facet/claim grain has no instance key (§6)                                                                                                                                                                                                                                                                                                                                                                                       | L2 / L4      |
-| 2   | **Admission does not judge `capability-bindings`, `environments`, `authz`, `advisories`, `hosts`, or the actuator/connector declarations.** The one layer where a provider or substrate may be named — the line whose edit migrates a topology — is not policy-judged, and neither is the L0 grant surface. `desiredstate.go:1339`'s comment claims "every estate kind except admission/ itself"; `admissionDirs` says otherwise | L7 / L1 / L0 |
-| 3   | A Step with only `actionCapability` dispatches with an empty Actuator                                                                                                                                                                                                                                                                                                                                                            | L6           |
-| 4   | Parse-time and run-time builder resolution disagree (`compute-build` vs `kubecompute-build`)                                                                                                                                                                                                                                                                                                                                     | L0 / L1      |
-| 5   | `Actuator.provisions` targets are not resolved at load — an unlaunchable Workflow reaches an operator at a gate                                                                                                                                                                                                                                                                                                                  | L0           |
-| 6   | The estate cannot express ordering across Assignments ("serve TLS once a certificate is present")                                                                                                                                                                                                                                                                                                                                | L4           |
-| 7   | Tombstone/revival semantics unrecorded (ADR owed)                                                                                                                                                                                                                                                                                                                                                                                | L2           |
-| 8   | The ADR-0151 lint enforcing "nothing above a provider names a substrate" is **follow-up 4, unimplemented**                                                                                                                                                                                                                                                                                                                       | L1           |
-| 9   | `substrate:` token collides with demo manifests                                                                                                                                                                                                                                                                                                                                                                                  | L1           |
-| 10  | "Report ignored params" is not a port obligation — a plugin may silently drop input                                                                                                                                                                                                                                                                                                                                              | L0           |
-| 11  | `software.package` has a bootstrap owner, not the ADR-0080 slice-2 Syncer collector                                                                                                                                                                                                                                                                                                                                              | L2           |
-| 12  | `svc-fleet` does not reach `graph.intent` despite being in the ConfigMap                                                                                                                                                                                                                                                                                                                                                         | L4           |
+Rows carry their status. **CLOSED** rows stay in the table rather than being deleted: the
+register is also the record of what this map's own reading found, and a seam that was real
+last week is the best evidence that the next one is worth checking too.
+
+| #   | Seam                                                                                                                                                                                                                                                                                                                                                                                                                                           | Layer        | Status                                    |
+| --- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------ | ----------------------------------------- |
+| 1   | Facet/claim grain has no instance key (§6)                                                                                                                                                                                                                                                                                                                                                                                                     | L2 / L4      | open — ADR owed                           |
+| 2   | **Admission judged neither the substrate-selecting layer nor the L0 grant surface nor anything a plugin ships.** Three gaps, one theme: `admissionDirs` listed 15 of 22 estate directories; `admitEstate` walked only the PRIMARY root, so every plugin-supplied declaration was judged by nothing; and `AdmitDeclarations` (the API door) omitted kinds the Git door already judged, so a control could hold on a reconcile and not on a POST | L7 / L1 / L0 | **CLOSED** — see §7.1                     |
+| 3   | **A Step declaring no shape at all loaded clean, then dispatched as an actuation with an empty Actuator** — `ValidateWorkflow` classifies positively, `types.Step.IsActuation()` classifies residually (fail-closed), and the two disagreed on exactly that input                                                                                                                                                                              | L6           | **CLOSED** — refused at load              |
+| 4   | **An Intent carries no `environments`, so every provisioning Intent is in every environment** — and the load check demands each one satisfy the builder of EVERY substrate. Sharpened from "parse and run-time disagree": they do not disagree by accident, the check deliberately validates all candidates. See §7.2                                                                                                                          | L0 / L1 / L4 | open — needs a decision                   |
+| 5   | ~~`Actuator.provisions` targets are not resolved at load~~ — **the map was wrong.** `checkProvisioningBuildInputs` ships and is wired at `desiredstate.go:462`, covering `provisions`, `decommissions` AND `remediates`                                                                                                                                                                                                                        | L0           | **was never open** — corrected 2026-07-30 |
+| 6   | The estate cannot express ordering across Assignments ("serve TLS once a certificate is present")                                                                                                                                                                                                                                                                                                                                              | L4           | open                                      |
+| 7   | Tombstone/revival semantics unrecorded (ADR owed)                                                                                                                                                                                                                                                                                                                                                                                              | L2           | open — ADR owed                           |
+| 8   | The ADR-0151 lint enforcing "nothing above a provider names a substrate" is **follow-up 4, unimplemented**                                                                                                                                                                                                                                                                                                                                     | L1           | open                                      |
+| 9   | `substrate:` token collides with demo manifests                                                                                                                                                                                                                                                                                                                                                                                                | L1           | open                                      |
+| 10  | "Report ignored params" is not a port obligation — a plugin may silently drop input                                                                                                                                                                                                                                                                                                                                                            | L0           | open                                      |
+| 11  | `software.package` has a bootstrap owner, not the ADR-0080 slice-2 Syncer collector                                                                                                                                                                                                                                                                                                                                                            | L2           | open                                      |
+| 12  | ~~`svc-fleet` does not reach `graph.intent` despite being in the ConfigMap~~ — never a ConfigMap gap: the WHOLE estate parse failed, on item 4's check. The estate was reverted (it existed only to work around ADR-0148 D6)                                                                                                                                                                                                                   | L4           | **CLOSED** — diagnosed, cause is item 4   |
+
+### 7.1 What closing item 2 found
+
+The register said admission "does not judge" seven directories. Reading the code to close it found
+that the coverage list was the _smallest_ of three gaps stacked on one another:
+
+1. **`admissionDirs` was incomplete** — the one it named. `capability-bindings/` is the single
+   place a provider or substrate may be named (ADR-0151), and `actuators/` + `connectors/` are the
+   L0 grant surface. Neither could be matched by any control.
+2. **`admitEstate` took one `root`, while every kind below it is parsed across `estateRoots()`** —
+   the estate plus one root per plugin admitted in `plugins.yaml`. So a plugin's Workflows,
+   Actuators, Connectors and Blueprints were judged by nothing **even for the kinds already on the
+   list**. That is the inverse of what admission is for: an org's own manifests were policed and
+   the third-party ones, which are the reason to have a policy, were not.
+3. **The two doors disagreed.** `AdmitDeclarations` (the API door, which exists to close the GOV-2
+   bypass) omitted `CredentialRef` and `SCIMIdP` — both of which the Git door had always judged. A
+   control over a credential pointer therefore held on a reconcile and silently did not hold on
+   `POST /desired-state/apply`. The same function also emitted different `kind` tokens: the Git
+   door's fallback was `default: return sub`, so a Cell was `"cells"` on one path and `"Cell"` on
+   the other, and `object.kind == 'Cell'` fired on exactly one of them.
+
+All three are closed, and the coverage is now **asserted rather than maintained**: a new estate
+directory that admission does not walk fails `TestAdmissionJudgesEveryDeclarationDirectory`, and
+the two doors are compared behaviourally by running the real estate through both and diffing the
+kinds each presented to the PDP (`TestBothAdmissionDoorsAgreeOnKind`).
+
+**The lesson generalizes and belongs in this map:** a control that never fires is
+indistinguishable from a control that always passes. Every "is X judged?" question in this
+document should be read as "judged _where_, at _which door_, over _which roots_" — three answers,
+and the reference estate had a different one for each.
+
+### 7.2 Item 4, restated: a provisioning Intent has no environment
+
+The earlier wording — "parse-time and run-time builder resolution disagree" — described the symptom
+and misnamed the cause. They do not disagree by accident.
+`checkProvisioningBuildInputs` validates an Intent against **every** Workflow any provider
+advertises for its kind, and says so in its own comment: _"IT CHECKS EVERY CANDIDATE, NOT THE
+WINNER, and that is deliberately stronger than the reconcile"_ — because which provider wins
+depends on runtime state (which providers are VERIFIED) that Git cannot see.
+
+That reasoning is sound. What makes it bite is a different fact: **`types.Intent` has no
+`environments` field.** `ScopeToEnvironment` filters Assignments, Triggers and Baselines; Intents
+are not filtered because a provisioning Intent has no Assignment to carry a scope (ADR-0058 makes
+it a sibling reconcile selected by name). So every `Intent/Compute` is in force in every
+environment, and the candidate set for it is genuinely the union of every substrate's builder.
+
+The consequence is visible in the shipped estate: `app-tier` declares `region`, `instanceType` and
+`ami` — AWS coordinates — while `dev` binds Compute to the **kubernetes** substrate, where none of
+them are used. They are there to satisfy `compute-build`, a builder that will never run for it in
+that environment. And the cost compounds: **admitting a new provisioning provider retroactively
+invalidates every existing Intent of that kind**, because each must now also satisfy the newcomer's
+builder.
+
+ADR-0151 D4 already booked the limit — _"the line moves the BUILDER, not provider-shaped `params`
+an Intent may be carrying"_ — this is the price of it, measured.
+
+**Three candidate shapes, none chosen here:**
+
+1. **Scope the Intent.** Give a provisioning Intent an `environments` filter and check only the
+   builders reachable in the environments it is in. Consistent with ADR-0118 D1's prescribed shape
+   (one flat declaration per environment) and with `environments` staying a membership filter. It
+   does mean two near-identical `Intent/Compute` documents for a fleet that spans two substrates —
+   which ADR-0118 D1 would call correct, not duplication.
+2. **Type the params.** Make the builder's declared `inputs` the contract and let the Intent's
+   `params` stay opaque, checking only the resolvable builder's needs at reconcile. Weaker: it
+   moves the diagnosis from load to launch, which is the direction §1.8 forbids.
+3. **Accept the union and say so.** Keep today's behaviour and make the error message name it:
+   _"`app-tier` must satisfy every registered Compute builder, because an Intent has no
+   environment."_ Cheapest, honest, closes nothing.
+
+This is a decision, not a defect, and it is the one blocking a genuinely multi-substrate estate.
 
 ## 8. Invariants, and where each is actually enforced
 
