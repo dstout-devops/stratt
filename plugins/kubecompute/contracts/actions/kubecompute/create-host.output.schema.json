@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "stratt:contract:actions/kubecompute/create-host.output:v1",
+  "title": "kubecompute/create-host output",
+  "description": "What the build made (ADR-0151). Deliberately NOT the address: a pod has no address until it is scheduled, so a builder returning one would be stating a fact it cannot know (§1.2). mgmt.address arrives from this plugin's OBSERVE half, on the cycle after the host is running.",
+  "type": "object",
+  "properties": {
+    "name": { "type": "string", "description": "The built host's name." },
+    "identity": { "type": "string", "description": "The kube.host identity — namespace/name." }
+  },
+  "required": ["name", "identity"],
+  "additionalProperties": false
+}

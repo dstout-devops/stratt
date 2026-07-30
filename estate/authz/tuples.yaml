@@ -33,3 +33,6 @@ tuples:
   # …and the gate-only CredentialRef the cert-issuer Action binds. An Action's use-check IS its
   # authz gate, so without this tuple dev-runner may reach the View and still not sign.
   - { user: principal:dev-runner, relation: user, object: credential_ref:cert-issuer }
+  # …and the gate-only CredentialRef the kubecompute/create-host Action binds (ADR-0151). Building
+  # a host is a privileged verb; the use-check is what gates it.
+  - { user: principal:dev-runner, relation: user, object: credential_ref:kubecompute-build }

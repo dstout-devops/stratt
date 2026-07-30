@@ -1,0 +1,14 @@
+# kubecompute-build — the CredentialRef the kubecompute/create-host Action binds (§2.5, ADR-0052).
+#
+# GATE-ONLY, the same shape as helm-deploy: the plugin reaches the Kubernetes API through its own
+# in-cluster ServiceAccount, so no material is brokered and nothing is injected. It exists because
+# an Action's CredentialRef use-check is its ONLY authz gate — the core refuses a credential-free
+# Action outright ("ActionUngated") — and BUILDING A HOST is exactly the verb that should not be
+# reachable by any Principal who happens to be able to launch a Workflow.
+#
+# POINTER only: the locator names an authz-marker Secret, never material.
+name: kubecompute-build
+ownerTeam: platform-admins
+backend: k8s-secret
+gateOnly: true
+locator: { namespace: stratt, name: kubecompute-build-authz }

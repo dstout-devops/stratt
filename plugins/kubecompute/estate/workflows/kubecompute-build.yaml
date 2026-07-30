@@ -1,0 +1,75 @@
+# kubecompute-build — the GATED build Workflow an Intent/Compute launches when the `provisioning`
+# capability resolves to kubecompute (ADR-0151, on the ADR-0058 reach path).
+#
+# The SAME launch interface awsec2's compute-build declares, and that is the point rather than
+# duplication: the reconcile supplies `instance`, `projectKind`, `labels`, `placement` and an opaque
+# `params` for every builder, so which provider serves an Intent/Compute is a capability-binding
+# decision and not an estate rewrite (ADR-0110, §1.5). A second builder that needed a different
+# launch shape would have made the class a fiction.
+#
+# What differs is one line — the `action:` — which is the landscape binding.
+name: kubecompute-build
+inputs:
+  type: object
+  additionalProperties: false
+  required: [instance, projectKind, labels]
+  properties:
+    instance:
+      type: string
+      minLength: 1
+      description: >
+        The instance this build makes, from the reconcile's per-instance fan-out. It is the host's
+        name AND its identity, so a rebuild of the same instance adopts rather than duplicates.
+    projectKind:
+      type: string
+      description: The Intent's project kind, carried onto the projection (ADR-0058 M1).
+    labels:
+      type: object
+      additionalProperties: true
+      description: >
+        The Intent's labels, including the `stratt.intent/instance` correlation label the next
+        reconcile matches to decide this instance is built. Losing it would leave the Intent
+        building forever, which is why the provider rewrites rather than drops the key that
+        Kubernetes label syntax would otherwise reject.
+    placement:
+      type: object
+      additionalProperties: true
+      description: >
+        Declared topology placement, always present and empty where the Intent declares nothing
+        (ADR-0123 D2). UNUSED by this provider — a pod is placed by the scheduler, not by the
+        estate — and accepted rather than refused so the shared launch interface stays shared.
+    params:
+      type: object
+      additionalProperties: true
+      description: Opaque provider build params, typed by the provider's Action Contract, never here.
+steps:
+  - name: approve
+    # §5 Flow 1: the launch is already a human act, and this is the second platform-admin
+    # approval. Building a host is not something a cadence should do on its own.
+    gate:
+      approvers:
+        teams: [platform-admins]
+      timeoutSeconds: 86400
+  - name: build
+    needs: [approve]
+    action: kubecompute/create-host # the landscape binding — swap for awsec2 / vsphere / opentofu
+    # An Action's CredentialRef use-check is its ONLY authz gate (ActionUngated), so the build
+    # carries one even though the plugin reaches the API through its own in-cluster ServiceAccount
+    # and no material is brokered — the gate-only shape ADR-0052 names, as helm-deploy uses.
+    credentialRefs: [kubecompute-build]
+    params:
+      name: "{{.launch.instance}}"
+      # BOUND, not merely declared. A Workflow input nothing binds is refused at load
+      # (ADR-0123 D3) — the rule exists because a declared `placement` reached no provider for a
+      # long time by being silently dropped. This substrate schedules pods rather than placing
+      # them, so the provider ACCEPTS placement and says out loud that it ignored it; it does not
+      # get to pretend the estate never asked.
+      projectKind: "{{.launch.projectKind}}"
+      placement: "{{.launch.placement}}"
+      params: "{{.launch.params}}"
+      # A POINTER to the Secret holding authorized_keys, never material (§2.5). It is the SAME
+      # trust the estate already brokers for reaching hosts, so a built host is reachable by the
+      # credential the converge already uses — rather than by a key minted at build time that
+      # nothing else knows about.
+      authorizedKeysSecret: managed-web-authorized-keys
+      labels: "{{.launch.labels}}"

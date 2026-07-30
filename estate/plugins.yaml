@@ -47,6 +47,8 @@ plugins:
   # this collector reports what is actually running. Cause it, then observe it — the same
   # division ADR-0144 D5 drew for DNS, and the reason software.chart is a projection (§1.2)
   # rather than something the deploy Action asserts about itself.
+  - name: kubecompute
+    path: ../plugins/kubecompute/estate
   - name: kubeservices
     path: ../plugins/kubeservices/estate
   - name: mcp

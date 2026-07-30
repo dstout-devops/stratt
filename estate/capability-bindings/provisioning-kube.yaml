@@ -1,0 +1,17 @@
+# provisioning-kube — Intent/Compute binds to kubecompute in the dev environment (ADR-0151).
+#
+# THIS is what makes the capstone chain executable end to end. `provisioning` for Compute already
+# had two providers and neither yields a host anything can converge: floci instances have no sshd
+# and vcenter/vcsim is `build-real`. Binding the class to kubecompute in dev means the SAME
+# Intent/Compute that builds an EC2 instance in one environment builds a converge-able host here —
+# which is the substrate-independence claim, exercised rather than asserted (§1.5, ADR-0110).
+#
+# Environment-scoped, not global: vsphere-dc keeps its vcenter binding (provisioning-vsphere.yaml),
+# and Subnet stays with opentofu-network. One class, one provider, per environment per kind — the
+# ADR-0112 D6 disambiguation, declared rather than guessed.
+name: provisioning-kube
+environments: [dev]
+entries:
+  - capability: provisioning
+    provider: kubecompute
+    intentKind: Compute
