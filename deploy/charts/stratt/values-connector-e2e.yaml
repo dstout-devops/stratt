@@ -68,6 +68,22 @@ plugins:
   # A cluster-wide READ-ONLY grant over Services and nothing else. The chart renders that as a
   # ClusterRole (the `kubeAccess` branch, whose own comment names a Syncer spanning namespaces as
   # the case), so there is no kubeconfig to bake and no secrets reach (§2.5).
+  # openbao — the `certissuer` capability's provider (CERT-1, W4). Without this pod the Actuator
+  # cannot be dialled, so it never verifies, so the certificate Blueprint's capability route stays
+  # PENDING and the whole leg compiles to nothing — measured on this floor before it was added.
+  #
+  # The token is the dev root token, literal, exactly as the compose service carries it and for the
+  # same reason: `server -dev` mints it at startup and it dies with the pod. Real deployments broker
+  # a token through a CredentialRef and never hold one in a manifest (§2.5).
+  - name: openbao
+    image:
+      repository: stratt-plugin-openbao
+      tag: dev
+      digest: ""
+      pullPolicy: Never # kind-loaded (task image:plugin PLUGIN=openbao)
+    env:
+      STRATT_OPENBAO_ADDR: http://openbao:8200
+      STRATT_OPENBAO_TOKEN: stratt-dev-root
   - name: kubeservices
     image:
       repository: stratt-plugin-kubeservices

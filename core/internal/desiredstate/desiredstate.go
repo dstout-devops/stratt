@@ -820,6 +820,41 @@ func checkProvisioningBuildInputs(decls Declarations) error {
 			}
 		}
 	}
+	// THE THIRD MEMBER OF THE SAME FAMILY, and it was missing (W4). `remediates` is what a
+	// capability-routed Blueprint resolves through (ADR-0135 D2/D3), and `validateRemediates` checks
+	// only that the entry is non-empty — exactly the partial check `validateProvisions` was before
+	// the builders loop above existed. So a provider could advertise a convergence Workflow nobody
+	// declared, and the estate LOADED: `task ci` stayed green while the live compiler rejected the
+	// Assignment with "remediation workflow ... not found".
+	//
+	// Measured, on the certificate leg: a `remediates` value mangled by an editing slip
+	// (`Certificate: cert-issue, and NO facetNamespaces at all.`) parsed cleanly, passed the whole
+	// gate, and was caught only by a running control plane. A dangling remediation target is the
+	// worst of the three to meet — provisioning and teardown Findings are launched by an operator
+	// who can read the name, whereas a drift Finding's remediation is the thing the estate promises
+	// will close it automatically.
+	for _, a := range decls.Actuators {
+		for kind, wfName := range a.Remediates {
+			if _, ok := byName[wfName]; !ok {
+				return fmt.Errorf(
+					"actuator %q advertises workflow %q as its %s remediation, but no such Workflow "+
+						"is declared — a capability-routed Blueprint would resolve to it and find "+
+						"nothing to launch. Declare it, or drop the remediates entry (ADR-0135 D2)",
+					a.Name, wfName, kind)
+			}
+		}
+	}
+	for _, c := range decls.Connectors {
+		for kind, wfName := range c.Remediates {
+			if _, ok := byName[wfName]; !ok {
+				return fmt.Errorf(
+					"connector %q advertises workflow %q as its %s remediation, but no such Workflow "+
+						"is declared — a capability-routed Blueprint would resolve to it and find "+
+						"nothing to launch. Declare it, or drop the remediates entry (ADR-0135 D2)",
+					c.Name, wfName, kind)
+			}
+		}
+	}
 
 	for _, in := range decls.Intents {
 		// The generated param set differs per provisioning shape: a fleet instance has an ordinal

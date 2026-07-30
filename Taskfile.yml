@@ -639,6 +639,31 @@ tasks:
     cmds:
       - deploy/dev/openbao-bootstrap.sh
 
+  dev:openbao:up:
+    # The IN-KIND dev CLM (CERT-1, W4). OpenBao shipped as a compose service and
+    # `dev:connector-e2e` is fully in-kind by design, so the certificate leg had no floor in which
+    # its provider could exist — the compile failed closed with `no verified provider builds
+    # Intent/Certificate`. Same in-cluster-substrate posture values-allinone takes for
+    # Postgres/NATS/Temporal: a dev floor stands up from nothing.
+    #
+    # The bootstrap is the SAME script the compose path uses, pointed at a port-forward — one
+    # provisioning of record for both floors, rather than a second copy that drifts.
+    desc: "Stand the dev CLM (OpenBao) in kind and provision its PKI — the certissuer provider's backend (W4)"
+    deps: [tools:kubectl]
+    cmds:
+      - "{{.KUBECTL}} --context {{.KIND_CONTEXT}} apply -f {{.ROOT_DIR}}/deploy/dev/openbao.yaml"
+      - "{{.KUBECTL}} --context {{.KIND_CONTEXT}} -n stratt rollout status deploy/openbao --timeout=120s"
+      - |
+        set -eu
+        "{{.KUBECTL}}" --context {{.KIND_CONTEXT}} -n stratt port-forward deploy/openbao 18200:8200 >/dev/null 2>&1 &
+        pf=$!
+        trap 'kill $pf 2>/dev/null || true' EXIT
+        for _ in $(seq 1 30); do
+          if curl -fsS -o /dev/null http://127.0.0.1:18200/v1/sys/health 2>/dev/null; then break; fi
+          sleep 1
+        done
+        STRATT_OPENBAO_ADDR=http://127.0.0.1:18200 {{.ROOT_DIR}}/deploy/dev/openbao-bootstrap.sh
+
   dev:netbox:bootstrap:
     desc: Seed the dev NetBox with an enterprise topology — regions, AZs, tenants (sovereignty), VLANs, the app supernet (ADR-0111)
     cmds:
