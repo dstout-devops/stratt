@@ -462,6 +462,12 @@ func ParseDir(root string, decider policy.Decider) (Declarations, error) {
 	if err := checkProvisioningBuildInputs(out); err != nil {
 		return out, err
 	}
+	// ADR-0151 follow-up 4 — the "kube-app" guard. Needs the parsed providers (to know what a
+	// provider NAME is) and every declared kind above them, so it runs here with the rest of the
+	// whole-estate checks.
+	if err := checkNothingAboveAProviderNamesASubstrate(out); err != nil {
+		return out, err
+	}
 	// Last, because it is whole-estate referential integrity: every kind's `environments`
 	// filter must name a declared scope (ADR-0142 D2). Runs after all kinds are parsed
 	// because the declared set and the referencing set are both estate-wide.

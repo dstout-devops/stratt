@@ -27,4 +27,10 @@ view: app-nodes
 actuator: ansible-crypto
 executionEnvironment: stratt-ee-crypto:dev
 collection: community.crypto
-substrate: ssh
+# WHAT THIS DEMO RUNS AGAINST. Named `backend`, NOT `substrate`: since ADR-0151 a substrate is a
+# CLOSED set of landscapes ({aws, kubernetes, vsphere}) declared by a PROVIDER and selected by one
+# capability-binding line. This field is the harness's own descriptor — it names the simulator or
+# transport a demo actually talks to — and it was spelled `substrate:` with values like
+# `ec2-floci` and `vsphere-vspheresim` that are not in that set at all. One token, two meanings,
+# and `kubernetes` was a legal value of both (declaration-map §7 item 9).
+backend: ssh

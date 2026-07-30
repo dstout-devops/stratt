@@ -400,8 +400,8 @@ last week is the best evidence that the next one is worth checking too.
 | 5   | ~~`Actuator.provisions` targets are not resolved at load~~ — **the map was wrong.** `checkProvisioningBuildInputs` ships and is wired at `desiredstate.go:462`, covering `provisions`, `decommissions` AND `remediates`                                                                                                                                                                                                                        | L0           | **was never open** — corrected 2026-07-30 |
 | 6   | The estate cannot express ordering across Assignments ("serve TLS once a certificate is present")                                                                                                                                                                                                                                                                                                                                              | L4           | open                                      |
 | 7   | Tombstone/revival semantics unrecorded (ADR owed)                                                                                                                                                                                                                                                                                                                                                                                              | L2           | open — ADR owed                           |
-| 8   | The ADR-0151 lint enforcing "nothing above a provider names a substrate" is **follow-up 4, unimplemented**                                                                                                                                                                                                                                                                                                                                     | L1           | open                                      |
-| 9   | `substrate:` token collides with demo manifests                                                                                                                                                                                                                                                                                                                                                                                                | L1           | open                                      |
+| 8   | ~~The ADR-0151 lint enforcing "nothing above a provider names a substrate" is follow-up 4, unimplemented~~ — shipped as `checkNothingAboveAProviderNamesASubstrate`. Keyed on the FIELD NAME, not the value: a `substrate` key anywhere in an Intent spec / Blueprint defaults+remediationParams / Assignment values / View selector, and a `provider` key whose value names a declared provider or a substrate token                          | L1           | **CLOSED** — see §7.3                     |
+| 9   | ~~`substrate:` token collides with demo manifests~~ — the demo manifests' field is renamed `backend:`. It names the simulator or transport a demo talks to (`ec2-floci`, `vsphere-vspheresim`, `ssh`), which is not ADR-0151's closed set at all — and `kubernetes` was a legal value of both                                                                                                                                                  | L1           | **CLOSED**                                |
 | 10  | "Report ignored params" is not a port obligation — a plugin may silently drop input                                                                                                                                                                                                                                                                                                                                                            | L0           | open                                      |
 | 11  | `software.package` has a bootstrap owner, not the ADR-0080 slice-2 Syncer collector                                                                                                                                                                                                                                                                                                                                                            | L2           | open                                      |
 | 12  | ~~`svc-fleet` does not reach `graph.intent` despite being in the ConfigMap~~ — never a ConfigMap gap: the WHOLE estate parse failed, on item 4's check. The estate was reverted (it existed only to work around ADR-0148 D6)                                                                                                                                                                                                                   | L4           | **CLOSED** — diagnosed, cause is item 4   |
@@ -477,6 +477,32 @@ an Intent may be carrying"_ — this is the price of it, measured.
 
 This is a decision, not a defect, and it is the one blocking a genuinely multi-substrate estate.
 
+### 7.3 Item 8: what the substrate lint does and does not refuse
+
+ADR-0151's selling property is that **one line migrates a topology** — flip `substrate: kubernetes`
+to `aws` in a capability-binding and every provisioning Intent resolves to the other landscape's
+builders, together, with nothing above the line moving. That is only true if nothing above the line
+is _separately_ coupled to a landscape, and a `spec` / `defaults` / `values` map is opaque to core
+(§1.5), so nothing typed could notice one that was.
+
+The lint keys on the **field name**, not the value, because that is the unambiguous part:
+
+- A key named **`substrate`** is refused outright. Exactly two declarations may carry it — a
+  provider's own and a capability-binding entry — and neither is above a provider.
+- A key named **`provider`** is refused when its value names a declared provider or a substrate
+  token. That is ADR-0106 D1 ("a route names a capability, never a provider") made checkable.
+
+**What it deliberately does not refuse**, because a lint that fires on prose is a spell-checker with
+a veto: a substrate token as a bare value (`ami: ami-0aws-baseline`), or in a declaration's name
+(`aws-billing-fleet`). Neither routes anything. The rule is about which _field decides where a thing
+gets built_.
+
+**A View selector IS linted, and that one is not obvious.** A selector reads observed labels, and
+selecting on an observed fact is ordinarily legitimate (§1.2). But `labels: {substrate: kubernetes}`
+makes the View's _membership_ substrate-specific — so the binding line no longer migrates it, and
+the Assignment goes on pointing at a set defined by the landscape it used to be on. The coupling
+arrives through the one door that looks like an observation.
+
 ## 8. Invariants, and where each is actually enforced
 
 Claims only. Where the "Enforced at" column says **not enforced**, that is a seam, not a rule.
@@ -485,7 +511,7 @@ Claims only. Where the "Enforced at" column says **not enforced**, that is a sea
 | --- | ----------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
 | 1   | At most one **declaring** claimant per path; a yielding layer fills only the definitionally unset; two declaring claimants refuse, naming both  | `core/internal/overlay/overlay.go`; `compiler.go:228`                                                                                                |
 | 2   | No computed **facts about the world** — a reach coordinate is observed or caused (L2 only)                                                      | ADR-0142 D4 (design rule; no single enforcement site)                                                                                                |
-| 3a  | Nothing above a provider names a **substrate**                                                                                                  | `types/substrate.go` states it; the lint is ADR-0151 follow-up 4 — **not enforced**                                                                  |
+| 3a  | Nothing above a provider names a **substrate**                                                                                                  | `checkNothingAboveAProviderNamesASubstrate` (ADR-0151 follow-up 4), refused at load — see §7.3 for what it does and does not catch                   |
 | 3b  | Nothing above L1 names a **provider**                                                                                                           | **False as stated** — `Step.actuator` (`types/workflow.go:105`) and `Baseline.actuator` bind by name. The capability form is preferred, not required |
 | 4   | Nothing **in** L2 is authored                                                                                                                   | `migrations/00001_graph_spine.sql` — `CHECK (prov_writer_kind IN ('syncer','run'))` + `facet_write_path` trigger                                     |
 | 5   | `environments[]` is a membership filter everywhere — never a value selector, never precedence                                                   | ADR-0118 D1 guardrail (a); ADR-0057 D4; `types/environment.go`                                                                                       |
