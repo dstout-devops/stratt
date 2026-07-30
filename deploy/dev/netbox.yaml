@@ -120,9 +120,20 @@ spec:
     spec:
       containers:
         - name: netbox
-          # Pinned to the compose stack's image so both dev floors run the same NetBox. The plugin
-          # talks ONLY to the Apache-2.0 core REST API, never a NetBox Enterprise surface.
-          image: docker.io/netboxcommunity/netbox:v4.5-3.4.2
+          # PINNED TO THE N-1 LINE (4.4), deliberately, and this is an evergreen (§1.7) decision
+          # rather than an avoidance. NetBox **4.5 replaced the API-token scheme**: tokens are
+          # peppered (API_TOKEN_PEPPER_1, >=50 chars) and the presented value is matched through a
+          # derived 12-char `key` index, so the v1 token this repo uses everywhere — the estate, the
+          # plugin env, and deploy/dev/netbox-bootstrap.sh — is rejected outright
+          # (`{"detail":"Invalid v1 token"}`), and a fixed v2-shaped literal set on the `token` field
+          # still fails to authenticate. §1.7 requires >= N-1 on the major line, and 4.4 IS N-1, so
+          # this pin is compliant today and buys the time to adopt v2 tokens as a deliberate piece
+          # of work rather than as a side effect of standing up a floor.
+          #
+          # Adopting 4.5 is booked as NET-3: it needs the plugin, the bootstrap script and the floor
+          # wiring to agree on a v2 token, which — since 4.5 GENERATES the value — means minting one
+          # after boot and injecting it, not a literal in a values file.
+          image: docker.io/netboxcommunity/netbox:v4.4-3.4.2
           env:
             - { name: DB_HOST, value: netbox-postgres }
             - { name: DB_NAME, value: netbox }
@@ -134,7 +145,8 @@ spec:
             - { name: REDIS_CACHE_HOST, value: netbox-redis }
             - { name: REDIS_CACHE_DATABASE, value: "1" }
             - { name: SECRET_KEY, value: stratt-dev-netbox-secret-key-0123456789-abcdefghij }
-            # REQUIRED on NetBox 4.5, and its absence fails SILENTLY in the way that costs most.
+            # Harmless on 4.4 (which does not read it) and REQUIRED the moment the pin moves to
+            # 4.5, where its absence fails SILENTLY in the way that costs most.
             # 4.5 hashes API tokens with a pepper; with none defined, `SUPERUSER_API_TOKEN` creates
             # ZERO tokens (measured: Token.objects.count() == 0) and every request authenticates
             # against nothing — the API answers `{"detail":"Invalid v1 token"}` and an operator
