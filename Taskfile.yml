@@ -210,7 +210,7 @@ tasks:
         ran=0
         if [ -f go.work ]; then
           for mod in $(go work edit -json | jq -r '.Use[].DiskPath'); do
-            echo "→ go test ($mod)"; (cd "$mod" && go test -p={{.GO_PARALLEL}} ./...)
+            echo "→ go test ($mod)"; (cd "$mod" && go test -p={{.GO_PARALLEL}} {{.GO_TEST_FLAGS}} ./...)
           done
           ran=1
         fi
@@ -546,7 +546,14 @@ tasks:
       # existed here, which is how a module shipped unvalidated with no lockfile.
       - task: tofu:validate
       - task: adr:index:check
+      # -count=1 in the GATE only (the inner-loop `task test` stays cached). Several guards
+      # here SCAN THE REPO rather than exercise their own package, so Go's test cache — keyed
+      # on the package's own inputs — serves a PASS after estate/ or docs/ changed underneath
+      # them. That is not theoretical: the svc-tier estate broke the committed-estate parse and
+      # `task ci` reported green on the same commit. A gate that can pass staler than the tree
+      # is worse than a slow gate (§1.8).
       - task: test
+        vars: { GO_TEST_FLAGS: "-count=1" }
       - task: plugins:standalone
       - task: plugins:boundary
       # D2's diff half. Needs a base ref, so it SKIPS locally and runs in CI, where
