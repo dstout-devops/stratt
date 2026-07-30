@@ -56,7 +56,16 @@ type Actuator struct {
 	// tenant's project directory (ADR-0134 D2 correction — a write ceiling in a file its subject
 	// can edit is not a ceiling). Authorization on Actuator selection does not exist yet; until it
 	// does this boundary is enforced by repo review.
-	ContentDir string `json:"contentDir,omitempty"`
+	// OutputContract PINS the shape this Actuator's Apply may hand to a downstream Step
+	// ({{.steps.<name>.outputs.x}}). Empty means the Apply emits nothing bindable, and outputs it
+	// emits anyway are REFUSED rather than captured (CERT-2).
+	//
+	// It exists because an Actuator Step used to be a dead end for data while an Action Step was
+	// not — an arbitrary asymmetry that made the born-on-target CSR flow cert-issuer's own input
+	// Contract documents impossible to express. The pin is what makes handing bytes between Steps
+	// safe: a consumer binds a shape the core agreed to, not one a plugin asserted.
+	OutputContract string `json:"outputContract,omitempty"`
+	ContentDir     string `json:"contentDir,omitempty"`
 	// Content is ContentDir resolved at estate-PARSE time: relative path → file content, mounted
 	// into the EE Job at project/<relpath> (ADR-0134 D3). Resolved here rather than read at
 	// dispatch for three reasons, in order of weight: JobSpec.Files is remote-safe (ADR-0032) so

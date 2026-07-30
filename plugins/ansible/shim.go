@@ -375,6 +375,8 @@ func Run(ctx context.Context, w io.Writer, dir string, req Request, run commandR
 	// green having changed nothing. Counted here — in the content-expertise — because
 	// only the ansible plugin knows a play can no-op; the spine stays content-blind.
 	actuated := map[string]bool{}
+	// outputs is the play's typed cross-Step payload, carried to the terminal message (CERT-2).
+	var outputs []byte
 	noHostsMatched := false
 	// unparsedEvents counts lines that WERE ansible-runner events but failed to decode.
 	// Such a line loses its ItemResult / facts / drift, so the shim no longer knows what
@@ -431,6 +433,13 @@ func Run(ctx context.Context, w io.Writer, dir string, req Request, run commandR
 			}
 			emit(&pluginv1.ApplyResponse{Result: &pluginv1.ItemResult{ItemKey: h, Status: st}})
 		}
+		// A play's typed OUTPUTS ride to the terminal message rather than being emitted here: the
+		// port validates them against a pinned contract once, on the terminal, exactly as an
+		// Action's are. Last writer wins across hosts, which is right for the single-target flows
+		// that use them (a CSR belongs to one host) and is stated rather than left implicit.
+		if o := extractOutputs(factsOf(ev)); o != nil {
+			outputs = o
+		}
 		if facets := extractFacts(ev); facets != nil {
 			// Facts project onto the host's Entity by the target's IDENTITY (the hub
 			// resolves-by-identity + gates the facet namespaces on the grant, MF3).
@@ -456,9 +465,18 @@ func Run(ctx context.Context, w io.Writer, dir string, req Request, run commandR
 	if vac := vacuousRun(rc, req.Targets, len(actuated), p.Limit, noHostsMatched, unparsedEvents); vac != "" {
 		ok, msg = false, vac
 	}
-	emit(&pluginv1.ApplyResponse{Event: &pluginv1.TaskEvent{
+	term := &pluginv1.ApplyResponse{Event: &pluginv1.TaskEvent{
 		Terminal: true, Ok: ok, At: timestamppb.Now(), Message: msg,
-	}})
+	}}
+	// Outputs ride the TERMINAL message and are governed HUB-SIDE against the Actuator's pinned
+	// output contract (CERT-2). The shim asserts no contract id of its own, deliberately: the pin
+	// belongs to the core, and a tool naming its own contract would be the plugin deciding what a
+	// consumer may bind — the inversion §1.5 refuses. An Actuator with no pin gets these refused,
+	// which is the correct answer to "a shape nobody agreed to".
+	if outputs != nil {
+		term.Outputs = &pluginv1.Payload{Bytes: outputs}
+	}
+	emit(term)
 	return nil
 }
 

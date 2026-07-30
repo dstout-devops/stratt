@@ -278,6 +278,10 @@ func (r *Registry) enableActuatorLocked(ctx context.Context, a types.Actuator, s
 	if r.plans != nil {
 		host = host.UsePlanStore(r.plans)
 	}
+	// The Apply's output pin rides from the SAME declaration everything else does (CERT-2), so a
+	// replica governs cross-Step outputs by exactly what the estate declared. Empty means this
+	// Actuator hands nothing downstream, and anything it emits is refused rather than captured.
+	host = host.WithApplyOutputContract(a.OutputContract)
 	pa := orchestrate.PluginActuator{
 		Host: host, DryRunnable: a.DryRunnable, Grant: grant, PlanStore: r.plans,
 		JobCommand: a.JobCommand, Image: a.Image, MCP: a.MCP, Requires: a.Requires,

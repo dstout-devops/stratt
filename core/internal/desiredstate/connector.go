@@ -258,14 +258,19 @@ func computeConnectorPlan(ctx context.Context, store *graph.Store, decls []types
 // ── Actuator (runs tool content; no Source) ─────────────────────────────────
 
 type actuatorFile struct {
-	Name            string            `yaml:"name"`
-	Address         string            `yaml:"address"`
-	PluginIdentity  string            `yaml:"pluginIdentity"`
-	Tier            string            `yaml:"tier"`
-	DryRunnable     bool              `yaml:"dryRunnable"`
-	ActionNames     []string          `yaml:"actionNames"`
-	JobCommand      []string          `yaml:"jobCommand"`
-	Image           string            `yaml:"image"`
+	Name           string   `yaml:"name"`
+	Address        string   `yaml:"address"`
+	PluginIdentity string   `yaml:"pluginIdentity"`
+	Tier           string   `yaml:"tier"`
+	DryRunnable    bool     `yaml:"dryRunnable"`
+	ActionNames    []string `yaml:"actionNames"`
+	JobCommand     []string `yaml:"jobCommand"`
+	Image          string   `yaml:"image"`
+	// outputContract PINS the shape this Actuator's Apply may hand to a downstream Step
+	// ({{.steps.<name>.outputs.x}}, CERT-2). Absent, the Apply's outputs are REFUSED — a shape
+	// nobody agreed to cannot be bound by a consumer, which is ADR-0031's rule for Actions applied
+	// to the Apply verb.
+	OutputContract  string            `yaml:"outputContract"`
 	ContentDir      string            `yaml:"contentDir"`
 	ContentInputs   []string          `yaml:"contentInputs"`
 	FacetNamespaces []string          `yaml:"facetNamespaces"`
@@ -291,7 +296,7 @@ func parseActuatorFile(path string, raw []byte) (string, types.Actuator, error) 
 	a := types.Actuator{
 		Name: f.Name, Address: f.Address, PluginIdentity: f.PluginIdentity, Tier: f.Tier,
 		DryRunnable: f.DryRunnable, ActionNames: f.ActionNames, JobCommand: f.JobCommand,
-		Image: f.Image, ContentDir: f.ContentDir, ContentInputs: f.ContentInputs,
+		Image: f.Image, OutputContract: f.OutputContract, ContentDir: f.ContentDir, ContentInputs: f.ContentInputs,
 		FacetNamespaces: f.FacetNamespaces, IdentitySchemes: f.IdentitySchemes, LabelKeys: f.LabelKeys,
 		ElevatedInputs: f.ElevatedInputs,
 		MCP:            f.MCP, Provides: f.Provides, Requires: f.Requires,

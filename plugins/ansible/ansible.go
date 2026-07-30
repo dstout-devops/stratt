@@ -364,6 +364,41 @@ func extractFacts(ev RunnerEvent) map[string][]byte {
 	return out
 }
 
+// extractOutputs lifts the reserved `stratt_outputs` fact — a play's typed OUTPUTS for cross-Step
+// binding, the sibling of `stratt_facets` (ADR-0084's fact-back) and deliberately a separate key.
+//
+// The two carry different things to different places and conflating them would be a §2.4-shaped
+// mistake: a FACET is observed state projected onto an Entity under the Run's FacetWriteScope, and
+// an OUTPUT is a value handed to a later Step in the same Workflow. A CSR is the clear case — it is
+// not a fact about the host worth keeping in the graph, it is a request the next Step must sign,
+// and writing it as a facet would put a short-lived artifact in a projection that outlives it.
+//
+// This is what makes the born-on-target certificate flow expressible at all (CERT-2): the target
+// generates its key and CSR, publishes ONLY the CSR here, and the private key never crosses the
+// wire (§2.5, the property cert-issuer's input Contract states in writing).
+// factsOf lifts a task event's ansible_facts, shared by the facet and output extractors so both
+// read the same place rather than each re-deriving it.
+func factsOf(ev RunnerEvent) map[string]any {
+	res, ok := ev.EventData["res"].(map[string]any)
+	if !ok {
+		return nil
+	}
+	facts, _ := res["ansible_facts"].(map[string]any)
+	return facts
+}
+
+func extractOutputs(facts map[string]any) []byte {
+	so, ok := facts["stratt_outputs"].(map[string]any)
+	if !ok || len(so) == 0 {
+		return nil
+	}
+	raw, err := json.Marshal(so)
+	if err != nil {
+		return nil
+	}
+	return raw
+}
+
 // extractDiff lifts a changed task's drift STRUCTURE (task + changed file/object
 // headers) from a runner_on_ok event — never the before/after bodies, which carry
 // secret material (§2.5, ADR-0019). Nil for unchanged tasks.
