@@ -396,7 +396,7 @@ last week is the best evidence that the next one is worth checking too.
 | 1   | Facet/claim grain has no instance key (§6)                                                                                                                                                                                                                                                                                                                                                                                                     | L2 / L4      | open — ADR owed                           |
 | 2   | **Admission judged neither the substrate-selecting layer nor the L0 grant surface nor anything a plugin ships.** Three gaps, one theme: `admissionDirs` listed 15 of 22 estate directories; `admitEstate` walked only the PRIMARY root, so every plugin-supplied declaration was judged by nothing; and `AdmitDeclarations` (the API door) omitted kinds the Git door already judged, so a control could hold on a reconcile and not on a POST | L7 / L1 / L0 | **CLOSED** — see §7.1                     |
 | 3   | **A Step declaring no shape at all loaded clean, then dispatched as an actuation with an empty Actuator** — `ValidateWorkflow` classifies positively, `types.Step.IsActuation()` classifies residually (fail-closed), and the two disagreed on exactly that input                                                                                                                                                                              | L6           | **CLOSED** — refused at load              |
-| 4   | **An Intent carries no `environments`, so every provisioning Intent is in every environment** — and the load check demands each one satisfy the builder of EVERY substrate. Sharpened from "parse and run-time disagree": they do not disagree by accident, the check deliberately validates all candidates. See §7.2                                                                                                                          | L0 / L1 / L4 | open — needs a decision                   |
+| 4   | ~~An Intent carries no `environments`, so every provisioning Intent must satisfy EVERY substrate's builder~~ — `types.Intent` gains the membership filter and the candidate set is scoped to the environments the Intent is in. Refused on assignable kinds (the Assignment already carries the scope). See §7.2 for the two violations the charter review caught first | L0 / L1 / L4 | **CLOSED** — estate cleanup owed |
 | 5   | ~~`Actuator.provisions` targets are not resolved at load~~ — **the map was wrong.** `checkProvisioningBuildInputs` ships and is wired at `desiredstate.go:462`, covering `provisions`, `decommissions` AND `remediates`                                                                                                                                                                                                                        | L0           | **was never open** — corrected 2026-07-30 |
 | 6   | The estate cannot express ordering across Assignments ("serve TLS once a certificate is present")                                                                                                                                                                                                                                                                                                                                              | L4           | open                                      |
 | 7   | Tombstone/revival semantics unrecorded (ADR owed)                                                                                                                                                                                                                                                                                                                                                                                              | L2           | open — ADR owed                           |
@@ -461,21 +461,47 @@ builder.
 ADR-0151 D4 already booked the limit — _"the line moves the BUILDER, not provider-shaped `params`
 an Intent may be carrying"_ — this is the price of it, measured.
 
-**Three candidate shapes, none chosen here:**
+**Three candidate shapes were put; shape 1 — scope the Intent — was chosen.** (Shape 2, typing the
+params and checking only at reconcile, moves diagnosis from load to launch, the direction §1.8
+forbids. Shape 3, accepting the union and naming it in the error, was the honest do-nothing.)
 
-1. **Scope the Intent.** Give a provisioning Intent an `environments` filter and check only the
-   builders reachable in the environments it is in. Consistent with ADR-0118 D1's prescribed shape
-   (one flat declaration per environment) and with `environments` staying a membership filter. It
-   does mean two near-identical `Intent/Compute` documents for a fleet that spans two substrates —
-   which ADR-0118 D1 would call correct, not duplication.
-2. **Type the params.** Make the builder's declared `inputs` the contract and let the Intent's
-   `params` stay opaque, checking only the resolvable builder's needs at reconcile. Weaker: it
-   moves the diagnosis from load to launch, which is the direction §1.8 forbids.
-3. **Accept the union and say so.** Keep today's behaviour and make the error message name it:
-   _"`app-tier` must satisfy every registered Compute builder, because an Intent has no
-   environment."_ Cheapest, honest, closes nothing.
+`types.Intent` now carries an `environments` membership filter, and `checkProvisioningBuildInputs`
+validates each provisioning Intent only against the builders reachable in the environments it is in
+— computed by running the same `capability.Resolve` the reconcile runs, per environment.
 
-This is a decision, not a defect, and it is the one blocking a genuinely multi-substrate estate.
+**ADR-0142 D4 turned out to presuppose this field.** Resolving the region coordinate it wrote that
+_"a flat `params.region` in each **environment-scoped Intent** is already the compliant shape
+ADR-0118 D1 prescribes, and already what the estate does"_ — but an Intent could not be
+environment-scoped at the time, so D4's own stated exit was not yet expressible. The "already" was
+aspirational. This is the field it was assuming.
+
+**What the charter review changed, because it is the more useful record.** `charter-guardian`
+returned CHANGES REQUIRED with two violations, both reproduced against the real loader:
+
+1. **§1.2 / ADR-0057 D3 — scoping only half of it is worse than not scoping at all.**
+   `ScopeToEnvironment` dropped out-of-scope Intents from the DECLARED set while
+   `graph.Store.ListIntents` still returned every stored row. `computeIntentLayerPlan` deletes a
+   stored Intent absent from the declarations, so two scoped daemons on one Postgres would have
+   **mutually wiped each other's estate**, forever, with the mass re-tag tripping `MaxPruneFraction`
+   and halting the reconcile. Every other env-scoped kind already had both halves; ADR-0057 D3
+   required the pairing in exactly these words, _"enforced in the data layer, not by convention."_
+2. **§1.8 — the narrowed candidate set could be SMALLER than what the reconcile resolves to.** The
+   asymmetries I had reasoned about (all providers treated as verified; unresolved widens) held.
+   The one I had not was _which environments get simulated_: `STRATT_ENVIRONMENT` empty is the
+   default and what every demo estate runs, and there `InScope` is true for everything. An Intent
+   scoped `[dev]` whose only provider was scoped `[prod]` produced an **empty** candidate set —
+   nothing checked at all — while an unscoped daemon resolved that builder happily and failed after
+   the gate. The unscoped daemon is now always simulated, resolved-outcome-only.
+
+Plus two flags, both fixed: a scoped Intent could name a `placement.subnet` scoped elsewhere (load
+passes, then "build app-subnet first" forever — the advice-nobody-can-take that check exists to
+eliminate, through a door the scope had just opened); and on an **assignable** kind the filter is
+inert or contradictory, since the Assignment already carries the scope and the compiler resolves the
+Intent from the store by name without filtering — so it is refused there.
+
+**Not done, deliberately:** the reference estate is unscoped. Removing `app-tier`'s AWS coordinates
+changes what a live-verified demo builds, and that belongs with a demo run rather than with a type
+gaining a field.
 
 ### 7.3 Item 8: what the substrate lint does and does not refuse
 

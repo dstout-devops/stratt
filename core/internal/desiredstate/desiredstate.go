@@ -647,12 +647,27 @@ func remediationCandidates(decls Declarations, intentKind, capClass string) []st
 // person who can fix it.
 //
 // IT CHECKS EVERY CANDIDATE, NOT THE WINNER, and that is deliberately stronger than the reconcile.
-// Which provider wins depends on the daemon's active environment and on which providers are
-// VERIFIED — runtime state Git cannot see (ADR-0110 D3, ADR-0113 D2). So every Workflow named in any
-// provider's `provisions` map for a kind must fit. `estate/actuators/awsec2.yaml` and
-// `vcenter.yaml` both advertise a Compute builder; a fix that satisfied only the one bound in this
-// environment would break the other on a binding change, which is precisely the moment nobody is
-// looking at the build Workflow.
+// Which provider wins depends on which providers are VERIFIED — runtime state Git cannot see
+// (ADR-0110 D3, ADR-0113 D2) — so a fix that satisfied only the one bound today would break the
+// other on a binding change, which is precisely the moment nobody is looking at the build Workflow.
+//
+// BUT "EVERY CANDIDATE" IS SCOPED TO THE ENVIRONMENTS THE INTENT IS ACTUALLY IN, and it used not to
+// be. The candidate set was the union of every declared provider's builder for the kind, in every
+// environment at once, and the consequence was not theoretical: `app-tier` had to declare `region`,
+// `instanceType` and `ami` — AWS coordinates — while the `dev` environment binds Compute to the
+// kubernetes substrate, where nothing reads them. They were there to satisfy a builder that will
+// never run for that Intent in that environment. Worse, admitting a NEW provisioning provider
+// retroactively invalidated every existing Intent of its kind, because each then had to satisfy the
+// newcomer's builder too. An estate could be broken by a plugin it had just installed and not yet
+// used.
+//
+// The scope comes from the Intent's own `environments` filter (types.Intent.Environments) and, in
+// each of those environments, from what a capability-binding could resolve to — the SAME
+// capability.Resolve the reconcile runs. reachableBuilders owns that computation and documents the
+// three conservative asymmetries that keep the narrowed set sound; read it before changing this.
+//
+// `app-tier`'s stray AWS coordinates are still in the estate: this makes them removable, it does
+// not remove them. That edit changes what a live-verified demo builds and belongs with a demo run.
 //
 // The expected param set is taken from provision.BuildLaunchParams itself rather than a list
 // duplicated here, so the check cannot drift from what the reconcile actually sends.
@@ -725,30 +740,67 @@ func checkBlueprintDelivers(decls Declarations) error {
 // means a second referent for one field, resolved by a different mechanism, which is the kind of
 // ambiguity §2.4 refuses. Booked in ADR-0147.
 func checkPlacementTargets(decls Declarations) error {
-	subnets := map[string]bool{}
+	subnets := map[string]types.Intent{}
 	var declared []string
 	for _, in := range decls.Intents {
 		if in.Kind == types.IntentSubnet {
-			subnets[in.Name] = true
+			subnets[in.Name] = in
 			declared = append(declared, in.Name)
 		}
 	}
 	sort.Strings(declared)
+	// The environments a scope check has to cover: the placing Intent's own, or every declared
+	// one when it is unscoped (an unscoped Intent is reconciled in all of them).
+	allEnvs := make([]string, 0, len(decls.Environments))
+	for _, e := range decls.Environments {
+		allEnvs = append(allEnvs, e.Name)
+	}
+	sort.Strings(allEnvs)
+
 	for _, in := range decls.Intents {
 		pl, ok := in.Spec["placement"].(map[string]any)
 		if !ok {
 			continue
 		}
 		target, _ := pl["subnet"].(string)
-		if target == "" || subnets[target] {
+		if target == "" {
 			continue
 		}
-		return fmt.Errorf(
-			"intent %s declares placement.subnet %q, which no Intent/Subnet declares (declared: %v). "+
-				"The reconcile resolves a placement target through the Intent/Subnet correlation key "+
-				"(ADR-0147 D1), so a name nothing declares can never resolve — the build would surface "+
-				"forever as \"build %s first\", advice nobody can take",
-			in.Name, target, declared, target)
+		sub, ok := subnets[target]
+		if !ok {
+			return fmt.Errorf(
+				"intent %s declares placement.subnet %q, which no Intent/Subnet declares (declared: %v). "+
+					"The reconcile resolves a placement target through the Intent/Subnet correlation key "+
+					"(ADR-0147 D1), so a name nothing declares can never resolve — the build would surface "+
+					"forever as \"build %s first\", advice nobody can take",
+				in.Name, target, declared, target)
+		}
+		// DECLARED IS NOT ENOUGH ONCE AN INTENT CAN BE SCOPED. A `[dev]` Compute Intent placed in a
+		// `[prod]` Subnet passes the name check and then fails identically at reconcile: the dev
+		// daemon filters the Subnet Intent out, nothing correlates, and the build surfaces forever
+		// as "build app-subnet first" — the same advice-nobody-can-take this check exists to
+		// eliminate, arriving by a route that did not exist before Intents carried a scope.
+		//
+		// The rule is COVERAGE, not equality: the target must be in scope everywhere the placing
+		// Intent is. An unscoped target covers everything and is always fine.
+		if len(sub.Environments) == 0 {
+			continue
+		}
+		envs := in.Environments
+		if len(envs) == 0 {
+			envs = allEnvs
+		}
+		for _, e := range envs {
+			if !types.InScope(sub.Environments, e) {
+				return fmt.Errorf(
+					"intent %s (environments: %v) declares placement.subnet %q, but that Intent/Subnet is "+
+						"scoped to %v — so in environment %q the placement target is filtered out of the "+
+						"reconcile and can never correlate. The build would surface forever as \"build %s "+
+						"first\", advice nobody can take (ADR-0147 D1, ADR-0057). Widen the subnet's scope "+
+						"or narrow this Intent's",
+					in.Name, envs, target, sub.Environments, e, target)
+			}
+		}
 	}
 	return nil
 }
@@ -897,7 +949,7 @@ func checkProvisioningBuildInputs(decls Declarations) error {
 			continue // not a provisioning kind
 		}
 
-		for _, wfName := range builders[kind] {
+		for _, wfName := range reachableBuilders(decls, in, kind, false) {
 			what := fmt.Sprintf("intent %s builds via workflow %s", in.Name, wfName)
 			if err := checkAdvertisedWorkflow(what, byName[wfName], in, supplied, unit, "build"); err != nil {
 				return err
@@ -908,7 +960,7 @@ func checkProvisioningBuildInputs(decls Declarations) error {
 		// destructive act an operator discovers at the gate. Only Compute has a teardown reach-path
 		// today (whole-Intent withdrawal for singletons is ADR-0114's own booked follow-up), so a
 		// singleton kind simply has no entry here rather than a special case.
-		for _, wfName := range teardowns[kind] {
+		for _, wfName := range reachableBuilders(decls, in, kind, true) {
 			what := fmt.Sprintf("intent %s tears down via workflow %s", in.Name, wfName)
 			// Representative values: this check is about the KEY SET, and a placeholder identity
 			// carries the same keys a real one does.
@@ -2570,6 +2622,9 @@ type intentFile struct {
 	Version  int            `yaml:"version"`
 	Spec     map[string]any `yaml:"spec"`
 	OnRemove string         `yaml:"onRemove"`
+	// Environments is the reconcile-scope membership filter (ADR-0057 D2). See
+	// types.Intent.Environments for why a provisioning Intent needed one of its own.
+	Environments []string `yaml:"environments"`
 }
 
 func parseIntentFile(path string, raw []byte) (string, types.Intent, error) {
@@ -2579,7 +2634,8 @@ func parseIntentFile(path string, raw []byte) (string, types.Intent, error) {
 	if err := dec.Decode(&f); err != nil {
 		return "", types.Intent{}, fmt.Errorf("desiredstate: %s: %w", path, err)
 	}
-	in := types.Intent{Name: f.Name, Kind: f.Kind, Version: f.Version, Spec: f.Spec, OnRemove: f.OnRemove}
+	in := types.Intent{Name: f.Name, Kind: f.Kind, Version: f.Version, Spec: f.Spec,
+		OnRemove: f.OnRemove, Environments: f.Environments}
 	// NORMALIZE the omitted version to the 1 it already means everywhere else. versionedRef has
 	// always read version < 1 as version 1 — for the dedup key, the plan-entry name, and the pin
 	// lookup — but the DECLARATION kept its literal 0, and that asymmetry was a permanent false
@@ -2676,6 +2732,45 @@ func ValidateIntent(in types.Intent) error {
 				"reconcile, which has no Assignment to pin a version with, and two versions of one fleet "+
 				"would be two claims on the same instance identities (ADR-0119 D3, ADR-0058 D5)",
 			in.Name, in.Kind)
+	}
+	// The MIRROR IMAGE of the version rule above, on the same predicate and for the same reason:
+	// an `environments` filter is meaningful exactly where no Assignment already carries one.
+	//
+	// An assignable Intent reaches the estate only through an Assignment, which is env-scoped and
+	// filtered already — so a filter here is at best inert, and at worst a second scope that can
+	// DISAGREE with the Assignment's. It is not even reliably inert: the compiler resolves the
+	// Intent from the store by name (compiler.go → GetIntent), which does not filter, so a prod
+	// Assignment referencing a `[dev]`-scoped Intent would still compile against it — or, if no dev
+	// daemon ever wrote the row, fail with "intent tls-app@1 not found" while the file sits in Git,
+	// which is precisely the misdirection ADR-0119 F4 went out of its way to remove.
+	//
+	// Refused rather than supported, because the shape that works already exists: one Assignment
+	// per environment (ADR-0118 D1).
+	if len(in.Environments) > 0 && types.AssignableIntentKind(in.Kind) {
+		return fmt.Errorf(
+			"intent %s: kind %s cannot carry `environments` — it is bound by an Assignment, which is "+
+				"already environment-scoped, so a second filter here is either redundant or a scope that "+
+				"can disagree with the one that actually selects it. Declare one Assignment per "+
+				"environment instead (ADR-0118 D1). The filter exists for PROVISIONING kinds, which have "+
+				"no Assignment to carry one (ADR-0058)",
+			in.Name, in.Kind)
+	}
+	// The rejectEnvKeyedValues guardrail, now that an Intent is environment-aware. Same rule, same
+	// narrowness: a TOP-LEVEL `params` key equal to one of this Intent's OWN declared environments
+	// is the shape someone writes when reaching for a conditional, and it is the
+	// new-configuration-language non-goal (§2.4, ADR-0118 D1). `params` rather than `spec` because
+	// that is where a provisioning Intent's provider values live and where the temptation lands.
+	if params, ok := in.Spec["params"].(map[string]any); ok {
+		for _, env := range in.Environments {
+			if _, clash := params[env]; clash {
+				return fmt.Errorf(
+					"intent %s: spec.params has a top-level key %q matching one of this Intent's own "+
+						"environments — env-conditional config values are forbidden (§2.4/§1 non-goal; "+
+						"environments is a membership filter, not a value selector). Declare one Intent "+
+						"per environment, each with flat params, instead (ADR-0118 D1)",
+					in.Name, env)
+			}
+		}
 	}
 	specRaw, err := json.Marshal(in.Spec)
 	if err != nil {
@@ -3800,7 +3895,18 @@ func ScopeToEnvironment(d Declarations, env string) Declarations {
 			bls = append(bls, b)
 		}
 	}
-	d.Assignments, d.Triggers, d.Baselines = assigns, trigs, bls
+	// An Intent is filtered here too. For an APPLICATION Intent this is belt-and-braces — it
+	// reaches the estate only through an Assignment, which is already filtered above — but a
+	// PROVISIONING Intent has no Assignment at all (ADR-0058 selects it by name), so this is
+	// the only place its scope can be applied. Without it the field would parse, validate, and
+	// change nothing: an `environments: [dev]` that a prod daemon still built.
+	ints := make([]types.Intent, 0, len(d.Intents))
+	for _, in := range d.Intents {
+		if types.InScope(in.Environments, env) {
+			ints = append(ints, in)
+		}
+	}
+	d.Assignments, d.Triggers, d.Baselines, d.Intents = assigns, trigs, bls, ints
 	return d
 }
 

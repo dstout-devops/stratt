@@ -1488,6 +1488,8 @@ export interface components {
             spec?: Record<string, never>;
             /** @enum {string} */
             onRemove?: "retain" | "revert" | "remove";
+            /** @description Reconcile-scope MEMBERSHIP filter (ADR-0057 D2) — which environments this Intent applies in; empty means all. Never a value selector: it chooses WHETHER this document applies, never what it means where it does (ADR-0118 D1). It exists because a PROVISIONING Intent has no Assignment to carry one — ADR-0058 makes provisioning a sibling reconcile that selects an Intent by name — so without it such an Intent was in force in every environment unconditionally, and had to satisfy every substrate's build Workflow at once. */
+            environments?: string[];
         };
         /** @description Binds an Intent to a cac-declared View, pinning a Blueprint version (charter §2.4). CaC-only. */
         Assignment: {

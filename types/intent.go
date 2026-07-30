@@ -99,4 +99,41 @@ type Intent struct {
 	// retain). Withdrawn-but-retained state always raises an orphan Finding
 	// (§2.4, §4.3).
 	OnRemove string `json:"onRemove,omitempty"`
+	// Environments is the reconcile-scope MEMBERSHIP FILTER (ADR-0057 D2, ADR-0142 D2) —
+	// which environments this Intent applies in. Empty means every environment, exactly as
+	// for Assignment, Trigger and Baseline. It is not a value selector and never will be:
+	// it chooses WHETHER this document applies, never what it means where it does (ADR-0118
+	// D1 guardrail (a)).
+	//
+	// IT EXISTS BECAUSE A PROVISIONING INTENT HAD NOWHERE TO PUT ONE. An Application Intent
+	// is scoped by the Assignment that binds it, but ADR-0058 makes provisioning a sibling
+	// reconcile with no Assignment — an Intent/Compute is selected BY NAME — so before this
+	// field a provisioning Intent was in force in every environment, unconditionally.
+	//
+	// The cost of that was not abstract. Which builder a kind resolves to is chosen per
+	// environment by a capability-binding (ADR-0151 D2), but the load-time check had to
+	// validate the Intent against EVERY provider's builder, since it could not know which
+	// environments the Intent would be reconciled in. So `app-tier` carries `region`, `ami`
+	// and `instanceType` — AWS coordinates — into a Kubernetes environment where nothing
+	// reads them, purely to satisfy a builder that will never run for it there. And
+	// admitting a new provisioning provider retroactively invalidated every existing Intent
+	// of that kind, because each then had to satisfy the newcomer too.
+	//
+	// Scoping the Intent is the shape ADR-0118 D1 already prescribes for per-environment
+	// values: one flat declaration per environment, rather than one document that means
+	// different things in different scopes. Two Intents for a fleet spanning two substrates
+	// is that rule applied, not duplication.
+	//
+	// ADR-0142 D4 in fact PRESUPPOSED this field. Resolving the region coordinate, it wrote
+	// that "a flat params.region in each environment-scoped Intent is already the compliant
+	// shape ADR-0118 D1 prescribes, and already what the estate does" — but at the time an
+	// Intent could not be environment-scoped at all, so D4's stated exit was not yet
+	// expressible. The "already" was aspirational; this is the field it was assuming.
+	//
+	// THE REFERENCE ESTATE IS NOT YET SCOPED. app-tier's AWS coordinates are still there:
+	// removing them is an estate change that must be verified by running the demos, not by
+	// this type gaining a field. Refused on assignable kinds (ValidateIntent) — an
+	// Application Intent is already scoped by the Assignment that binds it, and a second
+	// filter there is redundant at best and a disagreeing scope at worst.
+	Environments []string `json:"environments,omitempty"`
 }

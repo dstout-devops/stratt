@@ -97,7 +97,21 @@ func (s *Store) ListIntents(ctx context.Context) ([]types.Intent, error) {
 		if err := json.Unmarshal(spec, &in); err != nil {
 			return nil, fmt.Errorf("graph: decode intent spec: %w", err)
 		}
-		out = append(out, in)
+		// env scope (ADR-0057). THE SECOND HALF OF SCOPING A KIND, and the half that is not
+		// optional: ScopeToEnvironment drops out-of-scope Intents from the DECLARED set, and if
+		// this read did not drop them from the STORED set too, every other environment's rows
+		// would become prune candidates. computeIntentLayerPlan emits ActionDelete for a stored
+		// Intent absent from the declarations, so two scoped daemons on one Postgres would
+		// mutually wipe each other's estate — each deleting what the other had just written,
+		// forever, with the mass re-tag tripping MaxPruneFraction and halting the reconcile.
+		//
+		// ADR-0057 D3 required exactly this pairing, "enforced in the data layer, not by
+		// convention", and every other env-scoped kind in this file already does it. The Intent
+		// gained a scope only when a provisioning Intent needed one (types.Intent.Environments),
+		// so this line arrives with it rather than before it.
+		if types.InScope(in.Environments, s.environment) {
+			out = append(out, in)
+		}
 	}
 	return out, rows.Err()
 }

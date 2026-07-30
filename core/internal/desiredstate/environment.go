@@ -138,6 +138,18 @@ func validateEnvironmentRefs(d Declarations) error {
 			envs []string
 		}{"capability-binding", b.Name, b.Environments})
 	}
+	// An Intent carries the filter as of the provisioning-scope change, and it is the kind
+	// where a typo is quietest of all: a provisioning Intent has no Assignment (ADR-0058), so
+	// `environments: [dev1]` does not merely narrow its reach — it removes the ONLY document
+	// in that Intent's path, and the fleet it declares is simply never built, anywhere, with
+	// nothing raised.
+	for _, in := range d.Intents {
+		refs = append(refs, struct {
+			kind string
+			name string
+			envs []string
+		}{"intent", in.Name, in.Environments})
+	}
 
 	for _, r := range refs {
 		for _, e := range r.envs {
