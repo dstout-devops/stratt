@@ -191,9 +191,16 @@ type RunOutcome struct {
 	// Drift is the per-target observed-vs-expected fragments (capped,
 	// redacted upstream).
 	Drift map[string][]json.RawMessage
-	// Outputs are an Action's typed output VALUES (ADR-0031), validated against
-	// its output Contract — returned so a DAG runner can bind them into a
-	// downstream Step ({{.steps.<name>.outputs.<field>}}). Empty for Actuators.
+	// Outputs are a Step's typed output VALUES (ADR-0031), validated against a PINNED output
+	// Contract — returned so a DAG runner can bind them into a downstream Step
+	// ({{.steps.<name>.outputs.<field>}}).
+	//
+	// This used to read "Empty for Actuators", and that was the CERT-2 defect stated as a comment:
+	// an ACTION Step could hand a value downstream and an ACTUATOR Step could not, so every EE-Job
+	// step — every ansible step — was a dead end for data. It made the §2.5 flow cert-issuer's own
+	// input Contract documents unexpressible: the target generates key+CSR (an Apply), the CLM
+	// signs (an Action), the signed certificate is written back (an Apply), and step one had
+	// nowhere to put its CSR. Both verbs now carry outputs, governed by the same pin.
 	Outputs json.RawMessage
 }
 
@@ -337,7 +344,7 @@ func RunAgainstView(ctx workflow.Context, in RunInput) (RunOutcome, error) {
 		summaryErr = err
 	}
 	outcome := RunOutcome{RunID: in.RunID, PerTarget: result.PerTarget, Drift: result.Drift,
-		EntityByTarget: map[string]string{}}
+		Outputs: result.Outputs, EntityByTarget: map[string]string{}}
 	for _, t := range resolved.Targets {
 		outcome.EntityByTarget[t.Name] = t.EntityID
 	}
@@ -1371,7 +1378,7 @@ func (a *Activities) executePlugin(ctx context.Context, in RunInput, site string
 	a.surfaceRejections(ctx, in.RunID, "apply", in.Actuator, raw.Rejections)
 	// Map the governed, UNPROJECTED result to dispatch.Result. CollectFacts →
 	// ProjectFacts perform the single batched projection with Run provenance (#2).
-	res := dispatch.Result{Succeeded: raw.Succeeded, Error: raw.Error, PerTarget: raw.PerTarget, Drift: raw.Drift}
+	res := dispatch.Result{Succeeded: raw.Succeeded, Error: raw.Error, PerTarget: raw.PerTarget, Drift: raw.Drift, Outputs: raw.Outputs}
 	for _, e := range raw.WriteBack {
 		res.Entities = append(res.Entities, actuators.EntityObservation{
 			Kind: e.Kind, IdentityKeys: e.IdentityKeys, Labels: e.Labels})
@@ -1529,7 +1536,8 @@ func (a *Activities) executeJobPlugin(ctx context.Context, in RunInput, slice in
 	// in-tree floor (dispatch.Run's res.Succeeded = the Job exit).
 	res := dispatch.Result{
 		Succeeded: raw.Succeeded && jobOK, Error: raw.Error, PerTarget: raw.PerTarget, Drift: raw.Drift,
-		Facts: map[string]map[string]json.RawMessage{},
+		Outputs: raw.Outputs,
+		Facts:   map[string]map[string]json.RawMessage{},
 	}
 	if remote {
 		// §1.8 descent: stamp the execution locus of each governed target so the

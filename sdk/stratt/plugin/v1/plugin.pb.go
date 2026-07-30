@@ -3312,8 +3312,24 @@ type ApplyResponse struct {
 	Result          *ItemResult       `protobuf:"bytes,3,opt,name=result,proto3" json:"result,omitempty"`                                          // per-target status
 	Drift           *DiffFragment     `protobuf:"bytes,4,opt,name=drift,proto3" json:"drift,omitempty"`                                            // observed-vs-expected fragment (ADR-0019)
 	DerivedContract *DerivedContract  `protobuf:"bytes,5,opt,name=derived_contract,json=derivedContract,proto3" json:"derived_contract,omitempty"` // tofu rung-2 / mcp rung-3 schema doc
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
+	// Typed outputs for cross-Step binding ({{.steps.<name>.outputs.<field>}}), validated against a
+	// PINNED output_contract before capture — the same shape and the same rules InvokeResult has
+	// carried since ADR-0031. Set only on the TERMINAL message.
+	//
+	// ADDED because the asymmetry was arbitrary and load-bearing: an ACTION Step could hand a value
+	// to a later Step and an ACTUATOR Step could not, so every EE-Job step — every ansible step —
+	// was a dead end for data. That made the §2.5 flow cert-issuer's own input Contract DOCUMENTS
+	// unexpressible: the target generates key+CSR (ansible), the CLM signs (action), the signed
+	// certificate is written back (ansible). Step 1 could not hand its CSR to step 2, so the only
+	// shapes available were a CLM-generated key — discarding the born-on-target property the
+	// Contract states in writing — or a fake (CERT-2).
+	//
+	// Both transports decode this message, so one field serves the gRPC Apply and the EE-Job
+	// subprocess alike; a shim emits it exactly as a plugin does.
+	Outputs        *Payload     `protobuf:"bytes,6,opt,name=outputs,proto3" json:"outputs,omitempty"`
+	OutputContract *ContractRef `protobuf:"bytes,7,opt,name=output_contract,json=outputContract,proto3" json:"output_contract,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *ApplyResponse) Reset() {
@@ -3377,6 +3393,20 @@ func (x *ApplyResponse) GetDrift() *DiffFragment {
 func (x *ApplyResponse) GetDerivedContract() *DerivedContract {
 	if x != nil {
 		return x.DerivedContract
+	}
+	return nil
+}
+
+func (x *ApplyResponse) GetOutputs() *Payload {
+	if x != nil {
+		return x.Outputs
+	}
+	return nil
+}
+
+func (x *ApplyResponse) GetOutputContract() *ContractRef {
+	if x != nil {
+		return x.OutputContract
 	}
 	return nil
 }
@@ -4180,14 +4210,16 @@ const file_stratt_plugin_v1_plugin_proto_rawDesc = "" +
 	"\x04Rung\x12\x14\n" +
 	"\x10RUNG_UNSPECIFIED\x10\x00\x12\x15\n" +
 	"\x11RUNG_TOOL_DERIVED\x10\x02\x12\x11\n" +
-	"\rRUNG_DECLARED\x10\x03\"\xbd\x02\n" +
+	"\rRUNG_DECLARED\x10\x03\"\xba\x03\n" +
 	"\rApplyResponse\x121\n" +
 	"\x05event\x18\x01 \x01(\v2\x1b.stratt.plugin.v1.TaskEventR\x05event\x12?\n" +
 	"\n" +
 	"write_back\x18\x02 \x03(\v2 .stratt.plugin.v1.ObservedEntityR\twriteBack\x124\n" +
 	"\x06result\x18\x03 \x01(\v2\x1c.stratt.plugin.v1.ItemResultR\x06result\x124\n" +
 	"\x05drift\x18\x04 \x01(\v2\x1e.stratt.plugin.v1.DiffFragmentR\x05drift\x12L\n" +
-	"\x10derived_contract\x18\x05 \x01(\v2!.stratt.plugin.v1.DerivedContractR\x0fderivedContract\"\xac\x01\n" +
+	"\x10derived_contract\x18\x05 \x01(\v2!.stratt.plugin.v1.DerivedContractR\x0fderivedContract\x123\n" +
+	"\aoutputs\x18\x06 \x01(\v2\x19.stratt.plugin.v1.PayloadR\aoutputs\x12F\n" +
+	"\x0foutput_contract\x18\a \x01(\v2\x1d.stratt.plugin.v1.ContractRefR\x0eoutputContract\"\xac\x01\n" +
 	"\x0fDestroyResponse\x121\n" +
 	"\x05event\x18\x01 \x01(\v2\x1b.stratt.plugin.v1.TaskEventR\x05event\x124\n" +
 	"\x06result\x18\x02 \x01(\v2\x1c.stratt.plugin.v1.ItemResultR\x06result\x120\n" +
@@ -4397,49 +4429,51 @@ var file_stratt_plugin_v1_plugin_proto_depIdxs = []int32{
 	43, // 58: stratt.plugin.v1.ApplyResponse.result:type_name -> stratt.plugin.v1.ItemResult
 	44, // 59: stratt.plugin.v1.ApplyResponse.drift:type_name -> stratt.plugin.v1.DiffFragment
 	45, // 60: stratt.plugin.v1.ApplyResponse.derived_contract:type_name -> stratt.plugin.v1.DerivedContract
-	42, // 61: stratt.plugin.v1.DestroyResponse.event:type_name -> stratt.plugin.v1.TaskEvent
-	43, // 62: stratt.plugin.v1.DestroyResponse.result:type_name -> stratt.plugin.v1.ItemResult
-	30, // 63: stratt.plugin.v1.DestroyResponse.gone:type_name -> stratt.plugin.v1.GoneEntity
-	9,  // 64: stratt.plugin.v1.InvokeResult.outputs:type_name -> stratt.plugin.v1.Payload
-	13, // 65: stratt.plugin.v1.InvokeResult.output_contract:type_name -> stratt.plugin.v1.ContractRef
-	28, // 66: stratt.plugin.v1.InvokeResult.entities:type_name -> stratt.plugin.v1.ObservedEntity
-	15, // 67: stratt.plugin.v1.InvokeResult.provisioned_creds:type_name -> stratt.plugin.v1.CredentialRef
-	42, // 68: stratt.plugin.v1.InvokeResponse.event:type_name -> stratt.plugin.v1.TaskEvent
-	48, // 69: stratt.plugin.v1.InvokeResponse.result:type_name -> stratt.plugin.v1.InvokeResult
-	8,  // 70: stratt.plugin.v1.EmittedEvent.envelope:type_name -> stratt.plugin.v1.Envelope
-	9,  // 71: stratt.plugin.v1.EmittedEvent.payload:type_name -> stratt.plugin.v1.Payload
-	68, // 72: stratt.plugin.v1.EmittedEvent.match:type_name -> google.protobuf.Struct
-	67, // 73: stratt.plugin.v1.EmittedEvent.occurred_at:type_name -> google.protobuf.Timestamp
-	50, // 74: stratt.plugin.v1.SubscribeResponse.event:type_name -> stratt.plugin.v1.EmittedEvent
-	36, // 75: stratt.plugin.v1.PlanRequest.ResolvedCapabilitiesEntry.value:type_name -> stratt.plugin.v1.CapabilityHandle
-	36, // 76: stratt.plugin.v1.ApplyRequest.ResolvedCapabilitiesEntry.value:type_name -> stratt.plugin.v1.CapabilityHandle
-	36, // 77: stratt.plugin.v1.DestroyRequest.ResolvedCapabilitiesEntry.value:type_name -> stratt.plugin.v1.CapabilityHandle
-	36, // 78: stratt.plugin.v1.InvokeRequest.ResolvedCapabilitiesEntry.value:type_name -> stratt.plugin.v1.CapabilityHandle
-	19, // 79: stratt.plugin.v1.PluginService.GetManifest:input_type -> stratt.plugin.v1.GetManifestRequest
-	25, // 80: stratt.plugin.v1.PluginService.Health:input_type -> stratt.plugin.v1.HealthRequest
-	27, // 81: stratt.plugin.v1.PluginService.Observe:input_type -> stratt.plugin.v1.ObserveRequest
-	33, // 82: stratt.plugin.v1.PluginService.Plan:input_type -> stratt.plugin.v1.PlanRequest
-	35, // 83: stratt.plugin.v1.PluginService.Apply:input_type -> stratt.plugin.v1.ApplyRequest
-	39, // 84: stratt.plugin.v1.PluginService.Destroy:input_type -> stratt.plugin.v1.DestroyRequest
-	40, // 85: stratt.plugin.v1.PluginService.Invoke:input_type -> stratt.plugin.v1.InvokeRequest
-	41, // 86: stratt.plugin.v1.PluginService.Subscribe:input_type -> stratt.plugin.v1.SubscribeRequest
-	52, // 87: stratt.plugin.v1.PluginService.WrapKey:input_type -> stratt.plugin.v1.WrapKeyRequest
-	54, // 88: stratt.plugin.v1.PluginService.UnwrapKey:input_type -> stratt.plugin.v1.UnwrapKeyRequest
-	24, // 89: stratt.plugin.v1.PluginService.GetManifest:output_type -> stratt.plugin.v1.GetManifestResponse
-	26, // 90: stratt.plugin.v1.PluginService.Health:output_type -> stratt.plugin.v1.HealthResponse
-	32, // 91: stratt.plugin.v1.PluginService.Observe:output_type -> stratt.plugin.v1.ObserveResponse
-	34, // 92: stratt.plugin.v1.PluginService.Plan:output_type -> stratt.plugin.v1.PlanResponse
-	46, // 93: stratt.plugin.v1.PluginService.Apply:output_type -> stratt.plugin.v1.ApplyResponse
-	47, // 94: stratt.plugin.v1.PluginService.Destroy:output_type -> stratt.plugin.v1.DestroyResponse
-	49, // 95: stratt.plugin.v1.PluginService.Invoke:output_type -> stratt.plugin.v1.InvokeResponse
-	51, // 96: stratt.plugin.v1.PluginService.Subscribe:output_type -> stratt.plugin.v1.SubscribeResponse
-	53, // 97: stratt.plugin.v1.PluginService.WrapKey:output_type -> stratt.plugin.v1.WrapKeyResponse
-	55, // 98: stratt.plugin.v1.PluginService.UnwrapKey:output_type -> stratt.plugin.v1.UnwrapKeyResponse
-	89, // [89:99] is the sub-list for method output_type
-	79, // [79:89] is the sub-list for method input_type
-	79, // [79:79] is the sub-list for extension type_name
-	79, // [79:79] is the sub-list for extension extendee
-	0,  // [0:79] is the sub-list for field type_name
+	9,  // 61: stratt.plugin.v1.ApplyResponse.outputs:type_name -> stratt.plugin.v1.Payload
+	13, // 62: stratt.plugin.v1.ApplyResponse.output_contract:type_name -> stratt.plugin.v1.ContractRef
+	42, // 63: stratt.plugin.v1.DestroyResponse.event:type_name -> stratt.plugin.v1.TaskEvent
+	43, // 64: stratt.plugin.v1.DestroyResponse.result:type_name -> stratt.plugin.v1.ItemResult
+	30, // 65: stratt.plugin.v1.DestroyResponse.gone:type_name -> stratt.plugin.v1.GoneEntity
+	9,  // 66: stratt.plugin.v1.InvokeResult.outputs:type_name -> stratt.plugin.v1.Payload
+	13, // 67: stratt.plugin.v1.InvokeResult.output_contract:type_name -> stratt.plugin.v1.ContractRef
+	28, // 68: stratt.plugin.v1.InvokeResult.entities:type_name -> stratt.plugin.v1.ObservedEntity
+	15, // 69: stratt.plugin.v1.InvokeResult.provisioned_creds:type_name -> stratt.plugin.v1.CredentialRef
+	42, // 70: stratt.plugin.v1.InvokeResponse.event:type_name -> stratt.plugin.v1.TaskEvent
+	48, // 71: stratt.plugin.v1.InvokeResponse.result:type_name -> stratt.plugin.v1.InvokeResult
+	8,  // 72: stratt.plugin.v1.EmittedEvent.envelope:type_name -> stratt.plugin.v1.Envelope
+	9,  // 73: stratt.plugin.v1.EmittedEvent.payload:type_name -> stratt.plugin.v1.Payload
+	68, // 74: stratt.plugin.v1.EmittedEvent.match:type_name -> google.protobuf.Struct
+	67, // 75: stratt.plugin.v1.EmittedEvent.occurred_at:type_name -> google.protobuf.Timestamp
+	50, // 76: stratt.plugin.v1.SubscribeResponse.event:type_name -> stratt.plugin.v1.EmittedEvent
+	36, // 77: stratt.plugin.v1.PlanRequest.ResolvedCapabilitiesEntry.value:type_name -> stratt.plugin.v1.CapabilityHandle
+	36, // 78: stratt.plugin.v1.ApplyRequest.ResolvedCapabilitiesEntry.value:type_name -> stratt.plugin.v1.CapabilityHandle
+	36, // 79: stratt.plugin.v1.DestroyRequest.ResolvedCapabilitiesEntry.value:type_name -> stratt.plugin.v1.CapabilityHandle
+	36, // 80: stratt.plugin.v1.InvokeRequest.ResolvedCapabilitiesEntry.value:type_name -> stratt.plugin.v1.CapabilityHandle
+	19, // 81: stratt.plugin.v1.PluginService.GetManifest:input_type -> stratt.plugin.v1.GetManifestRequest
+	25, // 82: stratt.plugin.v1.PluginService.Health:input_type -> stratt.plugin.v1.HealthRequest
+	27, // 83: stratt.plugin.v1.PluginService.Observe:input_type -> stratt.plugin.v1.ObserveRequest
+	33, // 84: stratt.plugin.v1.PluginService.Plan:input_type -> stratt.plugin.v1.PlanRequest
+	35, // 85: stratt.plugin.v1.PluginService.Apply:input_type -> stratt.plugin.v1.ApplyRequest
+	39, // 86: stratt.plugin.v1.PluginService.Destroy:input_type -> stratt.plugin.v1.DestroyRequest
+	40, // 87: stratt.plugin.v1.PluginService.Invoke:input_type -> stratt.plugin.v1.InvokeRequest
+	41, // 88: stratt.plugin.v1.PluginService.Subscribe:input_type -> stratt.plugin.v1.SubscribeRequest
+	52, // 89: stratt.plugin.v1.PluginService.WrapKey:input_type -> stratt.plugin.v1.WrapKeyRequest
+	54, // 90: stratt.plugin.v1.PluginService.UnwrapKey:input_type -> stratt.plugin.v1.UnwrapKeyRequest
+	24, // 91: stratt.plugin.v1.PluginService.GetManifest:output_type -> stratt.plugin.v1.GetManifestResponse
+	26, // 92: stratt.plugin.v1.PluginService.Health:output_type -> stratt.plugin.v1.HealthResponse
+	32, // 93: stratt.plugin.v1.PluginService.Observe:output_type -> stratt.plugin.v1.ObserveResponse
+	34, // 94: stratt.plugin.v1.PluginService.Plan:output_type -> stratt.plugin.v1.PlanResponse
+	46, // 95: stratt.plugin.v1.PluginService.Apply:output_type -> stratt.plugin.v1.ApplyResponse
+	47, // 96: stratt.plugin.v1.PluginService.Destroy:output_type -> stratt.plugin.v1.DestroyResponse
+	49, // 97: stratt.plugin.v1.PluginService.Invoke:output_type -> stratt.plugin.v1.InvokeResponse
+	51, // 98: stratt.plugin.v1.PluginService.Subscribe:output_type -> stratt.plugin.v1.SubscribeResponse
+	53, // 99: stratt.plugin.v1.PluginService.WrapKey:output_type -> stratt.plugin.v1.WrapKeyResponse
+	55, // 100: stratt.plugin.v1.PluginService.UnwrapKey:output_type -> stratt.plugin.v1.UnwrapKeyResponse
+	91, // [91:101] is the sub-list for method output_type
+	81, // [81:91] is the sub-list for method input_type
+	81, // [81:81] is the sub-list for extension type_name
+	81, // [81:81] is the sub-list for extension extendee
+	0,  // [0:81] is the sub-list for field type_name
 }
 
 func init() { file_stratt_plugin_v1_plugin_proto_init() }

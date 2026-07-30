@@ -323,6 +323,7 @@ func runActuationStep(ctx workflow.Context, in DAGInput, step types.Step, steps 
 	cctx := workflow.WithChildOptions(ctx, workflow.ChildWorkflowOptions{
 		WorkflowID: ChildRunID(in.WorkflowRunID, step.Name),
 	})
+	var outcome RunOutcome
 	err := workflow.ExecuteChildWorkflow(cctx, RunAgainstView, RunInput{
 		ViewName:        step.ViewName,
 		Actuator:        step.Actuator,
@@ -335,11 +336,15 @@ func runActuationStep(ctx workflow.Context, in DAGInput, step types.Step, steps 
 		PlanFrom:        step.PlanFrom,
 		PlanDigest:      planDigest,
 		FacetWriteScope: step.FacetWriteScope,
-	}).Get(cctx, nil)
+	}).Get(cctx, &outcome)
 	if err != nil {
 		return stepFailed, nil
 	}
-	return stepSucceeded, nil
+	// An ACTUATOR Step can now hand a value to a later Step, which an ACTION Step always could.
+	// The asymmetry was arbitrary and it made the born-on-target CSR flow unexpressible: the target
+	// generates key+CSR (an ansible Apply), the CLM signs (an Action), the certificate is written
+	// back (another Apply) — and step one had nowhere to put its CSR (CERT-2).
+	return stepSucceeded, outcome.Outputs
 }
 
 // digestFromStep reads the planDigest output a Plan Step recorded into the DAG's

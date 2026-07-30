@@ -132,8 +132,10 @@ type Result struct {
 	// OutputsContract is the Step's tool-derived outputs schema, when the
 	// tool emitted one (§2.2 rung 2).
 	OutputsContract json.RawMessage
-	// Outputs are an Action's typed output VALUES (ADR-0031), validated against
-	// its output Contract and captured on the Run for cross-Step binding.
+	// Outputs are a Step's typed output VALUES (ADR-0031), validated against a PINNED output
+	// Contract and captured on the Run for cross-Step binding. Carried for BOTH verbs now: the
+	// Apply path could not produce one until CERT-2, which is what made the born-on-target CSR
+	// flow unexpressible — an ansible Step had nowhere to put the CSR it had just generated.
 	Outputs json.RawMessage
 	// Drift accumulates observed-vs-expected fragments per target from a
 	// check-mode execution (ADR-0019) — redacted upstream, size-capped here

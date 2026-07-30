@@ -42,7 +42,12 @@ type Host struct {
 
 	source     types.Source
 	rejections []Rejection
-	plans      *planstore.Store // set for Actuator hosts (the Plan verb); nil otherwise
+	// expectApplyOutputContract is the core-pinned output contract id for this Actuator's Apply
+	// (ADR-0031's rule, extended to the Apply verb for CERT-2). Empty means the Actuator declares
+	// none, and outputs are then REFUSED rather than captured: an unpinned shape handed to a
+	// downstream Step is a value nobody agreed to.
+	expectApplyOutputContract string
+	plans                     *planstore.Store // set for Actuator hosts (the Plan verb); nil otherwise
 
 	// credCoordinates gates SecretBroker ResolvedRef enrichment (ADR-0052 MF-C): the
 	// host attaches use-checked Secret COORDINATES to the Envelope only on the LOCAL/
@@ -132,6 +137,11 @@ func New(store *graph.Store, client pluginv1.PluginServiceClient, grant Grant, l
 	return &Host{store: store, client: client, grant: grant, credCoordinates: true,
 		log: log.With("plugin", grant.PluginIdentity, "source", grant.Source.Name)}
 }
+
+// WithApplyOutputContract pins the contract this Actuator's Apply outputs are governed against
+// (CERT-2). Unset, outputs are refused: a shape nobody pinned cannot be handed to a downstream
+// Step, which is ADR-0031's rule for Actions applied to the Apply verb.
+func (h *Host) WithApplyOutputContract(id string) *Host { h.expectApplyOutputContract = id; return h }
 
 // Rejections returns the governance refusals recorded so far (test/observability).
 func (h *Host) Rejections() []Rejection { return h.rejections }
@@ -892,6 +902,13 @@ type RawApplyResult struct {
 	Derived    []DerivedSchema
 	Checkpoint string // graceful-abort resume token (invariant #7); "" == ran to completion
 	Rejections []Rejection
+	// Outputs are the Apply's typed outputs for cross-Step binding, validated against a PINNED
+	// output contract exactly as an Action's are (ADR-0031). Nil when the plugin emitted none.
+	//
+	// Before this existed an ACTUATOR Step could not hand a value to a later Step while an ACTION
+	// Step could, and the asymmetry was arbitrary rather than principled — it made the born-on-
+	// target CSR flow cert-issuer's own Contract documents unexpressible (CERT-2).
+	Outputs json.RawMessage
 }
 
 // applyStatus renders a wire ItemResult.Status as the core-legible per-target
@@ -1107,6 +1124,28 @@ func (h *Host) govern(ctx context.Context, stream applyStream, resolved, writeSc
 				out.Drift = map[string][]json.RawMessage{}
 			}
 			out.Drift[d.GetItemKey()] = append(out.Drift[d.GetItemKey()], json.RawMessage(d.GetDetail().GetBytes()))
+		}
+		// Typed outputs for cross-Step binding, governed the same way an Action's are (ADR-0031):
+		// the plugin's asserted contract id must match what the core pinned for this Actuator, or
+		// the bytes are refused rather than captured. A Step downstream binds
+		// {{.steps.<name>.outputs.<field>}} against them.
+		//
+		// The pin is what makes this safe to hand to another Step: without it a plugin could assert
+		// any shape and a consumer's binding would break at run time on a value it never agreed to.
+		if outs := resp.GetOutputs(); outs != nil {
+			got := resp.GetOutputContract().GetSchemaId()
+			switch {
+			case h.expectApplyOutputContract == "":
+				rej := Rejection{Kind: "apply-outputs", Detail: got, Reason: "apply: outputs emitted but this Actuator pins no output contract (§1.5)"}
+				h.reject(rej.Kind, rej.Detail, rej.Reason)
+				out.Rejections = append(out.Rejections, rej)
+			case got != "" && got != h.expectApplyOutputContract:
+				rej := Rejection{Kind: "apply-outputs", Detail: got, Reason: "apply: output-contract drift — core pins " + h.expectApplyOutputContract}
+				h.reject(rej.Kind, rej.Detail, rej.Reason)
+				out.Rejections = append(out.Rejections, rej)
+			default:
+				out.Outputs = json.RawMessage(outs.GetBytes())
+			}
 		}
 		// Derived contract: namespace-confined to the plugin's own Source scope.
 		if dc := resp.GetDerivedContract(); dc != nil {

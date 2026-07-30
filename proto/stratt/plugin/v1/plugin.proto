@@ -696,6 +696,22 @@ message ApplyResponse {
   ItemResult result = 3;                // per-target status
   DiffFragment drift = 4;               // observed-vs-expected fragment (ADR-0019)
   DerivedContract derived_contract = 5; // tofu rung-2 / mcp rung-3 schema doc
+  // Typed outputs for cross-Step binding ({{.steps.<name>.outputs.<field>}}), validated against a
+  // PINNED output_contract before capture — the same shape and the same rules InvokeResult has
+  // carried since ADR-0031. Set only on the TERMINAL message.
+  //
+  // ADDED because the asymmetry was arbitrary and load-bearing: an ACTION Step could hand a value
+  // to a later Step and an ACTUATOR Step could not, so every EE-Job step — every ansible step —
+  // was a dead end for data. That made the §2.5 flow cert-issuer's own input Contract DOCUMENTS
+  // unexpressible: the target generates key+CSR (ansible), the CLM signs (action), the signed
+  // certificate is written back (ansible). Step 1 could not hand its CSR to step 2, so the only
+  // shapes available were a CLM-generated key — discarding the born-on-target property the
+  // Contract states in writing — or a fake (CERT-2).
+  //
+  // Both transports decode this message, so one field serves the gRPC Apply and the EE-Job
+  // subprocess alike; a shim emits it exactly as a plugin does.
+  Payload outputs = 6;
+  ContractRef output_contract = 7;
 }
 
 message DestroyResponse {
