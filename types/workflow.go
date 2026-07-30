@@ -246,3 +246,16 @@ type WorkflowRun struct {
 	ParentWorkflowRunID string `json:"parentWorkflowRunId,omitempty"`
 	ParentStepName      string `json:"parentStepName,omitempty"`
 }
+
+// IsActuation reports whether this Step converges a View through an Actuator — the shape that
+// needs a target and an authorization check, as opposed to a Gate, a Policy checkpoint, a nested
+// Workflow, or a targetless Action.
+//
+// It exists because the answer was previously inferred from `ViewName != ""`, which stopped being
+// a safe proxy the moment a Step could INHERIT its View from the Baseline that launched it
+// (ADR-0151 follow-on). An actuation Step with no ViewName looked exactly like a Gate to
+// authorizeLaunch, which skipped it — turning an omitted field into a bypassed §2.5 gate. One
+// predicate, so the DAG's dispatch and the authz door cannot disagree about what a Step IS.
+func (s Step) IsActuation() bool {
+	return s.Gate == nil && s.Policy == nil && s.Workflow == "" && s.Action == "" && s.ActionCapability == ""
+}

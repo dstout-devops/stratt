@@ -2110,7 +2110,8 @@ func (s *Server) StartWorkflowRun(w http.ResponseWriter, r *http.Request, name s
 		s.fail(w, err)
 		return
 	}
-	principal, ok := s.authorizeLaunch(w, r, wf)
+	// A direct launch supplies no View to inherit — every actuation Step must name its own.
+	principal, ok := s.authorizeLaunch(w, r, wf, "")
 	if !ok {
 		return
 	}
@@ -2125,7 +2126,7 @@ func (s *Server) StartWorkflowRun(w http.ResponseWriter, r *http.Request, name s
 	if !ok2 {
 		return
 	}
-	s.launchWorkflow(w, r, wf, principal, inputs, changeContext, "")
+	s.launchWorkflow(w, r, wf, principal, inputs, changeContext, "", "")
 }
 
 // authorizeLaunch enforces View-scoped execution authz (§2.5, ADR-0028): the launching
@@ -2133,12 +2134,31 @@ func (s *Server) StartWorkflowRun(w http.ResponseWriter, r *http.Request, name s
 // per-Step child Runs re-check at the RunAgainstView chokepoint; this is the fail-fast 403 at
 // the door. Shared by both launch doors so remediation cannot become a softer path to the
 // same execution.
-func (s *Server) authorizeLaunch(w http.ResponseWriter, r *http.Request, wf types.Workflow) (string, bool) {
+// defaultView is the View a remediation inherits from its Baseline; "" for a direct launch. An
+// actuation Step with no View of its own is authorized against IT — never skipped, which is what
+// the old `ViewName == ""` test would have done the moment a Step could inherit one. An omitted
+// field must not become a bypassed gate.
+func (s *Server) authorizeLaunch(w http.ResponseWriter, r *http.Request, wf types.Workflow, defaultView string) (string, bool) {
 	for _, st := range wf.Steps {
-		if st.ViewName == "" {
+		view := st.ViewName
+		if view == "" && st.IsActuation() {
+			view = defaultView
+		}
+		if view == "" {
+			// A Gate, a Policy checkpoint, a nested Workflow or an Action — none target a View.
+			// An ACTUATION Step that still has none after inheritance is refused below, at the
+			// point where it would otherwise run against nothing.
+			if st.IsActuation() {
+				writeErr(w, http.StatusConflict, fmt.Sprintf(
+					"workflow %s step %q converges a View but names none, and this launch supplies none "+
+						"to inherit — a Step may omit viewName only when launched from a Finding, whose "+
+						"Baseline says which View the Assignment covers",
+					wf.Name, st.Name))
+				return "", false
+			}
 			continue
 		}
-		if !s.requireGrant(w, r, authz.RelationRunner, "view:"+st.ViewName) {
+		if !s.requireGrant(w, r, authz.RelationRunner, "view:"+view) {
 			return "", false
 		}
 	}
@@ -2181,7 +2201,7 @@ func decodeLaunchBody(w http.ResponseWriter, r *http.Request) (inputs, changeCon
 // entityScope narrows the launched DAG to one Entity (ADR-0150 D3); "" is the whole View, which is
 // every launch that is not a per-Finding remediation. Passed explicitly rather than inferred, so a
 // direct launch cannot acquire a scope by accident and a remediation cannot lose one.
-func (s *Server) launchWorkflow(w http.ResponseWriter, r *http.Request, wf types.Workflow, principal string, inputs, changeContext map[string]any, entityScope string) {
+func (s *Server) launchWorkflow(w http.ResponseWriter, r *http.Request, wf types.Workflow, principal string, inputs, changeContext map[string]any, entityScope, viewName string) {
 	// Validate at the DOOR so a caller gets a 400 naming the offending input, rather than a
 	// created-then-failed Run they have to go read (§1.8). This is the same
 	// contract.ResolveLaunchInputs the RunDAG chokepoint calls — one implementation, two
@@ -2213,7 +2233,7 @@ func (s *Server) launchWorkflow(w http.ResponseWriter, r *http.Request, wf types
 		TaskQueue: orchestrate.TaskQueue,
 	}, orchestrate.RunDAG, orchestrate.DAGInput{
 		WorkflowRunID: wr.ID, WorkflowName: wf.Name, Principal: principal,
-		LaunchParams: resolved, Context: changeContext, EntityScope: entityScope,
+		LaunchParams: resolved, Context: changeContext, EntityScope: entityScope, ViewName: viewName,
 		// The floor's own environment, not the caller's claim about it (ADR-0122 D2).
 		Environment: s.Store.ActiveEnvironment(),
 	})
@@ -2287,7 +2307,7 @@ func (s *Server) RemediateFinding(w http.ResponseWriter, r *http.Request, id str
 		s.fail(w, err)
 		return
 	}
-	principal, ok := s.authorizeLaunch(w, r, wf)
+	principal, ok := s.authorizeLaunch(w, r, wf, fl.ViewName)
 	if !ok {
 		return
 	}
@@ -2312,7 +2332,7 @@ func (s *Server) RemediateFinding(w http.ResponseWriter, r *http.Request, id str
 		return
 	}
 	// D3: this remediation converges the Entity that drifted, not its whole tier.
-	s.launchWorkflow(w, r, wf, principal, merged, changeContext, fl.EntityID)
+	s.launchWorkflow(w, r, wf, principal, merged, changeContext, fl.EntityID, fl.ViewName)
 }
 
 // mergeRemediationInputs folds a caller's supplied inputs onto the Baseline's compiled ones,
@@ -2347,6 +2367,10 @@ type findingLaunch struct {
 	Baseline string
 	Workflow string
 	Params   map[string]any
+	// ViewName is the View the Baseline was compiled against — the Assignment's `view:`. A
+	// remediation Step that names no View inherits THIS one, so a converge Workflow stays a recipe
+	// rather than a target (§2.4: one binding site per value).
+	ViewName string
 	// EntityID is the Entity this Finding is about — the scope the remediation Run narrows to
 	// (ADR-0150 D3). Empty when the Finding's target is not an Entity (a workspace build), where
 	// the launch converges its Workflow's declared Views as it always has.
@@ -2507,7 +2531,7 @@ func resolveFindingLaunch(f types.Finding, getBaseline func(string) (types.Basel
 	}
 	return findingLaunch{
 		Baseline: b.Name, Workflow: b.RemediationWorkflow, Params: b.RemediationParams,
-		Kind: types.LaunchRemediate, EntityID: f.EntityID,
+		Kind: types.LaunchRemediate, EntityID: f.EntityID, ViewName: b.ViewName,
 	}, nil
 }
 

@@ -36,3 +36,6 @@ tuples:
   # …and the gate-only CredentialRef the kubecompute/create-host Action binds (ADR-0151). Building
   # a host is a privileged verb; the use-check is what gates it.
   - { user: principal:dev-runner, relation: user, object: credential_ref:kubecompute-build }
+  # …and the View of hosts kubecompute BUILDS into, which apache-configure now inherits rather
+  # than naming. runner-on-View is still the gate; it is just the Assignment's View now.
+  - { user: principal:dev-runner, relation: runner, object: view:web-servers }

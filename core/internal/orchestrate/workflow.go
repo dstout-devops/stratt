@@ -42,6 +42,17 @@ type DAGInput struct {
 	// Principal's authz remain the control; these only parameterize what was already
 	// declared and gated.
 	LaunchParams map[string]any
+	// ViewName is the View a remediation INHERITS from the Baseline that raised its Finding.
+	//
+	// A converge Workflow is a RECIPE — what to do — not a target. The Assignment already says
+	// WHERE (`view:`), the compiler copies it onto the Baseline, and a Step re-stating it was one
+	// value with two binding sites, able to disagree (§2.4). Worse, it made the recipe unusable for
+	// any host outside the View its author happened to name: a host Stratt had just BUILT could not
+	// be converged by it, and the only workaround was to label the host into that View — which the
+	// one-owner-per-label-key rule (ADR-0041) may forbid the builder from doing.
+	//
+	// Empty for a direct launch, where the Steps' own declared Views are the only targets.
+	ViewName string
 	// EntityScope narrows every Actuator Step of this DAG to one Entity (ADR-0150 D3), set when
 	// the DAG was launched to remediate a Finding. Empty ⇒ each Step converges its whole View,
 	// which is every other launch path.
@@ -329,8 +340,14 @@ func runActuationStep(ctx workflow.Context, in DAGInput, step types.Step, steps 
 		WorkflowID: ChildRunID(in.WorkflowRunID, step.Name),
 	})
 	var outcome RunOutcome
+	// The Step's own View, or the one inherited from the launching Baseline. A Step that declares
+	// none is not underspecified — it is saying "converge whatever this Assignment covers".
+	viewName := step.ViewName
+	if viewName == "" {
+		viewName = in.ViewName
+	}
 	err := workflow.ExecuteChildWorkflow(cctx, RunAgainstView, RunInput{
-		ViewName:        step.ViewName,
+		ViewName:        viewName,
 		Actuator:        step.Actuator,
 		Params:          params,
 		Slices:          step.Slices,

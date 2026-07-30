@@ -41,7 +41,15 @@ steps:
   - name: configure
     # The dedicated real-node View (ADR-0084 fixture). ansible_host is rendered by the
     # shim from each target's mgmt.address — the core never authored it (§1.4).
-    viewName: managed-web
+    # NO viewName — INHERITED from the Baseline that raised the Finding.
+    #
+    # The Assignment already says WHERE this Intent applies (`view:`), the compiler copies it onto
+    # the Baseline, and re-stating it here made one value two binding sites able to disagree (§2.4).
+    # It also made the recipe unusable for any host outside the View its author happened to name: a
+    # host Stratt had just BUILT could not be converged by it, and labelling the host into that View
+    # is not always open to the builder — a label key has exactly one owner (ADR-0041).
+    #
+    # A converge Workflow is a RECIPE — what to do — not a target. WHERE is the Assignment's job.
     actuator: ansible-nginx
     # The machine credential (SSH key) — mounted at spawn, use-checked against the
     # launching Principal (§2.5). The AWX Machine-Credential half of the split.

@@ -3445,8 +3445,16 @@ func ValidateWorkflow(w types.Workflow, opts ...ValidateOption) error {
 			return fmt.Errorf("workflow %s: step %s: a step is a gate, a policy, an action, or an actuation — not multiple", w.Name, s.Name)
 		case isAction && isActuation:
 			return fmt.Errorf("workflow %s: step %s: a step is an action or an actuation, not both (actions are targetless — no viewName/actuator/slices)", w.Name, s.Name)
-		case !isGate && !isPolicy && !isAction && !isNested && s.ViewName == "":
-			return fmt.Errorf("workflow %s: step %s: actuation step requires viewName", w.Name, s.Name)
+		// An actuation Step MAY omit viewName: a remediation INHERITS the View from the Baseline
+		// that raised its Finding, which is the Assignment's `view:` — so a converge Workflow is a
+		// RECIPE (what to do) rather than a target (where). Re-stating the Assignment's View here
+		// made one value two binding sites able to disagree (§2.4), and made the recipe unusable
+		// for any host outside the View its author happened to name.
+		//
+		// The refusal MOVES to launch rather than disappearing: authorizeLaunch rejects an
+		// actuation Step that still has no View after inheritance, naming the workflow and the
+		// step. The cost is honest and stated — a Workflow that can only ever be remediation-
+		// launched is now diagnosed when someone launches it directly, not when it is loaded.
 		case isGate && len(s.Gate.Approvers.Principals) == 0 && len(s.Gate.Approvers.Teams) == 0:
 			return fmt.Errorf("workflow %s: step %s: gate requires approvers (principals and/or teams)", w.Name, s.Name)
 		case isGate && s.Gate.TimeoutSeconds < 0:
