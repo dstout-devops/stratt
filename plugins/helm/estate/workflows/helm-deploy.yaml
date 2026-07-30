@@ -63,7 +63,13 @@ steps:
       version: "{{.launch.chartVersion}}"
       release: "{{.launch.release}}"
       namespace: "{{.launch.namespace}}"
-      # The namespace is created if absent, because the first deploy of a release into a fresh
-      # namespace is the ordinary case for a chart-delivered application and a Run that failed on
-      # a missing namespace would report a chart problem for a namespace problem (§1.8).
-      createNamespace: true
+      # NO createNamespace, and this is a least-authority decision rather than an omission.
+      # Setting it asks the deploy identity for NAMESPACE authority, which ADR-0102 Q3 withholds on
+      # purpose: the chart pre-creates each target namespace at the OPERATOR's install privilege
+      # (values `deployNamespace`), so the plugin's ServiceAccount holds a namespaced Role in that
+      # namespace and nothing else — no namespace-create, no cluster-wide reach.
+      #
+      # Measured: with `createNamespace: true` the deploy failed in ~3s even though the namespace
+      # already existed, because helm checks for it and the Role grants no `namespaces` verb. The
+      # target namespace existing is a precondition the OPERATOR satisfies, not something a Run
+      # should be able to arrange for itself.

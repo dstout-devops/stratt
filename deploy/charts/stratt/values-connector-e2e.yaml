@@ -37,6 +37,28 @@ plugins:
       digest: ""
       pullPolicy: Never # kind-loaded (task image:helm-plugin)
     tmpDir: true # writable /tmp for helm's cache (read-only rootfs)
+    # A LEAST-PRIVILEGE deploy target for the chart delivery form (ADR-0148 follow-up b). Without
+    # it the helm plugin's ServiceAccount holds NO kube grant at all in this floor, and
+    # `helm upgrade` exits 1 with the RBAC failure buried in streamed diagnostics — measured, on
+    # the first real launch of the parameterized helm-deploy.
+    #
+    # deployNamespace renders a pre-created Namespace plus a NAMESPACED Role+RoleBinding (ADR-0092
+    # / ADR-0102 Q3), not a cluster-wide ClusterRole: the SA can write into stratt-apps and nowhere
+    # else, holds no cluster-wide `secrets` reach, and cannot create namespaces. The chart creates
+    # the namespace at the OPERATOR's install privilege so the plugin never needs that grant —
+    # which is also why `createNamespace: true` in the Workflow is belt-and-braces rather than the
+    # mechanism.
+    deployNamespace: [stratt-apps]
+    kubeAccess:
+      apiGroups: ["", "apps", "autoscaling"]
+      resources: ["configmaps", "services", "deployments", "serviceaccounts", "secrets", "horizontalpodautoscalers"]
+      verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+    # READ-ONLY and a separate rule (least authority): helm --wait watches Pods and ReplicaSets to
+    # confirm rollout readiness.
+    kubeAccessRead:
+      apiGroups: ["", "apps"]
+      resources: ["pods", "replicasets"]
+      verbs: ["get", "list", "watch"]
   # kubeservices — the OBSERVE half of the chart delivery form (ADR-0148 follow-up b). It has to be
   # here because estate/plugins.yaml now admits it: a Connector the estate declares with no pod
   # behind it registers as unverifiable, which reads as "the backend is down" rather than "no floor

@@ -78,7 +78,31 @@ func Normalize(services []K8sService, clusterDomain string) []*pluginv1.Observed
 		if !isHelmManaged(s.Labels) {
 			continue
 		}
+		// THE RELEASE NAME, with a fallback, because requiring the ideal label silently dropped a
+		// real release. `app.kubernetes.io/instance` is Kubernetes' RECOMMENDED label and Helm's
+		// standard labels helper sets it — but a chart is free not to, and plenty do not. Measured
+		// on a live floor: podinfo 6.9.2 labels its Service `managed-by=Helm`, `name=podinfo`,
+		// `version=6.9.2`, `helm.sh/chart=podinfo-6.9.2` and NO instance. It therefore produced a
+		// `service` Entity and NO `application` Entity, so the entire chart delivery form observed
+		// nothing for a release that was plainly deployed — and said nothing, because `continue` is
+		// silent.
+		//
+		// It went unnoticed because the only release the collector had ever been run against was
+		// STRATT'S OWN, whose chart uses the standard helper and therefore does set `instance`. The
+		// one case that worked was the one that happened to satisfy an undeclared assumption.
+		//
+		// The fallback is `app.kubernetes.io/name`, and its limit is stated rather than glossed: for
+		// the ordinary one-release-per-chart-per-namespace case it IS the release name, and for two
+		// unlabelled releases of one chart in one namespace it collapses them into a single
+		// application Entity. That is a worse answer than distinguishing them and a much better one
+		// than reporting neither — and it is deterministic, so an operator who sees one Entity where
+		// they expected two has something to look at (§1.8). A Service with NEITHER label is still
+		// skipped: there is nothing left to name a release by, and inventing one would be a guess in
+		// the identity, which is the one place §1.2 forbids it.
 		instance := s.Labels["app.kubernetes.io/instance"]
+		if instance == "" {
+			instance = s.Labels["app.kubernetes.io/name"]
+		}
 		if instance == "" {
 			continue
 		}

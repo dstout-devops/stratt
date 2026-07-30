@@ -39,6 +39,22 @@ defaults:
   # claiming it here would make the estate an owner of something Helm already owns (§1.1).
   chartVersion: "6.9.2"
   namespace: stratt-apps
+  # WHERE CHARTS COME FROM, declared once rather than embedded in an Intent. The Intent says
+  # `podinfo`; helm needs a registry-qualified reference, and nothing in the estate had anywhere to
+  # put the difference. It is the chart form's version of a question ADR-0117 D4 already answered for
+  # Ansible: a CONTENT SOURCE is an external, operator-owned system, named explicitly rather than
+  # assumed. Here rather than in the Intent because an Intent names WHAT it wants and never where to
+  # fetch it from, and here rather than on the Actuator because a mirror is an ESTATE decision — an
+  # air-gapped ring overrides this one value per Assignment and everything else is unchanged, which
+  # is the same shape ADR-0124 D2 gives the Ansible half.
+  #
+  # DELIBERATELY UNTYPED in application.v3 (the spec schema is open), and that is not laziness. The
+  # typing argument `port` and `chartVersion` record is specifically about COMPARABILITY: those
+  # values are compared against an observed facet and nothing coerces between types (ADR-0118 D1).
+  # A registry prefix is never compared to anything — it is interpolated into a string. Typing it
+  # would also mean editing v3, which is now PINNED in a running store: the defect LIVE-1 records,
+  # repeated within an hour of fixing it.
+  chartRegistry: oci://ghcr.io/stefanprodan/charts
 routes:
   - observe:
       namespace: app.deliverable
@@ -51,7 +67,10 @@ routes:
     claim: exclusive
     remediationWorkflow: helm-deploy
     remediationParams:
-      chart: "{{.spec.package}}"
+      # Composed rather than declared whole: the estate holds the registry once and the application
+      # name once, and neither declaration repeats the other. Embedded interpolation renders into
+      # the surrounding text (template.substituteString), so this is one string with two sources.
+      chart: "{{.spec.chartRegistry}}/{{.spec.package}}"
       chartVersion: "{{.spec.chartVersion}}"
       release: "{{.spec.package}}"
       namespace: "{{.spec.namespace}}"
