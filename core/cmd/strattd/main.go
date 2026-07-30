@@ -1140,6 +1140,54 @@ func run(ctx context.Context, log *slog.Logger) error {
 		log.Info("no NetBox plugin configured (STRATT_NETBOX_PLUGIN_ADDR empty); syncer idle")
 	}
 
+	// ── kubecompute Syncer over the port — the OBSERVE half of the builder (ADR-0151) ──
+	// The Actuator half BUILDS a host; this half says how to REACH it. They are separate on
+	// purpose: a pod has no address until it is scheduled, so a builder that returned one would be
+	// asserting a fact it cannot know (§1.2). The address is observed, on a cadence, after the fact.
+	//
+	// Without this the build succeeds, the Entity is projected from the Action's write-back — and
+	// mgmt.address never appears, so nothing can converge the host that was just built. That is the
+	// shape ADR-0142 D4 predicted for a K8s Compute provider: it projects the coordinate it CAUSED,
+	// which is the observed producer again.
+	if addr := os.Getenv("STRATT_KUBECOMPUTE_PLUGIN_ADDR"); addr != "" {
+		sourceName := env("STRATT_KUBECOMPUTE_SOURCE_NAME", "kubecompute")
+		interval, err := time.ParseDuration(env("STRATT_KUBECOMPUTE_INTERVAL", "30s"))
+		if err != nil {
+			return fmt.Errorf("kubecompute interval: %w", err)
+		}
+		conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+		if err != nil {
+			return fmt.Errorf("kubecompute syncer dial %s: %w", addr, err)
+		}
+		defer conn.Close()
+		grant := pluginhost.Grant{
+			PluginIdentity: env("STRATT_KUBECOMPUTE_PLUGIN_ID", "kubecompute"),
+			Tier:           pluginhost.Tier(env("STRATT_KUBECOMPUTE_TIER", "trusted")),
+			Source:         types.Source{Kind: "kubecompute", Name: sourceName},
+			// ONE Facet namespace, and it is the reach coordinate. A builder that cannot say how to
+			// reach what it built has not finished the job — but it gets to say nothing else.
+			FacetNamespaces: []string{"mgmt.address"},
+			// AUTHORITATIVE for the hosts it built: it caused the address, so nothing else has a
+			// better claim on it (ADR-0060's declared-authority path, and ADR-0142 D4's
+			// "observed or caused, never computed").
+			AuthoritativeFacetNamespaces: []string{"mgmt.address"},
+			// The CORRELATION label the provisioning reconcile reads to see the instance as built
+			// (ADR-0120), plus the fleet key a View selects on. NOT `stratt.managed`: a label key has
+			// exactly ONE owner (ADR-0041) and that one is already claimed elsewhere, so asking for
+			// it fails the whole registration and the Syncer never starts — costing the reach
+			// coordinate for a marker this plugin does not need to own.
+			LabelKeys:        []string{"stratt.intent/instance", "fleet"},
+			IdentitySchemes:  []string{"kube.host"},
+			TombstoneSchemes: []string{"kube.host"},
+		}
+		host := pluginhost.New(store, pluginv1.NewPluginServiceClient(conn), grant, log)
+		controllers = append(controllers, homeSupervise(sourceName, host.Register, func(cctx context.Context) error {
+			return host.SyncLoop(cctx, interval)
+		}))
+	} else {
+		log.Info("no kubecompute plugin configured (STRATT_KUBECOMPUTE_PLUGIN_ADDR empty); syncer idle")
+	}
+
 	// ── Crossplane Syncer over the port — the SYNCER half of the dual-verb plugin ──
 	// (ADR-0060). The Actuator half is registered above; here the SAME plugin Observes
 	// its Claims' as-built state back as a REGISTERED Source (resync-able +
