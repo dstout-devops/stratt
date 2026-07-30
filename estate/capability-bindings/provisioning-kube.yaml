@@ -18,3 +18,25 @@ environments: [dev]
 entries:
   - capability: provisioning
     substrate: kubernetes
+    # SCOPED TO Compute, because Kubernetes has no subnet and pretending otherwise would be the
+    # square peg. Pod addressing is cluster-wide and owned by the CNI; you do not allocate a CIDR
+    # per workload. A Namespace is an API scope, not a network segment. NetworkPolicy is POLICY —
+    # allow/deny by label selector — and carries no address range at all. Of the three things an
+    # Intent/Subnet means on AWS (an allocated CIDR, a placement target, an isolation boundary) only
+    # the third has a Kubernetes analogue, and it has no addresses in it.
+    #
+    # A "kubernetes Subnet provider" could only be built by inventing a CIDR nothing honours, or by
+    # reaching into CNI-specific CRDs (Calico IPPool, Cilium) — a vendor coupling underneath a
+    # portability claim. `kubecompute` therefore advertises provisions: {Compute} and nothing else,
+    # which is not a gap: it is what Kubernetes is.
+    #
+    # Unscoped, this entry claimed EVERY kind — including one this substrate can never serve — and
+    # the resolver correctly refused Subnet outright. Naming the kind makes the estate say only what
+    # is true.
+    intentKind: Compute
+  # Subnets come from the substrate that HAS them. This is a MIXED topology and it is DECLARED
+  # rather than inferred, which is the distinction ADR-0151 D2 turns on: the resolver refuses a
+  # mix it has to guess at, and accepts one an author wrote down.
+  - capability: provisioning
+    provider: opentofu-network
+    intentKind: Subnet
