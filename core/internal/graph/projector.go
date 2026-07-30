@@ -450,6 +450,21 @@ func retractRelationsFor(ctx context.Context, tx pgx.Tx, ids []string) error {
 // number of Entities actually tombstoned. The projection stays rebuildable;
 // tombstones keep Run history resolvable.
 func (p *Projector) TombstoneAbsent(ctx context.Context, prov types.Provenance, scheme string, seen []string) (int64, error) {
+	// A NIL seen-set is the "everything of this scheme disappeared" case — the whole reason
+	// tombstoning exists — and it was the one case this could not handle. A nil Go slice encodes as
+	// SQL NULL, and `NOT (value = ANY(NULL))` evaluates to NULL rather than TRUE, so the WHERE below
+	// matched nothing and the Source's last host stayed present forever. An empty ARRAY[] gives the
+	// TRUE the predicate wants.
+	//
+	// Found by deleting a built host out-of-band and watching the estate NOT notice: the pod was
+	// gone, the Syncer's full sync correctly reported zero, and the Entity — and therefore the
+	// provisioning reconcile's belief that the instance was built — survived. The declaration still
+	// asked for the host and nothing re-raised the build, which is the config-as-code contract
+	// broken at its most basic point.
+	if seen == nil {
+		seen = []string{}
+	}
+
 	tx, err := p.begin(ctx)
 	if err != nil {
 		return 0, err
