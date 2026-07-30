@@ -1,0 +1,59 @@
+# floci — the real-EC2-API backend the network leg builds against (ADR-0093/0112), in kind.
+#
+# The last floor gap for the network leg. `deploy/tofu-modules/aws-network` defaults its
+# `aws_endpoint` variable to `http://floci:4566`, so a Service of that name is all the module needs —
+# no plugin change, no estate change, and a real AWS deployment simply leaves the endpoint empty.
+#
+# NO DOCKER SOCKET, deliberately, and the omission is the honest part. The compose service mounts
+# /var/run/docker.sock because floci materialises INSTANCES as sibling containers. The network leg
+# calls CreateVpc/CreateSubnet/CreateRouteTable and nothing that needs a container, so this pod is
+# scoped to what the leg actually exercises rather than handed the host's Docker daemon for
+# capability it does not use. Instance creation from THIS floor would fail, which is correct: HAR-1
+# already records that floci instances are not reachable from kind, and a floor that pretended
+# otherwise would be the fidelity claim ADR-0112 got wrong once already.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: floci
+  namespace: stratt
+  labels: { app: floci }
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: floci }
+  template:
+    metadata:
+      labels: { app: floci }
+    spec:
+      # WITHOUT THIS THE POD CANNOT START, and the reason is a name collision nobody would guess:
+      # Kubernetes injects legacy Docker-link variables for every Service in the namespace, so a
+      # Service named `floci` sets FLOCI_PORT=tcp://10.96.x.x:4566 — which floci's own Quarkus
+      # config reads as the `floci.port` property and rejects with
+      # `Expected an integer value, got "tcp://10.96.230.228:4566"`. The app is fine; the platform
+      # handed it a variable in its own namespace. Service links are a pre-DNS compatibility feature
+      # this floor has no use for.
+      enableServiceLinks: false
+      containers:
+        - name: floci
+          # Pinned to the compose service's version so a VPC built on one dev floor and a VPC built
+          # on the other come from the same API implementation.
+          image: floci/floci:1.5.33
+          ports:
+            - { containerPort: 4566, name: api }
+          readinessProbe:
+            httpGet: { path: /, port: 4566 }
+            periodSeconds: 2
+            failureThreshold: 45
+          resources:
+            requests: { cpu: 50m, memory: 128Mi }
+            limits: { cpu: "2", memory: 2Gi }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: floci
+  namespace: stratt
+spec:
+  selector: { app: floci }
+  ports:
+    - { name: api, port: 4566, targetPort: 4566 }

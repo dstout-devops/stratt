@@ -694,6 +694,18 @@ tasks:
         fi
         STRATT_NETBOX_ADDR=http://127.0.0.1:18083 STRATT_NETBOX_TOKEN="$tok" {{.ROOT_DIR}}/deploy/dev/netbox-bootstrap.sh
 
+  dev:floci:up:
+    # The real-EC2-API backend the network leg builds against, in kind (ADR-0093/0112). The
+    # aws-network module defaults `aws_endpoint` to http://floci:4566, so a Service of that name is
+    # all it needs — no plugin or estate change. Deliberately WITHOUT the host Docker socket the
+    # compose service mounts: the network leg calls CreateVpc/CreateSubnet and nothing that
+    # materialises an instance (HAR-1).
+    desc: "Stand the dev EC2 API (floci) in kind — the network leg's build target"
+    deps: [tools:kubectl]
+    cmds:
+      - "{{.KUBECTL}} --context {{.KIND_CONTEXT}} apply -f {{.ROOT_DIR}}/deploy/dev/floci.yaml"
+      - "{{.KUBECTL}} --context {{.KIND_CONTEXT}} -n stratt rollout status deploy/floci --timeout=180s"
+
   dev:objectstore:up:
     # The IN-KIND S3-compatible store the `statestore` capability needs a real provider for
     # (W5 prerequisite). Same story as dev:openbao:up one leg over: SeaweedFS shipped in compose,

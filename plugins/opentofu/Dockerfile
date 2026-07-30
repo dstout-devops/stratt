@@ -50,6 +50,15 @@ RUN set -eu; \
 
 FROM gcr.io/distroless/static-debian12:nonroot
 COPY --from=build /out/stratt-plugin-opentofu /usr/local/bin/stratt-plugin-opentofu
+# THE MODULES ARE BAKED, and that is the module-delivery answer ADR-0112 flagged as having no story.
+# The plugin resolves `module: aws-network` under STRATT_TOFU_MODULE_ROOT, so without this the pod
+# has a tofu binary, a state backend, an allocated CIDR — and nothing to apply.
+#
+# In the image rather than mounted, for the reason the EE bakes its Ansible content (ADR-0117 D3):
+# the image digest is then the whole truth about what a Run applied. A mounted module could change
+# under a running floor and the digest would not move. The committed .terraform.lock.hcl beside each
+# module is the §7.3 provider pin, so the module tree and its providers are pinned by the same act.
+COPY deploy/tofu-modules/ /modules/
 COPY --from=tofu /out-tofu /usr/local/bin/tofu
 # tofu writes a per-workspace data dir and a shared provider cache under this root. The pod's
 # rootfs is read-only, so it must be a writable mount — the chart's `tmpDir: true` supplies one,
