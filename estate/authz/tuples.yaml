@@ -39,3 +39,6 @@ tuples:
   # …and the View of hosts kubecompute BUILDS into, which apache-configure now inherits rather
   # than naming. runner-on-View is still the gate; it is just the Assignment's View now.
   - { user: principal:dev-runner, relation: runner, object: view:web-servers }
+  # …and the svc tier, where Tomcat runs. Same grant shape; the View is the authz unit whether the
+  # host was declared by hand or built minutes ago.
+  - { user: principal:dev-runner, relation: runner, object: view:svc-servers }

@@ -1,0 +1,26 @@
+# svc-fleet — hosts for the application tier that runs Tomcat.
+#
+# It exists because ADR-0148 D6 is one host, one managed application: the apache Blueprint claims
+# app.config exclusively, so a second app needs a second host rather than a second claim on the
+# same one. Nothing here says Tomcat, and nothing here says Kubernetes — it asks for compute and
+# the binding decides where. That is the point W5 wants proven: the SECOND application changes an
+# Assignment, not the estate around it.
+name: svc-fleet
+kind: Intent/Compute
+spec:
+  count: 1
+  namePrefix: svc
+  projectKind: host
+  labels: { fleet: svc }
+  requires: [provisioning]
+  # NON-EMPTY on purpose, and neither absent nor `{}` will do. The shared compute-build launch
+  # interface DECLARES a `params` input, and the provisioning reconcile only SUPPLIES one for an
+  # Intent whose spec carries non-empty params — so both absent and empty leave a declared input
+  # nothing fills, which is refused at load (ADR-0123 D3) and takes strattd down rather than
+  # degrading. Cost two boots in this arc before it was written down.
+  #
+  # The value is OPAQUE (ADR-0110): typed by whichever provider's Action Contract serves the build,
+  # never here. `tier` is a fact about this fleet rather than about a landscape — kubecompute needs
+  # none of it and REPORTS that it ignored it, which is ADR-0151 D4's honesty rule doing its job.
+  params:
+    tier: svc
