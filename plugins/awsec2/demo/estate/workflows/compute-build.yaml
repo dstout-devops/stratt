@@ -6,7 +6,7 @@
 # floci real-host EC2 backend (ADR-0093) it runs a REAL RunInstances — a genuine SSH-able Linux
 # container, not a mock (fidelity: real). The build projects the instance back BY IDENTITY ONLY with Run
 # provenance (projectKind + labels ride that projection, never a reconcile write, §1.2); the awsec2
-# Syncer's next OBSERVE then picks it up, so it appears in the ec2-instances View — the build→observe
+# Syncer's next OBSERVE then picks it up, so it appears in the provisioned-instances View — the build→observe
 # closure. The aws-dev CredentialRef is gate-only — an Action's use-check is its only authz gate (§2.5);
 # the plugin authenticates to EC2 with its own config. Delivered as CaC through the declarations mount.
 name: compute-build

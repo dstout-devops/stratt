@@ -205,7 +205,13 @@ host, which is the same stance ADR-0148 D6 takes for applications, and an expect
 (`notAfter`) that is a constant. Per-Entity EXPECTATION resolution is the honest name for what the
 keyed form needs, and it is now a follow-up rather than a thing this ADR quietly assumed.
 
-**STILL OWED BEFORE ACCEPTED:** `cert.presented` is a new core-model identifier and a new Facet
+**`vocabulary-linter`: CLEARED** (2026-07-30). `cert.presented` reads as a complement to
+`cert.expiry` rather than a collision — different Entities, different authorities, legal
+multi-source observation under ADR-0060. The `entity` template namespace is a lowercase token
+beside `spec`/`event`/`param` and does not overload the Named Kind `Entity`. `kube.host` and
+`host` are consistent with the frozen kinds.
+
+**PREVIOUSLY OWED, now cleared:** `cert.presented` is a new core-model identifier and a new Facet
 schema, so per CLAUDE.md it requires **`vocabulary-linter`** (charter §2 is frozen). It IS demanded
 by a shipping Contract (§1.1) — the `ansible-certificate` Actuator's `facetNamespaces` and the
 `deliver` Step's `facetWriteScope` — and pinned in `contracts/facets/cert.presented.schema.json`.

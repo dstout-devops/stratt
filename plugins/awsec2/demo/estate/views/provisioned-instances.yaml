@@ -1,0 +1,14 @@
+# provisioned-instances — a View of the instances a build produced, whatever built them.
+#
+# RENAMED from `ec2-instances` (ADR-0151 D1): a View never names where it runs. The selector below
+# was already substrate-neutral — `kinds: [instance]` matches an instance from ANY provider — so the
+# old name was both a coupling and inaccurate. It is the awsec2 Syncer's projection that fills it
+# HERE; the same View in a Kubernetes-substrate demo would fill from that provider instead.
+#
+# A View selecting the Syncer's projected instances (from floci in this demo). floci starts
+# EMPTY, so this View is empty until the build runs — then the freshly-provisioned instance appears here
+# on the Syncer's next OBSERVE (the `instance` kind, keyed on aws.instanceId). That's the read side of the
+# estate model: a live, rebuildable read-model of what's actually running in EC2 (charter §1.2).
+name: provisioned-instances
+selector:
+  kinds: [instance]

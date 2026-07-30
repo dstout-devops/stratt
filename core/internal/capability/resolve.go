@@ -84,6 +84,7 @@ func Resolve(capability, intentKind string, providers []Provider, bindings []typ
 	// SUBSTRATE selection(s) (ADR-0151 D2): an entry with no intentKind covers every kind, and one
 	// naming this kind covers just it.
 	substrates := map[string]bool{}
+	substrateClaims := false
 	for _, b := range bindings {
 		for _, e := range b.Entries {
 			if e.Capability != capability {
@@ -91,32 +92,45 @@ func Resolve(capability, intentKind string, providers []Provider, bindings []typ
 			}
 			switch {
 			case e.Substrate != "" && (e.IntentKind == "" || e.IntentKind == intentKind):
+				// CLAIMED, whether or not any provider of it can build this kind. An entry with no
+				// intentKind claims EVERY kind — so "the substrate cannot serve this kind" is a
+				// refusal to diagnose, never an opening for another substrate's provider to fill.
 				substrates[e.Substrate] = true
+				substrateClaims = true
 			case e.Provider != "" && e.IntentKind == intentKind:
 				selected[e.Provider] = true
 			}
 		}
 	}
 
-	// A PER-KIND PROVIDER ENTRY WINS OVER A SUBSTRATE ENTRY, and this is the one precedence rule in
-	// the resolver — declared, documented, and between two DIFFERENT selector forms rather than
-	// between two values of one field. It is what makes ADR-0151 D2's tie-break work: when a
-	// substrate legitimately offers two builders for a kind, the author names one for that kind and
-	// leaves the substrate default in force for every other. Without it, adding the tie-break would
-	// itself be a second candidate and the estate could never converge.
+	// COMBINING THE TWO SELECTOR FORMS (ADR-0151 D2, as ruled by charter-guardian 2026-07-30).
 	//
-	// It is NOT the implicit precedence §2.4 refuses — nothing is ranked by priority, recency or
-	// declaration order, and two entries of the SAME form still conflict rather than pick a winner.
-	// It is, however, the part of this design most in need of the charter-guardian review ADR-0151
-	// records as owed; if the ruling goes the other way, the fix is to refuse the overlap and make
-	// authors scope the substrate entry by kind.
-	if len(selected) == 0 && len(substrates) > 0 {
+	// The first version of this made a per-kind `provider:` entry WIN over a substrate entry, on the
+	// argument that a specificity rule between two different selector FORMS is not the implicit
+	// precedence §2.4 forbids. That was wrong on three counts and the third is the tell: §2.4 is
+	// named the anti-GPO axiom, and GPO precedence IS a ranking among differently-scoped declaration
+	// forms; ADR-0118 D1 already refused "last explicit layer wins" even with a declared, documented
+	// order, admitting a layer to yield only where it is DEFINITIONALLY UNSET; and this resolver
+	// already refuses substrate-vs-substrate and provider-vs-provider contests rather than ranking
+	// by specificity, so the old rule was the single exception in a design that otherwise agrees
+	// specificity must not decide.
+	//
+	// It was not a theoretical failure. The shipped dev estate — `provisioning-kube` (substrate:
+	// kubernetes, every kind) beside `provisioning-subnet` (provider: opentofu-network, which
+	// declares substrate: aws) — resolved Compute to kubecompute and Subnet to opentofu-network,
+	// BOTH green, with no diagnosis: a silently half-Kubernetes, half-AWS topology in the
+	// environment whose binding says "this environment is Kubernetes". That is verbatim the defect
+	// this ADR was written to eliminate, reproduced by the rule meant to prevent it.
+	//
+	// The rule now: the forms COMBINE only where the substrate entry is UNDERDETERMINED on this
+	// kind, never where they contest it — ADR-0118 D1's shape exactly.
+	if substrateClaims {
 		var wanted []string
 		for sub := range substrates {
 			wanted = append(wanted, sub)
 		}
 		sort.Strings(wanted)
-		if len(substrates) > 1 {
+		if len(wanted) > 1 {
 			return Result{
 				Status: StatusAmbiguous,
 				Reason: fmt.Sprintf("conflicting capability-bindings select %d different substrates (%v) for Intent/%s (%s) — an environment builds on ONE substrate; resolve to one (§2.4, ADR-0151 D2)", len(wanted), wanted, intentKind, capability),
@@ -129,6 +143,50 @@ func Resolve(capability, intentKind string, providers []Provider, bindings []typ
 			}
 		}
 		sort.Strings(matched)
+		inSubstrate := map[string]bool{}
+		for _, m := range matched {
+			inSubstrate[m] = true
+		}
+
+		if len(selected) > 0 {
+			// A provider entry may only COMPLETE an underdetermined substrate — it must name a
+			// provider OF that substrate, and the substrate must have left the choice open.
+			var picked []string
+			for p := range selected {
+				picked = append(picked, p)
+			}
+			sort.Strings(picked)
+			outside := false
+			for _, p := range picked {
+				if !inSubstrate[p] {
+					outside = true
+				}
+			}
+			switch {
+			case outside:
+				return Result{
+					Status: StatusAmbiguous,
+					Reason: fmt.Sprintf("capability-binding selects substrate %q for Intent/%s (%s), and another selects provider(s) %v which are NOT of that substrate (providers of %q that build this kind: %v) — this is how a topology ends up silently half on one substrate and half on another. Declare ONE: change the provider entry, or scope the substrate entry so it does not claim this kind (§2.4, ADR-0151 D2)", wanted[0], intentKind, capability, picked, wanted[0], matched),
+				}
+			case len(matched) == 1:
+				return Result{
+					Status: StatusAmbiguous,
+					Reason: fmt.Sprintf("substrate %q already resolves Intent/%s (%s) to %q, and a provider entry also selects %v — two bindings answering one question is a contest, not a refinement, and ranking them would be the precedence §2.4 refuses. Remove one (ADR-0151 D2)", wanted[0], intentKind, capability, matched[0], picked),
+				}
+			case len(picked) > 1:
+				return Result{
+					Status: StatusAmbiguous,
+					Reason: fmt.Sprintf("provider entries select %v for Intent/%s (%s) — resolve to one (§2.4)", picked, intentKind, capability),
+				}
+			default:
+				// UNDERDETERMINED and COMPLETED: the substrate offers >1 builder for this kind and
+				// the provider entry names one OF that substrate. The forms are not contesting —
+				// the substrate left the choice open and the author closed it (ADR-0118 D1's
+				// "a layer may yield only where it is definitionally unset").
+				return Result{Status: StatusResolved, Provider: picked[0], Workflow: canBuild[picked[0]]}
+			}
+		}
+
 		switch len(matched) {
 		case 1:
 			return Result{Status: StatusResolved, Provider: matched[0], Workflow: canBuild[matched[0]]}
@@ -150,7 +208,7 @@ func Resolve(capability, intentKind string, providers []Provider, bindings []typ
 			sort.Strings(avail)
 			return Result{
 				Status: StatusPending,
-				Reason: fmt.Sprintf("capability-binding selects substrate %q for Intent/%s (%s), but no verified provider of that substrate builds this kind (substrates that do: %v; builders: %v) — declare a provider with substrate: %s, or bind a provider by name for this kind (ADR-0151 D2)", wanted[0], intentKind, capability, avail, builders, wanted[0]),
+				Reason: fmt.Sprintf("capability-binding selects substrate %q for Intent/%s (%s), but no verified provider of that substrate builds this kind (substrates that do: %v; builders: %v) — declare a provider with substrate: %s, or scope the substrate entry so it does not claim this kind (ADR-0151 D2)", wanted[0], intentKind, capability, avail, builders, wanted[0]),
 			}
 		default:
 			return Result{
@@ -160,6 +218,8 @@ func Resolve(capability, intentKind string, providers []Provider, bindings []typ
 		}
 	}
 
+	// No substrate entry claims this kind — the pre-ADR-0151 path, unchanged: an explicit provider
+	// selection binds, and conflicting provider entries are a §2.4 error.
 	switch len(selected) {
 	case 1:
 		var prov string

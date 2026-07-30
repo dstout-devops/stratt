@@ -19,10 +19,12 @@ const (
 	SubstrateAWS        = "aws"
 	SubstrateKubernetes = "kubernetes"
 	SubstrateVSphere    = "vsphere"
-	// SubstrateVM is the generic hypervisor-or-metal landscape for a provider that manages machines
-	// without one of the named clouds beneath it.
-	SubstrateVM = "vm"
 )
+
+// A generic `vm` landscape was in the first draft and is REMOVED (charter-guardian, 2026-07-30):
+// no shipping provider declares it, and admitting it would have broken this file's own rule that
+// the set extends only with its first provider — the §1.1 "a schema exists when a Contract demands
+// it" discipline, applied to a vocabulary. It comes back when something ships that needs it.
 
 // substrates is the closed set. Extending it is a core decision that ships with its first provider
 // — the same rule capabilityClasses follows, and for the same reason: a plugin does not get to mint
@@ -31,7 +33,6 @@ var substrates = map[string]bool{
 	SubstrateAWS:        true,
 	SubstrateKubernetes: true,
 	SubstrateVSphere:    true,
-	SubstrateVM:         true,
 }
 
 // ValidSubstrate reports whether tok is a known substrate.

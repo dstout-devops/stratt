@@ -1663,7 +1663,7 @@ tasks:
 
   demo:ec2-only:stage:
     # Stage the ec2-only demo's SELF-CONTAINED estate (ADR-0116) into the inline-declarations path —
-    # its authz grant + gate-only aws-dev CredentialRef + compute-build Workflow + the ec2-instances
+    # its authz grant + gate-only aws-dev CredentialRef + compute-build Workflow + the provisioned-instances
     # View. The instance SYNCER is boot-wired via the plugin's hostEnv (values-demo-ec2); the Actions
     # are not — ADR-0103 moved them into an Actuator declaration, so the estate carries one. Saying
     # otherwise here is what left this demo dispatching an Action nothing registered. Delivered as CaC.

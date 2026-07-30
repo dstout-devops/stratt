@@ -142,7 +142,37 @@ func substituteString(s string, ns Namespaces, deferred map[string]bool) (any, e
 	if lookErr != nil {
 		return nil, lookErr
 	}
+	// MALFORMED-TOKEN GUARD (charter-guardian, 2026-07-30). Anything still carrying `{{` after both
+	// matchers had their turn is text that LOOKS like a binding and is not one — a filter
+	// expression, a missing brace, a bare `{{.entity}}` with no field. It used to pass through as a
+	// literal string, and ADR-0150 D2 is what made that dangerous: a resolved `commonName` of
+	// "{{.entity.dns.fqdn | lower}}" is a perfectly good string, satisfies the Contract, and gets
+	// ISSUED AS A CERTIFICATE SUBJECT. That is the wrong-subject outcome D2 says no convenience is
+	// worth, reached by a typo instead of by a fallback.
+	//
+	// Deferred tokens are exempt BY CONSTRUCTION — they are removed before the check, because
+	// leaving them intact is the entire point of deferral (ADR-0150 D2's two-stage binding).
+	if residual := stripDeferred(out, deferred); strings.Contains(residual, "{{") {
+		return nil, fmt.Errorf("template %q contains text that looks like a binding but is not a resolvable token — "+
+			"the grammar is a dotted field reference only ({{.ns.a.b}}), with no operators, filters or function calls "+
+			"(ADR-0024 D1). It is refused rather than passed through as a literal, because a literal that looks like a "+
+			"template is indistinguishable from a value someone meant", s)
+	}
 	return out, nil
+}
+
+// stripDeferred removes tokens of deferred namespaces so the malformed-token guard does not fire on
+// a binding that is intentionally waiting for its second stage.
+func stripDeferred(s string, deferred map[string]bool) string {
+	if len(deferred) == 0 {
+		return s
+	}
+	return tokenRe.ReplaceAllStringFunc(s, func(tok string) string {
+		if isDeferred(tokenRe.FindStringSubmatch(tok)[1], deferred) {
+			return ""
+		}
+		return tok
+	})
 }
 
 // isDeferred reports whether a dotted path's NAMESPACE (its first segment) is deferred.

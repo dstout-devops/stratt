@@ -50,25 +50,75 @@ func TestSubstrateMigrationIsOneLine(t *testing.T) {
 	}
 }
 
-// A per-kind provider entry WINS over a substrate entry — the declared specificity rule that makes
-// D2's tie-break usable. Without it, naming a provider to break a tie would add a candidate rather
-// than resolve one.
-func TestProviderEntryOverridesSubstrateForOneKind(t *testing.T) {
-	provs := append(builders(), Provider{
-		Name: "opentofu-network", Substrate: types.SubstrateAWS,
-		Workflows: map[string]string{"Subnet": "opentofu-subnet-build"},
-	})
+// THE RULE CHARTER-GUARDIAN SUBSTITUTED FOR THE ONE I FIRST WROTE (2026-07-30). The two selector
+// forms COMBINE only where the substrate entry is UNDERDETERMINED on a kind — it offers more than
+// one builder and the provider entry names one OF that substrate. They never contest.
+//
+// My original rule made a per-kind provider entry WIN, which is a specificity ranking, which is
+// exactly the anti-GPO precedence §2.4 refuses — and it reproduced the defect ADR-0151 exists to
+// eliminate, in shipped config: dev resolved Compute to a kubernetes provider and Subnet to an aws
+// one, both green, no diagnosis. See TestMixedSubstrateIsRefusedNotRanked below, which is that
+// estate.
+func TestProviderEntryCompletesAnUnderdeterminedSubstrate(t *testing.T) {
+	// TWO kubernetes builders for one kind — the substrate genuinely leaves the choice open.
+	provs := []Provider{
+		{Name: "kubecompute", Substrate: types.SubstrateKubernetes, Workflows: map[string]string{"Compute": "a"}},
+		{Name: "kubeother", Substrate: types.SubstrateKubernetes, Workflows: map[string]string{"Compute": "b"}},
+	}
+	// Substrate alone cannot decide…
+	if got := Resolve("provisioning", "Compute", provs,
+		bind(types.BindingEntry{Capability: "provisioning", Substrate: types.SubstrateKubernetes})); got.Status != StatusAmbiguous {
+		t.Fatalf("an underdetermined substrate must refuse, got %+v", got)
+	}
+	// …and a provider entry naming one OF that substrate closes it. This is the tie-break D2
+	// promises, and it survives the ruling because the forms are not answering the same question:
+	// the substrate said "kubernetes", the provider entry said "which kubernetes one".
+	got := Resolve("provisioning", "Compute", provs, bind(
+		types.BindingEntry{Capability: "provisioning", Substrate: types.SubstrateKubernetes},
+		types.BindingEntry{Capability: "provisioning", Provider: "kubeother", IntentKind: "Compute"},
+	))
+	if got.Status != StatusResolved || got.Provider != "kubeother" {
+		t.Fatalf("a provider entry must COMPLETE an underdetermined substrate, got %+v", got)
+	}
+}
+
+// A provider entry may not override a substrate that has ALREADY decided — two bindings answering
+// one question is a contest, not a refinement.
+func TestProviderEntryCannotOverrideADecidedSubstrate(t *testing.T) {
+	got := Resolve("provisioning", "Compute", builders(), bind(
+		types.BindingEntry{Capability: "provisioning", Substrate: types.SubstrateKubernetes},
+		types.BindingEntry{Capability: "provisioning", Provider: "awsec2", IntentKind: "Compute"},
+	))
+	if got.Status != StatusAmbiguous {
+		t.Fatalf("an override of a decided substrate must be refused, got %+v", got)
+	}
+}
+
+// THE REGRESSION, and it is the shipped dev estate verbatim: a substrate entry claiming every kind
+// beside a provider entry from ANOTHER substrate. Under the rejected rule both resolved green and
+// the topology was silently half-Kubernetes, half-AWS.
+func TestMixedSubstrateIsRefusedNotRanked(t *testing.T) {
+	provs := []Provider{
+		{Name: "kubecompute", Substrate: types.SubstrateKubernetes, Workflows: map[string]string{"Compute": "kubecompute-build"}},
+		{Name: "opentofu-network", Substrate: types.SubstrateAWS, Workflows: map[string]string{"Subnet": "opentofu-subnet-build"}},
+	}
 	bs := bind(
 		types.BindingEntry{Capability: "provisioning", Substrate: types.SubstrateKubernetes},
 		types.BindingEntry{Capability: "provisioning", Provider: "opentofu-network", IntentKind: "Subnet"},
 	)
-	// The override applies to its kind…
-	if got := Resolve("provisioning", "Subnet", provs, bs); got.Status != StatusResolved || got.Provider != "opentofu-network" {
-		t.Fatalf("a per-kind provider entry must win for its kind, got %+v", got)
+	got := Resolve("provisioning", "Subnet", provs, bs)
+	if got.Status != StatusAmbiguous {
+		t.Fatalf("a provider of ANOTHER substrate must be refused, not ranked — got %+v", got)
 	}
-	// …and leaves the substrate default in force for every other.
-	if got := Resolve("provisioning", "Compute", provs, bs); got.Status != StatusResolved || got.Provider != "kubecompute" {
-		t.Fatalf("the substrate default must still hold for other kinds, got %+v", got)
+	for _, want := range []string{"kubernetes", "opentofu-network"} {
+		if !strings.Contains(got.Reason, want) {
+			t.Fatalf("the refusal must name the substrate and the contradicting provider (%q missing): %s", want, got.Reason)
+		}
+	}
+	// A substrate that claims a kind no provider of it can build is still REFUSED, never quietly
+	// filled by another substrate's provider — that is the hole the ruling closed.
+	if got := Resolve("provisioning", "Compute", provs, bs); got.Status != StatusResolved {
+		t.Fatalf("the kind the substrate CAN build must still resolve, got %+v", got)
 	}
 }
 
@@ -92,11 +142,11 @@ func TestTwoSubstratesAreAmbiguous(t *testing.T) {
 // different problems with different fixes, and must not read the same.
 func TestUnservedSubstrateNamesWhatWasAvailable(t *testing.T) {
 	got := Resolve("provisioning", "Compute", builders(),
-		bind(types.BindingEntry{Capability: "provisioning", Substrate: types.SubstrateVM}))
+		bind(types.BindingEntry{Capability: "provisioning", Substrate: "openstack"}))
 	if got.Status != StatusPending {
 		t.Fatalf("an unserved substrate must be PENDING, got %+v", got)
 	}
-	for _, want := range []string{"vm", "aws", "kubernetes", "vsphere"} {
+	for _, want := range []string{"openstack", "aws", "kubernetes", "vsphere"} {
 		if !strings.Contains(got.Reason, want) {
 			t.Fatalf("the diagnosis must name the substrate asked for AND those available (%q missing): %s", want, got.Reason)
 		}

@@ -37,7 +37,7 @@ a guest OS, which is why it is `build-real` rather than `real`.
   decision.
 - **Build → observe closure.** floci starts empty; after the build, the awsec2 Syncer's OBSERVE loop
   picks up the freshly-provisioned instance and it appears in the
-  [ec2-instances](estate/views/ec2-instances.yaml) View — the write reflected in a live read-model
+  [provisioned-instances](estate/views/provisioned-instances.yaml) View — the write reflected in a live read-model
   (charter §1.2 — projections, never a second truth).
 - **The descent (§1.8).** Intent → Workflow → **Run** → task event, inspectable in the UI/CLI/API/MCP —
   and on failure the Run now carries the real cause (`GET /runs/{id}.error`).
@@ -69,7 +69,7 @@ declared **fidelity** up front.
    (or `POST /api/v1/workflows/compute-build/runs`). It parks on the gate.
 3. **Approve the gate** as a `platform-admins` member. The `build` Step runs `awsec2/create-vm` — a real
    `RunInstances` against floci.
-4. **Watch the graph come alive.** Open **Views → ec2-instances**: within a Syncer cycle the new instance
+4. **Watch the graph come alive.** Open **Views → provisioned-instances**: within a Syncer cycle the new instance
    appears (keyed on `aws.instanceId`). Your _write_ is now visible in the _read-model_.
 5. **Watch the descent.** Descend the **Run** in the UI: Workflow → Run → the `awsec2/create-vm` task
    event.

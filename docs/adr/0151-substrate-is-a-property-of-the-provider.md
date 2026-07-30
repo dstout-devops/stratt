@@ -1,11 +1,16 @@
 # ADR 0151 — Substrate is a property of the PROVIDER, selected by composition; no declaration above it ever names one
 
-- **Status:** **Proposed** (2026-07-30, steward) — **design only**. Supersedes the unwritten ADR-0151
-  that `plugins/kubecompute` currently cites: kubecompute is not a special case, it is the first
-  provider to declare `substrate: kubernetes`. **`charter-guardian` is OWED** on D2 before Accepted
-  (a selector that resolves a provider by a declared property sits next to the §2.4 implicit-
-  precedence line, and next to ADR-0118 D1's env-conditional-value refusal). No new Named Kind, no
-  migration; one new field on a provider declaration and one alternative form of a binding entry.
+- **Status:** **Proposed** (2026-07-30, steward) — **D1+D2 implemented and live-verified**
+  (`894b80e`); D3 outstanding. **`vocabulary-linter`: CLEARED** (2026-07-30) — `substrate` is a
+  provider-metadata property rather than a Named Kind, so §2's freeze does not bind it, and no
+  Intent/Blueprint/Assignment/View in the estate names a substrate. On the vendor-naming worry it
+  accepted the landscape-not-product framing (`aws` = the API surface EC2 and floci both speak);
+  that framing was supplied in the question, so treat it as a CONSCIOUS TRADE-OFF recorded rather
+  than an independent acquittal. **`charter-guardian`: D2's original precedence rule REJECTED** (2026-07-30) and REPLACED — see the
+  amendment in D2. D1 accepted with changes (`vm` dropped); D4 accepted with changes. Supersedes the unwritten ADR-0151 that `plugins/kubecompute`
+  cites: kubecompute is not a special case, it is the first provider to declare
+  `substrate: kubernetes`. No new Named Kind, no migration; one new field on a provider declaration
+  and one alternative form of a binding entry.
 - **Date:** 2026-07-30
 - **Deciders:** steward
 - **Charter sections:** §1.5 (sovereign contracts, multiple transports — the class is ours, the
@@ -87,7 +92,7 @@ provisions:
   Compute: kubecompute-build
 ```
 
-`substrate` is a short, closed vocabulary — `aws`, `kubernetes`, `vsphere`, `vm` — and it is a
+`substrate` is a short, closed vocabulary — `aws`, `kubernetes`, `vsphere` — and it is a
 statement about the provider, in the same category as `provides:` and `identitySchemes:`. It is
 descriptive, not a knob: a provider does not get to be configured into a different substrate.
 
@@ -119,9 +124,48 @@ declared `substrate` matches and that advertise a builder for the kind being bui
   (§1.8).
 
 `substrate:` and `provider:` are **mutually exclusive on one entry** — an entry that carried both
-would be answering the same question twice, and the two answers can disagree. The per-kind
-`provider:` form is unchanged and remains correct for a mixed estate that genuinely wants one kind
-served by a specific provider; the substrate form is the whole-topology default.
+would be answering the same question twice, and the two answers can disagree.
+
+**AMENDED (charter-guardian, 2026-07-30) — the original rule here was REJECTED.** It said a per-kind
+`provider:` entry WINS over a substrate entry, arguing that a specificity rule between two different
+selector FORMS is not the precedence §2.4 forbids. That was wrong on every count:
+
+- §2.4 is the **anti-GPO** axiom, and GPO precedence IS a ranking among differently-scoped
+  declaration forms. "Different forms" is the shape the rule was written against, not an exemption.
+- **ADR-0118 D1 had already ruled on it**, refusing `overlay.go`'s "last explicit layer wins" even
+  with a declared, documented order — and setting the test: a layer may yield only where it is
+  *definitionally unset*. A substrate entry with no `intentKind` is not silent about a kind; it
+  explicitly claims every one.
+- This resolver already refuses substrate-vs-substrate and provider-vs-provider contests rather than
+  ranking by specificity. The old rule was the single exception in a design that otherwise agrees
+  specificity must not decide.
+
+And it was not theoretical. The **shipped dev estate** — `provisioning-kube` (substrate: kubernetes,
+every kind) beside `provisioning-subnet` (provider: opentofu-network, which declares
+`substrate: aws`) — resolved Compute to kubecompute and Subnet to opentofu-network, **both green,
+no diagnosis**: a silently half-Kubernetes, half-AWS topology in the environment whose binding says
+"this environment is Kubernetes". Verbatim the defect this ADR was written to eliminate, reproduced
+by the rule meant to prevent it. Verified by running the shipped bindings through `Resolve`.
+
+**The rule now.** Let `S` be the providers of the named substrate that build this kind, and `P` the
+per-kind provider selection. The forms COMBINE only where the substrate is UNDERDETERMINED:
+
+| case | outcome |
+| --- | --- |
+| no substrate entry claims this kind | the pre-ADR-0151 path, unchanged |
+| substrate claims it, `P` empty | resolve from `S` (1 ⇒ resolved; 0 ⇒ pending; ≥2 ⇒ ambiguous) |
+| substrate claims it, `P ⊆ S` and `\|S\| > 1` | **resolve from `P`** — the substrate left the choice open and the author closed it |
+| `P ⊄ S` (including `S` empty) | **REFUSED**, naming the substrate and the contradicting provider — this is the mixed-topology bug |
+| `\|S\| == 1` and `P` non-empty | **REFUSED** — the substrate already decided; a second answer is a contest, not a refinement |
+
+This is ADR-0118 D1's shape exactly, and **D2's tie-break survives intact**: the tie-break case is by
+construction two providers *of the same substrate*, so `P ⊆ S ∧ |S| > 1` holds. A substrate that
+claims a kind no provider of it can build stays REFUSED rather than being quietly filled by another
+substrate's provider — that hole is what the ruling closed.
+
+A genuinely intended mixed topology ("dev is Kubernetes except subnets") must be **declared, not
+inferred** — an omission on the substrate entry (`except: [Subnet]`) so the one-liner survives for
+deliberate cases. NOT IMPLEMENTED; booked as a follow-up, because nothing shipping needs it yet.
 
 **The one-line migration is then literal:** change `substrate: kubernetes` to `substrate: aws` and
 every provisioning Intent in that environment builds on AWS instead — the network, the hosts, and
@@ -190,6 +234,31 @@ carelessly.
 - Whether `substrate` should also select non-provisioning classes (`configmgmt`, `certissuer`).
   Probably yes, and deliberately unaddressed until one is demanded by something shipping (§1.1).
 - Migration of built instances between substrates.
+
+## Amendments after review (2026-07-30)
+
+- **D1: `vm` is dropped.** It had no shipping declarer, and admitting it broke this ADR's own rule
+  that the set extends only with its first provider — the §1.1 "a schema exists when a Contract
+  demands it" discipline applied to a vocabulary. It returns when something ships that needs it.
+- **D1: a token collision to resolve before the vocabulary is fixed.** `substrate:` already exists as
+  a top-level key in the demo manifests (`demos/app-cert/demo.yaml` has `substrate: ssh`,
+  `plugins/awsec2/demo/demo.yaml` has `ec2-floci`, `plugins/helm/demo/demo.yaml` has `kubernetes`) —
+  an OPEN set with different semantics, overlapping the closed set on one value. One token, two
+  vocabularies, is what a frozen-vocabulary rule exists to prevent. NOT YET RESOLVED; one side must
+  be renamed.
+- **D4: the honesty limit must move to the claim site.** "The one-line migration is then literal" in
+  D2, and the same claim in `estate/capability-bindings/provisioning-kube.yaml`, are what a reader
+  acts on; the limit currently sits in Consequences. DONE below in D2's text.
+- **D4: the §1.8 safety net is a per-plugin convention, not a port guarantee.** kubecompute emits
+  "provider params … ignored", which is exactly right — but nothing in the port REQUIRES it, so a
+  provider that silently drops params yields a green build of a wrong-shaped host after a human
+  approved the gate. Since D4's honesty rests entirely on that behaviour, it should become an
+  obligation of the provisioning port. BOOKED, not done.
+- **D3 is still unimplemented**, and the ruling sharpens where it belongs: a mixed-substrate refusal
+  must fire at RESOLUTION, not three hops later at placement identity-scheme comparison. The
+  `P ⊄ S` case above is the first half of that; the cross-KIND case (two kinds of one topology
+  resolving to providers of different substrates) is not detectable in a per-kind resolver and needs
+  its own pass.
 
 ## Follow-ups
 
