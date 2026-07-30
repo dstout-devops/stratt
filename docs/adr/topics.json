@@ -1,8 +1,8 @@
 {
-  "note": "Source of truth for the ADR knowledge graph (ADR-0109). Views are GENERATED into MAP.md by `task adr:index`; `task adr:index:check` fails the build if MAP.md is stale or an ADR is untagged. When you add an ADR, add its number to >=1 subsystem below (coverage is enforced). Edit THIS file, never MAP.md. Multi-membership is expected for cross-cutting ADRs — that adjacency is the whole point (it is how a new design finds prior art it must reconcile with).",
+  "note": "Source of truth for the ADR knowledge graph (ADR-0109). Views are GENERATED into MAP.md by `task adr:index`; `task adr:index:check` fails the build if MAP.md is stale or an ADR is untagged. When you add an ADR, add its number to >=1 subsystem below (coverage is enforced). Edit THIS file, never MAP.md. Multi-membership is expected for cross-cutting ADRs \u2014 that adjacency is the whole point (it is how a new design finds prior art it must reconcile with).",
   "subsystems": {
     "foundation": {
-      "title": "Foundation — charter authority, control plane, language/tooling, monorepo, meta-process",
+      "title": "Foundation \u2014 charter authority, control plane, language/tooling, monorepo, meta-process",
       "adrs": [
         1,
         2,
@@ -20,7 +20,7 @@
       "depends_on": []
     },
     "graph-model": {
-      "title": "Graph model — Entity/Facet/Relation/Contract primitives, projection & liveness",
+      "title": "Graph model \u2014 Entity/Facet/Relation/Contract primitives, projection & liveness",
       "adrs": [
         15,
         17,
@@ -56,7 +56,7 @@
       ]
     },
     "plugin-port": {
-      "title": "Sovereign plugin port — the dark-matter substrate, transports, runtime registry",
+      "title": "Sovereign plugin port \u2014 the dark-matter substrate, transports, runtime registry",
       "adrs": [
         46,
         47,
@@ -84,7 +84,7 @@
       ]
     },
     "connectors": {
-      "title": "Connectors & Syncers — SoR ingest breadth, the Syncer SDK, adopt/AWX-import",
+      "title": "Connectors & Syncers \u2014 SoR ingest breadth, the Syncer SDK, adopt/AWX-import",
       "adrs": [
         7,
         14,
@@ -121,7 +121,7 @@
       ]
     },
     "actuators": {
-      "title": "Actuators — execution engines (opentofu, helm, mcp, cert-issuer reconcile)",
+      "title": "Actuators \u2014 execution engines (opentofu, helm, mcp, cert-issuer reconcile)",
       "adrs": [
         16,
         22,
@@ -142,7 +142,7 @@
       ]
     },
     "orchestration": {
-      "title": "Orchestration — Triggers, Workflows/Gates, Steps, Runs, Actions, notifications",
+      "title": "Orchestration \u2014 Triggers, Workflows/Gates, Steps, Runs, Actions, notifications",
       "adrs": [
         10,
         11,
@@ -163,7 +163,7 @@
       ]
     },
     "estate-as-code": {
-      "title": "Estate-as-Code — CaC declarations, environments, composition, the estate CLI",
+      "title": "Estate-as-Code \u2014 CaC declarations, environments, composition, the estate CLI",
       "adrs": [
         55,
         56,
@@ -193,7 +193,7 @@
       ]
     },
     "intent-compiler": {
-      "title": "Intent compiler — Intent/Assignment/Blueprint/Baseline compile to Runs",
+      "title": "Intent compiler \u2014 Intent/Assignment/Blueprint/Baseline compile to Runs",
       "adrs": [
         23,
         30,
@@ -206,7 +206,8 @@
         118,
         119,
         123,
-        148
+        148,
+        150
       ],
       "depends_on": [
         "graph-model",
@@ -216,7 +217,7 @@
       ]
     },
     "provisioning": {
-      "title": "Provisioning — declare & build infra (Intent -> builder -> machines), provision->configure",
+      "title": "Provisioning \u2014 declare & build infra (Intent -> builder -> machines), provision->configure",
       "adrs": [
         17,
         58,
@@ -245,7 +246,7 @@
       ]
     },
     "capability-framework": {
-      "title": "Capability framework — provides/requires, verification, resolve-inject vs enablement-gate, providers",
+      "title": "Capability framework \u2014 provides/requires, verification, resolve-inject vs enablement-gate, providers",
       "adrs": [
         100,
         104,
@@ -270,7 +271,7 @@
       ]
     },
     "credentials-secrets": {
-      "title": "Credentials & secrets (§2.5) — brokering, the SecretBroker port, KV, KeyCustodian",
+      "title": "Credentials & secrets (\u00a72.5) \u2014 brokering, the SecretBroker port, KV, KeyCustodian",
       "adrs": [
         9,
         29,
@@ -288,13 +289,14 @@
       ]
     },
     "certificates-pki": {
-      "title": "Certificates & PKI — cert lifecycle as a reconcile Actuator, OpenBao PKI",
+      "title": "Certificates & PKI \u2014 cert lifecycle as a reconcile Actuator, OpenBao PKI",
       "adrs": [
         30,
         43,
         50,
         98,
-        106
+        106,
+        150
       ],
       "depends_on": [
         "capability-framework",
@@ -304,7 +306,7 @@
       ]
     },
     "state-artifacts": {
-      "title": "Tool state & artifacts — state backend, evidence store, object storage, statestore/artifactstore",
+      "title": "Tool state & artifacts \u2014 state backend, evidence store, object storage, statestore/artifactstore",
       "adrs": [
         16,
         29,
@@ -321,7 +323,7 @@
       ]
     },
     "authz-identity": {
-      "title": "Authorization & identity — OpenFGA, Principal, SCIM, workload identity",
+      "title": "Authorization & identity \u2014 OpenFGA, Principal, SCIM, workload identity",
       "adrs": [
         9,
         28,
@@ -336,7 +338,7 @@
       ]
     },
     "policy-governance": {
-      "title": "Policy & governance — the PDP port, typed Controls, admission PEPs, obligations",
+      "title": "Policy & governance \u2014 the PDP port, typed Controls, admission PEPs, obligations",
       "adrs": [
         61,
         62,
@@ -363,7 +365,7 @@
       ]
     },
     "findings-drift": {
-      "title": "Findings & drift — Baselines, Findings, compliance packs, drift/GC",
+      "title": "Findings & drift \u2014 Baselines, Findings, compliance packs, drift/GC",
       "adrs": [
         19,
         20,
@@ -375,7 +377,8 @@
         129,
         130,
         133,
-        148
+        148,
+        150
       ],
       "depends_on": [
         "graph-model",
@@ -383,7 +386,7 @@
       ]
     },
     "ui": {
-      "title": "UI — React shell, schema-driven rendering, Views, descent, the first-party client",
+      "title": "UI \u2014 React shell, schema-driven rendering, Views, descent, the first-party client",
       "adrs": [
         3,
         12,
@@ -399,7 +402,7 @@
       ]
     },
     "api-surface": {
-      "title": "API surface — OpenAPI /api/v1, the AWX /api/v2 façade, the platform MCP server",
+      "title": "API surface \u2014 OpenAPI /api/v1, the AWX /api/v2 fa\u00e7ade, the platform MCP server",
       "adrs": [
         6,
         21,
@@ -415,7 +418,7 @@
       ]
     },
     "substrate-ops": {
-      "title": "Substrate & ops — HA/DR, Cells/multi-region, Sites, deploy, bootstrap, upgrade, observability, dev backends",
+      "title": "Substrate & ops \u2014 HA/DR, Cells/multi-region, Sites, deploy, bootstrap, upgrade, observability, dev backends",
       "adrs": [
         13,
         32,
@@ -439,7 +442,7 @@
       ]
     },
     "audit-telemetry": {
-      "title": "Audit & telemetry — the one audit stream, SIEM forwarder, decision recording, OpenTelemetry",
+      "title": "Audit & telemetry \u2014 the one audit stream, SIEM forwarder, decision recording, OpenTelemetry",
       "adrs": [
         34,
         65,
