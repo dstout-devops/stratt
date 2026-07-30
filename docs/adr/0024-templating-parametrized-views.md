@@ -1,6 +1,9 @@
 # ADR 0024 — Payload templating + parametrized Views
 
-- **Status:** Accepted
+- **Status:** Accepted — **D1 AMENDED 2026-07-30** (see the amendment note under D1): an
+  expression-like or malformed token is now REFUSED rather than passed through as literal text.
+  The no-new-config-language non-goal is unchanged and is now held by the grammar rather than by
+  convention.
 - **Date:** 2026-07-12
 - **Deciders:** Project steward (dstout)
 - **Charter sections:** §1 (no-new-config-language non-goal), §1.5/§1.8, §2.1
@@ -24,14 +27,35 @@ single explicit field reference) plus structured `outputs.instances[*]` →
    `{{.ns.a.b.c}}` token is a dotted-path lookup into a named namespace map
    (`spec`, `event`, `param`). There are **no operators, conditionals, loops,
    function calls, or evaluation** — a token like `{{.a + .b}}` or
-   `{{len(.x)}}` does not match the token grammar and passes through as
-   literal text, never evaluated (unit-tested). This is field reference, not
-   a language. **Type-preserving:** a string that is *exactly* one token
+   `{{len(.x)}}` does not match the token grammar and is **REFUSED** (see the
+   amendment below; this originally said "passes through as literal text").
+   This is field reference, not a language. **Type-preserving:** a string that is *exactly* one token
    takes the resolved value's native JSON type (the structured binding §2.3
    implies); an embedded token renders with `fmt.Sprint`. Unknown
    namespace/field is an error (fail-closed). The Intent compiler's private
    `{{.spec.X}}` substituter is deleted and migrated onto this — one
    implementation, one review surface.
+**AMENDMENT (2026-07-30) — pass-through becomes refusal.** D1 originally decided that a token the
+grammar does not match "passes through as literal text, never evaluated", and unit-tested the
+pass-through. The intent was to prove that nothing is ever evaluated, and that part stands. But NOT
+EVALUATING a thing and SILENTLY ACCEPTING IT AS A VALUE are different, and ADR-0150 D2 turned the
+difference into a correctness hazard rather than an aesthetic one.
+
+ADR-0150 derives a certificate's subject from a template. A `commonName` that resolves to the
+literal string `{{.entity.dns.fqdn | lower}}` is a perfectly good string: it satisfies its Contract,
+passes every check, and is **issued as a certificate subject**. That is the wrong-subject outcome
+ADR-0150 D2 says no convenience is worth — reached not by a fallback, which that ADR guards
+against, but by a typo, which it did not.
+
+So a string still containing `{{` after both matchers have run is now an error, naming the token and
+the grammar. Deferred namespaces (ADR-0150 D2's two-stage binding) are exempt by construction —
+leaving their tokens intact is the entire point of deferral.
+
+The non-goal is unchanged and is better served: nothing is evaluated, ever, and that is now enforced
+by the grammar instead of resting on nobody writing an expression. Ruled by `charter-guardian`
+(2026-07-30), which flagged the pass-through as the one place ADR-0150's fail-closed claim leaked.
+Confirmed by the steward.
+
 2. **Event → params, both Trigger launch paths.** Run-target: the engine
    resolves `t.Params`/`t.ViewParams` against `{event: payload}` at launch.
    Workflow-target: the payload rides in `DAGInput.Event`; each Step resolves
