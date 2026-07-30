@@ -25,6 +25,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/client-go/kubernetes"
 
 	pluginv1 "github.com/dstout-devops/stratt/sdk/stratt/plugin/v1"
@@ -45,6 +46,8 @@ const (
 	// kindLabel records the Entity kind the build was asked to project, so Observe and the build
 	// cannot disagree about it.
 	kindLabel = "stratt.io/project-kind"
+	// hostLabel is the per-host selector the built Service targets.
+	hostLabel = "stratt.io/host"
 )
 
 // Config locates the build scope and the host image.
@@ -163,8 +166,20 @@ func (s *Server) project(pod *corev1.Pod) *pluginv1.ObservedEntity {
 		}
 		e.Labels[k] = v
 	}
-	if ip := pod.Status.PodIP; ip != "" && pod.Status.Phase == corev1.PodRunning {
-		raw, err := json.Marshal(map[string]string{"address": ip})
+	// THE NAME THIS PROVIDER CAUSED, not the pod's IP (ADR-0142 D4). That ADR works the Kubernetes
+	// case explicitly: service DNS is deterministic, but "that determinism is the PROVIDER'S
+	// knowledge, not the estate's — a K8s Compute provider projects the name it CAUSED, which is
+	// the observed producer again". Caused, because the build creates the Service that makes the
+	// name resolve; nothing here is derived from a zone the estate guessed at.
+	//
+	// The pod IP was the first version and is worse in two ways that both bite: it changes on every
+	// restart, so a stable Entity acquires an unstable coordinate; and it cannot be a certificate
+	// subject — a CA role scoped to a domain refuses an IP, and an IP-CN certificate is wrong even
+	// where one would issue it.
+	if pod.Status.Phase == corev1.PodRunning {
+		raw, err := json.Marshal(map[string]string{
+			"address": pod.Name + "." + pod.Namespace + ".svc.cluster.local",
+		})
 		if err != nil {
 			return e
 		}
@@ -271,6 +286,28 @@ func (s *Server) createHost(stream grpc.ServerStreamingServer[pluginv1.InvokeRes
 		return status.Errorf(codes.Internal, "kubecompute: create host %s: %v", in.Name, err)
 	}
 
+	// The Service is what CAUSES the DNS name the Syncer projects. Created after the pod and
+	// adopted if present, for the same idempotence reason: a re-run of a built host converges on
+	// the same answer rather than erroring at a Gate an operator already approved.
+	svc := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      in.Name,
+			Namespace: s.cfg.Namespace,
+			Labels:    map[string]string{managedLabel: "true", hostLabel: in.Name},
+		},
+		Spec: corev1.ServiceSpec{
+			Selector: map[string]string{hostLabel: in.Name},
+			Ports:    []corev1.ServicePort{{Name: "ssh", Port: 22, TargetPort: intstr.FromInt32(22)}},
+		},
+	}
+	if _, serr := s.client.CoreV1().Services(s.cfg.Namespace).Create(ctx, svc, metav1.CreateOptions{}); serr != nil && !apierrors.IsAlreadyExists(serr) {
+		// FAIL, rather than leave a host with no resolvable name. A pod without its Service is
+		// running and unaddressable — the same shape as a host with no authorized key, and the
+		// build must not report success for it (§1.8).
+		return status.Errorf(codes.Internal, "kubecompute: create service for host %s: %v", in.Name, serr)
+	}
+	emit(fmt.Sprintf("host %s reachable at %s.%s.svc.cluster.local", in.Name, in.Name, s.cfg.Namespace))
+
 	outputs, err := json.Marshal(map[string]string{
 		"name":     created.Name,
 		"identity": created.Namespace + "/" + created.Name,
@@ -303,7 +340,7 @@ func (s *Server) hostPod(in createHostInput) *corev1.Pod {
 	if kind == "" {
 		kind = "host"
 	}
-	labels := map[string]string{managedLabel: "true", kindLabel: kind}
+	labels := map[string]string{managedLabel: "true", kindLabel: kind, hostLabel: in.Name}
 	// The estate's keys VERBATIM. An earlier revision rewrote `stratt.intent/instance` to a
 	// domain-prefixed form on the theory that Kubernetes would reject it — it does not:
 	// `stratt.intent` is a valid DNS-subdomain label prefix. The rewrite solved nothing and broke

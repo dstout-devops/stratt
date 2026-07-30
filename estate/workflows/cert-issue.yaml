@@ -71,7 +71,10 @@ steps:
     # binding was static where it should have been derived (CERT-3). The answer turned out not to be
     # a cert→host link. A certificate is a PROPERTY OF A HOST, so the Assignment binds a View of
     # hosts and each member's certificate is named from itself.
-    viewName: managed-web
+    # NO viewName — INHERITED from the Baseline that raised the Finding, exactly as the app
+    # converge Workflows now do. The Assignment says WHERE; this recipe says WHAT. It is what lets
+    # the SAME issuance flow serve a host that was declared by hand and one Stratt built minutes
+    # ago, with no edit here.
     actuator: ansible-certificate
     credentialRefs: [web-machine]
     # It writes NO facets: a CSR is not a fact about the host, it is a request for the next Step.
@@ -110,7 +113,10 @@ steps:
     # The same static host View as `gather`, and it must be: the key was generated there and has
     # not moved. Delivering to a different host than the one that made the key would produce a
     # certificate whose private half is somewhere else.
-    viewName: managed-web
+    # NO viewName — INHERITED from the Baseline that raised the Finding, exactly as the app
+    # converge Workflows now do. The Assignment says WHERE; this recipe says WHAT. It is what lets
+    # the SAME issuance flow serve a host that was declared by hand and one Stratt built minutes
+    # ago, with no edit here.
     actuator: ansible-certificate
     credentialRefs: [web-machine]
     # Delivery reports the FILE that landed and WHAT THE CERTIFICATE SAYS, read back from the host

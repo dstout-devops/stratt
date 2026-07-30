@@ -1,0 +1,15 @@
+# A certificate for every host Stratt BUILDS — the last leg, and it is four lines because the
+# issuance flow stopped naming a target.
+#
+# cert-issue inherits this Assignment's View, so the SAME born-on-target flow that serves the
+# hand-declared managed-web host serves a host built minutes ago. The subject is derived per host
+# from its own mgmt.address Facet (ADR-0150 D1), which kubecompute projects as the DNS name it
+# CAUSED — so nothing here, and nothing in the Intent, names a host or a substrate.
+name: web-servers-cert
+intent: web-cert@2
+view: web-servers
+blueprint: certificate@2
+environments: [dev]
+# The population moves from one host to another as the fleet builds out; acknowledge the delta the
+# §4.3 gate will see rather than making an operator chase it.
+ackDelta: 1
