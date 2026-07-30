@@ -37,7 +37,13 @@ routes:
     # certificate it is worse than for a config value, because two issuers racing one subject
     # produce two valid certs and no way to say which the target should present.
     claim: exclusive
-    remediationCapability: certissuer
+    # The COMPOSED Workflow, not the `certissuer` class — because converging a certificate now
+    # spans two plugins (ansible for the target-side key/CSR and delivery, the CLM for the
+    # signature) and no single provider can claim to remediate the kind. ADR-0106 D1's rule reads:
+    # name the capability when more than one provider could legitimately serve, name the Workflow
+    # when the estate has decided. Here the estate has COMPOSED, which is a stronger form of
+    # deciding. This Blueprint still names no CLM; estate/workflows/cert-issue.yaml does.
+    remediationWorkflow: cert-issue
     remediationParams:
       commonName: "{{.spec.commonName}}"
       role: "{{.spec.issuer}}"

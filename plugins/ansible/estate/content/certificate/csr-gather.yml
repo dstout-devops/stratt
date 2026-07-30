@@ -1,0 +1,61 @@
+---
+# Generate the target's key + CSR and publish ONLY the CSR (CERT-2, ADR-0050).
+#
+# THE PRIVATE KEY IS BORN HERE AND NEVER LEAVES. That is not a nicety — it is the property
+# contracts/actuators/cert-issuer.input has documented all along ("the private key is born on the
+# target and never crosses the wire, §2.5"), and it was unexpressible until an Actuator Step could
+# publish a typed output: the key is generated on the host, the CSR (public) goes to the CLM, and
+# the signature comes back. Nothing on this path can carry the key even by accident, because the
+# only thing published is `stratt_outputs.csr`.
+#
+# `stratt_outputs` and NOT `stratt_facets`, deliberately. A CSR is not a fact about the host worth
+# keeping in the graph; it is a request the next Step must sign. A facet would outlive the artifact
+# and still be sitting there after the certificate is reissued.
+- name: Generate a key and CSR on the target
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Ensure the key directory exists
+      ansible.builtin.file:
+        path: "{{ cert_dir }}"
+        state: directory
+        # 0700: the private key lives here and nothing else needs to read it.
+        mode: "0700"
+        owner: root
+        group: root
+
+    # community.crypto, which is why this content runs in the ansible-crypto EE variant
+    # (ADR-0117 D3a): the image is the content boundary, and a Step selects it by selecting the
+    # Actuator that declares that image — never by a run-time parameter.
+    - name: Generate the private key (idempotent — kept across renewals)
+      community.crypto.openssl_privatekey:
+        path: "{{ cert_dir }}/{{ cert_common_name }}.key"
+        size: 3072
+        mode: "0600"
+        owner: root
+        group: root
+
+    # The key is NOT regenerated on renewal: a renewal replaces the certificate, not the identity.
+    # Regenerating would invalidate anything pinned to the public key and force every peer to
+    # re-trust a host that has not actually changed.
+    - name: Generate the certificate-signing request
+      community.crypto.openssl_csr:
+        path: "{{ cert_dir }}/{{ cert_common_name }}.csr"
+        privatekey_path: "{{ cert_dir }}/{{ cert_common_name }}.key"
+        common_name: "{{ cert_common_name }}"
+        subject_alt_name: "DNS:{{ cert_common_name }}"
+        mode: "0644"
+      register: csr
+
+    - name: Read the CSR back
+      ansible.builtin.slurp:
+        src: "{{ cert_dir }}/{{ cert_common_name }}.csr"
+      register: csr_pem
+
+    # PUBLISH THE CSR AND NOTHING ELSE. The next Step binds this as
+    # {{.steps.<name>.outputs.csr}}; the hub validates it against the Actuator's pinned
+    # outputContract before any consumer can bind it.
+    - name: Publish the CSR for the signing Step
+      ansible.builtin.set_fact:
+        stratt_outputs:
+          csr: "{{ csr_pem.content | b64decode }}"

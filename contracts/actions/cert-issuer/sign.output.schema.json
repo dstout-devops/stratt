@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "stratt:contract:actions/cert-issuer/sign.output:v1",
+  "title": "cert-issuer/sign output",
+  "description": "Output Contract for cert-issuer/sign (CERT-2): the signed certificate, bound by the DELIVERY Step as {{.steps.<name>.outputs.certificate}}. Carries only PUBLIC material — the certificate and its serial. No private key appears here or anywhere on this path, because none was ever generated CLM-side (§2.5, ADR-0050): the target made the key, sent a CSR, and receives back the signature over it. `expiration` is informational for the Run's own log; the AUTHORITATIVE expiry the renewal Baseline reads is cert.expiry, projected by the CLM Syncer — one fact, one owner (§2.1).",
+  "type": "object",
+  "required": ["certificate", "serial"],
+  "properties": {
+    "certificate": { "type": "string", "description": "The signed certificate, PEM." },
+    "serial": { "type": "string", "description": "The issued certificate's serial — the cert.serial identity the CLM Syncer correlates on." },
+    "expiration": { "type": "integer", "description": "Unix expiry, informational. cert.expiry is the authoritative projection." }
+  },
+  "additionalProperties": false
+}

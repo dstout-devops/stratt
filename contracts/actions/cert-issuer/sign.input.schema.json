@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "stratt:contract:actions/cert-issuer/sign.input:v1",
+  "title": "cert-issuer/sign input",
+  "description": "Input Contract for the cert-issuer/sign Action (ADR-0050, CERT-2): submit a TARGET-GENERATED CSR to the CLM and return the signed certificate. This is the born-on-target half of certificate delivery — the private key is generated on the host, never leaves it, and only the CSR (public) crosses the wire (§2.5). `csr` is bound from the gather Step's typed output ({{.steps.<name>.outputs.csr}}), which is why this is an ACTION rather than an Actuator verb: an Action's result binds into a later Step, and the delivery Step needs the signed certificate. Neutrally named — a step-ca implementation of the certissuer capability satisfies this same document (§1.5).",
+  "type": "object",
+  "required": ["csr", "role"],
+  "properties": {
+    "csr": {
+      "type": "string",
+      "minLength": 1,
+      "description": "The target's PEM certificate-signing request. Public material by construction; the key that produced it stays on the host."
+    },
+    "role": {
+      "type": "string",
+      "minLength": 1,
+      "description": "The CLM role to sign under, from Intent/Certificate's `issuer`. A role name and never a provider path, so the same Intent survives a CLM swap."
+    },
+    "ttl": {
+      "type": "string",
+      "description": "Requested validity, from the Intent's `validity`. The CLM's role policy is the ceiling — a request above it is the CLM's to refuse, not ours to pre-check."
+    }
+  },
+  "additionalProperties": false
+}

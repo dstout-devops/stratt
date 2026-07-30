@@ -40,12 +40,25 @@ dryRunnable: true
 # by DISPATCHING this Actuator, not by invoking a resolve Action (ADR-0140 D3 row 3). The Manifest
 # advertises `certissuer` only where a PKI mount is configured, so verification stays honest.
 provides: [certissuer]
-# THE HALF THAT WAS MISSING (W4). `provides` advertises the CLASS; `remediates` is what a
-# capability-routed Blueprint resolves through — without it the class had a provider that could
-# serve no Intent kind, which is an assertion with nothing under it (the same defect ADR-0145 found
-# where opentofu-network advertised `provisioning` and could not build a Subnet).
-remediates:
-  Certificate: cert-issue
+# NO `remediates:` — and this is a correction, not an omission. It briefly pointed at `cert-issue`,
+# which was right while that Workflow was a single-plugin reconcile and wrong the moment delivery
+# landed (CERT-2): converging an Intent/Certificate now takes THREE Steps across TWO plugins —
+# ansible generates the CSR on the target and delivers the signed certificate, this provider signs
+# it. `remediates` says "this PROVIDER can converge that kind", and that is no longer true of any
+# single provider. The ESTATE composes it (estate/workflows/cert-issue.yaml) and the Blueprint names
+# the composed Workflow.
+#
+# `task plugins:boundary` is what said so, twice: first that this plugin's Workflow named another
+# plugin's Actuator, then that this Actuator advertised a Workflow it does not declare. Both are
+# ADR-0104 D1's rule — depend on a capability CLASS, never on who fulfils it — and both were telling
+# me the composition had outgrown the provider.
+#
+# WHAT IT COSTS, stated rather than absorbed: the certificate Blueprint now names a Workflow instead
+# of the `certissuer` CLASS, so the CLM-agnostic claim moves down a level — the Blueprint still says
+# nothing about OpenBao, but the composed Workflow names `cert-issuer/sign`. Restoring the class
+# indirection means `actionCapability: certissuer` on the signing Step plus a `capabilities/
+# certissuer.{input,output}` contract, which is a real piece of work and is booked rather than
+# faked.
 # The MF3 write ceiling (ADR-0054): the effective write-back is this grant ∩ the Step/Trigger's
 # facetWriteScope. Deliberately NARROWER than the boot grant it replaces, which carried the cert
 # SYNCER's five namespaces because one Go grant served both roles. The Actuator's Apply projects the
@@ -55,4 +68,8 @@ facetNamespaces: [cert.identity, cert.expiry]
 identitySchemes: [cert.serial]
 # Administrative PKI Actions (ADR-0098 E2) — CA admin, NOT the per-cert lifecycle, which is the
 # reconcile Actuator above. Verified against the plugin's own Manifest at enable.
-actionNames: [cert-issuer/create-intermediate, cert-issuer/rotate-crl]
+# cert-issuer/sign is the born-on-target half of delivery (CERT-2): it takes a CSR the TARGET
+# generated and returns the signed certificate, which the delivery Step binds as
+# {{.steps.sign.outputs.certificate}}. An ACTION rather than an Actuator verb precisely because an
+# Action result binds downstream and an Apply had nowhere to put one until ApplyResponse.outputs.
+actionNames: [cert-issuer/create-intermediate, cert-issuer/rotate-crl, cert-issuer/sign]

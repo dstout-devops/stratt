@@ -280,8 +280,17 @@ func TestPinsAreStable(t *testing.T) {
 	// intents/application v2 is pinned to 02c02872… but the shipped document hashes to d342b698…`.
 	// The pin is over the DOCUMENT, not over anyone's judgement about whether the change was
 	// compatible — which is precisely what a hash exists to stop being load-bearing (§1.5).
-	if len(all) != 72 {
-		t.Fatalf("expected 72 embedded documents, got %d — the shipped set is the SEAM set now "+
+	// 72 → 75: +actions/cert-issuer/sign.{input,output} and +outputs/csr (CERT-2). All three are
+	// SEAMS by ADR-0138 D3's definition rather than plugin-owned documents. `cert-issuer` is a
+	// NEUTRALLY-NAMED surface — §1.5 says explicitly that a step-ca plugin could implement it — so
+	// its Action contracts stay embedded, and `outputs/csr` is the shape an Actuator pins to hand a
+	// value to a later Step, which makes it a promise to Step AUTHORS rather than to one plugin.
+	//
+	// outputs/csr carries exactly one field, closed, and that is the design rather than economy:
+	// the private key is born on the target and never crosses the wire (§2.5, ADR-0050), so a
+	// schema admitting anything beside the CSR would be an invitation to send more.
+	if len(all) != 75 {
+		t.Fatalf("expected 75 embedded documents, got %d — the shipped set is the SEAM set now "+
 			"(ADR-0138 D3/D4); a plugin's own contracts live in plugins/<n>/contracts/", len(all))
 	}
 	versions := map[string]int{}

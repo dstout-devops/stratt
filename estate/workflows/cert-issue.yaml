@@ -1,5 +1,12 @@
 # cert-issue — the remediation the `certissuer` capability resolves to (W4, ADR-0030/0050/0106).
 #
+# IT LIVES IN THE ESTATE, not in the openbao plugin's tree, and that is ADR-0104 D1 enforced rather
+# than preference: this Workflow composes TWO plugins — ansible generates the CSR and delivers the
+# certificate, openbao signs it — and a plugin's own estate may not name another plugin's provider.
+# `task plugins:boundary` caught the first draft doing exactly that. The rule is the same one that
+# keeps cross-plugin DEMOS in demos/ rather than beside one of their plugins: whoever spans the
+# boundary owns the composition.
+#
 # WHY THIS FILE DID NOT EXIST. `cert-issuer` has advertised `provides: [certissuer]` since ADR-0106
 # with NO `remediates:` entry, because the Workflow it would name was never written — the exact
 # shape ADR-0145 found on the network leg, where `opentofu-network` advertised
@@ -44,7 +51,64 @@ inputs:
         loop rather than a schedule: the Baseline opens a Finding once `cert.expiry.notAfter` is
         closer than this, and this Run is what closes it.
 steps:
+  # ── THE BORN-ON-TARGET FLOW (CERT-2) ────────────────────────────────────────────────────────
+  # Three Steps because the property §2.5 demands needs three: the KEY is made where it will be
+  # used, only the CSR travels, and the signature comes back. It was unexpressible until an
+  # Actuator Step could hand a typed value downstream — an ansible Step had nowhere to put the CSR
+  # it had just generated, so the only shapes available were a CLM-generated key (discarding the
+  # born-on-target property this Actuator's own input Contract states in writing) or a fake.
+  - name: gather
+    viewName: managed-certs
+    actuator: ansible-certificate
+    credentialRefs: [web-machine]
+    # It writes NO facets: a CSR is not a fact about the host, it is a request for the next Step.
+    # The value leaves through the Actuator's pinned outputContract instead (outputs/csr).
+    params:
+      connection:
+        user: root
+        credentialRef: web-machine
+        hostKeyChecking: accept-new
+      extraVars:
+        cert_common_name: "{{.launch.commonName}}"
+        cert_dir: /etc/stratt/pki
+      playbook: csr-gather.yml
+
+  - name: sign
+    needs: [gather]
+    # An ACTION, not the cert-issuer Actuator's Apply — because an Action's result binds into a
+    # later Step and the delivery Step needs the certificate. The Actuator verb converges a View of
+    # certificates and writes cert.identity/cert.expiry; this signs exactly one.
+    action: cert-issuer/sign
+    credentialRefs: [cert-issuer]
+    params:
+      # The output of the Step above, validated against outputs/csr before anything could bind it.
+      csr: "{{.steps.gather.outputs.csr}}"
+      role: "{{.launch.role}}"
+      ttl: "{{.launch.ttl}}"
+
+  - name: deliver
+    needs: [sign]
+    viewName: managed-certs
+    actuator: ansible-certificate
+    credentialRefs: [web-machine]
+    # Delivery reports the FILE that landed — the one namespace this Actuator may write.
+    facetWriteScope: [fileset.content]
+    params:
+      connection:
+        user: root
+        credentialRef: web-machine
+        hostKeyChecking: accept-new
+      extraVars:
+        cert_common_name: "{{.launch.commonName}}"
+        cert_dir: /etc/stratt/pki
+        cert_pem: "{{.steps.sign.outputs.certificate}}"
+      playbook: cert-deliver.yml
+
+  # The reconcile that projects cert.identity / cert.expiry — the facts the renewal Baseline reads.
+  # It runs AFTER delivery so a Finding closes on a certificate that is actually on the host, not on
+  # one that merely exists in the CLM.
   - name: issue
+    needs: [deliver]
     viewName: managed-certs
     # The CAPABILITY's provider, not a provider name. cert-issuer is what serves `certissuer` in
     # this estate; the Blueprint above names only the class (ADR-0106 D1).
