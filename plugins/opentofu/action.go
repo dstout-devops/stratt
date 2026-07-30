@@ -95,9 +95,10 @@ func (s *Server) Invoke(req *pluginv1.InvokeRequest, stream grpc.ServerStreaming
 		_ = stream.Send(&pluginv1.InvokeResponse{Event: lineToWire(next(), timestamppb.Now(), line).event})
 	}
 
-	if _, rc, ierr := s.run.run(ctx, dir, env, s.initArgs(p.Workspace, stateBackend), onLine); ierr != nil {
+	if out, rc, ierr := s.run.run(ctx, dir, env, s.initArgs(p.Workspace, stateBackend), onLine); ierr != nil {
 		return s.invokeFailed(stream, cid, fmt.Errorf("opentofu/apply: init: %w", ierr))
 	} else if rc != 0 {
+		emitTail(stream, cid, out)
 		return s.invokeFailed(stream, cid, fmt.Errorf("opentofu/apply: tofu init failed (rc=%d)", rc))
 	}
 
@@ -121,9 +122,16 @@ func (s *Server) Invoke(req *pluginv1.InvokeRequest, stream grpc.ServerStreaming
 	}
 
 	applyArgv := append([]string{"apply", "-input=false", "-auto-approve", "-no-color", "-json"}, varFileArg(varFile)...)
-	if _, rc, aerr := s.run.run(ctx, dir, env, applyArgv, onLine); aerr != nil {
+	if out, rc, aerr := s.run.run(ctx, dir, env, applyArgv, onLine); aerr != nil {
 		return s.invokeFailed(stream, cid, fmt.Errorf("opentofu/apply: %w", aerr))
 	} else if rc != 0 {
+		// THE CAPTURED OUTPUT IS SURFACED, not discarded. `run` returns everything tofu wrote and
+		// this branch used to drop it on the floor, so a failing apply reached the operator as
+		// `tofu apply failed (rc=1)` and nothing else — a verdict with no evidence, which is the
+		// §1.8 failure DESC-5 had just been fixed for on the Action transport. The per-line stream
+		// covers a tofu that TALKS; this covers one that dies having said little, which is exactly
+		// the case an operator cannot reconstruct.
+		emitTail(stream, cid, out)
 		return s.invokeFailed(stream, cid, fmt.Errorf("opentofu/apply: tofu apply failed (rc=%d)", rc))
 	}
 
@@ -246,4 +254,32 @@ func (s *Server) invokeFailed(stream grpc.ServerStreamingServer[pluginv1.InvokeR
 		Level: pluginv1.TaskEvent_LEVEL_ERROR, At: timestamppb.Now(), CorrelationId: cid,
 		Terminal: true, Ok: false, Message: cause.Error(),
 	}})
+}
+
+// emitTail puts the tail of a failed tofu invocation's captured output onto the Run's event stream.
+//
+// `run` returns everything the tool wrote and the failure branches used to discard it, so a build
+// that died reached the operator as `tofu apply failed (rc=1)` and nothing else. The per-line
+// stream already covers a tofu that talks; this covers one that dies having said little — a
+// provider that refuses at startup, a backend that rejects a lock, an apply that exits before it
+// emits a diagnostic. Those are precisely the failures an operator cannot reconstruct, and
+// precisely the ones a rc= verdict describes worst.
+//
+// Bounded rather than unbounded: the stream is not a log sink (§3 — logs go to Loki), and the last
+// lines are where a fatal diagnostic lands. A larger tail would bury the cause it exists to show.
+func emitTail(stream grpc.ServerStreamingServer[pluginv1.InvokeResponse], cid string, out []byte) {
+	const keep = 25
+	lines := strings.Split(strings.TrimRight(string(out), "\n"), "\n")
+	if len(lines) > keep {
+		lines = lines[len(lines)-keep:]
+	}
+	for _, l := range lines {
+		if strings.TrimSpace(l) == "" {
+			continue
+		}
+		_ = stream.Send(&pluginv1.InvokeResponse{Event: &pluginv1.TaskEvent{
+			Level: pluginv1.TaskEvent_LEVEL_ERROR, At: timestamppb.Now(), CorrelationId: cid,
+			Message: strings.TrimSpace(l), Fields: map[string]string{"kind": "tofu-tail"},
+		}})
+	}
 }

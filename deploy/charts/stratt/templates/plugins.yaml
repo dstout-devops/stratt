@@ -77,7 +77,14 @@ spec:
               value: {{ $v | quote }}
               {{- end }}
             {{- end }}
-          resources: {{- toYaml ($.Values.pluginResources | default $.Values.resources) | nindent 12 }}
+          {{/* PER-PLUGIN resources, falling back to the shared default. Most plugins are thin API
+                 clients and the shared 256Mi fits them; a plugin that FORKS A TOOL is a different
+                 animal — `tofu apply` loads a provider binary and was OOMKilled (exit 137) at that
+                 limit, mid-apply, leaving an acquired state lock behind and failing every retry
+                 with `connection refused`. The verdict an operator saw was a stale lock; the cause
+                 was a memory limit. Raising the shared default for everyone would waste it on the
+                 thin ones, so the outlier declares its own. */}}
+          resources: {{- toYaml (.resources | default $.Values.pluginResources | default $.Values.resources) | nindent 12 }}
           {{- /* estateHosts: a file-backed Syncer (declared-estate, ADR-0056 §5)
                  needs the estate's hosts/ files. Mount ONLY those keys from the
                  inline declarations ConfigMap (least privilege — not the whole

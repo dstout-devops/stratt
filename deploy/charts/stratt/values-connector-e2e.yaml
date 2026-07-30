@@ -99,6 +99,13 @@ plugins:
       digest: ""
       pullPolicy: Never # kind-loaded (task image:plugin PLUGIN=opentofu)
     tmpDir: true
+    # This plugin FORKS A TOOL, which every other plugin does not. `tofu apply` loads the AWS
+    # provider binary and was OOMKilled (exit 137) at the shared 256Mi default — mid-apply, so it
+    # left an acquired state lock in S3 and every retry then failed with `connection refused`
+    # followed by `Error acquiring the state lock`. Two misleading verdicts for one memory limit.
+    resources:
+      requests: { cpu: 100m, memory: 256Mi }
+      limits: { cpu: "2", memory: 2Gi }
     env:
       # tofu's s3 BACKEND authenticates from the pod's own credential chain — the statestore handle
       # resolves WHERE the state lives, never the material (§2.5: the handle carries coordinates and
