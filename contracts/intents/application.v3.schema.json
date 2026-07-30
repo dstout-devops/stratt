@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "stratt:contract:intents/application:v3",
+  "title": "Intent/Application spec",
+  "description": "The desired-state payload for an application Intent (charter \u00a72.4, ADR-0023). v3 adds `chartVersion` for the CHART delivery form (ADR-0148 follow-up b). A SIBLING VERSION rather than an edit to v2, AND THE REASON IS MEASURED RATHER THAN STYLISTIC: v2 was edited in place first, on the argument that adding a NEW typed property is not the 'tightening' this file's header warns about \u2014 no declaration in the repo used the key, so nothing that parsed stopped parsing. `task ci` agreed, because the unit tests re-derive every hash from the shipped files and a self-consistent edit is invisible to them. The live floor did not: strattd refused to start with 'contract drift: intents/application v2 is pinned to 02c02872\u2026 but the shipped document hashes to d342b698\u2026 \u2014 publish a new version, never mutate a pin (\u00a71.5)'. The pin is over the DOCUMENT, not over the compatibility of the change, and that is the whole point of it \u2014 a reviewer reasoning about whether an edit is breaking is exactly what a hash exists to stop being load-bearing. The resolver keys by kind and takes the newest, so v1/v2 stay as pin rows for history while v3 is what validates. Still deliberately OPEN (additionalProperties: true): Intent/Application is a generic kind whose spec carries application-specific values \u2014 the app-cert demo's commonName, for instance \u2014 and closing it would force core to know every application's configuration fields, the ontology creep \u00a71.1 and \u00a79 forbid. Blueprints reference spec fields by explicit lookup ({{.spec.package}}).",
+  "type": "object",
+  "properties": {
+    "package": {
+      "type": "string"
+    },
+    "channel": {
+      "type": "string"
+    },
+    "chartVersion": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Desired version of the deliverable for a CHART-delivered application, as a STRING \u2014 the same load-bearing type argument `port` records: contracts/facets/app.deliverable declares the OBSERVED version as a string and nothing coerces between types (ADR-0118 D1), so the desired and observed values must share a type or they are never comparable. Typed here rather than left to additionalProperties because a shipping Blueprint route reads it (estate/blueprints/podinfo.yaml).",
+      "examples": [
+        "6.9.2"
+      ]
+    },
+    "port": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Desired listen port, as a STRING \u2014 the type is load-bearing, not stylistic. contracts/facets/app.config.schema.json declares the OBSERVED port as a string, and a compiled expectation from this spec is compared against that observed value; nothing coerces between types (ADR-0118 D1), so the two must agree or they are never comparable. Typed here because two shipping Blueprint routes read it (estate/blueprints/web-server.yaml and the app-cert demo) \u2014 and because leaving it untyped cost a full cluster round-trip: an Intent declaring a number parsed cleanly and failed only at facet write-back with '/port: got number, want string'."
+    }
+  },
+  "additionalProperties": true
+}

@@ -40,6 +40,15 @@ facetNamespaces: [service.endpoint, software.chart, app.deliverable]
 # collision that does not exist, and the contention surfaces as a Finding
 # (WriteFacetContentionFindings) if a second writer ever appears, which is when the call can be
 # made with the conflict visible.
+# labelKeys is a STATIC ALLOWLIST and it is not optional (ADR-0041/0132): a Syncer may write only
+# the label keys its declaration names, and every emission of an ungranted key is REJECTED with a
+# warning rather than dropped silently. Omitting it here cost a live run to find — the collector
+# registered, observed the cluster and had every label refused with
+# `label key not in operator grant`, which would have left estate/views/deployed-apps.yaml
+# (selecting application.name) matching NOTHING, and the chart Blueprint quietly targeting an empty
+# set. A View that selects on a label its writer may not write is a Blueprint that converges
+# nothing while looking healthy.
+labelKeys: [service.name, application.name]
 identitySchemes: [k8s.service, helm.release, dns.fqdn]
 # Tombstone on this plugin's OWN schemes only. dns.fqdn is deliberately absent from this list
 # while present above: it is a SHARED cross-source scheme (a service mTLS cert's SAN correlates

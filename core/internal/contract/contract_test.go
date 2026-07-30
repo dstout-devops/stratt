@@ -271,8 +271,17 @@ func TestPinsAreStable(t *testing.T) {
 	// (app.config scalar + software.package list), arrived at from the other side. A SEAM by
 	// ADR-0138 D3's definition: a Facet schema belongs to the estate, not to the collector that
 	// happens to write it today.
-	if len(all) != 71 {
-		t.Fatalf("expected 71 embedded documents, got %d — the shipped set is the SEAM set now "+
+	// 71 → 72: +intents/application.v3 (ADR-0148 follow-up b), and the reason is a finding rather
+	// than a bump. `chartVersion` was first ADDED TO v2 IN PLACE, on the argument that a new typed
+	// property is not the "tightening" that file's header warns about — nothing in the repo used
+	// the key, so nothing that parsed stopped parsing. This test agreed, because it re-derives
+	// every hash from the shipped files and a self-consistent edit is invisible to it. A store
+	// holding the previous pin row did not: strattd refused to start with `contract drift:
+	// intents/application v2 is pinned to 02c02872… but the shipped document hashes to d342b698…`.
+	// The pin is over the DOCUMENT, not over anyone's judgement about whether the change was
+	// compatible — which is precisely what a hash exists to stop being load-bearing (§1.5).
+	if len(all) != 72 {
+		t.Fatalf("expected 72 embedded documents, got %d — the shipped set is the SEAM set now "+
 			"(ADR-0138 D3/D4); a plugin's own contracts live in plugins/<n>/contracts/", len(all))
 	}
 	versions := map[string]int{}
@@ -299,10 +308,15 @@ func TestPinsAreStable(t *testing.T) {
 		t.Fatalf("ansible.input current version: %d (estate-resident since ADR-0138 D4)",
 			estateVersions["actuators/ansible.input"])
 	}
-	// intents/application v2 types `port` (ADR-0118 follow-up). A sibling version rather than an
-	// edit to v1, because tightening a type is BREAKING: `port: 443` parsed under v1 and does not
-	// under v2. v1 keeps its pin row; only the lookup moves.
-	if versions["intents/application"] != 2 {
+	// intents/application v2 types `port` (ADR-0118 follow-up); v3 adds `chartVersion` for the chart
+	// delivery form (ADR-0148 follow-up b). Both are SIBLING versions rather than edits, and the two
+	// have different reasons worth keeping apart. v2 existed because tightening a type is BREAKING:
+	// `port: 443` parsed under v1 and does not under v2. v3 exists because A PIN IS OVER THE
+	// DOCUMENT — the v3 change is additive and compatible by any reading, and mutating v2 in place
+	// still stopped strattd dead with `contract drift: … is pinned to 02c02872… but the shipped
+	// document hashes to d342b698…`. Compatibility is not the question a pin asks (§1.5). Older
+	// versions keep their pin rows; only the lookup moves.
+	if versions["intents/application"] != 3 {
 		t.Fatalf("intents/application current version: %d", versions["intents/application"])
 	}
 	// Same process, same documents → identical pins on re-read.
