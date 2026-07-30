@@ -2620,6 +2620,18 @@ components:
         workflow:
           type: string
           description: The Workflow that would be launched.
+        entityScope:
+          type: string
+          description: >
+            The Entity this remediation would be NARROWED to (ADR-0150 D3) — a Run launched
+            from a Finding converges the one Entity that drifted, not the whole View its
+            Steps declare. Absent when the Finding's target is not an Entity, in which case
+            the Workflow's Steps converge their declared Views as they always have.
+
+            It is here because a preview that omits it MISSTATES THE BLAST RADIUS. It
+            misstates it in the safe direction — the reader expects a whole tier and gets one
+            host — but §1.8 is about the descent telling the truth, and "safely wrong" is
+            still wrong when an operator is deciding whether to approve.
         kind:
           type: string
           enum: [remediate, remove, build]

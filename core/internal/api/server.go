@@ -2243,6 +2243,11 @@ func (s *Server) GetFindingRemediation(w http.ResponseWriter, r *http.Request, i
 		return
 	}
 	out := FindingRemediation{Baseline: fl.Baseline, Workflow: fl.Workflow}
+	// The blast radius this launch would actually have (ADR-0150 D3): one Entity, not the View.
+	if fl.EntityID != "" {
+		scope := fl.EntityID
+		out.EntityScope = &scope
+	}
 	if fl.Kind != "" {
 		k := FindingRemediationKind(fl.Kind)
 		out.Kind = &k
