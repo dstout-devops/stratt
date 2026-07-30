@@ -128,8 +128,15 @@ namespace, not a language feature:
 
 - `{{.entity.<facet-namespace>.<path>}}` — a Facet value on the matched Entity, e.g.
   `{{.entity.dns.fqdn}}`, `{{.entity.os.kernel.arch}}`.
-- `{{.entity.name}}`, `{{.entity.id}}`, `{{.entity.identity.<scheme>}}` — the Entity's own
-  coordinates.
+- `{{.entity.id}}`, `{{.entity.kind}}`, `{{.entity.identity.<scheme>}}` — the Entity's own
+  coordinates, which a Facet namespace may not shadow (refused, §2.4).
+
+CORRECTED after review: this ADR first documented `{{.entity.name}}`, which does not exist —
+`types.Entity` has no Name, an Entity is known by its identity keys — while `kind` shipped
+undocumented. And `labels` was exposed and is now REMOVED: a label is a free-form View selector
+rather than a provenance-stamped fact, so deriving a certificate subject from one is a far softer
+claim than deriving it from a Facet with a registered write-owner. §1.1 — it comes back if
+something shipping demands it.
 
 Field reference only: no operators, conditionals, loops or function calls (ADR-0024 D1 stands, and
 `{{.entity.dns.fqdn | lower}}` must not become a thing — the moment a naming policy needs a function

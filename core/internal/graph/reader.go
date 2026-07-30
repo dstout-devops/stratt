@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/jackc/pgx/v5"
@@ -470,10 +471,19 @@ func bindRaw(raw json.RawMessage, ns template.Namespaces) (json.RawMessage, erro
 // the shape the graph already stores; nothing here reinterprets it, which is what keeps this a
 // projection rather than a second model of an Entity (§1.2).
 //
-// Reserved keys — `id`, `kind`, `labels`, `identity` — are written LAST and win over a Facet
-// namespace of the same name. A Facet called `id` would otherwise silently shadow the Entity's own
-// identity and make `{{.entity.id}}` mean something different per Entity, which is precisely the
-// implicit precedence §2.4 refuses. The collision is resolved by a stated rule, not by map order.
+// EVERY COLLISION IS REFUSED, naming both namespaces (§2.4). The first version silently overwrote:
+// two Facet namespaces where one is a prefix of the other (`cert.presented` and
+// `cert.presented.notAfter`) clobbered each other in GetFacets order, and the reserved coordinate
+// keys were written LAST so they clobbered any Facet namespace of the same name. Its comment said
+// this projection "does not get to invent a merge rule" — overwriting IS a merge rule, decided by
+// map iteration order, which is the precise shape §2.4 forbids. It mattered because ADR-0150 D2
+// binds certificate subjects out of this tree: a silently-shadowed value is a certificate issued
+// for the wrong subject, arrived at by a route no one can see. Found by charter-guardian, 2026-07-30.
+//
+// LABELS ARE DELIBERATELY ABSENT. They were exposed in the first version and are removed: a label
+// is a free-form View selector, not a provenance-stamped fact, and deriving a certificate subject
+// from one is a far softer claim than deriving it from a Facet whose write-owner is registered.
+// §1.1 — a seam gets typed when something shipping demands it, and nothing does.
 func (s *Store) EntityTemplateNamespace(ctx context.Context, entityID string) (map[string]any, error) {
 	e, err := s.GetEntity(ctx, entityID)
 	if err != nil {
@@ -484,7 +494,15 @@ func (s *Store) EntityTemplateNamespace(ctx context.Context, entityID string) (m
 		return nil, err
 	}
 	ns := map[string]any{}
+	owner := map[string]string{}
 	for _, f := range facets {
+		if reservedEntityKeys[strings.Split(f.Namespace, ".")[0]] {
+			return nil, fmt.Errorf(
+				"graph: entity %s carries facet namespace %q, whose first segment is a RESERVED "+
+					"template key (%v) — {{.entity.%s}} would mean two different things depending on "+
+					"which was written last, so it is refused rather than resolved (§2.4, ADR-0150 D2)",
+				entityID, f.Namespace, reservedEntityKeyList(), strings.Split(f.Namespace, ".")[0])
+		}
 		var v any
 		if err := json.Unmarshal(f.Value, &v); err != nil {
 			// A Facet nobody can decode is skipped rather than failing the whole binding: the
@@ -492,7 +510,9 @@ func (s *Store) EntityTemplateNamespace(ctx context.Context, entityID string) (m
 			// malformed Facet must not make every other binding on the Entity unresolvable.
 			continue
 		}
-		nest(ns, strings.Split(f.Namespace, "."), v)
+		if err := nest(ns, owner, f.Namespace, strings.Split(f.Namespace, "."), v); err != nil {
+			return nil, fmt.Errorf("graph: entity %s: %w", entityID, err)
+		}
 	}
 	ns["id"] = e.ID
 	ns["kind"] = e.Kind
@@ -501,24 +521,47 @@ func (s *Store) EntityTemplateNamespace(ctx context.Context, entityID string) (m
 		identity[k] = val
 	}
 	ns["identity"] = identity
-	labels := make(map[string]any, len(e.Labels))
-	for k, val := range e.Labels {
-		labels[k] = val
-	}
-	ns["labels"] = labels
 	return ns, nil
 }
 
-// nest writes v at the dotted path, creating intermediate maps. A conflict with a non-map already
-// at an intermediate segment overwrites it — two Facet namespaces where one is a prefix of the
-// other (`dns` and `dns.fqdn`) is a graph-side modelling problem, and this projection does not get
-// to invent a merge rule for it.
-func nest(root map[string]any, path []string, v any) {
+// reservedEntityKeys are the Entity's own coordinates, which a Facet namespace may not shadow.
+var reservedEntityKeys = map[string]bool{"id": true, "kind": true, "identity": true}
+
+func reservedEntityKeyList() []string {
+	out := make([]string, 0, len(reservedEntityKeys))
+	for k := range reservedEntityKeys {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// nest writes v at the dotted path, refusing any collision with an already-placed namespace.
+//
+// Two Facet namespaces where one is a PREFIX of the other cannot both be represented in one tree —
+// `cert.presented` wants a value at a node `cert.presented.notAfter` needs to be a map. That is a
+// graph-side modelling problem, and the honest answer is to name it, not to let whichever was read
+// last win.
+func nest(root map[string]any, owner map[string]string, ns string, path []string, v any) error {
 	cur := root
 	for i, seg := range path {
-		if i == len(path)-1 {
+		prefix := strings.Join(path[:i+1], ".")
+		last := i == len(path)-1
+		if prev, taken := owner[prefix]; taken {
+			return fmt.Errorf(
+				"facet namespaces %q and %q collide in the {{.entity.*}} tree at %q — one is a prefix "+
+					"of the other, so they cannot both be represented and neither may silently win (§2.4)",
+				prev, ns, prefix)
+		}
+		if last {
+			if _, exists := cur[seg]; exists {
+				return fmt.Errorf(
+					"facet namespace %q collides with a deeper namespace already placed under %q in the "+
+						"{{.entity.*}} tree — neither may silently win (§2.4)", ns, prefix)
+			}
 			cur[seg] = v
-			return
+			owner[prefix] = ns
+			return nil
 		}
 		next, ok := cur[seg].(map[string]any)
 		if !ok {
@@ -527,4 +570,5 @@ func nest(root map[string]any, path []string, v any) {
 		}
 		cur = next
 	}
+	return nil
 }
