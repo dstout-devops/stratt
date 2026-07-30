@@ -108,6 +108,17 @@ plugins:
       tag: dev
       digest: ""
       pullPolicy: Never # kind-loaded (task image:plugin PLUGIN=awss3)
+    env:
+      STRATT_AWSS3_ENDPOINT: http://seaweedfs:8333
+      STRATT_AWSS3_REGION: us-east-1
+      STRATT_AWSS3_PATH_STYLE: "true" # SeaweedFS and most S3-compatibles need path-style
+      # WITHOUT THIS the plugin advertises no `statestore` capability at all — by design, since it
+      # only advertises what it can back. The estate's s3-statestore Actuator is then refused as a
+      # phantom provider and opentofu-network sits pending on a dependency forever. Measured on this
+      # floor before the value was set.
+      STRATT_AWSS3_STATE_BUCKET: stratt-tofu-state
+      AWS_ACCESS_KEY_ID: testing # dev-only, matching deploy/dev/seaweedfs.yaml's s3.json identity
+      AWS_SECRET_ACCESS_KEY: testing
   - name: kubeservices
     image:
       repository: stratt-plugin-kubeservices

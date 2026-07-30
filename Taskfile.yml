@@ -639,6 +639,35 @@ tasks:
     cmds:
       - deploy/dev/openbao-bootstrap.sh
 
+  dev:objectstore:up:
+    # The IN-KIND S3-compatible store the `statestore` capability needs a real provider for
+    # (W5 prerequisite). Same story as dev:openbao:up one leg over: SeaweedFS shipped in compose,
+    # dev:connector-e2e is fully in-kind, and the awss3 plugin therefore ran with no state bucket
+    # and — correctly — advertised no statestore capability. The registry then refused the estate's
+    # s3-statestore Actuator as a PHANTOM PROVIDER and opentofu-network sat pending on a dependency
+    # forever. Every layer was right; the floor had no object store.
+    desc: "Stand the dev object store (SeaweedFS) in kind and create the tofu state bucket (W5 prereq)"
+    deps: [tools:kubectl]
+    cmds:
+      - "{{.KUBECTL}} --context {{.KIND_CONTEXT}} apply -f {{.ROOT_DIR}}/deploy/dev/seaweedfs.yaml"
+      - "{{.KUBECTL}} --context {{.KIND_CONTEXT}} -n stratt rollout status deploy/seaweedfs --timeout=180s"
+      - |
+        set -eu
+        # tofu's s3 backend does NOT create its bucket, and its diagnostic for a missing one names
+        # the REGION rather than the bucket — a long way from the cause (measured, ADR-0145).
+        "{{.KUBECTL}}" --context {{.KIND_CONTEXT}} -n stratt port-forward deploy/seaweedfs 18333:8333 >/dev/null 2>&1 &
+        pf=$!
+        trap 'kill $pf 2>/dev/null || true' EXIT
+        for _ in $(seq 1 40); do
+          if curl -fsS -o /dev/null http://127.0.0.1:18333/healthz 2>/dev/null; then break; fi
+          sleep 1
+        done
+        docker run --rm --network host \
+          -e AWS_ACCESS_KEY_ID=testing -e AWS_SECRET_ACCESS_KEY=testing \
+          amazon/aws-cli:2.32.5 --endpoint-url http://127.0.0.1:18333 --region us-east-1 \
+          s3api create-bucket --bucket stratt-tofu-state >/dev/null 2>&1 || true
+        echo "objectstore: bucket stratt-tofu-state ready"
+
   dev:openbao:up:
     # The IN-KIND dev CLM (CERT-1, W4). OpenBao shipped as a compose service and
     # `dev:connector-e2e` is fully in-kind by design, so the certificate leg had no floor in which
