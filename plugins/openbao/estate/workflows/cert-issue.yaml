@@ -1,0 +1,65 @@
+# cert-issue — the remediation the `certissuer` capability resolves to (W4, ADR-0030/0050/0106).
+#
+# WHY THIS FILE DID NOT EXIST. `cert-issuer` has advertised `provides: [certissuer]` since ADR-0106
+# with NO `remediates:` entry, because the Workflow it would name was never written — the exact
+# shape ADR-0145 found on the network leg, where `opentofu-network` advertised
+# `provides: [provisioning]` and could not build a Subnet. A class with a provider that can serve no
+# Intent kind is an advertisement with nothing behind it: the capability RESOLVES, and then there is
+# nothing to launch.
+#
+# The whole certificate leg was in that state. The provider ships, the Facets ship, the schema
+# ships, `estate/triggers/cert-reconcile.yaml` names the capability — and no Intent/Certificate
+# existed anywhere in the estate, so the reach path had zero consumers and could not be exercised.
+name: cert-issue
+inputs:
+  type: object
+  additionalProperties: false
+  required: [commonName, role, ttl, renewBefore]
+  properties:
+    commonName:
+      type: string
+      minLength: 1
+      description: >
+        The subject the certificate is issued for, resolved per-Assignment from the Intent's spec.
+        It is the ONE field an operator declares and everything else follows from — the whole point
+        of an Intent/Certificate over a hand-run issuance.
+    role:
+      type: string
+      minLength: 1
+      description: >
+        The CLM role to issue under, from Intent/Certificate's `issuer`. Named as a ROLE rather than
+        as an OpenBao path so a step-ca implementation of the same capability serves the same
+        Intent unchanged (§1.5) — this Workflow lives in the openbao plugin's estate, but nothing
+        in the estate above it names openbao.
+    ttl:
+      type: string
+      minLength: 1
+      description: The requested validity, from the Intent's `validity`.
+    renewBefore:
+      type: string
+      minLength: 1
+      description: >
+        How long before expiry a certificate must be renewed. The SAME value the Blueprint's
+        observe expectation uses as its `notBefore` window, which is what makes renewal a drift
+        loop rather than a schedule: the Baseline opens a Finding once `cert.expiry.notAfter` is
+        closer than this, and this Run is what closes it.
+steps:
+  - name: issue
+    viewName: managed-certs
+    # The CAPABILITY's provider, not a provider name. cert-issuer is what serves `certissuer` in
+    # this estate; the Blueprint above names only the class (ADR-0106 D1).
+    actuator: cert-issuer
+    credentialRefs: [cert-issuer]
+    # The write ceiling for the issuance: the two Facets a certificate projects and nothing else.
+    facetWriteScope: [cert.identity, cert.expiry]
+    params:
+      commonName: "{{.launch.commonName}}"
+      role: "{{.launch.role}}"
+      ttl: "{{.launch.ttl}}"
+      renewBefore: "{{.launch.renewBefore}}"
+      # NO `csr` — and its absence is the §2.5 decision, not an omission. The CSR is the TARGET's:
+      # the private key is born on the host and never crosses the wire, so a CSR pasted into an
+      # estate file would either be a placeholder that issues nothing (which is what
+      # estate/triggers/cert-reconcile.yaml still carries) or a key that left its host. The
+      # Actuator's Contract makes `csr` optional for exactly this reason; supplying it is the
+      # target-side flow, and this reconcile path names the subject and lets the provider mint.

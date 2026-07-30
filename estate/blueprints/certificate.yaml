@@ -1,0 +1,45 @@
+# certificate — RENEWAL AS DRIFT, which is the thing the app-cert demo explicitly declined to teach.
+#
+# Every other Blueprint in this estate compares an observed VALUE to a declared one. This one
+# compares an observed TIMESTAMP to a WINDOW: `notBefore` asserts that cert.expiry.notAfter is at
+# least `renewBefore` in the future, so a certificate drifts by the passage of time and nothing
+# else. No schedule decides when to renew — the estate declares how much runway a certificate must
+# have, and the Finding opens exactly when it stops having it.
+#
+# That is why the mechanism is worth the file: a cron that renews every N hours is a guess that gets
+# worse as validity changes, and it cannot tell you whether the fleet is currently compliant. A
+# Baseline over the expiry window answers "which certificates are inside their renewal window right
+# now" as a graph question, and closes each Finding by issuing.
+#
+# THE ROUTE NAMES THE CAPABILITY, NOT THE PROVIDER (ADR-0106 D1). `certissuer` resolves per
+# environment to whatever provider serves the class — cert-issuer here, a step-ca plugin elsewhere —
+# and this document does not change when that changes. It is the guardrail that makes the whole
+# CLM-agnostic claim checkable rather than aspirational: grep this file for "openbao" and there is
+# nothing to find.
+name: certificate
+version: 1
+for: Intent/Certificate
+severity: warning
+# A certificate inside its renewal window is not a blip to be damped: the first observation is the
+# true one, and waiting for a second costs runway that is already short by construction.
+dampingObservations: 1
+defaults:
+  validity: 720h
+  renewBefore: 168h
+routes:
+  - observe:
+      namespace: cert.expiry
+      path: notAfter
+      # The renewal window, substituted from the Intent so the CHECK and the FIX read the same
+      # declaration (ADR-0030 threshold; ADR-0024 substitution engine).
+      notBefore: "{{.spec.renewBefore}}"
+    # EXCLUSIVE: two Assignments renewing one certificate is the §2.4 double-claim — and for a
+    # certificate it is worse than for a config value, because two issuers racing one subject
+    # produce two valid certs and no way to say which the target should present.
+    claim: exclusive
+    remediationCapability: certissuer
+    remediationParams:
+      commonName: "{{.spec.commonName}}"
+      role: "{{.spec.issuer}}"
+      ttl: "{{.spec.validity}}"
+      renewBefore: "{{.spec.renewBefore}}"

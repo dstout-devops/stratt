@@ -1,0 +1,22 @@
+# web-cert — an Intent/Certificate, and the FIRST consumer the certificate reach path has ever had.
+#
+# The provider half has shipped for a long time: the cert-issuer Actuator (OpenBao PKI), the
+# certificate spec schema, cert.identity and cert.expiry, and a scheduled reconcile Trigger. What
+# did not exist anywhere in the estate was an Intent/Certificate — so the whole leg was declared,
+# reviewed, cited in ADRs, and had zero consumers.
+#
+# FIVE LINES, like every other Intent. `issuer` names a CLM ROLE and never a provider: nothing here
+# says OpenBao, which is what lets a step-ca implementation of the `certissuer` capability serve
+# this same document unchanged (§1.5, ADR-0106 D1).
+#
+# `renewBefore` is the load-bearing one and it is why this is an Intent rather than a cron line: it
+# is BOTH the window the Blueprint's observe expectation checks `cert.expiry.notAfter` against AND
+# the value the issuance Run is launched with. One declaration, so the check and the fix cannot
+# disagree about when a certificate is too close to expiry.
+name: web-cert
+kind: Intent/Certificate
+spec:
+  issuer: stratt-dev
+  commonName: web.stratt.test
+  validity: 720h
+  renewBefore: 168h

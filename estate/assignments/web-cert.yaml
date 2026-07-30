@@ -1,0 +1,12 @@
+# web-cert — bind the certificate Intent to the renewal Blueprint over the cert Entities.
+#
+# The View is `managed-certs` (estate/views/certs.yaml), which selects `kinds: [cert]` — the
+# Entities the CLM Syncer projects for certificates it has issued. Like the chart form's
+# deployed-apps, the target set is OBSERVED rather than declared: a cert Entity exists because a
+# certificate exists, so this Blueprint converges the RENEWAL of certificates that are real, and
+# first issuance is a separate concern.
+name: web-cert
+intent: web-cert@1
+view: managed-certs
+blueprint: certificate@1
+environments: [dev, prod]
