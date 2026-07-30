@@ -62,6 +62,10 @@ type RunInput struct {
 	RunID    string
 	ViewName string
 	Actuator string
+	// CapabilityArgs is the Step's per-class resolve request, carried through to
+	// resolveCapabilities. See types.Step.CapabilityArgs for why it is per Step rather than per
+	// Actuator: `requires:` names the classes a TOOL needs, these are the DESIRED STATE of one Run.
+	CapabilityArgs map[string]map[string]any
 	// Action names a Connector Action for a targetless typed operation (§2.2,
 	// ADR-0031). Mutually exclusive with Actuator/ViewName — set means this Run
 	// executes via RunAction, not RunAgainstView.
@@ -1212,9 +1216,27 @@ func (a *Activities) resolveCapabilities(ctx context.Context, in RunInput, requi
 		if !ok {
 			return nil, fmt.Errorf("%s: capability %q resolve Action %q is not registered", subject, capClass, actionName)
 		}
-		args, _ := json.Marshal(map[string]string{"workspace": wsp.Workspace})
+		// The resolve request, PER CLASS. A Step declares one block per capability its tool
+		// requires (Step.CapabilityArgs); absent an entry the core sends `{"workspace": …}`, which
+		// is the shape statestore has always received and which every existing declaration relies
+		// on.
+		//
+		// That default is exactly what made `ipam` unresolvable: one shape was built for every
+		// class, so a class whose Contract wants an allocation request ({key, size} plus pool or
+		// role) got a workspace and was refused — correctly — by its own Contract. The fallback
+		// is kept for compatibility and is now a DECLARED default rather than the only option.
+		var args []byte
+		if req, ok := in.CapabilityArgs[capClass]; ok {
+			var merr error
+			if args, merr = json.Marshal(req); merr != nil {
+				return nil, fmt.Errorf("%s: capability %q request: %w", subject, capClass, merr)
+			}
+		} else {
+			args, _ = json.Marshal(map[string]string{"workspace": wsp.Workspace})
+		}
 		// Validate the resolve INPUT against the class Contract too (symmetric with the output) —
-		// so an empty/malformed workspace fails closed in the core, not deferred to the provider.
+		// so a malformed request fails closed in the core, not deferred to the provider. Core never
+		// learns what the fields MEAN (§1.5); the class Contract is the only thing that reads them.
 		inContract := "capabilities/" + capClass + ".input"
 		if err := contract.ValidateNamed(inContract, args); err != nil {
 			return nil, fmt.Errorf("%s: capability %q resolve input failed its Contract: %w", subject, capClass, err)

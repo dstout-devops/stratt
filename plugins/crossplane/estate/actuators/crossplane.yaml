@@ -45,5 +45,21 @@ labelKeys: [source, fleet, role, tier, stratt.intent/singleton]
 # registered, now verified against the plugin's own Manifest at enable.
 actionNames: [crossplane/provision]
 provisions:
-  Subnet: subnet-build
+  # Subnet is DEMOTED here, and it costs something worth naming (ADR-0150 / NET-5).
+  #
+  # `Intent/Subnet` now declares an allocation REQUEST (size + pool) rather than a literal CIDR,
+  # because ADR-0112 D5's claim is that a subnet's address is allocated and ADR-0111 makes the
+  # allocator the system of record. opentofu's builder obtains the CIDR from the `ipam` capability
+  # and injects it as a module var. THIS builder cannot: the crossplane plugin consumes no resolved
+  # capabilities at all, so `requires: [ipam]` would resolve a handle it ignores, and its
+  # subnet-build bound `{{.launch.params.cidr}}` — a value the Intent no longer declares and could
+  # not declare without becoming a second source of truth for the address (§2.4).
+  #
+  # WHAT THIS COSTS: ADR-0112 D6 deliberately made Subnet a >1-provider case so the
+  # estate/capability-bindings entry had something real to disambiguate. With one provider that
+  # binding is vacuous, and the demotion machinery loses its live consumer. That is a genuine loss,
+  # and it does not buy back an advertisement the provider cannot honour — the same rule that
+  # refused `provides:` with no `remediates` on cert-issuer and `provisions:` with no Workflow on
+  # opentofu-network. Restoring the line is one plugin change away (consume the ipam handle) and is
+  # booked rather than forgotten.
   Vlan: vlan-build

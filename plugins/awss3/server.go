@@ -382,7 +382,23 @@ func (s *Server) resolveStatestore(stream grpc.ServerStreamingServer[pluginv1.In
 		config["use_path_style"] = "true"
 	}
 	if s.cfg.Endpoint != "" {
+		// `endpoints.s3` is a NESTED backend attribute — the flat `endpoint` argument was removed
+		// from the s3 backend — so the consumer renders dotted keys as an HCL fragment rather than
+		// a -backend-config flag, which cannot express depth.
 		config["endpoints.s3"] = s.cfg.Endpoint
+		// An S3-COMPATIBLE endpoint is not AWS, and the backend assumes AWS until told otherwise:
+		// it calls STS GetCallerIdentity to validate credentials and to learn an account id, and a
+		// non-AWS store answers neither. Measured: `tofu init` against SeaweedFS fails with
+		// `validating provider credentials: retrieving caller identity from STS … InvalidClientTokenId`,
+		// which reads as a bad credential when the credential is fine and the SERVICE is absent.
+		//
+		// Emitted HERE rather than by the consumer because only this provider knows it is serving a
+		// compatible endpoint rather than AWS proper — the consumer renders whatever the class
+		// Contract's `config` carries and stays provider-agnostic (§1.5).
+		config["skip_credentials_validation"] = "true"
+		config["skip_requesting_account_id"] = "true"
+		config["skip_metadata_api_check"] = "true"
+		config["skip_region_validation"] = "true"
 	}
 	out := map[string]any{"backend": "s3", "config": config}
 	if s.cfg.StateCredentialRef != "" {

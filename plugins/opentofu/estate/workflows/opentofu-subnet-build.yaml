@@ -84,6 +84,23 @@ steps:
     # credentials tofu authenticates with; the module never carries material (its dev access_key is
     # the floci/localstack convention, where any credential passes).
     credentialRefs: [aws-dev]
+    # THE PER-CLASS RESOLVE REQUESTS (ADR-0150). The Actuator's `requires: [statestore, ipam]` says
+    # WHICH classes this build needs; these say what to ask each one FOR. Before this existed the
+    # core built one shape — `{workspace}` — for every class, so ipam was refused by its own
+    # Contract and the leg could not run at all.
+    #
+    # Both blocks are class-level and provider-agnostic: nothing here names S3, NetBox or OpenTofu,
+    # so a floor binding a different statestore or ipam provider runs this Workflow unchanged.
+    capabilityArgs:
+      statestore:
+        workspace: "{{.launch.name}}"
+      ipam:
+        # The allocation identity. netbox/ipam-resolve is idempotent and keyed by it, so a rebuild
+        # returns the SAME prefix rather than leaking a second one (ADR-0111).
+        key: "{{.launch.name}}"
+        size: "{{.launch.params.size}}"
+        pool: "{{.launch.params.pool}}"
+        region: "{{.launch.params.region}}"
     params:
       # Not one literal belonging to a Subnet declaration appears below — the rule ADR-0059 D3's
       # builder check enforces. app-subnet and dmz-subnet both resolve to this ONE Workflow, so a

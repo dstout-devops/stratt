@@ -388,11 +388,19 @@ func runActionStep(ctx workflow.Context, in DAGInput, step types.Step, steps map
 		WorkflowID: ChildRunID(in.WorkflowRunID, step.Name),
 	})
 	var outcome RunOutcome
+	// The per-class capability requests ride with the Step, resolved against the same namespaces
+	// its params were (so an Intent's allocation request reaches the provider through the launch
+	// interface like every other declared value).
+	capArgs, cerr := resolveCapabilityArgs(ctx, a, step, in, steps)
+	if cerr != nil {
+		return stepFailed, nil
+	}
 	err := workflow.ExecuteChildWorkflow(cctx, RunAction, RunInput{
 		Action:           action,
 		ActionCapability: step.ActionCapability,
 		DryRun:           step.DryRun,
 		Params:           params,
+		CapabilityArgs:   capArgs,
 		CredentialRefs:   step.CredentialRefs,
 		Principal:        in.Principal,
 		WorkflowRunID:    in.WorkflowRunID,
@@ -861,4 +869,44 @@ func (a *Activities) FinishWorkflowRun(ctx context.Context, id string, status ty
 		summary["steps"] = steps
 	}
 	return a.Store.SetWorkflowRunStatus(ctx, id, status, summary)
+}
+
+// ResolveCapabilityArgs substitutes a Step's per-class capability requests against the same
+// namespaces its params use, so an Intent's allocation request reaches the provider through the
+// launch interface like every other declared value.
+//
+// Deliberately NOT validated here: each block is checked against `capabilities/<class>.input` in
+// resolveCapabilities, which is the one place that knows which class it belongs to. Validating
+// early would mean this function learning the class map, which is core learning content (§1.5).
+func (a *Activities) ResolveCapabilityArgs(
+	_ context.Context, args map[string]map[string]any, event map[string]any,
+	steps map[string]json.RawMessage, launch map[string]any,
+) (map[string]map[string]any, error) {
+	if len(args) == 0 {
+		return nil, nil
+	}
+	ns := template.Namespaces{"event": event, "steps": stepsNamespace(steps), "launch": launch}
+	out := make(map[string]map[string]any, len(args))
+	for class, req := range args {
+		resolved, err := template.SubstituteParams(req, ns)
+		if err != nil {
+			return nil, temporal.NewNonRetryableApplicationError(
+				fmt.Sprintf("capability %q request: %v", class, err), "InvalidCapabilityArgs", err)
+		}
+		out[class] = resolved
+	}
+	return out, nil
+}
+
+// resolveCapabilityArgs runs the substitution as an activity so the workflow stays deterministic.
+func resolveCapabilityArgs(
+	ctx workflow.Context, a *Activities, step types.Step, in DAGInput, steps map[string]json.RawMessage,
+) (map[string]map[string]any, error) {
+	if len(step.CapabilityArgs) == 0 {
+		return nil, nil
+	}
+	var out map[string]map[string]any
+	err := workflow.ExecuteActivity(ctx, a.ResolveCapabilityArgs,
+		step.CapabilityArgs, in.Event, steps, in.LaunchParams).Get(ctx, &out)
+	return out, err
 }

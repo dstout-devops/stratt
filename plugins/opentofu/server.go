@@ -236,7 +236,27 @@ func (s *Server) initArgs(workspace string, stateBackend *pluginv1.CapabilityHan
 		}
 		sort.Strings(keys)
 		for _, k := range keys {
+			// A DOTTED key is a NESTED backend attribute and cannot ride the flag form. tofu's
+			// `-backend-config=k=v` sets a top-level argument only, so `endpoints.s3=…` — which is
+			// how the s3 backend takes an S3-compatible endpoint since the flat `endpoint` argument
+			// was removed — fails with `Error: Invalid backend configuration argument`. Measured on
+			// the first real build that got this far.
+			//
+			// Nested keys go into an HCL fragment written beside the workspace's data dir and
+			// passed as a config FILE, which is the form that accepts blocks. Flat keys keep the
+			// flag form: it is the simpler path and the one every other backend uses.
+			if strings.Contains(k, ".") {
+				continue // rendered into the HCL fragment below
+			}
 			args = append(args, "-backend-config="+k+"="+cfg[k])
+		}
+		if frag := nestedBackendHCL(cfg); frag != "" {
+			path := filepath.Join(s.dataRoot(), "workspaces", workspace, "backend.auto.hcl")
+			if err := os.MkdirAll(filepath.Dir(path), 0o755); err == nil {
+				if err := os.WriteFile(path, []byte(frag), 0o600); err == nil {
+					args = append(args, "-backend-config="+path)
+				}
+			}
 		}
 		return args
 	}
@@ -493,4 +513,53 @@ func planHasChanges(showRaw []byte) bool {
 		}
 	}
 	return false
+}
+
+// nestedBackendHCL renders the DOTTED keys of a resolved statestore config as HCL blocks.
+//
+// tofu's `-backend-config=k=v` flag sets a top-level argument and nothing deeper, so a provider
+// that legitimately needs a nested attribute — `endpoints.s3` is how the s3 backend has taken an
+// S3-compatible endpoint since the flat `endpoint` argument was removed — cannot be expressed as a
+// flag at all. It fails with `Error: Invalid backend configuration argument`, which names neither
+// the key nor the nesting.
+//
+// The class Contract deliberately types `config` as flat string settings (§1.5: one shape for every
+// statestore provider), so the DOT is the provider's own encoding of depth and this is the consumer
+// translating it for its tool. Core never sees either form.
+//
+// Returns "" when nothing is nested, so the common case writes no file.
+func nestedBackendHCL(cfg map[string]string) string {
+	groups := map[string]map[string]string{}
+	for k, v := range cfg {
+		key, sub, found := strings.Cut(k, ".")
+		if !found {
+			continue
+		}
+		if groups[key] == nil {
+			groups[key] = map[string]string{}
+		}
+		groups[key][sub] = v
+	}
+	if len(groups) == 0 {
+		return ""
+	}
+	outer := make([]string, 0, len(groups))
+	for k := range groups {
+		outer = append(outer, k)
+	}
+	sort.Strings(outer) // deterministic: the same resolved config renders the same bytes
+	var b strings.Builder
+	for _, k := range outer {
+		inner := make([]string, 0, len(groups[k]))
+		for sk := range groups[k] {
+			inner = append(inner, sk)
+		}
+		sort.Strings(inner)
+		fmt.Fprintf(&b, "%s = {\n", k)
+		for _, sk := range inner {
+			fmt.Fprintf(&b, "  %s = %q\n", sk, groups[k][sk])
+		}
+		b.WriteString("}\n")
+	}
+	return b.String()
 }

@@ -33,4 +33,16 @@ spec:
     # decides where the subnet is built; it must match the region web-fleet's hosts are built in,
     # or the host cannot be placed in this subnet (ADR-0146).
     region: us-east-1
-    cidr: 10.30.0.0/24
+    # AN ALLOCATION REQUEST, not a literal CIDR — which is what ADR-0112 D5 claims for this leg
+    # ("a subnet CIDR is ALLOCATED, not declared") and what the estate could not previously express.
+    # `cidr: 10.30.0.0/24` used to sit here, and with it the ipam capability had nothing to ask for:
+    # capabilities/ipam.input wants {key, size} plus one of pool/role, so a declared CIDR made the
+    # allocator decoration. Two subnets declaring overlapping literals would have collided with
+    # nothing to notice — which is ADR-0111's whole argument for an allocator being the system of
+    # record.
+    #
+    # `size` is the prefix length; `pool` is the supernet to carve from (seeded in NetBox as the EU
+    # app supernet). pool and role are schema-EXCLUSIVE in the Contract (a JSON Schema oneOf), never
+    # a pair with a runtime "role wins" rule — that would be the implicit precedence §2.4 refuses.
+    size: 24
+    pool: 10.30.0.0/16

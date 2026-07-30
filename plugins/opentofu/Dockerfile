@@ -63,7 +63,12 @@ COPY --from=tofu /out-tofu /usr/local/bin/tofu
 # tofu writes a per-workspace data dir and a shared provider cache under this root. The pod's
 # rootfs is read-only, so it must be a writable mount — the chart's `tmpDir: true` supplies one,
 # the same lever the helm plugin already uses for its cache.
-ENV STRATT_OPENTOFU_DATA_ROOT=/tmp/tofu
+# The variable name is STRATT_TOFU_DATA_ROOT, matching cmd/stratt-plugin-opentofu. An earlier
+# revision set STRATT_OPENTOFU_DATA_ROOT — a plausible-looking name the plugin never reads — so the
+# default /var/lib/stratt-tofu stayed in force and the first real build died on
+# `mkdir /var/lib/stratt-tofu: read-only file system`. An env var nothing reads is silent until the
+# code path that needs it runs.
+ENV STRATT_TOFU_DATA_ROOT=/tmp/tofu
 USER nonroot:nonroot
 EXPOSE 9090
 ENTRYPOINT ["/usr/local/bin/stratt-plugin-opentofu"]

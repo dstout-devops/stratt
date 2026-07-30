@@ -99,6 +99,17 @@ plugins:
       digest: ""
       pullPolicy: Never # kind-loaded (task image:plugin PLUGIN=opentofu)
     tmpDir: true
+    env:
+      # tofu's s3 BACKEND authenticates from the pod's own credential chain — the statestore handle
+      # resolves WHERE the state lives, never the material (§2.5: the handle carries coordinates and
+      # an optional CredentialRef, never a secret). Without these `tofu init` dies on
+      # `No valid credential sources found` after accepting the backend config, which reads as a
+      # backend problem rather than a credential one.
+      #
+      # Dev-only literals matching deploy/dev/seaweedfs.yaml's s3.json identity; a real floor sets
+      # the statestore provider's StateCredentialRef and brokers them.
+      AWS_ACCESS_KEY_ID: testing
+      AWS_SECRET_ACCESS_KEY: testing
   # awss3 — opentofu's `statestore` capability provider. Declaring the builder without it leaves the
   # route pending on a dependency rather than resolved, which is the fail-closed behaviour working
   # (§1.8) and not a floor anybody can build a subnet on.

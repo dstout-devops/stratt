@@ -3203,9 +3203,13 @@ type stepYAML struct {
 	ActionCapability string         `yaml:"actionCapability"`
 	DryRun           bool           `yaml:"dryRun"`
 	Params           map[string]any `yaml:"params"`
-	Slices           int            `yaml:"slices"`
-	CredentialRefs   []string       `yaml:"credentialRefs"`
-	FacetWriteScope  []string       `yaml:"facetWriteScope"`
+	// capabilityArgs: the per-CLASS resolve request for each capability the Step's tool requires
+	// (ADR-0150). See types.Step.CapabilityArgs — `requires:` names the classes, these say what to
+	// ask each one for.
+	CapabilityArgs  map[string]map[string]any `yaml:"capabilityArgs"`
+	Slices          int                       `yaml:"slices"`
+	CredentialRefs  []string                  `yaml:"credentialRefs"`
+	FacetWriteScope []string                  `yaml:"facetWriteScope"`
 }
 type gateYAML struct {
 	Approvers struct {
@@ -3319,7 +3323,7 @@ func parseWorkflowFile(path string, raw []byte, opts ...ValidateOption) (string,
 			Workflow: s.Workflow, WorkflowCapability: s.WorkflowCapability, ForKind: s.ForKind,
 			Inputs: s.Inputs,
 			Action: s.Action, ActionCapability: s.ActionCapability,
-			DryRun: s.DryRun, Params: s.Params,
+			DryRun: s.DryRun, Params: s.Params, CapabilityArgs: s.CapabilityArgs,
 			Slices: s.Slices, CredentialRefs: s.CredentialRefs,
 			FacetWriteScope: s.FacetWriteScope,
 		}
