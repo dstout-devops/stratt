@@ -520,12 +520,21 @@ func (s *Store) EntityTemplateNamespace(ctx context.Context, entityID string) (m
 	for k, val := range e.IdentityKeys {
 		identity[k] = val
 	}
-	ns["identity"] = identity
+	ns["identityKeys"] = identity
 	return ns, nil
 }
 
 // reservedEntityKeys are the Entity's own coordinates, which a Facet namespace may not shadow.
-var reservedEntityKeys = map[string]bool{"id": true, "kind": true, "identity": true}
+//
+// `identityKeys`, NOT `identity`, and the difference was found by checking the guard against the
+// live graph rather than by reasoning about it: `identity.credential` is a SHIPPED Facet namespace
+// carried by 9 entities on the dev floor (the SCIM/identity projection family, ADR-0079). Reserving
+// the bare token `identity` would have refused the whole {{.entity.*}} tree for every one of them —
+// turning a correctness guard into an outage for a family of Entities it was never about.
+//
+// The rename also reads truer: the value is the Entity's IdentityKeys map, which is what the Go
+// field is called. `identity.*` stays available to the Facet family that already owns it.
+var reservedEntityKeys = map[string]bool{"id": true, "kind": true, "identityKeys": true}
 
 func reservedEntityKeyList() []string {
 	out := make([]string, 0, len(reservedEntityKeys))

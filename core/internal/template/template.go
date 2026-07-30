@@ -26,7 +26,7 @@ var exactRe = regexp.MustCompile(`^\{\{\s*\.([a-zA-Z][a-zA-Z0-9_]*(?:\.[a-zA-Z0-
 type Namespaces map[string]map[string]any
 
 // NamespaceEntity is the per-Entity namespace (ADR-0150 D2): `{{.entity.<facet>.<path>}}`,
-// `{{.entity.id}}`, `{{.entity.kind}}`, `{{.entity.identity.<scheme>}}`.
+// `{{.entity.id}}`, `{{.entity.kind}}`, `{{.entity.identityKeys.<scheme>}}`.
 //
 // There is no `{{.entity.name}}` — types.Entity has no Name; an Entity is known by its identity
 // keys. And no `{{.entity.labels.*}}`: a label is a free-form View selector, not a

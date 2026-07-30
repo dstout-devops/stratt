@@ -61,7 +61,7 @@ func TestNestAllowsSiblings(t *testing.T) {
 // namespace called `id` was silently clobbered — {{.entity.id}} then meant different things on
 // different Entities.
 func TestReservedEntityKeys(t *testing.T) {
-	for _, k := range []string{"id", "kind", "identity"} {
+	for _, k := range []string{"id", "kind", "identityKeys"} {
 		if !reservedEntityKeys[k] {
 			t.Fatalf("%q must be reserved so a facet namespace cannot shadow the Entity's own coordinate", k)
 		}
@@ -71,5 +71,11 @@ func TestReservedEntityKeys(t *testing.T) {
 	// from one is a far softer claim than one derived from a Facet with a registered write-owner.
 	if reservedEntityKeys["labels"] {
 		t.Fatal("labels is not exposed in the entity namespace, so it has nothing to reserve")
+	}
+	// `identity` is deliberately NOT reserved: `identity.credential` is a shipped Facet namespace
+	// (ADR-0079), and reserving the bare token would refuse the whole tree for every Entity that
+	// carries one. The coordinate is `identityKeys`, which is also what the Go field is called.
+	if reservedEntityKeys["identity"] {
+		t.Fatal("reserving `identity` would break every Entity carrying an identity.* Facet")
 	}
 }
