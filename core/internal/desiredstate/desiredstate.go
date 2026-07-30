@@ -1336,8 +1336,15 @@ func parseAdmissionFile(path string, raw []byte) (string, admissionDecl, error) 
 	return f.Name, admissionDecl{Name: f.Name, Controls: ctrls}, nil
 }
 
-// admissionDirs are the declaration directories admission judges — every estate
-// kind except admission/ itself (a policy does not admit itself).
+// admissionDirs are the declaration directories admission judges. NOT every estate
+// kind: admission/ itself is excluded by design (a policy does not admit itself), but
+// capability-bindings/, environments/, authz/, advisories/, hosts/ and the plugin-side
+// actuators/ + connectors/ declarations are NOT judged either — and that is a gap, not a
+// design. capability-bindings/ is the one place a provider or substrate may be named
+// (ADR-0151), so the line whose edit migrates a whole topology is currently unreviewed by
+// policy, as is the L0 grant surface. Tracked in docs/declaration-map.md §7 item 2.
+// Say what is true here (§1.8): a reader who believes admission covers everything will
+// write a control that silently never fires.
 var admissionDirs = []string{
 	"views", "credential-refs", "triggers", "workflows", "emitters", "sites",
 	"cells", "scim", "notify-sinks", "subscriptions", "baselines", "mcp-servers",
