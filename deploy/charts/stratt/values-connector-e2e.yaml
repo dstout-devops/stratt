@@ -130,7 +130,12 @@ plugins:
       pullPolicy: Never # kind-loaded (task image:plugin PLUGIN=netbox)
     env:
       STRATT_NETBOX_URL: http://netbox:8080
-      STRATT_NETBOX_TOKEN: "0123456789abcdef0123456789abcdef01234567"
+      # NOT a literal, and that is forced rather than stylistic: NetBox 4.5 GENERATES its API token
+      # and matches the presented value through a key it derives itself, so no value written into
+      # this file could ever authenticate. `task dev:netbox:up` mints one and stores it here.
+      # It is also the §2.5 shape — nothing baked into the chart or the values.
+      STRATT_NETBOX_TOKEN:
+        secretKeyRef: { name: netbox-api-token, key: token }
   - name: kubeservices
     image:
       repository: stratt-plugin-kubeservices

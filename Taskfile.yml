@@ -665,7 +665,34 @@ tasks:
           if curl -fsS -o /dev/null http://127.0.0.1:18083/api/ 2>/dev/null; then break; fi
           sleep 2
         done
-        STRATT_NETBOX_ADDR=http://127.0.0.1:18083 {{.ROOT_DIR}}/deploy/dev/netbox-bootstrap.sh
+        # MINT the API token and store it where the plugin reads it. NetBox 4.5 generates the
+        # value and matches it through a key it derives, so there is no literal to configure —
+        # measured: with the pepper set and a FRESH database, SUPERUSER_API_TOKEN mints nothing.
+        # Idempotent: an existing Secret is reused so re-running does not orphan a live token.
+        if ! "{{.KUBECTL}}" --context {{.KIND_CONTEXT}} -n stratt get secret netbox-api-token >/dev/null 2>&1; then
+          tok=$("{{.KUBECTL}}" --context {{.KIND_CONTEXT}} -n stratt exec deploy/netbox -- \
+            /opt/netbox/netbox/manage.py shell -c "
+        from users.models import Token, User
+        u = User.objects.filter(is_superuser=True).first()
+        t = Token(user=u, description='stratt dev floor')
+        t.save()
+        # The CREDENTIAL is what follows the scheme in the Authorization header. For a v2 token
+        # that is nbt_<key>.<plaintext> — NetBox looks the token up BY KEY and then HMAC-validates
+        # the plaintext, so the key is part of the credential and not decoration. get_auth_header_prefix()
+        # is NetBox's own account of the shape ('Token ' for v1, 'Bearer nbt_<key>.' for v2); taking the
+        # value from there means this never drifts from the server's parser.
+        print('STRATT_TOKEN=' + t.get_auth_header_prefix().split(' ', 1)[1] + str(t.token))
+        " 2>/dev/null | sed -n 's/^STRATT_TOKEN=//p' | tr -d '\r')
+          test -n "$tok" || { echo "netbox: minting an API token produced nothing" >&2; exit 1; }
+          "{{.KUBECTL}}" --context {{.KIND_CONTEXT}} -n stratt create secret generic netbox-api-token \
+            --from-literal=token="$tok" >/dev/null
+          echo "netbox: minted an API token into secret/netbox-api-token"
+        else
+          tok=$("{{.KUBECTL}}" --context {{.KIND_CONTEXT}} -n stratt get secret netbox-api-token \
+            -o jsonpath='{.data.token}' | base64 -d)
+          echo "netbox: reusing the existing secret/netbox-api-token"
+        fi
+        STRATT_NETBOX_ADDR=http://127.0.0.1:18083 STRATT_NETBOX_TOKEN="$tok" {{.ROOT_DIR}}/deploy/dev/netbox-bootstrap.sh
 
   dev:objectstore:up:
     # The IN-KIND S3-compatible store the `statestore` capability needs a real provider for

@@ -59,9 +59,23 @@ spec:
             - name: STRATT_SECRET_NAMESPACE
               value: {{ .secretNamespace | quote }}
             {{- end }}
+            {{- /* A plugin env value is either a LITERAL or a Secret reference. The second form
+                   exists because some backends will not accept a value anyone can write down:
+                   NetBox 4.5 GENERATES its API token, so the only way to hold one is to mint it and
+                   read it back, and a literal in a values file could never be right. It also stops
+                   being a §2.5 violation by construction — nothing is baked into the chart.
+                   Literal:  STRATT_X: "value"
+                   Secret:   STRATT_X: {secretKeyRef: {name: my-secret, key: token}} */ -}}
             {{- range $k, $v := .env }}
             - name: {{ $k }}
+              {{- if kindIs "map" $v }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ (get $v "secretKeyRef").name | quote }}
+                  key: {{ (get $v "secretKeyRef").key | quote }}
+              {{- else }}
               value: {{ $v | quote }}
+              {{- end }}
             {{- end }}
           resources: {{- toYaml ($.Values.pluginResources | default $.Values.resources) | nindent 12 }}
           {{- /* estateHosts: a file-backed Syncer (declared-estate, ADR-0056 §5)

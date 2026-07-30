@@ -120,20 +120,25 @@ spec:
     spec:
       containers:
         - name: netbox
-          # PINNED TO THE N-1 LINE (4.4), deliberately, and this is an evergreen (§1.7) decision
-          # rather than an avoidance. NetBox **4.5 replaced the API-token scheme**: tokens are
-          # peppered (API_TOKEN_PEPPER_1, >=50 chars) and the presented value is matched through a
-          # derived 12-char `key` index, so the v1 token this repo uses everywhere — the estate, the
-          # plugin env, and deploy/dev/netbox-bootstrap.sh — is rejected outright
-          # (`{"detail":"Invalid v1 token"}`), and a fixed v2-shaped literal set on the `token` field
-          # still fails to authenticate. §1.7 requires >= N-1 on the major line, and 4.4 IS N-1, so
-          # this pin is compliant today and buys the time to adopt v2 tokens as a deliberate piece
-          # of work rather than as a side effect of standing up a floor.
+          # CURRENT (4.5), and deploy/dev/docker-compose.yml pins the SAME tag — two dev floors on
+          # different substrate versions is worse than either version, and an earlier revision of
+          # this file made exactly that mistake by pinning down to 4.4 to dodge a credential problem.
           #
-          # Adopting 4.5 is booked as NET-3: it needs the plugin, the bootstrap script and the floor
-          # wiring to agree on a v2 token, which — since 4.5 GENERATES the value — means minting one
-          # after boot and injecting it, not a literal in a values file.
-          image: docker.io/netboxcommunity/netbox:v4.4-3.4.2
+          # 4.5 replaced the API token and the plugin now speaks BOTH generations
+          # (plugins/netbox: authorizationHeader). What changed, recorded because the diagnosis was
+          # long and the server's error actively misleads:
+          #   * v1 = `Token <40-char plaintext>`, looked up by the plaintext directly.
+          #   * v2 = `Bearer nbt_<12-char key>.<plaintext>` — looked up by KEY, then HMAC-validated
+          #     against a server-side pepper (API_TOKEN_PEPPER_1, >=50 chars, set below).
+          #   * NetBox infers the version FROM THE PREFIX and nothing else, so a v2 token presented
+          #     under `Token ` parses as v1, finds no v1 row, and returns
+          #     `{"detail":"Invalid v1 token"}` — naming the version you did not intend while the
+          #     token you supplied is perfectly valid.
+          #   * `SUPERUSER_API_TOKEN` mints NOTHING on 4.5, even with the pepper set and a fresh
+          #     database. The token must be minted and read back, which `task dev:netbox:up` does.
+          #   * a 4.5-migrated database does NOT downgrade (`column users_user.is_staff does not
+          #     exist`), so moving this pin down needs a store reset.
+          image: docker.io/netboxcommunity/netbox:v4.5-3.4.2
           env:
             - { name: DB_HOST, value: netbox-postgres }
             - { name: DB_NAME, value: netbox }

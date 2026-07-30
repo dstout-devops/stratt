@@ -186,7 +186,7 @@ func (s *Server) postJSON(ctx context.Context, path string, body, out any) error
 		return fmt.Errorf("netbox: build POST %s: %w", u, err)
 	}
 	if s.cfg.Token != "" {
-		req.Header.Set("Authorization", "Token "+s.cfg.Token)
+		req.Header.Set("Authorization", authorizationHeader(s.cfg.Token))
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
