@@ -119,6 +119,18 @@ plugins:
       STRATT_AWSS3_STATE_BUCKET: stratt-tofu-state
       AWS_ACCESS_KEY_ID: testing # dev-only, matching deploy/dev/seaweedfs.yaml's s3.json identity
       AWS_SECRET_ACCESS_KEY: testing
+  # netbox — the `ipam` capability's provider and opentofu-network's LAST unmet dependency (NET-2).
+  # The token is the dev superuser API token deploy/dev/netbox.yaml issues; real deployments broker
+  # it through a CredentialRef (§2.5).
+  - name: netbox
+    image:
+      repository: stratt-plugin-netbox
+      tag: dev
+      digest: ""
+      pullPolicy: Never # kind-loaded (task image:plugin PLUGIN=netbox)
+    env:
+      STRATT_NETBOX_URL: http://netbox:8080
+      STRATT_NETBOX_TOKEN: "0123456789abcdef0123456789abcdef01234567"
   - name: kubeservices
     image:
       repository: stratt-plugin-kubeservices

@@ -1,0 +1,186 @@
+# netbox — the dev IPAM the `ipam` capability needs a real provider for (NET-2, the network leg's
+# last link).
+#
+# THE FOURTH AND FINAL LEVEL of the chain NET-2 records. `opentofu-network` declares
+# `requires: [statestore, ipam]`; the plugin had no image (PLG-2), then no pod, then a phantom
+# statestore provider, and now this: `netbox-ipam` has an image and no floor to run in, so the
+# builder verifies as a provisioning provider and sits pending on `ipam` forever.
+#
+# Heavier than openbao.yaml or seaweedfs.yaml because NetBox genuinely needs two services beside it
+# — Postgres and Redis — which is why it is worth having in the floor rather than faked: an IPAM
+# that hands out real, non-overlapping prefixes from a real allocator is the difference between
+# proving the network leg and proving a stub. ADR-0112 D5's claim is that a subnet CIDR is
+# ALLOCATED, not declared.
+#
+# DEV ONLY. Ephemeral storage, literal credentials, and a fixed API token — real deployments broker
+# every one of those through a CredentialRef (§2.5). The token below is the same one the compose
+# stack uses so `task dev:netbox:bootstrap` seeds either floor unchanged.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: netbox-postgres
+  namespace: stratt
+  labels: { app: netbox-postgres }
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: netbox-postgres }
+  template:
+    metadata:
+      labels: { app: netbox-postgres }
+    spec:
+      containers:
+        - name: postgres
+          # NetBox owns its OWN database rather than riding the control plane's: §1.2 keeps the
+          # external system of record separate, and a shared Postgres would make "restore NetBox"
+          # and "restore Stratt" one operation.
+          image: postgres:18.1-alpine
+          env:
+            - { name: POSTGRES_USER, value: netbox }
+            - { name: POSTGRES_PASSWORD, value: netbox-dev }
+            - { name: POSTGRES_DB, value: netbox }
+            - { name: PGDATA, value: /var/lib/postgresql/data/pgdata }
+          ports:
+            - { containerPort: 5432, name: postgres }
+          readinessProbe:
+            exec: { command: ["pg_isready", "-U", "netbox", "-d", "netbox"] }
+            periodSeconds: 2
+            failureThreshold: 45
+          volumeMounts:
+            - { name: data, mountPath: /var/lib/postgresql/data }
+          resources:
+            requests: { cpu: 50m, memory: 64Mi }
+            limits: { cpu: "1", memory: 512Mi }
+      volumes:
+        - name: data
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: netbox-postgres
+  namespace: stratt
+spec:
+  selector: { app: netbox-postgres }
+  ports:
+    - { name: postgres, port: 5432, targetPort: 5432 }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: netbox-redis
+  namespace: stratt
+  labels: { app: netbox-redis }
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: netbox-redis }
+  template:
+    metadata:
+      labels: { app: netbox-redis }
+    spec:
+      containers:
+        - name: redis
+          image: redis:7.4-alpine
+          # No persistence: NetBox uses Redis for its RQ task queue and cache, both rebuildable.
+          args: ["redis-server", "--save", "", "--appendonly", "no"]
+          ports:
+            - { containerPort: 6379, name: redis }
+          readinessProbe:
+            exec: { command: ["redis-cli", "ping"] }
+            periodSeconds: 2
+            failureThreshold: 30
+          resources:
+            requests: { cpu: 25m, memory: 32Mi }
+            limits: { cpu: "500m", memory: 256Mi }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: netbox-redis
+  namespace: stratt
+spec:
+  selector: { app: netbox-redis }
+  ports:
+    - { name: redis, port: 6379, targetPort: 6379 }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: netbox
+  namespace: stratt
+  labels: { app: netbox }
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: netbox }
+  template:
+    metadata:
+      labels: { app: netbox }
+    spec:
+      containers:
+        - name: netbox
+          # Pinned to the compose stack's image so both dev floors run the same NetBox. The plugin
+          # talks ONLY to the Apache-2.0 core REST API, never a NetBox Enterprise surface.
+          image: docker.io/netboxcommunity/netbox:v4.5-3.4.2
+          env:
+            - { name: DB_HOST, value: netbox-postgres }
+            - { name: DB_NAME, value: netbox }
+            - { name: DB_USER, value: netbox }
+            - { name: DB_PASSWORD, value: netbox-dev }
+            - { name: REDIS_HOST, value: netbox-redis }
+            - { name: REDIS_PORT, value: "6379" }
+            - { name: REDIS_DATABASE, value: "0" }
+            - { name: REDIS_CACHE_HOST, value: netbox-redis }
+            - { name: REDIS_CACHE_DATABASE, value: "1" }
+            - { name: SECRET_KEY, value: stratt-dev-netbox-secret-key-0123456789-abcdefghij }
+            # REQUIRED on NetBox 4.5, and its absence fails SILENTLY in the way that costs most.
+            # 4.5 hashes API tokens with a pepper; with none defined, `SUPERUSER_API_TOKEN` creates
+            # ZERO tokens (measured: Token.objects.count() == 0) and every request authenticates
+            # against nothing — the API answers `{"detail":"Invalid v1 token"}` and an operator
+            # reasonably concludes the token is wrong rather than that none was ever minted. Setting
+            # a token by hand fails loudly with `ValueError: API_TOKEN_PEPPERS is not defined`,
+            # which is the only place the real cause appears.
+            - {
+                name: API_TOKEN_PEPPER_1,
+                value: stratt-dev-netbox-api-token-pepper-0123456789-abcdefghijklmnop-QRSTUVWX,
+              }
+            - { name: SUPERUSER_NAME, value: admin }
+            - { name: SUPERUSER_EMAIL, value: admin@stratt.test }
+            - { name: SUPERUSER_PASSWORD, value: netbox-dev }
+            # The SAME token the compose stack issues, so deploy/dev/netbox-bootstrap.sh seeds
+            # either floor with no change and the plugin's env below matches both.
+            - { name: SUPERUSER_API_TOKEN, value: "0123456789abcdef0123456789abcdef01234567" }
+            - { name: SKIP_STARTUP_SCRIPTS, value: "true" }
+            - { name: ALLOWED_HOSTS, value: "*" }
+          ports:
+            - { containerPort: 8080, name: http }
+          readinessProbe:
+            # /login/ and NOT /api/. NetBox 4.5 requires authentication on the API, so an
+            # unauthenticated probe of /api/ gets a **403 forever** — the pod serves correctly and
+            # never becomes ready. Measured here, and the compose stack's healthcheck
+            # (`curl -fsS http://127.0.0.1:8080/api/`) carries the identical bug.
+            #
+            # It is the same shape as seaweedfs.yaml's note one file over: a readiness probe must
+            # hit something that is healthy WITHOUT credentials, or it tests the auth config rather
+            # than the service. /login/ answers 200 unauthenticated and is served by the same
+            # process, so it proves what readiness is actually asking about.
+            #
+            # NetBox runs migrations on first boot and takes a while; the generous failure budget is
+            # a startup budget, not a guess.
+            httpGet: { path: /login/, port: 8080 }
+            periodSeconds: 5
+            failureThreshold: 60
+          resources:
+            requests: { cpu: 100m, memory: 512Mi }
+            limits: { cpu: "2", memory: 2Gi }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: netbox
+  namespace: stratt
+spec:
+  selector: { app: netbox }
+  ports:
+    - { name: http, port: 8080, targetPort: 8080 }
