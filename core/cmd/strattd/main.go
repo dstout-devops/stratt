@@ -344,12 +344,25 @@ func run(ctx context.Context, log *slog.Logger) error {
 	log.Info("contracts pinned", "count", len(shipped))
 
 	// Bootstrap ownership registrations (§2.1: registration precedes writes).
-	// os.kernel is written back by Runs; owned by the platform team until the
-	// Blueprint compiler owns fact routing (Phase 2, charter-guardian note).
-	if err := store.RegisterFacetOwner(ctx, types.FacetOwner{
-		Namespace: "os.kernel", OwnerKind: "team", OwnerRef: "platform",
-	}); err != nil {
-		return err
+	//
+	// These are namespaces written back by RUNS rather than projected by a Syncer, so no plugin
+	// grant registers them and no Blueprint claims them — the compiler only registers a namespace
+	// a route OBSERVES. Owned by the platform team until fact routing is modelled, which is the
+	// Phase-2 charter-guardian note os.kernel has carried since the beginning.
+	//
+	//   * os.kernel      — gathered facts, written back by every converge.
+	//   * software.package — "apache is installed at version X". ADR-0080 records this Facet as
+	//     having a READER (the patch/advisory check) and no production write-owner, and that gap
+	//     is not academic: the apache converge SUCCEEDED on a freshly-built host and the Run then
+	//     failed on `facet namespace software.package has no registered owner`. The work was done
+	//     and the record of it was refused. A Syncer-owned collector (ADR-0080 slice 2) is the
+	//     real answer; until one ships, the team owns it exactly as it owns os.kernel.
+	for _, ns := range []string{"os.kernel", "software.package"} {
+		if err := store.RegisterFacetOwner(ctx, types.FacetOwner{
+			Namespace: ns, OwnerKind: "team", OwnerRef: "platform",
+		}); err != nil {
+			return err
+		}
 	}
 
 	// ── event plane ──────────────────────────────────────────────────────
