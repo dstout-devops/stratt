@@ -1807,6 +1807,25 @@ func mergeResults(slices []dispatch.Result) dispatch.Result {
 		if len(r.OutputsContract) > 0 {
 			out.OutputsContract = r.OutputsContract
 		}
+		// The output VALUES, beside the contract that describes them. Omitting this line meant
+		// every Actuator Step's outputs were governed, captured — and then dropped HERE, on the
+		// way out of the fold, because mergeResults runs for every Run and not just multi-slice
+		// ones. The symptom surfaced two Steps downstream as
+		//
+		//	template path .steps.gather.outputs.csr: "csr" is not an object
+		//
+		// which names the consumer and says nothing about the fold that emptied it: a nil
+		// json.RawMessage crosses Temporal as the four bytes `null`, which is non-empty enough to
+		// be stored as a Step output and useless enough to break every binding into it.
+		//
+		// Last non-empty wins, matching OutputsContract above and the shim's own stated rule for
+		// outputs across hosts. A Step fanned across several slices that publishes DIFFERENT
+		// outputs per slice is ambiguous by construction — the flows that use outputs are
+		// single-target (a CSR belongs to one host), and a general answer needs a declaration
+		// saying which slice speaks, not a silent pick here.
+		if len(r.Outputs) > 0 {
+			out.Outputs = r.Outputs
+		}
 		for t, fragments := range r.Drift {
 			if out.Drift == nil {
 				out.Drift = map[string][]json.RawMessage{}

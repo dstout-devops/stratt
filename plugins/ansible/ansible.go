@@ -387,16 +387,35 @@ func factsOf(ev RunnerEvent) map[string]any {
 	return facts
 }
 
-func extractOutputs(facts map[string]any) []byte {
-	so, ok := facts["stratt_outputs"].(map[string]any)
-	if !ok || len(so) == 0 {
-		return nil
+// extractOutputs returns the marshalled outputs and, when a play PUBLISHED something this
+// function could not use, a diagnosis naming why. The second return value exists because the
+// silent-drop version of this code cost a live debugging session: a play set `stratt_outputs`,
+// every task reported ok, the Run folded SUCCEEDED with `outputs` NULL, and the failure finally
+// surfaced two Steps later as
+//
+//	template path .steps.gather.outputs.csr: "csr" is not an object
+//
+// — a message about the CONSUMER, pointing nowhere near the producer that dropped the value.
+// §1.8: hiding mechanism is the product, hiding failure is not. A play that publishes an output
+// the shim discards must say so where the play ran.
+func extractOutputs(facts map[string]any) ([]byte, string) {
+	v, present := facts["stratt_outputs"]
+	if !present {
+		return nil, ""
+	}
+	so, ok := v.(map[string]any)
+	if !ok {
+		return nil, fmt.Sprintf("stratt_outputs must be a mapping of name -> value, got %T — "+
+			"outputs bind as {{.steps.<step>.outputs.<field>}}, so a scalar has no field to bind", v)
+	}
+	if len(so) == 0 {
+		return nil, "stratt_outputs is an empty mapping — nothing was published for a downstream Step to bind"
 	}
 	raw, err := json.Marshal(so)
 	if err != nil {
-		return nil
+		return nil, "stratt_outputs is not JSON-serialisable: " + err.Error()
 	}
-	return raw
+	return raw, ""
 }
 
 // extractDiff lifts a changed task's drift STRUCTURE (task + changed file/object
@@ -446,4 +465,15 @@ func diffPaths(diff any) []string {
 		}
 	}
 	return paths
+}
+
+// outputFields lists the published output NAMES, sorted, for the shim's descent event. Names
+// only, never values: an output can carry anything a play chose to publish and the event stream
+// is not where that judgement gets made (§2.5).
+func outputFields(raw []byte) []string {
+	var m map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &m); err != nil {
+		return nil
+	}
+	return slices.Sorted(maps.Keys(m))
 }

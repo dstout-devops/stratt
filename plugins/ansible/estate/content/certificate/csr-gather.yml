@@ -13,8 +13,45 @@
 # and still be sitting there after the certificate is reissued.
 - name: Generate a key and CSR on the target
   hosts: all
-  gather_facts: false
+  # Facts ARE gathered here, unlike cert-deliver.yml beside it, and only because the prerequisite
+  # below is named differently per distribution. `min` is enough — it carries os_family.
+  gather_facts: true
+  gather_subset: [min]
+  vars:
+    # community.crypto's modules are Python, and they execute ON THE TARGET (hosts: all), so the
+    # `cryptography` library is a TARGET dependency — not something the EE can satisfy. The crypto
+    # EE variant ships the COLLECTION; the collection then needs the library where it runs.
+    #
+    # Found by running it: the first live cert-issue died on
+    #   "Cannot detect the required Python library cryptography (>= 1.2.3)"
+    # against an Alpine target, with the EE reporting community.crypto==2.22.3 installed one line
+    # earlier. Content that runs remotely has two dependency surfaces and only one of them is the
+    # image.
+    #
+    # A per-family MAP and not a bare package name, for the ANS-012 reason:
+    # `ansible.builtin.package` dispatches the package MANAGER, never translates the package NAME.
+    # Alpine calls it py3-cryptography; everyone else python3-cryptography.
+    cert_crypto_package:
+      Alpine: py3-cryptography
+      Debian: python3-cryptography
+      RedHat: python3-cryptography
+      Suse: python3-cryptography
   tasks:
+    # Refuse an unmapped distribution rather than letting the map return Undefined and fail three
+    # tasks later inside a package manager — the ANS-014 rule: the diagnosis names the cause.
+    - name: A distribution with no mapped cryptography package must fail here, by name
+      ansible.builtin.assert:
+        that: ansible_facts['os_family'] in cert_crypto_package
+        fail_msg: >-
+          no cryptography package is mapped for os_family "{{ ansible_facts['os_family'] }}" —
+          add it to cert_crypto_package. community.crypto runs on the target and cannot work
+          without it, and guessing a package name would fail further from the cause (§1.8)
+
+    - name: Ensure the target can do crypto (community.crypto executes here, not in the EE)
+      ansible.builtin.package:
+        name: "{{ cert_crypto_package[ansible_facts['os_family']] }}"
+        state: present
+
     - name: Ensure the key directory exists
       ansible.builtin.file:
         path: "{{ cert_dir }}"

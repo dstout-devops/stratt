@@ -23,7 +23,10 @@ func TestExtractOutputsIsSeparateFromFacts(t *testing.T) {
 		"stratt_outputs": map[string]any{"csr": "-----BEGIN CERTIFICATE REQUEST-----"},
 		"stratt_facets":  map[string]any{"app.config": map[string]any{"port": "8080"}},
 	}
-	out := extractOutputs(facts)
+	out, diag := extractOutputs(facts)
+	if diag != "" {
+		t.Fatalf("a well-formed stratt_outputs must not be diagnosed as unusable: %s", diag)
+	}
 	if !strings.Contains(string(out), "CERTIFICATE REQUEST") {
 		t.Fatalf("stratt_outputs must be lifted for cross-Step binding, got %q", out)
 	}
@@ -34,7 +37,27 @@ func TestExtractOutputsIsSeparateFromFacts(t *testing.T) {
 	// A play that reports facets and no outputs hands nothing downstream, which is every play
 	// shipping today. Absence must be nil rather than an empty object, so the terminal carries no
 	// outputs at all and the hub has nothing to govern.
-	if got := extractOutputs(map[string]any{"stratt_facets": map[string]any{"app.config": 1}}); got != nil {
+	got, diag := extractOutputs(map[string]any{"stratt_facets": map[string]any{"app.config": 1}})
+	if got != nil {
 		t.Fatalf("no stratt_outputs must yield nil, got %q", got)
+	}
+	// ABSENT is silent; PRESENT-BUT-UNUSABLE is not. The silent-drop version of this code let a
+	// play publish an output the shim discarded, and the failure surfaced two Steps later as a
+	// template error naming the CONSUMER — nowhere near the producer (§1.8).
+	if diag != "" {
+		t.Fatalf("an absent stratt_outputs is not a defect and must not be diagnosed: %s", diag)
+	}
+	for name, bad := range map[string]any{
+		"scalar": "just-a-string",
+		"empty":  map[string]any{},
+		"list":   []any{"a"},
+	} {
+		raw, diag := extractOutputs(map[string]any{"stratt_outputs": bad})
+		if raw != nil {
+			t.Fatalf("%s stratt_outputs must not be captured, got %q", name, raw)
+		}
+		if diag == "" {
+			t.Fatalf("%s stratt_outputs must be DIAGNOSED, not silently dropped", name)
+		}
 	}
 }

@@ -40,3 +40,36 @@ func TestMergeResults_FirstCauseWinsAndSuccessStaysQuiet(t *testing.T) {
 		t.Fatalf("a successful Run must record no cause, got %q", clean.Error)
 	}
 }
+
+// TestMergeResults_CarriesOutputs: the SAME defect as the Error fold above, one field over and
+// found the same way — by running the thing. An Actuator Step's typed outputs (ADR-0031, extended
+// to Apply by CERT-2) were emitted by the shim, governed against the Actuator's pinned output
+// contract, captured by the hub — and then dropped by this fold, which every Run passes through
+// whether or not it has more than one slice.
+//
+// What made it expensive is that nothing failed where the value was lost. A nil json.RawMessage
+// crosses Temporal as the literal `null`, which is non-empty enough to be recorded as the Step's
+// output and useless enough to break every binding into it, so the first sign of trouble was a
+// message about the CONSUMER two Steps later:
+//
+//	template path .steps.gather.outputs.csr: "csr" is not an object
+//
+// Adding a field to dispatch.Result means teaching this fold about it. That is the rule the Error
+// case established and this one confirms.
+func TestMergeResults_CarriesOutputs(t *testing.T) {
+	const csr = `{"csr":"-----BEGIN CERTIFICATE REQUEST-----"}`
+	got := mergeResults([]dispatch.Result{
+		{Succeeded: true, PerTarget: map[string]string{}},
+		{Succeeded: true, PerTarget: map[string]string{}, Outputs: []byte(csr)},
+	})
+	if string(got.Outputs) != csr {
+		t.Fatalf("a Step's typed outputs must survive the slice fold; got %q", got.Outputs)
+	}
+	// A Run whose slices publish nothing must yield NO outputs — not an empty object and not
+	// `null`. The downstream binding distinguishes "nothing was published" from "a value that is
+	// not an object", and only the first is an ordinary Run.
+	none := mergeResults([]dispatch.Result{{Succeeded: true, PerTarget: map[string]string{}}})
+	if len(none.Outputs) != 0 {
+		t.Fatalf("a Run that published nothing must carry no outputs; got %q", none.Outputs)
+	}
+}

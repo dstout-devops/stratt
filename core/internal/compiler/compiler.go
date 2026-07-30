@@ -362,21 +362,15 @@ func Compile(ctx context.Context, s Store, maxDelta float64, resolveRemediation 
 		plan.Errors = append(plan.Errors, poisoned.message)
 	}
 
-	// ── ownership registry (blueprint-vs-blueprint, §2.1) ──
+	// ── ownership registry (§2.1) ──
 	// A namespace already owned by a Syncer or team is observed read-only —
-	// reads never claim write-ownership. An unowned namespace claimed by more
-	// than one distinct Blueprint (in this pass or against a persisted
-	// Blueprint owner) is a conflict: those Assignments are poisoned.
-	ownerships, ownConflicts, err := resolveOwnership(ctx, s, ownClaims, skipped)
+	// reads never claim write-ownership. Otherwise every claimant Blueprint is
+	// registered as an owner: registration says who MAY write, and since
+	// ADR-0060 that is per (namespace, owner_ref). Contention is decided
+	// per-Entity by detectClaimConflicts above, not here.
+	ownerships, err := resolveOwnership(ctx, s, ownClaims, skipped)
 	if err != nil {
 		return Plan{}, err
-	}
-	for _, c := range ownConflicts {
-		for _, a := range c.assignments {
-			skipped[a] = true
-			delete(candidates, a)
-		}
-		plan.Errors = append(plan.Errors, c.message)
 	}
 	plan.Ownership = ownerships
 
@@ -922,17 +916,28 @@ func detectClaimConflicts(claims []claimRecord, skipped map[string]bool) []poiso
 	return out
 }
 
-type ownConflict struct {
-	assignments []string
-	message     string
-}
-
 // resolveOwnership decides which Blueprint ownership registrations to perform
-// and which namespaces are contested (§2.1). A namespace already owned by a
-// Syncer or team is read-observed — no claim. An unowned namespace claimed by
-// more than one distinct Blueprint (this pass, or vs. a persisted Blueprint
-// owner) is a conflict poisoning every claimant Assignment.
-func resolveOwnership(ctx context.Context, s Store, claims []ownClaim, skipped map[string]bool) ([]types.FacetOwner, []ownConflict, error) {
+// (§2.1). A namespace already owned by a Syncer or team is read-observed — no
+// claim. Otherwise EVERY claimant Blueprint is registered as an owner.
+//
+// Many Blueprints may own one namespace, and that is ADR-0060's model, not a
+// relaxation of it. This function used to refuse a second Blueprint claimant
+// outright ("one namespace has one write owner"), which was written for the
+// ADR-0023 data layer where graph.facet_owner was keyed by namespace ALONE.
+// ADR-0060 re-keyed it (namespace, owner_ref) and re-based the §1.2
+// single-writer invariant onto (Entity, namespace, source) — in the words of
+// migration 00035, dropping "a global per-namespace monopoly that strips
+// capability" because the estate-wide lock "added zero per-Entity protection".
+// The compiler kept the monopoly the store had abandoned, so three application
+// Blueprints converging app.config over DISJOINT host sets — apache, tomcat and
+// web-server, which is exactly ADR-0148 D1's one-Blueprint-per-application —
+// poisoned each other and the estate would not compile at all.
+//
+// The protection that actually matters survives, sharper: two EXCLUSIVE claims
+// on one (namespace, Entity) still fail the compile in detectClaimConflicts,
+// per-Entity and by name (§2.4, exclusive-fails-compile / additive-union). This
+// pass registers who MAY write; it is not where contention is decided.
+func resolveOwnership(ctx context.Context, s Store, claims []ownClaim, skipped map[string]bool) ([]types.FacetOwner, error) {
 	// namespace → blueprint → assignments claiming it.
 	byNS := map[string]map[string][]string{}
 	for _, c := range claims {
@@ -946,7 +951,6 @@ func resolveOwnership(ctx context.Context, s Store, claims []ownClaim, skipped m
 	}
 
 	var owners []types.FacetOwner
-	var conflicts []ownConflict
 	namespaces := make([]string, 0, len(byNS))
 	for ns := range byNS {
 		namespaces = append(namespaces, ns)
@@ -957,43 +961,23 @@ func resolveOwnership(ctx context.Context, s Store, claims []ownClaim, skipped m
 		blueprints := byNS[ns]
 		owner, owned, err := s.GetFacetOwner(ctx, ns)
 		if err != nil {
-			return nil, nil, err
+			return nil, err
 		}
 		if owned && owner.OwnerKind != blueprintOwnerKind {
 			continue // Syncer/team-owned: read-only observation, no claim
 		}
-		// Distinct Blueprint claimants (include a persisted Blueprint owner).
-		claimants := map[string]bool{}
+		// Register every claimant (idempotent if already an owner). Sorted so a
+		// Plan is byte-stable across compiles — map order is not.
+		bps := make([]string, 0, len(blueprints))
 		for bp := range blueprints {
-			claimants[bp] = true
+			bps = append(bps, bp)
 		}
-		if owned {
-			claimants[owner.OwnerRef] = true
-		}
-		if len(claimants) > 1 {
-			names := make([]string, 0)
-			for _, as := range blueprints {
-				names = append(names, as...)
-			}
-			sort.Strings(names)
-			bpNames := make([]string, 0, len(claimants))
-			for bp := range claimants {
-				bpNames = append(bpNames, bp)
-			}
-			sort.Strings(bpNames)
-			conflicts = append(conflicts, ownConflict{
-				assignments: names,
-				message: fmt.Sprintf("facet namespace %q is claimed by multiple Blueprints (%s) — one namespace has one write owner (§2.1); scope the routes, never share ownership",
-					ns, strings.Join(bpNames, ", ")),
-			})
-			continue
-		}
-		// Exactly one Blueprint — register it (idempotent if already owner).
-		for bp := range blueprints {
+		sort.Strings(bps)
+		for _, bp := range bps {
 			owners = append(owners, types.FacetOwner{Namespace: ns, OwnerKind: blueprintOwnerKind, OwnerRef: bp})
 		}
 	}
-	return owners, conflicts, nil
+	return owners, nil
 }
 
 func filterMemberships(ms []graph.AssignmentMembership, skipped map[string]bool) []graph.AssignmentMembership {

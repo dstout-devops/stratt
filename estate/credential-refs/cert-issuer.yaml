@@ -1,0 +1,26 @@
+# cert-issuer — the CredentialRef the cert-issuer Actuator's Action and Apply bind (§2.5 / ADR-0050).
+#
+# WHY IT EXISTS, recorded because the first answer was the wrong one. The cert-issue Workflow named
+# `credentialRefs: [cert-issuer]` while NO such declaration existed anywhere in the estate — nothing
+# rejected that at load, because a Step's credentialRefs resolve when a Run dispatches. The first
+# live launch therefore failed, and the tempting fix was to delete the reference: the openbao plugin
+# holds its own CLM token from boot env (an acknowledged §2.5 debt, see
+# plugins/openbao/estate/actuators/openbao.yaml), so the Action appeared to need no credential at
+# all. That is exactly backwards. The core refuses a credential-free Action:
+#
+#	action "cert-issuer/sign" must carry a CredentialRef — the use-check is its only authz gate
+#	until the Action run-grant lands (ActionUngated)
+#
+# An Action's CredentialRef use-check is not bookkeeping about MATERIAL; it is the authorization
+# gate on the verb. Removing the reference removed the gate. The declaration was the missing part.
+#
+# Same shape and same reason as helm-deploy beside it: a gate-only ref (ADR-0052). The plugin
+# authenticates to OpenBao itself, so nothing is injected here and no material crosses — the
+# locator is a POINTER to an authz-marker Secret and the use-check is the whole point. When the
+# plugin's token moves onto a real brokered credential (the §2.5 debt above), this declaration
+# gains an `injection` and stops being gate-only; the Workflow does not change.
+name: cert-issuer
+ownerTeam: platform-admins
+backend: k8s-secret
+gateOnly: true
+locator: { namespace: stratt, name: cert-issuer-authz }

@@ -58,7 +58,16 @@ steps:
   # it had just generated, so the only shapes available were a CLM-generated key (discarding the
   # born-on-target property this Actuator's own input Contract states in writing) or a fake.
   - name: gather
-    viewName: managed-certs
+    # A HOST View, not managed-certs — and the difference is a gap this Workflow exposed rather
+    # than a detail. A `cert` Entity carries ONLY `cert.serial` (measured: no dns.fqdn, no
+    # mgmt.address), so it is not something ansible can reach; delivery needs the machine that will
+    # PRESENT the certificate. Nothing in the estate connects the two: an Intent/Certificate names
+    # a commonName and no target, and cert Entities correlate with hosts on no shared scheme.
+    #
+    # So this binding is STATIC where it should be derived, and that is booked (CERT-3) rather than
+    # dressed up. The renewal loop is unaffected — it is about the certificate — but delivery to
+    # "whichever host this certificate is for" is not yet expressible.
+    viewName: managed-web
     actuator: ansible-certificate
     credentialRefs: [web-machine]
     # It writes NO facets: a CSR is not a fact about the host, it is a request for the next Step.
@@ -79,6 +88,12 @@ steps:
     # later Step and the delivery Step needs the certificate. The Actuator verb converges a View of
     # certificates and writes cert.identity/cert.expiry; this signs exactly one.
     action: cert-issuer/sign
+    # An Action's CredentialRef use-check is its ONLY authz gate (the core refuses a credential-free
+    # Action outright, "ActionUngated"), so this is the gate on signing — not bookkeeping about
+    # material. The openbao plugin authenticates to the CLM itself, which is why
+    # estate/credential-refs/cert-issuer.yaml is a GATE-ONLY ref (ADR-0052), exactly as helm-deploy
+    # is. This reference named a declaration that did not exist until the first live run; deleting
+    # the reference would have removed the gate rather than fixed the estate.
     credentialRefs: [cert-issuer]
     params:
       # The output of the Step above, validated against outputs/csr before anything could bind it.
@@ -88,7 +103,10 @@ steps:
 
   - name: deliver
     needs: [sign]
-    viewName: managed-certs
+    # The same static host View as `gather`, and it must be: the key was generated there and has
+    # not moved. Delivering to a different host than the one that made the key would produce a
+    # certificate whose private half is somewhere else.
+    viewName: managed-web
     actuator: ansible-certificate
     credentialRefs: [web-machine]
     # Delivery reports the FILE that landed — the one namespace this Actuator may write.
@@ -104,26 +122,22 @@ steps:
         cert_pem: "{{.steps.sign.outputs.certificate}}"
       playbook: cert-deliver.yml
 
-  # The reconcile that projects cert.identity / cert.expiry — the facts the renewal Baseline reads.
-  # It runs AFTER delivery so a Finding closes on a certificate that is actually on the host, not on
-  # one that merely exists in the CLM.
-  - name: issue
-    needs: [deliver]
-    viewName: managed-certs
-    # The CAPABILITY's provider, not a provider name. cert-issuer is what serves `certissuer` in
-    # this estate; the Blueprint above names only the class (ADR-0106 D1).
-    actuator: cert-issuer
-    credentialRefs: [cert-issuer]
-    # The write ceiling for the issuance: the two Facets a certificate projects and nothing else.
-    facetWriteScope: [cert.identity, cert.expiry]
-    params:
-      commonName: "{{.launch.commonName}}"
-      role: "{{.launch.role}}"
-      ttl: "{{.launch.ttl}}"
-      renewBefore: "{{.launch.renewBefore}}"
-      # NO `csr` — and its absence is the §2.5 decision, not an omission. The CSR is the TARGET's:
-      # the private key is born on the host and never crosses the wire, so a CSR pasted into an
-      # estate file would either be a placeholder that issues nothing (which is what
-      # estate/triggers/cert-reconcile.yaml still carries) or a key that left its host. The
-      # Actuator's Contract makes `csr` optional for exactly this reason; supplying it is the
-      # target-side flow, and this reconcile path names the subject and lets the provider mint.
+  # ── WHY THERE IS NO FOURTH STEP ─────────────────────────────────────────────────────────────
+  # A fourth Step ran here — `issue`, a cert-issuer Apply over view:managed-certs meant to project
+  # cert.identity / cert.expiry once delivery had landed. It executed exactly once and the provider
+  # refused it, correctly:
+  #
+  #	commonName requires a target-generated csr (born-on-target, ADR-0050)
+  #	— refusing to sign without one
+  #
+  # The Step was asking the CLM to MINT a certificate whose subject it had named — the very thing
+  # the three Steps above exist to avoid, and which the Actuator fails closed on. Its stated purpose
+  # (project the facts the renewal Baseline reads) is not an Apply at all, and those Facets already
+  # have a write owner: the openbao cert Syncer projects cert.identity and cert.expiry from the CLM,
+  # which is the §2.1 single-writer this Step would have become a second of.
+  #
+  # So the certificate is issued by `sign`, delivered by `deliver`, and OBSERVED by the Syncer on
+  # its own cadence — one authority per fact (§1.2). The renewal loop is unchanged: the Baseline
+  # reads cert.expiry.notAfter against `renewBefore` and opens a Finding, and this Workflow is what
+  # closes it. `renewBefore` stays a declared input because the Blueprint's expectation and this
+  # Workflow's launch must agree on one window; nothing in these three Steps consumes it directly.

@@ -437,8 +437,24 @@ func Run(ctx context.Context, w io.Writer, dir string, req Request, run commandR
 		// port validates them against a pinned contract once, on the terminal, exactly as an
 		// Action's are. Last writer wins across hosts, which is right for the single-target flows
 		// that use them (a CSR belongs to one host) and is stated rather than left implicit.
-		if o := extractOutputs(factsOf(ev)); o != nil {
+		if o, diag := extractOutputs(factsOf(ev)); o != nil {
 			outputs = o
+			// Say WHAT was published, where the play ran. Field NAMES only — a value here could
+			// be anything the play chose to publish, and the shim's event stream is not the place
+			// to decide it is safe to print (§2.5).
+			emit(&pluginv1.ApplyResponse{Event: &pluginv1.TaskEvent{
+				Level: pluginv1.TaskEvent_LEVEL_INFO, At: timestamppb.Now(),
+				Message: "published outputs: " + strings.Join(outputFields(o), ", "),
+				Fields:  map[string]string{"host": host, "kind": "outputs"},
+			}})
+		} else if diag != "" {
+			// PUBLISHED BUT UNUSABLE. Loud, at the producer, naming the shape — never dropped to
+			// be rediscovered as a template error in a later Step.
+			emit(&pluginv1.ApplyResponse{Event: &pluginv1.TaskEvent{
+				Level: pluginv1.TaskEvent_LEVEL_WARN, At: timestamppb.Now(),
+				Message: "outputs discarded: " + diag,
+				Fields:  map[string]string{"host": host, "kind": "outputs-discarded"},
+			}})
 		}
 		if facets := extractFacts(ev); facets != nil {
 			// Facts project onto the host's Entity by the target's IDENTITY (the hub

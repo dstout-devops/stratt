@@ -184,12 +184,13 @@ func TestCompileClaimConflict(t *testing.T) {
 	if _, err := s.GetBaseline(ctx, CompiledName("asgB", "app-b", 1, 0)); err == nil {
 		t.Fatal("conflicted assignment asgB must not produce a baseline")
 	}
-	// The second blueprint's ownership claim on the shared namespace is denied.
-	// (First registrant wins the namespace; the conflict is reported.)
+	// The contested namespace here is os.kernel, which the seed Syncer owns, so
+	// no Blueprint ownership is claimed either way — the refusal above comes
+	// purely from the per-Entity exclusive-claim check (§2.4).
 }
 
-// ownedBlueprint manages (remediates) a fresh namespace, so the compiler
-// claims Blueprint write-ownership of it — the input to the conflict test.
+// ownedBlueprint manages (remediates) a fresh namespace, so the compiler claims
+// Blueprint write-ownership of it — the input to the ownership tests.
 func ownedBlueprint(name string, version int, observeNS string) types.Blueprint {
 	return types.Blueprint{
 		Name: name, Version: version, For: types.IntentApplication,
@@ -206,7 +207,19 @@ func ownedBlueprint(name string, version int, observeNS string) types.Blueprint 
 	}
 }
 
-func TestCompileOwnershipConflict(t *testing.T) {
+// TestCompileNamespaceCoOwnership: many Blueprints may own one facet namespace
+// (ADR-0060 — graph.facet_owner is keyed (namespace, owner_ref), and the
+// single-writer invariant binds (Entity, namespace, source)). This is the shape
+// the reference estate ships: apache, tomcat and web-server each converge
+// app.config over a disjoint set of hosts, one Blueprint per delivered
+// application (ADR-0148 D1).
+//
+// This test asserted the OPPOSITE until the compiler was reconciled with
+// ADR-0060: it was written against the ADR-0023 store, where facet_owner was
+// keyed by namespace alone, and it kept an estate-wide monopoly the data layer
+// had already dropped. The regression it now guards is a real one — with the
+// monopoly in force the reference estate did not compile at all.
+func TestCompileNamespaceCoOwnership(t *testing.T) {
 	s := testStore(t)
 	ctx := context.Background()
 	seedEntity(t, s, "u1", "x86_64")
@@ -214,25 +227,90 @@ func TestCompileOwnershipConflict(t *testing.T) {
 	must(t, s.UpsertWorkflow(ctx, types.Workflow{Name: "install", Steps: []types.Step{{Name: "go", ViewName: "dev-vms"}}}))
 	must(t, s.UpsertIntent(ctx, types.Intent{Name: "chrome", Kind: types.IntentApplication}))
 	must(t, s.UpsertIntent(ctx, types.Intent{Name: "firefox", Kind: types.IntentApplication}))
-	// Two distinct Blueprints both manage the fresh namespace app.managed.
+	// Two distinct Blueprints both manage the fresh namespace app.managed,
+	// additively (ownedBlueprint claims additive — the §2.4 union form).
 	must(t, s.UpsertBlueprint(ctx, ownedBlueprint("bp-a", 1, "app.managed")))
 	must(t, s.UpsertBlueprint(ctx, ownedBlueprint("bp-b", 1, "app.managed")))
 	must(t, s.UpsertAssignment(ctx, types.Assignment{Name: "asgA", Intent: "chrome", View: "dev-vms", Blueprint: "bp-a", BlueprintVersion: 1}))
 	must(t, s.UpsertAssignment(ctx, types.Assignment{Name: "asgB", Intent: "firefox", View: "dev-vms", Blueprint: "bp-b", BlueprintVersion: 1}))
 
 	plan := compileApply(t, s, 0)
+	if len(plan.Errors) != 0 {
+		t.Fatalf("co-ownership of one namespace must compile clean, got %v", plan.Errors)
+	}
+	// Both Blueprints are registered owners, and BOTH baselines are applied —
+	// neither Assignment was poisoned by the other's claim.
+	owners := map[string]bool{}
+	for _, o := range plan.Ownership {
+		if o.Namespace == "app.managed" {
+			owners[o.OwnerRef] = true
+		}
+	}
+	if !owners["bp-a"] || !owners["bp-b"] {
+		t.Fatalf("both Blueprints must be registered owners of app.managed, got %v", plan.Ownership)
+	}
+	if _, ok, _ := s.GetFacetOwner(ctx, "app.managed"); !ok {
+		t.Fatal("app.managed must have a registered owner after the compile")
+	}
+	assigned := map[string]bool{}
+	for _, b := range plan.Upserts {
+		if b.CompiledFrom != nil {
+			assigned[b.CompiledFrom.Assignment] = true
+		}
+	}
+	if !assigned["asgA"] || !assigned["asgB"] {
+		t.Fatalf("both Assignments must produce a Baseline, got %v", assigned)
+	}
+}
+
+// TestCompileExclusiveClaimConflict: co-ownership of a namespace is fine, but
+// two EXCLUSIVE claims landing on the same (namespace, Entity) is not — that is
+// the §2.4 anti-GPO axiom, and since the estate-wide ownership monopoly was
+// removed it is the ONLY thing standing between two Blueprints and a silent
+// last-writer-wins on one host.
+//
+// TestCompileClaimConflict above covers the same path over a SYNCER-owned
+// namespace (os.kernel), where resolveOwnership skips out early and only asserts
+// that some error occurred. This one contests a BLUEPRINT-owned namespace — the
+// case that used to be caught by the estate-wide monopoly on the way past — and
+// asserts the diagnosis names the contested Entity and both claimants.
+func TestCompileExclusiveClaimConflict(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	eid := seedEntity(t, s, "u1", "x86_64")
+	seedView(t, s, "dev-vms")
+	must(t, s.UpsertWorkflow(ctx, types.Workflow{Name: "install", Steps: []types.Step{{Name: "go", ViewName: "dev-vms"}}}))
+	must(t, s.UpsertIntent(ctx, types.Intent{Name: "chrome", Kind: types.IntentApplication}))
+	must(t, s.UpsertIntent(ctx, types.Intent{Name: "firefox", Kind: types.IntentApplication}))
+	// Same namespace, same View (so the same Entity u1), both EXCLUSIVE.
+	bpA, bpB := ownedBlueprint("bp-a", 1, "app.managed"), ownedBlueprint("bp-b", 1, "app.managed")
+	bpA.Routes[0].Claim, bpB.Routes[0].Claim = types.ClaimExclusive, types.ClaimExclusive
+	must(t, s.UpsertBlueprint(ctx, bpA))
+	must(t, s.UpsertBlueprint(ctx, bpB))
+	must(t, s.UpsertAssignment(ctx, types.Assignment{Name: "asgA", Intent: "chrome", View: "dev-vms", Blueprint: "bp-a", BlueprintVersion: 1}))
+	must(t, s.UpsertAssignment(ctx, types.Assignment{Name: "asgB", Intent: "firefox", View: "dev-vms", Blueprint: "bp-b", BlueprintVersion: 1}))
+
+	plan := compileApply(t, s, 0)
 	found := false
 	for _, e := range plan.Errors {
-		if contains(e, "claimed by multiple Blueprints") {
+		// Names the Entity and both claimants — §1.8, the operator must be able
+		// to see WHICH host is contested, not just that something is.
+		if contains(e, "exclusive claim conflict") && contains(e, eid) &&
+			contains(e, "asgA") && contains(e, "asgB") {
 			found = true
 		}
 	}
 	if !found {
-		t.Fatalf("expected a blueprint ownership conflict, got %v", plan.Errors)
+		t.Fatalf("expected a per-Entity exclusive claim conflict naming %s and both assignments, got %v", eid, plan.Errors)
 	}
-	// Neither claimant's baseline is applied, and the namespace stays unowned.
-	if _, ok, _ := s.GetFacetOwner(ctx, "app.managed"); ok {
-		t.Fatal("a contested namespace must not be registered to either blueprint")
+	// Both claimants are poisoned — no baseline, no precedence pick (§2.4).
+	for _, b := range plan.Upserts {
+		if b.CompiledFrom == nil {
+			continue
+		}
+		if a := b.CompiledFrom.Assignment; a == "asgA" || a == "asgB" {
+			t.Fatalf("a contested Assignment must not produce a Baseline: %s", a)
+		}
 	}
 }
 
