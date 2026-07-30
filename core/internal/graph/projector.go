@@ -168,6 +168,13 @@ func upsertEntityTx(ctx context.Context, tx pgx.Tx, prov types.Provenance, cell 
 		// correlated Entity are preserved (no §2.4 cross-source clobber, and a
 		// no-label writer no longer wipes). Ownership of the changed keys is
 		// enforced by the enforce_label_owner trigger.
+		// A REVIVAL is a NEW instance that happens to reuse an identity, and its Facets must not
+		// be the dead one's. Read the tombstone state before clearing it.
+		var revived bool
+		if err := tx.QueryRow(ctx,
+			`SELECT deleted_at IS NOT NULL FROM graph.entity WHERE id = $1`, id).Scan(&revived); err != nil {
+			return "", fmt.Errorf("graph: read tombstone state: %w", err)
+		}
 		if _, err := tx.Exec(ctx, `
 			UPDATE graph.entity
 			SET kind = $2, labels = graph.entity.labels || $3::jsonb,
@@ -178,6 +185,29 @@ func upsertEntityTx(ctx context.Context, tx pgx.Tx, prov types.Provenance, cell 
 			id, e.Kind, labels, string(prov.WriterKind), prov.WriterRef, prov.SourceID, prov.At, cell,
 		); err != nil {
 			return "", fmt.Errorf("graph: update entity: %w", err)
+		}
+		// FACTS DO NOT SURVIVE A TOMBSTONE. Every Facet describes the instance that died; carrying
+		// them onto the replacement is a stale projection asserting things about a machine that has
+		// never existed (§1.2).
+		//
+		// Measured, not theorised: a built host was deleted and rebuilt, and the graph went on
+		// claiming `software.package: apache2 2.4.68` about a pod that had never had apache — while
+		// `app.config: {port: 8080}` still read as SATISFIED, so no Finding was raised and the
+		// replacement would never have been converged. A lie that also silences the mechanism that
+		// would have corrected it.
+		//
+		// Retraction-by-source cannot fix this and it is worth saying why, because ADR-0060's M2
+		// note points that way: the retraction mechanism IS the full sync, and the ansible Actuator
+		// that wrote those Facets has no Syncer half — it never does one. Facts written by a
+		// converge can only be retired by the Entity's own death.
+		//
+		// Syncer-owned Facets are re-projected on the owning Source's next cycle, so this costs
+		// them nothing. graph.facet_history is untouched, so §1.8 descent into what was known at
+		// the time still resolves.
+		if revived {
+			if _, err := tx.Exec(ctx, `DELETE FROM graph.facet WHERE entity_id = $1`, id); err != nil {
+				return "", fmt.Errorf("graph: clear facets on revival: %w", err)
+			}
 		}
 	default:
 		return "", fmt.Errorf("%w: keys %v match %d entities", ErrIdentityConflict, e.IdentityKeys, len(matched))

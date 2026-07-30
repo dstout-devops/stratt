@@ -161,7 +161,11 @@ func (s *Server) project(pod *corev1.Pod) *pluginv1.ObservedEntity {
 	// Carry the estate's own labels through — `stratt.intent/instance` among them, which is what
 	// the provisioning reconcile matches to decide this instance is built (ADR-0120).
 	for k, v := range pod.Labels {
-		if k == managedLabel || k == kindLabel {
+		// The plugin's OWN bookkeeping labels are not estate data and are not projected: the
+		// managed marker, the project-kind record, and the per-host Service selector. Emitting one
+		// the grant does not cover is rejected by the governor and logged every cycle — noise that
+		// trains an operator to ignore rejection warnings.
+		if k == managedLabel || k == kindLabel || k == hostLabel {
 			continue
 		}
 		e.Labels[k] = v
