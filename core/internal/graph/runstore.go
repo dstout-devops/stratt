@@ -70,8 +70,10 @@ func (s *Store) SetRunStatus(ctx context.Context, runID string, status types.Run
 	return nil
 }
 
-// SetRunOutputs stores an Action Run's typed output values (§2.2, ADR-0031),
-// already validated against the Action's output Contract by the caller.
+// SetRunOutputs stores a Run's typed output values (§2.2, ADR-0031), already validated against the
+// pinned output Contract by the caller. Written for BOTH verbs: an Action's from
+// RecordActionResult, an Actuator Step's from FinishRun — the latter recorded nothing at all until
+// CERT-2, leaving graph.run.outputs NULL on Runs that had published a value downstream.
 func (s *Store) SetRunOutputs(ctx context.Context, runID string, outputs json.RawMessage) error {
 	tag, err := s.pool.Exec(ctx,
 		`UPDATE graph.run SET outputs = $2::jsonb WHERE id = $1`, runID, string(outputs))

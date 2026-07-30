@@ -2484,6 +2484,31 @@ func parseIntentFile(path string, raw []byte) (string, types.Intent, error) {
 		return "", types.Intent{}, fmt.Errorf("desiredstate: %s: %w", path, err)
 	}
 	in := types.Intent{Name: f.Name, Kind: f.Kind, Version: f.Version, Spec: f.Spec, OnRemove: f.OnRemove}
+	// NORMALIZE the omitted version to the 1 it already means everywhere else. versionedRef has
+	// always read version < 1 as version 1 — for the dedup key, the plan-entry name, and the pin
+	// lookup — but the DECLARATION kept its literal 0, and that asymmetry was a permanent false
+	// diff: the store round-trips the whole document through graph.intent.spec, so what comes back
+	// carries "version": 1 while the declaration marshals with the field omitted. declDocsEqual
+	// then reported drift on an Intent nobody had touched.
+	//
+	// The consequence was not cosmetic. Every Intent declaring no version was REWRITTEN on every
+	// reconcile cycle (10s), and the ones an Assignment pins failed the ADR-0119 D6 guard on each
+	// pass — a permanent ERROR per Intent per cycle, for an estate that was fully converged. The
+	// noise was the visible half; a plan that can never reach a no-op is the real defect.
+	//
+	// Here rather than in the comparison, so the parsed declaration IS what gets stored: one
+	// meaning for "no version", fixed at the edge, instead of every reader re-deriving it.
+	//
+	// ONLY for an ASSIGNABLE kind, and through the same derived predicate ValidateIntent uses.
+	// A provisioning Intent (Subnet, Compute…) may not carry a version at all: it is selected by
+	// NAME by the provisioning reconcile, which has no Assignment to pin one with, and two versions
+	// of one fleet would be two claims on the same instance identities (ADR-0119 D3, ADR-0058 D5).
+	// Normalizing every kind alike made strattd refuse its own estate at boot — correctly, and the
+	// message named the rule. Reusing the predicate rather than restating the kind list is what
+	// keeps a future kind from re-opening this.
+	if in.Version < 1 && types.AssignableIntentKind(in.Kind) {
+		in.Version = 1
+	}
 	if err := ValidateIntent(in); err != nil {
 		return "", types.Intent{}, fmt.Errorf("desiredstate: %s: %w", path, err)
 	}

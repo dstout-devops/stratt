@@ -1823,7 +1823,7 @@ func mergeResults(slices []dispatch.Result) dispatch.Result {
 		// outputs per slice is ambiguous by construction — the flows that use outputs are
 		// single-target (a CSR belongs to one host), and a general answer needs a declaration
 		// saying which slice speaks, not a silent pick here.
-		if len(r.Outputs) > 0 {
+		if hasOutputs(r.Outputs) {
 			out.Outputs = r.Outputs
 		}
 		for t, fragments := range r.Drift {
@@ -2024,6 +2024,20 @@ func (a *Activities) FinishRun(ctx context.Context, in RunInput, status types.Ru
 	}
 	if err := a.Store.SetRunSites(ctx, in.RunID, sites); err != nil {
 		return err
+	}
+	// The Step's typed outputs, on the Run that produced them (§1.8). RecordActionResult has
+	// always done this for an ACTION; an Actuator Step's outputs went to the next Step and were
+	// recorded NOWHERE, so `graph.run.outputs` was NULL for the very Run an operator descends into
+	// to ask what it handed downstream. That gap actively misled during the first live cert-issue:
+	// a NULL here read as "the plugin published nothing", when the plugin had published a CSR and a
+	// fold was dropping it.
+	//
+	// FinishRun is where both verbs converge, so one line covers both. Idempotent for an Action —
+	// same RunID, same bytes, and SetRunOutputs is a plain UPDATE.
+	if hasOutputs(result.Outputs) {
+		if err := a.Store.SetRunOutputs(ctx, in.RunID, result.Outputs); err != nil {
+			return err
+		}
 	}
 	// Outbound Notice on terminal failure/cancel (ADR-0027) — the outbound
 	// mirror of the inbound Emitter path. Notification deliveries are

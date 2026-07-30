@@ -54,9 +54,11 @@ type Run struct {
 	// message (e.g. a plugin Action's), read from the Run summary so the descent
 	// shows WHY it failed. Empty unless the Run failed with a recorded cause.
 	Error string `json:"error,omitempty"`
-	// Outputs are an Action Run's typed output VALUES (§2.2, ADR-0031),
-	// validated against the Action's output Contract and available for
-	// cross-Step binding. Nil for Actuator Runs.
+	// Outputs are a Run's typed output VALUES (§2.2, ADR-0031), validated against the pinned
+	// output Contract and available for cross-Step binding. Carried for BOTH verbs — an
+	// Actuator Step can hand a value downstream since CERT-2 (the born-on-target CSR), and
+	// leaving this nil for one of them made the Run record disagree with what the platform was
+	// actually carrying. Nil when the Run published nothing.
 	Outputs json.RawMessage `json:"outputs,omitempty"`
 	// Sites lists the execution loci this Run touched (ADR-0032) — the §1.8
 	// descent answer to "where did this run": ["local"], ["edge-west"], or a

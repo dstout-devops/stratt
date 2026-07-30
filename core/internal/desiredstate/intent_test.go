@@ -1169,3 +1169,134 @@ func TestDanglingProvisionsTargetIsRefused(t *testing.T) {
 		}
 	}
 }
+
+// TestUnversionedIntentReconcilesToNoop: an Intent declaring no `version:` must converge. It did
+// not. versionedRef has always read version < 1 as version 1 — for the dedup key, the plan-entry
+// name and the pin lookup — while the parsed declaration kept its literal 0. The store round-trips
+// the whole document through graph.intent.spec, so what comes back carries "version": 1 and
+// declDocsEqual compared it against a declaration that marshals the field away: permanent drift on
+// an Intent nobody had touched.
+//
+// Two consequences, and the quiet one is worse. Every unversioned Intent was REWRITTEN on every
+// reconcile cycle; and an Intent an Assignment pins hit the ADR-0119 D6 immutability guard on every
+// pass, logging an ERROR per Intent per cycle against a fully converged estate. A reconcile that
+// cannot reach a no-op is not noisy, it is not reconciling — and the log line said "pinned and
+// cannot be edited in place", which reads like an operator mistake rather than a phantom diff.
+//
+// Driven through ParseDir deliberately: the normalization lives at the parse edge, so a test that
+// hand-built Declarations would assert nothing about the path the reconcile actually takes.
+func TestUnversionedIntentReconcilesToNoop(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	root := t.TempDir()
+	writeDecl(t, root, "v.yaml", "name: hosts\nselector: {kinds: [host]}\n")
+	// No `version:` — the shape almost every shipped Intent declaration uses.
+	writeKind(t, root, "intents", "app-n.yaml", `
+name: app-n
+kind: Intent/Application
+spec: { package: nginx }
+`)
+	writeKind(t, root, "blueprints", "bp-n.yaml", `
+name: bp-n
+version: 1
+for: Intent/Application
+routes:
+  - observe: { namespace: app.config, path: port, equals: "443" }
+    claim: exclusive
+`)
+	// PINNED at @1, which is what makes the phantom diff loud rather than merely wasteful.
+	writeKind(t, root, "assignments", "prod-n.yaml", `
+name: prod-n
+intent: app-n@1
+view: hosts
+blueprint: bp-n@1
+`)
+	decls, err := ParseDir(root, nil)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if got := decls.Intents[0].Version; got != 1 {
+		t.Fatalf("an omitted version must normalize to 1 at the parse edge, got %d", got)
+	}
+	if _, err := Apply(ctx, s, decls); err != nil {
+		t.Fatalf("initial apply: %v", err)
+	}
+	// The SECOND pass over an unchanged declaration is the whole point.
+	plan, err := Apply(ctx, s, decls)
+	if err != nil {
+		t.Fatalf("second apply: %v", err)
+	}
+	for _, e := range plan.Entries {
+		if e.Kind != KindIntent || e.Name != "app-n@1" {
+			continue
+		}
+		if e.Action != ActionNoop {
+			t.Fatalf("an unchanged Intent must reconcile to a no-op, got action=%q err=%q", e.Action, e.Error)
+		}
+		if e.Error != "" {
+			t.Fatalf("a converged estate must not report an error: %q", e.Error)
+		}
+		return
+	}
+	t.Fatal("no plan entry for app-n@1")
+}
+
+// TestProvisioningIntentKeepsNoVersion guards the interaction that broke strattd at boot: the
+// unversioned-Intent normalization must NOT reach a provisioning kind. ADR-0119 D3 refuses a
+// version there outright — a provisioning Intent is selected by NAME by the reconcile, which has no
+// Assignment to pin one with — so defaulting it to 1 turned every shipped Subnet/Compute
+// declaration into a validation error and the daemon refused its own estate.
+//
+// Asserted through types.AssignableIntentKind, the same derived predicate both the normalization
+// and ValidateIntent use, so a kind added later is covered without editing a list here.
+func TestProvisioningIntentKeepsNoVersion(t *testing.T) {
+	root := t.TempDir()
+	writeDecl(t, root, "v.yaml", "name: hosts\nselector: {kinds: [host]}\n")
+	writeKind(t, root, "intents", "net.yaml", `
+name: app-subnet
+kind: Intent/Subnet
+spec:
+  projectKind: subnet
+  requires: [provisioning]
+  params: { region: us-east-1, size: 24, pool: 10.30.0.0/16 }
+`)
+	decls, err := ParseDir(root, nil)
+	if err != nil {
+		t.Fatalf("a provisioning Intent with no version must parse: %v", err)
+	}
+	in := decls.Intents[0]
+	if types.AssignableIntentKind(in.Kind) {
+		t.Fatalf("fixture must use a NON-assignable kind, got %q", in.Kind)
+	}
+	if in.Version != 0 {
+		t.Fatalf("a provisioning kind must carry no version (ADR-0119 D3), got %d", in.Version)
+	}
+	if err := ValidateIntent(in); err != nil {
+		t.Fatalf("the normalized declaration must still validate: %v", err)
+	}
+
+	// …and it must RECONCILE TO A NO-OP, which is the half the parse assertion above cannot see.
+	// UpsertIntent normalized in.Version to 1 and then marshalled the whole struct into
+	// graph.intent.spec, so the stored document claimed a version D3 forbids the declaration to
+	// carry. Every read-back disagreed with its own source and the reconcile planned an update on
+	// every cadence, forever. The column is still normalized — it is the key — but the document is
+	// now stored as authored.
+	s := testStore(t)
+	ctx := context.Background()
+	if _, err := Apply(ctx, s, decls); err != nil {
+		t.Fatalf("initial apply: %v", err)
+	}
+	plan, err := Apply(ctx, s, decls)
+	if err != nil {
+		t.Fatalf("second apply: %v", err)
+	}
+	for _, e := range plan.Entries {
+		if e.Kind == KindIntent && e.Name == "app-subnet@1" {
+			if e.Action != ActionNoop {
+				t.Fatalf("an unchanged provisioning Intent must reconcile to a no-op, got %q", e.Action)
+			}
+			return
+		}
+	}
+	t.Fatal("no plan entry for app-subnet@1")
+}

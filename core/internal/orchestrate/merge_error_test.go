@@ -72,4 +72,20 @@ func TestMergeResults_CarriesOutputs(t *testing.T) {
 	if len(none.Outputs) != 0 {
 		t.Fatalf("a Run that published nothing must carry no outputs; got %q", none.Outputs)
 	}
+	// …including when it arrives as the literal `null`, which is what a nil json.RawMessage
+	// BECOMES crossing Temporal. Every len() check reads those four bytes as present, so without
+	// this the empty case survives the fold, gets recorded as the Step's output, and breaks the
+	// next binding with a message about the consumer.
+	lit := mergeResults([]dispatch.Result{
+		{Succeeded: true, PerTarget: map[string]string{}, Outputs: []byte("null")},
+	})
+	if len(lit.Outputs) != 0 {
+		t.Fatalf("the literal null must not survive as a published output; got %q", lit.Outputs)
+	}
+	if hasOutputs([]byte(" null ")) || hasOutputs(nil) || hasOutputs([]byte("")) {
+		t.Fatal("hasOutputs must reject nil, empty and the null literal")
+	}
+	if !hasOutputs([]byte(csr)) {
+		t.Fatal("hasOutputs must accept a real published object")
+	}
 }

@@ -1,6 +1,7 @@
 package orchestrate
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -228,7 +229,7 @@ func RunDAG(ctx workflow.Context, in DAGInput) error {
 		done.Receive(ctx, &r)
 		running--
 		state[r.Name] = r.Status
-		if len(r.Outputs) > 0 {
+		if hasOutputs(r.Outputs) {
 			stepOutputs[r.Name] = r.Outputs
 		}
 		schedule()
@@ -657,6 +658,19 @@ func (a *Activities) EnsureWorkflowRun(ctx context.Context, in DAGInput, tempora
 		}
 	}
 	return wr.ID, nil
+}
+
+// hasOutputs reports whether a Step actually published something bindable.
+//
+// The literal `null` is NOT something: a nil json.RawMessage crosses Temporal's JSON converter as
+// the four bytes "null", which every len() check reads as present. Recorded as a Step output it
+// then poisons the namespace — a binding into it fails with `"<field>" is not an object`, a message
+// about the consumer that says nothing about the Step which published nothing. Distinguishing
+// "published nothing" from "published a value" is the whole difference between an ordinary Run and
+// a defect, so it is decided in ONE place rather than at each len() call site (§1.8).
+func hasOutputs(raw json.RawMessage) bool {
+	trimmed := bytes.TrimSpace(raw)
+	return len(trimmed) > 0 && !bytes.Equal(trimmed, []byte("null"))
 }
 
 // stepsNamespace turns accumulated Step outputs (stepName → outputs JSON) into
