@@ -460,3 +460,71 @@ func bindRaw(raw json.RawMessage, ns template.Namespaces) (json.RawMessage, erro
 	}
 	return json.Marshal(out)
 }
+
+// EntityTemplateNamespace projects one Entity into the `{{.entity.*}}` template namespace
+// (ADR-0150 D2): its own coordinates plus every Facet it carries, nested by the Facet's dotted
+// namespace so `{{.entity.dns.fqdn}}` and `{{.entity.mgmt.address.address}}` both read naturally.
+//
+// A Facet namespace is dotted and its value is a document, so the two nest into one tree: namespace
+// `mgmt.address` holding `{"address": "..."}` becomes entity → mgmt → address → address. That is
+// the shape the graph already stores; nothing here reinterprets it, which is what keeps this a
+// projection rather than a second model of an Entity (§1.2).
+//
+// Reserved keys — `id`, `kind`, `labels`, `identity` — are written LAST and win over a Facet
+// namespace of the same name. A Facet called `id` would otherwise silently shadow the Entity's own
+// identity and make `{{.entity.id}}` mean something different per Entity, which is precisely the
+// implicit precedence §2.4 refuses. The collision is resolved by a stated rule, not by map order.
+func (s *Store) EntityTemplateNamespace(ctx context.Context, entityID string) (map[string]any, error) {
+	e, err := s.GetEntity(ctx, entityID)
+	if err != nil {
+		return nil, err
+	}
+	facets, err := s.GetFacets(ctx, entityID)
+	if err != nil {
+		return nil, err
+	}
+	ns := map[string]any{}
+	for _, f := range facets {
+		var v any
+		if err := json.Unmarshal(f.Value, &v); err != nil {
+			// A Facet nobody can decode is skipped rather than failing the whole binding: the
+			// token that wanted it still fails closed, naming that path (§1.8), and an unrelated
+			// malformed Facet must not make every other binding on the Entity unresolvable.
+			continue
+		}
+		nest(ns, strings.Split(f.Namespace, "."), v)
+	}
+	ns["id"] = e.ID
+	ns["kind"] = e.Kind
+	identity := make(map[string]any, len(e.IdentityKeys))
+	for k, val := range e.IdentityKeys {
+		identity[k] = val
+	}
+	ns["identity"] = identity
+	labels := make(map[string]any, len(e.Labels))
+	for k, val := range e.Labels {
+		labels[k] = val
+	}
+	ns["labels"] = labels
+	return ns, nil
+}
+
+// nest writes v at the dotted path, creating intermediate maps. A conflict with a non-map already
+// at an intermediate segment overwrites it — two Facet namespaces where one is a prefix of the
+// other (`dns` and `dns.fqdn`) is a graph-side modelling problem, and this projection does not get
+// to invent a merge rule for it.
+func nest(root map[string]any, path []string, v any) {
+	cur := root
+	for i, seg := range path {
+		if i == len(path)-1 {
+			cur[seg] = v
+			return
+		}
+		next, ok := cur[seg].(map[string]any)
+		if !ok {
+			next = map[string]any{}
+			cur[seg] = next
+		}
+		cur = next
+	}
+}

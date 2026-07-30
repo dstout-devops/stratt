@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "stratt:contract:facets/cert.presented:v1",
+  "title": "cert.presented Facet",
+  "description": "Demanded by the ansible-certificate Actuator's delivery play (charter §1.1, ADR-0150 D5): the certificate a HOST ACTUALLY PRESENTS, read back from the file that landed on it. Distinct from cert.expiry, which the CLM Syncer projects onto a `cert` Entity: the CLM's record says a certificate was ISSUED, this one says a certificate is IN PLACE, and a certificate issued but never delivered is exactly the failure an operator needs to see. Two observers of related facts on different Entities is not a second truth (§1.2 — the host is the authority on what the host presents), and since ADR-0060 re-keyed ownership to (namespace, owner_ref) a second registered owner is legal by construction. The renewal Baseline reads notAfter through the notBefore operator (ADR-0030 D4), so renewal is drift on what is deployed rather than on what was ordered. SINGULAR, not keyed by common name: one Stratt-managed certificate per host, the same stance ADR-0148 D6 takes for applications — see that ADR's D5 amendment for why keying it would have needed per-Entity expectation resolution, which is a different mechanism from the launch-time binding D2 ships.",
+  "type": "object",
+  "properties": {
+    "commonName": {
+      "type": "string",
+      "description": "The subject the delivered certificate actually carries — read from the file, never restated from the request, so a certificate issued for the wrong subject is visible rather than assumed away."
+    },
+    "notAfter": { "type": "string", "format": "date-time" },
+    "notBefore": { "type": "string", "format": "date-time" },
+    "serial": { "type": "string" },
+    "issuer": {
+      "type": "string",
+      "description": "The issuing CA's subject, so a self-signed or wrong-CA certificate on a host is a graph fact rather than something an operator has to go and look for."
+    }
+  },
+  "required": ["commonName", "notAfter"],
+  "additionalProperties": false
+}

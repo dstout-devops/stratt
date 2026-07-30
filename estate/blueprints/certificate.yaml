@@ -17,7 +17,8 @@
 # CLM-agnostic claim checkable rather than aspirational: grep this file for "openbao" and there is
 # nothing to find.
 name: certificate
-version: 1
+# VERSION 2 — the expectation moved from the CLM's record to the host's (ADR-0150 D5).
+version: 2
 for: Intent/Certificate
 severity: warning
 # A certificate inside its renewal window is not a blip to be damped: the first observation is the
@@ -28,7 +29,13 @@ defaults:
   renewBefore: 168h
 routes:
   - observe:
-      namespace: cert.expiry
+      # cert.presented, NOT cert.expiry (ADR-0150 D5). cert.expiry is the CLM Syncer's projection
+      # onto a `cert` Entity and says a certificate was ISSUED; cert.presented is read back from the
+      # file on the host and says one is IN PLACE. A certificate issued but never delivered is
+      # exactly the failure an operator needs to see, and observing the CLM cannot see it (§1.8).
+      # It is also what makes this Blueprint bindable to a View of HOSTS, which is what lets one
+      # Intent cover a group (D1) instead of one Intent per certificate.
+      namespace: cert.presented
       path: notAfter
       # The renewal window, substituted from the Intent so the CHECK and the FIX read the same
       # declaration (ADR-0030 threshold; ADR-0024 substitution engine).

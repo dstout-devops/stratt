@@ -1,6 +1,8 @@
 # ADR 0150 — A certificate is derived from its host: per-Entity template resolution and entity-scoped remediation
 
-- **Status:** **Proposed** (2026-07-30, steward) — **design only, nothing implemented**. Prior-art
+- **Status:** **Proposed** (2026-07-30, steward) — **D1–D5 implemented and LIVE-PROVEN**; D6 is a
+  scope statement. One decision was amended by implementing it (D5, `cert.presented` is singular —
+  recorded in place rather than rewritten). Prior-art
   scan done by hand (this session's rules bar the subagent). **Two reviews are OWED before this can
   move to Accepted and are called out in D5/D6:** `vocabulary-linter` on the new facet namespace and
   the `entity` namespace token, and `charter-guardian` on the §2.4 resolution rule. No new
@@ -191,13 +193,23 @@ authoritative for the CLM's own inventory**. Two observers of related facts on d
 not a second truth; and since ADR-0060 re-keyed ownership to `(namespace, owner_ref)`, a second
 registered owner is legal by construction.
 
-**OWED BEFORE ACCEPTED:** the host-side namespace needs a name and a Contract. The working proposal
-is `cert.presented`, keyed by common name — `cert.presented.<cn>.{notAfter,serial,issuer}` — so a
-host presenting several certificates is representable, which a bare `cert.expiry` on a host is not.
-This is a new core-model identifier and a new Facet schema, so per CLAUDE.md it requires
-**`vocabulary-linter`** (charter §2 is frozen) and must be **demanded by a shipping Contract**
-(§1.1) — the `ansible-certificate` Actuator's write scope. Neither has been run; this ADR does not
-merge as Accepted until both have.
+**AMENDED DURING IMPLEMENTATION — `cert.presented` is SINGULAR, not keyed by common name.** This
+ADR proposed `cert.presented.<cn>.{notAfter,serial,issuer}` so a host presenting several
+certificates would be representable. Implementing it showed the cost: a per-CN key makes the
+Blueprint's `observe.path` per-Entity too (`{{.spec.commonName}}.notAfter`, itself derived from
+`{{.entity.*}}`), and expectations are evaluated by the DRIFT EVALUATOR, not resolved at launch —
+a different mechanism from the launch-time param binding D2 ships, and a second one invented in the
+same change. The shipped shape is therefore
+`cert.presented.{commonName,notAfter,notBefore,serial,issuer}`: ONE Stratt-managed certificate per
+host, which is the same stance ADR-0148 D6 takes for applications, and an expectation path
+(`notAfter`) that is a constant. Per-Entity EXPECTATION resolution is the honest name for what the
+keyed form needs, and it is now a follow-up rather than a thing this ADR quietly assumed.
+
+**STILL OWED BEFORE ACCEPTED:** `cert.presented` is a new core-model identifier and a new Facet
+schema, so per CLAUDE.md it requires **`vocabulary-linter`** (charter §2 is frozen). It IS demanded
+by a shipping Contract (§1.1) — the `ansible-certificate` Actuator's `facetNamespaces` and the
+`deliver` Step's `facetWriteScope` — and pinned in `contracts/facets/cert.presented.schema.json`.
+The linter has not been run; this ADR does not merge as Accepted until it has.
 
 ### D6 — Scope: this is a Blueprint capability, not a certificate feature
 

@@ -603,7 +603,12 @@ func resolveRemediationParams(ctx context.Context, s Store, route types.Blueprin
 	if len(route.RemediationParams) == 0 {
 		return nil, ""
 	}
-	resolved, err := template.SubstituteParams(route.RemediationParams, template.Namespaces{"spec": spec})
+	// `{{.entity.*}}` is DEFERRED, not resolved (ADR-0150 D2): this Baseline covers a whole View
+	// and there is no Entity here to resolve against. The token is stored intact and bound when a
+	// Finding's remediation launches, which is the first moment one Entity exists — the same
+	// two-stage shape ADR-0024 D3 uses for a parametrized View's selector.
+	resolved, err := template.SubstituteParamsDeferring(
+		route.RemediationParams, template.Namespaces{"spec": spec}, template.DeferEntity)
 	if err != nil {
 		return nil, fmt.Sprintf("remediationParams: %v", err)
 	}

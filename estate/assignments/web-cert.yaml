@@ -6,7 +6,17 @@
 # certificate exists, so this Blueprint converges the RENEWAL of certificates that are real, and
 # first issuance is a separate concern.
 name: web-cert
-intent: web-cert@1
-view: managed-certs
-blueprint: certificate@1
+intent: web-cert@2
+# A View of HOSTS, not of certificates (ADR-0150 D1). The certificate is a property of the machine,
+# so the population this applies to is the machines — every member gets its own certificate, named
+# from its own facts. managed-certs remains the CLM Syncer's own inventory View and is no longer
+# what a certificate Intent binds.
+view: managed-web
+blueprint: certificate@2
+# The membership delta this change makes is deliberate and large: the population moves from the
+# CLM's 6 `cert` Entities to the 1 host in managed-web, which the §4.3 max-delta gate correctly
+# paused ("7 of 6 changed"). Acknowledging it is the reviewable act the gate exists to force — the
+# certificates are not disappearing, the thing being managed changed from the CLM's record of a
+# certificate to the machine that presents one (ADR-0150 D1).
+ackDelta: 1
 environments: [dev, prod]

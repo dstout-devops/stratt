@@ -55,9 +55,16 @@ else
     echo "created root CA (Stratt Dev Root CA)"
 fi
 
-# 3. Issuing role: leaf certs under *.stratt.test, up to 90d.
+# 3. Issuing role: leaf certs under *.stratt.test or *.svc.cluster.local, up to 90d.
+#
+# svc.cluster.local is here because a certificate is now DERIVED from its host (ADR-0150 D1): the
+# subject comes from the target's own mgmt.address Facet, and on this in-kind floor that address is
+# the Service DNS name. Without it the CA correctly refuses the derived name —
+# "common name managed-web.stratt.svc.cluster.local not allowed by this role" — which is the role
+# doing its job, and exactly the kind of policy an operator wants enforced at the CA rather than
+# assumed by the estate. A production role would list the real domains instead.
 api POST "/v1/pki/roles/$role" \
-    '{"allowed_domains":"stratt.test","allow_subdomains":true,"max_ttl":"2160h","key_type":"rsa","key_bits":2048}' >/dev/null
+    '{"allowed_domains":"stratt.test,svc.cluster.local","allow_subdomains":true,"max_ttl":"2160h","key_type":"rsa","key_bits":2048}' >/dev/null
 echo "ensured role $role"
 
 # 4. Seed demo leaf certs — only when the estate has no leaf certs yet. LIST

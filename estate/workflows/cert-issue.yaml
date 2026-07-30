@@ -58,15 +58,19 @@ steps:
   # it had just generated, so the only shapes available were a CLM-generated key (discarding the
   # born-on-target property this Actuator's own input Contract states in writing) or a fake.
   - name: gather
-    # A HOST View, not managed-certs — and the difference is a gap this Workflow exposed rather
-    # than a detail. A `cert` Entity carries ONLY `cert.serial` (measured: no dns.fqdn, no
-    # mgmt.address), so it is not something ansible can reach; delivery needs the machine that will
-    # PRESENT the certificate. Nothing in the estate connects the two: an Intent/Certificate names
-    # a commonName and no target, and cert Entities correlate with hosts on no shared scheme.
+    # A HOST View — and since ADR-0150 that is the MODEL, not the workaround it used to be.
     #
-    # So this binding is STATIC where it should be derived, and that is booked (CERT-3) rather than
-    # dressed up. The renewal loop is unaffected — it is about the certificate — but delivery to
-    # "whichever host this certificate is for" is not yet expressible.
+    # This Step's View is the AUTHORIZATION unit (ADR-0028): `runner on view:managed-web` is checked
+    # at launch against a View the declaration names, exactly as for any other Run. What narrows the
+    # blast radius to ONE host is the Finding's Entity scope (D3) — a remediation converges the host
+    # that drifted, not its tier — and what names the certificate is that same Entity's own facts,
+    # resolved from `{{.entity.*}}` when the remediation launches (D2).
+    #
+    # The earlier revision of this comment recorded the debt this pays: a `cert` Entity carries only
+    # cert.serial, nothing connected a certificate to the machine that would present it, and the
+    # binding was static where it should have been derived (CERT-3). The answer turned out not to be
+    # a cert→host link. A certificate is a PROPERTY OF A HOST, so the Assignment binds a View of
+    # hosts and each member's certificate is named from itself.
     viewName: managed-web
     actuator: ansible-certificate
     credentialRefs: [web-machine]
@@ -109,8 +113,10 @@ steps:
     viewName: managed-web
     actuator: ansible-certificate
     credentialRefs: [web-machine]
-    # Delivery reports the FILE that landed — the one namespace this Actuator may write.
-    facetWriteScope: [fileset.content]
+    # Delivery reports the FILE that landed and WHAT THE CERTIFICATE SAYS, read back from the host
+    # (ADR-0150 D5) — the renewal Baseline observes cert.presented.notAfter, so renewal is drift on
+    # what is deployed rather than on what was ordered.
+    facetWriteScope: [fileset.content, cert.presented]
     params:
       connection:
         user: root

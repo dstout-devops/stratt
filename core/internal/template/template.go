@@ -25,20 +25,54 @@ var exactRe = regexp.MustCompile(`^\{\{\s*\.([a-zA-Z][a-zA-Z0-9_]*(?:\.[a-zA-Z0-
 // Namespaces maps a namespace name (spec|event|param) to its data.
 type Namespaces map[string]map[string]any
 
+// NamespaceEntity is the per-Entity namespace (ADR-0150 D2): `{{.entity.<facet>.<path>}}`,
+// `{{.entity.name}}`, `{{.entity.id}}`, `{{.entity.identity.<scheme>}}`.
+//
+// It is DEFERRED by the Intent compiler and resolved when a Finding's remediation launches,
+// because a Baseline covers a whole View and only the Finding names an Entity. Declared here, as
+// one constant, so the deferring side and the resolving side cannot disagree about its spelling —
+// a mismatch would turn every per-Entity binding into an unresolved token that reaches a plugin
+// as literal text.
+const NamespaceEntity = "entity"
+
+// DeferEntity is the deferral set for the entity namespace, shared by every compile-time
+// substitution that a launch-time pass completes.
+var DeferEntity = map[string]bool{NamespaceEntity: true}
+
 // Substitute walks a JSON-ish value (map, slice, string, or scalar) and
 // resolves every `{{.ns.path}}` token. A string that is exactly one token
 // takes the resolved value's native type (a number stays a number); a token
 // embedded in surrounding text is rendered with fmt.Sprint. Non-string
 // scalars pass through unchanged. An unknown namespace or missing field is an
 // error (fail-closed — a binding never silently drops).
-func Substitute(v any, ns Namespaces) (any, error) {
+func Substitute(v any, ns Namespaces) (any, error) { return subst(v, ns, nil) }
+
+// SubstituteDeferring is Substitute with a set of namespaces left UNRESOLVED: a token naming one of
+// them passes through with its `{{.ns.path}}` text intact instead of erroring as an unknown
+// namespace, so a later pass can resolve it against values that did not exist yet (ADR-0150 D2).
+//
+// This is a TWO-STAGE binding, not a relaxation of the fail-closed rule (ADR-0024 D1). Deferral is
+// explicit and by name: a namespace nobody deferred is still an error, so a typo'd `{{.entty.x}}`
+// fails at compile exactly as it does today. The deferred stage inherits the same rule — whoever
+// resolves it later must supply the namespace or fail — and the compiler is what guarantees a
+// second stage exists at all.
+//
+// The precedent is ADR-0024 D3: a parametrized View's selector carries `{{.param.x}}` through
+// storage and binds at launch, because launch is the first moment the value is knowable. This is
+// the same shape for a value that is per-ENTITY: the Baseline covers a whole View, the Finding
+// names one Entity, and only the Finding has an Entity to resolve against.
+func SubstituteDeferring(v any, ns Namespaces, deferred map[string]bool) (any, error) {
+	return subst(v, ns, deferred)
+}
+
+func subst(v any, ns Namespaces, deferred map[string]bool) (any, error) {
 	switch t := v.(type) {
 	case string:
-		return substituteString(t, ns)
+		return substituteString(t, ns, deferred)
 	case map[string]any:
 		out := make(map[string]any, len(t))
 		for k, val := range t {
-			r, err := Substitute(val, ns)
+			r, err := subst(val, ns, deferred)
 			if err != nil {
 				return nil, err
 			}
@@ -48,7 +82,7 @@ func Substitute(v any, ns Namespaces) (any, error) {
 	case []any:
 		out := make([]any, len(t))
 		for i, val := range t {
-			r, err := Substitute(val, ns)
+			r, err := subst(val, ns, deferred)
 			if err != nil {
 				return nil, err
 			}
@@ -63,28 +97,41 @@ func Substitute(v any, ns Namespaces) (any, error) {
 // SubstituteParams resolves a params map (the common case) and returns a new
 // map. A nil map returns nil.
 func SubstituteParams(params map[string]any, ns Namespaces) (map[string]any, error) {
+	return SubstituteParamsDeferring(params, ns, nil)
+}
+
+// SubstituteParamsDeferring is SubstituteParams with deferred namespaces (see SubstituteDeferring).
+func SubstituteParamsDeferring(params map[string]any, ns Namespaces, deferred map[string]bool) (map[string]any, error) {
 	if params == nil {
 		return nil, nil
 	}
-	out, err := Substitute(params, ns)
+	out, err := subst(params, ns, deferred)
 	if err != nil {
 		return nil, err
 	}
 	return out.(map[string]any), nil
 }
 
-func substituteString(s string, ns Namespaces) (any, error) {
+func substituteString(s string, ns Namespaces, deferred map[string]bool) (any, error) {
 	if !strings.Contains(s, "{{") {
 		return s, nil
 	}
-	// Exact single-token string → preserve the resolved value's type.
+	// Exact single-token string → preserve the resolved value's type. A DEFERRED namespace returns
+	// the token text unchanged, so the next stage sees exactly what the author wrote — including
+	// its type-preserving exact-token form.
 	if m := exactRe.FindStringSubmatch(s); m != nil {
+		if isDeferred(m[1], deferred) {
+			return s, nil
+		}
 		return lookup(m[1], ns)
 	}
 	// Embedded token(s) → render into the surrounding text.
 	var lookErr error
 	out := tokenRe.ReplaceAllStringFunc(s, func(tok string) string {
 		path := tokenRe.FindStringSubmatch(tok)[1]
+		if isDeferred(path, deferred) {
+			return tok
+		}
 		val, err := lookup(path, ns)
 		if err != nil {
 			lookErr = err
@@ -96,6 +143,15 @@ func substituteString(s string, ns Namespaces) (any, error) {
 		return nil, lookErr
 	}
 	return out, nil
+}
+
+// isDeferred reports whether a dotted path's NAMESPACE (its first segment) is deferred.
+func isDeferred(path string, deferred map[string]bool) bool {
+	if len(deferred) == 0 {
+		return false
+	}
+	ns, _, _ := strings.Cut(path, ".")
+	return deferred[ns]
 }
 
 // lookup resolves a dotted path "ns.a.b.c" against the namespaces.

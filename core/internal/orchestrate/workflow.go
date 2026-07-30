@@ -42,6 +42,10 @@ type DAGInput struct {
 	// Principal's authz remain the control; these only parameterize what was already
 	// declared and gated.
 	LaunchParams map[string]any
+	// EntityScope narrows every Actuator Step of this DAG to one Entity (ADR-0150 D3), set when
+	// the DAG was launched to remediate a Finding. Empty ⇒ each Step converges its whole View,
+	// which is every other launch path.
+	EntityScope string
 	// Environment is the floor's own active environment, stamped at launch and NOT asserted by
 	// the launcher (ADR-0122 D2). It used to arrive inside Context as a plain string, which
 	// meant a caller on a prod floor could assert `environment: dev` and walk past a prod
@@ -337,6 +341,7 @@ func runActuationStep(ctx workflow.Context, in DAGInput, step types.Step, steps 
 		PlanFrom:        step.PlanFrom,
 		PlanDigest:      planDigest,
 		FacetWriteScope: step.FacetWriteScope,
+		EntityScope:     in.EntityScope,
 	}).Get(cctx, &outcome)
 	if err != nil {
 		return stepFailed, nil

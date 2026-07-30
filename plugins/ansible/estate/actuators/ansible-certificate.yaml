@@ -6,7 +6,10 @@
 #                                   later Step. Without a pin the hub REFUSES an Apply's outputs, so
 #                                   this declaration is what makes {{.steps.gather.outputs.csr}}
 #                                   bindable at all.
-#   facetNamespaces: fileset.content — delivery reports the file that landed, and nothing more.
+#   facetNamespaces: fileset.content + cert.presented — delivery reports the file that landed AND
+#     what the certificate in it actually says (ADR-0150 D5), and nothing more. cert.presented is
+#     read back from the delivered bytes on the host, which is why it belongs to this Actuator and
+#     not to the CLM Syncer: the Syncer knows what was ISSUED, this knows what is IN PLACE.
 #
 # It runs the ansible-crypto EE image because csr-gather.yml uses community.crypto's
 # openssl_privatekey/openssl_csr. Content is selected by selecting an Actuator (ADR-0117 D3a), never
@@ -22,6 +25,6 @@ contentInputs: [playbook]
 # THE PIN (CERT-2). One document, closed, carrying only the CSR — because the private key is born on
 # the target and never crosses the wire, and a schema that admitted more would invite more.
 outputContract: outputs/csr
-facetNamespaces: [fileset.content]
+facetNamespaces: [fileset.content, cert.presented]
 identitySchemes: [host.name]
 elevatedInputs: [become.enabled]

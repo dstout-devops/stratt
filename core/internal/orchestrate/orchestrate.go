@@ -90,7 +90,18 @@ type RunInput struct {
 	// ViewParams binds a parametrized View's {{.param.x}} placeholders at
 	// launch (ADR-0024) — resolved by ResolveTargets before selection.
 	ViewParams map[string]any
-	Slices     int
+	// EntityScope NARROWS this Run to a single Entity of its View (ADR-0150 D3) — set when a
+	// remediation launches from a Finding, which names exactly one drifted Entity.
+	//
+	// It narrows, it never widens: the Entity must resolve as a MEMBER of the declared View or
+	// the Run fails. The View is still what authorization is decided against (ADR-0028), so the
+	// runner-on-View check is unchanged and still made at launch against a View the declaration
+	// names. That is why this scopes the RUN rather than templating `viewName` — a templated View
+	// would move the authorization gate behind a resolution step (§2.5).
+	//
+	// Empty ⇒ the whole View, which is every launch that is not a per-Finding remediation.
+	EntityScope string
+	Slices      int
 	// Trigger names the Trigger that fired this Run; empty for manual/API
 	// launches (§1.8 descent: Trigger → Run).
 	Trigger string
@@ -727,6 +738,9 @@ func (a *Activities) ResolveTargets(ctx context.Context, in RunInput) (ResolvedT
 	if len(ents) == 0 {
 		return ResolvedTargets{}, fmt.Errorf("orchestrate: view %s resolves to zero entities", in.ViewName)
 	}
+	if ents, err = narrowToEntity(ents, in); err != nil {
+		return ResolvedTargets{}, err
+	}
 	ids := make([]string, len(ents))
 	for i, e := range ents {
 		ids[i] = e.ID
@@ -753,6 +767,30 @@ func (a *Activities) ResolveTargets(ctx context.Context, in RunInput) (ResolvedT
 	return out, nil
 }
 
+// narrowToEntity applies RunInput.EntityScope (ADR-0150 D3): a remediation launched from a Finding
+// converges the Entity that drifted, not its whole tier.
+//
+// Refused rather than silently empty when the Entity is not a member. A scope that quietly matched
+// nothing would turn "converge this host" into "converge nothing" and report success — the §1.8
+// failure mode, and the one that matters most here because a per-Entity binding (D2) has already
+// resolved values FOR that Entity: running them against a different target set, or none, is worse
+// than not running at all.
+func narrowToEntity(ents []types.Entity, in RunInput) ([]types.Entity, error) {
+	if in.EntityScope == "" {
+		return ents, nil
+	}
+	for _, e := range ents {
+		if e.ID == in.EntityScope {
+			return []types.Entity{e}, nil
+		}
+	}
+	return nil, fmt.Errorf(
+		"orchestrate: entity %s is not a member of view %s, so this remediation has no target — "+
+			"a Run may only be narrowed to a member of the View it is authorized against (ADR-0150 D3). "+
+			"The View's membership most likely changed between the Finding and this launch",
+		in.EntityScope, in.ViewName)
+}
+
 // ResolveTargetsBySite resolves the View and partitions its targets by
 // execution locus (the mgmt.site Facet; unset ⇒ the built-in "local" central
 // cluster). Read-only — it only READS mgmt.site, never writes it (§1.2). Groups
@@ -772,6 +810,13 @@ func (a *Activities) ResolveTargetsBySite(ctx context.Context, in RunInput) (Rou
 			return RoutedTargets{ViewVersion: v.Version}, nil
 		}
 		return RoutedTargets{}, fmt.Errorf("orchestrate: view %s resolves to zero entities", in.ViewName)
+	}
+	// The SAME narrowing the non-routed resolver applies (ADR-0150 D3). Both paths share one
+	// implementation deliberately: a scope honoured on one and ignored on the other would make
+	// blast radius depend on whether a View happened to carry mgmt.site — the divergent-second-copy
+	// failure this repo keeps re-learning.
+	if ents, err = narrowToEntity(ents, in); err != nil {
+		return RoutedTargets{}, err
 	}
 	ids := make([]string, len(ents))
 	for i, e := range ents {
