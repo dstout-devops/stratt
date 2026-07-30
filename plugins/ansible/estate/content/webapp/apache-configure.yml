@@ -64,6 +64,67 @@
         regexp: '^Listen\s+80\s*$'
         replace: "# Listen 80 — superseded by stratt.conf (stratt-managed)"
 
+    # ── TLS, if a certificate has been delivered ────────────────────────────────────────────
+    # The app leg and the certificate leg COMPOSE THROUGH THE HOST, not through each other. Nothing
+    # in the apache declaration names a certificate and nothing in the certificate declaration names
+    # apache: the cert-issue flow delivers to /etc/stratt/pki and this play serves whatever is
+    # there. ADR-0150 D5 makes that unambiguous — one Stratt-managed certificate per host — so
+    # "whatever is there" is a definite article, not a guess.
+    #
+    # ABSENT IS NORMAL. A host with no certificate serves plain HTTP and converges green; TLS is not
+    # a second Blueprint and not a required binding. That is deliberate: making it a binding would
+    # mean an apache Intent could not be satisfied until a certificate existed, coupling two legs
+    # the estate deliberately keeps separate.
+    - name: Look for a delivered certificate
+      ansible.builtin.find:
+        paths: /etc/stratt/pki
+        patterns: "*.crt"
+      register: delivered_certs
+
+    - name: Serve TLS with the delivered certificate
+      when: delivered_certs.files | length == 1
+      block:
+        - name: Install the TLS module where the family ships it separately
+          ansible.builtin.package:
+            name: "{{ apache_ssl_pkg }}"
+            state: present
+          when: apache_ssl_pkg | length > 0
+
+        - name: Enable the TLS module where the family ships it disabled
+          ansible.builtin.command: "{{ apache_ssl_enable_cmd }}"
+          when: apache_ssl_enable_cmd | length > 0
+          changed_when: false
+
+        - name: Write the TLS vhost
+          ansible.builtin.copy:
+            dest: "{{ apache_conf_dir }}/stratt-tls.conf"
+            mode: "0644"
+            # ONLY the VirtualHost. Every family's ssl package/module already provides the
+            # LoadModule and `Listen 443`; emitting our own made apache refuse to start with
+            # "Cannot define multiple Listeners on the same IP:port" (measured on Alpine).
+            content: |
+              <VirtualHost *:443>
+                DocumentRoot {{ apache_docroot }}
+                SSLEngine on
+                SSLCertificateFile {{ (delivered_certs.files | first).path }}
+                # `crt$` → `key`, with NO backslash: the escaped form was written through a
+                # generator, reached the file as `\\.crt$`, and matched nothing — so the KEY path
+                # silently rendered as the CERT path. Apache then had a certificate where its
+                # private key should be. A regex that fails to match is indistinguishable from one
+                # that matches nothing, which is why the simplest expression that cannot be
+                # mis-escaped is the right one here.
+                SSLCertificateKeyFile {{ (delivered_certs.files | first).path | regex_replace('crt$', 'key') }}
+              </VirtualHost>
+
+    # Remove the vhost when the certificate is gone, so a revoked or withdrawn certificate stops
+    # being served rather than leaving apache pointing at a file that is no longer there — which
+    # fails the RESTART below and takes the whole service down with it.
+    - name: Stop serving TLS when no certificate is delivered
+      ansible.builtin.file:
+        path: "{{ apache_conf_dir }}/stratt-tls.conf"
+        state: absent
+      when: delivered_certs.files | length != 1
+
     - name: Start apache so the port actually takes effect (a real converge, not just a file)
       ansible.builtin.shell: "{{ apache_ctl }} -k restart 2>/dev/null || {{ apache_ctl }} -k start"
       register: started

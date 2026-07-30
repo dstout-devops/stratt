@@ -21,6 +21,32 @@ environment: dev
 # still auto-wired by the chart but IGNORED — the boot-env blocks for helm+declared are
 # retired (ADR-0103 S7); the estate Connector/Actuator declarations drive registration now.
 plugins:
+  # kubecompute — the `provisioning` capability's provider for Intent/Compute on Kubernetes
+  # (ADR-0151). It BUILDS a host that can actually be converged and then projects how to reach it,
+  # which is what closed the capstone's middle: floci instances ship no sshd, so nothing Stratt
+  # could build was anything Stratt could then converge.
+  - name: kubecompute
+    image:
+      repository: stratt-plugin-kubecompute
+      tag: dev
+      digest: ""
+      pullPolicy: Never # kind-loaded (task image:plugin PLUGIN=kubecompute)
+    # Hosts are built into their OWN namespace, never beside the control plane. deployNamespace
+    # renders the Namespace plus a NAMESPACED Role+RoleBinding, so a compromised builder can create
+    # pods where hosts live and nowhere else — it cannot create one next to strattd.
+    deployNamespace: [stratt-hosts]
+    kubeAccess:
+      apiGroups: [""]
+      # `services` alongside `pods`: the build creates a Service per host, because that is what
+      # CAUSES the DNS name the Syncer projects as mgmt.address (ADR-0142 D4 — observed or caused,
+      # never computed). Without it the host is running and unaddressable.
+      resources: ["pods", "services"]
+      verbs: ["get", "list", "watch", "create", "delete"]
+    hostEnv:
+      STRATT_KUBECOMPUTE_NAMESPACE: stratt-hosts
+    env:
+      STRATT_KUBECOMPUTE_NAMESPACE: stratt-hosts
+      STRATT_KUBECOMPUTE_IMAGE: alpine:3.22
   - name: declared
     image:
       repository: stratt-plugin-declared

@@ -1403,6 +1403,33 @@ tasks:
       - "{{.KUBECTL}} --context {{.KIND_CONTEXT}} apply -f {{.ROOT_DIR}}/deploy/dev/managed-web.yaml"
       - "{{.KUBECTL}} --context {{.KIND_CONTEXT}} -n stratt rollout status deploy/managed-web --timeout=120s"
 
+  dev:kubecompute:up:
+    desc: "Prepare the floor kubecompute BUILDS into (ADR-0151): the built hosts' authorized_keys + the gate-only authz markers"
+    deps: [tools:kubectl, dev:machine-key]
+    vars:
+      KEYDIR: "{{.ROOT_DIR}}/deploy/dev/managed-web"
+    cmds:
+      - go run sigs.k8s.io/kind@v{{.KIND_VER}} export kubeconfig --name {{.KIND_CLUSTER}}
+      # The namespace is normally rendered by the chart (kubecompute's deployNamespace), but this
+      # task must also work BEFORE the first helm install — a built host needs its authorized_keys
+      # Secret to exist in the namespace at pod-spawn, and a missing Secret makes the pod hang in
+      # ContainerCreating with a message about a volume rather than about a key.
+      - "{{.KUBECTL}} --context {{.KIND_CONTEXT}} create namespace stratt-hosts --dry-run=client -o yaml | {{.KUBECTL}} --context {{.KIND_CONTEXT}} apply -f -"
+      # The SAME throwaway dev keypair the hand-declared fixture nodes use, so a host Stratt BUILT
+      # is reachable by the credential the converge already brokers (web-machine) rather than by a
+      # key minted at build time that nothing else knows about.
+      - "{{.KUBECTL}} --context {{.KIND_CONTEXT}} -n stratt-hosts create secret generic managed-web-authorized-keys --from-file=authorized_keys={{.KEYDIR}}/id_ed25519.pub --dry-run=client -o yaml | {{.KUBECTL}} --context {{.KIND_CONTEXT}} apply -f -"
+      # GATE-ONLY authz markers (ADR-0052). An Action's CredentialRef use-check is its ONLY authz
+      # gate — the core refuses a credential-free Action outright — so `kubecompute/create-host` and
+      # `cert-issuer/sign` each need one even though neither brokers material: kubecompute reaches
+      # the API through its own ServiceAccount and openbao holds its own CLM token. The Secret is a
+      # POINTER the use-check resolves; it carries a marker and never material (§2.5).
+      #
+      # Created here because the credential-refs that NAME them ship in the estate while nothing
+      # created them — a gap that only shows up as a failed Run at the moment an operator launches.
+      - "{{.KUBECTL}} --context {{.KIND_CONTEXT}} -n stratt create secret generic kubecompute-build-authz --from-literal=marker=1 --dry-run=client -o yaml | {{.KUBECTL}} --context {{.KIND_CONTEXT}} apply -f -"
+      - "{{.KUBECTL}} --context {{.KIND_CONTEXT}} -n stratt create secret generic cert-issuer-authz --from-literal=marker=1 --dry-run=client -o yaml | {{.KUBECTL}} --context {{.KIND_CONTEXT}} apply -f -"
+
   dev:managed-app:up:
     # The BARE node the apache Blueprint converges (ADR-0148). It reuses managed-web's keypair and
     # authorized-keys Secret on purpose — one throwaway dev key for both fixture nodes — so this

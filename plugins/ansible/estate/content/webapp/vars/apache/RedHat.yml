@@ -11,3 +11,9 @@ apache_ctl: httpd
 apache_conf_dir: /etc/httpd/conf.d
 apache_listen_conf: /etc/httpd/conf/httpd.conf
 apache_docroot: /var/www/html
+# TLS: RedHat ships mod_ssl as its own package which drops a LoadModule into conf.modules.d/,
+# so the module line is unnecessary once installed.
+apache_ssl_pkg: mod_ssl
+# The mod_ssl package drops its own conf.modules.d entry AND an ssl.conf with `Listen 443`, so
+# installing it is the whole enable. DECLARED, NOT TESTED — no RedHat node runs in this floor.
+apache_ssl_enable_cmd: ""
