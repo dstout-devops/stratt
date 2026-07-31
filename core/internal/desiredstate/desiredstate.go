@@ -1724,6 +1724,12 @@ func parseKind[T any](dirs []string, optional bool, parse func(path string, raw 
 			if err != nil {
 				return nil, fmt.Errorf("desiredstate: %s: %w", path, err)
 			}
+			// BEFORE the per-kind parser, because the parser reads the first document and
+			// stops — so by the time it returns, any second declaration in this file has
+			// already been dropped and nothing downstream can tell.
+			if err := refuseMultiDocument(path, raw); err != nil {
+				return nil, err
+			}
 			name, decl, err := parse(path, raw)
 			if err != nil {
 				return nil, err
