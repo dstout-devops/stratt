@@ -95,7 +95,7 @@ func TestWorkflowToJobTemplate(t *testing.T) {
 	if !ok {
 		t.Fatal("expected a single actuation step")
 	}
-	jt := workflowToJobTemplate(wf, step)
+	jt := workflowToJobTemplate(wf, step, nil)
 	if jt["id"] != awxID("patch") || jt["name"] != "patch" || jt["playbook"] != "site.yml" {
 		t.Fatalf("job_template fields: %+v", jt)
 	}

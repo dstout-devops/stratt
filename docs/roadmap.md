@@ -326,6 +326,36 @@ the safe one. Scope today is `kubecompute-build`, the only Workflow forwarding `
 as other builders begin to, they either declare what they read or are correctly reported as reading
 none.
 
+### `/api/v2` route breadth is DONE (2026-07-31) — and two refusals are the point
+
+`schedules`, `workflow_job_templates` + `workflow_jobs`, `projects`, and `credentials` +
+`credential_types` all ship. The four families the parity audit named are complete; what remains on
+that front is launch SEMANTICS (`ask_*_on_launch` beyond variables, AWX-015), which is a design
+question about desired state rather than a missing endpoint.
+
+**`projects` needed no design at all**, which is worth recording: ADR-0134 D2 already declares an
+Actuator's `contentDir` to be "one project: playbooks, roles/, group_vars/", one Actuator per
+project. The family is that mapping. The alternative — deriving projects from distinct SCM blocks in
+Step params — would have been core reading a tool's params by name to invent an object, the §1.4 trap
+that ADR spends a paragraph warning implementers about. `scm_type` is manual because nothing clones
+at run time BY DESIGN, and `job_templates.project` is no longer null.
+
+**`credentials` is where §2.5 is easiest to erode.** An AWX credential CONTAINS material; a
+CredentialRef contains a POINTER, and no graph-store method returns material — not redacted, not
+encrypted, none. `inputs` carries the declared injection KEY NAMES with AWX's `$encrypted$` sentinel:
+it asserts "a secret stands here" (true), never "Stratt holds it" (false). The key names are
+Git-declared and already served on /api/v1, so hiding them would hide diagnosis while protecting
+nothing — but the LOCATOR is absent, because it is the address OF material and a compat listing is
+not the place to widen who reads it. One synthetic `credential_type` for every ref: AWX's type says
+what a credential is FOR, Stratt's `backend` says WHO BROKERS IT, and mapping one onto the other is a
+category error that would read as fact.
+
+**Two things were refused rather than half-shipped.** Attaching a credential (or an inventory) at
+launch stays in `ignored_fields` — a Step's credentialRefs are declared and reviewed in Git
+(ADR-0009), and a launch-time swap would make the compat surface the one door that skips that review.
+And `POST /projects/{id}/update/` does not exist: an update means "clone the SCM again", nothing here
+clones, and a no-op would tell an operator their content refreshed.
+
 ### Booked by the WFJT façade family (2026-07-31) — a cancel that would have lied
 
 `/api/v2/workflow_job_templates/` + `/workflow_jobs/` shipped, and **14 of the 21 Workflows the

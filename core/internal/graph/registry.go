@@ -354,6 +354,20 @@ func (s *Store) GetCredentialRef(ctx context.Context, name string) (types.Creden
 	return ref, nil
 }
 
+// ListCredentialRefs returns every pointer, whatever declared it. Like every
+// other read here it returns POINTERS — there is no method anywhere that
+// returns material, and no such code path exists (ADR-0009, §2.5).
+func (s *Store) ListCredentialRefs(ctx context.Context) ([]types.CredentialRef, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT name, owner_team, backend, locator, injection, declared_by
+		FROM graph.credential_ref ORDER BY name`)
+	if err != nil {
+		return nil, fmt.Errorf("graph: list credential refs: %w", err)
+	}
+	defer rows.Close()
+	return scanCredentialRefs(rows)
+}
+
 // ListCredentialRefsDeclaredBy returns pointers owned by a declaration path.
 func (s *Store) ListCredentialRefsDeclaredBy(ctx context.Context, declaredBy string) ([]types.CredentialRef, error) {
 	rows, err := s.pool.Query(ctx, `
@@ -363,6 +377,12 @@ func (s *Store) ListCredentialRefsDeclaredBy(ctx context.Context, declaredBy str
 		return nil, fmt.Errorf("graph: list credential refs: %w", err)
 	}
 	defer rows.Close()
+	return scanCredentialRefs(rows)
+}
+
+// scanCredentialRefs decodes the shared credential_ref column list. One decoder
+// for both list queries so a column added to one cannot silently skip the other.
+func scanCredentialRefs(rows pgx.Rows) ([]types.CredentialRef, error) {
 	var out []types.CredentialRef
 	for rows.Next() {
 		var ref types.CredentialRef
