@@ -68,6 +68,15 @@ func fakeAWX(t *testing.T) *httptest.Server {
 	mux.HandleFunc("/api/v2/execution_environments/", func(w http.ResponseWriter, r *http.Request) {
 		w.Write(page([]map[string]any{{"id": 80, "name": "pinned-ee", "image": "quay.io/x@sha256:" + strings.Repeat("a", 64)}}))
 	})
+	mux.HandleFunc("/api/v2/notification_templates/", func(w http.ResponseWriter, r *http.Request) {
+		w.Write(page([]map[string]any{{
+			"id": 90, "name": "slack-ops", "notification_type": "slack",
+			// In the clear, as AWX returns it: the token is IN the URL.
+			"notification_configuration": map[string]any{
+				"hook_url": "https://hooks.slack.invalid/services/T0/B0/XXXXXXXXXXXX", "channels": []string{"#ops"},
+			},
+		}}))
+	})
 	mux.HandleFunc("/api/v2/labels/", func(w http.ResponseWriter, r *http.Request) {
 		w.Write(page([]map[string]any{{"id": 70, "name": "prod"}}))
 	})

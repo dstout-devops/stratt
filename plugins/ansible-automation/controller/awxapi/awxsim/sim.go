@@ -52,6 +52,7 @@ func (s *Sim) Handler() http.Handler {
 	mux.HandleFunc("GET /api/v2/users/", s.auth(s.users))
 	mux.HandleFunc("GET /api/v2/labels/", s.auth(s.labels))
 	mux.HandleFunc("GET /api/v2/execution_environments/", s.auth(s.execEnvs))
+	mux.HandleFunc("GET /api/v2/notification_templates/", s.auth(s.notifications))
 	mux.HandleFunc("GET /api/v2/inventories/", s.auth(s.inventories))
 	mux.HandleFunc("GET /api/v2/inventories/{id}/", s.auth(s.inventory))
 	mux.HandleFunc("GET /api/v2/inventories/{id}/inventory_sources/", s.auth(s.inventorySources))

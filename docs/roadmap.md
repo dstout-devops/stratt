@@ -326,6 +326,37 @@ the safe one. Scope today is `kubecompute-build`, the only Workflow forwarding `
 as other builders begin to, they either declare what they read or are correctly reported as reading
 none.
 
+### AWX-009 · where a Controller sends its outcomes, without importing the credentials (2026-07-31)
+
+`notification_templates` → `ansible.notification`, the tenth collection the AAP mirror projects. It
+answers the migration question "where does this Controller send job outcomes, by what driver, and
+which have a hand-written message body I must re-author?" — each row is a Sink to declare on cutover,
+and `notificationType` is its `kind`, which is only a straight mapping because ADR-0125 made a Sink's
+kind name its delivery Action and left core holding no driver list.
+
+**The §2.5 line is the whole design, and the obvious rule is the wrong one.** AWX returns
+`$encrypted$` for `token`/`password` and returns everything else IN THE CLEAR — so "project what AWX
+did not encrypt" reads safe and is not: for the commonest driver the cleartext field IS the
+credential. A Slack or Teams incoming-webhook URL is a bearer secret with the token in its path.
+`configKeys` therefore carries key NAMES only, and the discard happens in `UnmarshalJSON`, so the Go
+type has **no field the values could live in** — structural, not a habit in the normalizer, and
+nothing a well-meaning "just add the endpoint" edit can reach. Same line ADR-0128 D2 drew for
+credentials and ADR-0132 D3 for schedule `extraDataKeys`, applied where it bites hardest. The
+simulator seeds real secret shapes (a webhook URL with a token in the path, a bearer header) so a
+leaking projection has something to fail on.
+
+**A test that could not fail, caught.** The first version of the leak test marshalled the entities
+and grepped for the secrets — but protobuf JSON base64-encodes facet bytes, so it matched nothing in
+either direction. It went green while proving nothing. The fix decodes the facets before searching;
+the note is in the test, because the shape recurs.
+
+**Attachments are absent BY BUDGET and it is stated rather than silent.** Which template notifies
+through which of these, on started/success/error, exists in AWX only as three sub-resources PER
+TEMPLATE — 3×len(job_templates) requests per poll, on the largest collection in any real Controller.
+That is the different-order-of-cost ADR-0131's budget exists to refuse; booked as a detail-tier
+opt-in. The poll-cost test caught the new collection read immediately and its literal was bumped
+deliberately (9 → 10), which is exactly what that constant is for.
+
 ### The reach gap closed for network devices — and a password that is only ever a path (ADR-0153)
 
 `ansible-tool.md` called ANS-001 "the one finding that changes what Stratt can be sold as": the ansible

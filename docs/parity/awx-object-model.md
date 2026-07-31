@@ -86,7 +86,7 @@ which is which.
 | `labels`                         | `none` 🟠       | AWX labels are the operator's own grouping vocabulary; they would map to graph labels cleanly and nobody has looked                                         | **AWX-006** |
 | `execution_environments`         | `none` 🟠       | Which EE a template runs in is invisible in the mirror; on our side EE is an Actuator declaration (ADR-0117 D3a), so the mapping is not obvious             | **AWX-007** |
 | `instance_groups`                | `none` 🟠       | AWX's execution placement; our equivalent is Sites/Cells, so this is a real mapping question nobody has asked                                               | **AWX-008** |
-| `notification_templates`         | `none` 🟠       | ADR-0125 made Sinks driver-shaped; importing AWX's notification config is now cheap and unexamined                                                          | **AWX-009** |
+| `notification_templates`         | `projected` 🟢  | → `ansible.notification` + `owned-by` edge (2026-07-31). Name, DRIVER and config KEY NAMES only — no configuration VALUE is ever projected, because AWX returns non-secret fields in the clear and for the commonest driver the cleartext field IS the credential (a Slack webhook URL is a bearer secret). `notificationType` is a Sink's `kind` on cutover (ADR-0125). ATTACHMENTS deliberately absent: 3 sub-reads per job template | ~~**AWX-009**~~ |
 | `credential_types`               | `none` 🟠       | Custom credential types + injectors — the platform audit already scores this 🟡 (`injectionFor` is a fixed map)                                             | **AWX-012** |
 | `ad_hoc_commands`                | `none` ⚪       | An imperative one-shot; Stratt's equivalent is a Run against a View, not an object to mirror                                                                |             |
 | `workflow_approvals`             | `adopt-only` ⚪ | Approval **nodes** are transformed into Workflow gates; pending approval _instances_ are run state, not config                                              |             |
@@ -204,7 +204,7 @@ Two paths read AWX, with different breadth, and nothing reconciles them:
 
 | Path                                                                                         | Endpoints                                                                                                               |
 | -------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
-| **Projection** ([controller/types.go](../../plugins/ansible-automation/controller/types.go)) | `job_templates`, `workflow_job_templates`, `schedules`, `organizations`, `teams` — **5**                                |
+| **Projection** ([controller/types.go](../../plugins/ansible-automation/controller/types.go)) | `job_templates`, `workflow_job_templates`, `schedules`, `organizations`, `teams`, `credentials`, `users`, `labels`, `execution_environments`, `notification_templates` — **10**                                |
 | **adopt deep-read** ([awxapi/](../../plugins/ansible-automation/controller/awxapi/))         | those + `projects`, `inventories`, `credentials`, `survey_spec`, `workflow_nodes`, `inventory_sources`, `hosts` — **9** |
 
 **Update (2026-07-26):** proving this seam found the asymmetry had also reached the **test harness**.
@@ -267,7 +267,15 @@ having been built first and never revisited when the transform grew deeper.
   discovered at read time is ungrantable. Labels are Entities with `has-label` edges, so an operator's AWX
   grouping vocabulary becomes Stratt Views by topology selection — see `estate/views/awx-prod-templates.yaml` ·
   **AWX-007** execution environments · **AWX-008** instance groups →
-  Sites/Cells · **AWX-009** notification templates → Sinks (cheap since ADR-0125) ·
+  Sites/Cells · ~~**AWX-009** notification templates → Sinks~~ — **done (2026-07-31)**, and the
+  §2.5 line is the whole design: AWX encrypts `token`/`password` and returns the REST IN THE CLEAR,
+  so "project what AWX did not encrypt" would have imported working webhook credentials into the
+  graph — a Slack incoming-webhook URL carries its token in the path. `configKeys` keeps the key
+  NAMES (what a Sink declaration has to restate) and the projecting Go type has **no field the
+  values could live in**, so the property is structural rather than a habit in the normalizer.
+  Attachments (which template notifies through which, on started/success/error) are absent BY
+  BUDGET: AWX exposes them only as three sub-resources per template, so the edge costs
+  3×len(job_templates) per poll — the different-order-of-cost ADR-0131 refuses by default ·
   ~~**AWX-007** execution environments~~ — **done, [ADR-0133](../adr/0133-execution-environments-and-instance-groups.md) D1** ·
   ~~**AWX-008** instance groups~~ — **declined, D4**, and the declining is the decision: it stays 🔴/⚪ rather
   than 🟠, because "nobody looked" and "we looked and said no" must never render the same ·

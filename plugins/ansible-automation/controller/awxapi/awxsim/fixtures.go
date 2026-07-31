@@ -100,6 +100,24 @@ type fExecEnv struct {
 	Pull  string `json:"pull,omitempty"`
 }
 
+// fNotification is an AWX notification template (AWX-009) — projection-only.
+//
+// The seeded values matter: `notification_configuration` carries a Slack webhook URL with a
+// token in its path, IN THE CLEAR, because that is what AWX actually returns. AWX encrypts
+// `token` and `password` and leaves the rest alone, so the cleartext field IS the credential
+// for the commonest driver. A simulator that seeded a harmless `{"channel":"#ops"}` would
+// let a projection that leaks values pass every test.
+type fNotification struct {
+	ID               int            `json:"id"`
+	Name             string         `json:"name"`
+	NotificationType string         `json:"notification_type"`
+	Configuration    map[string]any `json:"notification_configuration"`
+	Messages         map[string]any `json:"messages,omitempty"`
+	SummaryFields    struct {
+		Organization fNamed `json:"organization"`
+	} `json:"summary_fields"`
+}
+
 // fLabel is an AWX label (ADR-0132) — projection-only.
 type fLabel struct {
 	ID            int    `json:"id"`
@@ -213,6 +231,7 @@ type estate struct {
 	Users            []fUser
 	Labels           []fLabel
 	ExecutionEnvs    []fExecEnv
+	Notifications    []fNotification
 	TeamMembers      map[int][]fUser
 	Organizations    []fOrganization
 	Teams            []fTeam
@@ -301,6 +320,25 @@ func seed() *estate {
 		{ID: 80, Name: "pinned-ee", Image: "quay.io/ansible/awx-ee@sha256:" + "abc123def4567890abc123def4567890abc123def4567890abc123def4567890", Pull: "missing"},
 		{ID: 81, Name: "floating-ee", Image: "quay.io/ansible/awx-ee:latest", Pull: "always"},
 	}
+	// Notification templates (AWX-009). SEEDED WITH REAL SECRET SHAPES, deliberately: the
+	// Slack URL carries its token in the path and AWX returns it in the clear, and the webhook
+	// carries a bearer header. If the projection ever leaks a configuration VALUE, these are
+	// what would appear in the graph — which is what makes the leak test able to fail.
+	e.Notifications = []fNotification{
+		{ID: 90, Name: "slack-ops", NotificationType: "slack", Configuration: map[string]any{
+			"channels": []string{"#ops"}, "hook_url": "https://hooks.slack.invalid/services/T00000000/B00000000/XXXXXXXXXXXXXXXXXXXXXXXX",
+		}},
+		{ID: 91, Name: "pager", NotificationType: "pagerduty", Configuration: map[string]any{
+			"subdomain": "acme", "service_key": "$encrypted$", "client_name": "AWX",
+		}, Messages: map[string]any{"error": map[string]any{"body": "{{ job.name }} failed"}}},
+		{ID: 92, Name: "audit-webhook", NotificationType: "webhook", Configuration: map[string]any{
+			"url": "https://audit.example.com/hook?token=s3cr3t", "http_method": "POST",
+			"headers": map[string]any{"Authorization": "Bearer s3cr3t"},
+		}},
+	}
+	e.Notifications[0].SummaryFields.Organization = fNamed{ID: 1, Name: "Platform"}
+	e.Notifications[1].SummaryFields.Organization = fNamed{ID: 1, Name: "Platform"}
+
 	e.Labels = []fLabel{{ID: 70, Name: "prod"}, {ID: 71, Name: "critical"}, {ID: 72, Name: "legacy"}}
 	e.Labels[0].SummaryFields.Organization = fNamed{ID: 1, Name: "Platform"}
 	e.Labels[1].SummaryFields.Organization = fNamed{ID: 1, Name: "Platform"}

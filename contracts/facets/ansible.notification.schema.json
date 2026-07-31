@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "stratt:contract:facets/ansible.notification:v1",
+  "title": "ansible.notification Facet",
+  "description": "The OBSERVED definition of an AWX/AAP notification template — where a job's outcome is sent — projected read-only by the ansible-automation Connector's controller half (§1.2, AWX-009). An observed foreign object (→ a Stratt Sink on cutover, which is only cheap because ADR-0125 made a Sink's `kind` NAME ITS DELIVERY ACTION and left core holding no driver list, so notificationType maps straight across). Demanded by the awx-notifications audit View and by the cutover. NO CONFIGURATION VALUE IS EVER PROJECTED, and that is this Facet's central decision (§2.5): an AWX notification_configuration contains credentials, and not only in the fields AWX marks secret — AWX returns `$encrypted$` for token/password and leaves the REST IN THE CLEAR, and for the commonest driver the cleartext field IS the credential (a Slack or Teams incoming-webhook URL is a bearer secret with the token in its path). So `only the fields AWX did not encrypt` is not a safe rule; it is the rule that imports working webhook credentials into the graph. configKeys carries the KEY NAMES only — which driver knobs an operator configured, which is exactly what must be re-declared as a Sink — and the projecting Go type has no field the values could live in, so the property is structural rather than a habit in the normalizer. Same line ADR-0128 D2 drew for credentials (name and kind only) and ADR-0132 D3 for schedule extraDataKeys (key names, never values), applied where it bites hardest. ATTACHMENTS ARE ABSENT BY BUDGET, not oversight: which template notifies through which of these, on started/success/error, exists in AWX only as three sub-resources PER TEMPLATE, so projecting it costs 3×len(job_templates) requests per poll — the different-order-of-cost ADR-0131 warns about — and is booked as a detail-tier opt-in. Closed (§9).",
+  "type": "object",
+  "properties": {
+    "name": { "type": "string" },
+    "notificationType": {
+      "type": "string",
+      "description": "AWX's driver: slack | webhook | email | pagerduty | twilio | irc | mattermost | grafana | rocketchat. NOT enumerated: this is an observed foreign value, and an enum would turn AWX shipping a new driver into a projection failure rather than a fact rendered as-is (§1.2). It is also the field that maps to a Sink's `kind` on cutover (ADR-0125)."
+    },
+    "configKeys": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "the KEY NAMES of notification_configuration, sorted. Values are NEVER projected (§2.5) — see this schema's description for why the encrypted/cleartext split is not a usable boundary here."
+    },
+    "messagesCustomized": {
+      "type": "boolean",
+      "description": "whether the operator hand-wrote a message body. Presence, never content: a custom body can embed job variables, and what a cutover needs to know is that there is text to re-author."
+    }
+  },
+  "required": ["name"],
+  "additionalProperties": false
+}

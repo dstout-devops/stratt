@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"time"
 )
 
@@ -84,6 +85,70 @@ type ExecutionEnvironment struct {
 	SummaryFields struct {
 		Credential *named `json:"credential"`
 	} `json:"summary_fields"`
+}
+
+// NotificationTemplate is an AWX notification template — where AWX sends job outcomes
+// (AWX-009). It becomes a Sink on cutover: ADR-0125 made a Sink's `kind` NAME ITS DELIVERY
+// ACTION and left core holding no driver list, so `notificationType` maps straight across
+// and this mirror is actionable rather than decorative.
+//
+// ── THE §2.5 DECISION, AND IT IS THE WHOLE DESIGN OF THIS TYPE ───────────────────────────
+// An AWX notification_configuration CONTAINS CREDENTIALS, and not only in the fields AWX
+// marks secret. AWX returns `$encrypted$` for `token`/`password`, but it returns the rest
+// IN THE CLEAR — and for the most common driver the cleartext field IS the credential: a
+// Slack or Teams incoming-webhook URL is a bearer secret with the token in its path. So
+// "only the fields AWX did not encrypt" is not a safe rule; it is the rule that imports
+// working webhook credentials into the graph.
+//
+// This type therefore has NO FIELD THE VALUES COULD LIVE IN. configKeys decodes the object
+// and keeps only its KEY NAMES (see its UnmarshalJSON), so the property is structural
+// rather than a habit in the normalizer — there is nothing for a later `json.Marshal` of
+// this struct to leak, and nothing a well-meaning "just add the endpoint" edit can reach.
+// Same line ADR-0128 D2 drew for credentials (name and kind only) and ADR-0132 D3 for
+// schedule extraDataKeys (key names, never values), applied where it bites hardest.
+//
+// The key NAMES are worth having and are not secret: they say which driver knobs an
+// operator configured, which is exactly what has to be re-declared as a Sink.
+type NotificationTemplate struct {
+	ID   int    `json:"id"`
+	Name string `json:"name"`
+	// NotificationType is AWX's driver: slack, webhook, email, pagerduty, twilio, irc,
+	// mattermost, grafana, rocketchat. Deliberately NOT enumerated here — this is an
+	// observed foreign value, and an enum would turn AWX shipping a new driver into a
+	// projection failure rather than a fact we render as-is (§1.2).
+	NotificationType string     `json:"notification_type"`
+	Configuration    configKeys `json:"notification_configuration"`
+	// Messages is AWX's per-event message customization. Read as a presence BOOLEAN and
+	// never as content: a custom message body can embed job variables, and the fact worth
+	// projecting is "this one has hand-written text you must re-author on cutover".
+	Messages      json.RawMessage `json:"messages"`
+	SummaryFields struct {
+		Organization named `json:"organization"`
+	} `json:"summary_fields"`
+}
+
+// configKeys holds the KEY NAMES of a JSON object and discards every value at decode time.
+//
+// The discard happens in UnmarshalJSON on purpose. Decoding into a map and filtering later
+// would leave the values reachable for as long as the snapshot lives and one edit away from
+// a facet; this way the only thing that ever exists in the struct is the list of names.
+type configKeys []string
+
+func (k *configKeys) UnmarshalJSON(b []byte) error {
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(b, &raw); err != nil {
+		// A null or a non-object is "no keys", not a failed projection: AWX's shape here is
+		// driver-defined and a mirror must not die on a driver we have not seen.
+		*k = nil
+		return nil
+	}
+	out := make([]string, 0, len(raw))
+	for name := range raw {
+		out = append(out, name)
+	}
+	sort.Strings(out) // stable: a facet that reorders between polls reads as a change
+	*k = out
+	return nil
 }
 
 // Label is an AWX label — the operator's own grouping vocabulary (ADR-0132 D1).
@@ -216,6 +281,7 @@ type Snapshot struct {
 	Users         []User
 	Labels        []Label
 	ExecutionEnvs []ExecutionEnvironment
+	Notifications []NotificationTemplate
 	// WorkflowNodes by workflow_job_template id (ADR-0129). AWX has no bulk endpoint, so
 	// this is an N+1 read: one request per workflow, every poll.
 	WorkflowNodes map[int][]WorkflowNode
@@ -335,6 +401,16 @@ func (c *Client) Enumerate(ctx context.Context) (*Snapshot, error) {
 		return nil, err
 	}
 	if snap.ExecutionEnvs, err = list[ExecutionEnvironment](ctx, c, "/execution_environments/"); err != nil {
+		return nil, err
+	}
+	// A COLLECTION read (AWX-009): O(1) per poll. The ATTACHMENTS — which template notifies
+	// through which of these, on started/success/error — are deliberately NOT read, and that
+	// is a budget decision rather than an oversight. AWX exposes them only as three
+	// sub-resources PER TEMPLATE, so projecting them costs 3×len(JobTemplates) requests on
+	// top of the existing detail tier: job templates are the largest collection in every real
+	// Controller, which is the "different order of cost" ADR-0131 warns about. Booked as a
+	// detail-tier opt-in for an operator who needs the edge, not taken by default.
+	if snap.Notifications, err = list[NotificationTemplate](ctx, c, "/notification_templates/"); err != nil {
 		return nil, err
 	}
 	// The DETAIL tier (ADR-0131 D1): the expensive per-object sub-reads, on their own

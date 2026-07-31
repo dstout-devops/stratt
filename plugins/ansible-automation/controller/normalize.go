@@ -39,6 +39,15 @@ const (
 	// namespace where AWX instance groups deliberately do not: those are a placement
 	// model Stratt already answers with Sites and Cells (D4).
 	KindExecutionEnv = "ansible.executionenvironment"
+	// KindNotification mirrors an AWX notification template — where a job's outcome is sent
+	// (AWX-009). It becomes a Sink on cutover, which is only cheap because ADR-0125 made a
+	// Sink's `kind` name its delivery Action and left core holding no driver list.
+	//
+	// NAME, DRIVER AND CONFIG KEY NAMES ONLY (§2.5). AWX returns non-secret configuration
+	// fields in the clear, and for the commonest driver the cleartext field IS the
+	// credential — a Slack incoming-webhook URL is a bearer secret. See NotificationTemplate,
+	// whose type has no field the values could live in.
+	KindNotification = "ansible.notification"
 
 	// schemePlaybook is the ansible-project Syncer's OWNED kind — referenced here only
 	// as a cross-source relation TARGET (the `runs` edge), never owned or written by AWX.
@@ -195,6 +204,28 @@ func (c *Client) Normalize(snap *Snapshot) ([]*pluginv1.ObservedEntity, error) {
 			IdentityKeys: map[string]string{KindUser: c.qualify(u.ID)},
 			Labels:       labels(u.Username, ""),
 			Facets:       map[string][]byte{KindUser: facet},
+		})
+	}
+
+	for _, nt := range snap.Notifications {
+		// configKeys already dropped every value at decode; there is nothing here to filter.
+		facet, err := json.Marshal(map[string]any{
+			"name":             nt.Name,
+			"notificationType": nt.NotificationType,
+			"configKeys":       []string(nt.Configuration),
+			// Presence, never content: a custom body can embed job variables, and what a
+			// cutover needs to know is that there is hand-written text to re-author.
+			"messagesCustomized": len(nt.Messages) > 0 && string(nt.Messages) != "null",
+		})
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, &pluginv1.ObservedEntity{
+			Kind:         KindNotification,
+			IdentityKeys: map[string]string{KindNotification: c.qualify(nt.ID)},
+			Labels:       labels(nt.Name, nt.SummaryFields.Organization.Name),
+			Facets:       map[string][]byte{KindNotification: facet},
+			Relations:    orgRel(nt.SummaryFields.Organization.ID),
 		})
 	}
 

@@ -101,7 +101,7 @@ func clockClient(t *testing.T, url string, detail time.Duration, now *time.Time)
 // collectionReads is asserted as a literal on purpose. Four ADRs have now added reads to
 // this sync, and this number moving is the signal that a fifth did — ADR-0131's whole
 // point is that the total has an owner. Bump it deliberately, never to make a test pass.
-const collectionReads = 9 // job_templates, workflow_jts, schedules, orgs, teams, credentials, users, labels, execution_environments
+const collectionReads = 10 // job_templates, workflow_jts, schedules, orgs, teams, credentials, users, labels, execution_environments, notification_templates
 
 func TestDetailTierIsNotReadEveryPoll(t *testing.T) {
 	awx := &countingAWX{}
@@ -113,7 +113,7 @@ func TestDetailTierIsNotReadEveryPoll(t *testing.T) {
 		t.Fatalf("first enumerate: %v", err)
 	}
 	// First sync always reads detail — an empty cache is a miss, not a reason to project
-	// a workflow with no edges. 7 collections + 1 workflow + 1 team.
+	// a workflow with no edges. collectionReads + 1 workflow + 1 team.
 	if got, want := awx.total(), collectionReads+2; got != want {
 		t.Fatalf("first poll issued %d requests, want %d (%d collections + 1 workflow + 1 team of detail)", got, want, collectionReads)
 	}
