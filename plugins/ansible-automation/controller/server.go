@@ -72,6 +72,13 @@ func (s *Server) GetManifest(context.Context, *pluginv1.GetManifestRequest) (*pl
 			{SchemaId: KindUser},
 			{SchemaId: KindLabel},
 			{SchemaId: KindExecutionEnv},
+			// AWX-009. It was added to TombstoneSchemes and to the operator grant but NOT here,
+			// so the projection wrote a namespace it advertised no contract for — registration
+			// tolerates that (Contracts ⊆ FacetNamespaces is the only rule) and the facet write
+			// therefore went UNVALIDATED. Caught by TestHalvesOwnDisjointNamespaces, which
+			// counts what each half advertises. "Own what you project" (§1.1) is the rule, and a
+			// shipped schema only hardens the seam if the manifest points at it.
+			{SchemaId: KindNotification},
 		},
 		Actions: []*pluginv1.ActionDecl{{
 			Name:        actionMaterialize,

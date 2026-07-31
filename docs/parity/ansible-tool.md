@@ -55,25 +55,28 @@ What an Ansible project contains, against what the content half projects
 | Content-root element                                                | Observed?                           | Note                                                                                                                                             | ID          |
 | ------------------------------------------------------------------- | ----------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ | ----------- |
 | Playbooks (any `.yml` that is a play sequence)                      | 🟢 `name`, `path`, `plays`, `hosts` | Detected by **shape**, not location — a top-level sequence of mappings with `hosts:` or `import_playbook:`. Pinned schema                        |             |
-| `roles/*/`                                                          | 🟡 `name`, `path` only              | A role is a name and a directory; nothing inside it is read                                                                                      |             |
-| `roles/*/meta/main.yml` → `dependencies`                            | 🔴                                  | **Role→role dependency is graph-shaped structure**, and it is the one thing inside a role worth projecting                                       | **ANS-004** |
-| `roles/*/meta/main.yml` → `galaxy_info`                             | 🔴                                  | Author, license, supported platforms — cheap metadata once `meta/` is being read at all                                                          | **ANS-004** |
+| `roles/*/`                                                          | 🟢 name, path, required, version, deps, galaxy_info | Widened by the content-depth batch (2026-07-31). Tasks/handlers/defaults stay unread — the §9 line                                |             |
+| `roles/*/meta/main.yml` → `dependencies`                            | 🟢                                  | Projected as `depends-on` **relations**; all three Galaxy forms (bare string, `{role:}`, `{name:}`). Resolves to the in-tree role when there is one, else into the requirements space | ~~**ANS-004**~~ |
+| `roles/*/meta/main.yml` → `galaxy_info`                             | 🟢 author, license, min version, platform names | Platform *versions* are not projected — a supported-version matrix is not estate structure                                          | ~~**ANS-004**~~ |
 | `collections/requirements.yml` → `collections:`                     | 🟢 `name`, `version`, `source`      | Both Galaxy-legal forms (bare FQCN string and mapping) handled                                                                                   |             |
-| `requirements.yml` → `roles:`                                       | 🔴                                  | The **roles half is not parsed** — only `collections:`. Already booked by ADR-0127 D4                                                            | **ANS-002** |
+| `requirements.yml` → `roles:`                                       | 🟢 `name`, `version`, `src`         | Same `ansible.role` Kind as an in-tree role, marked `required` — one question, one Kind. Parsed PER ENTRY, because real files mix the bare-string and mapping forms in one list | ~~**ANS-002**~~ |
 | Inventory files                                                     | 🟡 `path`, `format` only            | Recognized by well-known name or an `inventory/`/`inventories/` ancestor; **contents never parsed**                                              |             |
 | Inventory groups / hosts inside those files                         | ⚪                                  | Deliberate: a **View** _is_ the group (ADR-0055 G3) and hosts come from their own Syncers, never a writable CMDB (§1.2)                          |             |
-| `group_vars/`, `host_vars/`                                         | 🔴                                  | Where an Ansible estate's actual configuration lives. Not observing them means "why did this host get this value" is unanswerable from the graph | **ANS-003** |
+| `group_vars/`, `host_vars/`                                         | 🟢 scope, target, **key names**     | `ansible.varscope`. Values are NEVER projected (§2.5) — a vars file routinely holds credentials in the clear. Both the file and directory forms; the directory form unions its files, as ansible does. **Precedence is observed, never computed**: two scopes binding one name both project, neither marked a winner | ~~**ANS-003**~~ |
 | `ansible.cfg`                                                       | 🔴                                  | Sets roles paths, connection defaults, strategy, callbacks — it changes the meaning of everything else in the root                               | **ANS-005** |
 | `library/`, `module_utils/`, `filter_plugins/`, `callback_plugins/` | 🔴                                  | A repo's own custom content is invisible; on a migration this is the content most likely to break                                                | **ANS-006** |
 | `galaxy.yml` (the root **is** a collection)                         | 🔴                                  | A collection-shaped repo is not recognized as one — it projects as loose playbooks and roles                                                     | **ANS-007** |
-| Vaulted files (`$ANSIBLE_VAULT` header)                             | 🟠                                  | Unexamined. A vaulted `group_vars/all.yml` should be observed as _present and vaulted_, never decrypted (§2.5)                                   | **ANS-008** |
+| Vaulted files (`$ANSIBLE_VAULT` header)                             | 🟢 `vaulted: true`, no keys         | Exactly as this row asked: present and vaulted, never decrypted. An empty key list WITH `vaulted:true` distinguishes "binds nothing" from "binds things I cannot show you" (§1.8) | ~~**ANS-008**~~ |
 | `molecule/`, `.yamllint`, `meta/runtime.yml`                        | ⚪                                  | Test scaffolding and lint config; not estate                                                                                                     |             |
 | Multi-document YAML playbooks                                       | 🟠                                  | `playbookPlays` unmarshals a single document; a `---`-separated multi-doc playbook would project only its first doc. Legal but rare              | **ANS-009** |
 
 **On the ⚪ rows.** Declining to parse inventory contents and role internals is the §9 line, correctly
-held. **ANS-003** and **ANS-004** are on the other side of it: a `group_vars/` file's _existence and
-scope_ and a role's _declared dependencies_ are structure, not execution semantics — observing them
-reinterprets nothing.
+held. **ANS-003** and **ANS-004** were on the other side of it — a `group_vars/` file's _existence and
+scope_ and a role's _declared dependencies_ are structure, not execution semantics — and both shipped
+on 2026-07-31 with that boundary intact: role tasks/handlers/defaults are still unread, and variable
+PRECEDENCE is still ansible's to decide. Two scopes binding one name both project with neither marked
+a winner; computing the winner would reinterpret the execution model (§9) and would have Stratt assert
+a fact about a run that has not happened (§1.2).
 
 ---
 
@@ -213,10 +216,13 @@ image-verified connection type is still not a proven one.
 
 **Tier 2 — the estate cannot see where configuration comes from:**
 
-- **ANS-003 · `group_vars/` / `host_vars/` observation.** Structure, not semantics: which files exist and
-  what scope they bind to. This is what makes "why does this host have this value" answerable.
-- **ANS-004 · Role `meta/` dependencies.** Role→role edges are the one graph inside a role.
-- **ANS-002 · `requirements.yml` roles half.** Already booked by ADR-0127 D4.
+~~All three done (2026-07-31), as one batch — they are one mechanism in one place:~~
+
+- ~~**ANS-003 · `group_vars/` / `host_vars/` observation.**~~ `ansible.varscope`: scope, target and
+  **key names, never values** (§2.5). Carried **ANS-008** with it — a vaulted file is present and
+  vaulted, never decrypted.
+- ~~**ANS-004 · Role `meta/` dependencies.**~~ `depends-on` relations + galaxy_info provenance.
+- ~~**ANS-002 · `requirements.yml` roles half.**~~ Same `ansible.role` Kind, marked `required`.
 
 **Tier 3 — completeness of the content picture:**
 
@@ -224,8 +230,7 @@ image-verified connection type is still not a proven one.
   **ANS-007** collection-shaped roots · ~~**ANS-011** multi-identity vault~~ (done, ADR-0153 D4) ·
   **ANS-013** pre-flight syntax check.
 
-**Unexamined (🟠) — look before deciding:** **ANS-008** vaulted-file observation ·
-**ANS-009** multi-document playbooks.
+**Unexamined (🟠) — look before deciding:** **ANS-009** multi-document playbooks.
 
 **Explicitly not gaps:** strategy/serial (play-level), raw ssh args (the injection seam the typed design
 exists to remove), run-time dynamic inventory (a second truth), ad-hoc commands, retry files.

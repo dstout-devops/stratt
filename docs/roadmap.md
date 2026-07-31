@@ -326,6 +326,48 @@ the safe one. Scope today is `kubecompute-build`, the only Workflow forwarding `
 as other builders begin to, they either declare what they read or are correctly reported as reading
 none.
 
+### The Ansible content root stops being a list of files (2026-07-31) — ANS-002/003/004/008
+
+Tier 2 of the tool audit ("the estate cannot see where configuration comes from") closed as one
+batch, because it is one mechanism in one place: `group_vars`/`host_vars` scopes, role `meta/`
+dependencies, and the `requirements.yml` roles half that was never parsed while its collections half
+always was.
+
+**`ansible.varscope` carries key NAMES and never values (§2.5)** — the third instance of that line
+after credentials (ADR-0128 D2) and schedule `extraDataKeys` (ADR-0132 D3), and the one where it
+bites hardest: a `group_vars` file routinely holds credentials in the clear, which is precisely why
+people vault them. But scope alone does not answer the motivating question either — knowing
+`group_vars/web.yml` exists says nothing about why a host got `http_port: 8080`. The names are the
+answer and are not secret. **ANS-008 fell out of it**: a `$ANSIBLE_VAULT` file is present with
+`vaulted: true` and NO keys, never decrypted, and an empty key list *with* that flag distinguishes
+"binds nothing" from "binds things I cannot show you" (§1.8).
+
+**Precedence is observed, never computed.** Two scopes binding one name is ansible's normal case;
+both project and neither is marked a winner. Computing the winner would reinterpret the execution
+model (§9 — the line this audit says is correctly held) and would have Stratt assert a fact about a
+run that has not happened (§1.2).
+
+**Three defects found by writing the tests, all of the silent-wrong-answer kind:**
+
+1. **An identity collision.** `roleID` used `"roles/" + name` for a required role — byte-identical to
+   an in-tree role's path. An in-tree `apache` and a `requirements.yml` entry named `apache` produced
+   ONE identity, so one silently overwrote the other: the same entity asserted twice with different
+   facets and no error anywhere. The spaces are now `roles/<path>` and `requirements/<name>`.
+2. **A dependency edge that always dangled.** `meta/main.yml` names a role, not a location, so the
+   edge target cannot be computed from the name — the first version pointed everything into the
+   requirements space, which left every dependency on an IN-TREE role pointing at nothing, forever.
+   It now resolves against the observed role set first.
+3. **A `requirements.yml` half that parsed to empty.** Decoding the whole `roles:` list into one
+   struct shape fails on the first bare string — and real files MIX the bare and mapping forms.
+   Measured against yaml.v3 rather than assumed. It is now per-entry, symmetric with the collections
+   half beside it.
+
+**And an existing guard caught a defect in the PREVIOUS commit.** `TestHalvesOwnDisjointNamespaces`
+counts what each half advertises; AWX-009 had added `ansible.notification` to `TombstoneSchemes` and
+to the operator grant but **not to `Contracts`** — registration tolerates that, so the projection was
+writing a facet nothing schema-validated. "Own what you project" (§1.1) only holds if the manifest
+points at the shipped schema. Fixed here.
+
 ### AWX-009 · where a Controller sends its outcomes, without importing the credentials (2026-07-31)
 
 `notification_templates` → `ansible.notification`, the tenth collection the AAP mirror projects. It

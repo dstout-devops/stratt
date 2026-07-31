@@ -289,15 +289,18 @@ func TestPinsAreStable(t *testing.T) {
 	// outputs/csr carries exactly one field, closed, and that is the design rather than economy:
 	// the private key is born on the target and never crosses the wire (§2.5, ADR-0050), so a
 	// schema admitting anything beside the CSR would be an invitation to send more.
-	// 77 since AWX-009 added facets/ansible.notification — where an AWX Controller sends job
+	// 79 since the ANS content-depth batch added facets/ansible.varscope (group_vars/host_vars
+	// scope + KEY NAMES, never values) and facets/ansible.role (which grew the ANS-002/004
+	// facts and earned a pin now that it carries more than a name and a path).
+	// 77 was AWX-009's facets/ansible.notification — where an AWX Controller sends job
 	// outcomes, projected as name + driver + config KEY NAMES only, because AWX returns
 	// non-secret configuration in the clear and for the commonest driver the cleartext field IS
 	// the credential (§2.5). 76 was ADR-0150 D5's facets/cert.presented — what a HOST actually
 	// presents, read back from the delivered file, beside the CLM Syncer's cert.expiry which says
 	// what was ISSUED. The count is deliberate: a new pinned document is an act, not a side
 	// effect (§1.5).
-	if len(all) != 77 {
-		t.Fatalf("expected 77 embedded documents, got %d — the shipped set is the SEAM set now "+
+	if len(all) != 79 {
+		t.Fatalf("expected 79 embedded documents, got %d — the shipped set is the SEAM set now "+
 			"(ADR-0138 D3/D4); a plugin's own contracts live in plugins/<n>/contracts/", len(all))
 	}
 	versions := map[string]int{}

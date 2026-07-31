@@ -63,7 +63,7 @@ func TestBothHalvesAssertOnePluginIdentity(t *testing.T) {
 // TWO Sources: the halves' owned namespaces must be DISJOINT. This is the assertion that
 // makes the split safe — every Observe is a full sync driving a per-Source tombstone
 // sweep, so an overlap would let one half's sync retract the other half's entities
-// (ADR-0042 per-source liveness). Their union is the nine `ansible.*` namespaces.
+// (ADR-0042 per-source liveness). Their union is the fifteen `ansible.*` namespaces.
 func TestHalvesOwnDisjointNamespaces(t *testing.T) {
 	ctrl, cont := manifests(t)
 	c, n := contractIDs(ctrl), contractIDs(cont)
@@ -73,18 +73,22 @@ func TestHalvesOwnDisjointNamespaces(t *testing.T) {
 			t.Errorf("namespace %q is advertised by BOTH halves — a shared owner means one half's full sync retracts the other's entities (ADR-0042/0127 D1)", ns)
 		}
 	}
-	if len(c) != 9 {
-		t.Errorf("controller advertises %d contracts, want 9 (template/workflow/schedule/org/team/credential/user/label/executionenvironment)", len(c))
+	// The counts are asserted as literals for the same reason the poll budget is: they move
+	// only when someone adds a namespace, and this is where that is noticed. AWX-009 added
+	// ansible.notification to TombstoneSchemes and to the operator grant but NOT to Contracts —
+	// so the projection wrote an unvalidated facet, and THIS test is what found it.
+	if len(c) != 10 {
+		t.Errorf("controller advertises %d contracts, want 10 (template/workflow/schedule/org/team/credential/user/label/executionenvironment/notification)", len(c))
 	}
-	if len(n) != 4 {
-		t.Errorf("content advertises %d contracts, want 4 (playbook/role/collection/inventory)", len(n))
+	if len(n) != 5 {
+		t.Errorf("content advertises %d contracts, want 5 (playbook/role/collection/inventory/varscope)", len(n))
 	}
-	for _, ns := range []string{"ansible.template", "ansible.workflow", "ansible.schedule", "ansible.org", "ansible.team", "ansible.credential", "ansible.user", "ansible.label", "ansible.executionenvironment"} {
+	for _, ns := range []string{"ansible.template", "ansible.workflow", "ansible.schedule", "ansible.org", "ansible.team", "ansible.credential", "ansible.user", "ansible.label", "ansible.executionenvironment", "ansible.notification"} {
 		if !c[ns] {
 			t.Errorf("controller half does not advertise %q", ns)
 		}
 	}
-	for _, ns := range []string{"ansible.playbook", "ansible.role", "ansible.collection", "ansible.inventory"} {
+	for _, ns := range []string{"ansible.playbook", "ansible.role", "ansible.collection", "ansible.inventory", "ansible.varscope"} {
 		if !n[ns] {
 			t.Errorf("content half does not advertise %q", ns)
 		}
