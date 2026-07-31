@@ -1927,6 +1927,16 @@ tasks:
       # has to carry its pod or the registry reports a Connector that will not verify.
       - task: image:plugin
         vars: {PLUGIN: kubeservices}
+      # kubecompute — the `provisioning` provider the DEV environment's Compute binding resolves to
+      # (ADR-0151). values-connector-e2e.yaml has declared its pod since that binding landed, and
+      # NO task ever built the image, so the chart rendered a Deployment with `pullPolicy: Never`
+      # against an image that does not exist in the kind node. The floor still went green, because
+      # `rollout status` waits on deploy/stratt alone — so the one plugin that BUILDS anything sat
+      # in ImagePullBackOff behind a passing gate. That is the same defect every other plugin in
+      # this list was added to fix, arriving one more time by a different door: declared in the
+      # floor, deployed by nothing.
+      - task: image:plugin
+        vars: {PLUGIN: kubecompute}
       # The certificate leg's provider (CERT-1) and the network leg's builder plus its statestore
       # dependency (ADR-0145). Each was declared in the estate with a dial address and deployed by
       # no floor, so each sat permanently unverified — which reads as "the backend is down".
@@ -1938,6 +1948,23 @@ tasks:
         vars: {PLUGIN: awss3}
       - task: image:plugin
         vars: {PLUGIN: netbox}
+      # THE BACKENDS THIS FLOOR'S PLUGINS DIAL. Each of these three tasks was written FOR this
+      # gate — read their comments: "dev:connector-e2e is fully in-kind by design, so the
+      # certificate leg had no floor in which its provider could exist"; "the awss3 plugin
+      # therefore ran with no state bucket"; "netbox-ipam had an image and no floor to run in".
+      # And this task called NONE of them, so the floor only worked on a cluster where someone had
+      # run them BY HAND. A gate that passes because of undocumented hand-applied state is not a
+      # gate. All three are idempotent (apply -f, and an existing token Secret is reused), so a
+      # warm cluster pays a few seconds and a cold one actually stands up.
+      - task: dev:openbao:up
+      - task: dev:objectstore:up
+      - task: dev:netbox:up
+      # The floor kubecompute BUILDS INTO: the stratt-hosts namespace + a built host's
+      # authorized_keys, and the gate-only authz marker Secrets the estate's credential-refs NAME
+      # (ADR-0052 — an Action's use-check is its only authz gate, so a build Run fails at launch
+      # without them). This task existed and NOTHING called it, which is the same shape as the
+      # missing image above: written, correct, wired to nothing.
+      - task: dev:kubecompute:up
       - task: dev:stage-estate # full estate incl. connectors/actuators
       - |
         set -eu
@@ -1952,6 +1979,16 @@ tasks:
       # strattd built hours earlier. Restart explicitly whenever the image was just rebuilt.
       - "{{.KUBECTL}} --context {{.KIND_CONTEXT}} -n stratt rollout restart deploy/stratt"
       - "{{.KUBECTL}} --context {{.KIND_CONTEXT}} -n stratt rollout status deploy/stratt --timeout=240s"
+      # EVERY Deployment, not just strattd. Waiting on deploy/stratt alone is how this floor went
+      # GREEN with a plugin pod in ImagePullBackOff: the chart rendered kubecompute's Deployment,
+      # no task built its image, `pullPolicy: Never` had nothing to find — and the gate never
+      # looked. A plugin that cannot start reports downstream as "the backend is down", which is
+      # the same misreading every comment in values-connector-e2e.yaml was written to prevent.
+      - |
+        set -eu
+        for d in $("{{.KUBECTL}}" --context {{.KIND_CONTEXT}} -n stratt get deploy -o name); do
+          "{{.KUBECTL}}" --context {{.KIND_CONTEXT}} -n stratt rollout status "$d" --timeout=240s
+        done
 
   dev:stack:up:
     desc: "EXTRAS (turnkey plugin-e2e stack): compose substrate + kind + all plugin images + helm-install (opt-in; genesis is the minimal default)"

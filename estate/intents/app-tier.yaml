@@ -40,6 +40,27 @@ spec:
   requires: [provisioning] # the capability CLASS (ADR-0110), never a provider name (§1.5)
   placement:
     subnet: app-subnet # placed-in the built subnet (ADR-0059 decision 5)
+    # THIS PLACEMENT IS NOT SATISFIABLE IN EITHER ENVIRONMENT THIS INTENT IS SCOPED TO, and it is
+    # kept anyway. Measured on the full-estate in-cluster floor, the Finding says exactly why:
+    #
+    #   placement target Intent/Subnet/app-subnet is built, but it carries none of the identity
+    #   schemes the resolved provider declares (it carries [aws.subnetId]; the provider declares
+    #   [kube.host]). The provider cannot address the subnet it is being asked to build into
+    #
+    # `app-subnet` is built by opentofu-network on AWS; dev's Compute binding is kubecompute and
+    # vsphere-dc's is vcenter, and neither can address an AWS subnet. There is no environment that
+    # binds an AWS Compute provider — `estate/capability-bindings/` has three files and none does.
+    #
+    # It stays for two reasons. It is the LIVE PROOF that ADR-0147 D3's refusal works and diagnoses
+    # itself rather than placing a pod somewhere meaningless (§1.8) — a passing check proves less
+    # than this Finding does. And the join it asks for is the one the capstone plan already
+    # concluded cannot exist: the aws substrate has networks and no converge-able hosts (floci
+    # ships no sshd), Kubernetes has converge-able hosts and no subnets that could honestly be
+    # called one — so the network leg is proven on aws and build→converge→cert on kubernetes, two
+    # proofs rather than one chain. This line is where that seam is visible in the estate.
+    #
+    # Deleting it, or inventing a `kubernetes` Subnet provider to satisfy it, are both refused:
+    # the first hides the seam, and the second would mean minting a CIDR nothing honours.
   params: # OPAQUE — validated against the resolved provider's own input Contract (§1.5)
     # `tier` is the only param this Intent ever meant. The AWS coordinates that sat beside it are
     # in the header above, with why they were here and why they are not any more.
