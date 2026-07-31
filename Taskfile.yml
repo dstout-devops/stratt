@@ -2405,6 +2405,19 @@ tasks:
         -f ee/Dockerfile -t stratt-ee-kube:dev .
       - go run sigs.k8s.io/kind@v{{.KIND_VER}} load docker-image stratt-ee-kube:dev --name {{.KIND_CLUSTER}}
 
+  dev:ee-vmware:build:
+    desc: Build the vmware-content EE variant (community.vmware's vmware_tools connection, ADR-0156)
+    cmds:
+      # The image that makes ADR-0156's `vmware_tools` transport usable — the one that needs NO
+      # network path to the guest, because every operation travels the vCenter API. NO binary
+      # build-arg: this connection plugin is a Python library, not an exec, so the shim's D6 gate
+      # asks only for the collection.
+      #
+      # NOT loaded into kind and NOT live-proven: vspheresim implements the vCenter API but not
+      # VMware Tools guest operations, so proving this needs a real vCenter with a Tools-running
+      # guest. Built and locked so an adopter who HAS one can select it from an Actuator.
+      - docker build --build-arg GO_PARALLEL={{.GO_PARALLEL}} --build-arg EE_CONTENT=vmware.requirements.yml -f ee/Dockerfile -t stratt-ee-vmware:dev .
+
   dev:ee-network:build:
     desc: Build the network-content EE variant (ansible.netcommon connection plugins, ADR-0153)
     cmds:

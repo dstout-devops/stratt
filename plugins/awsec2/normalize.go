@@ -101,6 +101,33 @@ func normalizeInstance(region string, in ec2types.Instance) (*pluginv1.ObservedE
 		facets["mgmt.address"] = raw
 	}
 
+	// mgmt.transport IS DELIBERATELY NOT WRITTEN HERE, and the reasoning matters more than
+	// the absence (ADR-0156).
+	//
+	// EC2 has two production connection paths and this Syncer can honestly observe NEITHER:
+	//
+	//   - SSH. The instance carries a KeyName, and it is tempting to read that as "reachable
+	//     over ssh". It is not: KeyName means A KEY IS AUTHORIZED, not that sshd is listening.
+	//     Inferring reachability from an authorization setting is COMPUTING a reach fact, which
+	//     is exactly what ADR-0142 D4 forbids — "a reach coordinate must be OBSERVED or CAUSED,
+	//     never COMPUTED" — and the dev substrate proves the gap is real rather than pedantic:
+	//     floci instances carry a KeyName and ship no sshd at all (HAR-1).
+	//
+	//   - SSM. `amazon.aws.aws_ssm` reaches an instance through a Systems Manager session and
+	//     needs no sshd whatsoever, which makes it the path a large share of EC2 estates
+	//     actually use. Whether an instance is SSM-managed is authoritatively answerable — SSM's
+	//     DescribeInstanceInformation lists exactly the instances whose agent has registered —
+	//     but that is a DIFFERENT AWS API than this Syncer speaks, with its own IAM scope.
+	//
+	// So this plugin observes no transport, every EC2 target falls to the Actuator's own default
+	// (ssh), and behaviour is unchanged from before ADR-0156. Writing `ssh` here to make the
+	// substrate look finished would be asserting a reachability we have not established — the
+	// precise failure that let the ec2-only demo claim fidelity `real` for a year.
+	//
+	// BOOKED: the SSM observation, which needs the SSM client and an ssm:DescribeInstanceInformation
+	// permission. It is also the only thing that would make the aws_ssm transport reachable at
+	// all, since a Facet has no other writer — so the two land together or not at all.
+
 	return &pluginv1.ObservedEntity{
 		Kind:         "instance",
 		IdentityKeys: identity,

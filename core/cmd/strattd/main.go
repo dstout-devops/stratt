@@ -935,6 +935,12 @@ func run(ctx context.Context, log *slog.Logger) error {
 			FacetNamespaces: []string{
 				"vm.config", "vm.runtime", "net.guest", "net.subnet",
 				"storage.datastore", "compute.pool", "net.dvswitch",
+				// mgmt.transport — HOW to reach the VM, beside WHERE (ADR-0156). vCenter reports
+				// guest.toolsRunningStatus, so this is OBSERVED rather than assumed from the
+				// substrate: the plugin claims vmware_tools only for a VM whose Tools are
+				// actually running, and vmware_tools needs no network path to the guest at all
+				// because every operation travels the vCenter API this Syncer already speaks.
+				"mgmt.transport",
 				// mgmt.address — the OBSERVED reach coordinate (ADR-0143). The
 				// mgmt.address schema has named this writer since ADR-0084 and the grant
 				// never carried it, so the projection could not have been written even if

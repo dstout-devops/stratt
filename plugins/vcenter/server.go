@@ -77,6 +77,12 @@ func (s *Server) GetManifest(context.Context, *pluginv1.GetManifestRequest) (*pl
 			// the grant and the projection and left this stale, which is precisely the gap
 			// mockstratt's `declares-what-it-emits` check now closes.
 			{SchemaId: "mgmt.address"},
+			// mgmt.transport — the PEER fact (ADR-0156): the address says where, this says by
+			// what means. Advertised because it is emitted, which is the rule the comment above
+			// exists to enforce: ADR-0143 updated the grant and the projection and left the
+			// advertisement stale, and the same omission here would leave the transport dropped
+			// or under authority nobody was asked for.
+			{SchemaId: "mgmt.transport"},
 		},
 		// Tombstone schemes per kind (ADR-0096 observe-all + full-sync tombstone). Read breadth
 		// (ADR-0115) adds region (datacenter) + availability-zone (cluster) — shared kinds — plus

@@ -194,6 +194,38 @@ included: which vendors a fleet needs is exactly the adopter-shaped question an 
 (ADR-0117 D3). An adopter copies the file, adds their vendors, relocks, and selects the image from their
 own Actuator.
 
+### The substrate transports — and the assumption that hid them (ADR-0156)
+
+The connection audit above was written on an assumption nobody had checked: that reaching a managed
+host means SSH on port 22. **Measuring the collections falsified it.** All three substrates ship a
+native connection plugin and none of them uses SSH:
+
+| Transport                       | Reaches the guest via              | Guest needs                       | Status |
+| ------------------------------- | ---------------------------------- | --------------------------------- | ------ |
+| `kubernetes.core.kubectl`       | `kubectl exec`                     | **nothing at all**                | 🟢 **LIVE-PROVEN** on kind — a pod asserted to have no sshd, no ssh client and nothing on port 22, converged over kubectl |
+| `community.vmware.vmware_tools` | vCenter guest ops — **no network path to the guest** | VMware Tools + guest creds | 🟡 shipped, unit-tested, **not live-proven**: vspheresim implements the vCenter API but not Tools guest operations |
+| `amazon.aws.aws_ssm`            | an AWS SSM Session                 | SSM Agent, instance profile, curl | 🟠 the shim supports it; **nothing produces it yet** — see below |
+
+**The transport is OBSERVED, not declared** (ADR-0156 D1): the Syncer that saw the host says how to
+reach it, in a `mgmt.transport` Facet beside `mgmt.address`. Declaring it on the Step would force
+every converge Workflow to name a substrate — the thing ADR-0151 removed from every declaration
+above the provider — and would make a mixed-substrate View unconvergeable, because connection
+settings render as inventory GROUP vars, one value per Run. Rendered per HOST, one Assignment
+converges pods, VMs and EC2 instances in **one Run**, naming none of them.
+
+**`aws_ssm` has no writer, and that is deliberate rather than unfinished.** The awsec2 Syncer can
+honestly observe *neither* EC2 path. `KeyName` means a key is AUTHORIZED, not that sshd is listening
+— inferring reachability from it is COMPUTING a reach fact, which ADR-0142 D4 forbids in those
+words, and floci proves the gap is real rather than pedantic (its instances carry a KeyName and ship
+no sshd). SSM is authoritatively answerable — `DescribeInstanceInformation` lists exactly the
+instances whose agent registered — but that is a different AWS API with its own IAM scope. **Booked:
+the SSM client and the transport land together or not at all**, since a Facet has no other writer.
+
+**What the kubectl proof retires:** `kubecompute` had to bake sshd and authorized keys into every pod
+it built, purely because the connection method had been assumed. That coupling is now removable.
+
+---
+
 **What is still outstanding is the DEVICE half.** A collection that installs is not a connection that
 works: **no real device has been driven end to end from this repo**. That needs a CI-runnable target (an
 FRR or cEOS container), and it is booked in the same shape as PLG-1's bastion half. A unit-green,

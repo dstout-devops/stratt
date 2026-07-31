@@ -571,6 +571,52 @@ installs is not a connection that works. That needs a CI-runnable target (FRR or
 the same shape as PLG-1's bastion half — and the parity doc says so in place rather than letting an
 image-verified row imply a proven one.
 
+### The converge side stops naming substrates — and a pod with no sshd is converged (ADR-0156)
+
+Asked whether estate-as-code truly spans vSphere, EC2 and Kubernetes — *change a count from 1 to 3
+and get three more machines* — the build half answered yes and the converge half did not. The reason
+turned out to be an assumption nobody had checked: **"every substrate needs sshd and a network path
+to port 22."**
+
+Measuring the actual collections falsified it. `kubernetes.core.kubectl` needs **nothing in the
+guest**. `community.vmware.vmware_tools` needs **no network path to the guest at all**, because every
+operation travels the vCenter API. `amazon.aws.aws_ssm` goes through a Systems Manager session. The
+harness gap that prompted the whole question — floci ships no sshd (HAR-1) — was never the blocker it
+looked like: two of three substrates never needed one.
+
+**So the transport is OBSERVED, not declared.** `mgmt.transport` sits beside `mgmt.address` — where
+vs by-what-means, both projections of what the provider actually did — and the shim renders it as a
+HOST var. One Assignment converges a pod, a VM and an EC2 instance in ONE Run, and the Intent, the
+Blueprint and the Assignment name no substrate. That is the converge-side equivalent of what ADR-0151
+did for builds, and it is why the Step was the wrong home: connection settings are group vars, one
+value per Run, so a mixed-substrate View could not be converged at all.
+
+**LIVE-PROVEN on kind, with the falsification first.** A pod asserted to have no sshd binary, no ssh
+client and nothing listening on port 22 — then converged by the real EE image and the real shim over
+`kubectl`, the play reporting its hostname from inside the pod. The negative half too: the base EE
+refuses the identical request, naming the missing collection. That retires a real coupling —
+kubecompute had to bake sshd and authorized keys into every pod it built, purely because the
+connection method had been assumed.
+
+**A near-miss worth recording.** The first negative run failed with `unknown field "transport"`, which
+looks like a refusal and is not: the image predated the proto change and its shim could not decode the
+request at all. A stale binary's unrelated error would have been filed as the gate working. Rebuilt
+from current source, it was real. Third time this session that a check which appeared to pass was
+measuring nothing — after `ansible-doc`'s useless exit code and a leak test that grepped base64.
+
+**What is NOT proven, stated rather than implied.** `vmware_tools` is shipped and unit-tested only:
+vspheresim implements the vCenter API but not Tools guest operations. And **`aws_ssm` has no writer at
+all** — the awsec2 Syncer can honestly observe neither EC2 path, because `KeyName` means a key is
+AUTHORIZED rather than that sshd is listening (computing a reach fact, which ADR-0142 D4 forbids), and
+SSM needs a different AWS API. Booked: the SSM client and the transport land together, since a Facet
+has no other writer.
+
+**The EE gate gained a second axis.** ADR-0153 D7 checked collections; `kubectl` and
+`session-manager-plugin` are BINARIES the connection plugin execs, so a collection-only gate would
+pass and fail at connect time. The kubectl binary is pinned by version AND sha256 — a version bounds
+which release, only the checksum bounds which bytes — and the build fails if a version is given
+without one.
+
 ### `/api/v2` route breadth is DONE (2026-07-31) — and two refusals are the point
 
 `schedules`, `workflow_job_templates` + `workflow_jobs`, `projects`, and `credentials` +

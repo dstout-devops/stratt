@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/vmware/govmomi/vim25/mo"
+	"github.com/vmware/govmomi/vim25/types"
 
 	pluginv1 "github.com/dstout-devops/stratt/sdk/stratt/plugin/v1"
 )
@@ -156,6 +157,32 @@ func normalizeVM(vm mo.VirtualMachine) (*pluginv1.ObservedEntity, error) {
 			return nil, fmt.Errorf("vcenter: marshal facet net.guest: %w", err)
 		}
 		facets["net.guest"] = raw
+	}
+
+	// mgmt.transport — HOW to reach it, observed beside WHERE (ADR-0156 D1).
+	//
+	// GATED ON WHAT vCENTER ACTUALLY REPORTS, not on the fact that this is vSphere. The
+	// vmware_tools connection plugin executes guest operations through the vCenter API, so it
+	// works if and only if VMware Tools is RUNNING in the guest — and vCenter tells us, in
+	// guest.toolsRunningStatus, which this projection already reads for vm.config. Claiming
+	// the transport for every VM would be computing a reach fact from the substrate rather
+	// than observing one, which is precisely what ADR-0142 D4 forbids: "a reach coordinate
+	// must be OBSERVED or CAUSED — never COMPUTED".
+	//
+	// WHY THIS TRANSPORT MATTERS MORE HERE THAN ANYWHERE: it needs NO NETWORK PATH TO THE
+	// GUEST. Everything travels over the vCenter API this Syncer is already talking to, so a
+	// VM on an isolated segment — no route, no bastion, no jump host — is convergeable. That
+	// is a case the SSH path can only answer with a ProxyJump chain somebody has to build.
+	//
+	// Identified by UUID rather than inventory path: config.uuid is the identity this plugin
+	// already keys the Entity on (vcenter.uuid above), so the transport and the identity
+	// cannot drift apart. An inventory path is a location, and locations move.
+	if vm.Guest != nil && vm.Guest.ToolsRunningStatus == string(types.VirtualMachineToolsRunningStatusGuestToolsRunning) {
+		raw, err := json.Marshal(map[string]string{"kind": "vmware_tools", "vmUuid": vm.Config.Uuid})
+		if err != nil {
+			return nil, fmt.Errorf("vcenter: marshal facet mgmt.transport: %w", err)
+		}
+		facets["mgmt.transport"] = raw
 	}
 
 	// mgmt.address — the OBSERVED reach coordinate (ADR-0143, ADDR-1).
