@@ -43,12 +43,15 @@ plugins:
     path: ../plugins/dns/estate
   - name: helm
     path: ../plugins/helm/estate
+  # kubecompute BUILDS hosts on the kubernetes substrate (ADR-0151) — the provider
+  # capability-bindings/provisioning-kube.yaml selects for Compute in dev, and the one that
+  # yields a host anything can actually converge.
+  - name: kubecompute
+    path: ../plugins/kubecompute/estate
   # kubeservices is the OBSERVE half of the chart delivery form: helm/deploy causes a release,
   # this collector reports what is actually running. Cause it, then observe it — the same
   # division ADR-0144 D5 drew for DNS, and the reason software.chart is a projection (§1.2)
   # rather than something the deploy Action asserts about itself.
-  - name: kubecompute
-    path: ../plugins/kubecompute/estate
   - name: kubeservices
     path: ../plugins/kubeservices/estate
   - name: mcp

@@ -92,6 +92,15 @@ exist, is not a feature.
 Empty-string-means-undeclared is legible to the thing that actually decides: the provider's own Action
 Contract, which validates its params downstream (§1.5) and can require what it needs.
 
+**2026-07-30 — D2 now covers `params` too, and it should have from the start.** `BuildLaunchParams` and
+`SingletonLaunchParams` emitted `params` only `if len(Spec.Params) > 0`: the exact omit-when-undeclared shape
+this decision withdrew one field over, on an argument that never mentioned placement specifically. It survived
+because every provisioning Intent in the estate happened to declare params, so no builder ever met the
+vanished key. That stopped the moment one legitimately did not — `web-fleet` on the kubernetes substrate,
+whose provider reads no build params at all — and the estate was refused with _"kubecompute-build declares
+input `params`, which the provisioning reconcile never supplies"_: true of that one Intent, false of the
+builder, and blaming the wrong document. `params` is now present-and-empty like `placement`.
+
 `app-tier-build.yaml` is therefore **deleted**. It was kept through ADR-0120 as the only worked example of
 the placed-in projection; with `compute-build` binding placement, the example is live rather than
 illustrative, and keeping an unreachable duplicate would leave two Workflows that build a Compute with only

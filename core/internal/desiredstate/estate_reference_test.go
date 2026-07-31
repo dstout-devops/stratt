@@ -100,6 +100,39 @@ func TestReferenceEstateDevSlice(t *testing.T) {
 		t.Errorf("prod slice must keep every Trigger, got %d of %d", len(prod.Triggers), len(decls.Triggers))
 	}
 
+	// THE INTENT HALF, which only became expressible when types.Intent gained the filter.
+	//
+	// The two Intent/Compute declarations are scoped `[dev, vsphere-dc]` — EVERY environment in
+	// which this estate binds a Compute provider at all. dev binds the kubernetes substrate and
+	// vsphere-dc binds vcenter; prod has two unscoped verified providers and nothing to break the
+	// tie, so resolution there fails closed (§2.4) and a Compute Intent in the prod slice could only
+	// surface an ambiguous build Finding with no Workflow behind it.
+	//
+	// BOTH DIRECTIONS ARE ASSERTED, and the second one is the one that matters. Dropping an
+	// environment from the filter is SILENT: membership filtering raises no Finding by design, so a
+	// capability that stops being reconciled anywhere looks exactly like one that was never wanted.
+	// An earlier draft of this scope said `[dev]` and withdrew vsphere-dc's live vcenter build path
+	// without anything noticing.
+	countCompute := func(d Declarations) int {
+		n := 0
+		for _, in := range d.Intents {
+			if in.Kind == types.IntentCompute {
+				n++
+			}
+		}
+		return n
+	}
+	if n := countCompute(prod); n != 0 {
+		t.Errorf("prod slice contains %d Intent/Compute, but prod binds no Compute provider — "+
+			"each would surface an ambiguous build Finding with no Workflow to launch", n)
+	}
+	for _, env := range []string{"dev", "vsphere-dc"} {
+		if n := countCompute(ScopeToEnvironment(decls, env)); n != 2 {
+			t.Errorf("%s binds a Compute provider, so both Intent/Compute (app-tier, web-fleet) must "+
+				"be in its slice; got %d. A narrowed scope withdraws a build path in silence", env, n)
+		}
+	}
+
 	// Unscoped (env == "") is byte-identical to no scoping: every Trigger kept.
 	if all := ScopeToEnvironment(decls, ""); len(all.Triggers) != len(decls.Triggers) {
 		t.Errorf("unscoped daemon must keep every Trigger, got %d of %d", len(all.Triggers), len(decls.Triggers))

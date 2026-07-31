@@ -113,9 +113,10 @@ type Intent struct {
 	// The cost of that was not abstract. Which builder a kind resolves to is chosen per
 	// environment by a capability-binding (ADR-0151 D2), but the load-time check had to
 	// validate the Intent against EVERY provider's builder, since it could not know which
-	// environments the Intent would be reconciled in. So `app-tier` carries `region`, `ami`
+	// environments the Intent would be reconciled in. So `app-tier` CARRIED `region`, `ami`
 	// and `instanceType` — AWS coordinates — into a Kubernetes environment where nothing
-	// reads them, purely to satisfy a builder that will never run for it there. And
+	// read them, purely to satisfy a builder that would never run for it there; the provider
+	// that did build it reported them straight back as ignored, on every build. And
 	// admitting a new provisioning provider retroactively invalidated every existing Intent
 	// of that kind, because each then had to satisfy the newcomer too.
 	//
@@ -130,10 +131,11 @@ type Intent struct {
 	// Intent could not be environment-scoped at all, so D4's stated exit was not yet
 	// expressible. The "already" was aspirational; this is the field it was assuming.
 	//
-	// THE REFERENCE ESTATE IS NOT YET SCOPED. app-tier's AWS coordinates are still there:
-	// removing them is an estate change that must be verified by running the demos, not by
-	// this type gaining a field. Refused on assignable kinds (ValidateIntent) — an
-	// Application Intent is already scoped by the Assignment that binds it, and a second
+	// THE REFERENCE ESTATE IS SCOPED, in a separate change verified by a full-estate
+	// in-cluster run rather than by CI alone: `app-tier` and `web-fleet` are
+	// `[dev, vsphere-dc]` — every environment in which the estate binds a Compute provider
+	// at all — and the coordinates are gone. Refused on assignable kinds (ValidateIntent):
+	// an Application Intent is already scoped by the Assignment that binds it, and a second
 	// filter there is redundant at best and a disagreeing scope at worst.
 	Environments []string `json:"environments,omitempty"`
 }

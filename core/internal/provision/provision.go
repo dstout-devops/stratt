@@ -523,10 +523,32 @@ func BuildLaunchParams(in Intent, inst Instance) map[string]any {
 		place["availabilityZone"] = inst.Zone
 	}
 	out["placement"] = place
-	if len(in.Spec.Params) > 0 {
-		out["params"] = in.Spec.Params
-	}
+	out["params"] = emptyIfNil(in.Spec.Params)
 	return out
+}
+
+// emptyIfNil makes `params` PRESENT-AND-EMPTY rather than absent — the same rule ADR-0123 D2 put on
+// `placement`, applied to the sibling key that was left behind.
+//
+// The 30-line argument above `place` is about `params` word for word: template substitution has no
+// conditionals (ADR-0083 D5), so a builder cannot branch on presence — it can only bind a field or
+// not — and a key that VANISHES for an Intent that declares none makes `{{.launch.params}}` unsafe
+// in a builder shared by Intents that do and do not. `placement` was fixed and `params` was not,
+// because every Intent in the estate happened to carry params.
+//
+// It stopped happening the moment one legitimately did not. `web-fleet` on the kubernetes substrate
+// needs no provider params at all — kubecompute reads none of them and reports as much — and with
+// them removed the ESTATE was refused: "kubecompute-build declares input params, which the
+// provisioning reconcile never supplies". That message is true of this one Intent and false of the
+// builder, so the check blamed the wrong document, and the only ways out were to keep declaring
+// params nothing reads or to stop declaring the input the builder genuinely accepts.
+//
+// Empty, not nil: it is marshalled to jsonb and read back, and `{}` traverses while `null` does not.
+func emptyIfNil(p map[string]any) map[string]any {
+	if p == nil {
+		return map[string]any{}
+	}
+	return p
 }
 
 // TeardownLaunchParams derives the launch inputs for ONE excess instance's gated teardown
@@ -620,9 +642,7 @@ func SingletonLaunchParams(si SingletonIntent, inst Instance) map[string]any {
 	}
 	place["subnetRef"] = inst.SubnetRef // ADR-0147 D1 — see BuildLaunchParams
 	out["placement"] = place
-	if len(si.Spec.Params) > 0 {
-		out["params"] = si.Spec.Params
-	}
+	out["params"] = emptyIfNil(si.Spec.Params) // present-and-empty, like placement — see emptyIfNil
 	return out
 }
 

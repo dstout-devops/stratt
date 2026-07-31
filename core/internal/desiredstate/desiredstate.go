@@ -666,8 +666,11 @@ func remediationCandidates(decls Declarations, intentKind, capClass string) []st
 // capability.Resolve the reconcile runs. reachableBuilders owns that computation and documents the
 // three conservative asymmetries that keep the narrowed set sound; read it before changing this.
 //
-// `app-tier`'s stray AWS coordinates are still in the estate: this makes them removable, it does
-// not remove them. That edit changes what a live-verified demo builds and belongs with a demo run.
+// The estate has since been cleaned up on the back of this: `app-tier` and `web-fleet` are scoped
+// `[dev, vsphere-dc]` — every environment in which the estate binds a Compute provider at all — and
+// the AWS coordinates are gone from both. Removing them uncovered the sibling of the same defect
+// one layer down: `params` was emitted only when the Intent declared some, so the FIRST Intent that
+// legitimately declared none made the estate unloadable. See provision.emptyIfNil.
 //
 // The expected param set is taken from provision.BuildLaunchParams itself rather than a list
 // duplicated here, so the check cannot drift from what the reconcile actually sends.

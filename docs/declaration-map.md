@@ -396,7 +396,7 @@ last week is the best evidence that the next one is worth checking too.
 | 1   | Facet/claim grain has no instance key (§6)                                                                                                                                                                                                                                                                                                                                                                                                     | L2 / L4      | open — ADR owed                           |
 | 2   | **Admission judged neither the substrate-selecting layer nor the L0 grant surface nor anything a plugin ships.** Three gaps, one theme: `admissionDirs` listed 15 of 22 estate directories; `admitEstate` walked only the PRIMARY root, so every plugin-supplied declaration was judged by nothing; and `AdmitDeclarations` (the API door) omitted kinds the Git door already judged, so a control could hold on a reconcile and not on a POST | L7 / L1 / L0 | **CLOSED** — see §7.1                     |
 | 3   | **A Step declaring no shape at all loaded clean, then dispatched as an actuation with an empty Actuator** — `ValidateWorkflow` classifies positively, `types.Step.IsActuation()` classifies residually (fail-closed), and the two disagreed on exactly that input                                                                                                                                                                              | L6           | **CLOSED** — refused at load              |
-| 4   | ~~An Intent carries no `environments`, so every provisioning Intent must satisfy EVERY substrate's builder~~ — `types.Intent` gains the membership filter and the candidate set is scoped to the environments the Intent is in. Refused on assignable kinds (the Assignment already carries the scope). See §7.2 for the two violations the charter review caught first | L0 / L1 / L4 | **CLOSED** — estate cleanup owed |
+| 4   | ~~An Intent carries no `environments`, so every provisioning Intent must satisfy EVERY substrate's builder~~ — `types.Intent` gains the membership filter and the candidate set is scoped to the environments the Intent is in. Refused on assignable kinds (the Assignment already carries the scope). See §7.2 for the two violations the charter review caught first                                                                        | L0 / L1 / L4 | **CLOSED** — estate cleaned up, §7.2      |
 | 5   | ~~`Actuator.provisions` targets are not resolved at load~~ — **the map was wrong.** `checkProvisioningBuildInputs` ships and is wired at `desiredstate.go:462`, covering `provisions`, `decommissions` AND `remediates`                                                                                                                                                                                                                        | L0           | **was never open** — corrected 2026-07-30 |
 | 6   | The estate cannot express ordering across Assignments ("serve TLS once a certificate is present")                                                                                                                                                                                                                                                                                                                                              | L4           | open                                      |
 | 7   | Tombstone/revival semantics unrecorded (ADR owed)                                                                                                                                                                                                                                                                                                                                                                                              | L2           | open — ADR owed                           |
@@ -499,9 +499,60 @@ eliminate, through a door the scope had just opened); and on an **assignable** k
 inert or contradictory, since the Assignment already carries the scope and the compiler resolves the
 Intent from the store by name without filtering — so it is refused there.
 
-**Not done, deliberately:** the reference estate is unscoped. Removing `app-tier`'s AWS coordinates
-changes what a live-verified demo builds, and that belongs with a demo run rather than with a type
-gaining a field.
+**The estate cleanup, done separately, and what it cost to find out.** `app-tier` and `web-fleet` are
+now `environments: [dev, vsphere-dc]` and the AWS coordinates are gone from both. Measured through
+the real `ParseDir` + `capability.Resolve`, those two are the entire set where anything could happen:
+
+| env          | Compute resolves to                                                |
+| ------------ | ------------------------------------------------------------------ |
+| `dev`        | **kubecompute → kubecompute-build** (substrate binding)            |
+| `vsphere-dc` | **vcenter → vsphere-vm-build**                                     |
+| `prod`       | AMBIGUOUS — 2 verified providers (awsec2, kubecompute), no binding |
+| `""`         | AMBIGUOUS — substrate `kubernetes` vs provider `vcenter`           |
+
+So prod was never buildable and the filter takes nothing away there. **The first draft of this
+paragraph said `[dev]` and claimed the filter changed nothing at all, which was false** — vsphere-dc
+resolved, and scoping to dev alone would have silently withdrawn a live capability, unnoticeable
+because membership filtering raises no Finding by design (ADR-0057). `charter-guardian` reproduced
+the table above and caught it. Two environments, one Intent set, two substrates is also the
+multi-substrate shape the capstone plan settled on, now stated by the estate rather than by a demo.
+
+The coordinates were not inert while they sat there. `kubecompute` — which builds both in dev —
+emitted `provider params ami,instanceType,region,tier ignored` on **every** build
+(`plugins/kubecompute/server.go:274`, keys sorted). `tier` is still in that list and stays: it is the
+one param `app-tier` ever meant. The other three were pure noise, and an estate that says false
+things per host is ADR-0151 D4's booked limit, measured rather than predicted.
+
+**A narrower check needs a floor under it, and that was nearly missed.** `checkAdvertisedWorkflow`
+runs per (Intent, reachable builder) pair, so a builder is only checked _by way of_ an Intent that
+can reach it. Scoping the estate's only two `Intent/Compute` declarations left awsec2's
+`compute-build` reachable from no Intent in the repo — and therefore checked by nothing: not the
+approval gate, not the hardcoded correlation label, not required-inputs-suppliable. That is
+precisely the PRV-1 defect class. Narrowing the per-Intent check was right; losing the per-builder
+floor was an accident of how the check was reached, and
+`TestEveryAdvertisedBuilderIsLaunchableByAnIntentShapedForIt` restores it by asking the other
+question — not "can this Intent build?" but "is this advertised Workflow launchable at all?", with a
+synthetic Intent shaped to the builder rather than to the estate.
+
+**The subnets stay unscoped, deliberately.** `checkPlacementTargets` requires coverage, not equality,
+so an unscoped target covers a scoped placer. `app-subnet` and `dmz-subnet` are therefore buildable
+in prod with no Compute Intent that could be placed in them — legal, and the honest reading: a
+network leg is useful without a host on it (it is the half of the capstone that is proven on aws).
+
+**Removing them uncovered a defect of the same class as the one this whole item is about.**
+`BuildLaunchParams` emitted `params` only `if len(Spec.Params) > 0` — the omit-when-undeclared shape
+ADR-0123 D2 explicitly withdrew for `placement`, on an argument that applies to `params` word for
+word: the substituter fails closed on a vanished key and the template language has no conditionals
+to guard it with. It survived because every provisioning Intent in the estate happened to carry
+params. The first one that legitimately did not made the estate unloadable, with an error blaming
+the builder (_"kubecompute-build declares input `params`, which the provisioning reconcile never
+supplies"_) for an honest declaration. Both launch-param paths now send it present-and-empty, and
+ADR-0123 D2 records the extension.
+
+**Two seams, one habit.** The `params` key and the environment filter are the same mistake at
+different layers: a value that is _usually_ there is treated as _always_ there, and the check that
+would have caught it was written against the estate as it happened to be rather than as it is
+allowed to be.
 
 ### 7.3 Item 8: what the substrate lint does and does not refuse
 

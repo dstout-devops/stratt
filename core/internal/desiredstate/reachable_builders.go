@@ -14,8 +14,8 @@ import (
 // types.Intent carried an `environments` filter the answer was always "everywhere", so the
 // candidate set was the union of every declared provider's builder for the kind and an
 // Intent/Compute had to satisfy every substrate at once. See types.Intent.Environments for what
-// that cost the shipped estate — which is still paying it, because scoping the reference estate
-// is a separate change that has to be verified by running the demos.
+// that cost the shipped estate, which has since been scoped and had the coordinates removed —
+// verified by a full-estate in-cluster run, not by CI alone.
 //
 // Three deliberate asymmetries with the runtime resolver, all in the conservative direction:
 //
