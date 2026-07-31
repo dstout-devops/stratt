@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "stratt:contract:facets/ansible.config:v1",
+  "title": "ansible.config Facet",
+  "description": "The OBSERVED settings of a content root's ansible.cfg, projected read-only by the ansible-project Connector (§1.2, ANS-005) — a foreign artifact, never a Stratt Named Kind. The tool audit's framing is exact: this file 'sets roles paths, connection defaults, strategy, callbacks — it changes the meaning of everything else in the root', so a projection that reads the tree without reading the config is reporting on a layout the tool may not be using. That is not hypothetical: `roles_path` moves where roles live, and a root configured with `roles_path = galaxy_roles` previously projected ZERO roles and said nothing. Observing it therefore also FIXED it — the role reader now searches `roles/` plus any relative, in-root roles_path entry. Absolute and escaping entries are skipped (this Syncer cannot read outside the content root and must not pretend to have) but still appear in the projected rolesPath, so the gap is visible rather than silent (§1.8). ALLOWLISTED VALUES, NAMES FOR THE REST (§2.5): the projected settings are a bounded set whose values are structural — paths, booleans, enums, integers — and every other key contributes only its NAME, section-qualified, in otherKeys. That is not merely consistency with this Connector's other key-names-never-values facets: ansible.cfg CAN hold a credential, because a `[galaxy_server.*]` section takes a real Galaxy API token. An allowlist keeps it out BY CONSTRUCTION, where a denylist would have to anticipate it. Only ansible.cfg/.ansible.cfg inside the root are read — ANSIBLE_CONFIG, ~/.ansible.cfg and /etc/ansible/ansible.cfg belong to the machine running ansible, and claiming to have read them would assert a fact about someone else's box. Closed (§9).",
+  "type": "object",
+  "properties": {
+    "path": { "type": "string" },
+    "rolesPath": {
+      "type": "string",
+      "description": "as configured, including entries outside the root that this projection does not cover"
+    },
+    "collectionsPath": { "type": "string" },
+    "libraryPath": { "type": "string" },
+    "moduleUtilsPath": { "type": "string" },
+    "filterPluginsPath": { "type": "string" },
+    "callbackPluginsPath": { "type": "string" },
+    "actionPluginsPath": { "type": "string" },
+    "lookupPluginsPath": { "type": "string" },
+    "inventoryPath": { "type": "string" },
+    "vaultPasswordFile": { "type": "string", "description": "a PATH, never material (§2.5)" },
+    "remoteUser": { "type": "string" },
+    "hostKeyChecking": { "type": "string" },
+    "timeout": { "type": "string" },
+    "become": { "type": "string" },
+    "becomeMethod": { "type": "string" },
+    "becomeUser": { "type": "string" },
+    "transport": { "type": "string" },
+    "forks": { "type": "string" },
+    "strategy": { "type": "string" },
+    "gathering": { "type": "string" },
+    "factCaching": { "type": "string" },
+    "interpreterPython": { "type": "string" },
+    "stdoutCallback": {
+      "type": "string",
+      "description": "a custom stdout callback changes what a Run's log looks like, which matters when the log is the evidence (§1.8)"
+    },
+    "callbacksEnabled": { "type": "string" },
+    "otherKeys": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "`section.key` for every setting off the allowlist, sorted. NAMES ONLY (§2.5) — this is where a [galaxy_server.*] token lands, and its value never leaves the parser."
+    }
+  },
+  "required": ["path"],
+  "additionalProperties": false
+}

@@ -50,11 +50,20 @@ type Role struct {
 	Platforms         []string
 }
 
-// Collection is a Galaxy collection dependency declared in requirements.yml.
+// Collection is a Galaxy collection in play for this project: one DECLARED as a dependency in
+// requirements.yml, or (ANS-007) the one this repo IS, when a galaxy.yml sits at the root.
+// Discriminated by Root, the same shape ANS-002 used for Role.
 type Collection struct {
 	Name    string // the FQCN, e.g. community.general
 	Version string
 	Source  string
+	// Root marks the repo's own collection manifest rather than a dependency.
+	Root bool
+	// Path is the galaxy.yml this came from; empty for a required collection.
+	Path         string
+	Description  string
+	License      []string
+	Dependencies map[string]string
 }
 
 // Inventory is an inventory file/source — the hosts+groups a run targets.
@@ -72,6 +81,14 @@ type Snapshot struct {
 	// VarScopes are the group_vars/host_vars binding sites (ANS-003/008) — scope and KEY
 	// NAMES, never values.
 	VarScopes []VarScope
+	// Config is the root's ansible.cfg (ANS-005). Nil when it has none. It is read FIRST,
+	// because roles_path changes where the role reader has to look.
+	Config *AnsibleConfig
+	// Plugins are the repo's OWN modules and plugins (ANS-006) — the content most likely to
+	// break on a migration.
+	Plugins []Plugin
+	// Galaxy is the root's own galaxy.yml (ANS-007): the repo declaring itself a collection.
+	Galaxy *GalaxyRoot
 }
 
 // Enumerate performs one full read of the content root. A parse failure on a
@@ -81,7 +98,19 @@ type Snapshot struct {
 func (c *Client) Enumerate() (*Snapshot, error) {
 	var snap Snapshot
 	var err error
-	if snap.Roles, err = c.roles(); err != nil {
+	// FIRST, and the ordering is load-bearing (ANS-005): ansible.cfg's roles_path decides
+	// where roles live, so reading the tree before the config that describes it is how a root
+	// configured with `roles_path = galaxy_roles` projected zero roles and said nothing.
+	if snap.Config, err = c.readConfig(); err != nil {
+		return nil, err
+	}
+	if snap.Galaxy, err = c.readGalaxy(); err != nil {
+		return nil, err
+	}
+	if snap.Roles, err = c.roles(snap.Config); err != nil {
+		return nil, err
+	}
+	if snap.Plugins, err = c.plugins(); err != nil {
 		return nil, err
 	}
 	// ONE read of requirements.yml yields BOTH halves (ANS-002). Only `collections:` was
@@ -92,6 +121,20 @@ func (c *Client) Enumerate() (*Snapshot, error) {
 		return nil, err
 	}
 	snap.Roles = append(snap.Roles, required...)
+	// The root's OWN collection, when it has a galaxy.yml (ANS-007) — same Kind as a required
+	// one, marked root, because "what collections are in play, and which one is THIS repo" is
+	// one question.
+	//
+	// AFTER the requirements read, not before: that read ASSIGNS snap.Collections rather than
+	// appending to it, so appending first silently discarded the root collection. Caught by the
+	// test; worth the comment because the next field added here will face the same trap.
+	if snap.Galaxy != nil {
+		snap.Collections = append(snap.Collections, Collection{
+			Name: snap.Galaxy.FQCN(), Version: snap.Galaxy.Version, Root: true,
+			Path: snap.Galaxy.Path, Description: snap.Galaxy.Description,
+			License: snap.Galaxy.License, Dependencies: snap.Galaxy.Dependencies,
+		})
+	}
 	if snap.Playbooks, snap.Inventories, err = c.content(); err != nil {
 		return nil, err
 	}
@@ -101,25 +144,36 @@ func (c *Client) Enumerate() (*Snapshot, error) {
 	return &snap, nil
 }
 
-// roles reads the immediate subdirectories of roles/ (each a reusable role).
-func (c *Client) roles() ([]Role, error) {
+// roles reads the immediate subdirectories of every role search path (each a reusable role).
+//
+// The search paths are `roles/` plus any relative, in-root entry of ansible.cfg's roles_path
+// (ANS-005). Reading only `roles/` meant a root that configured its roles elsewhere projected
+// NONE and reported no problem — the silent wrong answer the config observation exposed.
+func (c *Client) roles(cfg *AnsibleConfig) ([]Role, error) {
 	var out []Role
-	ents, err := fs.ReadDir(c.fsys, "roles")
-	if errors.Is(err, fs.ErrNotExist) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, fmt.Errorf("ansible-automation content: read roles/: %w", err)
-	}
-	for _, e := range ents {
-		if !e.IsDir() {
+	seen := map[string]bool{}
+	for _, dir := range rolesSearchPaths(cfg) {
+		ents, err := fs.ReadDir(c.fsys, dir)
+		if errors.Is(err, fs.ErrNotExist) {
 			continue
 		}
-		r := Role{Name: e.Name(), Path: "roles/" + e.Name()}
-		if err := c.readRoleMeta(&r); err != nil {
-			return nil, fmt.Errorf("ansible-automation content: read %s/meta: %w", r.Path, err)
+		if err != nil {
+			return nil, fmt.Errorf("ansible-automation content: read %s/: %w", dir, err)
 		}
-		out = append(out, r)
+		for _, e := range ents {
+			if !e.IsDir() {
+				continue
+			}
+			r := Role{Name: e.Name(), Path: dir + "/" + e.Name()}
+			if seen[r.Path] {
+				continue
+			}
+			seen[r.Path] = true
+			if err := c.readRoleMeta(&r); err != nil {
+				return nil, fmt.Errorf("ansible-automation content: read %s/meta: %w", r.Path, err)
+			}
+			out = append(out, r)
+		}
 	}
 	return out, nil
 }

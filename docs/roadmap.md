@@ -326,6 +326,41 @@ the safe one. Scope today is `kubecompute-build`, the only Workflow forwarding `
 as other builders begin to, they either declare what they read or are correctly reported as reading
 none.
 
+### ANS Tier 3 — and the config observation that turned out to be a bug fix (2026-07-31)
+
+`ansible.cfg` (ANS-005), the repo's own modules and plugins (ANS-006), and the root that IS a
+collection (ANS-007). With Tier 2 the day before, **the content-root audit is now green except
+ANS-009** (multi-document playbooks, still unexamined) — the Ansible half of a migration is visible.
+
+**ANS-005 was not an observation, it was a fix.** The audit says ansible.cfg "changes the meaning of
+everything else in the root", and reading it proved the point immediately: `roles_path` moves where
+roles live, and this Syncer's role reader looked in `roles/` unconditionally. A repo configured with
+`roles_path = galaxy_roles` projected **zero roles and said nothing** — reporting on a layout the
+tool was not using. The reader now searches `roles/` plus any relative, in-root `roles_path` entry.
+Absolute and escaping entries are skipped, because this Syncer cannot read outside the content root
+and must not pretend to have — but they still appear in the projected value, so the gap is visible
+rather than silent (§1.8).
+
+**The §2.5 rule needed a fourth application, and this time a denylist would have failed.**
+`ansible.cfg` can hold a real credential: a `[galaxy_server.*]` section takes a Galaxy API token. So
+the projected settings are a bounded ALLOWLIST of structurally-meaningful values, and every other key
+contributes its NAME only — which keeps the token out **by construction** rather than by having
+anticipated it.
+
+**ANS-006 covers both layouts, deliberately.** A playbook repo puts custom code in `library/` and
+`filter_plugins/`; a collection-shaped repo puts it in `plugins/modules/` and `plugins/filter/`.
+Covering one would report half of a real repo as shipping no custom content — the same silent-gap
+shape this batch exists to close. Classification is by DIRECTORY, because ansible loads plugins by
+directory and that is the only fact knowable without reading the program.
+
+**ANS-007 reuses the ANS-002 shape.** The root collection is an `ansible.collection` beside the
+required ones, marked `root` — one question, one Kind. Its own `dependencies` live in galaxy.yml and
+a projection reading only requirements.yml sees none of them.
+
+**One ordering bug, caught by its test.** The root collection was appended to `snap.Collections`
+*before* the requirements read, which ASSIGNS that slice rather than appending — so it was silently
+discarded. The comment now sits where the next field added there will read it.
+
 ### The Ansible content root stops being a list of files (2026-07-31) — ANS-002/003/004/008
 
 Tier 2 of the tool audit ("the estate cannot see where configuration comes from") closed as one

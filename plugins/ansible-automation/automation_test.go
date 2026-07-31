@@ -63,7 +63,7 @@ func TestBothHalvesAssertOnePluginIdentity(t *testing.T) {
 // TWO Sources: the halves' owned namespaces must be DISJOINT. This is the assertion that
 // makes the split safe — every Observe is a full sync driving a per-Source tombstone
 // sweep, so an overlap would let one half's sync retract the other half's entities
-// (ADR-0042 per-source liveness). Their union is the fifteen `ansible.*` namespaces.
+// (ADR-0042 per-source liveness). Their union is the seventeen `ansible.*` namespaces.
 func TestHalvesOwnDisjointNamespaces(t *testing.T) {
 	ctrl, cont := manifests(t)
 	c, n := contractIDs(ctrl), contractIDs(cont)
@@ -80,15 +80,15 @@ func TestHalvesOwnDisjointNamespaces(t *testing.T) {
 	if len(c) != 10 {
 		t.Errorf("controller advertises %d contracts, want 10 (template/workflow/schedule/org/team/credential/user/label/executionenvironment/notification)", len(c))
 	}
-	if len(n) != 5 {
-		t.Errorf("content advertises %d contracts, want 5 (playbook/role/collection/inventory/varscope)", len(n))
+	if len(n) != 7 {
+		t.Errorf("content advertises %d contracts, want 7 (playbook/role/collection/inventory/varscope/config/plugin)", len(n))
 	}
 	for _, ns := range []string{"ansible.template", "ansible.workflow", "ansible.schedule", "ansible.org", "ansible.team", "ansible.credential", "ansible.user", "ansible.label", "ansible.executionenvironment", "ansible.notification"} {
 		if !c[ns] {
 			t.Errorf("controller half does not advertise %q", ns)
 		}
 	}
-	for _, ns := range []string{"ansible.playbook", "ansible.role", "ansible.collection", "ansible.inventory", "ansible.varscope"} {
+	for _, ns := range []string{"ansible.playbook", "ansible.role", "ansible.collection", "ansible.inventory", "ansible.varscope", "ansible.config", "ansible.plugin"} {
 		if !n[ns] {
 			t.Errorf("content half does not advertise %q", ns)
 		}

@@ -289,7 +289,10 @@ func TestPinsAreStable(t *testing.T) {
 	// outputs/csr carries exactly one field, closed, and that is the design rather than economy:
 	// the private key is born on the target and never crosses the wire (§2.5, ADR-0050), so a
 	// schema admitting anything beside the CSR would be an invitation to send more.
-	// 79 since the ANS content-depth batch added facets/ansible.varscope (group_vars/host_vars
+	// 82 since ANS Tier 3 added facets/ansible.config (the file that changes the meaning of the
+	// root), facets/ansible.plugin (the repo's own code) and facets/ansible.collection (which
+	// grew the ANS-007 root-collection fields and earned a pin with them).
+	// 79 was the ANS Tier 2 batch, which added facets/ansible.varscope (group_vars/host_vars
 	// scope + KEY NAMES, never values) and facets/ansible.role (which grew the ANS-002/004
 	// facts and earned a pin now that it carries more than a name and a path).
 	// 77 was AWX-009's facets/ansible.notification — where an AWX Controller sends job
@@ -299,8 +302,8 @@ func TestPinsAreStable(t *testing.T) {
 	// presents, read back from the delivered file, beside the CLM Syncer's cert.expiry which says
 	// what was ISSUED. The count is deliberate: a new pinned document is an act, not a side
 	// effect (§1.5).
-	if len(all) != 79 {
-		t.Fatalf("expected 79 embedded documents, got %d — the shipped set is the SEAM set now "+
+	if len(all) != 82 {
+		t.Fatalf("expected 82 embedded documents, got %d — the shipped set is the SEAM set now "+
 			"(ADR-0138 D3/D4); a plugin's own contracts live in plugins/<n>/contracts/", len(all))
 	}
 	versions := map[string]int{}

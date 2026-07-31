@@ -1097,7 +1097,7 @@ func run(ctx context.Context, log *slog.Logger) error {
 			return fmt.Errorf("ansible-automation content plugin dial %s: %w", addr, err)
 		}
 		defer conn.Close()
-		// The FIVE ansible.* projection namespaces this Connector owns (its manifest advertises
+		// The SEVEN ansible.* projection namespaces this Connector owns (its manifest advertises
 		// exactly these; registration fails on any mismatch). Each is also the artifact's
 		// identity scheme — including the `depends-on` relation's TO scheme, which is
 		// ansible.role, a namespace this same Source already owns, so no cross-source pointable
@@ -1106,7 +1106,14 @@ func run(ctx context.Context, log *slog.Logger) error {
 		// ansible.varscope is the group_vars/host_vars binding site (ANS-003): scope and KEY
 		// NAMES, never values — a vars file routinely holds credentials in the clear, and a
 		// vaulted one is projected as present-and-vaulted rather than decrypted (§2.5).
-		primitiveSchemes := []string{"ansible.playbook", "ansible.role", "ansible.collection", "ansible.inventory", "ansible.varscope"}
+		//
+		// ansible.config is the root's ansible.cfg (ANS-005) — the file that changes the meaning
+		// of everything else in the root, projected as allowlisted VALUES plus the NAMES of
+		// every other key, because a [galaxy_server.*] section holds a real API token (§2.5).
+		// ansible.plugin is the repo's own modules and plugins (ANS-006), name/type/path and
+		// never contents.
+		primitiveSchemes := []string{"ansible.playbook", "ansible.role", "ansible.collection", "ansible.inventory",
+			"ansible.varscope", "ansible.config", "ansible.plugin"}
 		grant := pluginhost.Grant{
 			PluginIdentity: env("STRATT_ANSIBLE_AUTOMATION_CONTENT_PLUGIN_ID", "ansible-automation"),
 			Tier:           pluginhost.Tier(env("STRATT_ANSIBLE_AUTOMATION_CONTENT_TIER", "trusted")),

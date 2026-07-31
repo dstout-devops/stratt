@@ -1,0 +1,34 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "stratt:contract:facets/ansible.plugin:v1",
+  "title": "ansible.plugin Facet",
+  "description": "A custom module or plugin a content root ships ITSELF, projected read-only by the ansible-project Connector (§1.2, ANS-006) — a foreign artifact, never a Stratt Named Kind. The tool audit ranks this by migration risk rather than size: 'a repo's own custom content is invisible; on a migration this is the content most likely to break.' Everything else in a content root is Ansible-shaped and portable; a hand-written module in library/ is Python that runs on the target against a specific interpreter, and it is the thing an EE image either carries or does not. NAME, TYPE AND PATH — never contents. This is Python (occasionally Powershell), and parsing it would mean reading a program to guess what it does, well past the §9 line the role-internals rule already draws. Existence and kind are structure; behaviour is not. Classification is by the DIRECTORY the file sits in, because ansible loads plugins by directory — that is the fact, and the only one knowable without reading the program. BOTH LAYOUTS are covered: the classic adjacent-directory form (library/, filter_plugins/) a playbook repo uses, and the collection form (plugins/modules/, plugins/filter/) an ANS-007 galaxy.yml root uses; covering one would report half of a real repo as shipping no custom content. `role` names the owning role for a role-local plugin (roles/<name>/library/…), which travels WITH the role and is a different migration risk from a repo-wide one. Closed (§9).",
+  "type": "object",
+  "properties": {
+    "name": { "type": "string" },
+    "path": { "type": "string" },
+    "type": {
+      "enum": [
+        "module",
+        "module_utils",
+        "filter",
+        "callback",
+        "action",
+        "lookup",
+        "test",
+        "vars",
+        "strategy",
+        "inventory",
+        "connection",
+        "cache",
+        "doc_fragments"
+      ]
+    },
+    "role": {
+      "type": "string",
+      "description": "the role that owns it, when the file lives under roles/<name>/; absent for a repo-wide plugin"
+    }
+  },
+  "required": ["name", "path", "type"],
+  "additionalProperties": false
+}

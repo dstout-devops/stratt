@@ -63,9 +63,9 @@ What an Ansible project contains, against what the content half projects
 | Inventory files                                                     | 🟡 `path`, `format` only            | Recognized by well-known name or an `inventory/`/`inventories/` ancestor; **contents never parsed**                                              |             |
 | Inventory groups / hosts inside those files                         | ⚪                                  | Deliberate: a **View** _is_ the group (ADR-0055 G3) and hosts come from their own Syncers, never a writable CMDB (§1.2)                          |             |
 | `group_vars/`, `host_vars/`                                         | 🟢 scope, target, **key names**     | `ansible.varscope`. Values are NEVER projected (§2.5) — a vars file routinely holds credentials in the clear. Both the file and directory forms; the directory form unions its files, as ansible does. **Precedence is observed, never computed**: two scopes binding one name both project, neither marked a winner | ~~**ANS-003**~~ |
-| `ansible.cfg`                                                       | 🔴                                  | Sets roles paths, connection defaults, strategy, callbacks — it changes the meaning of everything else in the root                               | **ANS-005** |
-| `library/`, `module_utils/`, `filter_plugins/`, `callback_plugins/` | 🔴                                  | A repo's own custom content is invisible; on a migration this is the content most likely to break                                                | **ANS-006** |
-| `galaxy.yml` (the root **is** a collection)                         | 🔴                                  | A collection-shaped repo is not recognized as one — it projects as loose playbooks and roles                                                     | **ANS-007** |
+| `ansible.cfg`                                                       | 🟢 allowlisted values + other key **names** | It changes the meaning of everything else in the root, so observing it also FIXED the role reader: `roles_path` is now honored, not just recorded. `[galaxy_server.*] token` is why values are allowlisted (§2.5) | ~~**ANS-005**~~ |
+| `library/`, `module_utils/`, `filter_plugins/`, `callback_plugins/` | 🟢 name, type, path, owning role | `ansible.plugin`, in BOTH layouts (classic `library/` and collection `plugins/modules/`). Contents never read — that is a program, not structure                | ~~**ANS-006**~~ |
+| `galaxy.yml` (the root **is** a collection)                         | 🟢 fqcn, version, deps, license | Same `ansible.collection` Kind as a required one, marked `root` — one question, one Kind. Its own `dependencies` live here, not in requirements.yml            | ~~**ANS-007**~~ |
 | Vaulted files (`$ANSIBLE_VAULT` header)                             | 🟢 `vaulted: true`, no keys         | Exactly as this row asked: present and vaulted, never decrypted. An empty key list WITH `vaulted:true` distinguishes "binds nothing" from "binds things I cannot show you" (§1.8) | ~~**ANS-008**~~ |
 | `molecule/`, `.yamllint`, `meta/runtime.yml`                        | ⚪                                  | Test scaffolding and lint config; not estate                                                                                                     |             |
 | Multi-document YAML playbooks                                       | 🟠                                  | `playbookPlays` unmarshals a single document; a `---`-separated multi-doc playbook would project only its first doc. Legal but rare              | **ANS-009** |
@@ -226,9 +226,13 @@ image-verified connection type is still not a proven one.
 
 **Tier 3 — completeness of the content picture:**
 
-- **ANS-006** custom modules/plugins (+ `--module-path`) · **ANS-005** `ansible.cfg` ·
-  **ANS-007** collection-shaped roots · ~~**ANS-011** multi-identity vault~~ (done, ADR-0153 D4) ·
-  **ANS-013** pre-flight syntax check.
+~~**ANS-006** custom modules/plugins · **ANS-005** `ansible.cfg` · **ANS-007** collection-shaped
+roots~~ — **all done (2026-07-31)**, as one batch with the same mechanism as Tier 2. `ansible.cfg`
+was the one with teeth: observing it exposed that the role reader had been searching `roles/`
+unconditionally, so a root configured with `roles_path = galaxy_roles` projected **zero roles and
+reported no problem** — fixed, not merely recorded. Also ~~**ANS-011** multi-identity vault~~ (done,
+ADR-0153 D4). Still open: **ANS-013** pre-flight syntax check (a Step-level gate, a different
+mechanism from these projections) and `--module-path` on the execution surface.
 
 **Unexamined (🟠) — look before deciding:** **ANS-009** multi-document playbooks.
 

@@ -27,6 +27,13 @@ const (
 	// them, and §2.5 keeps material out of the graph. The names are what answer "why did this
 	// host get this value"; the values are what must not be here to answer it.
 	KindVarScope = "ansible.varscope"
+	// KindConfig is the root's ansible.cfg (ANS-005) — the file that changes the meaning of
+	// everything else in the root. Allowlisted settings carry VALUES; every other key
+	// contributes its NAME only, because a [galaxy_server.*] section holds a real API token.
+	KindConfig = "ansible.config"
+	// KindPlugin is a module or plugin the repo ships ITSELF (ANS-006): name, type and path,
+	// never contents. On a migration this is the content most likely to break.
+	KindPlugin = "ansible.plugin"
 )
 
 // Normalize maps a full content-root read into read-only `ansible.*` ObservedEntities.
@@ -124,9 +131,49 @@ func (c *Client) Normalize(snap *Snapshot) ([]*pluginv1.ObservedEntity, error) {
 		}
 	}
 	for _, col := range snap.Collections {
-		if err := emit(KindCollection, col.Name, col.Name, map[string]any{
-			"name": col.Name, "version": col.Version, "source": col.Source,
-		}); err != nil {
+		facet := map[string]any{"name": col.Name, "version": col.Version, "source": col.Source, "root": col.Root}
+		if col.Path != "" {
+			facet["path"] = col.Path
+		}
+		if col.Description != "" {
+			facet["description"] = col.Description
+		}
+		if len(col.License) > 0 {
+			facet["license"] = col.License
+		}
+		if len(col.Dependencies) > 0 {
+			facet["dependencies"] = col.Dependencies
+		}
+		// The ROOT collection is identified by its galaxy.yml path; a required one by its bare
+		// FQCN, as it has been since this Syncer shipped. A path cannot collide with an FQCN,
+		// so the two spaces are disjoint without re-keying every existing collection entity.
+		id := col.Name
+		if col.Root {
+			id = col.Path
+		}
+		if err := emit(KindCollection, id, col.Name, facet); err != nil {
+			return nil, err
+		}
+	}
+	for _, pl := range snap.Plugins {
+		facet := map[string]any{"name": pl.Name, "path": pl.Path, "type": pl.Type}
+		if pl.Role != "" {
+			facet["role"] = pl.Role
+		}
+		if err := emit(KindPlugin, pl.Path, pl.Name, facet); err != nil {
+			return nil, err
+		}
+	}
+	if cfg := snap.Config; cfg != nil {
+		facet := map[string]any{"path": cfg.Path}
+		for k, v := range cfg.Settings {
+			facet[k] = v
+		}
+		// Names only for everything off the allowlist (§2.5) — see configSettings.
+		if len(cfg.OtherKeys) > 0 {
+			facet["otherKeys"] = cfg.OtherKeys
+		}
+		if err := emit(KindConfig, cfg.Path, cfg.Path, facet); err != nil {
 			return nil, err
 		}
 	}
