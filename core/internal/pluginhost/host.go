@@ -732,6 +732,11 @@ type ApplyTarget struct {
 	Vars         map[string]string
 	// Jump is the resolved reached-via chain, nearest hop first (ADR-0126 D3).
 	Jump []JumpHop
+	// Transport is the target's OBSERVED connection method, from its mgmt.transport Facet
+	// (ADR-0156). Kind is legible for descent; Coordinates is the validated document,
+	// opaque here for the same reason `desired` is. Nil ⇒ nothing observed.
+	TransportKind        string
+	TransportCoordinates []byte
 }
 
 // JumpHop is one bastion's reachability coordinate. No credential: authenticating to a
@@ -957,7 +962,11 @@ func (h *Host) ApplyRaw(ctx context.Context, req ApplyInvoke) (RawApplyResult, e
 		for _, h := range t.Jump {
 			hops = append(hops, &pluginv1.JumpHop{Name: h.Name, Address: h.Address, Port: h.Port})
 		}
-		targets = append(targets, &pluginv1.ApplyTarget{Name: t.Name, Address: t.Address, Port: t.Port, IdentityKeys: t.IdentityKeys, Vars: t.Vars, Jump: hops})
+		pt := &pluginv1.ApplyTarget{Name: t.Name, Address: t.Address, Port: t.Port, IdentityKeys: t.IdentityKeys, Vars: t.Vars, Jump: hops}
+		if t.TransportKind != "" {
+			pt.Transport = &pluginv1.Transport{Kind: t.TransportKind, Coordinates: t.TransportCoordinates}
+		}
+		targets = append(targets, pt)
 	}
 	creds := make([]*pluginv1.CredentialRef, 0, len(req.CredentialRefs))
 	for _, n := range req.CredentialRefs {

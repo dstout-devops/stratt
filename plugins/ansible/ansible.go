@@ -38,6 +38,12 @@ type Target struct {
 	// Coordinates only — authenticating to a hop is params.connection.jump. The SHIM
 	// turns these into -o ProxyJump=…; the spine never authors an ssh flag (§1.4).
 	Jump []Hop `json:"jump,omitempty"`
+	// Transport is the target's OBSERVED connection method (ADR-0156): kind plus the
+	// coordinates document, opaque to core and read here. Empty kind ⇒ nothing observed and
+	// ansible's own default applies — DISTINCT from an observed `ssh`, which means a Syncer
+	// determined it. The SHIM renders every ansible_* key from this; the spine authors none.
+	TransportKind        string          `json:"transportKind,omitempty"`
+	TransportCoordinates json.RawMessage `json:"transportCoordinates,omitempty"`
 }
 
 // Hop is one bastion's coordinate in a reached-via chain.
@@ -105,6 +111,14 @@ func buildInventory(targets []Target) string {
 			if t.Port > 0 {
 				fmt.Fprintf(&b, " ansible_port=%d", t.Port)
 			}
+		}
+		// The OBSERVED transport, as HOST vars (ADR-0156 D3) — which is what lets one Run
+		// converge a pod, a vSphere VM and an EC2 instance together. Errors are surfaced by
+		// renderInventory's caller; buildInventory keeps its byte-stable signature, and a
+		// target whose transport does not render simply carries none here.
+		tv, _ := transportVarsFor(t)
+		for _, k := range slices.Sorted(maps.Keys(tv)) {
+			fmt.Fprintf(&b, " %s=%s", k, tv[k])
 		}
 		for _, k := range slices.Sorted(maps.Keys(t.Vars)) {
 			fmt.Fprintf(&b, " %s=%s", k, t.Vars[k])

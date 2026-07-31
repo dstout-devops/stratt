@@ -368,6 +368,19 @@ func Run(ctx context.Context, w io.Writer, dir string, req Request, run commandR
 	if cherr != nil {
 		return emitFatal(w, cherr.Error())
 	}
+	// The OBSERVED transports, checked BEFORE anything runs (ADR-0156): every target's
+	// coordinates parse and render, and this EE carries the collection and binary each
+	// transport needs. One pass over the whole set rather than per-target lazily — a Run that
+	// converges three hosts and then dies on the fourth's missing collection has already
+	// changed three machines.
+	if terr := validateTransports(req.Targets, osReadFile, osLookPath); terr != nil {
+		return terr
+	}
+	// D5: a Step-declared connection.type and an observed transport are refused TOGETHER,
+	// never resolved. Two homes for one fact is the precedence §2.4 refuses.
+	if terr := refuseTransportAndDeclaredType(p.Connection, req.Targets); terr != nil {
+		return terr
+	}
 	connVars, cerr := connectionVars(p.Connection, chain, filepath.Join(dir, "known_hosts"), hasLocalTarget(req.Targets), osReadDirNames, osReadFile, stageKeyIn(dir))
 	if cerr != nil {
 		return emitFatal(w, cerr.Error())

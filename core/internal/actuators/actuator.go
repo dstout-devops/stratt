@@ -16,6 +16,19 @@ import (
 	"github.com/dstout-devops/stratt/types"
 )
 
+// Transport is a target's observed connection method (ADR-0156 D2).
+//
+// Kind is LEGIBLE — the core carries and logs it exactly as it carries Address, so a Run's
+// descent can say which transport a target used (§1.8) — but the core NEVER BRANCHES ON IT.
+// That is what keeps the spine from holding a closed set of substrates it would have to grow
+// (§9). Coordinates is the validated mgmt.transport document, OPAQUE for the same reason
+// `desired` is: the shape belongs to the transport, and a core that parsed it would be
+// learning what a Kubernetes namespace is (§1.5).
+type Transport struct {
+	Kind        string
+	Coordinates json.RawMessage
+}
+
 // Target is one Entity rendered as an execution target.
 type Target struct {
 	EntityID string
@@ -33,6 +46,16 @@ type Target struct {
 	// port var (ansible_port, …) FROM it. 0 ⇒ no declared port; the tool's default
 	// applies — the core never invents one.
 	Port int32
+	// Transport is HOW this target is reached, resolved from its mgmt.transport Facet
+	// (ADR-0156). Address says WHERE; this says BY WHAT MEANS, and it is the fact that
+	// makes a MIXED-SUBSTRATE target set convergeable: a pod reached by kubectl, a VM by
+	// vmware_tools and an EC2 instance by aws_ssm can sit in one Apply, because the
+	// connection method rides the TARGET rather than the Step's config.
+	//
+	// Nil ⇒ nothing was observed about how to reach this target, and the Actuator applies
+	// its own default. That is DISTINCT from an observed `ssh` transport, which means a
+	// Syncer determined it.
+	Transport *Transport
 	// Vars are genuinely tool-authored vars only — never a core-emitted connection
 	// key. The reachability coordinate is Address above, not a var (ADR-0084 §1.4).
 	Vars map[string]string

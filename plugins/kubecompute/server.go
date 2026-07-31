@@ -92,6 +92,12 @@ func (s *Server) GetManifest(context.Context, *pluginv1.GetManifestRequest) (*pl
 		// to reach what it built has not finished the job.
 		Contracts: []*pluginv1.ContractDecl{
 			{SchemaId: "mgmt.address"},
+			// mgmt.transport is the PEER fact (ADR-0156): the address says where, this says by
+			// what means. A pod is reached by `kubectl exec`, which needs NOTHING in the guest —
+			// so observing it here is what lets this provider stop shipping sshd in its pods, and
+			// what lets one converge Run span pods, VMs and EC2 instances without any declaration
+			// above the provider naming a substrate.
+			{SchemaId: "mgmt.transport"},
 		},
 		// Tombstone by the host scheme: a built host that is gone from the API is gone. Union
 		// liveness (ADR-0042) keeps the Entity alive if another Source still observes it.
@@ -188,6 +194,19 @@ func (s *Server) project(pod *corev1.Pod) *pluginv1.ObservedEntity {
 			return e
 		}
 		e.Facets = map[string][]byte{"mgmt.address": raw}
+		// HOW to reach it, observed beside WHERE (ADR-0156 D1). A pod is reached by
+		// `kubectl exec` — the connection plugin needs nothing at all in the guest, which is
+		// why this is the substrate where the transport pays immediately: the SSH path
+		// required this provider to bake sshd and authorized keys into every pod it built,
+		// a coupling that existed only because the connection method was assumed.
+		//
+		// COORDINATES ONLY (§2.5): the namespace and the pod name. The kubeconfig, the token
+		// and the CA are the execution pod's own and never travel in a Facet.
+		if tr, err := json.Marshal(map[string]string{
+			"kind": "kubectl", "namespace": pod.Namespace, "pod": pod.Name,
+		}); err == nil {
+			e.Facets["mgmt.transport"] = tr
+		}
 	}
 	return e
 }

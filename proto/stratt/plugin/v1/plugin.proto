@@ -542,6 +542,37 @@ message ApplyTarget {
   // drew for the target itself. The plugin renders the connection — ProxyJump, -J,
   // whatever its transport calls it. There is no ssh flag anywhere in core (§1.4).
   repeated JumpHop jump = 6;
+  // transport is HOW this target is reached, resolved from its mgmt.transport Facet
+  // (ADR-0156). Where `address` says WHERE, this says BY WHAT MEANS — the peer fact,
+  // and the one that makes a MIXED-SUBSTRATE target set convergeable: a pod reached by
+  // kubectl, a VM by vmware_tools and an EC2 instance by aws_ssm can sit in one Apply,
+  // because the connection method rides the TARGET rather than the Step's config.
+  //
+  // Absent ⇒ nothing was observed about how to reach this target, and the actuator
+  // applies its own default (ssh, for a connection actuator). That is distinct from an
+  // OBSERVED `ssh` transport, which means a Syncer determined it.
+  Transport transport = 7;
+}
+
+// Transport is a target's observed connection method (ADR-0156 D2).
+//
+// The split is deliberate. `kind` is LEGIBLE — the core carries and logs it exactly as it
+// carries `address`, so a Run's descent can say which transport a target used (§1.8) — but
+// the core NEVER BRANCHES ON IT. That is what keeps the spine from holding a closed set of
+// substrates it would have to grow (§9).
+//
+// `coordinates` is the validated mgmt.transport Facet document, OPAQUE, for the same reason
+// `desired` is: the shape belongs to the transport and is typed by that pinned schema, and a
+// core that parsed it would be learning what a Kubernetes namespace is (§1.5). A typed
+// per-kind message was the alternative and fails the same test — the proto would enumerate
+// every substrate, and adding one would become a port change.
+//
+// COORDINATES, NEVER CREDENTIALS (§2.5). This identifies the target: a pod and namespace, a
+// VM path, an instance id and region. Authenticating to it is the Step's brokered
+// CredentialRef — the same address-vs-credential split ADR-0084 D4 drew for the address.
+message Transport {
+  string kind = 1;
+  bytes coordinates = 2;
 }
 
 // JumpHop is one resolved link in a reached-via chain — a bastion's reachability

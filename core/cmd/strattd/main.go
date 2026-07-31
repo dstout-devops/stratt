@@ -1208,13 +1208,15 @@ func run(ctx context.Context, log *slog.Logger) error {
 			PluginIdentity: env("STRATT_KUBECOMPUTE_PLUGIN_ID", "kubecompute"),
 			Tier:           pluginhost.Tier(env("STRATT_KUBECOMPUTE_TIER", "trusted")),
 			Source:         types.Source{Kind: "kubecompute", Name: sourceName},
-			// ONE Facet namespace, and it is the reach coordinate. A builder that cannot say how to
-			// reach what it built has not finished the job — but it gets to say nothing else.
-			FacetNamespaces: []string{"mgmt.address"},
-			// AUTHORITATIVE for the hosts it built: it caused the address, so nothing else has a
-			// better claim on it (ADR-0060's declared-authority path, and ADR-0142 D4's
-			// "observed or caused, never computed").
-			AuthoritativeFacetNamespaces: []string{"mgmt.address"},
+			// TWO Facet namespaces, and both are reach: mgmt.address says WHERE, mgmt.transport
+			// says BY WHAT MEANS (ADR-0156). A builder that cannot say how to reach what it built
+			// has not finished the job — but it gets to say nothing else.
+			FacetNamespaces: []string{"mgmt.address", "mgmt.transport"},
+			// AUTHORITATIVE for the hosts it built: it caused the address AND the transport — a
+			// pod is reached by `kubectl exec` because this provider made it a pod — so nothing
+			// else has a better claim on either (ADR-0060's declared-authority path, and
+			// ADR-0142 D4's "observed or caused, never computed").
+			AuthoritativeFacetNamespaces: []string{"mgmt.address", "mgmt.transport"},
 			// The CORRELATION label the provisioning reconcile reads to see the instance as built
 			// (ADR-0120), plus the fleet key a View selects on. NOT `stratt.managed`: a label key has
 			// exactly ONE owner (ADR-0041) and that one is already claimed elsewhere, so asking for

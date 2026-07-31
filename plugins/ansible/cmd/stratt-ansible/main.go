@@ -31,10 +31,16 @@ func run() error {
 		for _, h := range t.GetJump() {
 			hops = append(hops, ansible.Hop{Name: h.GetName(), Address: h.GetAddress(), Port: h.GetPort()})
 		}
-		req.Targets = append(req.Targets, ansible.Target{
+		at := ansible.Target{
 			Name: t.GetName(), Address: t.GetAddress(), Port: t.GetPort(),
 			Vars: t.GetVars(), Identity: t.GetIdentityKeys(), Jump: hops,
-		})
+		}
+		// The OBSERVED transport (ADR-0156): kind is legible, coordinates are opaque to core
+		// and read by the shim. Absent ⇒ nothing observed and ansible's default applies.
+		if tr := t.GetTransport(); tr != nil {
+			at.TransportKind, at.TransportCoordinates = tr.GetKind(), tr.GetCoordinates()
+		}
+		req.Targets = append(req.Targets, at)
 	}
 
 	dir := pluginserve.RunnerDir("/runner")

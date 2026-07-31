@@ -679,13 +679,36 @@ func (a *Activities) EnsureRun(ctx context.Context, in RunInput, workflowID stri
 // (ansible_host, …). The core never authors a tool var: the Phase-0
 // ansible_connection:local stub is retired. A target with no mgmt.address carries an
 // empty Address (unroutable — the actuator fails loudly, never a silent local run, §1.8).
-func renderTarget(e types.Entity, address string, port int32) actuators.Target {
+func renderTarget(e types.Entity, address string, port int32, transport json.RawMessage) actuators.Target {
 	return actuators.Target{
-		EntityID: e.ID,
-		Name:     observedName(e),
-		Address:  address,
-		Port:     port,
+		EntityID:  e.ID,
+		Name:      observedName(e),
+		Address:   address,
+		Port:      port,
+		Transport: transportOf(transport),
 	}
+}
+
+// transportOf reads the observed connection method from an mgmt.transport Facet raw
+// (ADR-0156 D1). Only `kind` is parsed, and ONLY so a Run's descent can say which transport a
+// target used (§1.8) — the rest of the document crosses the port untouched, because its shape
+// belongs to the transport and a core that parsed it would be learning what a Kubernetes
+// namespace is (§1.5). Nothing here branches on kind, which is what keeps the spine from
+// holding a closed set of substrates (§9).
+//
+// A document with no `kind` yields NO transport rather than an empty one: "nothing observed"
+// and "observed to be nothing" are different, and the second is not a state that exists.
+func transportOf(raw json.RawMessage) *actuators.Transport {
+	if len(raw) == 0 {
+		return nil
+	}
+	var t struct {
+		Kind string `json:"kind"`
+	}
+	if err := json.Unmarshal(raw, &t); err != nil || t.Kind == "" {
+		return nil
+	}
+	return &actuators.Transport{Kind: t.Kind, Coordinates: raw}
 }
 
 // observedName picks a human name for an execution target from the projection's tool-blind
@@ -749,10 +772,17 @@ func (a *Activities) ResolveTargets(ctx context.Context, in RunInput) (ResolvedT
 	if err != nil {
 		return ResolvedTargets{}, err
 	}
+	// The transport, read BESIDE the address because it is the same kind of fact: a
+	// coordinate the core resolves and the plugin renders (ADR-0156 D1). One batched read,
+	// exactly as the address is — not a per-target lookup.
+	transports, err := a.Store.FacetValuesByEntities(ctx, "mgmt.transport", ids)
+	if err != nil {
+		return ResolvedTargets{}, err
+	}
 	out := ResolvedTargets{ViewVersion: v.Version}
 	for _, e := range ents {
 		addr, port := addressOf(addrs[e.ID])
-		t := renderTarget(e, addr, port)
+		t := renderTarget(e, addr, port, transports[e.ID])
 		// The reached-via chain (ADR-0126 D3), resolved HERE beside the address
 		// because it is the same kind of fact: a coordinate the core resolves and the
 		// plugin renders. An error is returned rather than logged — a target declared
@@ -830,6 +860,14 @@ func (a *Activities) ResolveTargetsBySite(ctx context.Context, in RunInput) (Rou
 	if err != nil {
 		return RoutedTargets{}, err
 	}
+	// BOTH resolution paths read it, for the reason stated above about mgmt.site: a fact
+	// honoured on one path and ignored on the other makes behaviour depend on whether a Step
+	// happened to be Site-dispatched — the divergent-second-copy failure this repo keeps
+	// re-learning (ADR-0156 D1).
+	transports, err := a.Store.FacetValuesByEntities(ctx, "mgmt.transport", ids)
+	if err != nil {
+		return RoutedTargets{}, err
+	}
 	bySite := map[string][]actuators.Target{}
 	for _, e := range ents {
 		site := types.LocalSite
@@ -842,7 +880,7 @@ func (a *Activities) ResolveTargetsBySite(ctx context.Context, in RunInput) (Rou
 			}
 		}
 		addr, port := addressOf(addrs[e.ID])
-		t := renderTarget(e, addr, port)
+		t := renderTarget(e, addr, port, transports[e.ID])
 		// Both resolution paths carry the chain, or a Site-dispatched Step would
 		// silently lose its bastions — the asymmetry ADR-0125's sibling paths and
 		// ADR-0118's four launch doors both had to close. Sites and ProxyJump are
@@ -1374,7 +1412,11 @@ func (a *Activities) executePlugin(ctx context.Context, in RunInput, site string
 	// path today; passing them to identity-rendering actuators is a follow-up.)
 	targets := make([]pluginhost.ApplyTarget, 0, len(resolved.Targets))
 	for _, t := range resolved.Targets {
-		targets = append(targets, pluginhost.ApplyTarget{Name: t.Name, Address: t.Address, Port: t.Port, Vars: t.Vars, Jump: portHops(t.Jump)})
+		at := pluginhost.ApplyTarget{Name: t.Name, Address: t.Address, Port: t.Port, Vars: t.Vars, Jump: portHops(t.Jump)}
+		if t.Transport != nil {
+			at.TransportKind, at.TransportCoordinates = t.Transport.Kind, t.Transport.Coordinates
+		}
+		targets = append(targets, at)
 	}
 	// Plan-pinned Apply (ADR-0047 §8): a Step that names a Plan source MUST carry a
 	// Gate-approved digest. FAIL CLOSED on an empty digest — never a silent unpinned
@@ -1471,8 +1513,14 @@ func (a *Activities) executeJobPlugin(ctx context.Context, in RunInput, slice in
 	ptargets := make([]*pluginv1.ApplyTarget, 0, len(resolved.Targets))
 	for _, t := range resolved.Targets {
 		ids := map[string]string{"host.name": t.Name}
-		targets = append(targets, pluginhost.ApplyTarget{Name: t.Name, Address: t.Address, Port: t.Port, Vars: t.Vars, IdentityKeys: ids, Jump: portHops(t.Jump)})
-		ptargets = append(ptargets, &pluginv1.ApplyTarget{Name: t.Name, Address: t.Address, Port: t.Port, Vars: t.Vars, IdentityKeys: ids, Jump: protoHops(t.Jump)})
+		at := pluginhost.ApplyTarget{Name: t.Name, Address: t.Address, Port: t.Port, Vars: t.Vars, IdentityKeys: ids, Jump: portHops(t.Jump)}
+		pt := &pluginv1.ApplyTarget{Name: t.Name, Address: t.Address, Port: t.Port, Vars: t.Vars, IdentityKeys: ids, Jump: protoHops(t.Jump)}
+		if t.Transport != nil {
+			at.TransportKind, at.TransportCoordinates = t.Transport.Kind, t.Transport.Coordinates
+			pt.Transport = &pluginv1.Transport{Kind: t.Transport.Kind, Coordinates: t.Transport.Coordinates}
+		}
+		targets = append(targets, at)
+		ptargets = append(ptargets, pt)
 	}
 	// Only the use-checked, authorized names cross (§2.5); material stays on the
 	// kubelet secretKeyRef mounts (MF7 — one authz chokepoint, injection at the pod).
