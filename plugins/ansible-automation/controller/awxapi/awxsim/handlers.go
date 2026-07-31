@@ -31,6 +31,10 @@ func (s *Sim) projects(w http.ResponseWriter, r *http.Request) {
 	paged(s, w, r, "/api/v2/projects/", s.data.Projects)
 }
 
+func (s *Sim) credentialTypes(w http.ResponseWriter, r *http.Request) {
+	paged(s, w, r, "/api/v2/credential_types/", s.data.CredentialTypes)
+}
+
 func (s *Sim) labels(w http.ResponseWriter, r *http.Request) {
 	paged(s, w, r, "/api/v2/labels/", s.data.Labels)
 }

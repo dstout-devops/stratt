@@ -326,6 +326,50 @@ the safe one. Scope today is `kubecompute-build`, the only Workflow forwarding `
 as other builders begin to, they either declare what they read or are correctly reported as reading
 none.
 
+### AWX-012 + AWX-017 — the account nobody offboards (ADR-0155, 2026-07-31)
+
+**AWX-017 needed an identity-plane decision, and the join was the whole problem.** AWX knows a
+USERNAME; the identity plane keys by `<idp>/<scimId>`. Every obvious bridge is wrong: letting the AWX
+plugin write an identity fact is a §2.1 registration error (ADR-0130 D1 says so in those words);
+having an operator configure "this Controller authenticates against that IdP" is a convention typed
+into an env var, joined by string equality — **exactly the shape ADR-0154 had just spent its length
+repairing**, and repeating a defect one ADR after fixing it is not a plan; and keying by bare
+username is sound only if usernames are unique across every IdP, which nothing guarantees.
+
+**The answer: the SCIM projector emits the key, and only when it is unambiguous.** A `user` Entity
+gains `identity.userName` as a SECOND way to be ADDRESSED — claiming nothing about the person,
+contesting no ownership, the same move that lets the AWX half point at `ansible.playbook`. And the
+projector is the only component that CAN decide unambiguity: it enumerates every IdP in one pass, so
+it alone sees that `jsmith` exists in two directories. When it does, **neither** entity gets the key.
+That is the correct answer, not a gap.
+
+Lowercased, measured rather than assumed: RFC 7643 §4.1.1 makes SCIM `userName` unique per provider
+with `caseExact: false`, so normalising cannot merge two people and it makes the join survive a
+Controller storing `JSmith` for an IdP's `jsmith`.
+
+**The AWX half emits a soft `same-account-as` edge and its ABSENCE is the finding** — the
+relation-presence mechanism of ADR-0085 as sharpened by ADR-0154. A dropped edge means either no IdP
+knows this login (the account an offboarding process misses, because offboarding runs against the
+IdP) or the name is ambiguous. Both deserve a Finding. `same-account-as` asserts a CORRESPONDENCE —
+that two logins share a name, a fact about strings — never an identity, and
+`TestINV3_AuthzConsultsNoGraph` keeps it structurally unable to reach an access decision.
+
+**Verified two ways on purpose.** The unambiguity rule is a pure function with its own test, because
+the graph package's tests are Postgres-gated and SKIP without a database — which is exactly how an
+inert mechanism stays green here. The key actually LANDING and resolving is then asserted end to end
+against a real store, which a pure-function test cannot show.
+
+**AWX-012** rides along: `ansible.credentialtype`, where `managed: false` is the migration question —
+a credential of a custom type has no equivalent until that type's fields and injectors exist on the
+other side. Field names, which of them are secret, and the injector delivery modes; the injector
+TEMPLATES are not projected, being arbitrary operator text the mode already summarises.
+
+**AWX-005 stays declined, deliberately.** ADR-0130 D3 refused role grants on three grounds, and one
+of them is not a cost problem a better read shape answers: a projected grant graph is one query from
+being used as an authorization truth, and "INV-3 stops it" is an argument about mechanism rather than
+about what people build on top of a convincing-looking permission graph. That decision stands, and
+reopening it silently would make "we looked and said no" render the same as "nobody looked".
+
 ### AWX-001 · the Project, and the orphan signal it repairs (ADR-0154, 2026-07-31)
 
 The last `adopt-only` 🔴 in the AWX object-model's projection column, and the audit's own Tier 1 — for

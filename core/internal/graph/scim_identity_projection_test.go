@@ -124,3 +124,62 @@ func subjectPrincipal(t *testing.T, s *Store, userName string) string {
 	}
 	return subj.PrincipalID
 }
+
+// The pointable login-name key, END TO END against a real store (ADR-0155 D1). The unit test
+// beside this covers the RULE; this covers that the key actually lands on the entity and
+// resolves — which is what the AWX half's `same-account-as` edge depends on, and what a
+// pure-function test cannot show.
+func TestLoginKeyIsPointableAndAmbiguityIsRefused(t *testing.T) {
+	store := testStore(t)
+	ctx := context.Background()
+
+	// Two IdPs. `dana` exists only in okta; `jsmith` exists in BOTH (differing in case, which
+	// SCIM says cannot distinguish two people).
+	for _, idp := range []string{"okta", "entra"} {
+		if err := store.UpsertIDP(ctx, types.SCIMIdP{Name: idp, TokenHash: "x"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, u := range []types.SCIMIdentity{
+		{IDP: "okta", SCIMID: "o1", UserName: "dana", Active: true},
+		{IDP: "okta", SCIMID: "o2", UserName: "jsmith", Active: true},
+		{IDP: "entra", SCIMID: "e1", UserName: "JSMITH", Active: true},
+	} {
+		if err := store.UpsertIdentity(ctx, u); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := store.EnsureIdentitySubjectOwner(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.ProjectSCIMEntities(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	// The unambiguous login resolves — this is the join the AWX mirror points at.
+	id, ok, err := store.EntityIDByIdentity(ctx, "identity.userName", "dana")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok || id == "" {
+		t.Fatal("an unambiguous login must be addressable by name, or the whole correlation " +
+			"edge has nothing to resolve against")
+	}
+
+	// The colliding one does NOT — neither entity carries the key, so a foreign projection
+	// pointing at `jsmith` gets no match rather than the wrong person (§2.4).
+	if _, ok, err := store.EntityIDByIdentity(ctx, "identity.userName", "jsmith"); err != nil {
+		t.Fatal(err)
+	} else if ok {
+		t.Fatal("a username claimed by two IdPs must resolve to NOBODY — two candidate people " +
+			"is not a person, and the AWX account is then correctly reported as unlinked")
+	}
+
+	// The original key is untouched: this ADDS a way to address the entity, it does not
+	// replace one.
+	if _, ok, err := store.EntityIDByIdentity(ctx, "identity.scimId", "okta/o2"); err != nil {
+		t.Fatal(err)
+	} else if !ok {
+		t.Fatal("identity.scimId must still resolve")
+	}
+}

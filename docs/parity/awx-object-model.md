@@ -87,7 +87,7 @@ which is which.
 | `execution_environments`         | `none` 🟠       | Which EE a template runs in is invisible in the mirror; on our side EE is an Actuator declaration (ADR-0117 D3a), so the mapping is not obvious             | **AWX-007** |
 | `instance_groups`                | `none` 🟠       | AWX's execution placement; our equivalent is Sites/Cells, so this is a real mapping question nobody has asked                                               | **AWX-008** |
 | `notification_templates`         | `projected` 🟢  | → `ansible.notification` + `owned-by` edge (2026-07-31). Name, DRIVER and config KEY NAMES only — no configuration VALUE is ever projected, because AWX returns non-secret fields in the clear and for the commonest driver the cleartext field IS the credential (a Slack webhook URL is a bearer secret). `notificationType` is a Sink's `kind` on cutover (ADR-0125). ATTACHMENTS deliberately absent: 3 sub-reads per job template | ~~**AWX-009**~~ |
-| `credential_types`               | `none` 🟠       | Custom credential types + injectors — the platform audit already scores this 🟡 (`injectionFor` is a fixed map)                                             | **AWX-012** |
+| `credential_types`               | `projected` 🟢  | → `ansible.credentialtype` (2026-07-31). Field names, WHICH are secret, and the injector delivery modes — `managed: false` is the migration question, since a custom type exists nowhere else. Injector TEMPLATES are not projected: arbitrary operator text the mode already summarises | ~~**AWX-012**~~ |
 | `ad_hoc_commands`                | `none` ⚪       | An imperative one-shot; Stratt's equivalent is a Run against a View, not an object to mirror                                                                |             |
 | `workflow_approvals`             | `adopt-only` ⚪ | Approval **nodes** are transformed into Workflow gates; pending approval _instances_ are run state, not config                                              |             |
 | `activity_stream`                | `none` ⚪       | We keep our own hash-chained audit (ADR-0034); mirroring AWX's is not a graph concern                                                                       |             |
@@ -286,17 +286,23 @@ having been built first and never revisited when the transform grew deeper.
   ~~**AWX-007** execution environments~~ — **done, [ADR-0133](../adr/0133-execution-environments-and-instance-groups.md) D1** ·
   ~~**AWX-008** instance groups~~ — **declined, D4**, and the declining is the decision: it stays 🔴/⚪ rather
   than 🟠, because "nobody looked" and "we looked and said no" must never render the same ·
-  **AWX-012** custom credential types · ~~**AWX-013** schedule `extra_data` + timezone~~ — **done,
+  ~~**AWX-012** custom credential types~~ — **done (2026-07-31)** ·
+  ~~**AWX-013** schedule `extra_data` + timezone~~ — **done,
   [ADR-0132](../adr/0132-awx-labels-and-schedule-shape.md) D3**: timezone/next-run/window plus the
   per-schedule launch overrides, and `extraDataKeys` — **key names, never values**, which distinguishes
   two schedules of one template while holding the §2.5 line ADR-0128 D4 drew for `extra_vars` ·
   **AWX-015** the ~15 `ask_*_on_launch` booleans (deferred out of ADR-0128 D4: cutover fidelity rather
   than governance) · **AWX-016** workflow nodes as entities (deferred out of ADR-0129 D3 — it earns a
   namespace when a consumer needs the DAG, the obvious one being a UI rendering of a mirrored workflow
-  beside a Stratt Workflow) · **AWX-017** correlating `ansible.user` to the SCIM identity — the AWX
-  analogue of ADR-0079 4a's leaver-credential Finding, where **a local AWX account matching no known
-  identity** is the account nobody offboards; it needs a username-resolvable identity key on `user`
-  Entities, which is a decision about the identity plane · ~~**AWX-018** a **poll-cost budget**~~ — **done,
+  beside a Stratt Workflow) · ~~**AWX-017** correlating `ansible.user` to the SCIM identity~~ — **done
+  (2026-07-31, [ADR-0155](../adr/0155-the-account-nobody-offboards.md))**. The identity-plane decision
+  it needed: the SCIM projector emits a second, POINTABLE key `identity.userName` on the `user`
+  Entities it already owns — and **only when the login is claimed by exactly one IdP**, because the
+  projector is the sole component that enumerates every IdP and can therefore see the collision. Two
+  candidate people is not a person (§2.4). The AWX half emits a soft `same-account-as` edge, and its
+  ABSENCE is the Finding (`awx-account-unlinked`): either no IdP knows this login — the account
+  nobody offboards — or the name is ambiguous and Stratt cannot say who it is. Nothing here claims
+  `identity.subject`, and INV-3 keeps it structurally unreadable by authorization · ~~**AWX-018** a **poll-cost budget**~~ — **done,
   [ADR-0131](../adr/0131-controller-poll-cost-budget.md)**, settled before a fourth N+1 landed. The
   finding was that three ADRs had each added an N+1 read against a Controller we do not own, each
   individually justified, with no decision owning the total — and the compounding half was worse than

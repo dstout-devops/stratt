@@ -53,6 +53,16 @@ const (
 	// the Controller is running, and it is what makes ADR-0085's orphan signal diagnosable:
 	// the template→project edge joins on an ID AWX issued, not on a name a human aligned.
 	KindProject = "ansible.project"
+	// KindCredentialType is an AWX credential TYPE — the schema a credential instantiates
+	// (AWX-012). The custom ones are the migration question; the built-ins are AWX's own.
+	KindCredentialType = "ansible.credentialtype"
+
+	// schemeUserName is the IDENTITY-PLANE pointable key (ADR-0155 D1), referenced here only
+	// as the target of the `same-account-as` edge — never owned, never written. The SCIM
+	// projector owns identity.subject and identity.name (§2.1, ADR-0130 D1 is explicit that
+	// this plugin may claim neither); this points at an entity that projector already owns,
+	// exactly as the `runs` edge points at ansible.playbook.
+	schemeUserName = "identity.userName"
 
 	// schemePlaybook is the ansible-project Syncer's OWNED kind — referenced here only
 	// as a cross-source relation TARGET (the `runs` edge), never owned or written by AWX.
@@ -118,6 +128,40 @@ func (c *Client) Normalize(snap *Snapshot) ([]*pluginv1.ObservedEntity, error) {
 			Labels:       labels(jt.Name, jt.SummaryFields.Organization.Name),
 			Facets:       map[string][]byte{KindTemplate: facet},
 			Relations:    rels,
+		})
+	}
+
+	for _, ct := range snap.CredentialTypes {
+		fields := make([]string, 0, len(ct.Inputs.Fields))
+		secret := make([]string, 0, len(ct.Inputs.Fields))
+		for _, f := range ct.Inputs.Fields {
+			if f.ID == "" {
+				continue
+			}
+			fields = append(fields, f.ID)
+			if f.Secret {
+				secret = append(secret, f.ID)
+			}
+		}
+		sort.Strings(fields)
+		sort.Strings(secret)
+		modes := make([]string, 0, len(ct.Injectors))
+		for mode := range ct.Injectors {
+			modes = append(modes, mode)
+		}
+		sort.Strings(modes) // stable: a facet that reorders between polls reads as a change
+		facet, err := json.Marshal(map[string]any{
+			"name": ct.Name, "kind": ct.Kind, "managed": ct.Managed,
+			"fields": fields, "secretFields": secret, "injectorModes": modes,
+		})
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, &pluginv1.ObservedEntity{
+			Kind:         KindCredentialType,
+			IdentityKeys: map[string]string{KindCredentialType: c.qualify(ct.ID)},
+			Labels:       labels(ct.Name, ""),
+			Facets:       map[string][]byte{KindCredentialType: facet},
 		})
 	}
 
@@ -236,11 +280,27 @@ func (c *Client) Normalize(snap *Snapshot) ([]*pluginv1.ObservedEntity, error) {
 		if err != nil {
 			return nil, err
 		}
+		// The correlation edge (ADR-0155 D2), and its ABSENCE is the finding. The host
+		// resolves it and DROPS it when no identity carries that login name (no vivify,
+		// §1.2) — which means either no IdP identity has this username (the account nobody
+		// offboards) or the name is ambiguous across IdPs and Stratt cannot say who it is.
+		// Both are worth a Finding, and awx-account-unlinked reads exactly this absence.
+		//
+		// It asserts a CORRESPONDENCE, not an identity: that two logins share a name is a
+		// fact about strings, checkable, and all the offboarding question needs. Nothing
+		// reads it for authorization — INV-3 is structural (TestINV3_AuthzConsultsNoGraph).
+		var rels []*pluginv1.ObservedRelation
+		if login := strings.ToLower(strings.TrimSpace(u.Username)); login != "" {
+			rels = append(rels, &pluginv1.ObservedRelation{
+				Type: "same-account-as", ToScheme: schemeUserName, ToValue: login,
+			})
+		}
 		out = append(out, &pluginv1.ObservedEntity{
 			Kind:         KindUser,
 			IdentityKeys: map[string]string{KindUser: c.qualify(u.ID)},
 			Labels:       labels(u.Username, ""),
 			Facets:       map[string][]byte{KindUser: facet},
+			Relations:    rels,
 		})
 	}
 

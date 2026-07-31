@@ -43,6 +43,7 @@ func (s *Sim) Handler() http.Handler {
 	mux.HandleFunc("GET /api/v2/job_templates/{id}/", s.auth(s.jobTemplate))
 	mux.HandleFunc("GET /api/v2/job_templates/{id}/survey_spec/", s.auth(s.surveySpec))
 	mux.HandleFunc("GET /api/v2/projects/", s.auth(s.projects))
+	mux.HandleFunc("GET /api/v2/credential_types/", s.auth(s.credentialTypes))
 	mux.HandleFunc("GET /api/v2/projects/{id}/", s.auth(s.project))
 	mux.HandleFunc("GET /api/v2/workflow_job_templates/", s.auth(s.workflowJTs))
 	mux.HandleFunc("GET /api/v2/workflow_job_templates/{id}/workflow_nodes/", s.auth(s.workflowNodes))

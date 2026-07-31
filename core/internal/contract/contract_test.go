@@ -289,7 +289,9 @@ func TestPinsAreStable(t *testing.T) {
 	// outputs/csr carries exactly one field, closed, and that is the design rather than economy:
 	// the private key is born on the target and never crosses the wire (§2.5, ADR-0050), so a
 	// schema admitting anything beside the CSR would be an invitation to send more.
-	// 83 since AWX-001/ADR-0154 added facets/ansible.project — the AWX content root a template
+	// 84 since AWX-012 added facets/ansible.credentialtype — the schema a credential instantiates,
+	// where `managed: false` is the migration question.
+	// 83 was AWX-001/ADR-0154, which added facets/ansible.project — the AWX content root a template
 	// runs from, whose scm_url is projected with any embedded credential removed (§2.5).
 	// 82 was ANS Tier 3, which added facets/ansible.config (the file that changes the meaning of the
 	// root), facets/ansible.plugin (the repo's own code) and facets/ansible.collection (which
@@ -304,8 +306,8 @@ func TestPinsAreStable(t *testing.T) {
 	// presents, read back from the delivered file, beside the CLM Syncer's cert.expiry which says
 	// what was ISSUED. The count is deliberate: a new pinned document is an act, not a side
 	// effect (§1.5).
-	if len(all) != 83 {
-		t.Fatalf("expected 83 embedded documents, got %d — the shipped set is the SEAM set now "+
+	if len(all) != 84 {
+		t.Fatalf("expected 84 embedded documents, got %d — the shipped set is the SEAM set now "+
 			"(ADR-0138 D3/D4); a plugin's own contracts live in plugins/<n>/contracts/", len(all))
 	}
 	versions := map[string]int{}

@@ -1019,7 +1019,9 @@ func run(ctx context.Context, log *slog.Logger) error {
 			return fmt.Errorf("ansible-automation controller plugin dial %s: %w", addr, err)
 		}
 		defer conn.Close()
-		// ELEVEN owned namespaces (AWX-001/ADR-0154 added ansible.project — the content root a
+		// TWELVE owned namespaces (AWX-012 added ansible.credentialtype — the SCHEMA a credential
+		// instantiates; `managed: false` is the migration question, since a custom type exists
+		// nowhere else. (AWX-001/ADR-0154 added ansible.project — the content root a
 		// template runs FROM, carrying scm_revision and an ID-joined `uses-project` edge that
 		// makes ADR-0085's orphan signal diagnosable instead of merely present; its scm_url is
 		// projected with any embedded credential removed, §2.5. AWX-009 added ansible.notification — where AWX sends a job's
@@ -1033,7 +1035,7 @@ func run(ctx context.Context, log *slog.Logger) error {
 		// write-owner, and never read by authz: ADR-0079 INV-3).
 		// ansible.credential is name+kind only (§2.5) so "which templates use this
 		// credential" is a traversal rather than a scan.
-		ansibleSchemes := []string{"ansible.template", "ansible.workflow", "ansible.schedule", "ansible.org", "ansible.team", "ansible.credential", "ansible.user", "ansible.label", "ansible.executionenvironment", "ansible.notification", "ansible.project"}
+		ansibleSchemes := []string{"ansible.template", "ansible.workflow", "ansible.schedule", "ansible.org", "ansible.team", "ansible.credential", "ansible.user", "ansible.label", "ansible.executionenvironment", "ansible.notification", "ansible.project", "ansible.credentialtype"}
 		grant := pluginhost.Grant{
 			PluginIdentity: env("STRATT_ANSIBLE_AUTOMATION_CONTROLLER_PLUGIN_ID", "ansible-automation"),
 			Tier:           pluginhost.Tier(env("STRATT_ANSIBLE_AUTOMATION_CONTROLLER_TIER", "trusted")),
@@ -1051,7 +1053,12 @@ func run(ctx context.Context, log *slog.Logger) error {
 			// reason the two halves must not share a Source (ADR-0085/0127 D1). An extra
 			// IdentityScheme beyond the manifest is legal — Register only requires
 			// TombstoneSchemes ⊆ IdentitySchemes and Contracts ⊆ FacetNamespaces.
-			IdentitySchemes: append(append([]string{}, ansibleSchemes...), "ansible.playbook"),
+			// IdentitySchemes ⊇ FacetNamespaces PLUS two POINTABLE-ONLY schemes, neither of them
+			// writable here: `ansible.playbook` (owned by the CONTENT half) and
+			// `identity.userName` (owned by the SCIM projector, ADR-0155 D1) — the target of the
+			// `same-account-as` edge that makes "which AWX login matches nobody the IdP knows"
+			// answerable WITHOUT this plugin claiming an identity fact it may not write (§2.1).
+			IdentitySchemes: append(append([]string{}, ansibleSchemes...), "ansible.playbook", "identity.userName"),
 		}
 		ctrlClient := pluginv1.NewPluginServiceClient(conn)
 		host := pluginhost.New(store, ctrlClient, grant, log)

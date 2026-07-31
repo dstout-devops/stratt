@@ -111,6 +111,18 @@ type fExecEnv struct {
 // `token` and `password` and leaves the rest alone, so the cleartext field IS the credential
 // for the commonest driver. A simulator that seeded a harmless `{"channel":"#ops"}` would
 // let a projection that leaks values pass every test.
+// fCredentialType is an AWX credential type (AWX-012) — projection-only. One MANAGED (AWX's
+// own) and one CUSTOM, because `managed: false` is the interesting value: a custom type is
+// the one that exists nowhere else on cutover.
+type fCredentialType struct {
+	ID        int            `json:"id"`
+	Name      string         `json:"name"`
+	Kind      string         `json:"kind"`
+	Managed   bool           `json:"managed"`
+	Inputs    map[string]any `json:"inputs"`
+	Injectors map[string]any `json:"injectors"`
+}
+
 type fNotification struct {
 	ID               int            `json:"id"`
 	Name             string         `json:"name"`
@@ -236,6 +248,7 @@ type estate struct {
 	Labels           []fLabel
 	ExecutionEnvs    []fExecEnv
 	Notifications    []fNotification
+	CredentialTypes  []fCredentialType
 	TeamMembers      map[int][]fUser
 	Organizations    []fOrganization
 	Teams            []fTeam
@@ -350,6 +363,25 @@ func seed() *estate {
 	e.Notifications[0].SummaryFields.Organization = fNamed{ID: 1, Name: "Platform"}
 	e.Notifications[1].SummaryFields.Organization = fNamed{ID: 1, Name: "Platform"}
 
+	e.CredentialTypes = []fCredentialType{
+		{ID: 1, Name: "Machine", Kind: "ssh", Managed: true, Inputs: map[string]any{
+			"fields": []map[string]any{
+				{"id": "username", "type": "string"},
+				{"id": "password", "type": "string", "secret": true},
+				{"id": "ssh_key_data", "type": "string", "secret": true},
+			},
+		}},
+		{ID: 42, Name: "ACME Vault", Kind: "cloud", Managed: false, Inputs: map[string]any{
+			"fields": []map[string]any{
+				{"id": "url", "type": "string"},
+				{"id": "token", "type": "string", "secret": true},
+			},
+			"required": []string{"url", "token"},
+		}, Injectors: map[string]any{
+			"env":        map[string]any{"ACME_URL": "{{ url }}", "ACME_TOKEN": "{{ token }}"},
+			"extra_vars": map[string]any{"acme_url": "{{ url }}"},
+		}},
+	}
 	e.Labels = []fLabel{{ID: 70, Name: "prod"}, {ID: 71, Name: "critical"}, {ID: 72, Name: "legacy"}}
 	e.Labels[0].SummaryFields.Organization = fNamed{ID: 1, Name: "Platform"}
 	e.Labels[1].SummaryFields.Organization = fNamed{ID: 1, Name: "Platform"}

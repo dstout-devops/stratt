@@ -151,6 +151,42 @@ func (k *configKeys) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
+// CredentialType is an AWX credential type — the SCHEMA a credential is an instance of
+// (AWX-012). The built-in ones are AWX's own (ssh, vault, aws, …); the CUSTOM ones are what an
+// operator wrote, and they are the migration question: a credential of a custom type has no
+// equivalent until that type's fields and injectors exist on the other side.
+//
+// FIELD NAMES AND INJECTOR SHAPES, never a value — but note this is a weaker §2.5 statement than
+// the ones elsewhere in this Connector, because a credential TYPE holds no material by
+// construction: it is a schema, and the values live on credential INSTANCES, which ADR-0128 D2
+// already refuses to read. What is projected here is what the type ASKS FOR and how it delivers
+// it, which is exactly what has to be reproduced on cutover.
+type CredentialType struct {
+	ID   int    `json:"id"`
+	Name string `json:"name"`
+	Kind string `json:"kind"`
+	// Managed marks a type AWX ships. False is the interesting value: a custom type is the one
+	// that does not exist anywhere else.
+	Managed bool           `json:"managed"`
+	Inputs  credTypeInputs `json:"inputs"`
+	// Injectors say HOW the type delivers its fields to a job — as env vars, extra_vars, or
+	// files. Only the DELIVERY MODES are projected, not the templates: a template can embed
+	// `{{ password }}`, which names a field rather than carrying one, but projecting template
+	// text would put an operator's arbitrary strings in the graph for no gain a mode does not
+	// already give.
+	Injectors map[string]json.RawMessage `json:"injectors"`
+}
+
+// credTypeInputs decodes an AWX credential type's input schema down to its FIELD NAMES.
+type credTypeInputs struct {
+	Fields []struct {
+		ID     string `json:"id"`
+		Type   string `json:"type"`
+		Secret bool   `json:"secret"`
+	} `json:"fields"`
+	Required []string `json:"required"`
+}
+
 // Project is an AWX Project — the content root a job template runs FROM (AWX-001, ADR-0154).
 //
 // It is the last object the mirror could not see, and the audit ranked it Tier 1 for a reason that
@@ -295,17 +331,18 @@ type User struct {
 
 // Snapshot is one full read of the Controller's automation estate.
 type Snapshot struct {
-	JobTemplates  []JobTemplate
-	Workflows     []WorkflowJobTemplate
-	Schedules     []Schedule
-	Organizations []Organization
-	Teams         []Team
-	Credentials   []Credential
-	Users         []User
-	Labels        []Label
-	ExecutionEnvs []ExecutionEnvironment
-	Notifications []NotificationTemplate
-	Projects      []Project
+	JobTemplates    []JobTemplate
+	Workflows       []WorkflowJobTemplate
+	Schedules       []Schedule
+	Organizations   []Organization
+	Teams           []Team
+	Credentials     []Credential
+	Users           []User
+	Labels          []Label
+	ExecutionEnvs   []ExecutionEnvironment
+	Notifications   []NotificationTemplate
+	Projects        []Project
+	CredentialTypes []CredentialType
 	// WorkflowNodes by workflow_job_template id (ADR-0129). AWX has no bulk endpoint, so
 	// this is an N+1 read: one request per workflow, every poll.
 	WorkflowNodes map[int][]WorkflowNode
@@ -425,6 +462,10 @@ func (c *Client) Enumerate(ctx context.Context) (*Snapshot, error) {
 		return nil, err
 	}
 	if snap.ExecutionEnvs, err = list[ExecutionEnvironment](ctx, c, "/execution_environments/"); err != nil {
+		return nil, err
+	}
+	// A COLLECTION read (AWX-012): O(1) per poll.
+	if snap.CredentialTypes, err = list[CredentialType](ctx, c, "/credential_types/"); err != nil {
 		return nil, err
 	}
 	// A COLLECTION read (AWX-001): O(1) per poll. Project SYNC JOBS (/project_updates/) are

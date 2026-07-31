@@ -1,0 +1,49 @@
+# awx-account-unlinked — THE ACCOUNT NOBODY OFFBOARDS (AWX-017, ADR-0155).
+#
+# A relation-presence Baseline (ADR-0033, the same mechanism as awx-template-covered) asserting
+# graph TOPOLOGY rather than a node facet: every `ansible.user` the controller half projects must
+# carry an outgoing `same-account-as` edge to an identity the SCIM projector knows.
+#
+# THE ABSENCE IS THE SIGNAL. The edge targets `identity.userName:<login>`, a pointable key the SCIM
+# projector emits on the `user` Entities it already owns (ADR-0155 D1). The host resolves it and
+# DROPS it when nothing carries that login (no vivify, §1.2 / ADR-0042) — so a dropped edge means
+# one of exactly two things, and both deserve a Finding:
+#
+#   1. no IdP identity has this username — a LOCAL AWX ACCOUNT the directory does not know. That is
+#      the account an offboarding process misses, because offboarding runs against the IdP. It is
+#      the AWX analogue of ADR-0079 4a's leaver-credential Finding.
+#   2. the username is claimed by more than one configured IdP, so the projector emitted the key for
+#      NEITHER — Stratt genuinely cannot say which person it is, and saying nothing beats picking
+#      one (§2.4).
+#
+# WHAT THIS DOES NOT CLAIM. `same-account-as` says two logins share a NAME — a fact about strings,
+# checkable, and all the offboarding question needs. It does not say they are the same principal,
+# and nothing anywhere reads it for authorization: TestINV3_AuthzConsultsNoGraph fails the build if
+# the authz package imports graph at all (ADR-0079 INV-3), so this is structurally unable to become
+# an access decision. `identity.subject` and `identity.name` remain solely the SCIM projector's
+# (§2.1) — this plugin claims only `ansible.*` and POINTS at the rest.
+#
+# SERVICE ACCOUNTS (ADR-0155 D3). An AWX deployment runs automation under local accounts that will
+# never have an IdP identity, and firing on them forever is how a Finding gets ignored. The scope is
+# a VIEW, so an estate excludes its service accounts by declaring them out of `awx-users` or by
+# declaring a narrower View for this control — the judgement stays in Git where it is reviewable,
+# rather than in a `svc-` prefix heuristic where the plugin would be inventing a naming convention
+# for somebody else's estate.
+#
+# §1.8 / §4.3 FALSE-POSITIVE MODE (documented, not hidden): the SCIM projection runs on its own
+# cadence, so an identity not yet projected → its edge drops → the account momentarily looks
+# unlinked. dampingObservations absorbs that; a persistently-behind projector still surfaces, which
+# is an operability property made diagnosable rather than mysterious.
+#
+# Pure read (§1.2, §2.4): opens Findings, no actuator, no write-back. Remediation is an action at
+# AWX or at the IdP, never a graph edit (ADR-0079 INV-2).
+name: awx-account-unlinked
+viewName: awx-users
+mode: facet-observation
+framework: ansible-governance
+severity: warning
+cron: "@every 24h"
+dampingObservations: 2
+environments: [dev]
+requiredRelations:
+  - same-account-as
