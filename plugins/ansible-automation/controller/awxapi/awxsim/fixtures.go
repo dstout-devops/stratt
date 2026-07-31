@@ -56,6 +56,10 @@ type fProject struct {
 	ScmType   string `json:"scm_type"`
 	ScmURL    string `json:"scm_url"`
 	ScmBranch string `json:"scm_branch"`
+	// Projection-only (AWX-001): the commit AWX last synced, and the current sync state.
+	ScmRevision string `json:"scm_revision,omitempty"`
+	Status      string `json:"status,omitempty"`
+	LastUpdated string `json:"last_updated,omitempty"`
 }
 
 type fWorkflowJT struct {
@@ -271,8 +275,15 @@ func seed() *estate {
 
 	// Projects: 1 git (SCM content), 2 manual (no content).
 	e.Projects = []fProject{
-		{ID: 1, Name: "infra", ScmType: "git", ScmURL: "https://github.com/example/infra.git", ScmBranch: "main"},
-		{ID: 2, Name: "local-scripts", ScmType: "", ScmURL: ""},
+		{ID: 1, Name: "infra", ScmType: "git", ScmURL: "https://github.com/example/infra.git", ScmBranch: "main",
+			ScmRevision: "9f1c2d3e4a5b6c7d8e9f0a1b2c3d4e5f60718293", Status: "successful",
+			LastUpdated: "2026-07-30T10:00:00Z"},
+		{ID: 2, Name: "local-scripts", ScmType: "", ScmURL: "", Status: "never updated"},
+		// A clone URL with an embedded PAT — what a real estate contains, because it works and
+		// nobody stopped them. A fixture without one would let a verbatim projection pass (§2.5).
+		{ID: 3, Name: "vendor", ScmType: "git", ScmBranch: "release",
+			ScmURL:      "https://svc-account:ghp_REALTOKENHERE@github.example.com/acme/vendor.git",
+			ScmRevision: "abc0123", Status: "failed"},
 	}
 
 	// Credentials.

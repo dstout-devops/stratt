@@ -1019,7 +1019,10 @@ func run(ctx context.Context, log *slog.Logger) error {
 			return fmt.Errorf("ansible-automation controller plugin dial %s: %w", addr, err)
 		}
 		defer conn.Close()
-		// TEN owned namespaces (AWX-009 added ansible.notification — where AWX sends a job's
+		// ELEVEN owned namespaces (AWX-001/ADR-0154 added ansible.project — the content root a
+		// template runs FROM, carrying scm_revision and an ID-joined `uses-project` edge that
+		// makes ADR-0085's orphan signal diagnosable instead of merely present; its scm_url is
+		// projected with any embedded credential removed, §2.5. AWX-009 added ansible.notification — where AWX sends a job's
 		// outcome, name + driver + config KEY NAMES only, because a Slack webhook URL is
 		// itself a bearer credential; ADR-0133 added ansible.executionenvironment — a
 		// SUPPLY-CHAIN fact; AWX instance groups are deliberately NOT projected, because
@@ -1030,7 +1033,7 @@ func run(ctx context.Context, log *slog.Logger) error {
 		// write-owner, and never read by authz: ADR-0079 INV-3).
 		// ansible.credential is name+kind only (§2.5) so "which templates use this
 		// credential" is a traversal rather than a scan.
-		ansibleSchemes := []string{"ansible.template", "ansible.workflow", "ansible.schedule", "ansible.org", "ansible.team", "ansible.credential", "ansible.user", "ansible.label", "ansible.executionenvironment", "ansible.notification"}
+		ansibleSchemes := []string{"ansible.template", "ansible.workflow", "ansible.schedule", "ansible.org", "ansible.team", "ansible.credential", "ansible.user", "ansible.label", "ansible.executionenvironment", "ansible.notification", "ansible.project"}
 		grant := pluginhost.Grant{
 			PluginIdentity: env("STRATT_ANSIBLE_AUTOMATION_CONTROLLER_PLUGIN_ID", "ansible-automation"),
 			Tier:           pluginhost.Tier(env("STRATT_ANSIBLE_AUTOMATION_CONTROLLER_TIER", "trusted")),

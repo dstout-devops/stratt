@@ -74,7 +74,7 @@ which is which.
 | `organizations`                  | `projected` 🟢  | [types.go:100](../../plugins/ansible-automation/controller/types.go#L100) → `ansible.org`                                                                   |             |
 | `teams`                          | `projected` 🟢  | → `ansible.team` + `has-member` edges (~~AWX-004~~, ADR-0130 D2) — an estate fact, never an authz one                                                       |             |
 | `workflow_job_template_nodes`    | `derived` 🟢 + `adopt-only` ⚪ | The projection now reads them and derives `invokes` + `hasApprovalGate` (~~AWX-002~~, ADR-0129); the DAG's SHAPE stays adopt's, because fidelity is the transform's job and not the mirror's. Nodes as entities booked as **AWX-016** |  |
-| `projects`                       | `adopt-only` 🔴 | ADR-0127 D4 already books `ansible.project` + `scm_revision`; this audit confirms the sizing                                                                | **AWX-001** |
+| `projects`                       | `projected` 🟢 + `adopt-only` ⚪ | → `ansible.project` + the ID-joined `uses-project` edge (2026-07-31, [ADR-0154](../adr/0154-the-awx-project-and-the-orphan-signal-it-repairs.md)). Carries `scm_revision` — the only fact in the mirror saying which BYTES the Controller runs. `scm_url` is projected with any embedded credential removed and `scmUrlRedacted` set, because estates DO put PATs in clone URLs (§2.5) | ~~**AWX-001**~~ |
 | `inventories`                    | `mapped` ⚪     | → **View** ([materialize/views.go](../../plugins/ansible-automation/controller/materialize/views.go)); smart inventories reduce their `host_filter`         |             |
 | `inventory_sources`              | `mapped` ⚪     | → points at the native Syncer for that cloud, never re-implemented as an AWX plugin                                                                         |             |
 | `hosts` (inventory members)      | `mapped` ⚪     | Deliberately never re-projected — that is the writable-CMDB anti-pattern (§1.2); hosts come from their own Syncers                                          |             |
@@ -220,8 +220,8 @@ the cause. Both clients are now defensive.
 
 Most of the difference is correct and intended: `inventories`/`credentials`/`hosts`/`survey_spec` are
 `mapped` — they become Views, CredentialRefs, and `Workflow.inputs` at adopt and were never meant to be
-mirrored as themselves. **Two are not explainable that way**: `projects` (**AWX-001**) and `workflow_nodes`
-(**AWX-002**). Both are estate structure the graph should hold, both are already being fetched and parsed
+mirrored as themselves. **Two were not explainable that way**: `projects` (**AWX-001**, done 2026-07-31)
+and `workflow_nodes` (**AWX-002**, done ADR-0129). Both are estate structure the graph should hold, both are already being fetched and parsed
 by code in the same module, and neither absence appears to have been decided — it reads as the projection
 having been built first and never revisited when the transform grew deeper.
 
@@ -242,8 +242,15 @@ having been built first and never revisited when the transform grew deeper.
   approval-gate fact. The node graph's SHAPE is deliberately still not projected: that is cutover
   fidelity, which adopt reads from AWX directly, and the mirror exists for governance. Costs an **N+1
   read** — one request per workflow, every poll — recorded in the ADR's consequences rather than hidden.
-- **AWX-001 · `ansible.project` + `scm_revision`.** Already booked by ADR-0127 D4 and unchanged by this
-  audit — it repairs ADR-0085's soundness, and it deserves its own ADR.
+- ~~**AWX-001 · `ansible.project` + `scm_revision`.**~~ **Done (2026-07-31, ADR-0154)**, and it did
+  repair ADR-0085's soundness rather than merely add breadth. The orphan-template Baseline reads the
+  presence of the `runs` edge, whose target is keyed by the Project NAME concatenated with a playbook
+  path and matched against an operator-set env var — so a broken convention and genuinely-unseen
+  content produced the **identical** observation. The template now also carries `uses-project`, joined
+  on the ID AWX issued, which cannot silently mismatch: `uses-project` present + `runs` dropped now
+  means "the content root is the missing half", where before it meant nothing in particular.
+  Still open from that thread: comparing `scm_revision` to what the content half observed, which
+  needs the content half to observe its own checkout first.
 
 **Tier 2 — the authorization picture:**
 

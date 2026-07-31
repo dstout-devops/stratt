@@ -151,6 +151,29 @@ func (k *configKeys) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
+// Project is an AWX Project — the content root a job template runs FROM (AWX-001, ADR-0154).
+//
+// It is the last object the mirror could not see, and the audit ranked it Tier 1 for a reason that
+// is not breadth: ADR-0085's orphan-template Baseline reads the presence of a cross-source `runs`
+// edge whose target is keyed by the Project's NAME concatenated with a playbook path, matched
+// against an operator-set env var. When that convention is broken the edge drops — byte-identically
+// to it dropping because the content genuinely is not projected. One signal, two very different
+// causes. Projecting the Project gives the template an ID-JOINED companion edge, so the two cases
+// stop looking the same (§1.8).
+//
+// ScmRevision is the fact that binds catalogue to execution: the commit AWX last synced, and the
+// only thing in the mirror that says which BYTES the Controller is actually running.
+type Project struct {
+	ID          int    `json:"id"`
+	Name        string `json:"name"`
+	ScmType     string `json:"scm_type"` // git | hg | svn | archive | "" (manual)
+	ScmURL      string `json:"scm_url"`
+	ScmBranch   string `json:"scm_branch"`
+	ScmRevision string `json:"scm_revision"`
+	Status      string `json:"status"`
+	LastUpdated string `json:"last_updated"`
+}
+
 // Label is an AWX label — the operator's own grouping vocabulary (ADR-0132 D1).
 type Label struct {
 	ID            int    `json:"id"`
@@ -282,6 +305,7 @@ type Snapshot struct {
 	Labels        []Label
 	ExecutionEnvs []ExecutionEnvironment
 	Notifications []NotificationTemplate
+	Projects      []Project
 	// WorkflowNodes by workflow_job_template id (ADR-0129). AWX has no bulk endpoint, so
 	// this is an N+1 read: one request per workflow, every poll.
 	WorkflowNodes map[int][]WorkflowNode
@@ -401,6 +425,13 @@ func (c *Client) Enumerate(ctx context.Context) (*Snapshot, error) {
 		return nil, err
 	}
 	if snap.ExecutionEnvs, err = list[ExecutionEnvironment](ctx, c, "/execution_environments/"); err != nil {
+		return nil, err
+	}
+	// A COLLECTION read (AWX-001): O(1) per poll. Project SYNC JOBS (/project_updates/) are
+	// deliberately NOT read — that is run history, which §3 forbids mirroring, and status +
+	// last_updated already carry the current state (the same current-not-history line
+	// ADR-0128 D3 drew for templates).
+	if snap.Projects, err = list[Project](ctx, c, "/projects/"); err != nil {
 		return nil, err
 	}
 	// A COLLECTION read (AWX-009): O(1) per poll. The ATTACHMENTS — which template notifies

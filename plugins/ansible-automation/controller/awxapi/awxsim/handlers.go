@@ -25,6 +25,12 @@ func (s *Sim) notifications(w http.ResponseWriter, r *http.Request) {
 	paged(s, w, r, "/api/v2/notification_templates/", s.data.Notifications)
 }
 
+// projects serves the LIST. The sim served only the per-id detail until AWX-001, because
+// until then only the ADOPT path read a project — the projection never did.
+func (s *Sim) projects(w http.ResponseWriter, r *http.Request) {
+	paged(s, w, r, "/api/v2/projects/", s.data.Projects)
+}
+
 func (s *Sim) labels(w http.ResponseWriter, r *http.Request) {
 	paged(s, w, r, "/api/v2/labels/", s.data.Labels)
 }

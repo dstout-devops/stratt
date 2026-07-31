@@ -68,6 +68,13 @@ func fakeAWX(t *testing.T) *httptest.Server {
 	mux.HandleFunc("/api/v2/execution_environments/", func(w http.ResponseWriter, r *http.Request) {
 		w.Write(page([]map[string]any{{"id": 80, "name": "pinned-ee", "image": "quay.io/x@sha256:" + strings.Repeat("a", 64)}}))
 	})
+	mux.HandleFunc("/api/v2/projects/", func(w http.ResponseWriter, r *http.Request) {
+		w.Write(page([]map[string]any{{
+			"id": 1, "name": "infra", "scm_type": "git",
+			"scm_url": "https://github.com/example/infra.git", "scm_branch": "main",
+			"scm_revision": "9f1c2d3", "status": "successful",
+		}}))
+	})
 	mux.HandleFunc("/api/v2/notification_templates/", func(w http.ResponseWriter, r *http.Request) {
 		w.Write(page([]map[string]any{{
 			"id": 90, "name": "slack-ops", "notification_type": "slack",

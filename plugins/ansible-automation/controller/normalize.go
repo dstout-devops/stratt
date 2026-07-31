@@ -48,6 +48,11 @@ const (
 	// credential — a Slack incoming-webhook URL is a bearer secret. See NotificationTemplate,
 	// whose type has no field the values could live in.
 	KindNotification = "ansible.notification"
+	// KindProject mirrors an AWX Project — the content root a template runs FROM (AWX-001,
+	// ADR-0154). It carries scm_revision, the only fact in the mirror that says which BYTES
+	// the Controller is running, and it is what makes ADR-0085's orphan signal diagnosable:
+	// the template→project edge joins on an ID AWX issued, not on a name a human aligned.
+	KindProject = "ansible.project"
 
 	// schemePlaybook is the ansible-project Syncer's OWNED kind — referenced here only
 	// as a cross-source relation TARGET (the `runs` edge), never owned or written by AWX.
@@ -92,6 +97,14 @@ func (c *Client) Normalize(snap *Snapshot) ([]*pluginv1.ObservedEntity, error) {
 			return nil, err
 		}
 		rels := append(orgRel(jt.SummaryFields.Organization.ID), runsRel(jt)...)
+		// The ID-joined companion to the name-joined `runs` edge (ADR-0154 D1). This one cannot
+		// silently mismatch, which is what lets a dropped `runs` edge be diagnosed rather than
+		// merely noticed.
+		if pr := jt.SummaryFields.Project; pr.ID != 0 {
+			rels = append(rels, &pluginv1.ObservedRelation{
+				Type: "uses-project", ToScheme: KindProject, ToValue: c.qualify(pr.ID),
+			})
+		}
 		rels = append(rels, c.credentialRels(jt)...)
 		rels = append(rels, c.labelRels(jt.SummaryFields.Labels)...)
 		if ee := jt.SummaryFields.ExecutionEnvironment; ee.ID != 0 {
@@ -105,6 +118,30 @@ func (c *Client) Normalize(snap *Snapshot) ([]*pluginv1.ObservedEntity, error) {
 			Labels:       labels(jt.Name, jt.SummaryFields.Organization.Name),
 			Facets:       map[string][]byte{KindTemplate: facet},
 			Relations:    rels,
+		})
+	}
+
+	for _, pr := range snap.Projects {
+		scmURL, redacted := redactSCMURL(pr.ScmURL)
+		facet, err := json.Marshal(map[string]any{
+			"name": pr.Name, "scmType": pr.ScmType, "scmBranch": pr.ScmBranch,
+			"scmUrl": scmURL, "scmUrlRedacted": redacted,
+			// The commit AWX last synced — catalogue bound to execution. Projected as an
+			// OBSERVATION and compared to nothing: the content half reads a filesystem and
+			// projects no revision, so there is no second value to diff, and claiming a drift
+			// check we cannot compute would be the plausible-wrong-answer this repo refuses.
+			"scmRevision": pr.ScmRevision,
+			"status":      pr.Status,
+			"lastUpdated": pr.LastUpdated,
+		})
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, &pluginv1.ObservedEntity{
+			Kind:         KindProject,
+			IdentityKeys: map[string]string{KindProject: c.qualify(pr.ID)},
+			Labels:       labels(pr.Name, ""),
+			Facets:       map[string][]byte{KindProject: facet},
 		})
 	}
 

@@ -1,0 +1,34 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "stratt:contract:facets/ansible.project:v1",
+  "title": "ansible.project Facet",
+  "description": "The OBSERVED definition of an AWX/AAP Project — the content root a job template runs FROM — projected read-only by the ansible-automation Connector's controller half (§1.2, AWX-001, ADR-0154). An observed foreign object, never a Stratt Named Kind. IT EXISTS TO REPAIR A SIGNAL, not merely to add breadth: ADR-0085's orphan-template Baseline reads the presence of the cross-source `ansible.template --runs--> ansible.playbook` edge, whose target is keyed by the Project's NAME concatenated with a playbook path and matched against an operator-set STRATT_ANSIBLE_CONTENT_ID. When that convention is broken the edge drops — byte-identically to it dropping because the content genuinely is not projected. One signal, two very different causes, and no way to tell them apart (§1.8). The template now also carries `uses-project`, joined on the ID AWX ISSUED rather than on a name a human aligned, so a dropped `runs` edge can be diagnosed: the project is right there with its scmUrl and scmRevision, and the missing half is the content root. scmRevision is the commit AWX last synced — the only fact in the mirror that says which BYTES the Controller is running, binding catalogue to execution (ADR-0127 D4's phrase). It is projected as an OBSERVATION and compared to nothing: the content half reads a filesystem and projects no revision, so there is no second value to diff, and claiming a drift check that cannot be computed is the plausible-wrong-answer this repo refuses; the comparison is a follow-up, booked rather than implied. §2.5 ON scmUrl: AWX stores repository credentials as a separate object, but a real estate routinely embeds a PAT in the clone URL (https://user:token@host/…), so the userinfo is REMOVED and scmUrlRedacted says so. Dropping the URL entirely would lose which repository — the fact most needed — to guard a minority case; projecting it verbatim would import live tokens. The boolean matters as much as the redaction: silently stripping would leave a reader unable to tell a clean URL from a scrubbed one, and 'this repository is cloned with an embedded credential' is itself worth surfacing. A value that cannot be parsed AND contains an `@` is withheld entirely, because a value that cannot be proven safe is not one to project. Project SYNC JOBS are deliberately not mirrored (run history, §3); status + lastUpdated carry the current state, the same current-not-history line ADR-0128 D3 drew for templates. Closed (§9).",
+  "type": "object",
+  "properties": {
+    "name": { "type": "string" },
+    "scmType": {
+      "type": "string",
+      "description": "git | hg | svn | archive, or empty for a MANUAL project (a directory on the Controller, which by definition no content root mirrors)"
+    },
+    "scmUrl": {
+      "type": "string",
+      "description": "the clone URL with any embedded credential removed (§2.5); empty when the value could not be proven free of one"
+    },
+    "scmUrlRedacted": {
+      "type": "boolean",
+      "description": "something was taken out of scmUrl — a credential was embedded in it, or the value was unparseable and withheld. Its own finding, not just a caveat."
+    },
+    "scmBranch": { "type": "string" },
+    "scmRevision": {
+      "type": "string",
+      "description": "the commit AWX last synced — which BYTES the Controller is running. Observed, compared to nothing."
+    },
+    "status": {
+      "type": "string",
+      "description": "the project's current sync state (successful | failed | never updated | …) — current, never history"
+    },
+    "lastUpdated": { "type": "string", "description": "RFC3339 of the last sync" }
+  },
+  "required": ["name"],
+  "additionalProperties": false
+}

@@ -57,6 +57,7 @@ func TestProjectionAgainstAwxsim(t *testing.T) {
 		{"labels", len(snap.Labels), 3},
 		{"execution environments", len(snap.ExecutionEnvs), 2},
 		{"notification templates", len(snap.Notifications), 3},
+		{"projects", len(snap.Projects), 3},
 	} {
 		if tc.got != tc.want {
 			t.Errorf("%s enumerated = %d, want %d", tc.what, tc.got, tc.want)
@@ -67,9 +68,10 @@ func TestProjectionAgainstAwxsim(t *testing.T) {
 	if err != nil {
 		t.Fatalf("normalize: %v", err)
 	}
-	if len(ents) != 25 {
-		t.Fatalf("projected %d entities, want 25 (2 templates + 1 workflow + 4 schedules + 2 orgs + 2 teams + "+
-			"2 credentials + 4 users + 3 labels + 2 execution environments + 3 notification templates)", len(ents))
+	if len(ents) != 28 {
+		t.Fatalf("projected %d entities, want 28 (2 templates + 1 workflow + 4 schedules + 2 orgs + 2 teams + "+
+			"2 credentials + 4 users + 3 labels + 2 execution environments + 3 notification templates + "+
+			"3 projects)", len(ents))
 	}
 
 	byKind := map[string]int{}

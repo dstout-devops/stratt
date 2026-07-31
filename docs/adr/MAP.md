@@ -16,12 +16,12 @@ graph TD
   authz_identity["authz-identity<br/><small>0009 0028 0035 0079 0101 0122<br/>0130</small>"]
   capability_framework["capability-framework<br/><small>0100 0104 0105 0106 0107 0110<br/>0111 0112 0113 0114 0135 0145<br/>0146 0151</small>"]
   certificates_pki["certificates-pki<br/><small>0030 0043 0050 0098 0106 0150</small>"]
-  connectors["connectors<br/><small>0007 0014 0025 0026 0037 0038<br/>0039 0045 0086 0087 0088 0089<br/>0095 0097 0099 0113 0114 0115<br/>0127 0128 0129 0130 0131 0132<br/>0133 0136 0144 0146</small>"]
+  connectors["connectors<br/><small>0007 0014 0025 0026 0037 0038<br/>0039 0045 0086 0087 0088 0089<br/>0095 0097 0099 0113 0114 0115<br/>0127 0128 0129 0130 0131 0132<br/>0133 0136 0144 0146 0154</small>"]
   credentials_secrets["credentials-secrets<br/><small>0009 0029 0052 0094 0098 0099<br/>0100 0106 0125 0126 0153</small>"]
   estate_as_code["estate-as-code<br/><small>0055 0056 0057 0103 0113 0116<br/>0118 0119 0120 0122 0123 0132<br/>0134 0135 0136 0137 0138 0139<br/>0142 0146 0147 0148 0151 0152</small>"]
   findings_drift["findings-drift<br/><small>0019 0020 0033 0043 0080 0085<br/>0128 0129 0130 0133 0148 0150</small>"]
   foundation["foundation<br/><small>0001 0002 0004 0005 0006 0008<br/>0108 0109 0116 0137 0138 0141</small>"]
-  graph_model["graph-model<br/><small>0015 0017 0041 0042 0059 0060<br/>0079 0080 0081 0082 0084 0085<br/>0096 0114 0115 0119 0120 0123<br/>0126 0127 0128 0129 0130 0132<br/>0133 0143 0144 0147 0152 0153</small>"]
+  graph_model["graph-model<br/><small>0015 0017 0041 0042 0059 0060<br/>0079 0080 0081 0082 0084 0085<br/>0096 0114 0115 0119 0120 0123<br/>0126 0127 0128 0129 0130 0132<br/>0133 0143 0144 0147 0152 0153<br/>0154</small>"]
   intent_compiler["intent-compiler<br/><small>0023 0030 0036 0055 0058 0083<br/>0085 0114 0118 0119 0123 0148<br/>0150 0152</small>"]
   orchestration["orchestration<br/><small>0010 0011 0018 0027 0031 0063<br/>0118 0122 0125 0134 0139 0140</small>"]
   plugin_port["plugin-port<br/><small>0046 0047 0048 0049 0051 0053<br/>0054 0103 0117 0121 0124 0125<br/>0127 0131 0137 0138 0140 0141<br/>0145 0149</small>"]
@@ -205,6 +205,7 @@ Connectors & Syncers — SoR ingest breadth, the Syncer SDK, adopt/AWX-import.
 - [ADR-0136](0136-superseded-versus-driven.md) — Superseded, not integrated: which external systems are terminal and which are forever
 - [ADR-0144](0144-the-registered-reach-coordinate.md) — The reach coordinate can be REGISTERED: `Intent/DnsRecord` gets a provider, and a declared name becomes a caused fact
 - [ADR-0146](0146-the-coordinate-is-load-bearing-or-refused.md) — A provider coordinate is load-bearing or refused: the region leg, without re-deciding where a region lives
+- [ADR-0154](0154-the-awx-project-and-the-orphan-signal-it-repairs.md) — The AWX Project, and the orphan signal it repairs
 
 ### credentials-secrets
 
@@ -327,6 +328,7 @@ Graph model — Entity/Facet/Relation/Contract primitives, projection & liveness
 - [ADR-0147](0147-placement-resolves-to-a-provider-native-identity.md) — A declared placement resolves to a provider-native identity, or the build is not offered
 - [ADR-0152](0152-a-facet-claim-is-qualified.md) — A Facet claim is qualified: many managed applications on one host
 - [ADR-0153](0153-a-connection-type-and-a-password-that-is-only-ever-a-path.md) — A connection type, and a password that is only ever a path
+- [ADR-0154](0154-the-awx-project-and-the-orphan-signal-it-repairs.md) — The AWX Project, and the orphan signal it repairs
 
 ### intent-compiler
 
@@ -653,3 +655,4 @@ UI — React shell, schema-driven rendering, Views, descent, the first-party cli
 | [0151](0151-substrate-is-a-property-of-the-provider.md) | capability-framework, estate-as-code, provisioning |
 | [0152](0152-a-facet-claim-is-qualified.md) | estate-as-code, graph-model, intent-compiler |
 | [0153](0153-a-connection-type-and-a-password-that-is-only-ever-a-path.md) | actuators, credentials-secrets, graph-model |
+| [0154](0154-the-awx-project-and-the-orphan-signal-it-repairs.md) | connectors, graph-model |

@@ -326,6 +326,46 @@ the safe one. Scope today is `kubecompute-build`, the only Workflow forwarding `
 as other builders begin to, they either declare what they read or are correctly reported as reading
 none.
 
+### AWX-001 · the Project, and the orphan signal it repairs (ADR-0154, 2026-07-31)
+
+The last `adopt-only` 🔴 in the AWX object-model's projection column, and the audit's own Tier 1 — for
+a reason that is not breadth. **ADR-0085's orphan-template Baseline was ambiguous by construction.**
+It reads the presence of `ansible.template --runs--> ansible.playbook`, whose target is keyed by the
+AWX Project's NAME concatenated with a playbook path and matched against the operator-set
+`STRATT_ANSIBLE_CONTENT_ID`. So the edge rests on a convention someone types into an env var — and
+when that convention is broken the edge drops, **byte-identically** to it dropping because the
+content genuinely is not projected. One signal, two very different causes, no way to tell them apart.
+
+`ansible.project` gives the template an ID-JOINED companion, `uses-project`, on the identifier AWX
+issued rather than a name a human aligned. `uses-project` present with `runs` dropped now says "the
+content root is the missing half, and here is its scm_url and revision"; `uses-project` absent is a
+different diagnosis entirely. The `runs` edge is deliberately NOT re-keyed — the content half
+identifies playbooks by project id and relative path and knows nothing of AWX ids, so translating
+would have Stratt assert a correspondence neither system states (§1.2). The name join was never
+wrong; it lacked a companion.
+
+**`scm_revision` binds catalogue to execution** — the only fact in the mirror that says which BYTES
+the Controller is running. It is projected and **compared to nothing**: the content half reads a
+filesystem and projects no revision, so there is no second value to diff, and claiming a drift check
+that cannot be computed is the plausible-wrong-answer this repo keeps refusing. The comparison is
+booked, not implied.
+
+**§2.5, fifth application, and this one has a new shape.** AWX stores repository credentials as a
+separate object — but a real estate routinely embeds a PAT directly in the clone URL, because it
+works and nobody stopped them. Dropping `scm_url` would lose *which repository*, the fact most
+needed, to guard a minority case; projecting it verbatim would import live tokens. So the userinfo is
+removed and `scmUrlRedacted` says so — and the boolean matters as much as the redaction, because
+silently stripping would leave a reader unable to tell a clean URL from a scrubbed one, and "this
+repository is cloned with an embedded credential" is its own finding. A bare username is NOT flagged
+(the flag must mean a credential was present, not that there was an `@`), and a value that cannot be
+parsed but contains an `@` is withheld entirely — a value that cannot be proven safe is not one to
+project. The simulator seeds a PAT-bearing URL so a verbatim projection has something to fail on.
+
+Poll cost 10 → 11 collections, moved deliberately; project SYNC JOBS are not read, because that is
+run history (§3) and `status` + `lastUpdated` already carry current state. The disjoint-namespace
+guard caught the manifest contract again, which is now twice in three commits that it has earned its
+literal counts.
+
 ### ANS Tier 3 — and the config observation that turned out to be a bug fix (2026-07-31)
 
 `ansible.cfg` (ANS-005), the repo's own modules and plugins (ANS-006), and the root that IS a
