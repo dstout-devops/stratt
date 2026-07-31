@@ -1,0 +1,48 @@
+# Ansible content for the `ansible-kube` EE variant (ADR-0117 D3, ADR-0156).
+#
+# WHY THIS VARIANT EXISTS. ADR-0156 made the connection method a property of the SUBSTRATE,
+# observed by the Syncer that built the host: a pod is reached by `kubectl exec`, which needs
+# NOTHING in the guest. That retires a real coupling — kubecompute had to bake sshd and
+# authorized keys into every pod it built, purely because the connection method had been assumed.
+#
+# But kubernetes.core is not in ansible-core, and the connection plugin also SHELLS OUT to the
+# `kubectl` binary. Both are the image's job, and the shim refuses the transport before a play
+# runs when either is missing (D6) — so without this variant the transport is correctly, and
+# uselessly, refused everywhere.
+#
+# THE BINARY IS NOT DECLARED HERE, and that is deliberate rather than an omission: this file is a
+# REAL Galaxy requirements.yml, the same format ansible-galaxy and ansible-builder consume
+# (§3 compatibility, §1.1 — Stratt invents no content format). A binary has no place in it. It is
+# an image build arg instead, pinned by version AND sha256:
+#
+#     task dev:ee-kube:build
+#
+# EDITING THIS FILE MEANS RELOCKING IT:
+#     task ee:content:lock CONTENT=kube.requirements.yml
+
+collections:
+  # kubernetes.core — the `kubectl` CONNECTION plugin (plus the k8s modules a play may use).
+  # This is what makes ADR-0156's kubectl transport more than a Facet value.
+  - name: kubernetes.core
+    version: "6.5.0"
+
+  # ── THE PLATFORM FLOOR, repeated ─────────────────────────────────────────────────────
+  # Everything below is ee/content/platform.requirements.yml, copied at the same versions.
+  # `ee/content.py verify` (so `task ci`) fails if a variant drops or re-pins a floor entry:
+  # a variant ADDS capability and never subtracts it.
+
+  # community.general — the other half of `ansible.builtin.package` and
+  # `ansible.builtin.package_facts`. Both dispatch on the target's package manager, and both fall
+  # outside ansible-core the moment the target is not apt- or yum-based. Without this the platform
+  # cannot install a package on Alpine, SUSE, Arch or FreeBSD at all, which makes "install the
+  # application" a claim that holds only on the distros nobody checked.
+  #
+  # Pinned at the current release (2026-07-13), which requires ansible-core >= 2.18 against the
+  # image's >= 2.19 band (ee/Dockerfile) — evergreen §1.7 wants the current line, and content is
+  # pinned exactly because reproducibility of what a Run executed is what ADR-0117 D3 buys.
+  - name: community.general
+    version: "13.2.0"
+
+# roles: — installed identically and deliberately EMPTY, for the same reason crypto's is: pinning
+# content no shipping Contract demands is inventory to maintain for no consumer.
+roles: []

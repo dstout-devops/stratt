@@ -2384,6 +2384,27 @@ tasks:
       - docker build --build-arg GO_PARALLEL={{.GO_PARALLEL}} --build-arg EE_CONTENT=crypto.requirements.yml -f ee/Dockerfile -t stratt-ee-crypto:dev .
       - go run sigs.k8s.io/kind@v{{.KIND_VER}} load docker-image stratt-ee-crypto:dev --name {{.KIND_CLUSTER}}
 
+  dev:ee-kube:build:
+    desc: Build the kube-content EE variant (kubernetes.core + the kubectl binary, ADR-0156) and load it into kind
+    vars:
+      # The kubectl version is the REPO-WIDE KUBECTL_VER (already pinned within skew of the kind
+      # node, §1.7) — not a second copy. A divergent second pin is the shape this repo keeps
+      # paying for, and it would silently put a different kubectl in the EE than the one the
+      # tooling uses. Only the checksum is local, because only this build downloads the binary:
+      # a version bounds which RELEASE, the sha256 bounds which BYTES. Bump it with KUBECTL_VER,
+      # from https://dl.k8s.io/release/v<VER>/bin/linux/amd64/kubectl.sha256
+      KUBECTL_SHA: "7721f265e18709862655affba5343e85e1980639395d5754473dafaadcaa69e3"
+    cmds:
+      # The image that makes ADR-0156's `kubectl` transport usable. Without it the shim REFUSES
+      # the transport before the play runs (D6) — correctly, since kubernetes.core is not in
+      # ansible-core and the connection plugin execs a binary the base image does not carry.
+      #
+      # This is the EE that lets a kubecompute pod be converged WITH NO sshd IN IT.
+      - docker build --build-arg GO_PARALLEL={{.GO_PARALLEL}} --build-arg EE_CONTENT=kube.requirements.yml
+        --build-arg EE_KUBECTL_VERSION={{.KUBECTL_VER}} --build-arg EE_KUBECTL_SHA256={{.KUBECTL_SHA}}
+        -f ee/Dockerfile -t stratt-ee-kube:dev .
+      - go run sigs.k8s.io/kind@v{{.KIND_VER}} load docker-image stratt-ee-kube:dev --name {{.KIND_CLUSTER}}
+
   dev:ee-network:build:
     desc: Build the network-content EE variant (ansible.netcommon connection plugins, ADR-0153)
     cmds:

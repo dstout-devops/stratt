@@ -112,6 +112,24 @@ RUN python /usr/local/bin/stratt-ee-content install \
       ${EE_CONTENT:+/usr/share/stratt/ee-content/${EE_CONTENT}} \
     && chmod -R a+rX /usr/share/ansible
 
+# ── Control-node BINARIES some connection plugins exec (ADR-0156 D6) ──────────────────────
+# A collection is not always enough. kubernetes.core.kubectl SHELLS OUT to `kubectl`, and
+# amazon.aws.aws_ssm to `session-manager-plugin` — so an image can carry the collection and
+# still be unable to make the connection. The shim checks both axes before a play runs; this
+# is where the second axis gets satisfied.
+#
+# DECLARED PER IMAGE, exactly as content is: empty by default, so the base EE stays lean and a
+# variant that needs the binary asks for it by version. Nobody gets 50MB of kubectl by not
+# deciding — the same rule ANS-012 set when an empty EE_CONTENT turned out to be a build-arg
+# default rather than a choice.
+#
+# PINNED BY DIGEST, not just by version, and verified before it is trusted. A version bounds
+# WHICH release; only the checksum bounds WHICH BYTES — the identical argument ee/content.py's
+# lockfile makes for collections, applied to a binary downloaded over the network at build time.
+ARG EE_KUBECTL_VERSION=""
+ARG EE_KUBECTL_SHA256=""
+RUN if [ -n "${EE_KUBECTL_VERSION}" ]; then       set -eu;       arch="$(dpkg --print-architecture)";       url="https://dl.k8s.io/release/v${EE_KUBECTL_VERSION}/bin/linux/${arch}/kubectl";       echo "stratt-ee: fetching kubectl ${EE_KUBECTL_VERSION} (${arch})";       python -c "import urllib.request,sys; urllib.request.urlretrieve(sys.argv[1], '/usr/local/bin/kubectl')" "$url";       if [ -z "${EE_KUBECTL_SHA256}" ]; then         echo "stratt-ee: EE_KUBECTL_VERSION is set but EE_KUBECTL_SHA256 is not — a version bounds which";         echo "           RELEASE, only the checksum bounds which BYTES, and an unverified binary makes the";         echo "           image digest an unreliable claim about what a Run executed (ADR-0117 D3's argument)";         exit 1;       fi;       echo "${EE_KUBECTL_SHA256}  /usr/local/bin/kubectl" | sha256sum -c -;       chmod 0755 /usr/local/bin/kubectl;       kubectl version --client=true --output=yaml | head -3;     fi
+
 # The port-speaking shims (ADR-0051/0046): the EE-Job transport's pod commands. Each
 # reads /runner/stratt/request.json (the sovereign ApplyRequest) and emits typed
 # ApplyResponses. stratt-ansible runs ansible-runner; stratt-script runs user scripts.
