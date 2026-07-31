@@ -195,18 +195,17 @@ what the demo contributes is the **scenario**. Copying those declarations in wou
 divergent-second-copy defect this repo keeps paying for — the demo would pass against its own copy of
 a builder while the shipped one rotted.
 
-Two costs of that admission are visible in the tree and worth reading, because they are honest
-findings rather than boilerplate:
+Building it found that a plugin's estate was **not admittable standalone** — `plugins/ansible/estate`
+shipped four Workflows and two Triggers that named the *reference* estate's environment, Views and
+Facet namespaces, so any other estate admitting the plugin had to mirror all of them first. That is
+the opposite of what admission is for, and it is why [app-cert](../app-cert/README.md) admits ansible
+`contractsOnly`.
 
-- [`estate/environments/prod.yaml`](estate/environments/prod.yaml) exists only because the ansible
-  plugin ships prod-scoped Triggers;
-- [`estate/views/plugin-owned-secure-hosts.yaml`](estate/views/plugin-owned-secure-hosts.yaml) and
-  its sibling exist only because four of that plugin's Workflows name Views from the _reference_
-  estate.
-
-A plugin owning its Actuator, Workflows, Triggers and content (ADR-0137 D1) does not license it to
-presume its adopter's environments and View names. Both files say so at length, and the fix — moving
-those estate-shaped declarations out of the plugin tree — is booked rather than improvised here.
+**Fixed at the source rather than worked around here.** Those six declarations are the reference
+estate's compositions and now live in `estate/`; the plugin keeps what is genuinely its own — the
+Actuators, the content, and the converge recipes that name no View at all. This demo consequently
+declares no placeholder environment and no borrowed Views, which is what a self-contained estate
+should look like.
 
 The one genuine duplicate is [`estate/workflows/cert-issue.yaml`](estate/workflows/cert-issue.yaml),
 and its header explains why it has no shippable home: a Workflow that composes two plugins may live

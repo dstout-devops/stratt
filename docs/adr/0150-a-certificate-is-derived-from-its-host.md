@@ -1,11 +1,25 @@
 # ADR 0150 — A certificate is derived from its host: per-Entity template resolution and entity-scoped remediation
 
-- **Status:** **Proposed** (2026-07-30, steward) — **D1–D5 implemented and LIVE-PROVEN**; D6 is a
-  scope statement. One decision was amended by implementing it (D5, `cert.presented` is singular —
-  recorded in place rather than rewritten). Prior-art
-  scan done by hand (this session's rules bar the subagent). **Two reviews are OWED before this can
-  move to Accepted and are called out in D5/D6:** `vocabulary-linter` on the new facet namespace and
-  the `entity` namespace token, and `charter-guardian` on the §2.4 resolution rule. No new
+- **Status:** **Proposed** (2026-07-30, steward) — **D1–D5 implemented and LIVE-PROVEN**, and now
+  live-proven a second time against a host Stratt itself BUILT (see below); D6 is a scope statement.
+  One decision was amended by implementing it (D5, `cert.presented` is singular — recorded in place
+  rather than rewritten). Prior-art scan done by hand (this session's rules bar the subagent).
+  **STILL PROPOSED, AND THE BLOCKER IS UNCHANGED: two reviews are OWED and neither has run.**
+  `vocabulary-linter` on the new facet namespace and the `entity` namespace token, and
+  `charter-guardian` on the §2.4 resolution rule — both called out in D5/D6. Session rules bar the
+  subagents, so they remain outstanding; more implementation evidence does not substitute for a
+  review this ADR asked for in writing, and flipping it on the strength of a passing demo would be
+  exactly the "green run therefore correct" move the reviews exist to catch.
+- **Live proof (2026-07-31), on a host with no hand-declared existence:**
+  [demos/region-to-cert](../../demos/region-to-cert/README.md) builds a host from an `Intent/Compute`,
+  and the certificate leg then runs against it with nothing naming it anywhere. **D1** — the runner
+  asserts the remediation PREVIEW carries `commonName=web-01.stratt-hosts.svc.cluster.local`, resolved
+  per-Entity from that host's own `mgmt.address`, before launching: one Intent covering a fleet, with
+  the subject derived rather than authored. **D5** — `cert.presented` is parsed off the file that
+  landed on the target (`CN=web-01…`, `issuer=Stratt Dev Root CA`, `issuer != subject`), so the
+  renewal Baseline observes what is DEPLOYED rather than what was ordered, and the Finding resolves.
+  **D3** — the remediation converged the one host that drifted. The key was generated on the target
+  at mode `0600` and never crossed the wire. No new
   dependency. One new Facet namespace, one new template namespace, no new Named Kind, no migration.
 - **Date:** 2026-07-30
 - **Deciders:** steward

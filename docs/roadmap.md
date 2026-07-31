@@ -252,16 +252,19 @@ for their standalone image builds; and floci's healthcheck probed with a `wget` 
 
 Four findings that are real, are not demo bugs, and were each deliberately **not** fixed inside a demo:
 
-1. **A plugin's estate is not admittable standalone.** `plugins/ansible/estate` ships Triggers scoped
-   `environments: [prod]` and four Workflows naming `viewName: secure-hosts` / `web-hosts` — an
-   environment and two Views belonging to the **reference** estate. Any other estate admitting that
-   plugin must first mirror all four names or the load fails. ADR-0137 D1 says a plugin owns its
-   Actuator, Workflows, Triggers and content; it does not license a plugin to presume its adopter's
-   scopes. The fix is to move those estate-shaped declarations out of the plugin tree — which changes
-   what the reference estate's Assignments bind to, so it needs its own review. Evidence sits in the
-   demo as [`environments/prod.yaml`](../demos/region-to-cert/estate/environments/prod.yaml) and
-   [`views/plugin-owned-secure-hosts.yaml`](../demos/region-to-cert/estate/views/plugin-owned-secure-hosts.yaml),
-   both of which exist for no other reason and say so.
+1. ~~**A plugin's estate is not admittable standalone.**~~ **FIXED (2026-07-31).**
+   `plugins/ansible/estate` shipped Triggers scoped `environments: [prod]` and four Workflows naming
+   `viewName: secure-hosts` / `web-hosts` — an environment and two Views belonging to the
+   **reference** estate — so any other estate admitting that plugin had to mirror all four names or
+   fail to load. The `facetWriteScope` check below then found a third face of the same coupling: the
+   two collectors write `access.grants` and `fileset.content`, namespaces only the reference estate
+   owns. ADR-0137 D1 says a plugin owns its Actuator, Workflows, Triggers and content; it does not
+   license a plugin to presume its adopter's scopes. All six declarations are the reference estate's
+   own compositions and now live in `estate/{workflows,triggers}/`, with a single consumer each
+   (`estate/blueprints/{access,fileset}.yaml`) and no `remediates` map advertising them. The plugin
+   keeps what is genuinely its own — Actuators, content, and the converge recipes that name no View.
+   The capstone's three placeholder declarations were deleted with it.
+
 2. **A cross-plugin composed Workflow has no shippable home.** `cert-issue` composes ansible and
    openbao, so `task plugins:boundary` correctly refuses to let it live in either plugin — and there
    is nowhere else for it to travel. Every adopting estate therefore hand-copies it: the reference
@@ -269,13 +272,21 @@ Four findings that are real, are not demo bugs, and were each deliberately **not
    divergent-second-copy shape this repo keeps paying for, arriving through a door the boundary rule
    itself opened. The fix is a home for compositions — a pack an estate installs (ADR-0033's
    materialize-into-operator-Git move) rather than a file every adopter retypes.
-3. **`facetWriteScope` can name a namespace with no registered owner, and the Run dies after the
-   gate.** `cert-issue`'s `deliver` Step scopes `fileset.content`, which has an owner in the reference
-   estate only because an unrelated `web-files` Assignment declares one. Elsewhere:
-   `facet namespace fileset.content has no registered owner (charter §2.1: registration precedes writes)`
-   — correct, and met by an operator who has just approved a build. This is **statically checkable**,
-   and it is the third instance of one class: ADR-0145 added the same check for `provisions`, CERT-1
-   added it for `remediates`. It should be added for `facetWriteScope`, and probably generalised.
+3. ~~**`facetWriteScope` can name a namespace with no registered owner, and the Run dies after the
+   gate.**~~ **FIXED (2026-07-31) — `checkFacetWriteScopeOwners`, and the class is now closed three
+   for three.** ADR-0145 added the check for `provisions`, CERT-1 for `remediates`, this one for
+   `facetWriteScope`. It mirrors the runtime's three ownership sources rather than inventing a
+   fourth: a Blueprint route **that remediates** (a pure observation never seizes write-ownership,
+   matching `compiler.resolveOwnership`), a **dialled** provider's `facetNamespaces`, and the
+   namespaces core registers at boot — the last now read from `types` by both the daemon and the
+   check, so the two cannot drift about what is owned.
+   **The discriminator that makes it useful:** an EE-Job Actuator's `facetNamespaces` is a write
+   CEILING, not a claim. `ansible-certificate` declares `[fileset.content, cert.presented]` and owns
+   neither, so a naive "any facetNamespaces" version would have passed the very estate that failed
+   live. `address` vs `image` is the whole test, and `TestEEJobActuatorCeilingIsNotOwnership` pins it.
+   Deliberately permissive at the edges (a route counts whether or not an Assignment currently binds
+   it): a false negative costs a diagnosis, a false positive would refuse an estate that works.
+
 4. **The estate loader silently reads only the FIRST document of a multi-document YAML file.** Written
    as one file with two Views, the second simply did not exist — and the only reason it surfaced is
    that a Workflow happened to reference the missing one. A file whose extra documents nothing

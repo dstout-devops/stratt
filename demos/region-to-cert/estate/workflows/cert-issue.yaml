@@ -154,10 +154,11 @@ steps:
     # still publishes the fileset key and the governor drops it — out of scope, which is the governor
     # working.
     #
-    # BOOKED, not fixed here: a `facetWriteScope` naming a namespace with no registered owner in the
-    # estate is statically checkable at load, exactly as ADR-0145 made `provisions` and CERT-1 made
-    # `remediates` checkable. That would be the third instance of the same class — an advertised
-    # target nothing resolves — and it is core work with its own review, not a demo edit.
+    # AND IT IS NOW CAUGHT AT LOAD. `checkFacetWriteScopeOwners` refuses a `facetWriteScope` naming a
+    # namespace nothing in the estate owns — the third member of the family beside ADR-0145's
+    # `provisions` check and CERT-1's `remediates` check. So the divergence below is no longer a
+    # thing an author has to notice: an estate that scoped `fileset.content` without owning it fails
+    # in review rather than after an approved gate.
     facetWriteScope: [cert.presented]
     params:
       connection:

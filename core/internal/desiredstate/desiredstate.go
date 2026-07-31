@@ -462,6 +462,12 @@ func ParseDir(root string, decider policy.Decider) (Declarations, error) {
 	if err := checkProvisioningBuildInputs(out); err != nil {
 		return out, err
 	}
+	// The third member of the advertised-target family, beside validateProvisions (ADR-0145) and
+	// the `remediates` resolve check (CERT-1): a `facetWriteScope` naming a namespace nothing in
+	// this estate owns. Whole-estate, so it runs here with the rest.
+	if err := checkFacetWriteScopeOwners(out); err != nil {
+		return out, err
+	}
 	// ADR-0151 follow-up 4 — the "kube-app" guard. Needs the parsed providers (to know what a
 	// provider NAME is) and every declared kind above them, so it runs here with the rest of the
 	// whole-estate checks.

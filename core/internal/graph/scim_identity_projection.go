@@ -20,12 +20,18 @@ const scimIdentityProjector = "scim-identity-projector"
 // without displacing this owner — two writers to one subject's identity is a
 // registration error, not a merge.
 func (s *Store) EnsureIdentitySubjectOwner(ctx context.Context) error {
-	if err := s.RegisterFacetOwner(ctx, types.FacetOwner{
-		Namespace: "identity.subject",
-		OwnerKind: string(types.WriterSyncer),
-		OwnerRef:  scimIdentityProjector,
-	}); err != nil {
-		return err
+	// The namespace comes from types rather than a literal here, because the estate loader must
+	// agree that it is owned: a `facetWriteScope` naming a namespace no declaration claims is
+	// refused at load, and this one is claimed by nothing an estate can declare. One list, two
+	// readers — a second copy would let the check and this projector disagree.
+	for _, ns := range types.ProjectorOwnedFacetNamespaces() {
+		if err := s.RegisterFacetOwner(ctx, types.FacetOwner{
+			Namespace: ns,
+			OwnerKind: string(types.WriterSyncer),
+			OwnerRef:  scimIdentityProjector,
+		}); err != nil {
+			return err
+		}
 	}
 	return s.RegisterLabelOwner(ctx, types.LabelOwner{
 		Key:       "identity.name",

@@ -357,7 +357,13 @@ func run(ctx context.Context, log *slog.Logger) error {
 	//     failed on `facet namespace software.package has no registered owner`. The work was done
 	//     and the record of it was refused. A Syncer-owned collector (ADR-0080 slice 2) is the
 	//     real answer; until one ships, the team owns it exactly as it owns os.kernel.
-	for _, ns := range []string{"os.kernel", "software.package"} {
+	//
+	// The LIST now lives in types, because the estate loader has to agree with it: a
+	// `facetWriteScope` naming a namespace nothing owns is refused at load
+	// (checkFacetWriteScopeOwners), and these are owned by nothing an estate declares. Two copies
+	// of the list would make the check and the runtime disagree about what is owned — which is the
+	// exact class of split that check exists to catch, arriving one level up.
+	for _, ns := range types.TeamOwnedFacetNamespaces() {
 		if err := store.RegisterFacetOwner(ctx, types.FacetOwner{
 			Namespace: ns, OwnerKind: "team", OwnerRef: "platform",
 		}); err != nil {

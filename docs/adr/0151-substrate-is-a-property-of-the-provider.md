@@ -1,7 +1,20 @@
 # ADR 0151 — Substrate is a property of the PROVIDER, selected by composition; no declaration above it ever names one
 
-- **Status:** **Proposed** (2026-07-30, steward) — **D1+D2 implemented and live-verified**
-  (`894b80e`); D3 outstanding. **`vocabulary-linter`: CLEARED** (2026-07-30) — `substrate` is a
+- **Status:** **ACCEPTED** (2026-07-31, steward). Both gating reviews are complete (below), D1+D2 are
+  implemented and live-verified (`894b80e`), the `kube-app` guard from follow-up 4 ships as
+  `checkNothingAboveAProviderNamesASubstrate`, and **follow-up 2's capstone re-proof has now run**:
+  [demos/region-to-cert](../../demos/region-to-cert/README.md) builds a host, converges Apache on it
+  and delivers a CA-signed certificate to it as one act, from an estate whose only file naming a
+  landscape is its capability-binding — asserted by the runner, which strips comments and refuses any
+  Intent/Blueprint/Assignment/View/Workflow whose DECLARED fields name a substrate or a provider.
+  **D3 remains unimplemented** and is recorded as a residual rather than a blocker: it sharpens WHERE
+  a mixed-substrate refusal fires (at resolution, not three hops later at placement identity-scheme
+  comparison), and the estate is correct without it — the capstone runs a genuinely mixed topology
+  because an author DECLARED it, which is the case D2 permits, and the resolver still fails closed on
+  a mix it would have to guess at.
+  **Accepting with a decision outstanding is deliberate:** the argument, the field, the selector and
+  the guard are all settled and shipped, and leaving the whole ADR Proposed over a diagnostic
+  improvement would misreport what an implementer can rely on. **`vocabulary-linter`: CLEARED** (2026-07-30) — `substrate` is a
   provider-metadata property rather than a Named Kind, so §2's freeze does not bind it, and no
   Intent/Blueprint/Assignment/View in the estate names a substrate. On the vendor-naming worry it
   accepted the landscape-not-product framing (`aws` = the API surface EC2 and floci both speak);
@@ -262,9 +275,20 @@ carelessly.
 
 ## Follow-ups
 
-1. `charter-guardian` on D2; `vocabulary-linter` on the `substrate` value set (both gate Accepted).
-2. Implement D1 + D2, then delete `estate/capability-bindings/provisioning-kube.yaml`'s per-kind
+1. ~~`charter-guardian` on D2; `vocabulary-linter` on the `substrate` value set (both gate Accepted).~~
+   **DONE** — recorded in the status above: the linter CLEARED (with the landscape-not-product
+   framing logged as a conscious trade-off rather than an independent acquittal), and the guardian
+   REJECTED D2's original precedence rule, which was replaced.
+2. ~~Implement D1 + D2, then delete `estate/capability-bindings/provisioning-kube.yaml`'s per-kind
    form in favour of one substrate entry, and re-prove the capstone chain — build a host, converge
-   apache on it, deliver a certificate to it, as ONE act.
+   apache on it, deliver a certificate to it, as ONE act.~~ **DONE (2026-07-31)**, with one part
+   deliberately NOT done: the per-kind form stays, because Kubernetes has no subnet and the entry
+   that selects it is correctly scoped `intentKind: Compute` while `Subnet` names its own provider.
+   That is not the shape this follow-up wanted to delete — it is a MIXED topology an author wrote
+   down, which D2 permits and the resolver accepts precisely because it was declared. The capstone
+   chain re-ran end to end: `task demo:region-to-cert:run`, EXIT=0.
 3. D3's diagnosis: make a mixed-substrate placement refusal name the substrates, not the schemes.
-4. A lint that fails any Intent/Blueprint/Assignment/View naming a substrate — the `kube-app` guard.
+4. ~~A lint that fails any Intent/Blueprint/Assignment/View naming a substrate — the `kube-app`
+   guard.~~ **DONE** — `checkNothingAboveAProviderNamesASubstrate`, run with the whole-estate checks
+   at load. The capstone's runner asserts the same property a second way, over its own declarations,
+   so the claim is checked both by the loader and by the scenario that depends on it.
