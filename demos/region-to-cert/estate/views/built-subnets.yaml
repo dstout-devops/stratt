@@ -1,0 +1,10 @@
+# The networks Stratt BUILT. It exists so the built subnet is readable through the same API surface
+# everything else is (§1.6) — there is no "list all Entities of kind X" door, and there should not
+# be: a View is the authorization unit, so an unscoped kind query would be a read path with no gate
+# on it.
+#
+# It selects on KIND alone rather than on the singleton correlation label, deliberately: a second
+# Intent/Subnet lands here too, which is what an operator asking "what networks do we have" means.
+name: built-subnets
+selector:
+  kinds: [subnet]

@@ -1,0 +1,45 @@
+# demo.yaml — the demo manifest (ADR-0116 D1/D3). Declared metadata the turnkey runner READS and
+# surfaces, so the human-facing claims (especially `fidelity`) can't quietly rot away from the code
+# (D3: hide mechanism, never fidelity — charter §1.8). Not an estate declaration; a demo descriptor.
+name: region-to-cert
+title: "the capstone — declare a region, get a network, a host, an app and a certificate"
+summary: >
+  Two gated builds and two drift remediations, from an estate that names no substrate anywhere. A
+  region and a size are declared; an allocator picks the CIDR and OpenTofu builds the subnet in a
+  real EC2 API. A fleet of one is declared; Kubernetes builds the host and reports the DNS name it
+  CAUSED. Apache is declared; the same converge recipe that serves a hand-declared host installs it
+  on a machine that did not exist a minute ago. A certificate is declared; its key is born on that
+  host and never moves, its subject is derived from the host's own observed address, and a real CA
+  signs it — then every Finding closes because the estate actually converged.
+
+# fidelity (D3): how real is what you're watching? The turnkey runner prints this up front.
+#   real       — real workloads on real substrate.
+#   build-real — the substrate's control API and lifecycle are real; the substrate itself is a simulator.
+#   simulated  — the substrate itself is faked end to end.
+# BUILD-REAL, and the grade is the FLOOR of the two legs rather than the ceiling. The kubernetes leg
+# is `real` on its own; the network leg is not, and a composite claim that quoted its better half
+# would be exactly the fidelity inflation D3 exists to stop. The note says which is which.
+fidelity: build-real
+fidelityNote: >
+  The kubernetes leg is real end to end — a real pod with a real sshd, a real SSH connection, a real
+  Apache serving off the wire, a real RSA key generated on the target, and an X.509 certificate
+  signed by a real CA (OpenBao PKI) and read back off the file that landed. The network leg is
+  BUILD-REAL: real `tofu apply` of a real committed module against floci, an EC2 API implementation
+  rather than a mock, with a CIDR really allocated by a real NetBox. Two honest limits, stated
+  rather than blurred — the built host is a pod in the same cluster (PLG-1: what this proves is
+  execution depth, not reach through a bastion), and NO HOST IS PLACED IN THE BUILT SUBNET, because
+  no single dev substrate has both bootable machines and networks. See the README's "why this is two
+  proofs and not one chain".
+
+# What the runner drives (mirrors the estate/ declarations).
+intents: [app-subnet, web-fleet, apache-tier, web-cert]
+buildWorkflows: [opentofu-subnet-build, kubecompute-build]
+remediationWorkflows: [apache-configure, cert-issue]
+view: web-servers
+capabilities: [provisioning, ipam, statestore, certissuer, configmgmt]
+certificateAuthority: "Stratt Dev Root CA"
+# WHAT THIS DEMO RUNS AGAINST. Named `backend`, NOT `substrate`: since ADR-0151 a substrate is a
+# CLOSED set of landscapes ({aws, kubernetes, vsphere}) declared by a PROVIDER and selected by one
+# capability-binding line. This field is the harness's own descriptor — it names the simulators and
+# transports a demo actually talks to.
+backend: [kubernetes, ec2-floci, netbox, seaweedfs, openbao]

@@ -1,0 +1,27 @@
+# web-fleet — LEG 2: declare a host from code (ADR-0058, ADR-0151).
+#
+# "One Linux web server." That is the whole declaration, and it names no substrate, no image, no
+# size and no provider. capability-bindings/region-to-cert.yaml is the only file that decides where
+# this is built; change one word there and this file does not move.
+#
+# ONE host rather than the reference estate's two, because the demo's job is the CHAIN — build →
+# converge → certificate — and a second host proves per-instance fan-out that ADR-0058 already
+# proves elsewhere while doubling every wait in the runner.
+#
+# NO `params`, and that is a statement rather than an omission. This fleet used to carry
+# region/instanceType/ami in the reference estate — AWS coordinates for a builder that runs for it
+# in neither of its environments — and kubecompute reported them straight back as `provider params
+# ami,instanceType,region ignored` on every build. `params` is opaque to core, so what belongs in it
+# is whatever the RESOLVED provider's Contract reads: a host on Kubernetes is its name, its image
+# and its authorized keys, none of which an operator should be restating here.
+name: web-fleet
+kind: Intent/Compute
+spec:
+  count: 1 # → web-01 (a stable, idempotent, exclusively-claimed identity, §2.4)
+  namePrefix: web
+  projectKind: host # what the built infra projects AS, so a fleet View selects it
+  # The fleet label the BUILD owns (§2.1 per-key ownership). It is what makes the built host land in
+  # view:web-servers, which is what makes the app and certificate Assignments cover a machine that
+  # did not exist a minute ago — without editing either of them.
+  labels: { fleet: web }
+  requires: [provisioning]

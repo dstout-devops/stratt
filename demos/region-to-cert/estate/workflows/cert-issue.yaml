@@ -1,4 +1,4 @@
-# cert-issue — the remediation the `certissuer` capability resolves to (W4, ADR-0030/0050/0106).
+# cert-issue — the remediation the `certissuer` capability resolves to (ADR-0030/0050/0106).
 #
 # IT LIVES IN THE ESTATE, not in the openbao plugin's tree, and that is ADR-0104 D1 enforced rather
 # than preference: this Workflow composes TWO plugins — ansible generates the CSR and delivers the
@@ -7,16 +7,27 @@
 # keeps cross-plugin DEMOS in demos/ rather than beside one of their plugins: whoever spans the
 # boundary owns the composition.
 #
-# WHY THIS FILE DID NOT EXIST. `cert-issuer` has advertised `provides: [certissuer]` since ADR-0106
-# with NO `remediates:` entry, because the Workflow it would name was never written — the exact
-# shape ADR-0145 found on the network leg, where `opentofu-network` advertised
+# ── AND THAT RULE LEAVES THIS FILE WITH NO SHIPPABLE HOME, which is worth stating plainly because
+# this copy is the evidence. Everything else in this demo's estate is either the scenario (Intents,
+# Blueprints, Assignments) or a one-line admission of a plugin that ships its own declarations. This
+# is the exception: a composed Workflow belongs to neither plugin, so it cannot travel with either,
+# so EVERY estate that wants the composed certificate flow hand-copies it — the reference estate has
+# one, this demo now has a second, and nothing makes them agree.
+#
+# That is the divergent-second-copy shape this repo keeps paying for (awxsim's two halves; the
+# `web-server` capability route; PRV-1's two compute-build.yaml), arriving through a door the
+# boundary rule itself opened. It is not fixed here: the fix is a home for cross-plugin compositions
+# — a pack an estate installs (ADR-0033's materialize-into-operator-Git move) rather than a file
+# every adopter retypes — and that is a decision of consequence, so it is BOOKED rather than
+# improvised inside a demo. Until then, treat this file and estate/workflows/cert-issue.yaml as one
+# artifact in two places and change them together.
+#
+# WHY IT DID NOT EXIST AT ALL UNTIL RECENTLY. `cert-issuer` advertised `provides: [certissuer]`
+# since ADR-0106 with NO `remediates:` entry, because the Workflow it would name was never written —
+# the exact shape ADR-0145 found on the network leg, where `opentofu-network` advertised
 # `provides: [provisioning]` and could not build a Subnet. A class with a provider that can serve no
 # Intent kind is an advertisement with nothing behind it: the capability RESOLVES, and then there is
 # nothing to launch.
-#
-# The whole certificate leg was in that state. The provider ships, the Facets ship, the schema
-# ships, `estate/triggers/cert-reconcile.yaml` names the capability — and no Intent/Certificate
-# existed anywhere in the estate, so the reach path had zero consumers and could not be exercised.
 name: cert-issue
 inputs:
   type: object
@@ -120,10 +131,34 @@ steps:
     # ago, with no edit here.
     actuator: ansible-certificate
     credentialRefs: [web-machine]
-    # Delivery reports the FILE that landed and WHAT THE CERTIFICATE SAYS, read back from the host
-    # (ADR-0150 D5) — the renewal Baseline observes cert.presented.notAfter, so renewal is drift on
-    # what is deployed rather than on what was ordered.
-    facetWriteScope: [fileset.content, cert.presented]
+    # Delivery reports WHAT THE CERTIFICATE SAYS, read back from the host (ADR-0150 D5) — the
+    # renewal Baseline observes cert.presented.notAfter, so renewal is drift on what is deployed
+    # rather than on what was ordered.
+    #
+    # ── THE ONE PLACE THIS COPY DELIBERATELY DIVERGES FROM estate/workflows/cert-issue.yaml ────────
+    # The reference copy scopes `[fileset.content, cert.presented]`. Running this demo failed on that
+    # second namespace, AFTER an approved gate, with:
+    #
+    #	graph: upsert facet fileset.content on <host>: facet namespace fileset.content has no
+    #	registered owner (charter §2.1: registration precedes writes)
+    #
+    # And the ownership check is RIGHT. `fileset.content` has an owner in the reference estate only
+    # because an unrelated Assignment — `web-files`, an Intent/FileSet this scenario does not declare
+    # — happens to register it. So a Workflow that reads as self-contained silently depends on
+    # another Assignment existing somewhere in the same estate, and an adopter meets that dependency
+    # as a Run failing at the far end of a gate they have just approved.
+    #
+    # The write is bookkeeping about the delivered file (digest, mode, present); `cert.presented` is
+    # the load-bearing fact the renewal Baseline reads. An estate that manages no FileSet has no
+    # business claiming the namespace, so this copy claims what it owns and nothing else. The play
+    # still publishes the fileset key and the governor drops it — out of scope, which is the governor
+    # working.
+    #
+    # BOOKED, not fixed here: a `facetWriteScope` naming a namespace with no registered owner in the
+    # estate is statically checkable at load, exactly as ADR-0145 made `provisions` and CERT-1 made
+    # `remediates` checkable. That would be the third instance of the same class — an advertised
+    # target nothing resolves — and it is core work with its own review, not a demo edit.
+    facetWriteScope: [cert.presented]
     params:
       connection:
         user: root

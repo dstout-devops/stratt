@@ -1,0 +1,33 @@
+# apache — HOW an Intent/Application is judged and converged (ADR-0055, ADR-0083, ADR-0148).
+#
+# `for:` says which Intent KIND it composes; `delivers:` says which APPLICATION it installs. Two
+# different questions — Intent/Application composes every app, a Blueprint composes one — and the
+# second is what makes the Intent's own `package:` checkable rather than decorative.
+#
+# The route names its Workflow DIRECTLY rather than the `configmgmt` capability, which is the
+# documented answer when the estate has decided (ADR-0106 D1): `configmgmt` for Intent/Application
+# already resolves to ansible-platform-baseline, and a second provider would make both routes
+# ambiguous and fail closed (§2.4).
+name: apache
+version: 1
+for: Intent/Application
+delivers: apache
+severity: warning
+dampingObservations: 1
+defaults:
+  channel: stable
+  port: "8080"
+routes:
+  - observe:
+      namespace: app.config
+      path: port
+      equals: "{{.spec.port}}"
+    # EXCLUSIVE (§2.4): two Assignments converging one host's listen port is a double claim, and
+    # there is no precedence rule that could break it honestly.
+    claim: exclusive
+    remediationWorkflow: apache-configure
+    # The converge gets the SAME resolved value the expectation does (ADR-0118 D3, ADR-0148 D1), so
+    # a fleet overriding the default is converged to ITS port rather than to the Blueprint's. A port
+    # restated in the Workflow is what once made one value detected and another converged.
+    remediationParams:
+      apache_port: "{{.spec.port}}"

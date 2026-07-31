@@ -1,0 +1,13 @@
+# The gate on BUILDING A NETWORK — the AWS API credentials `tofu apply` authenticates with
+# (§2.5, ADR-0009).
+#
+# POINTER only, never material: the locator names the Kubernetes Secret the plugin's own broker
+# resolves at pod spawn. Against the dev EC2 API any credential passes, so on this floor the
+# material is a formality — the use-check is not. An Action's CredentialRef use-check is its only
+# authz gate, so even a build against a simulator has to carry one.
+name: aws-dev
+ownerTeam: platform-admins
+backend: k8s-secret
+locator: { namespace: stratt, name: aws-dev-creds }
+injection:
+  - { key: credentials, as: file, name: aws-credentials }

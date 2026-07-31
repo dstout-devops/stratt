@@ -71,13 +71,26 @@ func TestDemoEstatesDeclareTheActionsTheyDispatch(t *testing.T) {
 	for _, root := range roots {
 		t.Run(demoLabel(root), func(t *testing.T) {
 			declared := map[string]bool{}
-			for _, f := range yamlsIn(t, filepath.Join(root, "actuators")) {
-				var act struct {
-					ActionNames []string `yaml:"actionNames"`
-				}
-				decodeYAML(t, f, &act)
-				for _, n := range act.ActionNames {
-					declared[n] = true
+			// The demo's OWN actuators, plus those of every plugin estate it admits IN FULL.
+			//
+			// The second half arrived with demos/region-to-cert, the first demo that admits estates
+			// rather than contracts. Every earlier demo declares its own bespoke Actuator and
+			// admits `contractsOnly`, so "the demo's actuators/ directory" was the whole answer.
+			// A full admission loads the plugin's declarations too, so the cert-issuer Actuator IS
+			// on that floor — and this guard, reading the demo directory alone, reported a Run that
+			// would fail after the gate on a floor where it demonstrably does not.
+			//
+			// The question the guard is actually asking is "would this Action resolve on the floor
+			// this estate describes", so it now asks it of the same roots the loader would read.
+			for _, dir := range actuatorDirs(t, root) {
+				for _, f := range yamlsIn(t, dir) {
+					var act struct {
+						ActionNames []string `yaml:"actionNames"`
+					}
+					decodeYAML(t, f, &act)
+					for _, n := range act.ActionNames {
+						declared[n] = true
+					}
 				}
 			}
 			for _, f := range yamlsIn(t, filepath.Join(root, "workflows")) {
@@ -143,6 +156,41 @@ func pluginContractsUsedBy(t *testing.T, repo, root string) map[string]string {
 		}
 	}
 	return need
+}
+
+// actuatorDirs returns every actuators/ directory the loader would read for this
+// estate: the estate's own, then each admitted plugin estate that is NOT contractsOnly.
+//
+// Deliberately a mirror of estateRoots' rule rather than a second interpretation of it —
+// a contractsOnly admission contributes contracts and no declarations, so its Actuators
+// are not on the floor and must not count here either.
+func actuatorDirs(t *testing.T, root string) []string {
+	t.Helper()
+	dirs := []string{filepath.Join(root, "actuators")}
+
+	raw, err := os.ReadFile(filepath.Join(root, "plugins.yaml"))
+	if os.IsNotExist(err) {
+		return dirs
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	var f struct {
+		Plugins []struct {
+			Path          string `yaml:"path"`
+			ContractsOnly bool   `yaml:"contractsOnly"`
+		} `yaml:"plugins"`
+	}
+	if err := yaml.Unmarshal(raw, &f); err != nil {
+		t.Fatalf("%s/plugins.yaml: %v", root, err)
+	}
+	for _, p := range f.Plugins {
+		if p.ContractsOnly || p.Path == "" {
+			continue
+		}
+		dirs = append(dirs, filepath.Join(root, filepath.FromSlash(p.Path), "actuators"))
+	}
+	return dirs
 }
 
 func admittedNames(t *testing.T, path string) map[string]bool {

@@ -1,0 +1,25 @@
+# TWO VIEWS THIS DEMO NEVER USES, declared because an admitted plugin's Workflows target them.
+#
+# `plugins/ansible/estate` ships access-apply / access-revoke / fileset-apply / fileset-revert, and
+# each names a View in its Step:
+#
+#	workflow "access-apply" step "apply" targets View "secure-hosts", which this demo does not declare
+#
+# Both names belong to the REFERENCE estate. Admitting the ansible plugin's estate therefore obliges
+# any adopter to mirror them — the coupling written up at length in environments/prod.yaml beside
+# this file, and the reason demos/app-cert admits ansible `contractsOnly` instead.
+#
+# They select NOTHING on this floor and that is deliberate: the built host carries `fleet: web`, not
+# `role: web` or `tier: secure`, so nothing this demo builds lands in either. The four Workflows are
+# loadable and never launched; the two collectors that would target them are prod-scoped and never
+# fire. Declaring them with selectors that DID match would quietly enrol the demo's host in two
+# unrelated Baselines — a worse fix than an empty View, and the kind of thing that makes a demo fail
+# for reasons it is not about.
+#
+# The right end state is that a plugin's estate names no View at all — the shape `apache-configure`
+# and `cert-issue` already ship, where the Step inherits the View from the Assignment that raised
+# the Finding and the recipe says only WHAT. These four predate that move. Booked, not done here.
+name: secure-hosts
+selector:
+  kinds: [host]
+  labels: { tier: secure }

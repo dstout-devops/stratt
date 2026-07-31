@@ -420,13 +420,34 @@ tasks:
         # demo lands in demos/ because that is where demos "go", and the tree drifts
         # back to where it started one file at a time.
         #
-        # A demo's span is read the same way its estate declares it: pluginIdentity on
-        # its Actuators/Connectors, plus the `<plugin>/` prefix of any Action it calls.
+        # A demo's span is read FIRST from its own plugins.yaml, because that is the estate
+        # saying which plugins it uses — the authority half of ADR-0137 D1/D3 — and only then
+        # from the inferred signals: pluginIdentity on its Actuators/Connectors, plus the
+        # `<plugin>/` prefix of any Action it calls.
+        #
+        # BOTH CORRECTIONS WERE FORCED BY demos/region-to-cert, the first demo that admits plugin
+        # ESTATES rather than contracts. It declares no Actuator of its own and calls exactly one
+        # plugin Action, `cert-issuer/sign`, so the inferred span was the single token
+        # "cert-issuer" and this guard demanded the six-plugin capstone be moved to
+        # `plugins/cert-issuer/demo/`. Two things were wrong:
+        #
+        #   1. An Action's namespace is an ACTUATOR name, not a plugin name. `cert-issuer` is
+        #      openbao's Actuator and `plugins/cert-issuer/` does not exist. The heuristic only
+        #      ever looked right because the three earlier demos each drove a plugin whose
+        #      Actuator happened to share its directory name.
+        #   2. The admission list was never consulted, though it is the one place an estate
+        #      states this outright rather than having it deduced.
+        #
+        # So: union the admissions in, and keep only tokens that name a real plugin directory —
+        # an inferred token that resolves to no plugin is evidence about an Actuator, not about
+        # locality, and it must not decide where a demo lives.
         for d in demos/*/; do
           [ -d "${d}estate" ] || continue
-          spans=$({ grep -rhoE "pluginIdentity:[[:space:]]*[a-z0-9-]+" "$d" 2>/dev/null | sed 's/.*:[[:space:]]*//'
+          spans=$({ awk '/^[[:space:]]*#/ {next} /^[[:space:]]*-[[:space:]]*name:/ {sub(/.*name:[[:space:]]*/,""); print}' "${d}estate/plugins.yaml" 2>/dev/null
+                    grep -rhoE "pluginIdentity:[[:space:]]*[a-z0-9-]+" "$d" 2>/dev/null | sed 's/.*:[[:space:]]*//'
                     grep -rhoE "^[[:space:]]+action:[[:space:]]*[a-z0-9-]+/" "$d" 2>/dev/null | sed 's|.*:[[:space:]]*||; s|/||'
-                  } | sort -u | tr '\n' ' ' | sed 's/ *$//')
+                  } | sort -u)
+          spans=$(for t in $spans; do [ -d "plugins/$t" ] && echo "$t"; done | sort -u | tr '\n' ' ' | sed 's/ *$//')
           n=$(echo "$spans" | wc -w)
           if [ "$n" -eq 1 ]; then
             echo "  ✗ demo '$(basename "$d")' exercises only '$spans' — a single-plugin demo belongs in"
@@ -646,6 +667,33 @@ tasks:
     cmds:
       - deploy/dev/openbao-bootstrap.sh
 
+  dev:namespace:
+    # The `stratt` namespace, created by whoever needs it FIRST.
+    #
+    # It is normally rendered by `helm upgrade --install --create-namespace`, and every floor task
+    # below writes Secrets and Deployments into it — openbao, seaweedfs, netbox, the machine
+    # credential, the gate-only authz markers, every demo's node fixture. On a cluster that has EVER
+    # had stratt installed the namespace survives the uninstall, so those tasks work; on a COLD one
+    # they run before the helm install that would create it and every single one fails with
+    #
+    #	Error from server (NotFound): namespaces "stratt" not found
+    #
+    # which reads as a broken manifest rather than as an ordering bug. That is exactly what
+    # dev:connector-e2e did the first time it was run against a genuinely fresh kind cluster —
+    # the floor had been wired to stand its own prerequisites up (3ebda40) and still could not,
+    # because the wiring inherited the assumption that somebody had installed the chart here before.
+    #
+    # dev:kubecompute:up already did this for `stratt-hosts`, with the comment "this task must also
+    # work BEFORE the first helm install". Same reasoning, one namespace over; it simply was not
+    # applied to the namespace everything else writes into.
+    #
+    # Idempotent (apply of a client-side render), and it does NOT own the namespace's final shape —
+    # helm still applies its own labels/annotations on install.
+    internal: true
+    deps: [tools:kubectl]
+    cmds:
+      - "{{.KUBECTL}} --context {{.KIND_CONTEXT}} create namespace stratt --dry-run=client -o yaml | {{.KUBECTL}} --context {{.KIND_CONTEXT}} apply -f -"
+
   dev:netbox:up:
     # The IN-KIND IPAM — the network leg's LAST dependency (NET-2). netbox-ipam had an image and no
     # floor to run in, so opentofu-network verified as a provisioning provider and sat pending on
@@ -656,7 +704,7 @@ tasks:
     # The bootstrap is the SAME script the compose path uses, pointed at a port-forward, exactly as
     # dev:openbao:up does. One seeding of record for both floors.
     desc: "Stand the dev IPAM (NetBox + Postgres + Redis) in kind and seed its topology (NET-2)"
-    deps: [tools:kubectl]
+    deps: [tools:kubectl, dev:namespace]
     cmds:
       - "{{.KUBECTL}} --context {{.KIND_CONTEXT}} apply -f {{.ROOT_DIR}}/deploy/dev/netbox.yaml"
       - "{{.KUBECTL}} --context {{.KIND_CONTEXT}} -n stratt rollout status deploy/netbox-postgres --timeout=180s"
@@ -708,7 +756,7 @@ tasks:
     # compose service mounts: the network leg calls CreateVpc/CreateSubnet and nothing that
     # materialises an instance (HAR-1).
     desc: "Stand the dev EC2 API (floci) in kind — the network leg's build target"
-    deps: [tools:kubectl]
+    deps: [tools:kubectl, dev:namespace]
     cmds:
       - "{{.KUBECTL}} --context {{.KIND_CONTEXT}} apply -f {{.ROOT_DIR}}/deploy/dev/floci.yaml"
       - "{{.KUBECTL}} --context {{.KIND_CONTEXT}} -n stratt rollout status deploy/floci --timeout=180s"
@@ -721,7 +769,7 @@ tasks:
     # s3-statestore Actuator as a PHANTOM PROVIDER and opentofu-network sat pending on a dependency
     # forever. Every layer was right; the floor had no object store.
     desc: "Stand the dev object store (SeaweedFS) in kind and create the tofu state bucket (W5 prereq)"
-    deps: [tools:kubectl]
+    deps: [tools:kubectl, dev:namespace]
     cmds:
       - "{{.KUBECTL}} --context {{.KIND_CONTEXT}} apply -f {{.ROOT_DIR}}/deploy/dev/seaweedfs.yaml"
       - "{{.KUBECTL}} --context {{.KIND_CONTEXT}} -n stratt rollout status deploy/seaweedfs --timeout=180s"
@@ -752,7 +800,7 @@ tasks:
     # The bootstrap is the SAME script the compose path uses, pointed at a port-forward — one
     # provisioning of record for both floors, rather than a second copy that drifts.
     desc: "Stand the dev CLM (OpenBao) in kind and provision its PKI — the certissuer provider's backend (W4)"
-    deps: [tools:kubectl]
+    deps: [tools:kubectl, dev:namespace]
     cmds:
       - "{{.KUBECTL}} --context {{.KIND_CONTEXT}} apply -f {{.ROOT_DIR}}/deploy/dev/openbao.yaml"
       - "{{.KUBECTL}} --context {{.KIND_CONTEXT}} -n stratt rollout status deploy/openbao --timeout=120s"
@@ -1236,30 +1284,59 @@ tasks:
       #
       # The ConfigMap keys on a flattened path (`/`→`__`) and deployment.yaml
       # restores it via items[].path, so the extra depth costs nothing.
+      - task: estate:vendor-plugins
+        vars: { ESTATE: "{{.ROOT_DIR}}/estate", BY: "task dev:stage-estate", SOURCE: "estate/plugins.yaml" }
+
+  estate:vendor-plugins:
+    # Vendor an estate's ADMITTED plugin trees into the staged declarations (ADR-0137 D1/D3,
+    # ADR-0138 D3/D4). ONE implementation, used by dev:stage-estate and by every demo.
+    #
+    # It was two, and they differed in the one dimension that decides whether a floor boots:
+    # dev:stage-estate vendored full plugin ESTATES, while demo:vendor-contracts hardcoded
+    # `contractsOnly: true` and copied contracts alone. That was fine while every demo declared its
+    # own bespoke Actuator and wanted the tool's seam rather than the tool's estate — and it became
+    # a wall the moment demos/region-to-cert admitted six plugin estates in full, because the
+    # copy that knew how to do that was the one demos did not call. Two implementations of
+    # "vendor an admitted plugin", one of which silently produced a floor with no Workflows in it,
+    # is the divergent-second-copy shape this repo keeps paying for.
+    #
+    # The flag is now read from the admission itself, where it belongs: an estate says what it
+    # admits and how, and the staging obeys rather than deciding for it.
+    internal: true
+    requires:
+      vars: [ESTATE, BY, SOURCE]
+    cmds:
       - |
         set -eu
-        src="{{.ROOT_DIR}}/estate/plugins.yaml"
+        src="{{.ESTATE}}/plugins.yaml"
         dst="{{.ROOT_DIR}}/deploy/charts/stratt/dev/declarations"
         [ -f "$src" ] || exit 0
-        # name/path pairs out of the admission list. Deliberately strict: anything
-        # this cannot read is a hard failure, never a silently unstaged plugin —
-        # which would boot a daemon running none of that plugin's Workflows.
-        names=$(awk '/^[[:space:]]*-[[:space:]]*name:/{gsub(/.*name:[[:space:]]*/,"");print}' "$src")
-        paths=$(awk '/^[[:space:]]*path:/{gsub(/.*path:[[:space:]]*/,"");print}' "$src")
-        [ "$(echo "$names" | grep -c .)" = "$(echo "$paths" | grep -c .)" ] || {
-          echo "✗ estate/plugins.yaml: every admitted plugin needs exactly one path" >&2; exit 1; }
+        # One `name|path|contractsOnly` triple per admission. Deliberately strict: anything this
+        # cannot read is a hard failure, never a silently unstaged plugin — which would boot a
+        # daemon running none of that plugin's Workflows. Comment lines are skipped explicitly,
+        # so a commented-out admission in a heavily-annotated plugins.yaml cannot be staged.
+        entries=$(awk '
+          /^[[:space:]]*#/ { next }
+          /^[[:space:]]*-[[:space:]]*name:/ {
+            if (n != "") print n "|" p "|" c
+            n=$0; sub(/.*name:[[:space:]]*/,"",n); p=""; c="false"; next
+          }
+          /^[[:space:]]*path:/ { v=$0; sub(/.*path:[[:space:]]*/,"",v); p=v; next }
+          /^[[:space:]]*contractsOnly:/ { v=$0; sub(/.*contractsOnly:[[:space:]]*/,"",v); c=v; next }
+          END { if (n != "") print n "|" p "|" c }
+        ' "$src")
         : > "$dst/plugins.yaml"
-        echo "# GENERATED by 'task dev:stage-estate' — edit estate/plugins.yaml instead." >> "$dst/plugins.yaml"
-        echo "# The admitted plugin estates are VENDORED beside this file (ADR-0137 D3)." >> "$dst/plugins.yaml"
+        echo "# GENERATED by '{{.BY}}' — edit {{.SOURCE}} instead." >> "$dst/plugins.yaml"
+        echo "# The admitted plugin trees are VENDORED beside this file (ADR-0137 D3)." >> "$dst/plugins.yaml"
         echo "plugins:" >> "$dst/plugins.yaml"
+        total=$(printf '%s\n' "$entries" | grep -c . || true)
         i=1
-        while [ "$i" -le "$(echo "$names" | grep -c .)" ]; do
-          n=$(echo "$names" | sed -n "${i}p")
-          p=$(echo "$paths" | sed -n "${i}p")
-          from="{{.ROOT_DIR}}/estate/$p"
-          [ -d "$from" ] || { echo "✗ admitted plugin '$n': no estate at $p" >&2; exit 1; }
-          mkdir -p "$dst/plugins/$n/estate"
-          cp -R "$from/." "$dst/plugins/$n/estate/"
+        while [ "$i" -le "$total" ]; do
+          line=$(printf '%s\n' "$entries" | sed -n "${i}p")
+          n=${line%%|*}; rest=${line#*|}; p=${rest%%|*}; c=${rest#*|}
+          i=$((i + 1))
+          [ -n "$p" ] || { echo "✗ {{.SOURCE}}: admitted plugin '$n' has no path" >&2; exit 1; }
+          from="{{.ESTATE}}/$p"
           # The plugin's own SELF CONTRACTS (ADR-0138 D3/D4), vendored as the SIBLING of its
           # estate because that is where the loader looks: plugins/<n>/{estate,contracts}.
           #
@@ -1272,11 +1349,24 @@ tasks:
           if [ -d "$cfrom" ]; then
             mkdir -p "$dst/plugins/$n/contracts"
             cp -R "$cfrom/." "$dst/plugins/$n/contracts/"
+          elif [ "$c" = "true" ]; then
+            # A contractsOnly admission that contributes no contracts is the whole entry doing
+            # nothing — and the Step that needed the document fails after the gate is approved.
+            echo "✗ {{.SOURCE}}: '$n' is admitted contractsOnly but $cfrom does not exist" >&2; exit 1
           fi
+          if [ "$c" = "true" ]; then
+            echo "  - name: $n" >> "$dst/plugins.yaml"
+            echo "    path: plugins/$n/estate" >> "$dst/plugins.yaml"
+            echo "    contractsOnly: true" >> "$dst/plugins.yaml"
+            echo "  ✓ vendored plugin contracts: $n"
+            continue
+          fi
+          [ -d "$from" ] || { echo "✗ {{.SOURCE}}: admitted plugin '$n': no estate at $p" >&2; exit 1; }
+          mkdir -p "$dst/plugins/$n/estate"
+          cp -R "$from/." "$dst/plugins/$n/estate/"
           echo "  - name: $n" >> "$dst/plugins.yaml"
           echo "    path: plugins/$n/estate" >> "$dst/plugins.yaml"
           echo "  ✓ vendored plugin estate: $n"
-          i=$((i + 1))
         done
 
   dev:stage-genesis:
@@ -1309,6 +1399,23 @@ tasks:
     cmds:
       - mkdir -p {{.KEYDIR}}
       - ssh-keygen -t ed25519 -N "" -C stratt-web-machine -f {{.KEYDIR}}/id_ed25519
+
+  dev:machine-key:secret:
+    # The PRIVATE half of the shared dev machine key, as the Secret the `web-machine` CredentialRef
+    # points at. A POINTER is all the estate holds (§2.5); the dispatcher resolves this Secret and
+    # file-mounts the key into the execution pod at spawn.
+    #
+    # Split out of dev:managed-web:up because the two are independent needs that happened to be
+    # written in one place: a floor can need the credential WITHOUT needing the hand-declared node —
+    # which is exactly the capstone's case, where every host is one Stratt builds. Standing up an
+    # unrelated fixture node just to get a Secret would have put a second, undeclared host in the
+    # graph for the demo's Views to trip over.
+    desc: Publish the shared dev machine credential as the web-machine-creds Secret (idempotent)
+    deps: [tools:kubectl, dev:namespace, dev:machine-key]
+    vars:
+      KEYDIR: "{{.ROOT_DIR}}/deploy/dev/managed-web"
+    cmds:
+      - "{{.KUBECTL}} --context {{.KIND_CONTEXT}} -n stratt create secret generic web-machine-creds --from-file=ssh-privatekey={{.KEYDIR}}/id_ed25519 --dry-run=client -o yaml | {{.KUBECTL}} --context {{.KIND_CONTEXT}} apply -f -"
 
   dev:dns:key:
     # The dev estate's TSIG key — the ONE secret the dns plugin signs every UPDATE and
@@ -1398,13 +1505,14 @@ tasks:
 
   dev:managed-web:up:
     desc: Deploy the REAL sshd/nginx managed node for the ADR-0084 convergence demo (keypair + machine-credential Secret + node, idempotent)
-    deps: [tools:kubectl, dev:machine-key]
+    deps: [tools:kubectl, dev:namespace, dev:machine-key, dev:machine-key:secret]
     vars:
       KEYDIR: "{{.ROOT_DIR}}/deploy/dev/managed-web"
     cmds:
       - go run sigs.k8s.io/kind@v{{.KIND_VER}} export kubeconfig --name {{.KIND_CLUSTER}}
-      # The machine credential the remediation Step use-checks + mounts (§2.5).
-      - "{{.KUBECTL}} --context {{.KIND_CONTEXT}} -n stratt create secret generic web-machine-creds --from-file=ssh-privatekey={{.KEYDIR}}/id_ed25519 --dry-run=client -o yaml | {{.KUBECTL}} --context {{.KIND_CONTEXT}} apply -f -"
+      # The machine credential the remediation Step use-checks + mounts (§2.5) comes from
+      # dev:machine-key:secret above — one publication of record, shared with every other floor
+      # that needs the credential without needing this node.
       # The node's authorized_keys (the public half).
       - "{{.KUBECTL}} --context {{.KIND_CONTEXT}} -n stratt create secret generic managed-web-authorized-keys --from-file=authorized_keys={{.KEYDIR}}/id_ed25519.pub --dry-run=client -o yaml | {{.KUBECTL}} --context {{.KIND_CONTEXT}} apply -f -"
       - "{{.KUBECTL}} --context {{.KIND_CONTEXT}} apply -f {{.ROOT_DIR}}/deploy/dev/managed-web.yaml"
@@ -1412,7 +1520,7 @@ tasks:
 
   dev:kubecompute:up:
     desc: "Prepare the floor kubecompute BUILDS into (ADR-0151): the built hosts' authorized_keys + the gate-only authz markers"
-    deps: [tools:kubectl, dev:machine-key]
+    deps: [tools:kubectl, dev:namespace, dev:machine-key]
     vars:
       KEYDIR: "{{.ROOT_DIR}}/deploy/dev/managed-web"
     cmds:
@@ -1421,7 +1529,32 @@ tasks:
       # task must also work BEFORE the first helm install — a built host needs its authorized_keys
       # Secret to exist in the namespace at pod-spawn, and a missing Secret makes the pod hang in
       # ContainerCreating with a message about a volume rather than about a key.
-      - "{{.KUBECTL}} --context {{.KIND_CONTEXT}} create namespace stratt-hosts --dry-run=client -o yaml | {{.KUBECTL}} --context {{.KIND_CONTEXT}} apply -f -"
+      #
+      # ADOPTABLE, not merely present. Created plain, this namespace makes the FIRST helm install on
+      # a cold cluster fail outright:
+      #
+      #	Error: unable to continue with install: Namespace "stratt-hosts" in namespace "" exists and
+      #	cannot be imported into the current release: invalid ownership metadata; label validation
+      #	error: missing key "app.kubernetes.io/managed-by": must be set to "Helm" …
+      #
+      # Helm refuses to take over a resource it does not own, correctly. On a cluster that has ever
+      # had the chart installed the namespace already carries these three keys and survives
+      # `helm uninstall`, so the task worked for everyone who had run the floor before — and only for
+      # them. The keys below are exactly what helm stamps, so the install adopts this namespace
+      # instead of colliding with it, whichever order the two ran in.
+      - |
+        set -eu
+        cat <<'EOF' | "{{.KUBECTL}}" --context {{.KIND_CONTEXT}} apply -f -
+        apiVersion: v1
+        kind: Namespace
+        metadata:
+          name: stratt-hosts
+          labels:
+            app.kubernetes.io/managed-by: Helm
+          annotations:
+            meta.helm.sh/release-name: stratt
+            meta.helm.sh/release-namespace: stratt
+        EOF
       # The SAME throwaway dev keypair the hand-declared fixture nodes use, so a host Stratt BUILT
       # is reachable by the credential the converge already brokers (web-machine) rather than by a
       # key minted at build time that nothing else knows about.
@@ -1446,7 +1579,7 @@ tasks:
     # remediation CAUSES. managed-web ships nginx already, so its converge can only adjust a port on
     # something the image supplied — which cannot tell those two apart.
     desc: Deploy the BARE sshd node the apache Blueprint installs onto (ADR-0148, idempotent)
-    deps: [tools:kubectl, dev:machine-key]
+    deps: [tools:kubectl, dev:namespace, dev:machine-key]
     vars:
       KEYDIR: "{{.ROOT_DIR}}/deploy/dev/managed-web"
     cmds:
@@ -1460,7 +1593,7 @@ tasks:
     # purpose: with managed-app on apk and this on apt, the claim that distro naming belongs to
     # content is exercised against two package managers instead of asserted against one.
     desc: Deploy the BARE debian node the tomcat Blueprint installs onto (ADR-0148, idempotent)
-    deps: [tools:kubectl, dev:machine-key]
+    deps: [tools:kubectl, dev:namespace, dev:machine-key]
     vars:
       KEYDIR: "{{.ROOT_DIR}}/deploy/dev/managed-web"
     cmds:
@@ -1588,7 +1721,7 @@ tasks:
       - rm -rf {{.ROOT_DIR}}/deploy/charts/stratt/dev/declarations
       - mkdir -p {{.ROOT_DIR}}/deploy/charts/stratt/dev/declarations
       - cp -R {{.ROOT_DIR}}/plugins/helm/demo/estate/. {{.ROOT_DIR}}/deploy/charts/stratt/dev/declarations/
-      - task: demo:vendor-contracts
+      - task: demo:vendor-plugins
         vars: { DEMO: k8s-deploy, ESTATE: "{{.ROOT_DIR}}/plugins/helm/demo/estate" }
 
   demo:k8s-deploy:run:
@@ -1649,7 +1782,7 @@ tasks:
       - rm -rf {{.ROOT_DIR}}/deploy/charts/stratt/dev/declarations
       - mkdir -p {{.ROOT_DIR}}/deploy/charts/stratt/dev/declarations
       - cp -R {{.ROOT_DIR}}/plugins/vcenter/demo/estate/. {{.ROOT_DIR}}/deploy/charts/stratt/dev/declarations/
-      - task: demo:vendor-contracts
+      - task: demo:vendor-plugins
         vars: { DEMO: vsphere-only, ESTATE: "{{.ROOT_DIR}}/plugins/vcenter/demo/estate" }
 
   demo:vsphere-only:run:
@@ -1706,7 +1839,7 @@ tasks:
       - rm -rf {{.ROOT_DIR}}/deploy/charts/stratt/dev/declarations
       - mkdir -p {{.ROOT_DIR}}/deploy/charts/stratt/dev/declarations
       - cp -R {{.ROOT_DIR}}/plugins/awsec2/demo/estate/. {{.ROOT_DIR}}/deploy/charts/stratt/dev/declarations/
-      - task: demo:vendor-contracts
+      - task: demo:vendor-plugins
         vars: { DEMO: ec2-only, ESTATE: "{{.ROOT_DIR}}/plugins/awsec2/demo/estate" }
 
   demo:ec2-only:run:
@@ -1754,48 +1887,35 @@ tasks:
       - "{{.HELM}} uninstall stratt -n stratt --kube-context {{.KIND_CONTEXT}} --ignore-not-found 2>/dev/null || true"
       - docker compose -f {{.ROOT_DIR}}/deploy/dev/docker-compose.yml stop floci 2>/dev/null || true
 
-  demo:vendor-contracts:
-    # Vendor a demo's contractsOnly plugin admissions into the staged declarations (ADR-0138 D3/D4).
+  demo:vendor-plugins:
+    # Vendor a demo's admitted plugin trees into the staged declarations — a thin adapter over the
+    # ONE implementation (estate:vendor-plugins), which the reference estate's staging also uses.
     #
-    # Since the relocation, a plugin's Action/Actuator Contracts live in the PLUGIN's tree, and core
-    # holds only what the estate admits — a plugin wired by environment never contributes its
-    # documents, because the Manifest carries a schema ID and hash, never the schema (§1.5: a plugin
-    # does not mint contract meaning). So a demo that dispatches a plugin-owned Action must ADMIT the
-    # plugin, and the tree has to travel with the staged estate: in the repo the admission is a
-    # relative path out of the demo directory, and a deployed estate is self-contained.
+    # It was its own copy, and it hardcoded `contractsOnly: true`. That was right for every demo
+    # that declares its OWN Actuator and wants a plugin's SEAM rather than its estate — and it made
+    # a full-estate demo unstageable, which is what demos/region-to-cert needed. The two copies
+    # differed in exactly the dimension that decides whether the staged floor has any Workflows in
+    # it; the flag now comes from each admission, and one implementation honours it.
     #
-    # Without this the demo stages cleanly, `task ci` stays green (it parses from the repo, where the
+    # Why vendoring is needed at all: since ADR-0138 D3/D4 a plugin's Action/Actuator Contracts live
+    # in the PLUGIN's tree and core holds only what the estate admits — the Manifest carries a
+    # schema id and a hash, never the schema (§1.5: a plugin does not mint contract meaning). In the
+    # repo an admission is a relative path out of the demo directory; a DEPLOYED estate is
+    # self-contained, so the tree has to travel with it and the path has to be rewritten.
+    #
+    # Without it the demo stages cleanly, `task ci` stays green (it parses from the repo, where the
     # relative path resolves), and the daemon fails in-cluster on "no input contract". ONLY RUNNING
     # THE DEMO CATCHES IT — which is how the vsphere demo sat broken from ADR-0103 moving vcenter's
     # Actions into a declaration until the next time anyone ran it.
-    #
-    # One implementation, called by every demo that needs it. It was app-cert's inline shell block,
-    # and a second copy for vsphere would have been the divergent-copy defect this repo keeps paying
-    # for — with the twist that the copies would drift in the one dimension that decides whether a
-    # floor boots.
     internal: true
     requires:
       vars: [DEMO, ESTATE]
     cmds:
-      - |
-        set -eu
-        src="{{.ESTATE}}/plugins.yaml"
-        dst="{{.ROOT_DIR}}/deploy/charts/stratt/dev/declarations"
-        [ -f "$src" ] || exit 0
-        names=$(awk '/^[[:space:]]*-[[:space:]]*name:/{gsub(/.*name:[[:space:]]*/,"");print}' "$src")
-        : > "$dst/plugins.yaml"
-        echo "# GENERATED by 'task demo:{{.DEMO}}:stage' — edit {{.ESTATE}}/plugins.yaml." >> "$dst/plugins.yaml"
-        echo "plugins:" >> "$dst/plugins.yaml"
-        for n in $names; do
-          [ -d "{{.ROOT_DIR}}/plugins/$n/contracts" ] || {
-            echo "✗ {{.DEMO}} admits plugin '$n' but plugins/$n/contracts does not exist" >&2; exit 1; }
-          mkdir -p "$dst/plugins/$n/contracts"
-          cp -R "{{.ROOT_DIR}}/plugins/$n/contracts/." "$dst/plugins/$n/contracts/"
-          echo "  - name: $n" >> "$dst/plugins.yaml"
-          echo "    path: plugins/$n/estate" >> "$dst/plugins.yaml"
-          echo "    contractsOnly: true" >> "$dst/plugins.yaml"
-          echo "  ✓ vendored plugin contracts: $n"
-        done
+      - task: estate:vendor-plugins
+        vars:
+          ESTATE: "{{.ESTATE}}"
+          BY: "task demo:{{.DEMO}}:stage"
+          SOURCE: "{{.ESTATE}}/plugins.yaml"
 
   demo:app-cert:stage:
     # Stage the app-cert demo's SELF-CONTAINED estate (ADR-0116) into the inline-declarations path —
@@ -1818,7 +1938,7 @@ tasks:
       # Without this the demo stages cleanly, `task ci` stays green (it parses from the repo, where
       # the relative path resolves), and the daemon CrashLoops in-cluster on "no input contract for
       # actuator ansible-crypto". Only running the demo catches it.
-      - task: demo:vendor-contracts
+      - task: demo:vendor-plugins
         vars: { DEMO: app-cert, ESTATE: "{{.ROOT_DIR}}/demos/app-cert/estate" }
 
   demo:app-cert:node:up:
@@ -1827,7 +1947,7 @@ tasks:
     # run on the target. Separate from dev:managed-web:up so the two fixtures cannot perturb each
     # other. Idempotent — a throwaway keypair is generated once and reused.
     desc: Stand up the app-cert demo's managed node (sshd + nginx + sudo, non-root login)
-    deps: [tools:kubectl]
+    deps: [tools:kubectl, dev:namespace]
     vars:
       KEYDIR: "{{.ROOT_DIR}}/deploy/dev/app-cert"
     cmds:
@@ -1886,6 +2006,128 @@ tasks:
       - "{{.HELM}} uninstall stratt -n stratt --kube-context {{.KIND_CONTEXT}} --ignore-not-found 2>/dev/null || true"
       - "{{.KUBECTL}} --context {{.KIND_CONTEXT}} delete -f {{.ROOT_DIR}}/demos/app-cert/node.yaml --ignore-not-found 2>/dev/null || true"
       - "{{.KUBECTL}} --context {{.KIND_CONTEXT}} -n stratt delete secret app-node-creds app-node-authorized-keys --ignore-not-found 2>/dev/null || true"
+
+  demo:region-to-cert:stage:
+    # Stage the capstone's SELF-CONTAINED estate (ADR-0116 D1) into the inline-declarations path.
+    #
+    # UNLIKE EVERY OTHER DEMO, this one admits plugin ESTATES rather than contracts: it declares no
+    # Actuator of its own, so every provider, build Workflow and converge recipe it drives is one the
+    # plugin ships. The shared vendoring reads `contractsOnly` off each admission and does the right
+    # thing per entry — see estate:vendor-plugins for why that used to be two implementations.
+    desc: Stage the region-to-cert demo estate into the inline-declarations path
+    cmds:
+      - rm -rf {{.ROOT_DIR}}/deploy/charts/stratt/dev/declarations
+      - mkdir -p {{.ROOT_DIR}}/deploy/charts/stratt/dev/declarations
+      - cp -R {{.ROOT_DIR}}/demos/region-to-cert/estate/. {{.ROOT_DIR}}/deploy/charts/stratt/dev/declarations/
+      - task: demo:vendor-plugins
+        vars: { DEMO: region-to-cert, ESTATE: "{{.ROOT_DIR}}/demos/region-to-cert/estate" }
+
+  demo:region-to-cert:run:
+    # The turnkey capstone (ADR-0116; the W5 gate). It stands up a Stratt floor whose desired state
+    # IS this demo's estate and drives the whole estate-as-code chain: a gated network build on the
+    # aws substrate, then a gated host build on kubernetes, then Apache, then a CA-signed certificate
+    # — asserting each leg. By-hand walk: demos/region-to-cert/README.md.
+    #
+    # THIS FLOOR IS LARGER THAN THE OTHER DEMOS' AND EVERY LINE OF IT IS LOAD-BEARING. Each backend
+    # below is dialled by a plugin whose capability an Intent resolves to, and a missing one does not
+    # fail loudly — it makes the capability route sit PENDING and the build Finding never appear,
+    # which reads as "the demo hangs". The four in the middle were each written for some earlier
+    # floor and then called by nothing, which is how `dev:connector-e2e` came to pass on
+    # hand-applied state (3ebda40).
+    desc: "Demo — the capstone: declare a region, get a network, a host, an app and a certificate (demos/region-to-cert)"
+    deps: [tools:helm, tools:kubectl]
+    cmds:
+      - task: dev:kind:up
+      - task: image:kind-load # strattd
+      # The five plugin pods values-demo-region-to-cert.yaml declares. A declared pod whose image
+      # nobody built sits in ImagePullBackOff behind a passing floor check (`pullPolicy: Never` has
+      # nothing to find) and reports downstream as "the backend is down".
+      - task: image:plugin
+        vars: { PLUGIN: kubecompute }
+      - task: image:plugin
+        vars: { PLUGIN: openbao }
+      - task: image:plugin
+        vars: { PLUGIN: opentofu }
+      - task: image:plugin
+        vars: { PLUGIN: awss3 }
+      - task: image:plugin
+        vars: { PLUGIN: netbox }
+      # BOTH execution environments, because the two ansible Actuators this demo drives declare
+      # different images: apache-configure runs on the default EE, and ansible-certificate declares
+      # stratt-ee-crypto:dev (community.crypto pinned and version-verified at BUILD time, ADR-0117
+      # D3). An EE-Job Actuator is reported enabled WITHOUT any image check — there is nothing to
+      # dial — so a missing EE image is only ever found by a Run failing after a gate.
+      - task: dev:ee:build
+      - task: dev:ee-crypto:build
+      # THE BACKENDS THE PLUGINS DIAL.
+      - task: dev:openbao:up # the CLM the certissuer capability signs with
+      - task: dev:objectstore:up # the tofu state bucket the statestore capability needs
+      - task: dev:netbox:up # the allocator that decides the subnet's CIDR
+      # The EC2 API `tofu apply` builds the network against. dev:connector-e2e does NOT call this —
+      # it verifies the registry, and opentofu-network verifies by dialling its own plugin pod, not
+      # floci. A BUILD needs the substrate to exist, which is why the capstone stands it up and the
+      # registry proof does not.
+      - task: dev:floci:up
+      # The floor kubecompute BUILDS INTO: the stratt-hosts namespace (created ADOPTABLE so the first
+      # helm install on a cold cluster does not collide with it), the built host's authorized_keys,
+      # and the gate-only authz marker Secrets the estate's credential-refs NAME.
+      - task: dev:kubecompute:up
+      # The machine credential the converge and the certificate delivery ride. Shared with the
+      # hand-declared fixture nodes on purpose: a host Stratt BUILT is reachable by the credential the
+      # estate already brokers, not by one minted at build time that nothing else knows about.
+      - task: dev:machine-key:secret
+      - task: demo:region-to-cert:stage
+      - |
+        set -eu
+        "{{.HELM}}" upgrade --install stratt {{.ROOT_DIR}}/deploy/charts/stratt \
+          --kube-context {{.KIND_CONTEXT}} -n stratt --create-namespace \
+          -f {{.ROOT_DIR}}/deploy/charts/stratt/values-allinone.yaml \
+          -f {{.ROOT_DIR}}/deploy/charts/stratt/values-demo-region-to-cert.yaml
+      # A rebuilt image with the SAME tag is invisible to Kubernetes: the pod spec does not change,
+      # so `helm upgrade` leaves the old pod running and `rollout status` happily reports it ready.
+      # With pullPolicy: Never that means a code change silently does not take effect.
+      - "{{.KUBECTL}} --context {{.KIND_CONTEXT}} -n stratt rollout restart deploy/stratt"
+      # EVERY Deployment, not just strattd — the plugin that cannot start is the one whose capability
+      # never resolves, and waiting on deploy/stratt alone is how a floor goes green with a plugin in
+      # ImagePullBackOff.
+      - |
+        set -eu
+        for d in $("{{.KUBECTL}}" --context {{.KIND_CONTEXT}} -n stratt get deploy -o name); do
+          "{{.KUBECTL}}" --context {{.KIND_CONTEXT}} -n stratt rollout status "$d" --timeout=300s
+        done
+      - KUBECONTEXT={{.KIND_CONTEXT}} KUBECTL={{.KUBECTL}} bash {{.ROOT_DIR}}/demos/region-to-cert/run.sh
+
+  demo:region-to-cert:down:
+    # Tear down the capstone: uninstall the stratt release and delete the hosts Stratt BUILT. The
+    # kind cluster is kept for a fast re-run; full nuke: `task dev:kind:down`. Idempotent.
+    #
+    # The built hosts are deleted EXPLICITLY rather than left to the namespace, because they are not
+    # chart resources — they are pods kubecompute created, and `helm uninstall` has no idea they
+    # exist. Leaving them would make the next run observe hosts from a previous life, adopt them by
+    # name, and skip the build the demo exists to show.
+    desc: "Demo teardown — uninstall stratt + delete the built hosts and the backends holding built state (full nuke: dev:kind:down)"
+    cmds:
+      - "{{.HELM}} uninstall stratt -n stratt --kube-context {{.KIND_CONTEXT}} --ignore-not-found 2>/dev/null || true"
+      - "{{.KUBECTL}} --context {{.KIND_CONTEXT}} -n stratt-hosts delete pods,services -l stratt.managed=true --ignore-not-found 2>/dev/null || true"
+      # ── A REAL RESET, because this demo BUILDS THINGS and a build only happens once ──────────────
+      # ADR-0116 asks that `:down` leave a demo re-runnable from a known state. For the other demos
+      # that is nearly free. This one is different in kind: it drives four Findings that exist
+      # BECAUSE something is missing, and every one of them closes permanently. Re-running against a
+      # floor that still holds the previous run's state produces no build Finding at all, and the
+      # runner then fails with "no provisioning Finding ever opened" — which reads as a broken demo
+      # rather than as an already-converged estate.
+      #
+      # So the state has to go with it, and it lives in four places outside the chart:
+      #   floci      — the VPCs/subnets `tofu apply` really created
+      #   seaweedfs  — the tofu state that would otherwise report them as already built
+      #   netbox     — the prefix allocations (a re-run must be able to get the same ranges back)
+      #   openbao    — the CA, so the next run's certificate chains to a CA that exists
+      # Each is recreated by its own idempotent `dev:*:up` at the start of `:run`, so deleting them
+      # costs a re-bootstrap and buys a demo that actually re-runs.
+      - "{{.KUBECTL}} --context {{.KIND_CONTEXT}} -n stratt delete deploy floci seaweedfs netbox netbox-postgres netbox-redis openbao --ignore-not-found 2>/dev/null || true"
+      # The minted NetBox token dies with its database; leaving it makes dev:netbox:up REUSE a token
+      # the new NetBox has never heard of, and every ipam resolve then fails as unauthorized.
+      - "{{.KUBECTL}} --context {{.KIND_CONTEXT}} -n stratt delete secret netbox-api-token --ignore-not-found 2>/dev/null || true"
 
   dev:promote:authz:
     # Genesis -> real-authz promotion, BACKEND axis (ADR-0102, docs/runbooks/genesis-to-authz.md):

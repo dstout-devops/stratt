@@ -1,0 +1,29 @@
+# The dev-floor grants this demo needs, as data. Pointers only, never material (§2.5).
+#
+# The runner drives everything as the dev-header `bootstrap-admin` Principal — the SAME identity a
+# UI click, a CLI invocation or an MCP agent would carry (§1.6), through the same authorization
+# model. There is no demo back door.
+#
+# EVERY LINE HERE IS A GATE THAT ACTUALLY FIRES. `runner` on a View is the execution gate, checked
+# at launch before a single target resolves or a pod spawns (ADR-0028). `user` of a CredentialRef is
+# the per-Step use-check, and for an Action it is the ONLY authz gate there is — the core refuses a
+# credential-free Action outright ("ActionUngated"), which is why building a host and signing a
+# certificate each carry a gate-only ref that brokers no material at all (ADR-0052).
+tuples:
+  # Approving the two build Gates (§5 Flow 1). Building a host and building a network are not things
+  # a cadence gets to do on its own.
+  - { user: principal:bootstrap-admin, relation: member, object: team:platform-admins }
+  # The View the built host lands in — the target of the apache converge and the certificate flow.
+  - { user: principal:bootstrap-admin, relation: runner, object: view:web-servers }
+  # The View the built network lands in. Nothing is LAUNCHED against it; it is how the built subnet
+  # is read back, through the same gated door as everything else rather than an ungated kind query.
+  - { user: principal:bootstrap-admin, relation: runner, object: view:built-subnets }
+  # The gate on BUILDING A HOST (kubecompute/create-host).
+  - { user: principal:bootstrap-admin, relation: user, object: credential_ref:kubecompute-build }
+  # The gate on BUILDING A NETWORK — the AWS API credentials tofu authenticates with.
+  - { user: principal:bootstrap-admin, relation: user, object: credential_ref:aws-dev }
+  # The machine credential the converge and the certificate delivery ride to reach the host.
+  - { user: principal:bootstrap-admin, relation: user, object: credential_ref:web-machine }
+  # The gate on SIGNING (cert-issuer/sign). Reaching the View and being allowed to sign are two
+  # different permissions, and a Principal holding only the first is refused at launch.
+  - { user: principal:bootstrap-admin, relation: user, object: credential_ref:cert-issuer }

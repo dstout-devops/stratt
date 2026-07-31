@@ -1,0 +1,43 @@
+# Admitted plugin estates for the region-to-cert capstone (ADR-0137 D1/D3).
+#
+# THIS DEMO ADMITS ESTATES, NOT JUST CONTRACTS — the first one that does, and the difference is
+# what makes it a capstone rather than a fifth scenario. app-cert admits `ansible` with
+# `contractsOnly: true` because it declares its OWN Actuator and wants the tool's seam, not the
+# tool's estate. This demo declares no Actuator at all: every provider, every build Workflow and
+# every converge recipe it drives is one the PLUGIN ships. What the demo contributes is the
+# scenario — Intents, Blueprints, Assignments, Views, one capability-binding — which is exactly the
+# division of labour ADR-0137 D1 describes and what an adopter's own Git actually looks like.
+#
+# Copying those declarations in here instead would be the divergent-second-copy defect this repo
+# keeps paying for (awxsim's two halves; the `web-server` capability route; PRV-1's two
+# compute-build.yaml). The demo would then pass against its own copy of a builder while the shipped
+# one rotted.
+#
+# SIX PLUGINS, and the count is the honest cost of the capstone: two substrates, a network leg with
+# an allocator and a state store behind it, a build, a converge and a certificate.
+plugins:
+  # The converge half of both app and certificate legs: `ansible-apache` runs apache-configure,
+  # `ansible-certificate` runs the CSR-gather and cert-delivery Steps. Its content travels with it
+  # (an Actuator's contentDir is relative to the estate root that SHIPPED it).
+  - name: ansible
+    path: ../../../plugins/ansible/estate
+  # opentofu's `statestore` capability provider. Without it opentofu-network resolves and then sits
+  # PENDING ON A DEPENDENCY — fail-closed working as designed (§1.8), and not a floor anyone can
+  # build a subnet on.
+  - name: awss3
+    path: ../../../plugins/awss3/estate
+  # The Compute provider on the kubernetes substrate, and the piece that made the chain joinable at
+  # all: it builds a host that can actually be converged, and then reports the name it CAUSED.
+  - name: kubecompute
+    path: ../../../plugins/kubecompute/estate
+  # The `ipam` capability provider. The Intent asks for "a /24 out of this pool"; NetBox decides
+  # WHICH /24. That is the whole difference between an allocator and a decoration (ADR-0111).
+  - name: netbox
+    path: ../../../plugins/netbox/estate
+  # The `certissuer` capability provider — a real CA behind a Connector, which is the line the
+  # app-cert demo drew and could not cross (its certificate is minted by the play itself).
+  - name: openbao
+    path: ../../../plugins/openbao/estate
+  # The network builder: the bundled aws-network module, run by opentofu-subnet-build.
+  - name: opentofu
+    path: ../../../plugins/opentofu/estate

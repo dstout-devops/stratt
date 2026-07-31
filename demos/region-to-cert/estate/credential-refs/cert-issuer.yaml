@@ -1,0 +1,14 @@
+# The gate on SIGNING (§2.5, ADR-0050, ADR-0052).
+#
+# GATE-ONLY for the same reason as kubecompute-build one leg over: the openbao plugin authenticates
+# to the CLM itself, so nothing crosses here. Deleting the reference because "no material is needed"
+# is the tempting and exactly-backwards fix — it would remove the AUTHORIZATION on the verb, not
+# tidy up bookkeeping about a secret.
+#
+# When the plugin's token moves onto a real brokered credential (an acknowledged §2.5 debt), this
+# declaration gains an `injection` and stops being gate-only. The Workflow does not change.
+name: cert-issuer
+ownerTeam: platform-admins
+backend: k8s-secret
+gateOnly: true
+locator: { namespace: stratt, name: cert-issuer-authz }

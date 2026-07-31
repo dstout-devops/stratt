@@ -1,0 +1,11 @@
+# The second of the two Views declared only because an admitted plugin's Workflows target them —
+# the full account is in plugin-owned-secure-hosts.yaml beside this file.
+#
+# SPLIT INTO TWO FILES because the estate loader reads ONE declaration per file: written as a
+# two-document YAML it loaded `secure-hosts` and silently dropped `web-hosts`, and the only reason
+# that surfaced at all is that a Workflow referenced the missing one. A file whose second document
+# nothing happens to reference would vanish without a word.
+name: web-hosts
+selector:
+  kinds: [host]
+  labels: { role: web }
