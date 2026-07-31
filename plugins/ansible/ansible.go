@@ -78,6 +78,20 @@ const GatherFactsPlay = `- hosts: all
 // connection key from core) still render, in sorted key order so the same resolved
 // target set always renders the SAME inventory — a byte-stable artifact is what makes
 // two Runs comparable during descent (§1.8).
+// hasLocalTarget reports whether any target renders ansible_connection=local as a HOST
+// var — the fact connectionTypeVars needs to refuse a contradicting group-level type
+// (ADR-0153 D6). Kept beside buildInventory because it must stay true to what that
+// function actually emits; two functions disagreeing about which targets are local is
+// how the refusal would silently stop firing.
+func hasLocalTarget(targets []Target) bool {
+	for _, t := range targets {
+		if t.Address == "local" {
+			return true
+		}
+	}
+	return false
+}
+
 func buildInventory(targets []Target) string {
 	var b strings.Builder
 	b.WriteString("[all]\n")

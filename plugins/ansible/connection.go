@@ -18,6 +18,16 @@ import (
 // the credential the Step was AUTHORIZED to use and the file it actually read were two
 // facts nothing kept in agreement (§2.4).
 type connectionParams struct {
+	// Type is the ansible connection plugin (ADR-0153 D1). Empty means ssh — the shape
+	// every version before v8 assumed, so an existing declaration renders identically.
+	Type string `json:"type,omitempty"`
+	// NetworkOS is ansible_network_os, which the netcommon plugins require. Required with
+	// Type network_cli/netconf and refused otherwise: there is nothing to infer it from,
+	// and a wrong guess CONNECTS and then speaks another vendor's syntax (D2).
+	NetworkOS string `json:"networkOS,omitempty"`
+	// PasswordRef is the login/device password, rendered as --connection-password-file by
+	// playbookFlags — a PATH, never a value in the inventory (D3).
+	PasswordRef     *passwordRef     `json:"passwordRef,omitempty"`
 	User            string           `json:"user,omitempty"`
 	CredentialRef   string           `json:"credentialRef,omitempty"`
 	File            string           `json:"file,omitempty"`
@@ -44,6 +54,76 @@ const (
 	HostKeyOff       = "off"
 )
 
+// Connection types (ADR-0153 D1). The enum is closed and short: winrm/psrp are absent
+// because no verifiable Windows target exists in CI, and a value the shim has never
+// honored fails on a migrated fleet instead of at estate load. `local` is absent because
+// it is a property of the TARGET (mgmt.address's reserved value), not of this Step.
+const (
+	ConnSSH        = "ssh"
+	ConnNetworkCLI = "network_cli"
+	ConnNetconf    = "netconf"
+	// connLocal is what a `local` target renders as a HOST var. Not a legal params value —
+	// it exists here only so the conflict in D6 can be detected and named.
+	connLocal = "local"
+)
+
+// networkConnections are the ansible.netcommon plugins, which cannot connect without an
+// ansible_network_os.
+var networkConnections = map[string]bool{ConnNetworkCLI: true, ConnNetconf: true}
+
+// connectionTypeVars renders ansible_connection and ansible_network_os, and REFUSES the
+// three shapes that would otherwise resolve themselves silently (ADR-0153 D1/D2/D6).
+//
+// hasLocal reports whether any target in this run renders ansible_connection=local as a
+// HOST var. That matters because host vars beat group vars in ansible: a non-ssh type set
+// here would be silently overridden for exactly those targets, which is implicit
+// precedence hiding inside two declarations that each look right (§2.4). Refusing is the
+// only option that cannot connect the wrong way.
+func connectionTypeVars(c *connectionParams, hasLocal bool) (map[string]string, error) {
+	vars := map[string]string{}
+	typ := c.Type
+	if typ == "" || typ == ConnSSH {
+		if c.NetworkOS != "" {
+			return nil, fmt.Errorf("connection.networkOS is set but connection.type is %s — "+
+				"ansible_network_os means nothing to the ssh plugin, so one of the two is wrong",
+				cmpOrDefault(typ, ConnSSH))
+		}
+		return vars, nil
+	}
+	if typ == connLocal {
+		return nil, fmt.Errorf("connection.type %q is not a params value — a local target declares "+
+			"itself through mgmt.address, so setting it here would be a second home for that fact", typ)
+	}
+	if !networkConnections[typ] {
+		return nil, fmt.Errorf("connection.type %q is not one of %s, %s, %s (winrm/psrp are not "+
+			"supported: no verifiable Windows target exists, and accepting the value would ship a "+
+			"code path nothing has run)", typ, ConnSSH, ConnNetworkCLI, ConnNetconf)
+	}
+	if c.NetworkOS == "" {
+		return nil, fmt.Errorf("connection.type %s requires connection.networkOS (e.g. cisco.ios.ios) — "+
+			"there is nothing to infer it from, and a wrong guess connects and then issues another "+
+			"vendor's command syntax", typ)
+	}
+	if hasLocal {
+		return nil, fmt.Errorf("connection.type %s is set but this run includes a target whose "+
+			"mgmt.address is %q — ansible resolves that by letting the host var win, so the local "+
+			"target would silently connect a different way; split the View rather than have one Run "+
+			"mean two things", typ, connLocal)
+	}
+	vars["ansible_connection"] = typ
+	vars["ansible_network_os"] = c.NetworkOS
+	return vars, nil
+}
+
+// cmpOrDefault names the effective value in a diagnosis when the field was left empty, so
+// the message reads as what ansible will actually do rather than as a blank.
+func cmpOrDefault(v, def string) string {
+	if v == "" {
+		return def + " (the default)"
+	}
+	return v
+}
+
 // connectionVars renders the ansible connection variables for the inventory. The SHIM
 // authors every ansible_* key here; the core authors none (§1.4, ADR-0084 D3).
 //
@@ -51,10 +131,13 @@ const (
 // tested seam vaultPasswordFile uses rather than a second one. stage copies the resolved
 // key to a private-mode file and returns its path — see the call site for why that copy
 // is unavoidable. Both are injected so the rendering is unit-tested without a pod.
-func connectionVars(c *connectionParams, hops []Hop, knownHosts string, readDir func(string) ([]string, error), stage func(string) (string, error)) (map[string]string, error) {
-	vars := map[string]string{}
+func connectionVars(c *connectionParams, hops []Hop, knownHosts string, hasLocal bool, readDir func(string) ([]string, error), stage func(string) (string, error)) (map[string]string, error) {
 	if c == nil {
 		c = &connectionParams{}
+	}
+	vars, err := connectionTypeVars(c, hasLocal)
+	if err != nil {
+		return nil, err
 	}
 	if c.User != "" {
 		vars["ansible_user"] = c.User
@@ -83,6 +166,9 @@ func connectionVars(c *connectionParams, hops []Hop, knownHosts string, readDir 
 		vars["ansible_ssh_private_key_file"] = path
 	}
 
+	// ssh-specific options are rendered for the ssh family only. network_cli/netconf ride
+	// ssh underneath, so the host-key policy still applies to them; a future non-ssh type
+	// would need this gated, and the enum is closed so that stays a visible decision.
 	args, err := sshCommonArgs(c, knownHosts, readDir)
 	if err != nil {
 		return nil, err

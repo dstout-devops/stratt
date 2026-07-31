@@ -326,6 +326,44 @@ the safe one. Scope today is `kubecompute-build`, the only Workflow forwarding `
 as other builders begin to, they either declare what they read or are correctly reported as reading
 none.
 
+### The reach gap closed for network devices — and a password that is only ever a path (ADR-0153)
+
+`ansible-tool.md` called ANS-001 "the one finding that changes what Stratt can be sold as": the ansible
+Actuator spoke **SSH with a private key and nothing else**, so a network fleet or a password-only estate
+was not partially supported, it was unsupported — and no document said so. `ansible.input.v8` closes most
+of it: `connection.type: network_cli | netconf` with a required `networkOS`, plus the three credential
+forms the connection surface had no shape for (ANS-001's password half, ANS-010, ANS-011).
+
+**The credential half was the design, and the mechanism turned out better than the sketch.** The gap
+register assumed a password would have to become a value somewhere. It does not: ansible-core takes all
+three secrets as FILE PATHS — `--connection-password-file`, `--become-password-file`,
+`--vault-password-file` / `--vault-id id@path` — **verified against the interpreter the EE pins, not
+assumed from documentation**. So a password is never a value in the inventory, in extraVars, or in argv.
+The shape everybody writes first, `ansible_password` as an inventory group var, is not a weaker option
+but a forbidden one: `writeInventory` creates `inventory/hosts` at **0644** in the private data dir
+**beside ansible-runner's `artifacts/`**, and §2.5 says material is never written to artifacts. Each
+password resolves through the SAME `credentialFile` helper, gated by the SAME per-name use-grant check —
+no new credential channel, no new authorization path.
+
+**Three refusals, each because the alternative resolves itself silently.** `networkOS` is required for
+the netcommon types because a guessed vendor CONNECTS and then issues another vendor's syntax. A non-ssh
+`type` on a run containing a `local` target is refused, because `local` is a HOST var and host vars beat
+group vars — implicit precedence hiding inside two declarations that each look right (§2.4). And a
+duplicate vault `id` is refused, because ansible resolves that by ORDER, which is a silent winner by
+another name.
+
+**`winrm`/`psrp` are NOT in the enum, deliberately.** Windows is the most-asked-for row in the register,
+and there is no freely-runnable Windows target in CI — so the value would ship as a code path nothing had
+ever executed. An enum that ACCEPTS it fails at 3 a.m. on a fleet someone migrated; one that rejects it
+fails at estate load with a message naming the gap. Same rule as ADR-0151 D3's unimplemented substrates
+and the façade's unconvertible cron: **no answer beats a plausible wrong one.**
+
+**The honest limit: none of this is live-proven.** Every flag, every refusal and every ordering is
+unit-tested, and `vault`'s v7 object form still renders byte-identically — but **no network device has
+been driven end to end from this repo**. That needs a CI-runnable target (FRR or cEOS plus the matching
+collection in the EE image) and is booked in the same shape as PLG-1's bastion half. A unit-green
+connection type is not a proven one, and the parity doc says so in place.
+
 ### `/api/v2` route breadth is DONE (2026-07-31) — and two refusals are the point
 
 `schedules`, `workflow_job_templates` + `workflow_jobs`, `projects`, and `credentials` +

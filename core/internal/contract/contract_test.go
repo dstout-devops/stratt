@@ -305,8 +305,8 @@ func TestPinsAreStable(t *testing.T) {
 			versions[c.Name] = c.Version
 		}
 	}
-	// ansible.input v7 (the mounted-project `playbook` ref, ADR-0134 D4) resolves as the current
-	// version; v1–v6 stay pinned alongside it (every version keeps its own pin row — only the
+	// ansible.input v8 (the connection type + the credential forms, ADR-0153) resolves as the
+	// current version; v1–v7 stay pinned alongside it (every version keeps its own pin row — only the
 	// LOOKUP collapses to the highest). It is now ESTATE-resident (ADR-0138 D3/D4), so the
 	// version-sibling rule is asserted where the document actually lives — and asserting it there
 	// is what proves RegisterEstate reproduces load()'s semantics rather than inventing its own.
@@ -316,7 +316,7 @@ func TestPinsAreStable(t *testing.T) {
 			estateVersions[c.Name] = c.Version
 		}
 	}
-	if estateVersions["actuators/ansible.input"] != 7 {
+	if estateVersions["actuators/ansible.input"] != 8 {
 		t.Fatalf("ansible.input current version: %d (estate-resident since ADR-0138 D4)",
 			estateVersions["actuators/ansible.input"])
 	}

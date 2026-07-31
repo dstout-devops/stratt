@@ -38,9 +38,11 @@ restates it.
 
 **Bottom line.** The execution surface is genuinely good where it reaches — typed, bounded, reviewable,
 and deeper than the AWX mirror of the same knobs. The one finding that changes what Stratt can be sold as
-is **ANS-001**: the Actuator speaks SSH with a private key and nothing else, so a Windows estate or a
-network fleet is not partially supported, it is unsupported. That is a bigger hole than anything in the
-[AWX object-model audit](awx-object-model.md), and unlike those, it is not visible from any existing doc.
+was **ANS-001**: the Actuator spoke SSH with a private key and nothing else, so a Windows estate or a
+network fleet was not partially supported, it was unsupported. **ADR-0153 (2026-07-31) closed most of it**
+— `network_cli`/`netconf` reach, plus the three credential forms (login/device password, escalation
+password, multiple vault identities) — and the residue is now **Windows only**, stated in the enum rather
+than discovered at run time. That residue is real and is not being talked around: see §3.
 
 ---
 
@@ -95,10 +97,10 @@ mirror of the same fields.
 
 | `ansible-playbook` capability                              | Status | Note                                                                                                                                                                         | ID          |
 | ---------------------------------------------------------- | ------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------- |
-| `--connection` / `ansible_connection` other than ssh+local | 🔴     | See §3 — the finding of this audit                                                                                                                                           | **ANS-001** |
-| SSH **password** auth (`ansible_password`)                 | 🔴     | `connectionVars` renders `ansible_ssh_private_key_file` and nothing else — key-only                                                                                          | **ANS-001** |
-| **become password** (`ansible_become_password`)            | 🔴     | `becomeParams` is `{enabled,user,method}`; a sudo-with-password target cannot escalate                                                                                       | **ANS-010** |
-| `--vault-id` (multiple vault identities)                   | 🟡     | One `vault.credentialRef` only; a repo using two vault ids cannot run                                                                                                        | **ANS-011** |
+| `--connection` / `ansible_connection` other than ssh+local | 🟡     | **`network_cli` + `netconf` ship (ADR-0153, 2026-07-31)** — the netcommon reach. `winrm`/`psrp` and `httpapi` are still absent and are REFUSED by the enum rather than accepted; see §3 | **ANS-001** |
+| SSH **password** auth (`ansible_password`)                 | 🟢     | ~~key-only~~ — **`connection.passwordRef` ships (ADR-0153 D3)**, rendered as `--connection-password-file`: a PATH, never a value                                              | **ANS-001** |
+| **become password** (`ansible_become_password`)            | 🟢     | ~~cannot escalate~~ — **`become.passwordRef` ships (ADR-0153 D5)** → `--become-password-file`. A ref without `enabled: true` is refused                                       | ~~**ANS-010**~~ |
+| `--vault-id` (multiple vault identities)                   | 🟢     | ~~one only~~ — **`vault` takes an object OR a list, each with an optional `id` (ADR-0153 D4)**. Duplicate ids refused                                                         | ~~**ANS-011**~~ |
 | `--start-at-task`, `--step`                                | 🔴     | Interactive/partial execution. Low value for a governed platform ⚪-adjacent                                                                                                 | **ANS-012** |
 | `--syntax-check`, `--list-tasks`, `--list-hosts`           | 🔴     | Cheap, and genuinely useful as a pre-flight gate before a Run                                                                                                                | **ANS-013** |
 | `--force-handlers`, `--flush-cache`                        | 🔴     | Low value                                                                                                                                                                    | **ANS-012** |
@@ -112,33 +114,58 @@ mirror of the same fields.
 
 ---
 
-## 3. The connection-type gap · ANS-001
+## 3. The connection-type gap · ANS-001 — mostly closed (ADR-0153), Windows outstanding
 
-`connectionVars` ([connection.go:54-102](../../plugins/ansible/connection.go#L54-L102)) emits exactly
-three things: `ansible_user`, `ansible_ssh_private_key_file`, and `ansible_ssh_common_args`. The only
-other connection form anywhere in the path is `ansible_connection=local`, from the reserved `local` value
-of `mgmt.address` ([ansible.go:88](../../plugins/ansible/ansible.go#L88)).
+**Before ADR-0153.** `connectionVars` emitted exactly three things: `ansible_user`,
+`ansible_ssh_private_key_file`, and `ansible_ssh_common_args`. The only other connection form anywhere in
+the path was `ansible_connection=local`, from the reserved `local` value of `mgmt.address`. So the
+Actuator reached **Linux/Unix over SSH with a private key**, and the control node — and that was a reach
+gap, not a depth gap: for a network fleet or a password-only estate the answer was "you cannot use
+Stratt," and no document said so.
 
-So the Actuator can reach: **Linux/Unix over SSH with a private key**, and the control node itself. It
-cannot reach:
+The tell that it was never a decision: the `mgmt.address` Facet schema describes itself as feeding "the
+ansible/ssh/**winrm** Actuator" — the coordinate was designed for a connection type the execution path
+never grew.
 
-- **Windows** — `winrm` / `psrp`. No connection type, and no password auth, which Windows needs.
-- **Network devices** — `network_cli`, `netconf`, `httpapi`. The `ansible.netcommon` family is a large
-  part of why enterprises buy AAP.
-- **Containers** — `docker`, `podman`, `kubectl` connection plugins.
-- **Any SSH host that does not take a key** — password-only estates, which legacy fleets still are.
+**What ships now** (`ansible.input.v8`,
+[ADR-0153](../adr/0153-a-connection-type-and-a-password-that-is-only-ever-a-path.md)):
 
-This is not a depth gap, it is a reach gap: for those estates the answer today is "you cannot use Stratt,"
-and no current document says so. Note the tell that it was never a decision — the `mgmt.address` Facet
-schema already describes itself as feeding "the ansible/ssh/**winrm** Actuator", so the coordinate was
-designed for a connection type the execution path never grew.
+| Reach                                      | Then | Now                                                                  |
+| ------------------------------------------ | ---- | -------------------------------------------------------------------- |
+| Linux/Unix over SSH **with a key**         | ✅   | ✅ unchanged — an ssh Step renders byte-identically to v7             |
+| Any SSH host **without** a key             | ❌   | ✅ `connection.passwordRef`                                           |
+| **Network devices** (`ansible.netcommon`)  | ❌   | ✅ `connection.type: network_cli` / `netconf` + `connection.networkOS` |
+| Escalation that **prompts** for a password | ❌   | ✅ `become.passwordRef`                                               |
+| A repo with **two vault identities**       | ❌   | ✅ `vault` as a list with `id`s                                       |
+| **Windows** (`winrm`/`psrp`)               | ❌   | ❌ **still no** — and the enum REFUSES the value                      |
+| `httpapi`                                  | ❌   | ❌ its own decision (needs use_ssl/validate_certs/port)               |
+| Containers (`docker`/`podman`/`kubectl`)   | ❌   | ❌ nobody has asked                                                   |
 
-Worth stating clearly because it bounds the fix: the **graph side is ready**. `mgmt.address` carries
-address + port and is deliberately closed against growing into a device ontology (§9), so adding a
-connection type is an Actuator-and-Contract change — an `ansible.input.v7` with a typed `connection.type`
-enum plus the credential forms each type needs — not a data-model change. It should be its own ADR, and
-the credential half (passwords, brokered per §2.5, never in `extraVars`) is the part that needs the
-argument.
+**The credential half was the design, and the mechanism is worth knowing.** All three secrets reach
+ansible as a **file path** — `--connection-password-file`, `--become-password-file`,
+`--vault-password-file` / `--vault-id id@path` — verified against the ansible-core the EE pins. So a
+password is never a value anywhere. The shape everybody writes first, `ansible_password` as an inventory
+group var, is not a weaker option but a forbidden one: `writeInventory` creates `inventory/hosts` at
+**0644** in the private data dir **beside `artifacts/`**, and §2.5 says material is never written to
+artifacts.
+
+**Two refusals rather than resolutions.** `connection.networkOS` is required for the netcommon types and
+refused for ssh — a guessed vendor connects and then issues another vendor's syntax, which surfaces as a
+play failure pointing at the wrong thing. And a non-ssh `type` on a run that includes a `local` target is
+refused outright: `local` is a HOST var, host vars beat group vars, so the local target would silently
+connect a different way — implicit precedence hiding inside two declarations that each look right (§2.4).
+
+**Windows is the honest residue.** It is the most-asked-for row in the register and it is absent because
+it cannot be verified: there is no freely-runnable Windows target in CI, so shipping `winrm` would ship a
+code path nothing had ever executed. The enum therefore **rejects** it at estate load with a message
+naming the gap, instead of accepting it and failing on a fleet someone already migrated. When a target
+can be stood up and driven end to end, `winrm` is one enum value plus a credential form that now exists.
+
+**The live half is also outstanding, and it applies to what shipped.** The rendering is unit-tested —
+every flag, every refusal, every ordering — but **no network device has been driven end to end from this
+repo**. That needs a CI-runnable target (an FRR or cEOS container plus the matching collection in the EE
+image), and it is booked in the same shape as PLG-1's bastion half. A unit-green connection type is not a
+proven one.
 
 ---
 
@@ -146,10 +173,13 @@ argument.
 
 **Tier 1 — bounds what estates Stratt can manage at all:**
 
-- **ANS-001 · Connection types + non-key credentials.** Windows and network devices. Own ADR; the
-  credential-form half is the design work, not the flag.
-- **ANS-010 · Become password.** Small, and blocks a common sudo posture. Naturally batched with
-  ANS-001, since both are "a credential form the connection surface has no shape for."
+- **ANS-001 · Connection types + non-key credentials.** ~~Windows and network devices.~~ **Mostly done
+  (ADR-0153, 2026-07-31)**: `network_cli`/`netconf` + all three credential forms. Two pieces remain, and
+  neither is a flag — **(a) Windows**, blocked on a verifiable target rather than on design; **(b) a live
+  network-device run**, blocked on a CI-runnable device container plus its collection in the EE image.
+  Everything that shipped is unit-proven and none of it is live-proven.
+- ~~**ANS-010 · Become password.**~~ **Done (ADR-0153 D5)** — `--become-password-file`, and a password
+  supplied without `enabled: true` is refused rather than silently ignored.
 
 **Tier 2 — the estate cannot see where configuration comes from:**
 
@@ -161,7 +191,7 @@ argument.
 **Tier 3 — completeness of the content picture:**
 
 - **ANS-006** custom modules/plugins (+ `--module-path`) · **ANS-005** `ansible.cfg` ·
-  **ANS-007** collection-shaped roots · **ANS-011** multi-identity vault ·
+  **ANS-007** collection-shaped roots · ~~**ANS-011** multi-identity vault~~ (done, ADR-0153 D4) ·
   **ANS-013** pre-flight syntax check.
 
 **Unexamined (🟠) — look before deciding:** **ANS-008** vaulted-file observation ·

@@ -78,7 +78,10 @@ type params struct {
 	Diff      bool          `json:"diff,omitempty"`
 	Verbosity int           `json:"verbosity,omitempty"`
 	Timeout   int           `json:"timeout,omitempty"`
-	Vault     *vaultParams  `json:"vault,omitempty"`
+	// Vault is EITHER the v7 object (one identity) or a v8 array of them (ADR-0153 D4).
+	// Raw here and normalized by vaultEntries, because one field with two shapes is what
+	// keeps multi-identity from being a second field with a precedence rule (§2.4).
+	Vault json.RawMessage `json:"vault,omitempty"`
 
 	// Connection is the authentication half of reachability (ansible.input.v6,
 	// ADR-0126 D1). Its absence is legitimate — a local-connection target needs no
@@ -96,6 +99,23 @@ type becomeParams struct {
 	Enabled bool   `json:"enabled"`
 	User    string `json:"user,omitempty"`
 	Method  string `json:"method,omitempty"`
+	// PasswordRef closes ANS-010 (ADR-0153 D5). Rendered as --become-password-file: the
+	// path, never the password. A target whose escalation prompts could not escalate at all
+	// before this field existed.
+	PasswordRef *passwordRef `json:"passwordRef,omitempty"`
+}
+
+// passwordRef is a brokered password: a CredentialRef already on the Step, resolved to its
+// MOUNT PATH and handed to ansible as a --*-password-file argument (ADR-0153 D3).
+//
+// The path is the whole point. Rendering the password as an inventory group var instead —
+// the shape everybody writes first — puts secret material in inventory/hosts, which
+// writeInventory creates at 0644 in the private data dir BESIDE ansible-runner's
+// artifacts/. §2.5 says material is never written to artifacts, so that shape is not a
+// weaker option, it is a forbidden one.
+type passwordRef struct {
+	CredentialRef string `json:"credentialRef"`
+	File          string `json:"file,omitempty"`
 }
 
 // vaultParams points at a CredentialRef ALREADY on the Step (§2.5): the use-grant
@@ -104,6 +124,40 @@ type becomeParams struct {
 type vaultParams struct {
 	CredentialRef string `json:"credentialRef"`
 	File          string `json:"file,omitempty"`
+	// ID is the vault IDENTITY (ADR-0153 D4, closing ANS-011). With it the entry renders
+	// --vault-id <id>@<path>; without it, --vault-password-file <path>, byte-identical to v7.
+	ID string `json:"id,omitempty"`
+}
+
+// vaultEntries normalizes params.vault's two shapes into one list. A single object is the
+// v7 form and MUST keep working: the registry keeps one live actuators/ansible.input and a
+// Step cannot pin a version (ADR-0132 D4), so an array-only read would fail every shipped
+// object-form Step the moment v8 landed.
+func vaultEntries(raw json.RawMessage) ([]vaultParams, error) {
+	if len(raw) == 0 || string(raw) == "null" {
+		return nil, nil
+	}
+	var one vaultParams
+	if err := json.Unmarshal(raw, &one); err == nil {
+		return []vaultParams{one}, nil
+	}
+	var many []vaultParams
+	if err := json.Unmarshal(raw, &many); err != nil {
+		return nil, fmt.Errorf("params.vault is neither one entry nor a list of them: %w", err)
+	}
+	seen := map[string]bool{}
+	for _, v := range many {
+		if v.ID == "" {
+			continue
+		}
+		if seen[v.ID] {
+			// Two files claiming one identity is an ambiguity ansible resolves by ORDER —
+			// a silent winner by another name (§2.4).
+			return nil, fmt.Errorf("params.vault declares vault id %q twice — one identity, one password file", v.ID)
+		}
+		seen[v.ID] = true
+	}
+	return many, nil
 }
 
 // scmParams is a git content-ref: the repo to clone in the EE and the playbook path
@@ -164,6 +218,30 @@ func playbookFlags(p params, dryRun bool, readDir func(string) ([]string, error)
 		if p.Become.Method != "" {
 			f = append(f, "--become-method", p.Become.Method)
 		}
+		if p.Become.PasswordRef != nil {
+			if !p.Become.Enabled {
+				// One of the two is a mistake, and guessing which yields either a pointless
+				// credential mount or a run that quietly does not escalate (ADR-0153 D5).
+				return nil, fmt.Errorf("become.passwordRef is set but become.enabled is false — " +
+					"an escalation password for an escalation nobody requested")
+			}
+			path, err := credentialFile("become", p.Become.PasswordRef.CredentialRef,
+				p.Become.PasswordRef.File, "params.become.passwordRef.file", readDir)
+			if err != nil {
+				return nil, err
+			}
+			f = append(f, "--become-password-file", path)
+		}
+	}
+	// The login/device password. A PATH, never the secret: --connection-password-file is
+	// what makes that possible without a Jinja indirection (ADR-0153 D3).
+	if p.Connection != nil && p.Connection.PasswordRef != nil {
+		path, err := credentialFile("connection", p.Connection.PasswordRef.CredentialRef,
+			p.Connection.PasswordRef.File, "params.connection.passwordRef.file", readDir)
+		if err != nil {
+			return nil, err
+		}
+		f = append(f, "--connection-password-file", path)
 	}
 	if p.Limit != "" {
 		// Narrows the core-resolved set; it can never widen it — the rendered
@@ -185,10 +263,18 @@ func playbookFlags(p params, dryRun bool, readDir func(string) ([]string, error)
 	if p.Verbosity > 0 {
 		f = append(f, "-"+strings.Repeat("v", p.Verbosity))
 	}
-	if p.Vault != nil {
-		path, err := vaultPasswordFile(p.Vault, readDir)
+	vaults, err := vaultEntries(p.Vault)
+	if err != nil {
+		return nil, err
+	}
+	for i := range vaults {
+		path, err := vaultPasswordFile(&vaults[i], readDir)
 		if err != nil {
 			return nil, err
+		}
+		if id := vaults[i].ID; id != "" {
+			f = append(f, "--vault-id", id+"@"+path)
+			continue
 		}
 		f = append(f, "--vault-password-file", path)
 	}
@@ -282,7 +368,7 @@ func Run(ctx context.Context, w io.Writer, dir string, req Request, run commandR
 	if cherr != nil {
 		return emitFatal(w, cherr.Error())
 	}
-	connVars, cerr := connectionVars(p.Connection, chain, filepath.Join(dir, "known_hosts"), osReadDirNames, stageKeyIn(dir))
+	connVars, cerr := connectionVars(p.Connection, chain, filepath.Join(dir, "known_hosts"), hasLocalTarget(req.Targets), osReadDirNames, stageKeyIn(dir))
 	if cerr != nil {
 		return emitFatal(w, cerr.Error())
 	}

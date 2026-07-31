@@ -10,18 +10,18 @@ design must reconcile with. Chronological list: [README.md](README.md); phase vi
 
 ```mermaid
 graph TD
-  actuators["actuators<br/><small>0016 0022 0050 0053 0092 0117<br/>0124 0126 0133 0134 0135 0148<br/>0149</small>"]
+  actuators["actuators<br/><small>0016 0022 0050 0053 0092 0117<br/>0124 0126 0133 0134 0135 0148<br/>0149 0153</small>"]
   api_surface["api-surface<br/><small>0006 0021 0026 0076 0091 0121</small>"]
   audit_telemetry["audit-telemetry<br/><small>0034 0065 0077 0121</small>"]
   authz_identity["authz-identity<br/><small>0009 0028 0035 0079 0101 0122<br/>0130</small>"]
   capability_framework["capability-framework<br/><small>0100 0104 0105 0106 0107 0110<br/>0111 0112 0113 0114 0135 0145<br/>0146 0151</small>"]
   certificates_pki["certificates-pki<br/><small>0030 0043 0050 0098 0106 0150</small>"]
   connectors["connectors<br/><small>0007 0014 0025 0026 0037 0038<br/>0039 0045 0086 0087 0088 0089<br/>0095 0097 0099 0113 0114 0115<br/>0127 0128 0129 0130 0131 0132<br/>0133 0136 0144 0146</small>"]
-  credentials_secrets["credentials-secrets<br/><small>0009 0029 0052 0094 0098 0099<br/>0100 0106 0125 0126</small>"]
+  credentials_secrets["credentials-secrets<br/><small>0009 0029 0052 0094 0098 0099<br/>0100 0106 0125 0126 0153</small>"]
   estate_as_code["estate-as-code<br/><small>0055 0056 0057 0103 0113 0116<br/>0118 0119 0120 0122 0123 0132<br/>0134 0135 0136 0137 0138 0139<br/>0142 0146 0147 0148 0151 0152</small>"]
   findings_drift["findings-drift<br/><small>0019 0020 0033 0043 0080 0085<br/>0128 0129 0130 0133 0148 0150</small>"]
   foundation["foundation<br/><small>0001 0002 0004 0005 0006 0008<br/>0108 0109 0116 0137 0138 0141</small>"]
-  graph_model["graph-model<br/><small>0015 0017 0041 0042 0059 0060<br/>0079 0080 0081 0082 0084 0085<br/>0096 0114 0115 0119 0120 0123<br/>0126 0127 0128 0129 0130 0132<br/>0133 0143 0144 0147 0152</small>"]
+  graph_model["graph-model<br/><small>0015 0017 0041 0042 0059 0060<br/>0079 0080 0081 0082 0084 0085<br/>0096 0114 0115 0119 0120 0123<br/>0126 0127 0128 0129 0130 0132<br/>0133 0143 0144 0147 0152 0153</small>"]
   intent_compiler["intent-compiler<br/><small>0023 0030 0036 0055 0058 0083<br/>0085 0114 0118 0119 0123 0148<br/>0150 0152</small>"]
   orchestration["orchestration<br/><small>0010 0011 0018 0027 0031 0063<br/>0118 0122 0125 0134 0139 0140</small>"]
   plugin_port["plugin-port<br/><small>0046 0047 0048 0049 0051 0053<br/>0054 0103 0117 0121 0124 0125<br/>0127 0131 0137 0138 0140 0141<br/>0145 0149</small>"]
@@ -97,6 +97,7 @@ Actuators — execution engines (opentofu, helm, mcp, cert-issuer reconcile).
 - [ADR-0135](0135-a-plugin-ships-examples-not-declarations.md) — A plugin ships examples and conformance, never declarations; and remediation binds to a capability, not a name
 - [ADR-0148](0148-one-blueprint-per-application-and-an-honest-observation.md) — One Blueprint per application, and an observation that can come back wrong
 - [ADR-0149](0149-the-execution-environment-content-floor.md) — The execution environment carries a content floor, and every variant is a superset
+- [ADR-0153](0153-a-connection-type-and-a-password-that-is-only-ever-a-path.md) — A connection type, and a password that is only ever a path
 
 ### api-surface
 
@@ -221,6 +222,7 @@ Credentials & secrets (§2.5) — brokering, the SecretBroker port, KV, KeyCusto
 - [ADR-0106](0106-openbao-multi-capability-provider.md) — OpenBao as a multi-capability provider; enablement-gate vs resolve-inject capabilities
 - [ADR-0125](0125-notification-sinks-are-drivers-not-a-core-switch.md) — Notification sinks are drivers behind a seam, not a switch in the daemon
 - [ADR-0126](0126-managed-node-reachability-credential-host-key-and-jump.md) — Reaching a managed node: the connection credential, the host key, and the jump path
+- [ADR-0153](0153-a-connection-type-and-a-password-that-is-only-ever-a-path.md) — A connection type, and a password that is only ever a path
 
 ### estate-as-code
 
@@ -324,6 +326,7 @@ Graph model — Entity/Facet/Relation/Contract primitives, projection & liveness
 - [ADR-0144](0144-the-registered-reach-coordinate.md) — The reach coordinate can be REGISTERED: `Intent/DnsRecord` gets a provider, and a declared name becomes a caused fact
 - [ADR-0147](0147-placement-resolves-to-a-provider-native-identity.md) — A declared placement resolves to a provider-native identity, or the build is not offered
 - [ADR-0152](0152-a-facet-claim-is-qualified.md) — A Facet claim is qualified: many managed applications on one host
+- [ADR-0153](0153-a-connection-type-and-a-password-that-is-only-ever-a-path.md) — A connection type, and a password that is only ever a path
 
 ### intent-compiler
 
@@ -649,3 +652,4 @@ UI — React shell, schema-driven rendering, Views, descent, the first-party cli
 | [0150](0150-a-certificate-is-derived-from-its-host.md) | certificates-pki, findings-drift, intent-compiler |
 | [0151](0151-substrate-is-a-property-of-the-provider.md) | capability-framework, estate-as-code, provisioning |
 | [0152](0152-a-facet-claim-is-qualified.md) | estate-as-code, graph-model, intent-compiler |
+| [0153](0153-a-connection-type-and-a-password-that-is-only-ever-a-path.md) | actuators, credentials-secrets, graph-model |

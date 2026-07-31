@@ -1,0 +1,346 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "stratt:contract:actuators/ansible.input:v8",
+  "title": "ansible Actuator input (v8)",
+  "description": "Input Contract for the ansible Actuator (charter §2.3). Hand-written — derivation ladder rung 1 (§2.2). v8 (ADR-0153) closes the REACH gap the ansible-tool audit called the largest in the platform (ANS-001/010/011): a typed `connection.type` for the netcommon family, and the three credential FORMS the connection surface had no shape for — a login/device password, an escalation password, and multiple vault identities. THE CREDENTIAL HALF IS THE DESIGN: each of those secrets reaches ansible as a FILE PATH (--connection-password-file / --become-password-file / --vault-password-file / --vault-id id@path, all verified against the ansible-core the EE pins), so a password is NEVER a value anywhere. The rejected alternative — `ansible_password` as an inventory group var — writes secret material into inventory/hosts at 0644 beside ansible-runner's artifacts/, which §2.5 forbids outright. winrm/psrp are deliberately ABSENT from the type enum: there is no verifiable Windows target in CI, and an enum that accepts a value the shim has never honored fails at 3 a.m. instead of at estate load (ADR-0153 D1). A SIBLING of v7 (ADR-0132 D4): every v7 field is retained and `vault`'s object form still validates. v7 (ADR-0134) adds `playbook`: a path within the project tree the Step's ACTUATOR declares via contentDir, mounted at project/. It is the third and now preferred content source — a playbook stored as a string is a playbook nothing but us can read, and the repo paid for that twice (a shipped bug from `{{ var }}` vs `{{.ns.field}}` being visually identical, and a bespoke parser written to re-check the seam). A SIBLING of v6 rather than a widening of it (ADR-0132 D4): an Actuator input Contract is a wire promise to Step authors. Additive — every v6 field is retained (the registry keeps ONE live actuators/ansible.input, the highest version, and a Step cannot pin a version). v6 (ADR-0126) added the typed `connection` block: the machine credential is resolved from its CredentialRef MOUNT by the shim, closing ADR-0084 D4, which described that mechanism but was never built — every Workflow hand-wrote `ansible_ssh_private_key_file: /tmp/<name>-key` in extraVars instead, so the AUTHORIZED credential and the USED file were two facts nothing kept in agreement (§2.4). Connection keys in extraVars are now REFUSED rather than merged: a merge needs a winner, and a silent winner between the two is the same defect restated.",
+  "type": "object",
+  "properties": {
+    "play": {
+      "type": "string",
+      "description": "Play file content: a YAML sequence of plays (validated as YAML at Prepare). Mutually exclusive with scm and playbook. KEPT, not deprecated (ADR-0134 D4): a seven-line guard play is clearer inline than as a file in a directory. The rule is — if it is Ansible anyone would maintain, it is a file, so use `playbook`."
+    },
+    "playbook": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512,
+      "pattern": "^[A-Za-z0-9_][A-Za-z0-9_.-]*(/[A-Za-z0-9_][A-Za-z0-9_.-]*)*$",
+      "description": "Playbook path WITHIN the project tree this Step's Actuator declares (`contentDir`, ADR-0134 D2), which the spine mounts at project/ in the EE pod. Mutually exclusive with play and scm — the three are the three content sources, and a merge between them would need a winner. The path is segment-bounded rather than lookahead-guarded: every segment must begin with an alphanumeric or underscore, so `..` is unrepresentable and the path can never leave the mounted tree. Core never reads the FILE — the estate load checks only that it exists (ADR-0117 D6: core never parses play content); the shim runs it out of project/, reusing the branch params.scm already has after its clone."
+    },
+    "scm": {
+      "type": "object",
+      "description": "SCM content-ref: clone a repo in the EE pod and run a playbook from it. The clone execs git inside the EE image (GPL boundary, §3); the control plane never fetches content.",
+      "properties": {
+        "repo": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Clone URL (https:// or ssh://). Private-repo credentials arrive via the Step's credentialRefs, never here (§2.5)."
+        },
+        "ref": {
+          "type": "string",
+          "description": "Branch, tag, or commit to check out. Empty means the repo default branch."
+        },
+        "playbook": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Playbook path within the repo (e.g. site.yml or playbooks/deploy.yml)."
+        }
+      },
+      "required": [
+        "repo",
+        "playbook"
+      ],
+      "additionalProperties": false
+    },
+    "extraVars": {
+      "type": "object",
+      "description": "Extra variables passed to ansible-runner as --extra-vars (written to the runner's env/extravars). The landing field for AWX launch extra_vars and survey answers (§5.6). Never carries secret material (§2.5); credentials stay on credentialRefs. CONNECTION KEYS ARE REFUSED HERE (ADR-0126 D1): ansible_user, ansible_ssh_private_key_file and ansible_ssh_common_args are rendered by the shim from `connection`, which binds them to the CredentialRef the Step is actually authorized to use. Declaring one here is a Contract error naming the offending key.",
+      "propertyNames": {
+        "not": {
+          "enum": [
+            "ansible_user",
+            "ansible_ssh_private_key_file",
+            "ansible_ssh_common_args"
+          ]
+        },
+        "$comment": "ADR-0126 D1 — these belong in `connection`; see this field's description."
+      }
+    },
+    "connection": {
+      "type": "object",
+      "description": "How to reach the targets (ADR-0126). The ADDRESS is never here — it is the mgmt.address Facet core resolves into the typed Target coordinate (ADR-0084 D1/D2). This block is the AUTHENTICATION half of that split, exactly as AWX splits inventory-host from machine-credential. The shim renders every ansible key; core authors none (§1.4).",
+      "properties": {
+        "type": {
+          "enum": [
+            "ssh",
+            "network_cli",
+            "netconf"
+          ],
+          "default": "ssh",
+          "description": "Connection plugin the shim renders as ansible_connection (ADR-0153 D1). CLOSED and short on purpose. `ssh` is the default and the shape every prior version assumed. `network_cli` and `netconf` are the ansible.netcommon family — the reach an enterprise network fleet needs — and both require networkOS below. winrm/psrp are ABSENT: there is no verifiable Windows target in CI, so shipping the value would ship a code path nothing has executed, and an enum that accepts it fails on a migrated fleet rather than at estate load. httpapi is absent for its own reason — it needs use_ssl/validate_certs/port knobs, and there is no defensible default for validate_certs (false is a posture nobody chose; true breaks every self-signed appliance). `local` is absent because it is a property of the TARGET, not of this Step: mgmt.address's reserved value renders ansible_connection=local per host, and a second home for that fact would be resolved by ansible's host-vars-beat-group-vars rule — implicit precedence §2.4 refuses. The shim REFUSES a non-ssh type on a run whose targets include a local one, naming both."
+        },
+        "networkOS": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-z0-9_]+(\\.[a-z0-9_]+){0,2}$",
+          "description": "The ansible_network_os the netcommon connection plugins require (e.g. cisco.ios.ios, arista.eos.eos, frr.frr.frr). REQUIRED when type is network_cli or netconf and REFUSED otherwise (ADR-0153 D2). Required rather than defaulted because there is nothing to infer it from, and a wrong guess CONNECTS and then issues another vendor's command syntax — a failure that points at the play. It is a per-RUN value: connection vars are inventory group vars, so a mixed-vendor View must be split into per-vendor Views rather than have the shim pick, which is the same constraint and the same resolution as the bastion chain (jumpChainOf). A per-host network.os Facet was declined for now: nothing demands it (§1.1) and mgmt.address is closed against becoming a device ontology (§9)."
+        },
+        "passwordRef": {
+          "type": "object",
+          "description": "The login/device password, as a CredentialRef ALREADY on this Step's credentialRefs — no second credential channel is opened and the existing per-name use-check at dispatch stays the single authorization path (§2.5, ADR-0009/0052). The shim passes its MOUNT PATH as --connection-password-file: the password is never a value in the inventory, in extraVars, or in argv. That is the whole design (ADR-0153 D3) — group vars are written to inventory/hosts at 0644 beside ansible-runner's artifacts/, so a literal password there would be secret material in a Run artifact. Unlike a private KEY the mount is used in place and never staged: ansible applies no permission check to a password file, and a second copy of a secret is a second place it can leak from.",
+          "properties": {
+            "credentialRef": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Name of a file-injecting CredentialRef on this Step."
+            },
+            "file": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_][A-Za-z0-9_.-]*$",
+              "description": "Optional filename within the CredentialRef's mount (/runner/credentials/<ref>/<file>). Omit when the ref injects exactly one file — the shim resolves it; required (and diagnosed, §1.8) when the ref injects several. Identical rule to vault.file and connection.file."
+            }
+          },
+          "required": [
+            "credentialRef"
+          ],
+          "additionalProperties": false
+        },
+        "user": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9_][A-Za-z0-9_.@-]*$",
+          "description": "Login user; the shim renders ansible_user. Pattern-bounded — it reaches an ssh command line."
+        },
+        "credentialRef": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Name of a CredentialRef ALREADY on this Step's credentialRefs — no second credential channel is opened, and the existing per-name use-check at dispatch stays the single authorization path (§2.5, ADR-0009/0052). The shim renders ansible_ssh_private_key_file pointing at its mount."
+        },
+        "file": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_][A-Za-z0-9_.-]*$",
+          "description": "Optional filename within the CredentialRef's mount (/runner/credentials/<ref>/<file>). Omit when the ref injects exactly one file — the shim resolves it; required (and diagnosed, §1.8) when the ref injects several. Identical rule to vault.file."
+        },
+        "hostKeyChecking": {
+          "enum": [
+            "strict",
+            "accept-new",
+            "off"
+          ],
+          "default": "accept-new",
+          "description": "SSH host-key policy (ADR-0126 D2). Defaults to accept-new: it accepts a first key — which a just-provisioned host necessarily needs — and REFUSES a changed one, the property that actually matters. `strict` requires a pre-seeded known-hosts and fails first contact. `off` disables verification and must be written down to be used, instead of hiding inside a copy-pasted flag string. NOTE the honest limit: the accepted key is remembered for the RUN only; cross-Run memory is the booked follow-up (host key as a Facet + drift Finding)."
+        },
+        "jump": {
+          "type": "array",
+          "maxItems": 8,
+          "description": "Per-hop AUTH for the reached-via chain (ADR-0126 D3), nearest hop first. The chain's TOPOLOGY is graph data — reached-via Relations to bastion Entities, each carrying its own mgmt.address — so no address appears here: a copy would be a second home for a fact the graph already holds (§2.4). One entry per hop; a SHORTER array reuses its last entry for the remaining hops, which is the common 'same jump credential throughout' case declared once. An EMPTY array is legitimate (an agent-forwarded or certificate-based bastion needs no per-hop auth).",
+          "items": {
+            "type": "object",
+            "properties": {
+              "user": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "^[A-Za-z0-9_][A-Za-z0-9_.@-]*$"
+              },
+              "credentialRef": {
+                "type": "string",
+                "minLength": 1,
+                "description": "A CredentialRef already on this Step — the bastion's key. credentialRefs is a list, so a second credential needs no new channel and the existing per-name use-check gates it exactly as it gates the target's (§2.5)."
+              },
+              "file": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9_][A-Za-z0-9_.-]*$"
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "become": {
+      "type": "object",
+      "description": "Privilege escalation (ADR-0117 D1). Typed — not a flag string — so escalation is a declared, reviewable value in Git and a recorded value on the Run, and so a future content-blind Control can gate it (via a declared changeClass, never by the PDP reading this field). v8 adds passwordRef (ADR-0153 D5, closing ANS-010): a password-prompting escalation target could not escalate at all before it. A passwordRef WITHOUT enabled:true is refused by the shim — supplying an escalation password for an escalation nobody requested means one of the two is a mistake, and guessing which yields either a pointless credential mount or a run that quietly does not escalate.",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "description": "Escalate privileges (--become)."
+        },
+        "user": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_][A-Za-z0-9_.-]*$",
+          "description": "Escalate to this user (--become-user). Pattern-bounded: the value is rendered as an argv element, never concatenated into a command string."
+        },
+        "method": {
+          "type": "string",
+          "enum": [
+            "sudo",
+            "su",
+            "doas",
+            "pbrun",
+            "pfexec",
+            "runas",
+            "machinectl"
+          ],
+          "description": "Escalation method (--become-method). Enumerated: an open string here would be an injection seam."
+        },
+        "passwordRef": {
+          "type": "object",
+          "description": "The privilege-escalation password, as a CredentialRef ALREADY on this Step's credentialRefs — no second credential channel is opened and the existing per-name use-check at dispatch stays the single authorization path (§2.5, ADR-0009/0052). The shim passes its MOUNT PATH as --become-password-file: the password is never a value in the inventory, in extraVars, or in argv. That is the whole design (ADR-0153 D3) — group vars are written to inventory/hosts at 0644 beside ansible-runner's artifacts/, so a literal password there would be secret material in a Run artifact. Unlike a private KEY the mount is used in place and never staged: ansible applies no permission check to a password file, and a second copy of a secret is a second place it can leak from.",
+          "properties": {
+            "credentialRef": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Name of a file-injecting CredentialRef on this Step."
+            },
+            "file": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_][A-Za-z0-9_.-]*$",
+              "description": "Optional filename within the CredentialRef's mount (/runner/credentials/<ref>/<file>). Omit when the ref injects exactly one file — the shim resolves it; required (and diagnosed, §1.8) when the ref injects several. Identical rule to vault.file and connection.file."
+            }
+          },
+          "required": [
+            "credentialRef"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "limit": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 4096,
+      "pattern": "^[^\\s;|&$`<>\\\\]+$",
+      "description": "Host-subset pattern (--limit). Narrows the core-resolved target set; it can never widen it — the inventory the shim renders is the View's resolved set (ADR-0051 MF4, the confused-deputy gate). Shell metacharacters are rejected."
+    },
+    "tags": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^[A-Za-z0-9_][A-Za-z0-9_.-]*$"
+      },
+      "description": "Only run tasks with these tags (--tags). Each element is rendered as its own argv value."
+    },
+    "skipTags": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^[A-Za-z0-9_][A-Za-z0-9_.-]*$"
+      },
+      "description": "Skip tasks with these tags (--skip-tags)."
+    },
+    "forks": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 500,
+      "description": "Parallel host connections (--forks). Bounded so a Step cannot exhaust the execution pod."
+    },
+    "diff": {
+      "type": "boolean",
+      "description": "Show per-task changes (--diff) on an APPLYING run — 'converge, and show me what changed'. Distinct from check-mode (which converges nothing and arrives via the port's DryRun bit); a dry run already implies --diff."
+    },
+    "verbosity": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 4,
+      "description": "ansible verbosity (-v … -vvvv). Bounded; 0 means default."
+    },
+    "timeout": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 86400,
+      "description": "Connection timeout in seconds (--timeout)."
+    },
+    "vault": {
+      "description": "ansible-vault password source(s). The referenced CredentialRef MUST already be on the Step's credentialRefs — the existing use-grant check at dispatch stays the single authorization path (§2.5, ADR-0009/0052). No second credential channel is opened. v8 (ADR-0153 D4, closing ANS-011) accepts EITHER the v7 object (one identity) OR an ARRAY of entries, each with an optional `id`. One field with two shapes rather than a second field: a `vaultIds` alongside `vault` would be two declarations of one concept, and the moment both were set there would have to be a rule about which wins — the implicit precedence §2.4 refuses. Non-breaking by necessity rather than politeness: the registry keeps one live actuators/ansible.input and a Step cannot pin a version (ADR-0132 D4), so an array-only v8 would fail every shipped object-form Step the moment it landed.",
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "credentialRef": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Name of a CredentialRef on this Step, file-injected; the shim passes its path as --vault-password-file."
+            },
+            "file": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_][A-Za-z0-9_.-]*$",
+              "description": "Optional filename within the CredentialRef's mount (/runner/credentials/<ref>/<file>). Omit when the ref injects exactly one file — the shim resolves it; required (and diagnosed, §1.8) when the ref injects several."
+            },
+            "id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9_][A-Za-z0-9_.-]*$",
+              "description": "Optional vault IDENTITY. With it the shim renders --vault-id <id>@<path>; without it, --vault-password-file <path> exactly as v7 did. Duplicate ids across entries are refused: two files claiming one identity is an ambiguity ansible resolves by ORDER, which is a silent winner by another name (§2.4)."
+            }
+          },
+          "required": [
+            "credentialRef"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 16,
+          "items": {
+            "type": "object",
+            "properties": {
+              "credentialRef": {
+                "type": "string",
+                "minLength": 1,
+                "description": "Name of a CredentialRef on this Step, file-injected; the shim passes its path as --vault-password-file."
+              },
+              "file": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9_][A-Za-z0-9_.-]*$",
+                "description": "Optional filename within the CredentialRef's mount (/runner/credentials/<ref>/<file>). Omit when the ref injects exactly one file — the shim resolves it; required (and diagnosed, §1.8) when the ref injects several."
+              },
+              "id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128,
+                "pattern": "^[A-Za-z0-9_][A-Za-z0-9_.-]*$",
+                "description": "Optional vault IDENTITY. With it the shim renders --vault-id <id>@<path>; without it, --vault-password-file <path> exactly as v7 did. Duplicate ids across entries are refused: two files claiming one identity is an ambiguity ansible resolves by ORDER, which is a silent winner by another name (§2.4)."
+              }
+            },
+            "required": [
+              "credentialRef"
+            ],
+            "additionalProperties": false
+          }
+        }
+      ]
+    },
+    "eeImage": {
+      "deprecated": true,
+      "type": "string",
+      "description": "DEPRECATED and IGNORED (ADR-0117 D3a). No runtime path reads it: executeJobPlugin builds JobSpec without an Image, so the dispatcher always uses the global EE. Per-Step EE selection is by Actuator declaration (ADR-0103) — a Step selects an Actuator whose declaration carries the image — which keeps the core content-blind instead of teaching it to read an ansible param. Retained so nothing breaks; removal booked once no writer emits it."
+    },
+    "check": {
+      "deprecated": true,
+      "type": "boolean",
+      "description": "DEPRECATED and IGNORED (ADR-0117 D2). Check-mode has exactly one mechanism — the sovereign port's DryRun bit, which the shim maps to --check --diff (ADR-0051 MF6, superseding ADR-0019's params.check). Retained because the AWX materializer still writes it for imported check templates; deleting it before that writer is redirected to Step.DryRun would silently convert an imported check job into a converging apply (§1.8). Removal booked once no writer emits it."
+    }
+  },
+  "allOf": [
+    {
+      "$comment": "ADR-0134 D4 — play (inline), scm (cloned) and playbook (mounted from the Actuator's contentDir) are the three content sources, and project/ has room for exactly one of them. Stated as three PAIRWISE refusals rather than one `not: {anyOf: […]}` so a validation failure names the offending pair instead of reporting that the whole document matched something it should not have (§1.8).",
+      "not": {
+        "required": [
+          "play",
+          "scm"
+        ]
+      }
+    },
+    {
+      "not": {
+        "required": [
+          "play",
+          "playbook"
+        ]
+      }
+    },
+    {
+      "not": {
+        "required": [
+          "scm",
+          "playbook"
+        ]
+      }
+    }
+  ],
+  "additionalProperties": false
+}
