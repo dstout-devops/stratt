@@ -2384,6 +2384,25 @@ tasks:
       - docker build --build-arg GO_PARALLEL={{.GO_PARALLEL}} --build-arg EE_CONTENT=crypto.requirements.yml -f ee/Dockerfile -t stratt-ee-crypto:dev .
       - go run sigs.k8s.io/kind@v{{.KIND_VER}} load docker-image stratt-ee-crypto:dev --name {{.KIND_CLUSTER}}
 
+  dev:ee-network:build:
+    desc: Build the network-content EE variant (ansible.netcommon connection plugins, ADR-0153)
+    cmds:
+      # The image that makes ansible.input.v8's `connection.type: network_cli | netconf` more
+      # than a Contract enum. Neither plugin is in ansible-core — MEASURED, not assumed:
+      #
+      #   $ docker run --rm stratt-ee:dev ansible-doc -t connection network_cli
+      #   [WARNING]: Error loading plugin 'ansible.netcommon.network_cli':
+      #              No module named 'ansible_collections.ansible.netcommon'
+      #
+      # so on the default EE the shim refuses the type by reading the image's own content
+      # manifest, and this variant is the other half of that answer.
+      #
+      # NOT loaded into kind, unlike the crypto variant: nothing in the reference estate speaks
+      # to a network device, so there is no Step to run it and loading it would be inventory
+      # with no consumer. An adopter builds this (adding their own vendor collections — cisco.ios,
+      # arista.eos — and relocking) and selects it from their own Actuator declaration (ADR-0117 D3).
+      - docker build --build-arg GO_PARALLEL={{.GO_PARALLEL}} --build-arg EE_CONTENT=network.requirements.yml -f ee/Dockerfile -t stratt-ee-network:dev .
+
   dev:ee-mcp:build:
     desc: Build the MCP EE image and load it into the kind cluster (ADR-0022)
     cmds:

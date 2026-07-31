@@ -161,11 +161,40 @@ code path nothing had ever executed. The enum therefore **rejects** it at estate
 naming the gap, instead of accepting it and failing on a fleet someone already migrated. When a target
 can be stood up and driven end to end, `winrm` is one enum value plus a credential form that now exists.
 
-**The live half is also outstanding, and it applies to what shipped.** The rendering is unit-tested —
-every flag, every refusal, every ordering — but **no network device has been driven end to end from this
-repo**. That needs a CI-runnable target (an FRR or cEOS container plus the matching collection in the EE
-image), and it is booked in the same shape as PLG-1's bastion half. A unit-green connection type is not a
-proven one.
+**The enum was not enough, and verifying it is what found that out.** `network_cli` and `netconf` are
+**not in ansible-core** — measured, not assumed:
+
+```
+$ docker run --rm stratt-ee:dev ansible-doc -t connection network_cli
+[WARNING]: Error loading plugin 'ansible.netcommon.network_cli':
+           No module named 'ansible_collections.ansible.netcommon'
+```
+
+So a Contract that accepted the value on the default EE would pass review, pass the estate load, pass
+every unit test — and die at connect time naming a python module the estate never wrote. Which is
+verbatim the failure `platform.requirements.yml` was written about for `community.general.apk`. ADR-0153
+D7 closes it in both directions:
+
+| Image                             | plugin resolves?                          | shim behaviour                        |
+| --------------------------------- | ----------------------------------------- | ------------------------------------- |
+| `stratt-ee:dev` (platform floor)  | ❌ `network_cli` not found                 | **refuses**, naming `ansible.netcommon` and where to add it |
+| `stratt-ee-network:dev` (variant) | ✅ `network_cli` + `netconf` both resolve  | allows                                |
+
+The shim reads the image's own run-visible content manifest (`/etc/stratt/ee-content.json`) rather than
+probing — `ansible-doc` **exits 0 for a plugin that does not exist**, also measured, so the obvious
+probe silently passes. Declaration errors are still reported before image errors, so nobody is sent to
+rebuild an EE over a typo.
+
+`ee/content/network.requirements.yml` ships **`ansible.netcommon` only** — the connection plugins, which
+is the mechanism the enum promises. Vendor collections (`cisco.ios`, `arista.eos`) are deliberately not
+included: which vendors a fleet needs is exactly the adopter-shaped question an EE variant exists for
+(ADR-0117 D3). An adopter copies the file, adds their vendors, relocks, and selects the image from their
+own Actuator.
+
+**What is still outstanding is the DEVICE half.** A collection that installs is not a connection that
+works: **no real device has been driven end to end from this repo**. That needs a CI-runnable target (an
+FRR or cEOS container), and it is booked in the same shape as PLG-1's bastion half. A unit-green,
+image-verified connection type is still not a proven one.
 
 ---
 
@@ -176,8 +205,9 @@ proven one.
 - **ANS-001 · Connection types + non-key credentials.** ~~Windows and network devices.~~ **Mostly done
   (ADR-0153, 2026-07-31)**: `network_cli`/`netconf` + all three credential forms. Two pieces remain, and
   neither is a flag — **(a) Windows**, blocked on a verifiable target rather than on design; **(b) a live
-  network-device run**, blocked on a CI-runnable device container plus its collection in the EE image.
-  Everything that shipped is unit-proven and none of it is live-proven.
+  network-device run**, blocked on a CI-runnable device container (FRR/cEOS). The COLLECTION half of (b)
+  is now done and image-verified both ways (`ee/content/network.requirements.yml`, ADR-0153 D7); what
+  remains is driving a real device.
 - ~~**ANS-010 · Become password.**~~ **Done (ADR-0153 D5)** — `--become-password-file`, and a password
   supplied without `enabled: true` is refused rather than silently ignored.
 

@@ -358,11 +358,26 @@ ever executed. An enum that ACCEPTS it fails at 3 a.m. on a fleet someone migrat
 fails at estate load with a message naming the gap. Same rule as ADR-0151 D3's unimplemented substrates
 and the façade's unconvertible cron: **no answer beats a plausible wrong one.**
 
-**The honest limit: none of this is live-proven.** Every flag, every refusal and every ordering is
-unit-tested, and `vault`'s v7 object form still renders byte-identically — but **no network device has
-been driven end to end from this repo**. That needs a CI-runnable target (FRR or cEOS plus the matching
-collection in the EE image) and is booked in the same shape as PLG-1's bastion half. A unit-green
-connection type is not a proven one, and the parity doc says so in place.
+**AND THEN VERIFYING IT FOUND THE ADR HALF-APPLIED (D7, same day).** `network_cli` and `netconf` are
+**not in ansible-core**. A Contract accepting the value on the default EE passes review, passes the
+estate load, passes every unit test — and dies at connect time naming a python module the estate never
+wrote, which is verbatim the `community.general.apk` failure `platform.requirements.yml` exists to
+document. D1's argument had been applied to the Contract and not to the runtime.
+
+The shim now refuses a netcommon type the image cannot honor, reading the EE's own run-visible content
+manifest. **Not a probe:** `ansible-doc -t connection <name>` **exits 0 for a plugin that does not
+exist** — measured — so the obvious check silently passes. Declaration errors are reported before image
+errors, and an UNREADABLE manifest is a third outcome rather than a guess in either direction.
+`ee/content/network.requirements.yml` is the other half, a VARIANT rather than a floor entry (the floor
+is bounded to what the platform's own content needs, and no shipped content root speaks to a device),
+carrying `ansible.netcommon` only — vendor collections are the adopter-shaped question ADR-0117 D3 puts
+in a variant. **Verified against real images both ways:** the floor EE fails to load `network_cli` and
+the shim refuses it; the variant resolves both plugins and the shim allows it.
+
+**The honest limit is now narrower and still real: no DEVICE has been driven.** A collection that
+installs is not a connection that works. That needs a CI-runnable target (FRR or cEOS) and is booked in
+the same shape as PLG-1's bastion half — and the parity doc says so in place rather than letting an
+image-verified row imply a proven one.
 
 ### `/api/v2` route breadth is DONE (2026-07-31) — and two refusals are the point
 

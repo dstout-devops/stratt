@@ -74,12 +74,15 @@ var networkConnections = map[string]bool{ConnNetworkCLI: true, ConnNetconf: true
 // connectionTypeVars renders ansible_connection and ansible_network_os, and REFUSES the
 // three shapes that would otherwise resolve themselves silently (ADR-0153 D1/D2/D6).
 //
+// readFile reads the EE's own content manifest, injected so the image-capability check is
+// unit-tested without one — the same reason readDir and stage are injected below.
+//
 // hasLocal reports whether any target in this run renders ansible_connection=local as a
 // HOST var. That matters because host vars beat group vars in ansible: a non-ssh type set
 // here would be silently overridden for exactly those targets, which is implicit
 // precedence hiding inside two declarations that each look right (§2.4). Refusing is the
 // only option that cannot connect the wrong way.
-func connectionTypeVars(c *connectionParams, hasLocal bool) (map[string]string, error) {
+func connectionTypeVars(c *connectionParams, hasLocal bool, readFile func(string) ([]byte, error)) (map[string]string, error) {
 	vars := map[string]string{}
 	typ := c.Type
 	if typ == "" || typ == ConnSSH {
@@ -110,6 +113,12 @@ func connectionTypeVars(c *connectionParams, hasLocal bool) (map[string]string, 
 			"target would silently connect a different way; split the View rather than have one Run "+
 			"mean two things", typ, connLocal)
 	}
+	// LAST, and deliberately so: everything above is a defect in the DECLARATION, which the author
+	// can fix by editing YAML. This one is a defect in the IMAGE. Reporting a fixable declaration
+	// error first means an operator is never sent to rebuild an EE over a typo.
+	if err := requireConnectionCollection(typ, readFile); err != nil {
+		return nil, err
+	}
 	vars["ansible_connection"] = typ
 	vars["ansible_network_os"] = c.NetworkOS
 	return vars, nil
@@ -131,11 +140,11 @@ func cmpOrDefault(v, def string) string {
 // tested seam vaultPasswordFile uses rather than a second one. stage copies the resolved
 // key to a private-mode file and returns its path — see the call site for why that copy
 // is unavoidable. Both are injected so the rendering is unit-tested without a pod.
-func connectionVars(c *connectionParams, hops []Hop, knownHosts string, hasLocal bool, readDir func(string) ([]string, error), stage func(string) (string, error)) (map[string]string, error) {
+func connectionVars(c *connectionParams, hops []Hop, knownHosts string, hasLocal bool, readDir func(string) ([]string, error), readFile func(string) ([]byte, error), stage func(string) (string, error)) (map[string]string, error) {
 	if c == nil {
 		c = &connectionParams{}
 	}
-	vars, err := connectionTypeVars(c, hasLocal)
+	vars, err := connectionTypeVars(c, hasLocal, readFile)
 	if err != nil {
 		return nil, err
 	}

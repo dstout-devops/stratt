@@ -1,0 +1,71 @@
+# Ansible content for the `ansible-network` EE variant (ADR-0117 D3, ADR-0153).
+#
+# WHY THIS VARIANT EXISTS, and it was found by MEASURING rather than by design review.
+# ADR-0153 put `network_cli` and `netconf` in the ansible Actuator's connection-type enum.
+# Neither is in ansible-core:
+#
+#     $ ansible-doc -t connection network_cli
+#     [WARNING]: Error loading plugin 'ansible.netcommon.network_cli':
+#                No module named 'ansible_collections.ansible.netcommon'
+#     [WARNING]: network_cli was not found
+#
+# which is the SAME failure this repo already paid for once — see platform.requirements.yml on
+# `community.general.apk`: ansible names a collection the estate never mentioned, at connect time,
+# on a fleet somebody already migrated. ADR-0153 D1 argues an enum must not admit a value the shim
+# has never honored; admitting one the RUNTIME cannot honor is that defect through the back door.
+#
+# The shim now refuses the type when this collection is absent, reading the EE's own run-visible
+# manifest (/etc/stratt/ee-content.json) rather than probing — `ansible-doc` exits 0 for a plugin
+# that does not exist, measured. This file is the other half: the image that makes the answer yes.
+#
+# WHY A VARIANT AND NOT THE PLATFORM FLOOR. The floor's own rule is that it carries "exactly what
+# the PLATFORM'S OWN shipped content requires — not what an adopter might want", checkable against
+# plugins/*/estate/content/. No shipped content root speaks to a network device, so netcommon does
+# not belong there, and widening the floor to hold it would dissolve the rule that keeps the floor
+# checkable. ADR-0117 D3 already named the home for "content my estate needs": an EE variant
+# selected by an Actuator declaration.
+#
+# WHAT THIS DELIBERATELY DOES NOT SHIP: a vendor collection. netcommon provides the CONNECTION
+# plugins — the mechanism the Contract's enum promises. `connection.networkOS` names a platform
+# (cisco.ios.ios, arista.eos.eos, frr.frr.frr) whose cliconf/terminal plugins live in that vendor's
+# own collection, and which vendors a fleet needs is exactly the adopter-shaped question D3 puts in
+# a variant. An adopter copies this file, adds their vendors, relocks, and selects the image from
+# their own Actuator. Shipping one vendor here would be picking a fleet for them; shipping all of
+# them would be an unbounded image.
+#
+# HONEST STATUS: this variant is built and locked, and it has NOT been driven against a real
+# device. The live proof needs a CI-runnable target (FRR or cEOS) and is booked as ADR-0153's
+# outstanding half. A collection that installs is not a connection that works.
+#
+# EDITING THIS FILE MEANS RELOCKING IT:
+#     task ee:content:lock CONTENT=network.requirements.yml
+
+collections:
+  # ansible.netcommon — the network_cli and netconf CONNECTION plugins (plus the cliconf/httpapi
+  # base classes vendor collections build on). This is what makes ansible.input.v8's
+  # `connection.type` more than a Contract enum.
+  - name: ansible.netcommon
+    version: "8.6.1"
+
+  # ── THE PLATFORM FLOOR, repeated ─────────────────────────────────────────────────────
+  # Everything below is ee/content/platform.requirements.yml, copied at the same versions.
+  # `ee/content.py verify` (so `task ci`) fails if a variant drops or re-pins a floor entry:
+  # a variant ADDS capability and never subtracts it. Repeated rather than composed because
+  # `install` refuses two requirements files per image — a lockfile records the installed
+  # CLOSURE, and a closure cannot be attributed to one of several declarations.
+
+  # community.general — the other half of `ansible.builtin.package` and
+  # `ansible.builtin.package_facts`. Both dispatch on the target's package manager, and both fall
+  # outside ansible-core the moment the target is not apt- or yum-based. Without this the platform
+  # cannot install a package on Alpine, SUSE, Arch or FreeBSD at all, which makes "install the
+  # application" a claim that holds only on the distros nobody checked.
+  #
+  # Pinned at the current release (2026-07-13), which requires ansible-core >= 2.18 against the
+  # image's >= 2.19 band (ee/Dockerfile) — evergreen §1.7 wants the current line, and content is
+  # pinned exactly because reproducibility of what a Run executed is what ADR-0117 D3 buys.
+  - name: community.general
+    version: "13.2.0"
+
+# roles: — installed identically and deliberately EMPTY, for the same reason crypto's is: pinning
+# content no shipping Contract demands is inventory to maintain for no consumer.
+roles: []

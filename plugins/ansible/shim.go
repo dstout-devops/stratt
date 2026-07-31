@@ -368,7 +368,7 @@ func Run(ctx context.Context, w io.Writer, dir string, req Request, run commandR
 	if cherr != nil {
 		return emitFatal(w, cherr.Error())
 	}
-	connVars, cerr := connectionVars(p.Connection, chain, filepath.Join(dir, "known_hosts"), hasLocalTarget(req.Targets), osReadDirNames, stageKeyIn(dir))
+	connVars, cerr := connectionVars(p.Connection, chain, filepath.Join(dir, "known_hosts"), hasLocalTarget(req.Targets), osReadDirNames, osReadFile, stageKeyIn(dir))
 	if cerr != nil {
 		return emitFatal(w, cerr.Error())
 	}

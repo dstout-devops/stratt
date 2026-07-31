@@ -7,8 +7,11 @@
 - **Charter sections:** §1.1 (type the seams), §1.4 (boring spine — core authors no tool key),
   §1.8 (never hide diagnosis), §2.4 (no two facts that can disagree), §2.5 (credentials brokered,
   never baked), §9 (no ontology creep)
-- **Supersedes nothing. Extends ADR-0126 (the typed `connection` block) and ADR-0117 (the typed run
-  knobs). Closes ANS-001's network half, ANS-010, ANS-011.**
+- **Supersedes nothing. Extends ADR-0126** (the typed `connection` block) **and ADR-0117** (the typed
+  run knobs). Closes ANS-001's network half, ANS-010, ANS-011.
+- **AMENDED same day with D7, forced by verification.** D1 shipped before anyone checked whether the
+  running image could load the plugins the enum admits. It cannot: `network_cli`/`netconf` are not in
+  ansible-core, so D1's own argument applied to the Contract and not to the runtime. See D7.
 
 ## Context
 
@@ -184,6 +187,62 @@ That is implicit precedence sitting inside two correct-looking declarations, so 
 the combination**: a non-`ssh` `connection.type` with any `local` target fails the Run with a message
 naming both the type and the offending target. Refusing is the only option that cannot silently
 connect the wrong way (§1.8, §2.4).
+
+### D7 — a type the RUNNING IMAGE cannot honor is refused too (correction, found by verifying)
+
+**D1 was written and shipped before this was checked, and checking it found the ADR half-applied.**
+`network_cli` and `netconf` are not in ansible-core. Measured against the interpreter the EE pins:
+
+```
+$ ansible-doc -t connection network_cli
+[WARNING]: Error loading plugin 'ansible.netcommon.network_cli':
+           No module named 'ansible_collections.ansible.netcommon'
+[WARNING]: network_cli was not found
+```
+
+So a Contract that ACCEPTS the value on an image that cannot load the plugin produces a declaration
+which passes review, passes the estate load, and passes every unit test in this ADR — then dies at
+connect time naming a python module the estate never wrote. That is the identical failure
+`ee/content/platform.requirements.yml` was written about (`community.general.apk`: "naming a
+collection the play never mentions"), and it is D1's own argument coming back through the door D1
+did not close: **an enum must not admit a value the RUNTIME has never honored either.**
+
+**The shim refuses it, reading the image's own answer.** Every Stratt EE publishes
+`/etc/stratt/ee-content.json` — ee/content.py's "run-visible manifest (§1.8) … what the image
+ACTUALLY contains". `requireConnectionCollection` reads it and fails with the missing collection,
+what IS installed, and where the fix belongs.
+
+**Not a probe, and that distinction was also measured.** The obvious check is `ansible-doc -t
+connection <type>` and an exit code — **it exits 0 for a plugin that does not exist**, so the obvious
+check silently passes. The manifest is deterministic, needs no subprocess, and is the same artifact
+an operator descending into the Run already sees.
+
+**Order matters and is fixed:** every declaration-level refusal (D1/D2/D6) is reported BEFORE the
+image check, so an operator is never sent to rebuild an EE over a typo they could fix in YAML. An
+UNREADABLE manifest is its own third outcome — neither present nor missing — because guessing either
+way turns an image problem into a connection problem.
+
+**The image half: `ee/content/network.requirements.yml`**, a variant, not a floor entry. The floor's
+own rule is that it carries "exactly what the PLATFORM'S OWN shipped content requires", checkable
+against `plugins/*/estate/content/`; no shipped content root speaks to a device, so widening the
+floor would dissolve the rule that keeps it checkable. ADR-0117 D3 already named the home for
+"content my estate needs".
+
+It ships **`ansible.netcommon` only** — the connection plugins, which is the mechanism the enum
+promises. A vendor collection is deliberately absent: `networkOS` names a platform whose
+cliconf/terminal plugins live in that vendor's collection, and which vendors a fleet needs is exactly
+the adopter-shaped question a variant exists for. Shipping one would be picking a fleet for them.
+
+**Verified against real images, both directions:**
+
+| Image                            | `ansible-doc -t connection network_cli` | manifest                              |
+| -------------------------------- | ---------------------------------------- | ------------------------------------- |
+| `stratt-ee:dev` (platform floor) | ❌ not found                              | `community.general` only → shim refuses |
+| `stratt-ee-network:dev`          | ✅ resolves (both `network_cli`, `netconf`) | lists `ansible.netcommon` → shim allows |
+
+**This closes the collection half of the live gap, and not the device half.** A collection that
+installs is not a connection that works: no real device has been driven yet, and that still needs an
+FRR or cEOS target in CI.
 
 ## Consequences
 
