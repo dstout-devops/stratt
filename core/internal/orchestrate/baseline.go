@@ -153,16 +153,32 @@ func (a *Activities) EvaluateFacetBaseline(ctx context.Context, b types.Baseline
 		if err != nil {
 			return graph.ObservationOutcome{}, err
 		}
-		byNS := map[string]json.RawMessage{}
+		// KEYED BY (namespace, qualifier), ADR-0152 D5. A host running apache and tomcat carries
+		// two app.config rows, and a namespace-only map would keep whichever GetFacets returned
+		// last — the wrong application's port checked against this route's expectation, silently.
+		// Each compiled expectation carries the qualifier its route claimed, so it reads its own.
+		//
+		// This does NOT also fix the multi-SOURCE flatten that has always lived on this line: two
+		// sources projecting one (namespace, qualifier) still collide by row order, and fixing that
+		// needs the declared-authority collapse FacetValuesByEntities performs. Not reachable today
+		// (every namespace a shipped Baseline observes has exactly one writer — checked), booked as
+		// ADR-0152 follow-up 6, and named here so the next reader does not mistake this change for
+		// having closed it.
+		type facetKey struct{ ns, qualifier string }
+		byNS := map[facetKey]json.RawMessage{}
 		for _, f := range facets {
-			byNS[f.Namespace] = f.Value
+			byNS[facetKey{f.Namespace, f.Qualifier}] = f.Value
 		}
 		var unmet []map[string]any
 		for _, exp := range b.Expected {
-			if reason := expectationUnmet(byNS[exp.Namespace], exp); reason != "" {
-				unmet = append(unmet, map[string]any{
-					"namespace": exp.Namespace, "path": exp.Path, "reason": reason,
-				})
+			if reason := expectationUnmet(byNS[facetKey{exp.Namespace, exp.Qualifier}], exp); reason != "" {
+				d := map[string]any{"namespace": exp.Namespace, "path": exp.Path, "reason": reason}
+				// Only when there is one: a drift diff that grew a `qualifier: ""` key on every
+				// Finding in the estate would be noise, and §1.8 is about the reader.
+				if exp.Qualifier != "" {
+					d["qualifier"] = exp.Qualifier
+				}
+				unmet = append(unmet, d)
 			}
 		}
 		// Topology expectations (ADR-0085): each required relation type must be

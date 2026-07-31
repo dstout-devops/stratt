@@ -1396,6 +1396,15 @@ components:
       required: [namespace, value, provenance]
       properties:
         namespace: { type: string }
+        qualifier:
+          type: string
+          description: >
+            Which of several same-namespace Facets on this Entity this is (ADR-0152) — `app.config`
+            for apache and `app.config` for tomcat on one host are two FACTS, not two opinions about
+            one. Absent or empty means unqualified, which is the ordinary case. Derived at compile
+            from the resolved spec and stamped by the core from the claim that owns it; never
+            observed, and never proposed by a writer. Distinct from the SOURCE dimension (ADR-0060),
+            which exists for competing signals about one fact and collapses to one value at read.
         value:
           description: The Facet document fragment (schema attaches per namespace, §1.1).
         provenance: { $ref: "#/components/schemas/Provenance" }
@@ -1405,6 +1414,9 @@ components:
       properties:
         entity: { $ref: "#/components/schemas/Entity" }
         facets:
+          # One entry per (namespace, qualifier), NOT per namespace (ADR-0152). A client that keys
+          # this array by namespace alone will silently drop all but one of a co-hosted
+          # application's Facets.
           type: array
           items: { $ref: "#/components/schemas/Facet" }
     FacetPredicate:

@@ -333,6 +333,28 @@ qualifier violates it — so the expand release ships the column, the index and 
 and still cannot store two qualified facts. D9 is obtainable only after the contract release folds
 the column into the key. Two releases, then Accepted.
 
+### D10 — A DECLARED qualifier is refused at estate load until the contract release
+
+Added during implementation, because building the expand release surfaced a shape D2 did not
+cover: not the omitted qualifier (which is today's grain, safely) but the **declared** one.
+
+With the claim key widened and the Facet key not yet, a Blueprint route declaring
+`observe.qualifier` would COMPILE — `detectClaimConflicts` correctly sees two distinct claims — and
+then both Runs would write through `ON CONFLICT (entity_id, namespace, prov_source_id)`. The second
+would match the first's row and `DO UPDATE` it, **flipping its qualifier**. Not a constraint
+violation. A silent last-writer-wins: precisely the failure D4 widened the Facet key to abolish,
+reintroduced by shipping half of the widening.
+
+So `observe.qualifier` is a **load-time refusal** in this release, and the field exists on the YAML
+shape purely so the refusal can explain itself — without it, `KnownFields` answers an author who
+followed this ADR with `field qualifier not found in type`, and the ADR reads as fiction. The
+message names the ADR, the constraint that is not yet widened, what would happen if it were
+honoured, and what to do now.
+
+Refusing beats half-honouring: a declaration that reads as permitted and is honoured by something
+other than what it says is worse than one that is refused (§1.8). The refusal lifts in the same
+change that folds the primary key.
+
 ## Charter alignment
 
 - **§2.4 (anti-GPO), upheld and narrowed.** The frozen wording is _"one Assignment may claim it per

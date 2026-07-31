@@ -1262,6 +1262,8 @@ export interface components {
         };
         Facet: {
             namespace: string;
+            /** @description Which of several same-namespace Facets on this Entity this is (ADR-0152) — `app.config` for apache and `app.config` for tomcat on one host are two FACTS, not two opinions about one. Absent or empty means unqualified, which is the ordinary case. Derived at compile from the resolved spec and stamped by the core from the claim that owns it; never observed, and never proposed by a writer. Distinct from the SOURCE dimension (ADR-0060), which exists for competing signals about one fact and collapses to one value at read. */
+            qualifier?: string;
             /** @description The Facet document fragment (schema attaches per namespace, §1.1). */
             value: unknown;
             provenance: components["schemas"]["Provenance"];

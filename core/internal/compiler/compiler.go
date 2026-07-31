@@ -119,10 +119,14 @@ type Store interface {
 	ListBaselines(ctx context.Context) ([]types.Baseline, error)
 }
 
-// claimRecord is one (namespace, entity) claim for cross-Assignment conflict
-// detection.
+// claimRecord is one (namespace, qualifier, entity) claim for cross-Assignment conflict
+// detection (ADR-0152 D2 widened the grain from (namespace, entity)).
 type claimRecord struct {
-	namespace  string
+	namespace string
+	// qualifier distinguishes several same-namespace claims on ONE Entity — apache's app.config
+	// and tomcat's. Derived at compile from the resolved spec, never observed (D3). Empty is the
+	// ordinary case and reproduces the pre-ADR-0152 grain exactly.
+	qualifier  string
 	entityID   string
 	claim      string
 	assignment string
@@ -301,7 +305,7 @@ func Compile(ctx context.Context, s Store, maxDelta float64, resolveRemediation 
 			b := compiledBaseline(a, bp, intent, i, view, route, exp, matched, specLayers, remParams, remvParams)
 			candidates[a.Name] = append(candidates[a.Name], b)
 			for _, id := range matched {
-				claims = append(claims, claimRecord{exp.Namespace, id, route.Claim, a.Name})
+				claims = append(claims, claimRecord{exp.Namespace, exp.Qualifier, id, route.Claim, a.Name})
 			}
 			// Ownership is claimed only for a namespace the Blueprint MANAGES
 			// (writes, via a remediation Workflow). A pure observation reads a
@@ -841,6 +845,28 @@ func substituteExpectation(exp types.FacetExpectation, spec map[string]any) (typ
 		}
 		exp.NotBefore, _ = nb.(string)
 	}
+	// The claim key (ADR-0152 D2/D3). DERIVED here and nowhere else: from the resolved spec, at
+	// compile, by the same explicit-lookup engine every other value on this expectation uses.
+	//
+	// ABSENT AND EMPTY MUST NOT RENDER THE SAME. A qualifier that is PRESENT and resolves to ""
+	// — `{{.spec.pakcage}}`, or a field this Assignment never set — would otherwise compile
+	// straight back to the UNQUALIFIED grain: the route still works, and its exclusivity silently
+	// widens from (entity, app.config, apache) to (entity, app.config). That is the grain of an
+	// exclusive claim moving by accident, which is the same §2.4 surprise D2 refuses to inflict
+	// deliberately when it declines to default the qualifier at all.
+	if exp.Qualifier != "" {
+		q, err := template.Substitute(exp.Qualifier, ns)
+		if err != nil {
+			return exp, err.Error()
+		}
+		resolved, _ := q.(string)
+		if resolved == "" {
+			return exp, fmt.Sprintf("observe qualifier %q resolved to empty — a declared qualifier that "+
+				"resolves to nothing would silently return this route to the unqualified claim grain "+
+				"(ADR-0152 D2); remove it or supply the spec value it reads", exp.Qualifier)
+		}
+		exp.Qualifier = resolved
+	}
 	if len(exp.Equals) == 0 && len(exp.Contains) == 0 && exp.NotBefore == "" {
 		return exp, "observe expectation requires equals, contains, or notBefore"
 	}
@@ -881,13 +907,13 @@ type poison struct {
 // claimants (the anti-GPO axiom, §2.4). Skipped Assignments' claims are
 // ignored. Every Assignment involved in a conflict is poisoned.
 func detectClaimConflicts(claims []claimRecord, skipped map[string]bool) []poison {
-	type key struct{ ns, entity string }
+	type key struct{ ns, qualifier, entity string }
 	exclusive := map[key]map[string]bool{}
 	for _, c := range claims {
 		if skipped[c.assignment] || c.claim != types.ClaimExclusive {
 			continue
 		}
-		k := key{c.namespace, c.entityID}
+		k := key{c.namespace, c.qualifier, c.entityID}
 		if exclusive[k] == nil {
 			exclusive[k] = map[string]bool{}
 		}
@@ -904,8 +930,11 @@ func detectClaimConflicts(claims []claimRecord, skipped map[string]bool) []poiso
 			names = append(names, a)
 		}
 		sort.Strings(names)
-		msg := fmt.Sprintf("exclusive claim conflict on facet %q for entity %s: assignments %s (§2.4: no implicit precedence — resolve by scoping, not priority)",
-			k.ns, k.entity, strings.Join(names, ", "))
+		// The qualifier rides the message when there is one, because §1.8's whole complaint about
+		// the old text was that it said "two Blueprints claim app.config" when the true statement is
+		// which application on which host. Unqualified renders exactly as before.
+		msg := fmt.Sprintf("exclusive claim conflict on facet %q%s for entity %s: assignments %s (§2.4: no implicit precedence — resolve by scoping, not priority)",
+			k.ns, qualifierNote(k.qualifier), k.entity, strings.Join(names, ", "))
 		for _, a := range names {
 			poisoned[a] = true
 			if _, ok := messages[a]; !ok {
@@ -998,3 +1027,13 @@ func filterMemberships(ms []graph.AssignmentMembership, skipped map[string]bool)
 // shortIntentKind strips the "Intent/" prefix — capability maps and binding entries key by the bare
 // kind ("Application"), the same convention provisions/decommissions use.
 func shortIntentKind(kind string) string { return strings.TrimPrefix(kind, "Intent/") }
+
+// qualifierNote renders a claim's qualifier for a human — ` qualified "tomcat"`, or nothing at all
+// when unqualified, so the overwhelming majority of compile errors read exactly as they always have
+// and the new dimension only appears where it is load-bearing (ADR-0152 D2).
+func qualifierNote(qualifier string) string {
+	if qualifier == "" {
+		return ""
+	}
+	return fmt.Sprintf(" qualified %q", qualifier)
+}

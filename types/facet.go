@@ -13,6 +13,21 @@ type Facet struct {
 	// is declared in the facet-ownership registry; two writers to one
 	// namespace is a registration error, never a precedence fight (§2.1).
 	Namespace string `json:"namespace"`
+	// Qualifier distinguishes several same-namespace Facets on ONE Entity (ADR-0152):
+	// `app.config` for apache and `app.config` for tomcat on the same host are two FACTS,
+	// not two opinions about one. Empty — the ordinary case — means unqualified.
+	//
+	// It is DERIVED at compile from the resolved spec and stamped by the core from the
+	// claim that owns it; it is never observed, and a writer never proposes its own. An
+	// observed key would be undetectable until both Runs had executed, making the winner
+	// whoever bound the socket first — execution-order precedence with no field anyone can
+	// review (§2.4).
+	//
+	// DISTINCT FROM THE SOURCE DIMENSION, and the two must never be conflated. ADR-0060's
+	// source exists for COMPETING SIGNALS about one fact and collapses to one value at read
+	// time via the declared authority; a qualifier is for facts that genuinely COEXIST, and
+	// every one of them must survive the read.
+	Qualifier string `json:"qualifier,omitempty"`
 	// Value is the Facet document fragment. Typed by the pinned JSON Schema
 	// registered for the namespace — validated as data, never as a Go type.
 	Value json.RawMessage `json:"value"`

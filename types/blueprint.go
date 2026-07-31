@@ -145,6 +145,19 @@ type BlueprintRoute struct {
 // Facet values"). Exactly one of Equals / Contains is set.
 type FacetExpectation struct {
 	Namespace string `json:"namespace"`
+	// Qualifier is the per-application claim key (ADR-0152 D2): which of several same-namespace
+	// Facets on one Entity this route observes and claims. Resolved at compile from the resolved
+	// spec, exactly as Path/Equals are — `{{.spec.package}}` becomes `apache` here and `tomcat`
+	// there, so both may hold app.config on one host without a double-claim.
+	//
+	// Empty means unqualified, which is today's behaviour exactly and what almost every route is.
+	// Never defaulted from Blueprint.Delivers or anything else: a silent default would move the
+	// grain of every shipped estate on upgrade (§2.4). A qualifier that is PRESENT and resolves to
+	// empty is a compile error rather than a quiet slide back to the unqualified grain.
+	//
+	// REFUSED AT ESTATE LOAD until the ADR-0152 contract migration ships — see
+	// desiredstate's blueprint validation for why half-honouring it is worse than refusing it.
+	Qualifier string `json:"qualifier,omitempty"`
 	// Path is a dotted path within the Facet value ("" = whole value). It may
 	// carry a {{.spec.X}} reference resolved from the Intent spec at compile.
 	Path string `json:"path,omitempty"`

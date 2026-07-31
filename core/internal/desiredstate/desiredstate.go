@@ -3047,6 +3047,11 @@ type declExpectation struct {
 	Equals    any    `yaml:"equals"`
 	Contains  any    `yaml:"contains"`
 	NotBefore string `yaml:"notBefore"`
+	// Qualifier is ADR-0152's per-application claim key. DECLARED HERE AND REFUSED AT LOAD in
+	// this release — see checkQualifierNotYetStorable. The field exists so the refusal can
+	// explain itself rather than arriving as `field qualifier not found in type`, which is what
+	// KnownFields would otherwise say about a field the ADR tells an author to use.
+	Qualifier string `yaml:"qualifier"`
 }
 
 func parseBlueprintFile(path string, raw []byte) (string, types.Blueprint, error) {
@@ -3083,7 +3088,8 @@ func parseBlueprintFile(path string, raw []byte) (string, types.Blueprint, error
 			Match: match,
 			Observe: types.FacetExpectation{
 				Namespace: r.Observe.Namespace, Path: r.Observe.Path,
-				Equals: eq, Contains: con, NotBefore: r.Observe.NotBefore,
+				Qualifier: r.Observe.Qualifier,
+				Equals:    eq, Contains: con, NotBefore: r.Observe.NotBefore,
 			},
 			Claim: r.Claim, RemediationWorkflow: r.RemediationWorkflow,
 			RemediationCapability: r.RemediationCapability,
@@ -3145,6 +3151,25 @@ func ValidateBlueprint(b types.Blueprint) error {
 		}
 		if len(r.Observe.Equals) == 0 && len(r.Observe.Contains) == 0 && r.Observe.NotBefore == "" {
 			return fmt.Errorf("blueprint %s@%d: route %d observe requires equals, contains, or notBefore", b.Name, b.Version, i)
+		}
+		// ADR-0152 lands in TWO releases, and this is the first. The claim key and the Facet
+		// primary key must widen TOGETHER (D4): with the key still three columns, two Blueprints
+		// declaring different qualifiers on one Entity would COMPILE — the conflict detector would
+		// see two distinct claims — and then both write through
+		// ON CONFLICT (entity_id, namespace, prov_source_id) DO UPDATE, so the second Run would
+		// overwrite the first's row and flip its qualifier. Not even an error: a silent
+		// last-writer-wins, which is the precise failure the qualifier exists to abolish.
+		//
+		// So it is refused here rather than half-honoured. A declaration that reads as permitted and
+		// is honoured by something OTHER than what it says is worse than one that is refused (§1.8).
+		if r.Observe.Qualifier != "" {
+			return fmt.Errorf("blueprint %s@%d: route %d declares observe.qualifier %q, which this release "+
+				"cannot yet store: ADR-0152's expand migration (00047) adds the column, and the CONTRACT "+
+				"migration that folds it into graph.facet's primary key has not shipped. Until it does, two "+
+				"qualified claims on one Entity would compile and then silently overwrite each other's row "+
+				"(D4). Remove the qualifier; co-hosting two managed applications on one host arrives with "+
+				"that migration",
+				b.Name, b.Version, i, r.Observe.Qualifier)
 		}
 		switch r.Claim {
 		case types.ClaimExclusive, types.ClaimAdditive:

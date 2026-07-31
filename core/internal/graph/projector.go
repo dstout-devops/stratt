@@ -239,14 +239,19 @@ func upsertEntityTx(ctx context.Context, tx pgx.Tx, prov types.Provenance, cell 
 	}
 
 	for ns, val := range e.Facets {
-		if err := upsertFacetTx(ctx, tx, prov, cell, id, ns, val); err != nil {
+		// A Syncer projection is UNQUALIFIED. One Syncer is one source, so it already gets
+		// exactly one row per (entity, namespace) — the qualifier is a compile-derived property
+		// of a CLAIM (ADR-0152 D3), and a Syncer has no claim to derive one from. Observing two
+		// instances of one namespace stays inexpressible; that is a capability this release
+		// declines to add, not one it removes (D6).
+		if err := upsertFacetTx(ctx, tx, prov, cell, id, ns, "", val); err != nil {
 			return "", err
 		}
 	}
 	return id, nil
 }
 
-func upsertFacetTx(ctx context.Context, tx pgx.Tx, prov types.Provenance, cell, entityID, namespace string, value json.RawMessage) error {
+func upsertFacetTx(ctx context.Context, tx pgx.Tx, prov types.Provenance, cell, entityID, namespace, qualifier string, value json.RawMessage) error {
 	// Pinned Facet schemas validate at the write path itself (§1.5,
 	// ADR-0015) — every writer (Normalizer and Run provenance alike) passes
 	// through here, so enforcement is structural, not a review norm.
@@ -261,30 +266,62 @@ func upsertFacetTx(ctx context.Context, tx pgx.Tx, prov types.Provenance, cell, 
 	// skipped by the home-gate uuid cast (`sid <> ''`). A genuine per-Actuator
 	// source is the ADR-0060 M2 follow-up.
 	source := prov.SourceID
+	// The QUALIFIER dimension (ADR-0152): which of several same-namespace Facets on this Entity
+	// this is — apache's app.config and tomcat's, rather than two opinions about one. Empty is the
+	// ordinary case and means unqualified, not missing.
+	//
+	// The conflict target is still the THREE-column key, because this is the expand release and
+	// facet_pkey has not moved yet (00047 says why: the previous release's replicas upsert through
+	// that exact constraint). So a non-empty qualifier can be written, but a SECOND one on the same
+	// (entity, namespace, source) still collides — the capability arrives with the contract release
+	// that folds the column into the key. Deliberate, and stated here so the limit is found by
+	// reading rather than by a constraint violation at 3am.
 	if _, err := tx.Exec(ctx, `
-		INSERT INTO graph.facet (entity_id, namespace, value, prov_writer_kind, prov_writer_ref, prov_source_id, prov_cell, prov_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $8, $7)
+		INSERT INTO graph.facet (entity_id, namespace, qualifier, value, prov_writer_kind, prov_writer_ref, prov_source_id, prov_cell, prov_at)
+		VALUES ($1, $2, $9, $3, $4, $5, $6, $8, $7)
 		ON CONFLICT (entity_id, namespace, prov_source_id) DO UPDATE
 		SET value = excluded.value,
+		    qualifier = excluded.qualifier,
 		    prov_writer_kind = excluded.prov_writer_kind,
 		    prov_writer_ref = excluded.prov_writer_ref,
 		    prov_cell = excluded.prov_cell,
 		    prov_at = excluded.prov_at`,
-		entityID, namespace, value, string(prov.WriterKind), prov.WriterRef, source, prov.At, cell,
+		entityID, namespace, value, string(prov.WriterKind), prov.WriterRef, source, prov.At, cell, qualifier,
 	); err != nil {
-		return fmt.Errorf("graph: upsert facet %s on %s: %w", namespace, entityID, err)
+		return fmt.Errorf("graph: upsert facet %s%s on %s: %w", namespace, qualifierSuffix(qualifier), entityID, err)
 	}
 	return nil
 }
 
-// UpsertFacet projects one Facet value onto an existing Entity.
+// qualifierSuffix renders a qualifier for a human — `app.config[tomcat]`, or nothing at all when
+// unqualified, so the overwhelming majority of messages read exactly as they always have.
+func qualifierSuffix(qualifier string) string {
+	if qualifier == "" {
+		return ""
+	}
+	return "[" + qualifier + "]"
+}
+
+// UpsertFacet projects one UNQUALIFIED Facet value onto an existing Entity — the ordinary case,
+// and what almost every namespace is (ADR-0152: the qualifier exists for the few whose grain is
+// finer than the Entity, like one host's several managed applications).
 func (p *Projector) UpsertFacet(ctx context.Context, prov types.Provenance, entityID, namespace string, value json.RawMessage) error {
+	return p.UpsertQualifiedFacet(ctx, prov, entityID, namespace, "", value)
+}
+
+// UpsertQualifiedFacet projects one Facet value under an explicit qualifier (ADR-0152 D2/D4).
+//
+// The qualifier is DERIVED AT COMPILE from the resolved spec and stamped by the core from the
+// claim — a writer never proposes its own (D6). That is what keeps the plugin port unchanged: a
+// plugin able to name its own qualifier could name ANOTHER claim's, and write the observed row a
+// foreign Baseline's drift evaluation reads.
+func (p *Projector) UpsertQualifiedFacet(ctx context.Context, prov types.Provenance, entityID, namespace, qualifier string, value json.RawMessage) error {
 	tx, err := p.begin(ctx)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback(ctx) //nolint:errcheck
-	if err := upsertFacetTx(ctx, tx, prov, p.cell, entityID, namespace, value); err != nil {
+	if err := upsertFacetTx(ctx, tx, prov, p.cell, entityID, namespace, qualifier, value); err != nil {
 		return err
 	}
 	return tx.Commit(ctx)

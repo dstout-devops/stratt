@@ -1351,8 +1351,16 @@ func (s *Server) GetEntity(w http.ResponseWriter, r *http.Request, id string) {
 		var val any
 		_ = json.Unmarshal(f.Value, &val)
 		srcID := f.Provenance.SourceID
+		// The qualifier is carried only when there is one (ADR-0152): an unqualified Facet — which
+		// is almost all of them — renders byte-identically to before, so no client sees churn.
+		var qualifier *string
+		if f.Qualifier != "" {
+			q := f.Qualifier
+			qualifier = &q
+		}
 		doc.Facets[i] = Facet{
 			Namespace: f.Namespace,
+			Qualifier: qualifier,
 			Value:     val,
 			Provenance: Provenance{
 				WriterKind: ProvenanceWriterKind(f.Provenance.WriterKind),
