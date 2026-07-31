@@ -326,6 +326,26 @@ the safe one. Scope today is `kubecompute-build`, the only Workflow forwarding `
 as other builders begin to, they either declare what they read or are correctly reported as reading
 none.
 
+### Booked by the WFJT façade family (2026-07-31) — a cancel that would have lied
+
+`/api/v2/workflow_job_templates/` + `/workflow_jobs/` shipped, and **14 of the 21 Workflows the
+reference estate ships were invisible on the compat surface until they did**: `job_templates`
+presents only single-Step, Gate-free Workflows, so every DAG, every gated Workflow and every
+policy-checkpointed one had no AWX representation at all — the strangler-fig door failing at exactly
+the shapes an adopter migrates FOR. The launch reuses `orchestrate.LaunchWorkflowRun`, **extracted**
+from `api.Server.launchWorkflow` rather than copied; that function's own comment had warned for two
+ADRs that a second launch path grows its own authz and its own drift, and this was the moment the
+warning came due.
+
+**What was deliberately NOT shipped: `workflow_jobs/{id}/cancel/`.** AWX offers it and it was two
+lines here — but `RunDAG` has **no cancellation handling at all** (no `ctx.Done` path, no terminal
+status write), and the native API has no workflow-run cancel door either. Wiring one only on the
+compat surface would signal Temporal, tear the activities down, and leave `graph.workflow_run` saying
+`running` **forever**: an operator who cancelled would be told the execution is still going, which is
+strictly worse than not offering cancel. A 404 from the mux says "not offered" — absent rather than
+wrong (§1.8). **The real gap is native:** a terminal-status writer in `RunDAG`, with the façade route
+following it. Cancelling a Run (single-Step) already works and is unaffected.
+
 > **Note on scope.** The phase tables above cite ADRs through ~0054 (the phase + dark-matter work). Later
 > ADRs (0055–0091) extend the platform beyond the original phase plan — observability/OTel, API admission
 > PEPs, in-place adopt + standing cutover reconciler, new estate dimensions (identity/software/service), and

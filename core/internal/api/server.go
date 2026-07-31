@@ -2210,48 +2210,25 @@ func decodeLaunchBody(w http.ResponseWriter, r *http.Request) (inputs, changeCon
 // every launch that is not a per-Finding remediation. Passed explicitly rather than inferred, so a
 // direct launch cannot acquire a scope by accident and a remediation cannot lose one.
 func (s *Server) launchWorkflow(w http.ResponseWriter, r *http.Request, wf types.Workflow, principal string, inputs, changeContext map[string]any, entityScope, viewName string) {
-	// Validate at the DOOR so a caller gets a 400 naming the offending input, rather than a
-	// created-then-failed Run they have to go read (§1.8). This is the same
-	// contract.ResolveLaunchInputs the RunDAG chokepoint calls — one implementation, two
-	// call sites: this one for the error message, that one because no transport can skip it
-	// (ADR-0118 D4). Resolving here also means the defaults are visible in the Run's
-	// recorded params, not conjured later.
-	resolved, verr := contract.ResolveLaunchInputs(wf.Name, wf.Inputs, inputs)
-	if verr != nil {
-		writeErr(w, http.StatusBadRequest, verr.Error())
-		return
-	}
-	// The change context is admitted at the door for the same reason (ADR-0122): a caller
-	// asserting an environment, a core-owned `stratt.change/` label, or an unknown changeClass
-	// gets a 400 naming the key, not a Run that dies inside the DAG. The RunDAG chokepoint calls
-	// the same function, because that is the one nothing can skip.
-	if verr := policy.ValidateChangeContext(changeContext); verr != nil {
-		writeErr(w, http.StatusBadRequest, verr.Error())
-		return
-	}
-
-	wr, err := s.Store.CreateWorkflowRun(r.Context(), wf.Name, "", principal, "")
+	// The SEQUENCE now lives in orchestrate.LaunchWorkflowRun, because this stopped being the
+	// only door: the AWX façade's workflow_job_templates launch needs the identical validation,
+	// bookkeeping and Temporal start, and a private copy there would be the second launch path
+	// this comment has always warned about. What stays here is what is genuinely HTTP: the
+	// authz check above, and mapping the outcome onto a status code.
+	wr, err := orchestrate.LaunchWorkflowRun(r.Context(),
+		orchestrate.LaunchDeps{Store: s.Store, Temporal: s.Temporal},
+		orchestrate.WorkflowLaunchParams{
+			Workflow: wf, Principal: principal, Inputs: inputs, Context: changeContext,
+			EntityScope: entityScope, ViewName: viewName,
+		})
 	if err != nil {
-		s.fail(w, err)
-		return
-	}
-	temporalID := "wfrun-" + wr.ID
-	_, err = s.Temporal.ExecuteWorkflow(r.Context(), client.StartWorkflowOptions{
-		ID:        temporalID,
-		TaskQueue: orchestrate.TaskQueue,
-	}, orchestrate.RunDAG, orchestrate.DAGInput{
-		WorkflowRunID: wr.ID, WorkflowName: wf.Name, Principal: principal,
-		LaunchParams: resolved, Context: changeContext, EntityScope: entityScope, ViewName: viewName,
-		// The floor's own environment, not the caller's claim about it (ADR-0122 D2).
-		Environment: s.Store.ActiveEnvironment(),
-	})
-	if err != nil {
-		_ = s.Store.SetWorkflowRunStatus(r.Context(), wr.ID, types.RunFailed, map[string]any{"error": "workflow start failed"})
-		s.fail(w, fmt.Errorf("start workflow run: %w", err))
-		return
-	}
-	wr.TemporalID = temporalID
-	if err := s.Store.SetWorkflowRunTemporalID(r.Context(), wr.ID, temporalID); err != nil {
+		// A caller-supplied input that violates the declared interface, or a change context
+		// that is not admissible, is a 400 naming the offending key (ADR-0118 D4 / ADR-0122)
+		// — not a created-then-failed Run the operator has to go read (§1.8).
+		if errors.Is(err, orchestrate.ErrLaunchInput) {
+			writeErr(w, http.StatusBadRequest, err.Error())
+			return
+		}
 		s.fail(w, err)
 		return
 	}

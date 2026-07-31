@@ -82,6 +82,15 @@ func New(cfg Config) http.Handler {
 	// state (§2.2/§2.3).
 	mux.HandleFunc("GET /api/v2/schedules/", f.authed(f.listSchedules))
 	mux.HandleFunc("GET /api/v2/schedules/{id}/", f.authed(f.getSchedule))
+	// workflow_job_templates — the multi-Step/gated Workflows job_templates deliberately skips.
+	// Launch goes through the SAME orchestrate.LaunchWorkflowRun the native door calls; the DAG
+	// itself is a declaration, so everything else here is read-only.
+	mux.HandleFunc("GET /api/v2/workflow_job_templates/", f.authed(f.listWorkflowJobTemplates))
+	mux.HandleFunc("GET /api/v2/workflow_job_templates/{id}/", f.authed(f.getWorkflowJobTemplate))
+	mux.HandleFunc("GET /api/v2/workflow_job_templates/{id}/workflow_nodes/", f.authed(f.getWorkflowNodes))
+	mux.HandleFunc("POST /api/v2/workflow_job_templates/{id}/launch/", f.authed(f.launchWFJT))
+	mux.HandleFunc("GET /api/v2/workflow_jobs/", f.authed(f.listWorkflowJobs))
+	mux.HandleFunc("GET /api/v2/workflow_jobs/{id}/", f.authed(f.getWorkflowJob))
 	mux.HandleFunc("GET /api/v2/inventories/", f.authed(f.listInventories))
 	mux.HandleFunc("GET /api/v2/inventories/{id}/", f.authed(f.getInventory))
 

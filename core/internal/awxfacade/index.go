@@ -10,13 +10,15 @@ const awxVersion = "24.6.1"
 // Only the resources the façade implements are advertised.
 func (f *Facade) index(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{
-		"ping":          "/api/v2/ping/",
-		"config":        "/api/v2/config/",
-		"me":            "/api/v2/me/",
-		"job_templates": "/api/v2/job_templates/",
-		"jobs":          "/api/v2/jobs/",
-		"inventories":   "/api/v2/inventories/",
-		"schedules":     "/api/v2/schedules/",
+		"ping":                   "/api/v2/ping/",
+		"config":                 "/api/v2/config/",
+		"me":                     "/api/v2/me/",
+		"job_templates":          "/api/v2/job_templates/",
+		"jobs":                   "/api/v2/jobs/",
+		"inventories":            "/api/v2/inventories/",
+		"schedules":              "/api/v2/schedules/",
+		"workflow_job_templates": "/api/v2/workflow_job_templates/",
+		"workflow_jobs":          "/api/v2/workflow_jobs/",
 	})
 }
 

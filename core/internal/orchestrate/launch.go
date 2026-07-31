@@ -10,12 +10,18 @@ import (
 
 	"github.com/dstout-devops/stratt/core/internal/contract"
 	"github.com/dstout-devops/stratt/core/internal/graph"
+	"github.com/dstout-devops/stratt/core/internal/policy"
 	"github.com/dstout-devops/stratt/types"
 )
 
 // ErrStartWorkflow marks a failure to start the Temporal workflow (infra, not a
 // client error) — callers map it to a 5xx rather than a 4xx.
 var ErrStartWorkflow = errors.New("start workflow")
+
+// ErrLaunchInput marks a launch refused by what the CALLER supplied — declared
+// launch inputs that violate the Workflow's interface, or a change context that
+// is not admissible. Callers map it to a 4xx; everything else is theirs or ours.
+var ErrLaunchInput = errors.New("invalid launch")
 
 // LaunchDeps are the substrate handles a launch needs — the same ones the API
 // Server and the AWX façade already hold.
@@ -110,6 +116,79 @@ func LaunchRun(ctx context.Context, d LaunchDeps, p LaunchParams) (types.Run, er
 		return types.Run{}, err
 	}
 	return run, nil
+}
+
+// WorkflowLaunchParams is the transport-neutral input to launch a WORKFLOW —
+// the whole declared DAG, as opposed to LaunchParams' single Run.
+//
+// It carries no Environment field on purpose: the floor's own environment is
+// read from the Store here, never accepted from the caller (ADR-0122 D2).
+type WorkflowLaunchParams struct {
+	Workflow  types.Workflow
+	Principal string
+	// Inputs are the caller's answers to the Workflow's declared `inputs`
+	// interface; Context is what the launcher asserts about the CHANGE for
+	// policy Steps to decide on. Two concepts, two fields (ADR-0118 D4).
+	Inputs  map[string]any
+	Context map[string]any
+	// EntityScope narrows the launched DAG to one Entity (ADR-0150 D3); "" is
+	// the whole View. ViewName is the View an actuation Step with none of its
+	// own inherits (a Finding remediation); "" for a direct launch.
+	EntityScope string
+	ViewName    string
+}
+
+// LaunchWorkflowRun is THE launch path for a declared Workflow, shared by every
+// door that has one: POST /api/v1/workflows/{name}/runs, the remediation door,
+// and the AWX façade's workflow_job_templates launch (§1.6 — one launch, one
+// validation, one audit).
+//
+// One function on purpose, and the reason is written into the history: a second
+// launch path grows its own authz check, its own validation, and its own drift,
+// which is the §1.6 asymmetry that let MCP POST a nil body for as long as it
+// did. When the AWX façade gained this family it did NOT get a private copy of
+// the sequence — it calls this, exactly as its job_template launch calls
+// LaunchRun.
+//
+// Both validations run HERE rather than inside the DAG so a caller gets an error
+// naming the offending input, instead of a created-then-failed WorkflowRun they
+// have to go read (§1.8). The RunDAG chokepoint calls the same functions again,
+// because that is the one nothing can skip.
+//
+// AUTHORIZATION IS THE CALLER'S. This function does not check View-runner grants:
+// the doors do, each against its own transport's Principal (api.authorizeLaunch,
+// the façade's requireRunner). That split is deliberate — the authz decision needs
+// the request context — but it means a new door MUST authorize before calling.
+func LaunchWorkflowRun(ctx context.Context, d LaunchDeps, p WorkflowLaunchParams) (types.WorkflowRun, error) {
+	resolved, err := contract.ResolveLaunchInputs(p.Workflow.Name, p.Workflow.Inputs, p.Inputs)
+	if err != nil {
+		return types.WorkflowRun{}, fmt.Errorf("%w: %w", ErrLaunchInput, err)
+	}
+	if err := policy.ValidateChangeContext(p.Context); err != nil {
+		return types.WorkflowRun{}, fmt.Errorf("%w: %w", ErrLaunchInput, err)
+	}
+	wr, err := d.Store.CreateWorkflowRun(ctx, p.Workflow.Name, "", p.Principal, "")
+	if err != nil {
+		return types.WorkflowRun{}, err
+	}
+	temporalID := "wfrun-" + wr.ID
+	if _, err := d.Temporal.ExecuteWorkflow(ctx, client.StartWorkflowOptions{
+		ID: temporalID, TaskQueue: TaskQueue,
+	}, RunDAG, DAGInput{
+		WorkflowRunID: wr.ID, WorkflowName: p.Workflow.Name, Principal: p.Principal,
+		LaunchParams: resolved, Context: p.Context,
+		EntityScope: p.EntityScope, ViewName: p.ViewName,
+		// The floor's own environment, not the caller's claim about it (ADR-0122 D2).
+		Environment: d.Store.ActiveEnvironment(),
+	}); err != nil {
+		_ = d.Store.SetWorkflowRunStatus(ctx, wr.ID, types.RunFailed, map[string]any{"error": "workflow start failed"})
+		return types.WorkflowRun{}, fmt.Errorf("%w: start workflow run: %w", ErrStartWorkflow, err)
+	}
+	wr.TemporalID = temporalID
+	if err := d.Store.SetWorkflowRunTemporalID(ctx, wr.ID, temporalID); err != nil {
+		return types.WorkflowRun{}, err
+	}
+	return wr, nil
 }
 
 // launchAction is the single-launch path for a targetless Connector Action
