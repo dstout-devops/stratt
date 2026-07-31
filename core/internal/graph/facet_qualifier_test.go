@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"testing"
+	"time"
 
 	"github.com/dstout-devops/stratt/types"
 )
@@ -199,5 +200,78 @@ func TestASecondQualifierNeedsTheContractRelease(t *testing.T) {
 			"the expected inversion — two rows should now coexist. Update this test to assert that, "+
 			"and lift the estate-load refusal in desiredstate (blueprint route observe.qualifier).",
 			len(facets), facets)
+	}
+}
+
+// A contended namespace resolves to the DECLARED AUTHORITY, and to nothing when none is declared.
+//
+// ADR-0152 follow-up 6, and the older half of the defect it closes. ADR-0060 gave the Facet grain a
+// SOURCE dimension so many sources may project one namespace, and gave the scalar routing read the
+// declared-authority collapse to resolve them. The Baseline evaluator never learned about it: it
+// ranged GetFacets into a map keyed by namespace, so the LAST ROW SCANNED won — which observation a
+// compliance check evaluated against was decided by Postgres's return order.
+//
+// Omitting a contended key is the honest direction to be wrong in. A drift check that silently
+// evaluates one of two disagreeing observations reports compliance it cannot justify; one that
+// reports the value as absent is visibly wrong, and the ownership-contention Finding names the
+// contention itself (§2.4, §1.8).
+func TestContendedFacetsResolveToTheDeclaredAuthorityOrToNothing(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	id, _ := qualifierFixture(t, s, "custom.thing")
+	// Two SYNCER owners of one namespace — the shape ADR-0060 exists for.
+	for _, owner := range []string{"alpha/syncer", "beta/syncer"} {
+		if err := s.RegisterFacetOwner(ctx, types.FacetOwner{
+			Namespace: "custom.thing", OwnerKind: "syncer", OwnerRef: owner,
+		}); err != nil {
+			t.Fatalf("register %s: %v", owner, err)
+		}
+	}
+	p := s.NormalizerProjector()
+	write := func(owner, sourceID, port string) {
+		t.Helper()
+		pv := types.Provenance{WriterKind: types.WriterSyncer, WriterRef: owner, SourceID: sourceID, At: time.Now().UTC()}
+		if err := p.UpsertFacet(ctx, pv, id, "custom.thing", json.RawMessage(`{"port":"`+port+`"}`)); err != nil {
+			t.Fatalf("write as %s: %v", owner, err)
+		}
+	}
+	write("alpha/syncer", testSourceID, "80")
+	write("beta/syncer", "", "8080")
+
+	key := FacetKey{Namespace: "custom.thing"}
+	byKey, contended, err := s.ResolvedFacetsByEntity(ctx, id)
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	if _, ok := byKey[key]; ok {
+		t.Error("two sources disagree and none is declared authoritative — the read must OMIT the " +
+			"value rather than pick one, or a compliance check reports a verdict Postgres chose")
+	}
+	if len(contended) != 1 || contended[0] != key {
+		t.Fatalf("the contention must be reported so the check can say why it could not evaluate; got %v", contended)
+	}
+
+	// Declare one authoritative → the read resolves to exactly that source's value.
+	if err := s.RegisterFacetOwner(ctx, types.FacetOwner{
+		Namespace: "custom.thing", OwnerKind: "syncer", OwnerRef: "beta/syncer", Authoritative: true,
+	}); err != nil {
+		t.Fatalf("declare authority: %v", err)
+	}
+	byKey, contended, err = s.ResolvedFacetsByEntity(ctx, id)
+	if err != nil {
+		t.Fatalf("resolve after authority: %v", err)
+	}
+	if len(contended) != 0 {
+		t.Errorf("a declared authority clears the contention, got %v", contended)
+	}
+	var got struct {
+		Port string `json:"port"`
+	}
+	if err := json.Unmarshal(byKey[key], &got); err != nil {
+		t.Fatalf("decode resolved value: %v", err)
+	}
+	if got.Port != "8080" {
+		t.Errorf("resolved port = %q, want 8080 (beta/syncer is the declared authority) — resolving to "+
+			"the OTHER source would mean the authority declaration decides nothing", got.Port)
 	}
 }

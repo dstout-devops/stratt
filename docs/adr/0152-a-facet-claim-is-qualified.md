@@ -441,10 +441,15 @@ change that folds the primary key.
 5. The observed-instance question D6 leaves open (a Syncer projecting two same-namespace facts)
    needs its own decision if and when a Connector demands it. It is a port change; do not add the
    field before then.
-6. **The Baseline evaluator's multi-SOURCE flatten** (`baseline.go:158`) stays order-dependent after
-   this ADR — see D5. Not reachable today (every observed namespace has one writer, checked), and it
-   becomes reachable the day a write-scope is added to a Syncer-owned namespace. Fixing it means
-   giving the evaluator the declared-authority collapse `FacetValuesByEntities` already performs.
+6. ~~**The Baseline evaluator's multi-SOURCE flatten** stays order-dependent after this ADR~~ —
+   **CLOSED.** `Store.ResolvedFacetsByEntity` now resolves one effective value per
+   `(namespace, qualifier)` with the same declared-authority collapse `FacetValuesByEntities`
+   performs, and the evaluator reads through it. A contended key is OMITTED rather than guessed and
+   reported, so the drift diff can say the check could not evaluate a value it would have had to
+   pick — distinct from "the facet is missing", which sends an operator looking for the wrong thing.
+   The defect predates this ADR: ADR-0060 shipped the source dimension and gave the SCALAR read the
+   collapse; this read path never learned about it, so which observation a compliance check
+   evaluated against was decided by Postgres's return order.
 7. ~~**The two Actuator write-back doors already differ on facets**~~ — **checked and CLOSED before
    this ADR is implemented, because D6 cannot stand on a door that carries no facets at all.** The
    gRPC Apply door mapped `raw.WriteBack → res.Entities` as Kind/IdentityKeys/Labels and discarded

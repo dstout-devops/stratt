@@ -131,6 +131,91 @@ func (s *Store) GetFacets(ctx context.Context, entityID string) ([]types.Facet, 
 	return out, rows.Err()
 }
 
+// FacetKey identifies a Facet WITHIN an Entity: the namespace it is named by, and — since
+// ADR-0152 — which of several same-namespace Facets it is. Empty qualifier is the ordinary case.
+type FacetKey struct {
+	Namespace string
+	Qualifier string
+}
+
+// ResolvedFacetsByEntity returns ONE effective value per (namespace, qualifier) on an Entity,
+// resolving multi-source contention the same way the scalar routing read does.
+//
+// IT EXISTS BECAUSE THE DRIFT EVALUATOR WAS PICKING BY ROW ORDER. The Baseline evaluator built its
+// lookup by ranging GetFacets into a map keyed by namespace, so when two sources projected one
+// namespace onto one Entity the LAST row scanned won — an arbitrary choice, made by Postgres's
+// return order, about which observation a compliance check is evaluated against. ADR-0060 shipped
+// the multi-source grain and gave FacetValuesByEntities the declared-authority collapse; this read
+// path never learned about it. Booked as ADR-0152 follow-up 6 rather than claimed as fixed by that
+// ADR, and closed here.
+//
+// Not reachable in the shipped estate today — every namespace a Baseline observes has exactly one
+// writer (checked: of app.config, app.deliverable, access.grants, fileset.content, cert.presented
+// and stratt-apps, only app.deliverable has a Syncer writer and no Run write-scope includes it) —
+// which is precisely why it had to be fixed on purpose rather than by a failing test. It becomes
+// reachable the day someone adds a write-scope over a Syncer-owned namespace.
+//
+// CONTENDED KEYS ARE OMITTED, NOT GUESSED, and returned in the second value. A drift check that
+// silently evaluates one of two disagreeing observations reports compliance it cannot justify; one
+// that reports the value as absent is wrong in the honest direction, and the ownership-contention
+// Finding names the contention itself (§2.4, §1.8).
+func (s *Store) ResolvedFacetsByEntity(ctx context.Context, entityID string) (map[FacetKey]json.RawMessage, []FacetKey, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT f.namespace, f.qualifier, f.value,
+		       (o.owner_ref IS NOT NULL) AS is_authority
+		FROM graph.facet f
+		LEFT JOIN graph.facet_owner o
+		  ON o.namespace = f.namespace AND o.owner_ref = f.prov_writer_ref AND o.authoritative
+		WHERE f.entity_id = $1`, entityID)
+	if err != nil {
+		return nil, nil, fmt.Errorf("graph: resolved facets: %w", err)
+	}
+	defer rows.Close()
+	type candidate struct {
+		val         json.RawMessage
+		isAuthority bool
+	}
+	perKey := map[FacetKey][]candidate{}
+	for rows.Next() {
+		var k FacetKey
+		var val json.RawMessage
+		var isAuthority bool
+		if err := rows.Scan(&k.Namespace, &k.Qualifier, &val, &isAuthority); err != nil {
+			return nil, nil, fmt.Errorf("graph: scan resolved facet: %w", err)
+		}
+		perKey[k] = append(perKey[k], candidate{val, isAuthority})
+	}
+	if err := rows.Err(); err != nil {
+		return nil, nil, err
+	}
+	out := make(map[FacetKey]json.RawMessage, len(perKey))
+	var contended []FacetKey
+	for k, cands := range perKey {
+		if len(cands) == 1 {
+			out[k] = cands[0].val
+			continue
+		}
+		var auth []json.RawMessage
+		for _, c := range cands {
+			if c.isAuthority {
+				auth = append(auth, c.val)
+			}
+		}
+		if len(auth) == 1 {
+			out[k] = auth[0]
+			continue
+		}
+		contended = append(contended, k)
+	}
+	sort.Slice(contended, func(i, j int) bool {
+		if contended[i].Namespace != contended[j].Namespace {
+			return contended[i].Namespace < contended[j].Namespace
+		}
+		return contended[i].Qualifier < contended[j].Qualifier
+	})
+	return out, contended, nil
+}
+
 // GetObservedBy returns the Sources that currently observe an Entity and when
 // each last saw it — the per-Source presence set backing cross-source liveness
 // (charter §1.2, ADR-0042). The true presence set, replacing the last-writer
