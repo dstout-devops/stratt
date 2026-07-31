@@ -287,12 +287,45 @@ Four findings that are real, are not demo bugs, and were each deliberately **not
    Deliberately permissive at the edges (a route counts whether or not an Assignment currently binds
    it): a false negative costs a diagnosis, a false positive would refuse an estate that works.
 
-4. **The estate loader silently reads only the FIRST document of a multi-document YAML file.** Written
-   as one file with two Views, the second simply did not exist — and the only reason it surfaced is
-   that a Workflow happened to reference the missing one. A file whose extra documents nothing
-   references would vanish without a word, which is exactly the silent-drop §1.8 refuses. Either
-   support multi-document estate files or refuse them by name; reading one and discarding the rest is
-   the one option that should not stand.
+4. ~~**The estate loader silently reads only the FIRST document of a multi-document YAML file.**~~
+   **FIXED (2026-07-31)** — `refuseMultiDocument`, applied in `parseKind` (one call site, so every
+   kind present and future is covered) and explicitly to `plugins.yaml`, which is parsed outside it
+   and is the worst place to lose a document: a dropped admission loses every declaration that
+   plugin ships and the estate still loads. **Refused rather than supported**, deliberately —
+   supporting it means every parser returning one name for the duplicate map, `contentDir` resolving
+   against a root derived from the file path, and diagnostics naming a file+index; all new surface
+   for an affordance no shipped estate uses. A trailing `---` stays legal.
+
+### Booked next — the port has no obligation to report an ignored input
+
+**Where it comes from.** ADR-0151 D4's honesty rests entirely on a convention: `kubecompute` emits
+`provider params ami,instanceType,region ignored` because its author chose to. **Nothing in the port
+requires it**, so a provider that drops params silently yields a green build of a wrong-shaped host
+after a human approved the gate. That is the same class this session closed three times over — an
+advertised or supplied thing that quietly resolves to nothing — sitting one level lower, at the
+sovereign port, where it applies to every plugin in every language.
+
+**The design, worked out and recorded so the next step is unambiguous.** The obvious shape is an
+`ignored_params` field the provider fills in, and it is the wrong one: a provider that ignores
+silently simply returns an empty list, so the field rewards exactly the behaviour it exists to
+expose. **Invert it.** The provider declares `consumed_params` — what it actually READ — and the core
+computes `sent − consumed`. A provider that says nothing then has ALL of its params reported as
+ignored, which makes silence the loudest possible outcome instead of the quietest. It also matches
+the rule the rest of the platform already runs on: a plugin advertises only what it can back, and an
+unbacked claim is refused rather than assumed.
+
+**Layering, because it is not all in one place.** `params` is opaque by charter (§1.5), so the core
+cannot detect ignoring by inspection — only by comparison against what it sent. The port carries the
+fact (`InvokeResult.consumed_params`, additive), `pluginhost` passes it through governed alongside
+`Rejections` (its exact mirror image: a rejection is something the plugin sent that core refused, an
+ignored param is something core sent that the plugin refused), and the COMPARISON belongs in
+`orchestrate`, which built the launch params and knows their shape — putting it in `pluginhost` would
+leak the provisioning launch interface into the generic host.
+
+**Not started rather than half-started.** A proto field nothing reads is precisely the
+advertised-target-nothing-resolves defect, so this lands as one unit — proto + regen + host + the
+comparison + a Run event carrying it (§1.8 descent) + `sdk/mockstratt` conformance + `kubecompute`
+declaring what it consumes — or not at all.
 
 > **Note on scope.** The phase tables above cite ADRs through ~0054 (the phase + dark-matter work). Later
 > ADRs (0055–0091) extend the platform beyond the original phase plan — observability/OTel, API admission
