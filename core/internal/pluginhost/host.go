@@ -550,6 +550,17 @@ type RawInvokeResult struct {
 	Entities         []ActionEntity
 	ProvisionedCreds []string
 	Rejections       []Rejection
+	// ConsumedParams are the opaque `params` keys the provider says it READ, passed
+	// through verbatim (ADR-0151 D4). The comparison against what was SENT is not done
+	// here on purpose: `params` is the provisioning launch interface's shape, and the
+	// host is generic — teaching it that an Action's args have a top-level `params`
+	// object would leak one class's convention into the seam every class crosses.
+	// orchestrate builds those params and does the subtraction.
+	//
+	// The EXACT MIRROR of Rejections beside it: a rejection is something the plugin sent
+	// that the core refused, an ignored param is something the core sent that the plugin
+	// refused. Both are governance facts about a Run, and both must reach the operator.
+	ConsumedParams []string
 }
 
 // InvokeRaw calls the plugin's Invoke and returns a GOVERNED result WITHOUT
@@ -608,6 +619,7 @@ func (h *Host) InvokeRaw(ctx context.Context, req ActionInvoke) (RawInvokeResult
 			continue // a diagnostic-only message; the result rides the terminal one
 		}
 		out.Outputs = res.GetOutputs().GetBytes()
+		out.ConsumedParams = res.GetConsumedParams()
 		// §1.5: the plugin's asserted output contract must match the core-pinned id.
 		if got := res.GetOutputContract().GetSchemaId(); req.ExpectOutputContract != "" && got != "" && got != req.ExpectOutputContract {
 			return out, fmt.Errorf("pluginhost: action %q output-contract drift: plugin asserted %q, core pins %q", req.Action, got, req.ExpectOutputContract)

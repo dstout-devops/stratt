@@ -3482,8 +3482,34 @@ type InvokeResult struct {
 	OutputContract   *ContractRef           `protobuf:"bytes,2,opt,name=output_contract,json=outputContract,proto3" json:"output_contract,omitempty"`
 	Entities         []*ObservedEntity      `protobuf:"bytes,3,rep,name=entities,proto3" json:"entities,omitempty"`
 	ProvisionedCreds []*CredentialRef       `protobuf:"bytes,4,rep,name=provisioned_creds,json=provisionedCreds,proto3" json:"provisioned_creds,omitempty"`
-	unknownFields    protoimpl.UnknownFields
-	sizeCache        protoimpl.SizeCache
+	// consumed_params — the keys of the request's opaque `params` object this
+	// provider actually READ. The core computes `sent - consumed` and surfaces the
+	// difference on the Run; an ignored declaration must be visible, not silent
+	// (§1.8, ADR-0151 D4).
+	//
+	// DECLARE WHAT YOU USED, NOT WHAT YOU IGNORED, and the inversion is the whole
+	// design. The obvious field is `ignored_params`, filled in by the provider —
+	// and it rewards exactly the behaviour it exists to expose, because a provider
+	// that drops params silently returns an empty list and looks perfect. Reported
+	// the other way round, a provider that says nothing has ALL of its params
+	// reported as ignored: silence becomes the loudest possible outcome instead of
+	// the quietest, and no goodwill is required for the honesty to hold.
+	//
+	// It is the same rule the rest of the port already runs on — a plugin
+	// advertises only what it can back, and an unbacked claim is refused rather
+	// than assumed (the ADR-0106 D2 honesty rule).
+	//
+	// The core CANNOT work this out for itself: `params` is opaque by charter
+	// (§1.5), typed by the provider's own Contract, so there is nothing to inspect
+	// — only something to compare against what was sent. That is why the fact has
+	// to cross the port at all.
+	//
+	// Empty is meaningful and is NOT the same as "no params were sent": with an
+	// empty `params` there is nothing to report either way, and the core says
+	// nothing. A provider that legitimately consumes everything lists every key.
+	ConsumedParams []string `protobuf:"bytes,5,rep,name=consumed_params,json=consumedParams,proto3" json:"consumed_params,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *InvokeResult) Reset() {
@@ -3540,6 +3566,13 @@ func (x *InvokeResult) GetEntities() []*ObservedEntity {
 func (x *InvokeResult) GetProvisionedCreds() []*CredentialRef {
 	if x != nil {
 		return x.ProvisionedCreds
+	}
+	return nil
+}
+
+func (x *InvokeResult) GetConsumedParams() []string {
+	if x != nil {
+		return x.ConsumedParams
 	}
 	return nil
 }
@@ -4223,12 +4256,13 @@ const file_stratt_plugin_v1_plugin_proto_rawDesc = "" +
 	"\x0fDestroyResponse\x121\n" +
 	"\x05event\x18\x01 \x01(\v2\x1b.stratt.plugin.v1.TaskEventR\x05event\x124\n" +
 	"\x06result\x18\x02 \x01(\v2\x1c.stratt.plugin.v1.ItemResultR\x06result\x120\n" +
-	"\x04gone\x18\x03 \x03(\v2\x1c.stratt.plugin.v1.GoneEntityR\x04gone\"\x97\x02\n" +
+	"\x04gone\x18\x03 \x03(\v2\x1c.stratt.plugin.v1.GoneEntityR\x04gone\"\xc0\x02\n" +
 	"\fInvokeResult\x123\n" +
 	"\aoutputs\x18\x01 \x01(\v2\x19.stratt.plugin.v1.PayloadR\aoutputs\x12F\n" +
 	"\x0foutput_contract\x18\x02 \x01(\v2\x1d.stratt.plugin.v1.ContractRefR\x0eoutputContract\x12<\n" +
 	"\bentities\x18\x03 \x03(\v2 .stratt.plugin.v1.ObservedEntityR\bentities\x12L\n" +
-	"\x11provisioned_creds\x18\x04 \x03(\v2\x1f.stratt.plugin.v1.CredentialRefR\x10provisionedCreds\"{\n" +
+	"\x11provisioned_creds\x18\x04 \x03(\v2\x1f.stratt.plugin.v1.CredentialRefR\x10provisionedCreds\x12'\n" +
+	"\x0fconsumed_params\x18\x05 \x03(\tR\x0econsumedParams\"{\n" +
 	"\x0eInvokeResponse\x121\n" +
 	"\x05event\x18\x01 \x01(\v2\x1b.stratt.plugin.v1.TaskEventR\x05event\x126\n" +
 	"\x06result\x18\x02 \x01(\v2\x1e.stratt.plugin.v1.InvokeResultR\x06result\"\xad\x02\n" +

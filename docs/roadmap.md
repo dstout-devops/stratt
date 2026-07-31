@@ -296,36 +296,35 @@ Four findings that are real, are not demo bugs, and were each deliberately **not
    against a root derived from the file path, and diagnostics naming a file+index; all new surface
    for an affordance no shipped estate uses. A trailing `---` stays legal.
 
-### Booked next — the port has no obligation to report an ignored input
+### ~~Booked next~~ SHIPPED — the port now reports an ignored input (2026-07-31)
 
-**Where it comes from.** ADR-0151 D4's honesty rests entirely on a convention: `kubecompute` emits
-`provider params ami,instanceType,region ignored` because its author chose to. **Nothing in the port
-requires it**, so a provider that drops params silently yields a green build of a wrong-shaped host
-after a human approved the gate. That is the same class this session closed three times over — an
-advertised or supplied thing that quietly resolves to nothing — sitting one level lower, at the
-sovereign port, where it applies to every plugin in every language.
+ADR-0151 D4's honesty used to rest on a convention: `kubecompute` emitted `provider params … ignored`
+because its author chose to, and **nothing in the port required it**, so a provider that dropped
+params silently produced a green build of a wrong-shaped host after a human approved the gate. That
+is the same class this session closed three times over, sitting one level lower — at the sovereign
+port, where it applies to every plugin in every language.
 
-**The design, worked out and recorded so the next step is unambiguous.** The obvious shape is an
-`ignored_params` field the provider fills in, and it is the wrong one: a provider that ignores
-silently simply returns an empty list, so the field rewards exactly the behaviour it exists to
-expose. **Invert it.** The provider declares `consumed_params` — what it actually READ — and the core
-computes `sent − consumed`. A provider that says nothing then has ALL of its params reported as
-ignored, which makes silence the loudest possible outcome instead of the quietest. It also matches
-the rule the rest of the platform already runs on: a plugin advertises only what it can back, and an
-unbacked claim is refused rather than assumed.
+`InvokeResult.consumed_params` (additive) now carries the fact, and the core computes `sent −
+consumed` and puts the difference on the Run as a `params-ignored` event.
 
-**Layering, because it is not all in one place.** `params` is opaque by charter (§1.5), so the core
-cannot detect ignoring by inspection — only by comparison against what it sent. The port carries the
-fact (`InvokeResult.consumed_params`, additive), `pluginhost` passes it through governed alongside
-`Rejections` (its exact mirror image: a rejection is something the plugin sent that core refused, an
-ignored param is something core sent that the plugin refused), and the COMPARISON belongs in
-`orchestrate`, which built the launch params and knows their shape — putting it in `pluginhost` would
-leak the provisioning launch interface into the generic host.
+**The field declares what was CONSUMED, and that inversion is the whole design.** The intuitive shape
+is `ignored_params`, filled in by the provider — and it rewards exactly the behaviour it exists to
+expose, because a provider that drops params silently returns an empty list and looks perfect.
+Reported the other way round, a provider that says nothing has **everything** it was sent reported:
+silence becomes the loudest outcome rather than the quietest, and the honesty requires no goodwill.
 
-**Not started rather than half-started.** A proto field nothing reads is precisely the
-advertised-target-nothing-resolves defect, so this lands as one unit — proto + regen + host + the
-comparison + a Run event carrying it (§1.8 descent) + `sdk/mockstratt` conformance + `kubecompute`
-declaring what it consumes — or not at all.
+**The core could not do this alone,** which is why the fact had to cross the port: `params` is opaque
+by charter (§1.5), so there is nothing to inspect — only something to compare against what was sent.
+The comparison lives in `orchestrate`, which built those params, rather than in `pluginhost`, which
+crosses every class and must not learn one class's convention. Only the opaque `params` object is in
+scope; the shared launch interface is not, because `placement` is accepted-and-ignored **by design**
+on this substrate (ADR-0123 D2) and folding it in would report a designed no-op as a defect on every
+build.
+
+**No conformance test, deliberately** — there is nothing for one to protect. The default is already
+the safe one. Scope today is `kubecompute-build`, the only Workflow forwarding `{{.launch.params}}`;
+as other builders begin to, they either declare what they read or are correctly reported as reading
+none.
 
 > **Note on scope.** The phase tables above cite ADRs through ~0054 (the phase + dark-matter work). Later
 > ADRs (0055–0091) extend the platform beyond the original phase plan — observability/OTel, API admission

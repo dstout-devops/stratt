@@ -214,6 +214,12 @@ func (a *Activities) ExecuteAction(ctx context.Context, in RunInput, creds []dis
 		// signals — a RunEvent + a tracked Finding, never a swallowed log line
 		// (enterprise-readiness GOV-3).
 		a.surfaceRejections(ctx, in.RunID, "action", in.Action, raw.Rejections)
+		// The mirror of the line above: a rejection is what the plugin sent and core refused; this
+		// is what core SENT and the plugin did not read. Before it, an ignored param was visible
+		// only if the provider volunteered a diagnostic — kubecompute does, nothing required it,
+		// and a provider that stayed quiet produced a green build of a wrong-shaped host after an
+		// approved gate (ADR-0151 D4).
+		a.surfaceIgnoredParams(ctx, in.RunID, in.Action, ignoredParams(in.Params, raw.ConsumedParams))
 		// Entities are GOVERNED but UNPROJECTED — RecordActionResult performs the
 		// single write with RUN provenance (per-verb write path, ADR-0047 §2).
 		ents := make([]actuators.EntityObservation, 0, len(raw.Entities))

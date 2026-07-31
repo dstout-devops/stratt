@@ -331,6 +331,16 @@ func (s *Server) createHost(stream grpc.ServerStreamingServer[pluginv1.InvokeRes
 			Outputs:        &pluginv1.Payload{Bytes: outputs},
 			OutputContract: &pluginv1.ContractRef{SchemaId: "actions/kubecompute/create-host.output"},
 			Entities:       []*pluginv1.ObservedEntity{s.project(created)},
+			// NIL, and it is a statement rather than an omission: this provider reads NONE of the
+			// opaque params. A host here is its name, its image and its authorized keys, so the
+			// core reports every declared param as ignored — which is the correct answer and the
+			// one the emit() above has been making by hand.
+			//
+			// The difference is that the emit is goodwill and this is the CONTRACT: the core now
+			// computes `sent - consumed` itself, so a provider that says nothing gets everything
+			// reported rather than nothing (ADR-0151 D4). The event stays because it carries the
+			// REASON, which a key list cannot.
+			ConsumedParams: nil,
 		},
 	})
 }

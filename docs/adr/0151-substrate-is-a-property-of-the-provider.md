@@ -262,11 +262,26 @@ carelessly.
 - **D4: the honesty limit must move to the claim site.** "The one-line migration is then literal" in
   D2, and the same claim in `estate/capability-bindings/provisioning-kube.yaml`, are what a reader
   acts on; the limit currently sits in Consequences. DONE below in D2's text.
-- **D4: the §1.8 safety net is a per-plugin convention, not a port guarantee.** kubecompute emits
-  "provider params … ignored", which is exactly right — but nothing in the port REQUIRES it, so a
-  provider that silently drops params yields a green build of a wrong-shaped host after a human
-  approved the gate. Since D4's honesty rests entirely on that behaviour, it should become an
-  obligation of the provisioning port. BOOKED, not done.
+- ~~**D4: the §1.8 safety net is a per-plugin convention, not a port guarantee.**~~ **DONE
+  (2026-07-31).** kubecompute emitted "provider params … ignored" because its author chose to;
+  nothing in the port required it, so a provider that silently dropped params yielded a green build
+  of a wrong-shaped host after a human approved the gate. The port now carries
+  `InvokeResult.consumed_params`, the core computes `sent - consumed` from the opaque `params` object
+  it dispatched, and the difference reaches the Run as a `params-ignored` event.
+  **The field declares what was CONSUMED, not what was ignored, and the inversion is the design.**
+  An `ignored_params` field would have let a provider that drops params silently return an empty list
+  and look perfect — rewarding precisely the behaviour it exists to expose. Reported the other way
+  round, a provider that says nothing has EVERYTHING it was sent reported: silence is the loudest
+  outcome rather than the quietest, and the honesty needs no goodwill. It is the same rule the port
+  already runs on — advertise only what you can back (ADR-0106 D2).
+  **The core cannot do this alone**, which is why it had to cross the port at all: `params` is opaque
+  by charter (§1.5), so there is nothing to inspect — only something to compare against what was
+  sent. The comparison lives in `orchestrate`, not `pluginhost`: a top-level `params` object is the
+  provisioning launch interface's shape, and the host crosses every class.
+  **No conformance test, deliberately.** There is nothing for one to protect — the default is already
+  the safe one, and a plugin that implements nothing is reported on rather than trusted. Scope today
+  is `kubecompute-build`, the only Workflow that forwards `{{.launch.params}}`; as other builders
+  begin to, they either declare what they read or are correctly reported as reading none.
 - **D3 is still unimplemented**, and the ruling sharpens where it belongs: a mixed-substrate refusal
   must fire at RESOLUTION, not three hops later at placement identity-scheme comparison. The
   `P ⊄ S` case above is the first half of that; the cross-KIND case (two kinds of one topology

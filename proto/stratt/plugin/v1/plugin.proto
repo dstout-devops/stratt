@@ -730,6 +730,33 @@ message InvokeResult {
   ContractRef output_contract = 2;
   repeated ObservedEntity entities = 3;
   repeated CredentialRef provisioned_creds = 4;
+
+  // consumed_params — the keys of the request's opaque `params` object this
+  // provider actually READ. The core computes `sent - consumed` and surfaces the
+  // difference on the Run; an ignored declaration must be visible, not silent
+  // (§1.8, ADR-0151 D4).
+  //
+  // DECLARE WHAT YOU USED, NOT WHAT YOU IGNORED, and the inversion is the whole
+  // design. The obvious field is `ignored_params`, filled in by the provider —
+  // and it rewards exactly the behaviour it exists to expose, because a provider
+  // that drops params silently returns an empty list and looks perfect. Reported
+  // the other way round, a provider that says nothing has ALL of its params
+  // reported as ignored: silence becomes the loudest possible outcome instead of
+  // the quietest, and no goodwill is required for the honesty to hold.
+  //
+  // It is the same rule the rest of the port already runs on — a plugin
+  // advertises only what it can back, and an unbacked claim is refused rather
+  // than assumed (the ADR-0106 D2 honesty rule).
+  //
+  // The core CANNOT work this out for itself: `params` is opaque by charter
+  // (§1.5), typed by the provider's own Contract, so there is nothing to inspect
+  // — only something to compare against what was sent. That is why the fact has
+  // to cross the port at all.
+  //
+  // Empty is meaningful and is NOT the same as "no params were sent": with an
+  // empty `params` there is nothing to report either way, and the core says
+  // nothing. A provider that legitimately consumes everything lists every key.
+  repeated string consumed_params = 5;
 }
 
 message InvokeResponse {
