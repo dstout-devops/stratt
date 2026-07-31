@@ -136,6 +136,31 @@ type EntityObservation struct {
 	// targeting a resolved Entity BY IDENTITY. Projected Run-provenance alongside the
 	// entity (ProjectFacts), so a build projects its topology, not just identity.
 	Relations []RelationObservation
+	// Facets the observation carries, namespace → value, ALREADY GOVERNED (grant ceiling
+	// ∩ the Step's facetWriteScope, ADR-0054) by the time they reach here. Projected with
+	// Run provenance against the Entity this observation upserts.
+	//
+	// IT EXISTS BECAUSE ONE SEAM HAD TWO FATES. `pluginhost.ApplyEntity` has always carried
+	// `Facets`, and the governor has always gated them — but only the EE-Job door consumed
+	// them (`executeJobPlugin`, via `res.Facts[host.name]`). The gRPC door built an
+	// EntityObservation out of Kind/IdentityKeys/Labels and dropped the rest on the floor,
+	// because this struct had nowhere to put it. So the same governed write-back was
+	// honoured over one transport and discarded over the other, with the governor doing
+	// real work — admitting namespaces, emitting Rejections for the ones it refused —
+	// immediately before the survivors were thrown away.
+	//
+	// Nothing shipping hit it: `dns.yaml` and `awsec2.yaml` each DECLINE the
+	// `facetNamespaces` grant with a comment saying it would be "authority granted for a
+	// path that does not exist". That the estate had learned to route around a hole is the
+	// argument for closing it, not for leaving it — a grant that reads as permitted and is
+	// honoured by nothing is exactly the shape ADR-0054 warns about, and a dropped
+	// write-back reports as nothing at all.
+	//
+	// NOT the Action path. `pluginhost.ActionEntity` still carries no Facets, deliberately
+	// (ADR-0113 D3): a build projects BY IDENTITY ONLY and its Facets arrive from the
+	// Syncer's next OBSERVE. Apply is the Actuator's content verb, where the fact-back
+	// convention lives (ADR-0084) — which is why the EE-Job door had it all along.
+	Facets map[string]json.RawMessage
 }
 
 // RelationObservation is a write-back edge to a target named by identity (the target

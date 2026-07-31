@@ -1424,10 +1424,7 @@ func (a *Activities) executePlugin(ctx context.Context, in RunInput, site string
 	// Map the governed, UNPROJECTED result to dispatch.Result. CollectFacts →
 	// ProjectFacts perform the single batched projection with Run provenance (#2).
 	res := dispatch.Result{Succeeded: raw.Succeeded, Error: raw.Error, PerTarget: raw.PerTarget, Drift: raw.Drift, Outputs: raw.Outputs}
-	for _, e := range raw.WriteBack {
-		res.Entities = append(res.Entities, actuators.EntityObservation{
-			Kind: e.Kind, IdentityKeys: e.IdentityKeys, Labels: e.Labels})
-	}
+	res.Entities = writeBackObservations(raw.WriteBack)
 	// A rung-2 DerivedContract (tofu outputs schema) rides the existing
 	// OutputsContract channel — CollectFacts names it from the Step's workspace and
 	// ProjectFacts registers it, the core recomputing + pinning the hash (§1.5,
@@ -1613,13 +1610,42 @@ func (a *Activities) executeJobPlugin(ctx context.Context, in RunInput, slice in
 				"facets", sortedKeys(e.Facets))
 			continue
 		}
-		facets := make(map[string]json.RawMessage, len(e.Facets))
-		for ns, v := range e.Facets {
-			facets[ns] = json.RawMessage(v)
-		}
-		res.Facts[name] = facets
+		res.Facts[name] = applyFacets(e)
 	}
 	return res, nil
+}
+
+// applyFacets lifts a governed write-back's Facets into the projection shape.
+//
+// ONE FUNCTION BECAUSE THE DUPLICATE WAS THE BUG. Both Apply doors consume the same
+// `pluginhost.ApplyEntity`, and this conversion existed only inside the EE-Job door —
+// so the gRPC door, having no loop to copy, mapped Kind/IdentityKeys/Labels and let the
+// governed Facets fall on the floor. The transports must not disagree about what a
+// write-back carries; making the carrying shared is what stops them drifting again.
+func applyFacets(e pluginhost.ApplyEntity) map[string]json.RawMessage {
+	out := make(map[string]json.RawMessage, len(e.Facets))
+	for ns, v := range e.Facets {
+		out[ns] = json.RawMessage(v)
+	}
+	return out
+}
+
+// writeBackObservations maps governed gRPC-Apply write-backs to Entity observations.
+//
+// Facets ride the OBSERVATION here rather than dispatch.Result.Facts, because a gRPC
+// write-back names its Entity by identity and need not be one of the Run's resolved
+// targets — res.Facts is keyed by target NAME and CollectFacts silently drops any name
+// outside the resolved set, which is the confused-deputy floor for the EE-Job door and
+// would be a silent discard for this one. ProjectFacts writes them against the Entity it
+// upserts, once, with Run provenance (§1.2).
+func writeBackObservations(wb []pluginhost.ApplyEntity) []actuators.EntityObservation {
+	out := make([]actuators.EntityObservation, 0, len(wb))
+	for _, e := range wb {
+		out = append(out, actuators.EntityObservation{
+			Kind: e.Kind, IdentityKeys: e.IdentityKeys, Labels: e.Labels, Facets: applyFacets(e),
+		})
+	}
+	return out
 }
 
 // sortedKeys returns a map's keys in deterministic order — for diagnostics, where a
@@ -1944,6 +1970,15 @@ func (a *Activities) ProjectFacts(ctx context.Context, runID string, facts FactS
 					fmt.Sprintf("output entity identity conflict: %v", err), "IdentityConflict", err)
 			}
 			return err
+		}
+		// The observation's own Facets, projected against the Entity just upserted —
+		// the gRPC Apply door's half of the ADR-0084 fact-back, which the EE-Job door
+		// has always had via result.Facts. Governed upstream (grant ∩ write-scope);
+		// this is the single Run-provenance write, exactly as for EntityFacts above.
+		for ns, value := range obs.Facets {
+			if err := p.UpsertFacet(ctx, prov, ids[0], ns, value); err != nil {
+				return err
+			}
 		}
 		// Project the build's topology edges (ADR-0059): resolve each target BY
 		// IDENTITY, then upsert Run-provenance — an unresolved target drops the edge

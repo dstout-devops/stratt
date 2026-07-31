@@ -423,12 +423,17 @@ the column into the key. Two releases, then Accepted.
    this ADR — see D5. Not reachable today (every observed namespace has one writer, checked), and it
    becomes reachable the day a write-scope is added to a Syncer-owned namespace. Fixing it means
    giving the evaluator the declared-authority collapse `FacetValuesByEntities` already performs.
-7. **The two Actuator write-back doors already differ on facets** — `executeJobPlugin` maps governed
-   facets into `res.Facts` (`orchestrate.go:1620`) while `executePlugin`'s gRPC path maps
-   `raw.WriteBack → res.Entities` carrying Kind/IdentityKeys/Labels only
-   (`orchestrate.go:1427-1430`). Adjacent to this ADR rather than caused by it, surfaced by asking
-   where the qualifier would be stamped, and it needs checking on its own merits: a fact-back that
-   depends on the transport is the sibling-path divergence `orchestrate.go:815` warns about.
+7. ~~**The two Actuator write-back doors already differ on facets**~~ — **checked and CLOSED before
+   this ADR is implemented, because D6 cannot stand on a door that carries no facets at all.** The
+   gRPC Apply door mapped `raw.WriteBack → res.Entities` as Kind/IdentityKeys/Labels and discarded
+   `ApplyEntity.Facets`, which the governor had just admitted against grant ∩ write-scope — while
+   the EE-Job door routed the same governed shape to `res.Facts` and projected it. Not reachable in
+   the shipped estate, and the way it was not reachable is the argument for fixing it: `dns.yaml`
+   and `awsec2.yaml` each DECLINE the `facetNamespaces` grant, both saying in a comment that it
+   would be "authority granted for a path that does not exist". The estate had routed around a hole
+   in core. `EntityObservation` now carries `Facets`, `ProjectFacts` writes them against the Entity
+   it upserts, and both doors lift them through one shared function so they cannot drift apart
+   again. (The **Action** path still carries no facets, deliberately — ADR-0113 D3.)
 8. Audit the UI's `EntityDocument.facets` consumers (`ui/src/lib/data.ts`, `ui/src/lib/schema.ts`,
    `ui/src/screens/graph.tsx`, `ui/src/components/schema-value.tsx`) for anything assuming one Facet
    per namespace per Entity.
