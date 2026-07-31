@@ -16,6 +16,7 @@ func (f *Facade) index(w http.ResponseWriter, _ *http.Request) {
 		"job_templates": "/api/v2/job_templates/",
 		"jobs":          "/api/v2/jobs/",
 		"inventories":   "/api/v2/inventories/",
+		"schedules":     "/api/v2/schedules/",
 	})
 }
 

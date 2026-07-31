@@ -77,6 +77,11 @@ func New(cfg Config) http.Handler {
 	mux.HandleFunc("GET /api/v2/jobs/{id}/stdout/", f.authed(f.jobStdout))
 	mux.HandleFunc("GET /api/v2/jobs/{id}/cancel/", f.authed(f.canCancel))
 	mux.HandleFunc("POST /api/v2/jobs/{id}/cancel/", f.authed(f.cancel))
+	// schedules — READ-ONLY, like every other family here: a schedule is a DECLARATION reconciled
+	// from Git, and a POST door would make the compat surface a second write path into desired
+	// state (§2.2/§2.3).
+	mux.HandleFunc("GET /api/v2/schedules/", f.authed(f.listSchedules))
+	mux.HandleFunc("GET /api/v2/schedules/{id}/", f.authed(f.getSchedule))
 	mux.HandleFunc("GET /api/v2/inventories/", f.authed(f.listInventories))
 	mux.HandleFunc("GET /api/v2/inventories/{id}/", f.authed(f.getInventory))
 
