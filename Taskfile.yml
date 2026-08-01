@@ -1362,7 +1362,20 @@ tasks:
         curl -fsSL -o "$tmp/helm.tgz" "https://get.helm.sh/helm-v{{.HELM_VER}}-linux-${arch}.tar.gz"
         echo "${sha}  $tmp/helm.tgz" | sha256sum -c -
         tar -xz -C "$tmp" -f "$tmp/helm.tgz"
-        # ATOMIC INSTALL. Written to a sibling temp path and RENAMED, because two invocations
+        # ATOMIC INSTALL, via `mktemp` IN THE DESTINATION DIRECTORY — never `$$`.
+        #
+        # `$$` DOES NOT WORK HERE, and the first version of this fix used it. go-task runs each
+        # block in an EMBEDDED shell (mvdan.cc/sh) where `$$` is the PID of the TASK PROCESS,
+        # identical across concurrent blocks — measured: two parallel deps both print the same
+        # value. So both installers chose the SAME temp name and one renamed the file out from
+        # under the other's chmod:
+        #
+        #   install: cannot change permissions of '.bin/helm.tmp.8027': No such file or directory
+        #
+        # A WORSE race than the one it replaced — writing the final path in place is at least
+        # self-healing, while this made two cooperating installers destroy each other. mktemp is
+        # unique by construction and stays on the destination filesystem, so the rename is still
+        # atomic. Written to a sibling temp path and RENAMED, because two invocations
         # can run concurrently: `status:` execs the binary to decide whether to install, so two
         # parallel dependents both see "absent" and both install. Writing the final path in
         # place lets a THIRD reader exec a half-written, not-yet-chmod'd file — which surfaces as
@@ -1372,8 +1385,9 @@ tasks:
         # where .bin/ was genuinely empty. Locally the binaries always already existed, so no
         # amount of re-running here could produce it. rename(2) on one filesystem is atomic —
         # a reader sees the old file or the complete new one, never a partial.
-        install -m 0755 "$tmp/linux-${arch}/helm" "{{.HELM}}.tmp.$$"
-        mv -f "{{.HELM}}.tmp.$$" "{{.HELM}}"
+        dst=$(mktemp "{{.HELM}}.XXXXXX")
+        install -m 0755 "$tmp/linux-${arch}/helm" "$dst"
+        mv -f "$dst" "{{.HELM}}"
         rm -rf "$tmp"
 
   tools:kubectl:
@@ -1385,7 +1399,20 @@ tasks:
       - |
         set -eu
         arch=$(uname -m); case "$arch" in x86_64) arch=amd64;; aarch64|arm64) arch=arm64;; esac
-        # ATOMIC INSTALL. Written to a sibling temp path and RENAMED, because two invocations
+        # ATOMIC INSTALL, via `mktemp` IN THE DESTINATION DIRECTORY — never `$$`.
+        #
+        # `$$` DOES NOT WORK HERE, and the first version of this fix used it. go-task runs each
+        # block in an EMBEDDED shell (mvdan.cc/sh) where `$$` is the PID of the TASK PROCESS,
+        # identical across concurrent blocks — measured: two parallel deps both print the same
+        # value. So both installers chose the SAME temp name and one renamed the file out from
+        # under the other's chmod:
+        #
+        #   install: cannot change permissions of '.bin/helm.tmp.8027': No such file or directory
+        #
+        # A WORSE race than the one it replaced — writing the final path in place is at least
+        # self-healing, while this made two cooperating installers destroy each other. mktemp is
+        # unique by construction and stays on the destination filesystem, so the rename is still
+        # atomic. Written to a sibling temp path and RENAMED, because two invocations
         # can run concurrently: `status:` execs the binary to decide whether to install, so two
         # parallel dependents both see "absent" and both install. Writing the final path in
         # place lets a THIRD reader exec a half-written, not-yet-chmod'd file — which surfaces as
@@ -1395,10 +1422,10 @@ tasks:
         # where .bin/ was genuinely empty. Locally the binaries always already existed, so no
         # amount of re-running here could produce it. rename(2) on one filesystem is atomic —
         # a reader sees the old file or the complete new one, never a partial.
-        tmp="{{.KUBECTL}}.tmp.$$"
-        curl -fsSL -o "$tmp" "https://dl.k8s.io/release/v{{.KUBECTL_VER}}/bin/linux/${arch}/kubectl"
-        chmod +x "$tmp"
-        mv -f "$tmp" "{{.KUBECTL}}"
+        dst=$(mktemp "{{.KUBECTL}}.XXXXXX")
+        curl -fsSL -o "$dst" "https://dl.k8s.io/release/v{{.KUBECTL_VER}}/bin/linux/${arch}/kubectl"
+        chmod +x "$dst"
+        mv -f "$dst" "{{.KUBECTL}}"
 
   tools:tofu:
     desc: Install the pinned tofu binary to .bin/ (idempotent; zero-manual bootstrap)
@@ -1420,8 +1447,9 @@ tasks:
         curl -fsSL -o "$tmp/tofu.zip" "https://github.com/opentofu/opentofu/releases/download/v{{.TOFU_VER}}/tofu_{{.TOFU_VER}}_linux_${arch}.zip"
         echo "${sha}  $tmp/tofu.zip" | sha256sum -c -
         unzip -q -o -d "$tmp" "$tmp/tofu.zip"
-        install -m 0755 "$tmp/tofu" "{{.TOFU}}.tmp.$$"
-        mv -f "{{.TOFU}}.tmp.$$" "{{.TOFU}}"  # atomic — see tools:kubectl for why
+        dst=$(mktemp "{{.TOFU}}.XXXXXX")
+        install -m 0755 "$tmp/tofu" "$dst"
+        mv -f "$dst" "{{.TOFU}}"  # atomic + unique — see tools:kubectl for why
         rm -rf "$tmp"
 
   dev:placement:proof:
