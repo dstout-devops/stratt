@@ -2,7 +2,7 @@
 # run.sh — the turnkey runner for the "EC2: provision a real instance" demo (ADR-0116 D2). Drives real
 # provisioning + a live read-model on one substrate: a gated Workflow provisions a REAL EC2 instance
 # through the awsec2/create-vm Action against floci (a real-host EC2 backend, ADR-0093), then the awsec2
-# Syncer's OBSERVE picks the new instance up into the ec2-instances View — the build→observe closure.
+# Syncer's OBSERVE picks the new instance up into the provisioned-instances View — the build→observe closure.
 # Unlike the vSphere demo (a pre-seeded read graph), floci starts EMPTY: the graph comes alive WITH the
 # instance you build.
 #
@@ -25,6 +25,9 @@ API="${ROOT}/api/v1"
 
 kc() { "$KUBECTL" --context "$CTX" "$@"; }
 api() { curl -fsS -X "$1" "${API}$2" -H "X-Stratt-Principal: ${PRINCIPAL}" -H "Content-Type: application/json" "${@:3}"; }
+# The View the estate actually declares. Named once: the runner and the estate disagreeing
+# on this string is exactly how the observe check came to read a View that does not exist.
+OBSERVE_VIEW="provisioned-instances"
 count() { api GET "/views/$1/entities" 2>/dev/null | jq -r '.entities | length' 2>/dev/null || echo 0; }
 
 fidelity="$(grep -E '^fidelity:' "${HERE}/demo.yaml" | head -1 | sed 's/^fidelity:[[:space:]]*//')"
@@ -50,7 +53,7 @@ for _ in $(seq 1 40); do
 done
 [ -n "$ready" ] || { echo "FAIL: the ${WORKFLOW} Workflow never reconciled into the store"; exit 1; }
 
-echo "demo: EC2 is empty to start — ec2-instances View: $(count ec2-instances) instances"
+echo "demo: EC2 is empty to start — ${OBSERVE_VIEW} View: $(count "$OBSERVE_VIEW") instances"
 
 # ── Wait for the awsec2 Actuator to be DISPATCHABLE (status.enabled), not merely declared ─────────
 # The reconcile controller declares the Actuator from the staged estate, then RunActuators dials
@@ -136,33 +139,39 @@ done
 echo "demo: awaiting the Syncer to OBSERVE the new instance (build → observe closure)…"
 seen=0
 for _ in $(seq 1 20); do
-    seen=$(count ec2-instances)
+    seen=$(count "$OBSERVE_VIEW")
     [ "$seen" -gt 0 ] 2>/dev/null && break
     sleep 3
 done
 if [ "$seen" -gt 0 ] 2>/dev/null; then
-    echo "  the instance now appears in the ec2-instances View — real provision, live read-model"
+    echo "  the instance now appears in the ${OBSERVE_VIEW} View — real provision, live read-model"
 else
-    # THIS DEMO RUNS NO SYNCER, so "not yet" was never true — corrected 2026-08-01 after
-    # `task e2e:live` reported a green run whose final line was `ec2-instances: 0`.
+    # NOT a soft note any more — this is a FAILURE, and the reason it was not is worth keeping.
     #
-    # The estate here admits awsec2 `contractsOnly: true` and declares no Source and no Connector,
-    # so nothing polls EC2 and the View can never fill. The old wording ("the Syncer picks it up on
-    # its next cycle") named a component that is not on this floor, which is how the demo index and
-    # the roadmap both came to claim this demo proves "observed into the graph (0→1)". It proves the
-    # BUILD half only.
+    # `task e2e:live` reported a green run ending `ec2-instances: 0`. The first diagnosis was that
+    # this demo has no Syncer (no Source and no Connector in its estate) and therefore could not
+    # observe. THAT WAS WRONG. The Syncer is real and enabled — `STRATT_AWS_INTERVAL: 15s` in
+    # values-demo-ec2.yaml turns on strattd's opt-in instance Syncer — it is simply configured by
+    # host env rather than by an estate declaration, so looking only in estate/ found nothing and
+    # produced a confident wrong answer.
     #
-    # Booked rather than bolted on: giving this demo a Syncer is the fix, and it is a real change
-    # (a Source, a Connector, poll config) that belongs in a commit of its own — not smuggled into
-    # the run that discovered the gap.
-    echo "  NOT OBSERVED, and this demo cannot observe: it declares no Source and no Connector, so"
-    echo "  nothing polls EC2. The build half is proven above; the read-model half is NOT exercised"
-    echo "  here — plugins/vcenter/demo is the demo that proves a Syncer (docs/roadmap.md)."
+    # The actual defect: this runner counted a View named `ec2-instances`, and the estate declares
+    # `provisioned-instances`. `count()` maps the 404 to 0, so the check could NEVER see an
+    # instance — it reported "0 to start" (true by accident) and "0 at the end" (a missing View,
+    # not an empty one), and the soft-pass branch turned that into a green run.
+    #
+    # Two lessons, both already paid for elsewhere on this branch: a name nobody resolves is not a
+    # zero, and a check whose failure branch prints prose instead of exiting is not a check.
+    echo "FAIL: the instance was built but never observed into view:${OBSERVE_VIEW}."
+    echo "  The build→observe closure is what this demo exists to prove — a green run that observed"
+    echo "  nothing is the vacuous pass this repo keeps finding. Check the Syncer is enabled"
+    echo "  (STRATT_AWS_INTERVAL in values-demo-ec2.yaml) and that ${OBSERVE_VIEW} is declared."
+    exit 1
 fi
 
 echo
 echo "demo: DONE — Stratt provisioned a real EC2 instance through a gated Workflow (fidelity: ${fidelity})."
-printf "  Final graph: ec2-instances: %s\n" "$(count ec2-instances)"
-echo "  Explore the graph in the UI:  (cd ui && npm run dev)  → Views → ec2-instances"
+printf "  Final graph: %s: %s\n" "$OBSERVE_VIEW" "$(count "$OBSERVE_VIEW")"
+echo "  Explore the graph in the UI:  (cd ui && npm run dev)  → Views → provisioned-instances"
 echo "  Watch the descent:            UI → Runs → WorkflowRun ${run_id}"
 echo "  Clean up:       task demo:ec2-only:down   (or full teardown: task dev:kind:down && task dev:down)"
