@@ -700,6 +700,38 @@ not have**, which is a different thing from unfinished work and is marked as suc
   to fire from a dev session is an unverifiable gate, which is the shape this branch spent its
   length closing.
 
+**BLOCKING for anyone quoting the capstone — `demo:region-to-cert` does not pass from a COLD floor
+(2026-08-01):**
+
+Proof A dies after its gate is approved with:
+
+```
+cause: activity error (type: ExecuteAction …): no action registered as "opentofu/apply"
+       (type: UnknownAction, retryable: false)
+```
+
+**This is almost certainly not new**, and that is the point. The capstone had only ever been run on a
+WARM floor — every plugin already up from a previous run — and it passed there. Making `:run` reset
+its own floor (this branch) is what first exercised the cold path, and the cold path fails. So the
+capstone's green history says less than it appears to.
+
+What was tried and did NOT fix it: reordering the task to wait for every Deployment BEFORE restarting
+strattd, rather than after. That ordering was genuinely wrong and is fixed (`d56790e`) — it is the
+same bug `demo:scale-fleet` hit with `kubecompute/create-host`, where it WAS the whole cause — but
+the capstone still fails.
+
+The unexplained observation, recorded because it is the next thread to pull: after a failed run the
+`stratt-opentofu` pod was **54 seconds old**, i.e. it had come up *after* strattd, despite the task
+having waited for every Deployment to roll out first. Something restarts or replaces that pod after
+the wait completes, and strattd therefore boots against a plugin that is not serving. Whether the
+Action registration can recover from that at all (ADR-0103 promises a no-restart connector
+lifecycle) is the question to answer first — if it can, this is a timing bug; if it cannot, the
+no-restart claim needs revisiting.
+
+**Not investigated further deliberately:** chasing it properly needs more than a guess, and a guess
+committed here would be exactly the "looks fixed, was not measured" failure this branch spent its
+length closing.
+
 **Found by running things, and booked rather than fixed:**
 
 - **`kubecompute` advertises `provisions` but not `decommissions`.** It ships a build Workflow and no
