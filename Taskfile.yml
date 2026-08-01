@@ -2185,15 +2185,25 @@ tasks:
       # A rebuilt image with the SAME tag is invisible to Kubernetes: the pod spec does not change,
       # so `helm upgrade` leaves the old pod running and `rollout status` happily reports it ready.
       # With pullPolicy: Never that means a code change silently does not take effect.
-      - "{{.KUBECTL}} --context {{.KIND_CONTEXT}} -n stratt rollout restart deploy/stratt"
       # EVERY Deployment, not just strattd — the plugin that cannot start is the one whose capability
       # never resolves, and waiting on deploy/stratt alone is how a floor goes green with a plugin in
       # ImagePullBackOff.
+      #
+      # AND THE ORDER MATTERS, which this had backwards. Restarting strattd BEFORE its plugins are
+      # serving means it boots against pods that are not answering yet, and their Actions never enter
+      # the dispatch table: the run then dies with `no action registered as "opentofu/apply"` after
+      # the gate has already been approved. Measured on a cold floor, twice — demo:scale-fleet hit
+      # the identical failure with kubecompute/create-host.
+      #
+      # So: wait for every Deployment, THEN restart strattd against a floor that is fully up, THEN
+      # wait for it.
       - |
         set -eu
         for d in $("{{.KUBECTL}}" --context {{.KIND_CONTEXT}} -n stratt get deploy -o name); do
           "{{.KUBECTL}}" --context {{.KIND_CONTEXT}} -n stratt rollout status "$d" --timeout=300s
         done
+      - "{{.KUBECTL}} --context {{.KIND_CONTEXT}} -n stratt rollout restart deploy/stratt"
+      - "{{.KUBECTL}} --context {{.KIND_CONTEXT}} -n stratt rollout status deploy/stratt --timeout=300s"
       - KUBECONTEXT={{.KIND_CONTEXT}} KUBECTL={{.KUBECTL}} bash {{.ROOT_DIR}}/demos/region-to-cert/run.sh
 
   demo:region-to-cert:down:
