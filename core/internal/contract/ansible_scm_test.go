@@ -13,8 +13,8 @@ func TestAnsibleHighestVersionResolved(t *testing.T) {
 	if err != nil || !ok {
 		t.Fatalf("ansible.input contract: ok=%v err=%v", ok, err)
 	}
-	if c.Version != 8 {
-		t.Fatalf("resolved ansible.input version = %d, want 8 (the connection type + credential forms, ADR-0153)", c.Version)
+	if c.Version != 9 {
+		t.Fatalf("resolved ansible.input version = %d, want 9 (the kubectl reach credential, ADR-0156 D4a)", c.Version)
 	}
 }
 

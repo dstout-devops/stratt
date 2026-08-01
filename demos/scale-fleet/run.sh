@@ -9,11 +9,19 @@
 #
 #   0. The estate names NO substrate and NO provider outside its one capability-binding — asserted
 #      by reading the declarations, because a portability claim nobody checks is one that rots.
-#   A. count: 1 → ONE gated build → a host that CONVERGES, over `kubectl exec` (ADR-0156). The
-#      connection never touches port 22: the method is a property of the substrate, observed by the
-#      provider that built the host, and no declaration above it names one. (kubecompute still
-#      bootstraps sshd into its pods today — retiring that is the coupling this transport makes
-#      removable, booked separately. What is proven here is that the converge does not USE it.)
+#   A. count: 1 → ONE gated build → and the host carries an OBSERVED reach method (ADR-0156): the
+#      provider that built it said how to reach it, in a Facet, and no declaration above it names
+#      one. The method is a property of the substrate.
+#
+#      WHAT THIS DEMO DOES NOT PROVE, corrected 2026-08-01 after it claimed otherwise: it runs NO
+#      converge. It asserts the FACET IS PRESENT and previously narrated that as "a host that
+#      CONVERGES, over `kubectl exec` … the converge does not USE port 22" — a converge this script
+#      never launches. Measuring one thing and reporting a stronger one is the exact trap the
+#      comment beside `transportOf` congratulates itself for avoiding, with the polarity reversed.
+#      It mattered: demos/region-to-cert is the FIRST thing to actually converge over this
+#      transport, and it fails — the EE Job pod is spawned with no cluster identity by design
+#      (`AutomountServiceAccountToken: false`, dispatch.go), so `kubectl exec` has nothing to
+#      authenticate with. The transport's reach credential is unbuilt. Booked in docs/roadmap.md.
 #   B. THE EDIT. count: 1 → 3 surfaces EXACTLY TWO builds. Not three — web-01 is already built and
 #      the reconcile knows it. Not one — the shortfall is two. That exact number is the mechanism.
 #   C. Approve both → three hosts → and the SAME Assignment, unedited, converges all three in ONE
@@ -230,7 +238,8 @@ for _ in $(seq 1 60); do
     sleep 4
 done
 [ "$transport" = "kubectl" ] || fail "expected an observed kubectl transport, got '${transport:-none}'"
-echo "  ✓ mgmt.transport observed by the builder: ${transport} — the converge never touches port 22"
+echo "  ✓ mgmt.transport observed by the builder: ${transport} — the builder said how to reach
+    what it built. NOT asserted here: that a converge USES it (this demo runs none)."
 
 # ── B · THE EDIT ─────────────────────────────────────────────────────────────────────────
 say "B · count: 1 → 3 — and EXACTLY two builds are offered"
@@ -259,7 +268,8 @@ for _ in $(seq 1 60); do
     sleep 4
 done
 [ "$kinds" = "kubectl" ] || fail "expected every host to carry an observed transport, got '${kinds:-none}'"
-echo "  ✓ all three hosts carry an observed transport — one Assignment, one Run, no substrate named"
+echo "  ✓ all three hosts carry an observed transport — no substrate named anywhere above the
+    binding. (Observation only: no Run reaches them here.)"
 
 # ── D · THE EDIT BACK ───────────────────────────────────────────────────────────────────
 say "D · count: 3 → 1 — and the honest limit this demo found"

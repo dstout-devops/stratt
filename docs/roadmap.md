@@ -166,12 +166,12 @@ exit gate still requires its own operational evidence (SLO, security review, ado
 self-contained, narrated, **turnkey** scenarios that teach Stratt by running it. Five ship, each
 **live-verified end to end on kind** (build-up → gated Workflow → asserted real outcome → teardown):
 
-| Demo                                                                          | Substrate            | Fidelity     | Proven live                                                                                                                                                                                                                                                            |
-| ----------------------------------------------------------------------------- | -------------------- | ------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| [k8s: deploy an app](../plugins/helm/demo/README.md)                          | Kubernetes (kind)    | `real`       | gated `helm/deploy` → a real Deployment 1/1 Ready serving its page                                                                                                                                                                                                     |
-| [vSphere: provision a VM + the live graph](../plugins/vcenter/demo/README.md) | vSphere (vspheresim) | `build-real` | Syncer projects the topology; gated `vcenter/create-vm` → the built VM observed back, and its guest boots and reports a coordinate                                                                                                                                     |
-| [EC2: provision a real instance](../plugins/awsec2/demo/README.md)            | EC2 (floci)          | `build-real` | gated `awsec2/create-vm` → a real floci instance container running, observed into the graph (0→1). **Re-graded from `real` 2026-07-27**: floci's network model is fully real, but no AMI ships sshd and user-data never runs, so there is no guest to converge (HAR-1) |
-| [app install with a certificate](../demos/app-cert/README.md)                 | SSH (Linux host)     | `real`       | gated ansible converge: SSH as an unprivileged user → privilege escalation → a `community.crypto` X.509 cert → TLS read back off the wire, `app.config` projected with Run provenance, and a no-op Run refused                                                         |
+| Demo                                                                          | Substrate                | Fidelity     | Proven live                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| ----------------------------------------------------------------------------- | ------------------------ | ------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [k8s: deploy an app](../plugins/helm/demo/README.md)                          | Kubernetes (kind)        | `real`       | gated `helm/deploy` → a real Deployment 1/1 Ready serving its page                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| [vSphere: provision a VM + the live graph](../plugins/vcenter/demo/README.md) | vSphere (vspheresim)     | `build-real` | Syncer projects the topology; gated `vcenter/create-vm` → the built VM observed back, and its guest boots and reports a coordinate                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| [EC2: provision a real instance](../plugins/awsec2/demo/README.md)            | EC2 (floci)              | `build-real` | gated `awsec2/create-vm` → a real floci instance container running, observed into the graph (0→1). **Re-graded from `real` 2026-07-27**: floci's network model is fully real, but no AMI ships sshd and user-data never runs, so there is no guest to converge (HAR-1)                                                                                                                                                                                                                                                                                                                                                            |
+| [app install with a certificate](../demos/app-cert/README.md)                 | SSH (Linux host)         | `real`       | gated ansible converge: SSH as an unprivileged user → privilege escalation → a `community.crypto` X.509 cert → TLS read back off the wire, `app.config` projected with Run provenance, and a no-op Run refused                                                                                                                                                                                                                                                                                                                                                                                                                    |
 | [region-to-cert — the capstone](../demos/region-to-cert/README.md)            | Kubernetes + EC2 (floci) | `build-real` | **the whole chain, from an estate naming no substrate.** Two gated `Intent/Subnet` builds through real `tofu apply` → `10.30.0.0/24` + `10.30.1.0/24`, distinct ranges NetBox allocated and no declaration contains; a gated `Intent/Compute` build → a pod + Service, `mgmt.address` the provider CAUSED; `apache-configure` → HTTP served off the wire, `app.config.port=8080 writerKind=run`; `cert-issue` → key `0600` **born on target**, `issuer=Stratt Dev Root CA`, subject derived from the host's own address; all four Findings RESOLVED. Graded at the **floor** of its two legs — the kubernetes leg is `real` alone |
 
 **This is the first real dent in the "live-cluster e2e" gap** named in the enterprise-readiness section
@@ -247,6 +247,17 @@ for their standalone image builds; and floci's healthcheck probed with a `wget` 
     Verified `-race -count=30` clean.
     **Honest bound on the claim:** the production defect is certain from the code path; that this
     exact window caused every observed CI flake is inferred, not reproduced.
+
+- **Demo runners are load-bearing integration tests with no shell lint gate.** There is no
+  `shellcheck` or `shfmt` anywhere in the Taskfile, yet `demos/*/run.sh` is what actually asserts
+  the platform works end to end — six defects across the demo library were caught by these scripts
+  and by nothing else. Two hazards were measured while writing a single ~15-line helper on
+  2026-08-01: a local named `status` (a **read-only special variable in zsh**, so the by-hand walk
+  the READMEs invite breaks for any zsh reader), and `jq -r '.x // "default"'` **not** applying its
+  default on an EMPTY document — jq emits nothing and exits 0, so a failure message rendered a
+  blank where its diagnosis should have been. Both are shellcheck/inspection-class. The gate is
+  cheap; the argument for it is that a runner that fails for the wrong reason is worse than no
+  runner, which is this branch's recurring finding.
 
 ### Booked by the capstone (2026-07-31) — found by building and running `demos/region-to-cert`
 
@@ -396,7 +407,7 @@ booked, not implied.
 
 **§2.5, fifth application, and this one has a new shape.** AWX stores repository credentials as a
 separate object — but a real estate routinely embeds a PAT directly in the clone URL, because it
-works and nobody stopped them. Dropping `scm_url` would lose *which repository*, the fact most
+works and nobody stopped them. Dropping `scm_url` would lose _which repository_, the fact most
 needed, to guard a minority case; projecting it verbatim would import live tokens. So the userinfo is
 removed and `scmUrlRedacted` says so — and the boolean matters as much as the redaction, because
 silently stripping would leave a reader unable to tell a clean URL from a scrubbed one, and "this
@@ -442,7 +453,7 @@ required ones, marked `root` — one question, one Kind. Its own `dependencies` 
 a projection reading only requirements.yml sees none of them.
 
 **One ordering bug, caught by its test.** The root collection was appended to `snap.Collections`
-*before* the requirements read, which ASSIGNS that slice rather than appending — so it was silently
+_before_ the requirements read, which ASSIGNS that slice rather than appending — so it was silently
 discarded. The comment now sits where the next field added there will read it.
 
 ### The Ansible content root stops being a list of files (2026-07-31) — ANS-002/003/004/008
@@ -458,7 +469,7 @@ bites hardest: a `group_vars` file routinely holds credentials in the clear, whi
 people vault them. But scope alone does not answer the motivating question either — knowing
 `group_vars/web.yml` exists says nothing about why a host got `http_port: 8080`. The names are the
 answer and are not secret. **ANS-008 fell out of it**: a `$ANSIBLE_VAULT` file is present with
-`vaulted: true` and NO keys, never decrypted, and an empty key list *with* that flag distinguishes
+`vaulted: true` and NO keys, never decrypted, and an empty key list _with_ that flag distinguishes
 "binds nothing" from "binds things I cannot show you" (§1.8).
 
 **Precedence is observed, never computed.** Two scopes binding one name is ansible's normal case;
@@ -573,8 +584,8 @@ image-verified row imply a proven one.
 
 ### The converge side stops naming substrates — and a pod with no sshd is converged (ADR-0156)
 
-Asked whether estate-as-code truly spans vSphere, EC2 and Kubernetes — *change a count from 1 to 3
-and get three more machines* — the build half answered yes and the converge half did not. The reason
+Asked whether estate-as-code truly spans vSphere, EC2 and Kubernetes — _change a count from 1 to 3
+and get three more machines_ — the build half answered yes and the converge half did not. The reason
 turned out to be an assumption nobody had checked: **"every substrate needs sshd and a network path
 to port 22."**
 
@@ -667,6 +678,66 @@ strictly worse than not offering cancel. A 404 from the mux says "not offered" �
 wrong (§1.8). **The real gap is native:** a terminal-status writer in `RunDAG`, with the façade route
 following it. Cancelling a Run (single-Step) already works and is unaffected.
 
+### The kubectl transport had no way to reach anything (2026-08-01, ADR-0156 D4a)
+
+Found by running `demos/region-to-cert` on a cold floor. It is the largest single finding of the
+demos branch, and every part of it was invisible to the test suite.
+
+**The defect.** ADR-0156 made `kubecompute` observe a `kubectl` transport, and the shim prefers an
+observed transport over ssh — so the capstone's Apache converge, which had worked over ssh on
+2026-07-30, began failing. It failed as `runner_on_unreachable: Failed to create temporary
+directory … did not have permissions on the target directory`, which names the **guest's**
+filesystem. The pod was healthy and that exact `mkdir` succeeded when run with permission. The real
+cause was the API server refusing `kubectl exec`, because `dispatch.go` spawns every execution pod
+with `AutomountServiceAccountToken: false` — "the pod has no cluster identity", deliberately. There
+was no credential, and `pods/exec` appeared **nowhere in the repo**.
+
+**Why nothing caught it.** Three separate guards were all satisfied:
+
+1. ADR-0156 D6 checks the EE's _content_ — `kubernetes.core` and a `kubectl` binary. Both present.
+2. ADR-0156's own transport table asked only what the **guest** needs, and for kubectl the honest
+   answer is "nothing". There was no column for the control node, so the transport read as free.
+3. `demos/scale-fleet` claimed the converge. It asserts the **Facet is observed** and narrated that
+   as "a host that CONVERGES, over `kubectl exec` … the converge never touches port 22" — a converge
+   it never launches. Measuring one thing and reporting a stronger one, which is this branch's
+   recurring failure and the fourth instance of it.
+
+**Fixed:** `connection.kubeconfigRef` (`ansible.input.v9`, a sibling of v8 — additive, every v8
+declaration renders identically), rendered by the shim as the `ansible_kubectl_kubeconfig` group var
+from the credential's **mount path**; a third validate axis that refuses a kubectl-transported target
+with no brokered kubeconfig, naming the field and the reason; `task dev:kubecompute:up` mints a
+ServiceAccount scoped to `create pods/exec` + `get pods` in `stratt-hosts` **only** — proven by a real
+exec succeeding there and `Forbidden` in `stratt`. scale-fleet's claims are now bounded by what it
+executes.
+
+**Still open — the two transports that remain declared-not-proven.** `vmware_tools` and `aws_ssm`
+have credentials named by ADR-0156 D4 and no guard demanding them, because neither has a target to
+prove against (real vCenter; an SSM writer that does not exist yet). The kubectl guard is deliberately
+_not_ generalized to them: a check written against no reachable target is how this defect shipped in
+the first place. When each gets a live target, it gets its axis.
+
+**Also booked:** `kubectl auth can-i create pods/exec --as=<sa>` reported **no** for a grant that
+demonstrably works — the real exec succeeded with the same SA's token. Do not use `can-i` as evidence
+for subresource grants; exec the thing.
+
+**STILL OPEN, and a platform race rather than a demo one: an absent transport and a not-yet-observed
+transport are the same value.** `mgmt.address` and `mgmt.transport` have different writers — the
+build's terminal projection supplies the address, the Syncer's next Observe supplies the transport —
+so a host is addressable **before** its reach method is known. Measured on the capstone: the converge
+launched at 13:51:03 and the transport landed at 13:52:56. In that window the shim sees no transport,
+which it cannot distinguish from "this host is reached by ssh", so it renders ssh vars and the Run
+fails `unreachable` — the same symptom as the credential bug, from an unrelated cause, which is
+precisely why it stayed hidden behind it.
+
+The demo now waits for the transport before converging, and that is a demo fix, not a platform one.
+The platform question is real and unanswered: **should a converge against a host whose transport is
+not yet observed run at all?** Three candidate shapes, none obviously right — the Syncer projects a
+transport at build time so the two facts land together; the Baseline treats a host with an address
+and no transport as not-yet-ready rather than drifted; or the shim refuses a target whose transport is
+absent when the estate says this substrate always observes one. The first is closest to §1.2 (the
+provider CAUSED both facts and should say both), the third reintroduces a declaration the estate was
+freed of. Needs an ADR; do not fix it inside a demo.
+
 ### Open follow-ups from the `fix/seam-continuity-and-fidelity` branch (2026-08-01)
 
 Everything this branch deliberately did NOT finish, in one place, so none of it survives only in a
@@ -721,7 +792,7 @@ same bug `demo:scale-fleet` hit with `kubecompute/create-host`, where it WAS the
 the capstone still fails.
 
 The unexplained observation, recorded because it is the next thread to pull: after a failed run the
-`stratt-opentofu` pod was **54 seconds old**, i.e. it had come up *after* strattd, despite the task
+`stratt-opentofu` pod was **54 seconds old**, i.e. it had come up _after_ strattd, despite the task
 having waited for every Deployment to roll out first. Something restarts or replaces that pod after
 the wait completes, and strattd therefore boots against a plugin that is not serving. Whether the
 Action registration can recover from that at all (ADR-0103 promises a no-restart connector

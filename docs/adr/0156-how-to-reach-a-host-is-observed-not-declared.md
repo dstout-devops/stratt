@@ -21,11 +21,19 @@ network path to port 22."
 Measuring the actual Ansible collections falsified that. **All three substrates ship a native
 connection plugin, and none of them uses SSH:**
 
-| Substrate  | Plugin                          | Reaches the guest via              | Guest needs                       |
-| ---------- | ------------------------------- | ---------------------------------- | --------------------------------- |
-| Kubernetes | `kubernetes.core.kubectl`       | `kubectl exec`                     | **nothing**                       |
-| vSphere    | `community.vmware.vmware_tools` | VMware Tools guest ops via vCenter | VMware Tools + guest credentials  |
-| EC2        | `amazon.aws.aws_ssm`            | an AWS SSM Session                 | SSM Agent, instance profile, curl |
+| Substrate  | Plugin                          | Reaches the guest via              | Guest needs                       | Control node needs             |
+| ---------- | ------------------------------- | ---------------------------------- | --------------------------------- | ------------------------------ |
+| Kubernetes | `kubernetes.core.kubectl`       | `kubectl exec`                     | **nothing**                       | a **kubeconfig** (`pods/exec`) |
+| vSphere    | `community.vmware.vmware_tools` | VMware Tools guest ops via vCenter | VMware Tools + guest credentials  | vCenter credentials            |
+| EC2        | `amazon.aws.aws_ssm`            | an AWS SSM Session                 | SSM Agent, instance profile, curl | AWS credentials                |
+
+> **The last column was added 2026-08-01, and its absence was not cosmetic.** The original table had
+> only "Guest needs", so kubectl's requirement read as **nothing** — which is true of the guest and
+> false of the run. Reaching a pod needs no sshd, no agent and no account on the target, and it still
+> needs a credential on _this_ side, because the execution pod is deliberately spawned with
+> `AutomountServiceAccountToken: false` — "the pod has no cluster identity". A column that asks only
+> about the far end of a connection cannot describe a transport whose whole cost is at the near end.
+> See D4.
 
 Two of those change what is possible rather than merely how it is spelled:
 
@@ -106,6 +114,53 @@ That is ADR-0084 D4's split applied to the transport: the address half is observ
 credential half is the Step's brokered `CredentialRef` (§2.5). `vmware_tools` needs guest credentials
 and `aws_ssm` needs AWS credentials — both arrive the way every other credential does, and the shim
 resolves them at their mount.
+
+#### D4a — kubectl's reach credential, and the sentence above that was wrong by omission (2026-08-01)
+
+This decision listed the credential every transport needs **except kubectl**, whose row said
+"nothing". That was written from the guest's point of view and it made the transport look free. It is
+not, and the gap was found the only way it could be — by running it. `demos/region-to-cert` is the
+first thing in this repo to actually converge over the kubectl transport, and it failed:
+
+```
+runner_on_unreachable: Failed to create temporary directory. In some cases, you may have been
+able to authenticate and did not have permissions on the target directory.
+```
+
+Every word of which points at the target's filesystem. The pod was healthy and the identical `mkdir`
+succeeded when run with permission. The real cause was the **API server refusing `kubectl exec`**,
+because the execution pod holds no credential at all: `dispatch.go` spawns it with
+`AutomountServiceAccountToken: false`, commented "the pod has no cluster identity".
+
+**That property is kept, not traded away.** An execution pod runs arbitrary automation content; an
+ambient token that can exec into any pod in the cluster would make every Run a lateral-movement
+primitive. §2.5 wants reach authority brokered and use-granted, not ambient — so the answer is the
+one this decision already prescribes for the other two transports, applied to the one it skipped:
+
+- **`connection.kubeconfigRef`** (`ansible.input.v9`, a sibling of v8 — the loader takes the highest
+  version and every v8 declaration renders identically) names a `CredentialRef` already on the Step.
+  The shim renders its **mount path** as the `ansible_kubectl_kubeconfig` group var. A path, never a
+  value; the kubeconfig is not staged (kubectl applies no mode check, and a second copy of a bearer
+  credential is a second place it can leak from).
+- **The grant is scoped to `create pods/exec` + `get pods` in the hosts' namespace.** A kubeconfig is
+  a bearer credential, so the token's reach _is_ the blast radius of any content any Run executes.
+  `task dev:kubecompute:up` mints exactly that and nothing wider.
+- **The shim refuses the Run when a kubectl-transported target has no brokered kubeconfig**, naming
+  the missing field and the reason. This is a §1.8 fix as much as a §2.5 one: the failure it replaces
+  named the guest for a control-node authorization failure, and an operator following that message
+  would go and chmod a directory on a pod that was never the problem.
+
+**Why the existing guards did not catch it.** D6 checks what the EE _contains_ — the collection and
+the binary — and both were present, so nothing refused. Content and credential are independent axes;
+there are now three, and the credential one is a declaration-level question that needs no filesystem.
+
+**The general lesson, recorded because it is the second time on this arc:** a transport is not
+shipped when it renders, and it is not shipped when the image carries its collection. It is shipped
+when something has reached a host with it. D7 already cost this once with `ansible-doc`; the
+correction there was to stop trusting a check that could not fail, and the correction here is the
+same shape one layer out — `demos/scale-fleet` asserted the Facet was **observed** and narrated it as
+"a host that CONVERGES, over `kubectl exec`", a converge it never ran. Both demos' claims are now
+bounded by what they execute.
 
 ### D5 — a Step-declared type and an observed transport are REFUSED together, never resolved
 

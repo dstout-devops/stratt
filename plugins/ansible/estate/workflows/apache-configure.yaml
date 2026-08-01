@@ -34,7 +34,18 @@ steps:
     #
     # A converge Workflow is a RECIPE — what to do — not a target. WHERE is the Assignment's job.
     actuator: ansible-apache
-    credentialRefs: [web-machine]
+    # TWO reach credentials, because reach is per-HOST and this recipe is not. `web-machine` is the
+    # ssh key; `hosts-kubeconfig` is what the CONTROL NODE authenticates to the Kubernetes API with
+    # when a target's OBSERVED transport is kubectl (ADR-0156 D4). A host reached by ssh never reads
+    # the second and a pod reached by kubectl never reads the first — the shim renders each from the
+    # transport the provider observed, and neither is a fallback for the other.
+    #
+    # Both are declared UNCONDITIONALLY, and that is a real cost rather than an oversight: a Step
+    # brokers one set of credentials, so a recipe that must serve a mixed fleet has to carry both.
+    # The alternative — resolving a credential only if some target turns out to need it — would make
+    # what a Step is authorized to use depend on graph state at launch time, and the CredentialRef
+    # use-check is the only authz gate an Action has (§2.5). It stays a declaration.
+    credentialRefs: [web-machine, hosts-kubeconfig]
     # The remediation may write back only what it OBSERVES (ADR-0054): the effective port and the
     # installed package. Intersected with the Actuator's own ceiling above.
     facetWriteScope: [app.config, software.package]
@@ -43,6 +54,13 @@ steps:
         user: root
         credentialRef: web-machine
         hostKeyChecking: accept-new
+        # The kubectl transport's half. Without it a Run against a kubecompute-built pod does not
+        # refuse — it reaches the API server, is denied, and ansible reports `unreachable: Failed to
+        # create temporary directory … did not have permissions on the target directory`, which
+        # names the guest's filesystem for a failure entirely on the control node's side. The shim
+        # now refuses that by name at validate time (§1.8).
+        kubeconfigRef:
+          credentialRef: hosts-kubeconfig
       extraVars:
         apache_port: "{{.launch.apache_port}}"
       playbook: apache-configure.yml

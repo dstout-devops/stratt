@@ -24,6 +24,11 @@ tuples:
   - { user: principal:bootstrap-admin, relation: user, object: credential_ref:aws-dev }
   # The machine credential the converge and the certificate delivery ride to reach the host.
   - { user: principal:bootstrap-admin, relation: user, object: credential_ref:web-machine }
+  # The kubectl transport's REACH credential (ADR-0156 D4a). Granted BESIDE web-machine, never
+  # instead of it: reach is per-HOST, so one Run may use the ssh key for a declared node and the
+  # kubeconfig for a pod the estate BUILT. Its own grant because it is its own authority — this
+  # one can exec into the hosts namespace, which web-machine cannot.
+  - { user: principal:bootstrap-admin, relation: user, object: credential_ref:hosts-kubeconfig }
   # The gate on SIGNING (cert-issuer/sign). Reaching the View and being allowed to sign are two
   # different permissions, and a Principal holding only the first is refused at launch.
   - { user: principal:bootstrap-admin, relation: user, object: credential_ref:cert-issuer }

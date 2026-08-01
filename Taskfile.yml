@@ -1575,6 +1575,82 @@ tasks:
       # created them — a gap that only shows up as a failed Run at the moment an operator launches.
       - "{{.KUBECTL}} --context {{.KIND_CONTEXT}} -n stratt create secret generic kubecompute-build-authz --from-literal=marker=1 --dry-run=client -o yaml | {{.KUBECTL}} --context {{.KIND_CONTEXT}} apply -f -"
       - "{{.KUBECTL}} --context {{.KIND_CONTEXT}} -n stratt create secret generic cert-issuer-authz --from-literal=marker=1 --dry-run=client -o yaml | {{.KUBECTL}} --context {{.KIND_CONTEXT}} apply -f -"
+      # THE REACH CREDENTIAL for the kubectl transport (ADR-0156 D4, hosts-kubeconfig).
+      #
+      # Unlike the two markers above this brokers REAL material, because there is a real
+      # authorization to perform: the execution pod is spawned with no cluster identity
+      # (`AutomountServiceAccountToken: false` — dispatch.go, deliberate), so `kubectl exec` has
+      # nothing to authenticate with unless a kubeconfig is brokered into it. Without this the
+      # converge does not fail cleanly — it is DENIED by the API server, and ansible reports
+      # `unreachable: Failed to create temporary directory … did not have permissions on the target
+      # directory`, blaming the guest for a control-node failure. That cost one full capstone run.
+      #
+      # THE GRANT IS THE NARROWEST THING THAT WORKS, and the width matters more here than anywhere
+      # else on this floor: a kubeconfig is a BEARER credential, so whatever this token can reach is
+      # the blast radius of any content any Run executes. `create pods/exec` plus `get pods` in
+      # `stratt-hosts` only — no other namespace, no other verb, no `edit` role that happens to
+      # include exec. `get pods` is needed because the connection plugin resolves the pod before it
+      # execs into it.
+      - |
+        set -eu
+        cat <<'EOF' | "{{.KUBECTL}}" --context {{.KIND_CONTEXT}} apply -f -
+        apiVersion: v1
+        kind: ServiceAccount
+        metadata: { name: stratt-hosts-exec, namespace: stratt }
+        ---
+        apiVersion: rbac.authorization.k8s.io/v1
+        kind: Role
+        metadata: { name: stratt-hosts-exec, namespace: stratt-hosts }
+        rules:
+          - apiGroups: [""]
+            resources: [pods]
+            verbs: [get, list]
+          - apiGroups: [""]
+            resources: [pods/exec]
+            verbs: [create]
+        ---
+        apiVersion: rbac.authorization.k8s.io/v1
+        kind: RoleBinding
+        metadata: { name: stratt-hosts-exec, namespace: stratt-hosts }
+        roleRef: { apiGroup: rbac.authorization.k8s.io, kind: Role, name: stratt-hosts-exec }
+        subjects:
+          - { kind: ServiceAccount, name: stratt-hosts-exec, namespace: stratt }
+        EOF
+      # Mint the token and render the kubeconfig the Secret carries.
+      #
+      # `kubernetes.default.svc` is the in-CLUSTER address on purpose: this credential is read by an
+      # execution pod, never from this workstation, so the kind kubeconfig's 127.0.0.1 endpoint
+      # would resolve to the pod itself. The CA comes from the kube-root-ca.crt ConfigMap every
+      # namespace carries — a real trust anchor rather than insecure-skip-tls-verify, because a demo
+      # floor teaching the shape should teach the right one.
+      #
+      # NOT idempotent-by-reuse like the netbox token: re-running mints a fresh token and overwrites
+      # the Secret. That is safe here (a bound SA token is revocable by deleting the SA, and nothing
+      # else holds a copy) and it keeps a re-run from handing out a credential that has since expired.
+      - |
+        set -eu
+        ca="$("{{.KUBECTL}}" --context {{.KIND_CONTEXT}} -n stratt get configmap kube-root-ca.crt \
+          -o jsonpath='{.data.ca\.crt}' | base64 -w0)"
+        tok="$("{{.KUBECTL}}" --context {{.KIND_CONTEXT}} -n stratt create token stratt-hosts-exec --duration=24h)"
+        test -n "$ca" -a -n "$tok" || { echo "kubecompute: minting the hosts kubeconfig produced nothing" >&2; exit 1; }
+        kubeconfig="$(cat <<EOF
+        apiVersion: v1
+        kind: Config
+        clusters:
+          - name: stratt
+            cluster: { server: https://kubernetes.default.svc, certificate-authority-data: ${ca} }
+        users:
+          - name: stratt-hosts-exec
+            user: { token: ${tok} }
+        contexts:
+          - name: stratt
+            context: { cluster: stratt, user: stratt-hosts-exec, namespace: stratt-hosts }
+        current-context: stratt
+        EOF
+        )"
+        printf '%s' "$kubeconfig" | "{{.KUBECTL}}" --context {{.KIND_CONTEXT}} -n stratt \
+          create secret generic hosts-kubeconfig-creds --from-file=kubeconfig=/dev/stdin \
+          --dry-run=client -o yaml | "{{.KUBECTL}}" --context {{.KIND_CONTEXT}} apply -f -
 
   dev:managed-app:up:
     # The BARE node the apache Blueprint converges (ADR-0148). It reuses managed-web's keypair and
@@ -2158,6 +2234,19 @@ tasks:
       # dial — so a missing EE image is only ever found by a Run failing after a gate.
       - task: dev:ee:build
       - task: dev:ee-crypto:build
+      # AND THE KUBE VARIANT, which this list omitted while the apache Actuator DECLARED it.
+      #
+      # The omission was invisible in the worst way. `stratt-ee-kube:dev` was usually already on the
+      # node — built by `demo:scale-fleet:run`, which does list it — so the pod started, the play
+      # ran, and the only symptom was that the image was whatever a previous demo had left behind.
+      # Measured: the capstone spent three runs failing `unreachable` against a kube EE built before
+      # the shim learned to render `ansible_kubectl_kubeconfig` at all, while the freshly-built
+      # binary sitting in the repo did it correctly. `pullPolicy: Never` cannot tell a stale image
+      # from a right one, and neither can `rollout status`.
+      #
+      # The general rule this demo keeps re-learning: an image a declaration NAMES is a floor
+      # dependency, exactly like the plugin images above. Not building it does not fail loudly.
+      - task: dev:ee-kube:build
       # THE BACKENDS THE PLUGINS DIAL.
       - task: dev:openbao:up # the CLM the certissuer capability signs with
       - task: dev:objectstore:up # the tofu state bucket the statestore capability needs
@@ -2190,13 +2279,17 @@ tasks:
       # ImagePullBackOff.
       #
       # AND THE ORDER MATTERS, which this had backwards. Restarting strattd BEFORE its plugins are
-      # serving means it boots against pods that are not answering yet, and their Actions never enter
-      # the dispatch table: the run then dies with `no action registered as "opentofu/apply"` after
-      # the gate has already been approved. Measured on a cold floor, twice — demo:scale-fleet hit
-      # the identical failure with kubecompute/create-host.
+      # serving means it boots against pods that are not answering yet. So: wait for every
+      # Deployment, THEN restart strattd against a floor that is fully up, THEN wait for it.
       #
-      # So: wait for every Deployment, THEN restart strattd against a floor that is fully up, THEN
-      # wait for it.
+      # THAT IS NECESSARY AND NOT SUFFICIENT, and this comment used to claim otherwise. The run
+      # still died with `no action registered as "opentofu/apply"` after its gate was approved,
+      # because NOTHING HERE CAN WAIT FOR THE DISPATCH TABLE: `rollout status` returns when a
+      # readiness PROBE passes, while the Actions of a `requires:`-bearing Actuator arrive two
+      # reconcile cadences later (provider verification must persist a row before the next actuator
+      # reconcile reads it — measured at +10s on a cold floor, ADR-0104 D3 failing closed meanwhile).
+      # The gate for that is an API read, so it lives in run.sh's preflight where the reason string
+      # is readable — see `await_actuator` there. Left here as the pod-level precondition it is.
       - |
         set -eu
         for d in $("{{.KUBECTL}}" --context {{.KIND_CONTEXT}} -n stratt get deploy -o name); do

@@ -373,7 +373,7 @@ func Run(ctx context.Context, w io.Writer, dir string, req Request, run commandR
 	// transport needs. One pass over the whole set rather than per-target lazily — a Run that
 	// converges three hosts and then dies on the fourth's missing collection has already
 	// changed three machines.
-	if terr := validateTransports(req.Targets, osReadFile, osLookPath); terr != nil {
+	if terr := validateTransports(req.Targets, p.Connection, osReadFile, osLookPath); terr != nil {
 		return terr
 	}
 	// D5: a Step-declared connection.type and an observed transport are refused TOGETHER,
@@ -451,6 +451,27 @@ func Run(ctx context.Context, w io.Writer, dir string, req Request, run commandR
 		byHost[t.Name] = t
 	}
 	emit := pluginserve.NewEmitter(w).Send
+
+	// HOW THIS RUN TRIED TO CONNECT, stated once, as Run metadata (§1.8 — the abstraction must
+	// never hide diagnosis).
+	//
+	// It was missing and it cost three full capstone runs. A connection failure surfaces as
+	// ansible's `unreachable: Failed to create temporary directory … did not have permissions on
+	// the target directory` — a message that names the GUEST for what may be a control-node
+	// problem, a missing credential, an unobserved transport, or a plain ssh failure. All four
+	// render the same line, and the one artifact that distinguishes them — the inventory the shim
+	// rendered — lived only inside a pod that is gone by the time anyone reads the Run.
+	//
+	// SAFE TO EMIT, and that is a property of ADR-0153 D3 rather than of this call: every
+	// credential in the inventory is a PATH. Passwords are `--connection-password-file`, keys are
+	// staged file paths, the kubeconfig is its mount. There is no value here to redact — which is
+	// the same design that keeps them out of `inventory/hosts` at 0644 beside the artifacts.
+	emit(&pluginv1.ApplyResponse{Event: &pluginv1.TaskEvent{
+		Level: pluginv1.TaskEvent_LEVEL_INFO, At: timestamppb.Now(),
+		Message: "connection plan — the rendered inventory:\n" + inventory,
+		Scope:   pluginv1.TaskEvent_SCOPE_RUN,
+		Fields:  map[string]string{"kind": "inventory"},
+	}})
 
 	// What content this EE actually carries (ADR-0117 D3), stated once per Run so the
 	// descent can answer "which collections/roles did this Run have?" without inspecting

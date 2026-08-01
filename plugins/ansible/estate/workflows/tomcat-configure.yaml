@@ -37,13 +37,20 @@ steps:
     #
     # A converge Workflow is a RECIPE — what to do — not a target. WHERE is the Assignment's job.
     actuator: ansible-tomcat
-    credentialRefs: [web-machine]
+    # Reach is per-HOST and this recipe is not: `web-machine` is the ssh key, `hosts-kubeconfig`
+    # is what the control node authenticates to the Kubernetes API with when a target's OBSERVED
+    # transport is kubectl (ADR-0156 D4). Neither is a fallback for the other.
+    credentialRefs: [web-machine, hosts-kubeconfig]
     facetWriteScope: [app.config, software.package]
     params:
       connection:
         user: root
         credentialRef: web-machine
         hostKeyChecking: accept-new
+        # Without this a Run against a kubecompute-built pod is DENIED by the API server and
+        # ansible reports it as an unreachable host, naming the guest for a control-node failure.
+        kubeconfigRef:
+          credentialRef: hosts-kubeconfig
       extraVars:
         tomcat_port: "{{.launch.tomcat_port}}"
       playbook: tomcat-configure.yml

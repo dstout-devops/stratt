@@ -20,6 +20,11 @@ tuples:
   # rides to reach the managed-web node (ADR-0084 convergence fixture; §2.5 use-check).
   - { user: principal:dev-runner, relation: runner, object: view:managed-web }
   - { user: principal:dev-runner, relation: user, object: credential_ref:web-machine }
+  # The kubectl transport's REACH credential (ADR-0156 D4a). Granted BESIDE web-machine, never
+  # instead of it: reach is per-HOST, so one Run may use the ssh key for a declared node and the
+  # kubeconfig for a pod the estate BUILT. Its own grant because it is its own authority — this
+  # one can exec into the hosts namespace, which web-machine cannot.
+  - { user: principal:dev-runner, relation: user, object: credential_ref:hosts-kubeconfig }
   # …and the helm/deploy Action's authz-gate CredentialRef (ADR-0092 M2 self-deploy):
   # dev-runner may launch the gated helm-deploy Workflow that materializes a release.
   - { user: principal:dev-runner, relation: user, object: credential_ref:helm-deploy }

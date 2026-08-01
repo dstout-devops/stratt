@@ -171,6 +171,41 @@ func requireTransportTooling(kinds map[string]bool, read func(string) ([]byte, e
 	return nil
 }
 
+// requireTransportCredential refuses an observed transport whose REACH CREDENTIAL the Step never
+// declared — the third axis, after the collection and the binary.
+//
+// FOUND BY RUNNING IT, and it cost a whole capstone run to find. The content checks above both
+// passed: the EE carried kubernetes.core and a kubectl binary, so nothing refused, ansible connected
+// as far as it could and the Run died with
+//
+//	runner_on_unreachable: Failed to create temporary directory. In some cases, you may have been
+//	able to authenticate and did not have permissions on the target directory.
+//
+// Every word of which points at the TARGET's filesystem. The actual cause was the API server
+// rejecting `kubectl exec` because the execution pod holds no credential at all — a control-node
+// authorization failure, reported as a guest permissions problem. That is §1.8's exact prohibition:
+// the abstraction hid the diagnosis, and an operator following that message would go and chmod a
+// directory on a pod that was never the problem.
+//
+// A declaration-level check answers it before anything runs, and needs no filesystem: either the
+// Step brokered a credential for this transport or it did not.
+func requireTransportCredential(kinds map[string]bool, c *connectionParams) error {
+	if !kinds[TransportKubectl] {
+		return nil
+	}
+	if c != nil && c.KubeconfigRef != nil && c.KubeconfigRef.CredentialRef != "" {
+		return nil
+	}
+	return fmt.Errorf("a target is reached by %s, and this Step brokers no kubeconfig for it — set "+
+		"params.connection.kubeconfigRef.credentialRef. The GUEST needs nothing for kubectl (no sshd, "+
+		"no account), but the CONTROL NODE does: the execution pod is spawned with no cluster identity "+
+		"on purpose (AutomountServiceAccountToken: false), so `kubectl exec` has nothing to "+
+		"authenticate with. Without this the Run does not refuse — it reaches the API server, is "+
+		"denied, and ansible reports `unreachable: Failed to create temporary directory … did not "+
+		"have permissions on the target directory`, which names the guest for a failure that is "+
+		"entirely on this side (ADR-0156 D4)", TransportKubectl)
+}
+
 // osLookPath is the production binary probe for requireTransportTooling.
 func osLookPath(name string) (string, error) { return exec.LookPath(name) }
 
@@ -211,7 +246,7 @@ func transportVarsFor(t Target) (map[string]string, error) {
 // One pass over the whole set rather than per-target lazily, because a Run that converges three
 // hosts and then dies on the fourth's missing collection has already changed three machines. The
 // tooling check is per DISTINCT kind, so a hundred pods ask about kubernetes.core once.
-func validateTransports(targets []Target, read func(string) ([]byte, error), look func(string) (string, error)) error {
+func validateTransports(targets []Target, c *connectionParams, read func(string) ([]byte, error), look func(string) (string, error)) error {
 	kinds := map[string]bool{}
 	for _, t := range targets {
 		spec, err := parseTransport(t.TransportKind, t.TransportCoordinates)
@@ -226,7 +261,13 @@ func validateTransports(targets []Target, read func(string) ([]byte, error), loo
 		}
 		kinds[spec.Kind] = true
 	}
-	return requireTransportTooling(kinds, read, look)
+	if err := requireTransportTooling(kinds, read, look); err != nil {
+		return err
+	}
+	// The credential check comes LAST of the three deliberately: a missing collection is an image
+	// problem and a missing kubeconfig is a declaration problem, and reporting the image one first
+	// keeps the operator fixing things in the order they can actually fix them.
+	return requireTransportCredential(kinds, c)
 }
 
 // refuseTransportAndDeclaredType is ADR-0156 D5: a Step-declared connection.type and an OBSERVED
