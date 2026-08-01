@@ -646,6 +646,47 @@ tasks:
         echo "  Inspect: GET /actuators/<name> — .status.error carries the registry's own reason (§1.8)." >&2
         exit 1
 
+  chart:deps:
+    # MATERIALIZE THE CHART'S VENDORED DEPENDENCY FROM ITS COMMITTED LOCK.
+    #
+    # `deploy/charts/stratt/Chart.yaml` declares openfga; `Chart.lock` pins the exact resolution and
+    # IS committed; `deploy/charts/*/charts/*.tgz` is gitignored, because a vendored binary does not
+    # belong in git. Nothing ever ran `helm dependency build`, so the `.tgz` existed only on machines
+    # where somebody had once fetched it by hand — and Helm refuses to install a chart whose declared
+    # dependency is absent from `charts/`.
+    #
+    # FOUND BY THE FIRST CI RUN OF `e2e-live`, on a fresh clone, where every demo failed identically.
+    # It is the purest works-on-my-machine defect this repo has produced: the demos were green here
+    # and could never have run anywhere else, and no amount of local re-running would ever have said
+    # so. That is precisely the gap E2E-1 exists to close, closing itself on its first execution.
+    #
+    # `build`, never `update`: build honours Chart.lock, update RE-RESOLVES it and would silently
+    # move a pin that dependency-scout vetted (§1.7, §7.3 — pinned, never floating).
+    desc: "Materialize the chart's vendored dependencies from Chart.lock (helm dependency build)"
+    deps: [tools:helm]
+    cmds:
+      - |
+        set -eu
+        chart="{{.ROOT_DIR}}/deploy/charts/stratt"
+        # THE REPO LIST IS DERIVED FROM Chart.yaml, never restated here. `helm dependency build`
+        # resolves by URL and refuses with "no repository definition for <url>" until that URL is a
+        # registered repo — so the URL has to be known twice unless it is read from the one file
+        # that already declares it. A hardcoded copy here is a pin that can drift from the pin
+        # dependency-scout vetted, which is the second-copy failure this repo keeps paying for.
+        deps=$(awk '/^dependencies:/{d=1;next} /^[a-z]/{d=0} d && /- name:/{n=$3} d && /repository:/{print n" "$2}' "$chart/Chart.yaml")
+        # A chart that declares dependencies and yields no repo lines means the parse broke, not
+        # that there is nothing to do — and "nothing to do" would sail straight through to a helm
+        # error 200 lines later.
+        if grep -q '^dependencies:' "$chart/Chart.yaml" && [ -z "$deps" ]; then
+          echo "chart:deps: Chart.yaml declares dependencies but none parsed — the reader is broken" >&2
+          exit 1
+        fi
+        printf '%s\n' "$deps" | while read -r name url; do
+          [ -n "${url:-}" ] || continue
+          "{{.HELM}}" repo add "$name" "$url" --force-update >/dev/null
+        done
+        "{{.HELM}}" dependency build "$chart"
+
   e2e:list:
     # THE SUITE IS DERIVED, NEVER DECLARED — and that is the load-bearing part.
     #
@@ -1921,7 +1962,7 @@ tasks:
 
   dev:install:
     desc: "EXTRAS (advanced): helm-install strattd + all in-cluster plugins into kind, wired to the compose substrate (the plugin-e2e path; genesis uses dev:genesis instead)"
-    deps: [tools:helm, tools:kubectl, dev:stage-estate]
+    deps: [tools:helm, tools:kubectl, dev:stage-estate, chart:deps]
     vars:
       GW:
         sh: |
@@ -1953,7 +1994,7 @@ tasks:
     # loop (dev:genesis:selfdeploy). The self-retiring floor: the boot guard forbids the
     # dev header alongside OIDC, so it cannot persist into the real-authz posture. DEV ONLY.
     desc: THE default dev entrypoint — nothing -> minimal Stratt in kind (spine + strattd + bootstrap-admin), which then self-deploys the rest
-    deps: [tools:helm, tools:kubectl]
+    deps: [tools:helm, tools:kubectl, chart:deps]
     cmds:
       - task: dev:kind:up
       - task: image:kind-load
@@ -2017,7 +2058,7 @@ tasks:
     # The hello-stratt chart rides the helm plugin image (image:plugin PLUGIN=helm). By-hand walk:
     # plugins/helm/demo/README.md. Teardown: demo:k8s-deploy:down (full nuke: dev:kind:down).
     desc: "Demo — stand up a floor and deploy a real app through a gated Workflow (plugins/helm/demo)"
-    deps: [tools:helm, tools:kubectl]
+    deps: [tools:helm, tools:kubectl, chart:deps]
     cmds:
       - task: dev:kind:up
       - task: image:kind-load
@@ -2082,7 +2123,7 @@ tasks:
     # the vcenter Syncer projects the vspheresim topology into a live graph (Views come alive), and a gated
     # Workflow provisions a new VM through vcenter/create-vm. By-hand walk: plugins/vcenter/demo/README.md.
     desc: "Demo — stand up a vSphere floor, project the graph, and provision a VM through a gated Workflow"
-    deps: [tools:helm, tools:kubectl, dev:vspheresim:guest-image]
+    deps: [tools:helm, tools:kubectl, dev:vspheresim:guest-image, chart:deps]
     cmds:
       - task: dev:kind:up
       # vspheresim runs as a compose service on the host; the plugin reaches it on the kind host-gateway.
@@ -2147,7 +2188,7 @@ tasks:
     # that provisions a REAL instance via awsec2/create-vm; the awsec2 Syncer observes it into the graph.
     # By-hand walk: plugins/awsec2/demo/README.md.
     desc: "Demo — stand up an EC2 floor (floci) and provision a real instance through a gated Workflow"
-    deps: [tools:helm, tools:kubectl]
+    deps: [tools:helm, tools:kubectl, chart:deps]
     cmds:
       - task: dev:kind:up
       # floci runs as a compose service on the host; the plugin reaches its EC2 API on the kind
@@ -2271,7 +2312,7 @@ tasks:
     # write the observed state back — and then prove that a play reaching no host FAILS.
     # By-hand walk: demos/app-cert/README.md. Teardown: demo:app-cert:down.
     desc: "Demo — install an app with a TLS certificate on a real host through a gated Workflow (demos/app-cert)"
-    deps: [tools:helm, tools:kubectl]
+    deps: [tools:helm, tools:kubectl, chart:deps]
     cmds:
       - task: dev:kind:up
       - task: image:kind-load
@@ -2320,7 +2361,7 @@ tasks:
 
   demo:scale-fleet:run:
     desc: "Demo — change a 1 to a 3 and get two more machines, configured (demos/scale-fleet)"
-    deps: [tools:helm, tools:kubectl]
+    deps: [tools:helm, tools:kubectl, chart:deps]
     cmds:
       - task: dev:kind:up
       # A CLEAN FLOOR, FIRST, and this is not hygiene — it is the difference between a demo and a
@@ -2434,7 +2475,7 @@ tasks:
     # floor and then called by nothing, which is how `dev:connector-e2e` came to pass on
     # hand-applied state (3ebda40).
     desc: "Demo — the capstone: declare a region, get a network, a host, an app and a certificate (demos/region-to-cert)"
-    deps: [tools:helm, tools:kubectl]
+    deps: [tools:helm, tools:kubectl, chart:deps]
     cmds:
       - task: dev:kind:up
       # A CLEAN FLOOR FIRST, and `:down` below already explains why in detail: this demo drives four
@@ -2574,7 +2615,7 @@ tasks:
     # forbids only dev-header + OIDC). Run AFTER dev:genesis:selfdeploy. The full OIDC identity
     # flip (dev-header -> OpenBao) is the ADR-0101 follow-up.
     desc: "Promote authz backend in-proc -> the self-deployed OpenFGA server (one strattd restart)"
-    deps: [tools:helm, tools:kubectl]
+    deps: [tools:helm, tools:kubectl, chart:deps]
     cmds:
       - |
         set -eu
@@ -2594,7 +2635,7 @@ tasks:
     # here: edit a Connector declaration and watch the registry enable/disable it live
     # (GET /connectors, GET /actuators) while the strattd pod's start time never changes.
     desc: "ADR-0103: fully in-kind runtime-registry proof (no compose) — substrate + helm/declared plugins + estate"
-    deps: [tools:helm, tools:kubectl]
+    deps: [tools:helm, tools:kubectl, chart:deps]
     cmds:
       - task: dev:kind:up
       - task: image:kind-load # strattd
