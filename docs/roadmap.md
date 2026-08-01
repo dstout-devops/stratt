@@ -172,12 +172,18 @@ self-contained, narrated, **turnkey** scenarios that teach Stratt by running it.
 | [vSphere: provision a VM + the live graph](../plugins/vcenter/demo/README.md) | vSphere (vspheresim)     | `build-real` | Syncer projects the topology; gated `vcenter/create-vm` → the built VM observed back, and its guest boots and reports a coordinate                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
 | [EC2: provision a real instance](../plugins/awsec2/demo/README.md)            | EC2 (floci)              | `build-real` | gated `awsec2/create-vm` → a real floci instance container running, observed into the graph (0→1). **Re-graded from `real` 2026-07-27**: floci's network model is fully real, but no AMI ships sshd and user-data never runs, so there is no guest to converge (HAR-1)                                                                                                                                                                                                                                                                                                                                                            |
 | [app install with a certificate](../demos/app-cert/README.md)                 | SSH (Linux host)         | `real`       | gated ansible converge: SSH as an unprivileged user → privilege escalation → a `community.crypto` X.509 cert → TLS read back off the wire, `app.config` projected with Run provenance, and a no-op Run refused                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| [scale a fleet: change a 1 to a 3](../demos/scale-fleet/README.md)             | Kubernetes (kind)        | `real`       | **cardinality, and the asymmetry it found.** `count: 1 → 3` offers EXACTLY two builds (web-01 is not re-offered); approve and the SAME Assignment, unedited, converges the new hosts over `kubectl exec` — exactly TWO drift Findings open, and all three end up carrying an `app.config` the Run WROTE. `count: 3 → 1` offers NOTHING: this demo found that `kubecompute` advertises `provisions` and no `decommissions`, so count-down is not symmetric on this substrate. **Added to this table 2026-08-01 — it had been missing since the demo shipped, and until that day its converge was narrated rather than run** |
 | [region-to-cert — the capstone](../demos/region-to-cert/README.md)            | Kubernetes + EC2 (floci) | `build-real` | **the whole chain, from an estate naming no substrate.** Two gated `Intent/Subnet` builds through real `tofu apply` → `10.30.0.0/24` + `10.30.1.0/24`, distinct ranges NetBox allocated and no declaration contains; a gated `Intent/Compute` build → a pod + Service, `mgmt.address` the provider CAUSED; `apache-configure` → HTTP served off the wire, `app.config.port=8080 writerKind=run`; `cert-issue` → key `0600` **born on target**, `issuer=Stratt Dev Root CA`, subject derived from the host's own address; all four Findings RESOLVED. Graded at the **floor** of its two legs — the kubernetes leg is `real` alone |
 
 **This is the first real dent in the "live-cluster e2e" gap** named in the enterprise-readiness section
 below: the platform is now proven not only structurally and by unit/integration tests, but by
-reproducible, asserting runs against a real cluster + real/simulated substrates. Each runner is CI-able
-and **non-rotting** — a demo that stops working fails its own runner.
+reproducible, asserting runs against a real cluster + real/simulated substrates.
+
+**They are NOT non-rotting, and claiming so here was circular** (corrected 2026-08-01; it read "Each
+runner is CI-able and **non-rotting** — a demo that stops working fails its own runner"). A runner
+only fails when something runs it, and `task ci` runs none of them — which is exactly why the vsphere
+demo stayed broken for weeks after ADR-0103 moved vcenter's Actions. That is **E2E-1**, still open,
+and it closes with a scheduled `e2e:live` job, not with a sentence.
 
 **Demos behaved as an integration-test instrument, every single time.** Landing the first three surfaced
 (and fixed) six real defects no unit test caught; the capstone added four more of its own (see "Booked by
@@ -602,12 +608,36 @@ Blueprint and the Assignment name no substrate. That is the converge-side equiva
 did for builds, and it is why the Step was the wrong home: connection settings are group vars, one
 value per Run, so a mixed-substrate View could not be converged at all.
 
-**LIVE-PROVEN on kind, with the falsification first.** A pod asserted to have no sshd binary, no ssh
-client and nothing listening on port 22 — then converged by the real EE image and the real shim over
-`kubectl`, the play reporting its hostname from inside the pod. The negative half too: the base EE
-refuses the identical request, naming the missing collection. That retires a real coupling —
-kubecompute had to bake sshd and authorized keys into every pod it built, purely because the
-connection method had been assumed.
+**~~LIVE-PROVEN on kind~~ — RETRACTED 2026-08-01. This paragraph was the source of a false 🟢 that
+propagated into `docs/parity/ansible-tool.md`, and correcting it is worth more than the claim was.**
+
+It read: *"A pod asserted to have no sshd binary, no ssh client and nothing listening on port 22 —
+then converged by the real EE image and the real shim over `kubectl`."* Three things are wrong with
+that, all checkable:
+
+1. **No such assertion exists in the repo**, then or now. Nothing greps for a missing sshd.
+2. **No such pod exists.** `kubecompute` bakes `openssh` into every host it builds; sshd is
+   measurably running in them (`ps` in a built pod, 2026-08-01).
+3. **The platform path could not have run at all.** Execution pods are spawned with
+   `AutomountServiceAccountToken: false`, and no kubeconfig was brokered anywhere — `pods/exec` was
+   granted nowhere in the repo. A dispatched Run had nothing to authenticate to the API server with.
+   `demos/region-to-cert` proved it by being the first thing to try: it failed `unreachable`.
+
+What was almost certainly proven is the MECHANISM in isolation — ansible's kubectl connection
+working from a hand-run pod, which is exactly the check I re-ran on 2026-08-01 and which passes
+(`web-01 | SUCCESS => pong`). Recording that as the PLATFORM being proven is the same substitution
+this arc keeps making: `ansible-doc`'s exit code, the base64 leak test, the `ParentClosePolicy` grep,
+and `scale-fleet` asserting a Facet while narrating a converge. **A mechanism that works in a
+scratch pod says nothing about whether dispatch can reach it.**
+
+**Now genuinely live-proven** (ADR-0156 D4a): `task demo:region-to-cert:run` from a destroyed
+cluster installs Apache on a kubecompute-built pod over `kubectl exec` with a brokered kubeconfig,
+`ansible-runner rc=0`, HTTP served off the wire on :8080. The negative half holds too — the base EE
+refuses the identical request, naming the missing collection.
+
+**The coupling it was said to retire is NOT retired.** kubecompute still bakes sshd and
+authorized_keys into every pod; the converge simply no longer uses them. Removing that bootstrap is
+now unblocked and remains booked.
 
 **A near-miss worth recording.** The first negative run failed with `unknown field "transport"`, which
 looks like a refusal and is not: the image predated the proto change and its shim could not decode the
@@ -719,6 +749,23 @@ the first place. When each gets a live target, it gets its axis.
 **Also booked:** `kubectl auth can-i create pods/exec --as=<sa>` reported **no** for a grant that
 demonstrably works — the real exec succeeded with the same SA's token. Do not use `can-i` as evidence
 for subresource grants; exec the thing.
+
+**A KNOWN COST, measured rather than theorised: a Step declares its reach credentials
+unconditionally, so a floor pays for credentials its targets never use.** `apache-configure` names
+both `web-machine` (ssh) and `hosts-kubeconfig` (kubectl), because reach is per-HOST and a converge
+recipe is not — one recipe must serve a mixed fleet. Dispatch therefore mounts what the STEP
+declares, not what the targets turn out to need. `demos/scale-fleet` converges only pods, and the
+moment its converge became real the Run died in `ContainerCreating` with `secret
+"web-machine-creds" not found` — a MOUNT failure five minutes before anything could report why.
+
+The obvious fix — resolve a credential only if some target turns out to need it — is refused, and
+the reason is §2.5 rather than effort: it would make what a Step is AUTHORIZED to use depend on
+graph state at launch time, and the CredentialRef use-check is the only authz gate an Action has.
+Authority stays a declaration. What could improve without crossing that line is the DIAGNOSIS: a
+mount failure for a declared CredentialRef is statically predictable at estate-load time (the Step
+names a ref; the ref names a Secret; the floor either has it or does not), and today it surfaces as
+a pod that never starts. Same class as the `fileset.content` unregistered-owner finding CERT-2
+booked, and the fourth instance of "an advertised target nothing in the estate resolves".
 
 **STILL OPEN, and a platform race rather than a demo one: an absent transport and a not-yet-observed
 transport are the same value.** `mgmt.address` and `mgmt.transport` have different writers — the

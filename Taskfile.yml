@@ -2128,6 +2128,21 @@ tasks:
       # refuses that trade.
       - task: dev:ee-crypto:build
       - task: dev:kubecompute:up
+      # The MACHINE credential, needed even though nothing here connects by ssh.
+      #
+      # This floor converged nothing until 2026-08-01, so it never mounted a credential and never
+      # needed this. The moment the converge became real the Run died in ContainerCreating with
+      # `secret "web-machine-creds" not found` — not a connection error, a MOUNT error, five minutes
+      # before anything would have reported why.
+      #
+      # It is required because `apache-configure` declares BOTH reach credentials on the Step —
+      # `web-machine` for ssh and `hosts-kubeconfig` for kubectl — and dispatch mounts what the Step
+      # declares, not what the targets turn out to need. That cost is written down where the Step
+      # declares them: reach is per-HOST and a recipe is not, so a mixed fleet needs both, and making
+      # resolution depend on graph state at launch would make a Step's authority depend on what it
+      # happens to be pointed at (§2.5). A kubectl-only floor paying for an ssh key it never uses is
+      # the visible price of that.
+      - task: dev:machine-key:secret
       - task: demo:scale-fleet:stage
       - |
         set -eu

@@ -9,23 +9,26 @@
 #
 #   0. The estate names NO substrate and NO provider outside its one capability-binding — asserted
 #      by reading the declarations, because a portability claim nobody checks is one that rots.
-#   A. count: 1 → ONE gated build → and the host carries an OBSERVED reach method (ADR-0156): the
-#      provider that built it said how to reach it, in a Facet, and no declaration above it names
-#      one. The method is a property of the substrate.
+#   A. count: 1 → ONE gated build → a host carrying an OBSERVED reach method (ADR-0156), which the
+#      converge then USES: the provider that built it said how to reach it, in a Facet, and no
+#      declaration above it names one. The method is a property of the substrate.
 #
-#      WHAT THIS DEMO DOES NOT PROVE, corrected 2026-08-01 after it claimed otherwise: it runs NO
-#      converge. It asserts the FACET IS PRESENT and previously narrated that as "a host that
-#      CONVERGES, over `kubectl exec` … the converge does not USE port 22" — a converge this script
-#      never launches. Measuring one thing and reporting a stronger one is the exact trap the
-#      comment beside `transportOf` congratulates itself for avoiding, with the polarity reversed.
-#      It mattered: demos/region-to-cert is the FIRST thing to actually converge over this
-#      transport, and it fails — the EE Job pod is spawned with no cluster identity by design
-#      (`AutomountServiceAccountToken: false`, dispatch.go), so `kubectl exec` has nothing to
-#      authenticate with. The transport's reach credential is unbuilt. Booked in docs/roadmap.md.
+#      THIS LEG ONCE CLAIMED A CONVERGE IT NEVER RAN (corrected 2026-08-01). It asserted the Facet
+#      was PRESENT and narrated that as "a host that CONVERGES, over `kubectl exec` … the converge
+#      never touches port 22". Measuring one thing and reporting a stronger one is the exact trap
+#      the comment beside `transportOf` congratulates itself for avoiding, with the polarity
+#      reversed — and it hid a real defect: `demos/region-to-cert`, the first thing to ACTUALLY
+#      converge over this transport, failed, because the EE Job pod is spawned with no cluster
+#      identity by design (`AutomountServiceAccountToken: false`) and `kubectl exec` had nothing to
+#      authenticate with. The reach credential is built now (ADR-0156 D4a), so the claim is made
+#      the only way a claim should be: by running it.
 #   B. THE EDIT. count: 1 → 3 surfaces EXACTLY TWO builds. Not three — web-01 is already built and
 #      the reconcile knows it. Not one — the shortfall is two. That exact number is the mechanism.
-#   C. Approve both → three hosts → and the SAME Assignment, unedited, converges all three in ONE
-#      Run. Scaling out is one number; the configuration follows on its own.
+#   C. Approve both → three hosts → and the SAME Assignment, unedited, configures the two that did
+#      not exist when it was written. Asserted by reading back the `app.config` each Run WROTE, not
+#      by watching a Finding close. Scaling out is one number; the configuration follows on its own.
+#      The Run COUNT is reported rather than asserted — remediation is entity-scoped (ADR-0150), so
+#      the fan-out is a property to observe, not a number to assume.
 #   D. THE EDIT BACK. count: 3 → 1 — and the limit this demo FOUND by running: kubecompute
 #      advertises `provisions` and not `decommissions`, so on this substrate there is no teardown
 #      Workflow to offer. Reported, booked, and not asserted as something it is not.
@@ -210,6 +213,82 @@ approveAll() { # launch every open build Finding's remediation AND approve the G
     done
 }
 
+# ── the converge, which this demo used to CLAIM and not RUN ──────────────────────────────
+#
+# Corrected 2026-08-01. The header said "a host that CONVERGES, over `kubectl exec`" and the
+# summary said the new hosts were "built and CONFIGURED by an Assignment nobody edited". Neither
+# happened: the script asserted that `mgmt.transport` was OBSERVED and stopped there. It is the
+# same trap as reading the wrong jq path, with the polarity reversed — a claim that cannot fail
+# because nothing tests it.
+#
+# It runs now because it CAN: a kubectl converge needs a brokered kubeconfig on the control node
+# (ADR-0156 D4a), which did not exist when this demo was written. Every host reached here is
+# reached through the API server with no sshd involved, which is the claim the header makes.
+appFindings() { findingsMatching "web-servers-apache"; }
+
+# convergeAll launches every open apache drift Finding and waits for each Run.
+#
+# It REPORTS the number of Runs rather than asserting one. "One Assignment converges all three in
+# ONE Run" was the old summary's wording and nobody had counted: remediation is entity-scoped
+# (ADR-0150), so the fan-out is a property worth observing rather than a number worth assuming.
+convergeAll() { # convergeAll _ [EXPECTED-FINDINGS]
+    local ids run st n=0
+    # POLLED, not read once. The apache Baseline runs on its own cadence (`@every 1m`), so a host
+    # that landed seconds ago is drifted-but-not-yet-noticed. Reading once failed with "no apache
+    # drift Finding opened" against an estate that was about to open one — the same
+    # projection-lag-versus-defect confusion the transport wait upstream exists for.
+    for _ in $(seq 1 45); do
+        ids="$(api GET "/findings?status=open" | jq -r '.[]? | select(.baseline | test("web-servers-apache")) | .id')"
+        [ -n "$ids" ] && break
+        sleep 4
+    done
+    [ -n "$ids" ] || fail "no apache drift Finding opened — a built host with no app.config is
+      unmet desired state, so one should exist for every host that is not yet converged"
+    # MEASURED FIRST, then asserted (2026-08-01). This started as a bare report, because how many
+    # Findings a fleet of N unconverged hosts opens is a property of entity-scoped remediation
+    # (ADR-0150) that nobody had counted. It counted 1 and then 2 — so the caller may now demand a
+    # number, and leg C's 2 is the whole point: the host converged in leg A is NOT re-offered.
+    local got
+    got="$(printf '%s\n' "$ids" | grep -c .)"
+    echo "  · open apache drift Findings: ${got}"
+    if [ -n "${2:-}" ] && [ "$got" != "$2" ]; then
+        fail "expected ${2} apache drift Finding(s), got ${got} — more would mean an
+      already-converged host was offered again, fewer that a built host was never noticed"
+    fi
+    for id in $ids; do
+        run="$(api POST "/findings/${id}/remediation" -d '{}' | jq -r '.id // empty')"
+        [ -n "$run" ] || fail "launch converge $id returned no WorkflowRun"
+        n=$((n + 1))
+        # `.workflowRun.status`, not `.status` — measured. The first version read `.status`, got
+        # empty for every poll, and failed with "never reached a terminal state (last: none)" for a
+        # Run that was fine. It failed rather than passing, which is the only reason that was cheap.
+        for _ in $(seq 1 160); do
+            st="$(api GET "/workflow-runs/${run}" | jq -r '.workflowRun.status // .status // empty')"
+            case "$st" in
+                succeeded) break ;;
+                failed | cancelled)
+                    api GET "/runs?workflowRunId=${run}" 2>/dev/null \
+                        | jq -r '.[]? | select(.status=="failed") | "  cause: " + (.error // "(none recorded)")' | head -5 >&2
+                    fail "converge run ${run} ${st}" ;;
+            esac
+            sleep 3
+        done
+        [ "$st" = "succeeded" ] || fail "converge run ${run} never reached a verdict (last: ${st:-none})"
+    done
+    echo "  ✓ ${n} converge Run(s) succeeded"
+}
+
+# convergedHosts counts hosts carrying an app.config the Run WROTE — the fact that proves the
+# converge happened, rather than the Finding merely closing.
+convergedHosts() {
+    local total=0 port
+    for id in $(api GET "/views/${HOST_VIEW}/entities" | jq -r '.entities[].id'); do
+        port="$(api GET "/entities/$id" | jq -r '.facets[]? | select(.namespace=="app.config") | .value.port // empty')"
+        [ -n "$port" ] && total=$((total + 1))
+    done
+    echo "$total"
+}
+
 # ── A · one host, built and converged ────────────────────────────────────────────────────
 say "A · count: 1 — one gated build, and a host that converges"
 waitFor "open build Findings" 1 provisionFindings
@@ -239,7 +318,13 @@ for _ in $(seq 1 60); do
 done
 [ "$transport" = "kubectl" ] || fail "expected an observed kubectl transport, got '${transport:-none}'"
 echo "  ✓ mgmt.transport observed by the builder: ${transport} — the builder said how to reach
-    what it built. NOT asserted here: that a converge USES it (this demo runs none)."
+    what it built, and the converge below is what USES it"
+
+# …and the converge itself, over that transport. The pod has no sshd in play here: the connection
+# is `kubectl exec`, authenticated by a kubeconfig scoped to pods/exec in this one namespace.
+convergeAll _ 1
+waitFor "hosts carrying an app.config the Run wrote" 1 convergedHosts
+waitFor "open apache drift Findings once converged" 0 appFindings
 
 # ── B · THE EDIT ─────────────────────────────────────────────────────────────────────────
 say "B · count: 1 → 3 — and EXACTLY two builds are offered"
@@ -269,7 +354,20 @@ for _ in $(seq 1 60); do
 done
 [ "$kinds" = "kubectl" ] || fail "expected every host to carry an observed transport, got '${kinds:-none}'"
 echo "  ✓ all three hosts carry an observed transport — no substrate named anywhere above the
-    binding. (Observation only: no Run reaches them here.)"
+    binding"
+
+# THE CLAIM THIS LEG EXISTS FOR, now executed instead of narrated: the Assignment was never
+# edited, and the two hosts that did not exist when it was written are configured by it.
+#
+# Only the NEW hosts drift — web-01 was converged in leg A and stays converged, so the reconcile
+# offers exactly the shortfall here too. That is the same correlation property leg B asserts for
+# builds, holding for configuration, which is the part of "change a 1 to a 3" that matters after
+# the machines exist.
+convergeAll _ 2
+waitFor "hosts carrying an app.config the Run wrote" 3 convergedHosts
+waitFor "open apache drift Findings once converged" 0 appFindings
+echo "  ✓ the SAME Assignment, unedited, configured all three — exactly TWO drift Findings
+    opened, so the host converged in leg A was not offered again. Over kubectl exec, never port 22."
 
 # ── D · THE EDIT BACK ───────────────────────────────────────────────────────────────────
 say "D · count: 3 → 1 — and the honest limit this demo found"
@@ -297,8 +395,9 @@ cat <<'SUMMARY'
 
   One number changed, twice, and the estate did the rest:
 
-    count: 1 → 3   two builds offered (not three — web-01 was already there), approved, built
-                   and CONFIGURED by an Assignment nobody edited
+    count: 1 → 3   two builds offered (not three — web-01 was already there), approved, built,
+                   and then CONFIGURED by an Assignment nobody edited — asserted by reading the
+                   app.config each Run wrote back, not by watching the Finding close
     count: 3 → 1   the desired state drops — and this demo FOUND that kubecompute ships no
                    teardown Workflow, so nothing is offered on this substrate. Booked, not
                    papered over. vcenter has one; kubernetes does not, yet.
