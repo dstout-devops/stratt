@@ -1,6 +1,11 @@
 # ADR 0156 — How to reach a host is OBSERVED, not declared
 
-- **Status:** **Proposed** (2026-07-31, steward). Charter review by hand — this session's rules bar the
+- **Status:** **ACCEPTED** (promoted 2026-08-01 by the steward; proposed 2026-07-31). Promoted on
+  evidence rather than age: the transport is **live-proven end to end** — `demo:region-to-cert` and
+  `demo:scale-fleet` converge kubecompute-built pods over `kubectl exec` with a brokered kubeconfig,
+  `ansible-runner rc=0`, under `task e2e:live` (EXIT=0, all six demos). **D4a was added on the way**:
+  the transport shipped with no reach credential at all and could not authenticate, which only a real
+  converge exposed. Charter review by hand — this session's rules bar the
   subagent; §1.1/§1.2/§1.4/§1.5/§1.8/§2.4/§2.5/§9 answered inline. **No new runtime dependency**
   (three new EE content variants; the control plane gains nothing).
 - **Date:** 2026-07-31

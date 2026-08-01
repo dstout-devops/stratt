@@ -1,6 +1,11 @@
 # ADR 0153 — A connection type, and a password that is only ever a path
 
-- **Status:** **Proposed** (2026-07-31, steward). Charter review by hand — this session's rules bar the
+- **Status:** **ACCEPTED** (promoted 2026-08-01 by the steward; proposed 2026-07-31). The credential
+  forms are implemented and guarded — `TestInventoryCarriesCredentialPathsAndNeverMaterial` now checks
+  D3's path-not-value rule by VALUE rather than by variable name, after the older name-based guard was
+  found to pass anything not called `*pass*`. **Unchanged caveat, restated rather than quietly dropped:**
+  `network_cli`/`netconf` remain shipped-but-not-live-proven — no FRR/cEOS target exists in CI, and D7's
+  lesson is that a declared connection type is not a proven one. Charter review by hand — this session's rules bar the
   subagent; §1.1/§1.4/§1.8/§2.4/§2.5/§9 answered inline. **No new dependency.**
 - **Date:** 2026-07-31
 - **Deciders:** steward
