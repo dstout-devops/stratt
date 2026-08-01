@@ -16,6 +16,21 @@ declarations:
 
 environment: dev
 
+# THE EXECUTION ENVIRONMENT IS THE KUBE VARIANT (ADR-0156). kubecompute observes `kubectl` as the
+# transport of every host it builds, so the apache converge runs over the kubernetes.core connection
+# plugin — which the DEFAULT EE does not carry. This is not a preference: the shim refuses the
+# transport BEFORE the play runs when the collection or the binary is missing (D6), so leaving this
+# at stratt-ee:dev turns the capstone's converge leg into a clear refusal.
+#
+# The certificate leg's Actuator names stratt-ee-crypto:dev explicitly, and THAT image carries
+# kubernetes.core for the same reason — an image must hold the union of the transports its targets
+# use, because the transport is per TARGET and the image is per Run.
+ee:
+  image:
+    repository: stratt-ee-kube
+    tag: dev
+    digest: ""
+
 plugins:
   # The `provisioning` provider for Intent/Compute on the kubernetes substrate — the demo's LEG 2.
   - name: kubecompute

@@ -1,0 +1,28 @@
+# demo.yaml — the machine-readable descriptor (ADR-0116 D3). `task demos:check` reads it against the
+# README and the runner, so the human-facing claims — especially `fidelity` — cannot quietly rot away
+# from the code (D3: hide mechanism, never fidelity — charter §1.8).
+name: scale-fleet
+title: Change a 1 to a 3 and get two more machines — configured
+summary: >
+  The plainest question anyone asks of estate-as-code, demonstrated end to end: edit one number in
+  one Intent, and exactly the shortfall is offered for a gated build — then the SAME Assignment,
+  unedited, converges the new hosts. Then edit it back and watch cardinality run in reverse.
+
+# fidelity (D3): how real is what you're watching?
+fidelity: real
+fidelityNote: >
+  Everything here is real on a real kind cluster: real pods built by the kubecompute provider, a real
+  ansible converge over the `kubectl` connection plugin (ADR-0156 — the connection method is observed
+  by the provider that built the host, and the converge never touches port 22), and real Findings
+  gated by a real approval. The one thing this demo does NOT show is the multi-substrate half: the same Intent
+  resolves to vsphere-vm-build in the reference estate's `vsphere-dc` environment and
+  `demo:vsphere-only` exercises that builder, but this demo runs ONE floor and no dev substrate
+  offers a Kubernetes cluster and a vCenter at once. Proof 0 carries the portability claim instead —
+  it asserts that no declaration outside the single capability-binding names a substrate at all.
+
+# WHAT THIS RUNS AGAINST. Named `backend`, NOT `substrate`: since ADR-0151 a substrate is a property
+# of the PROVIDER, selected by one binding line, and a demo's floor is not that.
+backend: [kubernetes]
+
+intent: web-fleet
+view: web-servers

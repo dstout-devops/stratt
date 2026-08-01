@@ -18,6 +18,12 @@
       "name": "community.library_inventory_filtering_v1",
       "sha256": "d5de090c73f3bbfda0563b080e40cad38a97295d29b2d990568a433a2d2ec67f",
       "version": "1.1.5"
+    },
+    {
+      "declared": true,
+      "name": "kubernetes.core",
+      "sha256": "f123d357fd14cd704e4020fc92dc67d5a5afc6fc23040d57d1a5daa0bec85b10",
+      "version": "6.5.0"
     }
   ],
   "lockfileVersion": 1,

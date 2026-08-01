@@ -1,0 +1,20 @@
+# The machine credential the converge and the certificate delivery ride to reach the built host
+# (§2.5, ADR-0084).
+#
+# This is the AWX "Machine Credential" model with a clean split: the graph carries the ADDRESS
+# (mgmt.address → ansible_host, projected by whichever provider CAUSED it), and this carries the
+# KEY. Neither knows the other's half.
+#
+# POINTER only — the dispatcher resolves it to a Kubernetes Secret and file-mounts the key into the
+# execution pod at spawn, at /runner/credentials/web-machine/id_ed25519. It is never written to the
+# graph, never logged, and never lands in an artifact.
+#
+# The SAME ref reaches a host Stratt BUILT and a host declared by hand, which is the property worth
+# having: a built machine is reachable by the credential the estate already brokers rather than by
+# one minted at build time that nothing else knows about.
+name: web-machine
+ownerTeam: platform-admins
+backend: k8s-secret
+locator: { namespace: stratt, name: web-machine-creds }
+injection:
+  - { key: ssh-privatekey, as: file, name: id_ed25519 }

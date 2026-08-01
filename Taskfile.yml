@@ -37,6 +37,12 @@ vars:
   HELM_SHA256_AMD64: "e9b88b4ee95b18c706839c28d3a0220e5bc470e9cd9262410c90793c45ff8b7c"
   HELM_SHA256_ARM64: "21abd9354d39b2cd79a8d76be6912cd137a983cbf997193503fb8a6a6e2f2785"
   KUBECTL_VER: "1.34.1" # within skew of the kind node (K8s N-2, §1.7)
+  # The sha256 of that kubectl for linux/amd64, for the EE builds that bake the binary in
+  # (ADR-0156 D6 — the connection plugin execs it). A version bounds which RELEASE; only the
+  # checksum bounds which BYTES, which is the argument ee/content.py's lockfile already makes for
+  # collections. ONE pin shared by every EE variant that needs it, because two would drift.
+  # From https://dl.k8s.io/release/v{{.KUBECTL_VER}}/bin/linux/amd64/kubectl.sha256
+  KUBECTL_SHA256: "7721f265e18709862655affba5343e85e1980639395d5754473dafaadcaa69e3"
   # OpenTofu — charter §3 (OpenTofu over Terraform) and the network builder's toolchain
   # (ADR-0112/0145). Pinned on the CURRENT 1.12 line; N-1 is 1.11.x, so the module's
   # `required_version = ">= 1.8.0"` keeps both working (§1.7). sha256 from the release's
@@ -2007,6 +2013,88 @@ tasks:
       - "{{.KUBECTL}} --context {{.KIND_CONTEXT}} delete -f {{.ROOT_DIR}}/demos/app-cert/node.yaml --ignore-not-found 2>/dev/null || true"
       - "{{.KUBECTL}} --context {{.KIND_CONTEXT}} -n stratt delete secret app-node-creds app-node-authorized-keys --ignore-not-found 2>/dev/null || true"
 
+  demo:scale-fleet:stage:
+    desc: Stage the scale-fleet demo estate into the inline-declarations path
+    cmds:
+      - rm -rf {{.ROOT_DIR}}/deploy/charts/stratt/dev/declarations
+      - mkdir -p {{.ROOT_DIR}}/deploy/charts/stratt/dev/declarations
+      - cp -R {{.ROOT_DIR}}/demos/scale-fleet/estate/. {{.ROOT_DIR}}/deploy/charts/stratt/dev/declarations/
+      - task: demo:vendor-plugins
+        vars: { DEMO: scale-fleet, ESTATE: "{{.ROOT_DIR}}/demos/scale-fleet/estate" }
+
+  demo:scale-fleet:run:
+    desc: "Demo — change a 1 to a 3 and get two more machines, configured (demos/scale-fleet)"
+    deps: [tools:helm, tools:kubectl]
+    cmds:
+      - task: dev:kind:up
+      # A CLEAN FLOOR, FIRST, and this is not hygiene — it is the difference between a demo and a
+      # coincidence. This demo asserts EXACT counts: one build offered, then exactly two more. A
+      # floor that already holds `web-01` from another demo satisfies `count: 1` before this runs,
+      # so the first assertion reads 0 and the demo reports a failure that is really a leftover.
+      # Measured, not imagined: that is precisely what happened on the first live run.
+      #
+      # Deleting the namespace takes the in-cluster Postgres with it (values-allinone), so the
+      # graph starts empty — which is the only state in which "exactly two" means anything.
+      - task: demo:scale-fleet:down
+      - task: image:kind-load # strattd
+      - task: image:plugin
+        vars: { PLUGIN: kubecompute }
+      # THE KUBE EE, and it is not optional here. kubecompute observes `kubectl` as the transport of
+      # every host it builds (ADR-0156), so the converge runs over the kubernetes.core connection
+      # plugin — which the DEFAULT EE does not carry, and the shim refuses before the play runs
+      # rather than failing at connect time. Selecting it globally (ee.image.repository) is
+      # ADR-0117 D3's mechanism: no Actuator moves, and no Workflow learns a substrate.
+      - task: dev:ee-kube:build
+      # Built but never RUN by this demo. Admitting the ansible plugin's estate admits
+      # `ansible-certificate` with it, which declares this image — and a demo that skips building a
+      # declared image passes on a machine that happens to have it and fails on a fresh clone, two
+      # minutes in, with a dispatcher error. TestEveryDeclaredActuatorImageIsBuiltByATask is what
+      # refuses that trade.
+      - task: dev:ee-crypto:build
+      - task: dev:kubecompute:up
+      - task: demo:scale-fleet:stage
+      - |
+        set -eu
+        "{{.HELM}}" upgrade --install stratt {{.ROOT_DIR}}/deploy/charts/stratt \
+          --kube-context {{.KIND_CONTEXT}} -n stratt --create-namespace \
+          -f {{.ROOT_DIR}}/deploy/charts/stratt/values-allinone.yaml \
+          -f {{.ROOT_DIR}}/deploy/charts/stratt/values-demo-scale-fleet.yaml
+      # EVERY Deployment, and IN THIS ORDER, both halves learned the hard way.
+      #
+      # Waiting on deploy/stratt alone is how a floor goes green with a plugin still starting — the
+      # capstone's task says so in as many words, and this demo re-learned it on a cold floor: the
+      # build launched, the gate was approved, and the Run died with `no action registered as
+      # "kubecompute/create-host"` because the plugin was not yet serving when strattd came up.
+      #
+      # So: wait for every Deployment FIRST, then restart strattd so it boots against plugins that
+      # are already answering, then wait again. Restarting before the plugins are up just
+      # reproduces the race with extra steps.
+      - |
+        set -eu
+        for d in $("{{.KUBECTL}}" --context {{.KIND_CONTEXT}} -n stratt get deploy -o name); do
+          "{{.KUBECTL}}" --context {{.KIND_CONTEXT}} -n stratt rollout status "$d" --timeout=300s
+        done
+      - "{{.KUBECTL}} --context {{.KIND_CONTEXT}} -n stratt rollout restart deploy/stratt"
+      - "{{.KUBECTL}} --context {{.KIND_CONTEXT}} -n stratt rollout status deploy/stratt --timeout=300s"
+      - task: demo:scale-fleet:drive
+
+  demo:scale-fleet:drive:
+    internal: true
+    cmds:
+      # The runner owns its own port-forward (it restarts strattd twice and has to rebuild the
+      # tunnel each time), so this just hands it the coordinates.
+      - KUBECONTEXT={{.KIND_CONTEXT}} KUBECTL={{.KUBECTL}} HELM={{.HELM}} bash {{.ROOT_DIR}}/demos/scale-fleet/run.sh
+
+  demo:scale-fleet:down:
+    desc: Tear the scale-fleet demo down — including the graph, so the next run starts from nothing
+    cmds:
+      - "{{.HELM}} uninstall stratt --kube-context {{.KIND_CONTEXT}} -n stratt || true"
+      # BOTH namespaces, and the control-plane one matters most: values-allinone puts Postgres in
+      # it, so deleting it is what empties the graph. A demo that asserts exact counts cannot start
+      # on another demo's hosts.
+      - "{{.KUBECTL}} --context {{.KIND_CONTEXT}} delete ns stratt-hosts --ignore-not-found --timeout=120s"
+      - "{{.KUBECTL}} --context {{.KIND_CONTEXT}} delete ns stratt --ignore-not-found --timeout=180s"
+
   demo:region-to-cert:stage:
     # Stage the capstone's SELF-CONTAINED estate (ADR-0116 D1) into the inline-declarations path.
     #
@@ -2381,19 +2469,13 @@ tasks:
       # of the image definition. The declared collections are installed at BUILD time, the
       # resolved set is verified against the pins, and each artifact's SHA-256 is verified
       # against ee/content/crypto.requirements.lock.json (ee/content.py).
-      - docker build --build-arg GO_PARALLEL={{.GO_PARALLEL}} --build-arg EE_CONTENT=crypto.requirements.yml -f ee/Dockerfile -t stratt-ee-crypto:dev .
+      - docker build --build-arg GO_PARALLEL={{.GO_PARALLEL}} --build-arg EE_CONTENT=crypto.requirements.yml
+        --build-arg EE_KUBECTL_VERSION={{.KUBECTL_VER}} --build-arg EE_KUBECTL_SHA256={{.KUBECTL_SHA256}}
+        -f ee/Dockerfile -t stratt-ee-crypto:dev .
       - go run sigs.k8s.io/kind@v{{.KIND_VER}} load docker-image stratt-ee-crypto:dev --name {{.KIND_CLUSTER}}
 
   dev:ee-kube:build:
     desc: Build the kube-content EE variant (kubernetes.core + the kubectl binary, ADR-0156) and load it into kind
-    vars:
-      # The kubectl version is the REPO-WIDE KUBECTL_VER (already pinned within skew of the kind
-      # node, §1.7) — not a second copy. A divergent second pin is the shape this repo keeps
-      # paying for, and it would silently put a different kubectl in the EE than the one the
-      # tooling uses. Only the checksum is local, because only this build downloads the binary:
-      # a version bounds which RELEASE, the sha256 bounds which BYTES. Bump it with KUBECTL_VER,
-      # from https://dl.k8s.io/release/v<VER>/bin/linux/amd64/kubectl.sha256
-      KUBECTL_SHA: "7721f265e18709862655affba5343e85e1980639395d5754473dafaadcaa69e3"
     cmds:
       # The image that makes ADR-0156's `kubectl` transport usable. Without it the shim REFUSES
       # the transport before the play runs (D6) — correctly, since kubernetes.core is not in
@@ -2401,7 +2483,7 @@ tasks:
       #
       # This is the EE that lets a kubecompute pod be converged WITH NO sshd IN IT.
       - docker build --build-arg GO_PARALLEL={{.GO_PARALLEL}} --build-arg EE_CONTENT=kube.requirements.yml
-        --build-arg EE_KUBECTL_VERSION={{.KUBECTL_VER}} --build-arg EE_KUBECTL_SHA256={{.KUBECTL_SHA}}
+        --build-arg EE_KUBECTL_VERSION={{.KUBECTL_VER}} --build-arg EE_KUBECTL_SHA256={{.KUBECTL_SHA256}}
         -f ee/Dockerfile -t stratt-ee-kube:dev .
       - go run sigs.k8s.io/kind@v{{.KIND_VER}} load docker-image stratt-ee-kube:dev --name {{.KIND_CLUSTER}}
 

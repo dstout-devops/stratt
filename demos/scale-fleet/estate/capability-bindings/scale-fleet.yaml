@@ -1,0 +1,26 @@
+# THE ONE FILE IN THIS DEMO THAT NAMES A SUBSTRATE, and what stays still when this line changes is
+# the whole point of the demo. Every Intent, Blueprint, Assignment and View names a capability CLASS
+# and nothing else (ADR-0110, §1.5); the runner greps all of them for a substrate name and fails if
+# it finds one, because a portability claim nobody checks is a portability claim that rots.
+#
+# ONE ENTRY. This demo builds compute and nothing else — the question it answers is what happens
+# when a `count` changes, not how many kinds of thing an estate can hold.
+name: scale-fleet
+environments: [dev]
+entries:
+  # COMPUTE BUILDS ON KUBERNETES. Selected by a property the PROVIDERS declare (ADR-0151 D1), never
+  # by a provider name: change `kubernetes` to `aws` here and every Compute Intent in this scope
+  # resolves to the other landscape's builders, together, with nothing above this line moving.
+  #
+  # THAT IS THE SENTENCE THIS DEMO EXISTS TO MAKE CHECKABLE. The reference estate scopes the same
+  # web-fleet Intent to `dev` AND `vsphere-dc`, where it resolves to vsphere-vm-build instead —
+  # proven by demo:vsphere-only, not here, because one floor cannot hold a Kubernetes cluster and a
+  # vCenter at once. Its honest limit is ADR-0151 D4: this line moves the BUILDER, not
+  # provider-shaped `params` an Intent may be carrying (and this Intent deliberately carries none).
+  #
+  # SCOPED TO Compute even though this floor binds nothing else, so that admitting a second provider
+  # later cannot silently widen what this entry claims (§2.4 — a binding that grows by accident is a
+  # precedence rule nobody wrote).
+  - capability: provisioning
+    substrate: kubernetes
+    intentKind: Compute

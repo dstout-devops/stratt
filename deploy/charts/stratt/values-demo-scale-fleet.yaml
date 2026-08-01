@@ -1,0 +1,60 @@
+# values-demo-scale-fleet.yaml — the floor the scale-fleet demo runs on (ADR-0116).
+#
+# Layer on values-allinone.yaml (in-cluster Postgres/NATS/Temporal), so the whole thing stands up
+# from nothing in one kind cluster with no compose services.
+#
+# ONE PLUGIN POD. The demo builds compute and converges it, and `ansible` is not a pod: an ansible
+# Actuator runs on the EE-Job transport — a Kubernetes Job spawned per Run from a declared
+# execution-environment image — not as a long-lived plugin. Two transports beneath one sovereign
+# contract (§1.5), and the estate above them cannot tell which is which.
+
+declarations:
+  inline:
+    enabled: true
+    interval: "10s" # tighten the reconcile so a staged estate change goes live fast
+    maxPruneFraction: "1"
+
+environment: dev
+
+# THE EXECUTION ENVIRONMENT IS THE KUBE VARIANT, and it is load-bearing rather than a preference.
+#
+# kubecompute observes `kubectl` as the transport of every host it builds (ADR-0156 D1), so the
+# converge runs over the kubernetes.core connection plugin — which the DEFAULT EE does not carry.
+# The shim refuses the transport BEFORE the play runs when the collection or the `kubectl` binary is
+# missing (D6), so pointing this at stratt-ee:dev does not produce a subtle failure: it produces a
+# clear refusal naming what is absent.
+#
+# Selected GLOBALLY rather than per Actuator, which is the whole reason this works: no Actuator
+# declaration moves and no Workflow learns a substrate. The EE image is per-Run, so it must carry the
+# union of the transports its targets use — an operational fact of ADR-0156, stated here because it
+# is where an operator meets it.
+ee:
+  image:
+    repository: stratt-ee-kube
+    tag: dev
+    digest: ""
+
+plugins:
+  - name: kubecompute
+    image:
+      repository: stratt-plugin-kubecompute
+      tag: dev
+      digest: ""
+      pullPolicy: Never # kind-loaded (task image:plugin PLUGIN=kubecompute)
+    # Hosts are built into their OWN namespace, never beside the control plane. deployNamespace
+    # renders the Namespace plus a NAMESPACED Role+RoleBinding, so a compromised builder can create
+    # pods where hosts live and nowhere else.
+    deployNamespace: [stratt-hosts]
+    kubeAccess:
+      apiGroups: [""]
+      # `services` alongside `pods`: the build creates a Service per host, because that is what
+      # CAUSES the DNS name the Syncer projects as mgmt.address (ADR-0142 D4 — observed or caused,
+      # never computed). Without it the host is running and unaddressable, and the certificate leg
+      # has no subject to derive.
+      resources: ["pods", "services"]
+      verbs: ["get", "list", "watch", "create", "delete"]
+    hostEnv:
+      STRATT_KUBECOMPUTE_NAMESPACE: stratt-hosts
+    env:
+      STRATT_KUBECOMPUTE_NAMESPACE: stratt-hosts
+      STRATT_KUBECOMPUTE_IMAGE: alpine:3.22

@@ -1,0 +1,27 @@
+# Admitted plugin estates for the scale-fleet demo (ADR-0137 D1/D3).
+#
+# TWO PLUGINS, AND THE DEMO DECLARES NO ACTUATOR OF ITS OWN. Every provider, build Workflow and
+# converge recipe it drives is one a PLUGIN ships; what the demo contributes is the scenario —
+# an Intent, a Blueprint, an Assignment, a View and one capability-binding. That is the division of
+# labour ADR-0137 D1 describes, and what an adopter's own Git actually looks like.
+#
+# Copying those declarations in here instead would be the divergent-second-copy defect this repo
+# keeps paying for (awxsim's two halves; the `web-server` capability route; PRV-1's two
+# compute-build.yaml). The demo would pass against its own copy of a builder while the shipped one
+# rotted.
+plugins:
+  # The converge half: `ansible-apache` runs apache-configure against whatever the fleet View
+  # holds. Its content travels with it — an Actuator's contentDir is relative to the estate root
+  # that SHIPPED it.
+  #
+  # ADMITTING THE ESTATE ALSO ADMITS `ansible-certificate`, which this demo never runs but which
+  # declares the crypto EE image. `task demo:scale-fleet:run` therefore builds that image too, and
+  # that is not waste to be optimised away: TestEveryDeclaredActuatorImageIsBuiltByATask exists
+  # because a demo that skips it passes on a machine which happens to have the image and fails on a
+  # fresh clone with a dispatcher error two minutes into the run.
+  - name: ansible
+    path: ../../../plugins/ansible/estate
+  # The `provisioning` provider for Intent/Compute on the kubernetes substrate — the builder every
+  # `count` change in this demo resolves to.
+  - name: kubecompute
+    path: ../../../plugins/kubecompute/estate

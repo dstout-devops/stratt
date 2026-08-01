@@ -197,3 +197,38 @@ func TestUnreadableCoordinatesFailRatherThanDegrade(t *testing.T) {
 		t.Fatalf("unreadable coordinates must fail and name the target, got %v", err)
 	}
 }
+
+// THE CONSEQUENCE THAT IS NOT A FLAW, pinned so nobody rediscovers it in a demo run.
+//
+// The transport is per HOST; the EE IMAGE is per Actuator, and therefore per Run. So the image
+// a mixed-substrate Run uses must carry the UNION of the transports its targets need — one
+// image with kubernetes.core AND community.vmware AND amazon.aws, not three images.
+//
+// That is a real operational fact rather than a design defect: the gate names exactly which
+// piece is missing BEFORE anything runs, which is the difference between "build a wider EE" and
+// a connection error three hosts into a converge. Recorded here because it bit immediately —
+// kubecompute began observing `kubectl`, and every existing converge against its hosts would
+// have started failing on the default EE if the demos had not been repointed at the kube
+// variant (STRATT_EE_IMAGE, ADR-0117 D3's global default).
+func TestOneImageMustCarryEveryTransportItsRunUses(t *testing.T) {
+	mixed := []Target{
+		{Name: "pod", TransportKind: "kubectl", TransportCoordinates: []byte(`{"kind":"kubectl","namespace":"n","pod":"p"}`)},
+		{Name: "vm", TransportKind: "vmware_tools", TransportCoordinates: []byte(`{"kind":"vmware_tools","vmPath":"/DC0/vm/x"}`)},
+	}
+	// An image with only ONE of the two is refused, and the diagnosis names the one it lacks —
+	// not the one it has.
+	err := validateTransports(mixed, eeManifest("kubernetes.core"), anyBinary)
+	if err == nil {
+		t.Fatal("an image carrying one transport cannot serve a Run that uses two")
+	}
+	if !strings.Contains(err.Error(), "community.vmware") {
+		t.Errorf("the diagnosis must name the MISSING collection: %v", err)
+	}
+	if strings.Contains(err.Error(), "reached by kubectl") {
+		t.Errorf("…and not blame the one that is present: %v", err)
+	}
+	// The union satisfies it.
+	if err := validateTransports(mixed, eeManifest("kubernetes.core", "community.vmware"), anyBinary); err != nil {
+		t.Fatalf("an image carrying both must serve both: %v", err)
+	}
+}

@@ -27,6 +27,19 @@ collections:
   - name: community.crypto
     version: "2.22.3"
 
+  # kubernetes.core — NOT for its modules, but for its `kubectl` CONNECTION plugin (ADR-0156).
+  #
+  # THIS IS THE UNION RULE MEETING REALITY. The transport is a property of the TARGET, observed by
+  # the provider that built it; the EE image is per Actuator, and therefore per Run. So an image
+  # must carry every transport ITS targets use — and this variant's Actuator converges hosts that
+  # kubecompute built, which observe `kubectl`. Without this entry the shim refuses the run before
+  # the play starts (D6), correctly and uselessly.
+  #
+  # The `kubectl` BINARY comes with it, as a build arg on dev:ee-crypto:build: the connection plugin
+  # execs it, so the collection alone is not enough — the second axis ADR-0153 D7 did not have.
+  - name: kubernetes.core
+    version: "6.5.0"
+
   # ── THE PLATFORM FLOOR, repeated ─────────────────────────────────────────────────────
   # Everything below is ee/content/platform.requirements.yml, copied at the same versions.
   # `ee/content.py verify` (so `task ci`) fails if a variant drops or re-pins a floor entry.
