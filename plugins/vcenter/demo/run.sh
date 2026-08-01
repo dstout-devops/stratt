@@ -115,10 +115,18 @@ echo "  ${INSTANCE} now appears in the dev-vms View — the write is visible in 
 # projects what that guest reports as mgmt.address (ADR-0143) — an OBSERVED coordinate,
 # never one Stratt computed.
 echo "demo: awaiting the guest to report a reachability coordinate…"
-# 60s WAS THE BUDGET AND IT WAS TUNED ON ONE FAST WORKSTATION. The first CI run of e2e-live failed
-# here on a hosted runner: 4 vCPU, contended, every image pulled cold. A guest container that boots
-# in seconds locally has no such guarantee there, and the shortest wait in the suite is the one that
-# breaks first.
+# 60s WAS THE BUDGET, TUNED ON ONE FAST WORKSTATION — but slowness was NOT why this failed in CI,
+# and the first version of this comment said it was. The Entity dump below is what settled it: the
+# guest reported `toolsRunningStatus: guestToolsNotRunning`, meaning it never booted at all, so no
+# budget would ever have helped. The real cause was that every `.sh` in the repo was mode 100644 in
+# git — this devcontainer's bind mount reports `-rwxrwxrwx` on everything, so a missing exec bit is
+# unobservable here — and the guest image could not execute its own entrypoint. Fixing the modes
+# turned this demo green without touching the wait.
+#
+# The budget stays raised anyway, as honest insurance rather than as a fix: a hosted runner has 4
+# vCPU and pulls every image cold, and 60s was the shortest wait in the suite. It is NOT raised to
+# "long enough that it always passes" — that converts a real regression into a slow pass, which is
+# the failure this demo library was audited for.
 #
 # Raised to 150s — still bounded, still fatal. NOT raised to "long enough that it always passes":
 # that would convert a real regression into a slow pass, which is the failure this whole demo library
