@@ -115,8 +115,16 @@ echo "  ${INSTANCE} now appears in the dev-vms View — the write is visible in 
 # projects what that guest reports as mgmt.address (ADR-0143) — an OBSERVED coordinate,
 # never one Stratt computed.
 echo "demo: awaiting the guest to report a reachability coordinate…"
+# 60s WAS THE BUDGET AND IT WAS TUNED ON ONE FAST WORKSTATION. The first CI run of e2e-live failed
+# here on a hosted runner: 4 vCPU, contended, every image pulled cold. A guest container that boots
+# in seconds locally has no such guarantee there, and the shortest wait in the suite is the one that
+# breaks first.
+#
+# Raised to 150s — still bounded, still fatal. NOT raised to "long enough that it always passes":
+# that would convert a real regression into a slow pass, which is the failure this whole demo library
+# has been audited for. If the coordinate genuinely never arrives, this must still say so.
 addr=""
-for _ in $(seq 1 20); do
+for _ in $(seq 1 50); do
     addr=$(api GET "/entities/${entity_id}" 2>/dev/null |
         jq -r '.facets[]? | select(.namespace=="mgmt.address") | .value.address // empty' | head -1)
     [ -n "$addr" ] && break
@@ -127,7 +135,14 @@ done
 [ -n "$addr" ] || {
     echo "FAIL: ${INSTANCE} was built and observed but never reported a coordinate."
     echo "  vspheresim is running without a guest image, or the guest exited on boot."
-    echo "  check: docker compose -f deploy/dev/docker-compose.yml logs vspheresim"
+    # WHAT IT ACTUALLY SAW. Without this the message is a hypothesis: "no coordinate" reads the
+    # same whether the guest never booted, the Syncer never re-observed, or the Facet landed under
+    # a name this query does not match. On a CI runner nobody can attach to, the dump IS the
+    # diagnosis (§1.8).
+    echo "  the Entity as the API reports it:"
+    api GET "/entities/${entity_id}" 2>/dev/null |
+        jq -c '{kind: .entity.kind, facets: [.facets[]? | {ns: .namespace, value: .value}]}' 2>/dev/null |
+        sed 's/^/    /' || echo "    (the entity read failed too — the API may be unreachable)"
     exit 1
 }
 echo "  ${INSTANCE} is reachable at ${addr} — the built machine can be configured, not just listed"
