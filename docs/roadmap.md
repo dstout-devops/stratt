@@ -667,6 +667,76 @@ strictly worse than not offering cancel. A 404 from the mux says "not offered" �
 wrong (§1.8). **The real gap is native:** a terminal-status writer in `RunDAG`, with the façade route
 following it. Cancelling a Run (single-Step) already works and is unaffected.
 
+### Open follow-ups from the `fix/seam-continuity-and-fidelity` branch (2026-08-01)
+
+Everything this branch deliberately did NOT finish, in one place, so none of it survives only in a
+session's memory. Each line says what is blocked on what — several are blocked on a **target we do
+not have**, which is a different thing from unfinished work and is marked as such.
+
+**Owed verification (the highest-value items — code that exists and has not been proven):**
+
+- **ADR-0157 Phases 3–5 · WorkflowRun cancellation.** Phase 1 (the `ParentClosePolicy` fix) and
+  Phase 2 (the ADR) shipped. Still to do: the native `POST /api/v1/workflow-runs/{id}/cancel` door,
+  the `/api/v2/workflow_jobs/{id}/cancel/` façade route that was withheld in `1d7ffc0` for exactly
+  this reason, and the **live proof** — cancel a multi-Step DAG mid-Step on kind and assert the
+  WorkflowRun is `canceled`, the child Run is `canceled`, and **the K8s Job is gone**. Only the
+  third distinguishes a real cancel from bookkeeping.
+- **`aws_ssm` has no writer** (ADR-0156). The shim supports the transport; nothing produces it. The
+  awsec2 Syncer can honestly observe neither EC2 path — `KeyName` means a key is AUTHORIZED, not
+  that sshd is listening — so this needs the SSM client and an `ssm:DescribeInstanceInformation`
+  permission. **The SSM client and the transport land together or not at all**, since a Facet has no
+  other writer.
+- **`vmware_tools` is shipped and unit-tested only** (ADR-0156). vspheresim implements the vCenter
+  API but not Tools guest operations, so proving it needs **a real vCenter with a Tools-running
+  guest**. Blocked on a target, not on design.
+- **A live network-device run** (ADR-0153). The collection half is done and image-verified both
+  ways; no real device has been driven. Needs an FRR or cEOS container in CI.
+- **Windows (`winrm`/`psrp`)** (ADR-0153 D1). Blocked on a verifiable target ONLY — and note the
+  plugins are in ansible-core, so no EE variant is needed. It is one enum entry plus a credential
+  form that already exists.
+- **`params-ignored` RunEvent publish** (`6e114fc`). The log half is tested; the publish half is not,
+  because `Activities.Bus` is a concrete `*events.Bus` and no shipped Intent declares `params`.
+- **E2E-1's `e2e:live` CI job.** Deliberately not added blind: a scheduled gate that cannot be made
+  to fire from a dev session is an unverifiable gate, which is the shape this branch spent its
+  length closing.
+
+**Found by running things, and booked rather than fixed:**
+
+- **`kubecompute` advertises `provisions` but not `decommissions`.** It ships a build Workflow and no
+  teardown Workflow, so an `Intent/Compute` count-DOWN offers nothing on the kubernetes substrate.
+  vcenter has one (`vsphere-vm-teardown`, ADR-0114 D4), so the same edit against `vsphere-dc` would
+  surface gated teardowns. Found by `demo:scale-fleet`, whose leg D reports this rather than
+  asserting a number nobody measured.
+- **`kubecompute` still bakes sshd into every pod it builds.** ADR-0156 makes that coupling
+  removable — the kubectl transport needs nothing in the guest — and it was left in deliberately so
+  the transport change and the pod change are not one variable.
+- **Cross-Cell cancel is unmeasured** (ADR-0157 D6). The ADR does not claim the Gate-decision path
+  federates correctly; that needs a two-Cell floor. Until measured, a peer-homed cancel must fail
+  naming the reason rather than signal the local Temporal.
+
+**Owed reviews (this session's rules barred the subagents):**
+
+- **`charter-guardian` and `vocabulary-linter` on ADR-0150, 0153, 0154, 0155, 0156 and 0157.** Five
+  of those add a Facet namespace or a Contract version; ADR-0150 names two reviews as gating in its
+  own text. A steward must run them.
+- **ADR-0152 stays GATED** on the steward decision it asks for (the §2.1/§2.4 amendment), and its
+  CONTRACT half must land in a LATER release than the expand half (ADR-0078).
+
+**Still open from the plan, unchanged by this branch:**
+
+- **W6 residue** — ANS-013 (pre-flight syntax check), ANS-009 (multi-document playbooks), AWX-015
+  (`ask_*_on_launch` beyond variables; attaching a credential or inventory at launch is deliberately
+  refused today, and that is a desired-state question rather than a missing endpoint).
+- **AWX-005 is DECLINED, not pending** (ADR-0130 D3), and the distinction matters: a projected grant
+  graph is one query from being used as an authorization truth, which no read-shape fix answers.
+  "We looked and said no" must not render the same as "nobody looked".
+- **A cross-plugin composed Workflow still has no shippable home** — every estate hand-copies
+  `cert-issue`. Needs a composition pack (ADR-0033's materialize-into-operator-Git shape).
+- **ADR-0080 slice 2** — `software.package` has a bootstrap write-owner, not the Syncer collector.
+- **`scm_revision` comparison** (ADR-0154 D2) — needs the content half to observe its own git
+  checkout first.
+- **W7** — Automation Hub class, EDA rulebook depth, mesh multi-hop, gateway edges.
+
 > **Note on scope.** The phase tables above cite ADRs through ~0054 (the phase + dark-matter work). Later
 > ADRs (0055–0091) extend the platform beyond the original phase plan — observability/OTel, API admission
 > PEPs, in-place adopt + standing cutover reconciler, new estate dimensions (identity/software/service), and

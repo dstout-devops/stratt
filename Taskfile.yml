@@ -2126,6 +2126,17 @@ tasks:
     deps: [tools:helm, tools:kubectl]
     cmds:
       - task: dev:kind:up
+      # A CLEAN FLOOR FIRST, and `:down` below already explains why in detail: this demo drives four
+      # Findings that exist BECAUSE something is missing, and every one closes permanently. Running
+      # against a floor that still holds built state produces no build Finding and the runner fails
+      # with "no provisioning Finding ever opened" — which reads as a broken demo rather than an
+      # already-converged estate.
+      #
+      # That reasoning was written down and the reset was left for the operator to remember. It is
+      # called here now because it was measured failing: a `demo:scale-fleet` run left hosts
+      # correlated to the SAME `web-fleet` Intent, and this demo then reported a build that never
+      # opened. A precondition a runner needs is a precondition the runner should establish.
+      - task: demo:region-to-cert:down
       - task: image:kind-load # strattd
       # The five plugin pods values-demo-region-to-cert.yaml declares. A declared pod whose image
       # nobody built sits in ImagePullBackOff behind a passing floor check (`pullPolicy: Never` has
