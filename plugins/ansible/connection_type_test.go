@@ -374,3 +374,71 @@ func TestPresenceIsTheQuestionNotTheVersion(t *testing.T) {
 		t.Error("an empty install set must read as `none`, not as a truncated message")
 	}
 }
+
+// ── §2.5 · the inventory carries PATHS, never MATERIAL ───────────────────────────────────
+//
+// WHY THIS EXISTS, and why the older name-based check beside it is not enough. The shim now
+// EMITS the rendered inventory as a Run-scoped TaskEvent (§1.8: four different causes all print
+// ansible's identical `unreachable`, and the inventory is the one artifact that tells them
+// apart). That publishes the string to the Run event stream — a second distribution channel on
+// top of inventory/hosts at 0644 beside the artifacts.
+//
+// Emitting it is safe ONLY because every credential in it is a path, which is ADR-0153 D3's
+// design and was, until this test, an ASSUMPTION rather than a checked property.
+// TestPasswordsAreFilePathsAndNeverValues guards it by inspecting var NAMES for "pass" — a
+// heuristic that `ansible_kubectl_kubeconfig` passes trivially while carrying whatever it likes.
+// A name tells you nothing about a value.
+//
+// So: give every credential file CONTENT that is unmistakable, render, and assert the content
+// never appears. That is the property §2.5 actually states — "material never persists" — rather
+// than a proxy for it.
+func TestInventoryCarriesCredentialPathsAndNeverMaterial(t *testing.T) {
+	const material = "SUPER-SECRET-MATERIAL-THAT-MUST-NEVER-RENDER"
+
+	// A mount that injects exactly one file per ref, and a reader that returns MATERIAL for any
+	// credential file — so anything that inlines a credential instead of pointing at it shows up.
+	oneFile := func(string) ([]string, error) { return []string{"f"}, nil }
+	leaky := func(path string) ([]byte, error) {
+		if strings.HasPrefix(path, credentialsMount) {
+			return []byte(material), nil
+		}
+		return noEE(path)
+	}
+
+	vars, err := connectionVars(&connectionParams{
+		User:          "root",
+		CredentialRef: "web-machine",                                         // ssh key
+		PasswordRef:   &passwordRef{CredentialRef: "device-pw"},              // login password
+		KubeconfigRef: &fileCredentialRef{CredentialRef: "hosts-kubeconfig"}, // the kubectl reach credential
+	}, nil, "/runner/known_hosts", false, oneFile, leaky, fakeStage)
+	if err != nil {
+		t.Fatalf("connectionVars: %v", err)
+	}
+
+	// The kubeconfig renders, and renders as its MOUNT PATH.
+	kc, ok := vars["ansible_kubectl_kubeconfig"]
+	if !ok {
+		t.Fatal("a declared kubeconfigRef must render — without it a kubectl-transported target " +
+			"reaches the API server with no credential and fails as an unreachable HOST")
+	}
+	if !strings.HasPrefix(kc, credentialsMount+"/hosts-kubeconfig/") {
+		t.Errorf("ansible_kubectl_kubeconfig = %q, want a path under the credential mount", kc)
+	}
+
+	// THE ASSERTION. Every rendered value, and the whole inventory built from them.
+	inv := renderInventory([]Target{{
+		Name: "web-01", Address: "web-01.stratt-hosts.svc.cluster.local",
+		TransportKind:        "kubectl",
+		TransportCoordinates: []byte(`{"kind":"kubectl","namespace":"stratt-hosts","pod":"web-01"}`),
+	}}, vars)
+	if strings.Contains(inv, material) {
+		t.Fatalf("the rendered inventory carries credential MATERIAL — it is written to "+
+			"inventory/hosts at 0644 beside the Run's artifacts AND emitted as a Run event "+
+			"(§2.5: material never persists in the platform):\n%s", inv)
+	}
+	for k, v := range vars {
+		if strings.Contains(v, material) {
+			t.Errorf("connection var %q carries material rather than a path", k)
+		}
+	}
+}

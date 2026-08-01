@@ -170,7 +170,9 @@ Workflow → Run → task event. One click per level, all the way down (§1.8).
 
 ## What is real here
 
-**Real:** the pod, its sshd, the SSH connection, `become`, Apache serving off the wire, the RSA key
+**Real:** the pod, the `kubectl exec` connection its provider OBSERVED and the shim reached it by —
+authenticated with a brokered kubeconfig scoped to `pods/exec` in this one namespace, never an
+ambient cluster token (ADR-0156 D4a) — `become`, Apache serving off the wire, the RSA key
 generated on the target, the CSR, the X.509 certificate signed by OpenBao's PKI and read back off the
 delivered file. Real Temporal orchestration — each Workflow is declarative YAML compiled to a
 Temporal DAG, each Step an activity, and an approval gate a durable signal wait, which is why a gate
@@ -196,7 +198,7 @@ divergent-second-copy defect this repo keeps paying for — the demo would pass 
 a builder while the shipped one rotted.
 
 Building it found that a plugin's estate was **not admittable standalone** — `plugins/ansible/estate`
-shipped four Workflows and two Triggers that named the *reference* estate's environment, Views and
+shipped four Workflows and two Triggers that named the _reference_ estate's environment, Views and
 Facet namespaces, so any other estate admitting the plugin had to mirror all of them first. That is
 the opposite of what admission is for, and it is why [app-cert](../app-cert/README.md) admits ansible
 `contractsOnly`.

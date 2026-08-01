@@ -118,6 +118,63 @@ trap 'kill "$PF_PID" 2>/dev/null || true' EXIT
 for _ in $(seq 1 60); do curl -fsS "${ROOT}/healthz" >/dev/null 2>&1 && break; sleep 1; done
 curl -fsS "${ROOT}/healthz" >/dev/null 2>&1 || fail "strattd never became reachable on ${ROOT}"
 
+# ── PREFLIGHT · wait for the DISPATCH TABLE, not for the pods ────────────────────────────────────
+#
+# MEASURED FAILURE, and the fifth of this class on this branch: the run task waits for every
+# Deployment to roll out, restarts strattd, waits for it Ready — and then this script launched a
+# build that died with `no action registered as "opentofu/apply"` AFTER its gate was approved.
+#
+# The wait was not wrong, it was measuring the wrong thing. `rollout status` returns when the
+# READINESS PROBE passes, which is an HTTP handler; Action availability is two reconcile cadences
+# further on. From a cold floor, in strattd's own log:
+#
+#   03:18:05.103  opentofu-network  PENDING  "no verified provider for 'statestore':
+#                                             1 declared but failed/pending verification"
+#   03:18:05.152  s3-statestore     enabled  [awss3/statestore-resolve …]
+#   03:18:15.158  opentofu-network  enabled  [opentofu/apply]        ← +10s, next reconcile
+#
+# Nothing is broken there. `opentofu-network` declares `requires: [statestore, ipam]`, and the
+# registry fails CLOSED on an unverified capability rather than dispatching without the S3 backend
+# and the allocated CIDR (ADR-0104 D3) — while provider verification is a separate leader cadence
+# whose row has to be PERSISTED before the next actuator reconcile can read it. So on a cold floor
+# the Actions of every `requires:`-bearing Actuator arrive strictly later than the pod serving them,
+# and a demo that starts at Ready races them.
+#
+# The signal the demo depends on is therefore `status.enabled` on the Actuator itself — the §1.8
+# descent surface built for exactly this question, already used this way by demos/app-cert. Gate on
+# it, and report the registry's own pending REASON on timeout: it names the unmet capability, which
+# turns a mystery ("the action does not exist") into a diagnosis ("its statestore never verified").
+await_actuator() { # await_actuator NAME
+    # `body`, not `status` — the obvious name for this is a READ-ONLY special variable in zsh, and
+    # the by-hand walk in the README gets pasted into whatever shell the reader has.
+    local name="$1" body enabled reason
+    for _ in $(seq 1 60); do
+        body="$(api GET "/actuators/${name}" 2>/dev/null || true)"
+        enabled="$(printf '%s' "$body" | jq -r '.status.enabled // false' 2>/dev/null || echo false)"
+        [ "$enabled" = "true" ] && return 0
+        sleep 2
+    done
+    # jq's `//` does NOT cover this: on an EMPTY body (the Actuator 404s — it was never admitted to
+    # the estate at all) jq emits nothing and exits 0, so the default never fires and the message
+    # ended with "reason:" and a blank. Measured. Distinguish the two, because they are different
+    # diagnoses: a pending Actuator names its unmet capability, an absent one is a staging failure.
+    reason="$(printf '%s' "$body" | jq -r '.status.error // "enabled=false and no error reported"' 2>/dev/null)"
+    [ -n "$reason" ] || reason="the API returned nothing for this Actuator — it is not in the estate
+        at all, so check that demo:region-to-cert:stage ran and vendored the plugin's declarations"
+    fail "Actuator ${name} never reached status.enabled=true — so the Actions it declares are not in
+      the dispatch table and any Step naming one dies after its gate. The registry's reason:
+        ${reason}"
+}
+# Only the Actuators whose ACTIONS this demo dispatches, because a withheld Actuator IS a missing
+# Action. opentofu-network is the one that actually races (it is the only one here with a
+# `requires:`); the other two are asserted because they are the legs the demo cannot report on
+# without, and an already-enabled Actuator makes this a single cheap GET.
+echo "demo: awaiting the Actuators whose Actions this run dispatches"
+for act in opentofu-network kubecompute cert-issuer; do
+    await_actuator "$act"
+    echo "  ${act} enabled"
+done
+
 # ── shared helpers ───────────────────────────────────────────────────────────────────────────────
 
 # await_finding BASELINE-SUBSTRING [TRIES] → echoes the Finding id
@@ -331,6 +388,33 @@ case "$addr" in
 esac
 
 host_pod="${addr%%.*}"
+
+# ── …and the reach METHOD, which arrives LATER than the address (ADR-0156) ───────────────────────
+#
+# THE RACE THIS CLOSES, measured rather than assumed. The two facts have different writers: the
+# BUILD's terminal projection carries mgmt.address, and the Syncer's next Observe of the running pod
+# carries mgmt.transport. Waiting only on the address therefore lets the converge start in the window
+# where the host is addressable and its reach method is not yet known — the shim renders no kubectl
+# vars, silently falls back to ssh, and the Run dies `unreachable`.
+#
+# Measured on this demo: the converge ran at 13:51:03 and the transport landed at 13:52:56. Nearly
+# two minutes, and it looked exactly like the credential bug it was standing behind.
+#
+# So this waits for the fact the next leg actually depends on. It is also the assertion that makes
+# this demo's kubectl claim real: `demos/scale-fleet` observes the transport and converges nothing,
+# so the converge BELOW is the repo's only proof that the observed method is one Stratt can reach by.
+echo "demo: awaiting the reach METHOD the provider observed (it lands after the address)"
+transport=""
+for _ in $(seq 1 60); do
+    transport="$(facet "$host_id" mgmt.transport | jq -r '.value.kind // empty')"
+    [ -n "$transport" ] && break
+    sleep 4
+done
+[ "$transport" = "kubectl" ] || fail "expected an observed kubectl transport on ${host_id}, got
+      '${transport:-none}'. The converge would fall back to ssh — which is the coupling ADR-0156
+      exists to remove, and it must not pass silently."
+echo "  mgmt.transport=${transport} — the converge below reaches the pod through the API server,"
+echo "    with a brokered kubeconfig, and never touches port 22"
 
 # ── LEG 3: the app ───────────────────────────────────────────────────────────────────────────────
 echo "demo: awaiting the app drift Finding (a host with no app.config is desired state ABSENT)"

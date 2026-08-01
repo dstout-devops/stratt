@@ -49,15 +49,18 @@ for _ in $(seq 1 30); do curl -fsS "${ROOT}/healthz" >/dev/null 2>&1 && break; s
 # stratt-helm + registers helm/deploy on its cadence (ADR-0103, no restart). GET /actuators lists
 # DECLARED actuators immediately, but the deploy Step needs it REGISTERED — /actuators/{name}
 # reports the live registry status (§1.8), so gate on status.enabled to avoid the launch race.
-echo "demo: awaiting helm/deploy Actuator registration (status.enabled)…"
-enabled=""
-for _ in $(seq 1 45); do
-    enabled=$(api GET "/actuators/helm" 2>/dev/null | jq -r '.status.enabled // false')
-    [ "$enabled" = "true" ] && break
-    sleep 2
-done
-[ "$enabled" = "true" ] || { echo "FAIL: helm Actuator never reached status.enabled=true"; exit 1; }
-echo "  helm Actuator registered (helm/deploy dispatchable)"
+# THE ACTUATOR WAIT LIVES IN THE TASKFILE NOW (`dev:await-actuators`), run before this script.
+#
+# The private loop that stood here KILLED THE RUN SILENTLY. Under `set -euo pipefail`,
+# `enabled=$(api GET ... | jq ...)` makes a single transient API read fatal: `api` is `curl -fsS`,
+# so one blip in the port-forward failed the pipeline, failed the assignment, and exited the whole
+# script — before its own timeout, so its FAIL message never printed. `task e2e:live` caught exactly
+# that: the log ends at "awaiting…" and nothing follows. A demo that dies with no diagnosis is worse
+# than one that fails loudly (§1.8).
+#
+# The shared task tolerates a failed read (it is a POLL — an error is not an observation), waits for
+# EVERY declared Actuator rather than one name, and on timeout prints the registry's own pending
+# reason. It also retires the third copy of this loop.
 
 echo "demo: launch Workflow ${WORKFLOW} as ${PRINCIPAL}"
 run_id=$(api POST "/workflows/${WORKFLOW}/runs" | jq -r '.id')
@@ -89,6 +92,25 @@ done
 
 echo "demo: assert the real ${RELEASE} Deployment is Ready in ns/${DEMO_NS}"
 kc -n "$DEMO_NS" rollout status "deploy/${RELEASE}" --timeout=120s
+
+# …AND IT SERVES. Ready is a kubelet probe verdict about a container, not evidence that the thing
+# you declared answers anything — and this README says "what you deploy, you can `curl`" and
+# promises "a real workload at the end".
+#
+# It was the only demo in the library not verifying its own end artifact: vcenter asserts the guest's
+# reachability coordinate, app-cert reads TLS off the wire, region-to-cert wgets Apache and parses
+# the delivered certificate, scale-fleet reads back the app.config each Run wrote, ec2-only asserts
+# the instance into its View. Added 2026-08-01 during the narration audit, so the claim and the check
+# are the same statement.
+#
+# Read from INSIDE the cluster, through the Service — which exercises the Service the chart rendered
+# rather than only the pod, and needs no port-forward to race.
+echo "demo: assert the deployed workload actually serves, through its Service"
+kc -n "$DEMO_NS" run "curl-${RELEASE}-$$" --rm -i --restart=Never --quiet \
+    --image=curlimages/curl:8.11.1 --command -- \
+    curl -fsS -m 10 -o /dev/null "http://${RELEASE}.${DEMO_NS}.svc.cluster.local/" \
+    || { echo "FAIL: ${RELEASE} is Ready but served nothing on its Service — Ready is a probe verdict, not an answer"; exit 1; }
+echo "  http://${RELEASE}.${DEMO_NS}.svc.cluster.local/ answered — the workload you declared is serving"
 kc -n "$DEMO_NS" get deploy,svc -l "app.kubernetes.io/name=${RELEASE}"
 
 echo

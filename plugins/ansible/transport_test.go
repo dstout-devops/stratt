@@ -68,7 +68,7 @@ func TestIncompleteCoordinatesFailTheRun(t *testing.T) {
 	for name, doc := range cases {
 		kind := strings.SplitN(doc[9:], `"`, 2)[0]
 		err := validateTransports([]Target{{Name: "h", TransportKind: kind,
-			TransportCoordinates: []byte(doc)}}, eeManifest("kubernetes.core", "community.vmware", "amazon.aws"), anyBinary)
+			TransportCoordinates: []byte(doc)}}, nil, eeManifest("kubernetes.core", "community.vmware", "amazon.aws"), anyBinary)
 		if err == nil {
 			t.Errorf("%s must fail the run", name)
 		} else if !strings.Contains(err.Error(), "h") {
@@ -82,7 +82,7 @@ func TestIncompleteCoordinatesFailTheRun(t *testing.T) {
 // than on the projection that named a method nobody implements (§1.8).
 func TestUnknownTransportFailsRatherThanFallingBackToSSH(t *testing.T) {
 	err := validateTransports([]Target{{Name: "web-01", TransportKind: "winrm",
-		TransportCoordinates: []byte(`{"kind":"winrm"}`)}}, eeManifest(), anyBinary)
+		TransportCoordinates: []byte(`{"kind":"winrm"}`)}}, nil, eeManifest(), anyBinary)
 	if err == nil {
 		t.Fatal("an unimplemented transport must fail the run")
 	}
@@ -100,7 +100,7 @@ func TestUnknownTransportFailsRatherThanFallingBackToSSH(t *testing.T) {
 func TestTransportNeedingAnAbsentCollectionIsRefused(t *testing.T) {
 	err := validateTransports([]Target{{Name: "web-01", TransportKind: "kubectl",
 		TransportCoordinates: []byte(`{"kind":"kubectl","namespace":"n","pod":"p"}`)}},
-		eeManifest("community.general"), anyBinary)
+		nil, eeManifest("community.general"), anyBinary)
 	if err == nil {
 		t.Fatal("an ordinary EE ships neither kubernetes.core nor kubectl")
 	}
@@ -117,7 +117,7 @@ func TestTransportNeedingAnAbsentCollectionIsRefused(t *testing.T) {
 func TestCollectionPresentButBinaryMissingIsStillRefused(t *testing.T) {
 	err := validateTransports([]Target{{Name: "web-01", TransportKind: "kubectl",
 		TransportCoordinates: []byte(`{"kind":"kubectl","namespace":"n","pod":"p"}`)}},
-		eeManifest("kubernetes.core"), noBinary)
+		nil, eeManifest("kubernetes.core"), noBinary)
 	if err == nil {
 		t.Fatal("kubernetes.core alone does not make kubectl work — the plugin execs the binary")
 	}
@@ -131,7 +131,7 @@ func TestCollectionPresentButBinaryMissingIsStillRefused(t *testing.T) {
 func TestVMwareToolsNeedsNoBinary(t *testing.T) {
 	if err := validateTransports([]Target{{Name: "vm", TransportKind: "vmware_tools",
 		TransportCoordinates: []byte(`{"kind":"vmware_tools","vmPath":"/DC0/vm/x"}`)}},
-		eeManifest("community.vmware"), noBinary); err != nil {
+		nil, eeManifest("community.vmware"), noBinary); err != nil {
 		t.Fatalf("vmware_tools is a python library, not an exec: %v", err)
 	}
 }
@@ -147,7 +147,7 @@ func TestSSHAndAbsentTransportNeverConsultTheImage(t *testing.T) {
 	if err := validateTransports([]Target{
 		{Name: "a", Address: "10.0.0.1"},
 		{Name: "b", Address: "10.0.0.2", TransportKind: "ssh", TransportCoordinates: []byte(`{"kind":"ssh"}`)},
-	}, exploded, noBinary); err != nil {
+	}, nil, exploded, noBinary); err != nil {
 		t.Fatalf("ssh needs nothing from the image: %v", err)
 	}
 }
@@ -192,7 +192,7 @@ func TestNetworkDeviceWithNoObservedTransportIsFine(t *testing.T) {
 // pinned schema — schema drift, which §1.5 makes blocking rather than something to degrade past.
 func TestUnreadableCoordinatesFailRatherThanDegrade(t *testing.T) {
 	err := validateTransports([]Target{{Name: "web-01", TransportKind: "kubectl",
-		TransportCoordinates: []byte(`{not json`)}}, eeManifest("kubernetes.core"), anyBinary)
+		TransportCoordinates: []byte(`{not json`)}}, nil, eeManifest("kubernetes.core"), anyBinary)
 	if err == nil || !strings.Contains(err.Error(), "web-01") {
 		t.Fatalf("unreadable coordinates must fail and name the target, got %v", err)
 	}
@@ -217,7 +217,7 @@ func TestOneImageMustCarryEveryTransportItsRunUses(t *testing.T) {
 	}
 	// An image with only ONE of the two is refused, and the diagnosis names the one it lacks —
 	// not the one it has.
-	err := validateTransports(mixed, eeManifest("kubernetes.core"), anyBinary)
+	err := validateTransports(mixed, nil, eeManifest("kubernetes.core"), anyBinary)
 	if err == nil {
 		t.Fatal("an image carrying one transport cannot serve a Run that uses two")
 	}
@@ -228,7 +228,82 @@ func TestOneImageMustCarryEveryTransportItsRunUses(t *testing.T) {
 		t.Errorf("…and not blame the one that is present: %v", err)
 	}
 	// The union satisfies it.
-	if err := validateTransports(mixed, eeManifest("kubernetes.core", "community.vmware"), anyBinary); err != nil {
+	if err := validateTransports(mixed, kubeconfigDeclared(), eeManifest("kubernetes.core", "community.vmware"), anyBinary); err != nil {
 		t.Fatalf("an image carrying both must serve both: %v", err)
+	}
+}
+
+// ── D4 · the REACH CREDENTIAL, the third axis ────────────────────────────────────────────
+//
+// The axis that was missing, and its absence cost a full capstone run. The two content checks
+// above both PASSED for kubectl — the EE had kubernetes.core and a kubectl binary — so nothing
+// refused, and the Run died at connect time with
+//
+//	runner_on_unreachable: Failed to create temporary directory … you may have been able to
+//	authenticate and did not have permissions on the target directory
+//
+// which names the GUEST's filesystem for a failure that was entirely on the control node: the
+// execution pod holds no cluster identity (AutomountServiceAccountToken: false, by design), so
+// the API server refused the exec. §1.8 forbids exactly that — the abstraction hid the diagnosis.
+
+// kubeconfigDeclared is a Step that brokered a reach credential.
+func kubeconfigDeclared() *connectionParams {
+	return &connectionParams{KubeconfigRef: &fileCredentialRef{CredentialRef: "hosts-kubeconfig"}}
+}
+
+func TestKubectlWithoutABrokeredKubeconfigIsRefused(t *testing.T) {
+	target := []Target{{Name: "web-01", TransportKind: "kubectl",
+		TransportCoordinates: []byte(`{"kind":"kubectl","namespace":"stratt-hosts","pod":"web-01"}`)}}
+
+	// A fully-equipped image is NOT enough: this is a declaration gap, not an image gap, and
+	// proving it against an image that satisfies both content axes is what makes that distinct.
+	err := validateTransports(target, nil, eeManifest("kubernetes.core"), anyBinary)
+	if err == nil {
+		t.Fatal("a kubectl transport with no brokered kubeconfig must refuse BEFORE the run — " +
+			"otherwise the API server denies the exec and ansible blames the target")
+	}
+	// The diagnosis has to carry the fix and the reason, because the failure it replaces was
+	// actively misleading about which side of the connection was at fault.
+	for _, want := range []string{"kubeconfigRef", "kubectl", "cluster identity"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("missing %q in the diagnosis: %v", want, err)
+		}
+	}
+
+	// …and the same target with a credential passes.
+	if err := validateTransports(target, kubeconfigDeclared(), eeManifest("kubernetes.core"), anyBinary); err != nil {
+		t.Fatalf("a brokered kubeconfig is exactly what this transport needs: %v", err)
+	}
+}
+
+// An EMPTY credentialRef is not a credential. Without this the guard passes on
+// `kubeconfigRef: {credentialRef: ""}` — a declaration that looks deliberate and brokers nothing.
+func TestEmptyKubeconfigRefIsNotACredential(t *testing.T) {
+	if err := validateTransports([]Target{{Name: "web-01", TransportKind: "kubectl",
+		TransportCoordinates: []byte(`{"kind":"kubectl","namespace":"n","pod":"p"}`)}},
+		&connectionParams{KubeconfigRef: &fileCredentialRef{}}, eeManifest("kubernetes.core"), anyBinary); err == nil {
+		t.Fatal("an empty credentialRef brokers nothing and must refuse")
+	}
+}
+
+// The credential is demanded ONLY by the transport that needs it. ssh, vmware_tools and aws_ssm
+// carry their own credentials by their own routes (ADR-0156 D4), and demanding a kubeconfig of
+// them would refuse every converge that has ever worked.
+func TestOnlyKubectlDemandsAKubeconfig(t *testing.T) {
+	for _, tc := range []struct{ name, kind, coords, collection string }{
+		{"ssh", "ssh", `{"kind":"ssh"}`, ""},
+		{"vmware_tools", "vmware_tools", `{"kind":"vmware_tools","vmPath":"/DC0/vm/x"}`, "community.vmware"},
+		{"aws_ssm", "aws_ssm", `{"kind":"aws_ssm","instanceId":"i-0abc","region":"us-east-1"}`, "amazon.aws"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cols := []string{}
+			if tc.collection != "" {
+				cols = append(cols, tc.collection)
+			}
+			if err := validateTransports([]Target{{Name: "h", TransportKind: tc.kind,
+				TransportCoordinates: []byte(tc.coords)}}, nil, eeManifest(cols...), anyBinary); err != nil {
+				t.Fatalf("%s must not be made to declare a kubeconfig: %v", tc.name, err)
+			}
+		})
 	}
 }

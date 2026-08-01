@@ -1,0 +1,156 @@
+# Stratt E2E-1 — the LIVE gate.
+#
+# `task ci` runs no demo. Every "live-proven" claim in this repo is therefore backed by a task a
+# human remembered to invoke, which makes each one evidence of THE DAY IT LAST RAN rather than of
+# now. That gap is not hypothetical and it is not cheap:
+#
+#   · the vsphere demo stayed broken for weeks after ADR-0103 moved vcenter's Actions;
+#   · docs/parity carried a 🟢 LIVE-PROVEN for a transport that could not authenticate at all;
+#   · demos/scale-fleet claimed a converge it never ran, hiding the defect above.
+#
+# Every one of those is the same shape: a claim nobody re-checks. This workflow is the re-check.
+#
+# WHY NOT ON EVERY PR. One demo stands up a kind cluster, six plugin pods, three execution-environment
+# images and up to six backing services. That is minutes of wall clock and gigabytes of disk per
+# demo — a per-PR gate would be slower than the change it guards and would still not catch a
+# regression introduced by a dependency rather than a diff. Nightly plus every release tag is where
+# the signal is, and `workflow_dispatch` covers "I want to know right now".
+#
+# Supply-chain discipline (§7.3): every action pinned to a commit digest, never a floating tag —
+# same digests as ci.yml, bumped on the same quarterly train.
+
+name: E2E live
+
+on:
+  schedule:
+    # Nightly. Offset off the hour: a scheduled job on :00 competes with everybody else's.
+    - cron: "17 3 * * *"
+  push:
+    # The pre-release half of E2E-1. A tag is the last moment a broken demo is cheap to find.
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      demo:
+        description: "One demo to run (blank = the whole suite from `task e2e:list`)"
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: e2e-live-${{ github.ref }}
+  # NOT cancel-in-progress. A nightly that is half-finished still carries real information, and
+  # cancelling it to start another tells you nothing about either.
+  cancel-in-progress: false
+
+jobs:
+  suite:
+    name: Resolve the suite
+    runs-on: ubuntu-latest
+    outputs:
+      demos: ${{ steps.list.outputs.demos }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - name: Set up Go
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version: stable
+      - name: Install Task (pinned)
+        run: |
+          set -eu
+          go install github.com/go-task/task/v3/cmd/task@v3.52.0
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+      - name: Derive the matrix from the Taskfile
+        id: list
+        # THE SUITE IS NEVER WRITTEN DOWN HERE. `task e2e:list` reads the Taskfile's own
+        # `demo:<name>:run` targets, so a new demo is gated because it EXISTS. A hand-kept list in
+        # this file would be a second copy of the demo library, and a divergent second copy has
+        # caused four separate defects in this repo — most recently an EE image the capstone
+        # declared and no floor built, which cost three full runs to find.
+        env:
+          # Through the ENVIRONMENT, never interpolated into the script. `${{ inputs.demo }}` spliced
+          # into a shell line is a script-injection seam: the expansion happens before bash sees it,
+          # so the input is CODE rather than a value. Triggering this workflow needs write access, so
+          # the blast radius is small — but "only privileged users can exploit it" is the argument
+          # that keeps injection seams in codebases, and the fix is one line.
+          DEMO: ${{ inputs.demo }}
+        run: |
+          set -eu
+          if [ -n "${DEMO:-}" ]; then
+            # A dispatch for one demo still goes through e2e:list, so a typo fails HERE, with the
+            # real suite printed, rather than as an unrecognised task 40 minutes in.
+            task e2e:list | grep -qxF -- "$DEMO" || {
+              echo "no such demo: '$DEMO'. The suite is:" >&2
+              task e2e:list >&2
+              exit 1
+            }
+            demos=$(printf '%s' "$DEMO" | jq -R . | jq -sc .)
+          else
+            demos=$(task e2e:list | jq -R . | jq -sc .)
+          fi
+          echo "demos=$demos" >> "$GITHUB_OUTPUT"
+          echo "suite: $demos"
+
+  live:
+    name: ${{ matrix.demo }}
+    needs: suite
+    runs-on: ubuntu-latest
+    # Each demo's floor is large enough that the runner disk is the binding constraint, so they get
+    # a runner each rather than sharing one. It parallelises as a side effect; isolation is the
+    # reason.
+    strategy:
+      fail-fast: false # one broken demo must not hide the state of the other five
+      matrix:
+        demo: ${{ fromJSON(needs.suite.outputs.demos) }}
+    timeout-minutes: 90
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Reclaim runner disk
+        # Measured locally, a capstone floor is ~1.8GB of execution-environment images, ~1.3GB of
+        # kind node image, six plugin/control-plane images and six backing services — before Go's
+        # build cache. The hosted runner ships large preinstalled toolchains this job never touches;
+        # removing them is the difference between a gate and an intermittent ENOSPC.
+        #
+        # Best-effort by design: a runner image that drops one of these paths must not fail the run.
+        run: |
+          set -u
+          df -h / | tail -1
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/lib/android \
+            /usr/local/share/boost /opt/hostedtoolcache/CodeQL || true
+          docker image prune -af >/dev/null 2>&1 || true
+          df -h / | tail -1
+
+      - name: Set up Go
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version: stable
+
+      - name: Install Task (pinned)
+        run: |
+          set -eu
+          go install github.com/go-task/task/v3/cmd/task@v3.52.0
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+
+      - name: Run the demo against a real cluster
+        # The SAME entry point a human uses — `task demo:<name>:run` — not a CI-shaped variant.
+        # A gate that runs something adjacent to what it claims to gate is how the two drift.
+        run: task demo:${{ matrix.demo }}:run
+
+      - name: Diagnose the failure
+        if: failure()
+        # `task e2e:diagnose`, the same target a human runs locally, so the evidence in this log and
+        # the evidence on a workstation are identical (§1.8 — one-click descent must always exist,
+        # including when the click is a CI log). Never masks the failure: the step is
+        # failure()-gated and the job's verdict is the demo's.
+        run: task e2e:diagnose || true
+
+      - name: Tear the floor down
+        if: always()
+        # Cheap insurance rather than necessity — the runner is discarded either way. It exercises
+        # the `:down` half on every run, which is the only thing that keeps teardown honest: a demo
+        # whose teardown rotted would otherwise be found by the next person to re-run it locally.
+        run: task demo:${{ matrix.demo }}:down || true

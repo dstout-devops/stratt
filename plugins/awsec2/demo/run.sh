@@ -2,7 +2,7 @@
 # run.sh — the turnkey runner for the "EC2: provision a real instance" demo (ADR-0116 D2). Drives real
 # provisioning + a live read-model on one substrate: a gated Workflow provisions a REAL EC2 instance
 # through the awsec2/create-vm Action against floci (a real-host EC2 backend, ADR-0093), then the awsec2
-# Syncer's OBSERVE picks the new instance up into the ec2-instances View — the build→observe closure.
+# Syncer's OBSERVE picks the new instance up into the provisioned-instances View — the build→observe closure.
 # Unlike the vSphere demo (a pre-seeded read graph), floci starts EMPTY: the graph comes alive WITH the
 # instance you build.
 #
@@ -25,6 +25,9 @@ API="${ROOT}/api/v1"
 
 kc() { "$KUBECTL" --context "$CTX" "$@"; }
 api() { curl -fsS -X "$1" "${API}$2" -H "X-Stratt-Principal: ${PRINCIPAL}" -H "Content-Type: application/json" "${@:3}"; }
+# The View the estate actually declares. Named once: the runner and the estate disagreeing
+# on this string is exactly how the observe check came to read a View that does not exist.
+OBSERVE_VIEW="provisioned-instances"
 count() { api GET "/views/$1/entities" 2>/dev/null | jq -r '.entities | length' 2>/dev/null || echo 0; }
 
 fidelity="$(grep -E '^fidelity:' "${HERE}/demo.yaml" | head -1 | sed 's/^fidelity:[[:space:]]*//')"
@@ -50,7 +53,7 @@ for _ in $(seq 1 40); do
 done
 [ -n "$ready" ] || { echo "FAIL: the ${WORKFLOW} Workflow never reconciled into the store"; exit 1; }
 
-echo "demo: EC2 is empty to start — ec2-instances View: $(count ec2-instances) instances"
+echo "demo: EC2 is empty to start — ${OBSERVE_VIEW} View: $(count "$OBSERVE_VIEW") instances"
 
 # ── Wait for the awsec2 Actuator to be DISPATCHABLE (status.enabled), not merely declared ─────────
 # The reconcile controller declares the Actuator from the staged estate, then RunActuators dials
@@ -58,15 +61,8 @@ echo "demo: EC2 is empty to start — ec2-instances View: $(count ec2-instances)
 # reconciling is NOT the same fact: this demo launched as soon as the Workflow existed and failed
 # with `no action registered as "awsec2/create-vm"` — after the gate, which is the worst place for
 # a race to surface. /actuators/{name} reports the live registry status (§1.8), so gate on it.
-echo "demo: awaiting awsec2 Actuator registration (status.enabled)…"
-enabled=""
-for _ in $(seq 1 45); do
-    enabled=$(api GET "/actuators/awsec2" 2>/dev/null | jq -r '.status.enabled // false')
-    [ "$enabled" = "true" ] && break
-    sleep 2
-done
-[ "$enabled" = "true" ] || { echo "FAIL: awsec2 Actuator never reached status.enabled=true"; exit 1; }
-echo "  awsec2 Actuator registered (awsec2/create-vm dispatchable)"
+# The Actuator wait is `dev:await-actuators` in the Taskfile, run before this script — see the note
+# in plugins/helm/demo/run.sh for why the private loop that stood here was a silent-death hazard.
 
 # The instance identity is SUPPLIED AT LAUNCH, not baked into the Workflow (ADR-0120 D2). This
 # demo has no Intent/Compute — it drives the build Workflow directly — so it plays the part the
@@ -74,12 +70,20 @@ echo "  awsec2 Actuator registered (awsec2/create-vm dispatchable)"
 # labels the projection must carry, INCLUDING the stratt.intent/instance correlation label. Before
 # ADR-0120 the Workflow hardcoded web-01, so this demo could only ever build one instance and the
 # hardcoding was invisible from here.
+# NO `ordinal` IN THE BODY BELOW, and it was there until 2026-08-01. The launch had been returning
+# HTTP 400 for as long as nobody re-ran this demo: the Workflow declares its inputs with
+# `additionalProperties: false` and the properties are instance/projectKind/labels/placement/params.
+# `ordinal` appears only inside a DESCRIPTION string ("namePrefix + ordinal"), never as a property,
+# so a reader skimming the schema sees the word and assumes the field.
+#
+# Found by `task e2e:live` on its FIRST run. That is the whole argument for E2E-1 in one defect:
+# nothing else in the repo launches this Workflow, so when its contract tightened the only caller
+# went stale and every tracker kept saying this demo was live-verified.
 INSTANCE="${STRATT_DEMO_INSTANCE:-web-01}"
 echo "demo: launch Workflow ${WORKFLOW} as ${PRINCIPAL} (provision ${INSTANCE})"
 launch_body=$(jq -nc --arg i "$INSTANCE" '{
   inputs: {
     instance: $i,
-    ordinal: 1,
     projectKind: "host",
     labels: { fleet: "web", "stratt.intent/instance": $i },
     params: { region: "us-east-1", instanceType: "t3.micro", ami: "ami-0linuxbaseline000" },
@@ -128,19 +132,39 @@ done
 echo "demo: awaiting the Syncer to OBSERVE the new instance (build → observe closure)…"
 seen=0
 for _ in $(seq 1 20); do
-    seen=$(count ec2-instances)
+    seen=$(count "$OBSERVE_VIEW")
     [ "$seen" -gt 0 ] 2>/dev/null && break
     sleep 3
 done
 if [ "$seen" -gt 0 ] 2>/dev/null; then
-    echo "  the instance now appears in the ec2-instances View — real provision, live read-model"
+    echo "  the instance now appears in the ${OBSERVE_VIEW} View — real provision, live read-model"
 else
-    echo "  (instance not yet observed — the Syncer picks it up on its next cycle)"
+    # NOT a soft note any more — this is a FAILURE, and the reason it was not is worth keeping.
+    #
+    # `task e2e:live` reported a green run ending `ec2-instances: 0`. The first diagnosis was that
+    # this demo has no Syncer (no Source and no Connector in its estate) and therefore could not
+    # observe. THAT WAS WRONG. The Syncer is real and enabled — `STRATT_AWS_INTERVAL: 15s` in
+    # values-demo-ec2.yaml turns on strattd's opt-in instance Syncer — it is simply configured by
+    # host env rather than by an estate declaration, so looking only in estate/ found nothing and
+    # produced a confident wrong answer.
+    #
+    # The actual defect: this runner counted a View named `ec2-instances`, and the estate declares
+    # `provisioned-instances`. `count()` maps the 404 to 0, so the check could NEVER see an
+    # instance — it reported "0 to start" (true by accident) and "0 at the end" (a missing View,
+    # not an empty one), and the soft-pass branch turned that into a green run.
+    #
+    # Two lessons, both already paid for elsewhere on this branch: a name nobody resolves is not a
+    # zero, and a check whose failure branch prints prose instead of exiting is not a check.
+    echo "FAIL: the instance was built but never observed into view:${OBSERVE_VIEW}."
+    echo "  The build→observe closure is what this demo exists to prove — a green run that observed"
+    echo "  nothing is the vacuous pass this repo keeps finding. Check the Syncer is enabled"
+    echo "  (STRATT_AWS_INTERVAL in values-demo-ec2.yaml) and that ${OBSERVE_VIEW} is declared."
+    exit 1
 fi
 
 echo
 echo "demo: DONE — Stratt provisioned a real EC2 instance through a gated Workflow (fidelity: ${fidelity})."
-printf "  Final graph: ec2-instances: %s\n" "$(count ec2-instances)"
-echo "  Explore the graph in the UI:  (cd ui && npm run dev)  → Views → ec2-instances"
+printf "  Final graph: %s: %s\n" "$OBSERVE_VIEW" "$(count "$OBSERVE_VIEW")"
+echo "  Explore the graph in the UI:  (cd ui && npm run dev)  → Views → provisioned-instances"
 echo "  Watch the descent:            UI → Runs → WorkflowRun ${run_id}"
 echo "  Clean up:       task demo:ec2-only:down   (or full teardown: task dev:kind:down && task dev:down)"

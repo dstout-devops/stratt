@@ -33,6 +33,31 @@ type connectionParams struct {
 	File            string           `json:"file,omitempty"`
 	HostKeyChecking string           `json:"hostKeyChecking,omitempty"`
 	Jump            []connectionAuth `json:"jump,omitempty"`
+	// KubeconfigRef is the REACH credential for an OBSERVED kubectl transport — the half
+	// ADR-0156 D4 named for `vmware_tools` and `aws_ssm` and recorded as "nothing" for
+	// kubectl, because its table asked only what the GUEST needs.
+	//
+	// The guest genuinely needs nothing: `kubectl exec` requires no sshd, no agent and no
+	// account on the target. The CONTROL NODE is the half that was missed, and it needs a
+	// credential like any other: the EE Job pod is spawned with
+	// `AutomountServiceAccountToken: false` — "the pod has no cluster identity", a
+	// deliberate hardening property (dispatch.go) — so an execution pod running arbitrary
+	// automation content carries no ambient authority to the API server. Correctly: a pod
+	// that can exec into any pod in the cluster is not a boundary anyone should get for
+	// free, and §2.5 wants the reach authority brokered and use-granted, not ambient.
+	//
+	// So it arrives the way every other credential does — a CredentialRef the Step was
+	// AUTHORIZED to use, resolved to a file at pod spawn, rendered here as a PATH.
+	KubeconfigRef *fileCredentialRef `json:"kubeconfigRef,omitempty"`
+}
+
+// fileCredentialRef is a brokered CredentialRef plus the optional file to pick out of it
+// when the ref injects more than one. Structurally identical to passwordRef and named
+// apart from it on purpose: a kubeconfig is not a password, and a reader following
+// `passwordRef` into a kubectl connection would be reading the wrong mental model.
+type fileCredentialRef struct {
+	CredentialRef string `json:"credentialRef"`
+	File          string `json:"file,omitempty"`
 }
 
 // connectionAuth is the per-hop auth for a reached-via chain (ADR-0126 D3). No address
@@ -173,6 +198,23 @@ func connectionVars(c *connectionParams, hops []Hop, knownHosts string, hasLocal
 			return nil, err
 		}
 		vars["ansible_ssh_private_key_file"] = path
+	}
+	if c.KubeconfigRef != nil {
+		mounted, err := credentialFile("connection.kubeconfig", c.KubeconfigRef.CredentialRef,
+			c.KubeconfigRef.File, "params.connection.kubeconfigRef.file", readDir)
+		if err != nil {
+			return nil, err
+		}
+		// NOT staged, and the asymmetry with the ssh key above is the point. That copy exists
+		// because ssh REFUSES a 0440 private key ("Permissions 0440 are too open"); kubectl
+		// applies no such mode check to a kubeconfig, so the file dispatch already projected is
+		// usable where it lies. Staging it anyway would add a second copy of a bearer token on
+		// disk for no gain, and §2.5 is a reason to make fewer of those, not more.
+		//
+		// A GROUP var, not a host var: one Step brokers one kubeconfig, and it is the control
+		// node's credential rather than any single target's. Hosts reached by ssh in the same
+		// Run simply never read it.
+		vars["ansible_kubectl_kubeconfig"] = mounted
 	}
 
 	// ssh-specific options are rendered for the ssh family only. network_cli/netconf ride
