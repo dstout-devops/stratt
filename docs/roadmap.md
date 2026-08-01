@@ -714,6 +714,49 @@ strictly worse than not offering cancel. A 404 from the mux says "not offered" �
 wrong (§1.8). **The real gap is native:** a terminal-status writer in `RunDAG`, with the façade route
 following it. Cancelling a Run (single-Step) already works and is unaffected.
 
+### Charter review of this branch (2026-08-01) — performed as steward, subagents unavailable
+
+CLAUDE.md requires `charter-guardian` before finalizing changes to Contracts, credentials or authz,
+and `vocabulary-linter` before merging a new core-model identifier. Both were run **by hand against
+the charter text**, not from memory. Reviewed: `ansible.input.v9` (`connection.kubeconfigRef`), the
+`hosts-kubeconfig` CredentialRef and its authz tuples, ADR-0156 D4a, and the new
+`e2e:*` / `dev:await-actuators` surface.
+
+**Verdicts.** §1.1 type the seams — the new field attaches at a plugin-boundary Contract, no new
+Facet, nothing typed onto a whole Entity. §1.4 boring spine — the SHIM authors every `ansible_*`
+key; core sends typed transport coordinates and learns no ansible vocabulary. §1.5 sovereign
+contracts — v9 is a pinned, hash-verified SIBLING of v8 (highest version wins), so a Step cannot pin
+one and drift stays blocking. §1.6 one authz model — the use-grant is an OpenFGA tuple in Git, which
+is what §2.5 means by "Platform RBAC is itself CaC". §2.1 — no Facet namespace gains a second writer.
+
+**§2 vocabulary.** `kubeconfigRef` and `hosts-kubeconfig` are not banned terms and are not
+core-model identifiers (a plugin Contract field and an estate CredentialRef name). The TaskEvent
+`kind: "inventory"` I added needed a second look, since `inventory` IS banned — it is admissible for
+the same reason `kind: "tofu"` and `kind: "kubectl"` already are: a plugin-emitted, tool-scoped label
+naming ansible's own artifact, not a core-model identifier. The ban maps AWX *inventory* → **View**,
+and nothing here renames a View.
+
+**The one finding, and it was in something shipped hours earlier.** §2.5 says "material never
+persists in the platform". The shim now EMITS the rendered inventory as a Run event — a second
+distribution channel beside `inventory/hosts` — and that is safe only because every credential in it
+is a PATH (ADR-0153 D3). That was an **assumption, not a checked property**. The existing guard,
+`TestPasswordsAreFilePathsAndNeverValues`, inspects var NAMES for `pass` — a heuristic
+`ansible_kubectl_kubeconfig` passes trivially while carrying anything at all. A name tells you
+nothing about a value. Closed by `TestInventoryCarriesCredentialPathsAndNeverMaterial`: every
+credential file returns unmistakable content, and the test asserts that content never appears in any
+rendered var or in the inventory. Falsified by making the shim inline the kubeconfig — the guard
+fires.
+
+**Not settled here, deliberately.** ADR-0150 and 0153–0157 remain **Proposed**. Promoting an ADR is a
+steward decision and reviewing my own design is not the same as an independent review — this pass
+found one real defect in my own work, which is evidence for the value of the second pair of eyes, not
+a substitute for it.
+
+**Booked: the §2 freeze has no automated guard.** "Naming is API. Frozen at v1.0" is enforced by
+review only — there is no test scanning core-model identifiers for the six banned terms, so the
+freeze holds exactly as well as everyone's memory. A guard is cheap and belongs beside the other
+repo-scanning checks in `task ci`.
+
 ### E2E-1 · the live gate exists, and its first run found three rotted demos (2026-08-01)
 
 `task e2e:live` + `.github/workflows/e2e-live.yml` (nightly / `v*` tags / dispatch, one runner per
