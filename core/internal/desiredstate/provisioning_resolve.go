@@ -98,20 +98,31 @@ func decommissionProviders(ctx context.Context, store *graph.Store, env string) 
 	if err != nil {
 		return nil, err
 	}
+	return assembleTeardownProviders(verified, acts, conns, env), nil
+}
+
+// assembleTeardownProviders is the PURE selection for teardown — the `decommissions` sibling of
+// assembleProvisioningProviders, same rules over the other map.
+//
+// Extracted from decommissionProviders rather than written beside it: the load-time check needs the
+// same selection with every declared provider treated as verified (reachableBuilders), and a second
+// copy of a selection rule is how the provisioning and teardown halves drift apart. This repo has
+// found that failure three times already.
+func assembleTeardownProviders(verified map[string]bool, acts []types.Actuator, conns []types.Connector, env string) []capability.Provider {
 	var out []capability.Provider
 	for _, a := range acts {
 		if verified["actuator/"+a.Name] && types.InScope(a.ScopedEnvironments(), env) &&
 			slices.Contains(a.Provides, types.CapProvisioning) && len(a.Decommissions) > 0 {
-			out = append(out, capability.Provider{Name: a.Name, Workflows: a.Decommissions})
+			out = append(out, capability.Provider{Name: a.Name, Workflows: a.Decommissions, Substrate: a.Substrate})
 		}
 	}
 	for _, cn := range conns {
 		if verified["connector/"+cn.Name] && types.InScope(cn.ScopedEnvironments(), env) &&
 			slices.Contains(cn.Provides, types.CapProvisioning) && len(cn.Decommissions) > 0 {
-			out = append(out, capability.Provider{Name: cn.Name, Workflows: cn.Decommissions})
+			out = append(out, capability.Provider{Name: cn.Name, Workflows: cn.Decommissions, Substrate: cn.Substrate})
 		}
 	}
-	return out, nil
+	return out
 }
 
 // assembleProvisioningProviders is the PURE selection (ADR-0104 D1 / ADR-0113 D2): a provider is
@@ -127,13 +138,13 @@ func assembleProvisioningProviders(verified map[string]bool, acts []types.Actuat
 	for _, a := range acts {
 		if verified["actuator/"+a.Name] && types.InScope(a.ScopedEnvironments(), env) &&
 			slices.Contains(a.Provides, capClass) && len(a.Provisions) > 0 {
-			out = append(out, capability.Provider{Name: a.Name, Workflows: a.Provisions})
+			out = append(out, capability.Provider{Name: a.Name, Workflows: a.Provisions, Substrate: a.Substrate})
 		}
 	}
 	for _, cn := range conns {
 		if verified["connector/"+cn.Name] && types.InScope(cn.ScopedEnvironments(), env) &&
 			slices.Contains(cn.Provides, capClass) && len(cn.Provisions) > 0 {
-			out = append(out, capability.Provider{Name: cn.Name, Workflows: cn.Provisions})
+			out = append(out, capability.Provider{Name: cn.Name, Workflows: cn.Provisions, Substrate: cn.Substrate})
 		}
 	}
 	return out
@@ -227,7 +238,7 @@ func assembleRemediationProviders(verified map[string]bool, acts []types.Actuato
 	for _, a := range acts {
 		if verified["actuator/"+a.Name] && types.InScope(a.ScopedEnvironments(), env) &&
 			slices.Contains(a.Provides, capClass) && len(a.Remediates) > 0 {
-			out = append(out, capability.Provider{Name: a.Name, Workflows: a.Remediates})
+			out = append(out, capability.Provider{Name: a.Name, Workflows: a.Remediates, Substrate: a.Substrate})
 		}
 	}
 	for _, cn := range conns {

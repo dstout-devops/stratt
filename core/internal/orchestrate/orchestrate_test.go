@@ -144,7 +144,33 @@ func TestAddressOfReadsBothCoordinateFields(t *testing.T) {
 	}
 	// The resolved coordinate reaches the Target typed and whole.
 	addr, port := addressOf(json.RawMessage(`{"address":"10.0.0.7","port":2222}`))
-	if got := renderTarget(types.Entity{ID: "e1"}, addr, port); got.Address != "10.0.0.7" || got.Port != 2222 {
+	if got := renderTarget(types.Entity{ID: "e1"}, addr, port, nil); got.Address != "10.0.0.7" || got.Port != 2222 {
 		t.Fatalf("renderTarget dropped part of the coordinate: %+v", got)
+	}
+	if got := renderTarget(types.Entity{ID: "e1"}, addr, port, nil); got.Transport != nil {
+		t.Fatalf("no observed transport must stay nil, not an empty one — \"nothing observed\" and "+
+			"\"observed to be nothing\" are different, and the second is not a state that exists: %+v", got.Transport)
+	}
+}
+
+// The observed transport reaches the Target with its KIND legible and its coordinates OPAQUE
+// (ADR-0156 D2). Core parses `kind` only, and only so a Run's descent can say which transport a
+// target used — it never branches on it, which is what keeps the spine from holding a closed set
+// of substrates it would have to grow (§9).
+func TestTransportOf(t *testing.T) {
+	raw := json.RawMessage(`{"kind":"kubectl","namespace":"stratt-hosts","pod":"web-01"}`)
+	got := transportOf(raw)
+	if got == nil || got.Kind != "kubectl" {
+		t.Fatalf("kind must be legible: %+v", got)
+	}
+	if string(got.Coordinates) != string(raw) {
+		t.Errorf("the coordinates must cross UNTOUCHED — their shape belongs to the transport, and "+
+			"a core that parsed them would be learning what a Kubernetes namespace is: %s", got.Coordinates)
+	}
+	// A document with no kind yields NO transport rather than an empty one.
+	for _, doc := range []string{``, `{}`, `{"namespace":"n"}`, `{not json`} {
+		if tr := transportOf(json.RawMessage(doc)); tr != nil {
+			t.Errorf("transportOf(%q) = %+v, want nil", doc, tr)
+		}
 	}
 }

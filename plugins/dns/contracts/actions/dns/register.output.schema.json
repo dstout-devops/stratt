@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "stratt:contract:actions/dns/register.output:v1",
+  "title": "dns/register output",
+  "description": "Output Contract for the dns/register Action (ADR-0144): the record as WRITTEN — canonicalized (lowercased, qualified, TTL defaulted), so a descent screen shows what actually landed in the zone rather than what was typed. Deliberately NOT a reach coordinate: mgmt.address comes from the Syncer reading the zone back, never from a build asserting what it intended (ADR-0144 D5).",
+  "type": "object",
+  "required": ["name", "type", "data"],
+  "properties": {
+    "name": { "type": "string", "description": "The fully-qualified owner name as written." },
+    "type": { "enum": ["A", "AAAA", "CNAME"] },
+    "data": { "type": "string", "description": "The record data as written (address canonicalized, CNAME target lowercased)." },
+    "ttl": { "type": "integer", "description": "The TTL actually applied." }
+  },
+  "additionalProperties": false
+}

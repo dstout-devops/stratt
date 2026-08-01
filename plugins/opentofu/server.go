@@ -11,6 +11,7 @@ package opentofu
 import (
 	"context"
 	"crypto/sha256"
+	"embed"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -18,6 +19,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync/atomic"
 
 	"google.golang.org/grpc"
@@ -26,6 +28,16 @@ import (
 	"github.com/dstout-devops/stratt/sdk/pluginserve"
 	pluginv1 "github.com/dstout-devops/stratt/sdk/stratt/plugin/v1"
 )
+
+// The plugin's OWN contract documents (ADR-0138 D3/D4), embedded so their digests ride
+// every ContractRef — the port's invariant #5. The tree was on disk and embedded by
+// nothing, so the Manifest carried no ContractRef at all and the pin invariant had no
+// subject here; adding the Action made that visible.
+//
+//go:embed contracts
+var contractFS embed.FS
+
+var contracts = pluginserve.Contracts(contractFS)
 
 const protocolVersion = "v1"
 
@@ -61,6 +73,25 @@ func (s *Server) GetManifest(context.Context, *pluginv1.GetManifestRequest) (*pl
 		Class:           pluginv1.PluginClass_PLUGIN_CLASS_ACTUATOR,
 		Verbs: []pluginv1.Verb{
 			pluginv1.Verb_VERB_PLAN, pluginv1.Verb_VERB_APPLY, pluginv1.Verb_VERB_DESTROY,
+			// INVOKE serves the targetless build Action (ADR-0145 D1). Same plugin, same
+			// module root, same core-injected capability handles — a second ENTRY POINT
+			// for a workspace-scoped apply, not a second implementation of one.
+			pluginv1.Verb_VERB_INVOKE,
+		},
+		Actions: []*pluginv1.ActionDecl{
+			{
+				Name:   actionApply,
+				Input:  contracts.Ref("actions/opentofu/apply.input"),
+				Output: contracts.Ref("actions/opentofu/apply.output"),
+				// Idempotent because tofu is: applying an unchanged module against the same
+				// workspace state converges to the same infrastructure. That is a property of
+				// the STATE BACKEND being the same one, which is why the statestore handle is
+				// resolved for this verb too — with local state, a retry after a lost pod
+				// would build a second VPC rather than converge on the first.
+				Idempotent: true,
+				// `tofu plan` is genuinely side-effect-free, so a dry-run Step is honest here.
+				DryRunnable: true,
+			},
 		},
 		// apply.dry-run: plan/--check as a streaming dry-run. provisioning (ADR-0112): OpenTofu
 		// builds infra a consumer targets — it is a `provisioning` provider (the charter-canonical
@@ -71,6 +102,14 @@ func (s *Server) GetManifest(context.Context, *pluginv1.GetManifestRequest) (*pl
 		MinProtocol:  protocolVersion,
 		MaxProtocol:  protocolVersion,
 	}}, nil
+}
+
+// dataRoot is where tofu's working state lives — never inside the mounted module tree.
+func (s *Server) dataRoot() string {
+	if s.cfg.DataRoot != "" {
+		return s.cfg.DataRoot
+	}
+	return filepath.Join(os.TempDir(), "stratt-tofu")
 }
 
 func (s *Server) Health(context.Context, *pluginv1.HealthRequest) (*pluginv1.HealthResponse, error) {
@@ -87,10 +126,48 @@ func (s *Server) prepare(raw []byte, stateBackend, ipam *pluginv1.CapabilityHand
 	if p.Module == "" || p.Workspace == "" {
 		return p, "", nil, "", fmt.Errorf("module and workspace are required")
 	}
+	// A declared var must never collide with one the CORE injects. The ipam merge below writes
+	// stratt_ipam_cidr straight over whatever the declaration set, so an Intent that declared it
+	// was silently overruled — two answers to "which range", resolved by a rule nobody wrote
+	// down, which is the implicit precedence §2.4 exists to forbid. The reserved prefix is
+	// refused instead, and the diagnostic says where the value actually comes from.
+	for k := range p.Vars {
+		if strings.HasPrefix(k, "stratt_") {
+			return p, "", nil, "", fmt.Errorf(
+				"var %q uses the reserved stratt_ prefix: these are injected by the core from the "+
+					"capability handles the declaration `requires` (ADR-0111/0112 D3), so a declared "+
+					"value here would be silently overwritten. Remove it — the allocator decides", k)
+		}
+	}
 	dir = filepath.Join(s.cfg.ModuleRoot, p.Module)
+	// PER-WORKSPACE data dir, and OUTSIDE the module tree. It used to be
+	// <module>/.terraform — one directory shared by every Run this pod ever serves — which is
+	// wrong in two ways that only appear once something actually runs:
+	//
+	//  1. Two concurrent builds race. .terraform holds the initialized BACKEND (which state key
+	//     this directory is bound to), so app-subnet and dmz-subnet building at the same time
+	//     would each re-init it under the other, and one would apply against the other's state.
+	//     Nothing serializes them; a plugin pod handles Runs concurrently by design.
+	//  2. It writes into the mounted MODULE, so the shipped content is no longer what shipped.
+	//     That is how `tofu validate` on a checkout started failing after a build ran: the module
+	//     directory had acquired a backend binding it does not declare.
+	//
+	// The provider cache is deliberately still SHARED (TF_PLUGIN_CACHE_DIR): the isolation that
+	// matters is per-workspace STATE, and re-downloading a ~600MB provider tree per build would
+	// be a large price for isolating something that is identical by construction — the lockfile
+	// pins it to one hash.
+	dataDir := filepath.Join(s.dataRoot(), "workspaces", p.Workspace)
+	cacheDir := filepath.Join(s.dataRoot(), "plugin-cache")
+	if err = os.MkdirAll(cacheDir, 0o700); err != nil {
+		return p, "", nil, "", fmt.Errorf("prepare tofu plugin cache: %w", err)
+	}
+	if err = os.MkdirAll(dataDir, 0o700); err != nil {
+		return p, "", nil, "", fmt.Errorf("prepare tofu data dir: %w", err)
+	}
 	env = append(os.Environ(),
 		"TF_IN_AUTOMATION=1",
-		"TF_DATA_DIR="+filepath.Join(dir, ".terraform"),
+		"TF_DATA_DIR="+dataDir,
+		"TF_PLUGIN_CACHE_DIR="+cacheDir,
 	)
 	// The http-backend FLOOR (ADR-0016) injects a per-workspace HMAC cred. When the core injects a
 	// statestore handle (ADR-0105) the backend is provider-resolved instead (e.g. s3, whose creds
@@ -135,6 +212,19 @@ func (s *Server) prepare(raw []byte, stateBackend, ipam *pluginv1.CapabilityHand
 
 func (s *Server) initArgs(workspace string, stateBackend *pluginv1.CapabilityHandle) []string {
 	args := []string{"init", "-input=false", "-no-color", "-json"}
+	// -reconfigure, and it is load-bearing rather than defensive. The module directory is a
+	// long-lived mount shared by every Run this pod serves, and the backend config is per-WORKSPACE
+	// (a different state key each time). tofu detects the change and REFUSES to init, so without
+	// this the first build in a pod succeeded and every build after it failed at init — visible
+	// only by running two, which nothing ever did.
+	//
+	// -reconfigure and NOT -migrate-state, which is the same flag family and the opposite meaning:
+	// migrating would copy the previous workspace's state onto this workspace's key, so building
+	// dmz-subnet would inherit app-subnet's state and then "converge" it by destroying app-subnet's
+	// network. Each workspace owns its own state at its own key; there is nothing to migrate.
+	if stateBackend != nil || s.cfg.BackendURL != "" {
+		args = append(args, "-reconfigure")
+	}
 	if stateBackend != nil {
 		// Core-injected statestore backend (ADR-0105): the module declares `backend "<kind>" {}`
 		// and the core-resolved settings fill it via -backend-config. Provider-agnostic — s3, gcs,
@@ -146,7 +236,27 @@ func (s *Server) initArgs(workspace string, stateBackend *pluginv1.CapabilityHan
 		}
 		sort.Strings(keys)
 		for _, k := range keys {
+			// A DOTTED key is a NESTED backend attribute and cannot ride the flag form. tofu's
+			// `-backend-config=k=v` sets a top-level argument only, so `endpoints.s3=…` — which is
+			// how the s3 backend takes an S3-compatible endpoint since the flat `endpoint` argument
+			// was removed — fails with `Error: Invalid backend configuration argument`. Measured on
+			// the first real build that got this far.
+			//
+			// Nested keys go into an HCL fragment written beside the workspace's data dir and
+			// passed as a config FILE, which is the form that accepts blocks. Flat keys keep the
+			// flag form: it is the simpler path and the one every other backend uses.
+			if strings.Contains(k, ".") {
+				continue // rendered into the HCL fragment below
+			}
 			args = append(args, "-backend-config="+k+"="+cfg[k])
+		}
+		if frag := nestedBackendHCL(cfg); frag != "" {
+			path := filepath.Join(s.dataRoot(), "workspaces", workspace, "backend.auto.hcl")
+			if err := os.MkdirAll(filepath.Dir(path), 0o755); err == nil {
+				if err := os.WriteFile(path, []byte(frag), 0o600); err == nil {
+					args = append(args, "-backend-config="+path)
+				}
+			}
 		}
 		return args
 	}
@@ -218,7 +328,10 @@ func (s *Server) Apply(req *pluginv1.ApplyRequest, stream grpc.ServerStreamingSe
 				return pluginserve.ApplyTerminal(stream, false, pluginv1.ItemResult_STATUS_FAILED, "pinned plan bytes do not match plan_ref sha256")
 			}
 		}
-		planPath := filepath.Join(dir, ".terraform", "stratt-pinned.tfplan")
+		// The pinned plan lands in the WORKSPACE's data dir, not in the module tree — same
+		// reason as TF_DATA_DIR above, and sharper here: two concurrent plan-pinned applies
+		// writing one path would have each apply the other's approved plan.
+		planPath := filepath.Join(s.dataRoot(), "workspaces", p.Workspace, "stratt-pinned.tfplan")
 		if werr := os.WriteFile(planPath, req.GetPinnedPlan(), 0o600); werr != nil {
 			return pluginserve.ApplyTerminal(stream, false, pluginv1.ItemResult_STATUS_FAILED, "write pinned plan: "+werr.Error())
 		}
@@ -316,26 +429,60 @@ func (s *Server) Plan(ctx context.Context, req *pluginv1.PlanRequest) (*pluginv1
 }
 
 // Destroy tears the workspace down; streams like Apply with a workspace-root status.
+//
+// It used to run `tofu destroy` in the process's CWD with no env, no module directory, no
+// backend and no vars — reading its own doc comment's claim that "Destroy carries no `desired`",
+// which was never true: DestroyRequest.desired has always existed. The consequence was worse than
+// a no-op. `tofu destroy` in a directory with no configuration exits ZERO, so the verb reported
+// a successful teardown of infrastructure it had not touched, and ADR-0114's decommission Finding
+// would have closed on it. A teardown that cannot fail is not a teardown.
+//
+// It now takes exactly the path Apply does: same params, same module dir, same init against the
+// core-injected state backend — because destroying is converging on nothing, and it needs the
+// state that says what to converge.
 func (s *Server) Destroy(req *pluginv1.DestroyRequest, stream grpc.ServerStreamingServer[pluginv1.DestroyResponse]) error {
 	ctx := stream.Context()
-	// Destroy carries no `desired` — the workspace identity rides the same params
-	// contract via a dedicated field is a follow-up; v1 destroys the initialized
-	// workspace in the module dir. (Kept minimal; the Apply path is the proof.)
 	var seq int64
 	next := func() int64 { return atomic.AddInt64(&seq, 1) }
 	onLine := func(line []byte) {
 		_ = stream.Send(&pluginv1.DestroyResponse{Event: lineToWire(next(), timestamppb.Now(), line).event})
 	}
-	_, rc, err := s.run.run(ctx, "", nil, []string{"destroy", "-input=false", "-auto-approve", "-no-color", "-json"}, onLine)
-	ok := err == nil && rc == 0
-	status := pluginv1.ItemResult_STATUS_OK
-	if !ok {
-		status = pluginv1.ItemResult_STATUS_FAILED
+	terminal := func(ok bool, msg string) error {
+		status := pluginv1.ItemResult_STATUS_OK
+		if !ok {
+			status = pluginv1.ItemResult_STATUS_FAILED
+		}
+		return stream.Send(&pluginv1.DestroyResponse{
+			Event:  &pluginv1.TaskEvent{Terminal: true, Ok: ok, At: timestamppb.Now(), Message: msg},
+			Result: &pluginv1.ItemResult{ItemKey: "", Status: status},
+		})
 	}
-	return stream.Send(&pluginv1.DestroyResponse{
-		Event:  &pluginv1.TaskEvent{Terminal: true, Ok: ok, At: timestamppb.Now(), Message: fmt.Sprintf("tofu destroy rc=%d", rc)},
-		Result: &pluginv1.ItemResult{ItemKey: "", Status: status},
-	})
+
+	stateBackend := req.GetResolvedCapabilities()["statestore"]
+	// The ipam handle is resolved for DESTROY too, and not as symmetry-for-its-own-sake: a module
+	// variable with no default (aws-network's stratt_ipam_cidr) must be set for `tofu destroy` as
+	// much as for apply — tofu evaluates the configuration either way. Passing nil here made the
+	// teardown fail with "No value for required variable", which reads as a broken module rather
+	// than a missing injection.
+	ipam := req.GetResolvedCapabilities()["ipam"]
+	p, dir, env, varFile, err := s.prepare(req.GetDesired().GetBytes(), stateBackend, ipam)
+	if err != nil {
+		// Refused rather than defaulted to "destroy whatever is here": guessing the workspace is
+		// how a teardown destroys the wrong estate's network.
+		return terminal(false, "destroy: "+err.Error())
+	}
+	if varFile != "" {
+		defer os.Remove(varFile)
+	}
+	if _, rc, ierr := s.run.run(ctx, dir, env, s.initArgs(p.Workspace, stateBackend), onLine); ierr != nil {
+		return terminal(false, "destroy init: "+ierr.Error())
+	} else if rc != 0 {
+		return terminal(false, fmt.Sprintf("destroy: tofu init failed (rc=%d)", rc))
+	}
+	args := append([]string{"destroy", "-input=false", "-auto-approve", "-no-color", "-json"}, varFileArg(varFile)...)
+	_, rc, err := s.run.run(ctx, dir, env, args, onLine)
+	ok := err == nil && rc == 0
+	return terminal(ok, fmt.Sprintf("tofu destroy rc=%d", rc))
 }
 
 func varFileArg(varFile string) []string {
@@ -366,4 +513,53 @@ func planHasChanges(showRaw []byte) bool {
 		}
 	}
 	return false
+}
+
+// nestedBackendHCL renders the DOTTED keys of a resolved statestore config as HCL blocks.
+//
+// tofu's `-backend-config=k=v` flag sets a top-level argument and nothing deeper, so a provider
+// that legitimately needs a nested attribute — `endpoints.s3` is how the s3 backend has taken an
+// S3-compatible endpoint since the flat `endpoint` argument was removed — cannot be expressed as a
+// flag at all. It fails with `Error: Invalid backend configuration argument`, which names neither
+// the key nor the nesting.
+//
+// The class Contract deliberately types `config` as flat string settings (§1.5: one shape for every
+// statestore provider), so the DOT is the provider's own encoding of depth and this is the consumer
+// translating it for its tool. Core never sees either form.
+//
+// Returns "" when nothing is nested, so the common case writes no file.
+func nestedBackendHCL(cfg map[string]string) string {
+	groups := map[string]map[string]string{}
+	for k, v := range cfg {
+		key, sub, found := strings.Cut(k, ".")
+		if !found {
+			continue
+		}
+		if groups[key] == nil {
+			groups[key] = map[string]string{}
+		}
+		groups[key][sub] = v
+	}
+	if len(groups) == 0 {
+		return ""
+	}
+	outer := make([]string, 0, len(groups))
+	for k := range groups {
+		outer = append(outer, k)
+	}
+	sort.Strings(outer) // deterministic: the same resolved config renders the same bytes
+	var b strings.Builder
+	for _, k := range outer {
+		inner := make([]string, 0, len(groups[k]))
+		for sk := range groups[k] {
+			inner = append(inner, sk)
+		}
+		sort.Strings(inner)
+		fmt.Fprintf(&b, "%s = {\n", k)
+		for _, sk := range inner {
+			fmt.Fprintf(&b, "  %s = %q\n", sk, groups[k][sk])
+		}
+		b.WriteString("}\n")
+	}
+	return b.String()
 }

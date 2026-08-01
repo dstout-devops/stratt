@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sync/atomic"
 	"time"
 
 	"go.temporal.io/sdk/activity"
@@ -20,6 +21,7 @@ import (
 	"github.com/dstout-devops/stratt/core/internal/contract"
 	"github.com/dstout-devops/stratt/core/internal/dispatch"
 	"github.com/dstout-devops/stratt/core/internal/pluginhost"
+	pluginv1 "github.com/dstout-devops/stratt/sdk/stratt/plugin/v1"
 	"github.com/dstout-devops/stratt/types"
 )
 
@@ -164,12 +166,42 @@ func (a *Activities) ExecuteAction(ctx context.Context, in RunInput, creds []dis
 				Keys:  keys,
 			})
 		}
+		// Resolve whatever the DECLARATION requires and inject the handles legibly — the
+		// same call, in the same shape, that executePlugin and PlanStep make for the
+		// Actuator verbs (ADR-0105, carried to this seam by ADR-0145 D2). Fails closed:
+		// an unresolvable required capability aborts the Run rather than running the
+		// build with no state backend and no allocated network, which is the shape a
+		// silent no-handle Invoke had.
+		resolvedCaps, err := a.resolveCapabilities(ctx, in, pa.Requires)
+		if err != nil {
+			return dispatch.Result{}, temporal.NewNonRetryableApplicationError(err.Error(), "CapabilityResolveFailed", err)
+		}
+		// The Action's diagnostics reach the Run's own event stream as they arrive, so
+		// GET /runs/{id}/events shows an Action failing for the same reason it shows an Actuator
+		// failing. Before this, the Action path dropped every non-terminal TaskEvent and a Run
+		// whose error said "see the streamed diagnostics" had none to see (DESC-5, §1.8).
+		//
+		// Best-effort by design: a bus that is down must not turn a working Action into a failed
+		// one — losing the trace is bad, losing the CONVERGE because the trace could not be
+		// written is worse. The terminal cause still rides out.Error either way.
+		var seq atomic.Int64
+		onEvent := func(ev *pluginv1.TaskEvent) {
+			if a.Bus == nil {
+				return
+			}
+			re := dispatch.RunEventFromTaskEvent(ev, in.RunID, 0, seq.Add(1), "")
+			if err := a.Bus.Publish(ctx, re); err != nil {
+				a.Log.Warn("action event not published", "run", in.RunID, "action", in.Action, "err", err)
+			}
+		}
 		raw, err := pa.Host.InvokeRaw(ctx, pluginhost.ActionInvoke{
-			Principal:   in.Principal,
-			Action:      in.Action,
-			Args:        in.Params,
-			DryRun:      in.DryRun,
-			Credentials: portCreds,
+			OnEvent:              onEvent,
+			Principal:            in.Principal,
+			Action:               in.Action,
+			Args:                 in.Params,
+			DryRun:               in.DryRun,
+			Credentials:          portCreds,
+			ResolvedCapabilities: resolvedCaps,
 			// A class-named Step is governed by the CLASS Contract, not the resolved
 			// provider's own (ADR-0112 D2 / ADR-0140 D3 row 2) — the same shape every
 			// provider of the class fills, so a rebind changes no consumer's expectation.
@@ -182,6 +214,12 @@ func (a *Activities) ExecuteAction(ctx context.Context, in RunInput, creds []dis
 		// signals — a RunEvent + a tracked Finding, never a swallowed log line
 		// (enterprise-readiness GOV-3).
 		a.surfaceRejections(ctx, in.RunID, "action", in.Action, raw.Rejections)
+		// The mirror of the line above: a rejection is what the plugin sent and core refused; this
+		// is what core SENT and the plugin did not read. Before it, an ignored param was visible
+		// only if the provider volunteered a diagnostic — kubecompute does, nothing required it,
+		// and a provider that stayed quiet produced a green build of a wrong-shaped host after an
+		// approved gate (ADR-0151 D4).
+		a.surfaceIgnoredParams(ctx, in.RunID, in.Action, ignoredParams(in.Params, raw.ConsumedParams))
 		// Entities are GOVERNED but UNPROJECTED — RecordActionResult performs the
 		// single write with RUN provenance (per-verb write path, ADR-0047 §2).
 		ents := make([]actuators.EntityObservation, 0, len(raw.Entities))

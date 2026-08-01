@@ -168,6 +168,13 @@ func upsertEntityTx(ctx context.Context, tx pgx.Tx, prov types.Provenance, cell 
 		// correlated Entity are preserved (no §2.4 cross-source clobber, and a
 		// no-label writer no longer wipes). Ownership of the changed keys is
 		// enforced by the enforce_label_owner trigger.
+		// A REVIVAL is a NEW instance that happens to reuse an identity, and its Facets must not
+		// be the dead one's. Read the tombstone state before clearing it.
+		var revived bool
+		if err := tx.QueryRow(ctx,
+			`SELECT deleted_at IS NOT NULL FROM graph.entity WHERE id = $1`, id).Scan(&revived); err != nil {
+			return "", fmt.Errorf("graph: read tombstone state: %w", err)
+		}
 		if _, err := tx.Exec(ctx, `
 			UPDATE graph.entity
 			SET kind = $2, labels = graph.entity.labels || $3::jsonb,
@@ -178,6 +185,29 @@ func upsertEntityTx(ctx context.Context, tx pgx.Tx, prov types.Provenance, cell 
 			id, e.Kind, labels, string(prov.WriterKind), prov.WriterRef, prov.SourceID, prov.At, cell,
 		); err != nil {
 			return "", fmt.Errorf("graph: update entity: %w", err)
+		}
+		// FACTS DO NOT SURVIVE A TOMBSTONE. Every Facet describes the instance that died; carrying
+		// them onto the replacement is a stale projection asserting things about a machine that has
+		// never existed (§1.2).
+		//
+		// Measured, not theorised: a built host was deleted and rebuilt, and the graph went on
+		// claiming `software.package: apache2 2.4.68` about a pod that had never had apache — while
+		// `app.config: {port: 8080}` still read as SATISFIED, so no Finding was raised and the
+		// replacement would never have been converged. A lie that also silences the mechanism that
+		// would have corrected it.
+		//
+		// Retraction-by-source cannot fix this and it is worth saying why, because ADR-0060's M2
+		// note points that way: the retraction mechanism IS the full sync, and the ansible Actuator
+		// that wrote those Facets has no Syncer half — it never does one. Facts written by a
+		// converge can only be retired by the Entity's own death.
+		//
+		// Syncer-owned Facets are re-projected on the owning Source's next cycle, so this costs
+		// them nothing. graph.facet_history is untouched, so §1.8 descent into what was known at
+		// the time still resolves.
+		if revived {
+			if _, err := tx.Exec(ctx, `DELETE FROM graph.facet WHERE entity_id = $1`, id); err != nil {
+				return "", fmt.Errorf("graph: clear facets on revival: %w", err)
+			}
 		}
 	default:
 		return "", fmt.Errorf("%w: keys %v match %d entities", ErrIdentityConflict, e.IdentityKeys, len(matched))
@@ -209,14 +239,19 @@ func upsertEntityTx(ctx context.Context, tx pgx.Tx, prov types.Provenance, cell 
 	}
 
 	for ns, val := range e.Facets {
-		if err := upsertFacetTx(ctx, tx, prov, cell, id, ns, val); err != nil {
+		// A Syncer projection is UNQUALIFIED. One Syncer is one source, so it already gets
+		// exactly one row per (entity, namespace) — the qualifier is a compile-derived property
+		// of a CLAIM (ADR-0152 D3), and a Syncer has no claim to derive one from. Observing two
+		// instances of one namespace stays inexpressible; that is a capability this release
+		// declines to add, not one it removes (D6).
+		if err := upsertFacetTx(ctx, tx, prov, cell, id, ns, "", val); err != nil {
 			return "", err
 		}
 	}
 	return id, nil
 }
 
-func upsertFacetTx(ctx context.Context, tx pgx.Tx, prov types.Provenance, cell, entityID, namespace string, value json.RawMessage) error {
+func upsertFacetTx(ctx context.Context, tx pgx.Tx, prov types.Provenance, cell, entityID, namespace, qualifier string, value json.RawMessage) error {
 	// Pinned Facet schemas validate at the write path itself (§1.5,
 	// ADR-0015) — every writer (Normalizer and Run provenance alike) passes
 	// through here, so enforcement is structural, not a review norm.
@@ -231,30 +266,62 @@ func upsertFacetTx(ctx context.Context, tx pgx.Tx, prov types.Provenance, cell, 
 	// skipped by the home-gate uuid cast (`sid <> ''`). A genuine per-Actuator
 	// source is the ADR-0060 M2 follow-up.
 	source := prov.SourceID
+	// The QUALIFIER dimension (ADR-0152): which of several same-namespace Facets on this Entity
+	// this is — apache's app.config and tomcat's, rather than two opinions about one. Empty is the
+	// ordinary case and means unqualified, not missing.
+	//
+	// The conflict target is still the THREE-column key, because this is the expand release and
+	// facet_pkey has not moved yet (00047 says why: the previous release's replicas upsert through
+	// that exact constraint). So a non-empty qualifier can be written, but a SECOND one on the same
+	// (entity, namespace, source) still collides — the capability arrives with the contract release
+	// that folds the column into the key. Deliberate, and stated here so the limit is found by
+	// reading rather than by a constraint violation at 3am.
 	if _, err := tx.Exec(ctx, `
-		INSERT INTO graph.facet (entity_id, namespace, value, prov_writer_kind, prov_writer_ref, prov_source_id, prov_cell, prov_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $8, $7)
+		INSERT INTO graph.facet (entity_id, namespace, qualifier, value, prov_writer_kind, prov_writer_ref, prov_source_id, prov_cell, prov_at)
+		VALUES ($1, $2, $9, $3, $4, $5, $6, $8, $7)
 		ON CONFLICT (entity_id, namespace, prov_source_id) DO UPDATE
 		SET value = excluded.value,
+		    qualifier = excluded.qualifier,
 		    prov_writer_kind = excluded.prov_writer_kind,
 		    prov_writer_ref = excluded.prov_writer_ref,
 		    prov_cell = excluded.prov_cell,
 		    prov_at = excluded.prov_at`,
-		entityID, namespace, value, string(prov.WriterKind), prov.WriterRef, source, prov.At, cell,
+		entityID, namespace, value, string(prov.WriterKind), prov.WriterRef, source, prov.At, cell, qualifier,
 	); err != nil {
-		return fmt.Errorf("graph: upsert facet %s on %s: %w", namespace, entityID, err)
+		return fmt.Errorf("graph: upsert facet %s%s on %s: %w", namespace, qualifierSuffix(qualifier), entityID, err)
 	}
 	return nil
 }
 
-// UpsertFacet projects one Facet value onto an existing Entity.
+// qualifierSuffix renders a qualifier for a human — `app.config[tomcat]`, or nothing at all when
+// unqualified, so the overwhelming majority of messages read exactly as they always have.
+func qualifierSuffix(qualifier string) string {
+	if qualifier == "" {
+		return ""
+	}
+	return "[" + qualifier + "]"
+}
+
+// UpsertFacet projects one UNQUALIFIED Facet value onto an existing Entity — the ordinary case,
+// and what almost every namespace is (ADR-0152: the qualifier exists for the few whose grain is
+// finer than the Entity, like one host's several managed applications).
 func (p *Projector) UpsertFacet(ctx context.Context, prov types.Provenance, entityID, namespace string, value json.RawMessage) error {
+	return p.UpsertQualifiedFacet(ctx, prov, entityID, namespace, "", value)
+}
+
+// UpsertQualifiedFacet projects one Facet value under an explicit qualifier (ADR-0152 D2/D4).
+//
+// The qualifier is DERIVED AT COMPILE from the resolved spec and stamped by the core from the
+// claim — a writer never proposes its own (D6). That is what keeps the plugin port unchanged: a
+// plugin able to name its own qualifier could name ANOTHER claim's, and write the observed row a
+// foreign Baseline's drift evaluation reads.
+func (p *Projector) UpsertQualifiedFacet(ctx context.Context, prov types.Provenance, entityID, namespace, qualifier string, value json.RawMessage) error {
 	tx, err := p.begin(ctx)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback(ctx) //nolint:errcheck
-	if err := upsertFacetTx(ctx, tx, prov, p.cell, entityID, namespace, value); err != nil {
+	if err := upsertFacetTx(ctx, tx, prov, p.cell, entityID, namespace, qualifier, value); err != nil {
 		return err
 	}
 	return tx.Commit(ctx)
@@ -450,6 +517,21 @@ func retractRelationsFor(ctx context.Context, tx pgx.Tx, ids []string) error {
 // number of Entities actually tombstoned. The projection stays rebuildable;
 // tombstones keep Run history resolvable.
 func (p *Projector) TombstoneAbsent(ctx context.Context, prov types.Provenance, scheme string, seen []string) (int64, error) {
+	// A NIL seen-set is the "everything of this scheme disappeared" case — the whole reason
+	// tombstoning exists — and it was the one case this could not handle. A nil Go slice encodes as
+	// SQL NULL, and `NOT (value = ANY(NULL))` evaluates to NULL rather than TRUE, so the WHERE below
+	// matched nothing and the Source's last host stayed present forever. An empty ARRAY[] gives the
+	// TRUE the predicate wants.
+	//
+	// Found by deleting a built host out-of-band and watching the estate NOT notice: the pod was
+	// gone, the Syncer's full sync correctly reported zero, and the Entity — and therefore the
+	// provisioning reconcile's belief that the instance was built — survived. The declaration still
+	// asked for the host and nothing re-raised the build, which is the config-as-code contract
+	// broken at its most basic point.
+	if seen == nil {
+		seen = []string{}
+	}
+
 	tx, err := p.begin(ctx)
 	if err != nil {
 		return 0, err

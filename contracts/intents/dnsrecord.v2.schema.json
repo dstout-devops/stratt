@@ -1,0 +1,57 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "stratt:contract:intents/dnsrecord:v2",
+  "title": "Intent/DnsRecord spec",
+  "description": "Desired a DNS record declared in Git (ADR-0059/0110/0144, a named-singleton provisioning Intent). NOT an Entity (§1.2): cardinality-1, correlated desired<->built by (intentKind, name). v2 (ADR-0144 D6) closes the provider-coupling of the `builder:` seam exactly as subnet.v2/vlan.v2/dmz.v2 did — this kind was the straggler ADR-0110's migration missed, which made it UNDECLARABLE rather than merely unused: v1 REQUIRES builder+buildWorkflow and closes with additionalProperties:false, so an Intent written the way every other singleton is written failed validation, and one written the old way decoded into an empty `requires` that resolved to no provider. The Intent names the `provisioning` capability CLASS via `requires`, never a provider (§1.5); the reconcile resolves the bound provider + its build Workflow and surfaces a GATED build (§5 Flow 1), never auto-launches. 'params' is opaque, validated only against the resolved provider's own input Contract (§1.5) — no zone/rdata/TTL fields here (§1.1, no universal ontology: a 2136 provider and a cloud-API provider take different inputs and neither gets to define the kind).",
+  "type": "object",
+  "properties": {
+    "projectKind": {
+      "type": "string",
+      "description": "The Entity kind the built record projects AS (default dns-record), so Views select it. Carried on the build's Run-provenance projection — NEVER written by the reconcile (§1.2)."
+    },
+    "labels": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      },
+      "description": "Selection labels stamped on the built Entity's projection (per-key owned, ADR-0041)."
+    },
+    "requires": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "minItems": 1,
+      "contains": {
+        "const": "provisioning"
+      },
+      "description": "The capability CLASSES this singleton Intent depends on to be built (ADR-0110 D1). Must include `provisioning` (the class, never a named provider — §1.5); the reconcile resolves the concrete provider + its build Workflow via the verified-provider index + estate capability-bindings, fail-closed + observable (§1.8) when none resolves."
+    },
+    "params": {
+      "type": "object",
+      "additionalProperties": true,
+      "description": "Opaque build params passed to the resolved provider, validated against ITS input Contract downstream (§1.5). Never typed here (§1.1). For the RFC 2136 provider this is {zone, name, type, data, ttl}; a cloud-API provider takes its own shape behind the same Intent."
+    },
+    "placement": {
+      "type": "object",
+      "description": "Optional desired topology placement (ADR-0059 decision 5): a Relation cannot be declared in Git (§1.2), so placement's CaC home is the Intent; the build projects the placed-in edge (Run-provenance). Divergence from the observed placement raises a placement-drift Finding (§1.8).",
+      "properties": {
+        "subnet": {
+          "type": "string",
+          "description": "The subnet Entity name this unit is placed in (an Intent/Subnet name) — a placed-in edge."
+        },
+        "dmz": {
+          "type": "string",
+          "description": "The dmz Entity name this unit sits in (an in-dmz edge). Distinct from availabilityZone (decision 3: no generic zone)."
+        },
+        "availabilityZone": {
+          "type": "string",
+          "description": "The availability-zone Entity name this unit sits in (an in-az edge)."
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "required": ["requires"],
+  "additionalProperties": false
+}

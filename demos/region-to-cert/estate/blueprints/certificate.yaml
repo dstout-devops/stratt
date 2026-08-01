@@ -1,0 +1,48 @@
+# certificate — RENEWAL AS DRIFT, which is the line the app-cert demo drew and could not cross.
+#
+# Every other Blueprint here compares an observed VALUE to a declared one. This one compares an
+# observed TIMESTAMP to a WINDOW: `notBefore` asserts that the certificate on the host is at least
+# `renewBefore` away from expiry, so a certificate drifts by the passage of time and nothing else.
+# No schedule decides when to renew — the estate declares how much runway a certificate must have,
+# and the Finding opens exactly when it stops having it. A cron that renews every N hours is a guess
+# that gets worse as validity changes, and it cannot answer "which certificates are inside their
+# renewal window right now" at all.
+#
+# `cert.presented`, NOT `cert.expiry` (ADR-0150 D5). cert.expiry is the CLM's projection and says a
+# certificate was ISSUED; cert.presented is read back from the file on the host and says one is IN
+# PLACE. A certificate issued but never delivered is exactly the failure an operator needs to see,
+# and observing the CLM cannot see it (§1.8). It is also what makes this Blueprint bindable to a
+# View of HOSTS — which is what lets ONE Intent cover a whole fleet.
+#
+# THE ROUTE NAMES NO CLM. Grep this file for "openbao": there is nothing to find.
+name: certificate
+version: 1
+for: Intent/Certificate
+severity: warning
+# A certificate inside its renewal window is not a blip to be damped: the first observation is the
+# true one, and waiting for a second costs runway that is already short by construction.
+dampingObservations: 1
+defaults:
+  validity: 720h
+  renewBefore: 168h
+routes:
+  - observe:
+      namespace: cert.presented
+      path: notAfter
+      # The renewal window, substituted from the Intent so the CHECK and the FIX read the same
+      # declaration (ADR-0030 threshold; ADR-0024 substitution engine).
+      notBefore: "{{.spec.renewBefore}}"
+    # EXCLUSIVE, and for a certificate it is worse than for a config value: two issuers racing one
+    # subject produce two valid certificates and no way to say which the target should present.
+    claim: exclusive
+    # The COMPOSED Workflow, not the `certissuer` class — because converging a certificate spans two
+    # plugins (ansible for the target-side key/CSR and delivery, the CLM for the signature) and no
+    # single provider can claim to remediate the kind. Name the capability when more than one
+    # provider could legitimately serve; name the Workflow when the estate has DECIDED. Composing is
+    # a stronger form of deciding.
+    remediationWorkflow: cert-issue
+    remediationParams:
+      commonName: "{{.spec.commonName}}"
+      role: "{{.spec.issuer}}"
+      ttl: "{{.spec.validity}}"
+      renewBefore: "{{.spec.renewBefore}}"

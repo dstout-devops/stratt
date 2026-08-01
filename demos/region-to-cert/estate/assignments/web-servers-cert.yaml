@@ -1,0 +1,14 @@
+# A certificate for every host Stratt builds — the last leg, and it is five lines because the
+# issuance flow stopped naming a target.
+#
+# cert-issue inherits this Assignment's View, and the subject is derived per host from that host's
+# own mgmt.address Facet (ADR-0150 D1) — the DNS name kubecompute CAUSED by creating the Service.
+# So nothing here, and nothing in the Intent, names a host or a substrate.
+name: web-servers-cert
+intent: web-cert@1
+view: web-servers
+blueprint: certificate@1
+environments: [dev]
+# The population moves from nothing to one host as the fleet builds out; acknowledge the delta the
+# §4.3 blast-radius gate will see rather than making an operator chase it mid-demo.
+ackDelta: 1

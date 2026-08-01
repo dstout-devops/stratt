@@ -1,0 +1,40 @@
+# kubecompute — the `provisioning` capability's provider for Intent/Compute on Kubernetes
+# (ADR-0151), and the piece the capstone chain was missing in the middle.
+#
+# WHY IT EXISTS. Two providers already advertised `provisioning` for Compute and neither yields a
+# host anything can converge: a floci instance is a real machine RECORD with nothing listening (no
+# AMI ships sshd and user-data is never executed — measured 2026-07-27, floci 1.5.33), and
+# vcenter/vcsim is `build-real`. So "deploy a host → provision an application → deliver a
+# certificate to it" had never run as ONE act; the app and certificate legs were proven against
+# deploy/dev/managed-web.yaml, a host declared by hand rather than built.
+#
+# What this builds runs sshd and python3, which is the whole requirement: the SAME ansible reach
+# path (ADR-0084, mgmt.address → ansible_host) converges it, with no special case anywhere for a
+# built host versus a declared one.
+#
+# TWO HALVES, the awsec2 shape: it INVOKES to build and OBSERVES to say how to reach what it built.
+# The address is observed rather than returned by the build because a pod has no address until it is
+# scheduled — a builder asserting one would state a fact it cannot know (§1.2).
+# Hosts are built into their OWN namespace (stratt-hosts), not beside the control plane. That is
+# least privilege rather than tidiness: the plugin's pod-CREATE grant is a namespaced Role confined
+# to where hosts live, so a compromised builder cannot create pods next to strattd.
+name: kubecompute
+address: stratt-kubecompute:9090
+pluginIdentity: kubecompute
+tier: trusted
+dryRunnable: false
+# The landscape this provider builds in (ADR-0151 D1). Declaring it is what lets a binding select
+# this provider WITHOUT naming it — one line moves a whole topology (D2).
+substrate: kubernetes
+provides: [provisioning]
+actionNames: [kubecompute/create-host]
+identitySchemes: [kube.host]
+# The built host carries the estate's correlation label, and the grant must NAME it: the governor
+# drops any label key an Actuator did not declare, and the provisioning reconcile reads ONLY
+# `stratt.intent/instance` to decide this instance is built. Renaming or dropping it makes the Run
+# go green while the Finding is offered again forever (ADR-0120; guarded by
+# core/internal/desiredstate/provisioning_grant_test.go).
+labelKeys: [stratt.intent/instance, stratt.managed, fleet]
+facetNamespaces: [mgmt.address]
+provisions:
+  Compute: kubecompute-build

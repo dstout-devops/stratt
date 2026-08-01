@@ -25,17 +25,45 @@ type Playbook struct {
 	Hosts []string // the host patterns the plays target (observed, not resolved)
 }
 
-// Role is a directory under roles/ — reusable content a playbook includes.
+// Role is a role this project uses: a directory under roles/, OR a dependency declared in
+// requirements.yml (ANS-002). ONE Kind for both, because "which roles does this project use, and
+// which come from outside the repo" is one question — two Kinds would make it two queries and a
+// join, and would leave a dependency EDGE unable to resolve without knowing which it pointed at.
 type Role struct {
 	Name string
+	// Path is the in-tree location; EMPTY for a required role, which is the discriminator a
+	// reader actually cares about alongside Required.
 	Path string
+	// Required marks a role declared in requirements.yml rather than present in roles/ —
+	// content that must be fetched before this project can run (ANS-002).
+	Required bool
+	Version  string
+	Source   string
+	// Dependencies are the role names meta/main.yml declares (ANS-004), projected as
+	// `depends-on` edges. The one graph inside a role, and the only thing read from within
+	// one: tasks/handlers/defaults stay unread, which is the §9 line the audit holds.
+	Dependencies []string
+	// galaxy_info provenance — cheap metadata once meta/ is being read at all (ANS-004).
+	Author            string
+	License           string
+	MinAnsibleVersion string
+	Platforms         []string
 }
 
-// Collection is a Galaxy collection dependency declared in requirements.yml.
+// Collection is a Galaxy collection in play for this project: one DECLARED as a dependency in
+// requirements.yml, or (ANS-007) the one this repo IS, when a galaxy.yml sits at the root.
+// Discriminated by Root, the same shape ANS-002 used for Role.
 type Collection struct {
 	Name    string // the FQCN, e.g. community.general
 	Version string
 	Source  string
+	// Root marks the repo's own collection manifest rather than a dependency.
+	Root bool
+	// Path is the galaxy.yml this came from; empty for a required collection.
+	Path         string
+	Description  string
+	License      []string
+	Dependencies map[string]string
 }
 
 // Inventory is an inventory file/source — the hosts+groups a run targets.
@@ -50,6 +78,17 @@ type Snapshot struct {
 	Roles       []Role
 	Collections []Collection
 	Inventories []Inventory
+	// VarScopes are the group_vars/host_vars binding sites (ANS-003/008) — scope and KEY
+	// NAMES, never values.
+	VarScopes []VarScope
+	// Config is the root's ansible.cfg (ANS-005). Nil when it has none. It is read FIRST,
+	// because roles_path changes where the role reader has to look.
+	Config *AnsibleConfig
+	// Plugins are the repo's OWN modules and plugins (ANS-006) — the content most likely to
+	// break on a migration.
+	Plugins []Plugin
+	// Galaxy is the root's own galaxy.yml (ANS-007): the repo declaring itself a collection.
+	Galaxy *GalaxyRoot
 }
 
 // Enumerate performs one full read of the content root. A parse failure on a
@@ -59,55 +98,110 @@ type Snapshot struct {
 func (c *Client) Enumerate() (*Snapshot, error) {
 	var snap Snapshot
 	var err error
-	if snap.Roles, err = c.roles(); err != nil {
+	// FIRST, and the ordering is load-bearing (ANS-005): ansible.cfg's roles_path decides
+	// where roles live, so reading the tree before the config that describes it is how a root
+	// configured with `roles_path = galaxy_roles` projected zero roles and said nothing.
+	if snap.Config, err = c.readConfig(); err != nil {
 		return nil, err
 	}
-	if snap.Collections, err = c.collections(); err != nil {
+	if snap.Galaxy, err = c.readGalaxy(); err != nil {
 		return nil, err
+	}
+	if snap.Roles, err = c.roles(snap.Config); err != nil {
+		return nil, err
+	}
+	if snap.Plugins, err = c.plugins(); err != nil {
+		return nil, err
+	}
+	// ONE read of requirements.yml yields BOTH halves (ANS-002). Only `collections:` was
+	// parsed before, so a project's role dependencies were invisible while its collection
+	// dependencies were not — an asymmetry inside a single file.
+	var required []Role
+	if snap.Collections, required, err = c.requirements(); err != nil {
+		return nil, err
+	}
+	snap.Roles = append(snap.Roles, required...)
+	// The root's OWN collection, when it has a galaxy.yml (ANS-007) — same Kind as a required
+	// one, marked root, because "what collections are in play, and which one is THIS repo" is
+	// one question.
+	//
+	// AFTER the requirements read, not before: that read ASSIGNS snap.Collections rather than
+	// appending to it, so appending first silently discarded the root collection. Caught by the
+	// test; worth the comment because the next field added here will face the same trap.
+	if snap.Galaxy != nil {
+		snap.Collections = append(snap.Collections, Collection{
+			Name: snap.Galaxy.FQCN(), Version: snap.Galaxy.Version, Root: true,
+			Path: snap.Galaxy.Path, Description: snap.Galaxy.Description,
+			License: snap.Galaxy.License, Dependencies: snap.Galaxy.Dependencies,
+		})
 	}
 	if snap.Playbooks, snap.Inventories, err = c.content(); err != nil {
+		return nil, err
+	}
+	if snap.VarScopes, err = c.varScopes(); err != nil {
 		return nil, err
 	}
 	return &snap, nil
 }
 
-// roles reads the immediate subdirectories of roles/ (each a reusable role).
-func (c *Client) roles() ([]Role, error) {
+// roles reads the immediate subdirectories of every role search path (each a reusable role).
+//
+// The search paths are `roles/` plus any relative, in-root entry of ansible.cfg's roles_path
+// (ANS-005). Reading only `roles/` meant a root that configured its roles elsewhere projected
+// NONE and reported no problem — the silent wrong answer the config observation exposed.
+func (c *Client) roles(cfg *AnsibleConfig) ([]Role, error) {
 	var out []Role
-	ents, err := fs.ReadDir(c.fsys, "roles")
-	if errors.Is(err, fs.ErrNotExist) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, fmt.Errorf("ansible-automation content: read roles/: %w", err)
-	}
-	for _, e := range ents {
-		if !e.IsDir() {
+	seen := map[string]bool{}
+	for _, dir := range rolesSearchPaths(cfg) {
+		ents, err := fs.ReadDir(c.fsys, dir)
+		if errors.Is(err, fs.ErrNotExist) {
 			continue
 		}
-		out = append(out, Role{Name: e.Name(), Path: "roles/" + e.Name()})
+		if err != nil {
+			return nil, fmt.Errorf("ansible-automation content: read %s/: %w", dir, err)
+		}
+		for _, e := range ents {
+			if !e.IsDir() {
+				continue
+			}
+			r := Role{Name: e.Name(), Path: dir + "/" + e.Name()}
+			if seen[r.Path] {
+				continue
+			}
+			seen[r.Path] = true
+			if err := c.readRoleMeta(&r); err != nil {
+				return nil, fmt.Errorf("ansible-automation content: read %s/meta: %w", r.Path, err)
+			}
+			out = append(out, r)
+		}
 	}
 	return out, nil
 }
 
-// collections parses the Galaxy collection dependencies from the standard
-// requirements.yml locations. Each entry is either a bare FQCN string or a
-// {name, version, source} mapping (both Galaxy-legal forms).
-func (c *Client) collections() ([]Collection, error) {
+// requirements parses BOTH halves of the standard requirements.yml locations: the Galaxy
+// collection dependencies and (ANS-002) the role dependencies. Each entry of either is a bare
+// name string or a mapping — both Galaxy-legal forms, and real repos use both.
+func (c *Client) requirements() ([]Collection, []Role, error) {
 	var out []Collection
+	var roles []Role
 	for _, p := range []string{"requirements.yml", "requirements.yaml", "collections/requirements.yml", "collections/requirements.yaml"} {
 		b, err := fs.ReadFile(c.fsys, p)
 		if errors.Is(err, fs.ErrNotExist) {
 			continue
 		}
 		if err != nil {
-			return nil, fmt.Errorf("ansible-automation content: read %s: %w", p, err)
+			return nil, nil, fmt.Errorf("ansible-automation content: read %s: %w", p, err)
 		}
+		var root yaml.Node
+		if err := yaml.Unmarshal(b, &root); err != nil {
+			return nil, nil, fmt.Errorf("ansible-automation content: parse %s: %w", p, err)
+		}
+		roles = append(roles, parseRequirementsRoles(&root)...)
 		var doc struct {
 			Collections []yaml.Node `yaml:"collections"`
 		}
 		if err := yaml.Unmarshal(b, &doc); err != nil {
-			return nil, fmt.Errorf("ansible-automation content: parse %s: %w", p, err)
+			return nil, nil, fmt.Errorf("ansible-automation content: parse %s: %w", p, err)
 		}
 		for _, n := range doc.Collections {
 			if n.Kind == yaml.ScalarNode {
@@ -124,7 +218,7 @@ func (c *Client) collections() ([]Collection, error) {
 			}
 		}
 	}
-	return out, nil
+	return out, roles, nil
 }
 
 // content walks the tree once, classifying each file as an inventory (by well-known

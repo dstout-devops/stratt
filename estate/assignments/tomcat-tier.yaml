@@ -1,0 +1,9 @@
+# Binds the tomcat-tier Intent to the managed-tomcat node via tomcat@1. The port is the Blueprint
+# default (8080) because this Intent omits it — the drift loop checks app.config.port on a REACHABLE
+# node and the gated tomcat-configure remediation SSHes in, installs the package, sets the connector
+# port and reports both back, so the Finding RESOLVES.
+name: tomcat-tier
+intent: tomcat-tier@1
+view: managed-tomcat
+blueprint: tomcat@1
+environments: [dev]

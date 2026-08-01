@@ -75,7 +75,11 @@ func viewToInventory(view types.View, totalHosts int) map[string]any {
 }
 
 // workflowToJobTemplate renders a single-Step Workflow as an AWX job_template.
-func workflowToJobTemplate(wf types.Workflow, step types.Step) map[string]any {
+//
+// projects maps Actuator name → project id (projects.go). A Step whose Actuator declares a content
+// root gets a real `project`; one that does not gets null, because it genuinely has no project and
+// a synthesized id would dangle.
+func workflowToJobTemplate(wf types.Workflow, step types.Step, projects map[string]int64) map[string]any {
 	id := awxID(wf.Name)
 	invID := awxID(step.ViewName)
 	// Which file an AWX client sees as the job template's `playbook`, in the order the three
@@ -93,13 +97,17 @@ func workflowToJobTemplate(wf types.Workflow, step types.Step) map[string]any {
 	if playbook == "" {
 		playbook = "play.yml" // inline-play Workflows have no content ref at all
 	}
-	return map[string]any{
+	var project any
+	if pid, ok := projects[step.Actuator]; ok {
+		project = pid
+	}
+	out := map[string]any{
 		"id":                      id,
 		"type":                    "job_template",
 		"name":                    wf.Name,
 		"job_type":                "run",
 		"inventory":               invID,
-		"project":                 nil,
+		"project":                 project,
 		"playbook":                playbook,
 		"ask_variables_on_launch": true,
 		"ask_limit_on_launch":     false,
@@ -115,6 +123,12 @@ func workflowToJobTemplate(wf types.Workflow, step types.Step) map[string]any {
 			"user_capabilities": map[string]bool{"start": true, "edit": false, "delete": false},
 		},
 	}
+	if project != nil {
+		out["related"].(map[string]any)["project"] = jt("/api/v2/projects/%d/", project)
+		out["summary_fields"].(map[string]any)["project"] =
+			map[string]any{"id": project, "name": step.Actuator}
+	}
+	return out
 }
 
 // runToJob renders a Run as an AWX job.

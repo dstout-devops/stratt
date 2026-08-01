@@ -56,19 +56,22 @@ type Declarations struct {
 	// CapabilityBindings select which verified provider fulfils a capability class for a given
 	// Intent kind (ADR-0110 D3) — a CaC declaration form, not a Named Kind (§2 frozen).
 	CapabilityBindings []types.CapabilityBinding `json:"capabilityBindings"`
-	Triggers           []types.Trigger           `json:"triggers"`
-	Workflows          []types.Workflow          `json:"workflows"`
-	Emitters           []types.Emitter           `json:"emitters"`
-	Baselines          []types.Baseline          `json:"baselines"`
-	MCPServers         []types.MCPServer         `json:"mcpServers"`
-	Intents            []types.Intent            `json:"intents"`
-	Assignments        []types.Assignment        `json:"assignments"`
-	Blueprints         []types.Blueprint         `json:"blueprints"`
-	NotifySinks        []types.Sink              `json:"notifySinks"`
-	Subscriptions      []types.Subscription      `json:"subscriptions"`
-	Sites              []types.Site              `json:"sites"`
-	Cells              []types.Cell              `json:"cells"`
-	SCIMIdPs           []types.SCIMIdP           `json:"scimIdps"`
+	// Environments are the declared reconcile scopes (ADR-0142) — the referent for the
+	// `environments` membership filter every kind below carries. Not a Named Kind (§2 frozen).
+	Environments  []types.Environment  `json:"environments"`
+	Triggers      []types.Trigger      `json:"triggers"`
+	Workflows     []types.Workflow     `json:"workflows"`
+	Emitters      []types.Emitter      `json:"emitters"`
+	Baselines     []types.Baseline     `json:"baselines"`
+	MCPServers    []types.MCPServer    `json:"mcpServers"`
+	Intents       []types.Intent       `json:"intents"`
+	Assignments   []types.Assignment   `json:"assignments"`
+	Blueprints    []types.Blueprint    `json:"blueprints"`
+	NotifySinks   []types.Sink         `json:"notifySinks"`
+	Subscriptions []types.Subscription `json:"subscriptions"`
+	Sites         []types.Site         `json:"sites"`
+	Cells         []types.Cell         `json:"cells"`
+	SCIMIdPs      []types.SCIMIdP      `json:"scimIdps"`
 	// AdmissionControls are the estate's admission policy (ADR-0073 §7.4b): CEL
 	// predicates over each declaration's manifest, evaluated at load through the
 	// PDP port. A deny rejects the declaration (§7.4c).
@@ -245,7 +248,7 @@ func ParseDir(root string, decider policy.Decider) (Declarations, error) {
 		out.AdmissionControls = append(out.AdmissionControls, a.Controls...)
 	}
 	if len(out.AdmissionControls) > 0 && decider != nil {
-		if err := admitEstate(root, out.AdmissionControls, decider); err != nil {
+		if err := admitEstate(roots, out.AdmissionControls, decider); err != nil {
 			return out, err
 		}
 	}
@@ -308,6 +311,13 @@ func ParseDir(root string, decider policy.Decider) (Declarations, error) {
 	}
 	out.CapabilityBindings = capBindings
 	sort.Slice(out.CapabilityBindings, func(i, j int) bool { return out.CapabilityBindings[i].Name < out.CapabilityBindings[j].Name })
+
+	environments, err := parseKind(kindDirs(roots, "environments"), true, parseEnvironmentFile)
+	if err != nil {
+		return out, err
+	}
+	out.Environments = environments
+	sort.Slice(out.Environments, func(i, j int) bool { return out.Environments[i].Name < out.Environments[j].Name })
 
 	triggers, err := parseKind(kindDirs(roots, "triggers"), true,
 		func(path string, raw []byte) (string, types.Trigger, error) {
@@ -443,7 +453,31 @@ func ParseDir(root string, decider policy.Decider) (Declarations, error) {
 	if err := checkActuatorCapability(out); err != nil {
 		return out, err
 	}
+	if err := checkPlacementTargets(out); err != nil {
+		return out, err
+	}
+	if err := checkBlueprintDelivers(out); err != nil {
+		return out, err
+	}
 	if err := checkProvisioningBuildInputs(out); err != nil {
+		return out, err
+	}
+	// The third member of the advertised-target family, beside validateProvisions (ADR-0145) and
+	// the `remediates` resolve check (CERT-1): a `facetWriteScope` naming a namespace nothing in
+	// this estate owns. Whole-estate, so it runs here with the rest.
+	if err := checkFacetWriteScopeOwners(out); err != nil {
+		return out, err
+	}
+	// ADR-0151 follow-up 4 — the "kube-app" guard. Needs the parsed providers (to know what a
+	// provider NAME is) and every declared kind above them, so it runs here with the rest of the
+	// whole-estate checks.
+	if err := checkNothingAboveAProviderNamesASubstrate(out); err != nil {
+		return out, err
+	}
+	// Last, because it is whole-estate referential integrity: every kind's `environments`
+	// filter must name a declared scope (ADR-0142 D2). Runs after all kinds are parsed
+	// because the declared set and the referencing set are both estate-wide.
+	if err := validateEnvironmentRefs(out); err != nil {
 		return out, err
 	}
 	return out, nil
@@ -619,15 +653,167 @@ func remediationCandidates(decls Declarations, intentKind, capClass string) []st
 // person who can fix it.
 //
 // IT CHECKS EVERY CANDIDATE, NOT THE WINNER, and that is deliberately stronger than the reconcile.
-// Which provider wins depends on the daemon's active environment and on which providers are
-// VERIFIED — runtime state Git cannot see (ADR-0110 D3, ADR-0113 D2). So every Workflow named in any
-// provider's `provisions` map for a kind must fit. `estate/actuators/awsec2.yaml` and
-// `vcenter.yaml` both advertise a Compute builder; a fix that satisfied only the one bound in this
-// environment would break the other on a binding change, which is precisely the moment nobody is
-// looking at the build Workflow.
+// Which provider wins depends on which providers are VERIFIED — runtime state Git cannot see
+// (ADR-0110 D3, ADR-0113 D2) — so a fix that satisfied only the one bound today would break the
+// other on a binding change, which is precisely the moment nobody is looking at the build Workflow.
+//
+// BUT "EVERY CANDIDATE" IS SCOPED TO THE ENVIRONMENTS THE INTENT IS ACTUALLY IN, and it used not to
+// be. The candidate set was the union of every declared provider's builder for the kind, in every
+// environment at once, and the consequence was not theoretical: `app-tier` had to declare `region`,
+// `instanceType` and `ami` — AWS coordinates — while the `dev` environment binds Compute to the
+// kubernetes substrate, where nothing reads them. They were there to satisfy a builder that will
+// never run for that Intent in that environment. Worse, admitting a NEW provisioning provider
+// retroactively invalidated every existing Intent of its kind, because each then had to satisfy the
+// newcomer's builder too. An estate could be broken by a plugin it had just installed and not yet
+// used.
+//
+// The scope comes from the Intent's own `environments` filter (types.Intent.Environments) and, in
+// each of those environments, from what a capability-binding could resolve to — the SAME
+// capability.Resolve the reconcile runs. reachableBuilders owns that computation and documents the
+// three conservative asymmetries that keep the narrowed set sound; read it before changing this.
+//
+// The estate has since been cleaned up on the back of this: `app-tier` and `web-fleet` are scoped
+// `[dev, vsphere-dc]` — every environment in which the estate binds a Compute provider at all — and
+// the AWS coordinates are gone from both. Removing them uncovered the sibling of the same defect
+// one layer down: `params` was emitted only when the Intent declared some, so the FIRST Intent that
+// legitimately declared none made the estate unloadable. See provision.emptyIfNil.
 //
 // The expected param set is taken from provision.BuildLaunchParams itself rather than a list
 // duplicated here, so the check cannot drift from what the reconcile actually sends.
+// checkBlueprintDelivers refuses an Assignment that binds an Intent asking for one application to
+// a Blueprint that installs another (ADR-0148 D2).
+//
+// The tech is stated twice because it has to be. Content selection cannot be data — a templated
+// content ref is refused at estate load, deliberately, since templating your way into arbitrary
+// content is a supply-chain hole — so one playbook per Step cascades into one application per
+// Workflow, per route, per Blueprint. Meanwhile the Intent must still say what it wants, or a
+// reader has to chase the Assignment to its Blueprint to learn what the fleet is running.
+//
+// Two statements of one fact is the §2.4 hazard this repo keeps finding, so they are made to agree
+// rather than trusted to. Without this the estate compiles cleanly, the drift loop runs, the
+// operator approves a remediation, and the WRONG APPLICATION is installed on the fleet — with the
+// Finding then never resolving, because the expectation was written for the other one.
+//
+// PERMISSIVE IN BOTH DIRECTIONS BY OMISSION, and deliberately: a Blueprint that composes something
+// other than an application (access, fileset) declares no `delivers` and constrains nothing, and an
+// Intent that omits `package` is taking the Blueprint's word for it, which is the shape someone may
+// legitimately prefer. Only an explicit DISAGREEMENT is an error.
+func checkBlueprintDelivers(decls Declarations) error {
+	intents := make(map[string]types.Intent, len(decls.Intents))
+	for _, in := range decls.Intents {
+		intents[in.Name] = in
+	}
+	blueprints := map[string]types.Blueprint{}
+	for _, b := range decls.Blueprints {
+		blueprints[fmt.Sprintf("%s@%d", b.Name, b.Version)] = b
+	}
+	for _, a := range decls.Assignments {
+		bp, ok := blueprints[fmt.Sprintf("%s@%d", a.Blueprint, a.BlueprintVersion)]
+		if !ok || bp.Delivers == "" {
+			continue
+		}
+		in, ok := intents[a.Intent]
+		if !ok {
+			continue // a dangling Intent ref is another check's error, with a better message
+		}
+		pkg, _ := in.Spec["package"].(string)
+		if pkg == "" || pkg == bp.Delivers {
+			continue
+		}
+		return fmt.Errorf(
+			"assignment %s binds intent %s, which asks for package %q, to blueprint %s@%d, which "+
+				"delivers %q. A Blueprint installs ONE application — content cannot be selected by "+
+				"data (a templated content ref is refused at load), so the mismatch would compile, "+
+				"drift-check %q's configuration, and install %q on the fleet (ADR-0148 D2)",
+			a.Name, a.Intent, pkg, a.Blueprint, a.BlueprintVersion, bp.Delivers, pkg, bp.Delivers)
+	}
+	return nil
+}
+
+// checkPlacementTargets refuses a declared placement whose target no Intent/Subnet declares
+// (ADR-0147 D4).
+//
+// It became checkable only once D1 settled what the field REFERS to. `placement.subnet` is
+// resolved through the singleton correlation key `Intent/Subnet/<name>`, so its referent is an
+// Intent/Subnet name — and a name nothing declares can never resolve, in any environment, forever.
+// Before D1 the referent was ambiguous (an Intent name? an Entity name?) and a check here would
+// have baked in a guess; the schema description said both.
+//
+// The failure it closes is the ordinary typo. `placement.subnet: ap-subnet` is a perfectly valid
+// string that reaches the reconcile, fails to resolve, and surfaces as "declared but not built —
+// build it first" — advice that can never be taken, pointing at a subnet that does not exist. Same
+// §1.8 rule as an unknown environment or an undeclared Actuator: refuse at the diff.
+//
+// PLACEMENT INTO PRE-EXISTING ESTATE (a subnet nobody provisioned, observed by a Syncer) is
+// therefore NOT expressible, and that is a real limitation rather than an oversight — supporting it
+// means a second referent for one field, resolved by a different mechanism, which is the kind of
+// ambiguity §2.4 refuses. Booked in ADR-0147.
+func checkPlacementTargets(decls Declarations) error {
+	subnets := map[string]types.Intent{}
+	var declared []string
+	for _, in := range decls.Intents {
+		if in.Kind == types.IntentSubnet {
+			subnets[in.Name] = in
+			declared = append(declared, in.Name)
+		}
+	}
+	sort.Strings(declared)
+	// The environments a scope check has to cover: the placing Intent's own, or every declared
+	// one when it is unscoped (an unscoped Intent is reconciled in all of them).
+	allEnvs := make([]string, 0, len(decls.Environments))
+	for _, e := range decls.Environments {
+		allEnvs = append(allEnvs, e.Name)
+	}
+	sort.Strings(allEnvs)
+
+	for _, in := range decls.Intents {
+		pl, ok := in.Spec["placement"].(map[string]any)
+		if !ok {
+			continue
+		}
+		target, _ := pl["subnet"].(string)
+		if target == "" {
+			continue
+		}
+		sub, ok := subnets[target]
+		if !ok {
+			return fmt.Errorf(
+				"intent %s declares placement.subnet %q, which no Intent/Subnet declares (declared: %v). "+
+					"The reconcile resolves a placement target through the Intent/Subnet correlation key "+
+					"(ADR-0147 D1), so a name nothing declares can never resolve — the build would surface "+
+					"forever as \"build %s first\", advice nobody can take",
+				in.Name, target, declared, target)
+		}
+		// DECLARED IS NOT ENOUGH ONCE AN INTENT CAN BE SCOPED. A `[dev]` Compute Intent placed in a
+		// `[prod]` Subnet passes the name check and then fails identically at reconcile: the dev
+		// daemon filters the Subnet Intent out, nothing correlates, and the build surfaces forever
+		// as "build app-subnet first" — the same advice-nobody-can-take this check exists to
+		// eliminate, arriving by a route that did not exist before Intents carried a scope.
+		//
+		// The rule is COVERAGE, not equality: the target must be in scope everywhere the placing
+		// Intent is. An unscoped target covers everything and is always fine.
+		if len(sub.Environments) == 0 {
+			continue
+		}
+		envs := in.Environments
+		if len(envs) == 0 {
+			envs = allEnvs
+		}
+		for _, e := range envs {
+			if !types.InScope(sub.Environments, e) {
+				return fmt.Errorf(
+					"intent %s (environments: %v) declares placement.subnet %q, but that Intent/Subnet is "+
+						"scoped to %v — so in environment %q the placement target is filtered out of the "+
+						"reconcile and can never correlate. The build would surface forever as \"build %s "+
+						"first\", advice nobody can take (ADR-0147 D1, ADR-0057). Widen the subnet's scope "+
+						"or narrow this Intent's",
+					in.Name, envs, target, sub.Environments, e, target)
+			}
+		}
+	}
+	return nil
+}
+
 func checkProvisioningBuildInputs(decls Declarations) error {
 	byName := make(map[string]types.Workflow, len(decls.Workflows))
 	for _, w := range decls.Workflows {
@@ -701,6 +887,41 @@ func checkProvisioningBuildInputs(decls Declarations) error {
 			}
 		}
 	}
+	// THE THIRD MEMBER OF THE SAME FAMILY, and it was missing (W4). `remediates` is what a
+	// capability-routed Blueprint resolves through (ADR-0135 D2/D3), and `validateRemediates` checks
+	// only that the entry is non-empty — exactly the partial check `validateProvisions` was before
+	// the builders loop above existed. So a provider could advertise a convergence Workflow nobody
+	// declared, and the estate LOADED: `task ci` stayed green while the live compiler rejected the
+	// Assignment with "remediation workflow ... not found".
+	//
+	// Measured, on the certificate leg: a `remediates` value mangled by an editing slip
+	// (`Certificate: cert-issue, and NO facetNamespaces at all.`) parsed cleanly, passed the whole
+	// gate, and was caught only by a running control plane. A dangling remediation target is the
+	// worst of the three to meet — provisioning and teardown Findings are launched by an operator
+	// who can read the name, whereas a drift Finding's remediation is the thing the estate promises
+	// will close it automatically.
+	for _, a := range decls.Actuators {
+		for kind, wfName := range a.Remediates {
+			if _, ok := byName[wfName]; !ok {
+				return fmt.Errorf(
+					"actuator %q advertises workflow %q as its %s remediation, but no such Workflow "+
+						"is declared — a capability-routed Blueprint would resolve to it and find "+
+						"nothing to launch. Declare it, or drop the remediates entry (ADR-0135 D2)",
+					a.Name, wfName, kind)
+			}
+		}
+	}
+	for _, c := range decls.Connectors {
+		for kind, wfName := range c.Remediates {
+			if _, ok := byName[wfName]; !ok {
+				return fmt.Errorf(
+					"connector %q advertises workflow %q as its %s remediation, but no such Workflow "+
+						"is declared — a capability-routed Blueprint would resolve to it and find "+
+						"nothing to launch. Declare it, or drop the remediates entry (ADR-0135 D2)",
+					c.Name, wfName, kind)
+			}
+		}
+	}
 
 	for _, in := range decls.Intents {
 		// The generated param set differs per provisioning shape: a fleet instance has an ordinal
@@ -737,7 +958,7 @@ func checkProvisioningBuildInputs(decls Declarations) error {
 			continue // not a provisioning kind
 		}
 
-		for _, wfName := range builders[kind] {
+		for _, wfName := range reachableBuilders(decls, in, kind, false) {
 			what := fmt.Sprintf("intent %s builds via workflow %s", in.Name, wfName)
 			if err := checkAdvertisedWorkflow(what, byName[wfName], in, supplied, unit, "build"); err != nil {
 				return err
@@ -748,7 +969,7 @@ func checkProvisioningBuildInputs(decls Declarations) error {
 		// destructive act an operator discovers at the gate. Only Compute has a teardown reach-path
 		// today (whole-Intent withdrawal for singletons is ADR-0114's own booked follow-up), so a
 		// singleton kind simply has no entry here rather than a special case.
-		for _, wfName := range teardowns[kind] {
+		for _, wfName := range reachableBuilders(decls, in, kind, true) {
 			what := fmt.Sprintf("intent %s tears down via workflow %s", in.Name, wfName)
 			// Representative values: this check is about the KEY SET, and a placeholder identity
 			// carries the same keys a real one does.
@@ -844,6 +1065,32 @@ func checkAdvertisedWorkflow(what string, wf types.Workflow, in types.Intent, su
 				"`placement` reached no provider for as long as it did (ADR-0123 D3). Bind it, or "+
 				"stop declaring it", what, unbound)
 	}
+	// And every key the builder binds from INSIDE the opaque `params` must exist in this Intent.
+	//
+	// This is the one part of a build launch nothing validated, and the gap is structural rather
+	// than accidental: `params` is provider-shaped and opaque to core (§1.5), so no Contract covers
+	// it here, while template.Substitute fails CLOSED on a missing field — at launch, which is
+	// AFTER an operator approved the gate. The check above proves the reconcile can fill the
+	// builder's declared inputs; this one proves the INTENT can fill what the builder reads out of
+	// them. Both halves are needed for "this Intent can actually be built" to be a load-time fact.
+	//
+	// It found `app-tier` unbuildable: it declares only `params.tier`, while compute-build binds
+	// region, instanceType and ami. Same shape as the two defects before it (a declared placement
+	// reaching no provider, an advertised builder that did not exist) — a launch nobody could
+	// complete, discovered at the gate.
+	//
+	// EVERY candidate builder is checked, not the bound one, for the reason stated above: which
+	// provider wins is runtime state Git cannot see. A builder that binds nothing from params —
+	// vcenter's, which keeps provider-shaped values literal precisely to stay compatible with
+	// Intents shaped for another substrate — constrains nothing here.
+	if missing := unsuppliedParams(wf, in); len(missing) > 0 {
+		return fmt.Errorf(
+			"%s, but that workflow binds {{.launch.params.%s}} and intent %s declares no such param "+
+				"(it declares: %v). `params` is opaque to core (§1.5) so nothing types it, and the "+
+				"substituter refuses an unknown field — so this launch fails AFTER an operator "+
+				"approves the gate. Declare the param, or stop binding it (ADR-0146 D4)",
+			what, strings.Join(missing, "}}, {{.launch.params."), in.Name, sortedSpecParams(in))
+	}
 	if label, bad := hardcodedCorrelationLabel(wf); bad {
 		return fmt.Errorf(
 			"%s, but that workflow hardcodes the correlation label %q in a step. It must forward "+
@@ -895,6 +1142,55 @@ func checkAdvertisedWorkflow(what string, wf types.Workflow, in types.Intent, su
 // scanning the Steps for `{{.launch.<name>` finds every possible consumer. A nested binding
 // (`{{.launch.params.region}}`) counts as consuming `params`, which is right — the Workflow does
 // use it.
+// unsuppliedParams returns the keys w binds from {{.launch.params.*}} that the Intent's spec
+// does not declare, sorted. Empty when the Intent can satisfy the builder.
+func unsuppliedParams(w types.Workflow, in types.Intent) []string {
+	have := map[string]bool{}
+	if p, ok := in.Spec["params"].(map[string]any); ok {
+		for k := range p {
+			have[k] = true
+		}
+	}
+	need := map[string]bool{}
+	var walk func(any)
+	walk = func(v any) {
+		switch t := v.(type) {
+		case string:
+			for _, ref := range template.LaunchParamFields(t) {
+				need[ref] = true
+			}
+		case map[string]any:
+			for _, val := range t {
+				walk(val)
+			}
+		case []any:
+			for _, val := range t {
+				walk(val)
+			}
+		}
+	}
+	for _, st := range w.Steps {
+		walk(st.Params)
+	}
+	var out []string
+	for k := range need {
+		if !have[k] {
+			out = append(out, k)
+		}
+	}
+	sort.Strings(out) // deterministic diagnostics — a map-range error message is a coin flip
+	return out
+}
+
+// sortedSpecParams lists the param keys an Intent actually declares, for the diagnostic above.
+func sortedSpecParams(in types.Intent) []string {
+	p, ok := in.Spec["params"].(map[string]any)
+	if !ok {
+		return nil
+	}
+	return sortedKeys(p)
+}
+
 func unboundInputs(w types.Workflow, declared []string) []string {
 	bound := map[string]bool{}
 	var walk func(any)
@@ -1107,12 +1403,31 @@ func parseAdmissionFile(path string, raw []byte) (string, admissionDecl, error) 
 	return f.Name, admissionDecl{Name: f.Name, Controls: ctrls}, nil
 }
 
-// admissionDirs are the declaration directories admission judges — every estate
-// kind except admission/ itself (a policy does not admit itself).
+// admissionDirs are the declaration directories admission judges: EVERY directory the
+// estate can carry except admission/ itself, which is excluded by design — a policy does
+// not admit itself.
+//
+// It used to stop at the fifteen kinds above the blank line, and the three things missing
+// were the three that mattered most (docs/declaration-map.md §7 item 2):
+//
+//   - capability-bindings/ is the ONE place a provider or a substrate may be named
+//     (ADR-0151). It is the line whose edit migrates a whole topology from Kubernetes to
+//     AWS, and it was the only declaration in the estate that no control could reach.
+//   - actuators/ + connectors/ are the L0 GRANT surface — what a plugin is allowed to do.
+//     An org control over which providers may be admitted had nothing to match on.
+//   - authz/, advisories/, hosts/ and environments/ are list- or scope-shaped documents
+//     that still carry consequence: a tuple grants, an advisory decides what "vulnerable"
+//     means, a host declaration asserts a reach coordinate.
+//
+// A control that never fires reads exactly like a control that always passes (§1.8), so the
+// coverage is asserted by TestAdmissionJudgesEveryDeclarationDirectory rather than by this
+// list staying correct on its own.
 var admissionDirs = []string{
 	"views", "credential-refs", "triggers", "workflows", "emitters", "sites",
 	"cells", "scim", "notify-sinks", "subscriptions", "baselines", "mcp-servers",
 	"intents", "assignments", "blueprints",
+	"capability-bindings", "environments", "actuators", "connectors",
+	"authz", "advisories", "hosts",
 }
 
 // admitEstate runs the admission PEP over every declaration manifest through the
@@ -1120,35 +1435,53 @@ var admissionDirs = []string{
 // record (§1.8). The manifest is admitted as a generic object with a guaranteed
 // `kind` (the manifest's own, or the directory's), so admission controls can
 // match reliably (e.g. object.kind == 'Workflow').
-func admitEstate(root string, controls []types.Control, decider policy.Decider) error {
-	for _, sub := range admissionDirs {
-		entries, err := os.ReadDir(filepath.Join(root, sub))
-		if os.IsNotExist(err) {
-			continue
-		}
-		if err != nil {
-			return fmt.Errorf("desiredstate: admission read %s: %w", sub, err)
-		}
-		for _, e := range entries {
-			if e.IsDir() {
+//
+// IT TAKES EVERY ESTATE ROOT, NOT JUST THE PRIMARY ONE, and the singular signature it
+// replaced is the sharpest form of the same gap admissionDirs had. `estateRoots` returns the
+// estate plus one root per plugin admitted in plugins.yaml (ADR-0137), and every kind below
+// is parsed across all of them — but admission walked only the first. So a plugin's
+// Workflows, Actuators, Connectors and Blueprints were admitted by NOTHING, even for the
+// kinds already on the list.
+//
+// That is the inverse of what admission is for. Third-party declarations are precisely the
+// ones an org wants judged; the estate's own are the ones its authors already control. A
+// deployment could carry a fully-specified admission policy, pass its own manifests through
+// it, and admit an arbitrary plugin's Actuator grants unexamined.
+func admitEstate(roots []string, controls []types.Control, decider policy.Decider) error {
+	for _, root := range roots {
+		for _, sub := range admissionDirs {
+			entries, err := os.ReadDir(filepath.Join(root, sub))
+			if os.IsNotExist(err) {
 				continue
 			}
-			ext := strings.ToLower(filepath.Ext(e.Name()))
-			if ext != ".yaml" && ext != ".yml" {
-				continue
-			}
-			path := filepath.Join(sub, e.Name())
-			raw, err := os.ReadFile(filepath.Join(root, path))
 			if err != nil {
-				return fmt.Errorf("desiredstate: %s: %w", path, err)
+				return fmt.Errorf("desiredstate: admission read %s: %w", sub, err)
 			}
-			obj, err := manifestObject(raw, sub)
-			if err != nil {
-				return fmt.Errorf("desiredstate: admission parse %s: %w", path, err)
-			}
-			d := decider.Admit(context.Background(), policy.AdmissionRequest{Object: obj, Controls: controls})
-			if d.Outcome == types.OutcomeDeny {
-				return fmt.Errorf("desiredstate: %s: admission denied — %s", path, admissionReasons(d))
+			for _, e := range entries {
+				if e.IsDir() {
+					continue
+				}
+				ext := strings.ToLower(filepath.Ext(e.Name()))
+				if ext != ".yaml" && ext != ".yml" {
+					continue
+				}
+				path := filepath.Join(sub, e.Name())
+				raw, err := os.ReadFile(filepath.Join(root, path))
+				if err != nil {
+					return fmt.Errorf("desiredstate: %s: %w", path, err)
+				}
+				obj, err := manifestObject(raw, sub)
+				if err != nil {
+					return fmt.Errorf("desiredstate: admission parse %s: %w", path, err)
+				}
+				d := decider.Admit(context.Background(), policy.AdmissionRequest{Object: obj, Controls: controls})
+				if d.Outcome == types.OutcomeDeny {
+					// The ROOT is named as well as the path: `workflows/deploy.yaml` denied is a
+					// different problem depending on whether it is the estate's own or one a
+					// plugin shipped, and the operator's next move differs (§1.8).
+					return fmt.Errorf("desiredstate: %s: admission denied — %s",
+						filepath.Join(root, path), admissionReasons(d))
+				}
 			}
 		}
 	}
@@ -1171,27 +1504,53 @@ func manifestObject(raw []byte, sub string) (map[string]any, error) {
 	return m, nil
 }
 
+// dirKindByDir is the `object.kind` an admission control matches on, per declaration
+// directory — the fallback used when the manifest does not carry its own `kind` (an Intent
+// does; a View does not).
+//
+// IT IS EXHAUSTIVE OVER admissionDirs ON PURPOSE, and it did not used to be. Eight entries
+// were listed and the rest fell through to a `default: return sub`, so the Git door admitted
+// a Cell as kind "cells" while the imperative door (AdmitDeclarations) admitted the same
+// declaration as "Cell". A control written `object.kind == 'Cell'` therefore fired on an API
+// POST and silently never fired on the Git reconcile — the primary path. One token per kind,
+// both doors, asserted by TestBothAdmissionDoorsAgreeOnKind.
+//
+// Three directories keep their plural directory name deliberately, because their manifest is
+// a LIST document with no single subject: authz/tuples.yaml is `tuples:`, advisories/*.yaml
+// is `advisories:`, hosts/*.yaml is `hosts:`. Admitting the file as one object named for its
+// directory is honest; singularizing it would imply a per-item decision that is not what
+// happens. `hosts` in particular must NOT become a `Host` kind — a host is an Entity kind
+// VALUE, and minting a declaration kind for it is the ontology creep §9 refuses.
+var dirKindByDir = map[string]string{
+	"views":               "View",
+	"workflows":           "Workflow",
+	"assignments":         "Assignment",
+	"blueprints":          "Blueprint",
+	"baselines":           "Baseline",
+	"triggers":            "Trigger",
+	"emitters":            "Emitter",
+	"sites":               "Site",
+	"cells":               "Cell",
+	"intents":             "Intent",
+	"credential-refs":     "CredentialRef",
+	"notify-sinks":        "Sink",
+	"subscriptions":       "Subscription",
+	"mcp-servers":         "MCPServer",
+	"scim":                "SCIMIdP",
+	"actuators":           "Actuator",
+	"connectors":          "Connector",
+	"capability-bindings": "CapabilityBinding",
+	"environments":        "Environment",
+	"authz":               "authz",
+	"advisories":          "advisories",
+	"hosts":               "hosts",
+}
+
 func dirKind(sub string) string {
-	switch sub {
-	case "views":
-		return "View"
-	case "workflows":
-		return "Workflow"
-	case "assignments":
-		return "Assignment"
-	case "blueprints":
-		return "Blueprint"
-	case "baselines":
-		return "Baseline"
-	case "triggers":
-		return "Trigger"
-	case "emitters":
-		return "Emitter"
-	case "sites":
-		return "Site"
-	default:
-		return sub
+	if k, ok := dirKindByDir[sub]; ok {
+		return k
 	}
+	return sub
 }
 
 // AdmitDeclarations runs the admission PEP (ADR-0073) over already-parsed
@@ -1251,6 +1610,33 @@ func AdmitDeclarations(ctx context.Context, decls Declarations, controls []types
 	}
 	for i := range decls.Subscriptions {
 		all = append(all, obj{"Subscription", decls.Subscriptions[i].Name, decls.Subscriptions[i]})
+	}
+	// THE SIX BELOW WERE MISSING, and their absence made this door strictly WEAKER than the
+	// Git one — the opposite of the GOV-2 bypass this function exists to close. credential-refs/
+	// and scim/ were already on admissionDirs, so a control over them held on the reconcile and
+	// not on an API POST; actuators/, connectors/, capability-bindings/ and environments/ were
+	// judged by neither until this change.
+	//
+	// A door that admits a SUBSET is worse than one that admits nothing, because the policy
+	// looks enforced. The two lists are now asserted to agree (TestBothAdmissionDoorsAgreeOnKind)
+	// rather than left to whoever adds the next kind.
+	for i := range decls.CredentialRefs {
+		all = append(all, obj{"CredentialRef", decls.CredentialRefs[i].Name, decls.CredentialRefs[i]})
+	}
+	for i := range decls.SCIMIdPs {
+		all = append(all, obj{"SCIMIdP", decls.SCIMIdPs[i].Name, decls.SCIMIdPs[i]})
+	}
+	for i := range decls.Actuators {
+		all = append(all, obj{"Actuator", decls.Actuators[i].Name, decls.Actuators[i]})
+	}
+	for i := range decls.Connectors {
+		all = append(all, obj{"Connector", decls.Connectors[i].Name, decls.Connectors[i]})
+	}
+	for i := range decls.CapabilityBindings {
+		all = append(all, obj{"CapabilityBinding", decls.CapabilityBindings[i].Name, decls.CapabilityBindings[i]})
+	}
+	for i := range decls.Environments {
+		all = append(all, obj{"Environment", decls.Environments[i].Name, decls.Environments[i]})
 	}
 	for _, o := range all {
 		m, err := declarationObject(o.kind, o.v)
@@ -1337,6 +1723,12 @@ func parseKind[T any](dirs []string, optional bool, parse func(path string, raw 
 			raw, err := os.ReadFile(path)
 			if err != nil {
 				return nil, fmt.Errorf("desiredstate: %s: %w", path, err)
+			}
+			// BEFORE the per-kind parser, because the parser reads the first document and
+			// stops — so by the time it returns, any second declaration in this file has
+			// already been dropped and nothing downstream can tell.
+			if err := refuseMultiDocument(path, raw); err != nil {
+				return nil, err
 			}
 			name, decl, err := parse(path, raw)
 			if err != nil {
@@ -2245,6 +2637,9 @@ type intentFile struct {
 	Version  int            `yaml:"version"`
 	Spec     map[string]any `yaml:"spec"`
 	OnRemove string         `yaml:"onRemove"`
+	// Environments is the reconcile-scope membership filter (ADR-0057 D2). See
+	// types.Intent.Environments for why a provisioning Intent needed one of its own.
+	Environments []string `yaml:"environments"`
 }
 
 func parseIntentFile(path string, raw []byte) (string, types.Intent, error) {
@@ -2254,7 +2649,33 @@ func parseIntentFile(path string, raw []byte) (string, types.Intent, error) {
 	if err := dec.Decode(&f); err != nil {
 		return "", types.Intent{}, fmt.Errorf("desiredstate: %s: %w", path, err)
 	}
-	in := types.Intent{Name: f.Name, Kind: f.Kind, Version: f.Version, Spec: f.Spec, OnRemove: f.OnRemove}
+	in := types.Intent{Name: f.Name, Kind: f.Kind, Version: f.Version, Spec: f.Spec,
+		OnRemove: f.OnRemove, Environments: f.Environments}
+	// NORMALIZE the omitted version to the 1 it already means everywhere else. versionedRef has
+	// always read version < 1 as version 1 — for the dedup key, the plan-entry name, and the pin
+	// lookup — but the DECLARATION kept its literal 0, and that asymmetry was a permanent false
+	// diff: the store round-trips the whole document through graph.intent.spec, so what comes back
+	// carries "version": 1 while the declaration marshals with the field omitted. declDocsEqual
+	// then reported drift on an Intent nobody had touched.
+	//
+	// The consequence was not cosmetic. Every Intent declaring no version was REWRITTEN on every
+	// reconcile cycle (10s), and the ones an Assignment pins failed the ADR-0119 D6 guard on each
+	// pass — a permanent ERROR per Intent per cycle, for an estate that was fully converged. The
+	// noise was the visible half; a plan that can never reach a no-op is the real defect.
+	//
+	// Here rather than in the comparison, so the parsed declaration IS what gets stored: one
+	// meaning for "no version", fixed at the edge, instead of every reader re-deriving it.
+	//
+	// ONLY for an ASSIGNABLE kind, and through the same derived predicate ValidateIntent uses.
+	// A provisioning Intent (Subnet, Compute…) may not carry a version at all: it is selected by
+	// NAME by the provisioning reconcile, which has no Assignment to pin one with, and two versions
+	// of one fleet would be two claims on the same instance identities (ADR-0119 D3, ADR-0058 D5).
+	// Normalizing every kind alike made strattd refuse its own estate at boot — correctly, and the
+	// message named the rule. Reusing the predicate rather than restating the kind list is what
+	// keeps a future kind from re-opening this.
+	if in.Version < 1 && types.AssignableIntentKind(in.Kind) {
+		in.Version = 1
+	}
 	if err := ValidateIntent(in); err != nil {
 		return "", types.Intent{}, fmt.Errorf("desiredstate: %s: %w", path, err)
 	}
@@ -2326,6 +2747,45 @@ func ValidateIntent(in types.Intent) error {
 				"reconcile, which has no Assignment to pin a version with, and two versions of one fleet "+
 				"would be two claims on the same instance identities (ADR-0119 D3, ADR-0058 D5)",
 			in.Name, in.Kind)
+	}
+	// The MIRROR IMAGE of the version rule above, on the same predicate and for the same reason:
+	// an `environments` filter is meaningful exactly where no Assignment already carries one.
+	//
+	// An assignable Intent reaches the estate only through an Assignment, which is env-scoped and
+	// filtered already — so a filter here is at best inert, and at worst a second scope that can
+	// DISAGREE with the Assignment's. It is not even reliably inert: the compiler resolves the
+	// Intent from the store by name (compiler.go → GetIntent), which does not filter, so a prod
+	// Assignment referencing a `[dev]`-scoped Intent would still compile against it — or, if no dev
+	// daemon ever wrote the row, fail with "intent tls-app@1 not found" while the file sits in Git,
+	// which is precisely the misdirection ADR-0119 F4 went out of its way to remove.
+	//
+	// Refused rather than supported, because the shape that works already exists: one Assignment
+	// per environment (ADR-0118 D1).
+	if len(in.Environments) > 0 && types.AssignableIntentKind(in.Kind) {
+		return fmt.Errorf(
+			"intent %s: kind %s cannot carry `environments` — it is bound by an Assignment, which is "+
+				"already environment-scoped, so a second filter here is either redundant or a scope that "+
+				"can disagree with the one that actually selects it. Declare one Assignment per "+
+				"environment instead (ADR-0118 D1). The filter exists for PROVISIONING kinds, which have "+
+				"no Assignment to carry one (ADR-0058)",
+			in.Name, in.Kind)
+	}
+	// The rejectEnvKeyedValues guardrail, now that an Intent is environment-aware. Same rule, same
+	// narrowness: a TOP-LEVEL `params` key equal to one of this Intent's OWN declared environments
+	// is the shape someone writes when reaching for a conditional, and it is the
+	// new-configuration-language non-goal (§2.4, ADR-0118 D1). `params` rather than `spec` because
+	// that is where a provisioning Intent's provider values live and where the temptation lands.
+	if params, ok := in.Spec["params"].(map[string]any); ok {
+		for _, env := range in.Environments {
+			if _, clash := params[env]; clash {
+				return fmt.Errorf(
+					"intent %s: spec.params has a top-level key %q matching one of this Intent's own "+
+						"environments — env-conditional config values are forbidden (§2.4/§1 non-goal; "+
+						"environments is a membership filter, not a value selector). Declare one Intent "+
+						"per environment, each with flat params, instead (ADR-0118 D1)",
+					in.Name, env)
+			}
+		}
 	}
 	specRaw, err := json.Marshal(in.Spec)
 	if err != nil {
@@ -2572,6 +3032,7 @@ type blueprintFile struct {
 	Name                string           `yaml:"name"`
 	Version             int              `yaml:"version"`
 	For                 string           `yaml:"for"`
+	Delivers            string           `yaml:"delivers"`
 	Defaults            map[string]any   `yaml:"defaults"`
 	Routes              []blueprintRoute `yaml:"routes"`
 	Severity            string           `yaml:"severity"`
@@ -2598,6 +3059,11 @@ type declExpectation struct {
 	Equals    any    `yaml:"equals"`
 	Contains  any    `yaml:"contains"`
 	NotBefore string `yaml:"notBefore"`
+	// Qualifier is ADR-0152's per-application claim key. DECLARED HERE AND REFUSED AT LOAD in
+	// this release — see checkQualifierNotYetStorable. The field exists so the refusal can
+	// explain itself rather than arriving as `field qualifier not found in type`, which is what
+	// KnownFields would otherwise say about a field the ADR tells an author to use.
+	Qualifier string `yaml:"qualifier"`
 }
 
 func parseBlueprintFile(path string, raw []byte) (string, types.Blueprint, error) {
@@ -2608,7 +3074,7 @@ func parseBlueprintFile(path string, raw []byte) (string, types.Blueprint, error
 		return "", types.Blueprint{}, fmt.Errorf("desiredstate: %s: %w", path, err)
 	}
 	b := types.Blueprint{
-		Name: f.Name, Version: f.Version, For: f.For,
+		Name: f.Name, Version: f.Version, For: f.For, Delivers: f.Delivers,
 		Defaults: f.Defaults,
 		Severity: f.Severity, DampingObservations: f.DampingObservations,
 		RemoveWorkflow: f.RemoveWorkflow, RemoveParams: f.RemoveParams,
@@ -2634,7 +3100,8 @@ func parseBlueprintFile(path string, raw []byte) (string, types.Blueprint, error
 			Match: match,
 			Observe: types.FacetExpectation{
 				Namespace: r.Observe.Namespace, Path: r.Observe.Path,
-				Equals: eq, Contains: con, NotBefore: r.Observe.NotBefore,
+				Qualifier: r.Observe.Qualifier,
+				Equals:    eq, Contains: con, NotBefore: r.Observe.NotBefore,
 			},
 			Claim: r.Claim, RemediationWorkflow: r.RemediationWorkflow,
 			RemediationCapability: r.RemediationCapability,
@@ -2696,6 +3163,25 @@ func ValidateBlueprint(b types.Blueprint) error {
 		}
 		if len(r.Observe.Equals) == 0 && len(r.Observe.Contains) == 0 && r.Observe.NotBefore == "" {
 			return fmt.Errorf("blueprint %s@%d: route %d observe requires equals, contains, or notBefore", b.Name, b.Version, i)
+		}
+		// ADR-0152 lands in TWO releases, and this is the first. The claim key and the Facet
+		// primary key must widen TOGETHER (D4): with the key still three columns, two Blueprints
+		// declaring different qualifiers on one Entity would COMPILE — the conflict detector would
+		// see two distinct claims — and then both write through
+		// ON CONFLICT (entity_id, namespace, prov_source_id) DO UPDATE, so the second Run would
+		// overwrite the first's row and flip its qualifier. Not even an error: a silent
+		// last-writer-wins, which is the precise failure the qualifier exists to abolish.
+		//
+		// So it is refused here rather than half-honoured. A declaration that reads as permitted and
+		// is honoured by something OTHER than what it says is worse than one that is refused (§1.8).
+		if r.Observe.Qualifier != "" {
+			return fmt.Errorf("blueprint %s@%d: route %d declares observe.qualifier %q, which this release "+
+				"cannot yet store: ADR-0152's expand migration (00047) adds the column, and the CONTRACT "+
+				"migration that folds it into graph.facet's primary key has not shipped. Until it does, two "+
+				"qualified claims on one Entity would compile and then silently overwrite each other's row "+
+				"(D4). Remove the qualifier; co-hosting two managed applications on one host arrives with "+
+				"that migration",
+				b.Name, b.Version, i, r.Observe.Qualifier)
 		}
 		switch r.Claim {
 		case types.ClaimExclusive, types.ClaimAdditive:
@@ -2764,7 +3250,22 @@ func validateParamsContract(actuator string, params map[string]any, opts ...Vali
 		return fmt.Errorf("a View actuation requires an explicit actuator (no platform default)")
 	}
 	if template.Has(params) {
-		return nil
+		// Shape now, values at launch — see validateActionParamsContract. The Actuator
+		// path has the same hole for the same reason, so it gets the same gate rather
+		// than waiting for this defect class to arrive here too.
+		// Mirror ValidateActuatorParamsFor's lookup EXACTLY: the plugin-identity contract
+		// is a FALLBACK used only when the Actuator's own name has none. Checking both
+		// when both exist would be stricter than the validator this defers to, and a
+		// stricter shape gate refuses estates the launch path would accept.
+		name := "actuators/" + actuator + ".input"
+		if _, ok, err := contract.Get(name); err != nil {
+			return err
+		} else if !ok {
+			if id := apply(opts).identities[actuator]; id != "" && id != actuator {
+				name = "actuators/" + id + ".input"
+			}
+		}
+		return contract.ValidateParamKeys(name, params)
 	}
 	raw := json.RawMessage(`{}`)
 	if params != nil {
@@ -2781,24 +3282,43 @@ func validateParamsContract(actuator string, params map[string]any, opts ...Vali
 // Action's input Contract (ADR-0031). Template-carrying params ({{.steps.x}} /
 // {{.event.x}}) are validated at LAUNCH against resolved values, skipped here.
 func validateActionParamsContract(action string, params map[string]any) error {
-	// The Contract must EXIST even when the values cannot be checked yet. Existence
-	// is a static fact about the estate; it does not depend on what a template
-	// resolves to, so deferring it with the values was over-broad. A Step naming an
-	// uncontracted Action used to pass the load and fail at LAUNCH with "no input
-	// contract for action" — the §1.8 shape this package refuses everywhere else:
-	// admitted here, fatal somewhere a human is not reading a diff.
+	// EXISTENCE IS NOT CHECKED HERE, and the reason is architectural rather than a
+	// concession. This function briefly did check it — a Step naming an uncontracted
+	// Action passing the load and failing at LAUNCH is exactly the §1.8 shape this
+	// package refuses everywhere else — and the check was wrong at this layer:
 	//
-	// "An uncontracted operation must not exist" is already ValidateActionInput's
-	// own rule (§2.2/ADR-0031). This is that rule applied at the moment the
-	// reference is written rather than the moment it runs.
-	if _, ok, err := contract.Get("actions/" + action + ".input"); err != nil {
-		return err
-	} else if !ok {
-		return fmt.Errorf("action %q has no input contract — an uncontracted operation must not exist (§2.2, ADR-0031)", action)
-	}
+	// A running daemon's contract set is NOT complete when declarations are parsed.
+	// A plugin's self contracts (ADR-0138 D3/D4) are registered from its own tree
+	// only for the OWNING or an ADMITTED plugin, and a plugin wired by environment
+	// instead (the boot-wired path every plugin demo uses) contributes its contracts
+	// later still, from its Manifest when its Actuator is enabled. So at parse time
+	// "no contract" legitimately means "not yet", and enforcing it made strattd
+	// refuse to BOOT against a valid estate — a worse failure than the one it set out
+	// to prevent, and one `task ci` could not see because in-repo every plugin tree is
+	// on disk and complete.
+	//
+	// The rule itself is not abandoned: it moved to where the contract set genuinely
+	// is complete. TestEveryStepActionIsContracted checks it against the repo, which
+	// is where a typo'd Action name is written and where a reviewer can act on it, and
+	// ValidateActionInput still refuses an uncontracted Invoke at runtime (§2.2,
+	// ADR-0031). What stays HERE is the half that only makes sense with the document
+	// in hand.
 	if template.Has(params) {
-		return nil
+		// The VALUES wait for launch; the KEY SET does not. Which params a Step sends is
+		// written in Git and cannot change at runtime, so its shape can be checked at the
+		// diff rather than at the gate (§1.8) — and ValidateParamKeys holds no opinion
+		// when the document is absent, which is what lets it survive the incomplete
+		// contract set described above. Deferring shape along with values is how PRV-1
+		// shipped: this very Workflow family sent `subnet`/`availabilityZone` into an
+		// additionalProperties:false Contract and failed only when an operator approved
+		// the build.
+		return contract.ValidateParamKeys("actions/"+action+".input", params)
 	}
+	// NOTE, not a fix: the branch below still refuses an absent contract, because
+	// ValidateActionInput does. A Step with wholly literal params against an
+	// environment-wired plugin would therefore fail the load for "not yet" — the same
+	// trap, in a branch nothing in the estate currently reaches. Left alone rather
+	// than widened silently; it wants the same treatment when something hits it.
 	raw := json.RawMessage(`{}`)
 	if params != nil {
 		b, err := json.Marshal(params)
@@ -2939,9 +3459,13 @@ type stepYAML struct {
 	ActionCapability string         `yaml:"actionCapability"`
 	DryRun           bool           `yaml:"dryRun"`
 	Params           map[string]any `yaml:"params"`
-	Slices           int            `yaml:"slices"`
-	CredentialRefs   []string       `yaml:"credentialRefs"`
-	FacetWriteScope  []string       `yaml:"facetWriteScope"`
+	// capabilityArgs: the per-CLASS resolve request for each capability the Step's tool requires
+	// (ADR-0150). See types.Step.CapabilityArgs — `requires:` names the classes, these say what to
+	// ask each one for.
+	CapabilityArgs  map[string]map[string]any `yaml:"capabilityArgs"`
+	Slices          int                       `yaml:"slices"`
+	CredentialRefs  []string                  `yaml:"credentialRefs"`
+	FacetWriteScope []string                  `yaml:"facetWriteScope"`
 }
 type gateYAML struct {
 	Approvers struct {
@@ -3055,7 +3579,7 @@ func parseWorkflowFile(path string, raw []byte, opts ...ValidateOption) (string,
 			Workflow: s.Workflow, WorkflowCapability: s.WorkflowCapability, ForKind: s.ForKind,
 			Inputs: s.Inputs,
 			Action: s.Action, ActionCapability: s.ActionCapability,
-			DryRun: s.DryRun, Params: s.Params,
+			DryRun: s.DryRun, Params: s.Params, CapabilityArgs: s.CapabilityArgs,
 			Slices: s.Slices, CredentialRefs: s.CredentialRefs,
 			FacetWriteScope: s.FacetWriteScope,
 		}
@@ -3115,12 +3639,33 @@ func ValidateWorkflow(w types.Workflow, opts ...ValidateOption) error {
 		// A Step is exactly one of four shapes (§2.3, ADR-0031, ADR-0063): a Gate,
 		// a Policy checkpoint, an Action (targetless typed operation), or an
 		// Actuation (Actuator+View).
+		//
+		// THIS `isActuation` IS POSITIVE; types.Step.IsActuation() IS RESIDUAL — it answers
+		// "not any of the other shapes", so the DAG and the authz door fail CLOSED on a Step
+		// they cannot classify (a Step that looked like a Gate to authorizeLaunch was once an
+		// omitted field away from a bypassed §2.5 check). Both postures are right where they
+		// are, but they DISAGREED on exactly one input: a Step declaring no shape at all.
+		//
+		//	steps:
+		//	  - name: converge          # and nothing else
+		//
+		// loaded clean here — isGate/isPolicy/isAction/isActuation/isNested all false, and no
+		// case below matched "none of them" — and then IsActuation() called it an actuation and
+		// dispatched it with an empty Actuator. The refusal is added below rather than by
+		// changing the runtime predicate: fail-closed is the correct posture at dispatch, and
+		// once nothing shapeless can LOAD, the two definitions agree on every Step that exists.
 		isGate := s.Gate != nil
 		isPolicy := s.Policy != nil
 		isAction := s.Action != "" || s.ActionCapability != ""
 		isActuation := s.ViewName != "" || s.Actuator != "" || s.Slices != 0
 		isNested := s.Workflow != "" || s.WorkflowCapability != ""
 		switch {
+		case !isGate && !isPolicy && !isAction && !isActuation && !isNested:
+			return fmt.Errorf(
+				"workflow %s: step %s declares no shape — a step is a gate, a policy checkpoint, "+
+					"a nested workflow, an action (`action`/`actionCapability`) or an actuation "+
+					"(`actuator`, optionally with `viewName`), and this one is none of them. It "+
+					"would dispatch as an actuation against an empty Actuator (§2.3)", w.Name, s.Name)
 		case s.Workflow != "" && s.WorkflowCapability != "":
 			return fmt.Errorf("workflow %s: step %s: names a workflow and a workflowCapability — one or the "+
 				"other, never both (§2.4)", w.Name, s.Name)
@@ -3152,8 +3697,16 @@ func ValidateWorkflow(w types.Workflow, opts ...ValidateOption) error {
 			return fmt.Errorf("workflow %s: step %s: a step is a gate, a policy, an action, or an actuation — not multiple", w.Name, s.Name)
 		case isAction && isActuation:
 			return fmt.Errorf("workflow %s: step %s: a step is an action or an actuation, not both (actions are targetless — no viewName/actuator/slices)", w.Name, s.Name)
-		case !isGate && !isPolicy && !isAction && !isNested && s.ViewName == "":
-			return fmt.Errorf("workflow %s: step %s: actuation step requires viewName", w.Name, s.Name)
+		// An actuation Step MAY omit viewName: a remediation INHERITS the View from the Baseline
+		// that raised its Finding, which is the Assignment's `view:` — so a converge Workflow is a
+		// RECIPE (what to do) rather than a target (where). Re-stating the Assignment's View here
+		// made one value two binding sites able to disagree (§2.4), and made the recipe unusable
+		// for any host outside the View its author happened to name.
+		//
+		// The refusal MOVES to launch rather than disappearing: authorizeLaunch rejects an
+		// actuation Step that still has no View after inheritance, naming the workflow and the
+		// step. The cost is honest and stated — a Workflow that can only ever be remediation-
+		// launched is now diagnosed when someone launches it directly, not when it is loaded.
 		case isGate && len(s.Gate.Approvers.Principals) == 0 && len(s.Gate.Approvers.Teams) == 0:
 			return fmt.Errorf("workflow %s: step %s: gate requires approvers (principals and/or teams)", w.Name, s.Name)
 		case isGate && s.Gate.TimeoutSeconds < 0:
@@ -3382,7 +3935,18 @@ func ScopeToEnvironment(d Declarations, env string) Declarations {
 			bls = append(bls, b)
 		}
 	}
-	d.Assignments, d.Triggers, d.Baselines = assigns, trigs, bls
+	// An Intent is filtered here too. For an APPLICATION Intent this is belt-and-braces — it
+	// reaches the estate only through an Assignment, which is already filtered above — but a
+	// PROVISIONING Intent has no Assignment at all (ADR-0058 selects it by name), so this is
+	// the only place its scope can be applied. Without it the field would parse, validate, and
+	// change nothing: an `environments: [dev]` that a prod daemon still built.
+	ints := make([]types.Intent, 0, len(d.Intents))
+	for _, in := range d.Intents {
+		if types.InScope(in.Environments, env) {
+			ints = append(ints, in)
+		}
+	}
+	d.Assignments, d.Triggers, d.Baselines, d.Intents = assigns, trigs, bls, ints
 	return d
 }
 

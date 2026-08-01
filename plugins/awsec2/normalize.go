@@ -9,6 +9,7 @@ package awsec2
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
 
@@ -46,6 +47,13 @@ func normalizeInstance(region string, in ec2types.Instance) (*pluginv1.ObservedE
 	if in.PrivateIpAddress != nil && *in.PrivateIpAddress != "" {
 		network["privateIp"] = *in.PrivateIpAddress
 	}
+	// The private DNS name is projected as a FACT so that the reach coordinate below is
+	// auditable. Without it, mgmt.address would be a name appearing nowhere else in the
+	// graph and an operator could not see where it came from (§1.8) — the same reason
+	// vcenter carries guest.hostName on net.guest beside its own coordinate.
+	if in.PrivateDnsName != nil && *in.PrivateDnsName != "" {
+		network["privateDnsName"] = *in.PrivateDnsName
+	}
 	if in.PublicIpAddress != nil && *in.PublicIpAddress != "" {
 		network["publicIp"] = *in.PublicIpAddress
 	}
@@ -82,10 +90,75 @@ func normalizeInstance(region string, in ec2types.Instance) (*pluginv1.ObservedE
 		facets[ns] = raw
 	}
 
+	// mgmt.address — the OBSERVED reach coordinate (ADR-0143), applying the same rule on
+	// a second substrate: a NAME first, an address only as fallback, and nothing at all
+	// when neither is known.
+	if addr := reachCoordinate(in); addr != "" {
+		raw, err := json.Marshal(map[string]any{"address": addr})
+		if err != nil {
+			return nil, fmt.Errorf("awsec2: marshal facet mgmt.address: %w", err)
+		}
+		facets["mgmt.address"] = raw
+	}
+
+	// mgmt.transport IS DELIBERATELY NOT WRITTEN HERE, and the reasoning matters more than
+	// the absence (ADR-0156).
+	//
+	// EC2 has two production connection paths and this Syncer can honestly observe NEITHER:
+	//
+	//   - SSH. The instance carries a KeyName, and it is tempting to read that as "reachable
+	//     over ssh". It is not: KeyName means A KEY IS AUTHORIZED, not that sshd is listening.
+	//     Inferring reachability from an authorization setting is COMPUTING a reach fact, which
+	//     is exactly what ADR-0142 D4 forbids — "a reach coordinate must be OBSERVED or CAUSED,
+	//     never COMPUTED" — and the dev substrate proves the gap is real rather than pedantic:
+	//     floci instances carry a KeyName and ship no sshd at all (HAR-1).
+	//
+	//   - SSM. `amazon.aws.aws_ssm` reaches an instance through a Systems Manager session and
+	//     needs no sshd whatsoever, which makes it the path a large share of EC2 estates
+	//     actually use. Whether an instance is SSM-managed is authoritatively answerable — SSM's
+	//     DescribeInstanceInformation lists exactly the instances whose agent has registered —
+	//     but that is a DIFFERENT AWS API than this Syncer speaks, with its own IAM scope.
+	//
+	// So this plugin observes no transport, every EC2 target falls to the Actuator's own default
+	// (ssh), and behaviour is unchanged from before ADR-0156. Writing `ssh` here to make the
+	// substrate look finished would be asserting a reachability we have not established — the
+	// precise failure that let the ec2-only demo claim fidelity `real` for a year.
+	//
+	// BOOKED: the SSM observation, which needs the SSM client and an ssm:DescribeInstanceInformation
+	// permission. It is also the only thing that would make the aws_ssm transport reachable at
+	// all, since a Facet has no other writer — so the two land together or not at all.
+
 	return &pluginv1.ObservedEntity{
 		Kind:         "instance",
 		IdentityKeys: identity,
 		Labels:       labels,
 		Facets:       facets,
 	}, nil
+}
+
+// reachCoordinate picks the mgmt.address value from what EC2 reported: the PRIVATE DNS
+// name, else the PRIVATE IP, else nothing (ADR-0143 D1 applied to EC2).
+//
+// PUBLIC ADDRESSING IS DELIBERATELY NOT A FALLBACK, and this is the substrate-specific
+// judgement worth stating. EC2 also reports PublicDnsName and PublicIpAddress, and falling
+// back to them would mean that an instance which merely happens to have a public interface
+// gets managed OVER THE INTERNET by default — a security posture nobody chose, arrived at
+// because a private name was momentarily absent. In most enterprise VPCs the public name
+// does not resolve internally anyway. Reaching a host publicly is a deliberate decision and
+// must be declared, never defaulted into.
+//
+// The name is preferred for the reason ADR-0143 gives: a DNS name survives the address
+// changing underneath it, and `ansible_host` takes a hostname perfectly well. EC2's
+// private DNS name is dotted by construction (ip-10-0-1-7.ec2.internal), so unlike the
+// vSphere case there is no bare-hostname branch to refuse.
+func reachCoordinate(in ec2types.Instance) string {
+	if in.PrivateDnsName != nil {
+		if n := strings.TrimSpace(*in.PrivateDnsName); n != "" {
+			return strings.ToLower(n)
+		}
+	}
+	if in.PrivateIpAddress != nil {
+		return strings.TrimSpace(*in.PrivateIpAddress)
+	}
+	return ""
 }

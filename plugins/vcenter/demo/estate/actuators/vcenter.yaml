@@ -1,0 +1,55 @@
+# vcenter — the demo floor's Actuator, carrying the INVOKE Actions this demo dispatches (ADR-0103).
+#
+# WHY THIS FILE EXISTS AT ALL. It did not, and the demo's own staging comment explained why: the
+# Actions were registered in Go behind STRATT_VCENTER_PLUGIN_ADDR, so a boot-wired floor needed no
+# actuator declaration. ADR-0103 moved all 15 of them into plugins/vcenter/estate/actuators/vcenter.yaml
+# — and this demo's estate is a SEPARATE TREE (ADR-0116 D1: self-contained), so it was left naming
+# `vcenter/create-vm` with nothing declaring it. The floor could not boot.
+#
+# WHY IT IS NOT THE SHIPPED FILE COPIED. Staging the shipped Actuator was tried first, and it fails
+# for a reason worth recording rather than working around: that declaration advertises
+# `provisions: {Subnet: vsphere-subnet-build}`, and the load-time resolve check correctly refuses an
+# advertised builder whose Workflow is not declared. Bringing that Workflow along drags in the `ipam`
+# capability class and a `netbox-dev` CredentialRef — a NetBox this floor does not run. The shipped
+# Actuator describes a full vsphere-dc environment; this floor is deliberately Compute-only.
+#
+# So the difference below is not drift, it is SCOPE, and it is exactly two things:
+#   - no `provisions` / `decommissions` maps — the demo launches its build Workflow directly and
+#     declares no Intent/Compute, so there is nothing for a per-kind builder map to serve;
+#   - no `environments:` scope — the demo floor is unscoped (STRATT_ENVIRONMENT empty), and pinning
+#     it to vsphere-dc here would say something about an estate that has no environments.
+# Everything that decides how an Action DISPATCHES — the action names, the address, the plugin
+# identity, the tier, dry-runnability, the write ceiling — is identical, because those are the facts
+# the demo is meant to exercise.
+name: vcenter
+address: stratt-vcenter:9090
+pluginIdentity: vcenter
+tier: trusted
+dryRunnable: true
+provides: [provisioning]
+# The dispatch surface, verified against the plugin's own Manifest at enable (ADR-0103): a name
+# vcenter does not advertise holds the Actuator back with a diagnostic rather than registering an
+# entry that fails at Invoke.
+actionNames:
+  - vcenter/create-vm
+  - vcenter/create-portgroup
+  - vcenter/power-off
+  - vcenter/power-on
+  - vcenter/reset
+  - vcenter/suspend
+  - vcenter/shutdown-guest
+  - vcenter/reconfigure
+  - vcenter/delete-vm
+  - vcenter/snapshot-create
+  - vcenter/snapshot-revert
+  - vcenter/snapshot-remove
+  - vcenter/migrate
+  - vcenter/clone
+  - vcenter/reconfigure-portgroup
+  - vcenter/delete-portgroup
+# The Actuator's own write ceiling (ADR-0054), narrower than the Syncer's boot grant: an Action's
+# write-back is Run-provenance and entity-shaped — create-vm projects the built VM by identity. The
+# Facets the demo then shows (including mgmt.address, ADR-0143) arrive from the SYNCER's next OBSERVE
+# under its own grant, which is the build→observe closure the demo is about.
+identitySchemes: [vcenter.uuid, vcenter.network.moref]
+labelKeys: [vcenter.name, source]

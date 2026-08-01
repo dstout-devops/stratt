@@ -119,8 +119,27 @@ type Step struct {
 	ActionCapability string         `json:"actionCapability,omitempty"`
 	DryRun           bool           `json:"dryRun,omitempty"`
 	Params           map[string]any `json:"params,omitempty"`
-	Slices           int            `json:"slices,omitempty"`
-	CredentialRefs   []string       `json:"credentialRefs,omitempty"`
+	// CapabilityArgs is the per-CLASS resolve request for each capability the Step's
+	// Actuator/Action `requires:` — keyed by class name, validated against
+	// capabilities/<class>.input, and templated from the same namespaces Params are.
+	//
+	// It exists because the core used to build ONE input shape for every class:
+	// `{"workspace": …}`, which is statestore's Contract and nothing else's. That worked for as
+	// long as statestore was the only class anyone resolved, and made `ipam` structurally
+	// unresolvable — capabilities/ipam.input wants an allocation REQUEST ({key, size} plus one of
+	// pool/role) and refused the workspace outright. A generic seam exercised by one consumer
+	// (ADR-0111 booked this as the "Intent-declares-the-request param-flow" follow-up).
+	//
+	// WHY ON THE STEP rather than on the Actuator's `requires:`. `requires:` says WHICH classes a
+	// tool needs — a property of the tool, stable across every Run. The ARGS are desired state: a
+	// /24 from this pool, for this subnet. They vary per Run and belong where the Step's other
+	// arguments already live, flowing from the Intent through the launch interface.
+	//
+	// Core stays content-blind (§1.5): it substitutes the templates and hands the block to the
+	// class Contract. It never learns what `size` or `pool` mean.
+	CapabilityArgs map[string]map[string]any `json:"capabilityArgs,omitempty"`
+	Slices         int                       `json:"slices,omitempty"`
+	CredentialRefs []string                  `json:"credentialRefs,omitempty"`
 	// FacetWriteScope is the Facet namespaces an actuation Step may write back
 	// (ADR-0054): the actuator's grant ∩ this scope. Empty admits no facet write-back.
 	FacetWriteScope []string `json:"facetWriteScope,omitempty"`
@@ -226,4 +245,17 @@ type WorkflowRun struct {
 	// Set together or not at all; the data layer enforces it.
 	ParentWorkflowRunID string `json:"parentWorkflowRunId,omitempty"`
 	ParentStepName      string `json:"parentStepName,omitempty"`
+}
+
+// IsActuation reports whether this Step converges a View through an Actuator — the shape that
+// needs a target and an authorization check, as opposed to a Gate, a Policy checkpoint, a nested
+// Workflow, or a targetless Action.
+//
+// It exists because the answer was previously inferred from `ViewName != ""`, which stopped being
+// a safe proxy the moment a Step could INHERIT its View from the Baseline that launched it
+// (ADR-0151 follow-on). An actuation Step with no ViewName looked exactly like a Gate to
+// authorizeLaunch, which skipped it — turning an omitted field into a bypassed §2.5 gate. One
+// predicate, so the DAG's dispatch and the authz door cannot disagree about what a Step IS.
+func (s Step) IsActuation() bool {
+	return s.Gate == nil && s.Policy == nil && s.Workflow == "" && s.Action == "" && s.ActionCapability == ""
 }

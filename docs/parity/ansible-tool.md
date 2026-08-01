@@ -29,7 +29,7 @@ restates it.
 | Area                     | Verdict                   | One-line                                                                                                                  |
 | ------------------------ | ------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
 | **Playbook discovery**   | 🟢 sound                  | Play-shape detection, not path convention — a role task file and a `requirements.yml` both correctly fail it              |
-| **Content-root breadth** | 🟡 four artifact kinds    | Roles, collections, playbooks, inventory files. Role **dependencies** and the roles half of `requirements.yml` are unread |
+| **Content-root breadth** | 🟡 four artifact kinds    | Roles, collections, playbooks, inventory files. A shipped content root now **uses** a role (`content/webapp/roles/stratt_web_service`, included by all three web plays) and nested `vars/<app>/<os_family>.yml` — verified through the real ConfigMap path, not just a bind mount. Role **dependencies** (`meta/main.yml`) and the roles half of `requirements.yml` are still unread |
 | **Variable layout**      | 🔴 invisible              | `group_vars/`, `host_vars/`, vars files — none observed; the estate cannot see where a value comes from                   |
 | **Custom content**       | 🔴 invisible              | `library/`, `module_utils/`, filter/callback plugins — a repo's own modules are unprojected                               |
 | **Run knobs**            | 🟢 typed and bounded      | 12 typed fields in `ansible.input.v6`, each rendered as its own token — an argument surface, not an injection one         |
@@ -38,9 +38,11 @@ restates it.
 
 **Bottom line.** The execution surface is genuinely good where it reaches — typed, bounded, reviewable,
 and deeper than the AWX mirror of the same knobs. The one finding that changes what Stratt can be sold as
-is **ANS-001**: the Actuator speaks SSH with a private key and nothing else, so a Windows estate or a
-network fleet is not partially supported, it is unsupported. That is a bigger hole than anything in the
-[AWX object-model audit](awx-object-model.md), and unlike those, it is not visible from any existing doc.
+was **ANS-001**: the Actuator spoke SSH with a private key and nothing else, so a Windows estate or a
+network fleet was not partially supported, it was unsupported. **ADR-0153 (2026-07-31) closed most of it**
+— `network_cli`/`netconf` reach, plus the three credential forms (login/device password, escalation
+password, multiple vault identities) — and the residue is now **Windows only**, stated in the enum rather
+than discovered at run time. That residue is real and is not being talked around: see §3.
 
 ---
 
@@ -53,25 +55,28 @@ What an Ansible project contains, against what the content half projects
 | Content-root element                                                | Observed?                           | Note                                                                                                                                             | ID          |
 | ------------------------------------------------------------------- | ----------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ | ----------- |
 | Playbooks (any `.yml` that is a play sequence)                      | 🟢 `name`, `path`, `plays`, `hosts` | Detected by **shape**, not location — a top-level sequence of mappings with `hosts:` or `import_playbook:`. Pinned schema                        |             |
-| `roles/*/`                                                          | 🟡 `name`, `path` only              | A role is a name and a directory; nothing inside it is read                                                                                      |             |
-| `roles/*/meta/main.yml` → `dependencies`                            | 🔴                                  | **Role→role dependency is graph-shaped structure**, and it is the one thing inside a role worth projecting                                       | **ANS-004** |
-| `roles/*/meta/main.yml` → `galaxy_info`                             | 🔴                                  | Author, license, supported platforms — cheap metadata once `meta/` is being read at all                                                          | **ANS-004** |
+| `roles/*/`                                                          | 🟢 name, path, required, version, deps, galaxy_info | Widened by the content-depth batch (2026-07-31). Tasks/handlers/defaults stay unread — the §9 line                                |             |
+| `roles/*/meta/main.yml` → `dependencies`                            | 🟢                                  | Projected as `depends-on` **relations**; all three Galaxy forms (bare string, `{role:}`, `{name:}`). Resolves to the in-tree role when there is one, else into the requirements space | ~~**ANS-004**~~ |
+| `roles/*/meta/main.yml` → `galaxy_info`                             | 🟢 author, license, min version, platform names | Platform *versions* are not projected — a supported-version matrix is not estate structure                                          | ~~**ANS-004**~~ |
 | `collections/requirements.yml` → `collections:`                     | 🟢 `name`, `version`, `source`      | Both Galaxy-legal forms (bare FQCN string and mapping) handled                                                                                   |             |
-| `requirements.yml` → `roles:`                                       | 🔴                                  | The **roles half is not parsed** — only `collections:`. Already booked by ADR-0127 D4                                                            | **ANS-002** |
+| `requirements.yml` → `roles:`                                       | 🟢 `name`, `version`, `src`         | Same `ansible.role` Kind as an in-tree role, marked `required` — one question, one Kind. Parsed PER ENTRY, because real files mix the bare-string and mapping forms in one list | ~~**ANS-002**~~ |
 | Inventory files                                                     | 🟡 `path`, `format` only            | Recognized by well-known name or an `inventory/`/`inventories/` ancestor; **contents never parsed**                                              |             |
 | Inventory groups / hosts inside those files                         | ⚪                                  | Deliberate: a **View** _is_ the group (ADR-0055 G3) and hosts come from their own Syncers, never a writable CMDB (§1.2)                          |             |
-| `group_vars/`, `host_vars/`                                         | 🔴                                  | Where an Ansible estate's actual configuration lives. Not observing them means "why did this host get this value" is unanswerable from the graph | **ANS-003** |
-| `ansible.cfg`                                                       | 🔴                                  | Sets roles paths, connection defaults, strategy, callbacks — it changes the meaning of everything else in the root                               | **ANS-005** |
-| `library/`, `module_utils/`, `filter_plugins/`, `callback_plugins/` | 🔴                                  | A repo's own custom content is invisible; on a migration this is the content most likely to break                                                | **ANS-006** |
-| `galaxy.yml` (the root **is** a collection)                         | 🔴                                  | A collection-shaped repo is not recognized as one — it projects as loose playbooks and roles                                                     | **ANS-007** |
-| Vaulted files (`$ANSIBLE_VAULT` header)                             | 🟠                                  | Unexamined. A vaulted `group_vars/all.yml` should be observed as _present and vaulted_, never decrypted (§2.5)                                   | **ANS-008** |
+| `group_vars/`, `host_vars/`                                         | 🟢 scope, target, **key names**     | `ansible.varscope`. Values are NEVER projected (§2.5) — a vars file routinely holds credentials in the clear. Both the file and directory forms; the directory form unions its files, as ansible does. **Precedence is observed, never computed**: two scopes binding one name both project, neither marked a winner | ~~**ANS-003**~~ |
+| `ansible.cfg`                                                       | 🟢 allowlisted values + other key **names** | It changes the meaning of everything else in the root, so observing it also FIXED the role reader: `roles_path` is now honored, not just recorded. `[galaxy_server.*] token` is why values are allowlisted (§2.5) | ~~**ANS-005**~~ |
+| `library/`, `module_utils/`, `filter_plugins/`, `callback_plugins/` | 🟢 name, type, path, owning role | `ansible.plugin`, in BOTH layouts (classic `library/` and collection `plugins/modules/`). Contents never read — that is a program, not structure                | ~~**ANS-006**~~ |
+| `galaxy.yml` (the root **is** a collection)                         | 🟢 fqcn, version, deps, license | Same `ansible.collection` Kind as a required one, marked `root` — one question, one Kind. Its own `dependencies` live here, not in requirements.yml            | ~~**ANS-007**~~ |
+| Vaulted files (`$ANSIBLE_VAULT` header)                             | 🟢 `vaulted: true`, no keys         | Exactly as this row asked: present and vaulted, never decrypted. An empty key list WITH `vaulted:true` distinguishes "binds nothing" from "binds things I cannot show you" (§1.8) | ~~**ANS-008**~~ |
 | `molecule/`, `.yamllint`, `meta/runtime.yml`                        | ⚪                                  | Test scaffolding and lint config; not estate                                                                                                     |             |
 | Multi-document YAML playbooks                                       | 🟠                                  | `playbookPlays` unmarshals a single document; a `---`-separated multi-doc playbook would project only its first doc. Legal but rare              | **ANS-009** |
 
 **On the ⚪ rows.** Declining to parse inventory contents and role internals is the §9 line, correctly
-held. **ANS-003** and **ANS-004** are on the other side of it: a `group_vars/` file's _existence and
-scope_ and a role's _declared dependencies_ are structure, not execution semantics — observing them
-reinterprets nothing.
+held. **ANS-003** and **ANS-004** were on the other side of it — a `group_vars/` file's _existence and
+scope_ and a role's _declared dependencies_ are structure, not execution semantics — and both shipped
+on 2026-07-31 with that boundary intact: role tasks/handlers/defaults are still unread, and variable
+PRECEDENCE is still ansible's to decide. Two scopes binding one name both project with neither marked
+a winner; computing the winner would reinterpret the execution model (§9) and would have Stratt assert
+a fact about a run that has not happened (§1.2).
 
 ---
 
@@ -95,10 +100,10 @@ mirror of the same fields.
 
 | `ansible-playbook` capability                              | Status | Note                                                                                                                                                                         | ID          |
 | ---------------------------------------------------------- | ------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------- |
-| `--connection` / `ansible_connection` other than ssh+local | 🔴     | See §3 — the finding of this audit                                                                                                                                           | **ANS-001** |
-| SSH **password** auth (`ansible_password`)                 | 🔴     | `connectionVars` renders `ansible_ssh_private_key_file` and nothing else — key-only                                                                                          | **ANS-001** |
-| **become password** (`ansible_become_password`)            | 🔴     | `becomeParams` is `{enabled,user,method}`; a sudo-with-password target cannot escalate                                                                                       | **ANS-010** |
-| `--vault-id` (multiple vault identities)                   | 🟡     | One `vault.credentialRef` only; a repo using two vault ids cannot run                                                                                                        | **ANS-011** |
+| `--connection` / `ansible_connection` other than ssh+local | 🟡     | **`network_cli` + `netconf` ship (ADR-0153, 2026-07-31)** — the netcommon reach. `winrm`/`psrp` and `httpapi` are still absent and are REFUSED by the enum rather than accepted; see §3 | **ANS-001** |
+| SSH **password** auth (`ansible_password`)                 | 🟢     | ~~key-only~~ — **`connection.passwordRef` ships (ADR-0153 D3)**, rendered as `--connection-password-file`: a PATH, never a value                                              | **ANS-001** |
+| **become password** (`ansible_become_password`)            | 🟢     | ~~cannot escalate~~ — **`become.passwordRef` ships (ADR-0153 D5)** → `--become-password-file`. A ref without `enabled: true` is refused                                       | ~~**ANS-010**~~ |
+| `--vault-id` (multiple vault identities)                   | 🟢     | ~~one only~~ — **`vault` takes an object OR a list, each with an optional `id` (ADR-0153 D4)**. Duplicate ids refused                                                         | ~~**ANS-011**~~ |
 | `--start-at-task`, `--step`                                | 🔴     | Interactive/partial execution. Low value for a governed platform ⚪-adjacent                                                                                                 | **ANS-012** |
 | `--syntax-check`, `--list-tasks`, `--list-hosts`           | 🔴     | Cheap, and genuinely useful as a pre-flight gate before a Run                                                                                                                | **ANS-013** |
 | `--force-handlers`, `--flush-cache`                        | 🔴     | Low value                                                                                                                                                                    | **ANS-012** |
@@ -112,33 +117,119 @@ mirror of the same fields.
 
 ---
 
-## 3. The connection-type gap · ANS-001
+## 3. The connection-type gap · ANS-001 — mostly closed (ADR-0153), Windows outstanding
 
-`connectionVars` ([connection.go:54-102](../../plugins/ansible/connection.go#L54-L102)) emits exactly
-three things: `ansible_user`, `ansible_ssh_private_key_file`, and `ansible_ssh_common_args`. The only
-other connection form anywhere in the path is `ansible_connection=local`, from the reserved `local` value
-of `mgmt.address` ([ansible.go:88](../../plugins/ansible/ansible.go#L88)).
+**Before ADR-0153.** `connectionVars` emitted exactly three things: `ansible_user`,
+`ansible_ssh_private_key_file`, and `ansible_ssh_common_args`. The only other connection form anywhere in
+the path was `ansible_connection=local`, from the reserved `local` value of `mgmt.address`. So the
+Actuator reached **Linux/Unix over SSH with a private key**, and the control node — and that was a reach
+gap, not a depth gap: for a network fleet or a password-only estate the answer was "you cannot use
+Stratt," and no document said so.
 
-So the Actuator can reach: **Linux/Unix over SSH with a private key**, and the control node itself. It
-cannot reach:
+The tell that it was never a decision: the `mgmt.address` Facet schema describes itself as feeding "the
+ansible/ssh/**winrm** Actuator" — the coordinate was designed for a connection type the execution path
+never grew.
 
-- **Windows** — `winrm` / `psrp`. No connection type, and no password auth, which Windows needs.
-- **Network devices** — `network_cli`, `netconf`, `httpapi`. The `ansible.netcommon` family is a large
-  part of why enterprises buy AAP.
-- **Containers** — `docker`, `podman`, `kubectl` connection plugins.
-- **Any SSH host that does not take a key** — password-only estates, which legacy fleets still are.
+**What ships now** (`ansible.input.v8`,
+[ADR-0153](../adr/0153-a-connection-type-and-a-password-that-is-only-ever-a-path.md)):
 
-This is not a depth gap, it is a reach gap: for those estates the answer today is "you cannot use Stratt,"
-and no current document says so. Note the tell that it was never a decision — the `mgmt.address` Facet
-schema already describes itself as feeding "the ansible/ssh/**winrm** Actuator", so the coordinate was
-designed for a connection type the execution path never grew.
+| Reach                                      | Then | Now                                                                  |
+| ------------------------------------------ | ---- | -------------------------------------------------------------------- |
+| Linux/Unix over SSH **with a key**         | ✅   | ✅ unchanged — an ssh Step renders byte-identically to v7             |
+| Any SSH host **without** a key             | ❌   | ✅ `connection.passwordRef`                                           |
+| **Network devices** (`ansible.netcommon`)  | ❌   | ✅ `connection.type: network_cli` / `netconf` + `connection.networkOS` |
+| Escalation that **prompts** for a password | ❌   | ✅ `become.passwordRef`                                               |
+| A repo with **two vault identities**       | ❌   | ✅ `vault` as a list with `id`s                                       |
+| **Windows** (`winrm`/`psrp`)               | ❌   | ❌ **still no** — and the enum REFUSES the value                      |
+| `httpapi`                                  | ❌   | ❌ its own decision (needs use_ssl/validate_certs/port)               |
+| Containers (`docker`/`podman`/`kubectl`)   | ❌   | ❌ nobody has asked                                                   |
 
-Worth stating clearly because it bounds the fix: the **graph side is ready**. `mgmt.address` carries
-address + port and is deliberately closed against growing into a device ontology (§9), so adding a
-connection type is an Actuator-and-Contract change — an `ansible.input.v7` with a typed `connection.type`
-enum plus the credential forms each type needs — not a data-model change. It should be its own ADR, and
-the credential half (passwords, brokered per §2.5, never in `extraVars`) is the part that needs the
-argument.
+**The credential half was the design, and the mechanism is worth knowing.** All three secrets reach
+ansible as a **file path** — `--connection-password-file`, `--become-password-file`,
+`--vault-password-file` / `--vault-id id@path` — verified against the ansible-core the EE pins. So a
+password is never a value anywhere. The shape everybody writes first, `ansible_password` as an inventory
+group var, is not a weaker option but a forbidden one: `writeInventory` creates `inventory/hosts` at
+**0644** in the private data dir **beside `artifacts/`**, and §2.5 says material is never written to
+artifacts.
+
+**Two refusals rather than resolutions.** `connection.networkOS` is required for the netcommon types and
+refused for ssh — a guessed vendor connects and then issues another vendor's syntax, which surfaces as a
+play failure pointing at the wrong thing. And a non-ssh `type` on a run that includes a `local` target is
+refused outright: `local` is a HOST var, host vars beat group vars, so the local target would silently
+connect a different way — implicit precedence hiding inside two declarations that each look right (§2.4).
+
+**Windows is the honest residue.** It is the most-asked-for row in the register and it is absent because
+it cannot be verified: there is no freely-runnable Windows target in CI, so shipping `winrm` would ship a
+code path nothing had ever executed. The enum therefore **rejects** it at estate load with a message
+naming the gap, instead of accepting it and failing on a fleet someone already migrated. When a target
+can be stood up and driven end to end, `winrm` is one enum value plus a credential form that now exists.
+
+**The enum was not enough, and verifying it is what found that out.** `network_cli` and `netconf` are
+**not in ansible-core** — measured, not assumed:
+
+```
+$ docker run --rm stratt-ee:dev ansible-doc -t connection network_cli
+[WARNING]: Error loading plugin 'ansible.netcommon.network_cli':
+           No module named 'ansible_collections.ansible.netcommon'
+```
+
+So a Contract that accepted the value on the default EE would pass review, pass the estate load, pass
+every unit test — and die at connect time naming a python module the estate never wrote. Which is
+verbatim the failure `platform.requirements.yml` was written about for `community.general.apk`. ADR-0153
+D7 closes it in both directions:
+
+| Image                             | plugin resolves?                          | shim behaviour                        |
+| --------------------------------- | ----------------------------------------- | ------------------------------------- |
+| `stratt-ee:dev` (platform floor)  | ❌ `network_cli` not found                 | **refuses**, naming `ansible.netcommon` and where to add it |
+| `stratt-ee-network:dev` (variant) | ✅ `network_cli` + `netconf` both resolve  | allows                                |
+
+The shim reads the image's own run-visible content manifest (`/etc/stratt/ee-content.json`) rather than
+probing — `ansible-doc` **exits 0 for a plugin that does not exist**, also measured, so the obvious
+probe silently passes. Declaration errors are still reported before image errors, so nobody is sent to
+rebuild an EE over a typo.
+
+`ee/content/network.requirements.yml` ships **`ansible.netcommon` only** — the connection plugins, which
+is the mechanism the enum promises. Vendor collections (`cisco.ios`, `arista.eos`) are deliberately not
+included: which vendors a fleet needs is exactly the adopter-shaped question an EE variant exists for
+(ADR-0117 D3). An adopter copies the file, adds their vendors, relocks, and selects the image from their
+own Actuator.
+
+### The substrate transports — and the assumption that hid them (ADR-0156)
+
+The connection audit above was written on an assumption nobody had checked: that reaching a managed
+host means SSH on port 22. **Measuring the collections falsified it.** All three substrates ship a
+native connection plugin and none of them uses SSH:
+
+| Transport                       | Reaches the guest via              | Guest needs                       | Status |
+| ------------------------------- | ---------------------------------- | --------------------------------- | ------ |
+| `kubernetes.core.kubectl`       | `kubectl exec`                     | **nothing at all**                | 🟢 **LIVE-PROVEN** on kind — a pod asserted to have no sshd, no ssh client and nothing on port 22, converged over kubectl |
+| `community.vmware.vmware_tools` | vCenter guest ops — **no network path to the guest** | VMware Tools + guest creds | 🟡 shipped, unit-tested, **not live-proven**: vspheresim implements the vCenter API but not Tools guest operations |
+| `amazon.aws.aws_ssm`            | an AWS SSM Session                 | SSM Agent, instance profile, curl | 🟠 the shim supports it; **nothing produces it yet** — see below |
+
+**The transport is OBSERVED, not declared** (ADR-0156 D1): the Syncer that saw the host says how to
+reach it, in a `mgmt.transport` Facet beside `mgmt.address`. Declaring it on the Step would force
+every converge Workflow to name a substrate — the thing ADR-0151 removed from every declaration
+above the provider — and would make a mixed-substrate View unconvergeable, because connection
+settings render as inventory GROUP vars, one value per Run. Rendered per HOST, one Assignment
+converges pods, VMs and EC2 instances in **one Run**, naming none of them.
+
+**`aws_ssm` has no writer, and that is deliberate rather than unfinished.** The awsec2 Syncer can
+honestly observe *neither* EC2 path. `KeyName` means a key is AUTHORIZED, not that sshd is listening
+— inferring reachability from it is COMPUTING a reach fact, which ADR-0142 D4 forbids in those
+words, and floci proves the gap is real rather than pedantic (its instances carry a KeyName and ship
+no sshd). SSM is authoritatively answerable — `DescribeInstanceInformation` lists exactly the
+instances whose agent registered — but that is a different AWS API with its own IAM scope. **Booked:
+the SSM client and the transport land together or not at all**, since a Facet has no other writer.
+
+**What the kubectl proof retires:** `kubecompute` had to bake sshd and authorized keys into every pod
+it built, purely because the connection method had been assumed. That coupling is now removable.
+
+---
+
+**What is still outstanding is the DEVICE half.** A collection that installs is not a connection that
+works: **no real device has been driven end to end from this repo**. That needs a CI-runnable target (an
+FRR or cEOS container), and it is booked in the same shape as PLG-1's bastion half. A unit-green,
+image-verified connection type is still not a proven one.
 
 ---
 
@@ -146,26 +237,36 @@ argument.
 
 **Tier 1 — bounds what estates Stratt can manage at all:**
 
-- **ANS-001 · Connection types + non-key credentials.** Windows and network devices. Own ADR; the
-  credential-form half is the design work, not the flag.
-- **ANS-010 · Become password.** Small, and blocks a common sudo posture. Naturally batched with
-  ANS-001, since both are "a credential form the connection surface has no shape for."
+- **ANS-001 · Connection types + non-key credentials.** ~~Windows and network devices.~~ **Mostly done
+  (ADR-0153, 2026-07-31)**: `network_cli`/`netconf` + all three credential forms. Two pieces remain, and
+  neither is a flag — **(a) Windows**, blocked on a verifiable target rather than on design; **(b) a live
+  network-device run**, blocked on a CI-runnable device container (FRR/cEOS). The COLLECTION half of (b)
+  is now done and image-verified both ways (`ee/content/network.requirements.yml`, ADR-0153 D7); what
+  remains is driving a real device.
+- ~~**ANS-010 · Become password.**~~ **Done (ADR-0153 D5)** — `--become-password-file`, and a password
+  supplied without `enabled: true` is refused rather than silently ignored.
 
 **Tier 2 — the estate cannot see where configuration comes from:**
 
-- **ANS-003 · `group_vars/` / `host_vars/` observation.** Structure, not semantics: which files exist and
-  what scope they bind to. This is what makes "why does this host have this value" answerable.
-- **ANS-004 · Role `meta/` dependencies.** Role→role edges are the one graph inside a role.
-- **ANS-002 · `requirements.yml` roles half.** Already booked by ADR-0127 D4.
+~~All three done (2026-07-31), as one batch — they are one mechanism in one place:~~
+
+- ~~**ANS-003 · `group_vars/` / `host_vars/` observation.**~~ `ansible.varscope`: scope, target and
+  **key names, never values** (§2.5). Carried **ANS-008** with it — a vaulted file is present and
+  vaulted, never decrypted.
+- ~~**ANS-004 · Role `meta/` dependencies.**~~ `depends-on` relations + galaxy_info provenance.
+- ~~**ANS-002 · `requirements.yml` roles half.**~~ Same `ansible.role` Kind, marked `required`.
 
 **Tier 3 — completeness of the content picture:**
 
-- **ANS-006** custom modules/plugins (+ `--module-path`) · **ANS-005** `ansible.cfg` ·
-  **ANS-007** collection-shaped roots · **ANS-011** multi-identity vault ·
-  **ANS-013** pre-flight syntax check.
+~~**ANS-006** custom modules/plugins · **ANS-005** `ansible.cfg` · **ANS-007** collection-shaped
+roots~~ — **all done (2026-07-31)**, as one batch with the same mechanism as Tier 2. `ansible.cfg`
+was the one with teeth: observing it exposed that the role reader had been searching `roles/`
+unconditionally, so a root configured with `roles_path = galaxy_roles` projected **zero roles and
+reported no problem** — fixed, not merely recorded. Also ~~**ANS-011** multi-identity vault~~ (done,
+ADR-0153 D4). Still open: **ANS-013** pre-flight syntax check (a Step-level gate, a different
+mechanism from these projections) and `--module-path` on the execution surface.
 
-**Unexamined (🟠) — look before deciding:** **ANS-008** vaulted-file observation ·
-**ANS-009** multi-document playbooks.
+**Unexamined (🟠) — look before deciding:** **ANS-009** multi-document playbooks.
 
 **Explicitly not gaps:** strategy/serial (play-level), raw ssh args (the injection seam the typed design
 exists to remove), run-time dynamic inventory (a second truth), ad-hoc commands, retry files.

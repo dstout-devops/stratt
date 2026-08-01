@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "stratt:contract:facets/mgmt.transport:v1",
+  "title": "mgmt.transport Facet",
+  "description": "How an Entity is REACHED — the peer of mgmt.address, which says where (ADR-0156, extending ADR-0084). Written by the Syncer that observed the host, with provenance (§1.2): kubecompute observes `kubectl`, vcenter observes `vmware_tools`, awsec2 observes `aws_ssm` or `ssh`. Multi-writer by design and already precedented — mgmt.address is written by the declared-estate Syncer, the vcenter Syncer and build project-backs alike, under cross-source per-key Facet ownership (ADR-0041/0042). IT EXISTS BECAUSE THE CONNECTION METHOD IS A PROPERTY OF THE SUBSTRATE, NOT OF THE STEP. Every substrate ships a native Ansible connection plugin and none of them uses SSH: kubernetes.core.kubectl needs NOTHING in the guest, community.vmware.vmware_tools goes through vCenter's guest-operations API and needs no network path to the guest at all, amazon.aws.aws_ssm goes through an SSM Session. Declaring the transport on the Step would force a converge Workflow to name a substrate — precisely what ADR-0151 removed from every declaration above the provider — and would make a MIXED-SUBSTRATE View unconvergeable, because connection settings rendered as inventory group vars are one value for the whole Run. Observed here instead, the shim renders per-HOST vars and one Assignment converges pods, VMs and EC2 instances in ONE Run, naming none of them. COORDINATES, NEVER CREDENTIALS (§2.5, ADR-0084 D4's split applied to the transport): this carries what IDENTIFIES the target — a pod and namespace, a VM path, an instance id and region — and holds no vCenter password, no guest password, no AWS key and no kubeconfig. Those arrive as brokered CredentialRefs on the Step, resolved at their mount. Core never branches on `kind`; it carries and logs it exactly as it carries the address, which is what keeps the spine from holding a closed set of substrates (§9) while leaving a Run's descent legible (§1.8). `local` is deliberately NOT a kind: a control-node target already declares itself through mgmt.address's reserved value, and a second home for that fact would be resolved by a precedence rule §2.4 refuses. Closed (§9).",
+  "type": "object",
+  "properties": {
+    "kind": {
+      "enum": ["ssh", "kubectl", "vmware_tools", "aws_ssm"],
+      "description": "the connection plugin this target is reached by. `ssh` is an OBSERVATION, not a default — it means the Syncer determined this host is SSH-reachable, which is different from no transport being observed at all."
+    },
+    "namespace": { "type": "string", "description": "kubectl: the pod's namespace" },
+    "pod": { "type": "string", "description": "kubectl: the pod name" },
+    "container": {
+      "type": "string",
+      "description": "kubectl: the container within the pod, when it has more than one"
+    },
+    "vmPath": {
+      "type": "string",
+      "description": "vmware_tools: the VM's inventory path, e.g. /DC0/vm/web-01"
+    },
+    "vmUuid": {
+      "type": "string",
+      "description": "vmware_tools: the VM's uuid, when the path is ambiguous"
+    },
+    "instanceId": { "type": "string", "description": "aws_ssm: the EC2 instance id" },
+    "region": { "type": "string", "description": "aws_ssm: the region the instance is in" }
+  },
+  "required": ["kind"],
+  "additionalProperties": false,
+  "allOf": [
+    {
+      "$comment": "Per-kind coordinate requirements, stated as if/then so a validation failure names the missing field rather than reporting that the document matched no branch (§1.8 — the oneOf-error problem ADR-0153 D4 already hit).",
+      "if": { "properties": { "kind": { "const": "kubectl" } }, "required": ["kind"] },
+      "then": { "required": ["namespace", "pod"] }
+    },
+    {
+      "if": { "properties": { "kind": { "const": "vmware_tools" } }, "required": ["kind"] },
+      "then": { "anyOf": [{ "required": ["vmPath"] }, { "required": ["vmUuid"] }] }
+    },
+    {
+      "if": { "properties": { "kind": { "const": "aws_ssm" } }, "required": ["kind"] },
+      "then": { "required": ["instanceId", "region"] }
+    }
+  ]
+}

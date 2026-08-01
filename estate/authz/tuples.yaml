@@ -6,7 +6,7 @@ tuples:
   - { user: principal:dev-runner, relation: runner, object: view:web-hosts }
   - { user: principal:dev-runner, relation: runner, object: view:secure-hosts }
   # Plugin-e2e target Views (dev-hosts = the seeded synthetic target; dev-vms =
-  # the vcenter Syncer's projected vcsim VMs). The dev-runner launches the
+  # the vcenter Syncer's projected vspheresim VMs). The dev-runner launches the
   # actuator/syncer Runs against these — the runner-on-View gate at the door.
   - { user: principal:dev-runner, relation: runner, object: view:dev-hosts }
   - { user: principal:dev-runner, relation: runner, object: view:dev-vms }
@@ -23,3 +23,19 @@ tuples:
   # …and the helm/deploy Action's authz-gate CredentialRef (ADR-0092 M2 self-deploy):
   # dev-runner may launch the gated helm-deploy Workflow that materializes a release.
   - { user: principal:dev-runner, relation: user, object: credential_ref:helm-deploy }
+  # …and the View of certificates the cert-issue Workflow's `issue` Step converges (W4).
+  # The runner-on-View gate is per STEP, not per Workflow: cert-issue gathers a CSR from and
+  # delivers to view:managed-web (granted above) and then reconciles view:managed-certs, so a
+  # Principal holding only the first is refused AT LAUNCH — before any Step runs — with
+  # "lacks runner on view:managed-certs". That is the gate working; the estate simply never
+  # granted the second half, because until now nothing had ever launched this Workflow.
+  - { user: principal:dev-runner, relation: runner, object: view:managed-certs }
+  # …and the gate-only CredentialRef the cert-issuer Action binds. An Action's use-check IS its
+  # authz gate, so without this tuple dev-runner may reach the View and still not sign.
+  - { user: principal:dev-runner, relation: user, object: credential_ref:cert-issuer }
+  # …and the gate-only CredentialRef the kubecompute/create-host Action binds (ADR-0151). Building
+  # a host is a privileged verb; the use-check is what gates it.
+  - { user: principal:dev-runner, relation: user, object: credential_ref:kubecompute-build }
+  # …and the View of hosts kubecompute BUILDS into, which apache-configure now inherits rather
+  # than naming. runner-on-View is still the gate; it is just the Assignment's View now.
+  - { user: principal:dev-runner, relation: runner, object: view:web-servers }

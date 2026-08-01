@@ -156,9 +156,15 @@ a demo is estate CaC + assets + a runner + docs. The consequential decision is s
   **enterprise-estate capstone**, which additionally requires the deferred prerequisites, each its own
   demo-that-closes-a-gap: per-instance/region build fan-out (ADR-0058), a K8s `Compute` provider (or the
   workloads reframe), awsec2 region/AZ projection (ADR-0115 #1), and multi-substrate simultaneous reconcile
-  via environment scoping (ADR-0113 D2). Also deferred: the **real SSH converge** act (provision → configure
-  over SSH into a floci instance, the ADR-0084 pattern) — floci gives real SSH-able instances, but the EE
-  Job (in kind) reaching them across the host/kind network boundary is unsolved.
+  via environment scoping (ADR-0113 D2). ~~Also deferred: the **real SSH converge** act (provision →
+  configure over SSH into a floci instance, the ADR-0084 pattern) — floci gives real SSH-able instances,
+  but the EE Job (in kind) reaching them across the host/kind network boundary is unsolved.~~
+  **WITHDRAWN (2026-07-27): the premise was false.** floci instances are not SSH-able at all — no AMI
+  ships sshd, user-data is never executed (HAR-1 in [enterprise-readiness.md](../enterprise-readiness.md),
+  guarded by `plugins/awsec2/floci_fidelity_live_test.go`). The host/kind network boundary was therefore
+  never the blocker; there was nothing listening to reach. floci's **network** model is fully real and
+  remains the provisioning-leg substrate; a provision→configure demo needs a Compute provider whose
+  machines boot.
 
 ## Alternatives considered
 

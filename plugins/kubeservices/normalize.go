@@ -78,7 +78,31 @@ func Normalize(services []K8sService, clusterDomain string) []*pluginv1.Observed
 		if !isHelmManaged(s.Labels) {
 			continue
 		}
+		// THE RELEASE NAME, with a fallback, because requiring the ideal label silently dropped a
+		// real release. `app.kubernetes.io/instance` is Kubernetes' RECOMMENDED label and Helm's
+		// standard labels helper sets it — but a chart is free not to, and plenty do not. Measured
+		// on a live floor: podinfo 6.9.2 labels its Service `managed-by=Helm`, `name=podinfo`,
+		// `version=6.9.2`, `helm.sh/chart=podinfo-6.9.2` and NO instance. It therefore produced a
+		// `service` Entity and NO `application` Entity, so the entire chart delivery form observed
+		// nothing for a release that was plainly deployed — and said nothing, because `continue` is
+		// silent.
+		//
+		// It went unnoticed because the only release the collector had ever been run against was
+		// STRATT'S OWN, whose chart uses the standard helper and therefore does set `instance`. The
+		// one case that worked was the one that happened to satisfy an undeclared assumption.
+		//
+		// The fallback is `app.kubernetes.io/name`, and its limit is stated rather than glossed: for
+		// the ordinary one-release-per-chart-per-namespace case it IS the release name, and for two
+		// unlabelled releases of one chart in one namespace it collapses them into a single
+		// application Entity. That is a worse answer than distinguishing them and a much better one
+		// than reporting neither — and it is deterministic, so an operator who sees one Entity where
+		// they expected two has something to look at (§1.8). A Service with NEITHER label is still
+		// skipped: there is nothing left to name a release by, and inventing one would be a guess in
+		// the identity, which is the one place §1.2 forbids it.
 		instance := s.Labels["app.kubernetes.io/instance"]
+		if instance == "" {
+			instance = s.Labels["app.kubernetes.io/name"]
+		}
 		if instance == "" {
 			continue
 		}
@@ -158,6 +182,30 @@ func applicationEntity(namespace, instance, chartLabel, appVersion string, servi
 	// form-agnostic `software.%` pass for free.
 	raw, _ := json.Marshal(map[string]any{"charts": []map[string]any{chart}})
 
+	// app.deliverable is the SCALAR sibling, and the two exist for two different questions.
+	//
+	// software.chart above is a component LIST because the one form-agnostic advisory pass has to
+	// walk it (ADR-0080). A Blueprint route's observe expectation cannot: facetAtPath walks maps
+	// only, so `charts.version` resolves to nothing, and `contains` matches a whole element by
+	// DeepEqual — so "is the deployed chart at version X" would mean enumerating every field this
+	// function happened to set, INCLUDING appVersion, which is a fact about the chart rather than
+	// desired state an estate could declare (ADR-0148 D3).
+	//
+	// So the chart form gets the split the PACKAGE form already had: app.config carries the scalar
+	// a drift expectation reads and software.package carries the list the advisory pass reads. One
+	// dimension, two questions, two shapes — and both written by the same observation, so they
+	// cannot disagree about what is deployed.
+	//
+	// `version` is OMITTED rather than guessed when the helm.sh/chart label carries none: an absent
+	// path is an unmet expectation, which is the honest answer to "is the desired version deployed"
+	// when the version is unknown. Reporting the release name as a version would resolve a Finding
+	// on a fabrication.
+	deliverable := map[string]any{"name": chart["name"]}
+	if version != "" {
+		deliverable["version"] = version
+	}
+	deliverableRaw, _ := json.Marshal(deliverable)
+
 	rels := make([]*pluginv1.ObservedRelation, 0, len(serviceKeys))
 	for _, key := range serviceKeys {
 		rels = append(rels, &pluginv1.ObservedRelation{Type: "provides", ToScheme: SchemeService, ToValue: key})
@@ -166,8 +214,11 @@ func applicationEntity(namespace, instance, chartLabel, appVersion string, servi
 		Kind:         "application",
 		IdentityKeys: map[string]string{SchemeRelease: namespace + "/" + instance},
 		Labels:       map[string]string{"application.name": instance},
-		Facets:       map[string][]byte{"software.chart": raw},
-		Relations:    rels,
+		Facets: map[string][]byte{
+			"software.chart":  raw,
+			"app.deliverable": deliverableRaw,
+		},
+		Relations: rels,
 	}
 }
 

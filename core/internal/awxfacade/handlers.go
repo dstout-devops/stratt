@@ -25,13 +25,14 @@ func (f *Facade) listJobTemplates(w http.ResponseWriter, r *http.Request) {
 		awxErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	projects := f.projectIDs(r)
 	items := make([]named, 0, len(wfs))
 	for _, wf := range wfs {
 		step, ok := singleActuationStep(wf)
 		if !ok {
-			continue // multi-Step/gated Workflows are workflow_job_templates (fast-follow)
+			continue // multi-Step/gated Workflows are workflow_job_templates (workflowjobtemplates.go)
 		}
-		items = append(items, named{id: awxID(wf.Name), name: wf.Name, obj: workflowToJobTemplate(wf, step)})
+		items = append(items, named{id: awxID(wf.Name), name: wf.Name, obj: workflowToJobTemplate(wf, step, projects)})
 	}
 	writeJSON(w, http.StatusOK, paginate(r, items))
 }
@@ -48,7 +49,7 @@ func (f *Facade) getJobTemplate(w http.ResponseWriter, r *http.Request) {
 		awxErr(w, http.StatusNotFound, "Not found.")
 		return
 	}
-	writeJSON(w, http.StatusOK, workflowToJobTemplate(wf, step))
+	writeJSON(w, http.StatusOK, workflowToJobTemplate(wf, step, f.projectIDs(r)))
 }
 
 // resolveJobTemplate reverse-matches an AWX job_template id to a single-Step

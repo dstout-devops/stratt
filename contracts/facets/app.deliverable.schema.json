@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "stratt:contract:facets/app.deliverable:v1",
+  "title": "app.deliverable Facet",
+  "description": "Demanded by the chart-delivered Intent/Application Blueprint (ADR-0148 follow-up b): the OBSERVED deliverable an application Entity was deployed from, as SCALARS at a dotted path. It is the CHART form's sibling of app.config — the facet a Blueprint route's observe expectation is checked against — and it exists because the software.* facets cannot serve that role. software.chart carries a `charts` COMPONENT LIST so that the one form-agnostic advisory pass (ADR-0080) covers charts, and an expectation cannot reach into a list: facetAtPath walks maps only, and `contains` matches a whole element by DeepEqual, so asking 'is the deployed chart at version X' would mean enumerating every field the Normalizer happened to set — including appVersion, which is a fact about the chart and not desired state the estate could declare (ADR-0148 D3). The split is exactly the one the PACKAGE form already ships: app.config holds the scalar the drift expectation reads, software.package holds the list the advisory pass reads. Same dimension, two questions, two shapes. A projection (§1.2) of the running release, observed by the K8s/Helm collector and never authored; single §2.1 write-owner. CLOSED (§9): it carries what a drift expectation needs and is not an application-deployment ontology.",
+  "type": "object",
+  "properties": {
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "description": "The deliverable's name — the chart name, matching Intent/Application's spec.package."
+    },
+    "version": {
+      "type": "string",
+      "minLength": 1,
+      "description": "The deployed deliverable's version, as a STRING. The type is load-bearing rather than stylistic, for the reason app.config's port records: a compiled expectation from Intent/Application's spec.chartVersion is compared against this observed value and nothing coerces between types (ADR-0118 D1), so the two must agree or they are never comparable. OMITTED rather than guessed when the source cannot report it — an absent path is an unmet expectation, which is the honest answer to 'is the desired version deployed' when the version is unknown."
+    }
+  },
+  "required": ["name"],
+  "additionalProperties": false
+}

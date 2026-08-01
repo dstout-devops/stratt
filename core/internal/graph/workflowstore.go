@@ -189,6 +189,28 @@ func (s *Store) GetWorkflowRun(ctx context.Context, id string) (types.WorkflowRu
 	return wr, sum, nil
 }
 
+// GetWorkflowRunByAWXID resolves a WorkflowRun from the synthetic AWX integer id
+// the /api/v2 façade exposes for a workflow_job (ADR-0026), via the
+// graph.awx_run_id functional index (migration 00048). Int31 collisions resolve
+// to the most-recent execution sharing the id — correct for transient polling,
+// the same trade GetRunByAWXID makes. Returns ErrNotFound when none hashes to id.
+func (s *Store) GetWorkflowRunByAWXID(ctx context.Context, awxID int64) (types.WorkflowRun, error) {
+	var id string
+	err := s.pool.QueryRow(ctx, `
+		SELECT id FROM graph.workflow_run
+		WHERE graph.awx_run_id(id) = $1
+		ORDER BY started_at DESC LIMIT 1`, awxID,
+	).Scan(&id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return types.WorkflowRun{}, fmt.Errorf("%w: workflow run awx-id %d", ErrNotFound, awxID)
+	}
+	if err != nil {
+		return types.WorkflowRun{}, fmt.Errorf("graph: get workflow run by awx id: %w", err)
+	}
+	wr, _, err := s.GetWorkflowRun(ctx, id)
+	return wr, err
+}
+
 // ListWorkflowRuns returns recent executions, newest first.
 func (s *Store) ListWorkflowRuns(ctx context.Context, limit int) ([]types.WorkflowRun, error) {
 	if limit <= 0 || limit > 500 {

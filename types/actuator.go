@@ -56,7 +56,16 @@ type Actuator struct {
 	// tenant's project directory (ADR-0134 D2 correction — a write ceiling in a file its subject
 	// can edit is not a ceiling). Authorization on Actuator selection does not exist yet; until it
 	// does this boundary is enforced by repo review.
-	ContentDir string `json:"contentDir,omitempty"`
+	// OutputContract PINS the shape this Actuator's Apply may hand to a downstream Step
+	// ({{.steps.<name>.outputs.x}}). Empty means the Apply emits nothing bindable, and outputs it
+	// emits anyway are REFUSED rather than captured (CERT-2).
+	//
+	// It exists because an Actuator Step used to be a dead end for data while an Action Step was
+	// not — an arbitrary asymmetry that made the born-on-target CSR flow cert-issuer's own input
+	// Contract documents impossible to express. The pin is what makes handing bytes between Steps
+	// safe: a consumer binds a shape the core agreed to, not one a plugin asserted.
+	OutputContract string `json:"outputContract,omitempty"`
+	ContentDir     string `json:"contentDir,omitempty"`
 	// Content is ContentDir resolved at estate-PARSE time: relative path → file content, mounted
 	// into the EE Job at project/<relpath> (ADR-0134 D3). Resolved here rather than read at
 	// dispatch for three reasons, in order of weight: JobSpec.Files is remote-safe (ADR-0032) so
@@ -136,6 +145,17 @@ type Actuator struct {
 	// mechanism so an Intent's `requires: [provisioning]` resolves to a concrete Action — the
 	// provider owns its mechanism (§1.5); a capability-binding only selects WHICH provider.
 	Provisions map[string]string `json:"provisions,omitempty"`
+
+	// Substrate is the landscape this provider builds in (ADR-0151 D1) — "aws", "kubernetes",
+	// "vsphere", "vm". A FACT about the provider, in the same category as Provides and
+	// IdentitySchemes; it is descriptive, never a knob that configures the provider elsewhere.
+	//
+	// A capability-binding may select by it instead of naming a provider per Intent kind, which is
+	// what makes a whole-topology migration one line (ADR-0151 D2). NOTHING ABOVE A PROVIDER MAY
+	// NAME A SUBSTRATE: an Intent or Blueprint that does cannot migrate, because the name is the
+	// coupling. Empty is legal and means "never selected by substrate" — every provider shipped
+	// before ADR-0151 keeps working through its per-kind bindings.
+	Substrate string `json:"substrate,omitempty"`
 	// Decommissions maps an Intent kind to THIS provider's gated TEARDOWN Workflow for it (ADR-0114
 	// D4) — the symmetric counterpart to Provisions. It is how a provisioning provider advertises its
 	// per-kind teardown so a withdrawn/counted-down Intent (onRemove: remove) resolves to a concrete

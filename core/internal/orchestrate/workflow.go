@@ -1,6 +1,7 @@
 package orchestrate
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -41,6 +42,21 @@ type DAGInput struct {
 	// Principal's authz remain the control; these only parameterize what was already
 	// declared and gated.
 	LaunchParams map[string]any
+	// ViewName is the View a remediation INHERITS from the Baseline that raised its Finding.
+	//
+	// A converge Workflow is a RECIPE — what to do — not a target. The Assignment already says
+	// WHERE (`view:`), the compiler copies it onto the Baseline, and a Step re-stating it was one
+	// value with two binding sites, able to disagree (§2.4). Worse, it made the recipe unusable for
+	// any host outside the View its author happened to name: a host Stratt had just BUILT could not
+	// be converged by it, and the only workaround was to label the host into that View — which the
+	// one-owner-per-label-key rule (ADR-0041) may forbid the builder from doing.
+	//
+	// Empty for a direct launch, where the Steps' own declared Views are the only targets.
+	ViewName string
+	// EntityScope narrows every Actuator Step of this DAG to one Entity (ADR-0150 D3), set when
+	// the DAG was launched to remediate a Finding. Empty ⇒ each Step converges its whole View,
+	// which is every other launch path.
+	EntityScope string
 	// Environment is the floor's own active environment, stamped at launch and NOT asserted by
 	// the launcher (ADR-0122 D2). It used to arrive inside Context as a plain string, which
 	// meant a caller on a prod floor could assert `environment: dev` and walk past a prod
@@ -228,7 +244,7 @@ func RunDAG(ctx workflow.Context, in DAGInput) error {
 		done.Receive(ctx, &r)
 		running--
 		state[r.Name] = r.Status
-		if len(r.Outputs) > 0 {
+		if hasOutputs(r.Outputs) {
 			stepOutputs[r.Name] = r.Outputs
 		}
 		schedule()
@@ -322,9 +338,24 @@ func runActuationStep(ctx workflow.Context, in DAGInput, step types.Step, steps 
 	}
 	cctx := workflow.WithChildOptions(ctx, workflow.ChildWorkflowOptions{
 		WorkflowID: ChildRunID(in.WorkflowRunID, step.Name),
+		// SAME TRAP AS THE NESTED CHILD BELOW, and it was live here while that one was fixed.
+		// Temporal's default TERMINATES children when the parent closes — including when the
+		// parent merely FAILS with this Step still in flight. A terminated RunAgainstView never
+		// reaches its cancellation handler, so CleanupRun never deletes the K8s Job (it keeps
+		// converging real machines after the DAG is over) and FinishRun never stamps the Run,
+		// which then reads `running` forever. REQUEST_CANCEL lets the child write its own
+		// terminal status, which is the single-writer rule ADR-0026 already established.
+		ParentClosePolicy: enumspb.PARENT_CLOSE_POLICY_REQUEST_CANCEL,
 	})
+	var outcome RunOutcome
+	// The Step's own View, or the one inherited from the launching Baseline. A Step that declares
+	// none is not underspecified — it is saying "converge whatever this Assignment covers".
+	viewName := step.ViewName
+	if viewName == "" {
+		viewName = in.ViewName
+	}
 	err := workflow.ExecuteChildWorkflow(cctx, RunAgainstView, RunInput{
-		ViewName:        step.ViewName,
+		ViewName:        viewName,
 		Actuator:        step.Actuator,
 		Params:          params,
 		Slices:          step.Slices,
@@ -335,11 +366,16 @@ func runActuationStep(ctx workflow.Context, in DAGInput, step types.Step, steps 
 		PlanFrom:        step.PlanFrom,
 		PlanDigest:      planDigest,
 		FacetWriteScope: step.FacetWriteScope,
-	}).Get(cctx, nil)
+		EntityScope:     in.EntityScope,
+	}).Get(cctx, &outcome)
 	if err != nil {
 		return stepFailed, nil
 	}
-	return stepSucceeded, nil
+	// An ACTUATOR Step can now hand a value to a later Step, which an ACTION Step always could.
+	// The asymmetry was arbitrary and it made the born-on-target CSR flow unexpressible: the target
+	// generates key+CSR (an ansible Apply), the CLM signs (an Action), the certificate is written
+	// back (another Apply) — and step one had nowhere to put its CSR (CERT-2).
+	return stepSucceeded, outcome.Outputs
 }
 
 // digestFromStep reads the planDigest output a Plan Step recorded into the DAG's
@@ -386,13 +422,26 @@ func runActionStep(ctx workflow.Context, in DAGInput, step types.Step, steps map
 	}
 	cctx := workflow.WithChildOptions(ctx, workflow.ChildWorkflowOptions{
 		WorkflowID: ChildRunID(in.WorkflowRunID, step.Name),
+		// As above. RunAction has the same cancellation handler RunAgainstView does — a
+		// disconnected context, CleanupRun, then FinishRun(canceled) — and TERMINATE skips all
+		// of it. Actions are where the LONG runs live (a tofu apply), so this is the site where
+		// an unreaped pod runs longest after the DAG it belonged to has closed.
+		ParentClosePolicy: enumspb.PARENT_CLOSE_POLICY_REQUEST_CANCEL,
 	})
 	var outcome RunOutcome
+	// The per-class capability requests ride with the Step, resolved against the same namespaces
+	// its params were (so an Intent's allocation request reaches the provider through the launch
+	// interface like every other declared value).
+	capArgs, cerr := resolveCapabilityArgs(ctx, a, step, in, steps)
+	if cerr != nil {
+		return stepFailed, nil
+	}
 	err := workflow.ExecuteChildWorkflow(cctx, RunAction, RunInput{
 		Action:           action,
 		ActionCapability: step.ActionCapability,
 		DryRun:           step.DryRun,
 		Params:           params,
+		CapabilityArgs:   capArgs,
 		CredentialRefs:   step.CredentialRefs,
 		Principal:        in.Principal,
 		WorkflowRunID:    in.WorkflowRunID,
@@ -646,6 +695,19 @@ func (a *Activities) EnsureWorkflowRun(ctx context.Context, in DAGInput, tempora
 	return wr.ID, nil
 }
 
+// hasOutputs reports whether a Step actually published something bindable.
+//
+// The literal `null` is NOT something: a nil json.RawMessage crosses Temporal's JSON converter as
+// the four bytes "null", which every len() check reads as present. Recorded as a Step output it
+// then poisons the namespace — a binding into it fails with `"<field>" is not an object`, a message
+// about the consumer that says nothing about the Step which published nothing. Distinguishing
+// "published nothing" from "published a value" is the whole difference between an ordinary Run and
+// a defect, so it is decided in ONE place rather than at each len() call site (§1.8).
+func hasOutputs(raw json.RawMessage) bool {
+	trimmed := bytes.TrimSpace(raw)
+	return len(trimmed) > 0 && !bytes.Equal(trimmed, []byte("null"))
+}
+
 // stepsNamespace turns accumulated Step outputs (stepName → outputs JSON) into
 // the template namespace backing {{.steps.<name>.outputs.<field>}} (ADR-0031).
 func stepsNamespace(steps map[string]json.RawMessage) map[string]any {
@@ -861,4 +923,44 @@ func (a *Activities) FinishWorkflowRun(ctx context.Context, id string, status ty
 		summary["steps"] = steps
 	}
 	return a.Store.SetWorkflowRunStatus(ctx, id, status, summary)
+}
+
+// ResolveCapabilityArgs substitutes a Step's per-class capability requests against the same
+// namespaces its params use, so an Intent's allocation request reaches the provider through the
+// launch interface like every other declared value.
+//
+// Deliberately NOT validated here: each block is checked against `capabilities/<class>.input` in
+// resolveCapabilities, which is the one place that knows which class it belongs to. Validating
+// early would mean this function learning the class map, which is core learning content (§1.5).
+func (a *Activities) ResolveCapabilityArgs(
+	_ context.Context, args map[string]map[string]any, event map[string]any,
+	steps map[string]json.RawMessage, launch map[string]any,
+) (map[string]map[string]any, error) {
+	if len(args) == 0 {
+		return nil, nil
+	}
+	ns := template.Namespaces{"event": event, "steps": stepsNamespace(steps), "launch": launch}
+	out := make(map[string]map[string]any, len(args))
+	for class, req := range args {
+		resolved, err := template.SubstituteParams(req, ns)
+		if err != nil {
+			return nil, temporal.NewNonRetryableApplicationError(
+				fmt.Sprintf("capability %q request: %v", class, err), "InvalidCapabilityArgs", err)
+		}
+		out[class] = resolved
+	}
+	return out, nil
+}
+
+// resolveCapabilityArgs runs the substitution as an activity so the workflow stays deterministic.
+func resolveCapabilityArgs(
+	ctx workflow.Context, a *Activities, step types.Step, in DAGInput, steps map[string]json.RawMessage,
+) (map[string]map[string]any, error) {
+	if len(step.CapabilityArgs) == 0 {
+		return nil, nil
+	}
+	var out map[string]map[string]any
+	err := workflow.ExecuteActivity(ctx, a.ResolveCapabilityArgs,
+		step.CapabilityArgs, in.Event, steps, in.LaunchParams).Get(ctx, &out)
+	return out, err
 }

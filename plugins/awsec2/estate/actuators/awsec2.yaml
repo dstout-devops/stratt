@@ -18,6 +18,9 @@ tier: trusted
 # Plan-capable: every Action below was registered dryRunnable, several via the EC2 API's own
 # dry-run. Omitting this would REFUSE a dry-run Step against all of them.
 dryRunnable: true
+# The landscape this provider builds in (ADR-0151 D1). `aws` is the API SURFACE, not the vendor:
+# it covers EC2 and floci alike, because hiding that difference is the provider's job (§1.5).
+substrate: aws
 provides: [provisioning]
 # ── The 11 INVOKE Actions, MOVED here from main.go (ADR-0103) ────────────────────────────────
 # Registered in Go behind STRATT_AWS_PLUGIN_ADDR, so the dispatch surface was unreviewable from
@@ -43,7 +46,14 @@ actionNames:
 # authority granted for a path that does not exist. The awsec2 SYNCER keeps its own boot grant,
 # including the seven observed Facet namespaces, and remains the authority for them.
 identitySchemes: [aws.instanceId, aws.vpcId, aws.subnetId, aws.securityGroupId, aws.volumeId]
-labelKeys: [aws.region, aws.name, stratt.managed]
+# The CORRELATION LABEL is granted explicitly, and it is not optional garnish: the provisioning
+# loop closes on it. A build projects the Entity it made carrying stratt.intent/instance, and the next
+# reconcile reads ONLY that key back to see the desired unit as built. It was missing here, and
+# the failure mode is why it stayed missing: Host.toUpsert DROPS an ungranted label key rather
+# than refusing the projection, so the Entity still lands, the Run still goes green, and the sole
+# symptom is a build offered again on the next pass. TestProvisioningActuatorsGrantTheirCorrelationLabel
+# now refuses a `provisions` advertisement without it.
+labelKeys: [aws.region, aws.name, stratt.managed, stratt.intent/instance]
 # provisions advertises awsec2's per-kind build WORKFLOWS (ADR-0110 D3). It is the sole Compute
 # provider, so Intent/Compute auto-binds here with no explicit capability-binding. (awsec2 also has
 # create-vpc/subnet/security-group Actions, but wiring those as network build Workflows — with a VPC

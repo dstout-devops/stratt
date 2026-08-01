@@ -123,6 +123,33 @@ func TestPlacementRidesThroughWithDistinctFields(t *testing.T) {
 	}
 }
 
+// The SAME rule, on the sibling key that was left behind: `params` is present-and-empty too.
+//
+// It was emitted only `if len(Spec.Params) > 0`, which is the exact shape ADR-0123 D2 withdrew one
+// field over — and for the exact reason, since the substituter fails closed on a vanished key and
+// the template language has no conditionals to guard it with. It survived only because every
+// provisioning Intent in the estate happened to declare params. `web-fleet` on the kubernetes
+// substrate legitimately declares none (kubecompute reads none of them and says so), and with the
+// key gone the ESTATE was refused for a builder's honest input declaration.
+//
+// Both shapes are checked here, fleet and singleton, because they are two functions with one rule.
+func TestParamsAreAlwaysSentEvenWhenTheIntentDeclaresNone(t *testing.T) {
+	in := fleet()
+	in.Spec.Params = nil
+	p, ok := BuildLaunchParams(in, Instance{Name: "web-01", Ordinal: 1})["params"].(map[string]any)
+	if !ok {
+		t.Fatal("params must always be sent, so a shared builder can bind {{.launch.params}} unconditionally")
+	}
+	if len(p) != 0 {
+		t.Errorf("an Intent declaring no params must send an EMPTY object, not invented content: %v", p)
+	}
+	si := SingletonIntent{Name: "app-subnet", Kind: "Intent/Subnet", Spec: SingletonSpec{ProjectKind: "subnet"}}
+	sp, ok := SingletonLaunchParams(si, Instance{Name: "Intent/Subnet/app-subnet"})["params"].(map[string]any)
+	if !ok || len(sp) != 0 {
+		t.Errorf("the singleton path must follow the same rule: %v", sp)
+	}
+}
+
 // The params are stored as jsonb and read back as map[string]any, so the in-memory shape must
 // survive a JSON round-trip unchanged. A map[string]string or a struct pointer would resolve as a
 // whole value and then fail the moment a template addressed a field inside it — far from the cause.

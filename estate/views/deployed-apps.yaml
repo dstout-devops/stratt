@@ -1,0 +1,18 @@
+# deployed-apps — the application Entities kubeservices projects from Helm-managed releases.
+#
+# It selects on the label kubeservices sets (`application.name`), which is what makes the target set
+# OBSERVED rather than declared: an application Entity exists because a release is running, not
+# because a file says so. Two consequences worth stating rather than discovering:
+#
+#   * The View is EMPTY until something is deployed. For the drift loop that is correct — an absent
+#     Entity is nothing to check, which is the same "the graph holds what is built, and that absence
+#     is the signal" rule ADR-0147 D1 relies on for unbuilt subnets.
+#   * So this Blueprint converges VERSION DRIFT of a release that exists; it does not cause the
+#     FIRST deploy. That is a provisioning-shaped job (ADR-0058: `requires: [provisioning]` and a
+#     `provisions:` entry), and the helm Actuator declares neither. Booked in ADR-0148 rather than
+#     implied here — a Blueprint that silently only worked on the second run would be the same
+#     half-declaration this arc keeps finding.
+name: deployed-apps
+selector:
+  labels:
+    application.name: podinfo

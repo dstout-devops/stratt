@@ -1,0 +1,22 @@
+---
+# Apache's layout on Debian/Ubuntu (ansible_os_family == "Debian"). Loaded by apache-configure.yml
+# via the stratt_web_service role's prepare tasks.
+#
+# Debian's `apache2` shares only the package NAME with Alpine's. Measured on debian:12-slim: there
+# is no conf.d/ (it is conf-enabled/, pulled in by `IncludeOptional conf-enabled/*.conf`), there is
+# no httpd.conf (the stock `Listen 80` lives in ports.conf), and there is no `httpd` binary at all —
+# it is `apache2ctl`, which sources /etc/apache2/envvars before dispatching.
+svc_pkg: apache2
+apache_ctl: apache2ctl
+apache_conf_dir: /etc/apache2/conf-enabled
+apache_listen_conf: /etc/apache2/ports.conf
+apache_docroot: /var/www/html
+# TLS: Debian ships mod_ssl WITH apache2 and enables it with a2enmod, so there is no separate
+# package. Empty means "nothing to install" — stated rather than left absent, so a reader can see
+# the family was considered.
+apache_ssl_pkg: ""
+# Debian ships mod_ssl WITH apache2 but leaves it disabled, and its ports.conf already carries
+# `Listen 443` behind an <IfModule ssl_module>. So there is nothing to install and something to
+# ENABLE. DECLARED, NOT TESTED — no Debian node runs in this floor, which is the same honest
+# limit the plain-HTTP layout above carries.
+apache_ssl_enable_cmd: "a2enmod ssl"

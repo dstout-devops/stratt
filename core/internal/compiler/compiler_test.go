@@ -62,11 +62,11 @@ func TestSubstituteExpectation(t *testing.T) {
 
 func TestDetectClaimConflicts(t *testing.T) {
 	claims := []claimRecord{
-		{"apps.installed", "e1", types.ClaimExclusive, "asgA"},
-		{"apps.installed", "e1", types.ClaimExclusive, "asgB"}, // conflict on (ns,e1)
-		{"apps.installed", "e2", types.ClaimExclusive, "asgA"}, // asgA alone on e2: ok
-		{"trust.store", "e1", types.ClaimAdditive, "asgC"},
-		{"trust.store", "e1", types.ClaimAdditive, "asgD"}, // additive: no conflict
+		{"apps.installed", "", "e1", types.ClaimExclusive, "asgA"},
+		{"apps.installed", "", "e1", types.ClaimExclusive, "asgB"}, // conflict on (ns,qualifier,e1)
+		{"apps.installed", "", "e2", types.ClaimExclusive, "asgA"}, // asgA alone on e2: ok
+		{"trust.store", "", "e1", types.ClaimAdditive, "asgC"},
+		{"trust.store", "", "e1", types.ClaimAdditive, "asgD"}, // additive: no conflict
 	}
 	poisoned := detectClaimConflicts(claims, map[string]bool{})
 	if len(poisoned) != 2 {

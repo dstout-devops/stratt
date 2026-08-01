@@ -10,25 +10,25 @@ design must reconcile with. Chronological list: [README.md](README.md); phase vi
 
 ```mermaid
 graph TD
-  actuators["actuators<br/><small>0016 0022 0050 0053 0092 0117<br/>0124 0126 0133 0134 0135</small>"]
-  api_surface["api-surface<br/><small>0006 0021 0026 0076 0091 0121</small>"]
+  actuators["actuators<br/><small>0016 0022 0050 0053 0092 0117<br/>0124 0126 0133 0134 0135 0148<br/>0149 0153 0156</small>"]
+  api_surface["api-surface<br/><small>0006 0021 0026 0076 0091 0121<br/>0157</small>"]
   audit_telemetry["audit-telemetry<br/><small>0034 0065 0077 0121</small>"]
-  authz_identity["authz-identity<br/><small>0009 0028 0035 0079 0101 0122<br/>0130</small>"]
-  capability_framework["capability-framework<br/><small>0100 0104 0105 0106 0107 0110<br/>0111 0112 0113 0114 0135</small>"]
-  certificates_pki["certificates-pki<br/><small>0030 0043 0050 0098 0106</small>"]
-  connectors["connectors<br/><small>0007 0014 0025 0026 0037 0038<br/>0039 0045 0086 0087 0088 0089<br/>0095 0097 0099 0113 0114 0115<br/>0127 0128 0129 0130 0131 0132<br/>0133 0136</small>"]
-  credentials_secrets["credentials-secrets<br/><small>0009 0029 0052 0094 0098 0099<br/>0100 0106 0125 0126</small>"]
-  estate_as_code["estate-as-code<br/><small>0055 0056 0057 0103 0113 0116<br/>0118 0119 0120 0122 0123 0132<br/>0134 0135 0136 0137 0138 0139</small>"]
-  findings_drift["findings-drift<br/><small>0019 0020 0033 0043 0080 0085<br/>0128 0129 0130 0133</small>"]
+  authz_identity["authz-identity<br/><small>0009 0028 0035 0079 0101 0122<br/>0130 0155</small>"]
+  capability_framework["capability-framework<br/><small>0100 0104 0105 0106 0107 0110<br/>0111 0112 0113 0114 0135 0145<br/>0146 0151</small>"]
+  certificates_pki["certificates-pki<br/><small>0030 0043 0050 0098 0106 0150</small>"]
+  connectors["connectors<br/><small>0007 0014 0025 0026 0037 0038<br/>0039 0045 0086 0087 0088 0089<br/>0095 0097 0099 0113 0114 0115<br/>0127 0128 0129 0130 0131 0132<br/>0133 0136 0144 0146 0154 0155<br/>0156</small>"]
+  credentials_secrets["credentials-secrets<br/><small>0009 0029 0052 0094 0098 0099<br/>0100 0106 0125 0126 0153</small>"]
+  estate_as_code["estate-as-code<br/><small>0055 0056 0057 0103 0113 0116<br/>0118 0119 0120 0122 0123 0132<br/>0134 0135 0136 0137 0138 0139<br/>0142 0146 0147 0148 0151 0152</small>"]
+  findings_drift["findings-drift<br/><small>0019 0020 0033 0043 0080 0085<br/>0128 0129 0130 0133 0148 0150</small>"]
   foundation["foundation<br/><small>0001 0002 0004 0005 0006 0008<br/>0108 0109 0116 0137 0138 0141</small>"]
-  graph_model["graph-model<br/><small>0015 0017 0041 0042 0059 0060<br/>0079 0080 0081 0082 0084 0085<br/>0096 0114 0115 0119 0120 0123<br/>0126 0127 0128 0129 0130 0132<br/>0133</small>"]
-  intent_compiler["intent-compiler<br/><small>0023 0030 0036 0055 0058 0083<br/>0085 0114 0118 0119 0123</small>"]
-  orchestration["orchestration<br/><small>0010 0011 0018 0027 0031 0063<br/>0118 0122 0125 0134 0139 0140</small>"]
-  plugin_port["plugin-port<br/><small>0046 0047 0048 0049 0051 0053<br/>0054 0103 0117 0121 0124 0125<br/>0127 0131 0137 0138 0140 0141</small>"]
-  policy_governance["policy-governance<br/><small>0061 0062 0063 0064 0065 0066<br/>0067 0068 0069 0070 0071 0072<br/>0073 0074 0075 0076 0122</small>"]
-  provisioning["provisioning<br/><small>0017 0058 0095 0096 0107 0110<br/>0111 0112 0113 0114 0115 0120<br/>0123</small>"]
-  state_artifacts["state-artifacts<br/><small>0016 0029 0093 0097 0105 0112</small>"]
-  substrate_ops["substrate-ops<br/><small>0013 0032 0040 0044 0045 0049<br/>0077 0078 0093 0101 0102 0124<br/>0131</small>"]
+  graph_model["graph-model<br/><small>0015 0017 0041 0042 0059 0060<br/>0079 0080 0081 0082 0084 0085<br/>0096 0114 0115 0119 0120 0123<br/>0126 0127 0128 0129 0130 0132<br/>0133 0143 0144 0147 0152 0153<br/>0154 0155 0156</small>"]
+  intent_compiler["intent-compiler<br/><small>0023 0030 0036 0055 0058 0083<br/>0085 0114 0118 0119 0123 0148<br/>0150 0152</small>"]
+  orchestration["orchestration<br/><small>0010 0011 0018 0027 0031 0063<br/>0118 0122 0125 0134 0139 0140<br/>0157</small>"]
+  plugin_port["plugin-port<br/><small>0046 0047 0048 0049 0051 0053<br/>0054 0103 0117 0121 0124 0125<br/>0127 0131 0137 0138 0140 0141<br/>0145 0149</small>"]
+  policy_governance["policy-governance<br/><small>0061 0062 0063 0064 0065 0066<br/>0067 0068 0069 0070 0071 0072<br/>0073 0074 0075 0076 0122 0157</small>"]
+  provisioning["provisioning<br/><small>0017 0058 0095 0096 0107 0110<br/>0111 0112 0113 0114 0115 0120<br/>0123 0143 0144 0145 0146 0147<br/>0151</small>"]
+  state_artifacts["state-artifacts<br/><small>0016 0029 0093 0097 0105 0112<br/>0145</small>"]
+  substrate_ops["substrate-ops<br/><small>0013 0032 0040 0044 0045 0049<br/>0077 0078 0093 0101 0102 0124<br/>0131 0142 0149</small>"]
   ui["ui<br/><small>0003 0012 0020 0024 0090 0091<br/>0116 0121</small>"]
 
   actuators --> plugin_port
@@ -95,6 +95,10 @@ Actuators — execution engines (opentofu, helm, mcp, cert-issuer reconcile).
 - [ADR-0133](0133-execution-environments-and-instance-groups.md) — An AWX execution environment is a supply-chain fact; an instance group is a placement model we already have
 - [ADR-0134](0134-tool-content-lives-beside-the-estate.md) — A playbook is a playbook: tool content lives beside the estate, not inside a declaration
 - [ADR-0135](0135-a-plugin-ships-examples-not-declarations.md) — A plugin ships examples and conformance, never declarations; and remediation binds to a capability, not a name
+- [ADR-0148](0148-one-blueprint-per-application-and-an-honest-observation.md) — One Blueprint per application, and an observation that can come back wrong
+- [ADR-0149](0149-the-execution-environment-content-floor.md) — The execution environment carries a content floor, and every variant is a superset
+- [ADR-0153](0153-a-connection-type-and-a-password-that-is-only-ever-a-path.md) — A connection type, and a password that is only ever a path
+- [ADR-0156](0156-how-to-reach-a-host-is-observed-not-declared.md) — How to reach a host is OBSERVED, not declared
 
 ### api-surface
 
@@ -108,6 +112,7 @@ API surface — OpenAPI /api/v1, the AWX /api/v2 façade, the platform MCP serve
 - [ADR-0076](0076-admission-on-the-imperative-door.md) — Admission on the imperative door: the API is not a bypass around the compile-seam PEP
 - [ADR-0091](0091-ui-is-a-first-party-bundled-pure-api-client.md) — the UI is a first-party, served-by-default, pure `/api/v1` client (never a port-plugin, never a gated add-on)
 - [ADR-0121](0121-task-event-scope.md) — `TaskEvent.scope`: an event says whether it describes the Run or a task
+- [ADR-0157](0157-cancelling-a-workflow-run.md) — Cancelling a WorkflowRun: one writer, no orphans, and a Gate that stops meaning "approve me"
 
 ### audit-telemetry
 
@@ -133,6 +138,7 @@ Authorization & identity — OpenFGA, Principal, SCIM, workload identity.
 - [ADR-0101](0101-cluster-authz-activation-openbao-oidc-workload-identity.md) — Activate real cluster authz; OpenBao-OIDC workload identity; multi-issuer Principal resolution
 - [ADR-0122](0122-change-context-is-typed-and-partly-derived.md) — The change context is typed, and the facts core can know are derived, not asserted
 - [ADR-0130](0130-awx-local-accounts-and-team-membership.md) — AWX's local accounts are an estate fact, not an identity source and never an authz one
+- [ADR-0155](0155-the-account-nobody-offboards.md) — The account nobody offboards: correlating an AWX login to an identity, without claiming one
 
 ### capability-framework
 
@@ -151,6 +157,9 @@ Capability framework — provides/requires, verification, resolve-inject vs enab
 - [ADR-0113](0113-vsphere-provisioning-provider.md) — vSphere as a `provisioning` provider: the vcenter plugin gains a build verb (VM + DVPortgroup)
 - [ADR-0114](0114-entity-lifecycle-and-decommission-reach-path.md) — Entity lifecycle Actions + the desired-state decommission reach-path
 - [ADR-0135](0135-a-plugin-ships-examples-not-declarations.md) — A plugin ships examples and conformance, never declarations; and remediation binds to a capability, not a name
+- [ADR-0145](0145-the-actuator-builder-step-form.md) — The build-Step form for a workspace-scoped Actuator: capability injection reaches the Action seam, and the network leg goes live
+- [ADR-0146](0146-the-coordinate-is-load-bearing-or-refused.md) — A provider coordinate is load-bearing or refused: the region leg, without re-deciding where a region lives
+- [ADR-0151](0151-substrate-is-a-property-of-the-provider.md) — Substrate is a property of the PROVIDER, selected by composition; no declaration above it ever names one
 
 ### certificates-pki
 
@@ -163,6 +172,7 @@ Certificates & PKI — cert lifecycle as a reconcile Actuator, OpenBao PKI.
 - [ADR-0050](0050-certificate-reconcile-actuator.md) — Certificate lifecycle as a reconcile Actuator (CSR/sign over the port)
 - [ADR-0098](0098-openbao-plugin-consolidation-pki.md) — Consolidate the OpenBao surfaces into `plugins/openbao`; full-featured PKI behind the neutral cert-issuer Contract
 - [ADR-0106](0106-openbao-multi-capability-provider.md) — OpenBao as a multi-capability provider; enablement-gate vs resolve-inject capabilities
+- [ADR-0150](0150-a-certificate-is-derived-from-its-host.md) — A certificate is derived from its host: per-Entity template resolution and entity-scoped remediation
 
 ### connectors
 
@@ -196,6 +206,11 @@ Connectors & Syncers — SoR ingest breadth, the Syncer SDK, adopt/AWX-import.
 - [ADR-0132](0132-awx-labels-and-schedule-shape.md) — Two "mechanical" projection gaps that were not: AWX labels, and what a schedule actually runs
 - [ADR-0133](0133-execution-environments-and-instance-groups.md) — An AWX execution environment is a supply-chain fact; an instance group is a placement model we already have
 - [ADR-0136](0136-superseded-versus-driven.md) — Superseded, not integrated: which external systems are terminal and which are forever
+- [ADR-0144](0144-the-registered-reach-coordinate.md) — The reach coordinate can be REGISTERED: `Intent/DnsRecord` gets a provider, and a declared name becomes a caused fact
+- [ADR-0146](0146-the-coordinate-is-load-bearing-or-refused.md) — A provider coordinate is load-bearing or refused: the region leg, without re-deciding where a region lives
+- [ADR-0154](0154-the-awx-project-and-the-orphan-signal-it-repairs.md) — The AWX Project, and the orphan signal it repairs
+- [ADR-0155](0155-the-account-nobody-offboards.md) — The account nobody offboards: correlating an AWX login to an identity, without claiming one
+- [ADR-0156](0156-how-to-reach-a-host-is-observed-not-declared.md) — How to reach a host is OBSERVED, not declared
 
 ### credentials-secrets
 
@@ -213,6 +228,7 @@ Credentials & secrets (§2.5) — brokering, the SecretBroker port, KV, KeyCusto
 - [ADR-0106](0106-openbao-multi-capability-provider.md) — OpenBao as a multi-capability provider; enablement-gate vs resolve-inject capabilities
 - [ADR-0125](0125-notification-sinks-are-drivers-not-a-core-switch.md) — Notification sinks are drivers behind a seam, not a switch in the daemon
 - [ADR-0126](0126-managed-node-reachability-credential-host-key-and-jump.md) — Reaching a managed node: the connection credential, the host key, and the jump path
+- [ADR-0153](0153-a-connection-type-and-a-password-that-is-only-ever-a-path.md) — A connection type, and a password that is only ever a path
 
 ### estate-as-code
 
@@ -238,6 +254,12 @@ Estate-as-Code — CaC declarations, environments, composition, the estate CLI.
 - [ADR-0137](0137-a-plugin-is-a-service-not-a-subdirectory.md) — A plugin is a service, not a subdirectory: plane independence and the no-core-change rule
 - [ADR-0138](0138-capability-typed-dependencies-and-the-seam-self-split.md) — A module depends on capabilities: the seam/self split, and the Step-level gap
 - [ADR-0139](0139-nested-workflow-steps.md) — A Step may run a Workflow: nesting, and the one chokepoint
+- [ADR-0142](0142-environments-are-declared-not-just-referenced.md) — An environment is declared, not just referenced; and it is not a Cell, a Site, or a coordinate
+- [ADR-0146](0146-the-coordinate-is-load-bearing-or-refused.md) — A provider coordinate is load-bearing or refused: the region leg, without re-deciding where a region lives
+- [ADR-0147](0147-placement-resolves-to-a-provider-native-identity.md) — A declared placement resolves to a provider-native identity, or the build is not offered
+- [ADR-0148](0148-one-blueprint-per-application-and-an-honest-observation.md) — One Blueprint per application, and an observation that can come back wrong
+- [ADR-0151](0151-substrate-is-a-property-of-the-provider.md) — Substrate is a property of the PROVIDER, selected by composition; no declaration above it ever names one
+- [ADR-0152](0152-a-facet-claim-is-qualified.md) — A Facet claim is qualified: many managed applications on one host
 
 ### findings-drift
 
@@ -255,6 +277,8 @@ Findings & drift — Baselines, Findings, compliance packs, drift/GC.
 - [ADR-0129](0129-workflow-topology-projection.md) — A mirrored workflow says what it invokes; it does not re-model AWX's node graph
 - [ADR-0130](0130-awx-local-accounts-and-team-membership.md) — AWX's local accounts are an estate fact, not an identity source and never an authz one
 - [ADR-0133](0133-execution-environments-and-instance-groups.md) — An AWX execution environment is a supply-chain fact; an instance group is a placement model we already have
+- [ADR-0148](0148-one-blueprint-per-application-and-an-honest-observation.md) — One Blueprint per application, and an observation that can come back wrong
+- [ADR-0150](0150-a-certificate-is-derived-from-its-host.md) — A certificate is derived from its host: per-Entity template resolution and entity-scoped remediation
 
 ### foundation
 
@@ -304,6 +328,14 @@ Graph model — Entity/Facet/Relation/Contract primitives, projection & liveness
 - [ADR-0130](0130-awx-local-accounts-and-team-membership.md) — AWX's local accounts are an estate fact, not an identity source and never an authz one
 - [ADR-0132](0132-awx-labels-and-schedule-shape.md) — Two "mechanical" projection gaps that were not: AWX labels, and what a schedule actually runs
 - [ADR-0133](0133-execution-environments-and-instance-groups.md) — An AWX execution environment is a supply-chain fact; an instance group is a placement model we already have
+- [ADR-0143](0143-the-observed-reach-coordinate.md) — The reach coordinate is observed, and it is a name: the vcenter Syncer projects `mgmt.address`
+- [ADR-0144](0144-the-registered-reach-coordinate.md) — The reach coordinate can be REGISTERED: `Intent/DnsRecord` gets a provider, and a declared name becomes a caused fact
+- [ADR-0147](0147-placement-resolves-to-a-provider-native-identity.md) — A declared placement resolves to a provider-native identity, or the build is not offered
+- [ADR-0152](0152-a-facet-claim-is-qualified.md) — A Facet claim is qualified: many managed applications on one host
+- [ADR-0153](0153-a-connection-type-and-a-password-that-is-only-ever-a-path.md) — A connection type, and a password that is only ever a path
+- [ADR-0154](0154-the-awx-project-and-the-orphan-signal-it-repairs.md) — The AWX Project, and the orphan signal it repairs
+- [ADR-0155](0155-the-account-nobody-offboards.md) — The account nobody offboards: correlating an AWX login to an identity, without claiming one
+- [ADR-0156](0156-how-to-reach-a-host-is-observed-not-declared.md) — How to reach a host is OBSERVED, not declared
 
 ### intent-compiler
 
@@ -322,6 +354,9 @@ Intent compiler — Intent/Assignment/Blueprint/Baseline compile to Runs.
 - [ADR-0118](0118-parameter-plane.md) — The parameter plane: values reach the things that execute
 - [ADR-0119](0119-versioned-configuration-and-promotion.md) — Versioned configuration and promotion: one estate, N rings, immutable once pinned
 - [ADR-0123](0123-keyed-placement-aware-spread.md) — Keyed, placement-aware spread: identity survives a zone-list edit, and declared placement finally reaches the build
+- [ADR-0148](0148-one-blueprint-per-application-and-an-honest-observation.md) — One Blueprint per application, and an observation that can come back wrong
+- [ADR-0150](0150-a-certificate-is-derived-from-its-host.md) — A certificate is derived from its host: per-Entity template resolution and entity-scoped remediation
+- [ADR-0152](0152-a-facet-claim-is-qualified.md) — A Facet claim is qualified: many managed applications on one host
 
 ### orchestration
 
@@ -341,6 +376,7 @@ Orchestration — Triggers, Workflows/Gates, Steps, Runs, Actions, notifications
 - [ADR-0134](0134-tool-content-lives-beside-the-estate.md) — A playbook is a playbook: tool content lives beside the estate, not inside a declaration
 - [ADR-0139](0139-nested-workflow-steps.md) — A Step may run a Workflow: nesting, and the one chokepoint
 - [ADR-0140](0140-a-capability-is-invoked-not-named.md) — A capability is invoked, not named: the mapping is declared, never minted
+- [ADR-0157](0157-cancelling-a-workflow-run.md) — Cancelling a WorkflowRun: one writer, no orphans, and a Gate that stops meaning "approve me"
 
 ### plugin-port
 
@@ -366,6 +402,8 @@ Sovereign plugin port — the dark-matter substrate, transports, runtime registr
 - [ADR-0138](0138-capability-typed-dependencies-and-the-seam-self-split.md) — A module depends on capabilities: the seam/self split, and the Step-level gap
 - [ADR-0140](0140-a-capability-is-invoked-not-named.md) — A capability is invoked, not named: the mapping is declared, never minted
 - [ADR-0141](0141-the-plugin-sdk-is-go-the-port-is-the-contract.md) — The plugin SDK is Go; the PORT is the contract, not a language
+- [ADR-0145](0145-the-actuator-builder-step-form.md) — The build-Step form for a workspace-scoped Actuator: capability injection reaches the Action seam, and the network leg goes live
+- [ADR-0149](0149-the-execution-environment-content-floor.md) — The execution environment carries a content floor, and every variant is a superset
 
 ### policy-governance
 
@@ -390,6 +428,7 @@ Policy & governance — the PDP port, typed Controls, admission PEPs, obligation
 - [ADR-0075](0075-obligation-enforcement.md) — Obligation enforcement: a binding rider is enforced, not recorded-and-dropped
 - [ADR-0076](0076-admission-on-the-imperative-door.md) — Admission on the imperative door: the API is not a bypass around the compile-seam PEP
 - [ADR-0122](0122-change-context-is-typed-and-partly-derived.md) — The change context is typed, and the facts core can know are derived, not asserted
+- [ADR-0157](0157-cancelling-a-workflow-run.md) — Cancelling a WorkflowRun: one writer, no orphans, and a Gate that stops meaning "approve me"
 
 ### provisioning
 
@@ -410,6 +449,12 @@ Provisioning — declare & build infra (Intent -> builder -> machines), provisio
 - [ADR-0115](0115-vsphere-read-breadth.md) — vSphere read breadth: the inventory graph (region/AZ reuse, uncovered-Facet posture)
 - [ADR-0120](0120-provisioning-joins-the-parameter-plane.md) — Provisioning joins the parameter plane: a Finding carries its own launch spec
 - [ADR-0123](0123-keyed-placement-aware-spread.md) — Keyed, placement-aware spread: identity survives a zone-list edit, and declared placement finally reaches the build
+- [ADR-0143](0143-the-observed-reach-coordinate.md) — The reach coordinate is observed, and it is a name: the vcenter Syncer projects `mgmt.address`
+- [ADR-0144](0144-the-registered-reach-coordinate.md) — The reach coordinate can be REGISTERED: `Intent/DnsRecord` gets a provider, and a declared name becomes a caused fact
+- [ADR-0145](0145-the-actuator-builder-step-form.md) — The build-Step form for a workspace-scoped Actuator: capability injection reaches the Action seam, and the network leg goes live
+- [ADR-0146](0146-the-coordinate-is-load-bearing-or-refused.md) — A provider coordinate is load-bearing or refused: the region leg, without re-deciding where a region lives
+- [ADR-0147](0147-placement-resolves-to-a-provider-native-identity.md) — A declared placement resolves to a provider-native identity, or the build is not offered
+- [ADR-0151](0151-substrate-is-a-property-of-the-provider.md) — Substrate is a property of the PROVIDER, selected by composition; no declaration above it ever names one
 
 ### state-artifacts
 
@@ -423,6 +468,7 @@ Tool state & artifacts — state backend, evidence store, object storage, states
 - [ADR-0097](0097-awss3-connector.md) — The awss3 Connector: bucket lifecycle Actions + metadata-only bucket Syncer
 - [ADR-0105](0105-s3-capability-provider-agnostic.md) — Capability providers are provider-agnostic: S3 is provider #1 of statestore/artifactstore, never "the provider"
 - [ADR-0112](0112-opentofu-network-provider-capability-composition.md) — OpenTofu as the AWS network `provisioning` provider, composing statestore + ipam
+- [ADR-0145](0145-the-actuator-builder-step-form.md) — The build-Step form for a workspace-scoped Actuator: capability injection reaches the Action seam, and the network leg goes live
 
 ### substrate-ops
 
@@ -443,6 +489,8 @@ Substrate & ops — HA/DR, Cells/multi-region, Sites, deploy, bootstrap, upgrade
 - [ADR-0102](0102-tiered-genesis-bootstrap.md) — Tiered genesis bootstrap: a minimal self-retiring floor, then Stratt self-deploys the rest
 - [ADR-0124](0124-ee-content-supply-factory-and-offline-source.md) — EE content supply: an `execution-environment.yml` front door, and an offline source that is verified the same way
 - [ADR-0131](0131-controller-poll-cost-budget.md) — A poll-cost budget for the AAP Controller half: tiered cadence, and a partial read degrades instead of failing
+- [ADR-0142](0142-environments-are-declared-not-just-referenced.md) — An environment is declared, not just referenced; and it is not a Cell, a Site, or a coordinate
+- [ADR-0149](0149-the-execution-environment-content-floor.md) — The execution environment carries a content floor, and every variant is a superset
 
 ### ui
 
@@ -604,3 +652,19 @@ UI — React shell, schema-driven rendering, Views, descent, the first-party cli
 | [0139](0139-nested-workflow-steps.md) | estate-as-code, orchestration |
 | [0140](0140-a-capability-is-invoked-not-named.md) | orchestration, plugin-port |
 | [0141](0141-the-plugin-sdk-is-go-the-port-is-the-contract.md) | foundation, plugin-port |
+| [0142](0142-environments-are-declared-not-just-referenced.md) | estate-as-code, substrate-ops |
+| [0143](0143-the-observed-reach-coordinate.md) | graph-model, provisioning |
+| [0144](0144-the-registered-reach-coordinate.md) | connectors, graph-model, provisioning |
+| [0145](0145-the-actuator-builder-step-form.md) | capability-framework, plugin-port, provisioning, state-artifacts |
+| [0146](0146-the-coordinate-is-load-bearing-or-refused.md) | capability-framework, connectors, estate-as-code, provisioning |
+| [0147](0147-placement-resolves-to-a-provider-native-identity.md) | estate-as-code, graph-model, provisioning |
+| [0148](0148-one-blueprint-per-application-and-an-honest-observation.md) | actuators, estate-as-code, findings-drift, intent-compiler |
+| [0149](0149-the-execution-environment-content-floor.md) | actuators, plugin-port, substrate-ops |
+| [0150](0150-a-certificate-is-derived-from-its-host.md) | certificates-pki, findings-drift, intent-compiler |
+| [0151](0151-substrate-is-a-property-of-the-provider.md) | capability-framework, estate-as-code, provisioning |
+| [0152](0152-a-facet-claim-is-qualified.md) | estate-as-code, graph-model, intent-compiler |
+| [0153](0153-a-connection-type-and-a-password-that-is-only-ever-a-path.md) | actuators, credentials-secrets, graph-model |
+| [0154](0154-the-awx-project-and-the-orphan-signal-it-repairs.md) | connectors, graph-model |
+| [0155](0155-the-account-nobody-offboards.md) | authz-identity, connectors, graph-model |
+| [0156](0156-how-to-reach-a-host-is-observed-not-declared.md) | actuators, connectors, graph-model |
+| [0157](0157-cancelling-a-workflow-run.md) | api-surface, orchestration, policy-governance |

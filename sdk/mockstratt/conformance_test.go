@@ -192,3 +192,101 @@ func TestConformance_ErrorsAreOrderedFirst(t *testing.T) {
 		}
 	}
 }
+
+// TestConformance_DeclaresWhatItEmits covers the third pairing of the
+// advertised/granted/emitted triangle. The other two were already checked
+// somewhere; this one was checked nowhere, which is how a plugin came to project a
+// Facet namespace its own Manifest never mentioned.
+func TestConformance_DeclaresWhatItEmits(t *testing.T) {
+	manifest := func() *pluginv1.Manifest {
+		return &pluginv1.Manifest{
+			PluginId: "p", ProtocolVersion: "v1",
+			Class: pluginv1.PluginClass_PLUGIN_CLASS_SYNCER,
+			Verbs: []pluginv1.Verb{pluginv1.Verb_VERB_OBSERVE},
+			Contracts: []*pluginv1.ContractDecl{
+				{SchemaId: "vm.config", Sha256: "abc"},
+			},
+		}
+	}
+
+	t.Run("an unadvertised namespace is an error", func(t *testing.T) {
+		c := Conformance{
+			Result: Result{SawTerminal: true, Succeeded: true, WriteBack: []Entity{{
+				Kind:   "vm",
+				Facets: map[string][]byte{"vm.config": []byte(`{}`), "mgmt.address": []byte(`{"address":"h.example.test"}`)},
+			}}},
+			Manifest: manifest(),
+		}
+		errs := c.Errors()
+		if !hasCheck(errs, "declares-what-it-emits") {
+			t.Fatalf("projecting an unadvertised namespace must fail:\n%s", c.Report())
+		}
+		// The message has to NAME the namespace, or the author cannot act on it.
+		var found bool
+		for _, v := range errs {
+			if v.Check == "declares-what-it-emits" && v.Detail == "mgmt.address" {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("the violation must name the offending namespace:\n%s", c.Report())
+		}
+	})
+
+	t.Run("advertised namespaces pass", func(t *testing.T) {
+		c := Conformance{
+			Result: Result{SawTerminal: true, Succeeded: true, WriteBack: []Entity{{
+				Kind: "vm", Facets: map[string][]byte{"vm.config": []byte(`{}`)},
+			}}},
+			Manifest: manifest(),
+		}
+		if hasCheck(c.Errors(), "declares-what-it-emits") {
+			t.Errorf("a namespace the Manifest advertises must pass:\n%s", c.Report())
+		}
+	})
+
+	t.Run("reported once per namespace, not once per entity", func(t *testing.T) {
+		ent := Entity{Kind: "vm", Facets: map[string][]byte{"mgmt.address": []byte(`{}`)}}
+		c := Conformance{
+			Result:   Result{SawTerminal: true, Succeeded: true, WriteBack: []Entity{ent, ent, ent}},
+			Manifest: manifest(),
+		}
+		var n int
+		for _, v := range c.Errors() {
+			if v.Check == "declares-what-it-emits" {
+				n++
+			}
+		}
+		if n != 1 {
+			t.Errorf("a fleet-wide projection must not emit one violation per Entity; got %d:\n%s", n, c.Report())
+		}
+	})
+
+	// The convention the Manifest block already follows: a plugin with no manifest
+	// (the subprocess transport answers no GetManifest) is skipped, not failed.
+	// Failing it would train EE-Job authors to ignore the whole report.
+	t.Run("no manifest, no opinion", func(t *testing.T) {
+		c := Conformance{Result: Result{SawTerminal: true, Succeeded: true, WriteBack: []Entity{{
+			Kind: "vm", Facets: map[string][]byte{"anything": []byte(`{}`)},
+		}}}}
+		if hasCheck(c.Errors(), "declares-what-it-emits") {
+			t.Errorf("a manifest-less plugin must be skipped, not failed:\n%s", c.Report())
+		}
+	})
+
+	// A Manifest advertising NO contracts is an Actuator-shaped plugin that owns no
+	// namespace; it must not be judged against an empty advertisement.
+	t.Run("no advertised contracts, no opinion", func(t *testing.T) {
+		m := manifest()
+		m.Contracts = nil
+		c := Conformance{
+			Result: Result{SawTerminal: true, Succeeded: true, WriteBack: []Entity{{
+				Kind: "vm", Facets: map[string][]byte{"vm.config": []byte(`{}`)},
+			}}},
+			Manifest: m,
+		}
+		if hasCheck(c.Errors(), "declares-what-it-emits") {
+			t.Errorf("a plugin advertising no contracts owns no namespace to check against:\n%s", c.Report())
+		}
+	})
+}

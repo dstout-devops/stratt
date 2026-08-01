@@ -36,5 +36,16 @@ type BindingEntry struct {
 	Provider string `json:"provider"`
 	// IntentKind is the Intent kind this entry routes, WITHOUT the "Intent/" prefix
 	// (e.g. "Compute", "Subnet", "Vlan", "Dmz") — the reach-path is per kind (ADR-0110 D3).
-	IntentKind string `json:"intentKind"`
+	// OPTIONAL on a substrate entry, which covers every kind the substrate can build.
+	IntentKind string `json:"intentKind,omitempty"`
+	// Substrate selects the provider by a property the PROVIDERS DECLARE rather than by name
+	// (ADR-0151 D2) — "aws", "kubernetes", "vsphere", "vm". One entry then covers every Intent
+	// kind that substrate can build, which is what makes a whole-topology migration one line
+	// instead of one line per kind.
+	//
+	// MUTUALLY EXCLUSIVE with Provider on a single entry: an entry carrying both would answer the
+	// same question twice, and the two answers can disagree. Across entries they compose — see
+	// capability.Resolve for the declared specificity rule and why it is not the implicit
+	// precedence §2.4 refuses.
+	Substrate string `json:"substrate,omitempty"`
 }

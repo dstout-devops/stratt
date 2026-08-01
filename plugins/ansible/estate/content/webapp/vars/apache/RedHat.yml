@@ -1,0 +1,19 @@
+---
+# Apache's layout on RHEL/Rocky/Fedora (ansible_os_family == "RedHat"). Loaded by
+# apache-configure.yml via the stratt_web_service role's prepare tasks.
+#
+# The third layout, and the branch that had NEVER been executed: `'httpd' if RedHat else 'apache2'`
+# shipped for two ADRs against Alpine only. Here the package, the binary and the tree all differ —
+# /etc/httpd rather than /etc/apache2, with the stock `Listen 80` in conf/httpd.conf. Now executed
+# against rockylinux:9 by `task dev:content:proof`.
+svc_pkg: httpd
+apache_ctl: httpd
+apache_conf_dir: /etc/httpd/conf.d
+apache_listen_conf: /etc/httpd/conf/httpd.conf
+apache_docroot: /var/www/html
+# TLS: RedHat ships mod_ssl as its own package which drops a LoadModule into conf.modules.d/,
+# so the module line is unnecessary once installed.
+apache_ssl_pkg: mod_ssl
+# The mod_ssl package drops its own conf.modules.d entry AND an ssl.conf with `Listen 443`, so
+# installing it is the whole enable. DECLARED, NOT TESTED — no RedHat node runs in this floor.
+apache_ssl_enable_cmd: ""

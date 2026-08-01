@@ -30,16 +30,29 @@ func intentVersionOr(v int) int {
 // replicas keep writing `ON CONFLICT (name)` through a rolling upgrade (ADR-0078): both
 // constraints are present, each statement names the one it needs.
 func (s *Store) UpsertIntent(ctx context.Context, in types.Intent) error {
-	in.Version = intentVersionOr(in.Version)
+	// The DOCUMENT is stored exactly as declared; only the KEY COLUMN is normalized.
+	//
+	// These used to be one step — `in.Version = intentVersionOr(in.Version)` before the marshal —
+	// which wrote a version into the stored document that the declaration was not allowed to carry.
+	// A provisioning Intent (Subnet, Compute…) may hold NO version at all (ADR-0119 D3: it is
+	// selected by name, with no Assignment to pin one), so every read-back disagreed with its own
+	// declaration and the reconcile planned an update for it on every cadence — forever, on an
+	// estate nobody had touched. graph.intent.spec is the round-trip surface for the whole
+	// declaration, so anything normalized into it becomes phantom drift.
+	//
+	// The column still normalizes, because it is the key: (name, version) is the unique index, and
+	// version 0 and version 1 must not be two rows. versionedRef reads version < 1 as 1 for exactly
+	// the same reason, so the key agrees on both sides of the wire.
 	spec, err := json.Marshal(in)
 	if err != nil {
 		return fmt.Errorf("graph: marshal intent spec: %w", err)
 	}
+	version := intentVersionOr(in.Version)
 	_, err = s.pool.Exec(ctx, `
 		INSERT INTO graph.intent (name, version, spec) VALUES ($1, $2, $3)
-		ON CONFLICT (name, version) DO UPDATE SET spec = excluded.spec`, in.Name, in.Version, spec)
+		ON CONFLICT (name, version) DO UPDATE SET spec = excluded.spec`, in.Name, version, spec)
 	if err != nil {
-		return fmt.Errorf("graph: upsert intent %s@%d: %w", in.Name, in.Version, err)
+		return fmt.Errorf("graph: upsert intent %s@%d: %w", in.Name, version, err)
 	}
 	return nil
 }
@@ -84,7 +97,21 @@ func (s *Store) ListIntents(ctx context.Context) ([]types.Intent, error) {
 		if err := json.Unmarshal(spec, &in); err != nil {
 			return nil, fmt.Errorf("graph: decode intent spec: %w", err)
 		}
-		out = append(out, in)
+		// env scope (ADR-0057). THE SECOND HALF OF SCOPING A KIND, and the half that is not
+		// optional: ScopeToEnvironment drops out-of-scope Intents from the DECLARED set, and if
+		// this read did not drop them from the STORED set too, every other environment's rows
+		// would become prune candidates. computeIntentLayerPlan emits ActionDelete for a stored
+		// Intent absent from the declarations, so two scoped daemons on one Postgres would
+		// mutually wipe each other's estate — each deleting what the other had just written,
+		// forever, with the mass re-tag tripping MaxPruneFraction and halting the reconcile.
+		//
+		// ADR-0057 D3 required exactly this pairing, "enforced in the data layer, not by
+		// convention", and every other env-scoped kind in this file already does it. The Intent
+		// gained a scope only when a provisioning Intent needed one (types.Intent.Environments),
+		// so this line arrives with it rather than before it.
+		if types.InScope(in.Environments, s.environment) {
+			out = append(out, in)
+		}
 	}
 	return out, rows.Err()
 }

@@ -99,23 +99,23 @@ domain logic** — and **every tool is a plugin behind the sovereign plugin port
 connectors listed above were originally _in-tree_; they have all been re-centered out. This is a re-architecture
 of existing capabilities, not new phase work — the deliverables above still stand, they now live behind the port.
 
-| Slice                                                                                                            | State                       | Evidence                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
-| ---------------------------------------------------------------------------------------------------------------- | --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Sovereign plugin port + content-blind spine (the thesis)                                                         | ✅                          | [ADR-0046](adr/0046-stratt-as-substrate.md); `sdk/stratt/plugin/v1`, `pluginhost`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
-| Port v1 full surface (write-back, relations, rung ladder, plan pinning)                                          | ✅                          | [ADR-0047](adr/0047-plugin-port-v1-full-surface.md); `pluginhost.ApplyRaw`/`PlanStep`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
-| Integration taxonomy (connector-plugin vs migration-tool vs core-transport)                                      | ✅                          | [ADR-0048](adr/0048-integration-taxonomy-plugin-tool-transport.md); AWX importer relocated, façade kept                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
-| Sites over the port (agent = authenticated relay, governance stays hub-side)                                     | ✅                          | [ADR-0049](adr/0049-sites-over-the-plugin-port.md); `sitegw`, `siteproto` typed stream                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
-| Certificate lifecycle as a reconcile Actuator                                                                    | ✅                          | [ADR-0050](adr/0050-certificate-reconcile-actuator.md); `plugins/certissuer`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
-| Ansible EE-Job subprocess transport (GPL boundary in the EE image)                                               | ✅                          | [ADR-0051](adr/0051-ee-job-speaks-the-port.md); `plugins/ansible`, one `govern`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
-| SecretBroker port (per-call resolution; core holds no material, §2.5)                                            | ✅                          | [ADR-0052](adr/0052-secretbroker-port.md); `sdk/secretbroker`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
-| MCP as a generic transport (the last domain logic leaves the core)                                               | ✅                          | [ADR-0053](adr/0053-mcp-transport-generic-connector.md); `plugins/mcp` EE-Job shim                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
-| Per-Step facet write-scope (least-authority write-back at the one governor)                                      | ✅                          | [ADR-0054](adr/0054-per-step-facet-claim.md); `pluginhost.govern` grant∩scope                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
-| Tiered genesis bootstrap — Stratt self-deploys its own services/plugins (dogfood)                                | ✅                          | [ADR-0102](adr/0102-tiered-genesis-bootstrap.md); `dev:genesis`; helm/deploy self-deploy of the real OpenFGA server + backend promotion, **proven live in kind**                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
-| Runtime Connector/Actuator registry — enable/disable plugins with **no restart**, reconciled from CaC            | ✅                          | [ADR-0103](adr/0103-runtime-connector-registry.md); `connectorregistry`; helm (Actuator) + declared (Connector) enabled+disabled at runtime, strattd `restarts=0`, **proven live fully in-kind (no compose)**                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
-| Capability dependencies — plugins `requires` a capability _contract_, resolved first-class (the anti-Jenkins)    | 🟡 framework + verification | [ADR-0104](adr/0104-plugin-capability-dependencies.md); `types.ValidCapability` + `provides`/`requires` on both Kinds; registry resolves declared providers (store-visible, replica-consistent, health-independent), gates enablement, surfaces unmet/ambiguous as D6 **pending** (§1.8). **Slice 2:** leader-only provider verification (`graph.capability_provider`) — a phantom `provides` its Manifest doesn't back is verified=false and never counts (§1.5). ≥2-provider estate binding + the four enterprise providers (Temporal-spine, OpenBao, S3, EC2) are the follow-ons                                                                                                   |
-| S3 as a provider-agnostic `statestore` provider — **code-complete end-to-end** (the first real capability chain) | 🟡 code-complete            | [ADR-0105](adr/0105-s3-capability-provider-agnostic.md); provider-agnostic class Contract (`capabilities/statestore.*`); awss3 advertises+resolves `statestore` via `awss3/statestore-resolve`; `s3-statestore` provider declaration; `ApplyRequest`/`PlanRequest` field `resolved_capabilities` (legible, §2.5-safe); orchestration resolves the bound provider + invokes its resolve Action + validates the class Contract + injects at dispatch (Plan **and** Apply); OpenTofu renders `-backend-config` from the handle. S3 is provider #1 — Artifactory/GCS drop in behind the same contract. **Live opt-in proof (running state bucket + `requires:[statestore]`) outstanding** |
-| OpenBao as a multi-capability provider — the enablement-gate exemplar                                            | 🟡 provider verified        | [ADR-0106](adr/0106-openbao-multi-capability-provider.md); the reusable **enablement-gate vs resolve-inject** distinction. OpenBao advertises `keycustodian` + `certissuer` (guarded on the PKI mount; `secretbroker` excluded — SDK-side, §2.5); `openbao` provider declaration, no resolve Action (enablement-gate); keycustodian core-use stays on `portCustodian` (ADR-0104 D7). D1 guardrail: an enablement-gate's reach-path must be the CLASS contract, never a named provider's mechanism. First `requires:` consumer (a cert Blueprint Step) booked                                                                                                                          |
-| EC2 as the `provisioning` provider — the last enterprise add                                                     | 🟡 provider verified        | [ADR-0107](adr/0107-ec2-provisioning-provider.md); awsec2 advertises `provisioning` (enablement-gate, no resolve Action). Reconciles with the already-shipped ADR-0058 `builder:` reach-path (provider-coupled — a named §1.5 gap the class-contract refactor closes). Non-goal boundary: machine-_coordinate_ provisioning, never OS imaging/PXE (bare-metal provisioner = a plugin Stratt drives). EC2 provider #1 — GCE/KubeVirt siblings. **All four enterprise adds now landed as capability participants**                                                                                                                                                                      |
+| Slice                                                                                                            | State                       | Evidence                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| ---------------------------------------------------------------------------------------------------------------- | --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Sovereign plugin port + content-blind spine (the thesis)                                                         | ✅                          | [ADR-0046](adr/0046-stratt-as-substrate.md); `sdk/stratt/plugin/v1`, `pluginhost`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| Port v1 full surface (write-back, relations, rung ladder, plan pinning)                                          | ✅                          | [ADR-0047](adr/0047-plugin-port-v1-full-surface.md); `pluginhost.ApplyRaw`/`PlanStep`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| Integration taxonomy (connector-plugin vs migration-tool vs core-transport)                                      | ✅                          | [ADR-0048](adr/0048-integration-taxonomy-plugin-tool-transport.md); AWX importer relocated, façade kept                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| Sites over the port (agent = authenticated relay, governance stays hub-side)                                     | ✅                          | [ADR-0049](adr/0049-sites-over-the-plugin-port.md); `sitegw`, `siteproto` typed stream                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| Certificate lifecycle as a reconcile Actuator                                                                    | ✅                          | [ADR-0050](adr/0050-certificate-reconcile-actuator.md); `plugins/certissuer`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| Ansible EE-Job subprocess transport (GPL boundary in the EE image)                                               | ✅                          | [ADR-0051](adr/0051-ee-job-speaks-the-port.md); `plugins/ansible`, one `govern`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| SecretBroker port (per-call resolution; core holds no material, §2.5)                                            | ✅                          | [ADR-0052](adr/0052-secretbroker-port.md); `sdk/secretbroker`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| MCP as a generic transport (the last domain logic leaves the core)                                               | ✅                          | [ADR-0053](adr/0053-mcp-transport-generic-connector.md); `plugins/mcp` EE-Job shim                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| Per-Step facet write-scope (least-authority write-back at the one governor)                                      | ✅                          | [ADR-0054](adr/0054-per-step-facet-claim.md); `pluginhost.govern` grant∩scope                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| Tiered genesis bootstrap — Stratt self-deploys its own services/plugins (dogfood)                                | ✅                          | [ADR-0102](adr/0102-tiered-genesis-bootstrap.md); `dev:genesis`; helm/deploy self-deploy of the real OpenFGA server + backend promotion, **proven live in kind**                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| Runtime Connector/Actuator registry — enable/disable plugins with **no restart**, reconciled from CaC            | ✅                          | [ADR-0103](adr/0103-runtime-connector-registry.md); `connectorregistry`; helm (Actuator) + declared (Connector) enabled+disabled at runtime, strattd `restarts=0`, **proven live fully in-kind (no compose)**                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| Capability dependencies — plugins `requires` a capability _contract_, resolved first-class (the anti-Jenkins)    | 🟡 framework + verification | [ADR-0104](adr/0104-plugin-capability-dependencies.md); `types.ValidCapability` + `provides`/`requires` on both Kinds; registry resolves declared providers (store-visible, replica-consistent, health-independent), gates enablement, surfaces unmet/ambiguous as D6 **pending** (§1.8). **Slice 2:** leader-only provider verification (`graph.capability_provider`) — a phantom `provides` its Manifest doesn't back is verified=false and never counts (§1.5). ≥2-provider estate binding + the four enterprise providers (Temporal-spine, OpenBao, S3, EC2) are the follow-ons                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| S3 as a provider-agnostic `statestore` provider — **code-complete end-to-end** (the first real capability chain) | 🟡 code-complete            | [ADR-0105](adr/0105-s3-capability-provider-agnostic.md); provider-agnostic class Contract (`capabilities/statestore.*`); awss3 advertises+resolves `statestore` via `awss3/statestore-resolve`; `s3-statestore` provider declaration; `ApplyRequest`/`PlanRequest` field `resolved_capabilities` (legible, §2.5-safe); orchestration resolves the bound provider + invokes its resolve Action + validates the class Contract + injects at dispatch (Plan, Apply **and now Invoke/Destroy** — [ADR-0145](adr/0145-the-actuator-builder-step-form.md) D2, which found the Action seam had no `resolved_capabilities` at all, so `requires:` was a promise only half a declaration's dispatch surface kept); OpenTofu renders `-backend-config` from the handle. S3 is provider #1 — Artifactory/GCS drop in behind the same contract. **Live opt-in proof CLOSED (2026-07-28):** `task dev:tofu:proof` runs a real `tofu` build against a real S3 state bucket (seaweedfs) and asserts the state object landed, so a retry converges instead of building a second VPC |
+| OpenBao as a multi-capability provider — the enablement-gate exemplar                                            | 🟡 provider verified        | [ADR-0106](adr/0106-openbao-multi-capability-provider.md); the reusable **enablement-gate vs resolve-inject** distinction. OpenBao advertises `keycustodian` + `certissuer` (guarded on the PKI mount; `secretbroker` excluded — SDK-side, §2.5); `openbao` provider declaration, no resolve Action (enablement-gate); keycustodian core-use stays on `portCustodian` (ADR-0104 D7). D1 guardrail: an enablement-gate's reach-path must be the CLASS contract, never a named provider's mechanism. First `requires:` consumer (a cert Blueprint Step) booked                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| EC2 as the `provisioning` provider — the last enterprise add                                                     | 🟡 provider verified        | [ADR-0107](adr/0107-ec2-provisioning-provider.md); awsec2 advertises `provisioning` (enablement-gate, no resolve Action). Reconciles with the already-shipped ADR-0058 `builder:` reach-path (provider-coupled — a named §1.5 gap the class-contract refactor closes). Non-goal boundary: machine-_coordinate_ provisioning, never OS imaging/PXE (bare-metal provisioner = a plugin Stratt drives). EC2 provider #1 — GCE/KubeVirt siblings. **All four enterprise adds now landed as capability participants**                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
 
 **Verified in-repo (structural):** `core/internal/connectors/` is empty; `internal/actuators`,
 `internal/actions`, `internal/emitters` hold only the seam interfaces, no tool logic; **21 plugin packages**
@@ -163,23 +163,27 @@ exit gate still requires its own operational evidence (SLO, security review, ado
 ## The demo library — and the live-cluster e2e it delivered
 
 **[demos/](../demos/README.md)** ([ADR-0116](adr/0116-demo-library.md)) is a growing library of
-self-contained, narrated, **turnkey** scenarios that teach Stratt by running it. Four ship, each
+self-contained, narrated, **turnkey** scenarios that teach Stratt by running it. Five ship, each
 **live-verified end to end on kind** (build-up → gated Workflow → asserted real outcome → teardown):
 
-| Demo                                                                        | Substrate         | Fidelity     | Proven live                                                                                       |
-| --------------------------------------------------------------------------- | ----------------- | ------------ | ------------------------------------------------------------------------------------------------- |
-| [k8s: deploy an app](../plugins/helm/demo/README.md)                         | Kubernetes (kind) | `real`       | gated `helm/deploy` → a real Deployment 1/1 Ready serving its page                                |
-| [vSphere: provision a VM + the live graph](../plugins/vcenter/demo/README.md) | vSphere (vcsim)   | `build-real` | Syncer projects the topology; gated `vcenter/create-vm` → the built VM observed back (VMs 50→51)  |
-| [EC2: provision a real instance](../plugins/awsec2/demo/README.md)               | EC2 (floci)       | `real`       | gated `awsec2/create-vm` → a real floci instance container running, observed into the graph (0→1) |
-| [app install with a certificate](../demos/app-cert/README.md)                | SSH (Linux host)  | `real`       | gated ansible converge: SSH as an unprivileged user → privilege escalation → a `community.crypto` X.509 cert → TLS read back off the wire, `app.config` projected with Run provenance, and a no-op Run refused |
+| Demo                                                                          | Substrate            | Fidelity     | Proven live                                                                                                                                                                                                                                                            |
+| ----------------------------------------------------------------------------- | -------------------- | ------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [k8s: deploy an app](../plugins/helm/demo/README.md)                          | Kubernetes (kind)    | `real`       | gated `helm/deploy` → a real Deployment 1/1 Ready serving its page                                                                                                                                                                                                     |
+| [vSphere: provision a VM + the live graph](../plugins/vcenter/demo/README.md) | vSphere (vspheresim) | `build-real` | Syncer projects the topology; gated `vcenter/create-vm` → the built VM observed back, and its guest boots and reports a coordinate                                                                                                                                     |
+| [EC2: provision a real instance](../plugins/awsec2/demo/README.md)            | EC2 (floci)          | `build-real` | gated `awsec2/create-vm` → a real floci instance container running, observed into the graph (0→1). **Re-graded from `real` 2026-07-27**: floci's network model is fully real, but no AMI ships sshd and user-data never runs, so there is no guest to converge (HAR-1) |
+| [app install with a certificate](../demos/app-cert/README.md)                 | SSH (Linux host)     | `real`       | gated ansible converge: SSH as an unprivileged user → privilege escalation → a `community.crypto` X.509 cert → TLS read back off the wire, `app.config` projected with Run provenance, and a no-op Run refused                                                         |
+| [region-to-cert — the capstone](../demos/region-to-cert/README.md)            | Kubernetes + EC2 (floci) | `build-real` | **the whole chain, from an estate naming no substrate.** Two gated `Intent/Subnet` builds through real `tofu apply` → `10.30.0.0/24` + `10.30.1.0/24`, distinct ranges NetBox allocated and no declaration contains; a gated `Intent/Compute` build → a pod + Service, `mgmt.address` the provider CAUSED; `apache-configure` → HTTP served off the wire, `app.config.port=8080 writerKind=run`; `cert-issue` → key `0600` **born on target**, `issuer=Stratt Dev Root CA`, subject derived from the host's own address; all four Findings RESOLVED. Graded at the **floor** of its two legs — the kubernetes leg is `real` alone |
 
 **This is the first real dent in the "live-cluster e2e" gap** named in the enterprise-readiness section
 below: the platform is now proven not only structurally and by unit/integration tests, but by
 reproducible, asserting runs against a real cluster + real/simulated substrates. Each runner is CI-able
 and **non-rotting** — a demo that stops working fails its own runner.
 
-**Demos behaved as an integration-test instrument.** Landing the three surfaced (and fixed) six real
-defects no unit test caught: the desired-state wire API couldn't carry a targetless `action` Step or a
+**Demos behaved as an integration-test instrument, every single time.** Landing the first three surfaced
+(and fixed) six real defects no unit test caught; the capstone added four more of its own (see "Booked by
+the capstone" below) plus two in the harness — `dev:connector-e2e` could not stand up on a genuinely cold
+kind cluster at all, and demo staging vs estate staging were two implementations of one job differing in
+whether they carried declarations. The original six: the desired-state wire API couldn't carry a targetless `action` Step or a
 `gateOnly` CredentialRef (§1.6 asymmetry vs the Git door); the **genesis floor declared no helm
 Actuator**, so the shipped self-deploy dogfood could never register `helm/deploy`; a failed plugin
 Action's real cause was masked and no Run surfaced any error (§1.8 — see DESC-4 in
@@ -192,25 +196,578 @@ for their standalone image builds; and floci's healthcheck probed with a `wget` 
 1. **A fully-featured Ansible plugin.** Ansible ships today only as an **EE-Job subprocess shim**
    (ADR-0051, `plugins/ansible` — ~800 lines incl. tests); the app-install demo needs the real thing.
    ⚠️ **Design it against PLG-1** ([enterprise-readiness.md](enterprise-readiness.md)): every substrate a
-   plugin talks to in dev is one _we_ run and own (vcsim, floci, the in-cluster `managed-web` sshd node);
+   plugin talks to in dev is one _we_ run and own (vspheresim, floci, the in-cluster `managed-web` sshd node);
    in production these are **external, operator-owned systems** — a customer's AAP/AWX, Galaxy/Automation
    Hub, credential vault, and a fleet behind bastions. Do not bake dev's reachability/ownership
    conveniences into the plugin contract. This already bit us: the ec2-only demo's SSH-converge act is
    deferred precisely because floci's instances are reachable only because we host them.
 2. **An app-install demo** — install an app that requires a **TLS certificate** (a web server), so
    certificate issuance/renewal is taught alongside install.
-3. **The enterprise-estate capstone** (multi-substrate, one Intent), which additionally needs per-instance
-   fan-out (ADR-0058), a K8s `Compute` provider, and multi-substrate simultaneous reconcile.
+3. ~~**The enterprise-estate capstone** (multi-substrate, one Intent), which additionally needs per-instance
+   fan-out (ADR-0058), a K8s `Compute` provider, and multi-substrate simultaneous reconcile.~~
+   **SHIPPED as [demos/region-to-cert](../demos/region-to-cert/README.md)** — all three prerequisites
+   landed, and the demo drives declare → gated network build → gated host build → Apache converge →
+   CA-signed certificate on one floor, asserting each leg. **It is narrower than this entry asked
+   for, in one specific way that is worth reading rather than glossing:** "multi-substrate, one
+   Intent" turned out to be unbuildable honestly, because `Intent/Subnet` has no Kubernetes
+   implementation that is not an invention, and the aws substrate has networks but no bootable
+   machines. So the capstone is **two proofs in one estate** — the network leg on aws, build →
+   converge → certificate on kubernetes — with the placement resolver correctly refusing to join
+   them. The demo's README argues that at length instead of quietly delivering less.
+
+   **What running it found, which is the point of running it:** `task dev:connector-e2e` could not
+   stand up on a genuinely cold kind cluster at all (its backends ran before the `helm install` that
+   creates their namespace, and `stratt-hosts` was created un-adoptable so the first install
+   collided with it) — both now fixed and verified from a destroyed cluster; the demo staging and
+   the estate staging were **two implementations** of "vendor an admitted plugin" differing in
+   whether they carried declarations, now one; a plugin's estate is not admittable standalone,
+   because the ansible plugin's Triggers and Workflows name environments and Views belonging to the
+   **reference** estate; the estate loader **silently reads only the first document** of a
+   multi-document YAML file; and a composed Workflow's `facetWriteScope` can name a Facet namespace
+   with no registered owner, failing at the far end of an approved gate — statically checkable, and
+   the third instance of the class `provisions` (ADR-0145) and `remediates` (CERT-1) already closed.
 
 ## Dev follow-ups / test hygiene
 
-- **Two timing-sensitive tests flake under concurrent `task ci` load** (each passes clean in isolation
-  and on re-run; neither is a correctness bug): `core/internal/triggers/reconcile_test.go` (a
-  `time.Sleep(500ms)` around a reconcile cadence) and `core/internal/siterelay` (relay timing). On a
-  heavily-loaded box (kind + Crossplane + the full parallel suite) they occasionally miss their fixed
-  sleep window and fail with a bare `FAIL` / exit 201. **Fix:** replace the fixed `time.Sleep` with a
-  poll-until-condition-with-deadline (e.g. `require.Eventually`-style) so the gate is deterministic
-  regardless of host load. Low-risk, isolated to test files; do before wiring CI on a shared runner.
+- ~~**Two timing-sensitive tests flake under concurrent `task ci` load**~~ — **fixed**, and the
+  standing note that "neither is a correctness bug" was **half wrong**, which is the finding worth
+  keeping.
+  - `core/internal/triggers/reconcile_test.go` **was** the assumed shape: a fixed `20 × 500ms`
+    window waiting on Temporal's visibility store, which gives up after ~10s of wall clock however
+    loaded the host is. Now bounded by a **deadline** instead of an iteration count.
+  - `core/internal/siterelay` **was not a test-timing problem at all.** There was no `time.Sleep`
+    to remove. `NATSAcceptor.Accept` subscribed **lazily**, inside the goroutine running `Serve`,
+    so a call published before that goroutine was scheduled hit a subject with **no subscriber** —
+    and core NATS drops it silently, leaving the hub blocked until its per-call context expired
+    with no message naming the cause (§1.8). The test raced that window; **`stratt-agent` shipped
+    it too**, logging `plugin-port relay serving` before the subscription existed. Fixed at the
+    source: `NATSAcceptor.Subscribe()` establishes the interest eagerly **and flushes** (the flush
+    is the load-bearing half — `SubscribeSync` returning is not the server having registered), the
+    agent calls it before it claims to be serving, and the test calls it before it publishes.
+    Verified `-race -count=30` clean.
+    **Honest bound on the claim:** the production defect is certain from the code path; that this
+    exact window caused every observed CI flake is inferred, not reproduced.
+
+### Booked by the capstone (2026-07-31) — found by building and running `demos/region-to-cert`
+
+Four findings that are real, are not demo bugs, and were each deliberately **not** fixed inside a demo:
+
+1. ~~**A plugin's estate is not admittable standalone.**~~ **FIXED (2026-07-31).**
+   `plugins/ansible/estate` shipped Triggers scoped `environments: [prod]` and four Workflows naming
+   `viewName: secure-hosts` / `web-hosts` — an environment and two Views belonging to the
+   **reference** estate — so any other estate admitting that plugin had to mirror all four names or
+   fail to load. The `facetWriteScope` check below then found a third face of the same coupling: the
+   two collectors write `access.grants` and `fileset.content`, namespaces only the reference estate
+   owns. ADR-0137 D1 says a plugin owns its Actuator, Workflows, Triggers and content; it does not
+   license a plugin to presume its adopter's scopes. All six declarations are the reference estate's
+   own compositions and now live in `estate/{workflows,triggers}/`, with a single consumer each
+   (`estate/blueprints/{access,fileset}.yaml`) and no `remediates` map advertising them. The plugin
+   keeps what is genuinely its own — Actuators, content, and the converge recipes that name no View.
+   The capstone's three placeholder declarations were deleted with it.
+
+2. **A cross-plugin composed Workflow has no shippable home.** `cert-issue` composes ansible and
+   openbao, so `task plugins:boundary` correctly refuses to let it live in either plugin — and there
+   is nowhere else for it to travel. Every adopting estate therefore hand-copies it: the reference
+   estate has one, the capstone now has a second, and nothing makes them agree. That is the
+   divergent-second-copy shape this repo keeps paying for, arriving through a door the boundary rule
+   itself opened. The fix is a home for compositions — a pack an estate installs (ADR-0033's
+   materialize-into-operator-Git move) rather than a file every adopter retypes.
+3. ~~**`facetWriteScope` can name a namespace with no registered owner, and the Run dies after the
+   gate.**~~ **FIXED (2026-07-31) — `checkFacetWriteScopeOwners`, and the class is now closed three
+   for three.** ADR-0145 added the check for `provisions`, CERT-1 for `remediates`, this one for
+   `facetWriteScope`. It mirrors the runtime's three ownership sources rather than inventing a
+   fourth: a Blueprint route **that remediates** (a pure observation never seizes write-ownership,
+   matching `compiler.resolveOwnership`), a **dialled** provider's `facetNamespaces`, and the
+   namespaces core registers at boot — the last now read from `types` by both the daemon and the
+   check, so the two cannot drift about what is owned.
+   **The discriminator that makes it useful:** an EE-Job Actuator's `facetNamespaces` is a write
+   CEILING, not a claim. `ansible-certificate` declares `[fileset.content, cert.presented]` and owns
+   neither, so a naive "any facetNamespaces" version would have passed the very estate that failed
+   live. `address` vs `image` is the whole test, and `TestEEJobActuatorCeilingIsNotOwnership` pins it.
+   Deliberately permissive at the edges (a route counts whether or not an Assignment currently binds
+   it): a false negative costs a diagnosis, a false positive would refuse an estate that works.
+
+4. ~~**The estate loader silently reads only the FIRST document of a multi-document YAML file.**~~
+   **FIXED (2026-07-31)** — `refuseMultiDocument`, applied in `parseKind` (one call site, so every
+   kind present and future is covered) and explicitly to `plugins.yaml`, which is parsed outside it
+   and is the worst place to lose a document: a dropped admission loses every declaration that
+   plugin ships and the estate still loads. **Refused rather than supported**, deliberately —
+   supporting it means every parser returning one name for the duplicate map, `contentDir` resolving
+   against a root derived from the file path, and diagnostics naming a file+index; all new surface
+   for an affordance no shipped estate uses. A trailing `---` stays legal.
+
+### ~~Booked next~~ SHIPPED — the port now reports an ignored input (2026-07-31)
+
+ADR-0151 D4's honesty used to rest on a convention: `kubecompute` emitted `provider params … ignored`
+because its author chose to, and **nothing in the port required it**, so a provider that dropped
+params silently produced a green build of a wrong-shaped host after a human approved the gate. That
+is the same class this session closed three times over, sitting one level lower — at the sovereign
+port, where it applies to every plugin in every language.
+
+`InvokeResult.consumed_params` (additive) now carries the fact, and the core computes `sent −
+consumed` and puts the difference on the Run as a `params-ignored` event.
+
+**The field declares what was CONSUMED, and that inversion is the whole design.** The intuitive shape
+is `ignored_params`, filled in by the provider — and it rewards exactly the behaviour it exists to
+expose, because a provider that drops params silently returns an empty list and looks perfect.
+Reported the other way round, a provider that says nothing has **everything** it was sent reported:
+silence becomes the loudest outcome rather than the quietest, and the honesty requires no goodwill.
+
+**The core could not do this alone,** which is why the fact had to cross the port: `params` is opaque
+by charter (§1.5), so there is nothing to inspect — only something to compare against what was sent.
+The comparison lives in `orchestrate`, which built those params, rather than in `pluginhost`, which
+crosses every class and must not learn one class's convention. Only the opaque `params` object is in
+scope; the shared launch interface is not, because `placement` is accepted-and-ignored **by design**
+on this substrate (ADR-0123 D2) and folding it in would report a designed no-op as a defect on every
+build.
+
+**No conformance test, deliberately** — there is nothing for one to protect. The default is already
+the safe one. Scope today is `kubecompute-build`, the only Workflow forwarding `{{.launch.params}}`;
+as other builders begin to, they either declare what they read or are correctly reported as reading
+none.
+
+### AWX-012 + AWX-017 — the account nobody offboards (ADR-0155, 2026-07-31)
+
+**AWX-017 needed an identity-plane decision, and the join was the whole problem.** AWX knows a
+USERNAME; the identity plane keys by `<idp>/<scimId>`. Every obvious bridge is wrong: letting the AWX
+plugin write an identity fact is a §2.1 registration error (ADR-0130 D1 says so in those words);
+having an operator configure "this Controller authenticates against that IdP" is a convention typed
+into an env var, joined by string equality — **exactly the shape ADR-0154 had just spent its length
+repairing**, and repeating a defect one ADR after fixing it is not a plan; and keying by bare
+username is sound only if usernames are unique across every IdP, which nothing guarantees.
+
+**The answer: the SCIM projector emits the key, and only when it is unambiguous.** A `user` Entity
+gains `identity.userName` as a SECOND way to be ADDRESSED — claiming nothing about the person,
+contesting no ownership, the same move that lets the AWX half point at `ansible.playbook`. And the
+projector is the only component that CAN decide unambiguity: it enumerates every IdP in one pass, so
+it alone sees that `jsmith` exists in two directories. When it does, **neither** entity gets the key.
+That is the correct answer, not a gap.
+
+Lowercased, measured rather than assumed: RFC 7643 §4.1.1 makes SCIM `userName` unique per provider
+with `caseExact: false`, so normalising cannot merge two people and it makes the join survive a
+Controller storing `JSmith` for an IdP's `jsmith`.
+
+**The AWX half emits a soft `same-account-as` edge and its ABSENCE is the finding** — the
+relation-presence mechanism of ADR-0085 as sharpened by ADR-0154. A dropped edge means either no IdP
+knows this login (the account an offboarding process misses, because offboarding runs against the
+IdP) or the name is ambiguous. Both deserve a Finding. `same-account-as` asserts a CORRESPONDENCE —
+that two logins share a name, a fact about strings — never an identity, and
+`TestINV3_AuthzConsultsNoGraph` keeps it structurally unable to reach an access decision.
+
+**Verified two ways on purpose.** The unambiguity rule is a pure function with its own test, because
+the graph package's tests are Postgres-gated and SKIP without a database — which is exactly how an
+inert mechanism stays green here. The key actually LANDING and resolving is then asserted end to end
+against a real store, which a pure-function test cannot show.
+
+**AWX-012** rides along: `ansible.credentialtype`, where `managed: false` is the migration question —
+a credential of a custom type has no equivalent until that type's fields and injectors exist on the
+other side. Field names, which of them are secret, and the injector delivery modes; the injector
+TEMPLATES are not projected, being arbitrary operator text the mode already summarises.
+
+**AWX-005 stays declined, deliberately.** ADR-0130 D3 refused role grants on three grounds, and one
+of them is not a cost problem a better read shape answers: a projected grant graph is one query from
+being used as an authorization truth, and "INV-3 stops it" is an argument about mechanism rather than
+about what people build on top of a convincing-looking permission graph. That decision stands, and
+reopening it silently would make "we looked and said no" render the same as "nobody looked".
+
+### AWX-001 · the Project, and the orphan signal it repairs (ADR-0154, 2026-07-31)
+
+The last `adopt-only` 🔴 in the AWX object-model's projection column, and the audit's own Tier 1 — for
+a reason that is not breadth. **ADR-0085's orphan-template Baseline was ambiguous by construction.**
+It reads the presence of `ansible.template --runs--> ansible.playbook`, whose target is keyed by the
+AWX Project's NAME concatenated with a playbook path and matched against the operator-set
+`STRATT_ANSIBLE_CONTENT_ID`. So the edge rests on a convention someone types into an env var — and
+when that convention is broken the edge drops, **byte-identically** to it dropping because the
+content genuinely is not projected. One signal, two very different causes, no way to tell them apart.
+
+`ansible.project` gives the template an ID-JOINED companion, `uses-project`, on the identifier AWX
+issued rather than a name a human aligned. `uses-project` present with `runs` dropped now says "the
+content root is the missing half, and here is its scm_url and revision"; `uses-project` absent is a
+different diagnosis entirely. The `runs` edge is deliberately NOT re-keyed — the content half
+identifies playbooks by project id and relative path and knows nothing of AWX ids, so translating
+would have Stratt assert a correspondence neither system states (§1.2). The name join was never
+wrong; it lacked a companion.
+
+**`scm_revision` binds catalogue to execution** — the only fact in the mirror that says which BYTES
+the Controller is running. It is projected and **compared to nothing**: the content half reads a
+filesystem and projects no revision, so there is no second value to diff, and claiming a drift check
+that cannot be computed is the plausible-wrong-answer this repo keeps refusing. The comparison is
+booked, not implied.
+
+**§2.5, fifth application, and this one has a new shape.** AWX stores repository credentials as a
+separate object — but a real estate routinely embeds a PAT directly in the clone URL, because it
+works and nobody stopped them. Dropping `scm_url` would lose *which repository*, the fact most
+needed, to guard a minority case; projecting it verbatim would import live tokens. So the userinfo is
+removed and `scmUrlRedacted` says so — and the boolean matters as much as the redaction, because
+silently stripping would leave a reader unable to tell a clean URL from a scrubbed one, and "this
+repository is cloned with an embedded credential" is its own finding. A bare username is NOT flagged
+(the flag must mean a credential was present, not that there was an `@`), and a value that cannot be
+parsed but contains an `@` is withheld entirely — a value that cannot be proven safe is not one to
+project. The simulator seeds a PAT-bearing URL so a verbatim projection has something to fail on.
+
+Poll cost 10 → 11 collections, moved deliberately; project SYNC JOBS are not read, because that is
+run history (§3) and `status` + `lastUpdated` already carry current state. The disjoint-namespace
+guard caught the manifest contract again, which is now twice in three commits that it has earned its
+literal counts.
+
+### ANS Tier 3 — and the config observation that turned out to be a bug fix (2026-07-31)
+
+`ansible.cfg` (ANS-005), the repo's own modules and plugins (ANS-006), and the root that IS a
+collection (ANS-007). With Tier 2 the day before, **the content-root audit is now green except
+ANS-009** (multi-document playbooks, still unexamined) — the Ansible half of a migration is visible.
+
+**ANS-005 was not an observation, it was a fix.** The audit says ansible.cfg "changes the meaning of
+everything else in the root", and reading it proved the point immediately: `roles_path` moves where
+roles live, and this Syncer's role reader looked in `roles/` unconditionally. A repo configured with
+`roles_path = galaxy_roles` projected **zero roles and said nothing** — reporting on a layout the
+tool was not using. The reader now searches `roles/` plus any relative, in-root `roles_path` entry.
+Absolute and escaping entries are skipped, because this Syncer cannot read outside the content root
+and must not pretend to have — but they still appear in the projected value, so the gap is visible
+rather than silent (§1.8).
+
+**The §2.5 rule needed a fourth application, and this time a denylist would have failed.**
+`ansible.cfg` can hold a real credential: a `[galaxy_server.*]` section takes a Galaxy API token. So
+the projected settings are a bounded ALLOWLIST of structurally-meaningful values, and every other key
+contributes its NAME only — which keeps the token out **by construction** rather than by having
+anticipated it.
+
+**ANS-006 covers both layouts, deliberately.** A playbook repo puts custom code in `library/` and
+`filter_plugins/`; a collection-shaped repo puts it in `plugins/modules/` and `plugins/filter/`.
+Covering one would report half of a real repo as shipping no custom content — the same silent-gap
+shape this batch exists to close. Classification is by DIRECTORY, because ansible loads plugins by
+directory and that is the only fact knowable without reading the program.
+
+**ANS-007 reuses the ANS-002 shape.** The root collection is an `ansible.collection` beside the
+required ones, marked `root` — one question, one Kind. Its own `dependencies` live in galaxy.yml and
+a projection reading only requirements.yml sees none of them.
+
+**One ordering bug, caught by its test.** The root collection was appended to `snap.Collections`
+*before* the requirements read, which ASSIGNS that slice rather than appending — so it was silently
+discarded. The comment now sits where the next field added there will read it.
+
+### The Ansible content root stops being a list of files (2026-07-31) — ANS-002/003/004/008
+
+Tier 2 of the tool audit ("the estate cannot see where configuration comes from") closed as one
+batch, because it is one mechanism in one place: `group_vars`/`host_vars` scopes, role `meta/`
+dependencies, and the `requirements.yml` roles half that was never parsed while its collections half
+always was.
+
+**`ansible.varscope` carries key NAMES and never values (§2.5)** — the third instance of that line
+after credentials (ADR-0128 D2) and schedule `extraDataKeys` (ADR-0132 D3), and the one where it
+bites hardest: a `group_vars` file routinely holds credentials in the clear, which is precisely why
+people vault them. But scope alone does not answer the motivating question either — knowing
+`group_vars/web.yml` exists says nothing about why a host got `http_port: 8080`. The names are the
+answer and are not secret. **ANS-008 fell out of it**: a `$ANSIBLE_VAULT` file is present with
+`vaulted: true` and NO keys, never decrypted, and an empty key list *with* that flag distinguishes
+"binds nothing" from "binds things I cannot show you" (§1.8).
+
+**Precedence is observed, never computed.** Two scopes binding one name is ansible's normal case;
+both project and neither is marked a winner. Computing the winner would reinterpret the execution
+model (§9 — the line this audit says is correctly held) and would have Stratt assert a fact about a
+run that has not happened (§1.2).
+
+**Three defects found by writing the tests, all of the silent-wrong-answer kind:**
+
+1. **An identity collision.** `roleID` used `"roles/" + name` for a required role — byte-identical to
+   an in-tree role's path. An in-tree `apache` and a `requirements.yml` entry named `apache` produced
+   ONE identity, so one silently overwrote the other: the same entity asserted twice with different
+   facets and no error anywhere. The spaces are now `roles/<path>` and `requirements/<name>`.
+2. **A dependency edge that always dangled.** `meta/main.yml` names a role, not a location, so the
+   edge target cannot be computed from the name — the first version pointed everything into the
+   requirements space, which left every dependency on an IN-TREE role pointing at nothing, forever.
+   It now resolves against the observed role set first.
+3. **A `requirements.yml` half that parsed to empty.** Decoding the whole `roles:` list into one
+   struct shape fails on the first bare string — and real files MIX the bare and mapping forms.
+   Measured against yaml.v3 rather than assumed. It is now per-entry, symmetric with the collections
+   half beside it.
+
+**And an existing guard caught a defect in the PREVIOUS commit.** `TestHalvesOwnDisjointNamespaces`
+counts what each half advertises; AWX-009 had added `ansible.notification` to `TombstoneSchemes` and
+to the operator grant but **not to `Contracts`** — registration tolerates that, so the projection was
+writing a facet nothing schema-validated. "Own what you project" (§1.1) only holds if the manifest
+points at the shipped schema. Fixed here.
+
+### AWX-009 · where a Controller sends its outcomes, without importing the credentials (2026-07-31)
+
+`notification_templates` → `ansible.notification`, the tenth collection the AAP mirror projects. It
+answers the migration question "where does this Controller send job outcomes, by what driver, and
+which have a hand-written message body I must re-author?" — each row is a Sink to declare on cutover,
+and `notificationType` is its `kind`, which is only a straight mapping because ADR-0125 made a Sink's
+kind name its delivery Action and left core holding no driver list.
+
+**The §2.5 line is the whole design, and the obvious rule is the wrong one.** AWX returns
+`$encrypted$` for `token`/`password` and returns everything else IN THE CLEAR — so "project what AWX
+did not encrypt" reads safe and is not: for the commonest driver the cleartext field IS the
+credential. A Slack or Teams incoming-webhook URL is a bearer secret with the token in its path.
+`configKeys` therefore carries key NAMES only, and the discard happens in `UnmarshalJSON`, so the Go
+type has **no field the values could live in** — structural, not a habit in the normalizer, and
+nothing a well-meaning "just add the endpoint" edit can reach. Same line ADR-0128 D2 drew for
+credentials and ADR-0132 D3 for schedule `extraDataKeys`, applied where it bites hardest. The
+simulator seeds real secret shapes (a webhook URL with a token in the path, a bearer header) so a
+leaking projection has something to fail on.
+
+**A test that could not fail, caught.** The first version of the leak test marshalled the entities
+and grepped for the secrets — but protobuf JSON base64-encodes facet bytes, so it matched nothing in
+either direction. It went green while proving nothing. The fix decodes the facets before searching;
+the note is in the test, because the shape recurs.
+
+**Attachments are absent BY BUDGET and it is stated rather than silent.** Which template notifies
+through which of these, on started/success/error, exists in AWX only as three sub-resources PER
+TEMPLATE — 3×len(job_templates) requests per poll, on the largest collection in any real Controller.
+That is the different-order-of-cost ADR-0131's budget exists to refuse; booked as a detail-tier
+opt-in. The poll-cost test caught the new collection read immediately and its literal was bumped
+deliberately (9 → 10), which is exactly what that constant is for.
+
+### The reach gap closed for network devices — and a password that is only ever a path (ADR-0153)
+
+`ansible-tool.md` called ANS-001 "the one finding that changes what Stratt can be sold as": the ansible
+Actuator spoke **SSH with a private key and nothing else**, so a network fleet or a password-only estate
+was not partially supported, it was unsupported — and no document said so. `ansible.input.v8` closes most
+of it: `connection.type: network_cli | netconf` with a required `networkOS`, plus the three credential
+forms the connection surface had no shape for (ANS-001's password half, ANS-010, ANS-011).
+
+**The credential half was the design, and the mechanism turned out better than the sketch.** The gap
+register assumed a password would have to become a value somewhere. It does not: ansible-core takes all
+three secrets as FILE PATHS — `--connection-password-file`, `--become-password-file`,
+`--vault-password-file` / `--vault-id id@path` — **verified against the interpreter the EE pins, not
+assumed from documentation**. So a password is never a value in the inventory, in extraVars, or in argv.
+The shape everybody writes first, `ansible_password` as an inventory group var, is not a weaker option
+but a forbidden one: `writeInventory` creates `inventory/hosts` at **0644** in the private data dir
+**beside ansible-runner's `artifacts/`**, and §2.5 says material is never written to artifacts. Each
+password resolves through the SAME `credentialFile` helper, gated by the SAME per-name use-grant check —
+no new credential channel, no new authorization path.
+
+**Three refusals, each because the alternative resolves itself silently.** `networkOS` is required for
+the netcommon types because a guessed vendor CONNECTS and then issues another vendor's syntax. A non-ssh
+`type` on a run containing a `local` target is refused, because `local` is a HOST var and host vars beat
+group vars — implicit precedence hiding inside two declarations that each look right (§2.4). And a
+duplicate vault `id` is refused, because ansible resolves that by ORDER, which is a silent winner by
+another name.
+
+**`winrm`/`psrp` are NOT in the enum, deliberately.** Windows is the most-asked-for row in the register,
+and there is no freely-runnable Windows target in CI — so the value would ship as a code path nothing had
+ever executed. An enum that ACCEPTS it fails at 3 a.m. on a fleet someone migrated; one that rejects it
+fails at estate load with a message naming the gap. Same rule as ADR-0151 D3's unimplemented substrates
+and the façade's unconvertible cron: **no answer beats a plausible wrong one.**
+
+**AND THEN VERIFYING IT FOUND THE ADR HALF-APPLIED (D7, same day).** `network_cli` and `netconf` are
+**not in ansible-core**. A Contract accepting the value on the default EE passes review, passes the
+estate load, passes every unit test — and dies at connect time naming a python module the estate never
+wrote, which is verbatim the `community.general.apk` failure `platform.requirements.yml` exists to
+document. D1's argument had been applied to the Contract and not to the runtime.
+
+The shim now refuses a netcommon type the image cannot honor, reading the EE's own run-visible content
+manifest. **Not a probe:** `ansible-doc -t connection <name>` **exits 0 for a plugin that does not
+exist** — measured — so the obvious check silently passes. Declaration errors are reported before image
+errors, and an UNREADABLE manifest is a third outcome rather than a guess in either direction.
+`ee/content/network.requirements.yml` is the other half, a VARIANT rather than a floor entry (the floor
+is bounded to what the platform's own content needs, and no shipped content root speaks to a device),
+carrying `ansible.netcommon` only — vendor collections are the adopter-shaped question ADR-0117 D3 puts
+in a variant. **Verified against real images both ways:** the floor EE fails to load `network_cli` and
+the shim refuses it; the variant resolves both plugins and the shim allows it.
+
+**The honest limit is now narrower and still real: no DEVICE has been driven.** A collection that
+installs is not a connection that works. That needs a CI-runnable target (FRR or cEOS) and is booked in
+the same shape as PLG-1's bastion half — and the parity doc says so in place rather than letting an
+image-verified row imply a proven one.
+
+### The converge side stops naming substrates — and a pod with no sshd is converged (ADR-0156)
+
+Asked whether estate-as-code truly spans vSphere, EC2 and Kubernetes — *change a count from 1 to 3
+and get three more machines* — the build half answered yes and the converge half did not. The reason
+turned out to be an assumption nobody had checked: **"every substrate needs sshd and a network path
+to port 22."**
+
+Measuring the actual collections falsified it. `kubernetes.core.kubectl` needs **nothing in the
+guest**. `community.vmware.vmware_tools` needs **no network path to the guest at all**, because every
+operation travels the vCenter API. `amazon.aws.aws_ssm` goes through a Systems Manager session. The
+harness gap that prompted the whole question — floci ships no sshd (HAR-1) — was never the blocker it
+looked like: two of three substrates never needed one.
+
+**So the transport is OBSERVED, not declared.** `mgmt.transport` sits beside `mgmt.address` — where
+vs by-what-means, both projections of what the provider actually did — and the shim renders it as a
+HOST var. One Assignment converges a pod, a VM and an EC2 instance in ONE Run, and the Intent, the
+Blueprint and the Assignment name no substrate. That is the converge-side equivalent of what ADR-0151
+did for builds, and it is why the Step was the wrong home: connection settings are group vars, one
+value per Run, so a mixed-substrate View could not be converged at all.
+
+**LIVE-PROVEN on kind, with the falsification first.** A pod asserted to have no sshd binary, no ssh
+client and nothing listening on port 22 — then converged by the real EE image and the real shim over
+`kubectl`, the play reporting its hostname from inside the pod. The negative half too: the base EE
+refuses the identical request, naming the missing collection. That retires a real coupling —
+kubecompute had to bake sshd and authorized keys into every pod it built, purely because the
+connection method had been assumed.
+
+**A near-miss worth recording.** The first negative run failed with `unknown field "transport"`, which
+looks like a refusal and is not: the image predated the proto change and its shim could not decode the
+request at all. A stale binary's unrelated error would have been filed as the gate working. Rebuilt
+from current source, it was real. Third time this session that a check which appeared to pass was
+measuring nothing — after `ansible-doc`'s useless exit code and a leak test that grepped base64.
+
+**What is NOT proven, stated rather than implied.** `vmware_tools` is shipped and unit-tested only:
+vspheresim implements the vCenter API but not Tools guest operations. And **`aws_ssm` has no writer at
+all** — the awsec2 Syncer can honestly observe neither EC2 path, because `KeyName` means a key is
+AUTHORIZED rather than that sshd is listening (computing a reach fact, which ADR-0142 D4 forbids), and
+SSM needs a different AWS API. Booked: the SSM client and the transport land together, since a Facet
+has no other writer.
+
+**The EE gate gained a second axis.** ADR-0153 D7 checked collections; `kubectl` and
+`session-manager-plugin` are BINARIES the connection plugin execs, so a collection-only gate would
+pass and fail at connect time. The kubectl binary is pinned by version AND sha256 — a version bounds
+which release, only the checksum bounds which bytes — and the build fails if a version is given
+without one.
+
+### `/api/v2` route breadth is DONE (2026-07-31) — and two refusals are the point
+
+`schedules`, `workflow_job_templates` + `workflow_jobs`, `projects`, and `credentials` +
+`credential_types` all ship. The four families the parity audit named are complete; what remains on
+that front is launch SEMANTICS (`ask_*_on_launch` beyond variables, AWX-015), which is a design
+question about desired state rather than a missing endpoint.
+
+**`projects` needed no design at all**, which is worth recording: ADR-0134 D2 already declares an
+Actuator's `contentDir` to be "one project: playbooks, roles/, group_vars/", one Actuator per
+project. The family is that mapping. The alternative — deriving projects from distinct SCM blocks in
+Step params — would have been core reading a tool's params by name to invent an object, the §1.4 trap
+that ADR spends a paragraph warning implementers about. `scm_type` is manual because nothing clones
+at run time BY DESIGN, and `job_templates.project` is no longer null.
+
+**`credentials` is where §2.5 is easiest to erode.** An AWX credential CONTAINS material; a
+CredentialRef contains a POINTER, and no graph-store method returns material — not redacted, not
+encrypted, none. `inputs` carries the declared injection KEY NAMES with AWX's `$encrypted$` sentinel:
+it asserts "a secret stands here" (true), never "Stratt holds it" (false). The key names are
+Git-declared and already served on /api/v1, so hiding them would hide diagnosis while protecting
+nothing — but the LOCATOR is absent, because it is the address OF material and a compat listing is
+not the place to widen who reads it. One synthetic `credential_type` for every ref: AWX's type says
+what a credential is FOR, Stratt's `backend` says WHO BROKERS IT, and mapping one onto the other is a
+category error that would read as fact.
+
+**Two things were refused rather than half-shipped.** Attaching a credential (or an inventory) at
+launch stays in `ignored_fields` — a Step's credentialRefs are declared and reviewed in Git
+(ADR-0009), and a launch-time swap would make the compat surface the one door that skips that review.
+And `POST /projects/{id}/update/` does not exist: an update means "clone the SCM again", nothing here
+clones, and a no-op would tell an operator their content refreshed.
+
+### Booked by the WFJT façade family (2026-07-31) — a cancel that would have lied
+
+`/api/v2/workflow_job_templates/` + `/workflow_jobs/` shipped, and **14 of the 21 Workflows the
+reference estate ships were invisible on the compat surface until they did**: `job_templates`
+presents only single-Step, Gate-free Workflows, so every DAG, every gated Workflow and every
+policy-checkpointed one had no AWX representation at all — the strangler-fig door failing at exactly
+the shapes an adopter migrates FOR. The launch reuses `orchestrate.LaunchWorkflowRun`, **extracted**
+from `api.Server.launchWorkflow` rather than copied; that function's own comment had warned for two
+ADRs that a second launch path grows its own authz and its own drift, and this was the moment the
+warning came due.
+
+**What was deliberately NOT shipped: `workflow_jobs/{id}/cancel/`.** AWX offers it and it was two
+lines here — but `RunDAG` has **no cancellation handling at all** (no `ctx.Done` path, no terminal
+status write), and the native API has no workflow-run cancel door either. Wiring one only on the
+compat surface would signal Temporal, tear the activities down, and leave `graph.workflow_run` saying
+`running` **forever**: an operator who cancelled would be told the execution is still going, which is
+strictly worse than not offering cancel. A 404 from the mux says "not offered" — absent rather than
+wrong (§1.8). **The real gap is native:** a terminal-status writer in `RunDAG`, with the façade route
+following it. Cancelling a Run (single-Step) already works and is unaffected.
+
+### Open follow-ups from the `fix/seam-continuity-and-fidelity` branch (2026-08-01)
+
+Everything this branch deliberately did NOT finish, in one place, so none of it survives only in a
+session's memory. Each line says what is blocked on what — several are blocked on a **target we do
+not have**, which is a different thing from unfinished work and is marked as such.
+
+**Owed verification (the highest-value items — code that exists and has not been proven):**
+
+- **ADR-0157 Phases 3–5 · WorkflowRun cancellation.** Phase 1 (the `ParentClosePolicy` fix) and
+  Phase 2 (the ADR) shipped. Still to do: the native `POST /api/v1/workflow-runs/{id}/cancel` door,
+  the `/api/v2/workflow_jobs/{id}/cancel/` façade route that was withheld in `1d7ffc0` for exactly
+  this reason, and the **live proof** — cancel a multi-Step DAG mid-Step on kind and assert the
+  WorkflowRun is `canceled`, the child Run is `canceled`, and **the K8s Job is gone**. Only the
+  third distinguishes a real cancel from bookkeeping.
+- **`aws_ssm` has no writer** (ADR-0156). The shim supports the transport; nothing produces it. The
+  awsec2 Syncer can honestly observe neither EC2 path — `KeyName` means a key is AUTHORIZED, not
+  that sshd is listening — so this needs the SSM client and an `ssm:DescribeInstanceInformation`
+  permission. **The SSM client and the transport land together or not at all**, since a Facet has no
+  other writer.
+- **`vmware_tools` is shipped and unit-tested only** (ADR-0156). vspheresim implements the vCenter
+  API but not Tools guest operations, so proving it needs **a real vCenter with a Tools-running
+  guest**. Blocked on a target, not on design.
+- **A live network-device run** (ADR-0153). The collection half is done and image-verified both
+  ways; no real device has been driven. Needs an FRR or cEOS container in CI.
+- **Windows (`winrm`/`psrp`)** (ADR-0153 D1). Blocked on a verifiable target ONLY — and note the
+  plugins are in ansible-core, so no EE variant is needed. It is one enum entry plus a credential
+  form that already exists.
+- **`params-ignored` RunEvent publish** (`6e114fc`). The log half is tested; the publish half is not,
+  because `Activities.Bus` is a concrete `*events.Bus` and no shipped Intent declares `params`.
+- **E2E-1's `e2e:live` CI job.** Deliberately not added blind: a scheduled gate that cannot be made
+  to fire from a dev session is an unverifiable gate, which is the shape this branch spent its
+  length closing.
+
+**BLOCKING for anyone quoting the capstone — `demo:region-to-cert` does not pass from a COLD floor
+(2026-08-01):**
+
+Proof A dies after its gate is approved with:
+
+```
+cause: activity error (type: ExecuteAction …): no action registered as "opentofu/apply"
+       (type: UnknownAction, retryable: false)
+```
+
+**This is almost certainly not new**, and that is the point. The capstone had only ever been run on a
+WARM floor — every plugin already up from a previous run — and it passed there. Making `:run` reset
+its own floor (this branch) is what first exercised the cold path, and the cold path fails. So the
+capstone's green history says less than it appears to.
+
+What was tried and did NOT fix it: reordering the task to wait for every Deployment BEFORE restarting
+strattd, rather than after. That ordering was genuinely wrong and is fixed (`d56790e`) — it is the
+same bug `demo:scale-fleet` hit with `kubecompute/create-host`, where it WAS the whole cause — but
+the capstone still fails.
+
+The unexplained observation, recorded because it is the next thread to pull: after a failed run the
+`stratt-opentofu` pod was **54 seconds old**, i.e. it had come up *after* strattd, despite the task
+having waited for every Deployment to roll out first. Something restarts or replaces that pod after
+the wait completes, and strattd therefore boots against a plugin that is not serving. Whether the
+Action registration can recover from that at all (ADR-0103 promises a no-restart connector
+lifecycle) is the question to answer first — if it can, this is a timing bug; if it cannot, the
+no-restart claim needs revisiting.
+
+**Not investigated further deliberately:** chasing it properly needs more than a guess, and a guess
+committed here would be exactly the "looks fixed, was not measured" failure this branch spent its
+length closing.
+
+**Found by running things, and booked rather than fixed:**
+
+- **`kubecompute` advertises `provisions` but not `decommissions`.** It ships a build Workflow and no
+  teardown Workflow, so an `Intent/Compute` count-DOWN offers nothing on the kubernetes substrate.
+  vcenter has one (`vsphere-vm-teardown`, ADR-0114 D4), so the same edit against `vsphere-dc` would
+  surface gated teardowns. Found by `demo:scale-fleet`, whose leg D reports this rather than
+  asserting a number nobody measured.
+- **`kubecompute` still bakes sshd into every pod it builds.** ADR-0156 makes that coupling
+  removable — the kubectl transport needs nothing in the guest — and it was left in deliberately so
+  the transport change and the pod change are not one variable.
+- **Cross-Cell cancel is unmeasured** (ADR-0157 D6). The ADR does not claim the Gate-decision path
+  federates correctly; that needs a two-Cell floor. Until measured, a peer-homed cancel must fail
+  naming the reason rather than signal the local Temporal.
+
+**Owed reviews (this session's rules barred the subagents):**
+
+- **`charter-guardian` and `vocabulary-linter` on ADR-0150, 0153, 0154, 0155, 0156 and 0157.** Five
+  of those add a Facet namespace or a Contract version; ADR-0150 names two reviews as gating in its
+  own text. A steward must run them.
+- **ADR-0152 stays GATED** on the steward decision it asks for (the §2.1/§2.4 amendment), and its
+  CONTRACT half must land in a LATER release than the expand half (ADR-0078).
+
+**Still open from the plan, unchanged by this branch:**
+
+- **W6 residue** — ANS-013 (pre-flight syntax check), ANS-009 (multi-document playbooks), AWX-015
+  (`ask_*_on_launch` beyond variables; attaching a credential or inventory at launch is deliberately
+  refused today, and that is a desired-state question rather than a missing endpoint).
+- **AWX-005 is DECLINED, not pending** (ADR-0130 D3), and the distinction matters: a projected grant
+  graph is one query from being used as an authorization truth, which no read-shape fix answers.
+  "We looked and said no" must not render the same as "nobody looked".
+- **A cross-plugin composed Workflow still has no shippable home** — every estate hand-copies
+  `cert-issue`. Needs a composition pack (ADR-0033's materialize-into-operator-Git shape).
+- **ADR-0080 slice 2** — `software.package` has a bootstrap write-owner, not the Syncer collector.
+- **`scm_revision` comparison** (ADR-0154 D2) — needs the content half to observe its own git
+  checkout first.
+- **W7** — Automation Hub class, EDA rulebook depth, mesh multi-hop, gateway edges.
 
 > **Note on scope.** The phase tables above cite ADRs through ~0054 (the phase + dark-matter work). Later
 > ADRs (0055–0091) extend the platform beyond the original phase plan — observability/OTel, API admission

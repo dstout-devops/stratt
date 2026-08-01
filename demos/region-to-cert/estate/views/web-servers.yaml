@@ -1,0 +1,10 @@
+# web-servers — the fleet the Intent/Compute builds INTO, and the join that makes the chain a chain.
+#
+# It selects on the `fleet` label the BUILD owns (§2.1 per-key ownership): a kubecompute-build Run
+# projects its host as kind:host, labels{fleet: web}, so the machine lands here the moment it is
+# built and both the app and certificate Assignments start covering it. Nothing had to label it in,
+# which matters because a label key has exactly one owner (ADR-0041) and the builder may not be it.
+name: web-servers
+selector:
+  kinds: [host]
+  labels: { fleet: web }

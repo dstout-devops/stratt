@@ -12,7 +12,7 @@ func TestProxyJumpRendersTheResolvedChain(t *testing.T) {
 	vars, err := connectionVars(
 		&connectionParams{User: "appops", Jump: []connectionAuth{{User: "jump"}}},
 		[]Hop{{Name: "bastion", Address: "10.0.0.9", Port: 2222}},
-		"/runner/known_hosts", oneKey, fakeStage)
+		"/runner/known_hosts", false, oneKey, noEE, fakeStage)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -29,7 +29,7 @@ func TestProxyJumpPreservesNearestFirstOrder(t *testing.T) {
 	vars, err := connectionVars(&connectionParams{}, []Hop{
 		{Name: "edge", Address: "10.0.0.9"},
 		{Name: "inner", Address: "10.1.0.9"},
-	}, "", oneKey, fakeStage)
+	}, "", false, oneKey, noEE, fakeStage)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -102,7 +102,7 @@ func TestDisagreeingChainsAreRefusedNotSilentlyDropped(t *testing.T) {
 // spec without it would drop the hop and connect DIRECT — the failure mode the whole
 // decision exists to prevent, so both layers refuse it.
 func TestHopWithoutAddressIsRefused(t *testing.T) {
-	_, err := connectionVars(&connectionParams{}, []Hop{{Name: "ghost"}}, "", oneKey, fakeStage)
+	_, err := connectionVars(&connectionParams{}, []Hop{{Name: "ghost"}}, "", false, oneKey, noEE, fakeStage)
 	if err == nil || !strings.Contains(err.Error(), "ghost") {
 		t.Fatalf("an addressless hop must be refused by name, got %v", err)
 	}
@@ -111,7 +111,7 @@ func TestHopWithoutAddressIsRefused(t *testing.T) {
 // No chain ⇒ no ProxyJump at all. The overwhelmingly common case must render exactly
 // what it rendered before D3.
 func TestNoChainRendersNoProxyJump(t *testing.T) {
-	vars, err := connectionVars(&connectionParams{User: "appops"}, nil, "/runner/known_hosts", oneKey, fakeStage)
+	vars, err := connectionVars(&connectionParams{User: "appops"}, nil, "/runner/known_hosts", false, oneKey, noEE, fakeStage)
 	if err != nil {
 		t.Fatal(err)
 	}

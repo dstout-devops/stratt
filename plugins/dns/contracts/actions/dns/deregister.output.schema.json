@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "stratt:contract:actions/dns/deregister.output:v1",
+  "title": "dns/deregister output",
+  "description": "Output Contract for the dns/deregister Action (ADR-0144): the RRset that was removed, canonicalized.",
+  "type": "object",
+  "required": ["name", "type"],
+  "properties": {
+    "name": { "type": "string" },
+    "type": { "enum": ["A", "AAAA", "CNAME"] }
+  },
+  "additionalProperties": false
+}

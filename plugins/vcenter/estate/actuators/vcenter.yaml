@@ -21,6 +21,8 @@ environments: [vsphere-dc]
 # capability loss the migration must not introduce, and the mirror of `script`'s dryRunnable: false
 # being a safety property in the other direction.
 dryRunnable: true
+# The landscape this provider builds in (ADR-0151 D1) — vCenter proper and vcsim alike.
+substrate: vsphere
 provides: [provisioning]
 # ── The 15 INVOKE Actions, MOVED here from main.go (ADR-0103) ────────────────────────────────
 # They were registered in Go behind STRATT_VCENTER_PLUGIN_ADDR — a dispatch surface unreviewable
@@ -58,7 +60,14 @@ actionNames:
 # exist. The vcenter SYNCER keeps its own boot grant and stays authoritative for the seven Facet
 # namespaces it observes.
 identitySchemes: [vcenter.uuid, vcenter.network.moref]
-labelKeys: [vcenter.name, source]
+# The CORRELATION LABEL is granted explicitly, and it is not optional garnish: the provisioning
+# loop closes on it. A build projects the Entity it made carrying stratt.intent/instance (Compute) or stratt.intent/singleton (a named singleton), and the next
+# reconcile reads ONLY that key back to see the desired unit as built. It was missing here, and
+# the failure mode is why it stayed missing: Host.toUpsert DROPS an ungranted label key rather
+# than refusing the projection, so the Entity still lands, the Run still goes green, and the sole
+# symptom is a build offered again on the next pass. TestProvisioningActuatorsGrantTheirCorrelationLabel
+# now refuses a `provisions` advertisement without it.
+labelKeys: [vcenter.name, source, stratt.intent/instance, stratt.intent/singleton]
 # provisions advertises vcenter's per-kind build Workflows (ADR-0110 D3). In the vsphere-dc environment
 # BOTH Compute (awsec2 unscoped + vcenter) and Subnet (crossplane/opentofu unscoped + vcenter) have >1
 # provider → per-(class,kind) resolution fails closed on the ambiguity (§2.4); the

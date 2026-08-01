@@ -3,18 +3,18 @@ package contract
 import "testing"
 
 // TestAnsibleHighestVersionResolved locks that the highest-versioned sibling
-// wins the actuators/ansible.input lookup (path-sorted load) — currently v7
-// (`playbook`, ADR-0134), which still carries v6's connection block, the v3 scm
-// content-ref and the v4 extraVars: every version has been additive, since the
-// registry keeps exactly ONE live actuators/ansible.input and a Step cannot pin
-// a version.
+// wins the actuators/ansible.input lookup (path-sorted load) — currently v8
+// (the connection type + the credential forms, ADR-0153), which still carries
+// v7's mounted-project `playbook`, v6's connection block, the v3 scm content-ref
+// and the v4 extraVars: every version has been additive, since the registry keeps
+// exactly ONE live actuators/ansible.input and a Step cannot pin a version.
 func TestAnsibleHighestVersionResolved(t *testing.T) {
 	c, ok, err := Get("actuators/ansible.input")
 	if err != nil || !ok {
 		t.Fatalf("ansible.input contract: ok=%v err=%v", ok, err)
 	}
-	if c.Version != 7 {
-		t.Fatalf("resolved ansible.input version = %d, want 7 (the mounted-project playbook ref, ADR-0134)", c.Version)
+	if c.Version != 8 {
+		t.Fatalf("resolved ansible.input version = %d, want 8 (the connection type + credential forms, ADR-0153)", c.Version)
 	}
 }
 

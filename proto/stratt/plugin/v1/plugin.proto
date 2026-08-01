@@ -542,6 +542,37 @@ message ApplyTarget {
   // drew for the target itself. The plugin renders the connection — ProxyJump, -J,
   // whatever its transport calls it. There is no ssh flag anywhere in core (§1.4).
   repeated JumpHop jump = 6;
+  // transport is HOW this target is reached, resolved from its mgmt.transport Facet
+  // (ADR-0156). Where `address` says WHERE, this says BY WHAT MEANS — the peer fact,
+  // and the one that makes a MIXED-SUBSTRATE target set convergeable: a pod reached by
+  // kubectl, a VM by vmware_tools and an EC2 instance by aws_ssm can sit in one Apply,
+  // because the connection method rides the TARGET rather than the Step's config.
+  //
+  // Absent ⇒ nothing was observed about how to reach this target, and the actuator
+  // applies its own default (ssh, for a connection actuator). That is distinct from an
+  // OBSERVED `ssh` transport, which means a Syncer determined it.
+  Transport transport = 7;
+}
+
+// Transport is a target's observed connection method (ADR-0156 D2).
+//
+// The split is deliberate. `kind` is LEGIBLE — the core carries and logs it exactly as it
+// carries `address`, so a Run's descent can say which transport a target used (§1.8) — but
+// the core NEVER BRANCHES ON IT. That is what keeps the spine from holding a closed set of
+// substrates it would have to grow (§9).
+//
+// `coordinates` is the validated mgmt.transport Facet document, OPAQUE, for the same reason
+// `desired` is: the shape belongs to the transport and is typed by that pinned schema, and a
+// core that parsed it would be learning what a Kubernetes namespace is (§1.5). A typed
+// per-kind message was the alternative and fails the same test — the proto would enumerate
+// every substrate, and adding one would become a port change.
+//
+// COORDINATES, NEVER CREDENTIALS (§2.5). This identifies the target: a pod and namespace, a
+// VM path, an instance id and region. Authenticating to it is the Step's brokered
+// CredentialRef — the same address-vs-credential split ADR-0084 D4 drew for the address.
+message Transport {
+  string kind = 1;
+  bytes coordinates = 2;
 }
 
 // JumpHop is one resolved link in a reached-via chain — a bastion's reachability
@@ -560,6 +591,11 @@ message DestroyRequest {
   Envelope envelope = 1;
   repeated ApplyTarget targets = 2; // symmetry with Apply — the legible teardown set
   Payload desired = 3;              // opaque desired-state the plugin tears down (e.g. the cert commonName, ADR-0050)
+  // Core-resolved capability handles (ADR-0105/0145 D2) — the SAME channel Apply/Plan/Invoke use.
+  // A teardown needs them at least as much as a build does: without the statestore handle, tofu
+  // cannot read the state that says WHAT to destroy, and a destroy against empty state exits zero.
+  // That is how a teardown reports success having touched nothing.
+  map<string, CapabilityHandle> resolved_capabilities = 4;
 }
 
 // InvokeRequest — a targetless Action (RunAction). Args are opaque.
@@ -569,6 +605,18 @@ message InvokeRequest {
   string action = 3; // which advertised Action (ActionDecl.name); "" == the sole Action.
                      // Keeps Envelope.contract purely conformance, never a routing key.
   bool dry_run = 4;  // side-effect-free plan, only where the ActionDecl is dry_runnable
+  // Core-resolved capability handles (ADR-0105), keyed by capability class — the SAME legible
+  // channel as ApplyRequest/PlanRequest.resolved_capabilities, resolved from the DECLARATION's
+  // `requires:` and failing closed when one cannot be resolved (ADR-0145 D2).
+  //
+  // It was absent, and that absence was an accident of sequencing, not a decision: ADR-0105
+  // landed capability injection on the Actuator seam and nothing carried it to the Action seam.
+  // The consequence is that `requires: [statestore, ipam]` on a declaration was a promise only
+  // half its dispatch surface kept — a targetless Action served by the same plugin, under the
+  // same declaration, silently received no handle at all. That made a whole class of builder
+  // (a workspace-scoped `provisioning` provider, whose only correct Step form is a targetless
+  // Action — ADR-0145 D1) unable to compose the capabilities it declares.
+  map<string, CapabilityHandle> resolved_capabilities = 5;
 }
 
 // SubscribeRequest — an Emitter opens a long-lived push stream (invariant #4).
@@ -679,6 +727,22 @@ message ApplyResponse {
   ItemResult result = 3;                // per-target status
   DiffFragment drift = 4;               // observed-vs-expected fragment (ADR-0019)
   DerivedContract derived_contract = 5; // tofu rung-2 / mcp rung-3 schema doc
+  // Typed outputs for cross-Step binding ({{.steps.<name>.outputs.<field>}}), validated against a
+  // PINNED output_contract before capture — the same shape and the same rules InvokeResult has
+  // carried since ADR-0031. Set only on the TERMINAL message.
+  //
+  // ADDED because the asymmetry was arbitrary and load-bearing: an ACTION Step could hand a value
+  // to a later Step and an ACTUATOR Step could not, so every EE-Job step — every ansible step —
+  // was a dead end for data. That made the §2.5 flow cert-issuer's own input Contract DOCUMENTS
+  // unexpressible: the target generates key+CSR (ansible), the CLM signs (action), the signed
+  // certificate is written back (ansible). Step 1 could not hand its CSR to step 2, so the only
+  // shapes available were a CLM-generated key — discarding the born-on-target property the
+  // Contract states in writing — or a fake (CERT-2).
+  //
+  // Both transports decode this message, so one field serves the gRPC Apply and the EE-Job
+  // subprocess alike; a shim emits it exactly as a plugin does.
+  Payload outputs = 6;
+  ContractRef output_contract = 7;
 }
 
 message DestroyResponse {
@@ -697,6 +761,33 @@ message InvokeResult {
   ContractRef output_contract = 2;
   repeated ObservedEntity entities = 3;
   repeated CredentialRef provisioned_creds = 4;
+
+  // consumed_params — the keys of the request's opaque `params` object this
+  // provider actually READ. The core computes `sent - consumed` and surfaces the
+  // difference on the Run; an ignored declaration must be visible, not silent
+  // (§1.8, ADR-0151 D4).
+  //
+  // DECLARE WHAT YOU USED, NOT WHAT YOU IGNORED, and the inversion is the whole
+  // design. The obvious field is `ignored_params`, filled in by the provider —
+  // and it rewards exactly the behaviour it exists to expose, because a provider
+  // that drops params silently returns an empty list and looks perfect. Reported
+  // the other way round, a provider that says nothing has ALL of its params
+  // reported as ignored: silence becomes the loudest possible outcome instead of
+  // the quietest, and no goodwill is required for the honesty to hold.
+  //
+  // It is the same rule the rest of the port already runs on — a plugin
+  // advertises only what it can back, and an unbacked claim is refused rather
+  // than assumed (the ADR-0106 D2 honesty rule).
+  //
+  // The core CANNOT work this out for itself: `params` is opaque by charter
+  // (§1.5), typed by the provider's own Contract, so there is nothing to inspect
+  // — only something to compare against what was sent. That is why the fact has
+  // to cross the port at all.
+  //
+  // Empty is meaningful and is NOT the same as "no params were sent": with an
+  // empty `params` there is nothing to report either way, and the core says
+  // nothing. A provider that legitimately consumes everything lists every key.
+  repeated string consumed_params = 5;
 }
 
 message InvokeResponse {

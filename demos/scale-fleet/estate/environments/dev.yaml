@@ -1,0 +1,14 @@
+# dev — the one reconcile scope this demo runs in (ADR-0142 D1, ADR-0057).
+#
+# BOTH PROOFS RUN HERE, in ONE environment, and that is deliberate. A daemon boots with exactly one
+# STRATT_ENVIRONMENT, so a demo that split the network leg and the app leg across two scopes could
+# not run them on one floor — it would be two demos wearing one directory. The mixed topology is
+# instead DECLARED, in capability-bindings/region-to-cert.yaml: Compute builds on kubernetes,
+# Subnet builds on aws, in the same scope, because the estate says so rather than because a
+# resolver guessed (ADR-0151 D2).
+#
+# It carries no region and no DNS zone, exactly as the reference estate's does: an Environment
+# carries no inheritable facts (ADR-0142 D4). The region is flat in the Intent that needs it.
+name: dev
+description: >
+  The region-to-cert capstone's reconcile scope — one Cell, one environment, two substrates.

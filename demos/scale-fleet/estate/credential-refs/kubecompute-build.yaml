@@ -1,0 +1,14 @@
+# The gate on BUILDING A HOST (§2.5, ADR-0052).
+#
+# GATE-ONLY: kubecompute reaches the Kubernetes API through its own in-cluster ServiceAccount, so no
+# material is brokered and nothing is injected. It exists because an Action's CredentialRef
+# use-check is its ONLY authz gate — the core refuses a credential-free Action outright
+# ("ActionUngated") — and building a host is exactly the verb that must not be reachable by any
+# Principal who merely happens to be able to launch a Workflow.
+#
+# POINTER only: the locator names an authz-marker Secret, never material.
+name: kubecompute-build
+ownerTeam: platform-admins
+backend: k8s-secret
+gateOnly: true
+locator: { namespace: stratt, name: kubecompute-build-authz }

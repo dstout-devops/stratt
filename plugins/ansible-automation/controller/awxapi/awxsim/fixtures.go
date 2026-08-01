@@ -56,6 +56,10 @@ type fProject struct {
 	ScmType   string `json:"scm_type"`
 	ScmURL    string `json:"scm_url"`
 	ScmBranch string `json:"scm_branch"`
+	// Projection-only (AWX-001): the commit AWX last synced, and the current sync state.
+	ScmRevision string `json:"scm_revision,omitempty"`
+	Status      string `json:"status,omitempty"`
+	LastUpdated string `json:"last_updated,omitempty"`
 }
 
 type fWorkflowJT struct {
@@ -98,6 +102,36 @@ type fExecEnv struct {
 	Name  string `json:"name"`
 	Image string `json:"image"`
 	Pull  string `json:"pull,omitempty"`
+}
+
+// fNotification is an AWX notification template (AWX-009) — projection-only.
+//
+// The seeded values matter: `notification_configuration` carries a Slack webhook URL with a
+// token in its path, IN THE CLEAR, because that is what AWX actually returns. AWX encrypts
+// `token` and `password` and leaves the rest alone, so the cleartext field IS the credential
+// for the commonest driver. A simulator that seeded a harmless `{"channel":"#ops"}` would
+// let a projection that leaks values pass every test.
+// fCredentialType is an AWX credential type (AWX-012) — projection-only. One MANAGED (AWX's
+// own) and one CUSTOM, because `managed: false` is the interesting value: a custom type is
+// the one that exists nowhere else on cutover.
+type fCredentialType struct {
+	ID        int            `json:"id"`
+	Name      string         `json:"name"`
+	Kind      string         `json:"kind"`
+	Managed   bool           `json:"managed"`
+	Inputs    map[string]any `json:"inputs"`
+	Injectors map[string]any `json:"injectors"`
+}
+
+type fNotification struct {
+	ID               int            `json:"id"`
+	Name             string         `json:"name"`
+	NotificationType string         `json:"notification_type"`
+	Configuration    map[string]any `json:"notification_configuration"`
+	Messages         map[string]any `json:"messages,omitempty"`
+	SummaryFields    struct {
+		Organization fNamed `json:"organization"`
+	} `json:"summary_fields"`
 }
 
 // fLabel is an AWX label (ADR-0132) — projection-only.
@@ -213,6 +247,8 @@ type estate struct {
 	Users            []fUser
 	Labels           []fLabel
 	ExecutionEnvs    []fExecEnv
+	Notifications    []fNotification
+	CredentialTypes  []fCredentialType
 	TeamMembers      map[int][]fUser
 	Organizations    []fOrganization
 	Teams            []fTeam
@@ -252,8 +288,15 @@ func seed() *estate {
 
 	// Projects: 1 git (SCM content), 2 manual (no content).
 	e.Projects = []fProject{
-		{ID: 1, Name: "infra", ScmType: "git", ScmURL: "https://github.com/example/infra.git", ScmBranch: "main"},
-		{ID: 2, Name: "local-scripts", ScmType: "", ScmURL: ""},
+		{ID: 1, Name: "infra", ScmType: "git", ScmURL: "https://github.com/example/infra.git", ScmBranch: "main",
+			ScmRevision: "9f1c2d3e4a5b6c7d8e9f0a1b2c3d4e5f60718293", Status: "successful",
+			LastUpdated: "2026-07-30T10:00:00Z"},
+		{ID: 2, Name: "local-scripts", ScmType: "", ScmURL: "", Status: "never updated"},
+		// A clone URL with an embedded PAT — what a real estate contains, because it works and
+		// nobody stopped them. A fixture without one would let a verbatim projection pass (§2.5).
+		{ID: 3, Name: "vendor", ScmType: "git", ScmBranch: "release",
+			ScmURL:      "https://svc-account:ghp_REALTOKENHERE@github.example.com/acme/vendor.git",
+			ScmRevision: "abc0123", Status: "failed"},
 	}
 
 	// Credentials.
@@ -300,6 +343,44 @@ func seed() *estate {
 	e.ExecutionEnvs = []fExecEnv{
 		{ID: 80, Name: "pinned-ee", Image: "quay.io/ansible/awx-ee@sha256:" + "abc123def4567890abc123def4567890abc123def4567890abc123def4567890", Pull: "missing"},
 		{ID: 81, Name: "floating-ee", Image: "quay.io/ansible/awx-ee:latest", Pull: "always"},
+	}
+	// Notification templates (AWX-009). SEEDED WITH REAL SECRET SHAPES, deliberately: the
+	// Slack URL carries its token in the path and AWX returns it in the clear, and the webhook
+	// carries a bearer header. If the projection ever leaks a configuration VALUE, these are
+	// what would appear in the graph — which is what makes the leak test able to fail.
+	e.Notifications = []fNotification{
+		{ID: 90, Name: "slack-ops", NotificationType: "slack", Configuration: map[string]any{
+			"channels": []string{"#ops"}, "hook_url": "https://hooks.slack.invalid/services/T00000000/B00000000/XXXXXXXXXXXXXXXXXXXXXXXX",
+		}},
+		{ID: 91, Name: "pager", NotificationType: "pagerduty", Configuration: map[string]any{
+			"subdomain": "acme", "service_key": "$encrypted$", "client_name": "AWX",
+		}, Messages: map[string]any{"error": map[string]any{"body": "{{ job.name }} failed"}}},
+		{ID: 92, Name: "audit-webhook", NotificationType: "webhook", Configuration: map[string]any{
+			"url": "https://audit.example.com/hook?token=s3cr3t", "http_method": "POST",
+			"headers": map[string]any{"Authorization": "Bearer s3cr3t"},
+		}},
+	}
+	e.Notifications[0].SummaryFields.Organization = fNamed{ID: 1, Name: "Platform"}
+	e.Notifications[1].SummaryFields.Organization = fNamed{ID: 1, Name: "Platform"}
+
+	e.CredentialTypes = []fCredentialType{
+		{ID: 1, Name: "Machine", Kind: "ssh", Managed: true, Inputs: map[string]any{
+			"fields": []map[string]any{
+				{"id": "username", "type": "string"},
+				{"id": "password", "type": "string", "secret": true},
+				{"id": "ssh_key_data", "type": "string", "secret": true},
+			},
+		}},
+		{ID: 42, Name: "ACME Vault", Kind: "cloud", Managed: false, Inputs: map[string]any{
+			"fields": []map[string]any{
+				{"id": "url", "type": "string"},
+				{"id": "token", "type": "string", "secret": true},
+			},
+			"required": []string{"url", "token"},
+		}, Injectors: map[string]any{
+			"env":        map[string]any{"ACME_URL": "{{ url }}", "ACME_TOKEN": "{{ token }}"},
+			"extra_vars": map[string]any{"acme_url": "{{ url }}"},
+		}},
 	}
 	e.Labels = []fLabel{{ID: 70, Name: "prod"}, {ID: 71, Name: "critical"}, {ID: 72, Name: "legacy"}}
 	e.Labels[0].SummaryFields.Organization = fNamed{ID: 1, Name: "Platform"}

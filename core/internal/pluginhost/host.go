@@ -42,7 +42,12 @@ type Host struct {
 
 	source     types.Source
 	rejections []Rejection
-	plans      *planstore.Store // set for Actuator hosts (the Plan verb); nil otherwise
+	// expectApplyOutputContract is the core-pinned output contract id for this Actuator's Apply
+	// (ADR-0031's rule, extended to the Apply verb for CERT-2). Empty means the Actuator declares
+	// none, and outputs are then REFUSED rather than captured: an unpinned shape handed to a
+	// downstream Step is a value nobody agreed to.
+	expectApplyOutputContract string
+	plans                     *planstore.Store // set for Actuator hosts (the Plan verb); nil otherwise
 
 	// credCoordinates gates SecretBroker ResolvedRef enrichment (ADR-0052 MF-C): the
 	// host attaches use-checked Secret COORDINATES to the Envelope only on the LOCAL/
@@ -132,6 +137,11 @@ func New(store *graph.Store, client pluginv1.PluginServiceClient, grant Grant, l
 	return &Host{store: store, client: client, grant: grant, credCoordinates: true,
 		log: log.With("plugin", grant.PluginIdentity, "source", grant.Source.Name)}
 }
+
+// WithApplyOutputContract pins the contract this Actuator's Apply outputs are governed against
+// (CERT-2). Unset, outputs are refused: a shape nobody pinned cannot be handed to a downstream
+// Step, which is ADR-0031's rule for Actions applied to the Apply verb.
+func (h *Host) WithApplyOutputContract(id string) *Host { h.expectApplyOutputContract = id; return h }
 
 // Rejections returns the governance refusals recorded so far (test/observability).
 func (h *Host) Rejections() []Rejection { return h.rejections }
@@ -477,6 +487,28 @@ type ActionInvoke struct {
 	// the Envelope on the local path (MF-C). The plugin resolves material itself.
 	Credentials          []Credential
 	ExpectOutputContract string // core-pinned output-contract id; "" skips the reconcile
+	// ResolvedCapabilities are the core-resolved handles (ADR-0105) the declaration's
+	// `requires:` asked for — the SAME legible channel the Apply and Plan paths use, and
+	// carried here for the same reason (ADR-0145 D2): a targetless Action that builds
+	// infrastructure needs its state backend and its allocated network exactly as the
+	// Actuator verb does. Nil when the declaration requires nothing.
+	ResolvedCapabilities map[string]CapabilityHandle
+	// OnEvent receives every TaskEvent the plugin streams during the Invoke, terminal and
+	// non-terminal alike, as it arrives.
+	//
+	// It exists because this loop used to DROP them (DESC-5). The non-terminal events were
+	// `continue`d past with the comment "diagnostic message; the result rides the terminal one",
+	// so an Action's entire diagnostic stream reached nothing: the Run's error read
+	// "helm upgrade failed (rc=1): see the streamed diagnostics" and a live tail of
+	// GET /runs/{id}/events returned stream-end and nothing else. Measured on a real failure whose
+	// identical command succeeded by hand — the difference was unreachable through any supported
+	// path, which is §1.8's failure rather than a missing convenience.
+	//
+	// Streamed rather than accumulated and returned, because a diagnostic that only appears after
+	// the Run finishes cannot help anyone watching one that is stuck.
+	//
+	// Nil is legal and means the caller wants no events (every existing test).
+	OnEvent func(*pluginv1.TaskEvent)
 }
 
 // ActionEntity is a GOVERNED, UNPROJECTED provision→configure observation —
@@ -518,6 +550,17 @@ type RawInvokeResult struct {
 	Entities         []ActionEntity
 	ProvisionedCreds []string
 	Rejections       []Rejection
+	// ConsumedParams are the opaque `params` keys the provider says it READ, passed
+	// through verbatim (ADR-0151 D4). The comparison against what was SENT is not done
+	// here on purpose: `params` is the provisioning launch interface's shape, and the
+	// host is generic — teaching it that an Action's args have a top-level `params`
+	// object would leak one class's convention into the seam every class crosses.
+	// orchestrate builds those params and does the subtraction.
+	//
+	// The EXACT MIRROR of Rejections beside it: a rejection is something the plugin sent
+	// that the core refused, an ignored param is something the core sent that the plugin
+	// refused. Both are governance facts about a Run, and both must reach the operator.
+	ConsumedParams []string
 }
 
 // InvokeRaw calls the plugin's Invoke and returns a GOVERNED result WITHOUT
@@ -537,9 +580,10 @@ func (h *Host) InvokeRaw(ctx context.Context, req ActionInvoke) (RawInvokeResult
 			Principal: &pluginv1.Principal{Id: req.Principal, Kind: "user"},
 			Creds:     creds,
 		},
-		Args:   &pluginv1.Payload{Bytes: req.Args},
-		Action: req.Action,
-		DryRun: req.DryRun,
+		Args:                 &pluginv1.Payload{Bytes: req.Args},
+		Action:               req.Action,
+		DryRun:               req.DryRun,
+		ResolvedCapabilities: wireCapabilities(req.ResolvedCapabilities),
 	})
 	if err != nil {
 		return out, fmt.Errorf("pluginhost: invoke %q: %w", req.Action, err)
@@ -555,17 +599,27 @@ func (h *Host) InvokeRaw(ctx context.Context, req ActionInvoke) (RawInvokeResult
 			}
 			return out, fmt.Errorf("pluginhost: invoke recv: %w", err)
 		}
-		if ev := resp.GetEvent(); ev != nil && ev.GetTerminal() {
-			out.OK = ev.GetOk()
-			if !ev.GetOk() {
-				out.Error = ev.GetMessage() // the real failure cause (§1.8) — the terminal message rides here, no Result
+		if ev := resp.GetEvent(); ev != nil {
+			// EVERY event reaches the caller, not just the terminal one. The terminal message is
+			// the CAUSE; the stream before it is the EVIDENCE, and an Action that reported only
+			// the former left an operator with "see the streamed diagnostics" and nowhere to see
+			// them (DESC-5).
+			if req.OnEvent != nil {
+				req.OnEvent(ev)
+			}
+			if ev.GetTerminal() {
+				out.OK = ev.GetOk()
+				if !ev.GetOk() {
+					out.Error = ev.GetMessage() // the real failure cause (§1.8) — the terminal message rides here, no Result
+				}
 			}
 		}
 		res := resp.GetResult()
 		if res == nil {
-			continue // diagnostic message; the result rides the terminal one
+			continue // a diagnostic-only message; the result rides the terminal one
 		}
 		out.Outputs = res.GetOutputs().GetBytes()
+		out.ConsumedParams = res.GetConsumedParams()
 		// §1.5: the plugin's asserted output contract must match the core-pinned id.
 		if got := res.GetOutputContract().GetSchemaId(); req.ExpectOutputContract != "" && got != "" && got != req.ExpectOutputContract {
 			return out, fmt.Errorf("pluginhost: action %q output-contract drift: plugin asserted %q, core pins %q", req.Action, got, req.ExpectOutputContract)
@@ -678,6 +732,11 @@ type ApplyTarget struct {
 	Vars         map[string]string
 	// Jump is the resolved reached-via chain, nearest hop first (ADR-0126 D3).
 	Jump []JumpHop
+	// Transport is the target's OBSERVED connection method, from its mgmt.transport Facet
+	// (ADR-0156). Kind is legible for descent; Coordinates is the validated document,
+	// opaque here for the same reason `desired` is. Nil ⇒ nothing observed.
+	TransportKind        string
+	TransportCoordinates []byte
 }
 
 // JumpHop is one bastion's reachability coordinate. No credential: authenticating to a
@@ -860,6 +919,13 @@ type RawApplyResult struct {
 	Derived    []DerivedSchema
 	Checkpoint string // graceful-abort resume token (invariant #7); "" == ran to completion
 	Rejections []Rejection
+	// Outputs are the Apply's typed outputs for cross-Step binding, validated against a PINNED
+	// output contract exactly as an Action's are (ADR-0031). Nil when the plugin emitted none.
+	//
+	// Before this existed an ACTUATOR Step could not hand a value to a later Step while an ACTION
+	// Step could, and the asymmetry was arbitrary rather than principled — it made the born-on-
+	// target CSR flow cert-issuer's own Contract documents unexpressible (CERT-2).
+	Outputs json.RawMessage
 }
 
 // applyStatus renders a wire ItemResult.Status as the core-legible per-target
@@ -896,7 +962,11 @@ func (h *Host) ApplyRaw(ctx context.Context, req ApplyInvoke) (RawApplyResult, e
 		for _, h := range t.Jump {
 			hops = append(hops, &pluginv1.JumpHop{Name: h.Name, Address: h.Address, Port: h.Port})
 		}
-		targets = append(targets, &pluginv1.ApplyTarget{Name: t.Name, Address: t.Address, Port: t.Port, IdentityKeys: t.IdentityKeys, Vars: t.Vars, Jump: hops})
+		pt := &pluginv1.ApplyTarget{Name: t.Name, Address: t.Address, Port: t.Port, IdentityKeys: t.IdentityKeys, Vars: t.Vars, Jump: hops}
+		if t.TransportKind != "" {
+			pt.Transport = &pluginv1.Transport{Kind: t.TransportKind, Coordinates: t.TransportCoordinates}
+		}
+		targets = append(targets, pt)
 	}
 	creds := make([]*pluginv1.CredentialRef, 0, len(req.CredentialRefs))
 	for _, n := range req.CredentialRefs {
@@ -1075,6 +1145,28 @@ func (h *Host) govern(ctx context.Context, stream applyStream, resolved, writeSc
 				out.Drift = map[string][]json.RawMessage{}
 			}
 			out.Drift[d.GetItemKey()] = append(out.Drift[d.GetItemKey()], json.RawMessage(d.GetDetail().GetBytes()))
+		}
+		// Typed outputs for cross-Step binding, governed the same way an Action's are (ADR-0031):
+		// the plugin's asserted contract id must match what the core pinned for this Actuator, or
+		// the bytes are refused rather than captured. A Step downstream binds
+		// {{.steps.<name>.outputs.<field>}} against them.
+		//
+		// The pin is what makes this safe to hand to another Step: without it a plugin could assert
+		// any shape and a consumer's binding would break at run time on a value it never agreed to.
+		if outs := resp.GetOutputs(); outs != nil {
+			got := resp.GetOutputContract().GetSchemaId()
+			switch {
+			case h.expectApplyOutputContract == "":
+				rej := Rejection{Kind: "apply-outputs", Detail: got, Reason: "apply: outputs emitted but this Actuator pins no output contract (§1.5)"}
+				h.reject(rej.Kind, rej.Detail, rej.Reason)
+				out.Rejections = append(out.Rejections, rej)
+			case got != "" && got != h.expectApplyOutputContract:
+				rej := Rejection{Kind: "apply-outputs", Detail: got, Reason: "apply: output-contract drift — core pins " + h.expectApplyOutputContract}
+				h.reject(rej.Kind, rej.Detail, rej.Reason)
+				out.Rejections = append(out.Rejections, rej)
+			default:
+				out.Outputs = json.RawMessage(outs.GetBytes())
+			}
 		}
 		// Derived contract: namespace-confined to the plugin's own Source scope.
 		if dc := resp.GetDerivedContract(); dc != nil {

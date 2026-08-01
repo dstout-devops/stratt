@@ -60,12 +60,9 @@ contentInputs: [playbook]
 # Manifest-advertised `implements` (ADR-0140 D1), which a subprocess has no way to supply, so such a
 # route fails closed at resolution with a diagnostic naming the missing advertisement. configmgmt is
 # Workflow-shaped, which is why it works — and why it was the class most damaged by the old rule.
-provides: [configmgmt]
 # WHICH Workflow converges an Intent/Application on this Actuator (ADR-0135 D2). This is the
 # mechanism the attestation above is checked against — declaring the class with no mechanism behind
 # it stays refused as an assertion with nothing under it.
-remediates:
-  Application: web-server-configure
 facetNamespaces:
   - os.kernel
   - os.hardening.sysctl
@@ -73,9 +70,6 @@ facetNamespaces:
   - os.hardening.filesystem
   - os.hardening.auditd
   - os.hardening.services
-  # app.config: the observed application config a remediation reports back
-  # (ADR-0084 fact-back), e.g. the effective listen port after a converge.
-  - app.config
 identitySchemes: [host.name]
 # Privilege escalation, Control-gateable (ADR-0122 D3): core walks this path in each Step's
 # params and derives the `stratt.change/privileged` change-context label from a truthy value. It

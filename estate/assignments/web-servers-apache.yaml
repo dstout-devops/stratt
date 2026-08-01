@@ -1,0 +1,14 @@
+# apache on the hosts Stratt BUILT — and the point of this file is that it needed no new Workflow.
+#
+# `apache-configure` no longer names a View (ADR-0151 follow-on): it inherits the one this
+# Assignment declares. So the SAME converge recipe that serves managed-app serves web-servers, and
+# a host that did not exist an hour ago is covered by adding four lines here rather than by editing
+# the recipe or by labelling the host into somebody else's View — which the one-owner-per-label-key
+# rule (ADR-0041) may not even permit the builder to do.
+name: web-servers-apache
+intent: apache-tier@1
+# The View that selects `fleet: web` — which is what kubecompute stamped on the host it built,
+# from the Intent/Compute's own labels. Nothing here names a substrate.
+view: web-servers
+blueprint: apache@1
+environments: [dev]

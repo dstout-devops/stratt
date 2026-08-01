@@ -30,6 +30,7 @@ import (
 	"github.com/dstout-devops/stratt/core/internal/mcpserver"
 	"github.com/dstout-devops/stratt/core/internal/orchestrate"
 	"github.com/dstout-devops/stratt/core/internal/policy"
+	"github.com/dstout-devops/stratt/core/internal/template"
 	"github.com/dstout-devops/stratt/core/internal/triggers"
 	"github.com/dstout-devops/stratt/types"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
@@ -1350,8 +1351,16 @@ func (s *Server) GetEntity(w http.ResponseWriter, r *http.Request, id string) {
 		var val any
 		_ = json.Unmarshal(f.Value, &val)
 		srcID := f.Provenance.SourceID
+		// The qualifier is carried only when there is one (ADR-0152): an unqualified Facet — which
+		// is almost all of them — renders byte-identically to before, so no client sees churn.
+		var qualifier *string
+		if f.Qualifier != "" {
+			q := f.Qualifier
+			qualifier = &q
+		}
 		doc.Facets[i] = Facet{
 			Namespace: f.Namespace,
+			Qualifier: qualifier,
 			Value:     val,
 			Provenance: Provenance{
 				WriterKind: ProvenanceWriterKind(f.Provenance.WriterKind),
@@ -2109,7 +2118,8 @@ func (s *Server) StartWorkflowRun(w http.ResponseWriter, r *http.Request, name s
 		s.fail(w, err)
 		return
 	}
-	principal, ok := s.authorizeLaunch(w, r, wf)
+	// A direct launch supplies no View to inherit — every actuation Step must name its own.
+	principal, ok := s.authorizeLaunch(w, r, wf, "")
 	if !ok {
 		return
 	}
@@ -2124,7 +2134,7 @@ func (s *Server) StartWorkflowRun(w http.ResponseWriter, r *http.Request, name s
 	if !ok2 {
 		return
 	}
-	s.launchWorkflow(w, r, wf, principal, inputs, changeContext)
+	s.launchWorkflow(w, r, wf, principal, inputs, changeContext, "", "")
 }
 
 // authorizeLaunch enforces View-scoped execution authz (§2.5, ADR-0028): the launching
@@ -2132,12 +2142,31 @@ func (s *Server) StartWorkflowRun(w http.ResponseWriter, r *http.Request, name s
 // per-Step child Runs re-check at the RunAgainstView chokepoint; this is the fail-fast 403 at
 // the door. Shared by both launch doors so remediation cannot become a softer path to the
 // same execution.
-func (s *Server) authorizeLaunch(w http.ResponseWriter, r *http.Request, wf types.Workflow) (string, bool) {
+// defaultView is the View a remediation inherits from its Baseline; "" for a direct launch. An
+// actuation Step with no View of its own is authorized against IT — never skipped, which is what
+// the old `ViewName == ""` test would have done the moment a Step could inherit one. An omitted
+// field must not become a bypassed gate.
+func (s *Server) authorizeLaunch(w http.ResponseWriter, r *http.Request, wf types.Workflow, defaultView string) (string, bool) {
 	for _, st := range wf.Steps {
-		if st.ViewName == "" {
+		view := st.ViewName
+		if view == "" && st.IsActuation() {
+			view = defaultView
+		}
+		if view == "" {
+			// A Gate, a Policy checkpoint, a nested Workflow or an Action — none target a View.
+			// An ACTUATION Step that still has none after inheritance is refused below, at the
+			// point where it would otherwise run against nothing.
+			if st.IsActuation() {
+				writeErr(w, http.StatusConflict, fmt.Sprintf(
+					"workflow %s step %q converges a View but names none, and this launch supplies none "+
+						"to inherit — a Step may omit viewName only when launched from a Finding, whose "+
+						"Baseline says which View the Assignment covers",
+					wf.Name, st.Name))
+				return "", false
+			}
 			continue
 		}
-		if !s.requireGrant(w, r, authz.RelationRunner, "view:"+st.ViewName) {
+		if !s.requireGrant(w, r, authz.RelationRunner, "view:"+view) {
 			return "", false
 		}
 	}
@@ -2177,49 +2206,29 @@ func decodeLaunchBody(w http.ResponseWriter, r *http.Request) (inputs, changeCon
 // validation, and its own drift — which is precisely the §1.6 asymmetry that let MCP POST a
 // nil body for as long as it did. Both doors therefore get identical View-runner authz,
 // identical input validation, and identical Run bookkeeping.
-func (s *Server) launchWorkflow(w http.ResponseWriter, r *http.Request, wf types.Workflow, principal string, inputs, changeContext map[string]any) {
-	// Validate at the DOOR so a caller gets a 400 naming the offending input, rather than a
-	// created-then-failed Run they have to go read (§1.8). This is the same
-	// contract.ResolveLaunchInputs the RunDAG chokepoint calls — one implementation, two
-	// call sites: this one for the error message, that one because no transport can skip it
-	// (ADR-0118 D4). Resolving here also means the defaults are visible in the Run's
-	// recorded params, not conjured later.
-	resolved, verr := contract.ResolveLaunchInputs(wf.Name, wf.Inputs, inputs)
-	if verr != nil {
-		writeErr(w, http.StatusBadRequest, verr.Error())
-		return
-	}
-	// The change context is admitted at the door for the same reason (ADR-0122): a caller
-	// asserting an environment, a core-owned `stratt.change/` label, or an unknown changeClass
-	// gets a 400 naming the key, not a Run that dies inside the DAG. The RunDAG chokepoint calls
-	// the same function, because that is the one nothing can skip.
-	if verr := policy.ValidateChangeContext(changeContext); verr != nil {
-		writeErr(w, http.StatusBadRequest, verr.Error())
-		return
-	}
-
-	wr, err := s.Store.CreateWorkflowRun(r.Context(), wf.Name, "", principal, "")
+// entityScope narrows the launched DAG to one Entity (ADR-0150 D3); "" is the whole View, which is
+// every launch that is not a per-Finding remediation. Passed explicitly rather than inferred, so a
+// direct launch cannot acquire a scope by accident and a remediation cannot lose one.
+func (s *Server) launchWorkflow(w http.ResponseWriter, r *http.Request, wf types.Workflow, principal string, inputs, changeContext map[string]any, entityScope, viewName string) {
+	// The SEQUENCE now lives in orchestrate.LaunchWorkflowRun, because this stopped being the
+	// only door: the AWX façade's workflow_job_templates launch needs the identical validation,
+	// bookkeeping and Temporal start, and a private copy there would be the second launch path
+	// this comment has always warned about. What stays here is what is genuinely HTTP: the
+	// authz check above, and mapping the outcome onto a status code.
+	wr, err := orchestrate.LaunchWorkflowRun(r.Context(),
+		orchestrate.LaunchDeps{Store: s.Store, Temporal: s.Temporal},
+		orchestrate.WorkflowLaunchParams{
+			Workflow: wf, Principal: principal, Inputs: inputs, Context: changeContext,
+			EntityScope: entityScope, ViewName: viewName,
+		})
 	if err != nil {
-		s.fail(w, err)
-		return
-	}
-	temporalID := "wfrun-" + wr.ID
-	_, err = s.Temporal.ExecuteWorkflow(r.Context(), client.StartWorkflowOptions{
-		ID:        temporalID,
-		TaskQueue: orchestrate.TaskQueue,
-	}, orchestrate.RunDAG, orchestrate.DAGInput{
-		WorkflowRunID: wr.ID, WorkflowName: wf.Name, Principal: principal,
-		LaunchParams: resolved, Context: changeContext,
-		// The floor's own environment, not the caller's claim about it (ADR-0122 D2).
-		Environment: s.Store.ActiveEnvironment(),
-	})
-	if err != nil {
-		_ = s.Store.SetWorkflowRunStatus(r.Context(), wr.ID, types.RunFailed, map[string]any{"error": "workflow start failed"})
-		s.fail(w, fmt.Errorf("start workflow run: %w", err))
-		return
-	}
-	wr.TemporalID = temporalID
-	if err := s.Store.SetWorkflowRunTemporalID(r.Context(), wr.ID, temporalID); err != nil {
+		// A caller-supplied input that violates the declared interface, or a change context
+		// that is not admissible, is a 400 naming the offending key (ADR-0118 D4 / ADR-0122)
+		// — not a created-then-failed Run the operator has to go read (§1.8).
+		if errors.Is(err, orchestrate.ErrLaunchInput) {
+			writeErr(w, http.StatusBadRequest, err.Error())
+			return
+		}
 		s.fail(w, err)
 		return
 	}
@@ -2239,6 +2248,11 @@ func (s *Server) GetFindingRemediation(w http.ResponseWriter, r *http.Request, i
 		return
 	}
 	out := FindingRemediation{Baseline: fl.Baseline, Workflow: fl.Workflow}
+	// The blast radius this launch would actually have (ADR-0150 D3): one Entity, not the View.
+	if fl.EntityID != "" {
+		scope := fl.EntityID
+		out.EntityScope = &scope
+	}
 	if fl.Kind != "" {
 		k := FindingRemediationKind(fl.Kind)
 		out.Kind = &k
@@ -2278,7 +2292,7 @@ func (s *Server) RemediateFinding(w http.ResponseWriter, r *http.Request, id str
 		s.fail(w, err)
 		return
 	}
-	principal, ok := s.authorizeLaunch(w, r, wf)
+	principal, ok := s.authorizeLaunch(w, r, wf, fl.ViewName)
 	if !ok {
 		return
 	}
@@ -2302,7 +2316,8 @@ func (s *Server) RemediateFinding(w http.ResponseWriter, r *http.Request, id str
 			clashes, fl.Baseline, what, where, where))
 		return
 	}
-	s.launchWorkflow(w, r, wf, principal, merged, changeContext)
+	// D3: this remediation converges the Entity that drifted, not its whole tier.
+	s.launchWorkflow(w, r, wf, principal, merged, changeContext, fl.EntityID, fl.ViewName)
 }
 
 // mergeRemediationInputs folds a caller's supplied inputs onto the Baseline's compiled ones,
@@ -2337,6 +2352,14 @@ type findingLaunch struct {
 	Baseline string
 	Workflow string
 	Params   map[string]any
+	// ViewName is the View the Baseline was compiled against — the Assignment's `view:`. A
+	// remediation Step that names no View inherits THIS one, so a converge Workflow stays a recipe
+	// rather than a target (§2.4: one binding site per value).
+	ViewName string
+	// EntityID is the Entity this Finding is about — the scope the remediation Run narrows to
+	// (ADR-0150 D3). Empty when the Finding's target is not an Entity (a workspace build), where
+	// the launch converges its Workflow's declared Views as it always has.
+	EntityID string
 	// Kind is the act: types.LaunchRemediate | LaunchRemove | LaunchBuild. All three go
 	// through the same door because from the operator's side all three answer "resolve this
 	// Finding", and all three are named because they are not interchangeable.
@@ -2374,7 +2397,67 @@ func (s *Server) findingRemediation(w http.ResponseWriter, r *http.Request, id s
 		}
 		return types.Finding{}, findingLaunch{}, false
 	}
+	// STAGE TWO of the binding (ADR-0150 D2): the compiler deferred `{{.entity.*}}` because a
+	// Baseline covers a whole View; this Finding names one Entity, so now it resolves.
+	if prob := bindEntityParams(&fl, f, func(id string) (map[string]any, error) {
+		return s.Store.EntityTemplateNamespace(r.Context(), id)
+	}); prob != nil {
+		if prob.Err != nil {
+			s.fail(w, prob.Err)
+		} else {
+			writeErr(w, prob.Status, prob.Message)
+		}
+		return types.Finding{}, findingLaunch{}, false
+	}
 	return f, fl, true
+}
+
+// bindEntityParams resolves a launch's deferred `{{.entity.*}}` tokens against the Finding's
+// Entity (ADR-0150 D2). A launch with no such token is untouched, so this costs nothing for every
+// Baseline that does not use one.
+//
+// FAIL-CLOSED, AND THAT IS THE POINT (§2.4, §1.8). There is no fallback: a host missing the Facet a
+// naming policy asks for does not quietly fall back to its Entity name, its identity, or the
+// Intent's literal. The failure names the Finding, the Entity and the unresolved path, because the
+// alternative — silently binding something else — issues a certificate for the WRONG SUBJECT, and
+// no convenience is worth that. This is the one place ADR-0150 is deliberately less forgiving than
+// an operator might like.
+func bindEntityParams(fl *findingLaunch, f types.Finding, entityNS func(string) (map[string]any, error)) *launchProblem {
+	if len(fl.Params) == 0 || !usesEntityNamespace(fl.Params) {
+		return nil
+	}
+	if f.EntityID == "" {
+		return &launchProblem{Status: http.StatusConflict, Message: fmt.Sprintf(
+			"finding %s binds a per-Entity value (%s) but its target %q is not an Entity, so there "+
+				"is nothing to resolve it against. A per-Entity binding belongs on a Baseline whose "+
+				"targets are Entities",
+			f.ID, template.NamespaceEntity, f.Target)}
+	}
+	ens, err := entityNS(f.EntityID)
+	if err != nil {
+		return &launchProblem{Err: err}
+	}
+	bound, err := template.SubstituteParams(fl.Params, template.Namespaces{template.NamespaceEntity: ens})
+	if err != nil {
+		return &launchProblem{Status: http.StatusConflict, Message: fmt.Sprintf(
+			"finding %s: entity %s (target %q) cannot satisfy a per-Entity binding from baseline %s: %v. "+
+				"The Facet the declaration names is not projected on this Entity — project it, or "+
+				"narrow the View so this Entity is not a member. It is refused rather than "+
+				"substituted, because a value chosen here would be the wrong one",
+			f.ID, f.EntityID, f.Target, fl.Baseline, err)}
+	}
+	fl.Params = bound
+	return nil
+}
+
+// usesEntityNamespace reports whether any param still carries an `{{.entity.*}}` token.
+func usesEntityNamespace(params map[string]any) bool {
+	for ref := range template.References(params) {
+		if ns, _, _ := strings.Cut(ref, "."); ns == template.NamespaceEntity {
+			return true
+		}
+	}
+	return false
 }
 
 // launchProblem is why a Finding routes to nothing: either a decision this code made (Status +
@@ -2401,7 +2484,7 @@ func resolveFindingLaunch(f types.Finding, getBaseline func(string) (types.Basel
 	if f.LaunchWorkflow != "" {
 		return findingLaunch{
 			Baseline: f.Baseline, Workflow: f.LaunchWorkflow,
-			Params: f.LaunchParams, Kind: f.LaunchKind,
+			Params: f.LaunchParams, Kind: f.LaunchKind, EntityID: f.EntityID,
 		}, nil
 	}
 	b, err := getBaseline(f.Baseline)
@@ -2433,7 +2516,7 @@ func resolveFindingLaunch(f types.Finding, getBaseline func(string) (types.Basel
 	}
 	return findingLaunch{
 		Baseline: b.Name, Workflow: b.RemediationWorkflow, Params: b.RemediationParams,
-		Kind: types.LaunchRemediate,
+		Kind: types.LaunchRemediate, EntityID: f.EntityID, ViewName: b.ViewName,
 	}, nil
 }
 

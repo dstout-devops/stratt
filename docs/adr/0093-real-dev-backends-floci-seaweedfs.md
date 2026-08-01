@@ -13,7 +13,7 @@
 ## Context
 
 The AWS connector work needs **real hosts and real storage** to develop against — the steward was
-explicit: *"we can't just sim this."* Today the EC2 dev backend is **moto** (`motoserver/moto:5.2.2`) —
+explicit: _"we can't just sim this."_ Today the EC2 dev backend is **moto** (`motoserver/moto:5.2.2`) —
 a pure API **mock** with no real VMs/hosts. That is fine for exercising API call shapes but cannot test
 what a full-featured connector actually does: SSH/Ansible provisioning, real lifecycle state
 transitions, real object durability.
@@ -27,10 +27,24 @@ governance-safe backend. In scope: EC2 (real hosts) + S3 (real storage).
 
 ## Decision
 
+> **CORRECTION (2026-07-27, measured against floci 1.5.33).** The sentence below claimed
+> "SSH-able, cloud-init/UserData/IMDS" and it is **false**; it was taken from vendor documentation
+> and never verified against the wire. What is real: real Docker containers, real lifecycle state,
+> a real EC2 API, a **fully real network model** (VPC/subnet/security-group/route-table/IGW, with
+> genuine subnet CIDR IPAM), and `ImportKeyPair` genuinely writing `authorized_keys`. What is not:
+> **no AMI ships an `sshd` binary, user-data is never executed (no cloud-init in any image), and
+> `RegisterImage` accepts a custom image then ignores it at launch.** So "SSH-based provisioning
+> runs against genuine Linux hosts" does not hold — an instance is a real machine record with
+> nothing listening. See **HAR-1** in [enterprise-readiness.md](../enterprise-readiness.md); the
+> boundary is now guarded in both directions by `plugins/awsec2/floci_fidelity_live_test.go`. The
+> decision itself stands — floci over moto is still right, and the network half is what the
+> OpenTofu `aws-network` module depends on.
+
 **1. EC2 → Floci** (`floci-io/floci`, MIT), replacing moto in the dev harness. Floci serves the AWS EC2
-API over **real Docker containers** — SSH-able, cloud-init/UserData/IMDS, real lifecycle state — so the
-connector dev-loop (RunInstances/Describe/lifecycle/tags + SSH-based provisioning) runs against genuine
-Linux hosts. Pin `floci-io/floci:1.5.33` by **digest**; verify N-1 in CI.
+API over **real Docker containers** — ~~SSH-able, cloud-init/UserData/IMDS~~, real lifecycle state — so the
+connector dev-loop (RunInstances/Describe/lifecycle/tags ~~+ SSH-based provisioning~~) runs against genuine
+Linux ~~hosts~~ containers. Pin `floci-io/floci:1.5.33` by **digest**; verify N-1 in CI.
+
 - **Explicit tradeoff (steward-accepted): container, not hypervisor VM.** No kernel-module/nested-virt/
   boot-level fidelity. For workloads needing that, a thin EC2-API shim over **KubeVirt** (matches the
   kind substrate) or **Incus** is a **deferred follow-up ADR** — not this slice.
@@ -40,11 +54,13 @@ Linux hosts. Pin `floci-io/floci:1.5.33` by **digest**; verify N-1 in CI.
 **2. S3 → SeaweedFS, bump `3.97 → 4.40`** (`chrislusf/seaweedfs`, Apache-2.0). Already in the harness for
 the evidence store (ADR-0029); the bump keeps it current (4.40, released 2026-07-20; N-1 `4.39`). The
 core S3 API, replication, and bucket versioning remain in the Apache-2.0 core today. Pin by digest.
+
 - **Unchanged caveat (ADR-0029):** SeaweedFS accepts object-lock config but does **not** enforce WORM;
   dev evidence immutability rests on sha256 tamper-evidence + write-once, never backend WORM. Real WORM
   needs a compliant production store. The 4.40 bump does not change this.
 
 **3. Evergreen gates (§1.7)** — wired in CI for both:
+
 - Pin by **digest**, not floating tag; run the S3-path + EC2-connector tests against **both** the
   pinned and N-1 image on every bump.
 - **Floci tripwire (with a concrete trigger — charter-guardian Flag A):** solo-maintainer,
@@ -117,7 +133,7 @@ no plugin code.
   Folded: (A) the Floci fork tripwire now has a concrete trigger + upstream-liveness check; (B) the
   acceptance is dated and bounded dev-harness-only. Precision note (applied): dependency-selection
   governance lives most precisely in **§1.4** (boring/huge-community) + **§1.7** (upgrade record) +
-  **§3** (the MinIO single-vendor warning; SeaweedFS/Garage are charter-*named* reference S3 impls) —
+  **§3** (the MinIO single-vendor warning; SeaweedFS/Garage are charter-_named_ reference S3 impls) —
   §1.3 proper is Stratt's own licensing. The Garage-AGPL-as-unmodified-sidecar reading was affirmed
   correct (mirrors the §3 Ansible subprocess boundary).
 - **vocabulary-linter:** _n/a_ (no new core-model identifiers; `floci`/`seaweedfs` are tool/image names).

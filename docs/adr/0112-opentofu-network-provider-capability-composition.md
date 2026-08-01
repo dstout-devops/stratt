@@ -27,9 +27,20 @@ earlier scan feared (`Intent/Vpc`, route-table Entities) — the _module_ owns t
 
 It is also the convergence slice: the OpenTofu build Actuator declares **`requires: [statestore, ipam]`**, exercising
 provisioning (ADR-0110) + statestore (ADR-0105, finally dogfooded live) + ipam (ADR-0111) together, against **floci**
-— whose canonical docs confirm **real SSH-able Docker-backed instances _and_ full network write** (`CreateVpc`/
+— whose canonical docs confirm ~~**real SSH-able Docker-backed instances _and_**~~ **full network write** (`CreateVpc`/
 `CreateSubnet`/`CreateSecurityGroup`/`CreateRouteTable`/IGW/NAT), so the whole module runs against a genuine (if local)
-AWS surface with real hosts.
+AWS surface.
+
+> **CORRECTION (2026-07-27).** The network half of this sentence is now **measured true** — every call
+> above executes against floci 1.5.33, plus routes, associations, tags and the `Modify*Attribute` calls,
+> with genuine subnet CIDR IPAM. So this ADR's substrate premise holds and D1–D7 stand. The
+> **"SSH-able instances"** half is **false**: no AMI ships sshd, user-data is never executed. Note the
+> tell — the claim's own source was _"canonical docs"_, and this ADR's module README had already booked
+> the "DeepWiki-vs-docs conflict on floci's instance realness" as unresolved. It is resolved and the docs
+> were wrong. Consequence: nothing in this ADR changes (it builds network, not guests), but the
+> provision→**configure** story cannot land on a floci instance. See **HAR-1** in
+> [enterprise-readiness.md](../enterprise-readiness.md); guarded by
+> `plugins/awsec2/floci_fidelity_live_test.go`.
 
 A prior-art scan pre-authorized the direction (it is ADR-0110 D5's literal follow-up) but caught **two mechanics I must
 not gloss**: the capability-handle payload path is statestore-shaped (not generic), and the tofu module has no delivery

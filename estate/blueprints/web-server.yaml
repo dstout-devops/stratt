@@ -12,6 +12,20 @@
 name: web-server
 version: 1
 for: Intent/Application
+# WHICH application this Blueprint installs (ADR-0148 D2). `for:` says which Intent KIND it
+# composes; this says which app it actually knows how to converge — and they are different
+# questions, because Intent/Application composes every app while a Blueprint composes one.
+#
+# It is one Blueprint per app because the tech CASCADES: content selection cannot be data (a
+# templated content ref is refused at load — templating into arbitrary content is a supply-chain
+# hole), so one playbook per Step means one app per Workflow, per route, per Blueprint. Apache and
+# Tomcat differ by far more than a package name anyway — JVM, service unit, webapps dir, a PKCS12
+# keystore rather than PEM.
+#
+# Stating it here is what makes the Intent's own `package:` checkable: an Assignment binding an
+# Intent that asks for tomcat to this Blueprint is refused at load, rather than compiling, running
+# the drift loop, and installing nginx on a fleet that asked for something else.
+delivers: nginx
 severity: warning
 dampingObservations: 1
 # Sane defaults for the composed Intent/Application spec — the BASE overlay layer that an
@@ -50,3 +64,17 @@ routes:
     # than one provider could serve, name the Workflow when the estate has decided. The two are
     # mutually exclusive on a route, refused at compile.
     remediationCapability: configmgmt
+    # The converge gets the SAME resolved value the expectation does (ADR-0118 D3, ADR-0148 D1).
+    #
+    # This was absent, and its absence is why an overriding fleet was broken rather than merely
+    # undefaulted: `observe.equals` above resolves {{.spec.port}} per-Assignment, so web-server-secure
+    # drift-checks 443 — while the remediation carried a literal 8080 and would have converged the
+    # secure fleet to the wrong port, forever, since the Finding can never resolve against a value
+    # the converge does not set.
+    #
+    # It works on a CAPABILITY route, which is worth stating because it looks like it should not:
+    # the compiler resolves remediationCapability to a concrete Workflow BEFORE the params
+    # cross-check runs, so everything downstream sees a plain remediationWorkflow. Naming a class
+    # and parameterizing the converge are not alternatives.
+    remediationParams:
+      nginx_port: "{{.spec.port}}"

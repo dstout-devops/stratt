@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "stratt:contract:facets/ansible.collection:v1",
+  "title": "ansible.collection Facet",
+  "description": "A Galaxy collection in play for a content root, projected read-only by the ansible-project Connector (§1.2) — a foreign artifact, never a Stratt Named Kind. ONE Kind covers BOTH a collection DECLARED as a dependency in requirements.yml and (ANS-007) the collection the repo IS, when a galaxy.yml sits at the root, discriminated by `root`. That is the identical shape ANS-002 gave ansible.role, for the identical reason: 'what collections are in play here, and which one is THIS repo' is one question, and two Kinds would make it two queries and a join. Before ANS-007 a collection-shaped repo 'was not recognized as one — it projected as loose playbooks and roles', which is not merely incomplete but the wrong shape, with the thing an operator most needs to know about that repo (that it publishes acme.platform at 2.1.0) absent entirely. The root collection is identified by its galaxy.yml PATH and a required one by its bare FQCN — a small deliberate asymmetry with the role case, where both spaces are prefixed: required collections have been keyed by bare name since this Syncer shipped, a path cannot collide with an FQCN, and re-keying every existing collection entity for cosmetic symmetry is churn without a property. `dependencies` are the root collection's OWN requirements, which live in galaxy.yml rather than requirements.yml — a projection reading only requirements.yml sees none of them. Closed (§9).",
+  "type": "object",
+  "properties": {
+    "name": { "type": "string", "description": "the FQCN, e.g. community.general" },
+    "version": { "type": "string" },
+    "source": { "type": "string", "description": "the declared source of a required collection" },
+    "root": {
+      "type": "boolean",
+      "description": "the collection this repo IS (from galaxy.yml), rather than one it requires"
+    },
+    "path": {
+      "type": "string",
+      "description": "the galaxy.yml this came from; absent for a required collection"
+    },
+    "description": { "type": "string" },
+    "license": { "type": "array", "items": { "type": "string" } },
+    "dependencies": {
+      "type": "object",
+      "additionalProperties": { "type": "string" },
+      "description": "FQCN → version spec, from the root collection's own galaxy.yml"
+    }
+  },
+  "required": ["name"],
+  "additionalProperties": false
+}

@@ -4,9 +4,59 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/dstout-devops/stratt/types"
 )
+
+// unambiguousLoginKeys decides which identities get the pointable `identity.userName` key
+// (ADR-0155 D1), returning SCIM id → key for those that do.
+//
+// A `user` Entity gains that key as a SECOND way to be ADDRESSED, so a foreign projection that
+// knows a person only by the name they log in with can POINT at them — which is what lets the AWX
+// mirror ask "does this local account match anybody the IdP knows?" without claiming an identity
+// fact it may not write (§2.1).
+//
+// THE KEY IS EMITTED ONLY WHEN THE NAME IS UNAMBIGUOUS, and this projector is the only component
+// that can decide that: it enumerates every IdP in one pass, so it alone can see that `jsmith`
+// exists in two directories. When it does, NEITHER entity gets the key and nothing links — which is
+// the correct answer rather than a gap. Two candidate people is not a person, and picking one would
+// be the implicit precedence §2.4 refuses outright.
+//
+// Lowercased, and that is measured rather than assumed: RFC 7643 §4.1.1 defines SCIM userName as
+// unique across the provider's Users with caseExact:false, so two identities cannot differ only by
+// case — lowercasing cannot merge two distinct people, and it makes the join robust against a
+// Controller storing `JSmith` where the IdP stores `jsmith`.
+//
+// A pure function on purpose: the graph tests are Postgres-gated and SKIP without a database, which
+// is exactly how an inert mechanism stays green in this repo. This rule is the subtle part, so it is
+// testable without one.
+func unambiguousLoginKeys(usersByIDP map[string][]types.SCIMIdentity) map[string]string {
+	claimants := map[string]map[string]bool{}
+	for idp, users := range usersByIDP {
+		for _, u := range users {
+			key := strings.ToLower(strings.TrimSpace(u.UserName))
+			if key == "" {
+				continue
+			}
+			if claimants[key] == nil {
+				claimants[key] = map[string]bool{}
+			}
+			claimants[key][idp] = true
+		}
+	}
+	out := map[string]string{}
+	for _, users := range usersByIDP {
+		for _, u := range users {
+			key := strings.ToLower(strings.TrimSpace(u.UserName))
+			if key == "" || len(claimants[key]) != 1 {
+				continue
+			}
+			out[u.SCIMID] = key
+		}
+	}
+	return out
+}
 
 // scimIdentityProjector is the WriterRef + facet-owner ref for the SCIM→graph
 // identity projection (ADR-0079 slice 3). One name, so the §2.1 facet-ownership
@@ -20,12 +70,18 @@ const scimIdentityProjector = "scim-identity-projector"
 // without displacing this owner — two writers to one subject's identity is a
 // registration error, not a merge.
 func (s *Store) EnsureIdentitySubjectOwner(ctx context.Context) error {
-	if err := s.RegisterFacetOwner(ctx, types.FacetOwner{
-		Namespace: "identity.subject",
-		OwnerKind: string(types.WriterSyncer),
-		OwnerRef:  scimIdentityProjector,
-	}); err != nil {
-		return err
+	// The namespace comes from types rather than a literal here, because the estate loader must
+	// agree that it is owned: a `facetWriteScope` naming a namespace no declaration claims is
+	// refused at load, and this one is claimed by nothing an estate can declare. One list, two
+	// readers — a second copy would let the check and this projector disagree.
+	for _, ns := range types.ProjectorOwnedFacetNamespaces() {
+		if err := s.RegisterFacetOwner(ctx, types.FacetOwner{
+			Namespace: ns,
+			OwnerKind: string(types.WriterSyncer),
+			OwnerRef:  scimIdentityProjector,
+		}); err != nil {
+			return err
+		}
 	}
 	return s.RegisterLabelOwner(ctx, types.LabelOwner{
 		Key:       "identity.name",
@@ -53,6 +109,20 @@ func (s *Store) ProjectSCIMEntities(ctx context.Context) error {
 		return fmt.Errorf("scim-identity-projection: list idps: %w", err)
 	}
 	proj := s.NormalizerProjector()
+
+	// The pointable login-name keys (ADR-0155 D1). Every IdP's users are read ONCE here and
+	// reused below, both because the ambiguity decision needs to see all of them at once and
+	// because reading them twice would double this projection's cost for nothing.
+	usersByIDP := make(map[string][]types.SCIMIdentity, len(idps))
+	for _, idp := range idps {
+		users, err := s.ListIdentities(ctx, idp.Name, "", "")
+		if err != nil {
+			return fmt.Errorf("scim-identity-projection: list identities %q: %w", idp.Name, err)
+		}
+		usersByIDP[idp.Name] = users
+	}
+	loginKeys := unambiguousLoginKeys(usersByIDP)
+
 	for _, idp := range idps {
 		src, err := s.RegisterSource(ctx, types.Source{Kind: "scim", Name: "scim:" + idp.Name})
 		if err != nil {
@@ -60,11 +130,8 @@ func (s *Store) ProjectSCIMEntities(ctx context.Context) error {
 		}
 		prov := types.Provenance{WriterKind: types.WriterSyncer, WriterRef: scimIdentityProjector, SourceID: src.ID}
 
-		// Users → `user` Entities.
-		users, err := s.ListIdentities(ctx, idp.Name, "", "")
-		if err != nil {
-			return fmt.Errorf("scim-identity-projection: list identities %q: %w", idp.Name, err)
-		}
+		// Users → `user` Entities. Read in the unambiguity pass above, not again here.
+		users := usersByIDP[idp.Name]
 		userBatch := make([]EntityUpsert, 0, len(users))
 		for _, u := range users {
 			status := "active"
@@ -86,9 +153,16 @@ func (s *Store) ProjectSCIMEntities(ctx context.Context) error {
 			if err != nil {
 				return fmt.Errorf("scim-identity-projection: marshal user %q: %w", u.SCIMID, err)
 			}
+			keys := map[string]string{"identity.scimId": idp.Name + "/" + u.SCIMID}
+			// The pointable login-name key (ADR-0155 D1) — a second way to ADDRESS an entity
+			// this projector already owns, never a second claim about the person. Absent when
+			// the name is ambiguous across IdPs.
+			if k, ok := loginKeys[u.SCIMID]; ok {
+				keys["identity.userName"] = k
+			}
 			userBatch = append(userBatch, EntityUpsert{
 				Kind:         "user",
-				IdentityKeys: map[string]string{"identity.scimId": idp.Name + "/" + u.SCIMID},
+				IdentityKeys: keys,
 				Labels:       map[string]string{"identity.name": u.UserName},
 				Facets:       map[string]json.RawMessage{"identity.subject": raw},
 			})

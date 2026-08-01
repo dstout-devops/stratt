@@ -21,6 +21,32 @@ environment: dev
 # still auto-wired by the chart but IGNORED — the boot-env blocks for helm+declared are
 # retired (ADR-0103 S7); the estate Connector/Actuator declarations drive registration now.
 plugins:
+  # kubecompute — the `provisioning` capability's provider for Intent/Compute on Kubernetes
+  # (ADR-0151). It BUILDS a host that can actually be converged and then projects how to reach it,
+  # which is what closed the capstone's middle: floci instances ship no sshd, so nothing Stratt
+  # could build was anything Stratt could then converge.
+  - name: kubecompute
+    image:
+      repository: stratt-plugin-kubecompute
+      tag: dev
+      digest: ""
+      pullPolicy: Never # kind-loaded (task image:plugin PLUGIN=kubecompute)
+    # Hosts are built into their OWN namespace, never beside the control plane. deployNamespace
+    # renders the Namespace plus a NAMESPACED Role+RoleBinding, so a compromised builder can create
+    # pods where hosts live and nowhere else — it cannot create one next to strattd.
+    deployNamespace: [stratt-hosts]
+    kubeAccess:
+      apiGroups: [""]
+      # `services` alongside `pods`: the build creates a Service per host, because that is what
+      # CAUSES the DNS name the Syncer projects as mgmt.address (ADR-0142 D4 — observed or caused,
+      # never computed). Without it the host is running and unaddressable.
+      resources: ["pods", "services"]
+      verbs: ["get", "list", "watch", "create", "delete"]
+    hostEnv:
+      STRATT_KUBECOMPUTE_NAMESPACE: stratt-hosts
+    env:
+      STRATT_KUBECOMPUTE_NAMESPACE: stratt-hosts
+      STRATT_KUBECOMPUTE_IMAGE: alpine:3.22
   - name: declared
     image:
       repository: stratt-plugin-declared
@@ -37,3 +63,130 @@ plugins:
       digest: ""
       pullPolicy: Never # kind-loaded (task image:helm-plugin)
     tmpDir: true # writable /tmp for helm's cache (read-only rootfs)
+    # A LEAST-PRIVILEGE deploy target for the chart delivery form (ADR-0148 follow-up b). Without
+    # it the helm plugin's ServiceAccount holds NO kube grant at all in this floor, and
+    # `helm upgrade` exits 1 with the RBAC failure buried in streamed diagnostics — measured, on
+    # the first real launch of the parameterized helm-deploy.
+    #
+    # deployNamespace renders a pre-created Namespace plus a NAMESPACED Role+RoleBinding (ADR-0092
+    # / ADR-0102 Q3), not a cluster-wide ClusterRole: the SA can write into stratt-apps and nowhere
+    # else, holds no cluster-wide `secrets` reach, and cannot create namespaces. The chart creates
+    # the namespace at the OPERATOR's install privilege so the plugin never needs that grant —
+    # which is also why `createNamespace: true` in the Workflow is belt-and-braces rather than the
+    # mechanism.
+    deployNamespace: [stratt-apps]
+    kubeAccess:
+      apiGroups: ["", "apps", "autoscaling"]
+      resources: ["configmaps", "services", "deployments", "serviceaccounts", "secrets", "horizontalpodautoscalers"]
+      verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+    # READ-ONLY and a separate rule (least authority): helm --wait watches Pods and ReplicaSets to
+    # confirm rollout readiness.
+    kubeAccessRead:
+      apiGroups: ["", "apps"]
+      resources: ["pods", "replicasets"]
+      verbs: ["get", "list", "watch"]
+  # kubeservices — the OBSERVE half of the chart delivery form (ADR-0148 follow-up b). It has to be
+  # here because estate/plugins.yaml now admits it: a Connector the estate declares with no pod
+  # behind it registers as unverifiable, which reads as "the backend is down" rather than "no floor
+  # deploys this". It is also backend-free in the same sense declared and helm are — the cluster IS
+  # the system of record, and it is the one this pod already runs in.
+  #
+  # A cluster-wide READ-ONLY grant over Services and nothing else. The chart renders that as a
+  # ClusterRole (the `kubeAccess` branch, whose own comment names a Syncer spanning namespaces as
+  # the case), so there is no kubeconfig to bake and no secrets reach (§2.5).
+  # openbao — the `certissuer` capability's provider (CERT-1, W4). Without this pod the Actuator
+  # cannot be dialled, so it never verifies, so the certificate Blueprint's capability route stays
+  # PENDING and the whole leg compiles to nothing — measured on this floor before it was added.
+  #
+  # The token is the dev root token, literal, exactly as the compose service carries it and for the
+  # same reason: `server -dev` mints it at startup and it dies with the pod. Real deployments broker
+  # a token through a CredentialRef and never hold one in a manifest (§2.5).
+  - name: openbao
+    image:
+      repository: stratt-plugin-openbao
+      tag: dev
+      digest: ""
+      pullPolicy: Never # kind-loaded (task image:plugin PLUGIN=openbao)
+    env:
+      STRATT_OPENBAO_ADDR: http://openbao:8200
+      STRATT_OPENBAO_TOKEN: stratt-dev-root
+  # opentofu — the network leg's builder (ADR-0145). It had an image after PLG-2 and was deployed by
+  # NO floor, so `opentofu-network` sat permanently unverified and its capability route stayed
+  # pending: the floor log reads `actuator pending on dependency … no verified provider for
+  # 'statestore'`. ADR-0145's live proof ran this plugin IN-PROCESS via a Go test, never as a pod —
+  # so the transport it actually ships on had never carried a build.
+  #
+  # tmpDir gives it the writable root its Dockerfile's STRATT_OPENTOFU_DATA_ROOT points at: tofu
+  # writes a per-workspace data dir and a shared provider cache, and the pod rootfs is read-only.
+  - name: opentofu
+    image:
+      repository: stratt-plugin-opentofu
+      tag: dev
+      digest: ""
+      pullPolicy: Never # kind-loaded (task image:plugin PLUGIN=opentofu)
+    tmpDir: true
+    # This plugin FORKS A TOOL, which every other plugin does not. `tofu apply` loads the AWS
+    # provider binary and was OOMKilled (exit 137) at the shared 256Mi default — mid-apply, so it
+    # left an acquired state lock in S3 and every retry then failed with `connection refused`
+    # followed by `Error acquiring the state lock`. Two misleading verdicts for one memory limit.
+    resources:
+      requests: { cpu: 100m, memory: 256Mi }
+      limits: { cpu: "2", memory: 2Gi }
+    env:
+      # tofu's s3 BACKEND authenticates from the pod's own credential chain — the statestore handle
+      # resolves WHERE the state lives, never the material (§2.5: the handle carries coordinates and
+      # an optional CredentialRef, never a secret). Without these `tofu init` dies on
+      # `No valid credential sources found` after accepting the backend config, which reads as a
+      # backend problem rather than a credential one.
+      #
+      # Dev-only literals matching deploy/dev/seaweedfs.yaml's s3.json identity; a real floor sets
+      # the statestore provider's StateCredentialRef and brokers them.
+      AWS_ACCESS_KEY_ID: testing
+      AWS_SECRET_ACCESS_KEY: testing
+  # awss3 — opentofu's `statestore` capability provider. Declaring the builder without it leaves the
+  # route pending on a dependency rather than resolved, which is the fail-closed behaviour working
+  # (§1.8) and not a floor anybody can build a subnet on.
+  - name: awss3
+    image:
+      repository: stratt-plugin-awss3
+      tag: dev
+      digest: ""
+      pullPolicy: Never # kind-loaded (task image:plugin PLUGIN=awss3)
+    env:
+      STRATT_AWSS3_ENDPOINT: http://seaweedfs:8333
+      STRATT_AWSS3_REGION: us-east-1
+      STRATT_AWSS3_PATH_STYLE: "true" # SeaweedFS and most S3-compatibles need path-style
+      # WITHOUT THIS the plugin advertises no `statestore` capability at all — by design, since it
+      # only advertises what it can back. The estate's s3-statestore Actuator is then refused as a
+      # phantom provider and opentofu-network sits pending on a dependency forever. Measured on this
+      # floor before the value was set.
+      STRATT_AWSS3_STATE_BUCKET: stratt-tofu-state
+      AWS_ACCESS_KEY_ID: testing # dev-only, matching deploy/dev/seaweedfs.yaml's s3.json identity
+      AWS_SECRET_ACCESS_KEY: testing
+  # netbox — the `ipam` capability's provider and opentofu-network's LAST unmet dependency (NET-2).
+  # The token is the dev superuser API token deploy/dev/netbox.yaml issues; real deployments broker
+  # it through a CredentialRef (§2.5).
+  - name: netbox
+    image:
+      repository: stratt-plugin-netbox
+      tag: dev
+      digest: ""
+      pullPolicy: Never # kind-loaded (task image:plugin PLUGIN=netbox)
+    env:
+      STRATT_NETBOX_URL: http://netbox:8080
+      # NOT a literal, and that is forced rather than stylistic: NetBox 4.5 GENERATES its API token
+      # and matches the presented value through a key it derives itself, so no value written into
+      # this file could ever authenticate. `task dev:netbox:up` mints one and stores it here.
+      # It is also the §2.5 shape — nothing baked into the chart or the values.
+      STRATT_NETBOX_TOKEN:
+        secretKeyRef: { name: netbox-api-token, key: token }
+  - name: kubeservices
+    image:
+      repository: stratt-plugin-kubeservices
+      tag: dev
+      digest: ""
+      pullPolicy: Never # kind-loaded (task image:plugin PLUGIN=kubeservices)
+    kubeAccess:
+      apiGroups: [""]
+      resources: ["services"]
+      verbs: ["get", "list", "watch"]

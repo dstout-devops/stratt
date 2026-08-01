@@ -46,7 +46,7 @@ var contracts = pluginserve.Contracts(contractFS)
 type Config struct {
 	PluginID string
 	Endpoint string // https://netbox.example/  (the API base is <endpoint>/api)
-	Token    string // NetBox API token — "Authorization: Token <token>"
+	Token    string // NetBox API token; the scheme is inferred from its version (see authorizationHeader)
 	Insecure bool   // dev only
 }
 
@@ -226,7 +226,7 @@ func fetchPage[T any](ctx context.Context, s *Server, u string) (nbList[T], erro
 		return zero, fmt.Errorf("netbox: build request: %w", err)
 	}
 	if s.cfg.Token != "" {
-		req.Header.Set("Authorization", "Token "+s.cfg.Token)
+		req.Header.Set("Authorization", authorizationHeader(s.cfg.Token))
 	}
 	req.Header.Set("Accept", "application/json")
 	resp, err := s.http.Do(req)
@@ -243,4 +243,31 @@ func fetchPage[T any](ctx context.Context, s *Server, u string) (nbList[T], erro
 		return zero, fmt.Errorf("netbox: decode %s: %w", u, err)
 	}
 	return list, nil
+}
+
+// tokenPrefixV2 is NetBox's marker for a v2 API token (users/constants.py: TOKEN_PREFIX = 'nbt_').
+const tokenPrefixV2 = "nbt_"
+
+// authorizationHeader returns the Authorization value for a NetBox API token, choosing the scheme
+// the SAME way NetBox itself infers the version — by the prefix, and by nothing else:
+//
+//	version = 2 if auth_value.startswith(TOKEN_PREFIX) else 1   (netbox/api/authentication.py)
+//
+// v1: `Token <plaintext>`, looked up by the plaintext directly.
+// v2: `Bearer nbt_<key>.<plaintext>`, looked up by the 12-char key and then HMAC-validated against
+// a server-side pepper. The model says the same thing in get_auth_header_prefix().
+//
+// WHY THIS IS INFERRED RATHER THAN CONFIGURED: a token carries its own version, so a `netboxTokenVersion`
+// setting would be a second place for one fact to live and a second thing to get wrong. The prefix is
+// already the discriminator on the server; reusing it means a floor can hand this plugin either
+// generation and neither the estate nor the operator has to know which.
+//
+// It cost a long diagnosis to find, because presenting a v2 token WITHOUT its prefix parses as v1 and
+// fails with `{"detail":"Invalid v1 token"}` — a message that names the version you did not intend to
+// use and says nothing about the one you did.
+func authorizationHeader(token string) string {
+	if strings.HasPrefix(token, tokenPrefixV2) {
+		return "Bearer " + token
+	}
+	return "Token " + token
 }

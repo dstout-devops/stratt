@@ -6,7 +6,7 @@
 # floci real-host EC2 backend (ADR-0093) it runs a REAL RunInstances — a genuine SSH-able Linux
 # container, not a mock (fidelity: real). The build projects the instance back BY IDENTITY ONLY with Run
 # provenance (projectKind + labels ride that projection, never a reconcile write, §1.2); the awsec2
-# Syncer's next OBSERVE then picks it up, so it appears in the ec2-instances View — the build→observe
+# Syncer's next OBSERVE then picks it up, so it appears in the provisioned-instances View — the build→observe
 # closure. The aws-dev CredentialRef is gate-only — an Action's use-check is its only authz gate (§2.5);
 # the plugin authenticates to EC2 with its own config. Delivered as CaC through the declarations mount.
 name: compute-build
@@ -27,9 +27,6 @@ inputs:
     instance:
       type: string
       description: The desired instance's correlation name (namePrefix + ordinal), e.g. web-02.
-    ordinal:
-      type: integer
-      description: Its 1-based position in the fleet.
     projectKind:
       type: string
       description: The Entity kind the built instance projects as.
@@ -42,7 +39,10 @@ inputs:
     placement:
       type: object
       additionalProperties: true
-      description: Declared topology placement (subnet / dmz / availabilityZone), when the Intent declares one.
+      description: >
+        Declared topology placement, ALWAYS present with all fields and empty where nothing is
+        declared (ADR-0123 D2), INCLUDING subnetRef — the provider-native id the reconcile
+        resolves from the declared subnet NAME (ADR-0147 D1).
     params:
       type: object
       additionalProperties: true
@@ -69,3 +69,18 @@ steps:
       # its Finding is for rather than always web-01 (ADR-0120 D2).
       projectKind: "{{.launch.projectKind}}"
       projectLabels: "{{.launch.labels}}"
+      # Placement, carried EXACTLY as the plugin's shipped compute-build carries it, even
+      # though this demo declares no subnet — an unplaced Intent resolves both to "" and the
+      # Action skips the axis (ADR-0123 D2).
+      #
+      # Keeping them identical is the point. This file used to OMIT these two params while the
+      # shipped Workflow sent them, so the live-verified demo proved a Workflow the reference
+      # estate does not use — and it hid PRV-1, where the shipped one failed at launch for
+      # every Intent/Compute. A demo that exercises a different shape than the thing it
+      # demonstrates is worse than no demo. Guarded by TestPluginDemoWorkflowsMatchShipped.
+      # subnetRef, not subnet — see the shipped compute-build. This copy is kept BINDING-FOR-
+      # BINDING identical to it on purpose: the divergence between the two is what hid PRV-1
+      # (the demo ran a Workflow the estate did not), and TestDemoWorkflowsDoNotShadowWithDifferentParams
+      # now refuses a re-divergence rather than trusting anyone to remember.
+      subnetId: "{{.launch.placement.subnetRef}}"
+      availabilityZone: "{{.launch.placement.availabilityZone}}"

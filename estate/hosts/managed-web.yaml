@@ -6,6 +6,19 @@
 # (deploy/dev/managed-web.yaml). Labelled `demo: managed-web` (NOT role: web) so it
 # lands in the dedicated managed-web View only — never double-claiming app.config
 # with the web-hosts fleet (§2.4 exclusive claim).
+#
+# THE LITERAL `address:` BELOW IS THE DOCUMENTED EXCEPTION, not the pattern (ADDR-1,
+# ADR-0144). A hand-written coordinate is legal and sometimes the only truth available —
+# pre-existing estate nobody provisioned, a host whose name predates the platform. It is
+# not what an estate should teach by example, and there are now two producers that remove
+# the need for it: OBSERVED (the substrate reports the machine's own name — ADR-0143) and
+# REGISTERED (the estate declares a name and the `dns` provider creates the record, so the
+# coordinate is a fact Stratt CAUSED — ADR-0144, and see estate/intents/web-dns.yaml).
+#
+# This one stays a literal on purpose: the coordinate is a Kubernetes Service name that
+# the CLUSTER's own DNS owns and Stratt has no business writing into. Registering it in
+# the estate zone would create a second name for one thing, with no server to make it
+# true. Where the estate owns the naming, declare an Intent/DnsRecord instead.
 hosts:
   - fqdn: managed-web-1.stratt.test
     labels: { os: linux, demo: managed-web }

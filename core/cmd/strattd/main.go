@@ -344,12 +344,31 @@ func run(ctx context.Context, log *slog.Logger) error {
 	log.Info("contracts pinned", "count", len(shipped))
 
 	// Bootstrap ownership registrations (§2.1: registration precedes writes).
-	// os.kernel is written back by Runs; owned by the platform team until the
-	// Blueprint compiler owns fact routing (Phase 2, charter-guardian note).
-	if err := store.RegisterFacetOwner(ctx, types.FacetOwner{
-		Namespace: "os.kernel", OwnerKind: "team", OwnerRef: "platform",
-	}); err != nil {
-		return err
+	//
+	// These are namespaces written back by RUNS rather than projected by a Syncer, so no plugin
+	// grant registers them and no Blueprint claims them — the compiler only registers a namespace
+	// a route OBSERVES. Owned by the platform team until fact routing is modelled, which is the
+	// Phase-2 charter-guardian note os.kernel has carried since the beginning.
+	//
+	//   * os.kernel      — gathered facts, written back by every converge.
+	//   * software.package — "apache is installed at version X". ADR-0080 records this Facet as
+	//     having a READER (the patch/advisory check) and no production write-owner, and that gap
+	//     is not academic: the apache converge SUCCEEDED on a freshly-built host and the Run then
+	//     failed on `facet namespace software.package has no registered owner`. The work was done
+	//     and the record of it was refused. A Syncer-owned collector (ADR-0080 slice 2) is the
+	//     real answer; until one ships, the team owns it exactly as it owns os.kernel.
+	//
+	// The LIST now lives in types, because the estate loader has to agree with it: a
+	// `facetWriteScope` naming a namespace nothing owns is refused at load
+	// (checkFacetWriteScopeOwners), and these are owned by nothing an estate declares. Two copies
+	// of the list would make the check and the runtime disagree about what is owned — which is the
+	// exact class of split that check exists to catch, arriving one level up.
+	for _, ns := range types.TeamOwnedFacetNamespaces() {
+		if err := store.RegisterFacetOwner(ctx, types.FacetOwner{
+			Namespace: ns, OwnerKind: "team", OwnerRef: "platform",
+		}); err != nil {
+			return err
+		}
 	}
 
 	// ── event plane ──────────────────────────────────────────────────────
@@ -554,6 +573,12 @@ func run(ctx context.Context, log *slog.Logger) error {
 			FacetNamespaces: []string{
 				"instance.compute", "instance.network", "instance.state",
 				"net.vpc", "net.subnet", "net.securitygroup", "storage.volume",
+				// mgmt.address — the OBSERVED reach coordinate (ADR-0143), second substrate.
+				// Multi-source alongside `declared` and `vcenter` (ADR-0060); NOT authoritative,
+				// for the same reason: these write disjoint Entities, and where they correlate
+				// onto one the fail-safe read omits the value and raises a contention Finding
+				// rather than picking a winner (§2.4).
+				"mgmt.address",
 			},
 			LabelKeys: []string{"aws.region", "aws.name", "stratt.managed"},
 			IdentitySchemes: []string{
@@ -910,6 +935,26 @@ func run(ctx context.Context, log *slog.Logger) error {
 			FacetNamespaces: []string{
 				"vm.config", "vm.runtime", "net.guest", "net.subnet",
 				"storage.datastore", "compute.pool", "net.dvswitch",
+				// mgmt.transport — HOW to reach the VM, beside WHERE (ADR-0156). vCenter reports
+				// guest.toolsRunningStatus, so this is OBSERVED rather than assumed from the
+				// substrate: the plugin claims vmware_tools only for a VM whose Tools are
+				// actually running, and vmware_tools needs no network path to the guest at all
+				// because every operation travels the vCenter API this Syncer already speaks.
+				"mgmt.transport",
+				// mgmt.address — the OBSERVED reach coordinate (ADR-0143). The
+				// mgmt.address schema has named this writer since ADR-0084 and the grant
+				// never carried it, so the projection could not have been written even if
+				// the plugin had emitted one: a vSphere VM had no reach coordinate and
+				// provision→configure was structurally open.
+				//
+				// This makes mgmt.address MULTI-SOURCE (declared + vcenter), which
+				// ADR-0060 explicitly permits — it dropped the per-namespace lock naming
+				// "vSphere and a cloud Syncer would too". NOT declared authoritative:
+				// the two write disjoint Entities in practice, and where they DO correlate
+				// onto one (a CaC host that is also a vSphere VM), the fail-safe read omits
+				// the value and raises a contention Finding rather than picking one (§2.4).
+				// That is the correct outcome, so there is nothing to declare here.
+				"mgmt.address",
 			},
 			LabelKeys: []string{"vcenter.name", "source"},
 			// dns.fqdn is a shared cross-source scheme: only honored because the
@@ -980,7 +1025,14 @@ func run(ctx context.Context, log *slog.Logger) error {
 			return fmt.Errorf("ansible-automation controller plugin dial %s: %w", addr, err)
 		}
 		defer conn.Close()
-		// NINE owned namespaces (ADR-0133 added ansible.executionenvironment — a
+		// TWELVE owned namespaces (AWX-012 added ansible.credentialtype — the SCHEMA a credential
+		// instantiates; `managed: false` is the migration question, since a custom type exists
+		// nowhere else. (AWX-001/ADR-0154 added ansible.project — the content root a
+		// template runs FROM, carrying scm_revision and an ID-joined `uses-project` edge that
+		// makes ADR-0085's orphan signal diagnosable instead of merely present; its scm_url is
+		// projected with any embedded credential removed, §2.5. AWX-009 added ansible.notification — where AWX sends a job's
+		// outcome, name + driver + config KEY NAMES only, because a Slack webhook URL is
+		// itself a bearer credential; ADR-0133 added ansible.executionenvironment — a
 		// SUPPLY-CHAIN fact; AWX instance groups are deliberately NOT projected, because
 		// placement is Sites/Cells and a mirrored one would never govern): ADR-0128 added ansible.credential, ADR-0130 ansible.user,
 		// ADR-0132 ansible.label (an ENTITY, because a plugin's label KEYS are a static
@@ -989,7 +1041,7 @@ func run(ctx context.Context, log *slog.Logger) error {
 		// write-owner, and never read by authz: ADR-0079 INV-3).
 		// ansible.credential is name+kind only (§2.5) so "which templates use this
 		// credential" is a traversal rather than a scan.
-		ansibleSchemes := []string{"ansible.template", "ansible.workflow", "ansible.schedule", "ansible.org", "ansible.team", "ansible.credential", "ansible.user", "ansible.label", "ansible.executionenvironment"}
+		ansibleSchemes := []string{"ansible.template", "ansible.workflow", "ansible.schedule", "ansible.org", "ansible.team", "ansible.credential", "ansible.user", "ansible.label", "ansible.executionenvironment", "ansible.notification", "ansible.project", "ansible.credentialtype"}
 		grant := pluginhost.Grant{
 			PluginIdentity: env("STRATT_ANSIBLE_AUTOMATION_CONTROLLER_PLUGIN_ID", "ansible-automation"),
 			Tier:           pluginhost.Tier(env("STRATT_ANSIBLE_AUTOMATION_CONTROLLER_TIER", "trusted")),
@@ -1007,7 +1059,12 @@ func run(ctx context.Context, log *slog.Logger) error {
 			// reason the two halves must not share a Source (ADR-0085/0127 D1). An extra
 			// IdentityScheme beyond the manifest is legal — Register only requires
 			// TombstoneSchemes ⊆ IdentitySchemes and Contracts ⊆ FacetNamespaces.
-			IdentitySchemes: append(append([]string{}, ansibleSchemes...), "ansible.playbook"),
+			// IdentitySchemes ⊇ FacetNamespaces PLUS two POINTABLE-ONLY schemes, neither of them
+			// writable here: `ansible.playbook` (owned by the CONTENT half) and
+			// `identity.userName` (owned by the SCIM projector, ADR-0155 D1) — the target of the
+			// `same-account-as` edge that makes "which AWX login matches nobody the IdP knows"
+			// answerable WITHOUT this plugin claiming an identity fact it may not write (§2.1).
+			IdentitySchemes: append(append([]string{}, ansibleSchemes...), "ansible.playbook", "identity.userName"),
 		}
 		ctrlClient := pluginv1.NewPluginServiceClient(conn)
 		host := pluginhost.New(store, ctrlClient, grant, log)
@@ -1056,10 +1113,23 @@ func run(ctx context.Context, log *slog.Logger) error {
 			return fmt.Errorf("ansible-automation content plugin dial %s: %w", addr, err)
 		}
 		defer conn.Close()
-		// The four ansible.* projection namespaces this Connector owns (its manifest
-		// advertises exactly these; registration fails on any mismatch). Each is also the
-		// artifact's identity scheme. No relation schemes this slice (flat projection).
-		primitiveSchemes := []string{"ansible.playbook", "ansible.role", "ansible.collection", "ansible.inventory"}
+		// The SEVEN ansible.* projection namespaces this Connector owns (its manifest advertises
+		// exactly these; registration fails on any mismatch). Each is also the artifact's
+		// identity scheme — including the `depends-on` relation's TO scheme, which is
+		// ansible.role, a namespace this same Source already owns, so no cross-source pointable
+		// grant is needed (unlike the controller half's ansible.playbook).
+		//
+		// ansible.varscope is the group_vars/host_vars binding site (ANS-003): scope and KEY
+		// NAMES, never values — a vars file routinely holds credentials in the clear, and a
+		// vaulted one is projected as present-and-vaulted rather than decrypted (§2.5).
+		//
+		// ansible.config is the root's ansible.cfg (ANS-005) — the file that changes the meaning
+		// of everything else in the root, projected as allowlisted VALUES plus the NAMES of
+		// every other key, because a [galaxy_server.*] section holds a real API token (§2.5).
+		// ansible.plugin is the repo's own modules and plugins (ANS-006), name/type/path and
+		// never contents.
+		primitiveSchemes := []string{"ansible.playbook", "ansible.role", "ansible.collection", "ansible.inventory",
+			"ansible.varscope", "ansible.config", "ansible.plugin"}
 		grant := pluginhost.Grant{
 			PluginIdentity: env("STRATT_ANSIBLE_AUTOMATION_CONTENT_PLUGIN_ID", "ansible-automation"),
 			Tier:           pluginhost.Tier(env("STRATT_ANSIBLE_AUTOMATION_CONTENT_TIER", "trusted")),
@@ -1118,6 +1188,56 @@ func run(ctx context.Context, log *slog.Logger) error {
 		}))
 	} else {
 		log.Info("no NetBox plugin configured (STRATT_NETBOX_PLUGIN_ADDR empty); syncer idle")
+	}
+
+	// ── kubecompute Syncer over the port — the OBSERVE half of the builder (ADR-0151) ──
+	// The Actuator half BUILDS a host; this half says how to REACH it. They are separate on
+	// purpose: a pod has no address until it is scheduled, so a builder that returned one would be
+	// asserting a fact it cannot know (§1.2). The address is observed, on a cadence, after the fact.
+	//
+	// Without this the build succeeds, the Entity is projected from the Action's write-back — and
+	// mgmt.address never appears, so nothing can converge the host that was just built. That is the
+	// shape ADR-0142 D4 predicted for a K8s Compute provider: it projects the coordinate it CAUSED,
+	// which is the observed producer again.
+	if addr := os.Getenv("STRATT_KUBECOMPUTE_PLUGIN_ADDR"); addr != "" {
+		sourceName := env("STRATT_KUBECOMPUTE_SOURCE_NAME", "kubecompute")
+		interval, err := time.ParseDuration(env("STRATT_KUBECOMPUTE_INTERVAL", "30s"))
+		if err != nil {
+			return fmt.Errorf("kubecompute interval: %w", err)
+		}
+		conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+		if err != nil {
+			return fmt.Errorf("kubecompute syncer dial %s: %w", addr, err)
+		}
+		defer conn.Close()
+		grant := pluginhost.Grant{
+			PluginIdentity: env("STRATT_KUBECOMPUTE_PLUGIN_ID", "kubecompute"),
+			Tier:           pluginhost.Tier(env("STRATT_KUBECOMPUTE_TIER", "trusted")),
+			Source:         types.Source{Kind: "kubecompute", Name: sourceName},
+			// TWO Facet namespaces, and both are reach: mgmt.address says WHERE, mgmt.transport
+			// says BY WHAT MEANS (ADR-0156). A builder that cannot say how to reach what it built
+			// has not finished the job — but it gets to say nothing else.
+			FacetNamespaces: []string{"mgmt.address", "mgmt.transport"},
+			// AUTHORITATIVE for the hosts it built: it caused the address AND the transport — a
+			// pod is reached by `kubectl exec` because this provider made it a pod — so nothing
+			// else has a better claim on either (ADR-0060's declared-authority path, and
+			// ADR-0142 D4's "observed or caused, never computed").
+			AuthoritativeFacetNamespaces: []string{"mgmt.address", "mgmt.transport"},
+			// The CORRELATION label the provisioning reconcile reads to see the instance as built
+			// (ADR-0120), plus the fleet key a View selects on. NOT `stratt.managed`: a label key has
+			// exactly ONE owner (ADR-0041) and that one is already claimed elsewhere, so asking for
+			// it fails the whole registration and the Syncer never starts — costing the reach
+			// coordinate for a marker this plugin does not need to own.
+			LabelKeys:        []string{"stratt.intent/instance", "fleet"},
+			IdentitySchemes:  []string{"kube.host"},
+			TombstoneSchemes: []string{"kube.host"},
+		}
+		host := pluginhost.New(store, pluginv1.NewPluginServiceClient(conn), grant, log)
+		controllers = append(controllers, homeSupervise(sourceName, host.Register, func(cctx context.Context) error {
+			return host.SyncLoop(cctx, interval)
+		}))
+	} else {
+		log.Info("no kubecompute plugin configured (STRATT_KUBECOMPUTE_PLUGIN_ADDR empty); syncer idle")
 	}
 
 	// ── Crossplane Syncer over the port — the SYNCER half of the dual-verb plugin ──

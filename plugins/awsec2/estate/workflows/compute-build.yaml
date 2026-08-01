@@ -76,8 +76,27 @@ steps:
       # single instance and builds whichever one its Finding is for.
       projectKind: "{{.launch.projectKind}}"
       projectLabels: "{{.launch.labels}}"
-      # Declared placement finally reaches the provider (ADR-0123 D2). Empty strings mean the
-      # Intent declared nothing for that axis; the provider's own Action Contract decides what it
+      # Declared placement reaches the provider (ADR-0123 D2). Empty strings mean the Intent
+      # declared nothing for that axis; the provider's own Action Contract decides what it
       # requires (§1.5) — core does not, and cannot, branch on it (no conditionals, ADR-0083 D5).
-      subnet: "{{.launch.placement.subnet}}"
+      #
+      # NOTE THE NAMES. The launch interface is provider-AGNOSTIC (`placement.subnet` — every
+      # substrate has some notion of a subnet); the Action's params are provider-NATIVE
+      # (`subnetId` — an AWS subnet id). This Workflow is where the two meet, which is exactly
+      # what a per-provider build Workflow is for (§1.5). It previously sent `subnet`, a name
+      # the Action's Contract does not declare, so every build of this fleet failed at LAUNCH
+      # (PRV-1) — now caught at estate load by the param-key gate.
+      #
+      # `subnetRef`, NOT `subnet` (ADR-0147 D1, and this is PRV-2). Fixing PRV-1 got the key
+      # right and left the VALUE wrong: `placement.subnet` is an Intent/Subnet NAME, because a
+      # name is the only thing Git can hold, and it was handed straight to RunInstances as a
+      # subnet id. Measured against floci: `--subnet-id app-subnet` → InvalidSubnetID.NotFound.
+      # The comment above claimed this Workflow is "where the two meet"; no translation existed.
+      #
+      # `subnetRef` is the provider-native identity the RECONCILE resolves from that name, by
+      # intersecting the built subnet's identity keys with the schemes this provider declares —
+      # so core never learns what an AWS subnet id is. If the target is declared but not yet
+      # built, this Finding carries NO launch spec at all and says why (D3), rather than
+      # offering a build that would land the host off its network.
+      subnetId: "{{.launch.placement.subnetRef}}"
       availabilityZone: "{{.launch.placement.availabilityZone}}"

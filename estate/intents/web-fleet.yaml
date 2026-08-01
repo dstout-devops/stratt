@@ -7,9 +7,23 @@
 # (§5 Flow 1). Approve the buildWorkflow → the instance builds → projects back as
 # `kind: host, labels{os: linux, role: web}` → linux-fleet selects it → converged.
 #
-# `builder` is the landscape swap point: awsec2/create-vm (moto in dev) today,
-# one-line change to opentofu / vsphere / crossplane tomorrow — the rest of the
-# estate (the View, the Baselines, the configure Steps) never moves (§1.4/§1.5).
+# THE LANDSCAPE SWAP POINT IS NOT IN THIS FILE, which is the property worth having.
+# `capability-bindings/provisioning-kube.yaml` says `substrate: kubernetes` on one line; change it
+# to `aws` and every provisioning Intent in dev resolves to the other landscape's builders,
+# together (ADR-0151 D2). Nothing here moves, and nothing here names a provider or a substrate.
+#
+# `environments:` is a MEMBERSHIP FILTER (ADR-0057 D2, ADR-0118 D1) — where this Intent is
+# reconciled, never what it means there. The two named are every environment in which the estate
+# binds a Compute provider at all: dev binds the kubernetes substrate, vsphere-dc binds vcenter.
+# Prod is absent because it has two unscoped verified Compute providers and no binding to break the
+# tie, so resolution there fails closed (§2.4) and this fleet was never buildable in it.
+#
+# TWO ENVIRONMENTS, ONE INTENT SET, TWO SUBSTRATES — which is the multi-substrate shape the capstone
+# plan settled on, expressed by the estate rather than by a demo harness. Declaring the scope is
+# also what lets the load-time check ask the builders that will actually run (kubecompute-build,
+# vsphere-vm-build) instead of every builder that exists — see app-tier.yaml for what that cost
+# when it could not.
+environments: [dev, vsphere-dc]
 name: web-fleet
 kind: Intent/Compute
 spec:
@@ -22,10 +36,16 @@ spec:
   # cross-source label unification is an ADR-0058 decision-6 refinement.
   labels: { fleet: web }
   # requires the `provisioning` capability CLASS (ADR-0110) — never a named provider (§1.5). The
-  # reconcile resolves the bound provider + its build Workflow (here awsec2 → compute-build, the sole
-  # verified Compute provider; a binding change swaps it, not this Intent).
+  # reconcile resolves the bound provider + its build Workflow PER ENVIRONMENT: kubecompute →
+  # kubecompute-build in dev, vcenter → vsphere-vm-build in vsphere-dc. Three providers advertise
+  # Compute; a binding change swaps which one serves this Intent, and this file does not move.
   requires: [provisioning]
-  params: # OPAQUE — validated against the resolved provider's own input Contract (§1.5), never typed here
-    region: us-east-1
-    instanceType: t3.micro
-    ami: ami-0linuxbaseline000
+  # NO `params`, and that is a statement rather than an omission. This fleet carried
+  # region/instanceType/ami — AWS coordinates — for a builder that runs for it in neither
+  # environment; kubecompute reported them straight back as `provider params ami,instanceType,region
+  # ignored` on every build. `params` is opaque to core (§1.5), so what belongs in it is whatever the
+  # RESOLVED provider's own Contract reads — and neither builder here reads any of it: a host on
+  # kubernetes is its name, its image and its authorized keys, and vsphere-vm-build keeps its sizing
+  # literal for the very reason this Intent's params were wrong. Bind this to the aws substrate and
+  # the coordinates come back — declared flat, in an Intent scoped to that environment
+  # (ADR-0142 D4 / ADR-0118 D1).

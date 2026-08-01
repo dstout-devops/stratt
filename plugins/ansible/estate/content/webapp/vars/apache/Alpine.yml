@@ -1,0 +1,27 @@
+---
+# Apache's layout on Alpine (ansible_os_family == "Alpine"). Loaded by apache-configure.yml via
+# the stratt_web_service role's prepare tasks.
+#
+# Alpine packages upstream httpd's own layout under the name `apache2`: an httpd.conf carrying the
+# stock `Listen 80`, a conf.d/ include directory, and the `httpd` binary. It is NOT Debian's layout
+# despite sharing the package name — which is exactly the defect these files exist to fix
+# (ANS-014): the play resolved the PACKAGE name from the distro and then hard-coded these paths for
+# every distro, so on Debian it wrote configuration apache never reads and reported success anyway.
+#
+# `svc_pkg` is the ROLE's contract (it installs it and reports it in software.package); the
+# `apache_*` values are this play's own. The split is deliberate documentation of that seam.
+svc_pkg: apache2
+apache_ctl: httpd
+apache_conf_dir: /etc/apache2/conf.d
+apache_listen_conf: /etc/apache2/httpd.conf
+apache_docroot: /var/www/localhost/htdocs
+# TLS: Alpine ships mod_ssl in a SEPARATE package from the server, so serving a delivered
+# certificate is an install as well as a config change. Named per-family for the same ANS-014
+# reason as everything above — Debian and RedHat neither name it this way nor need it separately.
+apache_ssl_pkg: apache2-ssl
+# EMPTY: the apache2-ssl package already ships an ssl.conf carrying both the LoadModule and
+# `Listen 443`. An earlier revision emitted its own and apache refused to start —
+# "Cannot define multiple Listeners on the same IP:port" — so the vhost this play writes must
+# carry ONLY the VirtualHost. Measured on the live host, and the same per-family layout trap
+# ANS-014 records for the plain-HTTP paths above.
+apache_ssl_enable_cmd: ""

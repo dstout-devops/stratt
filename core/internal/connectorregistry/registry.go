@@ -278,6 +278,10 @@ func (r *Registry) enableActuatorLocked(ctx context.Context, a types.Actuator, s
 	if r.plans != nil {
 		host = host.UsePlanStore(r.plans)
 	}
+	// The Apply's output pin rides from the SAME declaration everything else does (CERT-2), so a
+	// replica governs cross-Step outputs by exactly what the estate declared. Empty means this
+	// Actuator hands nothing downstream, and anything it emits is refused rather than captured.
+	host = host.WithApplyOutputContract(a.OutputContract)
 	pa := orchestrate.PluginActuator{
 		Host: host, DryRunnable: a.DryRunnable, Grant: grant, PlanStore: r.plans,
 		JobCommand: a.JobCommand, Image: a.Image, MCP: a.MCP, Requires: a.Requires,
@@ -297,7 +301,11 @@ func (r *Registry) enableActuatorLocked(ctx context.Context, a types.Actuator, s
 	}
 	e := &entry{conn: conn, host: host, actuatorKey: a.Name, specJSON: spec}
 	for _, an := range a.ActionNames {
-		if err := r.plugins.RegisterAction(an, orchestrate.PluginAction{Host: host, DryRunnable: a.DryRunnable}); err != nil {
+		// Requires rides from the SAME declaration the Actuator got it from (ADR-0145 D2).
+		// One declaration, one `requires:`, both its dispatch surfaces — otherwise a build
+		// served as an Action silently runs without the statestore/ipam its sibling Apply
+		// is guaranteed.
+		if err := r.plugins.RegisterAction(an, orchestrate.PluginAction{Host: host, DryRunnable: a.DryRunnable, Requires: a.Requires}); err != nil {
 			r.setStatus(key, false, "action "+an+": "+err.Error())
 			r.log.Warn("connectorregistry: action register rejected", "name", a.Name, "action", an, "err", err)
 			continue // keep the actuator; the action collided
@@ -418,7 +426,7 @@ func (r *Registry) enableConnectorLocked(ctx context.Context, c types.Connector,
 	// everywhere else. The Actuator path has always done this; the Connector path had the
 	// verification without the registration.
 	for _, an := range c.ActionNames {
-		if err := r.plugins.RegisterAction(an, orchestrate.PluginAction{Host: host}); err != nil {
+		if err := r.plugins.RegisterAction(an, orchestrate.PluginAction{Host: host, Requires: c.Requires}); err != nil {
 			// §2.4 collision → reject + surface, never a crash (D4/D6). Roll back what this
 			// enable already registered so a partial dispatch surface never survives the failure.
 			for _, done := range e.actionNames {

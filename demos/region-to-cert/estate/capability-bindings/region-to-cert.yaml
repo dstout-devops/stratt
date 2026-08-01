@@ -1,0 +1,38 @@
+# THE ONE FILE IN THIS DEMO THAT NAMES A SUBSTRATE. Everything above it — every Intent, Blueprint
+# and Assignment — names a capability CLASS and nothing else (ADR-0110, §1.5). Grep the rest of this
+# estate for `kubernetes`, `aws`, `kubecompute`, `openbao` or `opentofu` and there is nothing to
+# find; the demo's runner asserts exactly that, because a portability claim nobody checks is a
+# portability claim that rots.
+#
+# TWO ENTRIES, TWO SUBSTRATES, ONE SCOPE — the mixed topology the capstone actually is.
+name: region-to-cert
+environments: [dev]
+entries:
+  # COMPUTE BUILDS ON KUBERNETES. Selected by a property the PROVIDERS declare (ADR-0151 D1), not by
+  # a provider name: change `kubernetes` to `aws` and every Compute Intent in this scope resolves to
+  # the other landscape's builders, together, with nothing above this line moving. That is the
+  # property worth having, and its honest limit is recorded in ADR-0151 D4 — the line moves the
+  # BUILDER, not provider-shaped `params` an Intent may be carrying.
+  #
+  # SCOPED TO Compute, because Kubernetes has no subnet. Pod addressing is cluster-wide and
+  # CNI-owned, a Namespace is an API scope rather than a segment, and NetworkPolicy carries no
+  # address range at all. Of the three things an Intent/Subnet means on AWS — an allocated CIDR, a
+  # placement target, an isolation boundary — only the third has a Kubernetes analogue and it has no
+  # addresses in it. Unscoped, this entry would claim Subnet too and the resolver would correctly
+  # refuse it.
+  - capability: provisioning
+    substrate: kubernetes
+    intentKind: Compute
+  # SUBNETS COME FROM THE SUBSTRATE THAT HAS THEM. Named by provider rather than by substrate
+  # because this floor admits exactly one Subnet builder; `substrate: aws` would say the same thing
+  # and would start claiming Compute the day a second aws provider is admitted.
+  #
+  # THIS IS WHY THE CAPSTONE IS TWO PROOFS AND NOT ONE CHAIN. A host cannot be placed in this
+  # subnet: the placement resolver refuses to put a pod in an AWS subnet, correctly (ADR-0147 D3),
+  # and no single dev substrate offers both halves — floci has real networks and no bootable
+  # machines (measured 2026-07-27, HAR-1), Kubernetes has bootable machines and no networks. The
+  # demo proves the network leg on aws and the build → converge → certificate leg on kubernetes, and
+  # says so out loud rather than staging a join that does not exist.
+  - capability: provisioning
+    provider: opentofu-network
+    intentKind: Subnet

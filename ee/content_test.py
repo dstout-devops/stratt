@@ -17,12 +17,14 @@ from pathlib import Path
 import content
 import pytest
 from content import (
+    PLATFORM_FLOOR,
     PinError,
     _tree_digest,
     check_locks,
     lock_path_for,
     verify,
     verify_lock,
+    verify_platform_floor,
 )
 
 
@@ -380,6 +382,70 @@ def test_shipped_declaration_is_locked() -> None:
     """
     shipped = Path(__file__).parent / "content" / "crypto.requirements.yml"
     assert check_locks([shipped]) > 0, "the shipped declaration must lock at least one artifact"
+
+
+# ── ANS-012: every EE variant carries the platform floor ─────────────────────────────────
+#
+# The defect these guard: the default EE was built with EE_CONTENT="" and shipped zero
+# collections, so `ansible.builtin.package` — a DISPATCHER whose apk/zypper/pacman
+# implementations live in community.general, not ansible-core — could not install a package on
+# Alpine at all. It was found by RUNNING content (`task dev:content:proof`), never by reading it:
+# every shipped content root uses `ansible.builtin.*` exclusively, so no static scan for FQCNs
+# has anything to find. The dependency is created by ansible's runtime dispatch on the target.
+#
+# What is checkable statically is the SECOND half — that a variant never silently subtracts from
+# the floor — because `install` refuses two requirements files per image (a lockfile records the
+# installed closure, which cannot be attributed to one of several declarations), so a variant must
+# REPEAT the floor rather than compose it, and repeated declarations drift.
+
+
+def _floor_pair(tmp_path: Path, floor: str, variant: str) -> list[Path]:
+    (tmp_path / PLATFORM_FLOOR).write_text(floor)
+    (tmp_path / "variant.requirements.yml").write_text(variant)
+    return sorted(tmp_path.glob("*.requirements.yml"))
+
+
+_FLOOR = 'collections:\n  - name: community.general\n    version: "13.2.0"\n'
+
+
+def test_shipped_variants_carry_the_platform_floor() -> None:
+    """The real ee/content/ set must satisfy its own rule — a gate nothing satisfies is theatre."""
+    shipped = sorted((Path(__file__).parent / "content").glob("*.requirements.yml"))
+    assert verify_platform_floor(shipped) > 0, "no variant was checked; the rule guards nothing"
+
+
+def test_a_variant_that_drops_a_floor_entry_is_refused(tmp_path: Path) -> None:
+    """A variant exists to ADD capability, never to subtract it.
+
+    Selecting the crypto EE for its openssl modules must not also, invisibly, be selecting an
+    environment that can no longer install a package on Alpine — the strictly-weaker-Actuator-
+    that-looks-identical failure ADR-0117 D3a already hit once with facet grants.
+    """
+    paths = _floor_pair(tmp_path, _FLOOR, 'collections:\n  - name: community.crypto\n    version: "2.22.3"\n')
+    with pytest.raises(PinError, match="platform floor"):
+        verify_platform_floor(paths)
+
+
+def test_a_variant_that_repins_a_floor_entry_is_refused(tmp_path: Path) -> None:
+    """Present-at-a-different-version is not carrying the floor.
+
+    A floor whose content depends on which image a Step happened to select is a fleet with two
+    answers to "can this platform install a package on Alpine" — §2.4's implicit-precedence hazard
+    wearing a supply-chain hat.
+    """
+    paths = _floor_pair(
+        tmp_path, _FLOOR, 'collections:\n  - name: community.general\n    version: "13.1.0"\n'
+    )
+    with pytest.raises(PinError, match="13.2.0"):
+        verify_platform_floor(paths)
+
+
+def test_an_absent_floor_is_refused(tmp_path: Path) -> None:
+    """The floor file must EXIST. Its absence is the original ANS-012 defect exactly: an EE whose
+    content set is an empty build arg, chosen by nobody and reviewable by no one."""
+    (tmp_path / "variant.requirements.yml").write_text(_FLOOR)
+    with pytest.raises(PinError, match="no platform floor"):
+        verify_platform_floor([tmp_path / "variant.requirements.yml"])
 
 
 # ── ADR-0124 D1: the ansible-builder execution-environment.yml front door ────────────────

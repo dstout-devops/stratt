@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/jackc/pgx/v5"
@@ -105,11 +106,13 @@ func (s *Store) RelationSources(ctx context.Context, toID, relType string) ([]st
 // GetFacets returns all Facets of an Entity with their Provenance — the
 // "why is this value here" surface (charter §2.1, §1.8).
 func (s *Store) GetFacets(ctx context.Context, entityID string) ([]types.Facet, error) {
+	// ORDER BY (namespace, qualifier) so a qualified namespace's rows come back in a stable,
+	// readable order — descent over "what does this host run" should not depend on row order.
 	rows, err := s.pool.Query(ctx, `
-		SELECT entity_id, namespace, value, prov_writer_kind, prov_writer_ref, coalesce(prov_source_id, ''), prov_at
+		SELECT entity_id, namespace, qualifier, value, prov_writer_kind, prov_writer_ref, coalesce(prov_source_id, ''), prov_at
 		FROM graph.facet
 		WHERE entity_id = $1
-		ORDER BY namespace`, entityID)
+		ORDER BY namespace, qualifier`, entityID)
 	if err != nil {
 		return nil, fmt.Errorf("graph: get facets: %w", err)
 	}
@@ -119,13 +122,98 @@ func (s *Store) GetFacets(ctx context.Context, entityID string) ([]types.Facet, 
 	for rows.Next() {
 		var f types.Facet
 		var wk string
-		if err := rows.Scan(&f.EntityID, &f.Namespace, &f.Value, &wk, &f.Provenance.WriterRef, &f.Provenance.SourceID, &f.Provenance.At); err != nil {
+		if err := rows.Scan(&f.EntityID, &f.Namespace, &f.Qualifier, &f.Value, &wk, &f.Provenance.WriterRef, &f.Provenance.SourceID, &f.Provenance.At); err != nil {
 			return nil, fmt.Errorf("graph: scan facet: %w", err)
 		}
 		f.Provenance.WriterKind = types.WriterKind(wk)
 		out = append(out, f)
 	}
 	return out, rows.Err()
+}
+
+// FacetKey identifies a Facet WITHIN an Entity: the namespace it is named by, and — since
+// ADR-0152 — which of several same-namespace Facets it is. Empty qualifier is the ordinary case.
+type FacetKey struct {
+	Namespace string
+	Qualifier string
+}
+
+// ResolvedFacetsByEntity returns ONE effective value per (namespace, qualifier) on an Entity,
+// resolving multi-source contention the same way the scalar routing read does.
+//
+// IT EXISTS BECAUSE THE DRIFT EVALUATOR WAS PICKING BY ROW ORDER. The Baseline evaluator built its
+// lookup by ranging GetFacets into a map keyed by namespace, so when two sources projected one
+// namespace onto one Entity the LAST row scanned won — an arbitrary choice, made by Postgres's
+// return order, about which observation a compliance check is evaluated against. ADR-0060 shipped
+// the multi-source grain and gave FacetValuesByEntities the declared-authority collapse; this read
+// path never learned about it. Booked as ADR-0152 follow-up 6 rather than claimed as fixed by that
+// ADR, and closed here.
+//
+// Not reachable in the shipped estate today — every namespace a Baseline observes has exactly one
+// writer (checked: of app.config, app.deliverable, access.grants, fileset.content, cert.presented
+// and stratt-apps, only app.deliverable has a Syncer writer and no Run write-scope includes it) —
+// which is precisely why it had to be fixed on purpose rather than by a failing test. It becomes
+// reachable the day someone adds a write-scope over a Syncer-owned namespace.
+//
+// CONTENDED KEYS ARE OMITTED, NOT GUESSED, and returned in the second value. A drift check that
+// silently evaluates one of two disagreeing observations reports compliance it cannot justify; one
+// that reports the value as absent is wrong in the honest direction, and the ownership-contention
+// Finding names the contention itself (§2.4, §1.8).
+func (s *Store) ResolvedFacetsByEntity(ctx context.Context, entityID string) (map[FacetKey]json.RawMessage, []FacetKey, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT f.namespace, f.qualifier, f.value,
+		       (o.owner_ref IS NOT NULL) AS is_authority
+		FROM graph.facet f
+		LEFT JOIN graph.facet_owner o
+		  ON o.namespace = f.namespace AND o.owner_ref = f.prov_writer_ref AND o.authoritative
+		WHERE f.entity_id = $1`, entityID)
+	if err != nil {
+		return nil, nil, fmt.Errorf("graph: resolved facets: %w", err)
+	}
+	defer rows.Close()
+	type candidate struct {
+		val         json.RawMessage
+		isAuthority bool
+	}
+	perKey := map[FacetKey][]candidate{}
+	for rows.Next() {
+		var k FacetKey
+		var val json.RawMessage
+		var isAuthority bool
+		if err := rows.Scan(&k.Namespace, &k.Qualifier, &val, &isAuthority); err != nil {
+			return nil, nil, fmt.Errorf("graph: scan resolved facet: %w", err)
+		}
+		perKey[k] = append(perKey[k], candidate{val, isAuthority})
+	}
+	if err := rows.Err(); err != nil {
+		return nil, nil, err
+	}
+	out := make(map[FacetKey]json.RawMessage, len(perKey))
+	var contended []FacetKey
+	for k, cands := range perKey {
+		if len(cands) == 1 {
+			out[k] = cands[0].val
+			continue
+		}
+		var auth []json.RawMessage
+		for _, c := range cands {
+			if c.isAuthority {
+				auth = append(auth, c.val)
+			}
+		}
+		if len(auth) == 1 {
+			out[k] = auth[0]
+			continue
+		}
+		contended = append(contended, k)
+	}
+	sort.Slice(contended, func(i, j int) bool {
+		if contended[i].Namespace != contended[j].Namespace {
+			return contended[i].Namespace < contended[j].Namespace
+		}
+		return contended[i].Qualifier < contended[j].Qualifier
+	})
+	return out, contended, nil
 }
 
 // GetObservedBy returns the Sources that currently observe an Entity and when
@@ -159,9 +247,35 @@ func (s *Store) GetObservedBy(ctx context.Context, entityID string) ([]types.Sou
 // — the dispatch-routing read path (ADR-0032): a single query for mgmt.site
 // over a resolved View, avoiding an N+1 GetFacets fan-out. Entities without the
 // Facet are simply absent from the returned map.
+//
+// It is a SCALAR read, so it resolves the EMPTY QUALIFIER ONLY (ADR-0152 D5). A qualified
+// namespace has no single value on an Entity by construction, and picking one of several would be
+// exactly the silent-precedence this whole design refuses. The suppressed qualifiers come back in
+// the second return so the caller can say WHY the value vanished rather than degrading quietly —
+// see FacetValuesByEntitiesScoped, which this delegates to, for why that return is not optional.
 func (s *Store) FacetValuesByEntities(ctx context.Context, namespace string, entityIDs []string) (map[string]json.RawMessage, error) {
+	vals, _, err := s.FacetValuesByEntitiesScoped(ctx, namespace, entityIDs)
+	return vals, err
+}
+
+// FacetValuesByEntitiesScoped is FacetValuesByEntities plus the diagnosis it owes.
+//
+// The second return maps entity id → the qualifiers that namespace carries on it, and it is
+// populated ONLY when a value was suppressed for being qualified. It exists because "absent" and
+// "diagnosed" are not the same thing, and the callers proved it: ResolveTargets turns a missing
+// mgmt.address into Target{Address: ""} with no error, no event and no Finding, and routed dispatch
+// turns a missing mgmt.site into LocalSite silently — a Run at the wrong locus with no signal at
+// all. Only reachvia errors.
+//
+// Today's omit-rather-than-pick behaviour is honest because the ownership-contention Finding
+// surfaces it (the comment below says so). ADR-0152 D5 deliberately stops that Finding firing on
+// qualifier multiplicity — two applications are not a contention — so without this return a
+// qualified scalar namespace would vanish with zero diagnosis anywhere in the system. That is the
+// dropped-reach-coordinate-that-reports-as-nothing failure ADR-0054 warns about, and §1.8 is the
+// discipline it would break.
+func (s *Store) FacetValuesByEntitiesScoped(ctx context.Context, namespace string, entityIDs []string) (map[string]json.RawMessage, map[string][]string, error) {
 	if len(entityIDs) == 0 {
-		return map[string]json.RawMessage{}, nil
+		return map[string]json.RawMessage{}, nil, nil
 	}
 	// ADR-0060 M5 + declared-authority: a scalar read resolves ONE effective value
 	// per Entity from now-possibly-many per-source rows — never a last-row/last-writer
@@ -170,15 +284,18 @@ func (s *Store) FacetValuesByEntities(ctx context.Context, namespace string, ent
 	// a syncer stamps prov_writer_ref = its owner_ref, so the join is exact. Run
 	// (empty-source) write-backs never match an authoritative syncer-owner, so a
 	// build's as-applied value defers to the declared IPAM/SoR truth by construction.
+	// Every row, qualified or not — the qualified ones are then EXCLUDED from resolution and
+	// reported as suppressed. Reading them is what makes the diagnosis possible; filtering in SQL
+	// would leave the caller with an absence and no cause.
 	rows, err := s.pool.Query(ctx, `
-		SELECT f.entity_id, f.value,
+		SELECT f.entity_id, f.qualifier, f.value,
 		       (o.owner_ref IS NOT NULL) AS is_authority
 		FROM graph.facet f
 		LEFT JOIN graph.facet_owner o
 		  ON o.namespace = f.namespace AND o.owner_ref = f.prov_writer_ref AND o.authoritative
 		WHERE f.namespace = $1 AND f.entity_id = ANY($2::uuid[])`, namespace, entityIDs)
 	if err != nil {
-		return nil, fmt.Errorf("graph: facet values by entities: %w", err)
+		return nil, nil, fmt.Errorf("graph: facet values by entities: %w", err)
 	}
 	defer rows.Close()
 	type candidate struct {
@@ -186,17 +303,22 @@ func (s *Store) FacetValuesByEntities(ctx context.Context, namespace string, ent
 		isAuthority bool
 	}
 	perEntity := make(map[string][]candidate, len(entityIDs))
+	qualified := map[string][]string{}
 	for rows.Next() {
-		var id string
+		var id, qualifier string
 		var val json.RawMessage
 		var isAuthority bool
-		if err := rows.Scan(&id, &val, &isAuthority); err != nil {
-			return nil, fmt.Errorf("graph: scan facet value: %w", err)
+		if err := rows.Scan(&id, &qualifier, &val, &isAuthority); err != nil {
+			return nil, nil, fmt.Errorf("graph: scan facet value: %w", err)
+		}
+		if qualifier != "" {
+			qualified[id] = append(qualified[id], qualifier)
+			continue
 		}
 		perEntity[id] = append(perEntity[id], candidate{val, isAuthority})
 	}
 	if err := rows.Err(); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	// Resolve: a single source yields its value. Many sources resolve to the ONE
 	// declared authority if present; with none declared the read is OMITTED
@@ -218,7 +340,21 @@ func (s *Store) FacetValuesByEntities(ctx context.Context, namespace string, ent
 			out[id] = auth[0]
 		}
 	}
-	return out, nil
+	// Suppression is reported only where it actually cost the caller a value. An Entity that has
+	// both an unqualified row and qualified ones resolved fine, and saying "suppressed" there would
+	// be noise that trains an operator to ignore the signal.
+	suppressed := map[string][]string{}
+	for id, quals := range qualified {
+		if _, resolved := out[id]; resolved {
+			continue
+		}
+		sort.Strings(quals)
+		suppressed[id] = quals
+	}
+	if len(suppressed) == 0 {
+		suppressed = nil
+	}
+	return out, suppressed, nil
 }
 
 // HomeCellsByEntities bulk-reads the home Cell of a set of Entities (ADR-0044)
@@ -459,4 +595,155 @@ func bindRaw(raw json.RawMessage, ns template.Namespaces) (json.RawMessage, erro
 		return nil, err
 	}
 	return json.Marshal(out)
+}
+
+// EntityTemplateNamespace projects one Entity into the `{{.entity.*}}` template namespace
+// (ADR-0150 D2): its own coordinates plus every Facet it carries, nested by the Facet's dotted
+// namespace so `{{.entity.dns.fqdn}}` and `{{.entity.mgmt.address.address}}` both read naturally.
+//
+// A Facet namespace is dotted and its value is a document, so the two nest into one tree: namespace
+// `mgmt.address` holding `{"address": "..."}` becomes entity → mgmt → address → address. That is
+// the shape the graph already stores; nothing here reinterprets it, which is what keeps this a
+// projection rather than a second model of an Entity (§1.2).
+//
+// EVERY COLLISION IS REFUSED, naming both namespaces (§2.4). The first version silently overwrote:
+// two Facet namespaces where one is a prefix of the other (`cert.presented` and
+// `cert.presented.notAfter`) clobbered each other in GetFacets order, and the reserved coordinate
+// keys were written LAST so they clobbered any Facet namespace of the same name. Its comment said
+// this projection "does not get to invent a merge rule" — overwriting IS a merge rule, decided by
+// map iteration order, which is the precise shape §2.4 forbids. It mattered because ADR-0150 D2
+// binds certificate subjects out of this tree: a silently-shadowed value is a certificate issued
+// for the wrong subject, arrived at by a route no one can see. Found by charter-guardian, 2026-07-30.
+//
+// LABELS ARE DELIBERATELY ABSENT. They were exposed in the first version and are removed: a label
+// is a free-form View selector, not a provenance-stamped fact, and deriving a certificate subject
+// from one is a far softer claim than deriving it from a Facet whose write-owner is registered.
+// §1.1 — a seam gets typed when something shipping demands it, and nothing does.
+func (s *Store) EntityTemplateNamespace(ctx context.Context, entityID string) (map[string]any, error) {
+	tree, _, err := s.EntityTemplateNamespaceScoped(ctx, entityID)
+	return tree, err
+}
+
+// EntityTemplateNamespaceScoped is EntityTemplateNamespace plus the namespaces it had to leave out.
+//
+// QUALIFIED FACETS DO NOT ENTER THE TREE (ADR-0152 D5). `{{.entity.app.config.port}}` cannot mean
+// two things, and the alternatives are both worse: picking one is the silent precedence the whole
+// qualifier design exists to refuse, and nesting under an invented `…app.config.<qualifier>.port`
+// level collides with any real sub-path of the same name. So the namespace is refused ENTRY, and
+// the second return names what was left out and under which qualifiers.
+//
+// Refusing the whole projection instead — which is what the reserved-key rule above does — was
+// considered and rejected. That rule fires on a namespace that cannot be represented at all; this
+// one fires on a host that legitimately runs two applications, and failing every binding on such a
+// host (including a certificate subject reading {{.entity.dns.fqdn}}, which is unaffected) would
+// turn a supported topology into an outage. The malformed-value case two lines down already draws
+// this line the same way: skip the one, keep the rest, and let the token that wanted it fail
+// closed naming its own path (§1.8, ADR-0024).
+func (s *Store) EntityTemplateNamespaceScoped(ctx context.Context, entityID string) (map[string]any, map[string][]string, error) {
+	e, err := s.GetEntity(ctx, entityID)
+	if err != nil {
+		return nil, nil, err
+	}
+	facets, err := s.GetFacets(ctx, entityID)
+	if err != nil {
+		return nil, nil, err
+	}
+	ns := map[string]any{}
+	owner := map[string]string{}
+	omitted := map[string][]string{}
+	for _, f := range facets {
+		if f.Qualifier != "" {
+			omitted[f.Namespace] = append(omitted[f.Namespace], f.Qualifier)
+			continue
+		}
+		if reservedEntityKeys[strings.Split(f.Namespace, ".")[0]] {
+			return nil, nil, fmt.Errorf(
+				"graph: entity %s carries facet namespace %q, whose first segment is a RESERVED "+
+					"template key (%v) — {{.entity.%s}} would mean two different things depending on "+
+					"which was written last, so it is refused rather than resolved (§2.4, ADR-0150 D2)",
+				entityID, f.Namespace, reservedEntityKeyList(), strings.Split(f.Namespace, ".")[0])
+		}
+		var v any
+		if err := json.Unmarshal(f.Value, &v); err != nil {
+			// A Facet nobody can decode is skipped rather than failing the whole binding: the
+			// token that wanted it still fails closed, naming that path (§1.8), and an unrelated
+			// malformed Facet must not make every other binding on the Entity unresolvable.
+			continue
+		}
+		if err := nest(ns, owner, f.Namespace, strings.Split(f.Namespace, "."), v); err != nil {
+			return nil, nil, fmt.Errorf("graph: entity %s: %w", entityID, err)
+		}
+	}
+	ns["id"] = e.ID
+	ns["kind"] = e.Kind
+	identity := make(map[string]any, len(e.IdentityKeys))
+	for k, val := range e.IdentityKeys {
+		identity[k] = val
+	}
+	ns["identityKeys"] = identity
+	for k := range omitted {
+		sort.Strings(omitted[k])
+	}
+	if len(omitted) == 0 {
+		omitted = nil
+	}
+	return ns, omitted, nil
+}
+
+// reservedEntityKeys are the Entity's own coordinates, which a Facet namespace may not shadow.
+//
+// `identityKeys`, NOT `identity`, and the difference was found by checking the guard against the
+// live graph rather than by reasoning about it: `identity.credential` is a SHIPPED Facet namespace
+// carried by 9 entities on the dev floor (the SCIM/identity projection family, ADR-0079). Reserving
+// the bare token `identity` would have refused the whole {{.entity.*}} tree for every one of them —
+// turning a correctness guard into an outage for a family of Entities it was never about.
+//
+// The rename also reads truer: the value is the Entity's IdentityKeys map, which is what the Go
+// field is called. `identity.*` stays available to the Facet family that already owns it.
+var reservedEntityKeys = map[string]bool{"id": true, "kind": true, "identityKeys": true}
+
+func reservedEntityKeyList() []string {
+	out := make([]string, 0, len(reservedEntityKeys))
+	for k := range reservedEntityKeys {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// nest writes v at the dotted path, refusing any collision with an already-placed namespace.
+//
+// Two Facet namespaces where one is a PREFIX of the other cannot both be represented in one tree —
+// `cert.presented` wants a value at a node `cert.presented.notAfter` needs to be a map. That is a
+// graph-side modelling problem, and the honest answer is to name it, not to let whichever was read
+// last win.
+func nest(root map[string]any, owner map[string]string, ns string, path []string, v any) error {
+	cur := root
+	for i, seg := range path {
+		prefix := strings.Join(path[:i+1], ".")
+		last := i == len(path)-1
+		if prev, taken := owner[prefix]; taken {
+			return fmt.Errorf(
+				"facet namespaces %q and %q collide in the {{.entity.*}} tree at %q — one is a prefix "+
+					"of the other, so they cannot both be represented and neither may silently win (§2.4)",
+				prev, ns, prefix)
+		}
+		if last {
+			if _, exists := cur[seg]; exists {
+				return fmt.Errorf(
+					"facet namespace %q collides with a deeper namespace already placed under %q in the "+
+						"{{.entity.*}} tree — neither may silently win (§2.4)", ns, prefix)
+			}
+			cur[seg] = v
+			owner[prefix] = ns
+			return nil
+		}
+		next, ok := cur[seg].(map[string]any)
+		if !ok {
+			next = map[string]any{}
+			cur[seg] = next
+		}
+		cur = next
+	}
+	return nil
 }

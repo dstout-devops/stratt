@@ -1,0 +1,8 @@
+# prod — the production reconcile scope (ADR-0142 D1, ADR-0057).
+#
+# Referenced today by estate/triggers/cert-reconcile.yaml, so that the 6-hourly certificate
+# reconcile fires only where it is meant to and never against a dev cell.
+name: prod
+description: >
+  Production reconcile scope. A daemon booted with STRATT_ENVIRONMENT=prod applies the
+  declarations tagged for it and nothing else.

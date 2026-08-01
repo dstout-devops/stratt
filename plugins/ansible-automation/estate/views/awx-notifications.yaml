@@ -1,0 +1,29 @@
+# The AWX-estate audit View over the ansible.notification mirror the ansible-automation
+# Connector's controller half projects (§1.2 read-only, AWX-009).
+#
+# NAME, DRIVER AND CONFIG KEY NAMES ONLY — no configuration value is ever projected (§2.5).
+# That is a sharper rule than it looks: AWX returns `$encrypted$` for the fields it treats
+# as secret and returns the rest IN THE CLEAR, and for the commonest driver the cleartext
+# field IS the credential — a Slack incoming-webhook URL is a bearer secret with the token
+# in its path. "Project what AWX did not encrypt" would therefore have imported working
+# webhook credentials into the graph.
+#
+# This View is why the namespace exists, and the question it answers is a migration one:
+# "where does this Controller send job outcomes, by what driver, and which of those have a
+# hand-written message body I have to re-author?" Each row is a Sink an operator has to
+# declare on cutover, and `notificationType` is its `kind` — which is only a straight
+# mapping because ADR-0125 made a Sink's kind name its delivery Action and left core
+# holding no driver list.
+#
+# WHAT IS NOT HERE: which job template notifies through which of these. AWX exposes the
+# attachment only as three sub-resources per template (started/success/error), so the edge
+# costs 3×len(job_templates) requests per poll — the different-order-of-cost ADR-0131's
+# budget exists to refuse by default. Booked as a detail-tier opt-in rather than taken
+# quietly, because a poll budget nobody can see is not a budget (D3).
+#
+# NOT a Sink. This is the read-only mirror of a foreign object, exactly as ansible.template
+# mirrors a job template; Sink is the frozen Named Kind it becomes when the operator
+# declares it in Git (§2).
+name: awx-notifications
+selector:
+  kinds: [ansible.notification]

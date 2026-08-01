@@ -1,0 +1,98 @@
+# seaweedfs — the in-kind S3-compatible object store the `statestore` capability needs a real
+# provider for (W5 prerequisite, ADR-0105/0145).
+#
+# WHY THIS FILE EXISTS, and it is the same story `deploy/dev/openbao.yaml` tells one leg over.
+# SeaweedFS shipped as a compose service; `dev:connector-e2e` is fully in-kind by design; the two
+# never met. So the `awss3` plugin ran with no `STRATT_AWSS3_STATE_BUCKET`, and — correctly —
+# advertised no `statestore` capability, because it only advertises what it can actually back:
+#
+#     if s.cfg.StateBucket != "" { capabilities = append(capabilities, "statestore") … }
+#
+# The registry then refused the estate's `s3-statestore` Actuator as a *phantom provider* ("declares
+# provides \"statestore\" but its Manifest does not advertise it", §1.5), and `opentofu-network`
+# verified as a provisioning provider and sat **pending on a dependency** forever. Every layer was
+# behaving correctly and the network leg could not build: the plugin declined to lie, the registry
+# declined to count an unbacked claim, and the builder declined to run without its state backend.
+# The missing thing was a floor with an object store in it.
+#
+# DEV ONLY. Ephemeral storage (emptyDir — a restart loses the tofu state, which is the right
+# trade for a dev floor and the wrong one anywhere else) and a literal admin identity. IMPORTANT,
+# carried over from the compose service because it is a real limit and not a dev shortcut: SeaweedFS
+# ACCEPTS object-lock config and retention but does NOT enforce WORM (verified empirically, ADR-0029).
+# Evidence immutability in dev rests on sha256 tamper-evidence plus write-once, never on the backend.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: seaweedfs-s3
+  namespace: stratt
+data:
+  # The SAME identity the compose stack declares, so a bucket written on one dev floor is reachable
+  # from the other with the same credentials. SeaweedFS 4.x rejects SIGNED requests from an identity
+  # it does not know, so an anonymous-only config would fail every AWS-SDK call.
+  s3.json: |
+    {
+      "identities": [
+        {
+          "name": "admin",
+          "credentials": [{ "accessKey": "testing", "secretKey": "testing" }],
+          "actions": ["Admin", "Read", "Write", "List", "Tagging"]
+        }
+      ]
+    }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: seaweedfs
+  namespace: stratt
+  labels: { app: seaweedfs }
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: seaweedfs }
+  template:
+    metadata:
+      labels: { app: seaweedfs }
+    spec:
+      containers:
+        - name: seaweedfs
+          # Pinned to the compose service's version so the two dev floors are the same store.
+          image: chrislusf/seaweedfs:4.40
+          args:
+            - "server"
+            - "-dir=/data"
+            - "-s3"
+            - "-s3.port=8333"
+            - "-s3.config=/etc/seaweedfs/s3.json"
+            - "-ip.bind=0.0.0.0"
+            - "-master.volumeSizeLimitMB=100"
+          ports:
+            - { containerPort: 8333, name: s3 }
+          readinessProbe:
+            # /healthz, NOT `GET /` — the root is 403 under the s3.config identity above, so a
+            # root probe can never pass and the pod would never become ready. Measured on the
+            # compose service, which had exactly this bug.
+            httpGet: { path: /healthz, port: 8333 }
+            periodSeconds: 2
+            failureThreshold: 45
+          volumeMounts:
+            - { name: data, mountPath: /data }
+            - { name: s3config, mountPath: /etc/seaweedfs }
+          resources:
+            requests: { cpu: 50m, memory: 128Mi }
+            limits: { cpu: "1", memory: 1Gi }
+      volumes:
+        - name: data
+          emptyDir: {}
+        - name: s3config
+          configMap: { name: seaweedfs-s3 }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: seaweedfs
+  namespace: stratt
+spec:
+  selector: { app: seaweedfs }
+  ports:
+    - { name: s3, port: 8333, targetPort: 8333 }

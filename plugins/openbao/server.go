@@ -108,6 +108,16 @@ func (s *Server) GetManifest(context.Context, *pluginv1.GetManifestRequest) (*pl
 				Input:  &pluginv1.ContractRef{SchemaId: "actions/cert-issuer/rotate-crl.input"},
 				Output: &pluginv1.ContractRef{SchemaId: "actions/cert-issuer/rotate-crl.output"},
 			},
+			{
+				// sign is IDEMPOTENT in the sense that matters: the same CSR signed twice yields
+				// two valid certificates, which is wasteful but not wrong, and a retry after a lost
+				// response must not be blocked. It is NOT idempotent in the sense of returning the
+				// same serial, and the declaration says the honest thing rather than the convenient
+				// one — the renewal Baseline closes on cert.expiry, not on a serial.
+				Name:   actionSign,
+				Input:  &pluginv1.ContractRef{SchemaId: "actions/cert-issuer/sign.input"},
+				Output: &pluginv1.ContractRef{SchemaId: "actions/cert-issuer/sign.output"},
+			},
 		},
 	}}, nil
 }
@@ -116,6 +126,7 @@ func (s *Server) GetManifest(context.Context, *pluginv1.GetManifestRequest) (*pl
 const (
 	actionCreateIntermediate = "cert-issuer/create-intermediate"
 	actionRotateCRL          = "cert-issuer/rotate-crl"
+	actionSign               = "cert-issuer/sign"
 )
 
 // Invoke dispatches the administrative PKI Actions. Content-blind: an unshipped action
@@ -133,6 +144,8 @@ func (s *Server) Invoke(req *pluginv1.InvokeRequest, stream grpc.ServerStreaming
 		return s.invokeCreateIntermediate(ctx, req, stream, ca)
 	case actionRotateCRL:
 		return s.invokeRotateCRL(ctx, req, stream, ca)
+	case actionSign:
+		return s.invokeSign(ctx, req, stream, ca)
 	default:
 		return status.Errorf(codes.InvalidArgument, "openbao: unknown action %q", action)
 	}
@@ -164,6 +177,45 @@ func (s *Server) invokeCreateIntermediate(ctx context.Context, req *pluginv1.Inv
 	}
 	out, _ := json.Marshal(map[string]any{"caSerial": serial})
 	return s.terminalOK(stream, req, "created intermediate CA "+serial, out, "actions/cert-issuer/create-intermediate.output")
+}
+
+// invokeSign submits a TARGET-GENERATED CSR and returns the signed certificate.
+//
+// An ACTION rather than an Actuator verb, and that is the whole reason this flow works: an Action's
+// result binds into a later Step ({{.steps.sign.outputs.certificate}}), which the delivery Step
+// needs. The cert-issuer ACTUATOR converges a View of certificates and writes cert.identity /
+// cert.expiry; this hands one certificate to the next Step.
+//
+// It carries no private key in either direction, because none is generated CLM-side (§2.5,
+// ADR-0050): the target made the key, sends the CSR, and gets back a signature over it. That is the
+// property cert-issuer's input Contract has documented all along and that the port could not
+// express until an Actuator Step could publish its CSR (CERT-2).
+func (s *Server) invokeSign(ctx context.Context, req *pluginv1.InvokeRequest, stream grpc.ServerStreamingServer[pluginv1.InvokeResponse], ca CA) error {
+	var p struct {
+		CSR  string `json:"csr"`
+		Role string `json:"role"`
+		TTL  string `json:"ttl"`
+	}
+	if args := req.GetArgs(); args != nil && len(args.GetBytes()) > 0 {
+		if err := json.Unmarshal(args.GetBytes(), &p); err != nil {
+			return status.Errorf(codes.InvalidArgument, "%s: invalid args: %v", actionSign, err)
+		}
+	}
+	// Fail closed on an EMPTY csr rather than letting the CLM decide. An empty string is what a
+	// gather Step that silently produced nothing looks like, and signing "whatever the CLM makes of
+	// it" would turn a missing request into a certificate for something unintended (§1.8).
+	if p.CSR == "" || p.Role == "" {
+		return status.Errorf(codes.InvalidArgument, "%s requires csr and role", actionSign)
+	}
+	_ = s.progress(stream, req, "signing CSR under role "+p.Role)
+	issued, err := ca.Sign(ctx, p.Role, p.CSR, p.TTL)
+	if err != nil {
+		return s.terminalFail(stream, req, fmt.Errorf("%s: %w", actionSign, err))
+	}
+	out, _ := json.Marshal(map[string]any{
+		"certificate": issued.PEM, "serial": issued.Serial, "expiration": issued.Expiration,
+	})
+	return s.terminalOK(stream, req, "signed certificate "+issued.Serial, out, "actions/cert-issuer/sign.output")
 }
 
 // invokeRotateCRL rotates the mount's CRL.

@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "stratt:contract:actions/kubecompute/create-host.input:v1",
+  "title": "kubecompute/create-host input",
+  "description": "Build one converge-able host (ADR-0151). authorizedKeysSecret is a POINTER to a Secret holding authorized_keys and never material (§2.5) — the build mounts it, so the key that lets Stratt reach the host is the one the estate already brokers; nothing is minted, logged, or written to the graph here. It is REQUIRED because a host built with no authorized key is running and unreachable, which is precisely the floci failure this provider exists not to repeat.",
+  "type": "object",
+  "properties": {
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "description": "The instance the Intent fanned out to — the host's name and its identity."
+    },
+    "authorizedKeysSecret": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Name of a Secret in the build namespace with an `authorized_keys` key. A pointer, never material."
+    },
+    "labels": {
+      "type": "object",
+      "additionalProperties": { "type": "string" },
+      "description": "Labels the built host carries, including the Intent's built-marker (ADR-0120) that the provisioning reconcile matches to decide this instance is built."
+    },
+    "projectKind": {
+      "type": "string",
+      "description": "The Entity kind the build projects (ADR-0058 M1). Defaults to `host` when unset — the only kind this substrate makes."
+    },
+    "placement": {
+      "type": "object",
+      "additionalProperties": true,
+      "description": "Declared topology placement (ADR-0123 D2). ACCEPTED AND UNUSED on this substrate: a pod is placed by the Kubernetes scheduler, not by the estate. It is accepted rather than refused so the shared Intent/Compute launch interface stays shared across providers, and the plugin EMITS an event when a non-empty placement is ignored — an ignored declaration must be visible, not silent (§1.8, and the ADR-0123 D3 rule that a dropped input is how `placement` reached no provider for as long as it did)."
+    },
+    "params": {
+      "type": "object",
+      "additionalProperties": true,
+      "description": "Opaque provider build params (ADR-0110). This provider needs none — a host is defined by its name, its image and its authorized keys — so they are accepted and unused, and a non-empty set is reported for the same reason placement is."
+    }
+  },
+  "required": ["name", "authorizedKeysSecret"],
+  "additionalProperties": false
+}

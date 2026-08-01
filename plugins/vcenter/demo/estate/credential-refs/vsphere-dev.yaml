@@ -1,6 +1,6 @@
 # vsphere-dev — the gate-only CredentialRef the vcenter/create-vm Action binds (§2.5 / ADR-0009 /
 # ADR-0113). An Action's CredentialRef use-check is its ONLY authz gate (ExecuteAction refuses a
-# credential-free Action, "ActionUngated"), so even a vcsim build must carry one. The vcenter plugin
+# credential-free Action, "ActionUngated"), so even a simulated build must carry one. The vcenter plugin
 # connects to vSphere with its OWN broker-resolved credentials (the Syncer already does), so no material
 # is resolved through this ref — it is a DELIBERATE gate-only ref (gateOnly, ADR-0052): the launching
 # Principal's use-check is the point. The demo authz grants bootstrap-admin `user` of it.

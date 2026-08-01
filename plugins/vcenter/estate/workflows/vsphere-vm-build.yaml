@@ -54,12 +54,15 @@ steps:
       # environment (ADR-0113 D2).
       #
       # Sizing stays LITERAL here, and the reason is a real constraint rather than an oversight.
-      # Intent/Compute's `params` is opaque and PROVIDER-SHAPED by design (§1.5) — the reference
-      # estate's Compute Intents carry EC2's region/instanceType/ami, because ADR-0113 D2 makes the
-      # environment the substrate boundary and those Intents resolve to awsec2 there. Binding
-      # {{.launch.params.cpus}} would therefore fail CLOSED at launch against exactly the Intents
-      # that exist, since the substituter refuses an unknown field rather than defaulting it
-      # (ADR-0024, and no conditionals in the template language, ADR-0083 D5).
+      # Intent/Compute's `params` is opaque and PROVIDER-SHAPED by design (§1.5), and the reference
+      # estate's two Compute Intents declare almost none of it: `web-fleet` declares no params at
+      # all and `app-tier` only `tier`. (They used to carry EC2's region/instanceType/ami, for a
+      # builder that runs for them in no environment they are reconciled in; scoping the Intents let
+      # those go.) Binding {{.launch.params.cpus}} would therefore fail CLOSED at launch against
+      # exactly the Intents that exist — the substituter refuses an unknown field rather than
+      # defaulting it (ADR-0024), and the template language has no conditionals (ADR-0083 D5). The
+      # constraint did not move when the coordinates did: it was never about which substrate's
+      # params were there, only that this builder cannot require params an Intent may not declare.
       #
       # These are also fleet-shape, not per-instance: every instance of a fleet gets the same size,
       # so they are not what ADR-0120 D2 is about. A vsphere-environment Intent puts cpus/memoryMB in

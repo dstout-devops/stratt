@@ -7,7 +7,44 @@
 # BEFORE the deploy (a mutating helm upgrade --install). An agent (or a human) decides
 # the Gate via POST /gates/{id}/decision (§1.6 — the same path for both). helm/deploy
 # is TARGETLESS (no View anchor) — the deploy names its own release + namespace.
+#
+# IT IS PARAMETERIZED NOW, and that replaced a hardcoded `hello`/`stratt-m2`. Two reasons, in
+# order of weight. It is the remediation half of the CHART delivery form (ADR-0148 follow-up b):
+# a Blueprint route over Intent/Application binds `{{.spec.package}}` / `{{.spec.chartVersion}}`
+# into these inputs, and a Workflow whose chart is baked cannot serve one. And a Workflow with
+# fixed params is a Workflow only a hand-launch can use, so the M2 proof and the drift remediation
+# would have been two copies of one thing — the divergent-second-copy failure that hid three
+# separate defects earlier in this arc. One artifact, exercised by both.
 name: helm-deploy
+inputs:
+  type: object
+  additionalProperties: false
+  required: [chart, chartVersion, release, namespace]
+  properties:
+    chart:
+      type: string
+      minLength: 1
+      description: >
+        The chart to deploy — resolved per-Assignment from Intent/Application's spec.package, which
+        for the chart delivery form IS the chart name. The `delivers:` agreement check (ADR-0148 D2)
+        is what stops an Intent asking for one chart being bound to a Blueprint that installs
+        another.
+    chartVersion:
+      type: string
+      minLength: 1
+      description: >
+        The exact chart version, as a STRING. It is compared against contracts/facets/
+        app.deliverable's observed `version` and nothing coerces between types (ADR-0118 D1), so
+        the desired and observed values must share a type or they are never comparable. Pinned
+        rather than floating because §7.3 wants the deployed bytes knowable.
+    release:
+      type: string
+      minLength: 1
+      description: The Helm release name — the identity kubeservices correlates on (helm.release).
+    namespace:
+      type: string
+      minLength: 1
+      description: The namespace the release is deployed into.
 steps:
   - name: approve
     gate:
@@ -22,8 +59,17 @@ steps:
     # pure authz-gate pointer (no material). The launching Principal needs `use`.
     credentialRefs: [helm-deploy]
     params:
-      # The self-contained demo chart mounted into the plugin (deploy/charts/stratt
-      # files/hello, ADR-0092 M2). Renders one ConfigMap — the observable proof.
-      chart: hello
-      release: hello
-      namespace: stratt-m2
+      chart: "{{.launch.chart}}"
+      version: "{{.launch.chartVersion}}"
+      release: "{{.launch.release}}"
+      namespace: "{{.launch.namespace}}"
+      # NO createNamespace, and this is a least-authority decision rather than an omission.
+      # Setting it asks the deploy identity for NAMESPACE authority, which ADR-0102 Q3 withholds on
+      # purpose: the chart pre-creates each target namespace at the OPERATOR's install privilege
+      # (values `deployNamespace`), so the plugin's ServiceAccount holds a namespaced Role in that
+      # namespace and nothing else — no namespace-create, no cluster-wide reach.
+      #
+      # Measured: with `createNamespace: true` the deploy failed in ~3s even though the namespace
+      # already existed, because helm checks for it and the Role grants no `namespaces` verb. The
+      # target namespace existing is a precondition the OPERATOR satisfies, not something a Run
+      # should be able to arrange for itself.

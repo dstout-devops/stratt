@@ -1,0 +1,14 @@
+# podinfo-app — bind the chart-delivered Intent to the chart Blueprint over the observed releases.
+#
+# Structurally identical to apache-tier's and tomcat-tier's Assignments, which is the claim
+# ADR-0148 makes about delivery forms being interchangeable at the intent layer. The one difference
+# is the View: apache's selects DECLARED hosts, this one selects OBSERVED application Entities.
+#
+# The @version pins are the shipped convention and they are load-bearing: an Assignment pins a
+# Blueprint version so a version bump rolls through rings with a compile-diff (§4.3) rather than
+# taking every bound Intent with it.
+name: podinfo-app
+intent: podinfo-app@1
+view: deployed-apps
+blueprint: podinfo@1
+environments: [dev]

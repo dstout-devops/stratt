@@ -119,10 +119,14 @@ type Store interface {
 	ListBaselines(ctx context.Context) ([]types.Baseline, error)
 }
 
-// claimRecord is one (namespace, entity) claim for cross-Assignment conflict
-// detection.
+// claimRecord is one (namespace, qualifier, entity) claim for cross-Assignment conflict
+// detection (ADR-0152 D2 widened the grain from (namespace, entity)).
 type claimRecord struct {
-	namespace  string
+	namespace string
+	// qualifier distinguishes several same-namespace claims on ONE Entity — apache's app.config
+	// and tomcat's. Derived at compile from the resolved spec, never observed (D3). Empty is the
+	// ordinary case and reproduces the pre-ADR-0152 grain exactly.
+	qualifier  string
 	entityID   string
 	claim      string
 	assignment string
@@ -301,7 +305,7 @@ func Compile(ctx context.Context, s Store, maxDelta float64, resolveRemediation 
 			b := compiledBaseline(a, bp, intent, i, view, route, exp, matched, specLayers, remParams, remvParams)
 			candidates[a.Name] = append(candidates[a.Name], b)
 			for _, id := range matched {
-				claims = append(claims, claimRecord{exp.Namespace, id, route.Claim, a.Name})
+				claims = append(claims, claimRecord{exp.Namespace, exp.Qualifier, id, route.Claim, a.Name})
 			}
 			// Ownership is claimed only for a namespace the Blueprint MANAGES
 			// (writes, via a remediation Workflow). A pure observation reads a
@@ -362,21 +366,15 @@ func Compile(ctx context.Context, s Store, maxDelta float64, resolveRemediation 
 		plan.Errors = append(plan.Errors, poisoned.message)
 	}
 
-	// ── ownership registry (blueprint-vs-blueprint, §2.1) ──
+	// ── ownership registry (§2.1) ──
 	// A namespace already owned by a Syncer or team is observed read-only —
-	// reads never claim write-ownership. An unowned namespace claimed by more
-	// than one distinct Blueprint (in this pass or against a persisted
-	// Blueprint owner) is a conflict: those Assignments are poisoned.
-	ownerships, ownConflicts, err := resolveOwnership(ctx, s, ownClaims, skipped)
+	// reads never claim write-ownership. Otherwise every claimant Blueprint is
+	// registered as an owner: registration says who MAY write, and since
+	// ADR-0060 that is per (namespace, owner_ref). Contention is decided
+	// per-Entity by detectClaimConflicts above, not here.
+	ownerships, err := resolveOwnership(ctx, s, ownClaims, skipped)
 	if err != nil {
 		return Plan{}, err
-	}
-	for _, c := range ownConflicts {
-		for _, a := range c.assignments {
-			skipped[a] = true
-			delete(candidates, a)
-		}
-		plan.Errors = append(plan.Errors, c.message)
 	}
 	plan.Ownership = ownerships
 
@@ -609,7 +607,12 @@ func resolveRemediationParams(ctx context.Context, s Store, route types.Blueprin
 	if len(route.RemediationParams) == 0 {
 		return nil, ""
 	}
-	resolved, err := template.SubstituteParams(route.RemediationParams, template.Namespaces{"spec": spec})
+	// `{{.entity.*}}` is DEFERRED, not resolved (ADR-0150 D2): this Baseline covers a whole View
+	// and there is no Entity here to resolve against. The token is stored intact and bound when a
+	// Finding's remediation launches, which is the first moment one Entity exists — the same
+	// two-stage shape ADR-0024 D3 uses for a parametrized View's selector.
+	resolved, err := template.SubstituteParamsDeferring(
+		route.RemediationParams, template.Namespaces{"spec": spec}, template.DeferEntity)
 	if err != nil {
 		return nil, fmt.Sprintf("remediationParams: %v", err)
 	}
@@ -842,6 +845,28 @@ func substituteExpectation(exp types.FacetExpectation, spec map[string]any) (typ
 		}
 		exp.NotBefore, _ = nb.(string)
 	}
+	// The claim key (ADR-0152 D2/D3). DERIVED here and nowhere else: from the resolved spec, at
+	// compile, by the same explicit-lookup engine every other value on this expectation uses.
+	//
+	// ABSENT AND EMPTY MUST NOT RENDER THE SAME. A qualifier that is PRESENT and resolves to ""
+	// — `{{.spec.pakcage}}`, or a field this Assignment never set — would otherwise compile
+	// straight back to the UNQUALIFIED grain: the route still works, and its exclusivity silently
+	// widens from (entity, app.config, apache) to (entity, app.config). That is the grain of an
+	// exclusive claim moving by accident, which is the same §2.4 surprise D2 refuses to inflict
+	// deliberately when it declines to default the qualifier at all.
+	if exp.Qualifier != "" {
+		q, err := template.Substitute(exp.Qualifier, ns)
+		if err != nil {
+			return exp, err.Error()
+		}
+		resolved, _ := q.(string)
+		if resolved == "" {
+			return exp, fmt.Sprintf("observe qualifier %q resolved to empty — a declared qualifier that "+
+				"resolves to nothing would silently return this route to the unqualified claim grain "+
+				"(ADR-0152 D2); remove it or supply the spec value it reads", exp.Qualifier)
+		}
+		exp.Qualifier = resolved
+	}
 	if len(exp.Equals) == 0 && len(exp.Contains) == 0 && exp.NotBefore == "" {
 		return exp, "observe expectation requires equals, contains, or notBefore"
 	}
@@ -882,13 +907,13 @@ type poison struct {
 // claimants (the anti-GPO axiom, §2.4). Skipped Assignments' claims are
 // ignored. Every Assignment involved in a conflict is poisoned.
 func detectClaimConflicts(claims []claimRecord, skipped map[string]bool) []poison {
-	type key struct{ ns, entity string }
+	type key struct{ ns, qualifier, entity string }
 	exclusive := map[key]map[string]bool{}
 	for _, c := range claims {
 		if skipped[c.assignment] || c.claim != types.ClaimExclusive {
 			continue
 		}
-		k := key{c.namespace, c.entityID}
+		k := key{c.namespace, c.qualifier, c.entityID}
 		if exclusive[k] == nil {
 			exclusive[k] = map[string]bool{}
 		}
@@ -905,8 +930,11 @@ func detectClaimConflicts(claims []claimRecord, skipped map[string]bool) []poiso
 			names = append(names, a)
 		}
 		sort.Strings(names)
-		msg := fmt.Sprintf("exclusive claim conflict on facet %q for entity %s: assignments %s (§2.4: no implicit precedence — resolve by scoping, not priority)",
-			k.ns, k.entity, strings.Join(names, ", "))
+		// The qualifier rides the message when there is one, because §1.8's whole complaint about
+		// the old text was that it said "two Blueprints claim app.config" when the true statement is
+		// which application on which host. Unqualified renders exactly as before.
+		msg := fmt.Sprintf("exclusive claim conflict on facet %q%s for entity %s: assignments %s (§2.4: no implicit precedence — resolve by scoping, not priority)",
+			k.ns, qualifierNote(k.qualifier), k.entity, strings.Join(names, ", "))
 		for _, a := range names {
 			poisoned[a] = true
 			if _, ok := messages[a]; !ok {
@@ -922,17 +950,28 @@ func detectClaimConflicts(claims []claimRecord, skipped map[string]bool) []poiso
 	return out
 }
 
-type ownConflict struct {
-	assignments []string
-	message     string
-}
-
 // resolveOwnership decides which Blueprint ownership registrations to perform
-// and which namespaces are contested (§2.1). A namespace already owned by a
-// Syncer or team is read-observed — no claim. An unowned namespace claimed by
-// more than one distinct Blueprint (this pass, or vs. a persisted Blueprint
-// owner) is a conflict poisoning every claimant Assignment.
-func resolveOwnership(ctx context.Context, s Store, claims []ownClaim, skipped map[string]bool) ([]types.FacetOwner, []ownConflict, error) {
+// (§2.1). A namespace already owned by a Syncer or team is read-observed — no
+// claim. Otherwise EVERY claimant Blueprint is registered as an owner.
+//
+// Many Blueprints may own one namespace, and that is ADR-0060's model, not a
+// relaxation of it. This function used to refuse a second Blueprint claimant
+// outright ("one namespace has one write owner"), which was written for the
+// ADR-0023 data layer where graph.facet_owner was keyed by namespace ALONE.
+// ADR-0060 re-keyed it (namespace, owner_ref) and re-based the §1.2
+// single-writer invariant onto (Entity, namespace, source) — in the words of
+// migration 00035, dropping "a global per-namespace monopoly that strips
+// capability" because the estate-wide lock "added zero per-Entity protection".
+// The compiler kept the monopoly the store had abandoned, so three application
+// Blueprints converging app.config over DISJOINT host sets — apache, tomcat and
+// web-server, which is exactly ADR-0148 D1's one-Blueprint-per-application —
+// poisoned each other and the estate would not compile at all.
+//
+// The protection that actually matters survives, sharper: two EXCLUSIVE claims
+// on one (namespace, Entity) still fail the compile in detectClaimConflicts,
+// per-Entity and by name (§2.4, exclusive-fails-compile / additive-union). This
+// pass registers who MAY write; it is not where contention is decided.
+func resolveOwnership(ctx context.Context, s Store, claims []ownClaim, skipped map[string]bool) ([]types.FacetOwner, error) {
 	// namespace → blueprint → assignments claiming it.
 	byNS := map[string]map[string][]string{}
 	for _, c := range claims {
@@ -946,7 +985,6 @@ func resolveOwnership(ctx context.Context, s Store, claims []ownClaim, skipped m
 	}
 
 	var owners []types.FacetOwner
-	var conflicts []ownConflict
 	namespaces := make([]string, 0, len(byNS))
 	for ns := range byNS {
 		namespaces = append(namespaces, ns)
@@ -957,43 +995,23 @@ func resolveOwnership(ctx context.Context, s Store, claims []ownClaim, skipped m
 		blueprints := byNS[ns]
 		owner, owned, err := s.GetFacetOwner(ctx, ns)
 		if err != nil {
-			return nil, nil, err
+			return nil, err
 		}
 		if owned && owner.OwnerKind != blueprintOwnerKind {
 			continue // Syncer/team-owned: read-only observation, no claim
 		}
-		// Distinct Blueprint claimants (include a persisted Blueprint owner).
-		claimants := map[string]bool{}
+		// Register every claimant (idempotent if already an owner). Sorted so a
+		// Plan is byte-stable across compiles — map order is not.
+		bps := make([]string, 0, len(blueprints))
 		for bp := range blueprints {
-			claimants[bp] = true
+			bps = append(bps, bp)
 		}
-		if owned {
-			claimants[owner.OwnerRef] = true
-		}
-		if len(claimants) > 1 {
-			names := make([]string, 0)
-			for _, as := range blueprints {
-				names = append(names, as...)
-			}
-			sort.Strings(names)
-			bpNames := make([]string, 0, len(claimants))
-			for bp := range claimants {
-				bpNames = append(bpNames, bp)
-			}
-			sort.Strings(bpNames)
-			conflicts = append(conflicts, ownConflict{
-				assignments: names,
-				message: fmt.Sprintf("facet namespace %q is claimed by multiple Blueprints (%s) — one namespace has one write owner (§2.1); scope the routes, never share ownership",
-					ns, strings.Join(bpNames, ", ")),
-			})
-			continue
-		}
-		// Exactly one Blueprint — register it (idempotent if already owner).
-		for bp := range blueprints {
+		sort.Strings(bps)
+		for _, bp := range bps {
 			owners = append(owners, types.FacetOwner{Namespace: ns, OwnerKind: blueprintOwnerKind, OwnerRef: bp})
 		}
 	}
-	return owners, conflicts, nil
+	return owners, nil
 }
 
 func filterMemberships(ms []graph.AssignmentMembership, skipped map[string]bool) []graph.AssignmentMembership {
@@ -1009,3 +1027,13 @@ func filterMemberships(ms []graph.AssignmentMembership, skipped map[string]bool)
 // shortIntentKind strips the "Intent/" prefix — capability maps and binding entries key by the bare
 // kind ("Application"), the same convention provisions/decommissions use.
 func shortIntentKind(kind string) string { return strings.TrimPrefix(kind, "Intent/") }
+
+// qualifierNote renders a claim's qualifier for a human — ` qualified "tomcat"`, or nothing at all
+// when unqualified, so the overwhelming majority of compile errors read exactly as they always have
+// and the new dimension only appears where it is load-bearing (ADR-0152 D2).
+func qualifierNote(qualifier string) string {
+	if qualifier == "" {
+		return ""
+	}
+	return fmt.Sprintf(" qualified %q", qualifier)
+}

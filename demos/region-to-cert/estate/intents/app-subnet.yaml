@@ -1,0 +1,29 @@
+# app-subnet — LEG 1: declare a network from code (ADR-0059, ADR-0145).
+#
+# Five lines of intent, and not one of them is an address. The graph holds only what is BUILT
+# (§1.2), so this is not an Entity: the provisioning reconcile compares this named singleton against
+# the subnet already projected and correlated for it, and surfaces a GATED build — it never
+# auto-launches (§5 Flow 1). Approve it, the provider builds, the subnet projects back correlated by
+# `stratt.intent/singleton`, and the Finding resolves.
+#
+# `size` + `pool` ARE AN ALLOCATION REQUEST, NOT A CIDR. This Intent says a /24 out of the app
+# supernet is wanted; it does not say which one. NetBox — the `ipam` capability — decides, and the
+# core injects the answer as var.stratt_ipam_cidr. The built subnet's `net.cidr` label reports what
+# it actually got. Hand-assigning ranges in Git is precisely what an allocator exists to stop, and
+# two subnets declaring overlapping literals would collide with nothing to notice (ADR-0111).
+#
+# The runner asserts this: the allocated /24 appears NOWHERE in this estate, which is the only way
+# to tell an allocation from a decoration.
+#
+# `region` is the substrate's own name for a place — a provider coordinate (ADR-0142 D3), flat here
+# rather than inherited from the environment, because an Environment carries no inheritable facts
+# (ADR-0142 D4) and one document must not mean different things in different scopes (ADR-0118 D1).
+name: app-subnet
+kind: Intent/Subnet
+spec:
+  projectKind: subnet
+  requires: [provisioning] # the capability CLASS — never a provider name (§1.5)
+  params: # OPAQUE to core, typed by the RESOLVED provider's own Contract (§1.5)
+    region: us-east-1
+    size: 24
+    pool: 10.30.0.0/16

@@ -68,6 +68,13 @@ func estateRoots(root string) ([]string, error) {
 		return nil, fmt.Errorf("desiredstate: %s: %w", path, err)
 	}
 
+	// The admission list is parsed OUTSIDE parseKind, so it needs the one-document rule applied
+	// explicitly. It is also the worst place to lose a document: a dropped admission does not lose
+	// one declaration, it loses every declaration that plugin ships — and the estate still loads.
+	if err := refuseMultiDocument(path, raw); err != nil {
+		return nil, err
+	}
+
 	var f pluginsFile
 	dec := yaml.NewDecoder(strings.NewReader(string(raw)))
 	dec.KnownFields(true) // a typo in an admission must fail, never silently admit nothing

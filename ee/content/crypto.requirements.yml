@@ -27,6 +27,34 @@ collections:
   - name: community.crypto
     version: "2.22.3"
 
+  # kubernetes.core — NOT for its modules, but for its `kubectl` CONNECTION plugin (ADR-0156).
+  #
+  # THIS IS THE UNION RULE MEETING REALITY. The transport is a property of the TARGET, observed by
+  # the provider that built it; the EE image is per Actuator, and therefore per Run. So an image
+  # must carry every transport ITS targets use — and this variant's Actuator converges hosts that
+  # kubecompute built, which observe `kubectl`. Without this entry the shim refuses the run before
+  # the play starts (D6), correctly and uselessly.
+  #
+  # The `kubectl` BINARY comes with it, as a build arg on dev:ee-crypto:build: the connection plugin
+  # execs it, so the collection alone is not enough — the second axis ADR-0153 D7 did not have.
+  - name: kubernetes.core
+    version: "6.5.0"
+
+  # ── THE PLATFORM FLOOR, repeated ─────────────────────────────────────────────────────
+  # Everything below is ee/content/platform.requirements.yml, copied at the same versions.
+  # `ee/content.py verify` (so `task ci`) fails if a variant drops or re-pins a floor entry.
+  #
+  # Repeated rather than composed because `install` refuses two requirements files per image:
+  # a lockfile records the installed CLOSURE, and a closure cannot be attributed to one of
+  # several declarations. The cost of that rule is this duplication; the check is what stops
+  # it rotting. See platform.requirements.yml for why a floor exists at all (ANS-012).
+  #
+  # WHY IT MATTERS HERE SPECIFICALLY: this variant is selected by a Step that wants openssl
+  # modules. Without the floor it would ALSO, silently, be a Step that can no longer install a
+  # package on Alpine — a strictly weaker environment that looks identical from the estate.
+  - name: community.general
+    version: "13.2.0"
+
 # roles: — supported and installed identically (ADR-0117 D3 put roles in scope after the
 # first revision omitted them), but deliberately EMPTY: nothing shipping demands a Galaxy
 # role yet, and pinning content no Contract needs would be inventory to maintain for no

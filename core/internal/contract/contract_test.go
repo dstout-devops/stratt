@@ -255,8 +255,61 @@ func TestPinsAreStable(t *testing.T) {
 	// Worth recording because the ADR's census was wrong: it read "22 of 152" by counting 13
 	// actuator FILES plus 9 action DIRECTORIES, but those directories hold 78 files. The real
 	// self-contract set was 91 documents, ~4× what the decision was sized against.
-	if len(all) != 69 {
-		t.Fatalf("expected 69 embedded documents, got %d — the shipped set is the SEAM set now "+
+	// 69 → 70: +intents/dnsrecord.v2 (ADR-0144 D6). The ADR-0110 straggler — every other
+	// named singleton got a v2 carrying `requires: [provisioning]` and dnsrecord did not,
+	// which left the kind not merely unused but UNDECLARABLE (v1 REQUIRES the removed
+	// builder/buildWorkflow seam and closes with additionalProperties: false). An Intent
+	// SPEC schema is a seam by D3's definition, so it stays embedded here rather than
+	// moving into the dns plugin's tree: the kind belongs to the estate, not the provider.
+	// 70 → 71: +facets/app.deliverable (ADR-0148 follow-up b). The CHART delivery form needed a
+	// facet an observe expectation could actually READ, and the software.* facets cannot be one:
+	// software.chart is a `charts` component LIST so the form-agnostic advisory pass can walk it
+	// (ADR-0080), while facetAtPath walks maps only and `contains` matches a whole element by
+	// DeepEqual — so asking "is the deployed chart at version X" would have meant enumerating
+	// every field the Normalizer happened to set, including appVersion, a fact about the chart
+	// rather than desired state (ADR-0148 D3). It is the split the PACKAGE form already shipped
+	// (app.config scalar + software.package list), arrived at from the other side. A SEAM by
+	// ADR-0138 D3's definition: a Facet schema belongs to the estate, not to the collector that
+	// happens to write it today.
+	// 71 → 72: +intents/application.v3 (ADR-0148 follow-up b), and the reason is a finding rather
+	// than a bump. `chartVersion` was first ADDED TO v2 IN PLACE, on the argument that a new typed
+	// property is not the "tightening" that file's header warns about — nothing in the repo used
+	// the key, so nothing that parsed stopped parsing. This test agreed, because it re-derives
+	// every hash from the shipped files and a self-consistent edit is invisible to it. A store
+	// holding the previous pin row did not: strattd refused to start with `contract drift:
+	// intents/application v2 is pinned to 02c02872… but the shipped document hashes to d342b698…`.
+	// The pin is over the DOCUMENT, not over anyone's judgement about whether the change was
+	// compatible — which is precisely what a hash exists to stop being load-bearing (§1.5).
+	// 72 → 75: +actions/cert-issuer/sign.{input,output} and +outputs/csr (CERT-2). All three are
+	// SEAMS by ADR-0138 D3's definition rather than plugin-owned documents. `cert-issuer` is a
+	// NEUTRALLY-NAMED surface — §1.5 says explicitly that a step-ca plugin could implement it — so
+	// its Action contracts stay embedded, and `outputs/csr` is the shape an Actuator pins to hand a
+	// value to a later Step, which makes it a promise to Step AUTHORS rather than to one plugin.
+	//
+	// outputs/csr carries exactly one field, closed, and that is the design rather than economy:
+	// the private key is born on the target and never crosses the wire (§2.5, ADR-0050), so a
+	// schema admitting anything beside the CSR would be an invitation to send more.
+	// 85 since ADR-0156 added facets/mgmt.transport — HOW a target is reached, the peer of
+	// mgmt.address's WHERE, observed by the Syncer that saw the host.
+	// 84 was AWX-012, which added facets/ansible.credentialtype — the schema a credential instantiates,
+	// where `managed: false` is the migration question.
+	// 83 was AWX-001/ADR-0154, which added facets/ansible.project — the AWX content root a template
+	// runs from, whose scm_url is projected with any embedded credential removed (§2.5).
+	// 82 was ANS Tier 3, which added facets/ansible.config (the file that changes the meaning of the
+	// root), facets/ansible.plugin (the repo's own code) and facets/ansible.collection (which
+	// grew the ANS-007 root-collection fields and earned a pin with them).
+	// 79 was the ANS Tier 2 batch, which added facets/ansible.varscope (group_vars/host_vars
+	// scope + KEY NAMES, never values) and facets/ansible.role (which grew the ANS-002/004
+	// facts and earned a pin now that it carries more than a name and a path).
+	// 77 was AWX-009's facets/ansible.notification — where an AWX Controller sends job
+	// outcomes, projected as name + driver + config KEY NAMES only, because AWX returns
+	// non-secret configuration in the clear and for the commonest driver the cleartext field IS
+	// the credential (§2.5). 76 was ADR-0150 D5's facets/cert.presented — what a HOST actually
+	// presents, read back from the delivered file, beside the CLM Syncer's cert.expiry which says
+	// what was ISSUED. The count is deliberate: a new pinned document is an act, not a side
+	// effect (§1.5).
+	if len(all) != 85 {
+		t.Fatalf("expected 85 embedded documents, got %d — the shipped set is the SEAM set now "+
 			"(ADR-0138 D3/D4); a plugin's own contracts live in plugins/<n>/contracts/", len(all))
 	}
 	versions := map[string]int{}
@@ -268,8 +321,8 @@ func TestPinsAreStable(t *testing.T) {
 			versions[c.Name] = c.Version
 		}
 	}
-	// ansible.input v7 (the mounted-project `playbook` ref, ADR-0134 D4) resolves as the current
-	// version; v1–v6 stay pinned alongside it (every version keeps its own pin row — only the
+	// ansible.input v8 (the connection type + the credential forms, ADR-0153) resolves as the
+	// current version; v1–v7 stay pinned alongside it (every version keeps its own pin row — only the
 	// LOOKUP collapses to the highest). It is now ESTATE-resident (ADR-0138 D3/D4), so the
 	// version-sibling rule is asserted where the document actually lives — and asserting it there
 	// is what proves RegisterEstate reproduces load()'s semantics rather than inventing its own.
@@ -279,14 +332,19 @@ func TestPinsAreStable(t *testing.T) {
 			estateVersions[c.Name] = c.Version
 		}
 	}
-	if estateVersions["actuators/ansible.input"] != 7 {
+	if estateVersions["actuators/ansible.input"] != 8 {
 		t.Fatalf("ansible.input current version: %d (estate-resident since ADR-0138 D4)",
 			estateVersions["actuators/ansible.input"])
 	}
-	// intents/application v2 types `port` (ADR-0118 follow-up). A sibling version rather than an
-	// edit to v1, because tightening a type is BREAKING: `port: 443` parsed under v1 and does not
-	// under v2. v1 keeps its pin row; only the lookup moves.
-	if versions["intents/application"] != 2 {
+	// intents/application v2 types `port` (ADR-0118 follow-up); v3 adds `chartVersion` for the chart
+	// delivery form (ADR-0148 follow-up b). Both are SIBLING versions rather than edits, and the two
+	// have different reasons worth keeping apart. v2 existed because tightening a type is BREAKING:
+	// `port: 443` parsed under v1 and does not under v2. v3 exists because A PIN IS OVER THE
+	// DOCUMENT — the v3 change is additive and compatible by any reading, and mutating v2 in place
+	// still stopped strattd dead with `contract drift: … is pinned to 02c02872… but the shipped
+	// document hashes to d342b698…`. Compatibility is not the question a pin asks (§1.5). Older
+	// versions keep their pin rows; only the lookup moves.
+	if versions["intents/application"] != 3 {
 		t.Fatalf("intents/application current version: %d", versions["intents/application"])
 	}
 	// Same process, same documents → identical pins on re-read.

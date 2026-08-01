@@ -74,7 +74,7 @@ which is which.
 | `organizations`                  | `projected` 🟢  | [types.go:100](../../plugins/ansible-automation/controller/types.go#L100) → `ansible.org`                                                                   |             |
 | `teams`                          | `projected` 🟢  | → `ansible.team` + `has-member` edges (~~AWX-004~~, ADR-0130 D2) — an estate fact, never an authz one                                                       |             |
 | `workflow_job_template_nodes`    | `derived` 🟢 + `adopt-only` ⚪ | The projection now reads them and derives `invokes` + `hasApprovalGate` (~~AWX-002~~, ADR-0129); the DAG's SHAPE stays adopt's, because fidelity is the transform's job and not the mirror's. Nodes as entities booked as **AWX-016** |  |
-| `projects`                       | `adopt-only` 🔴 | ADR-0127 D4 already books `ansible.project` + `scm_revision`; this audit confirms the sizing                                                                | **AWX-001** |
+| `projects`                       | `projected` 🟢 + `adopt-only` ⚪ | → `ansible.project` + the ID-joined `uses-project` edge (2026-07-31, [ADR-0154](../adr/0154-the-awx-project-and-the-orphan-signal-it-repairs.md)). Carries `scm_revision` — the only fact in the mirror saying which BYTES the Controller runs. `scm_url` is projected with any embedded credential removed and `scmUrlRedacted` set, because estates DO put PATs in clone URLs (§2.5) | ~~**AWX-001**~~ |
 | `inventories`                    | `mapped` ⚪     | → **View** ([materialize/views.go](../../plugins/ansible-automation/controller/materialize/views.go)); smart inventories reduce their `host_filter`         |             |
 | `inventory_sources`              | `mapped` ⚪     | → points at the native Syncer for that cloud, never re-implemented as an AWX plugin                                                                         |             |
 | `hosts` (inventory members)      | `mapped` ⚪     | Deliberately never re-projected — that is the writable-CMDB anti-pattern (§1.2); hosts come from their own Syncers                                          |             |
@@ -86,8 +86,8 @@ which is which.
 | `labels`                         | `none` 🟠       | AWX labels are the operator's own grouping vocabulary; they would map to graph labels cleanly and nobody has looked                                         | **AWX-006** |
 | `execution_environments`         | `none` 🟠       | Which EE a template runs in is invisible in the mirror; on our side EE is an Actuator declaration (ADR-0117 D3a), so the mapping is not obvious             | **AWX-007** |
 | `instance_groups`                | `none` 🟠       | AWX's execution placement; our equivalent is Sites/Cells, so this is a real mapping question nobody has asked                                               | **AWX-008** |
-| `notification_templates`         | `none` 🟠       | ADR-0125 made Sinks driver-shaped; importing AWX's notification config is now cheap and unexamined                                                          | **AWX-009** |
-| `credential_types`               | `none` 🟠       | Custom credential types + injectors — the platform audit already scores this 🟡 (`injectionFor` is a fixed map)                                             | **AWX-012** |
+| `notification_templates`         | `projected` 🟢  | → `ansible.notification` + `owned-by` edge (2026-07-31). Name, DRIVER and config KEY NAMES only — no configuration VALUE is ever projected, because AWX returns non-secret fields in the clear and for the commonest driver the cleartext field IS the credential (a Slack webhook URL is a bearer secret). `notificationType` is a Sink's `kind` on cutover (ADR-0125). ATTACHMENTS deliberately absent: 3 sub-reads per job template | ~~**AWX-009**~~ |
+| `credential_types`               | `projected` 🟢  | → `ansible.credentialtype` (2026-07-31). Field names, WHICH are secret, and the injector delivery modes — `managed: false` is the migration question, since a custom type exists nowhere else. Injector TEMPLATES are not projected: arbitrary operator text the mode already summarises | ~~**AWX-012**~~ |
 | `ad_hoc_commands`                | `none` ⚪       | An imperative one-shot; Stratt's equivalent is a Run against a View, not an object to mirror                                                                |             |
 | `workflow_approvals`             | `adopt-only` ⚪ | Approval **nodes** are transformed into Workflow gates; pending approval _instances_ are run state, not config                                              |             |
 | `activity_stream`                | `none` ⚪       | We keep our own hash-chained audit (ADR-0034); mirroring AWX's is not a graph concern                                                                       |             |
@@ -204,7 +204,7 @@ Two paths read AWX, with different breadth, and nothing reconciles them:
 
 | Path                                                                                         | Endpoints                                                                                                               |
 | -------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
-| **Projection** ([controller/types.go](../../plugins/ansible-automation/controller/types.go)) | `job_templates`, `workflow_job_templates`, `schedules`, `organizations`, `teams` — **5**                                |
+| **Projection** ([controller/types.go](../../plugins/ansible-automation/controller/types.go)) | `job_templates`, `workflow_job_templates`, `schedules`, `organizations`, `teams`, `credentials`, `users`, `labels`, `execution_environments`, `notification_templates` — **10**                                |
 | **adopt deep-read** ([awxapi/](../../plugins/ansible-automation/controller/awxapi/))         | those + `projects`, `inventories`, `credentials`, `survey_spec`, `workflow_nodes`, `inventory_sources`, `hosts` — **9** |
 
 **Update (2026-07-26):** proving this seam found the asymmetry had also reached the **test harness**.
@@ -220,8 +220,8 @@ the cause. Both clients are now defensive.
 
 Most of the difference is correct and intended: `inventories`/`credentials`/`hosts`/`survey_spec` are
 `mapped` — they become Views, CredentialRefs, and `Workflow.inputs` at adopt and were never meant to be
-mirrored as themselves. **Two are not explainable that way**: `projects` (**AWX-001**) and `workflow_nodes`
-(**AWX-002**). Both are estate structure the graph should hold, both are already being fetched and parsed
+mirrored as themselves. **Two were not explainable that way**: `projects` (**AWX-001**, done 2026-07-31)
+and `workflow_nodes` (**AWX-002**, done ADR-0129). Both are estate structure the graph should hold, both are already being fetched and parsed
 by code in the same module, and neither absence appears to have been decided — it reads as the projection
 having been built first and never revisited when the transform grew deeper.
 
@@ -242,8 +242,15 @@ having been built first and never revisited when the transform grew deeper.
   approval-gate fact. The node graph's SHAPE is deliberately still not projected: that is cutover
   fidelity, which adopt reads from AWX directly, and the mirror exists for governance. Costs an **N+1
   read** — one request per workflow, every poll — recorded in the ADR's consequences rather than hidden.
-- **AWX-001 · `ansible.project` + `scm_revision`.** Already booked by ADR-0127 D4 and unchanged by this
-  audit — it repairs ADR-0085's soundness, and it deserves its own ADR.
+- ~~**AWX-001 · `ansible.project` + `scm_revision`.**~~ **Done (2026-07-31, ADR-0154)**, and it did
+  repair ADR-0085's soundness rather than merely add breadth. The orphan-template Baseline reads the
+  presence of the `runs` edge, whose target is keyed by the Project NAME concatenated with a playbook
+  path and matched against an operator-set env var — so a broken convention and genuinely-unseen
+  content produced the **identical** observation. The template now also carries `uses-project`, joined
+  on the ID AWX issued, which cannot silently mismatch: `uses-project` present + `runs` dropped now
+  means "the content root is the missing half", where before it meant nothing in particular.
+  Still open from that thread: comparing `scm_revision` to what the content half observed, which
+  needs the content half to observe its own checkout first.
 
 **Tier 2 — the authorization picture:**
 
@@ -267,21 +274,35 @@ having been built first and never revisited when the transform grew deeper.
   discovered at read time is ungrantable. Labels are Entities with `has-label` edges, so an operator's AWX
   grouping vocabulary becomes Stratt Views by topology selection — see `estate/views/awx-prod-templates.yaml` ·
   **AWX-007** execution environments · **AWX-008** instance groups →
-  Sites/Cells · **AWX-009** notification templates → Sinks (cheap since ADR-0125) ·
+  Sites/Cells · ~~**AWX-009** notification templates → Sinks~~ — **done (2026-07-31)**, and the
+  §2.5 line is the whole design: AWX encrypts `token`/`password` and returns the REST IN THE CLEAR,
+  so "project what AWX did not encrypt" would have imported working webhook credentials into the
+  graph — a Slack incoming-webhook URL carries its token in the path. `configKeys` keeps the key
+  NAMES (what a Sink declaration has to restate) and the projecting Go type has **no field the
+  values could live in**, so the property is structural rather than a habit in the normalizer.
+  Attachments (which template notifies through which, on started/success/error) are absent BY
+  BUDGET: AWX exposes them only as three sub-resources per template, so the edge costs
+  3×len(job_templates) per poll — the different-order-of-cost ADR-0131 refuses by default ·
   ~~**AWX-007** execution environments~~ — **done, [ADR-0133](../adr/0133-execution-environments-and-instance-groups.md) D1** ·
   ~~**AWX-008** instance groups~~ — **declined, D4**, and the declining is the decision: it stays 🔴/⚪ rather
   than 🟠, because "nobody looked" and "we looked and said no" must never render the same ·
-  **AWX-012** custom credential types · ~~**AWX-013** schedule `extra_data` + timezone~~ — **done,
+  ~~**AWX-012** custom credential types~~ — **done (2026-07-31)** ·
+  ~~**AWX-013** schedule `extra_data` + timezone~~ — **done,
   [ADR-0132](../adr/0132-awx-labels-and-schedule-shape.md) D3**: timezone/next-run/window plus the
   per-schedule launch overrides, and `extraDataKeys` — **key names, never values**, which distinguishes
   two schedules of one template while holding the §2.5 line ADR-0128 D4 drew for `extra_vars` ·
   **AWX-015** the ~15 `ask_*_on_launch` booleans (deferred out of ADR-0128 D4: cutover fidelity rather
   than governance) · **AWX-016** workflow nodes as entities (deferred out of ADR-0129 D3 — it earns a
   namespace when a consumer needs the DAG, the obvious one being a UI rendering of a mirrored workflow
-  beside a Stratt Workflow) · **AWX-017** correlating `ansible.user` to the SCIM identity — the AWX
-  analogue of ADR-0079 4a's leaver-credential Finding, where **a local AWX account matching no known
-  identity** is the account nobody offboards; it needs a username-resolvable identity key on `user`
-  Entities, which is a decision about the identity plane · ~~**AWX-018** a **poll-cost budget**~~ — **done,
+  beside a Stratt Workflow) · ~~**AWX-017** correlating `ansible.user` to the SCIM identity~~ — **done
+  (2026-07-31, [ADR-0155](../adr/0155-the-account-nobody-offboards.md))**. The identity-plane decision
+  it needed: the SCIM projector emits a second, POINTABLE key `identity.userName` on the `user`
+  Entities it already owns — and **only when the login is claimed by exactly one IdP**, because the
+  projector is the sole component that enumerates every IdP and can therefore see the collision. Two
+  candidate people is not a person (§2.4). The AWX half emits a soft `same-account-as` edge, and its
+  ABSENCE is the Finding (`awx-account-unlinked`): either no IdP knows this login — the account
+  nobody offboards — or the name is ambiguous and Stratt cannot say who it is. Nothing here claims
+  `identity.subject`, and INV-3 keeps it structurally unreadable by authorization · ~~**AWX-018** a **poll-cost budget**~~ — **done,
   [ADR-0131](../adr/0131-controller-poll-cost-budget.md)**, settled before a fourth N+1 landed. The
   finding was that three ADRs had each added an N+1 read against a Controller we do not own, each
   individually justified, with no decision owning the total — and the compounding half was worse than

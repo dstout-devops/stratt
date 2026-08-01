@@ -1,17 +1,19 @@
 package desiredstate
 
 import (
-	"strings"
 	"testing"
 )
 
-// An Action Step's Contract must EXIST at load, even when its params cannot be
-// checked yet (ADR-0031, §2.2 — "an uncontracted operation must not exist").
+// Where an Action Step's Contract is required to EXIST (ADR-0031, §2.2 — "an
+// uncontracted operation must not exist"), and where it is only required to be
+// CONSISTENT if present.
 //
-// Existence is a static fact about the estate: it does not depend on what a template
-// resolves to. Deferring it alongside the VALUES meant a Step naming an uncontracted
-// Action passed the load and failed at launch with "no input contract for action" —
-// admitted where a human is reading a diff, fatal somewhere they are not (§1.8).
+// The rule is enforced in three places, and which place matters:
+//
+//   - the REPO (TestEveryStepActionIsContracted) — every tree is on disk there, so
+//     existence is exact and a typo'd Action name fails at the diff;
+//   - RUNTIME (ValidateActionInput) — an uncontracted Invoke is refused outright;
+//   - LOAD (here) — shape only, for the reason the next test records.
 
 // actionStepEstate writes an estate with one Action Step using the given action and
 // params body (raw YAML for the params block).
@@ -27,19 +29,25 @@ func actionStepEstate(t *testing.T, action, paramsYAML string) string {
 	return root
 }
 
-// TestUncontractedActionIsRefusedEvenWithTemplatedParams is the gap this closes. The
-// templated form is the one that mattered: concrete params already failed, because
-// validation ran and found no Contract to validate against. Templated params returned
-// early and skipped the existence check with them.
-func TestUncontractedActionIsRefusedEvenWithTemplatedParams(t *testing.T) {
-	root := actionStepEstate(t, "nosuch/operation", "      key: \"{{.launch.value}}\"\n")
-	_, err := ParseDir(root, nil)
-	if err == nil {
-		t.Fatal("a Step naming an Action with no input Contract must be refused at load — deferring it to " +
-			"launch means the failure lands where nobody is reading a diff")
-	}
-	if !strings.Contains(err.Error(), "no input contract") {
-		t.Fatalf("the diagnostic must name the missing Contract: %v", err)
+// TestUnknownActionWithTemplatedParamsLoads pins a DELIBERATE permissiveness, and it
+// is the inverse of what this file asserted for one day.
+//
+// The load-time existence check was tried and reverted, because a running daemon's
+// contract set is INCOMPLETE when it parses declarations: a plugin's self contracts
+// arrive from its own tree only for the owning or an admitted plugin (ADR-0138
+// D3/D4), and an environment-wired plugin — the boot-wired path every plugin demo
+// uses — contributes its contracts later still, from its Manifest at enable. So "no
+// contract" at load usually means "not yet", and enforcing it made strattd refuse to
+// BOOT against a valid estate. `task ci` could not see that, because in-repo every
+// plugin tree is on disk and complete; the vsphere demo floor found it.
+//
+// Nothing is lost. TestEveryStepActionIsContracted holds the rule where it is exact,
+// and ValidateActionInput refuses the Invoke.
+func TestUnknownActionWithTemplatedParamsLoads(t *testing.T) {
+	root := actionStepEstate(t, "notyet/registered", "      key: \"{{.launch.value}}\"\n")
+	if _, err := ParseDir(root, nil); err != nil {
+		t.Fatalf("an Action whose Contract is not registered YET must load — a plugin wired by "+
+			"environment registers its contracts after this parse, and refusing here stops the daemon booting: %v", err)
 	}
 }
 

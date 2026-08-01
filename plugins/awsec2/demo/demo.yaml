@@ -9,13 +9,26 @@ summary: >
 
 # fidelity (D3): how real is what you're watching?
 #   real       — real workloads on real substrate.
-#   build-real — provisioning/lifecycle APIs are real, guest-OS/runtime simulated.
+#   build-real — the substrate's control API and lifecycle are real; the substrate itself is a simulator.
 #   simulated  — the substrate itself is faked end to end.
-fidelity: real
+fidelity: build-real
 fidelityNote: >
-  floci (ADR-0093) runs REAL Docker containers as EC2 instances — SSH-able, real lifecycle, real EC2
-  API. Not a mock (it replaced moto). RunInstances actually launches a Linux instance.
+  floci (ADR-0093) runs REAL Docker containers as EC2 instances against a real EC2 API — RunInstances
+  actually launches a Linux container, the lifecycle is real, and the network model (VPC/subnet/SG/
+  route-table/IGW, genuine subnet CIDR IPAM) is real. Not a mock; it replaced moto. What is NOT real
+  is the GUEST: no floci AMI ships an sshd binary and user-data is never executed, so the instance is
+  a real machine record with nothing listening and cannot be converged onto. This note said "SSH-able"
+  and the demo claimed fidelity `real` until it was measured (2026-07-27, floci 1.5.33) — HAR-1 in
+  docs/enterprise-readiness.md, guarded by plugins/awsec2/floci_fidelity_live_test.go. build-real is
+  exactly the vocabulary this library already defined for it: provisioning/lifecycle APIs real,
+  guest-OS/runtime simulated.
 
 # What the runner drives (mirrors the estate).
 workflow: compute-build
-substrate: ec2-floci
+# WHAT THIS DEMO RUNS AGAINST. Named `backend`, NOT `substrate`: since ADR-0151 a substrate is a
+# CLOSED set of landscapes ({aws, kubernetes, vsphere}) declared by a PROVIDER and selected by one
+# capability-binding line. This field is the harness's own descriptor — it names the simulator or
+# transport a demo actually talks to — and it was spelled `substrate:` with values like
+# `ec2-floci` and `vsphere-vspheresim` that are not in that set at all. One token, two meanings,
+# and `kubernetes` was a legal value of both (declaration-map §7 item 9).
+backend: ec2-floci

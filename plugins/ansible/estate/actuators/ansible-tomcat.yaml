@@ -1,0 +1,28 @@
+# ansible-tomcat — the Actuator that converges Tomcat on a host (ADR-0148).
+#
+# A CONTENT actuator with no `provides:`, the same shape as ansible-apache and ansible-fileset.
+# Declaring `configmgmt` would give Intent/Application a THIRD provider of that class and make every
+# capability-routed remediation ambiguous and fail closed (§2.4). The Blueprint names its Workflow
+# directly, which is the documented answer when the estate has decided — and per application it has.
+#
+# THE SHARED CONTENT ROOT (content/webapp), and this file is where the earlier claim was wrong. It
+# said the per-project facetNamespaces ceiling was the least-authority property and that merging two
+# applications' roots would merge their write ceilings. `facetNamespaces` is a field on the ACTUATOR,
+# intersected with the Step's facetWriteScope per Actuator — so three Actuators over one root keep
+# three distinct ceilings, and this one still writes exactly app.config and software.package.
+#
+# The prediction in that comment was otherwise right: the shared skeleton became a ROLE
+# (roles/stratt_web_service) that each play includes. It just did not need separate roots to keep
+# the ceilings separate, because the ceilings were never the directory's to keep.
+name: ansible-tomcat
+pluginIdentity: ansible
+tier: trusted
+dryRunnable: true
+jobCommand: [stratt-ansible]
+contentDir: content/webapp
+contentInputs: [playbook]
+facetNamespaces:
+  - app.config
+  - software.package
+identitySchemes: [host.name]
+elevatedInputs: [become.enabled]

@@ -1,0 +1,192 @@
+# cert-issue — the remediation the `certissuer` capability resolves to (ADR-0030/0050/0106).
+#
+# IT LIVES IN THE ESTATE, not in the openbao plugin's tree, and that is ADR-0104 D1 enforced rather
+# than preference: this Workflow composes TWO plugins — ansible generates the CSR and delivers the
+# certificate, openbao signs it — and a plugin's own estate may not name another plugin's provider.
+# `task plugins:boundary` caught the first draft doing exactly that. The rule is the same one that
+# keeps cross-plugin DEMOS in demos/ rather than beside one of their plugins: whoever spans the
+# boundary owns the composition.
+#
+# ── AND THAT RULE LEAVES THIS FILE WITH NO SHIPPABLE HOME, which is worth stating plainly because
+# this copy is the evidence. Everything else in this demo's estate is either the scenario (Intents,
+# Blueprints, Assignments) or a one-line admission of a plugin that ships its own declarations. This
+# is the exception: a composed Workflow belongs to neither plugin, so it cannot travel with either,
+# so EVERY estate that wants the composed certificate flow hand-copies it — the reference estate has
+# one, this demo now has a second, and nothing makes them agree.
+#
+# That is the divergent-second-copy shape this repo keeps paying for (awxsim's two halves; the
+# `web-server` capability route; PRV-1's two compute-build.yaml), arriving through a door the
+# boundary rule itself opened. It is not fixed here: the fix is a home for cross-plugin compositions
+# — a pack an estate installs (ADR-0033's materialize-into-operator-Git move) rather than a file
+# every adopter retypes — and that is a decision of consequence, so it is BOOKED rather than
+# improvised inside a demo. Until then, treat this file and estate/workflows/cert-issue.yaml as one
+# artifact in two places and change them together.
+#
+# WHY IT DID NOT EXIST AT ALL UNTIL RECENTLY. `cert-issuer` advertised `provides: [certissuer]`
+# since ADR-0106 with NO `remediates:` entry, because the Workflow it would name was never written —
+# the exact shape ADR-0145 found on the network leg, where `opentofu-network` advertised
+# `provides: [provisioning]` and could not build a Subnet. A class with a provider that can serve no
+# Intent kind is an advertisement with nothing behind it: the capability RESOLVES, and then there is
+# nothing to launch.
+name: cert-issue
+inputs:
+  type: object
+  additionalProperties: false
+  required: [commonName, role, ttl, renewBefore]
+  properties:
+    commonName:
+      type: string
+      minLength: 1
+      description: >
+        The subject the certificate is issued for, resolved per-Assignment from the Intent's spec.
+        It is the ONE field an operator declares and everything else follows from — the whole point
+        of an Intent/Certificate over a hand-run issuance.
+    role:
+      type: string
+      minLength: 1
+      description: >
+        The CLM role to issue under, from Intent/Certificate's `issuer`. Named as a ROLE rather than
+        as an OpenBao path so a step-ca implementation of the same capability serves the same
+        Intent unchanged (§1.5). This Workflow no longer lives in the openbao plugin's estate — it
+        composes two plugins, so ADR-0104 D1 moved it into the ESTATE — and nothing above it names
+        a CLM at all.
+    ttl:
+      type: string
+      minLength: 1
+      description: The requested validity, from the Intent's `validity`.
+    renewBefore:
+      type: string
+      minLength: 1
+      description: >
+        How long before expiry a certificate must be renewed. The SAME value the Blueprint's
+        observe expectation uses as its `notBefore` window, which is what makes renewal a drift
+        loop rather than a schedule: the Baseline opens a Finding once `cert.expiry.notAfter` is
+        closer than this, and this Run is what closes it.
+steps:
+  # ── THE BORN-ON-TARGET FLOW (CERT-2) ────────────────────────────────────────────────────────
+  # Three Steps because the property §2.5 demands needs three: the KEY is made where it will be
+  # used, only the CSR travels, and the signature comes back. It was unexpressible until an
+  # Actuator Step could hand a typed value downstream — an ansible Step had nowhere to put the CSR
+  # it had just generated, so the only shapes available were a CLM-generated key (discarding the
+  # born-on-target property this Actuator's own input Contract states in writing) or a fake.
+  - name: gather
+    # A HOST View — and since ADR-0150 that is the MODEL, not the workaround it used to be.
+    #
+    # This Step's View is the AUTHORIZATION unit (ADR-0028): `runner on view:managed-web` is checked
+    # at launch against a View the declaration names, exactly as for any other Run. What narrows the
+    # blast radius to ONE host is the Finding's Entity scope (D3) — a remediation converges the host
+    # that drifted, not its tier — and what names the certificate is that same Entity's own facts,
+    # resolved from `{{.entity.*}}` when the remediation launches (D2).
+    #
+    # The earlier revision of this comment recorded the debt this pays: a `cert` Entity carries only
+    # cert.serial, nothing connected a certificate to the machine that would present it, and the
+    # binding was static where it should have been derived (CERT-3). The answer turned out not to be
+    # a cert→host link. A certificate is a PROPERTY OF A HOST, so the Assignment binds a View of
+    # hosts and each member's certificate is named from itself.
+    # NO viewName — INHERITED from the Baseline that raised the Finding, exactly as the app
+    # converge Workflows now do. The Assignment says WHERE; this recipe says WHAT. It is what lets
+    # the SAME issuance flow serve a host that was declared by hand and one Stratt built minutes
+    # ago, with no edit here.
+    actuator: ansible-certificate
+    credentialRefs: [web-machine]
+    # It writes NO facets: a CSR is not a fact about the host, it is a request for the next Step.
+    # The value leaves through the Actuator's pinned outputContract instead (outputs/csr).
+    params:
+      connection:
+        user: root
+        credentialRef: web-machine
+        hostKeyChecking: accept-new
+      extraVars:
+        cert_common_name: "{{.launch.commonName}}"
+        cert_dir: /etc/stratt/pki
+      playbook: csr-gather.yml
+
+  - name: sign
+    needs: [gather]
+    # An ACTION, not the cert-issuer Actuator's Apply — because an Action's result binds into a
+    # later Step and the delivery Step needs the certificate. The Actuator verb converges a View of
+    # certificates and writes cert.identity/cert.expiry; this signs exactly one.
+    action: cert-issuer/sign
+    # An Action's CredentialRef use-check is its ONLY authz gate (the core refuses a credential-free
+    # Action outright, "ActionUngated"), so this is the gate on signing — not bookkeeping about
+    # material. The openbao plugin authenticates to the CLM itself, which is why
+    # estate/credential-refs/cert-issuer.yaml is a GATE-ONLY ref (ADR-0052), exactly as helm-deploy
+    # is. This reference named a declaration that did not exist until the first live run; deleting
+    # the reference would have removed the gate rather than fixed the estate.
+    credentialRefs: [cert-issuer]
+    params:
+      # The output of the Step above, validated against outputs/csr before anything could bind it.
+      csr: "{{.steps.gather.outputs.csr}}"
+      role: "{{.launch.role}}"
+      ttl: "{{.launch.ttl}}"
+
+  - name: deliver
+    needs: [sign]
+    # The same static host View as `gather`, and it must be: the key was generated there and has
+    # not moved. Delivering to a different host than the one that made the key would produce a
+    # certificate whose private half is somewhere else.
+    # NO viewName — INHERITED from the Baseline that raised the Finding, exactly as the app
+    # converge Workflows now do. The Assignment says WHERE; this recipe says WHAT. It is what lets
+    # the SAME issuance flow serve a host that was declared by hand and one Stratt built minutes
+    # ago, with no edit here.
+    actuator: ansible-certificate
+    credentialRefs: [web-machine]
+    # Delivery reports WHAT THE CERTIFICATE SAYS, read back from the host (ADR-0150 D5) — the
+    # renewal Baseline observes cert.presented.notAfter, so renewal is drift on what is deployed
+    # rather than on what was ordered.
+    #
+    # ── THE ONE PLACE THIS COPY DELIBERATELY DIVERGES FROM estate/workflows/cert-issue.yaml ────────
+    # The reference copy scopes `[fileset.content, cert.presented]`. Running this demo failed on that
+    # second namespace, AFTER an approved gate, with:
+    #
+    #	graph: upsert facet fileset.content on <host>: facet namespace fileset.content has no
+    #	registered owner (charter §2.1: registration precedes writes)
+    #
+    # And the ownership check is RIGHT. `fileset.content` has an owner in the reference estate only
+    # because an unrelated Assignment — `web-files`, an Intent/FileSet this scenario does not declare
+    # — happens to register it. So a Workflow that reads as self-contained silently depends on
+    # another Assignment existing somewhere in the same estate, and an adopter meets that dependency
+    # as a Run failing at the far end of a gate they have just approved.
+    #
+    # The write is bookkeeping about the delivered file (digest, mode, present); `cert.presented` is
+    # the load-bearing fact the renewal Baseline reads. An estate that manages no FileSet has no
+    # business claiming the namespace, so this copy claims what it owns and nothing else. The play
+    # still publishes the fileset key and the governor drops it — out of scope, which is the governor
+    # working.
+    #
+    # AND IT IS NOW CAUGHT AT LOAD. `checkFacetWriteScopeOwners` refuses a `facetWriteScope` naming a
+    # namespace nothing in the estate owns — the third member of the family beside ADR-0145's
+    # `provisions` check and CERT-1's `remediates` check. So the divergence below is no longer a
+    # thing an author has to notice: an estate that scoped `fileset.content` without owning it fails
+    # in review rather than after an approved gate.
+    facetWriteScope: [cert.presented]
+    params:
+      connection:
+        user: root
+        credentialRef: web-machine
+        hostKeyChecking: accept-new
+      extraVars:
+        cert_common_name: "{{.launch.commonName}}"
+        cert_dir: /etc/stratt/pki
+        cert_pem: "{{.steps.sign.outputs.certificate}}"
+      playbook: cert-deliver.yml
+
+  # ── WHY THERE IS NO FOURTH STEP ─────────────────────────────────────────────────────────────
+  # A fourth Step ran here — `issue`, a cert-issuer Apply over view:managed-certs meant to project
+  # cert.identity / cert.expiry once delivery had landed. It executed exactly once and the provider
+  # refused it, correctly:
+  #
+  #	commonName requires a target-generated csr (born-on-target, ADR-0050)
+  #	— refusing to sign without one
+  #
+  # The Step was asking the CLM to MINT a certificate whose subject it had named — the very thing
+  # the three Steps above exist to avoid, and which the Actuator fails closed on. Its stated purpose
+  # (project the facts the renewal Baseline reads) is not an Apply at all, and those Facets already
+  # have a write owner: the openbao cert Syncer projects cert.identity and cert.expiry from the CLM,
+  # which is the §2.1 single-writer this Step would have become a second of.
+  #
+  # So the certificate is issued by `sign`, delivered by `deliver`, and OBSERVED by the Syncer on
+  # its own cadence — one authority per fact (§1.2). The renewal loop is unchanged: the Baseline
+  # reads cert.expiry.notAfter against `renewBefore` and opens a Finding, and this Workflow is what
+  # closes it. `renewBefore` stays a declared input because the Blueprint's expectation and this
+  # Workflow's launch must agree on one window; nothing in these three Steps consumes it directly.

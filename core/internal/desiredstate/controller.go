@@ -3,6 +3,7 @@ package desiredstate
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -276,6 +277,50 @@ func (c *Controller) reconcileProvisioning(ctx context.Context, decls Declaratio
 		return r
 	}
 
+	// PLACEMENT RESOLUTION (ADR-0147 D1). A declared placement target is an Intent/Subnet NAME —
+	// the only thing Git can hold — and a builder's Action needs the provider-native id. Nothing
+	// translated, so `placement.subnet: app-subnet` reached RunInstances as a subnet id and the
+	// substrate answered InvalidSubnetID.NotFound. The read happens HERE, once, so
+	// BuildLaunchParams stays pure.
+	singletonIdents, err := c.Store.SingletonIdentities(ctx)
+	if err != nil {
+		log.Error("singleton identities read failed", "error", err)
+		return
+	}
+	// providerSchemes is the resolved provider's DECLARED identity vocabulary. Core never learns
+	// what `aws.subnetId` means — it intersects what the built subnet carries with what the
+	// provider says it can address (ADR-0147 D2).
+	schemesByProvider := map[string][]string{}
+	for _, a := range decls.Actuators {
+		schemesByProvider[a.Name] = a.IdentitySchemes
+	}
+	for _, cn := range decls.Connectors {
+		if _, dup := schemesByProvider[cn.Name]; !dup {
+			schemesByProvider[cn.Name] = cn.IdentitySchemes
+		}
+	}
+	// resolvePlacement returns the provider-native ref for a declared placement target, and a
+	// reason when it cannot. An empty target is not placement at all — no ref, no reason.
+	resolvePlacement := func(target string, r capability.Result) (ref, reason string) {
+		if target == "" || r.Status != capability.StatusResolved {
+			return "", ""
+		}
+		key := provision.SingletonKey(types.IntentSubnet, target)
+		ref, err := provision.ResolveSubnetRef(key, singletonIdents[key], schemesByProvider[r.Provider])
+		if err == nil {
+			return ref, ""
+		}
+		if errors.Is(err, provision.SubnetRefUnbuilt) {
+			// ORDERING (ADR-0147 D3). Not an error — the estate is simply not there yet. It
+			// becomes an observable Finding with NO launch spec, exactly as an unresolved
+			// PROVIDER does (ADR-0110 D4), because the alternatives are both worse: a launch
+			// that fails after the approval, or one that silently builds the host UNPLACED.
+			return "", "placement target " + target + " is declared but not built — build it first, " +
+				"then this build becomes launchable (§5 Flow 1)"
+		}
+		return "", err.Error()
+	}
+
 	// The builder's declared interface, so core sends only what it asked for (ADR-0123 D3).
 	// Looked up once per Workflow: the alternative is sending everything and forcing every
 	// builder to declare params it ignores, which is what made `placement` inert.
@@ -298,17 +343,31 @@ func (c *Controller) reconcileProvisioning(ctx context.Context, decls Declaratio
 	for _, inst := range res.ToBuild {
 		sp := specs[inst.Intent]
 		r := resolveKind("Compute")
-		detail, _ := json.Marshal(provisionFindingDetail(r, map[string]any{
+		var placeTarget string
+		if sp.Placement != nil {
+			placeTarget = sp.Placement.Subnet
+		}
+		ref, blocked := resolvePlacement(placeTarget, r)
+		inst.SubnetRef = ref
+		base := map[string]any{
 			"instance": inst.Name, "intent": inst.Intent, "ordinal": inst.Ordinal,
 			"projectKind": sp.ProjectKind, "labels": sp.Labels, "params": sp.Params,
 			"placement": sp.Placement,
-		}))
+		}
+		if blocked != "" {
+			base["placementUnresolved"] = blocked
+		}
+		detail, _ := json.Marshal(provisionFindingDetail(r, base))
 		b := "provision/" + inst.Intent
 		// The TYPED per-instance launch spec beside the display blob (ADR-0120 D2). Empty when
 		// provisioning is unresolved: there is then genuinely nothing to launch, and the detail
 		// above names the capability that could not be bound.
+		//
+		// Also empty when a DECLARED placement cannot be resolved (ADR-0147 D3) — same rule, same
+		// reason. A launch spec offered here would either fail after the operator approved it, or
+		// build the host somewhere other than the network it was declared to be on.
 		pf := graph.ProvisionFinding{Baseline: b, Target: inst.Name, Severity: "warning", Detail: detail}
-		if r.Status == capability.StatusResolved {
+		if r.Status == capability.StatusResolved && blocked == "" {
 			pf.LaunchWorkflow = r.Workflow
 			pf.LaunchParams = provision.FilterToDeclared(
 				provision.BuildLaunchParams(provision.Intent{Name: inst.Intent, Spec: sp}, inst),
@@ -324,20 +383,31 @@ func (c *Controller) reconcileProvisioning(ctx context.Context, decls Declaratio
 	// correlation key the built Entity will carry as stratt.intent/singleton.
 	for _, inst := range sres.ToBuild {
 		si := singSpecs[inst.Intent]
-		detail, _ := json.Marshal(provisionFindingDetail(resolveKind(shortIntentKind(si.Kind)), map[string]any{
+		sr := resolveKind(shortIntentKind(si.Kind))
+		var sPlaceTarget string
+		if si.Spec.Placement != nil {
+			sPlaceTarget = si.Spec.Placement.Subnet
+		}
+		sRef, sBlocked := resolvePlacement(sPlaceTarget, sr)
+		inst.SubnetRef = sRef
+		sBase := map[string]any{
 			"singleton": inst.Name, "intent": inst.Intent, "intentKind": si.Kind,
 			"correlationLabel": map[string]string{"stratt.intent/singleton": inst.Name},
 			"projectKind":      si.Spec.ProjectKind, "labels": si.Spec.Labels, "params": si.Spec.Params,
 			"placement": si.Spec.Placement,
-		}))
+		}
+		if sBlocked != "" {
+			sBase["placementUnresolved"] = sBlocked
+		}
+		detail, _ := json.Marshal(provisionFindingDetail(sr, sBase))
 		b := "provision/" + inst.Intent
 		// The typed per-singleton launch spec (ADR-0120 D2, extended to the ADR-0059 D4 path).
 		// Empty when provisioning is unresolved: nothing to launch, and the detail names the
 		// capability that could not be bound.
 		pf := graph.ProvisionFinding{Baseline: b, Target: inst.Name, Severity: "warning", Detail: detail}
-		if r := resolveKind(shortIntentKind(si.Kind)); r.Status == capability.StatusResolved {
-			pf.LaunchWorkflow = r.Workflow
-			pf.LaunchParams = provision.FilterToDeclared(provision.SingletonLaunchParams(si, inst), declaredInputs(r.Workflow))
+		if sr.Status == capability.StatusResolved && sBlocked == "" {
+			pf.LaunchWorkflow = sr.Workflow
+			pf.LaunchParams = provision.FilterToDeclared(provision.SingletonLaunchParams(si, inst), declaredInputs(sr.Workflow))
 		}
 		if err := c.Store.WriteProvisionFinding(ctx, pf); err != nil {
 			log.Error("write singleton provision finding failed", "singleton", inst.Name, "error", err)

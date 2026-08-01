@@ -18,7 +18,9 @@ use (
 	./plugins/chef
 	./plugins/crossplane
 	./plugins/declared
+	./plugins/dns
 	./plugins/helm
+	./plugins/kubecompute
 	./plugins/kubecontainers
 	./plugins/kubeservices
 	./plugins/mcp

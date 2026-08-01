@@ -1262,6 +1262,8 @@ export interface components {
         };
         Facet: {
             namespace: string;
+            /** @description Which of several same-namespace Facets on this Entity this is (ADR-0152) — `app.config` for apache and `app.config` for tomcat on one host are two FACTS, not two opinions about one. Absent or empty means unqualified, which is the ordinary case. Derived at compile from the resolved spec and stamped by the core from the claim that owns it; never observed, and never proposed by a writer. Distinct from the SOURCE dimension (ADR-0060), which exists for competing signals about one fact and collapses to one value at read. */
+            qualifier?: string;
             /** @description The Facet document fragment (schema attaches per namespace, §1.1). */
             value: unknown;
             provenance: components["schemas"]["Provenance"];
@@ -1488,6 +1490,8 @@ export interface components {
             spec?: Record<string, never>;
             /** @enum {string} */
             onRemove?: "retain" | "revert" | "remove";
+            /** @description Reconcile-scope MEMBERSHIP filter (ADR-0057 D2) — which environments this Intent applies in; empty means all. Never a value selector: it chooses WHETHER this document applies, never what it means where it does (ADR-0118 D1). It exists because a PROVISIONING Intent has no Assignment to carry one — ADR-0058 makes provisioning a sibling reconcile that selects an Intent by name — so without it such an Intent was in force in every environment unconditionally, and had to satisfy every substrate's build Workflow at once. */
+            environments?: string[];
         };
         /** @description Binds an Intent to a cac-declared View, pinning a Blueprint version (charter §2.4). CaC-only. */
         Assignment: {
@@ -2017,6 +2021,11 @@ export interface components {
             baseline: string;
             /** @description The Workflow that would be launched. */
             workflow: string;
+            /**
+             * @description The Entity this remediation would be NARROWED to (ADR-0150 D3) — a Run launched from a Finding converges the one Entity that drifted, not the whole View its Steps declare. Absent when the Finding's target is not an Entity, in which case the Workflow's Steps converge their declared Views as they always have.
+             *     It is here because a preview that omits it MISSTATES THE BLAST RADIUS. It misstates it in the safe direction — the reader expects a whole tier and gets one host — but §1.8 is about the descent telling the truth, and "safely wrong" is still wrong when an operator is deciding whether to approve.
+             */
+            entityScope?: string;
             /**
              * @description Which ACT this would perform (ADR-0120 D5). remediate converges live state to its expectation; remove retires state the estate no longer declares; build creates declared state that does not exist yet. Three acts need a name rather than a boolean, and they are not interchangeable — an operator about to approve a gate is entitled to know which one they are approving (§1.8).
              * @enum {string}

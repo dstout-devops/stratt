@@ -5,9 +5,9 @@
 # The `plugins:` entry (a) deploys the vcenter plugin pod (Service stratt-vcenter:9090, image
 # kind-loaded by image:vcenter-plugin) and (b) makes the chart auto-derive STRATT_VCENTER_PLUGIN_ADDR
 # on strattd (deployment.yaml) so the boot-wired vcenter Syncer + INVOKE Actions (vcenter/create-vm …)
-# register (core/cmd/strattd/main.go). `env` configures the plugin pod (it dials vcsim on the kind
+# register (core/cmd/strattd/main.go). `env` configures the plugin pod (it dials vspheresim on the kind
 # host-gateway 192.168.102.1:8989); `hostEnv` injects strattd's Syncer wiring (Source name, endpoint,
-# interval). vcenter reaches an external vcsim, not the K8s API, so no kubeAccess.
+# interval). vcenter reaches an external vspheresim, not the K8s API, so no kubeAccess.
 plugins:
   - name: vcenter
     image:

@@ -41,12 +41,12 @@ func NewServer(cfg ServerConfig, client *Client, log *slog.Logger) *Server {
 	return &Server{cfg: cfg, client: client, log: log.With("plugin", "ansible-automation", "role", "content")}
 }
 
-// GetManifest advertises the SYNCER class + the four `ansible.*` Facet namespaces this
+// GetManifest advertises the SYNCER class + the seven `ansible.*` Facet namespaces this
 // Syncer owns — and ONLY those it actually populates (§1.1: own what you project). The
 // identity + relation schemes it emits are gated by the operator grant (strattd side),
 // never self-granted.
 func (s *Server) GetManifest(context.Context, *pluginv1.GetManifestRequest) (*pluginv1.GetManifestResponse, error) {
-	kinds := []string{KindPlaybook, KindRole, KindCollection, KindInventory}
+	kinds := []string{KindPlaybook, KindRole, KindCollection, KindInventory, KindVarScope, KindConfig, KindPlugin}
 	contracts := make([]*pluginv1.ContractDecl, 0, len(kinds))
 	for _, k := range kinds {
 		contracts = append(contracts, &pluginv1.ContractDecl{SchemaId: k})

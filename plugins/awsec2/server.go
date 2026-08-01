@@ -63,6 +63,16 @@ var facetNamespaces = []string{
 	"net.subnet",
 	"net.securitygroup",
 	"storage.volume",
+	// mgmt.address — the OBSERVED reach coordinate (ADR-0143), the second substrate to
+	// produce one. Until a provisioning provider projects this, a machine it BUILDS has
+	// no coordinate and cannot be targeted at all: the only working producer was a
+	// hand-written address in Git, which by definition cannot exist for a machine that
+	// does not exist yet.
+	//
+	// This list feeds BOTH the Manifest's contracts and nothing else, so advertisement
+	// and emission cannot drift here the way they did in vcenter (which hand-writes the
+	// two separately — see ADR-0143's own slip). Worth copying, not just noting.
+	"mgmt.address",
 }
 
 // tombstoneSchemes are the identity schemes this Syncer fully enumerates — one per
@@ -282,6 +292,24 @@ type createVMParams struct {
 	// stratt.intent/instance correlation key + fleet keys, not another Source's.
 	ProjectKind   string            `json:"projectKind"`
 	ProjectLabels map[string]string `json:"projectLabels"`
+	// Declared PLACEMENT (ADR-0058/0059 D5, ADR-0123 D2). Until this existed the
+	// provisioning seam rendered placement into this Action's params and the Action had
+	// nowhere to put it: the input Contract is additionalProperties:false, so every
+	// Intent/Compute build through compute-build failed at LAUNCH, and ADR-0123 D2's
+	// "declared placement finally reaches the provider" was not true (PRV-1).
+	//
+	// EMPTY IS MEANINGFUL AND NORMAL. ADR-0123 D2 requires placement be emitted complete —
+	// every axis present, empty where the Intent declares nothing — precisely so a shared
+	// builder can bind it without a conditional. So an empty string means "unplaced", and
+	// each field is applied to RunInstances only when set; core does not, and cannot,
+	// branch on it (ADR-0083 D5).
+	SubnetID         string   `json:"subnetId"`
+	AvailabilityZone string   `json:"availabilityZone"`
+	SecurityGroupIDs []string `json:"securityGroupIds"`
+	// KeyName names an ALREADY-IMPORTED key pair (awsec2/import-key-pair). The public key
+	// is imported; no private key ever crosses the core (§2.5) — this is only the name of
+	// the key pair the instance should authorize.
+	KeyName string `json:"keyName"`
 }
 
 // Invoke runs the create-vm Action: provision one EC2 instance as a single typed
@@ -322,6 +350,33 @@ func (s *Server) invokeCreateVM(ctx context.Context, req *pluginv1.InvokeRequest
 	if p.Region == "" || p.AMI == "" {
 		return status.Errorf(codes.InvalidArgument, "awsec2/create-vm requires region and ami")
 	}
+	// THE DECLARED REGION MUST MATCH THE ONE THIS PROVIDER SERVES, or the build is refused.
+	//
+	// `region` was a required param that selected nothing. The EC2 client is built once from
+	// s.cfg.Region (the pod's own configuration) and this value never reached it — it only
+	// travelled on to become the `aws.region` LABEL on the projection (below). So an Intent
+	// declaring us-east-1 against a provider serving eu-west-1 created the instance in
+	// eu-west-1 and told the graph it was in us-east-1: a projected label asserting a fact
+	// nobody observed, and a false one (§1.2).
+	//
+	// Refused rather than honoured by building a per-region client, which looks like the more
+	// capable fix and is the worse one: the Syncer enumerates s.cfg.Region and nothing else, so
+	// an instance built outside it is created, projected once by the build, and then never seen
+	// again by the source that owns its Facets. Building where you cannot observe is a bigger
+	// hole than the label it would close.
+	//
+	// Multi-region is expressed by COMPOSITION instead, which is the shape ADR-0142 D4 settled:
+	// one provider declaration per region, each scoped to an environment, each dialing a pod
+	// configured for that region. The coordinate stays flat in the Intent's params (ADR-0118 D1
+	// — no inheritance, no env-keyed values), and this check is what makes it load-bearing.
+	if p.Region != s.cfg.Region {
+		return status.Errorf(codes.FailedPrecondition,
+			"awsec2/create-vm: this provider serves region %q, but the build declared %q. It is refused "+
+				"rather than built in %q and labelled %q — and rather than built in %q, where this "+
+				"plugin's Syncer does not look. Bind an Intent declaring %q to a provider declaration "+
+				"scoped to an environment whose awsec2 pod serves it (ADR-0146 D2)",
+			s.cfg.Region, p.Region, s.cfg.Region, p.Region, p.Region, p.Region)
+	}
 	if p.InstanceType == "" {
 		p.InstanceType = "t3.micro"
 	}
@@ -349,6 +404,19 @@ func (s *Server) invokeCreateVM(ctx context.Context, req *pluginv1.InvokeRequest
 			ResourceType: ec2types.ResourceTypeInstance,
 			Tags:         []ec2types.Tag{{Key: aws.String("Name"), Value: aws.String(p.Name)}},
 		}}
+	}
+	// Placement: applied per-axis only when declared (empty ⇒ unplaced, ADR-0123 D2).
+	if p.SubnetID != "" {
+		input.SubnetId = aws.String(p.SubnetID)
+	}
+	if p.AvailabilityZone != "" {
+		input.Placement = &ec2types.Placement{AvailabilityZone: aws.String(p.AvailabilityZone)}
+	}
+	if len(p.SecurityGroupIDs) > 0 {
+		input.SecurityGroupIds = p.SecurityGroupIDs
+	}
+	if p.KeyName != "" {
+		input.KeyName = aws.String(p.KeyName)
 	}
 
 	out, err := api.RunInstances(ctx, input)

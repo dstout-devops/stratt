@@ -1,0 +1,14 @@
+# vsphere-dc — the vSphere datacenter reconcile scope (ADR-0142 D1, ADR-0113 D2).
+#
+# This is the scope in which Compute and Subnet resolve to the vcenter provisioning
+# provider rather than the unscoped default: estate/capability-bindings/provisioning-vsphere.yaml
+# is itself tagged `environments: [vsphere-dc]`, so the binding does not leak into the aws or
+# default scopes where awsec2 stays sole provider (§2.4 — an explicit binding, never a tiebreak).
+#
+# Note what this is NOT (ADR-0142 D3): not a Cell (a control-plane shard with its own
+# Postgres/NATS/Temporal), not a Site (an execution locus), and not the vSphere datacenter
+# itself — that is a `region` Entity the vcenter Syncer OBSERVES and projects.
+name: vsphere-dc
+description: >
+  vSphere datacenter reconcile scope — where the provisioning capability binds to vcenter
+  for Compute and Subnet.

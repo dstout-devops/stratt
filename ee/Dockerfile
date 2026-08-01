@@ -59,8 +59,18 @@ RUN uv pip install --system --no-cache \
 # (PLG-1), and because air-gap is then a seeding problem rather than a runtime one.
 #
 # EE_CONTENT names a Galaxy requirements file under ee/content/ (the real format, which
-# ansible-builder also consumes — §3 compatibility). Empty ⇒ a base EE with no content;
-# the manifest is still written, so "no content" is stated rather than merely absent.
+# ansible-builder also consumes — §3 compatibility). It DEFAULTS to the platform floor
+# (platform.requirements.yml) rather than to the empty string, and that is the ANS-012 fix:
+# an empty default meant the platform's own content set was an unreviewable build arg nobody
+# had chosen, and `ansible.builtin.package` — a dispatcher, not an implementation — could not
+# install anything on a target whose package manager lives outside ansible-core. Empty is still
+# expressible (`--build-arg EE_CONTENT=`) and still writes a manifest, so a contentless image
+# remains available as a DELIBERATE choice rather than as what you get by not deciding.
+#
+# Exactly one file per image: a lockfile records the installed CLOSURE, which cannot be
+# attributed to one of several declarations. So a variant REPEATS the floor instead of
+# composing it, and `ee/content.py verify` fails `task ci` if a variant drops or re-pins a
+# floor entry — a variant adds capability and never subtracts it.
 #
 # Installs into /usr/share/ansible/{collections,roles}, which is on ansible's DEFAULT
 # search path — verified live: ansible-runner adds its own project dirs WITHOUT replacing
@@ -86,7 +96,7 @@ RUN uv pip install --system --no-cache \
 # CI-gated at N-1, whereas CONTENT is pinned exactly because reproducibility of what a Run
 # executed is the property D3 buys. Different properties, different rules — not an
 # oversight.
-ARG EE_CONTENT=""
+ARG EE_CONTENT="platform.requirements.yml"
 ARG EE_LOCK_MODE="verify"
 # EE_OFFLINE (ADR-0124 D2): a subdirectory of ee/content/ holding pre-downloaded collection
 # tarballs. Set it and the install reaches NO registry — the pin check and the lockfile check are
@@ -101,6 +111,24 @@ RUN python /usr/local/bin/stratt-ee-content install \
       ${EE_OFFLINE:+--artifacts=/usr/share/stratt/ee-content/${EE_OFFLINE}} \
       ${EE_CONTENT:+/usr/share/stratt/ee-content/${EE_CONTENT}} \
     && chmod -R a+rX /usr/share/ansible
+
+# ── Control-node BINARIES some connection plugins exec (ADR-0156 D6) ──────────────────────
+# A collection is not always enough. kubernetes.core.kubectl SHELLS OUT to `kubectl`, and
+# amazon.aws.aws_ssm to `session-manager-plugin` — so an image can carry the collection and
+# still be unable to make the connection. The shim checks both axes before a play runs; this
+# is where the second axis gets satisfied.
+#
+# DECLARED PER IMAGE, exactly as content is: empty by default, so the base EE stays lean and a
+# variant that needs the binary asks for it by version. Nobody gets 50MB of kubectl by not
+# deciding — the same rule ANS-012 set when an empty EE_CONTENT turned out to be a build-arg
+# default rather than a choice.
+#
+# PINNED BY DIGEST, not just by version, and verified before it is trusted. A version bounds
+# WHICH release; only the checksum bounds WHICH BYTES — the identical argument ee/content.py's
+# lockfile makes for collections, applied to a binary downloaded over the network at build time.
+ARG EE_KUBECTL_VERSION=""
+ARG EE_KUBECTL_SHA256=""
+RUN if [ -n "${EE_KUBECTL_VERSION}" ]; then       set -eu;       arch="$(dpkg --print-architecture)";       url="https://dl.k8s.io/release/v${EE_KUBECTL_VERSION}/bin/linux/${arch}/kubectl";       echo "stratt-ee: fetching kubectl ${EE_KUBECTL_VERSION} (${arch})";       python -c "import urllib.request,sys; urllib.request.urlretrieve(sys.argv[1], '/usr/local/bin/kubectl')" "$url";       if [ -z "${EE_KUBECTL_SHA256}" ]; then         echo "stratt-ee: EE_KUBECTL_VERSION is set but EE_KUBECTL_SHA256 is not — a version bounds which";         echo "           RELEASE, only the checksum bounds which BYTES, and an unverified binary makes the";         echo "           image digest an unreliable claim about what a Run executed (ADR-0117 D3's argument)";         exit 1;       fi;       echo "${EE_KUBECTL_SHA256}  /usr/local/bin/kubectl" | sha256sum -c -;       chmod 0755 /usr/local/bin/kubectl;       kubectl version --client=true --output=yaml | head -3;     fi
 
 # The port-speaking shims (ADR-0051/0046): the EE-Job transport's pod commands. Each
 # reads /runner/stratt/request.json (the sovereign ApplyRequest) and emits typed

@@ -1221,3 +1221,129 @@ func TestHost_GovernStream_RedTerminalIsBelieved(t *testing.T) {
 		t.Fatal("a green terminal with no in-set failure must still fold Succeeded")
 	}
 }
+
+// TestHost_InvokeRawStreamsEveryEvent proves the Action path surfaces the plugin's DIAGNOSTICS,
+// not only its terminal cause.
+//
+// This is DESC-5's actual content, and it was not what DESC-5 said. `GET /runs/{id}/events` has
+// existed all along (an SSE replay+follow endpoint) — what did not exist was anything to put in it
+// from an Action. This loop `continue`d past every non-terminal TaskEvent with the comment
+// "diagnostic message; the result rides the terminal one", so an Action's whole stream reached
+// nothing.
+//
+// Measured, on a real failure: a Run whose error read "helm upgrade failed (rc=1): see the streamed
+// diagnostics", whose live event tail returned stream-end and nothing else, and whose IDENTICAL
+// command succeeded when run by hand under the same ServiceAccount. The difference between the two
+// was unreachable through any supported path — which is §1.8 failing at the one moment it exists
+// for, not a missing convenience.
+//
+// The terminal event reaches OnEvent too: a consumer tailing the stream should see the cause in
+// place, in order, rather than having to join it back from the Run summary.
+func TestHost_InvokeRawStreamsEveryEvent(t *testing.T) {
+	const cause = "helm upgrade failed (rc=1): see the streamed diagnostics"
+	grant := vcenterGrant(pluginhost.TierTrusted, []string{"vcenter.uuid"})
+	client := serve(t, &fakePlugin{pluginID: "vcenter-dev", invokeFailMsg: cause})
+	h := pluginhost.New(nil, client, grant, discardLog())
+
+	var seen []string
+	raw, err := h.InvokeRaw(context.Background(), pluginhost.ActionInvoke{
+		Principal: "alice", Action: "vcenter/create-vm",
+		OnEvent: func(ev *pluginv1.TaskEvent) { seen = append(seen, ev.GetMessage()) },
+	})
+	if err != nil {
+		t.Fatalf("invokeRaw: %v", err)
+	}
+	// The non-terminal diagnostic is the whole point: without it the operator has a verdict and no
+	// evidence, which is exactly the state a real failure left this session in.
+	if len(seen) != 2 || seen[0] != "working" {
+		t.Fatalf("every streamed TaskEvent must reach OnEvent, terminal and non-terminal alike — "+
+			"dropping the non-terminal ones is what left `see the streamed diagnostics` with nothing "+
+			"to see (DESC-5). got %q", seen)
+	}
+	if seen[1] != cause {
+		t.Fatalf("the terminal cause must arrive on the stream in order too, got %q", seen[1])
+	}
+	// And the existing contract is unchanged: the cause still rides out.Error.
+	if raw.OK || raw.Error != cause {
+		t.Fatalf("terminal capture regressed: ok=%v err=%q", raw.OK, raw.Error)
+	}
+}
+
+// TestHost_InvokeRawNilOnEventIsLegal: OnEvent is optional, so every existing caller and test that
+// wants no events keeps working. A hook that panicked when unset would make the diagnostic path a
+// liability rather than an improvement.
+func TestHost_InvokeRawNilOnEventIsLegal(t *testing.T) {
+	grant := vcenterGrant(pluginhost.TierTrusted, []string{"vcenter.uuid"})
+	client := serve(t, &fakePlugin{pluginID: "vcenter-dev"})
+	h := pluginhost.New(nil, client, grant, discardLog())
+	if _, err := h.InvokeRaw(context.Background(), pluginhost.ActionInvoke{
+		Principal: "alice", Action: "vcenter/create-vm",
+	}); err != nil {
+		t.Fatalf("a nil OnEvent must be legal: %v", err)
+	}
+}
+
+// TestHost_ApplyOutputsRequireAPin proves CERT-2's governance half: an Apply's typed outputs are
+// captured only when the core pinned a contract for them, and refused otherwise.
+//
+// The asymmetry this closes was arbitrary and load-bearing. An ACTION Step could hand a value to a
+// later Step (ADR-0031) and an ACTUATOR Step could not, so every EE-Job step — every ansible step —
+// was a dead end for data. That made the §2.5 flow cert-issuer's OWN input Contract documents
+// unexpressible: the target generates key+CSR (an Apply), the CLM signs (an Action), the signed
+// certificate is written back (an Apply). Step one had nowhere to put its CSR, leaving only a
+// CLM-generated key — discarding the born-on-target property the Contract states in writing.
+//
+// The PIN is what makes handing bytes to another Step safe: without it a plugin could assert any
+// shape and a consumer's `{{.steps.x.outputs.y}}` binding would break at run time on a value
+// nobody agreed to. So "no pin" is a refusal, not a default.
+func TestHost_ApplyOutputsRequireAPin(t *testing.T) {
+	grant := vcenterGrant(pluginhost.TierTrusted, []string{"vcenter.uuid"})
+	const payload = `{"csr":"-----BEGIN CERTIFICATE REQUEST-----"}`
+	stream := []*pluginv1.ApplyResponse{
+		applyResult("web-1", pluginv1.ItemResult_STATUS_CHANGED),
+		{
+			Event:          &pluginv1.TaskEvent{Terminal: true, Ok: true},
+			Outputs:        &pluginv1.Payload{Bytes: []byte(payload)},
+			OutputContract: &pluginv1.ContractRef{SchemaId: "outputs/csr"},
+		},
+	}
+	apply := func(h *pluginhost.Host) pluginhost.RawApplyResult {
+		t.Helper()
+		raw, err := h.ApplyRaw(context.Background(), pluginhost.ApplyInvoke{
+			Principal: "alice", Params: []byte(`{}`),
+			Targets: []pluginhost.ApplyTarget{{Name: "web-1", IdentityKeys: map[string]string{"vcenter.uuid": "u1"}}},
+		})
+		if err != nil {
+			t.Fatalf("applyRaw: %v", err)
+		}
+		return raw
+	}
+
+	// PINNED: captured, and available to a downstream Step.
+	pinned := pluginhost.New(nil, serve(t, &fakePlugin{pluginID: grant.PluginIdentity, applyStream: stream}),
+		grant, discardLog()).WithApplyOutputContract("outputs/csr")
+	if got := string(apply(pinned).Outputs); got != payload {
+		t.Fatalf("a pinned Apply's outputs must be captured for cross-Step binding, got %q", got)
+	}
+
+	// UNPINNED: refused, and the refusal is RECORDED rather than silent — an operator who declared
+	// no contract and expected a value must be able to see why nothing arrived (§1.8).
+	unpinned := pluginhost.New(nil, serve(t, &fakePlugin{pluginID: grant.PluginIdentity, applyStream: stream}),
+		grant, discardLog())
+	raw := apply(unpinned)
+	if raw.Outputs != nil {
+		t.Fatal("outputs with no pinned contract must be REFUSED — a shape nobody agreed to cannot " +
+			"be handed to a downstream Step")
+	}
+	if len(raw.Rejections) == 0 {
+		t.Fatal("the refusal must be recorded, not silent")
+	}
+
+	// DRIFT: the plugin asserts a contract that is not the one the core pinned. Same rule the
+	// Action path has always enforced — the pin is the core's, not the plugin's to choose.
+	drifted := pluginhost.New(nil, serve(t, &fakePlugin{pluginID: grant.PluginIdentity, applyStream: stream}),
+		grant, discardLog()).WithApplyOutputContract("outputs/something-else")
+	if got := apply(drifted); got.Outputs != nil || len(got.Rejections) == 0 {
+		t.Fatal("an output-contract mismatch must be refused and recorded")
+	}
+}

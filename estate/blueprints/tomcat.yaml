@@ -1,0 +1,33 @@
+# tomcat — the L2 onboarding Blueprint for Tomcat on a host (ADR-0055, ADR-0083, ADR-0148).
+#
+# THE LOAD-BEARING PROOF, and worth stating precisely because the plan overclaimed it. Adding a
+# second application does NOT leave "the estate around it" unmoved — it necessarily adds a Blueprint
+# and an Assignment, because content selection cannot be data and one playbook per Step cascades to
+# one application per Blueprint. What must not move, and does not, is the SPINE: the Intent kind,
+# the drift loop, Findings, gates, the fact-back convention, the credential, the reach path, the
+# advisory pass. Those are untouched by this file's existence.
+#
+# Same `delivers:`/`package:` agreement rule as apache: an Assignment binding a tomcat Intent to
+# the apache Blueprint is refused at load (ADR-0148 D2).
+name: tomcat
+version: 1
+for: Intent/Application
+delivers: tomcat
+severity: warning
+dampingObservations: 1
+# Sane defaults (ADR-0083 §5): the Intent overrides what it cares about and inherits the rest.
+# The paths are Debian tomcat10's; a RHEL fleet overrides them in its own Intent, which is the
+# flat-values-per-environment shape ADR-0118 D1 prescribes — never an env-keyed map here.
+defaults:
+  channel: stable
+  port: "8080"
+routes:
+  - observe:
+      namespace: app.config
+      path: port
+      equals: "{{.spec.port}}"
+    claim: exclusive
+    remediationWorkflow: tomcat-configure
+    # The converge gets the SAME resolved values the expectation does (ADR-0118 D3, ADR-0148 D1).
+    remediationParams:
+      tomcat_port: "{{.spec.port}}"

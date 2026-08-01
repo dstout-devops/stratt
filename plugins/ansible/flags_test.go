@@ -1,6 +1,7 @@
 package ansible
 
 import (
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -122,12 +123,24 @@ func TestVaultPasswordFile(t *testing.T) {
 	}
 }
 
+// vaultRaw marshals a vault declaration into params.Vault's raw form, so a test states
+// the SHAPE an estate writes rather than a Go struct that hides which of the two v8
+// accepts (ADR-0153 D4).
+func vaultRaw(t *testing.T, v any) json.RawMessage {
+	t.Helper()
+	raw, err := json.Marshal(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return raw
+}
+
 // TestPlaybookFlags_VaultRendersPasswordFile: a vault ref becomes
 // --vault-password-file <resolved path>, and a resolution failure is returned (the
 // caller turns it into a terminal fatal) rather than silently dropping the flag.
 func TestPlaybookFlags_VaultRendersPasswordFile(t *testing.T) {
 	one := func(string) ([]string, error) { return []string{"pw.txt"}, nil }
-	got, err := playbookFlags(params{Vault: &vaultParams{CredentialRef: "vault-dev"}}, false, one)
+	got, err := playbookFlags(params{Vault: vaultRaw(t, vaultParams{CredentialRef: "vault-dev"})}, false, one)
 	if err != nil {
 		t.Fatalf("playbookFlags: %v", err)
 	}
@@ -136,7 +149,7 @@ func TestPlaybookFlags_VaultRendersPasswordFile(t *testing.T) {
 	}
 
 	boom := func(string) ([]string, error) { return nil, errors.New("nope") }
-	if _, err := playbookFlags(params{Vault: &vaultParams{CredentialRef: "x"}}, false, boom); err == nil {
+	if _, err := playbookFlags(params{Vault: vaultRaw(t, vaultParams{CredentialRef: "x"})}, false, boom); err == nil {
 		t.Fatal("a vault resolution failure must surface, not be dropped")
 	}
 }

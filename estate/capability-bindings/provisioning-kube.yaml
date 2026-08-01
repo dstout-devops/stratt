@@ -1,0 +1,42 @@
+# dev builds on Kubernetes — ONE line, every kind (ADR-0151 D2).
+#
+# This file used to enumerate `provider: kubecompute, intentKind: Compute`, which is the shape that
+# made the estate accumulate one entry per kind and made a substrate migration an N-line edit. It
+# now selects by a property the PROVIDERS DECLARE, so the entry says what an operator actually
+# means — "this environment is Kubernetes" — and nothing above it names a substrate at all.
+#
+# CHANGE `kubernetes` TO `aws` AND THE TOPOLOGY MIGRATES: every provisioning Intent in dev resolves
+# to the aws-substrate builders instead, together. That is the property this exists for, and the
+# honest limit is recorded in ADR-0151 D4 — the line moves the BUILDER, not provider-shaped
+# `params` an Intent may be carrying.
+#
+# Environment-scoped, because `environments:` is a MEMBERSHIP FILTER and not a value selector
+# (ADR-0118 D1): it chooses which binding is in force, never what an Intent means. vsphere-dc keeps
+# its own binding, and the two never meet.
+name: provisioning-kube
+environments: [dev]
+entries:
+  - capability: provisioning
+    substrate: kubernetes
+    # SCOPED TO Compute, because Kubernetes has no subnet and pretending otherwise would be the
+    # square peg. Pod addressing is cluster-wide and owned by the CNI; you do not allocate a CIDR
+    # per workload. A Namespace is an API scope, not a network segment. NetworkPolicy is POLICY —
+    # allow/deny by label selector — and carries no address range at all. Of the three things an
+    # Intent/Subnet means on AWS (an allocated CIDR, a placement target, an isolation boundary) only
+    # the third has a Kubernetes analogue, and it has no addresses in it.
+    #
+    # A "kubernetes Subnet provider" could only be built by inventing a CIDR nothing honours, or by
+    # reaching into CNI-specific CRDs (Calico IPPool, Cilium) — a vendor coupling underneath a
+    # portability claim. `kubecompute` therefore advertises provisions: {Compute} and nothing else,
+    # which is not a gap: it is what Kubernetes is.
+    #
+    # Unscoped, this entry claimed EVERY kind — including one this substrate can never serve — and
+    # the resolver correctly refused Subnet outright. Naming the kind makes the estate say only what
+    # is true.
+    intentKind: Compute
+  # Subnets come from the substrate that HAS them. This is a MIXED topology and it is DECLARED
+  # rather than inferred, which is the distinction ADR-0151 D2 turns on: the resolver refuses a
+  # mix it has to guess at, and accepts one an author wrote down.
+  - capability: provisioning
+    provider: opentofu-network
+    intentKind: Subnet

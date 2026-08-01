@@ -14,15 +14,19 @@ import (
 
 func main() {
 	cfg := opentofu.Config{
-		PluginID:    pluginserve.Env("STRATT_PLUGIN_ID", "opentofu"),
-		TofuBin:     pluginserve.Env("STRATT_TOFU_BIN", "tofu"),
-		ModuleRoot:  pluginserve.Env("STRATT_TOFU_MODULE_ROOT", "/modules"),
+		PluginID:   pluginserve.Env("STRATT_PLUGIN_ID", "opentofu"),
+		TofuBin:    pluginserve.Env("STRATT_TOFU_BIN", "tofu"),
+		ModuleRoot: pluginserve.Env("STRATT_TOFU_MODULE_ROOT", "/modules"),
+		// Working state (per-workspace TF_DATA_DIR + the shared provider cache). Kept off the
+		// module mount, which is read-only content; point this at a volume to keep the provider
+		// cache across restarts (ADR-0145).
+		DataRoot:    pluginserve.Env("STRATT_TOFU_DATA_ROOT", "/var/lib/stratt-tofu"),
 		BackendURL:  os.Getenv("STRATT_STATE_BACKEND_URL"),
 		StateKeyHex: os.Getenv("STRATT_STATE_KEY"),
 	}
 	pluginserve.Main(pluginserve.Config{
 		Name:   "opentofu",
 		Server: opentofu.NewServer(cfg, pluginserve.Logger()),
-		Fields: []any{"module_root", cfg.ModuleRoot, "plugin_id", cfg.PluginID},
+		Fields: []any{"module_root", cfg.ModuleRoot, "data_root", cfg.DataRoot, "plugin_id", cfg.PluginID},
 	})
 }

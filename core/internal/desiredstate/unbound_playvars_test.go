@@ -23,9 +23,20 @@ import (
 // three variables defined nowhere in the repository, and they failed at run time on an undefined
 // variable with nothing in the build to say so.
 //
+// IT FOLLOWS `include_role`, and that is not a convenience — it is what stops factoring from being
+// an exit from this check. When the three web plays moved their shared ends into
+// roles/stratt_web_service, the tasks that left the top-level play included the entire observe and
+// fact-back tail, which is precisely where ANS-014's defect had lived. A guard that reads only the
+// play it is pointed at would have gone quiet at exactly the moment the risky code moved. See
+// scopeOf.
+//
 // HONEST LIMITS, stated because a guard invites more trust than it earns:
-//   - It cannot see variables a play builds dynamically (a name assembled in a task, a var file
-//     loaded at run time). A play doing that is invisible here.
+//   - It cannot see variables a play builds dynamically (a name assembled in a task). A templated
+//     `include_vars` path is handled by scope rather than by resolution: the `vars/<dir>` literals a
+//     play names bind the keys of the files under them, so an apache play does not silently inherit
+//     tomcat's variables — but a layout file that FORGETS a key one distro needs still passes here,
+//     because every file under the named directory contributes. Only executing that distro catches
+//     it, which is what `task dev:content:proof`'s per-family nodes are for.
 //   - Its list of play-local constructs (below) is enumerated by hand. A construct it does not
 //     know is reported as unbound, so a false positive is possible; that fails loudly and is
 //     fixed by adding the construct, which is the safe direction.
@@ -139,12 +150,74 @@ func playOf(content map[string]types.Actuator, actuator string, params map[strin
 	return play
 }
 
+// includedRole matches `include_role:` / `import_role:` followed by its `name:`. Used to pull the
+// role's own task files into the scanned text — see scopeOf.
+var includedRole = regexp.MustCompile(`(?m)(?:include_role|import_role):\s*\n\s+name:\s*([a-zA-Z_][a-zA-Z0-9_]*)`)
+
+// varsDirRef matches a literal `vars/<dir>` path the play names, which is how a play points the
+// shared role at its per-distro layout files.
+var varsDirRef = regexp.MustCompile(`\bvars/([a-zA-Z0-9_.-]+)`)
+
+// topLevelKeys pulls the `name:` keys from a flat YAML mapping — a vars or defaults file.
+var topLevelKeys = regexp.MustCompile(`(?m)^([a-zA-Z_][a-zA-Z0-9_]*):`)
+
+// scopeOf assembles everything that actually EXECUTES for a Step, and everything that supplies a
+// variable to it, out of the Actuator's content root.
+//
+// It exists because factoring must not be a way out of this guard. When the apache/tomcat/nginx
+// plays moved their shared ends into roles/stratt_web_service, the tasks that had been under this
+// check — including the whole observe/fact-back tail, which is where ANS-014's defect lived — left
+// the file the guard reads. A guard that only ever reads the top-level play rewards moving risky
+// logic into a role. So `include_role`/`import_role` is followed, and the role's task files are
+// scanned as part of the play that includes them, which is exactly what ansible does.
+//
+// The same reasoning covers `include_vars`: the per-distro layout files supply real variables, so
+// their keys are bound. Rather than resolving a templated include path (`{{ svc_layout_dir }}/{{
+// ansible_facts.os_family }}.yml`, which is not statically resolvable), it takes the `vars/<dir>`
+// literals the play NAMES and binds the keys of the files under them. That keeps the scope to
+// directories this play points at rather than every vars file in the root — an apache play does not
+// get tomcat's variables for free.
+func scopeOf(a types.Actuator, play string) (text string, supplied map[string]bool) {
+	supplied = map[string]bool{}
+	text = play
+
+	for _, m := range includedRole.FindAllStringSubmatch(play, -1) {
+		prefix := "roles/" + m[1] + "/"
+		for path, body := range a.Content {
+			if !strings.HasPrefix(path, prefix) {
+				continue
+			}
+			// A role's defaults ARE bindings; its tasks are code to be checked.
+			if strings.HasPrefix(path, prefix+"defaults/") || strings.HasPrefix(path, prefix+"vars/") {
+				for _, km := range topLevelKeys.FindAllStringSubmatch(body, -1) {
+					supplied[km[1]] = true
+				}
+				continue
+			}
+			text += "\n" + body
+		}
+	}
+
+	for _, m := range varsDirRef.FindAllStringSubmatch(text, -1) {
+		prefix := "vars/" + m[1] + "/"
+		for path, body := range a.Content {
+			if !strings.HasPrefix(path, prefix) {
+				continue
+			}
+			for _, km := range topLevelKeys.FindAllStringSubmatch(body, -1) {
+				supplied[km[1]] = true
+			}
+		}
+	}
+	return text, supplied
+}
+
 func unboundInParams(content map[string]types.Actuator, actuator string, params map[string]any) (int, []string) {
 	play := playOf(content, actuator, params)
 	if play == "" {
 		return 0, nil
 	}
-	supplied := map[string]bool{}
+	play, supplied := scopeOf(content[actuator], play)
 	if ev, ok := params["extraVars"].(map[string]any); ok {
 		for k := range ev {
 			supplied[k] = true

@@ -1,6 +1,10 @@
 package provision
 
-import "testing"
+import (
+	"errors"
+	"strings"
+	"testing"
+)
 
 func names(insts []Instance) map[string]bool {
 	m := map[string]bool{}
@@ -257,4 +261,57 @@ func TestExcessCountDown(t *testing.T) {
 	if ex := Excess(in, map[string]bool{"db-04": true, "webapp-04": true}); len(ex) != 0 {
 		t.Errorf("only <prefix>-<ordinal> names belong to the fleet, got %+v", ex)
 	}
+}
+
+// TestResolveSubnetRefKeepsCoreContentBlind pins the three outcomes of translating a declared
+// placement target (an Intent/Subnet NAME) into the provider-native id a builder's Action needs
+// (ADR-0147 D2). Core never learns what `aws.subnetId` means — it intersects what the built subnet
+// carries with what the resolved provider DECLARES it can address.
+func TestResolveSubnetRefKeepsCoreContentBlind(t *testing.T) {
+	const target = "Intent/Subnet/app-subnet"
+	awsSchemes := []string{"aws.instanceId", "aws.subnetId", "aws.vpcId"}
+
+	t.Run("exactly one addressable identity", func(t *testing.T) {
+		got, err := ResolveSubnetRef(target,
+			map[string]string{"aws.subnetId": "subnet-0abc", "netbox.prefix.id": "42"}, awsSchemes)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		// The netbox identity is ignored because awsec2 cannot address it — that is the point:
+		// a subnet co-owned by several sources still resolves to the ONE id this provider uses.
+		if got != "subnet-0abc" {
+			t.Errorf("ref = %q, want subnet-0abc", got)
+		}
+	})
+
+	t.Run("not built yet is a distinct outcome, not an error", func(t *testing.T) {
+		_, err := ResolveSubnetRef(target, nil, awsSchemes)
+		if !errors.Is(err, SubnetRefUnbuilt) {
+			t.Fatalf("want SubnetRefUnbuilt so the caller can surface an ordering Finding, got %v", err)
+		}
+	})
+
+	t.Run("built but unaddressable by this provider", func(t *testing.T) {
+		// A subnet built by Crossplane, and a Compute build resolved to awsec2: the estate is
+		// coherent on paper and the provider genuinely cannot place into it.
+		_, err := ResolveSubnetRef(target, map[string]string{"crossplane.claim": "app-subnet"}, awsSchemes)
+		if err == nil || errors.Is(err, SubnetRefUnbuilt) {
+			t.Fatalf("a built-but-unaddressable target must be a hard error, got %v", err)
+		}
+		if !strings.Contains(err.Error(), "crossplane.claim") || !strings.Contains(err.Error(), "aws.subnetId") {
+			t.Errorf("the diagnostic must name BOTH sides so the reader can see the mismatch; got %v", err)
+		}
+	})
+
+	t.Run("two addressable identities are refused, never picked", func(t *testing.T) {
+		_, err := ResolveSubnetRef(target,
+			map[string]string{"aws.subnetId": "subnet-0abc", "aws.vpcId": "vpc-0def"}, awsSchemes)
+		if err == nil {
+			t.Fatal("two ids for one placement must be refused — choosing between them is the " +
+				"implicit precedence §2.4 exists to forbid")
+		}
+		if !strings.Contains(err.Error(), "§2.4") {
+			t.Errorf("the diagnostic should name the rule; got %v", err)
+		}
+	})
 }

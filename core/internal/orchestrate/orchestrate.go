@@ -62,6 +62,10 @@ type RunInput struct {
 	RunID    string
 	ViewName string
 	Actuator string
+	// CapabilityArgs is the Step's per-class resolve request, carried through to
+	// resolveCapabilities. See types.Step.CapabilityArgs for why it is per Step rather than per
+	// Actuator: `requires:` names the classes a TOOL needs, these are the DESIRED STATE of one Run.
+	CapabilityArgs map[string]map[string]any
 	// Action names a Connector Action for a targetless typed operation (§2.2,
 	// ADR-0031). Mutually exclusive with Actuator/ViewName — set means this Run
 	// executes via RunAction, not RunAgainstView.
@@ -86,7 +90,18 @@ type RunInput struct {
 	// ViewParams binds a parametrized View's {{.param.x}} placeholders at
 	// launch (ADR-0024) — resolved by ResolveTargets before selection.
 	ViewParams map[string]any
-	Slices     int
+	// EntityScope NARROWS this Run to a single Entity of its View (ADR-0150 D3) — set when a
+	// remediation launches from a Finding, which names exactly one drifted Entity.
+	//
+	// It narrows, it never widens: the Entity must resolve as a MEMBER of the declared View or
+	// the Run fails. The View is still what authorization is decided against (ADR-0028), so the
+	// runner-on-View check is unchanged and still made at launch against a View the declaration
+	// names. That is why this scopes the RUN rather than templating `viewName` — a templated View
+	// would move the authorization gate behind a resolution step (§2.5).
+	//
+	// Empty ⇒ the whole View, which is every launch that is not a per-Finding remediation.
+	EntityScope string
+	Slices      int
 	// Trigger names the Trigger that fired this Run; empty for manual/API
 	// launches (§1.8 descent: Trigger → Run).
 	Trigger string
@@ -187,9 +202,16 @@ type RunOutcome struct {
 	// Drift is the per-target observed-vs-expected fragments (capped,
 	// redacted upstream).
 	Drift map[string][]json.RawMessage
-	// Outputs are an Action's typed output VALUES (ADR-0031), validated against
-	// its output Contract — returned so a DAG runner can bind them into a
-	// downstream Step ({{.steps.<name>.outputs.<field>}}). Empty for Actuators.
+	// Outputs are a Step's typed output VALUES (ADR-0031), validated against a PINNED output
+	// Contract — returned so a DAG runner can bind them into a downstream Step
+	// ({{.steps.<name>.outputs.<field>}}).
+	//
+	// This used to read "Empty for Actuators", and that was the CERT-2 defect stated as a comment:
+	// an ACTION Step could hand a value downstream and an ACTUATOR Step could not, so every EE-Job
+	// step — every ansible step — was a dead end for data. It made the §2.5 flow cert-issuer's own
+	// input Contract documents unexpressible: the target generates key+CSR (an Apply), the CLM
+	// signs (an Action), the signed certificate is written back (an Apply), and step one had
+	// nowhere to put its CSR. Both verbs now carry outputs, governed by the same pin.
 	Outputs json.RawMessage
 }
 
@@ -333,7 +355,7 @@ func RunAgainstView(ctx workflow.Context, in RunInput) (RunOutcome, error) {
 		summaryErr = err
 	}
 	outcome := RunOutcome{RunID: in.RunID, PerTarget: result.PerTarget, Drift: result.Drift,
-		EntityByTarget: map[string]string{}}
+		Outputs: result.Outputs, EntityByTarget: map[string]string{}}
 	for _, t := range resolved.Targets {
 		outcome.EntityByTarget[t.Name] = t.EntityID
 	}
@@ -398,6 +420,18 @@ func sitesTouched(result dispatch.Result) []string {
 type PluginAction struct {
 	Host        *pluginhost.Host
 	DryRunnable bool
+	// Requires are the capability CLASSES the DECLARATION that registered this Action
+	// asks the core to resolve and inject (ADR-0105, extended to the Action seam by
+	// ADR-0145 D2). It comes from the same `requires:` the sibling Actuator gets — one
+	// declaration, one promise — and is resolved per-invocation in ExecuteAction,
+	// failing closed exactly as the Apply path does.
+	//
+	// Before this it did not exist, and the effect was silent: an Actuator declaring
+	// `requires: [statestore, ipam]` and serving a build via `actionNames` had its
+	// handles injected on Apply and dropped on Invoke. The Action ran with no state
+	// backend and no allocated CIDR and reported success, because nothing on that path
+	// ever asked what the declaration required.
+	Requires []string
 }
 
 // PluginActuator is an Actuator provided by a plugin over the port
@@ -645,13 +679,36 @@ func (a *Activities) EnsureRun(ctx context.Context, in RunInput, workflowID stri
 // (ansible_host, …). The core never authors a tool var: the Phase-0
 // ansible_connection:local stub is retired. A target with no mgmt.address carries an
 // empty Address (unroutable — the actuator fails loudly, never a silent local run, §1.8).
-func renderTarget(e types.Entity, address string, port int32) actuators.Target {
+func renderTarget(e types.Entity, address string, port int32, transport json.RawMessage) actuators.Target {
 	return actuators.Target{
-		EntityID: e.ID,
-		Name:     observedName(e),
-		Address:  address,
-		Port:     port,
+		EntityID:  e.ID,
+		Name:      observedName(e),
+		Address:   address,
+		Port:      port,
+		Transport: transportOf(transport),
 	}
+}
+
+// transportOf reads the observed connection method from an mgmt.transport Facet raw
+// (ADR-0156 D1). Only `kind` is parsed, and ONLY so a Run's descent can say which transport a
+// target used (§1.8) — the rest of the document crosses the port untouched, because its shape
+// belongs to the transport and a core that parsed it would be learning what a Kubernetes
+// namespace is (§1.5). Nothing here branches on kind, which is what keeps the spine from
+// holding a closed set of substrates (§9).
+//
+// A document with no `kind` yields NO transport rather than an empty one: "nothing observed"
+// and "observed to be nothing" are different, and the second is not a state that exists.
+func transportOf(raw json.RawMessage) *actuators.Transport {
+	if len(raw) == 0 {
+		return nil
+	}
+	var t struct {
+		Kind string `json:"kind"`
+	}
+	if err := json.Unmarshal(raw, &t); err != nil || t.Kind == "" {
+		return nil
+	}
+	return &actuators.Transport{Kind: t.Kind, Coordinates: raw}
 }
 
 // observedName picks a human name for an execution target from the projection's tool-blind
@@ -704,6 +761,9 @@ func (a *Activities) ResolveTargets(ctx context.Context, in RunInput) (ResolvedT
 	if len(ents) == 0 {
 		return ResolvedTargets{}, fmt.Errorf("orchestrate: view %s resolves to zero entities", in.ViewName)
 	}
+	if ents, err = narrowToEntity(ents, in); err != nil {
+		return ResolvedTargets{}, err
+	}
 	ids := make([]string, len(ents))
 	for i, e := range ents {
 		ids[i] = e.ID
@@ -712,10 +772,17 @@ func (a *Activities) ResolveTargets(ctx context.Context, in RunInput) (ResolvedT
 	if err != nil {
 		return ResolvedTargets{}, err
 	}
+	// The transport, read BESIDE the address because it is the same kind of fact: a
+	// coordinate the core resolves and the plugin renders (ADR-0156 D1). One batched read,
+	// exactly as the address is — not a per-target lookup.
+	transports, err := a.Store.FacetValuesByEntities(ctx, "mgmt.transport", ids)
+	if err != nil {
+		return ResolvedTargets{}, err
+	}
 	out := ResolvedTargets{ViewVersion: v.Version}
 	for _, e := range ents {
 		addr, port := addressOf(addrs[e.ID])
-		t := renderTarget(e, addr, port)
+		t := renderTarget(e, addr, port, transports[e.ID])
 		// The reached-via chain (ADR-0126 D3), resolved HERE beside the address
 		// because it is the same kind of fact: a coordinate the core resolves and the
 		// plugin renders. An error is returned rather than logged — a target declared
@@ -728,6 +795,30 @@ func (a *Activities) ResolveTargets(ctx context.Context, in RunInput) (ResolvedT
 		out.Targets = append(out.Targets, t)
 	}
 	return out, nil
+}
+
+// narrowToEntity applies RunInput.EntityScope (ADR-0150 D3): a remediation launched from a Finding
+// converges the Entity that drifted, not its whole tier.
+//
+// Refused rather than silently empty when the Entity is not a member. A scope that quietly matched
+// nothing would turn "converge this host" into "converge nothing" and report success — the §1.8
+// failure mode, and the one that matters most here because a per-Entity binding (D2) has already
+// resolved values FOR that Entity: running them against a different target set, or none, is worse
+// than not running at all.
+func narrowToEntity(ents []types.Entity, in RunInput) ([]types.Entity, error) {
+	if in.EntityScope == "" {
+		return ents, nil
+	}
+	for _, e := range ents {
+		if e.ID == in.EntityScope {
+			return []types.Entity{e}, nil
+		}
+	}
+	return nil, fmt.Errorf(
+		"orchestrate: entity %s is not a member of view %s, so this remediation has no target — "+
+			"a Run may only be narrowed to a member of the View it is authorized against (ADR-0150 D3). "+
+			"The View's membership most likely changed between the Finding and this launch",
+		in.EntityScope, in.ViewName)
 }
 
 // ResolveTargetsBySite resolves the View and partitions its targets by
@@ -750,6 +841,13 @@ func (a *Activities) ResolveTargetsBySite(ctx context.Context, in RunInput) (Rou
 		}
 		return RoutedTargets{}, fmt.Errorf("orchestrate: view %s resolves to zero entities", in.ViewName)
 	}
+	// The SAME narrowing the non-routed resolver applies (ADR-0150 D3). Both paths share one
+	// implementation deliberately: a scope honoured on one and ignored on the other would make
+	// blast radius depend on whether a View happened to carry mgmt.site — the divergent-second-copy
+	// failure this repo keeps re-learning.
+	if ents, err = narrowToEntity(ents, in); err != nil {
+		return RoutedTargets{}, err
+	}
 	ids := make([]string, len(ents))
 	for i, e := range ents {
 		ids[i] = e.ID
@@ -759,6 +857,14 @@ func (a *Activities) ResolveTargetsBySite(ctx context.Context, in RunInput) (Rou
 		return RoutedTargets{}, err
 	}
 	addrs, err := a.Store.FacetValuesByEntities(ctx, "mgmt.address", ids)
+	if err != nil {
+		return RoutedTargets{}, err
+	}
+	// BOTH resolution paths read it, for the reason stated above about mgmt.site: a fact
+	// honoured on one path and ignored on the other makes behaviour depend on whether a Step
+	// happened to be Site-dispatched — the divergent-second-copy failure this repo keeps
+	// re-learning (ADR-0156 D1).
+	transports, err := a.Store.FacetValuesByEntities(ctx, "mgmt.transport", ids)
 	if err != nil {
 		return RoutedTargets{}, err
 	}
@@ -774,7 +880,7 @@ func (a *Activities) ResolveTargetsBySite(ctx context.Context, in RunInput) (Rou
 			}
 		}
 		addr, port := addressOf(addrs[e.ID])
-		t := renderTarget(e, addr, port)
+		t := renderTarget(e, addr, port, transports[e.ID])
 		// Both resolution paths carry the chain, or a Site-dispatched Step would
 		// silently lose its bastions — the asymmetry ADR-0125's sibling paths and
 		// ADR-0118's four launch doors both had to close. Sites and ProxyJump are
@@ -1149,16 +1255,33 @@ func (a *Activities) surfaceRejections(ctx context.Context, runID, source, plugi
 	}
 }
 
-// resolveCapabilities resolves each capability the Actuator `requires` (ADR-0105) into a handle to
-// inject onto the Apply: it finds the bound provider's resolve Action (via ResolveCapability),
-// invokes it (reusing Action governance + the class-level output-Contract reconcile), validates the
-// output against the CLASS-level Contract, and returns the handles keyed by class. Fails closed +
-// visibly (§1.8) — a required capability that can't be resolved aborts the Run, never a silent
-// apply without its resolved handle (e.g. tofu running against no state backend).
+// capabilitySubject names the Step in capability-resolve diagnostics. The Actuator verbs have
+// in.Actuator; an Action Step (ADR-0145 D2) has in.Action and an EMPTY Actuator, and reporting
+// `actuator ""` for one would send the reader hunting an Actuator that does not exist — a
+// diagnostic that misnames its subject hides the failure it is reporting (§1.8).
+func capabilitySubject(in RunInput) string {
+	if in.Actuator != "" {
+		return fmt.Sprintf("actuator %q", in.Actuator)
+	}
+	return fmt.Sprintf("action %q", in.Action)
+}
+
+// resolveCapabilities resolves each capability a declaration `requires` (ADR-0105) into a handle to
+// inject: it finds the bound provider's resolve Action (via ResolveCapability), invokes it (reusing
+// Action governance + the class-level output-Contract reconcile), validates the output against the
+// CLASS-level Contract, and returns the handles keyed by class. Fails closed + visibly (§1.8) — a
+// required capability that can't be resolved aborts the Run, never a silent apply without its
+// resolved handle (e.g. tofu running against no state backend).
+//
+// It serves all three consuming seams — Apply, Plan, and (ADR-0145 D2) Invoke. The resolve Action
+// it calls here is deliberately invoked with NO handles of its own: a resolver is the bottom of
+// this chain, and letting one require a capability would make capability resolution recursive with
+// no cycle rule. A resolver that needs configuration takes it as a CredentialRef, like any Action.
 func (a *Activities) resolveCapabilities(ctx context.Context, in RunInput, requires []string) (map[string]pluginhost.CapabilityHandle, error) {
 	if len(requires) == 0 {
 		return nil, nil
 	}
+	subject := capabilitySubject(in)
 	// The workspace the provider keys state by — read from the opaque desired, as the facts path
 	// does (a read of a core-owned selection label, not a projection write, §1.2). A malformed
 	// desired fails closed HERE with a clear diagnostic (§1.8), never a silent empty workspace.
@@ -1167,42 +1290,60 @@ func (a *Activities) resolveCapabilities(ctx context.Context, in RunInput, requi
 	}
 	if len(in.Params) > 0 {
 		if err := json.Unmarshal(in.Params, &wsp); err != nil {
-			return nil, fmt.Errorf("actuator %q: read workspace from params: %w", in.Actuator, err)
+			return nil, fmt.Errorf("%s: read workspace from params: %w", subject, err)
 		}
 	}
 	handles := make(map[string]pluginhost.CapabilityHandle, len(requires))
 	for _, capClass := range requires {
 		if a.ResolveCapability == nil {
-			return nil, fmt.Errorf("actuator %q requires %q but no capability resolver is configured", in.Actuator, capClass)
+			return nil, fmt.Errorf("%s requires %q but no capability resolver is configured", subject, capClass)
 		}
 		actionName, err := a.ResolveCapability(ctx, capClass)
 		if err != nil {
-			return nil, fmt.Errorf("actuator %q: resolve capability %q: %w", in.Actuator, capClass, err)
+			return nil, fmt.Errorf("%s: resolve capability %q: %w", subject, capClass, err)
 		}
 		pa, ok := a.Plugins.Action(actionName)
 		if !ok {
-			return nil, fmt.Errorf("actuator %q: capability %q resolve Action %q is not registered", in.Actuator, capClass, actionName)
+			return nil, fmt.Errorf("%s: capability %q resolve Action %q is not registered", subject, capClass, actionName)
 		}
-		args, _ := json.Marshal(map[string]string{"workspace": wsp.Workspace})
+		// The resolve request, PER CLASS. A Step declares one block per capability its tool
+		// requires (Step.CapabilityArgs); absent an entry the core sends `{"workspace": …}`, which
+		// is the shape statestore has always received and which every existing declaration relies
+		// on.
+		//
+		// That default is exactly what made `ipam` unresolvable: one shape was built for every
+		// class, so a class whose Contract wants an allocation request ({key, size} plus pool or
+		// role) got a workspace and was refused — correctly — by its own Contract. The fallback
+		// is kept for compatibility and is now a DECLARED default rather than the only option.
+		var args []byte
+		if req, ok := in.CapabilityArgs[capClass]; ok {
+			var merr error
+			if args, merr = json.Marshal(req); merr != nil {
+				return nil, fmt.Errorf("%s: capability %q request: %w", subject, capClass, merr)
+			}
+		} else {
+			args, _ = json.Marshal(map[string]string{"workspace": wsp.Workspace})
+		}
 		// Validate the resolve INPUT against the class Contract too (symmetric with the output) —
-		// so an empty/malformed workspace fails closed in the core, not deferred to the provider.
+		// so a malformed request fails closed in the core, not deferred to the provider. Core never
+		// learns what the fields MEAN (§1.5); the class Contract is the only thing that reads them.
 		inContract := "capabilities/" + capClass + ".input"
 		if err := contract.ValidateNamed(inContract, args); err != nil {
-			return nil, fmt.Errorf("actuator %q: capability %q resolve input failed its Contract: %w", in.Actuator, capClass, err)
+			return nil, fmt.Errorf("%s: capability %q resolve input failed its Contract: %w", subject, capClass, err)
 		}
 		outContract := "capabilities/" + capClass + ".output"
 		raw, err := pa.Host.InvokeRaw(ctx, pluginhost.ActionInvoke{
 			Principal: in.Principal, Action: actionName, Args: args, ExpectOutputContract: outContract,
 		})
 		if err != nil {
-			return nil, fmt.Errorf("actuator %q: invoke resolve %q: %w", in.Actuator, actionName, err)
+			return nil, fmt.Errorf("%s: invoke resolve %q: %w", subject, actionName, err)
 		}
 		if !raw.OK {
-			return nil, fmt.Errorf("actuator %q: capability resolve %q did not succeed", in.Actuator, actionName)
+			return nil, fmt.Errorf("%s: capability resolve %q did not succeed", subject, actionName)
 		}
 		// The output must satisfy the CLASS-level Contract (§1.5) — the same shape every provider fills.
 		if err := contract.ValidateNamed(outContract, raw.Outputs); err != nil {
-			return nil, fmt.Errorf("actuator %q: capability %q resolve output failed its Contract: %w", in.Actuator, capClass, err)
+			return nil, fmt.Errorf("%s: capability %q resolve output failed its Contract: %w", subject, capClass, err)
 		}
 		// statestore back-compat: populate the typed backend/config/credentialRef fields (the
 		// statestore consumer reads Kind/Config). A differently-shaped output (e.g. ipam's
@@ -1213,7 +1354,7 @@ func (a *Activities) resolveCapabilities(ctx context.Context, in RunInput, requi
 			CredentialRef string            `json:"credentialRef"`
 		}
 		if err := json.Unmarshal(raw.Outputs, &h); err != nil {
-			return nil, fmt.Errorf("actuator %q: decode capability %q handle: %w", in.Actuator, capClass, err)
+			return nil, fmt.Errorf("%s: decode capability %q handle: %w", subject, capClass, err)
 		}
 		// Output carries the contract-validated bytes verbatim (ADR-0112 D2), so ANY capability's
 		// handle reaches its consumer — the generalization that unblocks non-statestore classes.
@@ -1271,7 +1412,11 @@ func (a *Activities) executePlugin(ctx context.Context, in RunInput, site string
 	// path today; passing them to identity-rendering actuators is a follow-up.)
 	targets := make([]pluginhost.ApplyTarget, 0, len(resolved.Targets))
 	for _, t := range resolved.Targets {
-		targets = append(targets, pluginhost.ApplyTarget{Name: t.Name, Address: t.Address, Port: t.Port, Vars: t.Vars, Jump: portHops(t.Jump)})
+		at := pluginhost.ApplyTarget{Name: t.Name, Address: t.Address, Port: t.Port, Vars: t.Vars, Jump: portHops(t.Jump)}
+		if t.Transport != nil {
+			at.TransportKind, at.TransportCoordinates = t.Transport.Kind, t.Transport.Coordinates
+		}
+		targets = append(targets, at)
 	}
 	// Plan-pinned Apply (ADR-0047 §8): a Step that names a Plan source MUST carry a
 	// Gate-approved digest. FAIL CLOSED on an empty digest — never a silent unpinned
@@ -1320,11 +1465,8 @@ func (a *Activities) executePlugin(ctx context.Context, in RunInput, site string
 	a.surfaceRejections(ctx, in.RunID, "apply", in.Actuator, raw.Rejections)
 	// Map the governed, UNPROJECTED result to dispatch.Result. CollectFacts →
 	// ProjectFacts perform the single batched projection with Run provenance (#2).
-	res := dispatch.Result{Succeeded: raw.Succeeded, Error: raw.Error, PerTarget: raw.PerTarget, Drift: raw.Drift}
-	for _, e := range raw.WriteBack {
-		res.Entities = append(res.Entities, actuators.EntityObservation{
-			Kind: e.Kind, IdentityKeys: e.IdentityKeys, Labels: e.Labels})
-	}
+	res := dispatch.Result{Succeeded: raw.Succeeded, Error: raw.Error, PerTarget: raw.PerTarget, Drift: raw.Drift, Outputs: raw.Outputs}
+	res.Entities = writeBackObservations(raw.WriteBack)
 	// A rung-2 DerivedContract (tofu outputs schema) rides the existing
 	// OutputsContract channel — CollectFacts names it from the Step's workspace and
 	// ProjectFacts registers it, the core recomputing + pinning the hash (§1.5,
@@ -1371,8 +1513,14 @@ func (a *Activities) executeJobPlugin(ctx context.Context, in RunInput, slice in
 	ptargets := make([]*pluginv1.ApplyTarget, 0, len(resolved.Targets))
 	for _, t := range resolved.Targets {
 		ids := map[string]string{"host.name": t.Name}
-		targets = append(targets, pluginhost.ApplyTarget{Name: t.Name, Address: t.Address, Port: t.Port, Vars: t.Vars, IdentityKeys: ids, Jump: portHops(t.Jump)})
-		ptargets = append(ptargets, &pluginv1.ApplyTarget{Name: t.Name, Address: t.Address, Port: t.Port, Vars: t.Vars, IdentityKeys: ids, Jump: protoHops(t.Jump)})
+		at := pluginhost.ApplyTarget{Name: t.Name, Address: t.Address, Port: t.Port, Vars: t.Vars, IdentityKeys: ids, Jump: portHops(t.Jump)}
+		pt := &pluginv1.ApplyTarget{Name: t.Name, Address: t.Address, Port: t.Port, Vars: t.Vars, IdentityKeys: ids, Jump: protoHops(t.Jump)}
+		if t.Transport != nil {
+			at.TransportKind, at.TransportCoordinates = t.Transport.Kind, t.Transport.Coordinates
+			pt.Transport = &pluginv1.Transport{Kind: t.Transport.Kind, Coordinates: t.Transport.Coordinates}
+		}
+		targets = append(targets, at)
+		ptargets = append(ptargets, pt)
 	}
 	// Only the use-checked, authorized names cross (§2.5); material stays on the
 	// kubelet secretKeyRef mounts (MF7 — one authz chokepoint, injection at the pod).
@@ -1478,7 +1626,8 @@ func (a *Activities) executeJobPlugin(ctx context.Context, in RunInput, slice in
 	// in-tree floor (dispatch.Run's res.Succeeded = the Job exit).
 	res := dispatch.Result{
 		Succeeded: raw.Succeeded && jobOK, Error: raw.Error, PerTarget: raw.PerTarget, Drift: raw.Drift,
-		Facts: map[string]map[string]json.RawMessage{},
+		Outputs: raw.Outputs,
+		Facts:   map[string]map[string]json.RawMessage{},
 	}
 	if remote {
 		// §1.8 descent: stamp the execution locus of each governed target so the
@@ -1509,13 +1658,42 @@ func (a *Activities) executeJobPlugin(ctx context.Context, in RunInput, slice in
 				"facets", sortedKeys(e.Facets))
 			continue
 		}
-		facets := make(map[string]json.RawMessage, len(e.Facets))
-		for ns, v := range e.Facets {
-			facets[ns] = json.RawMessage(v)
-		}
-		res.Facts[name] = facets
+		res.Facts[name] = applyFacets(e)
 	}
 	return res, nil
+}
+
+// applyFacets lifts a governed write-back's Facets into the projection shape.
+//
+// ONE FUNCTION BECAUSE THE DUPLICATE WAS THE BUG. Both Apply doors consume the same
+// `pluginhost.ApplyEntity`, and this conversion existed only inside the EE-Job door —
+// so the gRPC door, having no loop to copy, mapped Kind/IdentityKeys/Labels and let the
+// governed Facets fall on the floor. The transports must not disagree about what a
+// write-back carries; making the carrying shared is what stops them drifting again.
+func applyFacets(e pluginhost.ApplyEntity) map[string]json.RawMessage {
+	out := make(map[string]json.RawMessage, len(e.Facets))
+	for ns, v := range e.Facets {
+		out[ns] = json.RawMessage(v)
+	}
+	return out
+}
+
+// writeBackObservations maps governed gRPC-Apply write-backs to Entity observations.
+//
+// Facets ride the OBSERVATION here rather than dispatch.Result.Facts, because a gRPC
+// write-back names its Entity by identity and need not be one of the Run's resolved
+// targets — res.Facts is keyed by target NAME and CollectFacts silently drops any name
+// outside the resolved set, which is the confused-deputy floor for the EE-Job door and
+// would be a silent discard for this one. ProjectFacts writes them against the Entity it
+// upserts, once, with Run provenance (§1.2).
+func writeBackObservations(wb []pluginhost.ApplyEntity) []actuators.EntityObservation {
+	out := make([]actuators.EntityObservation, 0, len(wb))
+	for _, e := range wb {
+		out = append(out, actuators.EntityObservation{
+			Kind: e.Kind, IdentityKeys: e.IdentityKeys, Labels: e.Labels, Facets: applyFacets(e),
+		})
+	}
+	return out
 }
 
 // sortedKeys returns a map's keys in deterministic order — for diagnostics, where a
@@ -1748,6 +1926,25 @@ func mergeResults(slices []dispatch.Result) dispatch.Result {
 		if len(r.OutputsContract) > 0 {
 			out.OutputsContract = r.OutputsContract
 		}
+		// The output VALUES, beside the contract that describes them. Omitting this line meant
+		// every Actuator Step's outputs were governed, captured — and then dropped HERE, on the
+		// way out of the fold, because mergeResults runs for every Run and not just multi-slice
+		// ones. The symptom surfaced two Steps downstream as
+		//
+		//	template path .steps.gather.outputs.csr: "csr" is not an object
+		//
+		// which names the consumer and says nothing about the fold that emptied it: a nil
+		// json.RawMessage crosses Temporal as the four bytes `null`, which is non-empty enough to
+		// be stored as a Step output and useless enough to break every binding into it.
+		//
+		// Last non-empty wins, matching OutputsContract above and the shim's own stated rule for
+		// outputs across hosts. A Step fanned across several slices that publishes DIFFERENT
+		// outputs per slice is ambiguous by construction — the flows that use outputs are
+		// single-target (a CSR belongs to one host), and a general answer needs a declaration
+		// saying which slice speaks, not a silent pick here.
+		if hasOutputs(r.Outputs) {
+			out.Outputs = r.Outputs
+		}
 		for t, fragments := range r.Drift {
 			if out.Drift == nil {
 				out.Drift = map[string][]json.RawMessage{}
@@ -1821,6 +2018,15 @@ func (a *Activities) ProjectFacts(ctx context.Context, runID string, facts FactS
 					fmt.Sprintf("output entity identity conflict: %v", err), "IdentityConflict", err)
 			}
 			return err
+		}
+		// The observation's own Facets, projected against the Entity just upserted —
+		// the gRPC Apply door's half of the ADR-0084 fact-back, which the EE-Job door
+		// has always had via result.Facts. Governed upstream (grant ∩ write-scope);
+		// this is the single Run-provenance write, exactly as for EntityFacts above.
+		for ns, value := range obs.Facets {
+			if err := p.UpsertFacet(ctx, prov, ids[0], ns, value); err != nil {
+				return err
+			}
 		}
 		// Project the build's topology edges (ADR-0059): resolve each target BY
 		// IDENTITY, then upsert Run-provenance — an unresolved target drops the edge
@@ -1946,6 +2152,20 @@ func (a *Activities) FinishRun(ctx context.Context, in RunInput, status types.Ru
 	}
 	if err := a.Store.SetRunSites(ctx, in.RunID, sites); err != nil {
 		return err
+	}
+	// The Step's typed outputs, on the Run that produced them (§1.8). RecordActionResult has
+	// always done this for an ACTION; an Actuator Step's outputs went to the next Step and were
+	// recorded NOWHERE, so `graph.run.outputs` was NULL for the very Run an operator descends into
+	// to ask what it handed downstream. That gap actively misled during the first live cert-issue:
+	// a NULL here read as "the plugin published nothing", when the plugin had published a CSR and a
+	// fold was dropping it.
+	//
+	// FinishRun is where both verbs converge, so one line covers both. Idempotent for an Action —
+	// same RunID, same bytes, and SetRunOutputs is a plain UPDATE.
+	if hasOutputs(result.Outputs) {
+		if err := a.Store.SetRunOutputs(ctx, in.RunID, result.Outputs); err != nil {
+			return err
+		}
 	}
 	// Outbound Notice on terminal failure/cancel (ADR-0027) — the outbound
 	// mirror of the inbound Emitter path. Notification deliveries are

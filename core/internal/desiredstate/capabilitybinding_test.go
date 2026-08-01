@@ -51,7 +51,7 @@ func TestValidateCapabilityBinding_Rejects(t *testing.T) {
 		{
 			name: "missing provider",
 			yaml: "name: b\nentries:\n  - capability: provisioning\n    intentKind: Compute\n",
-			want: "provider is required",
+			want: "one of provider or substrate is required",
 		},
 		{
 			name: "within-document duplicate (class, kind)",

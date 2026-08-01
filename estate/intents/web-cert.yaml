@@ -1,0 +1,36 @@
+# web-cert — an Intent/Certificate, and the FIRST consumer the certificate reach path has ever had.
+#
+# The provider half has shipped for a long time: the cert-issuer Actuator (OpenBao PKI), the
+# certificate spec schema, cert.identity and cert.expiry, and a scheduled reconcile Trigger. What
+# did not exist anywhere in the estate was an Intent/Certificate — so the whole leg was declared,
+# reviewed, cited in ADRs, and had zero consumers.
+#
+# FIVE LINES, like every other Intent. `issuer` names a CLM ROLE and never a provider: nothing here
+# says OpenBao, which is what lets a step-ca implementation of the `certissuer` capability serve
+# this same document unchanged (§1.5, ADR-0106 D1).
+#
+# `renewBefore` is the load-bearing one and it is why this is an Intent rather than a cron line: it
+# is BOTH the window the Blueprint's observe expectation checks `cert.expiry.notAfter` against AND
+# the value the issuance Run is launched with. One declaration, so the check and the fix cannot
+# disagree about when a certificate is too close to expiry.
+name: web-cert
+# VERSION 2 — commonName became a template (ADR-0150 D1). A pinned version is immutable
+# (ADR-0119 D6), so this is a new one and the Assignment repoints in the same change; @1 is
+# withdrawn rather than left beside it, because two versions of one Intent cannot coexist while
+# graph.intent still carries its original (name) primary key (ADR-0119 D7).
+version: 2
+kind: Intent/Certificate
+spec:
+  issuer: stratt-dev
+  # DERIVED FROM THE HOST, not authored per certificate (ADR-0150 D1). This one declaration now
+  # covers every member of the Assignment's View: add a host, it gets a certificate. That is the
+  # whole point — a 200-host tier is this file, not 200 of them.
+  #
+  # mgmt.address rather than dns.fqdn because that is the fact this floor actually projects, and
+  # on it the reachable address IS the host's FQDN (managed-web.stratt.svc.cluster.local). A
+  # production estate with a DNS Syncer would write `{{.entity.dns.fqdn}}`; the declaration shape
+  # is identical either way, which is the property worth having. A host missing the named Facet is
+  # REFUSED at launch, by name, rather than issued a certificate for a guessed subject (D2).
+  commonName: "{{.entity.mgmt.address.address}}"
+  validity: 720h
+  renewBefore: 168h

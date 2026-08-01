@@ -1,0 +1,58 @@
+# kubeservices — the K8s service/application Syncer (ADR-0081), declared at last.
+#
+# WHY THIS FILE IS NEW AND THE PLUGIN IS NOT. The collector has shipped for a long time: it
+# projects `service` Entities with service.endpoint, form-neutral `application` Entities with
+# software.chart, and the `provides` edge between them, all derived from the app.kubernetes.io/*
+# and helm.sh/chart labels rather than guessed. What it never had was a DECLARATION, so it ran
+# nowhere and `software.chart` had **zero live write-owners** — exactly what ADR-0080 said about
+# the chart form, and the reason the one form-agnostic advisory pass covered packages and
+# containers in production and charts only in a test.
+#
+# An implemented-but-undeclared Syncer is the mirror image of the defect this session kept
+# finding. A declared-but-unexecuted path fails when someone runs it; this one cannot fail,
+# because nothing reaches it — and a facet with no writer reads as "nothing is deployed" rather
+# than as "nobody is looking".
+#
+# IT WRITES TWO FACETS FOR ONE OBSERVATION, and the split is the point (ADR-0148 follow-up b):
+#   * software.chart   — a component LIST, so CheckSoftwareAdvisories can walk it (ADR-0080)
+#   * app.deliverable  — the SCALAR a Blueprint route's observe expectation can actually read
+# Both come from the same scrape, so they cannot disagree about what is deployed. This is the
+# same split the PACKAGE form already ships (app.config + software.package), arrived at from the
+# other direction: there, the converge's own fact-back writes both.
+name: kubeservices
+class: syncer
+address: stratt-kubeservices:9090
+pluginIdentity: kubeservices
+tier: trusted
+source:
+  kind: kubeservices
+  name: kubeservices-dev
+  # The cluster this collector reads, as a COORDINATE and not a credential (§2.5): it runs
+  # in-cluster and authenticates with its ServiceAccount, so there is no kubeconfig to bake.
+  # The name is the cluster's own, which is what makes a second cluster a second Source rather
+  # than a flag on this one.
+  endpoint: k8s://in-cluster/stratt
+facetNamespaces: [service.endpoint, software.chart, app.deliverable]
+# NO authoritativeFacetNamespaces, and the reason is the ADR-0060 rule rather than an omission:
+# an authority is declared when a namespace has SEVERAL writers, because at-most-one-authority is
+# what stops FacetValuesByEntities omitting a contested value entirely. All three namespaces here
+# have exactly one writer today — this one. Declaring an authority now would be guessing at a
+# collision that does not exist, and the contention surfaces as a Finding
+# (WriteFacetContentionFindings) if a second writer ever appears, which is when the call can be
+# made with the conflict visible.
+# labelKeys is a STATIC ALLOWLIST and it is not optional (ADR-0041/0132): a Syncer may write only
+# the label keys its declaration names, and every emission of an ungranted key is REJECTED with a
+# warning rather than dropped silently. Omitting it here cost a live run to find — the collector
+# registered, observed the cluster and had every label refused with
+# `label key not in operator grant`, which would have left estate/views/deployed-apps.yaml
+# (selecting application.name) matching NOTHING, and the chart Blueprint quietly targeting an empty
+# set. A View that selects on a label its writer may not write is a Blueprint that converges
+# nothing while looking healthy.
+labelKeys: [service.name, application.name]
+identitySchemes: [k8s.service, helm.release, dns.fqdn]
+# Tombstone on this plugin's OWN schemes only. dns.fqdn is deliberately absent from this list
+# while present above: it is a SHARED cross-source scheme (a service mTLS cert's SAN correlates
+# onto it), so tombstoning by it would let a cluster that stopped reporting a Service delete an
+# Entity another Source owns — the same trap dns.yaml records for its own zone reads.
+tombstoneSchemes: [k8s.service, helm.release]
+intervalSeconds: 60

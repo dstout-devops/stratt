@@ -26,7 +26,7 @@ func fakeStage(mounted string) (string, error) {
 func TestConnectionKeyComesFromTheCredentialMount(t *testing.T) {
 	vars, err := connectionVars(&connectionParams{
 		User: "appops", CredentialRef: "app-node-key",
-	}, nil, "/runner/known_hosts", oneKey, fakeStage)
+	}, nil, "/runner/known_hosts", false, oneKey, noEE, fakeStage)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -43,7 +43,7 @@ func TestConnectionKeyComesFromTheCredentialMount(t *testing.T) {
 // an operator looking in the wrong place entirely (§1.8). Inherited verbatim from
 // vaultPasswordFile by sharing credentialFile rather than copying it.
 func TestUnmountedConnectionRefNamesTheFix(t *testing.T) {
-	_, err := connectionVars(&connectionParams{CredentialRef: "missing"}, nil, "", noMount, fakeStage)
+	_, err := connectionVars(&connectionParams{CredentialRef: "missing"}, nil, "", false, noMount, noEE, fakeStage)
 	if err == nil || !strings.Contains(err.Error(), "is it on the Step's credentialRefs?") {
 		t.Fatalf("an unmounted ref must name the fix, got %v", err)
 	}
@@ -55,7 +55,7 @@ func TestUnmountedConnectionRefNamesTheFix(t *testing.T) {
 // An ambiguous mount is diagnosed rather than guessed — picking one would work until the
 // day it silently picked the wrong key.
 func TestAmbiguousConnectionMountIsDiagnosed(t *testing.T) {
-	_, err := connectionVars(&connectionParams{CredentialRef: "multi"}, nil, "", twoKeys, fakeStage)
+	_, err := connectionVars(&connectionParams{CredentialRef: "multi"}, nil, "", false, twoKeys, noEE, fakeStage)
 	if err == nil || !strings.Contains(err.Error(), "params.connection.file") {
 		t.Fatalf("an ambiguous mount must name the knob that resolves it, got %v", err)
 	}
@@ -72,7 +72,7 @@ func TestAmbiguousConnectionMountIsDiagnosed(t *testing.T) {
 // Workflow, which does not merely disable the check — with a /dev/null known-hosts it
 // makes every connection a fresh trust-on-first-use, so nothing is ever detected.
 func TestHostKeyCheckingDefaultsToVerifying(t *testing.T) {
-	vars, err := connectionVars(&connectionParams{}, nil, "/runner/known_hosts", oneKey, fakeStage)
+	vars, err := connectionVars(&connectionParams{}, nil, "/runner/known_hosts", false, oneKey, noEE, fakeStage)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -92,7 +92,7 @@ func TestHostKeyCheckingDefaultsToVerifying(t *testing.T) {
 // `off` still exists — some estates need it — but it now has to be WRITTEN DOWN, which
 // is the whole change: a reviewer sees the word, not an argument buried in a flag string.
 func TestHostKeyCheckingOffIsExplicit(t *testing.T) {
-	vars, err := connectionVars(&connectionParams{HostKeyChecking: HostKeyOff}, nil, "/runner/known_hosts", oneKey, fakeStage)
+	vars, err := connectionVars(&connectionParams{HostKeyChecking: HostKeyOff}, nil, "/runner/known_hosts", false, oneKey, noEE, fakeStage)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -105,7 +105,7 @@ func TestHostKeyCheckingOffIsExplicit(t *testing.T) {
 	if strings.Contains(args, "UserKnownHostsFile") {
 		t.Errorf("off must not pretend to remember anything: %q", args)
 	}
-	if _, err := connectionVars(&connectionParams{HostKeyChecking: "maybe"}, nil, "", oneKey, fakeStage); err == nil {
+	if _, err := connectionVars(&connectionParams{HostKeyChecking: "maybe"}, nil, "", false, oneKey, noEE, fakeStage); err == nil {
 		t.Error("an unknown policy must be refused, not silently defaulted")
 	}
 }
@@ -114,7 +114,7 @@ func TestHostKeyCheckingOffIsExplicit(t *testing.T) {
 // connection block is legitimately absent, and a nil-hostile shim would break every
 // gather-facts Run against a control-node target.
 func TestNoConnectionBlockStillRuns(t *testing.T) {
-	vars, err := connectionVars(nil, nil, "/runner/known_hosts", noMount, fakeStage)
+	vars, err := connectionVars(nil, nil, "/runner/known_hosts", false, noMount, noEE, fakeStage)
 	if err != nil {
 		t.Fatalf("an absent connection block is legitimate: %v", err)
 	}
@@ -162,7 +162,7 @@ func projectedMount(string) ([]string, error) {
 // and a timestamped data directory beside the key symlinks; inferring "the single file"
 // has to ignore them.
 func TestSingleKeyIsInferredThroughTheProjectedVolumeLayout(t *testing.T) {
-	vars, err := connectionVars(&connectionParams{CredentialRef: "app-node-ssh"}, nil, "", projectedMount, fakeStage)
+	vars, err := connectionVars(&connectionParams{CredentialRef: "app-node-ssh"}, nil, "", false, projectedMount, noEE, fakeStage)
 	if err != nil {
 		t.Fatalf("a single-key ref must resolve on a REAL mount layout, not just a flat one: %v", err)
 	}
@@ -179,7 +179,7 @@ func TestSingleKeyIsInferredThroughTheProjectedVolumeLayout(t *testing.T) {
 	twoReal := func(string) ([]string, error) {
 		return []string{"..data", "id_rsa", "id_ed25519"}, nil
 	}
-	if _, err := connectionVars(&connectionParams{CredentialRef: "multi"}, nil, "", twoReal, fakeStage); err == nil {
+	if _, err := connectionVars(&connectionParams{CredentialRef: "multi"}, nil, "", false, twoReal, noEE, fakeStage); err == nil {
 		t.Error("a ref with two real keys must still be diagnosed as ambiguous")
 	}
 }

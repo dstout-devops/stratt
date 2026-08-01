@@ -77,6 +77,32 @@ func New(cfg Config) http.Handler {
 	mux.HandleFunc("GET /api/v2/jobs/{id}/stdout/", f.authed(f.jobStdout))
 	mux.HandleFunc("GET /api/v2/jobs/{id}/cancel/", f.authed(f.canCancel))
 	mux.HandleFunc("POST /api/v2/jobs/{id}/cancel/", f.authed(f.cancel))
+	// schedules — READ-ONLY, like every other family here: a schedule is a DECLARATION reconciled
+	// from Git, and a POST door would make the compat surface a second write path into desired
+	// state (§2.2/§2.3).
+	mux.HandleFunc("GET /api/v2/schedules/", f.authed(f.listSchedules))
+	mux.HandleFunc("GET /api/v2/schedules/{id}/", f.authed(f.getSchedule))
+	// workflow_job_templates — the multi-Step/gated Workflows job_templates deliberately skips.
+	// Launch goes through the SAME orchestrate.LaunchWorkflowRun the native door calls; the DAG
+	// itself is a declaration, so everything else here is read-only.
+	mux.HandleFunc("GET /api/v2/workflow_job_templates/", f.authed(f.listWorkflowJobTemplates))
+	mux.HandleFunc("GET /api/v2/workflow_job_templates/{id}/", f.authed(f.getWorkflowJobTemplate))
+	mux.HandleFunc("GET /api/v2/workflow_job_templates/{id}/workflow_nodes/", f.authed(f.getWorkflowNodes))
+	mux.HandleFunc("POST /api/v2/workflow_job_templates/{id}/launch/", f.authed(f.launchWFJT))
+	mux.HandleFunc("GET /api/v2/workflow_jobs/", f.authed(f.listWorkflowJobs))
+	mux.HandleFunc("GET /api/v2/workflow_jobs/{id}/", f.authed(f.getWorkflowJob))
+	// projects — an Actuator's contentDir IS a project (ADR-0134 D2, one Actuator per project).
+	// No POST /update/: a project update means "clone the SCM again", and nothing here clones.
+	mux.HandleFunc("GET /api/v2/projects/", f.authed(f.listProjects))
+	mux.HandleFunc("GET /api/v2/projects/{id}/", f.authed(f.getProject))
+	mux.HandleFunc("GET /api/v2/projects/{id}/playbooks/", f.authed(f.getProjectPlaybooks))
+	// credentials — READ-ONLY discovery of brokered POINTERS. Attaching one at launch stays in
+	// ignored_fields: a Step's credentialRefs are declared and reviewed in Git (ADR-0009), and a
+	// launch-time swap would make the compat surface the one door that skips that review.
+	mux.HandleFunc("GET /api/v2/credentials/", f.authed(f.listCredentials))
+	mux.HandleFunc("GET /api/v2/credentials/{id}/", f.authed(f.getCredential))
+	mux.HandleFunc("GET /api/v2/credential_types/", f.authed(f.listCredentialTypes))
+	mux.HandleFunc("GET /api/v2/credential_types/{id}/", f.authed(f.getCredentialType))
 	mux.HandleFunc("GET /api/v2/inventories/", f.authed(f.listInventories))
 	mux.HandleFunc("GET /api/v2/inventories/{id}/", f.authed(f.getInventory))
 

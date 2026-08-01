@@ -1,0 +1,9 @@
+# Binds the apache-tier Intent to the managed-app node via apache@1. The port is the Blueprint
+# default (8080) because this Intent omits it — the drift loop then checks app.config.port on a
+# REACHABLE node and the gated apache-configure remediation actually SSHes in, installs the package,
+# sets the port and reports both back, so the Finding RESOLVES.
+name: apache-tier
+intent: apache-tier@1
+view: managed-app
+blueprint: apache@1
+environments: [dev]

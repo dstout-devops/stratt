@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"time"
 )
 
@@ -84,6 +85,129 @@ type ExecutionEnvironment struct {
 	SummaryFields struct {
 		Credential *named `json:"credential"`
 	} `json:"summary_fields"`
+}
+
+// NotificationTemplate is an AWX notification template — where AWX sends job outcomes
+// (AWX-009). It becomes a Sink on cutover: ADR-0125 made a Sink's `kind` NAME ITS DELIVERY
+// ACTION and left core holding no driver list, so `notificationType` maps straight across
+// and this mirror is actionable rather than decorative.
+//
+// ── THE §2.5 DECISION, AND IT IS THE WHOLE DESIGN OF THIS TYPE ───────────────────────────
+// An AWX notification_configuration CONTAINS CREDENTIALS, and not only in the fields AWX
+// marks secret. AWX returns `$encrypted$` for `token`/`password`, but it returns the rest
+// IN THE CLEAR — and for the most common driver the cleartext field IS the credential: a
+// Slack or Teams incoming-webhook URL is a bearer secret with the token in its path. So
+// "only the fields AWX did not encrypt" is not a safe rule; it is the rule that imports
+// working webhook credentials into the graph.
+//
+// This type therefore has NO FIELD THE VALUES COULD LIVE IN. configKeys decodes the object
+// and keeps only its KEY NAMES (see its UnmarshalJSON), so the property is structural
+// rather than a habit in the normalizer — there is nothing for a later `json.Marshal` of
+// this struct to leak, and nothing a well-meaning "just add the endpoint" edit can reach.
+// Same line ADR-0128 D2 drew for credentials (name and kind only) and ADR-0132 D3 for
+// schedule extraDataKeys (key names, never values), applied where it bites hardest.
+//
+// The key NAMES are worth having and are not secret: they say which driver knobs an
+// operator configured, which is exactly what has to be re-declared as a Sink.
+type NotificationTemplate struct {
+	ID   int    `json:"id"`
+	Name string `json:"name"`
+	// NotificationType is AWX's driver: slack, webhook, email, pagerduty, twilio, irc,
+	// mattermost, grafana, rocketchat. Deliberately NOT enumerated here — this is an
+	// observed foreign value, and an enum would turn AWX shipping a new driver into a
+	// projection failure rather than a fact we render as-is (§1.2).
+	NotificationType string     `json:"notification_type"`
+	Configuration    configKeys `json:"notification_configuration"`
+	// Messages is AWX's per-event message customization. Read as a presence BOOLEAN and
+	// never as content: a custom message body can embed job variables, and the fact worth
+	// projecting is "this one has hand-written text you must re-author on cutover".
+	Messages      json.RawMessage `json:"messages"`
+	SummaryFields struct {
+		Organization named `json:"organization"`
+	} `json:"summary_fields"`
+}
+
+// configKeys holds the KEY NAMES of a JSON object and discards every value at decode time.
+//
+// The discard happens in UnmarshalJSON on purpose. Decoding into a map and filtering later
+// would leave the values reachable for as long as the snapshot lives and one edit away from
+// a facet; this way the only thing that ever exists in the struct is the list of names.
+type configKeys []string
+
+func (k *configKeys) UnmarshalJSON(b []byte) error {
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(b, &raw); err != nil {
+		// A null or a non-object is "no keys", not a failed projection: AWX's shape here is
+		// driver-defined and a mirror must not die on a driver we have not seen.
+		*k = nil
+		return nil
+	}
+	out := make([]string, 0, len(raw))
+	for name := range raw {
+		out = append(out, name)
+	}
+	sort.Strings(out) // stable: a facet that reorders between polls reads as a change
+	*k = out
+	return nil
+}
+
+// CredentialType is an AWX credential type — the SCHEMA a credential is an instance of
+// (AWX-012). The built-in ones are AWX's own (ssh, vault, aws, …); the CUSTOM ones are what an
+// operator wrote, and they are the migration question: a credential of a custom type has no
+// equivalent until that type's fields and injectors exist on the other side.
+//
+// FIELD NAMES AND INJECTOR SHAPES, never a value — but note this is a weaker §2.5 statement than
+// the ones elsewhere in this Connector, because a credential TYPE holds no material by
+// construction: it is a schema, and the values live on credential INSTANCES, which ADR-0128 D2
+// already refuses to read. What is projected here is what the type ASKS FOR and how it delivers
+// it, which is exactly what has to be reproduced on cutover.
+type CredentialType struct {
+	ID   int    `json:"id"`
+	Name string `json:"name"`
+	Kind string `json:"kind"`
+	// Managed marks a type AWX ships. False is the interesting value: a custom type is the one
+	// that does not exist anywhere else.
+	Managed bool           `json:"managed"`
+	Inputs  credTypeInputs `json:"inputs"`
+	// Injectors say HOW the type delivers its fields to a job — as env vars, extra_vars, or
+	// files. Only the DELIVERY MODES are projected, not the templates: a template can embed
+	// `{{ password }}`, which names a field rather than carrying one, but projecting template
+	// text would put an operator's arbitrary strings in the graph for no gain a mode does not
+	// already give.
+	Injectors map[string]json.RawMessage `json:"injectors"`
+}
+
+// credTypeInputs decodes an AWX credential type's input schema down to its FIELD NAMES.
+type credTypeInputs struct {
+	Fields []struct {
+		ID     string `json:"id"`
+		Type   string `json:"type"`
+		Secret bool   `json:"secret"`
+	} `json:"fields"`
+	Required []string `json:"required"`
+}
+
+// Project is an AWX Project — the content root a job template runs FROM (AWX-001, ADR-0154).
+//
+// It is the last object the mirror could not see, and the audit ranked it Tier 1 for a reason that
+// is not breadth: ADR-0085's orphan-template Baseline reads the presence of a cross-source `runs`
+// edge whose target is keyed by the Project's NAME concatenated with a playbook path, matched
+// against an operator-set env var. When that convention is broken the edge drops — byte-identically
+// to it dropping because the content genuinely is not projected. One signal, two very different
+// causes. Projecting the Project gives the template an ID-JOINED companion edge, so the two cases
+// stop looking the same (§1.8).
+//
+// ScmRevision is the fact that binds catalogue to execution: the commit AWX last synced, and the
+// only thing in the mirror that says which BYTES the Controller is actually running.
+type Project struct {
+	ID          int    `json:"id"`
+	Name        string `json:"name"`
+	ScmType     string `json:"scm_type"` // git | hg | svn | archive | "" (manual)
+	ScmURL      string `json:"scm_url"`
+	ScmBranch   string `json:"scm_branch"`
+	ScmRevision string `json:"scm_revision"`
+	Status      string `json:"status"`
+	LastUpdated string `json:"last_updated"`
 }
 
 // Label is an AWX label — the operator's own grouping vocabulary (ADR-0132 D1).
@@ -207,15 +331,18 @@ type User struct {
 
 // Snapshot is one full read of the Controller's automation estate.
 type Snapshot struct {
-	JobTemplates  []JobTemplate
-	Workflows     []WorkflowJobTemplate
-	Schedules     []Schedule
-	Organizations []Organization
-	Teams         []Team
-	Credentials   []Credential
-	Users         []User
-	Labels        []Label
-	ExecutionEnvs []ExecutionEnvironment
+	JobTemplates    []JobTemplate
+	Workflows       []WorkflowJobTemplate
+	Schedules       []Schedule
+	Organizations   []Organization
+	Teams           []Team
+	Credentials     []Credential
+	Users           []User
+	Labels          []Label
+	ExecutionEnvs   []ExecutionEnvironment
+	Notifications   []NotificationTemplate
+	Projects        []Project
+	CredentialTypes []CredentialType
 	// WorkflowNodes by workflow_job_template id (ADR-0129). AWX has no bulk endpoint, so
 	// this is an N+1 read: one request per workflow, every poll.
 	WorkflowNodes map[int][]WorkflowNode
@@ -335,6 +462,27 @@ func (c *Client) Enumerate(ctx context.Context) (*Snapshot, error) {
 		return nil, err
 	}
 	if snap.ExecutionEnvs, err = list[ExecutionEnvironment](ctx, c, "/execution_environments/"); err != nil {
+		return nil, err
+	}
+	// A COLLECTION read (AWX-012): O(1) per poll.
+	if snap.CredentialTypes, err = list[CredentialType](ctx, c, "/credential_types/"); err != nil {
+		return nil, err
+	}
+	// A COLLECTION read (AWX-001): O(1) per poll. Project SYNC JOBS (/project_updates/) are
+	// deliberately NOT read — that is run history, which §3 forbids mirroring, and status +
+	// last_updated already carry the current state (the same current-not-history line
+	// ADR-0128 D3 drew for templates).
+	if snap.Projects, err = list[Project](ctx, c, "/projects/"); err != nil {
+		return nil, err
+	}
+	// A COLLECTION read (AWX-009): O(1) per poll. The ATTACHMENTS — which template notifies
+	// through which of these, on started/success/error — are deliberately NOT read, and that
+	// is a budget decision rather than an oversight. AWX exposes them only as three
+	// sub-resources PER TEMPLATE, so projecting them costs 3×len(JobTemplates) requests on
+	// top of the existing detail tier: job templates are the largest collection in every real
+	// Controller, which is the "different order of cost" ADR-0131 warns about. Booked as a
+	// detail-tier opt-in for an operator who needs the edge, not taken by default.
+	if snap.Notifications, err = list[NotificationTemplate](ctx, c, "/notification_templates/"); err != nil {
 		return nil, err
 	}
 	// The DETAIL tier (ADR-0131 D1): the expensive per-object sub-reads, on their own

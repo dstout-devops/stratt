@@ -63,6 +63,17 @@ type Connector struct {
 	// `requires: [provisioning]` resolves to a concrete Action — the provider owns its mechanism
 	// (§1.5); a capability-binding only selects WHICH provider.
 	Provisions map[string]string `json:"provisions,omitempty"`
+
+	// Substrate is the landscape this provider builds in (ADR-0151 D1) — "aws", "kubernetes",
+	// "vsphere", "vm". A FACT about the provider, in the same category as Provides and
+	// IdentitySchemes; it is descriptive, never a knob that configures the provider elsewhere.
+	//
+	// A capability-binding may select by it instead of naming a provider per Intent kind, which is
+	// what makes a whole-topology migration one line (ADR-0151 D2). NOTHING ABOVE A PROVIDER MAY
+	// NAME A SUBSTRATE: an Intent or Blueprint that does cannot migrate, because the name is the
+	// coupling. Empty is legal and means "never selected by substrate" — every provider shipped
+	// before ADR-0151 keeps working through its per-kind bindings.
+	Substrate string `json:"substrate,omitempty"`
 	// Decommissions maps an Intent kind to THIS provider's gated TEARDOWN Workflow for it (ADR-0114
 	// D4), symmetric to Provisions — the per-kind teardown a withdrawn/counted-down Intent resolves to.
 	Decommissions map[string]string `json:"decommissions,omitempty"`

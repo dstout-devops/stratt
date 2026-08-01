@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "stratt:contract:actions/opentofu/apply:output:v1",
+  "title": "opentofu/apply Action output",
+  "description": "Typed output values of a completed opentofu/apply (§2.2: an Action declares an output Contract), captured on the Run for cross-Step binding ({{.steps.<name>.outputs.<field>}}). The TOP level is closed; `outputs` is deliberately open because its keys are the module's own and a Contract that enumerated them would be a different Contract per module — which is exactly the per-provider typing §1.1 refuses. The module's shape is still typed, by the rung-2 schema the Apply verb derives from `tofu output -json` (ADR-0017/§2.2).",
+  "type": "object",
+  "required": ["module", "workspace", "outputs"],
+  "properties": {
+    "module": {
+      "type": "string",
+      "description": "The module that was applied."
+    },
+    "workspace": {
+      "type": "string",
+      "description": "The state workspace it was applied to."
+    },
+    "outputs": {
+      "type": "object",
+      "additionalProperties": true,
+      "description": "The module's own outputs, verbatim, MINUS the reserved stratt_entities (which is the governed projection channel, not a value) and with every output tofu marked `sensitive` replaced by \"(sensitive)\" — a Run's captured outputs are not a secret channel (§2.5), and a content-blind core cannot do that redaction for us."
+    }
+  },
+  "additionalProperties": false
+}

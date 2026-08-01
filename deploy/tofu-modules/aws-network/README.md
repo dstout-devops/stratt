@@ -14,22 +14,31 @@ route-table + IGW, from a **NetBox-allocated CIDR** (ipam, ADR-0111) with **S3 t
 - **`stratt_entities`** (`outputs.tf`) projects the subnet Entity by `aws.subnetId` (D5); the awsec2
   Syncer writes the `net.subnet` Facet by OBSERVE — one co-owned Entity, no fourth writer.
 
-## Bring-up steps that need a real `tofu` (deferred deployment validation — no tofu binary in the dev image)
+## Bring-up: DONE (2026-07-28, ADR-0145)
 
-1. **Generate + commit the provider lockfile (§7.3, ADR-0112 D4).** `tofu init` in this dir against
-   the pinned `aws ~> 5.60` provider, then commit the resulting **`.terraform.lock.hcl`** (provider
-   hash pins). It cannot be hand-authored — the hashes must match the real provider. **Until it is
-   committed, this module is not release-ready.**
-2. **`tofu validate`** — this module has not been validated in-repo (no tofu binary here); confirm it
-   at bring-up.
-3. **The live floci run** — `tofu apply` landing a real VPC/subnet on floci, and a VM SSH-able in it
-   (the DeepWiki-vs-docs conflict on floci's instance realness is settled here — ADR-0112 D7).
+All three items below were open for months because there was no `tofu` binary in this container to
+close them. There is now (`task tools:tofu`, pinned 1.12.5, sha256-verified).
 
-## Open mechanism (the build Workflow — ADR-0112 follow-up)
+1. **The provider lockfile is generated and COMMITTED** (`hashicorp/aws` 5.100.0; hashes for
+   `linux_amd64`/`linux_arm64`/`darwin_arm64`). This was **ADR-0112 D4's binding condition** for
+   shipping the module at all (§7.3), and it is why the module was not release-ready. Regenerate with
+   `task tofu:lock` when `required_providers` moves, and commit the result.
+2. **`tofu validate` runs in `task ci`** (`task tofu:validate`) — hermetic, with its working state in
+   gitignored `.bin/` so the gate never depends on what ran before it.
+3. **The live run happened**: `task dev:tofu:proof` applies this module against the real floci EC2 API
+   with real S3 state, through the `opentofu/apply` Action a launched `Intent/Subnet` build invokes,
+   and asserts the subnet from the API independently. See ADR-0145's Consequences for what it checks.
 
-`provisions: {Subnet: opentofu-subnet-build}` names a build Workflow, but a Workflow Step is either an
-_actuation_ (`viewName + actuator`) or a _targetless Action_. Crossplane's `subnet-build` uses a
-targetless **Action** (`crossplane/provision`); the opentofu **Actuator**'s apply is _workspace-scoped_,
-so `opentofu-subnet-build` needs either a synthetic/anchor View for the actuation **or** a targetless
-`opentofu/apply` Action wrapper. This is a real design decision (see ADR-0112 follow-ups), resolved at
-bring-up alongside the live run — not guessed at here.
+**A note that cost an hour:** floci is genuinely **region-scoped**, like AWS. A subnet this module
+creates in its default `eu-west-1` is correctly invisible to a reader querying `us-east-1` — which
+reads exactly like "the build created nothing". Pin one region across the module and every reader.
+
+## Open mechanism — SETTLED by ADR-0145 D1
+
+ADR-0112's follow-up #7 asked whether a workspace-scoped Actuator builder needs a synthetic/anchor
+View or a targetless `opentofu/apply` wrapper. It is **a targetless Action**. A `tofu apply` converges a
+workspace, not a set of graph Entities, so it has no View to actuate against; and only the Action seam
+carries the estate overlay that a build's `stratt.intent/singleton` correlation label must ride — it
+cannot come out of this module, because the plugin refuses any `stratt.*`-prefixed label in
+`stratt_entities` (see the note in `outputs.tf`). What that form does NOT get is the ADR-0047 plan pin;
+ADR-0145 D3 states the gap rather than hiding it.

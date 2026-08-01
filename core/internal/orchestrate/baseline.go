@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -149,20 +150,41 @@ func (a *Activities) EvaluateFacetBaseline(ctx context.Context, b types.Baseline
 	}
 	obs := map[string]graph.BaselineObservation{}
 	for _, e := range ents {
-		facets, err := a.Store.GetFacets(ctx, e.ID)
+		// ONE RESOLVED VALUE PER (namespace, qualifier) — both dimensions, decided in the data
+		// layer rather than by whatever order rows came back in.
+		//
+		// This line used to range GetFacets into a map keyed by NAMESPACE, which made two silent
+		// picks at once. Across QUALIFIERS a host running apache and tomcat would have one
+		// application's port checked against the other's expectation (ADR-0152 D5). Across SOURCES
+		// — the older of the two, shipped since ADR-0060 gave the Facet grain a source dimension —
+		// the last row scanned won, so which observation a compliance check evaluated against was
+		// decided by Postgres. FacetValuesByEntities has resolved the second properly for years;
+		// this read path never learned about it (ADR-0152 follow-up 6).
+		byKey, contended, err := a.Store.ResolvedFacetsByEntity(ctx, e.ID)
 		if err != nil {
 			return graph.ObservationOutcome{}, err
 		}
-		byNS := map[string]json.RawMessage{}
-		for _, f := range facets {
-			byNS[f.Namespace] = f.Value
-		}
 		var unmet []map[string]any
 		for _, exp := range b.Expected {
-			if reason := expectationUnmet(byNS[exp.Namespace], exp); reason != "" {
-				unmet = append(unmet, map[string]any{
-					"namespace": exp.Namespace, "path": exp.Path, "reason": reason,
-				})
+			k := graph.FacetKey{Namespace: exp.Namespace, Qualifier: exp.Qualifier}
+			if reason := expectationUnmet(byKey[k], exp); reason != "" {
+				d := map[string]any{"namespace": exp.Namespace, "path": exp.Path, "reason": reason}
+				// Only when there is one: a drift diff that grew a `qualifier: ""` key on every
+				// Finding in the estate would be noise, and §1.8 is about the reader.
+				if exp.Qualifier != "" {
+					d["qualifier"] = exp.Qualifier
+				}
+				// A contended key reads as ABSENT above, which is the honest direction to be wrong
+				// in — but "the facet is missing" and "two sources disagree and none is declared
+				// authoritative" are different problems with different fixes, and an operator sent
+				// looking for the first will not find it. The ownership Finding names the
+				// contention; this names why THIS check could not evaluate (§1.8).
+				if slices.Contains(contended, k) {
+					d["unresolved"] = "multiple sources project this facet and none is declared " +
+						"authoritative (ADR-0060) — the check cannot evaluate a value it would have " +
+						"had to pick; declare the authoritative source in sources/ CaC"
+				}
+				unmet = append(unmet, d)
 			}
 		}
 		// Topology expectations (ADR-0085): each required relation type must be

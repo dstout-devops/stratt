@@ -158,11 +158,19 @@ func TestReconcileLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Schedule List is eventually consistent (visibility store), so the
-	// rogue may not be visible to the first pass — poll a few cycles, the
-	// way the reconciler's cadence does in production.
+	// Schedule List is eventually consistent (visibility store), so the rogue may
+	// not be visible to the first pass — poll the way the reconciler's cadence does
+	// in production.
+	//
+	// Bounded by a DEADLINE, not by an iteration count. The fixed 20×500ms window
+	// gave up after ~10s of wall clock no matter how loaded the host was, so under a
+	// full parallel `task ci` (kind + the whole suite) this failed for want of host
+	// CPU rather than for a correctness reason — a flake that cost more trust than
+	// the test earned. The deadline is generous because the thing being waited on is
+	// Temporal's visibility store, whose lag is not ours to bound.
 	pruned := false
-	for range 20 {
+	deadline := time.Now().Add(60 * time.Second)
+	for {
 		if err := r.Reconcile(ctx); err != nil {
 			t.Fatal(err)
 		}
@@ -170,7 +178,10 @@ func TestReconcileLifecycle(t *testing.T) {
 			pruned = true
 			break
 		}
-		time.Sleep(500 * time.Millisecond)
+		if time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(250 * time.Millisecond)
 	}
 	if !pruned {
 		_ = sc.GetHandle(ctx, ScheduleID(rogue)).Delete(ctx)

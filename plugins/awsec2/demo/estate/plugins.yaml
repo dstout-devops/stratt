@@ -1,0 +1,20 @@
+# Admitted plugin estates for the ec2-only demo (ADR-0137 D1/D3).
+#
+# The demo's compute-build Workflow dispatches `awsec2/create-vm`, and since ADR-0138 D3/D4 that
+# Action's input Contract lives in the awsec2 PLUGIN's tree rather than in core. Core holds only what
+# the estate admits, and it cannot learn the document from the plugin at runtime: the Manifest
+# carries a schema id and a hash, never the schema (§1.5 — a plugin never mints contract meaning).
+# Without this admission the build Step fails with "no input contract for action" the moment an
+# operator approves the gate.
+#
+# CONTRACTS ONLY: the demo needs awsec2's SEAM, not its ESTATE. The demo declares no Intent/Compute
+# and drives its own Workflow, so importing the plugin's declarations would bring a provisioning
+# story this floor does not have.
+#
+# This file was missing, and the reason that stayed invisible is worth keeping: `task ci` parses from
+# the repo, where the plugin tree is on disk and complete, so the omission is only reachable by
+# running the demo on a real floor. TestDemoEstatesAdmitThePluginsTheyUse now catches it in seconds.
+plugins:
+  - name: awsec2
+    path: ../../estate
+    contractsOnly: true

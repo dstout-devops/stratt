@@ -1,0 +1,51 @@
+# awsec2 — the demo floor's Actuator, carrying the INVOKE Actions this demo dispatches (ADR-0103).
+#
+# WHY THIS FILE EXISTS. It did not, and the demo's own manifest said why: "the awsec2 Actuator/Actions
+# are boot-wired via the plugin's hostEnv, NOT a CaC actuator, so the estate carries no actuator file."
+# That stopped being true when ADR-0103 moved all 11 Actions into
+# plugins/awsec2/estate/actuators/awsec2.yaml — and this demo's estate is a SEPARATE TREE (ADR-0116
+# D1: self-contained), so it was left dispatching `awsec2/create-vm` with nothing registering it. The
+# Run failed after the gate with `no action registered as "awsec2/create-vm"`.
+#
+# It matches the shipped declaration, including `provisions: {Compute: compute-build}` — the demo
+# ships a compute-build Workflow of its own, so the advertisement resolves rather than promising a
+# builder nobody can launch. The one thing left out is the network Actions' half of the story: this
+# floor declares no Subnet Intent, and the shipped Actuator does not advertise a Subnet builder
+# either (ADR-0110 D5 keeps Subnet on Crossplane until the real-AWS network path lands).
+name: awsec2
+# stratt-aws, not stratt-awsec2: this floor's values-demo-ec2 names the plugin `aws`, so the chart
+# creates Service stratt-aws. The shipped Actuator names stratt-awsec2 because the reference estate's
+# plugin entry is `awsec2`. Getting this wrong does not fail loudly — the Actuator simply never
+# reaches status.enabled, with `produced zero addresses` sitting in its status where nothing looks.
+address: stratt-aws:9090
+pluginIdentity: awsec2
+tier: trusted
+dryRunnable: true
+provides: [provisioning]
+actionNames:
+  - awsec2/create-vm
+  - awsec2/start
+  - awsec2/stop
+  - awsec2/reboot
+  - awsec2/terminate
+  - awsec2/tag
+  - awsec2/create-security-group
+  - awsec2/import-key-pair
+  - awsec2/create-volume
+  - awsec2/create-vpc
+  - awsec2/create-subnet
+# The Action grant, narrower than the Syncer's boot grant: an Action's write-back is ENTITY-ONLY
+# (RecordActionResult projects Kind + IdentityKeys + Labels + Relations, no Facet), so identity
+# schemes and label keys are exactly what these Actions need. The awsec2 SYNCER keeps its own boot
+# grant and stays the authority for the Facets the demo then observes.
+identitySchemes: [aws.instanceId, aws.vpcId, aws.subnetId, aws.securityGroupId, aws.volumeId]
+# The CORRELATION LABEL is granted explicitly, and it is not optional garnish: the provisioning
+# loop closes on it. A build projects the Entity it made carrying stratt.intent/instance, and the next
+# reconcile reads ONLY that key back to see the desired unit as built. It was missing here, and
+# the failure mode is why it stayed missing: Host.toUpsert DROPS an ungranted label key rather
+# than refusing the projection, so the Entity still lands, the Run still goes green, and the sole
+# symptom is a build offered again on the next pass. TestProvisioningActuatorsGrantTheirCorrelationLabel
+# now refuses a `provisions` advertisement without it.
+labelKeys: [aws.region, aws.name, stratt.managed, stratt.intent/instance]
+provisions:
+  Compute: compute-build

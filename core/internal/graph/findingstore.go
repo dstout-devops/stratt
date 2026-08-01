@@ -336,18 +336,29 @@ func (s *Store) ResolveClearedCellPlacementFindings(ctx context.Context) (int64,
 // silent pick. One Finding per contended (Entity, namespace) carrying the contending
 // sources; idempotent on the live (baseline, target) row. Estate-wide, non-fatal.
 func (s *Store) WriteFacetContentionFindings(ctx context.Context) (int64, error) {
+	// GROUPED BY QUALIFIER TOO (ADR-0152 D5), and the Finding's IDENTITY carries it. Both halves
+	// are needed and the second is the one that is easy to miss: without the qualifier in the
+	// GROUP BY, apache's app.config and tomcat's — projected by two different sources — count as
+	// two sources contending for one fact, which is a Finding about a contention that does not
+	// exist. And without it in the baseline key, two GENUINE contentions on one (entity, namespace)
+	// under different qualifiers collide on the ON CONFLICT (baseline, target) row and one silently
+	// overwrites the other's diff: last-writer-wins in the one place whose entire job is to prevent
+	// exactly that. The empty qualifier renders as today's bare 'ownership/<ns>', so no shipped
+	// Finding re-keys.
 	tag, err := s.pool.Exec(ctx, `
 		INSERT INTO graph.finding
 			(baseline, target, entity_id, status, severity, framework, consecutive_drifted, diff, opened_at)
-		SELECT 'ownership/' || f.namespace, f.entity_id::text, f.entity_id::text, 'open', 'warning', 'ownership', 1,
+		SELECT 'ownership/' || f.namespace || CASE WHEN f.qualifier = '' THEN '' ELSE '@' || f.qualifier END,
+		       f.entity_id::text, f.entity_id::text, 'open', 'warning', 'ownership', 1,
 		       jsonb_build_object(
 		           'namespace', f.namespace,
+		           'qualifier', f.qualifier,
 		           'sources', array_agg(DISTINCT f.prov_source_id),
 		           'reason', 'multiple sources project this facet with no declared authority (ADR-0060 §4); declare the authoritative source in sources/ CaC'),
 		       now()
 		FROM graph.facet f
 		JOIN graph.entity e ON e.id = f.entity_id AND e.deleted_at IS NULL
-		GROUP BY f.entity_id, f.namespace
+		GROUP BY f.entity_id, f.namespace, f.qualifier
 		HAVING count(DISTINCT f.prov_source_id) > 1
 		ON CONFLICT (baseline, target) WHERE status <> 'resolved'
 		DO UPDATE SET diff = excluded.diff, last_observed = now()`)
@@ -392,8 +403,13 @@ func (s *Store) ResolveClearedFacetContentionFindings(ctx context.Context) (int6
 		  AND NOT EXISTS (
 		      SELECT 1 FROM graph.facet f
 		      WHERE f.entity_id::text = fnd.target
-		        AND 'ownership/' || f.namespace = fnd.baseline
-		      GROUP BY f.entity_id, f.namespace
+		        -- The qualifier is part of the Finding's identity on the write side (ADR-0152 D5),
+		        -- so it must be part of the match here or the two halves disagree: a contention
+		        -- that clears under one qualifier would never resolve while ANOTHER qualifier on
+		        -- the same namespace still had two sources. A stale open Finding nobody can clear
+		        -- is worse than none, because it teaches an operator that this framework lies.
+		        AND 'ownership/' || f.namespace || CASE WHEN f.qualifier = '' THEN '' ELSE '@' || f.qualifier END = fnd.baseline
+		      GROUP BY f.entity_id, f.namespace, f.qualifier
 		      HAVING count(DISTINCT f.prov_source_id) > 1)`)
 	if err != nil {
 		return 0, fmt.Errorf("graph: resolve cleared facet contention findings: %w", err)

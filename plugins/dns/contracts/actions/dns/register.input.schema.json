@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "stratt:contract:actions/dns/register.input:v1",
+  "title": "dns/register input",
+  "description": "Input Contract for the dns/register Action (ADR-0144): write ONE record into a zone the provider is authorized for, converging (the RRset is removed and re-added in one RFC 2136 update, so a re-run lands on the same zone state). This is the SINGLETON path — the record an Intent/DnsRecord declares, whose data the estate states because there is no machine to read it from (a service alias, a delegation, a name for something Stratt does not manage). The FLEET path is the dns Actuator, whose record data is each target's own observed coordinate and therefore has no `data` field at all. Hand-written — derivation ladder rung 1 (§2.2). Registering a name MUTATES how an estate is reached, so a Workflow that dispatches this belongs behind a Gate.",
+  "type": "object",
+  "required": ["zone", "name", "type", "data"],
+  "properties": {
+    "zone": {
+      "type": "string",
+      "minLength": 1,
+      "description": "The zone to update, e.g. `estate.example`. Trailing dot optional. The provider must be authorized for it by the server's own update policy — Stratt does not grant DNS write authority, it holds a key the server accepts."
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "description": "The record's owner name, bare (`web-01`) or fully qualified within the zone (`web-01.estate.example`). A qualified name from a DIFFERENT zone is REFUSED rather than re-suffixed: silently turning `www.other.example` into `www.other.example.ours.example` writes a record nobody asked for at a name nobody will look at (§1.8)."
+    },
+    "type": {
+      "enum": ["A", "AAAA", "CNAME"],
+      "description": "The record type. Restricted to the three that name a HOST, because a reach coordinate is what this provider exists for — it is not a zone editor (§1.1: type the seam, not the world). MX/TXT/SRV are a different job with a different consumer, and neither exists yet."
+    },
+    "data": {
+      "type": "string",
+      "minLength": 1,
+      "description": "The record's data: an IP address for A/AAAA, a canonical name for CNAME. Validated against the type at the seam (an A whose data is a name is refused here, not by the server three hops later). A CNAME pointing at its own name is refused too — that is a resolver loop, and it is the shape this design walks past when the estate's zone and the substrate's zone coincide."
+    },
+    "ttl": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 604800,
+      "description": "Record TTL in seconds (default 300). Short by default on purpose: these records track machines that get rebuilt, and a long TTL turns a re-registration into a fleet that will not notice for a day."
+    },
+    "projectKind": {
+      "type": "string",
+      "description": "The Entity kind the built record projects AS (default dns-record), carried from the Intent so Views select it. Identity-only projection — an Action's write-back carries no Facet, and mgmt.address is the Syncer's alone (ADR-0144 D5)."
+    },
+    "labels": {
+      "type": "object",
+      "additionalProperties": { "type": "string" },
+      "description": "Labels the projection carries, INCLUDING stratt.intent/singleton — the correlation key the provisioning reconcile reads to resolve this record's own Finding (ADR-0059 §6, ADR-0120 D2)."
+    }
+  },
+  "additionalProperties": false
+}

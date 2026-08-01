@@ -6,6 +6,24 @@
       "name": "community.crypto",
       "sha256": "2f03c37e594e9b48e8a02f2a70656b3740e3e5422d1fd09a0f012708b7765838",
       "version": "2.22.3"
+    },
+    {
+      "declared": true,
+      "name": "community.general",
+      "sha256": "7d4a3b2b6597e4abe18e660d6bcf07c5b1288fd0c14734a11599d3d0e3117045",
+      "version": "13.2.0"
+    },
+    {
+      "declared": false,
+      "name": "community.library_inventory_filtering_v1",
+      "sha256": "d5de090c73f3bbfda0563b080e40cad38a97295d29b2d990568a433a2d2ec67f",
+      "version": "1.1.5"
+    },
+    {
+      "declared": true,
+      "name": "kubernetes.core",
+      "sha256": "f123d357fd14cd704e4020fc92dc67d5a5afc6fc23040d57d1a5daa0bec85b10",
+      "version": "6.5.0"
     }
   ],
   "lockfileVersion": 1,

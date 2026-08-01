@@ -1,0 +1,61 @@
+# openbao — the dev CLM the `certissuer` capability needs a VERIFIED provider for (CERT-1, W4).
+#
+# WHY THIS FILE EXISTS. OpenBao already shipped as a compose service with a bootstrap script, and
+# `task dev:connector-e2e` is fully in-kind by design (ADR-0103 S7, no compose) — so the two never
+# met. The consequence was concrete and measured: the certificate leg reconciled, and the compile
+# fails closed with `no verified provider builds Intent/Certificate for capability "certissuer"`
+# because `cert-issuer` cannot be dialled. Nothing in the estate was wrong; there was simply no
+# floor in which the provider could exist.
+#
+# It is the same in-cluster-substrate posture values-allinone already takes for Postgres, NATS and
+# Temporal: a dev floor should be standable from nothing, without a second orchestration to run
+# beside it.
+#
+# DEV ONLY, and the ways it is dev are deliberate rather than incidental: `server -dev` keeps
+# everything in memory (unsealed at start, gone on restart), and the root token is a literal. Real
+# deployments broker a token through a CredentialRef and never hold one in a manifest (§2.5) — the
+# compose service this mirrors carries the same warning for the same reason.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: openbao
+  namespace: stratt
+  labels: { app: openbao }
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: openbao }
+  template:
+    metadata:
+      labels: { app: openbao }
+    spec:
+      containers:
+        - name: openbao
+          # Pinned to the version the compose service uses, so a certificate issued on one dev
+          # floor and a certificate issued on the other come from the same CLM.
+          image: openbao/openbao:2.5.5
+          args: ["server", "-dev"]
+          env:
+            - { name: BAO_DEV_ROOT_TOKEN_ID, value: stratt-dev-root }
+            - { name: BAO_DEV_LISTEN_ADDRESS, value: "0.0.0.0:8200" }
+          ports:
+            - { containerPort: 8200, name: http }
+          readinessProbe:
+            # Dev mode is unsealed and active immediately, so /v1/sys/health answers 200 as soon as
+            # the listener is up — no init container, no unseal dance.
+            httpGet: { path: /v1/sys/health, port: 8200 }
+            periodSeconds: 2
+            failureThreshold: 30
+          resources:
+            requests: { cpu: 50m, memory: 64Mi }
+            limits: { cpu: "1", memory: 512Mi }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: openbao
+  namespace: stratt
+spec:
+  selector: { app: openbao }
+  ports:
+    - { name: http, port: 8200, targetPort: 8200 }

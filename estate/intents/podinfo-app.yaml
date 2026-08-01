@@ -1,0 +1,17 @@
+# podinfo-app — a chart-delivered application, declared in five lines like the host-delivered ones.
+#
+# The whole point of the CHART form landing (ADR-0148 follow-up b) is that this Intent looks like
+# apache-tier and tomcat-tier: it names the application and the desired version, and nothing about
+# Helm, OCI, namespaces, values files or Kubernetes. `package:` is the deliverable's NAME across all
+# three forms — a chart name here, a distro package there — which is why Intent/Application stayed
+# one kind rather than splitting per form.
+#
+# chartVersion is a STRING and typed as one in application.v2, for the reason `port` records: it is
+# compared against app.deliverable's observed version and nothing coerces between types
+# (ADR-0118 D1). Pinned rather than floating because §7.3 wants the deployed bytes knowable — a
+# Blueprint default supplies it, and this Intent could override it per tier.
+name: podinfo-app
+kind: Intent/Application
+spec:
+  package: podinfo
+  chartVersion: "6.9.2"

@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "stratt:contract:facets/ansible.role:v1",
+  "title": "ansible.role Facet",
+  "description": "The OBSERVED metadata of an Ansible role a project uses, projected read-only by the ansible-project Connector (§1.2) — a foreign artifact, never a Stratt Named Kind. ONE Kind covers BOTH an in-tree role (roles/<name>/) and a role declared in requirements.yml (ANS-002), discriminated by `required` and by the presence of `path`: 'which roles does this project use, and which come from outside the repo' is ONE question, and two Kinds would make it two queries and a join — and would leave a depends-on edge unable to resolve without knowing which space it pointed at. The two identity spaces are `roles/<path>` and `requirements/<name>`, distinct prefixes deliberately, because an in-tree role and a required role of the same name are different objects. WHAT IS READ FROM INSIDE A ROLE: meta/main.yml, and nothing else (ANS-004). Tasks, handlers, defaults and vars stay unread — that is Ansible's execution model and reinterpreting it is the §9 no-new-language line the tool audit says is correctly held. A role's DECLARED DEPENDENCIES are on the other side of that line: they are structure Ansible already wrote down, they project as `depends-on` relations, and without them 'what breaks if I change this role' has no answer. The dependency edge is SOFT (resolve-at-query, never a forcing FK) and may name a role no Source has observed — refusing to draw it would hide a real dependency because the target has not been seen yet, which is the §1.8 failure rather than a referential-integrity win. galaxy_info is provenance, cheap once meta/ is being read at all. Shipping this schema hardens the write seam (§1.1 progressive hardening) now that the facet carries the ANS-002/ANS-004 facts rather than a name and a path. Closed (§9).",
+  "type": "object",
+  "properties": {
+    "name": { "type": "string" },
+    "path": {
+      "type": "string",
+      "description": "the in-tree location; EMPTY for a required role, which is the discriminator alongside `required`"
+    },
+    "required": {
+      "type": "boolean",
+      "description": "declared in requirements.yml rather than present in roles/ — content that must be fetched before this project can run"
+    },
+    "version": { "type": "string", "description": "the pinned version of a required role" },
+    "source": { "type": "string", "description": "the `src` of a required role" },
+    "dependencies": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "role names declared by meta/main.yml; each also projects as a depends-on relation"
+    },
+    "author": { "type": "string" },
+    "license": { "type": "string" },
+    "minAnsibleVersion": { "type": "string" },
+    "platforms": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "the platform NAMES galaxy_info declares (versions are not projected — a supported-version matrix is not estate structure)"
+    }
+  },
+  "required": ["name"],
+  "additionalProperties": false
+}

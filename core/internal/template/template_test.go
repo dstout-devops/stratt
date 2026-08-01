@@ -91,13 +91,25 @@ func TestHasAndReferences(t *testing.T) {
 	}
 }
 
-// No operators / expression syntax: a token with an operator is not a valid
-// token and is left as literal text (never evaluated) — the non-goal guard.
+// No operators / expression syntax — the non-goal guard (§1, "no new configuration languages").
+//
+// AMENDS ADR-0024 D1's stated behaviour, on charter-guardian's ruling (2026-07-30). D1 said an
+// expression-like token "passes through as literal text, never evaluated", and this test asserted
+// the pass-through. It is now REFUSED instead. Not evaluating it and silently accepting it as a
+// VALUE are different things, and ADR-0150 D2 is what turned the difference into a hazard: a
+// `commonName` that resolves to the literal "{{.entity.dns.fqdn | lower}}" is a perfectly good
+// string, satisfies its Contract, and gets issued as a CERTIFICATE SUBJECT. The non-goal is still
+// held — nothing is evaluated, ever — and it is now held by the grammar rather than by hoping
+// nobody writes one.
 func TestNotAnExpressionLanguage(t *testing.T) {
-	for _, s := range []string{"{{.event.a + .event.b}}", "{{ len(.event.x) }}", "{{.event.a == 1}}"} {
+	for _, s := range []string{"{{.event.a + .event.b}}", "{{ len(.event.x) }}", "{{.event.a == 1}}", "{{.event}}", "{{.event.a}"} {
 		got, err := Substitute(s, ns())
-		if err != nil || got != s {
-			t.Fatalf("expression-like token must pass through as literal, not evaluate: %q → %v err=%v", s, got, err)
+		if err == nil {
+			t.Fatalf("expression-like or malformed token must be REFUSED, not accepted as a literal value: %q → %v", s, got)
 		}
+	}
+	// Text that merely CONTAINS braces is untouched — the guard fires on `{{`, not on punctuation.
+	if got, err := Substitute("a { literal } value", ns()); err != nil || got != "a { literal } value" {
+		t.Fatalf("ordinary braces must pass through: %v err=%v", got, err)
 	}
 }

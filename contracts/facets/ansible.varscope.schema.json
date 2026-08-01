@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "stratt:contract:facets/ansible.varscope:v1",
+  "title": "ansible.varscope Facet",
+  "description": "The OBSERVED shape of a group_vars/host_vars binding site, projected read-only by the ansible-project Connector (§1.2, ANS-003) — a foreign artifact, never a Stratt Named Kind. It is where an Ansible estate's configuration actually lives, and the audit put the cost of not having it plainly: without it, 'why did this host get this value' is unanswerable from the graph. SCOPE AND KEY NAMES ONLY. NEVER VALUES (§2.5): a vars file routinely contains credentials in the clear — that is the whole reason people vault them — so projecting values would carry secret material into the graph. But scope alone does not answer the motivating question either; the key NAMES are the answer and are not secret, because they say WHICH variable is bound at WHICH scope. Third instance of the same line in this repo: ADR-0128 D2 (credential name and kind only), ADR-0132 D3 (schedule extraDataKeys), AWX-009 (notification configKeys). PRECEDENCE IS OBSERVED, NEVER COMPUTED: two scopes binding one name is Ansible's normal case, and both project with neither marked a winner — computing the winner would reinterpret Ansible's execution model (§9) and would have Stratt assert a fact about a run that has not happened (§1.2). VAULTED (ANS-008): a $ANSIBLE_VAULT file is observed as present with vaulted=true and NO keys, and is never decrypted — the plugin holds no vault password and must not want one. An empty key list with vaulted=true is a complete answer, and distinguishes 'this scope binds nothing' from 'this scope binds things I cannot show you' (§1.8). The DIRECTORY form (group_vars/<name>/ holding several files) is ONE scope with the union of its files' keys, because that is what ansible does with it. Closed (§9).",
+  "type": "object",
+  "properties": {
+    "path": {
+      "type": "string",
+      "description": "the file or directory, relative to the content root"
+    },
+    "scope": {
+      "enum": ["group", "host"],
+      "description": "which of the two directories it was found under"
+    },
+    "target": {
+      "type": "string",
+      "description": "the group or host name this scope binds to — the base name without extension, or the directory name"
+    },
+    "keys": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "the TOP-LEVEL variable names bound here, sorted. Never the values (§2.5). Empty when vaulted."
+    },
+    "vaulted": {
+      "type": "boolean",
+      "description": "an ansible-vault encrypted file. keys is then empty — not because nothing is bound, but because reading it would mean decrypting it."
+    }
+  },
+  "required": ["path", "scope", "target"],
+  "additionalProperties": false
+}

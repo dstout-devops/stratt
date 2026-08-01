@@ -1,0 +1,17 @@
+# apache-tier — Intent/Application (ADR-0055 "5-line simplest form"): declare the application, and
+# let the Blueprint supply how it is installed and what its sane defaults are.
+#
+# `package: apache` is the operator's statement of WHAT, and it stays here rather than being implied
+# by the Assignment's Blueprint, so this document is readable on its own — you learn what the fleet
+# runs without chasing an Assignment to its Blueprint. The apache Blueprint declares `delivers:
+# apache`, and binding this Intent to a Blueprint that installs something else is refused at load
+# (ADR-0148 D2). Two statements of one fact, made to agree rather than trusted to (§2.4).
+#
+# WHAT IS DELIBERATELY ABSENT: any distro package name. Apache is `apache2` on Alpine and Debian and
+# `httpd` on RHEL, and that belongs to CONTENT — ansible's own package abstraction plus its facts
+# already answer it. A per-distro map here would make core learn distro packaging (§1.1/§9), and it
+# is the env-keyed-values shape ADR-0118 D1 refuses, rotated one axis.
+name: apache-tier
+kind: Intent/Application
+spec:
+  package: apache

@@ -1,0 +1,27 @@
+# dmz-subnet — a SECOND network, and it exists to make the allocator claim falsifiable.
+#
+# app-subnet alone cannot prove an allocation. It asks for a /24 out of 10.30.0.0/16 and gets
+# 10.30.0.0/24 — which is exactly what a system that simply echoed the pool's base with the
+# requested prefix would return. "An allocator ran" and "an allocator allocated" look identical at
+# n=1.
+#
+# With a second Intent asking for the SAME size from the SAME pool, they stop looking identical: the
+# two must come back DIFFERENT and both inside the pool, which nothing but a real allocator holding
+# real state can do. The runner asserts precisely that.
+#
+# It also exercises the rule ADR-0059 D3's builder check enforces. `opentofu-subnet-build` binds
+# `workspace: {{.launch.name}}`, so these two singletons get SEPARATE tofu state — a hardcoded
+# workspace would have this build destroy app-subnet's infrastructure to converge on its own vars,
+# which is the exact collision found in crossplane's subnet-build. Two subnets through one Workflow
+# is the case that catches it.
+name: dmz-subnet
+kind: Intent/Subnet
+spec:
+  projectKind: subnet
+  requires: [provisioning]
+  params:
+    # THE SAME REGION as app-subnet, deliberately. A subnet is built in a place, and two networks in
+    # one estate that disagree about where they are is a fact worth being able to see (ADR-0146).
+    region: us-east-1
+    size: 24
+    pool: 10.30.0.0/16

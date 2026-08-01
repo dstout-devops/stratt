@@ -1,0 +1,16 @@
+# Apache on the host Stratt BUILT — and the point of this file is that it needed no new Workflow
+# and no edit anywhere else.
+#
+# The three-part join that makes an outcome apply to actual machines: WHAT (the Intent), WHERE (the
+# View), HOW-IT-IS-JUDGED (the Blueprint@version, pinned so a Blueprint revision cannot silently
+# change what a live Assignment means, ADR-0119 D2).
+#
+# `apache-configure` names no View — it INHERITS this one. So the SAME converge recipe the ansible
+# plugin ships serves a host that did not exist a minute ago, covered by four lines here rather than
+# by editing the recipe or by labelling the host into somebody else's View, which the
+# one-owner-per-label-key rule (ADR-0041) may not even permit the builder to do.
+name: web-servers-apache
+intent: apache-tier@1
+view: web-servers
+blueprint: apache@1
+environments: [dev]

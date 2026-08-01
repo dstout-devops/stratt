@@ -1,0 +1,19 @@
+# registered-hosts — the machines the estate gives its OWN names to (ADR-0144 D5, the
+# fleet half). This is the target set dns-fleet-register registers, and it is the whole
+# of the "which machines" decision: the Workflow carries no host list and the Actuator
+# carries no address, so membership is declared here and nowhere else.
+#
+# Selected by LABEL, not by kind, deliberately. The estate names machines across
+# substrates — a declared host, a vSphere VM, an EC2 instance — and a kinds selector
+# would either miss most of them or have to enumerate every substrate's kind and grow a
+# row each time one is added. `stratt.managed` is the label the provisioning builders
+# already stamp.
+#
+# A member with no reach coordinate is not excluded here, and that is on purpose: the
+# Actuator reports it as skipped with the reason, which is the visible "built, not yet
+# reachable" state (§1.8). Filtering it out in the View would make the same machine
+# silently absent instead.
+name: registered-hosts
+selector:
+  labels:
+    stratt.managed: "true"

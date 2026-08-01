@@ -1,0 +1,22 @@
+# web-cert — bind the certificate Intent to the renewal Blueprint over the cert Entities.
+#
+# The View is `managed-certs` (estate/views/certs.yaml), which selects `kinds: [cert]` — the
+# Entities the CLM Syncer projects for certificates it has issued. Like the chart form's
+# deployed-apps, the target set is OBSERVED rather than declared: a cert Entity exists because a
+# certificate exists, so this Blueprint converges the RENEWAL of certificates that are real, and
+# first issuance is a separate concern.
+name: web-cert
+intent: web-cert@2
+# A View of HOSTS, not of certificates (ADR-0150 D1). The certificate is a property of the machine,
+# so the population this applies to is the machines — every member gets its own certificate, named
+# from its own facts. managed-certs remains the CLM Syncer's own inventory View and is no longer
+# what a certificate Intent binds.
+view: managed-web
+blueprint: certificate@2
+# The membership delta this change makes is deliberate and large: the population moves from the
+# CLM's 6 `cert` Entities to the 1 host in managed-web, which the §4.3 max-delta gate correctly
+# paused ("7 of 6 changed"). Acknowledging it is the reviewable act the gate exists to force — the
+# certificates are not disappearing, the thing being managed changed from the CLM's record of a
+# certificate to the machine that presents one (ADR-0150 D1).
+ackDelta: 1
+environments: [dev, prod]

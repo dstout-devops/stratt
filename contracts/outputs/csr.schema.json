@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "stratt:contract:outputs/csr:v1",
+  "title": "csr output",
+  "description": "The typed output of a CSR-gathering Apply (CERT-2): the target's PEM certificate-signing request, published by a play as `stratt_outputs.csr` and bound by the signing Step as {{.steps.<name>.outputs.csr}}. CLOSED (§9) and carrying exactly one field, which is the point: the private key that produced this CSR was generated on the target and never leaves it (§2.5, ADR-0050), and a schema that admitted anything else would be an invitation to send more. An Actuator pins this document via its `outputContract`; without a pin the hub REFUSES the outputs rather than capturing them, because a shape nobody agreed to cannot be handed to a downstream Step.",
+  "type": "object",
+  "required": ["csr"],
+  "properties": {
+    "csr": { "type": "string", "minLength": 1, "description": "PEM certificate-signing request." }
+  },
+  "additionalProperties": false
+}

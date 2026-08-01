@@ -1,0 +1,61 @@
+# managed-app — a REAL sshd node for the apache convergence proof (ADR-0148).
+#
+# DELIBERATELY BARE: plain alpine with sshd and python3, and NO web server. managed-web ships
+# `nginx:alpine`, so its converge only ever adjusts a listen port on something already installed —
+# which cannot tell "Stratt installed the application" from "the image did". Here the package is
+# genuinely absent until a remediation runs, so the install is the thing being proven.
+#
+# It reuses managed-web's authorized-keys Secret and the same `web-machine` CredentialRef: one
+# throwaway dev key for both fixture nodes, root SSH with key-only login, ephemeral pods. A second
+# key would prove nothing and would be a second thing to rotate.
+#
+# The declared-estate host managed-app-1 carries mgmt.address = managed-app.stratt.svc.cluster.local
+# (the Service below), so the shim renders it as ansible_host — the same reach path managed-web uses.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: managed-app
+  namespace: stratt
+  labels: { app: managed-app }
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: managed-app }
+  template:
+    metadata:
+      labels: { app: managed-app }
+    spec:
+      containers:
+        - name: node
+          image: alpine:3.22
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -e
+              # openssh + python3 only. apache2 is NOT installed here — that is the point.
+              apk add --no-cache openssh python3 >/dev/null 2>&1
+              ssh-keygen -A
+              mkdir -p /root/.ssh
+              cp /authorized_keys/authorized_keys /root/.ssh/authorized_keys
+              chmod 700 /root/.ssh && chmod 600 /root/.ssh/authorized_keys
+              sed -i 's/^#*PermitRootLogin.*/PermitRootLogin prohibit-password/' /etc/ssh/sshd_config
+              exec /usr/sbin/sshd -D -e
+          ports:
+            - { containerPort: 22, name: ssh }
+            - { containerPort: 8080, name: http }
+          volumeMounts:
+            - { name: authkeys, mountPath: /authorized_keys, readOnly: true }
+      volumes:
+        - name: authkeys
+          secret: { secretName: managed-web-authorized-keys }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: managed-app
+  namespace: stratt
+spec:
+  selector: { app: managed-app }
+  ports:
+    - { name: ssh, port: 22, targetPort: 22 }
+    - { name: http, port: 8080, targetPort: 8080 }

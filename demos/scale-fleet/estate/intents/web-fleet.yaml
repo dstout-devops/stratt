@@ -1,0 +1,36 @@
+# web-fleet — Intent/Compute (ADR-0058): the declaration this whole demo edits.
+#
+# "One Linux web server." That is the whole thing, and it names no substrate, no provider, no image
+# and no size. capability-bindings/scale-fleet.yaml is the only file that decides where it is built.
+#
+# THE DEMO CHANGES EXACTLY ONE CHARACTER IN THIS FILE — `count: 1` to `count: 3` — and asserts what
+# happens: TWO builds are offered, not three and not one. That distinction is the whole mechanism.
+# `count` is CARDINALITY, not a loop: the reconcile compares it against the instances already built
+# and correlated for this Intent, and surfaces only the shortfall. web-01 is already there, so
+# web-01 is not rebuilt — which is what makes editing this number safe to do twice.
+#
+# It is a typed field precisely so it is not a config-language loop (§1 non-goal). Nothing here
+# templates, iterates or interpolates; the expansion is the reconcile's, and it is idempotent.
+#
+# GATED, ALWAYS (§5 Flow 1). Raising the count does not build anything. It surfaces a
+# `provision/web-fleet` Finding per missing instance, each offering the bound provider's build
+# Workflow, and a human approves. The estate never auto-launches infrastructure.
+#
+# NO `params`, and that is a statement rather than an omission: `params` is opaque to core (§1.5),
+# so what belongs in it is whatever the RESOLVED provider's own Contract reads. A host on Kubernetes
+# is its name, its image and its authorized keys — none of which an operator should be restating
+# here, and all of which the builder already knows.
+name: web-fleet
+kind: Intent/Compute
+spec:
+  count: 1 # ← THE NUMBER THIS DEMO EDITS. → web-01 (a stable, exclusively-claimed identity, §2.4)
+  namePrefix: web
+  projectKind: host # what the built infra projects AS, so a fleet View selects it
+  # The fleet label the BUILD owns (§2.1 per-key ownership). It is what puts each built host into
+  # view:web-servers — which is what makes the Apache Assignment cover machines that did not exist a
+  # minute ago, WITHOUT editing the Assignment. That is the second half of the claim: scaling out is
+  # one number, and the configuration follows on its own.
+  labels: { fleet: web }
+  # A capability CLASS, never a provider name (ADR-0110, §1.5). Three providers advertise Compute;
+  # the binding decides which one serves this Intent, and this file does not move when it changes.
+  requires: [provisioning]

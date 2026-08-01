@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # run.sh — the turnkey runner for the "vSphere: provision a VM + watch the graph come alive" demo
 # (ADR-0116 D2). Drives BOTH halves of the estate model on one substrate:
-#   READ  — the boot-wired vcenter Syncer projects the vcsim topology (regions/AZs/datastores/VMs) into
+#   READ  — the boot-wired vcenter Syncer projects the vspheresim topology (regions/AZs/datastores/VMs) into
 #           a live graph; the demo's Views make it queryable.
 #   WRITE — a gated Workflow provisions a new VM through the vcenter/create-vm Action, which the Syncer's
 #           next OBSERVE then picks up — closing the build→observe loop.
 #
-# `task demo:vsphere-only:run` stands the floor up (kind + strattd + the vcenter plugin + vcsim + the
-# staged CaC estate + a seeded vcsim topology) before invoking this. Needs curl + jq + kubectl.
+# `task demo:vsphere-only:run` stands the floor up (kind + strattd + the vcenter plugin + vspheresim + the
+# staged CaC estate + a seeded topology) before invoking this. Needs curl + jq + kubectl.
 #
 # Env: KUBECTL, KUBECONTEXT, STRATT_NS, STRATT_PRINCIPAL, STRATT_LPORT.
 set -euo pipefail
@@ -31,7 +31,7 @@ count() { api GET "/views/$1/entities" 2>/dev/null | jq -r '.entities | length' 
 fidelity="$(grep -E '^fidelity:' "${HERE}/demo.yaml" | head -1 | sed 's/^fidelity:[[:space:]]*//')"
 echo "┌───────────────────────────────────────────────────────────────────────────"
 echo "│ demo: vSphere — provision a VM + watch the graph come alive   fidelity: ${fidelity}"
-echo "│ vcsim is a real vCenter API (govmomi): provisioning executes; no guest OS boots."
+echo "│ vspheresim is a real vCenter API (govmomi): provisioning executes AND the built VM boots a guest."
 echo "└───────────────────────────────────────────────────────────────────────────"
 
 echo "demo: port-forward svc/stratt ${LPORT}->8080 (ns ${NS})"
@@ -40,7 +40,7 @@ PF_PID=$!
 trap 'kill "$PF_PID" 2>/dev/null || true' EXIT
 for _ in $(seq 1 30); do curl -fsS "${ROOT}/healthz" >/dev/null 2>&1 && break; sleep 1; done
 
-# ── READ: wait for the vcenter Syncer to project the vcsim topology into the graph ─────────────────
+# ── READ: wait for the vcenter Syncer to project the vspheresim topology into the graph ─────────────────
 echo "demo: awaiting the vcenter Syncer's first OBSERVE (the graph coming alive)…"
 vms=0
 for _ in $(seq 1 40); do
@@ -48,7 +48,7 @@ for _ in $(seq 1 40); do
     [ "$vms" -gt 0 ] 2>/dev/null && break
     sleep 3
 done
-[ "$vms" -gt 0 ] 2>/dev/null || { echo "FAIL: the dev-vms View never populated (Syncer/vcsim path broken)"; exit 1; }
+[ "$vms" -gt 0 ] 2>/dev/null || { echo "FAIL: the dev-vms View never populated (Syncer/vspheresim path broken)"; exit 1; }
 echo "  the graph is live — the estate as a queryable read-model:"
 printf "    regions/AZs: %s   datastores: %s   VMs: %s\n" "$(count availability-zones)" "$(count datastores)" "$vms"
 
@@ -62,7 +62,6 @@ INSTANCE="${STRATT_DEMO_INSTANCE:-web-01}"
 launch_body=$(jq -nc --arg i "$INSTANCE" '{
   inputs: {
     instance: $i,
-    ordinal: 1,
     projectKind: "host",
     labels: { fleet: "web", "stratt.intent/instance": $i }
   }
@@ -95,18 +94,43 @@ done
 [ "$status" = "succeeded" ] || { echo "FAIL: WorkflowRun did not converge (last=${status:-none})"; exit 1; }
 
 # ── CLOSE THE LOOP: the Syncer's next OBSERVE picks up the freshly-built VM ────────────────────────
-echo "demo: awaiting the Syncer to observe the built web-01 (build → observe closure)…"
-seen=""
+echo "demo: awaiting the Syncer to observe the built ${INSTANCE} (build → observe closure)…"
+# A HARD gate, not a note. This step used to print "not yet observed — the Syncer picks
+# it up on its next cycle" and exit 0, which means the demo reported success in exactly
+# the case it exists to detect: a write that never came back into the read-model.
+entity_id=""
 for _ in $(seq 1 20); do
-    seen=$(api GET "/views/dev-vms/entities" 2>/dev/null | jq -r '.entities[]? | select((.identityKeys.name // "") == "web-01" or (.labels["stratt.intent/instance"] // "") == "web-01") | "web-01"' | head -1)
-    [ "$seen" = "web-01" ] && break
+    entity_id=$(api GET "/views/dev-vms/entities" 2>/dev/null |
+        jq -r --arg i "$INSTANCE" '.entities[]? | select((.identityKeys.name // "") == $i or (.labels["stratt.intent/instance"] // "") == $i) | .id' | head -1)
+    [ -n "$entity_id" ] && [ "$entity_id" != "null" ] && break
     sleep 3
 done
-if [ "$seen" = "web-01" ]; then
-    echo "  web-01 now appears in the dev-vms View — the write is visible in the read-model"
-else
-    echo "  (web-01 not yet observed in dev-vms — the Syncer picks it up on its next cycle)"
-fi
+[ -n "$entity_id" ] && [ "$entity_id" != "null" ] || { echo "FAIL: ${INSTANCE} was built but never observed back into dev-vms (build→observe closure broken)"; exit 1; }
+echo "  ${INSTANCE} now appears in the dev-vms View — the write is visible in the read-model"
+
+# ── AND IT BOOTED: the guest reports a coordinate the graph publishes ──────────────────────────────
+# The step the stock vcsim image could not reach. A provisioned VM there was an inventory
+# record with no guest, so nothing could be converged onto it and provision→configure
+# could not be exercised on vSphere at all. vspheresim boots a real guest, and the Syncer
+# projects what that guest reports as mgmt.address (ADR-0143) — an OBSERVED coordinate,
+# never one Stratt computed.
+echo "demo: awaiting the guest to report a reachability coordinate…"
+addr=""
+for _ in $(seq 1 20); do
+    addr=$(api GET "/entities/${entity_id}" 2>/dev/null |
+        jq -r '.facets[]? | select(.namespace=="mgmt.address") | .value.address // empty' | head -1)
+    [ -n "$addr" ] && break
+    sleep 3
+done
+# Fatal, because demo.yaml now CLAIMS the guest boots. A claim the runner declines to
+# check is the drift the fidelity grade exists to prevent, and it would read as green.
+[ -n "$addr" ] || {
+    echo "FAIL: ${INSTANCE} was built and observed but never reported a coordinate."
+    echo "  vspheresim is running without a guest image, or the guest exited on boot."
+    echo "  check: docker compose -f deploy/dev/docker-compose.yml logs vspheresim"
+    exit 1
+}
+echo "  ${INSTANCE} is reachable at ${addr} — the built machine can be configured, not just listed"
 
 echo
 echo "demo: DONE — Stratt projected a live vSphere graph AND provisioned a VM through a gated Workflow (fidelity: ${fidelity})."

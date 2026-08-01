@@ -38,6 +38,12 @@ type Target struct {
 	// Coordinates only — authenticating to a hop is params.connection.jump. The SHIM
 	// turns these into -o ProxyJump=…; the spine never authors an ssh flag (§1.4).
 	Jump []Hop `json:"jump,omitempty"`
+	// Transport is the target's OBSERVED connection method (ADR-0156): kind plus the
+	// coordinates document, opaque to core and read here. Empty kind ⇒ nothing observed and
+	// ansible's own default applies — DISTINCT from an observed `ssh`, which means a Syncer
+	// determined it. The SHIM renders every ansible_* key from this; the spine authors none.
+	TransportKind        string          `json:"transportKind,omitempty"`
+	TransportCoordinates json.RawMessage `json:"transportCoordinates,omitempty"`
 }
 
 // Hop is one bastion's coordinate in a reached-via chain.
@@ -78,6 +84,20 @@ const GatherFactsPlay = `- hosts: all
 // connection key from core) still render, in sorted key order so the same resolved
 // target set always renders the SAME inventory — a byte-stable artifact is what makes
 // two Runs comparable during descent (§1.8).
+// hasLocalTarget reports whether any target renders ansible_connection=local as a HOST
+// var — the fact connectionTypeVars needs to refuse a contradicting group-level type
+// (ADR-0153 D6). Kept beside buildInventory because it must stay true to what that
+// function actually emits; two functions disagreeing about which targets are local is
+// how the refusal would silently stop firing.
+func hasLocalTarget(targets []Target) bool {
+	for _, t := range targets {
+		if t.Address == "local" {
+			return true
+		}
+	}
+	return false
+}
+
 func buildInventory(targets []Target) string {
 	var b strings.Builder
 	b.WriteString("[all]\n")
@@ -91,6 +111,14 @@ func buildInventory(targets []Target) string {
 			if t.Port > 0 {
 				fmt.Fprintf(&b, " ansible_port=%d", t.Port)
 			}
+		}
+		// The OBSERVED transport, as HOST vars (ADR-0156 D3) — which is what lets one Run
+		// converge a pod, a vSphere VM and an EC2 instance together. Errors are surfaced by
+		// renderInventory's caller; buildInventory keeps its byte-stable signature, and a
+		// target whose transport does not render simply carries none here.
+		tv, _ := transportVarsFor(t)
+		for _, k := range slices.Sorted(maps.Keys(tv)) {
+			fmt.Fprintf(&b, " %s=%s", k, tv[k])
 		}
 		for _, k := range slices.Sorted(maps.Keys(t.Vars)) {
 			fmt.Fprintf(&b, " %s=%s", k, t.Vars[k])
@@ -364,6 +392,60 @@ func extractFacts(ev RunnerEvent) map[string][]byte {
 	return out
 }
 
+// extractOutputs lifts the reserved `stratt_outputs` fact — a play's typed OUTPUTS for cross-Step
+// binding, the sibling of `stratt_facets` (ADR-0084's fact-back) and deliberately a separate key.
+//
+// The two carry different things to different places and conflating them would be a §2.4-shaped
+// mistake: a FACET is observed state projected onto an Entity under the Run's FacetWriteScope, and
+// an OUTPUT is a value handed to a later Step in the same Workflow. A CSR is the clear case — it is
+// not a fact about the host worth keeping in the graph, it is a request the next Step must sign,
+// and writing it as a facet would put a short-lived artifact in a projection that outlives it.
+//
+// This is what makes the born-on-target certificate flow expressible at all (CERT-2): the target
+// generates its key and CSR, publishes ONLY the CSR here, and the private key never crosses the
+// wire (§2.5, the property cert-issuer's input Contract states in writing).
+// factsOf lifts a task event's ansible_facts, shared by the facet and output extractors so both
+// read the same place rather than each re-deriving it.
+func factsOf(ev RunnerEvent) map[string]any {
+	res, ok := ev.EventData["res"].(map[string]any)
+	if !ok {
+		return nil
+	}
+	facts, _ := res["ansible_facts"].(map[string]any)
+	return facts
+}
+
+// extractOutputs returns the marshalled outputs and, when a play PUBLISHED something this
+// function could not use, a diagnosis naming why. The second return value exists because the
+// silent-drop version of this code cost a live debugging session: a play set `stratt_outputs`,
+// every task reported ok, the Run folded SUCCEEDED with `outputs` NULL, and the failure finally
+// surfaced two Steps later as
+//
+//	template path .steps.gather.outputs.csr: "csr" is not an object
+//
+// — a message about the CONSUMER, pointing nowhere near the producer that dropped the value.
+// §1.8: hiding mechanism is the product, hiding failure is not. A play that publishes an output
+// the shim discards must say so where the play ran.
+func extractOutputs(facts map[string]any) ([]byte, string) {
+	v, present := facts["stratt_outputs"]
+	if !present {
+		return nil, ""
+	}
+	so, ok := v.(map[string]any)
+	if !ok {
+		return nil, fmt.Sprintf("stratt_outputs must be a mapping of name -> value, got %T — "+
+			"outputs bind as {{.steps.<step>.outputs.<field>}}, so a scalar has no field to bind", v)
+	}
+	if len(so) == 0 {
+		return nil, "stratt_outputs is an empty mapping — nothing was published for a downstream Step to bind"
+	}
+	raw, err := json.Marshal(so)
+	if err != nil {
+		return nil, "stratt_outputs is not JSON-serialisable: " + err.Error()
+	}
+	return raw, ""
+}
+
 // extractDiff lifts a changed task's drift STRUCTURE (task + changed file/object
 // headers) from a runner_on_ok event — never the before/after bodies, which carry
 // secret material (§2.5, ADR-0019). Nil for unchanged tasks.
@@ -411,4 +493,15 @@ func diffPaths(diff any) []string {
 		}
 	}
 	return paths
+}
+
+// outputFields lists the published output NAMES, sorted, for the shim's descent event. Names
+// only, never values: an output can carry anything a play chose to publish and the event stream
+// is not where that judgement gets made (§2.5).
+func outputFields(raw []byte) []string {
+	var m map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &m); err != nil {
+		return nil
+	}
+	return slices.Sorted(maps.Keys(m))
 }

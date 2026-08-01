@@ -21,6 +21,15 @@ func (a Assignment) ScopedEnvironments() []string { return a.Environments }
 func (t Trigger) ScopedEnvironments() []string    { return t.Environments }
 func (b Baseline) ScopedEnvironments() []string   { return b.Environments }
 
+// An Intent joins the contract too, and it is the case the paragraph above did not cover.
+// The rule there — "per-environment values are declared by having ONE Assignment PER
+// ENVIRONMENT" — assumes every Intent HAS an Assignment. A provisioning Intent does not:
+// ADR-0058 makes provisioning a sibling reconcile that selects an Intent BY NAME, so there
+// was no scoped document anywhere in its path and it applied in every environment
+// unconditionally. Same membership semantics, same prohibition on env-keyed values; the
+// filter simply had to live on the Intent because for that family nothing else carries one.
+func (i Intent) ScopedEnvironments() []string { return i.Environments }
+
 // Provider-selection declarations are env-scoped too (ADR-0113 D2): the provisioning
 // reach-path resolves a provider per environment, so an Actuator/Connector that
 // `provides` a capability and the CapabilityBinding that selects it both join the

@@ -146,8 +146,17 @@ func run(log *slog.Logger) error {
 			return fmt.Errorf("site plugin dial %s: %w", pluginAddr, err)
 		}
 		defer conn.Close()
+		// Subscribe BEFORE the serve goroutine and before the log line, so "serving"
+		// is true when it is printed. Lazily subscribing inside Serve left a window
+		// where the agent claimed to be serving while a hub call was silently dropped
+		// (core NATS does not queue for an absent subscriber) and the hub then blocked
+		// until its per-call context expired, naming no cause (§1.8).
+		acceptor := siterelay.NewNATSAcceptor(gw.Conn(), site, pluginID)
+		if err := acceptor.Subscribe(); err != nil {
+			return fmt.Errorf("site plugin relay subscribe %s: %w", pluginID, err)
+		}
 		go func() {
-			if err := siterelay.Serve(ctx, siterelay.NewNATSAcceptor(gw.Conn(), site, pluginID), pluginv1.NewPluginServiceClient(conn)); err != nil && ctx.Err() == nil {
+			if err := siterelay.Serve(ctx, acceptor, pluginv1.NewPluginServiceClient(conn)); err != nil && ctx.Err() == nil {
 				log.Error("plugin relay serve exited", "plugin", pluginID, "err", err)
 			}
 		}()
