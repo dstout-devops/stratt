@@ -61,15 +61,8 @@ echo "demo: EC2 is empty to start — ${OBSERVE_VIEW} View: $(count "$OBSERVE_VI
 # reconciling is NOT the same fact: this demo launched as soon as the Workflow existed and failed
 # with `no action registered as "awsec2/create-vm"` — after the gate, which is the worst place for
 # a race to surface. /actuators/{name} reports the live registry status (§1.8), so gate on it.
-echo "demo: awaiting awsec2 Actuator registration (status.enabled)…"
-enabled=""
-for _ in $(seq 1 45); do
-    enabled=$(api GET "/actuators/awsec2" 2>/dev/null | jq -r '.status.enabled // false')
-    [ "$enabled" = "true" ] && break
-    sleep 2
-done
-[ "$enabled" = "true" ] || { echo "FAIL: awsec2 Actuator never reached status.enabled=true"; exit 1; }
-echo "  awsec2 Actuator registered (awsec2/create-vm dispatchable)"
+# The Actuator wait is `dev:await-actuators` in the Taskfile, run before this script — see the note
+# in plugins/helm/demo/run.sh for why the private loop that stood here was a silent-death hazard.
 
 # The instance identity is SUPPLIED AT LAUNCH, not baked into the Workflow (ADR-0120 D2). This
 # demo has no Intent/Compute — it drives the build Workflow directly — so it plays the part the

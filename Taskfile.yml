@@ -587,8 +587,10 @@ tasks:
     # It waits for EVERY declared Actuator rather than a named list. A demo stages exactly the
     # estate it needs, so "all of them" is the honest readiness condition and needs no per-demo
     # list to drift.
-    desc: "Block until every declared Actuator is enabled — the floor is ready when the dispatch table matches the estate"
+    desc: "Block until the named Actuators are enabled (REQUIRE='a b c') — the dispatch table is ready for THIS demo"
     deps: [tools:kubectl]
+    requires:
+      vars: [REQUIRE]
     cmds:
       - |
         set -eu
@@ -618,15 +620,28 @@ tasks:
           # actuator and this check can only ever fail. Measured — the first version did exactly
           # that, and it is the same shape as every other check on this branch that reported
           # something it had not looked at. One GET per actuator is the price of an answer.
+          # WAIT FOR THE NAMED ACTUATORS, not for "everything currently declared".
+          #
+          # TWO WRONG VERSIONS PRECEDED THIS, both of which PASSED when they should not have:
+          #   1. "nothing is pending" — satisfied by `/actuators` returning `[]` before the estate
+          #      reconciled at all. A success condition met by the absence of anything to check.
+          #   2. "every declared Actuator is enabled" — satisfied MID-CHURN. Demos run back to back
+          #      and each replaces the declarations mount, so between estates the declared set is
+          #      itself in flux: this reported "all 1 declared Actuator(s) enabled" and
+          #      `demo:ec2-only` then died at `no action registered as "awsec2/create-vm"`.
+          #
+          # The private per-demo loops this task replaced were correct for exactly the reason the
+          # generalisation was not: they named the Actuator they needed. Naming it is the
+          # information that makes the check mean anything, so REQUIRE is mandatory.
           pending=""
-          for n in $(printf '%s' "$body" | jq -r '.[]?.name' 2>/dev/null); do
+          for n in {{.REQUIRE}}; do
             en="$(curl -fsS "$api/actuators/$n" -H 'X-Stratt-Principal: bootstrap-admin' 2>/dev/null | jq -r '.status.enabled // false' 2>/dev/null || echo false)"
             [ "$en" = "true" ] || pending="${pending}${n} "
           done
-          [ -z "$pending" ] && { echo "  ✓ every declared Actuator is enabled — the dispatch table is ready"; exit 0; }
+          [ -z "$pending" ] && { echo "  ✓ required Actuator(s) enabled: {{.REQUIRE}} — dispatchable"; exit 0; }
           sleep 3
         done
-        echo "✗ Actuators still not enabled after 180s: ${pending:-<the /actuators read never succeeded>}" >&2
+        echo "✗ after 180s these required Actuators are not enabled: ${pending:-<none — the /actuators reads never succeeded>}" >&2
         echo "  Their Actions are NOT dispatchable, so any Step naming one dies after its gate." >&2
         echo "  Inspect: GET /actuators/<name> — .status.error carries the registry's own reason (§1.8)." >&2
         exit 1
@@ -2025,6 +2040,11 @@ tasks:
       - "{{.KUBECTL}} --context {{.KIND_CONTEXT}} -n stratt rollout status deploy/stratt --timeout=240s"
       # The gate-only CredentialRef points at this marker Secret (pointer, no material).
       - "{{.KUBECTL}} --context {{.KIND_CONTEXT}} -n stratt-authz create secret generic helm-deploy-authz --from-literal=marker=1 --dry-run=client -o yaml | {{.KUBECTL}} --context {{.KIND_CONTEXT}} apply -f -"
+      # THE DISPATCH TABLE, not the readiness probe — and it replaces a private wait loop inside
+      # this demo's run.sh that could kill the script SILENTLY on one transient API read
+      # (`set -euo pipefail` + `x=$(curl ... | jq ...)`). `task e2e:live` caught it.
+      - task: dev:await-actuators
+        vars: { REQUIRE: "helm" }
       - KUBECONTEXT={{.KIND_CONTEXT}} KUBECTL={{.KUBECTL}} bash {{.ROOT_DIR}}/plugins/helm/demo/run.sh
 
   demo:k8s-deploy:down:
@@ -2094,6 +2114,7 @@ tasks:
       # finished, dying with `no action registered as "vcenter/create-vm"` AFTER its gate was
       # approved — which reads exactly like the ADR-0103 rot this demo suffered before.
       - task: dev:await-actuators
+        vars: { REQUIRE: "vcenter" }
       - KUBECONTEXT={{.KIND_CONTEXT}} KUBECTL={{.KUBECTL}} bash {{.ROOT_DIR}}/plugins/vcenter/demo/run.sh
 
   demo:vsphere-only:down:
@@ -2152,6 +2173,11 @@ tasks:
       - "{{.KUBECTL}} --context {{.KIND_CONTEXT}} -n stratt rollout status deploy/stratt --timeout=240s"
       # The gate-only aws-dev CredentialRef points at this marker Secret (pointer, no material).
       - "{{.KUBECTL}} --context {{.KIND_CONTEXT}} -n stratt create secret generic aws-dev-authz --from-literal=marker=1 --dry-run=client -o yaml | {{.KUBECTL}} --context {{.KIND_CONTEXT}} apply -f -"
+      # THE DISPATCH TABLE, not the readiness probe — and it replaces a private wait loop inside
+      # this demo's run.sh that could kill the script SILENTLY on one transient API read
+      # (`set -euo pipefail` + `x=$(curl ... | jq ...)`). `task e2e:live` caught it.
+      - task: dev:await-actuators
+        vars: { REQUIRE: "awsec2" }
       - KUBECONTEXT={{.KIND_CONTEXT}} KUBECTL={{.KUBECTL}} bash {{.ROOT_DIR}}/plugins/awsec2/demo/run.sh
 
   demo:ec2-only:down:
