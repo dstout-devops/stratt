@@ -559,6 +559,194 @@ tasks:
     cmds:
       - go test ./internal/api/ -run TestCellsE2E -v -count=1
 
+  # ── E2E-1 · the LIVE gate ────────────────────────────────────────────────────────────────
+  #
+  # The row this closes has been open since the enterprise-readiness audit was written, and it is
+  # the only thing standing behind every "live-proven" claim in this repo. `task ci` runs no demo,
+  # so every one of them is proven by a task a human remembers to invoke. That is exactly how the
+  # vsphere demo stayed broken for weeks after ADR-0103 moved vcenter's Actions, and how a 🟢
+  # LIVE-PROVEN for a transport that could not authenticate survived in docs/parity for days.
+  #
+  # A demo's green is otherwise evidence of THE DAY IT LAST RAN. This is what makes it evidence of
+  # now.
+
+  dev:await-actuators:
+    # WAIT FOR THE DISPATCH TABLE, not for the pods. `rollout status` returns when a readiness PROBE
+    # passes; an Actuator's Actions enter the dispatch table one or more reconcile cadences later,
+    # and a `requires:`-bearing one waits for its capability provider to be VERIFIED first (ADR-0104
+    # D3, failing closed). A demo that launches in that window dies with `no action registered as
+    # "..."` AFTER its gate was approved.
+    #
+    # THREE demos have now hit this. The capstone (opentofu/apply) and ec2-only (awsec2/create-vm)
+    # each grew their own wait inside their own run.sh; vsphere-only had none and `task e2e:live`
+    # caught it on its first run — `no action registered as "vcenter/create-vm"`, launched 8s after
+    # strattd came Ready and 2s before the registry finished. A third private copy of the same loop
+    # is how this repo has produced four divergent-second-copy defects, so it lives HERE, once, as
+    # what it actually is: a property of the FLOOR being ready.
+    #
+    # It waits for EVERY declared Actuator rather than a named list. A demo stages exactly the
+    # estate it needs, so "all of them" is the honest readiness condition and needs no per-demo
+    # list to drift.
+    desc: "Block until every declared Actuator is enabled — the floor is ready when the dispatch table matches the estate"
+    deps: [tools:kubectl]
+    cmds:
+      - |
+        set -eu
+        # A PORT NOBODY ELSE ON THIS BOX IS USING. A stale forward from a previous run holds the
+        # port, the new one loses the bind, every read fails, and the loop then reports "not
+        # enabled" for actuators it never managed to ask about — a wrong diagnosis, which is worse
+        # than none. Measured while falsifying this task.
+        root="http://127.0.0.1:18490"
+        api="${root}/api/v1"
+        "{{.KUBECTL}}" --context {{.KIND_CONTEXT}} -n stratt port-forward svc/stratt 18490:8080 >/dev/null 2>&1 &
+        pf=$!
+        trap 'kill $pf 2>/dev/null || true' EXIT
+        up=""
+        for _ in $(seq 1 60); do curl -fsS -o /dev/null "${root}/healthz" 2>/dev/null && { up=1; break; }; sleep 1; done
+        # FAIL FAST AND SEPARATELY. "strattd is unreachable" and "an Actuator is pending" are
+        # different diagnoses with different fixes, and collapsing them into one timeout message is
+        # how a floor problem gets read as a registry problem for three minutes.
+        [ -n "$up" ] || { echo "✗ strattd never became reachable on ${root} — the floor is not up, so nothing can be said about the dispatch table" >&2; exit 1; }
+        pending=""
+        for _ in $(seq 1 60); do
+          body="$(curl -fsS "$api/actuators" -H 'X-Stratt-Principal: bootstrap-admin' 2>/dev/null || true)"
+          # An API error is NOT an observation. Treating a failed read as "nothing pending" would
+          # make this pass fastest exactly when the daemon is least healthy.
+          [ -n "$body" ] || { sleep 3; continue; }
+          # STATUS IS ONLY ON THE DETAIL ENDPOINT. `GET /actuators` returns bare declarations with
+          # no `.status` at all, so the obvious one-shot filter over the list matches EVERY
+          # actuator and this check can only ever fail. Measured — the first version did exactly
+          # that, and it is the same shape as every other check on this branch that reported
+          # something it had not looked at. One GET per actuator is the price of an answer.
+          pending=""
+          for n in $(printf '%s' "$body" | jq -r '.[]?.name' 2>/dev/null); do
+            en="$(curl -fsS "$api/actuators/$n" -H 'X-Stratt-Principal: bootstrap-admin' 2>/dev/null | jq -r '.status.enabled // false' 2>/dev/null || echo false)"
+            [ "$en" = "true" ] || pending="${pending}${n} "
+          done
+          [ -z "$pending" ] && { echo "  ✓ every declared Actuator is enabled — the dispatch table is ready"; exit 0; }
+          sleep 3
+        done
+        echo "✗ Actuators still not enabled after 180s: ${pending:-<the /actuators read never succeeded>}" >&2
+        echo "  Their Actions are NOT dispatchable, so any Step naming one dies after its gate." >&2
+        echo "  Inspect: GET /actuators/<name> — .status.error carries the registry's own reason (§1.8)." >&2
+        exit 1
+
+  e2e:list:
+    # THE SUITE IS DERIVED, NEVER DECLARED — and that is the load-bearing part.
+    #
+    # A hand-maintained list here (or in the workflow) would be a second copy of the demo library,
+    # and this repo has paid for a divergent second copy four separate times: awxsim's two halves,
+    # the `web-server` capability route, PRV-1's two compute-build.yamls, and the EE image the
+    # capstone declared and never built. The failure mode is specific and certain: someone adds a
+    # demo, does not add it here, and it is ungated for months while the table says the library is
+    # covered.
+    #
+    # Reading the Taskfile's own `demo:<name>:run` targets makes joining the gate STRUCTURAL. A new
+    # demo is gated because it exists, not because somebody remembered.
+    desc: "The demo suite the live gate runs — derived from this Taskfile, never a second list (E2E-1)"
+    silent: true
+    cmds:
+      - |
+        set -eu
+        found=$(grep -oE '^  demo:[a-z0-9-]+:run:' {{.ROOT_DIR}}/Taskfile.yml | sed 's/^  demo://; s/:run:$//' | sort)
+        # A gate that silently covers nothing looks identical to a gate that passes.
+        test -n "$found" || { echo "e2e:list matched no demo:<name>:run targets — the derivation broke, and a suite of zero would PASS" >&2; exit 1; }
+        printf '%s\n' "$found"
+
+  e2e:live:
+    # Stand the floor up and RUN the demos, asserting their real outcomes. Failure is a build
+    # failure — that is the whole point of the row (§1.8: a claim nobody re-checks is a claim that
+    # rots).
+    #
+    # RUNS EVERY DEMO EVEN AFTER ONE FAILS, deliberately. A nightly that stops at the first failure
+    # reports one broken demo and says nothing about the other five, so a second regression hides
+    # behind the first and surfaces a day later. The summary is the artifact; the exit code is the
+    # gate.
+    #
+    # In CI each demo gets its OWN runner (see .github/workflows/e2e-live.yml) — the floors are
+    # large and a shared disk is the binding constraint. This target is the same suite for a human,
+    # sequentially, on one box.
+    desc: "E2E-1 · run the whole demo library against a real cluster and assert every outcome"
+    cmds:
+      - |
+        set -u
+        demos=$(task e2e:list)
+        echo "e2e:live — $(printf '%s\n' "$demos" | grep -c .) demos"
+        rc=0
+        summary=""
+        for d in $demos; do
+          echo ""
+          echo "══════════════════════════════════════════════════════════════════════════════"
+          echo "  e2e:live — $d"
+          echo "══════════════════════════════════════════════════════════════════════════════"
+          start=$(date +%s)
+          if task "demo:${d}:run"; then
+            verdict="PASS"
+          else
+            verdict="FAIL"; rc=1
+          fi
+          summary="${summary}  ${verdict}  ${d}  ($(( $(date +%s) - start ))s)\n"
+          echo "  → ${d}: ${verdict}"
+        done
+        echo ""
+        echo "══ e2e:live summary ══════════════════════════════════════════════════════════"
+        printf '%b' "$summary"
+        # The exit code is what makes this a gate rather than a report.
+        exit $rc
+
+  e2e:diagnose:
+    # WHAT A FAILED LIVE RUN LEAVES BEHIND. Not a CI-only script: a nightly failure and a human
+    # debugging the same demo must see the SAME evidence, or the thing that reproduces locally is
+    # not the thing that failed remotely.
+    #
+    # It is shaped by what this branch actually needed. Four separate failures were diagnosable
+    # only from these exact places: a pod stuck in ContainerCreating on a missing Secret (events,
+    # not logs); an Actuator withheld pending an unverified capability (strattd, not the pod); an
+    # EE Job that reached its target and was denied (the run pod's own stream); and a stale image
+    # whose only symptom was behaviour (the image ref on the pod spec).
+    desc: "Dump what a failed live demo left behind — pods, events, strattd, and every run pod"
+    cmds:
+      - |
+        set -u
+        KC="{{.KUBECTL}} --context {{.KIND_CONTEXT}}"
+        echo "══ pods (all namespaces) ═════════════════════════════════════════════════════"
+        $KC get pods -A -o wide 2>&1 || true
+        echo ""
+        echo "══ anything not Running/Completed, described ═════════════════════════════════"
+        $KC get pods -A --no-headers 2>/dev/null \
+          | awk '$4 != "Running" && $4 != "Completed" {print $1, $2}' \
+          | while read -r ns pod; do
+              echo "── $ns/$pod ──"
+              # Events, not logs: a pod that never started has no logs, and the reason it did not
+              # start (a missing Secret, an absent image) is only in its events.
+              $KC -n "$ns" describe pod "$pod" 2>&1 | sed -n '/Events:/,$p' || true
+              echo ""
+            done
+      - |
+        set -u
+        KC="{{.KUBECTL}} --context {{.KIND_CONTEXT}}"
+        echo "══ strattd (last 200) ════════════════════════════════════════════════════════"
+        $KC -n stratt logs deploy/stratt --tail=200 2>&1 || true
+        echo ""
+        echo "══ registry verdicts — which Actuators are enabled, and which are PENDING ═════"
+        # The line that says an Action is missing because its capability never verified. It is
+        # INFO-level and drowns in the full log, which is why it gets its own section.
+        $KC -n stratt logs deploy/stratt 2>/dev/null \
+          | grep -E "actuator enabled|pending on dependency|register rejected|dial failed" | tail -40 || true
+      - |
+        set -u
+        KC="{{.KUBECTL}} --context {{.KIND_CONTEXT}}"
+        echo ""
+        echo "══ every EE run pod: its IMAGE and its stream ════════════════════════════════"
+        # The image ref is printed because a stale one is invisible otherwise — `pullPolicy: Never`
+        # cannot tell a current image from one a previous demo left on the node, and that cost this
+        # branch three full capstone runs.
+        for p in $($KC -n stratt get pods --no-headers 2>/dev/null | grep '^stratt-run-' | awk '{print $1}'); do
+          echo "── $p  image=$($KC -n stratt get pod "$p" -o jsonpath='{.spec.containers[0].image}' 2>/dev/null)"
+          $KC -n stratt logs "$p" --tail=60 2>&1 || true
+          echo ""
+        done
+
   ci:
     desc: Aggregate gate CI runs — evergreen + formatting + lint + codegen freshness + tests
     cmds:
@@ -1900,6 +2088,12 @@ tasks:
       - "{{.KUBECTL}} --context {{.KIND_CONTEXT}} -n stratt rollout status deploy/stratt --timeout=240s"
       # The gate-only vsphere-dev CredentialRef points at this marker Secret (pointer, no material).
       - "{{.KUBECTL}} --context {{.KIND_CONTEXT}} -n stratt create secret generic vsphere-dev-authz --from-literal=marker=1 --dry-run=client -o yaml | {{.KUBECTL}} --context {{.KIND_CONTEXT}} apply -f -"
+      # THE DISPATCH TABLE, not the readiness probe. `rollout status` above returns when strattd
+      # answers /healthz; its Actions enter the dispatch table one or more reconcile cadences after
+      # that. `task e2e:live` caught this demo launching 8s after Ready and 2s before the registry
+      # finished, dying with `no action registered as "vcenter/create-vm"` AFTER its gate was
+      # approved — which reads exactly like the ADR-0103 rot this demo suffered before.
+      - task: dev:await-actuators
       - KUBECONTEXT={{.KIND_CONTEXT}} KUBECTL={{.KUBECTL}} bash {{.ROOT_DIR}}/plugins/vcenter/demo/run.sh
 
   demo:vsphere-only:down:

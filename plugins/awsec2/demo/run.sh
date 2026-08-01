@@ -74,12 +74,20 @@ echo "  awsec2 Actuator registered (awsec2/create-vm dispatchable)"
 # labels the projection must carry, INCLUDING the stratt.intent/instance correlation label. Before
 # ADR-0120 the Workflow hardcoded web-01, so this demo could only ever build one instance and the
 # hardcoding was invisible from here.
+# NO `ordinal` IN THE BODY BELOW, and it was there until 2026-08-01. The launch had been returning
+# HTTP 400 for as long as nobody re-ran this demo: the Workflow declares its inputs with
+# `additionalProperties: false` and the properties are instance/projectKind/labels/placement/params.
+# `ordinal` appears only inside a DESCRIPTION string ("namePrefix + ordinal"), never as a property,
+# so a reader skimming the schema sees the word and assumes the field.
+#
+# Found by `task e2e:live` on its FIRST run. That is the whole argument for E2E-1 in one defect:
+# nothing else in the repo launches this Workflow, so when its contract tightened the only caller
+# went stale and every tracker kept saying this demo was live-verified.
 INSTANCE="${STRATT_DEMO_INSTANCE:-web-01}"
 echo "demo: launch Workflow ${WORKFLOW} as ${PRINCIPAL} (provision ${INSTANCE})"
 launch_body=$(jq -nc --arg i "$INSTANCE" '{
   inputs: {
     instance: $i,
-    ordinal: 1,
     projectKind: "host",
     labels: { fleet: "web", "stratt.intent/instance": $i },
     params: { region: "us-east-1", instanceType: "t3.micro", ami: "ami-0linuxbaseline000" },
@@ -135,7 +143,21 @@ done
 if [ "$seen" -gt 0 ] 2>/dev/null; then
     echo "  the instance now appears in the ec2-instances View — real provision, live read-model"
 else
-    echo "  (instance not yet observed — the Syncer picks it up on its next cycle)"
+    # THIS DEMO RUNS NO SYNCER, so "not yet" was never true — corrected 2026-08-01 after
+    # `task e2e:live` reported a green run whose final line was `ec2-instances: 0`.
+    #
+    # The estate here admits awsec2 `contractsOnly: true` and declares no Source and no Connector,
+    # so nothing polls EC2 and the View can never fill. The old wording ("the Syncer picks it up on
+    # its next cycle") named a component that is not on this floor, which is how the demo index and
+    # the roadmap both came to claim this demo proves "observed into the graph (0→1)". It proves the
+    # BUILD half only.
+    #
+    # Booked rather than bolted on: giving this demo a Syncer is the fix, and it is a real change
+    # (a Source, a Connector, poll config) that belongs in a commit of its own — not smuggled into
+    # the run that discovered the gap.
+    echo "  NOT OBSERVED, and this demo cannot observe: it declares no Source and no Connector, so"
+    echo "  nothing polls EC2. The build half is proven above; the read-model half is NOT exercised"
+    echo "  here — plugins/vcenter/demo is the demo that proves a Syncer (docs/roadmap.md)."
 fi
 
 echo

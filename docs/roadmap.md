@@ -170,7 +170,7 @@ self-contained, narrated, **turnkey** scenarios that teach Stratt by running it.
 | ----------------------------------------------------------------------------- | ------------------------ | ------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | [k8s: deploy an app](../plugins/helm/demo/README.md)                          | Kubernetes (kind)        | `real`       | gated `helm/deploy` → a real Deployment 1/1 Ready serving its page                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
 | [vSphere: provision a VM + the live graph](../plugins/vcenter/demo/README.md) | vSphere (vspheresim)     | `build-real` | Syncer projects the topology; gated `vcenter/create-vm` → the built VM observed back, and its guest boots and reports a coordinate                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
-| [EC2: provision a real instance](../plugins/awsec2/demo/README.md)            | EC2 (floci)              | `build-real` | gated `awsec2/create-vm` → a real floci instance container running, observed into the graph (0→1). **Re-graded from `real` 2026-07-27**: floci's network model is fully real, but no AMI ships sshd and user-data never runs, so there is no guest to converge (HAR-1)                                                                                                                                                                                                                                                                                                                                                            |
+| [EC2: provision a real instance](../plugins/awsec2/demo/README.md)            | EC2 (floci)              | `build-real` | gated `awsec2/create-vm` → a real floci instance container running. ~~observed into the graph (0→1)~~ **the observe half was never exercised here** (corrected 2026-08-01): the demo declares no Source and no Connector, so the View cannot fill — its runner polled for 60s and passed anyway with a soft note naming a Syncer that is not on the floor. Giving this demo a Syncer is booked. **Re-graded from `real` 2026-07-27**: floci's network model is fully real, but no AMI ships sshd and user-data never runs, so there is no guest to converge (HAR-1)                                                                                                                                                                                                                                                                                                                                                            |
 | [app install with a certificate](../demos/app-cert/README.md)                 | SSH (Linux host)         | `real`       | gated ansible converge: SSH as an unprivileged user → privilege escalation → a `community.crypto` X.509 cert → TLS read back off the wire, `app.config` projected with Run provenance, and a no-op Run refused                                                                                                                                                                                                                                                                                                                                                                                                                    |
 | [scale a fleet: change a 1 to a 3](../demos/scale-fleet/README.md)             | Kubernetes (kind)        | `real`       | **cardinality, and the asymmetry it found.** `count: 1 → 3` offers EXACTLY two builds (web-01 is not re-offered); approve and the SAME Assignment, unedited, converges the new hosts over `kubectl exec` — exactly TWO drift Findings open, and all three end up carrying an `app.config` the Run WROTE. `count: 3 → 1` offers NOTHING: this demo found that `kubecompute` advertises `provisions` and no `decommissions`, so count-down is not symmetric on this substrate. **Added to this table 2026-08-01 — it had been missing since the demo shipped, and until that day its converge was narrated rather than run** |
 | [region-to-cert — the capstone](../demos/region-to-cert/README.md)            | Kubernetes + EC2 (floci) | `build-real` | **the whole chain, from an estate naming no substrate.** Two gated `Intent/Subnet` builds through real `tofu apply` → `10.30.0.0/24` + `10.30.1.0/24`, distinct ranges NetBox allocated and no declaration contains; a gated `Intent/Compute` build → a pod + Service, `mgmt.address` the provider CAUSED; `apache-configure` → HTTP served off the wire, `app.config.port=8080 writerKind=run`; `cert-issue` → key `0600` **born on target**, `issuer=Stratt Dev Root CA`, subject derived from the host's own address; all four Findings RESOLVED. Graded at the **floor** of its two legs — the kubernetes leg is `real` alone |
@@ -179,11 +179,17 @@ self-contained, narrated, **turnkey** scenarios that teach Stratt by running it.
 below: the platform is now proven not only structurally and by unit/integration tests, but by
 reproducible, asserting runs against a real cluster + real/simulated substrates.
 
-**They are NOT non-rotting, and claiming so here was circular** (corrected 2026-08-01; it read "Each
-runner is CI-able and **non-rotting** — a demo that stops working fails its own runner"). A runner
-only fails when something runs it, and `task ci` runs none of them — which is exactly why the vsphere
-demo stayed broken for weeks after ADR-0103 moved vcenter's Actions. That is **E2E-1**, still open,
-and it closes with a scheduled `e2e:live` job, not with a sentence.
+**They were NOT non-rotting, and claiming so here was circular** (corrected 2026-08-01; it read
+"Each runner is CI-able and **non-rotting** — a demo that stops working fails its own runner"). A
+runner only fails when something runs it. **`task e2e:live` is now the something**, wired to nightly /
+`v*` tags / dispatch in `.github/workflows/e2e-live.yml`, with the suite derived from the Taskfile's
+own demo targets so a new demo is gated because it exists.
+
+Its first run found **three** real defects in demos this very table called live-verified — a
+dispatch-table race in `vsphere-only`, a launch that had been HTTP 400ing in `ec2-only`, and an
+`ec2-only` "observe" step that cannot observe because the demo declares no Syncer. All six pass now
+(`e2e:live` EXIT=0, ~26 min). **E2E-1 stays 🟡 until the workflow has actually executed in CI** —
+automation nobody has run is the same claim-nobody-checked this whole section is about.
 
 **Demos behaved as an integration-test instrument, every single time.** Landing the first three surfaced
 (and fixed) six real defects no unit test caught; the capstone added four more of its own (see "Booked by
@@ -707,6 +713,31 @@ compat surface would signal Temporal, tear the activities down, and leave `graph
 strictly worse than not offering cancel. A 404 from the mux says "not offered" — absent rather than
 wrong (§1.8). **The real gap is native:** a terminal-status writer in `RunDAG`, with the façade route
 following it. Cancelling a Run (single-Step) already works and is unaffected.
+
+### E2E-1 · the live gate exists, and its first run found three rotted demos (2026-08-01)
+
+`task e2e:live` + `.github/workflows/e2e-live.yml` (nightly / `v*` tags / dispatch, one runner per
+demo). The suite is derived from the Taskfile's own `demo:<name>:run` targets, so joining the gate is
+structural. All six demos pass, EXIT=0, ~26 min. Details in **E2E-1** under enterprise-readiness.
+
+**Booked by it:**
+
+- **`ec2-only` has no Syncer, so it cannot prove the observe half its name in every table implies.**
+  The estate admits awsec2 `contractsOnly: true` and declares no Source and no Connector; the runner
+  polled 60s and passed with a soft note naming a component that is not on the floor. The claim is
+  corrected everywhere. The FIX is to give the demo a Source + Connector so build→observe closes on
+  the EC2 substrate the way it already does on vSphere — a real change, deliberately not smuggled
+  into the run that found the gap.
+- **`actionlint` is not in the gate.** Both workflows were validated with it by hand
+  (`go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.7`, clean) and it caught nothing this
+  time — but a workflow is now load-bearing infrastructure with no lint behind it, and the next
+  editor gets no signal. Adding it to `task ci` is a new toolchain dependency and therefore owes the
+  **dependency-scout** review the charter requires (§1.7), which is why it is booked rather than
+  added.
+- **Three demos have now independently hit the dispatch-table race.** `dev:await-actuators` is the
+  shared answer, but `demo:region-to-cert` and `demo:ec2-only` still carry their own private wait
+  loops inside their runners. Collapsing those onto the shared task removes two more second copies;
+  low risk, not done here to keep this change reviewable.
 
 ### The kubectl transport had no way to reach anything (2026-08-01, ADR-0156 D4a)
 
