@@ -624,20 +624,38 @@ func TestRunDAGNestedChildFailureFailsTheParentStep(t *testing.T) {
 	}
 }
 
-// THE trap (ADR-0139 D2), and it is one line that is invisible until a parent is cancelled in
-// anger. Temporal's default TERMINATES children when the parent closes; a terminated RunDAG never
-// reaches finishWorkflowRun, so its WorkflowRun row reads `running` FOREVER and its K8s Jobs go
-// unreaped — a record that lies about a run's state.
-func TestNestedChildUsesRequestCancelClosePolicy(t *testing.T) {
+// THE trap (ADR-0139 D2), and it is one line per site that is invisible until a parent closes with
+// a Step still in flight. Temporal's default TERMINATES children; a terminated child never reaches
+// its cancellation handler, so CleanupRun never deletes the K8s Job — it keeps converging real
+// machines after the DAG is over — and FinishRun never stamps the row, which reads `running`
+// forever. A record that lies about a run's state is the §1.8 failure mode in its purest form.
+//
+// THIS TEST USED TO BE VACUOUS, and that is why it is written this way now. It asserted only that
+// the string REQUEST_CANCEL appeared SOMEWHERE in workflow.go — so it passed for a year while two
+// of the three child launches still took the TERMINATE default. A guard that greps a file for a
+// constant proves the constant was typed once, not that every site uses it.
+//
+// So it counts: every ChildWorkflowOptions block must carry a ParentClosePolicy. That is a
+// structural claim about the file rather than a search for a token, and a new child launch added
+// without the policy fails here instead of at 3 a.m. with an unreaped pod.
+func TestEveryChildWorkflowUsesRequestCancelClosePolicy(t *testing.T) {
 	src, err := os.ReadFile("workflow.go")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(src), "PARENT_CLOSE_POLICY_REQUEST_CANCEL") {
-		t.Fatal("a nested child must start with ParentClosePolicy REQUEST_CANCEL, never the TERMINATE " +
-			"default: a terminated child never writes its terminal status, so the row reads `running` forever")
+	text := string(src)
+
+	options := strings.Count(text, "workflow.ChildWorkflowOptions{")
+	policies := strings.Count(text, "ParentClosePolicy: enumspb.PARENT_CLOSE_POLICY_REQUEST_CANCEL")
+	if options == 0 {
+		t.Fatal("no child workflow launches found — this guard has lost its subject")
 	}
-	if strings.Contains(string(src), "PARENT_CLOSE_POLICY_TERMINATE") {
+	if policies != options {
+		t.Fatalf("%d child workflow launches but only %d set ParentClosePolicy: every child must "+
+			"write its OWN terminal status and reap its OWN pod, and the ones that do not are "+
+			"exactly the ones nobody notices until a parent closes in anger", options, policies)
+	}
+	if strings.Contains(text, "PARENT_CLOSE_POLICY_TERMINATE") {
 		t.Error("TERMINATE must not appear — the whole point is that the default is wrong here")
 	}
 }

@@ -338,6 +338,14 @@ func runActuationStep(ctx workflow.Context, in DAGInput, step types.Step, steps 
 	}
 	cctx := workflow.WithChildOptions(ctx, workflow.ChildWorkflowOptions{
 		WorkflowID: ChildRunID(in.WorkflowRunID, step.Name),
+		// SAME TRAP AS THE NESTED CHILD BELOW, and it was live here while that one was fixed.
+		// Temporal's default TERMINATES children when the parent closes — including when the
+		// parent merely FAILS with this Step still in flight. A terminated RunAgainstView never
+		// reaches its cancellation handler, so CleanupRun never deletes the K8s Job (it keeps
+		// converging real machines after the DAG is over) and FinishRun never stamps the Run,
+		// which then reads `running` forever. REQUEST_CANCEL lets the child write its own
+		// terminal status, which is the single-writer rule ADR-0026 already established.
+		ParentClosePolicy: enumspb.PARENT_CLOSE_POLICY_REQUEST_CANCEL,
 	})
 	var outcome RunOutcome
 	// The Step's own View, or the one inherited from the launching Baseline. A Step that declares
@@ -414,6 +422,11 @@ func runActionStep(ctx workflow.Context, in DAGInput, step types.Step, steps map
 	}
 	cctx := workflow.WithChildOptions(ctx, workflow.ChildWorkflowOptions{
 		WorkflowID: ChildRunID(in.WorkflowRunID, step.Name),
+		// As above. RunAction has the same cancellation handler RunAgainstView does — a
+		// disconnected context, CleanupRun, then FinishRun(canceled) — and TERMINATE skips all
+		// of it. Actions are where the LONG runs live (a tofu apply), so this is the site where
+		// an unreaped pod runs longest after the DAG it belonged to has closed.
+		ParentClosePolicy: enumspb.PARENT_CLOSE_POLICY_REQUEST_CANCEL,
 	})
 	var outcome RunOutcome
 	// The per-class capability requests ride with the Step, resolved against the same namespaces
