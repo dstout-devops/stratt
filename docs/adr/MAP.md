@@ -11,7 +11,7 @@ design must reconcile with. Chronological list: [README.md](README.md); phase vi
 ```mermaid
 graph TD
   actuators["actuators<br/><small>0016 0022 0050 0053 0092 0117<br/>0124 0126 0133 0134 0135 0148<br/>0149 0153 0156</small>"]
-  api_surface["api-surface<br/><small>0006 0021 0026 0076 0091 0121</small>"]
+  api_surface["api-surface<br/><small>0006 0021 0026 0076 0091 0121<br/>0157</small>"]
   audit_telemetry["audit-telemetry<br/><small>0034 0065 0077 0121</small>"]
   authz_identity["authz-identity<br/><small>0009 0028 0035 0079 0101 0122<br/>0130 0155</small>"]
   capability_framework["capability-framework<br/><small>0100 0104 0105 0106 0107 0110<br/>0111 0112 0113 0114 0135 0145<br/>0146 0151</small>"]
@@ -23,9 +23,9 @@ graph TD
   foundation["foundation<br/><small>0001 0002 0004 0005 0006 0008<br/>0108 0109 0116 0137 0138 0141</small>"]
   graph_model["graph-model<br/><small>0015 0017 0041 0042 0059 0060<br/>0079 0080 0081 0082 0084 0085<br/>0096 0114 0115 0119 0120 0123<br/>0126 0127 0128 0129 0130 0132<br/>0133 0143 0144 0147 0152 0153<br/>0154 0155 0156</small>"]
   intent_compiler["intent-compiler<br/><small>0023 0030 0036 0055 0058 0083<br/>0085 0114 0118 0119 0123 0148<br/>0150 0152</small>"]
-  orchestration["orchestration<br/><small>0010 0011 0018 0027 0031 0063<br/>0118 0122 0125 0134 0139 0140</small>"]
+  orchestration["orchestration<br/><small>0010 0011 0018 0027 0031 0063<br/>0118 0122 0125 0134 0139 0140<br/>0157</small>"]
   plugin_port["plugin-port<br/><small>0046 0047 0048 0049 0051 0053<br/>0054 0103 0117 0121 0124 0125<br/>0127 0131 0137 0138 0140 0141<br/>0145 0149</small>"]
-  policy_governance["policy-governance<br/><small>0061 0062 0063 0064 0065 0066<br/>0067 0068 0069 0070 0071 0072<br/>0073 0074 0075 0076 0122</small>"]
+  policy_governance["policy-governance<br/><small>0061 0062 0063 0064 0065 0066<br/>0067 0068 0069 0070 0071 0072<br/>0073 0074 0075 0076 0122 0157</small>"]
   provisioning["provisioning<br/><small>0017 0058 0095 0096 0107 0110<br/>0111 0112 0113 0114 0115 0120<br/>0123 0143 0144 0145 0146 0147<br/>0151</small>"]
   state_artifacts["state-artifacts<br/><small>0016 0029 0093 0097 0105 0112<br/>0145</small>"]
   substrate_ops["substrate-ops<br/><small>0013 0032 0040 0044 0045 0049<br/>0077 0078 0093 0101 0102 0124<br/>0131 0142 0149</small>"]
@@ -112,6 +112,7 @@ API surface — OpenAPI /api/v1, the AWX /api/v2 façade, the platform MCP serve
 - [ADR-0076](0076-admission-on-the-imperative-door.md) — Admission on the imperative door: the API is not a bypass around the compile-seam PEP
 - [ADR-0091](0091-ui-is-a-first-party-bundled-pure-api-client.md) — the UI is a first-party, served-by-default, pure `/api/v1` client (never a port-plugin, never a gated add-on)
 - [ADR-0121](0121-task-event-scope.md) — `TaskEvent.scope`: an event says whether it describes the Run or a task
+- [ADR-0157](0157-cancelling-a-workflow-run.md) — Cancelling a WorkflowRun: one writer, no orphans, and a Gate that stops meaning "approve me"
 
 ### audit-telemetry
 
@@ -375,6 +376,7 @@ Orchestration — Triggers, Workflows/Gates, Steps, Runs, Actions, notifications
 - [ADR-0134](0134-tool-content-lives-beside-the-estate.md) — A playbook is a playbook: tool content lives beside the estate, not inside a declaration
 - [ADR-0139](0139-nested-workflow-steps.md) — A Step may run a Workflow: nesting, and the one chokepoint
 - [ADR-0140](0140-a-capability-is-invoked-not-named.md) — A capability is invoked, not named: the mapping is declared, never minted
+- [ADR-0157](0157-cancelling-a-workflow-run.md) — Cancelling a WorkflowRun: one writer, no orphans, and a Gate that stops meaning "approve me"
 
 ### plugin-port
 
@@ -426,6 +428,7 @@ Policy & governance — the PDP port, typed Controls, admission PEPs, obligation
 - [ADR-0075](0075-obligation-enforcement.md) — Obligation enforcement: a binding rider is enforced, not recorded-and-dropped
 - [ADR-0076](0076-admission-on-the-imperative-door.md) — Admission on the imperative door: the API is not a bypass around the compile-seam PEP
 - [ADR-0122](0122-change-context-is-typed-and-partly-derived.md) — The change context is typed, and the facts core can know are derived, not asserted
+- [ADR-0157](0157-cancelling-a-workflow-run.md) — Cancelling a WorkflowRun: one writer, no orphans, and a Gate that stops meaning "approve me"
 
 ### provisioning
 
@@ -664,3 +667,4 @@ UI — React shell, schema-driven rendering, Views, descent, the first-party cli
 | [0154](0154-the-awx-project-and-the-orphan-signal-it-repairs.md) | connectors, graph-model |
 | [0155](0155-the-account-nobody-offboards.md) | authz-identity, connectors, graph-model |
 | [0156](0156-how-to-reach-a-host-is-observed-not-declared.md) | actuators, connectors, graph-model |
+| [0157](0157-cancelling-a-workflow-run.md) | api-surface, orchestration, policy-governance |
