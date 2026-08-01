@@ -791,6 +791,25 @@ tasks:
           | grep -E "actuator enabled|pending on dependency|register rejected|dial failed" | tail -40 || true
       - |
         set -u
+        # THE HOST-SIDE SUBSTRATE, which this target could not see. Not every demo's world is in
+        # kind: vspheresim runs as a COMPOSE SERVICE on the host and materialises guests as sibling
+        # containers, and floci does the same for EC2 instances. `demo:vsphere-only` failed in CI
+        # with a guest reporting `toolsRunningStatus: guestToolsNotRunning`, and the only advice
+        # available was "check docker compose logs" — which nobody can do on a hosted runner that no
+        # longer exists. A diagnosis that names a command the reader cannot run is not a diagnosis.
+        echo ""
+        echo "══ host compose services + sibling containers ════════════════════════════════"
+        docker compose -f {{.ROOT_DIR}}/deploy/dev/docker-compose.yml ps 2>&1 | head -20 || true
+        for svc in vspheresim; do
+          echo "── compose logs: $svc ──"
+          docker compose -f {{.ROOT_DIR}}/deploy/dev/docker-compose.yml logs --tail=60 "$svc" 2>&1 || true
+        done
+        # The guests themselves are siblings, not compose services, so `ps` above will not list them.
+        echo "── sibling containers (guests/instances) ──"
+        docker ps -a --format '{{"{{"}}.Names{{"}}"}}\t{{"{{"}}.Image{{"}}"}}\t{{"{{"}}.Status{{"}}"}}' 2>&1 | head -20 || true
+
+      - |
+        set -u
         KC="{{.KUBECTL}} --context {{.KIND_CONTEXT}}"
         echo ""
         echo "══ every EE run pod: its IMAGE and its stream ════════════════════════════════"
