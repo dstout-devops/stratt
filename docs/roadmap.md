@@ -975,8 +975,33 @@ not have**, which is a different thing from unfinished work and is marked as suc
   to fire from a dev session is an unverifiable gate, which is the shape this branch spent its
   length closing.
 
-**BLOCKING for anyone quoting the capstone — `demo:region-to-cert` does not pass from a COLD floor
-(2026-08-01):**
+**~~BLOCKING for anyone quoting the capstone~~ — RESOLVED (2026-08-02). `demo:region-to-cert` DOES
+pass from a cold floor; the entry below is kept for the diagnosis it records, not as a live blocker:**
+
+Two independent green runs, both genuinely cold, both AFTER this entry was written:
+
+- **CI, `e2e-live` run `30723212848`** (2026-08-01T23:22:42Z): job `region-to-cert` **success**. Every
+  matrix job builds its own kind cluster, and `.github/workflows/e2e-live.yml` runs
+  `task demo:region-to-cert:run` — "the SAME entry point a human uses, not a CI-shaped variant".
+- **Locally (2026-08-02)**: `task dev:kind:down` to DESTROY the cluster, then
+  `task demo:region-to-cert:run` → **EXIT=0**, full scenario, including both `Intent/Subnet` builds —
+  which are the very `opentofu/apply` Actions the failure below names.
+
+**What fixed it is NOT claimed.** The likeliest candidate is `fad1655` ("nothing ever ran `helm
+dependency build` — every demo needed a machine where someone had fetched it by hand"), which landed
+between this observation and the first green run, alongside the other CI fixes in that arc. Nobody
+bisected it, so that stays a candidate rather than a cause.
+
+**The lesson the entry earned, which outlives the bug:** it was written from one local failure and
+stated as blocking; the evidence that contradicted it existed within hours and nothing reconciled the
+two, so the tracker warned readers off a capstone that CI was proving green on every run. A finding
+recorded and then not re-checked against later evidence decays into misinformation — the same failure
+mode as an unexecuted seam, one layer up. **If a `BLOCKING` claim outlives the run that produced it,
+re-run it before quoting it.**
+
+<details><summary>The original entry, kept for the diagnosis (2026-08-01)</summary>
+
+**`demo:region-to-cert` does not pass from a COLD floor (2026-08-01):**
 
 Proof A dies after its gate is approved with:
 
@@ -1006,6 +1031,8 @@ no-restart claim needs revisiting.
 **Not investigated further deliberately:** chasing it properly needs more than a guess, and a guess
 committed here would be exactly the "looks fixed, was not measured" failure this branch spent its
 length closing.
+
+</details>
 
 **Found by running things, and booked rather than fixed:**
 
