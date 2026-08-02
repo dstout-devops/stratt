@@ -1,8 +1,9 @@
 # ADR 0158 — An unobserved transport is not ssh
 
 - **Status:** **Accepted** (2026-08-02, steward) — **live-proven on kind**, see Verification. Landed
-  Proposed the same day; promoted only after `demo:app-cert` asserted the refusal end to end. Charter review by hand — this session's rules bar
-  the subagent; §1.2/§1.8/§2.4/§9 answered inline. **No new runtime dependency.**
+  Proposed the same day and promoted only once `demo:app-cert` asserted the refusal end to end.
+  Charter review by hand — this session's rules bar the subagent; §1.2/§1.8/§2.4/§9 answered inline.
+  **No new runtime dependency.**
 - **Date:** 2026-08-02
 - **Deciders:** steward
 - **Charter sections:** §1.2 (projections, never a second truth — observed, not inferred), §1.8
@@ -188,17 +189,28 @@ no fixture could have surfaced, and both are fixed here:
 1. **The refusal reached no surface.** It `return`ed an error, which exits the process — so the Run
    failed carrying a `diagnostic-output` warn line, **no `task-terminal` event, and its own `error`
    field NULL**. An operator opening the failed Run saw an empty cause. It now emits a terminal
-   fatal, like every other refusal in the shim. ⚠️ **The three sibling checks from ADR-0156
-   (`validateTransports`, its credential axis, and `refuseTransportAndDeclaredType`) still return
-   bare errors and still have this defect** — deliberately not changed from inside this ADR's
-   branch; booked on the roadmap with this run as evidence.
+   fatal, like every other refusal in the shim. **The three sibling checks from ADR-0156
+   (`validateTransports`, its credential axis, and `refuseTransportAndDeclaredType`) had the same
+   defect and are fixed with it.** Booked as a follow-up first — changing shipped ADR-0156
+   behaviour from inside this branch looked like a ride-along — and then done here once the plugin
+   port's OWN conformance suite turned out to grade a missing terminal as a `SeverityError`
+   (`sdk/mockstratt/conformance.go`: "the core folds a stream that never terminated to FAILED; the
+   Run fails with no stated cause"). That makes it a conformance VIOLATION to repair, not a design
+   to revisit. All four axes are now pinned by one table-driven test, because the defect was
+   precisely that three behaved one way and one another.
 2. **It named a UUID.** `Target.Name` is core's `observedName(e)`, which falls back to the Entity ID
    when a host carries no `*.name` label — and this demo's node carries none, so the refusal read
    `target d56e01a6-…`. Unambiguous and unusable. It now prints the **address** beside it, which is
    what an operator recognises, while keeping the id every descent link keys on.
 
-**A third defect, in the demo harness rather than the shim:** `/api/v1/runs?workflowRunId=` **does
-not filter** — verified live, it returns every Run in the estate whichever id is passed. The new
-assertion read the *vacuous* guard's error and failed on it. The pre-existing vacuous assertion had
-the same bug and passed only because its Run was the sole failed one at that moment. Both now filter
-client-side; the API defect is booked, not fixed here.
+**A third defect, and it was the API rather than the demo:** `GET /api/v1/runs?workflowRunId=` did
+not filter — and the reason is sharper than "the filter is broken". **The parameter was never in the
+OpenAPI spec at all**, so an unknown query param was silently dropped and the route returned every
+Run in the estate. The caller got a plausible answer to a question it did not ask, which is worse
+than an error. The new assertion read the *vacuous* guard's error and failed on it; the pre-existing
+vacuous assertion had the same bug and passed only because its Run was the sole failed one at that
+moment. **Fixed**: `workflowRunId` is now a declared query parameter delegating to
+`Store.ListRunsForWorkflowRun`, which already existed and which `GetWorkflowRun` already used — only
+the route never exposed it. Pinned by a store test proving ISOLATION across two WorkflowRuns (the
+prior assertion used one, so a missing `WHERE` returned an identical answer), falsified by removing
+the clause. The demo asserts the server-side filter directly AND still filters client-side.

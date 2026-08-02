@@ -387,6 +387,46 @@ func TestTheRefusalNamesTheAddressAndNotOnlyAUUID(t *testing.T) {
 	}
 }
 
+// EVERY reach refusal must emit a terminal, not just ADR-0158's. The port's own conformance suite
+// grades a stream with no terminal TaskEvent as a SeverityError — "the core folds a stream that
+// never terminated to FAILED; the Run fails with no stated cause" — so a check that `return`s an
+// error refuses correctly and tells nobody. Confirmed live before it was fixed: the Run's `error`
+// field was NULL and the reason survived only as a warn diagnostic.
+//
+// Table-driven over all four axes deliberately: the defect was that three of them behaved one way
+// and one another, and a per-axis test would let the next one drift again.
+func TestEveryReachRefusalEmitsATerminalAndNotABareError(t *testing.T) {
+	cases := map[string]Request{
+		"unknown coordinates (validateTransports)": {
+			Params:  json.RawMessage(`{"play":"- hosts: all"}`),
+			Targets: []Target{{Name: "web-01", TransportKind: "winrm", TransportCoordinates: []byte(`{"kind":"winrm"}`)}},
+		},
+		"declared type over an observed transport (D5)": {
+			Params:  json.RawMessage(`{"play":"- hosts: all","connection":{"type":"network_cli","networkOS":"cisco.ios.ios"}}`),
+			Targets: []Target{{Name: "web-01", TransportKind: "kubectl", TransportCoordinates: []byte(`{"kind":"kubectl","namespace":"n","pod":"p"}`)}},
+		},
+		"no reach method at all (ADR-0158 D3)": {
+			Params:  json.RawMessage(`{"play":"- hosts: all"}`),
+			Targets: []Target{{Name: "ec2-01", Address: "10.0.0.7"}},
+		},
+	}
+	for name, req := range cases {
+		t.Run(name, func(t *testing.T) {
+			run := &captureRunner{rc: 0}
+			var buf bytes.Buffer
+			if err := Run(context.Background(), &buf, t.TempDir(), req, run, noClone(t)); err != nil {
+				t.Fatalf("a refusal is an emitted terminal, not a returned error: %v", err)
+			}
+			if !bytes.Contains(buf.Bytes(), []byte(`"terminal":true`)) {
+				t.Fatalf("no terminal emitted — the Run fails with no stated cause:\n%s", buf.String())
+			}
+			if len(run.args) != 0 {
+				t.Errorf("ansible-runner must not be spawned for a refused Run, args=%v", run.args)
+			}
+		})
+	}
+}
+
 // THE COST THE ADR PREDICTED AND THIS DISPROVES. ADR-0158's last consequence says a mixed View
 // needs the declared type for its unobserved half, that the declared type is a GROUP var, and
 // that rendering it per-host is therefore required — a shim change.

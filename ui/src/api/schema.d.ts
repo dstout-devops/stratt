@@ -2485,6 +2485,8 @@ export interface operations {
         parameters: {
             query?: {
                 limit?: number;
+                /** @description Return only the Runs belonging to this WorkflowRun (its Steps), newest first. Mutually exclusive with `limit` in effect: a WorkflowRun's Steps are a bounded set and are all returned. An unknown id yields an empty array, not an error — absence of Runs for a WorkflowRun is a legitimate state (it may not have dispatched a Step yet). */
+                workflowRunId?: string;
             };
             header?: never;
             path?: never;

@@ -642,6 +642,27 @@ func TestWorkflowRunsAndGates(t *testing.T) {
 	if err != nil || len(runs) != 1 || runs[0].StepName != "gather" || runs[0].ID != r.ID {
 		t.Fatalf("descent runs: %v %v", runs, err)
 	}
+	// ISOLATION, which the single-WorkflowRun assertion above cannot see: with one execution in
+	// the table, a query missing its WHERE returns exactly the same answer as one that has it.
+	// That is not hypothetical — `GET /runs?workflowRunId=` shipped IGNORING the parameter
+	// entirely (it was never in the OpenAPI spec, so an unknown query param was silently
+	// dropped), and a demo assertion read a DIFFERENT Workflow's error and failed on it. The
+	// route now delegates here, so this is where the property belongs.
+	other, err := s.CreateWorkflowRun(ctx, "patch", "", "bob", "probe-trigger")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.CreateRun(ctx, types.Run{WorkflowID: "wfrun-y-deliver", ViewRef: "view://all", ViewVersion: 1, WorkflowRunID: other.ID, StepName: "deliver"}); err != nil {
+		t.Fatal(err)
+	}
+	mine, err := s.ListRunsForWorkflowRun(ctx, wr.ID)
+	if err != nil || len(mine) != 1 || mine[0].ID != r.ID {
+		t.Fatalf("a second WorkflowRun's Steps must not leak into the first's descent: %v %v", mine, err)
+	}
+	theirs, err := s.ListRunsForWorkflowRun(ctx, other.ID)
+	if err != nil || len(theirs) != 1 || theirs[0].StepName != "deliver" {
+		t.Fatalf("...and each execution must still see its own: %v %v", theirs, err)
+	}
 	got, err := s.GetRun(ctx, r.ID)
 	if err != nil || got.WorkflowRunID != wr.ID || got.StepName != "gather" {
 		t.Fatalf("run linkage round-trip: %+v %v", got, err)

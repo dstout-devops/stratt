@@ -269,6 +269,14 @@ done
 # its own — which is exactly what happened on the first run of this check.
 reach_cause="$(api GET "/runs?workflowRunId=${reach_id}" 2>/dev/null | jq -r --arg r "$reach_id" '.[]? | select(.workflowRunId==$r) | select(.status=="failed") | .error // empty' | head -1)"
 echo "  reach guard Run failed as designed"
+# THE SERVER-SIDE FILTER, asserted directly. It did not exist: `workflowRunId` was never in the
+# OpenAPI spec, so the query param was silently dropped and this route returned every Run in the
+# estate. That is worse than an error — the caller gets a plausible answer to a question it did
+# not ask. Now that it filters, prove it here rather than only defending against it below.
+scoped="$(api GET "/runs?workflowRunId=${reach_id}" 2>/dev/null | jq -r --arg r "$reach_id" '[.[]? | select(.workflowRunId != $r)] | length')"
+[ "${scoped:-x}" = "0" ] || {
+    echo "FAIL: GET /runs?workflowRunId= returned ${scoped} Run(s) belonging to another WorkflowRun — the filter is being ignored again"; exit 1; }
+echo "  …and GET /runs?workflowRunId= returned only this WorkflowRun's Steps"
 echo "  cause: ${reach_cause:-(none recorded)}"
 # §1.8, and D3 states it explicitly: the refusal must NAME THE TARGET and BOTH remedies. Which one
 # is right is not knowable from the control node — either the estate should declare ssh, or a

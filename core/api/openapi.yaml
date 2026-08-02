@@ -200,6 +200,22 @@ paths:
           in: query
           required: false
           schema: { type: integer, format: int64, minimum: 1, maximum: 500, default: 100 }
+        # The Runs of ONE WorkflowRun — its Steps. Added because callers had already invented it:
+        # `demos/app-cert/run.sh` queried `?workflowRunId=…` and got the WHOLE estate's Runs back,
+        # because an unknown query parameter is silently ignored. Its assertion then read a
+        # different Workflow's error and drew a confident wrong conclusion — the §1.8 failure
+        # where the abstraction does not hide the answer, it hides that it answered a different
+        # question. `Store.ListRunsForWorkflowRun` already existed and GetWorkflowRun already used
+        # it; only the route never exposed it.
+        - name: workflowRunId
+          in: query
+          required: false
+          description: >
+            Return only the Runs belonging to this WorkflowRun (its Steps), newest first. Mutually
+            exclusive with `limit` in effect: a WorkflowRun's Steps are a bounded set and are all
+            returned. An unknown id yields an empty array, not an error — absence of Runs for a
+            WorkflowRun is a legitimate state (it may not have dispatched a Step yet).
+          schema: { type: string }
       responses:
         "200":
           description: Recent Runs, newest first.

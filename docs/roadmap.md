@@ -904,20 +904,27 @@ remedies — so it is in E2E-1 and cannot rot back.
 that a reviewed-but-unexecuted seam was wrong:
 
 - **The refusal reached no surface** — it returned an error instead of emitting a terminal, so the
-  Run failed with the `error` field NULL and only a warn-level diagnostic line. Fixed for this
-  check. ⚠️ **STILL OPEN for the three ADR-0156 sibling checks** (`validateTransports`, its
-  credential axis, `refuseTransportAndDeclaredType`): they all `return terr`, so every one of them
-  fails a Run whose recorded cause is empty. The conformance suite already records the symptom
-  (`SawTerminal:false`). Not changed from inside ADR-0158's branch — it is ADR-0156's shipped
-  behaviour and deserves its own change, not a ride-along.
+  Run failed with the `error` field NULL and only a warn-level diagnostic line. **Fixed, and for
+  all four reach axes**: the three ADR-0156 siblings (`validateTransports`, its credential axis,
+  `refuseTransportAndDeclaredType`) had it too. Booked as a follow-up first, then done once the
+  plugin port's OWN conformance suite turned out to grade a missing terminal as a `SeverityError`
+  — "the core folds a stream that never terminated to FAILED; the Run fails with no stated cause"
+  (`sdk/mockstratt/conformance.go`). That makes it a conformance violation to repair rather than
+  ADR-0156's design to revisit. One table-driven test now covers all four, since the defect was
+  exactly that three behaved one way and one another.
 - **The refusal named a UUID.** `observedName(e)` falls back to the Entity ID when a host has no
   `*.name` label, so the message read `target d56e01a6-…`. Now prints the address beside it.
-- ⚠️ **`/api/v1/runs?workflowRunId=` DOES NOT FILTER** — verified live: it returns every Run in the
-  estate whichever id is passed. The demo's new assertion silently read a different Workflow's
-  error. **The pre-existing vacuous-run assertion had the same bug** and passed only because its Run
-  happened to be the only failed one at that instant. Both now filter client-side, so the demos are
-  correct — but the API is still wrong, and anything else querying that route is reading unfiltered
-  results. Nothing else in-repo does today. **Open.**
+- **`GET /api/v1/runs?workflowRunId=` did not filter** — and the cause is sharper than a broken
+  filter: **the parameter was never in the OpenAPI spec**, so an unknown query param was silently
+  dropped and the route returned every Run in the estate. A caller got a plausible answer to a
+  question it did not ask. The demo's new assertion read a different Workflow's error; the
+  pre-existing vacuous-run assertion had the same bug and passed only because its Run happened to
+  be the only failed one at that instant. **Fixed** (OpenAPI-first, §3): `workflowRunId` is a
+  declared parameter delegating to `Store.ListRunsForWorkflowRun` — which already existed and which
+  `GetWorkflowRun` already used, so only the route was missing. Pinned by a store test proving
+  ISOLATION across two WorkflowRuns (the prior assertion used one, so a missing `WHERE` returned an
+  identical answer) and falsified by removing the clause; the demo now asserts the server-side
+  filter directly.
 
 **Three of the ADR's own predictions were wrong and are corrected in it.** The per-host rendering
 cost does not exist (ssh is the only declared type that can coexist with an observed transport, and
