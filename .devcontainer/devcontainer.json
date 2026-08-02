@@ -6,6 +6,9 @@
   "remoteEnv": {
     "WORKSPACE_ROOT": "/workspaces/${localWorkspaceFolderBasename}"
   },
+  "containerEnv": {
+    "NODE_OPTIONS": "--dns-result-order=ipv4first"
+  },
 	"features": {
 		"ghcr.io/devcontainers/features/docker-in-docker:4": {
 			"dockerDefaultAddressPool": "base=10.200.0.0/20,size=24",
@@ -63,6 +66,6 @@
 		}
 	},
 	"initializeCommand": "echo WORKSPACE_NAME=${localWorkspaceFolderBasename} > .devcontainer/.env",
-	"postCreateCommand": "chmod +x .devcontainer/postCreateCommand.sh && .devcontainer/postCreateCommand.sh",
+	"postCreateCommand": "sh .devcontainer/postCreateCommand.sh",
 	"postStartCommand": "task --dir ${containerWorkspaceFolder} setup:devcontainer"
 }
