@@ -13,8 +13,17 @@
 # WHY NOT ON EVERY PR. One demo stands up a kind cluster, six plugin pods, three execution-environment
 # images and up to six backing services. That is minutes of wall clock and gigabytes of disk per
 # demo — a per-PR gate would be slower than the change it guards and would still not catch a
-# regression introduced by a dependency rather than a diff. Nightly plus every release tag is where
-# the signal is, and `workflow_dispatch` covers "I want to know right now".
+# regression introduced by a dependency rather than a diff.
+#
+# WEEKLY, NOT NIGHTLY, and the reason is cost rather than confidence. One run is six runners for
+# roughly ten minutes each; nightly is ~30 runner-hours a month spent re-proving a tree that mostly
+# did not change. Weekly plus EVERY release tag plus `workflow_dispatch` keeps the signal where it
+# pays: a release is always gated, "I want to know right now" is one click, and the schedule is the
+# backstop for drift that arrives from OUTSIDE a diff — a base image, an upstream chart, an action.
+#
+# THE COST OF WEEKLY, STATED: up to seven days between a regression landing and the gate noticing.
+# That is acceptable only because the tag trigger exists — nothing ships un-gated — and it would not
+# be acceptable as the sole trigger.
 #
 # Supply-chain discipline (§7.3): every action pinned to a commit digest, never a floating tag —
 # same digests as ci.yml, bumped on the same quarterly train.
@@ -23,8 +32,9 @@ name: E2E live
 
 on:
   schedule:
-    # Nightly. Offset off the hour: a scheduled job on :00 competes with everybody else's.
-    - cron: "17 3 * * *"
+    # Mondays 03:17 UTC. Offset off the hour because a scheduled job on :00 competes with everybody
+    # else's; early Monday so a week's drift surfaces before the week's work builds on it.
+    - cron: "17 3 * * 1"
   push:
     # The pre-release half of E2E-1. A tag is the last moment a broken demo is cheap to find.
     tags: ["v*"]
@@ -40,7 +50,7 @@ permissions:
 
 concurrency:
   group: e2e-live-${{ github.ref }}
-  # NOT cancel-in-progress. A nightly that is half-finished still carries real information, and
+  # NOT cancel-in-progress. A scheduled run that is half-finished still carries real information, and
   # cancelling it to start another tells you nothing about either.
   cancel-in-progress: false
 

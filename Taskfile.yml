@@ -714,7 +714,7 @@ tasks:
     # failure — that is the whole point of the row (§1.8: a claim nobody re-checks is a claim that
     # rots).
     #
-    # RUNS EVERY DEMO EVEN AFTER ONE FAILS, deliberately. A nightly that stops at the first failure
+    # RUNS EVERY DEMO EVEN AFTER ONE FAILS, deliberately. A scheduled run that stops at the first failure
     # reports one broken demo and says nothing about the other five, so a second regression hides
     # behind the first and surfaces a day later. The summary is the artifact; the exit code is the
     # gate.
@@ -751,7 +751,7 @@ tasks:
         exit $rc
 
   e2e:diagnose:
-    # WHAT A FAILED LIVE RUN LEAVES BEHIND. Not a CI-only script: a nightly failure and a human
+    # WHAT A FAILED LIVE RUN LEAVES BEHIND. Not a CI-only script: a scheduled failure and a human
     # debugging the same demo must see the SAME evidence, or the thing that reproduces locally is
     # not the thing that failed remotely.
     #

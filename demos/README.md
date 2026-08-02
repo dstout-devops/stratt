@@ -26,7 +26,7 @@ Every `demos/<name>/` is:
   **They rotted, and now there is a gate** (this section read "Reproducible and CI-able, so it can't
   silently rot", which was false — corrected 2026-08-01). `task ci` still runs no demo, because a
   floor takes minutes and gigabytes. What runs them is **`task e2e:live`**, the whole library against
-  a real cluster with its exit code as the verdict, wired to nightly / `v*` tags / dispatch in
+  a real cluster with its exit code as the verdict, wired to **weekly** (Mon) / `v*` tags / dispatch in
   `.github/workflows/e2e-live.yml`.
 
   The suite is **derived from this Taskfile's `demo:<name>:run` targets, never written down** — so a
