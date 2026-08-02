@@ -181,7 +181,7 @@ reproducible, asserting runs against a real cluster + real/simulated substrates.
 
 **They were NOT non-rotting, and claiming so here was circular** (corrected 2026-08-01; it read
 "Each runner is CI-able and **non-rotting** — a demo that stops working fails its own runner"). A
-runner only fails when something runs it. **`task e2e:live` is now the something**, wired to nightly /
+runner only fails when something runs it. **`task e2e:live` is now the something**, wired to **weekly** (Mon) /
 `v*` tags / dispatch in `.github/workflows/e2e-live.yml`, with the suite derived from the Taskfile's
 own demo targets so a new demo is gated because it exists.
 
@@ -759,7 +759,7 @@ repo-scanning checks in `task ci`.
 
 ### E2E-1 · the live gate exists, and its first run found three rotted demos (2026-08-01)
 
-`task e2e:live` + `.github/workflows/e2e-live.yml` (nightly / `v*` tags / dispatch, one runner per
+`task e2e:live` + `.github/workflows/e2e-live.yml` (weekly Mon / `v*` tags / dispatch, one runner per
 demo). The suite is derived from the Taskfile's own `demo:<name>:run` targets, so joining the gate is
 structural. All six demos pass, EXIT=0, ~26 min. Details in **E2E-1** under enterprise-readiness.
 

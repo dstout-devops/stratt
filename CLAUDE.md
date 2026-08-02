@@ -100,7 +100,7 @@ Run repeatable work through the **Taskfile**; never assert success without the m
   scenario end-to-end, asserting the outcome (`demo:<name>:down` tears it back down). **`task e2e:live`
   runs the WHOLE library against a real cluster and its exit code is the gate (E2E-1)** — the suite is
   derived from this Taskfile's own `demo:<name>:run` targets, so a new demo is gated because it exists.
-  `.github/workflows/e2e-live.yml` runs it nightly / on `v*` tags / on dispatch. Live-verified on kind,
+  `.github/workflows/e2e-live.yml` runs it **weekly** (Mon) / on `v*` tags / on dispatch. Live-verified on kind,
   all six: `k8s-deploy`, `vsphere-only`, `ec2-only`, `app-cert`, `scale-fleet`, `region-to-cert`.
   A **single-plugin** demo lives with its plugin
   (`plugins/helm/demo/`, `plugins/vcenter/demo/`, `plugins/awsec2/demo/`); [demos/](demos/README.md) keeps only
