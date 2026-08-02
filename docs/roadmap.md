@@ -852,23 +852,40 @@ names a ref; the ref names a Secret; the floor either has it or does not), and t
 a pod that never starts. Same class as the `fileset.content` unregistered-owner finding CERT-2
 booked, and the fourth instance of "an advertised target nothing in the estate resolves".
 
-**STILL OPEN, and a platform race rather than a demo one: an absent transport and a not-yet-observed
-transport are the same value.** `mgmt.address` and `mgmt.transport` have different writers — the
-build's terminal projection supplies the address, the Syncer's next Observe supplies the transport —
-so a host is addressable **before** its reach method is known. Measured on the capstone: the converge
-launched at 13:51:03 and the transport landed at 13:52:56. In that window the shim sees no transport,
-which it cannot distinguish from "this host is reached by ssh", so it renders ssh vars and the Run
-fails `unreachable` — the same symptom as the credential bug, from an unrelated cause, which is
-precisely why it stayed hidden behind it.
+**STILL OPEN — but NOT the race I first booked, and the correction matters more than the entry.**
 
-The demo now waits for the transport before converging, and that is a demo fix, not a platform one.
-The platform question is real and unanswered: **should a converge against a host whose transport is
-not yet observed run at all?** Three candidate shapes, none obviously right — the Syncer projects a
-transport at build time so the two facts land together; the Baseline treats a host with an address
-and no transport as not-yet-ready rather than drifted; or the shim refuses a target whose transport is
-absent when the estate says this substrate always observes one. The first is closest to §1.2 (the
-provider CAUSED both facts and should say both), the third reintroduces a declaration the estate was
-freed of. Needs an ADR; do not fix it inside a demo.
+What I recorded on 2026-08-01: "`mgmt.address` and `mgmt.transport` have different writers — the
+build's terminal projection supplies the address, the Syncer's next Observe supplies the transport —
+so a host is addressable before its reach method is known. Measured: the converge launched at
+13:51:03 and the transport landed at 13:52:56."
+
+**That mechanism does not exist.** Reading `plugins/kubecompute/server.go`: the build's terminal
+projection calls the SAME `project()` the Syncer does, and it gates BOTH facets on
+`pod.Status.Phase == PodRunning` — so the build emits NEITHER ("The built Entity rides the terminal,
+WITHOUT mgmt.address: the pod has no address yet"). The two facets land together, atomically, in one
+upsert. There is no window on this substrate. The timestamps I cited were the LATEST write of a
+Facet the Syncer rewrites every cycle, which says nothing about when either first appeared — I read
+a recency stamp as a first-appearance stamp. The converge that failed did so for the reasons since
+fixed (no brokered kubeconfig, then a stale EE image), not for this.
+
+**The real question is narrower and sharper: the shim cannot distinguish "reached by ssh" from
+"reach method not yet known", because both are the absence of a Facet.** Two shipped cases prove it
+is not theoretical:
+
+- **awsec2 writes NO transport, deliberately and permanently** (`KeyName` means a key is authorized,
+  not that sshd listens; SSM needs a different API). Absent transport here means ssh, and ssh is
+  correct.
+- **vcenter gates the two facets DIFFERENTLY**: `mgmt.address` from `Guest.HostName`/`IpAddress`,
+  `mgmt.transport` from `ToolsRunningStatus == guestToolsRunning`. vCenter caches guest info, so a VM
+  whose tools stop keeps a stale address and loses its transport — and the shim then falls back to
+  ssh on a host whose observed answer was `vmware_tools`.
+
+So absence is overloaded: for one provider it is an answer, for another it is a gap. That is §2.4's
+territory — a value that means two things depending on who did not write it — and it needs an ADR.
+Candidate shapes: a provider declares whether it observes transports at all (making absence
+meaningful per-substrate); or `mgmt.transport` gains an explicit `ssh` value that awsec2 WRITES, so
+absence always means unknown; or the shim refuses an unknown transport and the estate opts into ssh.
+The second is closest to §1.2 — an observed fact stated rather than inferred from silence.
 
 ### Open follow-ups from the `fix/seam-continuity-and-fidelity` branch (2026-08-01)
 
