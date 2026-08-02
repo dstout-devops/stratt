@@ -1,7 +1,6 @@
 package ansible
 
 import (
-	"encoding/json"
 	"strings"
 	"testing"
 
@@ -123,7 +122,7 @@ func TestShim_UnreachableHostReportsWhy(t *testing.T) {
 		`{"event":"playbook_on_stats","event_data":{}}`,
 	}
 	req := Request{
-		Params:  json.RawMessage(`{"play":"- hosts: all"}`),
+		Params:  withDeclaredSSH(t, `{"play":"- hosts: all"}`),
 		Targets: []Target{{Name: "app-node-1.stratt.test", Address: "app-node.stratt.svc.cluster.local"}},
 	}
 	got := runShim(t, req, fakeRunner{rc: 4, lines: lines}) // rc=4 is ansible's unreachable

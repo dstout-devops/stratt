@@ -48,4 +48,13 @@ steps:
     # below is a path INSIDE that root, and core checks at estate load that it exists.
     actuator: ansible-platform-baseline
     params:
+      # ADR-0158 D2 — the reach method, declared. UNLIKE the other Steps carrying this line,
+      # these hosts were just BUILT (by `provision` above, through whichever provider the
+      # provisioning capability resolved to), so some of them may well carry an observed
+      # mgmt.transport. Declaring ssh is still both correct and necessary: it is inert where a
+      # transport IS observed — the per-host var wins and ssh authors no group var at all — and
+      # it is the only thing standing between an UNOBSERVED build (awsec2 writes no transport,
+      # deliberately) and a refused Run.
+      connection:
+        type: ssh
       playbook: linux-onboard.yml

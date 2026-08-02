@@ -60,7 +60,7 @@ func runShim(t *testing.T, req Request, f fakeRunner) []*pluginv1.ApplyResponse 
 // (paths only), a non-event line as a diagnostic (MF5), and a required terminal.
 func TestShim_FanOutFactsDriftDiagnostics(t *testing.T) {
 	req := Request{
-		Params: json.RawMessage(`{"play":"- hosts: all\n  tasks: []\n"}`),
+		Params: withDeclaredSSH(t, `{"play":"- hosts: all\n  tasks: []\n"}`),
 		Targets: []Target{
 			{Name: "web-1"},
 			{Name: "web-2", Identity: map[string]string{"host.name": "web-2"}},
@@ -148,7 +148,7 @@ func (c *captureRunner) run(_ context.Context, _ string, args []string, _ func([
 // play.yml. The clone boundary is a subprocess (git), injected here.
 func TestShim_SCMContentRef(t *testing.T) {
 	req := Request{
-		Params:  json.RawMessage(`{"scm":{"repo":"https://git.example/ops.git","ref":"v2","playbook":"site/deploy.yml"}}`),
+		Params:  withDeclaredSSH(t, `{"scm":{"repo":"https://git.example/ops.git","ref":"v2","playbook":"site/deploy.yml"}}`),
 		Targets: []Target{{Name: "web-1"}},
 		DryRun:  true,
 	}
@@ -195,7 +195,7 @@ func TestShim_SCMContentRef(t *testing.T) {
 // ansible's `--check --diff`, for the inline-play path, so a baseline (which forces
 // DryRun) never mutates a target. Without DryRun, no --check is passed.
 func TestShim_DryRunMapsToCheck(t *testing.T) {
-	base := Request{Params: json.RawMessage(`{"play":"- hosts: all\n  tasks: []\n"}`), Targets: []Target{{Name: "h"}}}
+	base := Request{Params: withDeclaredSSH(t, `{"play":"- hosts: all\n  tasks: []\n"}`), Targets: []Target{{Name: "h"}}}
 	for _, dry := range []bool{true, false} {
 		req := base
 		req.DryRun = dry
@@ -234,7 +234,7 @@ func TestShim_SCMValidation(t *testing.T) {
 				t.Fatalf("validateSCM(%+v) must reject", scm)
 			}
 			// End to end: a bad ref never reaches the cloner; it emits a terminal fatal.
-			raw, _ := json.Marshal(map[string]any{"scm": scm})
+			raw, _ := json.Marshal(map[string]any{"scm": scm, "connection": map[string]any{"type": "ssh"}})
 			req := Request{Params: raw, Targets: []Target{{Name: "h"}}}
 			clone := func(context.Context, string, scmParams) error {
 				t.Fatal("a rejected SCM ref must never be cloned")
@@ -257,7 +257,7 @@ func TestShim_SCMValidation(t *testing.T) {
 // green Run that actuated nothing. This is reachable today via params.limit.
 func TestShim_VacuousRunFailsTerminal(t *testing.T) {
 	req := Request{
-		Params:  json.RawMessage(`{"play":"- hosts: nope","limit":"nope"}`),
+		Params:  withDeclaredSSH(t, `{"play":"- hosts: nope","limit":"nope"}`),
 		Targets: []Target{{Name: "web-01", Address: "10.0.0.1"}},
 	}
 	// rc=0, and the only event is ansible saying the play matched nothing.
@@ -296,7 +296,7 @@ func TestShim_VacuousRunFailsTerminal(t *testing.T) {
 // TestShim_ActuatedRunStaysGreen: the guard must not regress the normal path — one
 // real per-host result is enough to make the run legitimately successful.
 func TestShim_ActuatedRunStaysGreen(t *testing.T) {
-	req := Request{Targets: []Target{{Name: "web-01"}, {Name: "web-02"}}}
+	req := Request{Params: withDeclaredSSH(t, ""), Targets: []Target{{Name: "web-01"}, {Name: "web-02"}}}
 	out := runShim(t, req, fakeRunner{rc: 0, lines: []string{
 		`{"uuid":"1","counter":1,"event":"runner_on_ok","event_data":{"host":"web-01","res":{}}}`,
 	}})
@@ -312,7 +312,7 @@ func TestShim_ActuatedRunStaysGreen(t *testing.T) {
 // the HUB rejects as a confused deputy (MF4). It must not satisfy the actuation check
 // either — otherwise a run that touched nothing in the View still reads as green.
 func TestShim_ImplicitLocalhostIsNotActuation(t *testing.T) {
-	req := Request{Targets: []Target{{Name: "web-01", Address: "10.0.0.1"}}}
+	req := Request{Params: withDeclaredSSH(t, ""), Targets: []Target{{Name: "web-01", Address: "10.0.0.1"}}}
 	out := runShim(t, req, fakeRunner{rc: 0, lines: []string{
 		`{"uuid":"1","counter":1,"event":"runner_on_ok","event_data":{"host":"localhost","res":{}}}`,
 	}})

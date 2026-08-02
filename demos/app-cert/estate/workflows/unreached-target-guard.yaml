@@ -1,0 +1,47 @@
+# unreached-target-guard — a Workflow that is SUPPOSED TO FAIL, and the demo asserts that it does.
+#
+# It exists because of the failure mode ADR-0158 D1/D3 closed. The shim inherited ADR-0153 D1's
+# rule that an empty `connection.type` renders ssh, so a target with NO observed `mgmt.transport`
+# silently became an SSH target. Absence is overloaded across the shipped providers and BOTH
+# readings are real: `awsec2` withholds the Facet deliberately and permanently (a KeyName says a
+# key is AUTHORIZED, not that sshd is LISTENING), so absence there means ssh; `vcenter` gates the
+# transport on ToolsRunningStatus while the address comes from guest info vCenter CACHES, so a VM
+# whose tools stop keeps a stale address and LOSES its transport, and absence there means the
+# observation went away. One value, two meanings, decided by which provider declined to write it.
+#
+# So an absent transport now means the reach method is UNKNOWN, and the Run is REFUSED rather than
+# attempted over ssh. What it replaces is worse than a refusal: ansible connects, fails, and
+# reports `unreachable`, which names the GUEST for a decision the control node made — §1.8's exact
+# prohibition, and the failure this arc has now paid for four separate times.
+#
+# THE STEP BELOW IS THE PRE-MIGRATION SHAPE, ON PURPOSE: no `connection` block at all, which is how
+# five of the reference estate's Steps were written and is precisely the shape a grep for
+# `connection:` cannot find. Its sibling Steps in this demo all declare `type: ssh` (D2). The
+# difference between them is the whole decision.
+#
+# REFUSING IS HALF THE REQUIREMENT. The demo also asserts the message NAMES THE TARGET and BOTH
+# remedies, because which one is right is not knowable from the control node: either these hosts
+# are ssh-reachable and the estate should say so, or a provider should have observed the transport
+# and its absence is the missing thing. A refusal that does not say which is a refusal that sends
+# an operator to the wrong place.
+#
+# No Gate: nothing is mutated, and approving a Run that is designed to refuse would teach the wrong
+# lesson. Inline `params.play` for the same reason vacuous-run-guard keeps one (ADR-0134 D4) —
+# nobody maintains this play, it exists to be refused before ansible is ever spawned.
+name: unreached-target-guard
+steps:
+  - name: reach-unknown
+    viewName: app-nodes
+    actuator: ansible-crypto
+    credentialRefs: [app-node-ssh]
+    params:
+      # NO `connection` block, and that is the point of this file. The node in view:app-nodes is
+      # declared by this demo's own estate rather than built by a provider, so nothing writes its
+      # mgmt.transport — and with nothing declared here either, the reach method is unknown.
+      play: |
+        - name: A play against a host whose reach method nobody stated
+          hosts: all
+          gather_facts: false
+          tasks:
+            - name: Never runs — the shim refuses before ansible-runner is spawned
+              ansible.builtin.command: /bin/true

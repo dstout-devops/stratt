@@ -7,7 +7,8 @@ summary: >
   Approve a gate, then watch Stratt SSH into a real managed host as an unprivileged user, escalate,
   mint an X.509 certificate with a collection baked into a purpose-built execution environment,
   install an app on it, and report the observed state back into the graph — then watch a play that
-  reaches no host fail rather than report green.
+  reaches no host fail rather than report green, and a host whose reach method nobody stated be
+  refused rather than reached by a guess.
 
 # fidelity (D3): how real is what you're watching? The turnkey runner prints this up front.
 #   real       — real workloads on real substrate.
@@ -23,6 +24,10 @@ fidelityNote: >
 # What the runner drives (mirrors the estate/ declarations).
 workflow: app-install-with-cert
 guardWorkflow: vacuous-run-guard
+# The second guard (ADR-0158 D1/D3): a Step declaring no connection at all, over the same View, whose
+# Run must be REFUSED — naming the target and both remedies — rather than attempted over a guessed
+# ssh. Every other Step here declares `connection.type: ssh`; this one is the pre-migration shape.
+reachGuardWorkflow: unreached-target-guard
 view: app-nodes
 actuator: ansible-crypto
 executionEnvironment: stratt-ee-crypto:dev

@@ -2681,6 +2681,22 @@ func (s *Server) ListViews(w http.ResponseWriter, r *http.Request) {
 
 // ListRuns implements (GET /runs).
 func (s *Server) ListRuns(w http.ResponseWriter, r *http.Request, params ListRunsParams) {
+	// Scoped to ONE WorkflowRun when asked. The filter reuses the store method GetWorkflowRun
+	// already calls, so the two doors onto "this WorkflowRun's Steps" cannot drift apart — a
+	// second query shaped slightly differently is how they would.
+	if params.WorkflowRunId != nil && *params.WorkflowRunId != "" {
+		rs, err := s.Store.ListRunsForWorkflowRun(r.Context(), *params.WorkflowRunId)
+		if err != nil {
+			s.fail(w, err)
+			return
+		}
+		out := make([]Run, 0, len(rs))
+		for _, run := range rs {
+			out = append(out, runToWire(run))
+		}
+		writeJSON(w, http.StatusOK, out)
+		return
+	}
 	limit := 0
 	if params.Limit != nil {
 		limit = int(*params.Limit)

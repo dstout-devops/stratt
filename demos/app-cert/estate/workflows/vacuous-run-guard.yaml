@@ -29,6 +29,7 @@ steps:
     params:
       # ADR-0126 D1 — derived from the credentialRef above, not a literal path.
       connection:
+        type: ssh # ADR-0158 D2 — nothing observes this node's transport.
         user: appops
         credentialRef: app-node-ssh
       play: |

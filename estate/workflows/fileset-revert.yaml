@@ -30,6 +30,9 @@ steps:
     viewName: web-hosts
     actuator: ansible-fileset
     params:
+      # ADR-0158 D2 — the reach method, declared: nothing observes these hosts.
+      connection:
+        type: ssh
       extraVars:
         fileset_path: "{{.launch.path}}"
       # estate/ansible/projects/fileset/revert.yml (ADR-0134).

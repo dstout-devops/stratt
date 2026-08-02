@@ -852,23 +852,95 @@ names a ref; the ref names a Secret; the floor either has it or does not), and t
 a pod that never starts. Same class as the `fileset.content` unregistered-owner finding CERT-2
 booked, and the fourth instance of "an advertised target nothing in the estate resolves".
 
-**STILL OPEN, and a platform race rather than a demo one: an absent transport and a not-yet-observed
-transport are the same value.** `mgmt.address` and `mgmt.transport` have different writers — the
-build's terminal projection supplies the address, the Syncer's next Observe supplies the transport —
-so a host is addressable **before** its reach method is known. Measured on the capstone: the converge
-launched at 13:51:03 and the transport landed at 13:52:56. In that window the shim sees no transport,
-which it cannot distinguish from "this host is reached by ssh", so it renders ssh vars and the Run
-fails `unreachable` — the same symptom as the credential bug, from an unrelated cause, which is
-precisely why it stayed hidden behind it.
+**STILL OPEN — but NOT the race I first booked, and the correction matters more than the entry.**
 
-The demo now waits for the transport before converging, and that is a demo fix, not a platform one.
-The platform question is real and unanswered: **should a converge against a host whose transport is
-not yet observed run at all?** Three candidate shapes, none obviously right — the Syncer projects a
-transport at build time so the two facts land together; the Baseline treats a host with an address
-and no transport as not-yet-ready rather than drifted; or the shim refuses a target whose transport is
-absent when the estate says this substrate always observes one. The first is closest to §1.2 (the
-provider CAUSED both facts and should say both), the third reintroduces a declaration the estate was
-freed of. Needs an ADR; do not fix it inside a demo.
+What I recorded on 2026-08-01: "`mgmt.address` and `mgmt.transport` have different writers — the
+build's terminal projection supplies the address, the Syncer's next Observe supplies the transport —
+so a host is addressable before its reach method is known. Measured: the converge launched at
+13:51:03 and the transport landed at 13:52:56."
+
+**That mechanism does not exist.** Reading `plugins/kubecompute/server.go`: the build's terminal
+projection calls the SAME `project()` the Syncer does, and it gates BOTH facets on
+`pod.Status.Phase == PodRunning` — so the build emits NEITHER ("The built Entity rides the terminal,
+WITHOUT mgmt.address: the pod has no address yet"). The two facets land together, atomically, in one
+upsert. There is no window on this substrate. The timestamps I cited were the LATEST write of a
+Facet the Syncer rewrites every cycle, which says nothing about when either first appeared — I read
+a recency stamp as a first-appearance stamp. The converge that failed did so for the reasons since
+fixed (no brokered kubeconfig, then a stale EE image), not for this.
+
+**The real question is narrower and sharper: the shim cannot distinguish "reached by ssh" from
+"reach method not yet known", because both are the absence of a Facet.** Two shipped cases prove it
+is not theoretical:
+
+- **awsec2 writes NO transport, deliberately and permanently** (`KeyName` means a key is authorized,
+  not that sshd listens; SSM needs a different API). Absent transport here means ssh, and ssh is
+  correct.
+- **vcenter gates the two facets DIFFERENTLY**: `mgmt.address` from `Guest.HostName`/`IpAddress`,
+  `mgmt.transport` from `ToolsRunningStatus == guestToolsRunning`. vCenter caches guest info, so a VM
+  whose tools stop keeps a stale address and loses its transport — and the shim then falls back to
+  ssh on a host whose observed answer was `vmware_tools`.
+
+So absence is overloaded: for one provider it is an answer, for another it is a gap. That is §2.4's
+territory — a value that means two things depending on who did not write it — and it needs an ADR.
+Candidate shapes: a provider declares whether it observes transports at all (making absence
+meaningful per-substrate); or `mgmt.transport` gains an explicit `ssh` value that awsec2 WRITES, so
+absence always means unknown; or the shim refuses an unknown transport and the estate opts into ssh.
+The second is closest to §1.2 — an observed fact stated rather than inferred from silence.
+
+**DECIDED and PART-LANDED (2026-08-02, [ADR-0158](adr/0158-an-unobserved-transport-is-not-ssh.md)).**
+The third shape won, and the second was refused outright: a provider writing "unknown" is a provider
+ASSERTING something, and the Facet's whole contract is that it carries what was OBSERVED (D4).
+Absence already expresses "nothing observed" precisely — the defect was the shim reading it as an
+answer. So the shim now REFUSES a target with no observed transport and no declared type
+(`requireReachMethod`), naming the target and both remedies, before `ansible-runner` is spawned.
+
+🟢 **ACCEPTED and LIVE-PROVEN** (`task demo:app-cert:run` EXIT=0 on kind). Falsified two ways —
+disabling the check fails 5 tests, deleting the CALL SITE fails exactly one, the end-to-end test
+written for precisely that hole. `task ci` EXIT=0. The demo carries a second guard Workflow,
+`unreached-target-guard`, whose Run must be refused with a message naming the target and both
+remedies — so it is in E2E-1 and cannot rot back.
+
+**Running it found three defects the unit tests could not**, which is the fourth time on this arc
+that a reviewed-but-unexecuted seam was wrong:
+
+- **The refusal reached no surface** — it returned an error instead of emitting a terminal, so the
+  Run failed with the `error` field NULL and only a warn-level diagnostic line. **Fixed, and for
+  all four reach axes**: the three ADR-0156 siblings (`validateTransports`, its credential axis,
+  `refuseTransportAndDeclaredType`) had it too. Booked as a follow-up first, then done once the
+  plugin port's OWN conformance suite turned out to grade a missing terminal as a `SeverityError`
+  — "the core folds a stream that never terminated to FAILED; the Run fails with no stated cause"
+  (`sdk/mockstratt/conformance.go`). That makes it a conformance violation to repair rather than
+  ADR-0156's design to revisit. One table-driven test now covers all four, since the defect was
+  exactly that three behaved one way and one another.
+- **The refusal named a UUID.** `observedName(e)` falls back to the Entity ID when a host has no
+  `*.name` label, so the message read `target d56e01a6-…`. Now prints the address beside it.
+- **`GET /api/v1/runs?workflowRunId=` did not filter** — and the cause is sharper than a broken
+  filter: **the parameter was never in the OpenAPI spec**, so an unknown query param was silently
+  dropped and the route returned every Run in the estate. A caller got a plausible answer to a
+  question it did not ask. The demo's new assertion read a different Workflow's error; the
+  pre-existing vacuous-run assertion had the same bug and passed only because its Run happened to
+  be the only failed one at that instant. **Fixed** (OpenAPI-first, §3): `workflowRunId` is a
+  declared parameter delegating to `Store.ListRunsForWorkflowRun` — which already existed and which
+  `GetWorkflowRun` already used, so only the route was missing. Pinned by a store test proving
+  ISOLATION across two WorkflowRuns (the prior assertion used one, so a missing `WHERE` returned an
+  identical answer) and falsified by removing the clause; the demo now asserts the server-side
+  filter directly.
+
+**Three of the ADR's own predictions were wrong and are corrected in it.** The per-host rendering
+cost does not exist (ssh is the only declared type that can coexist with an observed transport, and
+it authors no group var, so a mixed View works untouched); it is not a compile-time failure (targets
+come from a View resolved at launch); and the migration was ~3× the stated size — **9 Steps across 8
+estate files, five of which carried no `connection` block at all** and so were invisible to a grep
+for `connection:`, plus 17 test functions in `plugins/ansible`. `demos/region-to-cert` needed
+nothing; its pods observe `kubectl`.
+
+**A drift this surfaced rather than caused, and it is still open.**
+`contracts/facets/mgmt.transport.schema.json` says "awsec2 observes `aws_ssm` or `ssh`". **Neither
+has a writer** — awsec2 deliberately writes no transport, and `aws_ssm` waits on the SSM client
+booked above. So no shipped provider emits an observed `ssh` transport at all, which is exactly why
+`ssh` is a DECLARED value in practice. The schema description should be corrected to describe what
+is written; not done here, because a Facet schema edit is a pinned-hash change and deserves its own
+change rather than a ride-along.
 
 ### Open follow-ups from the `fix/seam-continuity-and-fidelity` branch (2026-08-01)
 

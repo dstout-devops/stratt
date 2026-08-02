@@ -373,13 +373,39 @@ func Run(ctx context.Context, w io.Writer, dir string, req Request, run commandR
 	// transport needs. One pass over the whole set rather than per-target lazily — a Run that
 	// converges three hosts and then dies on the fourth's missing collection has already
 	// changed three machines.
+	// emitFatal, not a bare `return`, on all three of these too — see the ADR-0158 note below for
+	// what a returned error actually does to a Run. These are ADR-0156's checks and the change is
+	// NOT a redesign of them: the plugin port's own conformance suite grades a stream with no
+	// terminal TaskEvent as a SeverityError ("the core folds a stream that never terminated to
+	// FAILED; the Run fails with no stated cause" — sdk/mockstratt/conformance.go), so returning
+	// here was a conformance VIOLATION rather than a second valid style. Confirmed live: a refused
+	// Run recorded a null `error` and only a warn diagnostic.
 	if terr := validateTransports(req.Targets, p.Connection, osReadFile, osLookPath); terr != nil {
-		return terr
+		return emitFatal(w, terr.Error())
 	}
 	// D5: a Step-declared connection.type and an observed transport are refused TOGETHER,
 	// never resolved. Two homes for one fact is the precedence §2.4 refuses.
 	if terr := refuseTransportAndDeclaredType(p.Connection, req.Targets); terr != nil {
-		return terr
+		return emitFatal(w, terr.Error())
+	}
+	// ADR-0158 D1/D3: a target NOTHING observed and NOTHING declared has an unknown reach
+	// method, and it is refused here rather than rendered as ssh. LAST of the four axes on
+	// purpose — the three above are a defect in the image, in the coordinates, or in a brokered
+	// credential, and this one is the estate not having said anything at all, which is the least
+	// specific thing to report when more than one applies.
+	//
+	// emitFatal, NOT a bare `return terr`, and the difference is the whole §1.8 point. FOUND BY
+	// RUNNING IT: the first live refusal worked and was nearly unreadable. A returned error exits
+	// the process, so the Run failed carrying a `diagnostic-output` warn line and NO
+	// `task-terminal` event — leaving the Run's own `error` field NULL. An operator opening the
+	// failed Run saw an empty cause. A terminal fatal is what the vacuous-run guard emits, and it
+	// is what puts the reason where every surface reads it (UI, /api/v1, MCP).
+	//
+	// The three checks ABOVE had the same defect and are fixed with it — see their note. It was
+	// booked as a follow-up first and then done here once the port's own conformance rule turned
+	// out to name it an error, which makes it a violation to repair rather than a design to revisit.
+	if terr := requireReachMethod(req.Targets, p.Connection); terr != nil {
+		return emitFatal(w, terr.Error())
 	}
 	connVars, cerr := connectionVars(p.Connection, chain, filepath.Join(dir, "known_hosts"), hasLocalTarget(req.Targets), osReadDirNames, osReadFile, stageKeyIn(dir))
 	if cerr != nil {

@@ -3,7 +3,6 @@ package ansible
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -41,7 +40,7 @@ func TestShim_MountedPlaybook(t *testing.T) {
 		"roles/common/tasks/x.yml": "- debug: {msg: hi}\n",
 	})
 	req := Request{
-		Params:  json.RawMessage(`{"playbook":"site.yml","extraVars":{"k":"v"}}`),
+		Params:  withDeclaredSSH(t, `{"playbook":"site.yml","extraVars":{"k":"v"}}`),
 		Targets: []Target{{Name: "web-1"}},
 	}
 	run := &captureRunner{rc: 0}
@@ -103,7 +102,7 @@ func TestShim_MountedPlaybookRefusals(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
 			mountProject(t, dir, map[string]string{"site.yml": "- hosts: all\n"})
-			req := Request{Params: json.RawMessage(tc.params), Targets: []Target{{Name: "h"}}}
+			req := Request{Params: withDeclaredSSH(t, tc.params), Targets: []Target{{Name: "h"}}}
 			var buf bytes.Buffer
 			run := &captureRunner{rc: 0}
 			if err := Run(context.Background(), &buf, dir, req, run, noClone(t)); err != nil {
@@ -127,7 +126,7 @@ func TestShim_InlinePlayStillWorksBesideAMount(t *testing.T) {
 	dir := t.TempDir()
 	mountProject(t, dir, map[string]string{"site.yml": "- hosts: all\n"})
 	req := Request{
-		Params:  json.RawMessage(`{"play":"- hosts: nothing\n  tasks: []\n"}`),
+		Params:  withDeclaredSSH(t, `{"play":"- hosts: nothing\n  tasks: []\n"}`),
 		Targets: []Target{{Name: "h"}},
 	}
 	run := &captureRunner{rc: 0}

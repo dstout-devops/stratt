@@ -5,13 +5,15 @@
 # connectors and credential-refs are CaC-only, §2.2/2.3, never `stratt apply`).
 #
 # It launches the gated app-install-with-cert Workflow, approves the platform-admins gate as the
-# dev-header bootstrap-admin Principal, waits for convergence, and then asserts THREE things that
-# ADR-0117 made true — each of which would have failed silently before it:
+# dev-header bootstrap-admin Principal, waits for convergence, and then asserts FOUR things — each
+# of which would have failed silently before the decision that made it true:
 #
 #   1. The app really serves TLS on the node, on a certificate minted by community.crypto from
 #      the EE this Step's Actuator declares (D3/D3a) — read back off the wire, not off a file.
 #   2. The Run reported its observed app.config back into the graph, under a bounded grant (MF3).
-#   3. A play that matches no host FAILS instead of reporting green (D5, follow-up h).
+#   3. A play that matches no host FAILS instead of reporting green (ADR-0117 D5, follow-up h).
+#   4. A Step declaring no reach method for a host nothing observed is REFUSED before ansible is
+#      spawned, and the refusal names the target and both remedies (ADR-0158 D1/D3).
 #
 # `task demo:app-cert:run` stands the floor up (kind + strattd + the declared plugin + the crypto
 # EE + the managed node + this estate) before invoking this script. Needs curl + jq + kubectl.
@@ -27,6 +29,7 @@ NS="${STRATT_NS:-stratt}"
 PRINCIPAL="${STRATT_PRINCIPAL:-bootstrap-admin}"
 WORKFLOW="app-install-with-cert"
 GUARD_WORKFLOW="vacuous-run-guard"
+REACH_GUARD_WORKFLOW="unreached-target-guard"
 VIEW="app-nodes"
 ACTUATOR="ansible-crypto"
 NODE_DEPLOY="app-node"
@@ -225,7 +228,10 @@ for _ in $(seq 1 90); do
     sleep 2
 done
 [ "$guard_status" = "failed" ] || { echo "FAIL: the guard Run never reached a verdict (last=${guard_status:-none})"; exit 1; }
-cause="$(api GET "/runs?workflowRunId=${guard_id}" 2>/dev/null | jq -r '.[]? | select(.status=="failed") | .error // empty' | head -1)"
+# Same client-side filter as the reach guard below, and for the same measured reason: the server
+# ignores workflowRunId. This assertion passed until now only because it ran while its own Run was
+# the ONLY failed one in the estate — luck of ordering, not a filter.
+cause="$(api GET "/runs?workflowRunId=${guard_id}" 2>/dev/null | jq -r --arg r "$guard_id" '.[]? | select(.workflowRunId==$r) | select(.status=="failed") | .error // empty' | head -1)"
 echo "  guard Run failed as designed"
 echo "  cause: ${cause:-(none recorded)}"
 # §1.8: failing is half the requirement — the failure must NAME the cause, or an operator is left
@@ -234,6 +240,61 @@ case "$cause" in
     *"no host"*|*"matched"*|*"actuated nothing"*|*"no target"*) : ;;
     *) echo "FAIL: the guard failed without naming why (§1.8): '${cause}'"; exit 1 ;;
 esac
+
+# ── Assertion 5: a target whose reach method NOBODY stated is REFUSED (ADR-0158 D1/D3) ───────────
+# The behaviour that used to be a silent ssh attempt. An absent `mgmt.transport` meant "ssh" to the
+# shim, but absence is overloaded across providers — awsec2 withholds the Facet deliberately (ssh is
+# right) while a vSphere guest whose Tools stop LOSES its transport and keeps a cached address (ssh
+# is wrong). The estate must say which, or the Run is refused.
+#
+# Every OTHER Step in this demo declares `connection.type: ssh`; unreached-target-guard declares no
+# connection at all, which is the pre-migration shape and the one a grep for `connection:` misses.
+echo "demo: assert a target with no observed transport and no declared type is REFUSED (the reach guard)"
+reach_id=$(api POST "/workflows/${REACH_GUARD_WORKFLOW}/runs" | jq -r '.id')
+[ -n "$reach_id" ] && [ "$reach_id" != "null" ] || { echo "FAIL: no WorkflowRun id for the reach guard"; exit 1; }
+reach_status=""
+for _ in $(seq 1 90); do
+    reach_status=$(api GET "/workflow-runs/${reach_id}" | jq -r '.workflowRun.status // .status // empty')
+    case "$reach_status" in
+        failed) break ;;
+        succeeded) echo "FAIL: a Run against a host whose reach method nobody stated SUCCEEDED — it connected by guessing ssh, which is the ADR-0158 D1 regression"; exit 1 ;;
+    esac
+    sleep 2
+done
+[ "$reach_status" = "failed" ] || { echo "FAIL: the reach guard never reached a verdict (last=${reach_status:-none})"; exit 1; }
+# CLIENT-SIDE FILTER, and it is not belt-and-braces: `/runs?workflowRunId=` DOES NOT FILTER —
+# verified live, the query returns every Run in the estate whichever id is passed. The gate lookup
+# above already selects client-side for the same reason. Without this, `head -1` picks whichever
+# failed Run sorts first and this assertion silently reads the vacuous guard's error instead of
+# its own — which is exactly what happened on the first run of this check.
+reach_cause="$(api GET "/runs?workflowRunId=${reach_id}" 2>/dev/null | jq -r --arg r "$reach_id" '.[]? | select(.workflowRunId==$r) | select(.status=="failed") | .error // empty' | head -1)"
+echo "  reach guard Run failed as designed"
+# THE SERVER-SIDE FILTER, asserted directly. It did not exist: `workflowRunId` was never in the
+# OpenAPI spec, so the query param was silently dropped and this route returned every Run in the
+# estate. That is worse than an error — the caller gets a plausible answer to a question it did
+# not ask. Now that it filters, prove it here rather than only defending against it below.
+scoped="$(api GET "/runs?workflowRunId=${reach_id}" 2>/dev/null | jq -r --arg r "$reach_id" '[.[]? | select(.workflowRunId != $r)] | length')"
+[ "${scoped:-x}" = "0" ] || {
+    echo "FAIL: GET /runs?workflowRunId= returned ${scoped} Run(s) belonging to another WorkflowRun — the filter is being ignored again"; exit 1; }
+echo "  …and GET /runs?workflowRunId= returned only this WorkflowRun's Steps"
+echo "  cause: ${reach_cause:-(none recorded)}"
+# §1.8, and D3 states it explicitly: the refusal must NAME THE TARGET and BOTH remedies. Which one
+# is right is not knowable from the control node — either the estate should declare ssh, or a
+# provider should have observed the transport — so a message offering only one sends half the
+# operators to the wrong place. Asserted separately from the failure itself.
+case "$reach_cause" in
+    *"app-node"*) : ;;
+    *) echo "FAIL: the refusal does not name the target (§1.8): '${reach_cause}'"; exit 1 ;;
+esac
+case "$reach_cause" in
+    *"connection.type: ssh"*) : ;;
+    *) echo "FAIL: the refusal does not offer remedy 1, declaring the type: '${reach_cause}'"; exit 1 ;;
+esac
+case "$reach_cause" in
+    *"mgmt.transport"*) : ;;
+    *) echo "FAIL: the refusal does not offer remedy 2, fixing the observation: '${reach_cause}'"; exit 1 ;;
+esac
+echo "  …and it named the target and BOTH remedies"
 
 echo
 echo "demo: DONE — a gated Workflow installed an app with a certificate on a real host (fidelity: ${fidelity})."
