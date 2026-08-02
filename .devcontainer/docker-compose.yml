@@ -12,7 +12,13 @@ services:
     environment:
       PYTHONUNBUFFERED: '1'
       UV_SYSTEM_CERTS: 'true'
-      UV_PROJECT: /opt/venv
+      # UV_PROJECT is deliberately NOT set. It means "discover a project in this directory"
+      # (`uv run --help`: `--project <PROJECT>`), not "put the venv here" — that is
+      # UV_PROJECT_ENVIRONMENT. It pointed at /opt/venv, which is not a project, does not
+      # exist, and is not writable by the `vscode` user anyway (/opt is root-owned), so every
+      # `uvx`/`uv run` in the Taskfile died with `Project directory /opt/venv does not exist`
+      # and took `task fmt:check` — and therefore `task ci` — with it. uv's defaults are
+      # correct here: the repo root's pyproject.toml is the project and `.venv/` is gitignored.
       NODE_OPTIONS: --dns-result-order=ipv4first
     volumes:
       - ..:/workspaces/${WORKSPACE_NAME:-workspace}:cached
