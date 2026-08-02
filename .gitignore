@@ -20,6 +20,14 @@ __pycache__/
 *.py[cod]
 .venv/
 venv/
+# uv.lock is NOT committed, and that is a decision rather than an oversight. pyproject.toml
+# expresses this repo's Python tooling as FLOORS (`ruff>=0.14.0`, …) that the quarterly evergreen
+# train raises (§1.7); a lockfile would pin exact versions beside those floors — a second home for
+# one fact (§2.4), and one that silently freezes what the floors exist to let float. The versions
+# that must be exact are pinned AT THE CALL SITE in Taskfile.yml (`uvx ruff@{{.RUFF_VER}}`), which
+# is also where the EE content gate hash-verifies them. It reappears whenever `uv run` is invoked,
+# so it is ignored rather than deleted.
+uv.lock
 .mypy_cache/
 .ruff_cache/
 .pytest_cache/

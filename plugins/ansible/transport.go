@@ -339,7 +339,7 @@ func requireReachMethod(targets []Target, c *connectionParams) error {
 			// This exemption is why the check reads the ADDRESS as well: the control node has no
 			// transport to observe and needs no Step to speak for it.
 		default:
-			unreached = append(unreached, t.Name)
+			unreached = append(unreached, describeTarget(t))
 		}
 	}
 	if len(unreached) == 0 {
@@ -355,6 +355,24 @@ func requireReachMethod(targets []Target, c *connectionParams) error {
 		"written mgmt.transport then its absence is the missing thing rather than the declaration "+
 		"(a vSphere guest whose VMware Tools stopped loses its transport while keeping a CACHED "+
 		"address, so it looks reachable and is not)", describeUnreached(unreached))
+}
+
+// describeTarget names one target the way an OPERATOR can act on, which is not always the way core
+// names it.
+//
+// FOUND BY RUNNING IT. `Target.Name` is core's `observedName(e)`, which falls back to the Entity's
+// UUID when the host carries no `*.name` label — and the app-cert demo's node carries none, so the
+// live refusal read `target d56e01a6-7ad6-4cfb-b9a9-04362655a10e`. That is unambiguous and useless:
+// nobody has an estate they can search by that. The ADDRESS is the string an operator recognises,
+// types into ssh, and finds in a DNS zone, so it is appended whenever it adds anything.
+//
+// Not a substitute — both are printed. The UUID is what the API, the audit stream and every descent
+// link key on (§1.8), so dropping it would trade one unsearchable diagnosis for another.
+func describeTarget(t Target) string {
+	if t.Address == "" || t.Address == t.Name {
+		return t.Name
+	}
+	return t.Name + " (" + t.Address + ")"
 }
 
 // describeUnreached names the refused targets in a BOUNDED way. A View of two hundred hosts must not

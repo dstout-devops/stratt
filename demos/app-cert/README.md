@@ -52,6 +52,15 @@ Ansible half of that, taken seriously.
   pattern matches nothing — it prints "skipping: no hosts matched" and calls that success. A
   fleet-wide change that silently reached zero machines must never look like one that worked. The
   [`vacuous-run-guard`](estate/workflows/vacuous-run-guard.yaml) Workflow proves it still does not.
+- **A host nobody stated how to reach is refused, not guessed at.** An absent `mgmt.transport` used
+  to render as ssh. But absence means two different things depending on which provider declined to
+  write it: `awsec2` withholds it deliberately (a key being *authorized* is not sshd *listening*), so
+  ssh is right — while a vSphere guest whose Tools stop **loses** its transport and keeps a cached
+  address, so ssh is wrong. The estate must say which. Every Step here declares
+  `connection.type: ssh`; the [`unreached-target-guard`](estate/workflows/unreached-target-guard.yaml)
+  Workflow declares nothing and is **refused before ansible is spawned**, naming the target and both
+  remedies (ADR-0158). What it replaces is an `unreachable` error that blamed the guest for a
+  decision the control node made.
 - **The descent (charter §1.8).** Walk Intent → Workflow → **Run** → task event in the UI, CLI,
   `/api/v1`, or MCP — the same descent, four equally-authorized surfaces.
 
@@ -69,12 +78,14 @@ That will (from nothing): bring up kind + a minimal Stratt whose desired state I
 **build the certificate-capable execution environment** (installing and verifying the pinned
 collection at build time), stand up the managed node with a throwaway keypair, wait for the host to
 be projected into the graph, launch the `app-install-with-cert` Workflow, **auto-approve** its gate as
-the dev bootstrap-admin, wait for convergence, and then assert three things:
+the dev bootstrap-admin, wait for convergence, and then assert four things:
 
 1. the app answers a **TLS handshake** on the certificate the play issued (read off the wire, not off
    the disk — a file proves a task ran, a handshake proves the app was installed on it);
 2. the Run **projected `app.config.port` into the graph** under its bounded grant;
-3. a play that matches no host **fails, and names why**.
+3. a play that matches no host **fails, and names why**;
+4. a Step that declares **no reach method** for a host nothing observed is **refused** — and the
+   refusal names the target and both ways to fix it.
 
 It prints the declared **fidelity** up front so the claim cannot drift from the code.
 
@@ -128,13 +139,18 @@ The turnkey runner does these for you; do them yourself to _feel_ the descent.
    TLS listener. And `GET /api/v1/views/app-nodes/entities` now carries the observed `app.config`.
 8. **Prove the guard.** Launch `vacuous-run-guard`. It touches nothing and **fails**, and the failure
    says why. Compare that to what a tool exiting 0 would have told you.
+9. **Prove the second guard.** Launch `unreached-target-guard` — the same View, but the Step declares
+   no `connection` at all. It is **refused before `ansible-runner` is spawned**, and the message names
+   the target and both remedies. Compare that to `unreachable: Failed to create temporary directory`,
+   which is what a guessed ssh connection would have told you about a host that was never the problem.
 
 ## What you just learned
 
 You drove a real configuration-management Run end to end: **declare → gate → connect → escalate →
 converge → observe**, with the tool's content pinned into a reproducible image, the Step's environment
 declared in Git, credentials that never touch the control plane, write-back bounded by declaration,
-and a no-op refused rather than reported green.
+a no-op refused rather than reported green, and a host whose reach method nobody stated refused
+rather than reached by a guess.
 
 If you have run AWX or Ansible Automation Platform, this is the same job you already know how to
 write — with the parts that usually live in someone's head (which collections, which image, who may

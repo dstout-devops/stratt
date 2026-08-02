@@ -386,8 +386,20 @@ func Run(ctx context.Context, w io.Writer, dir string, req Request, run commandR
 	// purpose — the three above are a defect in the image, in the coordinates, or in a brokered
 	// credential, and this one is the estate not having said anything at all, which is the least
 	// specific thing to report when more than one applies.
+	//
+	// emitFatal, NOT a bare `return terr`, and the difference is the whole §1.8 point. FOUND BY
+	// RUNNING IT: the first live refusal worked and was nearly unreadable. A returned error exits
+	// the process, so the Run failed carrying a `diagnostic-output` warn line and NO
+	// `task-terminal` event — leaving the Run's own `error` field NULL. An operator opening the
+	// failed Run saw an empty cause. A terminal fatal is what the vacuous-run guard emits, and it
+	// is what puts the reason where every surface reads it (UI, /api/v1, MCP).
+	//
+	// The three checks ABOVE still `return terr` and therefore still have this defect. Left alone
+	// deliberately: they are ADR-0156's, shipped and Accepted, and quietly changing their failure
+	// shape from inside this ADR's branch would be the kind of ride-along change that makes a diff
+	// unreviewable. Booked in the roadmap with this run as the evidence.
 	if terr := requireReachMethod(req.Targets, p.Connection); terr != nil {
-		return terr
+		return emitFatal(w, terr.Error())
 	}
 	connVars, cerr := connectionVars(p.Connection, chain, filepath.Join(dir, "known_hosts"), hasLocalTarget(req.Targets), osReadDirNames, osReadFile, stageKeyIn(dir))
 	if cerr != nil {

@@ -887,6 +887,54 @@ meaningful per-substrate); or `mgmt.transport` gains an explicit `ssh` value tha
 absence always means unknown; or the shim refuses an unknown transport and the estate opts into ssh.
 The second is closest to §1.2 — an observed fact stated rather than inferred from silence.
 
+**DECIDED and PART-LANDED (2026-08-02, [ADR-0158](adr/0158-an-unobserved-transport-is-not-ssh.md)).**
+The third shape won, and the second was refused outright: a provider writing "unknown" is a provider
+ASSERTING something, and the Facet's whole contract is that it carries what was OBSERVED (D4).
+Absence already expresses "nothing observed" precisely — the defect was the shim reading it as an
+answer. So the shim now REFUSES a target with no observed transport and no declared type
+(`requireReachMethod`), naming the target and both remedies, before `ansible-runner` is spawned.
+
+🟢 **ACCEPTED and LIVE-PROVEN** (`task demo:app-cert:run` EXIT=0 on kind). Falsified two ways —
+disabling the check fails 5 tests, deleting the CALL SITE fails exactly one, the end-to-end test
+written for precisely that hole. `task ci` EXIT=0. The demo carries a second guard Workflow,
+`unreached-target-guard`, whose Run must be refused with a message naming the target and both
+remedies — so it is in E2E-1 and cannot rot back.
+
+**Running it found three defects the unit tests could not**, which is the fourth time on this arc
+that a reviewed-but-unexecuted seam was wrong:
+
+- **The refusal reached no surface** — it returned an error instead of emitting a terminal, so the
+  Run failed with the `error` field NULL and only a warn-level diagnostic line. Fixed for this
+  check. ⚠️ **STILL OPEN for the three ADR-0156 sibling checks** (`validateTransports`, its
+  credential axis, `refuseTransportAndDeclaredType`): they all `return terr`, so every one of them
+  fails a Run whose recorded cause is empty. The conformance suite already records the symptom
+  (`SawTerminal:false`). Not changed from inside ADR-0158's branch — it is ADR-0156's shipped
+  behaviour and deserves its own change, not a ride-along.
+- **The refusal named a UUID.** `observedName(e)` falls back to the Entity ID when a host has no
+  `*.name` label, so the message read `target d56e01a6-…`. Now prints the address beside it.
+- ⚠️ **`/api/v1/runs?workflowRunId=` DOES NOT FILTER** — verified live: it returns every Run in the
+  estate whichever id is passed. The demo's new assertion silently read a different Workflow's
+  error. **The pre-existing vacuous-run assertion had the same bug** and passed only because its Run
+  happened to be the only failed one at that instant. Both now filter client-side, so the demos are
+  correct — but the API is still wrong, and anything else querying that route is reading unfiltered
+  results. Nothing else in-repo does today. **Open.**
+
+**Three of the ADR's own predictions were wrong and are corrected in it.** The per-host rendering
+cost does not exist (ssh is the only declared type that can coexist with an observed transport, and
+it authors no group var, so a mixed View works untouched); it is not a compile-time failure (targets
+come from a View resolved at launch); and the migration was ~3× the stated size — **9 Steps across 8
+estate files, five of which carried no `connection` block at all** and so were invisible to a grep
+for `connection:`, plus 17 test functions in `plugins/ansible`. `demos/region-to-cert` needed
+nothing; its pods observe `kubectl`.
+
+**A drift this surfaced rather than caused, and it is still open.**
+`contracts/facets/mgmt.transport.schema.json` says "awsec2 observes `aws_ssm` or `ssh`". **Neither
+has a writer** — awsec2 deliberately writes no transport, and `aws_ssm` waits on the SSM client
+booked above. So no shipped provider emits an observed `ssh` transport at all, which is exactly why
+`ssh` is a DECLARED value in practice. The schema description should be corrected to describe what
+is written; not done here, because a Facet schema edit is a pinned-hash change and deserves its own
+change rather than a ride-along.
+
 ### Open follow-ups from the `fix/seam-continuity-and-fidelity` branch (2026-08-01)
 
 Everything this branch deliberately did NOT finish, in one place, so none of it survives only in a

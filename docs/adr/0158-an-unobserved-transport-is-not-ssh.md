@@ -1,6 +1,7 @@
 # ADR 0158 — An unobserved transport is not ssh
 
-- **Status:** **Proposed** (2026-08-02, steward). Charter review by hand — this session's rules bar
+- **Status:** **Accepted** (2026-08-02, steward) — **live-proven on kind**, see Verification. Landed
+  Proposed the same day; promoted only after `demo:app-cert` asserted the refusal end to end. Charter review by hand — this session's rules bar
   the subagent; §1.2/§1.8/§2.4/§9 answered inline. **No new runtime dependency.**
 - **Date:** 2026-08-02
 - **Deciders:** steward
@@ -165,6 +166,39 @@ nothing declared a type; exempts a `local` target, which states its reach method
 
 `task ci` EXIT=0 with the estate migration applied.
 
-**Still owed, and the ADR stays Proposed until they land:** both live items. A refusal proven in a
-unit test is a refusal proven against a fixture, and this arc's whole lesson is that the fixture is
-not the estate.
+### Live-proven (2026-08-02) — and running it found two defects the fixtures could not
+
+`demos/app-cert` carries a second guard Workflow,
+[`unreached-target-guard`](../../demos/app-cert/estate/workflows/unreached-target-guard.yaml): the same
+View, a Step declaring **no `connection` block at all** — the pre-migration shape. The demo asserts
+its Run is refused AND that the message names the target and both remedies, each checked separately.
+`task demo:app-cert:run` EXIT=0 on kind, full scenario green, and the recorded cause reads:
+
+```
+target 4b6e533b-885e-4f23-bccc-62152e28348c (app-node.stratt.svc.cluster.local): no observed
+mgmt.transport and no declared connection.type, so the reach method is UNKNOWN … (1) DECLARE IT …
+(2) FIX THE OBSERVATION …
+```
+
+The guard is now part of E2E-1, so this cannot rot back.
+
+**The first live run passed the unit tests and was still wrong twice.** Both are §1.8 failures that
+no fixture could have surfaced, and both are fixed here:
+
+1. **The refusal reached no surface.** It `return`ed an error, which exits the process — so the Run
+   failed carrying a `diagnostic-output` warn line, **no `task-terminal` event, and its own `error`
+   field NULL**. An operator opening the failed Run saw an empty cause. It now emits a terminal
+   fatal, like every other refusal in the shim. ⚠️ **The three sibling checks from ADR-0156
+   (`validateTransports`, its credential axis, and `refuseTransportAndDeclaredType`) still return
+   bare errors and still have this defect** — deliberately not changed from inside this ADR's
+   branch; booked on the roadmap with this run as evidence.
+2. **It named a UUID.** `Target.Name` is core's `observedName(e)`, which falls back to the Entity ID
+   when a host carries no `*.name` label — and this demo's node carries none, so the refusal read
+   `target d56e01a6-…`. Unambiguous and unusable. It now prints the **address** beside it, which is
+   what an operator recognises, while keeping the id every descent link keys on.
+
+**A third defect, in the demo harness rather than the shim:** `/api/v1/runs?workflowRunId=` **does
+not filter** — verified live, it returns every Run in the estate whichever id is passed. The new
+assertion read the *vacuous* guard's error and failed on it. The pre-existing vacuous assertion had
+the same bug and passed only because its Run was the sole failed one at that moment. Both now filter
+client-side; the API defect is booked, not fixed here.

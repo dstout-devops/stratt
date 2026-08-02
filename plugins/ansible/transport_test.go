@@ -334,19 +334,56 @@ func TestShim_UnobservedTargetRefusesBeforeAnsibleIsSpawned(t *testing.T) {
 	}
 	run := &captureRunner{rc: 0}
 	var buf bytes.Buffer
-	err := Run(context.Background(), &buf, t.TempDir(), req, run, noClone(t))
-	if err == nil {
-		t.Fatal("the shim must REFUSE this Run, not merely be capable of refusing it — a target " +
-			"with no observed transport and no declared type reached ansible and came back " +
-			"`unreachable`, which names the guest for a control-node decision (§1.8)")
+	if err := Run(context.Background(), &buf, t.TempDir(), req, run, noClone(t)); err != nil {
+		t.Fatalf("the refusal is an emitted TERMINAL, not a returned error: %v", err)
 	}
-	if !strings.Contains(err.Error(), "ec2-01") {
-		t.Errorf("the refusal must name the target: %v", err)
+	// A TERMINAL EVENT, and this assertion is the one the live run earned. Returning a bare error
+	// exits the process, so the Run failed with a `diagnostic-output` warn line, NO `task-terminal`,
+	// and its own `error` field NULL — an operator opening the failed Run saw an empty cause, which
+	// is §1.8's exact prohibition. Verified against a real cluster before it was fixed.
+	if !bytes.Contains(buf.Bytes(), []byte(`"terminal":true`)) {
+		t.Fatalf("a refused Run must emit a terminal fatal, or its cause reaches no surface:\n%s", buf.String())
 	}
 	// BEFORE, not during: a refusal that arrives after ansible has already connected somewhere is
 	// the failure D3 exists to prevent, not a slower version of the fix.
 	if len(run.args) != 0 {
 		t.Errorf("ansible-runner must never be spawned for a refused Run, args=%v", run.args)
+	}
+	// The target AND both remedies, in the message that actually reaches the operator.
+	for _, want := range []string{"ec2-01", "connection.type: ssh", "mgmt.transport"} {
+		if !strings.Contains(buf.String(), want) {
+			t.Errorf("the terminal must carry %q: %s", want, buf.String())
+		}
+	}
+}
+
+// The refusal must name the target the way an OPERATOR can act on it. core's `observedName` falls
+// back to the Entity UUID when a host carries no `*.name` label, and the app-cert demo's node
+// carries none — so the first live refusal read `target d56e01a6-…`, which is unambiguous and
+// unusable. The address is what someone recognises; both are printed.
+func TestTheRefusalNamesTheAddressAndNotOnlyAUUID(t *testing.T) {
+	err := requireReachMethod([]Target{
+		{Name: "d56e01a6-7ad6-4cfb-b9a9-04362655a10e", Address: "app-node.stratt.svc.cluster.local"},
+	}, nil)
+	if err == nil {
+		t.Fatal("still a refusal")
+	}
+	for _, want := range []string{"d56e01a6-7ad6-4cfb-b9a9-04362655a10e", "app-node.stratt.svc.cluster.local"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the diagnosis must carry %q — the UUID is what every descent link keys on, "+
+				"the address is what an operator searches for, and neither substitutes: %v", want, err)
+		}
+	}
+	// No parenthetical when the address adds nothing, so an estate whose targets ARE named does not
+	// get `web-01 (web-01)`.
+	same := requireReachMethod([]Target{{Name: "web-01", Address: "web-01"}}, nil)
+	if strings.Contains(same.Error(), "web-01 (web-01)") {
+		t.Errorf("an address identical to the name must not be repeated: %v", same)
+	}
+	// And a target with no address at all is named plainly, not as `h ()`.
+	none := requireReachMethod([]Target{{Name: "h"}}, nil)
+	if !strings.Contains(none.Error(), "target h:") {
+		t.Errorf("a target with no address is named plainly: %v", none)
 	}
 }
 
