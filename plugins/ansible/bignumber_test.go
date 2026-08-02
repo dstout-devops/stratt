@@ -148,7 +148,7 @@ func TestShim_UnparsedEventIsVisibleAndOwnsTheDiagnosis(t *testing.T) {
 		t.Fatal("fixture must not parse, or the test proves nothing")
 	}
 	req := Request{
-		Params:  json.RawMessage(`{"play":"- hosts: all"}`),
+		Params:  withDeclaredSSH(t, `{"play":"- hosts: all"}`),
 		Targets: []Target{{Name: "web-01", Address: "10.0.0.1"}},
 	}
 	out := runShim(t, req, fakeRunner{rc: 0, lines: []string{broken}})

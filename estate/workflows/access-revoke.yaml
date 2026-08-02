@@ -38,6 +38,9 @@ steps:
     viewName: secure-hosts
     actuator: ansible-access-control
     params:
+      # ADR-0158 D2 — the reach method, declared: nothing observes these hosts.
+      connection:
+        type: ssh
       extraVars:
         access_subject: "{{.launch.subject}}"
         access_kind: "{{.launch.kind}}"

@@ -381,6 +381,14 @@ func Run(ctx context.Context, w io.Writer, dir string, req Request, run commandR
 	if terr := refuseTransportAndDeclaredType(p.Connection, req.Targets); terr != nil {
 		return terr
 	}
+	// ADR-0158 D1/D3: a target NOTHING observed and NOTHING declared has an unknown reach
+	// method, and it is refused here rather than rendered as ssh. LAST of the four axes on
+	// purpose — the three above are a defect in the image, in the coordinates, or in a brokered
+	// credential, and this one is the estate not having said anything at all, which is the least
+	// specific thing to report when more than one applies.
+	if terr := requireReachMethod(req.Targets, p.Connection); terr != nil {
+		return terr
+	}
 	connVars, cerr := connectionVars(p.Connection, chain, filepath.Join(dir, "known_hosts"), hasLocalTarget(req.Targets), osReadDirNames, osReadFile, stageKeyIn(dir))
 	if cerr != nil {
 		return emitFatal(w, cerr.Error())

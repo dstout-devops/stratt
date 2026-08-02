@@ -91,14 +91,48 @@ absence as an answer.
 ## Consequences
 
 - **Every estate converging EC2 or hand-declared hosts must declare `connection.type: ssh`.** A
-  migration, and the compile-time failure names the Step, so it cannot be discovered at run time.
+  migration, and the refusal names the Step's target rather than surfacing as `unreachable`.
 - **`demo:ec2-only` is unaffected** — it converges nothing. `demos/app-cert` and the reference
   estate's declared nodes need the line.
 - **The vcenter stale-address case becomes diagnosable**: tools stop, transport disappears, and the
   next converge refuses by name instead of silently trying ssh against a VM reached through vCenter.
-- **A cost worth stating:** a mixed View holding both observed and unobserved hosts now needs the
-  declared type for the unobserved half, and the declared type is a GROUP var (ADR-0156's own
-  argument). Rendering it per-host is required, and is a shim change rather than an estate one.
+
+### Corrected while implementing — three claims above were wrong
+
+Recorded rather than quietly fixed, because two of them were the reason this ADR looked expensive.
+
+1. **The per-host rendering cost does not exist.** The draft said a mixed View needs the declared
+   type for its unobserved half, that the declared type is a GROUP var, and that rendering it
+   per-host is therefore required — a shim change. It is not, and the reason is structural rather
+   than lucky: `ssh` is the ONLY declared type that can coexist with an observed transport, because
+   ADR-0156 D5 refuses every other one outright — and `connectionTypeVars` renders **nothing at all**
+   for ssh, since ansible's own default already is ssh. There is no `ansible_connection` group var
+   for a host var to fight with. The observed half keeps its per-host vars, the unobserved half falls
+   through to the default, and the two never meet. Pinned by
+   `TestMixedViewNeedsNoPerHostRenderingOfTheDeclaredType`, which fails if ssh ever starts authoring
+   a group var. **This ADR costs no shim rendering change.**
+2. **It is not a compile-time failure.** The draft claimed the migration "cannot be discovered at run
+   time" because the failure is at compile time. It cannot be: a Step's targets come from a View
+   resolved at LAUNCH, and `connection.type` is an ansible params field only the shim reads. D3 says
+   the right thing — the shim refuses before the play runs — and the consequence contradicted it.
+   What is true is the weaker, still-useful claim: the refusal happens before `ansible-runner` is
+   spawned, so nothing is reached and nothing is changed.
+3. **The migration is ~3× the size stated.** Not two demo Steps and "the reference estate's declared
+   nodes" but **9 Steps across 8 estate files** — and five of those Steps (`access-apply`,
+   `access-revoke`, `fileset-apply`, `fileset-revert`, `linux-onboard`) carried **no `connection`
+   block at all**, so they were invisible to a grep for `connection:` and are the shape this ADR
+   most affects. Plus **17 test functions** in `plugins/ansible`, every one of which relied on
+   empty-means-ssh. `demos/region-to-cert` needed nothing: its targets are kubecompute pods that
+   observe `kubectl`.
+
+### A drift this surfaced, not caused
+
+`contracts/facets/mgmt.transport.schema.json` describes itself as "awsec2 observes `aws_ssm` or
+`ssh`". **Neither is written by anything.** `plugins/awsec2/normalize.go` deliberately writes no
+transport at all (its own comment says why), and `aws_ssm` has no writer pending an SSM client. So
+**no shipped provider emits an observed `ssh` transport** — which is what makes `ssh` a DECLARED
+value in practice (D2) and is why the test fixtures migrated here declare it rather than observing
+it. The schema description should be corrected to describe what is written; booked, not done here.
 
 ## Verification
 
@@ -113,3 +147,24 @@ Not shippable on assertion. This ADR is **Proposed** and its implementation owes
 **No live proof is claimed here.** The last four ADRs on this arc each cost a real defect by shipping
 a seam that was reviewed and never executed — including ADR-0156 itself, which shipped a transport
 that could not authenticate. This one is a decision, not a landing.
+
+### Landed so far (2026-08-02) — the first item, and NOT the other two
+
+`requireReachMethod` in `plugins/ansible/transport.go`, called from `shim.go` as the fourth reach
+axis after the coordinate, image and credential checks. Refuses when nothing observed a transport and
+nothing declared a type; exempts a `local` target, which states its reach method through
+`mgmt.address`'s reserved value (ADR-0153 D6).
+
+**Falsified two ways, because the unit tests alone do not cover the wiring:**
+
+- Disable the collection arm → 5 tests fail, including the end-to-end one.
+- Delete the call in `shim.go` → **exactly one** test fails,
+  `TestShim_UnobservedTargetRefusesBeforeAnsibleIsSpawned`, which drives `Run` and asserts
+  `ansible-runner` was never spawned. Without it a shipped-but-uncalled check would have passed the
+  whole suite — the defect class this repo keeps rediscovering.
+
+`task ci` EXIT=0 with the estate migration applied.
+
+**Still owed, and the ADR stays Proposed until they land:** both live items. A refusal proven in a
+unit test is a refusal proven against a fixture, and this arc's whole lesson is that the fixture is
+not the estate.

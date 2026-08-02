@@ -82,6 +82,7 @@ steps:
     # The value leaves through the Actuator's pinned outputContract instead (outputs/csr).
     params:
       connection:
+        type: ssh # ADR-0158 D2 — a declared host, so nothing observes its transport.
         user: root
         credentialRef: web-machine
         hostKeyChecking: accept-new
@@ -126,6 +127,7 @@ steps:
     facetWriteScope: [fileset.content, cert.presented]
     params:
       connection:
+        type: ssh # ADR-0158 D2 — a declared host, so nothing observes its transport.
         user: root
         credentialRef: web-machine
         hostKeyChecking: accept-new

@@ -67,7 +67,7 @@ func TestContentSummary(t *testing.T) {
 // TestShim_EmitsContentEveryRun: the statement must be on the Run's event stream, not
 // merely available — otherwise it is not part of the descent at all.
 func TestShim_EmitsContentEveryRun(t *testing.T) {
-	req := Request{Targets: []Target{{Name: "web-01", Address: "10.0.0.1"}}}
+	req := Request{Params: withDeclaredSSH(t, ""), Targets: []Target{{Name: "web-01", Address: "10.0.0.1"}}}
 	out := runShim(t, req, fakeRunner{rc: 0, lines: []string{
 		`{"uuid":"1","counter":1,"event":"runner_on_ok","event_data":{"host":"web-01","res":{"changed":false}}}`,
 	}})

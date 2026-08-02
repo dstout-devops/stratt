@@ -41,6 +41,9 @@ steps:
     # alone, which is everything this project's content legitimately observes.
     actuator: ansible-fileset
     params:
+      # ADR-0158 D2 — the reach method, declared: nothing observes these hosts.
+      connection:
+        type: ssh
       extraVars:
         fileset_path: "{{.launch.path}}"
         fileset_src: "{{.launch.src}}"

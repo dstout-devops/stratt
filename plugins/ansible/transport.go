@@ -295,3 +295,81 @@ func refuseTransportAndDeclaredType(c *connectionParams, targets []Target) error
 	}
 	return nil
 }
+
+// ── D1/D3 · a target nobody observed and nobody declared is REFUSED ──────────────────────────────
+
+// requireReachMethod is ADR-0158 D1 and D3: a target with NO observed transport and NO declared
+// connection.type has an UNKNOWN reach method, and the Run is refused rather than rendered as ssh.
+//
+// WHY ABSENCE CANNOT MEAN SSH — it is overloaded across shipped providers, and both readings are
+// real today:
+//
+//   - `awsec2` withholds mgmt.transport DELIBERATELY and permanently: `KeyName` says a key is
+//     AUTHORIZED, not that sshd is LISTENING, and ADR-0142 D4 forbids computing a reach fact. So
+//     absence there means ssh, and ssh is correct.
+//   - `vcenter` gates mgmt.transport on `ToolsRunningStatus`, while mgmt.address comes from guest
+//     info vCenter CACHES. A VM whose tools stop keeps a stale address and LOSES its transport. So
+//     absence there means the observation went away, and ssh is wrong.
+//
+// One value, two meanings, decided by which provider declined to write it. Rendering ssh for both is
+// the shim asserting a fact about the host that no Syncer ever stated — the §1.2 line ADR-0142 D4
+// drew for reach COORDINATES, applied to the reach METHOD. It is also §2.4's anti-GPO axiom in
+// miniature: absence resolving to a default is precedence with nobody's name on it.
+//
+// REFUSE, DO NOT WARN. A warning on a converge that then attempts ssh anyway is strictly worse than
+// either alternative — it runs the wrong thing and reports it quietly. What it replaces is ansible's
+// own `unreachable`, which names the GUEST for a decision the control node made: the §1.8 failure
+// this arc has now paid for four separate times.
+func requireReachMethod(targets []Target, c *connectionParams) error {
+	if c != nil && c.Type != "" {
+		// SOMEBODY SAID, and which type they said does not matter here: `ssh` is D2's opt-in for a
+		// host nothing observes, and a network type is ADR-0153's declared case. Both are a stated
+		// intent, which is the whole property this check defends. A declared type that CONTRADICTS
+		// an observed transport is refused separately and by name (D5, above) — never resolved here.
+		return nil
+	}
+	var unreached []string
+	for _, t := range targets {
+		switch {
+		case t.TransportKind != "":
+			// Observed: a Syncer saw this host and said by what means.
+		case t.Address == connLocal:
+			// Declared — through mgmt.address's reserved value rather than either field above
+			// (ADR-0153 D6), and buildInventory renders its `ansible_connection=local` host var.
+			// This exemption is why the check reads the ADDRESS as well: the control node has no
+			// transport to observe and needs no Step to speak for it.
+		default:
+			unreached = append(unreached, t.Name)
+		}
+	}
+	if len(unreached) == 0 {
+		return nil
+	}
+	return fmt.Errorf("%s: no observed mgmt.transport and no declared connection.type, so the reach "+
+		"method is UNKNOWN — and rendering ssh for a host nobody observed would be this shim "+
+		"asserting a fact about it (ADR-0158 D1, §1.2). There are two remedies and which one is "+
+		"right depends on the host: (1) DECLARE IT — if these hosts are ssh-reachable, set "+
+		"params.connection.type: ssh on this Step, which is where a host nothing provisioned states "+
+		"how it is reached (an EC2 instance is permanently this case: KeyName means a key is "+
+		"authorized, not that sshd listens); or (2) FIX THE OBSERVATION — if a provider should have "+
+		"written mgmt.transport then its absence is the missing thing rather than the declaration "+
+		"(a vSphere guest whose VMware Tools stopped loses its transport while keeping a CACHED "+
+		"address, so it looks reachable and is not)", describeUnreached(unreached))
+}
+
+// describeUnreached names the refused targets in a BOUNDED way. A View of two hundred hosts must not
+// turn one refusal into two hundred lines of log — and the count is the thing that tells an operator
+// which of the two remedies they are looking at: one name is a stale guest, all of them is an estate
+// that never declared its type.
+func describeUnreached(names []string) string {
+	const show = 5
+	switch {
+	case len(names) == 1:
+		return "target " + names[0]
+	case len(names) <= show:
+		return fmt.Sprintf("%d targets (%s)", len(names), strings.Join(names, ", "))
+	default:
+		return fmt.Sprintf("%d targets (%s, and %d more)", len(names),
+			strings.Join(names[:show], ", "), len(names)-show)
+	}
+}

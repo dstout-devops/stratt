@@ -13,6 +13,21 @@ import (
 	"github.com/dstout-devops/stratt/sdk/mockstratt"
 )
 
+// withDeclaredSSH is the ADR-0158 D2 migration for these fixtures: a Run whose targets carry no
+// observed mgmt.transport must DECLARE how they are reached, or the shim refuses it (D3).
+//
+// A second copy of the in-package helper, and deliberately so — this file is `package
+// ansible_test` on purpose (it drives the real binary through mock-stratt rather than calling
+// Run in-process), so it cannot see the package's own test helpers. Kept string-simple rather
+// than re-implementing the merge: every params document here is a literal this file owns.
+func withDeclaredSSH(t *testing.T, params string) []byte {
+	t.Helper()
+	if !strings.HasPrefix(params, "{") || !strings.HasSuffix(params, "}") {
+		t.Fatalf("withDeclaredSSH: %q is not a JSON object literal", params)
+	}
+	return []byte(`{"connection":{"type":"ssh"},` + params[1:])
+}
+
 // Port conformance for the ansible plugin, driven through mock-stratt (ADR-0137 D6).
 //
 // WHAT MAKES THIS DIFFERENT FROM EVERY OTHER TEST IN THIS PACKAGE. The rest call
@@ -114,7 +129,7 @@ func TestConformance_MountedProject(t *testing.T) {
 	runner := fakeRunner(t, 0, onOK("web-1", true), onOK("web-2", false))
 
 	req := mockstratt.Request{
-		Params:  []byte(`{"playbook":"site.yml"}`),
+		Params:  withDeclaredSSH(t, `{"playbook":"site.yml"}`),
 		Targets: []mockstratt.ApplyTarget{{Name: "web-1", Address: "10.0.0.1"}, {Name: "web-2", Address: "10.0.0.2"}},
 		Content: map[string]string{
 			"site.yml":                    "- hosts: all\n  tasks: []\n",
@@ -146,7 +161,7 @@ func TestConformance_MissingPlaybookNamesTheMount(t *testing.T) {
 	runner := fakeRunner(t, 0)
 
 	req := mockstratt.Request{
-		Params:  []byte(`{"playbook":"absent.yml"}`),
+		Params:  withDeclaredSSH(t, `{"playbook":"absent.yml"}`),
 		Targets: []mockstratt.ApplyTarget{{Name: "web-1", Address: "10.0.0.1"}},
 		Content: map[string]string{"site.yml": "- hosts: all\n"},
 	}
@@ -178,7 +193,7 @@ func TestConformance_VacuousRunIsRefused(t *testing.T) {
 	runner := fakeRunner(t, 0) // rc=0, and not one per-host event
 
 	req := mockstratt.Request{
-		Params:  []byte(`{"playbook":"site.yml"}`),
+		Params:  withDeclaredSSH(t, `{"playbook":"site.yml"}`),
 		Targets: []mockstratt.ApplyTarget{{Name: "web-1", Address: "10.0.0.1"}},
 		Content: map[string]string{"site.yml": "- hosts: nothing\n"},
 	}
@@ -200,7 +215,7 @@ func TestConformance_ConfusedDeputyIsGated(t *testing.T) {
 	runner := fakeRunner(t, 0, onOK("localhost", true))
 
 	req := mockstratt.Request{
-		Params:  []byte(`{"playbook":"site.yml"}`),
+		Params:  withDeclaredSSH(t, `{"playbook":"site.yml"}`),
 		Targets: []mockstratt.ApplyTarget{{Name: "web-1", Address: "10.0.0.1"}},
 		Content: map[string]string{"site.yml": "- hosts: localhost\n"},
 	}
@@ -224,7 +239,7 @@ func TestConformance_UnreachableCarriesItsReason(t *testing.T) {
 	runner := fakeRunner(t, 4, onUnreachable("web-1", "ssh: no route to host"))
 
 	req := mockstratt.Request{
-		Params:  []byte(`{"playbook":"site.yml"}`),
+		Params:  withDeclaredSSH(t, `{"playbook":"site.yml"}`),
 		Targets: []mockstratt.ApplyTarget{{Name: "web-1", Address: "10.0.0.1"}},
 		Content: map[string]string{"site.yml": "- hosts: all\n"},
 	}
@@ -256,7 +271,7 @@ func TestConformance_InlinePlayStillWorks(t *testing.T) {
 	runner := fakeRunner(t, 0, onOK("web-1", false))
 
 	req := mockstratt.Request{
-		Params:  []byte(`{"play":"- hosts: all\n  tasks: []\n"}`),
+		Params:  withDeclaredSSH(t, `{"play":"- hosts: all\n  tasks: []\n"}`),
 		Targets: []mockstratt.ApplyTarget{{Name: "web-1", Address: "10.0.0.1"}},
 		// No Content: nothing mounts, so project/ is the shim's to write.
 	}

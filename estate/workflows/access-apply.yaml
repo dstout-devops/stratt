@@ -44,6 +44,13 @@ steps:
     # os.hardening.* from this play.
     actuator: ansible-access-control
     params:
+      # ADR-0158 D2 — the reach method, DECLARED. These targets are hosts nothing
+      # provisioned, so no Syncer writes their mgmt.transport, and an absent transport now
+      # means UNKNOWN rather than ssh: the shim refuses the Run instead of guessing (D1/D3).
+      # ssh is inert where a transport IS observed (host vars win), so this stays correct if
+      # one of these hosts is later built by a provider that reports its own.
+      connection:
+        type: ssh
       # The launch inputs mapped onto the play's own variable names. This mapping is the
       # boundary D6 draws: core never parses play content to discover what it needs, so the
       # translation from Stratt inputs to Ansible variables is declared here, explicitly.

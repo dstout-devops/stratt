@@ -76,6 +76,9 @@ steps:
       # literal that nothing kept in agreement with it (§2.4). ansible_host still comes from
       # each target's mgmt.address; the shim renders both.
       connection:
+        # ADR-0158 D2 — declared, because nothing observes this node: it is created by
+        # the demo's own declared-estate file, not built by a provider that reports a transport.
+        type: ssh
         user: appops
         credentialRef: app-node-ssh
         # This demo's node is created fresh per run, so its host key is new every time and
