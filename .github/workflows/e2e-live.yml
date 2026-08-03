@@ -15,7 +15,7 @@
 # demo — a per-PR gate would be slower than the change it guards and would still not catch a
 # regression introduced by a dependency rather than a diff.
 #
-# WEEKLY, NOT NIGHTLY, and the reason is cost rather than confidence. One run is six runners for
+# WEEKLY, NOT NIGHTLY, and the reason is cost rather than confidence. One run is one runner PER DEMO for
 # roughly ten minutes each; nightly is ~30 runner-hours a month spent re-proving a tree that mostly
 # did not change. Weekly plus EVERY release tag plus `workflow_dispatch` keeps the signal where it
 # pays: a release is always gated, "I want to know right now" is one click, and the schedule is the
@@ -111,7 +111,7 @@ jobs:
     # a runner each rather than sharing one. It parallelises as a side effect; isolation is the
     # reason.
     strategy:
-      fail-fast: false # one broken demo must not hide the state of the other five
+      fail-fast: false # one broken demo must not hide the state of the others
       matrix:
         demo: ${{ fromJSON(needs.suite.outputs.demos) }}
     timeout-minutes: 90
