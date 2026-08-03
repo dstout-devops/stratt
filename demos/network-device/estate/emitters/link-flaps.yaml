@@ -1,0 +1,17 @@
+# The device's alerting path, declared as an Emitter (ADR-0018). A webhook Emitter is an INGEST
+# endpoint: something outside Stratt POSTs here, and each POST becomes one event on the emitter
+# stream for every Trigger to match against.
+#
+# In a real estate this is where Alertmanager, an NMS or a syslog forwarder points when the link on
+# rtr-01 bounces. Here run.sh plays that part, because what this demo has to prove is what Stratt
+# does with a BURST of them (ADR-0162), not that curl can reach a port.
+#
+# ── THE TOKEN IS DELIBERATELY WORTHLESS ─────────────────────────────────────────────────────────
+#
+# The declaration holds hex(sha256(token)), never the token (§2.5) — but for THIS demo the plaintext
+# is in run.sh in the open, and that is a statement rather than an oversight: it authenticates one
+# POST to one throwaway kind cluster and grants nothing else. A demo must never teach a reader to
+# commit a token that means something; the string is named so nobody can mistake it for one.
+name: link-flaps
+kind: webhook
+tokenHash: 43617af80f821a4070d15fe100b0205e16d45eff680b6a6cb9d92b81918fcf91

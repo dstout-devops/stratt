@@ -1865,16 +1865,21 @@ func (f credRefFile) toCredentialRef() (types.CredentialRef, error) {
 // fired Runs execute as — which is exactly why Triggers are CaC-only: Git
 // review authorizes the binding.
 type triggerFile struct {
-	Name            string         `yaml:"name"`
-	Kind            string         `yaml:"kind"`
-	Cron            string         `yaml:"cron"`
-	Paused          bool           `yaml:"paused"`
-	Emitter         string         `yaml:"emitter"`
-	When            string         `yaml:"when"`
-	CooldownSeconds int            `yaml:"cooldownSeconds"`
-	ViewName        string         `yaml:"viewName"`
-	ViewParams      map[string]any `yaml:"viewParams"`
-	Actuator        string         `yaml:"actuator"`
+	Name            string `yaml:"name"`
+	Kind            string `yaml:"kind"`
+	Cron            string `yaml:"cron"`
+	Paused          bool   `yaml:"paused"`
+	Emitter         string `yaml:"emitter"`
+	When            string `yaml:"when"`
+	CooldownSeconds int    `yaml:"cooldownSeconds"`
+	// ADR-0162 — the pattern of matching events that fires this Trigger. Data, not a language.
+	WithinSeconds int            `yaml:"withinSeconds"`
+	Count         int            `yaml:"count"`
+	AllOf         []string       `yaml:"allOf"`
+	CorrelateBy   string         `yaml:"correlateBy"`
+	ViewName      string         `yaml:"viewName"`
+	ViewParams    map[string]any `yaml:"viewParams"`
+	Actuator      string         `yaml:"actuator"`
 	// The capability CLASS form (ADR-0140 D4) — exclusive with actuator.
 	ActuatorCapability string         `yaml:"actuatorCapability"`
 	Params             map[string]any `yaml:"params"`
@@ -1900,6 +1905,7 @@ func parseTriggerFile(path string, raw []byte, opts ...ValidateOption) (string, 
 	t := types.Trigger{
 		Name: f.Name, Kind: f.Kind, Cron: f.Cron, Paused: f.Paused,
 		Emitter: f.Emitter, When: f.When, CooldownSeconds: f.CooldownSeconds,
+		WithinSeconds: f.WithinSeconds, Count: f.Count, AllOf: f.AllOf, CorrelateBy: f.CorrelateBy,
 		ViewName: f.ViewName, ViewParams: f.ViewParams,
 		Actuator: f.Actuator, Params: f.Params,
 		Slices: f.Slices, CredentialRefs: f.CredentialRefs, Principal: f.Principal,
@@ -1957,16 +1963,74 @@ func ValidateTrigger(t types.Trigger, opts ...ValidateOption) error {
 			return fmt.Errorf("trigger %s: emitter/when belong to kind event", t.Name)
 		}
 	case types.TriggerEvent:
-		if t.Emitter == "" || t.When == "" {
-			return fmt.Errorf("trigger %s: event kind requires emitter and when", t.Name)
+		if t.Emitter == "" {
+			return fmt.Errorf("trigger %s: event kind requires emitter", t.Name)
+		}
+		// ── ADR-0162 · the pattern of matching events ────────────────────────────────────────
+		// Every rule here refuses a declaration that would otherwise need a precedence rule at
+		// fire time (§2.4), and each is checked at PARSE so a bad one fails its file rather than
+		// silently at 3am (§1.8, ADR-0018's own standard).
+		if (t.When == "") == (len(t.AllOf) == 0) {
+			return fmt.Errorf("trigger %s: exactly one of `when` or `allOf` — `when` asks about ONE "+
+				"event, `allOf` asks whether several have all happened, and a Trigger declaring both "+
+				"would need a rule to combine them (ADR-0162 D4)", t.Name)
+		}
+		if len(t.AllOf) > 0 {
+			if len(t.AllOf) < 2 {
+				return fmt.Errorf("trigger %s: allOf needs at least two conditions — one is `when`", t.Name)
+			}
+			if t.CorrelateBy == "" {
+				return fmt.Errorf("trigger %s: allOf requires correlateBy. Without it the Trigger "+
+					"fires when one condition matched SOME event and another matched a DIFFERENT, "+
+					"unrelated one — 'a deploy finished somewhere and a health check failed "+
+					"somewhere' — which converges the wrong estate and looks correct doing it "+
+					"(ADR-0162 D4)", t.Name)
+			}
+			if t.Count > 1 {
+				return fmt.Errorf("trigger %s: allOf and count are mutually exclusive — 'five of "+
+					"these' and 'one of each of those' are different questions (ADR-0162 D4)", t.Name)
+			}
+			if t.WithinSeconds <= 0 {
+				return fmt.Errorf("trigger %s: allOf requires withinSeconds — without a window the "+
+					"conditions correlate over all time, so a deploy last March would satisfy one "+
+					"half of today's pattern", t.Name)
+			}
+			for i, expr := range t.AllOf {
+				if _, err := rules.Compile(expr); err != nil {
+					return fmt.Errorf("trigger %s: allOf[%d]: %w", t.Name, i, err)
+				}
+			}
+		}
+		// correlateBy is a PATH into the firing payload and is spelled with the same `event.` prefix
+		// `when:` uses, because it reads the same namespace. Required rather than optional: a bare
+		// `service` would address the top-level key for one payload shape and NOTHING for another,
+		// and an event that addresses nothing joins no window at all — a silent non-participation
+		// that is very hard to see from the outside (§1.8).
+		if t.CorrelateBy != "" && !strings.HasPrefix(t.CorrelateBy, "event.") {
+			return fmt.Errorf("trigger %s: correlateBy must name a path in the firing event, "+
+				"spelled as `when` spells it — e.g. `event.service`, got %q (ADR-0162 D4)",
+				t.Name, t.CorrelateBy)
+		}
+		if t.CorrelateBy != "" && len(t.AllOf) == 0 && t.Count <= 1 {
+			return fmt.Errorf("trigger %s: correlateBy without allOf or count has nothing to "+
+				"correlate — every match fires, so partitioning the windows changes nothing", t.Name)
+		}
+		if t.Count > 1 && t.WithinSeconds <= 0 {
+			return fmt.Errorf("trigger %s: count requires withinSeconds — five events with no window "+
+				"is not a storm, it is a total, and it would fire once and never again", t.Name)
+		}
+		if t.Count < 0 || t.WithinSeconds < 0 {
+			return fmt.Errorf("trigger %s: count and withinSeconds must be >= 0", t.Name)
 		}
 		if t.Cron != "" || t.Paused {
 			return fmt.Errorf("trigger %s: cron/paused belong to kind schedule", t.Name)
 		}
 		// CEL compiles at declaration parse — a bad rule fails its file,
 		// never silently at event time (§1.8; ADR-0018).
-		if _, err := rules.Compile(t.When); err != nil {
-			return fmt.Errorf("trigger %s: %w", t.Name, err)
+		if t.When != "" {
+			if _, err := rules.Compile(t.When); err != nil {
+				return fmt.Errorf("trigger %s: %w", t.Name, err)
+			}
 		}
 	default:
 		return fmt.Errorf("trigger %s: unknown kind %q (schedule, event)", t.Name, t.Kind)

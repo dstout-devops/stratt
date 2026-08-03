@@ -34,6 +34,36 @@ type Trigger struct {
 	// CooldownSeconds suppresses further matches for this long after a
 	// launch (storm damping; 0 = none).
 	CooldownSeconds int `json:"cooldownSeconds,omitempty"`
+
+	// ── deciding on more than one event (ADR-0162) ────────────────────────────────────────────
+	//
+	// `When` still answers exactly one question about exactly one event. These say what PATTERN of
+	// matching events fires the Trigger — data, not a language (§1), the same shape
+	// CooldownSeconds already is.
+
+	// WithinSeconds is the window the pattern below is measured over. Required with Count > 1 or
+	// AllOf; meaningless alone.
+	WithinSeconds int `json:"withinSeconds,omitempty"`
+	// Count fires the Trigger when this many MATCHING events land inside the window, and the window
+	// then RESETS. 0 or 1 ⇒ fire on every match, which is every Trigger that exists today.
+	//
+	// Reset rather than slide, deliberately: a sliding window fires on the 5th event and then the
+	// 6th and the 7th, so a storm produces a storm of Runs — the problem this exists to solve.
+	Count int `json:"count,omitempty"`
+	// AllOf fires the Trigger when EVERY one of these conditions has been satisfied by some event
+	// sharing one CorrelateBy value, inside the window. Mutually exclusive with When and with Count:
+	// "five of these" and "one of each of those" are different questions, and a Trigger declaring
+	// both would need a rule to combine them (§2.4).
+	AllOf []string `json:"allOf,omitempty"`
+	// CorrelateBy is the dotted PATH into the event payload whose value ties events together —
+	// REQUIRED with AllOf. Without it "a deploy finished somewhere and a health check failed
+	// somewhere" fires, which is not what anybody means and is a very good way to converge the wrong
+	// estate at 3am. AAP's all() has this hazard and leaves it to the author; here the mistake is
+	// unavailable.
+	//
+	// A PATH, not an expression (ADR-0024): explicit field lookup, nothing evaluated. A value whose
+	// only job is to equal itself does not need a second evaluation surface.
+	CorrelateBy string `json:"correlateBy,omitempty"`
 	// Launch target: a single Run (ViewName + Actuator + Params + …) or a
 	// declared Workflow (WorkflowName) — exactly one.
 	ViewName string `json:"viewName,omitempty"`

@@ -1,7 +1,10 @@
 # ADR 0162 — A Trigger decides on more than one event
 
-- **Status:** **Proposed** (2026-08-03, steward). Charter review by hand — this session's rules bar
-  the subagent; §1/§1.2/§1.4/§1.8/§2.4/§9 answered inline. **No new runtime dependency.**
+- **Status:** **Accepted** (2026-08-03, steward) — **live-proven**: nine link-flap events against a
+  real device produced **exactly one** Run, counted from the estate's own WorkflowRuns. Gated by
+  `demo:network-device` and therefore by E2E-1. See Verification. Charter review by hand — this
+  session's rules bar the subagent; §1/§1.2/§1.4/§1.8/§2.4/§9 answered inline. **No new runtime
+  dependency.**
 - **Date:** 2026-08-03
 - **Deciders:** steward
 - **Charter sections:** §1 (no new configuration languages), §1.2 (projections, never a second
@@ -119,6 +122,14 @@ deploy finished somewhere and a health check failed somewhere" fires — which i
 means and is a very good way to converge the wrong estate at 3 a.m. AAP's `all()` has this hazard and
 leaves it to the author; here the correlation key is not optional, so the mistake is unavailable.
 
+**An event carrying no value for the key participates in NO window** — it is excluded, not bucketed.
+This is the second half of the guarantee and it is easy to get wrong: pooling uncorrelated events
+under one empty key would rebuild the exact hazard the required field removes, among precisely the
+events we know least about. `correlateBy` is spelled `event.service`, the same namespace `when:`
+reads, and the prefix is required rather than optional for the same reason — a bare `service` would
+address a top-level key for one payload shape and nothing at all for another, and addressing nothing
+is silent non-participation (§1.8).
+
 `allOf` and `count` are mutually exclusive: "five of these" and "one of each of those" are different
 questions, and a Trigger that declared both would need a rule to combine them (§2.4).
 
@@ -150,7 +161,12 @@ provenance, not a widened trigger table.
 - **Cooldown starts working correctly**, including across replicas and restarts. Estates that already
   declare it get a fix they did not ask for and would not have detected.
 - **One new table**, expiring, with no foreign key into the graph — deliberately separate so it can
-  never be joined into an estate query and mistaken for a fact about a host (D5).
+  never be joined into an estate query and mistaken for a fact about a host (D5). "Expiring" is a
+  swept cadence in `strattd`, not a property of the schema: a Trigger correlating on a
+  high-cardinality field leaves a row per value behind, so an unwired sweep would grow the table
+  without bound while every declaration still looked correct. The retention is far longer than any
+  sensible window on purpose — a sweep that could delete a LIVE window would reset a storm count
+  mid-storm, which is the failure this ADR exists to prevent.
 - **The engine gains a read-modify-write per matching event.** It is per (trigger, key) and bounded
   by the window, but it is no longer a pure function — the load characteristics change, and a storm
   is exactly when it is under most pressure.
@@ -170,3 +186,41 @@ Not shippable on assertion. This ADR owes:
   launched, counted from the Runs the estate actually has rather than from the engine's own log.
   "The storm was damped" is precisely the class of claim this repo has repeatedly found false when
   executed.
+
+### All of it, paid (2026-08-03)
+
+`demos/network-device` gains a webhook Emitter, a `count: 5, withinSeconds: 600` Trigger, and the
+Workflow it fires. Nothing else in that estate launches `rtr-flap-remediate`, so **the number of its
+WorkflowRuns IS the number of times the engine decided a storm had happened** — the assertion reads
+that number off `/workflow-runs`, never off a log line saying "accumulating", which would be true
+whether or not anything launched. `task demo:network-device:run` EXIT=0:
+
+```
+demo: post a burst of link-flap events and assert the storm is damped to ONE Run
+  four flaps matched the rule and launched NOTHING — below the threshold
+  the fifth flap launched it — the storm was recognised
+  nine flaps in total, and still exactly ONE Run — the window reset, it did not slide
+  …and the device's own running-config carries the remediation route 10.97.0.0/24
+```
+
+The last line is there because a damped storm that launched a Run which did nothing would satisfy
+every count above it. The nine-flap tail is D3's reset asserted directly: a sliding window would have
+fired again on the 6th, 7th, 8th and 9th.
+
+**Falsified**, each mechanism removed in turn and the matching guard confirmed to fail: no count
+threshold (every flap fires), uncorrelated events pooled under one key (the `somewhere and somewhere`
+hazard returns), correlation ignored entirely, the fire not persisted (the cooldown stops surviving a
+restart), and `satisfied` appended without the containment check (one condition repeated completes a
+two-condition pattern). The restart case is exercised by building a SECOND Engine over the same
+store — which is both a restarted pod and a second replica, the two situations D2 exists for.
+
+### Two things the implementation corrected in this ADR
+
+- **`correlateBy` did not work as this document first spelled it.** The examples say
+  `correlateBy: event.service`, matching how `when:` addresses the payload, but the path walker read
+  the payload directly — so `event` addressed nothing and every event fell into one shared window.
+  That is not a cosmetic mismatch: it is exactly the hazard D4 exists to remove, arrived at silently
+  through the spelling the ADR itself recommends. The prefix is now required and stripped, and an
+  event with no value for the key **participates in no window at all** (D4).
+- **The sweep was written and never wired.** The Consequences called the table expiring while nothing
+  called `TriggerWindowSweep` — a bound that existed only in prose. It is now a cadence in `strattd`.

@@ -80,6 +80,20 @@ checked two.
 6. **Break it on purpose.** Launch `rtr-configure-wrong-ee`. It fails before connecting and says
    which content is missing. Compare that to a python `ImportError` arriving after a live device has
    already been reached.
+7. **Make it flap.** POST the same link-flap event nine times:
+
+   ```sh
+   for i in $(seq 1 9); do
+     curl -sS -X POST localhost:8080/emitters/link-flaps \
+       -H 'X-Stratt-Emitter-Token: network-device-demo-not-a-secret' \
+       -d "{\"alertname\":\"LinkFlap\",\"device\":\"rtr-01\",\"seq\":$i}"
+   done
+   ```
+
+   Every one of them matches the Trigger's rule. **One** Run is launched
+   ([ADR-0162](../../docs/adr/0162-a-trigger-decides-on-more-than-one-event.md)): the estate asked to
+   be told about storms, not flaps, and it said so with a window and a threshold rather than with
+   code. `GET /api/v1/workflow-runs` is the honest place to count.
 
 ## What you just learned
 
@@ -87,3 +101,8 @@ You converged a class of estate that configuration-management tools usually trea
 product: **network devices**, through the same Workflow model, the same authorization, the same
 credential brokering and the same descent as every server. The Step names a connection type and a
 platform; nothing above it knows either.
+
+And the estate reacted to the device on its own terms: nine flap events, one remediation. The
+judgement that "five inside ten minutes is an incident and one is noise" is a declaration a reviewer
+can read in Git, not a rule buried in an engine — and the count behind it lives in Postgres, so it
+survives a restart and holds across replicas.

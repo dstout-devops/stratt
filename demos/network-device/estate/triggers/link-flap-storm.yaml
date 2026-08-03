@@ -1,0 +1,33 @@
+# ADR-0162 — act on the STORM, not on the alert.
+#
+# One link flap is noise. Five inside ten minutes is an incident, and it is the reason people run
+# event-driven automation at all. Before this Trigger could say so, Stratt could only express "when
+# THIS event arrives, do that" — so a flapping interface launched a Run per flap, and the automation
+# amplified the incident it was there to settle.
+#
+# ── WHAT MAKES THIS A DECLARATION AND NOT A LANGUAGE (§1 non-goal) ──────────────────────────────
+#
+# `when` still asks exactly one question of exactly one event — the CEL is unchanged and stays a pure
+# function of the payload. The PATTERN is data beside it: a window and a threshold, the same shape
+# `cooldownSeconds` already had. Nothing here evaluates, aggregates or remembers; the engine does the
+# counting, in Postgres, where an operator can read it (§1.8).
+#
+# ── AND WHY THE COUNT IS THE ENGINE'S RATHER THAN THE ESTATE'S ──────────────────────────────────
+#
+# The count lives in graph.trigger_window, so it survives a restart and is shared across replicas.
+# The in-memory version this replaced reset every time a pod bounced — meaning the storm damping an
+# operator declared was not the one they got, and nothing anywhere said so.
+name: link-flap-storm
+kind: event
+emitter: link-flaps
+# One event, one question. `event.*` is the POSTed body (the rules binding).
+when: "event.alertname == 'LinkFlap' && event.device == 'rtr-01'"
+# The pattern: five matching flaps inside ten minutes fire ONCE, and the window then resets. Reset
+# rather than slide — a sliding window would fire again on the 6th, 7th and 8th flap, turning one
+# storm into a storm of Runs.
+withinSeconds: 600
+count: 5
+workflowName: rtr-flap-remediate
+# The Trigger declaration IS the impersonation grant (ADR-0010): the fired Run executes as this
+# Principal, which is why Triggers are CaC-only — Git review authorizes the binding.
+principal: bootstrap-admin

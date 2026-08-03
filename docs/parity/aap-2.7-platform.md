@@ -30,7 +30,7 @@ exists," never as "the depth is audited."
 | **Policy-as-code** (OPA gate, 2.6+)            | 🟢 **ahead**                               | 4-valued lattice + typed Control library + dual PEPs + obligations vs AAP's thin OPA allow/deny                                       |
 | **Platform Gateway** (unified UI/API/RBAC/SSO) | 🟢 **code-complete core**, 🟡 UI/analytics | Unified UI, OIDC, OpenFGA, SCIM, one Principal, one audit stream, platform MCP; gaps are analytics/org/admin UI                       |
 | **Automation Mesh** (distributed exec)         | 🟢 **code-complete**, one gap              | Sites (push+pull) + signed Bundles + Cells (a partitioning story AAP lacks); gap = multi-hop relay nodes                              |
-| **Event-Driven Ansible** (rulebooks)           | 🟡 **partial** — spine yes, depth no       | Trigger engine covers ingest→CEL→launch+dedup; missing rulebook format, stateful/meta conditions, throttling, source breadth          |
+| **Event-Driven Ansible** (rulebooks)           | 🟢 **task parity** — two mechanisms declined | Ingest→CEL→launch+dedup, plus patterns over events (ADR-0162: `count`/`within`, `allOf`/`correlateBy`) and durable cross-replica throttling. Declined by decision, not missing: a `set_fact` working memory (§1.2) and the rulebook FILE format |
 | **Automation Hub** (content/EE/supply-chain)   | 🔴 **biggest gap**                         | No content registry, no EE-build factory, SBOM/SLSA pipeline unbuilt; plugin+contract-pinning model substitutes the _trust_ half only |
 
 **Bottom line:** the AWX-successor **job-runner + governance + distributed-execution + identity** surface is
@@ -119,14 +119,21 @@ parity. It is **not a rulebook engine**. Gaps:
   A PACKAGING difference rather than a capability gap: the engine evaluates every Trigger against
   every event and fires every match, which is what a ruleset does. AAP binds sources and rules in one
   file; Stratt has reusable Emitters plus Triggers. Declined in ADR-0162 D6 rather than left open.
-- **Stateful / meta conditions** — CEL sees one event; no `count > N within Ms`, no cross-event correlation.
-- ~~**Throttling / debounce / rate-limit** — dedup only.~~ — **false** (2026-08-03).
-  `cooldownSeconds` is declared, enforced and shipped (`triggerengine/engine.go`). The real
-  limitation is narrower and worse: the bookkeeping is an in-memory map, so it RESETS ON RESTART and
-  does not hold across replicas — the storm damping an estate declares is not the one it gets, and
-  nothing says so. [ADR-0162](../adr/0162-a-trigger-decides-on-more-than-one-event.md) D2 makes it
-  durable; `count`/`within` accumulation and `allOf`/`correlateBy` correlation are the genuine gaps
-  it addresses.
+- ~~**Stateful / meta conditions** — CEL sees one event; no `count > N within Ms`, no cross-event
+  correlation.~~ — **shipped** ([ADR-0162](../adr/0162-a-trigger-decides-on-more-than-one-event.md),
+  live-proven). CEL still sees one event and still answers one question — that is what keeps §1
+  intact — and the PATTERN sits beside it as data: `within` + `count` for "when this keeps
+  happening", `allOf` + `correlateBy` for "when both of these have happened". Two differences from
+  AAP's working memory, both deliberate: there is **no `set_fact`/`retract_fact` fact store** (D6 —
+  it would be a second truth about the estate with no provenance, §1.2), and **`correlateBy` is
+  mandatory with `allOf`**, so "a deploy finished somewhere and a health check failed somewhere"
+  cannot fire. AAP's `all()` leaves that hazard to the author.
+- ~~**Throttling / debounce / rate-limit** — dedup only.~~ — **false** (2026-08-03), and then
+  **fixed**. `cooldownSeconds` was already declared, enforced and shipped; the real limitation was
+  narrower and worse — the bookkeeping was an in-memory map, so it RESET ON RESTART and did not hold
+  across replicas, meaning the storm damping an estate declared was not the one it got and nothing
+  said so. ADR-0162 D2 moves it to Postgres, shared and durable. It also makes it **readable**, which
+  a rules engine's working memory is not: "why did this Trigger not fire?" is now a row (§1.8).
 - **Inline meta-actions** — can only launch a Workflow/View; no `set_fact`/`post_event`/`run_module`.
 
 ### 6. Automation Hub — 🔴 biggest gap

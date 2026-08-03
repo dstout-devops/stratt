@@ -27,6 +27,11 @@ NS="${STRATT_NS:-stratt}"
 PRINCIPAL="${STRATT_PRINCIPAL:-bootstrap-admin}"
 WORKFLOW="rtr-configure"
 GROUPED_WORKFLOW="rtr-grouped"
+STORM_WORKFLOW="rtr-flap-remediate"
+# The plaintext half of the Emitter's declared tokenHash (estate/emitters/link-flaps.yaml). It is in
+# the open on purpose: it authenticates one POST to one throwaway kind cluster and grants nothing
+# else. A demo must never teach a reader to commit a token that means something.
+FLAP_TOKEN="network-device-demo-not-a-secret"
 VIEW="net-devices"
 ACTUATOR="ansible-network"
 DEVICE_DEPLOY="rtr-01"
@@ -203,6 +208,84 @@ case "$ginv" in
     *"loaded-from-group_vars"*) echo "  …and group_vars/tier_edge.yml LOADED — the file ADR-0134 promised and nothing could read" ;;
     *) echo "FAIL: group_vars did not load; the play's assert would have failed"; exit 1 ;;
 esac
+
+# ── Assertion: a BURST of events launches exactly ONE Run (ADR-0162) ─────────────────────────────
+# One link flap is noise; five in ten minutes is an incident. Before ADR-0162 a Trigger could only
+# say "when THIS event arrives, do that", so a flapping interface launched a Run per flap and the
+# automation amplified the incident it existed to settle.
+#
+# EVERY NUMBER BELOW IS COUNTED FROM THE RUNS THE ESTATE ACTUALLY HAS, never from the engine's own
+# log. "The storm was damped" is exactly the class of claim this repo has repeatedly found false when
+# executed, and a log line saying "accumulating" would be true whether or not a Run was launched.
+echo "demo: post a burst of link-flap events and assert the storm is damped to ONE Run"
+
+flap() {
+    curl -fsS -o /dev/null -w '%{http_code}' -X POST "${ROOT}/emitters/link-flaps" \
+        -H "X-Stratt-Emitter-Token: ${FLAP_TOKEN}" -H "Content-Type: application/json" \
+        -d "{\"alertname\":\"LinkFlap\",\"device\":\"rtr-01\",\"seq\":$1}"
+}
+# Runs of the remediation Workflow, right now. It is launched by the Trigger and by nothing else in
+# this demo, so this number IS the number of times the engine decided a storm had happened.
+storm_runs() {
+    api GET "/workflow-runs?limit=500" | jq --arg w "$STORM_WORKFLOW" '[.[]? | select(.workflowName==$w)] | length'
+}
+
+before="$(storm_runs)"
+[ "${before:-0}" = "0" ] || { echo "FAIL: ${before} ${STORM_WORKFLOW} Run(s) existed before any event was posted"; exit 1; }
+
+# Four flaps. Each MATCHES the Trigger's `when` — the CEL is true every time — and none of them may
+# launch anything, because the estate asked to be told about storms, not flaps.
+for i in 1 2 3 4; do
+    code="$(flap "$i")"
+    [ "$code" = "202" ] || { echo "FAIL: flap ${i} was not accepted (HTTP ${code})"; exit 1; }
+done
+sleep 5
+mid="$(storm_runs)"
+[ "${mid:-0}" = "0" ] || {
+    echo "FAIL: ${mid} Run(s) launched from four flaps — the threshold is not being counted, so"
+    echo "      every flap of a storm becomes a Run and the automation amplifies the incident"
+    exit 1; }
+echo "  four flaps matched the rule and launched NOTHING — below the threshold"
+
+# The fifth crosses it.
+code="$(flap 5)"; [ "$code" = "202" ] || { echo "FAIL: flap 5 was not accepted (HTTP ${code})"; exit 1; }
+after=0
+for _ in $(seq 1 30); do
+    after="$(storm_runs)"
+    [ "${after:-0}" -ge 1 ] && break
+    sleep 2
+done
+[ "${after:-0}" -ge 1 ] || { echo "FAIL: the fifth flap did not launch the remediation Workflow"; exit 1; }
+echo "  the fifth flap launched it — the storm was recognised"
+
+# ── And the window RESET rather than slid, which is the whole design of D3 ───────────────────────
+# A sliding window fires again on the 6th, 7th and 8th event: one storm becomes a storm of Runs,
+# which is the problem being solved rather than a side effect of solving it.
+for i in 6 7 8 9; do
+    code="$(flap "$i")"; [ "$code" = "202" ] || { echo "FAIL: flap ${i} was not accepted (HTTP ${code})"; exit 1; }
+done
+sleep 8
+total="$(storm_runs)"
+[ "${total:-0}" = "1" ] || {
+    echo "FAIL: ${total} Runs after nine flaps, want exactly 1 — the window slid instead of resetting,"
+    echo "      so a sustained storm produces a Run per event past the threshold"
+    exit 1; }
+echo "  nine flaps in total, and still exactly ONE Run — the window reset, it did not slide"
+
+# The Run has to have actually converged the device. A damped storm that launched a Run which did
+# nothing would satisfy every count above and remediate nothing.
+swr="$(api GET "/workflow-runs?limit=500" | jq -r --arg w "$STORM_WORKFLOW" '[.[]? | select(.workflowName==$w)][0].id')"
+sstat=""
+for _ in $(seq 1 120); do
+    sstat=$(api GET "/workflow-runs/${swr}" | jq -r '.workflowRun.status // .status // empty')
+    case "$sstat" in succeeded|failed|canceled) break ;; esac
+    sleep 3
+done
+[ "$sstat" = "succeeded" ] || { echo "FAIL: the storm's Run is '${sstat:-none}', want succeeded"; exit 1; }
+ondevice "show running-config" | grep -qF "10.97.0.0/24" || {
+    echo "FAIL: the remediation Run succeeded but its route is not in the DEVICE's running-config"
+    exit 1; }
+echo "  …and the device's own running-config carries the remediation route 10.97.0.0/24"
 
 echo
 echo "demo: DONE — Stratt configured a real network device over its own CLI (fidelity: ${fidelity})."

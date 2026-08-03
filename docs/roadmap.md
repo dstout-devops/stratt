@@ -667,9 +667,12 @@ without one.
 ### `/api/v2` route breadth is DONE (2026-07-31) — and two refusals are the point
 
 `schedules`, `workflow_job_templates` + `workflow_jobs`, `projects`, and `credentials` +
-`credential_types` all ship. The four families the parity audit named are complete; what remains on
-that front is launch SEMANTICS (`ask_*_on_launch` beyond variables, AWX-015), which is a design
-question about desired state rather than a missing endpoint.
+`credential_types` all ship. The four families the parity audit named are complete; what remained on
+that front was launch SEMANTICS (`ask_*_on_launch` beyond variables, AWX-015) — correctly called a
+design question about desired state rather than a missing endpoint, and **answered as one**
+([ADR-0160](adr/0160-the-same-job-possibly-a-different-hand.md), live-proven): the promptable set is
+DERIVED from what a Workflow declares and its Steps bind, and a launch may supply a View, an image
+and a credential subset **from a permitted set the estate declared** — never from anywhere.
 
 **`projects` needed no design at all**, which is worth recording: ADR-0134 D2 already declares an
 Actuator's `contentDir` to be "one project: playbooks, roles/, group_vars/", one Actuator per
@@ -1178,9 +1181,10 @@ length closing.
 
 **Still open from the plan, unchanged by this branch:**
 
-- **W6 residue** — ANS-013 (pre-flight syntax check), ANS-009 (multi-document playbooks), AWX-015
-  (`ask_*_on_launch` beyond variables; attaching a credential or inventory at launch is deliberately
-  refused today, and that is a desired-state question rather than a missing endpoint).
+- **W6 residue** — ANS-013 (pre-flight syntax check), ANS-009 (multi-document playbooks). ~~AWX-015~~
+  is **closed** by [ADR-0160](adr/0160-the-same-job-possibly-a-different-hand.md): attaching a
+  credential, an image or a View at launch is no longer refused — it is selection from a permitted
+  set the estate declared, which was indeed the desired-state question rather than a missing endpoint.
 - **AWX-005 is DECLINED, not pending** (ADR-0130 D3), and the distinction matters: a projected grant
   graph is one query from being used as an authorization truth, which no read-shape fix answers.
   "We looked and said no" must not render the same as "nobody looked".

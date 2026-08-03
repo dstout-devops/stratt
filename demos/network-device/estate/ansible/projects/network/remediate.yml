@@ -1,0 +1,24 @@
+# What the estate does about a link-flap STORM (ADR-0162).
+#
+# Nothing about this play is special, and that is the point: the pattern-matching that decided a
+# storm had happened is the Trigger's business, and by the time anything runs here the decision is
+# already made. The play is ordinary remediation.
+#
+# It installs a distinct blackhole route so the DEMO can ask the device whether remediation happened
+# — a marker the run.sh assertion reads back over vtysh rather than trusting the Run's own report.
+- name: Remediate a flapping link
+  hosts: all
+  gather_facts: false
+  tasks:
+    # 10.97.0.0/24 is this play's alone: 10.99.0.0/24 is rtr-configure's change and 10.98.0.0/24 is
+    # the prefix the refused-EE guard proves NEVER reaches the device. A shared marker would let one
+    # assertion pass on another's evidence.
+    - name: Install the remediation marker route on the device
+      ansible.netcommon.cli_config:
+        config: |
+          ip route 10.97.0.0/24 blackhole
+      register: push
+
+    - name: Report
+      ansible.builtin.debug:
+        msg: "flap remediation applied; changed={{ push.changed }}"

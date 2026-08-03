@@ -6,7 +6,9 @@ summary: >
   Watch Stratt configure a real router over its own CLI — no shell on the far end, no python on the
   device, no agent. A declared device, a brokered key, one Step naming `connection.type:
   network_cli`, and the change read back out of the device's own running-config. Then watch a Step
-  whose image lacks the network content be refused before it ever connects.
+  whose image lacks the network content be refused before it ever connects — and watch nine link-flap
+  events produce exactly one remediation Run, because the estate declared that a storm is five inside
+  ten minutes and a single flap is noise.
 
 # fidelity (D3): how real is what you're watching? The turnkey runner prints this up front.
 #   real       — real workloads on real substrate.

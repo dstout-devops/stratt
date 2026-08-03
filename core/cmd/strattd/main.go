@@ -1741,6 +1741,32 @@ func run(ctx context.Context, log *slog.Logger) error {
 		}
 	})
 
+	// Window housekeeping (ADR-0162): the engine's memory of its own recent past is transient by
+	// construction, and something has to enforce that. A Trigger correlating on a high-cardinality
+	// field — one key per host, per deploy — leaves a row per value behind, so an UNSWEPT table
+	// grows without bound while every declaration looks correct.
+	//
+	// The retention is deliberately far longer than any sensible window: this reclaims dead keys, it
+	// is not part of the decision. A sweep that could delete a LIVE window would silently reset a
+	// storm count mid-storm, which is the failure this feature exists to prevent.
+	controllers = append(controllers, func(cctx context.Context) {
+		ticker := time.NewTicker(time.Hour)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-cctx.Done():
+				return
+			case <-ticker.C:
+				n, err := store.TriggerWindowSweep(cctx, 24*time.Hour)
+				if err != nil {
+					log.Error("trigger window sweep failed", "error", err) // best-effort; retry next tick
+				} else if n > 0 {
+					log.Info("trigger windows swept", "removed", n)
+				}
+			}
+		}
+	})
+
 	// ── Salt event-bus Emitter over the port (Subscribe verb; ADR-0039) ──
 	// Reuses the salt plugin host; the emitter name is grant-bound (anti-spoof),
 	// and the Trigger engine CEL-matches the plugin's legible `match` projection,
