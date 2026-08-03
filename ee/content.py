@@ -37,6 +37,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib.metadata
 import json
 import os
 import re
@@ -437,6 +438,29 @@ def _load_lock(path: Path) -> dict[str, list[dict[str, Any]]]:
     return out
 
 
+def _installed_python() -> list[dict[str, str]]:
+    """Every python distribution in this image, name and version (ADR-0159 D1).
+
+    importlib.metadata rather than `uv pip list` or a subprocess: it reads the same installed
+    metadata pip/uv write, in-process, with no dependency on which installer produced it — and it is
+    an OBSERVATION of the environment rather than a replay of what was asked for.
+
+    Names are normalised to PEP 503 form (lowercase, runs of -_. collapsed to -) because the same
+    distribution is spelled `ansible-pylibssh`, `ansible_pylibssh` and `Ansible-PyLibSSH` depending
+    on who is asking, and a consumer matching on the raw string would miss an image that has it.
+    """
+    seen: dict[str, str] = {}
+    for dist in importlib.metadata.distributions():
+        raw = dist.metadata["Name"] if dist.metadata else None
+        if not raw:
+            continue
+        name = re.sub(r"[-_.]+", "-", raw).lower()
+        # A duplicate can appear when two site dirs are on the path; keep the first, which is the
+        # one the interpreter would actually import.
+        seen.setdefault(name, dist.version or "")
+    return [{"name": n, "version": v} for n, v in sorted(seen.items())]
+
+
 def _lock_doc(manifest: dict[str, list[dict[str, Any]]]) -> dict[str, Any]:
     return {
         "lockfileVersion": LOCKFILE_VERSION,
@@ -696,6 +720,20 @@ def install(
         ]
         for section in ("collections", "roles")
     }
+    # THE THIRD AXIS (ADR-0159 D1). A connection plugin can need a collection, a control-node
+    # BINARY, and a control-node PYTHON MODULE — and only the first two were ever recorded, so the
+    # third could not be checked. `network_cli` needs `ansible-pylibssh` or `paramiko`; netcommon
+    # declares neither as a hard dependency because either will do, so installing the collection
+    # installs no SSH transport at all and every collection-shaped check reports a complete image.
+    # Measured against a live FRR device: the run passed the gate and died at connect time with
+    # `No module named 'paramiko'` — D7's own failure mode, one axis to the side.
+    #
+    # EVERYTHING INSTALLED, not just what EE_PYTHON_EXTRA added, and for the same reason the
+    # sections above record transitive dependencies: the manifest is what the image ACTUALLY
+    # CONTAINS, never a restatement of the request. Recording only deliberate additions would also
+    # refuse a working image whose library arrived transitively, which is a false refusal — and a
+    # gate that cries wolf is one people route around.
+    manifest["python"] = _installed_python()
     manifest_path.parent.mkdir(parents=True, exist_ok=True)
     manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
     os.chmod(manifest_path, 0o644)

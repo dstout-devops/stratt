@@ -91,6 +91,10 @@ func New(cfg Config) http.Handler {
 	mux.HandleFunc("POST /api/v2/workflow_job_templates/{id}/launch/", f.authed(f.launchWFJT))
 	mux.HandleFunc("GET /api/v2/workflow_jobs/", f.authed(f.listWorkflowJobs))
 	mux.HandleFunc("GET /api/v2/workflow_jobs/{id}/", f.authed(f.getWorkflowJob))
+	// The cancel pair 1d7ffc0 declined to ship and ADR-0157 unblocked: RunDAG now writes its own
+	// terminal status, so signalling Temporal no longer leaves graph.workflow_run saying `running`.
+	mux.HandleFunc("GET /api/v2/workflow_jobs/{id}/cancel/", f.authed(f.canCancelWorkflowJob))
+	mux.HandleFunc("POST /api/v2/workflow_jobs/{id}/cancel/", f.authed(f.cancelWorkflowJob))
 	// projects — an Actuator's contentDir IS a project (ADR-0134 D2, one Actuator per project).
 	// No POST /update/: a project update means "clone the SCM again", and nothing here clones.
 	mux.HandleFunc("GET /api/v2/projects/", f.authed(f.listProjects))

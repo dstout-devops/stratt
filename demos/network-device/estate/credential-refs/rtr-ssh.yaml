@@ -1,0 +1,10 @@
+# The DEVICE credential, brokered exactly like every other (§2.5, ADR-0126 D1). A network device is
+# not a special case for secrets: the key is a K8s Secret the dispatcher projects into the execution
+# pod at spawn, the Step names the ref, and the shim derives the key PATH from the ref it was
+# authorized to use rather than from a literal nothing keeps in agreement with it.
+name: rtr-ssh
+ownerTeam: platform-admins
+backend: k8s-secret
+locator: { namespace: stratt, name: rtr-creds }
+injection:
+  - { key: ssh-privatekey, as: file, name: id_ed25519 }

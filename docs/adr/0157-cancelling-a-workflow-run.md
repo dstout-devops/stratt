@@ -1,6 +1,8 @@
 # ADR 0157 — Cancelling a WorkflowRun: one writer, no orphans, and a Gate that stops meaning "approve me"
 
-- **Status:** **Proposed** (2026-08-01, steward). Charter review by hand — this session's rules bar the
+- **Status:** **Accepted** (2026-08-03, steward) — **live-proven on kind**, all three assertions
+  including "the K8s Job is gone", now gated by `demo:app-cert` and therefore by E2E-1. Proposed
+  2026-08-01. Charter review by hand — this session's rules bar the
   subagent; §1.6/§1.8/§2.1/§2.4/§2.5 answered inline. **No new dependency.**
 - **Date:** 2026-08-01
 - **Deciders:** steward
@@ -20,6 +22,44 @@ write. And there is no native door to cancel a WorkflowRun at all: `/api/v2/jobs
 the compat surface cancels a single Run, and the `workflow_jobs` equivalent was **deliberately not
 shipped** (1d7ffc0) precisely because it would have signalled Temporal and left
 `graph.workflow_run` reading `running` forever.
+
+### What implementing it found, and two of these change the decision (2026-08-02)
+
+Recorded here rather than quietly fixed, because the first is a premise this ADR asserted and got
+wrong — the reasoning below was built on it.
+
+1. **A Gate does NOT unblock on cancellation.** The Context section states "a Gate Step blocks in
+   `sel.Select(ctx)`. On cancellation that returns". It does not. A Temporal `Selector` unblocks
+   only on a branch it was given, and `runGateStep` supplies the signal channel and an optional
+   timer — nothing selecting on `ctx.Done()`. So a cancelled DAG left that goroutine blocked
+   forever: `done` never received, `running` never reached zero, the DAG never reached its own
+   cancellation handler, and the execution sat until its Temporal timeout. **The cancel door would
+   have returned 202 having stopped nothing** — the "success that did nothing" D6 refuses, arriving
+   through the front door instead. Fixed by adding the branch; falsified by removing it again.
+   Everything D2 says about `expired` vs `canceled` still holds and is now actually reachable.
+2. **D3 was not implementable as written.** It authorizes a cancel with "the `runner` grant on every
+   actuation Step's View — exactly the check `api.authorizeLaunch` already applies". At the launch
+   door that works; at the cancel door it does not, because a Finding-launched DAG's Steps name no
+   View of their own (ADR-0151: the Assignment says WHERE, the recipe does not), the inherited value
+   rode `DAGInput` into Temporal, and `graph.workflow_run` kept no copy. The handler would have had
+   a spec whose actuation Steps name no View and no default to supply, and `authorizeLaunch`
+   correctly refuses that — so **the most ordinary cancel there is, stopping a remediation sitting on
+   a Gate, would have failed as a malformed Workflow.** Deriving it from the child Runs' `view_ref`
+   fails in exactly that case: a DAG blocked on its Gate has no child Run yet. Migration 00050 adds
+   `workflow_run.view_name`, written at launch, before the execution starts.
+3. **D5 needed a step outcome it did not name.** "Which Steps completed, which were cancelled in
+   flight, and which never started" was three categories over a two-value vocabulary — an
+   interrupted Step recorded as `failed`, indistinguishable from one that failed on its own. A
+   failed converge reported why it stopped; a cancelled one may be mid-change on a real machine, and
+   that is the difference an operator has to act on. Added `canceled` as a Step outcome, and
+   nothing new is scheduled once cancellation arrives, so "never started" stays literally true.
+4. **D6 shipped as routing, not refusal.** It offered "routes exactly as a Gate decision does, or it
+   is refused", preferring refusal until cross-Cell was measured on a two-Cell floor. Routing
+   shipped: `CancelRun` already forwards through `forwardWriteToPeers`, and making WorkflowRun
+   cancel refuse where Run cancel forwards would invent an asymmetry to express a doubt. What D6
+   actually guards against is satisfied — an unreachable home is a loud 503, never a silent 202.
+   **The doubt is still unmeasured, and now applies to both paths equally rather than being
+   half-mitigated in one of them.**
 
 ### Phase 1 changed the shape of this decision
 
@@ -136,3 +176,56 @@ cannot show the pod died. The live proof is: launch a multi-Step DAG on kind, ca
 assert three things — the WorkflowRun reads `canceled`, the child Run reads `canceled`, and **the
 K8s Job is gone**. Only the third distinguishes a real cancel from bookkeeping, and it is the one
 Phase 1 has made plausible but has not yet demonstrated.
+
+### Live-proven (2026-08-03) — and the third assertion failed first
+
+`demos/app-cert` carries a third guard Workflow,
+[`cancel-guard`](../../demos/app-cert/estate/workflows/cancel-guard.yaml): one Step that sleeps on the
+target, cancelled mid-run. The demo asserts all three things, plus D5's per-Step summary.
+`task demo:app-cert:run` EXIT=0 on kind:
+
+```
+1/3 WorkflowRun reads canceled
+2/3 child Run reads canceled
+3/3 the K8s Job is GONE — the pod was reaped, not just the row stamped
+per-Step: sleep-until-cancelled=canceled
+```
+
+The Step sleeps on purpose: the first attempt at this proof used the demo's real install Workflow,
+whose ansible Step finishes in SEVEN SECONDS, so the cancel arrived with no pod left to reap and the
+third assertion had nothing to measure. **A proof that cannot fail is not a proof** — and this one
+promptly failed, which is the next section.
+
+### What the third assertion found is older than this ADR
+
+The live proof ran. **Assertions 1 and 2 passed; assertion 3 failed** — and the reason is a shipped
+defect that has made **every cancellation since ADR-0026 a lie**, not a gap in anything this ADR
+introduced.
+
+The dispatcher Role granted `create` and `get` on `batch/jobs`. `DeleteRunJobs` selects a Run's Jobs
+by the `stratt.dev/run-id` **label**, so it must `list` before it can `delete`, and it held neither:
+
+```
+ActivityType=CleanupRun Error="dispatch: list run jobs …: jobs.batch is forbidden:
+User "system:serviceaccount:stratt:stratt" cannot list resource "jobs" … in namespace "stratt""
+```
+
+Measured, not inferred: the guard's Step sleeps 120s on the target; after a cancel its Job read
+`Complete, DURATION 2m4s` and was **still present 243 seconds later**. The API returned 202, both
+rows read `canceled`, and the pod converged the host to completion regardless.
+
+**Why nobody saw it.** The handler called cleanup as `_ = workflow.ExecuteActivity(…)`, so the RBAC
+denial was discarded — it reached the daemon log as an activity error and nothing else. Meanwhile
+`TestDeleteRunJobs` passes against a fake clientset that has no RBAC at all, so it proves the label
+selector is right, which was never the problem; and `helm lint` renders the Role without knowing
+what the Go calls. **The defect lived precisely in the gap between the two tests that both passed.**
+
+Fixed here: the Role grants `list` and `delete`; the cleanup error is carried onto the Run's summary
+instead of discarded, so a cancel that cannot reap its pod says so where an operator reads it; and
+`TestChartGrantsTheJobVerbsThisPackageCalls` pins the verbs to the calls that need them, falsified by
+reverting them.
+
+**This is the clearest vindication of the rule that a seam is not shipped until it is executed.**
+ADR-0026's cancellation was reviewed, unit-tested, shipped, and wrong for its entire life, and the
+only thing that found it was insisting on the one assertion that could not be satisfied by
+bookkeeping.

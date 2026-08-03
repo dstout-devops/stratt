@@ -1,6 +1,7 @@
 package awxfacade
 
 import (
+	"fmt"
 	"net/http"
 	"strings"
 
@@ -46,6 +47,70 @@ func (f *Facade) cancel(w http.ResponseWriter, r *http.Request) {
 
 func cancelable(s types.RunStatus) bool {
 	return s == types.RunPending || s == types.RunRunning
+}
+
+// canCancelWorkflowJob: GET /api/v2/workflow_jobs/{id}/cancel/ → {"can_cancel": bool}.
+//
+// `can_cancel` stops being a field with no mechanism behind it (ADR-0157): until RunDAG had a
+// terminal-status writer, this family shipped NO cancel route at all and said so in a comment,
+// because signalling Temporal would have left graph.workflow_run reading `running` forever.
+func (f *Facade) canCancelWorkflowJob(w http.ResponseWriter, r *http.Request) {
+	wr, ok := f.workflowRunByPathID(w, r)
+	if !ok {
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"can_cancel": cancelable(wr.Status)})
+}
+
+// cancelWorkflowJob: POST /api/v2/workflow_jobs/{id}/cancel/ → 202. The route 1d7ffc0 declined and
+// ADR-0157 unblocks. Wraps the native cancel: RunDAG owns the `canceled` transition, its pending
+// Gates, and the per-Step summary; children are reaped by ParentClosePolicy.
+//
+// AUTHORIZATION MATCHES THE NATIVE DOOR — the runner grant on EVERY actuation Step's View, not just
+// the first, which is the same shape this family's launch already uses. A compat surface that
+// authorized cancel more loosely than /api/v1 would be a weaker path to the same capability, and
+// §1.6 says there is one model. The inherited View (a Finding remediation, whose Steps name none of
+// their own) comes from the row, which is why ADR-0157 D3 needed it persisted.
+func (f *Facade) cancelWorkflowJob(w http.ResponseWriter, r *http.Request) {
+	wr, ok := f.workflowRunByPathID(w, r)
+	if !ok {
+		return
+	}
+	wf, err := f.cfg.Store.GetWorkflow(r.Context(), wr.WorkflowName)
+	if err != nil {
+		awxErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	id, _, _ := principal(r)
+	for _, st := range wf.Steps {
+		if !st.IsActuation() {
+			continue
+		}
+		view := st.ViewName
+		if view == "" {
+			view = wr.ViewName
+		}
+		if view == "" {
+			// An actuation Step with no View of its own and nothing recorded to inherit. Refuse
+			// rather than skip the check: an omitted field must not become a bypassed gate.
+			awxErr(w, http.StatusBadRequest, fmt.Sprintf(
+				"workflow %s step %q converges a View but names none, and this execution recorded "+
+					"none to inherit — its cancel cannot be authorized", wf.Name, st.Name))
+			return
+		}
+		if !f.requireRunner(r.Context(), w, id, view) {
+			return
+		}
+	}
+	if !cancelable(wr.Status) {
+		w.WriteHeader(http.StatusAccepted) // already terminal — AWX treats a re-cancel as a no-op
+		return
+	}
+	if err := orchestrate.CancelWorkflowRun(r.Context(), f.cfg.Temporal, wr.ID, wr.TemporalID); err != nil {
+		awxErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	w.WriteHeader(http.StatusAccepted)
 }
 
 // viewNameFromRef strips the "view://" scheme from a Run's ViewRef → the bare

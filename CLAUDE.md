@@ -100,8 +100,11 @@ Run repeatable work through the **Taskfile**; never assert success without the m
   scenario end-to-end, asserting the outcome (`demo:<name>:down` tears it back down). **`task e2e:live`
   runs the WHOLE library against a real cluster and its exit code is the gate (E2E-1)** — the suite is
   derived from this Taskfile's own `demo:<name>:run` targets, so a new demo is gated because it exists.
-  `.github/workflows/e2e-live.yml` runs it **weekly** (Mon) / on `v*` tags / on dispatch. Live-verified on kind,
-  all six: `k8s-deploy`, `vsphere-only`, `ec2-only`, `app-cert`, `scale-fleet`, `region-to-cert`.
+  `.github/workflows/e2e-live.yml` runs it **weekly** (Mon) / on `v*` tags / on dispatch. Six are
+  CI-verified green on kind (run `30723212848`): `k8s-deploy`, `vsphere-only`, `ec2-only`,
+  `app-cert`, `scale-fleet`, `region-to-cert`. A seventh, `network-device`, is verified LOCALLY and
+  has not yet run in CI — it is in the suite (the list is derived, not hand-kept), so its first CI
+  run is the weekly one.
   A **single-plugin** demo lives with its plugin
   (`plugins/helm/demo/`, `plugins/vcenter/demo/`, `plugins/awsec2/demo/`); [demos/](demos/README.md) keeps only
   **cross-plugin** scenarios — `app-cert` spans ansible + openbao + declared (ADR-0137 D7, enforced by

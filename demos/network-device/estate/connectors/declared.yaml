@@ -1,0 +1,20 @@
+# The declared-estate Syncer: it turns this demo's hosts/*.yaml into an Entity carrying
+# mgmt.address, which the shim renders as ansible_host.
+#
+# NOTE WHAT IT DOES NOT WRITE: mgmt.transport. Nothing OBSERVES how to reach a switch — no provider
+# built it, no API reports its connection method — which is exactly ADR-0156 D5's declared side and
+# exactly why the Step below names `connection.type: network_cli` itself. A device is DISCOVERED,
+# not provisioned, and ADR-0158 D2 makes that statement explicit rather than inferred from silence.
+name: declared
+class: syncer
+address: stratt-declared:9090
+pluginIdentity: declared
+tier: trusted
+source:
+  kind: declared
+  name: declared-dev
+  endpoint: file:///hosts
+labelKeys: [os, role, tier, demo]
+facetNamespaces: [mgmt.address]
+identitySchemes: [dns.fqdn]
+intervalSeconds: 15

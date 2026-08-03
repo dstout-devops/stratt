@@ -1,0 +1,77 @@
+# stratt-rtr-01 — the network device this demo configures.
+#
+# NOT a Linux host running a routing daemon. `netops`'s login shell is /usr/bin/vtysh, so an SSH
+# session lands in the device's CLI with no POSIX shell behind it: no python to run a module on, no
+# writable /tmp to stage one in. That is what makes it a genuine test of `connection.type:
+# network_cli` — ansible's ordinary ssh path cannot work here at all, which is the point.
+#
+# Built by `task demo:network-device:device:build` from device.Dockerfile in this directory.
+# Throwaway dev fixture: a per-run keypair, an ephemeral pod, a config that lives only as long as it.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: rtr-01
+  namespace: stratt
+  labels: { app: rtr-01 }
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: rtr-01 }
+  template:
+    metadata:
+      labels: { app: rtr-01 }
+    spec:
+      # A NETWORK DEVICE HAS NO BUSINESS HOLDING A CLUSTER IDENTITY. Off for the obvious reason —
+      # nothing here talks to the API server — and for a second one found the hard way: the
+      # authorized key was first mounted at /run/secrets, which made that path a read-only mount and
+      # left kubelet unable to create /run/secrets/kubernetes.io/serviceaccount under it. The
+      # container then failed at OCI init with a read-only-filesystem error and CrashLooped, which
+      # reads like an image fault and is not. The key now mounts at /etc/device-keys.
+      automountServiceAccountToken: false
+      containers:
+        - name: device
+          image: stratt-frr-device:dev
+          imagePullPolicy: Never # kind-loaded
+          ports:
+            - { containerPort: 22, name: ssh }
+          # FRR's daemons request cap_net_admin, cap_net_raw AND cap_sys_admin in privs_init, and
+          # EXIT if they cannot set them — this is not a warning they carry on past. Measured, after
+          # two runs failed on it: with NET_ADMIN+NET_RAW alone, only staticd survives, so `vtysh`
+          # answers and the pod passes its readiness probe while `mgmtd` is dead. The device then
+          # ACCEPTS an SSH session, enters config mode, and rejects the config with `mgmtd is not
+          # running` — a failure that arrives at the device, looks like an ansible fault, and is not.
+          #
+          # SYS_ADMIN IS BROAD AND IS NOT GRANTED LIGHTLY. It is here because this fixture emulates a
+          # ROUTER: FRR manipulates the kernel RIB through netlink and asks for the privileges a
+          # routing daemon actually has on a real device. The scope is a throwaway demo pod in a kind
+          # cluster with no cluster identity (automountServiceAccountToken: false above) and nothing
+          # mounted from the host. It is a concession, recorded as one rather than buried.
+          securityContext:
+            capabilities:
+              add: ["NET_ADMIN", "NET_RAW", "SYS_ADMIN"]
+          volumeMounts:
+            - { name: authorized-keys, mountPath: /etc/device-keys, readOnly: true }
+          readinessProbe:
+            # The CLI answering is the readiness condition, not the port being open. sshd accepts
+            # connections before vtysh can reach the daemons, and a Run that arrives in that window
+            # fails for a reason unrelated to what it is testing.
+            exec:
+              command: ["sh", "-c", "vtysh -c 'show version' >/dev/null 2>&1"]
+            initialDelaySeconds: 5
+            periodSeconds: 3
+      volumes:
+        - name: authorized-keys
+          secret:
+            secretName: rtr-authorized-keys
+            items: [{ key: authorized_keys, path: authorized_keys }]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: rtr-01
+  namespace: stratt
+  labels: { app: rtr-01 }
+spec:
+  selector: { app: rtr-01 }
+  ports:
+    - { name: ssh, port: 22, targetPort: 22 }

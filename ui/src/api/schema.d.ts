@@ -1003,6 +1003,32 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/workflow-runs/{id}/cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Request cancellation of a running WorkflowRun
+         * @description Signals the WorkflowRun's Temporal execution to cancel (ADR-0157). The DAG is the single writer of its own terminal status: it stamps `canceled`, records every still-pending Gate as `canceled`, and writes the per-Step summary saying which Steps completed, which were cancelled in flight and which never started. Children are reaped by ParentClosePolicy — each child Run stamps its own status and deletes its own K8s Job.
+         *
+         *     Authorization is the SAME check the launch door applies: `runner` on every actuation Step's View. You may stop only what you were entitled to start; there is no separate canceller relation (D3).
+         *
+         *     Cancelling an already-terminal WorkflowRun is a no-op that returns 202, not a 409 — a client retrying a slow cancel must not be told its cancel failed when the state it asked for is the state that holds (D4). Cancellation is not rollback: a cancelled DAG leaves partial state, and drift detection is what surfaces the rest (D5).
+         */
+        post: operations["cancelWorkflowRun"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/gates": {
         parameters: {
             query?: never;
@@ -3487,6 +3513,28 @@ export interface operations {
                     "application/json": components["schemas"]["WorkflowRunDetail"];
                 };
             };
+            404: components["responses"]["NotFound"];
+        };
+    };
+    cancelWorkflowRun: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Cancellation requested */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
         };
     };

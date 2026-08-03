@@ -48,6 +48,39 @@ RUN uv pip install --system --no-cache \
     "ansible-core>=2.19,<2.20" \
     "ansible-runner>=2.4,<3"
 
+# EE_PYTHON_EXTRA — per-variant PYTHON packages, the third thing a transport can need and the one
+# nothing checked (found 2026-08-03, driving a real FRR device).
+#
+# A connection plugin can need three separate things, and the image gates only ever covered two:
+#
+#   1. a COLLECTION (ADR-0153 D7) — `ansible.netcommon` for network_cli/netconf;
+#   2. a BINARY on the control node (ADR-0156 D6) — kubectl, session-manager-plugin;
+#   3. a PYTHON MODULE on the control node — THIS, and it had no column anywhere.
+#
+# MEASURED, not theorised. With netcommon installed and the collection check passing, a
+# network_cli connection to a live FRR device died with:
+#
+#     [WARNING]: ansible-pylibssh not installed, falling back to paramiko
+#     [ERROR]: paramiko is not installed: No module named 'paramiko'
+#
+# which is word for word the failure ADR-0153 D7 exists to prevent — "a declaration that passes
+# review and dies at connect time naming a python module the estate never wrote" — happening to the
+# very connection type D7 was written about. netcommon declares neither library as a hard dependency
+# because either will do, so installing the collection installs no SSH transport at all.
+#
+# PER-VARIANT rather than in the floor above: the platform EE speaks to no network device, and
+# ADR-0117 D3's rule is that the floor stays bounded to what the platform's OWN content needs.
+#
+# Pinned by VERSION, not by digest, unlike EE_KUBECTL_SHA256 below — and the asymmetry is worth
+# naming rather than quietly tolerating: kubectl arrives as a bare binary over https with nothing
+# else vouching for it, whereas this comes from PyPI through uv. It is weaker than the collection
+# lockfile beside it, and a python-side lock is the honest follow-up.
+ARG EE_PYTHON_EXTRA=""
+RUN if [ -n "${EE_PYTHON_EXTRA}" ]; then \
+      echo "stratt-ee: installing variant python extras: ${EE_PYTHON_EXTRA}"; \
+      uv pip install --system --no-cache ${EE_PYTHON_EXTRA}; \
+    fi
+
 # ── Ansible content: collections + roles (ADR-0117 D3) ────────────────────────
 # Content is declared where it is RESOLVED — HERE, in the build — never as a field on
 # the run-time ansible.input Contract. A Step selects content by selecting an Actuator

@@ -1,0 +1,45 @@
+# Ansible content for the `ansible-frr` EE variant (ADR-0117 D3, ADR-0153, ADR-0159).
+#
+# WHAT MAKES THIS DIFFERENT FROM network.requirements.yml, and why both exist.
+#
+# `network.requirements.yml` ships `ansible.netcommon` and NO vendor collection, deliberately:
+# netcommon provides the CONNECTION plugins, which is the mechanism `connection.type` promises,
+# while `connection.networkOS` names a PLATFORM whose cliconf/terminal plugins live in that
+# vendor's own collection. A floor that guessed at vendors would be unbounded, and ADR-0117 D3
+# keeps the platform's content bounded to what the platform's OWN content needs.
+#
+# So an adopter takes that variant and adds THEIR vendor collection. This file is that adopter,
+# and it exists because a mechanism nobody has driven is a mechanism nobody has proven:
+# `demos/network-device` uses it to configure a real FRR device end to end. It is the demo's
+# image, not the platform's — cisco.ios, arista.eos and junipernetworks.junos are all equally
+# valid here and none of them belongs in the floor.
+#
+# WHY FRR AND NOT cEOS. cEOS needs registration and a licence, which makes it unusable as a CI
+# gate; FRR is Apache-2.0, ships in Alpine's package repository, and speaks a real vtysh CLI over
+# SSH. Verified end to end on 2026-08-03 before this file existed: `cli_config` pushed a static
+# route, `cli_command` read it back off the device, `changed=1`.
+#
+# THE PYTHON HALF IS NOT HERE, and that is the point of ADR-0159 D4. `network_cli` also needs an
+# SSH library on the CONTROL NODE (`ansible-pylibssh` or `paramiko`), which netcommon declares as
+# neither a dependency nor content — so it cannot live in a Galaxy requirements file at all. It
+# arrives through `EE_PYTHON_EXTRA` in ee/Dockerfile, where ee/content.py's own refusal says
+# python packages belong, and the shim checks for it by reading the manifest.
+collections:
+  # ansible.netcommon — the network_cli / netconf CONNECTION plugins, at the same version the
+  # network variant pins. A variant ADDS capability and never re-pins the floor beneath it.
+  - name: ansible.netcommon
+    version: "8.6.1"
+  # frr.frr — THE VENDOR HALF: the cliconf and terminal plugins that teach network_cli how to
+  # talk to a vtysh prompt, plus frr_facts. Without it `ansible_network_os: frr.frr.frr` names a
+  # platform ansible cannot drive, and the connection opens onto a CLI it cannot parse.
+  - name: frr.frr
+    version: "2.0.2"
+  # ── THE PLATFORM FLOOR, repeated ─────────────────────────────────────────────────────
+  # Everything below is ee/content/platform.requirements.yml, copied at the same versions.
+  # `ee/content.py verify` (so `task ci`) fails if a variant drops or re-pins a floor entry:
+  # a variant ADDS capability and never subtracts it. Repeated rather than composed because
+  # `install` refuses two requirements files per image — a lockfile records the installed
+  # CLOSURE, and a closure cannot be attributed to one of several declarations.
+  - name: community.general
+    version: "13.2.0"
+roles: []

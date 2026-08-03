@@ -29,6 +29,9 @@ vars:
   # Cluster tooling — pinned + installed to repo-local .bin/ so the dev stack
   # stands up with ZERO manual installs beyond go+task (quarterly upgrade train).
   KIND_VER: "0.32.0"
+  # The SSH transport ansible.netcommon's network_cli actually connects with (ADR-0153, found
+  # live 2026-08-03). Rides the quarterly evergreen train like every other pin here.
+  PYLIBSSH_VER: "1.4.0"
   # Helm 4 line (ADR-0092 / dependency-scout): Helm 3 bug-fix support lapsed
   # 2026-07-08 (security EOL 2026-11-11), so the pin moved off the stale 3.16.4.
   # N-1 v3.21.3 must keep working; the plugin image pins the same v4.2.3.
@@ -2331,6 +2334,83 @@ tasks:
           BY: "task demo:{{.DEMO}}:stage"
           SOURCE: "{{.ESTATE}}/plugins.yaml"
 
+  demo:network-device:stage:
+    desc: Stage the network-device demo estate into the inline-declarations path
+    cmds:
+      - rm -rf {{.ROOT_DIR}}/deploy/charts/stratt/dev/declarations
+      - mkdir -p {{.ROOT_DIR}}/deploy/charts/stratt/dev/declarations
+      - cp -R {{.ROOT_DIR}}/demos/network-device/estate/. {{.ROOT_DIR}}/deploy/charts/stratt/dev/declarations/
+      # Vendor the contractsOnly admission, for the reason spelled out under demo:app-cert:stage:
+      # in the repo the path is relative out of the demo directory, and a DEPLOYED estate has to be
+      # self-contained. Without it the demo stages cleanly, `task ci` stays green, and the daemon
+      # CrashLoops in-cluster on a missing input contract — only running it catches that.
+      - task: demo:vendor-plugins
+        vars: { DEMO: network-device, ESTATE: "{{.ROOT_DIR}}/demos/network-device/estate" }
+
+  demo:network-device:device:up:
+    # The device: FRR with vtysh as netops' LOGIN SHELL, so an SSH session lands in the CLI and
+    # ansible's ordinary ssh path cannot work at all. Idempotent — a throwaway keypair once, reused.
+    desc: Stand up the FRR network device (a real vtysh CLI over SSH)
+    deps: [tools:kubectl, dev:namespace]
+    vars:
+      KEYDIR: "{{.ROOT_DIR}}/deploy/dev/network-device"
+    cmds:
+      - go run sigs.k8s.io/kind@v{{.KIND_VER}} export kubeconfig --name {{.KIND_CLUSTER}}
+      # The PRIVATE half rides the rtr-ssh CredentialRef; the PUBLIC half becomes the device's
+      # authorized_keys. Material is git-ignored, never committed (§2.5).
+      - mkdir -p {{.KEYDIR}}
+      - test -f {{.KEYDIR}}/id_ed25519 || ssh-keygen -t ed25519 -N "" -C stratt-network-device -f {{.KEYDIR}}/id_ed25519
+      - "{{.KUBECTL}} --context {{.KIND_CONTEXT}} -n stratt create secret generic rtr-creds --from-file=ssh-privatekey={{.KEYDIR}}/id_ed25519 --dry-run=client -o yaml | {{.KUBECTL}} --context {{.KIND_CONTEXT}} apply -f -"
+      - "{{.KUBECTL}} --context {{.KIND_CONTEXT}} -n stratt create secret generic rtr-authorized-keys --from-file=authorized_keys={{.KEYDIR}}/id_ed25519.pub --dry-run=client -o yaml | {{.KUBECTL}} --context {{.KIND_CONTEXT}} apply -f -"
+      - "{{.KUBECTL}} --context {{.KIND_CONTEXT}} apply -f {{.ROOT_DIR}}/demos/network-device/device.yaml"
+      - "{{.KUBECTL}} --context {{.KIND_CONTEXT}} -n stratt rollout status deploy/rtr-01 --timeout=180s"
+
+  demo:network-device:run:
+    # ADR-0153's live half: the first Run in this repo that drives a NETWORK DEVICE rather than a
+    # server. Stands up a floor whose desired state IS this demo's estate, plus the FRR-capable EE
+    # and a real device, then converges it over `connection.type: network_cli` and asserts the change
+    # by reading the DEVICE's own running-config back.
+    # By-hand walk: demos/network-device/README.md. Teardown: demo:network-device:down.
+    desc: "Demo — configure a real network device over network_cli (demos/network-device)"
+    deps: [tools:helm, tools:kubectl, chart:deps]
+    cmds:
+      - task: dev:kind:up
+      - task: image:kind-load
+      - task: image:plugin
+        vars: {PLUGIN: declared}
+      # The EE an adopter would build: netcommon + ONE vendor collection + the python SSH transport
+      # netcommon does not declare (ADR-0159). Built and kind-loaded HERE because an EE-Job Actuator
+      # is reported healthy without any image check.
+      - task: dev:ee-frr:build
+      # The PLATFORM EE too, because the content guard needs it: rtr-configure-wrong-ee selects an
+      # Actuator on stratt-ee:dev precisely to prove that choosing an image without the network
+      # content FAILS EARLY. An image the demo never builds would make that guard pass only on a
+      # machine that happens to have it — which is the failure `TestEveryDeclaredActuatorImageIsBuilt
+      # ByATask` exists to catch, and did catch when this demo was first written.
+      - task: dev:ee:build
+      - task: demo:network-device:device:build
+      - task: demo:network-device:stage
+      - |
+        set -eu
+        "{{.HELM}}" upgrade --install stratt {{.ROOT_DIR}}/deploy/charts/stratt \
+          --kube-context {{.KIND_CONTEXT}} -n stratt --create-namespace \
+          -f {{.ROOT_DIR}}/deploy/charts/stratt/values-allinone.yaml \
+          -f {{.ROOT_DIR}}/deploy/charts/stratt/values-genesis.yaml \
+          -f {{.ROOT_DIR}}/deploy/charts/stratt/values-demo-network-device.yaml
+      # A rebuilt image with the SAME tag is invisible to Kubernetes, so force the roll — the same
+      # trap demo:app-cert:run documents at length.
+      - "{{.KUBECTL}} --context {{.KIND_CONTEXT}} -n stratt rollout restart deploy/stratt"
+      - "{{.KUBECTL}} --context {{.KIND_CONTEXT}} -n stratt rollout status deploy/stratt --timeout=300s"
+      - task: demo:network-device:device:up
+      - KUBECONTEXT={{.KIND_CONTEXT}} KUBECTL={{.KUBECTL}} bash {{.ROOT_DIR}}/demos/network-device/run.sh
+
+  demo:network-device:down:
+    desc: Tear down the network-device demo's device and secrets (leaves the floor)
+    deps: [tools:kubectl]
+    cmds:
+      - "{{.KUBECTL}} --context {{.KIND_CONTEXT}} delete -f {{.ROOT_DIR}}/demos/network-device/device.yaml --ignore-not-found 2>/dev/null || true"
+      - "{{.KUBECTL}} --context {{.KIND_CONTEXT}} -n stratt delete secret rtr-creds rtr-authorized-keys --ignore-not-found 2>/dev/null || true"
+
   demo:app-cert:stage:
     # Stage the app-cert demo's SELF-CONTAINED estate (ADR-0116) into the inline-declarations path —
     # its authz grants + the app-node-ssh machine CredentialRef + the app-nodes View + the declared
@@ -2978,7 +3058,39 @@ tasks:
       # to a network device, so there is no Step to run it and loading it would be inventory
       # with no consumer. An adopter builds this (adding their own vendor collections — cisco.ios,
       # arista.eos — and relocking) and selects it from their own Actuator declaration (ADR-0117 D3).
-      - docker build --build-arg GO_PARALLEL={{.GO_PARALLEL}} --build-arg EE_CONTENT=network.requirements.yml -f ee/Dockerfile -t stratt-ee-network:dev .
+      # ansible-pylibssh is NOT optional garnish — without it this image cannot open a network_cli
+      # session AT ALL. netcommon declares no SSH library as a hard dependency (pylibssh or paramiko,
+      # either will do), so installing the collection installs no transport, and the connection dies
+      # at connect time with `No module named 'paramiko'` — the exact "names a python module the
+      # estate never wrote" failure ADR-0153 D7 was written to prevent, for D7's own connection type.
+      # Measured against a live FRR device on 2026-08-03; see ee/Dockerfile's EE_PYTHON_EXTRA.
+      - docker build --build-arg GO_PARALLEL={{.GO_PARALLEL}} --build-arg EE_CONTENT=network.requirements.yml
+        --build-arg EE_PYTHON_EXTRA="ansible-pylibssh=={{.PYLIBSSH_VER}}"
+        -f ee/Dockerfile -t stratt-ee-network:dev .
+
+  dev:ee-frr:build:
+    desc: Build the FRR-capable EE variant and load it into kind (ADR-0153 live half, demos/network-device)
+    cmds:
+      # WHAT AN ADOPTER DOES, run as a gate rather than described in prose (ADR-0117 D3): take the
+      # network variant's content, add ONE vendor collection, select the image from an Actuator
+      # declaration. frr.frr carries the cliconf/terminal plugins that teach network_cli how to talk
+      # to a vtysh prompt; without them `ansible_network_os: frr.frr.frr` names a platform ansible
+      # cannot drive.
+      #
+      # EE_PYTHON_EXTRA is NOT optional (ADR-0159): netcommon declares no SSH library as a hard
+      # dependency because pylibssh or paramiko will do, so the collection alone opens no connection
+      # at all — and since ADR-0159 the shim REFUSES such an image up front instead of letting it
+      # die at connect time naming a python module the estate never wrote.
+      - docker build --build-arg GO_PARALLEL={{.GO_PARALLEL}} --build-arg EE_CONTENT=frr.requirements.yml
+        --build-arg EE_PYTHON_EXTRA="ansible-pylibssh=={{.PYLIBSSH_VER}}"
+        -f ee/Dockerfile -t stratt-ee-frr:dev .
+      - go run sigs.k8s.io/kind@v{{.KIND_VER}} load docker-image stratt-ee-frr:dev --name {{.KIND_CLUSTER}}
+
+  demo:network-device:device:build:
+    desc: Build the FRR network-device image (a real vtysh CLI over SSH) and load it into kind
+    cmds:
+      - docker build -f demos/network-device/device.Dockerfile -t stratt-frr-device:dev demos/network-device
+      - go run sigs.k8s.io/kind@v{{.KIND_VER}} load docker-image stratt-frr-device:dev --name {{.KIND_CLUSTER}}
 
   dev:ee-mcp:build:
     desc: Build the MCP EE image and load it into the kind cluster (ADR-0022)

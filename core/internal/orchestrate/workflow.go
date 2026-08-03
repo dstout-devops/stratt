@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
@@ -111,6 +112,11 @@ const (
 	stepSucceeded = "succeeded"
 	stepFailed    = "failed"
 	stepSkipped   = "skipped"
+	// stepCanceled is a Step that was IN FLIGHT when the DAG was cancelled (ADR-0157 D5). Distinct
+	// from stepFailed because the estate is in a different state: a failed converge reported why it
+	// stopped, whereas a cancelled one may have been mid-change on a real machine. Distinct from ""
+	// (never started), which is the third thing D5's summary has to be able to say.
+	stepCanceled = "canceled"
 )
 
 type stepResult struct {
@@ -184,6 +190,37 @@ func RunDAG(ctx workflow.Context, in DAGInput) error {
 	for _, s := range spec.Steps {
 		state[s.Name] = ""
 	}
+
+	// Cancellation (ADR-0157 D1/D2/D5), the same shape RunAgainstView and RunAction already use and
+	// for the same reason: the Workflow is the single writer of its own terminal status (ADR-0026,
+	// §2.1), so the API handler signals Temporal and never writes `canceled` itself. Two writers of
+	// one terminal value fails in the ugliest direction — the handler marks canceled, cancellation
+	// loses a race, and the DAG carries on against a row that says it stopped.
+	//
+	// Activities cannot run on a cancelled context, which is why the normal `finishWorkflowRun` on
+	// the way out is a no-op here (its activity simply fails and the error is discarded) and why
+	// this runs on a DISCONNECTED context. That is not a subtlety to rediscover: it is why the
+	// children's handlers are written this way.
+	//
+	// The children are already reaped by REQUEST_CANCEL — each stamps its own status and deletes its
+	// own K8s Job — so this handler owns only what nothing else can: the parent's row and its Gates.
+	defer func() {
+		if in.WorkflowRunID == "" || !errors.Is(ctx.Err(), workflow.ErrCanceled) {
+			return
+		}
+		dctx, dcancel := workflow.NewDisconnectedContext(ctx)
+		defer dcancel()
+		dctx = workflow.WithActivityOptions(dctx, opts)
+		// Gates first: a Gate left pending outlives the run in an operator's queue, whereas the
+		// WorkflowRun row is merely stale until the next line. Worst-first if only one succeeds.
+		_ = workflow.ExecuteActivity(dctx, a.CancelPendingGates, in.WorkflowRunID).Get(dctx, nil)
+		// D5 — the per-Step map goes in exactly as a normal finish writes it, because it already
+		// distinguishes the three states that matter after a cancel: terminal (the Step completed),
+		// "running" (cancelled in flight, so the estate is genuinely half-applied there) and ""
+		// (never started). Cancellation is not rollback and this records which is which; drift
+		// detection surfaces the rest, which is the system working rather than a gap.
+		_ = workflow.ExecuteActivity(dctx, a.FinishWorkflowRun, in.WorkflowRunID, types.RunCanceled, state).Get(dctx, nil)
+	}()
 	// stepOutputs accumulates completed Action Steps' typed outputs, the source
 	// of the {{.steps.<name>.outputs.x}} binding namespace (ADR-0031). Written
 	// only on the main workflow goroutine (on done.Receive), so it is safe to
@@ -211,6 +248,15 @@ func RunDAG(ctx workflow.Context, in DAGInput) error {
 			default:
 				status, outputs = runActuationStep(gctx, in, step, boundOutputs)
 			}
+			// A Step whose goroutine finds itself on a cancelled context was in flight when the
+			// cancel arrived, and is recorded as such rather than as a failure (D5). The ambiguity
+			// is stated rather than hidden: a Step that genuinely failed a moment BEFORE the cancel
+			// lands here too, and cannot be told apart from one the cancel stopped. Recording both
+			// as `canceled` is the safer error — it says "this may have been mid-change", which is
+			// the claim an operator needs to check, whereas `failed` asserts it finished failing.
+			if errors.Is(gctx.Err(), workflow.ErrCanceled) {
+				status = stepCanceled
+			}
 			done.Send(gctx, stepResult{Name: step.Name, Status: status, Outputs: outputs})
 		})
 	}
@@ -218,6 +264,13 @@ func RunDAG(ctx workflow.Context, in DAGInput) error {
 	// schedule marks unmet-condition Steps skipped and launches ready ones,
 	// repeating until stable (a skip can cascade further skips).
 	schedule := func() {
+		// Nothing new starts once the DAG is cancelled. Those Steps stay "" — D5's "never started"
+		// — which is both true and the useful thing to record: launching a child on a cancelled
+		// context would produce a Run row that exists only to fail, and would make the summary
+		// claim work was attempted where none was.
+		if errors.Is(ctx.Err(), workflow.ErrCanceled) {
+			return
+		}
 		for changed := true; changed; {
 			changed = false
 			for _, s := range spec.Steps {
@@ -642,9 +695,30 @@ func awaitGate(ctx workflow.Context, a *Activities, workflowRunID, stepName stri
 		if timer != nil {
 			sel.AddFuture(timer, func(workflow.Future) { timedOut = true })
 		}
+		// CANCELLATION HAS TO BE A BRANCH OF THE SELECT, and ADR-0157 assumed it was not needed.
+		// Its Context section states "a Gate Step blocks in sel.Select(ctx); on cancellation that
+		// returns" — it does NOT. A Temporal Selector unblocks only on a branch it was given, and
+		// with just the signal channel and the optional timer, a cancelled DAG left this goroutine
+		// blocked forever: `done` never received, `running` never reached zero, the DAG never
+		// reached its cancellation handler, and the whole execution sat until its Temporal timeout.
+		// So the cancel door would have returned 202 and stopped nothing — the exact "success that
+		// did nothing" this ADR refuses elsewhere (D6). Found by running it, not by reading it.
+		sel.AddReceive(ctx.Done(), func(workflow.ReceiveChannel, bool) {})
 		sel.Select(ctx)
+		if errors.Is(ctx.Err(), workflow.ErrCanceled) {
+			break
+		}
 	}
 
+	// CANCELLED: do not try to record anything here (ADR-0157 D2). `sel.Select` returns on
+	// cancellation with neither an approval nor a denial, so the switch below would fall to its
+	// default and record `expired` — which says the approval window lapsed when the truth is that
+	// someone stopped the run. The activity cannot execute on a cancelled context anyway; attempting
+	// it only trades a wrong record for a hung one. The DAG's cancellation handler records this Gate
+	// `canceled` on a disconnected context, which is the one place that CAN.
+	if errors.Is(ctx.Err(), workflow.ErrCanceled) {
+		return stepFailed
+	}
 	status := types.GateExpired
 	switch {
 	case denied:
@@ -677,6 +751,12 @@ func (a *Activities) EnsureWorkflowRun(ctx context.Context, in DAGInput, tempora
 	wr, err := a.Store.CreateNestedWorkflowRun(ctx, in.WorkflowName, temporalID, in.Principal, in.Trigger,
 		in.ParentWorkflowRunID, in.ParentStepName)
 	if err != nil {
+		return "", err
+	}
+	// The inherited View, on the Trigger/nested path too (ADR-0157 D3). The API path records it in
+	// LaunchWorkflowRun; this is the other door that mints a row, and a cancel must be authorizable
+	// against either. No-op when the Steps name their own Views.
+	if err := a.Store.SetWorkflowRunView(ctx, wr.ID, in.ViewName); err != nil {
 		return "", err
 	}
 	// The binding that decided this run (ADR-0139 D3). Launch-time resolution has no compiled
@@ -914,6 +994,36 @@ func (a *Activities) CreateGateRecord(ctx context.Context, workflowRunID, step, 
 // note are the audit trail (§1.6).
 func (a *Activities) RecordGateDecision(ctx context.Context, gateID, status, decidedBy, note string) error {
 	return a.Store.DecideGate(ctx, gateID, status, decidedBy, note)
+}
+
+// CancelPendingGates records every still-pending Gate of a cancelled WorkflowRun as `canceled`
+// (ADR-0157 D2). Without it a cancelled DAG leaves a Gate PENDING FOREVER — an approval an operator
+// can still act on, for a workflow that is gone — because the Gate Step's own RecordGateDecision
+// runs on the cancelled context and cannot execute.
+//
+// ONE activity over the set rather than one per Gate, and the reason is the failure mode: the
+// caller is a cancellation handler on a disconnected context, and a partial sweep there would leave
+// SOME gates pending with nothing left running to finish them. A single activity either records
+// them all or retries as a unit.
+//
+// `decidedBy` is deliberately empty. Nobody decided — the run was stopped — and writing the
+// cancelling Principal into a field that means "who approved or denied this" would put a wrong
+// answer in the audit record, which is the same §1.8 line D2 draws between `canceled` and `expired`.
+// The cancelling Principal is recorded on the WorkflowRun, where it belongs.
+func (a *Activities) CancelPendingGates(ctx context.Context, workflowRunID string) error {
+	gates, err := a.Store.ListGatesForWorkflowRun(ctx, workflowRunID)
+	if err != nil {
+		return err
+	}
+	for _, g := range gates {
+		if g.Status != types.GatePending {
+			continue // already approved, denied or expired — a decision that really happened
+		}
+		if err := a.Store.DecideGate(ctx, g.ID, types.GateCanceled, "", "the WorkflowRun was cancelled"); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // FinishWorkflowRun records the terminal status and per-Step outcomes.

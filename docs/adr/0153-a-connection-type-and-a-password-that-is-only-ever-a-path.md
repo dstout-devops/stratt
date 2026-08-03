@@ -265,6 +265,50 @@ a CI-runnable target: an FRR or cEOS container plus the matching collection in t
 the live half, in the shape PLG-1's bastion half is booked. **A unit-green connection type is not a
 proven one**, and this ADR does not claim otherwise.
 
+### The live half, done (2026-08-03) — and it is a GATED DEMO, not a one-off run
+
+[`demos/network-device`](../../demos/network-device/README.md) configures a real router end to end and
+asserts the outcome by reading the DEVICE, and because it is a `demo:<name>:run` target it is in the
+E2E-1 suite automatically — this cannot rot back to "unit-green".
+
+```
+demo: assert the target is a NETWORK DEVICE, not a host with a routing daemon
+  netops' login shell: /usr/bin/vtysh
+  and NO mgmt.transport is observed for it — a discovered device declares its own reach method
+  WorkflowRun succeeded over network_cli
+  device says: ip route 10.99.0.0/24 blackhole
+  guard Run failed as designed  (an EE without the content, refused before it connected)
+demo: DONE — Stratt configured a real network device over its own CLI (fidelity: real)
+```
+
+The guard is the half that makes D7 an enforced boundary rather than a claim: the SAME Step against
+an Actuator on the platform EE is refused before it connects, naming the missing collection, and the
+demo verifies the device was never touched by it.
+
+The target needs no cEOS, no licence and no registration:
+`alpine:3.21` + `apk add frr frr-pythontools openssh`, with the `netops` user's LOGIN SHELL set to
+`/usr/bin/vtysh` — you SSH in and land in the CLI, which is what a switch does. Driven from
+`stratt-ee-network:dev` plus one adopter vendor collection (`frr.frr` 2.0.2) over
+`ansible.netcommon.network_cli` with `ansible_network_os: frr.frr.frr`: `cli_command` returned the
+device's own running-config, `frr_facts` gathered facts through the cliconf/terminal plugins,
+`ok=4 failed=0`. That the SHIPPED variant works as the base also confirms the adopter path
+ADR-0117 D3 describes, rather than only asserting it.
+
+**And D7's gate passed a declaration that could not connect.** `network_cli` needs a PYTHON SSH
+LIBRARY on the control node — `ansible-pylibssh` or `paramiko` — and netcommon declares neither as a
+hard dependency, because either will do. So installing the collection installs no transport, the
+collection check (the only axis D7 added) passed, and the run died at connect time with
+`No module named 'paramiko'`: **"a declaration that passes review and dies at connect time naming a
+python module the estate never wrote"**, which is this ADR's own words for the failure it was written
+to prevent. `ee/Dockerfile` gains `EE_PYTHON_EXTRA`; the network variant installs pylibssh, pinned.
+
+**The general lesson, booked on the roadmap rather than decided here:** a transport can fail on THREE
+axes — a collection (D7), a control-node binary (ADR-0156 D6), and a control-node python module
+(nothing). The shim checks two. Fixing the image fixes this instance and leaves the class open, and
+closing it properly means teaching the content manifest to record python extras rather than growing a
+subprocess probe beside the seam D7 chose deliberately — which extends two Accepted ADRs and wants
+its own decision.
+
 **Contract surface.** `ansible.input.v8` is a sibling of v7 (ADR-0132 D4), additive: every v7 field is
 retained with its meaning, and `vault`'s object form still validates. Version 8 becomes the one live
 `actuators/ansible.input`.

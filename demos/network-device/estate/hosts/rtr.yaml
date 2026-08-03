@@ -1,0 +1,10 @@
+# The device, declared as data. `os: ios` is deliberately NOT claimed — this is FRR, and the
+# platform is named once, on the Step, as `connection.networkOS`.
+#
+# The address is the in-cluster Service DNS of the device pod (device.yaml), the documented
+# literal-coordinate exception ADDR-1 covers: a name the CLUSTER's DNS owns and Stratt has no
+# business writing into.
+hosts:
+  - fqdn: rtr-01.stratt.test
+    labels: { os: frr, role: router, demo: network-device }
+    address: rtr-01.stratt.svc.cluster.local

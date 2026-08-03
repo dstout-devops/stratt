@@ -91,5 +91,13 @@ deploy/dev/dns/tsig.env
 # app-cert demo SSH keypair (machine credential material — never commit, §2.5)
 deploy/dev/app-cert/
 
+# network-device demo SSH keypair (machine credential material — never commit, §2.5).
+# Its absence here let a generated PRIVATE KEY into a commit: the Taskfile target that mints it says
+# "never committed (§2.5)", and that was true of app-cert's directory and untrue of this one, because
+# the claim lived in a comment beside the generator rather than in the file that enforces it. Caught
+# before it was pushed; the key was regenerated regardless, since a key that reached an object store
+# is a key that leaked.
+deploy/dev/network-device/
+
 # vspheresim dev binary (task dev:vspheresim:up runs it with `go run`)
 plugins/vcenter/vspheresim

@@ -659,3 +659,78 @@ func TestEveryChildWorkflowUsesRequestCancelClosePolicy(t *testing.T) {
 		t.Error("TERMINATE must not appear — the whole point is that the default is wrong here")
 	}
 }
+
+// ── ADR-0157 D1/D2/D5 · cancelling a WorkflowRun ─────────────────────────────
+//
+// The gap Phase 1 left. Cancellation already PROPAGATES to children — ParentClosePolicy
+// REQUEST_CANCEL, guarded above — and each child stamps its own status and reaps its own pod. What
+// nothing owned was the PARENT's row, its Gates, and the door.
+//
+// Cancelling on a GATE deliberately, because it is both the likeliest real cancel (a change nobody
+// ends up approving) and the case that was worst before: the Gate Step's own RecordGateDecision runs
+// on the cancelled context and cannot execute, so the Gate stayed PENDING FOREVER — an approval an
+// operator could still act on, for a workflow that was gone.
+func TestRunDAGCancelStampsCanceledAndClosesItsGate(t *testing.T) {
+	spec := types.Workflow{Name: "patch", Steps: []types.Step{
+		{Name: "gather", ViewName: "v"},
+		{Name: "approve", Needs: []string{"gather"}, Gate: &types.GateSpec{
+			Approvers: types.GateApprovers{Teams: []string{"platform"}},
+		}},
+		{Name: "report", Needs: []string{"approve"}, ViewName: "v"},
+	}}
+	env, final, status := dagTestEnv(t, spec, map[string]error{})
+
+	var a *Activities
+	gatesClosed := ""
+	env.OnActivity(a.CancelPendingGates, mock.Anything, "wr-1").Return(
+		func(_ context.Context, id string) error { gatesClosed = id; return nil })
+
+	env.RegisterDelayedCallback(func() { env.CancelWorkflow() }, time.Minute)
+	env.ExecuteWorkflow(RunDAG, DAGInput{WorkflowRunID: "wr-1", WorkflowName: "patch", Principal: "alice"})
+
+	if !env.IsWorkflowCompleted() {
+		t.Fatal("a cancelled DAG must still complete — the handler runs on a disconnected context")
+	}
+	// D1 — the WorkflowRun's own row, written by the WORKFLOW. The API handler never writes this:
+	// two writers of one terminal value lets the handler mark canceled, cancellation lose a race,
+	// and the DAG carry on against a row that says it stopped (§2.1).
+	if *status != types.RunCanceled {
+		t.Fatalf("terminal status: got %q, want canceled — a cancelled DAG that records `failed` (or "+
+			"nothing) misreports why it stopped", *status)
+	}
+	// D2 — the pending Gate is closed, and by the activity rather than by the Gate Step, which
+	// cannot run on the cancelled context.
+	if gatesClosed != "wr-1" {
+		t.Error("a cancelled DAG must record its pending Gates — otherwise an operator is still " +
+			"holding an approval for a workflow that is gone")
+	}
+	// D5 — cancellation is not rollback, and the summary says which Steps are which. `gather`
+	// completed, `approve` was in flight, `report` never started: the estate is genuinely
+	// half-applied and the record has to show where.
+	if (*final)["gather"] != stepSucceeded {
+		t.Errorf("a Step that COMPLETED before the cancel stays succeeded: %v", *final)
+	}
+	if (*final)["approve"] != stepCanceled {
+		t.Errorf("a Step IN FLIGHT when the cancel arrived is `canceled`, not `failed` — the estate "+
+			"may be mid-change there, which is the claim an operator has to go check: %v", *final)
+	}
+	if (*final)["report"] != "" {
+		t.Errorf("a Step that NEVER STARTED must not be recorded as anything else: %v", *final)
+	}
+}
+
+// Cancelling is not the same as failing, and the summary must not blur them. A DAG that was
+// cancelled while a Step was mid-converge has left a real machine half-changed; one that failed has
+// not necessarily. Drift detection surfaces the rest either way, but only if the record says which
+// happened.
+func TestRunDAGCancelIsDistinctFromFailure(t *testing.T) {
+	spec := types.Workflow{Name: "patch", Steps: []types.Step{{Name: "gather", ViewName: "v"}}}
+	env, _, status := dagTestEnv(t, spec, map[string]error{"gather": errors.New("boom")})
+	env.ExecuteWorkflow(RunDAG, DAGInput{WorkflowRunID: "wr-1", WorkflowName: "patch", Principal: "alice"})
+	if !env.IsWorkflowCompleted() {
+		t.Fatal("workflow did not complete")
+	}
+	if *status != types.RunFailed {
+		t.Fatalf("an uncancelled DAG whose Step failed is FAILED, not canceled: %q", *status)
+	}
+}

@@ -1,0 +1,22 @@
+# The ansible Actuator for network devices, and the ONLY thing that makes this demo's Steps able to
+# reach one: `image:` selects the EE variant carrying `ansible.netcommon` (the connection plugins),
+# `frr.frr` (the cliconf/terminal plugins for this platform) and `ansible-pylibssh` (the python SSH
+# transport netcommon does not declare — ADR-0159).
+#
+# THIS IS ADR-0117 D3a's whole argument in one field. Content is not a run-time parameter an author
+# can get wrong; it is a property of the image, and a Step selects it by selecting this Actuator.
+# Point `image:` at the platform EE and the Run is REFUSED before it starts — the shim reads this
+# image's own content manifest and finds neither the collection nor the python library.
+name: ansible-network
+pluginIdentity: ansible
+tier: trusted
+dryRunnable: true
+jobCommand: [stratt-ansible]
+image: stratt-ee-frr:dev
+contentDir: ansible/projects/network
+contentInputs: [playbook]
+# It writes NO facets. A device's running-config is not a fact Stratt owns — nothing here has a
+# Normalizer for it, and inventing one would be the whole-Entity schema §1.1 forbids. The demo
+# asserts the change by READING THE DEVICE, which is the honest verification anyway.
+facetNamespaces: []
+identitySchemes: [host.name]

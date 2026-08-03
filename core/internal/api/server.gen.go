@@ -2275,6 +2275,9 @@ type ServerInterface interface {
 	// Get one WorkflowRun with per-Step outcomes
 	// (GET /workflow-runs/{id})
 	GetWorkflowRun(w http.ResponseWriter, r *http.Request, id string)
+	// Request cancellation of a running WorkflowRun
+	// (POST /workflow-runs/{id}/cancel)
+	CancelWorkflowRun(w http.ResponseWriter, r *http.Request, id string)
 	// List declared Workflows
 	// (GET /workflows)
 	ListWorkflows(w http.ResponseWriter, r *http.Request)
@@ -3745,6 +3748,32 @@ func (siw *ServerInterfaceWrapper) GetWorkflowRun(w http.ResponseWriter, r *http
 	handler.ServeHTTP(w, r)
 }
 
+// CancelWorkflowRun operation middleware
+func (siw *ServerInterfaceWrapper) CancelWorkflowRun(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", r.PathValue("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: ""})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.CancelWorkflowRun(w, r, id)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 // ListWorkflows operation middleware
 func (siw *ServerInterfaceWrapper) ListWorkflows(w http.ResponseWriter, r *http.Request) {
 
@@ -3990,6 +4019,7 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/views/{name}/entities", wrapper.ResolveView)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/workflow-runs", wrapper.ListWorkflowRuns)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/workflow-runs/{id}", wrapper.GetWorkflowRun)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/workflow-runs/{id}/cancel", wrapper.CancelWorkflowRun)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/workflows", wrapper.ListWorkflows)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/workflows/{name}", wrapper.GetWorkflow)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/workflows/{name}/runs", wrapper.StartWorkflowRun)
@@ -4419,21 +4449,28 @@ var swaggerSpec = []string{
 	"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",
-	"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",
+	"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",
 }
 
 // decodeSpec returns the embedded OpenAPI spec as raw JSON bytes,

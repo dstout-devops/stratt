@@ -8,7 +8,7 @@ summary: >
   mint an X.509 certificate with a collection baked into a purpose-built execution environment,
   install an app on it, and report the observed state back into the graph — then watch a play that
   reaches no host fail rather than report green, and a host whose reach method nobody stated be
-  refused rather than reached by a guess.
+  refused rather than reached by a guess, and a cancelled run stop for real — pod and all.
 
 # fidelity (D3): how real is what you're watching? The turnkey runner prints this up front.
 #   real       — real workloads on real substrate.
@@ -28,6 +28,10 @@ guardWorkflow: vacuous-run-guard
 # Run must be REFUSED — naming the target and both remedies — rather than attempted over a guessed
 # ssh. Every other Step here declares `connection.type: ssh`; this one is the pre-migration shape.
 reachGuardWorkflow: unreached-target-guard
+# The third guard (ADR-0157): a Step that sleeps on the target, cancelled mid-run. The demo asserts
+# the WorkflowRun reads `canceled`, its child Run reads `canceled`, and THE K8S JOB IS GONE — only
+# the last distinguishes a real cancel from a row that was merely stamped.
+cancelGuardWorkflow: cancel-guard
 view: app-nodes
 actuator: ansible-crypto
 executionEnvironment: stratt-ee-crypto:dev

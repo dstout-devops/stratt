@@ -29,7 +29,6 @@ import (
 	"github.com/dstout-devops/stratt/core/internal/cellrouter"
 	"github.com/dstout-devops/stratt/core/internal/contract"
 	"github.com/dstout-devops/stratt/core/internal/dispatch"
-	"github.com/dstout-devops/stratt/core/internal/events"
 	"github.com/dstout-devops/stratt/core/internal/evidencestore"
 	"github.com/dstout-devops/stratt/core/internal/graph"
 	"github.com/dstout-devops/stratt/core/internal/planstore"
@@ -272,8 +271,18 @@ func RunAgainstView(ctx workflow.Context, in RunInput) (RunOutcome, error) {
 		dctx, dcancel := workflow.NewDisconnectedContext(ctx)
 		defer dcancel()
 		dctx = workflow.WithActivityOptions(dctx, opts)
-		_ = workflow.ExecuteActivity(dctx, a.CleanupRun, in.RunID, touchedSites).Get(dctx, nil)
-		_ = workflow.ExecuteActivity(dctx, a.FinishRun, in, types.RunCanceled, dispatch.Result{}).Get(dctx, nil)
+		// The cleanup error is CARRIED, not discarded. It was `_ =` for as long as this handler
+		// has existed, and that is how a missing RBAC verb (`list` on batch/jobs) made every
+		// cancel since ADR-0026 stamp `canceled` over a pod that kept converging a real machine.
+		// A cancel that could not reap its pod must say so on the Run an operator will read,
+		// because the pod is the thing they actually needed stopped (§1.8).
+		cerr := workflow.ExecuteActivity(dctx, a.CleanupRun, in.RunID, touchedSites).Get(dctx, nil)
+		res := dispatch.Result{}
+		if cerr != nil {
+			res.Error = "cancelled, but the execution Job could NOT be deleted and may still be " +
+				"running against real targets: " + cerr.Error()
+		}
+		_ = workflow.ExecuteActivity(dctx, a.FinishRun, in, types.RunCanceled, res).Get(dctx, nil)
 	}()
 
 	// View-scoped execution authz (§2.5, ADR-0028): before ANYTHING runs, the
@@ -593,11 +602,32 @@ func (r *PluginRegistry) DeregisterAction(name string) {
 	delete(r.actions, name)
 }
 
+// EventBus is the slice of *events.Bus that orchestration actually uses — a PORT, so the
+// publishing half of an activity can be asserted without a NATS.
+//
+// It exists because a booked gap could not be closed without it: `params-ignored` (ADR-0151 D4)
+// had its logging half tested and its PUBLISHING half untested, because the field was the concrete
+// *events.Bus and a unit test has no bus to give it. The untested half is the half an operator
+// actually reads — a warning that reaches only the daemon log is a warning nobody sees, which is
+// the same §1.8 shape as a refusal with no terminal event.
+//
+// Narrow on purpose: exactly the three methods orchestration calls, so it stays a description of
+// this package's needs rather than a mirror of events.Bus that has to be kept in step with it.
+type EventBus interface {
+	Publish(ctx context.Context, ev types.RunEvent) error
+	PublishNotice(ctx context.Context, n types.Notice) error
+	Tail(ctx context.Context, runID string, fn func(types.RunEvent) error) error
+}
+
 type Activities struct {
 	Store      *graph.Store
 	Dispatcher *dispatch.Dispatcher
-	Bus        *events.Bus
-	Authz      authz.Authorizer
+	// Bus is the EventBus port, satisfied by *events.Bus in production. NIL-CHECK CAUTION: this is
+	// an interface, so a typed-nil *events.Bus assigned here would be non-nil as an interface and
+	// the `a.Bus == nil` guards would not fire. strattd passes a constructed bus or leaves it
+	// unset, which is the only shape those guards are written for.
+	Bus   EventBus
+	Authz authz.Authorizer
 	// Decider is the Policy Decision Point PORT (ADR-0072): the policy Step
 	// obtains its Decision through this seam, never a concrete engine. Nil ⇒ the
 	// built-in CEL provider (the default); swap for an external engine or

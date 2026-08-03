@@ -171,6 +171,12 @@ func LaunchWorkflowRun(ctx context.Context, d LaunchDeps, p WorkflowLaunchParams
 	if err != nil {
 		return types.WorkflowRun{}, err
 	}
+	// The inherited View, recorded BEFORE the execution starts (ADR-0157 D3): it is the
+	// authorization input for a later cancel, and a row that could be cancelled before it was set
+	// would be a row whose cancel could not be authorized. No-op for a direct launch.
+	if err := d.Store.SetWorkflowRunView(ctx, wr.ID, p.ViewName); err != nil {
+		return types.WorkflowRun{}, err
+	}
 	temporalID := "wfrun-" + wr.ID
 	if _, err := d.Temporal.ExecuteWorkflow(ctx, client.StartWorkflowOptions{
 		ID: temporalID, TaskQueue: TaskQueue,
@@ -229,6 +235,27 @@ func launchAction(ctx context.Context, d LaunchDeps, p LaunchParams) (types.Run,
 func CancelRun(ctx context.Context, temporal client.Client, runID string) error {
 	if err := temporal.CancelWorkflow(ctx, "run-"+runID, ""); err != nil {
 		return fmt.Errorf("cancel run %s: %w", runID, err)
+	}
+	return nil
+}
+
+// CancelWorkflowRun requests cancellation of a WorkflowRun's DAG execution (ADR-0157). Same
+// division of labour as CancelRun: the caller only SIGNALS, and RunDAG's own handler is the single
+// writer of the terminal status (§2.1) — it stamps `canceled`, records pending Gates, and writes
+// the per-Step summary. Children need nothing here: ParentClosePolicy REQUEST_CANCEL propagates to
+// every one of them, and each already reaps its own K8s Job and stamps its own row.
+//
+// The stored TemporalID is used rather than a reconstructed one where it exists, exactly as the
+// Gate-decision path does. Reconstructing "wfrun-"+id is the fallback for a row whose id was never
+// stamped, which the launch path does write but a Trigger-started execution stamps only after
+// EnsureWorkflowRun — signalling the wrong execution id is worse than signalling none, so this
+// prefers what was recorded.
+func CancelWorkflowRun(ctx context.Context, temporal client.Client, workflowRunID, temporalID string) error {
+	if temporalID == "" {
+		temporalID = "wfrun-" + workflowRunID
+	}
+	if err := temporal.CancelWorkflow(ctx, temporalID, ""); err != nil {
+		return fmt.Errorf("cancel workflow run %s: %w", workflowRunID, err)
 	}
 	return nil
 }

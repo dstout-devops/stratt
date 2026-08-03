@@ -939,8 +939,9 @@ nothing; its pods observe `kubectl`.
 has a writer** — awsec2 deliberately writes no transport, and `aws_ssm` waits on the SSM client
 booked above. So no shipped provider emits an observed `ssh` transport at all, which is exactly why
 `ssh` is a DECLARED value in practice. The schema description should be corrected to describe what
-is written; not done here, because a Facet schema edit is a pinned-hash change and deserves its own
-change rather than a ride-along.
+is written. 🟢 **DONE (2026-08-03)**: the description now states what each provider actually writes,
+including awsec2's deliberate silence and `aws_ssm`'s missing writer, and says why that makes `ssh` a
+DECLARED value in practice.
 
 ### Open follow-ups from the `fix/seam-continuity-and-fidelity` branch (2026-08-01)
 
@@ -950,12 +951,30 @@ not have**, which is a different thing from unfinished work and is marked as suc
 
 **Owed verification (the highest-value items — code that exists and has not been proven):**
 
-- **ADR-0157 Phases 3–5 · WorkflowRun cancellation.** Phase 1 (the `ParentClosePolicy` fix) and
-  Phase 2 (the ADR) shipped. Still to do: the native `POST /api/v1/workflow-runs/{id}/cancel` door,
-  the `/api/v2/workflow_jobs/{id}/cancel/` façade route that was withheld in `1d7ffc0` for exactly
-  this reason, and the **live proof** — cancel a multi-Step DAG mid-Step on kind and assert the
-  WorkflowRun is `canceled`, the child Run is `canceled`, and **the K8s Job is gone**. Only the
-  third distinguishes a real cancel from bookkeeping.
+- ~~**ADR-0157 Phases 3–5 · WorkflowRun cancellation.**~~ 🟢 **DONE and LIVE-PROVEN (2026-08-03).**
+  The native `POST /api/v1/workflow-runs/{id}/cancel` door, the `/api/v2/workflow_jobs/{id}/cancel/`
+  façade route withheld in `1d7ffc0`, and the live proof — all three assertions green on kind,
+  including **the K8s Job is gone**, now gated by `demo:app-cert`'s `cancel-guard` and therefore by
+  E2E-1. ADR-0157 → Accepted.
+
+  **The third assertion failed on its first run, and what it found had been shipped since
+  ADR-0026: every cancellation was a lie.** The dispatcher Role granted `create`+`get` on
+  `batch/jobs`, while `DeleteRunJobs` selects by the `stratt.dev/run-id` LABEL and so needs `list`
+  before `delete` — it held neither. Measured: after a cancel, the guard's Job read
+  `Complete, DURATION 2m4s` (its full sleep) and was **still present 243s later**, while the API had
+  returned 202 and both rows read `canceled`. The pod converged a real host to completion.
+  Invisible because the handler called cleanup as `_ = ExecuteActivity(…)`, and because
+  `TestDeleteRunJobs` passes against a fake clientset with no RBAC while `helm lint` renders the
+  Role without knowing what the Go calls — **the defect lived exactly in the gap between two
+  passing tests.** Fixed: the verbs, the discarded error (now carried onto the Run's summary), and
+  `TestChartGrantsTheJobVerbsThisPackageCalls` to pin them.
+
+  Three more corrections to the ADR itself, all found by implementing it: a Gate does NOT unblock on
+  cancellation (a Temporal `Selector` needs a `ctx.Done()` branch, so a cancelled DAG hung until its
+  Temporal timeout and the door would have returned 202 having stopped nothing); D3 was not
+  implementable as written (the inherited View was never persisted, so a Finding-launched
+  remediation's cancel could not be authorized — migration 00050); and D5 needed a `canceled` Step
+  outcome it had not named.
 - **`aws_ssm` has no writer** (ADR-0156). The shim supports the transport; nothing produces it. The
   awsec2 Syncer can honestly observe neither EC2 path — `KeyName` means a key is AUTHORIZED, not
   that sshd is listening — so this needs the SSM client and an `ssm:DescribeInstanceInformation`
@@ -964,19 +983,118 @@ not have**, which is a different thing from unfinished work and is marked as suc
 - **`vmware_tools` is shipped and unit-tested only** (ADR-0156). vspheresim implements the vCenter
   API but not Tools guest operations, so proving it needs **a real vCenter with a Tools-running
   guest**. Blocked on a target, not on design.
-- **A live network-device run** (ADR-0153). The collection half is done and image-verified both
-  ways; no real device has been driven. Needs an FRR or cEOS container in CI.
+- ~~**A live network-device run** (ADR-0153).~~ 🟢 **DONE (2026-08-03) — and it is a GATED DEMO.**
+  [`demos/network-device`](../demos/network-device/README.md) configures a real FRR router over
+  `connection.type: network_cli`, `EXIT=0` on kind, and E2E-1 picks it up automatically because
+  `demo:network-device:run` exists. It asserts the target really is a device (netops' login shell is
+  `/usr/bin/vtysh` — there is no POSIX shell behind it), that NOTHING observes its transport (a switch
+  is discovered, not provisioned, so the Step declares its own reach method — ADR-0156 D5 /
+  ADR-0158 D2), that the route is in the **device's own running-config** read back through vtysh, and
+  that a Step whose EE lacks the network content is **refused before it connects** with the device
+  verified untouched.
+
+  **A real device was driven, end to end.** Target: `alpine:3.21` + `apk add frr frr-pythontools
+  openssh`, with the login shell of the `netops` user set to `/usr/bin/vtysh` — which is exactly how
+  a switch presents, you SSH in and land in the CLI rather than a POSIX shell. No cEOS, no licence,
+  no registration. Driven from **`stratt-ee-network:dev` plus one adopter vendor collection**
+  (`frr.frr` 2.0.2, current on Galaxy), over `ansible.netcommon.network_cli` with
+  `ansible_network_os: frr.frr.frr`: `cli_command` returned the device's own running-config,
+  `frr.frr.frr_facts` gathered facts through the cliconf/terminal plugins, `ok=4 failed=0`.
+  That also confirms the shipped variant is a correct BASE for the adopter path ADR-0117 D3 describes.
+
+  **It found a defect on the way, now fixed: `network_cli` needs a PYTHON SSH LIBRARY and no EE had
+  one.** netcommon declares neither `ansible-pylibssh` nor `paramiko` as a hard dependency (either
+  will do), so installing the collection installs no transport at all, and the connection died with
+  `No module named 'paramiko'`. The image gate PASSED it — the collection was present, which is the
+  only axis ADR-0153 D7 checks. So a declaration that passed review died at connect time naming a
+  python module the estate never wrote, which is D7's own sentence describing the failure D7 exists
+  to prevent, happening to D7's own connection type. `ee/Dockerfile` gains `EE_PYTHON_EXTRA` and the
+  network variant now installs pylibssh (pinned, evergreen-tracked).
+
+  **Still to build:** the demo itself — an EE variant carrying one vendor collection, the device
+  manifest, the estate (a declared device + a Workflow with `connection.type: network_cli`), the
+  `run.sh` assertions, the Taskfile targets. E2E-1 picks it up automatically once
+  `demo:<name>:run` exists. It spans ansible + declared, so `demos/` is the right home under
+  ADR-0137 D7.
+
+- ~~⚠️ **THE SHIM CHECKS TWO OF THE THREE AXES A TRANSPORT CAN FAIL ON**~~ 🟢 **CLOSED
+  ([ADR-0159](adr/0159-a-transport-fails-on-three-axes.md), 2026-08-03, live-proven).** The EE content
+  manifest now records the image's PYTHON DISTRIBUTIONS beside its collections and roles, and the
+  shim refuses a connection type whose python transport is absent — ANY-OF, because netcommon accepts
+  pylibssh or paramiko and demanding one specific module would refuse a working image. No probe: D7
+  deliberately refused to interrogate the image and reads the manifest, so this reads the same seam.
+  Proven against two REAL images differing only by `EE_PYTHON_EXTRA` — the one without is refused
+  before the run with a terminal event naming both libraries and the fix; the shipped one renders its
+  inventory and starts the play. Falsified by deleting the call site.
+
+  Still open and named in D5: python extras are pinned by VERSION, not digest, so a republished wheel
+  at the same version changes the image and nothing says so — weaker than the collection lockfile
+  beside it. The fix is uv's own hash-locking over a per-variant requirements file, which changes how
+  variants are declared.
+
+  <details><summary>The original entry</summary>
+
+- ⚠️ **THE SHIM CHECKS TWO OF THE THREE AXES A TRANSPORT CAN FAIL ON** (found 2026-08-03, above).
+  A connection plugin can need a COLLECTION (ADR-0153 D7 checks it), a BINARY on the control node
+  (ADR-0156 D6 checks it — kubectl, session-manager-plugin), and a **PYTHON MODULE on the control
+  node (nothing checks it)**. The third is not hypothetical: it is what `network_cli` needs, and it
+  is what failed. Fixing the image fixes today's instance and leaves the CLASS open — the next
+  transport with a python-side dependency fails the same way.
+
+  **Not fixed here, and the reason is a real design question rather than effort.** D7 deliberately
+  REFUSED to probe the image (it measured `ansible-doc`'s exit codes as useless for this) and reads
+  the image's own content manifest instead. A python-module check therefore wants the manifest to
+  RECORD the variant's python extras, so the shim keeps reading one seam rather than growing a
+  subprocess probe beside it — which means touching `ee/content.py`, the manifest shape, and the
+  shim's `requireConnectionCollection`/`requireTransportTooling` pair. That extends two Accepted
+  ADRs and belongs in its own decision, not inside a demo commit.
+
+  </details>
 - **Windows (`winrm`/`psrp`)** (ADR-0153 D1). Blocked on a verifiable target ONLY — and note the
   plugins are in ansible-core, so no EE variant is needed. It is one enum entry plus a credential
   form that already exists.
-- **`params-ignored` RunEvent publish** (`6e114fc`). The log half is tested; the publish half is not,
-  because `Activities.Bus` is a concrete `*events.Bus` and no shipped Intent declares `params`.
-- **E2E-1's `e2e:live` CI job.** Deliberately not added blind: a scheduled gate that cannot be made
-  to fire from a dev session is an unverifiable gate, which is the shape this branch spent its
-  length closing.
+- ~~**`params-ignored` RunEvent publish** (`6e114fc`).~~ 🟢 **FIXED (2026-08-03).** `Activities.Bus`
+  is now the narrow `EventBus` PORT (`Publish`/`PublishNotice`/`Tail`) that `*events.Bus` satisfies,
+  so the publishing half is assertable without a NATS. Tests cover the event an operator actually
+  reads — kind, WARN level, Run scope, the params in deterministic order, and the `reason` that
+  answers "did I break something?" — plus a bus that refuses, which must not take the build down and
+  must still reach the log. The untested half was the half that matters: a warning reaching only the
+  daemon log is a warning nobody sees.
+- ~~**E2E-1's `e2e:live` CI job.**~~ 🟢 **SHIPPED** — `.github/workflows/e2e-live.yml` (weekly, on
+  `v*` tags, on dispatch), and it has fired: run `30723212848` green across all six demos. The
+  caution that wrote this entry ("not added blind: a scheduled gate that cannot be made to fire from
+  a dev session is an unverifiable gate") was answered by adding `workflow_dispatch`, which is how
+  that run was triggered. **Second stale entry found the same way as the capstone's BLOCKING one** —
+  written before the work landed and never re-checked. See the note there: if a tracker claim
+  outlives the run that produced it, re-run it before quoting it.
 
-**BLOCKING for anyone quoting the capstone — `demo:region-to-cert` does not pass from a COLD floor
-(2026-08-01):**
+**~~BLOCKING for anyone quoting the capstone~~ — RESOLVED (2026-08-02). `demo:region-to-cert` DOES
+pass from a cold floor; the entry below is kept for the diagnosis it records, not as a live blocker:**
+
+Two independent green runs, both genuinely cold, both AFTER this entry was written:
+
+- **CI, `e2e-live` run `30723212848`** (2026-08-01T23:22:42Z): job `region-to-cert` **success**. Every
+  matrix job builds its own kind cluster, and `.github/workflows/e2e-live.yml` runs
+  `task demo:region-to-cert:run` — "the SAME entry point a human uses, not a CI-shaped variant".
+- **Locally (2026-08-02)**: `task dev:kind:down` to DESTROY the cluster, then
+  `task demo:region-to-cert:run` → **EXIT=0**, full scenario, including both `Intent/Subnet` builds —
+  which are the very `opentofu/apply` Actions the failure below names.
+
+**What fixed it is NOT claimed.** The likeliest candidate is `fad1655` ("nothing ever ran `helm
+dependency build` — every demo needed a machine where someone had fetched it by hand"), which landed
+between this observation and the first green run, alongside the other CI fixes in that arc. Nobody
+bisected it, so that stays a candidate rather than a cause.
+
+**The lesson the entry earned, which outlives the bug:** it was written from one local failure and
+stated as blocking; the evidence that contradicted it existed within hours and nothing reconciled the
+two, so the tracker warned readers off a capstone that CI was proving green on every run. A finding
+recorded and then not re-checked against later evidence decays into misinformation — the same failure
+mode as an unexecuted seam, one layer up. **If a `BLOCKING` claim outlives the run that produced it,
+re-run it before quoting it.**
+
+<details><summary>The original entry, kept for the diagnosis (2026-08-01)</summary>
+
+**`demo:region-to-cert` does not pass from a COLD floor (2026-08-01):**
 
 Proof A dies after its gate is approved with:
 
@@ -1007,7 +1125,29 @@ no-restart claim needs revisiting.
 committed here would be exactly the "looks fixed, was not measured" failure this branch spent its
 length closing.
 
+</details>
+
 **Found by running things, and booked rather than fixed:**
+
+- ~~**A Gate decision with a missing `approve` field is silently a DENIAL**~~ 🟢 **FIXED
+  (2026-08-03).** The door now decodes with `DisallowUnknownFields` and requires `approve` to be
+  PRESENT, so the typo that found it (`{"approved":true}`) is a 400 naming the offending key instead
+  of a denial recorded against the caller's Principal. Both callers in the repo (the UI mutation and
+  the MCP `decide_gate` tool) already send the right shape, and a test pins those shapes so the
+  stricter door cannot trade a silent wrong answer for a loud broken one. **The audit of the same
+  `json.Decode` pattern on the OTHER write doors is still open** — this fixed the one that was
+  caught, not the class. Original entry:
+
+  **A Gate decision with a missing `approve` field is silently a DENIAL** (found 2026-08-02 while
+  writing ADR-0157's live proof, which sent `{"approved":true}` instead of `{"approve":true}` and
+  watched the gate go `denied` by the caller who meant to approve it). `components.schemas.GateDecision`
+  declares `required: [approve]`, but the handler decodes with `json.NewDecoder(...).Decode(&body)`,
+  which does not enforce required fields — so an unknown key is dropped, `approve` defaults to
+  false, and a typo becomes a decision recorded against the caller's Principal in the audit trail.
+  Denial is the safe DIRECTION, which is exactly why it went unnoticed; it is still a wrong answer
+  where a 400 belongs (§1.8), and the same decode pattern is worth auditing on the other write
+  doors. Related to the `?workflowRunId=` finding in ADR-0158's arc: both are the API accepting a
+  request it does not honour.
 
 - **`kubecompute` advertises `provisions` but not `decommissions`.** It ships a build Workflow and no
   teardown Workflow, so an `Intent/Compute` count-DOWN offers nothing on the kubernetes substrate.

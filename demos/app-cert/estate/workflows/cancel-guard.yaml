@@ -1,0 +1,41 @@
+# cancel-guard — a Workflow that exists to be CANCELLED, and the demo asserts what that did.
+#
+# ADR-0157 owed a live proof that a unit test cannot give: "launch a multi-Step DAG on kind, cancel
+# mid-Step, and assert three things — the WorkflowRun reads `canceled`, the child Run reads
+# `canceled`, and THE K8S JOB IS GONE. Only the third distinguishes a real cancel from bookkeeping."
+#
+# The first attempt at that proof used this demo's real install Workflow and could prove only two of
+# the three: its ansible Step finished in SEVEN SECONDS, so by the time the cancel landed there was
+# no pod left to reap and the third assertion had nothing to measure. A proof that cannot fail is
+# not a proof.
+#
+# So this Step sleeps ON THE TARGET, long enough that the cancel always arrives mid-run. The pod is
+# genuinely executing a task against a real host when the Job is deleted, which is the only shape in
+# which "the Job is gone" means anything. It converges nothing and changes nothing: `sleep` is the
+# rare command that is honestly idempotent.
+#
+# NO GATE, deliberately. The gate path is already covered by the unit test and by the other guards;
+# what is uncovered is the pod, and a gate here would only add a step between launch and the thing
+# under test. Cancelling AT a gate is a different case with no Job to reap.
+#
+# Inline `params.play` for the reason ADR-0134 D4 keeps that door open: nobody maintains this play,
+# it exists to be interrupted.
+name: cancel-guard
+steps:
+  - name: sleep-until-cancelled
+    viewName: app-nodes
+    actuator: ansible-crypto
+    credentialRefs: [app-node-ssh]
+    params:
+      connection:
+        type: ssh # ADR-0158 D2 — nothing observes this node's transport.
+        user: appops
+        credentialRef: app-node-ssh
+        hostKeyChecking: accept-new
+      play: |
+        - name: A play that is still running when the cancel arrives
+          hosts: all
+          gather_facts: false
+          tasks:
+            - name: Sleep on the target — the pod must be mid-task when its Job is deleted
+              ansible.builtin.command: sleep 120

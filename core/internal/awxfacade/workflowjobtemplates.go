@@ -398,10 +398,36 @@ func (f *Facade) listWorkflowJobs(w http.ResponseWriter, r *http.Request) {
 // getWorkflowJob: GET /api/v2/workflow_jobs/{id}/ — an indexed lookup (migration 00048), never a
 // scan over the recent list, which would 404 a live execution just past the list's horizon.
 func (f *Facade) getWorkflowJob(w http.ResponseWriter, r *http.Request) {
+	wr, ok := f.workflowRunByPathID(w, r)
+	if !ok {
+		return
+	}
+	writeJSON(w, http.StatusOK, workflowRunToJob(wr))
+}
+
+// THE CANCEL ROUTE NOW EXISTS, in cancel.go, and the sequence is the point rather than the feature.
+//
+// It was declined here (1d7ffc0) because adding it was two lines while RunDAG had NO cancellation
+// handling at all — no ctx.Done, no canceled-status write — and the native API had no workflow-run
+// cancel door either. Wiring one only on the compat surface would have signalled Temporal, torn the
+// activities down, and left graph.workflow_run saying `running` forever: an operator who cancelled
+// would be told the execution is still going, which is worse than not offering cancel. A 404 from
+// the mux said "this façade does not offer it" — absent rather than wrong.
+//
+// ADR-0157 supplied what was missing, in that order: RunDAG writes its own terminal status on a
+// disconnected context (D1), records its pending Gates as `canceled` rather than `expired` (D2),
+// and the NATIVE door shipped first. This route follows it, as the booking said it would, and
+// `can_cancel` stops being a field with no mechanism behind it. Booked, then built — not faked.
+
+// workflowRunByPathID resolves {id} to a WorkflowRun through the indexed AWX-id lookup — the same
+// shape runByPathID uses for a Run. Factored out when the cancel routes arrived (ADR-0157): three
+// handlers doing this by hand is three chances for one of them to scan the recent list instead and
+// 404 a live execution just past its horizon, which is the defect migration 00048 exists to prevent.
+func (f *Facade) workflowRunByPathID(w http.ResponseWriter, r *http.Request) (types.WorkflowRun, bool) {
 	id, ok := pathID(r)
 	if !ok {
 		awxErr(w, http.StatusNotFound, "Not found.")
-		return
+		return types.WorkflowRun{}, false
 	}
 	wr, err := f.cfg.Store.GetWorkflowRunByAWXID(r.Context(), id)
 	if err != nil {
@@ -410,18 +436,7 @@ func (f *Facade) getWorkflowJob(w http.ResponseWriter, r *http.Request) {
 		} else {
 			awxErr(w, http.StatusInternalServerError, err.Error())
 		}
-		return
+		return types.WorkflowRun{}, false
 	}
-	writeJSON(w, http.StatusOK, workflowRunToJob(wr))
+	return wr, true
 }
-
-// NO CANCEL ROUTE, and the reason is a defect this family declined to ship. AWX offers
-// workflow_jobs/{id}/cancel/, and adding it here was two lines — but RunDAG has NO cancellation
-// handling at all (no ctx.Done, no canceled-status write), and the native API has no workflow-run
-// cancel door either. Wiring one only on the compat surface would signal Temporal, tear the
-// activities down, and leave graph.workflow_run saying `running` forever: an operator who cancelled
-// would be told the execution is still going, which is worse than not offering cancel.
-//
-// A 404 from the mux says "this façade does not offer it" — absent rather than wrong. Cancelling a
-// WorkflowRun is a real gap, and it belongs to the NATIVE door first (a terminal status writer in
-// RunDAG), with the façade route following it. Booked, not faked.

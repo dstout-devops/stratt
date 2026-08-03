@@ -10,7 +10,7 @@ design must reconcile with. Chronological list: [README.md](README.md); phase vi
 
 ```mermaid
 graph TD
-  actuators["actuators<br/><small>0016 0022 0050 0053 0092 0117<br/>0124 0126 0133 0134 0135 0148<br/>0149 0153 0156 0158</small>"]
+  actuators["actuators<br/><small>0016 0022 0050 0053 0092 0117<br/>0124 0126 0133 0134 0135 0148<br/>0149 0153 0156 0158 0159</small>"]
   api_surface["api-surface<br/><small>0006 0021 0026 0076 0091 0121<br/>0157</small>"]
   audit_telemetry["audit-telemetry<br/><small>0034 0065 0077 0121</small>"]
   authz_identity["authz-identity<br/><small>0009 0028 0035 0079 0101 0122<br/>0130 0155</small>"]
@@ -24,7 +24,7 @@ graph TD
   graph_model["graph-model<br/><small>0015 0017 0041 0042 0059 0060<br/>0079 0080 0081 0082 0084 0085<br/>0096 0114 0115 0119 0120 0123<br/>0126 0127 0128 0129 0130 0132<br/>0133 0143 0144 0147 0152 0153<br/>0154 0155 0156 0158</small>"]
   intent_compiler["intent-compiler<br/><small>0023 0030 0036 0055 0058 0083<br/>0085 0114 0118 0119 0123 0148<br/>0150 0152</small>"]
   orchestration["orchestration<br/><small>0010 0011 0018 0027 0031 0063<br/>0118 0122 0125 0134 0139 0140<br/>0157</small>"]
-  plugin_port["plugin-port<br/><small>0046 0047 0048 0049 0051 0053<br/>0054 0103 0117 0121 0124 0125<br/>0127 0131 0137 0138 0140 0141<br/>0145 0149</small>"]
+  plugin_port["plugin-port<br/><small>0046 0047 0048 0049 0051 0053<br/>0054 0103 0117 0121 0124 0125<br/>0127 0131 0137 0138 0140 0141<br/>0145 0149 0159</small>"]
   policy_governance["policy-governance<br/><small>0061 0062 0063 0064 0065 0066<br/>0067 0068 0069 0070 0071 0072<br/>0073 0074 0075 0076 0122 0157</small>"]
   provisioning["provisioning<br/><small>0017 0058 0095 0096 0107 0110<br/>0111 0112 0113 0114 0115 0120<br/>0123 0143 0144 0145 0146 0147<br/>0151</small>"]
   state_artifacts["state-artifacts<br/><small>0016 0029 0093 0097 0105 0112<br/>0145</small>"]
@@ -100,6 +100,7 @@ Actuators — execution engines (opentofu, helm, mcp, cert-issuer reconcile).
 - [ADR-0153](0153-a-connection-type-and-a-password-that-is-only-ever-a-path.md) — A connection type, and a password that is only ever a path
 - [ADR-0156](0156-how-to-reach-a-host-is-observed-not-declared.md) — How to reach a host is OBSERVED, not declared
 - [ADR-0158](0158-an-unobserved-transport-is-not-ssh.md) — An unobserved transport is not ssh
+- [ADR-0159](0159-a-transport-fails-on-three-axes.md) — A transport fails on three axes, and the image gate checks two
 
 ### api-surface
 
@@ -407,6 +408,7 @@ Sovereign plugin port — the dark-matter substrate, transports, runtime registr
 - [ADR-0141](0141-the-plugin-sdk-is-go-the-port-is-the-contract.md) — The plugin SDK is Go; the PORT is the contract, not a language
 - [ADR-0145](0145-the-actuator-builder-step-form.md) — The build-Step form for a workspace-scoped Actuator: capability injection reaches the Action seam, and the network leg goes live
 - [ADR-0149](0149-the-execution-environment-content-floor.md) — The execution environment carries a content floor, and every variant is a superset
+- [ADR-0159](0159-a-transport-fails-on-three-axes.md) — A transport fails on three axes, and the image gate checks two
 
 ### policy-governance
 
@@ -672,3 +674,4 @@ UI — React shell, schema-driven rendering, Views, descent, the first-party cli
 | [0156](0156-how-to-reach-a-host-is-observed-not-declared.md) | actuators, connectors, graph-model |
 | [0157](0157-cancelling-a-workflow-run.md) | api-surface, orchestration, policy-governance |
 | [0158](0158-an-unobserved-transport-is-not-ssh.md) | actuators, connectors, graph-model |
+| [0159](0159-a-transport-fails-on-three-axes.md) | actuators, plugin-port |

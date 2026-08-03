@@ -1,0 +1,20 @@
+# The SAME plugin, the WRONG image — this Actuator exists to be refused.
+#
+# It is identical to ansible-network except for `image:`, which points at the platform EE: no
+# ansible.netcommon (so no network_cli plugin), no frr.frr (so no cliconf for this platform), and no
+# ansible-pylibssh (so no SSH transport under the connection even if the plugin loaded).
+#
+# ADR-0117 D3a's claim is that the IMAGE is the content boundary and a Step selects content by
+# selecting an Actuator. That claim is only worth something if choosing wrong FAILS, and fails
+# early — so the demo drives this one and asserts the refusal names what is missing, rather than
+# reaching the device and dying on a python import the estate never wrote.
+name: ansible-plain
+pluginIdentity: ansible
+tier: trusted
+dryRunnable: true
+jobCommand: [stratt-ansible]
+image: stratt-ee:dev
+contentDir: ansible/projects/network
+contentInputs: [playbook]
+facetNamespaces: []
+identitySchemes: [host.name]

@@ -1,0 +1,53 @@
+# Configure a real network device over its own CLI (ADR-0153).
+#
+# EVERY TASK HERE IS A CLI COMMAND TYPED AT A PROMPT AND PARSED BACK OUT OF THE TERMINAL. There is
+# no python on the far end to run a module on — `netops`'s login shell IS vtysh — so this play uses
+# the netcommon modules that drive a cliconf/terminal plugin rather than ansible's ordinary
+# module-shipping path. That is the whole difference `connection.type: network_cli` names.
+#
+# A FILE, not an inline `params.play` (ADR-0134): this is ansible anyone would maintain, so it lives
+# where ansible-lint and --syntax-check can reach it.
+- name: Configure the managed router
+  hosts: all
+  gather_facts: false
+  tasks:
+    # The device identifies ITSELF, through the vendor collection's cliconf/terminal plugins. This
+    # is the task that proves the platform half: without frr.frr in the EE, `ansible_network_os:
+    # frr.frr.frr` names a platform ansible cannot parse, and this fails where a connection error
+    # would not tell you why.
+    - name: Gather the device's own facts over the CLI
+      frr.frr.frr_facts:
+        gather_subset: default
+
+    - name: Report what the device said it is
+      ansible.builtin.debug:
+        msg: "device reports version={{ ansible_facts['net_version'] | default('?') }}"
+
+    # THE CHANGE. A blackhole route is chosen deliberately: it is real configuration the daemon
+    # accepts and reports, and it cannot black-hole anything that matters in a demo cluster.
+    - name: Push configuration to the running device
+      ansible.netcommon.cli_config:
+        config: |
+          ip route {{ route_prefix }} blackhole
+      register: push
+
+    - name: Report whether the device changed
+      ansible.builtin.debug:
+        msg: "cli_config changed={{ push.changed }}"
+
+    # READ IT BACK OFF THE DEVICE, never off a variable this play already holds. A play that asserts
+    # its own intent proves nothing about the device; this asks the daemon for its running-config and
+    # fails if the route is absent from it.
+    - name: Read the running-config back from the device
+      ansible.netcommon.cli_command:
+        command: show running-config
+      register: back
+
+    - name: The route must be in the DEVICE's own running-config
+      ansible.builtin.assert:
+        that:
+          - back.stdout is search(route_prefix | regex_escape)
+        fail_msg: >-
+          {{ route_prefix }} is not in the running-config the device returned — the push reported
+          success and the device does not have it
+        success_msg: "the device's own running-config carries {{ route_prefix }}"
