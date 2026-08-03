@@ -3466,6 +3466,20 @@ type stepYAML struct {
 	Slices          int                       `yaml:"slices"`
 	CredentialRefs  []string                  `yaml:"credentialRefs"`
 	FacetWriteScope []string                  `yaml:"facetWriteScope"`
+	// groupBy partitions this Step's targets into named groups (ADR-0161 D2) — one group per
+	// DISTINCT value of a label key or a Facet path, so a value nobody enumerated still produces one.
+	GroupBy []groupKeyYAML `yaml:"groupBy"`
+}
+
+// groupKeyYAML is one partitioning key. Exactly one of label/facet is set; both or neither is a
+// declaration error, because a key with two sources would need a rule to pick between them (§2.4).
+type groupKeyYAML struct {
+	Label string `yaml:"label"`
+	Facet *struct {
+		Namespace string `yaml:"namespace"`
+		Path      string `yaml:"path"`
+	} `yaml:"facet"`
+	Prefix string `yaml:"prefix"`
 }
 type gateYAML struct {
 	Approvers struct {
@@ -3582,6 +3596,7 @@ func parseWorkflowFile(path string, raw []byte, opts ...ValidateOption) (string,
 			DryRun: s.DryRun, Params: s.Params, CapabilityArgs: s.CapabilityArgs,
 			Slices: s.Slices, CredentialRefs: s.CredentialRefs,
 			FacetWriteScope: s.FacetWriteScope,
+			GroupBy:         groupKeys(s.GroupBy),
 		}
 		if s.Gate != nil {
 			step.Gate = &types.GateSpec{
@@ -4907,4 +4922,22 @@ func actuatorIdentities(as []types.Actuator) map[string]string {
 		}
 	}
 	return m
+}
+
+// groupKeys converts the declared partitioning keys (ADR-0161 D2). Validation that exactly one
+// source is set lives in ValidateWorkflow beside the other Step rules, not here: this is the
+// transport, and a parser that also judged would put the rule in two places.
+func groupKeys(in []groupKeyYAML) []types.GroupKey {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]types.GroupKey, 0, len(in))
+	for _, k := range in {
+		g := types.GroupKey{Label: k.Label, Prefix: k.Prefix}
+		if k.Facet != nil {
+			g.Facet = &types.FacetKey{Namespace: k.Facet.Namespace, Path: k.Facet.Path}
+		}
+		out = append(out, g)
+	}
+	return out
 }

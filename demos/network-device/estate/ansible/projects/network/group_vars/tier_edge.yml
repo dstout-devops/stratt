@@ -1,0 +1,6 @@
+# group_vars for the `tier_edge` group — the file ADR-0134 D2 always said was part of a project and
+# that ansible could never load, because Stratt rendered no groups for it to key on (ADR-0161).
+#
+# The demo asserts this value reaches the play. If groups are not rendered, ansible never opens this
+# file and the variable is undefined — which is the failure this whole ADR exists to remove.
+edge_marker: "loaded-from-group_vars"

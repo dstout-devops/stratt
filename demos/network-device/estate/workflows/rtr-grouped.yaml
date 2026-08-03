@@ -1,0 +1,28 @@
+# Configure the device through a GROUP, not through `all` (ADR-0161).
+#
+# `groupBy` is a STEP field rather than an ansible param, and §1.4 forces that: the CORE resolves
+# membership against the graph, and core reading a tool's params by name to do so is the trap
+# ADR-0134 warns about. `groupBy` says "partition by this key" in nobody's vocabulary.
+#
+# Every DISTINCT value of the key becomes a group, so this estate does not enumerate `edge` anywhere
+# — the device carries `tier: edge` and the group follows. That is keyed_groups' generative
+# behaviour, and it arrives as data rather than as an expression language (§1 non-goal).
+name: rtr-grouped
+steps:
+  - name: converge-edge-tier
+    viewName: net-devices
+    actuator: ansible-network
+    credentialRefs: [rtr-ssh]
+    # One group per distinct value of the `tier` label, prefixed so two keys whose value spaces
+    # overlap cannot silently collide into one group.
+    groupBy:
+      - label: tier
+        prefix: tier
+    params:
+      connection:
+        type: network_cli
+        networkOS: frr.frr.frr
+        user: netops
+        credentialRef: rtr-ssh
+        hostKeyChecking: accept-new
+      playbook: grouped.yml

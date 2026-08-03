@@ -34,6 +34,16 @@ type Target struct {
 	EntityID string
 	// Name is the target alias used in tool content and per-target results.
 	Name string
+	// Groups are the named partitions this target belongs to, resolved by the CORE from the Step's
+	// declared GroupBy keys against the graph (ADR-0161 D1). The Actuator renders them in whatever
+	// its tool calls a group — INI sections, for ansible — exactly as it renders Address into its
+	// own connection var: the core authors no tool syntax, the tool learns no graph vocabulary.
+	//
+	// Empty ⇒ this target is in no named partition, which is every Run before ADR-0161 and every
+	// Step that declares no GroupBy. It NEVER means "put it somewhere else": a target with no value
+	// for a key joins no group from that key rather than an invented bucket (§1.2 — the graph does
+	// not carry the value, so nothing may assert one).
+	Groups []string
 	// Address is the typed management reachability coordinate the core resolved
 	// from the Entity's mgmt.address Facet (ADR-0084). It is a FIRST-CLASS field,
 	// NOT a tool var: the core never authors a connection key (no ansible_host in

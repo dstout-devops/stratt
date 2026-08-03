@@ -420,6 +420,9 @@ func runActuationStep(ctx workflow.Context, in DAGInput, step types.Step, steps 
 		PlanDigest:      planDigest,
 		FacetWriteScope: step.FacetWriteScope,
 		EntityScope:     in.EntityScope,
+		// The Step's declared partitioning (ADR-0161). Carried here rather than read out of the
+		// Actuator's params because the CORE resolves membership against the graph.
+		GroupBy: step.GroupBy,
 	}).Get(cctx, &outcome)
 	if err != nil {
 		return stepFailed, nil

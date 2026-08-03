@@ -34,6 +34,8 @@ func run() error {
 		at := ansible.Target{
 			Name: t.GetName(), Address: t.GetAddress(), Port: t.GetPort(),
 			Vars: t.GetVars(), Identity: t.GetIdentityKeys(), Jump: hops,
+			// The core-resolved group partitions (ADR-0161): names only, rendered as INI here.
+			Groups: t.GetGroups(),
 		}
 		// The OBSERVED transport (ADR-0156): kind is legible, coordinates are opaque to core
 		// and read by the shim. Absent ⇒ nothing observed and ansible's default applies.

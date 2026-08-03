@@ -2651,7 +2651,22 @@ type ApplyTarget struct {
 	// Absent ⇒ nothing was observed about how to reach this target, and the actuator
 	// applies its own default (ssh, for a connection actuator). That is distinct from an
 	// OBSERVED `ssh` transport, which means a Syncer determined it.
-	Transport     *Transport `protobuf:"bytes,7,opt,name=transport,proto3" json:"transport,omitempty"`
+	Transport *Transport `protobuf:"bytes,7,opt,name=transport,proto3" json:"transport,omitempty"`
+	// groups are the named partitions this target belongs to, resolved by the CORE from the
+	// Step's declared groupBy keys against the graph (ADR-0161 D1). The actuator renders them in
+	// whatever its tool calls a group — INI sections, for ansible — exactly as it renders
+	// `address` into its own connection var. The core authors no INI; the plugin learns nothing
+	// about labels or Facets.
+	//
+	// Every DISTINCT value of a key becomes a group, so a value nobody enumerated still produces
+	// one — `keyed_groups`' generative behaviour, expressed as data rather than as an expression
+	// language (§1 non-goal).
+	//
+	// Empty ⇒ this target is in no named partition, which is every Run before ADR-0161. It never
+	// means "put it somewhere else": a target with no value for a key joins no group from that
+	// key rather than an invented bucket, because the graph does not carry the value and nothing
+	// may assert one (§1.2). Sorted, so one target set renders byte-identically twice (§1.8).
+	Groups        []string `protobuf:"bytes,8,rep,name=groups,proto3" json:"groups,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2731,6 +2746,13 @@ func (x *ApplyTarget) GetJump() []*JumpHop {
 func (x *ApplyTarget) GetTransport() *Transport {
 	if x != nil {
 		return x.Transport
+	}
+	return nil
+}
+
+func (x *ApplyTarget) GetGroups() []string {
+	if x != nil {
+		return x.Groups
 	}
 	return nil
 }
@@ -4241,7 +4263,7 @@ const file_stratt_plugin_v1_plugin_proto_rawDesc = "" +
 	"\x06output\x18\x04 \x01(\fR\x06output\x1a9\n" +
 	"\vConfigEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xc6\x03\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xde\x03\n" +
 	"\vApplyTarget\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12T\n" +
 	"\ridentity_keys\x18\x02 \x03(\v2/.stratt.plugin.v1.ApplyTarget.IdentityKeysEntryR\fidentityKeys\x12;\n" +
@@ -4249,7 +4271,8 @@ const file_stratt_plugin_v1_plugin_proto_rawDesc = "" +
 	"\aaddress\x18\x04 \x01(\tR\aaddress\x12\x12\n" +
 	"\x04port\x18\x05 \x01(\x05R\x04port\x12-\n" +
 	"\x04jump\x18\x06 \x03(\v2\x19.stratt.plugin.v1.JumpHopR\x04jump\x129\n" +
-	"\ttransport\x18\a \x01(\v2\x1b.stratt.plugin.v1.TransportR\ttransport\x1a?\n" +
+	"\ttransport\x18\a \x01(\v2\x1b.stratt.plugin.v1.TransportR\ttransport\x12\x16\n" +
+	"\x06groups\x18\b \x03(\tR\x06groups\x1a?\n" +
 	"\x11IdentityKeysEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\x1a7\n" +

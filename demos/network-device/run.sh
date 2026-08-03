@@ -26,6 +26,7 @@ CTX="${KUBECONTEXT:-kind-stratt-dev}"
 NS="${STRATT_NS:-stratt}"
 PRINCIPAL="${STRATT_PRINCIPAL:-bootstrap-admin}"
 WORKFLOW="rtr-configure"
+GROUPED_WORKFLOW="rtr-grouped"
 VIEW="net-devices"
 ACTUATOR="ansible-network"
 DEVICE_DEPLOY="rtr-01"
@@ -160,6 +161,48 @@ if ondevice "show running-config" | grep -qF "10.98.0.0/24"; then
     exit 1
 fi
 echo "  …and the device was never touched by it"
+
+# ── Assertion: a play targeting a GROUP reaches it, and group_vars load (ADR-0161) ───────────────
+# The shape of essentially every real Ansible playbook, and the one Stratt could not run at all until
+# ADR-0161: `hosts: tier_edge` rather than `hosts: all`. Before it, buildInventory wrote [all], the
+# hosts and [all:vars] — the whole file — so a group pattern matched NOTHING and
+# group_vars/tier_edge.yml was never loaded, because ansible keys those files on inventory groups.
+#
+# Nothing in this estate enumerates `edge`. The device carries `tier: edge` as a LABEL and the group
+# follows from `groupBy`, which is keyed_groups' generative behaviour arriving as data.
+echo "demo: assert a play targeting a GROUP converges the device, with group_vars loaded"
+gwr=$(api POST "/workflows/${GROUPED_WORKFLOW}/runs" | jq -r '.id')
+[ -n "$gwr" ] && [ "$gwr" != "null" ] || { echo "FAIL: no WorkflowRun id for the grouped Step"; exit 1; }
+gstat=""
+for _ in $(seq 1 120); do
+    gstat=$(api GET "/workflow-runs/${gwr}" | jq -r '.workflowRun.status // .status // empty')
+    case "$gstat" in succeeded|failed|canceled) break ;; esac
+    sleep 3
+done
+if [ "$gstat" != "succeeded" ]; then
+    echo "FAIL: the grouped Run is '${gstat:-none}', want succeeded."
+    echo "      A play saying 'hosts: tier_edge' that matches nothing is the pre-ADR-0161 behaviour:"
+    echo "      ansible reports no hosts matched and the vacuous-run guard fails the Run."
+    api GET "/runs?workflowRunId=${gwr}" 2>/dev/null |
+        jq -r --arg r "$gwr" '.[]? | select(.workflowRunId==$r) | "  run " + .id + " " + .status + " " + (.error // "")'
+    exit 1
+fi
+echo "  the grouped Run succeeded — [tier_edge] existed and matched"
+
+# The inventory the Run actually rendered, read off its own event stream (§1.8: the shim emits it as
+# kind=inventory). Asserting the SECTION rather than trusting the Run's success, because a play can
+# succeed for reasons that have nothing to do with the group.
+grun=$(api GET "/runs?workflowRunId=${gwr}" | jq -r --arg r "$gwr" '.[]? | select(.workflowRunId==$r) | .id' | head -1)
+ginv=$(kc -n "$NS" logs "job-name=stratt-run-${grun}-s0" --tail=-1 2>/dev/null ||
+       kc -n "$NS" logs -l "job-name=stratt-run-${grun}-s0" --tail=-1 2>/dev/null || true)
+case "$ginv" in
+    *"[tier_edge]"*) echo "  the rendered inventory carried a [tier_edge] section" ;;
+    *) echo "FAIL: the rendered inventory has no [tier_edge] section — the group was not rendered"; exit 1 ;;
+esac
+case "$ginv" in
+    *"loaded-from-group_vars"*) echo "  …and group_vars/tier_edge.yml LOADED — the file ADR-0134 promised and nothing could read" ;;
+    *) echo "FAIL: group_vars did not load; the play's assert would have failed"; exit 1 ;;
+esac
 
 echo
 echo "demo: DONE — Stratt configured a real network device over its own CLI (fidelity: ${fidelity})."

@@ -1,0 +1,31 @@
+# A play that targets a GROUP, not `all` — the shape of essentially every real Ansible playbook and
+# the one Stratt could not run until ADR-0161.
+#
+# `hosts: tier_edge` matches only because the core resolved the group from the device's `tier` label
+# and the shim rendered an INI section for it. Before ADR-0161 this play matched NOTHING, and the
+# vacuous-run guard (ADR-0117 D5) would have failed the Run — which is exactly how a migrated estate
+# would have discovered the gap.
+- name: Converge only the edge tier, addressed by group
+  hosts: tier_edge
+  gather_facts: false
+  tasks:
+    # Proves group_vars/tier_edge.yml was LOADED. It is only loadable because the group exists.
+    - name: The group's own vars must be in scope
+      ansible.builtin.assert:
+        that:
+          - edge_marker is defined
+          - edge_marker == 'loaded-from-group_vars'
+        fail_msg: >-
+          group_vars/tier_edge.yml did not load — the inventory rendered no [tier_edge] section, so
+          ansible had no group to key the file on
+        success_msg: "group_vars loaded: edge_marker={{ edge_marker }}"
+
+    # And the play really reached the device over its own CLI, in the group it was placed in.
+    - name: Prove the device was reached through the group
+      ansible.netcommon.cli_command:
+        command: show version
+      register: v
+
+    - name: Report
+      ansible.builtin.debug:
+        msg: "reached {{ inventory_hostname }} in group tier_edge; {{ v.stdout_lines[0] }}"

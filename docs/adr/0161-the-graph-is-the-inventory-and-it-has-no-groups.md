@@ -1,6 +1,8 @@
 # ADR 0161 — The graph is the inventory, and it renders no groups
 
-- **Status:** **Proposed** (2026-08-03, steward). Charter review by hand — this session's rules bar
+- **Status:** **Accepted** (2026-08-03, steward) — **live-proven**: a play targeting a GROUP
+  converges through it and its `group_vars` load, gated by `demo:network-device` and therefore by
+  E2E-1. See Verification. Charter review by hand — this session's rules bar
   the subagent; §1.1/§1.2/§1.4/§2.1/§9 answered inline. **No new runtime dependency.**
 - **Date:** 2026-08-03
 - **Deciders:** steward
@@ -152,3 +154,30 @@ is booked rather than approximated. If it returns, it returns as data.
   asserted from the Run's per-target results — plus a `group_vars/<group>.yml` whose value reaches
   the play, because "group_vars now work" is the claim most likely to be true in principle and false
   in the pod.
+
+### All of it, paid (2026-08-03)
+
+`demos/network-device` gains `rtr-grouped`, whose play says `hosts: tier_edge` and whose first task
+asserts a variable that can ONLY come from `group_vars/tier_edge.yml`. Nothing in that estate
+enumerates `edge`: the device carries `tier: edge` as a label and the group follows from `groupBy`,
+which is `keyed_groups`' generative behaviour arriving as data. `task demo:network-device:run`
+EXIT=0:
+
+```
+the grouped Run succeeded — [tier_edge] existed and matched
+the rendered inventory carried a [tier_edge] section
+…and group_vars/tier_edge.yml LOADED — the file ADR-0134 promised and nothing could read
+```
+
+The inventory section is asserted off the Run's own emitted `kind=inventory` event rather than
+inferred from the play succeeding, because a play can succeed for reasons that have nothing to do
+with the group.
+
+**Falsified** by removing the sorted iteration (byte-stability fails) and by giving an absent value an
+`unknown` bucket (the no-invented-bucket test fails). A third guard reads the Step→RunInput
+construction, because every resolver test would pass if a declared `groupBy` never reached the Run.
+
+**One consequence found by running it**: `TestNoUnboundPlayVariables` refused the new play, because a
+guard that scans for unsupplied Jinja variables had no reason to know about `group_vars/` — those
+files could never load before this ADR. It now counts them as bindings. A guard that did not would
+have refused exactly the plays this ADR exists to make runnable.
