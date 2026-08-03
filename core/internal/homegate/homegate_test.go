@@ -17,11 +17,15 @@ type fakeStore struct {
 	found    bool
 	err      error
 	peers    []types.Cell
+	// lastFound is what the most recent local read SAW. A Prober that answers from this rather than
+	// from `found` gives Resolve's two reads one consistent world — see TestSuperviseStandbyThenActivate.
+	lastFound bool
 }
 
 func (f *fakeStore) GetSourceHome(context.Context, string) (string, string, bool, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.lastFound = f.found
 	return f.cell, f.rehoming, f.found, f.err
 }
 func (f *fakeStore) PeerCells(context.Context) ([]types.Cell, error) { return f.peers, nil }
@@ -70,10 +74,25 @@ func TestSuperviseStandbyThenActivate(t *testing.T) {
 		store.cell, store.found = "eu", true // US re-homed the Source to EU
 		store.mu.Unlock()
 	}
+	// THE PROBE ANSWERS FROM THE SNAPSHOT THE LOCAL READ TOOK, and that is what makes this test
+	// deterministic rather than merely usually-green.
+	//
+	// Resolve reads the local row and THEN probes the peers — two reads, seen at two moments. A fake
+	// that derived the peer's answer from `store.found` LIVE let an adopt land between them, so one
+	// resolve saw a world where nobody homed the Source at all and returned Greenfield. Greenfield is
+	// Projectable, so the supervisor activated and ran, and the final status was greenfield rather
+	// than active. It failed roughly once per full-suite run — never in isolation, because the window
+	// is a few microseconds wide and only a loaded machine schedules into it.
+	//
+	// That skew was the FAKE's, not the supervisor's: the peer's answer and the local row are
+	// independent facts in production, and this models them as one. (Production has its own narrow
+	// version of the window during a re-home — the peer stops claiming before our row is written, so
+	// an adopt can be LABELLED greenfield. Both states claim, so behaviour is identical and only the
+	// status word differs; noted here rather than silently designed around.)
 	probe := func(context.Context, string, string) (string, bool, bool, error) {
 		store.mu.Lock()
 		defer store.mu.Unlock()
-		return "us", !store.found, false, nil // peer homes it until we're adopted
+		return "us", !store.lastFound, false, nil // peer homes it until the read that saw the adopt
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
