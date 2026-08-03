@@ -109,12 +109,18 @@ The Trigger engine (Emitter × CEL → Workflow/View launch, ADR-0018) covers th
 condition eval, at-least-once durable launch (JetStream), content-hash dedup, and full authz/descent
 parity. It is **not a rulebook engine**. Gaps:
 
-- ~~**Source breadth** — 3 kinds vs AAP's dozens~~ — **the comparison was wrong** (2026-08-03). This
-  measured Stratt's `kind` ENUM against AAP's source LIBRARY. A `stream` Emitter is a PLUGIN that
-  outbound-connects and publishes onto the emitter stream itself (salt does exactly this, ADR-0039),
-  so a Kafka or SQS source needs NO core change — it is plugin-authoring, which is how §1.4 says
-  breadth arrives. What core does still hold is the `explode` for webhook-shaped sources, where
-  `alertmanager` is hardcoded. Small and real; not "dozens of missing sources".
+- ~~**Source breadth** — 3 kinds vs AAP's dozens~~ — **the comparison was wrong** (2026-08-03), and
+  the residue it left is now **paid**. The original row measured Stratt's `kind` ENUM against AAP's
+  source LIBRARY. A `stream` Emitter is a PLUGIN that outbound-connects and publishes onto the
+  emitter stream itself (salt does exactly this, ADR-0039), so a Kafka or SQS source needs NO core
+  change — plugin-authoring, which is how §1.4 says breadth arrives. What core still held was the
+  `explode` for webhook-shaped sources, with `alertmanager` hardcoded;
+  [ADR-0163](../adr/0163-one-post-many-events-and-the-shape-is-not-cores.md) makes the fan-out a
+  declaration and takes the vendor's name out of core AND out of the published OpenAPI enum.
+  **What remains is authentication, and it is a real gap** (ADR-0163 D4): ingest authenticates one
+  way, a shared token in `X-Stratt-Emitter-Token`. Alertmanager can send that; GitHub, GitLab and
+  Stripe sign the body with an HMAC in their own header and cannot. So "any webhook source" means
+  "any that can send a shared token in a header we name" until that decision lands.
 - **Rulebook format** — a Trigger is `1 Emitter + 1 CEL → 1 target`; no ordered multi-rule ruleset.
   A PACKAGING difference rather than a capability gap: the engine evaluates every Trigger against
   every event and fires every match, which is what a ruleset does. AAP binds sources and rules in one

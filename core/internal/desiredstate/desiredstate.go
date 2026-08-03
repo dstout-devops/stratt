@@ -2064,6 +2064,18 @@ type emitterFile struct {
 	Name      string `yaml:"name"`
 	Kind      string `yaml:"kind"`
 	TokenHash string `yaml:"tokenHash"`
+	// ADR-0163 — how one POST becomes many events, declared rather than switched in core.
+	Explode *explodeFile `yaml:"explode"`
+}
+
+type explodeFile struct {
+	Path  string         `yaml:"path"`
+	Merge []mergeKeyFile `yaml:"merge"`
+}
+
+type mergeKeyFile struct {
+	Path string `yaml:"path"`
+	As   string `yaml:"as"`
 }
 
 func parseEmitterFile(path string, raw []byte) (string, types.Emitter, error) {
@@ -2074,10 +2086,40 @@ func parseEmitterFile(path string, raw []byte) (string, types.Emitter, error) {
 		return "", types.Emitter{}, fmt.Errorf("desiredstate: %s: %w", path, err)
 	}
 	e := types.Emitter{Name: f.Name, Kind: f.Kind, TokenHash: strings.ToLower(f.TokenHash)}
+	if f.Explode != nil {
+		e.Explode = &types.ExplodeSpec{Path: f.Explode.Path}
+		for _, m := range f.Explode.Merge {
+			e.Explode.Merge = append(e.Explode.Merge, types.MergeKey{Path: m.Path, As: m.As})
+		}
+	}
+	NormalizeEmitter(&e)
 	if err := ValidateEmitter(e); err != nil {
 		return "", types.Emitter{}, fmt.Errorf("desiredstate: %s: %w", path, err)
 	}
 	return e.Name, e, nil
+}
+
+// NormalizeEmitter rewrites the retired `alertmanager` kind into the equivalent declaration
+// (ADR-0163 D2). ONE place, and deletable as a unit once no declaration spells it.
+//
+// This is not a shim to be taken on trust: the equivalence is asserted by a test that runs the
+// same POST through this and through the shape the old hardcoded Go struct produced, and
+// requires the events to be byte-identical.
+//
+// Exported because EVERY door that accepts an Emitter declaration must apply it — the CaC parser
+// and the API's estate-apply path both. A normalization applied at one door is a rule that holds
+// depending on how the declaration arrived.
+func NormalizeEmitter(e *types.Emitter) {
+	if e.Kind != types.EmitterAlertmanager {
+		return
+	}
+	e.Kind = types.EmitterWebhook
+	if e.Explode == nil {
+		e.Explode = &types.ExplodeSpec{
+			Path:  "alerts",
+			Merge: []types.MergeKey{{Path: "receiver"}, {Path: "groupLabels"}},
+		}
+	}
 }
 
 // ValidateEmitter checks one Emitter declaration.
@@ -2086,7 +2128,7 @@ func ValidateEmitter(e types.Emitter) error {
 		return fmt.Errorf("emitter requires a name")
 	}
 	switch e.Kind {
-	case types.EmitterWebhook, types.EmitterAlertmanager:
+	case types.EmitterWebhook:
 		// Receive kinds authenticate an inbound POST by token.
 		if len(e.TokenHash) != 64 {
 			return fmt.Errorf("emitter %s: tokenHash must be hex(sha256(token)) — 64 hex chars", e.Name)
@@ -2099,8 +2141,35 @@ func ValidateEmitter(e types.Emitter) error {
 		if e.TokenHash != "" {
 			return fmt.Errorf("emitter %s: a stream emitter is outbound-subscribed and must not carry a tokenHash", e.Name)
 		}
+		// Nothing POSTs to a stream Emitter, so there is no body to fan out. A declaration
+		// that says otherwise is asking for something that cannot happen (§1.8 — refuse it
+		// where it is written, not by ignoring it at runtime).
+		if e.Explode != nil {
+			return fmt.Errorf("emitter %s: a stream emitter publishes its own events; there is no POST to explode", e.Name)
+		}
 	default:
-		return fmt.Errorf("emitter %s: unknown kind %q (webhook, alertmanager, stream)", e.Name, e.Kind)
+		return fmt.Errorf("emitter %s: unknown kind %q (webhook, stream)", e.Name, e.Kind)
+	}
+	// ADR-0163 D1/D3. Checked at PARSE so a declaration that could never fan out fails its
+	// file rather than every POST at 3am.
+	if e.Explode != nil {
+		if e.Explode.Path == "" {
+			return fmt.Errorf("emitter %s: explode requires a path — the array to fan out", e.Name)
+		}
+		seen := map[string]string{}
+		for i, m := range e.Explode.Merge {
+			if m.Path == "" {
+				return fmt.Errorf("emitter %s: explode.merge[%d] requires a path", e.Name, i)
+			}
+			// Two merged fields landing on ONE key is a collision the estate can see before
+			// any POST arrives, so it is refused here rather than at ingest. No precedence
+			// is invented either way (§2.4).
+			if prev, dup := seen[m.Key()]; dup {
+				return fmt.Errorf("emitter %s: explode.merge[%d] (%s) and %s both land on %q — "+
+					"declare `as:` to keep them apart", e.Name, i, m.Path, prev, m.Key())
+			}
+			seen[m.Key()] = m.Path
+		}
 	}
 	return nil
 }

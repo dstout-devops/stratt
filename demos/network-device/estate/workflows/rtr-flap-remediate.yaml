@@ -19,4 +19,8 @@ steps:
         user: netops
         credentialRef: rtr-ssh
         hostKeyChecking: accept-new
+      extraVars:
+        # This Workflow's own evidence, declared here rather than baked into the play — the batch
+        # Workflow (ADR-0163) runs the same play against a different marker.
+        marker_route: 10.97.0.0/24
       playbook: remediate.yml

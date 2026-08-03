@@ -1823,10 +1823,46 @@ components:
         name: { type: string }
         kind:
           type: string
-          enum: [webhook, alertmanager]
+          # Two kinds, and `alertmanager` is deliberately gone (ADR-0163 D2): a vendor's
+          # product name in a published enum is charter §2's ban on tool-specific renderings
+          # in a core identifier, broken in the most visible place there is. How a POST is
+          # SHAPED is a declaration now — see explode.
+          enum: [webhook, stream]
         tokenHash:
           type: string
           description: hex(sha256(token)) — never the token itself (§2.5).
+        explode:
+          $ref: "#/components/schemas/EmitterExplode"
+    EmitterExplode:
+      type: object
+      description: >
+        How one POST becomes many events (ADR-0163). Declared as data, because core
+        knowing any particular tool's field names is the §1.4 line this removes.
+        Absent, one POST is one event. `path` and `merge[].path` are dotted lookups —
+        explicit field access, nothing evaluated (ADR-0024's grammar).
+      required: [path]
+      properties:
+        path:
+          type: string
+          description: The array to fan out — one event per entry.
+        merge:
+          type: array
+          description: >
+            Envelope fields folded into every exploded event. Explicit, never
+            "everything else": an implicit merge would let the source adding one
+            top-level field silently change what every rule matches against.
+          items:
+            type: object
+            required: [path]
+            properties:
+              path: { type: string }
+              as:
+                type: string
+                description: >
+                  Renames the field in the event payload. A merged key that collides
+                  with one the item already carries is REFUSED rather than resolved
+                  (§2.4 — no implicit precedence); this is how the estate keeps them
+                  apart.
     MCPServer:
       type: object
       description: >

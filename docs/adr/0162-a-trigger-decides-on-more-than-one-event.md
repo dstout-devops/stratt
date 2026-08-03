@@ -207,6 +207,12 @@ The last line is there because a damped storm that launched a Run which did noth
 every count above it. The nine-flap tail is D3's reset asserted directly: a sliding window would have
 fired again on the 6th, 7th, 8th and 9th.
 
+**D4 is live-proven too, as of ADR-0163's demo work.** Each demo run is its own burst
+(`correlateBy: event.burst`) because `demo:network-device:down` leaves the floor standing — so
+without a correlation key a re-run inside the window inherits a count it did not earn and fires on
+its first flap. That is a false pass indistinguishable from a true one, and it is exactly what
+correlation is for.
+
 **Falsified**, each mechanism removed in turn and the matching guard confirmed to fail: no count
 threshold (every flap fires), uncorrelated events pooled under one key (the `somewhere and somewhere`
 hazard returns), correlation ignored entirely, the fire not persisted (the cooldown stops surviving a

@@ -1080,7 +1080,11 @@ func declarationsFromWire(in DesiredState, ids desiredstate.ValidateOption) (des
 	}
 	if in.Emitters != nil {
 		for _, e := range *in.Emitters {
-			em := types.Emitter{Name: e.Name, Kind: string(e.Kind), TokenHash: strings.ToLower(e.TokenHash)}
+			em := types.Emitter{Name: e.Name, Kind: string(e.Kind), TokenHash: strings.ToLower(e.TokenHash),
+				Explode: explodeFromWire(e.Explode)}
+			// The same normalization the CaC parser applies (ADR-0163 D2) — a declaration must
+			// not mean something different because it arrived over HTTP.
+			desiredstate.NormalizeEmitter(&em)
 			if err := desiredstate.ValidateEmitter(em); err != nil {
 				return out, fmt.Errorf("emitter %s: %w", e.Name, err)
 			}
@@ -2915,7 +2919,8 @@ func (s *Server) ListEmitters(w http.ResponseWriter, r *http.Request) {
 	}
 	out := make([]Emitter, 0, len(es))
 	for _, e := range es {
-		out = append(out, Emitter{Name: e.Name, Kind: EmitterKind(e.Kind), TokenHash: e.TokenHash})
+		out = append(out, Emitter{Name: e.Name, Kind: EmitterKind(e.Kind), TokenHash: e.TokenHash,
+			Explode: explodeToWire(e.Explode)})
 	}
 	writeJSON(w, http.StatusOK, out)
 }

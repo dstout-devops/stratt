@@ -28,6 +28,7 @@ PRINCIPAL="${STRATT_PRINCIPAL:-bootstrap-admin}"
 WORKFLOW="rtr-configure"
 GROUPED_WORKFLOW="rtr-grouped"
 STORM_WORKFLOW="rtr-flap-remediate"
+BATCH_WORKFLOW="rtr-batch-remediate"
 # The plaintext half of the Emitter's declared tokenHash (estate/emitters/link-flaps.yaml). It is in
 # the open on purpose: it authenticates one POST to one throwaway kind cluster and grants nothing
 # else. A demo must never teach a reader to commit a token that means something.
@@ -219,10 +220,14 @@ esac
 # executed, and a log line saying "accumulating" would be true whether or not a Run was launched.
 echo "demo: post a burst of link-flap events and assert the storm is damped to ONE Run"
 
+# Each demo run is its OWN burst, and the Trigger correlates on it. `down` deliberately leaves the
+# floor standing, so a second run inherits the first one's Postgres — without this, a re-run inside
+# the ten-minute window would fire on its first flap, having inherited a count it did not earn.
+BURST="burst-$(date +%s)-$$"
 flap() {
     curl -fsS -o /dev/null -w '%{http_code}' -X POST "${ROOT}/emitters/link-flaps" \
         -H "X-Stratt-Emitter-Token: ${FLAP_TOKEN}" -H "Content-Type: application/json" \
-        -d "{\"alertname\":\"LinkFlap\",\"device\":\"rtr-01\",\"seq\":$1}"
+        -d "{\"alertname\":\"LinkFlap\",\"device\":\"rtr-01\",\"burst\":\"${BURST}\",\"seq\":$1}"
 }
 # Runs of the remediation Workflow, right now. It is launched by the Trigger and by nothing else in
 # this demo, so this number IS the number of times the engine decided a storm had happened.
@@ -230,8 +235,18 @@ storm_runs() {
     api GET "/workflow-runs?limit=500" | jq --arg w "$STORM_WORKFLOW" '[.[]? | select(.workflowName==$w)] | length'
 }
 
-before="$(storm_runs)"
-[ "${before:-0}" = "0" ] || { echo "FAIL: ${before} ${STORM_WORKFLOW} Run(s) existed before any event was posted"; exit 1; }
+# COUNTED AS A DELTA against what the floor already had. Asserting an absolute zero would make this
+# demo pass only on a never-used cluster, and what is actually being claimed is what THIS burst
+# caused — which is the honest measurement anyway.
+base="$(storm_runs)"
+echo "  (${base} ${STORM_WORKFLOW} Run(s) already on this floor; counting the delta)"
+# The marker must be ABSENT first, or the "the device was remediated" assertion below passes on a
+# previous run's evidence. The device is recreated by demo:network-device:down + :run.
+if ondevice "show running-config" | grep -qF "10.97.0.0/24"; then
+    echo "FAIL: the device already carries the storm's marker route — this assertion would pass"
+    echo "      without the Trigger doing anything. task demo:network-device:down, then retry."
+    exit 1
+fi
 
 # Four flaps. Each MATCHES the Trigger's `when` — the CEL is true every time — and none of them may
 # launch anything, because the estate asked to be told about storms, not flaps.
@@ -240,7 +255,7 @@ for i in 1 2 3 4; do
     [ "$code" = "202" ] || { echo "FAIL: flap ${i} was not accepted (HTTP ${code})"; exit 1; }
 done
 sleep 5
-mid="$(storm_runs)"
+mid=$(( $(storm_runs) - base ))
 [ "${mid:-0}" = "0" ] || {
     echo "FAIL: ${mid} Run(s) launched from four flaps — the threshold is not being counted, so"
     echo "      every flap of a storm becomes a Run and the automation amplifies the incident"
@@ -251,7 +266,7 @@ echo "  four flaps matched the rule and launched NOTHING — below the threshold
 code="$(flap 5)"; [ "$code" = "202" ] || { echo "FAIL: flap 5 was not accepted (HTTP ${code})"; exit 1; }
 after=0
 for _ in $(seq 1 30); do
-    after="$(storm_runs)"
+    after=$(( $(storm_runs) - base ))
     [ "${after:-0}" -ge 1 ] && break
     sleep 2
 done
@@ -265,7 +280,7 @@ for i in 6 7 8 9; do
     code="$(flap "$i")"; [ "$code" = "202" ] || { echo "FAIL: flap ${i} was not accepted (HTTP ${code})"; exit 1; }
 done
 sleep 8
-total="$(storm_runs)"
+total=$(( $(storm_runs) - base ))
 [ "${total:-0}" = "1" ] || {
     echo "FAIL: ${total} Runs after nine flaps, want exactly 1 — the window slid instead of resetting,"
     echo "      so a sustained storm produces a Run per event past the threshold"
@@ -274,6 +289,7 @@ echo "  nine flaps in total, and still exactly ONE Run — the window reset, it 
 
 # The Run has to have actually converged the device. A damped storm that launched a Run which did
 # nothing would satisfy every count above and remediate nothing.
+# Newest first, so this is THIS burst's Run rather than one an earlier run left behind.
 swr="$(api GET "/workflow-runs?limit=500" | jq -r --arg w "$STORM_WORKFLOW" '[.[]? | select(.workflowName==$w)][0].id')"
 sstat=""
 for _ in $(seq 1 120); do
@@ -286,6 +302,74 @@ ondevice "show running-config" | grep -qF "10.97.0.0/24" || {
     echo "FAIL: the remediation Run succeeded but its route is not in the DEVICE's running-config"
     exit 1; }
 echo "  …and the device's own running-config carries the remediation route 10.97.0.0/24"
+
+# ── Assertion: ONE POST, five events, one Run — a shape core has never heard of (ADR-0163) ───────
+# Before ADR-0163 the ingest surface could fan out exactly one payload shape, Alertmanager's, and it
+# knew it by having that vendor's field names compiled into the Go control plane. The body below was
+# invented for this demo and no Go was written for it: `estate/emitters/nms-batch.yaml` says where
+# the items are and which envelope fields to fold in.
+#
+# THE ASSERTION FAILS IN BOTH DIRECTIONS, which is why it is worth running. If the fan-out does not
+# happen, this POST is ONE event, `count: 5` is never reached and NO Run exists. If it over-fans,
+# more than one Run does.
+echo "demo: post ONE batched report in a shape core has never heard of, and assert it fans out"
+
+batch_runs() {
+    api GET "/workflow-runs?limit=500" | jq --arg w "$BATCH_WORKFLOW" '[.[]? | select(.workflowName==$w)] | length'
+}
+bbase="$(batch_runs)"
+echo "  (${bbase} ${BATCH_WORKFLOW} Run(s) already on this floor; counting the delta)"
+if ondevice "show running-config" | grep -qF "10.96.0.0/24"; then
+    echo "FAIL: the device already carries the batch's marker route — see above. Tear down and retry."
+    exit 1
+fi
+BATCH_ID="batch-$(date +%s)-$$"
+
+# One POST. Five link events, nested under report.linkEvents; `site` merged from the envelope, and
+# the envelope's `status` merged as `batchStatus` because every event carries a `status` of its own
+# — the collision ADR-0163 D3 refuses to resolve silently.
+code="$(curl -fsS -o /dev/null -w '%{http_code}' -X POST "${ROOT}/emitters/nms-batch" \
+    -H "X-Stratt-Emitter-Token: ${FLAP_TOKEN}" -H "Content-Type: application/json" -d '{
+      "status":"open",
+      "report":{
+        "site":"lab-1",
+        "batchId":"'"${BATCH_ID}"'",
+        "linkEvents":[
+          {"kind":"link.flap","port":"ge-0/0/1","status":"down"},
+          {"kind":"link.flap","port":"ge-0/0/2","status":"down"},
+          {"kind":"link.flap","port":"ge-0/0/3","status":"down"},
+          {"kind":"link.flap","port":"ge-0/0/4","status":"down"},
+          {"kind":"link.flap","port":"ge-0/0/5","status":"down"}
+        ]}}')"
+[ "$code" = "202" ] || { echo "FAIL: the batched report was not accepted (HTTP ${code})"; exit 1; }
+
+after=0
+for _ in $(seq 1 30); do
+    after=$(( $(batch_runs) - bbase ))
+    [ "${after:-0}" -ge 1 ] && break
+    sleep 2
+done
+[ "${after:-0}" -ge 1 ] || {
+    echo "FAIL: one POST carrying five nested link events launched nothing."
+    echo "      That is what NO fan-out looks like: the body arrived as a single event, so a"
+    echo "      Trigger asking for five never saw more than one."
+    exit 1; }
+sleep 5
+total=$(( $(batch_runs) - bbase ))
+[ "${total:-0}" = "1" ] || { echo "FAIL: ${total} Runs from one POST, want exactly 1"; exit 1; }
+echo "  one POST became five events and crossed the threshold — exactly ONE Run"
+
+bwr="$(api GET "/workflow-runs?limit=500" | jq -r --arg w "$BATCH_WORKFLOW" '[.[]? | select(.workflowName==$w)][0].id')"
+bstat=""
+for _ in $(seq 1 120); do
+    bstat=$(api GET "/workflow-runs/${bwr}" | jq -r '.workflowRun.status // .status // empty')
+    case "$bstat" in succeeded|failed|canceled) break ;; esac
+    sleep 3
+done
+[ "$bstat" = "succeeded" ] || { echo "FAIL: the batch Run is '${bstat:-none}', want succeeded"; exit 1; }
+ondevice "show running-config" | grep -qF "10.96.0.0/24" || {
+    echo "FAIL: the batch Run succeeded but its own marker route is not on the device"; exit 1; }
+echo "  …and its own marker route 10.96.0.0/24 is on the device — its own evidence, not the storm's"
 
 echo
 echo "demo: DONE — Stratt configured a real network device over its own CLI (fidelity: ${fidelity})."

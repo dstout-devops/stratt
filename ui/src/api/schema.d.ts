@@ -1483,9 +1483,21 @@ export interface components {
         Emitter: {
             name: string;
             /** @enum {string} */
-            kind: "webhook" | "alertmanager";
+            kind: "webhook" | "stream";
             /** @description hex(sha256(token)) — never the token itself (§2.5). */
             tokenHash: string;
+            explode?: components["schemas"]["EmitterExplode"];
+        };
+        /** @description How one POST becomes many events (ADR-0163). Declared as data, because core knowing any particular tool's field names is the §1.4 line this removes. Absent, one POST is one event. `path` and `merge[].path` are dotted lookups — explicit field access, nothing evaluated (ADR-0024's grammar). */
+        EmitterExplode: {
+            /** @description The array to fan out — one event per entry. */
+            path: string;
+            /** @description Envelope fields folded into every exploded event. Explicit, never "everything else": an implicit merge would let the source adding one top-level field silently change what every rule matches against. */
+            merge?: {
+                path: string;
+                /** @description Renames the field in the event payload. A merged key that collides with one the item already carries is REFUSED rather than resolved (§2.4 — no implicit precedence); this is how the estate keeps them apart. */
+                as?: string;
+            }[];
         };
         /** @description A CaC-declared external MCP server the mcp Actuator may invoke (charter §2.3, ADR-0022). stdio servers carry their entire source in the declaration — Git review authorizes exactly what the sandbox runs. rev keys the pinned tool Contracts (rung 3, drift blocking). */
         MCPServer: {
