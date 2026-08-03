@@ -132,14 +132,19 @@ as independently-shipped **plugin images**, each its own CI unit (ADR-0046). Wha
   [.github/workflows/ci.yml](../../.github/workflows/ci.yml) implements only DCO. Image signing + SBOM + SLSA
   attestation are **unbuilt** (signing is real only on the pull-Bundle path). _(This is enterprise-crack
   SEC-5/SUP-1, now sharper because the container collector projects digests.)_
-- **Remote/upstream sync** — no Galaxy mirror and **no air-gap content seeding**; `requirements.yml`
+- **Remote/upstream sync** — no Galaxy mirror. **Air-gap content seeding SHIPPED** (ADR-0124 D2):
+  `task ee:content:pull` downloads the declared collections on a connected machine, and an EE built
+  with `EE_OFFLINE=<dir>` reaches NO registry — with the pin check and the lockfile check unchanged,
+  so an air-gapped build is verified by the same hash a connected one is rather than trusted for
+  where its bytes came from. What remains is the MIRROR (a hosted upstream), not the seeding.
+  Historically this bullet read "no air-gap content seeding"; `requirements.yml`
   resolution now exists but only at **EE build time**, pinned and verified (ADR-0117 D3), which is
   deliberately not a run-time resolver. The registry is **no longer the checksum authority**: each
   artifact's content SHA-256 is recorded in an in-repo lockfile beside its declaration
   ([ee/content/](../../ee/content/)) and every EE build fails on a mismatch, so a republished version at the
   same version number is caught rather than silently changing what a Run executed (ADR-0117 follow-up i —
-  which also closes the roles half, where there had been no checksum step at all). Air-gap seeding remains
-  owed. (git-sync covers SCM-project delivery only.)
+  which also closes the roles half, where there had been no checksum step at all). (git-sync covers
+  SCM-project delivery only.)
 
 ---
 

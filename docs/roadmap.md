@@ -705,14 +705,21 @@ from `api.Server.launchWorkflow` rather than copied; that function's own comment
 ADRs that a second launch path grows its own authz and its own drift, and this was the moment the
 warning came due.
 
-**What was deliberately NOT shipped: `workflow_jobs/{id}/cancel/`.** AWX offers it and it was two
-lines here — but `RunDAG` has **no cancellation handling at all** (no `ctx.Done` path, no terminal
-status write), and the native API has no workflow-run cancel door either. Wiring one only on the
+**~~What was deliberately NOT shipped: `workflow_jobs/{id}/cancel/`~~ — SHIPPED (2026-08-03,
+[ADR-0157](adr/0157-cancelling-a-workflow-run.md)), in the order this entry demanded: the native
+terminal-status writer first, the façade route following it. `can_cancel` stops being a field with no
+mechanism behind it. The original reasoning, which held:** AWX offers it and it was two
+lines here — but `RunDAG` had **no cancellation handling at all** (no `ctx.Done` path, no terminal
+status write), and the native API had no workflow-run cancel door either. Wiring one only on the
 compat surface would signal Temporal, tear the activities down, and leave `graph.workflow_run` saying
 `running` **forever**: an operator who cancelled would be told the execution is still going, which is
 strictly worse than not offering cancel. A 404 from the mux says "not offered" — absent rather than
 wrong (§1.8). **The real gap is native:** a terminal-status writer in `RunDAG`, with the façade route
 following it. Cancelling a Run (single-Step) already works and is unaffected.
+
+And the withholding paid off twice: ADR-0157's live proof found that cancelling a Run had **never
+reaped its pod** since ADR-0026 (a missing RBAC verb), so the compat route would have inherited a
+broken guarantee rather than merely exposing an absent one.
 
 ### Charter review of this branch (2026-08-01) — performed as steward, subagents unavailable
 
