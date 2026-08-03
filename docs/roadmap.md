@@ -939,8 +939,9 @@ nothing; its pods observe `kubectl`.
 has a writer** — awsec2 deliberately writes no transport, and `aws_ssm` waits on the SSM client
 booked above. So no shipped provider emits an observed `ssh` transport at all, which is exactly why
 `ssh` is a DECLARED value in practice. The schema description should be corrected to describe what
-is written; not done here, because a Facet schema edit is a pinned-hash change and deserves its own
-change rather than a ride-along.
+is written. 🟢 **DONE (2026-08-03)**: the description now states what each provider actually writes,
+including awsec2's deliberate silence and `aws_ssm`'s missing writer, and says why that makes `ssh` a
+DECLARED value in practice.
 
 ### Open follow-ups from the `fix/seam-continuity-and-fidelity` branch (2026-08-01)
 
@@ -987,8 +988,13 @@ not have**, which is a different thing from unfinished work and is marked as suc
 - **Windows (`winrm`/`psrp`)** (ADR-0153 D1). Blocked on a verifiable target ONLY — and note the
   plugins are in ansible-core, so no EE variant is needed. It is one enum entry plus a credential
   form that already exists.
-- **`params-ignored` RunEvent publish** (`6e114fc`). The log half is tested; the publish half is not,
-  because `Activities.Bus` is a concrete `*events.Bus` and no shipped Intent declares `params`.
+- ~~**`params-ignored` RunEvent publish** (`6e114fc`).~~ 🟢 **FIXED (2026-08-03).** `Activities.Bus`
+  is now the narrow `EventBus` PORT (`Publish`/`PublishNotice`/`Tail`) that `*events.Bus` satisfies,
+  so the publishing half is assertable without a NATS. Tests cover the event an operator actually
+  reads — kind, WARN level, Run scope, the params in deterministic order, and the `reason` that
+  answers "did I break something?" — plus a bus that refuses, which must not take the build down and
+  must still reach the log. The untested half was the half that matters: a warning reaching only the
+  daemon log is a warning nobody sees.
 - ~~**E2E-1's `e2e:live` CI job.**~~ 🟢 **SHIPPED** — `.github/workflows/e2e-live.yml` (weekly, on
   `v*` tags, on dispatch), and it has fired: run `30723212848` green across all six demos. The
   caution that wrote this entry ("not added blind: a scheduled gate that cannot be made to fire from
@@ -1058,7 +1064,16 @@ length closing.
 
 **Found by running things, and booked rather than fixed:**
 
-- **A Gate decision with a missing `approve` field is silently a DENIAL** (found 2026-08-02 while
+- ~~**A Gate decision with a missing `approve` field is silently a DENIAL**~~ 🟢 **FIXED
+  (2026-08-03).** The door now decodes with `DisallowUnknownFields` and requires `approve` to be
+  PRESENT, so the typo that found it (`{"approved":true}`) is a 400 naming the offending key instead
+  of a denial recorded against the caller's Principal. Both callers in the repo (the UI mutation and
+  the MCP `decide_gate` tool) already send the right shape, and a test pins those shapes so the
+  stricter door cannot trade a silent wrong answer for a loud broken one. **The audit of the same
+  `json.Decode` pattern on the OTHER write doors is still open** — this fixed the one that was
+  caught, not the class. Original entry:
+
+  **A Gate decision with a missing `approve` field is silently a DENIAL** (found 2026-08-02 while
   writing ADR-0157's live proof, which sent `{"approved":true}` instead of `{"approve":true}` and
   watched the gate go `denied` by the caller who meant to approve it). `components.schemas.GateDecision`
   declares `required: [approve]`, but the handler decodes with `json.NewDecoder(...).Decode(&body)`,

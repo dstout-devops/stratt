@@ -3,10 +3,14 @@ package orchestrate
 import (
 	"bytes"
 	"context"
+	"errors"
+	"io"
 	"log/slog"
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/dstout-devops/stratt/types"
 )
 
 func TestIgnoredParams(t *testing.T) {
@@ -113,5 +117,82 @@ func TestSurfaceIgnoredParamsReportsAndStaysQuiet(t *testing.T) {
 		if !strings.Contains(out, want) {
 			t.Errorf("the report omits %q — an operator needs the params, the action and the run: %q", want, out)
 		}
+	}
+}
+
+// fakeBus captures what orchestration publishes, so the half of surfaceIgnoredParams that an
+// operator actually reads can be asserted without a NATS (the EventBus port, ADR-0151 D4 follow-up).
+type fakeBus struct {
+	events   []types.RunEvent
+	failNext error
+}
+
+func (f *fakeBus) Publish(_ context.Context, ev types.RunEvent) error {
+	if f.failNext != nil {
+		err := f.failNext
+		f.failNext = nil
+		return err
+	}
+	f.events = append(f.events, ev)
+	return nil
+}
+func (f *fakeBus) PublishNotice(context.Context, types.Notice) error { return nil }
+func (f *fakeBus) Tail(context.Context, string, func(types.RunEvent) error) error {
+	return nil
+}
+
+// THE BOOKED GAP, closed. The log half was tested; the PUBLISH half was not, because the field was
+// a concrete *events.Bus and a unit test has no bus to give it. The publish half is the one that
+// matters: a warning that reaches only the daemon log is a warning nobody sees.
+func TestSurfaceIgnoredParamsPublishesTheRunEvent(t *testing.T) {
+	bus := &fakeBus{}
+	a := &Activities{Bus: bus, Log: slog.New(slog.NewTextHandler(io.Discard, nil))}
+
+	a.surfaceIgnoredParams(context.Background(), "run-1", "kubecompute/create-host", nil)
+	if len(bus.events) != 0 {
+		t.Fatalf("nothing ignored must publish nothing: %+v", bus.events)
+	}
+
+	a.surfaceIgnoredParams(context.Background(), "run-1", "kubecompute/create-host", []string{"ami", "region"})
+	if len(bus.events) != 1 {
+		t.Fatalf("one report, one event: %+v", bus.events)
+	}
+	ev := bus.events[0]
+	if ev.RunID != "run-1" || ev.Kind != "params-ignored" {
+		t.Errorf("the event must be addressable to the Run and identifiable by kind: %+v", ev)
+	}
+	// WARN, not INFO: this is a declaration that will silently stop being honoured if a binding
+	// changes, and an INFO event is one nobody filters for.
+	if ev.Level != types.RunEventWarn {
+		t.Errorf("level: got %v, want warn", ev.Level)
+	}
+	if ev.Scope != types.RunEventScopeRun {
+		t.Errorf("scope: got %v, want run — it is a property of the Run, not of one target", ev.Scope)
+	}
+	if got, _ := ev.Payload["action"].(string); got != "kubecompute/create-host" {
+		t.Errorf("payload must name the action that ignored them: %+v", ev.Payload)
+	}
+	params, _ := ev.Payload["params"].([]string)
+	if len(params) != 2 || params[0] != "ami" || params[1] != "region" {
+		t.Errorf("payload must carry the params, in the deterministic order the sort guarantees: %+v", ev.Payload)
+	}
+	// The reason is load-bearing, not decoration: the reader's first question is whether they broke
+	// something, and usually they have not.
+	if reason, _ := ev.Payload["reason"].(string); !strings.Contains(reason, "did not read these declared params") {
+		t.Errorf("payload must say WHY it is being reported: %+v", ev.Payload)
+	}
+}
+
+// A bus that refuses must not take the build down with it. Losing the trace is bad; losing a build
+// because the trace could not be written is worse — and the failure still has to reach the log.
+func TestSurfaceIgnoredParamsSurvivesABusThatRefuses(t *testing.T) {
+	var buf bytes.Buffer
+	bus := &fakeBus{failNext: errors.New("nats is down")}
+	a := &Activities{Bus: bus, Log: slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn}))}
+
+	a.surfaceIgnoredParams(context.Background(), "run-1", "kubecompute/create-host", []string{"ami"})
+
+	if !strings.Contains(buf.String(), "nats is down") {
+		t.Errorf("a failed publish must be logged, or the trace is lost twice over: %q", buf.String())
 	}
 }

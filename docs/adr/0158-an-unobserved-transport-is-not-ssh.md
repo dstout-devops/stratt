@@ -134,7 +134,10 @@ Recorded rather than quietly fixed, because two of them were the reason this ADR
 transport at all (its own comment says why), and `aws_ssm` has no writer pending an SSM client. So
 **no shipped provider emits an observed `ssh` transport** — which is what makes `ssh` a DECLARED
 value in practice (D2) and is why the test fixtures migrated here declare it rather than observing
-it. The schema description should be corrected to describe what is written; booked, not done here.
+it. **The schema description is now corrected (2026-08-03)** to state what is actually written —
+kubectl and vmware_tools observed, awsec2 writing nothing deliberately, `aws_ssm` with no writer at
+all — because a schema that describes writers it does not have is a second source of truth about the
+estate, which is the §1.2 line this ADR is otherwise about.
 
 ## Verification
 

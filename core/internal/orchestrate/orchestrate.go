@@ -29,7 +29,6 @@ import (
 	"github.com/dstout-devops/stratt/core/internal/cellrouter"
 	"github.com/dstout-devops/stratt/core/internal/contract"
 	"github.com/dstout-devops/stratt/core/internal/dispatch"
-	"github.com/dstout-devops/stratt/core/internal/events"
 	"github.com/dstout-devops/stratt/core/internal/evidencestore"
 	"github.com/dstout-devops/stratt/core/internal/graph"
 	"github.com/dstout-devops/stratt/core/internal/planstore"
@@ -603,11 +602,32 @@ func (r *PluginRegistry) DeregisterAction(name string) {
 	delete(r.actions, name)
 }
 
+// EventBus is the slice of *events.Bus that orchestration actually uses — a PORT, so the
+// publishing half of an activity can be asserted without a NATS.
+//
+// It exists because a booked gap could not be closed without it: `params-ignored` (ADR-0151 D4)
+// had its logging half tested and its PUBLISHING half untested, because the field was the concrete
+// *events.Bus and a unit test has no bus to give it. The untested half is the half an operator
+// actually reads — a warning that reaches only the daemon log is a warning nobody sees, which is
+// the same §1.8 shape as a refusal with no terminal event.
+//
+// Narrow on purpose: exactly the three methods orchestration calls, so it stays a description of
+// this package's needs rather than a mirror of events.Bus that has to be kept in step with it.
+type EventBus interface {
+	Publish(ctx context.Context, ev types.RunEvent) error
+	PublishNotice(ctx context.Context, n types.Notice) error
+	Tail(ctx context.Context, runID string, fn func(types.RunEvent) error) error
+}
+
 type Activities struct {
 	Store      *graph.Store
 	Dispatcher *dispatch.Dispatcher
-	Bus        *events.Bus
-	Authz      authz.Authorizer
+	// Bus is the EventBus port, satisfied by *events.Bus in production. NIL-CHECK CAUTION: this is
+	// an interface, so a typed-nil *events.Bus assigned here would be non-nil as an interface and
+	// the `a.Bus == nil` guards would not fire. strattd passes a constructed bus or leaves it
+	// unset, which is the only shape those guards are written for.
+	Bus   EventBus
+	Authz authz.Authorizer
 	// Decider is the Policy Decision Point PORT (ADR-0072): the policy Step
 	// obtains its Decision through this seam, never a concrete engine. Nil ⇒ the
 	// built-in CEL provider (the default); swap for an external engine or
