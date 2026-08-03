@@ -1010,6 +1010,23 @@ not have**, which is a different thing from unfinished work and is marked as suc
   `demo:<name>:run` exists. It spans ansible + declared, so `demos/` is the right home under
   ADR-0137 D7.
 
+- ~~⚠️ **THE SHIM CHECKS TWO OF THE THREE AXES A TRANSPORT CAN FAIL ON**~~ 🟢 **CLOSED
+  ([ADR-0159](adr/0159-a-transport-fails-on-three-axes.md), 2026-08-03, live-proven).** The EE content
+  manifest now records the image's PYTHON DISTRIBUTIONS beside its collections and roles, and the
+  shim refuses a connection type whose python transport is absent — ANY-OF, because netcommon accepts
+  pylibssh or paramiko and demanding one specific module would refuse a working image. No probe: D7
+  deliberately refused to interrogate the image and reads the manifest, so this reads the same seam.
+  Proven against two REAL images differing only by `EE_PYTHON_EXTRA` — the one without is refused
+  before the run with a terminal event naming both libraries and the fix; the shipped one renders its
+  inventory and starts the play. Falsified by deleting the call site.
+
+  Still open and named in D5: python extras are pinned by VERSION, not digest, so a republished wheel
+  at the same version changes the image and nothing says so — weaker than the collection lockfile
+  beside it. The fix is uv's own hash-locking over a per-variant requirements file, which changes how
+  variants are declared.
+
+  <details><summary>The original entry</summary>
+
 - ⚠️ **THE SHIM CHECKS TWO OF THE THREE AXES A TRANSPORT CAN FAIL ON** (found 2026-08-03, above).
   A connection plugin can need a COLLECTION (ADR-0153 D7 checks it), a BINARY on the control node
   (ADR-0156 D6 checks it — kubectl, session-manager-plugin), and a **PYTHON MODULE on the control
@@ -1024,6 +1041,8 @@ not have**, which is a different thing from unfinished work and is marked as suc
   subprocess probe beside it — which means touching `ee/content.py`, the manifest shape, and the
   shim's `requireConnectionCollection`/`requireTransportTooling` pair. That extends two Accepted
   ADRs and belongs in its own decision, not inside a demo commit.
+
+  </details>
 - **Windows (`winrm`/`psrp`)** (ADR-0153 D1). Blocked on a verifiable target ONLY — and note the
   plugins are in ansible-core, so no EE variant is needed. It is one enum entry plus a credential
   form that already exists.

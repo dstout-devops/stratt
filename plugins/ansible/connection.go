@@ -144,6 +144,14 @@ func connectionTypeVars(c *connectionParams, hasLocal bool, readFile func(string
 	if err := requireConnectionCollection(typ, readFile); err != nil {
 		return nil, err
 	}
+	// The THIRD axis (ADR-0159), and it runs after the collection check because it is the more
+	// specific finding: an image missing the collection is missing the plugin outright, whereas one
+	// missing the python library HAS the plugin and cannot open a socket with it. Reporting
+	// "netcommon is absent" first keeps the operator installing the collection before being told
+	// about a library that collection does not declare.
+	if err := requireConnectionPython(typ, readFile); err != nil {
+		return nil, err
+	}
 	vars["ansible_connection"] = typ
 	vars["ansible_network_os"] = c.NetworkOS
 	return vars, nil

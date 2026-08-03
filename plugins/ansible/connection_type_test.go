@@ -11,6 +11,30 @@ import (
 
 // eeManifest fakes the EE's run-visible content manifest (/etc/stratt/ee-content.json).
 func eeManifest(collections ...string) func(string) ([]byte, error) {
+	return eeManifestPython(nil, collections...)
+}
+
+// eeManifestPython is eeManifest plus the image's PYTHON distributions (ADR-0159 D1). The python
+// SECTION is always present — an image built by our pipeline always records one, even when empty —
+// because "no python library" and "cannot say what python it has" are different diagnoses and the
+// shim gives them different answers. eePrePython below is the second case.
+func eeManifestPython(python []string, collections ...string) func(string) ([]byte, error) {
+	entries := make([]string, 0, len(collections))
+	for _, c := range collections {
+		entries = append(entries, `{"name":"`+c+`","version":"1.0.0","declared":true}`)
+	}
+	pys := make([]string, 0, len(python))
+	for _, d := range python {
+		pys = append(pys, `{"name":"`+d+`","version":"1.0.0"}`)
+	}
+	doc := []byte(`{"collections":[` + strings.Join(entries, ",") + `],"roles":[],"python":[` +
+		strings.Join(pys, ",") + `]}`)
+	return func(string) ([]byte, error) { return doc, nil }
+}
+
+// eePrePython is an image built BEFORE ADR-0159: collections recorded, no python section at all. It
+// cannot say what it carries, and the shim refuses on it rather than assuming.
+func eePrePython(collections ...string) func(string) ([]byte, error) {
 	entries := make([]string, 0, len(collections))
 	for _, c := range collections {
 		entries = append(entries, `{"name":"`+c+`","version":"1.0.0","declared":true}`)
@@ -24,8 +48,14 @@ func eeManifest(collections ...string) func(string) ([]byte, error) {
 // the special case, and defaulting to it would have hidden the whole finding below.
 var noEE = eeManifest("community.general")
 
-// netEE is an EE variant built with the netcommon collection (ADR-0117 D3).
-var netEE = eeManifest("community.general", "ansible.netcommon")
+// netEE is an EE variant built with the netcommon collection (ADR-0117 D3) AND the python SSH
+// transport it needs. Both, because netcommon alone cannot open a connection — the collection
+// declares no SSH library as a hard dependency, which is the whole of ADR-0159.
+var netEE = eeManifestPython([]string{"ansible-pylibssh"}, "community.general", "ansible.netcommon")
+
+// netEENoPython is the image that shipped for months and could never connect: the collection is
+// there, the plugin loads, and there is no SSH transport under it.
+var netEENoPython = eeManifest("community.general", "ansible.netcommon")
 
 // network_cli is the value this whole ADR exists for: the ansible.netcommon family is a
 // large part of why enterprises buy AAP, and before v8 the Actuator could reach Linux over
@@ -439,6 +469,77 @@ func TestInventoryCarriesCredentialPathsAndNeverMaterial(t *testing.T) {
 	for k, v := range vars {
 		if strings.Contains(v, material) {
 			t.Errorf("connection var %q carries material rather than a path", k)
+		}
+	}
+}
+
+// ── ADR-0159 · the third axis: a python module on the CONTROL NODE ───────────────────────
+//
+// THE DEFECT THIS CLOSES, in one sentence: the collection was present, the gate passed, and the
+// connection could not be opened. `ansible.netcommon` declares neither ansible-pylibssh nor
+// paramiko as a hard dependency — either will do — so installing it installs no SSH transport, and
+// the run died at connect time with `No module named 'paramiko'`. That is ADR-0153 D7's own failure
+// mode happening to D7's own connection type, one axis to the side of where D7 was looking.
+//
+// FALSIFICATION: delete the requireConnectionPython call in connection.go and these fail.
+func TestNetworkCLINeedsAPythonTransportNotJustTheCollection(t *testing.T) {
+	_, err := connectionTypeVars(&connectionParams{Type: ConnNetworkCLI, NetworkOS: "frr.frr.frr"}, false, netEENoPython)
+	if err == nil {
+		t.Fatal("an EE with netcommon and NO python SSH library must be refused: the plugin loads and " +
+			"then cannot open a socket, which is a connect-time death the estate cannot diagnose")
+	}
+	for _, want := range []string{"ansible-pylibssh", "paramiko", "EE_PYTHON_EXTRA", "ansible.netcommon"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the refusal must name both acceptable libraries, the fix, and the collection that "+
+				"is NOT enough; missing %q: %v", want, err)
+		}
+	}
+}
+
+// ANY-OF (D2): either library satisfies it. Demanding one specific module would refuse an image
+// that works, and a gate that cries wolf is one people route around.
+func TestEitherPythonSSHLibrarySatisfiesNetworkCLI(t *testing.T) {
+	for _, lib := range []string{"ansible-pylibssh", "paramiko"} {
+		ee := eeManifestPython([]string{lib}, "community.general", "ansible.netcommon")
+		if _, err := connectionTypeVars(&connectionParams{Type: ConnNetworkCLI, NetworkOS: "frr.frr.frr"}, false, ee); err != nil {
+			t.Errorf("%s alone must be enough — netcommon accepts either: %v", lib, err)
+		}
+	}
+	// PEP 503: the same distribution is spelled several ways depending on who is asking, and a
+	// check matching raw strings would refuse an image that genuinely has the library.
+	for _, spelling := range []string{"Ansible_PyLibSSH", "ANSIBLE.PYLIBSSH", "ansible--pylibssh"} {
+		ee := eeManifestPython([]string{spelling}, "community.general", "ansible.netcommon")
+		if _, err := connectionTypeVars(&connectionParams{Type: ConnNetworkCLI, NetworkOS: "frr.frr.frr"}, false, ee); err != nil {
+			t.Errorf("%q is the same distribution and must satisfy the check: %v", spelling, err)
+		}
+	}
+}
+
+// An image built before ADR-0159 records no python section. It cannot say what it carries, and
+// "unknown" is not "adequate" — the same rule D7 applies to a manifest it cannot read at all.
+func TestAnEEThatCannotSayWhatPythonItCarriesIsRefused(t *testing.T) {
+	_, err := connectionTypeVars(&connectionParams{Type: ConnNetworkCLI, NetworkOS: "frr.frr.frr"},
+		false, eePrePython("community.general", "ansible.netcommon"))
+	if err == nil {
+		t.Fatal("a manifest with no python section must be refused, not assumed complete")
+	}
+	if !strings.Contains(err.Error(), "no python section") || !strings.Contains(err.Error(), "Rebuild") {
+		t.Errorf("the diagnosis must distinguish 'cannot say' from 'does not have', and say what to "+
+			"do about it: %v", err)
+	}
+}
+
+// ssh and local ask NOTHING of the image on any axis. A python check that fired on the path every
+// existing estate uses would be a self-inflicted outage.
+func TestSSHNeedsNoPythonTransport(t *testing.T) {
+	exploded := func(string) ([]byte, error) {
+		t.Helper()
+		t.Fatal("an ssh connection must not consult the content manifest")
+		return nil, nil
+	}
+	for _, typ := range []string{"", ConnSSH} {
+		if _, err := connectionTypeVars(&connectionParams{Type: typ}, false, exploded); err != nil {
+			t.Errorf("connection.type %q needs nothing from the image: %v", typ, err)
 		}
 	}
 }

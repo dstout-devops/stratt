@@ -50,6 +50,111 @@ var connectionCollections = map[string]string{
 	ConnNetconf:    "ansible.netcommon",
 }
 
+// connectionPythonAny is THE THIRD AXIS (ADR-0159): the python distributions a connection type needs
+// on the CONTROL NODE, of which ANY ONE suffices.
+//
+// FOUND BY DRIVING A REAL DEVICE. `ansible.netcommon` declares neither `ansible-pylibssh` nor
+// `paramiko` as a hard dependency — either will do — so installing the collection installs NO SSH
+// transport at all. The collection check above passed, and the run died at connect time with
+// `No module named 'paramiko'`: the exact "names a python module the estate never wrote" failure
+// ADR-0153 D7 exists to prevent, one axis to the side of where D7 was looking.
+//
+// ANY-OF, not a single name (D2). Demanding one specific module would refuse an image that works,
+// and a gate that cries wolf is one people route around — which protects nothing.
+//
+// Names are PEP 503 normalised (lowercase, runs of -_. collapsed to -) to match what the manifest
+// records, because the same distribution is spelled `ansible-pylibssh`, `ansible_pylibssh` and
+// `Ansible-PyLibSSH` depending on who is asking.
+var connectionPythonAny = map[string][]string{
+	ConnNetworkCLI: {"ansible-pylibssh", "paramiko"},
+	ConnNetconf:    {"ansible-pylibssh", "paramiko"},
+}
+
+// eePython reads the installed python distribution names out of the EE's content manifest.
+//
+// A manifest with NO python section is treated as "this image predates ADR-0159", and the caller
+// refuses on it — the same rule D7 applies to an unreadable manifest. Unknown is not adequate: an
+// image whose python content cannot be established is one whose connection cannot be promised, and
+// silently passing it would put back exactly the connect-time failure this check exists to move.
+func eePython(read func(string) ([]byte, error)) (map[string]string, bool, error) {
+	raw, err := read(eeContentManifest)
+	if err != nil {
+		return nil, false, err
+	}
+	var doc struct {
+		Python *[]struct {
+			Name    string `json:"name"`
+			Version string `json:"version"`
+		} `json:"python"`
+	}
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		return nil, false, fmt.Errorf("EE content manifest %s is unreadable: %w", eeContentManifest, err)
+	}
+	if doc.Python == nil {
+		return nil, false, nil
+	}
+	out := map[string]string{}
+	for _, d := range *doc.Python {
+		out[normalizeDist(d.Name)] = d.Version
+	}
+	return out, true, nil
+}
+
+// normalizeDist applies PEP 503 name normalisation, so `Ansible_PyLibSSH` and `ansible-pylibssh`
+// compare equal. Matching raw strings would miss an image that genuinely has the library.
+func normalizeDist(name string) string {
+	var b strings.Builder
+	prevSep := false
+	for _, r := range strings.ToLower(strings.TrimSpace(name)) {
+		if r == '-' || r == '_' || r == '.' {
+			if !prevSep {
+				b.WriteByte('-')
+			}
+			prevSep = true
+			continue
+		}
+		prevSep = false
+		b.WriteRune(r)
+	}
+	return b.String()
+}
+
+// requireConnectionPython refuses a connection type whose python transport this EE lacks, BEFORE the
+// play runs (ADR-0159 D3) — the third axis, beside the collection above and the binary in
+// transport.go.
+func requireConnectionPython(typ string, read func(string) ([]byte, error)) error {
+	want := connectionPythonAny[typ]
+	if len(want) == 0 {
+		return nil
+	}
+	have, ok, err := eePython(read)
+	if err != nil {
+		return fmt.Errorf("connection.type %s needs one of %s on the control node, and this image's "+
+			"content manifest could not be read to confirm it (%w) — an EE built outside our pipeline "+
+			"publishes no manifest, so what it contains is unknown rather than adequate",
+			typ, strings.Join(want, " or "), err)
+	}
+	if !ok {
+		return fmt.Errorf("connection.type %s needs one of %s on the control node, and this image's "+
+			"content manifest records no python section at all — it predates ADR-0159 and cannot say "+
+			"what it carries. Rebuild the EE; an image whose python content is unknown is one whose "+
+			"connection cannot be promised", typ, strings.Join(want, " or "))
+	}
+	for _, w := range want {
+		if _, found := have[normalizeDist(w)]; found {
+			return nil
+		}
+	}
+	return fmt.Errorf("connection.type %s cannot open a connection in this EE: it needs one of %s on "+
+		"the CONTROL NODE and has neither. The collection (%s) is present and is NOT enough — "+
+		"ansible.netcommon declares no SSH library as a hard dependency because either will do, so "+
+		"installing it installs no transport. Build an EE variant with "+
+		"`--build-arg EE_PYTHON_EXTRA=ansible-pylibssh==<version>` and select it from the Actuator "+
+		"declaration (ADR-0117 D3). Without this the Run does not refuse — it reaches ansible and "+
+		"dies with `No module named 'paramiko'`, naming a python module the estate never wrote "+
+		"(ADR-0159)", typ, strings.Join(want, " or "), connectionCollections[typ])
+}
+
 // eeCollections reads the installed collection names out of the EE's content manifest.
 func eeCollections(read func(string) ([]byte, error)) (map[string]string, error) {
 	raw, err := read(eeContentManifest)
