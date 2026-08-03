@@ -1054,6 +1054,17 @@ length closing.
 
 **Found by running things, and booked rather than fixed:**
 
+- **A Gate decision with a missing `approve` field is silently a DENIAL** (found 2026-08-02 while
+  writing ADR-0157's live proof, which sent `{"approved":true}` instead of `{"approve":true}` and
+  watched the gate go `denied` by the caller who meant to approve it). `components.schemas.GateDecision`
+  declares `required: [approve]`, but the handler decodes with `json.NewDecoder(...).Decode(&body)`,
+  which does not enforce required fields — so an unknown key is dropped, `approve` defaults to
+  false, and a typo becomes a decision recorded against the caller's Principal in the audit trail.
+  Denial is the safe DIRECTION, which is exactly why it went unnoticed; it is still a wrong answer
+  where a 400 belongs (§1.8), and the same decode pattern is worth auditing on the other write
+  doors. Related to the `?workflowRunId=` finding in ADR-0158's arc: both are the API accepting a
+  request it does not honour.
+
 - **`kubecompute` advertises `provisions` but not `decommissions`.** It ships a build Workflow and no
   teardown Workflow, so an `Intent/Compute` count-DOWN offers nothing on the kubernetes substrate.
   vcenter has one (`vsphere-vm-teardown`, ADR-0114 D4), so the same edit against `vsphere-dc` would
