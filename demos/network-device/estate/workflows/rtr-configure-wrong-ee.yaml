@@ -1,0 +1,35 @@
+# A Workflow that is SUPPOSED TO FAIL, and the demo asserts that it does — the content half of the
+# same lesson vacuous-run-guard teaches for actuation.
+#
+# Byte-identical to rtr-configure except for the Actuator, which selects the PLATFORM EE. That image
+# has no ansible.netcommon, so `connection.type: network_cli` names a plugin it cannot load, and no
+# ansible-pylibssh, so the connection has no SSH transport under it either (ADR-0159).
+#
+# Both are checked BEFORE the play runs, by reading the image's own content manifest — which is what
+# makes "the image is the content boundary" (ADR-0117 D3a) an enforced property rather than a
+# convention. Without the check the Run reaches the device and dies naming a python module the
+# estate never wrote, which is ADR-0153 D7's whole subject.
+name: rtr-configure-wrong-ee
+inputs:
+  type: object
+  additionalProperties: false
+  required: [routePrefix]
+  properties:
+    routePrefix:
+      type: string
+      pattern: '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+/[0-9]+$'
+steps:
+  - name: configure-with-the-wrong-image
+    viewName: net-devices
+    actuator: ansible-plain
+    credentialRefs: [rtr-ssh]
+    params:
+      connection:
+        type: network_cli
+        networkOS: frr.frr.frr
+        user: netops
+        credentialRef: rtr-ssh
+        hostKeyChecking: accept-new
+      extraVars:
+        route_prefix: "{{.launch.routePrefix}}"
+      playbook: configure.yml

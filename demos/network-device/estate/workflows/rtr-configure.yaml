@@ -1,0 +1,50 @@
+# Configure a network device — the Workflow ADR-0153's connection-type enum was written for, and
+# the first one in this repo that drives a device rather than a server.
+#
+# WHAT MAKES IT A NETWORK STEP is three declarations and nothing else:
+#
+#   connection.type: network_cli   the CONNECTION PLUGIN — ansible's ordinary ssh path cannot work
+#                                  against a target whose login shell is a CLI (ADR-0153 D1)
+#   connection.networkOS           the PLATFORM whose cliconf/terminal plugins parse that CLI; it is
+#                                  REQUIRED for the netcommon family and refused otherwise (D2)
+#   actuator: ansible-network      the IMAGE carrying both, plus the python SSH transport netcommon
+#                                  does not declare (ADR-0117 D3a, ADR-0159)
+#
+# Nothing above the Step names a substrate, a vendor or a transport: the View selects devices, the
+# Assignment would say where, and this recipe says how.
+name: rtr-configure
+inputs:
+  type: object
+  additionalProperties: false
+  required: [routePrefix]
+  properties:
+    routePrefix:
+      type: string
+      description: The prefix to install as a blackhole route, e.g. 10.99.0.0/24.
+      pattern: '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+/[0-9]+$'
+steps:
+  - name: configure
+    viewName: net-devices
+    actuator: ansible-network
+    credentialRefs: [rtr-ssh]
+    params:
+      connection:
+        # DECLARED, and ADR-0158 D2 is why it must be: nothing observes a switch's transport —
+        # no provider built it — so an absent mgmt.transport here means UNKNOWN, and the shim
+        # refuses rather than guessing ssh. A device states its reach method on the Step.
+        type: network_cli
+        # The platform. Without it the netcommon family is refused at declaration time (D2): there
+        # is nothing to infer it from, and a wrong guess connects and then issues another vendor's
+        # command syntax at a live device.
+        networkOS: frr.frr.frr
+        user: netops
+        # Derived from the credentialRef above, never a literal path (ADR-0126 D1).
+        credentialRef: rtr-ssh
+        # The device's host key is generated at image build, so it is stable across pod restarts
+        # and accept-new means what it says: first contact accepted, a CHANGED key refused.
+        hostKeyChecking: accept-new
+      extraVars:
+        # The launch input, mapped onto the play's own variable name. Core never parses play content
+        # to discover what it needs (ADR-0118 D6), so the translation is declared here.
+        route_prefix: "{{.launch.routePrefix}}"
+      playbook: configure.yml

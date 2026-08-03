@@ -1,0 +1,9 @@
+# The grants this demo's Principal needs, declared as data (ADR-0009/0028).
+#
+# `runner on view:net-devices` is the execution grant the Step is checked against, and `user on
+# credential_ref:rtr-ssh` is the §2.5 use-check — the two are separate on purpose: being allowed to
+# converge a View is not the same as being allowed to use a particular device credential.
+tuples:
+  - { user: principal:bootstrap-admin, relation: member, object: team:platform-admins }
+  - { user: principal:bootstrap-admin, relation: user, object: credential_ref:rtr-ssh }
+  - { user: principal:bootstrap-admin, relation: runner, object: view:net-devices }

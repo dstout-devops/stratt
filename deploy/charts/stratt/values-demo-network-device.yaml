@@ -1,0 +1,20 @@
+# network-device demo overlay (ADR-0116, ADR-0153) — layered on values-allinone.yaml +
+# values-genesis.yaml by `task demo:network-device:run`.
+#
+# Only the `declared` plugin, for the same reason app-cert needs only that one: it is the Syncer
+# that turns this demo's estate/hosts/*.yaml into an Entity carrying mgmt.address. The device is
+# DISCOVERED (declared as data), never provisioned — nothing builds a switch — which is exactly
+# ADR-0156 D5's declared side and why the Step names its own connection.type.
+#
+# The ansible Actuator needs no plugin pod: it is an EE-Job Actuator, the "plugin" is the container
+# image the dispatcher runs per Step, and WHICH image comes from the Actuator declaration in the
+# demo's estate (stratt-ee-frr:dev — ADR-0117 D3a), not from these values.
+plugins:
+  - name: declared
+    image:
+      repository: stratt-plugin-declared
+      tag: dev
+      pullPolicy: Never # kind-loaded (task image:declared-plugin)
+    estateHosts: true
+    env:
+      STRATT_DECLARED_PATH: /hosts

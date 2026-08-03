@@ -1,0 +1,10 @@
+# The plugins this demo's estate admits (ADR-0137 D1/D3).
+#
+# TWO, which is also why this demo lives in demos/ rather than beside a plugin (ADR-0137 D7): the
+# `declared` Syncer projects the device into the graph, and the `ansible` Actuator converges it.
+# A single-plugin demo belongs with its plugin; this one spans the seam between them, which is the
+# thing no single plugin can own.
+plugins:
+  - name: ansible
+    path: ../../../plugins/ansible/estate
+    contractsOnly: true

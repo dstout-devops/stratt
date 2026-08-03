@@ -1,0 +1,7 @@
+# The View the converge Step targets, and the authorization unit the `runner` grant is checked
+# against (ADR-0028).
+name: net-devices
+selector:
+  kinds: [host]
+  labels:
+    demo: network-device

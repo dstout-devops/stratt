@@ -983,8 +983,15 @@ not have**, which is a different thing from unfinished work and is marked as suc
 - **`vmware_tools` is shipped and unit-tested only** (ADR-0156). vspheresim implements the vCenter
   API but not Tools guest operations, so proving it needs **a real vCenter with a Tools-running
   guest**. Blocked on a target, not on design.
-- **A live network-device run** (ADR-0153). ⚠️ **NO LONGER BLOCKED, AND THE MECHANISM IS PROVEN**
-  (2026-08-03) — what remains is the Stratt plumbing, not the unknown.
+- ~~**A live network-device run** (ADR-0153).~~ 🟢 **DONE (2026-08-03) — and it is a GATED DEMO.**
+  [`demos/network-device`](../demos/network-device/README.md) configures a real FRR router over
+  `connection.type: network_cli`, `EXIT=0` on kind, and E2E-1 picks it up automatically because
+  `demo:network-device:run` exists. It asserts the target really is a device (netops' login shell is
+  `/usr/bin/vtysh` — there is no POSIX shell behind it), that NOTHING observes its transport (a switch
+  is discovered, not provisioned, so the Step declares its own reach method — ADR-0156 D5 /
+  ADR-0158 D2), that the route is in the **device's own running-config** read back through vtysh, and
+  that a Step whose EE lacks the network content is **refused before it connects** with the device
+  verified untouched.
 
   **A real device was driven, end to end.** Target: `alpine:3.21` + `apk add frr frr-pythontools
   openssh`, with the login shell of the `netops` user set to `/usr/bin/vtysh` — which is exactly how

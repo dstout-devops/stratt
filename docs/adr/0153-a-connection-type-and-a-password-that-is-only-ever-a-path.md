@@ -265,9 +265,27 @@ a CI-runnable target: an FRR or cEOS container plus the matching collection in t
 the live half, in the shape PLG-1's bastion half is booked. **A unit-green connection type is not a
 proven one**, and this ADR does not claim otherwise.
 
-### The live half, done (2026-08-03) — and D7's own failure happened to D7's own connection type
+### The live half, done (2026-08-03) — and it is a GATED DEMO, not a one-off run
 
-A real device was driven end to end. The target needs no cEOS, no licence and no registration:
+[`demos/network-device`](../../demos/network-device/README.md) configures a real router end to end and
+asserts the outcome by reading the DEVICE, and because it is a `demo:<name>:run` target it is in the
+E2E-1 suite automatically — this cannot rot back to "unit-green".
+
+```
+demo: assert the target is a NETWORK DEVICE, not a host with a routing daemon
+  netops' login shell: /usr/bin/vtysh
+  and NO mgmt.transport is observed for it — a discovered device declares its own reach method
+  WorkflowRun succeeded over network_cli
+  device says: ip route 10.99.0.0/24 blackhole
+  guard Run failed as designed  (an EE without the content, refused before it connected)
+demo: DONE — Stratt configured a real network device over its own CLI (fidelity: real)
+```
+
+The guard is the half that makes D7 an enforced boundary rather than a claim: the SAME Step against
+an Actuator on the platform EE is refused before it connects, naming the missing collection, and the
+demo verifies the device was never touched by it.
+
+The target needs no cEOS, no licence and no registration:
 `alpine:3.21` + `apk add frr frr-pythontools openssh`, with the `netops` user's LOGIN SHELL set to
 `/usr/bin/vtysh` — you SSH in and land in the CLI, which is what a switch does. Driven from
 `stratt-ee-network:dev` plus one adopter vendor collection (`frr.frr` 2.0.2) over

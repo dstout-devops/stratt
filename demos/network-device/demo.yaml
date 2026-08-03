@@ -1,0 +1,35 @@
+# demo.yaml — the demo manifest (ADR-0116 D1/D3). Declared metadata the turnkey runner READS and
+# surfaces, so the human-facing claims (especially `fidelity`) can't quietly rot away from the code.
+name: network-device
+title: "configure a network device"
+summary: >
+  Watch Stratt configure a real router over its own CLI — no shell on the far end, no python on the
+  device, no agent. A declared device, a brokered key, one Step naming `connection.type:
+  network_cli`, and the change read back out of the device's own running-config. Then watch a Step
+  whose image lacks the network content be refused before it ever connects.
+
+# fidelity (D3): how real is what you're watching? The turnkey runner prints this up front.
+#   real       — real workloads on real substrate.
+#   build-real — the substrate's control API and lifecycle are real; the substrate itself is a simulator.
+#   simulated  — the substrate itself is faked end to end.
+fidelity: real
+fidelityNote: >
+  A real FRR routing daemon with a real vtysh CLI, reached over a real SSH connection whose login
+  shell IS that CLI — there is no POSIX shell behind it, which is what makes ansible's ordinary path
+  impossible and network_cli load-bearing. Real cliconf/terminal plugins parse the terminal, and the
+  running-config asserted at the end is the daemon's own. The one concession: the device is a
+  container in the same kind cluster rather than a switch on a lab bench (PLG-1), and FRR stands in
+  for a vendor NOS because cEOS and vJunos need licences no CI gate can hold.
+
+# What the runner drives (mirrors the estate/ declarations).
+workflow: rtr-configure
+# The content guard: the same Step against an EE with no netcommon and no python SSH transport,
+# which must be REFUSED before it connects (ADR-0117 D3a, ADR-0153 D7, ADR-0159).
+guardWorkflow: rtr-configure-wrong-ee
+view: net-devices
+actuator: ansible-network
+executionEnvironment: stratt-ee-frr:dev
+collection: frr.frr
+# WHAT THIS DEMO RUNS AGAINST. `backend` is the harness's own descriptor — the simulator or
+# transport a demo actually talks to — and is NOT ADR-0151's closed substrate set.
+backend: network_cli
