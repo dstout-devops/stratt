@@ -1,7 +1,8 @@
 # ADR 0160 — The same job, possibly a different hand: launch-time parity with AAP
 
-- **Status:** **Proposed** (2026-08-03, steward) — **D1/D2/D3 implemented and unit-proven; D4
-  unimplemented; the LIVE proof is still owed.** Promotion waits on it, per the standing rule. Charter review by hand — this session's rules bar
+- **Status:** **Accepted** (2026-08-03, steward) for **D1/D2/D3**, which are **live-proven** on kind
+  and gated by `demo:scale-fleet`. **D4 remains unimplemented** and `ask_credential_on_launch` /
+  `ask_execution_environment_on_launch` correctly report false until it ships. Charter review by hand — this session's rules bar
   the subagent; §1.2/§1.6/§2.2/§2.4/§2.5 answered inline. **No new runtime dependency.**
 - **Date:** 2026-08-03
 - **Deciders:** steward
@@ -196,5 +197,32 @@ that ordering: a launch-supplied credentialRef today would bypass the §2.5 use-
 authorized against the Step's DECLARED refs. Advertising the prompt before the permitted set exists
 would invite exactly the escalation D4 is meant to make safe.
 
-**The live proof is owed and is not claimed.** `task ci` EXIT=0 is not the same as a Run whose target
-set actually narrowed, and this arc has now been wrong about that distinction six times.
+### The live proof, paid (2026-08-03)
+
+`demos/scale-fleet` builds three hosts, so a narrowing is observable rather than asserted.
+`fleet-limit` declares `hostLimit` and binds it into `params.limit`; the demo counts the DISTINCT
+hosts each Run produced a per-target result for, read from the execution pod's own event stream
+rather than from the request that started it. `task demo:scale-fleet:run` EXIT=0:
+
+```
+launch with hostLimit=all reached 3 host(s)
+launch with hostLimit=<one host> reached 1 host(s)
+✓ 3 → 1: the declared envelope actually bounded the Run
+✓ a View the Principal cannot run is REFUSED (403), checked against what was supplied
+✓ …and the granted View is accepted, so that refusal is a check and not a blanket no
+✓ /api/v2 advertises ask_limit_on_launch=true, derived from the binding
+✓ …and ask_inventory_on_launch=true, because the Step inherits its View
+```
+
+The 403 is the half that matters most: `web-servers-restricted` selects the SAME hosts under a name
+nobody holds `runner` on, so a pass there would mean the check ran against the Step's own View — or
+against nothing. And the granted View is accepted immediately after, because a check that refuses
+everything is not a check.
+
+**Found by running it, and it constrains this shape: an "optional" prompt cannot be an empty
+default.** The first `fleet-limit` defaulted `hostLimit` to `""`, and every launch failed
+`ResolveStepParams` with `/limit: minLength: got 0, want 1`. The contract is RIGHT — an empty
+`--limit` is meaningless — and the consequence is general: **a bound param must satisfy its
+Actuator's contract on every launch**, so an optional prompt needs a default that MEANS the
+unnarrowed case (here ansible's own `all`), not an absent one. Any future promptable field has to be
+checked against its own contract's floor, and this is the reason.

@@ -390,6 +390,103 @@ echo "  · kubecompute advertises no \`decommissions\` Workflow, so nothing is o
 echo "  · BOOKED: kubecompute needs a teardown Workflow for count-down to be symmetric here"
 echo "    (vcenter already has one — vsphere-vm-teardown, ADR-0114 D4)"
 
+# ── E · THE BLAST RADIUS IS CHOSEN AT LAUNCH (ADR-0160 D2/D3) ────────────────────────────
+# AAP's `ask_limit_on_launch` and `ask_inventory_on_launch`, proven the only way that counts: by
+# COUNTING THE HOSTS A RUN ACTUALLY REACHED, off its own per-target results. A launch that reports
+# a limit and converges everything is the failure this asserts against, and "the envelope holds" is
+# exactly the class of claim this repo has repeatedly found false when executed.
+say "E · a launch-supplied limit narrows the blast radius, and a supplied View is authorized"
+
+# The inventory name ansible sees for a target is the core's observedName(): a `*.name` label if the
+# host carries one, else its Entity id. Derived, never hardcoded — a hardcoded `web-01` would pass
+# for the wrong reason the day naming changes.
+firstName="$(api GET "/views/${HOST_VIEW}/entities" |
+    jq -r '.entities[0] | ([.labels // {} | to_entries[] | select(.key | endswith(".name")) | .value] + [.id])[0]')"
+[ -n "$firstName" ] && [ "$firstName" != "null" ] || { echo "FAIL: could not resolve a target's inventory name"; exit 1; }
+
+# hostsReached counts the DISTINCT hosts a Run produced a per-target result for, read from the
+# execution pod's own event stream rather than from the request that started it.
+hostsReached() {
+    local rid="$1" pod
+    pod="$(kc -n "$NS" get pods -o name --sort-by=.metadata.creationTimestamp 2>/dev/null |
+        grep -F "stratt-run-${rid}-s0" | tail -1)"
+    [ -n "$pod" ] || { echo 0; return; }
+    kc -n "$NS" logs "$pod" 2>/dev/null |
+        grep -o '"host":"[^"]*"' | sort -u | grep -vc '"host":""' || echo 0
+}
+
+# The View is supplied on BOTH launches, because this Workflow's Step deliberately names none — that
+# is the shape D3 exists for, and the door correctly refuses a launch that supplies no View to
+# inherit. The FIRST attempt at this assertion omitted it and was refused, which is the check working.
+launchLimited() { # $1 = hostLimit (`all` for the whole View); echoes the child Run id
+    local wr rid
+    wr=$(api POST "/workflows/fleet-limit/runs" \
+        -d "{\"viewName\":\"${HOST_VIEW}\",\"inputs\":{\"hostLimit\":\"$1\"}}" | jq -r '.id')
+    [ -n "$wr" ] && [ "$wr" != "null" ] || { echo ""; return; }
+    for _ in $(seq 1 120); do
+        case "$(api GET "/workflow-runs/${wr}" | jq -r '.workflowRun.status // .status // empty')" in
+            succeeded|failed|canceled) break ;;
+        esac
+        sleep 3
+    done
+    api GET "/runs?workflowRunId=${wr}" | jq -r --arg r "$wr" '.[]? | select(.workflowRunId==$r) | .id' | head -1
+}
+
+wholeRun="$(launchLimited "all")"
+[ -n "$wholeRun" ] || { echo "FAIL: the unlimited Run never dispatched (a launch supplying view=${HOST_VIEW} was refused or produced no child Run)"; exit 1; }
+whole="$(hostsReached "$wholeRun")"
+echo "  launch with hostLimit=all reached ${whole} host(s)"
+
+limitedRun="$(launchLimited "$firstName")"
+[ -n "$limitedRun" ] || { echo "FAIL: the limited Run never dispatched"; exit 1; }
+limited="$(hostsReached "$limitedRun")"
+echo "  launch with hostLimit=${firstName} reached ${limited} host(s)"
+
+[ "${whole:-0}" -gt 1 ] || { echo "FAIL: the unlimited Run reached ${whole} host(s); with fewer than two this proves nothing"; exit 1; }
+[ "${limited:-0}" -eq 1 ] || { echo "FAIL: the limited Run reached ${limited} host(s), want exactly 1 — the launch-supplied limit did not narrow the target set"; exit 1; }
+echo "  ✓ ${whole} → ${limited}: the declared envelope actually bounded the Run"
+
+# D3 · a supplied View is authorized AGAINST WHAT WAS SUPPLIED. `web-servers-restricted` selects the
+# SAME hosts under a name nobody holds `runner` on, so a pass here would mean the check ran against
+# the Step's own View — or against nothing.
+code="$(curl -sS -o /dev/null -w '%{http_code}' -X POST "${API}/workflows/fleet-limit/runs" \
+    -H "X-Stratt-Principal: ${PRINCIPAL}" -H "Content-Type: application/json" \
+    -d '{"viewName":"web-servers-restricted"}')"
+[ "$code" = "403" ] || { echo "FAIL: launching against a View with no runner grant returned ${code}, want 403 — the supplied View was not what the grant was checked against (ADR-0160 D3)"; exit 1; }
+echo "  ✓ a View the Principal cannot run is REFUSED (403), checked against what was supplied"
+
+# …and the granted one is accepted, so the refusal above is a check rather than a blanket no.
+code="$(curl -sS -o /dev/null -w '%{http_code}' -X POST "${API}/workflows/fleet-limit/runs" \
+    -H "X-Stratt-Principal: ${PRINCIPAL}" -H "Content-Type: application/json" \
+    -d "{\"viewName\":\"${HOST_VIEW}\",\"inputs\":{\"hostLimit\":\"${firstName}\"}}")"
+case "$code" in 200|201|202) : ;; *) echo "FAIL: launching against the GRANTED View returned ${code} — the check refuses everything, which is not a check"; exit 1 ;; esac
+echo "  ✓ …and the granted View is accepted, so that refusal is a check and not a blanket no"
+
+# D2 · the façade advertises the prompt, DERIVED from the binding above rather than hardcoded.
+# BOTH families are searched, because which one a Workflow lands in is a property of its SHAPE: the
+# façade renders a single-actuation-Step Workflow as a job_template and a multi-Step or gated one as
+# a workflow_job_template. Asserting against one family would pass today and break the day this
+# Workflow gains a Step — for a reason that has nothing to do with what is being tested.
+ask=""
+for fam in job_templates workflow_job_templates; do
+    found="$(curl -sS "${ROOT}/api/v2/${fam}/" -H "X-Stratt-Principal: ${PRINCIPAL}" 2>/dev/null |
+        jq -r '.results[]? | select(.name=="fleet-limit") | .ask_limit_on_launch' | head -1)"
+    [ -n "$found" ] && { ask="$found"; break; }
+done
+[ "$ask" = "true" ] || { echo "FAIL: /api/v2 reports ask_limit_on_launch=${ask:-absent} for a Workflow that declares the input AND binds it — a migrated template would lose the prompt (ADR-0160 D2)"; exit 1; }
+echo "  ✓ /api/v2 advertises ask_limit_on_launch=true, derived from the binding"
+
+# …and ask_inventory_on_launch follows from the Step naming no View of its own (D3) — the capability
+# the two launches above just exercised, advertised to the tooling that decides what to prompt for.
+askInv=""
+for fam in job_templates workflow_job_templates; do
+    found="$(curl -sS "${ROOT}/api/v2/${fam}/" -H "X-Stratt-Principal: ${PRINCIPAL}" 2>/dev/null |
+        jq -r '.results[]? | select(.name=="fleet-limit") | .ask_inventory_on_launch' | head -1)"
+    [ -n "$found" ] && { askInv="$found"; break; }
+done
+[ "$askInv" = "true" ] || { echo "FAIL: ask_inventory_on_launch=${askInv:-absent} for a Workflow whose Step inherits its View (ADR-0160 D3)"; exit 1; }
+echo "  ✓ …and ask_inventory_on_launch=true, because the Step inherits its View"
+
 say "done"
 cat <<'SUMMARY'
 

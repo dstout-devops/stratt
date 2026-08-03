@@ -331,14 +331,14 @@ not belong in a decision record.
 | AWX field | The task | Where it lives in Stratt | Status |
 | --- | --- | --- | --- |
 | `variables` | pass run-time values | declared `inputs` + `{{.launch.x}}` (ADR-0118) — **typed and closed**, where AWX's is an untyped boolean | 🟢 same ownership |
-| `limit` | narrow the target set for one run | `params.limit`, bound from a declared input | 🟢 |
+| `limit` | narrow the target set for one run | `params.limit`, bound from a declared input | 🟢 live-proven (3 → 1 hosts) |
 | `job_tags` / `skip_tags` | run a subset of tasks | `params.tags` / `params.skipTags` | 🟢 |
 | `diff_mode` | show per-task changes | `params.diff` | 🟢 |
 | `verbosity` | more output | `params.verbosity` | 🟢 |
 | `forks` | parallelism | `params.forks` | 🟢 |
 | `timeout` | connection timeout | `params.timeout` | 🟢 |
 | `scm_branch` | run from a different ref | `params.scm.ref` | 🟢 |
-| `inventory` | run against a different target set | `viewName` on the launch body, `runner` checked against what was supplied (ADR-0160 D3) | 🟢 |
+| `inventory` | run against a different target set | `viewName` on the launch body, `runner` checked against what was supplied (ADR-0160 D3) | 🟢 live-proven |
 | `job_type` (run/check) | dry-run this time | Run-level `DryRun` — ADR-0117 D2 gave check-mode ONE mechanism | 🟢 ownership moved, deliberately |
 | `job_slice_count` | slice a large run | `LaunchParams.Slices` | 🟢 ownership moved to the Run |
 | `instance_groups` | choose execution locus | Sites/Cells (ADR-0032/0044) | 🟢 ownership moved; AWX-008 declined the mirror |

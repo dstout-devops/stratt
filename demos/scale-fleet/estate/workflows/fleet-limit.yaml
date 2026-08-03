@@ -1,0 +1,51 @@
+# A converge whose blast radius is chosen AT LAUNCH (ADR-0160 D2/D3) — AAP's `ask_limit_on_launch`
+# and `ask_inventory_on_launch`, in this repo's own vocabulary.
+#
+# `hostLimit` is a DECLARED input: typed, closed, and rejected if a caller answers a question this
+# Workflow does not ask (ADR-0118 D2). That is the "and then some" over AAP, whose equivalent is a
+# boolean and accepts anything once it is on.
+#
+# Binding it into `params.limit` is what makes the prompt REAL, and it is also what the façade reads
+# to decide whether to advertise `ask_limit_on_launch` (D2) — the binding IS the declaration, so the
+# two cannot drift.
+#
+# The Step names NO viewName, so it inherits the launch's — which is what lets the same recipe be
+# pointed at a different target set (D3). The `runner` grant is checked against whatever is supplied.
+name: fleet-limit
+inputs:
+  type: object
+  additionalProperties: false
+  properties:
+    hostLimit:
+      type: string
+      minLength: 1
+      description: >
+        An ansible host pattern narrowing this Run to a subset of the View.
+      # `all` — ansible's own pattern for the whole inventory — NOT the empty string, and the
+      # difference is a real constraint on this shape rather than a stylistic choice. A bound param
+      # must satisfy its Actuator's contract on EVERY launch, and ansible.input's `limit` declares
+      # minLength 1 (an empty --limit is meaningless and the contract is right to refuse it). So an
+      # "optional" prompt cannot be expressed as an empty default: it needs a default that MEANS
+      # the unnarrowed case. Measured — the first version defaulted to "" and every launch failed
+      # ResolveStepParams with `/limit: minLength: got 0, want 1`.
+      default: all
+steps:
+  - name: converge
+    actuator: ansible-apache
+    credentialRefs: [web-machine, hosts-kubeconfig]
+    params:
+      connection:
+        user: root
+        credentialRef: web-machine
+        hostKeyChecking: accept-new
+        kubeconfigRef:
+          credentialRef: hosts-kubeconfig
+      # THE BINDING. `all` ⇒ --limit all, which is every host in the inventory.
+      limit: "{{.launch.hostLimit}}"
+      play: |
+        - name: Touch every host this Run actually reached
+          hosts: all
+          gather_facts: false
+          tasks:
+            - name: A no-op that produces one per-target result per host reached
+              ansible.builtin.command: /bin/true
