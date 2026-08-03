@@ -989,9 +989,13 @@ not have**, which is a different thing from unfinished work and is marked as suc
   form that already exists.
 - **`params-ignored` RunEvent publish** (`6e114fc`). The log half is tested; the publish half is not,
   because `Activities.Bus` is a concrete `*events.Bus` and no shipped Intent declares `params`.
-- **E2E-1's `e2e:live` CI job.** Deliberately not added blind: a scheduled gate that cannot be made
-  to fire from a dev session is an unverifiable gate, which is the shape this branch spent its
-  length closing.
+- ~~**E2E-1's `e2e:live` CI job.**~~ 🟢 **SHIPPED** — `.github/workflows/e2e-live.yml` (weekly, on
+  `v*` tags, on dispatch), and it has fired: run `30723212848` green across all six demos. The
+  caution that wrote this entry ("not added blind: a scheduled gate that cannot be made to fire from
+  a dev session is an unverifiable gate") was answered by adding `workflow_dispatch`, which is how
+  that run was triggered. **Second stale entry found the same way as the capstone's BLOCKING one** —
+  written before the work landed and never re-checked. See the note there: if a tracker claim
+  outlives the run that produced it, re-run it before quoting it.
 
 **~~BLOCKING for anyone quoting the capstone~~ — RESOLVED (2026-08-02). `demo:region-to-cert` DOES
 pass from a cold floor; the entry below is kept for the diagnosis it records, not as a live blocker:**
