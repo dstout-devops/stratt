@@ -29,6 +29,9 @@ vars:
   # Cluster tooling — pinned + installed to repo-local .bin/ so the dev stack
   # stands up with ZERO manual installs beyond go+task (quarterly upgrade train).
   KIND_VER: "0.32.0"
+  # The SSH transport ansible.netcommon's network_cli actually connects with (ADR-0153, found
+  # live 2026-08-03). Rides the quarterly evergreen train like every other pin here.
+  PYLIBSSH_VER: "1.4.0"
   # Helm 4 line (ADR-0092 / dependency-scout): Helm 3 bug-fix support lapsed
   # 2026-07-08 (security EOL 2026-11-11), so the pin moved off the stale 3.16.4.
   # N-1 v3.21.3 must keep working; the plugin image pins the same v4.2.3.
@@ -2978,7 +2981,15 @@ tasks:
       # to a network device, so there is no Step to run it and loading it would be inventory
       # with no consumer. An adopter builds this (adding their own vendor collections — cisco.ios,
       # arista.eos — and relocking) and selects it from their own Actuator declaration (ADR-0117 D3).
-      - docker build --build-arg GO_PARALLEL={{.GO_PARALLEL}} --build-arg EE_CONTENT=network.requirements.yml -f ee/Dockerfile -t stratt-ee-network:dev .
+      # ansible-pylibssh is NOT optional garnish — without it this image cannot open a network_cli
+      # session AT ALL. netcommon declares no SSH library as a hard dependency (pylibssh or paramiko,
+      # either will do), so installing the collection installs no transport, and the connection dies
+      # at connect time with `No module named 'paramiko'` — the exact "names a python module the
+      # estate never wrote" failure ADR-0153 D7 was written to prevent, for D7's own connection type.
+      # Measured against a live FRR device on 2026-08-03; see ee/Dockerfile's EE_PYTHON_EXTRA.
+      - docker build --build-arg GO_PARALLEL={{.GO_PARALLEL}} --build-arg EE_CONTENT=network.requirements.yml
+        --build-arg EE_PYTHON_EXTRA="ansible-pylibssh=={{.PYLIBSSH_VER}}"
+        -f ee/Dockerfile -t stratt-ee-network:dev .
 
   dev:ee-mcp:build:
     desc: Build the MCP EE image and load it into the kind cluster (ADR-0022)

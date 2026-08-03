@@ -983,8 +983,47 @@ not have**, which is a different thing from unfinished work and is marked as suc
 - **`vmware_tools` is shipped and unit-tested only** (ADR-0156). vspheresim implements the vCenter
   API but not Tools guest operations, so proving it needs **a real vCenter with a Tools-running
   guest**. Blocked on a target, not on design.
-- **A live network-device run** (ADR-0153). The collection half is done and image-verified both
-  ways; no real device has been driven. Needs an FRR or cEOS container in CI.
+- **A live network-device run** (ADR-0153). ⚠️ **NO LONGER BLOCKED, AND THE MECHANISM IS PROVEN**
+  (2026-08-03) — what remains is the Stratt plumbing, not the unknown.
+
+  **A real device was driven, end to end.** Target: `alpine:3.21` + `apk add frr frr-pythontools
+  openssh`, with the login shell of the `netops` user set to `/usr/bin/vtysh` — which is exactly how
+  a switch presents, you SSH in and land in the CLI rather than a POSIX shell. No cEOS, no licence,
+  no registration. Driven from **`stratt-ee-network:dev` plus one adopter vendor collection**
+  (`frr.frr` 2.0.2, current on Galaxy), over `ansible.netcommon.network_cli` with
+  `ansible_network_os: frr.frr.frr`: `cli_command` returned the device's own running-config,
+  `frr.frr.frr_facts` gathered facts through the cliconf/terminal plugins, `ok=4 failed=0`.
+  That also confirms the shipped variant is a correct BASE for the adopter path ADR-0117 D3 describes.
+
+  **It found a defect on the way, now fixed: `network_cli` needs a PYTHON SSH LIBRARY and no EE had
+  one.** netcommon declares neither `ansible-pylibssh` nor `paramiko` as a hard dependency (either
+  will do), so installing the collection installs no transport at all, and the connection died with
+  `No module named 'paramiko'`. The image gate PASSED it — the collection was present, which is the
+  only axis ADR-0153 D7 checks. So a declaration that passed review died at connect time naming a
+  python module the estate never wrote, which is D7's own sentence describing the failure D7 exists
+  to prevent, happening to D7's own connection type. `ee/Dockerfile` gains `EE_PYTHON_EXTRA` and the
+  network variant now installs pylibssh (pinned, evergreen-tracked).
+
+  **Still to build:** the demo itself — an EE variant carrying one vendor collection, the device
+  manifest, the estate (a declared device + a Workflow with `connection.type: network_cli`), the
+  `run.sh` assertions, the Taskfile targets. E2E-1 picks it up automatically once
+  `demo:<name>:run` exists. It spans ansible + declared, so `demos/` is the right home under
+  ADR-0137 D7.
+
+- ⚠️ **THE SHIM CHECKS TWO OF THE THREE AXES A TRANSPORT CAN FAIL ON** (found 2026-08-03, above).
+  A connection plugin can need a COLLECTION (ADR-0153 D7 checks it), a BINARY on the control node
+  (ADR-0156 D6 checks it — kubectl, session-manager-plugin), and a **PYTHON MODULE on the control
+  node (nothing checks it)**. The third is not hypothetical: it is what `network_cli` needs, and it
+  is what failed. Fixing the image fixes today's instance and leaves the CLASS open — the next
+  transport with a python-side dependency fails the same way.
+
+  **Not fixed here, and the reason is a real design question rather than effort.** D7 deliberately
+  REFUSED to probe the image (it measured `ansible-doc`'s exit codes as useless for this) and reads
+  the image's own content manifest instead. A python-module check therefore wants the manifest to
+  RECORD the variant's python extras, so the shim keeps reading one seam rather than growing a
+  subprocess probe beside it — which means touching `ee/content.py`, the manifest shape, and the
+  shim's `requireConnectionCollection`/`requireTransportTooling` pair. That extends two Accepted
+  ADRs and belongs in its own decision, not inside a demo commit.
 - **Windows (`winrm`/`psrp`)** (ADR-0153 D1). Blocked on a verifiable target ONLY — and note the
   plugins are in ansible-core, so no EE variant is needed. It is one enum entry plus a credential
   form that already exists.
