@@ -1833,6 +1833,24 @@ components:
           description: hex(sha256(token)) — never the token itself (§2.5).
         explode:
           $ref: "#/components/schemas/EmitterExplode"
+        token:
+          $ref: "#/components/schemas/EmitterToken"
+    EmitterToken:
+      type: object
+      description: >
+        Where the caller presents its shared token (ADR-0164 D1). Absent, the default
+        header X-Stratt-Emitter-Token. The trust model is unchanged either way: the
+        declaration and the database hold only hex(sha256(token)) (§2.5) and the
+        comparison is constant-time — a source sending its secret under its own header
+        name (GitLab's X-Gitlab-Token, and a long tail of others) was unreachable only
+        because core insisted on the name.
+      properties:
+        header:
+          type: string
+          description: The header the token arrives in.
+        prefix:
+          type: string
+          description: Stripped before comparison, e.g. "Bearer ".
     EmitterExplode:
       type: object
       description: >

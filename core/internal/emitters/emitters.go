@@ -24,13 +24,28 @@ import (
 	"github.com/dstout-devops/stratt/types"
 )
 
-// TokenHeader carries the caller's raw token.
-const TokenHeader = "X-Stratt-Emitter-Token"
+// TokenHeader is the DEFAULT header a caller presents its token in. An Emitter may declare
+// another (ADR-0164 D1); this is the value that field falls back to.
+const TokenHeader = types.DefaultTokenHeader
+
+// emitterSource and eventSink are the two things ingest needs from the substrate, named as
+// interfaces so the DOOR ITSELF is testable — *graph.Store and *events.Bus satisfy them.
+//
+// This seam exists because the handler had no test at all, which is how the token header came to
+// be a constant nobody questioned (ADR-0164 D1). A door that authenticates untrusted callers is a
+// poor place for the only coverage to be at one layer down.
+type emitterSource interface {
+	GetEmitter(ctx context.Context, name string) (types.Emitter, error)
+}
+
+type eventSink interface {
+	PublishEmitterEvent(ctx context.Context, ev types.EmitterEvent) error
+}
 
 // Ingest serves emitter webhooks.
 type Ingest struct {
-	store *graph.Store
-	bus   *events.Bus
+	store emitterSource
+	bus   eventSink
 	log   *slog.Logger
 }
 
@@ -64,7 +79,18 @@ func (in *Ingest) Handler() http.Handler {
 			http.Error(w, "emitter "+name+" is a stream subscriber, not an ingest endpoint", http.StatusBadRequest)
 			return
 		}
-		token := r.Header.Get(TokenHeader)
+		// The header and prefix are the Emitter's to declare (ADR-0164 D1). GitLab presents its
+		// secret as X-Gitlab-Token, others under their own names — all the same shared-token
+		// model we already had, unreachable only because core insisted on the header name.
+		// Nothing about the trust model moves: still hex(sha256(token)), still constant-time.
+		// A declared prefix is REQUIRED, not merely tolerated. TrimPrefix would accept a bare
+		// token too, which widens what is accepted past what the declaration says — the same
+		// property that makes a declared header REPLACE the default rather than add to it.
+		token, ok := strings.CutPrefix(r.Header.Get(em.TokenHeader()), em.TokenPrefix())
+		if !ok {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
 		sum := sha256.Sum256([]byte(token))
 		if token == "" || subtle.ConstantTimeCompare([]byte(hex.EncodeToString(sum[:])), []byte(strings.ToLower(em.TokenHash))) != 1 {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)

@@ -2066,6 +2066,13 @@ type emitterFile struct {
 	TokenHash string `yaml:"tokenHash"`
 	// ADR-0163 — how one POST becomes many events, declared rather than switched in core.
 	Explode *explodeFile `yaml:"explode"`
+	// ADR-0164 D1 — where the caller presents its shared token.
+	Token *tokenFile `yaml:"token"`
+}
+
+type tokenFile struct {
+	Header string `yaml:"header"`
+	Prefix string `yaml:"prefix"`
 }
 
 type explodeFile struct {
@@ -2086,6 +2093,9 @@ func parseEmitterFile(path string, raw []byte) (string, types.Emitter, error) {
 		return "", types.Emitter{}, fmt.Errorf("desiredstate: %s: %w", path, err)
 	}
 	e := types.Emitter{Name: f.Name, Kind: f.Kind, TokenHash: strings.ToLower(f.TokenHash)}
+	if f.Token != nil {
+		e.Token = &types.TokenSpec{Header: f.Token.Header, Prefix: f.Token.Prefix}
+	}
 	if f.Explode != nil {
 		e.Explode = &types.ExplodeSpec{Path: f.Explode.Path}
 		for _, m := range f.Explode.Merge {
@@ -2141,6 +2151,9 @@ func ValidateEmitter(e types.Emitter) error {
 		if e.TokenHash != "" {
 			return fmt.Errorf("emitter %s: a stream emitter is outbound-subscribed and must not carry a tokenHash", e.Name)
 		}
+		if e.Token != nil {
+			return fmt.Errorf("emitter %s: a stream emitter is outbound-subscribed; nothing presents a token to it", e.Name)
+		}
 		// Nothing POSTs to a stream Emitter, so there is no body to fan out. A declaration
 		// that says otherwise is asking for something that cannot happen (§1.8 — refuse it
 		// where it is written, not by ignoring it at runtime).
@@ -2149,6 +2162,12 @@ func ValidateEmitter(e types.Emitter) error {
 		}
 	default:
 		return fmt.Errorf("emitter %s: unknown kind %q (webhook, stream)", e.Name, e.Kind)
+	}
+	// A declared header with no name is a declaration that says nothing; it would silently mean
+	// "the default", and a reader of the file would believe otherwise (§1.8).
+	if e.Token != nil && e.Token.Header == "" && e.Token.Prefix == "" {
+		return fmt.Errorf("emitter %s: token block declares neither header nor prefix — remove it, "+
+			"or name the header the source actually sends (ADR-0164 D1)", e.Name)
 	}
 	// ADR-0163 D1/D3. Checked at PARSE so a declaration that could never fan out fails its
 	// file rather than every POST at 3am.

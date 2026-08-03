@@ -34,6 +34,43 @@ type Emitter struct {
 	// Explode fans ONE POST into many events (ADR-0163 D1). Nil ⇒ one POST is one
 	// event, which is every Emitter that shipped before this field existed.
 	Explode *ExplodeSpec `json:"explode,omitempty"`
+	// Token says WHERE the caller presents its shared token (ADR-0164 D1). Nil ⇒ the
+	// default header, which is every Emitter that shipped before this field existed.
+	Token *TokenSpec `json:"token,omitempty"`
+}
+
+// DefaultTokenHeader is where a caller presents its token when the Emitter declares nothing —
+// the header Stratt has always named, now the default of a declared field rather than the only
+// possibility (ADR-0164 D1).
+const DefaultTokenHeader = "X-Stratt-Emitter-Token"
+
+// TokenSpec declares where a source presents its shared token.
+//
+// NOTHING ABOUT THE TRUST MODEL CHANGES HERE: the declaration and the database still hold only
+// hex(sha256(token)) (§2.5), and the comparison is still constant-time. A source that sends its
+// secret under its own header name — GitLab's X-Gitlab-Token, and a long tail of others — was
+// unreachable for the sole reason that core insisted on the name.
+type TokenSpec struct {
+	// Header the token arrives in. Empty ⇒ DefaultTokenHeader.
+	Header string `json:"header,omitempty"`
+	// Prefix stripped before comparison, e.g. "Bearer ". Empty ⇒ the whole value is the token.
+	Prefix string `json:"prefix,omitempty"`
+}
+
+// TokenHeader is the header this Emitter's callers use.
+func (e Emitter) TokenHeader() string {
+	if e.Token != nil && e.Token.Header != "" {
+		return e.Token.Header
+	}
+	return DefaultTokenHeader
+}
+
+// TokenPrefix is stripped from the presented value before comparison.
+func (e Emitter) TokenPrefix() string {
+	if e.Token == nil {
+		return ""
+	}
+	return e.Token.Prefix
 }
 
 // ExplodeSpec declares how a source's payload carries several happenings — as DATA, because

@@ -1487,6 +1487,14 @@ export interface components {
             /** @description hex(sha256(token)) — never the token itself (§2.5). */
             tokenHash: string;
             explode?: components["schemas"]["EmitterExplode"];
+            token?: components["schemas"]["EmitterToken"];
+        };
+        /** @description Where the caller presents its shared token (ADR-0164 D1). Absent, the default header X-Stratt-Emitter-Token. The trust model is unchanged either way: the declaration and the database hold only hex(sha256(token)) (§2.5) and the comparison is constant-time — a source sending its secret under its own header name (GitLab's X-Gitlab-Token, and a long tail of others) was unreachable only because core insisted on the name. */
+        EmitterToken: {
+            /** @description The header the token arrives in. */
+            header?: string;
+            /** @description Stripped before comparison, e.g. "Bearer ". */
+            prefix?: string;
         };
         /** @description How one POST becomes many events (ADR-0163). Declared as data, because core knowing any particular tool's field names is the §1.4 line this removes. Absent, one POST is one event. `path` and `merge[].path` are dotted lookups — explicit field access, nothing evaluated (ADR-0024's grammar). */
         EmitterExplode: {

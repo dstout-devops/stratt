@@ -10,6 +10,36 @@ import "github.com/dstout-devops/stratt/types"
 // does not have. That is the "a declared X never reached the thing that runs it" defect this
 // repo keeps finding, and it is invisible until a POST arrives.
 
+func tokenFromWire(in *EmitterToken) *types.TokenSpec {
+	if in == nil {
+		return nil
+	}
+	out := &types.TokenSpec{}
+	if in.Header != nil {
+		out.Header = *in.Header
+	}
+	if in.Prefix != nil {
+		out.Prefix = *in.Prefix
+	}
+	return out
+}
+
+func tokenToWire(in *types.TokenSpec) *EmitterToken {
+	if in == nil {
+		return nil
+	}
+	out := &EmitterToken{}
+	if in.Header != "" {
+		h := in.Header
+		out.Header = &h
+	}
+	if in.Prefix != "" {
+		p := in.Prefix
+		out.Prefix = &p
+	}
+	return out
+}
+
 func explodeFromWire(in *EmitterExplode) *types.ExplodeSpec {
 	if in == nil {
 		return nil
