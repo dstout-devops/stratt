@@ -737,6 +737,9 @@ type ApplyTarget struct {
 	// opaque here for the same reason `desired` is. Nil ⇒ nothing observed.
 	TransportKind        string
 	TransportCoordinates []byte
+	// Groups are the named partitions this target belongs to (ADR-0161 D1) — core-resolved from the
+	// Step's groupBy keys, rendered by the plugin in its own tool's syntax.
+	Groups []string
 }
 
 // JumpHop is one bastion's reachability coordinate. No credential: authenticating to a
@@ -962,7 +965,7 @@ func (h *Host) ApplyRaw(ctx context.Context, req ApplyInvoke) (RawApplyResult, e
 		for _, h := range t.Jump {
 			hops = append(hops, &pluginv1.JumpHop{Name: h.Name, Address: h.Address, Port: h.Port})
 		}
-		pt := &pluginv1.ApplyTarget{Name: t.Name, Address: t.Address, Port: t.Port, IdentityKeys: t.IdentityKeys, Vars: t.Vars, Jump: hops}
+		pt := &pluginv1.ApplyTarget{Name: t.Name, Address: t.Address, Port: t.Port, IdentityKeys: t.IdentityKeys, Vars: t.Vars, Jump: hops, Groups: t.Groups}
 		if t.TransportKind != "" {
 			pt.Transport = &pluginv1.Transport{Kind: t.TransportKind, Coordinates: t.TransportCoordinates}
 		}

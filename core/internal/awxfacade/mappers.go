@@ -102,17 +102,14 @@ func workflowToJobTemplate(wf types.Workflow, step types.Step, projects map[stri
 		project = pid
 	}
 	out := map[string]any{
-		"id":                      id,
-		"type":                    "job_template",
-		"name":                    wf.Name,
-		"job_type":                "run",
-		"inventory":               invID,
-		"project":                 project,
-		"playbook":                playbook,
-		"ask_variables_on_launch": true,
-		"ask_limit_on_launch":     false,
-		"ask_inventory_on_launch": false,
-		"url":                     jt("/api/v2/job_templates/%d/", id),
+		"id":        id,
+		"type":      "job_template",
+		"name":      wf.Name,
+		"job_type":  "run",
+		"inventory": invID,
+		"project":   project,
+		"playbook":  playbook,
+		"url":       jt("/api/v2/job_templates/%d/", id),
 		"related": map[string]any{
 			"launch":    jt("/api/v2/job_templates/%d/launch/", id),
 			"inventory": jt("/api/v2/inventories/%d/", invID),
@@ -127,6 +124,15 @@ func workflowToJobTemplate(wf types.Workflow, step types.Step, projects map[stri
 		out["related"].(map[string]any)["project"] = jt("/api/v2/projects/%d/", project)
 		out["summary_fields"].(map[string]any)["project"] =
 			map[string]any{"id": project, "name": step.Actuator}
+	}
+	// The prompts, DERIVED from what this Workflow declares and this Step binds (ADR-0160 D2) rather
+	// than hardcoded. Three booleans used to live here, two of them permanently false, and AWX
+	// tooling reads them to decide what to prompt for — so a migrated template silently lost prompts
+	// the mechanism already supported.
+	// true unconditionally on THIS surface: the job_template launch path merges untyped extra_vars
+	// when the Workflow declares no inputs, so the door accepts them either way. See askFields.
+	for k, v := range askFields(wf, step, true) {
+		out[k] = v
 	}
 	return out
 }

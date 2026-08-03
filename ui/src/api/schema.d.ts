@@ -2076,6 +2076,26 @@ export interface components {
             context?: {
                 [key: string]: unknown;
             };
+            /**
+             * @description The View this launch targets, inherited by every actuation Step that names none of its own (ADR-0160 D3). It is AAP's `ask_inventory_on_launch`: take a working recipe and point it at a different target set, without editing the estate.
+             *
+             *     AUTHORIZATION IS AGAINST WHAT YOU SUPPLIED. The launch already requires `runner` on every actuation Step's View (ADR-0028); a supplied View is checked the same way, so you may run a recipe against any View you could have launched it against directly. That is AAP's own rule (`use` on the inventory) in this repo's existing vocabulary, and it is why this needs no new grant.
+             *
+             *     Omitted ⇒ each Step's declared View, which is every launch that exists today. A Step that names its own View is pinned by the estate and is NOT overridden — supplying one here reaches only the Steps that inherit.
+             */
+            viewName?: string;
+            /**
+             * @description An execution image selected from the Actuator's DECLARED PERMITTED SET (ADR-0160 D4) — AAP's `ask_execution_environment_on_launch`, as an envelope rather than a free choice.
+             *
+             *     REFUSED unless the Actuator declares it in `images`. That keeps ADR-0117 D3a intact: the image is still the content boundary and the estate still decides what content is permissible; the launcher only chooses among images an author already reviewed. An Actuator that declares no set offers no choice, and supplying one is a 400.
+             */
+            image?: string;
+            /**
+             * @description A SUBSET of the Step's declared credentialRefs to mount for this launch (ADR-0160 D4) — AAP's `ask_credential_on_launch`.
+             *
+             *     NARROWS, never widens: every name must already be declared on the Step, so the estate still bounds what this Step may ever use, and the §2.5 `user` check then runs per ref exactly as it does for a declared one. Both gates survive. Omitted ⇒ every declared ref, which is every launch that exists today.
+             */
+            credentialRefs?: string[];
         };
         /** @description A Temporal-backed DAG of Steps with Gates (charter §2, ADR-0011). CaC-only in v1. */
         Workflow: {

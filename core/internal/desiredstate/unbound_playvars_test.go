@@ -198,6 +198,26 @@ func scopeOf(a types.Actuator, play string) (text string, supplied map[string]bo
 		}
 	}
 
+	// group_vars/ and host_vars/ ARE bindings, and this arm exists because of ADR-0161. Ansible loads
+	// group_vars/<group>.yml automatically for every group in the inventory — but Stratt rendered NO
+	// groups until ADR-0161, so those files could never be loaded and nothing here needed to know
+	// about them. Now that a Step can declare `groupBy` and the inventory carries sections, a
+	// variable defined there is genuinely supplied, and a guard that did not know it would refuse
+	// exactly the plays ADR-0161 exists to make runnable.
+	//
+	// Deliberately NOT matched against the Step's declared groups: ansible resolves these by NAME at
+	// run time from whatever groups exist, and a build-time guard that tried to predict the set would
+	// be asserting a fact about the graph it cannot see (§1.2). The question here is only "does some
+	// declaration in this project supply this variable", which is what the roles/ arms above ask too.
+	for path, body := range a.Content {
+		if !strings.HasPrefix(path, "group_vars/") && !strings.HasPrefix(path, "host_vars/") {
+			continue
+		}
+		for _, km := range topLevelKeys.FindAllStringSubmatch(body, -1) {
+			supplied[km[1]] = true
+		}
+	}
+
 	for _, m := range varsDirRef.FindAllStringSubmatch(text, -1) {
 		prefix := "vars/" + m[1] + "/"
 		for path, body := range a.Content {

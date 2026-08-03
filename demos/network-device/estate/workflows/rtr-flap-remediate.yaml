@@ -1,0 +1,22 @@
+# What a link-flap storm launches (ADR-0162). Fired by the `link-flap-storm` Trigger, never by hand
+# in this demo — so counting the Runs of THIS Workflow counts exactly the times the engine decided a
+# storm had happened, which is the assertion the ADR owes.
+#
+# It takes no inputs: a Trigger-launched Workflow is launched by the estate, not by an operator at a
+# form, and everything it needs it already knows.
+name: rtr-flap-remediate
+steps:
+  - name: remediate
+    viewName: net-devices
+    actuator: ansible-network
+    credentialRefs: [rtr-ssh]
+    params:
+      connection:
+        # Declared, for ADR-0158 D2's reason: nothing observes a switch's transport, so an absent
+        # mgmt.transport means UNKNOWN and the shim refuses rather than guessing ssh.
+        type: network_cli
+        networkOS: frr.frr.frr
+        user: netops
+        credentialRef: rtr-ssh
+        hostKeyChecking: accept-new
+      playbook: remediate.yml

@@ -291,8 +291,7 @@ having been built first and never revisited when the transform grew deeper.
   [ADR-0132](../adr/0132-awx-labels-and-schedule-shape.md) D3**: timezone/next-run/window plus the
   per-schedule launch overrides, and `extraDataKeys` — **key names, never values**, which distinguishes
   two schedules of one template while holding the §2.5 line ADR-0128 D4 drew for `extra_vars` ·
-  **AWX-015** the ~15 `ask_*_on_launch` booleans (deferred out of ADR-0128 D4: cutover fidelity rather
-  than governance) · **AWX-016** workflow nodes as entities (deferred out of ADR-0129 D3 — it earns a
+  ~~**AWX-015** the ~15 `ask_*_on_launch` booleans~~ — **decided, [ADR-0160](../adr/0160-the-same-job-possibly-a-different-hand.md)** (see the launch-semantics table below) · **AWX-016** workflow nodes as entities (deferred out of ADR-0129 D3 — it earns a
   namespace when a consumer needs the DAG, the obvious one being a UI rendering of a mirrored workflow
   beside a Stratt Workflow) · ~~**AWX-017** correlating `ansible.user` to the SCIM identity~~ — **done
   (2026-07-31, [ADR-0155](../adr/0155-the-account-nobody-offboards.md))**. The identity-plane decision
@@ -315,3 +314,40 @@ having been built first and never revisited when the transform grew deeper.
 **Not gaps, recorded so they are not re-litigated:** inventories → View, hosts never re-projected,
 credentials name-and-kind-only, survey passwords refused, activity stream not mirrored, ad-hoc commands
 not an object. Each is a charter position with an ADR behind it.
+
+
+---
+
+## Launch semantics — the task-parity table (ADR-0160 D1)
+
+The standard is **task parity, not field parity**: perform the same tasks with the same permissions
+and ownership. If the task or the ownership MOVES in Stratt that is fine, but it has to be doable. So
+each of AWX's promptable fields is answered with WHERE THE TASK LIVES, not with whether a same-named
+field exists.
+
+Kept here rather than only in the ADR because adopters ask this continuously and a living answer does
+not belong in a decision record.
+
+| AWX field | The task | Where it lives in Stratt | Status |
+| --- | --- | --- | --- |
+| `variables` | pass run-time values | declared `inputs` + `{{.launch.x}}` (ADR-0118) — **typed and closed**, where AWX's is an untyped boolean | 🟢 same ownership |
+| `limit` | narrow the target set for one run | `params.limit`, bound from a declared input | 🟢 live-proven (3 → 1 hosts) |
+| `job_tags` / `skip_tags` | run a subset of tasks | `params.tags` / `params.skipTags` | 🟢 |
+| `diff_mode` | show per-task changes | `params.diff` | 🟢 |
+| `verbosity` | more output | `params.verbosity` | 🟢 |
+| `forks` | parallelism | `params.forks` | 🟢 |
+| `timeout` | connection timeout | `params.timeout` | 🟢 |
+| `scm_branch` | run from a different ref | `params.scm.ref` | 🟢 |
+| `inventory` | run against a different target set | `viewName` on the launch body, `runner` checked against what was supplied (ADR-0160 D3) | 🟢 live-proven |
+| `job_type` (run/check) | dry-run this time | Run-level `DryRun` — ADR-0117 D2 gave check-mode ONE mechanism | 🟢 ownership moved, deliberately |
+| `job_slice_count` | slice a large run | `LaunchParams.Slices` | 🟢 ownership moved to the Run |
+| `instance_groups` | choose execution locus | Sites/Cells (ADR-0032/0044) | 🟢 ownership moved; AWX-008 declined the mirror |
+| `credential` | run with a different credential | the Step's `credentialRefs` ARE the permitted set; a launch selects a subset (ADR-0160 D4) | 🟢 live-proven |
+| `execution_environment` | run with a different EE | the Actuator's `images:` permitted set; a launch selects a member (ADR-0160 D4) | 🟢 live-proven |
+| `labels` | tag the job for search | AWX-006 | 🟡 separate item |
+
+**The `ask_*_on_launch` booleans are DERIVED**, never hardcoded (ADR-0160 D2): a field is advertised
+when the Workflow declares an input AND a Step binds it from `{{.launch.*}}`. Both halves, because a
+binding with no declared input is a token nothing can fill, and a declared input nothing binds
+changes no behaviour. `variables` is the exception — a declared `inputs` interface IS the survey, so
+its truth condition is that the door accepts answers at all.

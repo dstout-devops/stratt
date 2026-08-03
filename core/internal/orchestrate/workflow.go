@@ -83,6 +83,11 @@ type DAGInput struct {
 	// the link has to arrive with the input rather than be stamped afterwards.
 	ParentWorkflowRunID string
 	ParentStepName      string
+	// Image and CredentialRefs are the launch's selections from the estate's declared permitted sets
+	// (ADR-0160 D4), already membership-checked at the door. CredentialRefs NARROWS a Step's declared
+	// set — the §2.5 use-check still runs per surviving ref. Empty ⇒ the declaration, unchanged.
+	Image          string
+	CredentialRefs []string
 	// ResolvedCapability is set when this run was reached through a nested capability Step
 	// (ADR-0139 D3) — recorded on the row so the binding that decided it is readable after
 	// the fact, not only in an activity's history.
@@ -408,11 +413,14 @@ func runActuationStep(ctx workflow.Context, in DAGInput, step types.Step, steps 
 		viewName = in.ViewName
 	}
 	err := workflow.ExecuteChildWorkflow(cctx, RunAgainstView, RunInput{
-		ViewName:        viewName,
-		Actuator:        step.Actuator,
-		Params:          params,
-		Slices:          step.Slices,
-		CredentialRefs:  step.CredentialRefs,
+		ViewName: viewName,
+		Actuator: step.Actuator,
+		Params:   params,
+		Slices:   step.Slices,
+		// The launch's NARROWED selection when it made one, else everything the Step declared
+		// (ADR-0160 D4). Intersected rather than replaced: a launch may only reduce this Step's set,
+		// and a name it never declared was already refused at the door.
+		CredentialRefs:  narrowCredentialRefs(step.CredentialRefs, in.CredentialRefs),
 		Principal:       in.Principal,
 		WorkflowRunID:   in.WorkflowRunID,
 		StepName:        step.Name,
@@ -420,6 +428,10 @@ func runActuationStep(ctx workflow.Context, in DAGInput, step types.Step, steps 
 		PlanDigest:      planDigest,
 		FacetWriteScope: step.FacetWriteScope,
 		EntityScope:     in.EntityScope,
+		Image:           in.Image,
+		// The Step's declared partitioning (ADR-0161). Carried here rather than read out of the
+		// Actuator's params because the CORE resolves membership against the graph.
+		GroupBy: step.GroupBy,
 	}).Get(cctx, &outcome)
 	if err != nil {
 		return stepFailed, nil
@@ -1073,4 +1085,31 @@ func resolveCapabilityArgs(
 	err := workflow.ExecuteActivity(ctx, a.ResolveCapabilityArgs,
 		step.CapabilityArgs, in.Event, steps, in.LaunchParams).Get(ctx, &out)
 	return out, err
+}
+
+// narrowCredentialRefs intersects a Step's declared refs with the launch's selection (ADR-0160 D4).
+//
+// INTERSECTION, not replacement, and the direction is the safety property: a launch may only REDUCE
+// what a Step mounts. A name outside the declaration was already refused at the door, and this is
+// the second line of defence — the estate bounds what a Step may ever use, the launch bounds what it
+// uses today, and the §2.5 `user` check then bounds who may use each survivor.
+//
+// An empty selection means "no selection made", NOT "mount nothing": every launch before ADR-0160
+// sends none, and reading that as an empty set would silently strip every credential from every
+// existing Run.
+func narrowCredentialRefs(declared, selected []string) []string {
+	if len(selected) == 0 {
+		return declared
+	}
+	want := map[string]bool{}
+	for _, r := range selected {
+		want[r] = true
+	}
+	out := make([]string, 0, len(declared))
+	for _, r := range declared {
+		if want[r] {
+			out = append(out, r)
+		}
+	}
+	return out
 }

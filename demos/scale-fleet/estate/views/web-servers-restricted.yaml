@@ -1,0 +1,10 @@
+# The SAME hosts, under a name nobody was granted `runner` on.
+#
+# It exists so the demo can prove the other half of ADR-0160 D3: a View supplied at launch is
+# authorized AGAINST WHAT WAS SUPPLIED. Without a View the Principal cannot run, "supplying a View
+# works" would be a claim about the happy path only — and an authorization check nothing has ever
+# seen refuse is an authorization check nobody has tested.
+name: web-servers-restricted
+selector:
+  kinds: [host]
+  labels: { fleet: web }

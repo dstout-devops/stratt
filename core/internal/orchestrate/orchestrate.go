@@ -55,6 +55,16 @@ var TaskQueue = "stratt-runs"
 // it is empty only for Action runs. Slices > 1 partitions the target set across
 // that many parallel K8s Jobs.
 type RunInput struct {
+	// Image is a launch-SELECTED execution image, valid only when it is a member of the Actuator's
+	// declared permitted set (ADR-0160 D4). Empty ⇒ the Actuator's own `image`, which is every Run
+	// that exists today. Membership is checked at the DOOR, before the Run is created, so an
+	// unpermitted image is a 400 rather than a Run that fails two minutes in.
+	Image string
+	// GroupBy partitions the resolved targets into named groups (ADR-0161). Carried on the RunInput
+	// rather than read from the Actuator's params because the CORE resolves membership against the
+	// graph, and core reading a tool's params by name to do so is the §1.4 trap ADR-0134 names.
+	// Empty ⇒ no partitions, which is every Run before ADR-0161.
+	GroupBy []types.GroupKey
 	// RunID is the pre-created Run summary id for API launches. Empty for
 	// Trigger-started executions: the Workflow's first activity (EnsureRun)
 	// creates the row itself (ADR-0010).
@@ -141,6 +151,11 @@ type RunInput struct {
 type ResolvedTargets struct {
 	ViewVersion int64
 	Targets     []actuators.Target
+	// GroupCollisions names the groups where sanitisation merged DISTINCT observed values into one
+	// name (ADR-0161 D2) — `eu-west-1` and `eu.west.1` both become `eu_west_1`. Surfaced rather than
+	// logged because a lossy transform nobody is told about is how two regions quietly become one
+	// group, and a play then converges hosts its author never meant to reach (§1.8).
+	GroupCollisions []string
 }
 
 // SiteGroup is the targets that route to one execution locus (ADR-0032). The
@@ -156,6 +171,8 @@ type SiteGroup struct {
 type RoutedTargets struct {
 	ViewVersion int64
 	Groups      []SiteGroup
+	// GroupCollisions is ResolvedTargets.GroupCollisions for the per-Site shape — see there.
+	GroupCollisions []string
 }
 
 // SiteGateway dispatches one prepared slice to a remote Site over NATS and
@@ -719,6 +736,104 @@ func renderTarget(e types.Entity, address string, port int32, transport json.Raw
 	}
 }
 
+// groupFacetNamespaces is the set of Facet namespaces a Step's GroupBy keys address, so the resolver
+// batch-reads them ONCE for the whole target set rather than per target — the same shape the address
+// and transport reads already use. A hundred hosts grouped by region ask the store one question.
+func groupFacetNamespaces(keys []types.GroupKey) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, k := range keys {
+		if k.Facet == nil || k.Facet.Namespace == "" || seen[k.Facet.Namespace] {
+			continue
+		}
+		seen[k.Facet.Namespace] = true
+		out = append(out, k.Facet.Namespace)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// applyGroups resolves and stamps group membership onto already-rendered targets (ADR-0161 D1).
+//
+// It reports the DISTINCT-value collisions sanitisation caused, because a lossy transform that
+// nobody is told about is how two regions quietly become one group (see groupName). Returning them
+// rather than logging them lets the caller put the fact where an operator reads it.
+// Takes POINTERS rather than a slice, because the per-Site path has already scattered its targets
+// across one slice per locus and there is no single backing array to index. Callers take the
+// pointers only AFTER every append is done — a pointer into a slice that later grows points at the
+// old array, and the stamped groups would vanish.
+func (a *Activities) applyGroups(ctx context.Context, ents []types.Entity, targets []*actuators.Target, keys []types.GroupKey) ([]string, error) {
+	if len(keys) == 0 {
+		return nil, nil
+	}
+	ids := make([]string, len(ents))
+	for i, e := range ents {
+		ids[i] = e.ID
+	}
+	perNS := map[string]map[string]json.RawMessage{}
+	for _, ns := range groupFacetNamespaces(keys) {
+		vals, err := a.Store.FacetValuesByEntities(ctx, ns, ids)
+		if err != nil {
+			return nil, err
+		}
+		perNS[ns] = vals
+	}
+	byID := map[string]*actuators.Target{}
+	for _, t := range targets {
+		byID[t.EntityID] = t
+	}
+	// group name -> the distinct RAW values that produced it. More than one means sanitisation
+	// merged them, which the caller surfaces.
+	merged := map[string]map[string]bool{}
+	for _, e := range ents {
+		facets := map[string]json.RawMessage{}
+		for ns, vals := range perNS {
+			facets[ns] = vals[e.ID]
+		}
+		names, err := groupsFor(e, facets, keys)
+		if err != nil {
+			return nil, err
+		}
+		if t := byID[e.ID]; t != nil {
+			t.Groups = names
+		}
+		for i, k := range keys {
+			_ = i
+			var raw string
+			if k.Label != "" {
+				raw = e.Labels[k.Label]
+			} else if k.Facet != nil {
+				raw = facetValueAt(facets[k.Facet.Namespace], k.Facet.Path)
+			}
+			if raw == "" {
+				continue
+			}
+			n := groupName(k.Prefix, raw)
+			if n == "" {
+				continue
+			}
+			if merged[n] == nil {
+				merged[n] = map[string]bool{}
+			}
+			merged[n][raw] = true
+		}
+	}
+	var collisions []string
+	for name, raws := range merged {
+		if len(raws) < 2 {
+			continue
+		}
+		vals := make([]string, 0, len(raws))
+		for v := range raws {
+			vals = append(vals, v)
+		}
+		sort.Strings(vals)
+		collisions = append(collisions, fmt.Sprintf("%s ← %s", name, strings.Join(vals, ", ")))
+	}
+	sort.Strings(collisions)
+	return collisions, nil
+}
+
 // transportOf reads the observed connection method from an mgmt.transport Facet raw
 // (ADR-0156 D1). Only `kind` is parsed, and ONLY so a Run's descent can say which transport a
 // target used (§1.8) — the rest of the document crosses the port untouched, because its shape
@@ -824,6 +939,18 @@ func (a *Activities) ResolveTargets(ctx context.Context, in RunInput) (ResolvedT
 		t.Jump = hops
 		out.Targets = append(out.Targets, t)
 	}
+	// Group membership, resolved AFTER the targets exist because it is a property of the SET: every
+	// distinct value of a key becomes a group, which is only knowable once the whole set is in hand
+	// (ADR-0161 D2). One batched Facet read per keyed namespace, not one per target.
+	ptrs := make([]*actuators.Target, len(out.Targets))
+	for i := range out.Targets {
+		ptrs[i] = &out.Targets[i]
+	}
+	collisions, gerr := a.applyGroups(ctx, ents, ptrs, in.GroupBy)
+	if gerr != nil {
+		return ResolvedTargets{}, gerr
+	}
+	out.GroupCollisions = collisions
 	return out, nil
 }
 
@@ -954,6 +1081,20 @@ func (a *Activities) ResolveTargetsBySite(ctx context.Context, in RunInput) (Rou
 	for _, s := range names {
 		out.Groups = append(out.Groups, SiteGroup{Site: s, Targets: bySite[s]})
 	}
+	// Group membership is resolved across the WHOLE set, not per Site (ADR-0161 D2): a group is
+	// every distinct value of a key, and a fleet split across two loci still has one `region_eu`.
+	// Pointers are taken here, after every append, for the reason applyGroups documents.
+	var ptrs []*actuators.Target
+	for gi := range out.Groups {
+		for ti := range out.Groups[gi].Targets {
+			ptrs = append(ptrs, &out.Groups[gi].Targets[ti])
+		}
+	}
+	collisions, gerr := a.applyGroups(ctx, ents, ptrs, in.GroupBy)
+	if gerr != nil {
+		return RoutedTargets{}, gerr
+	}
+	out.GroupCollisions = collisions
 	return out, nil
 }
 
@@ -1442,7 +1583,7 @@ func (a *Activities) executePlugin(ctx context.Context, in RunInput, site string
 	// path today; passing them to identity-rendering actuators is a follow-up.)
 	targets := make([]pluginhost.ApplyTarget, 0, len(resolved.Targets))
 	for _, t := range resolved.Targets {
-		at := pluginhost.ApplyTarget{Name: t.Name, Address: t.Address, Port: t.Port, Vars: t.Vars, Jump: portHops(t.Jump)}
+		at := pluginhost.ApplyTarget{Name: t.Name, Address: t.Address, Port: t.Port, Vars: t.Vars, Jump: portHops(t.Jump), Groups: t.Groups}
 		if t.Transport != nil {
 			at.TransportKind, at.TransportCoordinates = t.Transport.Kind, t.Transport.Coordinates
 		}
@@ -1543,8 +1684,8 @@ func (a *Activities) executeJobPlugin(ctx context.Context, in RunInput, slice in
 	ptargets := make([]*pluginv1.ApplyTarget, 0, len(resolved.Targets))
 	for _, t := range resolved.Targets {
 		ids := map[string]string{"host.name": t.Name}
-		at := pluginhost.ApplyTarget{Name: t.Name, Address: t.Address, Port: t.Port, Vars: t.Vars, IdentityKeys: ids, Jump: portHops(t.Jump)}
-		pt := &pluginv1.ApplyTarget{Name: t.Name, Address: t.Address, Port: t.Port, Vars: t.Vars, IdentityKeys: ids, Jump: protoHops(t.Jump)}
+		at := pluginhost.ApplyTarget{Name: t.Name, Address: t.Address, Port: t.Port, Vars: t.Vars, IdentityKeys: ids, Jump: portHops(t.Jump), Groups: t.Groups}
+		pt := &pluginv1.ApplyTarget{Name: t.Name, Address: t.Address, Port: t.Port, Vars: t.Vars, IdentityKeys: ids, Jump: protoHops(t.Jump), Groups: t.Groups}
 		if t.Transport != nil {
 			at.TransportKind, at.TransportCoordinates = t.Transport.Kind, t.Transport.Coordinates
 			pt.Transport = &pluginv1.Transport{Kind: t.Transport.Kind, Coordinates: t.Transport.Coordinates}
@@ -1591,7 +1732,11 @@ func (a *Activities) executeJobPlugin(ctx context.Context, in RunInput, slice in
 		// ZERO ansible awareness in the spine (§1.4). Empty ⇒ the dispatcher's global
 		// default, unchanged. Omitting this line was the reason `params.eeImage` looked
 		// honored and was not (ADR-0117 D3a's correction); executeMCP always set it.
-		Image: pa.Image,
+		// The launch-selected image when one was chosen from the Actuator's declared permitted set
+		// (ADR-0160 D4), else the Actuator's own. The DOOR already refused anything outside the
+		// set; this line only prefers the choice, and a second membership check here would be a
+		// second home for the rule.
+		Image: firstNonEmpty(in.Image, pa.Image),
 	}
 
 	// Bridge: the dispatcher streams decoded ApplyResponses onto ch (folding nothing,
@@ -2239,6 +2384,17 @@ func noticeKindForRun(s types.RunStatus) string {
 		return types.NoticeRunFailed
 	case types.RunCanceled:
 		return types.NoticeRunCanceled
+	}
+	return ""
+}
+
+// firstNonEmpty returns the first non-empty string, used where a launch-time selection overrides a
+// declaration that remains the default.
+func firstNonEmpty(vs ...string) string {
+	for _, v := range vs {
+		if v != "" {
+			return v
+		}
 	}
 	return ""
 }

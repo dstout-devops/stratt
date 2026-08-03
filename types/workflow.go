@@ -144,6 +144,17 @@ type Step struct {
 	// (ADR-0054): the actuator's grant ∩ this scope. Empty admits no facet write-back.
 	FacetWriteScope []string `json:"facetWriteScope,omitempty"`
 
+	// GroupBy partitions this Step's resolved targets into named groups (ADR-0161 D2), which the
+	// Actuator renders in whatever its tool calls a group — INI sections, for ansible.
+	//
+	// A STEP FIELD, NOT A PARAM, and §1.4 forces it: the CORE resolves membership against the graph,
+	// and core reading a tool's params by name to do so is the trap ADR-0134 spends a paragraph
+	// warning implementers about. `groupBy` says "partition by this key" in nobody's vocabulary —
+	// the same neutrality `viewName` and `credentialRefs` have.
+	//
+	// Empty ⇒ one group, the whole target set, which is every Run that exists today.
+	GroupBy []GroupKey `json:"groupBy,omitempty"`
+
 	// Plan marks an actuation Step that runs the Actuator's PLAN verb — the
 	// canonical producer of a hash-pinned saved plan (ADR-0047 §7/§8). It outputs
 	// the plan digest ({{.steps.<name>.outputs.planDigest}}) that a downstream Gate

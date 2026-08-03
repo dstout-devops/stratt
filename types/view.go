@@ -64,3 +64,33 @@ type FacetPredicate struct {
 	// Equals is the JSON value the addressed field must equal.
 	Equals json.RawMessage `json:"equals"`
 }
+
+// GroupKey is one partitioning key for a Step's targets (ADR-0161 D2): every DISTINCT value of the
+// addressed attribute becomes one group, so values nobody enumerated still produce groups. That is
+// `keyed_groups`' generative behaviour, expressed as DATA — a label key or a Facet namespace+path,
+// the same structured predicate shape a ViewSelector already uses — rather than as an expression
+// language the §1 non-goal forbids.
+//
+// Exactly one of Label or Facet is set; both or neither is a declaration error, because a key with
+// two sources would need a rule to pick between them (§2.4).
+type GroupKey struct {
+	// Label partitions by the value of this label key. An Entity without the label joins no group
+	// from this key — it is not put in an "unknown" bucket, because that would be inventing a value
+	// the graph does not carry (§1.2).
+	Label string `json:"label,omitempty"`
+	// Facet partitions by a value inside a Facet document, addressed exactly as a ViewSelector
+	// addresses one. Path "" means the whole value, which is only useful for scalar Facets.
+	Facet *FacetKey `json:"facet,omitempty"`
+	// Prefix is prepended to the value to form the group name ("region" + "eu-west-1" →
+	// "region_eu_west_1"). Optional but strongly advised: two keys whose value spaces overlap
+	// would otherwise collide into one group, and the collision would be silent.
+	Prefix string `json:"prefix,omitempty"`
+}
+
+// FacetKey addresses a value inside a Facet document for grouping. It is FacetPredicate without
+// `Equals` — the same addressing, asking for the value rather than testing it.
+type FacetKey struct {
+	Namespace string `json:"namespace"`
+	// Path is a dotted path within the Facet value ("" = the whole value).
+	Path string `json:"path,omitempty"`
+}

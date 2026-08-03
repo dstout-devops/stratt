@@ -12,6 +12,7 @@ import (
 	"io"
 	"maps"
 	"slices"
+	"sort"
 	"strings"
 
 	pluginv1 "github.com/dstout-devops/stratt/sdk/stratt/plugin/v1"
@@ -44,6 +45,10 @@ type Target struct {
 	// determined it. The SHIM renders every ansible_* key from this; the spine authors none.
 	TransportKind        string          `json:"transportKind,omitempty"`
 	TransportCoordinates json.RawMessage `json:"transportCoordinates,omitempty"`
+	// Groups are the named partitions the CORE resolved this target into (ADR-0161 D1). The SHIM
+	// renders them as INI sections; the core authors no INI and knows nothing about ansible groups.
+	// Empty ⇒ the target appears in [all] only, which is every Run before ADR-0161.
+	Groups []string `json:"groups,omitempty"`
 }
 
 // Hop is one bastion's coordinate in a reached-via chain.
@@ -98,6 +103,19 @@ func hasLocalTarget(targets []Target) bool {
 	return false
 }
 
+// buildInventory renders the target set as an INI inventory: `[all]` with one fully-specified host
+// line each, then one section per named group (ADR-0161 D3).
+//
+// THE HOST DEFINITIONS LIVE IN [all], AND THE GROUPS LIST BARE NAMES. That is ansible's own idiom
+// and it is load-bearing here: a host repeated with its vars in several sections would define the
+// same host several times, and ansible's precedence between those definitions is a rule nobody
+// should have to know. One definition, referenced by name.
+//
+// GROUPS NEVER WIDEN THE RUN (D3). Every name in a group section is a host already in `[all]`,
+// because membership was resolved from the very targets the View selected. A group is a partition
+// of the blast radius, never a lookup back into the graph — if it could pull in an unselected host,
+// the play's `hosts:` line would become the authorization unit, which is content deciding blast
+// radius and exactly what ADR-0028 refuses.
 func buildInventory(targets []Target) string {
 	var b strings.Builder
 	b.WriteString("[all]\n")
@@ -124,6 +142,22 @@ func buildInventory(targets []Target) string {
 			fmt.Fprintf(&b, " %s=%s", k, t.Vars[k])
 		}
 		b.WriteByte('\n')
+	}
+	// One section per group, sorted, members sorted — the byte-stability §1.8 needs so two Runs over
+	// one target set are comparable during descent. Map iteration would break it on its own.
+	members := map[string][]string{}
+	for _, t := range targets {
+		for _, g := range t.Groups {
+			members[g] = append(members[g], t.Name)
+		}
+	}
+	for _, g := range slices.Sorted(maps.Keys(members)) {
+		hosts := members[g]
+		sort.Strings(hosts)
+		b.WriteString("\n[" + g + "]\n")
+		for _, h := range hosts {
+			b.WriteString(h + "\n")
+		}
 	}
 	return b.String()
 }

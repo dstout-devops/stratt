@@ -667,9 +667,12 @@ without one.
 ### `/api/v2` route breadth is DONE (2026-07-31) — and two refusals are the point
 
 `schedules`, `workflow_job_templates` + `workflow_jobs`, `projects`, and `credentials` +
-`credential_types` all ship. The four families the parity audit named are complete; what remains on
-that front is launch SEMANTICS (`ask_*_on_launch` beyond variables, AWX-015), which is a design
-question about desired state rather than a missing endpoint.
+`credential_types` all ship. The four families the parity audit named are complete; what remained on
+that front was launch SEMANTICS (`ask_*_on_launch` beyond variables, AWX-015) — correctly called a
+design question about desired state rather than a missing endpoint, and **answered as one**
+([ADR-0160](adr/0160-the-same-job-possibly-a-different-hand.md), live-proven): the promptable set is
+DERIVED from what a Workflow declares and its Steps bind, and a launch may supply a View, an image
+and a credential subset **from a permitted set the estate declared** — never from anywhere.
 
 **`projects` needed no design at all**, which is worth recording: ADR-0134 D2 already declares an
 Actuator's `contentDir` to be "one project: playbooks, roles/, group_vars/", one Actuator per
@@ -705,14 +708,21 @@ from `api.Server.launchWorkflow` rather than copied; that function's own comment
 ADRs that a second launch path grows its own authz and its own drift, and this was the moment the
 warning came due.
 
-**What was deliberately NOT shipped: `workflow_jobs/{id}/cancel/`.** AWX offers it and it was two
-lines here — but `RunDAG` has **no cancellation handling at all** (no `ctx.Done` path, no terminal
-status write), and the native API has no workflow-run cancel door either. Wiring one only on the
+**~~What was deliberately NOT shipped: `workflow_jobs/{id}/cancel/`~~ — SHIPPED (2026-08-03,
+[ADR-0157](adr/0157-cancelling-a-workflow-run.md)), in the order this entry demanded: the native
+terminal-status writer first, the façade route following it. `can_cancel` stops being a field with no
+mechanism behind it. The original reasoning, which held:** AWX offers it and it was two
+lines here — but `RunDAG` had **no cancellation handling at all** (no `ctx.Done` path, no terminal
+status write), and the native API had no workflow-run cancel door either. Wiring one only on the
 compat surface would signal Temporal, tear the activities down, and leave `graph.workflow_run` saying
 `running` **forever**: an operator who cancelled would be told the execution is still going, which is
 strictly worse than not offering cancel. A 404 from the mux says "not offered" — absent rather than
 wrong (§1.8). **The real gap is native:** a terminal-status writer in `RunDAG`, with the façade route
 following it. Cancelling a Run (single-Step) already works and is unaffected.
+
+And the withholding paid off twice: ADR-0157's live proof found that cancelling a Run had **never
+reaped its pod** since ADR-0026 (a missing RBAC verb), so the compat route would have inherited a
+broken guarantee rather than merely exposing an absent one.
 
 ### Charter review of this branch (2026-08-01) — performed as steward, subagents unavailable
 
@@ -1171,9 +1181,10 @@ length closing.
 
 **Still open from the plan, unchanged by this branch:**
 
-- **W6 residue** — ANS-013 (pre-flight syntax check), ANS-009 (multi-document playbooks), AWX-015
-  (`ask_*_on_launch` beyond variables; attaching a credential or inventory at launch is deliberately
-  refused today, and that is a desired-state question rather than a missing endpoint).
+- **W6 residue** — ANS-013 (pre-flight syntax check), ANS-009 (multi-document playbooks). ~~AWX-015~~
+  is **closed** by [ADR-0160](adr/0160-the-same-job-possibly-a-different-hand.md): attaching a
+  credential, an image or a View at launch is no longer refused — it is selection from a permitted
+  set the estate declared, which was indeed the desired-state question rather than a missing endpoint.
 - **AWX-005 is DECLINED, not pending** (ADR-0130 D3), and the distinction matters: a projected grant
   graph is one query from being used as an authorization truth, which no read-shape fix answers.
   "We looked and said no" must not render the same as "nobody looked".

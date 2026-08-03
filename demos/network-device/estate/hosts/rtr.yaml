@@ -6,5 +6,5 @@
 # business writing into.
 hosts:
   - fqdn: rtr-01.stratt.test
-    labels: { os: frr, role: router, demo: network-device }
+    labels: { os: frr, role: router, demo: network-device, tier: edge }
     address: rtr-01.stratt.svc.cluster.local

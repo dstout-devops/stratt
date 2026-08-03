@@ -10,20 +10,20 @@ design must reconcile with. Chronological list: [README.md](README.md); phase vi
 
 ```mermaid
 graph TD
-  actuators["actuators<br/><small>0016 0022 0050 0053 0092 0117<br/>0124 0126 0133 0134 0135 0148<br/>0149 0153 0156 0158 0159</small>"]
+  actuators["actuators<br/><small>0016 0022 0050 0053 0092 0117<br/>0124 0126 0133 0134 0135 0148<br/>0149 0153 0156 0158 0159 0160<br/>0161</small>"]
   api_surface["api-surface<br/><small>0006 0021 0026 0076 0091 0121<br/>0157</small>"]
   audit_telemetry["audit-telemetry<br/><small>0034 0065 0077 0121</small>"]
   authz_identity["authz-identity<br/><small>0009 0028 0035 0079 0101 0122<br/>0130 0155</small>"]
   capability_framework["capability-framework<br/><small>0100 0104 0105 0106 0107 0110<br/>0111 0112 0113 0114 0135 0145<br/>0146 0151</small>"]
   certificates_pki["certificates-pki<br/><small>0030 0043 0050 0098 0106 0150</small>"]
-  connectors["connectors<br/><small>0007 0014 0025 0026 0037 0038<br/>0039 0045 0086 0087 0088 0089<br/>0095 0097 0099 0113 0114 0115<br/>0127 0128 0129 0130 0131 0132<br/>0133 0136 0144 0146 0154 0155<br/>0156 0158</small>"]
+  connectors["connectors<br/><small>0007 0014 0025 0026 0037 0038<br/>0039 0045 0086 0087 0088 0089<br/>0095 0097 0099 0113 0114 0115<br/>0127 0128 0129 0130 0131 0132<br/>0133 0136 0144 0146 0154 0155<br/>0156 0158 0160</small>"]
   credentials_secrets["credentials-secrets<br/><small>0009 0029 0052 0094 0098 0099<br/>0100 0106 0125 0126 0153</small>"]
   estate_as_code["estate-as-code<br/><small>0055 0056 0057 0103 0113 0116<br/>0118 0119 0120 0122 0123 0132<br/>0134 0135 0136 0137 0138 0139<br/>0142 0146 0147 0148 0151 0152</small>"]
   findings_drift["findings-drift<br/><small>0019 0020 0033 0043 0080 0085<br/>0128 0129 0130 0133 0148 0150</small>"]
   foundation["foundation<br/><small>0001 0002 0004 0005 0006 0008<br/>0108 0109 0116 0137 0138 0141</small>"]
-  graph_model["graph-model<br/><small>0015 0017 0041 0042 0059 0060<br/>0079 0080 0081 0082 0084 0085<br/>0096 0114 0115 0119 0120 0123<br/>0126 0127 0128 0129 0130 0132<br/>0133 0143 0144 0147 0152 0153<br/>0154 0155 0156 0158</small>"]
+  graph_model["graph-model<br/><small>0015 0017 0041 0042 0059 0060<br/>0079 0080 0081 0082 0084 0085<br/>0096 0114 0115 0119 0120 0123<br/>0126 0127 0128 0129 0130 0132<br/>0133 0143 0144 0147 0152 0153<br/>0154 0155 0156 0158 0161</small>"]
   intent_compiler["intent-compiler<br/><small>0023 0030 0036 0055 0058 0083<br/>0085 0114 0118 0119 0123 0148<br/>0150 0152</small>"]
-  orchestration["orchestration<br/><small>0010 0011 0018 0027 0031 0063<br/>0118 0122 0125 0134 0139 0140<br/>0157</small>"]
+  orchestration["orchestration<br/><small>0010 0011 0018 0027 0031 0063<br/>0118 0122 0125 0134 0139 0140<br/>0157 0162</small>"]
   plugin_port["plugin-port<br/><small>0046 0047 0048 0049 0051 0053<br/>0054 0103 0117 0121 0124 0125<br/>0127 0131 0137 0138 0140 0141<br/>0145 0149 0159</small>"]
   policy_governance["policy-governance<br/><small>0061 0062 0063 0064 0065 0066<br/>0067 0068 0069 0070 0071 0072<br/>0073 0074 0075 0076 0122 0157</small>"]
   provisioning["provisioning<br/><small>0017 0058 0095 0096 0107 0110<br/>0111 0112 0113 0114 0115 0120<br/>0123 0143 0144 0145 0146 0147<br/>0151</small>"]
@@ -101,6 +101,8 @@ Actuators — execution engines (opentofu, helm, mcp, cert-issuer reconcile).
 - [ADR-0156](0156-how-to-reach-a-host-is-observed-not-declared.md) — How to reach a host is OBSERVED, not declared
 - [ADR-0158](0158-an-unobserved-transport-is-not-ssh.md) — An unobserved transport is not ssh
 - [ADR-0159](0159-a-transport-fails-on-three-axes.md) — A transport fails on three axes, and the image gate checks two
+- [ADR-0160](0160-the-same-job-possibly-a-different-hand.md) — The same job, possibly a different hand: launch-time parity with AAP
+- [ADR-0161](0161-the-graph-is-the-inventory-and-it-has-no-groups.md) — The graph is the inventory, and it renders no groups
 
 ### api-surface
 
@@ -214,6 +216,7 @@ Connectors & Syncers — SoR ingest breadth, the Syncer SDK, adopt/AWX-import.
 - [ADR-0155](0155-the-account-nobody-offboards.md) — The account nobody offboards: correlating an AWX login to an identity, without claiming one
 - [ADR-0156](0156-how-to-reach-a-host-is-observed-not-declared.md) — How to reach a host is OBSERVED, not declared
 - [ADR-0158](0158-an-unobserved-transport-is-not-ssh.md) — An unobserved transport is not ssh
+- [ADR-0160](0160-the-same-job-possibly-a-different-hand.md) — The same job, possibly a different hand: launch-time parity with AAP
 
 ### credentials-secrets
 
@@ -340,6 +343,7 @@ Graph model — Entity/Facet/Relation/Contract primitives, projection & liveness
 - [ADR-0155](0155-the-account-nobody-offboards.md) — The account nobody offboards: correlating an AWX login to an identity, without claiming one
 - [ADR-0156](0156-how-to-reach-a-host-is-observed-not-declared.md) — How to reach a host is OBSERVED, not declared
 - [ADR-0158](0158-an-unobserved-transport-is-not-ssh.md) — An unobserved transport is not ssh
+- [ADR-0161](0161-the-graph-is-the-inventory-and-it-has-no-groups.md) — The graph is the inventory, and it renders no groups
 
 ### intent-compiler
 
@@ -381,6 +385,7 @@ Orchestration — Triggers, Workflows/Gates, Steps, Runs, Actions, notifications
 - [ADR-0139](0139-nested-workflow-steps.md) — A Step may run a Workflow: nesting, and the one chokepoint
 - [ADR-0140](0140-a-capability-is-invoked-not-named.md) — A capability is invoked, not named: the mapping is declared, never minted
 - [ADR-0157](0157-cancelling-a-workflow-run.md) — Cancelling a WorkflowRun: one writer, no orphans, and a Gate that stops meaning "approve me"
+- [ADR-0162](0162-a-trigger-decides-on-more-than-one-event.md) — A Trigger decides on more than one event
 
 ### plugin-port
 
@@ -675,3 +680,6 @@ UI — React shell, schema-driven rendering, Views, descent, the first-party cli
 | [0157](0157-cancelling-a-workflow-run.md) | api-surface, orchestration, policy-governance |
 | [0158](0158-an-unobserved-transport-is-not-ssh.md) | actuators, connectors, graph-model |
 | [0159](0159-a-transport-fails-on-three-axes.md) | actuators, plugin-port |
+| [0160](0160-the-same-job-possibly-a-different-hand.md) | actuators, connectors |
+| [0161](0161-the-graph-is-the-inventory-and-it-has-no-groups.md) | actuators, graph-model |
+| [0162](0162-a-trigger-decides-on-more-than-one-event.md) | orchestration |

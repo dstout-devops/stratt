@@ -89,3 +89,94 @@ func TestBuildInventoryIsByteStable(t *testing.T) {
 		t.Fatalf("vars must render in sorted key order: %q", first)
 	}
 }
+
+// ── ADR-0161 · the inventory renders GROUPS ──────────────────────────────────────────────
+//
+// Before this, buildInventory wrote `[all]`, the hosts, and `[all:vars]` — the whole file. So a
+// migrated play saying `hosts: webservers` matched NOTHING, and `group_vars/webservers.yml` (which
+// ADR-0134 D2 declares part of an Actuator's project) was never loaded, because ansible resolves
+// group_vars by group name against the inventory's groups and there were none.
+func TestInventoryRendersGroupSections(t *testing.T) {
+	inv := buildInventory([]Target{
+		{Name: "web-01", Address: "10.0.0.1", Groups: []string{"region_eu", "web"}},
+		{Name: "web-02", Address: "10.0.0.2", Groups: []string{"region_eu", "web"}},
+		{Name: "db-01", Address: "10.0.0.3", Groups: []string{"db", "region_us"}},
+	})
+	for _, want := range []string{
+		"[all]\n",
+		"web-01 ansible_host=10.0.0.1",
+		"\n[web]\nweb-01\nweb-02\n",
+		"\n[db]\ndb-01\n",
+		"\n[region_eu]\nweb-01\nweb-02\n",
+		"\n[region_us]\ndb-01\n",
+	} {
+		if !strings.Contains(inv, want) {
+			t.Errorf("missing %q in:\n%s", want, inv)
+		}
+	}
+	// THE HOST DEFINITION APPEARS ONCE. A host repeated with its vars in every section it belongs to
+	// would define the same host several times, and ansible's precedence between those definitions
+	// is a rule nobody should have to know.
+	if strings.Count(inv, "ansible_host=10.0.0.1") != 1 {
+		t.Errorf("a host must be DEFINED once and referenced by name:\n%s", inv)
+	}
+}
+
+// Byte-stability (§1.8): two Runs over one target set must produce identical inventories or they
+// cannot be compared during descent. Map iteration would break this on its own.
+func TestGroupRenderingIsByteStable(t *testing.T) {
+	ts := []Target{
+		{Name: "b", Address: "10.0.0.2", Groups: []string{"z", "a"}},
+		{Name: "a", Address: "10.0.0.1", Groups: []string{"a", "z"}},
+	}
+	first := buildInventory(ts)
+	for range 20 {
+		if buildInventory(ts) != first {
+			t.Fatalf("inventory is not byte-stable across renders:\n%s", first)
+		}
+	}
+	if !strings.Contains(first, "\n[a]\na\nb\n") || !strings.Contains(first, "\n[z]\na\nb\n") {
+		t.Errorf("groups and members must both be sorted:\n%s", first)
+	}
+}
+
+// A Run with no groupBy renders exactly what it rendered before ADR-0161 — the regression that
+// matters most, because every shipped estate is this case.
+func TestNoGroupsRendersTheOldInventoryExactly(t *testing.T) {
+	inv := buildInventory([]Target{{Name: "h", Address: "10.0.0.1"}})
+	if inv != "[all]\nh ansible_host=10.0.0.1\n" {
+		t.Fatalf("an ungrouped Run must render byte-identically to before:\n%q", inv)
+	}
+}
+
+// GROUPS NEVER WIDEN THE RUN (D3). Every name in a section is a host already in [all], because
+// membership was resolved from the very targets the View selected. There is no path from a group
+// name back into the graph — if there were, the play's `hosts:` line would become the authorization
+// unit, which is content deciding blast radius (ADR-0028 refuses exactly that).
+func TestAGroupOnlyEverContainsHostsAlreadyInAll(t *testing.T) {
+	inv := buildInventory([]Target{
+		{Name: "only-host", Address: "10.0.0.1", Groups: []string{"web"}},
+	})
+	all, groups := map[string]bool{}, map[string][]string{}
+	section := ""
+	for _, line := range strings.Split(inv, "\n") {
+		line = strings.TrimSpace(line)
+		switch {
+		case line == "":
+		case strings.HasPrefix(line, "["):
+			section = strings.Trim(line, "[]")
+		case section == "all":
+			all[strings.Fields(line)[0]] = true
+		default:
+			groups[section] = append(groups[section], line)
+		}
+	}
+	for g, hosts := range groups {
+		for _, h := range hosts {
+			if !all[h] {
+				t.Errorf("group %q references %q, which is not in [all] — a group must be a PARTITION "+
+					"of the blast radius, never a way to reach a host the View did not select", g, h)
+			}
+		}
+	}
+}
