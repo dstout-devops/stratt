@@ -950,12 +950,30 @@ not have**, which is a different thing from unfinished work and is marked as suc
 
 **Owed verification (the highest-value items — code that exists and has not been proven):**
 
-- **ADR-0157 Phases 3–5 · WorkflowRun cancellation.** Phase 1 (the `ParentClosePolicy` fix) and
-  Phase 2 (the ADR) shipped. Still to do: the native `POST /api/v1/workflow-runs/{id}/cancel` door,
-  the `/api/v2/workflow_jobs/{id}/cancel/` façade route that was withheld in `1d7ffc0` for exactly
-  this reason, and the **live proof** — cancel a multi-Step DAG mid-Step on kind and assert the
-  WorkflowRun is `canceled`, the child Run is `canceled`, and **the K8s Job is gone**. Only the
-  third distinguishes a real cancel from bookkeeping.
+- ~~**ADR-0157 Phases 3–5 · WorkflowRun cancellation.**~~ 🟢 **DONE and LIVE-PROVEN (2026-08-03).**
+  The native `POST /api/v1/workflow-runs/{id}/cancel` door, the `/api/v2/workflow_jobs/{id}/cancel/`
+  façade route withheld in `1d7ffc0`, and the live proof — all three assertions green on kind,
+  including **the K8s Job is gone**, now gated by `demo:app-cert`'s `cancel-guard` and therefore by
+  E2E-1. ADR-0157 → Accepted.
+
+  **The third assertion failed on its first run, and what it found had been shipped since
+  ADR-0026: every cancellation was a lie.** The dispatcher Role granted `create`+`get` on
+  `batch/jobs`, while `DeleteRunJobs` selects by the `stratt.dev/run-id` LABEL and so needs `list`
+  before `delete` — it held neither. Measured: after a cancel, the guard's Job read
+  `Complete, DURATION 2m4s` (its full sleep) and was **still present 243s later**, while the API had
+  returned 202 and both rows read `canceled`. The pod converged a real host to completion.
+  Invisible because the handler called cleanup as `_ = ExecuteActivity(…)`, and because
+  `TestDeleteRunJobs` passes against a fake clientset with no RBAC while `helm lint` renders the
+  Role without knowing what the Go calls — **the defect lived exactly in the gap between two
+  passing tests.** Fixed: the verbs, the discarded error (now carried onto the Run's summary), and
+  `TestChartGrantsTheJobVerbsThisPackageCalls` to pin them.
+
+  Three more corrections to the ADR itself, all found by implementing it: a Gate does NOT unblock on
+  cancellation (a Temporal `Selector` needs a `ctx.Done()` branch, so a cancelled DAG hung until its
+  Temporal timeout and the door would have returned 202 having stopped nothing); D3 was not
+  implementable as written (the inherited View was never persisted, so a Finding-launched
+  remediation's cancel could not be authorized — migration 00050); and D5 needed a `canceled` Step
+  outcome it had not named.
 - **`aws_ssm` has no writer** (ADR-0156). The shim supports the transport; nothing produces it. The
   awsec2 Syncer can honestly observe neither EC2 path — `KeyName` means a key is AUTHORIZED, not
   that sshd is listening — so this needs the SSM client and an `ssm:DescribeInstanceInformation`

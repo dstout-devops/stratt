@@ -668,6 +668,45 @@ func TestWorkflowRunsAndGates(t *testing.T) {
 		t.Fatalf("run linkage round-trip: %+v %v", got, err)
 	}
 
+	// ADR-0157 D2: `canceled` is a terminal Gate status the CHECK constraint accepts (migration
+	// 00049). Asserted against the real column rather than the Go constant, because the constant
+	// compiling proves nothing about what the data layer will store — and a value the code writes
+	// and the table rejects fails at the worst possible moment: inside a cancellation handler, on a
+	// disconnected context, with nothing left running to retry it.
+	cwr, err := s.CreateWorkflowRun(ctx, "patch", "", "carol", "probe-trigger")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cg, err := s.CreateGate(ctx, cwr.ID, "approve", "digest", types.GateApprovers{Teams: []string{"platform"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.DecideGate(ctx, cg.ID, types.GateCanceled, "", "the WorkflowRun was cancelled"); err != nil {
+		t.Fatalf("a cancelled Gate must be recordable — `expired` would say the approval window "+
+			"lapsed, which is a wrong answer in the audit record rather than a missing one: %v", err)
+	}
+	if got, err := s.GetGate(ctx, cg.ID); err != nil || got.Status != types.GateCanceled {
+		t.Fatalf("cancelled Gate round-trip: %+v %v", got, err)
+	}
+
+	// ADR-0157 D3: the INHERITED View round-trips. It is an authorization input for cancel — a
+	// Finding-launched DAG's Steps name no View of their own, so without this the cancel door has
+	// nothing to check a runner grant against and refuses the most ordinary cancel there is.
+	if err := s.SetWorkflowRunView(ctx, wr.ID, "web-hosts"); err != nil {
+		t.Fatal(err)
+	}
+	back, _, err := s.GetWorkflowRun(ctx, wr.ID)
+	if err != nil || back.ViewName != "web-hosts" {
+		t.Fatalf("inherited View must round-trip: %+v %v", back, err)
+	}
+	// A direct launch inherits nothing, and writing "" must not blank a recorded View.
+	if err := s.SetWorkflowRunView(ctx, wr.ID, ""); err != nil {
+		t.Fatal(err)
+	}
+	if back, _, _ := s.GetWorkflowRun(ctx, wr.ID); back.ViewName != "web-hosts" {
+		t.Fatalf("an empty View is a no-op, not an erase: %q", back.ViewName)
+	}
+
 	// Gate lifecycle: open (idempotent), decide once, refuse re-decision.
 	approvers := types.GateApprovers{Teams: []string{"platform"}}
 	g, err := s.CreateGate(ctx, wr.ID, "approve", "plan-digest-abc", approvers)

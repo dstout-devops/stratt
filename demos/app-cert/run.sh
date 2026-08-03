@@ -30,6 +30,7 @@ PRINCIPAL="${STRATT_PRINCIPAL:-bootstrap-admin}"
 WORKFLOW="app-install-with-cert"
 GUARD_WORKFLOW="vacuous-run-guard"
 REACH_GUARD_WORKFLOW="unreached-target-guard"
+CANCEL_GUARD_WORKFLOW="cancel-guard"
 VIEW="app-nodes"
 ACTUATOR="ansible-crypto"
 NODE_DEPLOY="app-node"
@@ -295,6 +296,69 @@ case "$reach_cause" in
     *) echo "FAIL: the refusal does not offer remedy 2, fixing the observation: '${reach_cause}'"; exit 1 ;;
 esac
 echo "  …and it named the target and BOTH remedies"
+
+# ── Assertion 6: a cancelled WorkflowRun really stops, pod and all (ADR-0157) ─────────────────────
+# The proof a unit test cannot give. A unit test can show the row is stamped and the Gate recorded;
+# it cannot show the POD DIED. Three assertions, and only the third distinguishes a real cancel from
+# bookkeeping — a WorkflowRun marked `canceled` while its execution pod keeps converging a real
+# machine is the worst of both, because the record says stopped and the estate says otherwise.
+echo "demo: assert a cancelled WorkflowRun stops its Step AND reaps its pod (the cancel guard)"
+cancel_wr=$(api POST "/workflows/${CANCEL_GUARD_WORKFLOW}/runs" | jq -r '.id')
+[ -n "$cancel_wr" ] && [ "$cancel_wr" != "null" ] || { echo "FAIL: no WorkflowRun id for the cancel guard"; exit 1; }
+
+# Scoped to THIS execution's own child Run, never "the newest Job in the namespace": that shortcut
+# grabs a Job left by an earlier step of this very demo and cancels before this DAG has started
+# anything, which passes the cancel and proves nothing.
+cancel_run=""
+for _ in $(seq 1 90); do
+    cancel_run=$(api GET "/runs?workflowRunId=${cancel_wr}" 2>/dev/null | jq -r --arg r "$cancel_wr" '.[]? | select(.workflowRunId==$r) | .id' | head -1)
+    [ -n "$cancel_run" ] && [ "$cancel_run" != "null" ] && break
+    sleep 2
+done
+[ -n "$cancel_run" ] && [ "$cancel_run" != "null" ] || { echo "FAIL: the cancel guard never dispatched a child Run"; exit 1; }
+cancel_job="job.batch/stratt-run-${cancel_run}-s0"
+for _ in $(seq 1 90); do kc -n "$NS" get "$cancel_job" >/dev/null 2>&1 && break; sleep 2; done
+kc -n "$NS" get "$cancel_job" >/dev/null 2>&1 || { echo "FAIL: ${cancel_job} never appeared — nothing to reap"; exit 1; }
+echo "  child Run ${cancel_run} is executing, Job present"
+
+code=$(curl -sS -o /dev/null -w '%{http_code}' -X POST "${API}/workflow-runs/${cancel_wr}/cancel" -H "X-Stratt-Principal: ${PRINCIPAL}")
+[ "$code" = "202" ] || { echo "FAIL: POST /workflow-runs/{id}/cancel returned ${code}, want 202"; exit 1; }
+
+for _ in $(seq 1 60); do
+    cst=$(api GET "/workflow-runs/${cancel_wr}" | jq -r '.workflowRun.status // .status // empty')
+    [ "$cst" = "canceled" ] && break
+    sleep 2
+done
+[ "${cst:-}" = "canceled" ] || { echo "FAIL: WorkflowRun is '${cst:-none}', want canceled — the DAG is the single writer of its own terminal status (D1)"; exit 1; }
+echo "  1/3 WorkflowRun reads canceled"
+
+for _ in $(seq 1 30); do
+    crst=$(api GET "/runs?workflowRunId=${cancel_wr}" | jq -r --arg i "$cancel_run" '.[]? | select(.id==$i) | .status')
+    [ "$crst" = "canceled" ] && break
+    sleep 2
+done
+[ "${crst:-}" = "canceled" ] || { echo "FAIL: child Run is '${crst:-none}', want canceled"; exit 1; }
+echo "  2/3 child Run reads canceled"
+
+# THE ONE THAT IS NOT BOOKKEEPING.
+cancel_gone=false
+for _ in $(seq 1 60); do
+    kc -n "$NS" get "$cancel_job" >/dev/null 2>&1 || { cancel_gone=true; break; }
+    sleep 2
+done
+[ "$cancel_gone" = true ] || {
+    echo "FAIL: ${cancel_job} still exists — the WorkflowRun says canceled while its pod keeps running,"
+    echo "      which is a record that lies about the estate (§1.8)"
+    kc -n "$NS" get "$cancel_job" -o wide
+    exit 1; }
+echo "  3/3 the K8s Job is GONE — the pod was reaped, not just the row stamped"
+
+# D5: cancellation is not rollback, and the summary has to say which Steps are which.
+api GET "/workflow-runs/${cancel_wr}" | jq -r '"  per-Step: " + ((.steps // []) | map(.name + "=" + .status) | join(", "))'
+step_state=$(api GET "/workflow-runs/${cancel_wr}" | jq -r '.steps[]? | select(.name=="sleep-until-cancelled") | .status')
+[ "$step_state" = "canceled" ] || {
+    echo "FAIL: the in-flight Step reads '${step_state}', want canceled — a Step interrupted mid-change"
+    echo "      is not the same as one that failed, and D5's summary is where that difference lives"; exit 1; }
 
 echo
 echo "demo: DONE — a gated Workflow installed an app with a certificate on a real host (fidelity: ${fidelity})."

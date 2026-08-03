@@ -1035,6 +1035,39 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/WorkflowRunDetail" }
         "404": { $ref: "#/components/responses/NotFound" }
+  /workflow-runs/{id}/cancel:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: { type: string }
+    post:
+      operationId: cancelWorkflowRun
+      summary: Request cancellation of a running WorkflowRun
+      description: >
+        Signals the WorkflowRun's Temporal execution to cancel (ADR-0157). The
+        DAG is the single writer of its own terminal status: it stamps
+        `canceled`, records every still-pending Gate as `canceled`, and writes
+        the per-Step summary saying which Steps completed, which were cancelled
+        in flight and which never started. Children are reaped by
+        ParentClosePolicy — each child Run stamps its own status and deletes its
+        own K8s Job.
+
+
+        Authorization is the SAME check the launch door applies: `runner` on
+        every actuation Step's View. You may stop only what you were entitled to
+        start; there is no separate canceller relation (D3).
+
+
+        Cancelling an already-terminal WorkflowRun is a no-op that returns 202,
+        not a 409 — a client retrying a slow cancel must not be told its cancel
+        failed when the state it asked for is the state that holds (D4).
+        Cancellation is not rollback: a cancelled DAG leaves partial state, and
+        drift detection is what surfaces the rest (D5).
+      responses:
+        "202": { description: Cancellation requested }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
   /gates:
     get:
       operationId: listGates

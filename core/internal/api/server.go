@@ -2522,6 +2522,71 @@ func resolveFindingLaunch(f types.Finding, getBaseline func(string) (types.Basel
 
 // GetWorkflowRun implements (GET /workflow-runs/{id}): the Workflow → Run
 // descent rung (§1.8) — every Step links its Run or Gate.
+// CancelWorkflowRun implements (POST /workflow-runs/{id}/cancel) — ADR-0157.
+//
+// The door the façade was withheld for (1d7ffc0): `workflow_jobs/{id}/cancel/` was declined because
+// signalling Temporal with no terminal writer in RunDAG would have left graph.workflow_run reading
+// `running` forever. D1 supplies that writer, so the native door becomes shippable and the façade
+// route follows it.
+//
+// THIS HANDLER NEVER WRITES `canceled`. RunDAG's own cancellation handler does, on a disconnected
+// context, because the Workflow is the single writer of its terminal status (§2.1, ADR-0026). Two
+// writers of one terminal value fails in the ugliest direction: the handler marks canceled,
+// cancellation loses a race, and the DAG carries on against a row that says it stopped.
+func (s *Server) CancelWorkflowRun(w http.ResponseWriter, r *http.Request, id string) {
+	wr, _, err := s.Store.GetWorkflowRun(r.Context(), id)
+	if err != nil {
+		// A WorkflowRun and its Gates are co-homed on the Cell whose Temporal owns the execution
+		// (ADR-0044 slice 5). A local miss ⇒ homed on a peer: forward, so the cancel signals the
+		// RIGHT Temporal namespace rather than a same-named execution on this one.
+		//
+		// ADR-0157 D6 said to route as a Gate decision does OR refuse until cross-Cell was measured
+		// on a two-Cell floor. Routing is what shipped, because the refusal branch would have made
+		// cancelling a WorkflowRun behave DIFFERENTLY from cancelling a Run — `CancelRun` already
+		// forwards through this exact helper — and inventing that asymmetry to express an unmeasured
+		// doubt costs more than it protects. The doubt is real and still unmeasured; it is recorded
+		// in the ADR against BOTH paths rather than half-mitigated in one of them. What D6 actually
+		// guards against is satisfied here: an unreachable home is a loud 503, never a silent 202.
+		if errors.Is(err, graph.ErrNotFound) {
+			s.forwardWriteToPeers(w, r, "/workflow-runs/"+id+"/cancel", nil, err)
+			return
+		}
+		s.fail(w, err)
+		return
+	}
+	if wr.Cell != "" && wr.Cell != s.localCell() {
+		s.forwardWriteToPeers(w, r, "/workflow-runs/"+id+"/cancel", nil, graph.ErrNotFound)
+		return
+	}
+	// D3 — the runner grant on every actuation Step's View, which is EXACTLY the check the launch
+	// door applies. You may stop only what you were entitled to start. A distinct `canceller`
+	// relation was rejected: a second authorization vocabulary for one plane is a second model to
+	// keep in agreement, and §1.6 says there is one.
+	//
+	// Deliberately NOT the Gate's approver set — approving is a judgement about a change, cancelling
+	// is an operational act on an execution, and conflating them would let an approver stop a run
+	// they could not have launched.
+	spec, err := s.Store.GetWorkflow(r.Context(), wr.WorkflowName)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	if _, ok := s.authorizeLaunch(w, r, spec, wr.ViewName); !ok {
+		return
+	}
+	// D4 — idempotent, and a finished run is not an error. A UI that retries a slow cancel must not
+	// receive a 409 reading "your cancel failed": the state it asked for is the state that holds.
+	if wr.Status != types.RunRunning && wr.Status != types.RunPending {
+		w.WriteHeader(http.StatusAccepted)
+		return
+	}
+	if err := orchestrate.CancelWorkflowRun(r.Context(), s.Temporal, wr.ID, wr.TemporalID); err != nil {
+		s.fail(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusAccepted)
+}
+
 func (s *Server) GetWorkflowRun(w http.ResponseWriter, r *http.Request, id string) {
 	wr, summary, err := s.Store.GetWorkflowRun(r.Context(), id)
 	if err != nil {

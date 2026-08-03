@@ -272,8 +272,18 @@ func RunAgainstView(ctx workflow.Context, in RunInput) (RunOutcome, error) {
 		dctx, dcancel := workflow.NewDisconnectedContext(ctx)
 		defer dcancel()
 		dctx = workflow.WithActivityOptions(dctx, opts)
-		_ = workflow.ExecuteActivity(dctx, a.CleanupRun, in.RunID, touchedSites).Get(dctx, nil)
-		_ = workflow.ExecuteActivity(dctx, a.FinishRun, in, types.RunCanceled, dispatch.Result{}).Get(dctx, nil)
+		// The cleanup error is CARRIED, not discarded. It was `_ =` for as long as this handler
+		// has existed, and that is how a missing RBAC verb (`list` on batch/jobs) made every
+		// cancel since ADR-0026 stamp `canceled` over a pod that kept converging a real machine.
+		// A cancel that could not reap its pod must say so on the Run an operator will read,
+		// because the pod is the thing they actually needed stopped (§1.8).
+		cerr := workflow.ExecuteActivity(dctx, a.CleanupRun, in.RunID, touchedSites).Get(dctx, nil)
+		res := dispatch.Result{}
+		if cerr != nil {
+			res.Error = "cancelled, but the execution Job could NOT be deleted and may still be " +
+				"running against real targets: " + cerr.Error()
+		}
+		_ = workflow.ExecuteActivity(dctx, a.FinishRun, in, types.RunCanceled, res).Get(dctx, nil)
 	}()
 
 	// View-scoped execution authz (§2.5, ADR-0028): before ANYTHING runs, the

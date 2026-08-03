@@ -120,6 +120,25 @@ func (s *Store) CreateNestedWorkflowRun(ctx context.Context, workflowName, tempo
 	return wr, nil
 }
 
+// SetWorkflowRunView records the View this execution inherited at launch (ADR-0157 D3). Written
+// once, right after the row is created and BEFORE the Temporal execution starts, because it is an
+// authorization input for cancel and a row that could be cancelled before it was set would be a row
+// whose cancel could not be authorized.
+func (s *Store) SetWorkflowRunView(ctx context.Context, id, viewName string) error {
+	if viewName == "" {
+		return nil // a direct launch inherits nothing; the Steps name their own Views
+	}
+	tag, err := s.pool.Exec(ctx,
+		`UPDATE graph.workflow_run SET view_name = $2 WHERE id = $1`, id, viewName)
+	if err != nil {
+		return fmt.Errorf("graph: set workflow run view: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("%w: workflow run %s", ErrNotFound, id)
+	}
+	return nil
+}
+
 // SetWorkflowRunTemporalID binds the row to its Temporal execution.
 func (s *Store) SetWorkflowRunTemporalID(ctx context.Context, id, temporalID string) error {
 	tag, err := s.pool.Exec(ctx,
@@ -168,10 +187,10 @@ func (s *Store) GetWorkflowRun(ctx context.Context, id string) (types.WorkflowRu
 	var triggeredBy *string
 	err := s.pool.QueryRow(ctx, `
 		SELECT id, workflow_name, temporal_id, status, principal, triggered_by, summary, started_at, finished_at, cell,
-		       coalesce(parent_workflow_run_id::text, ''), coalesce(parent_step_name, '')
+		       coalesce(parent_workflow_run_id::text, ''), coalesce(parent_step_name, ''), coalesce(view_name, '')
 		FROM graph.workflow_run WHERE id = $1`, id,
 	).Scan(&wr.ID, &wr.WorkflowName, &wr.TemporalID, &status, &wr.Principal, &triggeredBy, &summary, &wr.StartedAt, &wr.FinishedAt, &wr.Cell,
-		&wr.ParentWorkflowRunID, &wr.ParentStepName)
+		&wr.ParentWorkflowRunID, &wr.ParentStepName, &wr.ViewName)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return wr, nil, fmt.Errorf("%w: workflow run %s", ErrNotFound, id)
 	}

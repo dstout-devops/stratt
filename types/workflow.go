@@ -192,6 +192,11 @@ const (
 	GateApproved = "approved"
 	GateDenied   = "denied"
 	GateExpired  = "expired"
+	// GateCanceled is the WorkflowRun being cancelled out from under a pending Gate (ADR-0157 D2).
+	// DISTINCT from GateExpired on purpose: `expired` means the approval window lapsed, and telling
+	// an operator that when someone actually stopped the run is a wrong answer in the audit record
+	// rather than a missing one (§1.8). The Gate record is evidence.
+	GateCanceled = "canceled"
 )
 
 // Gate is one pending-or-decided approval instance of a Gate Step within a
@@ -229,6 +234,14 @@ type WorkflowRun struct {
 	TriggeredBy string     `json:"triggeredBy,omitempty"`
 	StartedAt   time.Time  `json:"startedAt"`
 	FinishedAt  *time.Time `json:"finishedAt,omitempty"`
+	// ViewName is the View this execution INHERITED at launch (ADR-0151): the Baseline's View for a
+	// Finding-launched remediation, whose actuation Steps deliberately name none of their own. Empty
+	// for a direct launch, where each Step names its own.
+	//
+	// PERSISTED because it is an AUTHORIZATION input, not only a descent convenience (ADR-0157 D3): a
+	// cancel is authorized by the runner grant on every actuation Step's View, and for an inherited
+	// View there is nothing else to check it against once the launch call is over.
+	ViewName string `json:"viewName,omitempty"`
 	// Cell is the control-plane Cell whose Temporal owns this execution (ADR-0044
 	// slice 5) — set once at creation. A Gate decision or cancel routes here.
 	// Empty ⇒ the built-in LocalCell.

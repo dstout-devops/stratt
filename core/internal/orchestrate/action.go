@@ -58,7 +58,13 @@ func RunAction(ctx workflow.Context, in RunInput) (RunOutcome, error) {
 		dctx = workflow.WithActivityOptions(dctx, opts)
 		// Actions are targetless (v1 runs them on the hub), so no remote Sites
 		// to cancel (ADR-0032) — pass nil.
-		_ = workflow.ExecuteActivity(dctx, a.CleanupRun, in.RunID, []string(nil)).Get(dctx, nil)
+		// Carried rather than discarded, for the reason written out in RunAgainstView's handler:
+		// a silently-failed cleanup is a `canceled` row over a pod that is still running.
+		cerr := workflow.ExecuteActivity(dctx, a.CleanupRun, in.RunID, []string(nil)).Get(dctx, nil)
+		if cerr != nil {
+			workflow.GetLogger(dctx).Error("cancelled but the execution Job could not be deleted",
+				"runID", in.RunID, "error", cerr.Error())
+		}
 		_ = workflow.ExecuteActivity(dctx, a.FinishRun, in, types.RunCanceled, dispatch.Result{}).Get(dctx, nil)
 	}()
 
