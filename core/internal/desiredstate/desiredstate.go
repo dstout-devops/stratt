@@ -2068,6 +2068,16 @@ type emitterFile struct {
 	Explode *explodeFile `yaml:"explode"`
 	// ADR-0164 D1 — where the caller presents its shared token.
 	Token *tokenFile `yaml:"token"`
+	// ADR-0164 D2 — this source SIGNS its body; verification is delegated to the key's holder.
+	Verify *verifyFile `yaml:"verify"`
+}
+
+type verifyFile struct {
+	Header    string `yaml:"header"`
+	Algorithm string `yaml:"algorithm"`
+	Encoding  string `yaml:"encoding"`
+	Prefix    string `yaml:"prefix"`
+	KeyRef    string `yaml:"keyRef"`
 }
 
 type tokenFile struct {
@@ -2095,6 +2105,10 @@ func parseEmitterFile(path string, raw []byte) (string, types.Emitter, error) {
 	e := types.Emitter{Name: f.Name, Kind: f.Kind, TokenHash: strings.ToLower(f.TokenHash)}
 	if f.Token != nil {
 		e.Token = &types.TokenSpec{Header: f.Token.Header, Prefix: f.Token.Prefix}
+	}
+	if f.Verify != nil {
+		e.Verify = &types.VerifySpec{Header: f.Verify.Header, Algorithm: f.Verify.Algorithm,
+			Encoding: f.Verify.Encoding, Prefix: f.Verify.Prefix, KeyRef: f.Verify.KeyRef}
 	}
 	if f.Explode != nil {
 		e.Explode = &types.ExplodeSpec{Path: f.Explode.Path}
@@ -2154,6 +2168,9 @@ func ValidateEmitter(e types.Emitter) error {
 		if e.Token != nil {
 			return fmt.Errorf("emitter %s: a stream emitter is outbound-subscribed; nothing presents a token to it", e.Name)
 		}
+		if e.Verify != nil {
+			return fmt.Errorf("emitter %s: a stream emitter publishes its own events; there is no request body to verify", e.Name)
+		}
 		// Nothing POSTs to a stream Emitter, so there is no body to fan out. A declaration
 		// that says otherwise is asking for something that cannot happen (§1.8 — refuse it
 		// where it is written, not by ignoring it at runtime).
@@ -2168,6 +2185,31 @@ func ValidateEmitter(e types.Emitter) error {
 	if e.Token != nil && e.Token.Header == "" && e.Token.Prefix == "" {
 		return fmt.Errorf("emitter %s: token block declares neither header nor prefix — remove it, "+
 			"or name the header the source actually sends (ADR-0164 D1)", e.Name)
+	}
+	// ADR-0164 D2. Checked at PARSE, because a signature declaration that cannot be acted on is
+	// worse than none: the estate believes it is authenticating and it is not.
+	if e.Verify != nil {
+		if e.Verify.Header == "" {
+			return fmt.Errorf("emitter %s: verify requires a header — the one the source sends its signature in", e.Name)
+		}
+		if e.Verify.KeyRef == "" {
+			return fmt.Errorf("emitter %s: verify requires a keyRef. It is a COORDINATE, never "+
+				"material: the core cannot hold the key (§2.5, ADR-0052) and asks its holder instead", e.Name)
+		}
+		switch e.Verify.Algorithm {
+		case "hmac-sha256", "hmac-sha512":
+		case "":
+			return fmt.Errorf("emitter %s: verify requires an algorithm (hmac-sha256, hmac-sha512). "+
+				"Inferring it from the header name would be core learning one vendor's spelling again", e.Name)
+		default:
+			return fmt.Errorf("emitter %s: verify algorithm %q is not one core will ask for "+
+				"(hmac-sha256, hmac-sha512)", e.Name, e.Verify.Algorithm)
+		}
+		switch e.Verify.Encoding {
+		case "", types.SignatureHex, types.SignatureBase64:
+		default:
+			return fmt.Errorf("emitter %s: verify encoding %q is not hex or base64", e.Name, e.Verify.Encoding)
+		}
 	}
 	// ADR-0163 D1/D3. Checked at PARSE so a declaration that could never fan out fails its
 	// file rather than every POST at 3am.

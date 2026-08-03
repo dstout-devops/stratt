@@ -21,6 +21,7 @@ import (
 
 	"github.com/dstout-devops/stratt/core/internal/events"
 	"github.com/dstout-devops/stratt/core/internal/graph"
+	"github.com/dstout-devops/stratt/core/internal/macverify"
 	"github.com/dstout-devops/stratt/types"
 )
 
@@ -47,11 +48,24 @@ type Ingest struct {
 	store emitterSource
 	bus   eventSink
 	log   *slog.Logger
+	// Verifier answers "does this signature match these bytes?" for Emitters that declare a
+	// signed source (ADR-0164 D2). Nil ⇒ no provider is bound, and a signed Emitter REFUSES
+	// rather than degrading to unverified — an estate that declared a signature and got none
+	// checked would be the worst of both.
+	Verifier macverify.Verifier
 }
 
 // New builds the ingest handler set.
 func New(store *graph.Store, bus *events.Bus, log *slog.Logger) *Ingest {
 	return &Ingest{store: store, bus: bus, log: log.With("component", "emitters")}
+}
+
+// WithVerifier binds the MAC provider for Emitters that declare a signed source (ADR-0164 D2).
+// A nil verifier is not "no verification" — it means a signed Emitter refuses, which is what an
+// estate that declared a signature and got none checked deserves to see.
+func (in *Ingest) WithVerifier(v macverify.Verifier) *Ingest {
+	in.Verifier = v
+	return in
 }
 
 // Handler serves POST /emitters/{name}.
@@ -102,6 +116,19 @@ func (in *Ingest) Handler() http.Handler {
 			http.Error(w, "read body", http.StatusBadRequest)
 			return
 		}
+
+		// ── The signature is checked on the RAW BYTES, before anything parses them (D3) ──
+		//
+		// A MAC covers exactly what the source sent. Verifying a re-serialized payload would
+		// fail on whitespace, key order and number formatting — INTERMITTENTLY, which is worse
+		// than failing. Nothing may touch `body` between the socket and here.
+		if em.Verify != nil {
+			if !in.verifySignature(r, em, body) {
+				http.Error(w, "unauthorized", http.StatusUnauthorized)
+				return
+			}
+		}
+
 		evs, err := explode(em, body)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
@@ -117,6 +144,35 @@ func (in *Ingest) Handler() http.Handler {
 		in.log.Info("emitter events ingested", "emitter", name, "kind", em.Kind, "events", len(evs))
 		w.WriteHeader(http.StatusAccepted)
 	})
+}
+
+// verifySignature answers whether this request carries a valid MAC over its own body.
+//
+// It logs the two failures APART, because they are different events for an operator (§1.8): a bad
+// signature is one caller being refused, while an unreachable provider is EVERY signed caller being
+// refused until somebody acts. The HTTP response says the same thing for both — a caller who could
+// tell them apart learns something about the key.
+func (in *Ingest) verifySignature(r *http.Request, em types.Emitter, body []byte) bool {
+	if in.Verifier == nil {
+		in.log.Error("emitter declares a signed source but no MAC verifier is bound; refusing",
+			"emitter", em.Name, "keyRef", em.Verify.KeyRef)
+		return false
+	}
+	sig, err := macverify.DecodeSignature(*em.Verify, r.Header.Get(em.Verify.Header))
+	if err != nil {
+		in.log.Info("emitter signature malformed", "emitter", em.Name, "error", err)
+		return false
+	}
+	ok, err := in.Verifier.Verify(r.Context(), *em.Verify, body, sig)
+	if err != nil {
+		in.log.Error("emitter signature could not be verified; refusing until the provider answers",
+			"emitter", em.Name, "keyRef", em.Verify.KeyRef, "error", err)
+		return false
+	}
+	if !ok {
+		in.log.Info("emitter signature rejected", "emitter", em.Name)
+	}
+	return ok
 }
 
 // explode turns one POST into events: webhook = the body as one payload;

@@ -29,6 +29,10 @@ WORKFLOW="rtr-configure"
 GROUPED_WORKFLOW="rtr-grouped"
 STORM_WORKFLOW="rtr-flap-remediate"
 BATCH_WORKFLOW="rtr-batch-remediate"
+# The NMS's signing key, created inside OpenBao and never exported (ADR-0164 D2).
+SIGNING_KEY="nms-webhook"
+BAOPORT="${STRATT_BAO_LPORT:-18200}"
+BAO_TOKEN="${STRATT_BAO_TOKEN:-stratt-dev-root}"
 # The plaintext half of the Emitter's declared tokenHash (estate/emitters/link-flaps.yaml). It is in
 # the open on purpose: it authenticates one POST to one throwaway kind cluster and grants nothing
 # else. A demo must never teach a reader to commit a token that means something.
@@ -325,11 +329,40 @@ if ondevice "show running-config" | grep -qF "10.96.0.0/24"; then
 fi
 BATCH_ID="batch-$(date +%s)-$$"
 
+# ── The NMS SIGNS what it sends, and Stratt checks it against a key it never holds (ADR-0164) ────
+#
+# THE KEY IS CREATED INSIDE OPENBAO AND NEVER EXPORTED. This script plays the NMS, so it asks
+# OpenBao for the MAC of its own body — which is exactly what a real source does with its copy of
+# the shared secret. What matters is the other end: the control plane verifies by asking the plugin
+# that holds the key, because §2.5 forbids it from holding one itself.
+echo "demo: seed the NMS signing key inside OpenBao (the control plane never reads it)"
+kc -n "$NS" port-forward svc/openbao "${BAOPORT}:8200" >/dev/null 2>&1 &
+BAO_PF=$!
+trap 'kill "$PF_PID" "$BAO_PF" 2>/dev/null || true' EXIT
+for _ in $(seq 1 30); do curl -fsS "http://127.0.0.1:${BAOPORT}/v1/sys/health" >/dev/null 2>&1 && break; sleep 1; done
+bao() { curl -fsS -H "X-Vault-Token: ${BAO_TOKEN}" "$@"; }
+# The Transit engine is not mounted in a dev OpenBao — mount it, idempotently.
+bao -X POST "http://127.0.0.1:${BAOPORT}/v1/sys/mounts/transit" -d '{"type":"transit"}' >/dev/null 2>&1 || true
+# exportable=false is the assertion, not decoration: nothing — including strattd — can read this
+# key back out of OpenBao. Verification therefore cannot be happening anywhere but inside it.
+bao -X POST "http://127.0.0.1:${BAOPORT}/v1/transit/keys/${SIGNING_KEY}" \
+    -d '{"exportable":false}' >/dev/null
+echo "  transit key ${SIGNING_KEY} exists, and exportable=false — nothing can read it back out"
+
+# sign returns the hex MAC OpenBao computes over exactly these bytes.
+sign() {
+    local b64 out
+    b64="$(printf '%s' "$1" | base64 -w0)"
+    out="$(bao -X POST "http://127.0.0.1:${BAOPORT}/v1/transit/hmac/${SIGNING_KEY}/sha2-256" \
+        -d "{\"input\":\"${b64}\"}" | jq -r '.data.hmac')"
+    # "vault:v1:<base64>" — the version prefix is Transit's, not the source's.
+    printf '%s' "${out##*:}" | base64 -d | od -An -tx1 | tr -d ' \n'
+}
+
 # One POST. Five link events, nested under report.linkEvents; `site` merged from the envelope, and
 # the envelope's `status` merged as `batchStatus` because every event carries a `status` of its own
 # — the collision ADR-0163 D3 refuses to resolve silently.
-code="$(curl -fsS -o /dev/null -w '%{http_code}' -X POST "${ROOT}/emitters/nms-batch" \
-    -H "X-Stratt-Emitter-Token: ${FLAP_TOKEN}" -H "Content-Type: application/json" -d '{
+BATCH_BODY='{
       "status":"open",
       "report":{
         "site":"lab-1",
@@ -340,8 +373,29 @@ code="$(curl -fsS -o /dev/null -w '%{http_code}' -X POST "${ROOT}/emitters/nms-b
           {"kind":"link.flap","port":"ge-0/0/3","status":"down"},
           {"kind":"link.flap","port":"ge-0/0/4","status":"down"},
           {"kind":"link.flap","port":"ge-0/0/5","status":"down"}
-        ]}}')"
-[ "$code" = "202" ] || { echo "FAIL: the batched report was not accepted (HTTP ${code})"; exit 1; }
+        ]}}'
+
+post_batch() {
+    curl -fsS -o /dev/null -w '%{http_code}' -X POST "${ROOT}/emitters/nms-batch" \
+        -H "X-Stratt-Emitter-Token: ${FLAP_TOKEN}" -H "Content-Type: application/json" \
+        -H "X-NMS-Signature: sha256=$2" --data-binary "$1" || true
+}
+
+# ── Refused first, so acceptance means something ─────────────────────────────────────────────────
+# A signature over DIFFERENT bytes must not authenticate these ones. This is the assertion that
+# makes the accepted case evidence rather than a coincidence: without it, a verifier that returned
+# true unconditionally would pass every other check in this section.
+tampered="${BATCH_BODY/lab-1/lab-9}"
+code="$(post_batch "$BATCH_BODY" "$(sign "$tampered")")"
+[ "$code" = "401" ] || {
+    echo "FAIL: a signature over different bytes was accepted (HTTP ${code}) — the body is not"
+    echo "      actually being verified, or it is being verified after something reshaped it"
+    exit 1; }
+echo "  a signature over different bytes is REFUSED (401)"
+
+code="$(post_batch "$BATCH_BODY" "$(sign "$BATCH_BODY")")"
+[ "$code" = "202" ] || { echo "FAIL: the correctly signed report was not accepted (HTTP ${code})"; exit 1; }
+echo "  the correctly signed report is accepted — verified against a key strattd never read"
 
 after=0
 for _ in $(seq 1 30); do

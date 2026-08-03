@@ -1488,6 +1488,26 @@ export interface components {
             tokenHash: string;
             explode?: components["schemas"]["EmitterExplode"];
             token?: components["schemas"]["EmitterToken"];
+            verify?: components["schemas"]["EmitterVerify"];
+        };
+        /** @description This source SIGNS its request body (ADR-0164 D2). keyRef is a COORDINATE and never material: the core cannot verify a MAC itself — that needs the shared secret, and ADR-0052 keeps credential material out of the control plane — so it hands the raw bytes and the coordinate to a provider holding the key, which answers yes or no. Absent, no signature is expected and the ingest path stays plugin-free. */
+        EmitterVerify: {
+            /** @description The header the signature arrives in, e.g. X-Hub-Signature-256. */
+            header: string;
+            /**
+             * @description The declared MAC. Required rather than inferred from the header name — inferring would be core learning one vendor's spelling again (§1.4).
+             * @enum {string}
+             */
+            algorithm: "hmac-sha256" | "hmac-sha512";
+            /**
+             * @description Encoding of the signature value. Default hex.
+             * @enum {string}
+             */
+            encoding?: "hex" | "base64";
+            /** @description Stripped before decoding, e.g. "sha256=". Required when declared, never merely trimmed — accepting a value without it would widen what is accepted past what the declaration says. */
+            prefix?: string;
+            /** @description The verification key BY COORDINATE, for the provider to resolve (§2.5). */
+            keyRef: string;
         };
         /** @description Where the caller presents its shared token (ADR-0164 D1). Absent, the default header X-Stratt-Emitter-Token. The trust model is unchanged either way: the declaration and the database hold only hex(sha256(token)) (§2.5) and the comparison is constant-time — a source sending its secret under its own header name (GitLab's X-Gitlab-Token, and a long tail of others) was unreachable only because core insisted on the name. */
         EmitterToken: {

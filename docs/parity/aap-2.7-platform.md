@@ -117,10 +117,14 @@ parity. It is **not a rulebook engine**. Gaps:
   `explode` for webhook-shaped sources, with `alertmanager` hardcoded;
   [ADR-0163](../adr/0163-one-post-many-events-and-the-shape-is-not-cores.md) makes the fan-out a
   declaration and takes the vendor's name out of core AND out of the published OpenAPI enum.
-  **What remains is authentication, and it is a real gap** (ADR-0163 D4): ingest authenticates one
-  way, a shared token in `X-Stratt-Emitter-Token`. Alertmanager can send that; GitHub, GitLab and
-  Stripe sign the body with an HMAC in their own header and cannot. So "any webhook source" means
-  "any that can send a shared token in a header we name" until that decision lands.
+  **Authentication was the remaining half and is now paid**
+  ([ADR-0164](../adr/0164-a-source-signs-and-the-core-does-not-hold-the-key.md)): the header a source
+  presents its token in is declared (D1 — GitLab's `X-Gitlab-Token` and the long tail behind it),
+  and a source that SIGNS its body is verified by delegating to the key's holder over the port (D2),
+  because the core may not hold the secret that would let it check a MAC itself (§2.5, ADR-0052).
+  **Still absent, deliberately**: timestamped anti-replay schemes (Stripe's `t=…,v1=…`), booked in
+  ADR-0164 D5 rather than approximated — and replay protection generally, which was absent before
+  this arc and remains so.
 - **Rulebook format** — a Trigger is `1 Emitter + 1 CEL → 1 target`; no ordered multi-rule ruleset.
   A PACKAGING difference rather than a capability gap: the engine evaluates every Trigger against
   every event and fires every match, which is what a ruleset does. AAP binds sources and rules in one

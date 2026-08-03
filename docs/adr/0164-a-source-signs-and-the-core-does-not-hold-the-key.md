@@ -1,6 +1,8 @@
 # ADR 0164 — A source signs, and the core does not hold the key
 
-- **Status:** **Proposed** (2026-08-03, steward). Charter review by hand — this session's rules bar
+- **Status:** **Accepted** (2026-08-03, steward) — **live-proven**: a signed report is verified
+  against a key held in OpenBao as `exportable: false`, which the control plane cannot read; one
+  changed byte is refused. Gated by `demo:network-device` and therefore by E2E-1. See Verification. Charter review by hand — this session's rules bar
   the subagent; §1/§1.4/§1.8/§2.5/§2 (vocabulary) answered inline. **No new runtime dependency**;
   one new capability class on the existing port.
 - **Date:** 2026-08-03
@@ -175,3 +177,49 @@ Not shippable on assertion. This ADR owes:
   against the request the port actually sends);
 - **live**: a real signed POST, verified against a key held in OpenBao that the control plane never
   reads, launching a Run — and the same POST with one byte of the body changed, refused.
+
+### All of it, paid (2026-08-03)
+
+`demos/network-device` gains the OpenBao plugin as its **MAC verifier** — not for certificates: the
+NMS signs its batched reports and the control plane checks them against a key it never holds. The
+signing key is created with `exportable: false`, so nothing (`strattd` included) can read it back
+out of OpenBao; verification therefore cannot be happening anywhere but inside it.
+`task demo:network-device:run` EXIT=0:
+
+```
+demo: seed the NMS signing key inside OpenBao (the control plane never reads it)
+  transit key nms-webhook exists, and exportable=false — nothing can read it back out
+  a signature over different bytes is REFUSED (401)
+  the correctly signed report is accepted — verified against a key strattd never read
+  one POST became five events and crossed the threshold — exactly ONE Run
+```
+
+**The refusal is asserted FIRST, and that ordering is the point.** A verifier that returned true
+unconditionally would pass every other line in that block; only the tampered case makes the accepted
+one evidence. The tamper changes one field of the body and signs THAT, so what is being caught is a
+body/signature mismatch rather than a missing header.
+
+**Falsified**, each mechanism removed in turn: verifying a re-serialized body instead of the raw
+bytes (D3), no provider bound degrading to unverified ingest, an unreachable provider treated as a
+pass, and verification skipped entirely for a signed Emitter. D1's three guards falsify too —
+ignoring the declared header, merely trimming the prefix rather than requiring it, and a declared
+header that widens acceptance instead of replacing the default.
+
+**The §2.5 property is asserted against the request the port actually sends**, not against the
+intention: the test reads back what crossed and checks it carries a key COORDINATE and an algorithm,
+with no field for material and nothing secret in it.
+
+### What building it found
+
+- **A declared prefix was merely trimmed, not required.** `strings.TrimPrefix` is a no-op when the
+  prefix is absent, so an Emitter declaring `"Bearer "` would have authenticated a caller that sent
+  a bare token — widening acceptance past what the declaration says, which is the exact property the
+  header rule exists to hold. Found by the test, fixed in the code.
+- **The ingest handler had no test at all**, which is how a hardcoded header survived this long in
+  the door that authenticates untrusted callers. It now takes its store and bus as interfaces so the
+  door itself is exercised.
+- **`WrapKey`/`UnwrapKey` are not actually served over the site relay.** The client has them and the
+  routing constants exist, but the far-end switch answers "unknown method". That is a pre-existing
+  gap in ADR-0100's cross-DC story rather than one this ADR introduced; it is recorded in
+  `siterelay/relay.go` and left alone, because whether an edge Site may verify against the hub's KMS
+  is an MF-C question deserving its own decision.

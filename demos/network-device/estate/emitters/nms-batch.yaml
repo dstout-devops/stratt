@@ -17,6 +17,21 @@ kind: webhook
 # hex(sha256("network-device-demo-not-a-secret")) — the same worthless demo token as link-flaps,
 # for the reason spelled out there.
 tokenHash: 43617af80f821a4070d15fe100b0205e16d45eff680b6a6cb9d92b81918fcf91
+# ── AND IT SIGNS WHAT IT SENDS (ADR-0164 D2) ────────────────────────────────────────────────────
+#
+# A shared token in a header proves the CALLER knows a secret. A signature proves the BODY is the
+# one that caller sent — a distinction that matters for a source whose reports drive convergence.
+#
+# `keyRef` is a COORDINATE and never material. The control plane cannot verify this itself: that
+# needs the shared secret, and ADR-0052 keeps credential material out of core. So it hands the raw
+# bytes and this name to a provider that holds the key, and gets back yes or no. The key never
+# leaves the KMS — ADR-0100's argument with one noun changed.
+verify:
+  header: X-NMS-Signature
+  algorithm: hmac-sha256
+  encoding: hex
+  prefix: "sha256="
+  keyRef: nms-webhook
 explode:
   # One event per entry. A batch of five link-flaps is five events, so the Trigger's `count` sees
   # five — which is what makes ONE POST able to satisfy a storm threshold.

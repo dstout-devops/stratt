@@ -40,6 +40,36 @@ func tokenToWire(in *types.TokenSpec) *EmitterToken {
 	return out
 }
 
+func verifyFromWire(in *EmitterVerify) *types.VerifySpec {
+	if in == nil {
+		return nil
+	}
+	out := &types.VerifySpec{Header: in.Header, Algorithm: string(in.Algorithm), KeyRef: in.KeyRef}
+	if in.Encoding != nil {
+		out.Encoding = string(*in.Encoding)
+	}
+	if in.Prefix != nil {
+		out.Prefix = *in.Prefix
+	}
+	return out
+}
+
+func verifyToWire(in *types.VerifySpec) *EmitterVerify {
+	if in == nil {
+		return nil
+	}
+	out := &EmitterVerify{Header: in.Header, Algorithm: EmitterVerifyAlgorithm(in.Algorithm), KeyRef: in.KeyRef}
+	if in.Encoding != "" {
+		e := EmitterVerifyEncoding(in.Encoding)
+		out.Encoding = &e
+	}
+	if in.Prefix != "" {
+		p := in.Prefix
+		out.Prefix = &p
+	}
+	return out
+}
+
 func explodeFromWire(in *EmitterExplode) *types.ExplodeSpec {
 	if in == nil {
 		return nil

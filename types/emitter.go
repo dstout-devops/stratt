@@ -37,6 +37,40 @@ type Emitter struct {
 	// Token says WHERE the caller presents its shared token (ADR-0164 D1). Nil ⇒ the
 	// default header, which is every Emitter that shipped before this field existed.
 	Token *TokenSpec `json:"token,omitempty"`
+	// Verify declares that this source SIGNS its body (ADR-0164 D2). Nil ⇒ no signature is
+	// expected, and the ingest path stays plugin-free — the hop exists only where a
+	// signature does.
+	Verify *VerifySpec `json:"verify,omitempty"`
+}
+
+// Signature encodings a source may use for its MAC.
+const (
+	SignatureHex    = "hex"
+	SignatureBase64 = "base64"
+)
+
+// VerifySpec declares how a source signs its request body.
+//
+// EVERY FIELD IS DATA, and a signature scheme is exactly the kind of thing that can be: a
+// closed set of choices — which header, which MAC, which encoding, what prefix — describable
+// without an expression language (§1). What it is NOT is a place to put a template.
+//
+// KeyRef is a COORDINATE and never material (§2.5). The core cannot verify a MAC itself and
+// does not try: it hands the bytes and the coordinate to a provider that holds the key
+// (ADR-0164 D2), the way ADR-0100 hands a DEK to a KMS rather than holding the KEK.
+type VerifySpec struct {
+	// Header the signature arrives in, e.g. X-Hub-Signature-256. Required.
+	Header string `json:"header"`
+	// Algorithm is the declared MAC, e.g. hmac-sha256. Required — inferring it from the
+	// header name would be core learning one vendor's spelling again (§1.4).
+	Algorithm string `json:"algorithm"`
+	// Encoding of the signature value: hex (default) or base64.
+	Encoding string `json:"encoding,omitempty"`
+	// Prefix stripped before decoding, e.g. "sha256=". Required when declared, never merely
+	// trimmed — see DecodeSignature.
+	Prefix string `json:"prefix,omitempty"`
+	// KeyRef names the verification key by coordinate, for the provider to resolve.
+	KeyRef string `json:"keyRef"`
 }
 
 // DefaultTokenHeader is where a caller presents its token when the Emitter declares nothing —

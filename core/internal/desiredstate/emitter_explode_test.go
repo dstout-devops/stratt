@@ -115,3 +115,63 @@ func TestTheVendorNameIsNoLongerAKind(t *testing.T) {
 		t.Errorf("the offered set must be the two real kinds: %v", err)
 	}
 }
+
+// ── ADR-0164 D2 · a signature declaration that cannot be acted on is worse than none ──────────
+//
+// Checked at PARSE, because the failure mode is an estate that believes it authenticates and does
+// not. Every rule here fails a FILE rather than a 3am POST.
+
+func TestVerifyNeedsAHeaderAnAlgorithmAndACoordinate(t *testing.T) {
+	full := func(mut func(*types.VerifySpec)) error {
+		v := &types.VerifySpec{Header: "X-Hub-Signature-256", Algorithm: "hmac-sha256", KeyRef: "gh"}
+		mut(v)
+		return ValidateEmitter(webhookEmitter(func(e *types.Emitter) { e.Verify = v }))
+	}
+	if err := full(func(*types.VerifySpec) {}); err != nil {
+		t.Fatalf("a complete declaration must validate: %v", err)
+	}
+	if err := full(func(v *types.VerifySpec) { v.Header = "" }); err == nil {
+		t.Error("verify with no header must be refused")
+	}
+	if err := full(func(v *types.VerifySpec) { v.KeyRef = "" }); err == nil {
+		t.Error("verify with no keyRef must be refused")
+	}
+	// The algorithm is REQUIRED rather than inferred: deriving it from the header name would be
+	// core learning one vendor's spelling again, which is the §1.4 defect ADR-0163 removed.
+	err := full(func(v *types.VerifySpec) { v.Algorithm = "" })
+	if err == nil || !strings.Contains(err.Error(), "algorithm") {
+		t.Errorf("verify with no algorithm must be refused: %v", err)
+	}
+	if err := full(func(v *types.VerifySpec) { v.Algorithm = "md5" }); err == nil {
+		t.Error("an algorithm core will not ask for must be refused at declaration, not at a POST")
+	}
+	if err := full(func(v *types.VerifySpec) { v.Encoding = "rot13" }); err == nil {
+		t.Error("an encoding that is not hex or base64 must be refused")
+	}
+}
+
+// The keyRef refusal has to teach, because "why can't I just put the secret here?" is the
+// question every adopter will have (§2.5).
+func TestTheKeyRefRefusalExplainsWhyItIsACoordinate(t *testing.T) {
+	err := ValidateEmitter(webhookEmitter(func(e *types.Emitter) {
+		e.Verify = &types.VerifySpec{Header: "X-Sig", Algorithm: "hmac-sha256"}
+	}))
+	if err == nil {
+		t.Fatal("expected a refusal")
+	}
+	for _, want := range []string{"COORDINATE", "material"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the refusal must say why, not just what; missing %q: %v", want, err)
+		}
+	}
+}
+
+// Nothing POSTs to a stream Emitter, so a signature declared on one describes an event that
+// cannot happen. Refused where it is written (§1.8).
+func TestAStreamEmitterCannotDeclareASignature(t *testing.T) {
+	err := ValidateEmitter(types.Emitter{Name: "salt", Kind: types.EmitterStream,
+		Verify: &types.VerifySpec{Header: "X-Sig", Algorithm: "hmac-sha256", KeyRef: "k"}})
+	if err == nil {
+		t.Fatal("a stream emitter declaring verify must be refused")
+	}
+}

@@ -65,6 +65,7 @@ const (
 	PluginService_Subscribe_FullMethodName   = "/stratt.plugin.v1.PluginService/Subscribe"
 	PluginService_WrapKey_FullMethodName     = "/stratt.plugin.v1.PluginService/WrapKey"
 	PluginService_UnwrapKey_FullMethodName   = "/stratt.plugin.v1.PluginService/UnwrapKey"
+	PluginService_VerifyMAC_FullMethodName   = "/stratt.plugin.v1.PluginService/VerifyMAC"
 )
 
 // PluginServiceClient is the client API for PluginService service.
@@ -101,6 +102,16 @@ type PluginServiceClient interface {
 	// localCustodian floor means this port is NEVER required to encrypt state.
 	WrapKey(ctx context.Context, in *WrapKeyRequest, opts ...grpc.CallOption) (*WrapKeyResponse, error)
 	UnwrapKey(ctx context.Context, in *UnwrapKeyRequest, opts ...grpc.CallOption) (*UnwrapKeyResponse, error)
+	// MACVerifier (ADR-0164 D2): does this signature match this body, under a key the CORE
+	// MUST NOT HOLD? Advertised via Manifest.capabilities "macverifier" — a separate class
+	// from keycustodian, so a KMS that wraps keys but cannot HMAC simply does not claim it.
+	//
+	// WHY THIS IS A PORT CALL AND NOT A FUNCTION IN CORE: verifying an inbound webhook
+	// signature requires the shared secret itself, and ADR-0052 states as a property it
+	// explicitly declined to weaken that the core never holds credential material, even
+	// transiently. The key stays in the KMS and the answer comes back as a boolean —
+	// ADR-0100's sentence with one noun changed.
+	VerifyMAC(ctx context.Context, in *VerifyMACRequest, opts ...grpc.CallOption) (*VerifyMACResponse, error)
 }
 
 type pluginServiceClient struct {
@@ -256,6 +267,16 @@ func (c *pluginServiceClient) UnwrapKey(ctx context.Context, in *UnwrapKeyReques
 	return out, nil
 }
 
+func (c *pluginServiceClient) VerifyMAC(ctx context.Context, in *VerifyMACRequest, opts ...grpc.CallOption) (*VerifyMACResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(VerifyMACResponse)
+	err := c.cc.Invoke(ctx, PluginService_VerifyMAC_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // PluginServiceServer is the server API for PluginService service.
 // All implementations must embed UnimplementedPluginServiceServer
 // for forward compatibility.
@@ -290,6 +311,16 @@ type PluginServiceServer interface {
 	// localCustodian floor means this port is NEVER required to encrypt state.
 	WrapKey(context.Context, *WrapKeyRequest) (*WrapKeyResponse, error)
 	UnwrapKey(context.Context, *UnwrapKeyRequest) (*UnwrapKeyResponse, error)
+	// MACVerifier (ADR-0164 D2): does this signature match this body, under a key the CORE
+	// MUST NOT HOLD? Advertised via Manifest.capabilities "macverifier" — a separate class
+	// from keycustodian, so a KMS that wraps keys but cannot HMAC simply does not claim it.
+	//
+	// WHY THIS IS A PORT CALL AND NOT A FUNCTION IN CORE: verifying an inbound webhook
+	// signature requires the shared secret itself, and ADR-0052 states as a property it
+	// explicitly declined to weaken that the core never holds credential material, even
+	// transiently. The key stays in the KMS and the answer comes back as a boolean —
+	// ADR-0100's sentence with one noun changed.
+	VerifyMAC(context.Context, *VerifyMACRequest) (*VerifyMACResponse, error)
 	mustEmbedUnimplementedPluginServiceServer()
 }
 
@@ -329,6 +360,9 @@ func (UnimplementedPluginServiceServer) WrapKey(context.Context, *WrapKeyRequest
 }
 func (UnimplementedPluginServiceServer) UnwrapKey(context.Context, *UnwrapKeyRequest) (*UnwrapKeyResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method UnwrapKey not implemented")
+}
+func (UnimplementedPluginServiceServer) VerifyMAC(context.Context, *VerifyMACRequest) (*VerifyMACResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method VerifyMAC not implemented")
 }
 func (UnimplementedPluginServiceServer) mustEmbedUnimplementedPluginServiceServer() {}
 func (UnimplementedPluginServiceServer) testEmbeddedByValue()                       {}
@@ -496,6 +530,24 @@ func _PluginService_UnwrapKey_Handler(srv interface{}, ctx context.Context, dec 
 	return interceptor(ctx, in, info, handler)
 }
 
+func _PluginService_VerifyMAC_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(VerifyMACRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PluginServiceServer).VerifyMAC(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PluginService_VerifyMAC_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PluginServiceServer).VerifyMAC(ctx, req.(*VerifyMACRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // PluginService_ServiceDesc is the grpc.ServiceDesc for PluginService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -522,6 +574,10 @@ var PluginService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "UnwrapKey",
 			Handler:    _PluginService_UnwrapKey_Handler,
+		},
+		{
+			MethodName: "VerifyMAC",
+			Handler:    _PluginService_VerifyMAC_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{
