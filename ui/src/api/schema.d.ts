@@ -2076,6 +2076,14 @@ export interface components {
             context?: {
                 [key: string]: unknown;
             };
+            /**
+             * @description The View this launch targets, inherited by every actuation Step that names none of its own (ADR-0160 D3). It is AAP's `ask_inventory_on_launch`: take a working recipe and point it at a different target set, without editing the estate.
+             *
+             *     AUTHORIZATION IS AGAINST WHAT YOU SUPPLIED. The launch already requires `runner` on every actuation Step's View (ADR-0028); a supplied View is checked the same way, so you may run a recipe against any View you could have launched it against directly. That is AAP's own rule (`use` on the inventory) in this repo's existing vocabulary, and it is why this needs no new grant.
+             *
+             *     Omitted ⇒ each Step's declared View, which is every launch that exists today. A Step that names its own View is pinned by the estate and is NOT overridden — supplying one here reaches only the Steps that inherit.
+             */
+            viewName?: string;
         };
         /** @description A Temporal-backed DAG of Steps with Gates (charter §2, ADR-0011). CaC-only in v1. */
         Workflow: {

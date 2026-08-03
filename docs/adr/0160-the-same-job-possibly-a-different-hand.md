@@ -1,6 +1,7 @@
 # ADR 0160 — The same job, possibly a different hand: launch-time parity with AAP
 
-- **Status:** **Proposed** (2026-08-03, steward). Charter review by hand — this session's rules bar
+- **Status:** **Proposed** (2026-08-03, steward) — **D1/D2/D3 implemented and unit-proven; D4
+  unimplemented; the LIVE proof is still owed.** Promotion waits on it, per the standing rule. Charter review by hand — this session's rules bar
   the subagent; §1.2/§1.6/§2.2/§2.4/§2.5 answered inline. **No new runtime dependency.**
 - **Date:** 2026-08-03
 - **Deciders:** steward
@@ -169,3 +170,31 @@ Not shippable on assertion — the standing rule here, and this arc has paid for
 - **Live**: a demo assertion that a launch-supplied `limit` ACTUALLY NARROWS the target set — the
   Run touches fewer hosts, observed from the Run's own per-target results, not from the request.
   "The envelope holds" is exactly the class of claim that has been false when executed.
+
+### Landed so far (2026-08-03) — D1, D2, D3; NOT D4; NOT the live proof
+
+**D2** derives all sixteen `ask_*` booleans from the declared inputs and their bindings. Three used
+to be hardcoded, two of them permanently false. Unit-proven across declared-and-bound,
+bound-not-declared, declared-not-bound, nested (`scm.ref`), the non-launch namespaces, and the union
+across a DAG's Steps.
+
+**Found while implementing, and preserved rather than resolved:** the two surfaces DISAGREE about
+`ask_variables_on_launch`. `job_templates` merges untyped extra_vars when a Workflow declares no
+inputs, so its door always accepts them; `workflow_job_templates` ties them to the survey and is
+false without `inputs`. Both are shipped and both are tested. Unifying them is a behaviour change on
+a compat surface and belongs in its own decision — it is written into `prompts.go` rather than left
+for the next reader to rediscover.
+
+**D3** accepts `viewName` on the direct launch door, and the grant is checked against WHAT WAS
+SUPPLIED. The body is now decoded BEFORE the authorization call, and a guard pins that ordering:
+authorizing first and reading the body after would check the grant on a View the caller did not name.
+The remediation door REFUSES a supplied View — its View comes from the Baseline, and two sources for
+one fact would need a precedence rule (§2.4).
+
+**D4 is not implemented.** `ask_credential_on_launch` therefore reports false, with a test pinning
+that ordering: a launch-supplied credentialRef today would bypass the §2.5 use-check, which is
+authorized against the Step's DECLARED refs. Advertising the prompt before the permitted set exists
+would invite exactly the escalation D4 is meant to make safe.
+
+**The live proof is owed and is not claimed.** `task ci` EXIT=0 is not the same as a Run whose target
+set actually narrowed, and this arc has now been wrong about that distinction six times.

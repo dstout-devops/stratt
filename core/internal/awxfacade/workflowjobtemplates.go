@@ -74,15 +74,12 @@ func workflowToWFJT(wf types.Workflow) map[string]any {
 	// contract.ResolveLaunchInputs then refuses — advertising a door that is closed.
 	asksVars := len(wf.Inputs) > 0
 	out := map[string]any{
-		"id":                      id,
-		"type":                    "workflow_job_template",
-		"name":                    wf.Name,
-		"description":             fmt.Sprintf("Stratt Workflow %q (%d steps)", wf.Name, len(wf.Steps)),
-		"inventory":               nil, // a DAG has no single View; each actuation Step names its own
-		"ask_variables_on_launch": asksVars,
-		"ask_limit_on_launch":     false,
-		"ask_inventory_on_launch": false,
-		"url":                     jt("/api/v2/workflow_job_templates/%d/", id),
+		"id":          id,
+		"type":        "workflow_job_template",
+		"name":        wf.Name,
+		"description": fmt.Sprintf("Stratt Workflow %q (%d steps)", wf.Name, len(wf.Steps)),
+		"inventory":   nil, // a DAG has no single View; each actuation Step names its own
+		"url":         jt("/api/v2/workflow_job_templates/%d/", id),
 		"related": map[string]any{
 			"launch":         jt("/api/v2/workflow_job_templates/%d/launch/", id),
 			"workflow_nodes": jt("/api/v2/workflow_job_templates/%d/workflow_nodes/", id),
@@ -98,6 +95,11 @@ func workflowToWFJT(wf types.Workflow) map[string]any {
 		out["extra_vars"] = json.RawMessage(wf.Inputs)
 	} else {
 		out["survey_enabled"] = false
+	}
+	// DERIVED (ADR-0160 D2), unioned across the DAG's Steps. `asksVars` used to be the only honest
+	// one of three booleans here; the other two were permanently false while the mechanism worked.
+	for k, v := range askFieldsForWorkflow(wf) {
+		out[k] = v
 	}
 	return out
 }

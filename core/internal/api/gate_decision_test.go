@@ -3,6 +3,7 @@ package api
 import (
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 )
@@ -74,5 +75,42 @@ func TestGateDecisionAcceptsTheShapesItsCallersSend(t *testing.T) {
 				t.Fatalf("a valid decision was refused: %s → %s", body, rr.Body.String())
 			}
 		})
+	}
+}
+
+// ── ADR-0160 D3 · a View supplied at a direct launch ─────────────────────────────────────────
+//
+// THE ORDER IS THE DECISION. A launch may supply a View that actuation Steps naming none of their
+// own inherit, and the `runner` grant is checked against WHAT WAS SUPPLIED. Authorizing first and
+// reading the body after would check the grant on a View the caller did not name — the shape of
+// every authorization bypass ever written.
+//
+// This reads the handler's source because the alternative needs a Store and an Authorizer, which
+// makes the test Postgres-gated and therefore SKIPPED in `task ci` — which is how this repo's inert
+// mechanisms have repeatedly stayed green (the same reasoning ADR-0118's resolveFindingLaunch split
+// records).
+func TestTheSuppliedViewIsDecodedBeforeItIsAuthorized(t *testing.T) {
+	src, err := os.ReadFile("server.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(src)
+	i := strings.Index(text, "func (s *Server) StartWorkflowRun(")
+	if i < 0 {
+		t.Fatal("the direct launch door is gone — this guard has lost its subject")
+	}
+	body := text[i : i+2000]
+
+	decode := strings.Index(body, "decodeLaunchBody")
+	authz := strings.Index(body, "s.authorizeLaunch")
+	if decode < 0 || authz < 0 {
+		t.Fatal("the direct launch door no longer both decodes and authorizes")
+	}
+	if decode > authz {
+		t.Error("the launch body is decoded AFTER the authorization check, so a supplied viewName " +
+			"is not what the `runner` grant was checked against (ADR-0160 D3)")
+	}
+	if !strings.Contains(body, "authorizeLaunch(w, r, wf, suppliedView)") {
+		t.Error("the grant must be checked against the SUPPLIED View, not against \"\"")
 	}
 }

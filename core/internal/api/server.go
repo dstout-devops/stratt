@@ -2118,8 +2118,16 @@ func (s *Server) StartWorkflowRun(w http.ResponseWriter, r *http.Request, name s
 		s.fail(w, err)
 		return
 	}
-	// A direct launch supplies no View to inherit — every actuation Step must name its own.
-	principal, ok := s.authorizeLaunch(w, r, wf, "")
+	// DECODED BEFORE AUTHORIZING, and the order is the decision (ADR-0160 D3). A launch may supply a
+	// View that every actuation Step naming none of its own inherits — AAP's
+	// `ask_inventory_on_launch` — and the `runner` grant is then checked against WHAT WAS SUPPLIED.
+	// Authorizing first and reading the body after would check the grant on a View the caller did not
+	// name, which is the shape of every authorization bypass ever written.
+	inputs, changeContext, suppliedView, ok2 := decodeLaunchBody(w, r)
+	if !ok2 {
+		return
+	}
+	principal, ok := s.authorizeLaunch(w, r, wf, suppliedView)
 	if !ok {
 		return
 	}
@@ -2130,11 +2138,7 @@ func (s *Server) StartWorkflowRun(w http.ResponseWriter, r *http.Request, name s
 	// Steps to decide on. They shared one untyped bag until the split, which is why the inputs
 	// schema could not be closed — a policy-gated Workflow's `environment` was
 	// indistinguishable from a stray parameter.
-	inputs, changeContext, ok2 := decodeLaunchBody(w, r)
-	if !ok2 {
-		return
-	}
-	s.launchWorkflow(w, r, wf, principal, inputs, changeContext, "", "")
+	s.launchWorkflow(w, r, wf, principal, inputs, changeContext, "", suppliedView)
 }
 
 // authorizeLaunch enforces View-scoped execution authz (§2.5, ADR-0028): the launching
@@ -2180,14 +2184,14 @@ func (s *Server) authorizeLaunch(w http.ResponseWriter, r *http.Request, wf type
 // decodeLaunchBody reads the {inputs, context} launch body (ADR-0118 D4). An unknown
 // top-level field is a 400, not a silent no-op — sending `input:` and having it ignored is
 // exactly the class of quiet mismatch this seam exists to remove.
-func decodeLaunchBody(w http.ResponseWriter, r *http.Request) (inputs, changeContext map[string]any, ok bool) {
+func decodeLaunchBody(w http.ResponseWriter, r *http.Request) (inputs, changeContext map[string]any, viewName string, ok bool) {
 	var body WorkflowLaunch
 	if r.Body != nil {
 		dec := json.NewDecoder(r.Body)
 		dec.DisallowUnknownFields()
 		if err := dec.Decode(&body); err != nil && !errors.Is(err, io.EOF) {
 			writeErr(w, http.StatusBadRequest, "decode launch body: "+err.Error())
-			return nil, nil, false
+			return nil, nil, "", false
 		}
 	}
 	if body.Inputs != nil {
@@ -2196,7 +2200,10 @@ func decodeLaunchBody(w http.ResponseWriter, r *http.Request) (inputs, changeCon
 	if body.Context != nil {
 		changeContext = *body.Context
 	}
-	return inputs, changeContext, true
+	if body.ViewName != nil {
+		viewName = strings.TrimSpace(*body.ViewName)
+	}
+	return inputs, changeContext, viewName, true
 }
 
 // launchWorkflow is THE server-side launch sequence, shared by the direct door
@@ -2296,8 +2303,17 @@ func (s *Server) RemediateFinding(w http.ResponseWriter, r *http.Request, id str
 	if !ok {
 		return
 	}
-	supplied, changeContext, ok := decodeLaunchBody(w, r)
+	// The remediation door ignores a supplied View: its View comes from the Baseline that raised the
+	// Finding (fl.ViewName), and accepting a second source for one fact would need a precedence rule
+	// §2.4 refuses. A caller who wants a different target set launches directly.
+	supplied, changeContext, remViewName, ok := decodeLaunchBody(w, r)
 	if !ok {
+		return
+	}
+	if remViewName != "" {
+		writeErr(w, http.StatusBadRequest, "viewName is not accepted on a remediation launch: the "+
+			"View comes from the Baseline that raised this Finding, and two sources for one fact "+
+			"would need a precedence rule (§2.4). Launch the Workflow directly to choose a View")
 		return
 	}
 	merged, clashes := mergeRemediationInputs(fl.Params, supplied)
