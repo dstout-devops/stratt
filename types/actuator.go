@@ -38,6 +38,19 @@ type Actuator struct {
 	// ansible content is selected — two declarations differing only in their EE image,
 	// so the spine never reads a tool's params to pick an image).
 	Image string `json:"image,omitempty"`
+	// Images is the PERMITTED SET a launch may select from (ADR-0160 D4) — AAP's
+	// `ask_execution_environment_on_launch`, expressed as an envelope rather than a free choice.
+	//
+	// IT DOES NOT WEAKEN ADR-0117 D3a. D3a's claim is that the IMAGE IS THE CONTENT BOUNDARY and a
+	// Step selects content by selecting an Actuator — not that the boundary is a single value. A
+	// declared set is still the estate deciding what content is permissible; the launcher chooses
+	// only among images an author already reviewed, and anything outside the set is refused. The
+	// deprecated `eeImage` param is NOT coming back: that was a free-form field in a tool's params,
+	// which is a different thing entirely.
+	//
+	// Empty ⇒ no choice is offered and `Image` is the only content this Actuator runs, which is
+	// every Actuator that exists today.
+	Images []string `json:"images,omitempty"`
 	// ContentDir is the TOOL-CONTENT root this Actuator runs, declared as a path relative to
 	// the estate root (ADR-0134 D2) — for ansible, one project: playbooks, roles/, group_vars/.
 	// The estate load resolves it into Content below; nothing at run time reads a filesystem.

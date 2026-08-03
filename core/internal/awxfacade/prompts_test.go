@@ -88,12 +88,42 @@ func TestEveryAskFieldIsPublishedEvenWhenFalse(t *testing.T) {
 // credentialRef today would bypass the §2.5 use-check, which is authorized against the Step's
 // DECLARED refs — so advertising the prompt would invite exactly the escalation D4 exists to make
 // safe. This test is the guard on that ordering.
-func TestCredentialIsNotAdvertisedUntilItIsSafe(t *testing.T) {
-	wf, st := wfWith(`{"properties":{"cred":{"type":"string"}}}`,
-		map[string]any{"connection": map[string]any{"credentialRef": "{{.launch.cred}}"}})
+func TestCredentialIsAdvertisedOnlyWhenTheEstateDeclaredAChoice(t *testing.T) {
+	// One ref is a declaration, not a choice — there is nothing to select between.
+	wf, st := wfWith("", nil)
+	st.CredentialRefs = []string{"only-one"}
 	if askFields(wf, st, true)["ask_credential_on_launch"] != false {
-		t.Error("a launch-bound credentialRef must NOT be advertised: the use-check is against the " +
-			"Step's declared refs, so the prompt would be an authorization bypass (ADR-0160 D4)")
+		t.Error("a single declared credentialRef offers no selection")
+	}
+	// Two or more IS a choice: the launch narrows, and the §2.5 use-check still runs per survivor.
+	st.CredentialRefs = []string{"prod", "dev"}
+	if askFields(wf, st, true)["ask_credential_on_launch"] != true {
+		t.Error("a Step declaring several refs offers a launch-time selection (ADR-0160 D4)")
+	}
+	// A launch-BOUND credentialRef is still not a prompt: binding it would put the value outside the
+	// declared set the §2.5 check is authorized against.
+	wf2, st2 := wfWith(`{"properties":{"cred":{"type":"string"}}}`,
+		map[string]any{"connection": map[string]any{"credentialRef": "{{.launch.cred}}"}})
+	if askFields(wf2, st2, true)["ask_credential_on_launch"] != false {
+		t.Error("a bound credentialRef is not the mechanism: D4 selects from a DECLARED set")
+	}
+}
+
+// The execution environment is advertised exactly when the Actuator declares a permitted set.
+func TestExecutionEnvironmentIsAdvertisedFromThePermittedSet(t *testing.T) {
+	prev := actuatorImages
+	t.Cleanup(func() { actuatorImages = prev })
+
+	wf, st := wfWith("", nil)
+	st.Actuator = "ansible-apache"
+
+	actuatorImages = func(string) []string { return nil }
+	if askFields(wf, st, true)["ask_execution_environment_on_launch"] != false {
+		t.Error("an Actuator declaring no `images` offers no choice — ADR-0117 D3a's single image")
+	}
+	actuatorImages = func(string) []string { return []string{"stratt-ee-crypto:dev"} }
+	if askFields(wf, st, true)["ask_execution_environment_on_launch"] != true {
+		t.Error("a declared permitted set IS a launch-time choice (ADR-0160 D4)")
 	}
 }
 

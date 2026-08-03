@@ -54,10 +54,11 @@ var promptableParams = map[string]string{
 // extra_vars as its ANSWERS whenever one is declared, whether or not a Step happens to bind a given
 // question. The truth condition is "the door accepts them", which is `len(wf.Inputs) > 0`.
 //
-// `credential` is deliberately absent too, and stays false until ADR-0160 D4 ships the declared
-// permitted set. A launch-supplied credentialRef today would bypass the §2.5 use-check, which is
-// authorized against the Step's DECLARED refs — advertising a prompt for it would invite exactly
-// the escalation D4 exists to make safe.
+// `credential` and `execution_environment` are absent from the map for a different reason: they are
+// not bindings at all. They are true when the ESTATE DECLARED A CHOICE (ADR-0160 D4) — more than one
+// credentialRef on the Step, or a non-empty `images` on the Actuator — and the launch selects within
+// it. Both gates survive: membership is checked at the door, and the §2.5 `user` check still runs
+// per credential.
 
 // launchToken matches `{{.launch.<name>}}` — the ONLY binding namespace that makes a value
 // launch-supplied. `{{.event.x}}` and `{{.steps.x}}` are bound from elsewhere and are not prompts.
@@ -157,6 +158,12 @@ func askFields(wf types.Workflow, step types.Step, acceptsVars bool) map[string]
 	// A View supplied at launch is a capability of the DOOR, not of a binding (ADR-0160 D3): any
 	// Workflow whose actuation Steps inherit their View can be pointed at a different one.
 	on["inventory"] = inheritsView(wf)
+	// D4 · these are true exactly when the ESTATE declared a choice. A Step with two or more
+	// credentialRefs offers a selection (the launch narrows); an Actuator with a non-empty `images`
+	// offers an execution environment. Neither is a binding — the launcher picks from a set an
+	// author reviewed, which is AAP's own shape (an admin enables prompting, RBAC bounds it).
+	on["credential"] = len(step.CredentialRefs) > 1
+	on["execution_environment"] = actuatorOffersImages(step.Actuator)
 
 	out := map[string]any{}
 	for _, f := range []string{
@@ -205,4 +212,20 @@ func askFieldsForWorkflow(wf types.Workflow) map[string]any {
 		return askFields(wf, types.Step{}, len(wf.Inputs) > 0)
 	}
 	return out
+}
+
+// actuatorOffersImages reports whether an Actuator declares a permitted image set a launch may
+// select from (ADR-0160 D4).
+//
+// A PACKAGE-LEVEL HOOK rather than a Store read, because this package renders and does not query:
+// facade.go injects the lookup it already holds. Nil ⇒ no Actuator information available, so no
+// choice is advertised — which is the safe direction: under-reporting a prompt costs a caller a
+// round-trip, over-reporting it costs them a 400 they cannot diagnose.
+var actuatorImages func(name string) []string
+
+func actuatorOffersImages(name string) bool {
+	if actuatorImages == nil || name == "" {
+		return false
+	}
+	return len(actuatorImages(name)) > 0
 }

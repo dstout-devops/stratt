@@ -55,6 +55,11 @@ var TaskQueue = "stratt-runs"
 // it is empty only for Action runs. Slices > 1 partitions the target set across
 // that many parallel K8s Jobs.
 type RunInput struct {
+	// Image is a launch-SELECTED execution image, valid only when it is a member of the Actuator's
+	// declared permitted set (ADR-0160 D4). Empty ⇒ the Actuator's own `image`, which is every Run
+	// that exists today. Membership is checked at the DOOR, before the Run is created, so an
+	// unpermitted image is a 400 rather than a Run that fails two minutes in.
+	Image string
 	// GroupBy partitions the resolved targets into named groups (ADR-0161). Carried on the RunInput
 	// rather than read from the Actuator's params because the CORE resolves membership against the
 	// graph, and core reading a tool's params by name to do so is the §1.4 trap ADR-0134 names.
@@ -1727,7 +1732,11 @@ func (a *Activities) executeJobPlugin(ctx context.Context, in RunInput, slice in
 		// ZERO ansible awareness in the spine (§1.4). Empty ⇒ the dispatcher's global
 		// default, unchanged. Omitting this line was the reason `params.eeImage` looked
 		// honored and was not (ADR-0117 D3a's correction); executeMCP always set it.
-		Image: pa.Image,
+		// The launch-selected image when one was chosen from the Actuator's declared permitted set
+		// (ADR-0160 D4), else the Actuator's own. The DOOR already refused anything outside the
+		// set; this line only prefers the choice, and a second membership check here would be a
+		// second home for the rule.
+		Image: firstNonEmpty(in.Image, pa.Image),
 	}
 
 	// Bridge: the dispatcher streams decoded ApplyResponses onto ch (folding nothing,
@@ -2375,6 +2384,17 @@ func noticeKindForRun(s types.RunStatus) string {
 		return types.NoticeRunFailed
 	case types.RunCanceled:
 		return types.NoticeRunCanceled
+	}
+	return ""
+}
+
+// firstNonEmpty returns the first non-empty string, used where a launch-time selection overrides a
+// declaration that remains the default.
+func firstNonEmpty(vs ...string) string {
+	for _, v := range vs {
+		if v != "" {
+			return v
+		}
 	}
 	return ""
 }

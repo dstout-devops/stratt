@@ -2123,8 +2123,18 @@ func (s *Server) StartWorkflowRun(w http.ResponseWriter, r *http.Request, name s
 	// `ask_inventory_on_launch` — and the `runner` grant is then checked against WHAT WAS SUPPLIED.
 	// Authorizing first and reading the body after would check the grant on a View the caller did not
 	// name, which is the shape of every authorization bypass ever written.
-	inputs, changeContext, suppliedView, ok2 := decodeLaunchBody(w, r)
+	inputs, changeContext, suppliedView, image, credRefs, ok2 := decodeLaunchBody(w, r)
 	if !ok2 {
+		return
+	}
+	// D4 · the estate's permitted sets, checked at the DOOR — before a Run exists, so an
+	// unpermitted choice is a 400 naming the set rather than a Run that dies in a pod.
+	if err := s.checkPermittedImage(r.Context(), wf, image); err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if err := s.checkPermittedCredentials(wf, credRefs); err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	principal, ok := s.authorizeLaunch(w, r, wf, suppliedView)
@@ -2138,7 +2148,7 @@ func (s *Server) StartWorkflowRun(w http.ResponseWriter, r *http.Request, name s
 	// Steps to decide on. They shared one untyped bag until the split, which is why the inputs
 	// schema could not be closed — a policy-gated Workflow's `environment` was
 	// indistinguishable from a stray parameter.
-	s.launchWorkflow(w, r, wf, principal, inputs, changeContext, "", suppliedView)
+	s.launchWorkflow(w, r, wf, principal, inputs, changeContext, "", suppliedView, image, credRefs)
 }
 
 // authorizeLaunch enforces View-scoped execution authz (§2.5, ADR-0028): the launching
@@ -2184,14 +2194,14 @@ func (s *Server) authorizeLaunch(w http.ResponseWriter, r *http.Request, wf type
 // decodeLaunchBody reads the {inputs, context} launch body (ADR-0118 D4). An unknown
 // top-level field is a 400, not a silent no-op — sending `input:` and having it ignored is
 // exactly the class of quiet mismatch this seam exists to remove.
-func decodeLaunchBody(w http.ResponseWriter, r *http.Request) (inputs, changeContext map[string]any, viewName string, ok bool) {
+func decodeLaunchBody(w http.ResponseWriter, r *http.Request) (inputs, changeContext map[string]any, viewName, image string, credentialRefs []string, ok bool) {
 	var body WorkflowLaunch
 	if r.Body != nil {
 		dec := json.NewDecoder(r.Body)
 		dec.DisallowUnknownFields()
 		if err := dec.Decode(&body); err != nil && !errors.Is(err, io.EOF) {
 			writeErr(w, http.StatusBadRequest, "decode launch body: "+err.Error())
-			return nil, nil, "", false
+			return nil, nil, "", "", nil, false
 		}
 	}
 	if body.Inputs != nil {
@@ -2203,7 +2213,13 @@ func decodeLaunchBody(w http.ResponseWriter, r *http.Request) (inputs, changeCon
 	if body.ViewName != nil {
 		viewName = strings.TrimSpace(*body.ViewName)
 	}
-	return inputs, changeContext, viewName, true
+	if body.Image != nil {
+		image = strings.TrimSpace(*body.Image)
+	}
+	if body.CredentialRefs != nil {
+		credentialRefs = *body.CredentialRefs
+	}
+	return inputs, changeContext, viewName, image, credentialRefs, true
 }
 
 // launchWorkflow is THE server-side launch sequence, shared by the direct door
@@ -2216,7 +2232,7 @@ func decodeLaunchBody(w http.ResponseWriter, r *http.Request) (inputs, changeCon
 // entityScope narrows the launched DAG to one Entity (ADR-0150 D3); "" is the whole View, which is
 // every launch that is not a per-Finding remediation. Passed explicitly rather than inferred, so a
 // direct launch cannot acquire a scope by accident and a remediation cannot lose one.
-func (s *Server) launchWorkflow(w http.ResponseWriter, r *http.Request, wf types.Workflow, principal string, inputs, changeContext map[string]any, entityScope, viewName string) {
+func (s *Server) launchWorkflow(w http.ResponseWriter, r *http.Request, wf types.Workflow, principal string, inputs, changeContext map[string]any, entityScope, viewName, image string, credentialRefs []string) {
 	// The SEQUENCE now lives in orchestrate.LaunchWorkflowRun, because this stopped being the
 	// only door: the AWX façade's workflow_job_templates launch needs the identical validation,
 	// bookkeeping and Temporal start, and a private copy there would be the second launch path
@@ -2227,6 +2243,7 @@ func (s *Server) launchWorkflow(w http.ResponseWriter, r *http.Request, wf types
 		orchestrate.WorkflowLaunchParams{
 			Workflow: wf, Principal: principal, Inputs: inputs, Context: changeContext,
 			EntityScope: entityScope, ViewName: viewName,
+			Image: image, CredentialRefs: credentialRefs,
 		})
 	if err != nil {
 		// A caller-supplied input that violates the declared interface, or a change context
@@ -2306,7 +2323,7 @@ func (s *Server) RemediateFinding(w http.ResponseWriter, r *http.Request, id str
 	// The remediation door ignores a supplied View: its View comes from the Baseline that raised the
 	// Finding (fl.ViewName), and accepting a second source for one fact would need a precedence rule
 	// §2.4 refuses. A caller who wants a different target set launches directly.
-	supplied, changeContext, remViewName, ok := decodeLaunchBody(w, r)
+	supplied, changeContext, remViewName, remImage, remCreds, ok := decodeLaunchBody(w, r)
 	if !ok {
 		return
 	}
@@ -2333,7 +2350,15 @@ func (s *Server) RemediateFinding(w http.ResponseWriter, r *http.Request, id str
 		return
 	}
 	// D3: this remediation converges the Entity that drifted, not its whole tier.
-	s.launchWorkflow(w, r, wf, principal, merged, changeContext, fl.EntityID, fl.ViewName)
+	if err := s.checkPermittedImage(r.Context(), wf, remImage); err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if err := s.checkPermittedCredentials(wf, remCreds); err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	s.launchWorkflow(w, r, wf, principal, merged, changeContext, fl.EntityID, fl.ViewName, remImage, remCreds)
 }
 
 // mergeRemediationInputs folds a caller's supplied inputs onto the Baseline's compiled ones,

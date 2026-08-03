@@ -137,7 +137,14 @@ func TestAStepsGroupByReachesTheRun(t *testing.T) {
 	if i < 0 {
 		t.Fatal("the actuation Step's RunInput construction is gone — this guard has lost its subject")
 	}
-	block := text[i : i+900]
+	// Scan to the END of the struct literal rather than a fixed byte window. The first version took
+	// text[i:i+900] and broke the moment ADR-0160 D4 added four lines above GroupBy — a guard that
+	// fails when an UNRELATED field is added is a guard people learn to widen rather than read.
+	end := strings.Index(text[i:], "}).Get(")
+	if end < 0 {
+		t.Fatal("the RunInput literal is no longer closed by `}).Get(` — this guard cannot find its end")
+	}
+	block := text[i : i+end]
 	if !strings.Contains(block, "GroupBy: step.GroupBy") {
 		t.Error("an actuation Step must pass its declared GroupBy to the Run, or `groupBy:` is a " +
 			"field an estate can declare and nothing will ever read — which is worse than not " +

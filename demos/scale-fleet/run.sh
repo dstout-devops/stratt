@@ -462,6 +462,33 @@ code="$(curl -sS -o /dev/null -w '%{http_code}' -X POST "${API}/workflows/fleet-
 case "$code" in 200|201|202) : ;; *) echo "FAIL: launching against the GRANTED View returned ${code} — the check refuses everything, which is not a check"; exit 1 ;; esac
 echo "  ✓ …and the granted View is accepted, so that refusal is a check and not a blanket no"
 
+# D4 · the estate declares a PERMITTED SET and the launch chooses within it. fleet-limit declares
+# TWO credentialRefs, so a selection exists to make — and the two gates must BOTH survive: the estate
+# bounds what this Step may ever use, and §2.5's `user` check still bounds who may use each survivor.
+code="$(curl -sS -o /dev/null -w '%{http_code}' -X POST "${API}/workflows/fleet-limit/runs" \
+    -H "X-Stratt-Principal: ${PRINCIPAL}" -H "Content-Type: application/json" \
+    -d "{\"viewName\":\"${HOST_VIEW}\",\"credentialRefs\":[\"web-machine\"],\"inputs\":{\"hostLimit\":\"${firstName}\"}}")"
+case "$code" in 200|201|202) : ;; *) echo "FAIL: narrowing to a DECLARED credentialRef returned ${code} — the launch may select within the estate's set (ADR-0160 D4)"; exit 1 ;; esac
+echo "  ✓ a launch may NARROW to a declared credentialRef"
+
+# …and may not reach outside it. `cert-issuer` is a real ref this Principal HOLDS `user` on — so a
+# pass here would mean the §2.5 grant alone decided, and the estate's per-Step bound counted for
+# nothing. "May I use it" and "may this Step use it" are different questions.
+code="$(curl -sS -o /dev/null -w '%{http_code}' -X POST "${API}/workflows/fleet-limit/runs" \
+    -H "X-Stratt-Principal: ${PRINCIPAL}" -H "Content-Type: application/json" \
+    -d "{\"viewName\":\"${HOST_VIEW}\",\"credentialRefs\":[\"cert-issuer\"]}")"
+[ "$code" = "400" ] || { echo "FAIL: selecting a credentialRef this Workflow never declares returned ${code}, want 400 — a launch NARROWS the declared set, it never widens it (ADR-0160 D4)"; exit 1; }
+echo "  ✓ …and may NOT reach outside it, even for a ref the Principal holds \`user\` on"
+
+# The same rule for the execution image: no Actuator here declares an `images` set, so no choice is
+# on offer and supplying one is refused. That is ADR-0117 D3a holding — the image is the content
+# boundary, and a launch may choose among REVIEWED images, never introduce one.
+code="$(curl -sS -o /dev/null -w '%{http_code}' -X POST "${API}/workflows/fleet-limit/runs" \
+    -H "X-Stratt-Principal: ${PRINCIPAL}" -H "Content-Type: application/json" \
+    -d "{\"viewName\":\"${HOST_VIEW}\",\"image\":\"ghcr.io/somebody/whatever:latest\"}")"
+[ "$code" = "400" ] || { echo "FAIL: supplying an image no Actuator declares returned ${code}, want 400 — the image is the content boundary (ADR-0117 D3a)"; exit 1; }
+echo "  ✓ an image outside the Actuator's declared set is REFUSED — D3a holds"
+
 # D2 · the façade advertises the prompt, DERIVED from the binding above rather than hardcoded.
 # BOTH families are searched, because which one a Workflow lands in is a property of its SHAPE: the
 # façade renders a single-actuation-Step Workflow as a job_template and a multi-Step or gated one as

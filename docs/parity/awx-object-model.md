@@ -342,8 +342,8 @@ not belong in a decision record.
 | `job_type` (run/check) | dry-run this time | Run-level `DryRun` — ADR-0117 D2 gave check-mode ONE mechanism | 🟢 ownership moved, deliberately |
 | `job_slice_count` | slice a large run | `LaunchParams.Slices` | 🟢 ownership moved to the Run |
 | `instance_groups` | choose execution locus | Sites/Cells (ADR-0032/0044) | 🟢 ownership moved; AWX-008 declined the mirror |
-| `credential` | run with a different credential | another Step, via Git — **or** ADR-0160 D4's declared permitted set, unimplemented | 🟡 doable, ownership shifted further than needed |
-| `execution_environment` | run with a different EE | another Actuator, via Git — same D4 answer | 🟡 as above |
+| `credential` | run with a different credential | the Step's `credentialRefs` ARE the permitted set; a launch selects a subset (ADR-0160 D4) | 🟢 live-proven |
+| `execution_environment` | run with a different EE | the Actuator's `images:` permitted set; a launch selects a member (ADR-0160 D4) | 🟢 live-proven |
 | `labels` | tag the job for search | AWX-006 | 🟡 separate item |
 
 **The `ask_*_on_launch` booleans are DERIVED**, never hardcoded (ADR-0160 D2): a field is advertised

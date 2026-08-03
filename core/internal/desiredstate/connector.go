@@ -272,6 +272,8 @@ type actuatorFile struct {
 	ActionNames    []string `yaml:"actionNames"`
 	JobCommand     []string `yaml:"jobCommand"`
 	Image          string   `yaml:"image"`
+	// images: the PERMITTED SET a launch may select from (ADR-0160 D4). Empty ⇒ no choice offered.
+	Images []string `yaml:"images"`
 	// outputContract PINS the shape this Actuator's Apply may hand to a downstream Step
 	// ({{.steps.<name>.outputs.x}}, CERT-2). Absent, the Apply's outputs are REFUSED — a shape
 	// nobody agreed to cannot be bound by a consumer, which is ADR-0031's rule for Actions applied
@@ -303,7 +305,7 @@ func parseActuatorFile(path string, raw []byte) (string, types.Actuator, error) 
 	a := types.Actuator{
 		Name: f.Name, Address: f.Address, PluginIdentity: f.PluginIdentity, Tier: f.Tier,
 		DryRunnable: f.DryRunnable, ActionNames: f.ActionNames, JobCommand: f.JobCommand,
-		Image: f.Image, OutputContract: f.OutputContract, ContentDir: f.ContentDir, ContentInputs: f.ContentInputs,
+		Image: f.Image, Images: f.Images, OutputContract: f.OutputContract, ContentDir: f.ContentDir, ContentInputs: f.ContentInputs,
 		FacetNamespaces: f.FacetNamespaces, IdentitySchemes: f.IdentitySchemes, LabelKeys: f.LabelKeys,
 		ElevatedInputs: f.ElevatedInputs,
 		MCP:            f.MCP, Provides: f.Provides, Requires: f.Requires,

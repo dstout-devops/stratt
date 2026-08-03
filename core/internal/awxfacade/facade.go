@@ -60,6 +60,18 @@ func New(cfg Config) http.Handler {
 		cfg.Log = slog.Default()
 	}
 	f := &Facade{cfg: cfg}
+	// The Actuator lookup the prompt derivation needs (ADR-0160 D4). Injected rather than read
+	// inside prompts.go because that file RENDERS and does not query — and because a nil Store (every
+	// unit test in this package) must degrade to "no choice advertised" rather than panic.
+	if cfg.Store != nil {
+		actuatorImages = func(name string) []string {
+			act, err := cfg.Store.GetActuator(context.Background(), name)
+			if err != nil {
+				return nil
+			}
+			return act.Images
+		}
+	}
 	mux := http.NewServeMux()
 
 	// Unauthenticated discovery endpoints.

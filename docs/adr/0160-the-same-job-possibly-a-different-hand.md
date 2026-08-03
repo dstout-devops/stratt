@@ -1,8 +1,7 @@
 # ADR 0160 — The same job, possibly a different hand: launch-time parity with AAP
 
-- **Status:** **Accepted** (2026-08-03, steward) for **D1/D2/D3**, which are **live-proven** on kind
-  and gated by `demo:scale-fleet`. **D4 remains unimplemented** and `ask_credential_on_launch` /
-  `ask_execution_environment_on_launch` correctly report false until it ships. Charter review by hand — this session's rules bar
+- **Status:** **Accepted** (2026-08-03, steward) — **all five decisions implemented and
+  live-proven** on kind, gated by `demo:scale-fleet` and therefore by E2E-1. Charter review by hand — this session's rules bar
   the subagent; §1.2/§1.6/§2.2/§2.4/§2.5 answered inline. **No new runtime dependency.**
 - **Date:** 2026-08-03
 - **Deciders:** steward
@@ -192,10 +191,20 @@ authorizing first and reading the body after would check the grant on a View the
 The remediation door REFUSES a supplied View — its View comes from the Baseline, and two sources for
 one fact would need a precedence rule (§2.4).
 
-**D4 is not implemented.** `ask_credential_on_launch` therefore reports false, with a test pinning
-that ordering: a launch-supplied credentialRef today would bypass the §2.5 use-check, which is
-authorized against the Step's DECLARED refs. Advertising the prompt before the permitted set exists
-would invite exactly the escalation D4 is meant to make safe.
+**D4 landed after the rest, in that order deliberately** — the prompt stayed false until the
+mechanism behind it existed. A launch may now select a `credentialRefs` SUBSET of what the Steps
+declare, and an `image` from the Actuator's declared `images`. Both are membership-checked at the
+DOOR, before a Run exists, so an unpermitted choice is a 400 naming the set rather than a Run that
+dies in a pod.
+
+**Both gates survive, which is the whole point.** The estate still bounds what a Step may EVER use
+(membership), and §2.5's `user` check still runs per surviving credential in `ResolveCredentials`,
+unchanged. What moved is only WHO picks among things an author already blessed — which is AAP's own
+shape, where an admin enables prompting and RBAC bounds the choice.
+
+**The dangerous case is the empty one, and it is tested:** an absent selection means "no selection
+made", NOT "mount nothing". Every launch before this sends none, and reading it as an empty set would
+silently strip every credential from every existing Run.
 
 ### The live proof, paid (2026-08-03)
 
@@ -214,10 +223,22 @@ launch with hostLimit=<one host> reached 1 host(s)
 ✓ …and ask_inventory_on_launch=true, because the Step inherits its View
 ```
 
+```
+✓ a launch may NARROW to a declared credentialRef
+✓ …and may NOT reach outside it, even for a ref the Principal holds `user` on
+✓ an image outside the Actuator's declared set is REFUSED — D3a holds
+```
+
 The 403 is the half that matters most: `web-servers-restricted` selects the SAME hosts under a name
 nobody holds `runner` on, so a pass there would mean the check ran against the Step's own View — or
 against nothing. And the granted View is accepted immediately after, because a check that refuses
 everything is not a check.
+
+**D4's refusal is chosen with the same care.** `cert-issuer` is a real CredentialRef this Principal
+DOES hold `user` on, and it is still refused — because it is not declared by this Workflow. A pass
+there would have meant the §2.5 grant alone decided and the estate's per-Step bound counted for
+nothing. "May I use it" and "may this Step use it" are different questions, and the estate owns the
+second.
 
 **Found by running it, and it constrains this shape: an "optional" prompt cannot be an empty
 default.** The first `fleet-limit` defaulted `hostLimit` to `""`, and every launch failed

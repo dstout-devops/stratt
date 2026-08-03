@@ -136,6 +136,14 @@ type WorkflowLaunchParams struct {
 	// own inherits (a Finding remediation); "" for a direct launch.
 	EntityScope string
 	ViewName    string
+	// Image and CredentialRefs are the launch's selections from the estate's DECLARED PERMITTED SETS
+	// (ADR-0160 D4). Both are checked for membership at the DOOR — an unpermitted value never
+	// reaches here — so this carries a choice already bounded by the estate, not a claim to trust.
+	//
+	// CredentialRefs NARROWS each Step's declared set; it never widens one, and the §2.5 `user`
+	// check still runs per surviving ref in ResolveCredentials. Empty ⇒ every declared ref.
+	Image          string
+	CredentialRefs []string
 }
 
 // LaunchWorkflowRun is THE launch path for a declared Workflow, shared by every
@@ -184,6 +192,7 @@ func LaunchWorkflowRun(ctx context.Context, d LaunchDeps, p WorkflowLaunchParams
 		WorkflowRunID: wr.ID, WorkflowName: p.Workflow.Name, Principal: p.Principal,
 		LaunchParams: resolved, Context: p.Context,
 		EntityScope: p.EntityScope, ViewName: p.ViewName,
+		Image: p.Image, CredentialRefs: p.CredentialRefs,
 		// The floor's own environment, not the caller's claim about it (ADR-0122 D2).
 		Environment: d.Store.ActiveEnvironment(),
 	}); err != nil {
