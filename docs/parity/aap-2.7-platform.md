@@ -109,11 +109,24 @@ The Trigger engine (Emitter × CEL → Workflow/View launch, ADR-0018) covers th
 condition eval, at-least-once durable launch (JetStream), content-hash dedup, and full authz/descent
 parity. It is **not a rulebook engine**. Gaps:
 
-- **Source breadth** — 3 kinds (webhook, alertmanager, salt-stream) vs AAP's dozens of `ansible.eda.*`
-  sources (Kafka, SQS, Azure SB, journald, file-watch…). Only alertmanager has a structured explode.
+- ~~**Source breadth** — 3 kinds vs AAP's dozens~~ — **the comparison was wrong** (2026-08-03). This
+  measured Stratt's `kind` ENUM against AAP's source LIBRARY. A `stream` Emitter is a PLUGIN that
+  outbound-connects and publishes onto the emitter stream itself (salt does exactly this, ADR-0039),
+  so a Kafka or SQS source needs NO core change — it is plugin-authoring, which is how §1.4 says
+  breadth arrives. What core does still hold is the `explode` for webhook-shaped sources, where
+  `alertmanager` is hardcoded. Small and real; not "dozens of missing sources".
 - **Rulebook format** — a Trigger is `1 Emitter + 1 CEL → 1 target`; no ordered multi-rule ruleset.
+  A PACKAGING difference rather than a capability gap: the engine evaluates every Trigger against
+  every event and fires every match, which is what a ruleset does. AAP binds sources and rules in one
+  file; Stratt has reusable Emitters plus Triggers. Declined in ADR-0162 D6 rather than left open.
 - **Stateful / meta conditions** — CEL sees one event; no `count > N within Ms`, no cross-event correlation.
-- **Throttling / debounce / rate-limit** — dedup only.
+- ~~**Throttling / debounce / rate-limit** — dedup only.~~ — **false** (2026-08-03).
+  `cooldownSeconds` is declared, enforced and shipped (`triggerengine/engine.go`). The real
+  limitation is narrower and worse: the bookkeeping is an in-memory map, so it RESETS ON RESTART and
+  does not hold across replicas — the storm damping an estate declares is not the one it gets, and
+  nothing says so. [ADR-0162](../adr/0162-a-trigger-decides-on-more-than-one-event.md) D2 makes it
+  durable; `count`/`within` accumulation and `allOf`/`correlateBy` correlation are the genuine gaps
+  it addresses.
 - **Inline meta-actions** — can only launch a Workflow/View; no `set_fact`/`post_event`/`run_module`.
 
 ### 6. Automation Hub — 🔴 biggest gap

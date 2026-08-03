@@ -23,7 +23,7 @@ graph TD
   foundation["foundation<br/><small>0001 0002 0004 0005 0006 0008<br/>0108 0109 0116 0137 0138 0141</small>"]
   graph_model["graph-model<br/><small>0015 0017 0041 0042 0059 0060<br/>0079 0080 0081 0082 0084 0085<br/>0096 0114 0115 0119 0120 0123<br/>0126 0127 0128 0129 0130 0132<br/>0133 0143 0144 0147 0152 0153<br/>0154 0155 0156 0158 0161</small>"]
   intent_compiler["intent-compiler<br/><small>0023 0030 0036 0055 0058 0083<br/>0085 0114 0118 0119 0123 0148<br/>0150 0152</small>"]
-  orchestration["orchestration<br/><small>0010 0011 0018 0027 0031 0063<br/>0118 0122 0125 0134 0139 0140<br/>0157</small>"]
+  orchestration["orchestration<br/><small>0010 0011 0018 0027 0031 0063<br/>0118 0122 0125 0134 0139 0140<br/>0157 0162</small>"]
   plugin_port["plugin-port<br/><small>0046 0047 0048 0049 0051 0053<br/>0054 0103 0117 0121 0124 0125<br/>0127 0131 0137 0138 0140 0141<br/>0145 0149 0159</small>"]
   policy_governance["policy-governance<br/><small>0061 0062 0063 0064 0065 0066<br/>0067 0068 0069 0070 0071 0072<br/>0073 0074 0075 0076 0122 0157</small>"]
   provisioning["provisioning<br/><small>0017 0058 0095 0096 0107 0110<br/>0111 0112 0113 0114 0115 0120<br/>0123 0143 0144 0145 0146 0147<br/>0151</small>"]
@@ -385,6 +385,7 @@ Orchestration — Triggers, Workflows/Gates, Steps, Runs, Actions, notifications
 - [ADR-0139](0139-nested-workflow-steps.md) — A Step may run a Workflow: nesting, and the one chokepoint
 - [ADR-0140](0140-a-capability-is-invoked-not-named.md) — A capability is invoked, not named: the mapping is declared, never minted
 - [ADR-0157](0157-cancelling-a-workflow-run.md) — Cancelling a WorkflowRun: one writer, no orphans, and a Gate that stops meaning "approve me"
+- [ADR-0162](0162-a-trigger-decides-on-more-than-one-event.md) — A Trigger decides on more than one event
 
 ### plugin-port
 
@@ -681,3 +682,4 @@ UI — React shell, schema-driven rendering, Views, descent, the first-party cli
 | [0159](0159-a-transport-fails-on-three-axes.md) | actuators, plugin-port |
 | [0160](0160-the-same-job-possibly-a-different-hand.md) | actuators, connectors |
 | [0161](0161-the-graph-is-the-inventory-and-it-has-no-groups.md) | actuators, graph-model |
+| [0162](0162-a-trigger-decides-on-more-than-one-event.md) | orchestration |
