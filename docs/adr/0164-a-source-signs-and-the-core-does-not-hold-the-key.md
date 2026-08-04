@@ -136,6 +136,24 @@ signed source's events are refused**, and the estate must see that as a refusal 
 silence. An Emitter that declares no `verify` is untouched — the hop exists only where a signature
 does.
 
+### D4b — This is a BOUNDARY CHANGE, and it is declared as one
+
+ADR-0137 D2 says developing a plugin changes nothing outside `plugins/<name>/`, and
+`task plugins:boundary:diff` enforces it against the diff. This change touches `plugins/openbao`
+**and** core, so it trips that gate — correctly.
+
+It is the legitimate case the gate's escape hatch exists for, and that hatch is a STATEMENT rather
+than a switch: a `Boundary-Change:` trailer that puts the crossing in front of a reviewer. A new
+capability class cannot live inside one plugin — `VerifyMAC` is a port verb (`proto/`), a core-side
+consumer (`core/internal/macverify`) and a first provider (`plugins/openbao`), the same three-part
+shape ADR-0100 has for KeyCustodian. What core learns is a capability CLASS; it never learns that
+openbao exists.
+
+**It also caught something worth keeping.** The gate is diff-based against `origin/main`, and a
+local `task ci` SKIPS it when `BASE` is unset — so this passed on the workstation and failed in CI.
+Running it as CI does is `BASE=origin/main task plugins:boundary:diff`, and any change spanning a
+plugin and core should.
+
 ### D5 — What is declined, each for a stated reason
 
 - **Core resolves the secret and HMACs it itself.** Refused: it contradicts ADR-0052's central
