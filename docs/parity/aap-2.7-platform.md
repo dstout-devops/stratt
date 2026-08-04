@@ -162,8 +162,14 @@ as independently-shipped **plugin images**, each its own CI unit (ADR-0046). Wha
 
 - **Content registry / index** — no collection hosting, no plugin catalog/discovery/version-resolution
   (relies on external OCI + hand-pinned Helm refs).
-- **EE build tooling** — no `ansible-builder` / `execution-environment.yml` factory; a single hand-written
-  [ee/Dockerfile](../../ee/Dockerfile) (compat asserted, not automated) and no EE distribution service.
+- ~~**EE build tooling** — no `ansible-builder` / `execution-environment.yml` factory~~ — **the row
+  was stale and is now closed**. ADR-0124 D1 already read an `execution-environment.yml` and resolved
+  its Galaxy content through the pinned, hash-verified pipeline (which `ansible-builder` itself does
+  not do); [ADR-0170](../adr/0170-from-a-definition-to-an-image.md) turns that reading into a BUILD —
+  `task ee:factory:build EE=…` — and carries `dependencies.python` into the image, which is
+  ADR-0159's third axis and the difference between an EE that connects and one that fails at connect
+  time. `ansible-builder` is deliberately NOT adopted (D3): compatibility belongs at the declaration
+  boundary, not in adopting a second build graph. Still open: an EE **distribution** service.
 - **Supply-chain pipeline** — charter §7.3 promises cosign/SBOM/SLSA "from release one," but
   [.github/workflows/ci.yml](../../.github/workflows/ci.yml) implements only DCO. Image signing + SBOM + SLSA
   attestation are **unbuilt** (signing is real only on the pull-Bundle path). _(This is enterprise-crack

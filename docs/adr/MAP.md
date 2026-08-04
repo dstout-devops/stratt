@@ -10,7 +10,7 @@ design must reconcile with. Chronological list: [README.md](README.md); phase vi
 
 ```mermaid
 graph TD
-  actuators["actuators<br/><small>0016 0022 0050 0053 0092 0117<br/>0124 0126 0133 0134 0135 0148<br/>0149 0153 0156 0158 0159 0160<br/>0161</small>"]
+  actuators["actuators<br/><small>0016 0022 0050 0053 0092 0117<br/>0124 0126 0133 0134 0135 0148<br/>0149 0153 0156 0158 0159 0160<br/>0161 0170</small>"]
   api_surface["api-surface<br/><small>0006 0021 0026 0076 0091 0121<br/>0157 0163 0164 0167</small>"]
   audit_telemetry["audit-telemetry<br/><small>0034 0065 0077 0121</small>"]
   authz_identity["authz-identity<br/><small>0009 0028 0035 0079 0101 0122<br/>0130 0155</small>"]
@@ -20,7 +20,7 @@ graph TD
   credentials_secrets["credentials-secrets<br/><small>0009 0029 0052 0094 0098 0099<br/>0100 0106 0125 0126 0153 0164<br/>0166 0167</small>"]
   estate_as_code["estate-as-code<br/><small>0055 0056 0057 0103 0113 0116<br/>0118 0119 0120 0122 0123 0132<br/>0134 0135 0136 0137 0138 0139<br/>0142 0146 0147 0148 0151 0152<br/>0163</small>"]
   findings_drift["findings-drift<br/><small>0019 0020 0033 0043 0080 0085<br/>0128 0129 0130 0133 0148 0150</small>"]
-  foundation["foundation<br/><small>0001 0002 0004 0005 0006 0008<br/>0108 0109 0116 0137 0138 0141<br/>0165 0168 0169</small>"]
+  foundation["foundation<br/><small>0001 0002 0004 0005 0006 0008<br/>0108 0109 0116 0137 0138 0141<br/>0165 0168 0169 0170</small>"]
   graph_model["graph-model<br/><small>0015 0017 0041 0042 0059 0060<br/>0079 0080 0081 0082 0084 0085<br/>0096 0114 0115 0119 0120 0123<br/>0126 0127 0128 0129 0130 0132<br/>0133 0143 0144 0147 0152 0153<br/>0154 0155 0156 0158 0161</small>"]
   intent_compiler["intent-compiler<br/><small>0023 0030 0036 0055 0058 0083<br/>0085 0114 0118 0119 0123 0148<br/>0150 0152</small>"]
   orchestration["orchestration<br/><small>0010 0011 0018 0027 0031 0063<br/>0118 0122 0125 0134 0139 0140<br/>0157 0162 0163 0164 0167 0169</small>"]
@@ -103,6 +103,7 @@ Actuators — execution engines (opentofu, helm, mcp, cert-issuer reconcile).
 - [ADR-0159](0159-a-transport-fails-on-three-axes.md) — A transport fails on three axes, and the image gate checks two
 - [ADR-0160](0160-the-same-job-possibly-a-different-hand.md) — The same job, possibly a different hand: launch-time parity with AAP
 - [ADR-0161](0161-the-graph-is-the-inventory-and-it-has-no-groups.md) — The graph is the inventory, and it renders no groups
+- [ADR-0170](0170-from-a-definition-to-an-image.md) — From a definition to an image
 
 ### api-surface
 
@@ -312,6 +313,7 @@ Foundation — charter authority, control plane, language/tooling, monorepo, met
 - [ADR-0165](0165-there-has-never-been-a-release-to-sign.md) — There has never been a release to sign
 - [ADR-0168](0168-a-warning-is-not-a-gate.md) — A warning is not a gate
 - [ADR-0169](0169-the-last-door-before-something-runs.md) — The last door before something runs
+- [ADR-0170](0170-from-a-definition-to-an-image.md) — From a definition to an image
 
 ### graph-model
 
@@ -711,3 +713,4 @@ UI — React shell, schema-driven rendering, Views, descent, the first-party cli
 | [0167](0167-a-replay-is-a-valid-signature-at-the-wrong-time.md) | api-surface, credentials-secrets, orchestration |
 | [0168](0168-a-warning-is-not-a-gate.md) | foundation, substrate-ops |
 | [0169](0169-the-last-door-before-something-runs.md) | foundation, orchestration, substrate-ops |
+| [0170](0170-from-a-definition-to-an-image.md) | actuators, foundation |

@@ -3094,6 +3094,38 @@ tasks:
       - 'test -n "{{.EE}}" || { echo "usage: task ee:factory:requirements EE=path/to/execution-environment.yml" >&2; exit 1; }' 
       - uv run --quiet --with pyyaml=={{.PYYAML_VER}} python ee/content.py ee-requirements {{.EE}}
 
+  ee:factory:build:
+    desc: "Build an EE image FROM an ansible-builder execution-environment.yml (ADR-0170). EE=path TAG=name"
+    vars:
+      TAG: '{{.TAG | default "stratt-ee-custom:dev"}}'
+    cmds:
+      - 'test -n "{{.EE}}" || { echo "usage: task ee:factory:build EE=path/to/execution-environment.yml [TAG=img:tag]" >&2; exit 1; }'
+      - |
+        set -eu
+        # ── The declaration is AAP's; the BUILD is ours (ADR-0170 D1) ────────────────────────
+        #
+        # ansible-builder is not adopted: its output does not byte-pin content or verify a
+        # lockfile, which is ADR-0124's entire argument. What an adopter needs is for the
+        # content their definition NAMES to be installed — by the pipeline that pins it.
+        out="{{.ROOT_DIR}}/ee/content/.factory.requirements.yml"
+        uv run --quiet --with pyyaml=={{.PYYAML_VER}} python {{.ROOT_DIR}}/ee/content.py \
+          ee-requirements "{{.EE}}" > "$out"
+        # dependencies.python CARRIES (D2) — ADR-0159's third axis, and the difference between an
+        # EE that connects and one that fails at connect time naming a module nobody declared.
+        extras="$(uv run --quiet --with pyyaml=={{.PYYAML_VER}} python {{.ROOT_DIR}}/ee/content.py \
+          ee-python "{{.EE}}" | tr '\n' ' ')"
+        echo "stratt-ee-factory: building {{.TAG}} from {{.EE}}"
+        [ -n "$extras" ] && echo "stratt-ee-factory: python extras: $extras" || true
+        docker build --build-arg GO_PARALLEL={{.GO_PARALLEL}} \
+          --build-arg EE_CONTENT="$(basename "$out")" \
+          --build-arg EE_LOCK_MODE=off \
+          --build-arg EE_PYTHON_EXTRA="$extras" \
+          -f {{.ROOT_DIR}}/ee/Dockerfile -t "{{.TAG}}" {{.ROOT_DIR}}
+        rm -f "$out"
+      # The three-axis check (ADR-0159) against an image built from an AAP definition — which is
+      # the whole claim. A build that succeeds and cannot connect is what this exists to catch.
+      - 'docker run --rm --entrypoint python "{{.TAG}}" /usr/local/bin/stratt-ee-content manifest 2>/dev/null || true'
+
   dev:ee-crypto:build:
     desc: Build the crypto-content EE variant and load it into the kind cluster (ADR-0117 D3/D3a)
     cmds:
