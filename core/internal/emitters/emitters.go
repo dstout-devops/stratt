@@ -158,12 +158,21 @@ func (in *Ingest) verifySignature(r *http.Request, em types.Emitter, body []byte
 			"emitter", em.Name, "keyRef", em.Verify.KeyRef)
 		return false
 	}
-	sig, err := macverify.DecodeSignature(*em.Verify, r.Header.Get(em.Verify.Header))
+	presented, err := macverify.Parse(*em.Verify, r.Header.Get(em.Verify.Header))
 	if err != nil {
 		in.log.Info("emitter signature malformed", "emitter", em.Name, "error", err)
 		return false
 	}
-	ok, err := in.Verifier.Verify(r.Context(), *em.Verify, body, sig)
+	// FRESHNESS BEFORE THE MAC (ADR-0167 D2). There is no point asking a KMS about bytes we
+	// have already decided not to accept, and refusing the cheapest check first leaks the least
+	// work to whoever is replaying.
+	if !macverify.Fresh(*em.Verify, presented, time.Now()) {
+		in.log.Info("emitter signature outside the declared tolerance; refusing as a replay",
+			"emitter", em.Name, "stamp", presented.Timestamp, "toleranceSeconds", em.Verify.ToleranceSeconds)
+		return false
+	}
+	ok, err := in.Verifier.Verify(r.Context(), *em.Verify,
+		macverify.SignedBytes(*em.Verify, presented, body), presented.Signature)
 	if err != nil {
 		in.log.Error("emitter signature could not be verified; refusing until the provider answers",
 			"emitter", em.Name, "keyRef", em.Verify.KeyRef, "error", err)

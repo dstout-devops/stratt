@@ -175,3 +175,45 @@ func TestAStreamEmitterCannotDeclareASignature(t *testing.T) {
 		t.Fatal("a stream emitter declaring verify must be refused")
 	}
 }
+
+// ── ADR-0167 · a declaration that checks nothing must fail its file ───────────────────────────
+
+func TestTimestampedSchemeDeclarationRules(t *testing.T) {
+	spec := func(mut func(*types.VerifySpec)) error {
+		v := &types.VerifySpec{Header: "Stripe-Signature", Algorithm: "hmac-sha256", KeyRef: "k"}
+		mut(v)
+		return ValidateEmitter(webhookEmitter(func(e *types.Emitter) { e.Verify = v }))
+	}
+	stripe := func(v *types.VerifySpec) {
+		v.Format = types.SignatureFormatKV
+		v.SignatureKey = "v1"
+		v.TimestampKey = "t"
+		v.SignedPayload = types.SignedPayloadTimestampBody
+		v.ToleranceSeconds = 300
+	}
+	if err := spec(stripe); err != nil {
+		t.Fatalf("a complete Stripe-shaped declaration must validate: %v", err)
+	}
+	// kv without naming the signature pair describes a header nobody can read.
+	if err := spec(func(v *types.VerifySpec) { stripe(v); v.SignatureKey = "" }); err == nil {
+		t.Error("format kv with no signatureKey must be refused")
+	}
+	// kv fields on a raw header are a declaration disagreeing with itself (§2.4).
+	if err := spec(func(v *types.VerifySpec) { v.SignatureKey = "v1" }); err == nil {
+		t.Error("signatureKey without format kv must be refused")
+	}
+	// THE ONE THAT MATTERS: a timestamp is only a defence when it is inside what was signed.
+	err := spec(func(v *types.VerifySpec) { stripe(v); v.TimestampKey = "" })
+	if err == nil {
+		t.Error("signedPayload timestamp.body with no timestampKey must be refused")
+	}
+	// …and a tolerance with nothing to measure is a control that silently checks nothing.
+	err = spec(func(v *types.VerifySpec) { v.ToleranceSeconds = 300 })
+	if err == nil || !strings.Contains(err.Error(), "checks nothing") {
+		t.Errorf("toleranceSeconds with no timestampKey must be refused: %v", err)
+	}
+	// The enum is an enum.
+	if err := spec(func(v *types.VerifySpec) { stripe(v); v.SignedPayload = "{t}.{body}" }); err == nil {
+		t.Error("a template-shaped signedPayload must be refused — it is an ENUM (§1)")
+	}
+}

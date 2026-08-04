@@ -122,9 +122,15 @@ parity. It is **not a rulebook engine**. Gaps:
   presents its token in is declared (D1 — GitLab's `X-Gitlab-Token` and the long tail behind it),
   and a source that SIGNS its body is verified by delegating to the key's holder over the port (D2),
   because the core may not hold the secret that would let it check a MAC itself (§2.5, ADR-0052).
-  **Still absent, deliberately**: timestamped anti-replay schemes (Stripe's `t=…,v1=…`), booked in
-  ADR-0164 D5 rather than approximated — and replay protection generally, which was absent before
-  this arc and remains so.
+  **Timestamped schemes and freshness now ship too**
+  ([ADR-0167](../adr/0167-a-replay-is-a-valid-signature-at-the-wrong-time.md)): a `kv` header shape,
+  a declared signature/timestamp pair, `signedPayload: timestamp.body`, and a tolerance window that
+  refuses a stale request BEFORE consulting the verifier. Two corrections to what this row used to
+  say: retry dedup always existed (`EventHash` excludes `ReceivedAt`, so a retried POST collides on
+  both the JetStream publish and the derived workflow id) — it is a CORRECTNESS control, never a
+  replay defence, because an attacker picks the moment. And freshness only protects sources that
+  sign a timestamp; the shared-token half still cannot bound replay, and ADR-0167 D3 says so rather
+  than implying coverage.
 - **Rulebook format** — a Trigger is `1 Emitter + 1 CEL → 1 target`; no ordered multi-rule ruleset.
   A PACKAGING difference rather than a capability gap: the engine evaluates every Trigger against
   every event and fires every match, which is what a ruleset does. AAP binds sources and rules in one

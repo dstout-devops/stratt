@@ -19,7 +19,9 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"fmt"
+	"strconv"
 	"strings"
+	"time"
 
 	pluginv1 "github.com/dstout-devops/stratt/sdk/stratt/plugin/v1"
 	"github.com/dstout-devops/stratt/types"
@@ -48,6 +50,82 @@ func (p *portVerifier) Verify(ctx context.Context, spec types.VerifySpec, body, 
 		return false, fmt.Errorf("macverify: provider could not answer for key %q: %w", spec.KeyRef, err)
 	}
 	return resp.GetValid(), nil
+}
+
+// Presented is what a request carried in its signature header, after the declared shape is applied.
+type Presented struct {
+	Signature []byte
+	// Timestamp is the source's own, from inside the signed material. Zero when none is declared.
+	Timestamp time.Time
+	HasStamp  bool
+}
+
+// Parse reads the signature header according to the declared shape (ADR-0167 D1).
+//
+// `raw` is the whole value; `kv` splits "t=…,v1=…" — how Stripe and Slack carry a timestamp beside
+// the MAC. Both are field lookups over a fixed grammar; nothing here evaluates.
+func Parse(spec types.VerifySpec, presented string) (Presented, error) {
+	if spec.Format != types.SignatureFormatKV {
+		sig, err := DecodeSignature(spec, presented)
+		return Presented{Signature: sig}, err
+	}
+	pairs := map[string]string{}
+	for _, part := range strings.Split(presented, ",") {
+		k, v, ok := strings.Cut(strings.TrimSpace(part), "=")
+		if ok {
+			pairs[k] = v
+		}
+	}
+	rawSig, ok := pairs[spec.SignatureKey]
+	if !ok {
+		return Presented{}, fmt.Errorf("signature header carries no %q pair", spec.SignatureKey)
+	}
+	sig, err := DecodeSignature(spec, rawSig)
+	if err != nil {
+		return Presented{}, err
+	}
+	out := Presented{Signature: sig}
+	if spec.TimestampKey != "" {
+		rawTS, ok := pairs[spec.TimestampKey]
+		if !ok {
+			return Presented{}, fmt.Errorf("signature header carries no %q pair", spec.TimestampKey)
+		}
+		secs, err := strconv.ParseInt(rawTS, 10, 64)
+		if err != nil {
+			return Presented{}, fmt.Errorf("timestamp %q is not unix seconds: %w", rawTS, err)
+		}
+		out.Timestamp, out.HasStamp = time.Unix(secs, 0), true
+	}
+	return out, nil
+}
+
+// Fresh reports whether a declared timestamp is inside tolerance.
+//
+// SKEW CUTS BOTH WAYS: a timestamp far in the FUTURE is refused too. Only checking the past is a
+// half-check — an attacker who can set the clock forward would otherwise mint requests that stay
+// valid indefinitely.
+func Fresh(spec types.VerifySpec, p Presented, now time.Time) bool {
+	if !p.HasStamp || spec.ToleranceSeconds <= 0 {
+		return true
+	}
+	drift := now.Sub(p.Timestamp)
+	if drift < 0 {
+		drift = -drift
+	}
+	return drift <= time.Duration(spec.ToleranceSeconds)*time.Second
+}
+
+// SignedBytes builds exactly what the MAC covers (ADR-0167 D1).
+//
+// The body is passed through UNTOUCHED in both shapes — ADR-0164 D3 still governs: a MAC covers the
+// bytes the source sent, so nothing here may normalize them.
+func SignedBytes(spec types.VerifySpec, p Presented, body []byte) []byte {
+	if spec.SignedPayload != types.SignedPayloadTimestampBody || !p.HasStamp {
+		return body
+	}
+	prefix := strconv.FormatInt(p.Timestamp.Unix(), 10) + "."
+	out := make([]byte, 0, len(prefix)+len(body))
+	return append(append(out, prefix...), body...)
 }
 
 // DecodeSignature turns the header value a source presented into raw MAC bytes: strip the declared

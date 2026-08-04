@@ -71,7 +71,34 @@ type VerifySpec struct {
 	Prefix string `json:"prefix,omitempty"`
 	// KeyRef names the verification key by coordinate, for the provider to resolve.
 	KeyRef string `json:"keyRef"`
+
+	// ── ADR-0167 · a replay is a valid signature at the wrong time ─────────────────────────
+	//
+	// Format is how the header is SHAPED: raw (the whole value is the signature) or kv
+	// ("t=…,v1=…", which is how Stripe and Slack carry a timestamp beside the MAC).
+	Format string `json:"format,omitempty"`
+	// SignatureKey and TimestampKey name the pairs, for kv only.
+	SignatureKey string `json:"signatureKey,omitempty"`
+	TimestampKey string `json:"timestampKey,omitempty"`
+	// SignedPayload is what the MAC covers. An ENUM, never a template: "{timestamp}.{body}"
+	// would be a two-token templating language, and then somebody wants {header:X} and a
+	// separator and an ordering, and the estate has an expression evaluator nobody decided
+	// to build (§1).
+	SignedPayload string `json:"signedPayload,omitempty"`
+	// ToleranceSeconds bounds how old a signed timestamp may be. Declared, because only the
+	// operator knows their clock skew and their source's retry behaviour — there is no safe
+	// default to pick on their behalf.
+	ToleranceSeconds int `json:"toleranceSeconds,omitempty"`
 }
+
+// Header formats and signed-payload shapes (ADR-0167 D1). Closed sets on purpose.
+const (
+	SignatureFormatRaw = "raw"
+	SignatureFormatKV  = "kv"
+
+	SignedPayloadBody          = "body"
+	SignedPayloadTimestampBody = "timestamp.body"
+)
 
 // DefaultTokenHeader is where a caller presents its token when the Emitter declares nothing —
 // the header Stratt has always named, now the default of a declared field rather than the only

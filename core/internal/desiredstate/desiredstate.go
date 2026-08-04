@@ -2078,6 +2078,12 @@ type verifyFile struct {
 	Encoding  string `yaml:"encoding"`
 	Prefix    string `yaml:"prefix"`
 	KeyRef    string `yaml:"keyRef"`
+	// ADR-0167 — timestamped schemes and the freshness window.
+	Format           string `yaml:"format"`
+	SignatureKey     string `yaml:"signatureKey"`
+	TimestampKey     string `yaml:"timestampKey"`
+	SignedPayload    string `yaml:"signedPayload"`
+	ToleranceSeconds int    `yaml:"toleranceSeconds"`
 }
 
 type tokenFile struct {
@@ -2108,7 +2114,10 @@ func parseEmitterFile(path string, raw []byte) (string, types.Emitter, error) {
 	}
 	if f.Verify != nil {
 		e.Verify = &types.VerifySpec{Header: f.Verify.Header, Algorithm: f.Verify.Algorithm,
-			Encoding: f.Verify.Encoding, Prefix: f.Verify.Prefix, KeyRef: f.Verify.KeyRef}
+			Encoding: f.Verify.Encoding, Prefix: f.Verify.Prefix, KeyRef: f.Verify.KeyRef,
+			Format: f.Verify.Format, SignatureKey: f.Verify.SignatureKey,
+			TimestampKey: f.Verify.TimestampKey, SignedPayload: f.Verify.SignedPayload,
+			ToleranceSeconds: f.Verify.ToleranceSeconds}
 	}
 	if f.Explode != nil {
 		e.Explode = &types.ExplodeSpec{Path: f.Explode.Path}
@@ -2209,6 +2218,44 @@ func ValidateEmitter(e types.Emitter) error {
 		case "", types.SignatureHex, types.SignatureBase64:
 		default:
 			return fmt.Errorf("emitter %s: verify encoding %q is not hex or base64", e.Name, e.Verify.Encoding)
+		}
+		// ── ADR-0167 · a pattern that cannot be acted on is worse than none ──────────────
+		switch e.Verify.Format {
+		case "", types.SignatureFormatRaw:
+			if e.Verify.SignatureKey != "" || e.Verify.TimestampKey != "" {
+				return fmt.Errorf("emitter %s: signatureKey/timestampKey describe a kv header; "+
+					"declare `format: kv` or drop them (ADR-0167 D1)", e.Name)
+			}
+		case types.SignatureFormatKV:
+			if e.Verify.SignatureKey == "" {
+				return fmt.Errorf("emitter %s: format kv requires signatureKey — which pair holds "+
+					"the MAC (e.g. v1)", e.Name)
+			}
+		default:
+			return fmt.Errorf("emitter %s: verify format %q is not raw or kv", e.Name, e.Verify.Format)
+		}
+		switch e.Verify.SignedPayload {
+		case "", types.SignedPayloadBody:
+		case types.SignedPayloadTimestampBody:
+			// A timestamp is only a defence when it is INSIDE what was signed (D3). Declaring
+			// this shape without saying where the timestamp comes from describes a MAC nobody
+			// can compute.
+			if e.Verify.TimestampKey == "" {
+				return fmt.Errorf("emitter %s: signedPayload %s requires timestampKey — the MAC "+
+					"covers <timestamp>.<body>, so the timestamp has to come from somewhere "+
+					"signed (ADR-0167 D3)", e.Name, types.SignedPayloadTimestampBody)
+			}
+		default:
+			return fmt.Errorf("emitter %s: signedPayload %q is not %s or %s. It is an ENUM rather "+
+				"than a template on purpose (§1)", e.Name, e.Verify.SignedPayload,
+				types.SignedPayloadBody, types.SignedPayloadTimestampBody)
+		}
+		if e.Verify.ToleranceSeconds < 0 {
+			return fmt.Errorf("emitter %s: toleranceSeconds must be >= 0", e.Name)
+		}
+		if e.Verify.ToleranceSeconds > 0 && e.Verify.TimestampKey == "" {
+			return fmt.Errorf("emitter %s: toleranceSeconds with no timestampKey checks nothing — "+
+				"freshness needs a timestamp from inside what was signed (ADR-0167 D3)", e.Name)
 		}
 	}
 	// ADR-0163 D1/D3. Checked at PARSE so a declaration that could never fan out fails its

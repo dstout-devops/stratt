@@ -1869,6 +1869,34 @@ components:
         keyRef:
           type: string
           description: The verification key BY COORDINATE, for the provider to resolve (§2.5).
+        format:
+          type: string
+          enum: [raw, kv]
+          description: >
+            How the signature header is shaped (ADR-0167). `raw` — the whole value is the
+            signature. `kv` — "t=…,v1=…", how Stripe and Slack carry a timestamp beside
+            the MAC. Default raw.
+        signatureKey:
+          type: string
+          description: Which kv pair holds the MAC, e.g. v1.
+        timestampKey:
+          type: string
+          description: Which kv pair holds unix seconds, e.g. t.
+        signedPayload:
+          type: string
+          enum: [body, "timestamp.body"]
+          description: >
+            What the MAC covers. An ENUM rather than a template on purpose (§1): a
+            "{timestamp}.{body}" form would be a small templating language, and then a
+            separator, an ordering and {header:X} follow. Default body.
+        toleranceSeconds:
+          type: integer
+          format: int64
+          minimum: 0
+          description: >
+            How old a signed timestamp may be before the request is refused as a replay.
+            Declared rather than defaulted: only the operator knows their clock skew and
+            their source's retry behaviour. Skew is checked BOTH ways.
     EmitterToken:
       type: object
       description: >
