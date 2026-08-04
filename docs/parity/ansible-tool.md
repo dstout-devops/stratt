@@ -68,7 +68,7 @@ What an Ansible project contains, against what the content half projects
 | `galaxy.yml` (the root **is** a collection)                         | 🟢 fqcn, version, deps, license                     | Same `ansible.collection` Kind as a required one, marked `root` — one question, one Kind. Its own `dependencies` live here, not in requirements.yml                                                                                                                                                                  | ~~**ANS-007**~~ |
 | Vaulted files (`$ANSIBLE_VAULT` header)                             | 🟢 `vaulted: true`, no keys                         | Exactly as this row asked: present and vaulted, never decrypted. An empty key list WITH `vaulted:true` distinguishes "binds nothing" from "binds things I cannot show you" (§1.8)                                                                                                                                    | ~~**ANS-008**~~ |
 | `molecule/`, `.yamllint`, `meta/runtime.yml`                        | ⚪                                                  | Test scaffolding and lint config; not estate                                                                                                                                                                                                                                                                         |                 |
-| Multi-document YAML playbooks                                       | 🟠                                                  | `playbookPlays` unmarshals a single document; a `---`-separated multi-doc playbook would project only its first doc. Legal but rare                                                                                                                                                                                  | **ANS-009**     |
+| Multi-document YAML playbooks                                       | 🟢 **examined and fixed (2026-08-04)**              | The suspicion was exactly right: `yaml.Unmarshal` into a slice stops at the first `---`, so a multi-doc playbook projected a play count and host list that were both silently SHORT — the Playbook still appeared, describing less of itself than the file contained, with nothing surfacing the discrepancy (§1.8). A decoder loop reads every document. A file that stops being YAML partway is REFUSED rather than truncated, which falsification had to be extended to catch: swallowing the decoder error passed every existing test, because non-playbook YAML is rejected by the play loop rather than by the parse | ~~ANS-009~~     |
 
 **On the ⚪ rows.** Declining to parse inventory contents and role internals is the §9 line, correctly
 held. **ANS-003** and **ANS-004** were on the other side of it — a `group_vars/` file's _existence and
@@ -281,7 +281,7 @@ reported no problem** — fixed, not merely recorded. Also ~~**ANS-011** multi-i
 ADR-0153 D4). Still open: **ANS-013** pre-flight syntax check (a Step-level gate, a different
 mechanism from these projections) and `--module-path` on the execution surface.
 
-**Unexamined (🟠) — look before deciding:** **ANS-009** multi-document playbooks.
+**Unexamined (🟠) — look before deciding:** none. ~~ANS-009~~ was examined 2026-08-04 and the suspicion held; see the row above.
 
 **Explicitly not gaps:** strategy/serial (play-level), raw ssh args (the injection seam the typed design
 exists to remove), run-time dynamic inventory (a second truth), ad-hoc commands, retry files.

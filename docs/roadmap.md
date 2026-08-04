@@ -437,7 +437,7 @@ literal counts.
 
 `ansible.cfg` (ANS-005), the repo's own modules and plugins (ANS-006), and the root that IS a
 collection (ANS-007). With Tier 2 the day before, **the content-root audit is now green except
-ANS-009** (multi-document playbooks, still unexamined) — the Ansible half of a migration is visible.
+ANS-009** (multi-document playbooks — examined and fixed 2026-08-04) — the Ansible half of a migration is visible.
 
 **ANS-005 was not an observation, it was a fix.** The audit says ansible.cfg "changes the meaning of
 everything else in the root", and reading it proved the point immediately: `roles_path` moves where
@@ -1181,7 +1181,10 @@ length closing.
 
 **Still open from the plan, unchanged by this branch:**
 
-- **W6 residue** — ANS-013 (pre-flight syntax check), ANS-009 (multi-document playbooks). ~~AWX-015~~
+- **W6 residue** — ANS-013 (pre-flight syntax check). ~~ANS-009~~ (multi-document playbooks) is
+  **examined and fixed** (2026-08-04): the 🟠 suspicion was right, a multi-doc playbook projected only
+  its first document, and the Playbook looked complete while describing less of itself than the file
+  held. ~~AWX-015~~
   is **closed** by [ADR-0160](adr/0160-the-same-job-possibly-a-different-hand.md): attaching a
   credential, an image or a View at launch is no longer refused — it is selection from a permitted
   set the estate declared, which was indeed the desired-state question rather than a missing endpoint.
