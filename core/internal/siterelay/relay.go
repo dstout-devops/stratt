@@ -70,6 +70,17 @@ const (
 	mSubscribe   = "Subscribe"
 	mWrapKey     = "WrapKey" // KeyCustodian capability over the relay (ADR-0100) — cross-DC transport
 	mUnwrapKey   = "UnwrapKey"
+	// MACVerifier (ADR-0164 D2). Present so *Client satisfies the port, and safe to carry in
+	// principle — the request holds a key COORDINATE and never material, so nothing secret
+	// crosses the link either way and the answer is one boolean.
+	//
+	// NOT SERVED BY THE SWITCH BELOW, and neither are mWrapKey/mUnwrapKey: the far end answers
+	// "unknown method" for all three. That is a PRE-EXISTING gap in ADR-0100's cross-DC story,
+	// not something ADR-0164 introduced, and it is left alone rather than quietly fixed —
+	// whether a Site may verify against the hub's KMS is an MF-C question (fail-closed at the
+	// edge) that deserves its own decision. Recorded here so the next reader does not assume
+	// these verbs work over a relay because a constant exists.
+	mVerifyMAC = "VerifyMAC"
 )
 
 // Serve runs the Site-agent side: it accepts relayed calls and proxies each to the

@@ -10,6 +10,22 @@
 # image the dispatcher runs per Step, and WHICH image comes from the Actuator declaration in the
 # demo's estate (stratt-ee-frr:dev — ADR-0117 D3a), not from these values.
 plugins:
+  # openbao — NOT for certificates here, but as the MAC VERIFIER (ADR-0164 D2). The NMS signs its
+  # batched reports and the control plane checks the signature against a key it never holds: the
+  # question crosses to this plugin, which asks Transit, and one boolean comes back.
+  #
+  # Declaring the pod is all that is needed. The chart wires STRATT_OPENBAO_PLUGIN_ADDR for every
+  # declared plugin, and that env is what binds the verifier — the demo admits NO openbao estate
+  # (its Actuators are a different demo's business), which is the difference between running a
+  # plugin and adopting its declarations.
+  - name: openbao
+    image:
+      repository: stratt-plugin-openbao
+      tag: dev
+      pullPolicy: Never # kind-loaded (task image:plugin PLUGIN=openbao)
+    env:
+      STRATT_OPENBAO_ADDR: http://openbao:8200
+      STRATT_OPENBAO_TOKEN: stratt-dev-root
   - name: declared
     image:
       repository: stratt-plugin-declared

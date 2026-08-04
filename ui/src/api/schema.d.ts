@@ -1483,9 +1483,49 @@ export interface components {
         Emitter: {
             name: string;
             /** @enum {string} */
-            kind: "webhook" | "alertmanager";
+            kind: "webhook" | "stream";
             /** @description hex(sha256(token)) — never the token itself (§2.5). */
             tokenHash: string;
+            explode?: components["schemas"]["EmitterExplode"];
+            token?: components["schemas"]["EmitterToken"];
+            verify?: components["schemas"]["EmitterVerify"];
+        };
+        /** @description This source SIGNS its request body (ADR-0164 D2). keyRef is a COORDINATE and never material: the core cannot verify a MAC itself — that needs the shared secret, and ADR-0052 keeps credential material out of the control plane — so it hands the raw bytes and the coordinate to a provider holding the key, which answers yes or no. Absent, no signature is expected and the ingest path stays plugin-free. */
+        EmitterVerify: {
+            /** @description The header the signature arrives in, e.g. X-Hub-Signature-256. */
+            header: string;
+            /**
+             * @description The declared MAC. Required rather than inferred from the header name — inferring would be core learning one vendor's spelling again (§1.4).
+             * @enum {string}
+             */
+            algorithm: "hmac-sha256" | "hmac-sha512";
+            /**
+             * @description Encoding of the signature value. Default hex.
+             * @enum {string}
+             */
+            encoding?: "hex" | "base64";
+            /** @description Stripped before decoding, e.g. "sha256=". Required when declared, never merely trimmed — accepting a value without it would widen what is accepted past what the declaration says. */
+            prefix?: string;
+            /** @description The verification key BY COORDINATE, for the provider to resolve (§2.5). */
+            keyRef: string;
+        };
+        /** @description Where the caller presents its shared token (ADR-0164 D1). Absent, the default header X-Stratt-Emitter-Token. The trust model is unchanged either way: the declaration and the database hold only hex(sha256(token)) (§2.5) and the comparison is constant-time — a source sending its secret under its own header name (GitLab's X-Gitlab-Token, and a long tail of others) was unreachable only because core insisted on the name. */
+        EmitterToken: {
+            /** @description The header the token arrives in. */
+            header?: string;
+            /** @description Stripped before comparison, e.g. "Bearer ". */
+            prefix?: string;
+        };
+        /** @description How one POST becomes many events (ADR-0163). Declared as data, because core knowing any particular tool's field names is the §1.4 line this removes. Absent, one POST is one event. `path` and `merge[].path` are dotted lookups — explicit field access, nothing evaluated (ADR-0024's grammar). */
+        EmitterExplode: {
+            /** @description The array to fan out — one event per entry. */
+            path: string;
+            /** @description Envelope fields folded into every exploded event. Explicit, never "everything else": an implicit merge would let the source adding one top-level field silently change what every rule matches against. */
+            merge?: {
+                path: string;
+                /** @description Renames the field in the event payload. A merged key that collides with one the item already carries is REFUSED rather than resolved (§2.4 — no implicit precedence); this is how the estate keeps them apart. */
+                as?: string;
+            }[];
         };
         /** @description A CaC-declared external MCP server the mcp Actuator may invoke (charter §2.3, ADR-0022). stdio servers carry their entire source in the declaration — Git review authorizes exactly what the sandbox runs. rev keys the pinned tool Contracts (rung 3, drift blocking). */
         MCPServer: {

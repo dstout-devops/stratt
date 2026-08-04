@@ -1,0 +1,48 @@
+# The SAME device alerts, arriving the way a real NMS sends them: one POST carrying a batch, with
+# the per-link detail nested somewhere only that vendor would have chosen (ADR-0163).
+#
+# ── NOTHING IN CORE KNOWS THIS SHAPE, AND THAT IS THE POINT ──────────────────────────────────────
+#
+# Before ADR-0163 the ingest surface could fan out exactly ONE payload shape — Alertmanager's — and
+# it knew it by having `receiver`, `groupLabels` and `alerts` compiled into the Go control plane. A
+# source that nested its items anywhere else was a core change (§1.4). This Emitter's shape was
+# invented for this file, no Go was written for it, and it fans out because the declaration below
+# says where to look.
+#
+# `path` and `merge[].path` are dotted lookups — explicit field access, nothing evaluated. The same
+# grammar ADR-0024 blessed for bindings, ADR-0161 used for groupBy and ADR-0162 for correlateBy;
+# reaching for it a fourth time is what keeps a configuration language out of the estate (§1).
+name: nms-batch
+kind: webhook
+# hex(sha256("network-device-demo-not-a-secret")) — the same worthless demo token as link-flaps,
+# for the reason spelled out there.
+tokenHash: 43617af80f821a4070d15fe100b0205e16d45eff680b6a6cb9d92b81918fcf91
+# ── AND IT SIGNS WHAT IT SENDS (ADR-0164 D2) ────────────────────────────────────────────────────
+#
+# A shared token in a header proves the CALLER knows a secret. A signature proves the BODY is the
+# one that caller sent — a distinction that matters for a source whose reports drive convergence.
+#
+# `keyRef` is a COORDINATE and never material. The control plane cannot verify this itself: that
+# needs the shared secret, and ADR-0052 keeps credential material out of core. So it hands the raw
+# bytes and this name to a provider that holds the key, and gets back yes or no. The key never
+# leaves the KMS — ADR-0100's argument with one noun changed.
+verify:
+  header: X-NMS-Signature
+  algorithm: hmac-sha256
+  encoding: hex
+  prefix: "sha256="
+  keyRef: nms-webhook
+explode:
+  # One event per entry. A batch of five link-flaps is five events, so the Trigger's `count` sees
+  # five — which is what makes ONE POST able to satisfy a storm threshold.
+  path: report.linkEvents
+  merge:
+    # Envelope fields folded into every event. Explicit, never "everything else": an implicit merge
+    # would let this vendor adding one top-level field silently change what every rule matches.
+    - { path: report.site }
+    # The batch's own id, which the storm Trigger correlates on — one report is one window.
+    - { path: report.batchId, as: batch }
+    # The envelope has a `status` and so does every event inside it. Merging it as-is is REFUSED
+    # rather than resolved (§2.4 — no winner is invented), and `as:` is how the estate keeps the
+    # two apart. This is the collision case, declared on purpose rather than avoided.
+    - { path: status, as: batchStatus }

@@ -8,7 +8,8 @@ summary: >
   network_cli`, and the change read back out of the device's own running-config. Then watch a Step
   whose image lacks the network content be refused before it ever connects — and watch nine link-flap
   events produce exactly one remediation Run, because the estate declared that a storm is five inside
-  ten minutes and a single flap is noise.
+  ten minutes and a single flap is noise. Then send that same storm as ONE batched report in a
+  payload shape nothing in core has ever seen, and watch it fan out anyway.
 
 # fidelity (D3): how real is what you're watching? The turnkey runner prints this up front.
 #   real       — real workloads on real substrate.

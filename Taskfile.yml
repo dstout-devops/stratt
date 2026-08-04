@@ -2378,6 +2378,12 @@ tasks:
       - task: image:kind-load
       - task: image:plugin
         vars: {PLUGIN: declared}
+      # openbao — the MAC verifier for the NMS's signed reports (ADR-0164 D2). The control plane
+      # cannot check a signature itself (§2.5 keeps material out of core), so it asks the plugin
+      # that holds the key. Both the plugin image and OpenBao itself are needed.
+      - task: image:plugin
+        vars: {PLUGIN: openbao}
+      - task: dev:openbao:up
       # The EE an adopter would build: netcommon + ONE vendor collection + the python SSH transport
       # netcommon does not declare (ADR-0159). Built and kind-loaded HERE because an EE-Job Actuator
       # is reported healthy without any image check.

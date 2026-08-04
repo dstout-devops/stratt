@@ -871,6 +871,17 @@ service PluginService {
   // localCustodian floor means this port is NEVER required to encrypt state.
   rpc WrapKey(WrapKeyRequest) returns (WrapKeyResponse);
   rpc UnwrapKey(UnwrapKeyRequest) returns (UnwrapKeyResponse);
+
+  // MACVerifier (ADR-0164 D2): does this signature match this body, under a key the CORE
+  // MUST NOT HOLD? Advertised via Manifest.capabilities "macverifier" — a separate class
+  // from keycustodian, so a KMS that wraps keys but cannot HMAC simply does not claim it.
+  //
+  // WHY THIS IS A PORT CALL AND NOT A FUNCTION IN CORE: verifying an inbound webhook
+  // signature requires the shared secret itself, and ADR-0052 states as a property it
+  // explicitly declined to weaken that the core never holds credential material, even
+  // transiently. The key stays in the KMS and the answer comes back as a boolean —
+  // ADR-0100's sentence with one noun changed.
+  rpc VerifyMAC(VerifyMACRequest) returns (VerifyMACResponse);
 }
 
 // KeyCustodian capability messages (ADR-0100). The wrapped bytes are opaque to the core;
@@ -892,6 +903,28 @@ message UnwrapKeyRequest {
 }
 message UnwrapKeyResponse {
   bytes dek = 1;
+}
+
+// MACVerifier capability messages (ADR-0164 D2).
+message VerifyMACRequest {
+  // body is the RAW bytes as they arrived, byte for byte. A MAC covers exactly what the
+  // source sent, so anything that re-serializes a parsed payload fails on whitespace, key
+  // order and number formatting — INTERMITTENTLY, which is worse than failing (D3).
+  bytes body = 1;
+  // signature is what the caller presented, already stripped of any declared prefix and
+  // decoded from its declared encoding — so the plugin compares bytes, not spellings.
+  bytes signature = 2;
+  // key_ref names the key BY COORDINATE. Never material: the whole point is that the core
+  // has none to send (§2.5).
+  string key_ref = 3;
+  // algorithm is the declared MAC, e.g. "hmac-sha256". A closed set, checked by the
+  // provider — an algorithm it cannot compute is a refusal, never a silent downgrade.
+  string algorithm = 4;
+}
+message VerifyMACResponse {
+  // valid is the whole answer. Deliberately not "which part failed": a caller that could
+  // learn WHY a signature was rejected learns something about the key.
+  bool valid = 1;
 }
 
 // ─────────────────────────────────────────────────────────────────────────

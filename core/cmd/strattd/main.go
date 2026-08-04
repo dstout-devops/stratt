@@ -46,6 +46,7 @@ import (
 	"github.com/dstout-devops/stratt/core/internal/homegate"
 	"github.com/dstout-devops/stratt/core/internal/keycustodian"
 	"github.com/dstout-devops/stratt/core/internal/leader"
+	"github.com/dstout-devops/stratt/core/internal/macverify"
 	"github.com/dstout-devops/stratt/core/internal/notify"
 	"github.com/dstout-devops/stratt/core/internal/objectstore"
 	"github.com/dstout-devops/stratt/core/internal/observability"
@@ -230,6 +231,27 @@ func buildKeyCustodian(stateKey string, log *slog.Logger) (keycustodian.Custodia
 	port := keycustodian.NewPort(pluginv1.NewPluginServiceClient(conn), "openbao-transit")
 	log.Info("keycustodian: OpenBao Transit provider enabled (in-core floor retained for migration + eject)", "addr", addr)
 	return keycustodian.NewMux(port, local), nil
+}
+
+// buildMACVerifier binds the provider that answers "does this signature match these bytes?" for
+// Emitters declaring a signed source (ADR-0164 D2).
+//
+// THERE IS NO IN-CORE FLOOR HERE, and that asymmetry with buildKeyCustodian is the whole point: a
+// local custodian can hold a key because it encrypts OUR state, but a local MAC verifier would mean
+// the control plane holding a THIRD PARTY's shared secret at rest, which is the §2.5 property
+// ADR-0052 declined to weaken. No provider means signed Emitters refuse — visibly, at the door.
+func buildMACVerifier(log *slog.Logger) macverify.Verifier {
+	addr := os.Getenv("STRATT_OPENBAO_PLUGIN_ADDR")
+	if addr == "" {
+		return nil
+	}
+	conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		log.Error("macverify: openbao plugin dial failed; signed Emitters will refuse", "addr", addr, "error", err)
+		return nil
+	}
+	log.Info("macverify: OpenBao Transit verifier enabled for signed Emitters", "addr", addr)
+	return macverify.NewPort(pluginv1.NewPluginServiceClient(conn))
 }
 
 func run(ctx context.Context, log *slog.Logger) error {
@@ -1837,7 +1859,7 @@ func run(ctx context.Context, log *slog.Logger) error {
 	if uiDir != "" {
 		log.Info("serving ui", "dir", uiDir)
 	}
-	server := &api.Server{Store: store, Bus: bus, Temporal: temporalClient, Authz: authorizer, Log: log, CellID: cellID, CellSecret: []byte(os.Getenv("STRATT_CELL_SECRET")), Peers: peerClient, Issuer: oidcIssuer, Audience: oidcAudience, DevPrincipalHeader: devPrincipal, OIDC: oidcResolver, UIDir: uiDir, StateBackend: stateHandler, EmitterIngest: emitters.New(store, bus, log).Handler(), SCIM: scim.New(store, log).Handler(), CompileStatus: compileStatus, Evidence: evidence, Decider: decider, AdmissionControls: admissionControls, Metrics: obs.MetricsHandler(), SourceStatus: func() map[string]string {
+	server := &api.Server{Store: store, Bus: bus, Temporal: temporalClient, Authz: authorizer, Log: log, CellID: cellID, CellSecret: []byte(os.Getenv("STRATT_CELL_SECRET")), Peers: peerClient, Issuer: oidcIssuer, Audience: oidcAudience, DevPrincipalHeader: devPrincipal, OIDC: oidcResolver, UIDir: uiDir, StateBackend: stateHandler, EmitterIngest: emitters.New(store, bus, log).WithVerifier(buildMACVerifier(log)).Handler(), SCIM: scim.New(store, log).Handler(), CompileStatus: compileStatus, Evidence: evidence, Decider: decider, AdmissionControls: admissionControls, Metrics: obs.MetricsHandler(), SourceStatus: func() map[string]string {
 		snap := sourceStatus.Snapshot()
 		out := make(map[string]string, len(snap))
 		for name, rt := range snap {

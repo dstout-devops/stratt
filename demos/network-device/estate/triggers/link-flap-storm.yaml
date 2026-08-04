@@ -27,6 +27,12 @@ when: "event.alertname == 'LinkFlap' && event.device == 'rtr-01'"
 # storm into a storm of Runs.
 withinSeconds: 600
 count: 5
+# The window is per-BURST, and that is what makes this demo repeatable: `down` deliberately leaves
+# the floor standing, so a second run inherits the first one's Postgres. Without a correlation key
+# every run would share one window and a re-run inside ten minutes would fire on its first flap,
+# having inherited a count it did not earn. A real estate correlates on the thing that flapped —
+# a device, a service, a circuit — for the same reason.
+correlateBy: event.burst
 workflowName: rtr-flap-remediate
 # The Trigger declaration IS the impersonation grant (ADR-0010): the fired Run executes as this
 # Principal, which is why Triggers are CaC-only — Git review authorizes the binding.
