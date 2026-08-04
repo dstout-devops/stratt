@@ -1,6 +1,7 @@
 # ADR 0169 — The last door before something runs
 
-- **Status:** **Proposed** (2026-08-04, steward). Charter review by hand — this session's rules bar
+- **Status:** **Accepted** (2026-08-04, steward) — **live-proven**: a real Run refused before a pod
+  existed, with the device untouched. See Verification. Charter review by hand — this session's rules bar
   the subagent; §1.4/§1.8/§7.3 answered inline. **No new dependency.**
 - **Date:** 2026-08-04
 - **Deciders:** steward
@@ -95,3 +96,20 @@ whatever they like. This governs what Stratt runs — no more, and the ADR does 
 - chart: the flag reaches the daemon as `STRATT_REQUIRE_IMAGE_DIGESTS` — asserted by rendering the
   production profile, because a gate wired to a value nobody propagates is inert in the quietest
   possible way.
+
+### Paid (2026-08-04)
+
+The gate is enabled on the running daemon rather than through the chart, and the reason is worth
+recording: every image on that floor is a floating tag by design, so turning it on in values would
+refuse to render the demo entirely — which is ADR-0168 working correctly, and not what this ADR
+needs to prove. `task demo:network-device:run` EXIT=0:
+
+```
+demo: assert the dispatcher refuses an unpinned EE image when the estate requires digests
+  the Run was refused, naming the image and the reason
+  …and the device was never touched by it
+```
+
+The second line is the one that matters. A Run that failed AFTER dispatching would look identical in
+the status column and would have already reached a live router; asserting the device is untouched is
+what distinguishes "refused" from "attempted and failed".

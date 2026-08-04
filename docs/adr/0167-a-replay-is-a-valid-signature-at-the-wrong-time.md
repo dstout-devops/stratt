@@ -1,6 +1,7 @@
 # ADR 0167 — A replay is a valid signature at the wrong time
 
-- **Status:** **Proposed** (2026-08-04, steward). Charter review by hand — this session's rules bar
+- **Status:** **Accepted** (2026-08-04, steward) — **live-proven**: a genuinely valid signature,
+  thirty minutes old, refused by a real cluster. See Verification. Charter review by hand — this session's rules bar
   the subagent; §1/§1.8/§2.4 answered inline. **No new dependency, no port change, no migration.**
 - **Date:** 2026-08-04
 - **Deciders:** steward
@@ -117,3 +118,24 @@ The tolerance is the knob. If someone needs replay-proofing inside it, that is a
   (clock skew cuts both ways, and only refusing the past is a half-check);
 - unit: an Emitter declaring no timestamp behaves exactly as ADR-0164 shipped it — the regression
   that matters, since every signed Emitter that exists is that case.
+
+### Paid (2026-08-04)
+
+`demos/network-device` gains `nms-timestamped`, a second signed Emitter carrying the Stripe/Slack
+shape. A second one rather than changing `nms-batch`, so the demo asserts ADR-0164's guarantee has
+not been traded away for this one. `task demo:network-device:run` EXIT=0:
+
+```
+demo: assert a correctly signed but STALE request is refused as a replay
+  a freshly signed request is accepted
+  …and the same signature 30 minutes old is REFUSED — valid, but at the wrong time
+  …and so is one 30 minutes in the future — skew is refused both ways
+```
+
+**The middle line is the whole ADR.** That request is signed with the same key, over its own
+timestamp, so the MAC is genuinely valid — OpenBao computed it. It is refused only because the clock
+says it is old. A verifier that checked the signature and ignored the time would accept it, and that
+is the replay this exists to stop.
+
+The future case is asserted beside it because only refusing the past is a half-check: an attacker who
+can push a clock forward would otherwise mint requests that never expire.

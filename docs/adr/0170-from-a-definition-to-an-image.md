@@ -82,6 +82,18 @@ It is Apache-2.0 and the real tool, so this is not a licensing dodge:
 unchanged from ADR-0124 D1. A definition leaning on a build step gets told which part did not come
 across, which is the §1.8 property this whole path was written for.
 
+### D5 — A factory build LOCKS what it resolved; it does not verify a reviewed lock
+
+`EE_LOCK_MODE=write`, not `verify`, and the distinction is not cosmetic. A Stratt-owned variant has
+a committed `*.requirements.lock.json` that a human reviewed, and its build FAILS if a resolved
+artifact's hash disagrees. A definition arriving from an operator's repository has no such file, so
+the build resolves what the definition names and hashes it then.
+
+That is exactly the guarantee `ansible-builder` gives, and one notch below what a Stratt variant
+gets. Saying so matters because the pinning story is this pipeline's whole claim over
+`ansible-builder`, and it would be easy to read "built by Stratt" as "verified by Stratt". Commit the
+generated lock and rebuild with `verify` to close it.
+
 ## Consequences
 
 - **An AAP operator's existing definition builds**, which is what P5 was actually asking for.
@@ -102,3 +114,27 @@ across, which is the §1.8 property this whole path was written for.
 - **live**: `task ee:factory:build` against a definition declaring a collection AND a python module
   produces an image whose manifest reports both — the ADR-0159 three-axis check run against an
   image built from an AAP definition, which is the whole claim.
+
+### Paid (2026-08-04)
+
+A definition of the shape an operator arrives with — `ansible.netcommon 8.1.0`, `ansible-pylibssh`,
+plus a `system` package and an `additional_build_steps` block — built end to end. The caveats printed
+and the build proceeded without them:
+
+```
+additional_build_steps: not carried over — build steps are the Dockerfile's, not a declaration's
+dependencies.system: not carried over — system packages belong in ee/Dockerfile…
+```
+
+And **both axes are in the image**, which is the claim:
+
+```
+ansible.netcommon    8.1.0          # the collection the definition named
+ansible-pylibssh     1.4.0          # the python module — ADR-0159's third axis
+```
+
+**Running it found D5.** The first attempt passed `EE_LOCK_MODE=off`, a value that does not exist —
+the installer accepts only `verify` or `write`, and refused with exit 2. Fixing it forced the
+question the ADR had not asked: what lock does a build from somebody else's definition verify
+against? None, because there is no reviewed lockfile for it. That is now D5 rather than an
+undocumented `write` nobody would have noticed.

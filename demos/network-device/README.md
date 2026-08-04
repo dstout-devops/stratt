@@ -122,6 +122,26 @@ checked two.
    `status` appears at both levels, so the envelope's is merged as `batchStatus` — a collision Stratt
    refuses to resolve on your behalf rather than silently picking a winner.
 
+9. **Replay it.** Sign a body for `nms-timestamped` the same way, but with a timestamp half an hour
+   old. The MAC is *valid* — same key, correctly computed over `<t>.<body>` — and the POST is
+   **refused 401** anyway
+   ([ADR-0167](../../docs/adr/0167-a-replay-is-a-valid-signature-at-the-wrong-time.md)). Try it in the
+   future too; skew is refused both ways, because only checking the past lets an attacker who can
+   push the clock forward mint requests that never expire.
+
+   This is the difference between "is this signature real?" and "should I act on it?" — and since
+   [ADR-0162](../../docs/adr/0162-a-trigger-decides-on-more-than-one-event.md) it matters more than
+   it looks: a replayed flap advances a **storm counter**, so five replays of one captured event
+   manufacture an incident that never happened.
+10. **Ask for pinned images.**
+    `kubectl -n stratt set env deploy/stratt STRATT_REQUIRE_IMAGE_DIGESTS=true`, then launch
+    `rtr-configure`. It **fails before a pod exists**, naming the image and why
+    ([ADR-0169](../../docs/adr/0169-the-last-door-before-something-runs.md)) — because every image on
+    this floor is a floating tag on purpose. Unset it to carry on.
+
+    Note where that check lives: not in an admission controller, but at the point Stratt itself
+    causes a pod to exist. It governs what *Stratt* runs, which is the part Stratt can promise.
+
 ## What you just learned
 
 You converged a class of estate that configuration-management tools usually treat as a separate
@@ -137,3 +157,7 @@ survives a restart and holds across replicas.
 You also pointed a source at Stratt whose payload shape nothing in the control plane had ever seen,
 and it worked because an estate declared where to look. That is the difference between a platform
 that supports your alerting stack and one that ships a list of the stacks it supports.
+
+And you watched two things be refused that a less careful platform would accept: a signature that was
+genuinely valid but stale, and an image that was genuinely available but unpinned. Neither refusal is
+about whether the bytes are real — both are about whether the estate said it wanted them.

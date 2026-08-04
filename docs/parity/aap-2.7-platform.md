@@ -31,12 +31,25 @@ exists," never as "the depth is audited."
 | **Platform Gateway** (unified UI/API/RBAC/SSO) | 🟢 **code-complete core**, 🟡 UI/analytics | Unified UI, OIDC, OpenFGA, SCIM, one Principal, one audit stream, platform MCP; gaps are analytics/org/admin UI                       |
 | **Automation Mesh** (distributed exec)         | 🟢 **code-complete**, one gap              | Sites (push+pull) + signed Bundles + Cells (a partitioning story AAP lacks); gap = multi-hop relay nodes                              |
 | **Event-Driven Ansible** (rulebooks)           | 🟢 **task parity** — two mechanisms declined | Ingest→CEL→launch+dedup, plus patterns over events (ADR-0162: `count`/`within`, `allOf`/`correlateBy`) and durable cross-replica throttling. Declined by decision, not missing: a `set_fact` working memory (§1.2) and the rulebook FILE format |
-| **Automation Hub** (content/EE/supply-chain)   | 🔴 **biggest gap**                         | No content registry, no EE-build factory, SBOM/SLSA pipeline unbuilt; plugin+contract-pinning model substitutes the _trust_ half only |
+| **Automation Hub** (content/EE/supply-chain)   | 🟡 **partial** — the registry half remains | EE-build factory ships (ADR-0124/0170: an AAP `execution-environment.yml` builds, with byte-pinned content ansible-builder does not do). Signing/SBOM/SLSA ship (ADR-0165), with digest enforcement at the chart (ADR-0168) and the dispatcher (ADR-0169). **Gap: no content registry / catalog / version resolution, and nothing published yet.** |
 
-**Bottom line:** the AWX-successor **job-runner + governance + distributed-execution + identity** surface is
-built and in places ahead. The credible-replacement work concentrates in **(1) Hub-class content/supply-chain,
-(2) EDA rulebook depth, (3) `/api/v2` + notification breadth for a clean migration**, plus the unbuilt
-**live-cluster proof**.
+**Bottom line (rewritten 2026-08-04 — every clause of the previous one had gone stale):** the
+AWX-successor **job-runner + governance + distributed-execution + identity** surface is built and in
+places ahead. Of the four things this line used to name as the remaining work:
+
+1. **Hub-class content/supply-chain** — the EE-build and signing halves ship (ADR-0124/0170,
+   ADR-0165/0168/0169). What remains is a **content registry**: no catalog, no discovery, no version
+   resolution — and nothing published yet, which is a decision rather than a coding task.
+2. **EDA rulebook depth** — closed. Patterns over events, durable cross-replica throttling, declared
+   payload shapes and signed sources all ship (ADR-0162/0163/0164/0167); the rulebook FILE format and
+   a `set_fact` working memory are **declined by decision**, not missing.
+3. **`/api/v2` + notification breadth** — route breadth closed 2026-07-31, launch semantics by
+   ADR-0160, sink drivers by ADR-0125.
+4. **The live-cluster proof** — shipped as E2E-1: the whole demo library runs against a real cluster
+   and its exit code is the gate.
+
+**The honest remaining list is now short and specific**: a content registry, an EE distribution
+service, multi-hop mesh relay, in-cluster admission verification, and analytics/org-admin UI.
 
 ---
 
@@ -170,10 +183,19 @@ as independently-shipped **plugin images**, each its own CI unit (ADR-0046). Wha
   ADR-0159's third axis and the difference between an EE that connects and one that fails at connect
   time. `ansible-builder` is deliberately NOT adopted (D3): compatibility belongs at the declaration
   boundary, not in adopting a second build graph. Still open: an EE **distribution** service.
-- **Supply-chain pipeline** — charter §7.3 promises cosign/SBOM/SLSA "from release one," but
-  [.github/workflows/ci.yml](../../.github/workflows/ci.yml) implements only DCO. Image signing + SBOM + SLSA
-  attestation are **unbuilt** (signing is real only on the pull-Bundle path). _(This is enterprise-crack
-  SEC-5/SUP-1, now sharper because the container collector projects digests.)_
+- ~~**Supply-chain pipeline** — … implements only DCO. Image signing + SBOM + SLSA attestation are
+  **unbuilt**.~~ — **built** (2026-08-04), and the row understated the problem: there was no release
+  pipeline at all, so "from release one" was unmet in a more basic way than missing signatures.
+  [ADR-0165](../adr/0165-there-has-never-been-a-release-to-sign.md) adds a tag-triggered workflow that
+  signs **keyless** (Sigstore — identity-bound to the workflow, no long-lived key), attaches an SPDX
+  SBOM and SLSA provenance, and **verifies its own output**; `task supply:verify` runs exactly what CI
+  runs. Enforcement followed in two places the register never separated:
+  [ADR-0168](../adr/0168-a-warning-is-not-a-gate.md) makes an unpinned image a chart **render
+  failure**, and [ADR-0169](../adr/0169-the-last-door-before-something-runs.md) refuses one at the
+  **dispatcher** — a different set of images entirely, since an EE-Job image is named by an Actuator
+  in the estate and the chart cannot see it. **Still open, stated plainly**: nothing is published yet
+  (ADR-0165 D5 — that is a decision, not a coding task), a digest is not a signature, and in-cluster
+  admission verification remains booked. _(enterprise-crack SEC-5/SUP-1.)_
 - **Remote/upstream sync** — no Galaxy mirror. **Air-gap content seeding SHIPPED** (ADR-0124 D2):
   `task ee:content:pull` downloads the declared collections on a connected machine, and an EE built
   with `EE_OFFLINE=<dir>` reaches NO registry — with the pin check and the lockfile check unchanged,

@@ -3110,6 +3110,12 @@ tasks:
         out="{{.ROOT_DIR}}/ee/content/.factory.requirements.yml"
         uv run --quiet --with pyyaml=={{.PYYAML_VER}} python {{.ROOT_DIR}}/ee/content.py \
           ee-requirements "{{.EE}}" > "$out"
+        # LOCK MODE IS `write`, NOT `verify`, and the difference is worth knowing (ADR-0170 D5):
+        # a definition from outside this repo has no reviewed lockfile, so the build RESOLVES and
+        # hashes what the definition names rather than checking it against hashes someone approved.
+        # That is the same guarantee ansible-builder gives and one notch below what a Stratt-owned
+        # variant gets. Commit the generated lock and switch to verify to close the gap.
+        #
         # dependencies.python CARRIES (D2) — ADR-0159's third axis, and the difference between an
         # EE that connects and one that fails at connect time naming a module nobody declared.
         extras="$(uv run --quiet --with pyyaml=={{.PYYAML_VER}} python {{.ROOT_DIR}}/ee/content.py \
@@ -3118,7 +3124,7 @@ tasks:
         [ -n "$extras" ] && echo "stratt-ee-factory: python extras: $extras" || true
         docker build --build-arg GO_PARALLEL={{.GO_PARALLEL}} \
           --build-arg EE_CONTENT="$(basename "$out")" \
-          --build-arg EE_LOCK_MODE=off \
+          --build-arg EE_LOCK_MODE=write \
           --build-arg EE_PYTHON_EXTRA="$extras" \
           -f {{.ROOT_DIR}}/ee/Dockerfile -t "{{.TAG}}" {{.ROOT_DIR}}
         rm -f "$out"

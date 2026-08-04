@@ -1,0 +1,36 @@
+# The same NMS, signing the way Stripe and Slack do (ADR-0167).
+#
+# ── WHY A SECOND SIGNED EMITTER RATHER THAN CHANGING THE FIRST ──────────────────────────────────
+#
+# `nms-batch` proves ADR-0164: a MAC over the body, verified against a key the control plane cannot
+# read. This one proves the thing that ADR could not — that a VALID signature can still be refused,
+# because it arrived at the wrong time. Keeping both means the demo asserts the older guarantee has
+# not been traded away for the newer one.
+#
+# ── WHAT A TIMESTAMP BUYS, AND WHY IT HAS TO BE INSIDE THE SIGNATURE ────────────────────────────
+#
+# A captured POST replays forever otherwise. Stratt already deduplicates identical events, but that
+# is a CORRECTNESS control for retries — its window is short and an attacker picks the moment. With
+# ADR-0162's `count`, a replayed flap does not merely re-fire something idempotent: it advances a
+# storm counter, and five replays of one captured event manufacture an incident that never happened.
+#
+# `signedPayload: timestamp.body` is what makes the clock trustworthy: the MAC covers `<t>.<body>`,
+# so an attacker who edits `t` invalidates the signature. A timestamp in a header nobody signed would
+# be a field the attacker controls, which is worth nothing.
+name: nms-timestamped
+kind: webhook
+tokenHash: 43617af80f821a4070d15fe100b0205e16d45eff680b6a6cb9d92b81918fcf91
+verify:
+  header: X-NMS-Signature-V2
+  algorithm: hmac-sha256
+  encoding: hex
+  keyRef: nms-webhook
+  # The header carries BOTH the clock and the MAC, as "t=…,v1=…" — one field, two values, which is
+  # the shape the real schemes use and the reason `format` exists at all.
+  format: kv
+  timestampKey: t
+  signatureKey: v1
+  signedPayload: timestamp.body
+  # Five minutes. Declared rather than defaulted because only an operator knows their own clock skew
+  # and their source's retry behaviour — there is no safe number to pick on somebody's behalf.
+  toleranceSeconds: 300
