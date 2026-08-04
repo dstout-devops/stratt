@@ -1508,6 +1508,25 @@ export interface components {
             prefix?: string;
             /** @description The verification key BY COORDINATE, for the provider to resolve (§2.5). */
             keyRef: string;
+            /**
+             * @description How the signature header is shaped (ADR-0167). `raw` — the whole value is the signature. `kv` — "t=…,v1=…", how Stripe and Slack carry a timestamp beside the MAC. Default raw.
+             * @enum {string}
+             */
+            format?: "raw" | "kv";
+            /** @description Which kv pair holds the MAC, e.g. v1. */
+            signatureKey?: string;
+            /** @description Which kv pair holds unix seconds, e.g. t. */
+            timestampKey?: string;
+            /**
+             * @description What the MAC covers. An ENUM rather than a template on purpose (§1): a "{timestamp}.{body}" form would be a small templating language, and then a separator, an ordering and {header:X} follow. Default body.
+             * @enum {string}
+             */
+            signedPayload?: "body" | "timestamp.body";
+            /**
+             * Format: int64
+             * @description How old a signed timestamp may be before the request is refused as a replay. Declared rather than defaulted: only the operator knows their clock skew and their source's retry behaviour. Skew is checked BOTH ways.
+             */
+            toleranceSeconds?: number;
         };
         /** @description Where the caller presents its shared token (ADR-0164 D1). Absent, the default header X-Stratt-Emitter-Token. The trust model is unchanged either way: the declaration and the database hold only hex(sha256(token)) (§2.5) and the comparison is constant-time — a source sending its secret under its own header name (GitLab's X-Gitlab-Token, and a long tail of others) was unreachable only because core insisted on the name. */
         EmitterToken: {

@@ -20,6 +20,24 @@
           ansible had no group to key the file on
         success_msg: "group_vars loaded: edge_marker={{ edge_marker }}"
 
+    # A module THIS REPO SHIPS, loaded from the project's own library/ with nothing declaring a
+    # module path (ANS-006 / `--module-path`). It runs on the control node, which is where a
+    # custom module runs anyway when the target has no python — the network_cli case exactly.
+    - name: Call a module the repo ships, not one from a collection
+      stratt_demo_fact:
+        marker: repo-own-module
+      delegate_to: localhost
+      register: own
+
+    - name: The repo's own module must have been found and run
+      ansible.builtin.assert:
+        that:
+          - own.seen == 'repo-own-module'
+        fail_msg: >-
+          ansible did not load library/stratt_demo_fact.py — the project's own modules are
+          unreachable at run time, so ANS-006 projects content the estate cannot use
+        success_msg: "the repo's own module loaded from project/library/ with no module path declared"
+
     # And the play really reached the device over its own CLI, in the group it was placed in.
     - name: Prove the device was reached through the group
       ansible.netcommon.cli_command:

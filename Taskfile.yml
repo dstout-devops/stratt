@@ -1345,6 +1345,35 @@ tasks:
       - "{{.HELM}} template stratt deploy/charts/stratt -f deploy/charts/stratt/values-allinone.yaml > /dev/null"
       # Self-deploy profile (helm Actuator plugin + demo chart, M2/ADR-0092).
       - "{{.HELM}} template stratt deploy/charts/stratt -f deploy/charts/stratt/values-allinone.yaml -f deploy/charts/stratt/values-selfdeploy.yaml > /dev/null"
+      # Supply-chain production profile (ADR-0168): the gate must REFUSE the chart's own defaults,
+      # which are floating tags. A gate that renders here would be one nobody had ever seen fire —
+      # so the assertion is the FAILURE, and the success case is proven beside it with digests set.
+      - |
+        set -eu
+        if {{.HELM}} template stratt {{.ROOT_DIR}}/deploy/charts/stratt \
+             -f {{.ROOT_DIR}}/deploy/charts/stratt/values-production-supply-chain.yaml >/dev/null 2>&1; then
+          echo "✗ supplyChain.requireDigests rendered floating tags — the gate is inert" >&2
+          exit 1
+        fi
+        echo "✓ chart:lint — requireDigests refuses unpinned images"
+      # …and accepts them once pinned, or the refusal would be unsatisfiable.
+      - |
+        set -eu
+        printf 'image:\n  digest: "sha256:%064d"\nforwarder:\n  image:\n    digest: "sha256:%064d"\n' 1 2 > /tmp/stratt-pinned.yaml
+        {{.HELM}} template stratt {{.ROOT_DIR}}/deploy/charts/stratt \
+          -f {{.ROOT_DIR}}/deploy/charts/stratt/values-production-supply-chain.yaml \
+          -f /tmp/stratt-pinned.yaml > /dev/null
+        echo "✓ chart:lint — requireDigests accepts a fully pinned estate"
+      # …and the same declaration REACHES THE DAEMON (ADR-0169 D3). A gate wired to a value nobody
+      # propagates is inert in the quietest possible way, so the wiring is asserted, not assumed.
+      - |
+        set -eu
+        {{.HELM}} template stratt {{.ROOT_DIR}}/deploy/charts/stratt \
+          -f {{.ROOT_DIR}}/deploy/charts/stratt/values-production-supply-chain.yaml \
+          -f /tmp/stratt-pinned.yaml | grep -q "STRATT_REQUIRE_IMAGE_DIGESTS" || {
+            echo "✗ supplyChain.requireDigests never reaches the dispatcher — ADR-0169 is inert" >&2
+            exit 1; }
+        echo "✓ chart:lint — requireDigests reaches the dispatcher (ADR-0169)"
       # Genesis profile (ADR-0102): minimal floor + self-deploy + inline declarations.
       - "{{.HELM}} template stratt deploy/charts/stratt -f deploy/charts/stratt/values-allinone.yaml -f deploy/charts/stratt/values-selfdeploy.yaml -f deploy/charts/stratt/values-genesis.yaml > /dev/null"
       # Connector-e2e profile (ADR-0103): fully in-kind — allinone substrate + helm/declared plugins + estate.
@@ -3064,6 +3093,44 @@ tasks:
       # every section that does NOT carry over, rather than producing an image quietly missing it.
       - 'test -n "{{.EE}}" || { echo "usage: task ee:factory:requirements EE=path/to/execution-environment.yml" >&2; exit 1; }' 
       - uv run --quiet --with pyyaml=={{.PYYAML_VER}} python ee/content.py ee-requirements {{.EE}}
+
+  ee:factory:build:
+    desc: "Build an EE image FROM an ansible-builder execution-environment.yml (ADR-0170). EE=path TAG=name"
+    vars:
+      TAG: '{{.TAG | default "stratt-ee-custom:dev"}}'
+    cmds:
+      - 'test -n "{{.EE}}" || { echo "usage: task ee:factory:build EE=path/to/execution-environment.yml [TAG=img:tag]" >&2; exit 1; }'
+      - |
+        set -eu
+        # ── The declaration is AAP's; the BUILD is ours (ADR-0170 D1) ────────────────────────
+        #
+        # ansible-builder is not adopted: its output does not byte-pin content or verify a
+        # lockfile, which is ADR-0124's entire argument. What an adopter needs is for the
+        # content their definition NAMES to be installed — by the pipeline that pins it.
+        out="{{.ROOT_DIR}}/ee/content/.factory.requirements.yml"
+        uv run --quiet --with pyyaml=={{.PYYAML_VER}} python {{.ROOT_DIR}}/ee/content.py \
+          ee-requirements "{{.EE}}" > "$out"
+        # LOCK MODE IS `write`, NOT `verify`, and the difference is worth knowing (ADR-0170 D5):
+        # a definition from outside this repo has no reviewed lockfile, so the build RESOLVES and
+        # hashes what the definition names rather than checking it against hashes someone approved.
+        # That is the same guarantee ansible-builder gives and one notch below what a Stratt-owned
+        # variant gets. Commit the generated lock and switch to verify to close the gap.
+        #
+        # dependencies.python CARRIES (D2) — ADR-0159's third axis, and the difference between an
+        # EE that connects and one that fails at connect time naming a module nobody declared.
+        extras="$(uv run --quiet --with pyyaml=={{.PYYAML_VER}} python {{.ROOT_DIR}}/ee/content.py \
+          ee-python "{{.EE}}" | tr '\n' ' ')"
+        echo "stratt-ee-factory: building {{.TAG}} from {{.EE}}"
+        [ -n "$extras" ] && echo "stratt-ee-factory: python extras: $extras" || true
+        docker build --build-arg GO_PARALLEL={{.GO_PARALLEL}} \
+          --build-arg EE_CONTENT="$(basename "$out")" \
+          --build-arg EE_LOCK_MODE=write \
+          --build-arg EE_PYTHON_EXTRA="$extras" \
+          -f {{.ROOT_DIR}}/ee/Dockerfile -t "{{.TAG}}" {{.ROOT_DIR}}
+        rm -f "$out"
+      # The three-axis check (ADR-0159) against an image built from an AAP definition — which is
+      # the whole claim. A build that succeeds and cannot connect is what this exists to catch.
+      - 'docker run --rm --entrypoint python "{{.TAG}}" /usr/local/bin/stratt-ee-content manifest 2>/dev/null || true'
 
   dev:ee-crypto:build:
     desc: Build the crypto-content EE variant and load it into the kind cluster (ADR-0117 D3/D3a)

@@ -503,8 +503,12 @@ def test_ee_unsupported_sections_are_reported_not_dropped(tmp_path: Path) -> Non
         )
     )
     joined = " ".join(notes)
-    for want in ("additional_build_steps", "images", "dependencies.python", "dependencies.system"):
+    for want in ("additional_build_steps", "images", "dependencies.system"):
         assert want in joined, f"{want} must be reported as not carried over: {notes}"
+    assert "dependencies.python" not in joined, (
+        "python CARRIES now (ADR-0170 D2); reporting it as dropped would be the old behaviour, "
+        f"which left an operator with a warning and an image that could not connect: {notes}"
+    )
 
 
 def test_ee_without_galaxy_content_is_refused(tmp_path: Path) -> None:
@@ -569,3 +573,104 @@ def test_offline_install_states_the_roles_limit(tmp_path: Path) -> None:
             tmp_path / "manifest.json",
             artifacts=tmp_path / "artifacts",
         )
+
+
+# ── ADR-0170 · from a definition to an image ──────────────────────────────────────────────────
+
+
+def _defn(tmp_path: Path, body: str) -> Path:
+    p = tmp_path / "execution-environment.yml"
+    p.write_text(body)
+    return p
+
+
+def test_dependencies_python_carries_in_declaration_order(tmp_path: Path) -> None:
+    """ADR-0170 D2: this is ADR-0159's third axis, and it decides whether the EE can connect.
+
+    Order is preserved because a pip install is not order-free — reordering somebody's
+    requirements is the kind of helpfulness that builds a different image than they described.
+    """
+    d = _defn(
+        tmp_path,
+        """
+version: 3
+dependencies:
+  galaxy:
+    collections:
+      - name: ansible.netcommon
+        version: 8.1.0
+  python:
+    - jmespath
+    - ansible-pylibssh==1.4.0
+""",
+    )
+    # DELIBERATELY NOT ALPHABETICAL: with a sorted fixture this assertion passes whether order is
+    # preserved or not, which makes it no test at all. Falsification caught exactly that.
+    assert content.ee_python_extras(d) == ["jmespath", "ansible-pylibssh==1.4.0"]
+
+    # …and it is NO LONGER a caveat. It used to be printed as not-carried, which is what left an
+    # operator with a warning and an image that could not connect.
+    _, notes = content.ee_galaxy_requirements(d)
+    assert not any("dependencies.python" in n for n in notes)
+
+
+def test_dependencies_python_may_be_a_requirements_file(tmp_path: Path) -> None:
+    """ansible-builder accepts a path as well as a list; both are what an adopter actually has."""
+    (tmp_path / "reqs.txt").write_text("# a comment\njmespath\n\nansible-pylibssh==1.4.0  # trailing\n")
+    d = _defn(
+        tmp_path,
+        """
+version: 3
+dependencies:
+  galaxy:
+    collections:
+      - name: ansible.netcommon
+        version: 8.1.0
+  python: reqs.txt
+""",
+    )
+    assert content.ee_python_extras(d) == ["jmespath", "ansible-pylibssh==1.4.0"]
+
+
+def test_dependencies_system_is_still_reported_and_not_carried(tmp_path: Path) -> None:
+    """The asymmetry in D2 is deliberate, so this test exists to fail if somebody 'fixes' it.
+
+    A system package lands in a layer whose position and provenance are the Dockerfile's business,
+    and no ADR-0159-shaped failure sits behind it — unlike the python axis.
+    """
+    d = _defn(
+        tmp_path,
+        """
+version: 3
+dependencies:
+  galaxy:
+    collections:
+      - name: ansible.netcommon
+        version: 8.1.0
+  system:
+    - openssh-clients
+additional_build_steps:
+  append_final:
+    - RUN echo hi
+""",
+    )
+    _, notes = content.ee_galaxy_requirements(d)
+    assert any("dependencies.system" in n for n in notes)
+    assert any("additional_build_steps" in n for n in notes)
+
+
+def test_a_definition_with_no_python_yields_nothing(tmp_path: Path) -> None:
+    """The regression that matters: every definition that does not declare python must build
+    exactly as it did before this ADR."""
+    d = _defn(
+        tmp_path,
+        """
+version: 3
+dependencies:
+  galaxy:
+    collections:
+      - name: community.general
+        version: 13.2.0
+""",
+    )
+    assert content.ee_python_extras(d) == []

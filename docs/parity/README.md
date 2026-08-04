@@ -66,3 +66,27 @@ than quietly wrong.
    thing away should take the scorecard.
 3. State the evidence base and the date in the header — what you read, and what you ran.
 4. Mark anything you did not examine 🟠 rather than omitting it. An omission reads as coverage.
+
+## Audit discipline — added 2026-08-04, after six rows in one day were wrong
+
+Six rows across [ansible-tool.md](ansible-tool.md) and [aap-2.7-platform.md](aap-2.7-platform.md)
+were corrected on 2026-08-04. Every one had drifted the same way: **the code shipped and the row did
+not move.** Two were recommended to the steward as the next work before anyone read the tree; one
+cited a function (`injectionFor`) that is not the mechanism it described and lives in a different
+component for a different purpose.
+
+That failure mode is worse than a stale row looks. These documents exist to be QUOTED — by planning,
+by ADR context sections, and by anyone deciding what to build next. A row claiming a capability is
+missing is an invitation to build it twice, and the credential-injectors row nearly bought a new
+configuration language to replace a declarative mechanism that already worked.
+
+**So, before quoting any row here:**
+
+1. **Read the code the row names.** If the row names no code, that is itself the finding.
+2. **A row is evidence of the day it was written**, exactly like a demo's green. If a claim outlives
+   the run or the reading that produced it, re-verify before repeating it.
+3. **Correct in place, with the evidence** — struck through and dated, never quietly rewritten. The
+   history of a wrong claim is how the next reader calibrates how much to trust the rest.
+4. **Not everything is stale.** The same pass confirmed CLI query verbs (`plan`/`apply` only, no
+   `get`/`describe`), cost accounting (calls and errors, no run-minutes), and the absent Organization
+   container are all ACCURATE. Verification is the point, not scepticism.

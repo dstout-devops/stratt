@@ -213,6 +213,14 @@ case "$ginv" in
     *"loaded-from-group_vars"*) echo "  …and group_vars/tier_edge.yml LOADED — the file ADR-0134 promised and nothing could read" ;;
     *) echo "FAIL: group_vars did not load; the play's assert would have failed"; exit 1 ;;
 esac
+# The repo's OWN module, loaded from project/library/ with no module path declared anywhere
+# (ANS-006 / `--module-path`). The play already asserts it, so a failure would fail the Run — but
+# asserting the line HERE makes it evidence rather than an inference from a green status.
+case "$ginv" in
+    *"the repo's own module loaded from project/library/"*)
+        echo "  …and the repo's OWN module loaded — ansible finds library/ beside the playbook, no knob needed" ;;
+    *) echo "FAIL: no evidence the repo's own module was loaded; ANS-006 projects content the estate cannot use"; exit 1 ;;
+esac
 
 # ── Assertion: a BURST of events launches exactly ONE Run (ADR-0162) ─────────────────────────────
 # One link flap is noise; five in ten minutes is an incident. Before ADR-0162 a Trigger could only
@@ -424,6 +432,88 @@ done
 ondevice "show running-config" | grep -qF "10.96.0.0/24" || {
     echo "FAIL: the batch Run succeeded but its own marker route is not on the device"; exit 1; }
 echo "  …and its own marker route 10.96.0.0/24 is on the device — its own evidence, not the storm's"
+
+# ── Assertion: a VALID signature at the wrong time is refused (ADR-0167) ─────────────────────────
+# ADR-0164 proved a signature can be checked. It could not prove this: that a correctly signed
+# request is still refused when it is stale. Without that, a captured POST replays forever — and
+# since ADR-0162 a replayed flap does not merely re-fire something idempotent, it ADVANCES A STORM
+# COUNTER, so five replays of one captured event manufacture an incident that never happened.
+echo "demo: assert a correctly signed but STALE request is refused as a replay"
+
+# The MAC covers <t>.<body>, so the clock is inside what was signed — an attacker editing `t`
+# invalidates the signature, which is what makes the timestamp worth checking at all.
+post_stamped() {
+    local ts="$1" sig
+    sig="$(sign "${ts}.${TS_BODY}")"
+    curl -fsS -o /dev/null -w '%{http_code}' -X POST "${ROOT}/emitters/nms-timestamped" \
+        -H "X-Stratt-Emitter-Token: ${FLAP_TOKEN}" -H "Content-Type: application/json" \
+        -H "X-NMS-Signature-V2: t=${ts},v1=${sig}" --data-binary "$TS_BODY" || true
+}
+TS_BODY='{"kind":"link.flap","port":"ge-0/0/9","site":"lab-1"}'
+
+now="$(date +%s)"
+code="$(post_stamped "$now")"
+[ "$code" = "202" ] || { echo "FAIL: a freshly signed request was not accepted (HTTP ${code})"; exit 1; }
+echo "  a freshly signed request is accepted"
+
+# THE ASSERTION. Signed with the SAME key, over its own timestamp, so the MAC is genuinely valid —
+# it is refused only because the clock says it is old. A verifier that checked the signature and
+# ignored the time would accept this, which is the replay this ADR exists to stop.
+stale=$(( now - 1800 ))
+code="$(post_stamped "$stale")"
+[ "$code" = "401" ] || {
+    echo "FAIL: a VALID signature 30 minutes old was accepted (HTTP ${code}) — the tolerance is"
+    echo "      not being enforced, so a captured request replays for as long as the key lives"
+    exit 1; }
+echo "  …and the same signature 30 minutes old is REFUSED — valid, but at the wrong time"
+
+# Skew cuts both ways: only refusing the past is a half-check, because an attacker who can push the
+# clock forward would otherwise mint requests that stay valid indefinitely.
+code="$(post_stamped "$(( now + 1800 ))")"
+[ "$code" = "401" ] || { echo "FAIL: a far-FUTURE timestamp was accepted (HTTP ${code})"; exit 1; }
+echo "  …and so is one 30 minutes in the future — skew is refused both ways"
+
+# ── Assertion: the dispatcher refuses an unpinned image (ADR-0169) ───────────────────────────────
+# The chart gate (ADR-0168) cannot see this image: an EE-Job image is named by an ACTUATOR in the
+# estate and reaches the cluster through the dispatcher. Every image on this floor is a floating
+# tag by design, so the gate is enabled here directly rather than through the chart — turning it on
+# in values would refuse to render the whole demo, which is ADR-0168 working correctly.
+echo "demo: assert the dispatcher refuses an unpinned EE image when the estate requires digests"
+kc -n "$NS" set env deploy/stratt STRATT_REQUIRE_IMAGE_DIGESTS=true >/dev/null
+kc -n "$NS" rollout status deploy/stratt --timeout=180s >/dev/null
+restore_digest_gate() { kc -n "$NS" set env deploy/stratt STRATT_REQUIRE_IMAGE_DIGESTS- >/dev/null 2>&1 || true; }
+trap 'restore_digest_gate; kill "$PF_PID" "$BAO_PF" 2>/dev/null || true' EXIT
+# The port-forward died with the old pod.
+kill "$PF_PID" 2>/dev/null || true
+kc -n "$NS" port-forward svc/stratt "${LPORT}:8080" >/dev/null 2>&1 &
+PF_PID=$!
+for _ in $(seq 1 30); do curl -fsS "${ROOT}/healthz" >/dev/null 2>&1 && break; sleep 1; done
+
+gwr=$(api POST "/workflows/${WORKFLOW}/runs" -d "{\"inputs\":{\"routePrefix\":\"10.95.0.0/24\"}}" | jq -r '.id')
+[ -n "$gwr" ] && [ "$gwr" != "null" ] || { echo "FAIL: no WorkflowRun id for the digest-gate check"; exit 1; }
+gstat=""
+for _ in $(seq 1 60); do
+    gstat=$(api GET "/workflow-runs/${gwr}" | jq -r '.workflowRun.status // .status // empty')
+    case "$gstat" in succeeded|failed|canceled) break ;; esac
+    sleep 3
+done
+[ "$gstat" = "failed" ] || {
+    echo "FAIL: the Run is '${gstat:-none}', want failed — an estate requiring digests ran a"
+    echo "      floating-tag image anyway, which is the gate being inert"
+    exit 1; }
+gerr="$(api GET "/runs?workflowRunId=${gwr}" 2>/dev/null | jq -r --arg r "$gwr" '.[]? | select(.workflowRunId==$r) | .error // empty' | head -1)"
+case "$gerr" in
+    *"ADR-0169"*|*"pinned by TAG"*) echo "  the Run was refused, naming the image and the reason" ;;
+    *) echo "FAIL: the Run failed for some other reason (§1.8): '${gerr}'"; exit 1 ;;
+esac
+# …and the device is untouched by a Run that never dispatched.
+if ondevice "show running-config" | grep -qF "10.95.0.0/24"; then
+    echo "FAIL: the refused Run still configured the device — it was not refused, it was attempted"
+    exit 1
+fi
+echo "  …and the device was never touched by it"
+restore_digest_gate
+kc -n "$NS" rollout status deploy/stratt --timeout=180s >/dev/null
 
 echo
 echo "demo: DONE — Stratt configured a real network device over its own CLI (fidelity: ${fidelity})."

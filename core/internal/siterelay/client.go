@@ -2,6 +2,7 @@ package siterelay
 
 import (
 	"context"
+	"fmt"
 	"io"
 
 	"google.golang.org/grpc"
@@ -54,19 +55,26 @@ func (c *Client) Health(ctx context.Context, in *pluginv1.HealthRequest, _ ...gr
 	return out, c.unary(ctx, mHealth, in, out)
 }
 
-func (c *Client) WrapKey(ctx context.Context, in *pluginv1.WrapKeyRequest, _ ...grpc.CallOption) (*pluginv1.WrapKeyResponse, error) {
-	out := &pluginv1.WrapKeyResponse{}
-	return out, c.unary(ctx, mWrapKey, in, out)
+func (c *Client) WrapKey(context.Context, *pluginv1.WrapKeyRequest, ...grpc.CallOption) (*pluginv1.WrapKeyResponse, error) {
+	return nil, errCustodyDoesNotTravel("WrapKey")
 }
 
-func (c *Client) UnwrapKey(ctx context.Context, in *pluginv1.UnwrapKeyRequest, _ ...grpc.CallOption) (*pluginv1.UnwrapKeyResponse, error) {
-	out := &pluginv1.UnwrapKeyResponse{}
-	return out, c.unary(ctx, mUnwrapKey, in, out)
+func (c *Client) UnwrapKey(context.Context, *pluginv1.UnwrapKeyRequest, ...grpc.CallOption) (*pluginv1.UnwrapKeyResponse, error) {
+	return nil, errCustodyDoesNotTravel("UnwrapKey")
 }
 
-func (c *Client) VerifyMAC(ctx context.Context, in *pluginv1.VerifyMACRequest, _ ...grpc.CallOption) (*pluginv1.VerifyMACResponse, error) {
-	out := &pluginv1.VerifyMACResponse{}
-	return out, c.unary(ctx, mVerifyMAC, in, out)
+func (c *Client) VerifyMAC(context.Context, *pluginv1.VerifyMACRequest, ...grpc.CallOption) (*pluginv1.VerifyMACResponse, error) {
+	return nil, errCustodyDoesNotTravel("VerifyMAC")
+}
+
+// errCustodyDoesNotTravel is the refusal the three custody verbs give, WITHOUT dialling: the call
+// is wrong before it reaches the wire (ADR-0166 D1). Present at all only because *Client must
+// satisfy PluginServiceClient — a stub that returns a clear refusal is honest, where one wired to a
+// routing constant implies a capability nobody built.
+func errCustodyDoesNotTravel(verb string) error {
+	return fmt.Errorf("siterelay: %s does not travel to a Site (ADR-0166): a custodian's key stays "+
+		"where it lives, and relaying it would carry the hub's DEK across the link. A Site needing "+
+		"custody is a Site-local custodian, not this verb over a relay", verb)
 }
 
 func (c *Client) Plan(ctx context.Context, in *pluginv1.PlanRequest, _ ...grpc.CallOption) (*pluginv1.PlanResponse, error) {

@@ -31,12 +31,25 @@ exists," never as "the depth is audited."
 | **Platform Gateway** (unified UI/API/RBAC/SSO) | 🟢 **code-complete core**, 🟡 UI/analytics | Unified UI, OIDC, OpenFGA, SCIM, one Principal, one audit stream, platform MCP; gaps are analytics/org/admin UI                       |
 | **Automation Mesh** (distributed exec)         | 🟢 **code-complete**, one gap              | Sites (push+pull) + signed Bundles + Cells (a partitioning story AAP lacks); gap = multi-hop relay nodes                              |
 | **Event-Driven Ansible** (rulebooks)           | 🟢 **task parity** — two mechanisms declined | Ingest→CEL→launch+dedup, plus patterns over events (ADR-0162: `count`/`within`, `allOf`/`correlateBy`) and durable cross-replica throttling. Declined by decision, not missing: a `set_fact` working memory (§1.2) and the rulebook FILE format |
-| **Automation Hub** (content/EE/supply-chain)   | 🔴 **biggest gap**                         | No content registry, no EE-build factory, SBOM/SLSA pipeline unbuilt; plugin+contract-pinning model substitutes the _trust_ half only |
+| **Automation Hub** (content/EE/supply-chain)   | 🟡 **partial** — the registry half remains | EE-build factory ships (ADR-0124/0170: an AAP `execution-environment.yml` builds, with byte-pinned content ansible-builder does not do). Signing/SBOM/SLSA ship (ADR-0165), with digest enforcement at the chart (ADR-0168) and the dispatcher (ADR-0169). **Gap: no content registry / catalog / version resolution, and nothing published yet.** |
 
-**Bottom line:** the AWX-successor **job-runner + governance + distributed-execution + identity** surface is
-built and in places ahead. The credible-replacement work concentrates in **(1) Hub-class content/supply-chain,
-(2) EDA rulebook depth, (3) `/api/v2` + notification breadth for a clean migration**, plus the unbuilt
-**live-cluster proof**.
+**Bottom line (rewritten 2026-08-04 — every clause of the previous one had gone stale):** the
+AWX-successor **job-runner + governance + distributed-execution + identity** surface is built and in
+places ahead. Of the four things this line used to name as the remaining work:
+
+1. **Hub-class content/supply-chain** — the EE-build and signing halves ship (ADR-0124/0170,
+   ADR-0165/0168/0169). What remains is a **content registry**: no catalog, no discovery, no version
+   resolution — and nothing published yet, which is a decision rather than a coding task.
+2. **EDA rulebook depth** — closed. Patterns over events, durable cross-replica throttling, declared
+   payload shapes and signed sources all ship (ADR-0162/0163/0164/0167); the rulebook FILE format and
+   a `set_fact` working memory are **declined by decision**, not missing.
+3. **`/api/v2` + notification breadth** — route breadth closed 2026-07-31, launch semantics by
+   ADR-0160, sink drivers by ADR-0125.
+4. **The live-cluster proof** — shipped as E2E-1: the whole demo library runs against a real cluster
+   and its exit code is the gate.
+
+**The honest remaining list is now short and specific**: a content registry, an EE distribution
+service, multi-hop mesh relay, in-cluster admission verification, and analytics/org-admin UI.
 
 ---
 
@@ -64,7 +77,7 @@ in the `awxfacade` wire layer.
 | Webhooks                                  | 🟢     | Emitter receiver [emitters/](../../core/internal/emitters/), ADR-0018                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
 | **Notifications**                         | 🟢     | A Sink's `kind` names its delivery Action, so core holds no list of drivers (ADR-0125). **webhook** + **smtp/email** ship; **Slack** works today over webhook (its incoming-hook url IS the credential); **PagerDuty/Teams** are a plugin driver with no core change — the routing key rides the brokered credential, never a Git-declared body (§2.5). ADR-0027                                                                                                                                                                                                                                                                                                             |
 | **`/api/v2` façade**                      | 🟡     | [awxfacade/](../../core/internal/awxfacade/): job_templates/jobs/inventories(+launch/cancel/stdout), **schedules** and **workflow_job_templates + workflow_jobs**, **projects** and **credentials + credential_types (all 2026-07-31)** shipped — **the four named route families are complete**.  **14 of the 21 Workflows the reference estate ships were invisible on this surface until the WFJT family landed** — `job_templates` presents only single-Step, Gate-free Workflows, so every DAG, every gated Workflow and every policy-checkpointed one had no representation at all, which is the compat door failing at exactly the shapes an adopter migrates FOR. The partition is now exact and total (a Workflow is one family or the other, never both and never neither, pinned against the shipped estate). Launch calls the SAME `orchestrate.LaunchWorkflowRun` the native door does — extracted rather than copied, because a second launch path grows its own authz and its own drift (§1.6) — and authorizes EVERY actuation Step's View, so the compat surface is not the weaker path. `workflow_nodes` renders the DAG with Stratt's backward `needs` edges inverted into AWX's forward success/failure/always lists; a node's `unified_job_template` is **null** unless the Step nests a real declared Workflow, because a Step is not independently launchable and a synthesized id would be a dangling reference. What AWX has no concept for (policy checkpoints, capability-class Steps) is named plainly in a `summary_fields.stratt` block rather than flattened into "job" — an AWX field either carries its AWX meaning faithfully or is absent (§1.8). **`projects` needed no inferring:** ADR-0134 D2 already declares an Actuator's `contentDir` to be "one project: playbooks, roles/, group_vars/", one Actuator per project, so the family is that mapping rather than a synthesized grouping over Step params (which would have been core reading a tool's params by name to invent an object — the §1.4 trap that ADR warns implementers about). `scm_type` is manual because Stratt resolves content at estate PARSE and carries it in the JobSpec — nothing clones at run time by design — and `scm_revision` is empty because core tracks none per content root (AWX-001), not because none exists. `job_templates.project` is no longer null. No `POST /update/`: an update means "clone the SCM again" and there is nothing to clone, so offering a no-op would tell an operator their content refreshed. **`credentials` is where §2.5 is easiest to erode and is not:** an AWX credential CONTAINS material, a CredentialRef contains a POINTER, and no graph-store method returns material — not redacted, not encrypted, none. `inputs` carries the declared injection KEY NAMES with AWX's `$encrypted$` sentinel, which asserts "a secret stands here" (true) and not "Stratt holds it" (false); the key names are Git-declared and already on /api/v1, so hiding them would hide diagnosis while protecting nothing. The LOCATOR is deliberately absent — not material, but the address of it, and a compat listing is not the place to widen who reads it. One synthetic `credential_type` for every ref, because AWX's type says what a credential is FOR while Stratt's `backend` says WHO BROKERS IT — mapping one onto the other is a category error that would read as fact. Attaching a credential at launch stays in `ignored_fields`: a Step's credentialRefs are declared and reviewed in Git (ADR-0009), and a launch-time swap would make the compat surface the one door that skips that review. ADR-0026. ADR-0026. **`schedules` is served from schedule-kind Triggers, and its one hard part is recorded rather than smoothed over:** AWX carries an iCal RRULE and Stratt carries cron, and the two are not interconvertible in general — cron ORs day-of-month against day-of-week where RRULE cannot. So the façade converts ONLY the subset that round-trips faithfully (minutely/hourly intervals, fixed-minute hourly, daily, and named-weekday weekly — which covers every Trigger the estate ships) and for anything else **omits `rrule` entirely**, stating the real cron in `description`. A wrong RRULE is the worst available output here: awxkit and the AWX UI would render a firing time different from the one actually in force with nothing anywhere to contradict them, which is hiding a discrepancy rather than hiding mechanism (§1.8). READ-ONLY like every other family — a schedule is a DECLARATION reconciled from Git, and a POST door would make the compat surface a second write path into desired state (§2.2/§2.3)                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
-| Custom credential **types**/injectors     | 🟡     | fixed `injectionFor` map, not a user-definable injector DSL                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| Custom credential **types**/injectors     | 🟢 **the task is served; the abstraction differs** (row was wrong, corrected 2026-08-04) | The row cited `injectionFor` as Stratt's mechanism. It is not: that map lives in the AWX IMPORT plugin and picks a sensible policy per AWX credential kind at MIGRATION time. Stratt's actual mechanism is per-CredentialRef and operator-declared in Git — `injection: [{key, as: env|file, name}]` — which is AWX's `env` and `file` injectors as DATA, and shipped estates use it (`aws-dev`, `crossplane-dev`). What genuinely differs, each for a reason: no `extra_vars` injector, because material as extra_vars would put a secret through the CORE (§2.5); no Jinja-composed file, because that is the §1 no-new-languages line — a composed artifact is one backend key holding the composed blob, which is exactly what the shipped kubeconfig and AWS-credentials refs do; and no first-class credential TYPE, because a type is a second place to declare a shape the ref and the Contract already declare |
 
 ### 2. Policy-as-code — 🟢 ahead of AAP 2.7
 
@@ -103,7 +116,7 @@ is a flat hub↔leaf NATS model; Receptor's arbitrary routable mesh (control/hop
 DMZ traversal) is not modeled. _(Note: `plugins/mesh/` is the service-dependency connector — a false
 friend, unrelated to automation mesh.)_
 
-### 5. Event-Driven Ansible — 🟡 partial (spine, not depth)
+### 5. Event-Driven Ansible — 🟢 task parity (two mechanisms declined by decision)
 
 The Trigger engine (Emitter × CEL → Workflow/View launch, ADR-0018) covers the **spine**: event ingest,
 condition eval, at-least-once durable launch (JetStream), content-hash dedup, and full authz/descent
@@ -122,9 +135,15 @@ parity. It is **not a rulebook engine**. Gaps:
   presents its token in is declared (D1 — GitLab's `X-Gitlab-Token` and the long tail behind it),
   and a source that SIGNS its body is verified by delegating to the key's holder over the port (D2),
   because the core may not hold the secret that would let it check a MAC itself (§2.5, ADR-0052).
-  **Still absent, deliberately**: timestamped anti-replay schemes (Stripe's `t=…,v1=…`), booked in
-  ADR-0164 D5 rather than approximated — and replay protection generally, which was absent before
-  this arc and remains so.
+  **Timestamped schemes and freshness now ship too**
+  ([ADR-0167](../adr/0167-a-replay-is-a-valid-signature-at-the-wrong-time.md)): a `kv` header shape,
+  a declared signature/timestamp pair, `signedPayload: timestamp.body`, and a tolerance window that
+  refuses a stale request BEFORE consulting the verifier. Two corrections to what this row used to
+  say: retry dedup always existed (`EventHash` excludes `ReceivedAt`, so a retried POST collides on
+  both the JetStream publish and the derived workflow id) — it is a CORRECTNESS control, never a
+  replay defence, because an attacker picks the moment. And freshness only protects sources that
+  sign a timestamp; the shared-token half still cannot bound replay, and ADR-0167 D3 says so rather
+  than implying coverage.
 - **Rulebook format** — a Trigger is `1 Emitter + 1 CEL → 1 target`; no ordered multi-rule ruleset.
   A PACKAGING difference rather than a capability gap: the engine evaluates every Trigger against
   every event and fires every match, which is what a ruleset does. AAP binds sources and rules in one
@@ -146,7 +165,7 @@ parity. It is **not a rulebook engine**. Gaps:
   a rules engine's working memory is not: "why did this Trigger not fire?" is now a row (§1.8).
 - **Inline meta-actions** — can only launch a Workflow/View; no `set_fact`/`post_event`/`run_module`.
 
-### 6. Automation Hub — 🔴 biggest gap
+### 6. Automation Hub — 🟡 partial (the registry half remains)
 
 AAP's hosted, signed, versioned **collection** distribution + **EE registry** + **collection-signing** trust
 story. Stratt covers the **trust + execution half** convincingly — boot-time hash-**pinned** Contracts that
@@ -156,12 +175,27 @@ as independently-shipped **plugin images**, each its own CI unit (ADR-0046). Wha
 
 - **Content registry / index** — no collection hosting, no plugin catalog/discovery/version-resolution
   (relies on external OCI + hand-pinned Helm refs).
-- **EE build tooling** — no `ansible-builder` / `execution-environment.yml` factory; a single hand-written
-  [ee/Dockerfile](../../ee/Dockerfile) (compat asserted, not automated) and no EE distribution service.
-- **Supply-chain pipeline** — charter §7.3 promises cosign/SBOM/SLSA "from release one," but
-  [.github/workflows/ci.yml](../../.github/workflows/ci.yml) implements only DCO. Image signing + SBOM + SLSA
-  attestation are **unbuilt** (signing is real only on the pull-Bundle path). _(This is enterprise-crack
-  SEC-5/SUP-1, now sharper because the container collector projects digests.)_
+- ~~**EE build tooling** — no `ansible-builder` / `execution-environment.yml` factory~~ — **the row
+  was stale and is now closed**. ADR-0124 D1 already read an `execution-environment.yml` and resolved
+  its Galaxy content through the pinned, hash-verified pipeline (which `ansible-builder` itself does
+  not do); [ADR-0170](../adr/0170-from-a-definition-to-an-image.md) turns that reading into a BUILD —
+  `task ee:factory:build EE=…` — and carries `dependencies.python` into the image, which is
+  ADR-0159's third axis and the difference between an EE that connects and one that fails at connect
+  time. `ansible-builder` is deliberately NOT adopted (D3): compatibility belongs at the declaration
+  boundary, not in adopting a second build graph. Still open: an EE **distribution** service.
+- ~~**Supply-chain pipeline** — … implements only DCO. Image signing + SBOM + SLSA attestation are
+  **unbuilt**.~~ — **built** (2026-08-04), and the row understated the problem: there was no release
+  pipeline at all, so "from release one" was unmet in a more basic way than missing signatures.
+  [ADR-0165](../adr/0165-there-has-never-been-a-release-to-sign.md) adds a tag-triggered workflow that
+  signs **keyless** (Sigstore — identity-bound to the workflow, no long-lived key), attaches an SPDX
+  SBOM and SLSA provenance, and **verifies its own output**; `task supply:verify` runs exactly what CI
+  runs. Enforcement followed in two places the register never separated:
+  [ADR-0168](../adr/0168-a-warning-is-not-a-gate.md) makes an unpinned image a chart **render
+  failure**, and [ADR-0169](../adr/0169-the-last-door-before-something-runs.md) refuses one at the
+  **dispatcher** — a different set of images entirely, since an EE-Job image is named by an Actuator
+  in the estate and the chart cannot see it. **Still open, stated plainly**: nothing is published yet
+  (ADR-0165 D5 — that is a decision, not a coding task), a digest is not a signature, and in-cluster
+  admission verification remains booked. _(enterprise-crack SEC-5/SUP-1.)_
 - **Remote/upstream sync** — no Galaxy mirror. **Air-gap content seeding SHIPPED** (ADR-0124 D2):
   `task ee:content:pull` downloads the declared collections on a connected machine, and an EE built
   with `EE_OFFLINE=<dir>` reaches NO registry — with the pin check and the lockfile check unchanged,

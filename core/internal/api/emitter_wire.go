@@ -45,6 +45,21 @@ func verifyFromWire(in *EmitterVerify) *types.VerifySpec {
 		return nil
 	}
 	out := &types.VerifySpec{Header: in.Header, Algorithm: string(in.Algorithm), KeyRef: in.KeyRef}
+	if in.Format != nil {
+		out.Format = string(*in.Format)
+	}
+	if in.SignatureKey != nil {
+		out.SignatureKey = *in.SignatureKey
+	}
+	if in.TimestampKey != nil {
+		out.TimestampKey = *in.TimestampKey
+	}
+	if in.SignedPayload != nil {
+		out.SignedPayload = string(*in.SignedPayload)
+	}
+	if in.ToleranceSeconds != nil {
+		out.ToleranceSeconds = int(*in.ToleranceSeconds)
+	}
 	if in.Encoding != nil {
 		out.Encoding = string(*in.Encoding)
 	}
@@ -59,6 +74,26 @@ func verifyToWire(in *types.VerifySpec) *EmitterVerify {
 		return nil
 	}
 	out := &EmitterVerify{Header: in.Header, Algorithm: EmitterVerifyAlgorithm(in.Algorithm), KeyRef: in.KeyRef}
+	if in.Format != "" {
+		f := EmitterVerifyFormat(in.Format)
+		out.Format = &f
+	}
+	if in.SignatureKey != "" {
+		k := in.SignatureKey
+		out.SignatureKey = &k
+	}
+	if in.TimestampKey != "" {
+		k := in.TimestampKey
+		out.TimestampKey = &k
+	}
+	if in.SignedPayload != "" {
+		sp := EmitterVerifySignedPayload(in.SignedPayload)
+		out.SignedPayload = &sp
+	}
+	if in.ToleranceSeconds > 0 {
+		t := int64(in.ToleranceSeconds)
+		out.ToleranceSeconds = &t
+	}
 	if in.Encoding != "" {
 		e := EmitterVerifyEncoding(in.Encoding)
 		out.Encoding = &e

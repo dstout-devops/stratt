@@ -236,8 +236,12 @@ with no field for material and nothing secret in it.
 - **The ingest handler had no test at all**, which is how a hardcoded header survived this long in
   the door that authenticates untrusted callers. It now takes its store and bus as interfaces so the
   door itself is exercised.
-- **`WrapKey`/`UnwrapKey` are not actually served over the site relay.** The client has them and the
-  routing constants exist, but the far-end switch answers "unknown method". That is a pre-existing
-  gap in ADR-0100's cross-DC story rather than one this ADR introduced; it is recorded in
-  `siterelay/relay.go` and left alone, because whether an edge Site may verify against the hub's KMS
-  is an MF-C question deserving its own decision.
+- ~~**`WrapKey`/`UnwrapKey` are not actually served over the site relay**… a pre-existing gap in
+  ADR-0100's cross-DC story.~~ — **that characterization was wrong**, corrected by
+  [ADR-0166](0166-a-key-custodian-does-not-travel.md). The far end does answer "unknown method", but
+  reading the call graph rather than the constant list shows `siterelay.NewClient` is built in one
+  place — dispatching plugin work to a Site — while the custodian and MAC verifier each hold their
+  own direct dial. **No shipping path routes a custody call through a relay**, so those client
+  methods are interface padding, not a broken capability. Nor should they travel: relaying WrapKey
+  would carry the hub's DEK across the WAN, inverting the property ADR-0100 exists to provide. They
+  now refuse at both ends with the reason.

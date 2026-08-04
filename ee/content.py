@@ -176,6 +176,38 @@ UNSUPPORTED_EE_SECTIONS = {
 }
 
 
+def ee_python_extras(path: Path) -> list[str]:
+    """Extract dependencies.python from an execution-environment.yml (ADR-0170 D2).
+
+    ansible-builder accepts an inline list or a path to a requirements.txt; both are handled,
+    because both are what an operator arriving from AAP actually has. Declaration ORDER is
+    preserved — a pip install is not order-free, and reordering somebody's requirements is the kind
+    of helpfulness that produces a different image than the one they described.
+    """
+    raw = yaml.safe_load(path.read_text()) or {}
+    deps = raw.get("dependencies") if isinstance(raw, dict) else None
+    if not isinstance(deps, dict):
+        return []
+    py = deps.get("python")
+    if py is None:
+        return []
+    if isinstance(py, str):
+        ref = (path.parent / py).resolve()
+        if not ref.is_file():
+            raise PinError(
+                f"{path}: dependencies.python points at {py!r}, which does not exist (resolved to {ref})"
+            )
+        out = []
+        for line in ref.read_text().splitlines():
+            line = line.split("#", 1)[0].strip()
+            if line:
+                out.append(line)
+        return out
+    if isinstance(py, list):
+        return [str(x).strip() for x in py if str(x).strip()]
+    raise PinError(f"{path}: dependencies.python must be a list or a path to a requirements file")
+
+
 def ee_galaxy_requirements(path: Path) -> tuple[dict[str, Any], list[str]]:
     """Extract the Galaxy requirements from an ansible-builder execution-environment.yml.
 
@@ -210,12 +242,18 @@ def ee_galaxy_requirements(path: Path) -> tuple[dict[str, Any], list[str]]:
             f"An execution-environment.yml with nothing under dependencies.galaxy is a base EE — "
             f"build one with no content file instead of an empty definition"
         )
-    for section in ("python", "system"):
-        if deps.get(section):
-            notes.append(
-                f"dependencies.{section}: not carried over — python/system packages belong in "
-                f"ee/Dockerfile, where the layer they land in is reviewable"
-            )
+    # dependencies.python CARRIES now (ADR-0170 D2) — see ee_python_extras. It is ADR-0159's third
+    # axis: a collection can install and the Run still die at connect time for want of a python
+    # module, and this is where an AAP operator declares that module. Leaving it a printed caveat
+    # while every other declared dependency installed was the wrong side of the line.
+    #
+    # dependencies.system stays reported: an apt package lands in a layer whose position and
+    # provenance are the Dockerfile's business, and no ADR-0159-shaped failure sits behind it.
+    if deps.get("system"):
+        notes.append(
+            "dependencies.system: not carried over — system packages belong in ee/Dockerfile, "
+            "where the layer they land in is reviewable"
+        )
 
     galaxy = deps.get("galaxy")
     if galaxy is None:
@@ -865,6 +903,12 @@ def main() -> int:
     p.add_argument("files", nargs="+", type=Path)
     p.add_argument("--artifacts", type=Path, required=True)
 
+    py = sub.add_parser(
+        "ee-python",
+        help="print dependencies.python from an execution-environment.yml, one per line (ADR-0170)",
+    )
+    py.add_argument("file", type=Path)
+
     e = sub.add_parser(
         "ee-requirements",
         help="print the Galaxy requirements an ansible-builder execution-environment.yml declares, "
@@ -886,6 +930,9 @@ def main() -> int:
             )
         elif args.cmd == "pull":
             return pull(args.files, args.artifacts)
+        elif args.cmd == "ee-python":
+            for pkg in ee_python_extras(args.file):
+                print(pkg)
         elif args.cmd == "ee-requirements":
             doc, notes = ee_galaxy_requirements(args.file)
             for note in notes:

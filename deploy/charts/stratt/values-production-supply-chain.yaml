@@ -1,0 +1,17 @@
+# Production supply-chain profile (ADR-0168, charter §7.3).
+#
+# WHAT THIS IS FOR: the chart has said "pin digests in production" since ADR-0013, in a NOTES.txt
+# warning. A warning does not stop a deployment, and nothing has ever failed because an image was
+# floating. This profile makes the promise checkable by `helm template` — the one tool every install
+# already runs — so "we pin digests" stops being a claim and becomes a gate.
+#
+# Layer it over your real values:
+#
+#   helm template stratt deploy/charts/stratt -f my-values.yaml \
+#     -f deploy/charts/stratt/values-production-supply-chain.yaml
+#
+# It will REFUSE until every image carries a digest, naming the one that does not. Get the digests
+# from a signed release and verify them first — `task supply:verify IMAGE=<ref@sha256:…>` (ADR-0165)
+# — because a digest you have not verified only proves the bytes are stable, never that they are ours.
+supplyChain:
+  requireDigests: true

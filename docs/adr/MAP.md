@@ -10,25 +10,25 @@ design must reconcile with. Chronological list: [README.md](README.md); phase vi
 
 ```mermaid
 graph TD
-  actuators["actuators<br/><small>0016 0022 0050 0053 0092 0117<br/>0124 0126 0133 0134 0135 0148<br/>0149 0153 0156 0158 0159 0160<br/>0161</small>"]
-  api_surface["api-surface<br/><small>0006 0021 0026 0076 0091 0121<br/>0157 0163 0164</small>"]
+  actuators["actuators<br/><small>0016 0022 0050 0053 0092 0117<br/>0124 0126 0133 0134 0135 0148<br/>0149 0153 0156 0158 0159 0160<br/>0161 0170</small>"]
+  api_surface["api-surface<br/><small>0006 0021 0026 0076 0091 0121<br/>0157 0163 0164 0167</small>"]
   audit_telemetry["audit-telemetry<br/><small>0034 0065 0077 0121</small>"]
   authz_identity["authz-identity<br/><small>0009 0028 0035 0079 0101 0122<br/>0130 0155</small>"]
   capability_framework["capability-framework<br/><small>0100 0104 0105 0106 0107 0110<br/>0111 0112 0113 0114 0135 0145<br/>0146 0151</small>"]
   certificates_pki["certificates-pki<br/><small>0030 0043 0050 0098 0106 0150</small>"]
   connectors["connectors<br/><small>0007 0014 0025 0026 0037 0038<br/>0039 0045 0086 0087 0088 0089<br/>0095 0097 0099 0113 0114 0115<br/>0127 0128 0129 0130 0131 0132<br/>0133 0136 0144 0146 0154 0155<br/>0156 0158 0160</small>"]
-  credentials_secrets["credentials-secrets<br/><small>0009 0029 0052 0094 0098 0099<br/>0100 0106 0125 0126 0153 0164</small>"]
+  credentials_secrets["credentials-secrets<br/><small>0009 0029 0052 0094 0098 0099<br/>0100 0106 0125 0126 0153 0164<br/>0166 0167</small>"]
   estate_as_code["estate-as-code<br/><small>0055 0056 0057 0103 0113 0116<br/>0118 0119 0120 0122 0123 0132<br/>0134 0135 0136 0137 0138 0139<br/>0142 0146 0147 0148 0151 0152<br/>0163</small>"]
   findings_drift["findings-drift<br/><small>0019 0020 0033 0043 0080 0085<br/>0128 0129 0130 0133 0148 0150</small>"]
-  foundation["foundation<br/><small>0001 0002 0004 0005 0006 0008<br/>0108 0109 0116 0137 0138 0141<br/>0165</small>"]
+  foundation["foundation<br/><small>0001 0002 0004 0005 0006 0008<br/>0108 0109 0116 0137 0138 0141<br/>0165 0168 0169 0170</small>"]
   graph_model["graph-model<br/><small>0015 0017 0041 0042 0059 0060<br/>0079 0080 0081 0082 0084 0085<br/>0096 0114 0115 0119 0120 0123<br/>0126 0127 0128 0129 0130 0132<br/>0133 0143 0144 0147 0152 0153<br/>0154 0155 0156 0158 0161</small>"]
   intent_compiler["intent-compiler<br/><small>0023 0030 0036 0055 0058 0083<br/>0085 0114 0118 0119 0123 0148<br/>0150 0152</small>"]
-  orchestration["orchestration<br/><small>0010 0011 0018 0027 0031 0063<br/>0118 0122 0125 0134 0139 0140<br/>0157 0162 0163 0164</small>"]
-  plugin_port["plugin-port<br/><small>0046 0047 0048 0049 0051 0053<br/>0054 0103 0117 0121 0124 0125<br/>0127 0131 0137 0138 0140 0141<br/>0145 0149 0159 0164 0165</small>"]
+  orchestration["orchestration<br/><small>0010 0011 0018 0027 0031 0063<br/>0118 0122 0125 0134 0139 0140<br/>0157 0162 0163 0164 0167 0169</small>"]
+  plugin_port["plugin-port<br/><small>0046 0047 0048 0049 0051 0053<br/>0054 0103 0117 0121 0124 0125<br/>0127 0131 0137 0138 0140 0141<br/>0145 0149 0159 0164 0165 0166</small>"]
   policy_governance["policy-governance<br/><small>0061 0062 0063 0064 0065 0066<br/>0067 0068 0069 0070 0071 0072<br/>0073 0074 0075 0076 0122 0157</small>"]
   provisioning["provisioning<br/><small>0017 0058 0095 0096 0107 0110<br/>0111 0112 0113 0114 0115 0120<br/>0123 0143 0144 0145 0146 0147<br/>0151</small>"]
   state_artifacts["state-artifacts<br/><small>0016 0029 0093 0097 0105 0112<br/>0145</small>"]
-  substrate_ops["substrate-ops<br/><small>0013 0032 0040 0044 0045 0049<br/>0077 0078 0093 0101 0102 0124<br/>0131 0142 0149 0165</small>"]
+  substrate_ops["substrate-ops<br/><small>0013 0032 0040 0044 0045 0049<br/>0077 0078 0093 0101 0102 0124<br/>0131 0142 0149 0165 0166 0168<br/>0169</small>"]
   ui["ui<br/><small>0003 0012 0020 0024 0090 0091<br/>0116 0121</small>"]
 
   actuators --> plugin_port
@@ -103,6 +103,7 @@ Actuators — execution engines (opentofu, helm, mcp, cert-issuer reconcile).
 - [ADR-0159](0159-a-transport-fails-on-three-axes.md) — A transport fails on three axes, and the image gate checks two
 - [ADR-0160](0160-the-same-job-possibly-a-different-hand.md) — The same job, possibly a different hand: launch-time parity with AAP
 - [ADR-0161](0161-the-graph-is-the-inventory-and-it-has-no-groups.md) — The graph is the inventory, and it renders no groups
+- [ADR-0170](0170-from-a-definition-to-an-image.md) — From a definition to an image
 
 ### api-surface
 
@@ -119,6 +120,7 @@ API surface — OpenAPI /api/v1, the AWX /api/v2 façade, the platform MCP serve
 - [ADR-0157](0157-cancelling-a-workflow-run.md) — Cancelling a WorkflowRun: one writer, no orphans, and a Gate that stops meaning "approve me"
 - [ADR-0163](0163-one-post-many-events-and-the-shape-is-not-cores.md) — One POST, many events, and the shape is not core's
 - [ADR-0164](0164-a-source-signs-and-the-core-does-not-hold-the-key.md) — A source signs, and the core does not hold the key
+- [ADR-0167](0167-a-replay-is-a-valid-signature-at-the-wrong-time.md) — A replay is a valid signature at the wrong time
 
 ### audit-telemetry
 
@@ -238,6 +240,8 @@ Credentials & secrets (§2.5) — brokering, the SecretBroker port, KV, KeyCusto
 - [ADR-0126](0126-managed-node-reachability-credential-host-key-and-jump.md) — Reaching a managed node: the connection credential, the host key, and the jump path
 - [ADR-0153](0153-a-connection-type-and-a-password-that-is-only-ever-a-path.md) — A connection type, and a password that is only ever a path
 - [ADR-0164](0164-a-source-signs-and-the-core-does-not-hold-the-key.md) — A source signs, and the core does not hold the key
+- [ADR-0166](0166-a-key-custodian-does-not-travel.md) — A key custodian does not travel
+- [ADR-0167](0167-a-replay-is-a-valid-signature-at-the-wrong-time.md) — A replay is a valid signature at the wrong time
 
 ### estate-as-code
 
@@ -307,6 +311,9 @@ Foundation — charter authority, control plane, language/tooling, monorepo, met
 - [ADR-0138](0138-capability-typed-dependencies-and-the-seam-self-split.md) — A module depends on capabilities: the seam/self split, and the Step-level gap
 - [ADR-0141](0141-the-plugin-sdk-is-go-the-port-is-the-contract.md) — The plugin SDK is Go; the PORT is the contract, not a language
 - [ADR-0165](0165-there-has-never-been-a-release-to-sign.md) — There has never been a release to sign
+- [ADR-0168](0168-a-warning-is-not-a-gate.md) — A warning is not a gate
+- [ADR-0169](0169-the-last-door-before-something-runs.md) — The last door before something runs
+- [ADR-0170](0170-from-a-definition-to-an-image.md) — From a definition to an image
 
 ### graph-model
 
@@ -393,6 +400,8 @@ Orchestration — Triggers, Workflows/Gates, Steps, Runs, Actions, notifications
 - [ADR-0162](0162-a-trigger-decides-on-more-than-one-event.md) — A Trigger decides on more than one event
 - [ADR-0163](0163-one-post-many-events-and-the-shape-is-not-cores.md) — One POST, many events, and the shape is not core's
 - [ADR-0164](0164-a-source-signs-and-the-core-does-not-hold-the-key.md) — A source signs, and the core does not hold the key
+- [ADR-0167](0167-a-replay-is-a-valid-signature-at-the-wrong-time.md) — A replay is a valid signature at the wrong time
+- [ADR-0169](0169-the-last-door-before-something-runs.md) — The last door before something runs
 
 ### plugin-port
 
@@ -423,6 +432,7 @@ Sovereign plugin port — the dark-matter substrate, transports, runtime registr
 - [ADR-0159](0159-a-transport-fails-on-three-axes.md) — A transport fails on three axes, and the image gate checks two
 - [ADR-0164](0164-a-source-signs-and-the-core-does-not-hold-the-key.md) — A source signs, and the core does not hold the key
 - [ADR-0165](0165-there-has-never-been-a-release-to-sign.md) — There has never been a release to sign
+- [ADR-0166](0166-a-key-custodian-does-not-travel.md) — A key custodian does not travel
 
 ### policy-governance
 
@@ -511,6 +521,9 @@ Substrate & ops — HA/DR, Cells/multi-region, Sites, deploy, bootstrap, upgrade
 - [ADR-0142](0142-environments-are-declared-not-just-referenced.md) — An environment is declared, not just referenced; and it is not a Cell, a Site, or a coordinate
 - [ADR-0149](0149-the-execution-environment-content-floor.md) — The execution environment carries a content floor, and every variant is a superset
 - [ADR-0165](0165-there-has-never-been-a-release-to-sign.md) — There has never been a release to sign
+- [ADR-0166](0166-a-key-custodian-does-not-travel.md) — A key custodian does not travel
+- [ADR-0168](0168-a-warning-is-not-a-gate.md) — A warning is not a gate
+- [ADR-0169](0169-the-last-door-before-something-runs.md) — The last door before something runs
 
 ### ui
 
@@ -696,3 +709,8 @@ UI — React shell, schema-driven rendering, Views, descent, the first-party cli
 | [0163](0163-one-post-many-events-and-the-shape-is-not-cores.md) | api-surface, estate-as-code, orchestration |
 | [0164](0164-a-source-signs-and-the-core-does-not-hold-the-key.md) | api-surface, credentials-secrets, orchestration, plugin-port |
 | [0165](0165-there-has-never-been-a-release-to-sign.md) | foundation, plugin-port, substrate-ops |
+| [0166](0166-a-key-custodian-does-not-travel.md) | credentials-secrets, plugin-port, substrate-ops |
+| [0167](0167-a-replay-is-a-valid-signature-at-the-wrong-time.md) | api-surface, credentials-secrets, orchestration |
+| [0168](0168-a-warning-is-not-a-gate.md) | foundation, substrate-ops |
+| [0169](0169-the-last-door-before-something-runs.md) | foundation, orchestration, substrate-ops |
+| [0170](0170-from-a-definition-to-an-image.md) | actuators, foundation |

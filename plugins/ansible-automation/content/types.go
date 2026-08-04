@@ -1,8 +1,10 @@
 package content
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"path"
 	"strings"
@@ -294,8 +296,28 @@ func hasYAMLExt(p string) bool {
 // (a sequence of task mappings with no `hosts`) and a requirements.yml (a mapping, not
 // a sequence) both correctly fail this test.
 func playbookPlays(b []byte) (hosts []string, plays int, ok bool) {
+	// EVERY DOCUMENT, not just the first (ANS-009). `yaml.Unmarshal` into a slice stops at the
+	// first `---`, so a multi-document playbook projected a play count and a host list that were
+	// both silently SHORT — the Playbook still appeared, just describing less of itself than the
+	// file contains. Nothing surfaced the discrepancy, which is the §1.8 shape that matters most.
+	//
+	// A decoder loop is the only difference. io.EOF ends the file; any other error means this is
+	// not parseable as a playbook, and the caller uses `ok` to decide whether a .yml file is one
+	// at all — so a looser parse here would project every vars file in the tree.
 	var seq []map[string]yaml.Node
-	if err := yaml.Unmarshal(b, &seq); err != nil || len(seq) == 0 {
+	dec := yaml.NewDecoder(bytes.NewReader(b))
+	for {
+		var doc []map[string]yaml.Node
+		err := dec.Decode(&doc)
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			return nil, 0, false
+		}
+		seq = append(seq, doc...)
+	}
+	if len(seq) == 0 {
 		return nil, 0, false
 	}
 	seen := map[string]bool{}

@@ -1,3 +1,6 @@
+{{/* Supply-chain gate (ADR-0168): refuse to render an unpinned image when the production
+     profile asks for digests. Invoked here because this template always renders. */}}
+{{- include "stratt.requireDigests" . -}}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -107,6 +110,13 @@ spec:
             {{- if .Values.environment }}
             - name: STRATT_ENVIRONMENT
               value: {{ .Values.environment | quote }}
+            {{- end }}
+            {{- if .Values.supplyChain.requireDigests }}
+            # ADR-0169: the same declaration that gates the chart's images (ADR-0168) reaches the
+            # dispatcher, so an Actuator naming a floating tag is refused before a pod exists.
+            # One flag, both doors — two switches would be two things to forget.
+            - name: STRATT_REQUIRE_IMAGE_DIGESTS
+              value: "true"
             {{- end }}
             - name: STRATT_TEMPORAL_ADDRESS
               value: {{ .Values.temporal.address | quote }}

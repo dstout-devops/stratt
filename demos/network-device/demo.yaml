@@ -9,7 +9,10 @@ summary: >
   whose image lacks the network content be refused before it ever connects — and watch nine link-flap
   events produce exactly one remediation Run, because the estate declared that a storm is five inside
   ten minutes and a single flap is noise. Then send that same storm as ONE batched report in a
-  payload shape nothing in core has ever seen, and watch it fan out anyway.
+  payload shape nothing in core has ever seen, and watch it fan out anyway — signed, and verified
+  against a key the control plane cannot read. Finally, watch two things be refused that a less
+  careful platform would accept: a signature that is genuinely valid but stale, and an image that is
+  genuinely available but unpinned.
 
 # fidelity (D3): how real is what you're watching? The turnkey runner prints this up front.
 #   real       — real workloads on real substrate.

@@ -41,6 +41,13 @@ type Config struct {
 	Namespace string
 	// EEImage is the execution-environment image (ansible-runner inside).
 	EEImage string
+	// RequireImageDigests refuses to run an EE-Job whose image is pinned by TAG (ADR-0169).
+	//
+	// The chart gate (ADR-0168) covers the images the CHART deploys — strattd, the agent, the
+	// forwarder, plugin pods. It cannot see these: an EE-Job image is named by an Actuator in
+	// the ESTATE, chosen per Step, and reaches the cluster through this dispatcher. Two
+	// different sets, and this was the unvetted one.
+	RequireImageDigests bool
 	// FSGroup is the pod-level fsGroup: credential Secret volumes are
 	// projected root:fsGroup mode 0440 (kubelet-owned, no world access), so
 	// the EE's non-root user reads them via group. Must match the EE image's
@@ -574,6 +581,17 @@ func (d *Dispatcher) createJob(ctx context.Context, name, runID string, spec act
 	image := spec.Image
 	if image == "" {
 		image = d.cfg.EEImage
+	}
+	// ── The last door before something runs (ADR-0169) ───────────────────────────────────────
+	//
+	// Refused HERE rather than at admission: this is the point Stratt itself causes a pod to
+	// exist, it needs no cluster-wide controller and no new dependency (§1.4), and it covers
+	// exactly the images Stratt is responsible for. A tag is MUTABLE — the bytes behind
+	// `stratt-ee:dev` can change after the review that approved the Actuator naming it.
+	if d.cfg.RequireImageDigests && !strings.Contains(image, "@sha256:") {
+		return fmt.Errorf("dispatch: image %q is pinned by TAG, not digest, and this estate "+
+			"requires digests (ADR-0169). The Actuator that named it must pin an image you "+
+			"verified (task supply:verify), or the estate must stop requiring digests", image)
 	}
 	// One mount per content file, restored to its JobSpec path. Sorted so the
 	// pod spec is deterministic (map iteration is not).
