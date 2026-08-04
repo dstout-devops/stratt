@@ -61,6 +61,11 @@ vars:
   # Python gate tools (ADR-0117 D3). Run via `uvx <tool>@<ver>` — project-independent,
   # so they work regardless of UV_PROJECT — and PINNED: a gate whose whole thesis is
   # "unpinned things resolve differently on different days" must not itself float.
+  # Supply-chain tools (ADR-0165, charter §7.3). CI-only — they are not runtime
+  # dependencies of anything Stratt ships. PINNED for the same reason the python gate
+  # tools are: a chain whose whole thesis is provenance must not itself float.
+  COSIGN_VER: "3.1.2"
+  SYFT_VER: "1.50.0"
   RUFF_VER: "0.14.5"
   MYPY_VER: "1.18.2"
   PYYAML_VER: "6.0.3"
@@ -1576,6 +1581,57 @@ tasks:
     cmds:
       - docker build --build-arg GO_PARALLEL={{.GO_PARALLEL}} -f plugins/{{.PLUGIN}}/Dockerfile -t stratt-plugin-{{.PLUGIN}}:dev .
       - go run sigs.k8s.io/kind@v{{.KIND_VER}} load docker-image stratt-plugin-{{.PLUGIN}}:dev --name {{.KIND_CLUSTER}}
+
+  supply:sbom:
+    desc: "Generate an SPDX SBOM for a built image (ADR-0165 D3). IMAGE=<ref> OUT=<path>"
+    vars:
+      IMAGE: '{{.IMAGE | default "stratt/strattd:ci"}}'
+      OUT: '{{.OUT | default "dist/sbom-strattd.spdx.json"}}'
+    cmds:
+      - mkdir -p "$(dirname {{.OUT}})"
+      # syft reads the LOCAL docker image, so this works before anything is published —
+      # which is the whole point of the dry run (D5): the artifact is described before it
+      # exists anywhere public.
+      - |
+        set -eu
+        docker run --rm \
+          -v /var/run/docker.sock:/var/run/docker.sock \
+          -v "{{.ROOT_DIR}}/$(dirname {{.OUT}})":/out \
+          anchore/syft:v{{.SYFT_VER}} \
+          docker:{{.IMAGE}} -o spdx-json="/out/$(basename {{.OUT}})"
+      - 'echo "SBOM: {{.OUT}} ($(jq -r ".packages | length" {{.OUT}}) packages)"'
+
+  supply:verify:
+    desc: "Verify a published image's signature + attestations (ADR-0165 D4). IMAGE=<ref@digest>"
+    silent: true
+    cmds:
+      - |
+        set -eu
+        : "${IMAGE:={{.IMAGE}}}"
+        [ -n "${IMAGE:-}" ] || { echo "supply:verify: IMAGE=<ref@sha256:...> required" >&2; exit 2; }
+        # ── THIS IS THE SAME CHECK CI RUNS, and that is deliberate (ADR-0165 D4) ──────────
+        # An adopter who cannot run exactly what the pipeline ran has to take the pipeline's
+        # word for it, which is the opposite of what a supply chain is for.
+        #
+        # Identity, not a key (D2): the assertion is that THIS workflow in THIS repo built it.
+        # A key would only say "somebody who had the key signed this".
+        # cosign runs from its own pinned image, so this task works on a workstation with no
+        # cosign installed — an adopter should not have to build a toolchain to check a signature.
+        cosign() { docker run --rm -i ghcr.io/sigstore/cosign/cosign:v{{.COSIGN_VER}} "$@"; }
+        : "${STRATT_OIDC_ISSUER:=https://token.actions.githubusercontent.com}"
+        : "${STRATT_IDENTITY_RE:=^https://github.com/dstout-devops/stratt/\.github/workflows/release\.yml@}"
+        cosign verify "$IMAGE" \
+          --certificate-identity-regexp "$STRATT_IDENTITY_RE" \
+          --certificate-oidc-issuer "$STRATT_OIDC_ISSUER" >/dev/null
+        echo "✓ signature: built by the release workflow, identity-bound"
+        cosign verify-attestation "$IMAGE" --type spdxjson \
+          --certificate-identity-regexp "$STRATT_IDENTITY_RE" \
+          --certificate-oidc-issuer "$STRATT_OIDC_ISSUER" >/dev/null
+        echo "✓ SBOM attestation present and bound to this digest"
+        cosign verify-attestation "$IMAGE" --type slsaprovenance \
+          --certificate-identity-regexp "$STRATT_IDENTITY_RE" \
+          --certificate-oidc-issuer "$STRATT_OIDC_ISSUER" >/dev/null
+        echo "✓ SLSA provenance present and bound to this digest"
 
   images:control-plane:
     desc: Build the CONTROL-PLANE images (no push/load) — the CI regression gate. Plugins & the EE image build in their OWN units (each plugin is its own build/CI unit, ADR-0046) — core CI never builds per-plugin (it must scale to hundreds of plugins).
