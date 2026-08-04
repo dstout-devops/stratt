@@ -1345,6 +1345,25 @@ tasks:
       - "{{.HELM}} template stratt deploy/charts/stratt -f deploy/charts/stratt/values-allinone.yaml > /dev/null"
       # Self-deploy profile (helm Actuator plugin + demo chart, M2/ADR-0092).
       - "{{.HELM}} template stratt deploy/charts/stratt -f deploy/charts/stratt/values-allinone.yaml -f deploy/charts/stratt/values-selfdeploy.yaml > /dev/null"
+      # Supply-chain production profile (ADR-0168): the gate must REFUSE the chart's own defaults,
+      # which are floating tags. A gate that renders here would be one nobody had ever seen fire —
+      # so the assertion is the FAILURE, and the success case is proven beside it with digests set.
+      - |
+        set -eu
+        if {{.HELM}} template stratt {{.ROOT_DIR}}/deploy/charts/stratt \
+             -f {{.ROOT_DIR}}/deploy/charts/stratt/values-production-supply-chain.yaml >/dev/null 2>&1; then
+          echo "✗ supplyChain.requireDigests rendered floating tags — the gate is inert" >&2
+          exit 1
+        fi
+        echo "✓ chart:lint — requireDigests refuses unpinned images"
+      # …and accepts them once pinned, or the refusal would be unsatisfiable.
+      - |
+        set -eu
+        printf 'image:\n  digest: "sha256:%064d"\nforwarder:\n  image:\n    digest: "sha256:%064d"\n' 1 2 > /tmp/stratt-pinned.yaml
+        {{.HELM}} template stratt {{.ROOT_DIR}}/deploy/charts/stratt \
+          -f {{.ROOT_DIR}}/deploy/charts/stratt/values-production-supply-chain.yaml \
+          -f /tmp/stratt-pinned.yaml > /dev/null
+        echo "✓ chart:lint — requireDigests accepts a fully pinned estate"
       # Genesis profile (ADR-0102): minimal floor + self-deploy + inline declarations.
       - "{{.HELM}} template stratt deploy/charts/stratt -f deploy/charts/stratt/values-allinone.yaml -f deploy/charts/stratt/values-selfdeploy.yaml -f deploy/charts/stratt/values-genesis.yaml > /dev/null"
       # Connector-e2e profile (ADR-0103): fully in-kind — allinone substrate + helm/declared plugins + estate.

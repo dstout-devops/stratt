@@ -1,3 +1,6 @@
+{{/* Supply-chain gate (ADR-0168): refuse to render an unpinned image when the production
+     profile asks for digests. Invoked here because this template always renders. */}}
+{{- include "stratt.requireDigests" . -}}
 apiVersion: apps/v1
 kind: Deployment
 metadata:

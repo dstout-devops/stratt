@@ -5,7 +5,18 @@
 # and NOTES.txt warns loudly when it is used.
 #
 # Digest pinning (§7.3): every image accepts `digest`, which wins over `tag`.
-# Production manifests must pin digests; NOTES.txt warns on floating tags.
+# Production manifests must pin digests; NOTES.txt warns on floating tags — and
+# supplyChain.requireDigests turns that warning into a refusal (ADR-0168).
+
+# ── Supply chain (§7.3, ADR-0165/0168) ────────────────────────────────────────
+supplyChain:
+  # Refuse to render when any image is pinned by TAG rather than by digest.
+  #
+  # OPT-IN, and deliberately so: every dev floor and demo in this repo runs on floating tags
+  # by design, so a default-on refusal would break them all — which is how a control ends up
+  # switched off globally and left that way. Turn it on in the profile that matters, where it
+  # is checked by `helm template`, the one tool every install already runs.
+  requireDigests: false
 
 image:
   repository: stratt/strattd

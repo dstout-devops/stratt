@@ -126,9 +126,10 @@ un-fetched.
   **booked, not built.** It is the natural consumer of this work and a separate decision: it changes
   what a cluster will run, needs its own failure story for a registry outage, and belongs with the
   §7.3 "community-tier plugins sandboxed by default" clause rather than with producing releases.
-- **Enforcing pinned digests in the chart** — booked. The chart already prefers a digest and warns on
-  a tag; turning the warning into a refusal breaks every dev floor in this repo, which all use
-  floating tags deliberately. It needs a values-gated production profile, which is its own change.
+- ~~**Enforcing pinned digests in the chart** — booked.~~ — **paid** by
+  [ADR-0168](0168-a-warning-is-not-a-gate.md): `supplyChain.requireDigests` makes an unpinned image a
+  render failure, opt-in via `values-production-supply-chain.yaml` for exactly the reason booked here
+  (every dev floor uses floating tags deliberately). The in-cluster half stays booked.
 - **Signing plugin images in this workflow** — declined. ADR-0046 makes each plugin its own CI unit
   precisely so core CI does not grow with plugin count. They follow this shape in their own pipelines.
 
