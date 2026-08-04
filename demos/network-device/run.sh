@@ -213,6 +213,14 @@ case "$ginv" in
     *"loaded-from-group_vars"*) echo "  …and group_vars/tier_edge.yml LOADED — the file ADR-0134 promised and nothing could read" ;;
     *) echo "FAIL: group_vars did not load; the play's assert would have failed"; exit 1 ;;
 esac
+# The repo's OWN module, loaded from project/library/ with no module path declared anywhere
+# (ANS-006 / `--module-path`). The play already asserts it, so a failure would fail the Run — but
+# asserting the line HERE makes it evidence rather than an inference from a green status.
+case "$ginv" in
+    *"the repo's own module loaded from project/library/"*)
+        echo "  …and the repo's OWN module loaded — ansible finds library/ beside the playbook, no knob needed" ;;
+    *) echo "FAIL: no evidence the repo's own module was loaded; ANS-006 projects content the estate cannot use"; exit 1 ;;
+esac
 
 # ── Assertion: a BURST of events launches exactly ONE Run (ADR-0162) ─────────────────────────────
 # One link flap is noise; five in ten minutes is an incident. Before ADR-0162 a Trigger could only

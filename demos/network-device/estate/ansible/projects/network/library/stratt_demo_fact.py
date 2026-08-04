@@ -9,7 +9,7 @@
 from ansible.module_utils.basic import AnsibleModule
 
 
-def main():
+def main() -> None:
     module = AnsibleModule(argument_spec={"marker": {"type": "str", "required": True}})
     module.exit_json(changed=False, seen=module.params["marker"])
 
