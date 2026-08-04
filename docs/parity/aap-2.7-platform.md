@@ -116,7 +116,7 @@ is a flat hub↔leaf NATS model; Receptor's arbitrary routable mesh (control/hop
 DMZ traversal) is not modeled. _(Note: `plugins/mesh/` is the service-dependency connector — a false
 friend, unrelated to automation mesh.)_
 
-### 5. Event-Driven Ansible — 🟡 partial (spine, not depth)
+### 5. Event-Driven Ansible — 🟢 task parity (two mechanisms declined by decision)
 
 The Trigger engine (Emitter × CEL → Workflow/View launch, ADR-0018) covers the **spine**: event ingest,
 condition eval, at-least-once durable launch (JetStream), content-hash dedup, and full authz/descent
@@ -165,7 +165,7 @@ parity. It is **not a rulebook engine**. Gaps:
   a rules engine's working memory is not: "why did this Trigger not fire?" is now a row (§1.8).
 - **Inline meta-actions** — can only launch a Workflow/View; no `set_fact`/`post_event`/`run_module`.
 
-### 6. Automation Hub — 🔴 biggest gap
+### 6. Automation Hub — 🟡 partial (the registry half remains)
 
 AAP's hosted, signed, versioned **collection** distribution + **EE registry** + **collection-signing** trust
 story. Stratt covers the **trust + execution half** convincingly — boot-time hash-**pinned** Contracts that
