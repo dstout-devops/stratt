@@ -443,7 +443,11 @@ func run(ctx context.Context, log *slog.Logger) error {
 	dispatcher := dispatch.New(dispatch.Config{
 		Namespace: env("STRATT_K8S_NAMESPACE", "default"),
 		EEImage:   env("STRATT_EE_IMAGE", "stratt-ee:dev"),
-		FSGroup:   eeFSGroup,
+		// ADR-0169: refuse to run an EE-Job image pinned by tag. Opt-in, wired from the chart's
+		// supplyChain.requireDigests so one declaration governs both doors — the images the
+		// chart deploys (ADR-0168) and the ones the estate tells this dispatcher to run.
+		RequireImageDigests: env("STRATT_REQUIRE_IMAGE_DIGESTS", "false") == "true",
+		FSGroup:             eeFSGroup,
 	}, kubeClient, bus, log)
 
 	// ── authorization seam (§2.5, ADR-0009) ─────────────────────────────

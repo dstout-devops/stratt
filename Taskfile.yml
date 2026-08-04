@@ -1364,6 +1364,16 @@ tasks:
           -f {{.ROOT_DIR}}/deploy/charts/stratt/values-production-supply-chain.yaml \
           -f /tmp/stratt-pinned.yaml > /dev/null
         echo "✓ chart:lint — requireDigests accepts a fully pinned estate"
+      # …and the same declaration REACHES THE DAEMON (ADR-0169 D3). A gate wired to a value nobody
+      # propagates is inert in the quietest possible way, so the wiring is asserted, not assumed.
+      - |
+        set -eu
+        {{.HELM}} template stratt {{.ROOT_DIR}}/deploy/charts/stratt \
+          -f {{.ROOT_DIR}}/deploy/charts/stratt/values-production-supply-chain.yaml \
+          -f /tmp/stratt-pinned.yaml | grep -q "STRATT_REQUIRE_IMAGE_DIGESTS" || {
+            echo "✗ supplyChain.requireDigests never reaches the dispatcher — ADR-0169 is inert" >&2
+            exit 1; }
+        echo "✓ chart:lint — requireDigests reaches the dispatcher (ADR-0169)"
       # Genesis profile (ADR-0102): minimal floor + self-deploy + inline declarations.
       - "{{.HELM}} template stratt deploy/charts/stratt -f deploy/charts/stratt/values-allinone.yaml -f deploy/charts/stratt/values-selfdeploy.yaml -f deploy/charts/stratt/values-genesis.yaml > /dev/null"
       # Connector-e2e profile (ADR-0103): fully in-kind — allinone substrate + helm/declared plugins + estate.
