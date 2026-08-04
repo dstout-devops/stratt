@@ -11,20 +11,20 @@ design must reconcile with. Chronological list: [README.md](README.md); phase vi
 ```mermaid
 graph TD
   actuators["actuators<br/><small>0016 0022 0050 0053 0092 0117<br/>0124 0126 0133 0134 0135 0148<br/>0149 0153 0156 0158 0159 0160<br/>0161</small>"]
-  api_surface["api-surface<br/><small>0006 0021 0026 0076 0091 0121<br/>0157</small>"]
+  api_surface["api-surface<br/><small>0006 0021 0026 0076 0091 0121<br/>0157 0163 0164</small>"]
   audit_telemetry["audit-telemetry<br/><small>0034 0065 0077 0121</small>"]
   authz_identity["authz-identity<br/><small>0009 0028 0035 0079 0101 0122<br/>0130 0155</small>"]
   capability_framework["capability-framework<br/><small>0100 0104 0105 0106 0107 0110<br/>0111 0112 0113 0114 0135 0145<br/>0146 0151</small>"]
   certificates_pki["certificates-pki<br/><small>0030 0043 0050 0098 0106 0150</small>"]
   connectors["connectors<br/><small>0007 0014 0025 0026 0037 0038<br/>0039 0045 0086 0087 0088 0089<br/>0095 0097 0099 0113 0114 0115<br/>0127 0128 0129 0130 0131 0132<br/>0133 0136 0144 0146 0154 0155<br/>0156 0158 0160</small>"]
-  credentials_secrets["credentials-secrets<br/><small>0009 0029 0052 0094 0098 0099<br/>0100 0106 0125 0126 0153</small>"]
-  estate_as_code["estate-as-code<br/><small>0055 0056 0057 0103 0113 0116<br/>0118 0119 0120 0122 0123 0132<br/>0134 0135 0136 0137 0138 0139<br/>0142 0146 0147 0148 0151 0152</small>"]
+  credentials_secrets["credentials-secrets<br/><small>0009 0029 0052 0094 0098 0099<br/>0100 0106 0125 0126 0153 0164</small>"]
+  estate_as_code["estate-as-code<br/><small>0055 0056 0057 0103 0113 0116<br/>0118 0119 0120 0122 0123 0132<br/>0134 0135 0136 0137 0138 0139<br/>0142 0146 0147 0148 0151 0152<br/>0163</small>"]
   findings_drift["findings-drift<br/><small>0019 0020 0033 0043 0080 0085<br/>0128 0129 0130 0133 0148 0150</small>"]
   foundation["foundation<br/><small>0001 0002 0004 0005 0006 0008<br/>0108 0109 0116 0137 0138 0141<br/>0165</small>"]
   graph_model["graph-model<br/><small>0015 0017 0041 0042 0059 0060<br/>0079 0080 0081 0082 0084 0085<br/>0096 0114 0115 0119 0120 0123<br/>0126 0127 0128 0129 0130 0132<br/>0133 0143 0144 0147 0152 0153<br/>0154 0155 0156 0158 0161</small>"]
   intent_compiler["intent-compiler<br/><small>0023 0030 0036 0055 0058 0083<br/>0085 0114 0118 0119 0123 0148<br/>0150 0152</small>"]
-  orchestration["orchestration<br/><small>0010 0011 0018 0027 0031 0063<br/>0118 0122 0125 0134 0139 0140<br/>0157 0162</small>"]
-  plugin_port["plugin-port<br/><small>0046 0047 0048 0049 0051 0053<br/>0054 0103 0117 0121 0124 0125<br/>0127 0131 0137 0138 0140 0141<br/>0145 0149 0159 0165</small>"]
+  orchestration["orchestration<br/><small>0010 0011 0018 0027 0031 0063<br/>0118 0122 0125 0134 0139 0140<br/>0157 0162 0163 0164</small>"]
+  plugin_port["plugin-port<br/><small>0046 0047 0048 0049 0051 0053<br/>0054 0103 0117 0121 0124 0125<br/>0127 0131 0137 0138 0140 0141<br/>0145 0149 0159 0164 0165</small>"]
   policy_governance["policy-governance<br/><small>0061 0062 0063 0064 0065 0066<br/>0067 0068 0069 0070 0071 0072<br/>0073 0074 0075 0076 0122 0157</small>"]
   provisioning["provisioning<br/><small>0017 0058 0095 0096 0107 0110<br/>0111 0112 0113 0114 0115 0120<br/>0123 0143 0144 0145 0146 0147<br/>0151</small>"]
   state_artifacts["state-artifacts<br/><small>0016 0029 0093 0097 0105 0112<br/>0145</small>"]
@@ -117,6 +117,8 @@ API surface — OpenAPI /api/v1, the AWX /api/v2 façade, the platform MCP serve
 - [ADR-0091](0091-ui-is-a-first-party-bundled-pure-api-client.md) — the UI is a first-party, served-by-default, pure `/api/v1` client (never a port-plugin, never a gated add-on)
 - [ADR-0121](0121-task-event-scope.md) — `TaskEvent.scope`: an event says whether it describes the Run or a task
 - [ADR-0157](0157-cancelling-a-workflow-run.md) — Cancelling a WorkflowRun: one writer, no orphans, and a Gate that stops meaning "approve me"
+- [ADR-0163](0163-one-post-many-events-and-the-shape-is-not-cores.md) — One POST, many events, and the shape is not core's
+- [ADR-0164](0164-a-source-signs-and-the-core-does-not-hold-the-key.md) — A source signs, and the core does not hold the key
 
 ### audit-telemetry
 
@@ -235,6 +237,7 @@ Credentials & secrets (§2.5) — brokering, the SecretBroker port, KV, KeyCusto
 - [ADR-0125](0125-notification-sinks-are-drivers-not-a-core-switch.md) — Notification sinks are drivers behind a seam, not a switch in the daemon
 - [ADR-0126](0126-managed-node-reachability-credential-host-key-and-jump.md) — Reaching a managed node: the connection credential, the host key, and the jump path
 - [ADR-0153](0153-a-connection-type-and-a-password-that-is-only-ever-a-path.md) — A connection type, and a password that is only ever a path
+- [ADR-0164](0164-a-source-signs-and-the-core-does-not-hold-the-key.md) — A source signs, and the core does not hold the key
 
 ### estate-as-code
 
@@ -266,6 +269,7 @@ Estate-as-Code — CaC declarations, environments, composition, the estate CLI.
 - [ADR-0148](0148-one-blueprint-per-application-and-an-honest-observation.md) — One Blueprint per application, and an observation that can come back wrong
 - [ADR-0151](0151-substrate-is-a-property-of-the-provider.md) — Substrate is a property of the PROVIDER, selected by composition; no declaration above it ever names one
 - [ADR-0152](0152-a-facet-claim-is-qualified.md) — A Facet claim is qualified: many managed applications on one host
+- [ADR-0163](0163-one-post-many-events-and-the-shape-is-not-cores.md) — One POST, many events, and the shape is not core's
 
 ### findings-drift
 
@@ -387,6 +391,8 @@ Orchestration — Triggers, Workflows/Gates, Steps, Runs, Actions, notifications
 - [ADR-0140](0140-a-capability-is-invoked-not-named.md) — A capability is invoked, not named: the mapping is declared, never minted
 - [ADR-0157](0157-cancelling-a-workflow-run.md) — Cancelling a WorkflowRun: one writer, no orphans, and a Gate that stops meaning "approve me"
 - [ADR-0162](0162-a-trigger-decides-on-more-than-one-event.md) — A Trigger decides on more than one event
+- [ADR-0163](0163-one-post-many-events-and-the-shape-is-not-cores.md) — One POST, many events, and the shape is not core's
+- [ADR-0164](0164-a-source-signs-and-the-core-does-not-hold-the-key.md) — A source signs, and the core does not hold the key
 
 ### plugin-port
 
@@ -415,6 +421,7 @@ Sovereign plugin port — the dark-matter substrate, transports, runtime registr
 - [ADR-0145](0145-the-actuator-builder-step-form.md) — The build-Step form for a workspace-scoped Actuator: capability injection reaches the Action seam, and the network leg goes live
 - [ADR-0149](0149-the-execution-environment-content-floor.md) — The execution environment carries a content floor, and every variant is a superset
 - [ADR-0159](0159-a-transport-fails-on-three-axes.md) — A transport fails on three axes, and the image gate checks two
+- [ADR-0164](0164-a-source-signs-and-the-core-does-not-hold-the-key.md) — A source signs, and the core does not hold the key
 - [ADR-0165](0165-there-has-never-been-a-release-to-sign.md) — There has never been a release to sign
 
 ### policy-governance
@@ -686,4 +693,6 @@ UI — React shell, schema-driven rendering, Views, descent, the first-party cli
 | [0160](0160-the-same-job-possibly-a-different-hand.md) | actuators, connectors |
 | [0161](0161-the-graph-is-the-inventory-and-it-has-no-groups.md) | actuators, graph-model |
 | [0162](0162-a-trigger-decides-on-more-than-one-event.md) | orchestration |
+| [0163](0163-one-post-many-events-and-the-shape-is-not-cores.md) | api-surface, estate-as-code, orchestration |
+| [0164](0164-a-source-signs-and-the-core-does-not-hold-the-key.md) | api-surface, credentials-secrets, orchestration, plugin-port |
 | [0165](0165-there-has-never-been-a-release-to-sign.md) | foundation, plugin-port, substrate-ops |

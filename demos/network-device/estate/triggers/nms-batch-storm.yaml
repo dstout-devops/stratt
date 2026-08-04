@@ -1,0 +1,21 @@
+# The same judgement as link-flap-storm — five inside ten minutes is an incident — asked of a source
+# whose payload shape core has never heard of (ADR-0163).
+#
+# WHAT THIS PROVES THAT THE OTHER TRIGGER CANNOT: the five events come from ONE POST. If the
+# declared fan-out did not happen, that POST would be a single event, `count: 5` would never be
+# reached, and NO Run would exist — so the assertion fails loudly in both directions rather than
+# only when something fires too much.
+name: nms-batch-storm
+kind: event
+emitter: nms-batch
+# `event.*` is one exploded entry, with the merged envelope fields folded in — so a rule can ask
+# about the link AND about the site the batch came from, in one expression.
+when: "event.kind == 'link.flap' && event.site == 'lab-1'"
+withinSeconds: 600
+count: 5
+# Correlated on a field that came from the ENVELOPE, folded into each event by the Emitter's
+# `merge` (ADR-0163 D1) — so the batch's own identity, declared once at the top of the report,
+# partitions the window for every event inside it.
+correlateBy: event.batch
+workflowName: rtr-batch-remediate
+principal: bootstrap-admin

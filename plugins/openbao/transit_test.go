@@ -3,6 +3,8 @@ package openbao
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -13,7 +15,22 @@ import (
 )
 
 // fakeTransit is a reversible stand-in for OpenBao Transit (no live server).
-type fakeTransit struct{ ensured map[string]bool }
+type fakeTransit struct {
+	ensured map[string]bool
+	// hmacFail makes the provider unable to ANSWER, which the ingest door must keep distinct
+	// from an answer of "no" (ADR-0164 D2).
+	hmacFail bool
+}
+
+// HMAC stands in for Transit's own: a deterministic MAC over key+algorithm+data, which is all
+// the port contract needs to be exercised — this test is about the VERB, not about SHA-2.
+func (f *fakeTransit) HMAC(_ context.Context, key, algorithm string, data []byte) ([]byte, error) {
+	if f.hmacFail {
+		return nil, errors.New("transit unreachable")
+	}
+	sum := sha256.Sum256(append([]byte(key+"|"+algorithm+"|"), data...))
+	return sum[:], nil
+}
 
 func (f *fakeTransit) EnsureKey(_ context.Context, key string) error {
 	if f.ensured == nil {

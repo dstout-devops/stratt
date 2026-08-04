@@ -94,6 +94,33 @@ checked two.
    ([ADR-0162](../../docs/adr/0162-a-trigger-decides-on-more-than-one-event.md)): the estate asked to
    be told about storms, not flaps, and it said so with a window and a threshold rather than with
    code. `GET /api/v1/workflow-runs` is the honest place to count.
+8. **Send the same storm as ONE batched report**, in a payload shape nobody wrote Go for. This one
+   is SIGNED, so the POST below is refused as written — ask OpenBao for the MAC first, exactly as
+   `run.sh` does (`transit/hmac/nms-webhook/sha2-256`), and send it as
+   `X-NMS-Signature: sha256=<hex>`:
+
+   ```sh
+   curl -sS -X POST localhost:8080/emitters/nms-batch \
+     -H 'X-Stratt-Emitter-Token: network-device-demo-not-a-secret' \
+     -H "X-NMS-Signature: sha256=${SIG}" \
+     -d '{"status":"open","report":{"site":"lab-1","linkEvents":[
+           {"kind":"link.flap","port":"ge-0/0/1","status":"down"},
+           {"kind":"link.flap","port":"ge-0/0/2","status":"down"},
+           {"kind":"link.flap","port":"ge-0/0/3","status":"down"},
+           {"kind":"link.flap","port":"ge-0/0/4","status":"down"},
+           {"kind":"link.flap","port":"ge-0/0/5","status":"down"}]}}'
+   ```
+
+   That report is also **signed**, and Stratt verifies it against a key it never holds
+   ([ADR-0164](../../docs/adr/0164-a-source-signs-and-the-core-does-not-hold-the-key.md)): the
+   `X-NMS-Signature` header carries an HMAC, the key lives in OpenBao marked `exportable: false`,
+   and the control plane answers "is this valid?" by asking the plugin that holds it. Change one
+   byte of the body and the POST is refused. One POST, five events, one Run
+   ([ADR-0163](../../docs/adr/0163-one-post-many-events-and-the-shape-is-not-cores.md)). Read
+   [`emitters/nms-batch.yaml`](estate/emitters/nms-batch.yaml): it says where the items are and which
+   envelope fields to fold in, and that is the whole of what made this shape work. Note
+   `status` appears at both levels, so the envelope's is merged as `batchStatus` — a collision Stratt
+   refuses to resolve on your behalf rather than silently picking a winner.
 
 ## What you just learned
 
@@ -106,3 +133,7 @@ And the estate reacted to the device on its own terms: nine flap events, one rem
 judgement that "five inside ten minutes is an incident and one is noise" is a declaration a reviewer
 can read in Git, not a rule buried in an engine — and the count behind it lives in Postgres, so it
 survives a restart and holds across replicas.
+
+You also pointed a source at Stratt whose payload shape nothing in the control plane had ever seen,
+and it worked because an estate declared where to look. That is the difference between a platform
+that supports your alerting stack and one that ships a list of the stacks it supports.

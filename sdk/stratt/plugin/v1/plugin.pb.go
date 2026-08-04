@@ -4082,6 +4082,130 @@ func (x *UnwrapKeyResponse) GetDek() []byte {
 	return nil
 }
 
+// MACVerifier capability messages (ADR-0164 D2).
+type VerifyMACRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// body is the RAW bytes as they arrived, byte for byte. A MAC covers exactly what the
+	// source sent, so anything that re-serializes a parsed payload fails on whitespace, key
+	// order and number formatting — INTERMITTENTLY, which is worse than failing (D3).
+	Body []byte `protobuf:"bytes,1,opt,name=body,proto3" json:"body,omitempty"`
+	// signature is what the caller presented, already stripped of any declared prefix and
+	// decoded from its declared encoding — so the plugin compares bytes, not spellings.
+	Signature []byte `protobuf:"bytes,2,opt,name=signature,proto3" json:"signature,omitempty"`
+	// key_ref names the key BY COORDINATE. Never material: the whole point is that the core
+	// has none to send (§2.5).
+	KeyRef string `protobuf:"bytes,3,opt,name=key_ref,json=keyRef,proto3" json:"key_ref,omitempty"`
+	// algorithm is the declared MAC, e.g. "hmac-sha256". A closed set, checked by the
+	// provider — an algorithm it cannot compute is a refusal, never a silent downgrade.
+	Algorithm     string `protobuf:"bytes,4,opt,name=algorithm,proto3" json:"algorithm,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *VerifyMACRequest) Reset() {
+	*x = VerifyMACRequest{}
+	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[49]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *VerifyMACRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*VerifyMACRequest) ProtoMessage() {}
+
+func (x *VerifyMACRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[49]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use VerifyMACRequest.ProtoReflect.Descriptor instead.
+func (*VerifyMACRequest) Descriptor() ([]byte, []int) {
+	return file_stratt_plugin_v1_plugin_proto_rawDescGZIP(), []int{49}
+}
+
+func (x *VerifyMACRequest) GetBody() []byte {
+	if x != nil {
+		return x.Body
+	}
+	return nil
+}
+
+func (x *VerifyMACRequest) GetSignature() []byte {
+	if x != nil {
+		return x.Signature
+	}
+	return nil
+}
+
+func (x *VerifyMACRequest) GetKeyRef() string {
+	if x != nil {
+		return x.KeyRef
+	}
+	return ""
+}
+
+func (x *VerifyMACRequest) GetAlgorithm() string {
+	if x != nil {
+		return x.Algorithm
+	}
+	return ""
+}
+
+type VerifyMACResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// valid is the whole answer. Deliberately not "which part failed": a caller that could
+	// learn WHY a signature was rejected learns something about the key.
+	Valid         bool `protobuf:"varint,1,opt,name=valid,proto3" json:"valid,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *VerifyMACResponse) Reset() {
+	*x = VerifyMACResponse{}
+	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[50]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *VerifyMACResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*VerifyMACResponse) ProtoMessage() {}
+
+func (x *VerifyMACResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_stratt_plugin_v1_plugin_proto_msgTypes[50]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use VerifyMACResponse.ProtoReflect.Descriptor instead.
+func (*VerifyMACResponse) Descriptor() ([]byte, []int) {
+	return file_stratt_plugin_v1_plugin_proto_rawDescGZIP(), []int{50}
+}
+
+func (x *VerifyMACResponse) GetValid() bool {
+	if x != nil {
+		return x.Valid
+	}
+	return false
+}
+
 var File_stratt_plugin_v1_plugin_proto protoreflect.FileDescriptor
 
 const file_stratt_plugin_v1_plugin_proto_rawDesc = "" +
@@ -4400,7 +4524,14 @@ const file_stratt_plugin_v1_plugin_proto_rawDesc = "" +
 	"\awrapped\x18\x01 \x01(\fR\awrapped\x12\x16\n" +
 	"\x06domain\x18\x02 \x01(\tR\x06domain\"%\n" +
 	"\x11UnwrapKeyResponse\x12\x10\n" +
-	"\x03dek\x18\x01 \x01(\fR\x03dek*\x92\x01\n" +
+	"\x03dek\x18\x01 \x01(\fR\x03dek\"{\n" +
+	"\x10VerifyMACRequest\x12\x12\n" +
+	"\x04body\x18\x01 \x01(\fR\x04body\x12\x1c\n" +
+	"\tsignature\x18\x02 \x01(\fR\tsignature\x12\x17\n" +
+	"\akey_ref\x18\x03 \x01(\tR\x06keyRef\x12\x1c\n" +
+	"\talgorithm\x18\x04 \x01(\tR\talgorithm\")\n" +
+	"\x11VerifyMACResponse\x12\x14\n" +
+	"\x05valid\x18\x01 \x01(\bR\x05valid*\x92\x01\n" +
 	"\vPluginClass\x12\x1c\n" +
 	"\x18PLUGIN_CLASS_UNSPECIFIED\x10\x00\x12\x17\n" +
 	"\x13PLUGIN_CLASS_SYNCER\x10\x01\x12\x19\n" +
@@ -4415,7 +4546,7 @@ const file_stratt_plugin_v1_plugin_proto_rawDesc = "" +
 	"VERB_APPLY\x10\x03\x12\x10\n" +
 	"\fVERB_DESTROY\x10\x04\x12\x0f\n" +
 	"\vVERB_INVOKE\x10\x05\x12\r\n" +
-	"\tVERB_EMIT\x10\x062\xbc\x06\n" +
+	"\tVERB_EMIT\x10\x062\x92\a\n" +
 	"\rPluginService\x12Z\n" +
 	"\vGetManifest\x12$.stratt.plugin.v1.GetManifestRequest\x1a%.stratt.plugin.v1.GetManifestResponse\x12K\n" +
 	"\x06Health\x12\x1f.stratt.plugin.v1.HealthRequest\x1a .stratt.plugin.v1.HealthResponse\x12P\n" +
@@ -4426,7 +4557,8 @@ const file_stratt_plugin_v1_plugin_proto_rawDesc = "" +
 	"\x06Invoke\x12\x1f.stratt.plugin.v1.InvokeRequest\x1a .stratt.plugin.v1.InvokeResponse0\x01\x12V\n" +
 	"\tSubscribe\x12\".stratt.plugin.v1.SubscribeRequest\x1a#.stratt.plugin.v1.SubscribeResponse0\x01\x12N\n" +
 	"\aWrapKey\x12 .stratt.plugin.v1.WrapKeyRequest\x1a!.stratt.plugin.v1.WrapKeyResponse\x12T\n" +
-	"\tUnwrapKey\x12\".stratt.plugin.v1.UnwrapKeyRequest\x1a#.stratt.plugin.v1.UnwrapKeyResponseB?Z=github.com/dstout-devops/stratt/sdk/stratt/plugin/v1;pluginv1b\x06proto3"
+	"\tUnwrapKey\x12\".stratt.plugin.v1.UnwrapKeyRequest\x1a#.stratt.plugin.v1.UnwrapKeyResponse\x12T\n" +
+	"\tVerifyMAC\x12\".stratt.plugin.v1.VerifyMACRequest\x1a#.stratt.plugin.v1.VerifyMACResponseB?Z=github.com/dstout-devops/stratt/sdk/stratt/plugin/v1;pluginv1b\x06proto3"
 
 var (
 	file_stratt_plugin_v1_plugin_proto_rawDescOnce sync.Once
@@ -4441,7 +4573,7 @@ func file_stratt_plugin_v1_plugin_proto_rawDescGZIP() []byte {
 }
 
 var file_stratt_plugin_v1_plugin_proto_enumTypes = make([]protoimpl.EnumInfo, 8)
-var file_stratt_plugin_v1_plugin_proto_msgTypes = make([]protoimpl.MessageInfo, 60)
+var file_stratt_plugin_v1_plugin_proto_msgTypes = make([]protoimpl.MessageInfo, 62)
 var file_stratt_plugin_v1_plugin_proto_goTypes = []any{
 	(PluginClass)(0),              // 0: stratt.plugin.v1.PluginClass
 	(Verb)(0),                     // 1: stratt.plugin.v1.Verb
@@ -4500,19 +4632,21 @@ var file_stratt_plugin_v1_plugin_proto_goTypes = []any{
 	(*WrapKeyResponse)(nil),       // 54: stratt.plugin.v1.WrapKeyResponse
 	(*UnwrapKeyRequest)(nil),      // 55: stratt.plugin.v1.UnwrapKeyRequest
 	(*UnwrapKeyResponse)(nil),     // 56: stratt.plugin.v1.UnwrapKeyResponse
-	nil,                           // 57: stratt.plugin.v1.ObservedEntity.IdentityKeysEntry
-	nil,                           // 58: stratt.plugin.v1.ObservedEntity.LabelsEntry
-	nil,                           // 59: stratt.plugin.v1.ObservedEntity.FacetsEntry
-	nil,                           // 60: stratt.plugin.v1.PlanRequest.ResolvedCapabilitiesEntry
-	nil,                           // 61: stratt.plugin.v1.ApplyRequest.ResolvedCapabilitiesEntry
-	nil,                           // 62: stratt.plugin.v1.CapabilityHandle.ConfigEntry
-	nil,                           // 63: stratt.plugin.v1.ApplyTarget.IdentityKeysEntry
-	nil,                           // 64: stratt.plugin.v1.ApplyTarget.VarsEntry
-	nil,                           // 65: stratt.plugin.v1.DestroyRequest.ResolvedCapabilitiesEntry
-	nil,                           // 66: stratt.plugin.v1.InvokeRequest.ResolvedCapabilitiesEntry
-	nil,                           // 67: stratt.plugin.v1.TaskEvent.FieldsEntry
-	(*timestamppb.Timestamp)(nil), // 68: google.protobuf.Timestamp
-	(*structpb.Struct)(nil),       // 69: google.protobuf.Struct
+	(*VerifyMACRequest)(nil),      // 57: stratt.plugin.v1.VerifyMACRequest
+	(*VerifyMACResponse)(nil),     // 58: stratt.plugin.v1.VerifyMACResponse
+	nil,                           // 59: stratt.plugin.v1.ObservedEntity.IdentityKeysEntry
+	nil,                           // 60: stratt.plugin.v1.ObservedEntity.LabelsEntry
+	nil,                           // 61: stratt.plugin.v1.ObservedEntity.FacetsEntry
+	nil,                           // 62: stratt.plugin.v1.PlanRequest.ResolvedCapabilitiesEntry
+	nil,                           // 63: stratt.plugin.v1.ApplyRequest.ResolvedCapabilitiesEntry
+	nil,                           // 64: stratt.plugin.v1.CapabilityHandle.ConfigEntry
+	nil,                           // 65: stratt.plugin.v1.ApplyTarget.IdentityKeysEntry
+	nil,                           // 66: stratt.plugin.v1.ApplyTarget.VarsEntry
+	nil,                           // 67: stratt.plugin.v1.DestroyRequest.ResolvedCapabilitiesEntry
+	nil,                           // 68: stratt.plugin.v1.InvokeRequest.ResolvedCapabilitiesEntry
+	nil,                           // 69: stratt.plugin.v1.TaskEvent.FieldsEntry
+	(*timestamppb.Timestamp)(nil), // 70: google.protobuf.Timestamp
+	(*structpb.Struct)(nil),       // 71: google.protobuf.Struct
 }
 var file_stratt_plugin_v1_plugin_proto_depIdxs = []int32{
 	12, // 0: stratt.plugin.v1.Envelope.coordinates:type_name -> stratt.plugin.v1.Coordinates
@@ -4536,38 +4670,38 @@ var file_stratt_plugin_v1_plugin_proto_depIdxs = []int32{
 	21, // 18: stratt.plugin.v1.Manifest.cutover:type_name -> stratt.plugin.v1.CutoverDescriptor
 	23, // 19: stratt.plugin.v1.GetManifestResponse.manifest:type_name -> stratt.plugin.v1.Manifest
 	3,  // 20: stratt.plugin.v1.HealthResponse.status:type_name -> stratt.plugin.v1.HealthResponse.Serving
-	57, // 21: stratt.plugin.v1.ObservedEntity.identity_keys:type_name -> stratt.plugin.v1.ObservedEntity.IdentityKeysEntry
-	58, // 22: stratt.plugin.v1.ObservedEntity.labels:type_name -> stratt.plugin.v1.ObservedEntity.LabelsEntry
-	59, // 23: stratt.plugin.v1.ObservedEntity.facets:type_name -> stratt.plugin.v1.ObservedEntity.FacetsEntry
+	59, // 21: stratt.plugin.v1.ObservedEntity.identity_keys:type_name -> stratt.plugin.v1.ObservedEntity.IdentityKeysEntry
+	60, // 22: stratt.plugin.v1.ObservedEntity.labels:type_name -> stratt.plugin.v1.ObservedEntity.LabelsEntry
+	61, // 23: stratt.plugin.v1.ObservedEntity.facets:type_name -> stratt.plugin.v1.ObservedEntity.FacetsEntry
 	29, // 24: stratt.plugin.v1.ObservedEntity.relations:type_name -> stratt.plugin.v1.ObservedRelation
 	28, // 25: stratt.plugin.v1.ObserveResponse.entities:type_name -> stratt.plugin.v1.ObservedEntity
 	30, // 26: stratt.plugin.v1.ObserveResponse.gone:type_name -> stratt.plugin.v1.GoneEntity
 	31, // 27: stratt.plugin.v1.ObserveResponse.gone_relations:type_name -> stratt.plugin.v1.GoneRelation
 	8,  // 28: stratt.plugin.v1.PlanRequest.envelope:type_name -> stratt.plugin.v1.Envelope
 	9,  // 29: stratt.plugin.v1.PlanRequest.desired:type_name -> stratt.plugin.v1.Payload
-	60, // 30: stratt.plugin.v1.PlanRequest.resolved_capabilities:type_name -> stratt.plugin.v1.PlanRequest.ResolvedCapabilitiesEntry
+	62, // 30: stratt.plugin.v1.PlanRequest.resolved_capabilities:type_name -> stratt.plugin.v1.PlanRequest.ResolvedCapabilitiesEntry
 	9,  // 31: stratt.plugin.v1.PlanResponse.diff:type_name -> stratt.plugin.v1.Payload
 	10, // 32: stratt.plugin.v1.PlanResponse.plan:type_name -> stratt.plugin.v1.ArtifactRef
 	8,  // 33: stratt.plugin.v1.ApplyRequest.envelope:type_name -> stratt.plugin.v1.Envelope
 	9,  // 34: stratt.plugin.v1.ApplyRequest.desired:type_name -> stratt.plugin.v1.Payload
 	10, // 35: stratt.plugin.v1.ApplyRequest.plan_ref:type_name -> stratt.plugin.v1.ArtifactRef
 	37, // 36: stratt.plugin.v1.ApplyRequest.targets:type_name -> stratt.plugin.v1.ApplyTarget
-	61, // 37: stratt.plugin.v1.ApplyRequest.resolved_capabilities:type_name -> stratt.plugin.v1.ApplyRequest.ResolvedCapabilitiesEntry
-	62, // 38: stratt.plugin.v1.CapabilityHandle.config:type_name -> stratt.plugin.v1.CapabilityHandle.ConfigEntry
-	63, // 39: stratt.plugin.v1.ApplyTarget.identity_keys:type_name -> stratt.plugin.v1.ApplyTarget.IdentityKeysEntry
-	64, // 40: stratt.plugin.v1.ApplyTarget.vars:type_name -> stratt.plugin.v1.ApplyTarget.VarsEntry
+	63, // 37: stratt.plugin.v1.ApplyRequest.resolved_capabilities:type_name -> stratt.plugin.v1.ApplyRequest.ResolvedCapabilitiesEntry
+	64, // 38: stratt.plugin.v1.CapabilityHandle.config:type_name -> stratt.plugin.v1.CapabilityHandle.ConfigEntry
+	65, // 39: stratt.plugin.v1.ApplyTarget.identity_keys:type_name -> stratt.plugin.v1.ApplyTarget.IdentityKeysEntry
+	66, // 40: stratt.plugin.v1.ApplyTarget.vars:type_name -> stratt.plugin.v1.ApplyTarget.VarsEntry
 	39, // 41: stratt.plugin.v1.ApplyTarget.jump:type_name -> stratt.plugin.v1.JumpHop
 	38, // 42: stratt.plugin.v1.ApplyTarget.transport:type_name -> stratt.plugin.v1.Transport
 	8,  // 43: stratt.plugin.v1.DestroyRequest.envelope:type_name -> stratt.plugin.v1.Envelope
 	37, // 44: stratt.plugin.v1.DestroyRequest.targets:type_name -> stratt.plugin.v1.ApplyTarget
 	9,  // 45: stratt.plugin.v1.DestroyRequest.desired:type_name -> stratt.plugin.v1.Payload
-	65, // 46: stratt.plugin.v1.DestroyRequest.resolved_capabilities:type_name -> stratt.plugin.v1.DestroyRequest.ResolvedCapabilitiesEntry
+	67, // 46: stratt.plugin.v1.DestroyRequest.resolved_capabilities:type_name -> stratt.plugin.v1.DestroyRequest.ResolvedCapabilitiesEntry
 	8,  // 47: stratt.plugin.v1.InvokeRequest.envelope:type_name -> stratt.plugin.v1.Envelope
 	9,  // 48: stratt.plugin.v1.InvokeRequest.args:type_name -> stratt.plugin.v1.Payload
-	66, // 49: stratt.plugin.v1.InvokeRequest.resolved_capabilities:type_name -> stratt.plugin.v1.InvokeRequest.ResolvedCapabilitiesEntry
+	68, // 49: stratt.plugin.v1.InvokeRequest.resolved_capabilities:type_name -> stratt.plugin.v1.InvokeRequest.ResolvedCapabilitiesEntry
 	4,  // 50: stratt.plugin.v1.TaskEvent.level:type_name -> stratt.plugin.v1.TaskEvent.Level
-	68, // 51: stratt.plugin.v1.TaskEvent.at:type_name -> google.protobuf.Timestamp
-	67, // 52: stratt.plugin.v1.TaskEvent.fields:type_name -> stratt.plugin.v1.TaskEvent.FieldsEntry
+	70, // 51: stratt.plugin.v1.TaskEvent.at:type_name -> google.protobuf.Timestamp
+	69, // 52: stratt.plugin.v1.TaskEvent.fields:type_name -> stratt.plugin.v1.TaskEvent.FieldsEntry
 	5,  // 53: stratt.plugin.v1.TaskEvent.scope:type_name -> stratt.plugin.v1.TaskEvent.Scope
 	6,  // 54: stratt.plugin.v1.ItemResult.status:type_name -> stratt.plugin.v1.ItemResult.Status
 	9,  // 55: stratt.plugin.v1.DiffFragment.detail:type_name -> stratt.plugin.v1.Payload
@@ -4590,8 +4724,8 @@ var file_stratt_plugin_v1_plugin_proto_depIdxs = []int32{
 	49, // 72: stratt.plugin.v1.InvokeResponse.result:type_name -> stratt.plugin.v1.InvokeResult
 	8,  // 73: stratt.plugin.v1.EmittedEvent.envelope:type_name -> stratt.plugin.v1.Envelope
 	9,  // 74: stratt.plugin.v1.EmittedEvent.payload:type_name -> stratt.plugin.v1.Payload
-	69, // 75: stratt.plugin.v1.EmittedEvent.match:type_name -> google.protobuf.Struct
-	68, // 76: stratt.plugin.v1.EmittedEvent.occurred_at:type_name -> google.protobuf.Timestamp
+	71, // 75: stratt.plugin.v1.EmittedEvent.match:type_name -> google.protobuf.Struct
+	70, // 76: stratt.plugin.v1.EmittedEvent.occurred_at:type_name -> google.protobuf.Timestamp
 	51, // 77: stratt.plugin.v1.SubscribeResponse.event:type_name -> stratt.plugin.v1.EmittedEvent
 	36, // 78: stratt.plugin.v1.PlanRequest.ResolvedCapabilitiesEntry.value:type_name -> stratt.plugin.v1.CapabilityHandle
 	36, // 79: stratt.plugin.v1.ApplyRequest.ResolvedCapabilitiesEntry.value:type_name -> stratt.plugin.v1.CapabilityHandle
@@ -4607,18 +4741,20 @@ var file_stratt_plugin_v1_plugin_proto_depIdxs = []int32{
 	42, // 89: stratt.plugin.v1.PluginService.Subscribe:input_type -> stratt.plugin.v1.SubscribeRequest
 	53, // 90: stratt.plugin.v1.PluginService.WrapKey:input_type -> stratt.plugin.v1.WrapKeyRequest
 	55, // 91: stratt.plugin.v1.PluginService.UnwrapKey:input_type -> stratt.plugin.v1.UnwrapKeyRequest
-	24, // 92: stratt.plugin.v1.PluginService.GetManifest:output_type -> stratt.plugin.v1.GetManifestResponse
-	26, // 93: stratt.plugin.v1.PluginService.Health:output_type -> stratt.plugin.v1.HealthResponse
-	32, // 94: stratt.plugin.v1.PluginService.Observe:output_type -> stratt.plugin.v1.ObserveResponse
-	34, // 95: stratt.plugin.v1.PluginService.Plan:output_type -> stratt.plugin.v1.PlanResponse
-	47, // 96: stratt.plugin.v1.PluginService.Apply:output_type -> stratt.plugin.v1.ApplyResponse
-	48, // 97: stratt.plugin.v1.PluginService.Destroy:output_type -> stratt.plugin.v1.DestroyResponse
-	50, // 98: stratt.plugin.v1.PluginService.Invoke:output_type -> stratt.plugin.v1.InvokeResponse
-	52, // 99: stratt.plugin.v1.PluginService.Subscribe:output_type -> stratt.plugin.v1.SubscribeResponse
-	54, // 100: stratt.plugin.v1.PluginService.WrapKey:output_type -> stratt.plugin.v1.WrapKeyResponse
-	56, // 101: stratt.plugin.v1.PluginService.UnwrapKey:output_type -> stratt.plugin.v1.UnwrapKeyResponse
-	92, // [92:102] is the sub-list for method output_type
-	82, // [82:92] is the sub-list for method input_type
+	57, // 92: stratt.plugin.v1.PluginService.VerifyMAC:input_type -> stratt.plugin.v1.VerifyMACRequest
+	24, // 93: stratt.plugin.v1.PluginService.GetManifest:output_type -> stratt.plugin.v1.GetManifestResponse
+	26, // 94: stratt.plugin.v1.PluginService.Health:output_type -> stratt.plugin.v1.HealthResponse
+	32, // 95: stratt.plugin.v1.PluginService.Observe:output_type -> stratt.plugin.v1.ObserveResponse
+	34, // 96: stratt.plugin.v1.PluginService.Plan:output_type -> stratt.plugin.v1.PlanResponse
+	47, // 97: stratt.plugin.v1.PluginService.Apply:output_type -> stratt.plugin.v1.ApplyResponse
+	48, // 98: stratt.plugin.v1.PluginService.Destroy:output_type -> stratt.plugin.v1.DestroyResponse
+	50, // 99: stratt.plugin.v1.PluginService.Invoke:output_type -> stratt.plugin.v1.InvokeResponse
+	52, // 100: stratt.plugin.v1.PluginService.Subscribe:output_type -> stratt.plugin.v1.SubscribeResponse
+	54, // 101: stratt.plugin.v1.PluginService.WrapKey:output_type -> stratt.plugin.v1.WrapKeyResponse
+	56, // 102: stratt.plugin.v1.PluginService.UnwrapKey:output_type -> stratt.plugin.v1.UnwrapKeyResponse
+	58, // 103: stratt.plugin.v1.PluginService.VerifyMAC:output_type -> stratt.plugin.v1.VerifyMACResponse
+	93, // [93:104] is the sub-list for method output_type
+	82, // [82:93] is the sub-list for method input_type
 	82, // [82:82] is the sub-list for extension type_name
 	82, // [82:82] is the sub-list for extension extendee
 	0,  // [0:82] is the sub-list for field type_name
@@ -4635,7 +4771,7 @@ func file_stratt_plugin_v1_plugin_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_stratt_plugin_v1_plugin_proto_rawDesc), len(file_stratt_plugin_v1_plugin_proto_rawDesc)),
 			NumEnums:      8,
-			NumMessages:   60,
+			NumMessages:   62,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

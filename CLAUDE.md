@@ -107,8 +107,9 @@ Run repeatable work through the **Taskfile**; never assert success without the m
   run is the weekly one.
   A **single-plugin** demo lives with its plugin
   (`plugins/helm/demo/`, `plugins/vcenter/demo/`, `plugins/awsec2/demo/`); [demos/](demos/README.md) keeps only
-  **cross-plugin** scenarios — `app-cert` spans ansible + openbao + declared (ADR-0137 D7, enforced by
-  `task plugins:boundary`). Treat a demo run as integration testing — they have repeatedly
+  **cross-plugin** scenarios — `app-cert` spans ansible + declared, and `region-to-cert` is the one
+  that runs **openbao** (six plugins; it is the capstone). ADR-0137 D7, enforced by
+  `task plugins:boundary`. Treat a demo run as integration testing — they have repeatedly
   surfaced real defects; keep them green when touching orchestration, plugins, or the estate.
 - **A demo's estate does NOT exercise `estate/plugins.yaml`**: each stages only its own tree. The full-estate
   in-cluster path (admission → vendoring → boot) is **`task dev:connector-e2e`**.

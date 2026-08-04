@@ -1,0 +1,22 @@
+# What a BATCHED link-flap report launches (ADR-0163). Fired by the `nms-batch-storm` Trigger and by
+# nothing else, so counting this Workflow's Runs counts exactly the times a single POST carrying five
+# nested link events was fanned out into five events and crossed the storm threshold.
+#
+# It runs the same play as rtr-flap-remediate against its own marker route, so the two assertions
+# cannot pass on each other's evidence.
+name: rtr-batch-remediate
+steps:
+  - name: remediate
+    viewName: net-devices
+    actuator: ansible-network
+    credentialRefs: [rtr-ssh]
+    params:
+      connection:
+        type: network_cli
+        networkOS: frr.frr.frr
+        user: netops
+        credentialRef: rtr-ssh
+        hostKeyChecking: accept-new
+      extraVars:
+        marker_route: 10.96.0.0/24
+      playbook: remediate.yml

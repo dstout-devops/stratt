@@ -2064,6 +2064,35 @@ type emitterFile struct {
 	Name      string `yaml:"name"`
 	Kind      string `yaml:"kind"`
 	TokenHash string `yaml:"tokenHash"`
+	// ADR-0163 — how one POST becomes many events, declared rather than switched in core.
+	Explode *explodeFile `yaml:"explode"`
+	// ADR-0164 D1 — where the caller presents its shared token.
+	Token *tokenFile `yaml:"token"`
+	// ADR-0164 D2 — this source SIGNS its body; verification is delegated to the key's holder.
+	Verify *verifyFile `yaml:"verify"`
+}
+
+type verifyFile struct {
+	Header    string `yaml:"header"`
+	Algorithm string `yaml:"algorithm"`
+	Encoding  string `yaml:"encoding"`
+	Prefix    string `yaml:"prefix"`
+	KeyRef    string `yaml:"keyRef"`
+}
+
+type tokenFile struct {
+	Header string `yaml:"header"`
+	Prefix string `yaml:"prefix"`
+}
+
+type explodeFile struct {
+	Path  string         `yaml:"path"`
+	Merge []mergeKeyFile `yaml:"merge"`
+}
+
+type mergeKeyFile struct {
+	Path string `yaml:"path"`
+	As   string `yaml:"as"`
 }
 
 func parseEmitterFile(path string, raw []byte) (string, types.Emitter, error) {
@@ -2074,10 +2103,47 @@ func parseEmitterFile(path string, raw []byte) (string, types.Emitter, error) {
 		return "", types.Emitter{}, fmt.Errorf("desiredstate: %s: %w", path, err)
 	}
 	e := types.Emitter{Name: f.Name, Kind: f.Kind, TokenHash: strings.ToLower(f.TokenHash)}
+	if f.Token != nil {
+		e.Token = &types.TokenSpec{Header: f.Token.Header, Prefix: f.Token.Prefix}
+	}
+	if f.Verify != nil {
+		e.Verify = &types.VerifySpec{Header: f.Verify.Header, Algorithm: f.Verify.Algorithm,
+			Encoding: f.Verify.Encoding, Prefix: f.Verify.Prefix, KeyRef: f.Verify.KeyRef}
+	}
+	if f.Explode != nil {
+		e.Explode = &types.ExplodeSpec{Path: f.Explode.Path}
+		for _, m := range f.Explode.Merge {
+			e.Explode.Merge = append(e.Explode.Merge, types.MergeKey{Path: m.Path, As: m.As})
+		}
+	}
+	NormalizeEmitter(&e)
 	if err := ValidateEmitter(e); err != nil {
 		return "", types.Emitter{}, fmt.Errorf("desiredstate: %s: %w", path, err)
 	}
 	return e.Name, e, nil
+}
+
+// NormalizeEmitter rewrites the retired `alertmanager` kind into the equivalent declaration
+// (ADR-0163 D2). ONE place, and deletable as a unit once no declaration spells it.
+//
+// This is not a shim to be taken on trust: the equivalence is asserted by a test that runs the
+// same POST through this and through the shape the old hardcoded Go struct produced, and
+// requires the events to be byte-identical.
+//
+// Exported because EVERY door that accepts an Emitter declaration must apply it — the CaC parser
+// and the API's estate-apply path both. A normalization applied at one door is a rule that holds
+// depending on how the declaration arrived.
+func NormalizeEmitter(e *types.Emitter) {
+	if e.Kind != types.EmitterAlertmanager {
+		return
+	}
+	e.Kind = types.EmitterWebhook
+	if e.Explode == nil {
+		e.Explode = &types.ExplodeSpec{
+			Path:  "alerts",
+			Merge: []types.MergeKey{{Path: "receiver"}, {Path: "groupLabels"}},
+		}
+	}
 }
 
 // ValidateEmitter checks one Emitter declaration.
@@ -2086,7 +2152,7 @@ func ValidateEmitter(e types.Emitter) error {
 		return fmt.Errorf("emitter requires a name")
 	}
 	switch e.Kind {
-	case types.EmitterWebhook, types.EmitterAlertmanager:
+	case types.EmitterWebhook:
 		// Receive kinds authenticate an inbound POST by token.
 		if len(e.TokenHash) != 64 {
 			return fmt.Errorf("emitter %s: tokenHash must be hex(sha256(token)) — 64 hex chars", e.Name)
@@ -2099,8 +2165,72 @@ func ValidateEmitter(e types.Emitter) error {
 		if e.TokenHash != "" {
 			return fmt.Errorf("emitter %s: a stream emitter is outbound-subscribed and must not carry a tokenHash", e.Name)
 		}
+		if e.Token != nil {
+			return fmt.Errorf("emitter %s: a stream emitter is outbound-subscribed; nothing presents a token to it", e.Name)
+		}
+		if e.Verify != nil {
+			return fmt.Errorf("emitter %s: a stream emitter publishes its own events; there is no request body to verify", e.Name)
+		}
+		// Nothing POSTs to a stream Emitter, so there is no body to fan out. A declaration
+		// that says otherwise is asking for something that cannot happen (§1.8 — refuse it
+		// where it is written, not by ignoring it at runtime).
+		if e.Explode != nil {
+			return fmt.Errorf("emitter %s: a stream emitter publishes its own events; there is no POST to explode", e.Name)
+		}
 	default:
-		return fmt.Errorf("emitter %s: unknown kind %q (webhook, alertmanager, stream)", e.Name, e.Kind)
+		return fmt.Errorf("emitter %s: unknown kind %q (webhook, stream)", e.Name, e.Kind)
+	}
+	// A declared header with no name is a declaration that says nothing; it would silently mean
+	// "the default", and a reader of the file would believe otherwise (§1.8).
+	if e.Token != nil && e.Token.Header == "" && e.Token.Prefix == "" {
+		return fmt.Errorf("emitter %s: token block declares neither header nor prefix — remove it, "+
+			"or name the header the source actually sends (ADR-0164 D1)", e.Name)
+	}
+	// ADR-0164 D2. Checked at PARSE, because a signature declaration that cannot be acted on is
+	// worse than none: the estate believes it is authenticating and it is not.
+	if e.Verify != nil {
+		if e.Verify.Header == "" {
+			return fmt.Errorf("emitter %s: verify requires a header — the one the source sends its signature in", e.Name)
+		}
+		if e.Verify.KeyRef == "" {
+			return fmt.Errorf("emitter %s: verify requires a keyRef. It is a COORDINATE, never "+
+				"material: the core cannot hold the key (§2.5, ADR-0052) and asks its holder instead", e.Name)
+		}
+		switch e.Verify.Algorithm {
+		case "hmac-sha256", "hmac-sha512":
+		case "":
+			return fmt.Errorf("emitter %s: verify requires an algorithm (hmac-sha256, hmac-sha512). "+
+				"Inferring it from the header name would be core learning one vendor's spelling again", e.Name)
+		default:
+			return fmt.Errorf("emitter %s: verify algorithm %q is not one core will ask for "+
+				"(hmac-sha256, hmac-sha512)", e.Name, e.Verify.Algorithm)
+		}
+		switch e.Verify.Encoding {
+		case "", types.SignatureHex, types.SignatureBase64:
+		default:
+			return fmt.Errorf("emitter %s: verify encoding %q is not hex or base64", e.Name, e.Verify.Encoding)
+		}
+	}
+	// ADR-0163 D1/D3. Checked at PARSE so a declaration that could never fan out fails its
+	// file rather than every POST at 3am.
+	if e.Explode != nil {
+		if e.Explode.Path == "" {
+			return fmt.Errorf("emitter %s: explode requires a path — the array to fan out", e.Name)
+		}
+		seen := map[string]string{}
+		for i, m := range e.Explode.Merge {
+			if m.Path == "" {
+				return fmt.Errorf("emitter %s: explode.merge[%d] requires a path", e.Name, i)
+			}
+			// Two merged fields landing on ONE key is a collision the estate can see before
+			// any POST arrives, so it is refused here rather than at ingest. No precedence
+			// is invented either way (§2.4).
+			if prev, dup := seen[m.Key()]; dup {
+				return fmt.Errorf("emitter %s: explode.merge[%d] (%s) and %s both land on %q — "+
+					"declare `as:` to keep them apart", e.Name, i, m.Path, prev, m.Key())
+			}
+			seen[m.Key()] = m.Path
+		}
 	}
 	return nil
 }

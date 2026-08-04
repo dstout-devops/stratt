@@ -64,6 +64,11 @@ func (c *Client) UnwrapKey(ctx context.Context, in *pluginv1.UnwrapKeyRequest, _
 	return out, c.unary(ctx, mUnwrapKey, in, out)
 }
 
+func (c *Client) VerifyMAC(ctx context.Context, in *pluginv1.VerifyMACRequest, _ ...grpc.CallOption) (*pluginv1.VerifyMACResponse, error) {
+	out := &pluginv1.VerifyMACResponse{}
+	return out, c.unary(ctx, mVerifyMAC, in, out)
+}
+
 func (c *Client) Plan(ctx context.Context, in *pluginv1.PlanRequest, _ ...grpc.CallOption) (*pluginv1.PlanResponse, error) {
 	out := &pluginv1.PlanResponse{}
 	return out, c.unary(ctx, mPlan, in, out)
