@@ -70,16 +70,20 @@ const (
 	mSubscribe   = "Subscribe"
 	mWrapKey     = "WrapKey" // KeyCustodian capability over the relay (ADR-0100) — cross-DC transport
 	mUnwrapKey   = "UnwrapKey"
-	// MACVerifier (ADR-0164 D2). Present so *Client satisfies the port, and safe to carry in
-	// principle — the request holds a key COORDINATE and never material, so nothing secret
-	// crosses the link either way and the answer is one boolean.
+	// MACVerifier (ADR-0164 D2).
 	//
-	// NOT SERVED BY THE SWITCH BELOW, and neither are mWrapKey/mUnwrapKey: the far end answers
-	// "unknown method" for all three. That is a PRE-EXISTING gap in ADR-0100's cross-DC story,
-	// not something ADR-0164 introduced, and it is left alone rather than quietly fixed —
-	// whether a Site may verify against the hub's KMS is an MF-C question (fail-closed at the
-	// edge) that deserves its own decision. Recorded here so the next reader does not assume
-	// these verbs work over a relay because a constant exists.
+	// ── THESE THREE DO NOT TRAVEL, AND THAT IS THE DESIGN (ADR-0166) ─────────────────────────
+	//
+	// WrapKey/UnwrapKey/VerifyMAC are REFUSED at both ends. ADR-0164 called this a gap in
+	// ADR-0100's cross-DC story; that was wrong and ADR-0166 corrects it. `siterelay.NewClient`
+	// is constructed in exactly one place — dispatching plugin work to a Site — while the
+	// custodian and the MAC verifier each build their own direct dial, so no shipping path
+	// routes a custody call through here at all.
+	//
+	// Nor should one: WrapKey/UnwrapKey would send the DEK that encrypts HUB state across the
+	// WAN to be wrapped by an edge Site's KMS, inverting the property ADR-0100 exists to
+	// provide. Per-Cell sovereignty is served by a Cell running its own control plane with its
+	// own local custodian — a Cell is a control plane, a Site is an execution locus.
 	mVerifyMAC = "VerifyMAC"
 )
 
@@ -136,6 +140,14 @@ func serveCall(ctx context.Context, cs CallStream, plugin pluginv1.PluginService
 		streamProxy[pluginv1.InvokeRequest, pluginv1.InvokeResponse](cctx, cs, req, plugin.Invoke)
 	case mSubscribe:
 		streamProxy[pluginv1.SubscribeRequest, pluginv1.SubscribeResponse](cctx, cs, req, plugin.Subscribe)
+	case mWrapKey, mUnwrapKey, mVerifyMAC:
+		// Named explicitly rather than left to the arm below, because "unknown method" reads
+		// like version skew and sends the next engineer looking for a missing case (§1.8).
+		// What is true is a design property, so it is what the error says.
+		_ = cs.Send(Msg{Terminal: true, Err: "siterelay: " + req.Method +
+			" does not travel to a Site (ADR-0166): a custodian's key stays where it lives, and " +
+			"relaying it would carry the hub's DEK across the link. A Site needing custody is a " +
+			"Site-local custodian, not this verb over a relay."})
 	default:
 		_ = cs.Send(Msg{Terminal: true, Err: "siterelay: unknown method " + req.Method})
 	}
