@@ -1,6 +1,7 @@
 # ADR 0165 — There has never been a release to sign
 
-- **Status:** **Proposed** (2026-08-04, steward). Charter review by hand — this session's rules bar
+- **Status:** **Accepted** (2026-08-04, steward) — **CI-proven**: all three control-plane images
+  built, keyless-signed and verified against this workflow's own identity, publishing nothing. Charter review by hand — this session's rules bar
   the subagent; §1.4/§1.5/§1.7/§1.8/§7.3 answered inline. **No new runtime dependency** — the tools
   are CI-only.
 - **Date:** 2026-08-04
@@ -174,9 +175,28 @@ That is D2's argument made executable: the gate checks WHO signed, not merely th
 key-based check could not have failed this way, because a valid signature by the right key is the
 whole of what it can assert.
 
-**Still owed: the keyless signing half.** It needs an OIDC identity only the CI environment has, so
-it cannot be exercised on a workstation and this ADR stays **Proposed** until a `workflow_dispatch`
-dry run lands. That boundary is the honest one and is not blurred.
+### And the CI half, paid (2026-08-04)
+
+Run `30868609634`, tag `v0.0.0-dryrun.1`, all three images **success**:
+
+```
+packages: 138
+signed the digest as a blob — identity-bound, nothing pushed
+✓ verified: signed by this workflow's identity      Verified OK
+```
+
+Keyless signing works end to end — the OIDC exchange, the Fulcio certificate and the Rekor entry —
+and the verification step confirms the signature against the workflow identity rather than merely
+noting that signing exited zero. **Nothing was published**: `PUBLISH` is `false` for any tag push by
+construction, so the entire trust chain ran against images that existed only in the runner.
+
+### What the dry run cost, which is worth recording
+
+**The tag triggered `e2e-live.yml` as well**, because that workflow also fires on `v*` — so proving a
+signing pipeline started the whole six-runner live demo suite. It was cancelled within a minute and
+the tag deleted, but the lesson generalizes: **`v*` is a shared trigger namespace in this repo, and a
+"harmless" tag is not harmless.** A future dry run should use `workflow_dispatch` from the default
+branch, which is what D5's `publish` input is for and costs one job instead of seven.
 
 ### What building it found
 
