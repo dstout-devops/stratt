@@ -136,6 +136,38 @@ jobs:
           BASE: main
         run: task ci
 
+  ansible-syntax:
+    name: Ansible syntax (ANS-013)
+    # ITS OWN JOB, AND THE COST IS THE REASON (ADR-0171). This needs a built EE image, which
+    # `task ci` deliberately does not build — so folding it into the CI gate would have added an
+    # EE build to every lint run. A separate job keeps that cost visible and attributable instead
+    # of hiding it inside a target everyone runs.
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - name: Set up Go
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version: stable
+      - name: Install uv
+        uses: astral-sh/setup-uv@e92bafb6253dcd438e0484186d7669ea7a8ca1cc # v6.4.3
+      - name: Install Task (pinned)
+        run: |
+          set -eu
+          go install github.com/go-task/task/v3/cmd/task@v3.52.0
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+      # The three EE variants the estate's Actuators name. Each playbook is checked against an
+      # image that actually runs it, because --syntax-check resolves module names.
+      - name: Build the EE images the estate declares
+        run: |
+          set -eu
+          task dev:ee:build:image
+          task dev:ee-frr:build:image
+          task dev:ee-crypto:build:image
+      - name: ansible-playbook --syntax-check, every referenced playbook
+        run: task ansible:syntax
+
   images:
     name: Control-plane image builds
     # Build the control-plane images (strattd/agent/forwarder) so a spec/module

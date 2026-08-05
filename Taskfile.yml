@@ -3019,13 +3019,19 @@ tasks:
       - task: e2e:plugin:syncer
       - task: e2e:plugin:devices
 
-  dev:ee:build:
-    desc: Build the dev EE image and load it into the kind cluster
+  dev:ee:build:image:
+    desc: "Image only (no kind load) — build stratt-ee:dev; the loader target wraps this"
     cmds:
       # Context is the repo root: the multi-stage build compiles the stratt-ansible
       # shim (ADR-0051) from plugins/ansible + sdk before baking the EE runtime.
       - docker build --build-arg GO_PARALLEL={{.GO_PARALLEL}} -f ee/Dockerfile -t stratt-ee:dev .
+
+  dev:ee:build:
+    desc: Build stratt-ee:dev and load it into the kind cluster
+    cmds:
+      - task: dev:ee:build:image
       - go run sigs.k8s.io/kind@v{{.KIND_VER}} load docker-image stratt-ee:dev --name {{.KIND_CLUSTER}}
+
 
   ee:content:check:
     desc: Fail if any EE content declaration is unpinned, unlocked, or drops the platform floor (ADR-0117 D3/i, ANS-012)
@@ -3094,6 +3100,51 @@ tasks:
       - 'test -n "{{.EE}}" || { echo "usage: task ee:factory:requirements EE=path/to/execution-environment.yml" >&2; exit 1; }' 
       - uv run --quiet --with pyyaml=={{.PYYAML_VER}} python ee/content.py ee-requirements {{.EE}}
 
+  ansible:syntax:
+    desc: "ANS-013 — real `ansible-playbook --syntax-check` over every playbook the estate references"
+    silent: true
+    cmds:
+      - |
+        set -eu
+        # ── A REAL SYNTAX CHECK, NOT A STRUCTURAL IMITATION (ADR-0171) ──────────────────────
+        #
+        # ansible parses these, inside the EE image, as a SUBPROCESS — which is the boundary
+        # charter §3 blesses ("Ansible is subprocess-only; the Go control plane never links it").
+        # Core still never opens a playbook (ADR-0117 D6); this is a build-time gate beside core,
+        # not a code path inside it.
+        #
+        # Each playbook is checked against the EE ITS OWN ACTUATOR DECLARES, because
+        # --syntax-check resolves module names: a play using frr.frr parsed by the platform EE
+        # would fail for a reason about the image rather than about the play.
+        refs="$(uv run --quiet --with pyyaml=={{.PYYAML_VER}} python {{.ROOT_DIR}}/tools/playbookrefs.py)"
+        n=0; bad=0
+        while IFS="$(printf '\t')" read -r root rel images; do
+          [ -n "$rel" ] || continue
+          n=$((n + 1))
+          # ANY image parsing it is a pass. A playbook may be referenced by an Actuator whose EE
+          # deliberately lacks its collection — demos/network-device does exactly that, pointing
+          # `ansible-plain` at a network play so the image gate has something to refuse. Requiring
+          # every pairing to parse would fail that estate for being correct.
+          ok=0; last=""
+          for image in $(echo "$images" | tr ',' ' '); do
+            if out="$(docker run --rm --entrypoint ansible-playbook \
+                        -v "$root":/project:ro -w /project "$image" --syntax-check "$rel" 2>&1)"; then
+              ok=1; break
+            fi
+            last="$out"
+          done
+          if [ "$ok" = 0 ]; then
+            bad=$((bad + 1))
+            echo "✗ $rel  (root $root; no image parsed it — tried $images)"
+            echo "$last" | sed 's/^/    /'
+          fi
+        done <<EOF
+        $refs
+        EOF
+        [ "$n" -gt 0 ] || { echo "✗ ansible:syntax checked NOTHING — the deriver reached no playbook" >&2; exit 1; }
+        [ "$bad" = 0 ] || { echo "✗ ansible:syntax — $bad of $n playbook(s) failed" >&2; exit 1; }
+        echo "✓ ansible:syntax — $n referenced playbook(s) parse, each in an EE that runs it"
+
   ee:factory:build:
     desc: "Build an EE image FROM an ansible-builder execution-environment.yml (ADR-0170). EE=path TAG=name"
     vars:
@@ -3132,8 +3183,8 @@ tasks:
       # the whole claim. A build that succeeds and cannot connect is what this exists to catch.
       - 'docker run --rm --entrypoint python "{{.TAG}}" /usr/local/bin/stratt-ee-content manifest 2>/dev/null || true'
 
-  dev:ee-crypto:build:
-    desc: Build the crypto-content EE variant and load it into the kind cluster (ADR-0117 D3/D3a)
+  dev:ee-crypto:build:image:
+    desc: "Image only (no kind load) — build stratt-ee-crypto:dev (ADR-0117 D3/D3a)"
     cmds:
       # Same Dockerfile as the base EE — content is selected by build ARG, not by a fork
       # of the image definition. The declared collections are installed at BUILD time, the
@@ -3142,7 +3193,13 @@ tasks:
       - docker build --build-arg GO_PARALLEL={{.GO_PARALLEL}} --build-arg EE_CONTENT=crypto.requirements.yml
         --build-arg EE_KUBECTL_VERSION={{.KUBECTL_VER}} --build-arg EE_KUBECTL_SHA256={{.KUBECTL_SHA256}}
         -f ee/Dockerfile -t stratt-ee-crypto:dev .
+
+  dev:ee-crypto:build:
+    desc: Build stratt-ee-crypto:dev and load it into the kind cluster
+    cmds:
+      - task: dev:ee-crypto:build:image
       - go run sigs.k8s.io/kind@v{{.KIND_VER}} load docker-image stratt-ee-crypto:dev --name {{.KIND_CLUSTER}}
+
 
   dev:ee-kube:build:
     desc: Build the kube-content EE variant (kubernetes.core + the kubectl binary, ADR-0156) and load it into kind
@@ -3197,8 +3254,8 @@ tasks:
         --build-arg EE_PYTHON_EXTRA="ansible-pylibssh=={{.PYLIBSSH_VER}}"
         -f ee/Dockerfile -t stratt-ee-network:dev .
 
-  dev:ee-frr:build:
-    desc: Build the FRR-capable EE variant and load it into kind (ADR-0153 live half, demos/network-device)
+  dev:ee-frr:build:image:
+    desc: "Image only (no kind load) — build stratt-ee-frr:dev (ADR-0153, demos/network-device)"
     cmds:
       # WHAT AN ADOPTER DOES, run as a gate rather than described in prose (ADR-0117 D3): take the
       # network variant's content, add ONE vendor collection, select the image from an Actuator
@@ -3213,7 +3270,13 @@ tasks:
       - docker build --build-arg GO_PARALLEL={{.GO_PARALLEL}} --build-arg EE_CONTENT=frr.requirements.yml
         --build-arg EE_PYTHON_EXTRA="ansible-pylibssh=={{.PYLIBSSH_VER}}"
         -f ee/Dockerfile -t stratt-ee-frr:dev .
+
+  dev:ee-frr:build:
+    desc: Build stratt-ee-frr:dev and load it into the kind cluster
+    cmds:
+      - task: dev:ee-frr:build:image
       - go run sigs.k8s.io/kind@v{{.KIND_VER}} load docker-image stratt-ee-frr:dev --name {{.KIND_CLUSTER}}
+
 
   demo:network-device:device:build:
     desc: Build the FRR network-device image (a real vtysh CLI over SSH) and load it into kind
