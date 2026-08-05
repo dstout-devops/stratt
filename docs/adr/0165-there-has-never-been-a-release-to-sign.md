@@ -210,3 +210,26 @@ branch, which is what D5's `publish` input is for and costs one job instead of s
   cosign (guessed 2.6.1; 3.1.2 is current). Both are pinned in `Taskfile.yml` beside the other gate
   tools, for the reason stated there: a gate whose thesis is "unpinned things resolve differently on
   different days" must not itself float.
+
+### What the publish path was hiding (2026-08-05)
+
+D5 said the publishing half is "wired, and off by default". Reading it back — prompted by the
+question "are we creating GHCR containers properly now?" — found **two defects that could only ever
+have surfaced on a real publish**:
+
+- **`subject-digest` was given a full image reference.** `docker image inspect --format
+  '{{ index .RepoDigests 0 }}'` yields `ghcr.io/…@sha256:…`, and `actions/attest-build-provenance`
+  wants the BARE `sha256:…` beside its own `subject-name`. Two consumers wanting different forms,
+  conflated into one output.
+- **The verify step invokes `task`, which the job never installed.** It would have died with
+  `task: command not found` — at the step whose entire purpose is that a release which cannot be
+  verified FAILS rather than shipping (D4). The gate would have failed for the wrong reason, which
+  is the one way a fail-closed check can still mislead.
+
+Both are fixed. **Neither is proven**, and that is the honest state: the dry run exercises signing,
+attestation and verification of a blob, and it does not exercise push, registry attestation or
+`supply:verify` against a real digest. The first real publish is still the first execution of that
+path — which is exactly what D5 says, and now with two fewer known bugs in it.
+
+The generalisable point: **"wired but off" is not "working, awaiting permission".** An untaken code
+path is untested code, and calling it wired invites reading it as ready.
