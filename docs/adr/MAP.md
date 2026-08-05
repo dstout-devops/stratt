@@ -10,7 +10,7 @@ design must reconcile with. Chronological list: [README.md](README.md); phase vi
 
 ```mermaid
 graph TD
-  actuators["actuators<br/><small>0016 0022 0050 0053 0092 0117<br/>0124 0126 0133 0134 0135 0148<br/>0149 0153 0156 0158 0159 0160<br/>0161 0170</small>"]
+  actuators["actuators<br/><small>0016 0022 0050 0053 0092 0117<br/>0124 0126 0133 0134 0135 0148<br/>0149 0153 0156 0158 0159 0160<br/>0161 0170 0171</small>"]
   api_surface["api-surface<br/><small>0006 0021 0026 0076 0091 0121<br/>0157 0163 0164 0167</small>"]
   audit_telemetry["audit-telemetry<br/><small>0034 0065 0077 0121</small>"]
   authz_identity["authz-identity<br/><small>0009 0028 0035 0079 0101 0122<br/>0130 0155</small>"]
@@ -18,7 +18,7 @@ graph TD
   certificates_pki["certificates-pki<br/><small>0030 0043 0050 0098 0106 0150</small>"]
   connectors["connectors<br/><small>0007 0014 0025 0026 0037 0038<br/>0039 0045 0086 0087 0088 0089<br/>0095 0097 0099 0113 0114 0115<br/>0127 0128 0129 0130 0131 0132<br/>0133 0136 0144 0146 0154 0155<br/>0156 0158 0160</small>"]
   credentials_secrets["credentials-secrets<br/><small>0009 0029 0052 0094 0098 0099<br/>0100 0106 0125 0126 0153 0164<br/>0166 0167</small>"]
-  estate_as_code["estate-as-code<br/><small>0055 0056 0057 0103 0113 0116<br/>0118 0119 0120 0122 0123 0132<br/>0134 0135 0136 0137 0138 0139<br/>0142 0146 0147 0148 0151 0152<br/>0163</small>"]
+  estate_as_code["estate-as-code<br/><small>0055 0056 0057 0103 0113 0116<br/>0118 0119 0120 0122 0123 0132<br/>0134 0135 0136 0137 0138 0139<br/>0142 0146 0147 0148 0151 0152<br/>0163 0171</small>"]
   findings_drift["findings-drift<br/><small>0019 0020 0033 0043 0080 0085<br/>0128 0129 0130 0133 0148 0150</small>"]
   foundation["foundation<br/><small>0001 0002 0004 0005 0006 0008<br/>0108 0109 0116 0137 0138 0141<br/>0165 0168 0169 0170</small>"]
   graph_model["graph-model<br/><small>0015 0017 0041 0042 0059 0060<br/>0079 0080 0081 0082 0084 0085<br/>0096 0114 0115 0119 0120 0123<br/>0126 0127 0128 0129 0130 0132<br/>0133 0143 0144 0147 0152 0153<br/>0154 0155 0156 0158 0161</small>"]
@@ -104,6 +104,7 @@ Actuators — execution engines (opentofu, helm, mcp, cert-issuer reconcile).
 - [ADR-0160](0160-the-same-job-possibly-a-different-hand.md) — The same job, possibly a different hand: launch-time parity with AAP
 - [ADR-0161](0161-the-graph-is-the-inventory-and-it-has-no-groups.md) — The graph is the inventory, and it renders no groups
 - [ADR-0170](0170-from-a-definition-to-an-image.md) — From a definition to an image
+- [ADR-0171](0171-a-file-a-step-calls-a-playbook.md) — A file a Step calls a playbook
 
 ### api-surface
 
@@ -274,6 +275,7 @@ Estate-as-Code — CaC declarations, environments, composition, the estate CLI.
 - [ADR-0151](0151-substrate-is-a-property-of-the-provider.md) — Substrate is a property of the PROVIDER, selected by composition; no declaration above it ever names one
 - [ADR-0152](0152-a-facet-claim-is-qualified.md) — A Facet claim is qualified: many managed applications on one host
 - [ADR-0163](0163-one-post-many-events-and-the-shape-is-not-cores.md) — One POST, many events, and the shape is not core's
+- [ADR-0171](0171-a-file-a-step-calls-a-playbook.md) — A file a Step calls a playbook
 
 ### findings-drift
 
@@ -714,3 +716,4 @@ UI — React shell, schema-driven rendering, Views, descent, the first-party cli
 | [0168](0168-a-warning-is-not-a-gate.md) | foundation, substrate-ops |
 | [0169](0169-the-last-door-before-something-runs.md) | foundation, orchestration, substrate-ops |
 | [0170](0170-from-a-definition-to-an-image.md) | actuators, foundation |
+| [0171](0171-a-file-a-step-calls-a-playbook.md) | actuators, estate-as-code |

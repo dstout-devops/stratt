@@ -1181,7 +1181,7 @@ length closing.
 
 **Still open from the plan, unchanged by this branch:**
 
-- **W6 residue** — ANS-013 (pre-flight syntax check). ~~ANS-009~~ (multi-document playbooks) is
+- ~~**W6 residue** — ANS-013~~ — **paid** (ADR-0171): a real `ansible-playbook --syntax-check` in its own CI job, over the playbooks the estate references. W6 residue is now empty. ~~ANS-009~~ (multi-document playbooks) is
   **examined and fixed** (2026-08-04): the 🟠 suspicion was right, a multi-doc playbook projected only
   its first document, and the Playbook looked complete while describing less of itself than the file
   held. ~~AWX-015~~

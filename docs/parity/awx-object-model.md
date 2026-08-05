@@ -32,11 +32,11 @@ from that single sample. Everything below is the rest of the sample.
 
 | Area                                       | Verdict                          | One-line                                                                                         |
 | ------------------------------------------ | -------------------------------- | ------------------------------------------------------------------------------------------------ |
-| **Object coverage** (which objects at all) | 🟡 10 projected                  | Spine + credentials + accounts + labels + EEs; **role grants** and **instance groups** remain, both declined with an argument |
-| **Field depth** on projected objects       | 🟡 template deepened, rest thin  | `ansible.template` now carries run state, run knobs + a credential edge (**ADR-0128**); the other four are still 1–3 fields |
+| **Object coverage** (which objects at all) | 🟢 **10 projected; the residue is 2 declines** (2026-08-05) | Spine + credentials + accounts + labels + EEs. `roles` (AWX-005, ADR-0130 D3) and `instance_groups` (AWX-008) are DECLINED with arguments, not pending — the object table below said 🟠 "nobody has looked" for both and contradicted this row until it was corrected. **The residue is two declines, not a coverage gap.** (An earlier version of this row claimed labels/EEs are derived from template payloads rather than enumerated — that was wrong; both are collection reads, see the rows below.) |
+| **Field depth** on projected objects       | 🟢 **8 of 12 deep; 4 thin by decision** (corrected 2026-08-05) | Counted from `controller/normalize.go`: template **18**, schedule **17**, project **8**, credentialtype **6**, user **5**, executionenvironment **5**, workflow **4**, notification **4** ‖ credential **2**, org **2**, label **2**, team **1**. The row said "the other four are still 1–3 fields" when there are TWELVE Kinds, not five. Each thin one is thin deliberately, because its value is the EDGE not the facet: `credential` name+kind only, never material (ADR-0128 D2, §2.5); `label` → `has-label` (ADR-0132 D1); `team` → `member-of`/`has-member` (ADR-0130 D2); `org` → `owned-by` |
 | **Workflow topology**                      | 🟢 invocations + approval gate   | `invokes` edges + `hasApprovalGate`/`nodeCount` (**ADR-0129**); the node graph stays adopt's job |
 | **Facet schema coverage**                  | 🟡 **8 of 13**                   | +template +credential (0128) +workflow (0129) +user (0130) +label (0132) +EE (0133)             |
-| **Read-path symmetry**                     | 🟡 divergent by accident         | Projection reads 5 endpoints, adopt reads 9; nothing states which asymmetries are deliberate     |
+| **Read-path symmetry**                     | 🟢 **deliberate, and the verdict inverted** (corrected 2026-08-05) | The row said "5 endpoints" and "divergent by accident". Both wrong: the projection reads **12 collections + 2 detail families**, making it the BROADEST of the three readers, not the thinnest. The divergence it named was closed by ADR-0128/0129/0131/0132/0133/0154 and the row never caught up. Every remaining asymmetry is stated in the table below |
 | **`stratt adopt` transform**               | 🟢 deep and honest               | Reads what it needs, refuses what it must (secrets, password surveys), reports what it drops     |
 
 **Bottom line.** The transform half is in good shape — `stratt adopt` reads deeply and its migration report
@@ -81,11 +81,11 @@ which is which.
 | `credentials`                    | `projected` 🟢 + `mapped` ⚪ | **Both, and deliberately** (ADR-0128 D2): projected as `ansible.credential` (name+kind, never material, §2.5) so credential usage is a traversal, AND mapped → **CredentialRef** at adopt. Mirror vs Named Kind, the same pair as `ansible.template` ↔ Workflow |             |
 | `job_templates/{id}/survey_spec` | `mapped` ⚪     | → `Workflow.inputs` (ADR-0118 D2); a **password** question is refused, not imported                                                                         |             |
 | `users`                          | `projected` 🟢  | → `ansible.user` (~~AWX-003~~, ADR-0130 D1) — AWX's LOCAL ACCOUNT table, deliberately **not** `identity.subject`, which has a single write-owner (§2.1)     |             |
-| `roles` (RBAC grants)            | `none` 🔴       | No principal→object grant is read, so no AWX permission is visible or migratable                                                                            | **AWX-005** |
+| `roles` (RBAC grants)            | `none` — **DECLINED** | Not pending: ADR-0130 D3 refused it with an argument, and the roadmap says so. A projected grant graph is one query from being used as an authorization truth, which no read-shape fix answers. "We looked and said no" must not render as "nobody looked" | ~~AWX-005~~ |
 | `jobs` / `job_events`            | `none` ⚪🟠     | Run **history** is deliberately not mirrored — §3 forbids replicating AWX's job-events-table pathology. But **current/last status is not history**          | **AWX-011** |
-| `labels`                         | `none` 🟠       | AWX labels are the operator's own grouping vocabulary; they would map to graph labels cleanly and nobody has looked                                         | **AWX-006** |
-| `execution_environments`         | `none` 🟠       | Which EE a template runs in is invisible in the mirror; on our side EE is an Actuator declaration (ADR-0117 D3a), so the mapping is not obvious             | **AWX-007** |
-| `instance_groups`                | `none` 🟠       | AWX's execution placement; our equivalent is Sites/Cells, so this is a real mapping question nobody has asked                                               | **AWX-008** |
+| `labels`                         | **projected** 🟢 | ADR-0132 shipped it. **Corrected twice**: 🟠 "nobody has looked" was wrong, and so was the 2026-08-05 replacement claiming they are derived from the template payload. `controller/types.go:461` enumerates `/labels/` as a COLLECTION every poll — a label attached to nothing IS projected. Only the ASSOCIATION rides `summary_fields` (`normalize.go:119`), which is why the edge costs no request. The real limit is narrower: an edge to a label the Controller did not also list on the SAME pass is dropped rather than stubbed — resolve-don't-vivify, `normalize.go:491-492` | ~~AWX-006~~ |
+| `execution_environments`         | **projected** 🟢 | ADR-0133 shipped it. Same double correction as labels: `controller/types.go:464` enumerates `/execution_environments/` as a COLLECTION, so an EE no template references IS projected. The `runs-in` edge rides `summary_fields` (`normalize.go:120-124`) and exists on job templates only — a workflow gets no `runs-in` | ~~AWX-007~~ |
+| `instance_groups`                | `none` — **DECLINED** | The scorecard above already records this as declined with an argument; this row contradicted it. Sites/Cells are the equivalent and AWX-008 refused the mirror | ~~AWX-008~~ |
 | `notification_templates`         | `projected` 🟢  | → `ansible.notification` + `owned-by` edge (2026-07-31). Name, DRIVER and config KEY NAMES only — no configuration VALUE is ever projected, because AWX returns non-secret fields in the clear and for the commonest driver the cleartext field IS the credential (a Slack webhook URL is a bearer secret). `notificationType` is a Sink's `kind` on cutover (ADR-0125). ATTACHMENTS deliberately absent: 3 sub-reads per job template | ~~**AWX-009**~~ |
 | `credential_types`               | `projected` 🟢  | → `ansible.credentialtype` (2026-07-31). Field names, WHICH are secret, and the injector delivery modes — `managed: false` is the migration question, since a custom type exists nowhere else. Injector TEMPLATES are not projected: arbitrary operator text the mode already summarises | ~~**AWX-012**~~ |
 | `ad_hoc_commands`                | `none` ⚪       | An imperative one-shot; Stratt's equivalent is a Run against a View, not an object to mirror                                                                |             |
@@ -97,7 +97,7 @@ which is which.
 
 ---
 
-## 2. Field depth on the five projected kinds
+## 2. Field depth on the twelve projected kinds
 
 This is the section the audit was written for. Each table lists **what lands in the graph** against what
 AWX holds on that object.
@@ -172,7 +172,7 @@ mirror — which is the half a customer scrutinizes hardest before trusting a cu
 
 ---
 
-## 3. Facet schema coverage — 2 of 9 · **AWX-014**
+## 3. Facet schema coverage — **10 of 12 projected Kinds** · ~~AWX-014~~ (corrected 2026-08-05)
 
 `contract.ValidateFacet` returns `covered=false` for an unregistered namespace
 ([contract.go:399-408](../../core/internal/contract/contract.go#L399-L408)) and the write proceeds
@@ -180,21 +180,34 @@ mirror — which is the half a customer scrutinizes hardest before trusting a cu
 namespace earns a schema when a Contract demands it, not before — but it should be _visible_, and until
 now it was not written down anywhere.
 
-| Namespace            | Pinned schema                                                    | Demander                                                                                        |
-| -------------------- | ---------------------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
-| `ansible.playbook`   | 🟢 [schema](../../contracts/facets/ansible.playbook.schema.json) | the content half's projection Contract                                                          |
-| `ansible.schedule`   | 🟢 [schema](../../contracts/facets/ansible.schedule.schema.json) | the `awx-schedule-enabled` Baseline + cutover                                                   |
-| `ansible.template`   | 🔴 none                                                          | — (the `awx-template-covered` Baseline reads relations, not content, so it does not demand one) |
-| `ansible.workflow`   | 🔴 none                                                          | —                                                                                               |
-| `ansible.org`        | 🔴 none                                                          | —                                                                                               |
-| `ansible.team`       | 🔴 none                                                          | —                                                                                               |
-| `ansible.role`       | 🔴 none                                                          | —                                                                                               |
-| `ansible.collection` | 🔴 none                                                          | —                                                                                               |
-| `ansible.inventory`  | 🔴 none                                                          | —                                                                                               |
+**This section said "2 of 9" and marked `ansible.template`, `ansible.workflow`, `ansible.role` and
+`ansible.collection` as 🔴 none. All four have schemas.** `contracts/facets/` holds **16** `ansible.*`
+documents, counted from the filesystem 2026-08-05.
 
-**Done for `ansible.template` (ADR-0128)** — and the ordering held: the schema landed _with_ the fields and
-_with_ the Baseline that reads them. The remaining six are unchanged, and the same rule applies to each:
-the schema lands when something consumes the namespace, not before.
+| Namespace                       | Pinned schema | Note |
+| ------------------------------- | ------------- | ---- |
+| `ansible.template`              | 🟢 | ADR-0128 — landed with the fields and the Baseline that reads them |
+| `ansible.schedule`              | 🟢 | the `awx-schedule-enabled` Baseline + cutover |
+| `ansible.project`               | 🟢 | ADR-0154 |
+| `ansible.credential`            | 🟢 | ADR-0128 D2 |
+| `ansible.credentialtype`        | 🟢 | |
+| `ansible.user`                  | 🟢 | ADR-0130 |
+| `ansible.workflow`              | 🟢 | ADR-0129 |
+| `ansible.label`                 | 🟢 | ADR-0132 |
+| `ansible.executionenvironment`  | 🟢 | ADR-0133 |
+| `ansible.notification`          | 🟢 | |
+| `ansible.org`                   | 🔴 none | nothing consumes it yet |
+| `ansible.team`                  | 🔴 none | nothing consumes it yet |
+
+Six further schemas exist for the CONTENT half rather than the controller mirror: `ansible.playbook`,
+`ansible.role`, `ansible.collection`, `ansible.plugin`, `ansible.varscope`, `ansible.config`.
+
+`ansible.inventory` has been dropped from this table: it is classified `mapped`, so it becomes Views
+and `Workflow.inputs` at adopt and can never be a projected namespace. Listing it manufactured a gap
+that cannot exist.
+
+The rule is unchanged and now has only two names under it: **a namespace earns a schema when a
+Contract demands it, not before** (§1.1 progressive hardening).
 
 ---
 
@@ -204,8 +217,9 @@ Two paths read AWX, with different breadth, and nothing reconciles them:
 
 | Path                                                                                         | Endpoints                                                                                                               |
 | -------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
-| **Projection** ([controller/types.go](../../plugins/ansible-automation/controller/types.go)) | `job_templates`, `workflow_job_templates`, `schedules`, `organizations`, `teams`, `credentials`, `users`, `labels`, `execution_environments`, `notification_templates` — **10**                                |
-| **adopt deep-read** ([awxapi/](../../plugins/ansible-automation/controller/awxapi/))         | those + `projects`, `inventories`, `credentials`, `survey_spec`, `workflow_nodes`, `inventory_sources`, `hosts` — **9** |
+| **Projection** ([controller/types.go:435-493](../../plugins/ansible-automation/controller/types.go)) | `job_templates`, `workflow_job_templates`, `schedules`, `organizations`, `teams`, `credentials`, `users`, `labels`, `execution_environments`, `credential_types`, `projects`, `notification_templates` — **12 collections**, plus **2 detail families** on their own cadence (`workflow_job_templates/{id}/workflow_nodes/`, `teams/{id}/users/` — ADR-0131 D1) |
+| **Bulk deep-read** ([awxapi/enumerate.go](../../plugins/ansible-automation/controller/awxapi/enumerate.go)) | 4 collections + 5 per-object sub-reads — **9 shapes**. No production caller today, deliberately: retained per ADR-0089 D5 for a bounded future `bulk-adopt`, and it builds the golden CaC fixture |
+| **Targeted adopt** ([awxapi/adopt_read.go](../../plugins/ansible-automation/controller/awxapi/adopt_read.go)) | **7 shapes**, all per-object (ADR-0086 model (b)) |
 
 **Update (2026-07-26):** proving this seam found the asymmetry had also reached the **test harness**.
 `awxsim` — the shared dev/test stand-in — served only the adopt deep-read's endpoints, so the projection

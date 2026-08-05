@@ -19,70 +19,86 @@ import (
 	"github.com/dstout-devops/stratt/core/internal/policy"
 )
 
+// verb is one accepted CLI command AND its banner line, in one place.
+//
+// ── ONE LIST, BECAUSE TWO LISTS DRIFTED ──────────────────────────────────────────────────────
+//
+// This was a dispatch chain plus a hand-written usage string, and they disagreed: the banner
+// advertised `stratt import awx …` long after ADR-0086 D1 retired the verb and ADR-0089 D5 deleted
+// import.go. An operator who ran what the banner told them to run got exit 2 — the abstraction
+// hiding a failure rather than a mechanism (§1.8), in the one place a new user starts.
+//
+// The accepted set and the advertised set are now the same value. Adding a verb without advertising
+// it, or advertising one that does not dispatch, is no longer possible to do by accident —
+// verbs_test.go fails on either.
+//
+// `import` is NOT coming back. We never import: the projection is always-on (ADR-0025's own
+// amendment), and `adopt` is the per-object strangler-fig path. A bounded `bulk-adopt` is booked in
+// ADR-0089 if demand appears — never a silent full-estate one-shot.
+type verb struct {
+	name  string
+	usage string
+	run   func(args []string) error
+}
+
+func verbs() []verb {
+	return []verb{
+		{"plan", "stratt plan [-d declarations-dir] [-s server-url]", planApply("plan")},
+		{"apply", "stratt apply [-d declarations-dir] [-s server-url]", planApply("apply")},
+		// `adopt <kind> <identity>` (ADR-0086) materializes ONE already-observed object into a
+		// reviewable Named-Kind bundle, from the live projection catalog + a targeted deep-read.
+		{"adopt", "stratt adopt <kind> <identity> --endpoint <url> [--token <t>] [-s server] -o <out-dir>", runAdopt},
+		// `bundle` packages Step content into a cosign-signable OCI Bundle for pull-mode Sites
+		// (ADR-0032); it talks to a registry, not the platform API.
+		{"bundle", "stratt bundle push <content-dir> <ref> --name N --version V --actuator A", runBundle},
+		// `pack` lists/shows/installs in-tree content packs (ADR-0033); install materializes a pack
+		// into the operator's desired-state Git (§1.2), never touching the platform API.
+		{"pack", "stratt pack <list|show|install> [name] --view V -o <cac-dir>", runPack},
+	}
+}
+
+// planApply builds the run func for the two verbs that share the desired-state flag set.
+func planApply(cmd string) func([]string) error {
+	return func(args []string) error {
+		fs := flag.NewFlagSet(cmd, flag.ExitOnError)
+		dir := fs.String("d", ".", "declarations directory (contains views/)")
+		server := fs.String("s", envOr("STRATT_SERVER", "http://localhost:8080"), "control-plane base URL")
+		_ = fs.Parse(args)
+		return run(cmd, *dir, *server)
+	}
+}
+
+func lookup(name string) (verb, bool) {
+	for _, v := range verbs() {
+		if v.name == name {
+			return v, true
+		}
+	}
+	return verb{}, false
+}
+
 func main() {
 	if len(os.Args) < 2 {
 		usage()
 		os.Exit(2)
 	}
-	cmd := os.Args[1]
-
-	// `adopt <kind> <identity>` (ADR-0086) materializes ONE already-observed object into a
-	// reviewable Named-Kind bundle, resolved from the live projection catalog + a targeted
-	// deep-read. It supersedes the one-shot `import` (we never import — the projection is
-	// always-on). `import` remains until adopt fully lands (ADR-0025 Superseded-in-part).
-	if cmd == "adopt" {
-		if err := runAdopt(os.Args[2:]); err != nil {
-			fmt.Fprintln(os.Stderr, "stratt:", err)
-			os.Exit(1)
-		}
-		return
-	}
-
-	// `bundle` packages Step content into a cosign-signable OCI Bundle for
-	// pull-mode Sites (ADR-0032); it talks to a registry, not the platform API.
-	if cmd == "bundle" {
-		if err := runBundle(os.Args[2:]); err != nil {
-			fmt.Fprintln(os.Stderr, "stratt:", err)
-			os.Exit(1)
-		}
-		return
-	}
-
-	// `pack` lists/shows/installs in-tree content packs (ADR-0033); install
-	// materializes a pack into the operator's desired-state Git (§1.2), never
-	// touching the platform API.
-	if cmd == "pack" {
-		if err := runPack(os.Args[2:]); err != nil {
-			fmt.Fprintln(os.Stderr, "stratt:", err)
-			os.Exit(1)
-		}
-		return
-	}
-
-	fs := flag.NewFlagSet(cmd, flag.ExitOnError)
-	dir := fs.String("d", ".", "declarations directory (contains views/)")
-	server := fs.String("s", envOr("STRATT_SERVER", "http://localhost:8080"), "control-plane base URL")
-	_ = fs.Parse(os.Args[2:])
-
-	switch cmd {
-	case "plan", "apply":
-		if err := run(cmd, *dir, *server); err != nil {
-			fmt.Fprintln(os.Stderr, "stratt:", err)
-			os.Exit(1)
-		}
-	default:
+	v, ok := lookup(os.Args[1])
+	if !ok {
 		usage()
 		os.Exit(2)
 	}
+	if err := v.run(os.Args[2:]); err != nil {
+		fmt.Fprintln(os.Stderr, "stratt:", err)
+		os.Exit(1)
+	}
 }
 
+// usage renders FROM the table, so it cannot advertise a verb that does not dispatch.
 func usage() {
-	fmt.Fprintln(os.Stderr, `usage:
-  stratt <plan|apply> [-d declarations-dir] [-s server-url]
-  stratt adopt <kind> <identity> --endpoint <url> [--token <t>] [-s server] -o <out-dir>
-  stratt import awx --endpoint <url> [--token <t>] -o <out-dir>   (legacy; superseded by adopt)
-  stratt bundle push <content-dir> <ref> --name N --version V --actuator A
-  stratt pack <list|show|install> [name] --view V -o <cac-dir>`)
+	fmt.Fprintln(os.Stderr, "usage:")
+	for _, v := range verbs() {
+		fmt.Fprintln(os.Stderr, "  "+v.usage)
+	}
 }
 
 func envOr(key, def string) string {

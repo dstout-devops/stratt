@@ -26,6 +26,14 @@ type fJobTemplate struct {
 	Limit         string `json:"limit,omitempty"`
 	JobTags       string `json:"job_tags,omitempty"`
 	BecomeEnabled bool   `json:"become_enabled,omitempty"`
+	// The five the sim did NOT serve until 2026-08-05, found by simcoverage_test.go rather than
+	// by anyone noticing: the projection has decoded them since ADR-0128 and they were silently
+	// zero in every test, so a projection reporting nothing for them looked correct.
+	SkipTags      string `json:"skip_tags,omitempty"`
+	Timeout       int    `json:"timeout,omitempty"`
+	Verbosity     int    `json:"verbosity,omitempty"`
+	DiffMode      bool   `json:"diff_mode,omitempty"`
+	ScmBranch     string `json:"scm_branch,omitempty"`
 	SummaryFields struct {
 		Credentials []fCredSummary `json:"credentials"`
 		// The PROJECTION half reads these two and the adopt half does not — awxsim
@@ -313,6 +321,9 @@ func seed() *estate {
 	// mirror was blind to before ADR-0128.
 	jt10.Status, jt10.LastJobFailed, jt10.LastJobRun = "failed", true, "2026-07-26T03:00:00Z"
 	jt10.NextJobRun, jt10.Forks, jt10.Limit, jt10.JobTags, jt10.BecomeEnabled = "2026-07-27T03:00:00Z", 5, "web*", "deploy", true
+	// Seeded non-zero on purpose: a fixture that left these at their zero values would satisfy
+	// the coverage guard's "is the key served" question while still testing nothing about them.
+	jt10.SkipTags, jt10.Timeout, jt10.Verbosity, jt10.DiffMode, jt10.ScmBranch = "slow", 600, 2, true, "release"
 	jt10.SummaryFields.Organization = fNamed{ID: 1, Name: "Platform"}
 	jt10.SummaryFields.Project = fNamed{ID: 1, Name: "infra"}
 	jt10.SummaryFields.Labels = fLabelList{Count: 2, Results: []fNamed{{ID: 70, Name: "prod"}, {ID: 71, Name: "critical"}}}

@@ -105,6 +105,17 @@ wired. Remove it and its dispatch; the rich client's `Enumerate` moves to the pl
 for a possible future bulk-adopt (`log`-ged if ever bounded). `adopt` (per-object, strangler-fig) is the
 sole path.
 
+> **Half-paid, and closed 2026-08-05.** `import.go` and its dispatch went; the **usage banner did not**.
+> For months `stratt` advertised `stratt import awx --endpoint <url> …` and answered it with exit 2 —
+> an operator running exactly what the CLI told them to run, told nothing about why (§1.8), in the
+> first place a new user looks. `main.go`'s stale comment still said `import` "remains until adopt
+> fully lands" long after its file was deleted.
+>
+> The root cause was two hand-maintained lists — a dispatch chain and a prose banner. They are now one
+> table that `usage()` renders from, so a verb cannot be advertised without dispatching or dispatch
+> without being advertised. `core/cmd/stratt/verbs_test.go` (the package's first test) asserts both
+> directions and that `import` resolves nowhere and appears nowhere.
+
 ### 6. Round-trip validation across the new module boundary (§1.5)
 The transform's shape tests move to the plugin (asserted against `awxsim`). The round-trip guarantee — *the
 emitted CaC actually parses back through the core `desiredstate` reader* — cannot live in the plugin (it may
