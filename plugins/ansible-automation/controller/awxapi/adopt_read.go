@@ -9,7 +9,7 @@ import (
 // and exactly the sub-resources the transform needs FOR IT — its project (SCM ref), survey
 // (if enabled), referenced credentials, and its inventory (+ dynamic sources and manual
 // hosts) — producing a single-object Snapshot the (kept) importer transform consumes. It is
-// NEVER a full-estate Enumerate: the object id is resolved from the live projection catalog
+// NEVER a full-estate Enumerate (that sibling lives in enumerate.go and says why it is kept): the object id is resolved from the live projection catalog
 // and only its own definition is pulled. Read-only (§1.2); the token is supplied at
 // invocation and never persisted (§2.5). A 404 on the template surfaces as an error so
 // adopt fails loud on a gone object rather than emitting stale CaC.

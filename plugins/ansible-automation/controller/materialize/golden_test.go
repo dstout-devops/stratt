@@ -32,6 +32,7 @@ func emitFromSim(t *testing.T) map[string]string {
 	if err != nil {
 		t.Fatal(err)
 	}
+	assertSnapshotBreadth(t, snap)
 	emit, err := Bundle(snap, Options{})
 	if err != nil {
 		t.Fatal(err)
@@ -111,6 +112,41 @@ func TestNoBannedVocabularyInDeclarations(t *testing.T) {
 			if strings.Contains(low, b) {
 				t.Errorf("banned vocabulary %q leaked into %s", b, path)
 			}
+		}
+	}
+}
+
+// assertSnapshotBreadth pins ADR-0089 D6 property 2 — "coverage-complete: the fixture exercises
+// every emit shape" — which was written as a must-fix and, until now, asserted only in prose.
+//
+// ── WHY HERE AND NOT IN THE DRIFT COMPARISON ─────────────────────────────────────────────────
+//
+// The golden comparison below catches a change in what the transform EMITS. It cannot catch a
+// narrowing of what the transform is FED: a narrowed Enumerate regenerated with -update produces a
+// smaller golden that is perfectly self-consistent, so every file matches and the suite stays green
+// while the round-trip contract quietly covers a happy-path subset.
+//
+// That is also the guard that makes enumerate.go's "looks dead, is not" comment enforceable rather
+// than hopeful: swapping Enumerate for a single-template read fails HERE, with a message naming the
+// ADR, before anything downstream has a chance to look fine.
+func assertSnapshotBreadth(t *testing.T, snap *awx.Snapshot) {
+	t.Helper()
+	for _, c := range []struct {
+		what string
+		got  int
+		min  int
+	}{
+		{"job templates", len(snap.JobTemplates), 2},
+		{"workflow job templates", len(snap.WorkflowJTs), 1},
+		{"inventories", len(snap.Inventories), 2},
+		{"survey specs", len(snap.Surveys), 1},
+		{"credentials", len(snap.Credentials), 2},
+	} {
+		if c.got < c.min {
+			t.Fatalf("golden fixture breadth: %d %s, want >= %d (ADR-0089 D6 property 2). "+
+				"A narrowed Enumerate makes this golden a happy-path subset, and the file-by-file "+
+				"drift comparison below CANNOT catch that — regenerating with -update would make "+
+				"the smaller emission self-consistent and green.", c.got, c.what, c.min)
 		}
 	}
 }
